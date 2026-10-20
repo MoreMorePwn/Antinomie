@@ -297,6 +297,40 @@ pub(crate) fn active_disk(options: &BackendOptions, vm: &VmConfig) -> Result<Pat
     let manifest = load(&directory, vm)?;
     owned(&directory, &manifest.active_disk)
 }
+/// A saved checkpoint's frozen disk layer.
+pub(crate) struct CheckpointDisk {
+    pub path: PathBuf,
+    pub name: String,
+    /// The checkpoint the layer belongs to.
+    pub id: String,
+    pub parent_id: Option<String>,
+}
+/// The frozen layer of the saved, not deleted, checkpoint `id`: an immutable
+/// qcow2 whose backing chain reaches the base. Like [`active_disk`] it
+/// refuses while a snapshot operation is unfinished.
+pub(crate) fn checkpoint_disk(
+    options: &BackendOptions,
+    vm: &VmConfig,
+    id: &str,
+) -> Result<CheckpointDisk, String> {
+    let directory = vm_dir(options, &vm.id)?;
+    pending(&directory)?;
+    let manifest = load(&directory, vm)?;
+    let record = manifest
+        .nodes
+        .iter()
+        .find(|node| node.checkpoint.id == id)
+        .ok_or("the checkpoint does not exist")?;
+    if record.checkpoint.deleted {
+        return Err("the checkpoint was deleted".into());
+    }
+    Ok(CheckpointDisk {
+        path: owned(&directory, &record.disk)?,
+        name: record.checkpoint.name.clone(),
+        id: record.checkpoint.id.clone(),
+        parent_id: record.checkpoint.parent_id.clone(),
+    })
+}
 pub(crate) fn recovery_required(options: &BackendOptions, vm: &VmConfig) -> Result<bool, String> {
     vm_dir(options, &vm.id)?
         .join(JOURNAL)

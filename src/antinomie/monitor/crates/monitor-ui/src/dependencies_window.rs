@@ -291,9 +291,12 @@ fn requirements(
         | Command::DownloadBase { .. }
         | Command::InstallTool { .. } => vec![Curl],
         Command::AnalyzeOnly { .. } | Command::AnalyzeHostFile { .. } => vec![Bubblewrap],
-        Command::MeasureDisk { .. } => vec![QemuImg],
+        Command::MeasureDisk { .. }
+        | Command::OpenDiskReference { .. }
+        | Command::SaveDiskPartition { .. } => vec![QemuImg],
         Command::OpenCurrentDisk { .. }
         | Command::DumpDisk { .. }
+        | Command::ImportQcow2Disk { .. }
         | Command::KeepCurrentDiskAsDump { .. } => vec![QemuImg, Bubblewrap, Prlimit],
         Command::Execute(request) if request.analysis.enabled => vec![Bubblewrap],
         _ => Vec::new(),

@@ -30,6 +30,16 @@ impl MonitorApp {
             .disk_job
             .clone()
             .filter(|job| ours(&job.vm_id));
+        let reference = self
+            .snapshot
+            .disk_reference
+            .clone()
+            .filter(|view| ours(&view.vm_id));
+        let triage_paths = self.triage.changed_paths();
+        let checkpoints: &[antinomie_monitor_core::VmCheckpoint] = vm_id
+            .as_ref()
+            .and_then(|id| self.snapshot.vm_snapshot_trees.get(id))
+            .map_or(&[], |tree| tree.nodes.as_slice());
         let other_job = self
             .snapshot
             .disk_job
@@ -57,6 +67,9 @@ impl MonitorApp {
                 current_disk: current_disk.as_ref(),
                 measure: measure.as_ref(),
                 job: job.as_ref(),
+                reference: reference.as_ref(),
+                checkpoints,
+                triage_paths: &triage_paths,
                 other_job,
                 font_size: self.settings.font_size,
                 settings: &mut self.settings.disks,
@@ -72,15 +85,50 @@ impl MonitorApp {
         let vm_id = self.selected.clone();
         match (action, vm_id) {
             (DiskAction::StopVm, _) => self.send(Command::Stop),
-            (DiskAction::Measure, Some(vm_id)) => self.send(Command::MeasureDisk { vm_id }),
-            (DiskAction::Open, Some(vm_id)) => self.send(Command::OpenCurrentDisk { vm_id }),
+            (DiskAction::Measure(pick), Some(vm_id)) => self.send(Command::MeasureDisk {
+                vm_id,
+                source: pick.source,
+                partition: pick.partition,
+            }),
+            (DiskAction::Open(pick), Some(vm_id)) => self.send(Command::OpenCurrentDisk {
+                vm_id,
+                source: pick.source,
+                partition: pick.partition,
+            }),
             (DiskAction::Close, Some(vm_id)) => self.send(Command::CloseCurrentDisk { vm_id }),
             (DiskAction::Cancel, Some(vm_id)) => self.send(Command::CancelDiskJob { vm_id }),
-            (DiskAction::Dump, Some(vm_id)) => self.send(Command::DumpDisk {
+            (DiskAction::Dump(pick), Some(vm_id)) => self.send(Command::DumpDisk {
                 vm_id,
+                source: pick.source,
+                partition: pick.partition,
                 hash: self.settings.disks.dump_hash,
                 layer_digests: self.settings.disks.source_digests,
             }),
+            (
+                DiskAction::SavePartition {
+                    source,
+                    partition,
+                    path,
+                },
+                Some(vm_id),
+            ) => self.send(Command::SaveDiskPartition {
+                vm_id,
+                source,
+                partition,
+                path,
+            }),
+            (DiskAction::Reference(source), Some(vm_id)) => {
+                self.send(Command::OpenDiskReference { vm_id, source });
+            }
+            (DiskAction::ImportQcow2(path), Some(vm_id)) => self.send(Command::ImportQcow2Disk {
+                vm_id,
+                path,
+                hash: self.settings.disks.dump_hash,
+            }),
+            (DiskAction::ShowInTriage(path), _) => {
+                self.triage.show_changed_path(ctx, &path);
+                self.focus_panel = Some(Panel::Triage);
+            }
             (DiskAction::Keep, Some(vm_id)) => self.send(Command::KeepCurrentDiskAsDump {
                 vm_id,
                 hash: self.settings.disks.dump_hash,

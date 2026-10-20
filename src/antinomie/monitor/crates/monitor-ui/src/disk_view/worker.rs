@@ -41,10 +41,12 @@ pub(super) struct Worker {
 
 impl Worker {
     /// Start the thread; the sandbox itself starts with the first request.
+    /// `other` is a reference image to diff `image` against.
     pub(super) fn start(
         ctx: egui::Context,
         name: &str,
         image: PathBuf,
+        other: Option<PathBuf>,
         out: PathBuf,
     ) -> Result<Self, String> {
         let (sender, jobs) = mpsc::channel::<Job>();
@@ -54,7 +56,11 @@ impl Worker {
         let thread = thread::Builder::new()
             .name(name.into())
             .spawn(move || {
-                let mut reader = Reader::open(&image, &out).map(|mut reader| {
+                let opened = match &other {
+                    Some(other) => Reader::open_with_other(&image, other, &out),
+                    None => Reader::open(&image, &out),
+                };
+                let mut reader = opened.map(|mut reader| {
                     reader.set_abort_flag(flag.clone());
                     reader
                 });

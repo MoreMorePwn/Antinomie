@@ -39,6 +39,9 @@ fn measure() -> DiskMeasure {
         directory: PathBuf::from("/home/user/rec/disks"),
         quota: 4 * 1024 * 1024 * 1024,
         error: None,
+        partitions: None,
+        partition_error: None,
+        partition: None,
     }
 }
 
@@ -106,7 +109,9 @@ fn a_stopped_vm_measures_once_and_open_sends_the_open_command() {
     let measures = |app: &MonitorApp| {
         app.submitted
             .iter()
-            .filter(|command| matches!(command, Command::MeasureDisk { vm_id } if vm_id == "vm"))
+            .filter(
+                |command| matches!(command, Command::MeasureDisk { vm_id, .. } if vm_id == "vm"),
+            )
             .count()
     };
     assert_eq!(measures(&app), 1, "{:?}", app.submitted);
@@ -124,7 +129,7 @@ fn a_stopped_vm_measures_once_and_open_sends_the_open_command() {
     click_label(&mut app, &ctx, size, "Open");
     assert!(matches!(
         app.submitted.last(),
-        Some(Command::OpenCurrentDisk { vm_id }) if vm_id == "vm"
+        Some(Command::OpenCurrentDisk { vm_id, .. }) if vm_id == "vm"
     ));
     // A measurement of another VM is not shown for this one.
     app.snapshot.disk_measure = Some(DiskMeasure {
@@ -156,9 +161,7 @@ fn a_job_of_this_vm_shows_progress_and_cancel_sends_the_cancel_command() {
     let size = egui::vec2(1600.0, 900.0);
     let shown = shown_texts(&mut app, &ctx, size);
     assert!(
-        shown
-            .iter()
-            .any(|text| text == "Reading the current disk… 46 %"),
+        shown.iter().any(|text| text == "Reading the disk… 46 %"),
         "{shown:?}"
     );
     click_label(&mut app, &ctx, size, "Cancel");
@@ -272,7 +275,7 @@ fn dump_disk_and_keep_as_dump_send_their_commands_with_the_hash_settings() {
     click_label(&mut app, &ctx, size, &dump);
     assert!(matches!(
         app.submitted.last(),
-        Some(Command::DumpDisk { vm_id, hash: true, layer_digests: false }) if vm_id == "vm"
+        Some(Command::DumpDisk { vm_id, hash: true, layer_digests: false, .. }) if vm_id == "vm"
     ));
     // The Settings toggles travel with the command.
     let mut app = self::app();
@@ -378,4 +381,59 @@ fn the_settings_offer_the_dump_hash_and_source_digest_toggles() {
         assert!(shown.iter().any(|text| text == label), "{label}: {shown:?}");
     }
     assert!(app.settings.disks.dump_hash && !app.settings.disks.source_digests);
+}
+
+#[test]
+fn the_diff_and_triage_changed_files_link_to_each_other_through_the_app() {
+    use crate::disk_view::{DiskAction, DIFF_JUMP_KEY};
+    use antinomie_monitor_core::disks::reader::{DiffEntry, DiffResults, DiffStatus, DiskEntry};
+    let mut app = app();
+    stopped_vm(&mut app);
+    let ctx = egui::Context::default();
+    // Disks to Triage: the Changed files tab, filtered to the path.
+    app.disk_action(&ctx, Some(DiskAction::ShowInTriage("/etc/passwd".into())));
+    assert_eq!(app.focus_panel, Some(Panel::Triage));
+    let draft =
+        ctx.data(|data| data.get_temp::<String>(egui::Id::new(("triage-filter-draft", 2usize))));
+    assert_eq!(draft.as_deref(), Some("file.path == \"/etc/passwd\""));
+
+    // Triage to Disks: with a diff open, the path is selected there.
+    let file = DiskEntry {
+        name: "passwd".into(),
+        addressable: true,
+        kind: antinomie_monitor_core::disks::reader::DiskEntryKind::File,
+        size: 10,
+        mode: 0o644,
+        uid: 0,
+        gid: 0,
+        mtime: 1,
+        atime: 1,
+        ctime: 1,
+        link_target: None,
+    };
+    let results = DiffResults {
+        entries: vec![DiffEntry {
+            path: "/etc/passwd".into(),
+            status: DiffStatus::Added,
+            before: None,
+            after: Some(file),
+            reasons: Vec::new(),
+        }],
+        added: 1,
+        ..DiffResults::default()
+    };
+    app.disk_view.show_diff_for_test(&ctx, results);
+    app.focus_panel = None;
+    ctx.data_mut(|data| data.insert_temp(egui::Id::new(DIFF_JUMP_KEY), "/etc/passwd".to_string()));
+    app.apply_triage_navigation(&ctx, None);
+    assert_eq!(app.focus_panel, Some(Panel::Disks));
+    assert_eq!(
+        app.disk_view.diff_selected_path_for_test().as_deref(),
+        Some("/etc/passwd")
+    );
+    // A path the diff does not list moves nothing.
+    app.focus_panel = None;
+    ctx.data_mut(|data| data.insert_temp(egui::Id::new(DIFF_JUMP_KEY), "/not/there".to_string()));
+    app.apply_triage_navigation(&ctx, None);
+    assert_eq!(app.focus_panel, None);
 }

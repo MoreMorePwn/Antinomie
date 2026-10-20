@@ -20,6 +20,8 @@ fn spec(fixture: &Fixture, top: &Path) -> JobSpec {
         source: DiskSourceRecord::default(),
         disks_dir: disks_dir(&fixture.root),
         quota: 0,
+        partition: None,
+        keep_scratch: None,
     }
 }
 
@@ -279,6 +281,7 @@ fn the_estimate_is_within_ten_percent_of_the_allocated_image() {
         &top,
         DiskSourceRecord::default(),
         &disks_dir(&fixture.root),
+        None,
     );
     let (estimate, actual) = (
         measured.allocated_estimate as f64,
@@ -301,7 +304,10 @@ fn slow_qemu_img(fixture: &Fixture, marker: &str) -> PathBuf {
 case "$1" in
 info) echo '[{{"filename":"{top}","format":"qcow2","virtual-size":33554432,"actual-size":4096}}]' ;;
 map) echo '[{{"start":0,"length":4096,"depth":0,"present":true,"zero":false,"data":true}}]' ;;
-convert) printf '    (12.34/100%%)\r'; exec /usr/bin/sleep {marker} ;;
+convert) case "$*" in
+  *--image-opts*) for last; do :; done; : > "$last" ;;
+  *) printf '    (12.34/100%%)\r'; exec /usr/bin/sleep {marker} ;;
+  esac ;;
 esac
 "#,
             top = fixture.path("top.qcow2").display()

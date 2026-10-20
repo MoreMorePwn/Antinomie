@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: MIT
 //! Measuring a disk chain before it is flattened: its logical size, how much
 //! of it is allocated, and whether the destination can hold the image.
-use super::{DiskLayerRef, DiskMeasure, DiskSourceRecord, unix_ms};
+use super::{
+    DiskLayerRef, DiskMeasure, DiskSourceRecord,
+    partition::{self, PartitionFs, PartitionTable},
+    unix_ms,
+};
 use serde_json::Value;
 use std::{
     fs,
@@ -45,7 +49,10 @@ pub struct ChainInfo {
 
 /// Run `command`, reading at most `limit` bytes of stdout. `None` when the
 /// output was larger (the process is stopped).
-fn run_capped(mut command: Command, limit: u64) -> Result<Option<(Vec<u8>, String)>, String> {
+pub(crate) fn run_capped(
+    mut command: Command,
+    limit: u64,
+) -> Result<Option<(Vec<u8>, String)>, String> {
     let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -153,13 +160,25 @@ pub fn chain_info(qemu_img: &Path, vm_dir: &Path, top: &Path) -> Result<ChainInf
 /// reports as data and not zero. An upper bound of the sparse output's
 /// allocation (conversion drops more zero runs). Falls back to the layers'
 /// allocated sizes when the map is unexpectedly large.
-pub fn allocated_estimate(qemu_img: &Path, top: &Path, chain: &ChainInfo) -> Result<u64, String> {
+pub fn allocated_estimate(
+    qemu_img: &Path,
+    top: &Path,
+    chain: &ChainInfo,
+    partition: Option<&partition::Partition>,
+) -> Result<u64, String> {
     let mut command = qemu_img_command(qemu_img);
-    command
-        .args(["map", "-f", "qcow2", "--output=json"])
-        .arg(top);
+    match partition {
+        // One partition: the same map, through the carve the conversion uses.
+        Some(partition) => command
+            .args(["map", "--output=json", "--image-opts"])
+            .arg(partition.image_opts(top)),
+        None => command
+            .args(["map", "-f", "qcow2", "--output=json"])
+            .arg(top),
+    };
     let Some((output, _)) = run_capped(command, MAP_OUTPUT_LIMIT)? else {
-        return Ok(chain.actual_size.min(chain.virtual_size));
+        let whole = chain.actual_size.min(chain.virtual_size);
+        return Ok(partition.map_or(whole, |partition| whole.min(partition.length)));
     };
     let extents: Vec<Value> =
         serde_json::from_slice(&output).map_err(|error| format!("qemu-img map output: {error}"))?;
@@ -202,9 +221,66 @@ pub fn sparse_supported(directory: &Path) -> bool {
     result.unwrap_or(false)
 }
 
+/// Read `length` bytes of the guest disk at `offset` through a temporary
+/// file in `scratch` (`qemu-img convert` of the carved range, which always
+/// writes the full length, zeros included).
+fn read_range(
+    qemu_img: &Path,
+    top: &Path,
+    scratch: &Path,
+    offset: u64,
+    length: u64,
+) -> Result<Vec<u8>, String> {
+    let file = scratch.join(format!(".probe-{}", crate::storage::unique_id()));
+    let mut command = qemu_img_command(qemu_img);
+    command
+        .args(["convert", "-O", "raw", "--image-opts"])
+        .arg(partition::carve_opts(offset, length, top))
+        .arg(&file);
+    let result = run_capped(command, 64 * 1024).and_then(|_| {
+        let mut bytes = Vec::new();
+        fs::File::open(&file)
+            .and_then(|file| file.take(length).read_to_end(&mut bytes))
+            .map_err(|error| format!("{}: {error}", file.display()))?;
+        Ok(bytes)
+    });
+    let _ = fs::remove_file(&file);
+    result
+}
+
+/// The partition table of the disk whose chain top is `top`, with the
+/// filesystem of each of the first partitions looked at. `Ok(None)` for a
+/// whole-disk filesystem or a blank disk.
+pub fn probe_partitions(
+    qemu_img: &Path,
+    top: &Path,
+    scratch: &Path,
+    disk_size: u64,
+) -> Result<Option<PartitionTable>, String> {
+    let head_length = (partition::HEAD_SECTORS as u64 * partition::SECTOR).min(disk_size);
+    let head = read_range(qemu_img, top, scratch, 0, head_length)?;
+    let Some(mut table) = partition::parse(&head, disk_size)? else {
+        return Ok(None);
+    };
+    for partition in table.partitions.iter_mut().take(partition::FS_PROBE_LIMIT) {
+        if partition.fs == PartitionFs::Other {
+            continue;
+        }
+        // The superblock sits 1024 bytes into the filesystem.
+        let sector = read_range(qemu_img, top, scratch, partition.start + 1024, 512);
+        partition.fs = match sector {
+            Ok(bytes) if partition::is_ext4_superblock(&bytes) => PartitionFs::Ext4,
+            Ok(bytes) if bytes.len() >= 512 => PartitionFs::Other,
+            _ => PartitionFs::Unknown,
+        };
+    }
+    Ok(Some(table))
+}
+
 /// Measure the chain with top `top`, for a view written under `disks_dir`
-/// (created). A failure is recorded in the result, not returned, so the UI
-/// can show it on the card.
+/// (created). `partition` is the partition to size, when the disk has a
+/// table and the caller chose one (else the table's default). A failure is
+/// recorded in the result, not returned, so the UI can show it on the card.
 pub fn measure(
     qemu_img: &Path,
     vm_id: &str,
@@ -212,6 +288,7 @@ pub fn measure(
     top: &Path,
     mut source: DiskSourceRecord,
     disks_dir: &Path,
+    partition: Option<u32>,
 ) -> DiskMeasure {
     let mut measure = DiskMeasure {
         vm_id: vm_id.into(),
@@ -224,8 +301,24 @@ pub fn measure(
             .map_err(|error| format!("{}: {error}", disks_dir.display()))?;
         let chain = chain_info(qemu_img, vm_dir, top)?;
         measure.logical_size = chain.virtual_size;
-        measure.allocated_estimate = allocated_estimate(qemu_img, top, &chain)?;
+        match probe_partitions(qemu_img, top, disks_dir, chain.virtual_size) {
+            Ok(table) => measure.partitions = table,
+            Err(error) => measure.partition_error = Some(error),
+        }
+        measure.partition = measure.partitions.as_ref().and_then(|table| {
+            partition
+                .filter(|index| table.get(*index).is_some())
+                .or_else(|| table.default_partition())
+        });
+        // A chosen partition that is not there is the caller's mistake.
+        if let (Some(index), Some(table)) = (partition, &measure.partitions)
+            && table.get(index).is_none()
+        {
+            return Err(format!("the disk has no partition {index}"));
+        }
+        measure.allocated_estimate = allocated_estimate(qemu_img, top, &chain, measure.selected())?;
         source.layers = chain.layers;
+        source.partition = measure.selected().cloned();
         measure.free_space = free_space(disks_dir)?;
         measure.sparse_supported = sparse_supported(disks_dir);
         Ok(())

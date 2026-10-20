@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use crate::disks::{
-    self, Ext4State,
-    fixture::{Fixture as Images, require_tools},
+    self, DiskSourceSpec, Ext4State,
+    fixture::{EXT4_START, Fixture as Images, OTHER_LENGTH, Scheme, require_tools},
     reader::{DiskAnswer, DiskRequest, image::Image},
 };
 use std::process::Command as Process;
@@ -46,6 +46,8 @@ fn vm_command(name: &str) -> Vec<Command> {
 
 fn dump(vm: &str) -> Command {
     Command::DumpDisk {
+        source: DiskSourceSpec::Current,
+        partition: None,
         vm_id: vm.into(),
         hash: true,
         layer_digests: false,
@@ -66,7 +68,11 @@ fn the_lease_refuses_what_would_touch_the_chain_being_read() {
     // No job: nothing is refused.
     for command in [
         start("a"),
-        Command::MeasureDisk { vm_id: "a".into() },
+        Command::MeasureDisk {
+            source: DiskSourceSpec::Current,
+            partition: None,
+            vm_id: "a".into(),
+        },
         dump("a"),
         keep("a"),
     ]
@@ -104,10 +110,33 @@ fn the_lease_refuses_what_would_touch_the_chain_being_read() {
     // One job slot overall.
     for vm in ["a", "b"] {
         for command in [
-            Command::MeasureDisk { vm_id: vm.into() },
-            Command::OpenCurrentDisk { vm_id: vm.into() },
+            Command::MeasureDisk {
+                source: DiskSourceSpec::Current,
+                partition: None,
+                vm_id: vm.into(),
+            },
+            Command::OpenCurrentDisk {
+                source: DiskSourceSpec::Current,
+                partition: None,
+                vm_id: vm.into(),
+            },
             dump(vm),
             keep(vm),
+            Command::OpenDiskReference {
+                vm_id: vm.into(),
+                source: DiskSourceSpec::Base,
+            },
+            Command::SaveDiskPartition {
+                vm_id: vm.into(),
+                source: DiskSourceSpec::Current,
+                partition: 1,
+                path: "/tmp/x".into(),
+            },
+            Command::ImportQcow2Disk {
+                vm_id: vm.into(),
+                path: "/tmp/x.qcow2".into(),
+                hash: false,
+            },
         ] {
             let message = lease(Some("a"), &command).unwrap_err();
             assert!(message.contains("another disk inspection or dump is still running"));
@@ -118,6 +147,7 @@ fn the_lease_refuses_what_would_touch_the_chain_being_read() {
         Command::Stop,
         Command::CancelDiskJob { vm_id: "a".into() },
         Command::CloseCurrentDisk { vm_id: "a".into() },
+        Command::CloseDiskReference { vm_id: "a".into() },
         Command::Rename {
             vm_id: "a".into(),
             name: "x".into(),
@@ -209,12 +239,32 @@ struct Machine {
 
 impl Machine {
     fn new() -> Self {
+        Self::build(None, false)
+    }
+
+    /// A machine whose disk carries a partition table: partition 1 holds
+    /// bytes that are no filesystem and partition 2 the ext4 image (or, when
+    /// `no_ext4`, more such bytes).
+    fn partitioned(scheme: Scheme, no_ext4: bool) -> Self {
+        Self::build(Some(scheme), no_ext4)
+    }
+
+    fn build(scheme: Option<Scheme>, no_ext4: bool) -> Self {
         let images = Images::new();
         let options_root = images.path("data");
         storage::private_dir(&options_root).unwrap();
         let mut worker = blank_worker(options_root.clone());
         let tree = images.standard_tree("tree");
-        let base_raw = images.ext4("base.ext4", &tree, &[]);
+        let wrap = |image: PathBuf, name: &str| match scheme {
+            Some(scheme) => {
+                if no_ext4 {
+                    fs::write(&image, vec![0x5Au8; 8 * 1024 * 1024]).unwrap();
+                }
+                images.partitioned(name, scheme, &image)
+            }
+            None => image,
+        };
+        let base_raw = wrap(images.ext4("base.ext4", &tree, &[]), "base-disk.raw");
         let base = images.path("source-base.qcow2");
         convert(&["-f", "raw", "-O", "qcow2"], &base_raw, &base, None);
         let kernel = images.path("kernel");
@@ -251,7 +301,7 @@ impl Machine {
         storage::atomic_json(&directory.join("config.json"), &vm).unwrap();
         // The overlay: the base plus one file, as a guest would have left it.
         fs::write(tree.join("etc/written-after-base"), "after the base\n").unwrap();
-        let changed = images.ext4("overlay.ext4", &tree, &[]);
+        let changed = wrap(images.ext4("overlay.ext4", &tree, &[]), "overlay-disk.raw");
         convert(
             &["-f", "raw", "-O", "qcow2", "-F", "qcow2"],
             &changed,
@@ -303,6 +353,8 @@ impl Machine {
 
     fn open_view(&mut self) -> disks::CurrentDiskView {
         self.command(Command::OpenCurrentDisk {
+            source: DiskSourceSpec::Current,
+            partition: None,
             vm_id: "fixture".into(),
         })
         .unwrap();
@@ -354,6 +406,8 @@ fn measuring_then_opening_reads_the_overlay_and_records_where_it_came_from() {
     let mut machine = Machine::new();
     machine
         .command(Command::MeasureDisk {
+            source: DiskSourceSpec::Current,
+            partition: None,
             vm_id: "fixture".into(),
         })
         .unwrap();
@@ -429,6 +483,8 @@ fn start_reset_restore_snapshot_delete_and_duplicate_wait_for_the_job() {
     let mut machine = Machine::new();
     machine
         .command(Command::OpenCurrentDisk {
+            source: DiskSourceSpec::Current,
+            partition: None,
             vm_id: "fixture".into(),
         })
         .unwrap();
@@ -476,6 +532,8 @@ fn start_reset_restore_snapshot_delete_and_duplicate_wait_for_the_job() {
     assert!(
         machine
             .command(Command::OpenCurrentDisk {
+                source: DiskSourceSpec::Current,
+                partition: None,
                 vm_id: "fixture".into()
             })
             .unwrap_err()
@@ -484,6 +542,8 @@ fn start_reset_restore_snapshot_delete_and_duplicate_wait_for_the_job() {
     assert!(
         machine
             .command(Command::MeasureDisk {
+                source: DiskSourceSpec::Current,
+                partition: None,
                 vm_id: "fixture".into()
             })
             .unwrap_err()
@@ -516,6 +576,8 @@ fn cancelling_leaves_no_scratch_and_no_view() {
     let mut machine = Machine::new();
     machine
         .command(Command::OpenCurrentDisk {
+            source: DiskSourceSpec::Current,
+            partition: None,
             vm_id: "fixture".into(),
         })
         .unwrap();
@@ -548,9 +610,13 @@ fn opening_needs_the_vm_off() {
         machine.worker.snapshot.state = state.clone();
         for command in [
             Command::OpenCurrentDisk {
+                source: DiskSourceSpec::Current,
+                partition: None,
                 vm_id: "fixture".into(),
             },
             Command::MeasureDisk {
+                source: DiskSourceSpec::Current,
+                partition: None,
                 vm_id: "fixture".into(),
             },
         ] {
@@ -565,6 +631,8 @@ fn opening_needs_the_vm_off() {
     machine.worker.snapshot.active_vm = Some("other".into());
     machine
         .command(Command::MeasureDisk {
+            source: DiskSourceSpec::Current,
+            partition: None,
             vm_id: "fixture".into(),
         })
         .unwrap();
@@ -722,6 +790,8 @@ fn a_pending_snapshot_journal_is_recovered_before_the_disk_is_read() {
     fs::write(machine.directory.join("snapshot-operation.json"), b"{}").unwrap();
     let error = machine
         .command(Command::OpenCurrentDisk {
+            source: DiskSourceSpec::Current,
+            partition: None,
             vm_id: "fixture".into(),
         })
         .unwrap_err();
@@ -768,6 +838,8 @@ fn host_files_are_analyzed_through_the_ordinary_job_queue() {
 fn dump_of(machine: &mut Machine, hash: bool) -> disks::dump::DiskDump {
     machine
         .command(Command::DumpDisk {
+            source: DiskSourceSpec::Current,
+            partition: None,
             vm_id: "fixture".into(),
             hash,
             layer_digests: false,
@@ -912,6 +984,8 @@ fn a_dump_over_the_quota_fails_with_the_quota_sentence() {
     // The measure shows the ceiling so the tab can say why before the click.
     machine
         .command(Command::MeasureDisk {
+            source: DiskSourceSpec::Current,
+            partition: None,
             vm_id: "fixture".into(),
         })
         .unwrap();
@@ -1114,4 +1188,508 @@ fn deleting_an_imported_dump_leaves_the_original_image() {
     let dump = disks::dump::import(&machine.directory, "fixture", "Fixture", &image).unwrap();
     delete_dump(&mut machine, &dump.dir).unwrap();
     assert!(!dump.dir.exists() && image.is_file());
+}
+
+fn take_checkpoint(machine: &mut Machine, name: &str) -> crate::api::VmCheckpoint {
+    let request = SnapshotRequest {
+        name: name.into(),
+        description: String::new(),
+        mode: VmSnapshotMode::Disk,
+    };
+    let prepared = crate::snapshots::prepare_take(
+        &machine.worker.options,
+        &machine.vm,
+        &request,
+        VmSnapshotConsistency::Stopped,
+    )
+    .unwrap();
+    let checkpoint =
+        crate::snapshots::commit_take(&machine.worker.options, &machine.vm, prepared, None, None)
+            .unwrap();
+    machine.worker.refresh_vm_snapshots("fixture").unwrap();
+    checkpoint
+}
+
+/// The backing file of `top`, as `qemu-img info` names it.
+fn backing_of(top: &Path) -> PathBuf {
+    let output = Process::new("qemu-img")
+        .args(["info", "-U", "--output=json"])
+        .arg(top)
+        .output()
+        .unwrap();
+    let info: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    PathBuf::from(
+        info["full-backing-filename"]
+            .as_str()
+            .expect("a backing file"),
+    )
+}
+
+/// Replace the (empty) writable top of the chain with a child of the same
+/// backing that holds the overlay's files plus `extra` (path, text), as a
+/// guest running after a checkpoint would have left it.
+fn write_into_top(machine: &Machine, name: &str, extra: &[(&str, &str)]) {
+    let images = &machine._images;
+    let top = crate::snapshots::active_disk(&machine.worker.options, &machine.vm).unwrap();
+    let backing = backing_of(&top);
+    let tree = images.path(&format!("{name}-tree"));
+    assert!(
+        Process::new("cp")
+            .arg("-a")
+            .arg(images.path("tree"))
+            .arg(&tree)
+            .status()
+            .unwrap()
+            .success()
+    );
+    for (path, text) in extra {
+        fs::write(tree.join(path), text).unwrap();
+    }
+    let raw = images.ext4(&format!("{name}.ext4"), &tree, &[]);
+    fs::remove_file(&top).unwrap();
+    convert(
+        &["-f", "raw", "-O", "qcow2", "-F", "qcow2"],
+        &raw,
+        &top,
+        Some(&backing),
+    );
+}
+
+fn open_source(
+    machine: &mut Machine,
+    source: DiskSourceSpec,
+) -> Result<disks::CurrentDiskView, String> {
+    machine.command(Command::OpenCurrentDisk {
+        vm_id: "fixture".into(),
+        source,
+        partition: None,
+    })?;
+    machine.finish_job();
+    machine.worker.snapshot.current_disk.clone().ok_or_else(|| {
+        machine
+            .worker
+            .snapshot
+            .last_error
+            .clone()
+            .unwrap_or_default()
+    })
+}
+
+#[test]
+fn a_checkpoint_source_reads_its_frozen_layer_and_records_it() {
+    require_tools!();
+    let mut machine = Machine::new();
+    let checkpoint = take_checkpoint(&mut machine, "before-run");
+    write_into_top(
+        &machine,
+        "later",
+        &[("etc/written-later", "after the checkpoint\n")],
+    );
+    let kind = disks::DiskSourceKind::Checkpoint {
+        id: checkpoint.id.clone(),
+        name: "before-run".into(),
+    };
+
+    // The current disk has what was written after the checkpoint; the
+    // checkpoint's layer does not, and still has what came before.
+    let current = open_source(&mut machine, DiskSourceSpec::Current).unwrap();
+    assert!(read_file(&current, "/etc/written-later").is_ok());
+    let view = open_source(
+        &mut machine,
+        DiskSourceSpec::Checkpoint(checkpoint.id.clone()),
+    )
+    .unwrap();
+    assert_eq!(view.source.kind, kind);
+    assert_eq!(view.source.kind.label(), "Disk at before-run");
+    assert_eq!(view.source.active_layer, "disk.qcow2");
+    assert_eq!(view.fs_state, Ext4State::Clean);
+    assert_eq!(view.source.layers.len(), 2);
+    assert_eq!(
+        read_file(&view, "/etc/written-after-base").unwrap(),
+        "after the base\n"
+    );
+    assert!(read_file(&view, "/etc/written-later").is_err());
+    // Opening a source closed the earlier view.
+    assert_eq!(machine.scratch().len(), 1);
+
+    // A dump of the checkpoint carries the same record and the same bytes.
+    machine
+        .command(Command::DumpDisk {
+            vm_id: "fixture".into(),
+            source: DiskSourceSpec::Checkpoint(checkpoint.id.clone()),
+            partition: None,
+            hash: true,
+            layer_digests: false,
+        })
+        .unwrap();
+    machine.finish_job();
+    let roots = vec![machine.directory.clone()];
+    let dumps = disks::dump::list(&roots);
+    assert_eq!(dumps.len(), 1);
+    assert_eq!(dumps[0].source.kind, kind);
+    assert!(dumps[0].sha256.is_some() && dumps[0].complete());
+
+    // The measure of the checkpoint names it too.
+    machine
+        .command(Command::MeasureDisk {
+            vm_id: "fixture".into(),
+            source: DiskSourceSpec::Checkpoint(checkpoint.id),
+            partition: None,
+        })
+        .unwrap();
+    machine.finish_job();
+    let measure = machine.worker.snapshot.disk_measure.clone().unwrap();
+    assert_eq!(measure.error, None);
+    assert_eq!(measure.source.kind, kind);
+}
+
+#[test]
+fn deleted_unknown_and_running_checkpoint_sources_are_refused() {
+    require_tools!();
+    let mut machine = Machine::new();
+    let checkpoint = take_checkpoint(&mut machine, "gone");
+    crate::snapshots::logical_delete(&machine.worker.options, &machine.vm, &checkpoint.id).unwrap();
+    let error = open_source(
+        &mut machine,
+        DiskSourceSpec::Checkpoint(checkpoint.id.clone()),
+    )
+    .unwrap_err();
+    assert!(error.contains("deleted"), "{error}");
+    let error = machine
+        .command(Command::OpenCurrentDisk {
+            vm_id: "fixture".into(),
+            source: DiskSourceSpec::Checkpoint("no-such-checkpoint".into()),
+            partition: None,
+        })
+        .unwrap_err();
+    assert!(error.contains("does not exist"), "{error}");
+    // One rule for every source: the VM must be off.
+    let live = take_checkpoint(&mut machine, "live");
+    machine.worker.snapshot.active_vm = Some("fixture".into());
+    let error = machine
+        .command(Command::OpenCurrentDisk {
+            vm_id: "fixture".into(),
+            source: DiskSourceSpec::Checkpoint(live.id),
+            partition: None,
+        })
+        .unwrap_err();
+    assert!(error.contains("stop the VM"), "{error}");
+    assert!(machine.worker.disk_job.is_none() && machine.scratch().is_empty());
+}
+
+#[test]
+fn the_installed_base_is_a_source_without_the_overlay() {
+    require_tools!();
+    let mut machine = Machine::new();
+    let view = open_source(&mut machine, DiskSourceSpec::Base).unwrap();
+    assert_eq!(view.source.kind, disks::DiskSourceKind::Base);
+    assert!(read_file(&view, "/etc/written-after-base").is_err());
+    assert!(read_file(&view, "/etc/passwd").is_ok());
+}
+
+#[test]
+fn a_reference_image_sits_beside_the_view_and_goes_with_it() {
+    require_tools!();
+    let mut machine = Machine::new();
+    let view = open_source(&mut machine, DiskSourceSpec::Current).unwrap();
+    machine
+        .command(Command::OpenDiskReference {
+            vm_id: "fixture".into(),
+            source: DiskSourceSpec::Base,
+        })
+        .unwrap();
+    machine.finish_job();
+    let reference = machine
+        .worker
+        .snapshot
+        .disk_reference
+        .clone()
+        .expect("a reference");
+    assert_eq!(reference.source.kind, disks::DiskSourceKind::Base);
+    // The view survived the second scratch image's sweep.
+    assert!(view.image.is_file() && reference.image.is_file());
+    assert_ne!(view.image, reference.image);
+    assert_eq!(machine.scratch().len(), 2);
+    // Starting the VM closes both.
+    machine
+        .command(Command::CloseDiskReference {
+            vm_id: "fixture".into(),
+        })
+        .unwrap();
+    assert!(!reference.image.exists() && view.image.is_file());
+    machine
+        .command(Command::OpenDiskReference {
+            vm_id: "fixture".into(),
+            source: DiskSourceSpec::Base,
+        })
+        .unwrap();
+    machine.finish_job();
+    machine.worker.close_disk_view();
+    assert!(machine.scratch().is_empty());
+    assert!(machine.worker.snapshot.disk_reference.is_none());
+}
+
+fn measure_partition(machine: &mut Machine, partition: Option<u32>) -> disks::DiskMeasure {
+    machine
+        .command(Command::MeasureDisk {
+            vm_id: "fixture".into(),
+            source: DiskSourceSpec::Current,
+            partition,
+        })
+        .unwrap();
+    machine.finish_job();
+    machine.worker.snapshot.disk_measure.clone().unwrap()
+}
+
+#[test]
+fn a_partitioned_disk_is_probed_and_its_ext4_partition_carved_for_both_schemes() {
+    require_tools!();
+    for scheme in [Scheme::Gpt, Scheme::Mbr] {
+        let mut machine = Machine::partitioned(scheme, false);
+        let measure = measure_partition(&mut machine, None);
+        assert_eq!(measure.error, None, "{scheme:?}");
+        let table = measure.partitions.clone().expect("a table");
+        assert_eq!(table.partitions.len(), 2);
+        assert_eq!(table.partitions[0].fs, disks::partition::PartitionFs::Other);
+        assert_eq!(table.partitions[1].fs, disks::partition::PartitionFs::Ext4);
+        assert_eq!(measure.partition, Some(2));
+        assert_eq!(measure.image_size(), 32 * 1024 * 1024);
+        assert_eq!(measure.unsupported(), None);
+        assert!(measure.allocated_estimate > 0);
+
+        // Open carves partition 2 and records it.
+        let view = open_source(&mut machine, DiskSourceSpec::Current).unwrap();
+        assert_eq!(view.logical_size, 32 * 1024 * 1024);
+        assert_eq!(
+            view.source.partition.as_ref().map(|p| (p.index, p.start)),
+            Some((2, EXT4_START))
+        );
+        assert_eq!(
+            read_file(&view, "/etc/written-after-base").unwrap(),
+            "after the base\n"
+        );
+        assert_eq!(fs::metadata(&view.image).unwrap().len(), 32 * 1024 * 1024);
+
+        // Dumping the other partition is the unsupported-filesystem state.
+        machine
+            .command(Command::DumpDisk {
+                vm_id: "fixture".into(),
+                source: DiskSourceSpec::Current,
+                partition: Some(1),
+                hash: false,
+                layer_digests: false,
+            })
+            .unwrap();
+        machine.finish_job();
+        let error = machine
+            .worker
+            .snapshot
+            .last_error
+            .clone()
+            .unwrap_or_default();
+        assert!(error.contains("unsupported filesystem"), "{error}");
+        assert!(disks::dump::list(std::slice::from_ref(&machine.directory)).is_empty());
+    }
+}
+
+#[test]
+fn a_partition_without_ext4_is_saved_to_the_host_and_never_opened() {
+    require_tools!();
+    let mut machine = Machine::partitioned(Scheme::Gpt, true);
+    let measure = measure_partition(&mut machine, None);
+    // No ext4 anywhere: a measurable disk that cannot be opened.
+    assert_eq!(measure.error, None);
+    assert_eq!(measure.partition, None);
+    let reason = measure.unsupported().expect("unsupported");
+    assert!(reason.contains("unsupported filesystem"), "{reason}");
+    machine
+        .command(Command::OpenCurrentDisk {
+            vm_id: "fixture".into(),
+            source: DiskSourceSpec::Current,
+            partition: None,
+        })
+        .unwrap();
+    machine.finish_job();
+    assert!(machine.worker.snapshot.current_disk.is_none());
+    assert!(
+        machine
+            .worker
+            .snapshot
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.contains("unsupported filesystem"))
+    );
+    assert!(machine.scratch().is_empty());
+
+    // Saving a partition writes exactly its bytes.
+    let target = machine.directory.join("partition-1.bin");
+    machine
+        .command(Command::SaveDiskPartition {
+            vm_id: "fixture".into(),
+            source: DiskSourceSpec::Current,
+            partition: 1,
+            path: target.clone(),
+        })
+        .unwrap();
+    machine.finish_job();
+    let saved = fs::read(&target).unwrap();
+    assert_eq!(saved.len() as u64, OTHER_LENGTH);
+    assert!(saved.iter().all(|byte| *byte == 0xAB));
+    // A disk without a table has nothing to carve.
+    let mut plain = Machine::new();
+    plain
+        .command(Command::SaveDiskPartition {
+            vm_id: "fixture".into(),
+            source: DiskSourceSpec::Current,
+            partition: 1,
+            path: plain.directory.join("x.bin"),
+        })
+        .unwrap();
+    plain.finish_job();
+    assert!(!plain.directory.join("x.bin").exists());
+}
+
+#[test]
+fn a_qcow2_import_holds_no_chain_but_keeps_the_one_job_slot() {
+    require_tools!();
+    let mut machine = Machine::new();
+    // An import of a file that is not there ends at once, but the job stays
+    // in its slot until the worker loop polls it.
+    let missing = machine.directory.join("missing.qcow2");
+    machine
+        .command(Command::ImportQcow2Disk {
+            vm_id: "fixture".into(),
+            path: missing,
+            hash: false,
+        })
+        .unwrap();
+    let job = machine.worker.disk_job.as_ref().expect("a job");
+    assert!(!job.holds_chain);
+    assert_eq!(job.purpose, disks::DiskJobPurpose::Import);
+    // The VM may start (or change its disk) while it converts...
+    for command in [
+        Command::Start {
+            vm_id: "fixture".into(),
+        },
+        Command::Reset {
+            vm_id: "fixture".into(),
+            confirmed: true,
+        },
+    ] {
+        assert_eq!(
+            machine.worker.disk_lease_gate(&command),
+            Ok(()),
+            "{command:?}"
+        );
+    }
+    // ...but no second disk job starts.
+    let error = machine
+        .command(Command::ImportQcow2Disk {
+            vm_id: "fixture".into(),
+            path: machine.directory.join("other.qcow2"),
+            hash: false,
+        })
+        .unwrap_err();
+    assert!(error.contains("still running"), "{error}");
+    let error = machine.command(dump("fixture")).unwrap_err();
+    assert!(error.contains("still running"), "{error}");
+    machine.finish_job();
+    // The failure is reported, and nothing was left in the recordings.
+    assert!(
+        machine
+            .worker
+            .snapshot
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.contains("missing.qcow2"))
+    );
+    assert!(disks::dump::list(std::slice::from_ref(&machine.directory)).is_empty());
+}
+
+#[test]
+fn a_full_checkpoint_on_a_restored_branch_reads_its_own_layer() {
+    require_tools!();
+    let mut machine = Machine::new();
+    let a = take_checkpoint(&mut machine, "branch-point");
+    write_into_top(
+        &machine,
+        "off-branch",
+        &[("etc/written-later", "on the abandoned branch\n")],
+    );
+    // Go back to the checkpoint: a new empty child of its layer.
+    let restore =
+        crate::snapshots::prepare_restore(&machine.worker.options, &machine.vm, &a.id, true)
+            .unwrap();
+    crate::snapshots::commit_restore(&machine.worker.options, &machine.vm, &restore).unwrap();
+    write_into_top(
+        &machine,
+        "on-branch",
+        &[("etc/on-branch", "after the restore\n")],
+    );
+    // A Full checkpoint (its memory artifact is a stub: only the disk is read).
+    let request = SnapshotRequest {
+        name: "branch-full".into(),
+        description: String::new(),
+        mode: VmSnapshotMode::Full,
+    };
+    let prepared = crate::snapshots::prepare_take(
+        &machine.worker.options,
+        &machine.vm,
+        &request,
+        VmSnapshotConsistency::Paused,
+    )
+    .unwrap();
+    fs::write(prepared.memory_path.as_ref().unwrap(), b"stub state").unwrap();
+    let b = crate::snapshots::commit_take(
+        &machine.worker.options,
+        &machine.vm,
+        prepared,
+        Some("compat".into()),
+        Some(serde_json::json!({"stub": true})),
+    )
+    .unwrap();
+    assert_eq!(b.mode, VmSnapshotMode::Full);
+    assert_eq!(b.parent_id.as_deref(), Some(a.id.as_str()));
+    machine.worker.refresh_vm_snapshots("fixture").unwrap();
+
+    let full = open_source(&mut machine, DiskSourceSpec::Checkpoint(b.id.clone())).unwrap();
+    assert_eq!(
+        full.source.kind,
+        disks::DiskSourceKind::Checkpoint {
+            id: b.id.clone(),
+            name: "branch-full".into()
+        }
+    );
+    assert_eq!(full.source.active_parent_id.as_deref(), Some(a.id.as_str()));
+    assert_eq!(
+        read_file(&full, "/etc/on-branch").unwrap(),
+        "after the restore\n"
+    );
+    assert_eq!(
+        read_file(&full, "/etc/written-after-base").unwrap(),
+        "after the base\n"
+    );
+    assert!(read_file(&full, "/etc/written-later").is_err());
+    // The Disk checkpoint it branched from has neither branch's file.
+    let disk = open_source(&mut machine, DiskSourceSpec::Checkpoint(a.id.clone())).unwrap();
+    assert_eq!(disk.source.active_layer, "disk.qcow2");
+    assert!(read_file(&disk, "/etc/on-branch").is_err());
+    assert!(read_file(&disk, "/etc/written-later").is_err());
+    // And a dump of the Full checkpoint records it.
+    machine
+        .command(Command::DumpDisk {
+            vm_id: "fixture".into(),
+            source: DiskSourceSpec::Checkpoint(b.id.clone()),
+            partition: None,
+            hash: false,
+            layer_digests: false,
+        })
+        .unwrap();
+    machine.finish_job();
+    let dumps = disks::dump::list(std::slice::from_ref(&machine.directory));
+    assert_eq!(dumps.len(), 1);
+    assert_eq!(
+        dumps[0].source.active_parent_id.as_deref(),
+        Some(a.id.as_str())
+    );
 }

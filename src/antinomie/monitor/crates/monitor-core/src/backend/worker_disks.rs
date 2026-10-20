@@ -8,8 +8,8 @@
 //! pure function the tests drive through every command.
 use super::*;
 use crate::disks::{
-    self, DiskSourceRecord,
-    job::{DumpPlan, Job, JobResult, JobSpec},
+    self, DiskSourceKind, DiskSourceRecord, DiskSourceSpec,
+    job::{DumpPlan, ImportSpec, Job, JobResult, JobSpec},
 };
 use std::path::Path;
 
@@ -51,7 +51,10 @@ pub(super) fn lease(job_vm: Option<&str>, command: &Command) -> Result<(), Strin
     match command {
         Command::MeasureDisk { .. }
         | Command::OpenCurrentDisk { .. }
+        | Command::OpenDiskReference { .. }
         | Command::DumpDisk { .. }
+        | Command::SaveDiskPartition { .. }
+        | Command::ImportQcow2Disk { .. }
         | Command::KeepCurrentDiskAsDump { .. } => {
             return Err(BUSY_MESSAGE.into());
         }
@@ -71,7 +74,12 @@ pub(super) fn lease(job_vm: Option<&str>, command: &Command) -> Result<(), Strin
 impl Worker {
     /// The gate in front of every command.
     pub(super) fn disk_lease_gate(&self, command: &Command) -> Result<(), String> {
-        let job_vm = self.disk_job.as_ref().map(|job| job.vm_id.as_str());
+        // An import reads no chain: only the one-job rule applies to it.
+        let job_vm = self
+            .disk_job
+            .as_ref()
+            .filter(|job| job.holds_chain)
+            .map(|job| job.vm_id.as_str());
         lease(job_vm, command)?;
         // A resize reads and rewrites the chain's header.
         if let (Some(job_vm), Command::Save(vm)) = (job_vm, command)
@@ -116,6 +124,14 @@ impl Worker {
         }
         if self
             .snapshot
+            .disk_reference
+            .as_ref()
+            .is_some_and(|view| view.vm_id == vm)
+        {
+            self.close_disk_reference();
+        }
+        if self
+            .snapshot
             .disk_measure
             .as_ref()
             .is_some_and(|measure| measure.vm_id == vm)
@@ -124,9 +140,17 @@ impl Worker {
         }
     }
 
-    /// Delete the open view's scratch image.
+    /// Delete the open view's scratch image, and the reference image beside
+    /// it (a diff needs both).
     pub(super) fn close_disk_view(&mut self) {
         if let Some(view) = self.snapshot.current_disk.take() {
+            disks::remove_scratch(&view);
+        }
+        self.close_disk_reference();
+    }
+
+    pub(super) fn close_disk_reference(&mut self) {
+        if let Some(view) = self.snapshot.disk_reference.take() {
             disks::remove_scratch(&view);
         }
     }
@@ -169,21 +193,70 @@ impl Worker {
         Ok((vm, dir))
     }
 
-    /// The chain top, its identity and the folder views go to; the same
-    /// checks `start()` runs on the disk. Safe because the VM is off.
-    fn disk_job_spec(&self, vm: &VmConfig, dir: &Path) -> Result<JobSpec, String> {
+    /// The chain top of `source`, its identity and the folder views go to;
+    /// the same checks `start()` runs on the disk. Safe because the VM is
+    /// off.
+    fn disk_job_spec(
+        &self,
+        vm: &VmConfig,
+        dir: &Path,
+        source: &DiskSourceSpec,
+        partition: Option<u32>,
+    ) -> Result<JobSpec, String> {
         crate::snapshots::recover_pending(&self.options, vm)?;
         let bundle: Bundle = storage::read_json(&dir.join("bundle.json"))?;
         crate::snapshots::validate_active(&self.options, vm, &bundle.base_disk)?;
-        let top = crate::snapshots::active_disk(&self.options, vm)?;
-        let source = DiskSourceRecord {
-            active_layer: top
-                .strip_prefix(dir)
-                .unwrap_or(&top)
+        let relative = |path: &Path| {
+            path.strip_prefix(dir)
+                .unwrap_or(path)
                 .to_string_lossy()
-                .into_owned(),
-            active_parent_id: crate::snapshots::list(&self.options, vm)?.active_parent_id,
-            ..DiskSourceRecord::default()
+                .into_owned()
+        };
+        let (top, record) = match source {
+            DiskSourceSpec::Current => {
+                let top = crate::snapshots::active_disk(&self.options, vm)?;
+                let record = DiskSourceRecord {
+                    kind: DiskSourceKind::Current,
+                    active_layer: relative(&top),
+                    active_parent_id: crate::snapshots::list(&self.options, vm)?.active_parent_id,
+                    ..DiskSourceRecord::default()
+                };
+                (top, record)
+            }
+            DiskSourceSpec::Checkpoint(id) => {
+                let checkpoint = crate::snapshots::checkpoint_disk(&self.options, vm, id)?;
+                // The layer's whole chain must be the VM's own, down to the
+                // pinned base.
+                crate::snapshots::validate_disk(
+                    &self.options,
+                    vm,
+                    &checkpoint.path,
+                    &bundle.base_disk,
+                )?;
+                let record = DiskSourceRecord {
+                    kind: DiskSourceKind::Checkpoint {
+                        id: checkpoint.id,
+                        name: checkpoint.name,
+                    },
+                    active_layer: relative(&checkpoint.path),
+                    active_parent_id: checkpoint.parent_id,
+                    ..DiskSourceRecord::default()
+                };
+                (checkpoint.path, record)
+            }
+            DiskSourceSpec::Base => {
+                let base = fs::canonicalize(&bundle.base_disk)
+                    .map_err(|error| format!("{}: {error}", bundle.base_disk.display()))?;
+                if !fs::metadata(&base).is_ok_and(|metadata| metadata.is_file()) {
+                    return Err("the VM's installed base image is missing".into());
+                }
+                let record = DiskSourceRecord {
+                    kind: DiskSourceKind::Base,
+                    active_layer: relative(&base),
+                    ..DiskSourceRecord::default()
+                };
+                (base, record)
+            }
         };
         let recordings = crate::locations::locations(&self.options, &vm.id)?.recording_directory;
         Ok(JobSpec {
@@ -191,9 +264,11 @@ impl Worker {
             vm_id: vm.id.clone(),
             vm_dir: dir.to_path_buf(),
             top,
-            source,
+            source: record,
             disks_dir: disks::disks_dir(&recordings),
             quota: self.options.capture_quota_size,
+            partition,
+            keep_scratch: None,
         })
     }
 
@@ -224,31 +299,105 @@ impl Worker {
         self.publish();
     }
 
-    pub(super) fn measure_disk(&mut self, vm_id: &str) -> Result<String, String> {
+    pub(super) fn measure_disk(
+        &mut self,
+        vm_id: &str,
+        source: &DiskSourceSpec,
+        partition: Option<u32>,
+    ) -> Result<String, String> {
         let (vm, dir) = self.disk_preconditions(vm_id)?;
-        let spec = self.disk_job_spec(&vm, &dir)?;
+        let spec = self.disk_job_spec(&vm, &dir, source, partition)?;
         self.snapshot.disk_measure = None;
         self.start_disk_job(Job::measure(spec)?);
         Ok("measuring the VM's disk".into())
     }
 
-    pub(super) fn open_current_disk(&mut self, vm_id: &str) -> Result<String, String> {
+    pub(super) fn open_current_disk(
+        &mut self,
+        vm_id: &str,
+        source: &DiskSourceSpec,
+        partition: Option<u32>,
+    ) -> Result<String, String> {
         let (vm, dir) = self.disk_preconditions(vm_id)?;
-        let spec = self.disk_job_spec(&vm, &dir)?;
-        // Opening again replaces the open view.
+        let spec = self.disk_job_spec(&vm, &dir, source, partition)?;
+        // Opening again replaces the open view (and its reference image).
         self.close_disk_view();
         self.start_disk_job(Job::view(spec)?);
         Ok("reading the VM's disk".into())
     }
 
+    /// A second scratch image, beside the open view, to diff against.
+    pub(super) fn open_disk_reference(
+        &mut self,
+        vm_id: &str,
+        source: &DiskSourceSpec,
+    ) -> Result<String, String> {
+        let (vm, dir) = self.disk_preconditions(vm_id)?;
+        let mut spec = self.disk_job_spec(&vm, &dir, source, None)?;
+        spec.keep_scratch = self
+            .snapshot
+            .current_disk
+            .as_ref()
+            .and_then(|view| view.image.parent().map(Path::to_path_buf));
+        self.close_disk_reference();
+        self.start_disk_job(Job::reference(spec)?);
+        Ok("reading the reference disk".into())
+    }
+
+    pub(super) fn save_disk_partition(
+        &mut self,
+        vm_id: &str,
+        source: &DiskSourceSpec,
+        partition: u32,
+        path: &Path,
+    ) -> Result<String, String> {
+        let (vm, dir) = self.disk_preconditions(vm_id)?;
+        if !path.is_absolute() {
+            return Err("the destination must be an absolute path".into());
+        }
+        let spec = self.disk_job_spec(&vm, &dir, source, Some(partition))?;
+        self.start_disk_job(Job::carve(spec, path.to_path_buf())?);
+        Ok("saving the partition".into())
+    }
+
+    /// Convert an imported qcow2 in the sandbox. It reads no VM chain, so the
+    /// VM may run; only one disk job at a time.
+    pub(super) fn import_qcow2_disk(
+        &mut self,
+        vm_id: &str,
+        path: &Path,
+        hash: bool,
+    ) -> Result<String, String> {
+        if self.disk_job.is_some() {
+            return Err(BUSY_MESSAGE.into());
+        }
+        let vm = self.snapshot_vm(vm_id)?;
+        crate::dependencies::require_tool(&self.options.qemu_img, "qemu-utils")?;
+        crate::dependencies::require_tool(Path::new("/usr/bin/bwrap"), "bubblewrap")?;
+        crate::dependencies::require_tool(Path::new("/usr/bin/prlimit"), "util-linux")?;
+        let recordings = crate::locations::locations(&self.options, vm_id)?.recording_directory;
+        let spec = ImportSpec {
+            qemu_img: self.options.qemu_img.clone(),
+            vm_id: vm.id.clone(),
+            vm_name: vm.name.clone(),
+            source: path.to_path_buf(),
+            disks_dir: disks::disks_dir(&recordings),
+            hash,
+        };
+        self.start_disk_job(Job::import_qcow2(spec)?);
+        Ok("converting the qcow2 image in the sandbox".into())
+    }
+
     pub(super) fn dump_disk(
         &mut self,
         vm_id: &str,
+        source: &DiskSourceSpec,
+        partition: Option<u32>,
         hash: bool,
         layer_digests: bool,
     ) -> Result<String, String> {
         let (vm, dir) = self.disk_preconditions(vm_id)?;
-        let spec = self.disk_job_spec(&vm, &dir)?;
+        let spec = self.disk_job_spec(&vm, &dir, source, partition)?;
         let plan = self.dump_plan(&vm, &dir, hash, layer_digests)?;
         self.start_disk_job(Job::dump(spec, plan)?);
         Ok("dumping the VM's disk".into())
@@ -267,7 +416,8 @@ impl Worker {
             .clone()
             .filter(|view| view.vm_id == vm_id)
             .ok_or("no disk view is open for this VM")?;
-        let spec = self.disk_job_spec(&vm, &dir)?;
+        // The job only names the chain; Keep reads the scratch image.
+        let spec = self.disk_job_spec(&vm, &dir, &DiskSourceSpec::Current, None)?;
         let plan = self.dump_plan(&vm, &dir, hash, layer_digests)?;
         self.start_disk_job(Job::keep(spec, plan, view)?);
         Ok("keeping the open disk view as a dump".into())
@@ -284,6 +434,19 @@ impl Worker {
         }
         self.close_disk_view();
         Ok("Current disk view closed".into())
+    }
+
+    pub(super) fn close_disk_reference_for(&mut self, vm_id: &str) -> Result<String, String> {
+        if self
+            .snapshot
+            .disk_reference
+            .as_ref()
+            .is_none_or(|view| view.vm_id != vm_id)
+        {
+            return Err("no reference disk is open for this VM".into());
+        }
+        self.close_disk_reference();
+        Ok("Reference disk closed".into())
     }
 
     pub(super) fn cancel_disk_job(&mut self, vm_id: &str) -> Result<String, String> {
@@ -317,9 +480,23 @@ impl Worker {
                 self.snapshot.disk_measure = Some(measure);
                 (true, "disk measured".to_string())
             }
+            Ok(JobResult::Reference(view)) => {
+                let message = format!("{} read for comparison", view.source.kind.label());
+                self.snapshot.disk_reference = Some(view);
+                (true, message)
+            }
+            Ok(JobResult::Carved(path, size)) => (
+                true,
+                format!(
+                    "Partition saved to {} ({})",
+                    path.display(),
+                    disks::format_size(size)
+                ),
+            ),
             Ok(JobResult::Opened(view)) => {
                 let message = format!(
-                    "Current disk of {} opened ({})",
+                    "{} of {} opened ({})",
+                    view.source.kind.label(),
                     view.vm_id,
                     view.fs_state.label()
                 );

@@ -26,7 +26,7 @@ impl DiskView {
                     if can_measure {
                         self.measured_for = None;
                         self.wait_for(true);
-                        self.action = Some(DiskAction::Measure);
+                        self.action = Some(DiskAction::Measure(self.pick.clone()));
                     }
                 }
             });
@@ -59,7 +59,10 @@ impl DiskView {
                 ))
                 .min_size(egui::vec2(ui.available_width(), 0.0)),
             )
-            .on_hover_text("Browse a raw ext4 image made elsewhere. The file stays where it is.")
+            .on_hover_text(
+                "Browse a raw ext4 image made elsewhere (the file stays where it is), or \
+                 convert a qcow2 image in the sandbox into a dump",
+            )
             .on_disabled_hover_text("Select a VM: imported images are kept with its recordings")
             .clicked()
         {
@@ -72,7 +75,7 @@ impl DiskView {
 
     /// Title, detail and color of the Current disk row.
     fn current_row(&self, cx: &DiskContext<'_>, vm: &VmConfig) -> (String, String, egui::Color32) {
-        let title = "Current disk (VM off)".to_string();
+        let title = self.source_title(&self.pick.source);
         let _ = vm;
         if !cx.vm_off {
             return (
@@ -86,6 +89,15 @@ impl DiskView {
                 (DiskJobStage::Measuring, _) => "measuring…".to_string(),
                 (DiskJobStage::Converting { percent }, DiskJobPurpose::Dump) => {
                     format!("dumping… {percent:.0} %")
+                }
+                (DiskJobStage::Converting { percent }, DiskJobPurpose::Reference) => {
+                    format!("reading the reference… {percent:.0} %")
+                }
+                (DiskJobStage::Converting { percent }, DiskJobPurpose::Carve) => {
+                    format!("saving the partition… {percent:.0} %")
+                }
+                (DiskJobStage::Converting { percent }, DiskJobPurpose::Import) => {
+                    format!("converting… {percent:.0} %")
                 }
                 (DiskJobStage::Converting { percent }, _) => format!("reading… {percent:.0} %"),
                 (DiskJobStage::Hashing { done, total }, _) => {
@@ -102,8 +114,15 @@ impl DiskView {
                 view.fs_state.label(),
                 clock(view.taken_ms / 1000)
             )
-        } else if let Some(measure) = cx.measure.filter(|measure| measure.error.is_none()) {
-            format!("not opened · ≈ {}", format_size(measure.allocated_estimate))
+        } else if let Some(measure) = self
+            .current_measure(cx)
+            .filter(|measure| measure.error.is_none())
+        {
+            if measure.unsupported().is_some() {
+                "unsupported filesystem".to_string()
+            } else {
+                format!("not opened · ≈ {}", format_size(measure.allocated_estimate))
+            }
         } else {
             "not opened".into()
         };

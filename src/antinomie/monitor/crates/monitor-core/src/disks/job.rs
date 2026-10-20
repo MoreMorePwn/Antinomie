@@ -15,6 +15,7 @@ use super::{
     dump::{DiskDump, DiskImageFormat, PART_FILE, sha256_file, sweep_partial},
     measure, quota_error, read_state, scratch_dir, sweep_scratch, unix_ms,
 };
+pub use import::ImportSpec;
 use std::{
     fs::{self, File},
     io::{self, Read},
@@ -44,6 +45,12 @@ pub struct JobSpec {
     pub disks_dir: PathBuf,
     /// The recording quota figure: the per-dump ceiling (0 for none).
     pub quota: u64,
+    /// The partition to read, for a disk with a partition table (else the
+    /// table's default, the root or largest ext4).
+    pub partition: Option<u32>,
+    /// A scratch folder that a new scratch image must not sweep away: the
+    /// open view's, while a reference image is made beside it.
+    pub keep_scratch: Option<PathBuf>,
 }
 
 /// What a dump records beyond the chain, and what it computes.
@@ -63,6 +70,10 @@ pub struct DumpPlan {
 pub enum JobResult {
     Measured(DiskMeasure),
     Opened(CurrentDiskView),
+    /// A second scratch image, to compare the open entry against.
+    Reference(CurrentDiskView),
+    /// One partition saved to a host file.
+    Carved(PathBuf, u64),
     Dumped(Box<DiskDump>),
     /// A view promoted to a dump; the view now reads the dump's image.
     Kept(Box<DiskDump>, Box<CurrentDiskView>),
@@ -72,6 +83,8 @@ pub enum JobResult {
 pub struct Job {
     pub vm_id: String,
     pub purpose: DiskJobPurpose,
+    /// The job reads the VM's disk chain: commands that would change it wait.
+    pub holds_chain: bool,
     started_ms: u64,
     estimate: Arc<AtomicU64>,
     stage: Arc<Mutex<DiskJobStage>>,
@@ -95,6 +108,21 @@ impl Job {
         })
     }
 
+    /// Flatten a source into a second scratch image (the baseline of a diff).
+    pub fn reference(spec: JobSpec) -> Result<Self, String> {
+        Self::spawn(spec, DiskJobPurpose::Reference, |run, spec| {
+            run.view(spec).map(JobResult::Reference)
+        })
+    }
+
+    /// Save one partition, of any filesystem, to `destination`.
+    pub fn carve(spec: JobSpec, destination: PathBuf) -> Result<Self, String> {
+        Self::spawn(spec, DiskJobPurpose::Carve, move |run, spec| {
+            run.carve(spec, &destination)
+                .map(|size| JobResult::Carved(destination, size))
+        })
+    }
+
     /// Flatten the chain into a new dump of the recordings.
     pub fn dump(spec: JobSpec, plan: DumpPlan) -> Result<Self, String> {
         Self::spawn(spec, DiskJobPurpose::Dump, move |run, spec| {
@@ -111,10 +139,30 @@ impl Job {
         })
     }
 
+    /// Convert a qcow2 image made elsewhere, inside the sandbox, into a dump.
+    /// Reads no VM chain.
+    pub fn import_qcow2(spec: import::ImportSpec) -> Result<Self, String> {
+        let vm_id = spec.vm_id.clone();
+        Self::start(vm_id, DiskJobPurpose::Import, false, move |run| {
+            run.import_qcow2(&spec)
+                .map(|dump| JobResult::Dumped(Box::new(dump)))
+        })
+    }
+
     fn spawn(
         spec: JobSpec,
         purpose: DiskJobPurpose,
         work: impl FnOnce(&Run, &JobSpec) -> Result<JobResult, String> + Send + 'static,
+    ) -> Result<Self, String> {
+        let vm_id = spec.vm_id.clone();
+        Self::start(vm_id, purpose, true, move |run| work(run, &spec))
+    }
+
+    fn start(
+        vm_id: String,
+        purpose: DiskJobPurpose,
+        holds_chain: bool,
+        work: impl FnOnce(&Run) -> Result<JobResult, String> + Send + 'static,
     ) -> Result<Self, String> {
         let estimate = Arc::new(AtomicU64::new(0));
         let stage = Arc::new(Mutex::new(DiskJobStage::Measuring));
@@ -125,16 +173,16 @@ impl Job {
             stage: stage.clone(),
             cancel: cancel.clone(),
         };
-        let vm_id = spec.vm_id.clone();
         let thread = thread::Builder::new()
             .name("antinomie-disk-job".into())
             .spawn(move || {
-                let _ = sender.send(work(&run, &spec));
+                let _ = sender.send(work(&run));
             })
             .map_err(|error| format!("disk job: {error}"))?;
         Ok(Self {
             vm_id,
             purpose,
+            holds_chain,
             started_ms: unix_ms(),
             estimate,
             stage,
@@ -247,6 +295,7 @@ impl Run {
             &spec.top,
             spec.source.clone(),
             &spec.disks_dir,
+            spec.partition,
         );
         measured.quota = spec.quota;
         self.estimate
@@ -267,12 +316,12 @@ impl Run {
 
     fn view(&self, spec: &JobSpec) -> Result<CurrentDiskView, String> {
         let measured = self.measure(spec)?;
-        if let Some(error) = measured.error {
+        if let Some(error) = measured.error.clone().or_else(|| measured.unsupported()) {
             return Err(error);
         }
         let view_id = crate::storage::unique_id();
         // Leftovers of an earlier crash are swept before a new scratch image.
-        sweep_scratch(&spec.disks_dir, None);
+        sweep_scratch(&spec.disks_dir, spec.keep_scratch.as_deref());
         sweep_partial(&spec.disks_dir);
         let scratch = scratch_dir(&spec.disks_dir, &view_id);
         crate::storage::private_dir(&scratch)
@@ -287,7 +336,7 @@ impl Run {
                 taken_ms: unix_ms(),
                 source: measured.source.clone(),
                 fs_state: flat.fs_state,
-                logical_size: measured.logical_size,
+                logical_size: measured.image_size(),
                 allocated_size: flat.allocated,
                 kept_as: None,
             });
@@ -310,9 +359,15 @@ impl Run {
         let mut command = measure::qemu_img_command(&spec.qemu_img);
         // No `-U`: QEMU's own image lock stays the backstop against a VM that
         // somehow has the chain open.
+        command.args(["convert", "-p"]);
+        match measured.selected() {
+            // One partition, carved in the same conversion.
+            Some(partition) => command
+                .args(["--image-opts", "-O", "raw"])
+                .arg(partition.image_opts(&spec.top)),
+            None => command.args(["-f", "qcow2", "-O", "raw"]).arg(&spec.top),
+        };
         command
-            .args(["convert", "-p", "-f", "qcow2", "-O", "raw"])
-            .arg(&spec.top)
             .arg(&part)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -323,7 +378,71 @@ impl Run {
         let outcome = self.wait(&mut child);
         outcome?;
         self.set_stage(DiskJobStage::Finalizing);
-        self.finish_image(&part, measured.logical_size, folder)
+        self.finish_image(&part, measured.image_size(), folder)
+    }
+
+    /// Save the chosen partition (any filesystem) as a raw file at
+    /// `destination`: written beside it as a hidden `.part`, synced, then
+    /// renamed. Returns the file's length.
+    fn carve(&self, spec: &JobSpec, destination: &Path) -> Result<u64, String> {
+        let measured = self.measure(spec)?;
+        if let Some(error) = measured.error.clone() {
+            return Err(error);
+        }
+        let partition = measured
+            .selected()
+            .cloned()
+            .ok_or("this disk has no partition table; use Dump disk instead")?;
+        let folder = destination
+            .parent()
+            .filter(|folder| folder.is_dir())
+            .ok_or_else(|| format!("{} has no folder to write to", destination.display()))?;
+        let free = measure::free_space(folder)?;
+        let need = if measure::sparse_supported(folder) {
+            measured.allocated_estimate
+        } else {
+            partition.length
+        };
+        if free < need.saturating_add(super::SPACE_MARGIN) {
+            return Err(format!(
+                "the partition needs about {} of free space under {}; {} is available",
+                super::format_size(need),
+                folder.display(),
+                super::format_size(free)
+            ));
+        }
+        self.set_stage(DiskJobStage::Converting { percent: 0.0 });
+        let part = folder.join(format!(".{}.part", crate::storage::unique_id()));
+        let result = (|| {
+            let mut command = measure::qemu_img_command(&spec.qemu_img);
+            command
+                .args(["convert", "-p", "--image-opts", "-O", "raw"])
+                .arg(partition.image_opts(&spec.top))
+                .arg(&part)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            let mut child = command
+                .spawn()
+                .map_err(|error| format!("qemu-img convert: {error}"))?;
+            self.wait(&mut child)?;
+            let file = File::open(&part).map_err(|error| error.to_string())?;
+            file.sync_all().map_err(|error| error.to_string())?;
+            let length = file.metadata().map_err(|error| error.to_string())?.len();
+            if length != partition.length {
+                return Err(format!(
+                    "the saved partition is {length} bytes; it is {} bytes in the table",
+                    partition.length
+                ));
+            }
+            fs::rename(&part, destination)
+                .map_err(|error| format!("{}: {error}", destination.display()))?;
+            Ok(length)
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(&part);
+        }
+        result
     }
 
     /// Sync and check a finished `.part` image, then rename it into place.
@@ -385,7 +504,12 @@ impl Run {
     fn dump(&self, spec: &JobSpec, plan: &DumpPlan) -> Result<DiskDump, String> {
         let started_ms = unix_ms();
         let measured = self.measure(spec)?;
-        if let Some(error) = measured.error.clone().or_else(|| measured.quota_error()) {
+        if let Some(error) = measured
+            .error
+            .clone()
+            .or_else(|| measured.unsupported())
+            .or_else(|| measured.quota_error())
+        {
             return Err(error);
         }
         sweep_partial(&spec.disks_dir);
@@ -412,7 +536,7 @@ impl Run {
                 fs_state: flat.fs_state,
                 started_ms,
                 finished_ms: Some(unix_ms()),
-                logical_size: measured.logical_size,
+                logical_size: measured.image_size(),
                 allocated_size: Some(flat.allocated),
                 sha256,
                 source,
@@ -552,6 +676,12 @@ impl Run {
     /// Wait for the converter, feeding its progress to the stage and
     /// honouring cancel.
     fn wait(&self, child: &mut Child) -> Result<(), String> {
+        self.wait_watching(child, None)
+    }
+
+    /// [`Self::wait`], also stopping the converter when `watch`'s file
+    /// allocates more than its limit (a hostile image that expands).
+    fn wait_watching(&self, child: &mut Child, watch: Option<(&Path, u64)>) -> Result<(), String> {
         let stdout = child.stdout.take().ok_or("qemu-img stdout unavailable")?;
         let stage = self.stage.clone();
         let progress = thread::spawn(move || read_progress(stdout, &stage));
@@ -569,6 +699,18 @@ impl Run {
                 let _ = progress.join();
                 let _ = errors.join();
                 return Err("cancelled".into());
+            }
+            if let Some((path, limit)) = watch
+                && fs::metadata(path).is_ok_and(|metadata| metadata.blocks() * 512 > limit)
+            {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = progress.join();
+                let _ = errors.join();
+                return Err(format!(
+                    "the converted image grew past {}, the free space left for it",
+                    super::format_size(limit)
+                ));
             }
             match child.try_wait() {
                 Ok(Some(status)) => break status,
@@ -620,5 +762,9 @@ pub fn parse_progress(line: &str) -> Option<f32> {
     (total > 0.0 && done.is_finite()).then(|| (done / total * 100.0).clamp(0.0, 100.0))
 }
 
+pub mod import;
+
+#[cfg(test)]
+mod import_tests;
 #[cfg(test)]
 mod tests;

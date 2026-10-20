@@ -151,6 +151,7 @@ fn a_measure_of_a_chain_reports_size_layers_and_estimate() {
         &top,
         DiskSourceRecord::default(),
         &disks_dir(&fixture.root),
+        None,
     );
     assert_eq!(measured.error, None);
     assert_eq!(measured.logical_size, 32 * 1024 * 1024);
@@ -186,6 +187,7 @@ fn measuring_a_missing_chain_reports_the_error_on_the_card() {
         &fixture.path("absent.qcow2"),
         DiskSourceRecord::default(),
         &disks_dir(&fixture.root),
+        None,
     );
     assert!(measured.error.unwrap().contains("qemu-img"));
 }

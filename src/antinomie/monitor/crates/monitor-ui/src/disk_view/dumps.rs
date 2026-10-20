@@ -82,6 +82,16 @@ fn dump_detail(row: &Row) -> String {
     if dump.imported {
         parts.push("imported".into());
     }
+    if !matches!(
+        dump.source.kind,
+        antinomie_monitor_core::disks::DiskSourceKind::Current
+            | antinomie_monitor_core::disks::DiskSourceKind::Imported
+    ) {
+        parts.push(dump.source.kind.label().to_lowercase());
+    }
+    if let Some(partition) = &dump.source.partition {
+        parts.push(format!("partition {}", partition.index));
+    }
     parts.push(format!(
         "{} of {}",
         format_size(dump.allocated_size.unwrap_or(dump.logical_size)),
@@ -236,10 +246,14 @@ impl DiskView {
         if self.waiting.is_some() {
             return Some("A request is on its way".into());
         }
-        let Some(measure) = cx.measure else {
+        let Some(measure) = self.current_measure(cx) else {
             return Some("Measuring the disk…".into());
         };
-        measure.error.clone().or_else(|| measure.quota_error())
+        measure
+            .error
+            .clone()
+            .or_else(|| measure.unsupported())
+            .or_else(|| measure.quota_error())
     }
 
     /// Why the open view cannot be kept now.
@@ -269,13 +283,13 @@ impl DiskView {
         let response = ui
             .add_enabled(blocked.is_none(), button)
             .on_hover_text(
-                "Flatten the VM's current disk into a standalone sparse image kept with its \
-                 recordings",
+                "Flatten the picked disk (the current disk, a checkpoint or the base) into a \
+                 standalone sparse image kept with the VM's recordings",
             )
             .on_disabled_hover_text(blocked.clone().unwrap_or_default());
         if response.clicked() {
             self.wait_for(false);
-            self.action = Some(DiskAction::Dump);
+            self.action = Some(DiskAction::Dump(self.pick.clone()));
         }
     }
 
@@ -318,7 +332,10 @@ impl DiskView {
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
                 if let Some(job) = cx.job.filter(|job| {
-                    matches!(job.purpose, DiskJobPurpose::Dump | DiskJobPurpose::Keep)
+                    matches!(
+                        job.purpose,
+                        DiskJobPurpose::Dump | DiskJobPurpose::Keep | DiskJobPurpose::Import
+                    )
                 }) {
                     self.writing_row(ui, job, font_size);
                 }
@@ -386,6 +403,8 @@ impl DiskView {
         };
         let title = if job.purpose == DiskJobPurpose::Keep {
             format!("{} Keeping the view", egui_phosphor::regular::RECORD)
+        } else if job.purpose == DiskJobPurpose::Import {
+            format!("{} Converting qcow2", egui_phosphor::regular::RECORD)
         } else {
             format!("{} Writing dump", egui_phosphor::regular::RECORD)
         };

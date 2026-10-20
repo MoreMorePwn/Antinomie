@@ -21,6 +21,9 @@ struct Scene {
     view: Option<CurrentDiskView>,
     measure: Option<DiskMeasure>,
     job: Option<DiskJobProgress>,
+    reference: Option<CurrentDiskView>,
+    checkpoints: Vec<VmCheckpoint>,
+    triage_paths: Arc<BTreeSet<String>>,
     other_job: bool,
     settings: DiskSettings,
     /// The recording folders dumps are listed from.
@@ -51,6 +54,9 @@ fn measure() -> DiskMeasure {
         directory: PathBuf::from("/home/user/rec/disks"),
         quota: 4 * 1024 * 1024 * 1024,
         error: None,
+        partitions: None,
+        partition_error: None,
+        partition: None,
     }
 }
 
@@ -82,6 +88,9 @@ impl Scene {
             view: None,
             measure: None,
             job: None,
+            reference: None,
+            checkpoints: Vec::new(),
+            triage_paths: Arc::default(),
             other_job: false,
             settings: DiskSettings::default(),
             roots: Vec::new(),
@@ -124,6 +133,9 @@ impl Scene {
                             current_disk: self.view.as_ref(),
                             measure: self.measure.as_ref(),
                             job: self.job.as_ref(),
+                            reference: self.reference.as_ref(),
+                            checkpoints: &self.checkpoints,
+                            triage_paths: &self.triage_paths,
                             other_job: self.other_job,
                             font_size: 16.0,
                             settings: &mut self.settings,
@@ -389,7 +401,7 @@ fn answer_info(view: &mut DiskView, path: &str, entry: DiskEntry, elf: bool) {
         .expect("an Info request is queued");
     let mut answer = info_for(path, entry, elf);
     answer.token = token;
-    view.accept(answer);
+    view.accept(&egui::Context::default(), answer);
 }
 
 #[test]
@@ -449,7 +461,7 @@ fn a_running_vm_disables_the_entry_and_offers_stop_vm() {
     // Nothing is requested for the measurement while the VM runs.
     assert_ne!(
         scene.frame(&mut view, &ctx, Vec::new()).1,
-        Some(DiskAction::Measure)
+        Some(DiskAction::Measure(Pick::default()))
     );
     // Disabled when no VM can be stopped (a stop is already under way).
     scene.can_stop = false;
@@ -464,7 +476,7 @@ fn a_stopped_vm_asks_for_a_measurement_once_and_shows_the_card() {
     // The first frame asks; later frames wait for the answer.
     assert_eq!(
         scene.frame(&mut view, &ctx, Vec::new()).1,
-        Some(DiskAction::Measure)
+        Some(DiskAction::Measure(Pick::default()))
     );
     for _ in 0..3 {
         assert_eq!(scene.frame(&mut view, &ctx, Vec::new()).1, None);
@@ -487,7 +499,10 @@ fn a_stopped_vm_asks_for_a_measurement_once_and_shows_the_card() {
     assert!(has(&texts, "source snapshots/ab12.qcow2"));
     assert!(has(&texts, "41.0 GiB free in /home/user/rec/disks"));
     assert!(has(&texts, "not opened · ≈ 1.9 GiB"));
-    assert_eq!(scene.click(&mut view, &ctx, "Open"), Some(DiskAction::Open));
+    assert_eq!(
+        scene.click(&mut view, &ctx, "Open"),
+        Some(DiskAction::Open(Pick::default()))
+    );
 }
 
 #[test]
@@ -495,7 +510,7 @@ fn a_failed_measure_or_a_full_disk_blocks_open_and_says_why() {
     let ctx = context();
     let mut scene = Scene::stopped();
     let mut view = DiskView {
-        measured_for: Some(("vm".into(), true)),
+        measured_for: Some(("vm".into(), true, Pick::default())),
         ..DiskView::default()
     };
     let mut failed = measure();
@@ -541,7 +556,7 @@ fn a_running_job_shows_progress_and_cancel() {
     });
     let mut view = DiskView::default();
     let texts = scene.settle(&mut view, &ctx);
-    assert!(has(&texts, "Reading the current disk… 46 %"), "{texts:?}");
+    assert!(has(&texts, "Reading the disk… 46 %"), "{texts:?}");
     assert!(has(&texts, "reading… 46 %"));
     assert!(texts.iter().any(|text| text.contains("About 1.9 GiB")));
     assert!(texts
@@ -554,7 +569,7 @@ fn a_running_job_shows_progress_and_cancel() {
     // No measurement is requested while a job runs.
     assert_ne!(
         scene.frame(&mut view, &ctx, Vec::new()).1,
-        Some(DiskAction::Measure)
+        Some(DiskAction::Measure(Pick::default()))
     );
     // Spinner while measuring.
     scene.job = Some(DiskJobProgress {
@@ -563,7 +578,7 @@ fn a_running_job_shows_progress_and_cancel() {
         ..scene.job.clone().unwrap()
     });
     let (output, _) = scene.frame(&mut view, &ctx, Vec::new());
-    assert!(has(&shown(&output), "Measuring the current disk…"));
+    assert!(has(&shown(&output), "Measuring the disk…"));
     assert!(theme::spinners_in(&output.shapes) >= 1);
 }
 
@@ -1116,31 +1131,44 @@ fn find_runs_off_the_ui_thread_and_reveals_a_match() {
     let matches = vec![
         FoundEntry {
             path: "/lib/x86_64/libc.so.6".into(),
-            kind: DiskEntryKind::File, offset: None, snippet: None,
+            kind: DiskEntryKind::File,
+            offset: None,
+            snippet: None,
         },
         FoundEntry {
             path: "/lib/libm.so".into(),
-            kind: DiskEntryKind::File, offset: None, snippet: None,
+            kind: DiskEntryKind::File,
+            offset: None,
+            snippet: None,
         },
         FoundEntry {
             path: "/usr/lib/libz.so".into(),
-            kind: DiskEntryKind::Symlink, offset: None, snippet: None,
+            kind: DiskEntryKind::Symlink,
+            offset: None,
+            snippet: None,
         },
     ];
-    view.accept(worker::Answer {
-        token,
-        reply: Ok(Ok(DiskAnswer::Found(FindResults {
-            query: FindQuery {
-                pattern: "*.so".into(),
-                mode: FindMode::Glob,
-            },
-            matches,
-            truncated: true,
-            timed_out: false,
-            scanned: 123, files_read: 0, bytes_read: 0, partial_files: 0, byte_limit_reached: false,
-        }))),
-        placed: None,
-    });
+    view.accept(
+        &egui::Context::default(),
+        worker::Answer {
+            token,
+            reply: Ok(Ok(DiskAnswer::Found(FindResults {
+                query: FindQuery {
+                    pattern: "*.so".into(),
+                    mode: FindMode::Glob,
+                },
+                matches,
+                truncated: true,
+                timed_out: false,
+                scanned: 123,
+                files_read: 0,
+                bytes_read: 0,
+                partial_files: 0,
+                byte_limit_reached: false,
+            }))),
+            placed: None,
+        },
+    );
     assert!(!view.find.running);
     let texts = scene.settle(&mut view, &ctx);
     assert!(has(&texts, "3 matches"), "{texts:?}");
@@ -1232,7 +1260,11 @@ fn find_errors_and_empty_results_are_shown() {
         matches: Vec::new(),
         truncated: false,
         timed_out: true,
-        scanned: 9, files_read: 0, bytes_read: 0, partial_files: 0, byte_limit_reached: false,
+        scanned: 9,
+        files_read: 0,
+        bytes_read: 0,
+        partial_files: 0,
+        byte_limit_reached: false,
     }));
     let texts = scene.settle(&mut view, &ctx);
     assert!(has(&texts, "0 matches"), "{texts:?}");
@@ -1341,7 +1373,7 @@ fn a_running_vm_asks_for_a_new_measurement_after_it_stops() {
     scene.vm_off = true;
     assert_eq!(
         scene.frame(&mut view, &ctx, Vec::new()).1,
-        Some(DiskAction::Measure)
+        Some(DiskAction::Measure(Pick::default()))
     );
 }
 
@@ -1351,13 +1383,13 @@ fn the_refresh_button_measures_again_only_when_it_can() {
     let mut scene = Scene::stopped();
     scene.measure = Some(measure());
     let mut view = DiskView {
-        measured_for: Some(("vm".into(), true)),
+        measured_for: Some(("vm".into(), true, Pick::default())),
         ..DiskView::default()
     };
     let refresh = egui_phosphor::regular::ARROW_CLOCKWISE;
     assert_eq!(
         scene.click(&mut view, &ctx, refresh),
-        Some(DiskAction::Measure)
+        Some(DiskAction::Measure(Pick::default()))
     );
     view.waiting = None;
     scene.vm_off = false;
@@ -1685,7 +1717,7 @@ fn the_dump_record_fills_the_details_dock() {
         "16.0 GiB",
         "812 MiB",
         &"ab".repeat(32),
-        "Current disk of the VM",
+        "Current disk",
         "snapshots/ab12.qcow2",
         "parent-7",
     ] {
@@ -1764,7 +1796,10 @@ fn the_dump_disk_button_follows_the_measure_the_vm_and_the_job() {
     let mut scene = Scene::stopped();
     scene.measure = Some(measure());
     let mut view = DiskView::default();
-    assert_eq!(scene.click(&mut view, &ctx, &label), Some(DiskAction::Dump));
+    assert_eq!(
+        scene.click(&mut view, &ctx, &label),
+        Some(DiskAction::Dump(Pick::default()))
+    );
     assert!(view.waiting.is_some(), "a request is on its way");
     // ...and not twice.
     assert_eq!(scene.click(&mut view, &ctx, &label), None);
@@ -1799,7 +1834,10 @@ fn the_dump_disk_button_follows_the_measure_the_vm_and_the_job() {
     let mut scene = Scene::stopped();
     scene.measure = Some(measure());
     let mut view = DiskView::default();
-    assert_eq!(scene.click(&mut view, &ctx, "Open"), Some(DiskAction::Open));
+    assert_eq!(
+        scene.click(&mut view, &ctx, "Open"),
+        Some(DiskAction::Open(Pick::default()))
+    );
 }
 
 #[test]
@@ -2126,3 +2164,5 @@ fn importing_an_image_selects_it_and_a_bad_file_is_refused_in_the_dialog() {
     // The imported file stays where it is.
     assert!(good.is_file());
 }
+
+mod phase3;
