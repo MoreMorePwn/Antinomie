@@ -81,6 +81,14 @@ enum GraphicsDriver {
 #[cfg(test)]
 mod graphics_option_tests {
     use super::*;
+    /// A swap that waits for a compositor frame callback never returns for a
+    /// window the compositor is not showing; with detached windows drawn from
+    /// the main window's update that stops every window.
+    #[test]
+    fn buffer_swaps_never_wait_for_the_compositor() {
+        assert!(!native_options().vsync);
+    }
+
     #[test]
     fn driver_selection_is_explicit_and_unknown_drivers_are_rejected() {
         assert!(
@@ -151,18 +159,7 @@ fn main() -> eframe::Result<()> {
     let smoke = args.smoke_exit.then_some(Duration::from_secs(3));
     eframe::run_native(
         "Antinomie Monitor",
-        eframe::NativeOptions {
-            // Matches the desktop entry (assets/antinomie.desktop) so the menu
-            // icon applies to the running window.
-            viewport: eframe::egui::ViewportBuilder::default()
-                .with_app_id("antinomie")
-                .with_title(format!("Antinomie {}", antinomie_monitor_core::APP_VERSION))
-                .with_inner_size([1280.0, 820.0])
-                .with_min_inner_size([800.0, 600.0])
-                // Dropping a host file on this window opens Upload with it.
-                .with_drag_and_drop(true),
-            ..Default::default()
-        },
+        native_options(),
         Box::new(move |cc| {
             Ok(Box::new(app::MonitorApp::new(
                 cc,
@@ -172,6 +169,29 @@ fn main() -> eframe::Result<()> {
             )))
         }),
     )
+}
+
+/// Window options for the app and its detached windows.
+fn native_options() -> eframe::NativeOptions {
+    eframe::NativeOptions {
+        // Matches the desktop entry (assets/antinomie.desktop) so the menu
+        // icon applies to the running window.
+        viewport: eframe::egui::ViewportBuilder::default()
+            .with_app_id("antinomie")
+            .with_title(format!("Antinomie {}", antinomie_monitor_core::APP_VERSION))
+            .with_inner_size([1280.0, 820.0])
+            .with_min_inner_size([800.0, 600.0])
+            // Dropping a host file on this window opens Upload with it.
+            .with_drag_and_drop(true),
+        // Detached windows are drawn from the main window's update on the one
+        // UI thread. With vsync every buffer swap waits for the compositor's
+        // next frame callback, and a compositor sends none to a window it is
+        // not showing (idle, covered or minimized on WSLg's Wayland): the swap
+        // of that one window then never returns and every window stops
+        // answering. Without vsync a swap never waits.
+        vsync: false,
+        ..Default::default()
+    }
 }
 
 fn install_base(options: BackendOptions, directory: PathBuf) -> Result<(), String> {
