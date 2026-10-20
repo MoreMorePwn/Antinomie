@@ -33,11 +33,11 @@ marks invalid are unavailable, never zero. Kernels of revision 11 to 16 keep
 the temporary collector described below, unchanged, until their bases are
 outdated; a revision-17 kernel never receives the collector upload or exec.
 
-### Accepted debugger, phases 0 and 1 (0.7.0)
+### Accepted debugger, phases 0, 1 and 2 (0.7.0)
 
 The debugger is a ptrace-free, process-scoped engine in the guest kernel
 (`kernel/antinomie/debug.c`, one file per architecture, x86-64 first) driven by
-control opcodes `0x1080..0x108c` and served to gdb, IDA, Ghidra and radare2 by a
+control opcodes `0x1080..0x108d` and served to gdb, IDA, Ghidra and radare2 by a
 host RSP server (`gdbstub 0.7.10`, MIT/Apache-2.0) on a loopback Unix socket and
 an ephemeral 127.0.0.1 port. Contract revision 17 is unchanged: the opcodes are
 additive and an older guest answers `-EOPNOTSUPP`. Layouts are in
