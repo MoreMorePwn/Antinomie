@@ -257,102 +257,205 @@ impl MonitorApp {
         // Cancel stays usable when the VM stops or a launch is pending; only
         // the form and its actions wait for a running VM.
         let ready = self.running() && self.pending_launch.is_none();
-        {
-            let selection_error = self.exec.analysis.validate().err();
-            let graphical = self.selected_vm_graphical();
-            let core_on_exit = self
-                .snapshot
-                .guest_kernel
-                .as_ref()
-                .is_some_and(|kernel| kernel.revision.is_some_and(|revision| revision >= 15));
-            let debug_on_start = self
-                .snapshot
-                .guest_kernel
-                .as_ref()
-                .is_some_and(|kernel| kernel.revision.is_some_and(|revision| revision >= 17));
-            let footer = ui.spacing().interact_size.y
-                + 24.0
-                + if selection_error.is_some() {
-                    ui.text_style_height(&egui::TextStyle::Body) + 10.0
-                } else {
-                    0.0
-                };
-            ui.add_enabled_ui(ready, |ui| {
-                egui::ScrollArea::vertical()
-                    .id_salt("run-setup")
-                    .max_height((ui.available_height() - footer).max(80.0))
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        if crate::analysis::launch_fields(
-                            ui,
-                            &mut self.exec,
-                            &mut self.args,
-                            &mut self.env,
-                            &self.snapshot.analysis_tools,
-                            crate::analysis::LaunchCapabilities {
-                                graphical,
-                                core_on_exit,
-                                debug_on_start,
-                                core_limits: self.snapshot.guest_core_limits,
-                                core_default_mib: self.settings.core_budget_mib,
+        let uploading = self.launch_source == crate::analysis::LaunchSource::Upload;
+        let selection_error = self.exec.analysis.validate().err();
+        let graphical = self.selected_vm_graphical();
+        let core_on_exit = self
+            .snapshot
+            .guest_kernel
+            .as_ref()
+            .is_some_and(|kernel| kernel.revision.is_some_and(|revision| revision >= 15));
+        let debug_on_start = self
+            .snapshot
+            .guest_kernel
+            .as_ref()
+            .is_some_and(|kernel| kernel.revision.is_some_and(|revision| revision >= 17));
+        // The footer: its rule and buttons, and the line of an error above.
+        let footer = ui.spacing().interact_size.y
+            + 24.0
+            + if selection_error.is_some() {
+                ui.text_style_height(&egui::TextStyle::Body) + 10.0
+            } else {
+                0.0
+            };
+        let chooser_note = if self.folder_picker.checking() {
+            Some("Checking file chooser…")
+        } else if !self.folder_picker.installed() {
+            Some("File selection requires Zenity; you can type a file path.")
+        } else {
+            None
+        };
+        let mut choose = false;
+        ui.add_enabled_ui(ready, |ui| {
+            egui::ScrollArea::vertical()
+                .id_salt("run-setup")
+                .max_height((ui.available_height() - footer).max(80.0))
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    let outcome = crate::analysis::launch_fields(
+                        ui,
+                        &mut self.exec,
+                        &mut self.args,
+                        &mut self.env,
+                        &self.snapshot.analysis_tools,
+                        crate::analysis::LaunchCapabilities {
+                            graphical,
+                            core_on_exit,
+                            debug_on_start,
+                            core_limits: self.snapshot.guest_core_limits,
+                            core_default_mib: self.settings.core_budget_mib,
+                        },
+                        crate::analysis::ProgramSource {
+                            choice: &mut self.launch_source,
+                            upload: crate::analysis::UploadFields {
+                                host_file: &mut self.source,
+                                destination: &mut self.destination,
+                                overwrite: &mut self.overwrite,
+                                can_choose: self.folder_picker.available()
+                                    && self.pending_upload.is_none(),
+                                chooser_note,
+                                busy: self.pending_upload.is_some(),
                             },
-                        ) {
-                            self.tools_open = true;
-                        }
-                        if let Some(size) = ui.data_mut(|data| {
-                            data.remove_temp::<u32>(crate::analysis::remembered_budget_id())
-                        }) {
-                            self.settings.core_budget_mib = size >> 20;
-                        }
-                    });
-            });
-            ui.separator();
-            if let Some(reason) = selection_error {
-                crate::activity::error(ui, reason);
+                        },
+                    );
+                    if outcome.install {
+                        self.tools_open = true;
+                    }
+                    if outcome.source.host_file_edited {
+                        self.upload_browser.selected = None;
+                    }
+                    choose = outcome.source.choose_file;
+                    if let Some(size) = ui.data_mut(|data| {
+                        data.remove_temp::<u32>(crate::analysis::remembered_budget_id())
+                    }) {
+                        self.settings.core_budget_mib = size >> 20;
+                    }
+                });
+        });
+        if choose {
+            self.upload_browser.invalidate();
+            if let Err(error) = self.folder_picker.choose(FolderTarget {
+                generation: self.upload_browser.generation,
+                kind: FolderKind::UploadFile,
+            }) {
+                self.report_error(format!("Host file: {error}"));
             }
-            ui.horizontal(|ui| {
-                let run = ui
-                    .add_enabled(
-                        ready
-                            && !self.exec.path.trim().is_empty()
-                            && self.exec.analysis.validate().is_ok(),
+        }
+        if let Some(reason) = selection_error {
+            crate::activity::error(ui, reason);
+        }
+        let valid = self.exec.analysis.validate().is_ok();
+        let program_ready = if uploading {
+            !self.source.trim().is_empty() && !self.destination.trim().is_empty()
+        } else {
+            !self.exec.path.trim().is_empty()
+        };
+        let mut run_rects = None;
+        let mut start = false;
+        let mut analyze_clicked = false;
+        let mut cancel = false;
+        let vm_name = self.selected_vm().map(|vm| vm.name.clone());
+        crate::widgets::footer_split(
+            ui,
+            |ui| {
+                let room = (ui.available_width() - 330.0).max(60.0);
+                ui.scope(|ui| {
+                    ui.set_max_width(room);
+                    if self.pending_upload.is_some() {
+                        theme::loading_weak(ui, "Uploading…");
+                    } else if ready {
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(format!(
+                                    "{} {} is running",
+                                    egui_phosphor::regular::CHECK_CIRCLE,
+                                    vm_name.as_deref().unwrap_or("The VM")
+                                ))
+                                .small()
+                                .color(theme::good()),
+                            )
+                            .truncate(),
+                        );
+                    } else {
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(format!(
+                                    "{} Start the VM to run a program",
+                                    egui_phosphor::regular::WARNING
+                                ))
+                                .small()
+                                .color(theme::warn()),
+                            )
+                            .truncate(),
+                        );
+                    }
+                });
+            },
+            |ui| {
+                // Right to left: the main action lands rightmost.
+                let run = if uploading {
+                    ui.add_enabled(
+                        ready && program_ready && valid && self.pending_upload.is_none(),
+                        primary_button(&format!("{} Upload", egui_phosphor::regular::UPLOAD_SIMPLE)),
+                    )
+                    .on_hover_text(
+                        "Upload as executable. The program is then set to its guest path in this window, ready to Run.",
+                    )
+                    .on_disabled_hover_text("Choose the host file and the guest path")
+                } else {
+                    ui.add_enabled(
+                        ready && program_ready && valid,
                         primary_button(&format!("{} Run", egui_phosphor::regular::PLAY)),
                     )
-                    .on_disabled_hover_text("Enter the executable to run");
-                if run.clicked() {
-                    match crate::analysis::snapshot(&self.exec, &self.args, &self.env, graphical) {
-                        Ok(request) => self.send(Command::Execute(request)),
-                        Err(reason) => self.report_error(reason),
-                    }
-                    if self.pending_launch.is_some() {
-                        self.launch_open = false;
-                    }
-                }
-                let analyze = ui.add_enabled(
-                    ready
-                        && self.exec.analysis.enabled
-                        && !self.exec.path.trim().is_empty()
-                        && self.exec.analysis.validate().is_ok(),
-                    egui::Button::new("Analyze Only"),
-                );
-                if analyze.clicked() {
-                    self.send(Command::AnalyzeOnly {
-                        path: self.exec.path.clone(),
-                        uid: self.exec.uid,
-                        gid: self.exec.gid,
-                        analysis: self.exec.analysis.clone(),
+                    .on_disabled_hover_text("Enter the executable to run")
+                };
+                start = run.clicked();
+                let analyze = ui
+                    .add_enabled(
+                        ready && !uploading && self.exec.analysis.enabled && program_ready && valid,
+                        egui::Button::new("Analyze Only"),
+                    )
+                    .on_hover_text("Acquire the file and run static analysis without launching it")
+                    .on_disabled_hover_text(if uploading {
+                        "Upload the file first"
+                    } else {
+                        "Needs Static Analysis and an executable"
                     });
-                    self.focus_panel = Some(Panel::StaticAnalysis);
+                analyze_clicked = analyze.clicked();
+                cancel = ui.button("Cancel").clicked();
+                run_rects = Some((run.rect, analyze.rect));
+            },
+        );
+        if start {
+            if uploading {
+                self.request_upload(true);
+            } else {
+                match crate::analysis::snapshot(&self.exec, &self.args, &self.env, graphical) {
+                    Ok(request) => self.send(Command::Execute(request)),
+                    Err(reason) => self.report_error(reason),
                 }
-                if ui.button("Cancel").clicked() {
+                if self.pending_launch.is_some() {
                     self.launch_open = false;
                 }
-                #[cfg(test)]
-                {
-                    self.launch_action_rects = Some((run.rect, analyze.rect));
-                }
-            });
+            }
         }
+        if analyze_clicked {
+            self.send(Command::AnalyzeOnly {
+                path: self.exec.path.clone(),
+                uid: self.exec.uid,
+                gid: self.exec.gid,
+                analysis: self.exec.analysis.clone(),
+            });
+            self.focus_panel = Some(Panel::StaticAnalysis);
+        }
+        if cancel {
+            self.launch_open = false;
+        }
+        #[cfg(test)]
+        {
+            self.launch_action_rects = run_rects;
+        }
+        let _ = run_rects;
     }
 
     /// New VM / VM configuration: the machine, display and emulation on the

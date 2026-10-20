@@ -293,6 +293,9 @@ impl MonitorApp {
                     self.launch_form(ui);
                 });
             self.launch_open &= open;
+            if !self.launch_open {
+                self.cancel_upload_handoff();
+            }
         }
         if self.upload_open {
             let mut open = true;
@@ -528,7 +531,10 @@ impl MonitorApp {
                 self.stealth_open = false;
                 self.credentials.reset();
             }
-            Dialog::Launch => self.launch_open = false,
+            Dialog::Launch => {
+                self.launch_open = false;
+                self.cancel_upload_handoff();
+            }
             Dialog::Upload => self.close_upload(),
             Dialog::Settings => self.settings_open = false,
             Dialog::Import => self.import_open = false,

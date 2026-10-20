@@ -309,6 +309,8 @@ pub struct MonitorApp {
     config_open: bool,
     launch_open: bool,
     upload_open: bool,
+    /// Run program: the program is in the guest, or a host file to upload first.
+    launch_source: crate::analysis::LaunchSource,
     draft: VmConfig,
     draft_generation: u64,
     folder_picker: FolderPicker,
@@ -502,6 +504,7 @@ impl MonitorApp {
             settings_page: Default::default(),
             launch_open: false,
             upload_open: false,
+            launch_source: Default::default(),
             draft: VmConfig::default(),
             draft_generation: 0,
             folder_picker,
