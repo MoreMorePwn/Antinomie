@@ -705,3 +705,40 @@ fn a_failed_read_is_listed_with_its_result_while_the_toggle_is_off() {
     assert!(!visibility.keeps(&row));
     assert!(visibility.keeps_with(&row, true));
 }
+
+fn hash_note(flags: u8) -> antinomie_monitor_core::FieldSummary {
+    let mut bytes = vec![0u8; 80];
+    bytes[0] = 1; // exec
+    bytes[3] = flags;
+    captured("lifecycle.file_hash", "antinomie.hash/1", &bytes)
+}
+
+fn executed_detail(mut call: InvocationSummary, flags: Option<u8>) -> String {
+    if let Some(flags) = flags {
+        let mut note = call.exit.clone().unwrap();
+        note.phase = 3;
+        note.fields = vec![hash_note(flags)];
+        call.kernel_notes.push(note);
+    }
+    let event = trace::representative(&call).unwrap();
+    let hit = Hit {
+        category: Category::Executed,
+        inferred: false,
+    };
+    file_category::detail(&FdState::default(), &call, event, hit)
+}
+
+#[test]
+fn an_exec_of_a_script_says_its_interpreter_ran_without_naming_one() {
+    let run = || op(59, "execve", 0, Some("/tmp/run.sh"), [0; 6]);
+    assert_eq!(executed_detail(run(), None), "");
+    assert_eq!(
+        executed_detail(run(), Some(0)),
+        "",
+        "an image that was the file itself"
+    );
+    assert_eq!(
+        executed_detail(run(), Some(1)),
+        "script run through its interpreter, path not recorded"
+    );
+}

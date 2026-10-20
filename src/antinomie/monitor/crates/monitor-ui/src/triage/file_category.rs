@@ -12,6 +12,7 @@
 use super::file_location::{self, Location};
 use super::sigma_events::{O_CREAT, O_TMPFILE, O_TRUNC};
 use super::*;
+use antinomie_monitor_core::kernel_notes::HashKind;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum Category {
@@ -326,6 +327,9 @@ fn flock_text(operation: u64) -> &'static str {
     }
 }
 
+/// What an exec of a script shows. The interpreter's path is not recorded.
+const SCRIPT_NOTE: &str = "script run through its interpreter, path not recorded";
+
 /// Words for a row's Detail column. Empty when the syscall name says it all.
 pub(super) fn detail(
     files: &FdState,
@@ -459,7 +463,19 @@ pub(super) fn detail(
             let destination = displayed_path(call, event, files);
             format!("{source} → {destination}")
         }
-        Category::Executed => normalized::command_line(call, event).unwrap_or_default(),
+        Category::Executed => {
+            let line = normalized::command_line(call, event).unwrap_or_default();
+            // The guest records that the image it hashed was a script's
+            // interpreter, not which one; the path of the interpreter is not
+            // in the trace.
+            let scripted = kernel_records::file_hash(call, HashKind::Exec)
+                .is_some_and(|hash| hash.interpreter);
+            match (scripted, line.is_empty()) {
+                (false, _) => line,
+                (true, true) => SCRIPT_NOTE.into(),
+                (true, false) => format!("{line} ({SCRIPT_NOTE})"),
+            }
+        }
         Category::Mapped => match name {
             "msync" => "shared mapping written back".into(),
             "mprotect" => "mapping made executable".into(),

@@ -177,6 +177,9 @@ it runs.
     ended is not reported, and there is no `ProcessGuid`; the event time is
     kept in the journal. Journal format 3 is unchanged and older journals still
     load. No rule in the installed SigmaHQ Linux pack uses the category yet.
+  - Triage › File activity › Executed says when the exec was a script run
+    through its interpreter, using the guest's own flag on the exec's hash
+    record. The interpreter's path is not shown: the guest does not record it.
   - The guest's count of dropped credential and hash records is shown in the
     run summary health, counts as observed loss, and is named in the TRL
     hover.
