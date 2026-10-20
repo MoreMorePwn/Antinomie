@@ -857,7 +857,17 @@ metadata and namespace operations, including failed attempts and shared mapping
 observations. Unknown originals, offsets, inode aliases and missing bytes stay
 explicit gaps. No host filesystem access is inferred from a guest path.
 
-Network has IPs, Hosts, HTTP and DNS tables with the requested compact columns.
+The Network viewer displays TShark's parse and decodes nothing itself: one
+sandboxed single-pass `-T fields` run prints the packet list (Protocol and Info
+columns plus the fields the colors and menus need) into a disk-backed row
+store, validated and sanitized per row, and the selected frame's details come
+from `-T pdml` with byte ranges checked against the frame. Finished captures
+cache their rows in `<capture>.pcap.view` keyed by size, mtime and TShark
+version; live captures append. Without TShark only raw frames and bytes show.
+Known limits: PDML byte ranges for reassembled or decrypted data are relative to
+that data and can highlight the wrong frame bytes (only ranges outside the frame
+are dropped), and single-pass details omit "reassembled in" links.
+Network has IPs, Hosts, HTTP, DNS and Sessions tables with the requested compact columns.
 Use recorded packet frame links and TShark's existing decoder. Local GeoIP/ASN
 data may enrich destination rows; do not contact an external lookup service.
 PCAPs record VM traffic, so time-window correlation does not prove process
