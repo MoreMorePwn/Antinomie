@@ -25,6 +25,7 @@ mod index;
 mod packs;
 mod registry;
 mod requirements;
+mod rule_text;
 mod selection;
 mod sigma;
 mod source_archive;
@@ -38,8 +39,9 @@ mod yara;
 pub(crate) use exclusions::selection_exclusion;
 
 pub use self::{
-    catalog::*, groups::*, index::*, packs::*, registry::*, requirements::*, selection::*,
-    source_catalog::*, source_fetch::*, source_install::*, source_yara::REPOSITORY_LICENSE_META,
+    catalog::*, groups::*, index::*, packs::*, registry::*, requirements::*, rule_text::*,
+    selection::*, source_catalog::*, source_fetch::*, source_install::*,
+    source_yara::REPOSITORY_LICENSE_META,
 };
 use self::{
     files::*, ids::*, sigma::*, source_archive::*, source_sigma::*, source_yara::*, yara::*,
