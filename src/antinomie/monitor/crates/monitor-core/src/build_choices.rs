@@ -1203,3 +1203,5 @@ pub const TIMEZONES: &[&str] = &[
     "Pacific/Tarawa",
     "Pacific/Tongatapu",
 ];
+#[cfg(test)]
+mod tests;

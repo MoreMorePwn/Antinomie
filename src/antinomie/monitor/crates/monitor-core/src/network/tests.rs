@@ -606,3 +606,7 @@ fn malformed_frames_never_panic_the_dissectors_or_the_reconstruction() {
         .collect();
     let _ = reconstruct(&captured);
 }
+
+mod app_layers;
+mod packet_summaries;
+mod reassembly;

@@ -392,3 +392,6 @@ impl Drop for Transport {
         unsafe { ant_close(self.ptr.as_ptr()) };
     }
 }
+
+#[cfg(test)]
+mod tests;
