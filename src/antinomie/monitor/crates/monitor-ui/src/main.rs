@@ -32,7 +32,7 @@ mod table_sort;
 mod terminal;
 mod theme;
 mod time_format;
-mod tools_window;
+mod tools_page;
 mod trace;
 mod tree_lines;
 mod triage;

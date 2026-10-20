@@ -342,6 +342,7 @@ impl MonitorApp {
                 }
             }
             Panel::Disks => self.disks_panel(ui),
+            Panel::Library(page) => self.library_panel(ui, *page),
             Panel::AnalysisSection { report_id, kind } => {
                 let key = format!("section:{report_id}:{kind:?}");
                 let report = self.analysis_windows.get(report_id).cloned();

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! Tools → Rule manager. Catalog checks and downloads happen only from buttons.
+//! Library → Detection rules. Catalog checks and downloads happen only from buttons.
 use crate::theme;
 use antinomie_monitor_core::ruleset::{self, Catalog, IndexedRule, Registry};
 use eframe::egui::{self, RichText};
@@ -20,9 +20,7 @@ pub(crate) mod first_run;
 mod source_tests;
 mod sources;
 
-pub(crate) const WINDOW_ID: &str = "rule_manager";
-
-/// A window the Rule manager asks the app to open, to repair an engine.
+/// A window or page the Detection rules page asks the app to open, to repair an engine.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RulesAction {
     AppDependencies,
@@ -135,12 +133,11 @@ impl Model {
         }
     }
 
-    /// Show the manager. `outbound` is the Settings permission; the manager
-    /// can turn it on when asked to. Returns a window the manager asks for.
-    pub(crate) fn show(
+    /// Draw the page. `outbound` is the Settings permission; the page can
+    /// turn it on when asked to. Returns a window the page asks for.
+    pub(crate) fn page(
         &mut self,
-        ctx: &egui::Context,
-        open: &mut bool,
+        ui: &mut egui::Ui,
         data_dir: &Path,
         outbound: &mut bool,
         tools: &ruleset::ToolConfig,
@@ -149,27 +146,16 @@ impl Model {
         if self.tools != *tools {
             self.tools = tools.clone();
         }
-        self.tick(ctx, data_dir);
-        let mut window_open = *open;
-        crate::widgets::window("Rule manager")
-            .id(egui::Id::new(WINDOW_ID))
-            .open(&mut window_open)
-            .resizable(true)
-            .default_width(720.0)
-            .default_height(ctx.screen_rect().height().max(240.0) * 0.92)
-            .show(ctx, |ui| {
-                ui.set_min_width(0.0);
-                ui.set_width(ui.available_width());
-                egui::ScrollArea::vertical()
-                    .auto_shrink([false, false])
-                    .animated(false)
-                    .drag_to_scroll(false)
-                    .id_salt("rule-manager-body")
-                    .show(ui, |ui| {
-                        self.contents(ui, data_dir, outbound, detection);
-                    });
+        self.tick(ui.ctx(), data_dir);
+        ui.set_min_width(0.0);
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .animated(false)
+            .drag_to_scroll(false)
+            .id_salt("rule-manager-body")
+            .show(ui, |ui| {
+                self.contents(ui, data_dir, outbound, detection);
             });
-        *open = window_open;
         self.requested.take()
     }
 
@@ -1298,7 +1284,6 @@ with open(destination, "wb") as output:
         outbound: &mut bool,
         tools: &ruleset::ToolConfig,
     ) -> (egui::FullOutput, Option<RulesAction>) {
-        let mut open = true;
         let mut action = None;
         let mut detection = antinomie_monitor_core::analysis::detection::Settings::default();
         ctx.style_mut(|style| {
@@ -1311,7 +1296,9 @@ with open(destination, "wb") as output:
                 ..Default::default()
             },
             |ctx| {
-                action = model.show(ctx, &mut open, dir, outbound, tools, &mut detection);
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    action = model.page(ui, dir, outbound, tools, &mut detection);
+                });
             },
         );
         (output, action)
@@ -1335,7 +1322,6 @@ with open(destination, "wb") as output:
         let ctx = egui::Context::default();
         crate::theme::install(&ctx);
         let size = egui::vec2(960.0, 900.0);
-        let mut open = true;
         let mut outbound = false;
         let tools = ruleset::ToolConfig::default();
         let mut paint =
@@ -1349,7 +1335,9 @@ with open(destination, "wb") as output:
                         ..Default::default()
                     },
                     |ctx| {
-                        let _ = model.show(ctx, &mut open, &dir, &mut outbound, &tools, detection);
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            let _ = model.page(ui, &dir, &mut outbound, &tools, detection);
+                        });
                     },
                 )
             };

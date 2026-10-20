@@ -6,6 +6,20 @@ it runs.
 
 ## 0.7.0 — Unreleased
 
+- **The sidebar gets a Library; base images, detection rules and analysis tools
+  are pages.** The *Base images* list is now a **Library** section with three
+  entries: **Base images** (the image count), **Detection rules** (the number of
+  installed packs; custom groups are not counted) and **Analysis tools** (no
+  count). Each opens as a tab of the main area instead of a window. The Base
+  images page lists the bases in a sortable table (status, size, VMs using it,
+  guest) with Import base, Download base and Build base above it and New VM from
+  this base, Open directory and Delete base for the selected row (also on
+  right-click). The Rule manager and Analysis tools windows became the Detection
+  rules and Analysis tools pages with every control they had; the Tools menu,
+  Run program, the Static Analysis report, the Triage detection header and
+  Getting started open the pages. The VM list stays flat under Virtual
+  machines. The saved fold state of the old Base images section now folds the
+  Library.
 - **Process cores are no longer limited to 64 MiB.** Core Dump on Exit and Dump
   core now have a **Budget** (64 MiB to 1 GiB) and a **Deadline** (up to 60 s).
   The budget bounds the bytes the guest *stores*: untouched mappings cost

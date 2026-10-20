@@ -222,6 +222,126 @@ pub(super) fn section_header(
     response
 }
 
+/// The Library section's title: a fold arrow and the name like the other
+/// section headers, with no count or "+"; a separator below.
+pub(super) fn library_header(ui: &mut egui::Ui, collapsed: &mut bool) {
+    let size = ui.spacing().interact_size.y;
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), size), egui::Sense::click());
+    if response.clicked() {
+        *collapsed = !*collapsed;
+    }
+    if ui.is_rect_visible(rect) {
+        let body = egui::TextStyle::Body.resolve(ui.style());
+        let small = egui::TextStyle::Small.resolve(ui.style());
+        let color = if response.hovered() {
+            theme::blue()
+        } else {
+            theme::heading()
+        };
+        let caret = line_galley(
+            ui,
+            &[(
+                if *collapsed {
+                    egui_phosphor::regular::CARET_RIGHT
+                } else {
+                    egui_phosphor::regular::CARET_DOWN
+                }
+                .to_owned(),
+                color,
+            )],
+            &small,
+            f32::INFINITY,
+        );
+        ui.painter().galley(
+            egui::pos2(rect.left(), rect.center().y - caret.size().y * 0.5),
+            caret,
+            color,
+        );
+        let name = line_galley(
+            ui,
+            &[("Library".to_owned(), color)],
+            &body,
+            rect.width() - small.size - 4.0,
+        );
+        ui.painter().galley(
+            egui::pos2(
+                rect.left() + small.size + 4.0,
+                rect.center().y - name.size().y * 0.5,
+            ),
+            name,
+            color,
+        );
+    }
+    response.on_hover_text("Library: click to fold");
+    ui.separator();
+}
+
+/// A Library entry: an icon, the name and a muted count at the right. The
+/// whole row is one target.
+pub(super) fn library_row(
+    ui: &mut egui::Ui,
+    icon: &str,
+    name: &str,
+    meta: Option<&str>,
+) -> egui::Response {
+    let body = egui::TextStyle::Body.resolve(ui.style());
+    let small = egui::TextStyle::Small.resolve(ui.style());
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), ui.spacing().interact_size.y + 2.0),
+        egui::Sense::click(),
+    );
+    if !ui.is_rect_visible(rect) {
+        return response;
+    }
+    if response.hovered() {
+        ui.painter().rect_filled(rect, 4.0, theme::palette().hover);
+    }
+    let left = rect.left() + 8.0;
+    let right = rect.right() - 8.0;
+    let mut name_left = left;
+    let icon = line_galley(
+        ui,
+        &[(icon.to_owned(), theme::muted())],
+        &body,
+        f32::INFINITY,
+    );
+    let icon_width = icon.size().x.max(body.size);
+    ui.painter().galley(
+        egui::pos2(left, rect.center().y - icon.size().y * 0.5),
+        icon,
+        theme::muted(),
+    );
+    name_left += icon_width + 6.0;
+    let mut name_right = right;
+    if let Some(meta) = meta {
+        let meta = line_galley(
+            ui,
+            &[(meta.to_owned(), theme::muted())],
+            &small,
+            f32::INFINITY,
+        );
+        name_right = right - meta.size().x - 8.0;
+        ui.painter().galley(
+            egui::pos2(right - meta.size().x, rect.center().y - meta.size().y * 0.5),
+            meta,
+            theme::muted(),
+        );
+    }
+    let name = line_galley(
+        ui,
+        &[(name.to_owned(), theme::text())],
+        &body,
+        name_right - name_left,
+    );
+    ui.painter().galley(
+        egui::pos2(name_left, rect.center().y - name.size().y * 0.5),
+        name,
+        theme::text(),
+    );
+    response
+}
+
 pub(super) fn tool_button(ui: &mut egui::Ui, button: ToolButton<'_>) -> bool {
     let font = egui::TextStyle::Button.resolve(ui.style());
     let (icon, label) = if button.enabled {

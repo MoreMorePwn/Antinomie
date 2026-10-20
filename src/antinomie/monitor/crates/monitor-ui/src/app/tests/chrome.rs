@@ -87,8 +87,6 @@ fn escape_closes_the_topmost_dialog_first() {
             Dialog::Settings => app.settings_open = true,
             Dialog::Import => app.import_open = true,
             Dialog::Download => app.download_open = true,
-            Dialog::Tools => app.tools_open = true,
-            Dialog::Rules => app.rules_open = true,
             Dialog::Samples => app.samples.open = true,
             Dialog::Dependencies => app.dependencies.open = true,
             Dialog::GettingStarted => app.getting_started.open = true,
@@ -199,7 +197,12 @@ fn toolbar_keeps_the_main_actions_and_menus_reach_the_rest() {
         ),
         (
             "Tools",
-            vec!["Settings…", "Analysis tools…", "App dependencies…"],
+            vec![
+                "Settings…",
+                "Analysis tools",
+                "Detection rules",
+                "App dependencies…",
+            ],
         ),
     ] {
         click_label(&mut app, &ctx, size, menu);
@@ -315,16 +318,13 @@ fn sidebar_shows_each_vm_state_resources_and_latest_run() {
         Some("/usr/bin/sample")
     );
 
-    // The base section folds away.
-    assert!(details
-        .iter()
-        .any(|text| text.contains("Linux 6.12.94 · Antinomie")));
-    click_label(&mut app, &ctx, size, "Base images");
-    assert!(app.settings.bases_collapsed);
+    // The Library lists its pages and folds away.
+    assert!(details.iter().any(|text| text.as_str() == "Base images"));
+    assert!(details.iter().any(|text| text.as_str() == "Analysis tools"));
+    click_label(&mut app, &ctx, size, "Library");
+    assert!(app.settings.library_collapsed);
     let output = render(&mut app, &ctx, size);
-    assert!(!texts(&output)
-        .iter()
-        .any(|(text, _)| text.contains("Linux 6.12.94 · Antinomie")));
+    assert!(!texts(&output).iter().any(|(text, _)| text == "Base images"));
     assert!(app.selected_base.is_none() && app.submitted.is_empty());
 }
 

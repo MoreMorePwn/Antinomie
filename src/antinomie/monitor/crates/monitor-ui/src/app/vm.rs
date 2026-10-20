@@ -319,7 +319,7 @@ impl MonitorApp {
                         },
                     );
                     if outcome.install {
-                        self.tools_open = true;
+                        self.open_library(crate::workspace::LibraryPage::Tools);
                     }
                     if outcome.source.host_file_edited {
                         self.upload_browser.selected = None;

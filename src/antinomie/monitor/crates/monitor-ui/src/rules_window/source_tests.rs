@@ -82,7 +82,6 @@ fn render(
     events: Vec<egui::Event>,
     outbound: &mut bool,
 ) -> Vec<(String, egui::Rect, egui::Rect)> {
-    let mut open = true;
     let mut detection = antinomie_monitor_core::analysis::detection::Settings::default();
     let tools = ruleset::ToolConfig::default();
     ctx.style_mut(|style| style.animation_time = 0.0);
@@ -93,7 +92,9 @@ fn render(
             ..Default::default()
         },
         |ctx| {
-            let _ = model.show(ctx, &mut open, dir, outbound, &tools, &mut detection);
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let _ = model.page(ui, dir, outbound, &tools, &mut detection);
+            });
         },
     );
     texts(&output)

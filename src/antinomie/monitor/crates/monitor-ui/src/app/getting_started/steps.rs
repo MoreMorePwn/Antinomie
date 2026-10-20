@@ -466,8 +466,8 @@ impl MonitorApp {
                 self.getting_started.rules_chosen = None;
                 self.rules_ui.check_catalog(&data_dir, outbound);
             }
-            if ui.button("Choose sources in the Rule manager…").clicked() {
-                self.rules_open = true;
+            if ui.button("Open Detection rules").clicked() {
+                self.open_library(crate::workspace::LibraryPage::Rules);
             }
         });
         let offers = self.rules_ui.offers();

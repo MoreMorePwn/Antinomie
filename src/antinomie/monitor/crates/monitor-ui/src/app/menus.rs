@@ -301,12 +301,12 @@ impl MonitorApp {
                             self.settings_open = true;
                             ui.close_menu();
                         }
-                        if ui.button("Analysis tools…").clicked() {
-                            self.tools_open = true;
+                        if ui.button("Analysis tools").clicked() {
+                            self.open_library(LibraryPage::Tools);
                             ui.close_menu();
                         }
-                        if ui.button("Rule manager…").clicked() {
-                            self.rules_open = true;
+                        if ui.button("Detection rules").clicked() {
+                            self.open_library(LibraryPage::Rules);
                             ui.close_menu();
                         }
                         if ui

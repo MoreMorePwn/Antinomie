@@ -112,9 +112,6 @@ impl MonitorApp {
         let now = unix_seconds();
         let mut selected_vm = None;
         let mut action: Option<(VmConfig, VmAction)> = None;
-        let mut base_action: Option<(String, BaseAction)> = None;
-        let mut clicked_base: Option<String> = None;
-        let mut open_downloads = false;
         let mut new_vm = false;
         egui::SidePanel::left("vms")
             // Room for the VM details, but the trace keeps most of a small
@@ -151,14 +148,15 @@ impl MonitorApp {
                     let budget = ui.available_height();
                     egui::ScrollArea::vertical()
                         .id_salt("vm_list")
-                        .max_height(if !self.settings.explorer_collapsed {
-                            budget * 0.35
-                        } else if self.settings.bases_collapsed {
-                            budget - ui.spacing().interact_size.y - 16.0
-                        } else {
-                            budget * 0.6
-                        }
-                        .max(80.0))
+                        .max_height(
+                            if self.settings.explorer_collapsed {
+                                // Room for the Library rows below.
+                                budget - ui.spacing().interact_size.y * 4.0 - 24.0
+                            } else {
+                                budget * 0.45
+                            }
+                            .max(80.0),
+                        )
                         .auto_shrink([false, true])
                         .show(ui, |ui| {
                             if self.snapshot.vms.is_empty() {
@@ -173,20 +171,31 @@ impl MonitorApp {
                                     let active = self.snapshot.active_vm.as_ref() == Some(&vm.id);
                                     let stopped = !active && !self.closing;
                                     for (label, enabled, choice) in [
-                                        ("Start VM", self.snapshot.active_vm.is_none() && !self.closing, VmAction::Start),
+                                        (
+                                            "Start VM",
+                                            self.snapshot.active_vm.is_none() && !self.closing,
+                                            VmAction::Start,
+                                        ),
                                         ("Stop VM", active, VmAction::Stop),
                                         ("Configuration…", stopped, VmAction::Configure),
                                         ("Snapshots…", !self.closing, VmAction::Snapshots),
                                         ("Rename…", !self.closing, VmAction::Rename),
                                         ("Duplicate…", stopped, VmAction::Duplicate),
                                         ("Open directory", true, VmAction::OpenDirectory),
-                                        ("Reset disk to base…", self.snapshot.active_vm.is_none(), VmAction::Reset),
+                                        (
+                                            "Reset disk to base…",
+                                            self.snapshot.active_vm.is_none(),
+                                            VmAction::Reset,
+                                        ),
                                         ("Delete VM and disk…", stopped, VmAction::Delete),
                                     ] {
                                         if matches!(choice, VmAction::Configure | VmAction::Reset) {
                                             ui.separator();
                                         }
-                                        if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
+                                        if ui
+                                            .add_enabled(enabled, egui::Button::new(label))
+                                            .clicked()
+                                        {
                                             action = Some((vm.clone(), choice));
                                             ui.close_menu();
                                         }
@@ -196,204 +205,12 @@ impl MonitorApp {
                         });
                 }
                 ui.add_space(6.0);
-                let add_base = egui::Id::new("add_base_menu");
-                let open = ui.memory(|memory| memory.is_popup_open(add_base));
-                let header = section_header(
-                    ui,
-                    SectionHeader {
-                        title: "Base images",
-                        count: self.snapshot.bases.len(),
-                        tooltip: "Installed base images: click to fold",
-                        action: "Add base",
-                        enabled: true,
-                        open,
-                    },
-                    &mut self.settings.bases_collapsed,
-                );
-                if header.clicked() {
-                    ui.memory_mut(|memory| memory.toggle_popup(add_base));
-                }
-                egui::popup::popup_below_widget(
-                    ui,
-                    add_base,
-                    &header,
-                    egui::PopupCloseBehavior::CloseOnClick,
-                    |ui| {
-                        ui.set_min_width(140.0);
-                        if ui
-                            .add_enabled(
-                                self.snapshot.active_vm.is_none(),
-                                egui::Button::new("Import base…"),
-                            )
-                            .clicked()
-                        {
-                            self.import_open = true;
-                        }
-                        if ui.button("Download base…").clicked() {
-                            open_downloads = true;
-                        }
-                        if ui.button("Build base…").clicked() {
-                            self.build_open = true;
-                        }
-                    },
-                );
-                if !self.settings.bases_collapsed {
-                egui::ScrollArea::vertical()
-                    .id_salt("base_list")
-                    .max_height(if self.settings.explorer_collapsed {
-                        ui.available_height() - 40.0
-                    } else {
-                        ui.available_height() * 0.35
-                    }.max(36.0))
-                    .auto_shrink([false, true])
-                    .show(ui, |ui| {
-                        if self.snapshot.bases_checking {
-                            ui.horizontal(|ui| {
-                                theme::spinner(ui);
-                                ui.label(
-                                    RichText::new("Checking base images…").color(theme::muted()),
-                                )
-                                .on_hover_text(
-                                    "The first start after an update or import checks each base once",
-                                );
-                            });
-                        } else if self.snapshot.bases.is_empty() {
-                            ui.label(RichText::new("No base images").color(theme::muted()));
-                            if ui.button("Add base…").clicked() {
-                                open_downloads = true;
-                            }
-                        }
-                        for base in &self.snapshot.bases {
-                            let dependents = self
-                                .snapshot
-                                .vms
-                                .iter()
-                                .filter(|vm| vm.base_identity.as_deref() == Some(base.id.as_str()))
-                                .count();
-                            let guest = base
-                                .guest
-                                .as_ref()
-                                .map_or("Linux 6.12.94".to_string(), |guest| guest.id.clone());
-                            let base_status = RevisionStatus::of_base(
-                                base.revision,
-                                base.min_app_version.as_deref(),
-                            );
-                            let name = versioned_label(
-                                &base.label,
-                                base.revision,
-                                base.min_app_version.as_deref(),
-                            );
-                            let mark = match base_status {
-                                RevisionStatus::Current => theme::good(),
-                                RevisionStatus::NeedsNewerApp => theme::error(),
-                                _ => theme::warn(),
-                            };
-                            let number = theme::value(theme::ValueKind::Number);
-                            let response = sidebar_row(
-                                ui,
-                                SidebarRow {
-                                    mark: (egui_phosphor::regular::HARD_DRIVE, mark),
-                                    name: &name,
-                                    state: None,
-                                    details: vec![vec![
-                                        (
-                                            format!("{:.1}", base.size_bytes as f64 / 1073741824.0),
-                                            number,
-                                        ),
-                                        (" GiB  ·  ".into(), theme::muted()),
-                                        (dependents.to_string(), number),
-                                        (
-                                            format!(
-                                                " VM{}  ·  {guest}",
-                                                if dependents == 1 { "" } else { "s" }
-                                            ),
-                                            theme::muted(),
-                                        ),
-                                    ]],
-                                    selected: self.selected_base.as_deref()
-                                        == Some(base.id.as_str()),
-                                },
-                            )
-                            .on_hover_text(format!(
-                                "{}\n{}\n{:.1} GiB on disk · guest {guest} · used by {} VM(s)\n\
-                                 {}\nRight-click for actions",
-                                name,
-                                base.directory.display(),
-                                base.size_bytes as f64 / 1073741824.0,
-                                dependents,
-                                describe_base(base)
-                            ));
-                            if response.clicked() || response.secondary_clicked() {
-                                clicked_base = Some(base.id.clone());
-                            }
-                            if base_status != RevisionStatus::Current {
-                                let hint = match base_status {
-                                    RevisionStatus::NeedsNewerApp => "Needs a newer Antinomie",
-                                    _ if newer_base(&self.snapshot, base).is_some() => {
-                                        "Outdated · newer base available"
-                                    }
-                                    _ => "Outdated · built for an earlier Antinomie",
-                                };
-                                ui.horizontal(|ui| {
-                                    ui.add_space(30.0);
-                                    if crate::activity::warning(ui, format!("{}: {hint}", base.label))
-                                        .interact(egui::Sense::click())
-                                        .on_hover_text(
-                                            "Open Add base > Download base for the base made for this version",
-                                        )
-                                        .clicked()
-                                    {
-                                        open_downloads = true;
-                                    }
-                                });
-                            }
-                            response.context_menu(|ui| {
-                                if ui.button("New VM from this base…").clicked() {
-                                    base_action = Some((base.id.clone(), BaseAction::NewVm));
-                                    ui.close_menu();
-                                }
-                                if ui.button("Open directory").clicked() {
-                                    base_action = Some((base.id.clone(), BaseAction::OpenDirectory));
-                                    ui.close_menu();
-                                }
-                                ui.separator();
-                                if ui
-                                    .add_enabled(
-                                        self.snapshot.active_vm.is_none(),
-                                        egui::Button::new("Delete base…"),
-                                    )
-                                    .clicked()
-                                {
-                                    base_action = Some((base.id.clone(), BaseAction::Delete));
-                                    ui.close_menu();
-                                }
-                            });
-                        }
-                    });
-                }
+                self.library_sidebar(ui);
                 ui.add_space(6.0);
                 self.explorer_sidebar(ui);
             });
         if new_vm {
             self.new_image();
-        }
-        if open_downloads {
-            self.open_downloads();
-        }
-        if let Some(identity) = clicked_base {
-            self.selected_base = Some(identity);
-        }
-        if let Some((identity, action)) = base_action {
-            match action {
-                BaseAction::NewVm => self.new_image_from(identity),
-                BaseAction::OpenDirectory => {
-                    if let Some(base) = self.snapshot.bases.iter().find(|base| base.id == identity)
-                    {
-                        open_directory(&base.directory);
-                    }
-                }
-                BaseAction::Delete => self.confirm = Some(Confirm::DeleteBase(identity)),
-            }
         }
         if let Some(vm_id) = selected_vm {
             if self.selected.as_ref() != Some(&vm_id) {

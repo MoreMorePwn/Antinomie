@@ -18,6 +18,7 @@ mod file_drop;
 mod getting_started;
 mod history;
 mod history_sync;
+mod library;
 mod menus;
 mod notices;
 mod panels;
@@ -49,7 +50,7 @@ use crate::{
     theme,
     trace::{self, Inspector, InvocationKey},
     values,
-    workspace::{Panel, WorkspaceLayout},
+    workspace::{LibraryPage, Panel, WorkspaceLayout},
 };
 use antinomie_monitor_core::{
     capture_processes::CaptureProcess, pair_events, syscall_groups::SyscallGroup, Backend,
@@ -130,7 +131,9 @@ struct Settings {
     show_fps: bool,
     /// Sidebar sections folded away.
     vms_collapsed: bool,
-    bases_collapsed: bool,
+    /// The Library section (it held the base list before 0.7.0).
+    #[serde(alias = "bases_collapsed")]
+    library_collapsed: bool,
     /// Sidebar host-file explorer; no guest paths or upload intent are persisted.
     explorer_collapsed: bool,
     explorer_root: Option<PathBuf>,
@@ -188,7 +191,7 @@ impl Default for Settings {
             outbound_catalog: false,
             show_fps: false,
             vms_collapsed: false,
-            bases_collapsed: false,
+            library_collapsed: false,
             explorer_collapsed: false,
             explorer_root: None,
             getting_started: Default::default(),
@@ -299,7 +302,7 @@ pub struct MonitorApp {
     backend: Option<Backend>,
     snapshot: Snapshot,
     selected: Option<String>,
-    /// Base image highlighted in the sidebar; selection only, actions are on right-click.
+    /// Base image highlighted on the Base images page.
     selected_base: Option<String>,
     settings: Settings,
     options: BackendOptions,
@@ -320,8 +323,8 @@ pub struct MonitorApp {
     download_open: bool,
     build_open: bool,
     about_open: bool,
-    tools_open: bool,
-    rules_open: bool,
+    /// Library pages asked for since the workspace last drew; it opens them.
+    library_requests: Vec<crate::workspace::LibraryPage>,
     rules_ui: crate::rules_window::Model,
     rules_summary: String,
     rules_generation: u64,
@@ -514,8 +517,7 @@ impl MonitorApp {
             download_open: false,
             build_open: false,
             about_open: false,
-            tools_open: false,
-            rules_open: false,
+            library_requests: Vec::new(),
             rules_ui: crate::rules_window::Model::default(),
             rules_summary: String::new(),
             rules_generation: 0,
@@ -832,8 +834,6 @@ enum Dialog {
     Settings,
     Import,
     Download,
-    Tools,
-    Rules,
     Samples,
     Snapshots,
     SnapshotDecision,
@@ -846,7 +846,7 @@ enum Dialog {
 }
 
 impl Dialog {
-    const ALL: [Dialog; 21] = [
+    const ALL: [Dialog; 19] = [
         Dialog::Confirm,
         Dialog::Name,
         Dialog::Transport,
@@ -857,8 +857,6 @@ impl Dialog {
         Dialog::Settings,
         Dialog::Import,
         Dialog::Download,
-        Dialog::Tools,
-        Dialog::Rules,
         Dialog::Samples,
         Dialog::Snapshots,
         Dialog::SnapshotDecision,
@@ -883,8 +881,6 @@ impl Dialog {
             Dialog::Settings => "settings",
             Dialog::Import => "import_base",
             Dialog::Download => "download_base",
-            Dialog::Tools => crate::tools_window::WINDOW_ID,
-            Dialog::Rules => crate::rules_window::WINDOW_ID,
             Dialog::Samples => crate::samples_view::WINDOW_ID,
             Dialog::Snapshots => crate::snapshots::WINDOW_ID,
             Dialog::SnapshotDecision => "snapshot_decision",
@@ -926,7 +922,7 @@ enum VmAction {
     Delete,
 }
 
-/// Right-click actions of a sidebar base image.
+/// Actions of a base image on the Base images page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BaseAction {
     NewVm,
