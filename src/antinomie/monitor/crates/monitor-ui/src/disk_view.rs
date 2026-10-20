@@ -7,35 +7,44 @@
 //!
 //! The entries are "Current disk (VM off)" and the saved disk dumps (made from
 //! it, or imported) newest first. A dump is a plain file: it stays browsable
-//! while the VM runs. Checkpoint sources (phase 3) add entry kinds beside
-//! `Current`.
+//! while the VM runs. The first entry reads a source picked on its card: the
+//! current disk, a saved checkpoint's layer or the installed base, and for a
+//! partitioned disk one partition. Any open entry can be compared with a
+//! reference ([`diff`]) and searched by content ([`find`]).
 use antinomie_monitor_core::{
     disks::{
         dump::DiskDump,
         reader::{DiskEntryKind, DiskFileInfo, DiskImageInfo, DiskRequest, FindResults},
-        CurrentDiskView, DiskJobProgress, DiskMeasure,
+        CurrentDiskView, DiskJobProgress, DiskJobPurpose, DiskMeasure, DiskSourceSpec,
     },
-    VmConfig,
+    VmCheckpoint, VmConfig,
 };
 use eframe::egui;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
 mod details;
+mod diff;
 mod dump_actions;
 mod dumps;
 mod entries;
 mod extraction;
 mod find;
 mod main_pane;
+mod source;
 mod tree;
 mod worker;
 
 pub(crate) use antinomie_monitor_core::disks::format_size;
+pub(crate) use diff::{
+    normalize_guest_path, JUMP_KEY as DIFF_JUMP_KEY, PATHS_KEY as DIFF_PATHS_KEY,
+};
+pub(crate) use source::Pick;
 
 /// Largest file Extract to view loads into the viewer.
 const VIEW_CAP: u64 = crate::data_view::DATA_WINDOW_CAP;
@@ -84,11 +93,25 @@ impl DiskSettings {
 /// What the tab asks the application to do.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum DiskAction {
-    Measure,
-    Open,
+    /// Measure the picked source (and partition).
+    Measure(Pick),
+    /// Open the picked source as the view.
+    Open(Pick),
     Close,
-    /// Dump the VM's current disk.
-    Dump,
+    /// Dump the picked source.
+    Dump(Pick),
+    /// Save one partition of the picked source to a host file.
+    SavePartition {
+        source: DiskSourceSpec,
+        partition: u32,
+        path: PathBuf,
+    },
+    /// Flatten a source into the reference image of a diff.
+    Reference(DiskSourceSpec),
+    /// Convert a qcow2 image made elsewhere, in the sandbox.
+    ImportQcow2(PathBuf),
+    /// Show a path in Triage › Changed files.
+    ShowInTriage(String),
     /// Promote the open view to a dump.
     Keep,
     Cancel,
@@ -123,6 +146,12 @@ pub(crate) struct DiskContext<'a> {
     pub current_disk: Option<&'a CurrentDiskView>,
     pub measure: Option<&'a DiskMeasure>,
     pub job: Option<&'a DiskJobProgress>,
+    /// The second scratch image of a diff, filtered to the selected VM.
+    pub reference: Option<&'a CurrentDiskView>,
+    /// The checkpoints of the selected VM (deleted ones are not offered).
+    pub checkpoints: &'a [VmCheckpoint],
+    /// Guest paths in the selected run's Triage › Changed files.
+    pub triage_paths: &'a Arc<BTreeSet<String>>,
     /// A disk job of another VM holds the single job slot.
     pub other_job: bool,
     pub font_size: f32,
@@ -165,6 +194,7 @@ enum Purpose {
         path: String,
     },
     Find,
+    Diff,
     Extract {
         path: String,
         intent: extraction::Intent,
@@ -229,7 +259,22 @@ pub(crate) struct DiskView {
     /// which leaves an open view as it is).
     waiting_for_view: bool,
     /// The state for which a measurement was already asked.
-    measured_for: Option<(String, bool)>,
+    measured_for: Option<(String, bool, Pick)>,
+    /// What the Current disk entry reads.
+    pick: Pick,
+    /// The checkpoints of the selected VM, as of the last frame.
+    checkpoints: Vec<VmCheckpoint>,
+    /// Guest paths in Triage › Changed files, as of the last frame.
+    triage_paths: Arc<BTreeSet<String>>,
+    /// The comparison of the open entry with a reference.
+    diff: Option<diff::Diff>,
+    /// The search reader was stopped (Cancel): start a new one.
+    restart_search: bool,
+    /// The published diff paths are to be withdrawn (the diff went away
+    /// without a context at hand).
+    diff_paths_cleared: bool,
+    /// A partition save waits for its destination (a file chooser).
+    partition_save: Option<dump_actions::PartitionSave>,
     had_measure: bool,
     last_measured: Option<u64>,
     /// The caps and toggles of the last `show`, for the Details pane.
@@ -326,6 +371,21 @@ impl DiskView {
             self.qemu_img = cx.qemu_img.to_path_buf();
         }
         self.open_kept = cx.current_disk.and_then(|view| view.kept_as.clone());
+        if self.checkpoints.len() != cx.checkpoints.len()
+            || self
+                .checkpoints
+                .iter()
+                .zip(cx.checkpoints)
+                .any(|(a, b)| a.id != b.id || a.deleted != b.deleted || a.name != b.name)
+        {
+            self.checkpoints = cx.checkpoints.to_vec();
+        }
+        if !Arc::ptr_eq(&self.triage_paths, cx.triage_paths) {
+            self.triage_paths = cx.triage_paths.clone();
+        }
+        if std::mem::take(&mut self.diff_paths_cleared) {
+            diff::withdraw_paths(ctx);
+        }
         self.scan_when_needed(cx);
         if self.want(cx)
             != self
@@ -381,6 +441,7 @@ impl DiskView {
             self.measured_for = None;
         }
         self.had_measure = cx.measure.is_some();
+
         // A request is answered by its job, or by its result (a small disk is
         // measured or opened between two snapshots).
         let measured = cx.measure.map(|measure| measure.measured_ms);
@@ -397,6 +458,7 @@ impl DiskView {
         self.poll_save(ctx);
         self.poll_dump_actions(ctx);
         self.pump(ctx);
+        self.diff_sync(ctx, cx);
     }
 
     /// The key and image of what the readers should be bound to.
@@ -462,12 +524,14 @@ impl DiskView {
                 ctx.clone(),
                 "disk-browse",
                 bound.image.clone(),
+                None,
                 bound.extract_dir.clone(),
             ),
             worker::Worker::start(
                 ctx.clone(),
                 "disk-search",
                 bound.image.clone(),
+                None,
                 bound.extract_dir.clone(),
             ),
         ) {
@@ -480,6 +544,9 @@ impl DiskView {
     }
 
     fn unbind(&mut self) {
+        if self.diff.take().is_some() {
+            self.diff_paths_cleared = true;
+        }
         self.bound = None;
         self.browse = None;
         self.search = None;
@@ -526,12 +593,29 @@ impl DiskView {
 
     /// Send the next queued requests and take the answers.
     fn pump(&mut self, ctx: &egui::Context) {
+        if std::mem::take(&mut self.restart_search) && self.search.is_none() {
+            if let Some(bound) = &self.bound {
+                match worker::Worker::start(
+                    ctx.clone(),
+                    "disk-search",
+                    bound.image.clone(),
+                    None,
+                    bound.extract_dir.clone(),
+                ) {
+                    Ok(search) => self.search = Some(search),
+                    Err(error) => self.status = Some((error, true)),
+                }
+            }
+        }
         let mut answers = Vec::new();
         for worker in [&mut self.browse, &mut self.search].into_iter().flatten() {
             answers.extend(worker.poll());
         }
+        if let Some(worker) = self.diff.as_mut().and_then(|diff| diff.worker.as_mut()) {
+            answers.extend(worker.poll());
+        }
         for answer in answers {
-            self.accept(answer);
+            self.accept(ctx, answer);
         }
         // The tree asks for the folder it is waiting on, when the browser is idle.
         let browser_idle = self
@@ -574,12 +658,18 @@ impl DiskView {
                 .as_ref()
                 .is_some_and(|worker| worker.busy.is_some())
             || !self.browse_queue.is_empty()
+            || self.diff.as_ref().is_some_and(|diff| {
+                matches!(
+                    diff.stage,
+                    diff::Stage::Running | diff::Stage::Reference { .. }
+                )
+            })
         {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
     }
 
-    fn accept(&mut self, answer: worker::Answer) {
+    fn accept(&mut self, ctx: &egui::Context, answer: worker::Answer) {
         use antinomie_monitor_core::disks::reader::DiskAnswer;
         let Some(purpose) = self.purposes.remove(&answer.token) else {
             return;
@@ -606,6 +696,10 @@ impl DiskView {
                     selection.info = Some(Err(error));
                 }
             }
+            (Purpose::Diff, Ok(DiskAnswer::Diffed(results))) => {
+                self.diff_finished(ctx, Ok(results));
+            }
+            (Purpose::Diff, Err(error)) => self.diff_finished(ctx, Err(error)),
             (Purpose::Find, Ok(DiskAnswer::Found(results))) => self.find.finished(Ok(results)),
             (Purpose::Find, Err(error)) => self.find.finished(Err(error)),
             (Purpose::Extract { path, intent }, Ok(DiskAnswer::Extracted(receipt))) => {
@@ -639,15 +733,16 @@ impl DiskView {
         );
     }
 
-    /// Ask the backend to measure the disk, once per state of the VM.
+    /// Ask the backend to measure the picked source, once per state of the
+    /// VM and per pick.
     fn measure_when_needed(&mut self, cx: &DiskContext<'_>) {
         let Some(vm) = cx.vm else {
             return;
         };
-        let state = (vm.id.clone(), cx.vm_off);
+        let state = (vm.id.clone(), cx.vm_off, self.pick.clone());
         if cx.vm_off
             && cx.current_disk.is_none()
-            && cx.measure.is_none()
+            && self.current_measure(cx).is_none()
             && cx.job.is_none()
             && !cx.other_job
             && self.waiting.is_none()
@@ -655,7 +750,7 @@ impl DiskView {
         {
             self.measured_for = Some(state);
             self.wait_for(true);
-            self.action = Some(DiskAction::Measure);
+            self.action = Some(DiskAction::Measure(self.pick.clone()));
         }
     }
 
@@ -671,8 +766,9 @@ impl DiskView {
         ui: &mut egui::Ui,
         mut cx: DiskContext<'_>,
     ) -> Option<DiskAction> {
-        self.sync(ui.ctx(), &cx);
+        // What sync asks for (a partition save the chooser finished) stays.
         self.action = None;
+        self.sync(ui.ctx(), &cx);
         self.measure_when_needed(&cx);
         egui::SidePanel::left("disk_entries")
             .resizable(true)

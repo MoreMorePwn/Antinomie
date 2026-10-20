@@ -1423,28 +1423,64 @@ pub enum Command {
     /// Dump the running VM's RAM (QEMU pauses the guest while it writes)
     /// into a new memory dump of its recordings, for the Memory tab.
     DumpMemory,
-    /// Measure the VM's current disk (VM off): logical and allocated size,
-    /// free space, for the Disks tab's card.
+    /// Measure a disk of the VM (VM off): logical and allocated size, free
+    /// space and the partition table, for the Disks tab's card. `source` is
+    /// the current disk, a saved checkpoint's layer or the installed base;
+    /// `partition` picks one partition of a partitioned disk (else the
+    /// root or largest ext4).
     MeasureDisk {
         vm_id: String,
+        source: crate::disks::DiskSourceSpec,
+        partition: Option<u32>,
     },
-    /// Flatten the VM's current disk (VM off) into a scratch image and open
-    /// it as the Disks tab's read-only "Current disk" view.
+    /// Flatten a disk of the VM (VM off) into a scratch image and open it
+    /// as the Disks tab's read-only view.
     OpenCurrentDisk {
         vm_id: String,
+        source: crate::disks::DiskSourceSpec,
+        partition: Option<u32>,
     },
-    /// Close the open view and delete its scratch image.
+    /// Close the open view (and the reference image) and delete their
+    /// scratch images.
     CloseCurrentDisk {
         vm_id: String,
     },
-    /// Dump the VM's current disk (VM off) into a standalone sparse
-    /// `root.ext4` of its recordings, with a `dump.json` sidecar. `hash` adds
-    /// the image's SHA-256, `layer_digests` the SHA-256 of every layer of the
+    /// Flatten a disk of the VM (VM off) into a second scratch image, the
+    /// baseline of a diff against the open entry. Closed with the view.
+    OpenDiskReference {
+        vm_id: String,
+        source: crate::disks::DiskSourceSpec,
+    },
+    /// Delete the reference image.
+    CloseDiskReference {
+        vm_id: String,
+    },
+    /// Dump a disk of the VM (VM off) into a standalone sparse `root.ext4`
+    /// of its recordings, with a `dump.json` sidecar. `hash` adds the
+    /// image's SHA-256, `layer_digests` the SHA-256 of every layer of the
     /// source chain.
     DumpDisk {
         vm_id: String,
+        source: crate::disks::DiskSourceSpec,
+        partition: Option<u32>,
         hash: bool,
         layer_digests: bool,
+    },
+    /// Save one partition (any filesystem) of a disk of the VM (VM off) to
+    /// a file chosen on the host.
+    SaveDiskPartition {
+        vm_id: String,
+        source: crate::disks::DiskSourceSpec,
+        partition: u32,
+        path: std::path::PathBuf,
+    },
+    /// Convert a qcow2 image made elsewhere into a dump of the VM's
+    /// recordings, with `qemu-img` inside the sandbox. Refuses an image that
+    /// depends on a backing file.
+    ImportQcow2Disk {
+        vm_id: String,
+        path: std::path::PathBuf,
+        hash: bool,
     },
     /// Promote the open view to a dump by renaming its scratch folder: no
     /// second conversion.
@@ -1453,7 +1489,8 @@ pub enum Command {
         hash: bool,
         layer_digests: bool,
     },
-    /// Cancel the running disk job (measuring, flattening, dumping or keeping).
+    /// Cancel the running disk job (measuring, flattening, dumping, keeping
+    /// or importing).
     CancelDiskJob {
         vm_id: String,
     },
@@ -1620,6 +1657,8 @@ pub struct Snapshot {
     pub memory_dump: Option<crate::memory::DumpProgress>,
     /// The open "Current disk (VM off)" view of the Disks tab.
     pub current_disk: Option<crate::disks::CurrentDiskView>,
+    /// The second scratch image a diff compares the open entry against.
+    pub disk_reference: Option<crate::disks::CurrentDiskView>,
     /// The latest measurement of a VM's current disk.
     pub disk_measure: Option<crate::disks::DiskMeasure>,
     /// The disk job that holds a VM's image while `qemu-img` reads it.

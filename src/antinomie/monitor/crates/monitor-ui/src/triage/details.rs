@@ -180,6 +180,7 @@ pub(super) fn show(view: &mut TriageView, ui: &mut egui::Ui) {
         let values = selected.cells.first().map(|cell| cell.values.as_slice()).unwrap_or_default();
         if matches!(selected.table.as_str(), "triage-yara" | "triage-ids" | "triage-sigma") { view.detection.details(ui, values); }
         if selected.table == "triage-changed" {
+            disk_diff_link(ui, &selected);
             if let Some(change) = view.scan.as_ref().and_then(|scan| scan.file_changes.iter().find(|change| change.evidence_key() == selected.key)) {
                 change.show(ui, view.scan.as_ref().and_then(|scan| scan.clock_anchor));
             } else {
@@ -460,5 +461,181 @@ mod tests {
             .data(|data| data.get_temp::<Selection>(selection_id()))
             .unwrap();
         assert_ne!(first.key, second.key);
+    }
+}
+
+/// Block evidence meets syscall evidence: when the Disks tab is showing a
+/// diff that lists this path, say so and offer the jump. The diff is
+/// between two disk images; this row is what the kernel was observed doing
+/// in one run. Neither proves the other.
+fn disk_diff_link(ui: &mut egui::Ui, selected: &Selection) {
+    let Some(path) = selected
+        .headers
+        .iter()
+        .position(|header| header == "Path")
+        .and_then(|index| selected.cells.get(index))
+        .and_then(|cell| crate::disk_view::normalize_guest_path(&cell.text))
+    else {
+        return;
+    };
+    let listed = ui
+        .ctx()
+        .data(|data| {
+            data.get_temp::<std::sync::Arc<std::collections::BTreeSet<String>>>(egui::Id::new(
+                crate::disk_view::DIFF_PATHS_KEY,
+            ))
+        })
+        .is_some_and(|paths| paths.contains(&path));
+    if !listed {
+        return;
+    }
+    ui.horizontal_wrapped(|ui| {
+        ui.colored_label(
+            theme::muted(),
+            "Syscall evidence: this row is what was observed in the run. The Disks tab diff lists \
+             the same path as block evidence: it differs between two disk images.",
+        );
+        if ui.button("Show in the Disks diff").clicked() {
+            ui.ctx().data_mut(|data| {
+                data.insert_temp(egui::Id::new(crate::disk_view::DIFF_JUMP_KEY), path.clone());
+            });
+        }
+    });
+    ui.add_space(6.0);
+}
+
+#[cfg(test)]
+mod disk_link_tests {
+    use super::*;
+    use crate::{
+        app::tests::texts,
+        disk_view::{DIFF_JUMP_KEY, DIFF_PATHS_KEY},
+        triage::table::cell,
+    };
+    use std::{collections::BTreeSet, sync::Arc};
+
+    fn changed(path: &str) -> Selection {
+        Selection {
+            table: "triage-changed".into(),
+            key: "key".into(),
+            headers: vec!["Time".into(), "Path".into()],
+            cells: vec![
+                cell("12:00:00", theme::text(), true),
+                cell(path, theme::text(), true),
+            ],
+        }
+    }
+
+    fn frame(
+        ctx: &egui::Context,
+        selection: &Selection,
+        events: Vec<egui::Event>,
+    ) -> egui::FullOutput {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 400.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| disk_diff_link(ui, selection));
+            },
+        )
+    }
+
+    fn publish(ctx: &egui::Context, paths: &[&str]) {
+        let set: BTreeSet<String> = paths.iter().map(|path| path.to_string()).collect();
+        ctx.data_mut(|data| data.insert_temp(egui::Id::new(DIFF_PATHS_KEY), Arc::new(set)));
+    }
+
+    const LABEL: &str = "Show in the Disks diff";
+
+    fn shown(output: &egui::FullOutput) -> Vec<String> {
+        texts(output).into_iter().map(|(text, _)| text).collect()
+    }
+
+    #[test]
+    fn a_changed_file_in_the_disk_diff_links_there_and_says_what_kind_of_evidence_each_is() {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let selection = changed("/etc/passwd");
+        // No diff open: nothing is offered.
+        for _ in 0..2 {
+            assert!(!shown(&frame(&ctx, &selection, Vec::new())).contains(&LABEL.to_string()));
+        }
+        publish(&ctx, &["/etc/passwd", "/etc/other"]);
+        let mut output = frame(&ctx, &selection, Vec::new());
+        for _ in 0..2 {
+            output = frame(&ctx, &selection, Vec::new());
+        }
+        let seen = shown(&output);
+        assert!(seen.contains(&LABEL.to_string()), "{seen:?}");
+        assert!(
+            seen.iter().any(|text| text
+                .starts_with("Syscall evidence: this row is what was observed")
+                && text.contains("block evidence")),
+            "{seen:?}"
+        );
+        let position = texts(&output)
+            .into_iter()
+            .find(|(text, _)| text == LABEL)
+            .unwrap()
+            .1
+            .center();
+        for pressed in [true, false] {
+            frame(
+                &ctx,
+                &selection,
+                vec![
+                    egui::Event::PointerMoved(position),
+                    egui::Event::PointerButton {
+                        pos: position,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        let jump = ctx.data(|data| data.get_temp::<String>(egui::Id::new(DIFF_JUMP_KEY)));
+        assert_eq!(jump.as_deref(), Some("/etc/passwd"));
+        // The path is spelled the way the diff spells it.
+        let selection = changed("/etc//passwd/");
+        assert!(shown(&frame(&ctx, &selection, Vec::new())).contains(&LABEL.to_string()));
+        // A path that is not in the diff, and a relative one, get no link.
+        for path in ["/var/log/other", "etc/passwd", ""] {
+            let selection = changed(path);
+            assert!(!shown(&frame(&ctx, &selection, Vec::new())).contains(&LABEL.to_string()));
+        }
+    }
+
+    #[test]
+    fn show_changed_path_opens_changed_files_filtered_to_one_path() {
+        let ctx = egui::Context::default();
+        let mut view = TriageView::default();
+        view.show_changed_path(&ctx, "/etc/passwd");
+        assert!(matches!(view.section, Section::Files));
+        assert!(view.files == FileTab::Changed);
+        let draft = |ctx: &egui::Context| {
+            ctx.data_mut(|data| {
+                data.remove_temp::<String>(egui::Id::new((
+                    "triage-filter-draft",
+                    FileTab::Changed.slot(),
+                )))
+            })
+        };
+        assert_eq!(draft(&ctx).as_deref(), Some("file.path == \"/etc/passwd\""));
+        // A name the filter cannot quote shows the tab unfiltered.
+        view.show_changed_path(&ctx, "/tmp/we\"ird");
+        assert_eq!(draft(&ctx), None);
+        // The Disks tab's request is taken once.
+        assert_eq!(view.take_disk_jump(&ctx), None);
+        ctx.data_mut(|data| data.insert_temp(egui::Id::new(DIFF_JUMP_KEY), "/x".to_string()));
+        assert_eq!(view.take_disk_jump(&ctx).as_deref(), Some("/x"));
+        assert_eq!(view.take_disk_jump(&ctx), None);
+        assert!(view.changed_paths().is_empty());
     }
 }

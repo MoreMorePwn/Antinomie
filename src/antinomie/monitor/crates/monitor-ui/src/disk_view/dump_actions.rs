@@ -7,6 +7,7 @@ use crate::theme;
 use antinomie_monitor_core::disks::{
     dump,
     export::{self, ExportFormat, Exported},
+    DiskSourceSpec,
 };
 use std::{
     process::{Child, Stdio},
@@ -23,6 +24,28 @@ pub(super) struct Import {
     pub path: String,
     pub picker: Option<Child>,
     pub error: Option<String>,
+}
+
+/// A partition save waiting for the host file to be chosen.
+pub(super) struct PartitionSave {
+    source: DiskSourceSpec,
+    partition: u32,
+    receiver: Receiver<Result<Option<PathBuf>, String>>,
+}
+
+impl PartitionSave {
+    #[cfg(test)]
+    pub(super) fn new(
+        source: DiskSourceSpec,
+        partition: u32,
+        receiver: Receiver<Result<Option<PathBuf>, String>>,
+    ) -> Self {
+        Self {
+            source,
+            partition,
+            receiver,
+        }
+    }
 }
 
 /// A SHA-256 check in progress.
@@ -155,9 +178,51 @@ impl DiskView {
         });
     }
 
+    /// Ask where to save partition `index` of the picked source.
+    pub(super) fn save_partition(&mut self, ctx: &egui::Context, index: u32) {
+        if self.partition_save.is_some() {
+            return;
+        }
+        let (sender, receiver) = mpsc::channel();
+        let repaint = ctx.clone();
+        thread::spawn(move || {
+            let _ = sender.send(choose_destination(&format!("partition-{index}.bin")));
+            repaint.request_repaint();
+        });
+        self.partition_save = Some(PartitionSave {
+            source: self.pick.source.clone(),
+            partition: index,
+            receiver,
+        });
+    }
+
     /// Take the results of the host-side actions.
     pub(super) fn poll_dump_actions(&mut self, ctx: &egui::Context) {
         self.poll_picker();
+        if let Some(save) = &self.partition_save {
+            match save.receiver.try_recv() {
+                Ok(result) => {
+                    let (source, partition) = (save.source.clone(), save.partition);
+                    self.partition_save = None;
+                    match result {
+                        Ok(Some(path)) => {
+                            self.wait_for(false);
+                            self.action = Some(DiskAction::SavePartition {
+                                source,
+                                partition,
+                                path,
+                            });
+                        }
+                        Ok(None) => {}
+                        Err(error) => self.status = Some((error, true)),
+                    }
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    ctx.request_repaint_after(Duration::from_millis(200));
+                }
+                Err(mpsc::TryRecvError::Disconnected) => self.partition_save = None,
+            }
+        }
         if let Some(verify) = &self.verify {
             match verify.receiver.try_recv() {
                 Ok(result) => {
@@ -314,8 +379,8 @@ impl DiskView {
         }
     }
 
-    /// The Import image… window. A raw ext4 image only: qcow2 import waits for
-    /// the sandboxed conversion of a later version.
+    /// The Import image… window. A raw ext4 image stays where it is; a qcow2
+    /// image is converted into a dump by `qemu-img` inside the sandbox.
     pub(super) fn import_window(&mut self, ctx: &egui::Context, cx: &DiskContext<'_>) {
         let Some(import) = self.import.as_mut() else {
             return;
@@ -323,6 +388,7 @@ impl DiskView {
         let mut open = true;
         let mut close = false;
         let mut done = None;
+        let mut queued = None;
         egui::Window::new("Import disk image")
             .id(egui::Id::new("disk_import"))
             .collapsible(false)
@@ -334,8 +400,10 @@ impl DiskView {
                     egui::Label::new(
                         egui::RichText::new(
                             "A raw ext4 image of one filesystem (the whole disk of a VM, as \
-                             `mkfs.ext4` or a dump makes it). The file stays where it is; its \
-                             content is only read in the isolated reader.",
+                             `mkfs.ext4` or a dump makes it): the file stays where it is and its \
+                             content is only read in the isolated reader. Or a qcow2 image: it is \
+                             converted into a new dump by qemu-img inside the sandbox, and \
+                             refused if it depends on a backing file.",
                         )
                         .color(theme::muted()),
                     )
@@ -357,7 +425,10 @@ impl DiskView {
                         .clicked()
                     {
                         match std::process::Command::new("zenity")
-                            .args(["--file-selection", "--title=Choose a raw ext4 image"])
+                            .args([
+                                "--file-selection",
+                                "--title=Choose a raw ext4 or qcow2 image",
+                            ])
                             .stdout(Stdio::piped())
                             .stderr(Stdio::null())
                             .spawn()
@@ -388,9 +459,13 @@ impl DiskView {
                         let path = crate::folders::user_path(&import.path);
                         match (cx.recordings, cx.vm) {
                             (Some(recordings), Some(vm)) => {
-                                match dump::import(recordings, &vm.id, &vm.name, &path) {
-                                    Ok(imported) => done = Some(imported.id),
-                                    Err(error) => import.error = Some(error),
+                                if is_qcow2(&path) {
+                                    queued = Some(path);
+                                } else {
+                                    match dump::import(recordings, &vm.id, &vm.name, &path) {
+                                        Ok(imported) => done = Some(imported.id),
+                                        Err(error) => import.error = Some(error),
+                                    }
                                 }
                             }
                             _ => import.error = Some("Select a VM first".into()),
@@ -401,6 +476,18 @@ impl DiskView {
                     }
                 });
             });
+        if let Some(path) = queued {
+            if cx.job.is_some() || cx.other_job {
+                if let Some(import) = self.import.as_mut() {
+                    import.error =
+                        Some("Another disk job is running: wait for it or cancel it".into());
+                }
+            } else {
+                self.wait_for(false);
+                self.action = Some(DiskAction::ImportQcow2(path));
+                close = true;
+            }
+        }
         if done.is_some()
             || close
             || !open
@@ -465,4 +552,13 @@ fn choose_destination(suggestion: &str) -> Result<Option<PathBuf>, String> {
     let text = String::from_utf8_lossy(&output.stdout);
     let destination = PathBuf::from(text.trim_end_matches('\n'));
     Ok((destination.is_absolute()).then_some(destination))
+}
+
+/// Whether the file starts with the qcow2 magic. Read on a click.
+fn is_qcow2(path: &Path) -> bool {
+    use std::io::Read;
+    let mut head = [0u8; 4];
+    std::fs::File::open(path)
+        .and_then(|mut file| file.read_exact(&mut head))
+        .is_ok_and(|()| &head == b"QFI\xfb")
 }

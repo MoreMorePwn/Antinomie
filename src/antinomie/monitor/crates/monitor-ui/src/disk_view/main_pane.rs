@@ -11,6 +11,14 @@ impl DiskView {
             hint(ui, "Select a VM to inspect its disk.");
             return;
         };
+        // Work that is not the entry's own: a qcow2 conversion or a partition
+        // save shows its progress above whatever is selected.
+        if let Some(job) = cx
+            .job
+            .filter(|job| matches!(job.purpose, DiskJobPurpose::Import | DiskJobPurpose::Carve))
+        {
+            self.job_strip(ui, job);
+        }
         if let Entry::Dump(_) = self.entry {
             self.dump_pane(ui, cx);
             return;
@@ -21,7 +29,11 @@ impl DiskView {
         }
         if let Some(job) = cx.job {
             // Keeping the open view leaves its tree visible beneath the bar.
-            if job.purpose == DiskJobPurpose::Keep && self.bound.is_some() {
+            if matches!(
+                job.purpose,
+                DiskJobPurpose::Keep | DiskJobPurpose::Reference
+            ) && self.bound.is_some()
+            {
                 self.job_strip(ui, job);
                 self.open_view_pane(ui, cx);
             } else {
@@ -102,13 +114,19 @@ impl DiskView {
     /// What a job is doing, as a sentence.
     fn job_text(job: &DiskJobProgress) -> String {
         let what = match job.purpose {
-            DiskJobPurpose::Measure => "Measuring the current disk",
-            DiskJobPurpose::View => "Reading the current disk",
-            DiskJobPurpose::Dump => "Dumping the current disk",
+            DiskJobPurpose::Measure => "Measuring the disk",
+            DiskJobPurpose::View => "Reading the disk",
+            DiskJobPurpose::Dump => "Dumping the disk",
             DiskJobPurpose::Keep => "Keeping the open view as a dump",
+            DiskJobPurpose::Reference => "Reading the reference disk",
+            DiskJobPurpose::Carve => "Saving the partition",
+            DiskJobPurpose::Import => "Converting the qcow2 image in the sandbox",
         };
         match &job.stage {
-            DiskJobStage::Measuring => "Measuring the current disk…".to_string(),
+            DiskJobStage::Measuring => match job.purpose {
+                DiskJobPurpose::Import => "Inspecting the qcow2 image in the sandbox…".to_string(),
+                _ => "Measuring the disk…".to_string(),
+            },
             DiskJobStage::Converting { percent } => format!("{what}… {percent:.0} %"),
             DiskJobStage::Hashing { done, total } => format!(
                 "Computing the SHA-256… {:.0} %",
@@ -188,16 +206,23 @@ impl DiskView {
 
     fn measure_card(&mut self, ui: &mut egui::Ui, cx: &DiskContext<'_>, vm: &VmConfig) {
         ui.add_space(8.0);
+        let busy = self.waiting.is_some() || cx.job.is_some() || cx.other_job;
         ui.label(
-            egui::RichText::new(format!("Current disk of {} (VM off)", vm.name))
-                .strong()
-                .color(theme::heading()),
+            egui::RichText::new(format!(
+                "{} of {} (VM off)",
+                self.source_name(&self.pick.source),
+                vm.name
+            ))
+            .strong()
+            .color(theme::heading()),
         );
+        self.source_picker(ui, !busy);
         if let Some(notice) = &self.notice {
             crate::activity::warning(ui, notice);
         }
+        let measure = self.current_measure(cx);
         let mut can_open = false;
-        match cx.measure {
+        match measure {
             None => {
                 ui.horizontal(|ui| {
                     theme::spinner(ui);
@@ -208,13 +233,17 @@ impl DiskView {
                 if let Some(error) = &measure.error {
                     crate::activity::error(ui, error);
                 } else {
-                    can_open = true;
+                    can_open = measure.unsupported().is_none();
                 }
                 if measure.logical_size > 0 {
                     ui.label(format!(
-                        "{} logical · ≈ {} allocated",
+                        "{} logical · ≈ {} allocated{}",
                         format_size(measure.logical_size),
-                        format_size(measure.allocated_estimate)
+                        format_size(measure.allocated_estimate),
+                        measure
+                            .selected()
+                            .map(|partition| format!(" · partition {}", partition.index))
+                            .unwrap_or_default()
                     ));
                     if !measure.source.active_layer.is_empty() {
                         ui.colored_label(
@@ -238,15 +267,16 @@ impl DiskView {
                         );
                     }
                 }
+                self.partition_list(ui, measure, busy);
             }
         }
         ui.add_space(6.0);
         let why = if self.waiting.is_some() {
             Some("A request is on its way")
-        } else if cx.other_job {
+        } else if cx.other_job || cx.job.is_some() {
             Some("Another disk job is running")
         } else if !can_open {
-            Some("The disk could not be measured")
+            Some("This disk cannot be opened: see the message above")
         } else {
             None
         };
@@ -258,11 +288,11 @@ impl DiskView {
                 .clicked()
             {
                 self.wait_for(true);
-                self.action = Some(DiskAction::Open);
+                self.action = Some(DiskAction::Open(self.pick.clone()));
             }
             self.dump_button(ui, cx, false);
         });
-        if let Some(quota) = cx.measure.and_then(|measure| measure.quota_error()) {
+        if let Some(quota) = measure.and_then(|measure| measure.quota_error()) {
             crate::activity::warning(ui, quota);
         }
         ui.add_space(4.0);
@@ -272,7 +302,8 @@ impl DiskView {
                     "Opening copies the allocated data into a temporary image; nothing is \
                      written to the VM's disk. The image is deleted when you close the view or \
                      start the VM, unless you keep it as a dump. Dump disk writes the image \
-                     straight into the VM's recordings.",
+                     straight into the VM's recordings. A checkpoint is read exactly like the \
+                     current disk, and also only while the VM is off.",
                 )
                 .color(theme::muted()),
             )
@@ -294,10 +325,16 @@ impl DiskView {
         ui.horizontal_wrapped(|ui| {
             ui.label(
                 egui::RichText::new(format!(
-                    "Current disk (VM off) · read {} · {} · {}",
+                    "{} (VM off) · read {} · {} · {}{}",
+                    view.source.kind.label(),
                     clock(view.taken_ms / 1000),
                     view.fs_state.label(),
-                    view.source.active_layer
+                    view.source.active_layer,
+                    view.source
+                        .partition
+                        .as_ref()
+                        .map(|partition| format!(" · partition {}", partition.index))
+                        .unwrap_or_default()
                 ))
                 .strong()
                 .color(theme::heading()),
@@ -413,6 +450,11 @@ impl DiskView {
                 ui.colored_label(theme::good(), message);
             }
         }
+        if self.diff.is_some() {
+            self.diff_pane(ui, cx);
+            return;
+        }
+        ui.horizontal_wrapped(|ui| self.compare_menu(ui, cx));
         self.find_bar(ui);
         ui.add_space(2.0);
         let height = ui.available_height().max(60.0);

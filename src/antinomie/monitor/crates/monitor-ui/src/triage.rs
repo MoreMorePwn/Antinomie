@@ -173,6 +173,8 @@ pub(crate) struct TriageView {
     packet_capture: Option<std::path::PathBuf>,
     context_key: Option<String>,
     details_directory: Option<std::path::PathBuf>,
+    /// Absolute guest paths in the run's Changed files, for the Disks tab.
+    changed_paths: Arc<std::collections::BTreeSet<String>>,
 }
 
 impl Default for TriageView {
@@ -208,6 +210,7 @@ impl Default for TriageView {
             packet_capture: None,
             context_key: None,
             details_directory: None,
+            changed_paths: Arc::default(),
         }
     }
 }
@@ -297,6 +300,35 @@ impl TriageView {
             self.scan_request.address_lookup = mode;
             self.request_refresh();
         }
+    }
+
+    /// The absolute guest paths of the selected run's Changed files (observed
+    /// operations). Rebuilt when the run's index is, never per frame.
+    pub(crate) fn changed_paths(&self) -> Arc<std::collections::BTreeSet<String>> {
+        self.changed_paths.clone()
+    }
+
+    /// Show one path in Files › Changed files: the table is filtered to it.
+    pub(crate) fn show_changed_path(&mut self, ctx: &egui::Context, path: &str) {
+        self.section = Section::Files;
+        self.files = FileTab::Changed;
+        // A quote or backslash cannot be written in the filter's string.
+        if !path.contains(['"', '\\']) && !path.chars().any(char::is_control) {
+            let draft = format!("file.path == \"{path}\"");
+            ctx.data_mut(|data| {
+                data.insert_temp(
+                    egui::Id::new(("triage-filter-draft", FileTab::Changed.slot())),
+                    draft,
+                );
+            });
+        }
+    }
+
+    /// A path the Disks tab diff was asked to show from the Details.
+    pub(crate) fn take_disk_jump(&self, ctx: &egui::Context) -> Option<String> {
+        ctx.data_mut(|data| {
+            data.remove_temp::<String>(egui::Id::new(crate::disk_view::DIFF_JUMP_KEY))
+        })
     }
 
     pub(crate) fn tick(&mut self, ctx: &egui::Context, input: TriageInput<'_>) {

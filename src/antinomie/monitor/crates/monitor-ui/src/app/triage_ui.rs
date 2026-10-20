@@ -83,7 +83,7 @@ impl MonitorApp {
         if let Some(input) = self.triage.take_open_input(ui.ctx()) {
             self.open_scanned_input(input);
         }
-        self.apply_triage_navigation(jump);
+        self.apply_triage_navigation(ui.ctx(), jump);
     }
 
     /// Opens a scanned input where it is viewed best.
@@ -112,12 +112,21 @@ impl MonitorApp {
 
     pub(super) fn show_triage_details(&mut self, ui: &mut egui::Ui) {
         let jump = self.triage.details(ui);
-        self.apply_triage_navigation(jump);
+        self.apply_triage_navigation(ui.ctx(), jump);
     }
 
-    fn apply_triage_navigation(&mut self, jump: Option<trace::InvocationKey>) {
+    pub(super) fn apply_triage_navigation(
+        &mut self,
+        ctx: &egui::Context,
+        jump: Option<trace::InvocationKey>,
+    ) {
         if let Some(call_id) = jump {
             self.jump_triage_call(call_id);
+        }
+        if let Some(path) = self.triage.take_disk_jump(ctx) {
+            if self.disk_view.reveal_diff(&path) {
+                self.focus_panel = Some(Panel::Disks);
+            }
         }
         if let Some(frame_number) = self.triage.take_packet_jump() {
             let capture = self.triage.take_packet_capture();

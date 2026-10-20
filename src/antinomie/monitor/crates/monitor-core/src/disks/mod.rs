@@ -30,6 +30,7 @@ pub mod export;
 pub mod extract;
 pub mod job;
 pub mod measure;
+pub mod partition;
 pub mod reader;
 pub(crate) mod sandbox;
 
@@ -136,16 +137,51 @@ pub fn read_state(image: &Path) -> Result<Ext4State, String> {
     })
 }
 
-/// Which disk state a view or (later) a dump was read from.
+/// Which disk state a view or a dump was read from.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum DiskSourceKind {
     /// The VM's current disk, VM off.
     #[default]
     Current,
-    /// A raw ext4 image made elsewhere.
+    /// A raw ext4 image made elsewhere (or a qcow2 converted in the sandbox).
     Imported,
-    // Phase 3: Checkpoint { id, name } (a saved snapshot's frozen layer).
+    /// A saved checkpoint's frozen layer.
+    Checkpoint { id: String, name: String },
+    /// The installed base image the VM's disk was created from.
+    Base,
+}
+
+impl DiskSourceKind {
+    /// "Current disk", "Disk at before-run", "Base image", "Imported image".
+    pub fn label(&self) -> String {
+        match self {
+            Self::Current => "Current disk".into(),
+            Self::Imported => "Imported image".into(),
+            Self::Checkpoint { name, .. } => format!("Disk at {name}"),
+            Self::Base => "Base image".into(),
+        }
+    }
+
+    /// The request that reads this source again, when it is one.
+    pub fn spec(&self) -> Option<DiskSourceSpec> {
+        match self {
+            Self::Current => Some(DiskSourceSpec::Current),
+            Self::Checkpoint { id, .. } => Some(DiskSourceSpec::Checkpoint(id.clone())),
+            Self::Base => Some(DiskSourceSpec::Base),
+            Self::Imported => None,
+        }
+    }
+}
+
+/// What to read: the VM's current disk, the installed base it was created
+/// from, or the frozen layer of a saved (not deleted) checkpoint.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum DiskSourceSpec {
+    #[default]
+    Current,
+    Base,
+    Checkpoint(String),
 }
 
 /// One layer of the chain an image was read from (top first, base last).
@@ -168,6 +204,9 @@ pub struct DiskSourceRecord {
     pub active_layer: String,
     pub active_parent_id: Option<String>,
     pub layers: Vec<DiskLayerRef>,
+    /// The partition of the disk the image was carved from; `None` for a
+    /// whole-disk filesystem.
+    pub partition: Option<partition::Partition>,
 }
 
 /// The open "Current disk (VM off)" view, published in the snapshot.
@@ -207,16 +246,59 @@ pub struct DiskMeasure {
     /// view is not bounded by it.
     pub quota: u64,
     pub error: Option<String>,
+    /// The disk's partition table; `None` for a whole-disk filesystem.
+    pub partitions: Option<partition::PartitionTable>,
+    /// Why the table could not be read (the disk is then treated as one
+    /// filesystem and fails to open if it is not).
+    pub partition_error: Option<String>,
+    /// The partition the estimate and the image are for.
+    pub partition: Option<u32>,
 }
 
 impl DiskMeasure {
+    /// The chosen partition, if the disk has a table.
+    pub fn selected(&self) -> Option<&partition::Partition> {
+        self.partitions
+            .as_ref()
+            .zip(self.partition)
+            .and_then(|(table, index)| table.get(index))
+    }
+
+    /// The size of the image that will be written: the partition, or the disk.
+    pub fn image_size(&self) -> u64 {
+        self.selected()
+            .map_or(self.logical_size, |partition| partition.length)
+    }
+
+    /// Why this measurement cannot be opened or dumped as a filesystem: the
+    /// disk has a partition table and the chosen partition (or the lack of
+    /// one) is not an ext2/3/4 filesystem.
+    pub fn unsupported(&self) -> Option<String> {
+        let table = self.partitions.as_ref()?;
+        match self.selected() {
+            None if table.partitions.is_empty() => {
+                Some("the partition table lists no partitions".into())
+            }
+            None => Some(
+                "unsupported filesystem: no ext2/3/4 partition on this disk; pick a partition \
+                 to save it to the host"
+                    .into(),
+            ),
+            Some(partition) if partition.fs != partition::PartitionFs::Ext4 => Some(format!(
+                "unsupported filesystem: partition {} ({}) does not hold ext2/3/4",
+                partition.index, partition.kind
+            )),
+            Some(_) => None,
+        }
+    }
+
     /// Free space the image needs: the estimate, or the full logical size on
     /// a filesystem that cannot hold holes, plus a margin.
     pub fn needed_space(&self) -> u64 {
         let need = if self.sparse_supported {
             self.allocated_estimate
         } else {
-            self.logical_size
+            self.image_size()
         };
         need.saturating_add(SPACE_MARGIN)
     }
@@ -265,7 +347,7 @@ pub(crate) const SPACE_MARGIN: u64 = 64 * 1024 * 1024;
 /// What a disk job does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DiskJobPurpose {
-    /// `qemu-img map`: the allocation estimate.
+    /// `qemu-img map`: the allocation estimate and the partition table.
     Measure,
     /// Flatten the chain into a scratch image and open it.
     View,
@@ -273,6 +355,13 @@ pub enum DiskJobPurpose {
     Dump,
     /// Promote the open view's scratch image to a dump.
     Keep,
+    /// Flatten a source into a second scratch image to compare the open
+    /// entry against.
+    Reference,
+    /// Save one partition of a disk to a file chosen on the host.
+    Carve,
+    /// Convert an imported qcow2 inside the sandbox into a dump.
+    Import,
 }
 
 #[derive(Clone, Debug, PartialEq)]

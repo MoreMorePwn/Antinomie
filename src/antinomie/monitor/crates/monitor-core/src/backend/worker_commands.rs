@@ -675,14 +675,37 @@ impl Worker {
             Command::StartNetworkCapture => self.start_network_capture(),
             Command::StopNetworkCapture => self.stop_network_capture(),
             Command::DumpMemory => self.start_memory_dump(),
-            Command::MeasureDisk { vm_id } => self.measure_disk(&vm_id),
-            Command::OpenCurrentDisk { vm_id } => self.open_current_disk(&vm_id),
+            Command::MeasureDisk {
+                vm_id,
+                source,
+                partition,
+            } => self.measure_disk(&vm_id, &source, partition),
+            Command::OpenCurrentDisk {
+                vm_id,
+                source,
+                partition,
+            } => self.open_current_disk(&vm_id, &source, partition),
             Command::CloseCurrentDisk { vm_id } => self.close_current_disk(&vm_id),
+            Command::OpenDiskReference { vm_id, source } => {
+                self.open_disk_reference(&vm_id, &source)
+            }
+            Command::CloseDiskReference { vm_id } => self.close_disk_reference_for(&vm_id),
             Command::DumpDisk {
                 vm_id,
+                source,
+                partition,
                 hash,
                 layer_digests,
-            } => self.dump_disk(&vm_id, hash, layer_digests),
+            } => self.dump_disk(&vm_id, &source, partition, hash, layer_digests),
+            Command::SaveDiskPartition {
+                vm_id,
+                source,
+                partition,
+                path,
+            } => self.save_disk_partition(&vm_id, &source, partition, &path),
+            Command::ImportQcow2Disk { vm_id, path, hash } => {
+                self.import_qcow2_disk(&vm_id, &path, hash)
+            }
             Command::KeepCurrentDiskAsDump {
                 vm_id,
                 hash,

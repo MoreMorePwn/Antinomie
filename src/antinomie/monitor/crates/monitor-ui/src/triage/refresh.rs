@@ -248,6 +248,14 @@ impl TriageView {
                             }) {
                                 self.selected_call_id = None;
                             }
+                            self.changed_paths = Arc::new(
+                                scan.file_changes
+                                    .iter()
+                                    .filter_map(|change| {
+                                        crate::disk_view::normalize_guest_path(&change.path)
+                                    })
+                                    .collect(),
+                            );
                             self.scan = Some(scan);
                             self.scan_error = None;
                             self.last_refresh = Some(self.clock.now());
@@ -289,6 +297,7 @@ impl TriageView {
         self.scan_cancel = None;
         self.scan_rx = None;
         self.scan = None;
+        self.changed_paths = Arc::default();
         self.scan_error = None;
         self.last_refresh = None;
         self.next_refresh = None;

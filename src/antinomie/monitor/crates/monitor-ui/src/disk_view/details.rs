@@ -23,9 +23,9 @@ fn time(value: i64) -> String {
 impl DiskView {
     /// The Details of the tab; the action it asks for goes to `out`.
     pub(crate) fn details(&mut self, ui: &mut egui::Ui) -> Option<DiskAction> {
+        self.action = None;
         self.poll_save(ui.ctx());
         self.poll_dump_actions(ui.ctx());
-        self.action = None;
         let dump = self.selected_dump().map(|row| row.dump.clone());
         let current = match self.bound.as_ref().map(|bound| &bound.what) {
             Some(What::Current(view)) => Some((**view).clone()),
@@ -50,6 +50,14 @@ impl DiskView {
                     .as_ref()
                     .map(|selection| selection.path.clone())
                     .filter(|_| self.bound.is_some());
+                // The selected difference comes first; an entry that is not in
+                // this image (a deleted one) has nothing else to show.
+                if let Some(entry) = self.diff.as_ref().and_then(|diff| diff.entry()).cloned() {
+                    self.diff_details(ui, &entry);
+                    if entry.after.is_none() {
+                        return;
+                    }
+                }
                 match (selected, dump, current) {
                     (Some(path), _, _) => self.entry_details(ui, &path),
                     (None, Some(dump), _) => self.dump_details(ui, &dump),
@@ -91,7 +99,14 @@ impl DiskView {
                     );
                 }
                 row(ui, "Filesystem state", dump.fs_state.label());
-                row(ui, "Format", "Raw ext4 (whole disk)");
+                row(
+                    ui,
+                    "Format",
+                    match &dump.source.partition {
+                        Some(partition) => format!("Raw ext4 (partition {})", partition.index),
+                        None => "Raw ext4 (whole disk)".to_string(),
+                    },
+                );
                 row(ui, "Logical size", format_size(dump.logical_size));
                 if let Some(allocated) = dump.allocated_size {
                     row(ui, "Allocated", format_size(allocated));
@@ -101,18 +116,10 @@ impl DiskView {
                     "SHA-256",
                     dump.sha256.clone().unwrap_or_else(|| "not recorded".into()),
                 );
-                row(
-                    ui,
-                    "Source",
-                    match &dump.source.kind {
-                        antinomie_monitor_core::disks::DiskSourceKind::Imported => {
-                            "Imported image".to_string()
-                        }
-                        antinomie_monitor_core::disks::DiskSourceKind::Current => {
-                            "Current disk of the VM".to_string()
-                        }
-                    },
-                );
+                row(ui, "Source", dump.source.kind.label());
+                if let Some(partition) = &dump.source.partition {
+                    row(ui, "Partition", partition.label());
+                }
                 if !dump.source.active_layer.is_empty() {
                     row(ui, "Source layer", dump.source.active_layer.clone());
                 }
@@ -222,7 +229,7 @@ impl DiskView {
     }
 
     fn view_details(&mut self, ui: &mut egui::Ui, view: &CurrentDiskView) {
-        theme::section(ui, "Current disk (VM off)");
+        theme::section(ui, &format!("{} (VM off)", view.source.kind.label()));
         egui::Grid::new("disk_view_details")
             .num_columns(2)
             .spacing([16.0, 4.0])
@@ -231,6 +238,9 @@ impl DiskView {
                 row(ui, "Source layer", view.source.active_layer.clone());
                 if let Some(parent) = &view.source.active_parent_id {
                     row(ui, "After checkpoint", parent.clone());
+                }
+                if let Some(partition) = &view.source.partition {
+                    row(ui, "Partition", partition.label());
                 }
                 row(
                     ui,
