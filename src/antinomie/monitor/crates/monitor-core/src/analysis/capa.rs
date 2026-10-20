@@ -84,7 +84,7 @@ pub(super) fn capabilities(section: &mut AnalysisSection) {
         );
         section.state = AnalysisSectionState::Unavailable;
         section.summary = if run.timed_out {
-            "capa ran out of time (4 minutes) before reporting".into()
+            "capa ran out of time (4 minutes) and was stopped; statically linked programs take capa much longer because it also analyses the bundled C library".into()
         } else {
             "capa reported no readable result; the format may be unsupported by capa".into()
         };
