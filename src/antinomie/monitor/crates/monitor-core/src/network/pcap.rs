@@ -38,10 +38,6 @@ fn open_capture(path: &Path) -> Result<File, String> {
         .map_err(|error| format!("network capture file: {error}"))
 }
 
-pub(super) fn u16_be(data: &[u8], at: usize) -> Option<u16> {
-    Some(u16::from_be_bytes(data.get(at..at + 2)?.try_into().ok()?))
-}
-
 /// The pcap global header: 24 bytes, microsecond timestamps, little or big
 /// endian, Ethernet link type.
 fn header_endian(header: &[u8; 24]) -> Result<bool, String> {
@@ -73,6 +69,7 @@ pub fn read_page(
     limit: usize,
 ) -> Result<NetworkPage, String> {
     let mut file = BufReader::new(open_capture(path)?);
+    let size = file.get_ref().metadata().map_err(|e| e.to_string())?.len();
     let mut header = [0u8; 24];
     if let Err(error) = file.read_exact(&mut header) {
         // QEMU writes the header when it opens the file; until then it is empty.
@@ -100,7 +97,6 @@ pub fn read_page(
         next_number: number,
     };
     let mut record = [0u8; 16];
-    let mut frame = Vec::new();
     while page.packets.len() < limit {
         if file.read_exact(&mut record).is_err() {
             break;
@@ -110,8 +106,12 @@ pub fn read_page(
         if captured > MAX_FRAME {
             return Err(format!("pcap record at {position} is {captured} bytes"));
         }
-        frame.resize(captured as usize, 0);
-        if file.read_exact(&mut frame).is_err() {
+        // The frame bytes are not needed for the raw list: skip them, and
+        // stop at a record still being written.
+        if position + 16 + u64::from(captured) > size {
+            break;
+        }
+        if file.seek_relative(i64::from(captured)).is_err() {
             break;
         }
         page.next_number += 1;
@@ -122,7 +122,8 @@ pub fn read_page(
                 + u64::from(read_u32(&record[4..8])),
             length,
             captured,
-            ..describe(&frame)
+            info: format!("Raw frame, {captured} bytes"),
+            ..NetworkPacket::default()
         });
         position += 16 + u64::from(captured);
         page.next_offset = position;

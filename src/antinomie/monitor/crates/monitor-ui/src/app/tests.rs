@@ -588,7 +588,7 @@ pub(super) fn section_report(id: &str, marker: &str) -> antinomie_monitor_core::
 }
 
 /// A pcap of a DNS query (UDP 5353 → 53) and a TCP SYN (40000 → 80).
-pub(super) fn test_pcap() -> Vec<u8> {
+pub(crate) fn test_pcap() -> Vec<u8> {
     fn frame(protocol: u8, transport: &[u8]) -> Vec<u8> {
         let mut frame = vec![
             0x52, 0x55, 10, 0, 2, 2, 0x52, 0x54, 0, 0x12, 0x34, 0x56, 8, 0,

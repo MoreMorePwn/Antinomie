@@ -398,6 +398,7 @@ impl<T: Row> Page<T> {
                     "Outcome",
                 ],
                 1 | 8..=15 => file_category::EVENT_HEADERS,
+                SESSION_SLOT => SESSION_HEADERS,
                 2 => file_tabs::CHANGED_HEADERS,
                 3 => HTTP_HEADERS,
                 4 => DNS_HEADERS,

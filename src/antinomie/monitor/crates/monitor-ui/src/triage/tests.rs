@@ -627,8 +627,6 @@ fn hidden_tick_indexes_once_a_shown_pane_refreshes_growth_preserves_selection_an
         TriageInput {
             analysis: None,
             invocations: &[],
-            packets: &[],
-            frames: None,
             vm_id: Some("vm"),
             boot_id: Some("boot"),
             run_id: Some(run),
@@ -805,6 +803,89 @@ fn exec_cloexec_and_shared_tables_keep_parent_descriptor_provenance_separate() {
 }
 
 #[test]
+fn encrypted_and_binary_sessions_h2c_requests_and_quic_hosts_come_from_tshark() {
+    if std::process::Command::new("tshark")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_err()
+    {
+        return;
+    }
+    let temp = PacketSpool::new().unwrap();
+    let path = temp.directory.join("protocols.pcap");
+    std::fs::write(
+        &path,
+        include_bytes!("../../../monitor-core/src/packet_filter/testdata/protocols.pcap"),
+    )
+    .unwrap();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let mut inventory = network::Inventory::default();
+    let mut kinds = Vec::new();
+    let index = scan_pcap_query_observed(
+        &path,
+        false,
+        &cancel,
+        &ScanRequest::default(),
+        &mut inventory,
+        &mut |kind, _, _, _| {
+            kinds.push(kind);
+            Ok(())
+        },
+    )
+    .unwrap();
+    let rows: Vec<Vec<String>> = index
+        .sessions
+        .iter()
+        .map(|row| row.iter().map(|cell| cell.text.clone()).collect())
+        .collect();
+    let find = |protocol: &str, kind: &str| {
+        rows.iter()
+            .find(|row| row[3] == format!("{protocol} {kind}"))
+            .unwrap_or_else(|| panic!("{protocol} {kind} in {rows:?}"))
+    };
+    let tls = find("TLSv1.2", "client hello");
+    assert_eq!(tls[4], "secure.example.test");
+    assert_eq!(tls[5], "h2, http/1.1");
+    assert!(tls[6].contains("3 cipher suites"), "{tls:?}");
+    let quic = find("QUIC", "client hello");
+    assert_eq!(
+        (quic[4].as_str(), quic[5].as_str()),
+        ("quic.example.test", "h3")
+    );
+    assert!(find("TLSv1.3", "server hello")[6].contains("0x1301"));
+    assert!(
+        rows.iter()
+            .any(|row| row[3] == "SSHv2 banner" && row[6].starts_with("SSH-2.0-")),
+        "{rows:?}"
+    );
+    // Cleartext HTTP/2 is listed with the HTTP requests, by authority.
+    assert!(index
+        .http
+        .iter()
+        .any(|row| row[3].text == "GET" && row[4].text == "www.example.com" && row[5].text == "/"));
+    let (_, hosts) = inventory.rows();
+    let sources: Vec<String> = hosts
+        .iter()
+        .map(|row| format!("{} {}", row[0].text, row[5].text))
+        .collect();
+    assert!(
+        sources.iter().any(|h| h == "quic.example.test QUIC SNI"),
+        "{sources:?}"
+    );
+    assert!(
+        sources.iter().any(|h| h == "secure.example.test TLS SNI"),
+        "{sources:?}"
+    );
+    assert!(
+        sources.iter().any(|h| h == "www.example.com HTTP/2"),
+        "{sources:?}"
+    );
+    assert!(kinds.contains(&RowKind::Session));
+}
+
+#[test]
 fn tshark_saved_and_live_prefix_index_use_all_capture_frames() {
     if std::process::Command::new("tshark")
         .arg("--version")
@@ -825,23 +906,20 @@ fn tshark_saved_and_live_prefix_index_use_all_capture_frames() {
         assert_eq!(index.http[0][3].text, "GET");
         assert_eq!(index.http[0][4].text, "example.com");
         assert_eq!(index.http[0][5].text, "/");
-        // TLS handshakes are decoded for the server name only; HTTP/2 and
-        // encrypted DNS are not requested from TShark at all.
+        // TShark parses everything it knows; the coverage says what stays
+        // encrypted, and HTTP/2 and session fields are requested from it.
         assert!(index.coverage.contains(
-            "TLS server names are read from handshakes; the content of HTTPS and HTTP/3 is encrypted, and cleartext HTTP/2 and encrypted DNS are not decoded"
+            "the content of HTTPS, HTTP/3 and encrypted DNS stays encrypted, and cleartext HTTP/2 requests are listed without their responses"
         ));
         assert!(TSHARK_FIELDS.contains(&"tls.handshake.extensions_server_name"));
-        assert!(!TSHARK_FIELDS
-            .iter()
-            .any(|field| field.starts_with("http2.")));
+        assert!(TSHARK_FIELDS.contains(&"http2.headers.method"));
+        assert!(TSHARK_FIELDS.contains(&"ssh.protocol"));
     }
 }
-use antinomie_monitor_core::{
-    network::NetworkPacket, EventSummary, FieldSummary, InvocationSummary,
-};
+use antinomie_monitor_core::{EventSummary, FieldSummary, InvocationSummary};
 
 fn page_notes(invocations: &[InvocationSummary]) -> Vec<BpfNote> {
-    bpf_notes(&TriageInput::page(invocations, &[]))
+    bpf_notes(&TriageInput::page(invocations))
 }
 
 #[test]
@@ -990,50 +1068,6 @@ fn saved_recording_from_env_is_indexed_when_present() {
     let _ = std::fs::write("/tmp/antinomie-bpf-scan.txt", bpf);
 }
 
-#[test]
-fn pcap_index_reconstructs_http_and_states_coverage() {
-    let dir = std::env::temp_dir().join(format!("antinomie-pcap-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("sample.pcap");
-    std::fs::write(&path, http_pcap()).unwrap();
-    let index = scan_pcap(&path, false, &AtomicBool::new(false))
-        .unwrap_or_else(|error| panic!("pcap index failed: {error}"));
-    assert!(
-        index.coverage.contains("pcap frames read 1"),
-        "{}",
-        index.coverage
-    );
-    assert!(
-        index.coverage.contains("HTTPS segments 0") && index.coverage.contains("HTTP/2 prefaces 0"),
-        "{}",
-        index.coverage
-    );
-    assert_eq!(index.http.len(), 1);
-    assert!(index.http[0].iter().any(|cell| cell.text.contains("GET /")));
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn saved_pcap_from_env_is_indexed_when_present() {
-    let Ok(path) = std::env::var("ANTINOMIE_PCAP") else {
-        return;
-    };
-    let index = scan_pcap(Path::new(&path), false, &AtomicBool::new(false))
-        .unwrap_or_else(|error| panic!("pcap index failed: {error}"));
-    assert!(
-        index.coverage.contains("pcap frames read"),
-        "{}",
-        index.coverage
-    );
-    assert!(
-        index.coverage.contains("Unavailable: HTTPS"),
-        "{}",
-        index.coverage
-    );
-    let _ = std::fs::write("/tmp/antinomie-pcap-coverage.txt", &index.coverage);
-}
-
 pub(super) fn http_pcap() -> Vec<u8> {
     let payload = b"GET / HTTP/1.1\r\nHost: example.com\r\n\r\n";
     let mut tcp = Vec::new();
@@ -1144,18 +1178,6 @@ pub(super) fn captured(key: &str, layout: &str, data: &[u8]) -> FieldSummary {
         preview: data.to_vec(),
         raw_path: None,
         ranges: vec![(0, len)],
-    }
-}
-
-fn packet(number: u64, protocol: &str, info: &str, port: Option<u16>) -> NetworkPacket {
-    NetworkPacket {
-        number,
-        protocol: protocol.into(),
-        info: info.into(),
-        source: "10.0.0.1".into(),
-        destination: "10.0.0.2".into(),
-        dst_port: port,
-        ..NetworkPacket::default()
     }
 }
 
@@ -1422,50 +1444,6 @@ fn write_fd_argument_is_shown_not_the_return() {
 
     let unlinked = call(9, 87, "unlink", 0);
     assert_eq!(file_rows(&[unlinked], &["unlink"]).rows[0][2].text, "—");
-}
-
-#[test]
-fn dns_port_argument_does_not_create_a_row() {
-    let mut write = call(3, 1, "write", 53);
-    write.entry.as_mut().unwrap().args = Some([53, 0, 53, 0, 0, 0]);
-    let mut send = call(3, 44, "sendto", 53);
-    send.entry.as_mut().unwrap().args = Some([53, 0, 53, 0, 0, 16]);
-    let packets = [
-        packet(1, "ICMP", "type 8", Some(53)),
-        packet(2, "DNS", "standard query A example.com", None),
-        packet(3, "TCP", "53 → 40000", Some(53)),
-        packet(4, "UDP", "9 → 9", Some(9)),
-    ];
-    let rows = dns_rows(&TriageInput::page(&[write, send], &packets));
-    assert!(rows.rows.is_empty());
-    assert!(!rows.stopped_early);
-}
-
-#[test]
-fn http_request_includes_get_and_skips_the_status_line() {
-    let packets = [
-        packet(1, "http", "HTTP/1.1 200 OK", Some(80)),
-        packet(2, "http", "GET / HTTP/1.1", Some(80)),
-        packet(3, "TCP", "GET /hidden HTTP/1.1", Some(80)),
-    ];
-    let mut response = call(4, 1, "write", 0);
-    response
-        .entry
-        .as_mut()
-        .unwrap()
-        .fields
-        .push(captured("arg1.data", "", b"HTTP/1.1 200 OK\r\n"));
-    let mut request = call(4, 1, "write", 0);
-    request.entry.as_mut().unwrap().fields.push(captured(
-        "arg1.data",
-        "",
-        b"GET /index.html HTTP/1.1\r\n",
-    ));
-    let rows = http_rows(&TriageInput::page(&[response, request], &packets));
-    assert!(
-        rows.rows.is_empty(),
-        "packet info and syscall text are not a reconstructed request"
-    );
 }
 
 #[test]
@@ -1744,37 +1722,6 @@ fn private_writable_mmap_is_not_a_changed_file() {
     let rows = file_rows(&[private, shared], &["mmap"]);
     assert_eq!(rows.rows.len(), 1, "{}", rows.rows.len());
     assert_eq!(rows.rows[0][3].text, "mmap");
-}
-
-#[test]
-fn http_request_process_needs_address_and_port() {
-    let packets = [packet(2, "http", "GET / HTTP/1.1", Some(80))];
-    let mut port_only = call(5, 44, "sendto", 0);
-    port_only
-        .entry
-        .as_mut()
-        .unwrap()
-        .fields
-        .push(captured("arg1.buf", "", b"port 80\0"));
-    assert_eq!(
-        http_rows(&TriageInput::page(&[port_only.clone()], &packets))
-            .rows
-            .len(),
-        0
-    );
-    assert_eq!(http_process(&packets[0], &[port_only]), "—");
-
-    let mut connect = call(4, 42, "connect", 0);
-    connect
-        .entry
-        .as_mut()
-        .unwrap()
-        .fields
-        .push(captured("arg1.addr", "", b"10.0.0.2:80\0"));
-    assert_eq!(
-        http_process(&packets[0], &[connect]),
-        "ambiguous: endpoint candidate pid 4 tid 4"
-    );
 }
 
 #[test]

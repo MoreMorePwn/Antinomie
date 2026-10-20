@@ -707,10 +707,6 @@ impl eframe::App for MonitorApp {
                 run_finished,
                 current_boot: self.snapshot.active_vm.as_deref() == Some(run.vm_id.as_str())
                     && self.snapshot.boot_id.as_deref() == Some(run.boot_id.as_str()),
-                #[cfg(test)]
-                packets: &[],
-                #[cfg(test)]
-                frames: None,
             })
             .unwrap_or_else(crate::triage::TriageInput::empty);
         self.triage.tick(ctx, input);

@@ -8,7 +8,7 @@ pub(super) fn collect(
     open: bool,
     cancel: &Arc<AtomicBool>,
     request: &ScanRequest,
-    observe: &mut impl FnMut(&Path, bool, &[Cell], &str, &str) -> Result<(), String>,
+    observe: &mut impl FnMut(&Path, RowKind, &[Cell], &str, &str) -> Result<(), String>,
 ) -> Result<PacketIndex, String> {
     let mut paths = vec![path.to_path_buf()];
     if request.owned_pcap {
@@ -30,8 +30,11 @@ pub(super) fn collect(
     }
     let mut http_page = sorting::Page::new(request, 3, cancel);
     let mut dns_page = sorting::Page::new(request, 4, cancel);
+    let mut session_page = sorting::Page::new(request, SESSION_SLOT, cancel);
     let http_query = query::compile_table(&request.filters[3], HTTP_FIELDS);
     let dns_query = query::compile_table(&request.filters[4], DNS_FIELDS);
+    let session_query =
+        query::compile_table(&request.filters[SESSION_SLOT], network::SESSION_FIELDS);
     let mut inventory = network::Inventory::default();
     let mut inner = request.clone();
     inner.offsets = [0; SLOTS];
@@ -64,13 +67,19 @@ pub(super) fn collect(
             cancel,
             &inner,
             &mut inventory,
-            &mut |http, row, destination, port| {
-                observe(path, http, row, destination, port)?;
-                if http && http_query.keep_table(&row[0].values) {
-                    http_page.push(row.to_vec())?;
-                }
-                if !http && dns_query.keep_table(&row[0].values) {
-                    dns_page.push(row.to_vec())?;
+            &mut |kind, row, destination, port| {
+                observe(path, kind, row, destination, port)?;
+                match kind {
+                    RowKind::Http if http_query.keep_table(&row[0].values) => {
+                        http_page.push(row.to_vec())?
+                    }
+                    RowKind::Dns if dns_query.keep_table(&row[0].values) => {
+                        dns_page.push(row.to_vec())?
+                    }
+                    RowKind::Session if session_query.keep_table(&row[0].values) => {
+                        session_page.push(row.to_vec())?
+                    }
+                    _ => {}
                 }
                 Ok(())
             },
@@ -99,6 +108,7 @@ pub(super) fn collect(
     }
     let (http, http_omitted, _) = http_page.finish()?;
     let (dns, dns_omitted, _) = dns_page.finish()?;
+    let (sessions, sessions_omitted, _) = session_page.finish()?;
     let (ips, hosts) = inventory.rows();
     let counts = Some((frames, ips.len() as u64, hosts.len() as u64));
     let mut inventory_pages = Vec::new();
@@ -128,6 +138,8 @@ pub(super) fn collect(
         ips_omitted,
         hosts,
         hosts_omitted,
+        sessions,
+        sessions_omitted,
         network_warning: (!warnings.is_empty()).then(|| warnings.join("; ")),
     })
 }

@@ -82,6 +82,22 @@ pub(super) const HOST_FIELDS: &[FieldSpec<'static>] = &[
     FieldSpec::number("frame.number", "First original packet"),
 ];
 
+pub(super) const SESSION_FIELDS: &[FieldSpec<'static>] = &[
+    FieldSpec::text("capture.path", "Capture segment of the evidence packet"),
+    FieldSpec::number("frame.number", "Original packet"),
+    FieldSpec::number("frame.time_us", "Packet time in the capture clock"),
+    FieldSpec::text("network.endpoints", "Source and destination endpoints"),
+    FieldSpec::text("session.protocol", "Protocol column TShark printed"),
+    FieldSpec::text("session.kind", "client hello, server hello or banner"),
+    FieldSpec::text("session.server_name", "TLS or QUIC server name (SNI)"),
+    FieldSpec::tags("session.alpn", "ALPN protocols offered or chosen"),
+    FieldSpec::text("session.details", "Cipher suites or the SSH banner"),
+    FieldSpec::text(
+        "session.fingerprint",
+        "JA3 and JA4 when TShark computes them",
+    ),
+];
+
 #[derive(Default)]
 struct Host {
     capture: String,

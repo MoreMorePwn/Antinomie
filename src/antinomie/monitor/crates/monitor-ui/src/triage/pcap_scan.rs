@@ -39,7 +39,53 @@ pub(super) const TSHARK_FIELDS: &[&str] = &[
     "ip.geoip.dst_org",
     "ipv6.geoip.dst_org",
     "tls.handshake.extensions_server_name",
+    // What the sessions and the HTTP/2 rows are built from.
+    "_ws.col.protocol",
+    "tls.handshake.type",
+    "tls.handshake.extensions_alpn_str",
+    "tls.handshake.ciphersuite",
+    "tls.handshake.version",
+    "ssh.protocol",
+    "http2.headers.method",
+    "http2.headers.authority",
+    "http2.headers.path",
+    "tls.handshake.ja3",
+    "tls.handshake.ja4",
 ];
+
+const F_PROTOCOL: usize = 36;
+const F_TLS_TYPE: usize = 37;
+const F_ALPN: usize = 38;
+const F_CIPHERS: usize = 39;
+const F_SSH_BANNER: usize = 41;
+const F_H2_METHOD: usize = 42;
+const F_H2_AUTHORITY: usize = 43;
+const F_H2_PATH: usize = 44;
+const F_JA3: usize = 45;
+const F_JA4: usize = 46;
+/// Columns older TShark releases lack (the TLS fingerprints).
+const FINGERPRINT_FIELDS: std::ops::Range<usize> = F_JA3..F_JA4 + 1;
+/// Columns of the GeoIP lookup, requested only when it is configured.
+const GEOIP_FIELDS: std::ops::Range<usize> = 31..35;
+
+pub(super) const SESSION_HEADERS: &[&str] = &[
+    "Frame",
+    "Time",
+    "Endpoint",
+    "Protocol",
+    "Server name",
+    "ALPN",
+    "Details",
+    "Fingerprint",
+];
+
+/// Which rows of a capture a callback is given.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum RowKind {
+    Http,
+    Dns,
+    Session,
+}
 
 pub(super) const HTTP_HEADERS: &[&str] = &[
     "Frame",
@@ -224,12 +270,34 @@ pub(super) fn spool_packet_fields(
 > {
     let spool = Arc::new(std::sync::Mutex::new(PacketSpool::new()?));
     let writer = Arc::clone(&spool);
+    // Columns left out: GeoIP unless it is configured, and the TLS
+    // fingerprints an older TShark does not have. They come back empty, so
+    // every row keeps the layout of TSHARK_FIELDS.
+    let mut skipped: Vec<usize> = if geoip {
+        Vec::new()
+    } else {
+        GEOIP_FIELDS.collect()
+    };
+    let optional: Vec<&str> = FINGERPRINT_FIELDS.map(|at| TSHARK_FIELDS[at]).collect();
+    if let Ok(known) =
+        antinomie_monitor_core::packet_filter::known_fields(&optional, Arc::clone(cancel))
+    {
+        skipped.extend(
+            known
+                .iter()
+                .zip(FINGERPRINT_FIELDS)
+                .filter(|(known, _)| !**known)
+                .map(|(_, at)| at),
+        );
+    }
+    skipped.sort_unstable();
     let fields: Vec<_> = TSHARK_FIELDS
         .iter()
         .enumerate()
-        .filter(|(at, _)| geoip || !(31..35).contains(at))
+        .filter(|(at, _)| !skipped.contains(at))
         .map(|(_, field)| *field)
         .collect();
+    let expected = fields.len();
     let extent = antinomie_monitor_core::packet_filter::stream_fields(
         identity,
         "(ip || ipv6) && !tcp.analysis.retransmission",
@@ -238,23 +306,22 @@ pub(super) fn spool_packet_fields(
         Arc::clone(cancel),
         move |line| {
             let mut spool = writer.lock().map_err(|_| "metadata spool lock poisoned")?;
-            if geoip {
-                spool.push(line)
-            } else {
-                let mut fields = tsv_fields(line)?;
-                if fields.len() != TSHARK_FIELDS.len() - 4 {
-                    return Err("TShark returned a different field layout".into());
-                }
-                for _ in 0..4 {
-                    fields.insert(31, String::new());
-                }
-                let padded = fields
-                    .iter()
-                    .map(|field| format!("\"{}\"", field.replace('"', "\"\"")))
-                    .collect::<Vec<_>>()
-                    .join("\t");
-                spool.push(&padded)
+            if skipped.is_empty() {
+                return spool.push(line);
             }
+            let mut fields = tsv_fields(line)?;
+            if fields.len() != expected {
+                return Err("TShark returned a different field layout".into());
+            }
+            for &at in &skipped {
+                fields.insert(at, String::new());
+            }
+            let padded = fields
+                .iter()
+                .map(|field| format!("\"{}\"", field.replace('"', "\"\"")))
+                .collect::<Vec<_>>()
+                .join("\t");
+            spool.push(&padded)
         },
     )?;
     Ok((spool, extent))
@@ -286,7 +353,7 @@ pub(super) fn scan_pcap_query_observed(
     cancel: &Arc<AtomicBool>,
     request: &ScanRequest,
     inventory: &mut network::Inventory,
-    observe: &mut impl FnMut(bool, &[Cell], &str, &str) -> Result<(), String>,
+    observe: &mut impl FnMut(RowKind, &[Cell], &str, &str) -> Result<(), String>,
 ) -> Result<PacketIndex, String> {
     if !request.owned_pcap && request.identity.is_some() && request.started_ms.is_none() {
         return Err(
@@ -331,13 +398,18 @@ pub(super) fn scan_pcap_query_observed(
         ips_omitted: 0,
         hosts: Vec::new(),
         hosts_omitted: 0,
+        sessions: Vec::new(),
+        sessions_omitted: 0,
         network_warning: None,
     };
     inventory.capture = path.display().to_string();
     let mut http_page = sorting::Page::new(request, 3, cancel);
     let mut dns_page = sorting::Page::new(request, 4, cancel);
+    let mut session_page = sorting::Page::new(request, SESSION_SLOT, cancel);
     let http_query = query::compile_table(&request.filters[3], HTTP_FIELDS);
     let dns_query = query::compile_table(&request.filters[4], DNS_FIELDS);
+    let session_query =
+        query::compile_table(&request.filters[SESSION_SLOT], network::SESSION_FIELDS);
     let mut line = String::new();
     loop {
         if cancel.load(Ordering::Relaxed) {
@@ -382,8 +454,19 @@ pub(super) fn scan_pcap_query_observed(
                 field(33)
             },
         );
+        let server_name_source = if field(F_PROTOCOL) == "QUIC" {
+            "QUIC SNI"
+        } else {
+            "TLS SNI"
+        };
         for hostname in field(35).split('\u{1f}').filter(|name| !name.is_empty()) {
-            inventory.host(hostname, frame, time, &[destination.into()], "TLS SNI");
+            inventory.host(
+                hostname,
+                frame,
+                time,
+                &[destination.into()],
+                server_name_source,
+            );
         }
         let endpoints = format!(
             "{}:{} → {}:{}",
@@ -424,55 +507,23 @@ pub(super) fn scan_pcap_query_observed(
                     .get(15)
                     .and_then(|value| value.split('\u{1f}').next())
                     .and_then(|value| value.parse::<u16>().ok());
-                let mut row = vec![
-                    cell(format!("#{frame}"), theme::text(), true),
-                    cell(
-                        time.map_or("Unavailable".into(), crate::time_format::short_time_us),
-                        theme::text(),
-                        true,
-                    ),
-                    cell(&endpoints, theme::text(), true),
-                    cell(*method, theme::text(), false),
-                    cell(item(12), theme::text(), false),
-                    cell(item(13), theme::text(), false),
-                    cell(item(14), theme::text(), false),
-                    cell(
-                        status.map_or("—".into(), |status| status.to_string()),
-                        theme::text(),
-                        true,
-                    ),
-                    cell(field(16), theme::text(), true),
-                    cell("unknown", theme::text(), false),
-                    cell("decoded; capture gaps unknown", theme::text(), false),
-                ];
-                row[0].values = vec![
-                    ("capture.path", RowValue::Text(path.display().to_string())),
-                    ("frame.number", RowValue::Number(i128::from(frame))),
-                    (
-                        "frame.time_us",
-                        time.map_or(RowValue::Missing, |time| RowValue::Number(i128::from(time))),
-                    ),
-                    ("network.endpoints", RowValue::Text(endpoints.clone())),
-                    ("http.method", RowValue::Text((*method).into())),
-                    ("http.host", text_value(item(12))),
-                    ("http.uri", text_value(item(13))),
-                    ("http.version", text_value(item(14))),
-                    (
-                        "http.status",
-                        status.map_or(RowValue::Missing, |status| {
-                            RowValue::Number(i128::from(status))
-                        }),
-                    ),
-                    ("entry.complete", RowValue::Missing),
-                    ("network.attribution", RowValue::Text("unknown".into())),
-                ];
+                let row = http_row(
+                    path,
+                    &HttpRequest {
+                        frame,
+                        time,
+                        endpoints: &endpoints,
+                        method,
+                        host: item(12),
+                        uri: item(13),
+                        version: item(14),
+                        status,
+                        response_frames: field(16),
+                    },
+                );
                 inventory.host(item(12), frame, time, &[destination.into()], "HTTP");
-                // Keep protocol/version metadata in typed filters, but only requested display columns.
-                row.remove(10);
-                row.remove(9);
-                row.remove(6);
                 observe(
-                    true,
+                    RowKind::Http,
                     &row,
                     destination,
                     if field(7).is_empty() {
@@ -567,7 +618,7 @@ pub(super) fn scan_pcap_query_observed(
                     row.remove(at);
                 }
                 observe(
-                    false,
+                    RowKind::Dns,
                     &row,
                     destination,
                     if field(7).is_empty() {
@@ -581,6 +632,53 @@ pub(super) fn scan_pcap_query_observed(
                 }
             }
         }
+        let destination_port = if field(7).is_empty() {
+            field(9)
+        } else {
+            field(7)
+        };
+        // Cleartext HTTP/2: TShark decodes the request headers; the response
+        // is in another frame (a stream) and is not matched here.
+        for (at, method) in field(F_H2_METHOD)
+            .split('\u{1f}')
+            .filter(|method| !method.is_empty())
+            .enumerate()
+        {
+            let item = |column: usize| field(column).split('\u{1f}').nth(at).unwrap_or("");
+            let row = http_row(
+                path,
+                &HttpRequest {
+                    frame,
+                    time,
+                    endpoints: &endpoints,
+                    method,
+                    host: item(F_H2_AUTHORITY),
+                    uri: item(F_H2_PATH),
+                    version: "HTTP/2",
+                    status: None,
+                    response_frames: "",
+                },
+            );
+            inventory.host(
+                item(F_H2_AUTHORITY),
+                frame,
+                time,
+                &[destination.into()],
+                "HTTP/2",
+            );
+            observe(RowKind::Http, &row, destination, destination_port)?;
+            if http_query.keep_table(&row[0].values) {
+                http_page.push(row)?;
+            }
+        }
+        // TLS and QUIC handshakes and SSH banners, as TShark parsed them
+        // without any key: what the encrypted session names about itself.
+        for row in session_rows(path, frame, time, &endpoints, &fields) {
+            observe(RowKind::Session, &row, destination, destination_port)?;
+            if session_query.keep_table(&row[0].values) {
+                session_page.push(row)?;
+            }
+        }
     }
     if request.address_lookup != AddressLookup::Tshark {
         network::enrich_public(inventory, cancel, &mut index.network_warning)?;
@@ -589,10 +687,13 @@ pub(super) fn scan_pcap_query_observed(
     index.counts = Some((extent.packet_count, ips.len() as u64, hosts.len() as u64));
     let (http, http_omitted, http_count) = http_page.finish()?;
     let (dns, dns_omitted, dns_count) = dns_page.finish()?;
+    let (sessions, sessions_omitted, _) = session_page.finish()?;
     index.http = http;
     index.http_omitted = http_omitted;
     index.dns = dns;
     index.dns_omitted = dns_omitted;
+    index.sessions = sessions;
+    index.sessions_omitted = sessions_omitted;
     for (slot, rows, fields) in [
         (6, ips, network::IP_FIELDS),
         (7, hosts, network::HOST_FIELDS),
@@ -622,7 +723,7 @@ pub(super) fn scan_pcap_query_observed(
             None => retention.into(),
         });
     }
-    index.coverage = format!("TShark HTTP/1 and DNS/UDP/TCP; {} capture frames; complete-record extent {}/{} octets; HTTP matches {http_count}, DNS matches {dns_count}; response correlation uses decoder frame links; attribution unknown. TLS server names are read from handshakes; the content of HTTPS and HTTP/3 is encrypted, and cleartext HTTP/2 and encrypted DNS are not decoded{}",
+    index.coverage = format!("TShark parses every packet; {} capture frames; complete-record extent {}/{} octets; HTTP matches {http_count}, DNS matches {dns_count}; HTTP/1 response correlation uses decoder frame links; attribution unknown. TLS and QUIC server names, ALPN and SSH banners come from handshakes read without keys; the content of HTTPS, HTTP/3 and encrypted DNS stays encrypted, and cleartext HTTP/2 requests are listed without their responses{}",
         extent.packet_count, extent.complete_extent, extent.file_size,
         if pcap_open { "; live prefix watermark; final capture requires reanalysis" } else { "" });
     Ok(index)
@@ -664,186 +765,166 @@ fn parse_integer(text: &str) -> Option<i128> {
     }
 }
 
-#[cfg(test)]
-const PACKET_BOUND: usize = 4096;
+pub(super) struct HttpRequest<'a> {
+    frame: u64,
+    time: Option<u64>,
+    endpoints: &'a str,
+    method: &'a str,
+    host: &'a str,
+    uri: &'a str,
+    version: &'a str,
+    status: Option<u16>,
+    response_frames: &'a str,
+}
 
-/// Read the owned pcap to the end, or to [`PACKET_BOUND`] frames. Reconstruction
-/// uses those frames. A later frame is counted and not decoded.
-#[cfg(test)]
-pub(super) fn scan_pcap(
+/// One HTTP request row. The protocol version stays a typed filter value and
+/// is not a display column.
+fn http_row(path: &Path, request: &HttpRequest<'_>) -> Vec<Cell> {
+    let time = request.time;
+    let mut row = vec![
+        cell(format!("#{}", request.frame), theme::text(), true),
+        cell(
+            time.map_or("Unavailable".into(), crate::time_format::short_time_us),
+            theme::text(),
+            true,
+        ),
+        cell(request.endpoints, theme::text(), true),
+        cell(request.method, theme::text(), false),
+        cell(request.host, theme::text(), false),
+        cell(request.uri, theme::text(), false),
+        cell(
+            request
+                .status
+                .map_or("—".into(), |status| status.to_string()),
+            theme::text(),
+            true,
+        ),
+        cell(request.response_frames, theme::text(), true),
+    ];
+    row[0].values = vec![
+        ("capture.path", RowValue::Text(path.display().to_string())),
+        ("frame.number", RowValue::Number(i128::from(request.frame))),
+        (
+            "frame.time_us",
+            time.map_or(RowValue::Missing, |time| RowValue::Number(i128::from(time))),
+        ),
+        (
+            "network.endpoints",
+            RowValue::Text(request.endpoints.into()),
+        ),
+        ("http.method", RowValue::Text(request.method.into())),
+        ("http.host", text_value(request.host)),
+        ("http.uri", text_value(request.uri)),
+        ("http.version", text_value(request.version)),
+        (
+            "http.status",
+            request.status.map_or(RowValue::Missing, |status| {
+                RowValue::Number(i128::from(status))
+            }),
+        ),
+        ("entry.complete", RowValue::Missing),
+        ("network.attribution", RowValue::Text("unknown".into())),
+    ];
+    row
+}
+
+/// Session rows of one frame: a TLS or QUIC client or server hello, or an SSH
+/// banner. Everything shown is a value TShark printed.
+fn session_rows(
     path: &Path,
-    pcap_open: bool,
-    cancel: &AtomicBool,
-) -> Result<PacketIndex, String> {
-    if cancel.load(Ordering::Relaxed) {
-        return Err("cancelled".into());
-    }
-    if !path.is_file() {
-        return Err("pcap path is not a file".into());
-    }
-    let mut offset = 0u64;
-    let mut number = 0u64;
-    let mut held: Vec<(antinomie_monitor_core::network::NetworkPacket, Vec<u8>)> = Vec::new();
-    let mut omitted = 0u64;
-    let mut stopped = false;
-    loop {
-        if cancel.load(Ordering::Relaxed) {
-            stopped = true;
-            break;
-        }
-        let page = antinomie_monitor_core::network::read_page(path, offset, number, 256)?;
-        if page.packets.is_empty() {
-            break;
-        }
-        for packet in page.packets {
-            if held.len() >= PACKET_BOUND {
-                omitted += 1;
-                continue;
-            }
-            let bytes = antinomie_monitor_core::network::frame(path, packet.offset)?;
-            held.push((packet, bytes));
-        }
-        if page.next_offset <= offset {
-            break;
-        }
-        offset = page.next_offset;
-        number = page.next_number;
-    }
-    let captured: Vec<_> = held
-        .iter()
-        .map(
-            |(packet, bytes)| antinomie_monitor_core::network::CapturedFrame {
-                number: packet.number,
-                time_us: packet.time_us,
-                bytes,
-            },
-        )
-        .collect();
-    let built = antinomie_monitor_core::network::reconstruct(&captured);
-    let mut http = Vec::new();
-    let mut http_omitted = 0u64;
-    for request in &built.http {
-        if http.len() >= STORED_ROWS {
-            http_omitted += 1;
-            continue;
-        }
-        http.push(http_index_row(request, &held));
-    }
-    let mut dns = Vec::new();
-    let mut dns_omitted = 0u64;
-    for query in &built.dns {
-        if dns.len() >= STORED_ROWS {
-            dns_omitted += 1;
-            continue;
-        }
-        dns.push(dns_index_row(query, &held));
-    }
-    let mut coverage = format!(
-        "pcap frames read {}, omitted {omitted}; retransmissions dropped {}; HTTPS segments {}; HTTP/2 prefaces {}; HTTP requests stored {}, omitted {http_omitted}; DNS requests stored {}, omitted {dns_omitted}",
-        held.len(),
-        built.retransmissions_dropped,
-        built.https_segments,
-        built.http2_prefaces,
-        http.len(),
-        dns.len()
-    );
-    if stopped {
-        coverage.push_str("; scan stopped before the end of the pcap");
-    } else if pcap_open {
-        coverage.push_str(
-            "; the capture file was read to its current end; a live capture may still grow",
-        );
-    }
-    Ok(PacketIndex {
-        counts: None,
-        coverage,
-        http,
-        http_omitted,
-        dns,
-        dns_omitted,
-        ips: Vec::new(),
-        ips_omitted: 0,
-        hosts: Vec::new(),
-        hosts_omitted: 0,
-        network_warning: None,
-    })
-}
-
-#[cfg(test)]
-fn packet_ends(
-    number: Option<u64>,
-    held: &[(antinomie_monitor_core::network::NetworkPacket, Vec<u8>)],
-) -> String {
-    number
-        .and_then(|number| held.iter().find(|(packet, _)| packet.number == number))
-        .map(|(packet, _)| format!("{} → {}", packet.source, packet.destination))
-        .unwrap_or_else(|| "—".into())
-}
-
-#[cfg(test)]
-fn http_index_row(
-    request: &antinomie_monitor_core::network::ReconstructedHttp,
-    held: &[(antinomie_monitor_core::network::NetworkPacket, Vec<u8>)],
-) -> Vec<Cell> {
-    let mut row = flow(
-        request
-            .request_frames
-            .first()
-            .map(|number| format!("#{number}"))
-            .unwrap_or_else(|| "—".into()),
-        packet_ends(request.request_frames.first().copied(), held),
-        format!("{} {} {}", request.method, request.uri, request.version),
-    );
-    row.push(cell(
-        request
-            .status
-            .map(|status| status.to_string())
-            .unwrap_or_else(|| "—".into()),
-        theme::text(),
-        false,
-    ));
-    row.push(cell("—".to_string(), theme::text(), true));
-    row
-}
-
-#[cfg(test)]
-fn dns_index_row(
-    query: &antinomie_monitor_core::network::ReconstructedDns,
-    held: &[(antinomie_monitor_core::network::NetworkPacket, Vec<u8>)],
-) -> Vec<Cell> {
-    let detail = if query.answers.is_empty() {
-        format!("{} {} {}", query.name, query.qtype, query.class_name)
-    } else {
-        format!(
-            "{} {} {} → {}",
-            query.name,
-            query.qtype,
-            query.class_name,
-            query.answers.join(", ")
-        )
+    frame: u64,
+    time: Option<u64>,
+    endpoints: &str,
+    fields: &[String],
+) -> Vec<Vec<Cell>> {
+    let field = |at: usize| fields[at].as_str();
+    let list = |at: usize| -> Vec<String> {
+        field(at)
+            .split('\u{1f}')
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .collect()
     };
-    let mut row = flow(
-        query
-            .query_frames
-            .first()
-            .map(|number| format!("#{number}"))
-            .unwrap_or_else(|| "—".into()),
-        packet_ends(query.query_frames.first().copied(), held),
-        detail,
-    );
-    let kind = if query.retry {
-        "retry"
-    } else if query.rcode.is_some() {
-        "response"
-    } else {
-        "query"
-    };
-    row.push(cell(
-        format!("{kind} {}", query.protocol),
-        theme::text(),
-        false,
-    ));
-    row
+    let protocol = field(F_PROTOCOL);
+    let handshakes = list(F_TLS_TYPE);
+    let mut kinds: Vec<(&str, String, String)> = Vec::new();
+    if handshakes.iter().any(|kind| kind == "1") {
+        let offered = list(F_CIPHERS).len();
+        kinds.push((
+            "client hello",
+            format!("{offered} cipher suites offered"),
+            field(F_ALPN).replace('\u{1f}', ", "),
+        ));
+    }
+    if handshakes.iter().any(|kind| kind == "2") {
+        kinds.push((
+            "server hello",
+            format!("cipher suite {}", field(F_CIPHERS).replace('\u{1f}', ", ")),
+            field(F_ALPN).replace('\u{1f}', ", "),
+        ));
+    }
+    if !field(F_SSH_BANNER).is_empty() {
+        kinds.push((
+            "banner",
+            field(F_SSH_BANNER).replace('\u{1f}', ", "),
+            String::new(),
+        ));
+    }
+    kinds
+        .into_iter()
+        .map(|(kind, details, alpn)| {
+            let server_name = if kind == "client hello" {
+                field(35).replace('\u{1f}', ", ")
+            } else {
+                String::new()
+            };
+            let fingerprint = [field(F_JA3), field(F_JA4)]
+                .iter()
+                .filter(|value| !value.is_empty())
+                .map(|value| value.replace('\u{1f}', ", "))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let shown_protocol = format!("{protocol} {kind}");
+            let mut row = vec![
+                cell(format!("#{frame}"), theme::text(), true),
+                cell(
+                    time.map_or("Unavailable".into(), crate::time_format::short_time_us),
+                    theme::text(),
+                    true,
+                ),
+                cell(endpoints, theme::text(), true),
+                cell(&shown_protocol, theme::text(), false),
+                cell(&server_name, theme::text(), false),
+                cell(&alpn, theme::text(), false),
+                cell(&details, theme::text(), false),
+                cell(&fingerprint, theme::text(), true),
+            ];
+            row[0].values = vec![
+                ("capture.path", RowValue::Text(path.display().to_string())),
+                ("frame.number", RowValue::Number(i128::from(frame))),
+                (
+                    "frame.time_us",
+                    time.map_or(RowValue::Missing, |time| RowValue::Number(i128::from(time))),
+                ),
+                ("network.endpoints", RowValue::Text(endpoints.into())),
+                ("session.protocol", text_value(protocol)),
+                ("session.kind", RowValue::Text(kind.into())),
+                ("session.server_name", text_value(&server_name)),
+                (
+                    "session.alpn",
+                    RowValue::List(
+                        alpn.split(", ")
+                            .filter(|a| !a.is_empty())
+                            .map(str::to_owned)
+                            .collect(),
+                    ),
+                ),
+                ("session.details", text_value(&details)),
+                ("session.fingerprint", text_value(&fingerprint)),
+            ];
+            row
+        })
+        .collect()
 }
 
 pub(super) fn walk_pages(

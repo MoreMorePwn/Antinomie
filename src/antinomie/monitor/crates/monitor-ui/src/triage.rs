@@ -12,8 +12,6 @@ use crate::{
     query::{self, FieldSpec, RowValue},
     theme, trace,
 };
-#[cfg(test)]
-use antinomie_monitor_core::network::NetworkPacket;
 use antinomie_monitor_core::{EventSummary, InvocationSummary};
 use eframe::egui::{self, RichText};
 /// Where a row of Detection > Scanned inputs opens.
@@ -67,10 +65,6 @@ mod summary;
 mod table;
 #[cfg(test)]
 mod torture_qa;
-#[cfg(test)]
-mod traffic;
-#[cfg(test)]
-use self::traffic::*;
 use self::{
     archive_scan::*, bpf_notes::*, descriptors::*, file_category::FILE_FIELDS, file_events::*,
     findings::*, pcap_scan::*, process_tree::*, refresh::*, table::*,
@@ -115,6 +109,7 @@ enum NetTab {
     Hosts,
     Http,
     Dns,
+    Sessions,
 }
 
 /// The time the refresh loop schedules by. Production adds nothing; a test
@@ -220,11 +215,6 @@ impl Default for TriageView {
 pub(crate) struct TriageInput<'a> {
     pub analysis: Option<&'a antinomie_monitor_core::AnalysisReport>,
     pub invocations: &'a [InvocationSummary],
-    #[cfg(test)]
-    pub packets: &'a [NetworkPacket],
-    /// Ethernet frames parallel to `packets`. Absent when the list has no payload.
-    #[cfg(test)]
-    pub frames: Option<&'a [Vec<u8>]>,
     pub vm_id: Option<&'a str>,
     pub boot_id: Option<&'a str>,
     pub run_id: Option<&'a str>,
@@ -247,10 +237,6 @@ impl<'a> TriageInput<'a> {
         Self {
             analysis: None,
             invocations: &[],
-            #[cfg(test)]
-            packets: &[],
-            #[cfg(test)]
-            frames: None,
             vm_id: None,
             boot_id: None,
             run_id: None,
@@ -265,12 +251,10 @@ impl<'a> TriageInput<'a> {
         }
     }
     #[cfg(test)]
-    fn page(invocations: &'a [InvocationSummary], packets: &'a [NetworkPacket]) -> Self {
+    fn page(invocations: &'a [InvocationSummary]) -> Self {
         Self {
             analysis: None,
             invocations,
-            packets,
-            frames: None,
             vm_id: None,
             boot_id: None,
             run_id: None,
@@ -595,18 +579,21 @@ impl TriageView {
             NetTab::Hosts => 7,
             NetTab::Http => 3,
             NetTab::Dns => 4,
+            NetTab::Sessions => SESSION_SLOT,
         };
         let fields = match self.network {
             NetTab::Ips => network::IP_FIELDS,
             NetTab::Hosts => network::HOST_FIELDS,
             NetTab::Http => HTTP_FIELDS,
             NetTab::Dns => DNS_FIELDS,
+            NetTab::Sessions => network::SESSION_FIELDS,
         };
         let example = match self.network {
             NetTab::Ips => "network.country == US",
             NetTab::Hosts => "network.hostname contains update",
             NetTab::Http => "http.method == GET",
             NetTab::Dns => "dns.name contains example",
+            NetTab::Sessions => "session.alpn contains h2",
         };
         let (count, omitted) = self
             .scan
@@ -616,6 +603,7 @@ impl TriageView {
                 NetTab::Hosts => (scan.hosts.len(), scan.hosts_omitted),
                 NetTab::Http => (scan.http.len(), scan.http_omitted),
                 NetTab::Dns => (scan.dns.len(), scan.dns_omitted),
+                NetTab::Sessions => (scan.sessions.len(), scan.sessions_omitted),
             });
         self.query_controls(ui, index, fields, example, count, count as u64 + omitted);
         let Some(scan) = &self.scan else {
@@ -654,6 +642,10 @@ impl TriageView {
             ),
             NetTab::Http => table(ui, "triage-http", HTTP_HEADERS, &scan.http),
             NetTab::Dns => table(ui, "triage-dns", DNS_HEADERS, &scan.dns),
+            NetTab::Sessions => {
+                ui.weak("TLS and QUIC hellos and SSH banners as TShark parsed them, without keys. Encrypted content stays encrypted.");
+                table(ui, "triage-sessions", SESSION_HEADERS, &scan.sessions)
+            }
         }
         let _ = input;
     }
@@ -1020,10 +1012,12 @@ struct ScanRequest {
 
 const STORED_ROWS: usize = 2000;
 /// Query tables with their own filter, sort and page: findings 0, opened 1,
-/// changed 2, http 3, dns 4, read 5, ips 6, hosts 7, then the file categories.
-const SLOTS: usize = 16;
+/// changed 2, http 3, dns 4, read 5, ips 6, hosts 7, the file categories 8 to
+/// 15, then the TLS, QUIC and SSH sessions.
+const SLOTS: usize = 17;
 /// Operation tabs with their own slot after the original eight.
-const FILE_TABS: usize = SLOTS - 8;
+const FILE_TABS: usize = 8;
+const SESSION_SLOT: usize = 16;
 
 struct FindingJournal {
     temp: std::path::PathBuf,
@@ -1073,6 +1067,8 @@ struct ArchiveScan {
     ips_omitted: u64,
     hosts: Vec<Vec<Cell>>,
     hosts_omitted: u64,
+    sessions: Vec<Vec<Cell>>,
+    sessions_omitted: u64,
     network_warning: Option<String>,
 }
 
@@ -1095,6 +1091,8 @@ struct PacketIndex {
     ips_omitted: u64,
     hosts: Vec<Vec<Cell>>,
     hosts_omitted: u64,
+    sessions: Vec<Vec<Cell>>,
+    sessions_omitted: u64,
     network_warning: Option<String>,
 }
 

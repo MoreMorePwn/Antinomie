@@ -148,13 +148,21 @@ fn display_filter_preserves_page_selection_and_prior_result_on_error_if_tshark_i
                 && if error {
                     view.display_error.is_some()
                 } else {
-                    view.display_index.is_some()
+                    // The index, TShark's parse finished and the page filled.
+                    view.display_index.as_ref().is_some_and(|index| {
+                        index.rows().status() != ParseStatus::Parsing
+                            && view.display_page.len() as u64
+                                >= index
+                                    .matching_count
+                                    .saturating_sub(view.display_page_start)
+                                    .min(PAGE_SIZE as u64)
+                    })
                 }
             {
                 break;
             }
             assert!(
-                started.elapsed() < Duration::from_secs(10),
+                started.elapsed() < Duration::from_secs(60),
                 "display worker timeout: {:?}",
                 view.display_error
             );
@@ -922,4 +930,247 @@ fn a_launched_wireshark_does_not_stay_a_zombie() {
     toolbar::reap(child).join().unwrap();
     // Waited for: the process table has no entry left for it.
     assert!(!Path::new(&format!("/proc/{pid}")).exists());
+}
+
+#[test]
+fn without_tshark_the_list_is_raw_frames_with_a_clear_notice() {
+    let root = std::env::temp_dir().join(format!("ant-raw-frames-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("raw.pcap");
+    std::fs::write(&path, crate::app::tests::test_pcap()).unwrap();
+    let mut view = NetworkView {
+        captures_for: Some((None, vec![])),
+        list: PacketList::new(Some(path)),
+        display_worker_error: Some("TShark unavailable: tshark is missing".into()),
+        ..Default::default()
+    };
+    assert!(view.raw_frames());
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let mut shown = Vec::new();
+    for _ in 0..3 {
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1400.0, 800.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    view.show(
+                        ui,
+                        NetworkContext {
+                            active: None,
+                            recordings: None,
+                            recording_roots: &[],
+                            nat: true,
+                            running: false,
+                            pending: false,
+                            boot_id: None,
+                            font_size: 16.0,
+                        },
+                    );
+                });
+            },
+        );
+        shown = crate::app::tests::texts(&output)
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect();
+    }
+    // The frames are listed by number, time and length only: nothing is decoded.
+    assert_eq!(view.list.packets.len(), 2);
+    assert!(view.list.packets.iter().all(|p| p.protocol.is_empty()));
+    assert!(
+        shown.iter().any(|text| text.starts_with("Raw frame, ")),
+        "{shown:?}"
+    );
+    assert!(
+        shown
+            .iter()
+            .any(|text| text.starts_with("TShark could not run")
+                || text.starts_with("TShark not installed")),
+        "{shown:?}"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn the_tshark_notice_names_the_fix_when_it_is_not_installed() {
+    assert_eq!(
+        tshark_notice(false, "boom", "Frames only."),
+        "TShark not installed — install it from Tools. Frames only."
+    );
+    assert!(tshark_notice(true, "boom", "x").starts_with("TShark could not run: boom"));
+}
+
+/// `ANTINOMIE_BIG_PCAP=<file> cargo test --release -p antinomie-monitor --
+/// --ignored --nocapture big_capture_frame_times`: how long the slowest frame
+/// of the Network tab takes while TShark parses a large capture.
+#[test]
+#[ignore = "probe; needs ANTINOMIE_BIG_PCAP"]
+fn big_capture_frame_times() {
+    let Ok(path) = std::env::var("ANTINOMIE_BIG_PCAP") else {
+        return;
+    };
+    let mut view = NetworkView {
+        captures_for: Some((None, vec![])),
+        list: PacketList::new(Some(PathBuf::from(path))),
+        ..Default::default()
+    };
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let started = Instant::now();
+    let (mut worst, mut frames) = (Duration::ZERO, 0u32);
+    let mut done = None;
+    while started.elapsed() < Duration::from_secs(120) {
+        let frame = Instant::now();
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1600.0, 900.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    view.show(
+                        ui,
+                        NetworkContext {
+                            active: None,
+                            recordings: None,
+                            recording_roots: &[],
+                            nat: true,
+                            running: false,
+                            pending: false,
+                            boot_id: None,
+                            font_size: 16.0,
+                        },
+                    );
+                });
+            },
+        );
+        worst = worst.max(frame.elapsed());
+        frames += 1;
+        if view
+            .display_index
+            .as_ref()
+            .is_some_and(|index| index.rows().status() == ParseStatus::Complete)
+        {
+            done = Some(started.elapsed());
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(16));
+    }
+    println!(
+        "{frames} frames; parse complete after {done:?}; slowest frame {worst:?}; page rows {}",
+        view.display_page.len()
+    );
+}
+
+fn details_frame(
+    view: &mut NetworkView,
+    ctx: &egui::Context,
+    events: Vec<egui::Event>,
+) -> Vec<(String, egui::Rect)> {
+    let output = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 900.0),
+            )),
+            events,
+            ..Default::default()
+        },
+        |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| view.details(ui, 16.0));
+        },
+    );
+    crate::app::tests::texts(&output)
+}
+
+#[test]
+fn the_details_pane_draws_tshark_lines_and_marks_the_bytes_of_the_clicked_one() {
+    use antinomie_monitor_core::packet_filter::{DetailNode, PacketTree};
+    let node = |depth, label: &str, name: &str, start, len, end| DetailNode {
+        depth,
+        label: label.into(),
+        name: name.into(),
+        start,
+        len,
+        end,
+    };
+    let tree = PacketTree {
+        nodes: vec![
+            node(0, "Frame 1: 40 bytes", "frame", 0, 40, 2),
+            node(1, "Frame Length: 40", "frame.len", 0, 0, 2),
+            node(0, "Internet Protocol Version 4", "ip", 14, 20, 5),
+            node(1, "Source Address: 10.0.2.15", "ip.src", 26, 4, 4),
+            node(1, "Beyond the frame: 1", "ip.bad", 900, 4, 5),
+        ],
+        cut: false,
+    };
+    let mut view = NetworkView::default();
+    view.list.selected = Some(NetworkPacket {
+        number: 1,
+        offset: 24,
+        length: 40,
+        captured: 40,
+        protocol: "UDP".into(),
+        info: "info".into(),
+        ..NetworkPacket::default()
+    });
+    view.list.frame = Some((24, Ok((0..40).collect())));
+    view.detail = Some(DetailView {
+        number: 1,
+        generation: 1,
+        state: DetailState::Ready(Box::new(PacketDetail {
+            number: 1,
+            frame_len: 40,
+            tree,
+        })),
+    });
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    for _ in 0..3 {
+        details_frame(&mut view, &ctx, Vec::new());
+    }
+    let shown = details_frame(&mut view, &ctx, Vec::new());
+    let find = |shown: &[(String, egui::Rect)], text: &str| {
+        shown
+            .iter()
+            .find(|(shown, _)| shown == text)
+            .map(|(_, rect)| *rect)
+    };
+    // The last protocol is open, the first closed; the lines are TShark's.
+    assert!(find(&shown, "Frame 1: 40 bytes").is_some());
+    assert!(find(&shown, "Frame Length: 40").is_none());
+    let line = find(&shown, "Source Address: 10.0.2.15").expect("open protocol shows its fields");
+    for pressed in [true, false] {
+        details_frame(
+            &mut view,
+            &ctx,
+            vec![
+                egui::Event::PointerMoved(line.center()),
+                egui::Event::PointerButton {
+                    pos: line.center(),
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+    }
+    let shown = details_frame(&mut view, &ctx, Vec::new());
+    assert!(
+        find(&shown, "Source Address: 10.0.2.15: 4 bytes at 0x001a").is_some(),
+        "{shown:?}"
+    );
+    // A range that does not fit the frame marks nothing.
+    view.detail_node = Some(4);
+    let shown = details_frame(&mut view, &ctx, Vec::new());
+    assert!(find(&shown, "40 bytes").is_some(), "{shown:?}");
 }

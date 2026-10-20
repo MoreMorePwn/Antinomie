@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! The packet table and the selected packet's layers and bytes.
+//! The packet table (TShark's rows) and the selected packet's details and bytes.
 use super::*;
 
 impl NetworkView {
@@ -17,14 +17,6 @@ impl NetworkView {
                     }
                 }
             });
-        }
-        self.refresh_payloads();
-        // Protocol coverage and reconstruction counts are not shown; the
-        // HTTP and DNS tables carry the rows themselves.
-        if self.reconstruction().is_none() {
-            if let Some(note) = self.payloads.as_ref().and_then(|cache| cache.note.clone()) {
-                ui.colored_label(theme::muted(), note);
-            }
         }
         if self.list.path.is_none() {
             empty_state(
@@ -44,7 +36,14 @@ impl NetworkView {
         if let Some(error) = &self.list.error {
             crate::activity::warning(ui, error);
         }
-        if self.list.truncated && self.display_index.is_none() {
+        if let Some(error) = self.tshark_unavailable() {
+            tshark_missing_notice(
+                ui,
+                &error,
+                "Raw frames and their bytes are shown without protocol decoding.",
+            );
+        }
+        if self.list.truncated && self.raw_frames() {
             crate::activity::warning(ui,
                 format!(
                     "Showing the first {MAX_PACKETS} packets; open the capture in Wireshark for all."
@@ -113,10 +112,10 @@ impl NetworkView {
         let mut filter = None;
         let mut display_filter = self.display_filter.clone();
         let list = &self.list;
-        let packets = if self.display_index.is_some() {
-            &self.display_page
-        } else {
+        let packets = if self.raw_frames() {
             &list.packets
+        } else {
+            &self.display_page
         };
         let filtering = !self.filter.trim().is_empty();
         egui::ScrollArea::horizontal()
@@ -301,8 +300,8 @@ impl NetworkView {
         }
     }
 
-    /// The selected packet for the Details panel: its decoded layers on the
-    /// left, its bytes on the right with the chosen field's bytes marked.
+    /// The selected packet for the Details panel: TShark's details tree on the
+    /// left, the frame's bytes on the right with the chosen line's bytes marked.
     pub(crate) fn details(&mut self, ui: &mut egui::Ui, font_size: f32) {
         if let Some((capture, live)) = self.capture_details.clone() {
             // The record can be taller than the panel; its own scroll area
@@ -321,16 +320,12 @@ impl NetworkView {
             }
             empty_state(
                 ui,
-                if self.list.packets.is_empty() {
-                    "No packet selected. Open a capture in the Network tab, then select a \
-                     packet to see its layers and bytes here."
-                } else {
-                    "No packet selected. Select a packet in the Network tab to see its \
-                     layers and bytes here."
-                },
+                "No packet selected. Select a packet in the Network tab to see its \
+                 details and bytes here.",
             );
             return;
         };
+        self.poll_detail();
         if self
             .list
             .frame
@@ -343,14 +338,11 @@ impl NetworkView {
                 } else {
                     network::frame(path, packet.offset)
                 };
-                self.list.layers = frame
-                    .as_ref()
-                    .map(|bytes| network::dissect(bytes))
-                    .unwrap_or_default();
                 self.list.frame = Some((packet.offset, frame));
-                self.list.field = None;
+                self.detail_node = None;
             }
         }
+        self.request_detail(packet.number, ui.ctx());
         let start = self.display_index.as_ref().map_or_else(
             || self.list.packets.first().map_or(0, |p| p.time_us),
             |index| index.first_time_us(),
@@ -391,6 +383,7 @@ impl NetworkView {
         let char_width = ui.fonts(|fonts| fonts.glyph_width(&mono, '0'));
         let hex_width = char_width * 74.0 + 28.0;
         let available = ui.available_width();
+        let tshark_error = self.tshark_unavailable();
         egui::SidePanel::left("packet_tree")
             .resizable(true)
             .default_width((available - hex_width).max(available * 0.45))
@@ -400,12 +393,48 @@ impl NetworkView {
                 ..Default::default()
             }))
             .show_inside(ui, |ui| {
-                egui::ScrollArea::both()
-                    .id_salt("packet_tree_scroll")
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        hovered = layer_tree(ui, &self.list.layers, &mut self.list.field, &mono);
-                    });
+                if let Some(error) = &tshark_error {
+                    tshark_missing_notice(ui, error, "Protocol details need TShark.");
+                    return;
+                }
+                let Some(detail) = &self.detail else {
+                    return;
+                };
+                match &detail.state {
+                    DetailState::Loading => {
+                        theme::loading_colored(
+                            ui,
+                            theme::muted(),
+                            "Asking TShark for the packet details…",
+                        );
+                    }
+                    DetailState::Failed(error) => {
+                        crate::activity::warning(ui, error);
+                    }
+                    DetailState::Ready(ready) => {
+                        ui.horizontal(|ui| {
+                            if ui.small_button("Expand all").clicked() {
+                                set_all(&ready.tree, &mut self.detail_open, true);
+                            }
+                            if ui.small_button("Collapse all").clicked() {
+                                set_all(&ready.tree, &mut self.detail_open, false);
+                            }
+                            if ready.tree.cut {
+                                ui.colored_label(
+                                    theme::muted(),
+                                    "Deeper or later lines were left out (size limits).",
+                                );
+                            }
+                        });
+                        hovered = detail_tree(
+                            ui,
+                            &ready.tree,
+                            &mut self.detail_open,
+                            &mut self.detail_node,
+                            &mono,
+                        );
+                    }
+                }
             });
         egui::CentralPanel::default()
             .frame(egui::Frame::new().inner_margin(egui::Margin {
@@ -413,28 +442,36 @@ impl NetworkView {
                 ..Default::default()
             }))
             .show_inside(ui, |ui| {
-                let chosen = self.list.field.and_then(|(layer, field)| {
-                    let layer = self.list.layers.get(layer)?;
-                    Some(match field.and_then(|field| layer.fields.get(field)) {
-                        Some(field) => (field.name.clone(), field.start, field.len),
-                        None => (layer.name.clone(), layer.start, layer.len),
-                    })
+                let chosen = self.detail_node.and_then(|at| {
+                    let DetailState::Ready(ready) = &self.detail.as_ref()?.state else {
+                        return None;
+                    };
+                    let node = ready.tree.nodes.get(at)?;
+                    // TShark's range must fit the bytes shown.
+                    let range = node.range().filter(|range| range.end <= bytes.len())?;
+                    Some((node.label.clone(), range))
                 });
                 ui.horizontal(|ui| {
                     theme::section(ui, "Bytes");
                     match &chosen {
-                        Some((name, start, len)) if *len > 0 => {
+                        Some((label, range)) => {
                             ui.label(
-                                RichText::new(format!("{name}: {len} bytes at 0x{start:04x}"))
-                                    .color(theme::muted()),
+                                RichText::new(format!(
+                                    "{}: {} bytes at 0x{:04x}",
+                                    label.chars().take(60).collect::<String>(),
+                                    range.len(),
+                                    range.start
+                                ))
+                                .color(theme::muted()),
                             );
                         }
-                        _ => {
+                        None => {
                             ui.colored_label(theme::muted(), format!("{} bytes", bytes.len()));
                         }
                     }
                 });
-                let marked = chosen.map(|(_, start, len)| start..start + len);
+                let marked = chosen.map(|(_, range)| range);
+                let hovered = hovered.filter(|range| range.end <= bytes.len());
                 egui::ScrollArea::both()
                     .id_salt("packet_bytes")
                     .auto_shrink([false, false])
@@ -449,6 +486,20 @@ impl NetworkView {
     }
 }
 
+/// What to tell the user when TShark cannot run: the viewer shows frames and
+/// bytes but decodes nothing itself.
+pub(super) fn tshark_notice(installed: bool, error: &str, what: &str) -> String {
+    if installed {
+        format!("TShark could not run: {error}. {what}")
+    } else {
+        format!("TShark not installed — install it from Tools. {what}")
+    }
+}
+
+pub(super) fn tshark_missing_notice(ui: &mut egui::Ui, error: &str, what: &str) {
+    crate::activity::warning(ui, tshark_notice(which("tshark").is_some(), error, what));
+}
+
 /// The row color of a packet, by the first matching rule.
 pub(super) fn packet_color(packet: &NetworkPacket) -> Option<PacketColor> {
     if let Some(flags) = packet.tcp_flags {
@@ -459,13 +510,18 @@ pub(super) fn packet_color(packet: &NetworkPacket) -> Option<PacketColor> {
             return Some(PacketColor::TcpSynFin);
         }
     }
-    Some(match packet.protocol.as_str() {
-        "HTTP" => PacketColor::Http,
-        "TLS" => PacketColor::Tls,
-        "DNS" => PacketColor::Dns,
-        "DHCP" => PacketColor::Dhcp,
+    // TShark names the protocol (TLSv1.3, HTTP2, MDNS, ...); the color is
+    // only the family it belongs to.
+    let protocol = packet.protocol.as_str();
+    Some(match protocol {
+        _ if protocol.starts_with("HTTP") => PacketColor::Http,
+        _ if protocol.starts_with("TLS") || protocol.starts_with("SSL") || protocol == "QUIC" => {
+            PacketColor::Tls
+        }
+        "DNS" | "MDNS" | "LLMNR" => PacketColor::Dns,
+        _ if protocol.starts_with("DHCP") => PacketColor::Dhcp,
         "ARP" => PacketColor::Arp,
-        "ICMP" | "ICMPv6" => PacketColor::Icmp,
+        _ if protocol.starts_with("ICMP") => PacketColor::Icmp,
         "TCP" => PacketColor::Tcp,
         "UDP" => PacketColor::Udp,
         _ => return None,
@@ -479,13 +535,16 @@ pub(super) fn text_format(font: egui::FontId, color: egui::Color32) -> egui::Tex
 /// The color of a protocol name.
 pub(super) fn protocol_color(protocol: &str) -> egui::Color32 {
     match protocol {
-        "DNS" | "DHCP" => theme::info(),
-        "HTTP" => theme::good(),
-        "TLS" => theme::value(ValueKind::Pointer),
+        "DNS" | "MDNS" | "LLMNR" => theme::info(),
+        _ if protocol.starts_with("DHCP") => theme::info(),
+        _ if protocol.starts_with("HTTP") => theme::good(),
+        _ if protocol.starts_with("TLS") || protocol.starts_with("SSL") || protocol == "QUIC" => {
+            theme::value(ValueKind::Pointer)
+        }
         "TCP" => theme::value(ValueKind::Flags),
         "UDP" => theme::value(ValueKind::Number),
         "ARP" => theme::warn(),
-        "ICMP" | "ICMPv6" => theme::value(ValueKind::Name),
+        _ if protocol.starts_with("ICMP") => theme::value(ValueKind::Name),
         _ => theme::muted(),
     }
 }
@@ -511,102 +570,6 @@ fn info_text(packet: &NetworkPacket, font_size: f32) -> egui::text::LayoutJob {
         _ => job.append(info, 0.0, text_format(font, theme::text())),
     }
     job
-}
-
-/// The color of a decoded field's value.
-fn field_color(kind: FieldKind) -> egui::Color32 {
-    theme::value(match kind {
-        FieldKind::Number => ValueKind::Number,
-        FieldKind::Address => ValueKind::Pointer,
-        FieldKind::Flags => ValueKind::Flags,
-        FieldKind::Name => ValueKind::Name,
-        FieldKind::Text => ValueKind::Text,
-        FieldKind::Bytes => ValueKind::Plain,
-    })
-}
-
-/// The packet's layers as a collapsible tree of branches; a click chooses a layer or a
-/// field (`chosen`). Returns the byte range under the pointer.
-fn layer_tree(
-    ui: &mut egui::Ui,
-    layers: &[PacketLayer],
-    chosen: &mut Option<(usize, Option<usize>)>,
-    mono: &egui::FontId,
-) -> Option<std::ops::Range<usize>> {
-    let mut hovered = None;
-    let font_size = mono.size + 1.0;
-    // Dense rows, as in Wireshark's details tree.
-    ui.spacing_mut().item_spacing.y = 0.0;
-    ui.spacing_mut().button_padding.y = 1.0;
-    ui.spacing_mut().interact_size.y = theme::row_height(font_size) - 2.0;
-    let char_width = crate::tree_lines::char_width(ui, mono);
-    let root = crate::tree_lines::Prefix::default();
-    for (index, layer) in layers.iter().enumerate() {
-        let id = ui.make_persistent_id(("packet_layer", &layer.name));
-        let mut state =
-            egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true);
-        let mut open = state.is_open();
-        crate::tree_lines::row(ui, &root, char_width, |ui| {
-            open = crate::tree_lines::caret(ui, &mut state);
-            let mut job = egui::text::LayoutJob::default();
-            job.append(
-                &layer.name,
-                0.0,
-                text_format(egui::FontId::proportional(font_size), theme::heading()),
-            );
-            if !layer.summary.is_empty() {
-                job.append(
-                    &format!("  {}", layer.summary),
-                    0.0,
-                    text_format(egui::FontId::proportional(font_size), theme::text()),
-                );
-            }
-            let response = ui.selectable_label(*chosen == Some((index, None)), job);
-            if response.clicked() {
-                *chosen = Some((index, None));
-            }
-            if response.hovered() {
-                hovered = Some(layer.start..layer.start + layer.len);
-            }
-        });
-        if !open {
-            continue;
-        }
-        let depths: Vec<_> = layer
-            .fields
-            .iter()
-            .map(|field| usize::from(field.depth) + 1)
-            .collect();
-        let branches = crate::tree_lines::prefixes(&depths);
-        for ((field_index, field), branch) in layer.fields.iter().enumerate().zip(&branches) {
-            crate::tree_lines::row(ui, branch, char_width, |ui| {
-                let mut job = egui::text::LayoutJob::default();
-                job.append(
-                    &format!("{}: ", field.name),
-                    0.0,
-                    text_format(egui::FontId::proportional(font_size), theme::muted()),
-                );
-                let font = match field.kind {
-                    FieldKind::Number | FieldKind::Address | FieldKind::Bytes => mono.clone(),
-                    _ => egui::FontId::proportional(font_size),
-                };
-                job.append(
-                    &field.value,
-                    0.0,
-                    text_format(font, field_color(field.kind)),
-                );
-                let selected = *chosen == Some((index, Some(field_index)));
-                let response = ui.selectable_label(selected, job);
-                if response.clicked() {
-                    *chosen = Some((index, Some(field_index)));
-                }
-                if response.hovered() {
-                    hovered = Some(field.start..field.start + field.len);
-                }
-            });
-        }
-    }
-    hovered
 }
 
 /// A hex dump (offset, 16 bytes, text) with `marked` bytes on the selection
