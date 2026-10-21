@@ -178,7 +178,7 @@ fn title(kind: &str, entry: &AnalysisEntry) -> String {
 
 fn copy_value(ui: &mut egui::Ui, label: &str, value: &str) {
     ui.horizontal(|ui| {
-        crate::analysis::strong(ui, label);
+        ui.strong(label);
         if ui
             .button(egui_phosphor::regular::COPY)
             .on_hover_text(format!("Copy full {label}"))
