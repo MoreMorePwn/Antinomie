@@ -1082,6 +1082,32 @@ pub struct GuestKernel {
     pub release: Option<String>,
 }
 
+/// What a guest's tracer offers beyond the records every revision-17 guest
+/// writes (`TRACER_CAPS`). A guest without the command offers nothing, and
+/// then the host asks for nothing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuestTracerCaps {
+    /// The optional EXEC flags the guest accepts.
+    pub exec_flags: u32,
+    /// Largest file the guest hashes, in bytes.
+    pub hash_file_max_size: u32,
+    /// Hash jobs that may wait at once.
+    pub hash_queue_count: u32,
+    /// Bytes that may wait to be hashed at once.
+    pub hash_pending_max_size: u64,
+}
+
+impl GuestTracerCaps {
+    /// The launched program's own image is hashed when asked.
+    pub fn hashes_root(&self) -> bool {
+        self.exec_flags & crate::control::EXEC_HASH_ROOT != 0
+    }
+    /// The files a run writes are hashed at their last close when asked.
+    pub fn hashes_writes(&self) -> bool {
+        self.exec_flags & crate::control::EXEC_HASH_WRITES != 0
+    }
+}
+
 /// One base advertised by the remote catalog, flattened for the UI.
 #[derive(Clone, Debug, Default)]
 pub struct RemoteBase {
@@ -1805,6 +1831,9 @@ pub struct Snapshot {
     pub guest_kernel: Option<GuestKernel>,
     /// What the guest accepts for process cores; None until it has answered.
     pub guest_core_limits: Option<crate::core_limits::CoreLimits>,
+    /// The optional hashing the guest tracer offers; None until it has
+    /// answered, all zero for a guest without TRACER_CAPS.
+    pub guest_tracer: Option<GuestTracerCaps>,
     pub last_error: Option<String>,
 }
 

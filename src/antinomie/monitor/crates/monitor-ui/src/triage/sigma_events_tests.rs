@@ -93,6 +93,7 @@ fn run(files: &mut FdState, calls: &[InvocationSummary]) -> Vec<Fields> {
         inherit_open_fds(files, invocation, event, &cookies);
         normalized::call(&mut journal, &mut held, files, invocation, event).unwrap();
     }
+    normalized::flush_creations(&mut journal, files).unwrap();
     normalized::flush_connections(&mut journal, held, files, None).unwrap();
     journal.finish(true).unwrap();
     let data = std::fs::read_to_string(
@@ -819,4 +820,270 @@ fn a_call_without_a_task_exit_gives_no_termination_event() {
     let mut files = FdState::default();
     let events = run(&mut files, &[tests::call(5, 231, "exit_group", 0)]);
     assert!(of(&events, "process_termination").is_empty());
+}
+
+/// A file identity record of `kind` for inode `ino`, a regular file.
+fn file_id_note(kind: u8, ino: u64) -> EventSummary {
+    let mut bytes = vec![0u8; 32];
+    bytes[0] = kind;
+    bytes[1] = 2;
+    bytes[4..8].copy_from_slice(&1u32.to_le_bytes());
+    bytes[8..16].copy_from_slice(&0x803u64.to_le_bytes());
+    bytes[16..24].copy_from_slice(&ino.to_le_bytes());
+    bytes[28..32].copy_from_slice(&0o100644u32.to_le_bytes());
+    note(
+        antinomie_monitor_core::kernel_notes::FILE_ID_KEY,
+        antinomie_monitor_core::kernel_notes::FILE_ID_LAYOUT,
+        &bytes,
+    )
+}
+
+/// The guest's hash of inode `ino` at its last close (`antinomie.hash/2`).
+fn write_hash_note(ino: u64, status: u8, flags: u8) -> EventSummary {
+    let mut bytes = hash_note(3, status, flags, 10).fields[0].preview.clone();
+    bytes.resize(112, 0);
+    bytes[80..88].copy_from_slice(&0x803u64.to_le_bytes());
+    bytes[88..96].copy_from_slice(&ino.to_le_bytes());
+    bytes[100..104].copy_from_slice(&0o100644u32.to_le_bytes());
+    bytes[104..108].copy_from_slice(&1u32.to_le_bytes());
+    note(HASH_KEY, "antinomie.hash/2", &bytes)
+}
+
+fn create(path: &str, ino: u64) -> InvocationSummary {
+    with_notes(
+        with_args(
+            tests::path_call(1, 2, "open", 3, path),
+            [0, 0o100 | 0o200, 0, 0, 0, 0],
+        ),
+        vec![file_id_note(1, ino)],
+    )
+}
+
+#[test]
+fn a_created_file_carries_the_hash_its_last_close_left() {
+    let mut files = FdState::default();
+    files.journal.hashes_writes = true;
+    let calls = [
+        create("/tmp/dropped", 7),
+        create("/tmp/still-open", 8),
+        create("/tmp/changed", 9),
+        tests::call(1, 1, "write", 10),
+        // The last close of /tmp/dropped is carried by the task's last call,
+        // whatever it was; /tmp/changed moved while the guest read it.
+        with_notes(
+            tests::call(1, 231, "exit_group", 0),
+            vec![write_hash_note(7, 0, 0), write_hash_note(9, 0, 2)],
+        ),
+    ];
+    let events = run(&mut files, &calls);
+    let created = of(&events, "file_event");
+    let by_name = |name: &str| {
+        created
+            .iter()
+            .find(|event| event["fields"]["TargetFilename"] == name)
+            .map(|event| event["fields"].clone())
+            .unwrap()
+    };
+    assert_eq!(
+        by_name("/tmp/dropped")["Hashes"],
+        format!("SHA256={}", "ab".repeat(32))
+    );
+    assert!(by_name("/tmp/changed")["HashSkipped"]
+        .as_str()
+        .unwrap()
+        .contains("changed"));
+    let open = by_name("/tmp/still-open");
+    assert!(open.get("Hashes").is_none());
+    assert!(open["HashSkipped"]
+        .as_str()
+        .unwrap()
+        .contains("no last close"));
+    assert_eq!(created.len(), 3, "every creation is still written once");
+}
+
+#[test]
+fn without_write_hashing_a_creation_is_written_at_once_and_unchanged() {
+    let mut files = FdState::default();
+    let calls = [
+        create("/tmp/dropped", 7),
+        with_notes(
+            tests::call(1, 231, "exit_group", 0),
+            vec![write_hash_note(7, 0, 0)],
+        ),
+    ];
+    let events = run(&mut files, &calls);
+    let created = &of(&events, "file_event")[0]["fields"];
+    for field in ["Hashes", "HashSkipped"] {
+        assert!(created.get(field).is_none(), "{field}");
+    }
+}
+
+#[test]
+fn names_from_the_base_fill_sysmon_user_and_the_auditd_interpreted_fields() {
+    let mut files = FdState::default();
+    files.journal.names = Some(std::sync::Arc::new(
+        antinomie_monitor_core::guest_names::GuestNames::from_files(
+            b"root:x:0:0::/root:/bin/sh\nanalyst:x:1000:1000::/home/analyst:/bin/sh\n",
+            b"root:x:0:\n",
+        ),
+    ));
+    let calls = [
+        with_notes(
+            exec(1, "/bin/sh", &["sh"]),
+            vec![creds_note(ROOT, None, true, 1)],
+        ),
+        with_notes(
+            tests::call(1, 105, "setuid", 0),
+            vec![creds_note(
+                [1000, 1000, 1000, 1000, 100, 100, 100, 100],
+                Some(1000),
+                true,
+                2,
+            )],
+        ),
+        exec(1, "/bin/id", &["id"]),
+        with_notes(
+            exec(2, "/bin/x", &["x"]),
+            vec![creds_note(
+                [4242, 4242, 4242, 4242, 0, 0, 0, 0],
+                None,
+                true,
+                1,
+            )],
+        ),
+    ];
+    let events = run(&mut files, &calls);
+    let users: Vec<_> = of(&events, "process_creation")
+        .iter()
+        .map(|event| event["fields"]["User"].clone())
+        .collect();
+    assert_eq!(
+        users,
+        ["root", "analyst", "4242"],
+        "numeric when the base has no name"
+    );
+    let syscall = auditd(&events, "SYSCALL");
+    let field = |event: &Fields, name: &str| event["fields"][name].as_str().unwrap().to_owned();
+    // The raw ids stay numbers; the interpreted ones are names.
+    assert_eq!(field(syscall[0], "uid"), "0");
+    assert_eq!(field(syscall[0], "UID"), "root");
+    assert_eq!(field(syscall[0], "AUID"), "unset");
+    assert_eq!(field(syscall[1], "uid"), "1000");
+    assert_eq!(field(syscall[1], "EUID"), "analyst");
+    assert_eq!(field(syscall[1], "GID"), "unknown(100)");
+    assert_eq!(field(syscall[1], "AUID"), "analyst");
+    assert_eq!(field(syscall[2], "UID"), "unknown(4242)");
+}
+
+#[test]
+fn without_names_the_auditd_records_have_no_interpreted_fields() {
+    let mut files = FdState::default();
+    let events = run(
+        &mut files,
+        &[with_notes(
+            exec(1, "/bin/sh", &["sh"]),
+            vec![creds_note(ROOT, None, true, 1)],
+        )],
+    );
+    let syscall = &auditd(&events, "SYSCALL")[0]["fields"];
+    for name in ["UID", "EUID", "GID", "AUID"] {
+        assert!(syscall.get(name).is_none(), "{name}");
+    }
+}
+
+#[test]
+fn the_launched_program_has_its_own_process_creation_with_its_image_hash() {
+    use antinomie_monitor_core::recording::LaunchRecord;
+    let temp = PacketSpool::new().unwrap();
+    let mut journal = EventJournal::new(&temp.directory, &identity()).unwrap();
+    let mut files = FdState::default();
+    files.journal.launch_cwd = Some("/tmp".into());
+    let launch = LaunchRecord {
+        pid: 101,
+        tid: 101,
+        timestamp_ns: 5,
+        path: Some("/tmp/sample".into()),
+        argv: Some(vec!["/tmp/sample".into(), "-x".into()]),
+        notes: vec![hash_note(1, 0, 0, 100)],
+    };
+    let creds = antinomie_monitor_core::kernel_notes::credentials(&creds_note(ROOT, None, true, 1));
+    normalized::launch(
+        &mut journal,
+        &files,
+        &launch,
+        creds.as_ref(),
+        antinomie_monitor_core::analysis::detection::Evidence::Call {
+            stream: 1,
+            cookie: 1,
+            call: 1,
+        },
+    )
+    .unwrap();
+    journal.finish(true).unwrap();
+    let data = std::fs::read_to_string(
+        temp.directory
+            .join(antinomie_monitor_core::analysis::detection::JOURNAL_FILE),
+    )
+    .unwrap();
+    let event: Fields = data
+        .lines()
+        .map(|line| serde_json::from_str::<Fields>(line).unwrap())
+        .find(|line| line["kind"] == "event")
+        .unwrap()["event"]
+        .clone();
+    assert_eq!(event["category"], "process_creation");
+    let fields = &event["fields"];
+    assert_eq!(fields["Image"], "/tmp/sample");
+    assert_eq!(fields["CommandLine"], "/tmp/sample -x");
+    assert_eq!(fields["ProcessId"], 101);
+    assert_eq!(fields["User"], "0");
+    assert_eq!(fields["CurrentDirectory"], "/tmp");
+    assert_eq!(fields["Hashes"], format!("SHA256={}", "ab".repeat(32)));
+    assert!(
+        fields.get("ParentProcessId").is_none(),
+        "the kernel started it"
+    );
+}
+
+/// An exec image record naming `path` as the loaded image.
+fn exec_image_note(path: &str) -> EventSummary {
+    let mut bytes = vec![0u8; 40];
+    let mut name = path.as_bytes().to_vec();
+    name.push(0);
+    bytes[8..12].copy_from_slice(&(name.len() as u32).to_le_bytes());
+    bytes.extend(name);
+    note(
+        antinomie_monitor_core::kernel_notes::EXEC_IMAGE_KEY,
+        "antinomie.execimg/1",
+        &bytes,
+    )
+}
+
+#[test]
+fn an_exec_whose_path_was_not_captured_is_named_by_its_image_never_its_parent() {
+    let mut files = FdState::default();
+    let calls = [
+        exec(1, "/bin/sh", &["sh"]),
+        tests::call(1, 57, "fork", 42),
+        // The child's path was not resident: the guest's image record names it.
+        with_notes(
+            tests::call(42, 59, "execve", 0),
+            vec![exec_image_note("/tmp/dropped")],
+        ),
+        tests::call(1, 57, "fork", 43),
+        // Neither: the image is unknown, not the parent's.
+        tests::call(43, 59, "execve", 0),
+    ];
+    let events = run(&mut files, &calls);
+    let creations = of(&events, "process_creation");
+    let by_pid = |pid: u32| {
+        creations
+            .iter()
+            .find(|event| event["fields"]["ProcessId"] == pid)
+            .map(|event| event["fields"].clone())
+            .unwrap()
+    };
+    assert_eq!(by_pid(42)["Image"], "/tmp/dropped");
+    assert_eq!(by_pid(42)["ParentImage"], "/bin/sh");
+    assert!(by_pid(43).get("Image").is_none(), "{}", by_pid(43));
 }

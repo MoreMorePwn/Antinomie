@@ -15,6 +15,8 @@ pub(super) const ASYNC_PARTIAL: &str = "some calls list only the first 256 of th
 /// Most task-end records read for one call. A task ends once; the bound
 /// keeps a damaged recording from growing a preview.
 const TASK_EXITS: usize = 4;
+/// Most lifecycle records read for a key that has no call (a launch).
+const LIFECYCLE_EVENTS: usize = 64;
 /// Largest preview of one call; larger means the evidence is too big to show.
 const CALL_PREVIEW_BYTES: usize = 32 * 1024 * 1024;
 
@@ -63,6 +65,8 @@ struct Queries<'a> {
     exits: rusqlite::Statement<'a>,
     /// Sequences of the credential and hash records.
     notes: rusqlite::Statement<'a>,
+    /// Sequences of every lifecycle record, for a key with no call.
+    lifecycle: rusqlite::Statement<'a>,
     /// The packets of one observation.
     event: rusqlite::Statement<'a>,
     /// Packets of async observations from a sequence on, in event order.
@@ -152,6 +156,9 @@ impl<'a> CallReader<'a> {
                      ORDER BY seq LIMIT {}",
                     crate::kernel_notes::NOTES_PER_CALL
                 ))?,
+                lifecycle: connection.prepare(&format!(
+                    "SELECT seq FROM lifecycle WHERE key=?1 ORDER BY seq LIMIT {LIFECYCLE_EVENTS}"
+                ))?,
                 event: connection.prepare(
                     "SELECT offset FROM packets WHERE key=?1 AND phase=3 AND seq=?2 \
                      AND offset<?3 ORDER BY offset",
@@ -230,6 +237,39 @@ impl<'a> CallReader<'a> {
                 row.get(0)
             })?;
         u64::try_from(count).map_err(|_| RecordingError::Limit("negative observation count"))
+    }
+
+    /// The lifecycle records under `key` (at most [`LIFECYCLE_EVENTS`]), in
+    /// event order: for a key no call owns, such as a run's launch.
+    pub(super) fn lifecycle(
+        &mut self,
+        key: &[u8],
+        cancel: &AtomicBool,
+    ) -> Result<Vec<EventSummary>, RecordingError> {
+        let mut preview = self.preview();
+        let boundary = self.source.boundary as i64;
+        let sequences = self
+            .queries
+            .lifecycle
+            .query_map([key], |row| row.get::<_, i64>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        for seq in sequences {
+            let mut rows = self
+                .queries
+                .event
+                .query(rusqlite::params![key, seq, boundary])?;
+            while let Some(row) = rows.next()? {
+                if cancel.load(Ordering::Relaxed) {
+                    return Err(RecordingError::Limit("archive read cancelled"));
+                }
+                self.source.ingest(key, row.get(0)?, &mut preview)?;
+            }
+        }
+        Ok(preview
+            .latest
+            .into_values()
+            .filter(|event| event.phase == 3)
+            .collect())
     }
 
     /// The call under `key` as the ordinary archive page shows it; `None`

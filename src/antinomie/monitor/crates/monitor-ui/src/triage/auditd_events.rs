@@ -184,7 +184,11 @@ fn syscall(
         fields.insert("success".into(), text(if ret < 0 { "no" } else { "yes" }));
     }
     fields.insert("pid".into(), text(event.pid.to_string()));
-    kernel_records::audit_ids(fields, kernel_records::credentials(files, call).as_ref());
+    kernel_records::audit_ids(
+        fields,
+        kernel_records::credentials(files, call).as_ref(),
+        files.journal.names.as_deref(),
+    );
     if let Some(parent) = sigma_events::parent(files, event) {
         fields.insert("ppid".into(), text(parent.pid.to_string()));
     }

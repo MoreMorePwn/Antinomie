@@ -742,7 +742,8 @@ the state is taken again after the unlink succeeded, for the same reason.
 An exec whose image is a script's interpreter sets flag INTERPRETER: the hash
 is of the interpreter that ran, which is not the file the call named. The first
 exec of a launched root (the usermodehelper exec before any traced call) has no
-call to belong to and is not hashed. Nothing here starts a process, opens a
+call to belong to; a guest that offers it hashes it under the launch's identity
+when the host asks (section 21). Nothing here starts a process, opens a
 descriptor in the guest or registers a BPF program; the pinned dentry and mount
 live a few milliseconds longer than they otherwise would, which is the only
 guest-observable effect (a deleted file's space is released when its job ends).
@@ -809,3 +810,54 @@ Both are cut at 511 bytes per string and say so; a name that did not fit is not
 shown. The identity is the host's key for one file across names: dev, ino and
 generation together, so a name that is reused by a new file is told from the file
 that held it.
+
+## 21. Revision 17: written files and the launched image (0.7.0)
+
+Two more hash records, both asked for by the host and so negotiated: the new
+optional command `TRACER_CAPS` (0x10a0, header only, 32-byte reply) lists the
+optional EXEC flags the guest accepts (`exec_flags`) and its hashing budget. An
+older guest answers -EOPNOTSUPP and the host then sends neither flag, which
+that guest would reject with -EINVAL; a host that does not know the command
+sends neither and the guest records nothing new. The contract revision stays 17.
+
+| EXEC flag | What the guest adds |
+|---|---|
+| `HASH_ROOT` (8) | The launched program's own image is hashed at its exec commit: an EXEC record of the root task with call id 0 and syscall number `U64_MAX`, the identity of its `lifecycle.launch` event, since the kernel starts the program without a traced execve |
+| `HASH_WRITES` (16) | Each regular file a task of the run had open for writing is hashed when the file's last writer lets it go: a WRITE record |
+
+**When a written file is hashed.** `__fput()` puts the file's write access and
+then asks the tracer; the file is hashed when the inode's writer count is then
+zero, so two descriptors open on one file give one record, after the second
+close. That moment is the content the run left behind, as an inotify
+`CLOSE_WRITE` reader sees it; a file opened for writing and not written is
+hashed all the same. The last close happens when the last reference goes: in
+task work after `close()`, at exit (`exit_task_work()`, after the task left the
+run's accounting, so the run is found by the task's root cookie), or after the
+call that dropped it (`dup2`, `munmap` of a shared mapping). A memfd, which has
+no write access to count, is hashed when its last reference goes; an attached
+System V shared memory segment (no write methods) is not. Pseudo filesystems
+(proc, sysfs, cgroup and cgroup2, debugfs, tracefs, securityfs, bpf, pstore,
+efivarfs, selinuxfs, smackfs, binfmt_misc) and files that are not regular publish
+nothing; a regular file on another filesystem gets an UNSUPPORTED_FS record.
+Writers that are not tasks of the run are not followed: another process, an
+io_uring worker (no traced context), the delayed fput worker of a kernel thread.
+
+**The record.** Layout `antinomie.hash/2`, 112 bytes: the `antinomie.hash/1`
+record with kind WRITE (3), then the file at the close: device (`new_encode_dev`)
+at 80, inode at 88, generation at 96, mode at 100, link count at 104 (0 when every
+name was removed before the close), zero at 108. The call it belongs to is the one
+the closing task made last (the `close`, the `exit_group`, or the call a signal
+ended), which need not name the file: the identity is how the host finds it, the
+same key as `lifecycle.file_id`. A host that knows only `/1` drops the record
+(its kind is unknown to it). Budget, refusals, the digest cache and the
+`CHANGED` comparison are those of section 18; the comparison is with the file as
+the last close left it. A refusal decided at the close (too large, queue full,
+budget, an unsupported filesystem) is not in a traced call, so the worker
+publishes it too, from a bounded list of 64; a refusal that does not fit is
+counted as lost.
+
+**Guest-observable effects.** None new in kind: the job holds the file's path
+until it is hashed, so the blocks of a file deleted right after its last close
+are released a few milliseconds later, and the worker's read uses CPU the
+sample can measure, bounded by the budget. No thread, workqueue or file
+descriptor appears in the guest.

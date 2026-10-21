@@ -58,6 +58,7 @@ mod properties;
 mod refresh;
 #[cfg(test)]
 mod refresh_tests;
+mod segments;
 mod sigma_events;
 #[cfg(test)]
 mod sigma_events_tests;
@@ -67,6 +68,8 @@ mod summary;
 mod table;
 #[cfg(test)]
 mod torture_qa;
+#[cfg(test)]
+mod tracer_qa;
 #[cfg(test)]
 mod uring_qa;
 use self::{
@@ -1063,6 +1066,14 @@ struct ScanRequest {
     identity: Option<(String, String, String)>,
     offsets: [usize; SLOTS],
     filters: [String; SLOTS],
+    /// The app's data folder: where the base a run's disk came from is
+    /// installed, for the guest's user and group names.
+    data_dir: Option<std::path::PathBuf>,
+    /// Names given directly (tests); otherwise they are read from the base.
+    guest_names: Option<Arc<antinomie_monitor_core::guest_names::GuestNames>>,
+    /// The run's earlier recording segments and their boots, oldest first,
+    /// for the packet index (set by the scan).
+    segments: Vec<(std::path::PathBuf, String)>,
 }
 
 const STORED_ROWS: usize = 2000;

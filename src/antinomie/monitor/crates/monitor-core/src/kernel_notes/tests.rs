@@ -155,6 +155,39 @@ fn a_hash_reads_back_as_sysmon_text() {
 }
 
 #[test]
+fn a_written_file_hash_names_its_file_and_only_in_its_own_layout() {
+    let mut bytes = hash_bytes(3, 0, 0);
+    bytes.resize(112, 0);
+    bytes[80..88].copy_from_slice(&0x803u64.to_le_bytes());
+    bytes[88..96].copy_from_slice(&77u64.to_le_bytes());
+    bytes[96..100].copy_from_slice(&9u32.to_le_bytes());
+    bytes[100..104].copy_from_slice(&0o100644u32.to_le_bytes());
+    bytes[104..108].copy_from_slice(&0u32.to_le_bytes());
+    let hash = file_hash(&note(HASH_KEY, HASH_WRITE_LAYOUT, bytes.clone())).unwrap();
+    assert_eq!(hash.kind, HashKind::Write);
+    assert!(hash.sysmon().is_some());
+    let file = hash.file.unwrap();
+    assert_eq!(
+        file.key,
+        FileKey {
+            dev: 0x803,
+            ino: 77,
+            generation: 9
+        }
+    );
+    assert_eq!((file.mode, file.nlink), (0o100644, 0));
+    // The earlier records carry no file; a write kind needs one, and an exec
+    // or delete kind never comes in the write layout.
+    assert!(file_hash(&note(HASH_KEY, HASH_LAYOUT, bytes[..80].to_vec())).is_none());
+    let mut exec = bytes.clone();
+    exec[0] = 1;
+    assert!(file_hash(&note(HASH_KEY, HASH_WRITE_LAYOUT, exec)).is_none());
+    assert!(file_hash(&note(HASH_KEY, HASH_WRITE_LAYOUT, bytes[..104].to_vec())).is_none());
+    let exec = file_hash(&note(HASH_KEY, HASH_LAYOUT, hash_bytes(1, 0, 0))).unwrap();
+    assert_eq!(exec.file, None);
+}
+
+#[test]
 fn a_script_interpreter_or_a_changed_file_gives_no_sysmon_hash_and_says_why() {
     for (flags, words) in [(1, "interpreter"), (2, "changed")] {
         let hash = file_hash(&note(HASH_KEY, HASH_LAYOUT, hash_bytes(2, 0, flags))).unwrap();
@@ -200,6 +233,7 @@ fn the_layouts_match_the_shared_control_header() {
     };
     assert_eq!(define("ANTC_CREDS_SIZE"), CREDS_SIZE);
     assert_eq!(define("ANTC_HASH_SIZE"), HASH_SIZE);
+    assert_eq!(define("ANTC_HASH_WRITE_SIZE"), HASH_WRITE_SIZE);
     assert_eq!(define("ANTC_HASH_FILE_MAX"), 16 << 20);
     for (name, value) in [
         ("ANTC_CRED_START", 1),
@@ -214,6 +248,7 @@ fn the_layouts_match_the_shared_control_header() {
         ("ANTC_CRED_OTHER", 10),
         ("ANTC_HASH_EXEC", 1),
         ("ANTC_HASH_DELETE", 2),
+        ("ANTC_HASH_WRITE", 3),
         ("ANTC_HASH_OK", 0),
         ("ANTC_HASH_TOO_LARGE", 1),
         ("ANTC_HASH_UNSUPPORTED_FS", 2),

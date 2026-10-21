@@ -259,7 +259,116 @@ pub(super) fn call(
     kernel_records::observe(files, call);
     build(&mut events, files, call, event);
     sigma_events::track(files, call, event);
-    route(journal, pending, events)
+    let ready = hold_creations(files, call, event, events);
+    route(journal, pending, ready)
+}
+
+/// A regular file the run created gets the guest's hash of it, taken when its
+/// last writer closed it, in `Hashes`. That hash is attached to a later call
+/// (the closing task's last), so the creation event waits for it, keyed by
+/// the file's identity, and is written when it arrives or when the scan ends.
+/// Only a run whose guest was asked to hash written files holds anything.
+fn hold_creations(
+    files: &mut FdState,
+    call: &InvocationSummary,
+    event: &EventSummary,
+    events: Vec<Event>,
+) -> Vec<Event> {
+    let mut ready = Vec::new();
+    let created = files
+        .journal
+        .hashes_writes
+        .then(|| kernel_records::file_id(call))
+        .flatten()
+        .filter(|id| id.regular && OPEN_NAMES.contains(&event.syscall_name.as_str()))
+        .map(|id| id.key);
+    for found in events {
+        match created {
+            Some(key)
+                if found.category == "file_event"
+                    && files.journal.held.len() < PENDING_LIMIT
+                    && !files.journal.held.contains_key(&key) =>
+            {
+                files.journal.held.insert(key, found);
+            }
+            _ => ready.push(found),
+        }
+    }
+    for hash in kernel_records::write_hashes(call) {
+        let Some(file) = hash.file else { continue };
+        if let Some(mut held) = files.journal.held.remove(&file.key) {
+            kernel_records::sysmon_hashes(&mut held.fields, Some(&hash));
+            ready.push(held);
+        }
+    }
+    ready
+}
+
+/// The creations still waiting at the end of the scan: no last close of the
+/// file was seen (it was still open when the recording ended, or its last
+/// writer was not a task of the run).
+pub(super) fn flush_creations(
+    journal: &mut EventJournal,
+    files: &mut FdState,
+) -> Result<(), String> {
+    let held = std::mem::take(&mut files.journal.held);
+    let mut held: Vec<_> = held.into_values().collect();
+    held.sort_by_key(|event| match event.time {
+        Some(Moment::GuestNs(ns)) => ns,
+        _ => 0,
+    });
+    for mut event in held {
+        event.fields.insert(
+            "HashSkipped".into(),
+            "no last close of the file was recorded: it was still open when the recording ended, or its last writer was not a task of the run".into(),
+        );
+        journal.push(event)?;
+    }
+    Ok(())
+}
+
+/// The launched program's own process creation. The kernel starts it without
+/// a traced execve, so no call stands for it: the launch record does.
+/// `CommandLine` only from a vector recorded whole; `Hashes` from the guest's
+/// hash of the image (a guest asked for it); the user from the credentials of
+/// the root's first traced call, the ones the exec left; the directory is the
+/// one the run was launched in. `evidence` is the root's first call.
+pub(super) fn launch(
+    journal: &mut EventJournal,
+    files: &FdState,
+    launch: &antinomie_monitor_core::recording::LaunchRecord,
+    creds: Option<&antinomie_monitor_core::kernel_notes::Credentials>,
+    evidence: Evidence,
+) -> Result<(), String> {
+    let mut fields = BTreeMap::from([
+        ("ProcessId".into(), serde_json::json!(launch.pid)),
+        ("ThreadId".into(), serde_json::json!(launch.tid)),
+        ("Syscall".into(), serde_json::json!("execve")),
+        ("Operation".into(), serde_json::json!("execve")),
+    ]);
+    text(&mut fields, "Image", launch.path.as_deref());
+    kernel_records::sysmon_user(&mut fields, creds, files.journal.names.as_deref());
+    if let Some(argv) = &launch.argv {
+        fields.insert("CommandLine".into(), argv.join(" ").into());
+    }
+    let hash = launch
+        .notes
+        .iter()
+        .filter_map(antinomie_monitor_core::kernel_notes::file_hash)
+        .find(|hash| hash.kind == HashKind::Exec);
+    kernel_records::sysmon_hashes(&mut fields, hash.as_ref());
+    text(
+        &mut fields,
+        "CurrentDirectory",
+        files.journal.launch_cwd.as_deref(),
+    );
+    journal.push(Event {
+        category: "process_creation".into(),
+        fields,
+        evidence,
+        time: (launch.timestamp_ns != 0).then_some(Moment::GuestNs(launch.timestamp_ns)),
+        inferred: Vec::new(),
+    })
 }
 
 fn build(
@@ -277,7 +386,7 @@ fn build(
     let image = process_image(files, event).map(str::to_owned);
     text(&mut fields, "Image", image.as_deref());
     let creds = kernel_records::credentials(files, call);
-    kernel_records::sysmon_user(&mut fields, creds.as_ref());
+    kernel_records::sysmon_user(&mut fields, creds.as_ref(), files.journal.names.as_deref());
     let ret = call.exit.as_ref().and_then(|exit| exit.result);
     if let Some(ret) = ret {
         fields.insert("Result".into(), ret.into());
@@ -301,7 +410,11 @@ fn build(
             ("ThreadId".into(), serde_json::json!(ended.tid)),
         ]);
         text(&mut ended_fields, "Image", image.as_deref());
-        kernel_records::sysmon_user(&mut ended_fields, creds.as_ref());
+        kernel_records::sysmon_user(
+            &mut ended_fields,
+            creds.as_ref(),
+            files.journal.names.as_deref(),
+        );
         events.push(Event {
             category: "process_termination".into(),
             fields: ended_fields,

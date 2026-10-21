@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! Background scans of a saved recording and the finding journal they write.
+use super::segments::{
+    guest_names, name_launched, run_segments, segment_facts, segments_stamp, walk_segments,
+};
 use super::*;
 
 impl FindingJournal {
@@ -102,8 +105,12 @@ pub(super) fn scan_archive_query(
         return Err("cancelled".into());
     }
     let directory = std::fs::canonicalize(directory).map_err(|error| error.to_string())?;
+    // A run that lived through transport reconnects is read whole, segment by
+    // segment, oldest first; the run's directory is the newest.
+    let segments = run_segments(&directory, request);
     // Taken before anything is read: a recording that grows meanwhile differs next time.
-    let stamp = source_stamp(&directory, pcap, pcap_open, request);
+    let mut stamp = source_stamp(&directory, pcap, pcap_open, request);
+    stamp.push_str(&segments_stamp(&segments));
     if request.unchanged_since.as_deref() == Some(stamp.as_str()) {
         return Err(UNCHANGED.into());
     }
@@ -113,18 +120,16 @@ pub(super) fn scan_archive_query(
                 .into(),
         );
     }
-    let recording = antinomie_monitor_core::recording::Recording {
-        directory,
-        manifest: serde_json::Value::Null,
-        events: Vec::new(),
-    };
-    let facts = request
-        .identity
-        .as_ref()
-        .map(|(vm, boot, run)| {
-            antinomie_monitor_core::recording::run_filter_facts(&recording.directory, run, vm, boot)
+    let recordings: Vec<_> = segments
+        .iter()
+        .map(|segment| antinomie_monitor_core::recording::Recording {
+            directory: segment.directory.clone(),
+            manifest: serde_json::Value::Null,
+            events: Vec::new(),
         })
-        .transpose()?;
+        .collect();
+    let recording = recordings.last().ok_or("no recording segment")?;
+    let facts = segment_facts(&segments, request)?;
     let mut clock_anchor = request.clock_anchor;
     let started_ms = request
         .started_ms
@@ -135,7 +140,14 @@ pub(super) fn scan_archive_query(
                 .or(call.task_exit.as_ref())
                 .is_some_and(|event| event.root_task_cookie == request.root_cookie)
     };
-    let total = recording.invocation_count_cancellable(None, cancel).ok();
+    let total = recordings
+        .iter()
+        .map(|recording| recording.invocation_count_cancellable(None, cancel).ok())
+        .sum::<Option<u64>>();
+    // The root's stream and its first credentials, for its launch.
+    let mut root_stream = None;
+    let mut root_creds = None;
+    let mut root_call = None;
     let mut cookie_sets = std::collections::BTreeMap::new();
     let mut nodes = std::collections::BTreeMap::new();
     let mut finding_page = sorting::Page::new(request, 0, cancel);
@@ -143,8 +155,21 @@ pub(super) fn scan_archive_query(
     let mut scoped_count = 0;
     // Calls whose saved async observations the pages only preview, and how many.
     let (mut async_partial, mut async_omitted) = (0u64, 0u64);
-    let (seen, complete, issues) = walk_pages(&recording, cancel, |page| {
+    let (seen, complete, issues) = walk_segments(&recordings, cancel, |segment, page| {
         let page: Vec<_> = page.iter().filter(scoped).cloned().collect();
+        for call in page
+            .iter()
+            .filter(|call| request.root_cookie != 0 && call.task_cookie == request.root_cookie)
+        {
+            root_stream.get_or_insert((segment, call.stream_id));
+            root_call.get_or_insert(trace::key(call));
+            if root_creds.is_none() {
+                root_creds = call
+                    .kernel_notes
+                    .iter()
+                    .find_map(antinomie_monitor_core::kernel_notes::credentials);
+            }
+        }
         scoped_count += page.len() as u64;
         for call in page.iter().filter(|call| call.async_omitted() > 0) {
             async_partial += 1;
@@ -169,6 +194,16 @@ pub(super) fn scan_archive_query(
         observe_processes(&mut nodes, &page);
         Ok(())
     })?;
+    // The launch, read from the segment that holds the root's first call.
+    let launch = root_stream.and_then(|(segment, stream)| {
+        recordings[segment]
+            .launch_record_cancellable(stream, request.root_cookie, cancel)
+            .ok()
+            .flatten()
+    });
+    if let Some(launch) = &launch {
+        name_launched(&mut nodes, launch, request.root_cookie);
+    }
     let cookies = resolve_cookies(&cookie_sets);
     let mut suspicious = Suspicious::new();
     let mut counts = normalized::Counts {
@@ -211,6 +246,24 @@ pub(super) fn scan_archive_query(
     let mut files = FdState::default();
     files.journal.launch_cwd = facts.as_ref().and_then(|facts| facts.launch_cwd.clone());
     files.journal.root_cookie = request.root_cookie;
+    files.journal.hashes_writes = facts.as_ref().is_some_and(|facts| facts.hashed_writes);
+    files.journal.names = guest_names(&recording.directory, request);
+    if let Some(launch) = &launch {
+        name_launched(&mut files.process_images, launch, request.root_cookie);
+        if let (Some(writer), Some(first)) = (&mut event_journal, root_call) {
+            let evidence = antinomie_monitor_core::analysis::detection::Evidence::Call {
+                stream: first.0,
+                cookie: first.1,
+                call: first.2,
+            };
+            if let Err(error) =
+                normalized::launch(writer, &files, launch, root_creds.as_ref(), evidence)
+            {
+                event_error = Some(error);
+                event_journal = None;
+            }
+        }
+    }
     let mut pending = Vec::new();
     let mut change_page = sorting::Page::new(request, 2, cancel);
     let mut file_index = files::FileIndex::default();
@@ -222,11 +275,13 @@ pub(super) fn scan_archive_query(
     let change_query = query::compile_table(&request.filters[2], FILE_FIELDS);
     let mut tabs = file_tabs::TabSink::new(request, cancel);
     let mut reach = async_files::Reach::default();
-    let (_, files_complete, _) = walk_pages(&recording, cancel, |page| {
+    let (_, files_complete, _) = walk_segments(&recordings, cancel, |segment, page| {
+        file_index.begin_segment(segment);
+        let recording = &recordings[segment];
         for submitted in page.iter().filter(scoped) {
             // The file requests an io_uring ring or AIO context carried,
             // after the call that submitted them, as the calls they stand for.
-            let requests = async_files::expand(&recording, submitted, &mut reach, cancel);
+            let requests = async_files::expand(recording, submitted, &mut reach, cancel);
             for (position, invocation) in std::iter::once(submitted)
                 .chain(requests.iter())
                 .enumerate()
@@ -319,6 +374,9 @@ pub(super) fn scan_archive_query(
                         read_page.push(row)?;
                     }
                 }
+                if real {
+                    file_index.observe_hashes(&files, invocation, event);
+                }
             }
         }
         Ok(())
@@ -376,6 +434,14 @@ pub(super) fn scan_archive_query(
     if !issues.is_empty() {
         coverage.push_str(&format!("; {} archive read issues", issues.len()));
     }
+    if recordings.len() > 1 {
+        coverage.push_str(&format!(
+            "; read {} recording segments of this run, split by {} transport reconnect{}",
+            recordings.len(),
+            recordings.len() - 1,
+            if recordings.len() == 2 { "" } else { "s" }
+        ));
+    }
     if async_partial > 0 {
         coverage.push_str(&format!(
             "; {async_omitted} saved async observations on {async_partial} calls are past the {} each call previews and were not scanned for processes, network or detection",
@@ -405,6 +471,11 @@ pub(super) fn scan_archive_query(
         .transpose()?
         .unwrap_or(false);
     network_request.started_ms = started_ms;
+    network_request.segments = segments
+        .iter()
+        .take(segments.len().saturating_sub(1))
+        .map(|segment| (segment.directory.clone(), segment.boot_id.clone()))
+        .collect();
     network_request.ended_ms = facts.as_ref().and_then(|facts| facts.ended_ms);
     let estimated_end =
         !network_request.owned_pcap && request.run_finished && network_request.ended_ms.is_none();
@@ -485,6 +556,9 @@ pub(super) fn scan_archive_query(
         },
     };
     if let Some(writer) = &mut event_journal {
+        if let Err(error) = normalized::flush_creations(writer, &mut files) {
+            event_error = Some(error);
+        }
         let held = std::mem::take(&mut pending);
         if let Err(error) = normalized::flush_connections(writer, held, &files, clock_anchor) {
             event_error = Some(error);

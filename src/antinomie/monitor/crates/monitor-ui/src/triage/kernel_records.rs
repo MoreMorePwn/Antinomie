@@ -9,15 +9,21 @@
 //! in effect after a call to everything built from it, the way auditd reports
 //! them at syscall exit. Nothing is filled in without a record:
 //!
-//! * `User` is the numeric effective uid. A guest's `/etc/passwd` is not
-//!   available on the host without a guest agent, so no name is looked up or
-//!   assumed (not even `root` for 0).
+//! * `User` is the effective user's name in the guest, from the `/etc/passwd`
+//!   of the base the VM's disk came from, read on the host (see
+//!   `antinomie_monitor_core::guest_names`), and the numeric effective uid when
+//!   no name is known. Nothing is assumed (not even `root` for 0).
 //! * `LogonId` is the audit login uid, which is what Sysmon for Linux reports.
 //!   It is empty when the guest never set one, or its kernel does not track it.
 //! * `Hashes` is `SHA256=…`, from a record the guest wrote, and only for the
 //!   file the call named. When the guest skipped or dropped a hash, or it
-//!   would describe another file, `HashSkipped` says why.
+//!   would describe another file, `HashSkipped` says why. A file the run
+//!   created gets the hash the guest took when its last writer closed it.
+//! * auditd keeps every id numeric, as auditd writes them; with names known,
+//!   the interpreted `UID`, `AUID`, `GID` and the rest of that family follow,
+//!   as auditd's enriched format adds them (`unset`, `unknown(N)`).
 use super::*;
+use antinomie_monitor_core::guest_names::GuestNames;
 use antinomie_monitor_core::kernel_notes::{
     self, Credentials, ExecImage, FileHash, FileId, HashKind,
 };
@@ -47,6 +53,15 @@ pub(super) fn file_hash(call: &InvocationSummary, kind: HashKind) -> Option<File
         .find(|hash| hash.kind == kind)
 }
 
+/// The hashes of files the run wrote that the guest took when their last
+/// writer closed them, attached to the call the closing task made last.
+pub(super) fn write_hashes(call: &InvocationSummary) -> impl Iterator<Item = FileHash> + '_ {
+    call.kernel_notes
+        .iter()
+        .filter_map(kernel_notes::file_hash)
+        .filter(|hash| hash.kind == HashKind::Write && hash.file.is_some())
+}
+
 /// The identity of the file this call acted on, when the guest recorded one:
 /// from a note of the call, or from the operand of an io_uring request.
 pub(super) fn file_id(call: &InvocationSummary) -> Option<FileId> {
@@ -62,9 +77,13 @@ pub(super) fn exec_image(call: &InvocationSummary) -> Option<ExecImage> {
 pub(super) fn sysmon_user(
     fields: &mut BTreeMap<String, serde_json::Value>,
     creds: Option<&Credentials>,
+    names: Option<&GuestNames>,
 ) {
     let Some(creds) = creds else { return };
-    fields.insert("User".into(), creds.euid.to_string().into());
+    let user = names
+        .and_then(|names| names.user(creds.euid))
+        .map_or_else(|| creds.euid.to_string(), str::to_owned);
+    fields.insert("User".into(), user.into());
     if let Some(auid) = creds.auid {
         fields.insert("LogonId".into(), auid.into());
     }
@@ -93,8 +112,12 @@ pub(super) fn sysmon_hashes(
 pub(super) fn audit_ids(
     fields: &mut BTreeMap<String, serde_json::Value>,
     creds: Option<&Credentials>,
+    names: Option<&GuestNames>,
 ) {
     let Some(creds) = creds else { return };
+    if let Some(names) = names {
+        interpreted_ids(fields, creds, names);
+    }
     for (name, value) in [
         ("uid", creds.uid),
         ("euid", creds.euid),
@@ -117,5 +140,43 @@ pub(super) fn audit_ids(
             "ses".into(),
             creds.session.unwrap_or(unset).to_string().into(),
         );
+    }
+}
+
+/// auditd's interpreted id fields (`log_format = ENRICHED`): a name for each
+/// id, `unknown(N)` for an id with none and `unset` for the unset login uid.
+fn interpreted_ids(
+    fields: &mut BTreeMap<String, serde_json::Value>,
+    creds: &Credentials,
+    names: &GuestNames,
+) {
+    let user = |id: u32| {
+        names
+            .user(id)
+            .map_or_else(|| format!("unknown({id})"), str::to_owned)
+    };
+    let group = |id: u32| {
+        names
+            .group(id)
+            .map_or_else(|| format!("unknown({id})"), str::to_owned)
+    };
+    for (name, value) in [
+        ("UID", user(creds.uid)),
+        ("EUID", user(creds.euid)),
+        ("SUID", user(creds.suid)),
+        ("FSUID", user(creds.fsuid)),
+        ("GID", group(creds.gid)),
+        ("EGID", group(creds.egid)),
+        ("SGID", group(creds.sgid)),
+        ("FSGID", group(creds.fsgid)),
+    ] {
+        fields.insert(name.into(), value.into());
+    }
+    if creds.audit {
+        let auid = match creds.auid {
+            None | Some(kernel_notes::UNSET) => "unset".to_owned(),
+            Some(auid) => user(auid),
+        };
+        fields.insert("AUID".into(), auid.into());
     }
 }

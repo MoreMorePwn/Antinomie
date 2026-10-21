@@ -234,7 +234,15 @@ impl Worker {
                 // A desktop run executes `/bin/sh`, so its program is acquired
                 // by path after the launch instead of by the kernel's exec.
                 let wire = crate::guest_desktop::wire_request(&request)?;
-                let args = control::execute_analysis(&wire, supported)?;
+                // Whatever hashing the guest offers is asked for; an older
+                // guest offers none and sees no new flag.
+                let tracer_hashing = self.snapshot.guest_tracer.map_or(0, |caps| {
+                    caps.exec_flags & (control::EXEC_HASH_ROOT | control::EXEC_HASH_WRITES)
+                });
+                let args = control::with_tracer_flags(
+                    control::execute_analysis(&wire, supported)?,
+                    tracer_hashing,
+                );
                 let selected = request.analysis.enabled;
                 let inline_acquisition = selected && supported && !desktop;
                 let run_id = storage::unique_id();
@@ -268,6 +276,7 @@ impl Worker {
                 run.summary.recording_error = None;
                 run.boot_bundle_identity = session.bundle.base_identity.clone();
                 run.disk_base_identity = session.disk_bundle.base_identity.clone();
+                run.tracer_hashing = tracer_hashing;
                 let mut artifacts = RunArtifactOwner::new(&run.summary);
                 let prepared = if request.capture_network {
                     session.start_run_network(&self.options, &mut artifacts)

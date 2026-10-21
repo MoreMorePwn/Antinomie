@@ -26,6 +26,7 @@ mod execution;
 pub mod filter_members;
 mod guest_account;
 mod guest_desktop;
+pub mod guest_names;
 mod guest_resources;
 mod http_fetch;
 pub mod kernel_notes;

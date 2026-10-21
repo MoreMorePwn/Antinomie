@@ -210,12 +210,25 @@ pub(super) fn observe_processes(
             }
         }
         if committed_exec(invocation) {
-            if let Some(comm) = program_name(entry, exit).or_else(|| {
-                invocation
-                    .async_events
-                    .iter()
-                    .find_map(|event| program_name(Some(event), None))
-            }) {
+            // The name the call gave, else the image the guest says it loaded;
+            // with neither, the name inherited from the parent no longer holds.
+            let named = program_name(entry, exit)
+                .or_else(|| {
+                    invocation
+                        .async_events
+                        .iter()
+                        .find_map(|event| program_name(Some(event), None))
+                })
+                .or_else(|| kernel_records::exec_image(invocation).and_then(|image| image.path));
+            if named.is_none() {
+                if let Some(node) = nodes.get_mut(&key) {
+                    node.comm = "?".into();
+                    node.argv.clear();
+                    node.command_line = None;
+                    node.proctitle = None;
+                }
+            }
+            if let Some(comm) = named {
                 let node = nodes.get_mut(&key).unwrap();
                 node.comm = comm.clone();
                 if node.exec_history.last() != Some(&comm) {

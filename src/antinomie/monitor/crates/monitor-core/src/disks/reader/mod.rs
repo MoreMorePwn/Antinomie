@@ -15,6 +15,7 @@ mod diff;
 mod glob;
 pub mod image;
 pub mod protocol;
+pub mod qcow2;
 pub mod serve;
 
 pub use client::Reader;

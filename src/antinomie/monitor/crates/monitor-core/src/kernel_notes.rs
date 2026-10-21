@@ -16,7 +16,13 @@
 //! * `lifecycle.file_hash` (layout `antinomie.hash/1`, 80 bytes) is the SHA-256
 //!   of an executed image or of a file about to be deleted, or the reason it
 //!   was not computed. A worker publishes it after the call returned, still
-//!   under that call's identity.
+//!   under that call's identity. A guest that offers it (`TRACER_CAPS`) also
+//!   hashes, on request, the launched program's own image (under the launch's
+//!   identity, call id 0) and each regular file the run wrote when its last
+//!   writer closed it: layout `antinomie.hash/2`, 112 bytes, the same record
+//!   followed by the file's device, inode, generation, mode and link count,
+//!   because the call it belongs to (the closing task's last) need not name
+//!   the file.
 //!
 //! * `lifecycle.file_id` (layout `antinomie.fileid/1`, 32 bytes) is the device
 //!   and inode of a file a call opened, renamed, linked or removed, or that an
@@ -40,6 +46,7 @@ pub const EXEC_IMAGE_KEY: &str = "lifecycle.exec_image";
 const CREDS_LAYOUT: &str = "antinomie.creds/2";
 const CREDS_LAYOUT_V1: &str = "antinomie.creds/1";
 const HASH_LAYOUT: &str = "antinomie.hash/1";
+const HASH_WRITE_LAYOUT: &str = "antinomie.hash/2";
 pub const FILE_ID_LAYOUT: &str = "antinomie.fileid/1";
 const EXEC_IMAGE_LAYOUT: &str = "antinomie.execimg/1";
 pub const FILE_ID_SIZE: usize = 32;
@@ -47,6 +54,7 @@ const EXEC_IMAGE_HEADER: usize = 40;
 pub(crate) const CREDS_SIZE: usize = 96;
 const CREDS_SIZE_V1: usize = 72;
 pub(crate) const HASH_SIZE: usize = 80;
+const HASH_WRITE_SIZE: usize = 112;
 /// "Unmapped" for a user or group id, "unset" for the login uid and session.
 pub const UNSET: u32 = u32::MAX;
 /// Most records kept for one call: a call changes credentials a few times at
@@ -185,6 +193,8 @@ pub enum HashKind {
     Exec,
     /// A file about to be deleted.
     Delete,
+    /// A file the run wrote, when its last writer closed it.
+    Write,
 }
 
 /// What became of one hashing request.
@@ -227,6 +237,18 @@ pub struct FileHash {
     pub hash_us: u32,
     /// Records the guest has lost since boot (queue, budget, memory, ring).
     pub lost: u32,
+    /// [`HashKind::Write`]: the file whose last writer closed it, as it was
+    /// then.
+    pub file: Option<ClosedFile>,
+}
+
+/// The file a write hash describes, at its last close.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ClosedFile {
+    pub key: FileKey,
+    pub mode: u32,
+    /// Hard links left: 0 when every name was removed before the close.
+    pub nlink: u32,
 }
 
 impl FileHash {
@@ -282,10 +304,27 @@ pub fn guest_lost(event: &EventSummary) -> Option<u64> {
 
 /// The file hash record of `event`, when it is a complete one.
 pub fn file_hash(event: &EventSummary) -> Option<FileHash> {
-    let data = payload(event, HASH_KEY, HASH_LAYOUT, HASH_SIZE)?;
-    let kind = match data[0] {
-        1 => HashKind::Exec,
-        2 => HashKind::Delete,
+    let (data, file) = match payload(event, HASH_KEY, HASH_WRITE_LAYOUT, HASH_WRITE_SIZE) {
+        Some(data) => (
+            data,
+            Some(ClosedFile {
+                key: FileKey {
+                    dev: u64_at(data, 80),
+                    ino: u64_at(data, 88),
+                    generation: u32_at(data, 96),
+                },
+                mode: u32_at(data, 100),
+                nlink: u32_at(data, 104),
+            }),
+        ),
+        None => (payload(event, HASH_KEY, HASH_LAYOUT, HASH_SIZE)?, None),
+    };
+    // Only a write record says which file it describes; the others name it
+    // through their call.
+    let kind = match (data[0], file.is_some()) {
+        (1, false) => HashKind::Exec,
+        (2, false) => HashKind::Delete,
+        (3, true) => HashKind::Write,
         _ => return None,
     };
     let status = match data[1] {
@@ -316,6 +355,7 @@ pub fn file_hash(event: &EventSummary) -> Option<FileHash> {
         queue_us: u32_at(data, 64),
         hash_us: u32_at(data, 68),
         lost: u32_at(data, 72),
+        file,
     })
 }
 

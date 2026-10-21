@@ -19,7 +19,20 @@ pub(super) fn collect(
         }) {
             return Err("Network artifact identity mismatch".into());
         }
-        paths = artifacts.network_captures;
+        // A run recorded across transport reconnects has a capture in each
+        // segment, under each segment's boot; the earlier ones come first.
+        paths = Vec::new();
+        for (segment, segment_boot) in &request.segments {
+            let Some(earlier) = antinomie_monitor_core::RunArtifacts::load(segment)? else {
+                continue;
+            };
+            if request.identity.as_ref().is_some_and(|(vm, _, run)| {
+                *vm == earlier.vm_id && *segment_boot == earlier.boot_id && *run == earlier.run_id
+            }) {
+                paths.extend(earlier.network_captures);
+            }
+        }
+        paths.extend(artifacts.network_captures);
     }
     let mut seen = std::collections::BTreeSet::new();
     paths.retain(|path| seen.insert(path.clone()));
