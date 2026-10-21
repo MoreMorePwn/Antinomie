@@ -220,9 +220,6 @@ impl MonitorApp {
         if snapshot.last_error != self.snapshot.last_error {
             if let Some(error) = &snapshot.last_error {
                 activity.push(("ERROR", error.clone()));
-                self.error_status_mark = Some(self.status.clone());
-            } else {
-                self.error_status_mark = None;
             }
         }
         if snapshot.health.persistence_error != self.snapshot.health.persistence_error {

@@ -22,7 +22,7 @@ fn running_app() -> MonitorApp {
 // Confirmed logic bugs
 
 #[test]
-fn a_newer_status_message_replaces_an_old_backend_error() {
+fn a_backend_error_is_a_toast_not_the_status_line() {
     let mut app = app();
     let ctx = context();
     app.snapshot.last_error = Some("old failure from ten minutes ago".into());
