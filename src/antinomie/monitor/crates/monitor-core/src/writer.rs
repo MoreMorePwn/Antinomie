@@ -4,7 +4,11 @@
 //! background thread in submission order. A busy disk (writeback throttling,
 //! journal commits) then delays this thread instead of the telemetry drain.
 //! The queue holds at most [`QUEUE_LIMIT`] bytes; past that, submitting
-//! waits, so a disk that stays slower than the guest still pushes back.
+//! waits, so a disk that stays slower than the guest still pushes back. The
+//! transport owner never waits here: it stops taking telemetry while the
+//! queue is [`backlogged`], so the guest's sends wait for room (never-drop
+//! mode) until the disk catches up, and what it already buffered is handed
+//! over when there is room again.
 //! Write errors land in the submitter's [`ErrorSlot`]; [`barrier`] waits
 //! until everything submitted before it is on disk (not synced), and
 //! [`wait_for`] waits only for one submission (and so for those before it).
@@ -295,6 +299,17 @@ pub(crate) fn wait_for(ticket: u64) {
     let writer = writer();
     let state = writer.state.lock().unwrap_or_else(|e| e.into_inner());
     drop(wait_while(writer, state, |state| state.done < ticket));
+}
+
+/// Whether the queue holds more than half of its limit: the transport owner
+/// takes no more telemetry until the disk has caught up.
+pub(crate) fn backlogged() -> bool {
+    let writer = writer();
+    writer
+        .state
+        .lock()
+        .map(|state| state.bytes > writer.limit / 2)
+        .unwrap_or_default()
 }
 
 /// Bytes queued and not yet written.

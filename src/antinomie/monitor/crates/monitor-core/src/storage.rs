@@ -1476,7 +1476,9 @@ struct CaptureManifest<'a> {
 /// Packets are buffered in memory and handed to the recording writer thread
 /// in large blocks: the transport thread calls [`RawCapture::flush`] after
 /// every drain pass, and `sync`, `manifest` and drop flush too. `sync` and
-/// `manifest` also wait until the writer has written everything.
+/// `manifest` also wait until the writer has written everything. A block the
+/// full writer queue cannot take yet stays buffered for the next flush (the
+/// transport owner stops taking telemetry meanwhile, see `writer`).
 pub struct RawCapture {
     pub directory: PathBuf,
     file: std::sync::Arc<File>,
@@ -1500,7 +1502,7 @@ pub struct RawCapture {
 const RAW_BUFFER: usize = 1024 * 1024;
 impl Drop for RawCapture {
     fn drop(&mut self) {
-        self.flush();
+        self.flush_blocking();
     }
 }
 impl RawCapture {
@@ -1636,13 +1638,8 @@ impl RawCapture {
                     self.ticket = ticket;
                     self.written = (self.bytes, self.packets);
                 }
-                Err(crate::writer::Op::Append { data, .. }) => {
-                    self.buffer = data;
-                    self.error.get_or_insert_with(|| {
-                        "recording writer queue is full; further capture admissions stopped".into()
-                    });
-                    return false;
-                }
+                // No room yet: kept for the next flush.
+                Err(crate::writer::Op::Append { data, .. }) => self.buffer = data,
                 Err(crate::writer::Op::WriteAt { .. }) => unreachable!("raw append operation"),
             }
         }

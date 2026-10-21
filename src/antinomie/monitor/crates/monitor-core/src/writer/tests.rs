@@ -134,3 +134,33 @@ fn time_spent_waiting_for_the_writer_is_counted_on_the_waiting_thread_only() {
     assert_eq!(other, Duration::ZERO);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn a_raw_capture_keeps_what_a_full_queue_cannot_take_and_saves_it_later() {
+    let root =
+        std::env::temp_dir().join(format!("ant-writer-held-{}", crate::storage::unique_id()));
+    let slow = held::SlowWriter::install_with_limit(1536 * 1024);
+    slow.pause();
+    let mut capture = crate::storage::RawCapture::new(root.clone(), 1 << 30).unwrap();
+    assert!(!backlogged());
+    let mut expected = Vec::new();
+    for number in 0..24u8 {
+        let packet = vec![number; 100 * 1024];
+        assert!(capture.append(&packet), "saving goes on");
+        expected.extend_from_slice(&(packet.len() as u32).to_le_bytes());
+        expected.extend_from_slice(&packet);
+    }
+    assert!(capture.flush());
+    // One block is queued; the rest waits in the capture, and the transport
+    // owner takes no more telemetry meanwhile.
+    assert!(backlogged());
+    assert!(slow.queued_len() <= 1536 * 1024);
+    assert_eq!(capture.error, None);
+    slow.resume();
+    capture.sync().unwrap();
+    assert!(!backlogged());
+    assert_eq!(std::fs::read(root.join("telemetry.raw")).unwrap(), expected);
+    drop(capture);
+    drop(slow);
+    std::fs::remove_dir_all(root).unwrap();
+}

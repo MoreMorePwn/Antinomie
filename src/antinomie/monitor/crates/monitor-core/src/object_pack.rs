@@ -308,7 +308,8 @@ impl PackWriter {
     }
 
     /// Hand buffered data to the writer thread without waiting for queue room.
-    /// The error leaves the unsubmitted bytes in this writer for its finalizer.
+    /// What the full queue cannot take yet stays buffered for the next flush
+    /// (the transport owner stops taking telemetry meanwhile).
     pub fn flush(&mut self) -> Result<(), String> {
         self.flush_with(false)
     }
@@ -342,7 +343,7 @@ impl PackWriter {
                 }
                 Err(Op::WriteAt { data, .. }) => {
                     self.buffer = data;
-                    return Err("recording writer queue is full".into());
+                    return Ok(());
                 }
                 Err(Op::Append { .. }) => unreachable!("object write operation"),
             }
@@ -370,7 +371,7 @@ impl PackWriter {
                 }
                 Err(Op::WriteAt { data, .. }) => {
                     self.index_buffer = data;
-                    return Err("recording writer queue is full".into());
+                    return Ok(());
                 }
                 Err(Op::Append { .. }) => unreachable!("object write operation"),
             }
