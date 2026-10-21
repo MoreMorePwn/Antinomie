@@ -346,14 +346,26 @@ pub fn dynamic(context: &mut Context) -> Result<String, String> {
     if !context.dir.join("p2dyn").is_file() || !context.dir.join("dbgroot").is_dir() {
         return Ok("skipped: no p2dyn build or dbgroot directory beside the fixtures".into());
     }
+    // gdb opens the loader and libc by the paths the guest uses (/tmp, the
+    // program's interpreter and run path) under its sysroot: one that holds
+    // the uploaded copies there. The host's own root would hand gdb whatever
+    // the host has at /tmp/p2ld.so or /tmp/libc.so.6 instead.
+    let sysroot = context.dir.join("sysroot");
+    fs::create_dir_all(sysroot.join("tmp")).map_err(|e| e.to_string())?;
+    for name in ["p2ld.so", "libc.so.6"] {
+        fs::copy(
+            context.dir.join("dbgroot").join(name),
+            sysroot.join("tmp").join(name),
+        )
+        .map_err(|e| format!("{name}: {e}"))?;
+    }
     let started = context.start_stopped("p2dyn", &["start", "20", "0"])?;
     let mut gdb = Gdb::start(&context.dir)?;
     let port = started.info.tcp_port;
-    let root = context.dir.join("dbgroot");
     let text = gdb.run(
         &format!(
-            "set sysroot /\nset solib-search-path {}\nfile p2dyn\ntarget remote 127.0.0.1:{port}\ninfo registers rip\ninfo symbol $pc\ninfo sharedlibrary",
-            root.display()
+            "set sysroot {}\nfile p2dyn\ntarget remote 127.0.0.1:{port}\ninfo registers rip\ninfo symbol $pc\ninfo sharedlibrary",
+            sysroot.display()
         ),
         40,
     )?;
