@@ -327,6 +327,7 @@ fn listing_page(report: &AnalysisReport, kind: AnalysisKind) -> Listing {
         report_id: report.id.clone(),
         kind,
         query: String::new(),
+        sort: None,
         start: 0,
         total: rows.len() as u64,
         rows,
@@ -928,16 +929,18 @@ fn native_analysis_workspace_fixture() {
                             kind,
                             start,
                             query,
+                            sort,
                         } if self.directory.is_some() => {
                             let fields = super::super::listing_view::listing_fields(kind);
                             let filter = crate::query::compile_table(&query, &fields);
-                            self.listing = Some(antinomie_monitor_core::read_listing_page_with(
+                            self.listing = Some(antinomie_monitor_core::read_listing_page_sorted(
                                 self.directory.as_ref().unwrap(),
                                 &report_id,
                                 kind,
                                 start,
                                 antinomie_monitor_core::LISTING_PAGE_MAX_ROWS,
                                 &query,
+                                sort,
                                 |entry| {
                                     filter
                                         .keep_table(&super::super::listing_view::listing_row(entry))
@@ -1934,4 +1937,49 @@ fn qa_report() -> (
         .collect();
     let (report, page) = code_report(AnalysisKind::Disassembly, &functions);
     (report, page.ok())
+}
+
+#[test]
+fn a_strings_header_click_reads_the_whole_listing_in_that_order_and_keeps_the_page_meanwhile() {
+    use crate::table_sort::testing;
+    use antinomie_monitor_core::ListingSort;
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let report = with_listing(fixture(), AnalysisKind::Strings, 3);
+    let page = listing_page(&report, AnalysisKind::Strings);
+    let mut state = WorkspaceState::default();
+    let actions = std::cell::RefCell::new(Vec::new());
+    let mut show = |ui: &mut egui::Ui| {
+        let action = workspace_section(
+            ui,
+            Some(&report),
+            AnalysisKind::Strings,
+            &mut state,
+            None,
+            Some(&page),
+        );
+        actions.borrow_mut().extend(action);
+    };
+    let ordered = |actions: &std::cell::RefCell<Vec<ReportAction>>| match actions.borrow().last() {
+        Some(ReportAction::ReadListing { sort, start, .. }) => Some((*sort, *start)),
+        _ => None,
+    };
+    let shown = testing::click(&ctx, "Text", &mut show);
+    // The rows of the page on screen stay while the sorted order is read.
+    assert!(
+        shown.iter().any(|(text, _)| text == "fixture string 0"),
+        "{shown:?}"
+    );
+    assert!(shown.iter().any(|(text, _)| text == "Sorting…"));
+    let ascending = ListingSort {
+        column: 3,
+        descending: false,
+    };
+    assert_eq!(ordered(&actions), Some((Some(ascending), 0)));
+    testing::click(&ctx, "Text", &mut show);
+    let descending = ListingSort {
+        column: 3,
+        descending: true,
+    };
+    assert_eq!(ordered(&actions), Some((Some(descending), 0)));
 }

@@ -29,6 +29,17 @@ it runs.
   can be folded and reopened, restarted or stopped, and closing it quits gdb
   cleanly so the process keeps running. The shared function sidebar is not used:
   the debug engine reads memory windows and has no symbols to list functions by.
+- **Static analysis Strings sorts from its headers; the Run program window keeps
+  UID and GID together.** The Strings table in Static analysis sorts by Offset,
+  Encoding, Length or Text over the whole listing, not the page on screen: the
+  archive reader orders every matching row and returns the page asked for, the
+  rows on screen stay while the new order is read ("Sorting…"), and filtering
+  still applies first. Disassembly and Decompilation keep their address and line
+  order, so their headers do not sort; hovering one says why. In Run program the
+  User row no longer leaves the GID value alone on a line: UID and GID move
+  down together when the column is narrow, and the Upload source's Host file
+  field takes the full column with Choose… under it. Settings' Detection page, the
+  README and the docs call the rules page Detection rules, not Rule manager.
 - **Core dumps and Static analysis in the new layout; a Strings tab for cores;
   functions count lines.** The Cores view keeps its list on the left and its tabs
   (Context, Memory mappings, Disassembly, Strings, Recovered notes, with counts

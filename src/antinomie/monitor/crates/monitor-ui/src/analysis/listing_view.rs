@@ -7,7 +7,7 @@ use super::ReportAction;
 use crate::theme;
 use antinomie_monitor_core::{
     AnalysisData, AnalysisEntry, AnalysisKind, AnalysisListingPage, AnalysisReport,
-    AnalysisSection, LISTING_PAGE_MAX_ROWS,
+    AnalysisSection, ListingSort, LISTING_PAGE_MAX_ROWS,
 };
 use eframe::egui::{self, Color32, FontId, RichText};
 use egui_extras::{Column, TableBuilder};
@@ -46,6 +46,10 @@ impl ListingState {
 /// Rows read ahead of the first one that is needed.
 const LOOK_BEHIND: u64 = 128;
 
+/// The sort state of the Strings table. Its header sorts the whole listing on
+/// the archive reader, not the page on screen.
+const STRINGS_TABLE: &str = "static-strings";
+
 pub(super) fn show(
     ui: &mut egui::Ui,
     report: &AnalysisReport,
@@ -55,12 +59,20 @@ pub(super) fn show(
 ) -> Option<ReportAction> {
     let kind = section.kind;
     let mut action = None;
+    let sort = (kind == AnalysisKind::Strings)
+        .then(|| crate::triage::sort_current(ui.ctx(), STRINGS_TABLE))
+        .flatten()
+        .map(|spec| ListingSort {
+            column: spec.column,
+            descending: spec.descending,
+        });
     let request = |start: u64, query: &str| {
         Some(ReportAction::ReadListing {
             report_id: report.id.clone(),
             kind,
             start,
             query: query.to_owned(),
+            sort,
         })
     };
     let listing = section.listing.as_ref();
@@ -140,6 +152,12 @@ pub(super) fn show(
     };
     remember_functions(&mut state.functions, section, page);
     remember_lines(&mut state.lines, page);
+    // A new order is read while the last one stays on screen.
+    let resorting = page.sort != sort;
+    if resorting {
+        crate::theme::loading(ui, "Sorting…");
+        action = request(0, query);
+    }
     if page.total == 0 {
         ui.label(if state.applied_query.is_empty() {
             "This listing is empty."
@@ -301,8 +319,16 @@ pub(super) fn show(
                 }
                 table
                     .header(row_height, |mut header| {
-                        for (title, _) in columns {
-                            header.col(|ui| crate::widgets::table::head(ui, title));
+                        for (column, (title, _)) in columns.iter().enumerate() {
+                            header.col(|ui| match kind {
+                                AnalysisKind::Strings => {
+                                    crate::table_sort::header(ui, STRINGS_TABLE, column, title)
+                                }
+                                AnalysisKind::Disassembly | AnalysisKind::Decompilation => {
+                                    ordered_head(ui, title, kind)
+                                }
+                                _ => crate::widgets::table::head(ui, title),
+                            });
                         }
                     })
                     .body(|body| {
@@ -385,7 +411,7 @@ pub(super) fn show(
     if let Some(selection) = clicked {
         state.selected = Some(selection);
     }
-    if let Some(index) = needed {
+    if let Some(index) = needed.filter(|_| !resorting) {
         action = request(index.saturating_sub(LOOK_BEHIND), query);
     }
     // Keep the page size in the type system's view of the bound.
@@ -939,6 +965,22 @@ fn kind_salt(kind: AnalysisKind) -> &'static str {
         AnalysisKind::Strings => "strings",
         _ => "other",
     }
+}
+
+/// A header that does not sort: these listings are in the order that means
+/// something, with each function's rows under its header.
+fn ordered_head(ui: &mut egui::Ui, title: &str, kind: AnalysisKind) {
+    let why = match kind {
+        AnalysisKind::Disassembly => {
+            "Disassembly stays in address order: each function's instructions follow its header."
+        }
+        _ => "Decompiled source stays in line order: each function's lines follow its header.",
+    };
+    crate::widgets::table::head_cell(ui, |ui| {
+        ui.add(egui::Label::new(crate::widgets::table::head_text(title)).truncate())
+            .on_hover_text(why)
+            .on_hover_cursor(egui::CursorIcon::NotAllowed);
+    });
 }
 
 fn mono_text(text: impl Into<String>, font: &FontId, color: Color32) -> RichText {

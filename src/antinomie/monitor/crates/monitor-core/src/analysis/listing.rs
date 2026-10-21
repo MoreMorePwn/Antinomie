@@ -204,8 +204,29 @@ pub fn read_listing_page_with(
     start: u64,
     count: usize,
     query: &str,
+    keep: impl FnMut(&AnalysisEntry) -> bool,
+) -> Result<AnalysisListingPage, String> {
+    read_listing_page_sorted(directory, report_id, kind, start, count, query, None, keep)
+}
+
+/// [`read_listing_page_with`] with the matching rows ordered by `sort` before
+/// the page is cut, so `start` counts in the sorted order over the whole
+/// listing, not within one page. Only a Strings listing sorts (see
+/// [`ListingSort`]); for any other category `sort` is ignored and the page
+/// says so. Ties keep the listing order. Holds every matching row while it
+/// sorts, which the listing's size bound keeps small.
+#[allow(clippy::too_many_arguments)]
+pub fn read_listing_page_sorted(
+    directory: &Path,
+    report_id: &str,
+    kind: AnalysisKind,
+    start: u64,
+    count: usize,
+    query: &str,
+    sort: Option<ListingSort>,
     mut keep: impl FnMut(&AnalysisEntry) -> bool,
 ) -> Result<AnalysisListingPage, String> {
+    let sort = sort.filter(|_| kind == AnalysisKind::Strings);
     let report = super::open_report(directory)?;
     if report.id != report_id {
         return Err("saved analysis report identity mismatch".into());
@@ -224,6 +245,8 @@ pub fn read_listing_page_with(
     }
     let count = count.min(LISTING_PAGE_MAX_ROWS);
     let mut rows = Vec::new();
+    // Every match, when the page is cut after sorting.
+    let mut matches = Vec::new();
     let mut total = 0u64;
     let mut seen = 0u64;
     let mut functions: Vec<AnalysisFunctionLines> = Vec::new();
@@ -239,7 +262,9 @@ pub fn read_listing_page_with(
         super::validation::validate_record(kind, &entry, record, report.specimen_len)?;
         count_function_line(kind, &entry, &mut functions);
         if keep(&entry) {
-            if total >= start && rows.len() < count {
+            if sort.is_some() {
+                matches.push((index as u64, entry));
+            } else if total >= start && rows.len() < count {
                 rows.push((index as u64, entry));
             }
             total = total.checked_add(1).ok_or("listing row count overflow")?;
@@ -248,15 +273,47 @@ pub fn read_listing_page_with(
     if seen != listing.rows {
         return Err("listing row count disagrees with its report".into());
     }
+    if let Some(sort) = sort {
+        sort_strings(&mut matches, sort);
+        rows = matches
+            .into_iter()
+            .skip(usize::try_from(start).unwrap_or(usize::MAX))
+            .take(count)
+            .collect();
+    }
     Ok(AnalysisListingPage {
         report_id: report_id.into(),
         kind,
         query: query.into(),
+        sort,
         start,
         total,
         rows,
         functions,
     })
+}
+
+/// Order Strings rows by the column of `sort`: file offset, encoding, length
+/// in octets, or text (ignoring case).
+fn sort_strings(rows: &mut [(u64, AnalysisEntry)], sort: ListingSort) {
+    let byte_len = |entry: &AnalysisEntry| match entry.record.as_ref().map(|record| &record.data) {
+        Some(AnalysisData::String { byte_len, .. }) => *byte_len,
+        _ => 0,
+    };
+    match sort.column {
+        0 => rows.sort_by_key(|(_, entry)| entry.offset.unwrap_or(0)),
+        1 => rows.sort_by_cached_key(|(_, entry)| {
+            match entry.record.as_ref().map(|record| &record.data) {
+                Some(AnalysisData::String { encoding, .. }) => encoding.clone(),
+                _ => String::new(),
+            }
+        }),
+        2 => rows.sort_by_key(|(_, entry)| byte_len(entry)),
+        _ => rows.sort_by_cached_key(|(_, entry)| entry.value.to_lowercase()),
+    }
+    if sort.descending {
+        rows.reverse();
+    }
 }
 
 /// Tally `entry` under the function it follows: a function header starts a
@@ -450,6 +507,132 @@ mod tests {
         )
         .unwrap();
         root
+    }
+
+    /// A Strings listing of `(offset, encoding, text)` and its report.
+    fn strings_listing(strings: &[(u64, &str, &str)]) -> std::path::PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("ant-listing-{}", crate::storage::unique_id()));
+        crate::storage::private_dir(&root).unwrap();
+        std::fs::create_dir(root.join("listings")).unwrap();
+        let mut writer = ListingWriter::create(
+            &root.join("listings"),
+            AnalysisKind::Strings,
+            LISTING_MAX_SIZE,
+        )
+        .unwrap();
+        for (offset, encoding, text) in strings {
+            let byte_len = text.len() as u64;
+            assert!(writer.push(
+                "string",
+                *text,
+                Some(AnalysisLocation {
+                    kind: AnalysisAddressKind::FileOffset,
+                    value: *offset,
+                    file_range: Some(AnalysisRange {
+                        offset: *offset,
+                        len: byte_len
+                    }),
+                }),
+                AnalysisData::String {
+                    encoding: (*encoding).into(),
+                    byte_len,
+                    retained_len: byte_len,
+                }
+            ));
+        }
+        let mut section = AnalysisSection::new(AnalysisKind::Strings);
+        section.state = AnalysisSectionState::Complete;
+        section.listing = Some(writer.finish(false).unwrap());
+        let report = AnalysisReport {
+            id: "sorted".into(),
+            state: AnalysisState::Complete,
+            source_path: "/fixture".into(),
+            specimen_sha256: None,
+            specimen_len: Some(0x1000),
+            reason: None,
+            sections: vec![section],
+        };
+        std::fs::write(
+            root.join("report.json"),
+            serde_json::to_vec(&report).unwrap(),
+        )
+        .unwrap();
+        root
+    }
+
+    #[test]
+    fn a_sorted_page_orders_the_whole_listing_before_it_is_cut() {
+        let root = strings_listing(&[
+            (0x30, "UTF-16LE", "mango-fruit"),
+            (0x10, "ASCII", "Zebra-animal"),
+            (0x50, "ASCII", "apple-fruit-long"),
+            (0x20, "UTF-16LE", "kiwi"),
+        ]);
+        let page = |start, column, descending, keep: &str| {
+            let keep = keep.to_owned();
+            read_listing_page_sorted(
+                &root,
+                "sorted",
+                AnalysisKind::Strings,
+                start,
+                2,
+                &keep,
+                Some(ListingSort { column, descending }),
+                |entry| entry.value.contains(&keep),
+            )
+            .unwrap()
+        };
+        fn values(page: &AnalysisListingPage) -> Vec<&str> {
+            page.rows
+                .iter()
+                .map(|(_, entry)| entry.value.as_str())
+                .collect()
+        }
+        // The second page of an offset sort holds the two highest offsets,
+        // which a sort of the listing's first page could not.
+        let second = page(2, 0, false, "");
+        assert_eq!(values(&second), ["mango-fruit", "apple-fruit-long"]);
+        assert_eq!((second.total, second.start), (4, 2));
+        assert_eq!(
+            values(&page(0, 0, true, "")),
+            ["apple-fruit-long", "mango-fruit"]
+        );
+        // Text ignores case; length orders by octets; encoding by name.
+        assert_eq!(values(&page(0, 3, false, "")), ["apple-fruit-long", "kiwi"]);
+        assert_eq!(values(&page(0, 2, false, "")), ["kiwi", "mango-fruit"]);
+        assert_eq!(values(&page(0, 1, false, ""))[0], "Zebra-animal");
+        // A filter narrows before the sort; the listing index stays.
+        let narrowed = page(0, 0, true, "fruit");
+        assert_eq!(values(&narrowed), ["apple-fruit-long", "mango-fruit"]);
+        assert_eq!(narrowed.rows[0].0, 2);
+        assert_eq!(
+            narrowed.sort,
+            Some(ListingSort {
+                column: 0,
+                descending: true
+            })
+        );
+        // Another category ignores the sort.
+        std::fs::remove_dir_all(root).unwrap();
+        let root = function_listing(AnalysisKind::Disassembly, &[("main", 0x2000, 3)]);
+        let unsorted = read_listing_page_sorted(
+            &root,
+            "counted",
+            AnalysisKind::Disassembly,
+            0,
+            2,
+            "",
+            Some(ListingSort {
+                column: 0,
+                descending: true,
+            }),
+            |_| true,
+        )
+        .unwrap();
+        assert_eq!(unsorted.sort, None);
+        assert_eq!(unsorted.rows[0].0, 0);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

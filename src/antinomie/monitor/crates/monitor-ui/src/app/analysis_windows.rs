@@ -213,6 +213,7 @@ impl MonitorApp {
                 kind,
                 start,
                 query,
+                sort,
             }) => {
                 let directory = self.analysis_directory(&report_id);
                 let report = self.analysis_report(&report_id).cloned();
@@ -223,7 +224,9 @@ impl MonitorApp {
                     || view
                         .listing_pending
                         .as_ref()
-                        .is_some_and(|(_, k, s, q)| *k == kind && *s == start && *q == query)
+                        .is_some_and(|(_, k, s, q, o)| {
+                            *k == kind && *s == start && *q == query && *o == sort
+                        })
                 {
                     return;
                 }
@@ -233,7 +236,7 @@ impl MonitorApp {
                 };
                 self.analysis_generation = self.analysis_generation.wrapping_add(1);
                 let generation = self.analysis_generation;
-                view.listing_pending = Some((generation, kind, start, query.clone()));
+                view.listing_pending = Some((generation, kind, start, query.clone(), sort));
                 let record_context = report
                     .as_ref()
                     .map(|report| view.state.record_context_for(report, kind))
@@ -246,6 +249,7 @@ impl MonitorApp {
                     kind,
                     start,
                     query,
+                    sort,
                     record_context,
                 });
             }

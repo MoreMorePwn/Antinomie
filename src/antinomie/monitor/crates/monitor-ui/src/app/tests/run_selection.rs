@@ -832,6 +832,7 @@ fn select_run_keeps_a_queued_listing_and_the_run_lists() {
                 antinomie_monitor_core::AnalysisKind::Strings,
                 0,
                 String::new(),
+                None,
             )),
             ..Default::default()
         }
@@ -844,6 +845,7 @@ fn select_run_keeps_a_queued_listing_and_the_run_lists() {
         kind: antinomie_monitor_core::AnalysisKind::Strings,
         start: 0,
         query: String::new(),
+        sort: None,
         record_context: Vec::new(),
     });
     app.select_run(None);
