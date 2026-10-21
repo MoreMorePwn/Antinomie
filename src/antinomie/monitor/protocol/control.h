@@ -62,6 +62,7 @@
  * TRACER_CAPS lists them; an older guest rejects unknown flags with -EINVAL. */
 #define ANTC_EXEC_HASH_ROOT 8
 #define ANTC_EXEC_HASH_WRITES 16
+#define ANTC_EXEC_SHELL_JOB 32
 #define ANTC_CORE_STATUS 0x1060
 #define ANTC_CORE_READ 0x1061
 #define ANTC_CORE_RELEASE 0x1062
@@ -366,10 +367,14 @@
  * Stop escalation end it.
  * EXEC_HASH_ROOT hashes the program's own image at its exec; EXEC_HASH_WRITES
  * hashes the regular files the run writes, when the last writer closes them
- * (see lifecycle.file_hash). Neither adds request or reply bytes.
+ * (see lifecycle.file_hash). EXEC_SHELL_JOB starts the program as a job of a
+ * terminal shell that has closed: its parent is init (PID 1), not kthreadd,
+ * and it leads its own process group, the terminal's foreground group, in a
+ * session whose leader no longer exists (the session id is a PID no process
+ * has). None of them adds request or reply bytes.
  * TRACER_CAPS: header only (8 bytes). Reply 32 bytes: u32 abi=1 at 0, u32
  * exec_flags at 4 (the optional EXEC flags this guest accepts: HASH_ROOT,
- * HASH_WRITES), u32 hash file limit at 8 (ANTC_HASH_FILE_MAX), u32 hash queue
+ * HASH_WRITES, SHELL_JOB), u32 hash file limit at 8 (ANTC_HASH_FILE_MAX), u32 hash queue
  * jobs at 12 (ANTC_HASH_QUEUE), u64 hash queued byte limit at 16
  * (ANTC_HASH_PENDING_MAX), zero at 24.
  * Arm failure has id/size=0 and negative errno; execution still succeeds.

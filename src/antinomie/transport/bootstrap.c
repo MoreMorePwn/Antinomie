@@ -8,7 +8,7 @@
 static bool reserved;
 static u64 bootstrap_gpa = ANT_BOOT_GPA;
 
-static int __init set_bootstrap_gpa(char *value)
+static int __init ant_boot_gpa_param(char *value)
 {
 	u64 gpa;
 	if (!value || kstrtoull(value, 0, &gpa) || (gpa & (ANT_BOOT_SIZE - 1)) ||
@@ -17,7 +17,7 @@ static int __init set_bootstrap_gpa(char *value)
 	bootstrap_gpa = gpa;
 	return 0;
 }
-early_param("antinomie_boot_gpa", set_bootstrap_gpa);
+early_param("antinomie_boot_gpa", ant_boot_gpa_param);
 
 void __init ant_bootstrap_reserve(void)
 {
