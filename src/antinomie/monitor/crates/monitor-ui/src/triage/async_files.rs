@@ -31,6 +31,8 @@ use antinomie_monitor_core::{kernel_notes, FieldSummary};
 /// `io_uring_enter` and `io_submit` on x86-64: the calls that carry requests.
 const IO_URING_ENTER: u64 = 426;
 const IO_SUBMIT: u64 = 209;
+/// `io_uring_setup`: the call that makes a ring.
+const IO_URING_SETUP: u64 = 425;
 /// Most requests turned into calls per scan: the scan must stay bounded.
 pub(super) const REQUEST_LIMIT: usize = 100_000;
 /// Observations read per archive page.
@@ -207,6 +209,8 @@ struct Equivalent {
     /// An open that installs the file in the ring's registered table: its
     /// result is a slot of that table (or 0), never a descriptor of the process.
     direct: bool,
+    /// The extended attribute value the request set (argument 2).
+    value: bool,
 }
 
 impl Equivalent {
@@ -219,6 +223,7 @@ impl Equivalent {
             writes: false,
             reads: false,
             direct: false,
+            value: false,
         }
     }
     fn path(mut self, index: usize, operand: &'static str) -> Self {
@@ -234,7 +239,15 @@ const PREAD64: u64 = 17;
 const PWRITE64: u64 = 18;
 const READV: u64 = 19;
 const WRITEV: u64 = 20;
+const FSYNC: u64 = 74;
+const FDATASYNC: u64 = 75;
 const FTRUNCATE: u64 = 77;
+const SETXATTR: u64 = 188;
+const FSETXATTR: u64 = 190;
+const GETXATTR: u64 = 191;
+const FGETXATTR: u64 = 193;
+const SPLICE: u64 = 275;
+const SYNC_FILE_RANGE: u64 = 277;
 const FALLOCATE: u64 = 285;
 const OPENAT: u64 = 257;
 const MKDIRAT: u64 = 258;
@@ -246,6 +259,11 @@ const PWRITEV: u64 = 296;
 const RENAMEAT2: u64 = 316;
 const STATX: u64 = 332;
 const OPENAT2: u64 = 437;
+
+/// `IORING_FSYNC_DATASYNC`: the request is an `fdatasync`.
+const FSYNC_DATASYNC: u64 = 1;
+/// `SPLICE_F_FD_IN_FIXED`: the input of a splice is a registered descriptor.
+const SPLICE_FD_IN_FIXED: u64 = 1 << 31;
 
 /// Positioned or sequential data transfer of a descriptor.
 fn transfer(sqe: &[u8], write: bool, vector: bool, offset: u64) -> Equivalent {
@@ -318,8 +336,47 @@ fn uring(request: &Request) -> Option<Equivalent> {
             .path(1, "oldpath")
             .path(3, "newpath"),
         21 => Equivalent::new(STATX, "statx", [fd, addr, flags, len, off, 0]).path(1, "path"),
+        3 if flags & FSYNC_DATASYNC != 0 => {
+            Equivalent::new(FDATASYNC, "fdatasync", [fd, 0, 0, 0, 0, 0])
+        }
+        3 => Equivalent::new(FSYNC, "fsync", [fd, 0, 0, 0, 0, 0]),
+        8 => Equivalent::new(
+            SYNC_FILE_RANGE,
+            "sync_file_range",
+            [fd, off, len, flags, 0, 0],
+        ),
+        // The offsets of a request are values (-1: the file position), not
+        // pointers to them as for the system call: the call carries none.
+        30 => {
+            let input = if flags & SPLICE_FD_IN_FIXED != 0 {
+                u64::MAX
+            } else {
+                descriptor(le::<4>(sqe, 44))
+            };
+            Equivalent::new(SPLICE, "splice", [input, 0, fd, 0, len, flags])
+        }
+        41 => Equivalent::new(FSETXATTR, "fsetxattr", [fd, addr, off, len, flags, 0])
+            .path(1, "xattr_name"),
+        42 => Equivalent::new(
+            SETXATTR,
+            "setxattr",
+            [le::<8>(sqe, 48), addr, off, len, flags, 0],
+        )
+        .path(0, "path")
+        .path(1, "xattr_name"),
+        43 => Equivalent::new(FGETXATTR, "fgetxattr", [fd, addr, off, len, 0, 0])
+            .path(1, "xattr_name"),
+        44 => Equivalent::new(
+            GETXATTR,
+            "getxattr",
+            [le::<8>(sqe, 48), addr, off, len, 0, 0],
+        )
+        .path(0, "path")
+        .path(1, "xattr_name"),
         _ => return None,
     };
+    // The value an attribute is set to is the data the request wrote.
+    call.value = matches!(request.opcode, 41 | 42);
     if fixed && !call.reads && !call.writes {
         call.args[0] = u64::MAX;
     }
@@ -512,6 +569,17 @@ fn call_for(parent: &InvocationSummary, request: &Request) -> Option<InvocationS
     if equivalent.writes {
         entry.fields.extend(buffer_fields(&request.input));
     }
+    if equivalent.value
+        && let Some(value) = request
+            .operands
+            .iter()
+            .find(|field| field.key == "async.operand.xattr_value")
+    {
+        let name = trace::argument_name(equivalent.nr, 2);
+        entry
+            .fields
+            .push(captured(format!("arg2.{name}"), "", value));
+    }
     if equivalent.reads {
         exit.fields.extend(buffer_fields(&request.output));
     }
@@ -544,6 +612,120 @@ pub(super) fn calls(parent: &InvocationSummary, events: &[EventSummary]) -> Vec<
         .iter()
         .filter_map(|request| call_for(parent, request))
         .collect()
+}
+
+/// File requests that no call of their process submitted: those of an
+/// SQPOLL ring's `iou-sqp` thread, or of a process the ring was passed to.
+/// The guest attributes them to the task that made the ring, with call id 0
+/// (contract 14.3), so they are read once per such task, after its first
+/// ring is made, and stand for calls of that task (its descriptors, its
+/// evidence: the `io_uring_setup`), each at the time of its first record. The
+/// scan holds them until the calls it walks reach that time.
+#[derive(Default)]
+pub(super) struct Attributed {
+    /// Tasks whose attributed requests were read: stream and task cookie.
+    read: std::collections::BTreeSet<(u64, u64)>,
+    /// Calls not yet due, by segment, time and the order they were read.
+    waiting: std::collections::BTreeMap<(usize, u64, u64), InvocationSummary>,
+    order: u64,
+}
+
+impl Attributed {
+    /// After `setup` made a ring: read every request attributed to its task.
+    pub(super) fn read(
+        &mut self,
+        recording: &antinomie_monitor_core::recording::Recording,
+        segment: usize,
+        setup: &InvocationSummary,
+        reach: &mut Reach,
+        cancel: &AtomicBool,
+    ) {
+        let made = trace::representative(setup).is_some_and(|event| {
+            event.syscall_nr == IO_URING_SETUP
+                && setup
+                    .exit
+                    .as_ref()
+                    .and_then(|exit| exit.result)
+                    .is_some_and(|result| result >= 0)
+        });
+        if !made || !self.read.insert((setup.stream_id, setup.task_cookie)) {
+            return;
+        }
+        let mut events = Vec::new();
+        let mut from = 0;
+        loop {
+            if reach.requests >= REQUEST_LIMIT || events.len() >= REQUEST_LIMIT * 8 {
+                reach.unread_calls += 1;
+                break;
+            }
+            match recording.attributed_async_page_cancellable(
+                setup.stream_id,
+                setup.task_cookie,
+                from,
+                PAGE,
+                cancel,
+            ) {
+                Ok(page) => {
+                    events.extend(page.events);
+                    match page.next_event_seq {
+                        Some(next) => from = next,
+                        None => break,
+                    }
+                }
+                Err(_) => {
+                    reach.unread_calls += 1;
+                    break;
+                }
+            }
+        }
+        self.hold(segment, setup, &events, reach);
+    }
+
+    /// Hold the calls the attributed `events` of `setup`'s task stand for.
+    pub(super) fn hold(
+        &mut self,
+        segment: usize,
+        setup: &InvocationSummary,
+        events: &[EventSummary],
+        reach: &mut Reach,
+    ) {
+        for request in requests(events) {
+            if reach.requests >= REQUEST_LIMIT {
+                reach.unread_requests += 1;
+                continue;
+            }
+            if let Some(call) = call_for(setup, &request) {
+                reach.requests += 1;
+                let at = call.entry.as_ref().map_or(0, |entry| entry.timestamp_ns);
+                self.order += 1;
+                self.waiting.insert((segment, at, self.order), call);
+            }
+        }
+    }
+
+    /// The calls due before `call` of `segment`: all of an earlier segment,
+    /// and those of this one recorded no later than the call.
+    pub(super) fn due(
+        &mut self,
+        segment: usize,
+        call: &InvocationSummary,
+    ) -> Vec<InvocationSummary> {
+        let Some(at) = trace::representative(call).map(|event| event.timestamp_ns) else {
+            return Vec::new();
+        };
+        let later = self.waiting.split_off(&(segment, at, u64::MAX));
+        std::mem::replace(&mut self.waiting, later)
+            .into_values()
+            .collect()
+    }
+
+    /// The calls still held when the walk ended, with their segment.
+    pub(super) fn rest(&mut self) -> Vec<(usize, InvocationSummary)> {
+        std::mem::take(&mut self.waiting)
+            .into_iter()
+            .map(|((segment, _, _), call)| (segment, call))
+            .collect()
+    }
 }
 
 /// What reading the observations of a call left out.

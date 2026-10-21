@@ -275,112 +275,118 @@ pub(super) fn scan_archive_query(
     let change_query = query::compile_table(&request.filters[2], FILE_FIELDS);
     let mut tabs = file_tabs::TabSink::new(request, cancel);
     let mut reach = async_files::Reach::default();
-    let (_, files_complete, _) = walk_segments(&recordings, cancel, |segment, page| {
+    let mut attributed = async_files::Attributed::default();
+    // One call, traced (`real`) or standing for an io_uring or AIO request.
+    let mut observe = |segment: usize,
+                       invocation: &InvocationSummary,
+                       real: bool|
+     -> Result<(), String> {
         file_index.begin_segment(segment);
         let recording = &recordings[segment];
+        if real {
+            observe_processes(&mut files.process_images, std::slice::from_ref(invocation));
+        }
+        let Some(event) = trace::representative(invocation) else {
+            return Ok(());
+        };
+        if real && call_args(invocation).is_some_and(|args| bpf_command(event, args).is_some()) {
+            let size = invocation
+                .entry
+                .iter()
+                .chain(invocation.exit.iter())
+                .flat_map(|event| &event.fields)
+                .map(|field| field.preview.len() + field.key.len() + field.ranges.len() * 16)
+                .sum::<usize>();
+            if bpf_calls.len() < STORED_ROWS && bpf_size.saturating_add(size) <= 8 * 1024 * 1024 {
+                bpf_size += size;
+                bpf_calls.push(invocation.clone());
+            } else {
+                bpf_omitted += 1;
+            }
+        }
+        let findable: &[InvocationSummary] = if real {
+            std::slice::from_ref(invocation)
+        } else {
+            &[]
+        };
+        for mut finding in suspicious_rows_state(findable, Some(&files)) {
+            counts.findings += 1;
+            tally(&mut suspicious, &finding.values);
+            finding.values.push((
+                "process.exe",
+                process_image(&files, event)
+                    .map_or(RowValue::Missing, |image| RowValue::Text(image.into())),
+            ));
+            if let Some(writer) = &mut journal {
+                if let Err(error) = writer.push(&finding) {
+                    journal_error = Some(error);
+                    journal = None;
+                }
+            }
+            if finding_query.keep_table(&finding.values) {
+                finding_page.push(finding)?;
+            }
+        }
+        sigma_events::seed_launch_cwd(&mut files, event);
+        remember_cwd(&mut files, invocation, event);
+        remember_open(&mut files, invocation, event);
+        apply_dup(&mut files, invocation, event);
+        forget_closed(&mut files, invocation, event);
+        inherit_open_fds(&mut files, invocation, event, &cookies);
+        // Classified before the call is tracked: "created" means the path
+        // was not seen before this call.
+        let hits = file_category::classify(&files, invocation, event);
+        if let Some(writer) = &mut event_journal {
+            if let Err(error) =
+                normalized::call(writer, &mut pending, &mut files, invocation, event)
+            {
+                event_error = Some(error);
+                event_journal = None;
+            }
+        }
+        if event_journal.is_none() {
+            // The journal tracks seen paths itself; without it, do it here.
+            sigma_events::track(&mut files, invocation, event);
+        }
+        tabs.observe(request, &mut counts, &files, invocation, event, &hits)?;
+        if let Some(row) =
+            file_index.observe_with(&files, invocation, event, Some(&recording.directory), &hits)
+        {
+            // Failed reads are listed with their result.
+            counts.reads += 1;
+            if request.file_visibility.keeps_with(&row, true)
+                && read_query.keep_table(&row[0].values)
+            {
+                read_page.push(row)?;
+            }
+        }
+        if real {
+            file_index.observe_hashes(&files, invocation, event);
+        }
+        Ok(())
+    };
+    let (_, files_complete, _) = walk_segments(&recordings, cancel, |segment, page| {
+        let recording = &recordings[segment];
         for submitted in page.iter().filter(scoped) {
+            // Requests a ring's own thread submitted, once the calls reach
+            // their time.
+            for call in attributed.due(segment, submitted) {
+                observe(segment, &call, false)?;
+            }
+            attributed.read(recording, segment, submitted, &mut reach, cancel);
             // The file requests an io_uring ring or AIO context carried,
             // after the call that submitted them, as the calls they stand for.
             let requests = async_files::expand(recording, submitted, &mut reach, cancel);
-            for (position, invocation) in std::iter::once(submitted)
-                .chain(requests.iter())
-                .enumerate()
-            {
-                let real = position == 0;
-                if real {
-                    observe_processes(&mut files.process_images, std::slice::from_ref(invocation));
-                }
-                let Some(event) = trace::representative(invocation) else {
-                    continue;
-                };
-                if real
-                    && call_args(invocation).is_some_and(|args| bpf_command(event, args).is_some())
-                {
-                    let size = invocation
-                        .entry
-                        .iter()
-                        .chain(invocation.exit.iter())
-                        .flat_map(|event| &event.fields)
-                        .map(|field| {
-                            field.preview.len() + field.key.len() + field.ranges.len() * 16
-                        })
-                        .sum::<usize>();
-                    if bpf_calls.len() < STORED_ROWS
-                        && bpf_size.saturating_add(size) <= 8 * 1024 * 1024
-                    {
-                        bpf_size += size;
-                        bpf_calls.push(invocation.clone());
-                    } else {
-                        bpf_omitted += 1;
-                    }
-                }
-                let findable: &[InvocationSummary] = if real {
-                    std::slice::from_ref(invocation)
-                } else {
-                    &[]
-                };
-                for mut finding in suspicious_rows_state(findable, Some(&files)) {
-                    counts.findings += 1;
-                    tally(&mut suspicious, &finding.values);
-                    finding.values.push((
-                        "process.exe",
-                        process_image(&files, event)
-                            .map_or(RowValue::Missing, |image| RowValue::Text(image.into())),
-                    ));
-                    if let Some(writer) = &mut journal {
-                        if let Err(error) = writer.push(&finding) {
-                            journal_error = Some(error);
-                            journal = None;
-                        }
-                    }
-                    if finding_query.keep_table(&finding.values) {
-                        finding_page.push(finding)?;
-                    }
-                }
-                sigma_events::seed_launch_cwd(&mut files, event);
-                remember_cwd(&mut files, invocation, event);
-                remember_open(&mut files, invocation, event);
-                apply_dup(&mut files, invocation, event);
-                forget_closed(&mut files, invocation, event);
-                inherit_open_fds(&mut files, invocation, event, &cookies);
-                // Classified before the call is tracked: "created" means the path
-                // was not seen before this call.
-                let hits = file_category::classify(&files, invocation, event);
-                if let Some(writer) = &mut event_journal {
-                    if let Err(error) =
-                        normalized::call(writer, &mut pending, &mut files, invocation, event)
-                    {
-                        event_error = Some(error);
-                        event_journal = None;
-                    }
-                }
-                if event_journal.is_none() {
-                    // The journal tracks seen paths itself; without it, do it here.
-                    sigma_events::track(&mut files, invocation, event);
-                }
-                tabs.observe(request, &mut counts, &files, invocation, event, &hits)?;
-                if let Some(row) = file_index.observe_with(
-                    &files,
-                    invocation,
-                    event,
-                    Some(&recording.directory),
-                    &hits,
-                ) {
-                    // Failed reads are listed with their result.
-                    counts.reads += 1;
-                    if request.file_visibility.keeps_with(&row, true)
-                        && read_query.keep_table(&row[0].values)
-                    {
-                        read_page.push(row)?;
-                    }
-                }
-                if real {
-                    file_index.observe_hashes(&files, invocation, event);
-                }
+            observe(segment, submitted, true)?;
+            for request in &requests {
+                observe(segment, request, false)?;
             }
         }
         Ok(())
     })?;
+    for (segment, call) in attributed.rest() {
+        observe(segment, &call, false)?;
+    }
     let bpf_identity = request.identity.as_ref();
     let bpf = bpf_notes(&TriageInput {
         invocations: &bpf_calls,

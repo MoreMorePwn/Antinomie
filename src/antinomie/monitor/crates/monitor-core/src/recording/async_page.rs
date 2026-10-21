@@ -87,7 +87,39 @@ impl Recording {
             return Err(RecordingError::Limit("async page size must be 1..256"));
         }
         retry_index_busy(cancel, || {
-            self.async_page_once(call, from_event_seq, limit, cancel)
+            self.async_page_once(call, from_event_seq, limit, true, cancel)
+        })
+    }
+
+    /// One page of the async observations the guest attributed to a task
+    /// outside its calls (contract 14.3): requests that the `iou-sqp` thread
+    /// of an SQPOLL ring, or a process the ring was passed to, submitted on a
+    /// ring the task created. They carry the ring creator's task cookie and
+    /// call id 0, so no call owns them and archive pages never show them.
+    /// Cursor, limit and order as [`Self::async_page_cancellable`]; a task
+    /// with none has an empty page.
+    pub fn attributed_async_page_cancellable(
+        &self,
+        stream_id: u64,
+        task_cookie: u64,
+        from_event_seq: u64,
+        limit: usize,
+        cancel: &AtomicBool,
+    ) -> Result<AsyncPage, RecordingError> {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(RecordingError::Limit("archive read cancelled"));
+        }
+        if !(1..=ASYNC_PREVIEW_LIMIT).contains(&limit) {
+            return Err(RecordingError::Limit("async page size must be 1..256"));
+        }
+        retry_index_busy(cancel, || {
+            self.async_page_once(
+                (stream_id, task_cookie, 0),
+                from_event_seq,
+                limit,
+                false,
+                cancel,
+            )
         })
     }
 
@@ -96,6 +128,7 @@ impl Recording {
         call: (u64, u64, u64),
         from_event_seq: u64,
         limit: usize,
+        owned: bool,
         cancel: &AtomicBool,
     ) -> Result<AsyncPage, RecordingError> {
         let path = self.directory.join("telemetry.raw");
@@ -105,7 +138,7 @@ impl Recording {
         let known = connection
             .query_row("SELECT 1 FROM invocations WHERE key=?1", [&key], |_| Ok(()))
             .optional()?;
-        if known.is_none() {
+        if owned && known.is_none() {
             return Err(RecordingError::Limit("call is not in the archive index"));
         }
         let mut reader = CallReader::open(&self.directory, &connection, boundary)?;

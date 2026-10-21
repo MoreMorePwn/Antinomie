@@ -477,3 +477,131 @@ fn a_script_exec_names_its_interpreter_and_the_file_that_was_loaded() {
     assert!(long.contains("too long to record"), "{long}");
     assert!(!detail(None).contains("script"));
 }
+
+#[test]
+fn sync_splice_and_attribute_requests_are_the_calls_they_stand_for() {
+    let mut events = Vec::new();
+    events.extend(request(10, 1, sqe(3, 0, 5, 0, 0, 0, 0), Vec::new(), 0));
+    events.extend(request(20, 2, sqe(3, 0, 5, 0, 0, 0, 1), Vec::new(), 0));
+    events.extend(request(30, 3, sqe(8, 0, 5, 4096, 0, 512, 2), Vec::new(), 0));
+    // SPLICE: the output is the request's descriptor, the input its
+    // splice_fd_in; the offsets are values, not pointers.
+    let mut splice = sqe(30, 0, 6, u64::MAX, u64::MAX, 100, 0);
+    splice[44..48].copy_from_slice(&5i32.to_le_bytes());
+    events.extend(request(40, 4, splice.clone(), Vec::new(), 100));
+    splice[28..32].copy_from_slice(&(1u32 << 31).to_le_bytes());
+    events.extend(request(50, 5, splice, Vec::new(), 100));
+    events.extend(request(
+        60,
+        6,
+        sqe(41, 0, 5, 0x6000, 0x5000, 3, 0),
+        vec![
+            path("async.operand.xattr_name", "user.tag"),
+            captured("async.operand.xattr_value", "", b"red"),
+        ],
+        0,
+    ));
+    let mut set = sqe(42, 0, 0, 0x6000, 0x5000, 3, 1);
+    set[48..56].copy_from_slice(&0x7000u64.to_le_bytes());
+    events.extend(request(
+        70,
+        7,
+        set,
+        vec![
+            path("async.operand.xattr_name", "user.tag"),
+            captured("async.operand.xattr_value", "", b"red"),
+            path("async.operand.path", "/tmp/x"),
+        ],
+        0,
+    ));
+    events.extend(request(
+        80,
+        8,
+        sqe(44, 0, 0, 0x6000, 0x5000, 16, 0),
+        vec![
+            path("async.operand.xattr_name", "user.tag"),
+            path("async.operand.path", "/tmp/x"),
+        ],
+        3,
+    ));
+    let calls = async_files::calls(&parent(), &events);
+    let names: Vec<_> = calls
+        .iter()
+        .map(|call| call.entry.as_ref().unwrap().syscall_name.as_str())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "fsync",
+            "fdatasync",
+            "sync_file_range",
+            "splice",
+            "splice",
+            "fsetxattr",
+            "setxattr",
+            "getxattr"
+        ]
+    );
+    assert_eq!(&args(&calls[2])[..4], &[5, 4096, 512, 2]);
+    assert_eq!(args(&calls[3]), [5, 0, 6, 0, 100, 0]);
+    assert_eq!(
+        args(&calls[4])[0],
+        u64::MAX,
+        "a registered input names no descriptor of the process"
+    );
+    assert_eq!(&args(&calls[6])[..2], &[0x7000, 0x5000]);
+    assert_eq!(path_list(&calls[6]), ["/tmp/x"]);
+    let field = |call: &InvocationSummary, suffix: &str| {
+        call.entry
+            .as_ref()
+            .unwrap()
+            .fields
+            .iter()
+            .find(|field| field.key.starts_with(suffix))
+            .map(|field| field.preview.clone())
+    };
+    assert_eq!(field(&calls[5], "arg1."), Some(b"user.tag\0".to_vec()));
+    assert_eq!(field(&calls[5], "arg2."), Some(b"red".to_vec()));
+    assert_eq!(field(&calls[7], "arg2."), None, "a get carries no value in");
+    // Triage files them as it files the system calls.
+    let files = FdState::default();
+    let category = |call: &InvocationSummary| {
+        file_category::classify(&files, call, call.entry.as_ref().unwrap())
+            .into_iter()
+            .map(|hit| hit.category)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(category(&calls[3]), [file_category::Category::Copied]);
+    assert_eq!(category(&calls[5]), [file_category::Category::Xattrs]);
+    assert_eq!(category(&calls[6]), [file_category::Category::Xattrs]);
+}
+
+#[test]
+fn requests_a_ring_thread_submitted_wait_for_their_time_among_the_calls() {
+    // An SQPOLL ring's thread submitted these for the ring's creator: they
+    // carry no call of their own and are held for the calls of that time.
+    let mut setup = call(1, 425, "io_uring_setup", 3);
+    setup.call_id = 2;
+    let mut events = request(100, 1, sqe(23, 0, 3, 0, 0x2000, 4, 0), Vec::new(), 4);
+    events.extend(request(300, 2, sqe(3, 0, 3, 0, 0, 0, 0), Vec::new(), 0));
+    let mut held = async_files::Attributed::default();
+    let mut reach = async_files::Reach::default();
+    held.hold(0, &setup, &events, &mut reach);
+    assert_eq!(reach.requests, 2);
+    let at = |time: u64| {
+        let mut call = call(1, 0, "read", 0);
+        call.entry.as_mut().unwrap().timestamp_ns = time;
+        call
+    };
+    assert!(held.due(0, &at(999)).is_empty(), "the write was at 1000 ns");
+    let due = held.due(0, &at(1000));
+    assert_eq!(due.len(), 1);
+    assert_eq!(due[0].entry.as_ref().unwrap().syscall_name, "pwrite64");
+    // The creator's identity: its descriptors, its setup call as evidence.
+    assert_eq!((due[0].task_cookie, due[0].call_id), (1, 2));
+    // A later segment takes every call of an earlier one.
+    let due = held.due(1, &at(0));
+    assert_eq!(due.len(), 1);
+    assert_eq!(due[0].entry.as_ref().unwrap().syscall_name, "fsync");
+    assert!(held.rest().is_empty());
+}
