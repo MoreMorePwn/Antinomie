@@ -92,6 +92,7 @@ pub(super) fn launch(
                 ],
                 env,
                 env_remove: Vec::new(),
+                home: None,
             })
         }
         GdbFlavour::Pwndbg => {
@@ -107,10 +108,17 @@ pub(super) fn launch(
                 env,
                 // The portable launcher warns about these.
                 env_remove: vec!["LD_LIBRARY_PATH", "LD_PRELOAD"],
+                // A portable pwndbg reads the user's `~/.gdbinit` even with
+                // `-nx`; one that sources another pwndbg (the usual setup of
+                // a pwndbg user) makes it stop at once ("double-loading").
+                home: Some(analysis_tools::tools_dir(data_dir).join(CONSOLE_HOME)),
             })
         }
     }
 }
+
+/// The home folder the pwndbg console runs with, under the tools folder.
+const CONSOLE_HOME: &str = ".console-home";
 
 /// `gdb` in `PATH`, as a shell would find it.
 pub(super) fn find_gdb() -> Option<PathBuf> {
@@ -135,6 +143,9 @@ pub(crate) struct Console {
     problem: Option<String>,
     /// `gdb` in `PATH`, looked up when the pane starts it.
     gdb: Option<Option<PathBuf>>,
+    /// Everything gdb printed (tests read past what the screen still shows).
+    #[cfg(test)]
+    transcript: Vec<u8>,
 }
 
 impl Console {
@@ -155,6 +166,13 @@ impl Console {
         self.start = false;
     }
 
+    /// The pane's Stop: end gdb and keep it ended until Restart (a pane
+    /// with no gdb and no ending would start one on its next draw).
+    pub fn quit(&mut self) {
+        self.stop();
+        self.ended = Some("stopped".into());
+    }
+
     #[cfg(test)]
     pub fn contents(&self) -> String {
         self.terminal.contents()
@@ -163,6 +181,50 @@ impl Console {
     #[cfg(test)]
     pub fn set_gdb(&mut self, path: Option<PathBuf>) {
         self.gdb = Some(path);
+    }
+
+    /// Type into gdb's terminal, as keys pressed on the pane do.
+    #[cfg(test)]
+    pub fn type_text(&mut self, text: &str) {
+        if let Some(child) = self.child.as_mut() {
+            child.write(text.as_bytes());
+        }
+    }
+
+    /// All gdb printed since the console started, escapes removed.
+    #[cfg(test)]
+    pub fn transcript(&self) -> String {
+        let text = String::from_utf8_lossy(&self.transcript);
+        let mut plain = String::with_capacity(text.len());
+        let mut chars = text.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '\u{1b}' {
+                // CSI: ESC [ parameters final-byte; OSC: ESC ] ... BEL.
+                match chars.peek() {
+                    Some('[') => {
+                        chars.next();
+                        for c in chars.by_ref() {
+                            if ('@'..='~').contains(&c) {
+                                break;
+                            }
+                        }
+                    }
+                    Some(']') => {
+                        for c in chars.by_ref() {
+                            if c == '\u{7}' {
+                                break;
+                            }
+                        }
+                    }
+                    _ => {
+                        chars.next();
+                    }
+                }
+            } else if c != '\r' {
+                plain.push(c);
+            }
+        }
+        plain
     }
 }
 
@@ -254,6 +316,8 @@ pub(super) fn show(
         let (printed, ended) = child.poll();
         if !printed.is_empty() {
             console.terminal.process(&printed);
+            #[cfg(test)]
+            console.transcript.extend_from_slice(&printed);
         }
         if let Some(status) = ended {
             console.child = None;
@@ -307,8 +371,7 @@ fn header(
                     .on_hover_text("Quit gdb; the process keeps running")
                     .clicked()
                 {
-                    console.stop();
-                    console.ended = Some("stopped".into());
+                    console.quit();
                 }
             }
             if ui
@@ -431,6 +494,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(system.program, Path::new("/usr/bin/pwndbg"));
+        // Neither reads an init file of the user's home.
+        for plan in [&managed, &system] {
+            assert_eq!(
+                plan.home.as_deref(),
+                Some(Path::new("/data/tools/.console-home"))
+            );
+        }
     }
 
     #[test]

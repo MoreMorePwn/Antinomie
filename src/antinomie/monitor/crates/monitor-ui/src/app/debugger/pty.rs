@@ -11,7 +11,10 @@ use rustix::{
 use std::{
     fs::File,
     io::{self, Read, Write},
-    os::{fd::BorrowedFd, unix::process::CommandExt},
+    os::{
+        fd::BorrowedFd,
+        unix::{fs::DirBuilderExt, process::CommandExt},
+    },
     path::PathBuf,
     process::{Child, Command, Stdio},
     sync::mpsc,
@@ -25,6 +28,9 @@ pub(super) struct Launch {
     pub args: Vec<String>,
     pub env: Vec<(&'static str, &'static str)>,
     pub env_remove: Vec<&'static str>,
+    /// A private home folder (created, mode 0700) the program runs with, so
+    /// no init file of the user's own home reaches it.
+    pub home: Option<PathBuf>,
 }
 
 /// How long a closing console gets to quit by itself.
@@ -67,6 +73,13 @@ impl PtyChild {
             }
             for (name, value) in &launch.env {
                 command.env(name, value);
+            }
+            if let Some(home) = &launch.home {
+                std::fs::DirBuilder::new()
+                    .recursive(true)
+                    .mode(0o700)
+                    .create(home)?;
+                command.env("HOME", home).env_remove("XDG_CONFIG_HOME");
             }
             command
                 .stdin(Stdio::from(slave.try_clone()?))
@@ -196,7 +209,29 @@ mod tests {
             args: vec!["-c".into(), script.into()],
             env: vec![("TERM", "xterm-256color")],
             env_remove: Vec::new(),
+            home: None,
         }
+    }
+
+    #[test]
+    fn a_private_home_is_made_and_is_the_programs_home() {
+        let root = std::env::temp_dir().join(format!("ant-pty-home-{}", std::process::id()));
+        let mut launch = shell("echo \"home=$HOME config=${XDG_CONFIG_HOME-unset}\"");
+        launch.home = Some(root.join("home"));
+        let mut child = PtyChild::spawn(&launch, 24, 80, || {}).unwrap();
+        let (text, _) = read_until(&mut child, "config=");
+        assert!(
+            text.contains(&format!("home={}", root.join("home").display())),
+            "{text}"
+        );
+        assert!(text.contains("config=unset"), "{text}");
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(root.join("home"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o700);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     fn read_until(child: &mut PtyChild, wanted: &str) -> (String, Option<String>) {
