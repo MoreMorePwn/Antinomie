@@ -270,6 +270,7 @@ fn generated_captured_members_validate_complete_values_and_missing_ranges() {
         .unwrap()
         .fields
         .push(FieldSummary {
+            arg: None,
             object_id: 1,
             key: "arg2.how".into(),
             layout: "linux-6.12.94/x86_64/open_how".into(),
@@ -316,6 +317,7 @@ fn process_provenance_requires_committed_exec_and_never_guesses_identity() {
             .unwrap()
             .fields
             .push(FieldSummary {
+                arg: None,
                 object_id: 1,
                 key: key.into(),
                 layout: String::new(),
@@ -373,6 +375,7 @@ fn tag_does_not_match_path_text_stored_only_in_info() {
     let path = b"/tmp/example\0";
     let captured = path.len() as u64;
     row.entry.as_mut().unwrap().fields.push(FieldSummary {
+        arg: None,
         object_id: 1,
         key: "path".into(),
         layout: String::new(),
@@ -442,6 +445,7 @@ fn exists_set_mask_and_raw_slot() {
     let path = b"/tmp/example\0";
     let captured = path.len() as u64;
     tagged.entry.as_mut().unwrap().fields.push(FieldSummary {
+        arg: None,
         object_id: 1,
         key: "path".into(),
         layout: String::new(),

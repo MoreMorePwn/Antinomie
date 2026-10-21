@@ -975,6 +975,7 @@ fn history_event(sequence: u64, path: &str) -> EventSummary {
         complete: false,
         issues: Vec::new(),
         fields: vec![FieldSummary {
+            arg: None,
             object_id: 1,
             key: "buffer".into(),
             layout: "bytes".into(),

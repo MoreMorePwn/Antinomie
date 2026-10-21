@@ -238,7 +238,7 @@ impl Inspector {
                 if covered_preview(field).is_empty() {
                     continue;
                 }
-                let rank = field_argument(nr, &field.key).unwrap_or(6);
+                let rank = field_argument(nr, field).unwrap_or(6);
                 if best.is_none_or(|(best, ..)| rank < best) {
                     best = Some((rank, phase, field));
                 }
@@ -347,10 +347,10 @@ impl Inspector {
                         let owned: Vec<_> = fields
                             .iter()
                             .copied()
-                            .filter(|(_, field)| field_argument(nr, &field.key) == Some(index))
+                            .filter(|(_, field)| field_argument(nr, field) == Some(index))
                             .collect();
-                        let note = argument_data(&owned)
-                            .map(|(_, field)| (preview(field), theme::value(ValueKind::Text)))
+                        let note = argument_preview(&owned)
+                            .map(|(_, text)| (text, theme::value(ValueKind::Text)))
                             .or_else(|| shown.raw.clone().map(|raw| (raw, theme::muted())))
                             .or_else(|| {
                                 nothing_returned(invocation, nr, index).then(|| {
@@ -498,7 +498,7 @@ impl Inspector {
         let objects: Vec<_> = fields
             .iter()
             .copied()
-            .filter(|(_, field)| args.is_none() || field_argument(nr, &field.key).is_none())
+            .filter(|(_, field)| args.is_none() || field_argument(nr, field).is_none())
             .collect();
         if !objects.is_empty()
             && section_row(
@@ -1106,11 +1106,12 @@ impl Inspector {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
 
     fn field() -> FieldSummary {
         FieldSummary {
+            arg: None,
             object_id: 1,
             key: "buf".into(),
             layout: String::new(),
@@ -1137,12 +1138,12 @@ mod tests {
 
     #[test]
     fn actual_capture_keys_associate_with_semantic_arguments() {
-        assert_eq!(field_argument(0, "buf"), Some(1));
-        assert_eq!(field_argument(257, "path"), Some(1));
-        assert_eq!(field_argument(19, "arg1.iov[2].data"), Some(1));
-        assert_eq!(field_argument(43, "address.length"), Some(2));
-        assert_eq!(field_argument(45, "address.data"), Some(4));
-        assert_eq!(field_argument(59, "context.exec.argv[0]"), None);
+        assert_eq!(key_argument(0, "buf"), Some(1));
+        assert_eq!(key_argument(257, "path"), Some(1));
+        assert_eq!(key_argument(19, "arg1.iov[2].data"), Some(1));
+        assert_eq!(key_argument(43, "address.length"), Some(2));
+        assert_eq!(key_argument(45, "address.data"), Some(4));
+        assert_eq!(key_argument(59, "context.exec.argv[0]"), None);
     }
 
     #[test]
@@ -1155,7 +1156,7 @@ mod tests {
         assert_eq!(numeric_formats(0x4241, 2)[6].1, "A B");
     }
 
-    fn openat(result: i64) -> InvocationSummary {
+    pub(super) fn openat(result: i64) -> InvocationSummary {
         let event = |phase: u8| antinomie_monitor_core::EventSummary {
             root_task_cookie: 7,
             stream_id: 1,
@@ -1177,6 +1178,7 @@ mod tests {
         };
         let mut entry = event(1);
         entry.fields.push(FieldSummary {
+            arg: None,
             object_id: 4,
             key: "arg1.path".into(),
             layout: String::new(),
@@ -1223,6 +1225,51 @@ mod tests {
         assert!(cells[5].1.contains("ENOENT = -2"));
         let cells = super::cells(&openat(3));
         assert_eq!(cells[5].0[0].0, "3");
+    }
+
+    fn string_field(key: &str, object_id: u32, text: &[u8]) -> FieldSummary {
+        FieldSummary {
+            arg: Some(1),
+            object_id,
+            key: key.into(),
+            layout: String::new(),
+            logical_len: Some(text.len() as u64),
+            captured_len: text.len() as u64,
+            status: Some(0),
+            capture_error: 0,
+            complete: true,
+            preview: text.to_vec(),
+            raw_path: None,
+            ranges: vec![(0, text.len() as u64)],
+        }
+    }
+
+    #[test]
+    fn exec_vectors_and_nested_objects_read_as_data_not_addresses() {
+        let fields = [
+            string_field("arg1.ptr[0]", 1, &[0x10, 0, 0, 0, 0, 0, 0, 0]),
+            string_field("arg1.string[0]", 2, b"sh\0"),
+            string_field("arg1.ptr[1]", 3, &[0x20, 0, 0, 0, 0, 0, 0, 0]),
+            string_field("arg1.string[1]", 4, b"-c\0"),
+        ];
+        let owned: Vec<_> = fields.iter().map(|field| (1, field)).collect();
+        assert_eq!(
+            argument_preview(&owned),
+            Some((None, "[\"sh\", \"-c\"]".to_owned()))
+        );
+        let nested = [
+            string_field("arg1.mmsg.0.header", 1, &[1; 8]),
+            string_field("arg1.mmsg.1.header", 2, &[2; 8]),
+        ];
+        let owned: Vec<_> = nested.iter().map(|field| (1, field)).collect();
+        assert_eq!(
+            argument_preview(&owned),
+            Some((None, "2 captured objects".to_owned()))
+        );
+        // A lone object of the argument is its data whatever its key.
+        let lone = [string_field("arg2.socklen.capacity", 1, &[16, 0, 0, 0])];
+        let owned: Vec<_> = lone.iter().map(|field| (1, field)).collect();
+        assert_eq!(argument_preview(&owned).map(|(id, _)| id), Some(Some(1)));
     }
 
     #[test]

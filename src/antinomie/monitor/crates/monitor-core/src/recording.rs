@@ -1721,6 +1721,7 @@ mod tests {
         fs::write(external.join("secret.raw"), b"secret").unwrap();
         std::os::unix::fs::symlink(&external, directory.join("objects")).unwrap();
         let field = FieldSummary {
+            arg: None,
             object_id: 1,
             key: String::new(),
             layout: String::new(),
@@ -1743,6 +1744,7 @@ mod tests {
     #[test]
     fn refuses_to_present_a_sparse_hole_as_captured() {
         let field = FieldSummary {
+            arg: None,
             object_id: 1,
             key: "arg1".into(),
             layout: String::new(),

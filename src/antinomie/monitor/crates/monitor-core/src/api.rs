@@ -1916,6 +1916,12 @@ pub struct EventSummary {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FieldSummary {
+    /// The register argument (0..=5) the kernel captured this field for, from
+    /// its field descriptor; `None` for a field of no single argument (a
+    /// schema gap, an async operand, a lifecycle record) and in summaries
+    /// saved before 0.7.0.
+    #[serde(default)]
+    pub arg: Option<u8>,
     pub object_id: u32,
     pub key: String,
     pub layout: String,
@@ -2227,6 +2233,7 @@ mod tests {
             event.call_id = call_id;
             event.event_seq = 5;
             event.fields = vec![FieldSummary {
+                arg: None,
                 object_id: 1,
                 key: "lifecycle.task_exit".into(),
                 layout: String::new(),
@@ -2403,6 +2410,7 @@ mod tests {
         let mut async_event = entry.clone();
         async_event.phase = 3;
         async_event.fields.push(FieldSummary {
+            arg: None,
             object_id: 1,
             key: "async.request_id".into(),
             layout: "u64".into(),

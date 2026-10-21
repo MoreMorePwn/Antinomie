@@ -371,7 +371,8 @@ fn meaning(nr: u64, index: usize) -> Meaning {
     if nr == 16 && index == 1 {
         return Meaning::Hex;
     }
-    if name.contains("addr")
+    // An address, not its length (addrlen, addr_len).
+    if (name.contains("addr") && !name.ends_with("len"))
         || matches!(
             name,
             "brk" | "start" | "newsp" | "tls" | "stack" | "address" | "ptr" | "uaddr" | "uaddr2"
@@ -596,9 +597,14 @@ mod tests {
         let args = [(-1i64) as u64, 15, 0, 0, 0, 0];
         assert_eq!(argument(62, 0, &args).text, "-1");
         assert_eq!(argument(62, 1, &args).text, "SIGTERM");
-        // ioctl requests are bit fields.
+        // ioctl requests read by name; the number stays available.
         let args = [1, 0x5401, 0x7ffd_0000, 0, 0, 0];
-        assert_eq!(argument(16, 1, &args).text, "0x5401");
+        assert_eq!(argument(16, 1, &args).text, "TCGETS");
+        assert_eq!(argument(16, 1, &args).raw.as_deref(), Some("0x5401"));
+        // An address length is a count, not an address.
+        let args = [3, 0x7ffd_0000, 16, 0, 0, 0];
+        assert_eq!(argument(49, 2, &args).text, "16");
+        assert_eq!(argument(49, 1, &args).text, "0x7ffd0000");
         // Only descriptor arguments are named; equal byte counts stay numeric.
         for (fd, name) in [(0, "stdin"), (1, "stdout"), (2, "stderr")] {
             let args = [fd, 0x1000, fd, 0, 0, 0];

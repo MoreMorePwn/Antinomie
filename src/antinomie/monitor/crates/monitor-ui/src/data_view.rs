@@ -795,6 +795,7 @@ impl DataWindows {
     ) {
         let len = bytes.len() as u64;
         let field = FieldSummary {
+            arg: None,
             object_id: 0,
             key: title.clone(),
             layout: String::new(),
@@ -856,6 +857,7 @@ mod tests {
 
     fn field(data: &[u8]) -> FieldSummary {
         FieldSummary {
+            arg: None,
             object_id: 7,
             key: "buf".into(),
             layout: String::new(),

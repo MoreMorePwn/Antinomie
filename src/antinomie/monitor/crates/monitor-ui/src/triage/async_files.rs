@@ -359,6 +359,7 @@ fn via_field(system: System) -> FieldSummary {
         System::Aio => b"AIO\0",
     };
     FieldSummary {
+        arg: None,
         object_id: 0,
         key: VIA_KEY.into(),
         layout: String::new(),

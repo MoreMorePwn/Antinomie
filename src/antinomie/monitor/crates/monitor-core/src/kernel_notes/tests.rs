@@ -21,6 +21,7 @@ fn note(key: &str, layout: &str, bytes: Vec<u8>) -> EventSummary {
         complete: true,
         issues: Vec::new(),
         fields: vec![FieldSummary {
+            arg: None,
             object_id: 1,
             key: key.into(),
             layout: layout.into(),

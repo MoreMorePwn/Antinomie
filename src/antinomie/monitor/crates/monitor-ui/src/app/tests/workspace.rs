@@ -155,6 +155,7 @@ fn native_workspace_fixture() {
     entry.syscall_name = "openat".into();
     entry.args = Some([u64::MAX - 99, 0x1000, 0x80002 | (1 << 60), 0, 0, 0]);
     entry.fields.push(antinomie_monitor_core::FieldSummary {
+        arg: None,
         object_id: 1,
         key: "path".into(),
         layout: "char[]".into(),

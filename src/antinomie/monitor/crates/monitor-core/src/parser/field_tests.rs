@@ -51,6 +51,7 @@ fn large_exec_event_is_complete_and_replays_all_stored_objects() {
     assert_eq!(event.fields.len(), 1025);
     for field in &event.fields {
         assert!(field.complete);
+        assert_eq!(field.arg, Some(1));
         assert_eq!(field.preview, field.object_id.to_le_bytes());
         assert_eq!(
             crate::recording::read_captured_range(&directory, field, 0, 4).unwrap(),
@@ -78,5 +79,24 @@ fn a_large_event_still_obeys_the_aggregate_state_budget() {
             .iter()
             .any(|issue| issue.contains("retention eviction"))
     }));
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn field_descriptors_name_their_argument_or_none() {
+    let directory =
+        std::env::temp_dir().join(format!("ant-field-arg-{}", crate::storage::unique_id()));
+    let mut assembler = Assembler::new(directory.clone(), 1024 * 1024).unwrap();
+    for (object, arg) in [(1u32, 3u8), (2, 255)] {
+        let mut begin = [0; 40];
+        begin[..3].copy_from_slice(&[arg, 1, 1]);
+        begin[4] = 1;
+        assembler
+            .ingest(&packet(2, object, 0, &begin, u64::from(object)))
+            .unwrap();
+    }
+    let event = &assembler.recent(1)[0];
+    let args: Vec<_> = event.fields.iter().map(|field| field.arg).collect();
+    assert_eq!(args, [Some(3), None]);
     std::fs::remove_dir_all(directory).unwrap();
 }

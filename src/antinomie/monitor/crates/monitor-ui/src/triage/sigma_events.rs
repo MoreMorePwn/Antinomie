@@ -526,7 +526,7 @@ pub(super) fn address(call: &InvocationSummary, nr: u64, argument: usize) -> Opt
             field.key.contains("addr")
                 && !field.key.contains("len")
                 && !field.key.contains("capacity")
-                && trace::field_argument(nr, &field.key) == Some(argument)
+                && trace::field_argument(nr, field) == Some(argument)
         })?;
     if !field.complete {
         return None;

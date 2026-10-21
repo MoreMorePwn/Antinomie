@@ -122,6 +122,7 @@ fn rules(group: &str) -> Vec<FlagRule> {
                 ("MAP_STACK", 0x20000),
                 ("MAP_HUGETLB", 0x40000),
                 ("MAP_SYNC", 0x80000),
+                ("MAP_DROPPABLE", 0x08),
                 ("MAP_FIXED_NOREPLACE", 0x100000),
             ]);
             values.extend([
@@ -563,6 +564,7 @@ fn rules(group: &str) -> Vec<FlagRule> {
     }
 }
 
+mod selectors;
 mod socket_options;
 use socket_options::{SOCKET_LEVELS, lookup, socket_option_name};
 
@@ -923,13 +925,19 @@ pub fn selector_name(number: u64, index: usize, args: &[u64; 6]) -> Option<Strin
             args[1] as i32,
             args[2] as i32,
         )),
-        _ => None,
+        _ => selectors::named_argument(number, index, args),
     }
 }
 
 /// Return None when the argument is not classified as flags by the pinned schema.
 pub fn argument_flags(number: u64, index: usize, value: u64) -> Option<FlagValue> {
     let group = syscall(number)?.arguments.get(index)?.flags.as_deref()?;
+    // The inventory leaves some flag groups unnamed; these have one meaning.
+    let group = match (number, index, group) {
+        // memfd_secret(flags): only O_CLOEXEC is defined.
+        (447, 0, "unknown") => "cloexec",
+        _ => group,
+    };
     let mut masks = rules(group);
     masks.sort_by_key(|&(_, mask, _)| std::cmp::Reverse(mask.count_ones()));
     let mut known = 0;
