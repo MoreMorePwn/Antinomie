@@ -56,6 +56,16 @@ pub(super) struct State {
     seeded: bool,
     /// Credentials in effect for each task, by task cookie.
     credentials: BTreeMap<u64, kernel_notes::Credentials>,
+    /// The guest's user and group names, when they could be read.
+    pub names: Option<std::sync::Arc<antinomie_monitor_core::guest_names::GuestNames>>,
+    /// The guest was asked to hash the files the run writes.
+    pub hashes_writes: bool,
+    /// File creations held until the guest's hash of the file arrives, by the
+    /// file's identity (see `normalized::call`).
+    pub(super) held: BTreeMap<
+        antinomie_monitor_core::kernel_notes::FileKey,
+        antinomie_monitor_core::analysis::detection::Event,
+    >,
 }
 
 impl State {

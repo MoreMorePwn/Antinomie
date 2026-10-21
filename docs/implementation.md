@@ -235,7 +235,8 @@ The host (`kernel_notes.rs`) decodes both; the call pairing, the archive index
 (`triage/kernel_records.rs`) follows credentials per task and attaches the ones in effect after
 the call to Sysmon-style `User` and `LogonId` and the auditd `uid` family, and
 the hash to `process_creation` and `file_delete`. Nothing is derived from a
-missing record: `User` is the numeric uid (no passwd on the host), `LogonId` is
+missing record: `User` is the numeric uid (names since the tracer gaps work
+below), `LogonId` is
 the audit login uid only when the guest set one, and the Sigma journal is
 format 3 (versions 1 and 2 still load). The MD5 digest is not recorded: no rule
 in the SigmaHQ Linux pack reads a hash.
@@ -334,6 +335,108 @@ optional, so an older guest and an older host both keep working.
   its first saved record, so a file's lifecycle can list such a step early
   (found with `uring-check record` on two vCPUs; it predates this work and is
   not changed here).
+
+### Accepted tracer and reconnect gaps (0.7.0)
+
+Guest series 0045; the contract stays at revision 17 and everything is
+negotiated: an older guest and an older host keep working, each without the
+additions.
+
+* **Negotiation.** `TRACER_CAPS` (0x10a0) is a new optional command: its reply
+  lists the optional EXEC flags the guest accepts (`HASH_ROOT` 8, `HASH_WRITES`
+  16) and the hashing budget. The host probes it after `CORE_CAPS`
+  (`session_transport.rs`, `KernelProbe::Tracer*`), keeps the answer in
+  `Snapshot::guest_tracer` and adds the offered flags to every EXEC
+  (`control::with_tracer_flags`); -EOPNOTSUPP or an older revision offers
+  nothing, so an older guest never sees a flag it would reject with -EINVAL. The
+  flags a run was launched with are saved as `tracer_hashing` in its manifest
+  and carried across a reconnect in the host checkpoint.
+* **Written files (guest).** `__fput()` calls `ant_monitor_close_write()` after
+  it put the file's write access; when the inode's writer count is then zero and
+  the closing task belongs to a run launched with `HASH_WRITES`, a WRITE job is
+  queued exactly like an exec or delete job (references only, `GFP_NOWAIT`, the
+  worker on `system_unbound_wq`). The identity is the task's last traced call
+  (`ant_monitor_identity_last()`); a task that has already left its run at exit
+  finds the run by its root cookie (`ant_run_hashes()`). A refusal decided at the
+  close is published by the worker too (`hash_reports`, bounded at 64). The
+  record (`antinomie.hash/2`) adds the file's device, inode, generation, mode and
+  link count, because the closing call need not name the file. Specification:
+  `native-schema-slices.md` section 21.
+* **The launched program (guest).** `ant_monitor_launch()` marks the context
+  (`launch_exec`) and `ant_monitor_exec()` sends the commit of that exec, which has
+  no traced call, to `ant_hash_launch_exec()`: hashed only for `HASH_ROOT`, under
+  the launch's identity (call id 0, syscall `U64_MAX`).
+* **Host records.** `kernel_notes::file_hash` reads `/2` (`HashKind::Write`,
+  `FileHash::file`); `recording::launch_record_cancellable` reads the launch
+  event and its notes by the root's key with call id 0, which no call owns
+  (`CallReader::lifecycle`).
+* **Triage.** The scan reads the launch record once and writes the launched
+  program's own `process_creation` first (`normalized::launch`): image and
+  command line from the launch, the user from the root's first credentials, the
+  launch directory, and `Hashes` from the launch's exec hash; the root is named
+  after it in the process tree, so its children's `ParentImage` is known. An
+  exec whose path was not captured takes the image the guest recorded for it
+  (`exec_image`), or none, never the parent's (`process_tree::observe_processes`).
+  For a run with `tracer_hashing`, the `file_event` of a regular file the run
+  created waits, keyed by the file's identity, for the WRITE hash of its last
+  close and then carries it as `Hashes` (or `HashSkipped`); one still waiting at
+  the end says no last close was recorded (`normalized::hold_creations`,
+  `flush_creations`). Sysmon has no file-modify event on Linux and Sigma's
+  `file_event` is the creation, so a modified existing file has no event to
+  carry a hash; its hash is in Files. `files::FileIndex::observe_hashes` puts the
+  latest WRITE or DELETE hash of a file into its lifecycle and Details and the
+  `file.sha256` filter value.
+* **User names.** `guest_names::for_run` reads `/etc/passwd` and `/etc/group`
+  from the installed base the run's disk came from (`disk_base_identity`), with
+  the sandboxed disk reader, which now opens a standalone qcow2 image itself
+  (`disks/reader/qcow2.rs`: v2/v3, no backing file, no encryption or external
+  data, zlib clusters; every table offset checked) instead of needing a
+  flattened copy, and adds the account the app provisioned (uid and gid 1000).
+  Chosen over a recording's reads of `/etc/passwd`, which exist only when the
+  program looked a name up and show what the program read; the base is
+  immutable, verified at install and read without touching the running VM.
+  Limit: users created in the guest after the base was built (by a run or by
+  hand) have no name and stay numeric. `User` is the name or the number; auditd
+  keeps every id numeric and adds the interpreted `UID`, `EUID`, `SUID`,
+  `FSUID`, `GID`… and `AUID` (`unset`, `unknown(N)`) that the enriched format
+  appends; the Sigma adapter keeps reading the raw ids (its columns are
+  case-insensitive, so the interpreted names are not loaded as columns).
+* **A reconnected run, whole.** `recording::run_segments` follows a run's
+  segments back from its newest through each boot's `resume-boundary.json`
+  (`source_boot_id`, no snapshot), so a snapshot restore, which starts another
+  run, is never joined. The scan (`triage/segments.rs`) walks every segment in
+  order with one file index, process tree and detection journal (written to the
+  newest segment, as before), checks each segment's identity with its own boot,
+  takes the start, launch directory and hashing from the first segment and
+  completeness from the newest unless an earlier one lost records, and gives the
+  packet index every segment's own captures. A file whose operations span a
+  boundary gets "reconnected" in its lifecycle and a "transport reconnected ·
+  recording segment N" row in its operation timeline; the coverage line says how
+  many segments were read.
+* **Debugger console.** Checked live (`app/tests/debugger_live.rs`, ignored): the
+  app with its backend, a BusyBox VM, the phase-2 fixture, and the console pane
+  driven as a person types into it (`Console::type_text`), for GEF, the managed
+  portable pwndbg and the host's system pwndbg: attach to a running program and
+  Debug on start, registers, memory and the front end's context, a software
+  breakpoint reached, two instruction steps, detach, and the pane's Stop, after
+  which the program runs on (a debugged-from-start one to its end). Found and
+  fixed: a portable pwndbg reads the user's `~/.gdbinit` even with `-nx`, and one
+  that sources another pwndbg made the console stop at once ("Detected
+  double-loading of Pwndbg"); pwndbg now runs with a private `HOME`
+  (`<data>/tools/.console-home`, `XDG_CONFIG_HOME` removed). The pane's Stop is
+  `Console::quit()`: a stopped console must say so, or its next draw starts gdb
+  again.
+* **Verification.** `examples/tracer-check.rs` with `tests/monitor/tracer-fixture.c`
+  (`record`: every written-file case, a reconnect with network capture, users
+  1000 and 65534; `legacy`: an older base), then the ignored test
+  `recorded_tracer_triage` (`triage/tracer_qa.rs`); `debugger_console_live`;
+  unit tests of the qcow2 reader, the names, the segments, the launch record,
+  the probe and the Triage events. Evidence and numbers are in the task report.
+* **Limits.** A file written through an io_uring worker or closed by a process
+  outside the run is not hashed; the launched program of a desktop run is the
+  shell wrapper. A file opened for writing and not written is hashed at its last
+  close all the same. A run's earlier segments must be in the same recording
+  folder as its newest.
 
 ### Accepted ANT-T0097 host UI performance (0.6.2)
 

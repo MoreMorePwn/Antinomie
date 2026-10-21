@@ -7,8 +7,10 @@ use super::file_category::{self, Access, Category, Hit};
 use super::file_content::{capture as captured_data, CapturedPayload};
 use super::file_location::{self, Location};
 use super::*;
-use antinomie_monitor_core::kernel_notes::{FileId, FileIdKind, FileKey};
+use antinomie_monitor_core::kernel_notes::{FileHash, FileId, FileIdKind, FileKey, HashKind};
 use std::collections::{BTreeMap, BTreeSet};
+
+mod view;
 
 const READ_NAMES: &[&str] = &["read", "pread64", "readv", "preadv", "preadv2"];
 const TRACKED_FILES: usize = 8192;
@@ -64,6 +66,12 @@ pub(super) struct Change {
     names: Vec<String>,
     /// Hard links the inode had after the last call that reported them.
     links: Option<u32>,
+    /// The guest's latest hash of the file: taken after its last writer closed
+    /// it, or just before it was deleted.
+    hash: Option<FileHash>,
+    /// Recording segment of the file's latest operation; a later one after a
+    /// transport reconnect puts the boundary in its story.
+    segment: usize,
 }
 
 const PATH_GAP: &str =
@@ -159,6 +167,41 @@ impl Change {
             self.gaps.remove(PATH_GAP);
         }
     }
+    /// The guest hashed the file: it says what the file held then, or why it
+    /// has no digest.
+    fn record_hash(&mut self, hash: FileHash) {
+        let moment = match hash.kind {
+            HashKind::Delete => "hashed before delete",
+            _ => "closed after write",
+        };
+        let what = match (hash.sha256_hex(), hash.skipped()) {
+            (Some(hex), None) => format!("SHA-256 {}…", &hex[..12]),
+            (_, Some(why)) => format!("no hash: {why}"),
+            (None, None) => "no hash".to_owned(),
+        };
+        self.step(format!("{moment} · {what}"));
+        self.hash = Some(hash);
+    }
+    /// A transport reconnect lies between this file's last operation and the
+    /// next: the recording continues in another segment.
+    fn cross_segment(&mut self, segment: usize, operation_count: &mut usize) {
+        if segment <= self.segment {
+            return;
+        }
+        self.segment = segment;
+        self.step("reconnected".into());
+        if self.operations.len() < TIMELINE_ROWS && *operation_count < TOTAL_OPERATIONS {
+            self.operations.push(Operation {
+                time: 0,
+                call: 0,
+                key: (0, 0, 0),
+                name: format!("transport reconnected · recording segment {}", segment + 1),
+                process: String::new(),
+                result: String::new(),
+            });
+            *operation_count += 1;
+        }
+    }
     /// A name the file was reached by that no rename or link of the run gave it.
     fn alias(&mut self, name: String) {
         if name != self.path && !self.names.contains(&name) && self.names.len() < 16 {
@@ -186,181 +229,6 @@ impl Change {
     pub fn evidence_key(&self) -> String {
         evidence_key(&self.row(None))
     }
-    pub fn row(&self, clock: Option<antinomie_monitor_core::HostClockAnchor>) -> Vec<Cell> {
-        let mut row = vec![
-            cell(
-                crate::time_format::guest_ns(clock, Some(self.first_ns)),
-                theme::text(),
-                true,
-            ),
-            cell(&self.path, theme::text(), true),
-            cell(
-                process_identity(self.pid, self.tid, self.process_image.as_deref()),
-                theme::text(),
-                true,
-            ),
-            cell(self.lifecycle_text(), theme::text(), false),
-            cell(
-                self.count_label(),
-                if self.gaps.is_empty() {
-                    theme::text()
-                } else {
-                    theme::warn()
-                },
-                false,
-            ),
-            file_category::location_cell(&self.locations),
-            cell(format!("call {}", self.call), theme::text(), true),
-        ];
-        row[0].values = vec![
-            (
-                "process.exe",
-                self.process_image
-                    .as_ref()
-                    .map_or(RowValue::Missing, |image| RowValue::Text(image.clone())),
-            ),
-            ("file.standard_io", RowValue::Bool(self.standard_io)),
-            (
-                "file.path",
-                if self.path_known {
-                    RowValue::Text(self.path.clone())
-                } else {
-                    RowValue::Missing
-                },
-            ),
-            (
-                "file.diff_count",
-                RowValue::Number(self.diff_count() as i128),
-            ),
-            (
-                "file.complete",
-                RowValue::Bool(
-                    self.gaps.is_empty()
-                        && self.original_size.is_some()
-                        && self.final_size.is_some(),
-                ),
-            ),
-            (
-                "file.count",
-                RowValue::Number(self.operations.len() as i128),
-            ),
-            ("event.id", RowValue::Number(i128::from(self.call))),
-            ("stream.id", RowValue::Number(i128::from(self.key.0))),
-            ("process.cookie", RowValue::Number(i128::from(self.key.1))),
-            ("event.time_ns", RowValue::Number(i128::from(self.first_ns))),
-            ("process.pid", RowValue::Number(i128::from(self.pid))),
-            ("process.tid", RowValue::Number(i128::from(self.tid))),
-            (
-                "file.operation",
-                RowValue::List(self.operations.iter().map(|op| op.name.clone()).collect()),
-            ),
-            ("file.lifecycle", RowValue::Text(self.lifecycle_text())),
-            (
-                "file.inode",
-                self.identity.map_or(RowValue::Missing, |key| {
-                    RowValue::Text(format!("{}:{}", key.dev, key.ino))
-                }),
-            ),
-            (
-                "file.names",
-                RowValue::List(
-                    std::iter::once(&self.path)
-                        .chain(self.names.iter())
-                        .cloned()
-                        .collect(),
-                ),
-            ),
-            (
-                "file.category",
-                RowValue::List(
-                    self.categories
-                        .iter()
-                        .map(|name| (*name).to_owned())
-                        .collect(),
-                ),
-            ),
-            (
-                "file.failed_attempts",
-                RowValue::Number(i128::from(self.failed)),
-            ),
-            (
-                "file.result",
-                RowValue::Text(if self.changes { "succeeded" } else { "failed" }.into()),
-            ),
-            (
-                "file.access_by",
-                self.access.map_or(RowValue::Missing, |access| {
-                    RowValue::Text(access.tag().into())
-                }),
-            ),
-            (
-                "file.location",
-                RowValue::List(self.locations.iter().map(|l| l.tag().to_owned()).collect()),
-            ),
-        ];
-        row
-    }
-    pub fn show(&self, ui: &mut egui::Ui, clock: Option<antinomie_monitor_core::HostClockAnchor>) {
-        egui::ScrollArea::vertical().id_salt(("file-change-details", self.key)).max_height(ui.available_height().max(40.0)).show(ui, |ui| {
-        ui.separator();
-        ui.label(
-            RichText::new(format!("Original → final: {}", self.path))
-                .strong()
-                .color(theme::text()),
-        );
-        if self.deleted {
-            crate::activity::warning(ui,
-                "File was deleted or unlinked; open descriptors may still refer to its contents.",
-            );
-        }
-        if self.original_size.is_none() {
-            ui.weak("Original size/contents were not fully captured.");
-        }
-        if self.final_size.is_none() {
-            ui.weak("Final size/contents were not fully captured.");
-        }
-        for gap in &self.gaps {
-            crate::activity::warning(ui, *gap);
-        }
-            let offsets = self.original.keys().chain(self.final_data.keys()).copied().collect::<BTreeSet<_>>();
-            let mut shown = 0;
-            for offset in &offsets {
-                if self.original.get(offset) == self.final_data.get(offset) { continue; }
-                if shown == 512 { ui.weak("Byte preview limited to 512 differences; original syscall evidence retains captured data."); break; }
-                let before = byte_label(self.original.get(offset), self.original_size, *offset);
-                let after = byte_label(self.final_data.get(offset), self.final_size, *offset);
-                ui.monospace(format!("{offset:08x}  {before} → {after}"));
-                shown += 1;
-            }
-            if shown == 0 { ui.weak("No differing byte pairs available in captured ranges."); }
-            ui.weak("?? = unavailable; ∅ = outside a known file extent.");
-            ui.label(RichText::new("Operation timeline").strong().color(theme::heading()));
-            let rows: Vec<_> = self.operations.iter().map(|op| {
-                let mut row = vec![
-                    cell(crate::time_format::guest_ns(clock, Some(op.time)), theme::text(), true),
-                    cell(&op.name, theme::text(), false),
-                    cell(&op.process, theme::text(), true),
-                    cell(&op.result, theme::text(), false),
-                    cell(format!("call {}", op.call), theme::text(), true),
-                ];
-                row[0].values = vec![("event.id", RowValue::Number(i128::from(op.call))), ("stream.id", RowValue::Number(i128::from(op.key.0))), ("process.cookie", RowValue::Number(i128::from(op.key.1)))]; row
-            }).collect();
-            egui::ScrollArea::horizontal().id_salt("file-operation-timeline-columns").auto_shrink([false,true]).show(ui,|ui| {
-                table_rows(ui, "file-operation-timeline", &["Time", "Operation", "Process (PID / TID)", "Result", "Evidence"], &rows);
-            });
-        });
-    }
-}
-
-fn byte_label(byte: Option<&u8>, size: Option<u64>, offset: u64) -> String {
-    byte.map(|b| format!("{b:02x}")).unwrap_or_else(|| {
-        if size.is_some_and(|size| offset >= size) {
-            "∅"
-        } else {
-            "??"
-        }
-        .into()
-    })
 }
 
 #[derive(Default)]
@@ -385,6 +253,8 @@ pub(super) struct FileIndex {
     retained_octets: usize,
     operation_count: usize,
     pub omitted_files: u64,
+    /// Recording segment being read (0 for the first).
+    segment: usize,
 }
 
 impl FileIndex {
@@ -398,6 +268,42 @@ impl FileIndex {
     ) -> Option<Vec<Cell>> {
         let hits = file_category::classify(files, call, event);
         self.observe_with(files, call, event, directory, &hits)
+    }
+
+    /// The calls that follow come from recording segment `segment` (counted
+    /// from 0), after a transport reconnect.
+    pub fn begin_segment(&mut self, segment: usize) {
+        self.segment = segment;
+    }
+
+    /// The hashes the guest took of files of this run: at the last close of a
+    /// written file (carried by the closing task's last call, with the file's
+    /// identity) and just before a delete (carried by the unlink).
+    pub fn observe_hashes(
+        &mut self,
+        files: &FdState,
+        call: &InvocationSummary,
+        event: &EventSummary,
+    ) {
+        for hash in kernel_records::write_hashes(call) {
+            let Some(file) = hash.file else { continue };
+            if let Some(change) = self
+                .by_identity
+                .get(&file.key)
+                .and_then(|group| self.changes.get_mut(group))
+            {
+                change.record_hash(hash);
+            }
+        }
+        let Some(hash) = kernel_records::file_hash(call, HashKind::Delete) else {
+            return;
+        };
+        let group = kernel_records::file_id(call)
+            .and_then(|id| self.by_identity.get(&id.key).cloned())
+            .unwrap_or_else(|| displayed_path(call, event, files));
+        if let Some(change) = self.changes.get_mut(&group) {
+            change.record_hash(hash);
+        }
     }
 
     /// `hits` is the call's classification, made before the call was tracked.
@@ -786,7 +692,9 @@ impl FileIndex {
             .filter(|name| !name.is_empty())
             .map(str::to_owned);
         let aliases = self.aliases.remove(&group);
+        let segment = self.segment;
         let change = self.changes.entry(group).or_insert_with(|| Change {
+            segment,
             path: own_name.clone().unwrap_or_else(|| path.clone()),
             path_known: path_known || own_name.is_some(),
             identity: known_identity,
@@ -801,6 +709,7 @@ impl FileIndex {
             access: Some(file_category::access(files, call, event)),
             ..Change::default()
         });
+        change.cross_segment(segment, &mut self.operation_count);
         if let Some(id) = identity {
             change.note_identity(id, path_known.then_some(path.as_str()));
         }
@@ -1661,5 +1570,107 @@ mod tests {
             .gaps
             .iter()
             .all(|gap| !gap.contains("path unavailable")));
+    }
+
+    /// The guest's hash of inode `inode` at its last close (`antinomie.hash/2`).
+    fn with_write_hash(mut call: InvocationSummary, inode: u64, status: u8) -> InvocationSummary {
+        let mut bytes = vec![0u8; 112];
+        bytes[0] = 3;
+        bytes[1] = status;
+        bytes[2] = u8::from(status == 0);
+        bytes[8..16].copy_from_slice(&5u64.to_le_bytes());
+        bytes[24..32].copy_from_slice(&(16u64 << 20).to_le_bytes());
+        if status == 0 {
+            bytes[32..64].fill(0xcd);
+        }
+        bytes[80..88].copy_from_slice(&1u64.to_le_bytes());
+        bytes[88..96].copy_from_slice(&inode.to_le_bytes());
+        bytes[96..100].copy_from_slice(&1u32.to_le_bytes());
+        let mut note = call.exit.clone().unwrap();
+        note.phase = 3;
+        note.fields = vec![captured("lifecycle.file_hash", "antinomie.hash/2", &bytes)];
+        call.kernel_notes.push(note);
+        call
+    }
+
+    fn index_with_hashes(calls: &[InvocationSummary], segments: &[usize]) -> FileIndex {
+        let mut index = FileIndex::default();
+        let mut files = FdState::default();
+        let cookies = task_cookies(calls);
+        for (position, call) in calls.iter().enumerate() {
+            index.begin_segment(segments.get(position).copied().unwrap_or(0));
+            let event = trace::representative(call).unwrap();
+            remember_cwd(&mut files, call, event);
+            remember_open(&mut files, call, event);
+            apply_dup(&mut files, call, event);
+            forget_closed(&mut files, call, event);
+            inherit_open_fds(&mut files, call, event, &cookies);
+            index.observe(&files, call, event, None);
+            index.observe_hashes(&files, call, event);
+        }
+        index
+    }
+
+    #[test]
+    fn a_written_file_shows_the_hash_of_its_last_close() {
+        let calls = [
+            create(2, "/tmp/out", 40, 1),
+            operation(3, 1, "write", 5, [3, 0, 5, 0, 0, 0], b"hello"),
+            // Carried by the task's last call, which names no file.
+            with_write_hash(operation(4, 231, "exit_group", 0, [0; 6], b""), 40, 0),
+        ];
+        let changes = index_with_hashes(&calls, &[]).finish();
+        let change = changes
+            .iter()
+            .find(|change| change.path == "/tmp/out")
+            .unwrap();
+        let text = change.lifecycle_text();
+        assert!(
+            text.ends_with("closed after write · SHA-256 cdcdcdcdcdcd…"),
+            "{text}"
+        );
+        let row = change.row(None);
+        let value = row[0]
+            .values
+            .iter()
+            .find(|(name, _)| *name == "file.sha256")
+            .map(|(_, value)| value.clone());
+        assert!(matches!(value, Some(RowValue::Text(hex)) if hex == "cd".repeat(32)));
+        // A refused hash says why instead.
+        let refused = [
+            create(2, "/tmp/big", 41, 1),
+            operation(3, 1, "write", 5, [3, 0, 5, 0, 0, 0], b"hello"),
+            with_write_hash(operation(4, 3, "close", 0, [3, 0, 0, 0, 0, 0], b""), 41, 1),
+        ];
+        let changes = index_with_hashes(&refused, &[]).finish();
+        assert!(changes[0].lifecycle_text().contains("no hash: file is"));
+    }
+
+    #[test]
+    fn a_reconnect_between_two_operations_of_a_file_is_marked() {
+        let calls = [
+            create(2, "/tmp/long", 50, 1),
+            operation(3, 1, "write", 5, [3, 0, 5, 0, 0, 0], b"hello"),
+            operation(4, 1, "write", 5, [3, 0, 5, 0, 0, 0], b"again"),
+        ];
+        let changes = index_with_hashes(&calls, &[0, 0, 1]).finish();
+        let change = &changes[0];
+        assert!(
+            change.lifecycle_text().contains("reconnected"),
+            "{}",
+            change.lifecycle_text()
+        );
+        let marker = change
+            .operations
+            .iter()
+            .position(|op| {
+                op.name
+                    .contains("transport reconnected · recording segment 2")
+            })
+            .unwrap();
+        assert_eq!(marker, 2, "between the write before and the write after");
+        // A file whose story is all in one segment has none.
+        let changes = index_with_hashes(&calls, &[1, 1, 1]).finish();
+        assert!(!changes[0].lifecycle_text().contains("reconnected"));
     }
 }

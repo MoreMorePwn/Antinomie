@@ -681,6 +681,10 @@ enum KernelProbe {
     CoreDue(Instant, u8),
     /// CORE_CAPS request in flight.
     Core(u64, u8),
+    /// Send TRACER_CAPS at this instant; the count is the attempts made.
+    TracerDue(Instant, u8),
+    /// TRACER_CAPS request in flight.
+    Tracer(u64, u8),
     Done,
 }
 /// Retry interval while the guest control service is not yet registered.

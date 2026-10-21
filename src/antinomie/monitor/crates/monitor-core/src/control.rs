@@ -6,6 +6,13 @@ pub(crate) const UPLOAD_ABORT: u32 = 0x1004;
 pub(crate) const EXEC: u32 = 0x1010;
 /// EXEC flag: park the new program before its first instruction for a debugger.
 pub(crate) const EXEC_DEBUG: u32 = 4;
+/// EXEC flag (TRACER_CAPS): hash the program's own image at its exec.
+pub(crate) const EXEC_HASH_ROOT: u32 = 8;
+/// EXEC flag (TRACER_CAPS): hash the files the run writes at their last close.
+pub(crate) const EXEC_HASH_WRITES: u32 = 16;
+pub(crate) const TRACER_CAPS: u32 = 0x10a0;
+pub(crate) const TRACER_CAPS_SIZE: usize = 32;
+const TRACER_ABI: u32 = 1;
 pub(crate) const INPUT: u32 = 0x1011;
 pub(crate) const READ: u32 = 0x1012;
 pub(crate) const RESIZE: u32 = 0x1013;
@@ -302,6 +309,35 @@ pub(crate) fn execute_analysis(r: &ExecRequest, supported: bool) -> Result<Vec<u
     }
     Ok(encoded)
 }
+/// Ask for the optional hashing a guest's TRACER_CAPS offers. Nothing is added
+/// for a guest that offers none, so an older guest never sees a flag it would
+/// reject.
+pub(crate) fn with_tracer_flags(mut encoded: Vec<u8>, offered: u32) -> Vec<u8> {
+    let wanted = offered & (EXEC_HASH_ROOT | EXEC_HASH_WRITES);
+    if wanted != 0 && encoded.len() >= 8 {
+        let flags = u32::from_le_bytes(encoded[4..8].try_into().expect("flags")) | wanted;
+        encoded[4..8].copy_from_slice(&flags.to_le_bytes());
+    }
+    encoded
+}
+/// Decode a TRACER_CAPS reply (32 bytes). Flags this host does not know are
+/// kept out, so they are never sent back.
+pub(crate) fn tracer_caps(reply: &[u8]) -> Result<crate::api::GuestTracerCaps, String> {
+    use crate::parser::{u32_at, u64_at};
+    if reply.len() != TRACER_CAPS_SIZE || reply[24..].iter().any(|&byte| byte != 0) {
+        return Err("invalid tracer capabilities reply length or padding".into());
+    }
+    let word = |at| u32_at(reply, at).map_err(|e| e.to_string());
+    if word(0)? != TRACER_ABI {
+        return Err("unknown tracer capabilities ABI".into());
+    }
+    Ok(crate::api::GuestTracerCaps {
+        exec_flags: word(4)? & (EXEC_HASH_ROOT | EXEC_HASH_WRITES),
+        hash_file_max_size: word(8)?,
+        hash_queue_count: word(12)?,
+        hash_pending_max_size: u64_at(reply, 16).map_err(|e| e.to_string())?,
+    })
+}
 pub(crate) fn acquire(path: &str, uid: u32, gid: u32) -> Result<Vec<u8>, String> {
     string(path, true)?;
     let mut encoded = header(0);
@@ -597,6 +633,49 @@ mod tests {
         assert_eq!(acquire("/tmp/a", 1000, 1000).unwrap().len(), 38);
     }
     #[test]
+    fn tracer_flags_are_asked_for_only_when_the_guest_offers_them() {
+        let request = ExecRequest {
+            path: "/bin/true".into(),
+            ..Default::default()
+        };
+        let plain = execute_analysis(&request, true).unwrap();
+        assert_eq!(with_tracer_flags(plain.clone(), 0), plain);
+        assert_eq!(with_tracer_flags(plain.clone(), 0x400), plain);
+        let mut reply = vec![0; TRACER_CAPS_SIZE];
+        reply[0..4].copy_from_slice(&1u32.to_le_bytes());
+        // A flag this host does not know is never sent back.
+        reply[4..8].copy_from_slice(&(EXEC_HASH_ROOT | EXEC_HASH_WRITES | 0x400).to_le_bytes());
+        reply[8..12].copy_from_slice(&(16u32 << 20).to_le_bytes());
+        reply[12..16].copy_from_slice(&16u32.to_le_bytes());
+        reply[16..24].copy_from_slice(&(64u64 << 20).to_le_bytes());
+        let caps = tracer_caps(&reply).unwrap();
+        assert!(caps.hashes_root() && caps.hashes_writes());
+        assert_eq!(caps.exec_flags, EXEC_HASH_ROOT | EXEC_HASH_WRITES);
+        assert_eq!(
+            (
+                caps.hash_file_max_size,
+                caps.hash_queue_count,
+                caps.hash_pending_max_size
+            ),
+            (16 << 20, 16, 64 << 20)
+        );
+        let asked = with_tracer_flags(plain.clone(), caps.exec_flags);
+        assert_eq!(asked.len(), plain.len(), "the flags add no request bytes");
+        assert_eq!(&asked[4..8], &24u32.to_le_bytes());
+        let mut debug = request.clone();
+        debug.debug_on_start = true;
+        let asked = with_tracer_flags(execute_analysis(&debug, true).unwrap(), caps.exec_flags);
+        assert_eq!(&asked[4..8], &(24u32 | EXEC_DEBUG).to_le_bytes());
+        // Malformed replies are refused.
+        assert!(tracer_caps(&reply[..31]).is_err());
+        let mut padded = reply.clone();
+        padded[30] = 1;
+        assert!(tracer_caps(&padded).is_err());
+        let mut abi = reply;
+        abi[0] = 2;
+        assert!(tracer_caps(&abi).is_err());
+    }
+    #[test]
     fn constants_match_the_shared_control_header() {
         let header = include_str!("../../../protocol/control.h");
         let define = |name: &str| -> u32 {
@@ -630,6 +709,12 @@ mod tests {
             ("ANTC_SHUTDOWN", SHUTDOWN),
             ("ANTC_RESOURCES", RESOURCES),
             ("ANTC_RESOURCES_SIZE", RESOURCES_SIZE as u32),
+            ("ANTC_TRACER_CAPS", TRACER_CAPS),
+            ("ANTC_TRACER_CAPS_SIZE", TRACER_CAPS_SIZE as u32),
+            ("ANTC_TRACER_ABI", TRACER_ABI),
+            ("ANTC_EXEC_HASH_ROOT", EXEC_HASH_ROOT),
+            ("ANTC_EXEC_HASH_WRITES", EXEC_HASH_WRITES),
+            ("ANTC_EXEC_DEBUG", EXEC_DEBUG),
             ("ANTC_REVISION", REVISION),
             ("ANTC_PROCESS_LIST", PROCESS_LIST),
             ("ANTC_CAPTURE_ATTACH", CAPTURE_ATTACH),

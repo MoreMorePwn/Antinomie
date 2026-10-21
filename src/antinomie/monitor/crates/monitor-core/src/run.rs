@@ -26,6 +26,9 @@ pub(crate) struct ProgramRun {
     pub sequence: u64,
     pub boot_bundle_identity: Option<String>,
     pub disk_base_identity: Option<String>,
+    /// The optional EXEC hash flags the run was launched with (TRACER_CAPS):
+    /// the program's own image, the files it writes.
+    pub tracer_hashing: u32,
     pub execution_generation: u64,
     /// Terminal READ requests that never received a reply before finalize.
     pub terminal_reads_unanswered: u64,
@@ -65,6 +68,7 @@ impl ProgramRun {
             sequence: 0,
             boot_bundle_identity: None,
             disk_base_identity: None,
+            tracer_hashing: 0,
             execution_generation: 0,
             terminal_reads_unanswered: 0,
             pending_screen: None,
@@ -132,7 +136,7 @@ impl ProgramRun {
         run.and(manifest)
     }
     fn manifest(&self) -> serde_json::Value {
-        serde_json::json!({"format":"ANTT run raw LE32","run":self.summary,"packets":self.capture.packets,"bytes":self.stored_len(),"persistence_error":self.summary.recording_error,"boot_bundle_identity":self.boot_bundle_identity,"disk_base_identity":self.disk_base_identity,"started_ms":self.started_ms,"ended_ms":self.ended_ms})
+        serde_json::json!({"format":"ANTT run raw LE32","run":self.summary,"packets":self.capture.packets,"bytes":self.stored_len(),"persistence_error":self.summary.recording_error,"boot_bundle_identity":self.boot_bundle_identity,"disk_base_identity":self.disk_base_identity,"tracer_hashing":self.tracer_hashing,"started_ms":self.started_ms,"ended_ms":self.ended_ms})
     }
     /// The guest's status reply could not be used. A recorded root exit is
     /// final, so it keeps the status the run already has: its identity, its
@@ -380,7 +384,7 @@ impl ProgramRun {
         let (rows, cols) = self.terminal.screen().size();
         storage::atomic_json(
             &self.summary.directory.join("manifest.json"),
-            &serde_json::json!({"format":"ANTT run raw LE32","run":self.summary,"packets":self.capture.packets,"bytes":self.stored_len(),"persistence_error":self.summary.recording_error,"final_state":state,"health":health,"terminal_rows":rows,"terminal_cols":cols,"terminal_complete":self.terminal_complete(),"terminal_issue":self.terminal_issue(),"quota_scope":"VM boot shared raw, fields, transcript, journal and screen","boot_bundle_identity":self.boot_bundle_identity,"disk_base_identity":self.disk_base_identity,"started_ms":self.started_ms,"ended_ms":self.ended_ms}),
+            &serde_json::json!({"format":"ANTT run raw LE32","run":self.summary,"packets":self.capture.packets,"bytes":self.stored_len(),"persistence_error":self.summary.recording_error,"final_state":state,"health":health,"terminal_rows":rows,"terminal_cols":cols,"terminal_complete":self.terminal_complete(),"terminal_issue":self.terminal_issue(),"quota_scope":"VM boot shared raw, fields, transcript, journal and screen","boot_bundle_identity":self.boot_bundle_identity,"disk_base_identity":self.disk_base_identity,"tracer_hashing":self.tracer_hashing,"started_ms":self.started_ms,"ended_ms":self.ended_ms}),
         )?;
         result
     }

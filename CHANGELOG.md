@@ -6,6 +6,37 @@ it runs.
 
 ## 0.7.0 — Unreleased
 
+- **Written files and the launched program are hashed; user names; a
+  reconnected run is read whole; the gdb console checked on a live VM.** Guest
+  series 0045, contract revision 17 unchanged. A base that offers it (new
+  optional command TRACER_CAPS) is asked for two more SHA-256 records: each
+  regular file a run wrote, taken when its last writer closes it (also at exit,
+  after `dup2` or `munmap`, a memfd when its last reference goes), with the file's
+  device, inode and link count in the record (`antinomie.hash/2`), and the image
+  of the launched program itself, which the kernel starts without a traced
+  execve. Same budget and refusals as the other hashes (16 MiB a file, 16 jobs,
+  64 MiB queued), the same CHANGED check, nothing new running in the guest; an
+  older base is asked for nothing and an older app asks for nothing. Triage
+  lists the launched program's own `process_creation` (image, command line,
+  directory, user, and `Hashes` from such a base), so Sigma rules on the sample's
+  own start apply; a file the run created carries the hash of its last close in
+  the Sysmon `Hashes` of its `file_event` (or `HashSkipped` with the reason), and
+  Files › Changed shows it in the file's lifecycle ("closed after write ·
+  SHA-256 …", "hashed before delete · …") with the full digest in Details. An exec
+  whose path was not captured is named by the image the guest says it loaded,
+  never by its parent's. Sysmon `User` is the guest's user name, read on the
+  host from the `/etc/passwd` of the base the VM's disk came from (the disk
+  reader now opens a base's qcow2 file directly) plus the account the app
+  provisioned; an id with no name stays a number. auditd ids stay numbers and get
+  the interpreted `UID`, `AUID`, `GID`… fields of auditd's enriched format.
+  Triage, its file lifecycles, the detection journal and the network evidence
+  now read every recording segment of a run that lived through a transport
+  reconnect, oldest first, with "reconnected" in the story of a file that spans
+  the boundary. The Debugger tab's console was run against a real guest with
+  GEF, the managed portable pwndbg and a system pwndbg: attach, Debug on start, a
+  breakpoint, steps, registers and memory, detach and closing the console. A
+  pwndbg whose user's `~/.gdbinit` loads another pwndbg used to stop at once
+  ("double-loading"); the console now runs pwndbg with a private home.
 - **Debugger tab beside Static, with a gdb console.** Attaching the debugger
   (Run › Attach debugger…) or starting a run with Debug on start opens a
   **Debugger · PID** tab right after Static Analysis and shows it; detaching, or

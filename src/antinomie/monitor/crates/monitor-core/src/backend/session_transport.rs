@@ -411,9 +411,24 @@ impl Session {
                 }
                 Ok(())
             }
-            KernelProbe::Info(_) | KernelProbe::Stats(_) | KernelProbe::Core(..) => {
-                self.drain_replies(snapshot, sender)
+            KernelProbe::TracerDue(when, attempts) => {
+                if Instant::now() >= when {
+                    self.kernel_probe = match self
+                        .transport
+                        .send(control::TRACER_CAPS, &control::header(0))
+                    {
+                        Ok(id) => KernelProbe::Tracer(id, attempts + 1),
+                        Err(_) => {
+                            KernelProbe::TracerDue(Instant::now() + KERNEL_PROBE_RETRY, attempts)
+                        }
+                    };
+                }
+                Ok(())
             }
+            KernelProbe::Info(_)
+            | KernelProbe::Stats(_)
+            | KernelProbe::Core(..)
+            | KernelProbe::Tracer(..) => self.drain_replies(snapshot, sender),
         }
     }
     /// Consume a reply that belongs to the kernel probe; false for any other reply.
@@ -459,6 +474,10 @@ impl Session {
                 self.kernel_probe = self.core_caps_reply(status, payload, attempts, snapshot);
                 true
             }
+            KernelProbe::Tracer(id, attempts) if id == reply_id => {
+                self.kernel_probe = self.tracer_caps_reply(status, payload, attempts, snapshot);
+                true
+            }
             _ => false,
         }
     }
@@ -473,7 +492,56 @@ impl Session {
             KernelProbe::CoreDue(Instant::now(), 0)
         } else {
             self.core_limits_known(crate::core_limits::CoreLimits::LEGACY, snapshot);
+            snapshot.guest_tracer = Some(crate::api::GuestTracerCaps::default());
             KernelProbe::Done
+        }
+    }
+    /// After the core limits: what a revision-17 guest's tracer offers. An
+    /// older guest offers nothing.
+    fn tracer_probe_start(snapshot: &mut Snapshot) -> KernelProbe {
+        let revision = snapshot
+            .guest_kernel
+            .as_ref()
+            .and_then(|kernel| kernel.revision);
+        if revision.is_some_and(|revision| revision >= 17) {
+            KernelProbe::TracerDue(Instant::now(), 0)
+        } else {
+            snapshot.guest_tracer = Some(crate::api::GuestTracerCaps::default());
+            KernelProbe::Done
+        }
+    }
+    /// TRACER_CAPS answers: the offer, nothing for an unsupported opcode, or a
+    /// retry (three tries) for anything else, after which nothing is asked.
+    fn tracer_caps_reply(
+        &mut self,
+        status: i32,
+        payload: &[u8],
+        attempts: u8,
+        snapshot: &mut Snapshot,
+    ) -> KernelProbe {
+        const EOPNOTSUPP: i32 = 95;
+        let caps = if status == 0 {
+            control::tracer_caps(payload)
+        } else if status == -EOPNOTSUPP {
+            Ok(crate::api::GuestTracerCaps::default())
+        } else {
+            Err(format!("guest status {status}"))
+        };
+        match caps {
+            Ok(caps) => {
+                snapshot.guest_tracer = Some(caps);
+                KernelProbe::Done
+            }
+            Err(_) if attempts < 3 => {
+                KernelProbe::TracerDue(Instant::now() + KERNEL_PROBE_RETRY, attempts)
+            }
+            Err(error) => {
+                snapshot.last_error = Some(format!(
+                    "guest tracer capabilities unavailable; written files and the program's own image are not hashed: {error}"
+                ));
+                snapshot.guest_tracer = Some(crate::api::GuestTracerCaps::default());
+                KernelProbe::Done
+            }
         }
     }
     fn core_limits_known(
@@ -504,7 +572,7 @@ impl Session {
         match limits {
             Ok(limits) => {
                 self.core_limits_known(limits, snapshot);
-                KernelProbe::Done
+                Self::tracer_probe_start(snapshot)
             }
             Err(_) if attempts < 3 => {
                 KernelProbe::CoreDue(Instant::now() + KERNEL_PROBE_RETRY, attempts)
@@ -514,7 +582,7 @@ impl Session {
                     "guest process-core limits unavailable; using 64 MiB and 5 s: {error}"
                 ));
                 self.core_limits_known(crate::core_limits::CoreLimits::LEGACY, snapshot);
-                KernelProbe::Done
+                Self::tracer_probe_start(snapshot)
             }
         }
     }

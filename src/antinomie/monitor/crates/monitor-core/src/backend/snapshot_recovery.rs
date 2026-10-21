@@ -24,6 +24,10 @@ struct HostCheckpoint {
     /// window that shows it would drop the new output as already seen.
     #[serde(default)]
     terminal_sequences: BTreeMap<String, u64>,
+    /// The hashing each run asked the guest for, by run id: the guest keeps
+    /// doing it after a reconnect, so the next segment says so too.
+    #[serde(default)]
+    tracer_hashing: BTreeMap<String, u32>,
 }
 #[derive(Serialize, Deserialize)]
 struct CaptureCheckpoint {
@@ -124,6 +128,12 @@ impl Session {
                 .runs
                 .values()
                 .map(|run| (run.summary.id.clone(), run.sequence))
+                .collect(),
+            tracer_hashing: self
+                .runs
+                .values()
+                .filter(|run| run.tracer_hashing != 0)
+                .map(|run| (run.summary.id.clone(), run.tracer_hashing))
                 .collect(),
             core_handles: self
                 .run_artifacts
@@ -243,6 +253,11 @@ impl Session {
             }
             run.boot_bundle_identity = bundle.base_identity.clone();
             run.disk_base_identity = disk_bundle.base_identity.clone();
+            run.tracer_hashing = checkpoint
+                .tracer_hashing
+                .get(&source_run_id)
+                .copied()
+                .unwrap_or(0);
             run.execution_generation = execution_generation;
             run.assembler
                 .set_event_table(vm.transport.event_table as usize);
@@ -791,6 +806,7 @@ impl Worker {
                 self.snapshot.process_page = None;
                 self.snapshot.guest_kernel = None;
                 self.snapshot.guest_core_limits = None;
+                self.snapshot.guest_tracer = None;
                 self.snapshot.network_capture = None;
                 self.snapshot.active_vm = Some(id.into());
                 self.snapshot.state = VmState::Running;

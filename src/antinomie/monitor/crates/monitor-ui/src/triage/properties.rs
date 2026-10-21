@@ -132,6 +132,13 @@ pub(super) struct View {
 }
 
 impl TriageView {
+    /// The app's data folder, where installed bases are (guest user names).
+    pub(crate) fn set_data_dir(&mut self, dir: &std::path::Path) {
+        if self.scan_request.data_dir.as_deref() != Some(dir) {
+            self.scan_request.data_dir = Some(dir.to_owned());
+        }
+    }
+
     pub(crate) fn set_tools_dir(&mut self, dir: &std::path::Path) {
         if self.properties.tools_dir.as_deref() != Some(dir) {
             self.properties.tools_dir = Some(dir.to_owned());

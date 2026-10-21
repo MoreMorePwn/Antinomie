@@ -47,6 +47,20 @@ pub(super) fn kind_of(kind: FileType) -> DiskEntryKind {
     }
 }
 
+/// The filesystem of a raw ext4 image or of a standalone qcow2 image (an
+/// installed base), read through the qcow2 tables without converting it.
+fn load(image: &Path) -> Result<Ext4, ReadError> {
+    let mut file = std::fs::File::open(image).map_err(|error| ReadError::Io(error.to_string()))?;
+    let mut magic = [0u8; 4];
+    let qcow2 =
+        std::io::Read::read_exact(&mut file, &mut magic).is_ok() && super::qcow2::is_qcow2(&magic);
+    if !qcow2 {
+        return Ext4::load_from_path(image).map_err(map_error);
+    }
+    let disk = super::qcow2::Qcow2::open(file).map_err(ReadError::Unsupported)?;
+    Ext4::load(Box::new(disk)).map_err(map_error)
+}
+
 /// An opened image: the filesystem, or why it cannot be read (every request
 /// then answers with that error).
 pub struct Image {
@@ -64,10 +78,9 @@ impl Image {
 
     /// [`Self::open`] with a reference image to diff against.
     pub fn open_with(image: &Path, other: Option<&Path>, out: &Path) -> Self {
-        let fs = Ext4::load_from_path(image).map_err(map_error);
         Self {
-            fs,
-            other: other.map(|other| Ext4::load_from_path(other).map_err(map_error)),
+            fs: load(image),
+            other: other.map(load),
             image: image.to_path_buf(),
             out: out.to_path_buf(),
         }

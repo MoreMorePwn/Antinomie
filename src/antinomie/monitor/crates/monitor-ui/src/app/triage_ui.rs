@@ -66,6 +66,7 @@ impl MonitorApp {
             .set_tools_dir(&antinomie_monitor_core::analysis_tools::tools_dir(
                 &self.options.data_dir,
             ));
+        self.triage.set_data_dir(&self.options.data_dir);
         if self.triage.take_rule_manager() {
             self.open_library(crate::workspace::LibraryPage::Rules);
         }

@@ -76,6 +76,10 @@ impl GuestAccount {
         }
         Ok(())
     }
+    /// The account's name (uid and gid 1000 in the guest).
+    pub(crate) fn username(&self) -> &str {
+        &self.username
+    }
     pub(crate) fn save(&self, directory: &Path) -> Result<(), String> {
         self.validate()?;
         storage::atomic_json(&directory.join("guest-account.json"), self)

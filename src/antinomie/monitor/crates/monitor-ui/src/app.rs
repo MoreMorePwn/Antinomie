@@ -725,6 +725,7 @@ impl eframe::App for MonitorApp {
                     && self.snapshot.boot_id.as_deref() == Some(run.boot_id.as_str()),
             })
             .unwrap_or_else(crate::triage::TriageInput::empty);
+        self.triage.set_data_dir(&self.options.data_dir);
         self.triage.tick(ctx, input);
         self.triage.show_finding_windows(ctx);
         let close = ctx.input(|input| input.viewport().close_requested())
