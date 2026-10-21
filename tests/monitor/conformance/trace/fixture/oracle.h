@@ -92,6 +92,11 @@ void key_any(const char *key);
 // any field) and phase "in"/"out"/"any". The checker requires exactly it.
 void want_status(int arg, const char *phase, const char *status);
 void want_key_status(const char *key, const char *status);
+// A field the recorder could not read at entry and captured later (contract
+// section 22, the page was not resident): `mark` is "at exit" (read again when
+// the call returned) or "kernel copy" (an exec's own copy). A key ending in
+// '*' covers every key it starts with. The checker requires exactly these.
+void want_recapture(const char *key, const char *mark);
 // A call whose capture is allowed to carry non-COMPLETE statuses the checker
 // would otherwise reject; `why` documents the reason.
 void allow_status(const char *status, const char *why);
@@ -154,6 +159,9 @@ unsigned ora_failures(void);
 void ora_flush(void);
 // A forked child's own case numbering.
 void ora_child(unsigned index);
+// The same without making the image resident, for the residency cases
+// (recapture.c), whose children pass literals they never touched.
+void ora_child_cold(unsigned index);
 // Wait for a child forked by the fixture; nonzero exit adds a failure.
 void ora_wait(pid_t child, const char *what);
 

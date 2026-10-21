@@ -30,8 +30,8 @@ struct pending {
     int is_volatile;
     long pid, tid;
     int noreturn, wait_status;
-    size_t data_len, status_len, extra_len, async_len;
-    char data[96 * 1024], status[4096], extra[4096], async[48 * 1024];
+    size_t data_len, status_len, extra_len, async_len, recapture_len;
+    char data[96 * 1024], status[4096], extra[4096], async[48 * 1024], recapture[2048];
 };
 
 static __thread struct pending pending;
@@ -129,13 +129,18 @@ void ora_make_resident(void)
     fclose(maps);
 }
 
-void ora_child(unsigned index)
+void ora_child_cold(unsigned index)
 {
-    ora_make_resident();
     // A child's case numbers never collide with its parent's.
     sequence = 1000000 * index;
     failures = 0;
     pending.active = 0;
+}
+
+void ora_child(unsigned index)
+{
+    ora_make_resident();
+    ora_child_cold(index);
 }
 
 void ora_wait(pid_t child, const char *what)
@@ -332,6 +337,14 @@ void want_key_status(const char *key, const char *status)
            key, status);
 }
 
+void want_recapture(const char *key, const char *mark)
+{
+    if (!pending.active)
+        return;
+    append(pending.recapture, sizeof pending.recapture, &pending.recapture_len,
+           "%s{\"key\":\"%s\",\"mark\":\"%s\"}", pending.recapture_len ? "," : "", key, mark);
+}
+
 void allow_status(const char *status, const char *reason)
 {
     if (!pending.active)
@@ -440,6 +453,9 @@ long ora_done(void)
     if (pending.noreturn)
         append(pending.extra, sizeof pending.extra, &pending.extra_len,
                ",\"noreturn\":true,\"wait_status\":%d", pending.wait_status);
+    if (pending.recapture_len)
+        append(pending.extra, sizeof pending.extra, &pending.extra_len, ",\"recapture\":[%s]",
+               pending.recapture);
     lined("ANT_EXPECT {\"seq\":%u,\"label\":\"%s\",\"nr\":%ld,\"name\":\"%s\",\"pid\":%ld,"
           "\"tid\":%ld,\"t0\":%llu,\"t1\":%llu,\"argc\":%d,\"args\":[\"%#lx\",\"%#lx\","
           "\"%#lx\",\"%#lx\",\"%#lx\",\"%#lx\"],\"unchecked\":%u,\"ret\":%ld,\"want\":%ld,"
