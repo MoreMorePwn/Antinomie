@@ -19,6 +19,10 @@ u32 ant_ring_size(void);
  * Advisory: a caller that can sleep uses it to pace bulk publication.
  */
 u32 ant_send_room(void);
+/* Whether a send that finds its ring full waits for the host (it set a send
+ * wait and is live) instead of failing at once. Advisory, like ant_send_room.
+ */
+bool ant_send_waits(void);
 
 /* Handlers run in sleepable worker context. No recursive registration changes.
  * reply is transport-owned, valid only during the callback.

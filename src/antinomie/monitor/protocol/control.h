@@ -266,8 +266,8 @@
  * number from the file that held it before), u32 mode at 28 (i_mode). Only
  * calls that succeeded publish one. An io_uring request carries the same
  * record as its operand "async.operand.file_id", with the same layout name; for
- * RENAMEAT, LINKAT and UNLINKAT, which look the name up before they run, nlink is
- * the count the operation leaves if it succeeds.
+ * RENAMEAT, LINKAT and UNLINKAT the operation publishes it when it succeeded,
+ * with the link count it left, as for the system call.
  * lifecycle.exec_image, layout "antinomie.execimg/1" (optional, additive):
  * published once per execve at the commit point. u32 flags at 0 (bit0
  * INTERPRETER: the image is a script's interpreter, bit1 INTERP_TRUNCATED,

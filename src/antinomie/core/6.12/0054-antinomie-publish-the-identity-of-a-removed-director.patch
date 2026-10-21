@@ -1,0 +1,90 @@
+From f7ad96c9d43322418f2f2fe6d7cbb306e1a842d3 Mon Sep 17 00:00:00 2001
+From: MikiMiku <jonathanirvinjo@gmail.com>
+Date: Thu, 22 Oct 2026 01:57:30 +0700
+Subject: [PATCH] antinomie: publish the identity of a removed directory, and
+ of splice and xattr requests' files
+
+rmdir() and unlinkat(AT_REMOVEDIR) published no file identity, unlike unlink
+of anything else, so the host could only follow a removed directory by its
+name. do_rmdir() now holds the directory's inode across vfs_rmdir(), which
+takes it off the dentry, and publishes lifecycle.file_id kind UNLINK for it
+when the call succeeded: the directory flag set and no link left.
+
+An io_uring request that acts on an open regular file carries its identity
+(ISSUE). SPLICE, FSETXATTR and FGETXATTR do too now: one end of a splice is
+a pipe, so the file end is named, the output at issue or the input when the
+request takes it.
+
+The contract revision stays 17: the records are the existing fileid layout
+and kinds, and an older host reads them as before.
+---
+ fs/namei.c          | 9 +++++++++
+ io_uring/io_uring.c | 3 +++
+ io_uring/splice.c   | 5 +++++
+ 3 files changed, 17 insertions(+)
+
+diff --git a/fs/namei.c b/fs/namei.c
+index 3b1fddd12..af9a9a91a 100644
+--- a/fs/namei.c
++++ b/fs/namei.c
+@@ -4371,6 +4371,7 @@ int do_rmdir(int dfd, struct filename *name)
+ 	struct path path;
+ 	struct qstr last;
+ 	int type;
++	struct inode *inode = NULL;
+ 	unsigned int lookup_flags = 0;
+ retry:
+ 	error = filename_parentat(dfd, name, lookup_flags, &path, &last, &type);
+@@ -4405,11 +4406,19 @@ int do_rmdir(int dfd, struct filename *name)
+ 	error = security_path_rmdir(&path, dentry);
+ 	if (error)
+ 		goto exit4;
++	/* The removed directory leaves the dentry: hold it to say which it was. */
++	inode = dentry->d_inode;
++	ihold(inode);
+ 	error = vfs_rmdir(mnt_idmap(path.mnt), path.dentry->d_inode, dentry);
++	if (!error)
++		ant_monitor_file_id(ANT_FILE_ID_UNLINK, inode);
+ exit4:
+ 	dput(dentry);
+ exit3:
+ 	inode_unlock(path.dentry->d_inode);
++	if (inode)
++		iput(inode);
++	inode = NULL;
+ 	mnt_drop_write(path.mnt);
+ exit2:
+ 	path_put(&path);
+diff --git a/io_uring/io_uring.c b/io_uring/io_uring.c
+index 7696e0db9..9c895d83e 100644
+--- a/io_uring/io_uring.c
++++ b/io_uring/io_uring.c
+@@ -1735,6 +1735,9 @@ static bool ant_uring_file_opcode(u8 opcode)
+ 	case IORING_OP_FALLOCATE:
+ 	case IORING_OP_SYNC_FILE_RANGE:
+ 	case IORING_OP_FADVISE:
++	case IORING_OP_SPLICE:
++	case IORING_OP_FSETXATTR:
++	case IORING_OP_FGETXATTR:
+ 		return true;
+ 	default:
+ 		return false;
+diff --git a/io_uring/splice.c b/io_uring/splice.c
+index 3b659cd23..9e12466b3 100644
+--- a/io_uring/splice.c
++++ b/io_uring/splice.c
+@@ -104,6 +104,11 @@ int io_splice(struct io_kiocb *req, unsigned int issue_flags)
+ 		ret = -EBADF;
+ 		goto done;
+ 	}
++	/* One end of a splice is a pipe: the issue hook named the output if it
++	 * is a file, this names the input if it is one.
++	 */
++	if (S_ISREG(file_inode(in)->i_mode))
++		ant_uring_file_id(req, ANT_FILE_ID_ISSUE, file_inode(in), 0);
+ 
+ 	poff_in = (sp->off_in == -1) ? NULL : &sp->off_in;
+ 	poff_out = (sp->off_out == -1) ? NULL : &sp->off_out;
+-- 
+2.53.0
+

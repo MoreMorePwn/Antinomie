@@ -50,6 +50,10 @@ The maximum payload is the ring capacity minus its 32-byte frame header:
 host's last published tail, or `U32_MAX` when a send would fail regardless. It
 is advisory: a producer that can sleep, such as the async record publisher,
 uses it to pace bulk publication and leave room for other events.
+`ant_send_waits()` says whether a send that finds its ring full waits for the
+host (a send wait is set and the host is live) instead of failing at once; the
+async publisher then needs no pacing, and a producer that can sleep waits for
+room in its own queue as a send would.
 
 Commands are independent registered callbacks. They receive argument bytes and
 a bounded result buffer; they do not manipulate queues or physical addresses.
