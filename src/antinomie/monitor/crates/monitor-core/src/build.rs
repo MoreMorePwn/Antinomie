@@ -160,15 +160,14 @@ pub const DEFAULT_MIRROR: &str = "http://deb.debian.org/debian";
 impl BuildOptions {
     /// Defaults for a profile; the Debian locale, keyboard and time zone follow
     /// this host when it has a recognised value, as the Debian installer guesses.
-    pub fn defaults(kind: Kind) -> Self {
+    pub fn defaults(_kind: Kind) -> Self {
         let host = HostLocale::detect();
         Self {
             name: String::new(),
             desktop: host.desktop.unwrap_or_else(default_desktop),
-            hostname: match kind {
-                Kind::BusyBox => "localhost".into(),
-                Kind::DebianXfce => "antinomie".into(),
-            },
+            // The Debian installer's own default: common on real machines,
+            // unlike "localhost" or a sandbox's name.
+            hostname: "debian".into(),
             locale: host.locale.unwrap_or_else(|| "en_US.UTF-8".into()),
             keyboard_layout: host.layout.clone().unwrap_or_else(|| "us".into()),
             keyboard_variant: host.layout.and(host.variant).unwrap_or_default(),
@@ -784,7 +783,7 @@ mod tests {
         busybox.validate(Kind::BusyBox).unwrap();
         assert_eq!(
             busybox.job_options(Kind::BusyBox),
-            serde_json::json!({"name": "", "hostname": "localhost"})
+            serde_json::json!({"name": "", "hostname": "debian"})
         );
         let mut variant = good.clone();
         variant.keyboard_layout = "us".into();

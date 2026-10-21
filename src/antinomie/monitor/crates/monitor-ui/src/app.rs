@@ -293,7 +293,9 @@ struct CredentialForm {
 impl CredentialForm {
     fn reset(&mut self) {
         *self = Self {
-            username: "analyst".into(),
+            // A common name; a sandbox-like one (analyst, malware) shows in
+            // the home directory and the process list of every sample.
+            username: "user".into(),
             ..Self::default()
         };
     }

@@ -737,6 +737,6 @@ mod tests {
         assert_eq!(request.profile, "debian-xfce");
         assert_eq!(request.mode, BuildMode::Qemu);
         assert_eq!(request.options.hostname, "lab");
-        assert_eq!(wizard.options[0].hostname, "localhost");
+        assert_eq!(wizard.options[0].hostname, "debian");
     }
 }

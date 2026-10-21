@@ -462,7 +462,7 @@ fn record(bundle: &str, data: &str, fixture: &str) -> Result<(), String> {
     runs.push(("reconnect", d.run(&slow).ok_or("run missing")?.clone()));
 
     // A user the base names, and one it does not.
-    for (label, uid) in [("analyst", 1000), ("nobody", 65534)] {
+    for (label, uid) in [("user", 1000), ("nobody", 65534)] {
         let user = d.launch(FIXTURE, &["exit0"], uid)?;
         d.finished(&user, 60)?;
         runs.push((label, d.run(&user).ok_or("run missing")?.clone()));
