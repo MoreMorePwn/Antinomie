@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! uring-check record BUNDLE NEW_DATA_DIR TORTURE FIXTURE   # prints RUN label=dir
-//! ANTINOMIE_URING_RUNS='files=DIR;regfiles=DIR;syncfiles=DIR;aio=DIR;script=DIR;async-io=DIR' \
+//! ANTINOMIE_URING_RUNS='files=DIR;regfiles=DIR;syncfiles=DIR;aio=DIR;sqfiles=DIR;morefiles=DIR;script=DIR;async-io=DIR' \
 //!     cargo test --release -p antinomie-monitor-ui recorded_uring_triage -- --ignored
 //! ```
 //!
@@ -257,11 +257,13 @@ fn recorded_uring_triage() {
         }
     }
     // The write through the descriptor opened before the rename reaches the
-    // same file, after the other name was removed.
-    if !first
-        .iter()
-        .any(|row| row.contains("name removed (1 link remains) → written"))
-    {
+    // same file, after the other name was removed. The hash the guest took
+    // for that removal is its step, and on several vCPUs it can find the
+    // file changing under the write.
+    if !first.iter().any(|row| {
+        row.split_once("name removed (1 link remains)")
+            .is_some_and(|(_, after)| after.contains("→ written"))
+    }) {
         miss(format!(
             "the write through the first descriptor: {first:#?}"
         ));
@@ -303,6 +305,69 @@ fn recorded_uring_triage() {
             "aio vector one",
         ],
     );
+
+    // An SQPOLL ring: its kernel thread submitted the requests, which the
+    // guest attributes to the ring's creator with no call of its own.
+    let sqpoll = get("sqfiles");
+    has(
+        sqpoll,
+        FileTab::Written,
+        &["(io_uring)", "/tmp/uring-sq.a", "27 bytes written"],
+    );
+    has(
+        sqpoll,
+        FileTab::Deleted,
+        &["unlinkat (io_uring)", "/tmp/uring-sq.b"],
+    );
+
+    // Sync, attribute, splice and directory requests, and a plain rmdir.
+    let more = get("morefiles");
+    has(
+        more,
+        FileTab::Attributes,
+        &["fsetxattr (io_uring)", "/tmp/uring-more.a", "user.tag"],
+    );
+    has(
+        more,
+        FileTab::Attributes,
+        &["setxattr (io_uring)", "/tmp/uring-more.a", "user.colour"],
+    );
+    has(
+        more,
+        FileTab::Other,
+        &["splice (io_uring)", "/tmp/uring-more.a"],
+    );
+    has(
+        more,
+        FileTab::Deleted,
+        &["unlinkat (io_uring)", "/tmp/uring-more.d", "directory"],
+    );
+    has(
+        more,
+        FileTab::Deleted,
+        &["rmdir", "/tmp/uring-more.e", "directory"],
+    );
+    // The removed directories are known by identity, not only by name.
+    for name in ["/tmp/uring-more.d", "/tmp/uring-more.e"] {
+        let row = more
+            .changed
+            .iter()
+            .find(|row| row.iter().any(|cell| cell.text == name));
+        let identified = row.is_some_and(|row| {
+            row[0]
+                .values
+                .iter()
+                .any(|(field, value)| *field == "file.inode" && matches!(value, RowValue::Text(_)))
+        });
+        if identified {
+            println!("ROW Changed (morefiles, by inode): {name}");
+        } else {
+            miss(format!(
+                "{name} is not known by its inode: {:#?}",
+                rows(more, FileTab::Changed)
+            ));
+        }
+    }
 
     // A script shows the interpreter its #! line named.
     let script = get("script");

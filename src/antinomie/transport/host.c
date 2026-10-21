@@ -519,6 +519,23 @@ int ant_poll(struct ant_client *c, int timeout_ms)
 	}
 }
 
+/* Copy out and consume the head message of reader index, peeked as msg. */
+static int take_telemetry(struct ant_client *c, unsigned index, const struct ant_message *msg,
+		void *dst, size_t capacity, size_t *payload_len)
+{
+	struct reader *r = &c->readers[index];
+	*payload_len = msg->payload_len;
+	if (capacity < msg->payload_len) {
+		c->next = index;
+		return -ENOBUFS;
+	}
+	ant_copy_out(r->data, r->size, r->tail + sizeof(*msg), dst, msg->payload_len);
+	r->tail += ant_span(msg->payload_len);
+	ANT_REL(&r->q->tail, r->tail);
+	c->next = (index + 1) % c->count;
+	return 0;
+}
+
 int ant_read(struct ant_client *c, void *dst, size_t capacity, size_t *payload_len)
 {
 	unsigned i;
@@ -529,23 +546,52 @@ int ant_read(struct ant_client *c, void *dst, size_t capacity, size_t *payload_l
 	if (error) return error;
 	for (i = 0; i < c->count; i++) {
 		unsigned index = (c->next + i) % c->count;
+		struct ant_message msg;
+		error = peek_telemetry(c, &c->readers[index], &msg);
+		if (error == -EAGAIN) continue;
+		if (error) return error;
+		return take_telemetry(c, index, &msg, dst, capacity, payload_len);
+	}
+	return -EAGAIN;
+}
+
+int ant_read_ordered(struct ant_client *c, void *dst, size_t capacity, size_t *payload_len,
+		size_t key_offset)
+{
+	struct ant_message best_msg;
+	unsigned i, best = UINT32_MAX;
+	__u64 best_key = 0;
+	int error;
+	if (!payload_len || (!dst && capacity) || key_offset > ANT_MAX_MESSAGE_LEN - 8)
+		return -EINVAL;
+	*payload_len = 0;
+	error = tick(c);
+	if (error) return error;
+	/* Each ring is in its producer's order; taking the smallest key among the
+	 * heads merges the rings in key order. Equal keys go round robin. */
+	for (i = 0; i < c->count; i++) {
+		unsigned index = (c->next + i) % c->count;
 		struct reader *r = &c->readers[index];
 		struct ant_message msg;
+		unsigned char raw[8];
+		__u64 key = 0;
+		int k;
 		error = peek_telemetry(c, r, &msg);
 		if (error == -EAGAIN) continue;
 		if (error) return error;
-		*payload_len = msg.payload_len;
-		if (capacity < msg.payload_len) {
-			c->next = index;
-			return -ENOBUFS;
+		if (msg.payload_len >= key_offset + 8) {
+			ant_copy_out(r->data, r->size, r->tail + sizeof(msg) + key_offset, raw, 8);
+			for (k = 7; k >= 0; k--)
+				key = key << 8 | raw[k];
 		}
-		ant_copy_out(r->data, r->size, r->tail + sizeof(msg), dst, msg.payload_len);
-		r->tail += ant_span(msg.payload_len);
-		ANT_REL(&r->q->tail, r->tail);
-		c->next = (index + 1) % c->count;
-		return 0;
+		if (best == UINT32_MAX || key < best_key) {
+			best = index;
+			best_key = key;
+			best_msg = msg;
+		}
 	}
-	return -EAGAIN;
+	if (best == UINT32_MAX) return -EAGAIN;
+	return take_telemetry(c, best, &best_msg, dst, capacity, payload_len);
 }
 
 int ant_command_send(struct ant_client *c, uint32_t opcode,

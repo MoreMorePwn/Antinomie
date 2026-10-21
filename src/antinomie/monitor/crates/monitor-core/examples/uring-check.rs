@@ -20,7 +20,8 @@
 //! from before the io_uring worker accounting: the host must still reach
 //! Finished, with the root's exit code unknown or right, never invented.
 //! `record` runs the file stories Triage reads (io_uring, AIO and plain system
-//! calls on one file, a script exec, the torture async-io module), stops the
+//! calls on one file, an SQPOLL ring, sync, splice, attribute and directory
+//! requests, a script exec, the torture async-io module) on four vCPUs, stops the
 //! VM so the recordings are complete, and prints a `RUN label=directory` line
 //! for each; the ignored test `recorded_uring_triage` of the app's triage
 //! module reads them (see its documentation). The data folder must be new and
@@ -570,12 +571,11 @@ fn history_until(
 }
 
 /// Status runs use two vCPUs, so a worker thread and the leader can leave at
-/// the same time. Recordings use one: with more, a record a worker publishes
-/// for an earlier call (an unlink's hash) can be saved ahead of calls made
-/// before it, and the archive orders calls by their first saved record, which
-/// would test that ordering instead of the file stories.
+/// the same time. Recordings use four: a task moves between vCPUs and a
+/// worker publishes for a call (an unlink's hash) on another vCPU than the
+/// call's, and the stories must still read in the order they happened.
 const STATUS_CPUS: u16 = 2;
-const RECORD_CPUS: u16 = 1;
+const RECORD_CPUS: u16 = 4;
 
 fn prepare(
     bundle: &str,
@@ -688,6 +688,8 @@ fn record(bundle: &str, data: &str, torture: &str, fixture: &str) -> Result<(), 
     record_run(&mut d, &mut runs, "regfiles", FIXTURE, &["regfiles"])?;
     record_run(&mut d, &mut runs, "syncfiles", FIXTURE, &["syncfiles"])?;
     record_run(&mut d, &mut runs, "aio", FIXTURE, &["aio"])?;
+    record_run(&mut d, &mut runs, "sqfiles", FIXTURE, &["sqfiles"])?;
+    record_run(&mut d, &mut runs, "morefiles", FIXTURE, &["morefiles"])?;
     record_run(
         &mut d,
         &mut runs,

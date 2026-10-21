@@ -72,6 +72,12 @@ int ant_resume_heartbeats(struct ant_client *client);
 void ant_close(struct ant_client *client);
 int ant_poll(struct ant_client *client, int timeout_ms);
 int ant_read(struct ant_client *client, void *dst, size_t capacity, size_t *payload_len);
+/* As ant_read, but from the ring whose head message has the smallest
+ * little-endian u64 at payload offset key_offset (a payload too short for it
+ * counts as 0): rings whose messages carry a key that grows along each ring,
+ * such as a timestamp, are read merged in key order. */
+int ant_read_ordered(struct ant_client *client, void *dst, size_t capacity,
+		size_t *payload_len, size_t key_offset);
 int ant_command_send(struct ant_client *client, uint32_t opcode,
 		const void *args, size_t payload_len, uint64_t *request_id);
 int ant_result_read(struct ant_client *client, uint64_t *request_id,
