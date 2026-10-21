@@ -138,7 +138,7 @@ impl MonitorApp {
             );
         }
         if !self.snapshot.vms.is_empty() {
-            ui.weak("More VMs: Machine > New VM.");
+            ui.weak("More VMs: File › New VM…");
             return;
         }
         if self.snapshot.bases.is_empty() {
@@ -257,7 +257,7 @@ impl MonitorApp {
         }
         let create = ui
             .add_enabled(!pending && !self.closing, primary_button("Create VM"))
-            .on_hover_text("Uses the New VM checks; Machine > New VM has every option")
+            .on_hover_text("Uses the New VM checks; File › New VM… has every option")
             .clicked();
         self.getting_started.draft = Some(draft);
         if create {
