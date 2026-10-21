@@ -1,0 +1,640 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Run the VM regression checks in tiers, one VM at a time.
+
+usage: vm-regress.py quick BASE [options]
+       vm-regress.py full  BASE --old-base OLD [--old-host REV|PATH] [options]
+       vm-regress.py auto  BASE [--against REF] [--old-base OLD] [...]
+
+quick  the conformance trace suite's oracle groups (user, root, threads)
+full   quick, the debugger, audit, io_uring, tracer, stealth and snapshot
+       checks, the conformance stress groups and interop in both directions
+       (an old host on BASE, the current host on OLD)
+auto   full when the diff against REF touches the kernel/host contract (guest
+       patches, transport, protocol docs, ANTC_REVISION), otherwise quick
+
+BASE is a BusyBox base bundle built from the current guest series. Everything
+a check writes goes under --out (default vm-regress-out): logs, runs, the
+fixtures built from tests/monitor and private HOME and XDG folders per check.
+The app's own data and settings are never used.
+"""
+import argparse
+import json
+import os
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+MONITOR = ROOT / "src/antinomie/monitor"
+EXAMPLES = Path("target/release/examples")
+TESTS = ROOT / "tests/monitor"
+
+# Changing any of these changes the contract between guest kernel and host.
+CONTRACT_PATHS = (
+    "src/antinomie/core/",
+    "src/antinomie/patches/",
+    "src/antinomie/transport/",
+    "src/antinomie/monitor/protocol/",
+)
+# A changed line that sets the revision (control.h, control.rs).
+REVISION_LINE = r"^[[:space:]]*(#[[:space:]]*define[[:space:]]+ANTC_REVISION[[:space:]]|(pub(\([a-z]+\))?[[:space:]]+)?const[[:space:]]+REVISION:)"
+
+QUICK_GROUPS = "user,root,threads"
+STRESS_GROUPS = "stress-light,stress-heavy,stress-extreme,stress-lossy"
+MIN_MEM_KIB = 5 * 1024 * 1024
+ORDER = ("PASS", "FLAKY", "FAIL", "TIMEOUT", "ERROR", "SKIP")
+
+
+class Failure(Exception):
+    pass
+
+
+# Tiers and the auto decision
+
+
+def contract_reasons(paths, revision_files=()):
+    """Why a change touches the kernel/host contract: one line per cause."""
+    reasons = []
+    for path in sorted(set(paths)):
+        for prefix in CONTRACT_PATHS:
+            if path.startswith(prefix):
+                reasons.append(f"{path} is under {prefix}")
+                break
+    for path in sorted(set(revision_files)):
+        reasons.append(f"{path} changes ANTC_REVISION")
+    return reasons
+
+
+def choose_tier(paths, revision_files=()):
+    reasons = contract_reasons(paths, revision_files)
+    if reasons:
+        return "full", reasons
+    return "quick", [f"none of {len(set(paths))} changed paths is a contract path"]
+
+
+def git(*args, check=True):
+    done = subprocess.run(["git", "-C", str(ROOT), *args], capture_output=True, text=True)
+    if check and done.returncode:
+        raise Failure(f"git {' '.join(args)}: {done.stderr.strip()}")
+    return done.stdout
+
+
+def default_against():
+    """origin/ plus the release branch HEAD is closest to."""
+    best = None
+    for ref in git("for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/release-*").split():
+        ahead = git("rev-list", "--count", f"{ref}..HEAD", check=False).strip()
+        if ahead.isdigit():
+            version = [int(part) for part in re.findall(r"\d+", ref)]
+            key = (int(ahead), [-part for part in version])
+            if best is None or key < best[0]:
+                best = (key, ref)
+    if best is None:
+        raise Failure("no origin/release-* ref: name one with --against")
+    return best[1]
+
+
+def changed_against(ref):
+    """Paths and revision-changing files of commits plus working tree since ref."""
+    base = git("merge-base", ref, "HEAD").strip()
+    paths = git("diff", "--name-only", base).split()
+    paths += git("ls-files", "--others", "--exclude-standard").split()
+    revision = git("diff", "--name-only", f"-G{REVISION_LINE}", base, "--").split()
+    return paths, revision
+
+
+# Environment and processes
+
+
+def mem_available_kib():
+    with open("/proc/meminfo") as meminfo:
+        for line in meminfo:
+            if line.startswith("MemAvailable:"):
+                return int(line.split()[1])
+    return 0
+
+
+def memwait(minimum, limit):
+    """Block until MemAvailable allows a boot; other agents boot VMs too."""
+    start = time.monotonic()
+    while mem_available_kib() < minimum:
+        if time.monotonic() - start > limit:
+            raise Failure(f"memory: MemAvailable stayed under {minimum // 1024 // 1024} GiB for {limit} s")
+        print(f"  memwait: MemAvailable {mem_available_kib() // 1024} MiB, waiting", flush=True)
+        time.sleep(20)
+
+
+def stat_fields(pid):
+    try:
+        text = Path(f"/proc/{pid}/stat").read_text()
+    except OSError:
+        return None
+    # comm is parenthesised and may contain spaces.
+    head, _, tail = text.rpartition(")")
+    return head.partition("(")[2], tail.split()
+
+
+def descendants(pid):
+    """(pid, start time) of every process below pid, found through /proc."""
+    children = {}
+    for entry in Path("/proc").iterdir():
+        if entry.name.isdigit():
+            fields = stat_fields(int(entry.name))
+            if fields:
+                children.setdefault(int(fields[1][1]), []).append((int(entry.name), fields))
+    found, todo = [], [pid]
+    while todo:
+        for child, fields in children.get(todo.pop(), []):
+            if "sccache" not in fields[0]:
+                found.append((child, fields[1][19]))
+                todo.append(child)
+    return found
+
+
+def stop_tree(process, grace=30):
+    """End the child we started and what it started (a VM monitor), nothing else."""
+    below = descendants(process.pid)
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        for pid, started in [(process.pid, None)] + below:
+            fields = stat_fields(pid)
+            if fields and (started is None or fields[1][19] == started):
+                try:
+                    os.kill(pid, sig)
+                except ProcessLookupError:
+                    pass
+        deadline = time.monotonic() + grace
+        while time.monotonic() < deadline and process.poll() is None:
+            time.sleep(0.5)
+        if process.poll() is not None:
+            break
+    process.wait()
+
+
+def run_logged(argv, env, cwd, log, timeout):
+    """Run argv with its output in log; (exit code or None on timeout, seconds)."""
+    start = time.monotonic()
+    with open(log, "ab") as out:
+        out.write(f"$ {' '.join(map(str, argv))}\n".encode())
+        out.flush()
+        process = subprocess.Popen(argv, env=env, cwd=cwd, stdout=out, stderr=subprocess.STDOUT,
+                                   stdin=subprocess.DEVNULL)
+        try:
+            code = process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            stop_tree(process)
+            code = None
+        except BaseException:
+            stop_tree(process)
+            raise
+        out.write(f"EXIT {code if code is not None else 'timeout'}\n".encode())
+    return code, time.monotonic() - start
+
+
+def private_env(out, name):
+    """HOME and XDG folders of one check, all under out; tools keep working."""
+    real = Path(os.environ.get("HOME", "/nonexistent"))
+    env = dict(os.environ)
+    base = out / "xdg" / name
+    for var, folder in (("HOME", "home"), ("XDG_DATA_HOME", "data"), ("XDG_CONFIG_HOME", "config"),
+                        ("XDG_CACHE_HOME", "cache"), ("XDG_STATE_HOME", "state")):
+        (base / folder).mkdir(parents=True, exist_ok=True)
+        env[var] = str(base / folder)
+    # cargo-driven checks still need the toolchain and the compiler cache.
+    for var, default in (("CARGO_HOME", real / ".cargo"), ("RUSTUP_HOME", real / ".rustup"),
+                         ("SCCACHE_DIR", real / ".cache/sccache"), ("SCCACHE_CONF", real / ".config/sccache/config")):
+        if var not in os.environ and default.exists():
+            env[var] = str(default)
+    for var in ("WAYLAND_DISPLAY", "DISPLAY"):
+        env.pop(var, None)
+    return env
+
+
+# Checks
+
+
+class Check:
+    def __init__(self, name, group, argv, cwd, timeout, vm=True, needs=(), cargo=False):
+        self.name, self.group, self.argv, self.cwd = name, group, argv, cwd
+        self.timeout, self.vm, self.needs, self.cargo = timeout, vm, needs, cargo
+
+
+def plan(tier, ctx):
+    """The checks of a tier in run order. ctx holds paths: base, old_base, out, new, old, fix."""
+    out, new, fix, base, old_base = ctx["out"], ctx["new"], ctx["fix"], ctx["base"], ctx["old_base"]
+    runs = out / "runs"
+    mon = str(MONITOR)
+
+    def example(name, *args, ex=new):
+        return [str(ex / name), *map(str, args)]
+
+    checks = [Check("conf-quick", "quick",
+                    example("conformance", "trace", base, runs / "conf-quick", "--groups", QUICK_GROUPS),
+                    mon, 3600, needs=("base",))]
+    if tier == "quick":
+        return checks
+
+    def vm_check(name, group, mode, args, bundle=base, ex=new, timeout=2400, needs=("base",), cwd=ROOT):
+        return Check(name, group, example(mode, args[0], bundle, runs / name, *args[1:], ex=ex), str(cwd),
+                     timeout, needs=needs)
+
+    torture, urfix = fix / "ant-torture", fix / "uring-fixture"
+    checks += [
+        Check("conf-stress", "full",
+              example("conformance", "trace", base, runs / "conf-stress", "--groups", STRESS_GROUPS),
+              mon, 7200, needs=("base",)),
+        vm_check("debug-p2", "full", "debug-check", ["p2", fix / "debug"]),
+        vm_check("debug-p3", "full", "debug-check", ["p3", fix / "debug"]),
+        vm_check("audit-stop", "full", "audit-check", ["stop", fix / "audit-fixture"]),
+        vm_check("audit-core", "full", "audit-check", ["core", fix / "audit-fixture"]),
+        vm_check("uring-status", "full", "uring-check", ["status", torture, urfix], timeout=3000),
+        vm_check("uring-boots", "full", "uring-check", ["boots", torture, urfix], timeout=3000),
+        vm_check("uring-legacy", "full", "uring-check", ["legacy", torture, urfix], bundle=old_base,
+                 timeout=3000, needs=("old_base",)),
+        vm_check("tracer-record", "full", "tracer-check", ["record", fix / "tracer-fixture"]),
+        vm_check("tracer-legacy", "full", "tracer-check", ["legacy", fix / "tracer-fixture"], bundle=old_base,
+                 needs=("old_base",)),
+        Check("tracer-qa", "full", None, mon, 2400, vm=False, cargo=True),
+        Check("debugger-live", "full", None, mon, 2400, cargo=True, needs=("base", "tools")),
+        vm_check("stealth", "full", "stealth-check", ["measure", fix / "stealth-probe"]),
+        Check("snapshot", "full", example("snapshot-check", base, runs / "snapshot"), str(ROOT), 2400,
+              needs=("base",)),
+    ]
+    old, olds = ctx["old"], ctx["old_base"]
+    interop = [
+        ("io-old-new-stealth", "stealth-check", ["measure", fix / "stealth-probe"], base, old),
+        ("io-old-new-uring", "uring-check", ["status", torture, urfix], base, old),
+        ("io-old-new-tracer", "tracer-check", ["record", fix / "tracer-fixture"], base, old),
+        ("io-old-new-audit", "audit-check", ["core", fix / "audit-fixture"], base, old),
+        ("io-old-new-p3", "debug-check", ["p3", fix / "debug"], base, old),
+        ("io-new-old-uring", "uring-check", ["status", torture, urfix], olds, new),
+        ("io-new-old-tracer", "tracer-check", ["record", fix / "tracer-fixture"], olds, new),
+        ("io-new-old-audit", "audit-check", ["core", fix / "audit-fixture"], olds, new),
+        ("io-new-old-p3", "debug-check", ["p3", fix / "debug"], olds, new),
+    ]
+    needs = ("base", "old_base", "old")
+    for name, mode, args, bundle, ex in interop:
+        checks.append(vm_check(name, "interop", mode, args, bundle=bundle, ex=ex,
+                               timeout=3000 if "uring" in name else 2400, needs=needs))
+    return checks
+
+
+def select(checks, only, skip):
+    names = {check.name for check in checks}
+    for name in list(only) + list(skip):
+        if name not in names:
+            raise Failure(f"unknown check {name}; this tier has: {', '.join(sorted(names))}")
+    return [c for c in checks if (not only or c.name in only) and c.name not in skip]
+
+
+# Fixtures and hosts
+
+
+def build_fixtures(out):
+    """Static guest programs from tests/monitor, built once per output folder."""
+    fix = out / "fixtures"
+    stamp = fix / ".built"
+    if stamp.exists():
+        return fix
+    log = out / "logs" / "fixtures.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    fix.mkdir(parents=True, exist_ok=True)
+    (fix / "debug").mkdir(exist_ok=True)
+    env = dict(os.environ)
+    strict = ["-Wall", "-Wextra", "-Werror"]
+    builds = [
+        (["-static", "-O2", *strict], "audit-fixture.c", fix / "audit-fixture"),
+        (["-static", "-O2", "-pthread", *strict], "uring-fixture.c", fix / "uring-fixture"),
+        (["-static", "-O2", *strict], "tracer-fixture.c", fix / "tracer-fixture"),
+        (["-static", "-O2", *strict], "stealth-probe.c", fix / "stealth-probe"),
+        (["-O1", "-static", "-no-pie", "-pthread"], "debug-p2-fixture.c", fix / "debug/p2fix"),
+        (["-O1", "-static-pie", "-pthread"], "debug-p2-fixture.c", fix / "debug/p2pie"),
+        (["-O1", "-static", "-no-pie", "-pthread"], "debug-p3-fixture.c", fix / "debug/p3fix"),
+        (["-O1", "-pthread", "-Wl,--dynamic-linker=/tmp/p2ld.so", "-Wl,-rpath,/tmp"],
+         "debug-p2-fixture.c", fix / "debug/p2dyn"),
+    ]
+    for flags, source, target in builds:
+        code, _ = run_logged(["gcc", *flags, "-o", str(target), str(TESTS / source)], env, str(ROOT), log, 600)
+        if code != 0:
+            raise Failure(f"building {source} failed, see {log}")
+    # The dynamic debug fixture brings the host's loader and libc.
+    root = fix / "debug/dbgroot"
+    root.mkdir(exist_ok=True)
+    libc = subprocess.run(["gcc", "-print-file-name=libc.so.6"], capture_output=True, text=True).stdout.strip()
+    loader = subprocess.run(["gcc", "-print-file-name=ld-linux-x86-64.so.2"], capture_output=True, text=True).stdout.strip()
+    for source, name in ((libc, "libc.so.6"), (loader, "p2ld.so")):
+        if not Path(source).exists():
+            raise Failure(f"no {name} source on this host ({source})")
+        shutil.copy2(os.path.realpath(source), root / name)
+    code, _ = run_logged([str(TESTS / "build-torture.sh"), str(fix), "--static"], env, str(ROOT), log, 1800)
+    if code != 0:
+        raise Failure(f"building the stress samples failed, see {log}")
+    stamp.write_text("built\n")
+    return fix
+
+
+def build_examples(repo, out, log_name, app=False):
+    log = out / "logs" / log_name
+    log.parent.mkdir(parents=True, exist_ok=True)
+    for extra in (["--examples"], ["-p", "antinomie-monitor-ui", "--bin", "antinomie-monitor"]) if app else (["--examples"],):
+        code, _ = run_logged(["cargo", "build", "--release", "--locked", "-j", "2", *extra],
+                             dict(os.environ), str(repo / "src/antinomie/monitor"), log, 7200)
+        if code != 0:
+            raise Failure(f"cargo build failed, see {log}")
+    return repo / "src/antinomie/monitor" / EXAMPLES
+
+
+def old_host(spec, out):
+    """(examples folder, cleanup) of the old host: a built checkout or a git rev."""
+    path = Path(spec).expanduser()
+    if path.is_dir():
+        for candidate in (path, path / "src/antinomie/monitor" / EXAMPLES, path / EXAMPLES):
+            if (candidate / "debug-check").is_file():
+                return candidate.resolve(), lambda: None
+        raise Failure(f"{path} has no built examples (target/release/examples/debug-check)")
+    tree = out / "old-host"
+    log = out / "logs" / "old-host.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    git("worktree", "add", "--detach", str(tree), spec)
+
+    def cleanup():
+        git("worktree", "remove", "--force", str(tree), check=False)
+        shutil.rmtree(tree, ignore_errors=True)
+        git("worktree", "prune", check=False)
+
+    try:
+        return build_examples(tree, out, "old-host.log"), cleanup
+    except BaseException:
+        cleanup()
+        raise
+
+
+def tools_dir(args, out):
+    """The managed gef and pwndbg the Debugger console check needs, in a private data folder."""
+    data = out / "debugger-data"
+    (data / "tools").mkdir(parents=True, exist_ok=True)
+    source = Path(args.debugger_tools).expanduser() if args.debugger_tools else None
+    for tool in ("gef", "pwndbg"):
+        if (data / "tools" / tool).exists():
+            continue
+        if source and (source / tool).is_dir():
+            shutil.copytree(source / tool, data / "tools" / tool)
+    return data
+
+
+# Running
+
+
+def command_for(check, ctx, args):
+    """The argv of the checks that need the previous results or a test filter."""
+    if check.name == "debugger-live":
+        env = {
+            "ANTINOMIE_DEBUG_LIVE_BUNDLE": str(ctx["base"]),
+            "ANTINOMIE_DEBUG_LIVE_DATA": str(ctx["debugger_data"]),
+            "ANTINOMIE_DEBUG_LIVE_FIXTURE": str(ctx["fix"] / "debug/p2fix"),
+        }
+        argv = ["cargo", "test", "--release", "--locked", "-j", "2", "-p", "antinomie-monitor-ui", "--bin",
+                "antinomie-monitor", "debugger_console_live", "--", "--ignored", "--nocapture"]
+        return argv, env
+    if check.name == "tracer-qa":
+        log = ctx["out"] / "logs" / "tracer-record.log"
+        text = log.read_text(errors="replace") if log.exists() else ""
+        runs = re.findall(r"^RUN (.*)$", text, re.M)
+        sha = re.search(r"^FIXTURE_SHA256 (\S+)", text, re.M)
+        writes = re.search(r"^RUN writes=(.*?)/tracer_record_", text, re.M)
+        if not (runs and sha and writes):
+            raise Failure("no usable tracer-record log (RUN, FIXTURE_SHA256); run tracer-record first")
+        env = {
+            "ANTINOMIE_TRACER_RUNS": ";".join(runs) + ";",
+            "ANTINOMIE_TRACER_FIXTURE_SHA256": sha.group(1),
+            "ANTINOMIE_TRACER_DATA": writes.group(1),
+            "ANTINOMIE_DISK_READER": str(MONITOR / "target/release/antinomie-monitor"),
+        }
+        argv = ["cargo", "test", "--release", "--locked", "-j", "2", "-p", "antinomie-monitor-ui", "--bin",
+                "antinomie-monitor", "recorded_tracer_triage", "--", "--ignored", "--nocapture"]
+        return argv, env
+    return check.argv, {}
+
+
+def missing(check, ctx):
+    labels = {"old_base": "--old-base", "old": "--old-host", "base": "BASE",
+              "tools": "--debugger-tools (a data folder with tools/gef and tools/pwndbg)"}
+    keys = {"old": "old_ok", "tools": "debugger_ok"}
+    for need in check.needs:
+        if not ctx.get(keys.get(need, need)):
+            return f"needs {labels[need]}"
+    return None
+
+
+def run_check(check, ctx, args, attempt):
+    """One attempt: a result dict with status, seconds, log and the exit code."""
+    out = ctx["out"]
+    suffix = "" if attempt == 1 else f".try{attempt}"
+    log = out / "logs" / f"{check.name}{suffix}.log"
+    result = {"name": check.name, "group": check.group, "attempt": attempt, "log": str(log)}
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("")
+    reason = missing(check, ctx)
+    if reason:
+        return {**result, "status": "SKIP", "seconds": 0.0, "detail": reason}
+    runs = out / "runs" / check.name
+    for stale in (runs, out / "runs" / f"{check.name}{suffix}"):
+        shutil.rmtree(stale, ignore_errors=True)
+    try:
+        argv, extra = command_for(check, ctx, args)
+        if check.vm:
+            memwait(MIN_MEM_KIB, args.mem_wait_limit)
+    except Failure as error:
+        return {**result, "status": "ERROR", "seconds": 0.0, "detail": str(error)}
+    env = private_env(out, check.name)
+    env.update(extra)
+    code, seconds = run_logged(argv, env, check.cwd, log, check.timeout)
+    status = "TIMEOUT" if code is None else "PASS" if code == 0 else "FAIL"
+    return {**result, "status": status, "seconds": round(seconds, 1), "exit": code}
+
+
+def run_with_retries(check, ctx, args):
+    attempts = []
+    for attempt in range(1, args.retries + 2):
+        result = run_check(check, ctx, args, attempt)
+        attempts.append(result)
+        print(f"  {check.name} attempt {attempt}: {result['status']} in {result['seconds']:.0f} s", flush=True)
+        if result["status"] in ("PASS", "SKIP", "ERROR"):
+            break
+    final = dict(attempts[-1])
+    final["attempts"] = attempts
+    if final["status"] == "PASS" and len(attempts) > 1:
+        final["status"] = "FLAKY"
+    return final
+
+
+# Report
+
+
+def fmt_seconds(seconds):
+    seconds = int(round(seconds))
+    return f"{seconds // 60}m{seconds % 60:02d}s"
+
+
+def report(results, order, header):
+    rows = [header, ""]
+    width = max([len(name) for name in order] + [5])
+    rows.append(f"{'check':<{width}}  {'result':<8} {'time':>8}  log")
+    total = 0.0
+    for name in order:
+        result = results.get(name)
+        if result is None:
+            rows.append(f"{name:<{width}}  {'-':<8} {'':>8}  not run")
+            continue
+        seconds = sum(a["seconds"] for a in result.get("attempts", [result]))
+        total += seconds
+        rows.append(f"{name:<{width}}  {result['status']:<8} {fmt_seconds(seconds):>8}  {result['log']}")
+        for attempt in result.get("attempts", []):
+            if len(result["attempts"]) > 1:
+                rows.append(f"{'':<{width}}    attempt {attempt['attempt']}: {attempt['status']} "
+                            f"{fmt_seconds(attempt['seconds'])}  {attempt['log']}")
+        if result.get("detail"):
+            rows.append(f"{'':<{width}}    {result['detail']}")
+    counts = {s: sum(1 for r in results.values() if r["status"] == s) for s in ORDER}
+    rows.append("")
+    rows.append("total " + fmt_seconds(total) + "; " + ", ".join(f"{n} {s}" for s, n in counts.items() if n))
+    if counts["FLAKY"]:
+        rows.append("FLAKY: passed only after a failed attempt, see the attempts above")
+    return "\n".join(rows)
+
+
+def exit_code(results, order):
+    bad = [n for n in order if results.get(n) is None or results[n]["status"] not in ("PASS", "FLAKY")]
+    return 1 if bad else 0
+
+
+# Arguments
+
+
+def parser():
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("tier", choices=("quick", "full", "auto"))
+    p.add_argument("base", help="BusyBox base bundle of the current guest series")
+    p.add_argument("--old-base", help="an older BusyBox base: legacy checks and the new-host interop direction")
+    p.add_argument("--old-host", metavar="REV|PATH",
+                   help="old host for interop: a git rev built in a temporary worktree, or a built checkout "
+                        "(default: the --against ref, else the nearest origin/release-*)")
+    p.add_argument("--against", help="auto: ref to diff against (default: the nearest origin/release-*)")
+    p.add_argument("--out", default="vm-regress-out", help="output folder (default: %(default)s)")
+    p.add_argument("--only", action="append", default=[], metavar="CHECK", help="run only this check (repeatable)")
+    p.add_argument("--skip", action="append", default=[], metavar="CHECK", help="skip this check (repeatable)")
+    p.add_argument("--rerun-failed", action="store_true",
+                   help="run the checks that did not pass (or never ran) in the last run in --out")
+    p.add_argument("--retries", type=int, default=0, metavar="N",
+                   help="rerun a failed check up to N more times; every attempt is reported and a pass "
+                        "after a failure is shown as FLAKY (default: %(default)s)")
+    p.add_argument("--debugger-tools", metavar="DIR",
+                   help="a data folder holding tools/gef and tools/pwndbg for the debugger-live check")
+    p.add_argument("--no-build", action="store_true", help="use the examples already built")
+    p.add_argument("--keep-old-host", action="store_true", help="keep the old host worktree in --out")
+    p.add_argument("--mem-wait-limit", type=int, default=3 * 3600, metavar="S",
+                   help="give up a boot after waiting this long for memory (default: %(default)s)")
+    p.add_argument("--list", action="store_true", help="print the tier's checks and exit")
+    return p
+
+
+def parse(argv):
+    args = parser().parse_args(argv)
+    if args.retries < 0:
+        raise SystemExit("--retries must not be negative")
+    if args.old_host and args.tier == "quick":
+        raise SystemExit("--old-host is only for full or auto")
+    return args
+
+
+def forbid_user_folders(out):
+    """The output folder must not sit in the app's own data, settings or install."""
+    home = Path(os.path.expanduser("~"))
+    for private in (home / "antinomie", home / ".local/share/antinomie", home / ".config/antinomie"):
+        if out == private or private in out.parents:
+            raise Failure(f"--out {out} is inside {private}, which belongs to the app")
+
+
+def main(argv=None):
+    args = parse(argv if argv is not None else sys.argv[1:])
+    out = Path(args.out).resolve()
+    try:
+        forbid_user_folders(out)
+        tier = args.tier
+        against = None
+        if tier == "auto":
+            against = args.against or default_against()
+            paths, revision = changed_against(against)
+            tier, reasons = choose_tier(paths, revision)
+            print(f"auto: {tier} tier against {against}")
+            for reason in reasons[:12]:
+                print(f"  {reason}")
+            if len(reasons) > 12:
+                print(f"  ... and {len(reasons) - 12} more")
+        base = Path(args.base).expanduser().resolve()
+        old_base = Path(args.old_base).expanduser().resolve() if args.old_base else None
+        for bundle in (base, old_base):
+            if bundle and not (bundle / "bundle.json").is_file():
+                raise Failure(f"{bundle} is not a base bundle (no bundle.json)")
+        # Placeholders until the fixtures and the old host exist; plan() runs again then.
+        ctx = {"out": out, "base": base, "old_base": old_base, "new": MONITOR / EXAMPLES,
+               "fix": out / "fixtures", "old": out / "old-host-examples", "old_ok": False}
+        checks = plan(tier, ctx)
+        if args.list:
+            for check in checks:
+                print(f"{check.name:<20} {check.group:<8} timeout {check.timeout} s")
+            return 0
+        order = [check.name for check in checks]
+        checks = select(checks, args.only, args.skip)
+        results = {}
+        results_file = out / "results.json"
+        if args.rerun_failed:
+            if not results_file.exists():
+                raise Failure(f"--rerun-failed: no {results_file}")
+            results = json.loads(results_file.read_text())
+            checks = [c for c in checks if results.get(c.name, {}).get("status") not in ("PASS", "FLAKY")]
+        out.mkdir(parents=True, exist_ok=True)
+        selected = {check.name for check in checks}
+        cleanup = lambda: None
+        try:
+            if not selected:
+                print("nothing to run")
+            else:
+                ctx["fix"] = build_fixtures(out)
+                if not args.no_build:
+                    ctx["new"] = build_examples(ROOT, out, "build.log", app=bool(selected & {"tracer-qa", "debugger-live"}))
+                if old_base and any("old" in c.needs for c in checks):
+                    spec = args.old_host or against or default_against()
+                    print(f"old host: {spec}", flush=True)
+                    ctx["old"], cleanup = old_host(spec, out)
+                    ctx["old_ok"] = True
+                if "debugger-live" in selected:
+                    ctx["debugger_data"] = tools_dir(args, out)
+                    ctx["debugger_ok"] = all((ctx["debugger_data"] / "tools" / t).is_dir() for t in ("gef", "pwndbg"))
+                checks = [c for c in plan(tier, ctx) if c.name in selected]
+                for check in checks:
+                    print(f"{check.name} ...", flush=True)
+                    results[check.name] = run_with_retries(check, ctx, args)
+                    results_file.write_text(json.dumps(results, indent=1))
+        finally:
+            if not args.keep_old_host:
+                cleanup()
+        shown = [n for n in order if n in results or n in selected or not (args.only or args.skip)]
+        text = report(results, shown, f"{tier} tier, base {base}")
+        (out / "report.txt").write_text(text + "\n")
+        print("\n" + text)
+        return exit_code(results, shown)
+    except Failure as error:
+        print(f"vm-regress: {error}", file=sys.stderr)
+        return 2
+    except KeyboardInterrupt:
+        print("vm-regress: interrupted", file=sys.stderr)
+        return 130
+
+
+if __name__ == "__main__":
+    sys.exit(main())
