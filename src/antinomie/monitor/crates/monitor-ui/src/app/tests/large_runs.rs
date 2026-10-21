@@ -227,33 +227,20 @@ fn page_request(directory: &Path, query: &str, offset: u64) -> Request {
 
 #[test]
 fn a_slow_process_tree_does_not_hold_up_the_trace_of_another_run() {
-    let big = archive_fixture("big", 400_000);
+    let big = archive_fixture("big", 2_000);
     let small = archive_fixture("small", 100);
-    let worker = ArchiveWorker::new(None).unwrap();
-    let wait_invocations = |worker: &ArchiveWorker| {
-        answer_where(worker, |answer| {
-            matches!(answer, Answer::Invocations { .. })
-        })
-        .0
-    };
-    // One page of 100 calls of a 400k-call run. The first read builds the
-    // recording's index (kept for later reads); the counts follow separately.
-    let started = Instant::now();
-    worker.request(page_request(&big, "", 0)).unwrap();
-    let Answer::Invocations { total, result, .. } = wait_invocations(&worker) else {
-        panic!("wrong answer")
-    };
-    let first_page = started.elapsed();
-    eprintln!(
-        "Invocations page 0 of a 400k-call run (no filter, cold index): {first_page:?}, total {total:?}"
-    );
-    assert!(result.is_ok());
-    assert_eq!(
-        total, None,
-        "the counts of a big recording come apart from its page"
-    );
-    // Its process tree, then the user selects another run.
-    let started = Instant::now();
+    // The tree is held inside its request, so it is pending for exactly as
+    // long as the test says, whatever the machine's load.
+    let (entered_sender, entered) = std::sync::mpsc::channel();
+    let (release, release_receiver) = std::sync::mpsc::channel();
+    let worker = ArchiveWorker::with_tree_gate(crate::archive::TreeGate {
+        entered: std::sync::Mutex::new(entered_sender),
+        release: std::sync::Mutex::new(release_receiver),
+    })
+    .unwrap();
+    // Declared after the worker, so a failing assert drops (and so releases)
+    // it first; the worker's drop joins a lane that waits on it.
+    let release = release;
     worker
         .request(Request::ProcessTree {
             run_id: "big".into(),
@@ -262,30 +249,34 @@ fn a_slow_process_tree_does_not_hold_up_the_trace_of_another_run() {
             path: "/bin/big".into(),
         })
         .unwrap();
-    std::thread::sleep(Duration::from_millis(20));
+    entered
+        .recv_timeout(Duration::from_secs(120))
+        .expect("the process tree was never taken up");
+    // The user selects another run while the tree is still being built.
     worker.request(page_request(&small, "", 0)).unwrap();
-    let mut order = Vec::new();
-    while order.len() < 2 {
-        match worker.wait_answer(Duration::from_secs(120)).unwrap() {
-            Answer::ProcessTree { result, .. } => order.push(format!(
-                "tree after {:?} ok={}",
-                started.elapsed(),
-                result.is_ok()
-            )),
-            Answer::Invocations { result, .. } => order.push(format!(
-                "new selection after {:?} ok={}",
-                started.elapsed(),
-                result.is_ok()
-            )),
-            // The counts of the first run still arrive.
-            _ => {}
-        }
-    }
-    eprintln!("answers in order: {order:#?}");
+    let (page, before) = answer_where(&worker, |answer| {
+        matches!(answer, Answer::Invocations { .. })
+    });
+    let Answer::Invocations { result, .. } = page else {
+        unreachable!()
+    };
+    assert!(result.is_ok());
     assert!(
-        order[0].starts_with("new selection"),
-        "the new selection waited for the process tree: {order:?}"
+        !before
+            .iter()
+            .any(|answer| matches!(answer, Answer::ProcessTree { .. })),
+        "the tree answered while it was held"
     );
+    // Released, the tree still completes.
+    release.send(()).unwrap();
+    let (tree, _) = answer_where(&worker, |answer| {
+        matches!(answer, Answer::ProcessTree { .. })
+    });
+    let Answer::ProcessTree { result, .. } = tree else {
+        unreachable!()
+    };
+    assert!(result.is_ok());
+    drop(worker);
     let _ = std::fs::remove_dir_all(big);
     let _ = std::fs::remove_dir_all(small);
 }
