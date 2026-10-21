@@ -11,11 +11,13 @@ impl Session {
         self.transport.poll(0)?;
         // Drain until the guest's rings are empty: they hold only milliseconds
         // of busy telemetry. A time budget still returns control to command
-        // handling under continuous telemetry.
+        // handling under continuous telemetry. While the recording writer is
+        // behind the disk, nothing is taken: the guest waits for room in its
+        // rings (never-drop mode) instead of the recording stopping.
         let started = Instant::now();
         self.pre_ack.expire(started);
         let mut drained = 0usize;
-        while started.elapsed() < PUMP_BUDGET {
+        while started.elapsed() < PUMP_BUDGET && !crate::writer::backlogged() {
             let Some(packet) = self.transport.read()?.map(<[u8]>::to_vec) else {
                 break;
             };
