@@ -31,6 +31,28 @@ it runs.
   same arrows as elsewhere. The Details panel now follows the Cores and Static
   analysis tabs and shows the function, mapping, string, note or row you
   selected; the floating details and bytes windows stay in the row menu.
+- **Notification toasts: warnings and errors move out of the status line and
+  inline notices.** A stack at the bottom right, above the status bar, shows an
+  icon, a title, a one-line detail (full text on hover), an "Open Activity" link
+  and a close button. Info toasts leave after 6 s, warnings after 12 s, errors
+  stay until closed; hovering a toast pauses its timer. A burst of the same
+  toast is one toast with a count (×N). Every toast is also an Activity row, and
+  the Activity tab shows the warning and error counts as two small chips. The
+  stack moves aside rather than cover a window's footer buttons, and works with
+  no Activity pane open. Now toasts: the status line's "Failed: …" and other
+  command errors, the backend's last error, download, build and tool-install
+  failures, the results of Memory, Disks, Samples, Snapshots and Rules actions,
+  and the evidence-action error window. The status line keeps plain status
+  messages and "Saving stopped". Form validation, "Stop the VM to change this"
+  style notes, empty-state sentences and the "No base image" banner stay where
+  they are.
+- **Fixed: triage tables kept the previous theme's colors after a theme switch.**
+  Rows are indexed with their text colors; they are now painted in the palette
+  of the active theme. Packet and syscall tints were already read at paint time.
+- **Fixed: bold text was white in the Light theme.** egui draws `strong()` text
+  in the pressed-widget text color, which was the white of the primary fill. The
+  pressed state now uses the selection tint with normal text; primary buttons
+  keep their own fill and white text.
 - **Detection rules: engines, Installed and Catalog tabs, and every rule of a
   pack.** The page has **YARA / IDS / Sigma** tabs and, inside each, **Installed**
   and **Catalog** tabs. Installed lists the packs and custom groups of the engine
