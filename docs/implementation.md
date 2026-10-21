@@ -240,10 +240,10 @@ the audit login uid only when the guest set one, and the Sigma journal is
 format 3 (versions 1 and 2 still load). The MD5 digest is not recorded: no rule
 in the SigmaHQ Linux pack reads a hash.
 
-### Accepted io_uring run status (0.7.0)
+### Accepted io_uring run status and Triage file identity (0.7.0)
 
-Guest series 0043; the contract stays at revision 17 and the change is
-compatible both ways: an older guest and an older host both keep working.
+Guest series 0043 and 0044; the contract stays at revision 17 and every addition is
+optional, so an older guest and an older host both keep working.
 
 * **Run status with io_uring workers (0043).** `iou-wrk` and `iou-sqp` threads
   are threads of the process that made the ring, and are in its process core. The
@@ -281,6 +281,14 @@ compatible both ways: an older guest and an older host both keep working.
   non-leader root exit, a crash, AIO, each with and without a core, then Stop of
   runs with workers, handled or ignoring SIGTERM), `boots` (the hardest cases on
   fresh boots), `legacy` (an older base: Finished, exit unknown or right).
+* **File identity and exec image records (0044).** `lifecycle.file_id` and
+  `lifecycle.exec_image`, specified in `protocol/control.h` and
+  `native-schema-slices.md` section 20. Hooks: `do_sys_openat2`, `do_renameat2`,
+  `do_linkat`, `do_unlinkat` and `exec_binprm` publish in the traced call; the
+  io_uring `OPENAT*` hook, a name lookup just before `RENAMEAT`, `LINKAT` and
+  `UNLINKAT`, and the issue of a request that acts on an open regular file attach
+  the same bytes to the request (`async.operand.file_id`). Those operations run
+  on a worker with no traced call, which is why they are request operands.
 
 ### Accepted ANT-T0097 host UI performance (0.6.2)
 

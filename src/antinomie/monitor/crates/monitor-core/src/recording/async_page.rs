@@ -43,8 +43,14 @@ pub(super) fn lifecycle_field(header: &parser::Header, packet: &[u8]) -> Option<
     }
     Some(if name == b"lifecycle.task_exit" {
         LifecycleKind::TaskExit
-    } else if name == crate::kernel_notes::CREDS_KEY.as_bytes()
-        || name == crate::kernel_notes::HASH_KEY.as_bytes()
+    } else if [
+        crate::kernel_notes::CREDS_KEY,
+        crate::kernel_notes::HASH_KEY,
+        crate::kernel_notes::FILE_ID_KEY,
+        crate::kernel_notes::EXEC_IMAGE_KEY,
+    ]
+    .iter()
+    .any(|key| name == key.as_bytes())
     {
         LifecycleKind::KernelNote
     } else {

@@ -778,3 +778,34 @@ sees the data layout unchanged, so only revision-17 bases send a hole.
 
 Stop's SIGKILL escalation and the `KILL_ESCALATED` run-status flag are specified
 in `run-status.md`.
+
+## 20. Revision 17: file identity and exec image records (0.7.0)
+
+Two more lifecycle records, specified in `control.h` and optional like the hash
+record: a guest from before them publishes none, a host that does not know them
+shows an unknown lifecycle field, and Triage falls back to names.
+
+* `lifecycle.file_id` (`antinomie.fileid/1`, 32 bytes) carries the device,
+  inode, inode generation, link count and mode of the file a call acted on, in
+  the traced call itself: an `open`/`openat`/`openat2`/`creat` that returned a
+  descriptor (kind OPEN), a `rename*` (RENAME: the inode moved), a `link*`
+  (LINK) and an `unlink*` (UNLINK, with the links that remain). Only calls that
+  succeeded publish one. An io_uring request carries the same bytes as the
+  operand `async.operand.file_id`: OPEN from `IORING_OP_OPENAT`/`OPENAT2` (the
+  file the request opened, direct descriptors included), RENAME/LINK/UNLINK
+  from `RENAMEAT`/`LINKAT`/`UNLINKAT` (the name is resolved a moment before the
+  operation on the worker, since the operation has no traced call to publish in),
+  and ISSUE for a request that acts on an open regular file
+  (`READ*`, `WRITE*`, `FSYNC`, `FTRUNCATE`, `FALLOCATE`, `SYNC_FILE_RANGE`,
+  `FADVISE`), once per request. ISSUE is what lets Triage tie a request on a
+  registered-table descriptor, or on a descriptor the capture never saw opened,
+  to a file. An AIO request on a regular file carries ISSUE too.
+* `lifecycle.exec_image` (`antinomie.execimg/1`) is published once per exec at
+  the commit point: the image that was loaded (its resolved path and its
+  identity) and, for a script, the interpreter exactly as the `#!` line names it
+  (`bprm->interp`). The hash record only said that the image was an interpreter.
+
+Both are cut at 511 bytes per string and say so; a name that did not fit is not
+shown. The identity is the host's key for one file across names: dev, ino and
+generation together, so a name that is reused by a new file is told from the file
+that held it.

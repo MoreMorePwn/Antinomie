@@ -18,14 +18,32 @@
 //!   was not computed. A worker publishes it after the call returned, still
 //!   under that call's identity.
 //!
+//! * `lifecycle.file_id` (layout `antinomie.fileid/1`, 32 bytes) is the device
+//!   and inode of a file a call opened, renamed, linked or removed, or that an
+//!   io_uring or AIO request used. An io_uring request carries the same record
+//!   as its operand `async.operand.file_id`. It lets one file be followed
+//!   across names; a guest from before it records none, and then a file is
+//!   known only by its names.
+//! * `lifecycle.exec_image` (layout `antinomie.execimg/1`) is published once per
+//!   exec: the image that was loaded and, for a script, the interpreter its
+//!   `#!` line named.
+//!
 //! The byte layouts are in `protocol/control.h`.
 use crate::api::EventSummary;
 
 pub const CREDS_KEY: &str = "lifecycle.creds";
 pub const HASH_KEY: &str = "lifecycle.file_hash";
+pub const FILE_ID_KEY: &str = "lifecycle.file_id";
+/// The operand an io_uring or AIO request carries instead.
+pub const FILE_ID_OPERAND: &str = "async.operand.file_id";
+pub const EXEC_IMAGE_KEY: &str = "lifecycle.exec_image";
 const CREDS_LAYOUT: &str = "antinomie.creds/2";
 const CREDS_LAYOUT_V1: &str = "antinomie.creds/1";
 const HASH_LAYOUT: &str = "antinomie.hash/1";
+pub const FILE_ID_LAYOUT: &str = "antinomie.fileid/1";
+const EXEC_IMAGE_LAYOUT: &str = "antinomie.execimg/1";
+pub const FILE_ID_SIZE: usize = 32;
+const EXEC_IMAGE_HEADER: usize = 40;
 pub(crate) const CREDS_SIZE: usize = 96;
 const CREDS_SIZE_V1: usize = 72;
 pub(crate) const HASH_SIZE: usize = 80;
@@ -38,10 +56,12 @@ pub(crate) const NOTES_PER_CALL: usize = 32;
 /// Whether `event` carries one of the records above, so call pairing keeps it.
 pub fn is_note(event: &EventSummary) -> bool {
     event.phase == 3
-        && event
-            .fields
-            .iter()
-            .any(|field| field.key == CREDS_KEY || field.key == HASH_KEY)
+        && event.fields.iter().any(|field| {
+            matches!(
+                field.key.as_str(),
+                CREDS_KEY | HASH_KEY | FILE_ID_KEY | EXEC_IMAGE_KEY
+            )
+        })
 }
 
 fn payload<'a>(event: &'a EventSummary, key: &str, layout: &str, size: usize) -> Option<&'a [u8]> {
@@ -296,6 +316,153 @@ pub fn file_hash(event: &EventSummary) -> Option<FileHash> {
         queue_us: u32_at(data, 64),
         hash_us: u32_at(data, 68),
         lost: u32_at(data, 72),
+    })
+}
+
+/// What a call did to the file whose identity a record carries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FileIdKind {
+    /// The file an open returned.
+    Open,
+    /// The inode a rename moved.
+    Rename,
+    /// The inode that got a new name.
+    Link,
+    /// The inode whose name was removed.
+    Unlink,
+    /// The file an io_uring or AIO request used.
+    Issue,
+    /// The image an exec loaded.
+    Exec,
+    Unknown(u8),
+}
+
+/// The identity of a file inode: the same on every name of the file, and
+/// different for a new file that took a name over.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct FileKey {
+    pub dev: u64,
+    pub ino: u64,
+    /// `i_generation`: tells a reused inode number from the file before it.
+    pub generation: u32,
+}
+
+/// A file identity record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FileId {
+    pub kind: FileIdKind,
+    pub key: FileKey,
+    /// Hard links the inode has after the call.
+    pub nlink: u32,
+    pub mode: u32,
+    pub directory: bool,
+    pub regular: bool,
+    pub symlink: bool,
+}
+
+fn file_id_from(data: &[u8]) -> FileId {
+    let kind = match data[0] {
+        1 => FileIdKind::Open,
+        2 => FileIdKind::Rename,
+        3 => FileIdKind::Link,
+        4 => FileIdKind::Unlink,
+        5 => FileIdKind::Issue,
+        6 => FileIdKind::Exec,
+        other => FileIdKind::Unknown(other),
+    };
+    FileId {
+        kind,
+        key: FileKey {
+            dev: u64_at(data, 8),
+            ino: u64_at(data, 16),
+            generation: u32_at(data, 24),
+        },
+        nlink: u32_at(data, 4),
+        mode: u32_at(data, 28),
+        directory: data[1] & 1 != 0,
+        regular: data[1] & 2 != 0,
+        symlink: data[1] & 4 != 0,
+    }
+}
+
+/// The file identity record of `event`, when it is a complete one.
+pub fn file_id(event: &EventSummary) -> Option<FileId> {
+    payload(event, FILE_ID_KEY, FILE_ID_LAYOUT, FILE_ID_SIZE).map(file_id_from)
+}
+
+/// The identity an io_uring or AIO request carried as an operand.
+pub fn file_id_operand(field: &crate::api::FieldSummary) -> Option<FileId> {
+    (field.key == FILE_ID_OPERAND
+        && field.complete
+        && field.layout == FILE_ID_LAYOUT
+        && field.preview.len() >= FILE_ID_SIZE)
+        .then(|| file_id_from(&field.preview[..FILE_ID_SIZE]))
+}
+
+/// The image an exec loaded and the interpreter a script named.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExecImage {
+    /// The interpreter exactly as the script's `#!` line names it; `None` when
+    /// the image is not a script's interpreter.
+    pub interpreter: Option<String>,
+    /// The resolved path of the loaded image: for a script, the interpreter's
+    /// file. `None` when the guest could not resolve it.
+    pub path: Option<String>,
+    /// The interpreter name was longer than the guest records.
+    pub interpreter_truncated: bool,
+    /// The image path was longer than the guest records.
+    pub path_truncated: bool,
+    pub key: FileKey,
+    pub nlink: u32,
+    pub mode: u32,
+}
+
+/// The exec image record of `event`, when it is a complete one.
+pub fn exec_image(event: &EventSummary) -> Option<ExecImage> {
+    if event.phase != 3 {
+        return None;
+    }
+    let field = event
+        .fields
+        .iter()
+        .find(|field| field.key == EXEC_IMAGE_KEY)?;
+    if !field.complete
+        || field.layout != EXEC_IMAGE_LAYOUT
+        || field.preview.len() < EXEC_IMAGE_HEADER
+    {
+        return None;
+    }
+    let data = &field.preview;
+    let flags = u32_at(data, 0);
+    let interp_len = u32_at(data, 4) as usize;
+    let path_len = u32_at(data, 8) as usize;
+    let text = |start: usize, len: usize| -> Option<String> {
+        let end = start.checked_add(len)?;
+        let bytes = data.get(start..end)?;
+        let (last, text) = bytes.split_last()?;
+        (*last == 0)
+            .then(|| std::str::from_utf8(text).ok().map(str::to_owned))
+            .flatten()
+    };
+    // A name that did not fit is not a name: it stays unknown.
+    let interpreter = (interp_len != 0 && flags & 2 == 0)
+        .then(|| text(EXEC_IMAGE_HEADER, interp_len))
+        .flatten();
+    let path = (path_len != 0 && flags & 4 == 0)
+        .then(|| text(EXEC_IMAGE_HEADER + interp_len, path_len))
+        .flatten();
+    Some(ExecImage {
+        interpreter,
+        path,
+        interpreter_truncated: flags & 2 != 0,
+        path_truncated: flags & 4 != 0,
+        key: FileKey {
+            dev: u64_at(data, 16),
+            ino: u64_at(data, 24),
+            generation: u32_at(data, 32),
+        },
+        nlink: u32_at(data, 12),
+        mode: u32_at(data, 36),
     })
 }
 
