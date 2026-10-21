@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Optional static-analysis tools Antinomie installs when the system has
 //! none: capa, Detect It Easy, Ghidra with its Java runtime, Volatility 3,
-//! Sigma and Magika. Each is downloaded from its upstream release, pinned by
+//! Sigma, Magika and the gdb consoles GEF (bata24) and pwndbg. Each is downloaded from its upstream release, pinned by
 //! SHA-256, unpacked into `<data>/tools/<id>/` and mounted read-only into the
 //! analysis sandbox at `SANDBOX_DIR`. A tool installed on the system takes
 //! precedence, except Magika, which the Properties panel looks for here first.
@@ -28,6 +28,7 @@ pub const GHIDRA_SYSTEM: &[&str] = &[
 ];
 pub const RADARE2_SYSTEM: &[&str] = &["/usr/bin/r2", "/usr/local/bin/r2", "/usr/bin/radare2"];
 pub const MAGIKA_SYSTEM: &[&str] = &["/usr/bin/magika", "/usr/local/bin/magika"];
+pub const PWNDBG_SYSTEM: &[&str] = &["/usr/bin/pwndbg", "/usr/local/bin/pwndbg"];
 /// Magika as the sandbox sees the managed copy.
 pub const MAGIKA_MANAGED: &str = "/opt/antinomie-tools/magika/magika";
 
@@ -40,6 +41,8 @@ pub enum Archive {
     TarGz { strip: usize },
     /// An xz-compressed tar file; the first `strip` components are dropped.
     TarXz { strip: usize },
+    /// One file kept as it is, under the name of `Download::file`.
+    File,
     /// A Debian package: the files of its data archive under `prefix`, placed
     /// flat (file names only).
     DebFiles { prefix: &'static str },
@@ -248,6 +251,45 @@ pub const PACKAGES: &[Package] = &[
         requirements: None,
         entry: "magika",
     },
+    // A single Python script for the system's gdb (which must have Python).
+    // bata24's fork has no releases, so the commit is the version.
+    Package {
+        id: "gef",
+        name: "GEF (bata24)",
+        version: "2026-10-20 (fc085a6)",
+        purpose: "gdb console of the Debugger tab (needs gdb with Python on this system)",
+        license: "MIT (bata24; derived from GEF by hugsy)",
+        downloads: &[Download {
+            file: "gef.py",
+            url: "https://raw.githubusercontent.com/bata24/gef/fc085a60be334d38d498296187344e9e7d558587/gef.py",
+            sha256: "fabcdc13c8c7a81ceaa2af891f6ce4695d623adef98c8f2ccf365bbbf4df90ce",
+            size: 9_278_078,
+            archive: Archive::File,
+            into: "",
+        }],
+        requirements: None,
+        entry: "gef.py",
+    },
+    // The upstream portable build: its own gdb, Python and libraries, started
+    // through bin/pwndbg, so it needs nothing from the system.
+    Package {
+        id: "pwndbg",
+        name: "pwndbg",
+        version: "2026.09.15",
+        purpose: "gdb console of the Debugger tab (portable build with its own gdb 17.2)",
+        license: "MIT (pwndbg); the build bundles GDB 17.2 (GPL-3.0-or-later), Python (PSF) \
+                  and other libraries under their own licenses",
+        downloads: &[Download {
+            file: "pwndbg_2026.09.15_x86_64-portable.tar.xz",
+            url: "https://github.com/pwndbg/pwndbg/releases/download/2026.09.15/pwndbg_2026.09.15_x86_64-portable.tar.xz",
+            sha256: "7ba64666ee595885ba4b0e073f85e423829103e9fdbe921ba4eef1acd9150803",
+            size: 108_200_928,
+            archive: Archive::TarXz { strip: 1 },
+            into: "",
+        }],
+        requirements: None,
+        entry: "bin/pwndbg",
+    },
 ];
 
 pub fn package(id: &str) -> Option<&'static Package> {
@@ -261,6 +303,7 @@ pub fn system_candidates(id: &str) -> &'static [&'static str] {
         "die" => DIE_SYSTEM,
         "ghidra" => GHIDRA_SYSTEM,
         "magika" => MAGIKA_SYSTEM,
+        "pwndbg" => PWNDBG_SYSTEM,
         _ => &[],
     }
 }
@@ -472,6 +515,22 @@ fn xz_bytes(reader: &mut impl io::BufRead) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+/// A xz stream, decompressed on a helper thread as it is read: the pwndbg
+/// build is 665 MiB unpacked, too much to hold in memory. `finish` reports
+/// what went wrong in the stream, which the reader only sees as its end.
+fn xz_stream(file: File) -> Result<(impl Read, impl FnOnce() -> Result<(), String>), String> {
+    let (reader, mut writer) = io::pipe().map_err(|e| e.to_string())?;
+    let worker = std::thread::spawn(move || {
+        lzma_rs::xz_decompress(&mut io::BufReader::new(file), &mut writer)
+            .map_err(|e| format!("xz: {e}"))
+    });
+    Ok((reader, move || {
+        worker
+            .join()
+            .unwrap_or_else(|_| Err("xz: decoder failed".into()))
+    }))
+}
+
 /// The data archive of a Debian package (an ar file), decompressed.
 fn deb_data(path: &Path) -> Result<Vec<u8>, String> {
     let bytes = fs::read(path).map_err(|e| e.to_string())?;
@@ -514,8 +573,21 @@ fn unpack(download: &Download, archive: &Path, target: &Path) -> Result<(), Stri
         ),
         Archive::TarXz { strip } => {
             let file = File::open(archive).map_err(|e| e.to_string())?;
-            let tar = xz_bytes(&mut io::BufReader::new(file))?;
-            unpack_tar(io::Cursor::new(tar), &target, |path| inside(path, strip))
+            let (tar, finish) = xz_stream(file)?;
+            let unpacked = unpack_tar(tar, &target, |path| inside(path, strip));
+            // A broken stream is the cause of a tar that ended early; a
+            // broken pipe only follows a tar that stopped reading.
+            match (unpacked, finish()) {
+                (Ok(()), decoded) => decoded,
+                (Err(_), Err(decoded)) if !decoded.contains("Broken pipe") => Err(decoded),
+                (Err(error), _) => Err(error),
+            }
+        }
+        Archive::File => {
+            let path = target.join(download.file);
+            fs::copy(archive, &path).map_err(|e| format!("{}: {e}", path.display()))?;
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o444)).map_err(|e| e.to_string())
         }
         Archive::DebFiles { prefix } => {
             unpack_tar(io::Cursor::new(deb_data(archive)?), &target, |path| {
@@ -862,10 +934,10 @@ mod tests {
                 );
                 assert!(download.size > 0);
             }
-            // Volatility and Sigma only run from Antinomie's own pinned install.
+            // Volatility, Sigma and GEF only run from Antinomie's own pinned install.
             assert_eq!(
                 system_candidates(package.id).is_empty(),
-                matches!(package.id, "volatility3" | "sigma")
+                matches!(package.id, "volatility3" | "sigma" | "gef")
             );
         }
         // Magika is the official release binary of exactly the listed version,
@@ -934,6 +1006,102 @@ mod tests {
         );
         fs::write(&archive, b"not an xz stream").unwrap();
         assert!(unpack(&download, &archive, &target).is_err());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_debugger_consoles_are_pinned_to_the_upstream_files_they_were_checked_against() {
+        let gef = package("gef").unwrap();
+        let [download] = gef.downloads else {
+            panic!("one GEF download");
+        };
+        // The commit in the URL is the version, and the file is a single script.
+        assert!(download.url.contains("/bata24/gef/fc085a60be33"));
+        assert!(gef.version.contains("fc085a6"));
+        assert!(download.url.ends_with("/gef.py"));
+        assert_eq!(
+            download.sha256,
+            "fabcdc13c8c7a81ceaa2af891f6ce4695d623adef98c8f2ccf365bbbf4df90ce"
+        );
+        assert!(matches!(download.archive, Archive::File));
+        assert_eq!(gef.entry, "gef.py");
+        assert!(gef.license.starts_with("MIT"));
+        assert!(system_candidates("gef").is_empty());
+
+        let pwndbg = package("pwndbg").unwrap();
+        let [download] = pwndbg.downloads else {
+            panic!("one pwndbg download");
+        };
+        assert_eq!(
+            download.url,
+            format!(
+                "https://github.com/pwndbg/pwndbg/releases/download/{0}/pwndbg_{0}_x86_64-portable.tar.xz",
+                pwndbg.version
+            )
+        );
+        assert_eq!(
+            download.sha256,
+            "7ba64666ee595885ba4b0e073f85e423829103e9fdbe921ba4eef1acd9150803"
+        );
+        assert!(matches!(download.archive, Archive::TarXz { strip: 1 }));
+        assert_eq!(pwndbg.entry, "bin/pwndbg");
+        assert!(pwndbg.license.starts_with("MIT"));
+        assert!(
+            system_candidates("pwndbg")
+                .iter()
+                .all(|path| path.ends_with("/pwndbg"))
+        );
+    }
+
+    #[test]
+    fn the_notices_name_the_debugger_consoles_with_the_pinned_hashes_and_terms() {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../../../THIRD-PARTY-NOTICES.md");
+        // A source package without the repository's top level has no file.
+        let Ok(notices) = fs::read_to_string(path) else {
+            return;
+        };
+        for id in ["gef", "pwndbg"] {
+            let package = package(id).unwrap();
+            for download in package.downloads {
+                assert!(notices.contains(download.sha256), "{id} hash");
+            }
+            assert!(notices.contains("MIT"), "{id} terms");
+        }
+        assert!(notices.contains("fc085a60be334d38d498296187344e9e7d558587"));
+        assert!(notices.contains("Copyright (c) 2021-2026 bata24"));
+        assert!(notices.contains("pwndbg 2026.09.15"));
+        assert!(notices.contains("Copyright (c) 2026 Dominik 'Disconnect3d' Czarnota"));
+        assert!(notices.contains("GDB 17.2 (GPL-3.0-or-later)"));
+    }
+
+    #[test]
+    fn a_single_file_download_is_kept_under_its_name_read_only() {
+        let root =
+            std::env::temp_dir().join(format!("ant-tools-file-{}", crate::storage::unique_id()));
+        fs::create_dir_all(&root).unwrap();
+        let archive = root.join("gef.py");
+        fs::write(&archive, b"print('gef')\n").unwrap();
+        let download = Download {
+            file: "gef.py",
+            url: "https://example.invalid/gef.py",
+            sha256: "",
+            size: 0,
+            archive: Archive::File,
+            into: "",
+        };
+        let target = root.join("out");
+        unpack(&download, &archive, &target).unwrap();
+        assert_eq!(fs::read(target.join("gef.py")).unwrap(), b"print('gef')\n");
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            fs::metadata(target.join("gef.py"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o444
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
