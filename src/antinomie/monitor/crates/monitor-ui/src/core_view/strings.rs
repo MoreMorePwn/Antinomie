@@ -341,12 +341,12 @@ impl StringsState {
             .striped(true)
             .sense(egui::Sense::click())
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-            .column(Column::initial(150.0).at_least(110.0).clip(true))
-            .column(Column::initial(90.0).at_least(60.0).clip(true))
+            .column(Column::initial(130.0).at_least(100.0).clip(true))
+            .column(Column::initial(80.0).at_least(60.0).clip(true))
             .column(Column::exact(84.0))
             .column(Column::exact(72.0))
-            .column(Column::initial(170.0).at_least(80.0).clip(true))
-            .column(Column::remainder().at_least(200.0).clip(true))
+            .column(Column::initial(120.0).at_least(70.0).clip(true))
+            .column(Column::remainder().at_least(100.0).clip(true))
             .header(table::header_height(font), |mut header| {
                 for (column, title) in ["Address", "File offset", "Encoding"]
                     .into_iter()
@@ -433,11 +433,15 @@ impl StringsState {
                 self.reset();
                 self.start(&record.core);
             }
-            ui.weak(format!(
-                "{} strings in {} of captured memory (ASCII of 4 or more octets, UTF-16LE of 4 or more characters)",
-                extracted.strings.len(),
-                crate::values::file_size(extracted.scanned),
-            ));
+            ui.add(
+                egui::Label::new(egui::RichText::new(format!(
+                    "{} strings in {} of captured memory",
+                    extracted.strings.len(),
+                    crate::values::file_size(extracted.scanned),
+                )).color(crate::theme::muted()))
+                .truncate(),
+            )
+            .on_hover_text("ASCII of 4 or more octets and UTF-16LE of 4 or more characters, as in Static analysis");
         });
         if self.running.is_some() {
             return;

@@ -506,6 +506,7 @@ impl CoreView {
         egui::CentralPanel::default()
             .frame(egui::Frame::new().inner_margin(egui::Margin {
                 left: 10,
+                right: 8,
                 ..Default::default()
             }))
             .show_inside(ui, |ui| self.analysis(ui));

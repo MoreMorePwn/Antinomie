@@ -230,7 +230,7 @@ impl CoreView {
             crate::activity::Level::Info,
             "Register values are recovered evidence. Stack unwinding, pointer chains, and debugger execution are not available for a saved core; attach the debugger to a live process for those.",
         );
-        egui::ScrollArea::both()
+        egui::ScrollArea::vertical()
             .id_salt("core-registers")
             .show(ui, |ui| {
                 let groups: &[(&str, &[&str])] = &[
@@ -383,8 +383,8 @@ impl CoreView {
             .max_scroll_height(crate::widgets::table::row_height(font) * 7.0)
             .min_scrolled_height(0.0)
             .column(
-                egui_extras::Column::initial(250.0)
-                    .at_least(130.0)
+                egui_extras::Column::initial(290.0)
+                    .at_least(160.0)
                     .clip(true),
             )
             .column(egui_extras::Column::exact(64.0))
@@ -484,7 +484,7 @@ impl CoreView {
             });
             return;
         };
-        let wide = ui.available_width() >= 760.0;
+        let wide = ui.available_width() >= 880.0;
         if wide {
             egui::SidePanel::right("core-mapping-info")
                 .resizable(true)

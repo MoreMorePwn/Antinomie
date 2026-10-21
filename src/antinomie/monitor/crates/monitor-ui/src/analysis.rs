@@ -473,6 +473,15 @@ pub(crate) enum ReportAction {
     },
 }
 
+/// Bold text in the theme's text color; `Ui::strong` is white in the Light theme.
+pub(crate) fn strong(ui: &mut egui::Ui, text: impl Into<String>) -> egui::Response {
+    ui.label(
+        egui::RichText::new(text)
+            .strong()
+            .color(crate::theme::text()),
+    )
+}
+
 pub(crate) fn section_title(kind: AnalysisKind) -> &'static str {
     match kind {
         AnalysisKind::Metadata => "Metadata",
