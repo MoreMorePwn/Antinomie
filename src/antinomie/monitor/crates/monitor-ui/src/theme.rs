@@ -9,7 +9,7 @@ use std::sync::atomic::AtomicU8;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 mod palettes;
-pub use palettes::{Palette, Theme, TREE_COLOR_COUNT};
+pub use palettes::{translate, Palette, Theme, TREE_COLOR_COUNT};
 #[cfg(test)]
 pub use palettes::{BLUE, DARK, LIGHT};
 
@@ -357,9 +357,13 @@ pub fn apply_theme(ctx: &egui::Context, theme: Theme) {
     style.visuals.widgets.hovered.bg_fill = palette.hover;
     style.visuals.widgets.hovered.weak_bg_fill = palette.hover;
     style.visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, palette.accent);
-    style.visuals.widgets.active.bg_fill = palette.primary;
-    style.visuals.widgets.active.weak_bg_fill = palette.primary;
-    style.visuals.widgets.active.fg_stroke = Stroke::new(1.0_f32, palette.primary_text);
+    // egui draws `RichText::strong()` in the pressed state's text color, so
+    // that color must read on the panel: the pressed fill is the selection
+    // tint, not the primary fill. A primary button sets its own fill and text.
+    style.visuals.widgets.active.bg_fill = palette.selection;
+    style.visuals.widgets.active.weak_bg_fill = palette.selection;
+    style.visuals.widgets.active.bg_stroke = Stroke::new(1.0_f32, palette.accent);
+    style.visuals.widgets.active.fg_stroke = Stroke::new(1.0_f32, palette.text);
     style.visuals.widgets.open.bg_fill = palette.hover;
     // egui grows a hovered or pressed widget by a point; next to a panel or
     // window edge that point is cut off, so widgets keep their size.
@@ -508,6 +512,25 @@ mod tests {
     fn contrast(a: Color32, b: Color32) -> f32 {
         let (a, b) = (luminance(a), luminance(b));
         (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    /// `RichText::strong()` and `Ui::strong` take the pressed text color; it
+    /// must read on every surface in every theme (it was white in Light).
+    #[test]
+    fn strong_text_reads_on_the_surfaces_in_every_theme() {
+        for theme in Theme::ALL {
+            let ctx = egui::Context::default();
+            install(&ctx);
+            apply_theme(&ctx, theme);
+            let p = theme.palette();
+            let strong = ctx.style().visuals.strong_text_color();
+            assert_eq!(strong, p.text, "{theme:?}");
+            for ground in [p.bg, p.panel, p.raised, p.hover] {
+                assert!(contrast(strong, ground) >= 7.0, "{theme:?} on {ground:?}");
+            }
+            let pressed = ctx.style().visuals.widgets.active.bg_fill;
+            assert!(contrast(strong, pressed) >= 4.5, "{theme:?} pressed fill");
+        }
     }
 
     /// Every token of every theme is set, opaque where it must be, and
