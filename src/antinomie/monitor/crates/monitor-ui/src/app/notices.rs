@@ -9,8 +9,20 @@ use crate::activity::{report, report_quiet, Level};
 impl MonitorApp {
     pub(super) fn collect_notices(&self, ctx: &egui::Context) {
         let snapshot = &self.snapshot;
+        // A condition that stands is one toast; it toasts again only after it
+        // has gone and come back.
+        let key = egui::Id::new("collected-notices");
+        let previous: std::collections::HashSet<String> =
+            ctx.data(|data| data.get_temp(key)).unwrap_or_default();
+        let mut now = std::collections::HashSet::new();
+        let mut emit = |level: Level, message: String| {
+            if !previous.contains(&message) {
+                report(ctx, level, &message);
+            }
+            now.insert(message);
+        };
         for message in crate::summary::health::notices(snapshot, &self.history) {
-            report(ctx, Level::Warn, message);
+            emit(Level::Warn, message.to_string());
         }
         for error in [
             &snapshot.last_error,
@@ -22,7 +34,7 @@ impl MonitorApp {
         .into_iter()
         .flatten()
         {
-            report(ctx, Level::Error, error);
+            emit(Level::Error, error.to_string());
         }
         for error in [
             snapshot
@@ -41,7 +53,7 @@ impl MonitorApp {
         .into_iter()
         .flatten()
         {
-            report(ctx, Level::Error, error);
+            emit(Level::Error, error.to_string());
         }
         if let Some(resources) = &snapshot.vm_resources {
             for error in [
@@ -54,14 +66,15 @@ impl MonitorApp {
             .into_iter()
             .flatten()
             {
-                report(ctx, Level::Warn, error);
+                emit(Level::Warn, error.to_string());
             }
         }
         if let Some(flush) = &snapshot.recording_flush {
             for error in &flush.errors {
-                report(ctx, Level::Error, error);
+                emit(Level::Error, error.to_string());
             }
         }
+        ctx.data_mut(|data| data.insert_temp(key, now));
         for run in snapshot.runs.iter().chain(&self.history) {
             if let Some(message) = crate::run_recording::warning_message(run) {
                 report_quiet(ctx, Level::Warn, message);

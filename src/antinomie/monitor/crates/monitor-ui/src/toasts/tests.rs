@@ -422,3 +422,78 @@ fn a_failed_status_leaves_the_view_as_a_toast_and_a_success_stays() {
     assert!(status.is_none());
     assert_eq!(level_count(&ctx), 1);
 }
+
+/// One frame in which the app reports `message` (or not), then logs it.
+fn frame_reporting(ctx: &egui::Context, journal: &mut Journal, time: f64, message: Option<&str>) {
+    let _ = ctx.run(
+        egui::RawInput {
+            time: Some(time),
+            ..Default::default()
+        },
+        |ctx| {
+            if let Some(message) = message {
+                crate::activity::report(ctx, Level::Error, message);
+            }
+            journal.ingest(ctx);
+        },
+    );
+}
+
+fn counts(ctx: &egui::Context) -> Vec<u32> {
+    with(ctx, |toasts| {
+        toasts.items().iter().map(|toast| toast.count).collect()
+    })
+}
+
+#[test]
+fn a_condition_reported_every_frame_is_one_toast() {
+    let ctx = context();
+    let mut journal = Journal::default();
+    for frame in 0..5 {
+        frame_reporting(
+            &ctx,
+            &mut journal,
+            f64::from(frame),
+            Some("Export: disk full"),
+        );
+    }
+    assert_eq!(counts(&ctx), [1]);
+}
+
+#[test]
+fn a_retry_that_fails_again_counts_while_shown_and_raises_a_new_toast_after_dismissal() {
+    let ctx = context();
+    let mut journal = Journal::default();
+    frame_reporting(&ctx, &mut journal, 0.0, Some("Export: disk full"));
+    assert_eq!(counts(&ctx), [1]);
+    // The same row is not written twice within a second.
+    std::thread::sleep(Duration::from_millis(1100));
+    frame_reporting(&ctx, &mut journal, 1.0, None);
+    frame_reporting(&ctx, &mut journal, 2.0, Some("Export: disk full"));
+    assert_eq!(counts(&ctx), [2], "repeat while visible counts");
+    let id = with(&ctx, |toasts| toasts.items()[0].id);
+    with(&ctx, |toasts| toasts.dismiss(id));
+    std::thread::sleep(Duration::from_millis(1100));
+    frame_reporting(&ctx, &mut journal, 3.0, None);
+    frame_reporting(&ctx, &mut journal, 4.0, Some("Export: disk full"));
+    assert_eq!(counts(&ctx), [1], "after dismissal it is a new toast");
+    assert_eq!(
+        journal.counts(),
+        (0, 3),
+        "each occurrence is an Activity row"
+    );
+}
+
+#[test]
+fn push_and_take_failure_follow_the_same_rule() {
+    let ctx = context();
+    push(&ctx, Level::Error, "Failed", "boom", None);
+    push(&ctx, Level::Error, "Failed", "boom", None);
+    assert_eq!(counts(&ctx), [2]);
+    let id = with(&ctx, |toasts| toasts.items()[0].id);
+    with(&ctx, |toasts| toasts.dismiss(id));
+    let mut status = Some(("Failed: boom".to_owned(), true));
+    take_failure(&ctx, &mut status);
+    take_failure(&ctx, &mut Some(("Failed: boom".to_owned(), true)));
+    assert_eq!(counts(&ctx), [2]);
+}
