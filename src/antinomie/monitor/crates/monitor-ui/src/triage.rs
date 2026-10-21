@@ -29,6 +29,7 @@ pub(crate) enum OpenInput {
 pub(crate) const OPEN_INPUT: &str = "triage-open-input";
 
 mod archive_scan;
+mod async_files;
 mod auditd_events;
 mod bpf_notes;
 mod counts;
@@ -66,6 +67,8 @@ mod summary;
 mod table;
 #[cfg(test)]
 mod torture_qa;
+#[cfg(test)]
+mod uring_qa;
 use self::{
     archive_scan::*, bpf_notes::*, descriptors::*, file_category::FILE_FIELDS, file_events::*,
     findings::*, pcap_scan::*, process_tree::*, refresh::*, table::*,
@@ -1163,6 +1166,11 @@ struct FdState {
     cwd: std::collections::BTreeMap<(u64, u32), String>,
     cwd_unverified: std::collections::BTreeSet<(u64, u32)>,
     cloexec: std::collections::BTreeSet<(u64, u32, u64)>,
+    /// File identity the guest recorded → the name the file was last opened
+    /// or renamed to, for a call that reaches it by no descriptor the run saw
+    /// opened (a slot of an io_uring registered table).
+    identity_paths:
+        std::collections::BTreeMap<antinomie_monitor_core::kernel_notes::FileKey, String>,
     /// What the Sigma journal tracks beyond descriptors: sockets, known paths, DNS answers.
     journal: sigma_events::State,
 }

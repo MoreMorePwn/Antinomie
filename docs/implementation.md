@@ -289,6 +289,51 @@ optional, so an older guest and an older host both keep working.
   `UNLINKAT`, and the issue of a request that acts on an open regular file attach
   the same bytes to the request (`async.operand.file_id`). Those operations run
   on a worker with no traced call, which is why they are request operands.
+* **Triage (host).** `triage/async_files.rs` groups the saved asynchronous
+  observations by request and writes each file request as the equivalent system
+  call, with the submitting call's identity, the path operands as `argN.name`
+  fields, the recorded data as `arg1.buf` and the result of its completion; the
+  scan feeds those calls through the tracking and classification it already has,
+  so Opened, Read, Written, Deleted, Renamed and the detection events need no
+  second path. A registered descriptor (`IOSQE_FIXED_FILE`) is not a descriptor
+  number: it carries none and is resolved through the file identity. An
+  `OPENAT`/`OPENAT2` with a `file_index` installs into the ring's table; its
+  result is a slot (or 0), so it is shown as `registered` and never tracked as a
+  descriptor of the process (`async_files::direct_descriptor`). A call that
+  reaches a file by no descriptor of the run (a registered slot) is named, and
+  counted as by descriptor, from the identity of the file it used and the name
+  an earlier open or rename gave that identity (`FdState::identity_paths`). The
+  guest publishes a request's data in stages, each at its offset in the
+  transfer (a vector read fills one segment after another): one stage is the
+  call's `arg1.buf`, several are its `arg1.iov[N].data` segments, up to the
+  first stage that is missing. `files.rs`
+  routes a call to the entry of the file it names by identity (`FileIndex::route`):
+  a name seen before for the same inode joins, a name that now holds another inode
+  splits the old file off, and the link count turns "deleted" into "name removed
+  (N links remain)". Without identity everything is as before: a name is a file.
+* **Verification.** Synthetic recordings: unit tests of the request decoding, the
+  identity routing, direct-descriptor opens and the interpreter text. Real
+  recordings: `uring-check record` (fixture modes `files`, `regfiles` with
+  `OPENAT`, `WRITEV`/`READV`, `WRITE_FIXED`/`READ_FIXED`, a registered file and a
+  direct-descriptor open, `syncfiles`, `aio` with vectors, `script`, and the
+  torture module) then the ignored test `recorded_uring_triage`
+  (`triage/uring_qa.rs`), which prints every row it matched and fails on any
+  that is missing. `uring-check` status modes boot two vCPUs; `record` boots one
+  (see Limits).
+* **Limits.** A request that never completed has no result and is shown as a call
+  with no exit. Requests that an SQPOLL thread submitted on behalf of the ring's
+  creator have no submitting call to attach to, and are not read. Operations that touch no file (sockets, timeouts, polls) are not
+  mapped. `SPLICE`, `TEE`, `FSYNC` and extended-attribute requests are not mapped.
+  The io_uring rename, link and unlink identity comes from a lookup just before
+  the operation, so a name changed in between is identified as it was at the
+  lookup. A core of a process whose leader left first is Partial for the
+  leader's missing registers, as before. Past 100,000 file requests a scan
+  stops reading them and the coverage line says so. On a guest with more than
+  one vCPU, a record a worker publishes after a call (an unlink's content hash)
+  can be saved ahead of calls made before it, and the archive orders a call by
+  its first saved record, so a file's lifecycle can list such a step early
+  (found with `uring-check record` on two vCPUs; it predates this work and is
+  not changed here).
 
 ### Accepted ANT-T0097 host UI performance (0.6.2)
 

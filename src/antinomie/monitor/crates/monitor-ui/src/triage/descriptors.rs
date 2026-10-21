@@ -6,6 +6,9 @@ use super::*;
 /// Every other file operation uses the argument whose schema name is `fd`.
 pub(super) fn file_fd(invocation: &InvocationSummary, event: &EventSummary) -> String {
     if OPEN_NAMES.contains(&event.syscall_name.as_str()) {
+        if async_files::direct_descriptor(invocation) {
+            return "registered".into();
+        }
         return invocation
             .exit
             .as_ref()
@@ -101,10 +104,11 @@ pub(super) fn remember_open(
         }
         return;
     }
+    remember_identity(files, invocation, event);
     if !OPEN_NAMES.contains(&event.syscall_name.as_str()) {
         return;
     }
-    if !succeeded(invocation) {
+    if !succeeded(invocation) || async_files::direct_descriptor(invocation) {
         return;
     }
     let Some(result) = invocation.exit.as_ref().and_then(|exit| exit.result) else {
@@ -531,8 +535,50 @@ pub(super) fn displayed_path(
             return path.clone();
         }
     }
+    if let Some(path) = identity_path(files, invocation) {
+        return path.to_owned();
+    }
     // Trace text is not a path. An uncaptured filename stays unknown.
     "—".into()
+}
+
+/// Remember the name of a file the guest identified, when a call opened it or
+/// renamed it, so a later call that reaches the same file by no descriptor of
+/// the run (a slot of an io_uring registered table) can still be named.
+fn remember_identity(files: &mut FdState, invocation: &InvocationSummary, event: &EventSummary) {
+    let Some(id) = kernel_records::file_id(invocation) else {
+        return;
+    };
+    if !succeeded(invocation) {
+        return;
+    }
+    let name = event.syscall_name.as_str();
+    let path = if OPEN_NAMES.contains(&name) {
+        Some(displayed_path(invocation, event, files))
+    } else if name.starts_with("rename") {
+        sigma_events::paths(files, invocation, event)
+            .into_iter()
+            .find(|used| used.role == sigma_events::Role::New)
+            .map(|used| used.name)
+    } else {
+        None
+    };
+    if let Some(path) = path.filter(|path| path != "—") {
+        if files.identity_paths.len() < 65536 || files.identity_paths.contains_key(&id.key) {
+            files.identity_paths.insert(id.key, path);
+        }
+    }
+}
+
+/// The name of the file a call acted on, from the identity the guest recorded
+/// for it, when an earlier open or rename of the run named that file.
+pub(super) fn identity_path<'a>(
+    files: &'a FdState,
+    invocation: &InvocationSummary,
+) -> Option<&'a str> {
+    kernel_records::file_id(invocation)
+        .and_then(|id| files.identity_paths.get(&id.key))
+        .map(String::as_str)
 }
 
 fn resolve_path(

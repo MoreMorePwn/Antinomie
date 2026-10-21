@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: MIT
 //! Bounded, evidence-based file reads and original-to-final change reconstruction.
-//! Unknown bytes are never zero-filled. Paths are observed names, not inode identities.
+//! Unknown bytes are never zero-filled. A path is a name: where the guest
+//! recorded the identity of a file (device and inode) one file is followed
+//! across its names, and where it did not, two names are two files.
 use super::file_category::{self, Access, Category, Hit};
 use super::file_content::{capture as captured_data, CapturedPayload};
 use super::file_location::{self, Location};
 use super::*;
+use antinomie_monitor_core::kernel_notes::{FileId, FileIdKind, FileKey};
 use std::collections::{BTreeMap, BTreeSet};
 
 const READ_NAMES: &[&str] = &["read", "pread64", "readv", "preadv", "preadv2"];
@@ -55,7 +58,16 @@ pub(super) struct Change {
     mode: Option<u64>,
     locations: Vec<Location>,
     access: Option<Access>,
+    /// The file the guest identified, once a call named it.
+    identity: Option<FileKey>,
+    /// Other names the same file was seen under (renames, hard links), in order.
+    names: Vec<String>,
+    /// Hard links the inode had after the last call that reported them.
+    links: Option<u32>,
 }
+
+const PATH_GAP: &str =
+    "File path unavailable; these operations cannot be assigned to a named file.";
 
 /// Distinct lifecycle steps kept per file.
 const LIFECYCLE_STEPS: usize = 64;
@@ -133,6 +145,35 @@ impl Change {
             ));
         }
         text
+    }
+    /// Record what the guest said about the file this change describes: its
+    /// identity, how many links it has left and a new name for it.
+    fn note_identity(&mut self, id: FileId, name: Option<&str>) {
+        self.identity.get_or_insert(id.key);
+        if !matches!(id.kind, FileIdKind::Issue | FileIdKind::Exec) {
+            self.links = Some(id.nlink);
+        }
+        if let (false, Some(name)) = (self.path_known, name) {
+            self.path = name.to_owned();
+            self.path_known = true;
+            self.gaps.remove(PATH_GAP);
+        }
+    }
+    /// A name the file was reached by that no rename or link of the run gave it.
+    fn alias(&mut self, name: String) {
+        if name != self.path && !self.names.contains(&name) && self.names.len() < 16 {
+            self.step(format!("also seen as {name}"));
+            self.names.push(name);
+        }
+    }
+    /// A name the file was given by a rename or a hard link.
+    fn add_name(&mut self, name: &str) {
+        if name != self.path
+            && !self.names.iter().any(|known| known == name)
+            && self.names.len() < 16
+        {
+            self.names.push(name.to_owned());
+        }
     }
     fn count_label(&self) -> String {
         let count = self.diff_count();
@@ -214,6 +255,21 @@ impl Change {
                 RowValue::List(self.operations.iter().map(|op| op.name.clone()).collect()),
             ),
             ("file.lifecycle", RowValue::Text(self.lifecycle_text())),
+            (
+                "file.inode",
+                self.identity.map_or(RowValue::Missing, |key| {
+                    RowValue::Text(format!("{}:{}", key.dev, key.ino))
+                }),
+            ),
+            (
+                "file.names",
+                RowValue::List(
+                    std::iter::once(&self.path)
+                        .chain(self.names.iter())
+                        .cloned()
+                        .collect(),
+                ),
+            ),
             (
                 "file.category",
                 RowValue::List(
@@ -314,6 +370,18 @@ pub(super) struct FileIndex {
     descriptors: BTreeMap<(u64, u32, u64), u64>,
     descriptions: BTreeMap<u64, (Option<u64>, bool)>,
     next_description: u64,
+    /// Identified file → the group of its changes, whatever name it came by.
+    by_identity: BTreeMap<FileKey, String>,
+    /// Open-file description → the group of the identified file it was opened
+    /// on, so a write through a descriptor reaches the file whatever name the
+    /// descriptor was opened by.
+    description_group: BTreeMap<u64, String>,
+    /// Group → the identified file it holds, to tell a name that a new file
+    /// took over from the file that held it.
+    group_identity: BTreeMap<String, FileKey>,
+    /// Names the file of a group was reached by, not yet put in its entry.
+    aliases: BTreeMap<String, Vec<String>>,
+    next_split: u64,
     retained_octets: usize,
     operation_count: usize,
     pub omitted_files: u64,
@@ -353,12 +421,15 @@ impl FileIndex {
                 self.descriptors.remove(&key);
             }
         }
+        let mut opened_description = None;
         if OPEN_NAMES.contains(&name)
             && success
+            && !async_files::direct_descriptor(call)
             && self.descriptions.len() < 65536
             && self.descriptors.len() < 65536
         {
             let id = self.next_description;
+            opened_description = Some(id);
             self.next_description = self.next_description.saturating_add(1);
             self.descriptions.insert(
                 id,
@@ -442,6 +513,17 @@ impl FileIndex {
                 .iter()
                 .any(|hit| matches!(hit.category, Category::Executed | Category::Mapped));
         if !reading && !changed && !lifecycle_only {
+            // An open that changes nothing still says which file a descriptor
+            // leads to, whatever name it was opened by.
+            if let (Some(opened), Some(id)) = (opened_description, kernel_records::file_id(call)) {
+                let named = displayed_path(call, event, files);
+                if named != "—" {
+                    let mut alias = None;
+                    let group = self.route(id.key, named.clone(), Some(&named), &mut alias);
+                    self.remember_alias(&group, alias);
+                    self.bind_description(opened, group);
+                }
+            }
             return None;
         }
         let observed = displayed_path(call, event, files);
@@ -460,6 +542,42 @@ impl FileIndex {
             observed
         } else {
             unavailable_descriptor(fd)
+        };
+        // The same file may arrive by another name, or by no name at all (a
+        // descriptor of a registered table, one opened before the capture):
+        // the guest's file identity joins it to the file it already knows.
+        let identity = kernel_records::file_id(call);
+        let mut alias = None;
+        // A rename or link acts on the file by its old name and names it anew;
+        // without an identity the pair of names is all there is to key on.
+        let (group, path, path_known) = match identity.and_then(|_| {
+            sigma_events::paths(files, call, event)
+                .into_iter()
+                .find(|used| used.role == sigma_events::Role::Old)
+        }) {
+            Some(old) => (old.name.clone(), old.name, true),
+            None => (group, path, path_known),
+        };
+        let group = match identity {
+            Some(id) => self.route(
+                id.key,
+                group,
+                path_known.then_some(path.as_str()),
+                &mut alias,
+            ),
+            // An operation on a descriptor goes where its description was opened.
+            None => description
+                .and_then(|id| self.description_group.get(&id))
+                .cloned()
+                .unwrap_or(group),
+        };
+        self.remember_alias(&group, alias.take());
+        if let (Some(description), Some(_)) = (opened_description, identity) {
+            self.bind_description(description, group.clone());
+        }
+        let (path, path_known) = match self.changes.get(&group) {
+            Some(known) if !path_known && known.path_known => (known.path.clone(), true),
+            _ => (path, path_known),
         };
         let mut explicit = matches!(
             name,
@@ -548,7 +666,14 @@ impl FileIndex {
                 ),
                 cell(result_label(ret), theme::text(), false),
                 file_category::location_cell(&read_locations),
-                cell(read_access.label(), theme::text(), false),
+                cell(
+                    match async_files::via(call) {
+                        Some(system) => format!("{} ({system})", read_access.label()),
+                        None => read_access.label().to_owned(),
+                    },
+                    theme::text(),
+                    false,
+                ),
                 cell(format!("call {}", call.call_id), theme::text(), true),
             ];
             row[0].values = vec![
@@ -582,6 +707,16 @@ impl FileIndex {
                 ("process.pid", RowValue::Number(i128::from(event.pid))),
                 ("process.tid", RowValue::Number(i128::from(event.tid))),
                 ("file.operation", RowValue::Text(name.into())),
+                (
+                    "file.via",
+                    RowValue::Text(async_files::via(call).unwrap_or("syscall").into()),
+                ),
+                (
+                    "file.inode",
+                    kernel_records::file_id(call).map_or(RowValue::Missing, |id| {
+                        RowValue::Text(format!("{}:{}", id.key.dev, id.key.ino))
+                    }),
+                ),
                 (
                     "file.success",
                     ret.map_or(RowValue::Missing, |ret| RowValue::Bool(ret >= 0)),
@@ -643,9 +778,18 @@ impl FileIndex {
             self.omitted_files += 1;
             return read_row;
         }
+        let known_identity = self.group_identity.get(&group).copied();
+        // A file reached first by another name keeps the name of its group.
+        let own_name = group
+            .split('\u{0}')
+            .next()
+            .filter(|name| !name.is_empty())
+            .map(str::to_owned);
+        let aliases = self.aliases.remove(&group);
         let change = self.changes.entry(group).or_insert_with(|| Change {
-            path: path.clone(),
-            path_known,
+            path: own_name.clone().unwrap_or_else(|| path.clone()),
+            path_known: path_known || own_name.is_some(),
+            identity: known_identity,
             standard_io: true,
             process_image: process_image(files, event).map(str::to_owned),
             call: call.call_id,
@@ -657,6 +801,12 @@ impl FileIndex {
             access: Some(file_category::access(files, call, event)),
             ..Change::default()
         });
+        if let Some(id) = identity {
+            change.note_identity(id, path_known.then_some(path.as_str()));
+        }
+        for alias in aliases.into_iter().flatten() {
+            change.alias(alias);
+        }
         // Hide a group only when every observed operation uses fd 0/1/2.
         // A metadata/namespace operation or another descriptor keeps it visible.
         change.standard_io &= file_fd(call, event)
@@ -665,16 +815,14 @@ impl FileIndex {
             .and_then(crate::values::standard_fd_name)
             .is_some();
         if !path_known {
-            change.gaps.insert(
-                "File path unavailable; these operations cannot be assigned to a named file.",
-            );
+            change.gaps.insert(PATH_GAP);
         }
         if change.operations.len() < TIMELINE_ROWS && self.operation_count < TOTAL_OPERATIONS {
             change.operations.push(Operation {
                 time: event.timestamp_ns,
                 call: call.call_id,
                 key: trace::key(call),
-                name: name.into(),
+                name: file_events::operation_label(call, event),
                 process: process_identity(event.pid, event.tid, process_image(files, event)),
                 result: result_label(ret),
             });
@@ -785,16 +933,34 @@ impl FileIndex {
                     change.modified = true;
                     change.gaps.insert("Truncate observed; uncaptured original bytes and implicit zero extension are unavailable.");
                 }
-                "unlink" | "unlinkat" | "rmdir" => {
-                    change.deleted = true;
-                    change.gaps.insert(
-                        "Unlink observed; link count and final inode lifetime are unavailable.",
-                    );
-                }
+                "unlink" | "unlinkat" | "rmdir" => match identity {
+                    // Another name keeps the file alive: only a name was removed.
+                    Some(id) if id.nlink > 0 && !id.directory => {}
+                    Some(_) => change.deleted = true,
+                    None => {
+                        change.deleted = true;
+                        change.gaps.insert(
+                            "Unlink observed; link count and final inode lifetime are unavailable.",
+                        );
+                    }
+                },
                 "msync" => {
                     change.modified = true;
                     change.final_data.clear();
                     change.gaps.insert("Shared writable mapping observed; actual mapped writes and final bytes are unavailable.");
+                }
+                "rename" | "renameat" | "renameat2" | "link" | "linkat" if identity.is_some() => {
+                    let new = sigma_events::paths(files, call, event)
+                        .into_iter()
+                        .find(|used| used.role == sigma_events::Role::New);
+                    if let Some(new) = new {
+                        change.add_name(&new.name);
+                    }
+                    if name.starts_with("rename") {
+                        change.gaps.insert(
+                            "Rename observed; a destination file it overwrote is not captured.",
+                        );
+                    }
                 }
                 "rename" | "renameat" | "renameat2" | "link" | "linkat" | "symlink"
                 | "symlinkat" => {
@@ -839,6 +1005,61 @@ impl FileIndex {
             change.final_size = Some(0);
         }
         read_row
+    }
+    /// The group of the changes to the file `key`. A name already seen for the
+    /// same file joins it. A name that now holds another file starts its own
+    /// group and the file it held keeps its history under a private key.
+    fn route(
+        &mut self,
+        key: FileKey,
+        group: String,
+        name: Option<&str>,
+        alias: &mut Option<String>,
+    ) -> String {
+        if let Some(known) = self.by_identity.get(&key).cloned() {
+            if known != group {
+                *alias = name.map(str::to_owned);
+            }
+            return known;
+        }
+        let replaced = self
+            .group_identity
+            .get(&group)
+            .copied()
+            .filter(|old| *old != key);
+        if let Some(old) = replaced {
+            let private = format!("{group}\u{0}#{}", self.next_split);
+            self.next_split += 1;
+            if let Some(change) = self.changes.remove(&group) {
+                self.changes.insert(private.clone(), change);
+            }
+            self.group_identity.remove(&group);
+            self.group_identity.insert(private.clone(), old);
+            self.by_identity.insert(old, private.clone());
+            for known in self.description_group.values_mut() {
+                if *known == group {
+                    known.clone_from(&private);
+                }
+            }
+        }
+        if self.by_identity.len() < 65536 {
+            self.by_identity.insert(key, group.clone());
+            self.group_identity.insert(group.clone(), key);
+        }
+        group
+    }
+    fn remember_alias(&mut self, group: &str, alias: Option<String>) {
+        if let Some(alias) = alias {
+            let names = self.aliases.entry(group.to_owned()).or_default();
+            if names.len() < 16 && !names.contains(&alias) {
+                names.push(alias);
+            }
+        }
+    }
+    fn bind_description(&mut self, description: u64, group: String) {
+        if self.description_group.len() < 65536 {
+            self.description_group.insert(description, group);
+        }
     }
     pub fn finish(self) -> Vec<Change> {
         self.changes
@@ -1252,5 +1473,193 @@ mod tests {
         let (_, rows) = build(&[open(2), read]);
         assert!(rows[0][3].text.contains("??????"));
         assert!(!rows[0][3].text.contains("XYZ"));
+    }
+
+    /// A call with the guest's identity record of the file it acted on.
+    fn identified(
+        mut call: InvocationSummary,
+        kind: u8,
+        nlink: u32,
+        inode: u64,
+    ) -> InvocationSummary {
+        let mut bytes = vec![0u8; 32];
+        bytes[0] = kind;
+        bytes[1] = 2;
+        bytes[4..8].copy_from_slice(&nlink.to_le_bytes());
+        bytes[8..16].copy_from_slice(&1u64.to_le_bytes());
+        bytes[16..24].copy_from_slice(&inode.to_le_bytes());
+        bytes[24..28].copy_from_slice(&1u32.to_le_bytes());
+        bytes[28..32].copy_from_slice(&0o100644u32.to_le_bytes());
+        let mut note = call.exit.clone().unwrap();
+        note.phase = 3;
+        note.fields = vec![captured("lifecycle.file_id", "antinomie.fileid/1", &bytes)];
+        call.kernel_notes.push(note);
+        call
+    }
+
+    fn named(
+        id: u64,
+        nr: u64,
+        name: &str,
+        ret: i64,
+        args: [u64; 6],
+        paths: &[&str],
+    ) -> InvocationSummary {
+        let mut call = operation(id, nr, name, ret, args, b"");
+        for (index, path) in paths.iter().enumerate() {
+            let mut bytes = path.as_bytes().to_vec();
+            bytes.push(0);
+            let key = match (name, index) {
+                ("rename" | "link", 0) => "arg0.oldname",
+                ("rename" | "link", _) => "arg1.newname",
+                _ => "arg0.pathname",
+            };
+            call.entry
+                .as_mut()
+                .unwrap()
+                .fields
+                .push(captured(key, "", &bytes));
+        }
+        call
+    }
+
+    fn create(id: u64, path: &str, inode: u64, nlink: u32) -> InvocationSummary {
+        let mut call = named(id, 2, "open", 3, [0, 0x42, 0, 0, 0, 0], &[path]);
+        call.entry.as_mut().unwrap().args = Some([0, 0x42, 0, 0, 0, 0]);
+        identified(call, 1, nlink, inode)
+    }
+
+    fn reopen(id: u64, path: &str, inode: u64, nlink: u32) -> InvocationSummary {
+        let call = named(id, 2, "open", 4, [0, 0x2, 0, 0, 0, 0], &[path]);
+        identified(call, 1, nlink, inode)
+    }
+
+    #[test]
+    fn a_name_the_run_never_saw_made_is_joined_to_its_file_by_identity() {
+        let calls = [
+            create(1, "/tmp/x", 100, 2),
+            operation(2, 1, "write", 1, [3, 0, 1, 0, 0, 0], b"x"),
+            // Another name of the same inode, linked before the capture.
+            reopen(3, "/tmp/y", 100, 2),
+            operation(4, 1, "write", 1, [4, 0, 1, 0, 0, 0], b"y"),
+        ];
+        let (index, _) = build(&calls);
+        let changes = index.finish();
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].names, ["/tmp/y"]);
+        assert!(changes[0].lifecycle_text().contains("also seen as /tmp/y"));
+        assert!(
+            changes[0].gaps.is_empty() || changes[0].gaps.iter().all(|gap| !gap.contains("path"))
+        );
+    }
+
+    #[test]
+    fn a_renamed_and_hard_linked_file_stays_one_entry_with_all_its_names() {
+        let calls = [
+            create(1, "/tmp/a", 100, 1),
+            operation(2, 1, "write", 1, [3, 0, 1, 0, 0, 0], b"x"),
+            identified(
+                named(3, 82, "rename", 0, [0; 6], &["/tmp/a", "/tmp/b"]),
+                2,
+                1,
+                100,
+            ),
+            identified(
+                named(4, 86, "link", 0, [0; 6], &["/tmp/b", "/tmp/c"]),
+                3,
+                2,
+                100,
+            ),
+            // The other name opened: the same file.
+            reopen(5, "/tmp/c", 100, 2),
+            identified(named(6, 87, "unlink", 0, [0; 6], &["/tmp/b"]), 4, 1, 100),
+            identified(named(7, 87, "unlink", 0, [0; 6], &["/tmp/c"]), 4, 0, 100),
+        ];
+        let (index, _) = build(&calls);
+        let changes = index.finish();
+        assert_eq!(changes.len(), 1, "one file, not one per name");
+        let file = &changes[0];
+        assert_eq!(file.path, "/tmp/a");
+        assert_eq!(file.names, ["/tmp/b", "/tmp/c"]);
+        let story = file.lifecycle_text();
+        for step in [
+            "renamed → /tmp/b",
+            "hard-linked → /tmp/c",
+            "name removed (1 link remains)",
+            "deleted",
+        ] {
+            assert!(story.contains(step), "{step:?} missing from {story}");
+        }
+        // The file was alive until its last name went.
+        assert!(file.deleted);
+        assert!(file.gaps.iter().all(|gap| !gap.contains("link count")));
+    }
+
+    #[test]
+    fn a_name_that_a_new_file_takes_over_is_a_second_entry() {
+        let calls = [
+            create(1, "/tmp/a", 100, 1),
+            operation(2, 1, "write", 1, [3, 0, 1, 0, 0, 0], b"x"),
+            identified(named(3, 87, "unlink", 0, [0; 6], &["/tmp/a"]), 4, 0, 100),
+            create(4, "/tmp/a", 200, 1),
+            operation(5, 1, "write", 2, [3, 0, 2, 0, 0, 0], b"yy"),
+        ];
+        let (index, _) = build(&calls);
+        let changes = index.finish();
+        assert_eq!(
+            changes.len(),
+            2,
+            "{:?}",
+            changes
+                .iter()
+                .map(Change::lifecycle_text)
+                .collect::<Vec<_>>()
+        );
+        assert!(changes.iter().all(|change| change.path == "/tmp/a"));
+        let (old, new): (Vec<_>, Vec<_>) = changes.iter().partition(|change| change.deleted);
+        assert_eq!((old.len(), new.len()), (1, 1));
+        assert!(!new[0].lifecycle_text().contains("deleted"));
+    }
+
+    #[test]
+    fn without_identity_two_names_are_two_files_and_the_gap_says_why() {
+        let calls = [
+            named(1, 2, "open", 3, [0, 0x42, 0, 0, 0, 0], &["/tmp/a"]),
+            operation(2, 1, "write", 1, [3, 0, 1, 0, 0, 0], b"x"),
+            named(3, 82, "rename", 0, [0; 6], &["/tmp/a", "/tmp/b"]),
+            named(4, 2, "open", 4, [0, 0x42, 0, 0, 0, 0], &["/tmp/b"]),
+            operation(5, 1, "write", 1, [4, 0, 1, 0, 0, 0], b"y"),
+            named(6, 87, "unlink", 0, [0; 6], &["/tmp/b"]),
+        ];
+        let (index, _) = build(&calls);
+        let changes = index.finish();
+        assert!(changes.len() >= 2);
+        assert!(changes.iter().all(|change| change.names.is_empty()));
+        assert!(changes
+            .iter()
+            .flat_map(|change| change.gaps.iter())
+            .any(|gap| gap.contains("link count")));
+    }
+
+    #[test]
+    fn a_descriptor_with_no_name_is_tied_to_its_file_by_identity() {
+        // A request on a registered descriptor: no path, only the identity.
+        let calls = [
+            create(1, "/tmp/a", 100, 1),
+            identified(
+                operation(2, 1, "write", 2, [u64::MAX, 0, 2, 0, 0, 0], b"hi"),
+                5,
+                1,
+                100,
+            ),
+        ];
+        let (index, _) = build(&calls);
+        let changes = index.finish();
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].path, "/tmp/a");
+        assert!(changes[0]
+            .gaps
+            .iter()
+            .all(|gap| !gap.contains("path unavailable")));
     }
 }

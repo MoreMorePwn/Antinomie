@@ -172,7 +172,9 @@ pub(super) fn access(files: &FdState, call: &InvocationSummary, event: &EventSum
         return Access::Inherited;
     };
     let owner = table_owner(files, call.task_cookie, event.tid);
-    if files.opened.contains_key(&(owner.0, owner.1, fd)) {
+    // A registered descriptor of an io_uring ring is still a descriptor of a
+    // file the run opened, which the guest's file identity names.
+    if files.opened.contains_key(&(owner.0, owner.1, fd)) || identity_path(files, call).is_some() {
         Access::ByDescriptor
     } else {
         Access::Inherited
@@ -327,8 +329,34 @@ fn flock_text(operation: u64) -> &'static str {
     }
 }
 
-/// What an exec of a script shows. The interpreter's path is not recorded.
+/// What an exec of a script shows when the guest did not record which
+/// interpreter it named (a guest from before the exec image record).
 const SCRIPT_NOTE: &str = "script run through its interpreter, path not recorded";
+
+/// "script run through /bin/sh" and, when the file loaded is somewhere else
+/// (a symlink, a multi-call binary), where: "script run through /bin/sh (loaded
+/// /usr/bin/busybox)". `None` for a program that is not a script.
+fn script_note(call: &InvocationSummary) -> Option<String> {
+    let hash_says =
+        kernel_records::file_hash(call, HashKind::Exec).is_some_and(|hash| hash.interpreter);
+    let image = kernel_records::exec_image(call);
+    let named = image
+        .as_ref()
+        .is_some_and(|image| image.interpreter.is_some() || image.interpreter_truncated);
+    if !hash_says && !named {
+        return None;
+    }
+    let Some(image) = image.filter(|_| named) else {
+        return Some(SCRIPT_NOTE.into());
+    };
+    Some(match (image.interpreter, image.path) {
+        (Some(name), Some(path)) if path != name => {
+            format!("script run through {name} (loaded {path})")
+        }
+        (Some(name), _) => format!("script run through {name}"),
+        (None, _) => "script run through an interpreter whose name was too long to record".into(),
+    })
+}
 
 /// Words for a row's Detail column. Empty when the syscall name says it all.
 pub(super) fn detail(
@@ -465,15 +493,13 @@ pub(super) fn detail(
         }
         Category::Executed => {
             let line = normalized::command_line(call, event).unwrap_or_default();
-            // The guest records that the image it hashed was a script's
-            // interpreter, not which one; the path of the interpreter is not
-            // in the trace.
-            let scripted = kernel_records::file_hash(call, HashKind::Exec)
-                .is_some_and(|hash| hash.interpreter);
-            match (scripted, line.is_empty()) {
-                (false, _) => line,
-                (true, true) => SCRIPT_NOTE.into(),
-                (true, false) => format!("{line} ({SCRIPT_NOTE})"),
+            // The exec image record names the interpreter the script's #! line
+            // gave. A guest from before it records only that the image it
+            // hashed was a script's interpreter.
+            match (script_note(call), line.is_empty()) {
+                (None, _) => line,
+                (Some(note), true) => note,
+                (Some(note), false) => format!("{line} ({note})"),
             }
         }
         Category::Mapped => match name {
@@ -514,7 +540,16 @@ pub(super) fn step_label(
         Category::Created => hit.label().to_lowercase(),
         Category::Written => "written".into(),
         Category::Truncated => "truncated".into(),
-        Category::Deleted => "deleted".into(),
+        Category::Deleted => match kernel_records::file_id(call) {
+            // The guest counted the links left: the file is gone only at none.
+            Some(id) if id.nlink > 0 && !id.directory => format!(
+                "name removed ({} link{} remain{})",
+                id.nlink,
+                if id.nlink == 1 { "" } else { "s" },
+                if id.nlink == 1 { "s" } else { "" }
+            ),
+            _ => "deleted".into(),
+        },
         Category::Renamed => {
             let new = sigma_events::paths(files, call, event)
                 .into_iter()
@@ -525,10 +560,17 @@ pub(super) fn step_label(
             }
         }
         Category::Linked => {
-            if name.starts_with("sym") {
-                "symlinked".into()
+            let new = sigma_events::paths(files, call, event)
+                .into_iter()
+                .find(|used| used.role == sigma_events::Role::New);
+            let kind = if name.starts_with("sym") {
+                "symlinked"
             } else {
-                "hard-linked".into()
+                "hard-linked"
+            };
+            match new {
+                Some(new) => format!("{kind} → {}", new.name),
+                None => kind.into(),
             }
         }
         Category::Permissions => match mode_argument(call, event) {
@@ -697,6 +739,13 @@ pub(super) fn category_row(
     ));
     values.push(("file.detail", RowValue::Text(text.clone())));
     values.push((
+        "file.interpreter",
+        kernel_records::exec_image(call)
+            .and_then(|image| image.interpreter)
+            .filter(|_| hit.category == Category::Executed)
+            .map_or(RowValue::Missing, RowValue::Text),
+    ));
+    values.push((
         "file.created_inferred",
         RowValue::Bool(hit.category == Category::Created && hit.inferred),
     ));
@@ -718,7 +767,7 @@ pub(super) fn category_row(
         cell(event.timestamp_ns.to_string(), theme::text(), true),
         cell(hit.label(), theme::text(), false),
         cell(
-            event.syscall_name.clone(),
+            file_events::operation_label(call, event),
             theme::value(theme::ValueKind::Name),
             false,
         ),
@@ -794,6 +843,22 @@ pub(super) const FILE_FIELDS: &[crate::query::FieldSpec<'static>] = &[
         "Observed descriptor; missing without success/provenance",
     ),
     crate::query::FieldSpec::text("file.operation", "Observed syscall operation"),
+    crate::query::FieldSpec::text(
+        "file.via",
+        "syscall, or io_uring / AIO for a request read as the call it stands for",
+    ),
+    crate::query::FieldSpec::text(
+        "file.inode",
+        "Device:inode the guest recorded for the file; the same on every name",
+    ),
+    crate::query::FieldSpec::tags(
+        "file.names",
+        "Every name a changed file was seen under (renames, hard links)",
+    ),
+    crate::query::FieldSpec::text(
+        "file.interpreter",
+        "Interpreter a script's #! line named, for an Executed script",
+    ),
     crate::query::FieldSpec::text("file.access", "Requested access/creation flags"),
     crate::query::FieldSpec::boolean(
         "file.success",

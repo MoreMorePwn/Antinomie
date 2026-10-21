@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 
+mod async_files;
 mod async_previews;
 mod layout;
 mod theme_switch;

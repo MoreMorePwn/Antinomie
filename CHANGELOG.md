@@ -111,6 +111,32 @@ it runs.
   torture async-io module, linked pairs, cancellation, requests pending at exit,
   a submission-queue thread, a root that exits from a non-leader thread, a
   crash and Stop, each with and without a core.
+- **Triage Files follows io_uring and AIO.** Programs that do their file work
+  through io_uring or AIO showed nothing in Opened, Read, Written, Deleted or
+  Renamed. Each request is now read as the system call it stands for
+  (`IORING_OP_OPENAT`/`OPENAT2`, `READ*`, `WRITE*`, `FTRUNCATE`, `FALLOCATE`,
+  `CLOSE`, `RENAMEAT`, `LINKAT`, `SYMLINKAT`, `UNLINKAT`, `MKDIRAT`, `STATX`, and
+  AIO `pread`/`pwrite`/`preadv`/`pwritev`) from the submission entry, the paths
+  and data the guest records and the request's result, so the same tabs, lifecycles
+  and detection events cover it. The Operation column says `openat (io_uring)`,
+  and `file.via` filters by `syscall`, `io_uring` or `AIO`. A request on a
+  registered descriptor is tied to its file by the identity the guest records,
+  not by a descriptor number that means something else, and an open straight
+  into the ring's registered table shows its descriptor as `registered`. Requests past the
+  per-call preview are read too, up to 100,000 per scan, and the coverage line
+  says what was not read. A vector read shows all the data it read, segment
+  after segment.
+- **Triage follows one file across renames and hard links.** The guest now records
+  the device and inode of the file a call opened, renamed, linked or removed (and
+  of the file an io_uring request used). A file renamed or hard-linked keeps one
+  entry with all its names; a name that a new file takes over starts its own; and
+  an unlink that leaves another link is "name removed (1 link remains)", not
+  "deleted". `file.inode` and `file.names` filter on it. With a base from before
+  this release files are known by name only, as before.
+- **Triage shows the interpreter of an executed script.** The Executed tab says
+  `script run through /bin/sh (loaded /bin/busybox)`: the interpreter exactly as the
+  `#!` line names it and the file that was loaded; `file.interpreter` filters on
+  the first. Earlier bases still say that the path was not recorded.
 - **Detection rules: engines, Installed and Catalog tabs, and every rule of a
   pack.** The page has **YARA / IDS / Sigma** tabs and, inside each, **Installed**
   and **Catalog** tabs. Installed lists the packs and custom groups of the engine

@@ -58,6 +58,15 @@ pub(super) fn file_event_row(
     Some(event_row(files, invocation, event))
 }
 
+/// The operation as a table shows it: the call's name, and the system that
+/// carried it when it was an io_uring or AIO request read as that call.
+pub(super) fn operation_label(call: &InvocationSummary, event: &EventSummary) -> String {
+    match async_files::via(call) {
+        Some(system) => format!("{} ({system})", event.syscall_name),
+        None => event.syscall_name.clone(),
+    }
+}
+
 /// The row of one file call, without deciding whether its tab lists the call.
 pub(super) fn event_row(
     files: &FdState,
@@ -99,7 +108,7 @@ pub(super) fn event_row(
             true,
         ),
         cell(
-            event.syscall_name.clone(),
+            operation_label(invocation, event),
             theme::value(theme::ValueKind::Name),
             false,
         ),
@@ -174,6 +183,16 @@ pub(super) fn event_row(
                 .map_or(RowValue::Missing, RowValue::Number),
         ),
         ("file.operation", RowValue::Text(event.syscall_name.clone())),
+        (
+            "file.via",
+            RowValue::Text(async_files::via(invocation).unwrap_or("syscall").into()),
+        ),
+        (
+            "file.inode",
+            kernel_records::file_id(invocation).map_or(RowValue::Missing, |id| {
+                RowValue::Text(format!("{}:{}", id.key.dev, id.key.ino))
+            }),
+        ),
         (
             "file.access",
             if flags.is_some() {
