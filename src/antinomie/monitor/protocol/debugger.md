@@ -340,3 +340,6 @@ Real gdb: `gdb-follow-child`, `gdb-follow-parent`, `gdb-keep-both`, `gdb-vfork`,
 backend): `reconnect`, `snapshot`, `snapshot-readopt` (these need a release base,
 a snapshot of an unversioned development kernel is refused). `P3_TRACE=1` turns on
 gdb's `debug remote`, `P3_TRACE_FILE` keeps the whole gdb transcript.
+
+The engine tests and the six real-gdb checks of Phase 3 also ran on a KASAN + lockdep
+(PROVE_LOCKING, PROVE_RCU) development kernel with no report in the guest log.
