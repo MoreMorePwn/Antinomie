@@ -135,10 +135,11 @@ pub(crate) fn nic_option(profile: &StealthProfile) -> String {
     if !profile.mac.is_empty() {
         device.push_str(&format!(",mac={}", profile.mac));
     }
-    if profile.identity_enabled && profile.nic == NicModel::E1000e {
-        if let Some((vendor, id)) = pci_ids(&profile.identity.nic_subsystem) {
-            device.push_str(&format!(",subsys_ven={vendor},subsys={id}"));
-        }
+    if profile.identity_enabled
+        && profile.nic == NicModel::E1000e
+        && let Some((vendor, id)) = pci_ids(&profile.identity.nic_subsystem)
+    {
+        device.push_str(&format!(",subsys_ven={vendor},subsys={id}"));
     }
     device
 }
