@@ -461,9 +461,10 @@ retry:
 	 * TTY queue events_unbound. WQ_MEM_RECLAIM makes that flush trip
 	 * check_flush_dependency. Flags stay 0 so the worker may complete
 	 * the read. The queue stays ordered, so commands, EOF and shutdown
-	 * keep one sequence.
+	 * keep one sequence. A worker shows the name of the queue it last ran
+	 * work for (kworker/uN:M-name), so it is named like the system's.
 	 */
-	worker = alloc_ordered_workqueue("antinomie-control", 0);
+	worker = alloc_ordered_workqueue("events_unbound", 0);
 	if (!worker) goto free_rings;
 	control->geometry.version = ANT_ABI;
 	control->geometry.session = get_random_u64() ?: 1;
