@@ -58,7 +58,7 @@ pub fn render(context: &Context, runs: &[(crate::Group, GroupRun)]) -> Result<Vi
         .collect();
     let summarized: Vec<&str> = runs
         .iter()
-        .filter(|(group, _)| group.kind == GroupKind::Stress)
+        .filter(|(group, _)| group.kind != GroupKind::Oracle)
         .map(|(group, _)| group.name.as_str())
         .collect();
     let workspace = context.repo.join("src/antinomie/monitor");
@@ -121,13 +121,14 @@ pub fn render(context: &Context, runs: &[(crate::Group, GroupRun)]) -> Result<Vi
     Ok(views)
 }
 
-/// Stress groups: the rendering test drew the inspector without a panic; its
-/// totals must have no fallback the view should never take.
+/// Stress and attribution groups: the rendering test drew the inspector
+/// without a panic; its totals must have no fallback the view should never
+/// take.
 pub fn stress_warnings(runs: &[(crate::Group, GroupRun)], views: &Views) -> Vec<String> {
     let mut problems = Vec::new();
     for (group, _) in runs
         .iter()
-        .filter(|(group, _)| group.kind == GroupKind::Stress)
+        .filter(|(group, _)| group.kind != GroupKind::Oracle)
     {
         let Some(summary) = views
             .get(&group.name)

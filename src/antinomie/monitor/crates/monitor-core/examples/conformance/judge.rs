@@ -330,8 +330,12 @@ impl<'a> Judge<'a> {
             let ok = match &found {
                 Some(id) => {
                     let kind = format!("{:?}", id.kind).to_uppercase();
+                    // The program saw the links before the call; an unlink
+                    // leaves one less, a directory removal none.
                     let nlink_ok = u64::from(id.nlink) == file.nlink
-                        || (file.kind == "UNLINK" && u64::from(id.nlink) + 1 == file.nlink);
+                        || (file.kind == "UNLINK"
+                            && (u64::from(id.nlink) + 1 == file.nlink
+                                || (id.directory && id.nlink == 0)));
                     let ok = kind == file.kind
                         && id.key.dev == file.dev()
                         && id.key.ino == file.ino

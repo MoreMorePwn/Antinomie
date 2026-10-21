@@ -455,8 +455,9 @@ static void remove_cases(void)
     st = before_unlink("paths-dir/inner");
     CALL("unlinkat.removedir", unlinkat, WANT_OK, AT_FDCWD, "paths-dir/inner", AT_REMOVEDIR);
     in_str(1, "paths-dir/inner");
-    why("AT_REMOVEDIR removes an empty directory; the recorder publishes no file identity for "
-        "a directory removal (only unlink of a non-directory has one)");
+    file_stat("UNLINK", &st);
+    why("AT_REMOVEDIR removes an empty directory; its identity is published like an unlink's, "
+        "with no link left");
     DONE();
     CALL("unlinkat.removedir_file", unlinkat, ENOTDIR, AT_FDCWD, "paths-reg", AT_REMOVEDIR);
     in_str(1, "paths-reg");
@@ -473,8 +474,10 @@ static void remove_cases(void)
     in_str(1, "paths-reg");
     DONE();
 
+    st = before_unlink("paths-dir/inner");
     CALL("rmdir.empty", rmdir, WANT_OK, "paths-dir/inner");
     in_str(0, "paths-dir/inner");
+    file_stat("UNLINK", &st);
     DONE();
     CALL("rmdir.missing", rmdir, ENOENT, "paths-dir/inner");
     in_str(0, "paths-dir/inner");
@@ -491,8 +494,10 @@ static void remove_cases(void)
     CALL("rmdir.not_empty", rmdir, ENOTEMPTY, "paths-dir");
     in_str(0, "paths-dir");
     DONE();
+    st = before_unlink("paths-sub");
     CALL("rmdir.subdir", rmdir, WANT_OK, "paths-sub");
     in_str(0, "paths-sub");
+    file_stat("UNLINK", &st);
     DONE();
     close((int)work);
 }

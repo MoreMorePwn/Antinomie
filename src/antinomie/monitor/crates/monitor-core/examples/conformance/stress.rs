@@ -156,6 +156,7 @@ pub fn check(
         accounting: trace::accounting(run, &scan, calls),
         throughput: serde_json::json!({
             "seconds": run.run_seconds,
+            "stop_seconds": run.stop_seconds,
             "calls": calls,
             "calls_per_second": calls as f64 / seconds,
             "packets_per_second": scan.packets as f64 / seconds,
