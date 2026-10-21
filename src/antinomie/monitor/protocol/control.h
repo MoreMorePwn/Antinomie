@@ -225,7 +225,47 @@
  * and u32 hashing time in microseconds at 64/68, u32 cumulative records
  * lost since boot at 72 (queue, budget, memory or ring loss), zero at 76.
  * Published after the call returned, by a worker, with the call's identity.
+ * lifecycle.file_id, layout "antinomie.fileid/1", 32 bytes (optional, additive:
+ * a guest from before it publishes none, a host that does not know it shows an
+ * unknown lifecycle field): the identity of the file inode a call acted on, so
+ * one file can be followed across names. u8 kind at 0 (OPEN: the file an open
+ * returned; RENAME: the inode moved; LINK: the inode that got a new name;
+ * UNLINK: the inode whose name was removed; ISSUE: the file an io_uring or AIO
+ * request used; EXEC: the executed image), u8 flags at 1 (bit0 directory,
+ * bit1 regular file, bit2 symbolic link), zero at 2, u32 nlink at 4 (after the
+ * call), u64 dev at 8 (new_encode_dev of the superblock), u64 ino at 16,
+ * u32 generation at 24 (i_generation; with dev and ino it tells a reused inode
+ * number from the file that held it before), u32 mode at 28 (i_mode). Only
+ * calls that succeeded publish one. An io_uring request carries the same
+ * record as its operand "async.operand.file_id", with the same layout name; for
+ * RENAMEAT, LINKAT and UNLINKAT, which look the name up before they run, nlink is
+ * the count the operation leaves if it succeeds.
+ * lifecycle.exec_image, layout "antinomie.execimg/1" (optional, additive):
+ * published once per execve at the commit point. u32 flags at 0 (bit0
+ * INTERPRETER: the image is a script's interpreter, bit1 INTERP_TRUNCATED,
+ * bit2 PATH_TRUNCATED), u32 interp_len at 4 and u32 path_len at 8 (bytes
+ * including the NUL; 0 = absent), u32 nlink at 12, u64 dev at 16, u64 ino at 24,
+ * u32 generation at 32, u32 mode at 36, then at 40 the interpreter exactly as
+ * the script's "#!" line names it (bprm->interp), then the resolved path of the
+ * image that was loaded (for a script, the interpreter's file), each NUL
+ * terminated and cut at 511 bytes. dev, ino, generation and mode are those of
+ * the loaded image.
  */
+#define ANTC_FILEID_SIZE 32
+#define ANTC_FILEID_OPEN 1
+#define ANTC_FILEID_RENAME 2
+#define ANTC_FILEID_LINK 3
+#define ANTC_FILEID_UNLINK 4
+#define ANTC_FILEID_ISSUE 5
+#define ANTC_FILEID_EXEC 6
+#define ANTC_FILEID_DIR 1
+#define ANTC_FILEID_REGULAR 2
+#define ANTC_FILEID_SYMLINK 4
+#define ANTC_EXECIMG_HEADER 40
+#define ANTC_EXECIMG_PATH_MAX 512
+#define ANTC_EXECIMG_INTERPRETER 1
+#define ANTC_EXECIMG_INTERP_TRUNCATED 2
+#define ANTC_EXECIMG_PATH_TRUNCATED 4
 #define ANTC_CREDS_SIZE 96
 #define ANTC_CRED_START 1
 #define ANTC_CRED_SETUID 2
