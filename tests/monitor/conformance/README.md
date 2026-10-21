@@ -96,6 +96,7 @@ ANT_EXPECT {"seq":12,"label":"openat.cwd","nr":257,"name":"openat","pid":116,"ti
 | `want`, `ok` | What the case meant to exercise (0 = success, an errno, -1 = either) and whether it did; a case that did not is a fixture failure |
 | `data` | Bytes behind an argument at entry (`in`), exit (`out`) or either (`any`), by argument or exact recorded key; `str` compares without terminators, `any` only requires a complete capture |
 | `status` | Capture statuses the case triggers on purpose (COPY_FAULT, NOT_RESIDENT, INVALID_EXTENT, …); the recording must have exactly these |
+| `recapture` | Inputs the recorder could not read at entry and captured later (contract section 22): key (a trailing `*` covers every key it starts with) and mark, `at exit` or `kernel copy`; the recording must have exactly these |
 | `file` | The file identity (`lifecycle.file_id`) an open, rename, link or unlink must publish |
 | `async` | io_uring/AIO requests the call submitted: their records, result and payload bytes |
 | `volatile` | Values that differ between runs; golden files mask them |
@@ -141,7 +142,9 @@ happens in the private `work_dir`, offline, under a 240 s alarm. Dangerous
 calls are refused as UID 1000 (`system.c`) or made harmless as root
 (`root.c`); each says why. Children use `in_child()` or `ora_child()`, and
 their case numbers never collide. `ora_make_resident()` prefaults the image so
-the recorder's no-fault copies see the program's literals.
+the recorder's no-fault copies see the program's literals; the residency cases
+(`recapture.c`) fork with `ora_child_cold()` instead and pass literals from a
+64 KiB block nothing else reads.
 
 ## Adding a part
 
