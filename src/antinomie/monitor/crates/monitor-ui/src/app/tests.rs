@@ -8,6 +8,7 @@ mod capture;
 mod chrome;
 mod clipboard;
 mod debugger;
+mod debugger_live;
 mod debugger_shots;
 mod debugger_tab;
 mod details_scroll;
