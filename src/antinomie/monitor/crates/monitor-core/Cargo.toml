@@ -24,8 +24,11 @@ yara-x = "1.21.0"
 zip = { version = "8.6", default-features = false, features = ["deflate", "aes-crypto"] }
 flate2 = "1"
 tar = "0.4"
-lzma-rs = "0.3"
+lzma-rust2 = { version = "0.23", default-features = false, features = ["std", "xz"] }
 ext4-view = { version = "1.0.0", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+lzma-rust2 = { version = "0.23", default-features = false, features = ["std", "xz", "encoder"] }
 
 [build-dependencies]
 cc = "1"
