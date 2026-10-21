@@ -264,3 +264,155 @@ pub(crate) fn lost_note(lost: u32) -> EventSummary {
     bytes[72..76].copy_from_slice(&lost.to_le_bytes());
     note(HASH_KEY, HASH_LAYOUT, bytes)
 }
+
+fn file_id_bytes(kind: u8, flags: u8, nlink: u32, dev: u64, ino: u64, generation: u32) -> Vec<u8> {
+    let mut bytes = vec![0; FILE_ID_SIZE];
+    bytes[0] = kind;
+    bytes[1] = flags;
+    bytes[4..8].copy_from_slice(&nlink.to_le_bytes());
+    bytes[8..16].copy_from_slice(&dev.to_le_bytes());
+    bytes[16..24].copy_from_slice(&ino.to_le_bytes());
+    bytes[24..28].copy_from_slice(&generation.to_le_bytes());
+    bytes[28..32].copy_from_slice(&0o100644u32.to_le_bytes());
+    bytes
+}
+
+#[test]
+fn a_file_identity_record_names_the_inode_and_what_the_call_did_to_it() {
+    let event = note(
+        FILE_ID_KEY,
+        FILE_ID_LAYOUT,
+        file_id_bytes(4, 2, 1, 0x801, 1234, 7),
+    );
+    assert!(is_note(&event));
+    let id = file_id(&event).unwrap();
+    assert_eq!(id.kind, FileIdKind::Unlink);
+    assert_eq!(
+        id.key,
+        FileKey {
+            dev: 0x801,
+            ino: 1234,
+            generation: 7
+        }
+    );
+    assert_eq!((id.nlink, id.mode), (1, 0o100644));
+    assert!(id.regular && !id.directory && !id.symlink);
+    for (code, kind) in [
+        (1, FileIdKind::Open),
+        (2, FileIdKind::Rename),
+        (3, FileIdKind::Link),
+        (5, FileIdKind::Issue),
+        (6, FileIdKind::Exec),
+        (9, FileIdKind::Unknown(9)),
+    ] {
+        let event = note(
+            FILE_ID_KEY,
+            FILE_ID_LAYOUT,
+            file_id_bytes(code, 0, 1, 1, 2, 3),
+        );
+        assert_eq!(file_id(&event).unwrap().kind, kind);
+    }
+}
+
+#[test]
+fn a_file_identity_record_that_is_short_incomplete_or_of_another_layout_is_not_read() {
+    let good = file_id_bytes(1, 2, 1, 1, 2, 3);
+    assert!(file_id(&note(FILE_ID_KEY, FILE_ID_LAYOUT, good[..31].to_vec())).is_none());
+    assert!(file_id(&note(FILE_ID_KEY, "antinomie.fileid/2", good.clone())).is_none());
+    assert!(file_id(&note("lifecycle.other", FILE_ID_LAYOUT, good.clone())).is_none());
+    let mut incomplete = note(FILE_ID_KEY, FILE_ID_LAYOUT, good.clone());
+    incomplete.fields[0].complete = false;
+    assert!(file_id(&incomplete).is_none());
+    // The operand form of an io_uring request.
+    let mut operand = note(FILE_ID_OPERAND, FILE_ID_LAYOUT, good).fields.remove(0);
+    assert_eq!(
+        file_id_operand(&operand).unwrap().key,
+        FileKey {
+            dev: 1,
+            ino: 2,
+            generation: 3
+        }
+    );
+    operand.complete = false;
+    assert!(file_id_operand(&operand).is_none());
+}
+
+fn exec_image_bytes(flags: u32, interpreter: &str, path: &str) -> Vec<u8> {
+    let interp_len = if interpreter.is_empty() {
+        0
+    } else {
+        interpreter.len() + 1
+    };
+    let path_len = if path.is_empty() { 0 } else { path.len() + 1 };
+    let mut bytes = vec![0; EXEC_IMAGE_HEADER];
+    bytes[0..4].copy_from_slice(&flags.to_le_bytes());
+    bytes[4..8].copy_from_slice(&(interp_len as u32).to_le_bytes());
+    bytes[8..12].copy_from_slice(&(path_len as u32).to_le_bytes());
+    bytes[12..16].copy_from_slice(&1u32.to_le_bytes());
+    bytes[16..24].copy_from_slice(&0x801u64.to_le_bytes());
+    bytes[24..32].copy_from_slice(&99u64.to_le_bytes());
+    bytes[32..36].copy_from_slice(&5u32.to_le_bytes());
+    bytes[36..40].copy_from_slice(&0o100755u32.to_le_bytes());
+    if interp_len != 0 {
+        bytes.extend(interpreter.as_bytes());
+        bytes.push(0);
+    }
+    if path_len != 0 {
+        bytes.extend(path.as_bytes());
+        bytes.push(0);
+    }
+    bytes
+}
+
+#[test]
+fn an_exec_image_record_names_the_interpreter_of_a_script_and_the_file_loaded() {
+    let event = note(
+        EXEC_IMAGE_KEY,
+        EXEC_IMAGE_LAYOUT,
+        exec_image_bytes(1, "/bin/sh", "/usr/bin/busybox"),
+    );
+    assert!(is_note(&event));
+    let image = exec_image(&event).unwrap();
+    assert_eq!(image.interpreter.as_deref(), Some("/bin/sh"));
+    assert_eq!(image.path.as_deref(), Some("/usr/bin/busybox"));
+    assert_eq!(image.key.ino, 99);
+    // A program that is not a script has no interpreter.
+    let plain = exec_image(&note(
+        EXEC_IMAGE_KEY,
+        EXEC_IMAGE_LAYOUT,
+        exec_image_bytes(0, "", "/tmp/sample"),
+    ))
+    .unwrap();
+    assert_eq!(
+        (plain.interpreter, plain.path.as_deref()),
+        (None, Some("/tmp/sample"))
+    );
+}
+
+#[test]
+fn a_name_the_guest_cut_short_or_left_unterminated_is_never_shown_as_a_path() {
+    let cut = exec_image(&note(
+        EXEC_IMAGE_KEY,
+        EXEC_IMAGE_LAYOUT,
+        exec_image_bytes(1 | 2 | 4, "/very/long", "/also/long"),
+    ))
+    .unwrap();
+    assert_eq!((cut.interpreter, cut.path), (None, None));
+    assert!(cut.interpreter_truncated && cut.path_truncated);
+    // Lengths that run past the record, or a name with no NUL, read as unknown.
+    let mut bytes = exec_image_bytes(1, "/bin/sh", "/bin/busybox");
+    bytes[8..12].copy_from_slice(&500u32.to_le_bytes());
+    let image = exec_image(&note(EXEC_IMAGE_KEY, EXEC_IMAGE_LAYOUT, bytes)).unwrap();
+    assert_eq!(image.interpreter.as_deref(), Some("/bin/sh"));
+    assert_eq!(image.path, None);
+    let mut bytes = exec_image_bytes(1, "/bin/sh", "/bin/busybox");
+    let last = bytes.len() - 1;
+    bytes[last] = b'x';
+    assert_eq!(
+        exec_image(&note(EXEC_IMAGE_KEY, EXEC_IMAGE_LAYOUT, bytes))
+            .unwrap()
+            .path,
+        None
+    );
+    assert!(exec_image(&note(EXEC_IMAGE_KEY, EXEC_IMAGE_LAYOUT, vec![0; 39])).is_none());
+}
