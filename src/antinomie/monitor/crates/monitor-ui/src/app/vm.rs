@@ -573,8 +573,9 @@ impl MonitorApp {
                                     )
                                     .on_hover_text(format!(
                                         "At least {min_disk} GiB for this base; a real PC has 256 GiB \
-                                         or more (checks flag under 60 GiB); the image grows only as \
-                                         the guest writes"
+                                         or more (checks flag under 60 GiB); a BusyBox base grows its \
+                                         filesystem on the first boot (256 GiB: about 400 MiB of image, \
+                                         two minutes)"
                                     ));
                                 } else {
                                     ui.label(

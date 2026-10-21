@@ -1218,7 +1218,7 @@ pub fn resource_hints(cpus: u16, ram_mib: u32, disk_gib: u32) -> Vec<&'static st
         hints.push("under 4 GiB RAM: checks flag it; PCs have 8 to 32 GiB");
     }
     if disk_gib < 64 {
-        hints.push("a disk under 60 GiB: checks flag it; PCs have 256 GiB or more (the image grows only as the guest writes)");
+        hints.push("a disk under 60 GiB: checks flag it; PCs have 256 GiB or more (a BusyBox base grows its filesystem on the first boot: for 256 GiB about 400 MiB of image and two minutes)");
     }
     hints
 }
