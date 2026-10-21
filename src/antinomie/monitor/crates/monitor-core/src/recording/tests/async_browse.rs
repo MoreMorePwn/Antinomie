@@ -644,3 +644,51 @@ fn observations_attributed_to_a_task_outside_its_calls_are_read_by_the_task() {
     assert!(none.events.is_empty() && none.next_event_seq.is_none());
     cleanup(&directory);
 }
+
+#[test]
+fn a_page_whose_previews_would_pass_its_budget_ends_early_and_the_next_goes_on() {
+    let (directory, recording) = dense_recording(600);
+    let cancel = AtomicBool::new(false);
+    let whole = recording.invocation_page(0, 10).unwrap();
+    assert_eq!(whole.invocations.len(), 3);
+    let size = |call: &InvocationSummary| {
+        call.entry
+            .iter()
+            .chain(call.exit.iter())
+            .chain(&call.async_events)
+            .chain(call.task_exit.iter())
+            .map(event_preview_size)
+            .sum::<usize>()
+    };
+    let sizes: Vec<_> = whole.invocations.iter().map(size).collect();
+    // Room for the dense call's preview and not for the next one with it.
+    let budget = sizes[0] + sizes[1] - 1;
+    assert!(budget >= sizes[1] + sizes[2]);
+    let first = recording
+        .matching_page_within(0, 10, None, &cancel, |_| true, budget)
+        .unwrap()
+        .page;
+    assert_eq!(first.invocations.len(), 1);
+    assert_eq!(first.invocations[0].call_id, 1);
+    let rest = recording
+        .matching_page_within(
+            first.next_offset.unwrap(),
+            10,
+            None,
+            &cancel,
+            |_| true,
+            budget,
+        )
+        .unwrap()
+        .page;
+    let calls: Vec<_> = rest.invocations.iter().map(|call| call.call_id).collect();
+    assert_eq!(calls, [2, 3]);
+    assert_eq!(rest.next_offset, None);
+    // A call alone past the budget cannot be shown.
+    assert!(
+        recording
+            .matching_page_within(0, 10, None, &cancel, |_| true, sizes[0] - 1)
+            .is_err()
+    );
+    cleanup(&directory);
+}
