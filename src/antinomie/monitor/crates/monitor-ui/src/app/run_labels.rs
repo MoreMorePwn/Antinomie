@@ -96,7 +96,10 @@ mod tests {
     use super::*;
 
     fn wait(labels: &mut RunLabels, ctx: &egui::Context, run: &RunSummary) -> Option<Labels> {
-        for _ in 0..200 {
+        // The reader thread competes with whatever else runs: wait on the
+        // clock, not on a count of polls.
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        while std::time::Instant::now() < deadline {
             if let Some(found) = labels.of(ctx, run) {
                 return Some(found);
             }

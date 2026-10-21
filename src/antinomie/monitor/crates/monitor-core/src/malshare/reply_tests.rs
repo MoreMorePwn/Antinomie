@@ -64,7 +64,8 @@ pub(super) fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
 /// Run `attempt` again while it fails only because another thread's child
 /// briefly held the script open for writing.
 pub(super) fn retry_busy<T>(mut attempt: impl FnMut() -> Result<T, String>) -> Result<T, String> {
-    for _ in 0..200 {
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while std::time::Instant::now() < deadline {
         match attempt() {
             Err(error) if error.contains("Text file busy") => {
                 std::thread::sleep(Duration::from_millis(10))

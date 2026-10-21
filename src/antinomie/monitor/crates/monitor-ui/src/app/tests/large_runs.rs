@@ -293,10 +293,13 @@ fn a_slow_process_tree_does_not_hold_up_the_trace_of_another_run() {
 #[test]
 fn archive_pages_cost_follows_the_page_not_the_recording() {
     let big = archive_fixture("repeat", 200_000);
+    let small = archive_fixture("repeat-small", 2_000);
     let worker = ArchiveWorker::new(None).unwrap();
-    let timed = |query: &str, offset: u64| {
+    let timed = |directory: &Path, query: &str, offset: u64| {
         let started = Instant::now();
-        worker.request(page_request(&big, query, offset)).unwrap();
+        worker
+            .request(page_request(directory, query, offset))
+            .unwrap();
         let (answer, _) = answer_where(&worker, |a| matches!(a, Answer::Invocations { .. }));
         let Answer::Invocations { total, result, .. } = answer else {
             unreachable!()
@@ -304,7 +307,7 @@ fn archive_pages_cost_follows_the_page_not_the_recording() {
         (started.elapsed(), total, result.unwrap())
     };
     // The first read of a recording builds its index, kept on disk for later reads.
-    let (cold, total, page) = timed("", 0);
+    let (cold, total, page) = timed(&big, "", 0);
     eprintln!("200k-call run, page 0, no filter, cold index: {cold:?} (total {total:?})");
     assert_eq!(page.invocations.len(), 100);
     assert_eq!(
@@ -321,27 +324,43 @@ fn archive_pages_cost_follows_the_page_not_the_recording() {
         unreachable!()
     };
     assert_eq!(result, Ok((200_000, 200_000)));
+    let (_, _, small_page) = timed(&small, "", 0);
+    assert_eq!(small_page.invocations.len(), 100);
     // Every later page costs a page, whichever it is, and a counted view's
-    // pages come with their counts.
+    // pages come with their counts. A page of the 200k-call recording is
+    // compared with the same page of a 100 times smaller one, read by the
+    // same worker in the same minutes: reading the whole recording for a
+    // page would cost 100 times as much, a loaded machine slows both. The
+    // fastest of several reads sets each cost, so a stall in one read (a
+    // descheduled worker) does not decide the result.
     let next = page.next_offset.unwrap();
-    for (label, query, offset) in [
-        ("page 0 again", "", 0),
-        ("next page", "", next),
-        ("page 0, text filter", "mmap", 0),
+    let small_next = small_page.next_offset.unwrap();
+    for (label, query, offset, small_offset) in [
+        ("page 0 again", "", 0, 0),
+        ("next page", "", next, small_next),
+        ("page 0, text filter", "mmap", 0, 0),
     ] {
-        let (took, total, page) = timed(query, offset);
-        eprintln!("200k-call run, {label}: {took:?} (total {total:?})");
-        assert_eq!(page.invocations.len(), 100, "{label}");
-        // Wall-clock bounds depend on the machine; the first read of the
-        // recording builds its index, so a later page costing a fraction of
-        // it shows the page no longer reads the whole recording.
+        let cheapest = |directory: &Path, offset: u64| {
+            (0..5)
+                .map(|_| {
+                    let (took, total, page) = timed(directory, query, offset);
+                    assert_eq!(page.invocations.len(), 100, "{label}");
+                    if query.is_empty() && directory == big.as_path() {
+                        assert_eq!(total, Some(200_000), "{label}");
+                    }
+                    took
+                })
+                .min()
+                .unwrap()
+        };
+        let (on_big, on_small) = (cheapest(&big, offset), cheapest(&small, small_offset));
+        eprintln!("{label}: {on_big:?} of 200k calls, {on_small:?} of 2k calls");
         assert!(
-            took * 4 < cold || took < Duration::from_millis(500),
-            "{label} took {took:?} after a {cold:?} first read: it reads the whole recording again"
+            on_big < on_small * 10 + Duration::from_millis(50),
+            "{label} took {on_big:?} on 200k calls and {on_small:?} on 2k calls: \
+             it reads the whole recording"
         );
-        if query.is_empty() {
-            assert_eq!(total, Some(200_000), "{label}");
-        }
     }
     let _ = std::fs::remove_dir_all(big);
+    let _ = std::fs::remove_dir_all(small);
 }

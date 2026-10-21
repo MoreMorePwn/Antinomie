@@ -418,7 +418,8 @@ mod tests {
         // Another test thread may fork while this file is open for writing;
         // the child holds the descriptor until it execs, and running the
         // script meanwhile fails with ETXTBSY.
-        for _ in 0..200 {
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while std::time::Instant::now() < deadline {
             match std::process::Command::new(&path).output() {
                 Err(error) if error.raw_os_error() == Some(26) => {
                     std::thread::sleep(Duration::from_millis(10))
