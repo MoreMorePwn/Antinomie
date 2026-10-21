@@ -438,6 +438,56 @@ additions.
   close all the same. A run's earlier segments must be in the same recording
   folder as its newest.
 
+### Accepted exit re-capture of non-resident inputs (0.7.0)
+
+Approved by the user on 2026-10-22. Guest series 0053, contract section 22;
+the contract revision stays 17 (the encoding is additive and 0.7.0 is not
+released). The recorder still never faults a page in (15.1: no sleeping, no
+userfaultfd or FUSE stall, no residency change a sample could see with
+`mincore()`).
+
+* **Guest (`kernel/antinomie/recorder.c`).** `field()` remembers an Entry input
+  that ended `ANT_NOT_RESIDENT` (caller's memory, no snapshot or iterator, not
+  async) in a fixed array of the task context: at most 8 per call, key under
+  96 bytes, nothing allocated. `recapture()` runs at the end of the Exit: a
+  string is measured again with its ceiling, a buffer is published only if one
+  no-fault byte per page reads, and the field goes out in the Exit with the
+  Entry's key, direction input and FIELD_BEGIN flag bit 3 (RECAPTURED). A key
+  the Exit already published (an in/out buffer) is not read twice. The exec
+  vector walk keeps where it stopped (`ant_exec_resume`) and resumes there. If
+  the address space changed (a successful exec), nothing is read from the old
+  one: `ant_monitor_exec_names()` (a hook in `exec_binprm()` next to the exec
+  image hook) keeps a copy of `bprm->filename` only when the path was not
+  resident, and the strings from the resume point on come from the new
+  image's `[arg_start, arg_end)` / `[env_start, env_end)`, flag bit 4
+  (KERNEL_COPY) too; an interpreter exec rewrote argv, so only envp is
+  recovered there. A vector pointer on a non-resident page is now classified
+  NOT_RESIDENT like other fields.
+* **Host (`monitor-core/src/recapture.rs`).** `FieldSummary::recapture`
+  (`AtExit`, `KernelCopy`; serialized only when set) comes from the flags
+  word. `pair_events()` moves a complete recaptured Exit field into the Entry
+  in place of the NOT_RESIDENT field (keeping its object id and dropping its
+  "capture incomplete" issue) or adds it (exec strings the Entry never
+  reached), so every reader of a call's inputs sees the value and a call whose
+  only gaps were recaptured is complete. The process tree takes an exec's path
+  from the Exit when the Entry had none (live and archive scan).
+* **Trace view.** A small "at exit" or "kernel copy" pill on the field row and
+  on its argument row; the tooltip and the inspector say in plain words that
+  the bytes are what memory held when the call returned and that another
+  thread could have changed them meanwhile. The capture summary reads
+  "Captured bytes (N bytes, at exit)".
+* **Compatibility.** An older host does not read the flags word: it shows the
+  field as one more Exit field and still reports the Entry incomplete (its
+  Triage path lookup, Entry then Exit, finds the value). A recording from an
+  older guest has no marks and pairs as before.
+* **Conformance.** The `recapture` area of the user group (`fixture/recapture.c`,
+  `want_recapture()` in the oracle) covers a forked child's literal, a
+  successful and a failed exec of literals, the start-up readlinkat, an
+  untouched file mapping, a buffer rewritten by a second thread while the call
+  blocks (the mark is what tells it apart) and a buffer the call never reads
+  (stays NOT_RESIDENT; `mincore` shows the recorder did not load it). Golden
+  files show the mark as `complete@at exit`.
+
 ### Guest conformance suite, part 1: the syscall trace log (0.7.0)
 
 One command boots disposable BusyBox VMs, runs programs that print what they did
@@ -496,10 +546,10 @@ cargo run --release --locked -j 2 -p antinomie-monitor-core --example conformanc
   and no observation loss is counted (a failing io_uring READ or a rejected
   opcode used to flag the run as lossy). The terminal ioctl decoder knows
   TCGETS2/TCSETS2* (glibc's `tcgetattr`) and TIOCGPGRP/TIOCSPGRP/TIOCGSID.
-* **Limits.** NOT_RESIDENT is recorded for pages a process has not touched yet
-  (static glibc's start-up readlink, a forked child's first literal): the
-  no-fault copy is the contract (15.1); a capture at exit would close it and needs
-  a contract change. The ioctl argument is decoded for terminal requests only.
+* **Limits.** NOT_RESIDENT inputs (static glibc's start-up readlinkat, a forked
+  child's first literal) are read again at exit since series 0053 (next
+  section); what the call never reads stays NOT_RESIDENT. The ioctl argument is
+  decoded for terminal requests only.
   Directory removal publishes no file identity. Rows without an entry point have
   positional argument names.
 

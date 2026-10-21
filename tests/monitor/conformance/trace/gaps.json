@@ -216,7 +216,7 @@
   "undescribed": [
     {
       "warning": "*: field capture incomplete, status NOT_RESIDENT (*)",
-      "reason": "The recorder copies user memory without faulting (it runs in the syscall entry path). A page the program has mapped but not yet touched in this process is recorded as NOT_RESIDENT (contract revision 8, section 15.1), and the call itself is unaffected. It happens to static glibc reading /proc/self/exe before main, and to forked children: fork() copies no page-table entries for file-backed private mappings, so a child's first use of a literal string or of a stack/rodata page is not resident. The oracle fixture prefaults its image; torture children do not. A later capture at exit, after the kernel itself faulted the page in, would close this; it needs a contract change and is proposed separately."
+      "reason": "The recorder copies user memory without faulting (contract 15.1). An input on a page the program has mapped but not touched yet (a forked child's literal, static glibc's start-up readlinkat of /proc/self/exe, an untouched mapping) is recorded NOT_RESIDENT at entry and, since series 0053, read again at exit (contract section 22), where the call has usually faulted it in; the host then shows it complete and marked. What remains NOT_RESIDENT is memory the call itself never read (a buffer /dev/null's write ignores, a call that failed before reading), a ninth or later such input of one call, and the argument strings of a successful interpreter (script) exec, whose argument list the kernel rewrote. None of the groups showed one in the 0053 runs; the entry stays for torture children that hit them."
     },
     {
       "warning": "ioctl: field capture incomplete, status NO_DECODER (arg2.ioctl)",

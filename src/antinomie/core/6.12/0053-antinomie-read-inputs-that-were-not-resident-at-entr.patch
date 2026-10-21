@@ -1,32 +1,34 @@
-From 63f19506dd131d6b7085763fc7fd525df5533b2a Mon Sep 17 00:00:00 2001
+From 35813dafc4b40d7d298c921c2f5d7ec54484be92 Mon Sep 17 00:00:00 2001
 From: MikiMiku <jonathanirvinjo@gmail.com>
 Date: Thu, 22 Oct 2026 03:39:00 +0700
 Subject: [PATCH] antinomie: read inputs that were not resident at entry again
  at exit
 
-The recorder copies user memory without faulting, so an input on a page the
-program has mapped but not touched yet (a forked child's literals, static
-glibc's start-up readlinkat of /proc/self/exe, an untouched file mapping) is
-recorded NOT_RESIDENT at entry, although the call itself faults the page in.
+The recorder copies user memory without faulting, so an input on a page
+the program has mapped but not touched yet (a forked child's literals,
+static glibc's start-up readlinkat of /proc/self/exe, an untouched file
+mapping) is recorded NOT_RESIDENT at entry, although the call itself
+faults the page in.
 
-Such an input is now remembered in the task's context (at most eight per call,
-nothing allocated) and read again at the end of the call's Exit, still
-without faulting. A string is measured again; a buffer is published only if
-every page reads without a fault. It goes into the Exit event under the
-Entry's key, as an input, with bit 3 (RECAPTURED) set in the FIELD_BEGIN
-flags word; a field that still cannot be read is not published, and an Exit
-field of the same key (the call's own output) drops the second read. The
-exec vectors keep the point where their entry walk stopped and resume from it.
-A vector pointer on a non-resident page is now NOT_RESIDENT like any other
-field instead of COPY_FAULT.
+Such an input is now remembered in the task's context (at most eight per
+call, nothing allocated) and read again at the end of the call's Exit,
+still without faulting. A string is measured again; a buffer is published
+only if every page reads without a fault. It goes into the Exit event
+under the Entry's key, as an input, with bit 3 (RECAPTURED) set in the
+FIELD_BEGIN flags word; a field that still cannot be read is not
+published, and an Exit field of the same key (the call's own output)
+drops the second read. The exec vectors keep the point where their entry
+walk stopped and resume from it. A vector pointer on a non-resident page
+is now NOT_RESIDENT like any other field instead of COPY_FAULT.
 
-A successful exec replaced the caller's memory, so nothing is read from it:
-the path is the exec's own copy (bprm->filename, the caller's part of an
-execveat path relative to a descriptor), kept by a new hook at the commit
-only when the Entry could not read it, and the argument and environment
-strings from the resume point on are read from the new image's stack, which
-no user code has run on yet. Those fields carry bit 4 (KERNEL_COPY) too. An
-interpreter exec rewrote argv, so only its environment is recovered.
+A successful exec replaced the caller's memory, so nothing is read from
+it: the path is the exec's own copy (bprm->filename, the caller's part of
+an execveat path relative to a descriptor), kept by a new hook at the
+commit only when the Entry could not read it, and the argument and
+environment strings from the resume point on are read from the new
+image's stack, which no user code has run on yet. Those fields carry bit
+4 (KERNEL_COPY) too. An interpreter exec rewrote argv, so only its
+environment is recovered.
 
 The FIELD_BEGIN flags word is not read by earlier hosts, so the change is
 additive and the contract revision stays 17.
