@@ -6,7 +6,7 @@
 //! recording (for example telemetry sent before the launch was acknowledged
 //! that the host could not keep) and never mean saving stopped.
 use crate::theme;
-use antinomie_monitor_core::{RunSummary, Snapshot};
+use antinomie_monitor_core::{run_note_text, RunSummary, Snapshot};
 use eframe::egui::{self, RichText};
 
 /// Short mark for a Run History row; `None` while saving works.
@@ -20,7 +20,11 @@ pub(crate) fn tooltip(run: &RunSummary) -> String {
     if let Some(error) = &run.recording_error {
         lines.push(format!("Recording incomplete: saving stopped: {error}"));
     }
-    lines.extend(run.notes.iter().map(|note| format!("Note: {note}")));
+    lines.extend(
+        run.notes
+            .iter()
+            .map(|note| format!("Note: {}", run_note_text(note))),
+    );
     lines.join("\n")
 }
 
@@ -32,7 +36,10 @@ pub(crate) fn show(ui: &mut egui::Ui, run: &RunSummary) {
     }
     for note in &run.notes {
         ui.add(
-            egui::Label::new(RichText::new(format!("Note: {note}")).color(theme::muted())).wrap(),
+            egui::Label::new(
+                RichText::new(format!("Note: {}", run_note_text(note))).color(theme::muted()),
+            )
+            .wrap(),
         );
     }
 }
