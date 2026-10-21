@@ -15,13 +15,8 @@ pub(super) fn status_line(view: &DebugView) -> (String, egui::Color32, bool) {
     }
     match &view.run {
         RunState::Unknown => ("Reading the process state…".into(), theme::muted(), true),
-        RunState::Stopped {
-            reason,
-            tid,
-            pc,
-            sequence,
-        } => (
-            format!("Stopped: {reason} @ {pc:#x}   thread {tid}   stop {sequence}"),
+        RunState::Stopped { reason, pc, .. } => (
+            format!("Stopped: {reason} @ {pc:#x}"),
             theme::value(theme::ValueKind::Pointer),
             view.loading,
         ),
@@ -69,13 +64,20 @@ pub(super) fn show(
             if spinner {
                 theme::spinner(ui);
             }
-            ui.label(RichText::new(text).color(color));
+            let status = ui.label(RichText::new(text).color(color));
+            if let RunState::Stopped { tid, sequence, .. } = &view.run {
+                status.on_hover_text(format!("Thread {tid} stopped, stop {sequence}"));
+            }
+            if let Some(chip) = panes::driving_chip(Some(view)) {
+                crate::widgets::chip(ui, chip, crate::widgets::Tone::Warn);
+            }
             if panel.waiting(view) {
                 theme::loading_weak(ui, "Working…");
             }
         }
     });
     ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
         let stopped = view.is_some_and(|view| view.run.stopped_sequence().is_some());
         let running = view.is_some_and(|view| {
             matches!(
@@ -136,7 +138,7 @@ pub(super) fn show(
             actions.push(PanelAction::Detach { kill: false });
         }
         if ui
-            .button("Detach and kill process")
+            .button("Detach and kill")
             .on_hover_text("Ends the process with SIGKILL")
             .clicked()
         {
@@ -189,42 +191,56 @@ fn thread_selector(
 }
 
 /// How to reach the same process from gdb, IDA, Ghidra or radare2, and the
-/// rule that decides who controls it.
+/// rule that decides who controls it. The unix socket and the rule sit behind
+/// "More", so the tab keeps its height for the listing.
 fn endpoint(ui: &mut egui::Ui, info: &DebugSessionInfo) {
+    let more_id = egui::Id::new("debugger-endpoint-more");
+    let mut more = ui
+        .data(|data| data.get_temp::<bool>(more_id))
+        .unwrap_or(false);
     ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new("Endpoint").color(theme::muted()));
         ui.add(egui::Label::new(RichText::new(&info.gdb_command).monospace()).selectable(true));
         if icon(ui, egui_phosphor::regular::COPY, "Copy command", true) {
             ui.ctx().copy_text(info.gdb_command.clone());
         }
-        ui.label(RichText::new("Client").color(theme::muted()));
-        ui.label(if info.client_connected {
-            "connected"
-        } else {
-            "waiting"
-        });
+        if info.client_connected {
+            ui.label(RichText::new("Client").color(theme::muted()));
+            ui.label("connected");
+        }
+        if crate::widgets::link(
+            ui,
+            if more {
+                "Less"
+            } else {
+                "Other ways to connect"
+            },
+        )
+        .clicked()
+        {
+            more = !more;
+        }
     });
-    egui::CollapsingHeader::new("Other ways to connect")
-        .id_salt("debugger-endpoint-more")
-        .show(ui, |ui| {
-            ui.label(RichText::new("gdb (Unix socket, needs socat)").color(theme::muted()));
-            ui.horizontal_wrapped(|ui| {
-                ui.add(
-                    egui::Label::new(RichText::new(&info.gdb_unix_command).monospace())
-                        .selectable(true),
-                );
-                if icon(ui, egui_phosphor::regular::COPY, "Copy command", true) {
-                    ui.ctx().copy_text(info.gdb_unix_command.clone());
-                }
-            });
+    ui.data_mut(|data| data.insert_temp(more_id, more));
+    if more {
+        ui.label(RichText::new("gdb (Unix socket, needs socat)").color(theme::muted()));
+        ui.horizontal_wrapped(|ui| {
             ui.add(
-                egui::Label::new(
-                    "One controller at a time. This panel drives the process until a debugger \
-                     connects; the connecting debugger takes control (the process is stopped) and \
-                     this panel becomes read-only until it disconnects, which leaves the process \
-                     running. Breakpoints set here stay set. Connections are local to this computer.",
-                )
-                .wrap(),
+                egui::Label::new(RichText::new(&info.gdb_unix_command).monospace())
+                    .selectable(true),
             );
+            if icon(ui, egui_phosphor::regular::COPY, "Copy command", true) {
+                ui.ctx().copy_text(info.gdb_unix_command.clone());
+            }
         });
+        ui.add(
+            egui::Label::new(
+                "One controller at a time. This panel drives the process until a debugger \
+                 connects; the connecting debugger takes control (the process is stopped) and \
+                 this panel becomes read-only until it disconnects, which leaves the process \
+                 running. Breakpoints set here stay set. Connections are local to this computer.",
+            )
+            .wrap(),
+        );
+    }
 }

@@ -1,9 +1,15 @@
 // SPDX-License-Identifier: MIT
-//! The middle column: disassembly around the instruction pointer, decoded by the
+//! The listing: disassembly around the instruction pointer, decoded by the
 //! same iced-x86 formatter as the static listing from a bounded window of the
-//! stopped process's memory. Clicking the gutter toggles a breakpoint.
+//! stopped process's memory, and painted with the shared listing's
+//! instruction colors. Clicking the gutter toggles a breakpoint. The shared
+//! function sidebar is not used: the debug engine reads memory windows, with
+//! no symbols, function bounds or load bias to name functions by.
 use super::*;
 use antinomie_monitor_core::debug::view::{BreakpointKind, WindowKind};
+
+/// Code bytes shown before an instruction's text; the rest is "…".
+const BYTES_SHOWN: usize = 6;
 
 pub(super) fn show(
     ui: &mut egui::Ui,
@@ -11,7 +17,22 @@ pub(super) fn show(
     view: &DebugView,
     actions: &mut Vec<PanelAction>,
 ) {
-    theme::section(ui, "Disassembly");
+    ui.horizontal(|ui| {
+        theme::section(ui, crate::code_listing::View::Disassembly.label()).on_hover_text(
+            "Instructions before the current one are a best guess (x86 lengths vary).",
+        );
+        if let Some(pc) = view
+            .registers
+            .as_ref()
+            .and_then(|registers| registers.get("rip"))
+        {
+            ui.label(
+                RichText::new(format!("rip {pc:#x}"))
+                    .monospace()
+                    .color(theme::value(theme::ValueKind::Pointer)),
+            );
+        }
+    });
     let editable = view.app_controls() && !panel.waiting(view);
     let stopped = view.run.stopped_sequence().is_some();
     if !stopped {
@@ -40,9 +61,10 @@ pub(super) fn show(
         ui.weak("No readable code at the instruction pointer.");
         return;
     }
-    ui.weak("Instructions before the current one are a best guess (x86 lengths vary).");
+    let font = egui::TextStyle::Monospace.resolve(ui.style());
     egui::ScrollArea::both()
         .id_salt(("debugger-code", window.sequence, window.address))
+        .auto_shrink([false, false])
         .show(ui, |ui| {
             for line in &lines {
                 let current = pc == Some(line.address);
@@ -50,7 +72,8 @@ pub(super) fn show(
                     .breakpoints
                     .iter()
                     .find(|entry| entry.addr == line.address);
-                ui.horizontal(|ui| {
+                let background = ui.painter().add(egui::Shape::Noop);
+                let row = ui.horizontal(|ui| {
                     let gutter = match breakpoint {
                         Some(entry) if entry.enabled => "●",
                         Some(_) => "○",
@@ -83,17 +106,37 @@ pub(super) fn show(
                     let shown: Vec<String> = line
                         .bytes
                         .iter()
-                        .take(8)
+                        .take(BYTES_SHOWN)
                         .map(|byte| format!("{byte:02x}"))
                         .collect();
+                    let more = if line.bytes.len() > BYTES_SHOWN {
+                        "…"
+                    } else {
+                        ""
+                    };
                     ui.label(
-                        RichText::new(format!("{:<24}", shown.join(" ")))
+                        RichText::new(format!("{:<18}", format!("{}{more}", shown.join(" "))))
                             .monospace()
                             .color(theme::muted()),
                     );
-                    let text = RichText::new(&line.text).monospace();
-                    ui.label(if current { text.strong() } else { text });
+                    let (mnemonic, operands) = line
+                        .text
+                        .split_once(char::is_whitespace)
+                        .unwrap_or((&line.text, ""));
+                    ui.label(crate::code_listing::instruction(
+                        mnemonic,
+                        operands.trim_start(),
+                        &font,
+                    ));
                 });
+                if current {
+                    let mut rect = row.response.rect;
+                    rect.max.x = rect.max.x.max(ui.max_rect().max.x);
+                    ui.painter().set(
+                        background,
+                        egui::Shape::rect_filled(rect, 2.0, theme::palette().selection),
+                    );
+                }
             }
         });
 }

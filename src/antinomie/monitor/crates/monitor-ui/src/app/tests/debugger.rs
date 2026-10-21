@@ -118,7 +118,7 @@ fn the_session_window_offers_the_endpoint_and_detach() {
         app.submitted.last(),
         Some(Command::DebugDetach { kill: false })
     ));
-    click_label(&mut app, &ctx, size, "Detach and kill process");
+    click_label(&mut app, &ctx, size, "Detach and kill");
     assert!(matches!(
         app.submitted.last(),
         Some(Command::DebugDetach { kill: true })
@@ -127,6 +127,7 @@ fn the_session_window_offers_the_endpoint_and_detach() {
 
 mod panel {
     use super::*;
+    use crate::app::debugger::panes::Pane;
     use antinomie_monitor_core::debug::{
         signal_policy::{SignalAction, SignalNote, SignalTable},
         view::{
@@ -139,7 +140,7 @@ mod panel {
     };
     use std::sync::Arc;
 
-    const SIZE: egui::Vec2 = egui::vec2(2000.0, 1000.0);
+    const SIZE: egui::Vec2 = egui::vec2(2000.0, 1600.0);
     const PC: u64 = 0x401136;
 
     fn window(kind: WindowKind, sequence: u32, address: u64, bytes: Vec<u8>) -> MemoryWindow {
@@ -221,7 +222,18 @@ mod panel {
         view
     }
 
+    /// A session with every pane but the console open: the tab folds them by
+    /// default, and these tests are about what is in them.
     fn open(app: &mut MonitorApp, view: DebugView) {
+        open_folded(app, view);
+        for pane in Pane::ALL {
+            if pane != Pane::Console {
+                app.settings.debugger.toggle_pane(pane);
+            }
+        }
+    }
+
+    fn open_folded(app: &mut MonitorApp, view: DebugView) {
         observer_fixture(app);
         app.snapshot.debug = Some(info());
         app.snapshot.debug_view = Some(Arc::new(view));
@@ -286,10 +298,7 @@ mod panel {
         open(&mut app, stopped(3));
         let shown = shown(&mut app, &ctx);
         let has = |text: &str| shown.iter().any(|shown| shown == text);
-        assert!(
-            has("Stopped: swbreak @ 0x401136   thread 77   stop 3"),
-            "{shown:?}"
-        );
+        assert!(has("Stopped: swbreak @ 0x401136"), "{shown:?}");
         assert!(has("Thread 77"), "the selected thread: {shown:?}");
         // Registers, decoded flags, and the extra base registers.
         for text in [
@@ -305,7 +314,7 @@ mod panel {
         }
         // Disassembly from the shared decoder, with the current instruction marked.
         assert!(
-            has("push rbp") && has("mov rbp, rsp") && has("ret"),
+            has("push     rbp") && has("mov      rbp, rsp") && has("ret"),
             "{shown:?}"
         );
         assert!(has("▶"));
@@ -318,8 +327,10 @@ mod panel {
         );
         // Breakpoint list and the threads list.
         assert!(has("0x401136") && has("sw"));
-        assert!(shown.iter().any(|text| text.starts_with(">77  stop")));
-        assert!(shown.iter().any(|text| text.starts_with("78  stop")));
+        assert!(
+            has("77") && has("78") && has("0x401200"),
+            "thread rows: {shown:?}"
+        );
         // The gray placeholder of the address input.
         assert!(has("address e.g. 0x401136"));
     }
@@ -581,14 +592,18 @@ mod panel {
         lone.caps.follow = false;
         lone.inferiors = vec![inferior(42, None, true, InferiorState::Running)];
         open(&mut app, lone);
-        assert!(!shown(&mut app, &ctx).iter().any(|text| text == "Processes"));
+        let texts = shown(&mut app, &ctx);
+        assert!(
+            texts.iter().any(|text| text.starts_with("One process;")),
+            "{texts:?}"
+        );
+        assert!(!texts.iter().any(|text| text == "Let go"));
         app.snapshot.debug_view = Some(Arc::new(with_children()));
         let texts = shown(&mut app, &ctx);
         let has = |wanted: &str| texts.iter().any(|text| text.trim() == wanted);
-        assert!(has("Processes"), "{texts:?}");
-        assert!(has(">42  stopped (swbreak)"), "{texts:?}");
-        assert!(has("43  child of 42  held"), "{texts:?}");
-        assert!(has("44  child of 42  running"), "{texts:?}");
+        assert!(has("stopped (swbreak)"), "{texts:?}");
+        assert!(has("43") && has("held"), "{texts:?}");
+        assert!(has("44") && has("running"), "{texts:?}");
         assert!(has("Let go") && has("Show"));
     }
 
@@ -689,12 +704,12 @@ mod panel {
             signal: 11,
         };
         assert_eq!(
-            crate::app::debugger::lists::thread_text(&running, false),
-            " 9  running  0x10"
+            crate::app::debugger::lists::thread_state(&running),
+            "running"
         );
         assert_eq!(
-            crate::app::debugger::lists::thread_text(&faulted, true),
-            ">10  stopped SIGSEGV  0x20"
+            crate::app::debugger::lists::thread_state(&faulted),
+            "stopped SIGSEGV"
         );
         let ctx = context();
         let mut app = app();
@@ -703,8 +718,12 @@ mod panel {
         view.threads.push(faulted);
         open(&mut app, view);
         let texts = shown(&mut app, &ctx);
-        assert!(texts.iter().any(|text| text == "9  running  0x10"));
-        assert!(texts.iter().any(|text| text == "10  stopped SIGSEGV  0x20"));
+        for wanted in ["9", "running", "0x10", "10", "stopped SIGSEGV", "0x20"] {
+            assert!(
+                texts.iter().any(|text| text == wanted),
+                "{wanted}: {texts:?}"
+            );
+        }
     }
 
     #[test]
@@ -715,8 +734,9 @@ mod panel {
         view.controller = Controller::Gdb;
         open(&mut app, view);
         let texts = shown(&mut app, &ctx);
-        assert!(texts.iter().any(|text| text.starts_with("43  child of 42")));
-        assert!(texts.iter().any(|text| text.starts_with(">77")));
+        assert!(texts.iter().any(|text| text == "43"));
+        assert!(texts.iter().any(|text| text == "held"));
+        assert!(texts.iter().any(|text| text == "77"));
         click_label(&mut app, &ctx, SIZE, "Show");
         assert!(requests(&app).is_empty());
     }
@@ -748,8 +768,13 @@ mod panel {
                 stopped: true,
             },
         ];
-        open(&mut app, view);
-        click_label(&mut app, &ctx, SIZE, "Signals");
+        open_folded(&mut app, view);
+        app.settings.debugger.toggle_pane(Pane::Signals);
+        // The recent signals are folded under their header.
+        let folded = unclipped(&mut app, &ctx);
+        assert!(folded.iter().any(|text| text == "Recent signals · 2"));
+        assert!(!folded.iter().any(|text| text.starts_with("SIGCHLD to")));
+        click_label(&mut app, &ctx, SIZE, "Recent signals · 2");
         let texts = unclipped(&mut app, &ctx);
         assert!(texts
             .iter()
@@ -794,8 +819,8 @@ mod panel {
     fn a_checkbox_sends_that_signals_new_action_and_it_is_remembered() {
         let ctx = context();
         let mut app = app();
-        open(&mut app, stopped(3));
-        click_label(&mut app, &ctx, SIZE, "Signals");
+        open_folded(&mut app, stopped(3));
+        app.settings.debugger.toggle_pane(Pane::Signals);
         for _ in 0..3 {
             render(&mut app, &ctx, SIZE);
         }

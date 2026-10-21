@@ -40,6 +40,8 @@ pub(crate) struct DebuggerPanel {
     announce: bool,
     /// The fork prompt's "Let the other process run" is off.
     pub(super) prompt_hold_other: bool,
+    /// The gdb console pane; gdb ends with the session.
+    pub(crate) console: super::console::Console,
 }
 
 impl DebuggerPanel {

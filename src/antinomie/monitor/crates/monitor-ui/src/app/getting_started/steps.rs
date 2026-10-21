@@ -333,7 +333,13 @@ impl MonitorApp {
 
     fn step_tools(&mut self, ui: &mut egui::Ui) {
         ui.label("Static analysis uses these tools. A missing one is downloaded from its upstream release (SHA-256 checked) into Antinomie's data folder.");
-        let tools: Vec<ToolStatus> = self.snapshot.analysis_tools.clone();
+        let tools: Vec<ToolStatus> = self
+            .snapshot
+            .analysis_tools
+            .iter()
+            .filter(|tool| !crate::app::debugger::is_console_tool(&tool.id))
+            .cloned()
+            .collect();
         let install = self.snapshot.tool_install.clone();
         let queued = !self.getting_started.tool_queue.is_empty()
             || self.getting_started.tool_inflight.is_some();

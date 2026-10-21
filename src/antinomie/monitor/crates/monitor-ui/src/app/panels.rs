@@ -43,7 +43,7 @@ impl MonitorApp {
             captures::ProcessPurpose::Debug => self.debugger_unavailable().is_none(),
             captures::ProcessPurpose::Attach => self.observer_start_enabled(),
         };
-        self.debugger_window(ctx);
+        self.debugger_session();
         if self
             .process_picker
             .selected
@@ -159,6 +159,10 @@ impl MonitorApp {
                 .get(id)
                 .map(|terminal| format!("{} / PID {}", terminal.run.request.path, terminal.run.pid))
                 .unwrap_or_else(|| "Terminal".into()),
+            Panel::Debugger => match &self.snapshot.debug {
+                Some(info) => format!("Debugger · PID {}", info.target.tgid),
+                None => "Debugger".into(),
+            },
             _ => panel.title().into(),
         }
     }
@@ -347,6 +351,7 @@ impl MonitorApp {
             }
             Panel::Disks => self.disks_panel(ui),
             Panel::Library(page) => self.library_panel(ui, *page),
+            Panel::Debugger => self.debugger_tab(ui),
             Panel::AnalysisSection { report_id, kind } => {
                 let key = format!("section:{report_id}:{kind:?}");
                 let report = self.analysis_windows.get(report_id).cloned();

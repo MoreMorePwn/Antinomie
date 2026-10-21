@@ -2,9 +2,13 @@
 //! Processes of the session: the program and the children of its forks, the
 //! prompt shown when the program forks and the policy for the next fork.
 use super::*;
-use antinomie_monitor_core::debug::view::{
-    FollowMode, ForkChoice, ForkPolicy, InferiorState, InferiorView,
+use crate::{
+    table_sort,
+    widgets::table::{self, Cell, Mark},
 };
+use antinomie_monitor_core::debug::view::{FollowMode, ForkChoice, ForkPolicy, InferiorState};
+
+use egui_extras::{Column, TableBuilder};
 
 const FOLLOW_MODES: [FollowMode; 4] = [
     FollowMode::Off,
@@ -24,22 +28,6 @@ pub(super) fn state_text(state: InferiorState) -> String {
         }
         InferiorState::Exited(status) => format!("killed (signal {})", status & 0x7f),
     }
-}
-
-fn row_text(inferior: &InferiorView) -> String {
-    let mut text = format!(
-        "{}{}",
-        if inferior.selected { ">" } else { " " },
-        inferior.pid
-    );
-    if let Some(parent) = inferior.parent {
-        text.push_str(&format!("  child of {parent}"));
-    }
-    if inferior.vfork {
-        text.push_str("  vfork");
-    }
-    text.push_str(&format!("  {}", state_text(inferior.state)));
-    text
 }
 
 /// The banner shown above the columns while the program waits for a choice.
@@ -88,44 +76,100 @@ pub(super) fn fork_prompt(
         });
 }
 
-/// The Processes section: the list and the fork policy chooser.
-pub(super) fn section(ui: &mut egui::Ui, view: &DebugView, actions: &mut Vec<PanelAction>) {
+/// The Processes pane: a sortable table of the program and its forked
+/// children, and the fork policy chooser.
+pub(super) fn pane(ui: &mut egui::Ui, view: &DebugView, actions: &mut Vec<PanelAction>) {
+    let enabled = view.app_controls();
     if view.inferiors.len() <= 1 && !view.caps.follow {
+        ui.weak("One process; this guest base cannot follow forks.");
         return;
     }
-    let enabled = view.app_controls();
-    theme::section(ui, "Processes");
-    for inferior in &view.inferiors {
-        ui.horizontal(|ui| {
-            let text = RichText::new(row_text(inferior)).monospace();
-            let text = if matches!(inferior.state, InferiorState::Exited(_)) {
-                text.color(theme::muted())
-            } else {
-                text
-            };
-            let _ = ui.selectable_label(inferior.selected, text);
-            let exited = matches!(inferior.state, InferiorState::Exited(_));
-            if !inferior.selected
-                && ui
-                    .add_enabled(enabled, egui::Button::new("Show"))
-                    .on_hover_text("Show this process's registers, memory and breakpoints")
-                    .clicked()
-            {
-                actions.push(PanelAction::Debug(DebugAction::SelectInferior {
-                    pid: inferior.pid,
-                }));
+    const TABLE: &str = "debugger-processes";
+    let order = table_sort::order(ui.ctx(), TABLE, view.inferiors.len(), |column, a, b| {
+        let (a, b) = (&view.inferiors[a], &view.inferiors[b]);
+        match column {
+            0 => a.pid.cmp(&b.pid),
+            1 => a.parent.cmp(&b.parent),
+            _ => state_text(a.state).cmp(&state_text(b.state)),
+        }
+    });
+    let row_height = table::row_height(egui::TextStyle::Body.resolve(ui.style()).size);
+    table::begin(ui);
+    TableBuilder::new(ui)
+        .id_salt(TABLE)
+        .striped(true)
+        .column(Column::auto().at_least(60.0))
+        .column(Column::auto().at_least(60.0))
+        .column(Column::auto().at_least(110.0))
+        .column(Column::remainder().at_least(120.0))
+        .vscroll(false)
+        .header(row_height + 4.0, |mut header| {
+            for (column, title) in ["PID", "Parent", "State"].into_iter().enumerate() {
+                header.col(|ui| table_sort::header(ui, TABLE, column, title));
             }
-            if ui
-                .add_enabled(enabled && !exited, egui::Button::new("Let go"))
-                .on_hover_text("Stop debugging this process; it then runs free")
-                .clicked()
-            {
-                actions.push(PanelAction::Debug(DebugAction::DetachInferior {
-                    pid: inferior.pid,
-                }));
-            }
+            header.col(|ui| table::head(ui, ""));
+        })
+        .body(|body| {
+            body.rows(row_height, order.len(), |mut row| {
+                let inferior = &view.inferiors[order[row.index()]];
+                let exited = matches!(inferior.state, InferiorState::Exited(_));
+                row.set_selected(inferior.selected);
+                row.col(|ui| {
+                    table::row_mark(
+                        ui,
+                        if inferior.selected {
+                            Mark::Selected
+                        } else {
+                            Mark::None
+                        },
+                    );
+                    table::cell(ui, Cell::Mono, &inferior.pid.to_string());
+                });
+                row.col(|ui| {
+                    let parent = inferior.parent.map(|parent| parent.to_string());
+                    table::cell(ui, Cell::Mono, parent.as_deref().unwrap_or("–"));
+                });
+                row.col(|ui| {
+                    let text = if inferior.vfork {
+                        format!("vfork, {}", state_text(inferior.state))
+                    } else {
+                        state_text(inferior.state)
+                    };
+                    let text = RichText::new(text);
+                    table::cell_rich(
+                        ui,
+                        Cell::Text,
+                        if exited {
+                            text.color(theme::muted())
+                        } else {
+                            text
+                        },
+                    );
+                });
+                row.col(|ui| {
+                    if !inferior.selected
+                        && ui
+                            .add_enabled(enabled, egui::Button::new("Show").small())
+                            .on_hover_text("Show this process's registers, memory and breakpoints")
+                            .clicked()
+                    {
+                        actions.push(PanelAction::Debug(DebugAction::SelectInferior {
+                            pid: inferior.pid,
+                        }));
+                    }
+                    if ui
+                        .add_enabled(enabled && !exited, egui::Button::new("Let go").small())
+                        .on_hover_text("Stop debugging this process; it then runs free")
+                        .clicked()
+                    {
+                        actions.push(PanelAction::Debug(DebugAction::DetachInferior {
+                            pid: inferior.pid,
+                        }));
+                    }
+                });
+            });
         });
-    }
+    ui.add_space(4.0);
     policy(ui, view, enabled, actions);
 }
 

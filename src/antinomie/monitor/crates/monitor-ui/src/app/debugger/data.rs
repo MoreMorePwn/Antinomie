@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
-//! The right column: registers with decoded flags, the bounded stack window and
-//! a memory range of the user's choosing, shown with the shared hex rows.
+//! Registers with decoded flags beside the listing, and the Stack and Memory
+//! panes: the bounded stack window and a memory range of the user's choosing,
+//! shown with the shared hex rows.
 use super::*;
 use crate::hex_view::{self, Cell};
 use antinomie_monitor_core::debug::{
@@ -11,24 +12,35 @@ use antinomie_monitor_core::debug::{
 /// Bytes the memory pane asks for.
 const MEMORY_READ_SIZE: usize = 256;
 
-pub(super) fn show(
+/// The registers next to the listing.
+pub(super) fn registers_column(ui: &mut egui::Ui, view: &DebugView) {
+    egui::ScrollArea::both()
+        .id_salt("debugger-registers-scroll")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            theme::section(ui, "Registers");
+            registers(ui, view);
+        });
+}
+
+/// The Stack pane.
+pub(super) fn stack_pane(ui: &mut egui::Ui, view: &DebugView) {
+    egui::ScrollArea::both()
+        .id_salt("debugger-stack-scroll")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            window_rows(ui, view, WindowKind::Stack, Some("rsp"))
+        });
+}
+
+/// The Memory pane.
+pub(super) fn memory_pane(
     ui: &mut egui::Ui,
     panel: &mut DebuggerPanel,
     view: &DebugView,
     actions: &mut Vec<PanelAction>,
 ) {
-    egui::ScrollArea::both()
-        .id_salt("debugger-right")
-        .show(ui, |ui| {
-            theme::section(ui, "Registers");
-            registers(ui, view);
-            ui.add_space(8.0);
-            theme::section(ui, "Stack");
-            window_rows(ui, view, WindowKind::Stack, Some("rsp"));
-            ui.add_space(8.0);
-            theme::section(ui, "Memory");
-            memory(ui, panel, view, actions);
-        });
+    memory(ui, panel, view, actions);
 }
 
 fn registers(ui: &mut egui::Ui, view: &DebugView) {
@@ -136,7 +148,7 @@ fn memory(
         let response = ui.add_enabled(
             editable,
             egui::TextEdit::singleline(&mut panel.memory_input)
-                .desired_width(260.0)
+                .desired_width((ui.available_width() - 70.0).clamp(60.0, 260.0))
                 .hint_text(theme::hint_text("address e.g. 0x7ffd0000")),
         );
         let entered =

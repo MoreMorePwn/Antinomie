@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
 //! Attach the debugger to a running guest process and show how to reach it.
-//! The engine is in the guest kernel and the RSP server on the host; this
-//! window starts and ends the session, shows how to reach it from gdb, and is
-//! the minimal in-app debugger: run control, threads, breakpoints, disassembly
-//! around the instruction pointer, registers, stack and memory.
+//! The engine is in the guest kernel and the RSP server on the host; the
+//! Debugger tab beside Static Analysis starts and ends the session, shows how
+//! to reach it from gdb, and is the in-app debugger: run control, the listing
+//! around the instruction pointer with the registers, and folded panes for
+//! threads, processes, breakpoints, memory, stack, signals and a gdb console.
 use super::*;
 use antinomie_monitor_core::{
     debug::view::{DebugAction, DebugView},
@@ -11,21 +12,31 @@ use antinomie_monitor_core::{
 };
 
 mod code;
+mod console;
 mod data;
 mod header;
 pub(super) mod lists;
+pub(crate) mod panes;
 pub(super) mod prefs;
 mod processes;
+mod pty;
 mod signals;
 mod state;
 
+pub(crate) use console::{is_console_tool, GdbFlavour};
 pub(crate) use prefs::DebuggerPrefs;
 pub(crate) use state::DebuggerPanel;
 
-/// Something the panel asks of the app once the window has been drawn.
+/// Something the panel asks of the app once the tab has been drawn.
 pub(super) enum PanelAction {
-    Detach { kill: bool },
+    Detach {
+        kill: bool,
+    },
     Debug(DebugAction),
+    /// Library, Analysis tools: where gdb front ends are installed.
+    OpenTools,
+    /// Settings, Analysis tools: where the front end is chosen.
+    OpenSettings,
 }
 
 impl MonitorApp {
@@ -59,8 +70,14 @@ impl MonitorApp {
         self.send(Command::ListProcesses { after_pid: 0 });
     }
 
-    /// The attached session: the debugger panel and its connection details.
-    pub(super) fn debugger_window(&mut self, ctx: &egui::Context) {
+    /// Whether a debugger session is attached, which is when its tab exists.
+    pub(crate) fn debugger_attached(&self) -> bool {
+        self.snapshot.debug.is_some()
+    }
+
+    /// Once per frame, tab shown or not: follow the session and send the
+    /// remembered choices when a new one begins.
+    pub(super) fn debugger_session(&mut self) {
         let Some(info) = self.snapshot.debug.clone() else {
             self.debugger.track_session(None);
             return;
@@ -74,27 +91,35 @@ impl MonitorApp {
                 self.debug_action_quiet(view, DebugAction::SetSignalTable(prefs.signals));
                 self.debug_action_quiet(view, DebugAction::SetForkPolicy(policy));
             }
-        }
-        if let Some(view) = &view {
             self.debugger.prune(view);
         }
+    }
+
+    /// The tab body of the attached session.
+    pub(super) fn debugger_tab(&mut self, ui: &mut egui::Ui) {
+        let Some(info) = self.snapshot.debug.clone() else {
+            ui.weak("No debugger session. Attach one from Run, Attach debugger…");
+            return;
+        };
+        let view = self.debug_view();
         let mut actions = Vec::new();
-        let panel = &mut self.debugger;
-        crate::widgets::window(format!("Debugger / PID {}", info.target.tgid))
-            .id(egui::Id::new("debugger_session"))
-            .collapsible(true)
-            .resizable(true)
-            .default_size({
-                // Most of the screen, never past it.
-                let screen = ctx.screen_rect().size();
-                [
-                    1450.0_f32.min(screen.x - 60.0),
-                    780.0_f32.min(screen.y - 80.0),
-                ]
-            })
-            .show(ctx, |ui| {
-                show(ui, panel, &info, view.as_deref(), &mut actions);
-            });
+        let ended_session = info.ended.is_some();
+        let env = console::Env {
+            tools: &self.snapshot.analysis_tools,
+            data_dir: &self.options.data_dir,
+            flavour: self.settings.debugger.gdb_flavour,
+            port: info.tcp_port,
+            ended_session,
+        };
+        show(
+            ui,
+            &mut self.debugger,
+            &mut self.settings.debugger,
+            &env,
+            &info,
+            view.as_deref(),
+            &mut actions,
+        );
         for action in actions {
             match action {
                 PanelAction::Detach { kill } => self.send(Command::DebugDetach { kill }),
@@ -103,6 +128,11 @@ impl MonitorApp {
                         self.remember_debug_choice(&action);
                         self.debug_action(view, action);
                     }
+                }
+                PanelAction::OpenTools => self.open_library(crate::workspace::LibraryPage::Tools),
+                PanelAction::OpenSettings => {
+                    self.settings_open = true;
+                    self.settings_page = settings_window::SettingsPage::AnalysisTools;
                 }
             }
         }
@@ -124,11 +154,13 @@ impl MonitorApp {
     }
 }
 
-/// The whole panel: header, then three columns (threads and breakpoints,
-/// disassembly, registers and memory).
+/// The whole tab: header, the listing with the registers, and the folded
+/// panes under them.
 fn show(
     ui: &mut egui::Ui,
     panel: &mut DebuggerPanel,
+    prefs: &mut DebuggerPrefs,
+    env: &console::Env<'_>,
     info: &DebugSessionInfo,
     view: Option<&DebugView>,
     actions: &mut Vec<PanelAction>,
@@ -149,14 +181,55 @@ fn show(
     }
     processes::fork_prompt(ui, panel, view, actions);
     ui.separator();
-    use egui_extras::{Size, StripBuilder};
-    StripBuilder::new(ui)
-        .size(Size::relative(0.16).at_least(260.0))
-        .size(Size::remainder().at_least(380.0))
-        .size(Size::relative(0.5).at_least(560.0))
-        .horizontal(|mut strip| {
-            strip.cell(|ui| lists::show(ui, panel, view, actions));
-            strip.cell(|ui| code::show(ui, panel, view, actions));
-            strip.cell(|ui| data::show(ui, panel, view, actions));
+    // The strip is always there; its content area has height only while a
+    // pane is open (and then keeps the height the user dragged it to).
+    let open = panes::open(prefs);
+    // The panes never take more than 60% of what is left, so the listing
+    // stays in view whatever is open; the height dragged to is kept.
+    let room = ui.available_height();
+    let mut bottom =
+        egui::TopBottomPanel::bottom(egui::Id::new(("debugger-panes", !open.is_empty())))
+            .resizable(!open.is_empty())
+            .frame(egui::Frame::new());
+    if !open.is_empty() {
+        bottom = bottom
+            .default_height(
+                (room
+                    * if prefs.pane_open(panes::Pane::Console) {
+                        0.55
+                    } else {
+                        0.4
+                    })
+                .clamp(150.0, 420.0),
+            )
+            .height_range(120.0..=(room * 0.6).max(150.0));
+    }
+    bottom.show_inside(ui, |ui| {
+        if let Some(clicked) = panes::strip(ui, prefs, Some(view), panel.console.running()) {
+            prefs.toggle_pane(clicked);
+        }
+        if !open.is_empty() {
+            panes::show(ui, &open, |ui, pane| match pane {
+                panes::Pane::Threads => lists::threads(ui, panel, view, actions),
+                panes::Pane::Processes => processes::pane(ui, view, actions),
+                panes::Pane::Breakpoints => lists::breakpoints(ui, panel, view, actions),
+                panes::Pane::Memory => data::memory_pane(ui, panel, view, actions),
+                panes::Pane::Stack => data::stack_pane(ui, view),
+                panes::Pane::Signals => signals::pane(ui, view, actions),
+                panes::Pane::Console => console::show(ui, &mut panel.console, env, actions),
+            });
+        }
+    });
+    egui::CentralPanel::default()
+        .frame(egui::Frame::new())
+        .show_inside(ui, |ui| {
+            use egui_extras::{Size, StripBuilder};
+            StripBuilder::new(ui)
+                .size(Size::remainder().at_least(360.0))
+                .size(Size::relative(0.3).at_least(240.0).at_most(380.0))
+                .horizontal(|mut strip| {
+                    strip.cell(|ui| code::show(ui, panel, view, actions));
+                    strip.cell(|ui| data::registers_column(ui, view));
+                });
         });
 }
