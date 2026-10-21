@@ -599,3 +599,48 @@ fn a_cancelled_first_index_keeps_the_chunks_it_committed() {
     assert!(index_counts(&connection).0 > 0);
     cleanup(&directory);
 }
+
+#[test]
+fn observations_attributed_to_a_task_outside_its_calls_are_read_by_the_task() {
+    // An SQPOLL ring's thread submits for the ring's creator with call id 0;
+    // the launch's lifecycle records share that key and are not observations.
+    let directory = directory();
+    let mut raw = File::create(directory.join("telemetry.raw")).unwrap();
+    write(&mut raw, event_packet(1, 1, 1, 1));
+    for packet in lifecycle(0, 5, b"lifecycle.launch") {
+        write(&mut raw, packet);
+    }
+    for number in 0..300 {
+        for packet in observation(0, 100 + number, b"async.request_id", &[]) {
+            write(&mut raw, packet);
+        }
+    }
+    write(&mut raw, event_packet(1, 2, 5, 2));
+    raw.sync_all().unwrap();
+    let recording = open_recording(&directory).unwrap();
+    let cancel = AtomicBool::new(false);
+    // No call owns them: the trace shows only call 1.
+    let page = recording.invocation_page(0, 10).unwrap();
+    assert_eq!(page.invocations.len(), 1);
+    assert!(
+        recording
+            .async_page_cancellable((9, 10, 0), 0, 256, &cancel)
+            .is_err()
+    );
+    let first = recording
+        .attributed_async_page_cancellable(9, 10, 0, 256, &cancel)
+        .unwrap();
+    assert_eq!(first.events.len(), 256);
+    assert_eq!(first.total, 300);
+    assert!(first.events.iter().all(|event| event.event_seq >= 100));
+    let rest = recording
+        .attributed_async_page_cancellable(9, 10, first.next_event_seq.unwrap(), 256, &cancel)
+        .unwrap();
+    assert_eq!((rest.events.len(), rest.next_event_seq), (44, None));
+    // Another task has none.
+    let none = recording
+        .attributed_async_page_cancellable(9, 11, 0, 256, &cancel)
+        .unwrap();
+    assert!(none.events.is_empty() && none.next_event_seq.is_none());
+    cleanup(&directory);
+}
