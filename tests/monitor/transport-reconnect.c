@@ -8,6 +8,7 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/mman.h>
 #include <unistd.h>
 
@@ -237,8 +238,51 @@ static void test_legacy(unsigned abi)
 	cleanup(&f);
 }
 
+/* Messages keyed by a timestamp in each ring come out merged in key order. */
+static void test_ordered_reads(void)
+{
+	static const struct { unsigned ring; __u64 key; } sent[] = {
+		{ 0, 10 }, { 0, 40 }, { 0, 50 }, { 1, 20 }, { 1, 30 }, { 3, 25 },
+	};
+	static const __u64 order[] = { 0, 10, 20, 25, 30, 40, 50 };
+	struct fixture f;
+	struct ant_client *client;
+	struct ant_message message = { .payload_len = 16 }, short_message = { .payload_len = 1 };
+	pthread_t thread;
+	__u64 heads[4] = { 0 }, key;
+	unsigned char data[16];
+	size_t len;
+	unsigned i;
+	setup(&f, 9);
+	assert(!pthread_create(&thread, NULL, ack_thread, &f));
+	assert(!ant_init(&f.options, &client));
+	assert(!pthread_join(thread, NULL));
+	for (i = 0; i < sizeof(sent) / sizeof(sent[0]); i++) {
+		memset(data, 0, sizeof(data));
+		memcpy(data, &sent[i].key, sizeof(sent[i].key));
+		ant_publish(&f.region->directory[sent[i].ring],
+			(char *)f.ram + (4U << 20) + sent[i].ring * ANT_TELEMETRY_RING_MIN,
+			ANT_TELEMETRY_RING_MIN, &heads[sent[i].ring], &message, data);
+	}
+	/* Too short to hold a key: it orders first. */
+	ant_publish(&f.region->directory[2], (char *)f.ram + (4U << 20) + 2 * ANT_TELEMETRY_RING_MIN,
+		ANT_TELEMETRY_RING_MIN, &heads[2], &short_message, "x");
+	for (i = 0; i < sizeof(order) / sizeof(order[0]); i++) {
+		assert(!ant_read_ordered(client, data, sizeof(data), &len, 0));
+		key = 0;
+		if (len == 16)
+			memcpy(&key, data, sizeof(key));
+		assert(key == order[i] && (len == 16 || (len == 1 && !order[i])));
+	}
+	assert(ant_read_ordered(client, data, sizeof(data), &len, 0) == -EAGAIN);
+	assert(ant_read_ordered(client, data, sizeof(data), &len, ANT_MAX_MESSAGE_LEN) == -EINVAL);
+	ant_close(client);
+	cleanup(&f);
+}
+
 int main(void)
 {
+	test_ordered_reads();
 	test_resume();
 	test_geometry();
 	test_ack_failure();

@@ -33,6 +33,13 @@
  *                    then a new file under the first name; exit 0
  *   aio              a file written and read through io_submit (PWRITE, PREAD,
  *                    PWRITEV, PREADV), exit 0
+ *   sqfiles          file work through an SQPOLL ring, whose kernel thread
+ *                    submits it: WRITE and FSYNC of a file opened with open,
+ *                    UNLINKAT of another; exit 0
+ *   morefiles        io_uring FSYNC (data only), SYNC_FILE_RANGE, FSETXATTR,
+ *                    SETXATTR, GETXATTR, SPLICE from a pipe into a file and
+ *                    from the file into a pipe, UNLINKAT of a directory
+ *                    (AT_REMOVEDIR), and rmdir of another; exit 0
  *   script FILE      writes an executable "#!/bin/sh" script to FILE and runs it
  *
  * Build: cc -static -O2 -pthread -Wall -Wextra -Werror tests/monitor/uring-fixture.c
@@ -54,6 +61,7 @@
 #include <sys/syscall.h>
 #include <sys/uio.h>
 #include <sys/wait.h>
+#include <sys/xattr.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -705,6 +713,187 @@ static int mode_aio(void)
 	return 0;
 }
 
+/* Fill an entry, then publish it: the SQPOLL thread may take it at once. */
+static void sq_queue(struct ring *ring, const struct io_uring_sqe *entry)
+{
+	unsigned tail = *ring->sq_tail, index = tail & *ring->sq_mask;
+
+	ring->sqes[index] = *entry;
+	ring->sq_array[index] = index;
+	__atomic_store_n(ring->sq_tail, tail + 1, __ATOMIC_RELEASE);
+}
+
+/* Wait for `count` completions of an SQPOLL ring, waking its thread when it
+ * sleeps; returns how many failed, or -1 when they did not all come.
+ */
+static int sq_wait(struct ring *ring, unsigned count)
+{
+	unsigned head = *ring->cq_head;
+	int tries, errors = 0;
+
+	for (tries = 0; tries < 500 && count; tries++) {
+		if (__atomic_load_n(ring->sq_flags, __ATOMIC_ACQUIRE) & IORING_SQ_NEED_WAKEUP)
+			syscall(__NR_io_uring_enter, ring->fd, 0, 0, IORING_ENTER_SQ_WAKEUP, NULL, 0);
+		while (count && head != __atomic_load_n(ring->cq_tail, __ATOMIC_ACQUIRE)) {
+			if (ring->cqes[head & *ring->cq_mask].res < 0)
+				errors++;
+			head++;
+			count--;
+		}
+		if (count)
+			nap(10);
+	}
+	__atomic_store_n(ring->cq_head, head, __ATOMIC_RELEASE);
+	return count ? -1 : errors;
+}
+
+static int mode_sqfiles(void)
+{
+	static const char first[] = "/tmp/uring-sq.a";
+	static const char other[] = "/tmp/uring-sq.b";
+	static char data[] = "written by the ring thread\n";
+	struct io_uring_sqe entry;
+	struct ring ring;
+	int fd, spare, errors;
+
+	unlink(first);
+	unlink(other);
+	fd = open(first, O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+	spare = open(other, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+	if (fd < 0 || spare < 0)
+		return 2;
+	close(spare);
+	if (ring_open(&ring, 32, IORING_SETUP_SQPOLL) < 0) {
+		say("URING UNAVAILABLE\n");
+		return 2;
+	}
+	say("URING READY\n");
+	memset(&entry, 0, sizeof(entry));
+	entry.opcode = IORING_OP_WRITE;
+	entry.fd = fd;
+	entry.addr = (unsigned long)data;
+	entry.len = sizeof(data) - 1;
+	entry.flags = IOSQE_IO_LINK;
+	entry.user_data = 1;
+	sq_queue(&ring, &entry);
+	memset(&entry, 0, sizeof(entry));
+	entry.opcode = IORING_OP_FSYNC;
+	entry.fd = fd;
+	entry.user_data = 2;
+	sq_queue(&ring, &entry);
+	errors = sq_wait(&ring, 2);
+	if (errors < 0)
+		return 2;
+	memset(&entry, 0, sizeof(entry));
+	entry.opcode = IORING_OP_UNLINKAT;
+	entry.fd = AT_FDCWD;
+	entry.addr = (unsigned long)other;
+	entry.user_data = 3;
+	sq_queue(&ring, &entry);
+	if (sq_wait(&ring, 1) != 0)
+		errors++;
+	close(fd);
+	unlink(first);
+	say(errors ? "URING DONE (errors)\n" : "URING DONE\n");
+	return errors ? 1 : 0;
+}
+
+static int mode_morefiles(void)
+{
+	static const char path[] = "/tmp/uring-more.a";
+	static const char directory[] = "/tmp/uring-more.d";
+	static const char plain_directory[] = "/tmp/uring-more.e";
+	static char data[] = "spliced bytes\n";
+	static char value[16];
+	struct io_uring_sqe *sqe;
+	struct ring ring;
+	int fd, pipes[2], errors = 0;
+
+	unlink(path);
+	rmdir(directory);
+	rmdir(plain_directory);
+	if (open_ring(&ring, 0) < 0)
+		return 2;
+	fd = open(path, O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+	if (fd < 0 || write(fd, "first\n", 6) != 6 || pipe(pipes) ||
+	    mkdir(directory, 0700) || mkdir(plain_directory, 0700))
+		return 2;
+	say("URING READY\n");
+	sqe = ring_next(&ring);
+	sqe->opcode = IORING_OP_FSYNC;
+	sqe->fd = fd;
+	sqe->fsync_flags = IORING_FSYNC_DATASYNC;
+	sqe->user_data = 1;
+	sqe = ring_next(&ring);
+	sqe->opcode = IORING_OP_SYNC_FILE_RANGE;
+	sqe->fd = fd;
+	sqe->len = 6;
+	sqe->sync_range_flags = 2; /* SYNC_FILE_RANGE_WRITE */
+	sqe->user_data = 2;
+	if (ring_submit(&ring, 2, &errors) < 2)
+		return 2;
+	sqe = ring_next(&ring);
+	sqe->opcode = IORING_OP_FSETXATTR;
+	sqe->fd = fd;
+	sqe->addr = (unsigned long)"user.tag";
+	sqe->addr2 = (unsigned long)"red";
+	sqe->len = 3;
+	sqe->user_data = 3;
+	sqe = ring_next(&ring);
+	sqe->opcode = IORING_OP_SETXATTR;
+	sqe->addr = (unsigned long)"user.colour";
+	sqe->addr2 = (unsigned long)"blue";
+	sqe->addr3 = (unsigned long)path;
+	sqe->len = 4;
+	sqe->user_data = 4;
+	if (ring_submit(&ring, 2, &errors) < 2)
+		return 2;
+	sqe = ring_next(&ring);
+	sqe->opcode = IORING_OP_GETXATTR;
+	sqe->addr = (unsigned long)"user.tag";
+	sqe->addr2 = (unsigned long)value;
+	sqe->addr3 = (unsigned long)path;
+	sqe->len = sizeof(value);
+	sqe->user_data = 5;
+	if (ring_submit(&ring, 1, &errors) < 1)
+		return 2;
+	/* A pipe into the file at offset 6, then the file into the pipe. */
+	if (write(pipes[1], data, sizeof(data) - 1) != (ssize_t)(sizeof(data) - 1))
+		return 2;
+	sqe = ring_next(&ring);
+	sqe->opcode = IORING_OP_SPLICE;
+	sqe->fd = fd;
+	sqe->off = 6;
+	sqe->splice_off_in = (unsigned long long)-1;
+	sqe->splice_fd_in = pipes[0];
+	sqe->len = sizeof(data) - 1;
+	sqe->user_data = 6;
+	if (ring_submit(&ring, 1, &errors) < 1)
+		return 2;
+	sqe = ring_next(&ring);
+	sqe->opcode = IORING_OP_SPLICE;
+	sqe->fd = pipes[1];
+	sqe->off = (unsigned long long)-1;
+	sqe->splice_off_in = 0;
+	sqe->splice_fd_in = fd;
+	sqe->len = 6;
+	sqe->user_data = 7;
+	sqe = ring_next(&ring);
+	sqe->opcode = IORING_OP_UNLINKAT;
+	sqe->fd = AT_FDCWD;
+	sqe->addr = (unsigned long)directory;
+	sqe->unlink_flags = AT_REMOVEDIR;
+	sqe->user_data = 8;
+	if (ring_submit(&ring, 2, &errors) < 2)
+		return 2;
+	if (rmdir(plain_directory))
+		errors++;
+	close(fd);
+	unlink(path);
+	say(errors ? "URING DONE (errors)\n" : "URING DONE\n");
+	return errors ? 1 : 0;
+}
+
 static int mode_script(const char *path)
 {
 	static const char body[] = "#!/bin/sh\necho SCRIPT RAN\nexit 0\n";
@@ -748,8 +937,12 @@ int main(int argc, char **argv)
 		return mode_regfiles();
 	if (!strcmp(mode, "syncfiles"))
 		return mode_syncfiles();
+	if (!strcmp(mode, "sqfiles"))
+		return mode_sqfiles();
+	if (!strcmp(mode, "morefiles"))
+		return mode_morefiles();
 	if (!strcmp(mode, "script") && argc > 2)
 		return mode_script(argv[2]);
-	say("usage: uring-fixture pairs|cancel|drain|sqpoll|threads|crash|hold|hold-ignore|files|syncfiles|aio|script FILE\n");
+	say("usage: uring-fixture pairs|cancel|drain|sqpoll|threads|crash|hold|hold-ignore|files|syncfiles|sqfiles|morefiles|aio|script FILE\n");
 	return 64;
 }

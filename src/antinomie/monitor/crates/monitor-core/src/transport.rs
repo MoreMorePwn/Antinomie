@@ -94,7 +94,13 @@ unsafe extern "C" {
     fn ant_resume_heartbeats(client: *mut c_void) -> c_int;
     fn ant_close(client: *mut c_void);
     fn ant_poll(client: *mut c_void, timeout_ms: c_int) -> c_int;
-    fn ant_read(client: *mut c_void, dst: *mut c_void, capacity: usize, len: *mut usize) -> c_int;
+    fn ant_read_ordered(
+        client: *mut c_void,
+        dst: *mut c_void,
+        capacity: usize,
+        len: *mut usize,
+        key_offset: usize,
+    ) -> c_int;
     fn ant_command_send(
         client: *mut c_void,
         opcode: u32,
@@ -144,6 +150,10 @@ fn check(code: i32) -> Result<i32, String> {
         Ok(code)
     }
 }
+
+/// Where an ANTT packet carries its guest timestamp (`timestamp_ns`, the
+/// guest's monotonic clock, one clock for all its vCPUs).
+const PACKET_TIMESTAMP_OFFSET: usize = 64;
 
 /// The Rc marker deliberately prevents sending a live C client to another thread.
 pub(crate) struct Transport {
@@ -293,15 +303,21 @@ impl Transport {
         // SAFETY: Client is live and this wrapper never leaves its sole owning thread.
         check(unsafe { ant_poll(self.ptr.as_ptr(), timeout) })
     }
+    /// The next telemetry packet, oldest first: the guest's per-CPU rings
+    /// are merged by the packets' guest timestamps, so records written on
+    /// different vCPUs (a task that moved, a worker publishing for a call)
+    /// arrive in the order they were made, not in the order the rings were
+    /// visited.
     pub fn read(&mut self) -> Result<Option<&[u8]>, String> {
         let mut len = 0;
         // SAFETY: Buffer is writable for capacity bytes; len is writable; client remains solely owned.
         let code = unsafe {
-            ant_read(
+            ant_read_ordered(
                 self.ptr.as_ptr(),
                 self.message.as_mut_ptr().cast(),
                 self.message.len(),
                 &mut len,
+                PACKET_TIMESTAMP_OFFSET,
             )
         };
         if code == -11 {
