@@ -501,12 +501,9 @@ impl DiskView {
                 }
             });
         }
-        if let Some((message, failed)) = &self.status {
-            if *failed {
-                crate::activity::error(ui, message);
-            } else {
-                ui.colored_label(theme::good(), message);
-            }
+        crate::toasts::take_failure(ui.ctx(), &mut self.status);
+        if let Some((message, _)) = &self.status {
+            ui.colored_label(theme::good(), message);
         }
     }
 

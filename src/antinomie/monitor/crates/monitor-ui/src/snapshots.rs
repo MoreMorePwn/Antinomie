@@ -237,7 +237,7 @@ impl SnapshotManager {
             }
             if let Some((success, message)) = &self.result {
                 if !*success {
-                    crate::activity::error(ui, message);
+                    crate::activity::error_toast(ui, message);
                 } else {
                     ui.colored_label(theme::good(), message);
                 };

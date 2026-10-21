@@ -598,7 +598,7 @@ impl BuildWizard {
             }
         });
         if let Some(error) = &status.error {
-            crate::activity::error(ui, error);
+            crate::activity::error_toast(ui, error);
         } else if status.finished {
             ui.colored_label(theme::good(), "Base built and installed.");
         } else if let Some((_, label)) = stages.get(current) {

@@ -84,12 +84,9 @@ impl MemoryView {
         if let Some(next) = self.plugin_bar(ui, &dump, cx) {
             action = Some(next);
         }
-        if let Some((message, error)) = &self.status {
-            if *error {
-                crate::activity::error(ui, message);
-            } else {
-                ui.colored_label(theme::muted(), message);
-            };
+        crate::toasts::take_failure(ui.ctx(), &mut self.status);
+        if let Some((message, _)) = &self.status {
+            ui.colored_label(theme::muted(), message);
         }
         ui.add_space(4.0);
         egui::SidePanel::left("memory_runs")

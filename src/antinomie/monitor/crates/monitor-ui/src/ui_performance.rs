@@ -200,7 +200,7 @@ impl Performance {
                     }
                 }
                 ui.add(egui::Label::new("For WSLg with a compatible GPU driver. Close Antinomie normally before using the command. It applies only to that launch.").wrap());
-                if let Some(error) = &self.error { crate::activity::error(ui, error); }
+                if let Some(error) = &self.error { crate::activity::error_toast(ui, error); }
                 ui.separator();
                 ui.strong("UI update CPU time");
                 let mut sorted: Vec<_> = self.samples.iter().copied().collect();

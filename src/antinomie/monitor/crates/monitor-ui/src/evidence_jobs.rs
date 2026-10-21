@@ -179,7 +179,7 @@ impl EvidenceJobs {
                                 ui.label(text);
                             }
                             Err(error) => {
-                                crate::activity::error(ui, error);
+                                crate::activity::error_toast(ui, error);
                             }
                         }
                     }

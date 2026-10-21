@@ -69,7 +69,7 @@ impl MonitorApp {
             }
         });
         if let Some(error) = &self.getting_started.base_error {
-            crate::activity::error(ui, error);
+            crate::activity::error_toast(ui, error);
         }
         if let Some(error) = &self.snapshot.remote_error {
             crate::activity::error(ui, error);
@@ -249,7 +249,7 @@ impl MonitorApp {
             self.credentials.reset();
         }
         if let Some(error) = &self.getting_started.vm_error {
-            crate::activity::error(ui, error);
+            crate::activity::error_toast(ui, error);
         }
         let pending = self.getting_started.vm_pending.is_some();
         if pending {
@@ -377,7 +377,7 @@ impl MonitorApp {
             });
             if let Some(install) = install.as_ref().filter(|install| install.id == tool.id) {
                 if let Some(error) = install.error.as_ref().filter(|_| install.finished) {
-                    crate::activity::error(ui, error);
+                    crate::activity::error_toast(ui, error);
                 } else if !install.finished {
                     let fraction = if install.total > 0 {
                         install.received as f32 / install.total as f32
@@ -392,7 +392,7 @@ impl MonitorApp {
             }
         }
         if let Some(error) = &self.getting_started.tool_error {
-            crate::activity::error(ui, error);
+            crate::activity::error_toast(ui, error);
         }
         ui.separator();
         ui.horizontal(|ui| {
@@ -567,7 +567,7 @@ impl MonitorApp {
             );
         }
         if is_error {
-            crate::activity::error(ui, status);
+            crate::activity::error_toast(ui, status);
         } else if !status.is_empty() {
             ui.weak(status);
         }
