@@ -6,6 +6,49 @@ it runs.
 
 ## 0.7.0 — Unreleased
 
+- **Stealth profile, part 2: UEFI, a SATA or NVMe disk, SMT, a home network
+  and the smaller entries.** Guest series 0052, contract revision 17
+  unchanged. The profile gains the firmware (BIOS, UEFI or UEFI with Secure
+  Boot, OVMF found through QEMU's firmware descriptors, a variable store per
+  VM), the disk bus (virtio, SATA with model, serial, firmware, WWN and SSD or
+  hard disk, or NVMe), an empty CD-ROM, two threads per core (with TOPOEXT on
+  AMD hosts), the pointer (virtio tablet, USB tablet or PS/2 only, each with
+  its cost), SMBIOS OEM strings and entry point, a named CPU model with a
+  brand and its own caches, kvm-clock apart from the KVM signature, SMM, the
+  RTC's clock and drift fix, the network card's PCI subsystem IDs and the
+  NAT's network, gateway, DNS server and DHCP range. Realistic presets choose
+  UEFI, a SATA SSD, two threads per core and 192.168.1.0/24. Before → after
+  on a BusyBox base with the Realistic desktop preset (17 of 77 checks giving
+  the VM away before, 13 of 80 after; 13 and 8 as uid 1000):
+
+  | Giveaway | Before | After |
+  | --- | --- | --- |
+  | Firmware | BIOS: no `/sys/firmware/efi` | UEFI (root still reads OVMF's `EDK II` vendor and BGRT) |
+  | Root disk | `vda`, Red Hat 1af4, `/dev/vda` | `sda`, `ATA Samsung SSD 870`, non-rotational, Samsung WWN |
+  | Addresses | 10.0.2.15, gateway 10.0.2.2, DNS 10.0.2.3 | 192.168.1.100, gateway 192.168.1.1 |
+  | SMBIOS type 11 | missing | the machine's OEM strings |
+  | Network card subsystem | Intel 8086 | the machine maker's (Lenovo 17aa) |
+  | CPU topology | one thread per core | two threads per core |
+
+  The guest kernel's EFI stub now claims the host's bootstrap page before it
+  places the kernel (0052): with KASLR under OVMF the kernel could land on
+  it and the transport then failed (shown deterministically with the page
+  inside where the kernel goes; then 38 UEFI and Secure Boot boots without a
+  failure, each kernel at a new address). BusyBox bases find their root on
+  virtio, SATA or NVMe, build NVMe in, and take their address by DHCP; bases
+  list what they boot with in `bundle.json` (`stealth_support`), and an entry
+  an older base, a Debian base or the host lacks falls back to BIOS, virtio,
+  10.0.2.0/24 or one thread per core, shown in the Stealth profile window.
+  QEMU's CD-ROM still answers `QEMU DVD-ROM` and its NVMe controller names
+  QEMU, so the presets use neither. `stealth-check` gains profile entries and
+  a `boots` mode; the probe checks firmware, disks, NAT addresses, PCI
+  subsystems, OEM strings and CPU threads. See docs/implementation.md,
+  "Stealth profile, part 2".
+- **Debugger check p2 "dynamic" no longer depends on the host's /tmp.** gdb
+  ran with the host's root as its sysroot, so a file named `p2ld.so` or
+  `libc.so.6` in the host's `/tmp` replaced the fixture's loader or libc and
+  the test failed, alone or in the full sequence. gdb now gets a sysroot that
+  holds the fixture's copies at the guest's paths.
 - **Guest conformance suite, part 1: the syscall trace log; what it found is
   fixed.** One command (`cargo run --release --example conformance -- trace
   BASE_DIR OUT_DIR`, see `tests/monitor/conformance/README.md`) boots a new
