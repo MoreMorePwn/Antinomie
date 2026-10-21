@@ -6,6 +6,7 @@ pub(super) fn cell(text: impl Into<String>, color: egui::Color32, mono: bool) ->
     Cell {
         text: text.into(),
         color,
+        theme: theme::theme(),
         mono,
         values: Vec::new(),
     }
@@ -78,7 +79,11 @@ pub(super) fn column_widths<'a>(
                     };
                     ui.fonts(|fonts| {
                         fonts
-                            .layout_no_wrap(cell.text.chars().take(256).collect(), font, cell.color)
+                            .layout_no_wrap(
+                                cell.text.chars().take(256).collect(),
+                                font,
+                                cell.color(),
+                            )
                             .size()
                             .x
                     }) + 24.0
@@ -293,7 +298,7 @@ fn table_rows_with(
                             branch.paint(ui.painter(), lines, branch_char);
                             branch.width(branch_char)
                         });
-                        let mut text = RichText::new(display_cell(&cell.text)).color(cell.color);
+                        let mut text = RichText::new(display_cell(&cell.text)).color(cell.color());
                         if cell.mono {
                             text = text.monospace();
                         }
@@ -452,7 +457,7 @@ fn finding_table_rows(
                 row.set_selected(selected == Some(finding.key));
                 for cell in &finding.cells {
                     row.col(|ui| {
-                        let mut text = RichText::new(bounded_cell(&cell.text)).color(cell.color);
+                        let mut text = RichText::new(bounded_cell(&cell.text)).color(cell.color());
                         if cell.mono {
                             text = text.monospace();
                         }

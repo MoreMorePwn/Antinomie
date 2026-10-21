@@ -227,6 +227,9 @@ impl Row for Finding {
 struct StoredCell {
     text: String,
     color: [u8; 4],
+    /// The theme `color` was taken from.
+    #[serde(default)]
+    theme: crate::theme::Theme,
     mono: bool,
     values: Vec<(usize, RowValue)>,
 }
@@ -274,6 +277,7 @@ impl Spool {
                 StoredCell {
                     text: cell.text,
                     color: cell.color.to_array(),
+                    theme: cell.theme,
                     mono: cell.mono,
                     values,
                 }
@@ -344,6 +348,7 @@ impl Spool {
                             cell.color[2],
                             cell.color[3],
                         ),
+                        theme: cell.theme,
                         mono: cell.mono,
                         values,
                     })

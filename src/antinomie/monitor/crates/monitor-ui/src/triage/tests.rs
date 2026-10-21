@@ -3,6 +3,7 @@ use super::*;
 
 mod async_previews;
 mod layout;
+mod theme_switch;
 
 #[test]
 #[ignore = "requires X11 native rendering; synthetic triage evidence fixture"]
