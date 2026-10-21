@@ -550,7 +550,8 @@ impl MonitorApp {
                                 ui.add(text_field(&mut app.draft.name).desired_width(280.0));
                                 ui.end_row();
                                 ui.label("CPU count");
-                                ui.add(egui::DragValue::new(&mut app.draft.cpus).range(1..=64));
+                                ui.add(egui::DragValue::new(&mut app.draft.cpus).range(1..=64))
+                                    .on_hover_text("A real PC has 4 to 16 threads (checks flag 1)");
                                 ui.end_row();
                                 ui.label("RAM");
                                 ui.add(
@@ -558,7 +559,10 @@ impl MonitorApp {
                                         .range(min_ram..=antinomie_monitor_core::storage::MAX_RAM_MIB)
                                         .suffix(" MiB"),
                                 )
-                                .on_hover_text(format!("At least {min_ram} MiB for this base"));
+                                .on_hover_text(format!(
+                                    "At least {min_ram} MiB for this base; a real PC has 8 to 32 GiB \
+                                     (checks flag under 4 GiB)"
+                                ));
                                 ui.end_row();
                                 ui.label("Disk");
                                 if creating {
@@ -567,7 +571,11 @@ impl MonitorApp {
                                             .range(min_disk..=2048)
                                             .suffix(" GiB"),
                                     )
-                                    .on_hover_text(format!("At least {min_disk} GiB for this base"));
+                                    .on_hover_text(format!(
+                                        "At least {min_disk} GiB for this base; a real PC has 256 GiB \
+                                         or more (checks flag under 60 GiB); the image grows only as \
+                                         the guest writes"
+                                    ));
                                 } else {
                                     ui.label(
                                         RichText::new(format!("{} GiB", app.draft.disk_gib))
@@ -780,10 +788,23 @@ impl MonitorApp {
         }
         if self.stealth_open && open && !cancel {
             let editable = creating || self.snapshot.active_vm.as_ref() != Some(&self.draft.id);
+            // What the VM's base boots with; none chosen yet offers all.
+            let base = selected_base(&self.snapshot, self.draft.base_identity.as_deref()).map_or(
+                antinomie_monitor_core::stealth::BaseSupport::all(),
+                |base| {
+                    antinomie_monitor_core::stealth::BaseSupport::from_list(&base.stealth_support)
+                },
+            );
             super::stealth::window(
                 ctx,
                 &mut self.stealth_open,
                 &mut self.draft.stealth,
+                &base,
+                &antinomie_monitor_core::stealth::resource_hints(
+                    self.draft.cpus,
+                    self.draft.ram_mib,
+                    self.draft.disk_gib,
+                ),
                 editable,
                 creating,
             );

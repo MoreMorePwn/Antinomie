@@ -190,6 +190,7 @@ fn apply_launch_settings(
     options: &BackendOptions,
     launch: &VmLaunchOptions,
     stealth: &crate::stealth::StealthProfile,
+    cpus: u16,
     bundle: &Bundle,
     bootstrap: u64,
 ) -> Result<(), String> {
@@ -209,7 +210,7 @@ fn apply_launch_settings(
     // Hiding the hypervisor needs a model to add flags to; QEMU's default
     // model is named after QEMU, so a profile that hides it brings its own.
     let base = cpu.or((stealth.hide_hypervisor || stealth.pmu).then_some("max"));
-    if let Some(cpu) = crate::stealth::cpu_option(stealth, base, acceleration == "kvm") {
+    if let Some(cpu) = crate::stealth::cpu_option(stealth, base, acceleration == "kvm", cpus) {
         command.arg("-cpu").arg(cpu);
     }
     let mut append = format!(
@@ -244,8 +245,9 @@ fn apply_launch_settings(
         }
         // An absolute pointer keeps the GTK display from grabbing and
         // recentering the host cursor. The guest kernel already binds
-        // CONFIG_VIRTIO_INPUT, so no additional controller is required.
-        command.args(["-device", "virtio-tablet-pci"]);
+        // CONFIG_VIRTIO_INPUT, so no additional controller is required; the
+        // profile may choose the USB tablet or only the PS/2 mouse instead.
+        command.args(crate::stealth::pointer_args(stealth));
     }
     command.arg("-display").arg(display);
     Ok(())
@@ -451,6 +453,11 @@ impl VmProcess {
             return Err("bootstrap GPA must be page aligned and inside VM RAM below 4 GiB".into());
         }
         let (ram_path, ram_memory) = guest_ram(ram_path, ram_size)?;
+        // The profile as this base and host can boot it.
+        let (stealth, _) = vm.stealth.fitted(
+            &crate::stealth::BaseSupport::from_list(&bundle.stealth_support),
+            &crate::stealth::HostSupport::detect(&options.qemu),
+        );
         let mut qmp_path = runtime_dir.join("qmp.sock");
         let mut socket_cleanup = None;
         if qmp_path.as_os_str().len() > 100 {
@@ -470,7 +477,7 @@ impl VmProcess {
             .arg("-machine")
             .arg(format!(
                 "q35,memory-backend=shared,max-ram-below-4g=4G{}",
-                crate::stealth::machine_options(&vm.stealth)
+                crate::stealth::machine_options(&stealth)
             ))
             .arg("-object")
             .arg(format!(
@@ -481,14 +488,10 @@ impl VmProcess {
             .arg("-m")
             .arg(vm.ram_mib.to_string())
             .arg("-smp")
-            .arg(crate::stealth::smp_option(&vm.stealth, vm.cpus))
+            .arg(crate::stealth::smp_option(&stealth, vm.cpus))
             .arg("-kernel")
             .arg(&bundle.kernel)
-            .arg("-drive")
-            .arg(format!(
-                "file={},format=qcow2,if=virtio,id=osdisk,node-name=antinomie-disk",
-                qemu_path(disk)?
-            ))
+            .args(crate::stealth::disk_args(&stealth, &qemu_path(disk)?))
             .arg("-qmp")
             .arg(format!("unix:{},server=on,wait=off", qemu_path(&qmp_path)?))
             .args(["-monitor", "none", "-serial", "stdio"])
@@ -508,15 +511,25 @@ impl VmProcess {
             boot.kernel_append
                 .push_str(&format!(" antinomie_ring_kib={}", vm.transport.ring_kib));
         }
-        apply_launch_settings(&mut cmd, options, &vm.launch, &vm.stealth, &boot, bootstrap)?;
-        crate::stealth::apply(&mut cmd, &vm.stealth, &runtime_dir)?;
+        apply_launch_settings(
+            &mut cmd, options, &vm.launch, &stealth, vm.cpus, &boot, bootstrap,
+        )?;
+        crate::stealth::apply(&mut cmd, &stealth, &runtime_dir)?;
+        crate::stealth::firmware_args(
+            &mut cmd,
+            &stealth,
+            &options.qemu,
+            &vm_dir(options, &vm.id)?,
+        )?;
         if let Some(initrd) = &bundle.initrd {
             cmd.arg("-initrd").arg(initrd);
         }
         if let Some(netdev) = user_network_backend(vm) {
             // Network captures attach a filter-dump to net0 over QMP.
-            cmd.args(["-netdev", netdev, "-device"])
-                .arg(crate::stealth::nic_option(&vm.stealth));
+            cmd.arg("-netdev")
+                .arg(crate::stealth::netdev_option(netdev, &stealth))
+                .arg("-device")
+                .arg(crate::stealth::nic_option(&stealth));
         } else {
             cmd.args(["-nic", "none"]);
         }
@@ -1155,6 +1168,7 @@ mod tests {
             options,
             launch,
             &crate::stealth::StealthProfile::transparent(),
+            4,
             &bundle(graphical),
             0x40000000,
         )?;
@@ -1465,6 +1479,7 @@ mod tests {
                             &options,
                             &launch,
                             &crate::stealth::StealthProfile::transparent(),
+                            4,
                             &bundle(true),
                             0x40000000,
                         )

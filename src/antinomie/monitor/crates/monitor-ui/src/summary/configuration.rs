@@ -2,7 +2,9 @@
 //! Configured capacities, launch preferences and the stealth profile of the
 //! selected VM, as cards.
 use super::*;
-use antinomie_monitor_core::stealth::{chassis_label, StealthPreset, StealthProfile, MACHINES};
+use antinomie_monitor_core::stealth::{
+    chassis_label, DiskBus, Firmware, StealthPreset, StealthProfile, MACHINES,
+};
 use egui_phosphor::regular as icon;
 
 /// Set for one frame when Configure… is pressed; the app opens the dialog.
@@ -200,6 +202,14 @@ fn on_off(on: bool, yes: &str, no: &str) -> String {
     if on { yes } else { no }.to_owned()
 }
 
+fn firmware_kind(firmware: Firmware) -> &'static str {
+    match firmware {
+        Firmware::Bios => "SeaBIOS",
+        Firmware::Uefi => "UEFI",
+        Firmware::UefiSecureBoot => "UEFI Secure Boot",
+    }
+}
+
 fn stealth(ui: &mut egui::Ui, profile: &StealthProfile, narrow: bool) {
     ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new(icon::SHIELD).size(18.0).color(theme::blue()));
@@ -229,13 +239,19 @@ fn stealth(ui: &mut egui::Ui, profile: &StealthProfile, narrow: bool) {
         hardware.push((
             "Firmware",
             format!(
-                "{} {} ({})",
-                identity.bios_vendor, identity.bios_version, identity.bios_date
+                "{} · {} {} ({})",
+                firmware_kind(profile.firmware),
+                identity.bios_vendor,
+                identity.bios_version,
+                identity.bios_date
             ),
         ));
         hardware.push(("ACPI OEM", identity.acpi_oem_id.trim_end().to_owned()));
     } else {
-        hardware.push(("Firmware", "SeaBIOS · ACPI OEM BOCHS".to_owned()));
+        hardware.push((
+            "Firmware",
+            format!("{} · ACPI OEM BOCHS", firmware_kind(profile.firmware)),
+        ));
     }
     let mut cpu = vec![if profile.cpu_passthrough {
         "Host CPU"
@@ -251,7 +267,17 @@ fn stealth(ui: &mut egui::Ui, profile: &StealthProfile, narrow: bool) {
     if profile.pmu {
         cpu.push("counters");
     }
-    let mut devices = Vec::new();
+    if profile.smt && profile.realistic_topology {
+        cpu.push("2 threads per core");
+    }
+    let mut devices = vec![match profile.disk_bus {
+        DiskBus::Virtio => "virtio disk",
+        DiskBus::Sata => "SATA disk",
+        DiskBus::Nvme => "NVMe disk",
+    }];
+    if profile.cdrom {
+        devices.push("CD-ROM");
+    }
     if profile.usb {
         devices.push("ICH9 USB");
     }
@@ -276,6 +302,14 @@ fn stealth(ui: &mut egui::Ui, profile: &StealthProfile, narrow: bool) {
                     profile.mac.as_str()
                 }
             ),
+        ),
+        (
+            "NAT",
+            if profile.nat.network.is_empty() {
+                "10.0.2.0/24 (QEMU)".to_owned()
+            } else {
+                format!("{} via {}", profile.nat.network, profile.nat.gateway)
+            },
         ),
         ("Devices", devices.join(" · ")),
         (

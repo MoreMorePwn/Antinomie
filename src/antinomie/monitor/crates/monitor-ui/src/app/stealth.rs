@@ -3,9 +3,53 @@
 //! guest. A preset fills every entry; editing one makes the profile Custom.
 use super::*;
 use antinomie_monitor_core::stealth::{
-    chassis_label, host_cpu_vendor, MachineIdentity, NicModel, StealthPreset, StealthProfile,
-    CHASSIS, MACHINES,
+    chassis_label, disk_bus_unavailable, firmware_unavailable, host_cpu_vendor, nat_unavailable,
+    BaseSupport, DiskBus, DiskMedia, Firmware, HostSupport, MachineIdentity, NatNetwork, NicModel,
+    Pointer, RtcClock, SmbiosEntry, StealthPreset, StealthProfile, CHASSIS, CPU_MODELS, MACHINES,
 };
+
+/// What the host offers (OVMF, clean SMT), read once.
+pub(super) fn host_support() -> &'static HostSupport {
+    static HOST: std::sync::OnceLock<HostSupport> = std::sync::OnceLock::new();
+    HOST.get_or_init(|| HostSupport::detect(std::path::Path::new("qemu-system-x86_64")))
+}
+
+/// A combo box whose unavailable choices are shown disabled with the reason.
+fn choice<T: Copy + PartialEq>(
+    ui: &mut egui::Ui,
+    id: &str,
+    value: &mut T,
+    options: &[T],
+    label: impl Fn(T) -> &'static str,
+    unavailable: impl Fn(T) -> Option<String>,
+) {
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(label(*value))
+        .width(260.0)
+        .show_ui(ui, |ui| {
+            for &option in options {
+                let reason = unavailable(option);
+                let response = ui.add_enabled(
+                    reason.is_none(),
+                    egui::SelectableLabel::new(*value == option, label(option)),
+                );
+                if let Some(reason) = reason {
+                    response.on_disabled_hover_text(reason);
+                } else if response.clicked() {
+                    *value = option;
+                }
+            }
+        });
+}
+
+/// A note under an entry the VM's base or the host cannot boot.
+fn falls_back(ui: &mut egui::Ui, reason: Option<String>) {
+    if let Some(reason) = reason {
+        ui.label("");
+        ui.colored_label(theme::warn(), format!("Falls back: {reason}"));
+        ui.end_row();
+    }
+}
 
 /// Picks a preset, applying it to every entry.
 fn preset_combo(ui: &mut egui::Ui, profile: &mut StealthProfile, id: &str) {
@@ -68,6 +112,29 @@ fn identity_fields(ui: &mut egui::Ui, identity: &mut MachineIdentity) {
             text_row(ui, "Memory part", &mut identity.memory_part);
             text_row(ui, "Memory serial", &mut identity.memory_serial);
         });
+}
+
+/// SMBIOS type 11 strings, one per line.
+fn oem_strings(ui: &mut egui::Ui, identity: &mut MachineIdentity) {
+    ui.label("OEM strings");
+    let mut text = identity.oem_strings.join("\n");
+    if ui
+        .add(
+            egui::TextEdit::multiline(&mut text)
+                .desired_rows(3)
+                .desired_width(260.0),
+        )
+        .on_hover_text("SMBIOS type 11, one string per line; PC firmware fills it, QEMU does not")
+        .changed()
+    {
+        identity.oem_strings = text
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(str::to_owned)
+            .collect();
+    }
+    ui.end_row();
 }
 
 fn hardware(ui: &mut egui::Ui, profile: &mut StealthProfile) {
@@ -160,18 +227,52 @@ fn hardware(ui: &mut egui::Ui, profile: &mut StealthProfile) {
     }
 }
 
-fn firmware(ui: &mut egui::Ui, profile: &mut StealthProfile) {
+fn firmware(ui: &mut egui::Ui, profile: &mut StealthProfile, base: &BaseSupport) {
     egui::Grid::new("vm_stealth_firmware")
         .num_columns(2)
         .spacing([12.0, 6.0])
         .show(ui, |ui| {
             ui.label("Firmware");
-            ui.label(RichText::new("SeaBIOS").color(theme::muted()))
-                .on_hover_text("The firmware's own strings follow the BIOS fields above");
+            choice(
+                ui,
+                "vm_stealth_firmware_kind",
+                &mut profile.firmware,
+                Firmware::ALL,
+                Firmware::label,
+                |firmware| firmware_unavailable(firmware, base, host_support()),
+            );
             ui.end_row();
+            falls_back(
+                ui,
+                firmware_unavailable(profile.firmware, base, host_support()),
+            );
+            if profile.firmware == Firmware::UefiSecureBoot {
+                ui.label("");
+                ui.colored_label(
+                    theme::muted(),
+                    "OVMF finds the kernel unsigned and starts it with its legacy loader; \
+                     the guest sees Secure Boot on",
+                );
+                ui.end_row();
+            }
             if profile.identity_enabled {
                 text_row(ui, "ACPI OEM ID", &mut profile.identity.acpi_oem_id);
                 text_row(ui, "ACPI table ID", &mut profile.identity.acpi_table_id);
+                ui.label("SMBIOS entry");
+                ui.horizontal(|ui| {
+                    ui.radio_value(
+                        &mut profile.smbios_entry,
+                        SmbiosEntry::Bits64,
+                        "64-bit (3.x)",
+                    );
+                    ui.radio_value(
+                        &mut profile.smbios_entry,
+                        SmbiosEntry::Bits32,
+                        "32-bit (2.x)",
+                    );
+                });
+                ui.end_row();
+                oem_strings(ui, &mut profile.identity);
             }
             ui.label("Devices");
             ui.checkbox(&mut profile.hpet, "HPET timer");
@@ -184,6 +285,19 @@ fn firmware(ui: &mut egui::Ui, profile: &mut StealthProfile) {
             ui.checkbox(&mut profile.usb, "Intel ICH9 USB controllers")
                 .on_hover_text("Every PC has USB; QEMU adds none by default");
             ui.end_row();
+            ui.label("");
+            let secure_boot = profile.firmware == Firmware::UefiSecureBoot;
+            let mut smm = profile.smm || secure_boot;
+            ui.add_enabled(
+                !secure_boot,
+                egui::Checkbox::new(&mut smm, "System management mode"),
+            )
+            .on_hover_text("PCs have SMM; Secure Boot firmware needs it")
+            .on_disabled_hover_text("Secure Boot firmware keeps its variables in SMM");
+            if !secure_boot {
+                profile.smm = smm;
+            }
+            ui.end_row();
         });
 }
 
@@ -193,13 +307,80 @@ fn cpu(ui: &mut egui::Ui, profile: &mut StealthProfile) {
         "Pass the host CPU through (its real name and features)",
     )
     .on_hover_text("Needs KVM; without it the model is named after the host CPU");
+    if !profile.cpu_passthrough {
+        egui::Grid::new("vm_stealth_cpu_model")
+            .num_columns(2)
+            .spacing([12.0, 6.0])
+            .show(ui, |ui| {
+                ui.label("Model");
+                let host = host_cpu_vendor();
+                let current = if profile.cpu_model.is_empty() {
+                    "The VM's CPU model setting".to_owned()
+                } else {
+                    profile.cpu_model.clone()
+                };
+                egui::ComboBox::from_id_salt("vm_stealth_cpu_named")
+                    .selected_text(current)
+                    .width(260.0)
+                    .show_ui(ui, |ui| {
+                        if ui
+                            .selectable_label(
+                                profile.cpu_model.is_empty(),
+                                "The VM's CPU model setting",
+                            )
+                            .clicked()
+                        {
+                            profile.cpu_model.clear();
+                            profile.cpu_brand.clear();
+                        }
+                        for model in CPU_MODELS
+                            .iter()
+                            .filter(|model| host.is_empty() || model.cpu_vendor == host)
+                        {
+                            if ui
+                                .selectable_label(profile.cpu_model == model.model, model.model)
+                                .on_hover_text(model.brand)
+                                .clicked()
+                            {
+                                profile.cpu_model = model.model.into();
+                                profile.cpu_brand = model.brand.into();
+                            }
+                        }
+                    });
+                ui.end_row();
+                text_row(ui, "Brand string", &mut profile.cpu_brand);
+                ui.label("");
+                ui.add_enabled(
+                    !profile.cpu_model.is_empty(),
+                    egui::Checkbox::new(&mut profile.model_cache_info, "The model's own caches"),
+                )
+                .on_hover_text("Its real cache layout and an L3 instead of QEMU's legacy one");
+                ui.end_row();
+            });
+    }
     ui.checkbox(&mut profile.hide_hypervisor, "Hide the hypervisor CPU flag");
     ui.checkbox(&mut profile.hide_kvm, "Hide the KVM signature")
         .on_hover_text(
             "The guest then uses its TSC instead of kvm-clock: a small timekeeping cost",
         );
+    ui.add_enabled(
+        !profile.hide_kvm,
+        egui::Checkbox::new(&mut profile.kvm_clock, "kvm-clock"),
+    )
+    .on_hover_text("The guest's clock source while the KVM signature is shown")
+    .on_disabled_hover_text("Hiding the KVM signature also hides kvm-clock");
     ui.checkbox(&mut profile.pmu, "Performance counters");
     ui.checkbox(&mut profile.realistic_topology, "One socket with N cores");
+    let smt = &host_support().smt;
+    ui.add_enabled(
+        profile.realistic_topology && smt.is_ok(),
+        egui::Checkbox::new(&mut profile.smt, "Two threads per core"),
+    )
+    .on_hover_text("As a CPU with SMT: N/2 cores of two threads (an even CPU count)")
+    .on_disabled_hover_text(match smt {
+        Err(reason) => reason.clone(),
+        Ok(()) => "Needs one socket with N cores".to_owned(),
+    });
     ui.add_enabled(
         profile.cpu_passthrough,
         egui::Checkbox::new(&mut profile.host_cache_info, "The host's cache sizes"),
@@ -207,7 +388,7 @@ fn cpu(ui: &mut egui::Ui, profile: &mut StealthProfile) {
     .on_hover_text("QEMU otherwise reports its own cache sizes; passthrough only");
 }
 
-fn network(ui: &mut egui::Ui, profile: &mut StealthProfile) {
+fn network(ui: &mut egui::Ui, profile: &mut StealthProfile, base: &BaseSupport) {
     egui::Grid::new("vm_stealth_network")
         .num_columns(2)
         .spacing([12.0, 6.0])
@@ -260,25 +441,154 @@ fn network(ui: &mut egui::Ui, profile: &mut StealthProfile) {
         theme::muted(),
         "A network card exists only when the VM's network is Isolated or NAT.",
     );
+    egui::Grid::new("vm_stealth_nat")
+        .num_columns(2)
+        .spacing([12.0, 6.0])
+        .show(ui, |ui| {
+            if profile.identity_enabled && profile.nic == NicModel::E1000e {
+                ui.label("Card subsystem");
+                ui.add(
+                    egui::TextEdit::singleline(&mut profile.identity.nic_subsystem)
+                        .desired_width(150.0)
+                        .hint_text(crate::theme::hint_text("8086:0000")),
+                )
+                .on_hover_text("A board's own card carries its maker's PCI subsystem IDs");
+                ui.end_row();
+            }
+            ui.label("NAT network");
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut profile.nat.network)
+                        .desired_width(150.0)
+                        .hint_text(crate::theme::hint_text("10.0.2.0/24")),
+                );
+                if ui
+                    .button("Home")
+                    .on_hover_text("192.168.1.0/24 behind a router at .1")
+                    .clicked()
+                {
+                    profile.nat = NatNetwork::home();
+                }
+                if ui
+                    .button("QEMU default")
+                    .on_hover_text("10.0.2.0/24, which QEMU and VirtualBox share")
+                    .clicked()
+                {
+                    profile.nat = NatNetwork::default();
+                }
+            });
+            ui.end_row();
+            if !profile.nat.network.is_empty() {
+                text_row(ui, "Gateway", &mut profile.nat.gateway);
+                text_row(ui, "DNS server", &mut profile.nat.dns);
+                text_row(ui, "DHCP start", &mut profile.nat.dhcp_start);
+                falls_back(ui, nat_unavailable(base).map(str::to_owned));
+            }
+        });
+    if !profile.nat.network.is_empty() {
+        ui.colored_label(
+            theme::muted(),
+            "The guest learns them by DHCP. QEMU needs the DNS server apart from the gateway; \
+             an isolated VM's guest uses the gateway for both.",
+        );
+    }
 }
 
-fn storage(ui: &mut egui::Ui, profile: &mut StealthProfile) {
+fn storage(ui: &mut egui::Ui, profile: &mut StealthProfile, base: &BaseSupport) {
     egui::Grid::new("vm_stealth_storage")
         .num_columns(2)
         .spacing([12.0, 6.0])
         .show(ui, |ui| {
             ui.label("Disk bus");
-            ui.label(RichText::new("virtio").color(theme::muted()))
+            choice(
+                ui,
+                "vm_stealth_disk_bus",
+                &mut profile.disk_bus,
+                DiskBus::ALL,
+                DiskBus::label,
+                |bus| disk_bus_unavailable(bus, base).map(str::to_owned),
+            );
+            ui.end_row();
+            falls_back(
+                ui,
+                disk_bus_unavailable(profile.disk_bus, base).map(str::to_owned),
+            );
+            if profile.disk_bus == DiskBus::Sata {
+                ui.label("Disk kind");
+                ui.horizontal(|ui| {
+                    ui.radio_value(&mut profile.disk_media, DiskMedia::Ssd, "SSD");
+                    ui.radio_value(
+                        &mut profile.disk_media,
+                        DiskMedia::Hdd,
+                        "Hard disk (7,200 rpm)",
+                    );
+                });
+                ui.end_row();
+            }
+            if profile.identity_enabled {
+                if profile.disk_bus == DiskBus::Sata {
+                    text_row(ui, "Disk model", &mut profile.identity.disk_model);
+                    text_row(ui, "Disk firmware", &mut profile.identity.disk_firmware);
+                    text_row(ui, "Disk WWN", &mut profile.identity.disk_wwn);
+                }
+                text_row(ui, "Disk serial", &mut profile.identity.disk_serial);
+            }
+            ui.label("CD-ROM");
+            ui.checkbox(&mut profile.cdrom, "An empty SATA CD-ROM drive")
                 .on_hover_text(
-                    "SATA and NVMe need the guest kernel to have those drivers built in; \
-                 the current bases boot from virtio only",
+                    "Desktops with an optical drive have one; QEMU's answers \
+                     \"QEMU DVD-ROM\" to the SCSI inquiry whatever its model",
                 );
             ui.end_row();
-            if profile.identity_enabled {
-                text_row(ui, "Disk serial", &mut profile.identity.disk_serial);
+            if profile.identity_enabled && profile.cdrom {
                 text_row(ui, "CD-ROM model", &mut profile.identity.cdrom_model);
             }
         });
+    if profile.disk_bus == DiskBus::Nvme {
+        ui.colored_label(
+            theme::muted(),
+            "QEMU's NVMe controller names itself \"QEMU NVMe Ctrl\" with QEMU's version as \
+             firmware; only its serial and subsystem name can be set.",
+        );
+    }
+    ui.colored_label(
+        theme::muted(),
+        "The disk's size is the VM's (pafish flags under 60 GiB).",
+    );
+}
+
+fn display(ui: &mut egui::Ui, profile: &mut StealthProfile) {
+    ui.label("Pointer");
+    for &pointer in Pointer::ALL {
+        let usable = pointer != Pointer::UsbTablet || profile.usb;
+        ui.add_enabled_ui(usable, |ui| {
+            ui.radio_value(&mut profile.pointer, pointer, pointer.label())
+                .on_disabled_hover_text("Needs the Intel ICH9 USB controllers");
+            ui.label(RichText::new(pointer.cost()).small().color(theme::muted()));
+        });
+    }
+    ui.add_space(4.0);
+    ui.colored_label(
+        theme::muted(),
+        "Display: virtio-gpu when the VM has a fixed resolution (Antinomie sizes its window \
+         through it), QEMU's standard VGA otherwise. Both name a VM vendor.",
+    );
+}
+
+fn clock(ui: &mut egui::Ui, profile: &mut StealthProfile) {
+    ui.checkbox(&mut profile.rtc_localtime, "Real-time clock in local time")
+        .on_hover_text(
+            "Linux PCs keep it in UTC and Linux guests read it as UTC; Windows PCs in local time",
+        );
+    ui.horizontal(|ui| {
+        ui.label("Driven by");
+        ui.radio_value(&mut profile.rtc_clock, RtcClock::Host, "the host's clock")
+            .on_hover_text("Wall time goes on while the VM is paused");
+        ui.radio_value(&mut profile.rtc_clock, RtcClock::Vm, "the VM's clock")
+            .on_hover_text("Stops while the VM is paused, as if it had been off");
+    });
+    ui.checkbox(&mut profile.rtc_driftfix, "Catch up on missed clock ticks")
+        .on_hover_text("For guests that count RTC interrupts (Windows); Linux does not need it");
 }
 
 /// A preset applied this frame stays that preset; any other edit is Custom.
@@ -296,6 +606,8 @@ pub(super) fn window(
     ctx: &egui::Context,
     open: &mut bool,
     profile: &mut StealthProfile,
+    base: &BaseSupport,
+    size_hints: &[&str],
     editable: bool,
     creating: bool,
 ) {
@@ -324,30 +636,37 @@ pub(super) fn window(
                             .default_open(true)
                             .show(ui, |ui| hardware(ui, profile));
                         egui::CollapsingHeader::new("Firmware and ACPI")
-                            .show(ui, |ui| firmware(ui, profile));
+                            .show(ui, |ui| firmware(ui, profile, base));
                         egui::CollapsingHeader::new("CPU").show(ui, |ui| cpu(ui, profile));
-                        egui::CollapsingHeader::new("Network").show(ui, |ui| network(ui, profile));
+                        egui::CollapsingHeader::new("Network")
+                            .show(ui, |ui| network(ui, profile, base));
                         egui::CollapsingHeader::new("Storage and devices")
-                            .show(ui, |ui| storage(ui, profile));
-                        egui::CollapsingHeader::new("Clock").show(ui, |ui| {
-                            ui.checkbox(
-                                &mut profile.rtc_localtime,
-                                "Real-time clock in local time",
-                            )
-                            .on_hover_text("Linux PCs keep it in UTC; Windows PCs in local time");
-                        });
+                            .show(ui, |ui| storage(ui, profile, base));
+                        egui::CollapsingHeader::new("Display and pointer")
+                            .show(ui, |ui| display(ui, profile));
+                        egui::CollapsingHeader::new("Clock").show(ui, |ui| clock(ui, profile));
                         egui::CollapsingHeader::new("Still visible").show(ui, |ui| {
-                            for giveaway in profile.giveaways() {
+                            let (fitted, notes) = profile.fitted(base, host_support());
+                            for giveaway in fitted.giveaways() {
                                 ui.label(format!("• {giveaway}"));
+                            }
+                            for note in notes {
+                                ui.colored_label(theme::warn(), format!("• {note}"));
+                            }
+                            // The VM's own settings, which pafish-style checks read.
+                            for hint in size_hints {
+                                ui.colored_label(theme::warn(), format!("• The VM's size: {hint}"));
                             }
                             ui.colored_label(
                                 theme::muted(),
                                 "Bases built by Antinomie 0.7.0 keep the guest kernel's options, \
                                  build string, symbols and worker names and QEMU's ACPI devices \
-                                 out of the guest, and start programs as a shell's job (parent \
-                                 init). Older bases still show them. Timing, the virtual disk \
-                                 and display, the chipset and QEMU's firmware tables are beyond \
-                                 what a launch option or the guest kernel can change.",
+                                 out of the guest, start programs as a shell's job (parent \
+                                 init), and boot under UEFI and from SATA or NVMe with their \
+                                 address from DHCP. Older bases still show the rest and fall \
+                                 back to BIOS, virtio and 10.0.2.x. Timing, the display, the \
+                                 chipset and QEMU's firmware tables are beyond what a launch \
+                                 option or the guest kernel can change.",
                             );
                         });
                     });

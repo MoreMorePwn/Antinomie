@@ -8,9 +8,26 @@
 //! a launch option. The guest kernel keeps its own traces out of the guest
 //! (its boot options, build string, symbols, worker names and QEMU's ACPI
 //! devices); what neither can change is listed by `giveaways()`.
+//!
+//! Some entries need the base (UEFI, a SATA or NVMe root disk, a NAT network
+//! of its own) or the host (OVMF, two threads per core); `fitted()` turns an
+//! entry the base or host lacks back into the choice every one has.
 use crate::storage::unique_id;
 use serde::{Deserialize, Serialize};
-use std::{path::Path, process::Command};
+
+mod firmware;
+mod launch;
+mod nat;
+mod smbios;
+#[cfg(test)]
+mod tests;
+
+pub use firmware::{Ovmf, find_ovmf};
+pub(crate) use launch::{
+    apply, cpu_option, disk_args, escape, firmware_args, machine_options, netdev_option,
+    nic_option, pointer_args, smp_option,
+};
+pub use nat::NatNetwork;
 
 /// A starting point for every entry; changing one makes the profile Custom.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -88,6 +105,158 @@ impl NicModel {
     }
 }
 
+/// The machine's firmware.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Firmware {
+    /// SeaBIOS, QEMU's default: no `/sys/firmware/efi` in the guest.
+    #[default]
+    Bios,
+    /// OVMF with an empty variable store, Secure Boot off.
+    Uefi,
+    /// OVMF with Microsoft's keys enrolled: Secure Boot on (needs SMM).
+    UefiSecureBoot,
+}
+
+impl Firmware {
+    pub const ALL: &'static [Self] = &[Self::Bios, Self::Uefi, Self::UefiSecureBoot];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Bios => "BIOS (SeaBIOS)",
+            Self::Uefi => "UEFI (OVMF)",
+            Self::UefiSecureBoot => "UEFI with Secure Boot (OVMF, Microsoft keys)",
+        }
+    }
+
+    pub fn is_uefi(self) -> bool {
+        self != Self::Bios
+    }
+}
+
+/// The bus of the root disk.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DiskBus {
+    /// Fastest; `vda` with Red Hat's vendor ID.
+    #[default]
+    Virtio,
+    /// On q35's ICH9 AHCI controller: `sda`, vendor ATA, the model set here.
+    Sata,
+    /// QEMU's NVMe controller, whose model name says QEMU.
+    Nvme,
+}
+
+impl DiskBus {
+    pub const ALL: &'static [Self] = &[Self::Virtio, Self::Sata, Self::Nvme];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Virtio => "virtio (fastest, VM vendor ID)",
+            Self::Sata => "SATA (AHCI)",
+            Self::Nvme => "NVMe (model says QEMU)",
+        }
+    }
+}
+
+/// What the disk says it is: SATA reports its rotation rate.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DiskMedia {
+    #[default]
+    Ssd,
+    /// A 7,200 rpm disk.
+    Hdd,
+}
+
+/// The pointing device beside the display (the VM window only).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Pointer {
+    /// Absolute, needs no driver beyond virtio-input.
+    #[default]
+    VirtioTablet,
+    /// Absolute, on the ICH9 USB controllers.
+    UsbTablet,
+    /// The PS/2 mouse every q35 machine has, relative.
+    Ps2,
+}
+
+impl Pointer {
+    pub const ALL: &'static [Self] = &[Self::VirtioTablet, Self::UsbTablet, Self::Ps2];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::VirtioTablet => "virtio tablet",
+            Self::UsbTablet => "USB tablet",
+            Self::Ps2 => "PS/2 mouse only",
+        }
+    }
+
+    /// What the choice costs.
+    pub fn cost(self) -> &'static str {
+        match self {
+            Self::VirtioTablet => {
+                "The pointer follows the host's; a virtio device named \"QEMU Virtio Tablet\""
+            }
+            Self::UsbTablet => {
+                "The pointer follows the host's; named \"QEMU USB Tablet\", needs the USB controllers"
+            }
+            Self::Ps2 => {
+                "Looks like a PC's mouse; the window grabs the pointer on a click \
+                 (Ctrl+Alt+G releases it)"
+            }
+        }
+    }
+}
+
+/// The SMBIOS entry point: 32-bit (SMBIOS 2.x) or 64-bit (SMBIOS 3.x, as
+/// current PCs).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SmbiosEntry {
+    #[default]
+    Bits64,
+    Bits32,
+}
+
+/// What drives the emulated real-time clock.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RtcClock {
+    /// The host's clock, QEMU's default: wall time goes on while the VM is
+    /// paused.
+    #[default]
+    Host,
+    /// The VM's own clock, which stops while the VM is paused.
+    Vm,
+}
+
+/// A named QEMU CPU model with the brand string it shows, for a VM without
+/// passthrough. The family and model numbers stay the QEMU model's.
+pub struct CpuModel {
+    pub model: &'static str,
+    pub cpu_vendor: &'static str,
+    pub brand: &'static str,
+}
+
+pub const CPU_MODELS: &[CpuModel] = &[
+    CpuModel {
+        model: "Skylake-Client-v4",
+        cpu_vendor: "GenuineIntel",
+        brand: "Intel(R) Core(TM) i7-6700 CPU @ 3.40GHz",
+    },
+    CpuModel {
+        model: "Cascadelake-Server-v5",
+        cpu_vendor: "GenuineIntel",
+        brand: "Intel(R) Xeon(R) Silver 4210R CPU @ 2.40GHz",
+    },
+    CpuModel {
+        model: "EPYC-Rome-v4",
+        cpu_vendor: "AuthenticAMD",
+        brand: "AMD Ryzen 5 3600 6-Core Processor",
+    },
+    CpuModel {
+        model: "EPYC-Milan-v2",
+        cpu_vendor: "AuthenticAMD",
+        brand: "AMD Ryzen 7 5800X 8-Core Processor",
+    },
+];
+
 /// What the firmware tables, the CPU and the devices say about the machine.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -119,6 +288,16 @@ pub struct MachineIdentity {
     pub acpi_table_id: String,
     pub cdrom_model: String,
     pub disk_serial: String,
+    /// SATA model, firmware revision and world wide name (16 hex digits);
+    /// NVMe takes the serial only.
+    pub disk_model: String,
+    pub disk_firmware: String,
+    pub disk_wwn: String,
+    /// SMBIOS type 11 OEM strings.
+    pub oem_strings: Vec<String>,
+    /// PCI subsystem `vendor:device` of the network card (e1000e only), as a
+    /// board's own card has its maker's; empty keeps Intel's.
+    pub nic_subsystem: String,
 }
 
 /// The stealth profile of one VM.
@@ -150,6 +329,29 @@ pub struct StealthProfile {
     /// Intel ICH9 USB controllers (EHCI with UHCI companions), as on a PC.
     pub usb: bool,
     pub rtc_localtime: bool,
+    pub firmware: Firmware,
+    pub disk_bus: DiskBus,
+    pub disk_media: DiskMedia,
+    /// Two threads per core (with one socket of N/2 cores).
+    pub smt: bool,
+    pub pointer: Pointer,
+    pub smbios_entry: SmbiosEntry,
+    /// A named QEMU CPU model and brand string when not passing the host
+    /// CPU through; empty: the VM's CPU model setting.
+    pub cpu_model: String,
+    pub cpu_brand: String,
+    /// The named model's own cache layout instead of QEMU's legacy one.
+    pub model_cache_info: bool,
+    /// kvm-clock while the KVM signature is shown.
+    pub kvm_clock: bool,
+    pub smm: bool,
+    pub rtc_clock: RtcClock,
+    /// Slew the RTC's missed ticks back in (for guests that count them).
+    pub rtc_driftfix: bool,
+    /// An empty SATA CD-ROM drive, which QEMU names in its SCSI inquiry.
+    pub cdrom: bool,
+    /// The NAT's addresses; empty: QEMU's 10.0.2.0/24.
+    pub nat: NatNetwork,
 }
 
 impl Default for StealthProfile {
@@ -178,6 +380,11 @@ pub struct MachineProfile {
     chassis_type: u8,
     acpi: (&'static str, &'static str),
     serial: SerialStyle,
+    oem_strings: &'static [&'static str],
+    /// The board's own network card: the maker's PCI subsystem IDs.
+    nic_subsystem: &'static str,
+    /// An optical drive in the chassis.
+    cdrom: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -204,6 +411,16 @@ pub const MACHINES: &[MachineProfile] = &[
         chassis_type: 3,
         acpi: ("DELL  ", "CBX3    "),
         serial: SerialStyle::Dell,
+        oem_strings: &[
+            "Dell System",
+            "1[0A61]",
+            "3[1.0]",
+            "12[www.dell.com]",
+            "14[1]",
+            "15[0]",
+        ],
+        nic_subsystem: "1028:0a61",
+        cdrom: true,
     },
     MachineProfile {
         id: "hp-elitedesk-800-g6",
@@ -222,6 +439,14 @@ pub const MACHINES: &[MachineProfile] = &[
         chassis_type: 35,
         acpi: ("HPQOEM", "SLIC-BPC"),
         serial: SerialStyle::Hp,
+        oem_strings: &[
+            "FBYTE#3X476J6S6b7B7H7M7R7W7maBapaqawbcbkbybzcbd8d9dUdpdqfPhKhkhwk8m9n4p8q3q4.vd",
+            "BUILDID#20WWLAAT601#SABA#DABA;",
+            "ABS 70/71 78 79 7A 7B",
+            "CSM v01.06",
+        ],
+        nic_subsystem: "103c:8715",
+        cdrom: false,
     },
     MachineProfile {
         id: "lenovo-m75q-gen2",
@@ -240,6 +465,9 @@ pub const MACHINES: &[MachineProfile] = &[
         chassis_type: 35,
         acpi: ("LENOVO", "TC-M3D  "),
         serial: SerialStyle::Lenovo,
+        oem_strings: &["Lenovo ThinkCentre M75q Gen 2", "TVT-Enablement"],
+        nic_subsystem: "17aa:3179",
+        cdrom: false,
     },
     MachineProfile {
         id: "hp-elitedesk-805-g8",
@@ -258,6 +486,14 @@ pub const MACHINES: &[MachineProfile] = &[
         chassis_type: 3,
         acpi: ("HPQOEM", "SLIC-BPC"),
         serial: SerialStyle::Hp,
+        oem_strings: &[
+            "FBYTE#3X476J6S6b7B7H7M7R7W7maBapaqawbcbkbybzcbd8d9dUdpdqfPhKhkhwk8m9n4p8q3q4.vd",
+            "BUILDID#21WWLGAT601#SABA#DABA;",
+            "ABS 70/71 78 79 7A 7B",
+            "CSM v01.06",
+        ],
+        nic_subsystem: "103c:8770",
+        cdrom: true,
     },
     MachineProfile {
         id: "dell-latitude-5420",
@@ -270,6 +506,16 @@ pub const MACHINES: &[MachineProfile] = &[
         chassis_type: 10,
         acpi: ("DELL  ", "CBX3    "),
         serial: SerialStyle::Dell,
+        oem_strings: &[
+            "Dell System",
+            "1[0A20]",
+            "3[1.0]",
+            "12[www.dell.com]",
+            "14[1]",
+            "15[3]",
+        ],
+        nic_subsystem: "1028:0a20",
+        cdrom: false,
     },
     MachineProfile {
         id: "lenovo-t14-gen3-amd",
@@ -288,6 +534,9 @@ pub const MACHINES: &[MachineProfile] = &[
         chassis_type: 10,
         acpi: ("LENOVO", "TP-R23  "),
         serial: SerialStyle::Lenovo,
+        oem_strings: &["IBM ThinkPad Embedded Controller -[R23HT32W]-"],
+        nic_subsystem: "17aa:22f5",
+        cdrom: false,
     },
     MachineProfile {
         id: "supermicro-x12sth",
@@ -310,6 +559,9 @@ pub const MACHINES: &[MachineProfile] = &[
         chassis_type: 23,
         acpi: ("SUPERM", "SMCI--MB"),
         serial: SerialStyle::Supermicro,
+        oem_strings: &["Default string"],
+        nic_subsystem: "15d9:1c48",
+        cdrom: false,
     },
     MachineProfile {
         id: "supermicro-h12ssl",
@@ -328,6 +580,9 @@ pub const MACHINES: &[MachineProfile] = &[
         chassis_type: 23,
         acpi: ("SUPERM", "SMCI--MB"),
         serial: SerialStyle::Supermicro,
+        oem_strings: &["Default string"],
+        nic_subsystem: "15d9:1c38",
+        cdrom: false,
     },
 ];
 
@@ -457,6 +712,15 @@ impl MachineIdentity {
             acpi_table_id: machine.acpi.1.into(),
             cdrom_model: "HL-DT-ST DVD+-RW GU90N".into(),
             disk_serial: format!("S6PXNF0T{}", random_text(UPPER_DIGITS, 6)),
+            disk_model: "Samsung SSD 870 EVO 500GB".into(),
+            disk_firmware: "SVT02B6Q".into(),
+            disk_wwn: disk_wwn(),
+            oem_strings: machine
+                .oem_strings
+                .iter()
+                .map(|text| (*text).into())
+                .collect(),
+            nic_subsystem: machine.nic_subsystem.into(),
         }
     }
 
@@ -472,7 +736,17 @@ impl MachineIdentity {
         self.system_uuid = uuid();
         self.memory_serial = random_text(b"0123456789ABCDEF", 8);
         self.disk_serial = format!("S6PXNF0T{}", random_text(UPPER_DIGITS, 6));
+        self.disk_wwn = disk_wwn();
     }
+}
+
+/// A world wide name in Samsung's NAA 5 range (OUI 002538), 16 hex digits.
+fn disk_wwn() -> String {
+    let tail: String = random_bytes(4)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!("5002538e{tail}")
 }
 
 impl StealthProfile {
@@ -494,6 +768,21 @@ impl StealthProfile {
             hpet: true,
             usb: false,
             rtc_localtime: false,
+            firmware: Firmware::Bios,
+            disk_bus: DiskBus::Virtio,
+            disk_media: DiskMedia::Ssd,
+            smt: false,
+            pointer: Pointer::VirtioTablet,
+            smbios_entry: SmbiosEntry::Bits64,
+            cpu_model: String::new(),
+            cpu_brand: String::new(),
+            model_cache_info: false,
+            kvm_clock: true,
+            smm: true,
+            rtc_clock: RtcClock::Host,
+            rtc_driftfix: false,
+            cdrom: false,
+            nat: NatNetwork::default(),
         }
     }
 
@@ -522,6 +811,23 @@ impl StealthProfile {
             hpet: true,
             usb: true,
             rtc_localtime: false,
+            firmware: Firmware::Uefi,
+            disk_bus: DiskBus::Sata,
+            disk_media: DiskMedia::Ssd,
+            smt: true,
+            pointer: Pointer::VirtioTablet,
+            smbios_entry: SmbiosEntry::Bits64,
+            cpu_model: String::new(),
+            cpu_brand: String::new(),
+            model_cache_info: false,
+            kvm_clock: true,
+            smm: true,
+            rtc_clock: RtcClock::Host,
+            rtc_driftfix: false,
+            // QEMU names its CD-ROM drive in the SCSI inquiry; real ones
+            // only come with the machines that have one, and cost that.
+            cdrom: false,
+            nat: NatNetwork::home(),
         }
     }
 
@@ -541,6 +847,11 @@ impl StealthProfile {
     pub fn use_machine(&mut self, machine: &MachineProfile) {
         self.identity = MachineIdentity::from_machine(machine);
         self.identity_enabled = true;
+    }
+
+    /// Whether `machine` comes with an optical drive (QEMU's names QEMU).
+    pub fn machine_has_cdrom(machine: &MachineProfile) -> bool {
+        machine.cdrom
     }
 
     /// A new random MAC address with the network card's vendor prefix.
@@ -601,6 +912,26 @@ impl StealthProfile {
                     ));
                 }
             }
+            if identity.oem_strings.len() > 16
+                || identity.oem_strings.iter().any(|text| {
+                    text.is_empty() || text.len() > 128 || text.chars().any(char::is_control)
+                })
+            {
+                return Err("OEM strings: at most 16, each 1 to 128 characters".into());
+            }
+            if !identity.disk_wwn.is_empty()
+                && (identity.disk_wwn.len() != 16
+                    || !identity.disk_wwn.chars().all(|c| c.is_ascii_hexdigit()))
+            {
+                return Err("The disk WWN is 16 hex digits".into());
+            }
+            if !identity.nic_subsystem.is_empty()
+                && launch::pci_ids(&identity.nic_subsystem).is_none()
+            {
+                return Err(
+                    "The network card's subsystem is vendor:device in hex (17aa:3179)".into(),
+                );
+            }
             let uuid = &identity.system_uuid;
             let groups: Vec<_> = uuid.split('-').map(str::len).collect();
             if !uuid.is_empty()
@@ -610,6 +941,20 @@ impl StealthProfile {
                 return Err(format!("UUID {uuid:?} is not in 8-4-4-4-12 hex form"));
             }
         }
+        if [&self.cpu_model, &self.cpu_brand]
+            .iter()
+            .any(|text| text.len() > 64 || text.chars().any(|c| c.is_control() || c == '='))
+        {
+            return Err("CPU model and brand: at most 64 characters, no '='".into());
+        }
+        if !self
+            .cpu_model
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.' || c == '_')
+        {
+            return Err(format!("{:?} is not a QEMU CPU model name", self.cpu_model));
+        }
+        self.nat.validate()?;
         Ok(())
     }
 
@@ -620,19 +965,40 @@ impl StealthProfile {
             found.push("CPUID hypervisor flag");
         }
         if !self.hide_kvm {
-            found.push("KVM CPUID signature and kvm-clock");
+            found.push(if self.kvm_clock {
+                "KVM CPUID signature and kvm-clock"
+            } else {
+                "KVM CPUID signature"
+            });
         }
         if !self.identity_enabled {
             found.push("QEMU in the SMBIOS and ACPI tables, chassis type Other");
         }
         if !self.cpu_passthrough {
-            found.push("QEMU CPU model name");
+            found.push(if self.cpu_brand.is_empty() {
+                "QEMU CPU model name"
+            } else {
+                "the QEMU CPU model's family and model numbers behind its brand"
+            });
         }
         if self.mac.is_empty() {
             found.push("QEMU's MAC address 52:54:00:12:34:56");
         }
         if self.nic == NicModel::VirtioNet {
             found.push("virtio network card (Red Hat vendor ID)");
+        }
+        match self.disk_bus {
+            DiskBus::Virtio => found.push("virtio disk vda (Red Hat vendor ID)"),
+            DiskBus::Sata if !self.identity_enabled || self.identity.disk_model.is_empty() => {
+                found.push("SATA disk model QEMU HARDDISK")
+            }
+            DiskBus::Sata => {}
+            DiskBus::Nvme => {
+                found.push("NVMe controller model \"QEMU NVMe Ctrl\" and its QEMU PCI ID")
+            }
+        }
+        if self.cdrom {
+            found.push("the CD-ROM's SCSI inquiry: QEMU DVD-ROM");
         }
         if self.vmport {
             found.push("VMware backdoor port");
@@ -643,18 +1009,66 @@ impl StealthProfile {
         if !self.pmu {
             found.push("no performance counters");
         }
+        match self.firmware {
+            Firmware::Bios => found.push("BIOS firmware (SeaBIOS): no /sys/firmware/efi"),
+            _ => found.push("OVMF's vendor (EDK II) in the EFI tables, to root"),
+        }
+        if self.nat.network.is_empty() {
+            found.push("QEMU user-network addresses (10.0.2.x) on NAT");
+        }
+        if self.pointer != Pointer::Ps2 {
+            found.push("the pointer's input name (QEMU) in the VM window");
+        }
         // Not covered by any entry: needed by Antinomie, outside QEMU options
         // or beyond what the guest kernel can hide (docs/implementation.md,
         // "Guest stealth").
         found.extend([
             "timing of VM exits (CPUID, I/O) and of traced calls",
-            "virtio disk (Red Hat vendor ID) and the emulated display",
-            "q35 chipset layout, Red Hat PCI subsystem IDs",
+            "the emulated display (Bochs or virtio-gpu)",
+            "q35 chipset layout, Red Hat PCI subsystem IDs on the chipset's devices",
             "QEMU's ACPI tables to root (BXPC creator ID, fw_cfg in the DSDT)",
             "a fresh boot: minutes of uptime",
-            "QEMU user-network addresses (10.0.2.x) on NAT",
         ]);
         found
+    }
+
+    /// This profile as the base and the host can boot it, and what changed:
+    /// an entry they lack falls back to the choice every base and host has.
+    pub fn fitted(&self, base: &BaseSupport, host: &HostSupport) -> (Self, Vec<String>) {
+        let mut fitted = self.clone();
+        let mut notes = Vec::new();
+        if let Some(reason) = firmware_unavailable(self.firmware, base, host) {
+            notes.push(format!("{}: {reason}; BIOS used", self.firmware.label()));
+            fitted.firmware = Firmware::Bios;
+        }
+        if fitted.firmware == Firmware::UefiSecureBoot {
+            fitted.smm = true;
+        }
+        if let Some(reason) = disk_bus_unavailable(self.disk_bus, base) {
+            notes.push(format!(
+                "{} disk: {reason}; virtio used",
+                self.disk_bus.label()
+            ));
+            fitted.disk_bus = DiskBus::Virtio;
+        }
+        if !self.nat.network.is_empty() && !base.dhcp {
+            notes.push(format!(
+                "NAT network {}: {NAT_STATIC}; 10.0.2.0/24 used",
+                self.nat.network
+            ));
+            fitted.nat = NatNetwork::default();
+        }
+        if self.smt && self.realistic_topology {
+            if let Err(reason) = &host.smt {
+                notes.push(format!("Two threads per core: {reason}; one used"));
+                fitted.smt = false;
+            }
+        }
+        if self.pointer == Pointer::UsbTablet && !self.usb {
+            notes.push("USB tablet: no USB controllers; virtio tablet used".into());
+            fitted.pointer = Pointer::VirtioTablet;
+        }
+        (fitted, notes)
     }
 
     /// How common checks (systemd-detect-virt, DMI strings, the CPUID
@@ -670,440 +1084,140 @@ impl StealthProfile {
     }
 }
 
-/// QEMU option values double their commas.
-pub(crate) fn escape(text: &str) -> String {
-    text.replace(',', ",,")
+/// Why an older base keeps QEMU's NAT network.
+const NAT_STATIC: &str = "the base sets 10.0.2.15 itself (rebuild it for DHCP)";
+
+/// What a base boots with besides virtio, SeaBIOS and 10.0.2.0/24, from its
+/// `bundle.json` (`stealth_support`, written by the image builders).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BaseSupport {
+    /// The kernel keeps the bootstrap page out of its EFI stub's placement.
+    pub uefi: bool,
+    pub sata: bool,
+    pub nvme: bool,
+    /// The guest takes its address from DHCP, so any NAT network works.
+    pub dhcp: bool,
 }
 
-/// Extra `-machine` properties.
-pub(crate) fn machine_options(profile: &StealthProfile) -> String {
-    // Only what differs from QEMU's defaults, so Transparent launches as before.
-    let mut options = String::new();
-    if !profile.vmport {
-        options.push_str(",vmport=off");
-    }
-    if !profile.hpet {
-        options.push_str(",hpet=off");
-    }
-    if profile.usb {
-        // q35 then adds ICH9 EHCI with its UHCI companions at 00:1d.
-        options.push_str(",usb=on");
-    }
-    if profile.identity_enabled {
-        options.push_str(",smbios-entry-point-type=64");
-        let identity = &profile.identity;
-        if !identity.acpi_oem_id.is_empty() {
-            options.push_str(&format!(",x-oem-id={}", escape(&identity.acpi_oem_id)));
-        }
-        if !identity.acpi_table_id.is_empty() {
-            options.push_str(&format!(
-                ",x-oem-table-id={}",
-                escape(&identity.acpi_table_id)
-            ));
+impl BaseSupport {
+    pub fn from_list(list: &[String]) -> Self {
+        let has = |name: &str| list.iter().any(|item| item == name);
+        Self {
+            uefi: has("uefi"),
+            sata: has("sata"),
+            nvme: has("nvme"),
+            dhcp: has("dhcp"),
         }
     }
-    options
+
+    /// Everything, for a profile not yet tied to a base.
+    pub fn all() -> Self {
+        Self {
+            uefi: true,
+            sata: true,
+            nvme: true,
+            dhcp: true,
+        }
+    }
 }
 
-/// The `-cpu` value: `base` (from the VM's CPU model setting) with the
-/// profile's CPU entries. Passthrough needs KVM.
-pub(crate) fn cpu_option(
-    profile: &StealthProfile,
-    base: Option<&str>,
-    kvm: bool,
+/// What the host offers: OVMF and clean SMT topology.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HostSupport {
+    pub ovmf: Result<(), String>,
+    pub ovmf_secure_boot: Result<(), String>,
+    pub smt: Result<(), String>,
+}
+
+impl HostSupport {
+    /// The host as `qemu` sees it.
+    pub fn detect(qemu: &std::path::Path) -> Self {
+        Self {
+            ovmf: find_ovmf(qemu, false).map(|_| ()),
+            ovmf_secure_boot: find_ovmf(qemu, true).map(|_| ()),
+            smt: smt_clean(
+                &host_cpu_vendor(),
+                &host_cpuinfo("flags").unwrap_or_default(),
+            ),
+        }
+    }
+
+    pub fn all() -> Self {
+        Self {
+            ovmf: Ok(()),
+            ovmf_secure_boot: Ok(()),
+            smt: Ok(()),
+        }
+    }
+}
+
+/// Two threads per core without QEMU's warning: Intel CPUs report them in
+/// their leaf 4 and 0xb topology; AMD CPUs need the TOPOEXT leaves, which
+/// the launch adds when the host CPU has them.
+fn smt_clean(cpu_vendor: &str, flags: &str) -> Result<(), String> {
+    match cpu_vendor {
+        "GenuineIntel" => Ok(()),
+        "AuthenticAMD" | "HygonGenuine"
+            if flags.split_whitespace().any(|flag| flag == "topoext") =>
+        {
+            Ok(())
+        }
+        "AuthenticAMD" | "HygonGenuine" => Err(
+            "the host CPU lacks TOPOEXT, without which QEMU warns that this AMD CPU has no SMT"
+                .into(),
+        ),
+        _ => Err("unknown host CPU vendor".into()),
+    }
+}
+
+/// Why `firmware` cannot be used with this base and host.
+pub fn firmware_unavailable(
+    firmware: Firmware,
+    base: &BaseSupport,
+    host: &HostSupport,
 ) -> Option<String> {
-    let mut model = if profile.cpu_passthrough && kvm {
-        "host".to_owned()
-    } else if profile.cpu_passthrough {
-        // Without KVM the host CPU cannot be passed through; show its name.
-        let brand = host_cpuinfo("model name")
-            .unwrap_or_else(|| "Intel(R) Core(TM) i7-10700 CPU @ 2.90GHz".into());
-        format!("max,model-id={}", escape(&brand))
-    } else {
-        base?.to_owned()
-    };
-    if model.is_empty() {
+    if !firmware.is_uefi() {
         return None;
     }
-    if profile.host_cache_info && model == "host" {
-        model.push_str(",host-cache-info=on");
+    if !base.uefi {
+        return Some(
+            "the base's kernel can land on the transport page under UEFI (rebuild it)".into(),
+        );
     }
-    if profile.hide_hypervisor {
-        model.push_str(",-hypervisor");
-    }
-    if profile.hide_kvm && kvm {
-        model.push_str(",kvm=off");
-    }
-    if profile.pmu && kvm {
-        model.push_str(",pmu=on");
-    }
-    Some(model)
-}
-
-/// The `-smp` value.
-pub(crate) fn smp_option(profile: &StealthProfile, cpus: u16) -> String {
-    if profile.realistic_topology {
-        format!("{cpus},sockets=1,cores={cpus},threads=1")
+    let found = if firmware == Firmware::UefiSecureBoot {
+        &host.ovmf_secure_boot
     } else {
-        cpus.to_string()
-    }
-}
-
-/// The network card `-device` value for netdev `net0`.
-pub(crate) fn nic_option(profile: &StealthProfile) -> String {
-    let mut device = format!("{},netdev=net0", profile.nic.device());
-    if !profile.mac.is_empty() {
-        device.push_str(&format!(",mac={}", profile.mac));
-    }
-    device
-}
-
-/// SMBIOS, device identity and clock options; the chassis table is written
-/// into `runtime_dir`.
-pub(crate) fn apply(
-    command: &mut Command,
-    profile: &StealthProfile,
-    runtime_dir: &Path,
-) -> Result<(), String> {
-    profile.validate()?;
-    if profile.rtc_localtime {
-        command.args(["-rtc", "base=localtime"]);
-    }
-    if !profile.identity_enabled {
-        return Ok(());
-    }
-    let id = &profile.identity;
-    let field = |name: &str, value: &str| {
-        if value.is_empty() {
-            String::new()
-        } else {
-            format!(",{name}={}", escape(value))
-        }
+        &host.ovmf
     };
-    // QEMU's type 0 sets the "virtual machine" BIOS characteristic, which
-    // systemd-detect-virt reads, so the BIOS table is written whole too.
-    let bios = runtime_dir.join("smbios-bios.bin");
-    std::fs::write(&bios, bios_table(id)).map_err(|error| format!("SMBIOS BIOS table: {error}"))?;
-    command
-        .arg("-smbios")
-        .arg(format!("file={}", escape(&bios.to_string_lossy())));
-    command.arg("-smbios").arg(format!(
-        "type=1{}{}{}{}{}{}{}",
-        field("manufacturer", &id.system_manufacturer),
-        field("product", &id.system_product),
-        field("version", &id.system_version),
-        field("serial", &id.system_serial),
-        field("uuid", &id.system_uuid),
-        field("sku", &id.system_sku),
-        field("family", &id.system_family)
-    ));
-    command.arg("-smbios").arg(format!(
-        "type=2{}{}{}",
-        field("manufacturer", &id.board_manufacturer),
-        field("product", &id.board_product),
-        field("serial", &id.board_serial)
-    ));
-    let (cpu_vendor, cpu_name) = (
-        host_cpu_vendor(),
-        host_cpuinfo("model name").unwrap_or_default(),
-    );
-    let cpu_maker = match cpu_vendor.as_str() {
-        "GenuineIntel" => "Intel(R) Corporation",
-        "AuthenticAMD" => "Advanced Micro Devices, Inc.",
-        _ => "",
-    };
-    command.arg("-smbios").arg(format!(
-        "type=4{}{}",
-        field("manufacturer", cpu_maker),
-        field("version", &cpu_name)
-    ));
-    command.arg("-smbios").arg(format!(
-        "type=17{}{}{},speed=3200",
-        field("manufacturer", &id.memory_manufacturer),
-        field("part", &id.memory_part),
-        field("serial", &id.memory_serial)
-    ));
-    // QEMU's type 3 options cannot set the chassis type, so the table is
-    // written whole and loaded in place of the generated one.
-    let chassis = runtime_dir.join("smbios-chassis.bin");
-    std::fs::write(&chassis, chassis_table(id))
-        .map_err(|error| format!("SMBIOS chassis table: {error}"))?;
-    command
-        .arg("-smbios")
-        .arg(format!("file={}", escape(&chassis.to_string_lossy())));
-    if !id.disk_serial.is_empty() {
-        command
-            .arg("-global")
-            .arg(format!("virtio-blk-pci.serial={}", escape(&id.disk_serial)));
-    }
-    if !id.cdrom_model.is_empty() {
-        command
-            .arg("-global")
-            .arg(format!("ide-cd.model={}", escape(&id.cdrom_model)));
-    }
-    Ok(())
+    found.as_ref().err().cloned()
 }
 
-/// The BIOS release from its version string, as QEMU's `release=` takes it:
-/// the first two numbers in it ("1.21.0" is 1.21).
-fn bios_release(version: &str) -> Option<(u8, u8)> {
-    let mut numbers = version
-        .split(|c: char| !c.is_ascii_digit())
-        .filter(|part| !part.is_empty());
-    let major = numbers.next()?.parse::<u8>().unwrap_or(1);
-    let minor = numbers.next()?.parse::<u8>().unwrap_or(0);
-    Some((major, minor))
+/// Why the base cannot boot from a disk on `bus`.
+pub fn disk_bus_unavailable(bus: DiskBus, base: &BaseSupport) -> Option<&'static str> {
+    match bus {
+        DiskBus::Virtio => None,
+        DiskBus::Sata if base.sata => None,
+        DiskBus::Nvme if base.nvme => None,
+        _ => Some("the base boots from virtio only (rebuild a BusyBox base; Debian keeps virtio)"),
+    }
 }
 
-/// Strings of an SMBIOS structure: the formatted area's string numbers (0 for
-/// an empty one) and the string set that follows it.
-fn string_set(strings: &[&str]) -> (Vec<u8>, Vec<u8>) {
-    let mut numbers = Vec::new();
-    let mut set = Vec::new();
-    for text in strings {
-        let bytes: Vec<u8> = text.bytes().filter(|byte| *byte != 0).collect();
-        if bytes.is_empty() {
-            numbers.push(0);
-        } else {
-            set.extend(bytes);
-            set.push(0);
-            numbers.push((set.iter().filter(|byte| **byte == 0).count()) as u8);
-        }
-    }
-    if set.is_empty() {
-        set.push(0);
-    }
-    set.push(0);
-    (numbers, set)
+/// Why the base cannot use a NAT network of its own.
+pub fn nat_unavailable(base: &BaseSupport) -> Option<&'static str> {
+    (!base.dhcp).then_some(NAT_STATIC)
 }
 
-/// An SMBIOS type 0 (BIOS information) structure, as a PC's firmware writes
-/// it: what it supports, and not QEMU's "characteristics not supported" and
-/// "system is a virtual machine" (extension byte 2, bit 4).
-fn bios_table(id: &MachineIdentity) -> Vec<u8> {
-    let (numbers, strings) = string_set(&[&id.bios_vendor, &id.bios_version, &id.bios_date]);
-    // PCI, PnP, flash upgradeable, shadowing, boot from CD, selectable boot,
-    // EDD, the int 13h floppy services, int 5h, 9h, 14h, 17h and 10h.
-    let characteristics: u64 = [7, 9, 11, 12, 15, 16, 19, 23, 24, 25, 26, 27, 28, 29, 30]
-        .iter()
-        .map(|bit| 1u64 << bit)
-        .sum();
-    let (major, minor) = bios_release(&id.bios_version).unwrap_or((0xff, 0xff));
-    // Type 0, the formatted area's length (SMBIOS 3.1) and handle 0.
-    let mut table = vec![0, 0x1a, 0, 0];
-    // Vendor and version strings, starting address segment F000h.
-    table.extend([numbers[0], numbers[1]]);
-    table.extend(0xf000u16.to_le_bytes());
-    // Release date string; the ROM size is in the extended field.
-    table.extend([numbers[2], 0xff]);
-    table.extend(characteristics.to_le_bytes());
-    // Extension byte 1: ACPI, USB legacy. Byte 2: BIOS boot specification,
-    // network boot, targeted content distribution (no VM bit).
-    table.extend([0x03, 0x07]);
-    // BIOS release; no embedded controller firmware.
-    table.extend([major, minor, 0xff, 0xff]);
-    table.extend(32u16.to_le_bytes()); // extended ROM size: 32 MiB
-    table.extend(strings);
-    table
-}
-
-/// An SMBIOS type 3 (chassis) structure with its strings.
-fn chassis_table(id: &MachineIdentity) -> Vec<u8> {
-    let manufacturer = if id.system_manufacturer.is_empty() {
-        "Default string"
-    } else {
-        &id.system_manufacturer
-    };
-    let serial = if id.chassis_serial.is_empty() {
-        "Default string"
-    } else {
-        &id.chassis_serial
-    };
-    let strings = [
-        manufacturer,
-        "Not Specified",
-        serial,
-        "Not Specified",
-        "Default string",
-    ];
-    let mut table = vec![
-        3,    // type: system enclosure or chassis
-        0x16, // length of the formatted area
-        0x00,
-        0x03, // handle
-        1,    // manufacturer: string 1
-        id.chassis_type.max(1),
-        2, // version
-        3, // serial number
-        4, // asset tag
-        3,
-        3,
-        3, // boot-up, power supply and thermal state: safe
-        3, // security status: none
-        0,
-        0,
-        0,
-        0, // OEM defined
-        0, // height
-        1, // power cords
-        0,
-        0, // no contained elements
-        5, // SKU number
-    ];
-    for text in strings {
-        table.extend(text.bytes().filter(|byte| *byte != 0));
-        table.push(0);
+/// What pafish-style checks flag in the VM's size, with a real machine's.
+pub fn resource_hints(cpus: u16, ram_mib: u32, disk_gib: u32) -> Vec<&'static str> {
+    let mut hints = Vec::new();
+    if cpus < 2 {
+        hints.push("1 CPU: checks flag fewer than 2; PCs have 4 to 16 threads");
     }
-    table.push(0);
-    table
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn presets_fill_a_realistic_identity_matching_the_host_cpu() {
-        let amd = StealthProfile::realistic(StealthPreset::RealisticDesktop, "AuthenticAMD");
-        assert_eq!(amd.identity.profile, "lenovo-m75q-gen2");
-        let intel = StealthProfile::realistic(StealthPreset::RealisticLaptop, "GenuineIntel");
-        assert_eq!(intel.identity.profile, "dell-latitude-5420");
-        assert_eq!(intel.identity.chassis_type, 10);
-        let server = StealthProfile::realistic(StealthPreset::RealisticServer, "unknown");
-        assert_eq!(server.identity.chassis_type, 23);
-        for profile in [&amd, &intel, &server] {
-            profile.validate().unwrap();
-            assert!(profile.mac.starts_with("3c:fd:fe:"));
-            assert_eq!(profile.rating(), "unlikely");
-            assert_eq!(profile.identity.system_uuid.len(), 36);
-        }
-        // Two VMs never share their serials or MAC address.
-        assert_ne!(
-            amd.identity.system_serial,
-            StealthProfile::realistic(StealthPreset::RealisticDesktop, "AuthenticAMD")
-                .identity
-                .system_serial
-        );
-        assert_ne!(
-            amd.mac,
-            StealthProfile::realistic(StealthPreset::RealisticDesktop, "AuthenticAMD").mac
-        );
+    if ram_mib < 4096 {
+        hints.push("under 4 GiB RAM: checks flag it; PCs have 8 to 32 GiB");
     }
-
-    #[test]
-    fn transparent_keeps_qemu_launch_options_and_rates_certain() {
-        let profile = StealthProfile::transparent();
-        assert_eq!(profile.rating(), "certain");
-        assert_eq!(smp_option(&profile, 4), "4");
-        assert_eq!(nic_option(&profile), "virtio-net-pci,netdev=net0");
-        assert_eq!(cpu_option(&profile, None, true), None);
-        assert_eq!(
-            cpu_option(&profile, Some("max"), true).as_deref(),
-            Some("max")
-        );
-        assert_eq!(machine_options(&profile), "");
-        // Old saved configurations have no profile and stay transparent.
-        let old: StealthProfile = serde_json::from_str("{}").unwrap();
-        assert_eq!(old, StealthProfile::transparent());
+    if disk_gib < 64 {
+        hints.push("a disk under 60 GiB: checks flag it; PCs have 256 GiB or more (the image grows only as the guest writes)");
     }
-
-    #[test]
-    fn realistic_options_hide_the_hypervisor_and_carry_the_identity() {
-        let profile = StealthProfile::realistic(StealthPreset::RealisticDesktop, "GenuineIntel");
-        assert_eq!(
-            cpu_option(&profile, None, true).as_deref(),
-            Some("host,host-cache-info=on,-hypervisor,kvm=off,pmu=on")
-        );
-        assert!(
-            cpu_option(&profile, None, false)
-                .unwrap()
-                .starts_with("max,model-id=")
-        );
-        assert_eq!(smp_option(&profile, 4), "4,sockets=1,cores=4,threads=1");
-        assert!(nic_option(&profile).starts_with("e1000e,netdev=net0,mac=3c:fd:fe:"));
-        let machine = machine_options(&profile);
-        assert!(machine.contains(",vmport=off"));
-        assert!(machine.contains(",usb=on"));
-        assert!(machine.contains(",x-oem-id=DELL  "));
-        let mut local = profile.clone();
-        local.new_local_mac();
-        let first = u8::from_str_radix(&local.mac[..2], 16).unwrap();
-        assert_eq!(first & 3, 2, "{}", local.mac);
-        assert!(local.validate().is_ok());
-        let dir = std::env::temp_dir().join(format!("ant-stealth-{}", unique_id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let mut command = Command::new("qemu");
-        apply(&mut command, &profile, &dir).unwrap();
-        let args: Vec<_> = command
-            .get_args()
-            .map(|arg| arg.to_string_lossy().into_owned())
-            .collect();
-        assert!(
-            args.iter()
-                .any(|arg| arg.starts_with("type=1,manufacturer=Dell Inc.,product=OptiPlex 7090"))
-        );
-        assert!(
-            args.iter()
-                .any(|arg| arg.starts_with("virtio-blk-pci.serial=S6PXNF0T"))
-        );
-        let chassis = std::fs::read(dir.join("smbios-chassis.bin")).unwrap();
-        assert_eq!(&chassis[..6], &[3, 0x16, 0, 3, 1, 3]);
-        assert!(chassis.ends_with(b"Default string\0\0"));
-        // The BIOS table: no VM bit, Dell's strings, release 1.21.
-        let bios = std::fs::read(dir.join("smbios-bios.bin")).unwrap();
-        assert_eq!(&bios[..6], &[0, 0x1a, 0, 0, 1, 2]);
-        assert_eq!(bios[8], 3);
-        assert_eq!(bios[0x13] & 0x10, 0, "the virtual machine bit is clear");
-        assert_eq!(bios[0x0a] & 0x08, 0, "characteristics are listed");
-        assert_eq!(&bios[0x14..0x16], &[1, 21]);
-        assert_eq!(&bios[0x1a..], b"Dell Inc.\x001.21.0\x0008/14/2024\x00\x00");
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn smbios_strings_are_numbered_and_empty_ones_are_zero() {
-        assert_eq!(
-            string_set(&["", "a", "bc"]),
-            (vec![0, 1, 2], b"a\0bc\0\0".to_vec())
-        );
-        assert_eq!(string_set(&["", ""]), (vec![0, 0], b"\0\0".to_vec()));
-        assert_eq!(bios_release("S21 Ver. 02.15.00"), Some((21, 2)));
-        assert_eq!(bios_release("A1"), None);
-        let bios = bios_table(&MachineIdentity::default());
-        assert_eq!(bios.len(), 0x1a + 2);
-        assert_eq!((bios[0x14], bios[0x15]), (0xff, 0xff));
-    }
-
-    #[test]
-    fn commas_are_escaped_and_bad_addresses_are_refused() {
-        let mut profile = StealthProfile::realistic(StealthPreset::RealisticServer, "AuthenticAMD");
-        assert!(machine_options(&profile).contains("x-oem-id=SUPERM"));
-        let dir = std::env::temp_dir().join(format!("ant-stealth-{}", unique_id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let mut command = Command::new("qemu");
-        apply(&mut command, &profile, &dir).unwrap();
-        let args: Vec<_> = command
-            .get_args()
-            .map(|arg| arg.to_string_lossy().into_owned())
-            .collect();
-        let bios = std::fs::read(dir.join("smbios-bios.bin")).unwrap();
-        assert!(
-            bios.windows(24)
-                .any(|part| part == b"American Megatrends Inc.")
-        );
-        assert!(!args.iter().any(|arg| arg.starts_with("type=0")));
-        std::fs::remove_dir_all(dir).unwrap();
-        profile.identity.bios_vendor = "Vendor, Inc.".into();
-        assert_eq!(escape(&profile.identity.bios_vendor), "Vendor,, Inc.");
-        profile.mac = "01:00:00:00:00:01".into();
-        assert!(profile.validate().is_err());
-        profile.mac = "zz".into();
-        assert!(profile.validate().is_err());
-        profile.mac.clear();
-        profile.identity.system_uuid = "not-a-uuid".into();
-        assert!(profile.validate().unwrap_err().contains("UUID"));
-        profile.identity.system_uuid = uuid();
-        profile.identity.memory_part = "line\nbreak".into();
-        assert!(profile.validate().is_err());
-    }
+    hints
 }
