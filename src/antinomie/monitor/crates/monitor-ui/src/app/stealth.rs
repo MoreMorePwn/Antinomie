@@ -641,10 +641,11 @@ pub(super) fn window(
                         egui::CollapsingHeader::new("CPU").show(ui, |ui| cpu(ui, profile));
                         egui::CollapsingHeader::new("Network")
                             .show(ui, |ui| network(ui, profile, base));
-                        egui::CollapsingHeader::new("Storage and devices")
-                            .show(ui, |ui| storage(ui, profile, base));
-                        egui::CollapsingHeader::new("Display and pointer")
-                            .show(ui, |ui| display(ui, profile));
+                        egui::CollapsingHeader::new("Storage and devices").show(ui, |ui| {
+                            storage(ui, profile, base);
+                            ui.add_space(6.0);
+                            display(ui, profile);
+                        });
                         egui::CollapsingHeader::new("Clock").show(ui, |ui| clock(ui, profile));
                         egui::CollapsingHeader::new("Still visible").show(ui, |ui| {
                             let (fitted, notes) = profile.fitted(base, host_support());
