@@ -6,6 +6,31 @@ it runs.
 
 ## 0.7.0 — Unreleased
 
+- **Guest conformance suite, part 1: the syscall trace log; what it found is
+  fixed.** One command (`cargo run --release --example conformance -- trace
+  BASE_DIR OUT_DIR`, see `tests/monitor/conformance/README.md`) boots a new
+  disposable VM per fixture group, runs a fixture that prints what each of its
+  calls was given and got back, and checks the recording call by call: all 375
+  native x86-64 slots with success, failure and decoding variants as a user, as
+  root and under concurrency, then `ant-torture` at light, heavy and extreme and
+  with a dropping transport. It fails on any warning or error in the trace, any
+  loss the counters do not account for exactly, any rendering fallback in the
+  Syscall Trace view (rendered with the view's own code), an unexplained gap or
+  slot, and golden-file changes (`--bless` rewrites them). Fixed on the way:
+  fields with nothing to copy (a NULL pointer, memory of another process,
+  memory the kernel uses after the call such as a thread's clear-tid word or
+  rseq area) no longer mark calls "incomplete"; a call's packets numbered around
+  another record of the same task no longer show a false "packet sequence gap";
+  the recorder's own incomplete flags are reported only when no field explains
+  them. The trace places captured data by the argument the guest captured it for
+  (accept's address, `rt_sigprocmask`'s set), names enumerated arguments (fcntl
+  commands, arch_prctl codes, ioctl requests, clocks, rlimits, advice, address
+  families, IPC and scheduling commands, reboot commands…), shows address
+  lengths as numbers, exec vectors as lists, and how many objects an argument
+  captured instead of its address. Guest series 0051 (contract revision 17
+  unchanged): an async request that fails has no payload to lose, so a failing
+  io_uring read no longer flags the run with observation loss; the terminal ioctl
+  decoder knows TCGETS2 (glibc's `tcgetattr`) and the process-group requests.
 - **The guest gives less away: measured, then fixed where the guest kernel
   and the base can.** Guest series 0050, contract revision 17 unchanged. A new
   check, `examples/stealth-check.rs` with the static probe

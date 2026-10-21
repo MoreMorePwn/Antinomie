@@ -1,0 +1,131 @@
+acct.file | acct(name="root-acct") = 0 | arg0.path:complete:"root-acct"
+acct.missing | acct(name="root-missing") = ENOENT | arg0.path:complete:"root-missing"
+acct.off | acct(name=NULL) = 0 | arg0.path:null pointer:uncaptured
+bpf.map_create_root | bpf(cmd=BPF_MAP_CREATE, attr=<bytes>, size=72) = 3 | arg1.attr:complete:<bytes>
+bpf.map_delete_array | bpf(cmd=BPF_MAP_DELETE_ELEM, attr=<bytes>, size=32) = EINVAL | arg1.attr:complete:<bytes> arg1.attr.key:complete:<bytes>
+bpf.map_get_next_key | bpf(cmd=BPF_MAP_GET_NEXT_KEY, attr=<bytes>, size=32) = 0 | arg1.attr:complete:<bytes> arg1.attr.key:complete:<bytes> arg1.attr.next_key:complete
+bpf.map_lookup | bpf(cmd=BPF_MAP_LOOKUP_ELEM, attr="ANTIMAP1", size=32) = 0 | arg1.attr:complete:<bytes> arg1.attr.key:complete:<bytes> arg1.attr.value:complete
+bpf.map_update | bpf(cmd=BPF_MAP_UPDATE_ELEM, attr=<bytes>, size=32) = 0 | arg1.attr:complete:<bytes> arg1.attr.key:complete:<bytes> arg1.attr.value:complete:"ANTIMAP1"
+bpf.prog_load_rejected | bpf(cmd=BPF_PROG_LOAD, attr="0: R1=ctx() R10=fp0\n0: (95) exit\nR0 !read_ok\npro"..., size=40) = EACCES | arg1.attr:complete:<bytes> arg1.attr.insns:complete:<bytes> arg1.attr.license:complete:"GPL" arg1.attr.log_buf:complete
+bpf.prog_load_root | bpf(cmd=BPF_PROG_LOAD, attr="processed 2 insns (limit 1000000) max_states_per"..., size=40) = 4 | arg1.attr:complete:<bytes> arg1.attr.insns:complete:<bytes> arg1.attr.license:complete:"GPL" arg1.attr.log_buf:complete
+capset.bad_version | capset(header=<bytes>, data=<addr>) = EINVAL | arg0.version:complete:<bytes> arg0.required_version:complete
+capset.drop_sys_boot | capset(header=<bytes>, data=<bytes>) = 0 | arg0.version:complete:<bytes> arg0.pid:complete:<bytes> arg1.capabilities:complete:<bytes>
+chroot.missing_root | chroot(filename="root-missing") = ENOENT | arg0.path:complete:"root-missing"
+chroot.not_directory | chroot(filename="root-file") = ENOTDIR | arg0.path:complete:"root-file"
+chroot.work_dir | chroot(filename=".") = 0 | arg0.path:complete:"."
+clock_settime.monotonic | clock_settime(which_clock=CLOCK_MONOTONIC, tp=<data>) = EINVAL | arg1.data:complete
+clock_settime.same_time | clock_settime(which_clock=CLOCK_REALTIME, tp=<data>) = <value> | arg1.data:complete
+delete_module.missing | delete_module(name_user="ant_missing", flags=O_NONBLOCK) = ENOENT | arg0.path:complete:"ant_missing"
+fanotify_init.notify | fanotify_init(flags=FAN_CLASS_NOTIF|FAN_CLOEXEC, event_f_flags=O_RDONLY) = ENOSYS |
+fanotify_mark.work_dir | fanotify_mark(fanotify_fd=-1, flags=FAN_MARK_INODE|FAN_MARK_ADD, mask=32, fd=AT_FDCWD, pathname="<work>") = ENOSYS | arg4.path:complete:"<work>"
+finit_module.bad_flags | finit_module(fd=3, uargs="", flags=0x40) = EINVAL | arg1.path:complete:""
+finit_module.badf | finit_module(fd=999, uargs="", flags=0x0) = EBADF | arg1.path:complete:""
+finit_module.not_a_module | finit_module(fd=3, uargs="", flags=0x0) = ENOEXEC | arg1.path:complete:""
+fsconfig.create | fsconfig(fs_fd=3, cmd=FSCONFIG_CMD_CREATE, key=NULL, value=NULL, aux=0) = 0 |
+fsconfig.create_again | fsconfig(fs_fd=3, cmd=FSCONFIG_CMD_CREATE, key=NULL, value=NULL, aux=0) = EBUSY |
+fsconfig.reconfigure | fsconfig(fs_fd=5, cmd=FSCONFIG_CMD_RECONFIGURE, key=NULL, value=NULL, aux=0) = 0 |
+fsconfig.set_binary_rejected | fsconfig(fs_fd=3, cmd=FSCONFIG_SET_BINARY, key="size", value=<bytes>, aux=3) = EINVAL | arg2.key:complete:"size" arg3.value:complete:<bytes>
+fsconfig.set_flag_unknown | fsconfig(fs_fd=3, cmd=FSCONFIG_SET_FLAG, key="ant_unknown", value=NULL, aux=0) = EINVAL | arg2.key:complete:"ant_unknown"
+fsconfig.set_string_size | fsconfig(fs_fd=3, cmd=FSCONFIG_SET_STRING, key="size", value="1m", aux=0) = 0 | arg2.key:complete:"size" arg3.value:complete:"1m"
+fsmount.bad_flags | fsmount(fs_fd=3, flags=0x80, ms_flags=0) = EINVAL |
+fsmount.tmpfs | fsmount(fs_fd=3, flags=CLOEXEC, ms_flags=6) = 4 |
+fsopen.bad_flags | fsopen(fs_name="tmpfs", flags=0x80) = EINVAL | arg0.path:complete:"tmpfs"
+fsopen.tmpfs | fsopen(fs_name="tmpfs", flags=CLOEXEC) = 3 | arg0.path:complete:"tmpfs"
+fspick.mount_root | fspick(dfd=AT_FDCWD, path="root-fsmnt", flags=FSPICK_CLOEXEC) = 5 | arg1.path:complete:"root-fsmnt"
+fspick.not_mount_root | fspick(dfd=AT_FDCWD, path=".", flags=0x0) = EINVAL | arg1.path:complete:"."
+init_module.garbage_image | init_module(umod="ANTINOMIE-CONFORMANCE-hovcjqxelszgnubipwdkryfmta"..., len=128, uargs="") = ENOEXEC | arg0.data:complete:"ANTINOMIE-CONFORMANCE-hovcjqxelszgnubipwdkryfmta"... arg2.path:complete:""
+ioperm.off_root | ioperm(from=128, num=1, on=0) = 0 |
+ioperm.on_root | ioperm(from=128, num=1, on=1) = 0 |
+iopl.lower_root | iopl(level=0) = 0 |
+iopl.raise_root | iopl(level=3) = 0 |
+kexec_file_load.unload | kexec_file_load(kernel_fd=-1, initrd_fd=-1, cmdline_len=0, cmdline_ptr=NULL, flags=0x1) = ENOSYS | arg3.data:null pointer:uncaptured
+kexec_load.bad_flags | kexec_load(entry=0, nr_segments=0, segments=NULL, flags=KEXEC_ARCH_DEFAULT|0x100) = EINVAL | arg2.segments:complete:uncaptured
+kexec_load.too_many_segments_root | kexec_load(entry=0, nr_segments=17, segments=<addr>, flags=KEXEC_ARCH_DEFAULT) = EINVAL | arg2.segments:invalid extent:uncaptured !3
+kexec_load.unload | kexec_load(entry=0, nr_segments=0, segments=NULL, flags=KEXEC_ARCH_DEFAULT) = 0 | arg2.segments:complete:uncaptured
+listmount.root_namespace | listmount(req=<data>, mnt_ids=<data>, nr_mnt_ids=16, flags=0x0) = <value> | arg0.mount_request:complete arg1.mount_ids:complete
+memfd_secret.bad_flags | memfd_secret(flags=0x40) = EINVAL |
+memfd_secret.plain | memfd_secret(flags=0x0) = 3 |
+migrate_pages.huge_maxnode | migrate_pages(pid=0, maxnode=40000, from=<addr>, to=<addr>) = EINVAL | arg2.node_mask:invalid extent:uncaptured arg3.node_mask:invalid extent:uncaptured !4
+migrate_pages.missing_pid | migrate_pages(pid=<pid>, maxnode=65, from=<bytes>, to=<bytes>) = ESRCH | arg2.node_mask:complete:<bytes> arg3.node_mask:complete:<bytes>
+migrate_pages.offline_node | migrate_pages(pid=0, maxnode=65, from=<bytes>, to=" ") = EINVAL | arg2.node_mask:complete:<bytes> arg3.node_mask:complete:" "
+migrate_pages.self | migrate_pages(pid=0, maxnode=65, from=<bytes>, to=<bytes>) = 0 | arg2.node_mask:complete:<bytes> arg3.node_mask:complete:<bytes>
+mknod.char_device | mknod(filename="root-null", mode=0600, dev=259) = 0 | arg0.path:complete:"root-null"
+mknod.directory_type | mknod(filename="root-dir-node", mode=0700, dev=0) = EPERM | arg0.path:complete:"root-dir-node"
+mknod.exists | mknod(filename="root-null", mode=0600, dev=259) = EEXIST | arg0.path:complete:"root-null"
+mlockall.current | mlockall(flags=MCL_CURRENT) = 0 |
+mlockall.future_onfault | mlockall(flags=MCL_FUTURE|MCL_ONFAULT) = 0 |
+mlockall.no_flags | mlockall(flags=0x0) = EINVAL |
+mlockall.onfault_only | mlockall(flags=MCL_ONFAULT) = EINVAL |
+mount.bind | mount(dev_name="root-mnt", dir_name="root-bind", type=NULL, flags=MS_BIND, data=NULL) = 0 | arg0.dev_name:complete:"root-mnt" arg1.dir_name:complete:"root-bind"
+mount.bind_missing | mount(dev_name="root-missing", dir_name="root-bind", type=NULL, flags=MS_BIND, data=NULL) = ENOENT | arg0.dev_name:complete:"root-missing" arg1.dir_name:complete:"root-bind"
+mount.make_private | mount(dev_name=NULL, dir_name="/", type=NULL, flags=MS_REC|MS_PRIVATE, data=NULL) = 0 | arg1.dir_name:complete:"/"
+mount.remount_ro | mount(dev_name=NULL, dir_name="root-mnt", type=NULL, flags=MS_RDONLY|MS_REMOUNT, data=NULL) = 0 | arg1.dir_name:complete:"root-mnt"
+mount.tmpfs | mount(dev_name="ant-tmpfs", dir_name="root-mnt", type="tmpfs", flags=MS_NOSUID|MS_NODEV, data="size=1m,mode=0700"...) = 0 | arg0.dev_name:complete:"ant-tmpfs" arg1.dir_name:complete:"root-mnt" arg2.type:complete:"tmpfs" arg4.data:complete:"size=1m,mode=0700"...
+mount_setattr.nop | mount_setattr(dfd=AT_FDCWD, path="root-fsmnt", flags=0x0, uattr=<bytes>, usize=32) = 0 | arg1.path:complete:"root-fsmnt" arg3.mount_attr:complete:<bytes>
+mount_setattr.read_only | mount_setattr(dfd=AT_FDCWD, path="root-fsmnt", flags=0x0, uattr=<bytes>, usize=32) = 0 | arg1.path:complete:"root-fsmnt" arg3.mount_attr:complete:<bytes>
+move_mount.attach | move_mount(from_dfd=4, from_path="", to_dfd=AT_FDCWD, to_path="root-fsmnt", ms_flags=MOVE_MOUNT_F_EMPTY_PATH) = 0 | arg1.path:complete:"" arg3.path:complete:"root-fsmnt"
+move_mount.attach_clone | move_mount(from_dfd=6, from_path="", to_dfd=AT_FDCWD, to_path="root-fsmnt2", ms_flags=MOVE_MOUNT_F_EMPTY_PATH) = 0 | arg1.path:complete:"" arg3.path:complete:"root-fsmnt2"
+move_mount.bad_flags | move_mount(from_dfd=AT_FDCWD, from_path="root-fsmnt", to_dfd=AT_FDCWD, to_path="root-fsmnt2", ms_flags=<addr>) = EINVAL | arg1.path:complete:"root-fsmnt" arg3.path:complete:"root-fsmnt2"
+move_pages.bad_flags | move_pages(pid=0, nr_pages=1, pages=<bytes>, nodes=NULL, status=<addr>, flags=0x10) = EINVAL | move_pages.array:complete:<bytes>
+move_pages.offline_node | move_pages(pid=0, nr_pages=1, pages=<bytes>, nodes=<bytes>, status=<addr>, flags=0x0) = ENODEV | move_pages.array:complete:<bytes> move_pages.array:complete:<bytes>
+move_pages.query | move_pages(pid=0, nr_pages=1, pages=<bytes>, nodes=NULL, status=<bytes>, flags=0x0) = 0 | move_pages.array:complete:<bytes> move_pages.array:complete
+move_pages.to_node0 | move_pages(pid=0, nr_pages=1, pages=<bytes>, nodes=<bytes>, status=<bytes>, flags=0x0) = 0 | move_pages.array:complete:<bytes> move_pages.array:complete:<bytes> move_pages.array:complete
+name_to_handle_at.bad_flags | name_to_handle_at(dfd=AT_FDCWD, name="root-handle", handle=<bytes>, mnt_id=<addr>, flag=<addr>) = EINVAL | arg1.path:complete:"root-handle" handle.header:complete:<bytes>
+name_to_handle_at.file | name_to_handle_at(dfd=AT_FDCWD, name=<data>, handle=<data>, mnt_id=<data>, flag=0x0) = <value> | arg1.path:complete handle.header:complete handle.header:complete arg3.mount_id:complete handle.bytes:complete
+name_to_handle_at.missing | name_to_handle_at(dfd=AT_FDCWD, name="root-missing", handle=<bytes>, mnt_id=<addr>, flag=0x0) = ENOENT | arg1.path:complete:"root-missing" handle.header:complete:<bytes>
+name_to_handle_at.too_small | name_to_handle_at(dfd=AT_FDCWD, name=<data>, handle=<data>, mnt_id=<data>, flag=0x0) = EOVERFLOW | arg1.path:complete handle.header:complete handle.header:complete arg3.mount_id:complete
+name_to_handle_at.unique_mount_id | name_to_handle_at(dfd=AT_FDCWD, name=<data>, handle=<data>, mnt_id=<data>, flag=AT_HANDLE_MNT_ID_UNIQUE) = <value> | arg1.path:complete handle.header:complete handle.header:complete arg3.mount_id:complete handle.bytes:complete
+open_by_handle_at.badf | open_by_handle_at(mountdirfd=999, handle=<data>, flags=O_RDONLY) = EBADF | handle.header:complete handle.bytes:complete
+open_by_handle_at.file | open_by_handle_at(mountdirfd=3, handle=<data>, flags=O_RDONLY|O_CLOEXEC) = <value> | handle.header:complete handle.bytes:complete
+open_by_handle_at.zero_bytes | open_by_handle_at(mountdirfd=3, handle=<data>, flags=O_RDONLY) = EINVAL | handle.header:complete handle.bytes:invalid extent !3
+open_tree.clone | open_tree(dfd=AT_FDCWD, path="root-fsmnt", flags=OPEN_TREE_CLONE|OPEN_TREE_CLOEXEC) = 6 | arg1.path:complete:"root-fsmnt"
+open_tree.missing | open_tree(dfd=AT_FDCWD, path="root-missing", flags=OPEN_TREE_CLONE) = ENOENT | arg1.path:complete:"root-missing"
+perf_event_open.root_task_clock | perf_event_open(attr_uptr=<bytes>, pid=0, cpu=-1, group_fd=-1, flags=PERF_FLAG_FD_CLOEXEC) = 3 | arg0.perf_event_attr:complete:<bytes>
+pivot_root.missing_put_old | pivot_root(new_root="root-pr", put_old="root-pr/missing") = ENOENT | arg0.path:complete:"root-pr" arg1.path:complete:"root-pr/missing"
+pivot_root.private_ns | pivot_root(new_root="root-pr", put_old="root-pr/old") = 0 | arg0.path:complete:"root-pr" arg1.path:complete:"root-pr/old"
+process_mrelease.bad_flags | process_mrelease(pidfd=<pid>, flags=0x1) = EINVAL |
+process_mrelease.badf | process_mrelease(pidfd=<pid>, flags=0x0) = EBADF |
+process_mrelease.killed_target | process_mrelease(pidfd=<pid>, flags=0x0) = 0 |
+process_mrelease.live_target | process_mrelease(pidfd=<pid>, flags=0x0) = EINVAL |
+process_mrelease.reaped_target | process_mrelease(pidfd=<pid>, flags=0x0) = ESRCH |
+quotactl.getfmt_root_device | quotactl(cmd=Q_GETFMT / USRQUOTA, special="/dev/vda", id=0, addr=<addr>) = ESRCH | arg1.special:complete:"/dev/vda"
+reboot.bad_magic | reboot(magic1=LINUX_REBOOT_MAGIC1, magic2=Unknown magic 0x5678, cmd=LINUX_REBOOT_CMD_CAD_OFF, arg=NULL) = EINVAL |
+reboot.cad_off | reboot(magic1=LINUX_REBOOT_MAGIC1, magic2=LINUX_REBOOT_MAGIC2, cmd=LINUX_REBOOT_CMD_CAD_OFF, arg=NULL) = 0 |
+reboot.cad_restore | reboot(magic1=LINUX_REBOOT_MAGIC1, magic2=LINUX_REBOOT_MAGIC2, cmd=LINUX_REBOOT_CMD_CAD_OFF, arg=NULL) = 0 |
+reboot.unknown_cmd | reboot(magic1=LINUX_REBOOT_MAGIC1, magic2=LINUX_REBOOT_MAGIC2, cmd=Unknown command 0x7fff, arg=NULL) = EINVAL | reboot.unknown_selector:no decoder:uncaptured !3
+sched_setscheduler.back_to_other | sched_setscheduler(pid=0, policy=SCHED_OTHER, param=<bytes>) = 0 | arg2.data:complete:<bytes>
+sched_setscheduler.bad_priority | sched_setscheduler(pid=0, policy=SCHED_FIFO, param="d") = EINVAL | arg2.data:complete:"d"
+sched_setscheduler.fifo | sched_setscheduler(pid=0, policy=SCHED_FIFO, param=<bytes>) = 0 | arg2.data:complete:<bytes>
+setdomainname.negative_len | setdomainname(name=<addr>, len=-1) = EINVAL | arg0.name:invalid extent:uncaptured !3
+setdomainname.private_uts | setdomainname(name="ant-domain", len=10) = 0 | arg0.name:complete:"ant-domain"
+setgid.regain_root | setgid(gid=0) = EPERM |
+setgid.user | setgid(gid=1000) = 0 |
+setgroups.empty | setgroups(gidsetsize=0, grouplist=NULL) = 0 | arg1.data:null pointer:uncaptured
+setgroups.one_group | setgroups(gidsetsize=1, grouplist=<bytes>) = 0 | arg1.data:complete:<bytes>
+setgroups.too_many | setgroups(gidsetsize=65537, grouplist=<addr>) = EINVAL | arg1.data:invalid extent:uncaptured !3
+sethostname.private_uts | sethostname(name="ant-host", len=8) = 0 | arg0.name:complete:"ant-host"
+sethostname.too_long | sethostname(name=<addr>, len=65) = EINVAL | arg0.name:invalid extent:uncaptured !3
+setns.any_type | setns(fd=4, nstype=0) = 0 |
+setns.badf | setns(fd=999, nstype=67108864) = EBADF |
+setns.pidfd_no_flags | setns(fd=5, nstype=0) = EINVAL |
+setns.pidfd_uts | setns(fd=5, nstype=67108864) = 0 |
+setns.uts_fd | setns(fd=4, nstype=67108864) = 0 |
+setns.wrong_type | setns(fd=4, nstype=1073741824) = EINVAL |
+setpriority.bad_which | setpriority(which=Unknown which 0x63, who=0, niceval=0) = EINVAL |
+setpriority.negative_nice | setpriority(which=PRIO_PROCESS, who=0, niceval=-5) = 0 |
+settimeofday.bad_usec | settimeofday(tv=<data>, tz=NULL) = EINVAL | arg0.data:complete arg1.data:null pointer
+settimeofday.same_time | settimeofday(tv=<data>, tz=NULL) = <value> | arg0.data:complete arg1.data:null pointer
+setuid.regain_root | setuid(uid=0) = EPERM |
+setuid.user | setuid(uid=1000) = 0 |
+statmount.root_work_dir | statmount(req=<data>, buf=<data>, bufsize=4096, flags=0x0) = <value> | arg0.mount_request:complete arg1.statmount:complete
+swapoff.file | swapoff(specialfile="root-swap") = 0 | arg0.path:complete:"root-swap"
+swapoff.missing | swapoff(specialfile="root-missing") = ENOENT | arg0.path:complete:"root-missing"
+swapon.file | swapon(specialfile="root-swap", swap_flags=0) = 0 | arg0.path:complete:"root-swap"
+swapon.missing | swapon(specialfile="root-missing", swap_flags=0) = ENOENT | arg0.path:complete:"root-missing"
+syslog.read_all_root | syslog(type=SYSLOG_ACTION_READ_ALL, buf=<data>, len=8192) = <value> | arg1.log:complete
+syslog.size_buffer_root | syslog(type=SYSLOG_ACTION_SIZE_BUFFER, buf=NULL, len=0) = 262144 |
+umount2.bind | umount2(name="root-bind", flags=0x0) = 0 | arg0.path:complete:"root-bind"
+umount2.detach | umount2(name="root-mnt", flags=MNT_DETACH) = 0 | arg0.path:complete:"root-mnt"
+umount2.not_mounted | umount2(name="root-mnt", flags=0x0) = EINVAL | arg0.path:complete:"root-mnt"
+userfaultfd.plain | userfaultfd(flags=O_CLOEXEC) = ENOSYS |
+vhangup.no_tty | vhangup() = 0 |

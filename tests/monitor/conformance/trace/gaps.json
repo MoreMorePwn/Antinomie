@@ -1,0 +1,234 @@
+{
+  "comment": "Accepted gaps of the syscall trace conformance matrix. Each entry names a syscall, a gap kind (no_decoder: the recorder has no decoder for a pointer argument and records an explicit NO_DECODER field; not_captured: the program passed data the recorder does not capture; render: the Syscall Trace view cannot name a value) and why it is accepted. 'unexercised' lists slots no fixture case reaches, with the reason. A gap or an unexercised slot missing here fails the suite.",
+  "gaps": [
+    {
+      "syscall": "uselib",
+      "kind": "no_decoder",
+      "what": "schema.argument_metadata",
+      "reason": "No entry point in the pinned syscall table (sys_ni_syscall): the call returns ENOSYS and the row has no argument schema, so the recorder writes an explicit schema.argument_metadata marker instead of argument data (native-schema-slices.md, slice 2G)."
+    },
+    {
+      "syscall": "_sysctl",
+      "kind": "no_decoder",
+      "what": "schema.argument_metadata",
+      "reason": "No entry point in the pinned syscall table (sys_ni_syscall): the call returns ENOSYS and the row has no argument schema, so the recorder writes an explicit schema.argument_metadata marker instead of argument data (native-schema-slices.md, slice 2G)."
+    },
+    {
+      "syscall": "create_module",
+      "kind": "no_decoder",
+      "what": "schema.argument_metadata",
+      "reason": "No entry point in the pinned syscall table (sys_ni_syscall): the call returns ENOSYS and the row has no argument schema, so the recorder writes an explicit schema.argument_metadata marker instead of argument data (native-schema-slices.md, slice 2G)."
+    },
+    {
+      "syscall": "get_kernel_syms",
+      "kind": "no_decoder",
+      "what": "schema.argument_metadata",
+      "reason": "No entry point in the pinned syscall table (sys_ni_syscall): the call returns ENOSYS and the row has no argument schema, so the recorder writes an explicit schema.argument_metadata marker instead of argument data (native-schema-slices.md, slice 2G)."
+    },
+    {
+      "syscall": "query_module",
+      "kind": "no_decoder",
+      "what": "schema.argument_metadata",
+      "reason": "No entry point in the pinned syscall table (sys_ni_syscall): the call returns ENOSYS and the row has no argument schema, so the recorder writes an explicit schema.argument_metadata marker instead of argument data (native-schema-slices.md, slice 2G)."
+    },
+    {
+      "syscall": "nfsservctl",
+      "kind": "no_decoder",
+      "what": "schema.argument_metadata",
+      "reason": "No entry point in the pinned syscall table (sys_ni_syscall): the call returns ENOSYS and the row has no argument schema, so the recorder writes an explicit schema.argument_metadata marker instead of argument data (native-schema-slices.md, slice 2G)."
+    },
+    {
+      "syscall": "getpmsg",
+      "kind": "no_decoder",
+      "what": "schema.argument_metadata",
+      "reason": "No entry point in the pinned syscall table (sys_ni_syscall): the call returns ENOSYS and the row has no argument schema, so the recorder writes an explicit schema.argument_metadata marker instead of argument data (native-schema-slices.md, slice 2G)."
+    },
+    {
+      "syscall": "putpmsg",
+      "kind": "no_decoder",
+      "what": "schema.argument_metadata",
+      "reason": "No entry point in the pinned syscall table (sys_ni_syscall): the call returns ENOSYS and the row has no argument schema, so the recorder writes an explicit schema.argument_metadata marker instead of argument data (native-schema-slices.md, slice 2G)."
+    },
+    {
+      "syscall": "afs_syscall",
+      "kind": "no_decoder",
+      "what": "schema.argument_metadata",
+      "reason": "No entry point in the pinned syscall table (sys_ni_syscall): the call returns ENOSYS and the row has no argument schema, so the recorder writes an explicit schema.argument_metadata marker instead of argument data (native-schema-slices.md, slice 2G)."
+    },
+    {
+      "syscall": "tuxcall",
+      "kind": "no_decoder",
+      "what": "schema.argument_metadata",
+      "reason": "No entry point in the pinned syscall table (sys_ni_syscall): the call returns ENOSYS and the row has no argument schema, so the recorder writes an explicit schema.argument_metadata marker instead of argument data (native-schema-slices.md, slice 2G)."
+    },
+    {
+      "syscall": "security",
+      "kind": "no_decoder",
+      "what": "schema.argument_metadata",
+      "reason": "No entry point in the pinned syscall table (sys_ni_syscall): the call returns ENOSYS and the row has no argument schema, so the recorder writes an explicit schema.argument_metadata marker instead of argument data (native-schema-slices.md, slice 2G)."
+    },
+    {
+      "syscall": "set_thread_area",
+      "kind": "no_decoder",
+      "what": "schema.argument_metadata",
+      "reason": "No entry point in the pinned syscall table (sys_ni_syscall): the call returns ENOSYS and the row has no argument schema, so the recorder writes an explicit schema.argument_metadata marker instead of argument data (native-schema-slices.md, slice 2G)."
+    },
+    {
+      "syscall": "get_thread_area",
+      "kind": "no_decoder",
+      "what": "schema.argument_metadata",
+      "reason": "No entry point in the pinned syscall table (sys_ni_syscall): the call returns ENOSYS and the row has no argument schema, so the recorder writes an explicit schema.argument_metadata marker instead of argument data (native-schema-slices.md, slice 2G)."
+    },
+    {
+      "syscall": "lookup_dcookie",
+      "kind": "no_decoder",
+      "what": "schema.argument_metadata",
+      "reason": "No entry point in the pinned syscall table (sys_ni_syscall): the call returns ENOSYS and the row has no argument schema, so the recorder writes an explicit schema.argument_metadata marker instead of argument data (native-schema-slices.md, slice 2G)."
+    },
+    {
+      "syscall": "epoll_ctl_old",
+      "kind": "no_decoder",
+      "what": "schema.argument_metadata",
+      "reason": "No entry point in the pinned syscall table (sys_ni_syscall): the call returns ENOSYS and the row has no argument schema, so the recorder writes an explicit schema.argument_metadata marker instead of argument data (native-schema-slices.md, slice 2G)."
+    },
+    {
+      "syscall": "epoll_wait_old",
+      "kind": "no_decoder",
+      "what": "schema.argument_metadata",
+      "reason": "No entry point in the pinned syscall table (sys_ni_syscall): the call returns ENOSYS and the row has no argument schema, so the recorder writes an explicit schema.argument_metadata marker instead of argument data (native-schema-slices.md, slice 2G)."
+    },
+    {
+      "syscall": "vserver",
+      "kind": "no_decoder",
+      "what": "schema.argument_metadata",
+      "reason": "No entry point in the pinned syscall table (sys_ni_syscall): the call returns ENOSYS and the row has no argument schema, so the recorder writes an explicit schema.argument_metadata marker instead of argument data (native-schema-slices.md, slice 2G)."
+    },
+    {
+      "syscall": "ioctl",
+      "kind": "no_decoder",
+      "what": "arg2.ioctl",
+      "reason": "The recorder decodes the ioctl argument only for terminal requests on a tty (TCGETS, TCSETS*, TCGETS2, TCSETS2*, TIOCGWINSZ, TIOCSWINSZ, TIOCGPGRP, TIOCSPGRP, TIOCGSID, FIONREAD); for any other request or file it records an explicit NO_DECODER marker. Request-specific layouts are not part of the capture schema."
+    },
+    {
+      "syscall": "uselib",
+      "kind": "render",
+      "what": "generic name *",
+      "reason": "No entry point and no argument schema in the pinned table: the trace can only name the six registers by position (first, second, \u2026)."
+    },
+    {
+      "syscall": "_sysctl",
+      "kind": "render",
+      "what": "generic name *",
+      "reason": "No entry point and no argument schema in the pinned table: the trace can only name the six registers by position (first, second, \u2026)."
+    },
+    {
+      "syscall": "create_module",
+      "kind": "render",
+      "what": "generic name *",
+      "reason": "No entry point and no argument schema in the pinned table: the trace can only name the six registers by position (first, second, \u2026)."
+    },
+    {
+      "syscall": "get_kernel_syms",
+      "kind": "render",
+      "what": "generic name *",
+      "reason": "No entry point and no argument schema in the pinned table: the trace can only name the six registers by position (first, second, \u2026)."
+    },
+    {
+      "syscall": "query_module",
+      "kind": "render",
+      "what": "generic name *",
+      "reason": "No entry point and no argument schema in the pinned table: the trace can only name the six registers by position (first, second, \u2026)."
+    },
+    {
+      "syscall": "nfsservctl",
+      "kind": "render",
+      "what": "generic name *",
+      "reason": "No entry point and no argument schema in the pinned table: the trace can only name the six registers by position (first, second, \u2026)."
+    },
+    {
+      "syscall": "getpmsg",
+      "kind": "render",
+      "what": "generic name *",
+      "reason": "No entry point and no argument schema in the pinned table: the trace can only name the six registers by position (first, second, \u2026)."
+    },
+    {
+      "syscall": "putpmsg",
+      "kind": "render",
+      "what": "generic name *",
+      "reason": "No entry point and no argument schema in the pinned table: the trace can only name the six registers by position (first, second, \u2026)."
+    },
+    {
+      "syscall": "afs_syscall",
+      "kind": "render",
+      "what": "generic name *",
+      "reason": "No entry point and no argument schema in the pinned table: the trace can only name the six registers by position (first, second, \u2026)."
+    },
+    {
+      "syscall": "tuxcall",
+      "kind": "render",
+      "what": "generic name *",
+      "reason": "No entry point and no argument schema in the pinned table: the trace can only name the six registers by position (first, second, \u2026)."
+    },
+    {
+      "syscall": "security",
+      "kind": "render",
+      "what": "generic name *",
+      "reason": "No entry point and no argument schema in the pinned table: the trace can only name the six registers by position (first, second, \u2026)."
+    },
+    {
+      "syscall": "set_thread_area",
+      "kind": "render",
+      "what": "generic name *",
+      "reason": "No entry point and no argument schema in the pinned table: the trace can only name the six registers by position (first, second, \u2026)."
+    },
+    {
+      "syscall": "get_thread_area",
+      "kind": "render",
+      "what": "generic name *",
+      "reason": "No entry point and no argument schema in the pinned table: the trace can only name the six registers by position (first, second, \u2026)."
+    },
+    {
+      "syscall": "lookup_dcookie",
+      "kind": "render",
+      "what": "generic name *",
+      "reason": "No entry point and no argument schema in the pinned table: the trace can only name the six registers by position (first, second, \u2026)."
+    },
+    {
+      "syscall": "epoll_ctl_old",
+      "kind": "render",
+      "what": "generic name *",
+      "reason": "No entry point and no argument schema in the pinned table: the trace can only name the six registers by position (first, second, \u2026)."
+    },
+    {
+      "syscall": "epoll_wait_old",
+      "kind": "render",
+      "what": "generic name *",
+      "reason": "No entry point and no argument schema in the pinned table: the trace can only name the six registers by position (first, second, \u2026)."
+    },
+    {
+      "syscall": "vserver",
+      "kind": "render",
+      "what": "generic name *",
+      "reason": "No entry point and no argument schema in the pinned table: the trace can only name the six registers by position (first, second, \u2026)."
+    }
+  ],
+  "unexercised": [],
+  "undescribed": [
+    {
+      "warning": "*: field capture incomplete, status NOT_RESIDENT (*)",
+      "reason": "The recorder copies user memory without faulting (it runs in the syscall entry path). A page the program has mapped but not yet touched in this process is recorded as NOT_RESIDENT (contract revision 8, section 15.1), and the call itself is unaffected. It happens to static glibc reading /proc/self/exe before main, and to forked children: fork() copies no page-table entries for file-backed private mappings, so a child's first use of a literal string or of a stack/rodata page is not resident. The oracle fixture prefaults its image; torture children do not. A later capture at exit, after the kernel itself faulted the page in, would close this; it needs a contract change and is proposed separately."
+    },
+    {
+      "warning": "ioctl: field capture incomplete, status NO_DECODER (arg2.ioctl)",
+      "reason": "The recorder decodes the ioctl argument only for terminal requests on a tty (TCGETS, TCSETS*, TCGETS2, TCSETS2*, TIOCGWINSZ, TIOCSWINSZ, TIOCGPGRP, TIOCSPGRP, TIOCGSID, FIONREAD); any other request records an explicit NO_DECODER marker for its argument."
+    },
+    {
+      "warning": "setsockopt: field capture incomplete, status NO_DECODER (sockopt.unknown_option)",
+      "reason": "A socket option the recorder's table does not know (the decoder zoo passes unknown ones on purpose) is recorded as an explicit selector gap with the raw option value (slice 2A)."
+    },
+    {
+      "warning": "getsockopt: field capture incomplete, status NO_DECODER (sockopt.unknown_option)",
+      "reason": "A socket option the recorder's table does not know (the decoder zoo passes unknown ones on purpose) is recorded as an explicit selector gap with the raw option value (slice 2A)."
+    }
+  ]
+}

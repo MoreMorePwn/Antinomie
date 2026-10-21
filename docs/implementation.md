@@ -438,6 +438,71 @@ additions.
   close all the same. A run's earlier segments must be in the same recording
   folder as its newest.
 
+### Guest conformance suite, part 1: the syscall trace log (0.7.0)
+
+One command boots disposable BusyBox VMs, runs programs that print what they did
+and checks what the app recorded and shows against it
+(`tests/monitor/conformance/README.md`):
+
+```sh
+cargo run --release --locked -j 2 -p antinomie-monitor-core --example conformance -- \
+    trace BASE_DIR OUT_DIR [--bless] [--groups …] [--recheck] [--no-render] [--no-build]
+```
+
+* **Fixture.** `tests/monitor/conformance/trace/fixture` (static C, one program,
+  groups `user`, `root`, `threads`). Every call goes through `CALL()`
+  (`oracle.h`): the raw system call with six registers, timed with
+  `CLOCK_MONOTONIC`, then one `ANT_EXPECT` JSON line with the arguments, the raw
+  result, the bytes behind each pointer argument at entry and exit, deliberate
+  capture statuses, the file identity, async requests and why the case is
+  shaped as it is. All 375 native slots are exercised, with success, failure and
+  decoding variants (about 2,000 cases as UID 1000, 130 as root, 2,240 under
+  concurrency). Dangerous calls are refused as UID 1000 or made harmless as root
+  in private namespaces and children; every such case says why.
+* **Tool.** `examples/conformance` (`main.rs` parts and CLI, `vm.rs` one VM per
+  group, `judge.rs` the call-by-call comparison, `trace.rs` the part, `stress.rs`,
+  `recording.rs` raw scan and pages, `render.rs`, `matrix.rs`, `golden.rs`). A
+  part names its groups and checks their runs; file lifecycle, process tree,
+  network and Suspicious activity are later parts of the same structure.
+* **Rendering.** The ignored monitor-ui test `conformance_trace_render`
+  (`trace/conformance.rs`) renders every call with the Syscall Trace view's own
+  code and draws the inspector, and reports raw-value fallbacks; the suite runs
+  it through cargo.
+* **Strictness.** Any warning or error of any recorded call fails, unless the
+  capture contract explains it and `tests/monitor/conformance/trace/gaps.json`
+  names it with a reason; so does any gap or unexercised slot not listed there.
+  Losses must add up exactly: packets saved = recorder attempted − failed =
+  transport taken − dropped = received = persisted; events saved = attempted when
+  nothing was lost; calls that show loss and incomplete async requests are bounded
+  by the counted failures and observation losses.
+* **Host fixes found by the suite.** Field statuses that mean there was nothing
+  to copy (NULL_POINTER, ADDRESS_ONLY, NOT_WRITTEN; ASYNC_UNOBSERVED in a call's
+  own Entry or Exit and the payload marker of a non-final async record) no longer
+  mark a call incomplete, matching the guest recorder; the recorder's own
+  incomplete marks are reported only when no field explains them, and precisely
+  (lost Entry, failed sends). The per-event "packet sequence gap" warning is gone:
+  packet numbers are per task across sync and async events, the END count shows
+  loss. `FieldSummary::arg` carries the argument the guest captured a field for,
+  and the trace places fields by it. Enumerated arguments are named (fcntl
+  commands, arch_prctl codes, ioctl requests by name or `_IOC` encoding, clocks
+  including CPU clocks, rlimits, madvise and fadvise advice, address families,
+  epoll and SysV IPC commands, scheduling policies, reboot magic and commands,
+  and more: `syscalls/selectors.rs`); address lengths are counts, not addresses;
+  exec vectors read as lists and an argument with several captured objects says
+  so instead of showing its address; MAP_DROPPABLE and memfd_secret's O_CLOEXEC
+  have names.
+* **Guest fix (series 0051, revision 17 unchanged).** An async request that ends
+  with an error has no payload to lose: its final record carries no payload gap
+  and no observation loss is counted (a failing io_uring READ or a rejected
+  opcode used to flag the run as lossy). The terminal ioctl decoder knows
+  TCGETS2/TCSETS2* (glibc's `tcgetattr`) and TIOCGPGRP/TIOCSPGRP/TIOCGSID.
+* **Limits.** NOT_RESIDENT is recorded for pages a process has not touched yet
+  (static glibc's start-up readlink, a forked child's first literal): the
+  no-fault copy is the contract (15.1); a capture at exit would close it and needs
+  a contract change. The ioctl argument is decoded for terminal requests only.
+  Directory removal publishes no file identity. Rows without an entry point have
+  positional argument names.
+
 ### Accepted ANT-T0097 host UI performance (0.6.2)
 
 Remove render-time filesystem checks for host chooser availability; resolve
