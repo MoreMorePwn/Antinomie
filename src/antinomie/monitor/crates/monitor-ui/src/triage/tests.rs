@@ -1867,3 +1867,26 @@ fn a_long_content_cell_shows_a_bounded_hover_and_keeps_the_full_value() {
     }
     assert_eq!(rows[0][2].text, long, "Details keeps the full value");
 }
+
+#[test]
+fn every_filter_slot_draws_its_filter_bar() {
+    // The Sessions slot once had no table id, so its filter bar indexed past
+    // the end of the list and the Network › Sessions tab panicked.
+    let ctx = egui::Context::default();
+    let mut view = TriageView::default();
+    for index in 0..SLOTS {
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                view.query_bar(
+                    ui,
+                    index,
+                    network::SESSION_FIELDS,
+                    "session.alpn contains h2",
+                    (0, 0),
+                    Bar::Plain,
+                );
+            });
+        });
+    }
+    assert_eq!(TABLE_IDS[SESSION_SLOT], "triage-sessions");
+}

@@ -32,6 +32,7 @@ const TABLES: &[&str] = &[
     "triage-hosts",
     "triage-http",
     "triage-dns",
+    "triage-sessions",
     "triage-bpf",
     "triage-yara",
     "triage-ids",
@@ -122,6 +123,7 @@ fn title(table: &str) -> &str {
         "triage-hosts" => "Host",
         "triage-http" => "HTTP request",
         "triage-dns" => "DNS request",
+        "triage-sessions" => "Network session",
         "triage-bpf" => "BPF observation",
         _ => "Selected evidence",
     }
