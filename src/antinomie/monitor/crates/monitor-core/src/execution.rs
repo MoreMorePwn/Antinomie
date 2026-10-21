@@ -26,10 +26,12 @@ pub(crate) fn decode(
         || total_task_count == 0
         || live_task_count > total_task_count
         || (flags & 2 != 0) != (live_task_count == 0)
-        || (flags & 2 != 0 && flags & 1 == 0)
         || (flags & 8 != 0 && (pending_async_count != 0 || flags & 16 != 0))
     {
-        return Err("inconsistent run status reply".into());
+        return Err(format!(
+            "inconsistent run status reply (cookie {:#x} generation {generation} live {live_task_count} async {pending_async_count} flags {flags:#x} total {total_task_count})",
+            read64(0)?
+        ));
     }
     let raw = u32_at(reply, 36).map_err(|e| e.to_string())? as i32;
     let root_exit = if flags & 1 != 0 {
@@ -56,8 +58,15 @@ fn wait_status(raw: i32) -> Result<WaitStatus, String> {
         .ok_or_else(|| "root wait status is not an exit or terminating signal".into())
 }
 
+/// The run's state from the guest's status. Whether the program ended is one
+/// fact and whether every async request was observed is another: a tree that
+/// ended with no request outstanding is finished even when the guest says its
+/// async observation was incomplete or lost records (`has_async_loss`), and
+/// even when an older guest never recorded the root's wait status
+/// (`root_status_missing`), which then stays unknown instead of read as 0.
 pub(crate) fn state(execution: &RunExecution) -> RunState {
-    if execution.flags & 2 != 0 && execution.flags & 8 != 0 && execution.flags & 16 == 0 {
+    let ended = execution.flags & 2 != 0 && execution.pending_async_count == 0;
+    if ended {
         if execution.flags & 4 != 0
             && matches!(execution.root_exit, Some(WaitStatus::Signaled { .. }))
         {
@@ -67,8 +76,6 @@ pub(crate) fn state(execution: &RunExecution) -> RunState {
         }
     } else if execution.flags & 4 != 0 {
         RunState::StopRequested
-    } else if execution.live_task_count == 0 && execution.pending_async_count == 0 {
-        RunState::Unknown
     } else {
         RunState::Running
     }
@@ -121,6 +128,54 @@ mod tests {
         let polite = decode(&reply(15, 0, 0, 15), 7, 1).unwrap();
         assert!(!polite.kill_escalated());
         assert_eq!(state(&polite), RunState::Stopped);
+    }
+    #[test]
+    fn an_ended_tree_is_finished_whatever_the_async_observation_says() {
+        // ROOT | TREE | OBSERVATION_INCOMPLETE, root exit 0: what every io_uring
+        // run reports. The process ended; only the observation is partial.
+        let incomplete = decode(&reply(19, 0, 0, 0), 7, 1).unwrap();
+        assert_eq!(state(&incomplete), RunState::Finished);
+        assert!(incomplete.observation_incomplete());
+        assert_eq!(incomplete.root_exit, Some(WaitStatus::Exited { code: 0 }));
+        // A stop of such a run, with the root killed by a signal, is Stopped.
+        let stopped = decode(&reply(23, 0, 0, 15), 7, 1).unwrap();
+        assert_eq!(state(&stopped), RunState::Stopped);
+        // Requests still counted after the tree ended keep the run running.
+        assert_eq!(
+            state(&decode(&reply(3, 0, 2, 0), 7, 1).unwrap()),
+            RunState::Running
+        );
+    }
+    #[test]
+    fn a_guest_that_lost_the_root_status_still_ends_the_run_without_inventing_it() {
+        // TREE_EXITED without ROOT_EXITED: an io_uring worker was the last
+        // thread of the root's group and an older guest did not count it.
+        let missing = decode(&reply(2, 0, 0, 0), 7, 1).unwrap();
+        assert!(missing.root_status_missing());
+        assert_eq!(missing.root_exit, None);
+        assert_eq!(missing.root_wait_status, None);
+        assert_eq!(state(&missing), RunState::Finished);
+        assert!(
+            !decode(&reply(3, 0, 0, 0), 7, 1)
+                .unwrap()
+                .root_status_missing()
+        );
+        // The live count and the flag must still agree.
+        assert!(decode(&reply(0, 0, 0, 0), 7, 1).is_err());
+        assert!(decode(&reply(2, 1, 0, 0), 7, 1).is_err());
+    }
+    #[test]
+    fn an_inconsistent_reply_names_every_field_it_rejected() {
+        let error = decode(&reply(2, 5, 0, 0), 7, 1).unwrap_err();
+        for part in [
+            "cookie 0x7",
+            "generation 2",
+            "live 5",
+            "flags 0x2",
+            "total 3",
+        ] {
+            assert!(error.contains(part), "{error}");
+        }
     }
     #[test]
     fn malformed_generation_flags_lengths_and_wait_status_are_rejected() {

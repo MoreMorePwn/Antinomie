@@ -61,11 +61,45 @@ host or a process in the guest:
 | A later Stop | Sends SIGTERM again and can only bring the deadline forward |
 | Core copy | A process core being copied is not interrupted (SIGKILL would truncate it): the escalation waits for the copy, for at most 15 s past the grace period. A root killed before its exit copy starts has no core, as for any SIGKILL |
 | Reporting | KILL_ESCALATED is set with the first SIGKILL, whichever task of the run needed it. The signal that ended the root is in the wait status: `Signaled 9` when the root itself was killed, `Signaled 15` or the program's own exit when it obeyed SIGTERM. A root that handled SIGTERM and exited by itself reports `Exited` while the flag still says another task needed SIGKILL |
-| Run state | Unchanged: `Stopped` needs STOP_REQUESTED, TREE_EXITED, ASYNC_COMPLETE and a root that died of a signal; a root that exited normally is `Finished` |
+| Run state | `Stopped` needs STOP_REQUESTED, TREE_EXITED, no outstanding request and a root that died of a signal; a root that exited normally is `Finished` (ASYNC_COMPLETE and OBSERVATION_INCOMPLETE no longer decide it; see below) |
 
 The work runs on the system unbound workqueue; no thread, workqueue or process
 is created in the guest. A task stuck in uninterruptible sleep cannot be killed
 by any signal; the run then stays live and the status says so.
+
+## io_uring workers, and what ends a run (revision 17)
+
+An io_uring ring puts kernel threads into the creating process: `iou-wrk-*`
+workers and an `iou-sqp-*` submission thread. They are threads of the root's
+thread group, appear in its process core, and can be the last to leave it. The
+run therefore counts them: they raise `live` and `total` like any thread and
+the thread that leaves the group last records the root's wait status, whichever
+thread it is. They have no cookie, are not observed, never start the process
+core rendezvous and are not signalled by Stop's escalation by cookie (SIGKILL of
+the group ends them with the process). An older guest did not count them; when
+a worker left last it reported TREE_EXITED without ROOT_EXITED.
+
+What the host takes from a reply:
+
+| Fact | Source | Never inferred from |
+|---|---|---|
+| The program tree ended | TREE_EXITED with `live == 0` | terminal EOF, a workload marker |
+| How the root ended | the wait status with ROOT_EXITED | the same |
+| Requests still outstanding | `pending` | the observation flags |
+| The observation was complete | no OBSERVATION_INCOMPLETE, loss count 0 | the process having ended |
+
+The run state follows the first three: **Finished** (or **Stopped**, for a
+stopped root that died of a signal) is a tree that ended with no request
+outstanding, whatever the observation flags say. OBSERVATION_INCOMPLETE and the
+loss count are reported next to the state (run notes, "Runs with async
+observation loss"), not folded into it: every io_uring request sets
+OBSERVATION_INCOMPLETE, because the task that wrote a shared ring's entry is not
+proven, so folding it in would leave every io_uring run `Unknown` for ever.
+TREE_EXITED without ROOT_EXITED (an older guest, above) ends the run with the
+exit status unknown (`root_status_missing`), never zero. A reply the host cannot
+use (a field out of range, an inconsistent live count) is an error naming the
+cookie, generation, live, async, flags and total fields it rejected; once the
+root's exit is recorded, such a reply no longer clears the status the run has.
 
 ## Run identity across a transport reconnect (host)
 

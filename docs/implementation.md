@@ -240,6 +240,48 @@ the audit login uid only when the guest set one, and the Sigma journal is
 format 3 (versions 1 and 2 still load). The MD5 digest is not recorded: no rule
 in the SigmaHQ Linux pack reads a hash.
 
+### Accepted io_uring run status (0.7.0)
+
+Guest series 0043; the contract stays at revision 17 and the change is
+compatible both ways: an older guest and an older host both keep working.
+
+* **Run status with io_uring workers (0043).** `iou-wrk` and `iou-sqp` threads
+  are threads of the process that made the ring, and are in its process core. The
+  run did not count them (`ant_monitor_fork_prepare` skipped `PF_USER_WORKER`), so
+  when a worker was the last thread out, the leader had already taken the live
+  count to zero and nothing recorded the root's wait status: RUN_STATUS said
+  TREE_EXITED without ROOT_EXITED, which the host rejected. Evidence from the
+  previous base (series 0001-0042) and host: `guest-run` with `ant-torture --only
+  async-io --level light` as root on four vCPUs gave, for each of four runs with
+  Core Dump on Exit, a complete core but no execution status, state `Unknown`,
+  "inconsistent run status reply" and the 30-second completion deadline; one of
+  the two runs without a core lost the status the same way, the other kept exit 0
+  with `Unknown` (OBSERVATION_INCOMPLETE, below). With a trace added to that
+  kernel, RUN_STATUS read `flags 0x12 live 0 total 1`, and the exits were: the
+  root thread with `group_dead 0` (so the live count reached zero without a
+  root status), then `iou-wrk-<pid>` (or `iou-sqp-<pid>` for SQPOLL) with
+  `group_dead 1` and no run to record in. The core rendezvous makes this the
+  usual order: `coredump_wait` sends SIGKILL to the workers, which leave io-wq
+  (so the root's ring cancellation does not wait for them) and then wait in
+  `coredump_task_exit` until the copy ends, while the root goes on with its own
+  exit. Without a core the workers usually, not always, leave first. Workers now join the run (live and total
+  counts, root status by whichever thread leaves the group last, core published
+  unavailable if one is last out of an armed run) but stay unobserved and do not
+  start the core rendezvous. The same run without a core ended with the root's
+  status, but OBSERVATION_INCOMPLETE (every io_uring request has an unproven
+  producer) and `Unknown` state, because the host folded that flag into the
+  state. Host (`execution.rs`): the state is the tree ending with nothing
+  outstanding; the observation flags stay beside it (`observation_incomplete`,
+  `has_async_loss`, the run note); TREE_EXITED without ROOT_EXITED is accepted
+  as an old guest's reply (`root_status_missing`, exit status unknown); an
+  unusable reply names its fields and no longer clears a recorded root exit
+  (`ProgramRun::status_unreadable`).
+  `examples/uring-check.rs` with `tests/monitor/uring-fixture.c`: `status` (the
+  torture module, linked pairs, cancellation, requests pending at exit, SQPOLL, a
+  non-leader root exit, a crash, AIO, each with and without a core, then Stop of
+  runs with workers, handled or ignoring SIGTERM), `boots` (the hardest cases on
+  fresh boots), `legacy` (an older base: Finished, exit unknown or right).
+
 ### Accepted ANT-T0097 host UI performance (0.6.2)
 
 Remove render-time filesystem checks for host chooser availability; resolve

@@ -87,6 +87,30 @@ it runs.
   in the pressed-widget text color, which was the white of the primary fill. The
   pressed state now uses the selection tint with normal text; primary buttons
   keep their own fill and white text.
+- **A run that uses io_uring ends with its own exit status, and finishes.** A
+  program that used io_uring and was run with Core Dump on Exit could end with
+  its run status unreadable: the core was complete, but the run showed no
+  execution status and an unknown state, and the app waited for a completion
+  that never came. The cause was in the guest: an io_uring worker thread is a
+  thread of the program, and when it left last (the core copy and a group exit
+  make that likely) nothing recorded how the program ended, so the status
+  reported the tree as ended with no root exit, which the app rejected as
+  inconsistent. The guest now counts those threads as part of the run (the task
+  counts include them, like the threads in the core) and the last thread out
+  records the exit. The app also reads the two facts apart: a run whose process
+  tree ended with nothing outstanding is **Finished** (or **Stopped**), while
+  "observation incomplete" and the lost-record count stay beside it as notes. An
+  io_uring run always reports incomplete observation, because the program that
+  wrote a shared ring's entry is not proven, so it used to stay Unknown for ever
+  even without a core. A reply the app cannot use no longer clears a root exit
+  it already knows, names the fields it rejected, and with a base from before
+  this release (which still loses the exit) the run finishes with the exit code
+  **unknown**, never zero. Needs a base built for this release for the exit
+  status; the contract revision stays 17 and earlier bases and apps keep
+  working. `uring-check status`, `boots` and `legacy` repeat the cases: the
+  torture async-io module, linked pairs, cancellation, requests pending at exit,
+  a submission-queue thread, a root that exits from a non-leader thread, a
+  crash and Stop, each with and without a core.
 - **Detection rules: engines, Installed and Catalog tabs, and every rule of a
   pack.** The page has **YARA / IDS / Sigma** tabs and, inside each, **Installed**
   and **Catalog** tabs. Installed lists the packs and custom groups of the engine

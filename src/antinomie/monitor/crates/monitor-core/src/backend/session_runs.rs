@@ -436,12 +436,7 @@ impl Session {
                 if !owner.matches(run) {
                     return Err("run status owner or execution generation changed".into());
                 }
-                let changed = run.summary.execution.take().is_some()
-                    || run.summary.state != RunState::Unknown;
-                run.summary.state = RunState::Unknown;
-                if changed {
-                    run.persist_summary()?;
-                }
+                run.status_unreadable()?;
                 Err(error)
             }
         }

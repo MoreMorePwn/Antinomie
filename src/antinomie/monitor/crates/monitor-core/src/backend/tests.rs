@@ -690,9 +690,10 @@ fn run_artifacts_wait_for_descendants_and_async_drain_then_queue_once() {
     status.flags = 3;
     assert!(!owner.observe(Some(&status)));
     status.pending_async_count = 0;
-    status.flags = 19; // async loss prevents a proven drained tree.
-    assert!(!owner.observe(Some(&status)));
-    status.flags = 11;
+    // OBSERVATION_INCOMPLETE without ASYNC_COMPLETE, as every io_uring run
+    // reports: the observation was partial, but the tree ended with nothing
+    // outstanding, so the exit artifacts go ahead.
+    status.flags = 19;
     assert!(owner.observe(Some(&status)));
     assert_eq!(owner.summary.memory_state, RunArtifactState::Queued);
     owner.summary.memory_state = RunArtifactState::Complete;
