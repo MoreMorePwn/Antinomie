@@ -1302,21 +1302,32 @@ fn native_core_view_fixture() {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
     }
+    let var = |name: &str| std::env::var(name).unwrap_or_default();
     let small = std::env::var_os("ANTINOMIE_CORE_QA_SMALL").is_some();
     let seconds = std::env::var("ANTINOMIE_CORE_QA_SECONDS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(15)
         .clamp(1, 120);
-    let tab = std::env::var("ANTINOMIE_CORE_QA_TAB").unwrap_or_default();
+    let tab = var("ANTINOMIE_CORE_QA_TAB");
+    let theme_choice = match var("ANTINOMIE_QA_THEME").as_str() {
+        "light" => crate::theme::Theme::Light,
+        "blue" => crate::theme::Theme::Blue,
+        _ => crate::theme::Theme::Dark,
+    };
+    let size = var("ANTINOMIE_QA_SIZE")
+        .split_once('x')
+        .and_then(|(w, h)| Some([w.parse::<f32>().ok()?, h.parse::<f32>().ok()?]))
+        .unwrap_or(if small {
+            [800.0, 900.0]
+        } else {
+            [1280.0, 900.0]
+        });
+    let decompiled = std::env::var_os("ANTINOMIE_CORE_QA_DECOMPILED").is_some();
     eframe::run_native(
         "Antinomie Core View QA — synthetic evidence",
         eframe::NativeOptions {
-            viewport: egui::ViewportBuilder::default().with_inner_size(if small {
-                [800.0, 900.0]
-            } else {
-                [1280.0, 900.0]
-            }),
+            viewport: egui::ViewportBuilder::default().with_inner_size(size),
             persist_window: false,
             event_loop_builder: Some(Box::new(|builder| {
                 builder.with_x11().with_any_thread(true);
@@ -1325,11 +1336,14 @@ fn native_core_view_fixture() {
         },
         Box::new(move |cc| {
             crate::theme::install(&cc.egui_ctx);
+            crate::theme::apply_theme(&cc.egui_ctx, theme_choice);
             crate::theme::text_size(&cc.egui_ctx, if small { 24.0 } else { 16.0 });
             let mut fixture = Fixture::new();
+            fill_qa_core(&mut fixture, decompiled);
             fixture.view.tab = match tab.as_str() {
                 "mappings" => Tab::Mappings,
                 "code" => Tab::Code,
+                "strings" => Tab::Strings,
                 "notes" => Tab::Notes,
                 _ => Tab::Context,
             };
@@ -1340,6 +1354,92 @@ fn native_core_view_fixture() {
         }),
     )
     .unwrap();
+}
+
+/// Enough synthetic evidence for the tables of a screenshot: more mappings,
+/// functions with decoded code, and a few hundred strings in the core's memory.
+fn fill_qa_core(fixture: &mut Fixture, decompiled: bool) {
+    let mut record = fixture.view.selected.clone().unwrap();
+    let mut memory = Vec::new();
+    for n in 0..300 {
+        memory
+            .extend_from_slice(format!("/usr/lib/x86_64-linux-gnu/module-{n:03}.so\0").as_bytes());
+        memory.extend_from_slice(b"GET /beacon HTTP/1.1\0\0\0");
+    }
+    fs::write(&record.core.source, &memory).unwrap();
+    record.core.source_size = memory.len() as u64;
+    record.core.mappings[0].captured_size = memory.len() as u64;
+    record.core.mappings[0].available_size = memory.len() as u64;
+    for (index, (flags, start)) in [
+        (6, 0x7f00_0000_0000u64),
+        (5, 0x7f00_0020_0000),
+        (4, 0x7ffc_1d39_0000),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        record.core.mappings.push(CoreMapping {
+            start,
+            memory_size: 0x21000 * (index as u64 + 1),
+            file_offset: 0,
+            captured_size: 4096,
+            available_size: 4096,
+            flags,
+        });
+    }
+    record.core.files.push(MappedFile {
+        start: 0x7f00_0020_0000,
+        end: 0x7f00_0022_1000,
+        file_offset: 0,
+        path: "/usr/lib/x86_64-linux-gnu/libc.so.6".into(),
+    });
+    fixture.view.records = vec![record.clone()];
+    fixture.view.selected = Some(record);
+    let names = [
+        "_start",
+        "main",
+        "beacon_loop",
+        "fetch_stage2",
+        "decrypt_config",
+        "persist",
+    ];
+    fixture.view.functions = names
+        .iter()
+        .enumerate()
+        .map(|(index, name)| CoreFunction {
+            address: 0x400000 + index as u64 * 0x40,
+            size: 0x40,
+            name: (*name).into(),
+        })
+        .collect();
+    fixture.view.code_function = Some(2);
+    let mut code = String::from("x86-64 process memory at 0x400000; linear decoding\n");
+    for (index, address) in (0u64..).map(|n| 0x400000 + n * 4).take(60).enumerate() {
+        let (mnemonic, operands) = match index % 5 {
+            0 => ("push", "rbp"),
+            1 => ("mov", "rbp, rsp"),
+            2 => ("call", "0x401200"),
+            3 => ("jne", "0x400010"),
+            _ => ("ret", ""),
+        };
+        code.push_str(&format!("{address:016x}  {mnemonic} {operands}\n"));
+    }
+    fixture.view.code = code;
+    fixture.view.remember_asm_counts();
+    if decompiled {
+        fixture.view.function_bodies = names
+            .iter()
+            .enumerate()
+            .map(|(index, name)| {
+                let mut body = format!("void {name}(void)\n{{\n");
+                for line in 0..index * 3 + 2 {
+                    body.push_str(&format!("  local_{line} = FUN_{line:04x}(0x{line:x});\n"));
+                }
+                body + "  return;\n}\n"
+            })
+            .collect();
+        fixture.view.show_decompiled = true;
+    }
 }
 
 #[test]

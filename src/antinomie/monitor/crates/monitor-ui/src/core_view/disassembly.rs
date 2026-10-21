@@ -353,10 +353,7 @@ impl CoreView {
         self.code_function
             .and_then(|index| self.functions.get(index))
             .filter(|function| function.size > 0)
-            .map(|function| {
-                let octets = function.size.min(FUNCTION_DISASSEMBLY_LIMIT);
-                format!("Disassemble function ({octets} octets)")
-            })
+            .map(|_| "Disassemble function".to_owned())
             .unwrap_or_else(|| "Disassemble captured code".to_owned())
     }
 

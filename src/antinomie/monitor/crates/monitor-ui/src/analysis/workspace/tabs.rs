@@ -229,7 +229,7 @@ fn header(
 ) -> Option<ReportAction> {
     let mut action = None;
     ui.horizontal_wrapped(|ui| {
-        ui.strong(file_name(report, state));
+        crate::analysis::strong(ui, file_name(report, state));
         if let Some(len) = report.specimen_len {
             ui.label(crate::values::file_size(len));
         }

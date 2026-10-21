@@ -944,6 +944,7 @@ fn native_analysis_workspace_fixture() {
                                 },
                             ));
                         }
+                        ReportAction::ReadListing { .. } => {}
                         action => eprintln!("Synthetic workspace action: {action:?}"),
                     }
                 }
@@ -954,6 +955,16 @@ fn native_analysis_workspace_fixture() {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
     }
+    let var = |name: &str| std::env::var(name).unwrap_or_default();
+    let theme_choice = match var("ANTINOMIE_QA_THEME").as_str() {
+        "light" => crate::theme::Theme::Light,
+        "blue" => crate::theme::Theme::Blue,
+        _ => crate::theme::Theme::Dark,
+    };
+    let size = var("ANTINOMIE_QA_SIZE")
+        .split_once('x')
+        .and_then(|(w, h)| Some([w.parse::<f32>().ok()?, h.parse::<f32>().ok()?]));
+    let view_name = var("ANTINOMIE_QA_VIEW");
     let small = std::env::var_os("ANTINOMIE_ANALYSIS_WORKSPACE_SMALL").is_some();
     let seconds = std::env::var("ANTINOMIE_ANALYSIS_QA_SECONDS")
         .ok()
@@ -963,11 +974,11 @@ fn native_analysis_workspace_fixture() {
     eframe::run_native(
         "Antinomie Analysis Workspace QA",
         eframe::NativeOptions {
-            viewport: egui::ViewportBuilder::default().with_inner_size(if small {
+            viewport: egui::ViewportBuilder::default().with_inner_size(size.unwrap_or(if small {
                 [800.0, 600.0]
             } else {
                 [1280.0, 820.0]
-            }),
+            })),
             persist_window: false,
             event_loop_builder: Some(Box::new(|builder| {
                 builder.with_x11().with_any_thread(true);
@@ -976,16 +987,21 @@ fn native_analysis_workspace_fixture() {
         },
         Box::new(move |cc| {
             crate::theme::install(&cc.egui_ctx);
-            crate::theme::text_size(&cc.egui_ctx, if small { 24.0 } else { 18.0 });
+            crate::theme::apply_theme(&cc.egui_ctx, theme_choice);
+            crate::theme::text_size(&cc.egui_ctx, if small { 24.0 } else { 16.0 });
             // A retained analysis directory (report.json, specimen and
             // listings) replaces the synthetic fixture; the tab is chosen by
             // its position in the strip.
             let directory =
                 std::env::var_os("ANTINOMIE_ANALYSIS_QA_DIR").map(std::path::PathBuf::from);
-            let report = directory.as_ref().map_or_else(fixture, |directory| {
-                serde_json::from_slice(&std::fs::read(directory.join("report.json")).unwrap())
-                    .unwrap()
-            });
+            let (qa_report, qa_page) = qa_report();
+            let report = directory.as_ref().map_or_else(
+                || qa_report,
+                |directory| {
+                    serde_json::from_slice(&std::fs::read(directory.join("report.json")).unwrap())
+                        .unwrap()
+                },
+            );
             let specimen = directory
                 .as_ref()
                 .map(|directory| std::fs::read(directory.join("specimen")).unwrap());
@@ -1000,6 +1016,22 @@ fn native_analysis_workspace_fixture() {
                 state.tab = Tab::ALL[tab.min(Tab::ALL.len() - 1)];
                 state.file_info = FileInfo::Summary;
             }
+            match view_name.as_str() {
+                "summary" => state.file_info = FileInfo::Summary,
+                "disasm" => {
+                    state.tab = Tab::Disassembly;
+                }
+                "strings" => state.tab = Tab::Strings,
+                "sections" => {}
+                _ => {}
+            }
+            if !view_name.is_empty() {
+                state.tab = match view_name.as_str() {
+                    "disasm" => Tab::Disassembly,
+                    "strings" => Tab::Strings,
+                    _ => Tab::FileInfo,
+                };
+            }
             state.active_view = Some("Structures/Sections".into());
             state.views.insert(
                 "Structures/Sections".into(),
@@ -1012,7 +1044,7 @@ fn native_analysis_workspace_fixture() {
                 report,
                 state,
                 preview: None,
-                listing: None,
+                listing: qa_page.map(Ok),
                 directory,
                 specimen,
                 deadline: Instant::now() + Duration::from_secs(seconds),
@@ -1879,4 +1911,27 @@ fn a_tables_headers_sort_its_rows_ascending_then_descending() {
         [".fixture9", ".fixture8", ".fixture7"],
         "descending by name"
     );
+}
+
+/// The screenshot report: the unit fixture plus a disassembly of six
+/// functions, and the listing page that carries their line counts.
+fn qa_report() -> (
+    AnalysisReport,
+    Option<antinomie_monitor_core::AnalysisListingPage>,
+) {
+    let names = [
+        "_start",
+        "main",
+        "beacon_loop",
+        "fetch_stage2",
+        "decrypt_config",
+        "persist",
+    ];
+    let functions: Vec<(&str, u64, u32)> = names
+        .iter()
+        .enumerate()
+        .map(|(index, name)| (*name, 0x401000 + index as u64 * 0x100, 4 + index as u32 * 5))
+        .collect();
+    let (report, page) = code_report(AnalysisKind::Disassembly, &functions);
+    (report, page.ok())
 }
