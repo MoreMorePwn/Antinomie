@@ -1058,11 +1058,12 @@ impl StealthProfile {
             ));
             fitted.nat = NatNetwork::default();
         }
-        if self.smt && self.realistic_topology {
-            if let Err(reason) = &host.smt {
-                notes.push(format!("Two threads per core: {reason}; one used"));
-                fitted.smt = false;
-            }
+        if self.smt
+            && self.realistic_topology
+            && let Err(reason) = &host.smt
+        {
+            notes.push(format!("Two threads per core: {reason}; one used"));
+            fitted.smt = false;
         }
         if self.pointer == Pointer::UsbTablet && !self.usb {
             notes.push("USB tablet: no USB controllers; virtio tablet used".into());
