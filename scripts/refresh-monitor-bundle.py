@@ -116,6 +116,14 @@ def refresh(source, kernel, config, output, allow_unversioned=False):
                         "initrd": "initrd" if "initrd" in artifacts else None,
                         "fixed_display": True, "sha256": hashes,
                         "build_provenance": build_provenance})
+        # The kept disk and initrd decide the root buses and DHCP; the new
+        # kernel decides UEFI and which controllers are built in.
+        kept = manifest.get("stealth_support") or []
+        support = image.stealth_support(config, publish / "kernel",
+                                        root_buses="sata" in kept or "nvme" in kept,
+                                        dhcp="dhcp" in kept)
+        if support:
+            updated["stealth_support"] = support
         image.stamp_revision(updated, publish / "kernel", allow_unversioned)
         (publish / "bundle.json").write_text(json.dumps(updated, indent=2) + "\n")
         for path in publish.rglob("*"):

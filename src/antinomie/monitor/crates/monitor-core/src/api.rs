@@ -888,6 +888,8 @@ pub struct BaseSummary {
     pub min_app_version: Option<String>,
     /// Antinomie version that built the base, when recorded.
     pub built_with: Option<String>,
+    /// Stealth profile entries the base boots with (`stealth::BaseSupport`).
+    pub stealth_support: Vec<String>,
 }
 
 /// Guest contract revision this app implements.

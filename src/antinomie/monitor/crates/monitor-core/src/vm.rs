@@ -1140,6 +1140,7 @@ mod tests {
             min_app_version: None,
             name: None,
             symbols: None,
+            stealth_support: Vec::new(),
         }
     }
 

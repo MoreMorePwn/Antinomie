@@ -120,6 +120,10 @@ DEBIAN_PARITY="BPF_SYSCALL BPF_JIT CHECKPOINT_RESTORE KEYS KEY_DH_OPERATIONS
 # Enabled in the minimal profile only, for prctl coverage; pinned Debian leaves
 # both unset, so the debian profile keeps them off.
 MINIMAL_EXTRA="ANON_VMA_NAME SCHED_CORE"
+# Root disk controllers the stealth profile offers besides virtio (SATA through
+# q35's AHCI, NVMe), built in for the minimal profile: the bootstrap initrd has
+# no module loader. The Debian profile keeps Debian's modules (virtio root only).
+DISK_BUSES="ATA SATA_AHCI SCSI BLK_DEV_SD BLK_DEV_NVME"
 # Built in for both profiles: the bootstrap initrd has no module loader, and the
 # fixed display needs virtio-gpu before userspace starts.
 DEBIAN_BUILTIN="ANTINOMIE UNIX98_PTYS IKCONFIG VIRTIO VIRTIO_PCI VIRTIO_BLK EXT4_FS
@@ -157,7 +161,8 @@ if [[ $profile == minimal ]]; then
         DRM DRM_VIRTIO_GPU DRM_VIRTIO_GPU_KMS DRM_BOCHS DRM_FBDEV_EMULATION FB FRAMEBUFFER_CONSOLE \
         INPUT INPUT_EVDEV INPUT_KEYBOARD INPUT_MOUSE KEYBOARD_ATKBD MOUSE_PS2 \
         SERIO SERIO_I8042 VIRTIO_INPUT HID HID_GENERIC USB_SUPPORT USB \
-        USB_XHCI_HCD USB_XHCI_PCI USB_HID RTC_CLASS RTC_DRV_CMOS $DEBIAN_PARITY $MINIMAL_EXTRA; do
+        USB_XHCI_HCD USB_XHCI_PCI USB_HID RTC_CLASS RTC_DRV_CMOS $DISK_BUSES \
+        $DEBIAN_PARITY $MINIMAL_EXTRA; do
         "$config" --file "$build_tree/.config" --enable "$symbol"
     done
     "$config" --file "$build_tree/.config" --disable IKCONFIG_PROC
@@ -171,7 +176,7 @@ if [[ $profile == minimal ]]; then
     "$config" --file "$build_tree/.config" --set-str ANTINOMIE_SOURCE_ID "$source_id"
     make -C "$source_tree" O="$build_tree" olddefconfig
     # shellcheck disable=SC2086
-    require_symbols ANTINOMIE IKCONFIG DEBUG_INFO $DEBIAN_PARITY $MINIMAL_EXTRA
+    require_symbols ANTINOMIE IKCONFIG DEBUG_INFO $DISK_BUSES $DEBIAN_PARITY $MINIMAL_EXTRA
     require_source_id
     make -C "$source_tree" O="$build_tree" "${compiler[@]}" LOCALVERSION= -j"$jobs" bzImage
     [[ ${#compiler[@]} -eq 0 ]] || ccache --show-stats >&2

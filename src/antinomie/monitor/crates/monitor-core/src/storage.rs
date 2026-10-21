@@ -410,6 +410,12 @@ pub struct Bundle {
     /// analysis; bases before 0.4.0 have none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub symbols: Option<PathBuf>,
+    /// Stealth profile entries the base boots with besides virtio, SeaBIOS
+    /// and 10.0.2.0/24: `uefi`, `sata`, `nvme`, `dhcp` (written by the image
+    /// builders). Advisory: an entry a base lacks falls back at launch; not
+    /// part of the identity.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stealth_support: Vec<String>,
 }
 fn is_false(value: &bool) -> bool {
     !value
@@ -422,6 +428,13 @@ impl Bundle {
             guest.validate()?;
         }
         b.validate_revision()?;
+        if b.stealth_support.len() > 16
+            || b.stealth_support.iter().any(|item| {
+                item.is_empty() || item.len() > 32 || !item.bytes().all(|c| c.is_ascii_lowercase())
+            })
+        {
+            return Err("bundle has an invalid stealth_support list".into());
+        }
         let resolve = |p: &Path| -> Result<PathBuf, String> {
             let path = fs::canonicalize(root.join(p))
                 .map_err(|e| format!("artifact {}: {e}", p.display()))?;
@@ -581,6 +594,7 @@ impl Bundle {
                     min_app_version: self.min_app_version.clone(),
                     name: self.name.clone(),
                     symbols: self.symbols.as_ref().map(|_| staging.join(SYMBOLS_FILE)),
+                    stealth_support: self.stealth_support.clone(),
                 };
                 if copied.identity()? != identity {
                     return Err("bundle changed during import; copies rejected".into());
@@ -619,6 +633,7 @@ impl Bundle {
             min_app_version: self.min_app_version,
             name: self.name,
             symbols: self.symbols.as_ref().map(|_| target.join(SYMBOLS_FILE)),
+            stealth_support: self.stealth_support,
         };
         installed.verify_installed()?;
         atomic_json(&target.join("bundle.json"), &installed)?;
@@ -1745,6 +1760,7 @@ mod tests {
             min_app_version: None,
             name: None,
             symbols: None,
+            stealth_support: Vec::new(),
         }
         .install(&options)
         .unwrap();
@@ -2064,6 +2080,7 @@ mod tests {
             min_app_version: None,
             name: None,
             symbols: None,
+            stealth_support: Vec::new(),
         };
         bundle.base_identity = Some(bundle.identity().unwrap());
         let vm = source.join("vms/old-id");
@@ -2295,6 +2312,7 @@ mod tests {
             min_app_version: None,
             name: None,
             symbols: None,
+            stealth_support: Vec::new(),
         };
         let options = BackendOptions {
             data_dir: directory.join("data"),
