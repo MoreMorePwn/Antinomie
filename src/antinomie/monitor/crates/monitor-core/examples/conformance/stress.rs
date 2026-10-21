@@ -23,6 +23,9 @@ pub struct StressReport {
     pub throughput: serde_json::Value,
 }
 
+/// How a page says a call's async observations were only previewed.
+const ASYNC_PARTIAL: &str = "some calls list only the first 256 of their saved async observations";
+
 /// Issues a lost packet causes; anything else is a defect even under loss.
 fn loss_issue(issue: &str) -> bool {
     [
@@ -76,9 +79,12 @@ pub fn check(
             *target.entry(issue).or_insert(0u64) += 1;
         }
     })?;
+    // A call with more saved observations than a page previews says so; the
+    // raw scan accounts for every one of them.
     problems.extend(
         page_issues
             .into_iter()
+            .filter(|issue| !issue.starts_with(ASYNC_PARTIAL))
             .map(|issue| format!("trace page: {issue}")),
     );
     let stats = run.recorder_stats.unwrap_or_default();
