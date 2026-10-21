@@ -349,7 +349,8 @@ pub fn dynamic(context: &mut Context) -> Result<String, String> {
     // gdb opens the loader and libc by the paths the guest uses (/tmp, the
     // program's interpreter and run path) under its sysroot: one that holds
     // the uploaded copies there. The host's own root would hand gdb whatever
-    // the host has at /tmp/p2ld.so or /tmp/libc.so.6 instead.
+    // the host has at /tmp/p2ld.so or /tmp/libc.so.6 instead. The auxiliary
+    // vector (AT_BASE: where the loader is) is in the transcript of a failure.
     let sysroot = context.dir.join("sysroot");
     fs::create_dir_all(sysroot.join("tmp")).map_err(|e| e.to_string())?;
     for name in ["p2ld.so", "libc.so.6"] {
@@ -364,7 +365,7 @@ pub fn dynamic(context: &mut Context) -> Result<String, String> {
     let port = started.info.tcp_port;
     let text = gdb.run(
         &format!(
-            "set sysroot {}\nfile p2dyn\ntarget remote 127.0.0.1:{port}\ninfo registers rip\ninfo symbol $pc\ninfo sharedlibrary",
+            "set sysroot {}\nfile p2dyn\ntarget remote 127.0.0.1:{port}\ninfo registers rip\ninfo symbol $pc\ninfo sharedlibrary\ninfo auxv",
             sysroot.display()
         ),
         40,
