@@ -175,12 +175,27 @@ struct Shared {
     counts: Arc<totals::Counts>,
     answers: mpsc::SyncSender<Answer>,
     wake: Option<eframe::egui::Context>,
+    #[cfg(test)]
+    tree_gate: Option<TreeGate>,
+}
+
+/// Test seam: holds the process-tree lane inside a request until released.
+#[cfg(test)]
+pub(crate) struct TreeGate {
+    pub(crate) entered: Mutex<mpsc::Sender<()>>,
+    pub(crate) release: Mutex<mpsc::Receiver<()>>,
 }
 
 fn serve(requests: mpsc::Receiver<Request>, shared: &Shared) {
     while let Ok(request) = requests.recv() {
         if shared.cancelled.load(Ordering::Relaxed) {
             break;
+        }
+        #[cfg(test)]
+        if let (Some(gate), Request::ProcessTree { .. }) = (&shared.tree_gate, &request) {
+            let _ = gate.entered.lock().unwrap().send(());
+            // A dropped sender (a failed test) releases it too.
+            let _ = gate.release.lock().unwrap().recv();
         }
         let answer = answer(request, shared);
         if shared.cancelled.load(Ordering::Relaxed) || shared.answers.send(answer).is_err() {
@@ -455,6 +470,22 @@ pub(crate) struct ArchiveWorker {
 
 impl ArchiveWorker {
     pub(crate) fn new(wake: Option<eframe::egui::Context>) -> Result<Self, String> {
+        Self::build(
+            wake,
+            #[cfg(test)]
+            None,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_tree_gate(gate: TreeGate) -> Result<Self, String> {
+        Self::build(None, Some(gate))
+    }
+
+    fn build(
+        wake: Option<eframe::egui::Context>,
+        #[cfg(test)] tree_gate: Option<TreeGate>,
+    ) -> Result<Self, String> {
         let (answers, receiver) = mpsc::sync_channel(4);
         let shared = Arc::new(Shared {
             cancelled: Arc::new(AtomicBool::new(false)),
@@ -462,6 +493,8 @@ impl ArchiveWorker {
             counts: totals::Counts::new(),
             answers,
             wake,
+            #[cfg(test)]
+            tree_gate,
         });
         let mut lanes = Vec::new();
         let mut workers = Vec::new();
