@@ -43,7 +43,7 @@ pub(super) fn field_tree(
         }
         // Outside the argument rows an argument's data goes by its name.
         let argument = (!strip_arg)
-            .then(|| field_argument(owner.1, &field.key))
+            .then(|| field_argument(owner.1, field))
             .flatten()
             .filter(|_| field.key.starts_with("arg"));
         let mut node = &mut root;
@@ -177,20 +177,73 @@ pub(super) fn nothing_returned(invocation: &InvocationSummary, nr: u64, index: u
 pub(super) fn argument_data<'a>(
     fields: &[(u8, &'a FieldSummary)],
 ) -> Option<(u8, &'a FieldSummary)> {
+    // The argument's own object: its key past the first component ("arg1",
+    // "address", "signal") is not nested ("arg1.iov[0].data", "msghdr.name").
     let top_level = |field: &FieldSummary| {
-        let key = match field.key.strip_prefix("arg") {
-            Some(rest) if rest.as_bytes().first().is_some_and(u8::is_ascii_digit) => {
-                rest.get(2..).unwrap_or_default()
-            }
-            _ => field.key.as_str(),
-        };
-        !key.contains(['.', '['])
+        let rest = field
+            .key
+            .split_once('.')
+            .map_or(field.key.as_str(), |(_, rest)| rest);
+        !rest.contains(['.', '['])
     };
     [2, 1].into_iter().find_map(|phase| {
-        fields.iter().copied().find(|(owner, field)| {
-            *owner == phase && top_level(field) && !covered_preview(field).is_empty()
-        })
+        let captured: Vec<_> = fields
+            .iter()
+            .copied()
+            .filter(|(owner, field)| *owner == phase && !covered_preview(field).is_empty())
+            .collect();
+        captured
+            .iter()
+            .copied()
+            .find(|(_, field)| top_level(field))
+            // A lone object of the argument is its data whatever its key
+            // ("arg2.socklen.capacity").
+            .or_else(|| (captured.len() == 1).then(|| captured[0]))
     })
+}
+
+/// What an argument row and the Info column show for the data captured
+/// behind an argument: its own object's preview; for an exec vector the
+/// strings as a list (`["sh", "-c", "id"]`); otherwise, when the argument has
+/// several captured objects and none is its own, how many there are (they are
+/// listed under the argument in the decoded tree). The object id is the one
+/// shown, when a single object is.
+pub(crate) fn argument_preview(fields: &[(u8, &FieldSummary)]) -> Option<(Option<u32>, String)> {
+    if let Some((_, field)) = argument_data(fields) {
+        return Some((Some(field.object_id), preview(field)));
+    }
+    let mut strings: Vec<(usize, &FieldSummary)> = fields
+        .iter()
+        .filter_map(|(_, field)| {
+            let rest = field.key.split_once(".string[")?.1;
+            let index = rest.strip_suffix(']')?.parse().ok()?;
+            Some((index, *field))
+        })
+        .collect();
+    if !strings.is_empty() {
+        strings.sort_by_key(|(index, _)| *index);
+        const SHOWN: usize = 6;
+        let mut items: Vec<String> = strings
+            .iter()
+            .take(SHOWN)
+            .map(|(_, field)| {
+                if field.complete {
+                    values::quoted(covered_preview(field))
+                } else {
+                    "?".into()
+                }
+            })
+            .collect();
+        if strings.len() > SHOWN {
+            items.push(format!("… {} more", strings.len() - SHOWN));
+        }
+        return Some((None, format!("[{}]", items.join(", "))));
+    }
+    let captured = fields
+        .iter()
+        .filter(|(_, field)| !covered_preview(field).is_empty())
+        .count();
+    (captured > 1).then(|| (None, format!("{captured} captured objects")))
 }
 
 /// "832 bytes", or "4 of 8 bytes" when only part was captured.
@@ -398,7 +451,17 @@ pub(super) fn async_stage(event: &antinomie_monitor_core::EventSummary) -> Strin
     }
 }
 
-pub(crate) fn field_argument(nr: u64, key: &str) -> Option<usize> {
+/// The argument a captured field belongs to: the one its descriptor names,
+/// else the one its key names (summaries saved before 0.7.0, fields the app
+/// derives itself).
+pub(crate) fn field_argument(nr: u64, field: &FieldSummary) -> Option<usize> {
+    match field.arg {
+        Some(arg) => Some(usize::from(arg)),
+        None => key_argument(nr, &field.key),
+    }
+}
+
+pub(crate) fn key_argument(nr: u64, key: &str) -> Option<usize> {
     if let Some(rest) = key.strip_prefix("arg") {
         let index = rest.as_bytes().first().copied()?;
         if (b'0'..=b'5').contains(&index)
@@ -562,12 +625,12 @@ pub(crate) fn info_parts(invocation: &InvocationSummary) -> Vec<(String, Tone)> 
             let owned: Vec<_> = fields
                 .iter()
                 .copied()
-                .filter(|(_, field)| field_argument(nr, &field.key) == Some(index))
+                .filter(|(_, field)| field_argument(nr, field) == Some(index))
                 .collect();
-            match argument_data(&owned) {
-                Some((_, field)) => {
-                    shown_fields.push(field.object_id);
-                    parts.push((preview(field), Tone::Value(ValueKind::Text)));
+            match argument_preview(&owned) {
+                Some((id, text)) => {
+                    shown_fields.extend(id);
+                    parts.push((text, Tone::Value(ValueKind::Text)));
                 }
                 None => {
                     let shown = values::argument(nr, index, &args);

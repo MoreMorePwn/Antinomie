@@ -604,6 +604,7 @@ mod tests {
     }
     fn field(layout: &str, size: usize) -> FieldSummary {
         FieldSummary {
+            arg: None,
             object_id: 1,
             key: "arg2.data".into(),
             layout: format!("linux-6.12.94/x86_64/{layout}"),

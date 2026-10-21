@@ -2156,6 +2156,7 @@ mod tests {
         fs::rename(&source, &hidden).unwrap();
         migrated.verify_installed().unwrap();
         let field = crate::api::FieldSummary {
+            arg: None,
             object_id: 1,
             key: String::new(),
             layout: String::new(),

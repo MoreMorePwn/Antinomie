@@ -19,6 +19,8 @@ pub(crate) const MAX_RETAINED_FIELDS: usize = 4096;
 
 #[cfg(test)]
 mod field_tests;
+#[cfg(test)]
+mod status_tests;
 
 #[derive(Default)]
 struct Issues(Vec<String>);
@@ -256,6 +258,7 @@ impl Field {
     fn new(id: u32) -> Self {
         Self {
             summary: FieldSummary {
+                arg: None,
                 object_id: id,
                 key: format!("object {id}"),
                 layout: String::new(),
@@ -277,7 +280,9 @@ impl Field {
             total: None,
         }
     }
-    fn summary(&self) -> FieldSummary {
+    /// `pending` says the field belongs to an async lifecycle record that is
+    /// not its request's final one (see [`nothing_to_copy`]).
+    fn summary(&self, phase: u8, pending: bool) -> FieldSummary {
         let mut s = self.summary.clone();
         s.ranges = self.chunks.iter().map(|(o, (len, _))| (*o, *len)).collect();
         let mut offset = 0;
@@ -288,10 +293,14 @@ impl Field {
         });
         let end = self.end.as_deref();
         let attempted = end.and_then(|b| u64_at(b, 24).ok());
+        let copied = s.status == Some(0) && s.logical_len == Some(offset);
+        let empty = s
+            .status
+            .is_some_and(|status| nothing_to_copy(status, phase, pending, &s.key))
+            && offset == 0;
         s.complete = self.begin.is_some()
             && end.is_some()
-            && s.status == Some(0)
-            && s.logical_len == Some(offset)
+            && (copied || empty)
             && s.captured_len == offset
             && contiguous
             && attempted == Some(self.chunk_count)
@@ -315,9 +324,11 @@ impl PacketSet {
     fn len(&self) -> u64 {
         self.count
     }
+    #[cfg(test)]
     fn first(&self) -> Option<u64> {
         self.ranges.first_key_value().map(|(start, _)| *start)
     }
+    #[cfg(test)]
     fn last(&self) -> Option<u64> {
         self.ranges.last_key_value().map(|(_, end)| *end)
     }
@@ -358,6 +369,8 @@ impl PacketSet {
 
 struct Event {
     summary: EventSummary,
+    /// Every header flag the event's packets carried.
+    header_flags: u32,
     capture_cookie: u64,
     begin: Option<Vec<u8>>,
     end: Option<Vec<u8>>,
@@ -389,6 +402,7 @@ impl Event {
                 issues: Vec::new(),
                 fields: Vec::new(),
             },
+            header_flags: 0,
             capture_cookie: h.capture_cookie,
             begin: None,
             end: None,
@@ -401,7 +415,26 @@ impl Event {
     fn summary(&self) -> EventSummary {
         let mut s = self.summary.clone();
         s.issues = self.issues.clone();
-        s.fields = self.fields.values().map(Field::summary).collect();
+        let phase = s.phase;
+        // An async lifecycle record before its request's final one, or the
+        // final record of an AIO read, whose output is read when the program
+        // reaps it (contract 14.2, a later "reaped" record).
+        let scalar = |key: &str| {
+            self.fields
+                .values()
+                .find(|field| field.summary.key == key)
+                .and_then(|field| field.summary.preview.get(..8))
+                .map(|bytes| u64::from_le_bytes(bytes.try_into().unwrap_or([0; 8])))
+        };
+        let aio_read = self.fields.values().any(|field| {
+            field.summary.key == "async.system" && field.summary.preview.starts_with(b"AIO")
+        }) && matches!(scalar("async.opcode"), Some(0 | 7));
+        let pending = phase == 3 && (scalar("async.final") == Some(0) || aio_read);
+        s.fields = self
+            .fields
+            .values()
+            .map(|field| field.summary(phase, pending))
+            .collect();
         if self.begin.is_none() {
             s.issues.push("missing EVENT_BEGIN".into());
         }
@@ -421,7 +454,7 @@ impl Event {
                     field.summary.object_id
                 ));
             }
-            if !field.summary().complete {
+            if !field.summary(phase, pending).complete {
                 s.issues.push(format!(
                     "object {} capture incomplete, status {}",
                     field.summary.object_id,
@@ -430,22 +463,40 @@ impl Event {
             }
             s.issues.extend(field.issues.iter().cloned());
         }
+        // A field whose status says why it is not complete explains the
+        // recorder's incomplete marks; only what no field shows is reported.
+        let fields_explain = self
+            .fields
+            .values()
+            .any(|field| field.summary.status.is_some_and(|status| status != 0));
+        if self.header_flags & 2 != 0 {
+            s.issues
+                .push("recorder lost this call's Entry record".into());
+        }
+        if self.header_flags & 4 != 0 || (self.header_flags & 1 != 0 && !fields_explain) {
+            s.issues
+                .push("recorder header reports incomplete capture".into());
+        }
         if let Some(end) = &self.end {
             let objects = u64_at(end, 0).unwrap_or(u64::MAX);
             let attempted = u64_at(end, 8).unwrap_or(u64::MAX);
             if objects != self.fields.len() as u64 {
                 s.issues.push("missing or inconsistent object count".into());
             }
+            // Packets of one task are numbered across all of its events,
+            // async records included, so an event's own numbers need not be
+            // consecutive; its END's count is what shows a lost packet.
             if attempted != self.packets.len() {
                 s.issues
                     .push("packet loss or inconsistent event packet count".into());
             }
-            if let (Some(first), Some(last)) = (self.packets.first(), self.packets.last())
-                && last.saturating_sub(first).saturating_add(1) != self.packets.len()
-            {
-                s.issues.push("packet sequence gap".into());
-            }
-            if u64_at(end, 16).unwrap_or(1) != 0 || u64_at(end, 24).unwrap_or(1) != 0 {
+            let failed = u64_at(end, 16).unwrap_or(1);
+            let state = u64_at(end, 24).unwrap_or(1);
+            if failed != 0 || state & 2 != 0 {
+                s.issues.push(format!(
+                    "recorder failed to send {failed} packets of this event"
+                ));
+            } else if state & !2 != 0 && !fields_explain {
                 s.issues
                     .push("recorder reports event loss or capture failure".into());
             }
@@ -695,10 +746,7 @@ impl Assembler {
             e.issues
                 .push(format!("unknown header flags 0x{:x}", h.flags));
         }
-        if h.flags & 7 != 0 {
-            e.issues
-                .push("recorder header reports incomplete capture".into());
-        }
+        e.header_flags |= h.flags;
         if h.schema_id != 1 || h.abi != 1 {
             e.issues.push("unknown schema or ABI; raw only".into());
         }
@@ -752,6 +800,8 @@ impl Assembler {
                             }
                         } else {
                             let n = usize::from(u16_at(b, 32)?);
+                            // The descriptor's argument index; 255 means none.
+                            f.summary.arg = (b[0] < 6).then_some(b[0]);
                             f.summary.key = String::from_utf8_lossy(&b[40..40 + n]).into_owned();
                             f.summary.layout = String::from_utf8_lossy(&b[40 + n..]).into_owned();
                             f.begin = Some(b.to_vec());
@@ -913,6 +963,26 @@ pub fn syscall_name(nr: u64) -> &'static str {
 }
 
 /// Field capture status names (contract revision 8; `capture_api.h` order).
+/// Whether a field `status` says there was nothing to copy, so the field is
+/// complete without bytes. The capture contract (native-schema-slices.md) has
+/// NULL_POINTER (a NULL argument), ADDRESS_ONLY (memory of another address
+/// space, recorded by address) and NOT_WRITTEN (an output the call did not
+/// write); the guest recorder does not count them as incomplete either.
+/// ASYNC_UNOBSERVED in a call's own Entry or Exit marks memory the kernel
+/// reads or writes after the call (a thread ID cleared at exit, a robust list
+/// walked at exit, rseq updates): there was nothing to copy yet. On an async
+/// lifecycle record that is not its request's final one (or that is the final
+/// record of an AIO read, reaped later), the `async.payload` marker says the
+/// payload is not in that record; the request's later records carry it, and
+/// a final record that still has the marker is a gap.
+pub fn nothing_to_copy(status: u32, phase: u8, pending: bool, key: &str) -> bool {
+    match status {
+        5 | 6 | 11 => true,
+        7 => phase != 3 || (pending && key == "async.payload"),
+        _ => false,
+    }
+}
+
 pub fn status_name(status: u32) -> &'static str {
     const NAMES: [&str; 13] = [
         "COMPLETE",

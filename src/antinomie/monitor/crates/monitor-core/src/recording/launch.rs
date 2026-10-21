@@ -102,6 +102,7 @@ mod tests {
 
     fn field(key: &str, value: &[u8], complete: bool) -> FieldSummary {
         FieldSummary {
+            arg: None,
             object_id: 1,
             key: key.into(),
             layout: String::new(),

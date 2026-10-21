@@ -436,6 +436,7 @@ mod tests {
             fields: fields
                 .iter()
                 .map(|(key, preview)| FieldSummary {
+                    arg: None,
                     object_id: 1,
                     key: (*key).into(),
                     layout: String::new(),

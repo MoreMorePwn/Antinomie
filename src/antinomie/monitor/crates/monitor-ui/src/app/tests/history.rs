@@ -54,6 +54,7 @@ fn async_only_row_keeps_missing_phases_and_renders_observation_loss() {
     observed.args = None;
     observed.result = Some(-61);
     observed.fields = vec![antinomie_monitor_core::FieldSummary {
+        arg: None,
         object_id: 1,
         key: "async.stage".into(),
         layout: "u64".into(),
@@ -135,6 +136,7 @@ fn a_call_the_task_ended_in_shows_how_it_ended_and_empty_reads_say_why() {
     ended.phase = 3;
     ended.event_seq = 9;
     ended.fields = vec![antinomie_monitor_core::FieldSummary {
+        arg: None,
         object_id: 1,
         key: "lifecycle.task_exit".into(),
         layout: String::new(),
@@ -195,6 +197,7 @@ fn details_values_copy_in_many_forms_and_captured_fields_open_data_windows() {
     let mut exit = event(2, 0);
     exit.result = Some(-2);
     exit.fields = vec![antinomie_monitor_core::FieldSummary {
+        arg: None,
         object_id: 5,
         key: "buf".into(),
         layout: String::new(),

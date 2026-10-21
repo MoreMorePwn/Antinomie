@@ -1209,6 +1209,7 @@ pub(super) fn call(pid: u32, nr: u64, name: &str, result: i64) -> InvocationSumm
 pub(super) fn captured(key: &str, layout: &str, data: &[u8]) -> FieldSummary {
     let len = data.len() as u64;
     FieldSummary {
+        arg: None,
         object_id: 1,
         key: key.into(),
         layout: layout.into(),

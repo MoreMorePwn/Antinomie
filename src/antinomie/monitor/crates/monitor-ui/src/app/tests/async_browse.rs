@@ -10,6 +10,7 @@ fn observation(call: u64, event_seq: u64) -> antinomie_monitor_core::EventSummar
     observed.event_seq = event_seq;
     observed.args = None;
     observed.fields = vec![FieldSummary {
+        arg: None,
         object_id: 1,
         key: "async.stage".into(),
         layout: "u64".into(),
