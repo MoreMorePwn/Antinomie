@@ -342,8 +342,12 @@ pub(super) fn window(
                             }
                             ui.colored_label(
                                 theme::muted(),
-                                "The guest kernel's Antinomie options and build string, the fw_cfg \
-                                 device and timing are outside launch options.",
+                                "Bases built by Antinomie 0.7.0 keep the guest kernel's options, \
+                                 build string, symbols and worker names and QEMU's ACPI devices \
+                                 out of the guest, and start programs as a shell's job (parent \
+                                 init). Older bases still show them. Timing, the virtual disk \
+                                 and display, the chipset and QEMU's firmware tables are beyond \
+                                 what a launch option or the guest kernel can change.",
                             );
                         });
                     });

@@ -234,14 +234,14 @@ impl Worker {
                 // A desktop run executes `/bin/sh`, so its program is acquired
                 // by path after the launch instead of by the kernel's exec.
                 let wire = crate::guest_desktop::wire_request(&request)?;
-                // Whatever hashing the guest offers is asked for; an older
-                // guest offers none and sees no new flag.
-                let tracer_hashing = self.snapshot.guest_tracer.map_or(0, |caps| {
-                    caps.exec_flags & (control::EXEC_HASH_ROOT | control::EXEC_HASH_WRITES)
-                });
+                // Whatever hashing and launch shape the guest offers is asked
+                // for; an older guest offers none and sees no new flag.
+                let offered = self.snapshot.guest_tracer.map_or(0, |caps| caps.exec_flags);
+                let tracer_hashing =
+                    offered & (control::EXEC_HASH_ROOT | control::EXEC_HASH_WRITES);
                 let args = control::with_tracer_flags(
                     control::execute_analysis(&wire, supported)?,
-                    tracer_hashing,
+                    offered,
                 );
                 let selected = request.analysis.enabled;
                 let inline_acquisition = selected && supported && !desktop;

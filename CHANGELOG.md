@@ -6,6 +6,63 @@ it runs.
 
 ## 0.7.0 — Unreleased
 
+- **The guest gives less away: measured, then fixed where the guest kernel
+  and the base can.** Guest series 0050, contract revision 17 unchanged. A new
+  check, `examples/stealth-check.rs` with the static probe
+  `tests/monitor/stealth-probe.c`, launches the probe the way a sample is
+  launched (as root and as uid 1000) on a Realistic desktop VM and prints a
+  table of 72 checks: systemd-detect-virt and virt-what (CPUID, DMI, the SMBIOS
+  VM bit, block and PCI vendors, fw_cfg), the Linux side of pafish (user and
+  host names, uptime, CPUs, memory, disk size, rdtsc around cpuid, sleep
+  skew), MAC prefix and NAT addresses, `/proc/cmdline`, `/proc/version`,
+  `uname`, `/proc/kallsyms`, `/proc/modules`, the kernel log, tracing, ACPI
+  devices, `/proc/*/comm` and kworker names, and the launched program's
+  parent, session and process group. Before → after, on a BusyBox base:
+
+  | Giveaway | Before | After |
+  | --- | --- | --- |
+  | `/proc/cmdline` and the kernel log | `antinomie_ring_kib=1024 antinomie_boot_gpa=0x40000000` | `console=tty0 console=ttyS0 panic=-1` |
+  | `/proc/version`, `uname -v` | `(<user>@<machine>) … #1 SMP PREEMPT_DYNAMIC <build time and zone>`: whoever built it, where and when | `(debian-kernel@lists.debian.org) … #1 SMP PREEMPT_DYNAMIC Debian 6.12.94-1 (2026-06-20)` |
+  | `/proc/kallsyms` | 365 `ant_*` symbols and about 490 more of the recorder's | none of the recorder's |
+  | kworker names | `kworker/u8:0-antinomie-control`, `-antinomie_resources` | `-events_unbound` |
+  | Launched program | PPid 2 (kthreadd), its own session id | PPid 1 (init), its own process group in a session whose leader is gone |
+  | ACPI devices, `/proc/ioports` | `QEMU0002:00` | none |
+  | SMBIOS BIOS "virtual machine" bit | set | clear |
+  | Kernel log for users | readable (`dmesg_restrict` 0) | root only, as on Debian |
+  | Hostname, users, root label | `localhost`, `analyst`, `antinomie` | `debian`, `user`, none |
+
+  The guest kernel now takes its `antinomie_*` options off the command line
+  before it first prints it (0046); leaves the recorder's functions and data
+  out of `/proc/kallsyms` and `wchan`, by the address ranges of its own
+  sections plus its `ant_*` names, while stack traces, kprobes and every
+  in-kernel lookup keep them (0047); runs the resource refresh on the system
+  unbound queue and names its other queues `events_unbound` (0048, audit F-13);
+  does not enumerate QEMU's own ACPI devices, so no `QEMU0002` in sysfs or
+  `/proc/ioports`, and nothing for a `qemu_fw_cfg` module to load for (0049); and, for a host that asks
+  with the new optional EXEC flag `SHELL_JOB` (offered in TRACER_CAPS), starts a
+  program as a job of a terminal shell that has closed: init adopts and reaps
+  it, it leads its own process group, still the terminal's foreground group,
+  in a session whose id is a PID no process has (0050, audit F-14). This app
+  asks for it whenever a base offers it; an older base offers nothing and an
+  older app asks for nothing (checked both ways). The kernel build writes
+  Debian's build string for the pinned package (maintainer, version and
+  changelog date, also a reproducible build) instead of the builder's user,
+  machine and time, keeps the release exactly 6.12.94 from a git checkout, and
+  restricts the kernel log to root in the BusyBox kernel too. The stealth
+  profile writes the SMBIOS BIOS table itself, with real BIOS characteristics
+  and without QEMU's "virtual machine" bit, which systemd-detect-virt reads. New
+  bases default to the hostname `debian` (both profiles), the BusyBox base names
+  uid 1000 `user`, the Debian account form proposes `user`, and neither image
+  labels its root filesystem `antinomie`. Observation is unchanged: the probe's
+  run recorded about 31,000 calls, and p2, p3, audit stop and core, io_uring,
+  tracer record, legacy and Triage, and the live debugger console pass on the new
+  base (p2's dynamic-loader case fails within the full p2 sequence with the
+  previous app and base too, and passes on its own on both). Still visible, and listed in the Stealth window: VM-exit timing (cpuid
+  takes about 16,000 cycles), the virtio disk and the emulated display, the q35
+  layout with Red Hat PCI subsystem IDs, QEMU's ACPI tables and fw_cfg port to
+  root, a fresh boot's uptime and QEMU's NAT addresses; see
+  docs/implementation.md "Guest stealth" for every check and limit. Bases
+  built before this change keep their old traces until rebuilt.
 - **Written files and the launched program are hashed; user names; a
   reconnected run is read whole; the gdb console checked on a live VM.** Guest
   series 0045, contract revision 17 unchanged. A base that offers it (new

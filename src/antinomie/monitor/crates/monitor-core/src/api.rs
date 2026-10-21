@@ -1106,6 +1106,11 @@ impl GuestTracerCaps {
     pub fn hashes_writes(&self) -> bool {
         self.exec_flags & crate::control::EXEC_HASH_WRITES != 0
     }
+    /// A program starts as a job of a closed terminal shell (parent init),
+    /// not as a child of kthreadd, when asked.
+    pub fn launches_as_job(&self) -> bool {
+        self.exec_flags & crate::control::EXEC_SHELL_JOB != 0
+    }
 }
 
 /// One base advertised by the remote catalog, flattened for the UI.
