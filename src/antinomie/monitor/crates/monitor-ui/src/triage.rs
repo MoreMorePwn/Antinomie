@@ -766,24 +766,7 @@ impl TriageView {
         {
             self.filter_drafts[index] = draft;
         }
-        let table_id = [
-            "triage-findings",
-            "triage-opened",
-            "triage-changed",
-            "triage-http",
-            "triage-dns",
-            "triage-read",
-            "triage-ips",
-            "triage-hosts",
-            "triage-created",
-            "triage-written",
-            "triage-deleted",
-            "triage-renamed",
-            "triage-executed",
-            "triage-attributes",
-            "triage-probed",
-            "triage-other",
-        ][index];
+        let table_id = TABLE_IDS[index];
         if let Some(sort) = sorting::take_request(ui.ctx(), table_id) {
             // The sort runs on the full rows; a compact table draws a subset.
             self.scan_request.sorts[index] = sort.map(|mut sort| {
@@ -1084,6 +1067,26 @@ const SLOTS: usize = 17;
 /// Operation tabs with their own slot after the original eight.
 const FILE_TABS: usize = 8;
 const SESSION_SLOT: usize = 16;
+/// The Details/selection table id of each filter slot, in slot order.
+const TABLE_IDS: [&str; SLOTS] = [
+    "triage-findings",
+    "triage-opened",
+    "triage-changed",
+    "triage-http",
+    "triage-dns",
+    "triage-read",
+    "triage-ips",
+    "triage-hosts",
+    "triage-created",
+    "triage-written",
+    "triage-deleted",
+    "triage-renamed",
+    "triage-executed",
+    "triage-attributes",
+    "triage-probed",
+    "triage-other",
+    "triage-sessions",
+];
 
 struct FindingJournal {
     temp: std::path::PathBuf,
