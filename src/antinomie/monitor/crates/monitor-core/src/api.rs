@@ -1935,6 +1935,43 @@ pub struct FieldSummary {
     pub preview: Vec<u8>,
     pub raw_path: Option<PathBuf>,
     pub ranges: Vec<(u64, u64)>,
+    /// Set when the bytes were not read at the call's Entry but later
+    /// (contract section 22): an input the Entry found not resident. `None`
+    /// for every other field and in recordings from guests before series 0053.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recapture: Option<Recapture>,
+}
+
+/// How an input the call's Entry could not read was captured later.
+///
+/// | Variant | Bytes |
+/// | --- | --- |
+/// | `AtExit` | The caller's memory read again when the call returned. Another thread could have changed it while the call ran, so it may differ from what the call was given |
+/// | `KernelCopy` | The kernel's own copy, after an exec replaced the caller's memory: the path the exec opened, or argument and environment strings from the new program's stack |
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Recapture {
+    AtExit,
+    KernelCopy,
+}
+impl Recapture {
+    /// FIELD_BEGIN flags word bits (offset 36): RECAPTURED, KERNEL_COPY.
+    pub const FLAG: u32 = 8;
+    pub const KERNEL_COPY_FLAG: u32 = 16;
+    /// The mark a FIELD_BEGIN flags word carries, if any.
+    pub fn from_flags(flags: u32) -> Option<Self> {
+        match (flags & Self::FLAG != 0, flags & Self::KERNEL_COPY_FLAG != 0) {
+            (true, true) => Some(Self::KernelCopy),
+            (true, false) => Some(Self::AtExit),
+            _ => None,
+        }
+    }
+    /// A short tag for the trace and reports.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::AtExit => "at exit",
+            Self::KernelCopy => "kernel copy",
+        }
+    }
 }
 #[derive(Clone, Debug)]
 // Snapshots use a single coalesced slot, so this variant does not multiply queued payloads.
@@ -2063,6 +2100,9 @@ pub fn pair_events(events: &[EventSummary]) -> Vec<InvocationSummary> {
         if let Some(&index) = indexes.get(&(event.stream_id, event.task_cookie, event.call_id)) {
             rows[index].task_exit = Some(event.clone());
         }
+    }
+    for row in &mut rows {
+        crate::recapture::promote(row);
     }
     rows
 }
@@ -2247,6 +2287,7 @@ mod tests {
                 preview: raw.to_le_bytes().to_vec(),
                 raw_path: None,
                 ranges: vec![(0, 8)],
+                recapture: None,
             }];
             event
         };
@@ -2424,6 +2465,7 @@ mod tests {
             preview: vec![0; 8],
             raw_path: None,
             ranges: vec![(0, 8)],
+            recapture: None,
         });
         let mut events = vec![entry];
         for event_seq in 0..260 {

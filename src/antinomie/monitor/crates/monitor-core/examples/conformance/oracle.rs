@@ -40,6 +40,14 @@ fn minus_one() -> i32 {
     -1
 }
 
+/// A field the case expects captured after the Entry (contract section 22):
+/// `mark` is "at exit" or "kernel copy".
+#[derive(Clone, Debug, Deserialize)]
+pub struct RecaptureItem {
+    pub key: String,
+    pub mark: String,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct Allow {
     pub status: String,
@@ -102,6 +110,8 @@ pub struct Expect {
     pub data: Vec<DataItem>,
     #[serde(default)]
     pub status: Vec<StatusItem>,
+    #[serde(default)]
+    pub recapture: Vec<RecaptureItem>,
     #[serde(default, rename = "async")]
     pub requests: Vec<AsyncItem>,
     pub file: Option<FileItem>,

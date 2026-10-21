@@ -371,6 +371,7 @@ fn via_field(system: System) -> FieldSummary {
         preview: label.to_vec(),
         raw_path: None,
         ranges: vec![(0, label.len() as u64)],
+        recapture: None,
     }
 }
 

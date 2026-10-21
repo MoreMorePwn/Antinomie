@@ -66,6 +66,7 @@ fn async_only_row_keeps_missing_phases_and_renders_observation_loss() {
         preview: 6u64.to_le_bytes().to_vec(),
         raw_path: None,
         ranges: vec![(0, 8)],
+        recapture: None,
     }];
     let mut row = InvocationSummary {
         stream_id: observed.stream_id,
@@ -149,6 +150,7 @@ fn a_call_the_task_ended_in_shows_how_it_ended_and_empty_reads_say_why() {
         preview: 0x100u64.to_le_bytes().to_vec(),
         raw_path: None,
         ranges: vec![(0, 8)],
+        recapture: None,
     }];
     let mut row = InvocationSummary {
         stream_id: 1,
@@ -209,6 +211,7 @@ fn details_values_copy_in_many_forms_and_captured_fields_open_data_windows() {
         preview: b"abcd".to_vec(),
         raw_path: None,
         ranges: vec![(0, 4)],
+        recapture: None,
     }];
     let row = InvocationSummary {
         stream_id: 1,

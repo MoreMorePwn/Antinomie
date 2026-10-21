@@ -22,6 +22,7 @@ fn observation(call: u64, event_seq: u64) -> antinomie_monitor_core::EventSummar
         preview: 4u64.to_le_bytes().to_vec(),
         raw_path: None,
         ranges: vec![(0, 8)],
+        recapture: None,
     }];
     observed
 }

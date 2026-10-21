@@ -19,6 +19,9 @@ pub(super) struct Row<'a> {
     pub(super) value: Option<(&'a str, Color32)>,
     /// After the value: a decoded form, a preview or a remark.
     pub(super) note: Option<(&'a str, Color32)>,
+    /// Last, a small pill: where data that is not the Entry's own came from
+    /// ("at exit", "kernel copy"); the row's hover text explains it.
+    pub(super) tag: Option<&'a str>,
     pub(super) selected: bool,
 }
 
@@ -40,10 +43,20 @@ pub(super) fn tree_row(ui: &mut egui::Ui, row: Row<'_>) -> (egui::Response, bool
     let note = row
         .note
         .map(|(text, color)| painter.layout_no_wrap(text.to_owned(), body.clone(), color));
+    let tag_font = egui::FontId::proportional(body.size * 0.8);
+    let tag_tone = crate::widgets::Tone::Info;
+    let tag = row
+        .tag
+        .map(|text| painter.layout_no_wrap(text.to_owned(), tag_font, tag_tone.fg()));
     let gap = body.size * 0.8;
     let value_x = (name_x + name.size().x + gap).max(name_x + body.size * 6.5);
     let note_x = value_x + value.as_ref().map_or(0.0, |value| value.size().x + gap);
-    let end = note_x + note.as_ref().map_or(0.0, |note| note.size().x) + 4.0;
+    let tag_x = note_x + note.as_ref().map_or(0.0, |note| note.size().x + gap);
+    let pad = body.size * 0.4;
+    let end = tag.as_ref().map_or(
+        note_x + note.as_ref().map_or(0.0, |note| note.size().x),
+        |tag| tag_x + tag.size().x + 2.0 * pad,
+    ) + 4.0;
     let (rect, response) = ui.allocate_exact_size(
         egui::vec2(ui.available_width().max(end), height),
         egui::Sense::click(),
@@ -102,6 +115,12 @@ pub(super) fn tree_row(ui: &mut egui::Ui, row: Row<'_>) -> (egui::Response, bool
         if let Some(note) = note {
             painter.galley(place(note_x, &note), note.clone(), theme::muted());
         }
+        if let Some(tag) = tag {
+            let at = place(tag_x + pad, &tag);
+            let pill = Rect::from_min_size(at, tag.size()).expand2(egui::vec2(pad, 1.0));
+            painter.rect_filled(pill, pill.height() / 2.0, tag_tone.bg());
+            painter.galley(at, tag.clone(), tag_tone.fg());
+        }
     }
     (response, open)
 }
@@ -123,6 +142,7 @@ pub(super) fn section_row(
             name_color: theme::heading(),
             value: None,
             note: None,
+            tag: None,
             selected: false,
         },
     );
@@ -153,6 +173,7 @@ pub(super) fn note_row(ui: &mut egui::Ui, branch: &Prefix, text: &str, color: Co
             name_color: color,
             value: None,
             note: None,
+            tag: None,
             selected: false,
         },
     );

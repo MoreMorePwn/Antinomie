@@ -65,8 +65,11 @@ fn field_u64(event: &EventSummary, key: &str) -> Option<u64> {
 }
 
 fn field_text(event: &EventSummary, key: &str) -> Option<String> {
-    let field = event.fields.iter().find(|field| field.key == key)?;
-    let bytes = field.preview.split(|byte| *byte == 0).next()?;
+    preview_text(&event.fields.iter().find(|field| field.key == key)?.preview)
+}
+
+fn preview_text(preview: &[u8]) -> Option<String> {
+    let bytes = preview.split(|byte| *byte == 0).next()?;
     (!bytes.is_empty()).then(|| String::from_utf8_lossy(bytes).into_owned())
 }
 
@@ -286,6 +289,33 @@ impl ProcessTracker {
             }
             return;
         }
+        // An exec whose Entry could not read the path publishes it at its
+        // Exit (contract 22): the exec's own copy, after the commit record.
+        if event.phase == 2 {
+            let key = match event.syscall_nr {
+                59 => "arg0.path",
+                322 => "arg1.path",
+                _ => return,
+            };
+            let recaptured = event
+                .fields
+                .iter()
+                .find(|field| field.key == key && field.recapture.is_some() && field.complete);
+            if event.result == Some(0)
+                && let Some(path) = recaptured.and_then(|field| preview_text(&field.preview))
+                && self
+                    .lifetimes
+                    .get(&event.pid)
+                    .is_none_or(|life| event.timestamp_ns >= life.exec_ns)
+            {
+                self.lifetimes.entry(event.pid).or_default().exec_ns = event.timestamp_ns;
+                let process = self.process(event.pid);
+                process.name = file_name(&path);
+                process.exe = Some(path);
+                self.changed = true;
+            }
+            return;
+        }
         if event.phase != 3 || !event.complete {
             return;
         }
@@ -448,6 +478,7 @@ mod tests {
                     preview: preview.clone(),
                     raw_path: None,
                     ranges: Vec::new(),
+                    recapture: None,
                 })
                 .collect(),
         }
@@ -510,6 +541,37 @@ mod tests {
         let parent = list.iter().find(|p| p.pid == 100).unwrap();
         assert!(parent.at_start);
         assert_eq!(parent.name, "bash");
+    }
+
+    #[test]
+    fn an_exec_path_recaptured_at_exit_names_the_process() {
+        let mut tracker = ProcessTracker::default();
+        tracker.packet(&header(200, 1, 1));
+        // The Entry could not read the path (NOT_RESIDENT): no bytes.
+        tracker.event(&event(200, 1, 59, &[("arg0.path", Vec::new())]));
+        tracker.event(&event(
+            200,
+            3,
+            0,
+            &[("lifecycle.exec_commit", 200u64.to_le_bytes().to_vec())],
+        ));
+        let mut failed = event(200, 2, 59, &[("arg0.path", b"/tmp/.y\0".to_vec())]);
+        failed.fields[0].recapture = Some(crate::api::Recapture::AtExit);
+        failed.result = Some(-2);
+        tracker.event(&failed);
+        assert!(tracker.list()[0].exe.is_none());
+        let mut exit = event(200, 2, 59, &[("arg0.path", b"/tmp/.x\0".to_vec())]);
+        exit.result = Some(0);
+        tracker.event(&exit);
+        assert!(
+            tracker.list()[0].exe.is_none(),
+            "an unmarked Exit field is not a path"
+        );
+        exit.fields[0].recapture = Some(crate::api::Recapture::KernelCopy);
+        tracker.event(&exit);
+        let process = &tracker.list()[0];
+        assert_eq!(process.name, ".x");
+        assert_eq!(process.exe.as_deref(), Some("/tmp/.x"));
     }
 
     #[test]

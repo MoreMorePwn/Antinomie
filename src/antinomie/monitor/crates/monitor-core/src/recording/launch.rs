@@ -114,6 +114,7 @@ mod tests {
             preview: value.to_vec(),
             raw_path: None,
             ranges: Vec::new(),
+            recapture: None,
         }
     }
 

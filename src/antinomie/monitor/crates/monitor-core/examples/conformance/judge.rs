@@ -505,6 +505,7 @@ impl<'a> Judge<'a> {
         for item in &expect.data {
             self.check_data(expect, &phases, item, result);
         }
+        check_recaptures(expect, call, result);
         for (phase, event) in phases {
             let Some(event) = event else { continue };
             let ids: Vec<u32> = accounted
@@ -756,6 +757,48 @@ pub fn transcript_problems(transcript: &Transcript) -> Vec<String> {
     problems
 }
 
+/// Inputs captured after the Entry (contract section 22) are exactly the ones
+/// the case declares, with the declared mark. A declared key ending in `*`
+/// covers every key it starts with (an exec vector read on at exit).
+fn check_recaptures(expect: &Expect, call: &InvocationSummary, result: &mut CaseResult) {
+    let covers = |pattern: &str, key: &str| match pattern.strip_suffix('*') {
+        Some(prefix) => key.starts_with(prefix),
+        None => pattern == key,
+    };
+    let fields = call
+        .entry
+        .iter()
+        .chain(&call.exit)
+        .flat_map(|event| &event.fields);
+    let marked: Vec<(&str, &str)> = fields
+        .filter_map(|field| Some((field.key.as_str(), field.recapture?.label())))
+        .collect();
+    for (key, mark) in &marked {
+        if !expect
+            .recapture
+            .iter()
+            .any(|item| covers(&item.key, key) && item.mark == *mark)
+        {
+            result.data_ok = false;
+            result.problems.push(format!(
+                "field {key} captured {mark}, which the case does not declare"
+            ));
+        }
+    }
+    for item in &expect.recapture {
+        if !marked
+            .iter()
+            .any(|(key, mark)| covers(&item.key, key) && item.mark == *mark)
+        {
+            result.data_ok = false;
+            result.problems.push(format!(
+                "expected {} captured {}, not recorded",
+                item.key, item.mark
+            ));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -774,6 +817,7 @@ mod tests {
             preview: data.to_vec(),
             raw_path: None,
             ranges: vec![(0, data.len() as u64)],
+            recapture: None,
         }
     }
 

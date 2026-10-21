@@ -33,6 +33,7 @@ fn note(key: &str, layout: &str, bytes: Vec<u8>) -> EventSummary {
             preview: bytes,
             raw_path: None,
             ranges: Vec::new(),
+            recapture: None,
         }],
     }
 }

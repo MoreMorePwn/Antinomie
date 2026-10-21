@@ -616,6 +616,7 @@ mod tests {
             preview: vec![0; size],
             raw_path: None,
             ranges: vec![(0, size as u64)],
+            recapture: None,
         }
     }
     #[test]

@@ -44,6 +44,7 @@ pub mod parser;
 mod pre_ack;
 mod process_tree;
 mod quota;
+mod recapture;
 pub mod recording;
 mod recording_flush;
 mod resources;

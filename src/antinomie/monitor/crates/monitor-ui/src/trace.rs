@@ -5,7 +5,7 @@ use crate::{
     theme::{self, ValueKind},
     values,
 };
-use antinomie_monitor_core::{syscalls, FieldSummary, InvocationSummary, WaitStatus};
+use antinomie_monitor_core::{syscalls, FieldSummary, InvocationSummary, Recapture, WaitStatus};
 use eframe::egui::{self, Color32, RichText};
 
 pub(crate) mod async_browse;
@@ -368,6 +368,7 @@ impl Inspector {
                                 index,
                                 value,
                             });
+                        let mark = argument_recapture(&owned);
                         let (response, open) = tree_row(
                             ui,
                             Row {
@@ -378,16 +379,19 @@ impl Inspector {
                                 name_color: theme::text(),
                                 value: Some((&shown.text, theme::value(shown.kind))),
                                 note: note.as_ref().map(|(text, color)| (text.as_str(), *color)),
+                                tag: mark.map(Recapture::label),
                                 selected,
                             },
                         );
                         let c_type = syscalls::syscall(nr)
                             .and_then(|info| info.arguments.get(index))
                             .map_or("", |argument| argument.c_type.as_str());
-                        let response = response.on_hover_text(format!(
-                            "{c_type} {name}\n{}\nraw {value:#x}",
-                            shown.hover()
-                        ));
+                        let mut hover =
+                            format!("{c_type} {name}\n{}\nraw {value:#x}", shown.hover());
+                        if let Some(mark) = mark {
+                            hover = format!("{hover}\n\n{}", recapture_explanation(mark));
+                        }
+                        let response = response.on_hover_text(hover);
                         data_view::number_menu(
                             &response,
                             value,
@@ -431,6 +435,7 @@ impl Inspector {
                         name_color: theme::heading(),
                         value: Some((&shown.text, theme::value(shown.kind))),
                         note: description.as_deref().map(|text| (text, theme::muted())),
+                        tag: None,
                         selected: self.selection == Some(Selection::Return(result)),
                     },
                 );
@@ -471,6 +476,7 @@ impl Inspector {
                         name_color: theme::heading(),
                         value: Some((&ended, color)),
                         note: Some((note, theme::muted())),
+                        tag: None,
                         selected: false,
                     },
                 );
@@ -491,6 +497,7 @@ impl Inspector {
                         name_color: theme::heading(),
                         value: Some((missing, theme::warn())),
                         note: None,
+                        tag: None,
                         selected: false,
                     },
                 );
@@ -534,6 +541,7 @@ impl Inspector {
                                 ("missing", theme::warn())
                             }),
                             note: ended.then_some(("the call never returned", theme::muted())),
+                            tag: None,
                             selected: false,
                         },
                     );
@@ -563,6 +571,7 @@ impl Inspector {
                         name_color: theme::text(),
                         value: Some((&record, theme::value(ValueKind::Number))),
                         note: Some((&note, theme::muted())),
+                        tag: None,
                         selected: false,
                     },
                 );
@@ -603,6 +612,7 @@ impl Inspector {
                         name_color: theme::text(),
                         value: Some((&record, theme::value(ValueKind::Number))),
                         note: Some((&note, theme::muted())),
+                        tag: None,
                         selected: false,
                     },
                 );
@@ -651,6 +661,7 @@ impl Inspector {
                         name_color: theme::muted(),
                         value: None,
                         note: None,
+                        tag: None,
                         selected: false,
                     },
                 );
@@ -697,6 +708,7 @@ impl Inspector {
                 name_color: theme::text(),
                 value: Some((&record, theme::value(ValueKind::Number))),
                 note: Some((&note, theme::muted())),
+                tag: None,
                 selected: false,
             },
         );
@@ -745,6 +757,7 @@ impl Inspector {
                     name_color: theme::text(),
                     value: Some((&shown.text, theme::value(shown.kind))),
                     note: None,
+                    tag: None,
                     selected: false,
                 },
             );
@@ -766,6 +779,7 @@ impl Inspector {
                     name_color: theme::text(),
                     value: Some((&size, capture_color(field))),
                     note: Some((&shown, theme::value(ValueKind::Text))),
+                    tag: None,
                     selected: self.selection
                         == Some(Selection::AsyncCaptured {
                             event_seq: event.event_seq,
@@ -862,9 +876,11 @@ impl Inspector {
         let mut open_data = false;
         ui.horizontal_wrapped(|ui| {
             theme::section(ui, &field.key);
-            let phase = match &self.selection {
-                Some(Selection::Captured { phase: 1, .. }) => "at entry",
-                Some(Selection::Captured { .. }) => "at exit",
+            let phase = match (&self.selection, field.recapture) {
+                (_, Some(Recapture::AtExit)) => "input, read at exit",
+                (_, Some(Recapture::KernelCopy)) => "input, the kernel's copy",
+                (Some(Selection::Captured { phase: 1, .. }), None) => "at entry",
+                (Some(Selection::Captured { .. }), None) => "at exit",
                 _ => "async",
             };
             ui.colored_label(theme::muted(), phase);
@@ -907,6 +923,9 @@ impl Inspector {
             ));
         }
         ui.add(egui::Label::new(RichText::new(facts.join(" · ")).color(theme::muted())).wrap());
+        if let Some(mark) = field.recapture {
+            ui.add(egui::Label::new(recapture_explanation(mark)).wrap());
+        }
         if open_data {
             self.open_selected_data(invocation, field);
         }
@@ -1125,6 +1144,7 @@ pub(super) mod tests {
             preview: b"abc".to_vec(),
             raw_path: None,
             ranges: vec![(0, 3), (8, 2)],
+            recapture: None,
         }
     }
 
@@ -1192,6 +1212,7 @@ pub(super) mod tests {
             preview: b"/etc/passwd\0".to_vec(),
             raw_path: None,
             ranges: vec![(0, 12)],
+            recapture: None,
         });
         InvocationSummary {
             stream_id: 1,
@@ -1243,7 +1264,29 @@ pub(super) mod tests {
             preview: text.to_vec(),
             raw_path: None,
             ranges: vec![(0, text.len() as u64)],
+            recapture: None,
         }
+    }
+
+    #[test]
+    fn recaptured_fields_say_how_they_were_captured() {
+        let mut path = string_field("arg0.path", 1, b"/tmp/.x\0");
+        assert_eq!(capture_summary(&path), "Captured bytes (8 bytes)");
+        path.recapture = Some(Recapture::AtExit);
+        assert_eq!(capture_summary(&path), "Captured bytes (8 bytes, at exit)");
+        let plain = string_field("arg1.string[0]", 2, b"x\0");
+        let mut copy = string_field("arg1.string[1]", 3, b"y\0");
+        copy.recapture = Some(Recapture::KernelCopy);
+        assert_eq!(argument_recapture(&[(1, &plain)]), None);
+        assert_eq!(
+            argument_recapture(&[(1, &plain), (1, &path)]),
+            Some(Recapture::AtExit)
+        );
+        assert_eq!(
+            argument_recapture(&[(1, &path), (1, &copy)]),
+            Some(Recapture::KernelCopy)
+        );
+        assert!(recapture_explanation(Recapture::AtExit).contains("Another thread"));
     }
 
     #[test]
