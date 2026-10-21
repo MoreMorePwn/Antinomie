@@ -40,6 +40,9 @@ pub struct MatchTotals {
     pub stamp: ArchiveStamp,
 }
 
+/// Most bytes of previews one page carries.
+const PAGE_PREVIEW_BYTES: usize = 64 * 1024 * 1024;
+
 pub(super) fn indexed_boundary(connection: &rusqlite::Connection) -> Result<u64, RecordingError> {
     let boundary: i64 =
         connection.query_row("SELECT length FROM indexed LIMIT 1", [], |row| row.get(0))?;
@@ -74,7 +77,20 @@ impl Recording {
         limit: usize,
         pid: Option<u32>,
         cancel: &AtomicBool,
+        keep: impl FnMut(&InvocationSummary) -> bool,
+    ) -> Result<MatchingPage, RecordingError> {
+        self.matching_page_within(offset, limit, pid, cancel, keep, PAGE_PREVIEW_BYTES)
+    }
+
+    /// [`Self::matching_page_cancellable`] with `budget` bytes of previews.
+    pub(super) fn matching_page_within(
+        &self,
+        offset: u64,
+        limit: usize,
+        pid: Option<u32>,
+        cancel: &AtomicBool,
         mut keep: impl FnMut(&InvocationSummary) -> bool,
+        budget: usize,
     ) -> Result<MatchingPage, RecordingError> {
         if cancel.load(Ordering::Relaxed) {
             return Err(RecordingError::Limit("archive read cancelled"));
@@ -124,12 +140,20 @@ impl Recording {
                 .fold(0_usize, |size, event| {
                     size.saturating_add(event_preview_size(event))
                 });
-            page_preview_size = page_preview_size.saturating_add(size);
-            if page_preview_size > 64 * 1024 * 1024 {
-                return Err(RecordingError::Limit(
-                    "archive page previews exceed 64 MiB; raw records retained",
-                ));
+            // A page holds at most `budget` bytes of previews: a call that
+            // would pass it starts the next page (a call alone is bounded far
+            // below it), so io_uring submissions each carrying hundreds of
+            // observed payloads are shown a few at a time.
+            if page_preview_size.saturating_add(size) > budget {
+                if invocations.is_empty() {
+                    return Err(RecordingError::Limit(
+                        "archive page previews exceed 64 MiB; raw records retained",
+                    ));
+                }
+                next_offset = Some(first_offset);
+                break;
             }
+            page_preview_size += size;
             invocations.push(invocation);
         }
         let mut issues = reader.take_issues();
