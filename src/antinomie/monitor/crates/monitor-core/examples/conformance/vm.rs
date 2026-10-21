@@ -208,10 +208,9 @@ pub fn run_group(base: &Path, data_dir: &Path, plan: &VmPlan) -> Result<GroupRun
         data_dir: data_dir.to_path_buf(),
         headless: true,
         capture_quota_size: 8 * 1024 * 1024 * 1024,
-        // After a load group the guest flushes gigabytes of file churn to
-        // its disk before it powers off; the app's 10 s default would force
-        // it off and mark the capture forced.
-        shutdown_timeout: Duration::from_secs(120),
+        // The app's own shutdown timeout: a guest that is still writing back
+        // a load group's file churn when it powers off is waited for while
+        // it writes (Stop watches the VM's disk writes).
         ..Default::default()
     };
     let mut driver = Driver {

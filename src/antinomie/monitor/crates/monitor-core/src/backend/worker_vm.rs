@@ -292,6 +292,11 @@ impl Worker {
         };
         let mut forced = false;
         let mut exit_success = false;
+        let mut writeback = Writeback::new(
+            Instant::now(),
+            shutdown_timeout(self.options.shutdown_timeout, graphical),
+        );
+        let mut deadline = deadline;
         loop {
             match session.process.child.try_wait() {
                 Ok(Some(status)) => {
@@ -331,6 +336,10 @@ impl Worker {
             if self.last_publish.elapsed() >= Duration::from_millis(250) {
                 self.snapshot.events = session.history();
                 self.publish();
+            }
+            if writeback.due(Instant::now()) {
+                let written = session.process.disk_written();
+                deadline = writeback.observe(Instant::now(), written, deadline);
             }
             if Instant::now() >= deadline {
                 forced = true;
@@ -393,6 +402,56 @@ pub(super) fn qmp_outcome_unknown(error: &str) -> bool {
     !error.starts_with("QMP error:")
 }
 
+/// Longest a guest that keeps writing its disk while it powers off is waited
+/// for, in all, from the shutdown request.
+const WRITEBACK_LIMIT: Duration = Duration::from_secs(300);
+/// How often Stop asks QEMU how much the guest has written.
+const WRITEBACK_POLL: Duration = Duration::from_secs(1);
+
+/// A guest writes back what its programs left in its page cache before it
+/// powers off (`ksys_sync`): after heavy file churn that is hundreds of
+/// megabytes, and the host disk the VM's image is on may be busy, so it can
+/// take far longer than the shutdown timeout. While the VM's disks are still
+/// being written, the deadline moves to a whole timeout after the last write
+/// seen, up to [`WRITEBACK_LIMIT`]; a guest that stops writing and does not
+/// power off is forced off a timeout later, as before.
+struct Writeback {
+    started: Instant,
+    timeout: Duration,
+    next_poll: Instant,
+    written: Option<u64>,
+}
+
+impl Writeback {
+    fn new(started: Instant, timeout: Duration) -> Self {
+        Self {
+            started,
+            timeout,
+            next_poll: started,
+            written: None,
+        }
+    }
+
+    fn due(&self, now: Instant) -> bool {
+        now >= self.next_poll
+    }
+
+    /// The deadline after a sample of the bytes written (`None`: no answer).
+    fn observe(&mut self, now: Instant, written: Option<u64>, deadline: Instant) -> Instant {
+        self.next_poll = now + WRITEBACK_POLL;
+        let progressed =
+            matches!((self.written, written), (Some(before), Some(after)) if after > before);
+        if written.is_some() {
+            self.written = written;
+        }
+        if progressed {
+            deadline.max((now + self.timeout).min(self.started + WRITEBACK_LIMIT))
+        } else {
+            deadline
+        }
+    }
+}
+
 /// Least time a graphical guest gets to shut down: a loaded desktop session
 /// takes longer than a console guest to stop its services.
 const GRAPHICAL_SHUTDOWN: Duration = Duration::from_secs(30);
@@ -408,6 +467,30 @@ fn shutdown_timeout(configured: Duration, graphical: bool) -> Duration {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_guest_still_writing_its_disk_at_power_off_is_waited_for_up_to_a_limit() {
+        let start = std::time::Instant::now();
+        let second = super::Duration::from_secs(1);
+        let timeout = 10 * second;
+        let mut writeback = super::Writeback::new(start, timeout);
+        let deadline = start + timeout;
+        assert!(writeback.due(start));
+        // The first answer only sets where the count stands.
+        let deadline = writeback.observe(start, Some(100), deadline);
+        assert_eq!(deadline, start + timeout);
+        assert!(!writeback.due(start + second / 2));
+        // Writes go on: a whole timeout after the last one seen.
+        let deadline = writeback.observe(start + 9 * second, Some(200), deadline);
+        assert_eq!(deadline, start + 19 * second);
+        // No answer and no writes keep the deadline.
+        let deadline = writeback.observe(start + 10 * second, None, deadline);
+        let deadline = writeback.observe(start + 11 * second, Some(200), deadline);
+        assert_eq!(deadline, start + 19 * second);
+        // Never past the limit.
+        let deadline = writeback.observe(start + 299 * second, Some(300), deadline);
+        assert_eq!(deadline, start + super::WRITEBACK_LIMIT);
+    }
+
     #[test]
     fn graphical_guests_get_at_least_the_desktop_shutdown_time() {
         let console = Duration::from_secs(10);
