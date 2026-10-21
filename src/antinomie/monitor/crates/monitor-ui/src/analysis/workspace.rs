@@ -372,7 +372,7 @@ fn results(
     };
     let mut action = None;
     ui.horizontal_wrapped(|ui| {
-        crate::analysis::strong(ui, section_title(kind));
+        ui.strong(section_title(kind));
         let rows = section
             .listing
             .as_ref()
@@ -602,7 +602,7 @@ fn identity(ui: &mut egui::Ui, report: &AnalysisReport) -> Option<ReportAction> 
                 .striped(true)
                 .show(ui, |ui| {
                     for (label, value) in rows {
-                        crate::analysis::strong(ui, label.as_str());
+                        ui.strong(label.as_str());
                         ui.horizontal(|ui| {
                             if ui
                                 .small_button(egui_phosphor::regular::COPY)

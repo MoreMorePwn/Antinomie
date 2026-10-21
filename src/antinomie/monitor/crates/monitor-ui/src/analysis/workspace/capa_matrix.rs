@@ -246,7 +246,7 @@ pub(super) fn show(ui: &mut egui::Ui, section: &AnalysisSection, state: &mut Cap
                 .collect(),
         ),
     };
-    crate::analysis::strong(ui, heading);
+    ui.strong(heading);
     egui::ScrollArea::vertical()
         .id_salt("capa-capabilities")
         .auto_shrink([false, false])
