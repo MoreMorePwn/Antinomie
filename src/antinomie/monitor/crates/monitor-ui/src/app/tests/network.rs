@@ -15,7 +15,10 @@ fn render_until(
     found: impl Fn(&[String]) -> bool,
 ) -> Vec<String> {
     let mut shown = Vec::new();
-    for _ in 0..2400 {
+    // TShark competes with whatever else runs: wait on the clock, not on a
+    // count of frames (a frame itself takes longer when the machine is busy).
+    let deadline = Instant::now() + std::time::Duration::from_secs(180);
+    while Instant::now() < deadline {
         shown = texts(&render(app, ctx, size))
             .into_iter()
             .map(|(text, _)| text)
@@ -135,7 +138,8 @@ fn network_panel_lists_captures_toggles_capture_and_filters_by_clicked_values() 
     let stop = format!("{} Stop capture", egui_phosphor::regular::STOP);
     // The status line above the panels (TShark's parse of the new capture)
     // can shift the layout between drawing and clicking: try again.
-    for _ in 0..40 {
+    let deadline = Instant::now() + std::time::Duration::from_secs(60);
+    while Instant::now() < deadline {
         click_label(&mut app, &ctx, size, &stop);
         if matches!(app.submitted.last(), Some(Command::StopNetworkCapture)) {
             break;

@@ -104,6 +104,23 @@ fn scratch_folders(fixture: &Fixture) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// A sleep argument no other test process shares: every run of these tests
+/// matches `/proc` for it, so a parallel run (or a converter left by an
+/// earlier one) must not look like this test's converter.
+fn marker(tag: &str) -> String {
+    format!("{tag}{}", std::process::id())
+}
+
+/// Wait for the stand-in converter to be gone; a killed process takes a
+/// scheduling slot to exit, which a loaded machine delays.
+fn assert_gone(marker: &str, message: &str) {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while running(marker) {
+        assert!(Instant::now() < deadline, "{message}");
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
 fn running(marker: &str) -> bool {
     fs::read_dir("/proc")
         .unwrap()
@@ -322,10 +339,10 @@ esac
 fn cancel_kills_the_converter_and_leaves_no_scratch() {
     let fixture = Fixture::new();
     let mut spec = spec(&fixture, &fixture.path("top.qcow2"));
-    spec.qemu_img = slow_qemu_img(&fixture, "51515");
+    spec.qemu_img = slow_qemu_img(&fixture, &marker("51515"));
     let mut job = Job::view(spec).unwrap();
     // The progress line reaches the stage.
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         if let DiskJobStage::Converting { percent } = job.progress().stage
             && (percent - 12.34).abs() < 0.01
@@ -339,14 +356,18 @@ fn cancel_kills_the_converter_and_leaves_no_scratch() {
         );
         thread::sleep(Duration::from_millis(20));
     }
-    assert!(running("51515"));
+    // The progress line comes before the shell execs the sleep.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !running(&marker("51515")) {
+        assert!(Instant::now() < deadline, "converter never started");
+        thread::sleep(Duration::from_millis(20));
+    }
     assert_eq!(scratch_folders(&fixture).len(), 1);
     assert_eq!(job.progress().purpose, DiskJobPurpose::View);
     assert_eq!(job.progress().estimate, 4096);
     job.cancel();
     assert_eq!(wait(&mut job).unwrap_err(), "cancelled");
-    thread::sleep(Duration::from_millis(100));
-    assert!(!running("51515"), "the converter was left running");
+    assert_gone(&marker("51515"), "the converter was left running");
     assert!(scratch_folders(&fixture).is_empty());
 }
 
@@ -354,16 +375,15 @@ fn cancel_kills_the_converter_and_leaves_no_scratch() {
 fn dropping_a_running_job_stops_its_converter() {
     let fixture = Fixture::new();
     let mut spec = spec(&fixture, &fixture.path("top.qcow2"));
-    spec.qemu_img = slow_qemu_img(&fixture, "52525");
+    spec.qemu_img = slow_qemu_img(&fixture, &marker("52525"));
     let job = Job::view(spec).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !running("52525") {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !running(&marker("52525")) {
         assert!(Instant::now() < deadline, "converter never started");
         thread::sleep(Duration::from_millis(20));
     }
     drop(job);
-    thread::sleep(Duration::from_millis(100));
-    assert!(!running("52525"));
+    assert_gone(&marker("52525"), "the converter was left running");
     assert!(scratch_folders(&fixture).is_empty());
 }
 
@@ -445,7 +465,7 @@ fn the_converter_dies_with_the_thread_that_started_it() {
         return;
     }
     let fixture = Fixture::new();
-    let script = slow_qemu_img(&fixture, "53535");
+    let script = slow_qemu_img(&fixture, &marker("53535"));
     let (release, released) = std::sync::mpsc::channel::<()>();
     let spawner = thread::spawn(move || {
         let mut command = measure::qemu_img_command(&script);
@@ -456,15 +476,15 @@ fn the_converter_dies_with_the_thread_that_started_it() {
         let _ = released.recv();
         child
     });
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !running("53535") {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !running(&marker("53535")) {
         assert!(Instant::now() < deadline, "the converter never started");
         thread::sleep(Duration::from_millis(20));
     }
     release.send(()).unwrap();
     let mut child = spawner.join().unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while running("53535") {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while running(&marker("53535")) {
         assert!(
             Instant::now() < deadline,
             "the converter outlived its parent"
@@ -657,10 +677,10 @@ fn a_dump_that_does_not_fit_the_free_space_is_refused_naming_the_folder() {
 fn cancelling_a_dump_removes_its_folder_and_leaves_no_record() {
     let fixture = Fixture::new();
     let mut spec = spec(&fixture, &fixture.path("top.qcow2"));
-    spec.qemu_img = slow_qemu_img(&fixture, "54545");
+    spec.qemu_img = slow_qemu_img(&fixture, &marker("54545"));
     let mut job = Job::dump(spec, plan(true, false)).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !running("54545") {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !running(&marker("54545")) {
         assert!(Instant::now() < deadline, "converter never started");
         thread::sleep(Duration::from_millis(20));
     }
@@ -669,8 +689,7 @@ fn cancelling_a_dump_removes_its_folder_and_leaves_no_record() {
     assert!(crate::disks::dump::list(std::slice::from_ref(&fixture.root)).is_empty());
     job.cancel();
     assert_eq!(wait(&mut job).unwrap_err(), "cancelled");
-    thread::sleep(Duration::from_millis(100));
-    assert!(!running("54545"));
+    assert_gone(&marker("54545"), "the converter was left running");
     assert!(folders(&fixture).is_empty());
 }
 
@@ -678,16 +697,15 @@ fn cancelling_a_dump_removes_its_folder_and_leaves_no_record() {
 fn dropping_a_running_dump_leaves_no_folder() {
     let fixture = Fixture::new();
     let mut spec = spec(&fixture, &fixture.path("top.qcow2"));
-    spec.qemu_img = slow_qemu_img(&fixture, "55555");
+    spec.qemu_img = slow_qemu_img(&fixture, &marker("55555"));
     let job = Job::dump(spec, plan(true, false)).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !running("55555") {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !running(&marker("55555")) {
         assert!(Instant::now() < deadline, "converter never started");
         thread::sleep(Duration::from_millis(20));
     }
     drop(job);
-    thread::sleep(Duration::from_millis(100));
-    assert!(!running("55555"));
+    assert_gone(&marker("55555"), "the converter was left running");
     assert!(folders(&fixture).is_empty());
 }
 

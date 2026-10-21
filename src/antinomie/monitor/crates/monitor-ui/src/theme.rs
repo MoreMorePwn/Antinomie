@@ -5,8 +5,7 @@
 // The value colors, headings and density are adopted view by view.
 use eframe::egui::{self, Color32, FontData, FontFamily, FontId, Stroke, TextStyle};
 #[cfg(not(test))]
-use std::sync::atomic::AtomicU8;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 mod palettes;
 pub use palettes::{translate, Palette, Theme, TREE_COLOR_COUNT};
@@ -35,7 +34,21 @@ fn store_theme(index: u8) {
     #[cfg(test)]
     THEME.with(|cell| cell.set(index));
 }
+// The density is per thread in tests for the same reason: one test's
+// Comfortable must not change the spacing another test is laying out.
+#[cfg(not(test))]
 static COMPACT: AtomicBool = AtomicBool::new(true);
+#[cfg(test)]
+thread_local! {
+    static COMPACT: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+fn store_compact(compact: bool) {
+    #[cfg(not(test))]
+    COMPACT.store(compact, Ordering::Relaxed);
+    #[cfg(test)]
+    COMPACT.with(|cell| cell.set(compact));
+}
 
 /// The active palette.
 pub fn palette() -> &'static Palette {
@@ -148,7 +161,7 @@ pub fn value(kind: ValueKind) -> Color32 {
 /// Density (Settings): compact by default. Comfortable gives taller table
 /// rows and roomier spacing, padding and margins everywhere.
 pub fn set_compact(ctx: &egui::Context, compact: bool) {
-    COMPACT.store(compact, Ordering::Relaxed);
+    store_compact(compact);
     ctx.style_mut(density);
 }
 
@@ -202,7 +215,10 @@ pub fn tab_title(title: &str) -> String {
     }
 }
 pub fn is_compact() -> bool {
-    COMPACT.load(Ordering::Relaxed)
+    #[cfg(not(test))]
+    return COMPACT.load(Ordering::Relaxed);
+    #[cfg(test)]
+    return COMPACT.with(std::cell::Cell::get);
 }
 /// Height of one table row for text of `font_size`.
 pub fn row_height(font_size: f32) -> f32 {

@@ -1308,7 +1308,7 @@ mod tests {
             };
             let launcher = jobs.active.as_ref().unwrap().child.as_ref().unwrap().id();
             let children = PathBuf::from(format!("/proc/{launcher}/task/{launcher}/children"));
-            let deadline = Instant::now() + Duration::from_secs(2);
+            let deadline = Instant::now() + Duration::from_secs(60);
             let pid = loop {
                 if let Some(pid) = fs::read_to_string(&children)
                     .unwrap()
@@ -1326,7 +1326,21 @@ mod tests {
             };
             let witness =
                 rustix::process::pidfd_open(pid, rustix::process::PidfdFlags::empty()).unwrap();
-            let started = Instant::now();
+            let exited = || {
+                let mut polls = [rustix::event::PollFd::new(
+                    &witness,
+                    rustix::event::PollFlags::IN,
+                )];
+                rustix::event::poll(
+                    &mut polls,
+                    Some(&rustix::event::Timespec {
+                        tv_sec: 0,
+                        tv_nsec: 0,
+                    }),
+                )
+                .unwrap();
+                polls[0].revents().contains(rustix::event::PollFlags::IN)
+            };
             if cancel {
                 jobs.cancel(&id).unwrap();
             } else {
@@ -1338,38 +1352,23 @@ mod tests {
                 );
                 jobs.finish(job);
             }
-            // A blocked tick waits for the sandbox for seconds; a loaded
-            // machine can still take a few hundred milliseconds.
-            assert!(
-                started.elapsed() < Duration::from_secs(1),
-                "cleanup tick blocked"
-            );
+            // The tick must not wait for the sandbox: it only asks the launcher
+            // to stop, so the namespace init (sleeping 30 s) is still alive when
+            // it returns. Wall time is no measure of that: the tick also writes
+            // and fsyncs the report, which stalls for seconds on a loaded
+            // machine.
+            assert!(!exited(), "cleanup tick waited for the sandbox to die");
             assert!(
                 jobs.active.is_some(),
                 "one STOP request is not cleanup completion"
             );
-            let deadline = Instant::now() + Duration::from_secs(2);
+            let deadline = Instant::now() + Duration::from_secs(60);
             while jobs.active.is_some() && Instant::now() < deadline {
                 jobs.next();
                 std::thread::sleep(Duration::from_millis(5));
             }
             assert!(jobs.active.is_none(), "namespace cleanup did not finish");
-            let mut polls = [rustix::event::PollFd::new(
-                &witness,
-                rustix::event::PollFlags::IN,
-            )];
-            rustix::event::poll(
-                &mut polls,
-                Some(&rustix::event::Timespec {
-                    tv_sec: 0,
-                    tv_nsec: 0,
-                }),
-            )
-            .unwrap();
-            assert!(
-                polls[0].revents().contains(rustix::event::PollFlags::IN),
-                "owned init survived completion"
-            );
+            assert!(exited(), "owned init survived completion");
             let report = jobs.updates().pop().unwrap().1;
             let reason = report.reason.unwrap();
             assert!(
