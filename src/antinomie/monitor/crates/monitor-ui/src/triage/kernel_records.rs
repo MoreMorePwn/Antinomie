@@ -18,7 +18,9 @@
 //!   file the call named. When the guest skipped or dropped a hash, or it
 //!   would describe another file, `HashSkipped` says why.
 use super::*;
-use antinomie_monitor_core::kernel_notes::{self, Credentials, FileHash, HashKind};
+use antinomie_monitor_core::kernel_notes::{
+    self, Credentials, ExecImage, FileHash, FileId, HashKind,
+};
 use std::collections::BTreeMap;
 
 /// Follow the credential records of one call. They apply from this call on.
@@ -43,6 +45,17 @@ pub(super) fn file_hash(call: &InvocationSummary, kind: HashKind) -> Option<File
         .iter()
         .filter_map(kernel_notes::file_hash)
         .find(|hash| hash.kind == kind)
+}
+
+/// The identity of the file this call acted on, when the guest recorded one:
+/// from a note of the call, or from the operand of an io_uring request.
+pub(super) fn file_id(call: &InvocationSummary) -> Option<FileId> {
+    call.kernel_notes.iter().find_map(kernel_notes::file_id)
+}
+
+/// The image an exec of this call loaded and the interpreter it named.
+pub(super) fn exec_image(call: &InvocationSummary) -> Option<ExecImage> {
+    call.kernel_notes.iter().find_map(kernel_notes::exec_image)
 }
 
 /// Sysmon `User` and `LogonId`.

@@ -23,10 +23,16 @@
  *   files            io_uring file operations for the Triage file index: openat,
  *                    write, read, fsync, ftruncate, renameat, unlinkat, close, a
  *                    rename and a hard link of one file, then exit 0
+ *   regfiles         io_uring OPENAT, WRITEV and READV, WRITE_FIXED and READ_FIXED
+ *                    on a registered buffer, a WRITE through a registered file,
+ *                    an OPENAT straight into the registered table (a slot, not
+ *                    a descriptor) written through that slot, CLOSE and
+ *                    UNLINKAT; exit 0
  *   syncfiles        the same story with plain system calls: create, rename,
  *                    hard-link, write through the other name, unlink one name,
  *                    then a new file under the first name; exit 0
- *   aio              a file written and read through io_submit, exit 0
+ *   aio              a file written and read through io_submit (PWRITE, PREAD,
+ *                    PWRITEV, PREADV), exit 0
  *   script FILE      writes an executable "#!/bin/sh" script to FILE and runs it
  *
  * Build: cc -static -O2 -pthread -Wall -Wextra -Werror tests/monitor/uring-fixture.c
@@ -46,6 +52,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
+#include <sys/uio.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -419,7 +426,8 @@ static int mode_files(void)
 	}
 	if (fd < 0)
 		return 2;
-	queue_rw(&ring, IORING_OP_WRITE, fd, data, sizeof(data) - 1, 0, 0, 11);
+	/* Linked: the read runs after the write, not beside it on a worker. */
+	queue_rw(&ring, IORING_OP_WRITE, fd, data, sizeof(data) - 1, 0, IOSQE_IO_LINK, 11);
 	queue_rw(&ring, IORING_OP_READ, fd, back, sizeof(data) - 1, 0, 0, 12);
 	if (ring_submit(&ring, 2, &errors) < 2)
 		return 2;
@@ -482,6 +490,113 @@ static int mode_files(void)
 		sqe->user_data = 20;
 	}
 	if (ring_submit(&ring, 3, &errors) < 0)
+		return 2;
+	say(errors ? "URING DONE (errors)\n" : "URING DONE\n");
+	return errors ? 1 : 0;
+}
+
+/* Submit one queued request, wait for it and return its result. */
+static int ring_one(struct ring *ring, int *errors)
+{
+	unsigned head = *ring->cq_head;
+
+	if (ring_submit(ring, 1, errors) < 1)
+		return -1000;
+	return ring->cqes[head & *ring->cq_mask].res;
+}
+
+static int mode_regfiles(void)
+{
+	static const char first[] = "/tmp/uring-reg.a";
+	static const char direct[] = "/tmp/uring-reg.d";
+	static char one[] = "vector one\n", two[] = "vector two\n", back[64];
+	static char fixed[4096];
+	static const char slot_text[] = "slot write\n", direct_text[] = "direct\n";
+	struct iovec parts[2] = { { one, sizeof(one) - 1 }, { two, sizeof(two) - 1 } };
+	struct iovec readback[1] = { { back, sizeof(back) } };
+	struct iovec registered[1] = { { fixed, sizeof(fixed) } };
+	struct io_uring_sqe *sqe;
+	struct ring ring;
+	int fd, table[2], errors = 0;
+
+	unlink(first);
+	unlink(direct);
+	if (open_ring(&ring, 0) < 0)
+		return 2;
+	say("URING READY\n");
+	sqe = ring_next(&ring);
+	sqe->opcode = IORING_OP_OPENAT;
+	sqe->fd = AT_FDCWD;
+	sqe->addr = (unsigned long)first;
+	sqe->open_flags = O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC;
+	sqe->len = 0600;
+	fd = ring_one(&ring, &errors);
+	if (fd < 0)
+		return 2;
+	queue_rw(&ring, IORING_OP_WRITEV, fd, parts, 2, 0, 0, 21);
+	if (ring_one(&ring, &errors) < 0)
+		return 2;
+	queue_rw(&ring, IORING_OP_READV, fd, readback, 1, 0, 0, 22);
+	if (ring_one(&ring, &errors) < 0)
+		return 2;
+	/* A registered buffer: WRITE_FIXED and READ_FIXED use buffer 0. */
+	memset(fixed, 'F', sizeof(fixed));
+	memcpy(fixed, "fixed buffer data", 17);
+	if (syscall(__NR_io_uring_register, ring.fd, IORING_REGISTER_BUFFERS, registered, 1) < 0)
+		return 2;
+	queue_rw(&ring, IORING_OP_WRITE_FIXED, fd, fixed, 17, 64, 0, 23);
+	if (ring_one(&ring, &errors) < 0)
+		return 2;
+	queue_rw(&ring, IORING_OP_READ_FIXED, fd, fixed + 1024, 17, 64, 0, 24);
+	if (ring_one(&ring, &errors) < 0)
+		return 2;
+	/* A registered file table: slot 0 is fd, slot 1 is free. */
+	table[0] = fd;
+	table[1] = -1;
+	if (syscall(__NR_io_uring_register, ring.fd, IORING_REGISTER_FILES, table, 2) < 0)
+		return 2;
+	queue_rw(&ring, IORING_OP_WRITE, 0, (void *)slot_text, sizeof(slot_text) - 1, 128,
+		 IOSQE_FIXED_FILE, 25);
+	if (ring_one(&ring, &errors) < 0)
+		return 2;
+	/* An open straight into slot 1: the result is 0, not a descriptor. */
+	sqe = ring_next(&ring);
+	sqe->opcode = IORING_OP_OPENAT;
+	sqe->fd = AT_FDCWD;
+	sqe->addr = (unsigned long)direct;
+	sqe->open_flags = O_RDWR | O_CREAT | O_TRUNC;
+	sqe->len = 0600;
+	sqe->file_index = 2;
+	sqe->user_data = 26;
+	if (ring_one(&ring, &errors) != 0)
+		return 2;
+	queue_rw(&ring, IORING_OP_WRITE, 1, (void *)direct_text, sizeof(direct_text) - 1, 0,
+		 IOSQE_FIXED_FILE, 27);
+	if (ring_one(&ring, &errors) < 0)
+		return 2;
+	sqe = ring_next(&ring);
+	sqe->opcode = IORING_OP_CLOSE;
+	sqe->file_index = 2;
+	sqe->user_data = 28;
+	if (ring_one(&ring, &errors) < 0)
+		return 2;
+	sqe = ring_next(&ring);
+	sqe->opcode = IORING_OP_CLOSE;
+	sqe->fd = fd;
+	sqe->user_data = 29;
+	if (ring_one(&ring, &errors) < 0)
+		return 2;
+	sqe = ring_next(&ring);
+	sqe->opcode = IORING_OP_UNLINKAT;
+	sqe->fd = AT_FDCWD;
+	sqe->addr = (unsigned long)first;
+	sqe->user_data = 30;
+	sqe = ring_next(&ring);
+	sqe->opcode = IORING_OP_UNLINKAT;
+	sqe->fd = AT_FDCWD;
+	sqe->addr = (unsigned long)direct;
+	sqe->user_data = 31;
+	if (ring_submit(&ring, 2, &errors) < 0)
 		return 2;
 	say(errors ? "URING DONE (errors)\n" : "URING DONE\n");
 	return errors ? 1 : 0;
@@ -555,6 +670,34 @@ static int mode_aio(void)
 	if (syscall(__NR_io_submit, context, 1, list) != 1 ||
 	    syscall(__NR_io_getevents, context, 1, 1, events, NULL) != 1)
 		return 2;
+	{
+		static char first_half[] = "aio vector one\n", second_half[] = "aio vector two\n";
+		static char back[64];
+		struct iovec parts[2] = { { first_half, sizeof(first_half) - 1 },
+					  { second_half, sizeof(second_half) - 1 } };
+		struct iovec readback[1] = { { back, sizeof(back) } };
+
+		memset(&write_cb, 0, sizeof(write_cb));
+		write_cb.aio_lio_opcode = IOCB_CMD_PWRITEV;
+		write_cb.aio_fildes = fd;
+		write_cb.aio_buf = (unsigned long)parts;
+		write_cb.aio_nbytes = 2;
+		write_cb.aio_offset = sizeof(data);
+		list[0] = &write_cb;
+		if (syscall(__NR_io_submit, context, 1, list) != 1 ||
+		    syscall(__NR_io_getevents, context, 1, 1, events, NULL) != 1)
+			return 2;
+		memset(&read_cb, 0, sizeof(read_cb));
+		read_cb.aio_lio_opcode = IOCB_CMD_PREADV;
+		read_cb.aio_fildes = fd;
+		read_cb.aio_buf = (unsigned long)readback;
+		read_cb.aio_nbytes = 1;
+		read_cb.aio_offset = sizeof(data);
+		list[0] = &read_cb;
+		if (syscall(__NR_io_submit, context, 1, list) != 1 ||
+		    syscall(__NR_io_getevents, context, 1, 1, events, NULL) != 1)
+			return 2;
+	}
 	syscall(__NR_io_destroy, context);
 	close(fd);
 	unlink(path);
@@ -601,6 +744,8 @@ int main(int argc, char **argv)
 		return mode_files();
 	if (!strcmp(mode, "aio"))
 		return mode_aio();
+	if (!strcmp(mode, "regfiles"))
+		return mode_regfiles();
 	if (!strcmp(mode, "syncfiles"))
 		return mode_syncfiles();
 	if (!strcmp(mode, "script") && argc > 2)

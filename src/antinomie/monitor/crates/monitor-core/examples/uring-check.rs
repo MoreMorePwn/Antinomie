@@ -8,6 +8,7 @@
 //!   uring-check status BUNDLE NEW_DATA_DIR TORTURE FIXTURE
 //!   uring-check boots  BUNDLE NEW_DATA_DIR TORTURE FIXTURE [COUNT]
 //!   uring-check legacy BUNDLE NEW_DATA_DIR TORTURE FIXTURE
+//!   uring-check record BUNDLE NEW_DATA_DIR TORTURE FIXTURE
 //!
 //! TORTURE is the static `ant-torture` sample and FIXTURE the static
 //! `tests/monitor/uring-fixture` program. `status` runs every case with and
@@ -18,7 +19,11 @@
 //! hardest cases on COUNT fresh boots (default 3). `legacy` is for a base
 //! from before the io_uring worker accounting: the host must still reach
 //! Finished, with the root's exit code unknown or right, never invented.
-//! The data folder must be new and
+//! `record` runs the file stories Triage reads (io_uring, AIO and plain system
+//! calls on one file, a script exec, the torture async-io module), stops the
+//! VM so the recordings are complete, and prints a `RUN label=directory` line
+//! for each; the ignored test `recorded_uring_triage` of the app's triage
+//! module reads them (see its documentation). The data folder must be new and
 //! disposable. Every result is a `RESULT` line.
 use antinomie_monitor_core::*;
 use std::{
@@ -344,15 +349,19 @@ impl Driver {
         };
         loop {
             self.receive();
-            if let Some(error) = &self.snapshot.last_error {
-                if !watched.errors.contains(error) {
-                    watched.errors.push(error.clone());
-                }
+            if let Some(error) = self
+                .snapshot
+                .last_error
+                .as_ref()
+                .filter(|error| !watched.errors.contains(error))
+            {
+                watched.errors.push(error.clone());
             }
-            if let Some(execution) = self.execution(id) {
-                if watched.generations.last() != Some(&execution.generation) {
-                    watched.generations.push(execution.generation);
-                }
+            if let Some(execution) = self
+                .execution(id)
+                .filter(|e| watched.generations.last() != Some(&e.generation))
+            {
+                watched.generations.push(execution.generation);
             }
             if self
                 .run(id)
@@ -483,10 +492,8 @@ fn core_checks(
             artifacts.core_state, artifacts.issues
         ));
     }
-    if let Some(threads) = threads.filter(|_| strict) {
-        if threads as u64 > total {
-            bad.push(format!("core has {threads} threads, run counted {total}"));
-        }
+    if let Some(threads) = threads.filter(|threads| strict && *threads as u64 > total) {
+        bad.push(format!("core has {threads} threads, run counted {total}"));
     }
     Ok(bad)
 }
@@ -563,8 +570,12 @@ fn history_until(
 }
 
 /// Status runs use two vCPUs, so a worker thread and the leader can leave at
-/// the same time.
+/// the same time. Recordings use one: with more, a record a worker publishes
+/// for an earlier call (an unlink's hash) can be saved ahead of calls made
+/// before it, and the archive orders calls by their first saved record, which
+/// would test that ordering instead of the file stories.
 const STATUS_CPUS: u16 = 2;
+const RECORD_CPUS: u16 = 1;
 
 fn prepare(
     bundle: &str,
@@ -637,6 +648,68 @@ fn stop_cases(d: &mut Driver, failed: &mut Vec<String>) -> Result<(), String> {
             }
         }
     }
+    Ok(())
+}
+
+/// One recorded run for the triage test: wait for the end and note where it is.
+fn record_run(
+    d: &mut Driver,
+    labels: &mut Vec<(String, PathBuf)>,
+    label: &str,
+    program: &str,
+    args: &[&str],
+) -> Result<(), String> {
+    let id = d.launch(program, args, false)?;
+    let watched = d.watch(&id, 90);
+    result(format!(
+        "{label}: {} after {} ms",
+        d.describe(&id),
+        watched.elapsed.as_millis()
+    ));
+    if !watched.ended {
+        return Err(format!("{label} did not end"));
+    }
+    let directory = d.run(&id).ok_or("run missing")?.directory.clone();
+    labels.push((label.to_string(), directory));
+    Ok(())
+}
+
+fn record(bundle: &str, data: &str, torture: &str, fixture: &str) -> Result<(), String> {
+    let mut d = prepare(
+        bundle,
+        data,
+        "io_uring record",
+        torture,
+        fixture,
+        RECORD_CPUS,
+    )?;
+    let mut runs = Vec::new();
+    record_run(&mut d, &mut runs, "files", FIXTURE, &["files"])?;
+    record_run(&mut d, &mut runs, "regfiles", FIXTURE, &["regfiles"])?;
+    record_run(&mut d, &mut runs, "syncfiles", FIXTURE, &["syncfiles"])?;
+    record_run(&mut d, &mut runs, "aio", FIXTURE, &["aio"])?;
+    record_run(
+        &mut d,
+        &mut runs,
+        "script",
+        FIXTURE,
+        &["script", "/tmp/uring-script.sh"],
+    )?;
+    record_run(
+        &mut d,
+        &mut runs,
+        "async-io",
+        TORTURE,
+        &["--only", "async-io", "--level", "light"],
+    )?;
+    // The recordings are complete when the VM has stopped.
+    d.command(Command::Stop)?;
+    d.wait("VM stop", 90, |s| s.state == VmState::Stopped)?;
+    thread::sleep(Duration::from_secs(2));
+    for (label, directory) in &runs {
+        println!("RUN {label}={}", directory.display());
+    }
+    println!("PASS record");
     Ok(())
 }
 
@@ -741,6 +814,7 @@ fn main() {
     {
         ["status", bundle, data, torture, fixture] => status(bundle, data, torture, fixture),
         ["legacy", bundle, data, torture, fixture] => legacy(bundle, data, torture, fixture),
+        ["record", bundle, data, torture, fixture] => record(bundle, data, torture, fixture),
         ["boots", bundle, data, torture, fixture] => boots(bundle, data, torture, fixture, 3),
         ["boots", bundle, data, torture, fixture, count] => count
             .parse()
@@ -748,7 +822,7 @@ fn main() {
             .and_then(|count| boots(bundle, data, torture, fixture, count)),
         _ => {
             eprintln!(
-                "usage: uring-check status|legacy|boots BUNDLE NEW_DATA_DIR TORTURE FIXTURE [COUNT]"
+                "usage: uring-check status|legacy|record|boots BUNDLE NEW_DATA_DIR TORTURE FIXTURE [COUNT]"
             );
             std::process::exit(2);
         }
