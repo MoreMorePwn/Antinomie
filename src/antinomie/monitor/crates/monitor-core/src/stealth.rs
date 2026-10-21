@@ -994,7 +994,7 @@ impl StealthProfile {
             }
             DiskBus::Sata => {}
             DiskBus::Nvme => {
-                found.push("NVMe controller model \"QEMU NVMe Ctrl\" and its QEMU PCI ID")
+                found.push("NVMe controller model QEMU NVMe Ctrl, QEMU's version as firmware, an org.qemu subsystem name")
             }
         }
         if self.cdrom {

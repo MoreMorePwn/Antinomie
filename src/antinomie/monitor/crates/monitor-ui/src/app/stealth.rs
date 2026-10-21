@@ -548,7 +548,8 @@ fn storage(ui: &mut egui::Ui, profile: &mut StealthProfile, base: &BaseSupport) 
         ui.colored_label(
             theme::muted(),
             "QEMU's NVMe controller names itself \"QEMU NVMe Ctrl\" with QEMU's version as \
-             firmware; only its serial and subsystem name can be set.",
+             firmware and an org.qemu subsystem name; only its serial and PCI vendor (Intel's) \
+             can be set.",
         );
     }
     ui.colored_label(
