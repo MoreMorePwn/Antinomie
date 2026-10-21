@@ -39,6 +39,7 @@
 #include <sys/io.h>
 #include <sys/ioctl.h>
 #include <sys/klog.h>
+#include <sys/mman.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
@@ -1053,6 +1054,35 @@ static void check_self(void)
 	}
 }
 
+/* --- Recorder residency -------------------------------------------------- */
+
+/* The recorder copies a call's memory without faulting, at entry and again at
+ * exit (contract section 22). A page the call itself never reads must still
+ * be out of the page tables afterwards: mincore() would show a sample any
+ * page the recorder loaded.
+ */
+static void check_residency(void)
+{
+	long page = sysconf(_SC_PAGESIZE);
+	unsigned char vec = 0xff;
+	int null = open("/dev/null", O_WRONLY);
+	void *buffer = mmap(NULL, page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+
+	if (null < 0 || buffer == MAP_FAILED) {
+		report("info", "recorder.residency", "setup failed");
+	} else if (write(null, buffer, page) != page || mincore(buffer, page, &vec)) {
+		report("info", "recorder.residency", "write or mincore failed");
+	} else {
+		reportf(vec & 1 ? "fail" : "pass", "recorder.residency",
+			"an untouched page given to write(/dev/null) is %s afterwards",
+			vec & 1 ? "resident" : "not resident");
+	}
+	if (buffer != MAP_FAILED)
+		munmap(buffer, page);
+	if (null >= 0)
+		close(null);
+}
+
 /* --- Base defaults ------------------------------------------------------- */
 
 static int sandbox_name(const char *name)
@@ -1220,6 +1250,7 @@ int main(int argc, char **argv)
 	(void)argc;
 	(void)argv;
 	check_self();
+	check_residency();
 	check_cpuid();
 	check_topology();
 	check_firmware();
