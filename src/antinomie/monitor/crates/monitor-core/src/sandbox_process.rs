@@ -65,10 +65,21 @@ fn process_file(path: &Path, limit: usize) -> Result<Option<String>, String> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(format!("sandbox process metadata: {error}")),
     };
+    read_process_text(file, limit)
+}
+
+/// A task reaped between `open` and `read` (a fast sandbox init collected by
+/// its launcher) makes the read fail with ESRCH, not the open with ENOENT; both
+/// mean the process is gone.
+fn read_process_text(file: File, limit: usize) -> Result<Option<String>, String> {
     let mut text = String::new();
-    file.take((limit + 1) as u64)
-        .read_to_string(&mut text)
-        .map_err(|e| format!("sandbox process metadata: {e}"))?;
+    match file.take((limit + 1) as u64).read_to_string(&mut text) {
+        Ok(_) => {}
+        Err(error) if error.raw_os_error() == Some(rustix::io::Errno::SRCH.raw_os_error()) => {
+            return Ok(None);
+        }
+        Err(error) => return Err(format!("sandbox process metadata: {error}")),
+    }
     if text.len() > limit {
         return Err("sandbox process metadata exceeds its bound".into());
     }
@@ -715,6 +726,19 @@ mod tests {
         assert!(!status.success());
         assert!(fixture.process.reaped);
         assert!(!fixture.process.stop_requested && !fixture.process.group_killed);
+    }
+
+    #[test]
+    fn process_metadata_of_a_task_reaped_after_open_reads_as_gone() {
+        for name in ["stat", "status"] {
+            let mut child = Command::new("/bin/sh")
+                .args(["-c", "exit 0"])
+                .spawn()
+                .unwrap();
+            let file = File::open(format!("/proc/{}/{name}", child.id())).unwrap();
+            child.wait().unwrap();
+            assert_eq!(read_process_text(file, 4096), Ok(None), "{name}");
+        }
     }
 
     #[test]
