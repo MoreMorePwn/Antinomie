@@ -170,7 +170,7 @@ pub(super) fn show(view: &mut TriageView, ui: &mut egui::Ui) {
             .max_col_width((ui.available_width() * 0.7).max(80.0)).show(ui, |ui| {
         for (header, cell) in selected.headers.iter().zip(&selected.cells) {
             ui.label(RichText::new(header).small().color(theme::muted()));
-            let text = RichText::new(&cell.text).color(cell.color);
+            let text = RichText::new(&cell.text).color(cell.color());
             ui.add(egui::Label::new(if cell.mono { text.monospace() } else { text }).wrap());
             ui.end_row();
         }

@@ -869,9 +869,19 @@ impl Drop for TriageView {
 #[derive(Clone)]
 struct Cell {
     text: String,
+    /// Taken from the palette of `theme`; read it through [`Cell::color`].
     color: egui::Color32,
+    theme: theme::Theme,
     mono: bool,
     values: Vec<(&'static str, RowValue)>,
+}
+
+impl Cell {
+    /// The text color in the theme that is active now, whichever one the row
+    /// was indexed in.
+    fn color(&self) -> egui::Color32 {
+        theme::translate(self.color, self.theme, theme::theme())
+    }
 }
 
 #[cfg(test)]
