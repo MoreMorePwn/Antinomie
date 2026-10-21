@@ -21,6 +21,7 @@
 //! A part is one subject of the suite (the syscall trace log now; file
 //! lifecycle, process tree, network and Suspicious activity later): it names
 //! its fixture groups and checks their runs. Add one in `parts()`.
+mod attribution;
 mod golden;
 mod judge;
 mod matrix;
@@ -51,6 +52,9 @@ pub enum GroupKind {
     /// A load generator: every record must be well formed and every loss
     /// accounted for.
     Stress,
+    /// A program whose run status is the subject: who wrote its io_uring
+    /// entries, as the run says it.
+    Attribution,
 }
 
 /// Paths every part shares.
@@ -121,6 +125,7 @@ fn save_run(dir: &Path, run: &vm::GroupRun) -> Result<(), String> {
         "errors": run.errors,
         "boot_seconds": run.boot_seconds,
         "run_seconds": run.run_seconds,
+        "stop_seconds": run.stop_seconds,
     });
     std::fs::write(
         dir.join("group-run.json"),
@@ -140,6 +145,7 @@ fn load_run(dir: &Path) -> Result<vm::GroupRun, String> {
         errors: serde_json::from_value(value["errors"].clone()).unwrap_or_default(),
         boot_seconds: value["boot_seconds"].as_f64().unwrap_or(0.0),
         run_seconds: value["run_seconds"].as_f64().unwrap_or(0.0),
+        stop_seconds: value["stop_seconds"].as_f64().unwrap_or(0.0),
     })
 }
 
@@ -181,11 +187,12 @@ fn run_part(
         match run {
             Ok(run) => {
                 eprintln!(
-                    "conformance: {} {}: ran in {:.0} s (boot {:.0} s)",
+                    "conformance: {} {}: ran in {:.0} s (boot {:.0} s, stop {:.1} s)",
                     part.name(),
                     group.name,
                     started.elapsed().as_secs_f64(),
-                    run.boot_seconds
+                    run.boot_seconds,
+                    run.stop_seconds
                 );
                 runs.push((group, run));
             }

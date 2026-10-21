@@ -6,7 +6,7 @@
 //! `ant-torture`. Oracle groups are judged call by call; every group must be
 //! free of warnings and errors and account for every lost record.
 use crate::{
-    Context, Group, GroupKind, Outcome, Part, golden,
+    Context, Group, GroupKind, Outcome, Part, attribution, golden,
     judge::{self, CaseResult, Judge},
     matrix, oracle, recording, render, stress,
     vm::{GroupRun, VmPlan},
@@ -38,6 +38,14 @@ fn oracle_group(context: &Context, name: &str, uid: u32) -> Group {
             gid: uid,
             timeout: 300,
         },
+    }
+}
+
+/// One run of the fixture's io_uring attribution group `name`.
+fn attribution_group(context: &Context, name: &str) -> Group {
+    Group {
+        kind: GroupKind::Attribution,
+        ..oracle_group(context, name, 1000)
     }
 }
 
@@ -305,15 +313,18 @@ fn judge_group(
             problems.push(format!("undescribed call warning ×{count}: {issue}"));
         }
     }
-    // The io_uring rule of the run-status contract: every ring use leaves the
-    // observation flagged incomplete, and only that note may be present.
-    let async_used = transcript.expects.iter().any(|e| !e.requests.is_empty());
+    // The fixture's rings are each mapped by one process, which wrote their
+    // entries: the run's async observation is complete and has no note.
     for note in &run.run.notes {
-        let expected =
-            async_used && note.starts_with("Async observation loss reported: last guest count 0,");
-        if !expected {
-            problems.push(format!("run note: {note}"));
-        }
+        problems.push(format!("run note: {note}"));
+    }
+    if run
+        .run
+        .execution
+        .as_ref()
+        .is_some_and(|e| e.observation_incomplete())
+    {
+        problems.push("async observation incomplete (OBSERVATION_INCOMPLETE)".into());
     }
     let execution = run.run.execution.as_ref();
     if execution.is_some_and(|e| e.async_loss_count != 0) {
@@ -354,6 +365,9 @@ impl Part for TracePart {
             oracle_group(context, "user", 1000),
             oracle_group(context, "root", 0),
             oracle_group(context, "threads", 1000),
+            attribution_group(context, "ring-private"),
+            attribution_group(context, "ring-shared"),
+            attribution_group(context, "ring-sqpoll"),
             stress_group(
                 context,
                 "stress-light",
@@ -418,6 +432,19 @@ impl Part for TracePart {
                     }
                     reports.push(report);
                 }
+                GroupKind::Attribution => {
+                    let report = attribution::check(group, run, &accepted)?;
+                    std::fs::write(
+                        reports_dir.join(format!("{}.json", group.name)),
+                        serde_json::to_vec_pretty(&report).map_err(|e| e.to_string())?,
+                    )
+                    .map_err(|e| e.to_string())?;
+                    passed &= report.passed;
+                    summary.push(attribution::summary_line(&report));
+                    for problem in report.problems.iter().take(100) {
+                        summary.push(format!("    {problem}"));
+                    }
+                }
                 GroupKind::Stress => {
                     let report = stress::check(group, run, &accepted)?;
                     std::fs::write(
@@ -451,7 +478,11 @@ impl Part for TracePart {
         } else {
             BTreeMap::new()
         };
-        let render_problems = render::stress_warnings(runs, &views);
+        let render_problems = if context.render {
+            render::stress_warnings(runs, &views)
+        } else {
+            Vec::new()
+        };
         for problem in &render_problems {
             summary.push(format!("FAIL render: {problem}"));
         }

@@ -40,6 +40,9 @@ pub struct GroupRun {
     pub errors: Vec<String>,
     pub boot_seconds: f64,
     pub run_seconds: f64,
+    /// From Stop to the VM stopped: the guest's own shutdown, its power-off
+    /// and the host's last drain.
+    pub stop_seconds: f64,
 }
 
 /// Host memory the other users of this machine need: a VM boots only when
@@ -313,8 +316,10 @@ fn drive(driver: &mut Driver, plan: &VmPlan) -> Result<GroupRun, String> {
     driver.receive();
     let recorder_stats = driver.snapshot.health.recorder_stats;
     // Stopping waits for queued recording writes.
+    let stopping = Instant::now();
     driver.command(Command::Stop, 900)?;
     driver.wait("VM stop", 120, |s| s.state == VmState::Stopped)?;
+    let stop_seconds = stopping.elapsed().as_secs_f64();
     thread::sleep(Duration::from_secs(1));
     driver.receive();
     let health = driver.snapshot.health.clone();
@@ -332,6 +337,7 @@ fn drive(driver: &mut Driver, plan: &VmPlan) -> Result<GroupRun, String> {
         errors: std::mem::take(&mut driver.errors),
         boot_seconds,
         run_seconds,
+        stop_seconds,
     })
 }
 

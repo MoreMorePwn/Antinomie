@@ -34,6 +34,11 @@ pub struct RawScan {
     pub async_requests: u64,
     pub async_without_final: u64,
     pub async_payload_missing: u64,
+    /// io_uring requests whose submission says who wrote the entry
+    /// (`async.flags`): a thread of the submitting process (bit 3), or a
+    /// writer that is not proven (bit 1).
+    pub async_producer_process: u64,
+    pub async_producer_unknown: u64,
 }
 
 /// What the scan keeps of one async request.
@@ -42,6 +47,8 @@ struct Request {
     final_seen: bool,
     final_gap: bool,
     reaped: bool,
+    /// `async.flags` of the submission record (stage 1).
+    submitted_flags: Option<u64>,
 }
 
 const ASYNC_KEYS: [&str; 4] = [
@@ -148,7 +155,18 @@ pub fn scan_raw(directory: &Path) -> Result<RawScan, String> {
             request.final_gap = flags.unwrap_or(0) & 1 != 0;
         }
         request.reaped |= stage == 7;
+        if stage == 1 {
+            request.submitted_flags = flags;
+        }
     }
+    scan.async_producer_process = requests
+        .values()
+        .filter(|r| r.submitted_flags.is_some_and(|flags| flags & 8 != 0))
+        .count() as u64;
+    scan.async_producer_unknown = requests
+        .values()
+        .filter(|r| r.submitted_flags.is_some_and(|flags| flags & 2 != 0))
+        .count() as u64;
     scan.async_requests = requests.len() as u64;
     scan.async_without_final = requests.values().filter(|r| !r.final_seen).count() as u64;
     scan.async_payload_missing = requests

@@ -46,11 +46,13 @@ flowchart LR
 2. Each group gets a new VM (4 vCPUs, 2 GiB, waits until the host has 3.5 GiB
    free), uploads its program, runs it until the guest reports the whole process
    tree ended, reads the recorder's counters (`STATS`), stops the VM and deletes
-   its disk overlay. The recording, `group-run.json` (health and counters) and
-   the guest console (`serial.log`) stay in `OUT_DIR/groups/GROUP/`.
+   its disk overlay. The recording, `group-run.json` (health, counters, and how
+   long boot, run and Stop took) and the guest console (`serial.log`) stay in
+   `OUT_DIR/groups/GROUP/`.
 3. Oracle groups are judged call by call (`examples/conformance/judge.rs`),
-   stress groups record by record (`stress.rs`); both check the run's health and
-   accounting (`trace.rs`).
+   stress groups record by record (`stress.rs`), attribution groups by their
+   run status (`attribution.rs`); all check the run's health and accounting
+   (`trace.rs`).
 4. `render.rs` runs the opt-in test `conformance_trace_render` of the monitor-ui
    crate, which shows every recorded call through the Syscall Trace view's own
    code (table cells, Info column, argument rows, field previews and one frame of
@@ -69,6 +71,7 @@ throughput), the matrix, `render/`, and on a golden mismatch
 | `user` | `trace-fixture user` | 1000 | Every user area: files, paths, xattr/splice, events, network (loopback, AF_UNIX), memory, process, identity, signals, time, futex, SysV/POSIX IPC, keys, AIO, io_uring and the refused administrative calls |
 | `root` | `trace-fixture root` | 0 | The privileged success variants, each made harmless (private namespaces, children, values set to what they were) |
 | `threads` | `trace-fixture threads` | 1000 | 8 pinned threads × 200 calls and 32 short-lived processes: identity and ordering under concurrency |
+| `ring-private`, `ring-shared`, `ring-sqpoll` | `trace-fixture ring-…` | 1000 | Who wrote an io_uring entry, one run each (`trace/fixture/attribution.c`): a ring one process maps is complete (ASYNC_COMPLETE, every request `async.flags` bit 3, no note); a ring a forked child still maps and an SQPOLL ring are OBSERVATION_INCOMPLETE (bit 1) with the attribution note, never loss |
 | `stress-light`, `stress-heavy`, `stress-extreme` | `ant-torture --level L --only syscall-flood,object-capture,process-tree,file-churn,async-io,decoder-zoo,argv-env,timing` | 0 | Load on every CPU, large objects, thousands of processes, async I/O; default (never-drop) transport |
 | `stress-lossy` | the same at `heavy` | 0 | A 256 KiB ring that drops: every lost record must be counted |
 
@@ -118,8 +121,11 @@ directory markers), `ANT_FIXTURE_FAIL` and `ANT_DONE {"failures":N}`.
   contract explains it and `trace/gaps.json` lists it under `undescribed`;
 * a raw packet the parser rejects, a trace page diagnostic, a run that did not
   end `Finished` with exit 0, a recording error, a backend error, transport,
-  parser, storage or note losses outside `stress-lossy`, a run note other
-  than the io_uring observation note, async observation losses;
+  parser, storage or note losses outside `stress-lossy`, any run note or
+  OBSERVATION_INCOMPLETE in an oracle group (its rings are its own), async
+  observation losses;
+* an attribution group whose run flags, notes or requests' producer bits are
+  not the ones its ring calls for;
 * accounting that does not add up: packets saved = recorder attempted − failed
   = persisted; events saved = events attempted when nothing was lost; every
   call that shows loss covered by a failed send;

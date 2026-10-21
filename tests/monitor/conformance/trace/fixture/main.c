@@ -3,7 +3,7 @@
 //
 // main.c — the syscall trace conformance fixture.
 //
-//   trace-fixture user|root|threads [AREA...]
+//   trace-fixture user|root|threads|ring-private|ring-shared|ring-sqpoll [AREA...]
 //   trace-fixture --exec-target ARG...      (an execve case's new image)
 //
 // Everything happens in a private directory below /tmp that is removed before
@@ -52,6 +52,9 @@ static const struct area areas[] = {
     {"recapture", "user", area_recapture},
     {"root", "root", area_root},
     {"threads", "threads", area_threads},
+    {"ring_private", "ring-private", area_ring_private},
+    {"ring_shared", "ring-shared", area_ring_shared},
+    {"ring_sqpoll", "ring-sqpoll", area_ring_sqpoll},
 };
 #define AREA_COUNT (sizeof areas / sizeof areas[0])
 
@@ -132,7 +135,7 @@ int main(int argc, char **argv)
         return argc > 2 ? atoi(argv[2]) : 0;
     }
     if (argc < 2) {
-        fprintf(stderr, "usage: %s user|root|threads [AREA...]\n", argv[0]);
+        fprintf(stderr, "usage: %s user|root|threads|ring-private|ring-shared|ring-sqpoll [AREA...]\n", argv[0]);
         return 2;
     }
     const char *group = argv[1];

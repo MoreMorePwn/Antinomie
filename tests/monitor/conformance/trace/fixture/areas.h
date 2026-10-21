@@ -38,6 +38,10 @@ void area_recapture(void);
 void area_root(void);
 // Concurrency (threads.c): many threads and processes on every CPU.
 void area_threads(void);
+// Who wrote an io_uring entry (attribution.c): one group, one run each.
+void area_ring_private(void);
+void area_ring_shared(void);
+void area_ring_sqpoll(void);
 
 // The fixture's private working directory (absolute), created by main.
 extern char work_dir[256];
