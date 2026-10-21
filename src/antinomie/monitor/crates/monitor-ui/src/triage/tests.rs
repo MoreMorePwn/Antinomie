@@ -39,6 +39,15 @@ fn native_triage_fixture() {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
     }
+    // Cells keep the colours they are made with, so the theme comes first.
+    if let Ok(name) = std::env::var("ANTINOMIE_QA_THEME") {
+        let chosen = match name.as_str() {
+            "light" => theme::Theme::Light,
+            "blue" => theme::Theme::Blue,
+            _ => theme::Theme::Dark,
+        };
+        theme::apply_theme(&egui::Context::default(), chosen);
+    }
     let temp = PacketSpool::new().unwrap();
     let mut raw = Vec::new();
     write_rwx_calls(&mut raw, 0..3);
@@ -93,8 +102,13 @@ fn native_triage_fixture() {
         }
         let event = trace::representative(call).unwrap();
         remember_open(&mut state, call, event);
-        if let Some(row) = file_event_row(&state, call, event, OPEN_NAMES) {
-            scan.opened.push(row);
+        // Opened rows are the index's own, in the Opened table's column order.
+        for hit in file_category::classify(&state, call, event) {
+            if hit.category.tab() == FileTab::Opened {
+                scan.opened
+                    .push(file_category::category_row(&state, call, event, hit));
+                scan.counts.opened += 1;
+            }
         }
         if let Some(row) = index.observe(&state, call, event, None) {
             scan.read.push(row);

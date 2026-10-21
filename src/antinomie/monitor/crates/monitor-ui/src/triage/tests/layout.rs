@@ -481,3 +481,39 @@ fn every_table_still_sorts_from_its_headers() {
     let sort = view.scan_request.sorts[4].expect("a sort of the DNS slot");
     assert_eq!(sort.column, 1);
 }
+
+#[test]
+fn an_opened_row_keeps_every_value_under_its_own_column() {
+    let call = path_call(1, 2, "open", 3, "/tmp/analysis-note.txt");
+    let event = trace::representative(&call).unwrap();
+    let state = FdState::default();
+    let hit = file_category::classify(&state, &call, event)
+        .into_iter()
+        .find(|hit| hit.category.tab() == FileTab::Opened)
+        .expect("an open call is an Opened row");
+    let row = file_category::with_time(
+        &[file_category::category_row(&state, &call, event, hit)],
+        None,
+    )
+    .remove(0);
+    let headers = file_category::EVENT_HEADERS;
+    assert_eq!(row.len(), headers.len());
+    let at = |header: &str| &row[headers.iter().position(|h| *h == header).unwrap()].text;
+    assert!(
+        at("Path").contains("/tmp/analysis-note.txt"),
+        "{}",
+        at("Path")
+    );
+    assert_eq!(at("Operation"), "open");
+    assert!(at("Process (PID / TID)").contains(" / "));
+    assert!(at("Evidence").starts_with("call "));
+    // The shown columns are the Opened table's, each from its own header.
+    let shown: Vec<&str> = file_tabs::OPENED_COLUMNS
+        .iter()
+        .map(|&column| headers[column])
+        .collect();
+    assert_eq!(
+        shown,
+        ["Time", "Path", "Process (PID / TID)", "Result", "Evidence"]
+    );
+}
