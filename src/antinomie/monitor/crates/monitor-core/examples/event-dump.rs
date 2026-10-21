@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! Print a recording's assembled events, every phase including lifecycle
-//! records, with each captured field: key, status, length and preview.
+//! records, with each captured field: key, status (and "at exit" or "kernel
+//! copy" for an input read after the Entry), length and preview.
 //!
 //! usage: event-dump RUN_DIR [SYSCALL_OR_PID...]
 use antinomie_monitor_core::parser::Assembler;
@@ -61,9 +62,12 @@ fn main() {
                 .map(|c| if c.is_control() { '.' } else { c })
                 .collect();
             println!(
-                "    {} status {:?} logical {:?} captured {} complete {} {:?} {}",
+                "    {} status {:?}{} logical {:?} captured {} complete {} {:?} {}",
                 field.key,
                 field.status,
+                field
+                    .recapture
+                    .map_or(String::new(), |mark| format!(" ({})", mark.label())),
                 field.logical_len,
                 field.captured_len,
                 field.complete,

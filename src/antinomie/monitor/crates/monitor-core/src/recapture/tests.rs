@@ -54,12 +54,15 @@ impl Event {
         p.extend(body);
         self.packets.push(p);
     }
-    /// A string field: its bytes, or none with `status`.
+    /// A string field of argument 0: its bytes, or none with `status`.
     fn field(&mut self, key: &str, flags: u32, data: Option<&[u8]>, status: u32) {
+        self.field_of(0, key, flags, data, status);
+    }
+    fn field_of(&mut self, arg: u8, key: &str, flags: u32, data: Option<&[u8]>, status: u32) {
         self.objects += 1;
         let id = self.objects;
         let mut begin = vec![0; 40];
-        begin[0] = 0;
+        begin[0] = arg;
         begin[1] = 1;
         begin[2..4].copy_from_slice(&2u16.to_le_bytes());
         begin[4..6].copy_from_slice(&u16::from(self.phase).to_le_bytes());
@@ -188,6 +191,25 @@ fn other_entry_gaps_keep_the_call_incomplete_and_unmarked_exit_fields_stay() {
         left,
         [("arg2.data", None), ("arg2.data", Some(Recapture::AtExit))]
     );
+}
+
+#[test]
+fn a_key_two_arguments_share_is_matched_by_argument() {
+    // rt_sigprocmask: the new mask (arg 1) in, the old one (arg 2) out.
+    let mut entry = Event::new(1, 1, None);
+    entry.field_of(1, "signal.mask", 0, None, 12);
+    let mut exit = Event::new(2, 100, Some(0));
+    exit.field_of(2, "signal.mask", 0, Some(b"old-mask"), 0);
+    exit.field_of(1, "signal.mask", Recapture::FLAG, Some(b"new-mask"), 0);
+    let row = pair(entry.end(true).into_iter().chain(exit.end(false)));
+    let entry = row.entry.unwrap();
+    assert!(entry.complete, "{:?}", entry.issues);
+    assert_eq!(entry.fields[0].arg, Some(1));
+    assert_eq!(entry.fields[0].preview, b"new-mask");
+    let exit = row.exit.unwrap();
+    assert_eq!(exit.fields.len(), 1);
+    assert_eq!(exit.fields[0].arg, Some(2));
+    assert_eq!(exit.fields[0].preview, b"old-mask");
 }
 
 #[test]
