@@ -65,6 +65,69 @@ pub struct Palette {
     pub shadow: Color32,
 }
 
+impl Palette {
+    /// Every color of the palette in a fixed order, the text and semantic
+    /// colors first, so [`translate`] picks the most meaningful slot when two
+    /// slots share a color.
+    fn slots(&self) -> Vec<Color32> {
+        let mut slots = vec![
+            self.text,
+            self.muted,
+            self.hint,
+            self.accent,
+            self.heading,
+            self.good,
+            self.warn,
+            self.error,
+            self.info,
+            self.live,
+            self.number,
+            self.string,
+            self.pointer,
+            self.flag,
+            self.name,
+            self.terminal_text,
+            self.primary_text,
+            self.primary,
+            self.cta,
+            self.bg,
+            self.panel,
+            self.raised,
+            self.hover,
+            self.line,
+            self.line_soft,
+            self.selection,
+            self.selection_soft,
+            self.stripe,
+            self.good_bg,
+            self.warn_bg,
+            self.error_bg,
+            self.info_bg,
+            self.neutral_bg,
+            self.terminal,
+            self.shadow,
+        ];
+        slots.extend(self.tree);
+        slots.extend(self.syscall);
+        slots.extend(self.packet);
+        slots
+    }
+}
+
+/// `color`, a color of `from`'s palette, as the same slot of the palette of
+/// `to`; any other color stays. Lets text colored when a table was built be
+/// painted in the theme that is active when it is drawn.
+pub fn translate(color: Color32, from: Theme, to: Theme) -> Color32 {
+    if from == to {
+        return color;
+    }
+    let slots = from.palette().slots();
+    slots
+        .iter()
+        .position(|slot| *slot == color)
+        .map_or(color, |index| to.palette().slots()[index])
+}
+
 /// How many distinct branch colors a tree cycles through.
 pub const TREE_COLOR_COUNT: usize = 6;
 
