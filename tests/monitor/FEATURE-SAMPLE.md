@@ -25,7 +25,7 @@ directory.
 
 ## Run
 
-1. Optional, for detection: in Tools → Rule manager install YARA-Forge Core,
+1. Optional, for detection: in Tools → Detection rules install YARA-Forge Core,
    Emerging Threats Open and SigmaHQ Linux, and add `feature-sample.yar` and
    `feature-sample.rules` as custom groups. IDS needs Suricata on the host.
    Sigma needs a Python with pySigma 2.x and its SQLite backend, set as the

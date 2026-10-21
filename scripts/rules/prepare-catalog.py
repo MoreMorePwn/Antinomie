@@ -689,7 +689,7 @@ SHA-256 of every file Antinomie keeps and how Antinomie filters the files on
 the user's computer. It contains **no rules**, and no samples, captures or scan
 results.
 
-`catalog.json` (schema 2) is what Tools > Rule manager reads:
+`catalog.json` (schema 2) is what Tools > Detection rules reads:
 `{bucket}/catalog.json`. Nothing is
 downloaded until the person allows downloads and presses a button; scans never
 download rules or upload evidence.
@@ -706,7 +706,7 @@ download rules or upload evidence.
 3. The monitor filters locally: licenses for YARA-Forge, log sources for
    Sigma, compile checks for YARA, keyword checks for Suricata.
 4. The result is installed as a pack under the person's data directory with its
-   source, revision, hashes and license, which the Rule manager, the rule-set
+   source, revision, hashes and license, which the Detection rules page, the rule-set
    list and each scan record show.
 
 ## Sources in this catalog

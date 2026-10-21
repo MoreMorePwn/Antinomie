@@ -213,3 +213,47 @@ fn the_run_window_fits_a_short_screen_and_keeps_its_footer() {
         }
     }
 }
+
+#[test]
+fn the_user_row_keeps_uid_and_gid_on_one_line_and_choose_sits_under_the_host_file() {
+    for size in [egui::vec2(1280.0, 820.0), egui::vec2(1000.0, 700.0)] {
+        let ctx = context();
+        let mut app = analysis_setup_fixture();
+        let shown = texts(&settle(&mut app, &ctx, size));
+        let rect = |needle: &str| shown.iter().find(|(text, _)| text == needle).unwrap().1;
+        let (uid, gid) = (rect("UID"), rect("GID"));
+        assert!(
+            (uid.center().y - gid.center().y).abs() < 4.0,
+            "UID and GID are on different lines at {size:?}: {uid:?} {gid:?}"
+        );
+        // Both values sit on that line too, the second right of the GID label.
+        let mut values: Vec<_> = shown
+            .iter()
+            .filter(|(text, _)| text == "1000")
+            .map(|(_, rect)| *rect)
+            .collect();
+        values.sort_by(|a, b| a.left().total_cmp(&b.left()));
+        assert!(
+            values.len() == 2
+                && values
+                    .iter()
+                    .all(|value| (value.center().y - uid.center().y).abs() < 4.0)
+                && values[1].left() > gid.right(),
+            "GID value is not beside its label at {size:?}: {values:?}"
+        );
+
+        // The Host file field has the column to itself, with Choose… under it,
+        // and the window still fits.
+        let mut app = analysis_setup_fixture();
+        app.launch_source = LaunchSource::Upload;
+        app.source.clear();
+        let shown = texts(&settle(&mut app, &ctx, size));
+        let rect = |needle: &str| shown.iter().find(|(text, _)| text == needle).unwrap().1;
+        let (hint, choose) = (rect("Choose a file or enter its path"), rect("Choose…"));
+        assert!(choose.top() > hint.bottom(), "{choose:?} {hint:?}");
+        let window = ctx
+            .memory(|memory| memory.area_rect(Dialog::Launch.window_id()))
+            .expect("window");
+        assert!(window.right() <= size.x, "{size:?} {window:?}");
+    }
+}

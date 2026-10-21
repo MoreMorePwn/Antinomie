@@ -331,7 +331,7 @@ impl MonitorApp {
             });
             ui.end_row();
             ui.label("Rule packs");
-            if ui.button("Open Rules…").clicked() {
+            if ui.button("Open Detection rules…").clicked() {
                 self.open_library(crate::workspace::LibraryPage::Rules);
             }
             ui.end_row();

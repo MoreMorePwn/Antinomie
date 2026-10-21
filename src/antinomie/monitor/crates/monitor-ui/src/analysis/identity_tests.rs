@@ -108,3 +108,41 @@ fn launch_user_controls_wrap_in_a_narrow_large_text_pane() {
         );
     }
 }
+
+#[test]
+fn uid_and_gid_stay_on_one_line_at_every_width() {
+    for width in [260.0, 300.0, 330.0, 360.0, 420.0, 600.0] {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut request = ExecRequest {
+            uid: 1000,
+            gid: 1000,
+            ..Default::default()
+        };
+        let mut output = render(&ctx, &mut request, vec![], width);
+        for _ in 0..4 {
+            output = render(&ctx, &mut request, vec![], width);
+        }
+        let uid = find(&output, "UID").unwrap();
+        let gid = find(&output, "GID").unwrap();
+        let mut values: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "1000" => {
+                    Some(text.visual_bounding_rect())
+                }
+                _ => None,
+            })
+            .collect();
+        values.sort_by(|a, b| a.left().total_cmp(&b.left()));
+        assert_eq!(values.len(), 2, "width {width}");
+        for rect in [gid, values[0], values[1]] {
+            assert!(
+                (rect.center().y - uid.center().y).abs() < 4.0,
+                "width {width}: {rect:?} is not on the UID line {uid:?}"
+            );
+        }
+        assert!(values[1].right() <= width, "width {width}: {:?}", values[1]);
+    }
+}

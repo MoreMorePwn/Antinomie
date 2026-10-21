@@ -265,10 +265,38 @@ fn identity_fields(ui: &mut egui::Ui, request: &mut ExecRequest) {
                     }
                 }
             });
-        ui.label(egui::RichText::new("UID").color(crate::theme::muted()));
-        ui.add(egui::DragValue::new(&mut request.uid).range(0..=u32::MAX));
-        ui.label(egui::RichText::new("GID").color(crate::theme::muted()));
-        ui.add(egui::DragValue::new(&mut request.gid).range(0..=u32::MAX));
+        // UID and GID stay together: when the pair does not fit beside the
+        // preset, it moves to the next line as a whole, never the GID alone.
+        // Its width is what it measured last frame.
+        let pair_id = ui.id().with("uid-gid-width");
+        let pair = ui
+            .data(|data| data.get_temp::<f32>(pair_id))
+            .unwrap_or(200.0);
+        let room = ui.max_rect().right() - ui.next_widget_position().x;
+        if room < pair + ui.spacing().item_spacing.x {
+            ui.end_row();
+        }
+        let mut width = 3.0 * ui.spacing().item_spacing.x;
+        width += ui
+            .label(egui::RichText::new("UID").color(crate::theme::muted()))
+            .rect
+            .width();
+        width += ui
+            .add(egui::DragValue::new(&mut request.uid).range(0..=u32::MAX))
+            .rect
+            .width();
+        width += ui
+            .label(egui::RichText::new("GID").color(crate::theme::muted()))
+            .rect
+            .width();
+        width += ui
+            .add(egui::DragValue::new(&mut request.gid).range(0..=u32::MAX))
+            .rect
+            .width();
+        if ui.data(|data| data.get_temp::<f32>(pair_id)) != Some(width) {
+            ui.data_mut(|data| data.insert_temp(pair_id, width));
+            ui.ctx().request_repaint();
+        }
     });
 }
 
