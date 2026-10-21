@@ -307,9 +307,18 @@ struct NoticeHub {
     dismissed: HashSet<egui::Id>,
     pending: VecDeque<(Level, String, bool)>,
     omitted: usize,
+    /// Toast reports of this and of the previous pass: one that was reported
+    /// last pass is the same occurrence still on screen, not a new one.
+    pass: u64,
+    seen: HashSet<egui::Id>,
+    seen_before: HashSet<egui::Id>,
 }
 
-/// Report a diagnostic once: an Activity row and a toast, nothing inline.
+/// Report an occurrence: an Activity row and a toast, nothing inline. Drawn
+/// again every frame while it stands, it counts once; reported again after a
+/// frame without it (a retry that fails again) it is a new occurrence: a
+/// repeat of a toast still shown counts ×N, one that was dismissed or has
+/// expired is a new toast.
 pub(crate) fn report(ctx: &egui::Context, level: Level, message: impl std::fmt::Display) {
     register_with(ctx, level, bounded(message.to_string()), true);
 }
@@ -328,8 +337,30 @@ fn register_with(
     toast: bool,
 ) -> (egui::Id, bool) {
     let id = egui::Id::new(("activity-notice", level.label(), &message));
+    let pass = ctx.cumulative_pass_nr();
     ctx.data_mut(|data| {
         let hub = data.get_temp_mut_or_default::<NoticeHub>(egui::Id::new(HUB));
+        if toast {
+            if hub.pass != pass {
+                hub.seen_before = if hub.pass + 1 == pass {
+                    std::mem::take(&mut hub.seen)
+                } else {
+                    hub.seen.clear();
+                    HashSet::new()
+                };
+                hub.pass = pass;
+            }
+            let fresh = !hub.seen.contains(&id) && !hub.seen_before.contains(&id);
+            hub.seen.insert(id);
+            if fresh {
+                if hub.pending.len() < INBOX_LIMIT {
+                    hub.pending.push_back((level, message, true));
+                } else {
+                    hub.omitted = hub.omitted.saturating_add(1);
+                }
+            }
+            return (id, false);
+        }
         if hub.known.insert(id) {
             hub.order.push_back(id);
             if hub.order.len() > NOTICE_LIMIT {
@@ -348,8 +379,8 @@ fn register_with(
     })
 }
 
-/// The result of an action that failed, once per message: a toast and an
-/// Activity row, nothing inline. Use [`error`] for a label that states a
+/// The result of an action that failed: a toast and an Activity row, nothing
+/// inline (see [`report`] for how repeats count). Use [`error`] for a label that states a
 /// condition or a validation.
 pub(crate) fn error_toast(ui: &egui::Ui, message: impl std::fmt::Display) {
     report(ui.ctx(), Level::Error, message);
