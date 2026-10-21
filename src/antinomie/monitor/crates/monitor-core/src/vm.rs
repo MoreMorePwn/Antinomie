@@ -614,6 +614,20 @@ impl VmProcess {
         let reply = qmp.reply(&format!("{command}\n"))?;
         Ok(reply.get("return").cloned().unwrap_or_default())
     }
+    /// Bytes the guest has written to its disks since QEMU started
+    /// (`query-blockstats`, every device), or `None` when QMP does not answer.
+    pub fn disk_written(&self) -> Option<u64> {
+        let stats = self
+            .qmp(&serde_json::json!({"execute":"query-blockstats"}))
+            .ok()?;
+        Some(
+            stats
+                .as_array()?
+                .iter()
+                .filter_map(|device| device["stats"]["wr_bytes"].as_u64())
+                .sum(),
+        )
+    }
     /// Stops execution and reports whether it was previously running.
     pub fn pause(&self) -> Result<bool, String> {
         let status = self.qmp(&serde_json::json!({"execute":"query-status"}))?;
