@@ -194,15 +194,13 @@ pub(crate) fn dialogs(ctx: &egui::Context) {
         }
     }
     if let Some(error) = error {
-        let mut open = true;
-        crate::widgets::window("Evidence action failed")
-            .open(&mut open)
-            .show(ctx, |ui| {
-                crate::activity::error(ui, &error);
-            });
-        if open {
-            shared.lock().unwrap_or_else(|e| e.into_inner()).error = Some(error);
-        }
+        crate::toasts::push(
+            ctx,
+            crate::activity::Level::Error,
+            "Evidence action failed",
+            &error,
+            Some(crate::toasts::Action::open_activity()),
+        );
     }
 }
 

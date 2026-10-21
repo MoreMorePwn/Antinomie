@@ -228,7 +228,7 @@ impl CoreView {
         }
         if let Some((level, message)) = &self.status_notice {
             if message == &self.status {
-                crate::activity::notice(ui, *level, message);
+                crate::activity::report(ui.ctx(), *level, message);
                 return;
             }
         }

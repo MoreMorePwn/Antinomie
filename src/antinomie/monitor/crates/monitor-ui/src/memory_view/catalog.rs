@@ -210,7 +210,7 @@ impl MemoryView {
                 );
                 if let Some((message, error)) = &self.catalog_status {
                     if *error {
-                        crate::activity::error(ui, message);
+                        crate::activity::error_toast(ui, message);
                     } else {
                         ui.colored_label(theme::good(), message);
                     };

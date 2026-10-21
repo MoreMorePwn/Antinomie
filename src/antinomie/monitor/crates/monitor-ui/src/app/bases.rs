@@ -68,7 +68,7 @@ impl MonitorApp {
                     });
                 });
                 if let Some(error) = &self.snapshot.remote_error {
-                    crate::activity::error(ui, error);
+                    crate::activity::error_toast(ui, error);
                 }
                 if let Some(next) = download_status(ui, download.as_ref()) {
                     command = Some(next);
@@ -159,7 +159,7 @@ pub(super) fn download_status(
                 );
             }
             Some(error) => {
-                crate::activity::error(ui, format!("{}: {error}", status.label));
+                crate::activity::error_toast(ui, format!("{}: {error}", status.label));
             }
             None => {
                 ui.colored_label(theme::good(), format!("{} installed", status.label));

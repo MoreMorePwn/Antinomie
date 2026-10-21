@@ -206,9 +206,8 @@ impl Model {
             });
             ui.add(egui::Label::new(RichText::new(self.hosts_line()).color(theme::text())).wrap());
         }
-        if self.status_error.as_deref() == Some(self.status.as_str()) {
-            crate::activity::error(ui, &self.status);
-        } else if !self.status.is_empty() {
+        // A failure was raised as a toast when it arrived.
+        if self.status_error.as_deref() != Some(self.status.as_str()) && !self.status.is_empty() {
             ui.label(RichText::new(&self.status).color(theme::text()));
         }
         if self.job.is_some() {

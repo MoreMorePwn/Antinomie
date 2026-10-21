@@ -324,7 +324,7 @@ impl DiskView {
                     ui.colored_label(theme::good(), format!("Verified: matches {sum}"));
                 }
                 Verified::Differs { computed, recorded } => {
-                    crate::activity::error(
+                    crate::activity::error_toast(
                         ui,
                         format!(
                             "The image does not match its recorded SHA-256.\nrecorded {recorded}\ncomputed {computed}"
@@ -338,7 +338,7 @@ impl DiskView {
                     );
                 }
                 Verified::Failed(error) => {
-                    crate::activity::error(ui, error);
+                    crate::activity::error_toast(ui, error);
                 }
             }
         }

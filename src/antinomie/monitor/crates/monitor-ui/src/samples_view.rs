@@ -626,9 +626,7 @@ impl SamplesView {
         for error in &self.catalog_errors {
             crate::activity::report(ctx, crate::activity::Level::Warn, error);
         }
-        if let Some((message, true)) = &self.status {
-            crate::activity::report(ctx, crate::activity::Level::Error, message);
-        }
+        crate::toasts::take_failure(ctx, &mut self.status);
         if !self.open {
             return None;
         }
@@ -746,9 +744,6 @@ impl SamplesView {
                     });
                     ui.add_space(2.0);
                 }
-                if let Some((message, _)) = &self.status {
-                    crate::activity::error(ui, message);
-                }
                 ui.add_space(8.0);
                 ui.checkbox(
                     &mut self.understood,
@@ -801,9 +796,9 @@ impl SamplesView {
                          the Internet.",
                     );
                 }
-                if let Some((message, error)) = &self.status {
+                if let Some((message, _)) = &self.status {
                     ui.add_space(4.0);
-                    if *error { crate::activity::error(ui, message); } else { ui.colored_label(theme::good(), message); };
+                    ui.colored_label(theme::good(), message);
                 }
             });
     }

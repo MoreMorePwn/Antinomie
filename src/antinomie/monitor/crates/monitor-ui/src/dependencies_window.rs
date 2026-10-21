@@ -147,7 +147,7 @@ impl DependenciesWindow {
                     crate::theme::loading(ui, "Checking this system…");
                 }
                 if let Some(error) = &self.error {
-                    crate::activity::error(ui, error);
+                    crate::activity::error_toast(ui, error);
                 }
                 if let Some(report) = &self.report {
                     egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
