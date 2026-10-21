@@ -33,6 +33,7 @@ void area_keys(void);
 void area_aio(void);
 void area_uring(void);
 void area_system(void);
+void area_recapture(void);
 // Root areas (root.c).
 void area_root(void);
 // Concurrency (threads.c): many threads and processes on every CPU.
@@ -42,6 +43,8 @@ void area_threads(void);
 extern char work_dir[256];
 // The fixture's own path (/proc/self/exe resolved), for exec cases.
 extern char self_path[256];
+// When main() started: static glibc's start-up calls happened before.
+extern uint64_t main_t0;
 
 // Fill `len` bytes with a recognizable pattern seeded by `seed`.
 void pattern(void *buffer, size_t len, unsigned seed);

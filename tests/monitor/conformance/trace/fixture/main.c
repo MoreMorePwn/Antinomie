@@ -23,6 +23,7 @@
 
 char work_dir[256];
 char self_path[256];
+uint64_t main_t0;
 
 struct area {
     const char *name;
@@ -48,6 +49,7 @@ static const struct area areas[] = {
     {"aio", "user", area_aio},
     {"uring", "user", area_uring},
     {"system", "user", area_system},
+    {"recapture", "user", area_recapture},
     {"root", "root", area_root},
     {"threads", "threads", area_threads},
 };
@@ -121,6 +123,7 @@ static int selected(const struct area *area, const char *group, int argc, char *
 
 int main(int argc, char **argv)
 {
+    main_t0 = ora_now();
     if (argc >= 2 && !strcmp(argv[1], "--exec-target")) {
         // The new image of an execve case: say so and end with the code its
         // first argument names.
