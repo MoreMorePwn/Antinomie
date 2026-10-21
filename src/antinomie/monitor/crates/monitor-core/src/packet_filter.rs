@@ -1165,7 +1165,9 @@ mod tests {
     }
 
     fn wait_parsed(rows: &RowStore) {
-        for _ in 0..1200 {
+        // TShark competes with whatever else runs: wait on the clock.
+        let deadline = Instant::now() + Duration::from_secs(180);
+        while Instant::now() < deadline {
             if rows.status() != ParseStatus::Parsing {
                 return;
             }

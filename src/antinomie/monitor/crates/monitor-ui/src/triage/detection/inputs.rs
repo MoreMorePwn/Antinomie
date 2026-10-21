@@ -852,7 +852,8 @@ mod tests {
 
     /// Draw until the worker's answer shows `count` missing rows.
     fn shown_until_missing(view: &mut View, ctx: &egui::Context, count: usize) -> String {
-        for _ in 0..200 {
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        while std::time::Instant::now() < deadline {
             let text = shown(view, ctx);
             if text.matches("Evidence missing").count() == count {
                 return text;
@@ -897,7 +898,8 @@ mod tests {
         // The first answer arrives: nothing is missing.
         let text = shown_until_missing(&mut view, &ctx, 0);
         assert_eq!(text.matches("Evidence missing").count(), 0, "{text}");
-        for _ in 0..200 {
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        while std::time::Instant::now() < deadline {
             if view.presence.rx.is_none() {
                 break;
             }
