@@ -901,26 +901,20 @@ VMs default to Realistic desktop.
 | Clock | `-rtc base=localtime` | UTC | UTC (local time is offered for Windows-like guests) |
 
 Hiding the KVM signature makes the guest use its TSC instead of kvm-clock.
-On AMD hosts the topology stays cores only (QEMU warns about SMT threads).
+0.7.0 adds firmware, disk bus, SMT, pointer, clock, NAT and smaller entries:
+see "Stealth profile, part 2" below.
 The profile is validated before a VM is created, saved or launched: MAC
 addresses are six hex pairs and not multicast, identity strings have no
 control characters and are at most 64 bytes, ACPI IDs fit their 6 and 8
 bytes, and the UUID is in 8-4-4-4-12 form.
 
-**What a profile cannot change.** The root disk stays virtio-blk: the bases'
-kernels build AHCI and NVMe as modules and the bootstrap initrd loads none.
-The firmware stays SeaBIOS: under OVMF the kernel's EFI stub places the
-kernel through firmware allocations that do not know the bootstrap page
-(`antinomie_boot_gpa`), so with KASLR the kernel could land on it and the
-transport would fail now and then; UEFI needs that page reserved in the EFI
-stub first. The pointer stays virtio-tablet (the Antinomie window needs an
-absolute pointer, and the USB tablet is named QEMU as well). The RTC stays in
-UTC by default because Linux guests read it as UTC; local time would shift
-the guest clock and every recorded timestamp. The fw_cfg device, the q35 chipset layout, the
-virtio display and VM-exit timing are outside launch options; the Stealth
-profile window and the Summary list them under "Still visible". The guest
-kernel's own traces are handled in the guest (see "Guest stealth" below). A
-snapshot taken with other hardware may not restore after the profile changes.
+**What a profile cannot change.** The fw_cfg device and QEMU's ACPI table
+creator ID, the q35 chipset layout and its devices' Red Hat subsystem IDs,
+the emulated display and VM-exit timing are outside launch options; the
+Stealth profile window and the Summary list them under "Still visible". The
+guest kernel's own traces are handled in the guest (see "Guest stealth"
+below). A snapshot taken with other hardware may not restore after the
+profile changes.
 
 **Summary.** The VM configuration section of the Summary shows Compute,
 Storage and display, and Network and transport cards, and a Stealth profile
@@ -1088,18 +1082,141 @@ without a cost to observation or a separate design):
 * *QEMU's ACPI tables and fw_cfg.* To root, every table header has the creator
   ID `BXPC`, the DSDT describes `QEMU0002`/`FWCF`, and port 0x511 answers
   `QEMU`; the kernel log (root only now) prints the table headers.
-* *Virtio disk and the emulated display.* `vda` with vendor 1af4 (SATA/NVMe is
-  the follow-up card); the display is Bochs (`bochs-drm`, 1234:1111) or
-  virtio-gpu.
-* *NAT addresses.* QEMU user networking gives 10.0.2.15, gateway 10.0.2.2 and
-  DNS 10.0.2.3, which VirtualBox shares; the BusyBox base configures them
-  statically.
+* *The emulated display.* Bochs (`bochs-drm`, 1234:1111) or virtio-gpu. The
+  disk and the NAT addresses are profile entries since part 2 (below).
 * *A fresh boot.* Uptime is seconds to minutes; the VM's CPU count, memory
   and disk size are its settings (pafish flags under 2 CPUs, 2 GiB, 60 GiB).
 * *Environment.* A run gets exactly the environment the user set (by default
   `PATH` and `TERM`), not a login shell's `HOME`, `USER`, `SHELL`, `PWD`.
 * *Older bases* keep their command line, build string, symbols, worker names
   and `QEMU0002` until rebuilt, and are launched with kthreadd as parent.
+
+## Stealth profile, part 2 (0.7.0)
+
+Guest series 0052, contract revision 17 unchanged. New profile entries
+(`monitor-core/src/stealth.rs`; launch options in `stealth/launch.rs`, SMBIOS
+tables in `stealth/smbios.rs`, OVMF discovery in `stealth/firmware.rs`, NAT
+addresses in `stealth/nat.rs`). Each adds a launch option only when it
+differs from QEMU's default, and a profile saved without it reads as that
+default, so earlier VMs launch exactly as before.
+
+| Entry | QEMU option | Transparent | Realistic |
+| --- | --- | --- | --- |
+| Firmware | BIOS: none. UEFI: `-drive if=pflash,unit=0,readonly=on,file=<OVMF code>`, `-drive if=pflash,unit=1,file=<the VM's variable store>`; Secure Boot adds `-machine smm=on`, `-global driver=cfi.pflash01,property=secure,value=on` | SeaBIOS | UEFI (OVMF, no Secure Boot) |
+| Disk bus | virtio: `-drive if=virtio` as before. SATA: `-drive if=none,id=osdisk` and `-device ide-hd,bus=ide.0,model=,serial=,ver=,wwn=,rotation_rate=1\|7200`. NVMe: `-device nvme,serial=,use-intel-id=on` | virtio | SATA SSD `Samsung SSD 870 EVO 500GB`, firmware `SVT02B6Q`, a random Samsung NAA WWN |
+| CD-ROM | `-device ide-cd,bus=ide.1` (empty) | none | none |
+| SMT | `-smp N,sockets=1,cores=N/2,threads=2`, `+topoext` on AMD hosts | `-smp N` | Two threads per core |
+| Pointer | `virtio-tablet-pci`, `usb-tablet` or none (the PS/2 mouse) | virtio tablet | virtio tablet |
+| SMBIOS type 11 | `-smbios type=11,value=…` | none | The machine's OEM strings (Dell `Dell System`, `1[0A61]`…, HP `FBYTE#…`, Lenovo, Supermicro) |
+| SMBIOS entry point | `-machine smbios-entry-point-type=64\|32` (with an identity) | QEMU's | 64-bit |
+| Named CPU model | `-cpu <model>,model-id=<brand>[,legacy-cache=off,l3-cache=on]` without passthrough | the VM's CPU setting | passthrough (unchanged) |
+| kvm-clock | `-cpu …,-kvmclock` while the KVM signature is shown | on | hidden with the signature |
+| SMM | `-machine smm=off` | on | on |
+| RTC | `-rtc base=localtime,clock=vm,driftfix=slew` (each when chosen) | UTC, host clock | UTC, host clock |
+| NIC subsystem | `-device e1000e,subsys_ven=,subsys=` | Intel's | The machine maker's (Dell 1028:0a61, HP 103c:…, Lenovo 17aa:3179, Supermicro 15d9:…) |
+| NAT network | `-netdev user,net=,host=,dns=,dhcpstart=` | 10.0.2.0/24 | 192.168.1.0/24, gateway .1, DNS .10, DHCP from .100 |
+
+**Fitting to the base and the host.** Some entries need the base or the host.
+A base says what it boots with in `bundle.json` `stealth_support` (advisory,
+not part of the identity), which the image builders compute:
+
+| Value | Written when |
+| --- | --- |
+| `uefi` | The kernel has `EFI` and `EFI_STUB` and its bzImage holds the EFI stub's bootstrap page claim (0052, found by its warning text) |
+| `sata`, `nvme` | The initrd searches that bus for the root disk and the kernel has `ATA SATA_AHCI SCSI BLK_DEV_SD`, or `BLK_DEV_NVME`, built in (BusyBox bases; the minimal kernel profile now builds NVMe in) |
+| `dhcp` | The guest takes its address from DHCP (BusyBox bases now; Debian bases through NetworkManager) |
+
+The host offers OVMF when QEMU's firmware descriptors (the user's and
+`/etc/qemu/firmware`, then `share/qemu/firmware` of the QEMU in use and
+`/usr/share/qemu/firmware`, by file name, as QEMU and libvirt read them) name
+a UEFI x86_64 q35 flash image with a raw variable store, with Microsoft's
+keys enrolled for Secure Boot; each VM copies the store once
+(`efi-vars.fd`, `efi-vars-secure-boot.fd` in its folder). SMT is offered on
+Intel hosts and on AMD hosts whose CPU has TOPOEXT (without it QEMU warns that
+the CPU has no hyperthreading; with `+topoext` the guest sees `thread_siblings
+0-1`). `StealthProfile::fitted()` turns an entry the base or host lacks into
+BIOS, virtio, 10.0.2.0/24 or one thread per core at launch; the Stealth
+profile window shows such choices disabled with the reason and lists the
+fallbacks under "Still visible". A Debian base keeps virtio: its kernel
+builds AHCI and NVMe as modules and its root is `/dev/vda` (APPEND, fstab);
+the Debian kernel was not rebuilt here.
+
+**UEFI and the bootstrap page (0052).** Under OVMF the kernel's EFI stub
+decompresses and places the kernel itself, with KASLR at a random 2 MiB slot
+among the firmware's free memory, and the host's bootstrap page is free
+memory to the firmware. When the kernel landed on it, the host read the
+kernel's bytes as the boot block and failed (`Protocol error`). The stub now
+reads `antinomie_boot_gpa=` as the decompressor does (the last valid one
+counts) and allocates that page as loader data at its address before the
+kernel, the initrd and the boot data are placed; after `exit_boot()` it is
+ordinary RAM and `ant_bootstrap_reserve()` takes it from memblock as before.
+Measured: with `nokaslr` OVMF places the kernel at 0x1800000; with the page at
+0x2000000 the old kernel failed 3 of 3 boots, the new one moved to 0x2200000
+and passed 3 of 3. With KASLR and the default page: 32 of 32 UEFI boots and 6
+of 6 Secure Boot boots brought the transport up, each at a different
+physical address, plus 6 and 3 on the final base, and `/sys/firmware/efi`
+exists in the guest.
+
+**Secure Boot.** OVMF with Microsoft's keys rejects the unsigned kernel
+("Secure boot image verification failed") and then starts it with its legacy
+Linux loader ("insecure and deprecated"); the stub reports Secure Boot
+enabled and the kernel logs `secureboot: Secure boot enabled`. A later OVMF
+build without that fallback would refuse the boot; the kernel would then need
+a shim.
+
+**The base.** The BusyBox initrd mounts the first of `/dev/vda`, `/dev/sda`
+and `/dev/nvme0n1`; init runs `udhcpc` with its own script (address, route,
+`resolv.conf`). An isolated VM's NAT (`restrict=on`) answers DHCP without a
+router or DNS server; the DHCP server's address then takes both roles, so a
+program's lookups still leave the VM and are captured (they get no answer, as
+before). The host-side capture, DNS and HTTP decoding and Triage do not assume
+10.0.2.x (Triage treats every private address as the local network, which is
+why a NAT network must be private). An older host ignores `stealth_support`
+and the new base boots from virtio under SeaBIOS and gets 10.0.2.15 from the
+NAT's DHCP server; a new host fits a profile to an older base's empty list.
+
+**Disk size.** The disk's size is the VM's; a BusyBox base grows its
+filesystem to it on the first boot. A 256 GiB disk took about 400 MiB of
+image (virtio 398 MiB, SATA 411 MiB) and nearly two minutes of online
+resizing. The VM dialog's fields and the Stealth window show what a real
+machine has (pafish flags fewer than 2 CPUs, under 4 GiB RAM, under 60 GiB of
+disk).
+
+**What remains.** QEMU's CD-ROM answers the SCSI inquiry with `QEMU
+DVD-ROM` whatever its model (so the presets leave it out); its NVMe
+controller is `QEMU NVMe Ctrl` with QEMU's version as firmware and an
+`nqn.2019-08.org.qemu:` subsystem name (QEMU prefixes any name it is given);
+OVMF's firmware vendor (`EFI v2.7 by Debian distribution of EDK II`, root's
+kernel log) and its BGRT table (OEM `INTEL`/`EDK2`, root); the ACPI creator
+ID `BXPC` and fw_cfg (already listed); the chipset devices' Red Hat subsystem
+IDs (only e1000e takes a subsystem); the display. efivarfs is not mounted in
+the BusyBox base (its kernel builds it as a module), so OVMF's boot entries,
+which name QEMU's devices, are not readable there. The RTC stays UTC by
+default: Linux guests read it as UTC.
+
+**Before → after**, with the new probe (`examples/stealth-check.rs`, which
+gains `firmware=`, `disk=`, `nat=`, `cdrom=`, `smt=` and `gpa=` entries and a
+`boots` mode), Realistic desktop on a BusyBox base: before is the 0.7.0 app
+and base before this work, after is this app and base.
+
+| Check | Before | After |
+| --- | --- | --- |
+| `firmware.type` | fail: BIOS, no `/sys/firmware/efi` | pass: UEFI |
+| `firmware.vendor` (root) | (BIOS) | fail: `Debian distribution of EDK II` |
+| `smbios.oem-strings` (root) | fail: no type 11 | pass: 2 strings |
+| `acpi.oem-ids` (root) | pass | fail: OVMF's BGRT `INTEL`/`EDK2` |
+| `virtio.devices`, `block.devices`, `base.root-device` | fail: `vda`, vendor 0x1af4 | pass: `sda`, `ATA Samsung SSD 870`, rev `2B6Q`, non-rotational, WWN `naa.5002538e…` |
+| `net.addresses` | fail: 10.0.2.15, gateway 10.0.2.2, DNS 10.0.2.3 | pass: 192.168.1.100, gateway and DNS 192.168.1.1 (isolated) |
+| `pci.vendors` | fail: Bochs 1234:1111, virtio 1af4:1001 | fail: Bochs 1234:1111 |
+| `pci.subsystems` | fail: 10 of 11 Red Hat; e1000e 8086 | fail: 9 of 10 Red Hat; e1000e 17aa (Lenovo) |
+| `cpu.threads` | one thread per core | two threads per core |
+| unchanged fails | `acpi.tables`, `fwcfg.ioport`, `dmesg.vm` (root); `block.disk-size`, `display.fb`, `iomem.names`, `base.uptime`, `base.memory`, `timing.rdtsc-cpuid` | the same |
+
+Totals: 17 of 77 checks gave the VM away before, 13 of 80 after; in the view
+of uid 1000, 13 before and 8 after (the display, the chipset's subsystem IDs,
+the measurement VM's 8 GiB disk and 2 GiB RAM, uptime and VM-exit timing).
+With NVMe, `block.devices` and `block.nvme` fail on the controller's model;
+with the CD-ROM, `scsi.models` fails on `QEMU DVD-ROM`.
 
 ## Detection scanned inputs (0.6.2)
 
