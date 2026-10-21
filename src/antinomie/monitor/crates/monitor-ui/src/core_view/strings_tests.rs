@@ -208,6 +208,8 @@ fn a_header_click_sorts_ascending_then_descending() {
         &named(&["mango-fruit", "apple-fruit", "zebra-animal"]),
     );
     let mut state = StringsState::default();
+    // The table, and its headers, appear once the worker has read the strings.
+    pump(&ctx, &mut state, &record, |shown| has(shown, "Text"));
     let names = ["mango-fruit", "apple-fruit", "zebra-animal"];
     let mut show = |ui: &mut egui::Ui| {
         state.show(ui, &record);
@@ -216,20 +218,16 @@ fn a_header_click_sorts_ascending_then_descending() {
     let shown = testing::click(&ctx, "Text", &mut show);
     let wanted = ["apple-fruit", "mango-fruit", "zebra-animal"];
     let mut shown = shown;
-    for _ in 0..400 {
-        if order(&shown) == wanted {
-            break;
-        }
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while order(&shown) != wanted && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(5));
         shown = testing::frame(&ctx, vec![], &mut show);
     }
     assert_eq!(order(&shown), wanted, "ascending by text");
     let mut shown = testing::click(&ctx, "Text", &mut show);
     let wanted = ["zebra-animal", "mango-fruit", "apple-fruit"];
-    for _ in 0..400 {
-        if order(&shown) == wanted {
-            break;
-        }
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while order(&shown) != wanted && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(5));
         shown = testing::frame(&ctx, vec![], &mut show);
     }

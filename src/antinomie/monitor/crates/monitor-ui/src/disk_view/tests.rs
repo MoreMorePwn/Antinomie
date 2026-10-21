@@ -1959,7 +1959,8 @@ fn verify_agrees_with_the_recorded_digest_and_notices_a_difference() {
     // SHA-256("abc")
     let digest = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
     let finish = |view: &mut DiskView| {
-        for _ in 0..200 {
+        let deadline = std::time::Instant::now() + Duration::from_secs(120);
+        while std::time::Instant::now() < deadline {
             view.poll_dump_actions(&ctx);
             if view.verify.is_none() {
                 return;
@@ -2028,7 +2029,10 @@ fn saving_an_image_writes_a_sparse_raw_file_or_a_qcow2_and_reports_it() {
     let ctx = context();
     let mut view = DiskView::default();
     let wait = |view: &mut DiskView| {
-        for _ in 0..500 {
+        // qemu-img competes with whatever else runs: wait on the job, not on
+        // a count of ticks.
+        let deadline = std::time::Instant::now() + Duration::from_secs(120);
+        while std::time::Instant::now() < deadline {
             view.poll_dump_actions(&ctx);
             if view.saving_image.is_none() {
                 return;
