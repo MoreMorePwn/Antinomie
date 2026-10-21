@@ -270,6 +270,7 @@ impl Field {
                 preview: Vec::new(),
                 raw_path: None,
                 ranges: Vec::new(),
+                recapture: None,
             },
             begin: None,
             end: None,
@@ -804,6 +805,7 @@ impl Assembler {
                             f.summary.arg = (b[0] < 6).then_some(b[0]);
                             f.summary.key = String::from_utf8_lossy(&b[40..40 + n]).into_owned();
                             f.summary.layout = String::from_utf8_lossy(&b[40 + n..]).into_owned();
+                            f.summary.recapture = crate::api::Recapture::from_flags(u32_at(b, 36)?);
                             f.begin = Some(b.to_vec());
                         }
                     }

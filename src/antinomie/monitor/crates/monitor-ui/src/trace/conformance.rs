@@ -164,6 +164,7 @@ pub(crate) fn view(invocation: &InvocationSummary) -> CallView {
             "preview": shown,
             "status": field.status.map(status_name),
             "complete": field.complete,
+            "recapture": field.recapture.map(|mark| mark.label()),
         }));
     }
     let info_parts = info_parts(invocation);
@@ -332,6 +333,7 @@ mod view_tests {
             preview: b"/tmp\0".to_vec(),
             raw_path: None,
             ranges: vec![(0, 5)],
+            recapture: None,
         }];
         let shown = view(&call);
         assert!(shown.fallbacks.is_empty(), "{:?}", shown.fallbacks);

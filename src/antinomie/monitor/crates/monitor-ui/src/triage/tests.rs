@@ -1221,6 +1221,7 @@ pub(super) fn captured(key: &str, layout: &str, data: &[u8]) -> FieldSummary {
         preview: data.to_vec(),
         raw_path: None,
         ranges: vec![(0, len)],
+        recapture: None,
     }
 }
 

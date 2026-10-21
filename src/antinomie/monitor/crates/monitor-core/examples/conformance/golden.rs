@@ -167,7 +167,11 @@ fn line(
         .iter()
         .map(|field| {
             let key = field["key"].as_str().unwrap_or("?");
-            let status = field["status"].as_str().unwrap_or("?");
+            let mut status = field["status"].as_str().unwrap_or("?").to_owned();
+            // A field captured after the Entry (contract 22) says how.
+            if let Some(mark) = field["recapture"].as_str() {
+                status = format!("{status}@{mark}");
+            }
             if field["phase"].as_u64() == Some(1) && !volatile {
                 format!(
                     "{key}:{status}:{}",

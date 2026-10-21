@@ -93,6 +93,10 @@ pub(super) fn field_tree(
                     note: shown
                         .as_deref()
                         .map(|text| (text, theme::value(ValueKind::Text))),
+                    tag: child
+                        .field
+                        .and_then(|field| field.recapture)
+                        .map(Recapture::label),
                     selected: child.field.is_some_and(|field| {
                         inspector.selection
                             == Some(Selection::Captured {
@@ -103,8 +107,11 @@ pub(super) fn field_tree(
                 },
             );
             if let Some(field) = child.field {
-                let response =
-                    response.on_hover_text(format!("{}\n{}", field.key, capture_summary(field)));
+                let mut hover = format!("{}\n{}", field.key, capture_summary(field));
+                if let Some(mark) = field.recapture {
+                    hover = format!("{hover}\n\n{}", recapture_explanation(mark));
+                }
+                let response = response.on_hover_text(hover);
                 if field_menu(&response, field) {
                     inspector.request_data(invocation, nr, format!("p{phase}"), field);
                 }
@@ -246,6 +253,20 @@ pub(crate) fn argument_preview(fields: &[(u8, &FieldSummary)]) -> Option<(Option
     (captured > 1).then(|| (None, format!("{captured} captured objects")))
 }
 
+/// The mark an argument row shows when data behind it was captured later:
+/// "kernel copy" if any of its objects is one, else "at exit".
+pub(crate) fn argument_recapture(fields: &[(u8, &FieldSummary)]) -> Option<Recapture> {
+    let mut marks = fields.iter().filter_map(|(_, field)| field.recapture);
+    let first = marks.next()?;
+    Some(
+        if first == Recapture::KernelCopy || marks.any(|mark| mark == Recapture::KernelCopy) {
+            Recapture::KernelCopy
+        } else {
+            Recapture::AtExit
+        },
+    )
+}
+
 /// "832 bytes", or "4 of 8 bytes" when only part was captured.
 pub(crate) fn capture_size(field: &FieldSummary) -> String {
     match field.logical_len {
@@ -338,13 +359,34 @@ pub(crate) fn incomplete_reason(field: &FieldSummary) -> String {
 }
 
 /// "Captured bytes (N bytes)"; an incomplete capture also says how much of
-/// the object it holds and why it stopped.
+/// the object it holds and why it stopped, a later capture where it came from.
 pub(crate) fn capture_summary(field: &FieldSummary) -> String {
     let count = capture_size(field);
-    if field.complete {
-        format!("Captured bytes ({count})")
-    } else {
+    if !field.complete {
         format!("Captured bytes ({count}, {})", incomplete_reason(field))
+    } else if let Some(mark) = field.recapture {
+        format!("Captured bytes ({count}, {})", mark.label())
+    } else {
+        format!("Captured bytes ({count})")
+    }
+}
+
+/// What a later capture's tag means, for its tooltip (contract section 22).
+pub(crate) fn recapture_explanation(mark: Recapture) -> &'static str {
+    match mark {
+        Recapture::AtExit => {
+            "Read when the call returned, not when it started: the memory was not loaded \
+             yet when the call began, and the recorder never loads memory itself. The call \
+             loaded it. Another thread of the program could have changed it while the call \
+             ran, so the call may have been given something else."
+        }
+        Recapture::KernelCopy => {
+            "The kernel's own copy: the program's memory was not loaded when the call \
+             began, and the exec then replaced it. This is the path the exec opened, or an \
+             argument or environment string as the kernel placed it on the new program's \
+             stack, read when the call returned. Another thread could have changed the \
+             original while the kernel copied it."
+        }
     }
 }
 

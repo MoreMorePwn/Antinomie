@@ -620,8 +620,9 @@ impl Recording {
                 continue;
             }
             tracker.packet(&header);
-            // Only exec names and lifecycle records need object assembly.
-            if header.phase == 3 || (header.phase == 1 && matches!(header.syscall_nr, 59 | 322)) {
+            // Only exec names (at entry, or recaptured at exit) and lifecycle
+            // records need object assembly.
+            if header.phase == 3 || (header.phase != 0 && matches!(header.syscall_nr, 59 | 322)) {
                 match assembler.ingest(&packet) {
                     Ok(Some(event)) => tracker.event(&event),
                     Ok(None) => {}
@@ -1733,6 +1734,7 @@ mod tests {
             preview: vec![],
             raw_path: Some(external.join("secret.raw")),
             ranges: vec![(0, 6)],
+            recapture: None,
         };
         assert!(matches!(
             read_captured_range(&directory, &field, 0, 6),
@@ -1756,6 +1758,7 @@ mod tests {
             preview: vec![],
             raw_path: None,
             ranges: vec![(0, 2), (8, 2)],
+            recapture: None,
         };
         assert!(matches!(
             read_captured_range(Path::new("/unused"), &field, 1, 8),

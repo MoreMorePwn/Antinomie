@@ -807,6 +807,7 @@ impl DataWindows {
             preview: bytes,
             raw_path: None,
             ranges: vec![(0, len)],
+            recapture: None,
         };
         self.open(ctx, OpenData { key, title, field }, None);
     }
@@ -869,6 +870,7 @@ mod tests {
             preview: data[..data.len().min(256)].to_vec(),
             raw_path: None,
             ranges: vec![(0, data.len() as u64)],
+            recapture: None,
         }
     }
 
