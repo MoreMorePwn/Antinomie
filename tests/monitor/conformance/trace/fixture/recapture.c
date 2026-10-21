@@ -19,12 +19,14 @@
 //   - memory the call never reads, which stays NOT_RESIDENT and which the
 //     recorder leaves unloaded (mincore).
 //
-// Slots: openat execve readlinkat write mincore (all also covered elsewhere).
+// Slots: openat execve readlinkat write mincore rt_sigprocmask (all also
+// covered elsewhere).
 #include "areas.h"
 
 #include <fcntl.h>
 #include <poll.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -51,6 +53,7 @@ static const struct {
     "ANT_RECAPTURE=exec", // 4
     "recapture-noexec",   // 5: a file the kernel cannot execute
     "ANT_RECAPTURE=fail", // 6
+    "\0\010",             // 7: a signal set with SIGUSR2 (bit 11)
 }};
 
 // What a cold child reports to its parent about an exec that replaced it.
@@ -95,6 +98,19 @@ static void open_child(void)
     DONE();
     if (fd >= 0)
         close((int)fd);
+}
+
+// rt_sigprocmask names its new and old masks "signal.mask" (arguments 1 and
+// 2): the old mask written at exit is not the new one read again.
+static void sigmask_child(void)
+{
+    uint64_t old = 0;
+    CALL("rt_sigprocmask.cold_set", rt_sigprocmask, WANT_OK, SIG_BLOCK, COLD_TEXT(7), &old, 8);
+    in_buf(1, COLD_TEXT(7), 8);
+    out_buf(2, &old, sizeof old);
+    want_recapture("signal.mask", "at exit");
+    why("a forked child has no page-table entry for the literal set; the call faults it in");
+    DONE();
 }
 
 static void failed_exec_child(void)
@@ -312,6 +328,7 @@ void area_recapture(void)
     startup_case();
     cold_child(421, "recapture openat child", open_child);
     cold_child(422, "recapture failed exec child", failed_exec_child);
+    cold_child(423, "recapture sigprocmask child", sigmask_child);
     exec_cases();
     mapping_case();
     untouched_case();

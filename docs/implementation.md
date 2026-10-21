@@ -452,8 +452,9 @@ userfaultfd or FUSE stall, no residency change a sample could see with
   96 bytes, nothing allocated. `recapture()` runs at the end of the Exit: a
   string is measured again with its ceiling, a buffer is published only if one
   no-fault byte per page reads, and the field goes out in the Exit with the
-  Entry's key, direction input and FIELD_BEGIN flag bit 3 (RECAPTURED). A key
-  the Exit already published (an in/out buffer) is not read twice. The exec
+  Entry's key, direction input and FIELD_BEGIN flag bit 3 (RECAPTURED). An
+  argument and key the Exit already published (an in/out buffer) is not read
+  twice. The exec
   vector walk keeps where it stopped (`ant_exec_resume`) and resumes there. If
   the address space changed (a successful exec), nothing is read from the old
   one: `ant_monitor_exec_names()` (a hook in `exec_binprm()` next to the exec
@@ -466,11 +467,12 @@ userfaultfd or FUSE stall, no residency change a sample could see with
 * **Host (`monitor-core/src/recapture.rs`).** `FieldSummary::recapture`
   (`AtExit`, `KernelCopy`; serialized only when set) comes from the flags
   word. `pair_events()` moves a complete recaptured Exit field into the Entry
-  in place of the NOT_RESIDENT field (keeping its object id and dropping its
-  "capture incomplete" issue) or adds it (exec strings the Entry never
-  reached), so every reader of a call's inputs sees the value and a call whose
-  only gaps were recaptured is complete. The process tree takes an exec's path
-  from the Exit when the Entry had none (live and archive scan).
+  in place of the NOT_RESIDENT field of the same argument and key (keeping
+  its object id and dropping its "capture incomplete" issue) or adds it (exec
+  strings the Entry never reached), so every reader of a call's inputs sees
+  the value and a call whose only gaps were recaptured is complete. The
+  process tree takes an exec's path from the Exit when the Entry had none
+  (live and archive scan).
 * **Trace view.** A small "at exit" or "kernel copy" pill on the field row and
   on its argument row; the tooltip and the inspector say in plain words that
   the bytes are what memory held when the call returned and that another

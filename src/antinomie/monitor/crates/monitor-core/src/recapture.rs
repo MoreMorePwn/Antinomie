@@ -13,7 +13,7 @@ const NOT_RESIDENT: u32 = 12;
 
 /// Move the complete recaptured fields of `row`'s Exit into its Entry.
 ///
-/// | Entry field with the same key | Result |
+/// | Entry field with the same key and argument | Result |
 /// | --- | --- |
 /// | NOT_RESIDENT | Replaced; it keeps its object id, and its "capture incomplete" issue goes |
 /// | None (exec strings after the one the Entry stopped at) | Appended with a new object id |
@@ -43,7 +43,13 @@ pub(crate) fn promote(row: &mut InvocationSummary) {
             kept.push(field);
             continue;
         }
-        match entry.fields.iter_mut().find(|slot| slot.key == field.key) {
+        // The same key can name two arguments (rt_sigprocmask's new and old
+        // masks); the field is the input of its own argument.
+        match entry
+            .fields
+            .iter_mut()
+            .find(|slot| slot.key == field.key && slot.arg == field.arg)
+        {
             Some(slot) if slot.status == Some(NOT_RESIDENT) => {
                 let issue = format!(
                     "object {} capture incomplete, status NOT_RESIDENT",
@@ -52,7 +58,6 @@ pub(crate) fn promote(row: &mut InvocationSummary) {
                 entry.issues.retain(|existing| *existing != issue);
                 *slot = FieldSummary {
                     object_id: slot.object_id,
-                    arg: slot.arg.or(field.arg),
                     ..field
                 };
             }

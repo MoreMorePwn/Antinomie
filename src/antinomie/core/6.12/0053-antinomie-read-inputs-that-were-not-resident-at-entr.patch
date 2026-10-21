@@ -1,4 +1,4 @@
-From 35813dafc4b40d7d298c921c2f5d7ec54484be92 Mon Sep 17 00:00:00 2001
+From cfaca5b97d1ab9c46d1ff9b8cf013d80cd876bbf Mon Sep 17 00:00:00 2001
 From: MikiMiku <jonathanirvinjo@gmail.com>
 Date: Thu, 22 Oct 2026 03:39:00 +0700
 Subject: [PATCH] antinomie: read inputs that were not resident at entry again
@@ -35,8 +35,8 @@ additive and the contract revision stays 17.
 ---
  fs/exec.c                         |   1 +
  include/linux/antinomie_monitor.h |   3 +
- kernel/antinomie/recorder.c       | 333 ++++++++++++++++++++++++++++--
- 3 files changed, 317 insertions(+), 20 deletions(-)
+ kernel/antinomie/recorder.c       | 336 ++++++++++++++++++++++++++++--
+ 3 files changed, 320 insertions(+), 20 deletions(-)
 
 diff --git a/fs/exec.c b/fs/exec.c
 index ba438abb4..856cd27a9 100644
@@ -79,7 +79,7 @@ index fd00bdcc1..47e18756b 100644
  static inline void ant_monitor_async_file_id(struct ant_async **slot, u8 kind,
  					     struct inode *inode, int nlink_delta) {}
 diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
-index ae4ece278..c02985102 100644
+index ae4ece278..ed60f6d88 100644
 --- a/kernel/antinomie/recorder.c
 +++ b/kernel/antinomie/recorder.c
 @@ -47,6 +47,30 @@
@@ -130,7 +130,7 @@ index ae4ece278..c02985102 100644
  	u8 packet[ANT_HEADER_SIZE + ANT_CHUNK_SIZE];
  };
  
-@@ -246,6 +280,48 @@ static void incomplete(struct ant_task *ctx, enum ant_status status)
+@@ -246,6 +280,51 @@ static void incomplete(struct ant_task *ctx, enum ant_status status)
  	}
  }
  
@@ -164,27 +164,30 @@ index ae4ece278..c02985102 100644
 +	strscpy(r->key, key, sizeof(r->key));
 +}
 +
-+/* An Exit field with the key of a remembered input is the call's own output
-+ * for that key (an in/out buffer); the input is not read a second time.
++/* An Exit field with the argument and key of a remembered input is the
++ * call's own output for that buffer (an in/out buffer); the input is not read
++ * a second time. Another argument's output under the same key (the old mask
++ * of rt_sigprocmask) is a different buffer.
 + */
-+static void recapture_drop(struct ant_task *ctx, const char *key)
++static void recapture_drop(struct ant_task *ctx, u8 arg_index, const char *key)
 +{
 +	int i;
 +
 +	for (i = 0; i < ctx->recapture_count; i++)
-+		if (!strcmp(ctx->recapture[i].key, key))
++		if (ctx->recapture[i].arg_index == arg_index &&
++		    !strcmp(ctx->recapture[i].key, key))
 +			ctx->recapture[i].done = true;
 +}
 +
  static size_t iter_user_copy(void __user *base, size_t progress, size_t len,
  			     void *out, void *unused)
  {
-@@ -273,9 +349,12 @@ static void field(struct ant_task *ctx, u8 arg_index, const char *key,
+@@ -273,9 +352,12 @@ static void field(struct ant_task *ctx, u8 arg_index, const char *key,
  	ctx->object_count++;
  	if (address && ctx->phase != 3)
  		ctx->flags |= ANT_OBSERVATIONAL;
 +	if (ctx->phase == 2 && !ctx->field_mark && ctx->recapture_count)
-+		recapture_drop(ctx, key);
++		recapture_drop(ctx, arg_index, key);
  	memset(body, 0, 40);
  	body[0] = arg_index;
 -	body[1] = ctx->phase == 2 || ctx->async_output ? 2 : 1;
@@ -193,7 +196,7 @@ index ae4ece278..c02985102 100644
  	put_unaligned_le16(encoding, body + 2);
  	put_unaligned_le16(ctx->kernel_imported ? 3 : ctx->phase == 3 ? 5 : ctx->phase,
  			   body + 4);
-@@ -285,7 +364,7 @@ static void field(struct ant_task *ctx, u8 arg_index, const char *key,
+@@ -285,7 +367,7 @@ static void field(struct ant_task *ctx, u8 arg_index, const char *key,
  	put_unaligned_le16(layout_len, body + 34);
  	put_unaligned_le32((encoding == 2 ? 2 : 0) |
  			     (encoding == 1 && (ctx->nr == 1 || ctx->nr == 20 || ctx->nr == 44) &&
@@ -202,7 +205,7 @@ index ae4ece278..c02985102 100644
  	memcpy(body + 40, key, key_len);
  	memcpy(body + 40 + key_len, layout, layout_len);
  	if (status == ANT_COPY_FAULT && !snapshot)
-@@ -322,6 +401,10 @@ static void field(struct ant_task *ctx, u8 arg_index, const char *key,
+@@ -322,6 +404,10 @@ static void field(struct ant_task *ctx, u8 arg_index, const char *key,
  			status = ANT_ABORTED_ON_LOSS;
  	}
  	incomplete(ctx, status);
@@ -213,7 +216,7 @@ index ae4ece278..c02985102 100644
  	put_unaligned_le64(object_size, body);
  	put_unaligned_le64(captured_len, body + 8);
  	put_unaligned_le32(status, body + 16);
-@@ -350,8 +433,10 @@ static u64 user_string(struct ant_task *ctx, u8 arg_index, const char *key,
+@@ -350,8 +436,10 @@ static u64 user_string(struct ant_task *ctx, u8 arg_index, const char *key,
  		status = ANT_COPY_FAULT;
  	else if (len > ceiling)
  		status = ANT_INVALID_EXTENT;
@@ -224,7 +227,7 @@ index ae4ece278..c02985102 100644
  	return status == ANT_COMPLETE ? len : 0;
  }
  
-@@ -389,34 +474,63 @@ void ant_capture_set_state(struct ant_task *ctx, void *state,
+@@ -389,34 +477,63 @@ void ant_capture_set_state(struct ant_task *ctx, void *state,
  	ctx->native_release = release;
  }
  
@@ -304,7 +307,7 @@ index ae4ece278..c02985102 100644
  		if (!used || ctx->failed_count)
  			return;
  		*budget -= used;
-@@ -591,8 +705,11 @@ static void capture_entry(struct ant_task *ctx)
+@@ -591,8 +708,11 @@ static void capture_entry(struct ant_task *ctx)
  			user_string(ctx, 0, "arg0.path", a[0], PATH_MAX);
  		budget = max_t(u64, ARG_MAX,
  			min_t(u64, _STK_LIM * 3 / 4, rlimit(RLIMIT_STACK) / 4));
@@ -318,7 +321,7 @@ index ae4ece278..c02985102 100644
  		break;
  	case 82:
  		user_string(ctx, 0, "arg0.path", a[0], PATH_MAX);
-@@ -718,6 +835,177 @@ static void capture_exit(struct ant_task *ctx, long result)
+@@ -718,6 +838,177 @@ static void capture_exit(struct ant_task *ctx, long result)
  	}
  }
  
@@ -496,7 +499,7 @@ index ae4ece278..c02985102 100644
  static void operand_clear(struct ant_task *ctx)
  {
  	kvfree(ctx->operand);
-@@ -1004,6 +1292,8 @@ void ant_monitor_enter(struct pt_regs *regs, long nr)
+@@ -1004,6 +1295,8 @@ void ant_monitor_enter(struct pt_regs *regs, long nr)
  	ctx->iov_count = 0;
  	ctx->sock_capacity = 0;
  	ctx->sock_capacity_valid = false;
@@ -505,7 +508,7 @@ index ae4ece278..c02985102 100644
  	ctx->nr = nr;
  	ctx->abi = in_ia32_syscall() ? 0 : nr & ANT_X32_BIT ? 2 : 1;
  	ctx->arg_count = ctx->abi == 1 ? ant_native_syscalls[nr].argc : 255;
-@@ -1040,7 +1330,9 @@ void ant_monitor_exit(struct pt_regs *regs)
+@@ -1040,7 +1333,9 @@ void ant_monitor_exit(struct pt_regs *regs)
  	event_begin(ctx, 2, regs->ax);
  	operand_emit(ctx);
  	capture_exit(ctx, regs->ax);
@@ -515,7 +518,7 @@ index ae4ece278..c02985102 100644
  	ctx->active = false;
  	ant_capture_set_state(ctx, NULL, NULL);
  	kfree(ctx->iov);
-@@ -1430,6 +1722,7 @@ void ant_monitor_release(struct task_struct *task)
+@@ -1430,6 +1725,7 @@ void ant_monitor_release(struct task_struct *task)
  		ant_capture_set_state(ctx, NULL, NULL);
  		operand_clear(ctx);
  		kfree(ctx->iov);

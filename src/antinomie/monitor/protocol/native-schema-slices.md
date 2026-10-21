@@ -880,7 +880,7 @@ the call returns, when the page is usually resident, and says so.
 |---|---|
 | Which fields | An input field of the call's own Entry (phase 1) whose status is `ANT_NOT_RESIDENT`, read from the caller's memory (no snapshot, no iterator, not async, not kernel-imported). At most 8 per call, keys under 96 bytes; others stay `ANT_NOT_RESIDENT`. The task context keeps them in place: nothing is allocated |
 | Exec vectors | The entry walk of `execve`/`execveat` `argv`/`envp` stops at the first pointer or string on a non-resident page, as before, and keeps the point to resume from (index, and the pointer if it was read) |
-| When | At the end of the Exit, after the call's own exit fields. An Exit field with the same key (an in/out buffer) is the call's output and drops the second read |
+| When | At the end of the Exit, after the call's own exit fields. An Exit field with the same argument and key (an in/out buffer) is the call's output and drops the second read; the same key on another argument (`rt_sigprocmask`'s old mask) does not |
 | How | Still without faulting. A string is measured again with its ceiling; a buffer is published only if every page reads without a fault at that moment. A field that still cannot be read is not published: the Entry's `ANT_NOT_RESIDENT` stands |
 | Record | A normal field of the Exit event with the Entry's key, layout, encoding and argument, direction 1 (input), source 2 (exit), status `ANT_COMPLETE`, and bit 3 (`0x8`, RECAPTURED) in the FIELD_BEGIN flags word (offset 36). A failed exec resumes its vectors: the remaining pointers and strings, each marked |
 | Successful exec | The caller's memory is gone (the address space differs from the Entry's), so nothing is read from it. The path is the exec's own copy (`bprm->filename`, the `struct filename` from `getname`; for `execveat` relative to a descriptor the caller's part after `/dev/fd/N/`), source 3 (kernel-imported), address the caller's pointer. The `argv`/`envp` strings from the resume point on are read from the new image's stack, `[arg_start, arg_end)` and `[env_start, env_end)`, which the kernel just wrote and no user code has run on; their address is that of the copy. These carry bit 4 (`0x10`, KERNEL_COPY) too. Pointer values after the resume point are not recorded. An interpreter exec (script, binfmt_misc: `bprm->interp != bprm->filename`) rewrote `argv`, so only `envp` is recovered |
@@ -895,11 +895,12 @@ and stays distinguishable. A kernel copy is what the kernel used (the path it
 opened, the strings it gave the new program), read after the call.
 
 **Host.** Pairing moves a complete recaptured Exit field into the Entry, in
-place of the `ANT_NOT_RESIDENT` field with the same key (an exec string the
-Entry never reached is added). The field keeps the Entry's object id and its
-"capture incomplete" issue is removed, so a call whose only gaps were
-recaptured is complete; `FieldSummary::recapture` (`AtExit`, `KernelCopy`)
-carries the mark into the trace, Triage, filters, exports and JSON. A
+place of the `ANT_NOT_RESIDENT` field with the same argument and key (an exec
+string the Entry never reached is added). The field keeps the Entry's object
+id and its "capture incomplete" issue is removed, so a call whose only gaps
+were recaptured is complete; `FieldSummary::recapture` (`AtExit`,
+`KernelCopy`) carries the mark into the trace, Triage, filters, exports and
+JSON. A
 recaptured field that is not complete (a page reclaimed between the check and
 the copy) stays in the Exit as sent.
 
