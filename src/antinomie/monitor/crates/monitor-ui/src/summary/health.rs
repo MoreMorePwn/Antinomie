@@ -75,15 +75,10 @@ impl<'a> Facts<'a> {
             if let Some(status) = &run.execution {
                 ui.add(
                     egui::Label::new(format!(
-                        "{} [{}]: {} async observations lost{}",
+                        "{} [{}]: {} async observations lost",
                         run.request.path,
                         short_id(&run.id),
                         status.async_loss_count,
-                        if status.flags & 16 != 0 {
-                            "; loss flag set"
-                        } else {
-                            ""
-                        }
                     ))
                     .wrap(),
                 );
@@ -115,7 +110,7 @@ impl<'a> Facts<'a> {
             .as_ref()
             .map(|error| format!("Recorder health unavailable for boot {boot}: {error}"));
         [recorder, unavailable].into_iter().flatten().chain(self.async_runs.iter().map(move |run| {
-            format!("Async observation loss reported for {} [{}], boot {boot}; see the retained run notes and execution status.", run.request.path, short_id(&run.id))
+            format!("Async observations lost for {} [{}], boot {boot}; see the retained run notes and execution status.", run.request.path, short_id(&run.id))
         }))
     }
 }

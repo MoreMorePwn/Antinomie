@@ -164,17 +164,24 @@ impl ProgramRun {
             self.ended_ms.get_or_insert_with(unix_ms);
         }
     }
+    /// Keep the guest's async observation facts in the run's notes, so they
+    /// stay known when a later status query is unavailable: lost
+    /// observations (a warning elsewhere), and, apart from it, requests whose
+    /// submitting task is not proven (information only).
     pub(crate) fn record_async_loss(&mut self) {
-        if let Some(status) = self
-            .summary
-            .execution
-            .as_ref()
-            .filter(|status| status.has_async_loss())
-        {
+        let Some(status) = self.summary.execution.as_ref() else {
+            return;
+        };
+        let incomplete = status.observation_incomplete();
+        if status.has_async_loss() {
             let note = format!(
-                "{ASYNC_LOSS_NOTE_PREFIX}: last guest count {}, loss flag {}. Saving may continue, but observation completeness is not proven.",
+                "{ASYNC_LOSS_NOTE_PREFIX} {} record{}: saving may continue, but those requests are not wholly observed.",
                 status.async_loss_count,
-                status.flags & 16 != 0
+                if status.async_loss_count == 1 {
+                    ""
+                } else {
+                    "s"
+                }
             );
             if let Some(saved) = self
                 .summary
@@ -189,6 +196,9 @@ impl ProgramRun {
                 // is bounded by its fixed text and numeric status fields.
                 self.summary.notes.push(note);
             }
+        }
+        if incomplete {
+            self.add_note(ASYNC_ATTRIBUTION_NOTE);
         }
     }
     /// Complete only after EOF with every terminal READ reply received.
@@ -746,8 +756,10 @@ mod tests {
         run.record_async_loss();
         run.summary.execution.as_mut().unwrap().async_loss_count = 9;
         run.record_async_loss();
-        assert_eq!(run.summary.notes.len(), 1);
-        assert!(run.summary.notes[0].contains("last guest count 9"));
+        // The loss, updated in place, and apart from it the attribution.
+        assert_eq!(run.summary.notes.len(), 2);
+        assert!(run.summary.notes[0].starts_with("Async observation lost 9 records"));
+        assert_eq!(run.summary.notes[1], ASYNC_ATTRIBUTION_NOTE);
         run.summary.notes.clear();
         for n in 0..MAX_NOTES {
             run.add_note(format!("general note {n}"));
@@ -759,7 +771,7 @@ mod tests {
                 .notes
                 .last()
                 .unwrap()
-                .contains("last guest count 9")
+                .starts_with("Async observation lost 9 records")
         );
         run.summary.execution = None;
         assert!(run.summary.has_async_loss());
@@ -773,6 +785,39 @@ mod tests {
         assert_eq!(saved.notes, run.summary.notes);
         drop(run);
         storage::settle_json_under(&directory);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
+    fn requests_not_proven_to_one_task_are_a_note_and_not_loss() {
+        let (mut run, directory) = open_run("ant-run-attribution");
+        run.summary.execution = Some(RunExecution {
+            generation: 1,
+            live_task_count: 0,
+            pending_async_count: 0,
+            flags: 16 | 8 | 3,
+            root_wait_status: Some(0),
+            root_exit: Some(WaitStatus::Exited { code: 0 }),
+            async_loss_count: 0,
+            total_task_count: 1,
+        });
+        run.record_async_loss();
+        run.record_async_loss();
+        assert_eq!(run.summary.notes, [ASYNC_ATTRIBUTION_NOTE]);
+        assert!(!run.summary.has_async_loss());
+        // A complete observation leaves no note at all.
+        run.summary.notes.clear();
+        run.summary.execution.as_mut().unwrap().flags = 8 | 3;
+        run.record_async_loss();
+        assert!(run.summary.notes.is_empty());
+        // Runs saved before: a count of 0 with the flag was this same fact.
+        run.summary.execution = None;
+        run.summary.notes = vec!["Async observation loss reported: last guest count 0, loss flag true. Saving may continue, but observation completeness is not proven.".into()];
+        assert!(!run.summary.has_async_loss());
+        assert_eq!(run_note_text(&run.summary.notes[0]), ASYNC_ATTRIBUTION_NOTE);
+        run.summary.notes = vec!["Async observation loss reported: last guest count 12, loss flag true. Saving may continue, but observation completeness is not proven.".into()];
+        assert!(run.summary.has_async_loss());
+        drop(run);
+        crate::storage::settle_json_under(&directory);
         std::fs::remove_dir_all(directory).unwrap();
     }
     #[test]

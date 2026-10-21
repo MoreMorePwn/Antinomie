@@ -115,9 +115,11 @@ fn async_loss_uses_exact_vm_and_boot_and_survives_missing_execution_status() {
     let current = snapshot.runs.last_mut().unwrap();
     current.execution.as_mut().unwrap().async_loss_count = 0;
     assert!(
-        current.has_async_loss(),
-        "the guest's loss flag is independent of its counter"
+        !current.has_async_loss(),
+        "OBSERVATION_INCOMPLETE alone is unproven attribution, not loss"
     );
+    assert!(Facts::new(&snapshot, &[]).async_runs.is_empty());
+    let current = snapshot.runs.last_mut().unwrap();
     current
         .notes
         .push("Async observation loss reported: last guest count 3".into());

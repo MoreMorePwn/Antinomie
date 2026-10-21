@@ -774,7 +774,45 @@ pub struct RunExecution {
     pub total_task_count: u64,
 }
 
-pub(crate) const ASYNC_LOSS_NOTE_PREFIX: &str = "Async observation loss reported";
+/// Starts the note of a run whose guest counted lost async observations.
+pub(crate) const ASYNC_LOSS_NOTE_PREFIX: &str = "Async observation lost";
+/// The note of a run whose guest lost nothing but could not prove which task
+/// submitted every request (OBSERVATION_INCOMPLETE): information, not loss.
+pub const ASYNC_ATTRIBUTION_NOTE: &str = "Uses io_uring: which task submitted each request is not proven (an SQPOLL ring, or a ring another process can write); nothing was lost";
+/// How runs saved before the two notes were told apart said either:
+/// "Async observation loss reported: last guest count N, loss flag B. …".
+const LEGACY_ASYNC_NOTE_PREFIX: &str = "Async observation loss reported";
+
+/// A run note as it reads now. A note saved before the async notes were told
+/// apart that carried only the incomplete flag (guest count 0) reads as the
+/// attribution note it meant; every other note is itself.
+pub fn run_note_text(note: &str) -> &str {
+    if note.starts_with(LEGACY_ASYNC_NOTE_PREFIX) && !async_loss_note(note) {
+        ASYNC_ATTRIBUTION_NOTE
+    } else {
+        note
+    }
+}
+
+/// Whether a run note says async observations were lost: the loss note, or
+/// a legacy note with a guest count above 0 (one with count 0 only had the
+/// incomplete flag, which is not loss).
+pub(crate) fn async_loss_note(note: &str) -> bool {
+    if note.starts_with(ASYNC_LOSS_NOTE_PREFIX) {
+        return true;
+    }
+    let Some(rest) = note.strip_prefix(LEGACY_ASYNC_NOTE_PREFIX) else {
+        return false;
+    };
+    rest.split_once("last guest count ")
+        .and_then(|(_, count)| {
+            count
+                .split(|c: char| !c.is_ascii_digit())
+                .next()
+                .and_then(|digits| digits.parse::<u64>().ok())
+        })
+        .is_none_or(|count| count > 0)
+}
 /// Starts the note a run gets in each recording segment that follows a
 /// transport reconnect. The run keeps its identity; the note counts segments.
 pub(crate) const RECONNECT_NOTE_PREFIX: &str = "Recording continues after a transport reconnect";
@@ -798,14 +836,13 @@ impl RunSummary {
     /// | Result | Meaning |
     /// |---|---|
     /// | `true` | Loss remains known even if a later status query is unavailable |
+    ///
+    /// Incomplete attribution alone (an SQPOLL or shared ring) is not loss.
     pub fn has_async_loss(&self) -> bool {
         self.execution
             .as_ref()
             .is_some_and(RunExecution::has_async_loss)
-            || self
-                .notes
-                .iter()
-                .any(|note| note.starts_with(ASYNC_LOSS_NOTE_PREFIX))
+            || self.notes.iter().any(|note| async_loss_note(note))
     }
 }
 
@@ -827,20 +864,18 @@ impl RunExecution {
     }
 
     /// Whether the guest could not attribute or count every async request
-    /// (OBSERVATION_INCOMPLETE). Every io_uring request sets it, because the
-    /// submitting task of a shared ring is not proven. It says nothing about
-    /// whether the program has ended.
+    /// (OBSERVATION_INCOMPLETE): an SQPOLL ring or a ring another process can
+    /// write, whose submitting task is not proven (every io_uring request, for
+    /// a guest before series 0055), or a request it could not track. It says
+    /// nothing about whether the program has ended, nor that anything was lost.
     pub fn observation_incomplete(&self) -> bool {
         self.flags & 16 != 0
     }
 
-    /// Whether the guest reported async capture loss, independently of transport drops.
-    ///
-    /// | Result | Meaning |
-    /// |---|---|
-    /// | `true` | A loss count or the guest's async-loss status flag is present |
+    /// Whether the guest counted lost async observations, independently of
+    /// transport drops. Incomplete attribution alone is not loss.
     pub fn has_async_loss(&self) -> bool {
-        self.async_loss_count > 0 || self.flags & 16 != 0
+        self.async_loss_count > 0
     }
 }
 
