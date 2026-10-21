@@ -121,12 +121,18 @@ impl MonitorApp {
                 .dependencies
                 .report()
                 .map(|report| !report.has_missing()),
-            tools_total: self.snapshot.analysis_tools.len(),
+            // The gdb consoles of the Debugger tab are not part of first run.
+            tools_total: self
+                .snapshot
+                .analysis_tools
+                .iter()
+                .filter(|tool| !debugger::is_console_tool(&tool.id))
+                .count(),
             tools_missing: self
                 .snapshot
                 .analysis_tools
                 .iter()
-                .filter(|tool| !tool.available())
+                .filter(|tool| !debugger::is_console_tool(&tool.id) && !tool.available())
                 .count(),
             rule_engines: self
                 .rules_ui

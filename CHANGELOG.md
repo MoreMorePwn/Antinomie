@@ -6,6 +6,29 @@ it runs.
 
 ## 0.7.0 — Unreleased
 
+- **Debugger tab beside Static, with a gdb console.** Attaching the debugger
+  (Run › Attach debugger…) or starting a run with Debug on start opens a
+  **Debugger · PID** tab right after Static Analysis and shows it; detaching, or
+  the run or VM ending, closes it (it is never restored with the saved layout).
+  Details and Activity fold down to their tab strip while the tab shows, so
+  the listing gets the height; the split comes back when you leave it.
+  The old floating window is gone and every feature moved in: the main view is
+  the listing around the instruction pointer with the registers and the run
+  controls, and threads, processes (with the fork choice), breakpoints, memory,
+  stack, the signal handle table and the console sit in panes folded below a
+  strip until you open them, each on its own; which are open is remembered. The
+  tables sort from their headers, and a chip says "gdb is driving; panel is
+  read-only" while an external or console gdb controls the process. The
+  **gdb console** pane runs host gdb on a terminal, attached to the session
+  through the same loopback server (`target remote`), with **GEF (bata24)** by
+  default or **pwndbg** (Settings › Analysis tools › Debugger console). Both are
+  new managed tools in Library › Analysis tools: `gef.py` at a pinned bata24/gef
+  commit (it uses the system's gdb), and pwndbg 2026.09.15's portable build with
+  its own gdb, each checked by SHA-256 (licenses in THIRD-PARTY-NOTICES.md). A
+  missing gdb or front end is said in the pane with an Install… link. The pane
+  can be folded and reopened, restarted or stopped, and closing it quits gdb
+  cleanly so the process keeps running. The shared function sidebar is not used:
+  the debug engine reads memory windows and has no symbols to list functions by.
 - **Core dumps and Static analysis in the new layout; a Strings tab for cores;
   functions count lines.** The Cores view keeps its list on the left and its tabs
   (Context, Memory mappings, Disassembly, Strings, Recovered notes, with counts

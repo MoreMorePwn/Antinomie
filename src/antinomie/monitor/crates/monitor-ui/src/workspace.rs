@@ -29,6 +29,10 @@ pub(crate) enum Panel {
     Details,
     Activity,
     Terminal(String),
+    /// The debugger of the attached session: it sits beside Static Analysis
+    /// while a session lasts, and is never restored with the saved
+    /// arrangement.
+    Debugger,
     /// A Library page: opened from the sidebar, a menu or a link, closed by
     /// its tab; never restored with the saved arrangement.
     Library(LibraryPage),
@@ -80,6 +84,7 @@ impl Panel {
             Self::Details => "Details",
             Self::Activity => "Activity",
             Self::Terminal(_) => "Terminal",
+            Self::Debugger => "Debugger",
             Self::Library(page) => page.title(),
         }
     }
@@ -212,6 +217,10 @@ pub(crate) struct WorkspaceLayout {
     dock_back: Option<Panel>,
     #[serde(skip)]
     cancel_drag: bool,
+    /// The split between the work area and Details/Activity before the
+    /// Debugger tab shrank the lower part.
+    #[serde(skip)]
+    details_fraction: Option<f32>,
 }
 
 impl Default for WorkspaceLayout {
@@ -238,6 +247,7 @@ impl Default for WorkspaceLayout {
             detach: None,
             dock_back: None,
             cancel_drag: false,
+            details_fraction: None,
         }
     }
 }
@@ -315,7 +325,10 @@ impl WorkspaceLayout {
                 self.dock[SurfaceIndex(index)].retain_tabs(|tab| {
                     if matches!(
                         tab,
-                        Panel::Terminal(_) | Panel::AnalysisSection { .. } | Panel::Library(_)
+                        Panel::Terminal(_)
+                            | Panel::AnalysisSection { .. }
+                            | Panel::Library(_)
+                            | Panel::Debugger
                     ) || seen.contains(tab)
                     {
                         false
@@ -369,6 +382,117 @@ impl WorkspaceLayout {
         self.focus(panel);
     }
 
+    /// Where the Debugger tab is: the tab before it, and whether it shows.
+    #[cfg(test)]
+    pub(crate) fn debugger_position(&self) -> Option<(Option<Panel>, bool)> {
+        let (surface, node, tab) = self.dock.find_tab(&Panel::Debugger)?;
+        let egui_dock::Node::Leaf { tabs, active, .. } = &self.dock[surface][node] else {
+            return None;
+        };
+        Some((
+            tab.0
+                .checked_sub(1)
+                .and_then(|before| tabs.get(before))
+                .cloned(),
+            *active == tab,
+        ))
+    }
+
+    /// Put the Debugger tab right after Static Analysis, wherever that went.
+    fn place_debugger(&mut self) {
+        match self.dock.find_tab(&Panel::StaticAnalysis) {
+            Some((surface, node, tab)) => {
+                self.dock[surface][node].insert_tab(TabIndex(tab.0 + 1), Panel::Debugger);
+            }
+            None => self
+                .dock
+                .main_surface_mut()
+                .push_to_first_leaf(Panel::Debugger),
+        }
+    }
+
+    /// Keep the Debugger tab in step with the session: a new session opens
+    /// and focuses it, the end of the session closes it.
+    fn follow_debugger(&mut self, app: &MonitorApp, ctx: &egui::Context) {
+        let open = self.dock.find_tab(&Panel::Debugger);
+        match (app.debugger_attached(), open) {
+            (true, None) => {
+                self.place_debugger();
+                self.focus(Panel::Debugger);
+                if let Some((surface, node, _)) = self.dock.find_tab(&Panel::Debugger) {
+                    // The tab bar does not follow the focus: scroll it to its
+                    // end, where the Debugger tab is when the tabs overflow.
+                    if let egui_dock::Node::Leaf { scroll, .. } = &mut self.dock[surface][node] {
+                        *scroll = -2000.0;
+                    }
+                    if !surface.is_main() {
+                        ctx.send_viewport_cmd_to(
+                            egui::ViewportId::from_hash_of(("workspace", surface.0)),
+                            egui::ViewportCommand::Focus,
+                        );
+                    }
+                }
+            }
+            (false, Some(location)) => {
+                self.dock.remove_tab(location);
+                self.remove_empty_windows();
+            }
+            _ => {}
+        }
+        self.shrink_details_for_debugger();
+    }
+
+    /// How much of the main window the work area keeps while the Debugger
+    /// tab shows: Details and Activity follow other tabs, so they fold down
+    /// to their tab strip and the debugger gets the height.
+    const DEBUGGER_SPLIT: f32 = 0.93;
+
+    /// The Debugger tab is the shown tab of the work area (the top part of
+    /// the main window).
+    fn debugger_shows(&self) -> bool {
+        use egui_dock::Node;
+        let Some((surface, node, tab)) = self.dock.find_tab(&Panel::Debugger) else {
+            return false;
+        };
+        if !surface.is_main() {
+            return false;
+        }
+        let mut at = node;
+        let in_top = loop {
+            if at == NodeIndex::root().left() {
+                break true;
+            }
+            match at.parent() {
+                Some(parent) => at = parent,
+                None => break false,
+            }
+        };
+        in_top && matches!(&self.dock[surface][node], Node::Leaf { active, .. } if *active == tab)
+    }
+
+    /// Fold Details and Activity down while the Debugger tab shows and put
+    /// the split back when it stops showing. A split the user drags in
+    /// between is theirs until the tab is left.
+    fn shrink_details_for_debugger(&mut self) {
+        use egui_dock::Node;
+        let shows = self.debugger_shows();
+        let Node::Vertical { fraction, .. } = &mut self.dock.main_surface_mut()[NodeIndex::root()]
+        else {
+            return;
+        };
+        match (shows, self.details_fraction) {
+            (true, None) => {
+                self.details_fraction = Some(*fraction);
+                *fraction = Self::DEBUGGER_SPLIT.max(*fraction);
+            }
+            (false, Some(before)) => {
+                *fraction = before;
+                self.details_fraction = None;
+            }
+            _ => {}
+        }
+    }
+
     pub(crate) fn focus(&mut self, panel: Panel) {
         if let Some((surface, node, tab)) = self.dock.find_tab(&panel) {
             self.dock.set_active_tab((surface, node, tab));
@@ -399,6 +523,7 @@ impl WorkspaceLayout {
         for page in app.take_library_pages() {
             self.open_library(page);
         }
+        self.follow_debugger(app, ctx);
         egui::CentralPanel::default()
             .frame(theme::frame(theme::bg()))
             .show(ctx, |ui| self.show_surface(app, ui, SurfaceIndex::main()));
@@ -812,6 +937,8 @@ impl WorkspaceLayout {
                 app.close_terminal_view(&id);
             } else if matches!(panel, Panel::AnalysisSection { .. } | Panel::Library(_)) {
                 continue;
+            } else if panel == Panel::Debugger {
+                self.place_debugger();
             } else {
                 self.return_home(panel);
             }
@@ -2350,6 +2477,37 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn the_debugger_tab_folds_details_while_it_shows_and_gives_the_split_back() {
+        use egui_dock::Node;
+        let split = |layout: &WorkspaceLayout| match &layout.dock.main_surface()[NodeIndex::root()]
+        {
+            Node::Vertical { fraction, .. } => *fraction,
+            other => panic!("not split: {other:?}"),
+        };
+        let mut layout = WorkspaceLayout::default();
+        layout.place_debugger();
+        assert_eq!(
+            layout.debugger_position(),
+            Some((Some(Panel::StaticAnalysis), true)),
+            "beside Static Analysis"
+        );
+        layout.focus(Panel::Trace);
+        layout.shrink_details_for_debugger();
+        assert!(
+            (split(&layout) - 0.72).abs() < 1e-6,
+            "not showing: untouched"
+        );
+        layout.focus(Panel::Debugger);
+        layout.shrink_details_for_debugger();
+        assert!(split(&layout) > 0.9, "Details and Activity fold down");
+        layout.shrink_details_for_debugger();
+        assert!(split(&layout) > 0.9, "and stay that way while it shows");
+        layout.focus(Panel::Trace);
+        layout.shrink_details_for_debugger();
+        assert!((split(&layout) - 0.72).abs() < 1e-6, "the split came back");
     }
 
     #[test]

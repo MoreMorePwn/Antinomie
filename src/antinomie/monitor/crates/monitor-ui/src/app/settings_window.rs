@@ -390,6 +390,27 @@ impl MonitorApp {
         if ui.button("Manage tools…").clicked() {
             self.open_library(crate::workspace::LibraryPage::Tools);
         }
+        ui.add_space(10.0);
+        ui.separator();
+        form_grid("settings_debugger_console", ui).show(ui, |ui| {
+            ui.label("Debugger console");
+            ui.vertical(|ui| {
+                crate::widgets::segmented(
+                    ui,
+                    crate::app::debugger::GdbFlavour::ALL
+                        .into_iter()
+                        .map(|flavour| (flavour, crate::widgets::TabItem::new(flavour.label()))),
+                    &mut self.settings.debugger.gdb_flavour,
+                );
+                hint(
+                    ui,
+                    "The gdb in the Debugger tab. GEF (bata24) runs on this system's gdb; pwndbg \
+                     brings its own. Install either from Manage tools. Applies the next time the \
+                     console starts.",
+                );
+            });
+            ui.end_row();
+        });
     }
 
     fn disks_page(&mut self, ui: &mut egui::Ui) {
