@@ -359,6 +359,7 @@ impl Session {
             run_status_poll: RunStatusPoll::default(),
             recorder_poll: recorder_health::RecorderPoll::default(),
             last_process_save: Instant::now(),
+            writer_held_since: None,
             network_bytes_done: 0,
             network_bytes: 0,
             last_network_check: Instant::now(),

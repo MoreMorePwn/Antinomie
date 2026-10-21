@@ -17,6 +17,8 @@ impl Session {
         let started = Instant::now();
         self.pre_ack.expire(started);
         let mut drained = 0usize;
+        let held = crate::writer::backlogged();
+        self.note_writer_hold(held, started, &mut snapshot.health);
         while started.elapsed() < PUMP_BUDGET && !crate::writer::backlogged() {
             let Some(packet) = self.transport.read()?.map(<[u8]>::to_vec) else {
                 break;
@@ -216,6 +218,20 @@ impl Session {
         self.update_captures(snapshot);
         let _ = sender;
         Ok(())
+    }
+    /// Keep how long telemetry was held back for the recording writer.
+    fn note_writer_hold(&mut self, held: bool, now: Instant, health: &mut Health) {
+        match (held, self.writer_held_since) {
+            (true, None) => self.writer_held_since = Some(now),
+            (false, Some(since)) => {
+                self.writer_held_since = None;
+                let held = u64::try_from(now.saturating_duration_since(since).as_nanos())
+                    .unwrap_or(u64::MAX);
+                health.writer_held_ns = health.writer_held_ns.saturating_add(held);
+                health.writer_held_longest_ns = health.writer_held_longest_ns.max(held);
+            }
+            _ => {}
+        }
     }
     /// Capture All load shedding: drop instead of waiting while the host is
     /// behind (see [`Shed`]). `wait_ns` is the guest's total send wait.

@@ -465,6 +465,9 @@ struct Session {
     recorder_poll: recorder_health::RecorderPoll,
     /// When capture process trees were last queued for saving.
     last_process_save: Instant,
+    /// Since when the host has taken no telemetry because the recording
+    /// writer is behind the disk.
+    writer_held_since: Option<Instant>,
     /// Bytes of this boot's network captures (pcaps written by QEMU): the
     /// finished ones, and the running one as last measured. They count
     /// against the recording quota like every other recording.
