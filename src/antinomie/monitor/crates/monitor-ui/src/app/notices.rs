@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: MIT
 //! Observe backend diagnostic state even when its owning panel is closed.
+//!
+//! The backend's own errors and warnings are toasts. What belongs to one run,
+//! core or capture is logged to Activity only; its view shows it inline.
 use super::*;
-use crate::activity::{report, Level};
+use crate::activity::{report, report_quiet, Level};
 
 impl MonitorApp {
     pub(super) fn collect_notices(&self, ctx: &egui::Context) {
@@ -61,25 +64,25 @@ impl MonitorApp {
         }
         for run in snapshot.runs.iter().chain(&self.history) {
             if let Some(message) = crate::run_recording::warning_message(run) {
-                report(ctx, Level::Warn, message);
+                report_quiet(ctx, Level::Warn, message);
             }
             if let Some(analysis) = &run.analysis {
                 if let Some(reason) = &analysis.reason {
-                    report(ctx, Level::Warn, reason);
+                    report_quiet(ctx, Level::Warn, reason);
                 }
             }
         }
         for core in &snapshot.process_cores {
             if let Some(issue) = &core.issue {
-                report(ctx, Level::Warn, issue);
+                report_quiet(ctx, Level::Warn, issue);
             }
         }
         for capture in snapshot.captures.iter().chain(&self.capture_history) {
             if let Some(error) = &capture.recording_error {
-                report(ctx, Level::Warn, error);
+                report_quiet(ctx, Level::Warn, error);
             }
             if let Some(reason) = &capture.incomplete_reason {
-                report(ctx, Level::Warn, reason);
+                report_quiet(ctx, Level::Warn, reason);
             }
         }
         for report_value in snapshot
@@ -88,7 +91,7 @@ impl MonitorApp {
             .chain(self.analysis_windows.values())
         {
             if let Some(reason) = &report_value.reason {
-                report(ctx, Level::Warn, reason);
+                report_quiet(ctx, Level::Warn, reason);
             }
         }
     }

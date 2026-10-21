@@ -119,8 +119,11 @@ fn activity_tab_has_separate_warning_and_error_colors() {
         panic!("rich activity title")
     };
     assert!(job.text.contains("Activity"));
-    assert_eq!(job.sections[1].format.color, theme::warn());
-    assert_eq!(job.sections[2].format.color, theme::error());
+    let chip = |index: usize| &job.sections[index].format;
+    assert_eq!(chip(2).color, theme::warn());
+    assert_eq!(chip(2).background, theme::palette().warn_bg);
+    assert_eq!(chip(4).color, theme::error());
+    assert_eq!(chip(4).background, theme::palette().error_bg);
 }
 
 fn frame(

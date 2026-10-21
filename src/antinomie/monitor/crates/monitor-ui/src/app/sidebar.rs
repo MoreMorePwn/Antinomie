@@ -254,7 +254,7 @@ impl MonitorApp {
     /// The status line. Losses and the app version sit on the right:
     /// `TRL x UIL y STL z CAP p/q GiB Antinomie x.y.z`.
     pub(super) fn health(&mut self, ctx: &egui::Context) {
-        egui::TopBottomPanel::bottom("health")
+        let bar = egui::TopBottomPanel::bottom("health")
             .frame(theme::frame(theme::raised()))
             .show(ctx, |ui| {
                 let dropped = self.snapshot.health.dropped;
@@ -266,15 +266,8 @@ impl MonitorApp {
                 let quota = self.settings.quota_gib;
                 let shedding = self.snapshot.health.shedding;
                 let persistence = self.snapshot.health.persistence_error.clone();
-                // A backend error is news until a later status message
-                // replaces the status text it arrived with.
-                let last_error = self
-                    .snapshot
-                    .last_error
-                    .clone()
-                    .filter(|_| self.error_status_mark.as_ref() == Some(&self.status));
                 let status = self.status.clone();
-                let notice = self.status_notice.as_ref().filter(|(_, message)| message == &status).map(|(level, _)| *level);
+                let is_notice = self.status_notice.as_ref().is_some_and(|(_, message)| message == &status);
                 let closing = self.closing;
                 let loss = |count: u64| if count == 0 { theme::good() } else { theme::warn() };
                 let saved = persisted as f64 / 1_073_741_824.0;
@@ -317,26 +310,21 @@ impl MonitorApp {
                                 &format!("Saving stopped: {error}"),
                                 theme::error(),
                             );
-                        } else if let Some(error) = &last_error {
-                            status_line(
-                                ui,
-                                egui_phosphor::regular::WARNING_CIRCLE,
-                                error,
-                                theme::error(),
-                            );
                         } else if closing {
                             ui.spinner();
                             let message = "Waiting for guest shutdown and recording finalization…";
                             ui.add(egui::Label::new(RichText::new(message).color(theme::warn())).truncate())
                                 .on_hover_text(message);
-                        } else if !status.is_empty() {
-                            if let Some(level) = notice { crate::activity::compact(ui, level, &status); }
-                            else { status_line(ui, egui_phosphor::regular::INFO, &status, theme::info()); }
+                        } else if !status.is_empty() && !is_notice {
+                            // A warning or an error is a toast, not a status line.
+                            status_line(ui, egui_phosphor::regular::INFO, &status, theme::info());
                         }
                     });
                 });
                 ui.add_space(3.0);
             });
+        // The toast stack sits above the bar.
+        crate::toasts::set_floor(ctx, bar.response.rect.top());
     }
 
     pub(super) fn log(&mut self, level: &'static str, message: String) {

@@ -33,6 +33,7 @@ mod table_sort;
 mod terminal;
 mod theme;
 mod time_format;
+mod toasts;
 mod tools_page;
 mod trace;
 mod tree_lines;

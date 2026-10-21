@@ -34,6 +34,8 @@ mod stealth;
 mod terminal_windows;
 mod terminals;
 mod theme_setting;
+mod toast_shots;
+mod toasts;
 mod trace_filters;
 mod trace_paging;
 mod trace_run_selector;
@@ -172,7 +174,6 @@ pub(crate) fn app() -> MonitorApp {
         pending_sessions: BTreeMap::new(),
         stale_command_ids: VecDeque::new(),
         backend_disconnected: false,
-        error_status_mark: None,
         run_list_cache: None,
         run_selector_cache: Default::default(),
         started: Instant::now(),

@@ -10,7 +10,7 @@ const ENTRY_LIMIT: usize = 2048;
 const MESSAGE_SIZE: usize = 4096;
 const JOURNAL_SIZE: usize = 2 * 1024 * 1024;
 const NOTICE_LIMIT: usize = 4096;
-const INBOX_LIMIT: usize = ENTRY_LIMIT;
+pub(crate) const INBOX_LIMIT: usize = ENTRY_LIMIT;
 const HUB: &str = "activity-notices";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,11 +50,15 @@ pub(crate) struct Journal {
     info: bool,
     warn: bool,
     error: bool,
+    /// Warnings and errors logged since the last frame; each becomes a toast.
+    #[serde(skip)]
+    toast_out: Vec<(Level, String)>,
 }
 impl Default for Journal {
     fn default() -> Self {
         Self {
             entries: VecDeque::new(),
+            toast_out: Vec::new(),
             info: true,
             warn: true,
             error: true,
@@ -98,7 +102,15 @@ impl Journal {
             }
         }
     }
+    /// Log an event; a warning or an error also becomes a toast.
     pub(crate) fn log(&mut self, level: &str, message: String) {
+        self.record(level, message, true);
+    }
+    /// Log without a toast: the row of a toast, or a state label.
+    pub(crate) fn log_quiet(&mut self, level: &str, message: String) {
+        self.record(level, message, false);
+    }
+    fn record(&mut self, level: &str, message: String, toast: bool) {
         let level = match level {
             "ERROR" => Level::Error,
             "WARN" => Level::Warn,
@@ -116,6 +128,9 @@ impl Journal {
         }) {
             return;
         }
+        if toast && level != Level::Info && self.toast_out.len() < INBOX_LIMIT {
+            self.toast_out.push((level, message.clone()));
+        }
         self.entries.push_back(Entry {
             unix_ms,
             level,
@@ -131,8 +146,11 @@ impl Journal {
                 std::mem::take(&mut hub.omitted),
             )
         });
-        for (level, message) in pending {
-            self.log(level.label(), message);
+        for (level, message, toast) in pending {
+            self.record(level.label(), message, toast);
+        }
+        for (level, row) in crate::toasts::take_rows(ctx) {
+            self.log_quiet(level.label(), row);
         }
         if omitted != 0 {
             self.log(
@@ -140,6 +158,16 @@ impl Journal {
                 format!("Activity notice queue overflow: {omitted} additional notices omitted"),
             );
         }
+        for (level, message) in std::mem::take(&mut self.toast_out) {
+            crate::toasts::push_logged(ctx, level, &message);
+        }
+    }
+    #[cfg(test)]
+    pub(crate) fn messages(&self) -> Vec<&str> {
+        self.entries
+            .iter()
+            .map(|entry| entry.message.as_str())
+            .collect()
     }
     pub(crate) fn counts(&self) -> (usize, usize) {
         (
@@ -153,20 +181,30 @@ impl Journal {
                 .count(),
         )
     }
+    /// The dock tab: "Activity" and, when there are any, a small chip each
+    /// for the warnings and the errors.
     pub(crate) fn title(&self, font_size: f32) -> egui::WidgetText {
         let mut job = egui::text::LayoutJob::default();
-        let format = |color| egui::TextFormat {
-            font_id: egui::FontId::proportional(font_size),
+        let format = |color, background, size| egui::TextFormat {
+            font_id: egui::FontId::proportional(size),
             color,
+            background,
+            valign: egui::Align::Center,
             ..Default::default()
         };
-        job.append("Activity", 0.0, format(theme::text()));
+        let none = egui::Color32::TRANSPARENT;
+        job.append("Activity", 0.0, format(theme::text(), none, font_size));
+        let palette = theme::palette();
         let (warn, error) = self.counts();
-        if warn != 0 {
-            job.append(&format!("  {warn}"), 0.0, format(theme::warn()));
-        }
-        if error != 0 {
-            job.append(&format!("  {error}"), 0.0, format(theme::error()));
+        for (count, color, background) in [
+            (warn, palette.warn, palette.warn_bg),
+            (error, palette.error, palette.error_bg),
+        ] {
+            if count != 0 {
+                job.append(" ", 0.0, format(theme::text(), none, font_size));
+                let size = (font_size - 3.0).max(11.0);
+                job.append(&format!(" {count} "), 0.0, format(color, background, size));
+            }
         }
         job.into()
     }
@@ -267,14 +305,28 @@ struct NoticeHub {
     known: HashSet<egui::Id>,
     order: VecDeque<egui::Id>,
     dismissed: HashSet<egui::Id>,
-    pending: VecDeque<(Level, String)>,
+    pending: VecDeque<(Level, String, bool)>,
     omitted: usize,
 }
 
+/// Report a diagnostic once: an Activity row and a toast, nothing inline.
 pub(crate) fn report(ctx: &egui::Context, level: Level, message: impl std::fmt::Display) {
-    register(ctx, level, bounded(message.to_string()));
+    register_with(ctx, level, bounded(message.to_string()), true);
+}
+/// Report a diagnostic of one object (a run, a core) once, in Activity only.
+/// The object's own view shows it inline.
+pub(crate) fn report_quiet(ctx: &egui::Context, level: Level, message: impl std::fmt::Display) {
+    register_with(ctx, level, bounded(message.to_string()), false);
 }
 fn register(ctx: &egui::Context, level: Level, message: String) -> (egui::Id, bool) {
+    register_with(ctx, level, message, false)
+}
+fn register_with(
+    ctx: &egui::Context,
+    level: Level,
+    message: String,
+    toast: bool,
+) -> (egui::Id, bool) {
     let id = egui::Id::new(("activity-notice", level.label(), &message));
     ctx.data_mut(|data| {
         let hub = data.get_temp_mut_or_default::<NoticeHub>(egui::Id::new(HUB));
@@ -287,7 +339,7 @@ fn register(ctx: &egui::Context, level: Level, message: String) -> (egui::Id, bo
                 }
             }
             if hub.pending.len() < INBOX_LIMIT {
-                hub.pending.push_back((level, message));
+                hub.pending.push_back((level, message, toast));
             } else {
                 hub.omitted = hub.omitted.saturating_add(1);
             }
@@ -296,6 +348,12 @@ fn register(ctx: &egui::Context, level: Level, message: String) -> (egui::Id, bo
     })
 }
 
+/// The result of an action that failed, once per message: a toast and an
+/// Activity row, nothing inline. Use [`error`] for a label that states a
+/// condition or a validation.
+pub(crate) fn error_toast(ui: &egui::Ui, message: impl std::fmt::Display) {
+    report(ui.ctx(), Level::Error, message);
+}
 pub(crate) fn warning(ui: &mut egui::Ui, message: impl std::fmt::Display) -> egui::Response {
     notice(ui, Level::Warn, message)
 }

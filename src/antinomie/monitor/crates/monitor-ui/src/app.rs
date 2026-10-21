@@ -442,7 +442,6 @@ pub struct MonitorApp {
     backend_disconnected: bool,
     /// The status text when the current backend error arrived. The error shows
     /// on the status line until a newer status message replaces that text.
-    error_status_mark: Option<String>,
     /// Run History's listing of the selected VM's runs before the text filter,
     /// with the key of the runs it was built from.
     run_list_cache: Option<(u64, Arc<Vec<RunSummary>>)>,
@@ -622,7 +621,6 @@ impl MonitorApp {
             pending_sessions: BTreeMap::new(),
             stale_command_ids: VecDeque::new(),
             backend_disconnected: false,
-            error_status_mark: None,
             run_list_cache: None,
             run_selector_cache: Default::default(),
             started: Instant::now(),

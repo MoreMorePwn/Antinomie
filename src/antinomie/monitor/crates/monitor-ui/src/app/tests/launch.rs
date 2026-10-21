@@ -17,11 +17,15 @@ fn long_health_messages_do_not_overlap_figures_and_keep_full_hover_text() {
                 style.interaction.tooltip_grace_time = 0.0;
             });
             app.closing = shutting_down;
-            let message = if shutting_down { closing } else { error };
+            // Saving stopped is a state of the bar; a command error is a toast.
+            let saving = format!("Saving stopped: {error}");
+            let message = if shutting_down {
+                closing
+            } else {
+                saving.as_str()
+            };
             if !shutting_down {
-                app.snapshot.last_error = Some(error.into());
-                // The error has just arrived: no newer status message yet.
-                app.error_status_mark = Some(app.status.clone());
+                app.snapshot.health.persistence_error = Some(error.into());
             }
             let size = egui::vec2(width, 900.0);
             let mut output = egui::FullOutput::default();

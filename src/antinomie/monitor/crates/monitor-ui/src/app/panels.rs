@@ -34,6 +34,10 @@ impl MonitorApp {
         self.data_windows.show(ctx);
         self.file_drop_overlay(ctx);
         self.activity.ingest(ctx);
+        for panel in crate::toasts::show(ctx) {
+            self.focus_panel = Some(panel);
+            ctx.request_repaint();
+        }
         let enabled = match self.process_picker.purpose {
             captures::ProcessPurpose::Core => self.manual_core_unavailable().is_none(),
             captures::ProcessPurpose::Debug => self.debugger_unavailable().is_none(),
