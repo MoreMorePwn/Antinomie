@@ -1712,6 +1712,13 @@ pub struct Health {
     /// Recording bytes queued for the disk writer thread.
     #[serde(default)]
     pub write_backlog: u64,
+    /// How long, in all and at the longest, the host took no telemetry
+    /// because the recording writer was behind the disk (the guest's sends
+    /// waited meanwhile).
+    #[serde(default)]
+    pub writer_held_ns: u64,
+    #[serde(default)]
+    pub writer_held_longest_ns: u64,
     /// Capture All is dropping telemetry because the host is behind; the
     /// guest would otherwise wait on every traced syscall.
     #[serde(default)]
