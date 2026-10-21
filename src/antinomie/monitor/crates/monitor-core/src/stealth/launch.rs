@@ -182,8 +182,9 @@ pub(crate) fn disk_args(profile: &StealthProfile, image: &str) -> Vec<String> {
             vec!["-drive".into(), drive("none"), "-device".into(), device]
         }
         DiskBus::Nvme => {
-            // The controller's model and firmware revision are QEMU's; the
-            // serial, the subsystem name and the PCI vendor can be set.
+            // The controller's model, firmware revision and subsystem name
+            // (nqn.2019-08.org.qemu:<serial>) are QEMU's; the serial and the
+            // PCI vendor can be set.
             let serial = if profile.identity_enabled && !id.disk_serial.is_empty() {
                 escape(&id.disk_serial)
             } else {
@@ -193,13 +194,7 @@ pub(crate) fn disk_args(profile: &StealthProfile, image: &str) -> Vec<String> {
                 "-drive".into(),
                 drive("none"),
                 "-device".into(),
-                format!(
-                    "nvme-subsys,id=nvme-subsys0,nqn=nqn.2014.08.org.nvmexpress:144d144d{serial}"
-                ),
-                "-device".into(),
-                format!("nvme,id=nvme0,serial={serial},subsys=nvme-subsys0,use-intel-id=on"),
-                "-device".into(),
-                "nvme-ns,drive=osdisk,bus=nvme0,nsid=1".into(),
+                format!("nvme,drive=osdisk,serial={serial},use-intel-id=on"),
             ]
         }
     }

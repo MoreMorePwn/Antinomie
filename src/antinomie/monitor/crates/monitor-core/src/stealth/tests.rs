@@ -263,13 +263,8 @@ fn realistic_hardware_entries_become_launch_options() {
     profile.disk_bus = DiskBus::Nvme;
     profile.disk_media = DiskMedia::Hdd;
     let nvme = disk_args(&profile, "/d.qcow2").join(" ");
-    assert!(
-        nvme.contains(
-            "nvme-subsys,id=nvme-subsys0,nqn=nqn.2014.08.org.nvmexpress:144d144dS6PXNF0T"
-        )
-    );
-    assert!(nvme.contains(",subsys=nvme-subsys0,use-intel-id=on"));
-    assert!(nvme.ends_with("nvme-ns,drive=osdisk,bus=nvme0,nsid=1"));
+    assert!(nvme.contains("nvme,drive=osdisk,serial=S6PXNF0T"));
+    assert!(nvme.ends_with(",use-intel-id=on"));
     profile.disk_bus = DiskBus::Sata;
     assert!(
         disk_args(&profile, "/d")
