@@ -95,28 +95,30 @@ pub(crate) fn rows(
         }
         LaunchSource::Upload => {
             let label = ui.label("Host file");
-            ui.add_enabled_ui(!upload.busy, |ui| {
-                ui.horizontal(|ui| {
-                    let width = 150.0;
-                    if ui
-                        .add(
-                            text(upload.host_file, "Choose a file or enter its path")
-                                .desired_width(width),
-                        )
-                        .labelled_by(label.id)
-                        .changed()
-                    {
-                        outcome.host_file_edited = true;
-                    }
-                    if ui
-                        .add_enabled(upload.can_choose, egui::Button::new("Choose…"))
-                        .on_hover_text("Choose a file with the filesystem explorer")
-                        .clicked()
-                    {
-                        outcome.choose_file = true;
-                    }
-                });
-            });
+            if ui
+                .add_enabled(
+                    !upload.busy,
+                    text(upload.host_file, "Choose a file or enter its path")
+                        .desired_width(f32::INFINITY),
+                )
+                .labelled_by(label.id)
+                .changed()
+            {
+                outcome.host_file_edited = true;
+            }
+            ui.end_row();
+            // Under the field, so the field keeps the whole column.
+            ui.label("");
+            if ui
+                .add_enabled(
+                    upload.can_choose && !upload.busy,
+                    egui::Button::new("Choose…"),
+                )
+                .on_hover_text("Choose a file with the filesystem explorer")
+                .clicked()
+            {
+                outcome.choose_file = true;
+            }
             ui.end_row();
             if let Some(note) = upload.chooser_note {
                 hint_row(ui, note);

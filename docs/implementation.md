@@ -740,11 +740,11 @@ reverified when needed. File sizes in the UI read `N bytes (X.Y KB)` with
 1024-based units.
 
 Detection has independent YARA, IDS and Sigma jobs. Production rules come from
-the rule manager under `<data-dir>/rules/`: installed community packs, custom
+the Detection rules page under `<data-dir>/rules/`: installed community packs, custom
 group revisions and the enabled-rule selection. The manager reads
 `https://huggingface.co/buckets/MoreMorePwn/antinomie-rules/resolve/catalog.json`
 only when Check or Install/Update is used, and only if
-Settings allows outbound catalog access; the Rule manager offers to allow it
+Settings allows outbound catalog access; the Detection rules page offers to allow it
 in place and names every host it will contact. Scans do not contact the network.
 
 The catalog has two schemas, both read by `monitor-core/src/ruleset/catalog.rs`.
@@ -799,7 +799,7 @@ keeps documents whose log source is listed. The result is indexed like any
 pack and registered as a version named `<revision>-<12 hex of the plan digest>`,
 where the plan digest covers the pinned inputs, the filter, the chosen options
 and `FILTER_REVISION`; the installed pack records its source, hashes and what
-the filter removed (`SourceProvenance`), which the Rule manager, the rule-set
+the filter removed (`SourceProvenance`), which the Detection rules page, the rule-set
 list and each scan's selection manifest show.
 
 `scripts/rules/prepare-catalog.py` generates the catalog from pinned upstream

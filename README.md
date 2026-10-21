@@ -56,7 +56,7 @@ read, and anything the app could not decode or lost is marked as such.
   and network triage use the installed `tshark` command with `prlimit`
   resource limits; Antinomie decodes no protocol itself. On Debian/Ubuntu install
   `tshark util-linux`; these tools are checked in **Tools > App dependencies**.
-- Detection rules come from **Tools > Rule manager**, which downloads each
+- Detection rules come from **Tools > Detection rules**, which downloads each
   pack from its publisher (GitHub, rules.emergingthreats.net, sslbl.abuse.ch),
   verifies it and filters it on your computer, only after you allow it; it
   shows each pack's source, license and the hosts it contacts. YARA is built in. IDS scans need Suricata
