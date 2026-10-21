@@ -252,6 +252,14 @@ u32 ant_send_room(void)
 }
 EXPORT_SYMBOL_GPL(ant_send_room);
 
+bool ant_send_waits(void)
+{
+	/* Pairs with the release that publishes the rings at setup. */
+	return smp_load_acquire(&ready) && READ_ONCE(control->send_wait_us) &&
+		READ_ONCE(control->live);
+}
+EXPORT_SYMBOL_GPL(ant_send_waits);
+
 int ant_register_command(u32 opcode, ant_command_handler fn, void *context)
 {
 	int i, free_slot = -1, error = -ENOSPC;

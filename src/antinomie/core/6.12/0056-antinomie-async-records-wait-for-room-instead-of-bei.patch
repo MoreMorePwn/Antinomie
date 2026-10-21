@@ -1,0 +1,164 @@
+From 44dbae4808c7b26e12374c14cdc125c0451be6ff Mon Sep 17 00:00:00 2001
+From: MikiMiku <jonathanirvinjo@gmail.com>
+Date: Thu, 22 Oct 2026 02:01:43 +0700
+Subject: [PATCH] antinomie: async records wait for room instead of being lost
+ while the host waits
+
+Under load an io_uring submission of a few hundred requests lost most of its
+async records: ant-torture's async-io module at its lightest level, beside
+the other load modules, lost 7,355 staged packets and counted 10,393 async
+observation losses, and alone it counted 10,256. Each request stages about a
+dozen records (submission, acceptance, completion, its payload capture and
+file identity) in a queue of 1,024, and the worker that publishes them
+waited up to 10 ms before each record while its CPU's ring was more than
+half full, which a busy guest's rings always are: about 100 records a
+second.
+
+When the host asks senders to wait for room instead of dropping (never-drop
+mode, the default), the worker keeps only an eighth of the ring spare, room
+for a sender that cannot wait long; it still keeps half when sends drop. And
+a record staged by a task that may sleep waits for room in the staging
+queue, up to a second, as its own send would wait for room in its ring,
+instead of being counted lost at once. Interrupt completions and callers
+holding a lock cannot wait and are counted as before.
+
+ant_send_waits() (transport guest API) says whether sends wait. The contract
+revision stays 17: nothing on the wire changes.
+---
+ include/linux/antinomie.h |  4 +++
+ kernel/antinomie/async.c  | 56 +++++++++++++++++++++++++++++++--------
+ kernel/antinomie/guest.c  |  8 ++++++
+ 3 files changed, 57 insertions(+), 11 deletions(-)
+
+diff --git a/include/linux/antinomie.h b/include/linux/antinomie.h
+index 7b33226ce..a7d5c0367 100644
+--- a/include/linux/antinomie.h
++++ b/include/linux/antinomie.h
+@@ -19,6 +19,10 @@ u32 ant_ring_size(void);
+  * Advisory: a caller that can sleep uses it to pace bulk publication.
+  */
+ u32 ant_send_room(void);
++/* Whether a send that finds its ring full waits for the host (it set a send
++ * wait and is live) instead of failing at once. Advisory, like ant_send_room.
++ */
++bool ant_send_waits(void);
+ 
+ /* Handlers run in sleepable worker context. No recursive registration changes.
+  * reply is transport-owned, valid only during the callback.
+diff --git a/kernel/antinomie/async.c b/kernel/antinomie/async.c
+index f047d3311..efb999e5a 100644
+--- a/kernel/antinomie/async.c
++++ b/kernel/antinomie/async.c
+@@ -100,6 +100,38 @@ static void event_release(const struct ant_async_event *event)
+ 	put_task_struct(event->origin);
+ }
+ 
++/* How long a record waits for room in the staging queue: about what one
++ * send waits for room in its ring when the host asks senders to wait.
++ */
++#define ANT_ASYNC_STAGE_WAIT_MS 1000
++
++/* Take record_lock with room for one record. When the queue is full and the
++ * caller may sleep while the host asks senders to wait instead of dropping
++ * (never-drop mode), wait for the publisher to make room, as a send would
++ * wait for its ring; an interrupt completion or a caller holding a lock
++ * cannot, nor can anyone once the wait ran out. False, unlocked, when there
++ * is no room.
++ */
++static bool stage_lock(unsigned long *irqflags)
++{
++	unsigned long deadline = 0;
++
++	for (;;) {
++		spin_lock_irqsave(&record_lock, *irqflags);
++		if (record_count < ANT_ASYNC_RECORD_COUNT)
++			return true;
++		spin_unlock_irqrestore(&record_lock, *irqflags);
++		if (!in_task() || !preemptible() || rcu_preempt_depth() || !ant_send_waits())
++			return false;
++		if (!deadline)
++			deadline = jiffies + msecs_to_jiffies(ANT_ASYNC_STAGE_WAIT_MS);
++		else if (time_after(jiffies, deadline))
++			return false;
++		schedule_work(&publish_work);
++		usleep_range(100, 200);
++	}
++}
++
+ static void stage_record(struct ant_async *request, u32 stage, s64 result,
+ 			 u64 flags, bool final)
+ {
+@@ -113,9 +145,7 @@ static void stage_record(struct ant_async *request, u32 stage, s64 result,
+ 	/* The subsystem owns request until this hook returns. A queued record
+ 	 * takes a separate task reference and never retains the request pointer.
+ 	 */
+-	spin_lock_irqsave(&record_lock, irqflags);
+-	if (record_count == ANT_ASYNC_RECORD_COUNT) {
+-		spin_unlock_irqrestore(&record_lock, irqflags);
++	if (!stage_lock(&irqflags)) {
+ 		ant_run_async_loss(request->event.root_cookie);
+ 		return;
+ 	}
+@@ -138,18 +168,24 @@ static void stage_record(struct ant_async *request, u32 stage, s64 result,
+ }
+ 
+ /* A burst of queued records is published by one worker on one CPU. Before
+- * each record it waits, up to ANT_ASYNC_PACE_MS, until that CPU's ring is at
+- * most half full, so the burst cannot crowd out the syscall events of tasks
+- * running there. After the wait it publishes anyway; drops are counted.
++ * each record it waits, up to ANT_ASYNC_PACE_MS, until that CPU's ring has
++ * room to spare, so the burst cannot crowd out the syscall events of tasks
++ * running there: half the ring when a full ring drops a send, an eighth when
++ * senders wait for room instead (never-drop mode), which is still room for a
++ * sender that cannot wait long (one in atomic context spins briefly). After
++ * the wait it publishes anyway; drops are counted. Half a ring in never-drop
++ * mode was too much: a busy guest's rings are always fuller than that, and at
++ * 10 ms a record the worker could not keep up with one io_uring submission of
++ * a few hundred requests.
+  */
+ #define ANT_ASYNC_PACE_MS 10
+ 
+ static void await_room(void)
+ {
+ 	unsigned long deadline = jiffies + msecs_to_jiffies(ANT_ASYNC_PACE_MS);
++	u32 spare = ant_ring_size() / (ant_send_waits() ? 8 : 2);
+ 
+-	while (ant_send_room() < ant_ring_size() / 2 &&
+-	       time_before(jiffies, deadline))
++	while (ant_send_room() < spare && time_before(jiffies, deadline))
+ 		usleep_range(100, 200);
+ }
+ 
+@@ -192,9 +228,7 @@ int ant_async_stage_packet(const struct ant_async_event *event,
+ 
+ 	if (packet_len > sizeof(record->packet))
+ 		return -EMSGSIZE;
+-	spin_lock_irqsave(&record_lock, irqflags);
+-	if (record_count == ANT_ASYNC_RECORD_COUNT) {
+-		spin_unlock_irqrestore(&record_lock, irqflags);
++	if (!stage_lock(&irqflags)) {
+ 		ant_run_async_loss(event->root_cookie);
+ 		return -ENOSPC;
+ 	}
+diff --git a/kernel/antinomie/guest.c b/kernel/antinomie/guest.c
+index b080ef5ea..23f320998 100644
+--- a/kernel/antinomie/guest.c
++++ b/kernel/antinomie/guest.c
+@@ -252,6 +252,14 @@ u32 ant_send_room(void)
+ }
+ EXPORT_SYMBOL_GPL(ant_send_room);
+ 
++bool ant_send_waits(void)
++{
++	/* Pairs with the release that publishes the rings at setup. */
++	return smp_load_acquire(&ready) && READ_ONCE(control->send_wait_us) &&
++		READ_ONCE(control->live);
++}
++EXPORT_SYMBOL_GPL(ant_send_waits);
++
+ int ant_register_command(u32 opcode, ant_command_handler fn, void *context)
+ {
+ 	int i, free_slot = -1, error = -ENOSPC;
+-- 
+2.53.0
+

@@ -1,0 +1,120 @@
+From a9773774856c0013ac7323db5e71c94d14824156 Mon Sep 17 00:00:00 2001
+From: MikiMiku <jonathanirvinjo@gmail.com>
+Date: Thu, 22 Oct 2026 01:59:41 +0700
+Subject: [PATCH] antinomie: an io_uring entry only one process can write is
+ attributed to it
+
+Every io_uring submission was flagged ANT_ASYNC_PRODUCER_UNKNOWN, which marks
+the run OBSERVATION_INCOMPLETE, so no run that used io_uring could ever be
+ASYNC_COMPLETE, even a program that made and used a ring of its own.
+
+A process writes a ring's entries and moves its tail only through a mapping
+of them. When the page that holds the entry and the ring's first page (head
+and tail) are each mapped by at most one user page table, the entry was
+written by a thread of the process that submits it: the request carries the
+new flag ANT_ASYNC_PRODUCER_PROCESS (bit 3; which thread wrote it is still
+not known) and the run stays complete. A ring with another mapping (kept
+across a fork, mapped by a process the descriptor was passed to, a
+MAP_SHARED buffer of a NO_MMAP ring, or mapped twice by one process) keeps
+PRODUCER_UNKNOWN, as do the SQPOLL thread's submissions and submissions from
+outside the creator's thread group, which are attributed to the creator.
+
+The contract revision stays 17: async.flags gains a bit that hosts ignore, and
+OBSERVATION_INCOMPLETE keeps its meaning (attribution or counting was
+incomplete); it is now raised only when it is.
+---
+ include/linux/antinomie_monitor.h |  2 ++
+ io_uring/io_uring.c               | 37 ++++++++++++++++++++++++++++---
+ kernel/antinomie/async.c          |  3 ++-
+ 3 files changed, 38 insertions(+), 4 deletions(-)
+
+diff --git a/include/linux/antinomie_monitor.h b/include/linux/antinomie_monitor.h
+index 47e18756b..40a0be58c 100644
+--- a/include/linux/antinomie_monitor.h
++++ b/include/linux/antinomie_monitor.h
+@@ -24,6 +24,8 @@ struct linux_binprm;
+ #define ANT_ASYNC_PAYLOAD_GAP BIT(0)
+ #define ANT_ASYNC_PRODUCER_UNKNOWN BIT(1)
+ #define ANT_ASYNC_ABANDONED BIT(2)
++/* The submitting process wrote the entry; which of its threads is not known. */
++#define ANT_ASYNC_PRODUCER_PROCESS BIT(3)
+ /* Kinds of file identity record (ANTC_FILEID_* in control_wire.h). */
+ #define ANT_FILE_ID_OPEN 1
+ #define ANT_FILE_ID_RENAME 2
+diff --git a/io_uring/io_uring.c b/io_uring/io_uring.c
+index 9c895d83e..8ff6d762b 100644
+--- a/io_uring/io_uring.c
++++ b/io_uring/io_uring.c
+@@ -2212,14 +2212,43 @@ static u32 ant_uring_payload_flags(u8 opcode)
+ 	case IORING_OP_FIXED_FD_INSTALL:
+ 	case IORING_OP_FTRUNCATE:
+ 	case IORING_OP_LISTEN:
+-		return ANT_ASYNC_PRODUCER_UNKNOWN;
++		return 0;
+ 	default:
+-		return ANT_ASYNC_PAYLOAD_GAP | ANT_ASYNC_PRODUCER_UNKNOWN;
++		return ANT_ASYNC_PAYLOAD_GAP;
+ 	}
+ }
+ 
++/* User page tables that map the ring page at @offset of @pages: the per-page
++ * count, which this kernel keeps for every page of a large folio too.
++ */
++static int ant_uring_mappings(struct page **pages, unsigned int npages, unsigned long offset)
++{
++	unsigned long index = offset >> PAGE_SHIFT;
++
++	if (!pages || index >= npages)
++		return 0;
++	return atomic_read(&pages[index]->_mapcount) + 1;
++}
++
++/* Whether a task outside the submitting process could have written @sqe: a
++ * process writes a ring's entries and moves its tail only through a mapping
++ * of them, so a ring whose entry page and ring page are each mapped once
++ * (its creator's mapping, or none) was written by a thread of the process
++ * that maps it. A fork that keeps the mapping, another process that mapped
++ * the ring's descriptor, a MAP_SHARED buffer of a NO_MMAP ring or a second
++ * mapping of the same process each map them more than once.
++ */
++static bool ant_uring_shared(struct io_ring_ctx *ctx, const struct io_uring_sqe *sqe)
++{
++	return ant_uring_mappings(ctx->sqe_pages, ctx->n_sqe_pages,
++				  (unsigned long)sqe - (unsigned long)ctx->sq_sqes) > 1 ||
++		ant_uring_mappings(ctx->ring_pages, ctx->n_ring_pages, 0) > 1;
++}
++
+ /* The SQPOLL thread and tasks outside the creator's thread group submit on
+- * behalf of the ring creator's run (contract 14.3).
++ * behalf of the ring creator's run (contract 14.3); they, and a ring another
++ * process maps, leave the entry's writer unknown. Otherwise the entry was
++ * written by a thread of the submitting process, which one is not known.
+  */
+ static struct ant_async *ant_uring_begin(struct io_ring_ctx *ctx,
+ 					 const struct io_uring_sqe *sqe)
+@@ -2234,6 +2263,8 @@ static struct ant_async *ant_uring_begin(struct io_ring_ctx *ctx,
+ 		return ant_monitor_async_begin_attributed(ctx->ant_creator, ctx->ant_root_cookie,
+ 							  ctx->ant_task_cookie, ANT_ASYNC_IO_URING,
+ 							  opcode, user_data, flags, sqe, len);
++	flags |= ant_uring_shared(ctx, sqe) ? ANT_ASYNC_PRODUCER_UNKNOWN :
++		ANT_ASYNC_PRODUCER_PROCESS;
+ 	return ant_monitor_async_begin(ANT_ASYNC_IO_URING, opcode, user_data, flags, sqe, len);
+ }
+ #endif
+diff --git a/kernel/antinomie/async.c b/kernel/antinomie/async.c
+index d9003a242..f047d3311 100644
+--- a/kernel/antinomie/async.c
++++ b/kernel/antinomie/async.c
+@@ -268,7 +268,8 @@ static struct ant_async *begin(struct task_struct *owner, u64 root_cookie, u64 t
+ 	event->descriptor_len = descriptor_len;
+ 	memcpy(event->descriptor, descriptor, descriptor_len);
+ 	ant_run_async_start(event->root_cookie);
+-	if (flags & ~ANT_ASYNC_PAYLOAD_GAP)
++	/* A writer that is not proven to be the submitting process. */
++	if (flags & ~(ANT_ASYNC_PAYLOAD_GAP | ANT_ASYNC_PRODUCER_PROCESS))
+ 		ant_run_async_incomplete(event->root_cookie);
+ 	stage_record(request, 1, 0, 0, false);
+ 	return request;
+-- 
+2.53.0
+
