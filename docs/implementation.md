@@ -824,7 +824,7 @@ VMs default to Realistic desktop.
 
 | Entry | QEMU option | Transparent | Realistic |
 | --- | --- | --- | --- |
-| Machine identity | `-smbios type=0,1,2,4,17`, `-smbios file=` (type 3 chassis table written to the runtime directory), `-machine smbios-entry-point-type=64` | QEMU strings, chassis Other | One of eight built-in vendor machines (Dell, HP, Lenovo, Supermicro; Intel and AMD) with random serials and UUID |
+| Machine identity | `-smbios type=1,2,4,17`, `-smbios file=` (type 0 BIOS and type 3 chassis tables written to the runtime directory; the BIOS table lists real characteristics and not QEMU's "virtual machine" bit), `-machine smbios-entry-point-type=64` | QEMU strings, chassis Other | One of eight built-in vendor machines (Dell, HP, Lenovo, Supermicro; Intel and AMD) with random serials and UUID |
 | ACPI OEM IDs | `-machine x-oem-id=,x-oem-table-id=` | `BOCHS` / `BXPC` | The machine's vendor IDs |
 | CPU | `-cpu host,-hypervisor,kvm=off,pmu=on` (without KVM: `max,model-id=<host CPU name>,-hypervisor`); passthrough replaces the VM's CPU model setting | QEMU model, hypervisor bit, KVM signature | Passthrough, hidden hypervisor bit and KVM signature, performance counters |
 | CPU caches | `-cpu host,host-cache-info=on` (passthrough only) | QEMU's cache sizes | The host's cache sizes |
@@ -852,10 +852,10 @@ stub first. The pointer stays virtio-tablet (the Antinomie window needs an
 absolute pointer, and the USB tablet is named QEMU as well). The RTC stays in
 UTC by default because Linux guests read it as UTC; local time would shift
 the guest clock and every recorded timestamp. The fw_cfg device, the q35 chipset layout, the
-virtio display, the Antinomie options and build string of the guest kernel,
-and VM-exit timing are outside launch options; the Stealth profile window
-and the Summary list them under "Still visible". A snapshot taken with other
-hardware may not restore after the profile changes.
+virtio display and VM-exit timing are outside launch options; the Stealth
+profile window and the Summary list them under "Still visible". The guest
+kernel's own traces are handled in the guest (see "Guest stealth" below). A
+snapshot taken with other hardware may not restore after the profile changes.
 
 **Summary.** The VM configuration section of the Summary shows Compute,
 Storage and display, and Network and transport cards, and a Stealth profile
@@ -870,6 +870,171 @@ hypervisor CPU flag, uses the `tsc` clocksource, sees an Intel 0x8086 e1000e
 card with a `3c:fd:fe` address, Intel ICH9 USB controllers (8086:2934-2936,
 293a), the host's 16 MiB L3 and a `LENOVO` ACPI OEM ID, and records a
 guest-run without loss (3,456 packets, none dropped).
+
+## Guest stealth (0.7.0)
+
+Guest series 0046-0050; contract revision 17 unchanged, every guest change
+either invisible to the host or negotiated. What a sample sees from inside the
+guest, measured on a BusyBox base with the Realistic desktop profile, and
+what the guest kernel and the base now keep from it.
+
+**The check.** `examples/stealth-check.rs measure BUNDLE NEW_DATA_DIR PROBE
+[desktop|laptop|server|transparent]` boots one VM (two vCPUs, 2 GiB, isolated
+NAT) with that preset, uploads the static `tests/monitor/stealth-probe.c` and
+launches it as a run, as root and as uid 1000, after the host's first
+resource polls. The probe prints `STEALTH verdict key value` lines (pass: looks
+like a real machine; fail: a giveaway; info; skip: not readable for that
+user), the check turns them into `ROW` lines and `stealth.md`/`stealth.tsv` in
+the data folder and fails when the root run's recording holds fewer than 100
+calls (observation must not suffer). The probe reimplements
+systemd-detect-virt's VM checks (CPUID leaf 1 and 0x40000000, DMI vendors, the
+SMBIOS BIOS "virtual machine" bit), virt-what's (DMI, `/proc/cpuinfo`, block,
+SCSI and PCI vendors, fw_cfg sysfs and its I/O port), the Linux side of
+pafish (user and host names, uptime, CPU count, memory, disk size, rdtsc twice
+and around cpuid, a 500 ms sleep timed by the monotonic clock and the TSC),
+the MAC prefix and NAT addresses, and Antinomie's own: `/proc/cmdline`,
+`/proc/version`, `uname`, `/proc/config.gz`, `/proc/kallsyms`, `/proc/modules`
+and `/sys/module`, the kernel log, BTF and tracefs, `/proc/iomem` and
+`/proc/ioports` names, ACPI devices, every process's comm and command line
+watched for four seconds (worker names change with every work item), and the
+launched program's parent, session, process group, terminal and environment.
+
+**Before → after** (root's verdict; user's where it differs):
+
+| Check | Before | After | How |
+| --- | --- | --- | --- |
+| `kernel.cmdline` | fail: `… antinomie_ring_kib=1024 antinomie_boot_gpa=0x40000000` | pass: `console=tty0 console=ttyS0 panic=-1` | 0046 |
+| `dmesg.antinomie` | fail: the command line twice, readable by users (`dmesg_restrict` 0) | pass: none; root only (`dmesg_restrict` 1) | 0046, build script |
+| `kernel.version` | fail: the builder's `user@machine`, build time and time zone | pass: `(debian-kernel@lists.debian.org) … Debian 6.12.94-1 (2026-06-20)` | build script |
+| `kallsyms.antinomie` | fail: 365 `ant_*` of 190,666 | pass: none (854 of the recorder's symbols hidden) | 0047 |
+| `proc.comm-antinomie`, `proc.kworker-names` | fail: `kworker/u8:N-antinomie-control`, `-antinomie_resources` | pass | 0048 |
+| `self.parent` | fail: PPid 2 (kthreadd) | info: PPid 1 (init) | 0050, `SHELL_JOB` |
+| `self.session` | fail: sid = pgid = pid (session leader) | info: own process group, foreground, in session `pid - 1` whose leader does not exist | 0050, `SHELL_JOB` |
+| `acpi.devices`, `iomem.names` | fail: `QEMU0002:00` in sysfs and `/proc/ioports` | pass (sysfs); `bochs-drm` and `virtio-pci-modern` remain | 0049 |
+| `smbios.vm-bit` | fail: set | pass: clear | host, `stealth.rs` |
+| `base.hostname`, `base.users`, `base.fs-label` | fail: `localhost`, `analyst`, label `antinomie` | pass: `debian`, `user`, no label | image builders |
+| `acpi.tables` (root) | fail: BXPC creator ID, `QEMU0002`/`FWCF` in the DSDT | unchanged | limit |
+| `fwcfg.ioport` (root) | fail: signature `QEMU` at port 0x511 | unchanged | limit |
+| `pci.vendors` | fail: subsystem vendor 1af4 on every q35 device, Bochs display 1234:1111 | unchanged | limit, launch options |
+| `virtio.devices`, `block.devices`, `base.root-device` | fail: virtio disk `vda` | unchanged | follow-up card (SATA/NVMe) |
+| `display.fb` | fail: `bochs-drmdrmfb` (or virtio-gpu) | unchanged | limit |
+| `net.addresses` | fail: gateway 10.0.2.2, DNS 10.0.2.3 | unchanged | limit, launch options |
+| `timing.rdtsc-cpuid` | fail: median about 16,000 cycles | unchanged | limit |
+| `base.uptime`, `base.memory`, `block.disk-size` | fail: seconds, 2 GiB, 8 GiB | unchanged | the VM's settings and a fresh boot |
+| CPUID, DMI strings, MAC, clocksource, `cpuinfo` | pass (the 0.6.2 profile) | pass | |
+
+Totals with the Realistic desktop preset: 27 of 72 checks gave the VM or
+Antinomie away before, 14 after; with this app and the new base the user's
+view has no Antinomie name left. The tables, probe outputs and logs of both
+measurements are kept with the task report.
+
+**Command line (0046).** `setup_arch()` hands `boot_command_line` to
+`ant_cmdline_take()` (`kernel/antinomie/stealth.c`) before it first prints it:
+every `antinomie_*` option is cut out (quoting and the order of the others
+kept) and applied at once with `parse_early_options()`, so the existing
+`early_param()` handlers run as before and nothing later sees the options. The
+decompressor reads the original line for its KASLR placement. The host is
+unchanged.
+
+**Symbols (0047).** `section_begin.o` and `section_end.o`, linked first and last
+in `kernel/antinomie`, put labels at the start and end of its `.text`,
+`.rodata`, `.data`, `.bss` and per-CPU sections (`sections.h`; the text labels
+are annotated as not being call targets for objtool). `ant_symbol_hidden()`
+answers for an address in one of these ranges or an `ant_*` name (the hooks
+elsewhere and their `__pfx_`, `__ksymtab_`, `__setup_` and initcall entries).
+`/proc/kallsyms` skips those lines for every reader, root too, and
+`/proc/<pid>/wchan` shows 0 for them. The kernel's table is complete: oopses,
+`%pS`, kprobes, `kallsyms_lookup_name()` and the debugger are unaffected.
+
+**Workers (0048).** The resource refresh is queued on `system_unbound_wq`
+(one work item, one refresh in flight); the control (ordered), process-core
+and debug queues keep their own ordering and limits and are named
+`events_unbound`, the system queue whose worker pool they share.
+
+**ACPI (0049).** `acpi_bus_check_add()` skips devices whose `_HID` starts with
+`QEMU` (fw_cfg `QEMU0002`, pvpanic `QEMU0001`). Nothing in the guest uses
+fw_cfg after the firmware: SeaBIOS and the linuxboot option ROM read the
+kernel, initrd, ACPI and SMBIOS tables through it before the kernel runs, the
+BusyBox kernel has no fw_cfg driver, the Debian one's `qemu_fw_cfg` module
+has no device left to load for (not run on a Debian base here), and the host uses no fw_cfg device (no vmcoreinfo). The device stays in
+QEMU, so its I/O ports 0x510-0x51b still answer `QEMU` to root with `ioperm`.
+
+**Launch shape (0050, negotiated).** EXEC flag `SHELL_JOB` (32), listed in
+TRACER_CAPS `exec_flags`; the host asks for it on every launch when the guest
+offers it (`control::with_tracer_flags`), alongside the hashing flags (which
+alone are saved as the manifest's `tracer_hashing`). `execute()` allocates a
+PID before the launch (`alloc_pid()` in the initial namespace, so it is lower
+than the program's); in `launch_init()`, after the program took its terminal
+as session leader, `launch_as_job()` moves it under tasklist_lock from
+kthreadd's children to init's (`real_parent`, `parent`, `exit_signal`
+SIGCHLD), moves its session to that PID (`change_pid(PIDTYPE_SID)`) and points
+the terminal's session at it. Result: PPid 1, pgid = pid = the terminal's
+foreground group, sid = an id no process holds, `/dev/tty` opens, a child can
+`setsid()`, the program cannot (it leads a process group, as under a shell's
+job control). Init reaps it at exit (BusyBox init and systemd reap any
+child). The PID belongs to the session from then on and is freed with its last
+member; a launch that fails before frees it like a failed fork's. A real
+parent shell is not possible: it would be a process running in the guest for
+Antinomie, which the design excludes, so this is the shape of a job whose
+terminal shell has exited. An older host never asks and gets kthreadd as
+parent; an older guest does not offer the flag.
+
+**Build string and log.** `scripts/build-monitor-kernel.sh` sets
+`KBUILD_BUILD_USER`/`HOST` from the pinned package's maintainer
+(`debian-kernel`, `lists.debian.org`), `KBUILD_BUILD_VERSION=1`,
+`KBUILD_BUILD_TIMESTAMP` from its changelog date and
+`KBUILD_BUILD_VERSION_TIMESTAMP="Debian 6.12.94-1 (2026-06-20)"`, as Debian's
+`debian/rules.real` does (values in `adapter.conf`: `SOURCE_VERSION`,
+`SOURCE_DATE_EPOCH`, `SOURCE_MAINTAINER`); the build becomes reproducible in
+time too. The minimal profile disables `LOCALVERSION_AUTO` and builds with
+`LOCALVERSION=`, so a git author tree no longer gives `6.12.94-g<commit>`,
+and enables `SECURITY_DMESG_RESTRICT` as Debian does. The compiler part of
+`/proc/version` is the builder's compiler (Debian's own builder VM has
+Debian 13's gcc 14; a host build shows the host's). The release stays
+`6.12.94`: Debian's is `6.12.94+deb13-amd64`, and changing it would move the
+Debian base's modules and the bundles' `kernel_version`.
+
+**Base defaults.** BusyBox and Debian bases default to the hostname `debian`
+(the Debian installer's default), the BusyBox base names uid 1000 `user`
+(home `/home/user/`), the Debian account form proposes `user`, and neither
+image gives the root filesystem a label (nothing mounts it by label).
+
+**Known limits** (what neither a launch option nor the guest kernel removes
+without a cost to observation or a separate design):
+
+* *VM-exit timing.* CPUID, I/O ports and other intercepted instructions exit
+  to KVM: rdtsc around cpuid measures about 16,000 cycles on this AMD host
+  (bare metal: 100-250). Plain rdtsc and sleep timing look normal.
+* *Tracer overhead.* Each traced call of a run writes telemetry; a sample that
+  times its own system calls against a baseline sees them slower (see the
+  overhead benchmark). The debugger's parked thread shows state `D`, not the
+  `t` of a ptrace stop (it waits killable).
+* *Root inspection of the guest kernel.* Root can read `/proc/kcore`, place a
+  kprobe on a recorder function by name, read `/proc/<pid>/stack`, iterate
+  kernel symbols with BPF, or read the original boot command line from the
+  boot parameters' memory; the guest kernel is modified and cannot hide that
+  from its own root. The Debian kernel profile also keeps Debian's
+  `DEBUG_INFO_BTF` (world-readable `/sys/kernel/btf/vmlinux` names every
+  function, the recorder's too) and `FUNCTION_TRACER` (root's tracefs lists
+  them): not changed here because the Debian kernel was not rebuilt.
+* *q35 PCI layout.* QEMU gives every q35 device the Red Hat subsystem vendor
+  1af4, and the chipset (ICH9, 8086:29c0 host bridge) is QEMU's choice of a
+  2009 platform.
+* *QEMU's ACPI tables and fw_cfg.* To root, every table header has the creator
+  ID `BXPC`, the DSDT describes `QEMU0002`/`FWCF`, and port 0x511 answers
+  `QEMU`; the kernel log (root only now) prints the table headers.
+* *Virtio disk and the emulated display.* `vda` with vendor 1af4 (SATA/NVMe is
+  the follow-up card); the display is Bochs (`bochs-drm`, 1234:1111) or
+  virtio-gpu.
+* *NAT addresses.* QEMU user networking gives 10.0.2.15, gateway 10.0.2.2 and
+  DNS 10.0.2.3, which VirtualBox shares; the BusyBox base configures them
+  statically.
+* *A fresh boot.* Uptime is seconds to minutes; the VM's CPU count, memory
+  and disk size are its settings (pafish flags under 2 CPUs, 2 GiB, 60 GiB).
+* *Environment.* A run gets exactly the environment the user set (by default
+  `PATH` and `TERM`), not a login shell's `HOME`, `USER`, `SHELL`, `PWD`.
+* *Older bases* keep their command line, build string, symbols, worker names
+  and `QEMU0002` until rebuilt, and are launched with kthreadd as parent.
 
 ## Detection scanned inputs (0.6.2)
 

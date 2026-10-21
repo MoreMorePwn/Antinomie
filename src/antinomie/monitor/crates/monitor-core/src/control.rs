@@ -10,6 +10,12 @@ pub(crate) const EXEC_DEBUG: u32 = 4;
 pub(crate) const EXEC_HASH_ROOT: u32 = 8;
 /// EXEC flag (TRACER_CAPS): hash the files the run writes at their last close.
 pub(crate) const EXEC_HASH_WRITES: u32 = 16;
+/// EXEC flag (TRACER_CAPS): start the program as a job of a closed terminal
+/// shell (parent init, its own process group in a session whose leader is
+/// gone) instead of as a child of kthreadd leading its own session.
+pub(crate) const EXEC_SHELL_JOB: u32 = 32;
+/// The optional EXEC flags this host knows; others a guest offers are ignored.
+const EXEC_OPTIONAL: u32 = EXEC_HASH_ROOT | EXEC_HASH_WRITES | EXEC_SHELL_JOB;
 pub(crate) const TRACER_CAPS: u32 = 0x10a0;
 pub(crate) const TRACER_CAPS_SIZE: usize = 32;
 const TRACER_ABI: u32 = 1;
@@ -309,11 +315,11 @@ pub(crate) fn execute_analysis(r: &ExecRequest, supported: bool) -> Result<Vec<u
     }
     Ok(encoded)
 }
-/// Ask for the optional hashing a guest's TRACER_CAPS offers. Nothing is added
-/// for a guest that offers none, so an older guest never sees a flag it would
-/// reject.
+/// Ask for the optional hashing and launch shape a guest's TRACER_CAPS offers.
+/// Nothing is added for a guest that offers none, so an older guest never
+/// sees a flag it would reject.
 pub(crate) fn with_tracer_flags(mut encoded: Vec<u8>, offered: u32) -> Vec<u8> {
-    let wanted = offered & (EXEC_HASH_ROOT | EXEC_HASH_WRITES);
+    let wanted = offered & EXEC_OPTIONAL;
     if wanted != 0 && encoded.len() >= 8 {
         let flags = u32::from_le_bytes(encoded[4..8].try_into().expect("flags")) | wanted;
         encoded[4..8].copy_from_slice(&flags.to_le_bytes());
@@ -332,7 +338,7 @@ pub(crate) fn tracer_caps(reply: &[u8]) -> Result<crate::api::GuestTracerCaps, S
         return Err("unknown tracer capabilities ABI".into());
     }
     Ok(crate::api::GuestTracerCaps {
-        exec_flags: word(4)? & (EXEC_HASH_ROOT | EXEC_HASH_WRITES),
+        exec_flags: word(4)? & EXEC_OPTIONAL,
         hash_file_max_size: word(8)?,
         hash_queue_count: word(12)?,
         hash_pending_max_size: u64_at(reply, 16).map_err(|e| e.to_string())?,
@@ -644,13 +650,18 @@ mod tests {
         let mut reply = vec![0; TRACER_CAPS_SIZE];
         reply[0..4].copy_from_slice(&1u32.to_le_bytes());
         // A flag this host does not know is never sent back.
-        reply[4..8].copy_from_slice(&(EXEC_HASH_ROOT | EXEC_HASH_WRITES | 0x400).to_le_bytes());
+        reply[4..8].copy_from_slice(
+            &(EXEC_HASH_ROOT | EXEC_HASH_WRITES | EXEC_SHELL_JOB | 0x400).to_le_bytes(),
+        );
         reply[8..12].copy_from_slice(&(16u32 << 20).to_le_bytes());
         reply[12..16].copy_from_slice(&16u32.to_le_bytes());
         reply[16..24].copy_from_slice(&(64u64 << 20).to_le_bytes());
         let caps = tracer_caps(&reply).unwrap();
-        assert!(caps.hashes_root() && caps.hashes_writes());
-        assert_eq!(caps.exec_flags, EXEC_HASH_ROOT | EXEC_HASH_WRITES);
+        assert!(caps.hashes_root() && caps.hashes_writes() && caps.launches_as_job());
+        assert_eq!(
+            caps.exec_flags,
+            EXEC_HASH_ROOT | EXEC_HASH_WRITES | EXEC_SHELL_JOB
+        );
         assert_eq!(
             (
                 caps.hash_file_max_size,
@@ -661,11 +672,11 @@ mod tests {
         );
         let asked = with_tracer_flags(plain.clone(), caps.exec_flags);
         assert_eq!(asked.len(), plain.len(), "the flags add no request bytes");
-        assert_eq!(&asked[4..8], &24u32.to_le_bytes());
+        assert_eq!(&asked[4..8], &56u32.to_le_bytes());
         let mut debug = request.clone();
         debug.debug_on_start = true;
         let asked = with_tracer_flags(execute_analysis(&debug, true).unwrap(), caps.exec_flags);
-        assert_eq!(&asked[4..8], &(24u32 | EXEC_DEBUG).to_le_bytes());
+        assert_eq!(&asked[4..8], &(56u32 | EXEC_DEBUG).to_le_bytes());
         // Malformed replies are refused.
         assert!(tracer_caps(&reply[..31]).is_err());
         let mut padded = reply.clone();
@@ -714,6 +725,7 @@ mod tests {
             ("ANTC_TRACER_ABI", TRACER_ABI),
             ("ANTC_EXEC_HASH_ROOT", EXEC_HASH_ROOT),
             ("ANTC_EXEC_HASH_WRITES", EXEC_HASH_WRITES),
+            ("ANTC_EXEC_SHELL_JOB", EXEC_SHELL_JOB),
             ("ANTC_EXEC_DEBUG", EXEC_DEBUG),
             ("ANTC_REVISION", REVISION),
             ("ANTC_PROCESS_LIST", PROCESS_LIST),

@@ -5,8 +5,9 @@
 //! The profile is stored per VM. A preset fills every entry; serials, the
 //! system UUID and the MAC address are random per VM and kept, so one VM keeps
 //! its identity across boots and two VMs never share one. Everything here is
-//! a launch option: the guest kernel's own traces (its command line, the
-//! fw_cfg device, its build string) are outside this profile.
+//! a launch option. The guest kernel keeps its own traces out of the guest
+//! (its boot options, build string, symbols, worker names and QEMU's ACPI
+//! devices); what neither can change is listed by `giveaways()`.
 use crate::storage::unique_id;
 use serde::{Deserialize, Serialize};
 use std::{path::Path, process::Command};
@@ -642,12 +643,16 @@ impl StealthProfile {
         if !self.pmu {
             found.push("no performance counters");
         }
-        // Not covered by any entry: needed by Antinomie or outside QEMU options.
+        // Not covered by any entry: needed by Antinomie, outside QEMU options
+        // or beyond what the guest kernel can hide (docs/implementation.md,
+        // "Guest stealth").
         found.extend([
-            "virtio disk and display (Red Hat vendor ID)",
-            "QEMU fw_cfg device and q35 chipset layout",
-            "Antinomie options on the guest kernel command line",
-            "timing of VM exits",
+            "timing of VM exits (CPUID, I/O) and of traced calls",
+            "virtio disk (Red Hat vendor ID) and the emulated display",
+            "q35 chipset layout, Red Hat PCI subsystem IDs",
+            "QEMU's ACPI tables to root (BXPC creator ID, fw_cfg in the DSDT)",
+            "a fresh boot: minutes of uptime",
+            "QEMU user-network addresses (10.0.2.x) on NAT",
         ]);
         found
     }
@@ -775,26 +780,13 @@ pub(crate) fn apply(
             format!(",{name}={}", escape(value))
         }
     };
-    let release = id
-        .bios_version
-        .split(|c: char| !c.is_ascii_digit())
-        .filter(|part| !part.is_empty())
-        .take(2)
-        .collect::<Vec<_>>();
-    let release = match release.as_slice() {
-        [major, minor, ..] => format!(
-            ",release={}.{}",
-            major.parse::<u8>().unwrap_or(1),
-            minor.parse::<u8>().unwrap_or(0)
-        ),
-        _ => String::new(),
-    };
-    command.arg("-smbios").arg(format!(
-        "type=0{}{}{}{release}",
-        field("vendor", &id.bios_vendor),
-        field("version", &id.bios_version),
-        field("date", &id.bios_date)
-    ));
+    // QEMU's type 0 sets the "virtual machine" BIOS characteristic, which
+    // systemd-detect-virt reads, so the BIOS table is written whole too.
+    let bios = runtime_dir.join("smbios-bios.bin");
+    std::fs::write(&bios, bios_table(id)).map_err(|error| format!("SMBIOS BIOS table: {error}"))?;
+    command
+        .arg("-smbios")
+        .arg(format!("file={}", escape(&bios.to_string_lossy())));
     command.arg("-smbios").arg(format!(
         "type=1{}{}{}{}{}{}{}",
         field("manufacturer", &id.system_manufacturer),
@@ -850,6 +842,69 @@ pub(crate) fn apply(
             .arg(format!("ide-cd.model={}", escape(&id.cdrom_model)));
     }
     Ok(())
+}
+
+/// The BIOS release from its version string, as QEMU's `release=` takes it:
+/// the first two numbers in it ("1.21.0" is 1.21).
+fn bios_release(version: &str) -> Option<(u8, u8)> {
+    let mut numbers = version
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|part| !part.is_empty());
+    let major = numbers.next()?.parse::<u8>().unwrap_or(1);
+    let minor = numbers.next()?.parse::<u8>().unwrap_or(0);
+    Some((major, minor))
+}
+
+/// Strings of an SMBIOS structure: the formatted area's string numbers (0 for
+/// an empty one) and the string set that follows it.
+fn string_set(strings: &[&str]) -> (Vec<u8>, Vec<u8>) {
+    let mut numbers = Vec::new();
+    let mut set = Vec::new();
+    for text in strings {
+        let bytes: Vec<u8> = text.bytes().filter(|byte| *byte != 0).collect();
+        if bytes.is_empty() {
+            numbers.push(0);
+        } else {
+            set.extend(bytes);
+            set.push(0);
+            numbers.push((set.iter().filter(|byte| **byte == 0).count()) as u8);
+        }
+    }
+    if set.is_empty() {
+        set.push(0);
+    }
+    set.push(0);
+    (numbers, set)
+}
+
+/// An SMBIOS type 0 (BIOS information) structure, as a PC's firmware writes
+/// it: what it supports, and not QEMU's "characteristics not supported" and
+/// "system is a virtual machine" (extension byte 2, bit 4).
+fn bios_table(id: &MachineIdentity) -> Vec<u8> {
+    let (numbers, strings) = string_set(&[&id.bios_vendor, &id.bios_version, &id.bios_date]);
+    // PCI, PnP, flash upgradeable, shadowing, boot from CD, selectable boot,
+    // EDD, the int 13h floppy services, int 5h, 9h, 14h, 17h and 10h.
+    let characteristics: u64 = [7, 9, 11, 12, 15, 16, 19, 23, 24, 25, 26, 27, 28, 29, 30]
+        .iter()
+        .map(|bit| 1u64 << bit)
+        .sum();
+    let (major, minor) = bios_release(&id.bios_version).unwrap_or((0xff, 0xff));
+    // Type 0, the formatted area's length (SMBIOS 3.1) and handle 0.
+    let mut table = vec![0, 0x1a, 0, 0];
+    // Vendor and version strings, starting address segment F000h.
+    table.extend([numbers[0], numbers[1]]);
+    table.extend(0xf000u16.to_le_bytes());
+    // Release date string; the ROM size is in the extended field.
+    table.extend([numbers[2], 0xff]);
+    table.extend(characteristics.to_le_bytes());
+    // Extension byte 1: ACPI, USB legacy. Byte 2: BIOS boot specification,
+    // network boot, targeted content distribution (no VM bit).
+    table.extend([0x03, 0x07]);
+    // BIOS release; no embedded controller firmware.
+    table.extend([major, minor, 0xff, 0xff]);
+    table.extend(32u16.to_le_bytes()); // extended ROM size: 32 MiB
+    table.extend(strings);
+    table
 }
 
 /// An SMBIOS type 3 (chassis) structure with its strings.
@@ -994,7 +1049,29 @@ mod tests {
         let chassis = std::fs::read(dir.join("smbios-chassis.bin")).unwrap();
         assert_eq!(&chassis[..6], &[3, 0x16, 0, 3, 1, 3]);
         assert!(chassis.ends_with(b"Default string\0\0"));
+        // The BIOS table: no VM bit, Dell's strings, release 1.21.
+        let bios = std::fs::read(dir.join("smbios-bios.bin")).unwrap();
+        assert_eq!(&bios[..6], &[0, 0x1a, 0, 0, 1, 2]);
+        assert_eq!(bios[8], 3);
+        assert_eq!(bios[0x13] & 0x10, 0, "the virtual machine bit is clear");
+        assert_eq!(bios[0x0a] & 0x08, 0, "characteristics are listed");
+        assert_eq!(&bios[0x14..0x16], &[1, 21]);
+        assert_eq!(&bios[0x1a..], b"Dell Inc.\x001.21.0\x0008/14/2024\x00\x00");
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn smbios_strings_are_numbered_and_empty_ones_are_zero() {
+        assert_eq!(
+            string_set(&["", "a", "bc"]),
+            (vec![0, 1, 2], b"a\0bc\0\0".to_vec())
+        );
+        assert_eq!(string_set(&["", ""]), (vec![0, 0], b"\0\0".to_vec()));
+        assert_eq!(bios_release("S21 Ver. 02.15.00"), Some((21, 2)));
+        assert_eq!(bios_release("A1"), None);
+        let bios = bios_table(&MachineIdentity::default());
+        assert_eq!(bios.len(), 0x1a + 2);
+        assert_eq!((bios[0x14], bios[0x15]), (0xff, 0xff));
     }
 
     #[test]
@@ -1009,10 +1086,12 @@ mod tests {
             .get_args()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect();
+        let bios = std::fs::read(dir.join("smbios-bios.bin")).unwrap();
         assert!(
-            args.iter()
-                .any(|arg| arg.contains("vendor=American Megatrends Inc."))
+            bios.windows(24)
+                .any(|part| part == b"American Megatrends Inc.")
         );
+        assert!(!args.iter().any(|arg| arg.starts_with("type=0")));
         std::fs::remove_dir_all(dir).unwrap();
         profile.identity.bios_vendor = "Vendor, Inc.".into();
         assert_eq!(escape(&profile.identity.bios_vendor), "Vendor,, Inc.");
