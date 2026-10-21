@@ -58,6 +58,10 @@
 #define ANTC_EXEC_SPECIMEN 1
 #define ANTC_EXEC_CORE 2
 #define ANTC_EXEC_DEBUG 4
+/* Optional EXEC flags (revision 17, additive): only for a guest whose
+ * TRACER_CAPS lists them; an older guest rejects unknown flags with -EINVAL. */
+#define ANTC_EXEC_HASH_ROOT 8
+#define ANTC_EXEC_HASH_WRITES 16
 #define ANTC_CORE_STATUS 0x1060
 #define ANTC_CORE_READ 0x1061
 #define ANTC_CORE_RELEASE 0x1062
@@ -117,6 +121,12 @@
 #define ANTC_DEBUG_THREAD_CTL 0x1090
 #define ANTC_DEBUG_SESSIONS 0x1091
 #define ANTC_DEBUG_BP_LIST 0x1092
+/* Tracer capabilities (revision 17, additive, optional): the optional EXEC
+ * flags this guest accepts and the hashing budget. -EOPNOTSUPP from an older
+ * guest means none: the host must then send none of them. */
+#define ANTC_TRACER_CAPS 0x10a0
+#define ANTC_TRACER_CAPS_SIZE 32
+#define ANTC_TRACER_ABI 1
 #define ANTC_DEBUG_ABI 1
 #define ANTC_DEBUG_CAPS_SIZE 48
 #define ANTC_DEBUG_REGSET_SIZE 16
@@ -225,6 +235,23 @@
  * and u32 hashing time in microseconds at 64/68, u32 cumulative records
  * lost since boot at 72 (queue, budget, memory or ring loss), zero at 76.
  * Published after the call returned, by a worker, with the call's identity.
+ * Kinds: EXEC (1) an executed image; DELETE (2) a file about to be unlinked;
+ * WRITE (3) a regular file a task of the run had open for writing, when the
+ * last writer of the file closed it (only for a run launched with EXEC flag
+ * HASH_WRITES). A WRITE record uses layout "antinomie.hash/2", 112 bytes: the
+ * 80 above, then the file at the close: u64 dev at 80 (new_encode_dev),
+ * u64 ino at 88, u32 generation at 96, u32 mode at 100, u32 nlink at 104,
+ * zero at 108. Its call is the one the closing task made last (close, dup2,
+ * exit_group, munmap, or the call a signal ended), since the last close of a
+ * file happens when its last reference goes, not necessarily in a call that
+ * names it. Pseudo filesystems (proc, sysfs, cgroup, debugfs, tracefs,
+ * securityfs, bpf, pstore, efivarfs, selinuxfs, smackfs, binfmt_misc) and
+ * files that are not regular publish nothing; a regular file elsewhere that is
+ * not read publishes its reason. CHANGED compares the file with its state at
+ * that close. With EXEC flag HASH_ROOT the launched program's own image is
+ * hashed too, as an EXEC record of the root task with call id 0 and syscall
+ * number U64_MAX: the identity of its "lifecycle.launch" event, since the
+ * kernel starts the program without a traced execve.
  * lifecycle.file_id, layout "antinomie.fileid/1", 32 bytes (optional, additive:
  * a guest from before it publishes none, a host that does not know it shows an
  * unknown lifecycle field): the identity of the file inode a call acted on, so
@@ -282,6 +309,8 @@
 #define ANTC_HASH_SIZE 80
 #define ANTC_HASH_EXEC 1
 #define ANTC_HASH_DELETE 2
+#define ANTC_HASH_WRITE 3
+#define ANTC_HASH_WRITE_SIZE 112
 #define ANTC_HASH_OK 0
 #define ANTC_HASH_TOO_LARGE 1
 #define ANTC_HASH_UNSUPPORTED_FS 2
@@ -335,6 +364,14 @@
  * instead of creating one. -EBUSY when another session is live. The program
  * stays parked until the debugger continues it or detaches; STOP_RUN and the
  * Stop escalation end it.
+ * EXEC_HASH_ROOT hashes the program's own image at its exec; EXEC_HASH_WRITES
+ * hashes the regular files the run writes, when the last writer closes them
+ * (see lifecycle.file_hash). Neither adds request or reply bytes.
+ * TRACER_CAPS: header only (8 bytes). Reply 32 bytes: u32 abi=1 at 0, u32
+ * exec_flags at 4 (the optional EXEC flags this guest accepts: HASH_ROOT,
+ * HASH_WRITES), u32 hash file limit at 8 (ANTC_HASH_FILE_MAX), u32 hash queue
+ * jobs at 12 (ANTC_HASH_QUEUE), u64 hash queued byte limit at 16
+ * (ANTC_HASH_PENDING_MAX), zero at 24.
  * Arm failure has id/size=0 and negative errno; execution still succeeds.
  * Only the launched root thread group is eligible, native Linux ELF64.
  * CORE_STATUS: header flags=0, u64 id at 8, 16 bytes total. Reply80:
