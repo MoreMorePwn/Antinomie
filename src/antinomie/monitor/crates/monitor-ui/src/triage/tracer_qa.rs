@@ -6,7 +6,7 @@
 //!
 //! ```text
 //! tracer-check record BUNDLE NEW_DATA_DIR FIXTURE   # prints RUN label=dir, FIXTURE_SHA256
-//! ANTINOMIE_TRACER_RUNS='writes=DIR;reconnect=DIR;analyst=DIR;nobody=DIR' \
+//! ANTINOMIE_TRACER_RUNS='writes=DIR;reconnect=DIR;user=DIR;nobody=DIR' \
 //! ANTINOMIE_TRACER_FIXTURE_SHA256=HEX ANTINOMIE_TRACER_DATA=NEW_DATA_DIR \
 //! ANTINOMIE_DISK_READER=target/release/antinomie-monitor \
 //!     cargo test --release -p antinomie-monitor-ui recorded_tracer_triage -- --ignored
@@ -355,7 +355,7 @@ fn recorded_tracer_triage() {
         );
     }
 
-    for (label, user) in [("analyst", "analyst"), ("nobody", "65534")] {
+    for (label, user) in [("user", "user"), ("nobody", "65534")] {
         let Some(directory) = runs.get(label) else {
             continue;
         };

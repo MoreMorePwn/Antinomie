@@ -205,19 +205,19 @@ def valid_hostname(name):
     return name
 
 
-def base_tree(root, hostname="localhost"):
-    for directory in ("bin", "sbin", "usr/bin", "usr/sbin", "etc", "dev", "proc", "sys", "run", "tmp", "root", "home/analyst", "var/log"):
+def base_tree(root, hostname="debian"):
+    for directory in ("bin", "sbin", "usr/bin", "usr/sbin", "etc", "dev", "proc", "sys", "run", "tmp", "root", "home/user", "var/log"):
         (root / directory).mkdir(parents=True, exist_ok=True)
     (root / "tmp").chmod(0o1777)
-    (root / "home/analyst").chmod(0o700)
+    (root / "home/user").chmod(0o700)
     install_binary("/usr/bin/busybox", root, "/bin/busybox")
     applets = subprocess.check_output(["/usr/bin/busybox", "--list"], text=True).splitlines()
     for applet in applets:
         if applet != "busybox":
             (root / "bin" / applet).symlink_to("busybox")
     (root / "sbin/init").symlink_to("../bin/busybox")
-    write_file(root, "/etc/passwd", "root:x:0:0:root:/root:/bin/sh\nanalyst:x:1000:1000:Analyst:/home/analyst:/bin/sh\n")
-    write_file(root, "/etc/group", "root:x:0:\nanalyst:x:1000:\n")
+    write_file(root, "/etc/passwd", "root:x:0:0:root:/root:/bin/sh\nuser:x:1000:1000:user,,,:/home/user:/bin/sh\n")
+    write_file(root, "/etc/group", "root:x:0:\nuser:x:1000:\n")
     write_file(root, "/etc/hostname", hostname + "\n")
     write_file(root, "/etc/resolv.conf", "nameserver 10.0.2.3\n")
     write_file(root, "/etc/inittab", "::sysinit:/etc/init.d/rcS\ntty1::respawn:/bin/getty -n -l /bin/sh 0 tty1\nttyS0::respawn:/bin/getty -n -l /bin/sh 115200 ttyS0\n::ctrlaltdel:/bin/reboot\n::shutdown:/bin/sync\n::shutdown:/bin/umount -a -r\n")
@@ -278,7 +278,7 @@ def main():
     parser.add_argument("--base-size-mib", type=int, default=256)
     parser.add_argument("--allow-unversioned", action="store_true",
                         help="accept a development kernel without a source id")
-    parser.add_argument("--hostname", default="localhost")
+    parser.add_argument("--hostname", default="debian")
     parser.add_argument("--app-version", help="Antinomie version building this base")
     parser.add_argument("--name", default="", help="display name of the base")
     parser.add_argument("--work", type=Path, default=REPO / "work",
@@ -306,13 +306,14 @@ def main():
         raw = staging / "base.raw"
         with raw.open("wb") as image:
             image.truncate(args.base_size_mib << 20)
-        run("mkfs.ext4", "-q", "-F", "-L", "antinomie", "-d", str(root), str(raw))
-        # Imported staging files belong to the builder, not the guest analyst.
+        # No volume label: an installer leaves the root filesystem unnamed.
+        run("mkfs.ext4", "-q", "-F", "-d", str(root), str(raw))
+        # Imported staging files belong to the builder, not the guest user.
         metadata = staging / "ownership.debugfs"
         commands = []
         for path in [root] + sorted(root.rglob("*")):
             guest_path = "/" + str(path.relative_to(root)) if path != root else "/"
-            owner = 1000 if guest_path == "/home/analyst" else 0
+            owner = 1000 if guest_path == "/home/user" else 0
             commands.extend((f"set_inode_field {guest_path} uid {owner}",
                              f"set_inode_field {guest_path} gid {owner}"))
         metadata.write_text("\n".join(commands) + "\n")

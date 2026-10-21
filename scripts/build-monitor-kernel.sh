@@ -97,9 +97,26 @@ else
     echo "kernel source id $source_id" >&2
 fi
 
+# The build string (/proc/version, uname -v) is the one Debian's own build of
+# the pinned package writes (debian/rules.real): the kernel team's address, the
+# package version and its changelog date. Never the name of the user and the
+# machine that built this kernel, nor the time; the build is reproducible.
+adapter="$repo/src/antinomie/packaging/debian-6.12.94-1-trixie/adapter.conf"
+adapter_value() { sed -n "s/^$1=//p" "$adapter"; }
+source_version=$(adapter_value SOURCE_VERSION)
+source_epoch=$(adapter_value SOURCE_DATE_EPOCH)
+maintainer=$(adapter_value SOURCE_MAINTAINER)
+[[ $source_version && $source_epoch =~ ^[0-9]+$ && $maintainer == *@* ]] ||
+    { echo "build identity missing from $adapter" >&2; exit 1; }
+export KBUILD_BUILD_USER=${maintainer%@*} KBUILD_BUILD_HOST=${maintainer#*@}
+export KBUILD_BUILD_VERSION=1 KBUILD_BUILD_TIMESTAMP="@$source_epoch"
+KBUILD_BUILD_VERSION_TIMESTAMP="Debian $source_version ($(date -u -d "@$source_epoch" +%F))"
+export KBUILD_BUILD_VERSION_TIMESTAMP
+
 # Symbols pinned Debian 13 enables that syscall coverage and realism depend on.
+# SECURITY_DMESG_RESTRICT: as on Debian, only root reads the kernel log.
 DEBIAN_PARITY="BPF_SYSCALL BPF_JIT CHECKPOINT_RESTORE KEYS KEY_DH_OPERATIONS
-    SECURITY_YAMA USER_NS"
+    SECURITY_YAMA USER_NS SECURITY_DMESG_RESTRICT"
 # Enabled in the minimal profile only, for prctl coverage; pinned Debian leaves
 # both unset, so the debian profile keeps them off.
 MINIMAL_EXTRA="ANON_VMA_NAME SCHED_CORE"
@@ -144,6 +161,9 @@ if [[ $profile == minimal ]]; then
         "$config" --file "$build_tree/.config" --enable "$symbol"
     done
     "$config" --file "$build_tree/.config" --disable IKCONFIG_PROC
+    # The release is exactly 6.12.94, as from the prepared tree, also when an
+    # author tree is a git checkout (no -g<commit>, no "+").
+    "$config" --file "$build_tree/.config" --disable LOCALVERSION_AUTO
     # DWARF in vmlinux, for the base's Volatility symbol table (as Debian).
     "$config" --file "$build_tree/.config" --disable DEBUG_INFO_NONE \
         --enable DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT
@@ -153,7 +173,7 @@ if [[ $profile == minimal ]]; then
     # shellcheck disable=SC2086
     require_symbols ANTINOMIE IKCONFIG DEBUG_INFO $DEBIAN_PARITY $MINIMAL_EXTRA
     require_source_id
-    make -C "$source_tree" O="$build_tree" "${compiler[@]}" -j"$jobs" bzImage
+    make -C "$source_tree" O="$build_tree" "${compiler[@]}" LOCALVERSION= -j"$jobs" bzImage
     [[ ${#compiler[@]} -eq 0 ]] || ccache --show-stats >&2
     echo "$build_tree/arch/x86/boot/bzImage"
     exit 0

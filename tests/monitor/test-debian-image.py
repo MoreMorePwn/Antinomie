@@ -80,7 +80,7 @@ class DebianImageTests(unittest.TestCase):
             image.options({"desktop": "windows"})
 
     def test_options_are_validated(self):
-        self.assertEqual(image.options({})["hostname"], "antinomie")
+        self.assertEqual(image.options({})["hostname"], "debian")
         self.assertEqual(image.options({"name": "  Lab desktop  "})["name"], "Lab desktop")
         for bad in ({"hostname": "Bad_Name"}, {"locale": "en_US.ISO-8859-1"},
                     {"keyboard_layout": "US"}, {"keyboard_variant": "a b"},

@@ -71,7 +71,7 @@ PACKAGES = ("systemd-sysv", "sudo", "dbus-x11", "dbus-user-session", "network-ma
             "console-setup", "tzdata")
 # Installer-style answers. Values are checked again inside the new system
 # against its locale, keyboard and time zone data.
-DEFAULTS = {"name": "", "desktop": "xfce", "hostname": "antinomie", "locale": "en_US.UTF-8",
+DEFAULTS = {"name": "", "desktop": "xfce", "hostname": "debian", "locale": "en_US.UTF-8",
             "keyboard_layout": "us",
             "keyboard_variant": "", "timezone": "Etc/UTC", "standard": False,
             "mirror": "http://deb.debian.org/debian", "proxy": ""}
@@ -484,7 +484,7 @@ def root_image(values, raw, staging, provenance, log, modules=None, cache=None):
         add_modules(tarball, modules)
     with raw.open("xb") as target:
         target.truncate(IMAGE_SIZE)
-    subprocess.run(["mkfs.ext4", "-q", "-F", "-L", "antinomie", "-d", str(tarball), str(raw)],
+    subprocess.run(["mkfs.ext4", "-q", "-F", "-d", str(tarball), str(raw)],
                    check=True, stdout=log, stderr=subprocess.STDOUT)
     xattrs = apply_xattrs(tarball, raw, staging, log)
     tarball.unlink()
