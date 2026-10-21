@@ -242,7 +242,13 @@ struct AnalysisView {
     pending: Option<(u64, u64, usize)>,
     listing: Option<Result<antinomie_monitor_core::AnalysisListingPage, String>>,
     /// Generation and request of the listing page being read.
-    listing_pending: Option<(u64, antinomie_monitor_core::AnalysisKind, u64, String)>,
+    listing_pending: Option<(
+        u64,
+        antinomie_monitor_core::AnalysisKind,
+        u64,
+        String,
+        Option<antinomie_monitor_core::ListingSort>,
+    )>,
     record_context: Option<Vec<(&'static str, crate::query::RowValue)>>,
 }
 

@@ -492,12 +492,14 @@ pub(crate) enum ReportAction {
     OpenAnalysisTools,
     /// Show the same file's identity in Triage › Properties.
     OpenTriageProperties,
-    /// Read a page of a category's full listing, filtered by `query`.
+    /// Read a page of a category's full listing, filtered by `query` and
+    /// ordered by `sort` over the whole listing.
     ReadListing {
         report_id: String,
         kind: AnalysisKind,
         start: u64,
         query: String,
+        sort: Option<antinomie_monitor_core::ListingSort>,
     },
 }
 

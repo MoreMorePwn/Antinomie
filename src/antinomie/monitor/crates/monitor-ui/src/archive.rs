@@ -96,6 +96,7 @@ pub(crate) enum Request {
         kind: antinomie_monitor_core::AnalysisKind,
         start: u64,
         query: String,
+        sort: Option<antinomie_monitor_core::ListingSort>,
         record_context: Vec<(&'static str, crate::query::RowValue)>,
     },
 }
@@ -399,6 +400,7 @@ fn answer(request: Request, shared: &Shared) -> Answer {
             kind,
             start,
             query,
+            sort,
             record_context,
         } => Answer::Listing {
             result: {
@@ -407,13 +409,14 @@ fn answer(request: Request, shared: &Shared) -> Answer {
                 if let Some(error) = filter.error.clone() {
                     Err(error)
                 } else {
-                    antinomie_monitor_core::read_listing_page_with(
+                    antinomie_monitor_core::read_listing_page_sorted(
                         &directory,
                         &report_id,
                         kind,
                         start,
                         antinomie_monitor_core::LISTING_PAGE_MAX_ROWS,
                         &query,
+                        sort,
                         |entry| {
                             filter.keep_table(&crate::analysis::listing_row_with(
                                 entry,

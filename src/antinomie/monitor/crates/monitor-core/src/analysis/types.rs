@@ -252,12 +252,22 @@ pub struct AnalysisListing {
     pub truncated: bool,
 }
 
+/// The order a listing is read in: the table column and the direction.
+/// Strings columns are Offset (0), Encoding (1), Length (2) and Text (3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ListingSort {
+    pub column: usize,
+    pub descending: bool,
+}
+
 /// One page of a listing, optionally filtered by a case-insensitive query.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AnalysisListingPage {
     pub report_id: String,
     pub kind: AnalysisKind,
     pub query: String,
+    /// The order of the matching rows; `None` is the listing's own order.
+    pub sort: Option<ListingSort>,
     /// Index of the first returned row among the matching rows.
     pub start: u64,
     /// Matching rows in the whole listing.
