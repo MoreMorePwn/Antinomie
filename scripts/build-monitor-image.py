@@ -171,6 +171,37 @@ def fixed_display_config(config, kernel=None):
     return True
 
 
+# The EFI stub of a kernel with guest patch 0051 claims the bootstrap page before
+# it places the kernel; its warning text is the mark of that patch in a bzImage
+# (the stub is not part of the compressed payload).
+UEFI_BOOT_PAGE_MARK = b"Bootstrap page 0x%llx is not free"
+
+
+def stealth_support(config, kernel, root_buses=True, dhcp=True):
+    """Stealth profile entries the base can boot with, for bundle.json.
+
+    uefi: the kernel boots through its EFI stub without landing on the bootstrap
+    page; sata, nvme: the initrd finds the root disk on that bus and the kernel
+    has the controller built in; dhcp: the guest takes its address from the
+    NAT's DHCP server, so any NAT network works. A base without the field boots
+    from virtio under SeaBIOS on 10.0.2.0/24 only."""
+    support = []
+    values = {}
+    if config is not None:
+        values = dict(line.split("=", 1) for line in Path(config).read_text().splitlines()
+                      if line.startswith("CONFIG_") and "=" in line)
+    built_in = lambda *names: all(values.get("CONFIG_" + name) == "y" for name in names)
+    if built_in("EFI", "EFI_STUB") and UEFI_BOOT_PAGE_MARK in Path(kernel).read_bytes():
+        support.append("uefi")
+    if root_buses and built_in("ATA", "SATA_AHCI", "SCSI", "BLK_DEV_SD"):
+        support.append("sata")
+    if root_buses and built_in("BLK_DEV_NVME"):
+        support.append("nvme")
+    if dhcp:
+        support.append("dhcp")
+    return support
+
+
 def install_binary(source, root, destination=None):
     source = Path(source)
     target = root / (destination or str(source)).lstrip("/")
@@ -219,7 +250,31 @@ def base_tree(root, hostname="debian"):
     write_file(root, "/etc/passwd", "root:x:0:0:root:/root:/bin/sh\nuser:x:1000:1000:user,,,:/home/user:/bin/sh\n")
     write_file(root, "/etc/group", "root:x:0:\nuser:x:1000:\n")
     write_file(root, "/etc/hostname", hostname + "\n")
-    write_file(root, "/etc/resolv.conf", "nameserver 10.0.2.3\n")
+    # Written at boot from the NAT's DHCP answer.
+    write_file(root, "/etc/resolv.conf", "")
+    write_file(root, "/etc/udhcpc/default.script", """#!/bin/sh
+case "$1" in
+deconfig)
+    ip addr flush dev "$interface"
+    ip link set "$interface" up
+    ;;
+bound|renew)
+    ip addr flush dev "$interface"
+    ip addr add "$ip/${mask:-24}" ${broadcast:+broadcast "$broadcast"} dev "$interface"
+    # A NAT that isolates the VM answers without a router or DNS server: its
+    # own address (the DHCP server's) then takes both roles, as a home router.
+    for gateway in ${router:-$serverid}; do
+        ip route replace default via "$gateway" dev "$interface"
+        break
+    done
+    : > /etc/resolv.conf
+    [ -n "$domain" ] && echo "search $domain" >> /etc/resolv.conf
+    for server in ${dns:-$serverid}; do
+        echo "nameserver $server" >> /etc/resolv.conf
+    done
+    ;;
+esac
+""", 0o755)
     write_file(root, "/etc/inittab", "::sysinit:/etc/init.d/rcS\ntty1::respawn:/bin/getty -n -l /bin/sh 0 tty1\nttyS0::respawn:/bin/getty -n -l /bin/sh 115200 ttyS0\n::ctrlaltdel:/bin/reboot\n::shutdown:/bin/sync\n::shutdown:/bin/umount -a -r\n")
     write_file(root, "/etc/init.d/rcS", """#!/bin/sh
 export PATH=/bin:/sbin:/usr/bin:/usr/sbin
@@ -231,9 +286,11 @@ chmod 1777 /tmp
 hostname "$(cat /etc/hostname)"
 ip link set lo up
 if ip link show eth0 >/dev/null 2>&1; then
+    # The address, gateway and DNS server come from the NAT's DHCP server, as
+    # on a PC behind a home router (the VM's stealth profile picks the network).
     ip link set eth0 up
-    ip addr add 10.0.2.15/24 dev eth0
-    ip route add default via 10.0.2.2
+    udhcpc -i eth0 -s /etc/udhcpc/default.script -f -q -n -t 5 -T 1 >/dev/null 2>&1 ||
+        echo 'Guest DHCP failed'
 fi
 echo 'BusyBox guest ready'
 """, 0o755)
@@ -252,14 +309,19 @@ mount -t devtmpfs devtmpfs /dev
 exec </dev/console >/dev/console 2>&1
 mount -t proc proc /proc
 mount -t sysfs sysfs /sys
+# The root disk is the VM's only disk, on the bus its stealth profile chose:
+# virtio, SATA or NVMe.
+root=
 for n in 1 2 3 4 5 6 7 8 9 10; do
-    [ -b /dev/vda ] && break
+    for disk in /dev/vda /dev/sda /dev/nvme0n1; do
+        [ -b $disk ] && root=$disk && break 2
+    done
     sleep 1
 done
-mount -t ext4 -o rw /dev/vda /newroot || exec sh
+mount -t ext4 -o rw ${root:-/dev/vda} /newroot || exec sh
 # Grow the filesystem to the VM's disk while mounted: offline, resize2fs
 # refuses a filesystem mounted since its last full check (every base disk).
-resize2fs /dev/vda || echo 'Guest filesystem resize failed'
+resize2fs $root || echo 'Guest filesystem resize failed'
 mount --move /dev /newroot/dev
 mount --move /proc /newroot/proc
 mount --move /sys /newroot/sys
@@ -340,6 +402,7 @@ def main():
     stamp_revision(manifest, args.output / "kernel", args.allow_unversioned, args.app_version)
     if name:
         manifest["name"] = name
+    manifest["stealth_support"] = stealth_support(args.kernel_config, args.output / "kernel")
     if fixed_display:
         manifest["fixed_display"] = True
         shutil.copy2(args.kernel_config, args.output / "kernel.config")

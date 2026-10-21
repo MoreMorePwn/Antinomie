@@ -283,6 +283,7 @@ impl Machine {
             antinomie_revision: None,
             antinomie_source: None,
             symbols: None,
+            stealth_support: Vec::new(),
             built_with: None,
             min_app_version: None,
             name: None,

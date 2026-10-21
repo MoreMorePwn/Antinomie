@@ -294,6 +294,7 @@ pub(crate) fn installed_bases(options: &BackendOptions) -> Result<Vec<BaseSummar
             revision: bundle.antinomie_revision,
             min_app_version: bundle.min_app_version.clone(),
             built_with: bundle.built_with.clone(),
+            stealth_support: bundle.stealth_support.clone(),
         });
         if bases.len() > 128 {
             return Err("installed base catalog exceeds limit".into());
@@ -380,6 +381,7 @@ mod tests {
                 min_app_version: None,
                 name: None,
                 symbols: None,
+                stealth_support: Vec::new(),
             }
             .install(&options)
             .unwrap();

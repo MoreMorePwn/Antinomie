@@ -439,6 +439,7 @@ pub(super) fn test_base(id: &str, fixed_display: bool) -> BaseSummary {
         revision: Some(APP_REVISION),
         min_app_version: None,
         built_with: None,
+        stealth_support: Vec::new(),
     }
 }
 
@@ -474,6 +475,7 @@ pub(super) fn base_summary_for_revision(revision: Option<u32>) -> BaseSummary {
         revision,
         min_app_version: None,
         built_with: None,
+        stealth_support: Vec::new(),
     }
 }
 

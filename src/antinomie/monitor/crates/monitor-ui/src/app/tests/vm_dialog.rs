@@ -440,6 +440,7 @@ fn debian_credentials_are_transient_and_creation_uses_validated_api() {
             revision: Some(APP_REVISION),
             min_app_version: None,
             built_with: None,
+            stealth_support: Vec::new(),
             guest: Some(antinomie_monitor_core::GuestProfile {
                 id: "debian-xfce".into(),
                 label: "Debian 13 (Xfce)".into(),
@@ -520,6 +521,7 @@ fn debian_new_vm_dialog_fits_large_text_and_enforces_profile_minima() {
             revision: Some(APP_REVISION),
             min_app_version: None,
             built_with: None,
+            stealth_support: Vec::new(),
             guest: Some(antinomie_monitor_core::GuestProfile {
                 id: "debian-xfce".into(),
                 label: "Debian 13 (Xfce)".into(),
@@ -623,6 +625,7 @@ fn native_debian_setup_fixture() {
                     revision: Some(APP_REVISION),
                     min_app_version: None,
                     built_with: None,
+                    stealth_support: Vec::new(),
                     guest: Some(antinomie_monitor_core::GuestProfile {
                         id: "debian-xfce".into(),
                         label: "Debian 13 (Xfce)".into(),

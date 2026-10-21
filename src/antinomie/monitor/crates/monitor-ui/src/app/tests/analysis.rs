@@ -193,6 +193,7 @@ fn run_in_is_offered_for_graphical_bases_remembered_and_sent_with_the_launch() {
             revision: Some(APP_REVISION),
             min_app_version: None,
             built_with: None,
+            stealth_support: Vec::new(),
             guest: Some(antinomie_monitor_core::GuestProfile {
                 id: "debian-gnome".into(),
                 label: "Debian 13 (GNOME)".into(),

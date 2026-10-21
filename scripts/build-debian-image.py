@@ -562,6 +562,10 @@ def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=Fa
         helpers.stamp_revision(manifest, bundle / "kernel", allow_unversioned, app_version)
         if values["name"]:
             manifest["name"] = values["name"]
+        # NetworkManager takes the NAT's DHCP answer; the root stays /dev/vda
+        # (APPEND, fstab) and Debian builds the SATA and NVMe drivers as modules.
+        manifest["stealth_support"] = helpers.stealth_support(kernel_config, bundle / "kernel",
+                                                              root_buses=False)
         if helpers.fixed_display_config(kernel_config, bundle / "kernel"):
             manifest["fixed_display"] = True
             shutil.copy2(kernel_config, provenance / "kernel.config")
