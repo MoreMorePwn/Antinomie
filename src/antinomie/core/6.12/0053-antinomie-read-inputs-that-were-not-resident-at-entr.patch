@@ -1,0 +1,526 @@
+From 63f19506dd131d6b7085763fc7fd525df5533b2a Mon Sep 17 00:00:00 2001
+From: MikiMiku <jonathanirvinjo@gmail.com>
+Date: Thu, 22 Oct 2026 03:39:00 +0700
+Subject: [PATCH] antinomie: read inputs that were not resident at entry again
+ at exit
+
+The recorder copies user memory without faulting, so an input on a page the
+program has mapped but not touched yet (a forked child's literals, static
+glibc's start-up readlinkat of /proc/self/exe, an untouched file mapping) is
+recorded NOT_RESIDENT at entry, although the call itself faults the page in.
+
+Such an input is now remembered in the task's context (at most eight per call,
+nothing allocated) and read again at the end of the call's Exit, still
+without faulting. A string is measured again; a buffer is published only if
+every page reads without a fault. It goes into the Exit event under the
+Entry's key, as an input, with bit 3 (RECAPTURED) set in the FIELD_BEGIN
+flags word; a field that still cannot be read is not published, and an Exit
+field of the same key (the call's own output) drops the second read. The
+exec vectors keep the point where their entry walk stopped and resume from it.
+A vector pointer on a non-resident page is now NOT_RESIDENT like any other
+field instead of COPY_FAULT.
+
+A successful exec replaced the caller's memory, so nothing is read from it:
+the path is the exec's own copy (bprm->filename, the caller's part of an
+execveat path relative to a descriptor), kept by a new hook at the commit
+only when the Entry could not read it, and the argument and environment
+strings from the resume point on are read from the new image's stack, which
+no user code has run on yet. Those fields carry bit 4 (KERNEL_COPY) too. An
+interpreter exec rewrote argv, so only its environment is recovered.
+
+The FIELD_BEGIN flags word is not read by earlier hosts, so the change is
+additive and the contract revision stays 17.
+---
+ fs/exec.c                         |   1 +
+ include/linux/antinomie_monitor.h |   3 +
+ kernel/antinomie/recorder.c       | 333 ++++++++++++++++++++++++++++--
+ 3 files changed, 317 insertions(+), 20 deletions(-)
+
+diff --git a/fs/exec.c b/fs/exec.c
+index ba438abb4..856cd27a9 100644
+--- a/fs/exec.c
++++ b/fs/exec.c
+@@ -1852,6 +1852,7 @@ static int exec_binprm(struct linux_binprm *bprm)
+ 	ant_monitor_exec(bprm->file, bprm->interp != bprm->filename);
+ 	ant_monitor_exec_image(bprm->file, bprm->interp != bprm->filename ?
+ 			       bprm->interp : NULL);
++	ant_monitor_exec_names(bprm);
+ 	ant_monitor_debug_exec();
+ 	ptrace_event(PTRACE_EVENT_EXEC, old_vpid);
+ 	proc_exec_connector(current);
+diff --git a/include/linux/antinomie_monitor.h b/include/linux/antinomie_monitor.h
+index fd00bdcc1..47e18756b 100644
+--- a/include/linux/antinomie_monitor.h
++++ b/include/linux/antinomie_monitor.h
+@@ -18,6 +18,7 @@ struct ant_hash_job;
+ struct iov_iter;
+ struct mm_struct;
+ struct kernel_siginfo;
++struct linux_binprm;
+ #define ANT_ASYNC_IO_URING 1
+ #define ANT_ASYNC_AIO 2
+ #define ANT_ASYNC_PAYLOAD_GAP BIT(0)
+@@ -98,6 +99,7 @@ u64 ant_monitor_cookie(struct task_struct *task);
+ u64 ant_monitor_stream_id(void);
+ void ant_monitor_exec(struct file *file, bool interpreter);
+ void ant_monitor_exec_image(struct file *file, const char *interp);
++void ant_monitor_exec_names(const struct linux_binprm *bprm);
+ void ant_monitor_file_id(u8 kind, struct inode *inode);
+ void ant_monitor_async_file_id(struct ant_async **slot, u8 kind, struct inode *inode,
+ 			       int nlink_delta);
+@@ -174,6 +176,7 @@ static inline void ant_monitor_fork(struct task_struct *child) {}
+ static inline void ant_monitor_fork_prepare(struct task_struct *child) {}
+ static inline void ant_monitor_exec(struct file *file, bool interpreter) {}
+ static inline void ant_monitor_exec_image(struct file *file, const char *interp) {}
++static inline void ant_monitor_exec_names(const struct linux_binprm *bprm) {}
+ static inline void ant_monitor_file_id(u8 kind, struct inode *inode) {}
+ static inline void ant_monitor_async_file_id(struct ant_async **slot, u8 kind,
+ 					     struct inode *inode, int nlink_delta) {}
+diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
+index ae4ece278..c02985102 100644
+--- a/kernel/antinomie/recorder.c
++++ b/kernel/antinomie/recorder.c
+@@ -47,6 +47,30 @@
+ #define ANT_INCOMPLETE 1
+ #define ANT_OBSERVATIONAL 8
+ #define ANT_LIFECYCLE 16
++/* FIELD_BEGIN flags word (contract 22): the field is a later capture of an
++ * input the Entry could not read, and its bytes are the kernel's own copy.
++ */
++#define ANT_FIELD_RECAPTURED 8
++#define ANT_FIELD_KERNEL_COPY 16
++#define ANT_RECAPTURE_MAX 8
++#define ANT_RECAPTURE_KEY_SIZE 96
++
++/* An input field recorded NOT_RESIDENT at entry, read again at exit. */
++struct ant_recapture {
++	u64 address, size, declared_size;
++	const char *layout;
++	u16 encoding;
++	u8 arg_index;
++	bool string, exec_path, done;
++	char key[ANT_RECAPTURE_KEY_SIZE];
++};
++
++/* Where an exec vector's entry walk stopped on a non-resident page. */
++struct ant_exec_resume {
++	u64 vector, index, pointer;
++	u8 arg_index;
++	bool pending, pointer_read;
++};
+ 
+ struct ant_task {
+ 	u64 call_id, event_seq, packet_seq, nr, args[6];
+@@ -72,6 +96,16 @@ struct ant_task {
+ 	u64 operand_size;
+ 	u8 operand_arg;
+ 	bool operand_set;
++	/* Contract 22: inputs to read again at exit, without allocating. */
++	struct ant_recapture recapture[ANT_RECAPTURE_MAX];
++	struct ant_exec_resume exec_resume[2];
++	struct mm_struct *entry_mm;
++	char *exec_name;
++	u64 exec_budget, exec_argc, exec_envc;
++	u32 field_mark;
++	u8 recapture_count;
++	enum ant_status last_status;
++	bool string_field, exec_walk, exec_committed, exec_argv_intact;
+ 	u8 packet[ANT_HEADER_SIZE + ANT_CHUNK_SIZE];
+ };
+ 
+@@ -246,6 +280,48 @@ static void incomplete(struct ant_task *ctx, enum ant_status status)
+ 	}
+ }
+ 
++/* Contract 22. An input of a syscall's own Entry that was not resident is
++ * remembered (address, extent, key), at most ANT_RECAPTURE_MAX per call, and
++ * read again at exit, where the call itself has usually faulted it in. Exec
++ * vectors keep their own resume point instead (ant_exec_resume).
++ */
++static void recapture_note(struct ant_task *ctx, u8 arg_index, const char *key,
++			   const char *layout, u16 encoding, u64 address,
++			   u64 object_size, u64 declared_size)
++{
++	struct ant_recapture *r;
++
++	if (ctx->phase != 1 || ctx->async_event || ctx->kernel_imported ||
++	    ctx->iter_source || ctx->exec_walk || !address ||
++	    ctx->recapture_count >= ANT_RECAPTURE_MAX ||
++	    strlen(key) >= ANT_RECAPTURE_KEY_SIZE)
++		return;
++	r = &ctx->recapture[ctx->recapture_count++];
++	r->address = address;
++	r->size = object_size;
++	r->declared_size = declared_size;
++	r->layout = layout;
++	r->encoding = encoding;
++	r->arg_index = arg_index;
++	r->string = ctx->string_field;
++	r->exec_path = r->string && ((ctx->nr == 59 && arg_index == 0) ||
++					 (ctx->nr == 322 && arg_index == 1));
++	r->done = false;
++	strscpy(r->key, key, sizeof(r->key));
++}
++
++/* An Exit field with the key of a remembered input is the call's own output
++ * for that key (an in/out buffer); the input is not read a second time.
++ */
++static void recapture_drop(struct ant_task *ctx, const char *key)
++{
++	int i;
++
++	for (i = 0; i < ctx->recapture_count; i++)
++		if (!strcmp(ctx->recapture[i].key, key))
++			ctx->recapture[i].done = true;
++}
++
+ static size_t iter_user_copy(void __user *base, size_t progress, size_t len,
+ 			     void *out, void *unused)
+ {
+@@ -273,9 +349,12 @@ static void field(struct ant_task *ctx, u8 arg_index, const char *key,
+ 	ctx->object_count++;
+ 	if (address && ctx->phase != 3)
+ 		ctx->flags |= ANT_OBSERVATIONAL;
++	if (ctx->phase == 2 && !ctx->field_mark && ctx->recapture_count)
++		recapture_drop(ctx, key);
+ 	memset(body, 0, 40);
+ 	body[0] = arg_index;
+-	body[1] = ctx->phase == 2 || ctx->async_output ? 2 : 1;
++	/* A recaptured input keeps its direction although it is read at exit. */
++	body[1] = !ctx->field_mark && (ctx->phase == 2 || ctx->async_output) ? 2 : 1;
+ 	put_unaligned_le16(encoding, body + 2);
+ 	put_unaligned_le16(ctx->kernel_imported ? 3 : ctx->phase == 3 ? 5 : ctx->phase,
+ 			   body + 4);
+@@ -285,7 +364,7 @@ static void field(struct ant_task *ctx, u8 arg_index, const char *key,
+ 	put_unaligned_le16(layout_len, body + 34);
+ 	put_unaligned_le32((encoding == 2 ? 2 : 0) |
+ 			     (encoding == 1 && (ctx->nr == 1 || ctx->nr == 20 || ctx->nr == 44) &&
+-			      declared_size > object_size ? 4 : 0), body + 36);
++			      declared_size > object_size ? 4 : 0) | ctx->field_mark, body + 36);
+ 	memcpy(body + 40, key, key_len);
+ 	memcpy(body + 40 + key_len, layout, layout_len);
+ 	if (status == ANT_COPY_FAULT && !snapshot)
+@@ -322,6 +401,10 @@ static void field(struct ant_task *ctx, u8 arg_index, const char *key,
+ 			status = ANT_ABORTED_ON_LOSS;
+ 	}
+ 	incomplete(ctx, status);
++	ctx->last_status = status;
++	if (status == ANT_NOT_RESIDENT && !snapshot)
++		recapture_note(ctx, arg_index, key, layout, encoding, address,
++			       object_size, declared_size);
+ 	put_unaligned_le64(object_size, body);
+ 	put_unaligned_le64(captured_len, body + 8);
+ 	put_unaligned_le32(status, body + 16);
+@@ -350,8 +433,10 @@ static u64 user_string(struct ant_task *ctx, u8 arg_index, const char *key,
+ 		status = ANT_COPY_FAULT;
+ 	else if (len > ceiling)
+ 		status = ANT_INVALID_EXTENT;
++	ctx->string_field = true;
+ 	field(ctx, arg_index, key, "", 2, address, NULL,
+ 	      status == ANT_COMPLETE ? len : U64_MAX, ceiling, status);
++	ctx->string_field = false;
+ 	return status == ANT_COMPLETE ? len : 0;
+ }
+ 
+@@ -389,34 +474,63 @@ void ant_capture_set_state(struct ant_task *ctx, void *state,
+ 	ctx->native_release = release;
+ }
+ 
+-static void exec_vector(struct ant_task *ctx, u8 arg_index, u64 address,
+-			u64 *budget)
++/* Walks an exec vector from @index. At entry, a pointer or string on a page
++ * that is not resident ends the walk and leaves the point to resume from at
++ * exit (contract 22); there a value that still cannot be read is not recorded.
++ */
++static void exec_vector(struct ant_task *ctx, int slot, u8 arg_index, u64 address,
++			u64 index, u64 *budget)
+ {
+-	u64 index, ptr, used;
++	struct ant_exec_resume *resume = &ctx->exec_resume[slot];
++	bool entry = ctx->phase == 1;
++	enum ant_status status;
++	u64 ptr, used, ceiling;
+ 	char key[80];
+-	int error;
++	long len;
+ 
+ 	if (!address)
+ 		return;
+-	for (index = 0; index < MAX_ARG_STRINGS; index++) {
++	for (; index < MAX_ARG_STRINGS; index++) {
+ 		if (*budget < sizeof(ptr) || address > ULONG_MAX - index * sizeof(ptr)) {
+ 			scnprintf(key, sizeof(key), "arg%u.vector", arg_index);
+ 			field(ctx, arg_index, key, "", 1, address, NULL,
+ 			      U64_MAX, *budget, ANT_INVALID_EXTENT);
+ 			return;
+ 		}
+-		error = copy_from_user_nofault(&ptr,
+-			(void __user *)(unsigned long)(address + index * sizeof(ptr)), sizeof(ptr));
+-		scnprintf(key, sizeof(key), "arg%u.ptr[%llu]", arg_index, index);
+-		field(ctx, arg_index, key, "linux-6.12.94/x86_64/pointer", 3,
+-		      address + index * sizeof(ptr), &ptr, sizeof(ptr), sizeof(ptr),
+-		      error ? ANT_COPY_FAULT : ANT_COMPLETE);
+-		if (error || !ptr || ctx->failed_count)
+-			return;
+-		*budget -= sizeof(ptr);
++		if (!entry && resume->pointer_read) {
++			/* The Entry recorded this pointer; only its string was missing. */
++			ptr = resume->pointer;
++			resume->pointer_read = false;
++		} else {
++			status = copy_from_user_nofault(&ptr,
++				(void __user *)(unsigned long)(address + index * sizeof(ptr)),
++				sizeof(ptr)) ? fault_status(address + index * sizeof(ptr),
++							    sizeof(ptr)) : ANT_COMPLETE;
++			if (!entry && status != ANT_COMPLETE)
++				return;
++			scnprintf(key, sizeof(key), "arg%u.ptr[%llu]", arg_index, index);
++			field(ctx, arg_index, key, "linux-6.12.94/x86_64/pointer", 3,
++			      address + index * sizeof(ptr), &ptr, sizeof(ptr), sizeof(ptr),
++			      status);
++			if (status == ANT_NOT_RESIDENT)
++				*resume = (struct ant_exec_resume){ .vector = address,
++					.index = index, .arg_index = arg_index, .pending = true };
++			if (status != ANT_COMPLETE || !ptr || ctx->failed_count)
++				return;
++			*budget -= sizeof(ptr);
++		}
++		ceiling = min_t(u64, MAX_ARG_STRLEN, *budget);
++		if (!entry) {
++			len = strnlen_user_nofault((void __user *)(unsigned long)ptr, ceiling);
++			if (len <= 0 || len > ceiling)
++				return;
++		}
+ 		scnprintf(key, sizeof(key), "arg%u.string[%llu]", arg_index, index);
+-		used = user_string(ctx, arg_index, key, ptr,
+-				   min_t(u64, MAX_ARG_STRLEN, *budget));
++		used = user_string(ctx, arg_index, key, ptr, ceiling);
++		if (!used && entry && ctx->last_status == ANT_NOT_RESIDENT)
++			*resume = (struct ant_exec_resume){ .vector = address,
++				.index = index, .pointer = ptr, .arg_index = arg_index,
++				.pending = true, .pointer_read = true };
+ 		if (!used || ctx->failed_count)
+ 			return;
+ 		*budget -= used;
+@@ -591,8 +705,11 @@ static void capture_entry(struct ant_task *ctx)
+ 			user_string(ctx, 0, "arg0.path", a[0], PATH_MAX);
+ 		budget = max_t(u64, ARG_MAX,
+ 			min_t(u64, _STK_LIM * 3 / 4, rlimit(RLIMIT_STACK) / 4));
+-		exec_vector(ctx, ctx->nr == 59 ? 1 : 2, a[ctx->nr == 59 ? 1 : 2], &budget);
+-		exec_vector(ctx, ctx->nr == 59 ? 2 : 3, a[ctx->nr == 59 ? 2 : 3], &budget);
++		ctx->exec_walk = true;
++		exec_vector(ctx, 0, ctx->nr == 59 ? 1 : 2, a[ctx->nr == 59 ? 1 : 2], 0, &budget);
++		exec_vector(ctx, 1, ctx->nr == 59 ? 2 : 3, a[ctx->nr == 59 ? 2 : 3], 0, &budget);
++		ctx->exec_walk = false;
++		ctx->exec_budget = budget;
+ 		break;
+ 	case 82:
+ 		user_string(ctx, 0, "arg0.path", a[0], PATH_MAX);
+@@ -718,6 +835,177 @@ static void capture_exit(struct ant_task *ctx, long result)
+ 	}
+ }
+ 
++/* Whether every page of [address, address + size) can be read without
++ * faulting; a recaptured field is published only then.
++ */
++static bool resident(u64 address, u64 size)
++{
++	u64 page, last;
++	u8 byte;
++
++	if (check_add_overflow(address, size - 1, &last))
++		return false;
++	for (page = address & PAGE_MASK;; page += PAGE_SIZE) {
++		if (copy_from_user_nofault(&byte,
++				(void __user *)(unsigned long)max(page, address), 1))
++			return false;
++		if (page == (last & PAGE_MASK))
++			return true;
++	}
++}
++
++static void recapture_field(struct ant_task *ctx, const struct ant_recapture *r)
++{
++	u64 size = r->size;
++	long len;
++
++	if (r->string) {
++		len = strnlen_user_nofault((void __user *)(unsigned long)r->address,
++					   r->declared_size);
++		if (len <= 0 || len > r->declared_size)
++			return;
++		size = len;
++		ctx->string_field = true;
++	} else if (!size || size == U64_MAX || !resident(r->address, size)) {
++		return;
++	}
++	field(ctx, r->arg_index, r->key, r->layout, r->encoding, r->address, NULL,
++	      size, r->declared_size, ANT_COMPLETE);
++	ctx->string_field = false;
++}
++
++/* After a successful exec the caller's memory is gone, but the kernel copied
++ * the argument and environment strings to the new image's stack, which no
++ * user code has run on yet: [arg_start, arg_end) and [env_start, env_end).
++ * The strings from the resume point on are read from there. An interpreter
++ * (a script, binfmt_misc) rewrote the argument list, so only its environment
++ * is recovered.
++ */
++static void exec_recover(struct ant_task *ctx, int slot)
++{
++	const struct ant_exec_resume *resume = &ctx->exec_resume[slot];
++	struct mm_struct *mm = current->mm;
++	u64 start, end, count = slot ? ctx->exec_envc : ctx->exec_argc, i, limit;
++	char key[80];
++	long len;
++
++	if (!resume->pending || !mm || (!slot && !ctx->exec_argv_intact))
++		return;
++	spin_lock(&mm->arg_lock);
++	start = slot ? mm->env_start : mm->arg_start;
++	end = slot ? mm->env_end : mm->arg_end;
++	spin_unlock(&mm->arg_lock);
++	for (i = 0; i < count && start < end && !ctx->failed_count; i++) {
++		limit = min_t(u64, end - start, MAX_ARG_STRLEN);
++		len = strnlen_user_nofault((void __user *)(unsigned long)start, limit);
++		if (len <= 0 || len > limit)
++			return;
++		if (i >= resume->index) {
++			scnprintf(key, sizeof(key), "arg%u.string[%llu]", resume->arg_index, i);
++			ctx->string_field = true;
++			field(ctx, resume->arg_index, key, "", 2, start, NULL, len,
++			      MAX_ARG_STRLEN, ANT_COMPLETE);
++			ctx->string_field = false;
++		}
++		start += len;
++	}
++}
++
++/* Contract 22, at the end of the Exit: each input the Entry recorded
++ * NOT_RESIDENT is read again, still without faulting, and published only if
++ * all of it is resident now, marked RECAPTURED. If the call replaced the
++ * address space (a successful exec), the caller's memory is gone: the path is
++ * the exec's own copy and the vectors are read from the new image, marked
++ * KERNEL_COPY too; nothing else is read.
++ */
++static void recapture(struct ant_task *ctx)
++{
++	bool same_mm = current->mm == ctx->entry_mm;
++	const struct ant_recapture *r;
++	int i;
++
++	if (!ctx->recapture_count && !ctx->exec_resume[0].pending &&
++	    !ctx->exec_resume[1].pending)
++		return;
++	ctx->field_mark = ANT_FIELD_RECAPTURED;
++	for (i = 0; i < ctx->recapture_count && !ctx->failed_count; i++) {
++		r = &ctx->recapture[i];
++		if (r->done)
++			continue;
++		if (same_mm) {
++			recapture_field(ctx, r);
++		} else if (r->exec_path && ctx->exec_name) {
++			ctx->field_mark |= ANT_FIELD_KERNEL_COPY;
++			ctx->kernel_imported = true;
++			field(ctx, r->arg_index, r->key, "", 2, r->address, ctx->exec_name,
++			      strlen(ctx->exec_name) + 1, r->declared_size, ANT_COMPLETE);
++			ctx->kernel_imported = false;
++			ctx->field_mark = ANT_FIELD_RECAPTURED;
++		}
++	}
++	for (i = 0; i < ARRAY_SIZE(ctx->exec_resume) && !ctx->failed_count; i++) {
++		if (!ctx->exec_resume[i].pending)
++			continue;
++		if (same_mm) {
++			exec_vector(ctx, i, ctx->exec_resume[i].arg_index,
++				    ctx->exec_resume[i].vector, ctx->exec_resume[i].index,
++				    &ctx->exec_budget);
++		} else if (ctx->exec_committed) {
++			ctx->field_mark |= ANT_FIELD_KERNEL_COPY;
++			exec_recover(ctx, i);
++			ctx->field_mark = ANT_FIELD_RECAPTURED;
++		}
++	}
++	ctx->field_mark = 0;
++}
++
++static void recapture_reset(struct ant_task *ctx)
++{
++	ctx->recapture_count = 0;
++	memset(ctx->exec_resume, 0, sizeof(ctx->exec_resume));
++	ctx->exec_committed = false;
++	kfree(ctx->exec_name);
++	ctx->exec_name = NULL;
++}
++
++/* At an exec's commit, still inside the traced call: the exec's own copy of
++ * the path, kept only when the Entry could not read it, and what the exit
++ * needs to find the strings on the new image's stack.
++ */
++void ant_monitor_exec_names(const struct linux_binprm *bprm)
++{
++	struct ant_task *ctx = current->ant_monitor;
++	const char *name = bprm->filename;
++	char prefix[24];
++	int i, n;
++
++	if (!ctx || !ctx->active || ctx->busy || ctx->abi != 1 ||
++	    (ctx->nr != 59 && ctx->nr != 322))
++		return;
++	ctx->exec_committed = true;
++	ctx->exec_argv_intact = bprm->interp == bprm->filename;
++	ctx->exec_argc = bprm->argc;
++	ctx->exec_envc = bprm->envc;
++	for (i = 0; i < ctx->recapture_count; i++) {
++		if (!ctx->recapture[i].exec_path || ctx->exec_name)
++			continue;
++		/* execveat relative to a descriptor names "/dev/fd/N" (empty path)
++		 * or "/dev/fd/N/<path>"; the caller's string is what follows.
++		 */
++		if (bprm->fdpath) {
++			n = scnprintf(prefix, sizeof(prefix), "/dev/fd/%d", (int)ctx->args[0]);
++			if (strncmp(name, prefix, n))
++				return;
++			name += n;
++			if (*name == '/')
++				name++;
++			else if (*name)
++				return;
++		}
++		ctx->exec_name = kstrdup(name, GFP_KERNEL | __GFP_NOWARN);
++	}
++}
++
+ static void operand_clear(struct ant_task *ctx)
+ {
+ 	kvfree(ctx->operand);
+@@ -1004,6 +1292,8 @@ void ant_monitor_enter(struct pt_regs *regs, long nr)
+ 	ctx->iov_count = 0;
+ 	ctx->sock_capacity = 0;
+ 	ctx->sock_capacity_valid = false;
++	recapture_reset(ctx);
++	ctx->entry_mm = current->mm;
+ 	ctx->nr = nr;
+ 	ctx->abi = in_ia32_syscall() ? 0 : nr & ANT_X32_BIT ? 2 : 1;
+ 	ctx->arg_count = ctx->abi == 1 ? ant_native_syscalls[nr].argc : 255;
+@@ -1040,7 +1330,9 @@ void ant_monitor_exit(struct pt_regs *regs)
+ 	event_begin(ctx, 2, regs->ax);
+ 	operand_emit(ctx);
+ 	capture_exit(ctx, regs->ax);
++	recapture(ctx);
+ 	event_end(ctx);
++	recapture_reset(ctx);
+ 	ctx->active = false;
+ 	ant_capture_set_state(ctx, NULL, NULL);
+ 	kfree(ctx->iov);
+@@ -1430,6 +1722,7 @@ void ant_monitor_release(struct task_struct *task)
+ 		ant_capture_set_state(ctx, NULL, NULL);
+ 		operand_clear(ctx);
+ 		kfree(ctx->iov);
++		kfree(ctx->exec_name);
+ 		kfree(ctx);
+ 	}
+ }
+-- 
+2.53.0
+

@@ -607,6 +607,11 @@ counted in the recorder's `copy faults` statistic. Fields read through an
 iterator keep `ANT_COPY_FAULT`. The recorder never faults pages in, so a
 non-resident value is not recorded even though the syscall used it.
 
+From series 0053 (section 22) the recorder reads such an input again at the
+call's exit, still without faulting, and an exec's pointer vector is classified
+the same way (an entry pointer on a non-resident page is `ANT_NOT_RESIDENT`
+instead of `ANT_COPY_FAULT`).
+
 ### 15.2 Async publication pacing
 
 Queued async records are published by one worker. Before each record it waits,
@@ -861,3 +866,54 @@ until it is hashed, so the blocks of a file deleted right after its last close
 are released a few milliseconds later, and the worker's read uses CPU the
 sample can measure, bounded by the budget. No thread, workqueue or file
 descriptor appears in the guest.
+
+## 22. Revision 17: inputs read again at exit (0.7.0)
+
+The user approved this change on 2026-10-22. It closes the largest capture gap
+of 15.1: a page the program has mapped but not touched (a forked child's
+literals, static glibc's start-up `readlink("/proc/self/exe")`, an untouched
+file mapping) is recorded `ANT_NOT_RESIDENT` at entry, although the call itself
+faults it in. The recorder still never faults: it reads the input again when
+the call returns, when the page is usually resident, and says so.
+
+| Rule | Contract |
+|---|---|
+| Which fields | An input field of the call's own Entry (phase 1) whose status is `ANT_NOT_RESIDENT`, read from the caller's memory (no snapshot, no iterator, not async, not kernel-imported). At most 8 per call, keys under 96 bytes; others stay `ANT_NOT_RESIDENT`. The task context keeps them in place: nothing is allocated |
+| Exec vectors | The entry walk of `execve`/`execveat` `argv`/`envp` stops at the first pointer or string on a non-resident page, as before, and keeps the point to resume from (index, and the pointer if it was read) |
+| When | At the end of the Exit, after the call's own exit fields. An Exit field with the same key (an in/out buffer) is the call's output and drops the second read |
+| How | Still without faulting. A string is measured again with its ceiling; a buffer is published only if every page reads without a fault at that moment. A field that still cannot be read is not published: the Entry's `ANT_NOT_RESIDENT` stands |
+| Record | A normal field of the Exit event with the Entry's key, layout, encoding and argument, direction 1 (input), source 2 (exit), status `ANT_COMPLETE`, and bit 3 (`0x8`, RECAPTURED) in the FIELD_BEGIN flags word (offset 36). A failed exec resumes its vectors: the remaining pointers and strings, each marked |
+| Successful exec | The caller's memory is gone (the address space differs from the Entry's), so nothing is read from it. The path is the exec's own copy (`bprm->filename`, the `struct filename` from `getname`; for `execveat` relative to a descriptor the caller's part after `/dev/fd/N/`), source 3 (kernel-imported), address the caller's pointer. The `argv`/`envp` strings from the resume point on are read from the new image's stack, `[arg_start, arg_end)` and `[env_start, env_end)`, which the kernel just wrote and no user code has run on; their address is that of the copy. These carry bit 4 (`0x10`, KERNEL_COPY) too. Pointer values after the resume point are not recorded. An interpreter exec (script, binfmt_misc: `bprm->interp != bprm->filename`) rewrote `argv`, so only `envp` is recovered |
+| Exec that failed after the point of no return | The address space was replaced but nothing was committed: nothing is read, the Entry's status stands |
+| Statistics | Unchanged: the entry's `ANT_NOT_RESIDENT` still counts as a copy fault |
+
+**What the mark means.** The Entry event was already sent with the field
+`ANT_NOT_RESIDENT` and the incomplete header flag. A recaptured field holds
+what was in memory after the call, not what the call was given: another thread
+can change the buffer while the call runs. It is weaker than an entry capture
+and stays distinguishable. A kernel copy is what the kernel used (the path it
+opened, the strings it gave the new program), read after the call.
+
+**Host.** Pairing moves a complete recaptured Exit field into the Entry, in
+place of the `ANT_NOT_RESIDENT` field with the same key (an exec string the
+Entry never reached is added). The field keeps the Entry's object id and its
+"capture incomplete" issue is removed, so a call whose only gaps were
+recaptured is complete; `FieldSummary::recapture` (`AtExit`, `KernelCopy`)
+carries the mark into the trace, Triage, filters, exports and JSON. A
+recaptured field that is not complete (a page reclaimed between the check and
+the copy) stays in the Exit as sent.
+
+**Compatibility.** Only the FIELD_BEGIN flags word gains bits; an older host
+does not read that word, so it shows such a field as one more Exit field (its
+Triage, which reads Entry then Exit, finds the path there) and still reports the
+Entry incomplete. A recording from an older guest has no marks and reads as
+before. Bits 3 and 4 were zero until now. The contract revision stays 17: the
+encoding is additive, 0.7.0 is not released, and revisions change only with
+a minor release (`revisions.json`); raising it would make an older 0.7.0 host
+refuse new bases although it reads them correctly.
+
+**Guest-observable effects.** None new in kind: the exit reads are no-fault
+copies like the entry's (they never change residency, `mincore()` included),
+one byte per page to check a buffer and then the copy, and only for calls
+whose entry found a non-resident page. A successful exec with a non-resident
+path keeps a copy of the path (at most `PATH_MAX`) until the call returns.
