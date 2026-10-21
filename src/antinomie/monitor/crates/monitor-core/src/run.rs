@@ -134,6 +134,27 @@ impl ProgramRun {
     fn manifest(&self) -> serde_json::Value {
         serde_json::json!({"format":"ANTT run raw LE32","run":self.summary,"packets":self.capture.packets,"bytes":self.stored_len(),"persistence_error":self.summary.recording_error,"boot_bundle_identity":self.boot_bundle_identity,"disk_base_identity":self.disk_base_identity,"started_ms":self.started_ms,"ended_ms":self.ended_ms})
     }
+    /// The guest's status reply could not be used. A recorded root exit is
+    /// final, so it keeps the status the run already has: its identity, its
+    /// generation and the wait status. Before that the status is unknown, as
+    /// it is for a guest that cannot answer.
+    pub(crate) fn status_unreadable(&mut self) -> Result<(), String> {
+        if self
+            .summary
+            .execution
+            .as_ref()
+            .is_some_and(|execution| execution.flags & 1 != 0)
+        {
+            return Ok(());
+        }
+        let changed =
+            self.summary.execution.take().is_some() || self.summary.state != RunState::Unknown;
+        self.summary.state = RunState::Unknown;
+        if changed {
+            self.persist_summary()?;
+        }
+        Ok(())
+    }
     pub(crate) fn record_tree_completion(&mut self) {
         if self.summary.state == RunState::Finished {
             self.ended_ms.get_or_insert_with(unix_ms);
@@ -434,6 +455,55 @@ mod tests {
         assert_eq!(run.stored_len(), increment as u64);
         assert!(increment > 0);
         drop(run);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
+    fn an_unreadable_status_reply_keeps_a_recorded_root_exit_and_nothing_else() {
+        let directory =
+            std::env::temp_dir().join(format!("ant-run-unreadable-{}", storage::unique_id()));
+        let execution = |flags| RunExecution {
+            generation: 9,
+            live_task_count: 1,
+            pending_async_count: 0,
+            flags,
+            root_wait_status: (flags & 1 != 0).then_some(0),
+            root_exit: (flags & 1 != 0).then_some(WaitStatus::Exited { code: 0 }),
+            async_loss_count: 0,
+            total_task_count: 3,
+        };
+        let summary = RunSummary {
+            started_ms: None,
+            clock_anchor: None,
+            id: "run".into(),
+            vm_id: "vm".into(),
+            boot_id: "boot".into(),
+            session_id: 1,
+            root_task_cookie: 2,
+            pid: 3,
+            request: ExecRequest::default(),
+            directory: directory.clone(),
+            terminal_eof: false,
+            state: RunState::Running,
+            notes: Vec::new(),
+            recording_error: None,
+            execution: Some(execution(0)),
+            analysis: None,
+        };
+        let mut run = ProgramRun::new(summary, 65536).unwrap();
+        // Before the root has exited the status is unknown again.
+        run.status_unreadable().unwrap();
+        assert!(run.summary.execution.is_none());
+        assert_eq!(run.summary.state, RunState::Unknown);
+        // After it, a reply that cannot be read changes nothing.
+        run.summary.execution = Some(execution(1));
+        run.summary.state = RunState::Running;
+        run.status_unreadable().unwrap();
+        let kept = run.summary.execution.as_ref().unwrap();
+        assert_eq!(kept.generation, 9);
+        assert_eq!(kept.root_exit, Some(WaitStatus::Exited { code: 0 }));
+        assert_eq!(run.summary.state, RunState::Running);
+        drop(run);
+        storage::flush_json().unwrap();
         std::fs::remove_dir_all(directory).unwrap();
     }
     #[test]

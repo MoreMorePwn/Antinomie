@@ -818,6 +818,22 @@ impl RunExecution {
         self.flags & 32 != 0
     }
 
+    /// Whether the program tree ended but the guest never recorded the root's
+    /// wait status. A guest of this revision before the io_uring worker fix
+    /// does that when an io_uring worker thread is the last to leave the
+    /// root's thread group; the exit code is then unknown, not zero.
+    pub fn root_status_missing(&self) -> bool {
+        self.flags & 2 != 0 && self.flags & 1 == 0
+    }
+
+    /// Whether the guest could not attribute or count every async request
+    /// (OBSERVATION_INCOMPLETE). Every io_uring request sets it, because the
+    /// submitting task of a shared ring is not proven. It says nothing about
+    /// whether the program has ended.
+    pub fn observation_incomplete(&self) -> bool {
+        self.flags & 16 != 0
+    }
+
     /// Whether the guest reported async capture loss, independently of transport drops.
     ///
     /// | Result | Meaning |
