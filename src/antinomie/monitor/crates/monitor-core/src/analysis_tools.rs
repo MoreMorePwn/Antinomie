@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use std::{
     fs::{self, File},
-    io::{self, Read},
+    io::{self, Read, Seek},
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
     sync::atomic::{AtomicBool, Ordering},
@@ -508,55 +508,84 @@ fn unpack_tar(
     Ok(())
 }
 
-/// An xz stream, decompressed.
-fn xz_bytes(reader: &mut impl io::BufRead) -> Result<Vec<u8>, String> {
-    let mut out = Vec::new();
-    lzma_rs::xz_decompress(reader, &mut out).map_err(|e| format!("xz: {e}"))?;
-    Ok(out)
+/// The most memory (KiB) one xz block may ask of the decoder: its
+/// dictionary plus the decoder's own tables. xz -9 uses 64 MiB; a stream
+/// that wants more is refused rather than allocated.
+const XZ_MEMORY_LIMIT_KB: u32 = 256 * 1024;
+
+/// An xz decoder that remembers why it failed: tar only sees a stream that
+/// ended early, and the decoder's error is the better message.
+struct XzSource<R: Read> {
+    xz: lzma_rust2::XzReader<io::BufReader<R>>,
+    failure: Option<String>,
 }
 
-/// A xz stream, decompressed on a helper thread as it is read: the pwndbg
-/// build is 665 MiB unpacked, too much to hold in memory. `finish` reports
-/// what went wrong in the stream, which the reader only sees as its end.
-fn xz_stream(file: File) -> Result<(impl Read, impl FnOnce() -> Result<(), String>), String> {
-    let (reader, mut writer) = io::pipe().map_err(|e| e.to_string())?;
-    let worker = std::thread::spawn(move || {
-        lzma_rs::xz_decompress(&mut io::BufReader::new(file), &mut writer)
-            .map_err(|e| format!("xz: {e}"))
-    });
-    Ok((reader, move || {
-        worker
-            .join()
-            .unwrap_or_else(|_| Err("xz: decoder failed".into()))
-    }))
+impl<R: Read> Read for XzSource<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.xz.read(buf).inspect_err(|e| {
+            self.failure.get_or_insert_with(|| e.to_string());
+        })
+    }
 }
 
-/// The data archive of a Debian package (an ar file), decompressed.
-fn deb_data(path: &Path) -> Result<Vec<u8>, String> {
-    let bytes = fs::read(path).map_err(|e| e.to_string())?;
-    if !bytes.starts_with(b"!<arch>\n") {
+/// Unpack a tar.xz as it is decoded: nothing but the decoder's dictionary
+/// and one copy buffer is held, whatever the archive's size (pwndbg is
+/// 665 MiB unpacked).
+fn unpack_tar_xz(
+    reader: impl Read,
+    target: &Path,
+    place: impl Fn(&Path) -> Result<Option<PathBuf>, String>,
+) -> Result<(), String> {
+    let mut source = XzSource {
+        xz: lzma_rust2::XzReader::new_mem_limit(
+            io::BufReader::new(reader),
+            false,
+            XZ_MEMORY_LIMIT_KB,
+        ),
+        failure: None,
+    };
+    let unpacked = unpack_tar(&mut source, target, place);
+    // A broken stream is the cause of a tar that ended early.
+    if let Some(failure) = source.failure {
+        return Err(format!("xz: {failure}"));
+    }
+    unpacked?;
+    // Tar stops at its end marker; the rest of the stream (padding, block
+    // checks, index, footer) is still verified.
+    io::copy(&mut source, &mut io::sink())
+        .map(|_| ())
+        .map_err(|e| format!("xz: {e}"))
+}
+
+/// The data archive of a Debian package (an ar file): its `data.tar.xz`
+/// member, positioned for reading.
+fn deb_data(path: &Path) -> Result<io::Take<File>, String> {
+    let mut file = File::open(path).map_err(|e| e.to_string())?;
+    let mut magic = [0u8; 8];
+    if file.read_exact(&mut magic).is_err() || &magic != b"!<arch>\n" {
         return Err("not a Debian package".into());
     }
-    let mut offset = 8;
-    while offset + 60 <= bytes.len() {
-        let header = &bytes[offset..offset + 60];
+    loop {
+        let mut header = [0u8; 60];
+        match file.read_exact(&mut header) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => break,
+            Err(e) => return Err(e.to_string()),
+        }
         let name = String::from_utf8_lossy(&header[..16])
             .trim()
             .trim_end_matches('/')
             .to_owned();
-        let size: usize = String::from_utf8_lossy(&header[48..58])
+        let size: u64 = String::from_utf8_lossy(&header[48..58])
             .trim()
             .parse()
             .map_err(|_| "Debian package member size malformed")?;
-        let start = offset + 60;
-        let end = start
-            .checked_add(size)
-            .filter(|end| *end <= bytes.len())
-            .ok_or("Debian package truncated")?;
         if name == "data.tar.xz" {
-            return xz_bytes(&mut &bytes[start..end]).map_err(|e| format!("data.tar.xz: {e}"));
+            return Ok(file.take(size));
         }
-        offset = end + (size % 2);
+        let skip = i64::try_from(size + size % 2).map_err(|_| "Debian package truncated")?;
+        file.seek(io::SeekFrom::Current(skip))
+            .map_err(|e| e.to_string())?;
     }
     Err("Debian package has no data.tar.xz".into())
 }
@@ -571,33 +600,25 @@ fn unpack(download: &Download, archive: &Path, target: &Path) -> Result<(), Stri
             &target,
             |path| inside(path, strip),
         ),
-        Archive::TarXz { strip } => {
-            let file = File::open(archive).map_err(|e| e.to_string())?;
-            let (tar, finish) = xz_stream(file)?;
-            let unpacked = unpack_tar(tar, &target, |path| inside(path, strip));
-            // A broken stream is the cause of a tar that ended early; a
-            // broken pipe only follows a tar that stopped reading.
-            match (unpacked, finish()) {
-                (Ok(()), decoded) => decoded,
-                (Err(_), Err(decoded)) if !decoded.contains("Broken pipe") => Err(decoded),
-                (Err(error), _) => Err(error),
-            }
-        }
+        Archive::TarXz { strip } => unpack_tar_xz(
+            File::open(archive).map_err(|e| e.to_string())?,
+            &target,
+            |path| inside(path, strip),
+        ),
         Archive::File => {
             let path = target.join(download.file);
             fs::copy(archive, &path).map_err(|e| format!("{}: {e}", path.display()))?;
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(&path, fs::Permissions::from_mode(0o444)).map_err(|e| e.to_string())
         }
-        Archive::DebFiles { prefix } => {
-            unpack_tar(io::Cursor::new(deb_data(archive)?), &target, |path| {
-                Ok(path
-                    .to_string_lossy()
-                    .starts_with(prefix)
-                    .then(|| path.file_name().map(PathBuf::from))
-                    .flatten())
-            })
-        }
+        Archive::DebFiles { prefix } => unpack_tar_xz(deb_data(archive)?, &target, |path| {
+            Ok(path
+                .to_string_lossy()
+                .starts_with(prefix)
+                .then(|| path.file_name().map(PathBuf::from))
+                .flatten())
+        })
+        .map_err(|e| format!("data.tar.xz: {e}")),
     }
 }
 
@@ -882,6 +903,7 @@ pub fn remove(data_dir: &Path, id: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
 
     #[test]
     fn archive_paths_and_links_stay_inside_the_tool_directory() {
@@ -961,6 +983,180 @@ mod tests {
         assert!(MAGIKA_SYSTEM.iter().all(|path| path.ends_with("/magika")));
     }
 
+    /// A single-block xz stream, the layout whose decoder most easily ends
+    /// up holding the whole archive.
+    fn xz_bytes(data: &[u8]) -> Vec<u8> {
+        let mut writer =
+            lzma_rust2::XzWriter::new(Vec::new(), lzma_rust2::XzOptions::with_preset(1)).unwrap();
+        writer.write_all(data).unwrap();
+        writer.finish().unwrap()
+    }
+
+    /// A tar with a small, a large pseudo-random and a small file.
+    fn tar_with_a_large_file(size: usize) -> Vec<u8> {
+        let mut state = 0x9e37_79b9_7f4a_7c15u64;
+        let large: Vec<u8> = (0..size)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                (state >> 32) as u8
+            })
+            .collect();
+        let mut builder = tar::Builder::new(Vec::new());
+        for (name, body) in [
+            ("top/a", &b"first"[..]),
+            ("top/big", &large),
+            ("top/z", b"last"),
+        ] {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(body.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder.append_data(&mut header, name, body).unwrap();
+        }
+        builder.into_inner().unwrap()
+    }
+
+    /// Counts the octets the decoder has taken from the archive.
+    struct Counted<R>(R, std::rc::Rc<std::cell::Cell<usize>>);
+
+    impl<R: Read> Read for Counted<R> {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            let len = self.0.read(buf)?;
+            self.1.set(self.1.get() + len);
+            Ok(len)
+        }
+    }
+
+    #[test]
+    fn a_tar_xz_is_unpacked_while_it_is_decoded_not_after_it_is_held() {
+        let root =
+            std::env::temp_dir().join(format!("ant-tools-xzs-{}", crate::storage::unique_id()));
+        fs::create_dir_all(&root).unwrap();
+        let tar = tar_with_a_large_file(12 << 20);
+        let xz = xz_bytes(&tar);
+        assert!(xz.len() > 11 << 20, "the large file does not compress");
+        let consumed = std::rc::Rc::new(std::cell::Cell::new(0));
+        let seen = std::cell::RefCell::new(Vec::new());
+        unpack_tar_xz(
+            Counted(io::Cursor::new(&xz), consumed.clone()),
+            &root,
+            |path| {
+                seen.borrow_mut().push(consumed.get());
+                inside(path, 1)
+            },
+        )
+        .unwrap();
+        let seen = seen.into_inner();
+        assert_eq!(seen.len(), 3);
+        // A decoder that buffers the archive has read all of it before the
+        // first entry is placed; a streaming one has read a few buffers.
+        assert!(
+            seen[0] < 1 << 20,
+            "read {} octets for the first entry",
+            seen[0]
+        );
+        assert!(
+            seen[1] < 1 << 20,
+            "read {} octets for the second entry",
+            seen[1]
+        );
+        // The last entry cannot start before most of the large one is decoded.
+        assert!(seen[2] > 10 << 20, "read {} octets for the last", seen[2]);
+        assert_eq!(
+            consumed.get(),
+            xz.len(),
+            "the whole stream is read and checked"
+        );
+        assert_eq!(fs::read(root.join("z")).unwrap(), b"last");
+        assert_eq!(fs::metadata(root.join("big")).unwrap().len(), 12 << 20);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_damaged_or_oversized_xz_stream_is_reported_as_the_xz_stream() {
+        let root =
+            std::env::temp_dir().join(format!("ant-tools-xze-{}", crate::storage::unique_id()));
+        fs::create_dir_all(&root).unwrap();
+        let tar = tar_with_a_large_file(1 << 20);
+        let xz = xz_bytes(&tar);
+        let place = |path: &Path| inside(path, 1);
+        // Cut inside the large file.
+        let error = unpack_tar_xz(&xz[..xz.len() / 2], &root, place).unwrap_err();
+        assert!(error.starts_with("xz: "), "{error}");
+        // A flipped bit in the middle fails the block's check or its data.
+        let mut flipped = xz.clone();
+        flipped[xz.len() / 2] ^= 0x40;
+        assert!(unpack_tar_xz(&flipped[..], &root, place).is_err());
+        // A damaged footer is found after the tar has ended.
+        let mut footer = xz.clone();
+        let last = footer.len() - 1;
+        footer[last] ^= 0xff;
+        let error = unpack_tar_xz(&footer[..], &root, place).unwrap_err();
+        assert!(error.starts_with("xz: "), "{error}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_debian_package_data_member_is_unpacked_from_the_file() {
+        let root =
+            std::env::temp_dir().join(format!("ant-tools-deb-{}", crate::storage::unique_id()));
+        fs::create_dir_all(&root).unwrap();
+        let mut builder = tar::Builder::new(Vec::new());
+        let body = b"library";
+        let mut header = tar::Header::new_gnu();
+        header.set_size(body.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        builder
+            .append_data(&mut header, "usr/lib/libicu-test.so", &body[..])
+            .unwrap();
+        builder
+            .append_data(&mut header, "usr/share/other", &body[..])
+            .unwrap();
+        let data = xz_bytes(&builder.into_inner().unwrap());
+        let mut deb = b"!<arch>\n".to_vec();
+        // An odd-sized member before the data is padded to an even offset.
+        for (name, content) in [
+            ("debian-binary", &b"2.0\n"[..]),
+            ("odd", b"123"),
+            ("data.tar.xz", &data),
+        ] {
+            deb.extend(
+                format!(
+                    "{name:<16}{:<12}0     0     100644  {:<10}`\n",
+                    0,
+                    content.len()
+                )
+                .bytes(),
+            );
+            deb.extend(content);
+            if content.len() % 2 == 1 {
+                deb.push(b'\n');
+            }
+        }
+        let archive = root.join("lib.deb");
+        fs::write(&archive, &deb).unwrap();
+        let download = Download {
+            file: "lib.deb",
+            url: "https://example.invalid/lib.deb",
+            sha256: "",
+            size: 0,
+            archive: Archive::DebFiles { prefix: "usr/lib/" },
+            into: "base",
+        };
+        let target = root.join("out");
+        unpack(&download, &archive, &target).unwrap();
+        assert_eq!(fs::read(target.join("base/libicu-test.so")).unwrap(), body);
+        assert!(!target.join("base/other").exists());
+        fs::write(&archive, &deb[..deb.len() - 20]).unwrap();
+        assert!(unpack(&download, &archive, &target).is_err());
+        fs::write(&archive, b"!<arch>\nnot an archive").unwrap();
+        assert!(unpack(&download, &archive, &target).is_err());
+        let _ = fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn a_tar_xz_download_unpacks_without_its_top_directory() {
         let root =
@@ -980,8 +1176,7 @@ mod tests {
             )
             .unwrap();
         let tar = builder.into_inner().unwrap();
-        let mut xz = Vec::new();
-        lzma_rs::xz_compress(&mut tar.as_slice(), &mut xz).unwrap();
+        let xz = xz_bytes(&tar);
         let archive = root.join("magika.tar.xz");
         fs::write(&archive, &xz).unwrap();
         let download = Download {
