@@ -30,5 +30,11 @@ ext4-view = { version = "1.0.0", default-features = false, features = ["std"] }
 [dev-dependencies]
 lzma-rust2 = { version = "0.23", default-features = false, features = ["std", "xz", "encoder"] }
 
+# The conformance suite's checker logic has unit tests of its own.
+[[example]]
+name = "conformance"
+path = "examples/conformance/main.rs"
+test = true
+
 [build-dependencies]
 cc = "1"

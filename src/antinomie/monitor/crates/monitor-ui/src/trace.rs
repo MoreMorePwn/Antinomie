@@ -9,6 +9,8 @@ use antinomie_monitor_core::{syscalls, FieldSummary, InvocationSummary, WaitStat
 use eframe::egui::{self, Color32, RichText};
 
 pub(crate) mod async_browse;
+#[cfg(test)]
+mod conformance;
 mod fields;
 mod tree_row;
 pub(crate) use fields::*;
