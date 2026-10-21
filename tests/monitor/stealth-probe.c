@@ -32,6 +32,9 @@
 #include <strings.h>
 #include <time.h>
 #include <unistd.h>
+#include <ifaddrs.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
 #include <cpuid.h>
 #include <sys/io.h>
 #include <sys/ioctl.h>
@@ -282,7 +285,7 @@ static void check_smbios_raw(void)
 	ssize_t len = read_all("/sys/firmware/dmi/tables/DMI", (char *)table, sizeof(table));
 	ssize_t at = 0;
 	char found[512] = "";
-	int vm_bit = -1, types = 0;
+	int vm_bit = -1, types = 0, oem_strings = -1;
 
 	if (len < 0) {
 		report(errno == EACCES ? "skip" : "fail", "smbios.vm-bit", strerror(errno));
@@ -300,6 +303,9 @@ static void check_smbios_raw(void)
 		 * "system is a virtual machine" (systemd-detect-virt reads it). */
 		if (type == 0 && length > 0x13)
 			vm_bit = (table[at + 0x13] >> 4) & 1;
+		/* Type 11: OEM strings, which PC firmware fills and QEMU leaves out. */
+		if (type == 11 && length > 4)
+			oem_strings = table[at + 4];
 		/* The string set: NUL-terminated strings, ended by one more NUL;
 		 * a structure without strings has two NULs. */
 		end = at + length;
@@ -323,13 +329,17 @@ static void check_smbios_raw(void)
 	}
 	reportf(vm_bit == 1 ? "fail" : "pass", "smbios.vm-bit", "%d (%d structures)", vm_bit, types);
 	report(*found ? "fail" : "pass", "smbios.strings", *found ? found : "none naming a VM");
+	if (oem_strings < 0)
+		report("fail", "smbios.oem-strings", "no type 11 structure");
+	else
+		reportf("pass", "smbios.oem-strings", "%d strings", oem_strings);
 }
 
 /* ACPI tables (root only): OEM IDs and QEMU devices in the DSDT. */
 static void check_acpi(void)
 {
 	static char data[1 << 20];
-	char list[512] = "", path[128], found[512] = "";
+	char list[512] = "", path[128], found[512] = "", oem_found[512] = "";
 	struct dirent *entry;
 	DIR *dir = opendir("/sys/firmware/acpi/tables");
 	int denied = 0;
@@ -353,9 +363,12 @@ static void check_acpi(void)
 				if (strlen(list) + strlen(entry->d_name) + strlen(oem) + 4 < sizeof(list))
 					snprintf(list + strlen(list), sizeof(list) - strlen(list), "%s%s=%s",
 						 *list ? " " : "", entry->d_name, oem);
-				if (vm_word(oem) && strlen(found) + 40 < sizeof(found))
-					snprintf(found + strlen(found), sizeof(found) - strlen(found),
-						 "%s%s OEM %s", *found ? ", " : "", entry->d_name, oem);
+				/* BOCHS/BXPC from QEMU, INTEL/EDK2 from OVMF (BGRT). */
+				if ((vm_word(oem) || contains_ci(oem, "BOCHS") || contains_ci(oem, "EDK2")) &&
+				    strlen(oem_found) + 40 < sizeof(oem_found))
+					snprintf(oem_found + strlen(oem_found),
+						 sizeof(oem_found) - strlen(oem_found), "%s%s OEM %s",
+						 *oem_found ? ", " : "", entry->d_name, oem);
 			}
 			{
 				static const char *const devices[] = { "QEMU0002", "QEMU0001", "FWCF",
@@ -373,9 +386,12 @@ static void check_acpi(void)
 		closedir(dir);
 	}
 	if (!dir || (denied && !*list)) {
+		report("skip", "acpi.oem-ids", dir ? "permission denied" : strerror(errno));
 		report("skip", "acpi.tables", dir ? "permission denied" : strerror(errno));
 	} else {
-		report("info", "acpi.oem-ids", list);
+		/* The header's OEM and table IDs (BOCHS/BXPC by default). */
+		report(*oem_found ? "fail" : "pass", "acpi.oem-ids", *oem_found ? oem_found : list);
+		/* The creator ID and the DSDT's devices. */
 		report(*found ? "fail" : "pass", "acpi.tables", *found ? found : "no VM names");
 	}
 	/* Enumerated ACPI devices are world-readable. */
@@ -423,8 +439,9 @@ static void check_pci(void)
 {
 	struct dirent *entry;
 	DIR *dir = opendir("/sys/bus/pci/devices");
-	char path[160], vendor[16], device[16], sub[16], found[1024] = "";
-	int total = 0;
+	static const char vm_vendors[] = "0x1af4 0x1b36 0x1234 0x15ad 0x80ee";
+	char path[160], vendor[16], device[16], sub[16], found[1024] = "", subs[1024] = "";
+	int total = 0, sub_vm = 0;
 
 	if (!dir) {
 		report("info", "pci.vendors", "no PCI bus");
@@ -445,17 +462,21 @@ static void check_pci(void)
 			sub[0] = 0;
 		/* 1af4 Red Hat (virtio), 1b36 Red Hat (QEMU), 1234 Bochs display,
 		 * 15ad VMware, 80ee VirtualBox. */
-		if (strstr("0x1af4 0x1b36 0x1234 0x15ad 0x80ee", vendor) ||
-		    strstr("0x1af4 0x1b36 0x1234 0x15ad 0x80ee", sub)) {
-			if (strlen(found) + 48 < sizeof(found))
-				snprintf(found + strlen(found), sizeof(found) - strlen(found),
-					 "%s%s %s:%s sub %s", *found ? ", " : "", entry->d_name + 5,
-					 vendor + 2, device + 2, sub + 2);
-		}
+		if (strstr(vm_vendors, vendor) && strlen(found) + 48 < sizeof(found))
+			snprintf(found + strlen(found), sizeof(found) - strlen(found), "%s%s %s:%s",
+				 *found ? ", " : "", entry->d_name + 5, vendor + 2, device + 2);
+		/* The subsystem: q35 gives every device QEMU's 1af4:1100. */
+		if (*sub && strstr(vm_vendors, sub))
+			sub_vm++;
+		else if (*sub && strlen(subs) + 40 < sizeof(subs))
+			snprintf(subs + strlen(subs), sizeof(subs) - strlen(subs), "%s%s sub %s",
+				 *subs ? ", " : "", entry->d_name + 5, sub + 2);
 	}
 	closedir(dir);
 	reportf(*found ? "fail" : "pass", "pci.vendors", "%d devices; VM vendors: %s", total,
 		*found ? found : "none");
+	reportf(sub_vm ? "fail" : "pass", "pci.subsystems", "%d of %d with a VM subsystem vendor; others: %s",
+		sub_vm, total, *subs ? subs : "none");
 }
 
 static void check_virtio(void)
@@ -509,6 +530,39 @@ static void check_block(void)
 	closedir(dir);
 	report(bad ? "fail" : "pass", "block.devices", list);
 	report(small ? "fail" : "pass", "block.disk-size", small ? "a disk under 60 GiB (pafish)" : "every disk 60 GiB or more");
+	/* NVMe controllers: model, firmware and subsystem name (QEMU's say so). */
+	dir = opendir("/sys/class/nvme");
+	if (dir) {
+		char nvme[512] = "";
+		int qemu = 0;
+
+		while ((entry = readdir(dir))) {
+			char model[64] = "", firmware[32] = "", nqn[256] = "";
+
+			if (entry->d_name[0] == '.')
+				continue;
+			snprintf(path, sizeof(path), "/sys/class/nvme/%.32s/model", entry->d_name);
+			read_line(path, model, sizeof(model));
+			snprintf(path, sizeof(path), "/sys/class/nvme/%.32s/firmware_rev", entry->d_name);
+			read_line(path, firmware, sizeof(firmware));
+			snprintf(path, sizeof(path), "/sys/class/nvme/%.32s/subsysnqn", entry->d_name);
+			read_line(path, nqn, sizeof(nqn));
+			qemu |= vm_word(model) || vm_word(nqn);
+			if (strlen(nvme) + 160 < sizeof(nvme))
+				snprintf(nvme + strlen(nvme), sizeof(nvme) - strlen(nvme),
+					 "%s%s model %.40s firmware %.8s nqn %.80s", *nvme ? ", " : "",
+					 entry->d_name, model, firmware, nqn);
+		}
+		closedir(dir);
+		if (*nvme)
+			report(qemu ? "fail" : "pass", "block.nvme", nvme);
+	}
+	if (!read_line("/sys/block/sda/queue/rotational", value, sizeof(value))) {
+		char wwid[128] = "";
+
+		read_line("/sys/block/sda/device/wwid", wwid, sizeof(wwid));
+		reportf("info", "block.sata", "sda rotational %s wwid %s", value, *wwid ? wwid : "-");
+	}
 }
 
 static void check_net(void)
@@ -549,11 +603,11 @@ static void check_net(void)
 }
 
 /* QEMU's (and VirtualBox's) user networking: 10.0.2.15, gateway 10.0.2.2,
- * DNS 10.0.2.3. */
+ * DNS 10.0.2.3; the guest's own address too. */
 static void check_net_addresses(void)
 {
 	static char text[8192];
-	char gateway[32] = "none", dns[64] = "none", *line;
+	char gateway[32] = "none", dns[64] = "none", address[32] = "none", *line;
 	int qemu = 0;
 
 	if (read_all("/proc/net/route", text, sizeof(text)) >= 0) {
@@ -575,7 +629,24 @@ static void check_net_addresses(void)
 				break;
 			}
 	}
-	reportf(qemu ? "fail" : "pass", "net.addresses", "gateway %s, nameserver %s", gateway, dns);
+	{
+		struct ifaddrs *list, *item;
+
+		if (!getifaddrs(&list)) {
+			for (item = list; item; item = item->ifa_next) {
+				struct sockaddr_in *in = (struct sockaddr_in *)item->ifa_addr;
+
+				if (!in || in->sin_family != AF_INET || !strcmp(item->ifa_name, "lo"))
+					continue;
+				inet_ntop(AF_INET, &in->sin_addr, address, sizeof(address));
+				qemu |= !strncmp(address, "10.0.2.", 7);
+				break;
+			}
+			freeifaddrs(list);
+		}
+	}
+	reportf(qemu ? "fail" : "pass", "net.addresses", "address %s, gateway %s, nameserver %s",
+		address, gateway, dns);
 }
 
 static void check_devices_misc(void)
@@ -1082,6 +1153,66 @@ static void check_base(void)
 		reportf("info", "base.root-size", "%.1f GiB", (double)fs.f_blocks * fs.f_frsize / (1 << 30));
 }
 
+/* --- Firmware and CPU topology ----------------------------------------- */
+
+static void check_firmware(void)
+{
+	struct stat st;
+	ssize_t len;
+
+	if (stat("/sys/firmware/efi", &st)) {
+		/* A current PC boots UEFI; SeaBIOS boots leave no EFI tables. */
+		report("fail", "firmware.type", "BIOS (no /sys/firmware/efi)");
+		return;
+	}
+	report("pass", "firmware.type", "UEFI");
+	/* The EFI system table's firmware vendor, as the kernel logs it at boot
+	 * ("efi: EFI v2.7 by <vendor>"; the log is root's). */
+	{
+		static char log[1 << 20];
+		int size = klogctl(3, log, sizeof(log) - 1);
+		char *line, vendor[96] = "";
+
+		if (size < 0) {
+			report("skip", "firmware.vendor", strerror(errno));
+		} else {
+			log[size] = 0;
+			line = strstr(log, "efi: EFI v");
+			if (line && (line = strstr(line, " by ")))
+				sscanf(line + 4, "%95[^\n]", vendor);
+			report(!*vendor ? "info" : contains_ci(vendor, "EDK") || vm_word(vendor) ? "fail" : "pass",
+			       "firmware.vendor", *vendor ? vendor : "not in the kernel log");
+		}
+	}
+	/* Secure Boot's state, when efivarfs is mounted (any user reads it). */
+	if (stat("/sys/firmware/efi/efivars", &st)) {
+		report("info", "firmware.secure-boot", "no efivars");
+	} else {
+		char data[8];
+
+		len = read_all("/sys/firmware/efi/efivars/"
+			       "SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c", data, sizeof(data));
+		if (len >= 5)
+			reportf("info", "firmware.secure-boot", "%s", data[4] ? "on" : "off");
+		else
+			report("info", "firmware.secure-boot", "efivarfs not mounted");
+	}
+}
+
+static void check_topology(void)
+{
+	char siblings[64] = "", cache[32] = "";
+
+	if (!read_line("/sys/devices/system/cpu/cpu0/topology/thread_siblings_list", siblings,
+		       sizeof(siblings)))
+		reportf("info", "cpu.threads", "cpu0 siblings %s (%s)", siblings,
+			strpbrk(siblings, ",-") ? "two threads per core" : "one thread per core");
+	if (read_line("/sys/devices/system/cpu/cpu0/cache/index3/size", cache, sizeof(cache)))
+		report("fail", "cpu.l3-cache", "none");
+	else
+		report("pass", "cpu.l3-cache", cache);
+}
+
 int main(int argc, char **argv)
 {
 	setvbuf(stdout, NULL, _IOLBF, 0);
@@ -1090,6 +1221,8 @@ int main(int argc, char **argv)
 	(void)argv;
 	check_self();
 	check_cpuid();
+	check_topology();
+	check_firmware();
 	check_dmi();
 	check_smbios_raw();
 	check_acpi();

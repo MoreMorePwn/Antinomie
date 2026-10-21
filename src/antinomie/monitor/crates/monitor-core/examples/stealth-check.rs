@@ -3,18 +3,33 @@
 //! Real-VM measurement of what a sample sees of the VM, the sandbox and
 //! Antinomie: the stealth giveaway table.
 //!
-//!   stealth-check measure BUNDLE NEW_DATA_DIR PROBE [PRESET]
+//!   stealth-check measure BUNDLE NEW_DATA_DIR PROBE [PRESET [ENTRY=VALUE...]]
+//!   stealth-check boots BUNDLE NEW_DATA_DIR COUNT [PRESET [ENTRY=VALUE...]]
 //!
 //! PROBE is the static `tests/monitor/stealth-probe` program; PRESET is
-//! `desktop` (default), `laptop`, `server` or `transparent`. One BusyBox VM
-//! with two vCPUs and 2 GiB boots with that stealth profile; the probe is
-//! uploaded and launched as a run, as root and as uid 1000, the way a sample
-//! is. Every check becomes a table row (giveaway, what root and the user see,
-//! pass or fail), printed as `ROW` lines and written to `stealth.md` and
-//! `stealth.tsv` in the data folder. The root run's recording must hold the
-//! probe's calls, so observation is checked alongside. The data folder must
-//! be new and disposable.
-use antinomie_monitor_core::stealth::{StealthPreset, StealthProfile, host_cpu_vendor};
+//! `desktop` (default), `laptop`, `server` or `transparent`; entries change
+//! the preset: `firmware=bios|uefi|uefi-sb`, `disk=virtio|sata|nvme`,
+//! `nat=qemu|home`, `cdrom=on|off`, `smt=on|off` and `gpa=ADDRESS` (the
+//! bootstrap page). One BusyBox VM with two vCPUs and 2 GiB boots with that
+//! stealth profile, as the base and host can boot it (`NOTE` lines say what
+//! fell back).
+//!
+//! measure: the probe is uploaded and launched as a run, as root and as uid
+//! 1000, the way a sample is. Every check becomes a table row (giveaway, what
+//! root and the user see, pass or fail), printed as `ROW` lines and written to
+//! `stealth.md` and `stealth.tsv` in the data folder. The root run's recording
+//! must hold the probe's calls, so observation is checked alongside.
+//!
+//! boots: the VM starts and stops COUNT times; each boot must bring the guest
+//! transport up and run a shell that reports the firmware type and where the
+//! kernel was placed (KASLR), and the firmware type must be the profile's.
+//! A boot whose transport does not come up within two minutes fails.
+//!
+//! The data folder must be new and disposable.
+use antinomie_monitor_core::stealth::{
+    BaseSupport, DiskBus, Firmware, HostSupport, NatNetwork, StealthPreset, StealthProfile,
+    host_cpu_vendor,
+};
 use antinomie_monitor_core::*;
 use std::{
     collections::BTreeMap,
@@ -125,15 +140,118 @@ impl Driver {
     }
 }
 
-fn preset(name: &str) -> Result<StealthProfile, String> {
-    let kind = match name {
+/// The VM's profile and the bootstrap page, from the preset and entries.
+fn profile(args: &[&str]) -> Result<(StealthProfile, Option<u64>), String> {
+    let kind = match args.first().copied().unwrap_or("desktop") {
         "desktop" => StealthPreset::RealisticDesktop,
         "laptop" => StealthPreset::RealisticLaptop,
         "server" => StealthPreset::RealisticServer,
         "transparent" => StealthPreset::Transparent,
         other => return Err(format!("unknown preset {other}")),
     };
-    Ok(StealthProfile::default().for_preset(kind, &host_cpu_vendor()))
+    let mut profile = StealthProfile::default().for_preset(kind, &host_cpu_vendor());
+    let mut gpa = None;
+    for entry in args.iter().skip(1) {
+        let on = |value: &str| match value {
+            "on" => Ok(true),
+            "off" => Ok(false),
+            _ => Err(format!("{entry}: on or off")),
+        };
+        match entry
+            .split_once('=')
+            .ok_or(format!("{entry} is not ENTRY=VALUE"))?
+        {
+            ("firmware", "bios") => profile.firmware = Firmware::Bios,
+            ("firmware", "uefi") => profile.firmware = Firmware::Uefi,
+            ("firmware", "uefi-sb") => profile.firmware = Firmware::UefiSecureBoot,
+            ("disk", "virtio") => profile.disk_bus = DiskBus::Virtio,
+            ("disk", "sata") => profile.disk_bus = DiskBus::Sata,
+            ("disk", "nvme") => profile.disk_bus = DiskBus::Nvme,
+            ("nat", "qemu") => profile.nat = NatNetwork::default(),
+            ("nat", "home") => profile.nat = NatNetwork::home(),
+            ("cdrom", value) => profile.cdrom = on(value)?,
+            ("smt", value) => profile.smt = on(value)?,
+            ("gpa", value) => {
+                gpa = Some(
+                    u64::from_str_radix(value.trim_start_matches("0x"), 16)
+                        .map_err(|_| format!("{entry}: a hex address"))?,
+                )
+            }
+            _ => return Err(format!("unknown entry {entry}")),
+        }
+    }
+    Ok((profile, gpa))
+}
+
+/// A backend on a new data folder with one VM of `profile`, after printing
+/// what the base and host cannot boot of it.
+fn driver(
+    bundle: &str,
+    data: &Path,
+    profile: StealthProfile,
+    gpa: Option<u64>,
+) -> Result<(Driver, String), String> {
+    if data.exists() {
+        return Err("the measurement needs a new disposable data folder".into());
+    }
+    let base = antinomie_monitor_core::storage::Bundle::load(Path::new(bundle))?;
+    let (_, notes) = profile.fitted(
+        &BaseSupport::from_list(&base.stealth_support),
+        &HostSupport::detect(Path::new("qemu-system-x86_64")),
+    );
+    for note in notes {
+        println!("NOTE {note}");
+    }
+    let options = BackendOptions {
+        bundle_dir: PathBuf::from(bundle),
+        data_dir: data.to_path_buf(),
+        headless: true,
+        capture_quota_size: 1024 * 1024 * 1024,
+        bootstrap_gpa: gpa,
+        ..Default::default()
+    };
+    let mut d = Driver {
+        backend: Backend::new(options)?,
+        snapshot: Snapshot::default(),
+        replies: BTreeMap::new(),
+        output: BTreeMap::new(),
+    };
+    d.command(Command::Create(VmConfig {
+        name: "stealth check".into(),
+        cpus: 2,
+        ram_mib: 2048,
+        disk_gib: 8,
+        nat: true,
+        isolated_network: true,
+        stealth: profile,
+        ..Default::default()
+    }))?;
+    d.wait("VM publication", 10, |s| !s.vms.is_empty())?;
+    let vm_id = d.snapshot.vms[0].id.clone();
+    Ok((d, vm_id))
+}
+
+impl Driver {
+    /// Start the VM and wait for the guest transport and the base's init.
+    fn boot(&mut self, vm_id: &str) -> Result<(), String> {
+        self.command(Command::Start {
+            vm_id: vm_id.to_owned(),
+        })?;
+        self.wait("guest", 120, |s| {
+            s.guest_kernel.as_ref().and_then(|k| k.revision).is_some()
+                && s.serial_log
+                    .as_ref()
+                    .and_then(|p| fs::read(p).ok())
+                    .is_some_and(|log| log.windows(19).any(|part| part == b"BusyBox guest ready"))
+        })
+    }
+
+    fn stop(&mut self) -> Result<(), String> {
+        self.command(Command::Stop)?;
+        self.wait("VM stop", 90, |s| s.state == VmState::Stopped)?;
+        thread::sleep(Duration::from_secs(2));
+        Ok(())
+    }
 }
 
 /// The probe's `STEALTH verdict key value` lines, by key, in output order.
@@ -176,45 +294,12 @@ fn cell(text: &str) -> String {
     text.replace('|', "\\|")
 }
 
-fn measure(bundle: &str, data: &str, probe: &str, preset_name: &str) -> Result<(), String> {
+fn measure(bundle: &str, data: &str, probe: &str, args: &[&str]) -> Result<(), String> {
     let data = PathBuf::from(data);
-    if data.exists() {
-        return Err("the measurement needs a new disposable data folder".into());
-    }
-    let stealth = preset(preset_name)?;
-    let options = BackendOptions {
-        bundle_dir: PathBuf::from(bundle),
-        data_dir: data.clone(),
-        headless: true,
-        capture_quota_size: 1024 * 1024 * 1024,
-        ..Default::default()
-    };
-    let mut d = Driver {
-        backend: Backend::new(options)?,
-        snapshot: Snapshot::default(),
-        replies: BTreeMap::new(),
-        output: BTreeMap::new(),
-    };
-    d.command(Command::Create(VmConfig {
-        name: "stealth check".into(),
-        cpus: 2,
-        ram_mib: 2048,
-        disk_gib: 8,
-        nat: true,
-        isolated_network: true,
-        stealth,
-        ..Default::default()
-    }))?;
-    d.wait("VM publication", 10, |s| !s.vms.is_empty())?;
-    let vm_id = d.snapshot.vms[0].id.clone();
-    d.command(Command::Start { vm_id })?;
-    d.wait("guest", 120, |s| {
-        s.guest_kernel.as_ref().and_then(|k| k.revision).is_some()
-            && s.serial_log
-                .as_ref()
-                .and_then(|p| fs::read(p).ok())
-                .is_some_and(|log| log.windows(19).any(|part| part == b"BusyBox guest ready"))
-    })?;
+    let preset_name = args.first().copied().unwrap_or("desktop");
+    let (stealth, gpa) = profile(args)?;
+    let (mut d, vm_id) = driver(bundle, &data, stealth, gpa)?;
+    d.boot(&vm_id)?;
     // Like a sample a while after boot: the host's first polls have run.
     thread::sleep(Duration::from_secs(5));
     let program = "/tmp/probe";
@@ -235,9 +320,7 @@ fn measure(bundle: &str, data: &str, probe: &str, preset_name: &str) -> Result<(
         .find(|r| r.id == root_run)
         .map(|r| r.directory.clone())
         .ok_or("root run missing")?;
-    d.command(Command::Stop)?;
-    d.wait("VM stop", 90, |s| s.state == VmState::Stopped)?;
-    thread::sleep(Duration::from_secs(2));
+    d.stop()?;
     fs::write(data.join("probe-root.txt"), &root_text).map_err(|e| e.to_string())?;
     fs::write(data.join("probe-user.txt"), &user_text).map_err(|e| e.to_string())?;
     if !root_text.contains("STEALTH-END") || !user_text.contains("STEALTH-END") {
@@ -293,6 +376,96 @@ fn measure(bundle: &str, data: &str, probe: &str, preset_name: &str) -> Result<(
     Ok(())
 }
 
+/// Boot `count` times; every boot must bring the transport up on the
+/// profile's firmware.
+fn boots(bundle: &str, data: &str, count: &str, args: &[&str]) -> Result<(), String> {
+    let count: u32 = count.parse().map_err(|_| "COUNT is a number")?;
+    let (stealth, gpa) = profile(args)?;
+    let (mut d, vm_id) = driver(bundle, Path::new(data), stealth, gpa)?;
+    let firmware = d.snapshot.vms[0].stealth.firmware;
+    let base = antinomie_monitor_core::storage::Bundle::load(Path::new(bundle))?;
+    let (fitted, _) = d.snapshot.vms[0].stealth.fitted(
+        &BaseSupport::from_list(&base.stealth_support),
+        &HostSupport::detect(Path::new("qemu-system-x86_64")),
+    );
+    let expected = if fitted.firmware.is_uefi() {
+        "uefi"
+    } else {
+        "bios"
+    };
+    let script = "if [ -d /sys/firmware/efi ]; then echo BOOT-FIRMWARE uefi; \
+                  else echo BOOT-FIRMWARE bios; fi; \
+                  echo BOOT-KERNEL $(grep -m1 'Kernel code' /proc/iomem)";
+    let (mut failed, mut placements) = (0, std::collections::BTreeSet::new());
+    for boot in 1..=count {
+        let started = Instant::now();
+        if let Err(error) = d.boot(&vm_id) {
+            failed += 1;
+            println!("BOOT {boot} FAIL transport: {error}");
+            let _ = d.stop();
+            continue;
+        }
+        let known: Vec<String> = d.snapshot.runs.iter().map(|r| r.id.clone()).collect();
+        d.command(Command::Execute(ExecRequest {
+            path: "/bin/sh".into(),
+            args: vec!["-c".into(), script.into()],
+            // Root reads the kernel's physical placement in /proc/iomem.
+            uid: 0,
+            gid: 0,
+            ..Default::default()
+        }))?;
+        d.wait("run", 60, |s| {
+            s.runs.iter().any(|r| {
+                !known.contains(&r.id) && matches!(r.state, RunState::Finished | RunState::Stopped)
+            })
+        })?;
+        let run = d
+            .snapshot
+            .runs
+            .iter()
+            .find(|r| !known.contains(&r.id))
+            .ok_or("run missing")?
+            .id
+            .clone();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !d.output(&run).contains("BOOT-KERNEL") && Instant::now() < deadline {
+            d.receive();
+            thread::sleep(Duration::from_millis(20));
+        }
+        let output = d.output(&run).to_owned();
+        let found = output
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("BOOT-FIRMWARE "))
+            .unwrap_or("none")
+            .to_owned();
+        let kernel = output
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("BOOT-KERNEL "))
+            .unwrap_or("")
+            .trim()
+            .to_owned();
+        placements.insert(kernel.split('-').next().unwrap_or("").to_owned());
+        let verdict = if found == expected { "PASS" } else { "FAIL" };
+        if verdict == "FAIL" {
+            failed += 1;
+        }
+        println!(
+            "BOOT {boot} {verdict} firmware {found} kernel {kernel} in {:.1} s",
+            started.elapsed().as_secs_f64()
+        );
+        d.stop()?;
+    }
+    println!(
+        "RESULT {count} boots ({firmware:?} as {expected}), {failed} failed, {} kernel placements",
+        placements.len()
+    );
+    if failed > 0 {
+        return Err(format!("{failed} of {count} boots failed"));
+    }
+    println!("PASS boots");
+    Ok(())
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let outcome = match args
@@ -301,10 +474,13 @@ fn main() {
         .collect::<Vec<_>>()
         .as_slice()
     {
-        ["measure", bundle, data, probe] => measure(bundle, data, probe, "desktop"),
-        ["measure", bundle, data, probe, preset] => measure(bundle, data, probe, preset),
+        ["measure", bundle, data, probe, rest @ ..] => measure(bundle, data, probe, rest),
+        ["boots", bundle, data, count, rest @ ..] => boots(bundle, data, count, rest),
         _ => {
-            eprintln!("usage: stealth-check measure BUNDLE NEW_DATA_DIR PROBE [PRESET]");
+            eprintln!(
+                "usage: stealth-check measure BUNDLE NEW_DATA_DIR PROBE [PRESET [ENTRY=VALUE...]]\n       \
+                 stealth-check boots BUNDLE NEW_DATA_DIR COUNT [PRESET [ENTRY=VALUE...]]"
+            );
             std::process::exit(2);
         }
     };
