@@ -6,6 +6,31 @@ it runs.
 
 ## 0.7.0 — Unreleased
 
+- **Inputs that were not resident at a call's entry are read again at exit.**
+  Guest series 0053, contract section 22, contract revision 17 unchanged
+  (approved 2026-10-22). The recorder copies user memory without faulting, so
+  an argument on a page the program had mapped but not touched yet (a forked
+  child's literal path, static glibc's start-up `readlinkat` of
+  `/proc/self/exe`, an untouched file mapping) was recorded NOT_RESIDENT with
+  no bytes: the largest capture gap left. The recorder now reads such an input
+  again when the call returns, still without faulting, and the Syscall Trace
+  shows it with an "at exit" tag whose tooltip says the bytes are what memory
+  held after the call (another thread could have changed them meanwhile).
+  After a successful exec the program's memory is gone, so the path is the
+  exec's own copy and the argument and environment strings come from the new
+  program's stack, tagged "kernel copy" (an interpreter exec rewrote its
+  arguments, so only its environment). The field takes the place of the
+  NOT_RESIDENT one in the call's Entry, so the call is no longer incomplete and
+  Triage, filters and rules see the value; the process tree names an exec from
+  it, and JSON carries the mark (`recapture`). An older app shows the field as
+  one more Exit field; an older base records as before. Memory a call never
+  reads stays NOT_RESIDENT, and the stealth probe checks with `mincore` that
+  the recorder loads nothing. Conformance (same app, same fixtures, base 0052 →
+  0053): calls left with a NOT_RESIDENT input 4 → 0 as uid 1000, 1 → 0 as
+  root, 1 → 0 under concurrency, 422 → 1 in `stress-light` (an exec that fails
+  with E2BIG before reading its string) and 1,282 → 0 in `stress-lossy`; slots
+  with data captured stay 374 of 375 (the ioctl decoder gap). A new area covers
+  each case, including a buffer a second thread rewrites while `write` blocks.
 - **Stealth profile, part 2: UEFI, a SATA or NVMe disk, SMT, a home network
   and the smaller entries.** Guest series 0052, contract revision 17
   unchanged. The profile gains the firmware (BIOS, UEFI or UEFI with Secure
