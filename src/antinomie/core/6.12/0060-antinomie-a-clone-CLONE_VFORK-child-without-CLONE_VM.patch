@@ -1,8 +1,8 @@
 From 7a325a2e4e3e28b8326ef7631b7ce7b034eabf8d Mon Sep 17 00:00:00 2001
 From: MikiMiku <jonathanirvinjo@gmail.com>
 Date: Thu, 22 Oct 2026 21:57:59 +0700
-Subject: [PATCH 60/60] antinomie: a clone(CLONE_VFORK) child without CLONE_VM
- keeps its own memory
+Subject: [PATCH] antinomie: a clone(CLONE_VFORK) child without CLONE_VM keeps
+ its own memory
 
 The fork hook took CLONE_VFORK alone as a shared address space. A child of
 clone(CLONE_VFORK) without CLONE_VM gets a copy of the memory, as a fork

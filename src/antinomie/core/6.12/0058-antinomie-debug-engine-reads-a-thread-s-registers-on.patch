@@ -1,8 +1,8 @@
 From 900bcda1bf09950af357b64c2120307024b232bc Mon Sep 17 00:00:00 2001
 From: MikiMiku <jonathanirvinjo@gmail.com>
 Date: Thu, 22 Oct 2026 21:55:24 +0700
-Subject: [PATCH 58/60] antinomie: debug engine reads a thread's registers only
- while its stack is held
+Subject: [PATCH] antinomie: debug engine reads a thread's registers only while
+ its stack is held
 
 A thread's user registers are on its kernel stack. The engine holds a
 reference on each thread's task_struct but not on its stack, which an
