@@ -1,0 +1,77 @@
+From 7a325a2e4e3e28b8326ef7631b7ce7b034eabf8d Mon Sep 17 00:00:00 2001
+From: MikiMiku <jonathanirvinjo@gmail.com>
+Date: Thu, 22 Oct 2026 21:57:59 +0700
+Subject: [PATCH 60/60] antinomie: a clone(CLONE_VFORK) child without CLONE_VM
+ keeps its own memory
+
+The fork hook took CLONE_VFORK alone as a shared address space. A child of
+clone(CLONE_VFORK) without CLONE_VM gets a copy of the memory, as a fork
+child does, but its session was given its parent's breakpoint table and
+memory: MEM_READ, MEM_WRITE and BP_SET acted on the parent, the
+breakpoint bytes the child's copy inherited were never taken out, and a
+child stopped at one of them stopped there again at every continue.
+
+The parent still waits for such a child and reports VFORK and VFORK_DONE;
+the child shares the parent's address space only with CLONE_VM, and
+otherwise gets its own table holding the parent's inserted bytes, which
+its first stop takes out, as for a fork. The event's SHARED_MM flag says
+which. The contract revision stays 17.
+---
+ kernel/antinomie/debug.c | 12 ++++++++----
+ 1 file changed, 8 insertions(+), 4 deletions(-)
+
+diff --git a/kernel/antinomie/debug.c b/kernel/antinomie/debug.c
+index 8ebd44b9b..8cecc9ca6 100644
+--- a/kernel/antinomie/debug.c
++++ b/kernel/antinomie/debug.c
+@@ -2485,7 +2485,7 @@ static void thread_created(struct ant_dbg *s, struct task_struct *child)
+  * first instruction, holding a copy of the engine's bytes the parent had in. The
+  * debugger adopts it (ATTACH with the identity from the event) or lets it go.
+  */
+-static struct ant_dbg *child_session(struct ant_dbg *parent, struct task_struct *child, bool vfork)
++static struct ant_dbg *child_session(struct ant_dbg *parent, struct task_struct *child, bool shared)
+ {
+ 	struct ant_dbg_as *pas, *as = NULL;
+ 	struct ant_dbg_thread *t;
+@@ -2517,7 +2517,7 @@ static struct ant_dbg *child_session(struct ant_dbg *parent, struct task_struct
+ 	pas = as_get(parent);
+ 	if (!pas)
+ 		goto fail;
+-	if (vfork) {
++	if (shared) {
+ 		/* The child runs in its parent's memory until it execs. */
+ 		as = pas;
+ 		c->shared_as = true;
+@@ -2611,7 +2611,11 @@ void ant_dbg_fork(struct task_struct *child, u64 clone_flags)
+ 	struct ant_dbg_event *ev, *done = NULL;
+ 	struct ant_dbg_thread *t;
+ 	struct ant_dbg *s, *c;
++	/* The parent waits for a vfork child; the child shares its memory only
++	 * with CLONE_VM (clone(CLONE_VFORK) alone gives it a copy, as fork does).
++	 */
+ 	bool vfork = clone_flags & CLONE_VFORK;
++	bool shared = vfork && (clone_flags & CLONE_VM);
+ 	int error;
+ 
+ 	s = hook_session();
+@@ -2637,7 +2641,7 @@ void ant_dbg_fork(struct task_struct *child, u64 clone_flags)
+ 		done = kzalloc(sizeof(*done), GFP_KERNEL);
+ 	if (vfork && !done)
+ 		goto fail;
+-	c = child_session(s, child, vfork);
++	c = child_session(s, child, shared);
+ 	if (!c)
+ 		goto fail;
+ 	mutex_lock(&dbg_lock);
+@@ -2657,7 +2661,7 @@ void ant_dbg_fork(struct task_struct *child, u64 clone_flags)
+ 	ev->child_start_ns = c->start_ns;
+ 	ev->child_tgid = c->tgid;
+ 	ev->parent_tid = t->tid;
+-	ev->flags = vfork ? ANTC_DEBUG_EVF_SHARED_MM : 0;
++	ev->flags = shared ? ANTC_DEBUG_EVF_SHARED_MM : 0;
+ 	if (vfork) {
+ 		*done = *ev;
+ 		done->kind = ANTC_DEBUG_EVENT_VFORK_DONE;
+-- 
+2.53.0
+
