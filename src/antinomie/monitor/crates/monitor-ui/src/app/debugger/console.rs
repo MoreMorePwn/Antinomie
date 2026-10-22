@@ -54,6 +54,13 @@ pub(super) enum Unavailable {
     NoFlavour(GdbFlavour),
 }
 
+/// The console is not run under bubblewrap like the analysis tools: its gdb
+/// must be the session leader of the pseudo-terminal for Ctrl-C to reach it (a
+/// bwrap `--new-session` loses that terminal, and without it a SIGINT would
+/// end bwrap), and it connects to the host's loopback server, which an
+/// unshared network would cut off. It runs with a cleared environment
+/// (`PtyChild::spawn` passes only PATH, locale and TZ) and a private home.
+///
 /// The command line that attaches `flavour` to the session's loopback port.
 /// The server speaks plain `target remote`, as `debug-check` drives gdb.
 /// `-nx` keeps the user's own gdbinit out of the session and debuginfod
@@ -92,7 +99,9 @@ pub(super) fn launch(
                 ],
                 env,
                 env_remove: Vec::new(),
-                home: None,
+                // The same private home as pwndbg: GEF keeps its settings there
+                // and reads none of the user's own.
+                home: Some(analysis_tools::tools_dir(data_dir).join(CONSOLE_HOME)),
             })
         }
         GdbFlavour::Pwndbg => {
@@ -465,6 +474,10 @@ mod tests {
         );
         assert!(plan.env.contains(&("DEBUGINFOD_URLS", "")));
         assert!(plan.env.contains(&("TERM", "xterm-256color")));
+        assert_eq!(
+            plan.home.as_deref(),
+            Some(Path::new("/data/tools/.console-home"))
+        );
     }
 
     #[test]

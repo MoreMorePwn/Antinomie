@@ -33,6 +33,10 @@ pub(super) struct Launch {
     pub home: Option<PathBuf>,
 }
 
+/// The only variables the program inherits. HOME is never among them: the
+/// program's home is the private folder of `Launch::home`.
+const INHERITED_ENV: [&str; 6] = ["PATH", "LANG", "LC_ALL", "LC_CTYPE", "LC_MESSAGES", "TZ"];
+
 /// How long a closing console gets to quit by itself.
 const QUIT_GRACE: Duration = Duration::from_secs(3);
 
@@ -68,6 +72,15 @@ impl PtyChild {
         let child = {
             let mut command = Command::new(&launch.program);
             command.args(&launch.args);
+            // The console renders guest-controlled data through Python plugins, so
+            // it gets no more of the user's session than it needs: no display, no
+            // D-Bus or ssh-agent socket, no PYTHONPATH, nothing else inherited.
+            command.env_clear();
+            for name in INHERITED_ENV {
+                if let Some(value) = std::env::var_os(name) {
+                    command.env(name, value);
+                }
+            }
             for name in &launch.env_remove {
                 command.env_remove(name);
             }
@@ -232,6 +245,22 @@ mod tests {
             .mode();
         assert_eq!(mode & 0o777, 0o700);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn only_the_listed_variables_reach_the_program() {
+        // SAFETY: the name is unique to this test, so no other thread reads it.
+        unsafe { std::env::set_var("ANT_PTY_LEAK_TEST", "secret") };
+        let launch = shell(
+            "echo \"leak=${ANT_PTY_LEAK_TEST-none} display=${DISPLAY-none} bus=${DBUS_SESSION_BUS_ADDRESS-none} \
+             ssh=${SSH_AUTH_SOCK-none} py=${PYTHONPATH-none} home=${HOME-none} path=${PATH:+set}\"",
+        );
+        let mut child = PtyChild::spawn(&launch, 24, 80, || {}).unwrap();
+        let (text, _) = read_until(&mut child, "path=");
+        assert!(
+            text.contains("leak=none display=none bus=none ssh=none py=none home=none path=set"),
+            "{text}"
+        );
     }
 
     fn read_until(child: &mut PtyChild, wanted: &str) -> (String, Option<String>) {
