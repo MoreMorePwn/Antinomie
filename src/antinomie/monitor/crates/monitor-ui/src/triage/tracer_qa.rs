@@ -127,7 +127,32 @@ fn recorded_tracer_triage() {
             (label.to_owned(), std::path::PathBuf::from(directory))
         })
         .collect();
+    // Nothing to check is not a pass: a run list without a run this test
+    // knows (tracer-check failed before printing any) fails here.
+    const LABELS: [&str; 5] = ["writes", "reconnect", "user", "nobody", "legacy"];
+    let unknown: Vec<_> = runs
+        .keys()
+        .filter(|label| !LABELS.contains(&label.as_str()))
+        .collect();
+    assert!(unknown.is_empty(), "unknown run labels {unknown:?}");
+    assert!(
+        !runs.is_empty(),
+        "ANTINOMIE_TRACER_RUNS names no run; tracer-check printed none"
+    );
+    for (label, directory) in &runs {
+        assert!(
+            directory.join("run.json").is_file(),
+            "the {label} run has no recording at {}",
+            directory.display()
+        );
+    }
     let fixture = std::env::var("ANTINOMIE_TRACER_FIXTURE_SHA256").unwrap_or_default();
+    if runs.contains_key("writes") {
+        assert!(
+            fixture.len() == 64,
+            "the writes run needs ANTINOMIE_TRACER_FIXTURE_SHA256, got {fixture:?}"
+        );
+    }
 
     if let Some(writes) = runs.get("writes") {
         let found = scan(writes, true);
