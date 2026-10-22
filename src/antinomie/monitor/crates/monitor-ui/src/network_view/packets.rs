@@ -1,6 +1,55 @@
 // SPDX-License-Identifier: MIT
 //! The packet table (TShark's rows) and the selected packet's details and bytes.
 use super::*;
+use std::cmp::Ordering;
+
+/// The sort state of the Packets table.
+const PACKETS_TABLE: &str = "network_packets";
+
+/// `rows` (indices into `packets`) in the order `sort` picks; unchanged without one.
+pub(super) fn ordered_rows(
+    rows: &[usize],
+    packets: &[NetworkPacket],
+    sort: Option<crate::triage::SortSpec>,
+) -> Vec<usize> {
+    let mut rows = rows.to_vec();
+    if let Some(spec) = sort {
+        rows.sort_by(|&a, &b| {
+            let order = compare_packets(spec.column, &packets[a], &packets[b]);
+            if spec.descending {
+                order.reverse()
+            } else {
+                order
+            }
+        });
+    }
+    rows
+}
+
+/// Packet order for a header column: No., Time, Source, Destination, Protocol,
+/// Length, Info. Addresses order by IP then port, packets without one last.
+fn compare_packets(column: usize, left: &NetworkPacket, right: &NetworkPacket) -> Ordering {
+    let address = |packet: &NetworkPacket, source: bool| {
+        let (ip, port, text) = if source {
+            (packet.src_ip, packet.src_port, &packet.source)
+        } else {
+            (packet.dst_ip, packet.dst_port, &packet.destination)
+        };
+        (ip.is_none(), ip, port, text.to_lowercase())
+    };
+    match column {
+        0 => left.number.cmp(&right.number),
+        1 => left.time_us.cmp(&right.time_us),
+        2 => address(left, true).cmp(&address(right, true)),
+        3 => address(left, false).cmp(&address(right, false)),
+        4 => left
+            .protocol
+            .to_lowercase()
+            .cmp(&right.protocol.to_lowercase()),
+        5 => left.length.cmp(&right.length),
+        _ => left.info.to_lowercase().cmp(&right.info.to_lowercase()),
+    }
+}
 
 impl NetworkView {
     pub(super) fn packets(&mut self, ui: &mut egui::Ui, is_live: bool, cx: &NetworkContext<'_>) {
@@ -118,6 +167,24 @@ impl NetworkView {
             &self.display_page
         };
         let filtering = !self.filter.trim().is_empty();
+        // A header click sorts the rows shown: the page when TShark pages the
+        // capture, all of them for raw frames.
+        let sort = crate::triage::sort_current(ui.ctx(), PACKETS_TABLE);
+        let mut cached = std::mem::take(&mut self.packet_order);
+        let key = sort.map(|spec| {
+            (
+                spec,
+                list.rows.len(),
+                packets.len(),
+                self.display_page_start,
+                self.raw_frames(),
+            )
+        });
+        if cached.key != key || cached.rows.len() != list.rows.len() {
+            cached.rows = ordered_rows(&list.rows, packets, sort);
+            cached.key = key;
+        }
+        let ordered = &cached.rows;
         egui::ScrollArea::horizontal()
             .id_salt("network_columns")
             .show(ui, |ui| {
@@ -127,7 +194,7 @@ impl NetworkView {
                     .sense(egui::Sense::click())
                     .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
                     .striped(true)
-                    .stick_to_bottom(is_live && list.selected.is_none())
+                    .stick_to_bottom(is_live && list.selected.is_none() && sort.is_none())
                     .max_scroll_height(f32::INFINITY)
                     .min_scrolled_height(0.0)
                     .auto_shrink([false, false])
@@ -151,7 +218,7 @@ impl NetworkView {
                     .header(
                         crate::widgets::table::header_height(font_size),
                         |mut header| {
-                            for label in [
+                            for (column, label) in [
                                 "No.",
                                 "Time",
                                 "Source",
@@ -159,8 +226,13 @@ impl NetworkView {
                                 "Protocol",
                                 "Length",
                                 "Info",
-                            ] {
-                                header.col(|ui| crate::widgets::table::head(ui, label));
+                            ]
+                            .into_iter()
+                            .enumerate()
+                            {
+                                header.col(|ui| {
+                                    crate::table_sort::header(ui, PACKETS_TABLE, column, label)
+                                });
                             }
                         },
                     )
@@ -169,7 +241,7 @@ impl NetworkView {
                             crate::widgets::table::row_height(font_size),
                             list.rows.len(),
                             |mut row| {
-                                let index = list.rows[row.index()];
+                                let index = ordered[row.index()];
                                 let packet = &packets[index];
                                 let selected = list
                                     .selected
@@ -288,6 +360,7 @@ impl NetworkView {
                         );
                     });
             });
+        self.packet_order = cached;
         if list.rows.is_empty() {
             ui.colored_label(
                 theme::muted(),

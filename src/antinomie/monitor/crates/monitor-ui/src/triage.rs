@@ -63,7 +63,7 @@ mod sigma_events;
 #[cfg(test)]
 mod sigma_events_tests;
 mod sorting;
-pub(crate) use sorting::{current as sort_current, header as sort_header};
+pub(crate) use sorting::{current as sort_current, header as sort_header, Spec as SortSpec};
 mod summary;
 mod table;
 #[cfg(test)]
