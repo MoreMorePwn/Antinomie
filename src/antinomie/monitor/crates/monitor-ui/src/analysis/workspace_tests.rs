@@ -1974,12 +1974,54 @@ fn a_strings_header_click_reads_the_whole_listing_in_that_order_and_keeps_the_pa
     let ascending = ListingSort {
         column: 3,
         descending: false,
+        field: None,
     };
     assert_eq!(ordered(&actions), Some((Some(ascending), 0)));
     testing::click(&ctx, "Text", &mut show);
     let descending = ListingSort {
         column: 3,
         descending: true,
+        field: None,
     };
     assert_eq!(ordered(&actions), Some((Some(descending), 0)));
+}
+
+#[test]
+fn structures_and_record_headers_sort_the_whole_listing_by_their_field() {
+    use crate::table_sort::testing;
+    use antinomie_monitor_core::{ListingSort, StructureField};
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    for (kind, header, column, field) in [
+        (AnalysisKind::Structures, "Value", 1, StructureField::Value),
+        (
+            AnalysisKind::Structures,
+            "File offset",
+            2,
+            StructureField::Offset,
+        ),
+    ] {
+        let report = with_listing(fixture(), kind, 3);
+        let page = listing_page(&report, kind);
+        let mut state = WorkspaceState::default();
+        let actions = std::cell::RefCell::new(Vec::new());
+        let mut show = |ui: &mut egui::Ui| {
+            let action = workspace_section(ui, Some(&report), kind, &mut state, None, Some(&page));
+            actions.borrow_mut().extend(action);
+        };
+        testing::click(&ctx, header, &mut show);
+        let sort = match actions.borrow().last() {
+            Some(ReportAction::ReadListing { sort, .. }) => *sort,
+            other => panic!("no listing read after the {header} click: {other:?}"),
+        };
+        assert_eq!(
+            sort,
+            Some(ListingSort {
+                column,
+                descending: false,
+                field: Some(field)
+            }),
+            "{header}"
+        );
+    }
 }
