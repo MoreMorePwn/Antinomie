@@ -122,6 +122,11 @@ cd ~/src/antinomie
 scripts/commit.sh                    # prompts for DEP-3 headers
 ```
 
+The Quilt view lives beside the mail-format series in `src/antinomie/core/6.12`;
+`python3 scripts/sync-quilt-view.py` adds a view patch and its `series` line for
+any series patch that lacks one (`--check` only reports), so the view cannot fall
+behind a patch added another way.
+
 Then verify it applies and builds in the disposable tree:
 
 ```bash

@@ -1,2 +1,5 @@
 # Third-party community YARA rules; keep them out of GitHub language statistics.
 src/antinomie/monitor/crates/monitor-core/assets/rules/*.yar linguist-vendored
+
+# Patch files carry other projects' diffs verbatim; their context lines are not ours to check.
+*.patch -whitespace

@@ -664,8 +664,9 @@ pub(super) fn window(
                                 "Bases built by Antinomie 0.7.0 keep the guest kernel's options, \
                                  build string, symbols and worker names and QEMU's ACPI devices \
                                  out of the guest, start programs as a shell's job (parent \
-                                 init), and boot under UEFI and from SATA or NVMe with their \
-                                 address from DHCP. Older bases still show the rest and fall \
+                                 init), and boot under UEFI with their address from DHCP. \
+                                 BusyBox bases also boot from SATA or NVMe; Debian bases boot \
+                                 from virtio only. Older bases still show the rest and fall \
                                  back to BIOS, virtio and 10.0.2.x. Timing, the display, the \
                                  chipset and QEMU's firmware tables are beyond what a launch \
                                  option or the guest kernel can change.",

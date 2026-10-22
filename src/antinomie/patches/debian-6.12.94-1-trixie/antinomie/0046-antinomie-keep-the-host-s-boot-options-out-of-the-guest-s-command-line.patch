@@ -1,0 +1,133 @@
+Description: antinomie: keep the host's boot options out of the guest's command line
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-10-21
+
+The host boots the guest with antinomie_boot_gpa= and antinomie_ring_kib= on the kernel command line. Any program could read them in /proc/cmdline, and the kernel log printed them twice ("Command line:" and "Kernel command line:"): a one-line check for this sandbox.  setup_arch() now hands the boot command line to ant_cmdline_take() before it first prints it. Every antinomie_* option is cut out of the line (quoted values and the order of the other options are kept, and the spaces around a removed option collapse to one) and applied at once as an early parameter, so the existing early_param() handlers see the same values as before and nothing after them sees the options at all: not parse_early_param(), not the saved command line, not the log. The decompressor still reads the original line for its KASLR placement, as before.  The host passes the same options as before, so older and newer hosts work with this guest unchanged.
+
+---
+diff --git a/arch/x86/kernel/setup.c b/arch/x86/kernel/setup.c
+index 4b80081dd..8bf3eddf2 100644
+--- a/arch/x86/kernel/setup.c
++++ b/arch/x86/kernel/setup.c
+@@ -18,6 +18,7 @@
+ #include <linux/memblock.h>
+ #ifdef CONFIG_ANTINOMIE
+ #include <linux/antinomie.h>
++#include <linux/antinomie_stealth.h>
+ #endif
+ #include <linux/panic_notifier.h>
+ #include <linux/pci.h>
+@@ -754,6 +755,9 @@ void __init setup_arch(char **cmdline_p)
+ 	 */
+ 	__flush_tlb_all();
+ #else
++#ifdef CONFIG_ANTINOMIE
++	ant_cmdline_take(boot_command_line);
++#endif
+ 	printk(KERN_INFO "Command line: %s\n", boot_command_line);
+ 	boot_cpu_data.x86_phys_bits = MAX_PHYSMEM_BITS;
+ #endif
+diff --git a/include/linux/antinomie_stealth.h b/include/linux/antinomie_stealth.h
+new file mode 100644
+index 000000000..a691b5cbe
+--- /dev/null
++++ b/include/linux/antinomie_stealth.h
+@@ -0,0 +1,13 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef ANTINOMIE_STEALTH_H
++#define ANTINOMIE_STEALTH_H
++#include <linux/types.h>
++
++#ifdef CONFIG_ANTINOMIE
++/* Architecture setup, before the command line is first printed: take the
++ * host's antinomie_* options out of it and apply them. */
++void ant_cmdline_take(char *cmdline);
++#else
++static inline void ant_cmdline_take(char *cmdline) { }
++#endif
++#endif
+diff --git a/kernel/antinomie/Makefile b/kernel/antinomie/Makefile
+index 6e8c29a75..393cfa7e8 100644
+--- a/kernel/antinomie/Makefile
++++ b/kernel/antinomie/Makefile
+@@ -8,3 +8,4 @@ obj-y += resources.o
+ obj-y += hash.o
+ obj-y += debug.o debug_x86.o
+ obj-y += fileid.o
++obj-y += stealth.o
+diff --git a/kernel/antinomie/stealth.c b/kernel/antinomie/stealth.c
+new file mode 100644
+index 000000000..cd076965f
+--- /dev/null
++++ b/kernel/antinomie/stealth.c
+@@ -0,0 +1,68 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* What the guest kernel keeps from the programs it runs: Antinomie's own
++ * traces in interfaces any program can read.
++ *
++ * The host passes its boot options (antinomie_boot_gpa=, antinomie_ring_kib=)
++ * on the kernel command line. They are taken out of it before the kernel
++ * first prints it, applied here, and never reach the saved command line:
++ * /proc/cmdline and the kernel log show the rest of the line only.
++ */
++#include <linux/antinomie_stealth.h>
++#include <linux/ctype.h>
++#include <linux/init.h>
++#include <linux/kernel.h>
++#include <linux/string.h>
++#include <asm/setup.h>
++
++#define ANT_OPTION_PREFIX "antinomie_"
++
++static char ant_options[COMMAND_LINE_SIZE] __initdata;
++
++/* Remove every antinomie_* option from cmdline, in place, and apply them as
++ * early parameters. Other options, quoted values and their order are kept;
++ * the spaces around a removed option collapse to one. */
++void __init ant_cmdline_take(char *cmdline)
++{
++	char *in = cmdline, *out = cmdline;
++	size_t taken = 0;
++
++	while (*in) {
++		const char *start;
++		bool quoted = false;
++		size_t len;
++
++		if (isspace(*in)) {
++			*out++ = *in++;
++			continue;
++		}
++		start = in;
++		while (*in && (quoted || !isspace(*in))) {
++			if (*in == '"')
++				quoted = !quoted;
++			in++;
++		}
++		len = in - start;
++		if (len > strlen(ANT_OPTION_PREFIX) &&
++		    !strncmp(start, ANT_OPTION_PREFIX, strlen(ANT_OPTION_PREFIX))) {
++			if (taken + len + 2 <= sizeof(ant_options)) {
++				if (taken)
++					ant_options[taken++] = ' ';
++				memcpy(ant_options + taken, start, len);
++				taken += len;
++				ant_options[taken] = '\0';
++			}
++			/* Drop the space before it; the one after it stays. */
++			while (out > cmdline && isspace(out[-1]))
++				out--;
++			continue;
++		}
++		memmove(out, start, len);
++		out += len;
++	}
++	*out = '\0';
++	in = skip_spaces(cmdline);
++	if (in != cmdline)
++		memmove(cmdline, in, strlen(in) + 1);
++	if (taken)
++		parse_early_options(ant_options);
++}

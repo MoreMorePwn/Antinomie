@@ -1,7 +1,3 @@
-# Antinomie Quilt series for the Debian adapter.
-#
-# Generated from src/antinomie/core/6.12/ by scripts/commit.sh.
-# One entry per patch, in application order. Do not edit by hand.
 0001-antinomie-add-kernel-control-and-scoped-syscall-telemetry-over-v7.patch
 0002-antinomie-license-original-shared-transport-headers-under-mit.patch
 0003-antinomie-tag-launched-run-lineage-and-request-tree-stop.patch
@@ -40,3 +36,22 @@
 0036-antinomie-debug-engine-hardware-breakpoints-and-watchpoints.patch
 0037-antinomie-debug-engine-debug-on-start-and-the-auxiliary-vector.patch
 0038-antinomie-debug-engine-process-core-and-stop-under-a-debug-stop-signals-before-fatal-exits.patch
+0039-antinomie-size-process-cores-by-the-guest-s-memory-grow-the-buffer-in-chunks-report-why-a-core-is-cut.patch
+0040-antinomie-poll-the-control-worker-every-tick-while-a-finished-process-core-is-read.patch
+0041-antinomie-debugger-phase-3-wire-contract.patch
+0042-antinomie-debug-engine-follow-fork-vfork-and-exec-non-stop-threads-adoptable-sessions.patch
+0043-antinomie-count-io-uring-workers-in-the-run-so-the-root-s-exit-is-not-lost.patch
+0044-antinomie-publish-the-identity-of-the-files-a-call-acted-on-and-the-image-an-exec-loaded.patch
+0045-antinomie-hash-the-files-a-run-writes-at-their-last-close-and-the-launched-program-s-image-on-request.patch
+0046-antinomie-keep-the-host-s-boot-options-out-of-the-guest-s-command-line.patch
+0047-antinomie-leave-the-recorder-s-symbols-out-of-proc-kallsyms-and-wchan.patch
+0048-antinomie-do-not-name-guest-workers-after-the-recorder.patch
+0049-antinomie-do-not-enumerate-qemu-s-own-acpi-devices.patch
+0050-antinomie-start-a-program-as-a-job-of-a-closed-terminal-shell-on-request.patch
+0051-antinomie-a-failed-async-request-has-no-payload-to-lose-decode-termios2-and-process-group-ioctls.patch
+0052-antinomie-keep-the-efi-stub-from-placing-the-kernel-on-the-bootstrap-page.patch
+0053-antinomie-read-inputs-that-were-not-resident-at-entry-again-at-exit.patch
+0054-antinomie-publish-the-identity-of-a-removed-directory-and-of-splice-and-xattr-requests-files.patch
+0055-antinomie-an-io-uring-entry-only-one-process-can-write-is-attributed-to-it.patch
+0056-antinomie-async-records-wait-for-room-instead-of-being-lost-while-the-host-waits.patch
+0057-antinomie-an-io-uring-rename-link-or-unlink-names-its-file-from-the-operation.patch

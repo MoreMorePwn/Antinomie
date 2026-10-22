@@ -1,0 +1,98 @@
+Description: antinomie: keep the EFI stub from placing the kernel on the bootstrap page
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-10-21
+
+Under UEFI firmware the kernel's EFI stub decompresses and places the kernel itself: with physical KASLR it takes a random 2 MiB aligned slot among the firmware's free memory. The host's bootstrap page (antinomie_boot_gpa=, by default ANT_BOOT_GPA) is free memory to the firmware, so the kernel could land on it. ant_bootstrap_reserve() then finds the page already reserved, the guest never publishes its transport and the host waits in vain; whether it happens depends on the random slot of each boot. The decompressor, used when there is no EFI, already keeps the page out of its KASLR choice.  The stub now reads antinomie_boot_gpa= with the same checks (the last valid one counts) and allocates that page as loader data at its address before the kernel, the initrd and the boot data are placed. After exit_boot() loader data is ordinary RAM, so the kernel reserves the page from memblock as before. If the firmware already uses the page the stub warns on the firmware console and boots on; the transport then fails as it would have.
+
+---
+diff --git a/drivers/firmware/efi/libstub/x86-stub.c b/drivers/firmware/efi/libstub/x86-stub.c
+index f8e465da3..9d2bfb40f 100644
+--- a/drivers/firmware/efi/libstub/x86-stub.c
++++ b/drivers/firmware/efi/libstub/x86-stub.c
+@@ -21,6 +21,10 @@
+ #include "efistub.h"
+ #include "x86-stub.h"
+ 
++#ifdef CONFIG_ANTINOMIE
++#include <linux/antinomie_boot.h>
++#endif
++
+ extern char _bss[], _ebss[];
+ 
+ const efi_system_table_t *efi_system_table;
+@@ -847,12 +851,62 @@ static void error(char *str)
+ 
+ static const char *cmdline_memmap_override;
+ 
++#ifdef CONFIG_ANTINOMIE
++static u64 ant_boot_gpa = ANT_BOOT_GPA;
++
++/*
++ * antinomie_boot_gpa=, checked as the decompressor and the kernel check it;
++ * the last valid one counts.
++ */
++static void ant_parse_boot_gpa(const char *cmdline)
++{
++	static const char name[] = "antinomie_boot_gpa=";
++	const char *p = cmdline;
++
++	while ((p = strstr(p, name))) {
++		bool word = p == cmdline || isspace(p[-1]);
++		char *end;
++		u64 gpa;
++
++		p += sizeof(name) - 1;
++		gpa = simple_strtoull(p, &end, 0);
++		if (word && end != p && (!*end || isspace(*end)) &&
++		    !(gpa & (ANT_BOOT_SIZE - 1)) && gpa >= 0x100000 &&
++		    gpa <= ~0ULL - ANT_BOOT_SIZE)
++			ant_boot_gpa = gpa;
++	}
++}
++
++/*
++ * The host's bootstrap page is ordinary free memory to the firmware. Claim it
++ * before the kernel, its initrd and boot data are placed, so that physical
++ * KASLR cannot put the kernel on it (the decompressor avoids it the same way
++ * when there is no EFI). As loader data it is RAM again after exit_boot(),
++ * and the kernel reserves it from memblock (ant_bootstrap_reserve()).
++ */
++static void ant_claim_boot_page(void)
++{
++	efi_physical_addr_t addr = ant_boot_gpa;
++	efi_status_t status;
++
++	status = efi_bs_call(allocate_pages, EFI_ALLOCATE_ADDRESS, EFI_LOADER_DATA,
++			     ANT_BOOT_SIZE / EFI_PAGE_SIZE, &addr);
++	if (status != EFI_SUCCESS)
++		efi_warn("Bootstrap page 0x%llx is not free: 0x%lx\n", ant_boot_gpa,
++			 status);
++}
++#endif
++
+ static efi_status_t parse_options(const char *cmdline)
+ {
+ 	static const char opts[][14] = {
+ 		"mem=", "memmap=", "hugepages="
+ 	};
+ 
++#ifdef CONFIG_ANTINOMIE
++	ant_parse_boot_gpa(cmdline);
++#endif
++
+ 	for (int i = 0; i < ARRAY_SIZE(opts); i++) {
+ 		const char *p = strstr(cmdline, opts[i]);
+ 
+@@ -995,6 +1049,10 @@ void __noreturn efi_stub_entry(efi_handle_t handle,
+ 	if (efi_mem_encrypt > 0)
+ 		hdr->xloadflags |= XLF_MEM_ENCRYPTION;
+ 
++#ifdef CONFIG_ANTINOMIE
++	ant_claim_boot_page();
++#endif
++
+ 	status = efi_decompress_kernel(&kernel_entry);
+ 	if (status != EFI_SUCCESS) {
+ 		efi_err("Failed to decompress kernel\n");
