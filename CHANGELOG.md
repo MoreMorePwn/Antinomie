@@ -11,6 +11,8 @@ it runs.
   Restart unit test stays on its fake GDB. Newly reported dependency advisories
   are assessed against the enabled features and archive APIs in
   `docs/dependency-advisories.md`; the upstream versions are unchanged.
+  The live debugger's attach target outlives its connection deadline, and its
+  Debug on start target outlives the console-close observation window.
 
 - **VM check recovery.** Debugger tool copies are staged and published only
   after completion. Resuming an interrupted regression run replaces an unmarked

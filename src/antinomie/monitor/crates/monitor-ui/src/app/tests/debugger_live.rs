@@ -205,7 +205,9 @@ fn console_session(
             ]
             .iter()
             .any(|error| transcript.contains(error)),
-        "{flavour:?} did not connect; it printed:\n{transcript}\nthe debug session: {:?}",
+        "{flavour:?} did not connect; running={} screen={}\nit printed:\n{transcript}\nthe debug session: {:?}",
+        app.debugger.console.running(),
+        app.debugger.console.contents(),
         app.snapshot.debug
     );
     println!("CONSOLE {flavour:?} connected");
@@ -364,7 +366,10 @@ fn debugger_console_live() {
             if system { " (system pwndbg)" } else { "" }
         );
         // Attach to a running program.
-        let (run, identity) = launch(&mut app, &ctx, &["hw", "600"], false);
+        // A round sleeps 50 ms. Keep the attach target alive beyond the
+        // 60-second connection deadline and command checks even on a cold host;
+        // the test kills it explicitly after detaching.
+        let (run, identity) = launch(&mut app, &ctx, &["hw", "12000"], false);
         app.send(Command::DebugAttach {
             identity: identity.unwrap(),
         });
@@ -376,7 +381,10 @@ fn debugger_console_live() {
             signal: 9,
         });
         // Debug on start: the program is parked before its first instruction.
-        let (run, _) = launch(&mut app, &ctx, &["start", "40"], true);
+        // After detach, closing the console observes it running for two seconds.
+        // Its lifetime must exceed that observation window, then finish within
+        // the existing 60-second completion deadline.
+        let (run, _) = launch(&mut app, &ctx, &["start", "200"], true);
         assert!(pump(&mut app, &ctx, 30, |app| app.snapshot.debug.is_some()));
         console_session(&mut app, &ctx, flavour, main, &run, false);
         // It runs on to its own end once the console is gone.
