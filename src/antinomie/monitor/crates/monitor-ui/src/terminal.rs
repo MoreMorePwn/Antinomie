@@ -270,7 +270,7 @@ impl Terminal {
                 painter.rect_stroke(
                     egui::Rect::from_min_size(pos, cell),
                     0.0,
-                    egui::Stroke::new(1.0_f32, Color32::WHITE),
+                    egui::Stroke::new(1.0_f32, cursor_color()),
                     egui::StrokeKind::Inside,
                 );
             }
@@ -577,9 +577,38 @@ fn color(value: vt100::Color, default: Color32) -> Color32 {
     }
 }
 
+/// The cursor's outline: the terminal's own text color, so it reads on the
+/// dark terminal and on the Light theme's near-white one.
+fn cursor_color() -> Color32 {
+    theme::terminal_text()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_cursor_reads_on_the_terminal_in_every_theme() {
+        let luminance = |color: Color32| {
+            let linear = |channel: u8| {
+                let c = f32::from(channel) / 255.0;
+                if c <= 0.03928 {
+                    c / 12.92
+                } else {
+                    ((c + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * linear(color.r()) + 0.7152 * linear(color.g()) + 0.0722 * linear(color.b())
+        };
+        for theme in theme::Theme::ALL {
+            let ctx = egui::Context::default();
+            theme::install(&ctx);
+            theme::apply_theme(&ctx, theme);
+            let (a, b) = (luminance(cursor_color()), luminance(theme::terminal()));
+            let ratio = (a.max(b) + 0.05) / (a.min(b) + 0.05);
+            assert!(ratio >= 7.0, "{theme:?}: cursor contrast {ratio}");
+        }
+    }
 
     #[test]
     fn historical_grid_survives_small_viewports_and_large_fonts() {
@@ -775,7 +804,7 @@ mod tests {
                 .shapes
                 .iter()
                 .find_map(|shape| match &shape.shape {
-                    egui::Shape::Rect(rect) if rect.stroke.color == Color32::WHITE => {
+                    egui::Shape::Rect(rect) if rect.stroke.color == cursor_color() => {
                         Some(rect.rect)
                     }
                     _ => None,
