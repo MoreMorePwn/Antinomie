@@ -6,7 +6,9 @@ import io
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
+import time
 import unittest
 import unittest.mock
 
@@ -249,6 +251,116 @@ class IsolationTests(unittest.TestCase):
             with self.assertRaises(vm.Failure):
                 vm.forbid_user_folders(home / private / "out")
         vm.forbid_user_folders(Path("/tmp/vm-regress-out"))
+
+    def test_root_home_and_xdg_folders_are_refused(self):
+        home = Path.home()
+        for bad in (Path("/"), home, home / ".local", home / ".local/share", home / ".config", home / ".cache",
+                    Path(os.environ.get("XDG_DATA_HOME") or home / ".local/share"),
+                    Path(os.environ.get("XDG_DATA_HOME") or home / ".local/share") / "antinomie", Path("/home")):
+            with self.subTest(out=str(bad)), self.assertRaises(vm.Failure):
+                vm.forbid_user_folders(bad)
+        vm.forbid_user_folders(home / "vm-regress-out")
+
+    def test_a_link_to_a_protected_folder_is_refused_by_its_real_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            link = Path(tmp) / "out"
+            link.symlink_to(Path.home())
+            with self.assertRaises(vm.Failure):
+                vm.forbid_user_folders(link)
+            data = Path(tmp) / "xdgdata"
+            (data / "antinomie").mkdir(parents=True)
+            with unittest.mock.patch.dict(os.environ, {"XDG_DATA_HOME": str(data)}):
+                with self.assertRaises(vm.Failure):
+                    vm.forbid_user_folders(data / "antinomie" / "out")
+                with self.assertRaises(vm.Failure):
+                    vm.forbid_user_folders(data)
+
+
+class SafeRemoveTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        base = Path(self.tmp.name)
+        self.out = base / "out"
+        self.out.mkdir()
+        self.outside = base / "outside"
+        (self.outside / "victim").mkdir(parents=True)
+        (self.outside / "victim" / "keep").write_text("x")
+
+    def test_plain_folder_is_removed(self):
+        target = self.out / "runs" / "a"
+        target.mkdir(parents=True)
+        (target / "f").write_text("x")
+        vm.safe_rmtree(target, self.out)
+        self.assertFalse(target.exists())
+        vm.safe_rmtree(target, self.out)  # already gone: fine
+
+    def test_linked_parent_is_refused_and_nothing_outside_is_touched(self):
+        (self.out / "runs").symlink_to(self.outside)
+        with self.assertRaises(vm.Failure):
+            vm.safe_rmtree(self.out / "runs" / "victim", self.out)
+        self.assertTrue((self.outside / "victim" / "keep").exists())
+
+    def test_linked_check_data_never_reaches_the_target(self):
+        (self.out / "xdg").symlink_to(self.outside)
+        with self.assertRaises(vm.Failure):
+            vm.clean_check_data(self.out, "victim")
+        self.assertTrue((self.outside / "victim" / "keep").exists())
+
+    def test_link_as_last_component_is_unlinked_not_followed(self):
+        (self.out / "runs").mkdir()
+        (self.out / "runs" / "a").symlink_to(self.outside / "victim")
+        vm.safe_rmtree(self.out / "runs" / "a", self.out)
+        self.assertFalse((self.out / "runs" / "a").is_symlink())
+        self.assertTrue((self.outside / "victim" / "keep").exists())
+
+    def test_outside_path_and_root_itself_are_refused(self):
+        for bad in (self.outside / "victim", self.out, self.out / ".." / "outside"):
+            with self.subTest(path=str(bad)), self.assertRaises(vm.Failure):
+                vm.safe_rmtree(bad, self.out)
+        self.assertTrue((self.outside / "victim" / "keep").exists())
+
+
+class StopTreeTests(unittest.TestCase):
+    """A killed check takes its whole tree with it, and only its own tree."""
+
+    SCRIPT = (
+        "import os, signal, subprocess, sys, time\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "kid = subprocess.Popen([sys.executable, '-c', 'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(300)'])\n"
+        "pid = os.fork()\n"
+        "if pid == 0:\n"
+        "    # a grandchild that is re-parented to init once its parent is gone\n"
+        "    if os.fork() == 0:\n"
+        "        signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "        open(sys.argv[1], 'w').write(str(os.getpid()) + ' ' + str(kid.pid))\n"
+        "        time.sleep(300)\n"
+        "    os._exit(0)\n"
+        "os.waitpid(pid, 0)\n"
+        "time.sleep(300)\n"
+    )
+
+    def test_grandchildren_die_after_the_child_exits(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pids = Path(tmp) / "pids"
+            bystander = subprocess.Popen(["sleep", "300"])
+            self.addCleanup(bystander.wait)
+            self.addCleanup(bystander.kill)
+            child = subprocess.Popen([sys.executable, "-c", self.SCRIPT, str(pids)], start_new_session=True)
+            for _ in range(100):
+                if pids.exists() and pids.read_text().count(" "):
+                    break
+                time.sleep(0.1)
+            orphan, kid = (int(x) for x in pids.read_text().split())
+            self.assertTrue(vm.alive(orphan, None) and vm.alive(kid, None))
+            vm.stop_tree(child, grace=1)
+            for _ in range(50):
+                if not vm.alive(orphan, None) and not vm.alive(kid, None):
+                    break
+                time.sleep(0.1)
+            self.assertFalse(vm.alive(orphan, None), "re-parented grandchild survived")
+            self.assertFalse(vm.alive(kid, None), "child of the child survived")
+            self.assertTrue(vm.alive(bystander.pid, None), "a process outside the tree was killed")
 
 
 class ReportTests(unittest.TestCase):

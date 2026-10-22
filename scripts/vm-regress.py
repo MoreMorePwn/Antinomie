@@ -145,15 +145,39 @@ def default_min_free():
     return ["/mnt/e:5"] if wsl and Path("/mnt/e").is_dir() else []
 
 
+def safe_rmtree(path, root):
+    """Remove path only when it really is below root: no link in the way, no escape.
+
+    shutil.rmtree refuses only a link as the last component, so a linked parent
+    (out/runs -> elsewhere) would be followed. A link as path itself is unlinked,
+    never followed.
+    """
+    path, root = Path(path), Path(root)
+    real_root = Path(os.path.realpath(root))
+    try:
+        rel = Path(os.path.abspath(path)).relative_to(os.path.abspath(root))
+    except ValueError:
+        raise Failure(f"refusing to remove {path}: not below {root}") from None
+    if rel == Path("."):
+        raise Failure(f"refusing to remove {root} itself")
+    parent = Path(os.path.realpath(path.parent))
+    if parent != real_root / rel.parent:
+        raise Failure(f"refusing to remove {path}: a parent folder is a link leaving {root}")
+    if path.is_symlink():
+        path.unlink()
+    elif path.exists():
+        shutil.rmtree(path, ignore_errors=True)
+
+
 def clean_check_data(out, name):
     """Remove the VM disks, recordings and private folders a recorded check left."""
     runs = out / "runs" / name
     if name.startswith("conf-"):
         for bulk in CONFORMANCE_BULK:
-            shutil.rmtree(runs / bulk, ignore_errors=True)
+            safe_rmtree(runs / bulk, out)
     else:
-        shutil.rmtree(runs, ignore_errors=True)
-    shutil.rmtree(out / "xdg" / name, ignore_errors=True)
+        safe_rmtree(runs, out)
+    safe_rmtree(out / "xdg" / name, out)
 
 
 # Environment and processes
@@ -204,23 +228,59 @@ def descendants(pid):
     return found
 
 
+def tree_members(pid):
+    """(pid, start time) of pid's own tree: its descendants and what is left in its session.
+
+    The child runs in a session of its own (start_new_session), so a grandchild
+    re-parented to init after its parent died is still found by the session id.
+    Nothing outside that session or that tree is ever listed.
+    """
+    found = dict(descendants(pid))
+    for entry in Path("/proc").iterdir():
+        if entry.name.isdigit():
+            fields = stat_fields(int(entry.name))
+            if fields and "sccache" not in fields[0] and fields[1][3] == str(pid):
+                found[int(entry.name)] = fields[1][19]
+    found.pop(pid, None)
+    return sorted(found.items())
+
+
+def alive(pid, started):
+    fields = stat_fields(pid)
+    return bool(fields) and fields[1][0] != "Z" and (started is None or fields[1][19] == started)
+
+
 def stop_tree(process, grace=30):
-    """End the child we started and what it started (a VM monitor), nothing else."""
-    below = descendants(process.pid)
+    """End the child we started and what it started (a VM monitor), nothing else.
+
+    The tree is listed again before every signal, and the wait covers every
+    member, not only the child, so a descendant that outlives its parent still
+    gets the KILL round.
+    """
     for sig in (signal.SIGTERM, signal.SIGKILL):
-        for pid, started in [(process.pid, None)] + below:
-            fields = stat_fields(pid)
-            if fields and (started is None or fields[1][19] == started):
+        members = [(process.pid, None)] + tree_members(process.pid)
+        for pid, started in members:
+            if alive(pid, started):
                 try:
                     os.kill(pid, sig)
                 except ProcessLookupError:
                     pass
         deadline = time.monotonic() + grace
-        while time.monotonic() < deadline and process.poll() is None:
-            time.sleep(0.5)
-        if process.poll() is not None:
-            break
+        while time.monotonic() < deadline:
+            members = [(process.pid, None)] + tree_members(process.pid)
+            if process.poll() is not None and not any(alive(pid, started) for pid, started in members[1:]):
+                break
+            time.sleep(0.2)
+        else:
+            continue
+        break
     process.wait()
+    for pid, started in tree_members(process.pid):
+        if alive(pid, started):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
 
 def run_logged(argv, env, cwd, log, timeout):
@@ -230,7 +290,7 @@ def run_logged(argv, env, cwd, log, timeout):
         out.write(f"$ {' '.join(map(str, argv))}\n".encode())
         out.flush()
         process = subprocess.Popen(argv, env=env, cwd=cwd, stdout=out, stderr=subprocess.STDOUT,
-                                   stdin=subprocess.DEVNULL)
+                                   stdin=subprocess.DEVNULL, start_new_session=True)
         try:
             code = process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -410,7 +470,7 @@ def old_host(spec, out):
 
     def cleanup():
         git("worktree", "remove", "--force", str(tree), check=False)
-        shutil.rmtree(tree, ignore_errors=True)
+        safe_rmtree(tree, out)
         git("worktree", "prune", check=False)
 
     try:
@@ -494,9 +554,9 @@ def run_check(check, ctx, args, attempt):
     if problem:
         return {**result, "status": "ERROR", "seconds": 0.0, "detail": f"not started: {problem}"}
     runs = out / "runs" / check.name
-    for stale in (runs, out / "runs" / f"{check.name}{suffix}"):
-        shutil.rmtree(stale, ignore_errors=True)
     try:
+        for stale in (runs, out / "runs" / f"{check.name}{suffix}"):
+            safe_rmtree(stale, out)
         argv, extra = command_for(check, ctx, args)
         if check.vm:
             memwait(MIN_MEM_KIB, args.mem_wait_limit)
@@ -620,11 +680,31 @@ def parse(argv):
     return args
 
 
-def forbid_user_folders(out):
-    """The output folder must not sit in the app's own data, settings or install."""
+def protected_folders():
+    """(folder, whole) pairs: whole means the folder and everything in it is off limits."""
     home = Path(os.path.expanduser("~"))
-    for private in (home / "antinomie", home / ".local/share/antinomie", home / ".config/antinomie"):
-        if out == private or private in out.parents:
+    xdg = {}
+    for var, default in (("XDG_DATA_HOME", ".local/share"), ("XDG_CONFIG_HOME", ".config"),
+                         ("XDG_CACHE_HOME", ".cache"), ("XDG_STATE_HOME", ".local/state")):
+        xdg[var] = Path(os.environ.get(var) or home / default)
+    keep = [Path("/"), home, home / ".local", *xdg.values()]
+    inside = [home / "antinomie"] + [folder / "antinomie" for folder in xdg.values()]
+    resolve = lambda path: Path(os.path.realpath(path))
+    return [resolve(p) for p in keep], [resolve(p) for p in inside]
+
+
+def forbid_user_folders(out):
+    """The output folder must not be, hold or sit in the user's home, XDG folders or the app's data.
+
+    out is compared by its real path, so a link to one of them is refused too.
+    """
+    out = Path(os.path.realpath(out))
+    keep, inside = protected_folders()
+    for folder in keep:
+        if out == folder or out in folder.parents:
+            raise Failure(f"--out {out} is or contains {folder}, which must never be cleaned")
+    for private in inside:
+        if out == private or private in out.parents or out in private.parents:
             raise Failure(f"--out {out} is inside {private}, which belongs to the app")
 
 
