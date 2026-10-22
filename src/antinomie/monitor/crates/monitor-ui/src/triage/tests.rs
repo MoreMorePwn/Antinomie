@@ -887,7 +887,17 @@ fn encrypted_and_binary_sessions_h2c_requests_and_quic_hosts_come_from_tshark() 
             .find(|row| row[3] == format!("{protocol} {kind}"))
             .unwrap_or_else(|| panic!("{protocol} {kind} in {rows:?}"))
     };
-    let tls = find("TLSv1.2", "client hello");
+    // Preserve the protocol column produced by the installed TShark. Older
+    // versions label the TLS 1.0 record envelope, newer ones the TLS 1.2 hello.
+    let tls = rows
+        .iter()
+        .find(|row| {
+            matches!(
+                row[3].as_str(),
+                "TLSv1 client hello" | "TLSv1.2 client hello"
+            )
+        })
+        .expect("TLS client hello session");
     assert_eq!(tls[4], "secure.example.test");
     assert_eq!(tls[5], "h2, http/1.1");
     assert!(tls[6].contains("3 cipher suites"), "{tls:?}");

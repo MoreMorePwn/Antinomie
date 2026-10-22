@@ -6,6 +6,12 @@ it runs.
 
 ## 0.7.0 — Unreleased
 
+- **Portable release checks.** TLS fixture checks accept TShark's older record
+  label while verifying the ClientHello version and evidence; the debugger
+  Restart unit test stays on its fake GDB. Newly reported dependency advisories
+  are assessed against the enabled features and archive APIs in
+  `docs/dependency-advisories.md`; the upstream versions are unchanged.
+
 - **VM check recovery.** Debugger tool copies are staged and published only
   after completion. Resuming an interrupted regression run replaces an unmarked
   partial copy instead of starting pwndbg with a missing runtime library.
