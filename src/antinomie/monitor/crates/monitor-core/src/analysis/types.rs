@@ -254,10 +254,32 @@ pub struct AnalysisListing {
 
 /// The order a listing is read in: the table column and the direction.
 /// Strings columns are Offset (0), Encoding (1), Length (2) and Text (3).
+/// The other tables' columns differ by view (sections, symbols, ...), so
+/// their sort names its column in `field` instead.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ListingSort {
     pub column: usize,
     pub descending: bool,
+    pub field: Option<StructureField>,
+}
+
+/// A column of the Structures and other record tables to sort by. Numbers order numerically
+/// and come before rows that have none; the rest order as text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StructureField {
+    Name,
+    Value,
+    Address,
+    Offset,
+    VirtualSize,
+    FileSize,
+    Flags,
+    Library,
+    Ordinal,
+    Kind,
+    Scope,
+    Defined,
+    Size,
 }
 
 /// One page of a listing, optionally filtered by a case-insensitive query.

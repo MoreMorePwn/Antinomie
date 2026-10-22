@@ -211,9 +211,9 @@ pub fn read_listing_page_with(
 
 /// [`read_listing_page_with`] with the matching rows ordered by `sort` before
 /// the page is cut, so `start` counts in the sorted order over the whole
-/// listing, not within one page. Only a Strings listing sorts (see
-/// [`ListingSort`]); for any other category `sort` is ignored and the page
-/// says so. Ties keep the listing order. Holds every matching row while it
+/// listing, not within one page. A Strings listing sorts by column and every
+/// listing but the disassembly and the decompiled source by field (see
+/// [`ListingSort`]); otherwise `sort` is ignored and the page says so. Ties keep the listing order. Holds every matching row while it
 /// sorts, which the listing's size bound keeps small.
 #[allow(clippy::too_many_arguments)]
 pub fn read_listing_page_sorted(
@@ -226,7 +226,12 @@ pub fn read_listing_page_sorted(
     sort: Option<ListingSort>,
     mut keep: impl FnMut(&AnalysisEntry) -> bool,
 ) -> Result<AnalysisListingPage, String> {
-    let sort = sort.filter(|_| kind == AnalysisKind::Strings);
+    let sort = sort.filter(|sort| match kind {
+        AnalysisKind::Strings => sort.field.is_none(),
+        // Disassembly and decompiled source stay in the order that means something.
+        AnalysisKind::Disassembly | AnalysisKind::Decompilation => false,
+        _ => sort.field.is_some(),
+    });
     let report = super::open_report(directory)?;
     if report.id != report_id {
         return Err("saved analysis report identity mismatch".into());
@@ -274,7 +279,10 @@ pub fn read_listing_page_sorted(
         return Err("listing row count disagrees with its report".into());
     }
     if let Some(sort) = sort {
-        sort_strings(&mut matches, sort);
+        match sort.field {
+            Some(field) => sort_structures(&mut matches, field, sort.descending),
+            None => sort_strings(&mut matches, sort),
+        }
         rows = matches
             .into_iter()
             .skip(usize::try_from(start).unwrap_or(usize::MAX))
@@ -312,6 +320,106 @@ fn sort_strings(rows: &mut [(u64, AnalysisEntry)], sort: ListingSort) {
         _ => rows.sort_by_cached_key(|(_, entry)| entry.value.to_lowercase()),
     }
     if sort.descending {
+        rows.reverse();
+    }
+}
+
+/// The number of a Structures cell, as its table shows it.
+fn structure_number(field: StructureField, entry: &AnalysisEntry) -> Option<u64> {
+    let record = entry.record.as_ref();
+    match field {
+        StructureField::Offset => record
+            .and_then(|r| r.location.as_ref())
+            .and_then(|l| l.file_range)
+            .map(|r| r.offset)
+            .or(entry.offset)
+            .or_else(|| match &record?.data {
+                AnalysisData::Signature { offset, .. } => Some(*offset),
+                _ => None,
+            }),
+        StructureField::Address => record
+            .and_then(|r| r.location.as_ref())
+            .filter(|l| l.kind != AnalysisAddressKind::FileOffset)
+            .map(|l| l.value)
+            .or_else(|| match &record?.data {
+                AnalysisData::Section { address, .. } => Some(*address),
+                AnalysisData::Symbol { address, .. } | AnalysisData::Export { address, .. } => {
+                    *address
+                }
+                _ => None,
+            }),
+        _ => match (&record?.data, field) {
+            (AnalysisData::Section { virtual_size, .. }, StructureField::VirtualSize) => {
+                Some(*virtual_size)
+            }
+            (AnalysisData::Section { file_size, .. }, StructureField::FileSize) => *file_size,
+            (AnalysisData::Symbol { size, .. }, StructureField::Size) => Some(*size),
+            (
+                AnalysisData::Import { ordinal, .. } | AnalysisData::Export { ordinal, .. },
+                StructureField::Ordinal,
+            ) => *ordinal,
+            _ => None,
+        },
+    }
+}
+
+/// The text of a Structures cell that has no number.
+fn structure_text(field: StructureField, entry: &AnalysisEntry) -> String {
+    let data = entry.record.as_ref().map(|record| &record.data);
+    match (field, data) {
+        (StructureField::Value, _) => entry.value.to_lowercase(),
+        (StructureField::Name, data) => match data {
+            Some(
+                AnalysisData::Section { name, .. }
+                | AnalysisData::Symbol { name, .. }
+                | AnalysisData::Function { name, .. },
+            ) => name.to_lowercase(),
+            Some(
+                AnalysisData::Import {
+                    name: Some(name), ..
+                }
+                | AnalysisData::Export {
+                    name: Some(name), ..
+                },
+            ) => name.to_lowercase(),
+            _ => entry.label.to_lowercase(),
+        },
+        (
+            StructureField::Flags,
+            Some(AnalysisData::Section {
+                raw_flags, flags, ..
+            }),
+        ) => format!("{raw_flags} {}", flags.join(" | ")).to_lowercase(),
+        (StructureField::Library, Some(AnalysisData::Import { library, .. })) => {
+            library.clone().unwrap_or_default().to_lowercase()
+        }
+        (
+            StructureField::Scope,
+            Some(AnalysisData::Symbol { scope, .. } | AnalysisData::Property { scope, .. }),
+        ) => scope.to_lowercase(),
+        (StructureField::Kind, Some(AnalysisData::Symbol { kind, .. })) => kind.to_lowercase(),
+        (StructureField::Defined, Some(AnalysisData::Symbol { undefined, .. })) => {
+            if *undefined { "undefined" } else { "defined" }.into()
+        }
+        _ => String::new(),
+    }
+}
+
+/// Order Structures rows by one table column: numbers numerically (rows
+/// without one after them), the rest as text ignoring case.
+fn sort_structures(rows: &mut [(u64, AnalysisEntry)], field: StructureField, descending: bool) {
+    rows.sort_by(|(_, left), (_, right)| {
+        match (
+            structure_number(field, left),
+            structure_number(field, right),
+        ) {
+            (Some(left), Some(right)) => left.cmp(&right),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            _ => structure_text(field, left).cmp(&structure_text(field, right)),
+        }
+    });
+    if descending {
         rows.reverse();
     }
 }
@@ -561,6 +669,122 @@ mod tests {
         root
     }
 
+    /// A Structures listing of sections `(name, address, virtual size, file size)`.
+    fn sections_listing(sections: &[(&str, u64, u64, Option<u64>)]) -> std::path::PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("ant-listing-{}", crate::storage::unique_id()));
+        crate::storage::private_dir(&root).unwrap();
+        std::fs::create_dir(root.join("listings")).unwrap();
+        let mut writer = ListingWriter::create(
+            &root.join("listings"),
+            AnalysisKind::Structures,
+            LISTING_MAX_SIZE,
+        )
+        .unwrap();
+        for (name, address, virtual_size, file_size) in sections {
+            assert!(writer.push(
+                "Section",
+                *name,
+                None,
+                AnalysisData::Section {
+                    name: (*name).into(),
+                    address: *address,
+                    virtual_size: *virtual_size,
+                    file_size: *file_size,
+                    raw_flags: "0x6".into(),
+                    flags: vec!["ALLOC".into()],
+                }
+            ));
+        }
+        let mut section = AnalysisSection::new(AnalysisKind::Structures);
+        section.state = AnalysisSectionState::Complete;
+        section.listing = Some(writer.finish(false).unwrap());
+        let report = AnalysisReport {
+            id: "structs".into(),
+            state: AnalysisState::Complete,
+            source_path: "/fixture".into(),
+            specimen_sha256: None,
+            specimen_len: Some(0x1000),
+            reason: None,
+            sections: vec![section],
+        };
+        std::fs::write(
+            root.join("report.json"),
+            serde_json::to_vec(&report).unwrap(),
+        )
+        .unwrap();
+        root
+    }
+
+    #[test]
+    fn a_structures_sort_names_its_field_and_orders_the_whole_listing() {
+        let root = sections_listing(&[
+            (".text", 0x3000, 0x500, Some(0x400)),
+            (".bss", 0x1000, 0x80, None),
+            (".Data", 0x2000, 0x10, Some(0x10)),
+        ]);
+        let names = |field, descending, start, count| {
+            let page = read_listing_page_sorted(
+                &root,
+                "structs",
+                AnalysisKind::Structures,
+                start,
+                count,
+                "",
+                Some(ListingSort {
+                    column: 0,
+                    descending,
+                    field: Some(field),
+                }),
+                |_| true,
+            )
+            .unwrap();
+            assert!(page.sort.is_some_and(|sort| sort.field == Some(field)));
+            page.rows
+                .iter()
+                .map(|(_, entry)| entry.value.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            names(StructureField::Name, false, 0, 9),
+            [".bss", ".Data", ".text"]
+        );
+        assert_eq!(
+            names(StructureField::Address, true, 0, 9),
+            [".text", ".Data", ".bss"]
+        );
+        assert_eq!(
+            names(StructureField::VirtualSize, false, 0, 9),
+            [".Data", ".bss", ".text"]
+        );
+        // A row without a number follows the rows that have one.
+        assert_eq!(
+            names(StructureField::FileSize, false, 0, 9),
+            [".Data", ".text", ".bss"]
+        );
+        // The page is cut after sorting.
+        assert_eq!(names(StructureField::Address, false, 2, 9), [".text"]);
+        // Without a field a Structures listing is not sorted, and the
+        // disassembly never is.
+        let plain = read_listing_page_sorted(
+            &root,
+            "structs",
+            AnalysisKind::Structures,
+            0,
+            9,
+            "",
+            Some(ListingSort {
+                column: 1,
+                descending: true,
+                field: None,
+            }),
+            |_| true,
+        )
+        .unwrap();
+        assert_eq!(plain.sort, None);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn a_sorted_page_orders_the_whole_listing_before_it_is_cut() {
         let root = strings_listing(&[
@@ -578,7 +802,11 @@ mod tests {
                 start,
                 2,
                 &keep,
-                Some(ListingSort { column, descending }),
+                Some(ListingSort {
+                    column,
+                    descending,
+                    field: None,
+                }),
                 |entry| entry.value.contains(&keep),
             )
             .unwrap()
@@ -610,7 +838,8 @@ mod tests {
             narrowed.sort,
             Some(ListingSort {
                 column: 0,
-                descending: true
+                descending: true,
+                field: None
             })
         );
         // Another category ignores the sort.
@@ -626,6 +855,7 @@ mod tests {
             Some(ListingSort {
                 column: 0,
                 descending: true,
+                field: None,
             }),
             |_| true,
         )

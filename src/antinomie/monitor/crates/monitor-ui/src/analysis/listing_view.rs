@@ -7,7 +7,7 @@ use super::ReportAction;
 use crate::theme;
 use antinomie_monitor_core::{
     AnalysisData, AnalysisEntry, AnalysisKind, AnalysisListingPage, AnalysisReport,
-    AnalysisSection, ListingSort, LISTING_PAGE_MAX_ROWS,
+    AnalysisSection, ListingSort, StructureField, LISTING_PAGE_MAX_ROWS,
 };
 use eframe::egui::{self, Color32, FontId, RichText};
 use egui_extras::{Column, TableBuilder};
@@ -59,13 +59,7 @@ pub(super) fn show(
 ) -> Option<ReportAction> {
     let kind = section.kind;
     let mut action = None;
-    let sort = (kind == AnalysisKind::Strings)
-        .then(|| crate::triage::sort_current(ui.ctx(), STRINGS_TABLE))
-        .flatten()
-        .map(|spec| ListingSort {
-            column: spec.column,
-            descending: spec.descending,
-        });
+    let sort = listing_sort(ui.ctx(), kind, state.scope);
     let request = |start: u64, query: &str| {
         Some(ReportAction::ReadListing {
             report_id: report.id.clone(),
@@ -327,7 +321,12 @@ pub(super) fn show(
                                 AnalysisKind::Disassembly | AnalysisKind::Decompilation => {
                                     ordered_head(ui, title, kind)
                                 }
-                                _ => crate::widgets::table::head(ui, title),
+                                _ => crate::table_sort::header(
+                                    ui,
+                                    &sort_table(kind, state.scope),
+                                    column,
+                                    title,
+                                ),
                             });
                         }
                     })
@@ -964,6 +963,71 @@ fn kind_salt(kind: AnalysisKind) -> &'static str {
         AnalysisKind::Decompilation => "decompilation",
         AnalysisKind::Strings => "strings",
         _ => "other",
+    }
+}
+
+/// The sort state of a record table: one per category, and for the Structures
+/// views one per view, whose columns differ.
+fn sort_table(kind: AnalysisKind, scope: Option<Structure>) -> String {
+    match (kind, scope) {
+        (AnalysisKind::Structures, Some(scope)) => format!("static-structures-{}", scope.label()),
+        _ => format!("static-{}", kind_salt(kind)),
+    }
+}
+
+/// The column a header of this table stands for.
+fn sort_field(
+    kind: AnalysisKind,
+    scope: Option<Structure>,
+    column: usize,
+) -> Option<StructureField> {
+    use records::Column as C;
+    let shown = match (kind, scope) {
+        (AnalysisKind::Structures, Some(scope)) => records::columns(kind, scope, false),
+        _ => &[C::Name, C::Value],
+    };
+    Some(match shown.get(column)? {
+        C::Name => StructureField::Name,
+        C::Value => StructureField::Value,
+        C::Address => StructureField::Address,
+        C::Offset => StructureField::Offset,
+        C::VirtualSize => StructureField::VirtualSize,
+        C::FileSize => StructureField::FileSize,
+        C::Flags => StructureField::Flags,
+        C::Library => StructureField::Library,
+        C::Ordinal => StructureField::Ordinal,
+        C::Kind => StructureField::Kind,
+        C::Scope => StructureField::Scope,
+        C::Defined => StructureField::Defined,
+        C::Size => StructureField::Size,
+        _ => return None,
+    })
+}
+
+/// The order the header clicks chose for this listing, as the archive reader
+/// takes it: the whole listing is sorted there, not the page on screen.
+fn listing_sort(
+    ctx: &egui::Context,
+    kind: AnalysisKind,
+    scope: Option<Structure>,
+) -> Option<ListingSort> {
+    match kind {
+        AnalysisKind::Disassembly | AnalysisKind::Decompilation => None,
+        AnalysisKind::Strings => {
+            crate::triage::sort_current(ctx, STRINGS_TABLE).map(|spec| ListingSort {
+                column: spec.column,
+                descending: spec.descending,
+                field: None,
+            })
+        }
+        _ => {
+            let spec = crate::triage::sort_current(ctx, &sort_table(kind, scope))?;
+            Some(ListingSort {
+                column: spec.column,
+                descending: spec.descending,
+                field: Some(sort_field(kind, scope, spec.column)?),
+            })
+        }
     }
 }
 
