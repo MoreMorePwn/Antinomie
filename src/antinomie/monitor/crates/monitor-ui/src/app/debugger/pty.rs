@@ -325,13 +325,17 @@ mod tests {
         let root = std::env::temp_dir().join(format!("ant-pty-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let record = root.join("record");
+        // The program says when its trap is in: a Ctrl-C before that would end
+        // the shell (a busy machine can take longer than any fixed wait to
+        // start it), which is not what is tested here.
         let script = format!(
-            "trap 'echo interrupted >> {0}' INT; n=0; while [ $n -lt 200 ]; do n=$((n+1)); read -r line || sleep 0.05; echo $line >> {0}; \
+            "trap 'echo interrupted >> {0}' INT; echo ready; n=0; while [ $n -lt 200 ]; do n=$((n+1)); read -r line || sleep 0.05; echo $line >> {0}; \
              [ \"$line\" = quit ] && exit 0; done",
             record.display()
         );
-        let child = PtyChild::spawn(&shell(&script), 24, 80, || {}).unwrap();
-        std::thread::sleep(Duration::from_millis(300));
+        let mut child = PtyChild::spawn(&shell(&script), 24, 80, || {}).unwrap();
+        let (text, ended) = read_until(&mut child, "ready");
+        assert!(text.contains("ready") && ended.is_none(), "{text:?}");
         drop(child);
         let deadline = Instant::now() + Duration::from_secs(10);
         let mut seen = String::new();
