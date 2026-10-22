@@ -71,9 +71,12 @@ impl MonitorApp {
                 (RunFilter::Live, "Live"),
                 (RunFilter::Past, "Past"),
             ] {
-                if ui
-                    .selectable_label(self.run_filter == filter, label)
-                    .clicked()
+                if crate::widgets::tab(
+                    ui,
+                    self.run_filter == filter,
+                    &crate::widgets::TabItem::new(label),
+                )
+                .clicked()
                 {
                     self.run_filter = filter;
                 }

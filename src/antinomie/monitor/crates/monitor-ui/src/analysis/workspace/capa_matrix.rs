@@ -106,34 +106,20 @@ fn matrix(section: &AnalysisSection, mbc: bool) -> Vec<(String, Vec<Technique<'_
 }
 
 pub(super) fn toggle(ui: &mut egui::Ui, state: &mut CapaState) {
-    ui.horizontal_wrapped(|ui| {
-        if ui
-            .selectable_label(
-                !state.table && !state.mbc,
-                format!("{} ATT&CK", egui_phosphor::regular::GRID_FOUR),
-            )
-            .clicked()
-        {
+    use crate::widgets::{tab, tab_row, TabItem};
+    tab_row(ui, |ui| {
+        let attack = TabItem::new(format!("{} ATT&CK", egui_phosphor::regular::GRID_FOUR));
+        if tab(ui, !state.table && !state.mbc, &attack).clicked() {
             state.table = false;
             state.mbc = false;
         }
-        if ui
-            .selectable_label(
-                !state.table && state.mbc,
-                format!("{} MBC", egui_phosphor::regular::GRID_FOUR),
-            )
-            .clicked()
-        {
+        let mbc = TabItem::new(format!("{} MBC", egui_phosphor::regular::GRID_FOUR));
+        if tab(ui, !state.table && state.mbc, &mbc).clicked() {
             state.table = false;
             state.mbc = true;
         }
-        if ui
-            .selectable_label(
-                state.table,
-                format!("{} Table", egui_phosphor::regular::TABLE),
-            )
-            .clicked()
-        {
+        let table = TabItem::new(format!("{} Table", egui_phosphor::regular::TABLE));
+        if tab(ui, state.table, &table).clicked() {
             state.table = true;
         }
     });
@@ -334,5 +320,26 @@ mod tests {
             mbc[0].1[0].label,
             "Obfuscated Files or Information / Encoding-Standard Algorithm [E1027.m02]"
         );
+    }
+
+    #[test]
+    fn the_matrix_toggle_is_a_thin_bordered_tab_row_that_switches_views() {
+        use crate::table_sort::testing;
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let state = std::cell::RefCell::new(CapaState::default());
+        let mut show = |ui: &mut egui::Ui| toggle(ui, &mut state.borrow_mut());
+        testing::click(
+            &ctx,
+            &format!("{} MBC", egui_phosphor::regular::GRID_FOUR),
+            &mut show,
+        );
+        assert!(state.borrow().mbc && !state.borrow().table);
+        testing::click(
+            &ctx,
+            &format!("{} Table", egui_phosphor::regular::TABLE),
+            &mut show,
+        );
+        assert!(state.borrow().table);
     }
 }

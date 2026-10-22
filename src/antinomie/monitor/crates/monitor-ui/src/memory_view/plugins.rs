@@ -174,8 +174,7 @@ impl MemoryView {
         let mut chosen_os = None;
         ui.horizontal(|ui| {
             for os in Os::ALL {
-                if ui
-                    .selectable_label(list_os == os, os.label())
+                if crate::widgets::tab(ui, list_os == os, &crate::widgets::TabItem::new(os.label()))
                     .on_hover_text(format!("List the plugins for {} dumps", os.label()))
                     .clicked()
                 {

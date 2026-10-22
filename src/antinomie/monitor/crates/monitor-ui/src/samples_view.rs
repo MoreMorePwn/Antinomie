@@ -807,18 +807,21 @@ impl SamplesView {
     /// The source to search: each has its own key and its own results.
     fn source_row(&mut self, ui: &mut egui::Ui, cx: &SamplesContext<'_>) {
         let mut switch = None;
-        ui.horizontal(|ui| {
+        crate::widgets::tab_row(ui, |ui| {
             ui.label(RichText::new("Source").color(theme::muted()));
             for source in Source::ALL {
-                if ui
-                    .selectable_label(self.source == source, source.label())
-                    .on_hover_text(match source {
-                        Source::MalwareBazaar => {
-                            "abuse.ch's MalwareBazaar: families, tags, architectures"
-                        }
-                        Source::MalShare => "MalShare: hashes, file types, file names and sources",
-                    })
-                    .clicked()
+                if crate::widgets::tab(
+                    ui,
+                    self.source == source,
+                    &crate::widgets::TabItem::new(source.label()),
+                )
+                .on_hover_text(match source {
+                    Source::MalwareBazaar => {
+                        "abuse.ch's MalwareBazaar: families, tags, architectures"
+                    }
+                    Source::MalShare => "MalShare: hashes, file types, file names and sources",
+                })
+                .clicked()
                     && self.source != source
                 {
                     switch = Some(source);
