@@ -55,3 +55,6 @@
 0055-antinomie-an-io-uring-entry-only-one-process-can-write-is-attributed-to-it.patch
 0056-antinomie-async-records-wait-for-room-instead-of-being-lost-while-the-host-waits.patch
 0057-antinomie-an-io-uring-rename-link-or-unlink-names-its-file-from-the-operation.patch
+0058-antinomie-debug-engine-reads-a-thread-s-registers-only-while-its-stack-is-held.patch
+0059-antinomie-debug-engine-never-waits-without-bound-for-a-step.patch
+0060-antinomie-a-clone-clone-vfork-child-without-clone-vm-keeps-its-own-memory.patch

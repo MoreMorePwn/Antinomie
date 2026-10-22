@@ -712,9 +712,9 @@ Full-tier checks that failed now and then on this shared host, and why.
   imports the base (about 20 s on this disk): the check gives it 120 s.
 * **`.gdb_history` in the working directory.** pwndbg turns history saving on and
   gdb's default file is `.gdb_history` in the working directory, the app's; the
-  live check left one in `crates/monitor-ui`. The pwndbg console's history goes to
-  its private home (`GDBHISTFILE`); GEF names `~/.gdb_history` itself. The check
-  fails if one appears in the working directory.
+  live check left one in `crates/monitor-ui`. The console's history goes to its
+  private home (`GDBHISTFILE` for pwndbg; GEF names `~/.gdb_history`, which is
+  that home). The check fails if one appears in the working directory.
 * **`debug-p3` gdb timeouts.** The phase 3 gdb tests set the remote timeout with
   `set remote timeout 30`, which gdb does not have (the command is
   `remotetimeout`; gdb printed "Undefined set remote command"), and the phase 2
