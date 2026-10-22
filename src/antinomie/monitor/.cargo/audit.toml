@@ -1,6 +1,6 @@
-# Reviewed advisories (cargo audit). All come through yara-x 1.21.0, the
-# newest release, which pins wasmtime 45 and depends on rsa; revisit when
-# yara-x updates them.
+# Reviewed advisory applicability for the pinned host build. See
+# docs/dependency-advisories.md for sources, enabled features and invalidation
+# conditions. These entries do not claim that the dependencies are patched.
 [advisories]
 ignore = [
     # rsa: timing side channel in private-key decryption and signing; yara-x
@@ -14,4 +14,19 @@ ignore = [
     "RUSTSEC-2026-0222",
     "RUSTSEC-2026-0327",
     "RUSTSEC-2026-0269",
+    # Recursive Wasm types: no guest-supplied Wasm/compiled rules; YARA-X
+    # builds core modules from its fixed type schema. No gc feature enabled.
+    "RUSTSEC-2026-0359",
+    # Cranelift aarch64 backend: the distributed host target is x86-64.
+    "RUSTSEC-2026-0379",
+    # Component-model async entrypoints and component handle tables: neither
+    # component-model nor async is enabled in this Wasmtime dependency.
+    "RUSTSEC-2026-0362",
+    "RUSTSEC-2026-0363",
+    # zip's extract()/stream-extract helpers are not called. Our two archive
+    # readers iterate entries; rule imports reject symlinks and the tool
+    # extractor validates links and masks mode bits before setting them.
+    "RUSTSEC-2026-0367",
+    "RUSTSEC-2026-0368",
+    "RUSTSEC-2026-0369",
 ]

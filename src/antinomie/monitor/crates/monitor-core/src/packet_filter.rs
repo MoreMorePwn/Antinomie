@@ -1901,8 +1901,7 @@ mod tests {
         let protocols: std::collections::BTreeSet<&str> =
             packets.iter().map(|p| p.protocol.as_str()).collect();
         for expected in [
-            "DNS", "TLSv1.2", "TLSv1.3", "HTTP2", "SSH", "HTTP", "SMB", "FTP", "SMTP", "NTP",
-            "ARP", "QUIC",
+            "DNS", "TLSv1.3", "HTTP2", "SSH", "HTTP", "SMB", "FTP", "SMTP", "NTP", "ARP", "QUIC",
         ] {
             assert!(protocols.contains(expected), "{expected} in {protocols:?}");
         }
@@ -1913,7 +1912,25 @@ mod tests {
                 .map(|p| p.info.clone())
                 .unwrap()
         };
-        assert!(info("TLSv1.2").contains("Client Hello (SNI=secure.example.test)"));
+        // TShark 4.2 names this packet after its TLS 1.0 record envelope;
+        // newer releases use the ClientHello's TLS 1.2 version. Keep its raw
+        // display label and prove the actual handshake bytes in either case.
+        let tls = packets
+            .iter()
+            .find(|packet| {
+                matches!(packet.protocol.as_str(), "TLSv1" | "TLSv1.2")
+                    && packet
+                        .info
+                        .contains("Client Hello (SNI=secure.example.test)")
+            })
+            .expect("the TLS ClientHello must be decoded");
+        let detail =
+            parse::load_detail(Path::new("tshark"), &snapshot, tls.number, &state, 0).unwrap();
+        assert!(
+            detail.tree.nodes.iter().any(|node| {
+                node.name == "tls.handshake.version" && node.label.contains("0x0303")
+            })
+        );
         assert!(info("QUIC").contains("Initial"));
         assert!(info("SSH").contains("SSH-2.0"));
         // The QUIC Initial's server name and ALPN come out of TShark without keys.

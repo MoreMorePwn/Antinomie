@@ -464,8 +464,15 @@ fn the_console_runs_gdb_on_a_terminal_connected_to_the_session_port() {
     let _ = stream.read(&mut [0u8; 1]);
     // Restart starts a new one; closing the session ends it.
     app.debugger.console.restart();
+    // Restart invalidates the executable lookup. Keep the test on its fake
+    // debugger instead of silently requiring a system gdb on this machine.
+    app.debugger.console.set_gdb(Some(gdb));
     render(&mut app, &ctx, size);
-    assert!(app.debugger.console.running());
+    assert!(
+        app.debugger.console.running(),
+        "{}",
+        app.debugger.console.contents()
+    );
     app.debugger.track_session(None);
     assert!(!app.debugger.console.running());
     let _ = std::fs::remove_dir_all(&root);
