@@ -442,6 +442,20 @@ class ToolCopyTests(unittest.TestCase):
             with unittest.mock.patch.object(vm.shutil, "copytree", side_effect=AssertionError("copied twice")):
                 vm.tools_dir(args, out)
 
+    def test_a_linked_tool_parent_is_refused_before_any_write(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            args, out = self.fixture(root)
+            private = root / "private"
+            private.mkdir()
+            (private / "keep").write_text("untouched")
+            out.mkdir()
+            (out / "debugger-data").symlink_to(private, target_is_directory=True)
+            with self.assertRaises(vm.Failure):
+                vm.tools_dir(args, out)
+            self.assertEqual(list(private.iterdir()), [private / "keep"])
+            self.assertEqual((private / "keep").read_text(), "untouched")
+
 
 class ReportTests(unittest.TestCase):
     def result(self, name, status, attempts=None):

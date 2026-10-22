@@ -484,6 +484,8 @@ def old_host(spec, out):
 def tools_dir(args, out):
     """The managed gef and pwndbg the Debugger console check needs, in a private data folder."""
     data = out / "debugger-data"
+    if Path(os.path.realpath(data / "tools")) != Path(os.path.realpath(out)) / "debugger-data/tools":
+        raise Failure("debugger tool output has a linked parent")
     (data / "tools").mkdir(parents=True, exist_ok=True)
     source = Path(args.debugger_tools).expanduser() / "tools" if args.debugger_tools else None
     for tool in ("gef", "pwndbg"):
@@ -498,7 +500,7 @@ def tools_dir(args, out):
                 staged = Path(temporary) / tool
                 shutil.copytree(source / tool, staged, symlinks=True)
                 (staged / ".vm-regress-copy-complete").write_text("1\n")
-                safe_rmtree(destination, data)
+                safe_rmtree(destination, out)
                 staged.rename(destination)
     return data
 
