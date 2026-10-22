@@ -401,6 +401,48 @@ class StopTreeTests(unittest.TestCase):
             self.assertTrue(vm.alive(bystander.pid, None), "a process outside the tree was killed")
 
 
+class ToolCopyTests(unittest.TestCase):
+    def fixture(self, root):
+        source, out = root / "source", root / "out"
+        for tool in ("gef", "pwndbg"):
+            folder = source / "tools" / tool
+            folder.mkdir(parents=True)
+            (folder / "entry").write_text(tool)
+            (folder / "runtime").write_text("required library")
+        return vm.argparse.Namespace(debugger_tools=str(source)), out
+
+    def test_resuming_replaces_an_incomplete_copy(self):
+        with tempfile.TemporaryDirectory() as name:
+            args, out = self.fixture(Path(name))
+            partial = out / "debugger-data/tools/pwndbg"
+            partial.mkdir(parents=True)
+            (partial / "entry").write_text("incomplete")
+            data = vm.tools_dir(args, out)
+            self.assertEqual((data / "tools/pwndbg/runtime").read_text(), "required library")
+            self.assertEqual((partial / "entry").read_text(), "pwndbg")
+            self.assertTrue((partial / ".vm-regress-copy-complete").is_file())
+
+    def test_a_failed_copy_does_not_publish_or_destroy_the_previous_folder(self):
+        with tempfile.TemporaryDirectory() as name:
+            args, out = self.fixture(Path(name))
+            partial = out / "debugger-data/tools/gef"
+            partial.mkdir(parents=True)
+            (partial / "entry").write_text("previous")
+            with unittest.mock.patch.object(vm.shutil, "copytree", side_effect=OSError("interrupted")):
+                with self.assertRaises(OSError):
+                    vm.tools_dir(args, out)
+            self.assertEqual((partial / "entry").read_text(), "previous")
+            self.assertFalse((partial / ".vm-regress-copy-complete").exists())
+            self.assertEqual(list((out / "debugger-data/tools").iterdir()), [partial])
+
+    def test_a_complete_copy_is_reused(self):
+        with tempfile.TemporaryDirectory() as name:
+            args, out = self.fixture(Path(name))
+            vm.tools_dir(args, out)
+            with unittest.mock.patch.object(vm.shutil, "copytree", side_effect=AssertionError("copied twice")):
+                vm.tools_dir(args, out)
+
+
 class ReportTests(unittest.TestCase):
     def result(self, name, status, attempts=None):
         value = {"name": name, "status": status, "seconds": 61.0, "log": f"/out/logs/{name}.log"}

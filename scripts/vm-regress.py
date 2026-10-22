@@ -26,6 +26,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -486,10 +487,19 @@ def tools_dir(args, out):
     (data / "tools").mkdir(parents=True, exist_ok=True)
     source = Path(args.debugger_tools).expanduser() / "tools" if args.debugger_tools else None
     for tool in ("gef", "pwndbg"):
-        if (data / "tools" / tool).exists():
+        destination = data / "tools" / tool
+        complete = destination / ".vm-regress-copy-complete"
+        if complete.is_file():
             continue
         if source and (source / tool).is_dir():
-            shutil.copytree(source / tool, data / "tools" / tool, symlinks=True)
+            # A previous interruption may have left only part of a tool. Never
+            # publish that directory before the entire copy and stamp are ready.
+            with tempfile.TemporaryDirectory(prefix=f".{tool}-", dir=data / "tools") as temporary:
+                staged = Path(temporary) / tool
+                shutil.copytree(source / tool, staged, symlinks=True)
+                (staged / ".vm-regress-copy-complete").write_text("1\n")
+                safe_rmtree(destination, data)
+                staged.rename(destination)
     return data
 
 

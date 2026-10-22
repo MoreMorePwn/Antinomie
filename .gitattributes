@@ -3,3 +3,6 @@ src/antinomie/monitor/crates/monitor-core/assets/rules/*.yar linguist-vendored
 
 # Patch files carry other projects' diffs verbatim; their context lines are not ours to check.
 *.patch -whitespace
+
+# Preserve upstream license text byte-for-byte, including its trailing blank lines.
+LICENSES/third-party/cargo-upstream/**/LICENSE* -whitespace

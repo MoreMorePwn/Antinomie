@@ -697,6 +697,11 @@ nothing. It reads the runs of `tracer-record`'s last attempt.
 
 ### Checks that failed under load (0.7.0)
 
+The runner stages its private debugger tools and marks a complete copy before
+publication. An interrupted copy previously left a directory that a resumed run
+treated as installed; pwndbg then failed to load `libpython3.13.so.1.0`. Resuming
+now replaces an unmarked copy, with tests for failed copy, recovery and reuse.
+
 On 2026-10-23 the user scheduled the stress-heavy telemetry drops and
 intermittent slow transport reconnect for 0.7.1. They are known 0.7.0 limitations,
 not passing zero-loss or reconnect-latency guarantees. Preserve historical
