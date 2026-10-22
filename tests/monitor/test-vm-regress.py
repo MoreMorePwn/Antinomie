@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 """scripts/vm-regress.py: tier choice, argument parsing and the check plan, without a VM."""
 import importlib.util
+import io
 import os
 from pathlib import Path
 import subprocess
@@ -159,7 +160,8 @@ class PlanTests(unittest.TestCase):
     def test_full_contains_quick_and_both_interop_directions(self):
         names = [c.name for c in vm.plan("full", self.ctx())]
         self.assertEqual(names[0], "conf-quick")
-        for name in ("conf-stress", "debug-p2", "debug-p3", "audit-stop", "audit-core", "uring-status",
+        for name in ("conf-stress-light", "conf-stress-heavy", "conf-stress-extreme", "conf-stress-lossy",
+                     "debug-p2", "debug-p3", "audit-stop", "audit-core", "uring-status",
                      "uring-boots", "uring-legacy", "tracer-record", "tracer-legacy", "tracer-qa",
                      "debugger-live", "stealth", "snapshot", "io-old-new-p3", "io-new-old-p3"):
             self.assertIn(name, names)
@@ -189,6 +191,49 @@ class PlanTests(unittest.TestCase):
         by_name = {c.name: c for c in vm.plan("full", ctx)}
         self.assertIn("--old-base", vm.missing(by_name["uring-legacy"], ctx))
         self.assertIsNone(vm.missing(by_name["debug-p2"], ctx))
+
+
+class DiskTests(unittest.TestCase):
+    def args(self, *extra):
+        return vm.parse(["quick", "b", *extra])
+
+    def test_defaults_and_options(self):
+        args = self.args("--min-free", "/tmp:3", "--min-free", "/:1", "--max-used-gb", "100")
+        self.assertEqual((args.max_used_gb, args.min_free, args.keep_data), (100, ["/tmp:3", "/:1"], False))
+        self.assertEqual(self.args().max_used_gb, 380)
+
+    def test_bad_min_free_is_refused(self):
+        for spec in ("/tmp", "/tmp:x", ":5"):
+            with self.subTest(spec=spec), self.assertRaises(SystemExit), \
+                    unittest.mock.patch("sys.stderr", io.StringIO()):
+                self.args("--min-free", spec)
+
+    def test_guard_refuses_a_full_disk(self):
+        self.assertIsNone(vm.disk_problem(self.args("--min-free", "/tmp:0")))
+        self.assertIn("over the limit", vm.disk_problem(self.args("--max-used-gb", "0", "--min-free", "/tmp:0")))
+        self.assertIn("under the limit", vm.disk_problem(self.args("--min-free", "/tmp:99999999")))
+        with self.assertRaises(vm.Failure):
+            vm.disk_guard(self.args("--min-free", "/tmp:99999999"))
+
+    def test_stress_groups_are_separate_checks(self):
+        names = [c.name for c in vm.plan("full", PlanTests().ctx()) if c.name.startswith("conf-stress")]
+        self.assertEqual(len(names), 4)
+
+    def test_cleanup_removes_bulk_and_keeps_reports(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            conf = out / "runs/conf-quick"
+            for sub in ("groups/user", "render", "trace"):
+                (conf / sub).mkdir(parents=True)
+                (conf / sub / "f").write_text("x")
+            plain = out / "runs/debug-p2"
+            plain.mkdir(parents=True)
+            (out / "xdg/debug-p2/home").mkdir(parents=True)
+            vm.clean_check_data(out, "conf-quick")
+            vm.clean_check_data(out, "debug-p2")
+            self.assertFalse((conf / "groups").exists() or (conf / "render").exists())
+            self.assertTrue((conf / "trace/f").exists())
+            self.assertFalse(plain.exists() or (out / "xdg/debug-p2").exists())
 
 
 class IsolationTests(unittest.TestCase):

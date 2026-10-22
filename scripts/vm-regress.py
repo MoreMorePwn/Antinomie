@@ -45,8 +45,11 @@ CONTRACT_PATHS = (
 REVISION_LINE = r"^[[:space:]]*(#[[:space:]]*define[[:space:]]+ANTC_REVISION[[:space:]]|(pub(\([a-z]+\))?[[:space:]]+)?const[[:space:]]+REVISION:)"
 
 QUICK_GROUPS = "user,root,threads"
-STRESS_GROUPS = "stress-light,stress-heavy,stress-extreme,stress-lossy"
+STRESS_GROUPS = ("stress-light", "stress-heavy", "stress-extreme", "stress-lossy")
 MIN_MEM_KIB = 5 * 1024 * 1024
+GIB = 1024**3
+# What a finished check leaves that only matters for debugging it: VM disks and recordings.
+CONFORMANCE_BULK = ("groups", "render", "bin", "xdg")
 ORDER = ("PASS", "FLAKY", "FAIL", "TIMEOUT", "ERROR", "SKIP")
 
 
@@ -106,6 +109,51 @@ def changed_against(ref):
     paths += git("ls-files", "--others", "--exclude-standard").split()
     revision = git("diff", "--name-only", f"-G{REVISION_LINE}", base, "--").split()
     return paths, revision
+
+
+# Disk space: WSL's Linux disk is a file on a Windows drive that only grows
+
+
+def disk_problem(args):
+    """Why a check must not start now (disk too full), or None."""
+    used = shutil.disk_usage("/").used / GIB
+    if used > args.max_used_gb:
+        return f"Linux disk used {used:.0f} GiB is over the limit of {args.max_used_gb} GiB"
+    for spec in args.min_free:
+        path, _, limit = spec.rpartition(":")
+        try:
+            free = shutil.disk_usage(path).free / GIB
+        except OSError as error:
+            return f"--min-free {spec}: {error}"
+        if free < float(limit):
+            return f"{path} has {free:.1f} GiB free, under the limit of {limit} GiB"
+    return None
+
+
+def disk_guard(args):
+    problem = disk_problem(args)
+    if problem:
+        raise Failure(f"disk: {problem}; clean up and rerun (--rerun-failed)")
+
+
+def default_min_free():
+    """On WSL the Windows drive behind the Linux disk must keep room."""
+    try:
+        wsl = "microsoft" in Path("/proc/version").read_text().lower()
+    except OSError:
+        wsl = False
+    return ["/mnt/e:5"] if wsl and Path("/mnt/e").is_dir() else []
+
+
+def clean_check_data(out, name):
+    """Remove the VM disks, recordings and private folders a recorded check left."""
+    runs = out / "runs" / name
+    if name.startswith("conf-"):
+        for bulk in CONFORMANCE_BULK:
+            shutil.rmtree(runs / bulk, ignore_errors=True)
+    else:
+        shutil.rmtree(runs, ignore_errors=True)
+    shutil.rmtree(out / "xdg" / name, ignore_errors=True)
 
 
 # Environment and processes
@@ -244,9 +292,9 @@ def plan(tier, ctx):
 
     torture, urfix = fix / "ant-torture", fix / "uring-fixture"
     checks += [
-        Check("conf-stress", "full",
-              example("conformance", "trace", base, runs / "conf-stress", "--groups", STRESS_GROUPS),
-              mon, 7200, needs=("base",)),
+        *[Check(f"conf-{group}", "full",
+                example("conformance", "trace", base, runs / f"conf-{group}", "--groups", group),
+                mon, 7200, needs=("base",)) for group in STRESS_GROUPS],
         vm_check("debug-p2", "full", "debug-check", ["p2", fix / "debug"]),
         vm_check("debug-p3", "full", "debug-check", ["p3", fix / "debug"]),
         vm_check("audit-stop", "full", "audit-check", ["stop", fix / "audit-fixture"]),
@@ -377,12 +425,12 @@ def tools_dir(args, out):
     """The managed gef and pwndbg the Debugger console check needs, in a private data folder."""
     data = out / "debugger-data"
     (data / "tools").mkdir(parents=True, exist_ok=True)
-    source = Path(args.debugger_tools).expanduser() if args.debugger_tools else None
+    source = Path(args.debugger_tools).expanduser() / "tools" if args.debugger_tools else None
     for tool in ("gef", "pwndbg"):
         if (data / "tools" / tool).exists():
             continue
         if source and (source / tool).is_dir():
-            shutil.copytree(source / tool, data / "tools" / tool)
+            shutil.copytree(source / tool, data / "tools" / tool, symlinks=True)
     return data
 
 
@@ -408,6 +456,8 @@ def command_for(check, ctx, args):
         writes = re.search(r"^RUN writes=(.*?)/tracer_record_", text, re.M)
         if not (runs and sha and writes):
             raise Failure("no usable tracer-record log (RUN, FIXTURE_SHA256); run tracer-record first")
+        if not Path(writes.group(1)).is_dir():
+            raise Failure("tracer-record's data is gone (cleaned after its check); rerun it with --keep-data")
         env = {
             "ANTINOMIE_TRACER_RUNS": ";".join(runs) + ";",
             "ANTINOMIE_TRACER_FIXTURE_SHA256": sha.group(1),
@@ -441,6 +491,9 @@ def run_check(check, ctx, args, attempt):
     reason = missing(check, ctx)
     if reason:
         return {**result, "status": "SKIP", "seconds": 0.0, "detail": reason}
+    problem = disk_problem(args)
+    if problem:
+        return {**result, "status": "ERROR", "seconds": 0.0, "detail": f"not started: {problem}"}
     runs = out / "runs" / check.name
     for stale in (runs, out / "runs" / f"{check.name}{suffix}"):
         shutil.rmtree(stale, ignore_errors=True)
@@ -534,6 +587,13 @@ def parser():
                         "after a failure is shown as FLAKY (default: %(default)s)")
     p.add_argument("--debugger-tools", metavar="DIR",
                    help="a data folder holding tools/gef and tools/pwndbg for the debugger-live check")
+    p.add_argument("--keep-data", action="store_true",
+                   help="keep each check's VM disks and recordings (default: delete them once its result is recorded)")
+    p.add_argument("--max-used-gb", type=int, default=380, metavar="GB",
+                   help="do not start a check while the Linux disk uses more than this (default: %(default)s)")
+    p.add_argument("--min-free", action="append", default=None, metavar="PATH:GB",
+                   help="do not start a check while PATH has less than GB free (repeatable; "
+                        "default on WSL: /mnt/e:5, the Windows drive behind the Linux disk)")
     p.add_argument("--no-build", action="store_true", help="use the examples already built")
     p.add_argument("--keep-old-host", action="store_true", help="keep the old host worktree in --out")
     p.add_argument("--mem-wait-limit", type=int, default=3 * 3600, metavar="S",
@@ -546,6 +606,16 @@ def parse(argv):
     args = parser().parse_args(argv)
     if args.retries < 0:
         raise SystemExit("--retries must not be negative")
+    if args.min_free is None:
+        args.min_free = default_min_free()
+    for spec in args.min_free:
+        path, _, limit = spec.rpartition(":")
+        try:
+            ok = bool(path) and float(limit) >= 0
+        except ValueError:
+            ok = False
+        if not ok:
+            raise SystemExit(f"--min-free {spec}: expected PATH:GB")
     if args.old_host and args.tier == "quick":
         raise SystemExit("--old-host is only for full or auto")
     return args
@@ -604,12 +674,15 @@ def main(argv=None):
             if not selected:
                 print("nothing to run")
             else:
+                disk_guard(args)
                 ctx["fix"] = build_fixtures(out)
                 if not args.no_build:
+                    disk_guard(args)
                     ctx["new"] = build_examples(ROOT, out, "build.log", app=bool(selected & {"tracer-qa", "debugger-live"}))
                 if old_base and any("old" in c.needs for c in checks):
                     spec = args.old_host or against or default_against()
                     print(f"old host: {spec}", flush=True)
+                    disk_guard(args)
                     ctx["old"], cleanup = old_host(spec, out)
                     ctx["old_ok"] = True
                 if "debugger-live" in selected:
@@ -620,9 +693,17 @@ def main(argv=None):
                     print(f"{check.name} ...", flush=True)
                     results[check.name] = run_with_retries(check, ctx, args)
                     results_file.write_text(json.dumps(results, indent=1))
+                    # tracer-qa reads tracer-record's recordings: that data goes after it.
+                    if not args.keep_data and check.name != "tracer-record":
+                        clean_check_data(out, check.name)
+                        if check.name == "tracer-qa":
+                            clean_check_data(out, "tracer-record")
+
         finally:
             if not args.keep_old_host:
                 cleanup()
+            if not args.keep_data:
+                clean_check_data(out, "tracer-record")
         shown = [n for n in order if n in results or n in selected or not (args.only or args.skip)]
         text = report(results, shown, f"{tier} tier, base {base}")
         (out / "report.txt").write_text(text + "\n")

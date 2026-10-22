@@ -272,6 +272,10 @@ for it, and its children live in a directory of the same name (`app.rs` with
   keep an existing path working.
 - **Tests sit with their module** in `<module>/tests.rs`; group a large test
   module by the same areas under `<module>/tests/`.
+- **VM regression.** Run `scripts/vm-regress.py quick BASE` for every change;
+  a change under the guest patches, transport or protocol folders, or to
+  `ANTC_REVISION`, needs the `full` tier (`auto` decides). See "VM regression
+  tiers" in `docs/implementation.md`.
 - **Size.** A file holds at most 1,200 lines of non-test code.
   `scripts/check-module-size.py` enforces this in CI. Files that were already
   larger are listed in `scripts/module-size-allowlist.txt` and may shrink but
