@@ -331,6 +331,12 @@ impl MonitorApp {
                     "Type into VM",
                     false,
                 ),
+                Confirm::DebugKill => (
+                    "Detach and kill",
+                    "Detach the debugger and end the debugged process with SIGKILL? Its state is lost; the VM keeps running.",
+                    "Detach and kill",
+                    true,
+                ),
                 Confirm::Nat { .. } => (
                     "Enable NAT",
                     "Enable NAT? The guest can connect to the host network and Internet.",
@@ -392,6 +398,11 @@ impl MonitorApp {
                                     && self.running()
                                     && self.snapshot.memory_dump.is_none()
                             }
+                            Confirm::DebugKill => self
+                                .snapshot
+                                .debug
+                                .as_ref()
+                                .is_some_and(|session| session.ended.is_none()),
                             Confirm::Nat { vm, creating } => {
                                 if *creating {
                                     self.snapshot.active_vm.is_none()
@@ -436,6 +447,7 @@ impl MonitorApp {
                         Confirm::DeleteEvidence(deletion) => self.submit_delete_evidence(deletion),
                         Confirm::Upload(intent) => self.submit_upload(intent, true),
                         Confirm::Clipboard { intent, text } => self.submit_clipboard(intent, text),
+                        Confirm::DebugKill => self.send(Command::DebugDetach { kill: true }),
                         Confirm::Nat { mut vm, creating } => {
                             vm.nat = true;
                             vm.isolated_network = false;

@@ -8,7 +8,7 @@ use crate::{
 };
 use antinomie_monitor_core::debug::{
     signal_policy::signal_name,
-    view::{BreakpointKind, DebugThread},
+    view::{BreakpointKind, DebugThread, ViewCaps, WatchAccess},
 };
 use egui_extras::{Column, TableBuilder};
 
@@ -108,6 +108,32 @@ pub(super) fn threads(
         });
 }
 
+/// The kinds of breakpoint the panel can add, with their names and what each
+/// needs from the guest's debug engine.
+const KINDS: [(&str, BreakpointKind); 5] = [
+    ("Software", BreakpointKind::Software),
+    ("Hardware", BreakpointKind::Hardware),
+    ("Watch write", BreakpointKind::Watch(WatchAccess::Write)),
+    ("Watch read", BreakpointKind::Watch(WatchAccess::Read)),
+    ("Watch access", BreakpointKind::Watch(WatchAccess::Access)),
+];
+
+/// Whether the guest's engine offers `kind`, and why not when it does not.
+fn kind_offered(caps: ViewCaps, kind: BreakpointKind) -> Result<(), &'static str> {
+    match kind {
+        BreakpointKind::Software if !caps.software_breakpoints => {
+            Err("This guest has no software breakpoints")
+        }
+        BreakpointKind::Hardware if caps.hardware_breakpoints == 0 => {
+            Err("This guest has no hardware breakpoint registers")
+        }
+        BreakpointKind::Watch(_) if caps.hardware_watchpoints == 0 => {
+            Err("This guest has no watchpoint registers")
+        }
+        _ => Ok(()),
+    }
+}
+
 pub(super) fn breakpoints(
     ui: &mut egui::Ui,
     panel: &mut DebuggerPanel,
@@ -116,6 +142,9 @@ pub(super) fn breakpoints(
 ) {
     let stopped = view.run.stopped_sequence().is_some();
     let editable = view.app_controls() && stopped && !panel.waiting(view);
+    panel.breakpoint_kind = panel.breakpoint_kind.min(KINDS.len() - 1);
+    let kind = KINDS[panel.breakpoint_kind].1;
+    let offered = kind_offered(view.caps, kind);
     ui.horizontal(|ui| {
         let response = ui.add_enabled(
             editable,
@@ -126,22 +155,51 @@ pub(super) fn breakpoints(
         let entered =
             response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
         let add = ui
-            .add_enabled(editable, egui::Button::new("Add"))
-            .on_disabled_hover_text("Stop the process to change breakpoints")
+            .add_enabled(editable && offered.is_ok(), egui::Button::new("Add"))
+            .on_disabled_hover_text(match offered {
+                Err(why) => why,
+                Ok(()) => "Stop the process to change breakpoints",
+            })
             .clicked();
-        if (add || entered) && editable {
+        if (add || entered) && editable && offered.is_ok() {
             match state::parse_address(&panel.breakpoint_input) {
                 Ok(addr) => {
                     panel.input_error = None;
                     panel.breakpoint_input.clear();
                     actions.push(PanelAction::Debug(DebugAction::AddBreakpoint {
                         addr,
-                        kind: BreakpointKind::Software,
+                        kind,
                     }));
                 }
                 Err(problem) => panel.input_error = Some(problem),
             }
         }
+    });
+    ui.horizontal(|ui| {
+        ui.weak("Add as");
+        ui.add_enabled_ui(editable, |ui| {
+            egui::ComboBox::from_id_salt("debugger-breakpoint-kind")
+                .selected_text(KINDS[panel.breakpoint_kind].0)
+                .show_ui(ui, |ui| {
+                    for (index, (label, kind)) in KINDS.iter().enumerate() {
+                        let offered = kind_offered(view.caps, *kind);
+                        let item = ui
+                            .add_enabled_ui(offered.is_ok(), |ui| {
+                                ui.selectable_value(&mut panel.breakpoint_kind, index, *label)
+                            })
+                            .inner;
+                        if let Err(why) = offered {
+                            item.on_disabled_hover_text(why);
+                        }
+                    }
+                })
+                .response
+                .on_hover_text(
+                    "Software patches the code. Hardware and watchpoints use the CPU's debug \
+                     registers (a few slots); a watch covers 8 bytes from the address, and a \
+                     read watch also stops on writes, as the registers have no read-only mode.",
+                );
+        });
     });
     if view.breakpoints.is_empty() {
         ui.weak("No breakpoints");

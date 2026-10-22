@@ -30,6 +30,8 @@ pub(crate) struct DebuggerPanel {
     /// Backend command id -> request id, to clear the spinner of a refusal.
     inflight: BTreeMap<u64, u64>,
     pub(super) breakpoint_input: String,
+    /// The kind the Add button makes: an index into `lists::KINDS`.
+    pub(super) breakpoint_kind: usize,
     pub(super) memory_input: String,
     /// Local problem with an input (the backend reports its own in the view).
     pub(super) input_error: Option<String>,
@@ -130,6 +132,11 @@ impl MonitorApp {
     pub(crate) fn debugger_input_for_tests(&mut self, breakpoint: &str, memory: &str) {
         self.debugger.breakpoint_input = breakpoint.into();
         self.debugger.memory_input = memory.into();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn debugger_kind_for_tests(&mut self, kind: usize) {
+        self.debugger.breakpoint_kind = kind;
     }
 
     /// Send one request for the stop on screen.

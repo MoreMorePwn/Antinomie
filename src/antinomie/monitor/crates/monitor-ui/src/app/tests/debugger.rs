@@ -118,11 +118,49 @@ fn the_session_window_offers_the_endpoint_and_detach() {
         app.submitted.last(),
         Some(Command::DebugDetach { kill: false })
     ));
+    let sent = app.submitted.len();
     click_label(&mut app, &ctx, size, "Detach and kill");
+    // Killing the process is asked about first; nothing is sent yet.
+    assert!(matches!(app.confirm, Some(Confirm::DebugKill)));
+    assert_eq!(app.submitted.len(), sent);
+    // Cancel keeps the process.
+    click_label(&mut app, &ctx, size, "Cancel");
+    assert!(app.confirm.is_none());
+    assert_eq!(app.submitted.len(), sent);
+    click_label(&mut app, &ctx, size, "Detach and kill");
+    // The dialog's own button is the lowest "Detach and kill" on screen.
+    let output = render(&mut app, &ctx, size);
+    let pos = texts(&output)
+        .into_iter()
+        .filter(|(text, _)| text == "Detach and kill")
+        .max_by(|a, b| a.1.top().total_cmp(&b.1.top()))
+        .unwrap()
+        .1
+        .center();
+    for pressed in [true, false] {
+        let _ = draw_input(
+            &mut app,
+            &ctx,
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                events: vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+                ..Default::default()
+            },
+        );
+    }
     assert!(matches!(
         app.submitted.last(),
         Some(Command::DebugDetach { kill: true })
     ));
+    assert!(app.confirm.is_none());
 }
 
 mod panel {
@@ -134,7 +172,7 @@ mod panel {
             BreakpointEntry, BreakpointKind, Controller, DebugAction, DebugRequest, DebugThread,
             DebugView, FollowMode, ForkChoice, ForkPolicy, ForkPrompt, InferiorState, InferiorView,
             MemoryWindow, Pending, RegisterEntry, RegisterSnapshot, RunState, StopReason, ViewCaps,
-            WindowKind,
+            WatchAccess, WindowKind,
         },
         RegKind,
     };
@@ -510,6 +548,56 @@ mod panel {
                 .any(|text| text.contains("\"main\" is not a hexadecimal address")),
             "{all:?}"
         );
+    }
+
+    #[test]
+    fn the_add_button_makes_the_chosen_kind_when_the_guest_offers_it() {
+        let ctx = context();
+        let mut app = app();
+        let mut view = stopped(3);
+        view.caps.hardware_breakpoints = 4;
+        view.caps.hardware_watchpoints = 4;
+        open(&mut app, view);
+        shown(&mut app, &ctx);
+        // The kinds are in the drop-down; Software is chosen first.
+        let all = shown(&mut app, &ctx);
+        assert!(all.iter().any(|text| text == "Software"), "{all:?}");
+        for (index, kind) in [
+            (1, BreakpointKind::Hardware),
+            (2, BreakpointKind::Watch(WatchAccess::Write)),
+            (3, BreakpointKind::Watch(WatchAccess::Read)),
+            (4, BreakpointKind::Watch(WatchAccess::Access)),
+        ] {
+            app.debugger_kind_for_tests(index);
+            app.debugger_input_for_tests("0x401200", "");
+            click_label(&mut app, &ctx, SIZE, "Add");
+            assert_eq!(
+                requests(&app).last().map(|request| &request.action),
+                Some(&DebugAction::AddBreakpoint {
+                    addr: 0x401200,
+                    kind
+                }),
+                "{kind:?}"
+            );
+            let mut answered = stopped(3);
+            answered.caps.hardware_breakpoints = 4;
+            answered.caps.hardware_watchpoints = 4;
+            answered.handled = requests(&app).last().unwrap().id;
+            app.snapshot.debug_view = Some(Arc::new(answered));
+        }
+    }
+
+    #[test]
+    fn a_kind_the_guest_lacks_cannot_be_added() {
+        let ctx = context();
+        let mut app = app();
+        // `stopped` offers software breakpoints only.
+        open(&mut app, stopped(3));
+        shown(&mut app, &ctx);
+        app.debugger_kind_for_tests(1);
+        app.debugger_input_for_tests("0x401200", "");
+        click_label(&mut app, &ctx, SIZE, "Add");
+        assert!(requests(&app).is_empty(), "no hardware registers offered");
     }
 
     #[test]
