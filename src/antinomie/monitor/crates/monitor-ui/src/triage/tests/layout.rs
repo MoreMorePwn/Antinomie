@@ -339,15 +339,15 @@ fn network_views_are_tabs_with_counts_and_dns_has_its_time_column() {
     }
     click(&ctx, &mut view, find(&out, "DNS").center());
     assert!(view.network == NetTab::Dns);
-    // DNS has the same Time column as HTTP, after Frame.
-    assert_eq!(DNS_HEADERS[..2], HTTP_HEADERS[..2]);
+    // DNS keeps the columns it had before 0.7.0: no Time column.
+    assert_eq!(DNS_HEADERS[..2], ["Frame", "Endpoint"]);
     let out = settle(&ctx, &mut view);
     let frame = find(&out, "Frame");
     let time = texts(&out)
         .into_iter()
         .filter(|(text, rect)| text == "Time" && (rect.top() - frame.top()).abs() < 3.0)
         .count();
-    assert_eq!(time, 1, "{:?}", texts(&out));
+    assert_eq!(time, 0, "{:?}", texts(&out));
 }
 
 #[test]
@@ -469,10 +469,10 @@ fn every_table_still_sorts_from_its_headers() {
     }
     view.network = NetTab::Dns;
     let out = settle(&ctx, &mut view);
-    // The Time header (second column) is a sort button of the DNS table.
+    // The Endpoint header (second column) is a sort button of the DNS table.
     let time = texts(&out)
         .into_iter()
-        .find(|(text, rect)| text.starts_with("Time") && rect.top() > 120.0)
+        .find(|(text, rect)| text.starts_with("Endpoint") && rect.top() > 120.0)
         .unwrap()
         .1;
     click(&ctx, &mut view, time.center());
