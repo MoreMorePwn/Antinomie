@@ -494,16 +494,16 @@ fn real_tshark_dns_ipv4_ipv6_and_retry_rows_preserve_original_frames_and_respons
                 .collect::<Vec<_>>(),
             ["#1", "#2", "#4"]
         );
-        // The Time column sits after Frame, as in the HTTP table.
-        assert_eq!(DNS_HEADERS[..2], ["Frame", "Time"]);
+        // The table keeps the v0.6.2 columns: no Time column.
+        assert_eq!(DNS_HEADERS[..2], ["Frame", "Endpoint"]);
+        assert!(!DNS_HEADERS.contains(&"Time"));
         assert!(index.dns.iter().all(|row| row.len() == DNS_HEADERS.len()));
-        assert!(index.dns.iter().all(|row| !row[1].text.is_empty()));
-        assert!(index.dns.iter().all(|row| row[3].text == "example.com"));
-        assert_eq!(index.dns[0][7].text, "3");
-        assert_eq!(index.dns[2][7].text, "5");
-        assert!(index.dns[0][6].text.contains("93.184.216.34"));
-        assert!(index.dns[2][2].text.contains("::1"));
-        assert_eq!(index.dns[0][4].text, "A");
+        assert!(index.dns.iter().all(|row| row[2].text == "example.com"));
+        assert_eq!(index.dns[0][6].text, "3");
+        assert_eq!(index.dns[2][6].text, "5");
+        assert!(index.dns[0][5].text.contains("93.184.216.34"));
+        assert!(index.dns[2][1].text.contains("::1"));
+        assert_eq!(index.dns[0][3].text, "A");
         assert!(!index.ips.is_empty());
         assert_eq!(index.hosts.len(), 1);
         assert!(index.dns[1][0]

@@ -100,7 +100,6 @@ pub(super) const HTTP_HEADERS: &[&str] = &[
 
 pub(super) const DNS_HEADERS: &[&str] = &[
     "Frame",
-    "Time",
     "Endpoint",
     "Qname",
     "Qtype",
@@ -561,11 +560,6 @@ pub(super) fn scan_pcap_query_observed(
                 let retry = tshark_boolean(field(30));
                 let mut row = vec![
                     cell(format!("#{frame}"), theme::text(), true),
-                    cell(
-                        time.map_or("Unavailable".into(), crate::time_format::short_time_us),
-                        theme::text(),
-                        true,
-                    ),
                     cell(&endpoints, theme::text(), true),
                     cell(field(18), theme::text(), true),
                     cell(name, theme::text(), false),
@@ -615,7 +609,7 @@ pub(super) fn scan_pcap_query_observed(
                     .cloned()
                     .collect();
                 inventory.host(name, frame, time, &addresses, "DNS lookup");
-                for at in [11, 7, 6, 3] {
+                for at in [10, 6, 5, 2] {
                     row.remove(at);
                 }
                 observe(
