@@ -238,6 +238,16 @@ pub(super) struct View {
     clock: Option<antinomie_monitor_core::HostClockAnchor>,
 }
 
+/// An input's caveat above the findings: how Sigma events are converted is a
+/// plain note, anything else an input says (an IDS limit) stays a warning.
+fn input_note(ui: &mut egui::Ui, text: &str) {
+    if text == antinomie_monitor_core::analysis::detection::SIGMA_COVERAGE_WARNING {
+        ui.add(egui::Label::new(egui::RichText::new(text).color(theme::text())).wrap());
+    } else {
+        crate::activity::warning(ui, text);
+    }
+}
+
 impl View {
     /// Saved evidence was deleted: look at the listed captures and cores again.
     pub(super) fn evidence_deleted(&mut self) {
@@ -1039,7 +1049,7 @@ impl View {
             .map(|input| input.warning.as_str())
             .find(|warning| !warning.is_empty())
         {
-            crate::activity::warning(ui, warning);
+            input_note(ui, warning);
         }
         if report.findings.is_empty() {
             ui.weak(match report.state {
