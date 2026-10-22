@@ -525,7 +525,11 @@ mod tests {
     use super::*;
     #[test]
     fn a_launch_before_the_tracer_probe_is_refused() {
-        assert!(tracer_offer(None).unwrap_err().contains("retry in a moment"));
+        assert!(
+            tracer_offer(None)
+                .unwrap_err()
+                .contains("retry in a moment")
+        );
         let caps = crate::api::GuestTracerCaps {
             exec_flags: 0x30,
             ..Default::default()
