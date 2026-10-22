@@ -1,8 +1,7 @@
 From 0a703558be777fb5859e0082b601890c8001b7c7 Mon Sep 17 00:00:00 2001
 From: MikiMiku <jonathanirvinjo@gmail.com>
 Date: Thu, 22 Oct 2026 21:57:37 +0700
-Subject: [PATCH 59/60] antinomie: debug engine never waits without bound for a
- step
+Subject: [PATCH] antinomie: debug engine never waits without bound for a step
 
 The engine's single worker (max_active 1) serves every debug session. A
 step of a system call or a repeated string instruction waited for the step
