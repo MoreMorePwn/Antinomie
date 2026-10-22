@@ -515,6 +515,20 @@ thread group, is attributed to the creator's run and flagged
 `ANT_ASYNC_PRODUCER_UNKNOWN`: the shared ring does not say which thread wrote the
 SQE. A submission by the creator's own threads keeps its real task identity.
 
+Which process wrote the entry (guest series 0055, revision 17). A process
+writes a ring's entries and moves its tail only through a mapping of them.
+When the page holding the submitted entry and the ring's first page (head and
+tail) are each mapped by at most one user page table, the entry was written
+by a thread of the submitting process: the request carries
+`ANT_ASYNC_PRODUCER_PROCESS` (`async.flags` bit 3; which thread is not known)
+and the run's observation stays complete. A ring with another mapping (kept
+across a fork, mapped by a process the descriptor was passed to, a
+`MAP_SHARED` buffer of a `NO_MMAP` ring, or mapped twice by one process)
+gets `ANT_ASYNC_PRODUCER_UNKNOWN` (bit 1) and makes the run
+OBSERVATION_INCOMPLETE, as do the SQPOLL thread's submissions and those from
+outside the creator's process. A guest before 0055 flagged every io_uring
+submission unknown; a host reads both.
+
 ### 14.4 Typed io_uring operands
 
 | Opcode | Operand |
@@ -795,15 +809,20 @@ shows an unknown lifecycle field, and Triage falls back to names.
   inode, inode generation, link count and mode of the file a call acted on, in
   the traced call itself: an `open`/`openat`/`openat2`/`creat` that returned a
   descriptor (kind OPEN), a `rename*` (RENAME: the inode moved), a `link*`
-  (LINK) and an `unlink*` (UNLINK, with the links that remain). Only calls that
+  (LINK) and an `unlink*` (UNLINK, with the links that remain; since series
+  0054 also `rmdir` and `unlinkat(AT_REMOVEDIR)`, a directory with no link
+  left). Only calls that
   succeeded publish one. An io_uring request carries the same bytes as the
   operand `async.operand.file_id`: OPEN from `IORING_OP_OPENAT`/`OPENAT2` (the
   file the request opened, direct descriptors included), RENAME/LINK/UNLINK
-  from `RENAMEAT`/`LINKAT`/`UNLINKAT` (the name is resolved a moment before the
-  operation on the worker, since the operation has no traced call to publish in),
+  from `RENAMEAT`/`LINKAT`/`UNLINKAT` (published by the operation itself on the
+  worker when it succeeded, with the link count it left; before series 0057
+  the name was resolved a moment before the operation, which two requests on
+  one file run side by side could both see with all its links),
   and ISSUE for a request that acts on an open regular file
   (`READ*`, `WRITE*`, `FSYNC`, `FTRUNCATE`, `FALLOCATE`, `SYNC_FILE_RANGE`,
-  `FADVISE`), once per request. ISSUE is what lets Triage tie a request on a
+  `FADVISE`, and since series 0054 `FSETXATTR`, `FGETXATTR` and the file end
+  of a `SPLICE`), once per request. ISSUE is what lets Triage tie a request on a
   registered-table descriptor, or on a descriptor the capture never saw opened,
   to a file. An AIO request on a regular file carries ISSUE too.
 * `lifecycle.exec_image` (`antinomie.execimg/1`) is published once per exec at
