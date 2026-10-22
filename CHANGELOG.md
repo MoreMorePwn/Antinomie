@@ -6,6 +6,33 @@ it runs.
 
 ## 0.7.0 — Unreleased
 
+- **Final audit fixes (host).** Packets and the Static analysis tables sort
+  from their headers; the DNS table is back to its 0.6.2 columns; Summary >
+  Health shows how long telemetry was held back for the recording writer (a
+  line when it happened, a row in More health details). Debugger: **Detach and
+  kill** asks first, and **Add** can make a hardware breakpoint or a watchpoint
+  (write, read or access) where the guest offers them. The confirmation and
+  Snapshots dialogs, and four windows that were pinned to the centre (the
+  Samples first-use note, Delete memory dump, the disk import and the memory
+  import), are plain windows like the rest: nothing dims and they move. The
+  Sigma conversion note above the findings is plain text; a real Partial of a
+  scan (a budget stop, evidence still captured, a result that could not be
+  saved, rules not run) shows Partial and says why even when every input was
+  read. The remaining six in-page tab rows (Memory OS, Samples source, capa
+  views, Memory Text and Table, Run History All, Live, Past and the Disks diff
+  filter) use the thin-bordered tabs. The terminal cursor shows in the Light
+  theme. The stealth note no longer says Debian bases boot from SATA or NVMe
+  (they stay on virtio). The Quilt view of the guest series lists all patches,
+  0001-0057 (`scripts/sync-quilt-view.py` keeps it in step). The gdb console
+  runs with a cleared environment (only PATH, locale and TZ) and a private home
+  for GEF too; it is not sandboxed, because Ctrl-C must reach gdb on its own
+  terminal and gdb must reach the loopback server. A program launched before
+  the guest reported its tracer capabilities is refused with "retry in a
+  moment" instead of starting without the shell-job shape and hashing.
+  `scripts/vm-regress.py` never deletes through a linked folder, refuses `/`,
+  the home and XDG folders and the app's own folders by their real path, and a
+  check that is stopped takes its whole process tree with it.
+
 - **io_uring follow-ups, records in order across vCPUs, saving under load,
   Stop after heavy churn.** Guest series 0054-0057, contract revision 17
   unchanged. Triage now reads the file requests an SQPOLL ring's kernel thread
@@ -391,16 +418,16 @@ it runs.
   filter bar (the first two still start on), and a file under a hidden
   directory, a persistence path or a credentials path gets a warning bar and a
   warning-coloured Location. Network gets an **Open Packets** button that shows
-  the run's capture in Packets, and the DNS table gets the Time column HTTP
-  already had. The "Refresh, Every, Refreshed N s ago" row of these three
+  the run's capture in Packets. The "Refresh, Every, Refreshed N s ago" row of these three
   sections is one status at the right of the tab bar; its menu has Refresh now
   and the interval, and the refresh itself is unchanged. Table columns and rows
-  are otherwise unchanged and every header still sorts.
+  are unchanged (the DNS table has the columns it had before) and every header
+  still sorts.
 - **Process cores are no longer limited to 64 MiB.** Core Dump on Exit and Dump
   core now have a **Budget** (64 MiB to 1 GiB) and a **Deadline** (up to 60 s).
   The budget bounds the bytes the guest *stores*: untouched mappings cost
   nothing, so a 256 MiB budget (the new default, also set under Settings >
-  Process cores) is free for a small process. The guest tells the app what it
+  Recording) is free for a small process. The guest tells the app what it
   accepts, from its RAM (half of RAM less 128 MiB, 64 MiB to 1 GiB), and the
   list shows it with the guest's available memory; a base built before this
   release accepts 64 MiB only and says so. The guest buffer now grows in 8 MiB
@@ -469,7 +496,7 @@ it runs.
   and a finished capture's parsed list is cached beside it
   (`<capture>.pcap.view`, keyed by the pcap's size and modification time and
   the TShark version, deleted with the capture). A live capture is re-read
-  about once a second and only new frames are parsed again into the same list.
+  about once a second and the capture is parsed again into the same list.
   A synthetic 144,000-packet capture parses in about 11 seconds (the first
   page after 1.5 s, a reopen from the cache in 0.3 s) while the slowest window
   frame stays at 20 ms. Triage > Network gains a **Sessions** table (TLS and
@@ -503,8 +530,12 @@ it runs.
 
 - **Every table sorts by a clicked column header.** Run History, Activity, the
   process picker, capture history, the Detection event journal (the events on
-  the current page), the filter guide, core notes and the downloaded samples
-  list (which gained a header row) join the tables that already sorted. The
+  the current page), the filter guide, core notes, the downloaded samples
+  list (which gained a header row), Packets (the rows of the page shown, or all
+  of them without TShark) and the Static analysis tables (Structures and the
+  other record tables sort the whole listing on the archive reader, as Strings
+  does; the disassembly and decompiled source keep their order) join the
+  tables that already sorted. The
   first click sorts ascending, the next descending, and an arrow marks the
   column. The **All live traces** buttons in Run History and Capture History
   are gone.
@@ -696,7 +727,8 @@ it runs.
     load. No rule in the installed SigmaHQ Linux pack uses the category yet.
   - Triage › File activity › Executed says when the exec was a script run
     through its interpreter, using the guest's own flag on the exec's hash
-    record. The interpreter's path is not shown: the guest does not record it.
+    record; the entry on the interpreter of an executed script above shows the
+    interpreter's path.
   - The guest's count of dropped credential and hash records is shown in the
     run summary health, counts as observed loss, and is named in the TRL
     hover.
@@ -705,7 +737,8 @@ it runs.
     and core ("Complete", "Deleted", ...).
   - The TShark coverage note no longer says HTTPS is unavailable: TLS server
     names are read from handshakes; the content of HTTPS and HTTP/3 is
-    encrypted, and cleartext HTTP/2 and encrypted DNS are not decoded.
+    encrypted, and encrypted DNS is not decoded (cleartext HTTP/2 requests are
+    listed with the HTTP requests).
   - App dependencies reports "Wrong version" for a QEMU older than 6.0 (the
     network capture needs its flat `object-add` arguments). No minimum was
     invented for TShark or Suricata. The dnf and zypper package names were
@@ -728,9 +761,9 @@ it runs.
     handles it (ended in 0.3 s, no escalation) and a tree of seven tasks.
   - **A transport reconnect no longer splits a run into two records.** The run
     keeps its id, so the selection, an open terminal and a pending Stop still
-    mean it, and its terminal sequence continues. Run History lists the newest
-    recording segment, with a note per reconnect that names the boot holding
-    the earlier part. Restoring a snapshot still starts a new run.
+    mean it, and its terminal sequence continues. Run History lists the run
+    once, with a note per reconnect that names the boot holding the earlier
+    part, and Triage reads every recording segment (see above). Restoring a snapshot still starts a new run.
   - **Process cores of programs with large untouched memory are no longer cut
     short.** The guest kept a core in a buffer indexed by file offset, so a
     segment beyond 64 MiB of file offset could not be stored: a program with a
@@ -739,8 +772,9 @@ it runs.
     page touched in the VM). The limit now counts the bytes stored, not the
     file's size: holes are kept as holes, named in the transfer instead of
     sent, written as sparse ranges and covered by the digest. The file may be
-    up to 16 GiB long; the 64 MiB ceiling on stored bytes is unchanged and
-    its configuration stays with the separate card. Live cores share this.
+    up to 16 GiB long; the ceiling on stored bytes stayed at 64 MiB in this
+    step and is configurable (up to 1 GiB) in the Process cores entry above.
+    Live cores share this.
   - The file-hash `CHANGED` flag compares inode identity, size, mtime, ctime
     and the inode change counter, not just size and mtime, and a digest is
     documented as the bytes at hashing time. An unlink by the sample itself
@@ -768,9 +802,9 @@ it runs.
   connects; a debugger that detaches or dies leaves it running with its
   breakpoints removed. First release: all-stop, one process, software
   breakpoints, single-step of one thread, x86-64. Guest contract revision 17
-  (unchanged; older bases say the debugger is unavailable). Fork/exec following
-  comes next (Debug on start, hardware breakpoints and signals are in the next
-  entries). Every guest request costs about one 10 ms control poll, so registers take
+  (unchanged; older bases say the debugger is unavailable). Fork and exec
+  following, Debug on start, hardware breakpoints and signals are in the next
+  entries. Every guest request costs about one 10 ms control poll, so registers take
   about 44 ms and a step about 44 ms; see `protocol/debugger.md`.
 - **The debugger gets Debug on start, threads, hardware breakpoints, signals and
   fast requests.** Run dialog > Debugger > **Debug on start** parks the new
@@ -796,7 +830,7 @@ it runs.
   what it cannot do (Debug on start, hardware kinds, signal passing). The panel
   uses the new kinds and passes the signal a thread stopped on.
 - **The debugger has a panel in the app.** After **Attach debugger…** the
-  Debugger window shows the process, a thread selector, the stop reason and
+  Debugger tab shows the process, a thread selector, the stop reason and
   address, and **Continue**, **Step**, **Stop**, **Refresh** and **Detach**
   buttons, with the gdb command and a copy button above. Threads and
   breakpoints are on the left (add a breakpoint by address, enable or disable
@@ -861,9 +895,8 @@ it runs.
   records.
 - **Sigma and auditd events now carry them.** Triage follows each task's
   credentials and attaches the ones in effect after a call, the way auditd
-  reports them: Sysmon-style events get `User` (the numeric effective uid; a
-  guest's `/etc/passwd` is not available on the host without a guest agent, so
-  no name is looked up or guessed, not even `root`) and `LogonId` (the audit login
+  reports them: Sysmon-style events get `User` (the user's name from the base's
+  `/etc/passwd`, or the number when no name is known) and `LogonId` (the audit login
   uid, empty when the guest never set one), `process_creation` and `file_delete`
   get `Hashes` as `SHA256=…`, and `HashSkipped` says why there is none. The
   auditd `SYSCALL` record gets `uid`, `euid`, `suid`, `fsuid`, the gid family,
@@ -899,7 +932,8 @@ it runs.
   Metadata probed, Other (links, copies, executable or shared writable
   mappings, directory listings, watches and locks) and Changed files, each with
   a whole-run count. A call can sit in several tabs: an `open` with
-  `O_CREAT|O_TRUNC` that made the file is Opened, Created and Truncated.
+  `O_CREAT|O_TRUNC` that made the file is Opened and Created (a create is not
+  also Truncated).
   Created says "(inferred)" when only a path not seen earlier in the run shows
   the file is new (`O_EXCL`, `mkdir`, `mknod`, `memfd_create` and `O_TMPFILE`
   prove it). Changed files now has a Lifecycle column telling what happened to
@@ -912,8 +946,8 @@ it runs.
   `file.errno`, `file.location`, `file.access_by`, `file.created_inferred`,
   `file.mode`, `file.mode_flags`, `file.lifecycle` and `file.failed_attempts`.
   Calls the kernel refused are no longer counted as changes or in the tab
-  counts and are hidden; "Show failed attempts" lists them. io_uring file
-  operations are not mapped into these tabs yet.
+  counts and are hidden there; "Show failed attempts" lists them (Opened and
+  Read always list failed attempts with their result).
 
 - **A Getting started window walks a new user through the first setup.** It
   opens by itself the first time Antinomie starts with no VM and no base

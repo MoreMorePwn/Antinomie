@@ -38,8 +38,11 @@ outdated; a revision-17 kernel never receives the collector upload or exec.
 The debugger is a ptrace-free, process-scoped engine in the guest kernel
 (`kernel/antinomie/debug.c`, one file per architecture, x86-64 first) driven by
 control opcodes `0x1080..0x108d` and served to gdb, IDA, Ghidra and radare2 by a
-host RSP server (`gdbstub 0.7.10`, MIT/Apache-2.0) on a loopback Unix socket and
-an ephemeral 127.0.0.1 port. Contract revision 17 is unchanged: the opcodes are
+host RSP server on a loopback Unix socket and an ephemeral 127.0.0.1 port. The
+server is the project's own implementation of GDB's Remote Serial Protocol
+(`debug/rsp_packet.rs` framing, `rsp_client.rs` and `rsp_requests.rs` packet
+dispatch, `rsp_server.rs` sockets and threads); no third-party RSP crate is used,
+so no gdbstub licence applies. Contract revision 17 is unchanged: the opcodes are
 additive and an older guest answers `-EOPNOTSUPP`. Layouts are in
 `protocol/control.h`, semantics, measurements and limits in `protocol/debugger.md`.
 
@@ -118,7 +121,7 @@ choosers (`core_budget.rs`) in Run program, Dump core and Settings.
 
 ### Accepted in-app debugger panel (0.7.0)
 
-The Debugger window is the minimal in-app UI over the same engine. It does not
+The Debugger tab (beside Static analysis) holds the in-app UI over the same engine. It does not
 connect to the RSP socket: the controller (`debug/ui_control.rs`) runs on the
 RSP server thread and drives the same `Debugger` and `DebugBackend`, reaching the
 guest through the same `DebugLink` as an external client. Panel data types are in
@@ -152,13 +155,46 @@ guest through the same `DebugLink` as an external client. Panel data types are i
   that was asked to stop or step every 10 ms. Memory reads are at most 4096 bytes.
   Disassembly decodes the window in the UI thread (`analysis::decode_window`, the
   listing's iced-x86 formatter); instructions before the current one are a guess.
-* **Room for phase 2.** `StopReason` has signal, watchpoint and entry variants,
-  `BreakpointKind` has hardware and watch kinds (requests for them are refused
-  until the guest offers them), `ViewCaps` carries the guest's capabilities, and a
+* **Breakpoint kinds.** `BreakpointKind` has software, hardware and watch kinds
+  (write, read, access); the Breakpoints pane's "Add as" choice makes any of them
+  and greys out a kind the guest's `ViewCaps` do not offer (a request for one the
+  guest lacks is refused with a notice). A watch covers eight bytes from its
+  address, and a read watch is an access watch because the debug registers have no
+  read-only mode. `StopReason` has signal, watchpoint and entry variants, and a
   stop reason is mapped from the engine's `StopKind` in one place.
+* **Detach and kill** asks for confirmation (a plain, movable window like the
+  other confirmations) before it ends the process with SIGKILL; **Detach** does
+  not ask, as the process keeps running.
 * **Not in the panel.** Saved process cores (opened read-only in Core dumps, which
   already shows registers, mappings with a hex view and disassembly), memory and
-  register writes, step over, and anything that needs phase 2.
+  register writes, and step over (Next), Watch…, Mappings, Decompile and "Open in
+  GDB" of the mockup, which were not built.
+
+### Accepted gdb console in the Debugger tab (0.7.0)
+
+The tab also runs a gdb front end against the session's loopback port
+(`app/debugger/console.rs`, `pty.rs`): GEF (the managed script in the system gdb),
+or pwndbg (a system install, else the managed portable copy), chosen in Settings;
+it starts with `-nx -q` and `target remote 127.0.0.1:PORT`, with debuginfod off.
+The program runs on a pseudo-terminal as its session leader, drawn by the app's
+terminal widget. While gdb drives, the panel is read-only (see "One controller at
+a time" above). Closing the pane or the session asks gdb to quit, then kills it.
+
+* **Environment.** gdb starts with a cleared environment: only `PATH`, `LANG`,
+  `LC_ALL`, `LC_CTYPE`, `LC_MESSAGES` and `TZ` are passed on, plus `TERM` and an
+  empty `DEBUGINFOD_URLS`. Its `HOME` is a private folder, `<data>/tools/.console-home`
+  (mode 0700), for GEF and pwndbg alike, so no init file or setting of the user's
+  own home reaches it and none of theirs is written. The display, D-Bus and
+  ssh-agent sockets and `PYTHONPATH` are not inherited.
+* **Not sandboxed.** Unlike the analysis workers, the console does not run under
+  bubblewrap. Ctrl-C must reach gdb through the terminal, which needs gdb to be the
+  session leader on its pseudo-terminal (bubblewrap's `--new-session` takes that
+  away, and without it an interrupt would end bubblewrap), and gdb connects to the
+  host's loopback server, which the shared profile's unshared network would cut off.
+  The mitigations are the ones above, no program or core file given to gdb, `-nx`,
+  and a server that implements neither `vFile` nor `qXfer:libraries`, so a guest
+  supplies no ELF and no auto-load script; guest data is dumped only by a command
+  the user types.
 
 ### Accepted debugger phase 3: follow, non-stop, re-adoption (0.7.0)
 
@@ -1602,9 +1638,10 @@ the journal category `auditd`: `SYSCALL` (`Syscall`, `a0`..`a3` as hex, `exit`,
 the arguments NUL-joined and hex-encoded, 128 bytes at most; only with a whole
 argument vector), `EXECVE` (`argc`, `a0`..`a15` from
 the captured argument vector), `PATH` (`name`, `nametype`) and `SOCKADDR`
-(`saddr`). The trace has no audit keys, credentials, file modes or inodes, so
-those fields are absent and a rule that needs one is reported as not
-evaluated. An event's `_inferred` list (event journal format 2; format 1
+(`saddr`). The trace has no audit keys, so a rule that needs one is reported
+as not evaluated; user and group ids, capability sets, file identity (device and
+inode) and hashes are recorded from 0.7.0 on and fill the matching fields where
+the base is new enough, and are absent for an older base or recording. An event's `_inferred` list (event journal format 2; format 1
 journals still load) names the fields that came from tracking or correlation,
 and a finding says how many of its matched events rely on one. Rules that need
 a field the journal lacks, and keyword rules, are still reported as not
