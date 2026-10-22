@@ -163,7 +163,7 @@ class PlanTests(unittest.TestCase):
         for name in ("conf-stress-light", "conf-stress-heavy", "conf-stress-extreme", "conf-stress-lossy",
                      "debug-p2", "debug-p3", "audit-stop", "audit-core", "uring-status",
                      "uring-boots", "uring-legacy", "tracer-record", "tracer-legacy", "tracer-qa",
-                     "debugger-live", "stealth", "snapshot", "io-old-new-p3", "io-new-old-p3"):
+                     "debugger-live", "stealth", "snapshot", "io-old-new-p3", "io-new-old-audit"):
             self.assertIn(name, names)
         self.assertEqual(len(names), len(set(names)))
 
@@ -171,8 +171,8 @@ class PlanTests(unittest.TestCase):
         by_name = {c.name: c.argv for c in vm.plan("full", self.ctx())}
         self.assertTrue(by_name["io-old-new-p3"][0].startswith("/oldhost/"))
         self.assertIn("/base", by_name["io-old-new-p3"])
-        self.assertTrue(by_name["io-new-old-p3"][0].startswith("/new/"))
-        self.assertIn("/old", by_name["io-new-old-p3"])
+        self.assertTrue(by_name["io-new-old-audit"][0].startswith("/new/"))
+        self.assertIn("/old", by_name["io-new-old-audit"])
 
     def test_every_vm_check_has_its_own_data_folder(self):
         folders = [a for c in vm.plan("full", self.ctx()) if c.vm and c.argv

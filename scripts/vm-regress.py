@@ -312,6 +312,8 @@ def plan(tier, ctx):
         Check("snapshot", "full", example("snapshot-check", base, runs / "snapshot"), str(ROOT), 2400,
               needs=("base",)),
     ]
+    # Old host on the new base runs the whole contract; the new host on an old base can only
+    # run what that guest has: the legacy checks above (io_uring, tracer) and the audit core.
     old, olds = ctx["old"], ctx["old_base"]
     interop = [
         ("io-old-new-stealth", "stealth-check", ["measure", fix / "stealth-probe"], base, old),
@@ -319,10 +321,7 @@ def plan(tier, ctx):
         ("io-old-new-tracer", "tracer-check", ["record", fix / "tracer-fixture"], base, old),
         ("io-old-new-audit", "audit-check", ["core", fix / "audit-fixture"], base, old),
         ("io-old-new-p3", "debug-check", ["p3", fix / "debug"], base, old),
-        ("io-new-old-uring", "uring-check", ["status", torture, urfix], olds, new),
-        ("io-new-old-tracer", "tracer-check", ["record", fix / "tracer-fixture"], olds, new),
         ("io-new-old-audit", "audit-check", ["core", fix / "audit-fixture"], olds, new),
-        ("io-new-old-p3", "debug-check", ["p3", fix / "debug"], olds, new),
     ]
     needs = ("base", "old_base", "old")
     for name, mode, args, bundle, ex in interop:
