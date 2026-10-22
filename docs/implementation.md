@@ -489,6 +489,16 @@ userfaultfd or FUSE stall, no residency change a sample could see with
   blocks (the mark is what tells it apart) and a buffer the call never reads
   (stays NOT_RESIDENT; `mincore` shows the recorder did not load it). Golden
   files show the mark as `complete@at exit`.
+* **Cost.** A call whose entry found nothing non-resident pays a 64-byte reset
+  at entry and a few branches per field and at exit; the task context grows
+  by about 1.3 KiB and stays in the same slab size. The stress groups re-read
+  422 of 737k calls (`stress-light`). Their throughput is set by the shared
+  host, not the guest: same app, base 0052 → 0053, `stress-light` 31.3k →
+  9.6k calls/s, `stress-lossy` (guest bound, no waiting) 95.8k → 190.8k
+  calls/s, `threads` 2.8k → 3.3k, in both directions with load averages of
+  10 to 15 on the host, so no difference can be attributed to the change.
+  `stress-heavy` failed both times the same way (the host's recording writer
+  queue filled).
 
 ### Guest conformance suite, part 1: the syscall trace log (0.7.0)
 
