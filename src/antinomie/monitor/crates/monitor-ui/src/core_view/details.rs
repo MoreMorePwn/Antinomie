@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! What the shared Details panel shows for a core: the function, mapping,
 //! string or note chosen last in the Cores view.
 use super::*;

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Pack requirements and how they are checked against installed tools.
 use super::*;
 

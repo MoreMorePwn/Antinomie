@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Host wall-clock presentation shared by histories and triage.
 use antinomie_monitor_core::HostClockAnchor;
 use chrono::{DateTime, FixedOffset, Local, Utc};

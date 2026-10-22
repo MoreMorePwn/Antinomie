@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 use super::{ANALYSIS_PREVIEW_MAX_SIZE, AnalysisReport, AnalysisSpecimenPage, AnalysisState};
 use rustix::fs::{Mode, OFlags, openat};
 use sha2::{Digest, Sha256};

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Stealth profile: QEMU launch options that make a VM look like ordinary
 //! hardware to software that checks whether it runs in a VM.
 //!

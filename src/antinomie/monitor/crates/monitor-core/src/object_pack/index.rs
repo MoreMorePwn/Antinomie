@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Reading the packed object store: the index and the segments it names.
 //!
 //! `objects.idx` is retained as the evidence source. A private, disposable

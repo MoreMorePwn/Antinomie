@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! TShark's packet details (PDML) for one frame, as a bounded tree.
 //!
 //! TShark prints every protocol and field with the line Wireshark shows for

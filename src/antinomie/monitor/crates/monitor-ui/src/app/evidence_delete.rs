@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Deleting a saved network capture or core: the confirmation, the backend
 //! command and what the app forgets once the files are gone.
 use super::*;

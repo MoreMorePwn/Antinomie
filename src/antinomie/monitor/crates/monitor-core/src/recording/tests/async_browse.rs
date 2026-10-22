@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Dense async observations: the page previews them, a continuation browses
 //! them all, and every saved raw identity stays reachable.
 use super::*;

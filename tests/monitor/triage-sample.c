@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 /* Run only in the disposable sample guest. All file changes stay in a fresh
  * /tmp directory; network destinations are the isolated local fixture server. */

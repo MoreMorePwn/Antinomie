@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Keeping the archive index cache bounded.
 //!
 //! An index is rebuilt from its recording whenever it is missing, so the cache

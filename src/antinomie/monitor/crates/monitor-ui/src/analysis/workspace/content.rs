@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The Content tab: the retained specimen read one page at a time and shown
 //! as a hex dump, text or a byte literal. Reading is a report action; this
 //! view only asks for the page it shows.

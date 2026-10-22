@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The filesystem side of the reader: answers [`DiskRequest`]s from an ext4
 //! image with the `ext4-view` crate. This runs inside the sandbox of the
 //! `--disk-reader` worker, but is plain code that unit tests call directly.

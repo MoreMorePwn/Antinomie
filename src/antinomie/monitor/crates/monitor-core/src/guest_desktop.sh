@@ -1,5 +1,5 @@
 # shellcheck shell=sh
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-only
 # Copyright (c) 2026 MikiMiku (MoreMorePwn)
 #
 # Runs a program in the guest's logged-in graphical session. The host launches

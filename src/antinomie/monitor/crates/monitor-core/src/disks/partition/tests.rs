@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 use super::*;
 use crate::disks::fixture::{
     EXT4_START, Fixture, OTHER_LENGTH, OTHER_START, Scheme, require_tools,

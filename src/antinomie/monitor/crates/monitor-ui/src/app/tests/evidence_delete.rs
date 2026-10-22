@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Right-click Delete: the confirmation, the backend command and what the app
 //! forgets once the backend has deleted the files.
 use super::*;

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The context menu every static analysis table row offers, and the floating
 //! details and bytes windows its items open. A window holds a copy of its
 //! row, so it outlives the filter, sort and tab that showed the row.

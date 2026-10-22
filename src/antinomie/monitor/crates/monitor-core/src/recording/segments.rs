@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The recording segments of one run.
 //!
 //! A transport reconnect seals a run's recording and continues the same run

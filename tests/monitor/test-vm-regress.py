@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-only
 """scripts/vm-regress.py: tier choice, argument parsing and the check plan, without a VM."""
 import importlib.util
 import io

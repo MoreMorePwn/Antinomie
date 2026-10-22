@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! BPF program loads and attachments seen in the trace.
 use super::*;
 

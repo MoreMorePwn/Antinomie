@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The Rule manager's view of schema 2 packs: where each collection comes
 //! from, what it is licensed under, which hosts it contacts, and the install,
 //! update and remove buttons.

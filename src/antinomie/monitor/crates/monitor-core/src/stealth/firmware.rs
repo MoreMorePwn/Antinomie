@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! UEFI firmware (OVMF) for the stealth profile, found as QEMU and libvirt
 //! find it: through the firmware descriptors QEMU's packages install
 //! (QEMU's `docs/interop/firmware.json`).

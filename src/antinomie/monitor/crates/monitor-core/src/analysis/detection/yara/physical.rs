@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Bounded PT_LOAD inspection for QEMU's x86-64 physical ELF dumps.
 //! CPU notes are intentionally not interpreted as Linux process metadata.
 use crate::core_dump::CoreMapping;

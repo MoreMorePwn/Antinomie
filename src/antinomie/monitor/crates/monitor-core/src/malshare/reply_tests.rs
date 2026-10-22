@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Public MalShare API metadata retrieved 2026-10-18; lists limited to three rows.
 //! Endpoint contract: https://malshare.com/doc.php. No key or sample bodies retained.
 use super::*;

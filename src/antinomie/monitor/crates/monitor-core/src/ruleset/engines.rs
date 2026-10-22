@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! What the scan engines on this host report about themselves.
 //!
 //! Requirements in the rules catalog are checked against these facts, and the

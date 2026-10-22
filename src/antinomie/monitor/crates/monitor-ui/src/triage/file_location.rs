@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Where a path lives: one table of rules, applied to every file row.
 //!
 //! A path can fall in several classes (`/home/user/.ssh/authorized_keys` is both

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Durable external qcow2 checkpoints. Saved layers are immutable dependencies.
 use crate::{
     api::{

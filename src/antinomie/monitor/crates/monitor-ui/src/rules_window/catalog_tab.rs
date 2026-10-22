@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The Catalog tab of the Detection rules page: the packs on offer for the
 //! engine and the details of the selected one. Nothing here fetches a rule.
 use super::{theme, Model};

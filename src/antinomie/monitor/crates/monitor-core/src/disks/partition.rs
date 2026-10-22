@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! MBR and GPT probing of a guest disk.
 //!
 //! The first sectors of the disk are guest-controlled bytes parsed in the

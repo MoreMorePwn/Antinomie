@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Persisted syscall page size and cursor invalidation.
 use super::*;
 

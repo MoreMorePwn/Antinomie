@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 use super::super::finding::Pick;
 use super::super::tests::{each_galley_rect, frames, rendered_text};
 use super::*;

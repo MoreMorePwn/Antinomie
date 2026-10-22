@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Native fixture for the Debugger tab, for screenshots in each theme and
 //! size. Needs an X11 display; exits by itself.
 //!

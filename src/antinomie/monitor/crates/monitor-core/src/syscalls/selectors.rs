@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! Names of enumerated arguments the schema types as plain integers: commands,
 //! operations, clocks, resources and the like (Linux 6.12 UAPI values). The

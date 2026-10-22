@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! The lines a fixture prints about what it did (tests/monitor/conformance/
 //! trace/fixture/oracle.h): `ANT_EXPECT`, `ANT_ROLE`, `ANT_GROUP`,

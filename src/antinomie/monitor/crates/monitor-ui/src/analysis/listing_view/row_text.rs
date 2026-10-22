@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The complete text of each cell of a listing row, for its context menu.
 use super::*;
 

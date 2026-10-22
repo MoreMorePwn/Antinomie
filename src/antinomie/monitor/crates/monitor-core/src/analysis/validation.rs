@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Bounds and consistency checks on analysis reports and their records,
 //! applied to worker output, archived reports and listing rows.
 use super::worker::REPORT_MAX_SIZE;

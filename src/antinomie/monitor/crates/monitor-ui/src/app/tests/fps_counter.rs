@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The debug FPS counter: off by default, drawn only when enabled, never a
 //! reason to repaint.
 use super::*;

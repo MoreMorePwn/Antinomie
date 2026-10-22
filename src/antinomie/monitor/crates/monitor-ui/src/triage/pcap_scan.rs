@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Packet capture scans through TShark and the spool that bounds them.
 use super::*;
 

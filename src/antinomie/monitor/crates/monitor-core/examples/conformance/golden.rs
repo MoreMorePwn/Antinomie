@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! Golden files of how the Syscall Trace view shows each described call,
 //! normalised so a rerun reproduces them: process and thread IDs become

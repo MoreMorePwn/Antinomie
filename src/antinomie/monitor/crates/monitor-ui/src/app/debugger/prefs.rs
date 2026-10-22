@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! What the debugger panel remembers between sessions and app restarts: the
 //! signal table, the fork policy, which panes of the tab are open and which
 //! gdb front end the console runs. They live in the app's saved settings, and

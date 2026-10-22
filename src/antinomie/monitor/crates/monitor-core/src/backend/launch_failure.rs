@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Wording of a failed program launch: what is known and what is not.
 use super::RequestError;
 

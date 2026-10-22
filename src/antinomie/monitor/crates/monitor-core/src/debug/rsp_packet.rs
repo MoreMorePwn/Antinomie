@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! GDB Remote Serial Protocol framing: `$payload#xx` packets with `}` escaping
 //! and run-length decoding, `%name:payload#xx` notifications, the acknowledgement
 //! bytes and the interrupt byte. Pure functions and a byte-at-a-time parser, so

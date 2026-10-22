@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The filter bar, the result table and the stored list of the samples window.
 use super::*;
 

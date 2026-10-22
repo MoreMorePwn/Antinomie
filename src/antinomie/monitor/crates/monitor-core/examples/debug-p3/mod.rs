@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! Debugger phase 3 qualification: `debug-check p3 BUNDLE NEW_DATA_DIR FIXTURE_DIR [test ...]`.
 //! FIXTURE_DIR holds `p3fix`, the build of `tests/monitor/debug-p3-fixture.c`

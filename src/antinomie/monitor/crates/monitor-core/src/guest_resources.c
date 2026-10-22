@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 /* Temporary 0.6.1 guest resource producer. No shell or guest libraries needed. */
 #define _GNU_SOURCE

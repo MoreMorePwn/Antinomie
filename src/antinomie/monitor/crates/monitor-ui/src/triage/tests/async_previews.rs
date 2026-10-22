@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! A scan of a call with more async observations than its page previews says so.
 use super::*;
 

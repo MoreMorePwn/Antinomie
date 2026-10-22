@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 use super::super::{CHUNK_TAG, FIELD_TAG, FieldKey, INDEX_FILE, MAGIC, VERSION};
 use super::*;
 use std::{

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Read through the native integration; bind every typing intent to one boot.
 use super::*;
 use antinomie_monitor_core::clipboard::Text;

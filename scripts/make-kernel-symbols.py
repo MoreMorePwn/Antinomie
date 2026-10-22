@@ -10,7 +10,7 @@ from its upstream release into --tools (default: work/tools of this kit),
 pinned by SHA-256. The table lets Volatility analyse memory dumps of guests
 running exactly this kernel.
 """
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-only
 # Copyright (c) 2026 MikiMiku (MoreMorePwn)
 import argparse
 import hashlib

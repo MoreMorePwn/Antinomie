@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The sidebar's Library section and the pages it opens in the main area.
 use super::*;
 use antinomie_monitor_core::ruleset::InstalledPack;

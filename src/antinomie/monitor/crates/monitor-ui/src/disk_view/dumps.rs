@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The saved dumps of the entries list: scanning the recordings, the rows
 //! with their badges and menus, and the record filter.
 //!

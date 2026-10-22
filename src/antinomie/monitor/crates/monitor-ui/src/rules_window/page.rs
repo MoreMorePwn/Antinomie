@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The Detection rules page: YARA, IDS and Sigma tabs; inside each, Installed
 //! and Catalog tabs. A pack lists all of its rules in a table and a rule
 //! shows its details and source text. Catalog packs show the catalog's

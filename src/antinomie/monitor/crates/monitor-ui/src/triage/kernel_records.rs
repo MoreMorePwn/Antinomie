@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Credentials and file hashes the guest kernel recorded, turned into the
 //! Sysmon `User`, `LogonId` and `Hashes` fields and the auditd `uid`, `euid`,
 //! `auid` family.

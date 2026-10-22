@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Packed object store: captured buffers of one archive in a few append-only
 //! files instead of one file per buffer.
 //!

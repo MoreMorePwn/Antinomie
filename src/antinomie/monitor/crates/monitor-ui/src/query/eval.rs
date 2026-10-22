@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Filter expressions, values and their evaluation against a row.
 use super::*;
 

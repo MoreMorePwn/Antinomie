@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Time zones offered by the base build wizard.
 
 /// Time zones (IANA names).

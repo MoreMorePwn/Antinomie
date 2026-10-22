@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Normalize facts already reconstructed by triage; do not infer missing fields.
 use super::*;
 use antinomie_monitor_core::analysis::detection::JournalSummary;

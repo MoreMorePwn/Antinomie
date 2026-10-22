@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The executable sandboxed workers run: this program, even after a rebuild
 //! replaced it on disk.
 use super::*;

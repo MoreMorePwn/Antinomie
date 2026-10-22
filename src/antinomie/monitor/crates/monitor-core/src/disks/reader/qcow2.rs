@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! A read-only view of a standalone qcow2 image as the raw disk it holds, for
 //! `ext4-view`.
 //!

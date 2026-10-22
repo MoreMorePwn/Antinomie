@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! What it means that the recording quota is reached.
 //!
 //! The quota bounds what one VM boot may save: raw telemetry, assembled

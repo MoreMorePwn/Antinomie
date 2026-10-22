@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-only
 # Copyright (c) 2026 MikiMiku (MoreMorePwn)
 # Runs Volatility 3 for Antinomie (python3 -I -c <this> LIB MODE ARGS...).
 #   LIB   directory holding the volatility3 package and its dependencies

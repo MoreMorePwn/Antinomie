@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The Disks tab inside the application: its place among the tabs, what it
 //! shows for a running or a stopped VM, the commands its buttons send and the
 //! shared Details dock.

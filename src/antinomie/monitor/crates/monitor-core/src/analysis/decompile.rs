@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Decompilation through a locally installed decompiler: Ghidra headless
 //! when present, otherwise radare2's pseudo-code. Each function becomes a
 //! header row followed by one row per source line.

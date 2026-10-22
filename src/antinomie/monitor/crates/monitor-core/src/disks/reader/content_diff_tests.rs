@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Content search and image comparison in the reader.
 use super::{
     content::{self, Limits as FindLimits},

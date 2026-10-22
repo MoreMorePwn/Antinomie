@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Encoders and decoders for the guest debug opcodes (`protocol/control.h`).
 //! Pure functions: no transport, so every layout is unit-tested against the
 //! shared header. All integers are little endian.

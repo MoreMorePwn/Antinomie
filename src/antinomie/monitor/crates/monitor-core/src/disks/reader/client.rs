@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The parent's handle on the sandboxed reader worker.
 use super::protocol::{CONTENT_SECONDS, DIFF_SECONDS, DiskRequest, Envelope, FIND_SECONDS, Reply};
 use crate::disks::sandbox::Account;

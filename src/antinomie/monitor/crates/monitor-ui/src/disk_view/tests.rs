@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Headless tests of the Disks tab: its states, tree, Details, Find and the
 //! requests it makes. The reader is not started: answers are fed in as the
 //! reader thread would deliver them.

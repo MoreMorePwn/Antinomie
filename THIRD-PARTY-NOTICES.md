@@ -1,6 +1,6 @@
 # Third-party notices
 
-These materials are not relicensed by the root MIT license. This inventory
+These materials are not relicensed by the root GPLv3 license. This inventory
 records known embedded UI assets and distribution boundaries; it is not a
 complete transitive-dependency or binary-release compliance audit.
 

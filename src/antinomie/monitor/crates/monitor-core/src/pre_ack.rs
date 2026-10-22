@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Bounded holding area for packets of a root task the host has not been told
 //! about yet.
 //!

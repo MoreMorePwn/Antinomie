@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 /* Debugger phase 3 fixture for the disposable BusyBox qualifier: processes that
  * fork, vfork and exec, and threads that run on their own. One binary, a mode

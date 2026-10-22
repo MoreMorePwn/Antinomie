@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! auditd-style records built from one traced call, so Sigma rules written for
 //! `service: auditd` can be evaluated against a run.
 //!

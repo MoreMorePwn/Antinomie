@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The gdb console of the Debugger tab: host gdb, with GEF (bata24) or
 //! pwndbg, on a terminal pane, connected to the session through the RSP
 //! loopback server like any external gdb. While it is connected gdb is the

@@ -1,5 +1,10 @@
 # Contributing to the Antinomie kernel packaging
 
+Original host/tooling contributions for 0.7.0 and later use GPL-3.0-only.
+Shared kernel headers remain MIT; kernel-derived and imported files keep their
+existing licenses. Contributions must be available under the destination
+license. See LICENSING.md; earlier releases retain their original terms.
+
 This document is the operational guide for adding and maintaining Antinomie
 patches. It assumes you have read the design documents in the project vault
 (`Documentation/Antinomie/`), in particular *Debian Kernel and Image

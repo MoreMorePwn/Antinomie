@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Per-run network capture on the session: start, stop, suspend and resume.
 use super::*;
 

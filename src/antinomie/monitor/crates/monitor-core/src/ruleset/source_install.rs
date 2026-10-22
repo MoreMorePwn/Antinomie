@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Installing a schema 2 pack: fetch from upstream, verify, filter locally,
 //! index, and register the result like any other pack version.
 use super::*;

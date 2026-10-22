@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The original text of one indexed rule, read from the installed file it was
 //! parsed from. Nothing is stored beside the index: the text is cut out of the
 //! pack or group file again with the same block splitters the index uses.

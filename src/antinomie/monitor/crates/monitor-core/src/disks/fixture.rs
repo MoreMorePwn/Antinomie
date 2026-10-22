@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Test fixtures: small ext4 images built with `mkfs.ext4 -d` and `debugfs`,
 //! and qcow2 chains built with `qemu-img`, all in a private temp folder that
 //! is deleted on drop. Tests that need the tools skip when they are missing.

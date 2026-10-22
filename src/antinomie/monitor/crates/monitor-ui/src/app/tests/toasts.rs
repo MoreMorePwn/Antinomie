@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Warnings and errors reach the user as toasts, not in their old places.
 use super::*;
 use crate::activity::Level;

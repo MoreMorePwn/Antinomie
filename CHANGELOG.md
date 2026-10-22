@@ -6,6 +6,20 @@ it runs.
 
 ## 0.7.0 — Unreleased
 
+- **Host licensing.** Original application, host transport, tooling, tests and
+  product documentation use GPL-3.0-only from 0.7.0. Earlier releases remain MIT.
+  Shared headers compiled into the kernel remain MIT; kernel patches, kernel
+  transport, Debian inputs, fonts, dependencies and community rules retain their
+  own licenses. Application archives retain component notices and a locked
+  dependency inventory. See LICENSING.md for boundaries and source obligations.
+
+- **Known issues scheduled for 0.7.1.** Under stress-heavy, a waiting guest
+  telemetry sender can starve and drop records even while the host keeps
+  consuming the ring. Transport reconnect occasionally takes long enough that a
+  timed sample has packets in only one recording segment. Both remain unfixed
+  in 0.7.0 by the user's release decision; loss and partial-recording indicators
+  remain enabled. A passing retry does not establish a repair.
+
 - **Final audit fixes (host).** Packets and the Static analysis tables sort
   from their headers; the DNS table is back to its 0.6.2 columns; Summary >
   Health shows how long telemetry was held back for the recording writer (a

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Selection profiles a scan reads: digests, snapshots and their manifests.
 use super::{exclusions::DUPLICATE_RULE_REASON, *};
 

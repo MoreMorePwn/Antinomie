@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The VM is paused while QEMU writes the RAM dump: say so, with progress,
 //! and keep guest commands from being sent (the backend refuses them).
 use super::*;

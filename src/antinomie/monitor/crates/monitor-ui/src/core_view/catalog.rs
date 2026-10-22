@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The catalog of process cores on disk and its background refresh.
 use super::*;
 

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! `DebugBackend` over the guest kernel's debug engine. Requests go through a
 //! `GuestLink`; the backend keeps the session id and the generation of the last
 //! stop it saw, and sends that generation with every request so an operation

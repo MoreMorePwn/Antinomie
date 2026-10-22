@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The Threads and Breakpoints panes: sortable tables of the stopped process's
 //! threads and its breakpoints.
 use super::*;

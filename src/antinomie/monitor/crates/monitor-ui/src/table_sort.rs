@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Click-to-sort for plain tables: the header cell and the row order it picks.
 //! The header and its arrow are the triage tables' own (`triage::sort_header`);
 //! this adds the ordering for tables that hold ordinary Rust rows.

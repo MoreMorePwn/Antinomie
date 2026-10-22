@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Bounded, file-backed Linux x86-64 process-core inspection. Physical QEMU
 //! dumps are deliberately rejected: their CPU notes are not process threads.
 use iced_x86::{Decoder, DecoderOptions, Formatter, IntelFormatter};

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Session orchestration: the frontend handle, the worker thread that owns the
 //! VM, and the session that owns one transport client.
 mod completions;

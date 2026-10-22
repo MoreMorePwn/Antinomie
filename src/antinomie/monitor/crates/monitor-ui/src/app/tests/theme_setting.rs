@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The theme choice: Settings > Appearance, remembered across launches, and
 //! the windows that follow the new window style.
 use super::*;

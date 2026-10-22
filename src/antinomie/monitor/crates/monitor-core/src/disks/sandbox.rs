@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The private account file the shared sandbox profile binds over
 //! `/etc/passwd`: one unprivileged name, no host account.
 use std::{

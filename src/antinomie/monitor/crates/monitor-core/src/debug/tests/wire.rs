@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 use crate::debug::{ArchTag, RegsetBlob, wire::*};
 
 fn define(name: &str) -> u32 {

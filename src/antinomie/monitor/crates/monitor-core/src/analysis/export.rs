@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Export retained evidence on an archive worker, never the rendering thread.
 use super::{AnalysisData, AnalysisEntry, AnalysisKind, AnalysisReport, AnalysisSection};
 use std::{

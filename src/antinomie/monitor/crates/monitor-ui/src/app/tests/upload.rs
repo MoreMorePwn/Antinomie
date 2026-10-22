@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Upload dialog, file explorer and the upload-then-run handoff.
 use super::*;
 

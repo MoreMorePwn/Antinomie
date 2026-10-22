@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! Real-VM qualification of configurable process-core sizes: one case per run,
 //! one JSON `ROW` line for the result. The data folder must be new.

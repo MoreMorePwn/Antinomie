@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The worker loop: notifications, tool and catalog polling, base listing.
 use super::*;
 

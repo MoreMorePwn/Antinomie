@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Downloading upstream rule files: HTTPS only, bounded, cancellable, and
 //! limited to the hosts the catalog names.
 use super::*;

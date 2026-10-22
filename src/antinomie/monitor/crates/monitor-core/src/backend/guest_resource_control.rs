@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! Guest resource producers on the single backend transport owner: the kernel's
 //! RESOURCES command (revision 17 and later) or, for older bases, the temporary

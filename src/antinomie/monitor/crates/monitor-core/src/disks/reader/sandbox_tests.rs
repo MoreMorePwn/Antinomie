@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The reader's sandbox: what a compromised worker could reach, probed with a
 //! shell run in the same bubblewrap command line, and the worker's lifecycle.
 use super::{

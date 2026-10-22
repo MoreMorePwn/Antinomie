@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Selection information rendered exclusively in the shared Details panel.
 use super::*;
 

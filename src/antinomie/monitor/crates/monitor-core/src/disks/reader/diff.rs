@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Comparing two ext4 images: the entries added to, deleted from and changed
 //! in the image since a reference (the "before").
 //!

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Opt-in check of Triage over real guest recordings of io_uring, AIO and
 //! plain file work, made by `uring-check record` (see its documentation):
 //!

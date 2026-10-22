@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Run program > Program > Source: a file already in the guest, or a host
 //! file that is uploaded first.
 use crate::theme;

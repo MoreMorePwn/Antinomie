@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! A sample push from sending it to its result, or to giving up on it.
 use super::SamplesView;
 use antinomie_monitor_core::ExecRequest;

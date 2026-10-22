@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Focused image contract and rollback tests; no network or mmdebstrap run required."""
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-only
 import importlib.util
 import io
 from pathlib import Path

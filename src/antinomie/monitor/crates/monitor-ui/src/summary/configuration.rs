@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Configured capacities, launch preferences and the stealth profile of the
 //! selected VM, as cards.
 use super::*;

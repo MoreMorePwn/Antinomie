@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The request handlers of an RSP client session that read and change the
 //! target: stop status, thread selection, registers, memory, breakpoints and
 //! the queries (`qSupported`, target description, thread list). The session

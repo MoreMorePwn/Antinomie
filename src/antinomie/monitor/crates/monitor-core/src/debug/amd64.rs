@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The x86-64 target description.
 //!
 //! The register image follows GDB's amd64-linux feature order, which this file

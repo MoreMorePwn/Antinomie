@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Independent manual capture ownership. Admission is sent once, after a
 //! durable nonce journal; uncertain admission is reconciled only by LOOKUP.
 use super::{

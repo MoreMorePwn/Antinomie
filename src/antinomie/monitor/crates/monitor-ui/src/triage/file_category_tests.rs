@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 use super::file_category::{self, Access, Category, Hit, Outcome};
 use super::*;
 use crate::triage::tests::{call, captured, path_call};

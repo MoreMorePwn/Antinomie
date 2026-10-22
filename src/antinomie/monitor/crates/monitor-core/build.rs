@@ -4,6 +4,9 @@ use std::{env, fs, path::Path};
 /// their repository layout.
 const KIT_FILES: &[&str] = &[
     "LICENSE",
+    "LICENSING.md",
+    "THIRD-PARTY-NOTICES.md",
+    "LICENSES/Antinomie-MIT.txt",
     "scripts/build-base.py",
     "scripts/build-monitor-kernel.sh",
     "scripts/build-monitor-image.py",

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Running optional local tools inside the analysis sandbox: bounded output,
 //! a wall-clock timeout and an explicit environment.
 use std::{

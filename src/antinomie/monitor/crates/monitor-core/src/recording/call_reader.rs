@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Assembles the saved evidence of one call from the packet index.
 //!
 //! A call's entry, exit, task end and kernel notes are always read. Its async observations

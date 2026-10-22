@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The text of one rule is cut from its installed file for every engine.
 use super::*;
 

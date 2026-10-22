@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Program-run dropdown shared by the Triage and syscall trace views.
 //!
 //! Every view that offers the dropdown reads and writes `selected_run`, so a

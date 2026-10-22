@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Right-click Delete of saved network captures and process cores: the menu
 //! item and the wording of the confirmation. The deletion itself is the
 //! backend's `Command::DeleteEvidence`.

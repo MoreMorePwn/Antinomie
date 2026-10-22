@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! SMBIOS structures QEMU's own options cannot fill as a PC's firmware does:
 //! the BIOS information (type 0) and the chassis (type 3).
 use super::MachineIdentity;

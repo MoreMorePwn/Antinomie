@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The Library: base images, detection rules and analysis tools. The sidebar
 //! lists them; each opens as a page, a tab of the main area.
 use super::*;

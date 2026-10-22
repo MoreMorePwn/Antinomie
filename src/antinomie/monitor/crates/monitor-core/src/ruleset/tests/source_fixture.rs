@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Local stand-ins for upstream downloads. No test here uses the network.
 use super::*;
 use std::sync::Mutex;

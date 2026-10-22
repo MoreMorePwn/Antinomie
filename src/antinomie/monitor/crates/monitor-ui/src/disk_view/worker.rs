@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! A thread that owns one sandboxed reader and answers one request at a time,
 //! so the interface never waits for the image.
 use antinomie_monitor_core::disks::{

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! Phase 2 through a real gdb: Debug on start, threads, stepping across a system
 //! call and a repeated string instruction, hardware breakpoints and watchpoints,

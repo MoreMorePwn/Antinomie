@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Four disk workers isolate bounded process-core writes and durability from
 //! the transport owner. A sink submits at most one job and polls its receipt.
 use crate::{api::RunArtifactState, storage};

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Opt-in check of the Debugger tab's gdb console against a real guest: the
 //! app with its backend, a BusyBox VM, the phase-2 fixture, host gdb with
 //! the managed GEF and the managed portable pwndbg, driven through the pane

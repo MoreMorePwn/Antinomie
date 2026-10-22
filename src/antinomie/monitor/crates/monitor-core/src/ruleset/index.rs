@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Derived rule indexes and their migration between parser versions.
 use super::*;
 

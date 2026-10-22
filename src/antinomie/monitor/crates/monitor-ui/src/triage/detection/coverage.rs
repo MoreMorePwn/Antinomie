@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Detection > rule coverage: how many IDS rules loaded or Sigma rules were
 //! evaluated, how many did not apply and why. These are coverage limits of the
 //! engine and the run; they are not a partial scan.

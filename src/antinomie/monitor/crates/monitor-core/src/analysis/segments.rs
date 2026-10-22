@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Segments for Structures: every ELF program header, or the segments
 //! other object formats declare.
 use object::{Object, ObjectSegment};

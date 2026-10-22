@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Per-section progress of a running worker: the worker publishes the report
 //! after every section and the host adopts what is validated, so a deadline or
 //! a crash keeps the sections that finished.

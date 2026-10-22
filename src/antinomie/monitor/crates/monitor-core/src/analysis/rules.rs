@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Rule matching with YARA-X and the rules selected in the rule manager.
 use super::*;
 use std::{fs, path::Path, time::Duration};

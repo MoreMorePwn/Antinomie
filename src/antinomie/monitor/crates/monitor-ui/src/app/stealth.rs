@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! VM configuration > Stealth profile: the hardware identity a VM shows its
 //! guest. A preset fills every entry; editing one makes the profile Custom.
 use super::*;

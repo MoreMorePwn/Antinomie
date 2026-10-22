@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! A background keyboard owner with short QMP connections between key chords.
 use super::Qmp;
 use std::{

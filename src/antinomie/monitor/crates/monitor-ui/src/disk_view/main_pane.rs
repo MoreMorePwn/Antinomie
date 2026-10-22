@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The main pane: one of the states of the Current disk entry (no VM, VM
 //! running, measured, job running, open), or the browser of a saved dump.
 use super::*;

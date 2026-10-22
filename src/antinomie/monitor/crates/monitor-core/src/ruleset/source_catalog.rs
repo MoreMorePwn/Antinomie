@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Schema 2 of the rules catalog: sources, not archives.
 //!
 //! The catalog lists where each rule collection lives upstream, the exact

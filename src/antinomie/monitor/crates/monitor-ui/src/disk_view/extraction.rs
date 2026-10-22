@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Extracting a guest file to the host: the reader writes it, the parent
 //! gives it a sanitized private name, and what happens next is the intent.
 //! Nothing is ever executed; the viewer, Save to host, Open with and Static

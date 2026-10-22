@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-only
 """Nightly end-to-end check on a real VM: the newest BusyBox base for this
 app version boots, launched programs and Capture All are recorded without
 loss or parser errors, processes are named, and a network capture records

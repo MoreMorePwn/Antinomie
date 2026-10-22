@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The listing: disassembly around the instruction pointer, decoded by the
 //! same iced-x86 formatter as the static listing from a bounded window of the
 //! stopped process's memory, and painted with the shared listing's

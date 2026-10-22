@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Help > Getting started: when it opens, what it remembers, the install
 //! command and the dependency list.
 use super::*;

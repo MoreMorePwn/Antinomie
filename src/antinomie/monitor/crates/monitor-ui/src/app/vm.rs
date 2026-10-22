@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! VM configuration, launch and the VM settings dialog.
 use super::*;
 

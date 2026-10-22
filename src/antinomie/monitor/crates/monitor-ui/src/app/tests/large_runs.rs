@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Large-run regressions: archive paging, the process tree and per-frame
 //! file lookups stay cheap as a recording grows.
 use super::*;

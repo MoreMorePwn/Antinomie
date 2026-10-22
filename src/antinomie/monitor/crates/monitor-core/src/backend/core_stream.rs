@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Reading a finished process core: several `CORE_READ`s are sent for
 //! consecutive offsets before the first reply is waited for, and the replies
 //! are joined into one write. A guest buffer is immutable once terminal, so a

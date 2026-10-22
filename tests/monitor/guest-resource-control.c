@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 /* Exercise the real static collector through the existing public control API.
  * Reuse the monitor integration driver's bounded framing and transport owner. */

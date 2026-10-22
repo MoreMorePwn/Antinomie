@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Process cores stay separate from VM RAM. Metadata, page reads and decoding
 //! run in a single bounded background job; rendering never loads a whole core.
 use antinomie_monitor_core::core_dump::{self, CoreDump, CoreFunction, CoreMapping, CoreRecord};

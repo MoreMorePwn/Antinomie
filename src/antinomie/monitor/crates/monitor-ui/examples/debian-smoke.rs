@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 use antinomie_monitor_core::{
     recording::open_recording, Backend, BackendOptions, Command, ExecRequest, GuestCredentials,

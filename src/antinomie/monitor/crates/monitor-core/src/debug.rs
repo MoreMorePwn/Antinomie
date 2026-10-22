@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Debugger support: a host RSP (GDB Remote Serial Protocol) server in front of
 //! a `DebugBackend`. The shipped backend is the Antinomie guest kernel's
 //! ptrace-free debug engine over the V7 control channel; the trait is the seam

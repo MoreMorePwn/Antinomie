@@ -72,6 +72,10 @@ jobs:
       - name: Tests
         working-directory: src/antinomie/monitor
         run: cargo test --release --locked --no-fail-fast
+      - name: License boundaries and locked dependencies
+        run: |
+          python3 tests/monitor/test-licenses.py
+          python3 scripts/check-licenses.py
       - name: Build-script tests
         run: |
           python3 tests/monitor/test-guest-resources.py

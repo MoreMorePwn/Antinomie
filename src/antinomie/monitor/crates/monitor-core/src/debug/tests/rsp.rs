@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The RSP server against a mock backend, over its real Unix socket and TCP
 //! port. Packets are written by hand so these tests pin the exact replies a
 //! debugger sees, independent of the server's own packet code.

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The packet capture of the run or observation Triage shows.
 //!
 //! Finding it opens the run's artifact list and reads the first bytes of

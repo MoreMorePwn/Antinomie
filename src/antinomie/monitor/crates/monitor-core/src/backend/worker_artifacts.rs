@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Network captures, memory dumps and run artifacts owned by the worker.
 use super::*;
 

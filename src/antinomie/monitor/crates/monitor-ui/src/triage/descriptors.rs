@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! File descriptor, working directory and path tracking per task.
 use super::*;
 

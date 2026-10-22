@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Native per-VM operational dashboard. Host observations never imply guest utilization.
 use crate::theme;
 pub(crate) mod configuration;

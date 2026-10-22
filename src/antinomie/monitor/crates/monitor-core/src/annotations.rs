@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! User labels separate from recorder-owned evidence and identities.
 use serde::{Deserialize, Serialize};
 use std::{fs, io::Read, path::Path};

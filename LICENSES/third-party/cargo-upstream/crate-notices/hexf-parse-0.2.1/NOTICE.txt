@@ -1,0 +1,6 @@
+Upstream crate: hexf-parse 0.2.1
+Declared license: CC0-1.0
+Declared authors: Kang Seonghoon <public+rust@mearie.org>
+Source: https://crates.io/crates/hexf-parse/0.2.1
+
+The published crate supplies no explicit copyright notice in its source headers. Author and license declarations above are retained without inventing an owner or year.

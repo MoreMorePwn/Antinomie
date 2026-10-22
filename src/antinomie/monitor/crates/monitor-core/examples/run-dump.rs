@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! Print a recorded run's syscalls, one line each: process, thread, call,
 //! arguments, the first captured field and the result.

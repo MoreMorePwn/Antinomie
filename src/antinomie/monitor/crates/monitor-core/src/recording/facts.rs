@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The small facts a run's saved sidecars state, read without its telemetry.
 use super::*;
 

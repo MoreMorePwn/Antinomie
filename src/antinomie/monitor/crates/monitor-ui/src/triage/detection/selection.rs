@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The digest of the rules each engine would use, computed off the UI thread.
 use super::*;
 

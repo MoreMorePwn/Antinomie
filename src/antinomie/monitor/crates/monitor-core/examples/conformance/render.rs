@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! The Syscall Trace view's rendering of the recorded runs, made by the app's
 //! own code: the opt-in test `conformance_trace_render` of the monitor-ui

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! One nonblocking, correlated recorder statistics query per sampling interval.
 use super::*;
 

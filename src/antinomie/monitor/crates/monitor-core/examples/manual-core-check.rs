@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! Real four-vCPU live-core qualification; requires a fresh disposable data folder.
 use antinomie_monitor_core::*;

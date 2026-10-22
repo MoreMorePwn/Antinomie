@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! Real-VM qualification of the hashes of written files and of the launched
 //! program's own image, and of a run recorded across a transport reconnect.

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Run selection and evidence navigation for the native triage pane.
 use super::run_selector::RunSelector;
 use super::*;

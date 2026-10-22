@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Library → Detection rules. Catalog checks and downloads happen only from buttons.
 use crate::theme;
 use antinomie_monitor_core::ruleset::{self, Catalog, IndexedRule, Registry};

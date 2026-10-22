@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The File activity section: its tabs, filters and tables.
 use super::file_category::EVENT_HEADERS;
 use super::*;

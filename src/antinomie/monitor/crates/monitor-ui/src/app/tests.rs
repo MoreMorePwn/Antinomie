@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 use super::{session::*, trace_view::*, *};
 mod analysis;
 mod analysis_sections;

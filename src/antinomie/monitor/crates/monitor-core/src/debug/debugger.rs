@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The processes of one debugger session. Following a fork turns a child the
 //! guest holds parked into an inferior here; the controllers (an RSP client or the
 //! in-app panel) decide which to run, follow or let go. All-stop and non-stop

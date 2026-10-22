@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* Copyright (c) 2026 MikiMiku (MoreMorePwn) */
 /*
  * Guest fixture for the io_uring run-status qualification

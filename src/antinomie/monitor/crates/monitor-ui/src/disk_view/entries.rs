@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The list of entries on the left: "Current disk (VM off)", the buttons to
 //! dump the disk or import an image, and the saved dumps (see [`super::dumps`]).
 use super::*;

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Keeps Run History complete while the backend's live snapshot changes.
 //!
 //! The snapshot lists only the runs of the current boot. A run that leaves it

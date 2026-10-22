@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! MalwareBazaar end to end with a real API key: the searches the Malware
 //! samples window makes, one small ELF sample downloaded into

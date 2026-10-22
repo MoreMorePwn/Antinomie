@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 /* A benign program that exercises as many Antinomie views as one run can:
  * triage (processes, files, network, BPF), community-rule detection and

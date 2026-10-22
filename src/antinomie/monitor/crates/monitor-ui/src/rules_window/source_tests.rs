@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The Rule manager's schema 2 view, driven with local fixtures only.
 use super::*;
 use antinomie_monitor_core::ruleset::{Fetcher, PackEntry};

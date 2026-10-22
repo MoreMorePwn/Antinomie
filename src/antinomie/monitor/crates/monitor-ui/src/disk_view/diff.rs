@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Compare the open entry (the open view or a saved dump) with a reference:
 //! the installed base image, a saved checkpoint, another dump or the open
 //! view. The sandboxed reader walks both images and lists the added, deleted

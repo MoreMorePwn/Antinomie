@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! A small, bounded glob matcher for Find: `*` (any run, including `/`),
 //! `?` (one character) and `[...]` classes (ranges, leading `!` or `^`
 //! negates). Case-insensitive. Matching is iterative with backtracking only

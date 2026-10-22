@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Opt-in rendering check of recorded runs for the guest conformance suite
 //! (`examples/conformance` in monitor-core, tests/monitor/conformance):
 //!

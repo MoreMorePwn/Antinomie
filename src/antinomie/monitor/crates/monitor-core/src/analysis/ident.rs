@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Compiler, language, linker, runtime and packer identification from
 //! built-in signatures, plus `file` magic and Detect It Easy when installed.
 use super::tools;

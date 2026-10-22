@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Help > Getting started: the window frame, when it opens and the work it
 //! queues. Each step reuses the existing window's code and plumbing; see
 //! `steps` for what a step shows.

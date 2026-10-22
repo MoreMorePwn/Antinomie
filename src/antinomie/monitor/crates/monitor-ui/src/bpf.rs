@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Readable translation of captured eBPF instructions. Bytes are the guest's
 //! recorded program image; this is a disassembly, not proof the kernel loaded it.
 use std::{

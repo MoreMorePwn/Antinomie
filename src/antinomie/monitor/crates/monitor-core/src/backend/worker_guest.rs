@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Commands executed inside the running guest.
 use super::*;
 use crate::debug::KernelDebugBackend;

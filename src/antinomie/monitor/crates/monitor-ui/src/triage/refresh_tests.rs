@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Triage keeps the index of the selected run current without re-reading what
 //! has not changed. Regression tests for the refresh loop.
 use super::tests::write_rwx_calls;

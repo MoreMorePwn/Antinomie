@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Controls and messages that must not stay stuck after the VM, boot or
 //! backend state moves on.
 use super::*;

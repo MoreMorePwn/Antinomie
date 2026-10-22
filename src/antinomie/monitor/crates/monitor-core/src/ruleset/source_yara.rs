@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The YARA-Forge filter: split a package by source repository, keep the
 //! rules whose license allows local use and drop the ones that do not compile.
 //!

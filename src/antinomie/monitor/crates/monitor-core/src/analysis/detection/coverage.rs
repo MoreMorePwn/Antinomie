@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Rule coverage of one IDS or Sigma scan: how many rules the engine could use
 //! and why the others did not apply to this run. A rule that does not apply is a
 //! coverage limit, not an incomplete scan, so none of this changes the state.

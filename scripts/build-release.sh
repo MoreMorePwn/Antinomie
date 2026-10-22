@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-only
 #
 # build-release.sh — build the release executable and the release archive
 # antinomie-<version>-linux-x86_64.tar.gz plus SHA256SUMS.
@@ -50,6 +50,7 @@ cp "$REPO/install.sh" "$REPO/CHANGELOG.md" "$REPO/LICENSE" "$REPO/LICENSING.md" 
    "$REPO/THIRD-PARTY-NOTICES.md" "$package/"
 cp "$MONITOR/assets/antinomie.desktop" "$MONITOR/assets/antinomie.svg" "$package/"
 cp -r "$REPO/LICENSES" "$package/"
+python3 "$REPO/scripts/check-licenses.py" --output "$package/LICENSES/cargo-dependencies"
 # Preserve notices from the toolchain/libc actually used by this build.
 rust_notice="$(rustc --print sysroot)/share/doc/rust/COPYRIGHT-library.html"
 test -f "$rust_notice"
@@ -113,9 +114,12 @@ Packet display filters and HTTP/DNS triage use installed TShark, with
 Bubblewrap and Prlimit isolation/resource limits. On Debian/Ubuntu install
 tshark bubblewrap util-linux. These tools are not bundled in this archive.
 
-Licensing: see LICENSING.md; the executable is a composite of MIT
-application code, its dependencies, the embedded analysis rule sets (their
-own licenses, see THIRD-PARTY-NOTICES.md) and the embedded base build kit.
+Licensing: original application code is GPL-3.0-only from 0.7.0. Earlier
+releases remain MIT. Shared kernel headers, dependencies, separately installed
+rule packs and the embedded guest build kit retain their own licenses.
+See LICENSING.md, THIRD-PARTY-NOTICES.md and LICENSES/. Redistributors must
+provide corresponding source to binary recipients; retain the source revision
+and build instructions alongside the downloads.
 BUILD-INFO.json records the source revision, compiler, musl package and notices.
 TEXT
 mkdir -p "$OUT"

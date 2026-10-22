@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* Copyright (c) 2026 MikiMiku (MoreMorePwn) */
 /*
  * Guest probe for the kernel tracer's credential and file-hash records.

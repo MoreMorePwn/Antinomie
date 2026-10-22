@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! One row of a hex dump, shared by the process-core viewer and the debugger:
 //! sixteen bytes as hex, then as printable characters. A byte the viewer has
 //! not got is shown for what it is: `??` for one that cannot be read, `··` for

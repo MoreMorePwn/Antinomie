@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! Print a recording's assembled events, every phase including lifecycle
 //! records, with each captured field: key, status (and "at exit" or "kernel

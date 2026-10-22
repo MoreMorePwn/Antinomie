@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 use super::*;
 use object::{Object, ObjectSection, ObjectSymbol};
 use sha2::{Digest, Sha256};

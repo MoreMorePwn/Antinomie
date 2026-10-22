@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Branch prefixes in the style of the `tree` command: `├── `, `└── `,
 //! `│   ` and blanks, one four-character cell per level below the roots.
 //! Each level has its own color from the theme's cycling tree palette; the

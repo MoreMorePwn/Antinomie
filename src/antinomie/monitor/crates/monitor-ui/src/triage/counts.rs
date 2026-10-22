@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Whole-run section totals, independent of table filters and preview pages.
 use super::*;
 use crate::widgets::{self, TabItem, Tone};

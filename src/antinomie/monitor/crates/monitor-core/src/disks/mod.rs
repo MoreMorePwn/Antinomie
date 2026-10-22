@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The Disks tab's backend: a read-only view of a VM's current disk while the
 //! VM is off, and the sandboxed reader that browses it.
 //!

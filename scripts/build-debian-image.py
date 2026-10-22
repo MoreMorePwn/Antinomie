@@ -6,7 +6,7 @@ The root filesystem is bootstrapped into a tarball (rootless with
 image with mkfs.ext4 -d; no libguestfs appliance and no mounted host
 filesystems are used.
 """
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-only
 # Copyright (c) 2026 MikiMiku (MoreMorePwn)
 import argparse
 from datetime import datetime, timedelta, timezone

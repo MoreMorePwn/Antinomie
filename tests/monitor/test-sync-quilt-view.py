@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-only
 """scripts/sync-quilt-view.py: the Quilt view of the guest series lists every patch."""
 import importlib.util
 import tempfile

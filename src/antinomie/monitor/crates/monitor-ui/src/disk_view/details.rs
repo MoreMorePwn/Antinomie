@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The shared Details dock for the Disks tab: the open view, or the selected
 //! file, directory or link, with Extract, Save, Open with and Static Analysis.
 use super::{extraction::Intent, *};

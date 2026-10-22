@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Bounded root-group ELF core acquisition. Immutable guest buffers are read by
 //! offset; launch and release side effects are never automatically replayed.
 use super::core_sink::{Action, Kind, Sink};

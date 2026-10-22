@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! When the index of the selected run is read again, and what a read costs.
 use super::*;
 

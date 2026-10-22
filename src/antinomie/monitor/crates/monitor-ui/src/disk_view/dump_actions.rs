@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! What the tab does with a saved dump on the host: import a raw ext4 image,
 //! verify the recorded SHA-256, and save the image as a sparse raw or a qcow2
 //! file. Each runs on its own thread; the frame only polls a channel.

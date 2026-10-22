@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The packet list as TShark printed it, kept on disk.
 //!
 //! One TShark pass over a capture prints, for every frame, the columns

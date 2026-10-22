@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 use crate::{
     api::{RunExecution, RunState, WaitStatus},
     parser::{u32_at, u64_at},

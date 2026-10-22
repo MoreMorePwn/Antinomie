@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! Engine-level phase 3 tests through the `DebugBackend` trait: following fork,
 //! vfork and exec, non-stop, hardware breakpoints in new threads, re-adopting a

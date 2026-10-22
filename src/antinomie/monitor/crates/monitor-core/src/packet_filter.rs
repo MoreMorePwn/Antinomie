@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Display filters delegated to the separately installed, unmodified TShark
 //! executable. Live PCAP snapshots and all disk indexes are private; no engine
 //! code is linked, copied, or bundled with the monitor.

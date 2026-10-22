@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Ignored memory probes for the window. Run one at a time, for example
 //! `cargo test --release -p antinomie-monitor-ui memory_probe -- --ignored --exact
 //! --test-threads=1 app::tests::memory_probe::idle_frames_do_not_grow`.

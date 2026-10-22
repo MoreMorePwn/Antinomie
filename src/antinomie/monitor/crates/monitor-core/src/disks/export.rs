@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Saving a dump's image to the host as a sparse raw file or a compressed,
 //! self-contained qcow2 file (no backing file).
 //!

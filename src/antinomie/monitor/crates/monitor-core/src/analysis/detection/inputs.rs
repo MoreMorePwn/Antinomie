@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! What a detection scan passed to its rules: one row per input, with how
 //! much of it was evaluated.
 use super::*;

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! How much of a run's terminal one worker pass reads.
 //!
 //! A terminal READ returns at most [`TERMINAL_READ_SIZE`] bytes. Reading one

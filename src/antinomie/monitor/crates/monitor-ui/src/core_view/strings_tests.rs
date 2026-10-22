@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 use super::*;
 use crate::core_view::tests::Fixture;
 use crate::table_sort::testing;

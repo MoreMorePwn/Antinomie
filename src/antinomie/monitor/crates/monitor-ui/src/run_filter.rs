@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Typed run-history fields share one registry for validation and completion.
 use crate::query::{compile_table_with, Aliases, FieldSpec, RowValue};
 use antinomie_monitor_core::recording::RunFilterFacts;

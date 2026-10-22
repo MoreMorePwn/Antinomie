@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-only
 #
 # check-privacy.sh — fail when tracked files name a developer machine: a home
 # folder other than the guest and example accounts below, a WSL drive mount,

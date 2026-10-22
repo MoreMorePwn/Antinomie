@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Detection > Event journal: a read-only, paged view of the normalized events
 //! Sigma evaluated, with each event's source call or packet one click away.
 //!

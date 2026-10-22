@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! Replay every packet without copying captured objects; summarize capture gaps.
 //! Usage: recording-audit RUN_DIR
