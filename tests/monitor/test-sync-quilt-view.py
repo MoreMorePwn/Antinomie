@@ -28,7 +28,7 @@ index 111..222 100644
 @@ -1 +1,2 @@ int f(void)
  int f(void);
 +int g(void);
--- 
+--\x20
 2.47.0
 
 """
