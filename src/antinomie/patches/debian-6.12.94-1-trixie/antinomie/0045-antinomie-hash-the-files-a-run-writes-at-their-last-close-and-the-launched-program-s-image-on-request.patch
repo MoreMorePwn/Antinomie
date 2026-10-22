@@ -1,0 +1,719 @@
+Description: antinomie: hash the files a run writes at their last close, and the launched program's image, on request
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-10-21
+
+The tracer hashed an executed image and a file about to be deleted, but not what a run leaves behind in the files it writes, and not the launched program itself: the kernel starts it without a traced execve, so its exec had no call to hang a hash on.  A run launched with the new EXEC flag HASH_WRITES gets a SHA-256 of each regular file one of its tasks had open for writing, when the file's last writer lets it go (the inode's writer count drops to zero in __fput()): after close() in task work, at exit, or after the call that dropped the last reference. A memfd, which has no write access to count, is the same when its last reference goes. The job takes the same path as the others: references and a small job in the closing task, never a sleep or a wait; the read on the system unbound workqueue with a private no-notify, no-atime open; the same 16 MiB file limit, 16 queued jobs and 64 MiB queued; the same refusal records and the same CHANGED comparison, against the file as the last close left it. Pseudo filesystems (proc, sysfs, cgroup and the like) and files that are not regular publish nothing. A refusal decided outside a traced call is published by the worker too, under the identity taken at the close.  The record (kind WRITE, layout antinomie.hash/2, 112 bytes) is the hash/1 record followed by the file's device, inode, generation, mode and link count at the close, because the call it belongs to, the closing task's last, need not name the file. A task that has left its run at exit still finds the run by its root cookie.  With EXEC flag HASH_ROOT the launched program's own image is hashed at its exec commit, as an EXEC record under the launch's identity (call id 0, the "lifecycle.launch" event's).  The new optional command TRACER_CAPS lists the optional EXEC flags a guest accepts and its hashing budget; an older guest answers -EOPNOTSUPP and must not be sent the flags, which it would reject. A host that does not know them sends neither flag and sees nothing new. The contract revision stays 17.
+
+---
+diff --git a/fs/file_table.c b/fs/file_table.c
+index 2a08bc93b..4fd0a7f2e 100644
+--- a/fs/file_table.c
++++ b/fs/file_table.c
+@@ -9,6 +9,7 @@
+ #include <linux/string.h>
+ #include <linux/slab.h>
+ #include <linux/file.h>
++#include <linux/antinomie_monitor.h>
+ #include <linux/init.h>
+ #include <linux/module.h>
+ #include <linux/fs.h>
+@@ -451,6 +452,8 @@ static void __fput(struct file *file)
+ 	fops_put(file->f_op);
+ 	file_f_owner_release(file);
+ 	put_file_access(file);
++	if (unlikely(mode & FMODE_WRITE))
++		ant_monitor_close_write(file);
+ 	dput(dentry);
+ 	if (unlikely(mode & FMODE_NEED_UNMOUNT))
+ 		dissolve_on_fput(mnt);
+diff --git a/include/linux/antinomie_monitor.h b/include/linux/antinomie_monitor.h
+index 422bc4e53..fd00bdcc1 100644
+--- a/include/linux/antinomie_monitor.h
++++ b/include/linux/antinomie_monitor.h
+@@ -106,6 +106,7 @@ void ant_monitor_loginuid(void);
+ struct ant_hash_job *ant_monitor_delete_prepare(const struct path *parent,
+ 						struct dentry *dentry);
+ void ant_monitor_delete_done(struct ant_hash_job *job, int error);
++void ant_monitor_close_write(struct file *file);
+ void ant_monitor_specimen_exec(struct file *file);
+ bool ant_monitor_core_armed(struct task_struct *task);
+ bool ant_monitor_core_pending(struct task_struct *task);
+@@ -185,6 +186,7 @@ static inline struct ant_hash_job *ant_monitor_delete_prepare(const struct path
+ }
+ 
+ static inline void ant_monitor_delete_done(struct ant_hash_job *job, int error) {}
++static inline void ant_monitor_close_write(struct file *file) {}
+ static inline void ant_monitor_specimen_exec(struct file *file) {}
+ static inline bool ant_monitor_core_armed(struct task_struct *task)
+ {
+diff --git a/kernel/antinomie/control.c b/kernel/antinomie/control.c
+index 4cf79aea7..e3605223d 100644
+--- a/kernel/antinomie/control.c
++++ b/kernel/antinomie/control.c
+@@ -48,6 +48,7 @@ struct ant_launch {
+ 	kgid_t gid;
+ 	struct ant_specimen *specimen;
+ 	struct ant_core *core;
++	u32 hash_flags;
+ 	bool debug;
+ };
+ 
+@@ -247,6 +248,8 @@ static int launch_init(struct subprocess_info *info, struct cred *cred)
+ 	session->pgrp = get_task_pid(current, PIDTYPE_PGID);
+ 	ant_specimen_arm(launch->specimen);
+ 	ant_core_bind(launch->core, session->task_cookie);
++	/* Before the exec: the program's own image is hashed at its commit. */
++	ant_run_hash_flags(current, launch->hash_flags);
+ 	/* Last: the new program parks at its first return to user mode. */
+ 	return launch->debug ? ant_debug_launch() : 0;
+ }
+@@ -265,7 +268,8 @@ static int execute(const u8 *args, size_t args_len, void *reply, size_t *reply_l
+ 	if (args_len < offset)
+ 		return -EINVAL;
+ 	flags = get_unaligned_le32(args + 4);
+-	if (flags & ~(ANTC_EXEC_SPECIMEN | ANTC_EXEC_CORE | ANTC_EXEC_DEBUG))
++	if (flags & ~(ANTC_EXEC_SPECIMEN | ANTC_EXEC_CORE | ANTC_EXEC_DEBUG |
++		      ANTC_EXEC_HASH_ROOT | ANTC_EXEC_HASH_WRITES))
+ 		return -EINVAL;
+ 	if (flags & ANTC_EXEC_DEBUG) {
+ 		error = ant_debug_launch_check();
+@@ -288,6 +292,7 @@ static int execute(const u8 *args, size_t args_len, void *reply, size_t *reply_l
+ 	}
+ 	launch->session = session;
+ 	launch->debug = flags & ANTC_EXEC_DEBUG;
++	launch->hash_flags = flags & (ANTC_EXEC_HASH_ROOT | ANTC_EXEC_HASH_WRITES);
+ 	launch->uid = make_kuid(&init_user_ns, get_unaligned_le32(args + 8));
+ 	launch->gid = make_kgid(&init_user_ns, get_unaligned_le32(args + 12));
+ 	if (!uid_valid(launch->uid) || !gid_valid(launch->gid)) {
+@@ -613,6 +618,17 @@ static int command(const void *data, size_t args_len, void *reply,
+ 		return ant_debug_command(opcode, args, args_len, reply, capacity, reply_len);
+ 	case ANTC_RESOURCES:
+ 		return ant_resources_command(args, args_len, reply, capacity, reply_len);
++	case ANTC_TRACER_CAPS:
++		if (args_len != 8 || capacity < ANTC_TRACER_CAPS_SIZE)
++			return -EINVAL;
++		memset(reply, 0, ANTC_TRACER_CAPS_SIZE);
++		put_unaligned_le32(ANTC_TRACER_ABI, reply);
++		put_unaligned_le32(ANTC_EXEC_HASH_ROOT | ANTC_EXEC_HASH_WRITES, reply + 4);
++		put_unaligned_le32(ANTC_HASH_FILE_MAX, reply + 8);
++		put_unaligned_le32(ANTC_HASH_QUEUE, reply + 12);
++		put_unaligned_le64(ANTC_HASH_PENDING_MAX, reply + 16);
++		*reply_len = ANTC_TRACER_CAPS_SIZE;
++		return 0;
+ 	case ANTC_ACQUIRE:
+ 		if (capacity < 24)
+ 			return -EMSGSIZE;
+@@ -687,7 +703,7 @@ static int __init ant_control_init(void)
+ 		ANTC_DEBUG_REGS_WRITE, ANTC_DEBUG_MEM_READ, ANTC_DEBUG_MEM_WRITE,
+ 		ANTC_DEBUG_BP_SET, ANTC_DEBUG_BP_CLEAR, ANTC_DEBUG_AUXV, ANTC_DEBUG_CONFIG,
+ 		ANTC_DEBUG_EVENTS, ANTC_DEBUG_THREAD_CTL, ANTC_DEBUG_SESSIONS,
+-		ANTC_DEBUG_BP_LIST };
++		ANTC_DEBUG_BP_LIST, ANTC_TRACER_CAPS };
+ 	int i, error;
+ 
+ 	for (i = 0; i < ARRAY_SIZE(opcodes); i++) {
+diff --git a/kernel/antinomie/control_wire.h b/kernel/antinomie/control_wire.h
+index a2f56f004..b69053e79 100644
+--- a/kernel/antinomie/control_wire.h
++++ b/kernel/antinomie/control_wire.h
+@@ -58,6 +58,10 @@
+ #define ANTC_EXEC_SPECIMEN 1
+ #define ANTC_EXEC_CORE 2
+ #define ANTC_EXEC_DEBUG 4
++/* Optional EXEC flags (revision 17, additive): only for a guest whose
++ * TRACER_CAPS lists them; an older guest rejects unknown flags with -EINVAL. */
++#define ANTC_EXEC_HASH_ROOT 8
++#define ANTC_EXEC_HASH_WRITES 16
+ #define ANTC_CORE_STATUS 0x1060
+ #define ANTC_CORE_READ 0x1061
+ #define ANTC_CORE_RELEASE 0x1062
+@@ -117,6 +121,12 @@
+ #define ANTC_DEBUG_THREAD_CTL 0x1090
+ #define ANTC_DEBUG_SESSIONS 0x1091
+ #define ANTC_DEBUG_BP_LIST 0x1092
++/* Tracer capabilities (revision 17, additive, optional): the optional EXEC
++ * flags this guest accepts and the hashing budget. -EOPNOTSUPP from an older
++ * guest means none: the host must then send none of them. */
++#define ANTC_TRACER_CAPS 0x10a0
++#define ANTC_TRACER_CAPS_SIZE 32
++#define ANTC_TRACER_ABI 1
+ #define ANTC_DEBUG_ABI 1
+ #define ANTC_DEBUG_CAPS_SIZE 48
+ #define ANTC_DEBUG_REGSET_SIZE 16
+@@ -225,6 +235,23 @@
+  * and u32 hashing time in microseconds at 64/68, u32 cumulative records
+  * lost since boot at 72 (queue, budget, memory or ring loss), zero at 76.
+  * Published after the call returned, by a worker, with the call's identity.
++ * Kinds: EXEC (1) an executed image; DELETE (2) a file about to be unlinked;
++ * WRITE (3) a regular file a task of the run had open for writing, when the
++ * last writer of the file closed it (only for a run launched with EXEC flag
++ * HASH_WRITES). A WRITE record uses layout "antinomie.hash/2", 112 bytes: the
++ * 80 above, then the file at the close: u64 dev at 80 (new_encode_dev),
++ * u64 ino at 88, u32 generation at 96, u32 mode at 100, u32 nlink at 104,
++ * zero at 108. Its call is the one the closing task made last (close, dup2,
++ * exit_group, munmap, or the call a signal ended), since the last close of a
++ * file happens when its last reference goes, not necessarily in a call that
++ * names it. Pseudo filesystems (proc, sysfs, cgroup, debugfs, tracefs,
++ * securityfs, bpf, pstore, efivarfs, selinuxfs, smackfs, binfmt_misc) and
++ * files that are not regular publish nothing; a regular file elsewhere that is
++ * not read publishes its reason. CHANGED compares the file with its state at
++ * that close. With EXEC flag HASH_ROOT the launched program's own image is
++ * hashed too, as an EXEC record of the root task with call id 0 and syscall
++ * number U64_MAX: the identity of its "lifecycle.launch" event, since the
++ * kernel starts the program without a traced execve.
+  * lifecycle.file_id, layout "antinomie.fileid/1", 32 bytes (optional, additive:
+  * a guest from before it publishes none, a host that does not know it shows an
+  * unknown lifecycle field): the identity of the file inode a call acted on, so
+@@ -282,6 +309,8 @@
+ #define ANTC_HASH_SIZE 80
+ #define ANTC_HASH_EXEC 1
+ #define ANTC_HASH_DELETE 2
++#define ANTC_HASH_WRITE 3
++#define ANTC_HASH_WRITE_SIZE 112
+ #define ANTC_HASH_OK 0
+ #define ANTC_HASH_TOO_LARGE 1
+ #define ANTC_HASH_UNSUPPORTED_FS 2
+@@ -335,6 +364,14 @@
+  * instead of creating one. -EBUSY when another session is live. The program
+  * stays parked until the debugger continues it or detaches; STOP_RUN and the
+  * Stop escalation end it.
++ * EXEC_HASH_ROOT hashes the program's own image at its exec; EXEC_HASH_WRITES
++ * hashes the regular files the run writes, when the last writer closes them
++ * (see lifecycle.file_hash). Neither adds request or reply bytes.
++ * TRACER_CAPS: header only (8 bytes). Reply 32 bytes: u32 abi=1 at 0, u32
++ * exec_flags at 4 (the optional EXEC flags this guest accepts: HASH_ROOT,
++ * HASH_WRITES), u32 hash file limit at 8 (ANTC_HASH_FILE_MAX), u32 hash queue
++ * jobs at 12 (ANTC_HASH_QUEUE), u64 hash queued byte limit at 16
++ * (ANTC_HASH_PENDING_MAX), zero at 24.
+  * Arm failure has id/size=0 and negative errno; execution still succeeds.
+  * Only the launched root thread group is eligible, native Linux ELF64.
+  * CORE_STATUS: header flags=0, u64 id at 8, 16 bytes total. Reply80:
+diff --git a/kernel/antinomie/hash.c b/kernel/antinomie/hash.c
+index 94cd76c5a..a5d0117e8 100644
+--- a/kernel/antinomie/hash.c
++++ b/kernel/antinomie/hash.c
+@@ -1,5 +1,6 @@
+ // SPDX-License-Identifier: GPL-2.0-only
+-/* SHA-256 of an executed image and of a file about to be deleted.
++/* SHA-256 of an executed image, of a file about to be deleted and, for a run
++ * that asks for it, of a file the run wrote, when its last writer closes it.
+  *
+  * The traced task only takes references and queues a small job; a worker on
+  * the system unbound workqueue reopens the file, hashes it and publishes the
+@@ -15,6 +16,16 @@
+  * next record that is. The worker reads through a private open with no
+  * notification and no access-time update, one 64 KiB chunk at a time.
+  *
++ * A written file is hashed when the last open-for-writing reference to it goes
++ * (the inode's writer count drops to zero in __fput()), by whichever task of
++ * the run released it: in task work after close(), at exit, or after the call
++ * that dropped the last reference. That moment is the content the run left,
++ * the way an inotify CLOSE_WRITE reader sees it; a file opened for writing and
++ * not written is hashed all the same. The record carries the file's identity,
++ * because the call it belongs to (the task's last) need not name the file.
++ * Writers that are not tasks of the run (another process, an io_uring worker,
++ * the delayed fput worker) are not followed.
++ *
+  * The digest describes the bytes the worker read, at hashing time, never the
+  * bytes at the call: the file is read some time after the call returned. The
+  * call records the file's state (inode identity, size, modification and change
+@@ -50,6 +61,7 @@
+ #include <linux/delay.h>
+ #include <linux/workqueue.h>
+ #include "async.h"
++#include "run.h"
+ #include "control_wire.h"
+ #include "hash.h"
+ #include "notes.h"
+@@ -57,8 +69,11 @@
+ #define ANT_HASH_CHUNK (64U * 1024)
+ #define ANT_HASH_CACHE 32
+ #define ANT_HASH_CACHE_TTL_NS (30ULL * NSEC_PER_SEC)
++/* Refusals waiting for the worker to publish them (deferred jobs only). */
++#define ANT_HASH_REPORTS 64
+ #define ANT_HASH_KEY "lifecycle.file_hash"
+ #define ANT_HASH_LAYOUT "antinomie.hash/1"
++#define ANT_HASH_WRITE_LAYOUT "antinomie.hash/2"
+ 
+ /* The identity and state of a file's inode. */
+ struct ant_hash_state {
+@@ -74,9 +89,13 @@ struct ant_hash_job {
+ 	struct ant_hash_state seen;
+ 	u64 nr, size, reserved, queued_ns;
+ 	s32 error;
++	/* WRITE: the file at its last close. */
++	u32 mode, nlink;
+ 	u8 kind, status, flags;
+ 	/* An unlink of this job's file is in progress (see unlink_begin()). */
+ 	bool unlinking;
++	/* Outside a traced call: even a refusal is published by the worker. */
++	bool deferred;
+ };
+ 
+ /* Digests of recently hashed files, so an exec storm of one program reads it
+@@ -97,6 +116,8 @@ static DEFINE_SPINLOCK(hash_lock);
+ static struct ant_hash_cached cache[ANT_HASH_CACHE];
+ static unsigned int cache_next;
+ static LIST_HEAD(hash_jobs);
++static LIST_HEAD(hash_reports);
++static unsigned int pending_reports;
+ /* The job a worker is processing, which is on no list; see unlink_begin(). */
+ static struct ant_hash_job *running;
+ static unsigned int pending_jobs;
+@@ -115,9 +136,13 @@ static void job_free(struct ant_hash_job *job)
+ 	kfree(job);
+ }
+ 
+-static struct ant_hash_job *job_new(u8 kind)
++/* A job for the traced call in progress or, with @last, for the task's last
++ * traced call (or its launch): see ant_monitor_identity_last().
++ */
++static struct ant_hash_job *job_new(u8 kind, bool last)
+ {
+ 	struct ant_hash_job *job;
++	bool known;
+ 
+ 	if (!current->ant_monitor)
+ 		return NULL;
+@@ -126,7 +151,9 @@ static struct ant_hash_job *job_new(u8 kind)
+ 		atomic_inc(&lost);
+ 		return NULL;
+ 	}
+-	if (!ant_monitor_identity(&job->event, &job->nr)) {
++	known = last ? ant_monitor_identity_last(&job->event, &job->nr) :
++		ant_monitor_identity(&job->event, &job->nr);
++	if (!known) {
+ 		kfree(job);
+ 		return NULL;
+ 	}
+@@ -219,10 +246,11 @@ static void cache_store(const struct ant_hash_state *key, const u8 *digest)
+ 	spin_unlock(&hash_lock);
+ }
+ 
+-static void pack(const struct ant_hash_job *job, u8 status, u8 flags, const u8 *digest,
+-		 u64 hashed, u32 queue_us, u32 hash_us, u8 *rec)
++/* The record of @job: ANTC_HASH_SIZE bytes, ANTC_HASH_WRITE_SIZE for WRITE. */
++static size_t pack(const struct ant_hash_job *job, u8 status, u8 flags, const u8 *digest,
++		   u64 hashed, u32 queue_us, u32 hash_us, u8 *rec)
+ {
+-	memset(rec, 0, ANTC_HASH_SIZE);
++	memset(rec, 0, ANTC_HASH_WRITE_SIZE);
+ 	rec[0] = job->kind;
+ 	rec[1] = status;
+ 	rec[2] = digest ? ANTC_HASH_SHA256 : 0;
+@@ -236,17 +264,58 @@ static void pack(const struct ant_hash_job *job, u8 status, u8 flags, const u8 *
+ 	put_unaligned_le32(queue_us, rec + 64);
+ 	put_unaligned_le32(hash_us, rec + 68);
+ 	put_unaligned_le32(atomic_read(&lost), rec + 72);
++	if (job->kind != ANTC_HASH_WRITE)
++		return ANTC_HASH_SIZE;
++	put_unaligned_le64(job->seen.dev, rec + 80);
++	put_unaligned_le64(job->seen.ino, rec + 88);
++	put_unaligned_le32(job->seen.generation, rec + 96);
++	put_unaligned_le32(job->mode, rec + 100);
++	put_unaligned_le32(job->nlink, rec + 104);
++	return ANTC_HASH_WRITE_SIZE;
++}
++
++static const char *layout_of(const struct ant_hash_job *job)
++{
++	return job->kind == ANTC_HASH_WRITE ? ANT_HASH_WRITE_LAYOUT : ANT_HASH_LAYOUT;
+ }
+ 
+ /* An outcome decided in the traced task: nothing is read. */
+ static void report_now(struct ant_hash_job *job, u8 status)
+ {
+-	u8 rec[ANTC_HASH_SIZE];
++	u8 rec[ANTC_HASH_WRITE_SIZE];
++	size_t len;
++	bool kick;
+ 
+-	pack(job, status, job->flags, NULL, 0, 0, 0, rec);
+-	if (!ant_monitor_note(ANT_HASH_KEY, ANT_HASH_LAYOUT, rec, sizeof(rec)))
++	/* A record outside a traced call (the launch's exec, a last close in
++	 * task work) cannot be written in the task's own call: a worker
++	 * publishes it under the identity taken, with nothing to read.
++	 */
++	if (!job->deferred) {
++		len = pack(job, status, job->flags, NULL, 0, 0, 0, rec);
++		if (!ant_monitor_note(ANT_HASH_KEY, layout_of(job), rec, len))
++			atomic_inc(&lost);
++		job_free(job);
++		return;
++	}
++	job->status = status;
++	if (job->path.dentry) {
++		path_put(&job->path);
++		job->path.dentry = NULL;
++	}
++	spin_lock(&hash_lock);
++	if (pending_reports >= ANT_HASH_REPORTS) {
++		spin_unlock(&hash_lock);
+ 		atomic_inc(&lost);
+-	job_free(job);
++		job_free(job);
++		return;
++	}
++	pending_reports++;
++	list_add_tail(&job->node, &hash_reports);
++	kick = !scheduled;
++	scheduled = true;
++	spin_unlock(&hash_lock);
++	if (kick)
++		queue_work(system_unbound_wq, &hash_work);
+ }
+ 
+ static void submit(struct ant_hash_job *job)
+@@ -322,10 +391,8 @@ static void unlink_end(const struct ant_hash_state *after, bool unlinked)
+ 	spin_unlock(&hash_lock);
+ }
+ 
+-void ant_hash_exec(struct file *file, bool interpreter)
++static void exec_job(struct ant_hash_job *job, struct file *file, bool interpreter)
+ {
+-	struct ant_hash_job *job = job_new(ANTC_HASH_EXEC);
+-
+ 	if (!job)
+ 		return;
+ 	if (interpreter)
+@@ -339,6 +406,83 @@ void ant_hash_exec(struct file *file, bool interpreter)
+ 	submit(job);
+ }
+ 
++void ant_hash_exec(struct file *file, bool interpreter)
++{
++	exec_job(job_new(ANTC_HASH_EXEC, false), file, interpreter);
++}
++
++/* The launched program's own exec, which the kernel makes without a traced
++ * call: hashed only for a run launched with EXEC flag HASH_ROOT, under the
++ * launch's identity (call id 0).
++ */
++void ant_hash_launch_exec(struct file *file, bool interpreter)
++{
++	struct ant_hash_job *job;
++
++	if (!ant_run_hashes(current, ANTC_EXEC_HASH_ROOT))
++		return;
++	job = job_new(ANTC_HASH_EXEC, true);
++	if (job)
++		job->deferred = true;
++	exec_job(job, file, interpreter);
++}
++
++/* Filesystems with no stored content: a write there is a control operation,
++ * not a file the run left behind, and its last close publishes nothing.
++ */
++static bool pseudo_fs(unsigned long magic)
++{
++	switch (magic) {
++	case PROC_SUPER_MAGIC: case SYSFS_MAGIC: case CGROUP_SUPER_MAGIC:
++	case CGROUP2_SUPER_MAGIC: case DEBUGFS_MAGIC: case TRACEFS_MAGIC:
++	case SECURITYFS_MAGIC: case BPF_FS_MAGIC: case PSTOREFS_MAGIC:
++	case EFIVARFS_MAGIC: case SELINUX_MAGIC: case SMACK_MAGIC:
++	case BINFMTFS_MAGIC:
++		return true;
++	}
++	return false;
++}
++
++/* __fput() of a file opened for writing, after its write access was put. When
++ * it was the file's last writer and a task of a run that hashes its writes let
++ * it go (also at exit, after the task left the run), the content the run left
++ * is queued for hashing. Never sleeps or waits: the job takes its own path
++ * reference before __fput() drops the file's.
++ */
++void ant_monitor_close_write(struct file *file)
++{
++	struct inode *inode = file->f_inode;
++	struct ant_hash_job *job;
++
++	/* A file opened for writing holds write access; a pseudo file made for
++	 * writing (memfd) has none, and only one with write methods counts (an
++	 * attached System V shared memory segment has none).
++	 */
++	if (!S_ISREG(inode->i_mode) ||
++	    !(file->f_mode & (FMODE_WRITER | FMODE_CAN_WRITE)) ||
++	    (file->f_mode & FMODE_NONOTIFY) || pseudo_fs(inode->i_sb->s_magic) ||
++	    !ant_run_hashes(current, ANTC_EXEC_HASH_WRITES))
++		return;
++	/* Another writer still has it open (or, below zero, it is being
++	 * executed and cannot have one): its own last close comes later.
++	 */
++	if (atomic_read(&inode->i_writecount) != 0)
++		return;
++	job = job_new(ANTC_HASH_WRITE, true);
++	if (!job)
++		return;
++	job->deferred = true;
++	job->status = classify(inode, &job->seen);
++	job->size = job->seen.size;
++	job->mode = inode->i_mode;
++	job->nlink = inode->i_nlink;
++	if (job->status == ANTC_HASH_OK) {
++		job->path = file->f_path;
++		path_get(&job->path);
++	}
++	submit(job);
++}
++
+ /* Called with the parent directory locked, before vfs_unlink(). The pinned
+  * dentry keeps the inode and its data until the worker is done, even after the
+  * name is gone; the caller reports the outcome with ant_monitor_delete_done().
+@@ -346,7 +490,7 @@ void ant_hash_exec(struct file *file, bool interpreter)
+ struct ant_hash_job *ant_monitor_delete_prepare(const struct path *parent,
+ 					     struct dentry *dentry)
+ {
+-	struct ant_hash_job *job = job_new(ANTC_HASH_DELETE);
++	struct ant_hash_job *job = job_new(ANTC_HASH_DELETE, false);
+ 
+ 	if (!job)
+ 		return NULL;
+@@ -418,12 +562,13 @@ static void process(struct ant_hash_job *job, struct ant_task *ctx, u8 *buf)
+ {
+ 	struct sha256_state sha;
+ 	struct ant_hash_state key, after;
+-	u8 digest[SHA256_DIGEST_SIZE], rec[ANTC_HASH_SIZE], status = ANTC_HASH_OK;
++	u8 digest[SHA256_DIGEST_SIZE], rec[ANTC_HASH_WRITE_SIZE], status = ANTC_HASH_OK;
+ 	u8 flags = job->flags;
+ 	struct file *file;
+ 	u64 start = ktime_get_ns(), hashed = 0, limit;
+ 	loff_t pos = 0;
+ 	ssize_t count;
++	size_t len;
+ 
+ 	if (!buf) {
+ 		status = ANTC_HASH_NO_MEMORY;
+@@ -472,11 +617,22 @@ static void process(struct ant_hash_job *job, struct ant_task *ctx, u8 *buf)
+ close:
+ 	fput(file);
+ publish:
+-	pack(job, status, flags, status == ANTC_HASH_OK ? digest : NULL, hashed,
+-	     min_t(u64, (start - job->queued_ns) / NSEC_PER_USEC, U32_MAX),
+-	     min_t(u64, (ktime_get_ns() - start) / NSEC_PER_USEC, U32_MAX), rec);
++	len = pack(job, status, flags, status == ANTC_HASH_OK ? digest : NULL, hashed,
++		   min_t(u64, (start - job->queued_ns) / NSEC_PER_USEC, U32_MAX),
++		   min_t(u64, (ktime_get_ns() - start) / NSEC_PER_USEC, U32_MAX), rec);
+ 	if (ant_monitor_note_publish(ctx, &job->event, job->nr, ANT_HASH_KEY,
+-				     ANT_HASH_LAYOUT, rec, sizeof(rec)))
++				     layout_of(job), rec, len))
++		atomic_inc(&lost);
++}
++
++/* A refusal decided outside a traced call (see report_now()). */
++static void publish_report(struct ant_hash_job *job, struct ant_task *ctx)
++{
++	u8 rec[ANTC_HASH_WRITE_SIZE];
++	size_t len = pack(job, job->status, job->flags, NULL, 0, 0, 0, rec);
++
++	if (ant_monitor_note_publish(ctx, &job->event, job->nr, ANT_HASH_KEY,
++				     layout_of(job), rec, len))
+ 		atomic_inc(&lost);
+ }
+ 
+@@ -488,6 +644,20 @@ static void hash_run(struct work_struct *work)
+ 
+ 	for (;;) {
+ 		spin_lock(&hash_lock);
++		job = list_first_entry_or_null(&hash_reports, struct ant_hash_job, node);
++		if (job) {
++			list_del(&job->node);
++			pending_reports--;
++			spin_unlock(&hash_lock);
++			if (!ctx)
++				ctx = ant_monitor_async_capture_alloc();
++			if (ctx)
++				publish_report(job, ctx);
++			else
++				atomic_inc(&lost);
++			job_free(job);
++			continue;
++		}
+ 		job = list_first_entry_or_null(&hash_jobs, struct ant_hash_job, node);
+ 		if (!job) {
+ 			scheduled = false;
+diff --git a/kernel/antinomie/hash.h b/kernel/antinomie/hash.h
+index b28f9784b..5475b067c 100644
+--- a/kernel/antinomie/hash.h
++++ b/kernel/antinomie/hash.h
+@@ -7,5 +7,6 @@
+ struct file;
+ 
+ void ant_hash_exec(struct file *file, bool interpreter);
++void ant_hash_launch_exec(struct file *file, bool interpreter);
+ 
+ #endif
+diff --git a/kernel/antinomie/notes.h b/kernel/antinomie/notes.h
+index 56a947fa2..cf7d0c1d9 100644
+--- a/kernel/antinomie/notes.h
++++ b/kernel/antinomie/notes.h
+@@ -14,6 +14,12 @@ struct ant_async_event;
+  * takes its own reference on ev->origin.
+  */
+ bool ant_monitor_identity(struct ant_async_event *ev, u64 *nr);
++/* Identity of the task's last traced call, or of its launch before its first
++ * call (call id 0), for a record of something that happened outside a call:
++ * the last close of a file in task work or at exit, the launched program's
++ * exec. Only for a task of a launched run; false when it has no context.
++ */
++bool ant_monitor_identity_last(struct ant_async_event *ev, u64 *nr);
+ /* Publish one record in the calling task's own traced call. */
+ bool ant_monitor_note(const char *key, const char *layout, const void *data,
+ 		      size_t len);
+diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
+index 3811e9d8a..642f89c0e 100644
+--- a/kernel/antinomie/recorder.c
++++ b/kernel/antinomie/recorder.c
+@@ -57,6 +57,8 @@ struct ant_task {
+ 	u8 phase, abi, arg_count;
+ 	bool active, busy, entry_lost, sock_capacity_valid, kernel_imported;
+ 	bool creds_seen;
++	/* Set by a launch until the program's own exec commits (no traced call). */
++	bool launch_exec;
+ 	struct iovec *iov;
+ 	u32 iov_count;
+ 	const struct ant_async_event *async_event;
+@@ -887,13 +889,10 @@ bool ant_monitor_note(const char *key, const char *layout, const void *data, siz
+ 	return sent;
+ }
+ 
+-bool ant_monitor_identity(struct ant_async_event *ev, u64 *nr)
++static void identity_fill(struct ant_task *ctx, struct ant_async_event *ev, u64 *nr)
+ {
+-	struct ant_task *ctx = current->ant_monitor;
+ 	const struct cred *cred = current_cred();
+ 
+-	if (!ctx || !ctx->active || ctx->busy)
+-		return false;
+ 	ev->origin = current;
+ 	ev->task_cookie = current->ant_cookie;
+ 	ev->root_cookie = READ_ONCE(current->ant_root_cookie);
+@@ -910,6 +909,25 @@ bool ant_monitor_identity(struct ant_async_event *ev, u64 *nr)
+ 	ev->euid = from_kuid(&init_user_ns, cred->euid);
+ 	ev->egid = from_kgid(&init_user_ns, cred->egid);
+ 	*nr = ctx->nr;
++}
++
++bool ant_monitor_identity(struct ant_async_event *ev, u64 *nr)
++{
++	struct ant_task *ctx = current->ant_monitor;
++
++	if (!ctx || !ctx->active || ctx->busy)
++		return false;
++	identity_fill(ctx, ev, nr);
++	return true;
++}
++
++bool ant_monitor_identity_last(struct ant_async_event *ev, u64 *nr)
++{
++	struct ant_task *ctx = current->ant_monitor;
++
++	if (!ctx || ctx->busy || !READ_ONCE(current->ant_root_cookie))
++		return false;
++	identity_fill(ctx, ev, nr);
+ 	return true;
+ }
+ 
+@@ -975,6 +993,7 @@ void ant_monitor_enter(struct pt_regs *regs, long nr)
+ 	ctx->abi = in_ia32_syscall() ? 0 : nr & ANT_X32_BIT ? 2 : 1;
+ 	ctx->arg_count = ctx->abi == 1 ? ant_native_syscalls[nr].argc : 255;
+ 	ctx->call_id++;
++	ctx->launch_exec = false;
+ 	ctx->entry_ns = ktime_get_ns();
+ 	ctx->ip = instruction_pointer(regs);
+ 	ctx->sp = user_stack_pointer(regs);
+@@ -1266,6 +1285,7 @@ int ant_monitor_launch(const char *path, char **argv, char **envp)
+ 	ctx->capture_cookie = ant_observer_admit(current);
+ 	ctx->nr = U64_MAX;
+ 	ctx->abi = 1;
++	ctx->launch_exec = true;
+ 	ctx->busy = true;
+ 	event_begin(ctx, 3, 0);
+ 	put_unaligned_le64(current->ant_cookie, cookie);
+@@ -1362,8 +1382,19 @@ void ant_monitor_fork(struct task_struct *child)
+ 
+ void ant_monitor_exec(struct file *file, bool interpreter)
+ {
+-	lifecycle(current->ant_monitor, "lifecycle.exec_commit", task_pid_nr(current));
+-	ant_hash_exec(file, interpreter);
++	struct ant_task *ctx = current->ant_monitor;
++	bool launch = ctx && ctx->launch_exec && !ctx->active;
++
++	lifecycle(ctx, "lifecycle.exec_commit", task_pid_nr(current));
++	if (ctx)
++		ctx->launch_exec = false;
++	/* The launched program's own exec is not a traced call: its image is
++	 * hashed only when the host asked for it, under the launch's identity.
++	 */
++	if (launch)
++		ant_hash_launch_exec(file, interpreter);
++	else
++		ant_hash_exec(file, interpreter);
+ }
+ 
+ void ant_monitor_task_exit(bool group_dead)
+diff --git a/kernel/antinomie/run.c b/kernel/antinomie/run.c
+index f440bcdc2..799436905 100644
+--- a/kernel/antinomie/run.c
++++ b/kernel/antinomie/run.c
+@@ -38,6 +38,8 @@ struct ant_run {
+ 	s32 root_status;
+ 	bool core_armed;
+ 	bool stop_armed;
++	/* EXEC flags HASH_ROOT and HASH_WRITES the run was launched with. */
++	u32 hash_flags;
+ 	u32 stop_passes;
+ 	unsigned long kill_at, kill_hard;
+ };
+@@ -125,6 +127,36 @@ int ant_run_launch(struct task_struct *task, u64 cookie)
+ 	return 0;
+ }
+ 
++/* The hashing the host asked for at launch, set before the program's exec. */
++void ant_run_hash_flags(struct task_struct *task, u32 flags)
++{
++	struct ant_run *run = task->ant_run;
++
++	if (run)
++		WRITE_ONCE(run->hash_flags, flags);
++}
++
++/* A task that has left its run (ant_run_exit() detached it) still closes its
++ * files afterwards, in exit_task_work(): its root cookie finds the run.
++ */
++bool ant_run_hashes(struct task_struct *task, u32 flag)
++{
++	struct ant_run *run = READ_ONCE(task->ant_run);
++	u64 cookie = READ_ONCE(task->ant_root_cookie);
++	unsigned long irqflags;
++	bool hashes;
++
++	if (run)
++		return READ_ONCE(run->hash_flags) & flag;
++	if (!cookie)
++		return false;
++	spin_lock_irqsave(&run_lock, irqflags);
++	run = find_run(cookie);
++	hashes = run && (run->hash_flags & flag);
++	spin_unlock_irqrestore(&run_lock, irqflags);
++	return hashes;
++}
++
+ void ant_run_fork(struct task_struct *parent, struct task_struct *child)
+ {
+ 	struct ant_run *run = parent->ant_run;
+diff --git a/kernel/antinomie/run.h b/kernel/antinomie/run.h
+index 1638169d2..519e3c441 100644
+--- a/kernel/antinomie/run.h
++++ b/kernel/antinomie/run.h
+@@ -13,6 +13,8 @@ int ant_run_signal(u64 root_cookie, int sig, bool *issued);
+ void ant_run_stop_arm(u64 root_cookie, u32 grace_ms);
+ void ant_run_core_arm(u64 root_cookie, bool armed);
+ u64 ant_run_root_cookie(struct task_struct *task);
++void ant_run_hash_flags(struct task_struct *task, u32 flags);
++bool ant_run_hashes(struct task_struct *task, u32 flag);
+ void ant_run_async_start(u64 root_cookie);
+ void ant_run_async_finish(u64 root_cookie);
+ void ant_run_async_loss(u64 root_cookie);

@@ -1,0 +1,119 @@
+Description: antinomie: poll the control worker every tick while a finished process core is read
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-10-20
+
+The host fetches a core in 16 KiB pieces and asks for the next as soon as it has the last, so the 10 ms control poll bounded the transfer at about 1.5 MiB/s. While a terminal core was read or its status asked for in the last two seconds the worker now polls at every tick (the hook the debugger already uses), and CORE_CAPS advertises it as FAST_READ. Idle behaviour is unchanged.
+
+---
+diff --git a/kernel/antinomie/control_wire.h b/kernel/antinomie/control_wire.h
+index 756349fc8..29cba617e 100644
+--- a/kernel/antinomie/control_wire.h
++++ b/kernel/antinomie/control_wire.h
+@@ -76,6 +76,7 @@
+ #define ANTC_CORE_CAPS_STORED 2
+ #define ANTC_CORE_CAPS_LONG_TIMEOUT 4
+ #define ANTC_CORE_CAPS_CHUNKED 8
++#define ANTC_CORE_CAPS_FAST_READ 16
+ #define ANTC_CORE_READ_HOLE 1
+ #define ANTC_CORE_LOGICAL_MAX 17179869184ULL
+ #define ANTC_CORE_ARMED 1
+@@ -264,7 +265,8 @@
+  * CORE_CAPS: header only (8 bytes). Reply 48 bytes: u32 abi=1 at 0, u32 flags at
+  * 4 (bit0 BUDGET: max_size up to max_core_bytes; bit1 STATUS_STORED; bit2
+  * LONG_TIMEOUT: timeout_ms up to max_timeout_ms; bit3 CHUNKED: the buffer grows
+- * while it is written, so -ENOMEM means the budget could not be reached),
++ * while it is written, so -ENOMEM means the budget could not be reached; bit4
++ * FAST_READ: the guest polls every tick while a finished core is read),
+  * u64 max_core_bytes at 8 (per handle, 64MiB..1GiB: half of RAM less 128MiB,
+  * clamped), u64 pool_bytes at 16 (sum of the budgets of open handles, twice
+  * the maximum), u32 max_handles=4 at 24, u32 max_timeout_ms=60000 at 28,
+diff --git a/kernel/antinomie/guest.c b/kernel/antinomie/guest.c
+index 172c80504..2e21f8ba7 100644
+--- a/kernel/antinomie/guest.c
++++ b/kernel/antinomie/guest.c
+@@ -388,11 +388,13 @@ static void control_tick(struct work_struct *work)
+ 	}
+ 	service_commands();
+ 	ANT_REL(&control->guest_heartbeat, control->guest_heartbeat + 1);
+-	/* While a debugger is attached every request is a round trip the user waits
+-	 * for: poll at the next tick instead of every ANT_POLL_MS.
++	/* While a debugger is attached, or a finished process core is being read,
++	 * every request is a round trip the user waits for: poll at the next tick
++	 * instead of every ANT_POLL_MS.
+ 	 */
+ 	queue_delayed_work(worker, &control_work,
+-			   ant_debug_active() ? 1 : msecs_to_jiffies(ANT_POLL_MS));
++			   ant_debug_active() || ant_core_reading() ?
++			   1 : msecs_to_jiffies(ANT_POLL_MS));
+ }
+ 
+ static int __init ant_guest_init(void)
+diff --git a/kernel/antinomie/process_core.c b/kernel/antinomie/process_core.c
+index 394b85023..8ae8db4f7 100644
+--- a/kernel/antinomie/process_core.c
++++ b/kernel/antinomie/process_core.c
+@@ -109,6 +109,24 @@ u32 ant_core_max_timeout_ms(void)
+ 	return ANT_CORE_TIMEOUT_MAX;
+ }
+ 
++/* A host that is reading a finished core asks for the next piece as soon as it
++ * has the last one, so the control worker polls at every tick for a short
++ * while after each read instead of every ANT_POLL_MS.
++ */
++static unsigned long core_read_until;
++
++static void ant_core_note_read(void)
++{
++	WRITE_ONCE(core_read_until, (jiffies + 2 * HZ) | 1);
++}
++
++bool ant_core_reading(void)
++{
++	unsigned long until = READ_ONCE(core_read_until);
++
++	return until && time_before(jiffies, until);
++}
++
+ /* What CORE_CAPS tells the host about the limits above. */
+ int ant_core_caps(const u8 *args, size_t args_len, void *reply, size_t capacity,
+ 		  size_t *reply_len)
+@@ -120,7 +138,8 @@ int ant_core_caps(const u8 *args, size_t args_len, void *reply, size_t capacity,
+ 	memset(reply, 0, ANTC_CORE_CAPS_SIZE);
+ 	put_unaligned_le32(1, reply);
+ 	put_unaligned_le32(ANTC_CORE_CAPS_BUDGET | ANTC_CORE_CAPS_STORED |
+-			   ANTC_CORE_CAPS_LONG_TIMEOUT | ANTC_CORE_CAPS_CHUNKED, reply + 4);
++			   ANTC_CORE_CAPS_LONG_TIMEOUT | ANTC_CORE_CAPS_CHUNKED |
++			   ANTC_CORE_CAPS_FAST_READ, reply + 4);
+ 	put_unaligned_le64(ant_core_max_bytes(), reply + 8);
+ 	put_unaligned_le64(ant_core_pool_bytes(), reply + 16);
+ 	put_unaligned_le32(ANT_CORE_HANDLES, reply + 24);
+@@ -887,6 +906,7 @@ int ant_core_command(u32 opcode, const u8 *args, size_t args_len,
+ 			put_unaligned_le64(core->expected_size, reply + 40);
+ 			if (extended)
+ 				put_unaligned_le64(core->stored, reply + 80);
++			ant_core_note_read();
+ 		}
+ 		put_unaligned_le32(core->state, reply + 48);
+ 		put_unaligned_le32(core->status, reply + 52);
+@@ -916,6 +936,7 @@ int ant_core_command(u32 opcode, const u8 *args, size_t args_len,
+ 		mutex_unlock(&core_lock);
+ 		count = min_t(u64, count, core->size - offset);
+ 		flags = 0;
++		ant_core_note_read();
+ 		if (count && core_locate(core, offset, &base, &available)) {
+ 			count = min_t(u64, count, available);
+ 			core_copy_out(core, base, reply + 24, count);
+diff --git a/kernel/antinomie/process_core.h b/kernel/antinomie/process_core.h
+index c62779c83..005c0f2c7 100644
+--- a/kernel/antinomie/process_core.h
++++ b/kernel/antinomie/process_core.h
+@@ -35,6 +35,7 @@ bool ant_core_run_busy(u64 root_cookie);
+ u64 ant_core_max_bytes(void);
+ u64 ant_core_pool_bytes(void);
+ u32 ant_core_max_timeout_ms(void);
++bool ant_core_reading(void);
+ int ant_core_caps(const u8 *args, size_t args_len, void *reply, size_t capacity,
+ 		  size_t *reply_len);
+ 
