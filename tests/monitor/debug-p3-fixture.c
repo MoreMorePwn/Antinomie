@@ -39,9 +39,10 @@
  *   exitstep a second thread reaches exit_syscall, a SYS_exit system call
  *            instruction of its own, after LEAD_MS (6000 by default); the main
  *            thread ticks
- *   vforkstep in round 2 runs a raw SYS_vfork at vfork_syscall; the child execs
- *            this program in mode leaf; the parent reports "vfork child exit=5"
- *   pausestep in round 2 runs a raw SYS_pause at pause_syscall (blocks until a
+ *   vforkstep in round 20 (a second in, after the debugger attached) runs a raw
+ *            SYS_vfork at vfork_syscall; the child execs this program in mode
+ *            leaf; the parent reports "vfork child exit=5"
+ *   pausestep in round 20 runs a raw SYS_pause at pause_syscall (blocks until a
  *            signal)
  *   vforknovm every third round clones a child with CLONE_VFORK and no
  *            CLONE_VM (its own copy of memory; the parent waits for it); the
@@ -222,7 +223,7 @@ int main(int argc, char **argv)
             if (child > 0 && waitpid(child, &status, 0) == child)
                 printf("vfork child exit=%d sig=%d\n", WIFEXITED(status) ? WEXITSTATUS(status) : -1,
                        WIFSIGNALED(status) ? WTERMSIG(status) : 0);
-        } else if (!strcmp(mode, "vforkstep") && round == 2) {
+        } else if (!strcmp(mode, "vforkstep") && round == 20) {
             /* Inline: the child returns into this frame, as from vfork(). */
             long child;
             __asm__ volatile(".globl vfork_syscall\nvfork_syscall:\n\tsyscall"
@@ -236,7 +237,7 @@ int main(int argc, char **argv)
             if (child > 0 && waitpid((pid_t)child, &status, 0) == child)
                 printf("vfork child exit=%d sig=%d\n", WIFEXITED(status) ? WEXITSTATUS(status) : -1,
                        WIFSIGNALED(status) ? WTERMSIG(status) : 0);
-        } else if (!strcmp(mode, "pausestep") && round == 2) {
+        } else if (!strcmp(mode, "pausestep") && round == 20) {
             printf("pausing\n");
             fflush(stdout);
             pause_now();

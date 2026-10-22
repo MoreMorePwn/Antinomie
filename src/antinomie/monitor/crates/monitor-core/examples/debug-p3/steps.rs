@@ -153,7 +153,7 @@ pub fn exit_step(context: &mut Context) -> Result<String, String> {
 /// with kill is taken while the step is under way.
 pub fn blocking_steps(context: &mut Context) -> Result<String, String> {
     // (a) A followed vfork.
-    let mut prog = context.start("vforkstep", 8, 0, Some(follow()))?;
+    let mut prog = context.start("vforkstep", 30, 0, Some(follow()))?;
     let site = prog.sym("vfork_syscall")?;
     let event = stop_at(&mut prog, site, 15)?;
     let started = Instant::now();
@@ -194,7 +194,7 @@ pub fn blocking_steps(context: &mut Context) -> Result<String, String> {
     context.finish(prog)?;
 
     // (b) A call that blocks: DETACH with kill while the step is under way.
-    let mut prog = context.start("pausestep", 8, 0, None)?;
+    let mut prog = context.start("pausestep", 30, 0, None)?;
     prog.stop()?;
     let site = prog.sym("pause_syscall")?;
     let event = stop_at(&mut prog, site, 15)?;
@@ -210,7 +210,7 @@ pub fn blocking_steps(context: &mut Context) -> Result<String, String> {
 
     // (c) The same step left alone: the group runs while the call blocks, and
     // a stop request ends it.
-    let mut prog = context.start("pausestep", 8, 0, None)?;
+    let mut prog = context.start("pausestep", 30, 0, None)?;
     prog.stop()?;
     let site = prog.sym("pause_syscall")?;
     let event = stop_at(&mut prog, site, 15)?;
@@ -236,7 +236,7 @@ pub fn blocking_steps(context: &mut Context) -> Result<String, String> {
 
 /// FF-21: clone(CLONE_VFORK) without CLONE_VM gives the child its own memory.
 pub fn vfork_own_memory(context: &mut Context) -> Result<String, String> {
-    let mut prog = context.start("vforknovm", 4, 0, Some(follow()))?;
+    let mut prog = context.start("vforknovm", 40, 0, Some(follow()))?;
     let child_site = prog.sym("child_site")?;
     prog.dbg.set_breakpoint(child_site, 1).map_err(text)?;
     let event = prog.go(15)?;
