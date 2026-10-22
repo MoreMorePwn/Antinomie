@@ -280,8 +280,11 @@ def build_image(profile, values, build, work, output, app_version=None, image_ca
     if app_version:
         command += ["--app-version", app_version]
     if profile == "busybox":
-        command += ["--hostname", values.get("hostname", "localhost"),
-                    "--name", values.get("name", "")]
+        # An answer the job leaves out takes the recipe's default, as the app's
+        # own defaults (BuildOptions) and the Debian recipe do.
+        for option in ("hostname", "name"):
+            if option in values:
+                command += [f"--{option}", values[option]]
     else:
         answers = work / "options.json"
         answers.write_text(json.dumps(values) + "\n")
