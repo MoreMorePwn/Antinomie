@@ -587,8 +587,8 @@ listed and a pass after a failure is shown as FLAKY), `--list`, `--no-build`.
 
 | Tier | Runs | Takes (this machine) |
 |---|---|---|
-| quick | the conformance trace suite's oracle groups `user`, `root`, `threads` (`conf-quick`) | QUICK_TIME |
-| full | quick; `conf-stress-light`, `conf-stress-heavy`, `conf-stress-extreme`, `conf-stress-lossy` (one check and one conformance run each, cleaned up in between); `debug-p2`, `debug-p3`, `audit-stop`, `audit-core`, `uring-status`, `uring-boots`, `tracer-record`, `tracer-qa`, `debugger-live`, `stealth`, `snapshot`; `uring-legacy` and `tracer-legacy` on the old base; interop in both directions (`io-old-new-*`: the old host with BASE; `io-new-old-*`: this host with the old base) | FULL_TIME |
+| quick | the conformance trace suite's oracle groups `user`, `root`, `threads` (`conf-quick`) | about 1 min with the examples built, 5 to 7 min when the render test has to build too |
+| full | quick; `conf-stress-light`, `conf-stress-heavy`, `conf-stress-extreme`, `conf-stress-lossy` (one check and one conformance run each, cleaned up in between); `debug-p2`, `debug-p3`, `audit-stop`, `audit-core`, `uring-status`, `uring-boots`, `tracer-record`, `tracer-qa`, `debugger-live`, `stealth`, `snapshot`; `uring-legacy` and `tracer-legacy` on the old base; interop in both directions (`io-old-new-*`: the old host with BASE; this host with the old base: `io-new-old-audit` and the two legacy checks, since an old guest lacks what the other checks need) | about 2 h 10 min plus, the first time, about 15 min to build the old host; the four stress groups take 80 min of it (light 7, heavy 24, extreme 35, lossy 13) |
 
 Quick is the default for every change. Full is required when a change touches the
 kernel/host contract, and for a release check:
