@@ -236,7 +236,10 @@ impl Worker {
                 let wire = crate::guest_desktop::wire_request(&request)?;
                 // Whatever hashing and launch shape the guest offers is asked
                 // for; an older guest offers none and sees no new flag.
-                let offered = self.snapshot.guest_tracer.map_or(0, |caps| caps.exec_flags);
+                // The offer comes from a probe after boot. A launch that beat it
+                // would silently drop the shell-job shape and the hashing, so it
+                // waits instead, like the core limits do.
+                let offered = control::tracer_offer(self.snapshot.guest_tracer)?;
                 let tracer_hashing =
                     offered & (control::EXEC_HASH_ROOT | control::EXEC_HASH_WRITES);
                 let args = control::with_tracer_flags(
