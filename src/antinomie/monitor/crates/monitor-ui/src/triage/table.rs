@@ -274,7 +274,11 @@ fn table_rows_with(
         .header(row_height, |mut header| {
             for (column, title) in headers.iter().enumerate() {
                 header.col(|ui| {
-                    sorting::header(ui, id, column, title);
+                    crate::widgets::table::aligned(
+                        ui,
+                        crate::widgets::table::numeric_align(numeric_column(title)),
+                        |ui| sorting::header(ui, id, column, title),
+                    );
                 });
             }
         })
@@ -341,7 +345,13 @@ fn table_rows_with(
                                 },
                             );
                         } else {
-                            draw(ui);
+                            crate::widgets::table::aligned(
+                                ui,
+                                crate::widgets::table::numeric_align(numeric_column(
+                                    headers[column],
+                                )),
+                                draw,
+                            );
                         }
                     });
                 }
@@ -392,6 +402,22 @@ pub(super) fn finding_table(
         .inner;
     details::refresh_findings(ui.ctx(), id, headers, rows);
     clicked
+}
+
+/// Columns whose cells are numbers (ids, frames, counts): their header and
+/// cells sit at the right edge, as in the other tables of the app.
+fn numeric_column(header: &str) -> bool {
+    matches!(
+        header,
+        "TID"
+            | "Frame"
+            | "Response frame"
+            | "Occurrences"
+            | "Diff count"
+            | "Requests"
+            | "Rcode"
+            | "Evidence"
+    )
 }
 
 fn finding_table_rows(
@@ -445,7 +471,11 @@ fn finding_table_rows(
         .header(row_height, |mut header| {
             for (column, title) in headers.iter().enumerate() {
                 header.col(|ui| {
-                    sorting::header(ui, id, column, title);
+                    crate::widgets::table::aligned(
+                        ui,
+                        crate::widgets::table::numeric_align(numeric_column(title)),
+                        |ui| sorting::header(ui, id, column, title),
+                    );
                 });
             }
         })
@@ -455,18 +485,23 @@ fn finding_table_rows(
                     .as_ref()
                     .map_or(row.index(), |order| order[row.index()])];
                 row.set_selected(selected == Some(finding.key));
-                for cell in &finding.cells {
+                for (column, cell) in finding.cells.iter().enumerate() {
                     row.col(|ui| {
                         let mut text = RichText::new(bounded_cell(&cell.text)).color(cell.color());
                         if cell.mono {
                             text = text.monospace();
                         }
-                        ui.add(
-                            egui::Label::new(text)
-                                .truncate()
-                                .selectable(false)
-                                .sense(egui::Sense::hover()),
-                        );
+                        let align = crate::widgets::table::numeric_align(numeric_column(
+                            headers.get(column).copied().unwrap_or_default(),
+                        ));
+                        crate::widgets::table::aligned(ui, align, |ui| {
+                            ui.add(
+                                egui::Label::new(text)
+                                    .truncate()
+                                    .selectable(false)
+                                    .sense(egui::Sense::hover()),
+                            );
+                        });
                     });
                 }
                 if row.response().clicked() {

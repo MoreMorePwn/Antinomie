@@ -316,7 +316,7 @@ fn flagged_file_rows_get_a_warn_bar_and_a_warn_location() {
 }
 
 #[test]
-fn network_views_are_tabs_with_counts_and_dns_has_its_time_column() {
+fn network_views_are_tabs_with_counts_and_dns_keeps_its_columns() {
     let ctx = context();
     let (_temp, mut view) = view(Section::Network);
     {
@@ -516,4 +516,34 @@ fn an_opened_row_keeps_every_value_under_its_own_column() {
         shown,
         ["Time", "Path", "Process (PID / TID)", "Result", "Evidence"]
     );
+}
+
+#[test]
+fn numeric_columns_sit_at_the_right_edge_of_their_cells() {
+    let ctx = context();
+    let (_temp, mut view) = view(Section::Network);
+    {
+        let scan = view.scan.as_mut().unwrap();
+        scan.network_counts = Some((10, 1, 1));
+        let mut row: Vec<Cell> = DNS_HEADERS
+            .iter()
+            .map(|header| cell(*header, theme::text(), false))
+            .collect();
+        row[0] = cell("#3", theme::text(), true);
+        row[0].values = vec![("frame.number", RowValue::Number(3))];
+        scan.dns = vec![row];
+    }
+    view.network = NetTab::Dns;
+    let out = settle(&ctx, &mut view);
+    let header = find(&out, "Frame");
+    let frame = find(&out, "#3");
+    // The number and its header end together at the column's right edge; a
+    // left-aligned pair would start together instead.
+    assert!(
+        (header.right() - frame.right()).abs() < 3.0,
+        "header {header:?} cell {frame:?}"
+    );
+    let endpoint = find(&out, "Endpoint");
+    // Text columns stay at the left edge.
+    assert!(endpoint.left() > header.right());
 }
