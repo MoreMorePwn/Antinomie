@@ -49,7 +49,7 @@ it runs.
   and misread every later reply ("Remote replied unexpectedly to
   'vMustReplyEmpty'", then "The program has no registers now"); the debug
   server now ignores such a retransmission, and the console gives gdb 30 s
-  for a reply instead of 2 s. The pwndbg console keeps gdb's history in its
+  for a reply instead of 2 s. The console keeps gdb's history in its
   own home instead of `.gdb_history` in the app's working directory. A base
   built from a job without a hostname is named `debian`, not `localhost`.
   The debug checks set gdb's remote timeout with the command gdb has

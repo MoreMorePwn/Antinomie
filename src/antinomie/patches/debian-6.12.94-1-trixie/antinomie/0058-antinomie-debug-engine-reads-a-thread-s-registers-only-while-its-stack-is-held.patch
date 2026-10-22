@@ -1,0 +1,237 @@
+Description: antinomie: debug engine reads a thread's registers only while its stack is held
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-10-22
+
+A thread's user registers are on its kernel stack. The engine holds a reference on each thread's task_struct but not on its stack, which an exiting thread frees at its last switch (VMAP_STACK), leaving task->stack NULL. A stopped group that was killed (a timer_create() SIGKILL while the debugger looked at a breakpoint stop) left its threads' records running and the session STOPPED; Continue then read the reporting thread's instruction pointer through task_pt_regs() and oopsed the debug worker, which ended every debug session until reboot. A stepped thread that exited in the step (a syscall instruction with rax = exit) had its trap flag cleared the same way.  Every access to another thread's registers (an event's pc, the thread list, REGS_READ and REGS_WRITE, the resume past a hardware breakpoint, the step's arm and its undo) now holds the stack with try_get_task_stack() and finds nothing (-ESRCH, pc 0) once it is gone; a step of a thread that left skips the trap-flag undo. Continue first asks whether the group is over, and STATUS does for a stopped session too, so a killed group reads as exited. Continue does not touch a thread that left. The contract revision stays 17.
+
+---
+diff --git a/kernel/antinomie/debug.c b/kernel/antinomie/debug.c
+index cc9d489b5..64e5ceb28 100644
+--- a/kernel/antinomie/debug.c
++++ b/kernel/antinomie/debug.c
+@@ -41,6 +41,7 @@
+ #include <linux/sched/mm.h>
+ #include <linux/sched/signal.h>
+ #include <linux/sched/task.h>
++#include <linux/sched/task_stack.h>
+ #include <linux/slab.h>
+ #include <linux/task_work.h>
+ #include <linux/unaligned.h>
+@@ -405,6 +406,33 @@ static bool thread_stopped(struct ant_dbg_thread *t)
+ 	return READ_ONCE(t->state) == T_PARKED || READ_ONCE(t->vfork_wait);
+ }
+ 
++/* A thread's user registers are on its kernel stack, which an exiting thread
++ * frees at its last switch (VMAP_STACK) while the engine still holds its
++ * task_struct. Every access to another thread's registers holds the stack for
++ * its duration, and finds nothing when it is gone.
++ */
++static bool regs_hold(struct ant_dbg_thread *t)
++{
++	return try_get_task_stack(t->task) != NULL;
++}
++
++static void regs_release(struct ant_dbg_thread *t)
++{
++	put_task_stack(t->task);
++}
++
++/* The thread's instruction pointer; 0 once its stack is gone. */
++static unsigned long thread_pc(struct ant_dbg_thread *t)
++{
++	unsigned long pc;
++
++	if (!regs_hold(t))
++		return 0;
++	pc = ant_dbg_arch_pc(t->task);
++	regs_release(t);
++	return pc;
++}
++
+ static void queue_work_ref(struct ant_dbg *s)
+ {
+ 	if (!refcount_inc_not_zero(&s->refs))
+@@ -1167,7 +1195,7 @@ static void ev_fill(struct ant_dbg_event *ev, struct ant_dbg_thread *t, u32 kind
+ 		*ev = *rich;
+ 	ev->kind = kind;
+ 	ev->tid = t->tid;
+-	ev->pc = ant_dbg_arch_pc(t->task);
++	ev->pc = thread_pc(t);
+ 	ev->addr = event_has_addr(kind) ? t->pending_addr : 0;
+ 	ev->sig = kind == ANTC_DEBUG_EVENT_SIGNAL ? t->sig : 0;
+ 	ev->aux = kind == ANTC_DEBUG_EVENT_WATCH ? t->pending_aux : 0;
+@@ -1218,22 +1246,29 @@ static void ev_ack(struct ant_dbg *s, u32 seq)
+  */
+ static void prepare_resume(struct ant_dbg_thread *t)
+ {
+-	if (t->rf_pc && ant_dbg_arch_pc(t->task) == t->rf_pc)
+-		ant_dbg_arch_resume_past_hw(t->task);
++	if (t->rf_pc && regs_hold(t)) {
++		if (ant_dbg_arch_pc(t->task) == t->rf_pc)
++			ant_dbg_arch_resume_past_hw(t->task);
++		regs_release(t);
++	}
+ 	t->rf_pc = 0;
+ }
+ 
+ /* Arm a parked thread to execute one user instruction. Returns whether the step
+  * may last as long as the program wants (a system call, a long string loop):
+- * only the debugger's stop request ends it then.
++ * only the debugger's stop request ends it then. -ESRCH: the thread is gone.
+  */
+-static bool step_prepare(struct ant_dbg_thread *t)
++static int step_prepare(struct ant_dbg_thread *t)
+ {
+-	unsigned int class = ant_dbg_arch_step_class(t->task);
++	unsigned int class;
+ 
++	if (!regs_hold(t))
++		return -ESRCH;
++	class = ant_dbg_arch_step_class(t->task);
+ 	prepare_resume(t);
+ 	ant_dbg_arch_step_arm(t->task, &t->step);
+ 	t->step_pc = ant_dbg_arch_pc(t->task);
++	regs_release(t);
+ 	t->step_rep = class == ANT_DBG_STEP_REP;
+ 	if (class == ANT_DBG_STEP_SYSCALL) {
+ 		t->step_sys = true;
+@@ -1243,7 +1278,9 @@ static bool step_prepare(struct ant_dbg_thread *t)
+ 	return class != ANT_DBG_STEP_PLAIN;
+ }
+ 
+-/* Undo whatever a step armed, once the thread is stopped (or leaves). */
++/* Undo whatever a step armed, once the thread is stopped (or leaves). A thread
++ * that exited has no registers left to take the trap flag out of.
++ */
+ static void step_cleanup(struct ant_dbg_thread *t, bool stepped)
+ {
+ 	if (t->step_sys) {
+@@ -1252,7 +1289,10 @@ static void step_cleanup(struct ant_dbg_thread *t, bool stepped)
+ 	}
+ 	t->step_rep = false;
+ 	if (READ_ONCE(t->stepping)) {
+-		ant_dbg_arch_step_done(t->task, &t->step, stepped);
++		if (regs_hold(t)) {
++			ant_dbg_arch_step_done(t->task, &t->step, stepped);
++			regs_release(t);
++		}
+ 		WRITE_ONCE(t->stepping, false);
+ 	}
+ }
+@@ -1749,7 +1789,11 @@ static int step_thread(struct ant_dbg *s, struct ant_dbg_thread *t, bool into_ha
+ 		WRITE_ONCE(t->step_hook, true);
+ 		unbounded = true;
+ 	} else {
+-		unbounded = step_prepare(t);
++		error = step_prepare(t);
++		if (error < 0)
++			return error;
++		unbounded = error;
++		error = 0;
+ 	}
+ 	WRITE_ONCE(t->go, true);
+ 	wake_up_all(&s->wait);
+@@ -1793,6 +1837,11 @@ static void do_cont(struct ant_dbg *s)
+ 	u32 tid, kind, sig, sig_tid;
+ 	int error = 0;
+ 
++	/* A group that was killed while it was stopped has nothing left to resume:
++	 * its threads left the park and their stacks may be gone.
++	 */
++	if (group_over(s))
++		return;
+ 	spin_lock_irq(&s->lock);
+ 	step = s->step_request;
+ 	tid = s->step_tid;
+@@ -1821,6 +1870,8 @@ static void do_cont(struct ant_dbg *s)
+ 	}
+ 	spin_unlock_irq(&s->lock);
+ 	t = find_tid(s, tid);
++	if (t && thread_gone(t))
++		t = NULL;
+ 	if (sig_tid || sig || (t && t->sig))
+ 		delivering = apply_signal(s, sig_tid ?: tid, sig) && (sig_tid ?: tid) == tid;
+ 	if (step) {
+@@ -1843,7 +1894,7 @@ static void do_cont(struct ant_dbg *s)
+ 	 * while everything is stopped and the breakpoints are out of memory.
+ 	 */
+ 	if (t && !delivering && (kind == ANTC_DEBUG_EVENT_BREAKPOINT || kind == ANTC_DEBUG_EVENT_STEP) &&
+-	    bp_at(as, ant_dbg_arch_pc(t->task))) {
++	    thread_parked(t) && bp_at(as, thread_pc(t))) {
+ 		error = step_thread(s, t, false);
+ 		if (group_over(s))
+ 			goto out;
+@@ -2783,8 +2834,10 @@ static int cmd_status(struct ant_dbg *s, u8 *reply, size_t capacity, size_t *rep
+ 
+ 	if (capacity < ANTC_DEBUG_STATUS_SIZE)
+ 		return -EMSGSIZE;
++	/* A stopped group can be killed too (SIGKILL ends a park). */
+ 	if (READ_ONCE(s->state) == ANTC_DEBUG_RUNNING ||
+-	    READ_ONCE(s->state) == ANTC_DEBUG_STOPPING)
++	    READ_ONCE(s->state) == ANTC_DEBUG_STOPPING ||
++	    READ_ONCE(s->state) == ANTC_DEBUG_STOPPED)
+ 		group_over(s);
+ 	live = count_threads(s, &parked);
+ 	memset(reply, 0, ANTC_DEBUG_STATUS_SIZE);
+@@ -2845,7 +2898,7 @@ static int cmd_threads(struct ant_dbg *s, u8 *reply, size_t capacity, size_t *re
+ 		put_unaligned_le32(parked ? T_PARKED : T_RUNNING, entry + 4);
+ 		put_unaligned_le32(vfork ? ANTC_DEBUG_EVENT_VFORK : parked ? t->reason : 0, entry + 8);
+ 		put_unaligned_le32(parked && !vfork ? READ_ONCE(t->sig) : 0, entry + 12);
+-		put_unaligned_le64(parked ? ant_dbg_arch_pc(t->task) : 0, entry + 16);
++		put_unaligned_le64(parked ? thread_pc(t) : 0, entry + 16);
+ 		/* Flags only for a debugger that follows forks (earlier ones read zero). */
+ 		if (READ_ONCE(s->opts))
+ 			put_unaligned_le32(vfork ? ANTC_DEBUG_TF_VFORK_WAIT : 0, entry + 24);
+@@ -2904,14 +2957,16 @@ static int regs_one(struct ant_dbg_thread *t, u32 nt, u8 *reply, size_t capacity
+ 	return 16 + length;
+ }
+ 
++static int regs_access(struct ant_dbg_thread *t, bool write, u32 flags, u32 nt, const u8 *args,
++		       size_t args_len, u8 *reply, size_t capacity, size_t *reply_len);
++
+ static int cmd_regs(u32 opcode, struct ant_dbg *s, const u8 *args, size_t args_len,
+ 		    u8 *reply, size_t capacity, size_t *reply_len)
+ {
+ 	bool write = opcode == ANTC_DEBUG_REGS_WRITE;
+ 	u32 flags = get_unaligned_le32(args + 4);
+-	const struct user_regset *regset;
+ 	struct ant_dbg_thread *t;
+-	u32 nt = get_unaligned_le32(args + 20), length = 0;
++	u32 nt = get_unaligned_le32(args + 20);
+ 	int error;
+ 
+ 	if (args_len < (write ? 40 : 32) || (!write && args_len != 32) ||
+@@ -2925,6 +2980,21 @@ static int cmd_regs(u32 opcode, struct ant_dbg *s, const u8 *args, size_t args_l
+ 		return -ESRCH;
+ 	if (!ant_dbg_arch_task_ok(t->task))
+ 		return -EOPNOTSUPP;
++	if (!regs_hold(t))
++		return -ESRCH;
++	error = regs_access(t, write, flags, nt, args, args_len, reply, capacity, reply_len);
++	regs_release(t);
++	return error;
++}
++
++/* REGS_READ and REGS_WRITE of a thread whose stack is held. */
++static int regs_access(struct ant_dbg_thread *t, bool write, u32 flags, u32 nt, const u8 *args,
++		       size_t args_len, u8 *reply, size_t capacity, size_t *reply_len)
++{
++	const struct user_regset *regset;
++	u32 length;
++	int error;
++
+ 	if (flags & ANTC_DEBUG_REGS_ALL) {
+ 		struct ant_dbg_caps caps;
+ 		unsigned int i, count = 0;
+@@ -3358,7 +3428,8 @@ static int cmd_thread_ctl(struct ant_dbg *s, const u8 *args, size_t args_len, u8
+ 			prepare_resume(t);
+ 			WRITE_ONCE(t->step_hook, true);
+ 		} else if (action == ANTC_DEBUG_TCTL_STEP) {
+-			step_prepare(t);
++			if (step_prepare(t) < 0)
++				return -ESRCH;
+ 		} else {
+ 			prepare_resume(t);
+ 		}
