@@ -803,6 +803,35 @@ mod tests {
     }
 
     #[test]
+    fn the_sigma_caveat_above_the_findings_is_a_plain_note_and_other_warnings_stay_warnings() {
+        let ctx = egui::Context::default();
+        let first_color = |text: &str| {
+            let output = frames(&ctx, 2, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| super::super::input_note(ui, text));
+            });
+            let mut color = None;
+            for shape in &output {
+                super::super::tests::each_galley(&shape.shape, &mut |galley| {
+                    if galley.text().contains(text) && color.is_none() {
+                        color = galley
+                            .job
+                            .sections
+                            .first()
+                            .map(|section| section.format.color);
+                    }
+                });
+            }
+            color
+        };
+        let sigma = antinomie_monitor_core::analysis::detection::SIGMA_COVERAGE_WARNING;
+        assert_eq!(first_color(sigma), Some(theme::text()));
+        assert_ne!(
+            first_color("The Suricata warning limit was reached."),
+            Some(theme::text())
+        );
+    }
+
+    #[test]
     fn rows_say_why_and_the_sigma_row_carries_the_coverage_warning() {
         let ctx = egui::Context::default();
         let rows = vec![
