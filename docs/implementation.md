@@ -661,6 +661,75 @@ Once a check's result is recorded, its VM disks, recordings and private folders 
 deleted (logs, `results.json`, the report and the conformance reports stay);
 `--keep-data` keeps them. `tracer-qa` reads `tracer-record`'s recordings, which go
 after it; rerun `tracer-record` with `--keep-data` before running `tracer-qa` alone.
+`tracer-qa` is an ERROR, not run, when `tracer-record` did not pass (in this run or,
+for a rerun, the last one in `--out`): a Triage QA over a failed recording proves
+nothing. It reads the runs of `tracer-record`'s last attempt.
+
+### Checks that failed under load (0.7.0)
+
+Full-tier checks that failed now and then on this shared host, and why.
+
+* **`debugger-live`: pwndbg "The program has no registers now".** A real bug of
+  the RSP server. A new session's console pane starts gdb by itself; Restart
+  (which the check pressed) starts a second gdb while the first still holds the
+  session. The server serves one client at a time, so the second one's first
+  packet (`qSupported`) waited unacknowledged while the first gdb quit and the
+  server stopped the process again for the next client. gdb waits its remote
+  timeout (2 s) for the `+`, then sends the packet again; the server answered both
+  copies, and every later reply answered the request before it ("Remote replied
+  unexpectedly to 'vMustReplyEmpty': vCont;c;C;s;S;t"). pwndbg starts fast enough
+  to land in that window; GEF, slower to load, usually did not. Fixes: the server
+  ignores a copy of the last packet that comes before the client has acknowledged
+  a reply (`rsp_client.rs`, `retransmitted`; a client in acknowledgement mode sends
+  nothing new before that `+`); the console runs gdb with `set remotetimeout 30`
+  (a reply can wait for the guest longer than 2 s on a busy host: a request is
+  given 5 s, the link 15 s, and a gdb that times out also misreads every later
+  reply). Before: 3 of 3 runs failed at that step (the fourth attempt, with only
+  the server fix, connected and failed later in the test, below); after: 5 of 5
+  passed, the first while a guest kernel built with `-j6`. A gdb that leaves
+  releases the process, so Restart in a Debug on start session lets the program
+  run from its entry; the check now uses the pane's own gdb for Debug on start
+  and presses Restart in the attach case. The first VM of a fresh data folder
+  imports the base (about 20 s on this disk): the check gives it 120 s.
+* **`.gdb_history` in the working directory.** pwndbg turns history saving on and
+  gdb's default file is `.gdb_history` in the working directory, the app's; the
+  live check left one in `crates/monitor-ui`. The pwndbg console's history goes to
+  its private home (`GDBHISTFILE`); GEF names `~/.gdb_history` itself. The check
+  fails if one appears in the working directory.
+* **`debug-p3` gdb timeouts.** The phase 3 gdb tests set the remote timeout with
+  `set remote timeout 30`, which gdb does not have (the command is
+  `remotetimeout`; gdb printed "Undefined set remote command"), and the phase 2
+  tests set none, so gdb kept 2 s and a slow reply desynchronised it as above;
+  which command group then never finished varied by run. The waits were right; the
+  timeout never applied. Both now set `remotetimeout 30`.
+* **The pty test `closing_asks_the_program_to_quit_first`.** It closed the program
+  after a fixed 300 ms; in the full test run the shell had sometimes not yet set
+  its INT trap, so the Ctrl-C ended it. It now waits for the shell to say it is
+  ready.
+* **`build-base` bases named `localhost`.** `build-base.py` passed
+  `--hostname localhost` to the BusyBox recipe when the job had no hostname (a job
+  written by hand, `"options": {}`), and the stealth check failed `base.hostname`
+  and `base.etc-hostname`. It now passes only the answers the job gives; every
+  path defaults to `debian` and names uid 1000 `user`.
+* **`io-old-new-tracer`: "a segment of the reconnected run captured no packets"**
+  (not fixed). `tracer-check record` reconnects the transport 4 s into a 30 s run
+  that sends one DNS query a second and wants packets in both segments. A
+  reconnect usually takes 0.2 to 1 s; in the two failures it took 41 s and 49 s
+  (of 24 recorded: 4.3, 16, 19, 41 and 49 s are the slow ones), so the run's
+  queries fell into one segment. The check depends on the reconnect being short;
+  where the time goes in a slow reconnect was not measured.
+* **`stress-heavy` transport drops** (not fixed). Two getppid Entry records of 13.7
+  million were dropped by the guest while the host's writer held nothing back. The
+  same kind of drop predates 0054-0057: a 0052 base (`s2final`) dropped one write
+  Entry in `stress-light`. A guest send
+  drops only when the host is not live, when a sender that cannot sleep has spun
+  200 us, or when a waiting sender's wait (5 s by default) runs out. Candidates: a
+  sleeping waiter starved for the whole wait by senders on its CPU that take the
+  room as it frees (waiting is not first come, first served), or the wait measured
+  with `local_clock()` across CPUs (a sender that slept can wake on another CPU;
+  the guests here report a stable `sched_clock`, which makes this unlikely). Which
+  one was not shown: the guest does not count drops by cause, and the recordings
+  of the runs with drops were gone.
 
 ### Trace follow-ups: io_uring, ordering, saving under load, Stop (0.7.0)
 

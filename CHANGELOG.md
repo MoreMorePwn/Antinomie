@@ -32,6 +32,18 @@ it runs.
   `scripts/vm-regress.py` never deletes through a linked folder, refuses `/`,
   the home and XDG folders and the app's own folders by their real path, and a
   check that is stopped takes its whole process tree with it.
+- **The Debugger console connects on a busy host, and checks that failed
+  under load.** A gdb that connected while another was leaving (the console's
+  Restart, or the pane's own gdb replaced) had its first packet answered twice
+  and misread every later reply ("Remote replied unexpectedly to
+  'vMustReplyEmpty'", then "The program has no registers now"); the debug
+  server now ignores such a retransmission, and the console gives gdb 30 s
+  for a reply instead of 2 s. The pwndbg console keeps gdb's history in its
+  own home instead of `.gdb_history` in the app's working directory. A base
+  built from a job without a hostname is named `debian`, not `localhost`.
+  The debug checks set gdb's remote timeout with the command gdb has
+  (`remotetimeout`), the Tracer Triage QA fails when its input recording
+  failed, and a pty test no longer races the shell it starts.
 
 - **io_uring follow-ups, records in order across vCPUs, saving under load,
   Stop after heavy churn.** Guest series 0054-0057, contract revision 17
