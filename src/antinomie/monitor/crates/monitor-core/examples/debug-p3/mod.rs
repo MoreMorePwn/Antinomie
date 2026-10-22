@@ -9,6 +9,7 @@ use antinomie_monitor_core::debug::{ChildRef, SessionOptions, StopEvent, ThreadA
 mod engine;
 mod gdb;
 mod session;
+mod steps;
 
 type Symbols = BTreeMap<String, u64>;
 type Test = fn(&mut Context) -> Result<String, String>;
@@ -215,6 +216,10 @@ pub fn run(bundle: &str, data: &str, dir: &str, only: &[String]) -> Result<(), S
         ("gdb-vfork", gdb::vfork),
         ("gdb-exec", gdb::exec),
         ("gdb-nonstop", gdb::nonstop),
+        ("killed-stop", steps::killed_stop),
+        ("exit-step", steps::exit_step),
+        ("blocking-steps", steps::blocking_steps),
+        ("vfork-own-memory", steps::vfork_own_memory),
         // Restoring a snapshot changes the VM under the later tests: keep these last.
         ("snapshot", session::snapshot_with_debugger),
         ("snapshot-readopt", session::snapshot_readopt),

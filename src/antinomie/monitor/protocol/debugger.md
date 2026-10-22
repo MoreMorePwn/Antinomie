@@ -71,8 +71,22 @@ The generic engine reads and writes registers through the kernel's own
   handler consumes each iteration's trap in place until the instruction pointer
   moves. Phase 2 planted a temporary breakpoint after the instruction with the
   rest of the group stopped; that is gone, which is what lets threads step
-  independently. A step that blocks in a system call waits for the system call;
-  only the debugger's stop request ends it.
+  independently. The engine's one worker serves every session and never waits for
+  a step longer than 2 s: a step the kernel holds longer (a system call that
+  blocks, a long string loop, a handler not reached yet), or one a `DETACH` or
+  `STOP_RUN` wants ended, stays armed, the group runs (`RUNNING`), and the thread's
+  stop at the step's end is the next event (`STEP`), as a breakpoint would be; a
+  step past a breakpoint that a `CONT` left unfinished ends quietly. A stepped
+  thread that falls asleep in a vfork the debugger follows stops the group at once
+  with that thread's `VFORK` event. A `STOP` during the step stops the group once
+  it runs. `DETACH` (with or without kill) is accepted while a `CONT` or step is
+  under way and is carried out when it is done (guest series 0059; before, it
+  was refused with `-EBUSY` and a step of a vfork hung every session).
+* **Registers of a thread that left.** A thread's user registers are on its kernel
+  stack, which an exiting thread frees; every access to another thread's
+  registers holds the stack and finds nothing once it is gone (`REGS_*` answer
+  `-ESRCH`, a thread's pc reads 0), and `STATUS` and `CONT` of a stopped group that
+  was killed report it `EXITED` (guest series 0058).
 * **Signals** (guest Phase 2). Every signal about to be delivered to a thread of
   the group stops the group first (`get_signal` calls the engine under the
   signal lock; the thread parks as a tracer's signal stop would, without a
@@ -127,7 +141,9 @@ The generic engine reads and writes registers through the kernel's own
   start) is not an event.
 * **Sessions and children** (phase 3): sessions are a list (at most 16), each over
   one thread group; the engine's bytes live in an address-space object a vfork
-  child shares with its parent until it execs. With option `FORK` the fork hook (in
+  child shares with its parent until it execs (a `CLONE_VFORK` child shares it only
+with `CLONE_VM`; without it the child has its own, as after a fork, and the
+event's `SHARED_MM` flag is clear: guest series 0060). With option `FORK` the fork hook (in
   `kernel_clone`, before the child runs) opens a session for the child, parked at
   its first return to user mode with event `CHILD`, holding a record of the engine
   bytes it inherited (taken out when the debugger adopts it); the parent thread
@@ -324,7 +340,8 @@ Tests: `start`, `pie`, `dynamic` (Debug on start under a real gdb), `gdb-threads
 run in one VM.
 
 Phase 3 has `tests/monitor/debug-p3-fixture.c` (modes `fork`, `vfork`, `exec`,
-`leaf`, `nonstop`, `system`, `spawn`, `chld`, `stopself`; the optional fourth
+`leaf`, `nonstop`, `system`, `spawn`, `chld`, `stopself`, `killtimer`,
+`exitstep`, `vforkstep`, `pausestep`, `vforknovm`; the optional fourth
 argument is a lead-in in milliseconds, so gdb connects to a program that is idle,
 not in the middle of a fork) and `debug-check p3`:
 
@@ -334,7 +351,13 @@ cargo run --release --example debug-check -- p3 BUNDLE NEW_DATA_DIR DIR [test ..
 ```
 
 Backend tests: `fork-follow`, `vfork-follow`, `exec-event`, `exec-legacy`,
-`nonstop`, `hwthreads`, `sigchld`, `readopt`, `stoprun-bytes`, `fork-stress`.
+`nonstop`, `hwthreads`, `sigchld`, `readopt`, `stoprun-bytes`, `fork-stress`,
+and the engine's worker under programs that end or block (`killed-stop`: a group
+SIGKILLed by its own timer at a breakpoint stop, then `CONT`; `exit-step`: a
+thread steps its own `exit` five times; `blocking-steps`: a step of a followed
+vfork, `DETACH` with kill during a step of `pause()`, and that step left to run;
+`vfork-own-memory`: `clone(CLONE_VFORK)` without `CLONE_VM`). These four also
+read the guest kernel log and fail on an oops, BUG or warning.
 Real gdb: `gdb-follow-child`, `gdb-follow-parent`, `gdb-keep-both`, `gdb-vfork`,
 `gdb-exec`, `gdb-nonstop`. App level (the panel controller through the app's
 backend): `reconnect`, `snapshot`, `snapshot-readopt` (these need a release base,
