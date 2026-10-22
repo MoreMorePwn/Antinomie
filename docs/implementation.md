@@ -565,6 +565,69 @@ cargo run --release --locked -j 2 -p antinomie-monitor-core --example conformanc
   Directory removal publishes no file identity. Rows without an entry point have
   positional argument names.
 
+### VM regression tiers (0.7.0)
+
+Every guest change used to run the whole VM regression set. One runner,
+`scripts/vm-regress.py`, now runs it in two tiers, and a change picks one by what
+it touches. Self-tests of the tier choice and the arguments:
+`python3 tests/monitor/test-vm-regress.py` (no VM).
+
+```sh
+scripts/vm-regress.py quick BASE
+scripts/vm-regress.py full  BASE --old-base OLD_BASE [--old-host REV|PATH] [--debugger-tools DIR]
+scripts/vm-regress.py auto  BASE [--against REF] [--old-base OLD_BASE ...]
+```
+
+`BASE` is a BusyBox base built from the current guest series; `OLD_BASE` an older
+one (the previous release's). Common options: `--out DIR` (logs, runs, fixtures and
+private HOME and XDG folders; default `vm-regress-out`), `--only CHECK` and
+`--skip CHECK` (repeatable), `--rerun-failed` (the checks that did not pass, or
+never ran, in the last run in `--out`), `--retries N` (opt-in: every attempt is
+listed and a pass after a failure is shown as FLAKY), `--list`, `--no-build`.
+
+| Tier | Runs | Takes (this machine) |
+|---|---|---|
+| quick | the conformance trace suite's oracle groups `user`, `root`, `threads` (`conf-quick`) | QUICK_TIME |
+| full | quick; `conf-stress-light`, `conf-stress-heavy`, `conf-stress-extreme`, `conf-stress-lossy` (one check and one conformance run each, cleaned up in between); `debug-p2`, `debug-p3`, `audit-stop`, `audit-core`, `uring-status`, `uring-boots`, `tracer-record`, `tracer-qa`, `debugger-live`, `stealth`, `snapshot`; `uring-legacy` and `tracer-legacy` on the old base; interop in both directions (`io-old-new-*`: the old host with BASE; `io-new-old-*`: this host with the old base) | FULL_TIME |
+
+Quick is the default for every change. Full is required when a change touches the
+kernel/host contract, and for a release check:
+
+* the guest patches `src/antinomie/core/`, `src/antinomie/patches/`,
+  `src/antinomie/transport/`;
+* `src/antinomie/monitor/protocol/` (contract documents, `control.h`, the schema
+  JSON);
+* any change to `ANTC_REVISION` (the `#define` in `control.h` or `REVISION` in
+  `control.rs`).
+
+`auto` decides this from the diff against `REF` (default: the `origin/release-*`
+branch `HEAD` is closest to): the commits since the merge base with `REF`, the
+working tree and untracked files. One contract path, or a changed revision line,
+makes it full; otherwise quick. It prints the paths that decided. The old host of
+interop is a git rev built in a temporary worktree under `--out` (removed
+afterwards) or a built checkout given with `--old-host`; it defaults to `REF`, so
+for a release check name the previous release.
+
+Rules the runner keeps: one VM at a time, and a wait for 5 GiB of MemAvailable
+before each boot; a timeout per check; HOME and the XDG folders of every check are
+private folders under `--out`, never the app's own data or settings; only the
+processes it started are stopped on a timeout. The report lists each check with
+its result, time and log, and the exit status is nonzero unless every check
+passed (a check whose prerequisite is missing, such as `--old-base`, counts as not
+passed). `debugger-live` needs the managed GEF and pwndbg: `--debugger-tools` names
+a data folder that has `tools/gef` and `tools/pwndbg` (`install-tool DATA gef`).
+
+Disk: the runs write a lot (the extreme stress group about 11 GB), and under WSL the
+Linux disk is a file on a Windows drive that grows but does not shrink, so `df /`
+does not show the danger. Before each check, build and boot the runner refuses to
+start (the check is reported ERROR, not started) while the Linux disk uses more than
+`--max-used-gb` (default 380) or a `--min-free PATH:GB` path has less free space
+(repeatable; on WSL it defaults to `/mnt/e:5`, the Windows drive behind the disk).
+Once a check's result is recorded, its VM disks, recordings and private folders are
+deleted (logs, `results.json`, the report and the conformance reports stay);
+`--keep-data` keeps them. `tracer-qa` reads `tracer-record`'s recordings, which go
+after it; rerun `tracer-record` with `--keep-data` before running `tracer-qa` alone.
+
 ### Accepted ANT-T0097 host UI performance (0.6.2)
 
 Remove render-time filesystem checks for host chooser availability; resolve
