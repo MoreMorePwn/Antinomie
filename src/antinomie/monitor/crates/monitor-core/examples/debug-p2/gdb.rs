@@ -58,8 +58,12 @@ impl Gdb {
         if std::env::var_os("P2_GDB_REMOTE_DEBUG").is_some() {
             gdb.run("set debug remote 1", 20)?;
         }
+        // gdb waits 2 s for a reply by default, then asks again and reads
+        // every later reply as the answer to the request before it. A busy
+        // host can make the guest take longer (a request is given 5 s), so
+        // the checks give gdb as long as the app's console does.
         gdb.run(
-            "set pagination off\nset confirm off\nset style enabled off\nset width 0\nset height 0\nset debuginfod enabled off",
+            "set pagination off\nset confirm off\nset style enabled off\nset width 0\nset height 0\nset debuginfod enabled off\nset remotetimeout 30",
             20,
         )?;
         Ok(gdb)
