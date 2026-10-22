@@ -663,10 +663,17 @@ impl SnapshotManager {
             Decision::Rename { .. } => "Rename snapshot",
             Decision::Delete { .. } => "Delete snapshot",
         };
-        let modal = egui::Modal::new(egui::Id::new("snapshot_decision")).show(ctx, |ui| {
+        let mut open = true;
+        // Like the other spawned windows: no dim behind it and free to move.
+        crate::widgets::window(title)
+            .id(egui::Id::new("snapshot_decision"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .pivot(egui::Align2::CENTER_CENTER)
+            .default_pos(ctx.screen_rect().center())
+            .show(ctx, |ui| {
                 ui.set_width((ctx.screen_rect().width() - 48.0).clamp(240.0, 440.0));
-                ui.label(RichText::new(title).strong().color(theme::text()));
-                ui.separator();
                 egui::ScrollArea::vertical().max_height((ctx.screen_rect().height() - 180.0).max(100.0)).show(ui, |ui| {
                     match decision {
                         Decision::Create(draft) => {
@@ -713,7 +720,7 @@ impl SnapshotManager {
                     cancel = ui.button("Cancel").clicked();
                 });
             });
-        if modal.should_close() || cancel || command.is_some() {
+        if !open || cancel || command.is_some() {
             self.decision = None;
         }
         command

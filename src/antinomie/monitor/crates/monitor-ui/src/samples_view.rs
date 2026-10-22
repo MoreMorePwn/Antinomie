@@ -714,7 +714,8 @@ impl SamplesView {
             .collapsible(false)
             .resizable(false)
             .default_width(620.0)
-            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .pivot(egui::Align2::CENTER_CENTER)
+            .default_pos(ctx.screen_rect().center())
             .open(&mut open)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {

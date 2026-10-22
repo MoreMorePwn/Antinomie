@@ -340,80 +340,83 @@ impl MonitorApp {
             };
             let mut yes = false;
             let mut cancel = false;
-            let modal = egui::Modal::new(Dialog::Confirm.window_id()).show(ctx, |ui| {
-                ui.set_width(400.0);
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new(egui_phosphor::regular::WARNING)
-                            .size(ui.text_style_height(&egui::TextStyle::Heading))
-                            .color(if destructive {
-                                theme::error()
-                            } else {
-                                theme::warn()
-                            }),
-                    );
-                    ui.label(
-                        RichText::new(title)
-                            .size(ui.text_style_height(&egui::TextStyle::Heading))
-                            .color(theme::heading()),
-                    );
-                });
-                ui.add_space(4.0);
-                ui.label(text);
-                if let Confirm::KillRun(target) = confirm {
-                    ui.add(egui::Label::new(target.label(&self.snapshot)).wrap());
-                }
-                if let Confirm::Clipboard { text, .. } = confirm {
-                    ui.label(format!("{} keys to type", text.key_count));
-                }
-                let enabled = !self.closing
-                    && match confirm {
-                        Confirm::KillRun(target) => {
-                            target.current(&self.snapshot)
-                                && self.running()
-                                && self.pending_kill.is_none()
-                                && self.snapshot.memory_dump.is_none()
-                                && self.vm_snapshots.pending.is_none()
-                        }
-                        Confirm::Reset(_) | Confirm::Delete(_) | Confirm::DeleteBase(_) => {
-                            self.snapshot.active_vm.is_none()
-                        }
-                        Confirm::DeleteEvidence(_) => self.selected.is_some(),
-                        Confirm::Upload(intent) => {
-                            intent.same_session(&self.snapshot)
-                                && self.snapshot.state == VmState::Running
-                                && self.pending_upload.is_none()
-                        }
-                        Confirm::Clipboard { intent, .. } => {
-                            intent.current(&self.snapshot)
-                                && self.running()
-                                && self.snapshot.memory_dump.is_none()
-                        }
-                        Confirm::Nat { vm, creating } => {
-                            if *creating {
-                                self.snapshot.active_vm.is_none()
-                            } else {
-                                self.snapshot.active_vm.as_ref() != Some(&vm.id)
+            let mut open = true;
+            // Like the other spawned windows: no dim behind it and free to move.
+            crate::widgets::window(title)
+                .id(Dialog::Confirm.window_id())
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .pivot(egui::Align2::CENTER_CENTER)
+                .default_pos(ctx.screen_rect().center())
+                .show(ctx, |ui| {
+                    ui.set_width(400.0);
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new(egui_phosphor::regular::WARNING)
+                                .size(ui.text_style_height(&egui::TextStyle::Heading))
+                                .color(if destructive {
+                                    theme::error()
+                                } else {
+                                    theme::warn()
+                                }),
+                        );
+                        ui.add(egui::Label::new(text).wrap());
+                    });
+                    if let Confirm::KillRun(target) = confirm {
+                        ui.add(egui::Label::new(target.label(&self.snapshot)).wrap());
+                    }
+                    if let Confirm::Clipboard { text, .. } = confirm {
+                        ui.label(format!("{} keys to type", text.key_count));
+                    }
+                    let enabled = !self.closing
+                        && match confirm {
+                            Confirm::KillRun(target) => {
+                                target.current(&self.snapshot)
+                                    && self.running()
+                                    && self.pending_kill.is_none()
+                                    && self.snapshot.memory_dump.is_none()
+                                    && self.vm_snapshots.pending.is_none()
                             }
-                        }
-                    };
-                dialog_footer(ui, |ui| {
-                    yes = ui
-                        .add_enabled(
-                            enabled,
-                            if destructive {
-                                danger_button(button)
-                            } else {
-                                primary_button(button)
-                            },
-                        )
-                        .clicked();
-                    cancel = ui.button("Cancel").clicked();
+                            Confirm::Reset(_) | Confirm::Delete(_) | Confirm::DeleteBase(_) => {
+                                self.snapshot.active_vm.is_none()
+                            }
+                            Confirm::DeleteEvidence(_) => self.selected.is_some(),
+                            Confirm::Upload(intent) => {
+                                intent.same_session(&self.snapshot)
+                                    && self.snapshot.state == VmState::Running
+                                    && self.pending_upload.is_none()
+                            }
+                            Confirm::Clipboard { intent, .. } => {
+                                intent.current(&self.snapshot)
+                                    && self.running()
+                                    && self.snapshot.memory_dump.is_none()
+                            }
+                            Confirm::Nat { vm, creating } => {
+                                if *creating {
+                                    self.snapshot.active_vm.is_none()
+                                } else {
+                                    self.snapshot.active_vm.as_ref() != Some(&vm.id)
+                                }
+                            }
+                        };
+                    dialog_footer(ui, |ui| {
+                        yes = ui
+                            .add_enabled(
+                                enabled,
+                                if destructive {
+                                    danger_button(button)
+                                } else {
+                                    primary_button(button)
+                                },
+                            )
+                            .clicked();
+                        cancel = ui.button("Cancel").clicked();
+                    });
                 });
-            });
-            // A click beside the dialog cancels it; Escape is handled with
-            // the other dialogs.
-            cancel |= modal.backdrop_response.clicked();
+            // The close button cancels it; Escape is handled with the other
+            // dialogs.
+            cancel |= !open;
             if yes {
                 if let Some(confirm) = self.confirm.take() {
                     match confirm {
