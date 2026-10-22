@@ -259,6 +259,8 @@ eventfd.initial | eventfd(count=5) = 9 |
 eventfd2.bad_flags | eventfd2(count=0, flags=0x2) = EINVAL |
 eventfd2.semaphore | eventfd2(count=0, flags=EFD_SEMAPHORE|EFD_NONBLOCK|EFD_CLOEXEC) = 10 |
 execve.bad_argv | execve(filename="/tmp/trace-fixture", argv=0x1, envp=["ANT_EXEC=failure"]) = EFAULT | arg0.path:complete:"/tmp/trace-fixture" arg1.ptr[0]:copy fault:uncaptured arg2.ptr[0]:complete:<bytes> arg2.string[0]:complete:"ANT_EXEC=failure" arg2.ptr[1]:complete:<bytes> !3
+execve.cold_failed | execve(filename="recapture-noexec", argv=["recapture-noexec", "--exec-target"], envp=["ANT_RECAPTURE=fail"]) = ENOEXEC | arg0.path:complete@at exit:"recapture-noexec" arg1.ptr[0]:complete:<bytes> arg1.string[0]:complete@at exit:"recapture-noexec" arg2.ptr[0]:complete:<bytes> arg2.string[0]:complete@at exit:"ANT_RECAPTURE=fail" arg1.ptr[1]:complete@at exit:<bytes> arg1.string[1]:complete@at exit:"--exec-target" arg1.ptr[2]:complete@at exit:<bytes> arg2.ptr[1]:complete@at exit:<bytes>
+execve.cold_literals | execve(filename=<data>, argv=<data>, envp=<data>) = <value> | arg0.path:complete@kernel copy arg1.ptr[0]:complete arg1.string[0]:complete@kernel copy arg2.ptr[0]:complete arg2.string[0]:complete@kernel copy arg1.string[1]:complete@kernel copy arg1.string[2]:complete@kernel copy
 execve.directory | execve(filename=".", argv=["/tmp/trace-fixture", "--exec-target", "3"], envp=["ANT_EXEC=failure"]) = EACCES | arg0.path:complete:"." arg1.ptr[0]:complete:<bytes> arg1.string[0]:complete:"/tmp/trace-fixture" arg1.ptr[1]:complete:<bytes> arg1.string[1]:complete:"--exec-target" arg1.ptr[2]:complete:<bytes> arg1.string[2]:complete:"3" arg1.ptr[3]:complete:<bytes> arg2.ptr[0]:complete:<bytes> arg2.string[0]:complete:"ANT_EXEC=failure" arg2.ptr[1]:complete:<bytes>
 execve.missing | execve(filename="ant-missing-image", argv=["/tmp/trace-fixture", "--exec-target", "3"], envp=["ANT_EXEC=failure"]) = ENOENT | arg0.path:complete:"ant-missing-image" arg1.ptr[0]:complete:<bytes> arg1.string[0]:complete:"/tmp/trace-fixture" arg1.ptr[1]:complete:<bytes> arg1.string[1]:complete:"--exec-target" arg1.ptr[2]:complete:<bytes> arg1.string[2]:complete:"3" arg1.ptr[3]:complete:<bytes> arg2.ptr[0]:complete:<bytes> arg2.string[0]:complete:"ANT_EXEC=failure" arg2.ptr[1]:complete:<bytes>
 execve.null_path | execve(filename=NULL, argv=["/tmp/trace-fixture", "--exec-target", "3"], envp=["ANT_EXEC=failure"]) = EFAULT | arg0.path:null pointer:uncaptured arg1.ptr[0]:complete:<bytes> arg1.string[0]:complete:"/tmp/trace-fixture" arg1.ptr[1]:complete:<bytes> arg1.string[1]:complete:"--exec-target" arg1.ptr[2]:complete:<bytes> arg1.string[2]:complete:"3" arg1.ptr[3]:complete:<bytes> arg2.ptr[0]:complete:<bytes> arg2.string[0]:complete:"ANT_EXEC=failure" arg2.ptr[1]:complete:<bytes>
@@ -871,6 +873,7 @@ migrate_pages.no_such_pid | migrate_pages(pid=<pid>, maxnode=65, from=<bytes>, t
 migrate_pages.self | migrate_pages(pid=0, maxnode=65, from=<bytes>, to=<bytes>) = 0 | arg2.node_mask:complete:<bytes> arg3.node_mask:complete:<bytes>
 mincore.bad_vector | mincore(start=<addr>, len=4096, vec=0x1) = EFAULT |
 mincore.partly_resident | mincore(start=<addr>, len=12288, vec=<data>) = <value> | arg2.residency:complete
+mincore.recorder_left_it | mincore(start=<addr>, len=4096, vec="") = 0 | arg2.residency:complete
 mincore.unaligned | mincore(start=<addr>, len=4096, vec=<addr>) = EINVAL |
 mincore.unmapped | mincore(start=<addr>, len=4096, vec=<addr>) = ENOMEM |
 mkdir.exists | mkdir(pathname="paths-dir", mode=0700) = EEXIST | arg0.path:complete:"paths-dir"
@@ -1089,6 +1092,7 @@ open_tree.recursive_without_clone | open_tree(dfd=AT_FDCWD, path=".", flags=0x80
 openat.absolute | openat(dfd=AT_FDCWD, filename="<work>/io-at", flags=O_RDONLY|O_CLOEXEC, mode=0) = 4 | arg1.path:complete:"<work>/io-at"
 openat.aio_direct | openat(dfd=AT_FDCWD, filename="aio-direct", flags=O_RDWR|O_CREAT|O_TRUNC|O_DIRECT|O_CLOEXEC, mode=0600) = 3 | arg1.path:complete:"aio-direct"
 openat.bad_dirfd | openat(dfd=999, filename="io-at", flags=O_RDONLY, mode=0) = EBADF | arg1.path:complete:"io-at"
+openat.cold_literal | openat(dfd=AT_FDCWD, filename="recapture-file", flags=O_RDONLY, mode=0) = 3 | arg1.path:complete@at exit:"recapture-file"
 openat.copy_target | openat(dfd=AT_FDCWD, filename="io-copy", flags=O_RDWR|O_CREAT|O_TRUNC, mode=0600) = 4 | arg1.path:complete:"io-copy"
 openat.cwd | openat(dfd=AT_FDCWD, filename="io-at", flags=O_WRONLY|O_CREAT|O_EXCL, mode=0640) = 3 | arg1.path:complete:"io-at"
 openat.directory | openat(dfd=AT_FDCWD, filename=".", flags=O_RDONLY|O_DIRECTORY|O_CLOEXEC, mode=0) = 3 | arg1.path:complete:"."
@@ -1182,7 +1186,7 @@ prctl.set_dumpable_bad | prctl(option=PR_SET_DUMPABLE, arg2=2, arg3=0, arg4=0, a
 prctl.set_dumpable_off | prctl(option=PR_SET_DUMPABLE, arg2=0, arg3=0, arg4=0, arg5=0) = 0 |
 prctl.set_dumpable_same | prctl(option=PR_SET_DUMPABLE, arg2=1, arg3=0, arg4=0, arg5=0) = 0 |
 prctl.set_name | prctl(option=PR_SET_NAME, arg2="ant-process", arg3=0, arg4=0, arg5=0) = 0 | arg1.name:complete:"ant-process"
-prctl.set_name_long | prctl(option=PR_SET_NAME, arg2=5258833, arg3=0, arg4=0, arg5=0) = 0 | arg1.name:invalid extent:uncaptured !3
+prctl.set_name_long | prctl(option=PR_SET_NAME, arg2=5279365, arg3=0, arg4=0, arg5=0) = 0 | arg1.name:invalid extent:uncaptured !3
 prctl.set_no_new_privs | prctl(option=PR_SET_NO_NEW_PRIVS, arg2=1, arg3=0, arg4=0, arg5=0) = 0 |
 prctl.set_no_new_privs_bad_args | prctl(option=PR_SET_NO_NEW_PRIVS, arg2=1, arg3=1, arg4=0, arg5=0) = EINVAL |
 prctl.set_seccomp_filter | prctl(option=PR_SET_SECCOMP, arg2=2, arg3=<bytes>, arg4=0, arg5=0) = 0 | arg2.program:complete:<bytes> arg2.program.filter:complete:<bytes>
@@ -1283,6 +1287,7 @@ readlink.truncated | readlink(path="paths-sym", buf="path", bufsiz=4) = 4 | arg0
 readlinkat.bad_dirfd | readlinkat(dfd=999, path="paths-sym", buf=<addr>, bufsiz=256) = EBADF | arg1.path:complete:"paths-sym"
 readlinkat.dirfd | readlinkat(dfd=3, path="paths-dangling", buf="paths-nowhere", bufsiz=256) = 13 | arg1.path:complete:"paths-dangling" arg2.data:complete
 readlinkat.empty_path | readlinkat(dfd=4, path="", buf="paths-file", bufsiz=256) = 10 | arg1.path:complete:"" arg2.data:complete
+readlinkat.static_startup | readlinkat(dfd=AT_FDCWD, path=<data>, buf=<data>, bufsiz=4096) = <value> | arg1.path:complete@at exit arg2.data:complete
 readlinkat.zero_size | readlinkat(dfd=AT_FDCWD, path="paths-sym", buf=<addr>, bufsiz=0) = EINVAL | arg1.path:complete:"paths-sym"
 readv.two | readv(fd=3, vec=<bytes>, vlen=2) = 36 | arg1.iov:complete:<bytes> arg1.iov[0].data:complete arg1.iov[1].data:complete
 reboot.bad_magic_unprivileged | reboot(magic1=Unknown magic 0x1234, magic2=Unknown magic 0x5678, cmd=LINUX_REBOOT_CMD_CAD_OFF, arg=NULL) = EPERM |
@@ -1373,6 +1378,7 @@ rt_sigpending.two | rt_sigpending(set="\0\n", sigsetsize=8) = 0 | arg0.pending:c
 rt_sigprocmask.bad_how | rt_sigprocmask(how=Unknown how 0x7, set="\0\n", oset=NULL, sigsetsize=8) = EINVAL | signal.mask:complete:"\0\n"
 rt_sigprocmask.bad_size | rt_sigprocmask(how=SIG_BLOCK, set=<addr>, oset=NULL, sigsetsize=4) = EINVAL | signal.mask:invalid extent:uncaptured !3
 rt_sigprocmask.block | rt_sigprocmask(how=SIG_BLOCK, set="\0\n", oset=<bytes>, sigsetsize=8) = 0 | signal.mask:complete:"\0\n" signal.mask:complete
+rt_sigprocmask.cold_set | rt_sigprocmask(how=SIG_BLOCK, set=<bytes>, oset=<bytes>, sigsetsize=8) = 0 | signal.mask:complete@at exit:<bytes> signal.mask:complete
 rt_sigprocmask.query | rt_sigprocmask(how=SIG_BLOCK, set=NULL, oset="\0\n", sigsetsize=8) = 0 | signal.mask:complete
 rt_sigprocmask.setmask_restore | rt_sigprocmask(how=SIG_SETMASK, set=<bytes>, oset=<bytes>, sigsetsize=8) = 0 | signal.mask:complete:<bytes> signal.mask:complete
 rt_sigprocmask.unblock | rt_sigprocmask(how=SIG_UNBLOCK, set=<bytes>, oset="\0\n", sigsetsize=8) = 0 | signal.mask:complete:<bytes> signal.mask:complete
@@ -1769,9 +1775,9 @@ sysinfo.buffer | sysinfo(info=<data>) = <value> | arg0.data:complete
 sysinfo.fault | sysinfo(info=0x1) = EFAULT |
 syslog.clear_unprivileged | syslog(type=SYSLOG_ACTION_CLEAR, buf=NULL, len=0) = EPERM |
 syslog.console_level_unprivileged | syslog(type=SYSLOG_ACTION_CONSOLE_LEVEL, buf=NULL, len=1) = EPERM |
-syslog.read_all | syslog(type=SYSLOG_ACTION_READ_ALL, buf=<data>, len=8192) = <value> | arg1.log:complete
-syslog.read_all_negative_len | syslog(type=SYSLOG_ACTION_READ_ALL, buf=<addr>, len=-1) = EINVAL |
-syslog.size_buffer | syslog(type=SYSLOG_ACTION_SIZE_BUFFER, buf=NULL, len=0) = 262144 |
+syslog.read_all | syslog(type=SYSLOG_ACTION_READ_ALL, buf=<addr>, len=8192) = EPERM |
+syslog.read_all_negative_len | syslog(type=SYSLOG_ACTION_READ_ALL, buf=<addr>, len=-1) = EPERM |
+syslog.size_buffer | syslog(type=SYSLOG_ACTION_SIZE_BUFFER, buf=NULL, len=0) = EPERM |
 syslog.unknown_unprivileged | syslog(type=Unknown action 0x63, buf=<addr>, len=16) = EPERM | syslog.unknown_selector:no decoder:uncaptured !3
 tee.bad_flags | tee(fdin=3, fdout=6, len=8, flags=0x80) = EINVAL |
 tee.badf | tee(fdin=999, fdout=6, len=8, flags=SPLICE_F_NONBLOCK) = EBADF |
@@ -1902,7 +1908,7 @@ vmsplice.bad_flags | vmsplice(fd=4, iov=<bytes>, nr_segs=2, flags=0x80) = EINVAL
 vmsplice.badf | vmsplice(fd=999, iov=<bytes>, nr_segs=2, flags=0x0) = EBADF | arg1.iov:complete:<bytes> arg1.iov[0].data:complete:"VMSPLICE-" arg1.iov[1].data:complete:"PAYLOAD"
 vmsplice.from_empty_nonblock | vmsplice(fd=3, iov=<bytes>, nr_segs=1, flags=SPLICE_F_NONBLOCK) = EAGAIN | arg1.iov:complete:<bytes> arg1.iov[0].data:complete:"FROM-PIPE-12"
 vmsplice.from_pipe | vmsplice(fd=3, iov=<bytes>, nr_segs=1, flags=SPLICE_F_NONBLOCK) = 12 | arg1.iov:complete:<bytes> arg1.iov[0].data:complete:"ANTINOMIE-CO"
-vmsplice.gift | vmsplice(fd=4, iov="\06W\0\0\0\0\0@", nr_segs=1, flags=SPLICE_F_NONBLOCK|SPLICE_F_GIFT) = 64 | arg1.iov:complete:"\06W\0\0\0\0\0@" arg1.iov[0].data:complete:"ANTINOMIE-CONFORMANCE-jqxelszgnubipwdkryfmtahovc"...
+vmsplice.gift | vmsplice(fd=4, iov=<bytes>, nr_segs=1, flags=SPLICE_F_NONBLOCK|SPLICE_F_GIFT) = 64 | arg1.iov:complete:<bytes> arg1.iov[0].data:complete:"ANTINOMIE-CONFORMANCE-jqxelszgnubipwdkryfmtahovc"...
 vmsplice.iov_fault | vmsplice(fd=4, iov=0x1, nr_segs=2, flags=0x0) = EFAULT | arg1.iov:copy fault:uncaptured !3
 vmsplice.not_pipe | vmsplice(fd=7, iov=<bytes>, nr_segs=2, flags=0x0) = EBADF | arg1.iov:complete:<bytes> arg1.iov[0].data:complete:"VMSPLICE-" arg1.iov[1].data:complete:"PAYLOAD"
 vmsplice.to_pipe | vmsplice(fd=4, iov=<bytes>, nr_segs=2, flags=0x0) = 16 | arg1.iov:complete:<bytes> arg1.iov[0].data:complete:"VMSPLICE-" arg1.iov[1].data:complete:"PAYLOAD"
@@ -1928,7 +1934,10 @@ waitid.wnohang_running | waitid(which=P_PID, pid=<pid>, infop=<bytes>, options=W
 waitid.wnowait | waitid(which=P_PID, pid=<pid>, infop=<data>, options=WEXITED|WNOWAIT, ru=NULL) = <value> | arg2.data:complete arg4.data:null pointer
 write.badf | write(fd=999, buf="ANTI", count=4) = EBADF | arg1.data:complete:"ANTI"
 write.fault | write(fd=3, buf=0x1, count=16) = EFAULT | arg1.data:copy fault:uncaptured !3
+write.never_read | write(fd=3, buf=<addr>, count=4096) = 4096 | arg1.data:not resident:uncaptured !3
+write.rewritten_during_call | write(fd=4, buf="XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"..., count=8192) = 8192 | arg1.data:complete@at exit:"XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"...
 write.text | write(fd=3, buf="ANTINOMIE-CONFORMANCE-FILE-IO-0123456789", count=40) = 40 | arg1.data:complete:"ANTINOMIE-CONFORMANCE-FILE-IO-0123456789"
+write.untouched_mapping | write(fd=4, buf="ANTINOMIE-CONFORMANCE-ubipwdkryfmtahovcjqxelszgn"..., count=8192) = 8192 | arg1.data:complete@at exit:"ANTINOMIE-CONFORMANCE-ubipwdkryfmtahovcjqxelszgn"...
 write.uring_poll_pipe | write(fd=6, buf="P", count=1) = 1 | arg1.data:complete:"P"
 write.zero_length | write(fd=3, buf=<addr>, count=0) = 0 | arg1.data:complete:uncaptured
 writev.three | writev(fd=3, vec=<bytes>, vlen=3) = 15 | arg1.iov:complete:<bytes> arg1.iov[0].data:complete:"VEC-ONE-" arg1.iov[1].data:complete:uncaptured arg1.iov[2].data:complete:"VEC-TWO"
