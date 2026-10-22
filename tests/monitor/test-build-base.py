@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+import unittest.mock
 
 REPO = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location("build_base", REPO / "scripts/build-base.py")
@@ -43,6 +44,21 @@ class BuildBaseTests(unittest.TestCase):
                     else:
                         with self.assertRaisesRegex(RuntimeError, error):
                             base.load_job(job)
+
+    def test_busybox_answers_left_out_take_the_recipes_defaults(self):
+        # The recipe's defaults (hostname debian) are the app's: no build path
+        # names the guest localhost.
+        commands = []
+        with unittest.mock.patch.object(base, "run", lambda *args, **_: commands.append(args)):
+            for values in ({}, {"hostname": "lab", "name": "Lab"}):
+                base.build_image("busybox", values, Path("/b"), Path("/w"), Path("/o"))
+        self.assertNotIn("--hostname", commands[0])
+        self.assertNotIn("localhost", commands[0])
+        self.assertEqual(commands[1][-4:], ("--hostname", "lab", "--name", "Lab"))
+        recipe = (REPO / "scripts/build-monitor-image.py").read_text()
+        self.assertIn('parser.add_argument("--hostname", default="debian")', recipe)
+        app = (REPO / "src/antinomie/monitor/crates/monitor-core/src/build.rs").read_text()
+        self.assertIn('hostname: "debian".into()', app)
 
     def test_missing_or_wrong_tarball_is_refused_before_unpacking(self):
         with tempfile.TemporaryDirectory() as name:
