@@ -67,3 +67,68 @@ fn toolbar_kill_opens_confirmation_and_cancel_keeps_run_untouched() {
     assert!(app.submitted.is_empty());
     assert_eq!(app.snapshot.runs[0].state, RunState::Running);
 }
+
+#[test]
+fn a_confirmation_is_a_plain_window_with_no_dim_that_the_title_drags() {
+    let mut app = app();
+    app.confirm = Some(Confirm::Reset("vm".into()));
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let size = egui::vec2(1440.0, 900.0);
+    let mut output = render(&mut app, &ctx, size);
+    for _ in 0..3 {
+        output = render(&mut app, &ctx, size);
+    }
+    // A modal paints a backdrop layer over the whole app; this one does not.
+    let dimmed = ctx.memory(|memory| {
+        memory
+            .areas()
+            .visible_layer_ids()
+            .iter()
+            .any(|layer| layer.order == egui::Order::Foreground)
+    });
+    assert!(!dimmed, "nothing dims behind the confirmation");
+    let title = |output: &egui::FullOutput| {
+        texts(output)
+            .into_iter()
+            .filter(|(text, _)| text == "Reset disk")
+            .map(|(_, rect)| rect)
+            .min_by(|a, b| a.top().total_cmp(&b.top()))
+            .expect("the window title")
+    };
+    let before = title(&output);
+    let from = before.center();
+    let to = from + egui::vec2(-300.0, 120.0);
+    let frame = |app: &mut MonitorApp, events| {
+        draw_input(
+            app,
+            &ctx,
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                events,
+                ..Default::default()
+            },
+        )
+    };
+    let button = |pos, pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    frame(&mut app, vec![egui::Event::PointerMoved(from)]);
+    frame(&mut app, vec![button(from, true)]);
+    frame(
+        &mut app,
+        vec![egui::Event::PointerMoved(from + (to - from) * 0.5)],
+    );
+    frame(&mut app, vec![egui::Event::PointerMoved(to)]);
+    frame(&mut app, vec![button(to, false)]);
+    let output = render(&mut app, &ctx, size);
+    let after = title(&output);
+    assert!(
+        (after.center() - before.center() - (to - from)).length() < 4.0,
+        "the window follows the drag: {before:?} -> {after:?}"
+    );
+    assert!(app.confirm.is_some(), "dragging does not cancel it");
+}
