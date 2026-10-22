@@ -122,7 +122,11 @@ impl MonitorApp {
         );
         for action in actions {
             match action {
-                PanelAction::Detach { kill } => self.send(Command::DebugDetach { kill }),
+                // Killing the process is asked about first.
+                PanelAction::Detach { kill: true } => self.confirm = Some(Confirm::DebugKill),
+                PanelAction::Detach { kill: false } => {
+                    self.send(Command::DebugDetach { kill: false })
+                }
                 PanelAction::Debug(action) => {
                     if let Some(view) = &view {
                         self.remember_debug_choice(&action);

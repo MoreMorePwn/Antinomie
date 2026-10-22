@@ -220,6 +220,8 @@ enum Confirm {
         vm: Box<VmConfig>,
         creating: bool,
     },
+    /// Detach the debugger and kill the debugged process.
+    DebugKill,
 }
 
 #[derive(Clone, Copy, PartialEq)]
