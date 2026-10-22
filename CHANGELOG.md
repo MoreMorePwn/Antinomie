@@ -32,6 +32,17 @@ it runs.
   `scripts/vm-regress.py` never deletes through a linked folder, refuses `/`,
   the home and XDG folders and the app's own folders by their real path, and a
   check that is stopped takes its whole process tree with it.
+- **Debug engine fixes from the final code audit.** Guest series 0058-0060,
+  contract revision 17 unchanged. Continuing a program that was killed while
+  the debugger held it stopped, or stepping a thread through its own exit, no
+  longer oopses the guest's debug worker (which ended every debug session
+  until reboot); the engine holds a thread's kernel stack while it touches its
+  registers. A step of a system call no longer makes the engine wait without
+  bound: stepping a vfork the debugger follows stops at the vfork at once
+  instead of hanging every session, a step that blocks lets the program run
+  until it returns, Detach works while a step is under way, and the child of a
+  stepped fork no longer dies of SIGTRAP. A `clone(CLONE_VFORK)` child without
+  `CLONE_VM` has its own memory. Bases built from this tree have these fixes.
 - **The Debugger console connects on a busy host, and checks that failed
   under load.** A gdb that connected while another was leaving (the console's
   Restart, or the pane's own gdb replaced) had its first packet answered twice
