@@ -242,6 +242,25 @@ guest, and a new host with an old guest, both keep the Phase 2 behaviour.
   SIGCHLD is nostop noprint pass, which the checker did not apply. The checker was
   wrong, the engine right: it now passes the signals gdb's table says are quiet.
   `debug-check p3 sigchld` makes the race deterministic.
+* **Final audit fixes (guest series 0058-0060, revision 17 unchanged).** FF-14
+  and FF-15: the engine held each thread's `task_struct` but not its kernel
+  stack, where its registers are; an exiting thread frees it (VMAP_STACK). A group
+  killed at a breakpoint stop (its own `timer_create` SIGKILL) and then continued
+  oopsed the debug worker in `ant_dbg_arch_pc`, and a thread that stepped its own
+  `exit` oopsed it in `ant_dbg_arch_step_done`; both reproduced on a 0057 base.
+  Every access to another thread's registers now holds the stack
+  (`try_get_task_stack`) and finds nothing once it is gone; STATUS and CONT of a
+  killed stopped group report it exited (0058). FF-16: the single worker waited
+  without bound for a step of a system call; a stepped vfork with FORK hung every
+  session and DETACH was refused. A step the kernel holds longer than 2 s now
+  finishes by itself as the next event, a stepped thread asleep in a followed
+  vfork stops the group with its VFORK event, DETACH is accepted during a
+  continue or step, and the child of a stepped fork no longer inherits the trap
+  flag and the system-call-exit trap (it died of SIGTRAP once the step could end)
+  (0059). FF-21: `clone(CLONE_VFORK)` without `CLONE_VM` gives the child its own
+  memory and table (0060). `debug-check p3` runs `killed-stop`, `exit-step`,
+  `blocking-steps` and `vfork-own-memory`, which also read the guest kernel log;
+  all four fail on 0057 and pass on 0060.
 
 ### Accepted guest credential and file-hash records (0.7.0)
 
@@ -718,18 +737,24 @@ Full-tier checks that failed now and then on this shared host, and why.
   (of 24 recorded: 4.3, 16, 19, 41 and 49 s are the slow ones), so the run's
   queries fell into one segment. The check depends on the reconnect being short;
   where the time goes in a slow reconnect was not measured.
-* **`stress-heavy` transport drops** (not fixed). Two getppid Entry records of 13.7
-  million were dropped by the guest while the host's writer held nothing back. The
-  same kind of drop predates 0054-0057: a 0052 base (`s2final`) dropped one write
-  Entry in `stress-light`. A guest send
-  drops only when the host is not live, when a sender that cannot sleep has spun
-  200 us, or when a waiting sender's wait (5 s by default) runs out. Candidates: a
-  sleeping waiter starved for the whole wait by senders on its CPU that take the
-  room as it frees (waiting is not first come, first served), or the wait measured
-  with `local_clock()` across CPUs (a sender that slept can wake on another CPU;
-  the guests here report a stable `sched_clock`, which makes this unlikely). Which
-  one was not shown: the guest does not count drops by cause, and the recordings
-  of the runs with drops were gone.
+* **`stress-heavy` transport drops** (not fixed; cause found). Two getppid
+  records of 13.7 million were dropped by the guest while the host's writer held
+  nothing back; a rerun on the same base dropped one more (an Exit's first
+  packet). The same kind of drop predates 0054-0057: a 0052 base (`s2final`)
+  dropped one write Entry in `stress-light`. The rerun's recording shows what
+  happened: the task's records before the lost one are 0.4 to 0.5 us apart, the
+  next one comes 6.06 s later, and the rest of the lost event was sent from
+  another vCPU. The sender waited the whole send wait (5 s) for room in a full
+  ring and dropped, although the host kept taking telemetry: waiting is not first
+  come, first served. A waiting sender sleeps 50 to 100 us between looks, and
+  the senders that run on its CPU meanwhile take the room the host frees, so under
+  a flood of short calls one waiter can starve for the whole wait (the run had
+  375,409 waits). The cross-CPU `local_clock()` difference in the same loop was
+  ruled out: such a drop would come at once, not after 5 s. A fix belongs in the
+  guest's send path (`transport/guest.c`): hand freed room to waiters first (a
+  per-ring ticket), or end a wait only when the host made no progress on the ring
+  for the whole wait. Not done here: it changes the never-drop contract's timing
+  and needs the full tier and the stress groups.
 
 ### Trace follow-ups: io_uring, ordering, saving under load, Stop (0.7.0)
 
