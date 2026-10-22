@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Offline properties of an exact digest-verified retained executable.
 use super::{AnalysisReport, jobs, specimen, tools};
 use crate::analysis_tools;

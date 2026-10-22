@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 use super::*;
 
 fn event(call_id: u64, event_seq: u64, phase: u8, timestamp_ns: u64) -> EventSummary {

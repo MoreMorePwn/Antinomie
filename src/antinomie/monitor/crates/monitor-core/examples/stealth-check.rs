@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! Real-VM measurement of what a sample sees of the VM, the sandbox and
 //! Antinomie: the stealth giveaway table.

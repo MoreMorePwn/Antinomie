@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The addresses of QEMU's user-mode NAT: 10.0.2.0/24 with gateway 10.0.2.2
 //! and DNS 10.0.2.3 by default, which QEMU and VirtualBox share; a profile
 //! gives it a home network's instead. The guest learns them from the NAT's

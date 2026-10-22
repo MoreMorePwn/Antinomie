@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 use super::{session_runs::*, *};
 use std::collections::BTreeSet;
 

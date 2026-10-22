@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! Whole-result queries with bounded pages and disk-backed sorting.
 use super::{Column, ResultRow, ResultTable, is_absent};

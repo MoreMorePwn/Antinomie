@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! io_uring and AIO requests read as the system calls they stand for, and what
 //! Triage then shows for them.
 use super::*;

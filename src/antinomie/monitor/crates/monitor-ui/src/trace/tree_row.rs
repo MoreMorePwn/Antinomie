@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The decoded call's tree rows: branches, caret, name, value and note.
 use crate::{
     theme,

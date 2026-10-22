@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! In-page tab strips (thin-bordered) and the segmented control. Dock tabs
 //! (egui_dock) are separate and keep their own look.
 use super::Tone;

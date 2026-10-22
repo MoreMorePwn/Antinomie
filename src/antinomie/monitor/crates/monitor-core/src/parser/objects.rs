@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! How the assembler stores and re-reads field chunks: the packed object
 //! store for new archives, and either layout when replaying a saved one.
 use crate::{

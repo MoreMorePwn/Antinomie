@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! Temporary guest producer ownership and bounded, authenticated-by-session framing.
 //! Guest measurements are observations, not trusted against a compromised guest.

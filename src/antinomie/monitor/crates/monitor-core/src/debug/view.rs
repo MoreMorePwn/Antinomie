@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! What the in-app debugger shows, as plain data. The controller that owns the
 //! debug engine for the app (`ui_control`) fills a [`DebugView`]; the UI only
 //! reads it and sends [`DebugRequest`]s. Nothing here talks to the guest.

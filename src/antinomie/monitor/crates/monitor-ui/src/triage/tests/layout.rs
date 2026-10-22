@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The Process, Files and Network layouts: the segmented control, the tabs
 //! with counts, the filter-bar toggles, flagged rows and the packet link.
 use super::*;

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Stopping a spawned tool together with everything it started, and never
 //! waiting unboundedly on a pipe a survivor may still hold.
 //!

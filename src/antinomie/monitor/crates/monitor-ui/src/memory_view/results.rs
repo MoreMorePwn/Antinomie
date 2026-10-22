@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Loading a saved plugin result and showing it as a table.
 use super::*;
 

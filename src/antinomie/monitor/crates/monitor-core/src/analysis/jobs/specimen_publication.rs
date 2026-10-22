@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Publish acquired specimen identity before exposing it to archive readers.
 use super::*;
 

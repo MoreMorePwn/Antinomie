@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-only
 """Inspectable rules-bucket operations.
 
 A store is either a local directory (tests and rehearsals) or the Hugging Face

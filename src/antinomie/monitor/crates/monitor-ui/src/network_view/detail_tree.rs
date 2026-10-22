@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The packet details tree exactly as TShark printed it, with expand and
 //! collapse. The viewer only draws it: every line, nesting level and byte
 //! range comes from TShark.

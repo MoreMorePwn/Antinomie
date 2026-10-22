@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! io_uring and AIO file requests, read as the system calls they stand for.
 //!
 //! Triage follows files through system calls, and a program that does its file

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-only
 """Write the bundled ATT&CK technique-name table from the enterprise STIX bundle.
 
 Usage: generate-mitre-attack.py enterprise-attack.json OUTPUT.tsv

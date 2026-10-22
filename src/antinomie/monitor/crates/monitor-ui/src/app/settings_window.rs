@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Settings: a page list at the left, the chosen page at the right (the
 //! mockup's layout). Appearance and the other pages apply at once; the
 //! Recording page applies on Save.

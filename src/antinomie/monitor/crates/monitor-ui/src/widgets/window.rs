@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Window and dialog chrome in the mockup's style.
 use crate::theme;
 use eframe::egui::{self, RichText};

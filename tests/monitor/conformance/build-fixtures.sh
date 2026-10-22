@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-only
 #
 # build-fixtures.sh — build the guest conformance fixtures.
 #

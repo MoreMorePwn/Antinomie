@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! One RSP client (gdb, IDA, Ghidra, radare2) served against a [`Debugger`]:
 //! packet dispatch, thread ids with process ids (multiprocess), all-stop and
 //! non-stop, fork, vfork and exec events, `%Stop` notifications. The wire (a

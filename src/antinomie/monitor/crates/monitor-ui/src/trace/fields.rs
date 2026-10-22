@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Captured-field presentation for the trace inspector: the field tree, value
 //! lines, capture sizes and flags, and the trace line parts of a call.
 use super::*;

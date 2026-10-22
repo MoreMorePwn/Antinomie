@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Inspect a process core without opening the desktop; does not execute its code.
 use antinomie_monitor_core::core_dump::CoreDump;
 use std::path::PathBuf;

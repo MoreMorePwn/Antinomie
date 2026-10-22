@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Deleting saved evidence: the backend decides what is still being written,
 //! removes the files inside the VM's recording folders and gives the freed
 //! bytes back to the boot's recording quota.

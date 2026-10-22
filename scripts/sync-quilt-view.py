@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-only
 """Keep the Quilt view of the guest patch series in step with the series itself.
 
 usage: sync-quilt-view.py [--check]

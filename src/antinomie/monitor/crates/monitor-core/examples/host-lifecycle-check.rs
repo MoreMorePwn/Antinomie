@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! Real host-only lifecycle qualification with an existing revision-14 BusyBox base.
 //! Usage: host-lifecycle-check BUNDLE NEW_DATA_DIR

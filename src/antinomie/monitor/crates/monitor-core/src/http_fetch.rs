@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The one place that builds a `curl` command line for a download.
 //!
 //! Every front-end (MalShare, MalwareBazaar, the base and tool downloads, the

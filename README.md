@@ -200,11 +200,12 @@ application version or publishing anything.
 
 ## License
 
-Original Antinomie host and tooling code is [MIT licensed](LICENSE), copyright
+From 0.7.0, original Antinomie host and tooling code is [GPL-3.0-only](LICENSE), copyright
 2026 MikiMiku (MoreMorePwn). Kernel-derived and imported material keep their own
 terms. Read the [licensing scope](LICENSING.md) and
 [third-party notices](THIRD-PARTY-NOTICES.md) before redistributing; the kernel
-and guest images as a whole are not MIT licensed.
+and guest images retain their component-specific licenses. Earlier releases
+remain under their original MIT terms. Shared kernel headers remain MIT.
 
 Building from source also requires `musl-tools` for the embedded static guest
 resource collector, which only bases older than 0.7.0 (revision 16 and earlier)

@@ -7,10 +7,11 @@ root filesystem or Debian 13 amd64 with Xfce.
 
 ## License
 
-Original monitor code and the host/shared transport are MIT licensed, copyright
-2026 MikiMiku (MoreMorePwn). Kernel implementation and third-party components
-retain their terms. See the root [licensing scope](../../../LICENSING.md) and
-[required notices](../../../THIRD-PARTY-NOTICES.md); guest images are not wholly MIT.
+From 0.7.0 original monitor code and the host transport are GPL-3.0-only,
+copyright 2026 MikiMiku (MoreMorePwn). Shared kernel headers remain MIT;
+kernel implementation and third-party components retain their terms. Earlier
+releases remain MIT. See the root [licensing scope](../../../LICENSING.md) and
+[required notices](../../../THIRD-PARTY-NOTICES.md).
 
 ## Build and run
 

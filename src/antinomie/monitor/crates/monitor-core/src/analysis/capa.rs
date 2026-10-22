@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Capabilities from an installed capa, run with the bundled capa-rules.
 use super::tools;
 use super::*;

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! Attribution groups: who wrote an io_uring entry, as the run says it
 //! (`trace/fixture/attribution.c`). A ring one process maps was written by

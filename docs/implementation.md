@@ -1,5 +1,16 @@
 # Antinomie initial monitoring release
 
+## Current licensing boundary (0.7.0)
+
+Original host application, host transport, scripts, tests and product
+documentation use GPL-3.0-only from 0.7.0. The shared kernel headers remain MIT;
+kernel implementation and historical patch exports keep their kernel terms.
+Imports and separately installed tools/rules retain their own licenses. Earlier
+releases and the separate documentation/website repositories retain their
+original license scopes. `scripts/check-licenses.py` validates the boundary and
+locked dependency license expressions, and records notice-document gaps without
+claiming full legal clearance. Release packaging includes that inventory.
+
 This brief is the shared implementation contract. User authorized implementation
 on 2026-10-01. Core workers/review use gpt-6.1-sol; bounded support may use Luna.
 The accepted 0.5.0 snapshot/reconnect extension below supersedes the historical
@@ -685,6 +696,12 @@ for a rerun, the last one in `--out`): a Triage QA over a failed recording prove
 nothing. It reads the runs of `tracer-record`'s last attempt.
 
 ### Checks that failed under load (0.7.0)
+
+On 2026-10-23 the user scheduled the stress-heavy telemetry drops and
+intermittent slow transport reconnect for 0.7.1. They are known 0.7.0 limitations,
+not passing zero-loss or reconnect-latency guarantees. Preserve historical
+failures, retries and explicit release-qualification exclusions. The remaining
+debugger fixes and release work continue independently.
 
 Full-tier checks that failed now and then on this shared host, and why.
 

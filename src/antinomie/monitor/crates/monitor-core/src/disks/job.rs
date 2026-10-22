@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The disk job: measuring a VM's disk chain, flattening it into a scratch
 //! image with `qemu-img convert` and opening it as the current-disk view, or
 //! saving it as a dump (straight from the chain, or by promoting the open

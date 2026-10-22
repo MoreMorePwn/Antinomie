@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Shared evidence labels and actions. Sidecars never rename recorded files.
 use antinomie_monitor_core::annotations::{self, Annotation};
 use eframe::egui;

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Capture-loss scopes stay separate: recorder sends, transport, UI, storage and runs.
 use crate::{activity, theme};
 use antinomie_monitor_core::{Health, RunSummary, Snapshot};

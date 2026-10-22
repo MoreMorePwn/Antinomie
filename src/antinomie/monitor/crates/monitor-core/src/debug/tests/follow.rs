@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Several processes and non-stop over the real sockets, against a fake guest
 //! that can fork, exec and run threads one by one: the replies a debugger reads
 //! for a fork, a vfork and an exec, process-qualified thread ids, `D;pid`, and the

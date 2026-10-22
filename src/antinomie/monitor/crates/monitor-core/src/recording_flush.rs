@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Making a stopped boot's recordings durable in the background.
 //!
 //! Disk work is serialized through one bounded worker. This preserves the

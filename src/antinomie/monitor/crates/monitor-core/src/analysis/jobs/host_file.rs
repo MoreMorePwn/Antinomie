@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Static analysis of a file on the host (one the Disks tab extracted from a
 //! VM's disk), with no VM running: the specimen is copied from the file where
 //! a guest transfer would write it, and the rest of the job (isolated worker,

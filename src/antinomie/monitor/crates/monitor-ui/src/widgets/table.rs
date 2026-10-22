@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The table style of the mockup for `egui_extras::TableBuilder`: a header
 //! row in the panel color with muted semibold labels and a rule under it,
 //! zebra rows, hover and selection fills (from the theme's visuals), a 3 px

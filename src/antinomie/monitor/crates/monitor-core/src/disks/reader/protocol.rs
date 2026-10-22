@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The reader's requests and answers: one JSON object per line, one request
 //! in flight at a time, each answer echoing its request id. The child knows
 //! only `/image` and `/out`; every path in this protocol is a guest path.

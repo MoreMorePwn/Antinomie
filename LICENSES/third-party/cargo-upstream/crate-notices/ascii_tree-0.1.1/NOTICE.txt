@@ -1,0 +1,6 @@
+Upstream crate: ascii_tree 0.1.1
+Declared license: MIT
+Declared authors: d.maetzke@bpressure.net
+Source: https://crates.io/crates/ascii_tree/0.1.1
+
+The published crate supplies no explicit copyright notice in its source headers. Author and license declarations above are retained without inventing an owner or year.

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Aggregate owned capture segments before applying filters, sorting and pages.
 use super::*;
 

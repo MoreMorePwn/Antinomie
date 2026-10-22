@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The one listing widget behind Static analysis' Disassembly and
 //! Decompilation tabs and the Cores view (the Debugger joins them later): the
 //! function sidebar, with the number of lines each function has in the view

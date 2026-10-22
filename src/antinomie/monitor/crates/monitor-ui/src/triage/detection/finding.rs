@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! One finding in full: how each engine's explanation is read, and the movable
 //! Details window with the rule, its metadata and every evidence location.
 use super::*;

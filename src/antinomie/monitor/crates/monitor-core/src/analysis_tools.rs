@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Optional static-analysis tools Antinomie installs when the system has
 //! none: capa, Detect It Easy, Ghidra with its Java runtime, Volatility 3,
 //! Sigma, Magika and the gdb consoles GEF (bata24) and pwndbg. Each is downloaded from its upstream release, pinned by

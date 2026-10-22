@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The app side of the debugger: attach to a guest process, run the loopback
 //! RSP server, and serve the server thread's guest requests on the transport
 //! thread (which alone owns the transport). The server thread never touches the

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 /* Test shim: delays fsync/fdatasync by SLOW_FSYNC_MS (default 187, the median
  * measured under WSL in ANT-T0009 2B) to reproduce a slow host disk. With

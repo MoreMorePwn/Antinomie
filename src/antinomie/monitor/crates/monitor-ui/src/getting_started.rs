@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Help > Getting started: what a first analysis needs, one step at a time.
 //! This module holds the steps, what is remembered between launches and the
 //! rules for showing the window; the window itself is `app::getting_started`.

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Deleting saved network captures and process cores.
 //!
 //! The recording folder is the only place anything is removed from, and only

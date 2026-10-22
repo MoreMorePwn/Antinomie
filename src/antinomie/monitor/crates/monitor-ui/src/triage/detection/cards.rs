@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Match cards: one designed card per matched rule, with a severity stripe, a
 //! short summary, a facts row and a Details button.
 use super::finding::{pack_name, parse_details};

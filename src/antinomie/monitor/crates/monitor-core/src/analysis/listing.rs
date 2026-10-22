@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Complete category results kept beside the bounded report.
 //!
 //! A listing is `listings/<kind>.jsonl`: one `AnalysisEntry` per line, record

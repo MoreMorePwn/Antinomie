@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Importing a qcow2 image made elsewhere.
 //!
 //! The qcow2 metadata of an imported file (headers, L1/L2 tables, backing

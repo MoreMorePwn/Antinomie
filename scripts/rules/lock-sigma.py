@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-only
 """Write the hash-locked pip requirements of the managed Sigma tool.
 
 Every package is pinned, and each pin lists the SHA-256 of every wheel that

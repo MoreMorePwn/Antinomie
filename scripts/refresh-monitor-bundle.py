@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Publish a new kernel bundle without modifying its source disk or initrd."""
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-only
 # Copyright (c) 2026 MikiMiku (MoreMorePwn)
 import argparse
 import ctypes

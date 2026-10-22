@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The monitor window: application state, its construction and the frame loop.
 //!
 //! Each child module adds one area of behaviour to [`MonitorApp`] in its own

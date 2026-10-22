@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-only
 """Run the VM regression checks in tiers, one VM at a time.
 
 usage: vm-regress.py quick BASE [options]

@@ -1,0 +1,13 @@
+Upstream crate: enum-map-derive 0.17.0
+Declared license: MIT OR Apache-2.0
+Declared authors: Kamila Borowska <kamila@borowska.pw>
+Source: https://crates.io/crates/enum-map-derive/0.17.0
+
+Verbatim source-header notices:
+// SPDX-FileCopyrightText: 2021 - 2023 Kamila Borowska <kamila@borowska.pw>
+// SPDX-FileCopyrightText: 2021 Bruno Corrêa Zimmermann <brunoczim@gmail.com>
+// SPDX-FileCopyrightText: 2021 - 2022 Kamila Borowska <kamila@borowska.pw>
+// SPDX-FileCopyrightText: 2017 - 2022 Kamila Borowska <kamila@borowska.pw>
+// SPDX-FileCopyrightText: 2018 hcpl <hcpl.prog@gmail.com>
+// SPDX-FileCopyrightText: 2019 mara <vmedea@protonmail.com>
+// SPDX-FileCopyrightText: 2021 Dietrich <dietrich@teilgedanken.de>

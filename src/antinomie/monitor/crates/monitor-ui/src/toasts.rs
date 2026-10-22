@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Notification toasts (design section 6.12): a bottom-right stack with an
 //! icon, a title, a one-line detail, an optional action link and a close
 //! button. Info toasts leave after 6 s, warnings after 12 s and errors stay

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Registers with decoded flags beside the listing, and the Stack and Memory
 //! panes: the bounded stack window and a memory range of the user's choosing,
 //! shown with the shared hex rows.

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Community and custom rule packs under the Antinomie data directory.
 //!
 //! Production scans read only what this manager has installed and enabled.

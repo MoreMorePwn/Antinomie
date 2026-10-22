@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The Cores view in the mockup's arrangement: the list, the tabs, the
 //! shared function sidebar with the lines of each function, and Details.
 use super::tests::{click, settle, texts, Fixture};

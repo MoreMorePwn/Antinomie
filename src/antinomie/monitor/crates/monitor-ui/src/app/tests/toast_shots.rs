@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Native fixture for the toast stack and the Activity tab's counts, for
 //! screenshots in each theme and size. Needs an X11 display; exits by itself.
 //!

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! Debugger phase 2 qualification: `debug-check p2 BUNDLE NEW_DATA_DIR FIXTURE_DIR [test ...]`.
 //! FIXTURE_DIR holds the builds of `tests/monitor/debug-p2-fixture.c`:

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Continuation pages for the async observations of one saved call.
 //!
 //! An archive page carries at most [`ASYNC_PREVIEW_LIMIT`] observations per

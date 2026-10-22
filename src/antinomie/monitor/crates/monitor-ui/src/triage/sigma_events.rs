@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! State the Sigma normalizer keeps across calls, and the fields built from it:
 //! parent process, working directory, new files, sockets and DNS names.
 //!

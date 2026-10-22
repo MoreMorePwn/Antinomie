@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! A host program on a pseudo-terminal, for the gdb console: the program is a
 //! session leader on the PTY (so Ctrl-C reaches it), a thread reads what it
 //! prints, and closing the console asks it to quit before it is killed.

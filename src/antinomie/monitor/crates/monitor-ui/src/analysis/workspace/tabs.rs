@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The tab strip across the top of the static analysis window and the view
 //! each tab shows. A tab maps onto one retained analysis category, except
 //! File Info and Content, which draw on several.

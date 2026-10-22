@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Recording storage health and the decision to stop saving.
 use super::*;
 use crate::quota::QuotaState;

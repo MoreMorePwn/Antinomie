@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Bounded metadata catalog for independently acquired, nonfatal process cores.
 use crate::{ProcessCoreCapture, ProcessCoreRequest};
 use std::{

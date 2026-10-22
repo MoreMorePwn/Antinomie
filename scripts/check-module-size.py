@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-only
 """Keep host Rust modules small enough to read.
 
 Counts the lines of each monitor source file before its test module; test

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Durable VM discovery and retained recording locations.
 use crate::{
     api::*,

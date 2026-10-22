@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Opt-in whole-recording QA using the same triage index and table renderers.
 use super::*;
 

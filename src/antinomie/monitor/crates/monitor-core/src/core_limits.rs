@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! What a guest accepts for a process core, and why a core is not complete.
 //!
 //! The guest derives its limits from its memory and advertises them (`CORE_CAPS`);

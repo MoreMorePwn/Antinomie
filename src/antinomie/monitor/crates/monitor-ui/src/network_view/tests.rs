@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 #[test]
 fn explicit_evidence_jump_reveals_a_frame_hidden_by_prior_filters() {
     let mut view = super::NetworkView::default();

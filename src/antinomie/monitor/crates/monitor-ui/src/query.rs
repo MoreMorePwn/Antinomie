@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Display filter for syscall rows. A bare word still matches the row text.
 //! A comparison such as `syscall.num == 9 && args.fd < 3` uses the fields below.
 use crate::trace::{self, argument_name};

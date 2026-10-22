@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 /* Debug-engine fixture for the disposable BusyBox qualifier. Build statically
  * and not position independent so a host debugger can read its symbols:

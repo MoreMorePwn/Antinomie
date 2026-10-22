@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Embedded content: binwalk's signature scan, without extraction.
 use super::tools;
 use super::*;

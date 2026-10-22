@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The in-app panel's controller against a fake engine: state machine, bounded
 //! fetches, dropping of requests made for a stop that is over, the shared
 //! breakpoint table, and one-controller-at-a-time against a real RSP client.

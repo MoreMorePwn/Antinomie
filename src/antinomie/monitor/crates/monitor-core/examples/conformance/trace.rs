@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! Part 1: the syscall trace log. Groups `user` (UID 1000), `root` (UID 0) and
 //! `threads` run the oracle fixture (tests/monitor/conformance/trace/fixture);

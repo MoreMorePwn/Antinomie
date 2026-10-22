@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The Capa Matrix: capa's capabilities arranged by ATT&CK tactic or MBC
 //! objective, with the capabilities behind a selected technique below.
 use super::*;

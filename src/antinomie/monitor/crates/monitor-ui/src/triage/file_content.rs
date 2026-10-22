@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Read only captured payload ranges; never concatenate across a capture hole.
 use super::*;
 

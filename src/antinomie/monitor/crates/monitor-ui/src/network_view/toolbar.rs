@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Display filter toolbar, quick filters and the Wireshark handoff.
 use super::*;
 

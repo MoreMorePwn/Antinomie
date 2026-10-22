@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The packet table (TShark's rows) and the selected packet's details and bytes.
 use super::*;
 use std::cmp::Ordering;

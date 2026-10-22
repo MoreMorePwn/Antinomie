@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-only
 """Generate the Antinomie rules catalog (schema 2) from pinned upstream sources.
 
 The catalog lists where each rule collection lives upstream, the revision it

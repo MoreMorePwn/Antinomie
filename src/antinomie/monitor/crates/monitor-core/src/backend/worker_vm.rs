@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Starting and stopping the VM, and host resource checks.
 use super::*;
 

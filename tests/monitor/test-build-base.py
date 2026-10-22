@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Orchestrator contract tests (scripts/build-base.py); no kernel build."""
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-only
 import importlib.util
 import json
 from pathlib import Path

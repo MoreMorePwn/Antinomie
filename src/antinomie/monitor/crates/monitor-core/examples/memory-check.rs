@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! Memory analysis end to end on a Debian base: boot a VM, start a marked
 //! process, dump the VM's RAM as the Memory tab's Dump memory button does,

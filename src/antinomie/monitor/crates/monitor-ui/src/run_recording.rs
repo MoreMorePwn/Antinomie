@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! How one run's recording is shown wherever the run is: Trace, Run History,
 //! Details and Triage read the same words from here.
 //!

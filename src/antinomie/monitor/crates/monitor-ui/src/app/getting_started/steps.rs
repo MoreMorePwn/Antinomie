@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! What each Getting started step shows. Every step reads live state and
 //! sends the same commands as the window it stands in for.
 use super::*;

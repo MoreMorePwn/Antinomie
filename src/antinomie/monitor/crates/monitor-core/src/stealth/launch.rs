@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The stealth profile as QEMU launch options. Each one adds only what
 //! differs from QEMU's defaults, so a Transparent profile launches as before.
 use super::{

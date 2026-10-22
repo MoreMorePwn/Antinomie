@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The transport thread never waits for the disk: Run acceptance, status
 //! files, terminal and telemetry bookkeeping and the seal at Stop all return
 //! while both the recording writer and the status-file thread are stopped,

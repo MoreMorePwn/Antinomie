@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The process tree rebuilt from fork, clone and exec calls.
 use super::*;
 

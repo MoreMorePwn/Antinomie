@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The minimal bubblewrap mount profile shared by every external tool that
 //! reads attacker-influenced input (analysis workers, TShark).
 //!

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The debugger panel's own state and how it talks to the backend: a request
 //! carries an id and the stop it was made for; the backend's view says which
 //! request it has handled, so the panel knows what is still in flight and shows

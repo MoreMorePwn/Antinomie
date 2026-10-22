@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Owned bubblewrap namespace lifecycle shared by noninteractive host tools.
 //! Command builders call prepare before bwrap's target `--`, then drop Command
 //! after spawning and adopt the Child infallibly. Never discard a false/error

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Reads a selection warning back as a rule that did not apply. The wording is
 //! produced in this module's neighbours from the constants used here, so a scan
 //! can count these rules without the UI reading warning text.

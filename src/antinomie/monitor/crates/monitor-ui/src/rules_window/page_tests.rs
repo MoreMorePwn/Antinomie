@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The Detection rules page: engine tabs, Installed and Catalog tabs, a
 //! pack's rules and a rule's details, driven with local fixtures only.
 use super::source_tests::{catalog_value, click, joined, model_for, render};

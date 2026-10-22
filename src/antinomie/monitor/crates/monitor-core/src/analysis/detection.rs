@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Offline rule evaluation against identity-scoped retained evidence.
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

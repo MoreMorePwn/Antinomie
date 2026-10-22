@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Scrolling for the Details panel: one vertical area with a stable id, kept
 //! where the user left it while the same thing stays selected, and a process
 //! tree height that grows with the window and can be dragged.

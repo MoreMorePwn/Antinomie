@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Register layout as data. One `TargetDescription` per architecture says which
 //! registers a debugger sees, in what order, and where each lives inside the
 //! regset blobs the guest transfers. The GDB `g` packet image, the target

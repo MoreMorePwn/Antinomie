@@ -84,7 +84,7 @@ Skills are named here; agents find them in their own installed skills.
 
 Read LICENSING.md, THIRD-PARTY-NOTICES.md and the guide's
 `Licensing and Provenance.md` before importing code/assets or preparing a release.
-Original eligible host/tooling code defaults to MIT with the project identity
+Original eligible host/tooling code defaults to GPL-3.0-only from 0.7.0 with the project identity
 `MikiMiku (MoreMorePwn)`; preserve kernel and upstream/file-specific terms.
 Do not commit unnecessary third-party branding, reference mockups or research
 artifacts to this product repository. Required notices and honest technical

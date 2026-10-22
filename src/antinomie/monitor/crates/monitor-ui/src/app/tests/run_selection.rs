@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The selected run and what shows its health: it survives VM restarts,
 //! filters and queued reads, leaves with a deleted VM, and says when its
 //! recording is incomplete.

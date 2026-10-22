@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The Details panel scrolls: long content, a deep and wide process tree, an
 //! offset that stays put across repaints and resets for another run.
 use super::*;

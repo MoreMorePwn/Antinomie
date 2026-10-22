@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 use super::super::signals::{gdb_to_linux, linux_to_gdb};
 /// GDB's own numbers (`include/gdb/signals.def`), written out: the oracle for the
 /// mapping.

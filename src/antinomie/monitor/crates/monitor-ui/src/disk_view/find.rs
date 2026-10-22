@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Find: name, path or glob search over the whole tree, run by the reader
 //! (bounded in matches, entries and time) so the interface stays responsive.
 use super::*;

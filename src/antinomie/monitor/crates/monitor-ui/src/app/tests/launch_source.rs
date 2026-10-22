@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Run program: the Source choice (a guest path or an uploaded host file),
 //! the arguments placeholder and the window's fit.
 use super::*;

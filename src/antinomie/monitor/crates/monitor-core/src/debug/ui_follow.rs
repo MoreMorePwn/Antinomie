@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The panel's handling of several processes and of what the program does to
 //! them: forks (follow the parent, the child, or ask), vfork, exec, and the signal
 //! table. A child the guest holds parked at its fork is an inferior of the

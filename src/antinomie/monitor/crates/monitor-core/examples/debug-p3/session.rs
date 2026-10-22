@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! Phase 3 at the app level: a debugger session through a transport reconnect and
 //! through a VM snapshot. The app's panel controller owns the session; the test

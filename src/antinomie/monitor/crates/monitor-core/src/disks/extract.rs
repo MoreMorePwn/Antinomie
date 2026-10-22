@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Placing a file the reader extracted: the worker writes `<out>/<request id>`
 //! and this module (in the parent, after the worker answered) gives it a
 //! sanitized host name. No guest-controlled string becomes a host path before

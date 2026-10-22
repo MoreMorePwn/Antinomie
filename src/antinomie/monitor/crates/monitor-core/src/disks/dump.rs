@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Saved disk dumps: a standalone sparse `root.ext4` in
 //! `<recording dir>/disks/<id>/` and the `dump.json` sidecar that names it.
 //!

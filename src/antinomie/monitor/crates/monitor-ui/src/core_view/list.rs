@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The core list, its filters, and project export and import.
 use super::*;
 use crate::evidence_delete::{Deletion, Kind as DeleteKind};

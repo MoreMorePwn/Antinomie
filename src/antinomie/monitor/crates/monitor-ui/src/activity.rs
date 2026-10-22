@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Bounded, persisted application log and the shared dismissible notice surface.
 use crate::theme;
 use eframe::egui::{self, RichText};

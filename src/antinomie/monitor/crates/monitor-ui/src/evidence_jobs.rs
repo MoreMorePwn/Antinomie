@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! A bounded worker for exports and external native-project opening.
 use antinomie_monitor_core::{AnalysisExportFormat, AnalysisKind};
 use eframe::egui;

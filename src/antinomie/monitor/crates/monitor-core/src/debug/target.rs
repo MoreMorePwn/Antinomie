@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The architecture-neutral view of a debuggable target. Everything the RSP
 //! server needs is expressed here, so the Linux kernel engine and a future
 //! QEMU-gdbstub backend are interchangeable.

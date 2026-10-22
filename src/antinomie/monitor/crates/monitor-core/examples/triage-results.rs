@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! Run the normal offline Properties or Detection job on a recorded sample.
 //! Usage: triage-results --properties ANALYSIS_DIR [TOOLS_DIR] | --detect REQUEST.json

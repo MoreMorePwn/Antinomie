@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Content search: does a regular file contain some bytes? Bounded per file,
 //! in total and by time; the first hit of a file is reported with its offset
 //! and a snippet of the bytes around it.

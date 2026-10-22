@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The in-app debugger's controller. It runs on the RSP server thread and uses
 //! the same `Debugger` (so the same backends, guest link and breakpoint tables)
 //! an external debugger does; the panel never connects to our own socket.

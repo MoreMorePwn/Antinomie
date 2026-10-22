@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Attach the debugger to a running guest process and show how to reach it.
 //! The engine is in the guest kernel and the RSP server on the host; the
 //! Debugger tab beside Static Analysis starts and ends the session, shows how

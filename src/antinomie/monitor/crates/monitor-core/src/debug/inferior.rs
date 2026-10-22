@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! One debugged process of the guest: its backend (a guest session), the
 //! breakpoints the debuggers asked for, a cache of the registers read at the
 //! current stop, and where it stands (running, stopped at an event, gone).

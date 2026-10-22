@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The shared widget kit of the redesigned UI. Each helper is the egui form
 //! of one component of the design (see "UI Redesign - Design", section 6) and
 //! reads its colors from `theme`, so all three themes restyle it at once.

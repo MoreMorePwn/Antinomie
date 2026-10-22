@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The list of network captures of the selected VM.
 use super::*;
 use crate::evidence_delete::{CAPTURE_LIVE, CAPTURE_WRITING};

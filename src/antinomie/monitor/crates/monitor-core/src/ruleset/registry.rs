@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The registry of installed packs and groups, and rule toggles.
 use super::*;
 

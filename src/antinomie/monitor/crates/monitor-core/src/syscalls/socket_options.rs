@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Socket levels and option names, from the pinned UAPI headers.
 
 // Socket levels and options named by the pinned UAPI headers. The kernel capture

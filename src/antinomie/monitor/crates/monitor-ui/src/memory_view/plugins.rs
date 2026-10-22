@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Choosing a Volatility plugin and its options, and the saved runs.
 use super::*;
 

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Incremental SQLite index for the append-only packed-object index file.
 use super::super::{
     CHUNK_RECORD_SIZE, CHUNK_TAG, FIELD_RECORD_SIZE, FIELD_TAG, FieldKey, HEADER_SIZE, INDEX_FILE,

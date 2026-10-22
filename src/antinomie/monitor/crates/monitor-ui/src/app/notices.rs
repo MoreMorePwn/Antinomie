@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Observe backend diagnostic state even when its owning panel is closed.
 //!
 //! The backend's own errors and warnings are toasts. What belongs to one run,

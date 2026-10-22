@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The Debugger tab beside Static Analysis: when it exists, its folded panes,
 //! the one-controller chip and the gdb console.
 use super::*;

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Reading the files a catalog lists out of a download, with every size
 //! bounded and every file hashed. Nothing in a download is executed.
 use super::*;

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The reader worker's request loop: JSON lines on stdin and stdout.
 use super::{
     image::Image,

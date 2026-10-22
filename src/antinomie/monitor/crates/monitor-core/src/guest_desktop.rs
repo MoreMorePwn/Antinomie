@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! Launch into the guest's graphical session. The guest has no helper
 //! program, and only the guest knows the session's display, so a constant

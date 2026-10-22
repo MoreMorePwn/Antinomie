@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Detection > Scanned inputs: exactly what the last scan passed to the
 //! rules, so a count such as "1 object evaluated" can be checked.
 use super::*;

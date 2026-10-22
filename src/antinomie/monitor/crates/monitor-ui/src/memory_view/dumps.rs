@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The list of RAM dumps, their identity and deletion.
 use super::*;
 

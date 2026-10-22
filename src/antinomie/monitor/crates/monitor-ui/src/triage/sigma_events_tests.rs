@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The Sysmon-style fields and auditd-style records built from the trace.
 use super::*;
 use antinomie_monitor_core::analysis::detection::{EventJournal, Identity};

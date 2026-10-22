@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Processes of the session: the program and the children of its forks, the
 //! prompt shown when the program forks and the policy for the next fork.
 use super::*;

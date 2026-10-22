@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! A triage table keeps the colors of the theme it was built in only until
 //! the next paint: switching theme restyles rows that are already indexed.
 use super::*;

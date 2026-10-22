@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-only
 """Build the bundled community YARA rule file from a YARA-Forge package.
 
 usage: refresh-yara-rules.py YARA_FORGE_RULES.yar RELEASE OUTPUT.yar [EXCLUDE ...]

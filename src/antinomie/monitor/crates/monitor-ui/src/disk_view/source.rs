@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! What the "Current disk" entry reads: the VM's current disk, the frozen
 //! layer of a saved checkpoint, or the installed base image, and, for a
 //! disk with a partition table, which partition. One rule for all of them:

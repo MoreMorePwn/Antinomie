@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Running the external TShark decoder: bounded output reads, deadlines,
 //! cancellation and reaping of the sandboxed child.
 use super::*;

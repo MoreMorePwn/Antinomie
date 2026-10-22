@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! A guest that stops answering for longer than the transport's health
 //! timeout (its QEMU frozen with SIGSTOP, as a host under heavy load starves

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Property jobs are isolated, on demand and tied to an exact run specimen.
 use super::*;
 use antinomie_monitor_core::analysis::properties::{self as engine, FileProperties};

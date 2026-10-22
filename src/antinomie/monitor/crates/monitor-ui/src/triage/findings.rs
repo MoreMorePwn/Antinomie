@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Suspicious-behaviour findings and their confidence.
 use super::*;
 

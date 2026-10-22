@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! Real four-vCPU process-core acquisition qualification in a fresh data folder.
 //! Usage: process-core-check BUNDLE NEW_DATA_DIR STATIC_FIXTURE

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Summaries of destinations and observed hostnames.
 //! Public-address enrichment runs in the index worker, never while drawing.
 use super::*;

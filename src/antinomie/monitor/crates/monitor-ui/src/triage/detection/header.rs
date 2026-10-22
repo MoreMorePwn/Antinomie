@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The top of the Detection panel: engine tabs, the rule-set list, the scan
 //! controls, the progress bar and the matched-rule summary.
 use super::*;

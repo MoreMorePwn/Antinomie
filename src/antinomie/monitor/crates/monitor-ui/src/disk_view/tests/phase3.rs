@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Headless tests of the Disks tab's third phase: checkpoint sources,
 //! partitions, diff, content Find, the qcow2 import and the Triage links.
 use super::*;

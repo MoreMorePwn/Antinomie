@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Bounded, read-only pages of the normalized event journal Sigma evaluates.
 //!
 //! The journal is published by atomic rename and never appended to, so a read

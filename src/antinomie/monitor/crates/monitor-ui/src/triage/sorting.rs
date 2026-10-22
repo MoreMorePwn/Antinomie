@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Stable table order and disk-backed sorting before archive pagination.
 use super::*;
 use std::collections::{hash_map::DefaultHasher, BTreeMap};

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Printable strings of a process core's memory. The Static analysis
 //! extractor (`analysis::find_strings`: ASCII of four or more octets, UTF-16LE
 //! of four or more characters) runs over each captured mapping in bounded

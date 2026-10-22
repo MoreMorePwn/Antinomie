@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The real `--disk-reader` worker of the `antinomie-monitor` binary, run
 //! through the sandboxed `Reader` of the core crate, on a small ext4 image
 //! built here with `mkfs.ext4 -d`. Skipped without bubblewrap or e2fsprogs.

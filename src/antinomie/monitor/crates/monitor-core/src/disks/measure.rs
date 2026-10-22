@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Measuring a disk chain before it is flattened: its logical size, how much
 //! of it is allocated, and whether the destination can hold the image.
 use super::{

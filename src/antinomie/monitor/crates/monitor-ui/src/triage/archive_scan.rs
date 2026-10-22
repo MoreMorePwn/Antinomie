@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Background scans of a saved recording and the finding journal they write.
 use super::segments::{
     guest_names, name_launched, run_segments, segment_facts, segments_stamp, walk_segments,

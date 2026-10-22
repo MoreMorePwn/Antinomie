@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Modal dialogs and dialog layout helpers.
 use super::*;
 
@@ -139,6 +139,10 @@ impl MonitorApp {
                             .color(theme::heading()),
                     );
                     ui.label("Run programs in a QEMU VM and record every system call they make.");
+                    ui.label("Copyright (c) 2026 MikiMiku (MoreMorePwn)");
+                    ui.label("Original application code: GPL-3.0-only. No warranty.");
+                    ui.label("You may redistribute it under GPLv3; components retain their own licenses.");
+                    ui.hyperlink_to("GNU GPL version 3", "https://www.gnu.org/licenses/gpl-3.0.html");
                     dialog_section(ui, "Versions");
                     form_grid("about", ui).show(ui, |ui| {
                         ui.label(RichText::new("Guest kernel").color(theme::muted()));

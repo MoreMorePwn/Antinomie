@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The RSP server: a loopback Unix socket and an ephemeral 127.0.0.1 TCP port,
 //! one client at a time, driving the project's own RSP implementation
 //! (`rsp_client`) against a `DebugBackend`. It never binds a non-loopback

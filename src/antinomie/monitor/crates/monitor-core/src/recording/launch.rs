@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! A run's launch: the records the guest wrote for the launched program before
 //! its first traced call.
 //!

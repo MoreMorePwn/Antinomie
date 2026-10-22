@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! What the Getting started window needs of the Rule manager: the catalog's
 //! packs, which of them are installed, and one install at a time on the
 //! manager's own worker. Nothing here opens the network by itself.

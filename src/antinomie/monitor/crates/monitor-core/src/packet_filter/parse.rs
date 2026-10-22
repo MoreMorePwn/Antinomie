@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Parsing a capture with TShark into the stored packet list, the cache of
 //! that list beside the capture, and TShark's details of a single frame.
 use super::pdml::{self, MAX_PDML_SIZE, PacketTree};

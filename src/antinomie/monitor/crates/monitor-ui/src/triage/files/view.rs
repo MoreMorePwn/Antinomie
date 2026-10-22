@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! How a changed file is shown: its row in the Changed tab and its Details.
 use super::*;
 

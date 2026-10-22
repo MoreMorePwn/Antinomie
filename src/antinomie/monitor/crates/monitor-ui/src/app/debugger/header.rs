@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The panel's top: process and thread, the stop status line, run-control
 //! buttons and the endpoint an external debugger connects to.
 use super::*;

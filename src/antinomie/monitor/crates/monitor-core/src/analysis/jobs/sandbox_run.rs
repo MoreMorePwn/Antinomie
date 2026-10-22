@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Running one external analysis tool in the worker's bubblewrap isolation.
 use super::*;
 

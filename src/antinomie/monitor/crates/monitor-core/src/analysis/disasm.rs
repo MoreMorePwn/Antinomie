@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Built-in disassembly: x86 and x86-64 decoded with iced-x86, other
 //! architectures through objdump; every instruction is one listing row.
 use super::listing::{LISTING_MAX_SIZE, ListingWriter};

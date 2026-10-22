@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! The coverage matrix: for every native x86-64 slot, whether a fixture
 //! exercised it and whether its arguments, result, captured data, rendering

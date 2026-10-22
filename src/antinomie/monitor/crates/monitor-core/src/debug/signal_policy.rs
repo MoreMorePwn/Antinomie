@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! What the in-app panel does when the program is about to receive a signal: gdb's
 //! `handle` table, per signal, with gdb's own defaults. `stop` shows the signal as
 //! a stop, `print` records it in the panel's signal log, `pass` gives it to the

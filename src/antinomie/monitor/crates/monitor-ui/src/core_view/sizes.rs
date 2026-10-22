@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! How a process core's sizes and the reason it is incomplete read in the list
 //! and the details: requested, accepted, expected and saved bytes.
 use antinomie_monitor_core::{

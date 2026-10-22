@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The Settings window: a page list, one page at a time, a footer that stays
 //! in view on a short screen, and the settings it keeps.
 use super::*;

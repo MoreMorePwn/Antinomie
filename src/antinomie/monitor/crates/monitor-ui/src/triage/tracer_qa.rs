@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Opt-in check of Triage over real guest recordings made by
 //! `tracer-check record` (see its documentation): the hashes of written files
 //! and of the launched program, the guest's user names, and a run recorded

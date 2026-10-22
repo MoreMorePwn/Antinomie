@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! What a file call did, by operation: the categories behind the Files tabs,
 //! each call's result, and how the call reached the file.
 //!

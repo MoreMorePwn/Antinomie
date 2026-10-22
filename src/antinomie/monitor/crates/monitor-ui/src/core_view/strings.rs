@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The Strings tab: printable ASCII and UTF-16LE text of the core's captured
 //! memory, found by the Static analysis extractor on a worker thread. The
 //! filter and the sort run on a worker too and the table shows one page of

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! What the selected run's saved captures and core read as: "Complete",
 //! "Partial capture", "Deleted"... The run's artifact list is read on a
 //! worker, when the selection changes, after a delete and on a slow timer,

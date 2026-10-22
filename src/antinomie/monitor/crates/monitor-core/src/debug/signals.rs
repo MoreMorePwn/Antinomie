@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Signal numbers. The guest speaks Linux x86-64 numbers; the GDB Remote Serial
 //! Protocol speaks GDB's own table (`include/gdb/signals.def`), which differs
 //! for a dozen signals (`SIGBUS` is 7 on Linux and 10 in GDB, `SIGUSR1` is 10 and

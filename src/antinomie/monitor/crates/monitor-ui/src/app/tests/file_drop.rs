@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Dropping a host file onto the main window: overlay, Upload form and refusals.
 use super::*;
 

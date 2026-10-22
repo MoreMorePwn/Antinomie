@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Importing a qcow2 image in the sandbox.
 use super::{
     import::{Qcow2Facts, check_info},

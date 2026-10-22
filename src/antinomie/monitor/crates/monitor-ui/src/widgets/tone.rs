@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Semantic tones and the status chip.
 use crate::theme;
 use eframe::egui::{self, Color32, RichText};

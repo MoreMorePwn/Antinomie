@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The widget kit: tabs select and wrap, windows keep their title above the
 //! body and close on the button, tables paint their header.
 use super::*;

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! Real-VM qualification of how a run that uses io_uring (or AIO) reports its
 //! status: the root's wait status, the tree's end and the async count come from

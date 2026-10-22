@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-only
 # Copyright (c) 2026 MikiMiku (MoreMorePwn)
 """Summarize run-overhead-bench.sh output: medians per state and workload,
 overhead against the kernel without Antinomie, and recording losses."""

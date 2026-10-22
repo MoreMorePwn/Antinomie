@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Detection > Scanned inputs rows open the panel that shows each input.
 use super::*;
 use crate::triage::OpenInput;

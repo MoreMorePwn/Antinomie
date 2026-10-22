@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Whole-run counts, independent of table visibility, filters and query pages.
 use super::*;
 use antinomie_monitor_core::analysis::detection::{Engine, State};

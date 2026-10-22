@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! A call row that previews its async observations says so and browses the rest.
 use super::*;
 use antinomie_monitor_core::{AsyncPage, FieldSummary};

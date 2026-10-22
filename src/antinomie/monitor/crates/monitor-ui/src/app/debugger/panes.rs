@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The panes under the listing: threads, processes, breakpoints, memory,
 //! stack, signals and the gdb console. They are folded until the user opens
 //! them from the strip, each independently, and the tab remembers which are

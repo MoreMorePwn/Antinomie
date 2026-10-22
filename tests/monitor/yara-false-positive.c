@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //
 // yara-false-positive.c — a harmless program that community YARA rules flag.
 //

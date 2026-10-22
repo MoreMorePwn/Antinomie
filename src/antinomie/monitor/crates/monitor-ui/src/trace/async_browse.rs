@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The async observations of a call: the preview a row carries, and the
 //! saved ones past it, read a page at a time off the interface thread.
 use super::{key, note_row, section_row, Inspector, InvocationKey, Prefix};

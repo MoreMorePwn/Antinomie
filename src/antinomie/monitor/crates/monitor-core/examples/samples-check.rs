@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! Sending a downloaded sample into a VM, end to end, without MalwareBazaar:
 //! PROGRAM (a harmless static x86-64 test program that prints SAMPLE-RAN) is

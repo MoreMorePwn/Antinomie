@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Download policy: HTTPS only, redirects stay on the publisher's hosts.
 use super::source_fixture::*;
 use super::*;

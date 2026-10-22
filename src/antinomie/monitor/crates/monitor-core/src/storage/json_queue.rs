@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The persistence thread for small status files (`run.json`, `artifacts.json`,
 //! manifests, ...).
 //!

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The Disks tab's host: what it shows from the backend's snapshot and what
 //! its actions send.
 use super::*;

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! Manual check of static analysis of a host file (the Disks tab's "Hand to
 //! Static Analysis"), with no VM: queue the file through the backend and wait

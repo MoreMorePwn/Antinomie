@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The filesystem tree of an open disk: the host explorer's cached-flatten
 //! design (lazy listings, pages of `PAGE_LEN`, a cap on expanded folders and
 //! on depth, only the viewport's rows create widgets) over the reader's

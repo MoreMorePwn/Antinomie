@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Bounded evidence tables and the jump from a row to its evidence.
 use super::*;
 

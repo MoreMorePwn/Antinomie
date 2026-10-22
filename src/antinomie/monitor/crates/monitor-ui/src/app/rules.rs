@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Local rule state belongs to application startup, independently of its window.
 use super::*;
 

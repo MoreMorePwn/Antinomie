@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Bounded host text for typing through a US-layout virtual keyboard.
 
 /// Maximum clipboard input in UTF-8 octets, before normalization.

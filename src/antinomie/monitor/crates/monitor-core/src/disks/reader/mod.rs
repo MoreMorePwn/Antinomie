@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The sandboxed ext4 reader.
 //!
 //! The image is attacker-controlled content, so every byte of `ext4-view`

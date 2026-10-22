@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Bounded, evidence-based file reads and original-to-final change reconstruction.
 //! Unknown bytes are never zero-filled. A path is a name: where the guest
 //! recorded the identity of a file (device and inode) one file is followed

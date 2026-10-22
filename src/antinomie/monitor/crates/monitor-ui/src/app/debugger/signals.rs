@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The signal handling table (gdb's `handle`): what the panel does when the
 //! program is about to receive each signal, and the latest signals seen.
 use super::*;

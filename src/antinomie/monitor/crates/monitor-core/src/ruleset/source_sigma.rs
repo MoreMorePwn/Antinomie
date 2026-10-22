@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The Sigma filter: keep the rules whose log source the catalog lists.
 //!
 //! Keeping a rule only imports it. Whether Antinomie can evaluate it is

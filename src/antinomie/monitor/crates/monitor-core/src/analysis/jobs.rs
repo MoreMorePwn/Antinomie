@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 use super::progress::worker_deadline;
 use super::worker::REPORT_MAX_SIZE;
 use super::*;

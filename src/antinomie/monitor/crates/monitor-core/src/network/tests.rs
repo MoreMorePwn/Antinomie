@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 use super::*;
 
 fn ethernet(ethertype: u16, payload: &[u8]) -> Vec<u8> {

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! Stress groups: `ant-torture` at one level. Nothing describes the calls, so
 //! every one must be well formed (both phases, a result, no warning) and every

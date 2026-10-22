@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Triage for the selected run: process activity, files, HTTP/DNS and eBPF.
 //! Rows are observations from captured syscalls and packets, not a verdict.
 use std::path::Path;

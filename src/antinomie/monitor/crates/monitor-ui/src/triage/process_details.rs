@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! Details of a selected process: its suspicious observations and the jumps
 //! scoped to it. Each jump reuses a navigation the app already has.
 use super::*;

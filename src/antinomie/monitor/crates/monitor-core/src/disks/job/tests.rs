@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 use super::*;
 use crate::disks::{
     DISKS_DIR, Ext4State, disks_dir,

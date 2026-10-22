@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The Disks tab's commands and the disk-job lease.
 //!
 //! While a disk job reads a VM's image chain, no command may change that

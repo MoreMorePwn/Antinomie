@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-only
 //! The mockup's card: a bordered panel with a heading, for grouping facts on
 //! a page (Identity, Categories, register groups).
 use crate::theme;
