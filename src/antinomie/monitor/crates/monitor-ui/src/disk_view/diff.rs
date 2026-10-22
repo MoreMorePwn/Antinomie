@@ -564,9 +564,12 @@ impl DiskView {
                 ("Deleted", Some(DiffStatus::Deleted)),
                 ("Changed", Some(DiffStatus::Changed)),
             ] {
-                if ui
-                    .selectable_label(diff.filter.status == status, label)
-                    .clicked()
+                if crate::widgets::tab(
+                    ui,
+                    diff.filter.status == status,
+                    &crate::widgets::TabItem::new(label),
+                )
+                .clicked()
                 {
                     diff.filter.status = status;
                     changed_filter = true;

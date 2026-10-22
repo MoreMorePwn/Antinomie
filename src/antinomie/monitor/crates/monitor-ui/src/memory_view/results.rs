@@ -293,10 +293,19 @@ impl MemoryView {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.toggle_value(&mut self.show_log, "Messages")
                     .on_hover_text("Volatility's messages for this run");
-                ui.selectable_value(&mut self.text_view, true, "Text")
-                    .on_hover_text("The result as Volatility prints it");
-                ui.selectable_value(&mut self.text_view, false, "Table")
-                    .on_hover_text("Columns colored by type; click a column name to sort");
+                let text = self.text_view;
+                if crate::widgets::tab(ui, text, &crate::widgets::TabItem::new("Text"))
+                    .on_hover_text("The result as Volatility prints it")
+                    .clicked()
+                {
+                    self.text_view = true;
+                }
+                if crate::widgets::tab(ui, !text, &crate::widgets::TabItem::new("Table"))
+                    .on_hover_text("Columns colored by type; click a column name to sort")
+                    .clicked()
+                {
+                    self.text_view = false;
+                }
                 ui.separator();
                 let files = std::fs::read_dir(result.run.files())
                     .map(|mut entries| entries.next().is_some())
