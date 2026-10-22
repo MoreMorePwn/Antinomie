@@ -315,6 +315,15 @@ pub(crate) fn execute_analysis(r: &ExecRequest, supported: bool) -> Result<Vec<u
     }
     Ok(encoded)
 }
+/// The optional EXEC flags the guest offers. Until the TRACER_CAPS probe has
+/// answered there is no offer, and a launch must wait instead of going out
+/// without the shell-job shape and the hashing.
+pub(crate) fn tracer_offer(caps: Option<crate::api::GuestTracerCaps>) -> Result<u32, String> {
+    caps.map(|caps| caps.exec_flags).ok_or_else(|| {
+        "the guest has not reported its tracer capabilities yet; retry in a moment".to_string()
+    })
+}
+
 /// Ask for the optional hashing and launch shape a guest's TRACER_CAPS offers.
 /// Nothing is added for a guest that offers none, so an older guest never
 /// sees a flag it would reject.
@@ -514,6 +523,16 @@ pub(crate) fn info(reply: &[u8]) -> Result<crate::api::GuestKernel, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_launch_before_the_tracer_probe_is_refused() {
+        assert!(tracer_offer(None).unwrap_err().contains("retry in a moment"));
+        let caps = crate::api::GuestTracerCaps {
+            exec_flags: 0x30,
+            ..Default::default()
+        };
+        assert_eq!(tracer_offer(Some(caps)), Ok(0x30));
+        assert_eq!(tracer_offer(Some(Default::default())), Ok(0));
+    }
     #[test]
     fn debug_on_start_is_a_flag_without_request_bytes() {
         let mut request = ExecRequest::default();
