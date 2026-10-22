@@ -79,7 +79,7 @@ fn sysroot_line(context: &Context) -> String {
         ""
     };
     format!(
-        "set sysroot {}\nset remote timeout 30{trace}",
+        "set sysroot {}{trace}",
         context.dir.join("sysroot").display()
     )
 }
