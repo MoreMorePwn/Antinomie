@@ -508,7 +508,14 @@ def command_for(check, ctx, args):
                 "antinomie-monitor", "debugger_console_live", "--", "--ignored", "--nocapture"]
         return argv, env
     if check.name == "tracer-qa":
-        log = ctx["out"] / "logs" / "tracer-record.log"
+        # Triage QA over the recordings of a failed tracer-record would pass on
+        # whatever that run left: its input must have passed.
+        record = input_result(ctx, "tracer-record")
+        if record is None:
+            raise Failure("its input tracer-record has no result; run tracer-record first")
+        if record["status"] not in ("PASS", "FLAKY"):
+            raise Failure(f"its input tracer-record did not pass ({record['status']}, {record['log']})")
+        log = Path(record["log"])
         text = log.read_text(errors="replace") if log.exists() else ""
         runs = re.findall(r"^RUN (.*)$", text, re.M)
         sha = re.search(r"^FIXTURE_SHA256 (\S+)", text, re.M)
@@ -527,6 +534,16 @@ def command_for(check, ctx, args):
                 "antinomie-monitor", "recorded_tracer_triage", "--", "--ignored", "--nocapture"]
         return argv, env
     return check.argv, {}
+
+
+def input_result(ctx, name):
+    """The result of check name: from this run, else from the last run in --out."""
+    if name in ctx.get("results", {}):
+        return ctx["results"][name]
+    try:
+        return json.loads((ctx["out"] / "results.json").read_text()).get(name)
+    except (OSError, ValueError):
+        return None
 
 
 def missing(check, ctx):
@@ -748,6 +765,7 @@ def main(argv=None):
             checks = [c for c in checks if results.get(c.name, {}).get("status") not in ("PASS", "FLAKY")]
         out.mkdir(parents=True, exist_ok=True)
         selected = {check.name for check in checks}
+        ctx["results"] = results
         cleanup = lambda: None
         try:
             if not selected:

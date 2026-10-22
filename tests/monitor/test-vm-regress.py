@@ -195,6 +195,44 @@ class PlanTests(unittest.TestCase):
         self.assertIsNone(vm.missing(by_name["debug-p2"], ctx))
 
 
+class TracerQaTests(unittest.TestCase):
+    """Triage QA reads tracer-record's runs; it must not pass over a failed one."""
+
+    def run_qa(self, record, log_text="", data=True):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            (out / "logs").mkdir()
+            ctx = {**PlanTests().ctx(), "out": out, "results": {}}
+            if record:
+                log = out / "logs" / "tracer-record.try2.log"
+                log.write_text(log_text.replace("DATA", tmp))
+                ctx["results"]["tracer-record"] = {"status": record, "log": str(log)}
+            check = next(c for c in vm.plan("full", ctx) if c.name == "tracer-qa")
+            return vm.command_for(check, ctx, None)
+
+    LOG = "RUN writes=DATA/tracer_record_1/run\nFIXTURE_SHA256 ab\nPASS record\n"
+
+    def test_a_failed_or_missing_record_is_an_error(self):
+        for status in (None, "FAIL", "TIMEOUT", "ERROR", "SKIP"):
+            with self.subTest(status=status), self.assertRaisesRegex(vm.Failure, "tracer-record"):
+                self.run_qa(status, self.LOG)
+
+    def test_a_passed_record_is_read_from_its_last_attempt(self):
+        for status in ("PASS", "FLAKY"):
+            argv, env = self.run_qa(status, self.LOG)
+            self.assertIn("recorded_tracer_triage", argv)
+            self.assertTrue(env["ANTINOMIE_TRACER_RUNS"].startswith("writes="))
+            self.assertEqual(env["ANTINOMIE_TRACER_FIXTURE_SHA256"], "ab")
+
+    def test_the_last_runs_result_counts_when_this_run_has_none(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            (out / "results.json").write_text('{"tracer-record": {"status": "FAIL", "log": "/l"}}')
+            ctx = {**PlanTests().ctx(), "out": out, "results": {}}
+            self.assertEqual(vm.input_result(ctx, "tracer-record")["status"], "FAIL")
+            self.assertIsNone(vm.input_result(ctx, "debug-p2"))
+
+
 class DiskTests(unittest.TestCase):
     def args(self, *extra):
         return vm.parse(["quick", "b", *extra])
