@@ -29,7 +29,9 @@ pub(super) struct Launch {
     pub env: Vec<(&'static str, &'static str)>,
     pub env_remove: Vec<&'static str>,
     /// A private home folder (created, mode 0700) the program runs with, so
-    /// no init file of the user's own home reaches it.
+    /// no init file of the user's own home reaches it. gdb keeps its command
+    /// history there too: pwndbg turns saving on, and gdb's own default file
+    /// is `.gdb_history` in the working directory, the app's.
     pub home: Option<PathBuf>,
 }
 
@@ -92,7 +94,10 @@ impl PtyChild {
                     .recursive(true)
                     .mode(0o700)
                     .create(home)?;
-                command.env("HOME", home).env_remove("XDG_CONFIG_HOME");
+                command
+                    .env("HOME", home)
+                    .env("GDBHISTFILE", home.join(".gdb_history"))
+                    .env_remove("XDG_CONFIG_HOME");
             }
             command
                 .stdin(Stdio::from(slave.try_clone()?))
@@ -229,7 +234,8 @@ mod tests {
     #[test]
     fn a_private_home_is_made_and_is_the_programs_home() {
         let root = std::env::temp_dir().join(format!("ant-pty-home-{}", std::process::id()));
-        let mut launch = shell("echo \"home=$HOME config=${XDG_CONFIG_HOME-unset}\"");
+        let mut launch =
+            shell("echo \"home=$HOME history=$GDBHISTFILE config=${XDG_CONFIG_HOME-unset}\"");
         launch.home = Some(root.join("home"));
         let mut child = PtyChild::spawn(&launch, 24, 80, || {}).unwrap();
         let (text, _) = read_until(&mut child, "config=");
@@ -238,6 +244,13 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("config=unset"), "{text}");
+        assert!(
+            text.contains(&format!(
+                "history={}",
+                root.join("home/.gdb_history").display()
+            )),
+            "{text}"
+        );
         use std::os::unix::fs::PermissionsExt;
         let mode = std::fs::metadata(root.join("home"))
             .unwrap()

@@ -741,6 +741,29 @@ fn a_client_that_vanishes_leaves_the_process_running_and_the_server_usable() {
 }
 
 #[test]
+fn a_client_that_waited_and_sent_its_first_packet_again_gets_one_reply() {
+    let fixture = stopped_fixture();
+    let mut first = fixture.unix();
+    first.handshake();
+    // The second client is queued behind the first: gdb, with no `+` within
+    // its remote timeout, sends its first packet again.
+    let mut second = fixture.tcp();
+    second.send_no_wait("qSupported:multiprocess+;swbreak+");
+    second.send_no_wait("qSupported:multiprocess+;swbreak+");
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(first.send("D"), "OK");
+    let reply = second.packet().unwrap();
+    assert!(reply.contains("PacketSize=4000"), "{reply}");
+    // Every later reply answers its own request, not the copy.
+    assert_eq!(second.send("vMustReplyEmpty"), "");
+    assert!(second.send("?").starts_with("T05thread:"));
+    // A request repeated after its reply was acknowledged is answered again.
+    assert_eq!(second.send("qAttached"), "1");
+    assert_eq!(second.send("qAttached"), "1");
+    assert_eq!(second.send("D"), "OK");
+}
+
+#[test]
 fn kill_ends_the_process_and_the_session() {
     let fixture = stopped_fixture();
     let mut client = fixture.unix();
