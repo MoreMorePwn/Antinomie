@@ -50,14 +50,20 @@ fn matched_summary(report: &Report) -> String {
 }
 
 /// The badge of a result: what happened to its inputs, except that a scan
-/// with no enabled rules says so, and a result saved without inputs keeps
-/// the state it always had.
+/// with no enabled rules says so, a result saved without inputs keeps the
+/// state it always had, and a real Partial of the engine (a budget stop, a
+/// result that could not be saved, evidence still being captured, rules that
+/// were not run) never reads Complete because every input was read.
 fn status_badge(report: &Report) -> (&'static str, egui::Color32) {
+    use super::inputs::Overall;
     let overall = match report.inputs.as_deref() {
         Some(inputs) if report.state != State::NoRules => super::inputs::overall(inputs),
         _ => None,
     };
     match overall {
+        Some(Overall::Complete) if report.state == State::Partial => {
+            (Overall::Partial.label(), Overall::Partial.tone())
+        }
         Some(overall) => (overall.label(), overall.tone()),
         None => (state(&report.state), state_tone(&report.state)),
     }
@@ -324,11 +330,22 @@ impl View {
             long.push(full);
         };
         if let Some(Ok(report)) = self.results[index].as_ref() {
-            // With recorded inputs the badge already says Partial or not, by
-            // the inputs alone; an engine-level "Partial" must not contradict it.
-            let engine_partial = report.state == State::Partial && report.inputs.is_some();
-            if let Some(line) = limitation_line(&report.state).filter(|_| !engine_partial) {
+            if let Some(line) = limitation_line(&report.state) {
                 note(line.to_owned(), line.to_owned());
+            }
+            // What made it Partial, in the engine's words.
+            if report.state == State::Partial {
+                if let Some(first) = report.warnings.first() {
+                    let more = report.warnings.len() - 1;
+                    note(
+                        if more == 0 {
+                            first.clone()
+                        } else {
+                            format!("{first} (+{more} more)")
+                        },
+                        report.warnings.join("\n"),
+                    );
+                }
             }
             if report.omitted_evidence > 0 {
                 note(
@@ -627,6 +644,26 @@ mod tests {
         let complete = panel_text(&mut view);
         assert!(complete.contains("Complete"), "{complete}");
         assert!(!complete.contains("Partial"), "{complete}");
+        // A real Partial of the engine is never shown as Complete, whatever
+        // the inputs did, and the engine says why.
+        let Some(Ok(report)) = view.results[0].as_mut() else {
+            unreachable!()
+        };
+        report.state = State::Partial;
+        report.warnings =
+            vec!["Partial: this scan used evidence that was still being captured.".into()];
+        let partial = panel_text(&mut view);
+        assert!(partial.contains("Partial"), "{partial}");
+        assert!(!partial.contains("Complete"), "{partial}");
+        assert!(
+            partial.contains("evidence that was still being captured"),
+            "{partial}"
+        );
+        let Some(Ok(report)) = view.results[0].as_mut() else {
+            unreachable!()
+        };
+        report.state = State::Complete;
+        report.warnings.clear();
         let Some(Ok(report)) = view.results[0].as_mut() else {
             unreachable!()
         };
