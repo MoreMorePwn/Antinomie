@@ -6,6 +6,44 @@ it runs.
 
 ## 0.7.0 — Unreleased
 
+- **io_uring follow-ups, records in order across vCPUs, saving under load,
+  Stop after heavy churn.** Guest series 0054-0057, contract revision 17
+  unchanged. Triage now reads the file requests an SQPOLL ring's kernel thread
+  submitted (the guest attributes them to the ring's creator with no call of
+  its own), and files io_uring FSYNC, SYNC_FILE_RANGE, SPLICE, FSETXATTR,
+  SETXATTR, FGETXATTR and GETXATTR requests as the system calls they stand
+  for. rmdir and unlinkat(AT_REMOVEDIR) publish the removed directory's
+  identity (0054), so Triage knows a removed directory by its inode; splice
+  and xattr requests carry the identity of their file; an io_uring rename,
+  link or unlink takes its file's identity from the operation (0057), so two
+  of them run side by side no longer leave a deleted file "name removed". An io_uring ring that
+  only one process maps is attributed to that process (async.flags bit 3,
+  0055): its run is ASYNC_COMPLETE instead of OBSERVATION_INCOMPLETE, which
+  every io_uring run used to be; a ring a forked child or another process
+  maps and an SQPOLL ring stay unproven. The run note says which: "Async
+  observation lost N records" (a warning, and the run is listed under loss in
+  Summary › health) or "Uses io_uring: which task submitted each request is
+  not proven …; nothing was lost" (information); an old run's note with count
+  0 reads as the second. Async records are no longer lost under load (0056):
+  ant-torture's async-io module at its lightest level lost 10,256 records
+  alone and 10,393 beside the other load modules (7,355 staged packets
+  failed, 79 of 640 requests saved); now none, all 642 requests saved whole.
+  The host reads the guest's per-CPU rings merged by guest time, so a record
+  of one vCPU (a hash worker's, a moved task's) is no longer saved ahead of
+  earlier records of another and a file's lifecycle no longer lists a step
+  early; uring-check record runs on four vCPUs. A recording whose writer
+  falls behind the disk no longer stops for good ("recording writer queue is
+  full"): the host holds telemetry back and the guest waits, so saving goes
+  on; on this shared host stress-heavy had lost 6.4 million packets that way,
+  and now saves every packet, except what a disk stall longer than the
+  guest's longest send wait drops (counted; Health says how long telemetry
+  was held). A trace page whose previews pass 64 MiB ends early instead of
+  failing. Stop waits for a guest still writing back its page cache as it
+  powers off (up to 300 s while the disk writes grow) instead of forcing it
+  off after 10 s and marking the capture forced. The conformance suite gains
+  the attribution groups ring-private, ring-shared and ring-sqpoll and
+  directory identity cases, and records Stop times; the user golden expects
+  the kernel log to be root's (stealth), on bases built from this tree.
 - **Inputs that were not resident at a call's entry are read again at exit.**
   Guest series 0053, contract section 22, contract revision 17 unchanged
   (approved 2026-10-22). The recorder copies user memory without faulting, so

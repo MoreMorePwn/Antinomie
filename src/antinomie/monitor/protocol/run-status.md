@@ -91,10 +91,24 @@ What the host takes from a reply:
 The run state follows the first three: **Finished** (or **Stopped**, for a
 stopped root that died of a signal) is a tree that ended with no request
 outstanding, whatever the observation flags say. OBSERVATION_INCOMPLETE and the
-loss count are reported next to the state (run notes, "Runs with async
-observation loss"), not folded into it: every io_uring request sets
-OBSERVATION_INCOMPLETE, because the task that wrote a shared ring's entry is not
-proven, so folding it in would leave every io_uring run `Unknown` for ever.
+loss count are reported next to the state, not folded into it, and apart from
+each other:
+
+| Guest says | Host shows |
+|---|---|
+| Loss count above 0 | Note "Async observation lost N records"; the run is listed under "Runs with async observation loss" (Summary › health), a warning |
+| OBSERVATION_INCOMPLETE, count 0 | Note "Uses io_uring: which task submitted each request is not proven (an SQPOLL ring, or a ring another process can write); nothing was lost", information only; not listed as loss |
+| Neither | No note |
+
+OBSERVATION_INCOMPLETE is raised for an io_uring request whose entry's writer
+is not proven: the SQPOLL thread's submissions, submissions from outside the
+ring creator's process, and a ring another process maps (native-schema-slices
+14.3). A ring one process maps was written by that process, and its run can
+be ASYNC_COMPLETE (guest series 0055); an older guest raised the flag for
+every io_uring request, so folding it into the state would have left every
+io_uring run `Unknown` for ever. A run saved before the two notes were told
+apart has "Async observation loss reported: last guest count N, loss flag B":
+with N = 0 it is shown as the attribution note and is not loss.
 TREE_EXITED without ROOT_EXITED (an older guest, above) ends the run with the
 exit status unknown (`root_status_missing`), never zero. A reply the host cannot
 use (a field out of range, an inconsistent live count) is an error naming the
@@ -170,7 +184,7 @@ time record the observation context, not the later deferred publisher's CPU.
 | `async.opcode` | Native io_uring/AIO operation selector |
 | `async.user_data` | Application-supplied completion correlation value; not an identity guarantee |
 | `async.system` | NUL-terminated `io_uring` or `AIO` |
-| `async.flags` | Bit 0 payload gap, bit 1 unknown SQE producer, bit 2 retired without observed completion; upper 32 bits raw CQE flags |
+| `async.flags` | Bit 0 payload gap, bit 1 unknown SQE producer, bit 2 retired without observed completion, bit 3 SQE written by a thread of the submitting process (which thread is not known; guest series 0055); upper 32 bits raw CQE flags |
 | `async.submission` | Kernel-imported SQE or IOCB descriptor snapshot, native layout named in field metadata |
 | `async.payload.direction` | 1 input or 2 output |
 | `async.payload.requested_size` | Kernel-imported iterator extent, in bytes |

@@ -323,18 +323,16 @@ optional, so an older guest and an older host both keep working.
   (see Limits).
 * **Limits.** A request that never completed has no result and is shown as a call
   with no exit. Requests that an SQPOLL thread submitted on behalf of the ring's
-  creator have no submitting call to attach to, and are not read. Operations that touch no file (sockets, timeouts, polls) are not
-  mapped. `SPLICE`, `TEE`, `FSYNC` and extended-attribute requests are not mapped.
-  The io_uring rename, link and unlink identity comes from a lookup just before
-  the operation, so a name changed in between is identified as it was at the
-  lookup. A core of a process whose leader left first is Partial for the
+  creator are read since the trace follow-ups (below). Operations that touch no
+  file (sockets, timeouts, polls) are not mapped, nor is `TEE` (pipes only).
+  The io_uring rename, link and unlink identity came from a lookup just before
+  the operation; since series 0057 the operation publishes it (trace
+  follow-ups, below). A core of a process whose leader left first is Partial for the
   leader's missing registers, as before. Past 100,000 file requests a scan
   stops reading them and the coverage line says so. On a guest with more than
-  one vCPU, a record a worker publishes after a call (an unlink's content hash)
-  can be saved ahead of calls made before it, and the archive orders a call by
-  its first saved record, so a file's lifecycle can list such a step early
-  (found with `uring-check record` on two vCPUs; it predates this work and is
-  not changed here).
+  one vCPU, a record a worker published after a call (an unlink's content hash)
+  could be saved ahead of calls made before it; the host now reads the vCPUs'
+  rings merged by guest time (trace follow-ups, below).
 
 ### Accepted tracer and reconnect gaps (0.7.0)
 
@@ -562,7 +560,7 @@ cargo run --release --locked -j 2 -p antinomie-monitor-core --example conformanc
   child's first literal) are read again at exit since series 0053 (next
   section); what the call never reads stays NOT_RESIDENT. The ioctl argument is
   decoded for terminal requests only.
-  Directory removal publishes no file identity. Rows without an entry point have
+  Directory removal publishes its identity since series 0054. Rows without an entry point have
   positional argument names.
 
 ### VM regression tiers (0.7.0)
@@ -627,6 +625,107 @@ Once a check's result is recorded, its VM disks, recordings and private folders 
 deleted (logs, `results.json`, the report and the conformance reports stay);
 `--keep-data` keeps them. `tracer-qa` reads `tracer-record`'s recordings, which go
 after it; rerun `tracer-record` with `--keep-data` before running `tracer-qa` alone.
+
+### Trace follow-ups: io_uring, ordering, saving under load, Stop (0.7.0)
+
+Guest series 0054-0057; the contract stays at revision 17 and every addition is
+optional (an older guest and an older host keep working).
+
+* **SQPOLL requests in Triage.** An SQPOLL ring's `iou-sqp` thread (and a
+  process the ring was passed to) submits with no call of the creator: the
+  guest attributes the requests to the creator's task with call id 0 (contract
+  14.3). `Recording::attributed_async_page_cancellable` reads that key; the scan
+  (`triage/async_files.rs`, `Attributed`) reads it once per task after its
+  first successful `io_uring_setup`, turns the requests into calls with the
+  creator's identity (its descriptors; the setup call as evidence) and holds
+  each until the walk reaches the request's time.
+* **More requests read as calls.** `FSYNC` (fsync, or fdatasync with
+  `IORING_FSYNC_DATASYNC`), `SYNC_FILE_RANGE`, `SPLICE` (input from
+  `splice_fd_in`, a registered input names no descriptor; the request's offsets
+  are values, so the call has no offset pointers), `FSETXATTR`, `SETXATTR`,
+  `FGETXATTR`, `GETXATTR` (name, value and path from the recorded operands).
+  The guest (0054) attaches the file identity (ISSUE) to `SPLICE`, `FSETXATTR`
+  and `FGETXATTR` too; one end of a splice is a pipe, so the file end is named.
+* **Directory removal (0054).** `do_rmdir` holds the directory's inode across
+  `vfs_rmdir` (which takes it off the dentry) and publishes `lifecycle.file_id`
+  kind UNLINK, directory, no link left; an io_uring `UNLINKAT` with
+  `AT_REMOVEDIR` says no link is left. Triage already routes a removal by
+  identity, so a removed directory is one file entry known by its inode.
+* **io_uring rename, link and unlink identity (0057).** The lookup just
+  before the operation gave the link count the operation would leave; two
+  `UNLINKAT`s of one file's two names, run side by side on four vCPUs, both
+  saw two links and both said one remains, so the file was never deleted in
+  Triage (found by `uring-check record` on four vCPUs). The worker marks the
+  request it runs (`ant_async_target`) around `do_renameat2`, `do_linkat`,
+  `do_unlinkat` and `do_rmdir`, and the identity they publish when they
+  succeed becomes the request's operand, with the count actually left.
+* **Process-level attribution (0055).** Every io_uring submission used to carry
+  `ANT_ASYNC_PRODUCER_UNKNOWN` and make the run OBSERVATION_INCOMPLETE, so no
+  io_uring run was ever ASYNC_COMPLETE. A process writes a ring's entries and
+  moves its tail only through a mapping of them: when the entry's page and the
+  ring's first page are each mapped by at most one user page table, the entry
+  was written by a thread of the submitting process (`ANT_ASYNC_PRODUCER_PROCESS`,
+  `async.flags` bit 3) and the run stays complete. A ring kept across a fork,
+  mapped by another process or twice by one, an SQPOLL ring and submissions
+  from outside the creator's process stay unknown. Specified in
+  `native-schema-slices.md` 14.3 and `run-status.md`.
+* **Run notes (host).** Lost observations (count above 0) are the note "Async
+  observation lost N records" and the health panel's "Runs with async
+  observation loss"; OBSERVATION_INCOMPLETE alone is the muted note "Uses
+  io_uring: which task submitted each request is not proven …; nothing was
+  lost", not loss. A saved run's old note with count 0 reads as the new one
+  (`run_note_text`).
+* **Async records under load (0056).** The publisher waited up to 10 ms before
+  each record while its CPU's ring was more than half full, about 100 records
+  a second on a busy guest, and the staging queue (1,024 records) overflowed:
+  ant-torture `--only async-io --level light` counted 10,256 async observation
+  losses alone and 10,393 beside the other load modules (7,355 staged packets
+  failed; 79 of 640 requests saved). In never-drop mode it now keeps an
+  eighth of the ring spare, and a task that may sleep waits up to a second
+  for staging room instead of losing the record (`ant_send_waits()`, a new
+  transport guest call). After: 0 losses, 0 staging failures, all 642
+  requests with their final records. Interrupt completions and callers
+  holding a lock still cannot wait; their losses are counted.
+* **Record order across vCPUs.** The host read the per-CPU rings in turn, so a
+  record could be saved ahead of earlier records of another vCPU (a task that
+  moved, a hash worker publishing for an unlink) and a file's lifecycle listed
+  a step early. `ant_read_ordered()` (host transport) takes the ring head with
+  the smallest guest timestamp (`timestamp_ns`, one clock for every vCPU), so
+  the rings are merged in time. A record can still come after a later one if
+  its sender had not published it yet (waiting for room). `uring-check record`
+  runs on four vCPUs.
+* **Saving under load.** A raw block or object chunk the writer's full queue
+  (256 MiB) could not take stopped the recording for good and every later
+  packet was a storage drop; on this shared host even stress-heavy lost its
+  recording that way (6,428,035 storage drops after 870 MiB), and
+  stress-extreme lost 9.9 million packets (measured by the conformance work). A
+  block that does not fit now stays buffered, and while the queue holds more
+  than half its limit the transport thread takes no telemetry, so the guest's
+  sends wait (never-drop mode). If the disk stalls longer than the guest's
+  longest send wait (5 s by default), the guest drops what it cannot hold,
+  and those drops are counted exactly; `Health::writer_held_ns` and
+  `writer_held_longest_ns` say how long telemetry was held back. After, on the
+  same host under a load average of 10-12 from other work: stress-heavy saves
+  every packet but 9 of 11.5 million (telemetry held 54 s in all, at most
+  20 s), and stress-extreme runs its 1,057 s whole, saving until the suite's
+  8 GiB recording quota (19.6 million packets saved, 32 transport drops, held
+  46 s in all, at most 17 s; the 19.7 million packets after the quota are the
+  quota's, counted as such). A trace page whose previews would pass 64 MiB
+  now ends early instead of failing.
+* **Stop after heavy file churn.** The guest writes back its page cache before
+  it powers off (`ksys_sync` in the SHUTDOWN handler); after ant-torture's
+  file churn on a busy host that took 55 s, so the 10 s shutdown timeout
+  forced the VM off and marked the capture forced. Stop polls QEMU's
+  `query-blockstats`; while the guest's disk writes grow, the deadline moves
+  to a timeout after the last write seen, up to 300 s
+  (`backend/worker_vm.rs`, `Writeback`).
+* **Verification.** `uring-check record` on four vCPUs with the stories
+  `sqfiles` and `morefiles` and `recorded_uring_triage`; conformance groups
+  `ring-private`, `ring-shared`, `ring-sqpoll` (attribution) and the
+  directory removal cases of `user`; unit tests of the request mapping, the
+  attributed reader and hold, the ordered read (host simulator in
+  `tests/monitor/transport-reconnect.c`), the writer hold, budgeted pages and
+  the Stop deadline.
 
 ### Accepted ANT-T0097 host UI performance (0.6.2)
 
@@ -979,7 +1078,8 @@ remain in the boot's raw archives. A cookie nobody claims disappears.
 ## Recording disk work off the transport thread (0.6.2)
 
 The thread that drains telemetry and serves commands never waits for the
-disk. Run, Upload, Stop and snapshots are answered while a recording saturates
+disk. When the recording writer falls behind, it stops taking telemetry
+instead (the guest waits for room; trace follow-ups, 0.7.0). Run, Upload, Stop and snapshots are answered while a recording saturates
 the disk.
 
 | Write | Where it happens | Durability |
