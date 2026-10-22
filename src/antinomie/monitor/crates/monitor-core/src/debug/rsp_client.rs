@@ -202,6 +202,10 @@ pub(super) struct Client {
     /// Hg: the thread of g, m, Z and the other requests of the "general" thread.
     pub(super) general: Sel,
     pub(super) last_reply: Vec<u8>,
+    /// The last packet received, and whether the client has acknowledged a
+    /// reply since: a copy that comes before that is a retransmission.
+    pub(super) last_packet: Option<Vec<u8>>,
+    pub(super) client_acked: bool,
     /// All-stop: the target was resumed and a stop reply is owed.
     pub(super) waiting: bool,
     /// Non-stop notifications waiting for their turn, and the one sent.
@@ -230,6 +234,8 @@ impl Client {
             nonstop: false,
             general: Sel::NONE,
             last_reply: Vec::new(),
+            last_packet: None,
+            client_acked: false,
             waiting: false,
             queue: VecDeque::new(),
             held: None,
@@ -415,7 +421,11 @@ impl<W: Wire> Session<'_, W> {
             Err(error) => return Ok(Some(Outcome::ClientGone(error.to_string()))),
         };
         match self.client.framer.feed(byte) {
-            None | Some(Incoming::Ack) => Ok(None),
+            None => Ok(None),
+            Some(Incoming::Ack) => {
+                self.client.client_acked = true;
+                Ok(None)
+            }
             Some(Incoming::Nack) => {
                 let again = self.client.last_reply.clone();
                 self.write(&again)?;
@@ -424,12 +434,34 @@ impl<W: Wire> Session<'_, W> {
             Some(Incoming::BadPacket) => Ok(Some(Outcome::ClientGone("bad packet".into()))),
             Some(Incoming::Interrupt) => self.interrupted(),
             Some(Incoming::Packet(payload)) => {
+                if self.retransmitted(&payload) {
+                    return Ok(None);
+                }
                 if !self.client.no_ack {
                     self.write(b"+")?;
                 }
                 self.dispatch(&payload)
             }
         }
+    }
+
+    /// Whether `payload` is a copy of the last packet that the client sent
+    /// again because our `+` was late: gdb waits its remote timeout (2 s by
+    /// default) for it, and a client queued behind another, or one whose
+    /// connect waits for the process to stop, can wait longer. A client in
+    /// acknowledgement mode sends nothing new before that `+`, so a copy that
+    /// comes before it has acknowledged our reply is not a new request;
+    /// answering it too would shift every later reply by one.
+    fn retransmitted(&mut self, payload: &[u8]) -> bool {
+        if !self.client.no_ack
+            && !self.client.client_acked
+            && self.client.last_packet.as_deref() == Some(payload)
+        {
+            return true;
+        }
+        self.client.last_packet = Some(payload.to_vec());
+        self.client.client_acked = false;
+        false
     }
 
     /// A non-stop client acknowledges its last notification with `vStopped` even

@@ -65,6 +65,11 @@ pub(super) enum Unavailable {
 /// The server speaks plain `target remote`, as `debug-check` drives gdb.
 /// `-nx` keeps the user's own gdbinit out of the session and debuginfod
 /// stays off, so gdb never goes to the network by itself.
+///
+/// gdb's remote timeout (2 s by default) is raised to [`REMOTE_TIMEOUT`]: a
+/// reply can wait for the guest that long on a busy host (a request is given
+/// 5 s, the link 15 s), and a gdb that times out asks for the reply again and
+/// then reads each later reply as the answer to the request before it.
 pub(super) fn launch(
     flavour: GdbFlavour,
     port: u16,
@@ -78,6 +83,7 @@ pub(super) fn launch(
             .join(package.id)
             .join(package.entry)
     });
+    let timeout = format!("set remotetimeout {REMOTE_TIMEOUT}");
     let connect = format!("target remote 127.0.0.1:{port}");
     let env = vec![("TERM", "xterm-256color"), ("DEBUGINFOD_URLS", "")];
     match flavour {
@@ -94,6 +100,8 @@ pub(super) fn launch(
                     "-q".into(),
                     "-x".into(),
                     script.display().to_string(),
+                    "-ex".into(),
+                    timeout,
                     "-ex".into(),
                     connect,
                 ],
@@ -113,7 +121,14 @@ pub(super) fn launch(
                 .ok_or(Unavailable::NoFlavour(flavour))?;
             Ok(Launch {
                 program,
-                args: vec!["-nx".into(), "-q".into(), "-ex".into(), connect],
+                args: vec![
+                    "-nx".into(),
+                    "-q".into(),
+                    "-ex".into(),
+                    timeout,
+                    "-ex".into(),
+                    connect,
+                ],
                 env,
                 // The portable launcher warns about these.
                 env_remove: vec!["LD_LIBRARY_PATH", "LD_PRELOAD"],
@@ -128,6 +143,9 @@ pub(super) fn launch(
 
 /// The home folder the pwndbg console runs with, under the tools folder.
 const CONSOLE_HOME: &str = ".console-home";
+
+/// Seconds gdb waits for a reply of the session's server.
+const REMOTE_TIMEOUT: u32 = 30;
 
 /// `gdb` in `PATH`, as a shell would find it.
 pub(super) fn find_gdb() -> Option<PathBuf> {
@@ -469,6 +487,8 @@ mod tests {
                 "-x",
                 "/data/tools/gef/gef.py",
                 "-ex",
+                "set remotetimeout 30",
+                "-ex",
                 "target remote 127.0.0.1:40123"
             ]
         );
@@ -494,7 +514,14 @@ mod tests {
         assert_eq!(managed.program, Path::new("/data/tools/pwndbg/bin/pwndbg"));
         assert_eq!(
             managed.args,
-            ["-nx", "-q", "-ex", "target remote 127.0.0.1:7"]
+            [
+                "-nx",
+                "-q",
+                "-ex",
+                "set remotetimeout 30",
+                "-ex",
+                "target remote 127.0.0.1:7"
+            ]
         );
         assert!(managed.env_remove.contains(&"LD_LIBRARY_PATH"));
         // No system gdb is needed: the portable build has its own.

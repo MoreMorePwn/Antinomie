@@ -16,6 +16,10 @@
 //! breakpoint and reaches it, steps, detaches, and closes the console: the
 //! program then runs on to its own end. pwndbg is the managed portable copy
 //! and then, when the host has one, the system pwndbg the app prefers.
+//!
+//! A new session's pane starts gdb by itself. Debug on start uses that gdb;
+//! the attach case presses Restart while it holds the session, so the new gdb
+//! connects while the old one is still leaving (it waits its turn).
 use super::*;
 use crate::app::debugger::{panes::Pane, GdbFlavour};
 use antinomie_monitor_core::GuestProcessIdentity;
@@ -109,7 +113,9 @@ fn gdb(app: &mut MonitorApp, ctx: &egui::Context, line: &str, needles: &[&str]) 
     let new = text.get(before..).unwrap_or("").to_owned();
     assert!(
         found,
-        "after {line:?} wanted {needles:?}; gdb printed:\n{new}"
+        "after {line:?} wanted {needles:?}; gdb printed:\n{new}\n\
+         the whole console:\n{text}\nthe debug session: {:?}",
+        app.snapshot.debug
     );
     println!("GDB {line:?} -> {} bytes, found {needles:?}", new.len());
     new
@@ -168,16 +174,19 @@ fn launch(
 }
 
 /// One console session on the live debug session: registers, memory, a
-/// software breakpoint at `stop`, steps, detach, close.
+/// software breakpoint at `stop`, steps, detach, close. With `restart` the
+/// pane's gdb is replaced by a new one first.
 fn console_session(
     app: &mut MonitorApp,
     ctx: &egui::Context,
     flavour: GdbFlavour,
     stop: u64,
     run: &str,
+    restart: bool,
 ) {
-    app.settings.debugger.gdb_flavour = flavour;
-    app.debugger.console.restart();
+    if restart {
+        app.debugger.console.restart();
+    }
     let prompt = match flavour {
         GdbFlavour::Gef => "gef",
         GdbFlavour::Pwndbg => "pwndbg>",
@@ -186,10 +195,18 @@ fn console_session(
         let text = app.debugger.console.transcript();
         text.contains("Remote debugging using") && text.contains(prompt)
     });
+    let transcript = app.debugger.console.transcript();
     assert!(
-        connected,
-        "{flavour:?} did not connect; it printed:\n{}",
-        app.debugger.console.transcript()
+        connected
+            && ![
+                "Remote replied unexpectedly",
+                "Remote connection closed",
+                "packet error"
+            ]
+            .iter()
+            .any(|error| transcript.contains(error)),
+        "{flavour:?} did not connect; it printed:\n{transcript}\nthe debug session: {:?}",
+        app.snapshot.debug
     );
     println!("CONSOLE {flavour:?} connected");
     // Registers and memory, as the front end shows them.
@@ -310,7 +327,12 @@ fn debugger_console_live() {
         disk_gib: 1,
         ..Default::default()
     }));
-    assert!(pump(&mut app, &ctx, 20, |app| !app.snapshot.vms.is_empty()));
+    // The first VM of a data folder imports the base into it (about 20 s on
+    // a slow disk).
+    assert!(pump(&mut app, &ctx, 120, |app| !app
+        .snapshot
+        .vms
+        .is_empty()));
     let vm_id = app.snapshot.vms[0].id.clone();
     app.selected = Some(vm_id.clone());
     app.send(Command::Start {
@@ -336,6 +358,7 @@ fn debugger_console_live() {
     }
     for (flavour, system) in passes {
         SYSTEM_PWNDBG.store(system, std::sync::atomic::Ordering::Relaxed);
+        app.settings.debugger.gdb_flavour = flavour;
         println!(
             "PASS {flavour:?}{}",
             if system { " (system pwndbg)" } else { "" }
@@ -346,7 +369,7 @@ fn debugger_console_live() {
             identity: identity.unwrap(),
         });
         assert!(pump(&mut app, &ctx, 30, |app| app.snapshot.debug.is_some()));
-        console_session(&mut app, &ctx, flavour, hw_code, &run);
+        console_session(&mut app, &ctx, flavour, hw_code, &run, true);
         end_session(&mut app, &ctx);
         app.send(Command::Signal {
             run_id: run.clone(),
@@ -355,7 +378,7 @@ fn debugger_console_live() {
         // Debug on start: the program is parked before its first instruction.
         let (run, _) = launch(&mut app, &ctx, &["start", "40"], true);
         assert!(pump(&mut app, &ctx, 30, |app| app.snapshot.debug.is_some()));
-        console_session(&mut app, &ctx, flavour, main, &run);
+        console_session(&mut app, &ctx, flavour, main, &run, false);
         // It runs on to its own end once the console is gone.
         let ended = pump(&mut app, &ctx, 60, |app| {
             matches!(
@@ -380,8 +403,10 @@ fn debugger_console_live() {
     pump(&mut app, &ctx, 60, |app| {
         app.snapshot.state == VmState::Stopped
     });
-    // GEF saves gdb's history in the working directory, as gdb does.
-    if !history_before {
-        let _ = std::fs::remove_file(".gdb_history");
-    }
+    // gdb's history goes to the console's home (pwndbg) or the user's (GEF),
+    // never to the app's working directory.
+    assert!(
+        history_before || !std::path::Path::new(".gdb_history").exists(),
+        "a console saved gdb's history in the working directory"
+    );
 }
