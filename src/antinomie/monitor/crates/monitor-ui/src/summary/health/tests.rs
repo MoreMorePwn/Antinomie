@@ -206,3 +206,21 @@ fn guest_hash_and_credential_drops_count_as_observed_loss() {
         "Loss observed"
     );
 }
+
+#[test]
+fn the_writer_hold_time_is_shown_only_when_there_was_one() {
+    let mut health = Health::default();
+    assert_eq!(held_text(&health), None);
+    health.writer_held_ns = 2_500_000_000;
+    health.writer_held_longest_ns = 1_200_000_000;
+    assert_eq!(
+        held_text(&health).as_deref(),
+        Some("2.5 s in all, 1.2 s at the longest")
+    );
+    health.writer_held_ns = 4_000_000;
+    health.writer_held_longest_ns = 3_000_000;
+    assert_eq!(
+        held_text(&health).as_deref(),
+        Some("4 ms in all, 3 ms at the longest")
+    );
+}

@@ -125,8 +125,32 @@ pub(crate) fn notices(snapshot: &Snapshot, history: &[RunSummary]) -> Vec<String
     facts.messages(snapshot).collect()
 }
 
+/// How long telemetry was held back because the recording writer was behind
+/// the disk (the guest's sends waited meanwhile): the total and the longest
+/// single hold. `None` while it never happened.
+pub(super) fn held_text(health: &Health) -> Option<String> {
+    (health.writer_held_ns > 0).then(|| {
+        let show = |ns: u64| {
+            if ns >= 1_000_000_000 {
+                format!("{:.1} s", ns as f64 / 1e9)
+            } else {
+                format!("{} ms", ns.div_ceil(1_000_000))
+            }
+        };
+        format!(
+            "{} in all, {} at the longest",
+            show(health.writer_held_ns),
+            show(health.writer_held_longest_ns.max(1))
+        )
+    })
+}
+
 pub(super) fn details(ui: &mut egui::Ui, health: &Health) {
     for (label, value) in [
+        (
+            "Telemetry held back for the writer",
+            held_text(health).unwrap_or_else(|| "never".into()),
+        ),
         ("Packets persisted", health.persisted_packets.to_string()),
         ("Write backlog", super::size(health.write_backlog)),
         ("Parser errors", health.parser_errors.to_string()),

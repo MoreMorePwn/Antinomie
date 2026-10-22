@@ -465,6 +465,15 @@ pub(crate) fn show(
                         );
                     }
                 });
+                if let Some(held) = health::held_text(&snapshot.health) {
+                    ui.colored_label(
+                        theme::muted(),
+                        format!("Telemetry held back for the writer: {held}"),
+                    )
+                    .on_hover_text(
+                        "The recording writer was behind the disk, so the host took no telemetry and the guest's sends waited. Nothing was dropped by this.",
+                    );
+                }
                 if snapshot.health.shedding {
                     crate::activity::warning(
                         ui,
