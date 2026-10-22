@@ -85,9 +85,18 @@ struct PacketList {
     counts: Option<(usize, Counts)>,
 }
 
+/// The packet rows in the order the Packets header chose, kept until the sort,
+/// the rows or the page change so a long capture is not sorted every frame.
+#[derive(Default)]
+struct PacketOrder {
+    key: Option<(crate::triage::SortSpec, usize, usize, u64, bool)>,
+    rows: Vec<usize>,
+}
+
 #[derive(Default)]
 pub(crate) struct NetworkView {
     list: PacketList,
+    packet_order: PacketOrder,
     filter: String,
     /// Last filter that parsed. Packet rows are built from this, not from an
     /// invalid expression still sitting in the box.

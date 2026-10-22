@@ -1174,3 +1174,47 @@ fn the_details_pane_draws_tshark_lines_and_marks_the_bytes_of_the_clicked_one() 
     let shown = details_frame(&mut view, &ctx, Vec::new());
     assert!(find(&shown, "40 bytes").is_some(), "{shown:?}");
 }
+
+#[test]
+fn packet_rows_sort_by_every_header_column_and_keep_ties_in_order() {
+    use super::packets::ordered_rows;
+    use crate::triage::SortSpec;
+    let mut packets = vec![
+        packet("TCP", "10.0.2.15:40000", "1.2.3.4:80"),
+        packet("DNS", "10.0.2.3:53", "10.0.2.15:5353"),
+        packet("ARP", "", ""),
+    ];
+    for (index, (number, time, length)) in [(1, 30, 60), (2, 10, 120), (3, 20, 60)]
+        .into_iter()
+        .enumerate()
+    {
+        packets[index].number = number;
+        packets[index].time_us = time;
+        packets[index].length = length;
+    }
+    let rows = [0, 1, 2];
+    let by =
+        |column, descending| ordered_rows(&rows, &packets, Some(SortSpec { column, descending }));
+    assert_eq!(ordered_rows(&rows, &packets, None), [0, 1, 2]);
+    assert_eq!(by(0, true), [2, 1, 0]);
+    assert_eq!(by(1, false), [1, 2, 0]);
+    // Addresses by IP; a packet without one is last when ascending.
+    assert_eq!(by(2, false), [1, 0, 2]);
+    assert_eq!(by(3, false), [0, 1, 2]);
+    assert_eq!(by(4, false), [2, 1, 0]);
+    // Equal lengths keep the capture order.
+    assert_eq!(by(5, false), [0, 2, 1]);
+    assert_eq!(by(6, false), [2, 1, 0]);
+    // A filtered subset sorts as itself.
+    assert_eq!(
+        ordered_rows(
+            &[2, 0],
+            &packets,
+            Some(SortSpec {
+                column: 1,
+                descending: false
+            })
+        ),
+        [2, 0]
+    );
+}
