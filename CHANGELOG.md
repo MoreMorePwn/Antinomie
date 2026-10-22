@@ -6,6 +6,10 @@ it runs.
 
 ## 0.7.0 — Unreleased
 
+- **VM check recovery.** Debugger tool copies are staged and published only
+  after completion. Resuming an interrupted regression run replaces an unmarked
+  partial copy instead of starting pwndbg with a missing runtime library.
+
 - **Host licensing.** Original application, host transport, tooling, tests and
   product documentation use GPL-3.0-only from 0.7.0. Earlier releases remain MIT.
   Shared headers compiled into the kernel remain MIT; kernel patches, kernel

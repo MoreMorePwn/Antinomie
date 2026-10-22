@@ -1,6 +1,6 @@
 Upstream crate: tinyzip 0.4.0
 Declared license: MIT
-Declared authors: 
+Declared authors: none supplied
 Source: https://crates.io/crates/tinyzip/0.4.0
 
 The published crate supplies no explicit copyright notice in its source headers. Author and license declarations above are retained without inventing an owner or year.
