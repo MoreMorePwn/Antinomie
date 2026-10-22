@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
 //! The RSP server: a loopback Unix socket and an ephemeral 127.0.0.1 TCP port,
-//! one client at a time, driving the `gdbstub` state machine against a
-//! `DebugBackend`. It never binds a non-loopback address. A client that goes
-//! away (or detaches) leaves the process running: breakpoints are removed and
-//! the group resumed, and the server keeps listening until it is shut down.
+//! one client at a time, driving the project's own RSP implementation
+//! (`rsp_client`) against a `DebugBackend`. It never binds a non-loopback
+//! address. A client that goes away (or detaches) leaves the process running:
+//! breakpoints are removed and the group resumed, and the server keeps
+//! listening until it is shut down.
 use super::{
     debugger::{AdoptedChild, Debugger},
     inferior::RunState,

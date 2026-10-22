@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! The RSP server against a mock backend, over its real Unix socket and TCP
 //! port. Packets are written by hand so these tests pin the exact replies a
-//! debugger sees, independent of gdbstub's own packet code.
+//! debugger sees, independent of the server's own packet code.
 use crate::debug::{
     ArchTag, BreakpointKind, DebugBackend, DebugCaps, DebugError, DebugServer, DetachMode,
     RegsetBlob, RegsetInfo, ResumeAction, StopEvent, StopKind, TargetState, ThreadInfo,

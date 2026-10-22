@@ -3,12 +3,10 @@
 //! each call's result, and how the call reached the file.
 //!
 //! One call can belong to several categories (an `open` with `O_CREAT|O_TRUNC`
-//! that made the file is Opened, Created and Truncated). The classification
-//! reads the call and the path state before that call is tracked.
-//!
-//! TODO(io_uring): `IORING_OP_OPENAT`, `WRITE`, `UNLINKAT`, `RENAMEAT` and
-//! friends are not mapped. The saved async observations carry no decoded
-//! opcode, path or descriptor fields that this index could classify.
+//! that made the file is Opened and Created; a create is not also Truncated).
+//! The classification reads the call and the path state before that call is
+//! tracked. io_uring requests are mapped to the calls they stand for in
+//! `async_files`.
 use super::file_location::{self, Location};
 use super::sigma_events::{O_CREAT, O_TMPFILE, O_TRUNC};
 use super::*;
