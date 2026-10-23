@@ -37,6 +37,10 @@ pub(in crate::triage) struct Output {
     pub tasks: Suspicious,
 }
 
+/// Where the host uploads the resource collector of a base from before 0.7.0; the
+/// rest of the name is random for each launch.
+const COLLECTOR: &str = "/tmp/.antinomie-resource-";
+
 /// Rows held before the caps are applied; past it matches are only counted.
 const ROWS_HELD: usize = 200_000;
 
@@ -78,6 +82,15 @@ impl Engine {
             return;
         };
         let cx = Ctx::new(call, event, files, directory, via_async);
+        // Antinomie's own resource collector (bases from before 0.7.0) is not the sample's.
+        let ours = |path: &str| path.starts_with(COLLECTOR);
+        if cx.image.is_some_and(ours) || cx.exec_path().is_some_and(|path| ours(&path)) {
+            self.state.app_tasks.insert(call.task_cookie);
+        }
+        if self.state.app_tasks.contains(&call.task_cookie) {
+            self.state.track(&cx);
+            return;
+        }
         let mut hits = collect_hits(&cx, &mut self.state);
         // One call is one occurrence of a rule on an object, however many ways it touched it.
         let mut seen = std::collections::BTreeSet::new();
@@ -345,7 +358,7 @@ impl Engine {
                 output.badge += 1;
             }
             let row = rows::finding(agg);
-            if !agg.hidden() && agg.tier != Tier::Info {
+            if !agg.hidden() && agg.tier != Tier::Info && agg.cookie != 0 {
                 tally(&mut output.tasks, &row.values);
             }
             output.rows.push(row);

@@ -435,3 +435,52 @@ fn the_tiers_match_the_classification_counts_of_the_rules_implemented() {
         Category::ALL.len()
     );
 }
+
+/// Cost of the rules on a large run of ordinary calls, printed for a human to read.
+#[test]
+#[ignore = "measures time; run with --ignored --nocapture"]
+fn the_rules_cost_little_on_a_large_ordinary_run() {
+    let mut calls = Vec::new();
+    for n in 0..60_000u64 {
+        let pid = 1 + (n % 40) as u32;
+        calls.push(open_read(
+            pid,
+            &format!("/usr/lib/x86_64-linux-gnu/lib{}.so", n % 300),
+            3,
+        ));
+        calls.push(read(pid, 3, b"\x7fELF\x02\x01\x01"));
+        calls.push(mmap(pid, 5, 0x802, 0x7000));
+        calls.push(sys(pid, 202, "futex", [0; 6], 0));
+        calls.push(close(pid, 3));
+    }
+    let count = calls.len();
+    let start = std::time::Instant::now();
+    let out = run_with(calls, Options::default());
+    let rules = start.elapsed();
+    eprintln!(
+        "{count} calls in {rules:?}: {:?} per call; {} rows",
+        rules / count as u32,
+        out.rows.len()
+    );
+    assert!(out.rows.len() < 100);
+}
+
+#[test]
+fn the_resource_collector_of_an_older_base_is_antinomie_s_not_the_sample_s() {
+    let collector = "/tmp/.antinomie-resource-abc123def456";
+    let out = run(vec![
+        exec(9, collector, &["res"]),
+        open_read(9, "/proc/meminfo", 3),
+        unlink(9, collector),
+        stat(9, "/sys/fs/selinux", 0),
+    ]);
+    assert!(out.rows.is_empty(), "{:?}", rules_of(&out));
+    assert_eq!(out.tiers[3], 0);
+    // The same behaviour from a program of the run is reported.
+    let sample = run(vec![
+        exec(9, "/tmp/.other", &["x"]),
+        unlink(9, "/tmp/.other"),
+    ]);
+    assert!(has(&sample, "evasion.self_delete"));
+    assert!(has(&sample, "execution.temp_exec"));
+}

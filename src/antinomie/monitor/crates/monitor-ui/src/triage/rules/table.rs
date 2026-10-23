@@ -136,6 +136,10 @@ const CAPTURE: &[&str] = &[
     "ping",
     "arping",
 ];
+/// Programs that rebuild the linker cache and library paths as their job.
+const LINKER: &[&str] = &[
+    "ldconfig", "dpkg", "apt", "apt-get", "rpm", "dnf", "yum", "pacman", "apk",
+];
 const SERVICES: &[&str] = &[
     "systemd",
     "dbus-daemon",
@@ -273,7 +277,8 @@ pub(in crate::triage) const SPECS: &[Spec] = &[
         T::Medium,
         C::Injection,
         &["T1574.006"],
-    ),
+    )
+    .allow(LINKER),
     // Persistence
     rule(
         "persistence.cron",

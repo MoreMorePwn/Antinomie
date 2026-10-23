@@ -214,14 +214,16 @@ impl<'a> Ctx<'a> {
             .filter(|touch| matches!(touch.op, Op::Opened | Op::Probed | Op::Read | Op::Executed))
     }
 
-    /// The path an exec named.
+    /// The path an exec named, resolved against the working directory when it can be.
     pub(super) fn exec_path(&self) -> Option<String> {
         if !self.is_exec() {
             return None;
         }
-        path_list(self.call)
-            .into_iter()
-            .next()
+        self.touches()
+            .iter()
+            .find(|touch| touch.op == Op::Executed)
+            .map(|touch| touch.path.clone())
+            .or_else(|| path_list(self.call).into_iter().next())
             .or_else(|| kernel_records::exec_image(self.call).and_then(|image| image.path))
     }
 

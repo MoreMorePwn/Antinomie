@@ -180,7 +180,7 @@ fn looking_for_security_software_is_medium_even_when_it_is_absent() {
             "discovery.security_software"
         )
         .as_deref(),
-        Some("low")
+        Some("info")
     );
     assert!(!has(
         &run(vec![stat(1, "/usr/bin/ls", 0)]),

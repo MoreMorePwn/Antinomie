@@ -371,10 +371,8 @@ pub(super) fn rules(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
     for touch in cx.changes() {
         changed_matched |= changed(cx, st, touch, out);
     }
-    if cx.ok || cx.failed || cx.ret.is_none() {
-        for touch in cx.removes() {
-            removed(cx, st, touch, out);
-        }
+    for touch in cx.removes() {
+        removed(cx, st, touch, out);
     }
     for touch in cx.reads() {
         read(cx, st, touch, out);
@@ -409,13 +407,11 @@ fn other_calls(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
             } else {
                 (cx.args[0], cx.args[2])
             };
-            if let (Some(file), Some(socket)) = (cx.fd_path(from), cx.socket(to)) {
+            if let (Some(file), Some(_)) = (cx.fd_path(from), cx.socket(to)) {
                 if file.starts_with('/') && !file.starts_with("/proc/") {
-                    let secret = !file_location::classify(file, &[]).is_empty()
-                        && file_location::classify(file, &[])
-                            .iter()
-                            .any(|class| class.flagged());
-                    let _ = socket;
+                    let secret = file_location::classify(file, &[])
+                        .iter()
+                        .any(|class| class.flagged());
                     let mut hit = Hit::new(
                         "exfil.file_to_socket",
                         file,
@@ -546,9 +542,11 @@ fn changed(cx: &Ctx, st: &mut State, touch: &Touch, out: &mut Vec<Hit>) -> bool 
         out.push(hit);
         matched = true;
     }
-    if let Some(hit) = system_file(cx, touch) {
-        out.push(hit);
-        matched = true;
+    if !matched {
+        if let Some(hit) = system_file(cx, touch) {
+            out.push(hit);
+            matched = true;
+        }
     }
     if touch.op == Op::Created {
         st.created(cx, path, out);
@@ -611,7 +609,19 @@ fn hidden_file(cx: &Ctx, touch: &Touch) -> Option<Hit> {
     }
     let path = touch.path.as_str();
     let name = base(path);
-    let odd = (name.starts_with('.') && name != "." && name != "..")
+    // Lock and marker files programs leave in these directories as a matter of course.
+    let routine = matches!(
+        name,
+        ".pwd.lock"
+            | ".updated"
+            | ".keep"
+            | ".gitkeep"
+            | ".placeholder"
+            | ".lock"
+            | ".gitignore"
+            | ".dockerenv"
+    );
+    let odd = (name.starts_with('.') && name != "." && name != ".." && !routine)
         && under(
             path,
             &[
@@ -801,8 +811,8 @@ fn look(cx: &Ctx, st: &mut State, touch: &Touch, out: &mut Vec<Hit>) {
                 path,
                 format!("{} looks for {path}", cx.name),
             )
-            .tier(super::Tier::Low)
-            .detail("An operating-system hardening path that ordinary programs also look at: LOW."),
+            .tier(super::Tier::Info)
+            .detail("An operating-system hardening path that libraries and ordinary programs also look at: INFO."),
         );
     }
     st.discovery(cx, path, touch, out);

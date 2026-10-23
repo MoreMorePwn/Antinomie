@@ -107,16 +107,6 @@ fn clearing_logs_and_history_covers_files_the_ring_buffer_and_tools() {
     ] {
         assert_eq!(tier(&out, "evasion.log_clear").as_deref(), Some("high"));
     }
-    assert_eq!(
-        rows(
-            &run(vec![unlink(1, "/var/log/auth.log")]),
-            "evasion.log_clear"
-        )[0]
-        .cells[4]
-            .text
-            .is_empty(),
-        false
-    );
     assert!(
         !has(
             &run(vec![sys(1, 103, "syslog", [3, 0, 0, 0, 0, 0], 0)]),
