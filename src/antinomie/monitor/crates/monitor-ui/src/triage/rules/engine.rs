@@ -294,7 +294,7 @@ impl Engine {
 
     /// Settle every row: scope, siblings, tiers, caps.
     pub(in crate::triage) fn finish(mut self, files: &FdState) -> Output {
-        let traced = std::mem::take(&mut self.state.probes.traced_exec);
+        let traced = self.state.probes.traced_exec.clone();
         if let Some((hit, number, capture, time)) = self.state.frames.nxdomain_hit.take() {
             if self.state.frames.resolver_answers {
                 let resolver = self.state.dns_task.clone();

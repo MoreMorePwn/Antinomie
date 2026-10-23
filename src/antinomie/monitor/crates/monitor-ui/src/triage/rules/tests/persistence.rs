@@ -41,7 +41,7 @@ fn every_persistence_path_has_its_rule_and_tier() {
             "high",
         ),
         (
-            "/home/u/.config/systemd/user/x.service",
+            "/home/user/.config/systemd/user/x.service",
             "persistence.systemd",
             "high",
         ),
@@ -59,7 +59,7 @@ fn every_persistence_path_has_its_rule_and_tier() {
             "medium",
         ),
         ("/root/.bashrc", "persistence.shell_profile", "medium"),
-        ("/home/u/.zshrc", "persistence.shell_profile", "medium"),
+        ("/home/user/.zshrc", "persistence.shell_profile", "medium"),
         ("/etc/profile.d/x.sh", "persistence.shell_profile", "medium"),
         (
             "/root/.ssh/authorized_keys",
@@ -72,7 +72,7 @@ fn every_persistence_path_has_its_rule_and_tier() {
             "high",
         ),
         (
-            "/home/u/.config/autostart/x.desktop",
+            "/home/user/.config/autostart/x.desktop",
             "persistence.xdg_autostart",
             "medium",
         ),
@@ -147,7 +147,7 @@ fn ordinary_configuration_is_low_and_the_specific_rules_do_not_double_count() {
     assert_eq!(rule_for("/etc/cron.d/x"), ["persistence.cron"]);
     assert!(rule_for("/tmp/data").is_empty());
     assert!(!has(
-        &run(writes("/home/u/notes.txt")),
+        &run(writes("/home/user/notes.txt")),
         "persistence.config_write"
     ));
 }

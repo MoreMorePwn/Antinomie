@@ -7,8 +7,8 @@ fn many_files_renamed_to_one_new_extension_is_a_ransomware_rewrite() {
         .map(|n| {
             rename(
                 1,
-                &format!("/home/u/doc{n}.txt"),
-                &format!("/home/u/doc{n}.txt.locked"),
+                &format!("/home/user/doc{n}.txt"),
+                &format!("/home/user/doc{n}.txt.locked"),
             )
         })
         .collect();
@@ -22,8 +22,8 @@ fn many_files_renamed_to_one_new_extension_is_a_ransomware_rewrite() {
         .map(|n| {
             rename(
                 1,
-                &format!("/home/u/d{n}.txt"),
-                &format!("/home/u/d{n}.locked"),
+                &format!("/home/user/d{n}.txt"),
+                &format!("/home/user/d{n}.locked"),
             )
         })
         .collect();
@@ -32,8 +32,8 @@ fn many_files_renamed_to_one_new_extension_is_a_ransomware_rewrite() {
         .map(|n| {
             rename(
                 1,
-                &format!("/home/u/a{n}.txt"),
-                &format!("/home/u/b{n}.txt"),
+                &format!("/home/user/a{n}.txt"),
+                &format!("/home/user/b{n}.txt"),
             )
         })
         .collect();
@@ -47,13 +47,13 @@ fn many_files_renamed_to_one_new_extension_is_a_ransomware_rewrite() {
 fn the_same_note_in_three_directories_is_a_ransom_note() {
     let note = |dir: &str| open_write(1, &format!("{dir}/README_DECRYPT.txt"), 3);
     let out = run(vec![
-        note("/home/u/a"),
-        note("/home/u/b"),
-        note("/home/u/c"),
+        note("/home/user/a"),
+        note("/home/user/b"),
+        note("/home/user/c"),
     ]);
     assert_eq!(tier(&out, "impact.ransom_note").as_deref(), Some("medium"));
     assert!(!has(
-        &run(vec![note("/home/u/a"), note("/home/u/b")]),
+        &run(vec![note("/home/user/a"), note("/home/user/b")]),
         "impact.ransom_note"
     ));
     let makefile = |dir: &str| open_write(1, &format!("{dir}/Makefile"), 3);
@@ -71,7 +71,7 @@ fn the_same_note_in_three_directories_is_a_ransom_note() {
 #[test]
 fn deleting_a_hundred_files_it_did_not_create_is_a_mass_delete() {
     let deletes: Calls = (0..120)
-        .map(|n| unlink(1, &format!("/home/u/dir{}/file{n}", n % 4)))
+        .map(|n| unlink(1, &format!("/home/user/dir{}/file{n}", n % 4)))
         .collect();
     assert_eq!(
         tier(&run(deletes), "impact.mass_delete").as_deref(),
@@ -84,7 +84,7 @@ fn deleting_a_hundred_files_it_did_not_create_is_a_mass_delete() {
     own.extend((0..120).map(|n| unlink(1, &format!("/tmp/w{}/f{n}", n % 4))));
     assert!(!has(&run(own), "impact.mass_delete"));
     let few: Calls = (0..20)
-        .map(|n| unlink(1, &format!("/home/u/f{n}")))
+        .map(|n| unlink(1, &format!("/home/user/f{n}")))
         .collect();
     assert!(!has(&run(few), "impact.mass_delete"));
 }
@@ -334,7 +334,7 @@ fn stopping_services_and_removing_recovery_are_medium() {
     for path in [
         "/var/backups/dpkg.status.0",
         "/backup1/db.tar",
-        "/home/u/file.bak",
+        "/home/user/file.bak",
     ] {
         assert!(
             has(&run(vec![unlink(1, path)]), "impact.inhibit_recovery"),
@@ -402,9 +402,9 @@ fn input_devices_the_screen_the_microphone_and_the_clipboard_are_collection() {
 #[test]
 fn archiving_home_data_into_a_staging_directory_is_medium() {
     for argv in [
-        vec!["tar", "czf", "/tmp/.a.tgz", "/home/u/Documents"],
+        vec!["tar", "czf", "/tmp/.a.tgz", "/home/user/Documents"],
         vec!["zip", "-r", "/dev/shm/x.zip", "/root/.ssh"],
-        vec!["7z", "a", "/tmp/x.7z", "/home/u"],
+        vec!["7z", "a", "/tmp/x.7z", "/home/user"],
     ] {
         let path = format!("/usr/bin/{}", argv[0]);
         assert_eq!(

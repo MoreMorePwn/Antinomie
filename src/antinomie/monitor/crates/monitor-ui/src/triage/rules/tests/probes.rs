@@ -458,3 +458,15 @@ fn the_probe_rows_belong_to_the_evasion_category_filter() {
         .filter(|row| view_keeps(&discovery, &row.values))
         .all(|row| text(row, "finding.category") == "discovery"));
 }
+
+#[test]
+fn a_debuggers_child_calling_traceme_before_its_exec_is_not_a_check() {
+    let out = run(vec![
+        sys(1, 101, "ptrace", [0; 6], 0),
+        exec(1, "/bin/true", &["true"]),
+    ]);
+    assert!(!has(&out, "evasion.traceme"));
+    assert!(!has(&out, "evasion.debugger_check"));
+    let alone = run(vec![sys(1, 101, "ptrace", [0; 6], 0)]);
+    assert!(has(&alone, "evasion.traceme") && has(&alone, "evasion.debugger_check"));
+}

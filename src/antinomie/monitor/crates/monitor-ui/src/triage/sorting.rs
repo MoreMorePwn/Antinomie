@@ -64,7 +64,7 @@ fn atom(header: &str, column: usize, row: &[Cell]) -> Atom {
     ) {
         return Atom::Missing;
     }
-    if header == "Severity" {
+    if header == "Severity" || header == "Tier" {
         if let Some(rank) = match cell.text.as_str() {
             "info" | "informational" => Some(0),
             "low" => Some(1),
@@ -504,5 +504,40 @@ mod tests {
             .unwrap();
         cancel.store(true, Ordering::Relaxed);
         assert!(matches!(cancelled.finish(), Err(error) if error.contains("cancelled")));
+    }
+
+    #[test]
+    fn findings_sort_by_tier_rank_and_by_count_as_numbers() {
+        use super::super::rules::tests::support::*;
+        let mut calls = vec![
+            open_write(1, "/etc/cron.d/a", 3),
+            exec(2, "/bin/sh", &["sh"]),
+        ];
+        calls.extend((0..12).map(|_| open_read(3, "/etc/os-release", 4)));
+        let out = run(calls);
+        let rows = out.rows;
+        let order = |column: usize, descending: bool| -> Vec<String> {
+            let mut request = ScanRequest::default();
+            request.sorts[0] = Some(Spec { column, descending });
+            let mut page = Page::<Finding>::new(&request, 0, &Arc::new(AtomicBool::new(false)));
+            for row in rows.iter().cloned() {
+                page.push(row).unwrap();
+            }
+            page.finish()
+                .unwrap()
+                .0
+                .iter()
+                .map(|row| row.cells[0].text.clone())
+                .collect()
+        };
+        // High, then low, then info; text order would put "info" before "low".
+        let high_first = order(1, true);
+        assert_eq!(high_first[..2], ["persistence.cron", "process.interpreter"]);
+        assert_eq!(
+            order(1, false)[..2],
+            ["process.exec", "discovery.system_info"]
+        );
+        // 12 is more than 2 even though "12" sorts before "2" as text.
+        assert_eq!(order(5, true)[0], "discovery.system_info");
     }
 }

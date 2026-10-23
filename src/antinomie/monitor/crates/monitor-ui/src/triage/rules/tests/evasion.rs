@@ -122,7 +122,7 @@ fn clearing_logs_and_history_covers_files_the_ring_buffer_and_tools() {
     );
     for out in [
         run(vec![unlink(1, "/root/.bash_history")]),
-        run(vec![open_truncate(1, "/home/u/.zsh_history", 3)]),
+        run(vec![open_truncate(1, "/home/user/.zsh_history", 3)]),
         run(vec![exec_env(
             1,
             "/bin/ls",
@@ -305,7 +305,7 @@ fn hidden_entries_immutable_files_hidden_processes_and_weakened_protections() {
     );
     assert!(
         !has(
-            &run(vec![open_write(1, "/home/u/.bashrc", 3)]),
+            &run(vec![open_write(1, "/home/user/.bashrc", 3)]),
             "evasion.hidden_artifact"
         ),
         "dotfiles in a home are normal"

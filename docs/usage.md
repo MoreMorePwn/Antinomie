@@ -119,6 +119,17 @@ packet history already has it, and specimen Content supports a byte-offset jump.
 - **Run History**: every run on the selected VM, including earlier boots, with
   its command line, user, status and exit code. Double-click a run to open its
   Triage view. Select a trace entry to inspect its recorded call details.
+- **Triage › Process › Suspicious activity**: behaviour recognised in the run's
+  calls, kernel records and packets. Each row has a tier (HIGH, MEDIUM, LOW;
+  INFO is only counted unless **Show INFO** is on), a category and an ATT&CK
+  reference. Repeats fold into one row with a count, a failed call or a program
+  that does the thing as its job lowers the tier by one, and **Details** says
+  why a row has its tier. The chips narrow the table by tier and category. A row
+  is something to look at, not a verdict. **Evasion** lists every anti-analysis
+  check the sample made through system calls (machine identity, CPU, MAC address,
+  uptime, `TracerPid`, container markers, long sleeps) with the answer the guest
+  gave, and a heuristic note on what the sample did in the next 30 seconds.
+  `CPUID` and `RDTSC` checks leave no system call and are not visible.
 - **Network**: select an ongoing or saved capture from capture history, or start
   one there. Protocol colors help scan the packets; click an address, protocol
   or port to filter it, or use the counted dropdowns. The packet list and the

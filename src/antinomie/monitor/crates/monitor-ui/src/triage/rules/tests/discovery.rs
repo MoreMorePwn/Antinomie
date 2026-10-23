@@ -109,7 +109,7 @@ fn system_details_users_and_network_configuration_are_context() {
 fn a_sweep_of_directories_and_a_search_for_keys_is_low() {
     let mut calls = Vec::new();
     for n in 0..250 {
-        calls.push(open_read(1, &format!("/home/u/d{n}"), 3));
+        calls.push(open_read(1, &format!("/home/user/d{n}"), 3));
         calls.push(sys(1, 217, "getdents64", [3, 0, 4096, 0, 0, 0], 100));
         calls.push(close(1, 3));
     }
@@ -120,7 +120,7 @@ fn a_sweep_of_directories_and_a_search_for_keys_is_low() {
     let few: Calls = (0..10)
         .flat_map(|n| {
             vec![
-                open_read(1, &format!("/home/u/d{n}"), 3),
+                open_read(1, &format!("/home/user/d{n}"), 3),
                 sys(1, 217, "getdents64", [3, 0, 4096, 0, 0, 0], 100),
             ]
         })

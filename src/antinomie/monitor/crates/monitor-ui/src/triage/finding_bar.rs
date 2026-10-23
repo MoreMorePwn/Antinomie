@@ -78,6 +78,18 @@ impl TriageView {
             view.show_hidden = !view.show_hidden;
             changed = true;
         }
+        if view.category_on(Category::Evasion) {
+            ui.add(
+                egui::Label::new(
+                    RichText::new(
+                        "Evasion lists the checks made through system calls and the answer each got. CPUID and RDTSC run inside the program and leave no call, so they are not visible here.",
+                    )
+                    .small()
+                    .color(theme::muted()),
+                )
+                .wrap(),
+            );
+        }
         if changed {
             self.scan_request.offsets[0] = 0;
             self.request_query_refresh();
