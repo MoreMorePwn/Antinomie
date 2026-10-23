@@ -89,6 +89,51 @@ fn all_and_large_pages_request_only_bounded_windows_and_reuse_cursors() {
 }
 
 #[test]
+fn unfinished_recordings_do_not_reuse_ranks_from_an_earlier_prefix() {
+    let mut app = app();
+    app.selected = Some("vm".into());
+    let mut past = run("growing");
+    past.state = RunState::Unknown;
+    app.history.push(past);
+    app.select_run(Some("growing".into()));
+    app.set_trace_page_size(0);
+    app.trace_paging.remember(256, 9000);
+    app.request_trace_window(300);
+    assert!(matches!(
+        app.pending_archive,
+        Some(Request::InvocationRange {
+            offset: 0,
+            skip: 300,
+            limit: 256,
+            ..
+        })
+    ));
+    app.trace_paging.remember(256, 9000);
+    app.history[0].state = RunState::Finalized;
+    app.request_trace_window(300);
+    assert!(matches!(
+        app.pending_archive,
+        Some(Request::InvocationRange {
+            offset: 0,
+            skip: 300,
+            limit: 256,
+            ..
+        })
+    ));
+    app.trace_paging.remember(256, 12000);
+    app.request_trace_window(300);
+    assert!(matches!(
+        app.pending_archive,
+        Some(Request::InvocationRange {
+            offset: 12000,
+            skip: 44,
+            limit: 256,
+            ..
+        })
+    ));
+}
+
+#[test]
 fn all_mode_renders_a_million_row_extent_without_loading_a_million_calls() {
     let ctx = egui::Context::default();
     theme::install(&ctx);
