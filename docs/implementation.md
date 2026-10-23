@@ -879,6 +879,65 @@ optional (an older guest and an older host keep working).
   `tests/monitor/transport-reconnect.c`), the writer hold, budgeted pages and
   the Stop deadline.
 
+### Suspicious activity: tiers, categories, noise and the Evasion category (0.7.1)
+
+The rules live in `monitor-ui/src/triage/rules/`; `findings.rs` runs them over a
+list of calls for the live view and the scan runs them through the same
+`rules::Engine`. Host only: nothing here needs a guest change.
+
+* **Classification.** `table.rs` has one entry per rule id: version, tier
+  (`high`, `medium`, `low`, `info`; weights 10, 4, 1, 0), one of 13 categories,
+  ATT&CK technique and detection-strategy ids (v20; a rule with no technique says
+  so), whether failure is the signal and the programs that do the thing as their
+  job. A test checks that every id the code emits is in the table and that every
+  ATT&CK id is well formed.
+* **Rules.** `exec.rs` reads an exec (the program, `argv`, `envp`, and a shell's
+  `-c` script command by command); `paths.rs` reads what a call did to a file;
+  `process.rs` memory, ptrace, namespace, signal and credential records;
+  `network.rs` sockets; `frames.rs` the capture's DNS, HTTP and TLS/SSH rows;
+  `evasion.rs` and `probes.rs` the anti-analysis checks. Correlated rules keep
+  bounded per-task windows in `state.rs`.
+* **Noise.** A hit is lowered one tier for a failed call (unless failing is the
+  signal; five failures of a HIGH rule keep the tier) and for an allow-listed
+  program, folded by `(rule, task, object)`, and siblings of one parent with the
+  same program, arguments and object fold into one row. A steady repeat is shown
+  as `×N every ~T`. Caps: 50 rows per rule and task, 2,000 per rule, 500 per
+  task, 20,000 per run; the rest is one `+N more not stored (cap)` row that the
+  badge counts. INFO is counted by rule, never built unless **Show INFO** is on.
+  In a capture of the whole VM (no run root) a process whose creation was not seen
+  and that did not start with an exec is outside the scope: one tier down and
+  hidden unless **Show hidden** is on, unless the sample wrote its program. Frames
+  of VM housekeeping are skipped by a versioned list and counted. A row found in
+  packets is tied to a task only when that task's calls reached the address;
+  otherwise it is VM-wide and one tier down.
+* **Rows.** Twelve columns (Rule, Tier, Category, Process, Summary, Count, Source,
+  Time, Confidence, Evidence, Version, Outcome). New filter fields: `finding.tier`
+  (`finding.severity` is its alias), `finding.base_tier`, `finding.category`,
+  `finding.technique`, `finding.count`, `finding.flags`, `finding.hidden`,
+  `finding.object`, `finding.first_ns`, `finding.last_ns`. The journal is
+  `triage-findings-v2.jsonl`.
+* **Evasion.** Anti-analysis checks are not a tab: they are rows of the
+  **Defense evasion / anti-analysis** category (the **Evasion** chip). Per task,
+  `probes.rs` keeps each check with the answer the guest gave (DMI strings,
+  `cpuinfo` flags, PCI vendors, clocksource, modules, MAC OUI, uptime, `TracerPid`,
+  `PTRACE_TRACEME`, `SIGTRAP` handlers, container markers, runs of clock reads),
+  judged by what would show a VM, a container or a debugger, and says which Stealth
+  profile entry decides the answer. It summarises the task's next 30 s (exited,
+  slept, stopped using the network, went on) and, for an exit or long sleep within
+  5 s of a VM-revealing answer with no other work, adds `evasion.probe_then_exit`.
+  This is a heuristic from the recorded calls and the rows say so. `CPUID` and
+  `RDTSC` run in the program and leave no system call, so they are not seen (the
+  UI says so); that needs a guest change.
+* **Not covered here.** `memory.write_then_exec`, `memory.unpacked_capture`,
+  `evasion.cpuid_probe`, `evasion.timing_probe` and the root-level `rootkit.*` and
+  `privilege.cred_overwrite` rules need new guest data; `evasion.packed_image`
+  needs a static-analysis result.
+* **Antinomie's own activity.** The resource collector of a base from before 0.7.0
+  (uploaded as `/tmp/.antinomie-resource-<token>`, which removes itself) is
+  recognised by that path and its tasks are left out. The terminal and the analyst's
+  commands are outside a run's tree, and in a capture of the whole VM outside the
+  scope above.
+
 ### Accepted ANT-T0097 host UI performance (0.6.2)
 
 Remove render-time filesystem checks for host chooser availability; resolve
