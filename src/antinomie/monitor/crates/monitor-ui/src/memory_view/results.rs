@@ -214,6 +214,17 @@ impl MemoryView {
                         "Page {page_number}/{page_count} · {} matching / {} retained rows",
                         result.total, result.source_rows
                     ));
+                    let mut page = page_number;
+                    ui.label("Go to page");
+                    if ui
+                        .add_enabled(
+                            self.loading.is_none(),
+                            egui::DragValue::new(&mut page).range(1..=page_count),
+                        )
+                        .changed()
+                    {
+                        start = Some((page - 1).saturating_mul(RESULT_PAGE_LEN as u64));
+                    }
                     if ui
                         .add_enabled(
                             self.loading.is_none()

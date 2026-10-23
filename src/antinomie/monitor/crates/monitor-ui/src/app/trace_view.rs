@@ -105,95 +105,7 @@ impl MonitorApp {
             if let Some(selection) = selection {
                 self.select_process(selection);
             }
-            if self.trace_archive_directory().is_some() {
-                let mut size = self.settings.trace_page_size;
-                ui.label("Calls/page");
-                if ui
-                    .add(egui::DragValue::new(&mut size).range(1..=256))
-                    .on_hover_text("Saved syscall page size (1–256); saved across restarts")
-                    .changed()
-                {
-                    self.set_trace_page_size(size);
-                }
-                if icon(
-                    ui,
-                    egui_phosphor::regular::ARROW_LEFT,
-                    "Previous archive page",
-                    !self.archive_pending && !self.archive_previous.is_empty(),
-                ) {
-                    if let Some(offset) = self.archive_previous.pop() {
-                        self.request_page(offset);
-                    }
-                }
-                if icon(
-                    ui,
-                    egui_phosphor::regular::ARROW_RIGHT,
-                    "Next archive page",
-                    !self.archive_pending && self.archive_next.is_some(),
-                ) {
-                    self.next_archive_page();
-                }
-                if icon(
-                    ui,
-                    egui_phosphor::regular::ARROW_CLOCKWISE,
-                    "Reload archive page",
-                    !self.archive_pending,
-                ) {
-                    let offset = if self.archive_page_generation != self.archive_generation
-                        && self.archive_previous.is_empty()
-                    {
-                        0
-                    } else {
-                        self.archive_offset
-                    };
-                    self.request_page(offset);
-                }
-                if self.archive_total.is_none()
-                    && !self.archive_pending
-                    && self.archive_page_generation == self.archive_generation
-                    && self.archive_error.is_none()
-                {
-                    ui.horizontal(|ui| {
-                        theme::spinner(ui);
-                        ui.label(format!(
-                            "Page {} · counting matches…",
-                            self.archive_previous.len() + 1
-                        ));
-                    });
-                }
-                if let Some(total) = self.archive_total {
-                    if self.archive_page_generation == self.archive_generation {
-                        ui.label(format!(
-                            "Page {} of {} · {} calls/page · {total} matching / {} saved calls",
-                            self.archive_previous.len() + 1,
-                            total.div_ceil(self.settings.trace_page_size as u64).max(1),
-                            self.settings.trace_page_size,
-                            self.archive_source_total.unwrap_or(total)
-                        ));
-                    } else {
-                        ui.label(format!(
-                            "Previous results: {total} matching / {} saved calls",
-                            self.archive_source_total.unwrap_or(total)
-                        ));
-                    }
-                }
-                if self.archive_pending {
-                    theme::spinner(ui);
-                }
-                ui.label(if self.archive_pending {
-                    if self.archive_page.is_empty() {
-                        "Reading archive matches…"
-                    } else {
-                        "Reading matches · previous results shown"
-                    }
-                } else if self.archive_page_generation != self.archive_generation
-                    && !self.archive_page.is_empty()
-                {
-                    "Previous results · refresh to retry"
-                } else {
-                    "History"
-                });
-            }
+            self.trace_archive_pager(ui);
             let filter_width = ui.available_width().max(180.0);
             crate::query::filter_edit(
                 ui,
@@ -249,7 +161,14 @@ impl MonitorApp {
         if let Some((column, descending)) = self.trace_sort {
             sort_invocations(&mut invocations, column, descending);
             if archived {
-                ui.colored_label(theme::muted(), "Sort applies to this page");
+                ui.colored_label(
+                    theme::muted(),
+                    if self.trace_windowed() {
+                        "Sort applies to the loaded window"
+                    } else {
+                        "Sort applies to this page"
+                    },
+                );
             }
         }
         if invocations.len() != total {
@@ -293,6 +212,27 @@ impl MonitorApp {
         let hovered_row: Option<usize> = ui.data_mut(|data| data.remove_temp(hover_id));
         let palette = *theme::palette();
         let trace_colors = self.settings.trace_colors;
+        let virtualized = archived && self.trace_paging.ranked && self.trace_windowed();
+        let logical_start = self
+            .trace_paging
+            .page
+            .saturating_mul(self.settings.trace_page_size as u64);
+        let row_count = if virtualized {
+            let remaining = self
+                .archive_total
+                .unwrap_or(invocations.len() as u64)
+                .saturating_sub(logical_start);
+            let count = if self.settings.trace_page_size == 0 {
+                remaining
+            } else {
+                remaining.min(self.settings.trace_page_size as u64)
+            };
+            usize::try_from(count).unwrap_or(usize::MAX)
+        } else {
+            invocations.len()
+        };
+        let mut first_visible = None;
+        let mut last_visible = 0;
         egui::ScrollArea::horizontal()
             .id_salt("syscalls_horizontal")
             .auto_shrink([false, false])
@@ -300,7 +240,16 @@ impl MonitorApp {
                 ui.set_min_width((font / 16.0 * 760.0).max(ui.available_width()));
                 crate::widgets::table::begin(ui);
                 TableBuilder::new(ui)
-                    .id_salt(("syscall_table", width_class))
+                    .id_salt((
+                        "syscall_table",
+                        width_class,
+                        self.trace_paging.page,
+                        self.settings.trace_page_size,
+                        self.trace_archive_directory(),
+                        &self.applied_filter,
+                        &self.archive_hidden_categories,
+                        self.selected_process,
+                    ))
                     .striped(true)
                     .resizable(true)
                     .sense(egui::Sense::click())
@@ -362,9 +311,30 @@ impl MonitorApp {
                         }
                     })
                     .body(|body| {
-                        body.rows(height, invocations.len(), |mut row| {
+                        body.rows(height, row_count, |mut row| {
                             let index = row.index();
-                            let invocation = &invocations[index];
+                            let rank = logical_start.saturating_add(index as u64);
+                            if virtualized {
+                                first_visible.get_or_insert(rank);
+                                last_visible = rank;
+                            }
+                            let loaded_index = if virtualized {
+                                rank.checked_sub(self.trace_paging.window_start)
+                                    .and_then(|index| usize::try_from(index).ok())
+                            } else {
+                                Some(index)
+                            };
+                            let invocation = loaded_index.and_then(|index| invocations.get(index));
+                            let Some(invocation) = invocation else {
+                                for column in 0..7 {
+                                    row.col(|ui| {
+                                        if column == 4 {
+                                            ui.weak("Loading…");
+                                        }
+                                    });
+                                }
+                                return;
+                            };
                             let event =
                                 trace::representative(invocation).expect("filtered observation");
                             let key = trace::key(invocation);
@@ -471,6 +441,20 @@ impl MonitorApp {
                         });
                     });
             });
+        if let Some(start) = first_visible {
+            let loaded_end = self
+                .trace_paging
+                .window_start
+                .saturating_add(self.archive_page.len() as u64);
+            if !self.archive_pending
+                && self.archive_error.is_none()
+                && (start < self.trace_paging.window_start
+                    || start >= loaded_end
+                    || (last_visible >= loaded_end && start > self.trace_paging.window_start))
+            {
+                self.request_trace_window(start);
+            }
+        }
     }
 
     /// Category filter above the trace: one chip per syscall group (with

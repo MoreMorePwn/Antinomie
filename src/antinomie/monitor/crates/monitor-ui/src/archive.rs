@@ -27,6 +27,18 @@ pub(crate) type ProcessTreeResult = Result<
 >;
 
 pub(crate) enum Request {
+    InvocationRange {
+        generation: u64,
+        directory: PathBuf,
+        offset: u64,
+        skip: u64,
+        limit: usize,
+        capture: bool,
+        pid: Option<u32>,
+        query: String,
+        hidden_categories: Vec<SyscallGroup>,
+        cancel: Arc<AtomicBool>,
+    },
     ProcessTree {
         run_id: String,
         directory: PathBuf,
@@ -214,6 +226,17 @@ fn invocations(
     limit: usize,
     cancel: &Arc<AtomicBool>,
 ) -> Result<(InvocationPage, Option<(u64, u64)>), String> {
+    invocation_range(shared, view, offset, 0, limit, cancel)
+}
+
+fn invocation_range(
+    shared: &Shared,
+    view: &totals::View,
+    offset: u64,
+    skip: u64,
+    limit: usize,
+    cancel: &Arc<AtomicBool>,
+) -> Result<(InvocationPage, Option<(u64, u64)>), String> {
     let filter = crate::query::compile_note(&view.query);
     if let Some(error) = filter.error.as_ref() {
         return Err(error.clone());
@@ -222,8 +245,9 @@ fn invocations(
     // of their own, or here for a small recording.
     let found = view
         .open(cancel)?
-        .matching_page_cancellable(
+        .matching_range_cancellable(
             offset,
+            skip,
             limit,
             view.pid,
             cancel,
@@ -238,6 +262,49 @@ fn invocations(
 
 fn answer(request: Request, shared: &Shared) -> Answer {
     match request {
+        Request::InvocationRange {
+            generation,
+            directory,
+            offset,
+            skip,
+            limit,
+            capture,
+            pid,
+            query,
+            hidden_categories,
+            cancel,
+        } => {
+            *shared
+                .active_invocations
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::clone(&cancel));
+            if shared.cancelled.load(Ordering::Relaxed) {
+                cancel.store(true, Ordering::Relaxed);
+            }
+            let view = totals::View {
+                directory,
+                capture,
+                pid,
+                query,
+                hidden_categories,
+            };
+            let read = invocation_range(shared, &view, offset, skip, limit, &cancel);
+            *shared
+                .active_invocations
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+            let (total, source_total) = match &read {
+                Ok((_, Some((total, source_total)))) => (Some(*total), Some(*source_total)),
+                _ => (None, None),
+            };
+            Answer::Invocations {
+                generation,
+                offset,
+                total,
+                source_total,
+                result: read.map(|(page, _)| page),
+            }
+        }
         Request::ProcessTree {
             run_id,
             directory,
@@ -710,6 +777,40 @@ mod tests {
             cancel,
         }
     }
+    #[test]
+    fn direct_rank_jump_counts_only_filtered_calls() {
+        let fixture = fixture(1000);
+        let worker = ArchiveWorker::new(None).unwrap();
+        worker
+            .try_request(Request::InvocationRange {
+                generation: 7,
+                directory: fixture.0.clone(),
+                offset: 0,
+                skip: 300,
+                limit: 37,
+                capture: false,
+                pid: None,
+                query: "call.id >= 150".into(),
+                hidden_categories: Vec::new(),
+                cancel: Arc::new(AtomicBool::new(false)),
+            })
+            .unwrap_or_else(|_| panic!("request rejected"));
+        let answer = worker
+            .wait_answer(std::time::Duration::from_secs(20))
+            .unwrap();
+        let Answer::Invocations {
+            generation, result, ..
+        } = answer
+        else {
+            panic!("wrong answer")
+        };
+        assert_eq!(generation, 7);
+        let page = result.unwrap();
+        let ids: Vec<_> = page.invocations.iter().map(|call| call.call_id).collect();
+        assert_eq!(ids, (450..487).collect::<Vec<_>>());
+        assert!(page.next_offset.is_some());
+    }
+
     #[test]
     fn configurable_pages_follow_raw_cursors_without_skipping_filtered_calls() {
         let fixture = fixture(350);

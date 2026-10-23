@@ -89,6 +89,45 @@ impl Recording {
         limit: usize,
         pid: Option<u32>,
         cancel: &AtomicBool,
+        keep: impl FnMut(&InvocationSummary) -> bool,
+        budget: usize,
+    ) -> Result<MatchingPage, RecordingError> {
+        self.matching_range_within(offset, 0, limit, pid, cancel, keep, budget)
+    }
+
+    /// Seek by matching-call rank after a known raw cursor, without retaining
+    /// the skipped calls. Used for direct page jumps and virtual table windows.
+    ///
+    /// | Argument | Meaning |
+    /// | --- | --- |
+    /// | `offset` | Inclusive raw cursor; zero starts at the recording beginning |
+    /// | `skip` | Matching calls to skip after that cursor |
+    /// | `limit` | Window size, 1 through 256; independent of the UI page size |
+    /// | `pid` | Optional guest process predicate |
+    /// | `cancel` | Cooperative read cancellation |
+    /// | `keep` | Filter applied before counting the skipped calls |
+    ///
+    /// Returns a bounded matching window and the next raw cursor.
+    pub fn matching_range_cancellable(
+        &self,
+        offset: u64,
+        skip: u64,
+        limit: usize,
+        pid: Option<u32>,
+        cancel: &AtomicBool,
+        keep: impl FnMut(&InvocationSummary) -> bool,
+    ) -> Result<MatchingPage, RecordingError> {
+        self.matching_range_within(offset, skip, limit, pid, cancel, keep, PAGE_PREVIEW_BYTES)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn matching_range_within(
+        &self,
+        offset: u64,
+        mut skip: u64,
+        limit: usize,
+        pid: Option<u32>,
+        cancel: &AtomicBool,
         mut keep: impl FnMut(&InvocationSummary) -> bool,
         budget: usize,
     ) -> Result<MatchingPage, RecordingError> {
@@ -125,6 +164,10 @@ impl Recording {
                 continue;
             };
             if !keep(&invocation) {
+                continue;
+            }
+            if skip > 0 {
+                skip -= 1;
                 continue;
             }
             if invocations.len() == limit {

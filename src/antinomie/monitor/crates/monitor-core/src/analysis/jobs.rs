@@ -24,6 +24,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod acquisition;
 mod host_file;
 mod sandbox_run;
 mod specimen_publication;
@@ -64,6 +65,8 @@ pub(crate) struct Job {
 pub(crate) struct Jobs {
     queue: VecDeque<Job>,
     active: Option<Job>,
+    /// Acquisition progresses even while the single analysis worker is busy.
+    acquiring: Option<Job>,
     release: VecDeque<u64>,
     retained_len: u64,
     updates: Vec<(Option<String>, AnalysisReport)>,
@@ -128,12 +131,14 @@ impl Jobs {
     pub fn stored_len(&self) -> u64 {
         self.retained_len
             .saturating_add(self.active.as_ref().map_or(0, |j| j.reserved_len))
+            .saturating_add(self.acquiring.as_ref().map_or(0, |j| j.reserved_len))
             .saturating_add(self.queue.iter().map(|j| j.reserved_len).sum::<u64>())
     }
     pub fn persisted_len(&self) -> u64 {
         self.retained_len.saturating_add(
             self.active
                 .iter()
+                .chain(self.acquiring.iter())
                 .chain(self.queue.iter())
                 .map(|job| job.disk_len.saturating_add(job.worker_len))
                 .sum::<u64>(),
@@ -141,7 +146,9 @@ impl Jobs {
     }
     #[cfg(test)]
     pub fn pending_count(&self) -> usize {
-        self.queue.len() + usize::from(self.active.is_some())
+        self.queue.len()
+            + usize::from(self.active.is_some())
+            + usize::from(self.acquiring.is_some())
     }
     pub fn submit(
         &mut self,
@@ -158,8 +165,12 @@ impl Jobs {
             fs::create_dir_all(&directory).map_err(|e| format!("analysis directory: {e}"))?;
             fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
                 .map_err(|e| e.to_string())?;
-            if self.queue.len() >= 8 {
-                return Err("analysis queue is full (eight waiting jobs)".into());
+            if self.queue.len()
+                + usize::from(self.active.is_some())
+                + usize::from(self.acquiring.is_some())
+                >= 9
+            {
+                return Err("analysis queue is full (nine pending jobs)".into());
             }
             let reserved_len = total_len
                 .checked_add(
@@ -308,15 +319,21 @@ impl Jobs {
         if let Some(id) = self.release.pop_front() {
             return Some(Action::Release(id));
         }
+        let action = self.acquire_next();
+        self.worker_tick();
+        action
+    }
+    fn worker_tick(&mut self) {
         if self.active.is_none() {
-            self.active = self.queue.pop_front().map(|mut job| {
-                // The transfer deadline counts from when the job starts, not
-                // from when it was queued behind another job.
-                job.deadline = Instant::now() + TRANSFER_DEADLINE;
-                job
-            });
+            self.active = self
+                .queue
+                .iter()
+                .position(|job| job.report.state == AnalysisState::Queued)
+                .and_then(|index| self.queue.remove(index));
         }
-        let mut job = self.active.take()?;
+        let Some(mut job) = self.active.take() else {
+            return;
+        };
         job.worker_len = ["worker.log", "output/report.json"]
             .into_iter()
             .map(|name| fs::metadata(job.directory.join(name)).map_or(0, |m| m.len()))
@@ -329,19 +346,17 @@ impl Jobs {
         ) && job.child.is_some()
         {
             self.finish(job);
-            return None;
+            return;
         }
-        if Instant::now() >= job.deadline {
-            if job.child.is_some() {
-                job.keep_finished_sections();
-            }
+        if job.child.is_some() && Instant::now() >= job.deadline {
+            job.keep_finished_sections();
             fail(
                 &mut job.report,
                 AnalysisState::Partial,
                 "analysis deadline exceeded; worker stopped and incomplete evidence retained",
             );
             self.finish(job);
-            return None;
+            return;
         }
         if let Some(child) = job.child.as_mut() {
             match child.poll_status() {
@@ -375,7 +390,7 @@ impl Jobs {
                         );
                     }
                     self.finish(job);
-                    return None;
+                    return;
                 }
                 Ok(None) => {
                     if let Some(progress) = job.progress.changed(&job.directory, &job.report) {
@@ -383,7 +398,7 @@ impl Jobs {
                         self.updates.push((job.run_id.clone(), job.report.clone()));
                     }
                     self.active = Some(job);
-                    return None;
+                    return;
                 }
                 Err(error) => {
                     fail(
@@ -392,55 +407,9 @@ impl Jobs {
                         format!("worker {} wait: {error}", child.id()),
                     );
                     self.finish(job);
-                    return None;
+                    return;
                 }
             }
-        }
-        if job.received_len < job.total_len {
-            let action = Action::Read {
-                id: job.handle?,
-                offset: job.received_len,
-                total: job.total_len,
-                capacity: (job.total_len - job.received_len)
-                    .min(u64::from(control::SPECIMEN_CHUNK_SIZE)) as u32,
-            };
-            self.active = Some(job);
-            return Some(action);
-        }
-        if let Some(file) = job.file.take() {
-            let result = file.sync_all().and_then(|_| {
-                fs::rename(
-                    job.directory.join("specimen.partial"),
-                    job.directory.join("specimen"),
-                )
-            });
-            if let Err(error) = result {
-                fail(
-                    &mut job.report,
-                    AnalysisState::Unavailable,
-                    format!("specimen publication: {error}"),
-                );
-                self.finish(job);
-                return None;
-            }
-        }
-        if let Some(id) = job.handle.take() {
-            self.release.push_back(id);
-        }
-        job.report.state = AnalysisState::Queued;
-        job.report.specimen_len = Some(job.total_len);
-        job.report.specimen_sha256 = Some(format!("{:x}", job.digest.clone().finalize()));
-        match job.publish_specimen_report() {
-            Ok(false) => {
-                self.active = Some(job);
-                return None;
-            }
-            Err(error) => {
-                fail(&mut job.report, AnalysisState::Unavailable, error);
-                self.finish(job);
-                return None;
-            }
-            Ok(true) => {}
         }
         match spawn_worker(&job, self.tools_dir.as_deref()) {
             Ok(child) => {
@@ -463,7 +432,6 @@ impl Jobs {
                 self.finish(job);
             }
         }
-        None
     }
     pub fn chunk(
         &mut self,
@@ -472,7 +440,7 @@ impl Jobs {
         total: u64,
         capacity: u32,
     ) {
-        let Some(mut job) = self.active.take() else {
+        let Some(mut job) = self.acquiring.take() else {
             return;
         };
         let result = result.and_then(|reply| {
@@ -489,7 +457,10 @@ impl Jobs {
             job.disk_len = job.disk_len.saturating_add(chunk.len() as u64);
             Ok(())
         }) {
-            Ok(()) => self.active = Some(job),
+            Ok(()) => {
+                // Rotate transfers so every retained guest handle makes progress.
+                self.queue.push_back(job);
+            }
             Err(error) => {
                 fail(
                     &mut job.report,
@@ -504,6 +475,17 @@ impl Jobs {
         std::mem::take(&mut self.updates)
     }
     pub fn cancel(&mut self, id: &str) -> Result<(), String> {
+        if self.acquiring.as_ref().is_some_and(|j| j.report.id == id) {
+            if let Some(mut job) = self.acquiring.take() {
+                fail(
+                    &mut job.report,
+                    AnalysisState::Cancelled,
+                    "analysis acquisition cancelled",
+                );
+                self.finish(job);
+            }
+            return Ok(());
+        }
         if self.active.as_ref().is_some_and(|j| j.report.id == id) {
             if let Some(mut job) = self.active.take() {
                 fail(
@@ -529,6 +511,14 @@ impl Jobs {
         Err("analysis job is unknown or already completed".into())
     }
     pub fn shutdown(&mut self) {
+        if let Some(mut job) = self.acquiring.take() {
+            fail(
+                &mut job.report,
+                AnalysisState::Unavailable,
+                "VM ended during specimen acquisition",
+            );
+            self.finish(job);
+        }
         if let Some(mut job) = self.active.take() {
             fail(
                 &mut job.report,
@@ -1209,7 +1199,7 @@ mod tests {
     }
 
     #[test]
-    fn a_queued_job_gets_its_full_transfer_time_when_it_starts() {
+    fn queued_transfers_rotate_and_keep_the_original_acquisition_deadline() {
         let root = std::env::temp_dir().join(format!("ant-analysis-qdl-{}", storage::unique_id()));
         let selection = AnalysisSelection {
             enabled: true,
@@ -1232,21 +1222,13 @@ mod tests {
             Ok((2, 3)),
             512 * 1024 * 1024,
         );
-        // The second job waits behind the first for a while.
-        std::thread::sleep(Duration::from_millis(1500));
+        // Do not refresh an old handle's deadline just because it waited.
+        let deadline = jobs.queue[1].deadline;
         jobs.cancel(&first_id).unwrap();
         assert!(matches!(jobs.next(), Some(Action::Release(1))));
         assert!(matches!(jobs.next(), Some(Action::Read { id: 2, .. })));
-        let left = jobs
-            .active
-            .as_ref()
-            .unwrap()
-            .deadline
-            .saturating_duration_since(Instant::now());
-        assert!(
-            left > TRANSFER_DEADLINE - Duration::from_secs(1),
-            "{left:?} left"
-        );
+        let actual = jobs.acquiring.as_ref().unwrap().deadline;
+        assert_eq!(actual, deadline);
         drop(jobs);
         fs::remove_dir_all(root).unwrap();
     }
@@ -1301,6 +1283,7 @@ mod tests {
                     progress: Default::default(),
                 }),
                 queue: VecDeque::new(),
+                acquiring: None,
                 release: VecDeque::new(),
                 retained_len: 0,
                 updates: Vec::new(),
