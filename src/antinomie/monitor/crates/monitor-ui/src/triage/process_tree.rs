@@ -566,24 +566,3 @@ pub(super) fn process_tree_lines(invocations: &[InvocationSummary]) -> Vec<Strin
         })
         .collect()
 }
-
-pub(super) fn unix_shell(path: &str) -> bool {
-    matches!(
-        path.rsplit(['/', '\\']).next().unwrap_or(path),
-        "sh" | "bash" | "dash" | "zsh" | "ksh" | "csh" | "tcsh" | "fish" | "ash"
-    )
-}
-
-pub(super) fn preview_line(event: &EventSummary) -> String {
-    event
-        .fields
-        .iter()
-        .find_map(|field| {
-            let text = String::from_utf8_lossy(crate::trace::covered_preview(field))
-                .trim_end_matches('\0')
-                .trim()
-                .to_owned();
-            (!text.is_empty()).then_some(text)
-        })
-        .unwrap_or_else(|| event.syscall_name.clone())
-}

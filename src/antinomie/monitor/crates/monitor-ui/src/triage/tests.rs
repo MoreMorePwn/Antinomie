@@ -618,7 +618,17 @@ fn quoted_packet_fields_and_epoch_times_preserve_exact_values() {
 }
 
 pub(super) fn write_rwx_calls(raw: &mut dyn std::io::Write, calls: std::ops::Range<u64>) {
+    write_rwx_tasks(raw, calls, |_| 55);
+}
+
+/// The same calls, each made by the task `task(call)`; the run's root stays 55.
+pub(super) fn write_rwx_tasks(
+    raw: &mut dyn std::io::Write,
+    calls: std::ops::Range<u64>,
+    task: impl Fn(u64) -> u32,
+) {
     for call in calls {
+        let who = task(call);
         for phase in [1u8, 2] {
             for fragment in [1u8, 5] {
                 let mut body = vec![0u8; if fragment == 1 { 120 } else { 32 }];
@@ -639,15 +649,15 @@ pub(super) fn write_rwx_calls(raw: &mut dyn std::io::Write, calls: std::ops::Ran
                 packet[12..16].copy_from_slice(&(136u32 + body.len() as u32).to_le_bytes());
                 packet[20..24].copy_from_slice(&1u32.to_le_bytes());
                 packet[24..32].copy_from_slice(&1u64.to_le_bytes());
-                packet[32..40].copy_from_slice(&55u64.to_le_bytes());
+                packet[32..40].copy_from_slice(&u64::from(who).to_le_bytes());
                 packet[40..48].copy_from_slice(&call.to_le_bytes());
                 packet[48..56].copy_from_slice(&(call * 2 + u64::from(phase)).to_le_bytes());
                 packet[56..64].copy_from_slice(
                     &(call * 4 + u64::from(phase) + u64::from(fragment)).to_le_bytes(),
                 );
                 packet[64..72].copy_from_slice(&(call * 10 + u64::from(phase)).to_le_bytes());
-                packet[72..76].copy_from_slice(&55u32.to_le_bytes());
-                packet[76..80].copy_from_slice(&55u32.to_le_bytes());
+                packet[72..76].copy_from_slice(&who.to_le_bytes());
+                packet[76..80].copy_from_slice(&who.to_le_bytes());
                 packet[88..96].copy_from_slice(&9u64.to_le_bytes());
                 packet[96..98].copy_from_slice(&1u16.to_le_bytes());
                 packet[98] = phase;
@@ -677,22 +687,23 @@ fn hidden_tick_indexes_once_a_shown_pane_refreshes_growth_preserves_selection_an
             pcap_open: false,
             clock_anchor: None,
             started_ms: None,
-            root_cookie: 0,
+            root_cookie: 55,
             run_finished: false,
             current_boot: false,
         }
     }
-    fn wait(view: &mut TriageView, ctx: &egui::Context, archive: &Path, run: &str, count: usize) {
+    fn wait(view: &mut TriageView, ctx: &egui::Context, archive: &Path, run: &str, count: u64) {
         // Only a bound on a hang; the refresh timer runs on the view's clock.
         let deadline = Instant::now() + Duration::from_secs(60);
         loop {
             // Intentionally never call show: another panel owns the workspace.
             view.clock.advance(Duration::from_secs(1));
             view.tick(ctx, input(archive, run));
+            // The calls of one task fold into one row: growth shows in the call count.
             if view
                 .scan
                 .as_ref()
-                .is_some_and(|scan| scan.findings.len() == count)
+                .is_some_and(|scan| scan.counts.calls == count && scan.findings.len() == 1)
                 && view.scan_rx.is_none()
             {
                 break;
@@ -776,38 +787,74 @@ fn hidden_tick_indexes_once_a_shown_pane_refreshes_growth_preserves_selection_an
 }
 
 #[test]
-fn complete_retained_archive_query_pages_every_rwx_finding_and_persists_facts() {
+fn caps_keep_two_thousand_rows_per_rule_and_count_the_rest_in_an_overflow_row() {
     let temp = PacketSpool::new().unwrap();
     let mut raw = std::fs::File::create(temp.directory.join("telemetry.raw")).unwrap();
-    write_rwx_calls(&mut raw, 0..2051);
+    // 2051 tasks, one call each: one row per task, so the per-rule cap applies.
+    write_rwx_tasks(&mut raw, 0..2051, |call| 1000 + call as u32);
     raw.sync_all().unwrap();
     let cancel = Arc::new(AtomicBool::new(false));
-    let first = scan_archive_query(
-        &temp.directory,
-        None,
-        false,
-        &cancel,
-        &ScanRequest::default(),
-    )
-    .unwrap();
+    let mut request = ScanRequest {
+        root_cookie: 55,
+        ..ScanRequest::default()
+    };
+    let first = scan_archive_query(&temp.directory, None, false, &cancel, &request).unwrap();
     assert_eq!(first.findings.len(), STORED_ROWS);
-    assert_eq!(first.findings_omitted, 51);
-    let mut request = ScanRequest::default();
+    assert_eq!(first.findings_omitted, 1);
+    assert_eq!(
+        first.counts.findings, 2051,
+        "the badge counts the capped rows"
+    );
+    assert_eq!(first.counts.findings_capped, 51);
     request.offsets[0] = STORED_ROWS;
     request.filters[0] = "finding.rule == \"memory.rwx\" && finding.success == true".into();
     let second = scan_archive_query(&temp.directory, None, false, &cancel, &request).unwrap();
-    assert_eq!(second.findings.len(), 51);
+    assert_eq!(second.findings.len(), 1);
     assert_eq!(second.findings_omitted, STORED_ROWS as u64);
-    assert!(second
-        .findings
-        .iter()
-        .all(|finding| finding.call_id >= STORED_ROWS as u64));
-    let journal = std::fs::read_to_string(temp.directory.join("triage-findings-v1.jsonl")).unwrap();
-    assert_eq!(journal.lines().count(), 2051);
+    assert_eq!(
+        second.findings[0].cells[rules::COL_SUMMARY].text,
+        "+51 more not stored (cap)"
+    );
+    assert_eq!(second.findings[0].cells[5].text, "51");
+    let journal = std::fs::read_to_string(temp.directory.join("triage-findings-v2.jsonl")).unwrap();
+    assert_eq!(journal.lines().count(), 2001);
     let fact: serde_json::Value = serde_json::from_str(journal.lines().next().unwrap()).unwrap();
+    assert_eq!(fact["format_version"], 2);
     assert_eq!(fact["facts"]["finding.rule"], "memory.rwx");
-    assert_eq!(fact["facts"]["finding.version"], 1);
+    assert_eq!(fact["facts"]["finding.version"], 2);
+    assert_eq!(fact["facts"]["finding.tier"], "high");
+    assert_eq!(fact["facts"]["finding.category"], "evasion");
     assert_eq!(fact["facts"]["finding.success"], true);
+}
+
+#[test]
+fn repeats_of_one_task_are_one_row_with_a_count_and_a_time_span() {
+    let temp = PacketSpool::new().unwrap();
+    let mut raw = std::fs::File::create(temp.directory.join("telemetry.raw")).unwrap();
+    write_rwx_calls(&mut raw, 0..40);
+    raw.sync_all().unwrap();
+    let request = ScanRequest {
+        root_cookie: 55,
+        ..ScanRequest::default()
+    };
+    let scan = scan_archive_query(
+        &temp.directory,
+        None,
+        false,
+        &Arc::new(AtomicBool::new(false)),
+        &request,
+    )
+    .unwrap();
+    assert_eq!(scan.findings.len(), 1);
+    let row = &scan.findings[0];
+    assert_eq!(row.cells[5].text, "40");
+    assert_eq!(files::number(&row.values, "finding.count"), Some(40));
+    assert!(
+        files::number(&row.values, "finding.last_ns")
+            > files::number(&row.values, "finding.first_ns")
+    );
+    assert_eq!(scan.counts.findings, 1);
+    assert_eq!(scan.suspicious.get(&(55, 55)), Some(&1));
 }
 
 #[test]
@@ -1669,13 +1716,13 @@ pub(super) fn path_call(
 }
 
 #[test]
-fn ordinary_exec_is_not_a_unix_shell_and_sigsuspend_is_not_privilege() {
-    let rows = suspicious_rows(&[
+fn an_exec_is_info_a_shell_is_an_interpreter_and_sigsuspend_is_not_privilege() {
+    let calls = [
         path_call(1, 59, "execve", 0, "/bin/ls"),
         path_call(1, 59, "execve", 0, "/bin/sh"),
         call(1, 130, "rt_sigsuspend", 0),
         call(1, 105, "setuid", 0),
-    ]);
+    ];
     let text = |row: &Finding, key: &str| -> String {
         row.values
             .iter()
@@ -1685,30 +1732,42 @@ fn ordinary_exec_is_not_a_unix_shell_and_sigsuspend_is_not_privilege() {
             })
             .unwrap_or_default()
     };
-    let exec = |needle: &str| {
-        rows.iter()
-            .find(|row| {
-                text(row, "finding.rule") == "process.exec"
-                    && text(row, "finding.summary").contains(needle)
-            })
-            .unwrap()
-    };
+    // The default view lists LOW and above: only the shell.
+    let rows = suspicious_rows(&calls);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(text(&rows[0], "finding.rule"), "process.interpreter");
     assert_eq!(
-        text(exec("/bin/ls"), "finding.source"),
-        "Observed process execution"
+        text(&rows[0], "finding.source"),
+        "MITRE ATT&CK T1059.004 · DET0384"
     );
+    assert_eq!(text(&rows[0], "finding.tier"), "low");
+    // Show INFO builds the exec rows; they are counted either way.
+    let counted = suspicious_output(&calls, rules::Options::default());
+    assert_eq!(counted.tiers[rules::Tier::Info.index()], 2);
+    assert_eq!(counted.badge, 1, "an exec does not count in the badge");
+    let all = suspicious_output(
+        &calls,
+        rules::Options {
+            show_info: true,
+            capture_all: false,
+        },
+    );
+    let ls = all
+        .rows
+        .iter()
+        .find(|row| {
+            text(row, "finding.rule") == "process.exec"
+                && text(row, "finding.summary").contains("/bin/ls")
+        })
+        .unwrap();
     assert_eq!(
-        text(exec("/bin/sh"), "finding.source"),
-        "MITRE ATT&CK T1059.004"
+        text(ls, "finding.source"),
+        "Observed behaviour; no ATT&CK technique"
     );
-    assert!(rows.iter().all(|row| {
-        text(row, "finding.rule") != "privilege.change"
-            || !text(row, "finding.summary").contains("rt_sigsuspend")
-    }));
-    assert!(rows.iter().any(|row| {
-        text(row, "finding.rule") == "privilege.change"
-            && text(row, "finding.summary").contains("setuid")
-    }));
+    assert!(all
+        .rows
+        .iter()
+        .all(|row| text(row, "finding.rule") != "privilege.change"));
 }
 
 #[test]
@@ -1787,7 +1846,7 @@ fn bpf_program_attach_uses_the_loaded_fd() {
     let notes = page_notes(&[load.clone(), attach]);
     assert_eq!(notes[0].lifecycle.as_deref(), Some("loaded program fd 6"));
     assert_eq!(notes[1].lifecycle.as_deref(), Some("attach successful"));
-    assert_eq!(suspicious_rows(&[load])[0].cells[8].text, "1");
+    assert_eq!(suspicious_rows(&[load])[0].cells[10].text, "1");
 
     let mut other = call(1, 321, "bpf", 7);
     other.entry.as_mut().unwrap().args = Some([8, 4, 0, 0, 0, 0]);

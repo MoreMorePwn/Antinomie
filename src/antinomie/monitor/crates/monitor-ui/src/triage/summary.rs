@@ -340,6 +340,7 @@ mod tests {
         super::super::tests::write_rwx_calls(&mut raw, 0..3);
         raw.sync_all().unwrap();
         let request = ScanRequest {
+            root_cookie: 55,
             offsets: [20; SLOTS],
             filters: std::array::from_fn(|_| String::new()),
             ..Default::default()
@@ -356,7 +357,8 @@ mod tests {
         .unwrap();
         assert!(scan.findings.is_empty());
         assert_eq!(scan.counts.calls, 3);
-        assert_eq!(scan.counts.findings, 3);
+        // The three calls of one task are one row.
+        assert_eq!(scan.counts.findings, 1);
         assert!(scan.network_counts.is_none());
         let ctx = egui::Context::default();
         theme::install(&ctx);

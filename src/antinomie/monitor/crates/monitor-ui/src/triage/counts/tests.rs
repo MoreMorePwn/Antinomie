@@ -19,7 +19,7 @@ fn section_totals_ignore_preview_pages_and_filters_and_keep_missing_network_dist
     view.scan_request.offsets[0] = 2000;
     view.scan = Some(scan);
     for (metric, count) in [
-        (Metric::Findings, 3),
+        (Metric::Findings, 1),
         (Metric::Opened, 1234),
         (Metric::Reads, 5678),
         (Metric::Changed, 9012),
