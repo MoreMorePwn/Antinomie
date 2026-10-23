@@ -221,6 +221,7 @@ pub(super) fn show(view: &mut TriageView, ui: &mut egui::Ui) {
         if files::number(values, "event.id").is_some()
             && files::number(values, "stream.id").is_some()
             && files::number(values, "process.cookie").is_some()
+            && files::number(values, "frame.number").is_none()
             && ui.button("Open original syscall").clicked()
         { request_evidence_jump(ui.ctx(), values); }
         if files::number(values, "frame.number").is_some()

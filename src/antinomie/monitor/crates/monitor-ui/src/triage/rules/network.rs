@@ -3,7 +3,7 @@
 use super::super::sigma_events::Socket;
 use super::super::*;
 use super::ctx::{base, nr, Ctx};
-use super::state::State;
+use super::state::{Contact, State};
 use super::tools;
 use super::{Hit, Tier};
 use std::net::IpAddr;
@@ -73,6 +73,16 @@ fn raw_socket(cx: &Ctx, out: &mut Vec<Hit>) {
     }
 }
 
+/// Remember who reached an address, to tie packets of the capture to a task.
+fn reached(cx: &Ctx, st: &mut State, ip: IpAddr, port: u16) {
+    if st.contacted.len() < 65_536 {
+        st.contacted.entry(ip).or_insert_with(|| Contact::of(cx));
+    }
+    if port == 53 && st.dns_task.is_none() {
+        st.dns_task = Some(Contact::of(cx));
+    }
+}
+
 /// A unix socket path, from a `sockaddr_un`.
 fn unix_path(cx: &Ctx, argument: usize) -> Option<String> {
     let field = cx.field(argument, "")?;
@@ -111,6 +121,7 @@ fn connect(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
     };
     let time = cx.time();
     let target = format!("{ip}:{port}");
+    reached(cx, st, ip, port);
     if METADATA.contains(&ip.to_string().as_str()) {
         out.push(Hit::new(
             "credential.cloud_metadata",

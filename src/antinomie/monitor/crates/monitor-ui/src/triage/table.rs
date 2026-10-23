@@ -152,7 +152,10 @@ pub(super) fn evidence_values_key(values: &[(&str, RowValue)]) -> String {
 }
 
 pub(super) fn request_evidence_jump(ctx: &egui::Context, values: &[(&str, RowValue)]) {
+    // A finding found in packets carries a frame and no call.
+    let packet = values.iter().any(|(key, _)| *key == "capture.path");
     if let Some(key) = files::number(values, "stream.id")
+        .filter(|_| !packet)
         .zip(files::number(values, "process.cookie"))
         .zip(files::number(values, "event.id"))
     {

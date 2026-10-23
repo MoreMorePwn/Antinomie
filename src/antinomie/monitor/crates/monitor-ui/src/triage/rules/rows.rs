@@ -129,6 +129,23 @@ pub(super) fn finding(agg: &Agg) -> Finding {
         summary.push_str(&format!(" · the same in {} processes", agg.siblings));
     }
     let attack: Vec<String> = agg.attack.iter().map(|id| (*id).to_owned()).collect();
+    let mut detail = agg.detail.clone();
+    if agg.count > 1 && !agg.samples.is_empty() {
+        let calls: Vec<String> = std::iter::once(agg.call_id)
+            .chain(agg.samples.iter().map(|(_, call)| *call))
+            .map(|call| call.to_string())
+            .collect();
+        detail.push(format!(
+            "Occurrences: calls {}{} ({} in all)",
+            calls.join(", "),
+            if agg.count > calls.len() as u64 {
+                ", …"
+            } else {
+                ""
+            },
+            agg.count
+        ));
+    }
     let source = spec.source(agg.attack);
     let time = if agg.first_ns == 0 {
         "—".to_string()
@@ -178,7 +195,7 @@ pub(super) fn finding(agg: &Agg) -> Finding {
         ),
         ("finding.last_ns", RowValue::Number(i128::from(agg.last_ns))),
         ("finding.why", RowValue::List(agg.why.clone())),
-        ("finding.detail", RowValue::List(agg.detail.clone())),
+        ("finding.detail", RowValue::List(detail)),
         (
             "syscall.ret",
             agg.ret
@@ -198,6 +215,12 @@ pub(super) fn finding(agg: &Agg) -> Finding {
         ),
         ("entry.tag", RowValue::Missing),
     ];
+    let mut values = values;
+    // A row found in packets opens the packet, not a call.
+    if let Some((capture, frame)) = &agg.packet {
+        values.push(("capture.path", RowValue::Text(capture.clone())));
+        values.push(("frame.number", RowValue::Number(i128::from(*frame))));
+    }
     Finding {
         key: agg.key(),
         call_id: agg.call_id,

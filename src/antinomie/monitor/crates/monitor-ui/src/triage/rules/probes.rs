@@ -847,6 +847,7 @@ fn base_row(
         detail: Vec::new(),
         siblings: 0,
         samples: Vec::new(),
+        packet: None,
         tier: spec.tier,
         why: Vec::new(),
     }
