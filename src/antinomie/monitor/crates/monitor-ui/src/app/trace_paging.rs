@@ -9,6 +9,7 @@ pub(super) struct TracePaging {
     pub window_start: u64,
     pub pending_start: Option<u64>,
     anchors: std::collections::BTreeMap<u64, u64>,
+    anchors_closed: bool,
 }
 
 impl TracePaging {
@@ -66,12 +67,28 @@ impl MonitorApp {
         let Some(directory) = self.prepare_trace_read() else {
             return;
         };
-        let (rank, offset) = self
-            .trace_paging
-            .anchors
-            .range(..=start)
-            .next_back()
-            .map_or((0, 0), |(&rank, &offset)| (rank, offset));
+        // An unfinished call can acquire an exit/result as the archive grows,
+        // changing earlier filter membership. Only closed recordings have
+        // stable matching ranks; growing prefixes must seek from the start.
+        let closed = if let Some(capture) = self.selected_capture_summary() {
+            capture.state == CaptureState::Finalized
+        } else {
+            self.offline_run()
+                .is_some_and(|run| run.state == RunState::Finalized)
+        };
+        if !closed || !self.trace_paging.anchors_closed {
+            self.trace_paging.anchors.clear();
+        }
+        self.trace_paging.anchors_closed = closed;
+        let (rank, offset) = if closed {
+            self.trace_paging
+                .anchors
+                .range(..=start)
+                .next_back()
+                .map_or((0, 0), |(&rank, &offset)| (rank, offset))
+        } else {
+            (0, 0)
+        };
         let limit = if self.trace_windowed() {
             256
         } else {

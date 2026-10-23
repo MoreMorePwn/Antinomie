@@ -79,7 +79,9 @@ matching calls in one scrollable table. Large pages and all-matches mode load
 visible rows in windows of at most 256 calls, with a 64 MiB preview budget;
 they do not copy the entire recording into memory. A first jump through a
 filtered recording can scan the preceding matches in the background. Revisited
-ranges reuse a bounded cursor cache. Column sorting applies to the loaded window.
+ranges of finalized recordings reuse a bounded cursor cache. Unfinished
+recordings seek from the start because arriving results can change earlier
+filter matches. Column sorting applies to the loaded window.
 Core strings and saved memory-analysis results also offer direct page entry;
 packet history already has it, and specimen Content supports a byte-offset jump.
 
