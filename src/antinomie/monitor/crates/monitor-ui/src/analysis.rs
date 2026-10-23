@@ -532,32 +532,60 @@ pub(crate) fn in_progress(report: &AnalysisReport) -> bool {
 pub(crate) fn pending_word(state: AnalysisState) -> &'static str {
     match state {
         AnalysisState::Acquiring | AnalysisState::Queued => "Queued…",
-        _ => "Running…",
+        _ => "Waiting…",
     }
 }
 
-/// "Analysis in progress: <categories without a result>", or None once the
-/// analysis has finished.
+/// "<done>/<total> checks completed" and the one check running now with its
+/// tool and elapsed time, or None once the analysis has finished.
 pub(crate) fn progress_text(report: &AnalysisReport) -> Option<String> {
     if !in_progress(report) {
         return None;
     }
-    let stage = match report.state {
-        AnalysisState::Acquiring => " (copying the program from the guest)",
-        AnalysisState::Queued => " (queued)",
-        _ => "",
-    };
-    let pending: Vec<_> = report
+    let done = report
         .sections
         .iter()
-        .filter(|section| section.state == AnalysisSectionState::Pending)
-        .map(|section| section_title(section.kind))
-        .collect();
-    Some(if pending.is_empty() {
-        format!("Analysis in progress{stage}")
-    } else {
-        format!("Analysis in progress{stage}: {}", pending.join(", "))
-    })
+        .filter(|s| {
+            matches!(
+                s.state,
+                AnalysisSectionState::Complete | AnalysisSectionState::Partial
+            )
+        })
+        .count();
+    let unavailable = report
+        .sections
+        .iter()
+        .filter(|s| s.state == AnalysisSectionState::Unavailable)
+        .count();
+    let waiting = report
+        .sections
+        .iter()
+        .filter(|s| s.state == AnalysisSectionState::Pending)
+        .count();
+    let status = match report.state {
+        AnalysisState::Acquiring => "Copying the program from the guest".to_owned(),
+        AnalysisState::Queued => "Queued for analysis".to_owned(),
+        _ => report
+            .sections
+            .iter()
+            .find(|s| s.state == AnalysisSectionState::Running)
+            .map(|s| format!("{}: {}", section_title(s.kind), s.summary))
+            .unwrap_or_else(|| {
+                // Between two checks, or before the first one starts.
+                if done + unavailable == 0 {
+                    "Starting analysis worker"
+                } else if waiting == 0 {
+                    "Writing the report"
+                } else {
+                    "Starting the next check"
+                }
+                .to_owned()
+            }),
+    };
+    Some(format!(
+        "{done}/{} checks completed · {unavailable} unavailable · {waiting} waiting\n{status}",
+        report.sections.len()
+    ))
 }
 
 /// A spinner and the progress line while `report` is still being analyzed.
@@ -768,7 +796,7 @@ mod tests {
     }
 
     #[test]
-    fn progress_names_categories_still_running_and_clears_when_finished() {
+    fn progress_counts_checks_and_names_the_one_running_until_finished() {
         let sections = [
             (AnalysisKind::Metadata, AnalysisSectionState::Complete),
             (AnalysisKind::Strings, AnalysisSectionState::Pending),
@@ -776,15 +804,28 @@ mod tests {
         ];
         assert_eq!(
             progress_text(&report(AnalysisState::Running, &sections)).as_deref(),
-            Some("Analysis in progress: Strings, Entropy")
+            Some("1/3 checks completed · 0 unavailable · 2 waiting\nStarting the next check")
         );
         assert_eq!(
             progress_text(&report(AnalysisState::Queued, &sections[..1])).as_deref(),
-            Some("Analysis in progress (queued)")
+            Some("1/1 checks completed · 0 unavailable · 0 waiting\nQueued for analysis")
         );
         assert!(progress_text(&report(AnalysisState::Acquiring, &sections))
             .unwrap()
-            .starts_with("Analysis in progress (copying the program from the guest): Strings"));
+            .contains("Copying the program from the guest"));
+        let fresh = [(AnalysisKind::Metadata, AnalysisSectionState::Pending)];
+        assert!(progress_text(&report(AnalysisState::Running, &fresh))
+            .unwrap()
+            .ends_with("Starting analysis worker"));
+        let finished = [(AnalysisKind::Metadata, AnalysisSectionState::Complete)];
+        assert!(progress_text(&report(AnalysisState::Running, &finished))
+            .unwrap()
+            .ends_with("Writing the report"));
+        let mut active = report(AnalysisState::Running, &sections);
+        active.sections[1].state = AnalysisSectionState::Running;
+        active.sections[1].summary = "Built-in analysis · tool 3s · check 3s elapsed".into();
+        active.sections[2].state = AnalysisSectionState::Unavailable;
+        assert_eq!(progress_text(&active).unwrap(), "1/3 checks completed · 1 unavailable · 0 waiting\nStrings: Built-in analysis · tool 3s · check 3s elapsed");
         for state in [
             AnalysisState::Complete,
             AnalysisState::Partial,

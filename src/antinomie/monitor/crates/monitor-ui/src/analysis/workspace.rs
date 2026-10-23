@@ -715,7 +715,7 @@ fn state_tone(section: &AnalysisSection) -> crate::widgets::Tone {
         S::Complete => Tone::Good,
         S::Partial => Tone::Warn,
         S::Unavailable => Tone::Error,
-        S::Pending => Tone::Neutral,
+        S::Pending | S::Running => Tone::Neutral,
     }
 }
 
@@ -799,6 +799,7 @@ fn state_word(report: &AnalysisReport, section: &AnalysisSection) -> &'static st
             super::pending_word(report.state)
         }
         antinomie_monitor_core::AnalysisSectionState::Pending => "Pending",
+        antinomie_monitor_core::AnalysisSectionState::Running => "Running…",
         antinomie_monitor_core::AnalysisSectionState::Complete => "Complete",
         antinomie_monitor_core::AnalysisSectionState::Partial => "Partial",
         antinomie_monitor_core::AnalysisSectionState::Unavailable => "Unavailable",
@@ -961,6 +962,32 @@ mod tests {
         view.query = "value2".into();
         assert_eq!(visible(&section, Structure::All, &mut view, &[]), [1]);
         assert_eq!(view.selected, Some((true, 16)));
+    }
+    #[test]
+    fn a_waiting_check_is_worded_apart_from_the_one_running() {
+        let mut report = AnalysisReport {
+            id: "words".into(),
+            state: AnalysisState::Running,
+            source_path: "/bin/true".into(),
+            specimen_sha256: None,
+            specimen_len: None,
+            reason: None,
+            sections: vec![
+                AnalysisSection::new(AnalysisKind::Strings),
+                AnalysisSection::new(AnalysisKind::Capabilities),
+            ],
+        };
+        report.sections[1].state = AnalysisSectionState::Running;
+        let words: Vec<_> = report
+            .sections
+            .iter()
+            .map(|section| state_word(&report, section))
+            .collect();
+        assert_eq!(words, ["Waiting…", "Running…"]);
+        report.state = AnalysisState::Queued;
+        assert_eq!(state_word(&report, &report.sections[0]), "Queued…");
+        report.state = AnalysisState::Partial;
+        assert_eq!(state_word(&report, &report.sections[0]), "Pending");
     }
     #[test]
     fn switching_report_resets_navigation_selection_and_preview() {

@@ -346,7 +346,11 @@ fn pending(report: &AnalysisReport, kind: AnalysisKind) -> bool {
     super::super::in_progress(report)
         && report.sections.iter().any(|section| {
             section.kind == kind
-                && section.state == antinomie_monitor_core::AnalysisSectionState::Pending
+                && matches!(
+                    section.state,
+                    antinomie_monitor_core::AnalysisSectionState::Pending
+                        | antinomie_monitor_core::AnalysisSectionState::Running
+                )
         })
 }
 

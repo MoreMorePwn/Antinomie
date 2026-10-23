@@ -2,7 +2,9 @@
 //! Per-section progress of a running worker: the worker publishes the report
 //! after every section and the host adopts what is validated, so a deadline or
 //! a crash keeps the sections that finished.
+mod activity;
 use super::*;
+pub(super) use activity::{Stage, tool_started};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -10,7 +12,7 @@ use std::{
 };
 
 /// Name of the worker's progress report in its output directory.
-pub(super) const FILE: &str = "progress.json";
+pub(super) const FILE: &str = "progress/progress.json";
 /// How often the host looks at a running worker's progress.
 const POLL: Duration = Duration::from_secs(2);
 
@@ -20,14 +22,14 @@ pub(super) fn publish(directory: &Path, report: &AnalysisReport, running: Option
     let mut snapshot = report.clone();
     snapshot.state = AnalysisState::Running;
     if let Some(section) = running.and_then(|index| snapshot.sections.get_mut(index)) {
-        section.state = AnalysisSectionState::Pending;
+        section.state = AnalysisSectionState::Running;
         section.summary = "running in the analysis worker".into();
     }
     let Ok(encoded) = super::worker::bounded_report(&mut snapshot) else {
         return;
     };
     let target = directory.join(FILE);
-    let temporary = directory.join(".progress.tmp");
+    let temporary = directory.join("progress/.progress.tmp");
     if fs::write(&temporary, encoded).is_ok() && fs::rename(&temporary, &target).is_err() {
         let _ = fs::remove_file(&temporary);
     }
@@ -55,11 +57,18 @@ impl Watch {
         let path: PathBuf = directory.join("output").join(FILE);
         let metadata = fs::symlink_metadata(&path).ok()?;
         let stamp = (metadata.modified().ok()?, metadata.len());
-        if self.seen == Some(stamp) {
+        if self.seen == Some(stamp)
+            && !expected
+                .sections
+                .iter()
+                .any(|s| s.state == AnalysisSectionState::Running)
+        {
             return None;
         }
+        let mut report = super::jobs::read_report(&path, expected, false).ok()?;
+        activity::annotate(&directory.join("output/progress"), &mut report);
         self.seen = Some(stamp);
-        super::jobs::read_report(&path, expected, false).ok()
+        Some(report)
     }
 }
 
@@ -67,8 +76,16 @@ impl Watch {
 /// false drops listing references (the files are not validated yet).
 pub(super) fn merge(report: &mut AnalysisReport, progress: AnalysisReport, keep_listings: bool) {
     for (section, new) in report.sections.iter_mut().zip(progress.sections) {
-        let finished = new.state != AnalysisSectionState::Pending;
-        if finished || section.state == AnalysisSectionState::Pending {
+        let finished = !matches!(
+            new.state,
+            AnalysisSectionState::Pending | AnalysisSectionState::Running
+        );
+        if finished
+            || matches!(
+                section.state,
+                AnalysisSectionState::Pending | AnalysisSectionState::Running
+            )
+        {
             *section = new;
         }
         if !keep_listings {
@@ -85,10 +102,12 @@ pub(super) fn salvage(directory: &Path, report: &mut AnalysisReport) -> bool {
     let Ok(progress) = super::jobs::read_report(&path, report, false) else {
         return false;
     };
-    let finished = progress
-        .sections
-        .iter()
-        .any(|section| section.state != AnalysisSectionState::Pending);
+    let finished = progress.sections.iter().any(|section| {
+        !matches!(
+            section.state,
+            AnalysisSectionState::Pending | AnalysisSectionState::Running
+        )
+    });
     merge(report, progress, true);
     finished
 }
@@ -102,6 +121,24 @@ impl super::jobs::Job {
             super::jobs::adopt_listings(&self.directory, &mut self.report);
         }
     }
+}
+
+/// Preserve report/tab order, but finish inexpensive checks before the two
+/// heavyweight whole-program analyzers. Within each tier retain user order.
+pub(super) fn execution_order(report: &AnalysisReport) -> Vec<usize> {
+    let mut indices: Vec<_> = (0..report.sections.len()).collect();
+    indices.sort_by_key(|&i| match report.sections[i].kind {
+        AnalysisKind::Metadata
+        | AnalysisKind::Structures
+        | AnalysisKind::Strings
+        | AnalysisKind::Entropy
+        | AnalysisKind::Hardening => 0,
+        AnalysisKind::Rules | AnalysisKind::Identification => 1,
+        AnalysisKind::Embedded | AnalysisKind::Disassembly => 2,
+        AnalysisKind::Capabilities => 3,
+        AnalysisKind::Decompilation => 4,
+    });
+    indices
 }
 
 pub(crate) fn worker_deadline(report: &AnalysisReport) -> Duration {
@@ -143,10 +180,31 @@ mod tests {
     }
 
     #[test]
+    fn light_checks_finish_before_whole_program_tools_without_reordering_the_report() {
+        let mut report = report();
+        let kinds = [
+            AnalysisKind::Decompilation,
+            AnalysisKind::Capabilities,
+            AnalysisKind::Disassembly,
+            AnalysisKind::Rules,
+            AnalysisKind::Metadata,
+            AnalysisKind::Identification,
+            AnalysisKind::Embedded,
+        ];
+        report.sections = kinds.iter().copied().map(AnalysisSection::new).collect();
+        let order = execution_order(&report);
+        assert_eq!(order, [4, 3, 5, 2, 6, 1, 0]);
+        assert_eq!(
+            report.sections.iter().map(|s| s.kind).collect::<Vec<_>>(),
+            kinds
+        );
+    }
+
+    #[test]
     fn a_deadline_keeps_finished_sections_and_marks_only_the_rest() {
         let directory = std::env::temp_dir().join(format!("ant-progress-{}", std::process::id()));
         let output = directory.join("output");
-        fs::create_dir_all(&output).unwrap();
+        fs::create_dir_all(output.join("progress")).unwrap();
         let expected = report();
         let mut worker = expected.clone();
         worker.sections[0].state = AnalysisSectionState::Complete;
@@ -157,7 +215,9 @@ mod tests {
         let snapshot = Watch::default().changed(&directory, &live).unwrap();
         merge(&mut live, snapshot, false);
         assert_eq!(live.sections[0].state, AnalysisSectionState::Complete);
+        assert_eq!(live.sections[1].state, AnalysisSectionState::Running);
         assert_eq!(live.sections[1].summary, "running in the analysis worker");
+        assert_eq!(live.sections[2].state, AnalysisSectionState::Pending);
         // The worker is stopped: finished sections stay, the rest is marked.
         let mut stopped = expected.clone();
         assert!(salvage(&directory, &mut stopped));

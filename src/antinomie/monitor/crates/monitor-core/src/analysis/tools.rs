@@ -156,6 +156,7 @@ pub(crate) fn run_cancellable(
     log_stderr: bool,
     cancel: &AtomicBool,
 ) -> Result<Run, String> {
+    super::progress::tool_started(path, args);
     let mut command = Command::new(path);
     command
         .args(args)

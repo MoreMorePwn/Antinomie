@@ -33,6 +33,14 @@ pub(crate) fn validate_report(report: &AnalysisReport) -> Result<(), String> {
     {
         return Err("analysis report violates archive bounds".into());
     }
+    let running = report
+        .sections
+        .iter()
+        .filter(|s| s.state == AnalysisSectionState::Running)
+        .count();
+    if running > 1 || (running != 0 && report.state != AnalysisState::Running) {
+        return Err("invalid running analysis section state".into());
+    }
     for (index, section) in report.sections.iter().enumerate() {
         if report.sections[..index]
             .iter()
