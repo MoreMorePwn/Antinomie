@@ -173,7 +173,12 @@ pub(super) fn cache(
 #[derive(Default)]
 pub(super) struct Counts {
     pub calls: u64,
+    /// The badge: rows of LOW and above that are not hidden, and the capped ones.
     pub findings: u64,
+    /// Rows by tier (HIGH, MEDIUM, LOW) and the number of INFO matches.
+    pub finding_tiers: [u64; 4],
+    pub findings_hidden: u64,
+    pub findings_capped: u64,
     pub opened: u64,
     pub reads: u64,
     pub changed: u64,

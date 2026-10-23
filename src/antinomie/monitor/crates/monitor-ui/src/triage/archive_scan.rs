@@ -22,7 +22,7 @@ impl FindingJournal {
             .map_err(|error| error.to_string())?;
         Ok(Self {
             temp,
-            destination: directory.join("triage-findings-v1.jsonl"),
+            destination: directory.join("triage-findings-v2.jsonl"),
             file,
             size: 0,
         })
@@ -44,7 +44,7 @@ impl FindingJournal {
                 ((*name).to_owned(), value)
             })
             .collect::<serde_json::Map<_, _>>();
-        let row = serde_json::to_vec(&serde_json::json!({"format_version":1, "evidence_call_id":finding.call_id, "facts":facts}))
+        let row = serde_json::to_vec(&serde_json::json!({"format_version":2, "evidence_call_id":finding.call_id, "facts":facts}))
             .map_err(|error| error.to_string())?;
         if self.size.saturating_add(row.len() as u64 + 1) > 256 * 1024 * 1024 {
             return Err("finding journal exceeded 256 MiB; prior journal retained".into());
@@ -90,7 +90,11 @@ pub(super) fn scan_archive(
         pcap,
         pcap_open,
         &Arc::new(AtomicBool::new(cancel.load(Ordering::Relaxed))),
-        &ScanRequest::default(),
+        &ScanRequest {
+            // The fixtures are one run; a request without a root is a capture of the whole VM.
+            root_cookie: 55,
+            ..ScanRequest::default()
+        },
     )
 }
 
@@ -152,6 +156,10 @@ pub(super) fn scan_archive_query(
     let mut nodes = std::collections::BTreeMap::new();
     let mut finding_page = sorting::Page::new(request, 0, cancel);
     let finding_query = query::compile_table(&request.filters[0], FINDING_FIELDS);
+    let mut engine = rules::Engine::new(rules::Options {
+        show_info: request.finding_view.show_info,
+        capture_all: request.root_cookie == 0,
+    });
     let mut scoped_count = 0;
     // Calls whose saved async observations the pages only preview, and how many.
     let (mut async_partial, mut async_omitted) = (0u64, 0u64);
@@ -205,7 +213,6 @@ pub(super) fn scan_archive_query(
         name_launched(&mut nodes, launch, request.root_cookie);
     }
     let cookies = resolve_cookies(&cookie_sets);
-    let mut suspicious = Suspicious::new();
     let mut counts = normalized::Counts {
         calls: scoped_count,
         ..Default::default()
@@ -304,29 +311,7 @@ pub(super) fn scan_archive_query(
                 bpf_omitted += 1;
             }
         }
-        let findable: &[InvocationSummary] = if real {
-            std::slice::from_ref(invocation)
-        } else {
-            &[]
-        };
-        for mut finding in suspicious_rows_state(findable, Some(&files)) {
-            counts.findings += 1;
-            tally(&mut suspicious, &finding.values);
-            finding.values.push((
-                "process.exe",
-                process_image(&files, event)
-                    .map_or(RowValue::Missing, |image| RowValue::Text(image.into())),
-            ));
-            if let Some(writer) = &mut journal {
-                if let Err(error) = writer.push(&finding) {
-                    journal_error = Some(error);
-                    journal = None;
-                }
-            }
-            if finding_query.keep_table(&finding.values) {
-                finding_page.push(finding)?;
-            }
-        }
+        engine.observe(invocation, &files, Some(&recording.directory), !real);
         sigma_events::seed_launch_cwd(&mut files, event);
         remember_cwd(&mut files, invocation, event);
         remember_open(&mut files, invocation, event);
@@ -409,7 +394,6 @@ pub(super) fn scan_archive_query(
     for change in &file_changes {
         change_page.push(change.row(clock_anchor))?;
     }
-    let (findings, findings_omitted, _) = finding_page.finish()?;
     let (read, read_omitted, _) = read_page.finish()?;
     let (changed, changed_omitted, _) = change_page.finish()?;
     let (opened, file_tabs) = tabs.finish()?;
@@ -418,59 +402,6 @@ pub(super) fn scan_archive_query(
         omitted: opened_omitted,
     } = opened;
     let complete = complete && files_complete;
-    if complete && !cancel.load(Ordering::Relaxed) {
-        if let Some(writer) = &mut journal {
-            if let Err(error) = writer.publish() {
-                journal_error = Some(error);
-            }
-        }
-    }
-    let mut coverage = format!(
-        "indexed {seen} saved calls{}; findings stored {}, omitted {findings_omitted}; opened stored {}, omitted {opened_omitted}; changed stored {}, omitted {changed_omitted}",
-        total
-            .map(|count| format!(" of {count}"))
-            .unwrap_or_else(|| " (saved total unavailable)".into()),
-        findings.len(),
-        opened.len(),
-        changed.len()
-    );
-    if !complete {
-        coverage.push_str("; scan stopped before the end of telemetry.raw");
-    }
-    if !issues.is_empty() {
-        coverage.push_str(&format!("; {} archive read issues", issues.len()));
-    }
-    if recordings.len() > 1 {
-        coverage.push_str(&format!(
-            "; read {} recording segments of this run, split by {} transport reconnect{}",
-            recordings.len(),
-            recordings.len() - 1,
-            if recordings.len() == 2 { "" } else { "s" }
-        ));
-    }
-    if async_partial > 0 {
-        coverage.push_str(&format!(
-            "; {async_omitted} saved async observations on {async_partial} calls are past the {} each call previews and were not scanned for processes, network or detection",
-            antinomie_monitor_core::ASYNC_PREVIEW_LIMIT
-        ));
-    }
-    if reach.requests > 0 {
-        coverage.push_str(&format!(
-            "; {} io_uring/AIO file requests read as system calls",
-            reach.requests
-        ));
-    }
-    if reach.unread_calls > 0 {
-        coverage.push_str(&format!(
-            "; file requests of {} calls were not all read ({} requests, past the scan limit or unreadable)",
-            reach.unread_calls, reach.unread_requests
-        ));
-    }
-    if let Some(error) = journal_error {
-        coverage.push_str(&format!(
-            "; finding journal persistence unavailable: {error}"
-        ));
-    }
     let mut network_request = request.clone();
     network_request.owned_pcap = pcap
         .map(|path| network::owned_capture(&recording.directory, request.identity.as_ref(), path))
@@ -574,6 +505,79 @@ pub(super) fn scan_archive_query(
     if estimated_end && network.network_warning.is_none() {
         network.network_warning =
             Some("Network end time is estimated from this run’s last retained syscall.".into());
+    }
+    let output = engine.finish(&files);
+    counts.findings = output.badge;
+    counts.finding_tiers = output.tiers;
+    counts.findings_hidden = output.hidden;
+    counts.findings_capped = output.capped;
+    let suspicious = output.tasks;
+    for finding in output.rows {
+        if let Some(writer) = &mut journal {
+            if let Err(error) = writer.push(&finding) {
+                journal_error = Some(error);
+                journal = None;
+            }
+        }
+        if rules::view_keeps(&request.finding_view, &finding.values)
+            && finding_query.keep_table(&finding.values)
+        {
+            finding_page.push(finding)?;
+        }
+    }
+    let (findings, findings_omitted, _) = finding_page.finish()?;
+    if complete && !cancel.load(Ordering::Relaxed) {
+        if let Some(writer) = &mut journal {
+            if let Err(error) = writer.publish() {
+                journal_error = Some(error);
+            }
+        }
+    }
+    let mut coverage = format!(
+        "indexed {seen} saved calls{}; findings stored {}, omitted {findings_omitted}; opened stored {}, omitted {opened_omitted}; changed stored {}, omitted {changed_omitted}",
+        total
+            .map(|count| format!(" of {count}"))
+            .unwrap_or_else(|| " (saved total unavailable)".into()),
+        findings.len(),
+        opened.len(),
+        changed.len()
+    );
+    if !complete {
+        coverage.push_str("; scan stopped before the end of telemetry.raw");
+    }
+    if !issues.is_empty() {
+        coverage.push_str(&format!("; {} archive read issues", issues.len()));
+    }
+    if recordings.len() > 1 {
+        coverage.push_str(&format!(
+            "; read {} recording segments of this run, split by {} transport reconnect{}",
+            recordings.len(),
+            recordings.len() - 1,
+            if recordings.len() == 2 { "" } else { "s" }
+        ));
+    }
+    if async_partial > 0 {
+        coverage.push_str(&format!(
+            "; {async_omitted} saved async observations on {async_partial} calls are past the {} each call previews and were not scanned for processes, network or detection",
+            antinomie_monitor_core::ASYNC_PREVIEW_LIMIT
+        ));
+    }
+    if reach.requests > 0 {
+        coverage.push_str(&format!(
+            "; {} io_uring/AIO file requests read as system calls",
+            reach.requests
+        ));
+    }
+    if reach.unread_calls > 0 {
+        coverage.push_str(&format!(
+            "; file requests of {} calls were not all read ({} requests, past the scan limit or unreadable)",
+            reach.unread_calls, reach.unread_requests
+        ));
+    }
+    if let Some(error) = journal_error {
+        coverage.push_str(&format!(
+            "; finding journal persistence unavailable: {error}"
+        ));
     }
     coverage.push_str(". ");
     coverage.push_str(&network.coverage);

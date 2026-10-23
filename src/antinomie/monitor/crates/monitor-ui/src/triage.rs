@@ -45,6 +45,7 @@ mod file_location;
 mod file_tabs;
 mod file_visibility;
 mod files;
+mod finding_bar;
 mod findings;
 mod kernel_records;
 mod network;
@@ -58,6 +59,7 @@ mod properties;
 mod refresh;
 #[cfg(test)]
 mod refresh_tests;
+mod rules;
 mod segments;
 mod sigma_events;
 #[cfg(test)]
@@ -95,6 +97,8 @@ enum Bar {
     Plain,
     /// The Hide stdio, Hide library and Failed attempts toggles.
     Files,
+    /// Tier and category chips, Show INFO and Show hidden.
+    Findings,
     /// The Open Packets button, enabled when the run has a capture.
     Network {
         packets: bool,
@@ -560,10 +564,8 @@ impl TriageView {
                         &scan.suspicious,
                     );
                 } else {
-                    let mut suspicious = Suspicious::new();
-                    for finding in suspicious_rows(input.invocations) {
-                        tally(&mut suspicious, &finding.values);
-                    }
+                    let suspicious =
+                        suspicious_output(input.invocations, rules::Options::default()).tasks;
                     process_tree_nodes(
                         ui,
                         &process_nodes(input.invocations),
@@ -688,13 +690,13 @@ impl TriageView {
                 format!("{omitted} rule matches are available on other query pages."),
             );
         }
-        self.query_controls(
+        self.query_bar(
             ui,
             0,
             FINDING_FIELDS,
-            "finding.severity == high",
-            findings.len(),
-            findings.len() as u64 + omitted,
+            "finding.tier == high",
+            (findings.len(), findings.len() as u64 + omitted),
+            Bar::Findings,
         );
         let clock = self
             .scan
@@ -702,7 +704,7 @@ impl TriageView {
             .and_then(|scan| scan.clock_anchor)
             .or(self.scan_request.clock_anchor);
         for finding in &mut findings {
-            finding.cells[5].text = crate::time_format::guest_ns(
+            finding.cells[rules::COL_TIME].text = crate::time_format::guest_ns(
                 clock,
                 files::number(&finding.values, "event.time_ns"),
             );
@@ -710,23 +712,15 @@ impl TriageView {
         let rows = if self.scan.is_some() {
             findings
         } else {
-            filter_findings(findings, &self.scan_request.filters[0])
+            let view = self.scan_request.finding_view;
+            let mut rows = filter_findings(findings, &self.scan_request.filters[0]);
+            rows.retain(|row| rules::view_keeps(&view, &row.values));
+            rows
         };
         let clicked = finding_table(
             ui,
             "triage-findings",
-            &[
-                "Rule",
-                "Severity",
-                "Process",
-                "Summary",
-                "Source",
-                "Time",
-                "Confidence",
-                "Evidence",
-                "Version",
-                "Outcome",
-            ],
+            rules::HEADERS,
             &rows,
             self.selected_call_id,
         );
@@ -734,18 +728,6 @@ impl TriageView {
             self.selected_call_id = Some(call_id);
         }
         None
-    }
-
-    fn query_controls(
-        &mut self,
-        ui: &mut egui::Ui,
-        index: usize,
-        fields: &[FieldSpec<'_>],
-        example: &str,
-        retained: usize,
-        total: u64,
-    ) {
-        self.query_bar(ui, index, fields, example, (retained, total), Bar::Plain);
     }
 
     /// The filter bar of a table: the filter, then one row with the section's
@@ -803,6 +785,9 @@ impl TriageView {
             ui.horizontal_wrapped(|ui| {
                 if bar == Bar::Files {
                     self.file_toggles(ui);
+                }
+                if bar == Bar::Findings {
+                    self.finding_chips(ui);
                 }
                 if self.scan_key.is_some() {
                     self.pager(ui, index, retained, total);
@@ -975,15 +960,31 @@ struct ProcessNode {
 const FINDING_FIELDS: &[FieldSpec<'static>] = &[
     FieldSpec::text("finding.rule", "Stable activity rule"),
     FieldSpec::number("finding.version", "Rule version"),
-    FieldSpec::text("finding.severity", "Activity severity, not malware verdict"),
+    FieldSpec::text("finding.tier", "high, medium, low or info, after context"),
+    FieldSpec::text("finding.severity", "Same as finding.tier"),
+    FieldSpec::text("finding.base_tier", "The rule's own tier, before context"),
+    FieldSpec::text(
+        "finding.category",
+        "execution, persistence, privilege, evasion, credential, discovery, injection, c2, rootkit, impact, collection, lateral or exfiltration",
+    ),
+    FieldSpec::tags("finding.technique", "ATT&CK technique and detection ids"),
+    FieldSpec::number("finding.count", "Occurrences folded into the row"),
+    FieldSpec::tags(
+        "finding.flags",
+        "failed, allow-listed, outside-scope, vm-wide, suppressed, async, collapsed, capped, periodic, repeated",
+    ),
+    FieldSpec::boolean("finding.hidden", "Hidden as housekeeping or outside the run"),
     FieldSpec::text("finding.confidence", "Evidence confidence: high or limited"),
     FieldSpec::text("finding.source", "Rule reference"),
     FieldSpec::text("finding.summary", "Matching facts"),
+    FieldSpec::text("finding.object", "What repeats are folded by"),
     FieldSpec::boolean("finding.attempted", "A syscall attempt was recorded"),
     FieldSpec::boolean(
         "finding.success",
         "Observed nonnegative syscall exit; missing without exit",
     ),
+    FieldSpec::number("finding.first_ns", "First occurrence, guest monotonic ns"),
+    FieldSpec::number("finding.last_ns", "Last occurrence, guest monotonic ns"),
     FieldSpec::number("process.pid", "Observed PID"),
     FieldSpec::text(
         "process.exe",
@@ -1034,6 +1035,8 @@ const DNS_FIELDS: &[FieldSpec<'static>] = &[
 
 #[derive(Clone, Default)]
 struct ScanRequest {
+    /// The chips above Suspicious activity.
+    finding_view: rules::View,
     event_cache: Option<normalized::Cache>,
     sorts: [Option<sorting::Spec>; SLOTS],
     file_visibility: file_visibility::FileVisibility,

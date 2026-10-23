@@ -390,18 +390,7 @@ impl<T: Row> Page<T> {
         if let Some(sort) = self.sort {
             let cells = row.cells();
             let headers: &[&str] = match self.index {
-                0 => &[
-                    "Rule",
-                    "Severity",
-                    "Process",
-                    "Summary",
-                    "Source",
-                    "Time",
-                    "Confidence",
-                    "Evidence",
-                    "Version",
-                    "Outcome",
-                ],
+                0 => rules::HEADERS,
                 1 | 8..=15 => file_category::EVENT_HEADERS,
                 SESSION_SLOT => SESSION_HEADERS,
                 2 => file_tabs::CHANGED_HEADERS,
@@ -494,23 +483,16 @@ mod tests {
     fn sorted_findings_keep_exact_unsigned_identity_and_cancellation_is_observable() {
         let mut request = ScanRequest::default();
         request.sorts[0] = Some(Spec {
-            column: 7,
+            column: 9,
             descending: true,
         });
         let cancel = Arc::new(AtomicBool::new(false));
         let mut page = Page::<Finding>::new(&request, 0, &cancel);
         let mut call = super::super::tests::call(7, 9, "mmap", 0);
+        call.entry.as_mut().unwrap().args = Some([0, 4096, 7, 0, 0, 0]);
         call.call_id = u64::MAX;
         call.stream_id = 99;
-        let finding = hit(
-            "memory.rwx",
-            "high",
-            "process".into(),
-            "test evidence".into(),
-            "fixture",
-            trace::representative(&call).unwrap(),
-            &call,
-        );
+        let finding = suspicious_rows(&[call]).remove(0);
         let expected = finding.key;
         page.push(finding).unwrap();
         let (rows, _, _) = page.finish().unwrap();

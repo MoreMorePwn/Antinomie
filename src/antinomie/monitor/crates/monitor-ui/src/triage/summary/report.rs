@@ -215,12 +215,13 @@ fn observations(ui: &mut egui::Ui, scan: &ArchiveScan) -> bool {
             for (index, finding) in scan.findings.iter().take(4).enumerate() {
                 let severity = finding
                     .cells
-                    .get(1)
+                    .get(rules::COL_TIER)
                     .map_or("Observed", |cell| cell.text.as_str());
                 let color = match severity {
                     "high" => theme::error(),
                     "medium" => theme::warn(),
-                    _ => theme::blue(),
+                    "low" => theme::blue(),
+                    _ => theme::muted(),
                 };
                 // One syscall can produce several observations, so the click
                 // target needs the rule as well as the invocation.
@@ -240,13 +241,13 @@ fn observations(ui: &mut egui::Ui, scan: &ArchiveScan) -> bool {
                             if !rule.is_empty() {
                                 ui.label(RichText::new(rule).strong().color(theme::text()));
                             }
-                            if let Some(process) = finding.cells.get(2) {
+                            if let Some(process) = finding.cells.get(rules::COL_PROCESS) {
                                 ui.label(
                                     RichText::new(&process.text).small().color(theme::muted()),
                                 );
                             }
                         });
-                        if let Some(summary) = finding.cells.get(3) {
+                        if let Some(summary) = finding.cells.get(rules::COL_SUMMARY) {
                             ui.add(egui::Label::new(&summary.text).truncate());
                         }
                     })
@@ -262,23 +263,7 @@ fn observations(ui: &mut egui::Ui, scan: &ArchiveScan) -> bool {
                     if let Some(first) = cells.first_mut() {
                         first.values.clone_from(&finding.values);
                     }
-                    details::select(
-                        ui.ctx(),
-                        "triage-findings",
-                        &[
-                            "Rule",
-                            "Severity",
-                            "Process",
-                            "Summary",
-                            "Source",
-                            "Time",
-                            "Confidence",
-                            "Evidence",
-                            "Version",
-                            "Outcome",
-                        ],
-                        &cells,
-                    );
+                    details::select(ui.ctx(), "triage-findings", rules::HEADERS, &cells);
                     details::clicked(ui.ctx(), "triage-findings");
                 }
                 if clicked.double_clicked() {

@@ -20,6 +20,8 @@ const CONNECT: u64 = 42;
 const ACCEPT: u64 = 43;
 const SENDTO: u64 = 44;
 const BIND: u64 = 49;
+const LISTEN: u64 = 50;
+const SETSOCKOPT: u64 = 54;
 const ACCEPT4: u64 = 288;
 pub(super) const O_CREAT: u64 = 0o100;
 pub(super) const O_EXCL: u64 = 0o200;
@@ -27,6 +29,7 @@ pub(super) const O_TRUNC: u64 = 0o1000;
 /// `__O_TMPFILE | O_DIRECTORY`; both bits must be set.
 pub(super) const O_TMPFILE: u64 = 0o20200000;
 const SOCK_CLOEXEC: u64 = 0o2000000;
+const EINPROGRESS: i64 = -115;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum SocketKind {
@@ -35,10 +38,45 @@ pub(super) enum SocketKind {
     Other,
 }
 
+/// An IP address and port a socket was connected or bound to.
+pub(super) type Endpoint = (std::net::IpAddr, u16);
+
 #[derive(Clone, Copy)]
-struct Socket {
+pub(super) struct Socket {
     kind: SocketKind,
     cloexec: bool,
+    /// `socket()` domain: 2 inet, 10 inet6, 17 packet.
+    pub domain: u64,
+    /// A raw or packet socket.
+    pub raw: bool,
+    /// Where `connect` sent it, or where `accept` found the peer.
+    pub peer: Option<Endpoint>,
+    pub bound: Option<Endpoint>,
+    pub listening: bool,
+    /// Made by `accept`: a client reached this process.
+    pub accepted: bool,
+    /// A classic socket filter was attached.
+    pub filtered: bool,
+}
+
+impl Socket {
+    pub fn is_datagram(&self) -> bool {
+        self.kind == SocketKind::Datagram
+    }
+
+    fn new(kind: SocketKind, cloexec: bool, domain: u64, raw: bool) -> Self {
+        Self {
+            kind,
+            cloexec,
+            domain,
+            raw,
+            peer: None,
+            bound: None,
+            listening: false,
+            accepted: false,
+            filtered: false,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -404,8 +442,31 @@ fn track_sockets(files: &mut FdState, call: &InvocationSummary, event: &EventSum
     let owner = table_owner(files, call.task_cookie, event.tid);
     let key = |fd: u64| (owner.0, owner.1, fd);
     let sockets = &mut files.journal.sockets;
+    let endpoint =
+        |nr: u64| address(call, nr, 1).and_then(|found| Some((found.ip.parse().ok()?, found.port)));
     match event.syscall_nr {
+        // A non-blocking connect that is still going has already named its peer.
+        CONNECT if result >= 0 || result == EINPROGRESS => {
+            if let Some(socket) = sockets.get_mut(&key(args[0])) {
+                socket.peer = endpoint(CONNECT);
+            }
+        }
         _ if result < 0 => {}
+        BIND => {
+            if let Some(socket) = sockets.get_mut(&key(args[0])) {
+                socket.bound = endpoint(BIND);
+            }
+        }
+        LISTEN => {
+            if let Some(socket) = sockets.get_mut(&key(args[0])) {
+                socket.listening = true;
+            }
+        }
+        SETSOCKOPT if args[1] == 1 && args[2] == 26 => {
+            if let Some(socket) = sockets.get_mut(&key(args[0])) {
+                socket.filtered = true;
+            }
+        }
         SOCKET => {
             let kind = match (args[0], args[1] & 0xf) {
                 (2 | 10, 1) => SocketKind::Stream,
@@ -414,14 +475,19 @@ fn track_sockets(files: &mut FdState, call: &InvocationSummary, event: &EventSum
             };
             if sockets.len() < TABLE_LIMIT {
                 let cloexec = args[1] & SOCK_CLOEXEC != 0;
-                sockets.insert(key(result as u64), Socket { kind, cloexec });
+                let raw = args[0] == 17 || (matches!(args[0], 2 | 10) && args[1] & 0xf == 3);
+                sockets.insert(key(result as u64), Socket::new(kind, cloexec, args[0], raw));
             }
         }
         ACCEPT | ACCEPT4 => {
             let cloexec = event.syscall_nr == ACCEPT4 && args[3] & SOCK_CLOEXEC != 0;
             if sockets.len() < TABLE_LIMIT {
                 let kind = SocketKind::Stream;
-                sockets.insert(key(result as u64), Socket { kind, cloexec });
+                let domain = sockets.get(&key(args[0])).map_or(2, |socket| socket.domain);
+                let mut accepted = Socket::new(kind, cloexec, domain, false);
+                accepted.accepted = true;
+                accepted.peer = endpoint(event.syscall_nr);
+                sockets.insert(key(result as u64), accepted);
             }
         }
         3 => {
@@ -488,6 +554,12 @@ pub(super) fn socket_kind(
         .sockets
         .get(&(owner.0, owner.1, fd))
         .map(|socket| socket.kind)
+}
+
+/// The socket a task's descriptor refers to, when its `socket()` or `accept()` was seen.
+pub(super) fn socket_at(files: &FdState, cookie: u64, tid: u32, fd: u64) -> Option<&Socket> {
+    let owner = table_owner(files, cookie, tid);
+    files.journal.sockets.get(&(owner.0, owner.1, fd))
 }
 
 /// First time this process reaches this datagram peer. A datagram socket has

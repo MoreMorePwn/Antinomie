@@ -449,7 +449,7 @@ fn clone_flag(invocation: &InvocationSummary, event: &EventSummary, flag: u64) -
     }
 }
 
-fn clone3_flags(invocation: &InvocationSummary) -> Option<u64> {
+pub(super) fn clone3_flags(invocation: &InvocationSummary) -> Option<u64> {
     let field = invocation
         .entry
         .iter()
