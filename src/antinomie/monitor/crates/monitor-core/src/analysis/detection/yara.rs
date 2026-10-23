@@ -787,6 +787,7 @@ mod tests {
             include_dir: None,
             skipped_inputs: vec![],
             unstaged: vec![],
+            network_off: false,
         };
         let report = scan(&staged, &directory.join("work")).unwrap();
         let inputs = report.inputs.clone().unwrap();

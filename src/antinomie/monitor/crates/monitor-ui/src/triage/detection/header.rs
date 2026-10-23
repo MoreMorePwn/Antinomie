@@ -18,6 +18,9 @@ pub(super) fn rule_set_title(sets: &[EngineSet]) -> String {
     )
 }
 
+/// The neutral line of a scan the run was set up to leave out.
+pub(super) const SKIPPED_NOTE: &str = "Network capture was turned off for this run";
+
 pub(super) fn limitation_line(state: &State) -> Option<&'static str> {
     match state {
         State::Complete => None,
@@ -25,6 +28,8 @@ pub(super) fn limitation_line(state: &State) -> Option<&'static str> {
         State::Unavailable => Some("Limited: this scan could not evaluate the evidence."),
         State::NoRules => Some("Limited: no rules are enabled."),
         State::Missing => Some("Limited: the evidence for this engine is missing."),
+        // Nothing was lost, so this is no limit; the status line says why.
+        State::Skipped => None,
     }
 }
 
@@ -35,6 +40,7 @@ pub(super) fn state(state: &State) -> &'static str {
         State::Unavailable => "Unavailable",
         State::NoRules => "No rules enabled",
         State::Missing => "Evidence missing",
+        State::Skipped => "Skipped",
     }
 }
 
@@ -74,7 +80,7 @@ fn state_tone(state_value: &State) -> egui::Color32 {
     match state_value {
         State::Complete => theme::blue(),
         State::Partial | State::NoRules | State::Missing => theme::warn(),
-        State::Unavailable => theme::muted(),
+        State::Unavailable | State::Skipped => theme::muted(),
     }
 }
 
@@ -90,7 +96,7 @@ impl View {
                 Err(_) => true,
                 Ok(report) => matches!(
                     report.state,
-                    State::Unavailable | State::Missing | State::NoRules
+                    State::Unavailable | State::Missing | State::NoRules | State::Skipped
                 ),
             })
         {
@@ -294,8 +300,14 @@ impl View {
             }
         }
         if let Some(Ok(report)) = self.results[index].as_ref() {
-            parts.push(StatusPart::Count(matched_summary(report)));
             let (label, tone) = status_badge(report);
+            if report.state == State::Skipped {
+                // A neutral line: nothing was evaluated, and nothing is missing.
+                parts.push(StatusPart::Badge(label, tone));
+                parts.push(StatusPart::Muted(SKIPPED_NOTE.to_owned()));
+                return parts;
+            }
+            parts.push(StatusPart::Count(matched_summary(report)));
             parts.push(StatusPart::Badge(label, tone));
             let (short, long) = evaluated_text(report);
             parts.push(StatusPart::Evaluated(short, long));
@@ -455,7 +467,12 @@ mod tests {
         for label in ["YARA", "IDS", "Sigma", "1,234", "0", "…"] {
             assert!(texts.contains(label), "{texts}");
         }
-        for state in [State::Missing, State::Unavailable, State::NoRules] {
+        for state in [
+            State::Missing,
+            State::Unavailable,
+            State::NoRules,
+            State::Skipped,
+        ] {
             let mut missing = report(Vec::new());
             missing.state = state;
             view.results[1] = Some(Ok(missing));
@@ -675,6 +692,39 @@ mod tests {
             "{old}"
         );
         assert!(!old.contains("complete ·"), "{old}");
+    }
+
+    #[test]
+    fn a_skipped_ids_scan_is_a_neutral_line_and_not_a_warning() {
+        let mut view = scanned_view();
+        view.selected = Engine::Ids;
+        view.phase[1] = "idle".into();
+        let mut skipped = report(Vec::new());
+        skipped.engine = Engine::Ids;
+        skipped.state = State::Skipped;
+        skipped.inputs = Some(vec![ScannedInput {
+            kind: antinomie_monitor_core::analysis::detection::InputKind::Capture,
+            outcome: InputOutcome::Skipped,
+            reason: SKIPPED_NOTE.into(),
+            ..ScannedInput::default()
+        }]);
+        assert_eq!(limitation_line(&State::Skipped), None);
+        assert_eq!(state(&State::Skipped), "Skipped");
+        assert_eq!(status_badge(&skipped), ("Skipped", theme::muted()));
+        view.results[1] = Some(Ok(skipped));
+        let joined = panel_text(&mut view);
+        assert!(joined.contains("Skipped"), "{joined}");
+        assert!(
+            joined.contains("Network capture was turned off for this run"),
+            "{joined}"
+        );
+        for warning in ["Limited", "Evidence missing", "Partial", "clean"] {
+            assert!(!joined.contains(warning), "{warning}: {joined}");
+        }
+        assert_eq!(
+            view.tab_count(1),
+            super::super::super::counts::Count::Unavailable
+        );
     }
 
     /// Every painted text of a pane of the given size, in paint order.

@@ -1065,6 +1065,7 @@ impl View {
                 State::Complete => "No rule matched the evaluated data.",
                 State::NoRules => "No rules enabled. This is not a clean scan.",
                 State::Missing => "Evidence missing. This is not a clean scan.",
+                State::Skipped => header::SKIPPED_NOTE,
                 _ => "No retained matches. Coverage is incomplete or unavailable.",
             });
         }
