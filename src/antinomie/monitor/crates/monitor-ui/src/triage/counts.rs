@@ -105,10 +105,20 @@ impl TriageView {
     pub(super) fn process_tabs(&mut self, ui: &mut egui::Ui) {
         let processes = self.section_count(Metric::Processes);
         let findings = self.section_count(Metric::Findings);
-        let warn = match findings {
-            Count::Ready(count) if count > 0 => Tone::Warn,
+        // Red with a HIGH row, amber with a MEDIUM row, neutral otherwise.
+        let tiers = self.scan.as_ref().map(|scan| scan.counts.finding_tiers);
+        let warn = match (findings, tiers) {
+            (Count::Ready(count), Some(tiers)) if count > 0 && tiers[0] > 0 => Tone::Error,
+            (Count::Ready(count), Some(tiers)) if count > 0 && tiers[1] > 0 => Tone::Warn,
             _ => Tone::Neutral,
         };
+        let hover = self.scan.as_ref().map(|scan| {
+            let tiers = scan.counts.finding_tiers;
+            format!(
+                "{} high · {} medium · {} low · {} info · {} hidden",
+                tiers[0], tiers[1], tiers[2], tiers[3], scan.counts.findings_hidden
+            )
+        });
         widgets::segmented(
             ui,
             [
@@ -116,10 +126,13 @@ impl TriageView {
                     ProcessTab::Tree,
                     TabItem::new("Process tree").badge(processes.label(), processes.tone(false)),
                 ),
-                (
-                    ProcessTab::Suspicious,
-                    TabItem::new("Suspicious activity").badge(findings.label(), warn),
-                ),
+                (ProcessTab::Suspicious, {
+                    let item = TabItem::new("Suspicious activity").badge(findings.label(), warn);
+                    match hover {
+                        Some(hover) => item.tooltip(hover),
+                        None => item,
+                    }
+                }),
             ],
             &mut self.process,
         );

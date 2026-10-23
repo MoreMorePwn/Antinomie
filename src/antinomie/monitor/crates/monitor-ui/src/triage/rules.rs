@@ -23,7 +23,7 @@ mod table;
 mod tools;
 
 #[cfg(test)]
-mod tests;
+pub(in crate::triage) mod tests;
 
 /// Every hit the rules find in one call.
 fn collect_hits(cx: &ctx::Ctx, st: &mut state::State) -> Vec<Hit> {

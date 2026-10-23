@@ -10,4 +10,5 @@ mod network;
 mod persistence;
 mod pipeline;
 mod privilege;
-mod support;
+mod probes;
+pub(in crate::triage) mod support;

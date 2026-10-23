@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-only
-use super::super::super::tests::call;
 use super::support::*;
 
 #[test]

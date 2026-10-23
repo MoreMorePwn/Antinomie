@@ -250,10 +250,15 @@ fn judge(class: Class, path: &str, bytes: &[u8]) -> (String, Option<bool>) {
                     )
                 })
                 .unwrap_or_default();
-            let answer = if hypervisor {
-                format!("model name \"{shown}\"; flags include hypervisor")
+            let model = if shown.is_empty() {
+                String::new()
             } else {
-                format!("model name \"{shown}\"; no hypervisor flag")
+                format!("model name \"{shown}\"; ")
+            };
+            let answer = if hypervisor {
+                format!("{model}flags include hypervisor")
+            } else {
+                format!("{model}no hypervisor flag")
             };
             (answer, Some(hypervisor || named))
         }

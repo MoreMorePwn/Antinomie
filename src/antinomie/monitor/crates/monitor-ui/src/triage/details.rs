@@ -180,6 +180,9 @@ pub(super) fn show(view: &mut TriageView, ui: &mut egui::Ui) {
         });
         ui.add_space(10.0);
         let values = selected.cells.first().map(|cell| cell.values.as_slice()).unwrap_or_default();
+        if selected.table == "triage-findings" {
+            finding_details(ui, values);
+        }
         if matches!(selected.table.as_str(), "triage-yara" | "triage-ids" | "triage-sigma") { view.detection.details(ui, values); }
         if selected.table == "triage-changed" {
             disk_diff_link(ui, &selected);
@@ -234,6 +237,41 @@ pub(super) fn show(view: &mut TriageView, ui: &mut egui::Ui) {
             }
         }
     });
+}
+
+/// The lines behind a Suspicious activity row: why it has its tier, and the
+/// facts the rule gathered (for an anti-analysis row, each check and its answer).
+fn finding_details(ui: &mut egui::Ui, values: &[(&'static str, RowValue)]) {
+    let lines = |key: &str| -> Vec<String> {
+        values
+            .iter()
+            .find_map(|(name, value)| match value {
+                RowValue::List(lines) if *name == key => Some(lines.clone()),
+                _ => None,
+            })
+            .unwrap_or_default()
+    };
+    let rule = values.iter().find_map(|(name, value)| match value {
+        RowValue::Text(text) if *name == "finding.rule" => Some(text.as_str()),
+        _ => None,
+    });
+    let section = |ui: &mut egui::Ui, title: &str, lines: Vec<String>| {
+        if lines.is_empty() {
+            return;
+        }
+        ui.label(RichText::new(title).small().color(theme::muted()));
+        for line in lines {
+            ui.add(egui::Label::new(RichText::new(line).monospace()).wrap());
+        }
+        ui.add_space(8.0);
+    };
+    let title = if rule.is_some_and(|rule| rule.starts_with("evasion.")) {
+        "Checks and what the guest answered"
+    } else {
+        "Details"
+    };
+    section(ui, title, lines("finding.detail"));
+    section(ui, "Why this tier", lines("finding.why"));
 }
 
 fn scan_clock(view: &TriageView) -> Option<antinomie_monitor_core::HostClockAnchor> {

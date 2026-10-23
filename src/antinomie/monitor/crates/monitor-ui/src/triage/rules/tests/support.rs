@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Builders for the calls the rule tests feed the engine.
-use super::super::super::tests::{call, captured, path_call};
+pub(super) use super::super::super::tests::{call, captured, path_call};
+pub(super) use super::super::super::{EventSummary, Finding, InvocationSummary};
 use super::super::*;
+pub(super) use super::super::{view_keeps, View};
 use antinomie_monitor_core::kernel_notes::{
     CREDS_KEY, EXEC_IMAGE_KEY, FILE_ID_KEY, FILE_ID_LAYOUT,
 };
@@ -12,7 +14,7 @@ pub(super) const MS: u64 = 1_000_000;
 pub(super) const SECOND: u64 = 1_000_000_000;
 
 /// Number the calls in order, one millisecond apart, and run the engine over them.
-pub(super) fn run(calls: Calls) -> Output {
+pub(in crate::triage) fn run(calls: Calls) -> Output {
     run_with(
         calls,
         Options {
@@ -328,4 +330,16 @@ fn note(key: &str, layout: &str, bytes: &[u8]) -> EventSummary {
     event.args = None;
     event.fields = vec![captured(key, layout, bytes)];
     event
+}
+
+/// Rows for tests of the views that show them: a task that reads two kinds of VM
+/// evidence, so its anti-analysis row is MEDIUM.
+pub(in crate::triage) fn evasion_rows() -> Vec<Finding> {
+    let calls = vec![
+        open_read(1, "/sys/class/dmi/id/sys_vendor", 3),
+        read(1, 3, b"QEMU\n"),
+        open_read(1, "/proc/cpuinfo", 4),
+        read(1, 4, b"flags\t: fpu hypervisor\n"),
+    ];
+    run(calls).rows
 }

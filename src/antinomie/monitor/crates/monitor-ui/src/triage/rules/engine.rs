@@ -64,7 +64,10 @@ impl Engine {
             return;
         };
         let cx = Ctx::new(call, event, files, directory, via_async);
-        let hits = collect_hits(&cx, &mut self.state);
+        let mut hits = collect_hits(&cx, &mut self.state);
+        // One call is one occurrence of a rule on an object, however many ways it touched it.
+        let mut seen = std::collections::BTreeSet::new();
+        hits.retain(|hit| seen.insert((hit.rule, hit.object.clone())));
         for hit in hits {
             self.record(&cx, hit);
         }
@@ -77,7 +80,8 @@ impl Engine {
             return;
         };
         let task = cx.call.task_cookie;
-        let allowed = spec.allow.contains(&cx.image_name());
+        // At an exec the trace already names the new program, not the one that asked for it.
+        let allowed = !cx.is_exec() && spec.allow.contains(&cx.image_name());
         let failed = cx.failed;
         let time = cx.time();
         let key = (spec.id, task, hit.object.clone());

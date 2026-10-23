@@ -537,16 +537,18 @@ fn changes_flags(cmd: &Command) -> bool {
     })
 }
 
-/// scp, rsync, sftp, `curl -T` and `ssh host 'cat > file'` toward another host.
+/// scp, rsync and sftp toward a remote destination, `curl -T` and `ssh host 'cat > file'`.
 fn remote_push(cmd: &Command) -> bool {
-    let remote = |arg: &&str| {
+    let remote = |arg: &str| {
         !arg.starts_with('-')
             && arg.split_once(':').is_some_and(|(host, path)| {
                 !host.is_empty() && !host.contains('/') && !path.starts_with("//")
             })
     };
     match cmd.name() {
-        "scp" | "rsync" | "sftp" => cmd.operands().iter().any(remote),
+        // The last operand is where the files go.
+        "scp" | "rsync" => cmd.operands().last().is_some_and(|last| remote(last)),
+        "sftp" => cmd.operands().iter().any(|arg| remote(arg)),
         "curl" => {
             cmd.has_any(&["-T", "--upload-file"])
                 && cmd.operands().iter().any(|arg| arg.contains("://"))
@@ -570,7 +572,9 @@ fn stages_archive(cmd: &Command) -> bool {
         return false;
     }
     let sources = cmd.args().iter().any(|word| {
-        super::ctx::home_relative(word).is_some()
+        word.starts_with("/home/")
+            || word == "/root"
+            || word.starts_with("/root/")
             || word.starts_with("~/")
             || word.contains("/.ssh")
             || word.contains("/.aws")

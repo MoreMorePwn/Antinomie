@@ -123,6 +123,19 @@ const JIT: &[&str] = &[
     "pypy3",
     "qemu-system-x86_64",
 ];
+/// Programs that listen on the wire or ask for an address.
+const CAPTURE: &[&str] = &[
+    "tcpdump",
+    "tshark",
+    "dumpcap",
+    "dhclient",
+    "dhcpcd",
+    "NetworkManager",
+    "systemd-networkd",
+    "wpa_supplicant",
+    "ping",
+    "arping",
+];
 const SERVICES: &[&str] = &[
     "systemd",
     "dbus-daemon",
@@ -768,7 +781,8 @@ pub(in crate::triage) const SPECS: &[Spec] = &[
         T::Medium,
         C::Command,
         &["T1095", "DET0457", "T1040", "DET0314"],
-    ),
+    )
+    .allow(CAPTURE),
     rule(
         "c2.bpf_backdoor",
         1,
@@ -782,7 +796,8 @@ pub(in crate::triage) const SPECS: &[Spec] = &[
         T::Medium,
         C::Command,
         &["T1205.002", "DET0162"],
-    ),
+    )
+    .allow(CAPTURE),
     rule(
         "network.tor",
         1,

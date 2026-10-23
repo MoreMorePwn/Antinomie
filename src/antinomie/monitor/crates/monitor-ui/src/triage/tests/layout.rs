@@ -547,3 +547,150 @@ fn numeric_columns_sit_at_the_right_edge_of_their_cells() {
     // Text columns stay at the left edge.
     assert!(endpoint.left() > header.right());
 }
+
+#[test]
+fn suspicious_activity_has_tier_and_category_chips_and_evasion_is_one_of_them() {
+    let ctx = context();
+    let (_temp, mut view) = view(Section::Process);
+    view.process = ProcessTab::Suspicious;
+    let out = settle(&ctx, &mut view);
+    let shown = texts(&out);
+    let chip = |label: &str| {
+        shown
+            .iter()
+            .find(|(text, _)| text.contains(label))
+            .unwrap_or_else(|| panic!("{label} chip missing in {shown:?}"))
+            .1
+    };
+    for label in [
+        "HIGH",
+        "MEDIUM",
+        "LOW",
+        "Show INFO",
+        "Execution",
+        "Persistence",
+        "Evasion",
+        "C2",
+        "Exfiltration",
+        "Show hidden",
+    ] {
+        chip(label);
+    }
+    // No evasion row exists yet; the chip narrows the table to its category.
+    assert_eq!(view.scan_request.finding_view.categories, 0);
+    view.scan_request.offsets[0] = 2000;
+    click(&ctx, &mut view, chip("Evasion").center());
+    assert!(view
+        .scan_request
+        .finding_view
+        .category_on(rules::Category::Evasion));
+    assert_eq!(view.scan_request.offsets[0], 0);
+    let out = settle(&ctx, &mut view);
+    let again = texts(&out)
+        .into_iter()
+        .find(|(text, _)| text.contains("Evasion"))
+        .unwrap()
+        .1;
+    click(&ctx, &mut view, again.center());
+    assert_eq!(
+        view.scan_request.finding_view.categories, 0,
+        "a second click clears the chip"
+    );
+    let out = settle(&ctx, &mut view);
+    let info = texts(&out)
+        .into_iter()
+        .find(|(text, _)| text.contains("Show INFO"))
+        .unwrap()
+        .1;
+    click(&ctx, &mut view, info.center());
+    assert!(view.scan_request.finding_view.show_info);
+}
+
+#[test]
+fn the_badge_hover_splits_the_rows_by_tier_and_its_colour_follows_the_worst() {
+    let (_temp, mut view) = view(Section::Process);
+    let scan = view.scan.as_mut().unwrap();
+    scan.counts.findings = 8;
+    scan.counts.finding_tiers = [2, 5, 1, 340];
+    scan.counts.findings_hidden = 12;
+    let ctx = context();
+    let out = settle(&ctx, &mut view);
+    assert!(has(&out, "Suspicious activity8"), "{:?}", texts(&out));
+}
+
+#[test]
+fn the_details_of_an_evasion_row_list_each_check_the_answer_and_why_it_has_its_tier() {
+    let ctx = context();
+    let findings = rules::tests::support::evasion_rows();
+    let probe = findings
+        .iter()
+        .find(|row| row.cells[0].text == "evasion.sandbox_probe")
+        .expect("a sandbox probe row")
+        .clone();
+    let label = probe.cells[0].text.clone();
+    let mut view = TriageView::default();
+    let mut draw = |events, time| {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1500.0, 2000.0),
+                )),
+                events,
+                time: Some(time),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::SidePanel::right("shared-details")
+                    .exact_width(560.0)
+                    .show(ctx, |ui| {
+                        view.details(ui);
+                    });
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    view.suspicious_findings(ui, vec![probe.clone()], 0);
+                });
+            },
+        )
+    };
+    for n in 0..3 {
+        draw(vec![], f64::from(n) * 0.01);
+    }
+    let output = draw(vec![], 0.04);
+    let pos = texts(&output)
+        .into_iter()
+        .find(|(text, _)| text == &label)
+        .unwrap()
+        .1
+        .center();
+    for (n, pressed) in [true, false].into_iter().enumerate() {
+        draw(
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+            0.1 + n as f64 * 0.05,
+        );
+    }
+    let output = draw(vec![], 0.3);
+    let shown = texts(&output);
+    let any = |needle: &str| {
+        shown
+            .iter()
+            .any(|(text, rect)| text.contains(needle) && rect.left() >= 940.0)
+    };
+    assert!(any("Checks and what the guest answered"), "{shown:?}");
+    assert!(any("\"QEMU\""), "the answer the guest gave");
+    assert!(any("would show it"));
+    assert!(any("Stealth profile › Machine identity"));
+    assert!(
+        any("CPUID"),
+        "instruction-level checks are said to be invisible: {shown:?}"
+    );
+    assert!(any("Why this tier"));
+    assert!(any("Heuristic"));
+}
