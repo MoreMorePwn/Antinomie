@@ -456,6 +456,10 @@ pub(super) fn path(cx: &Ctx, st: &mut State, touch: &Touch, _out: &mut Vec<Hit>)
             let tp = task(st, cx);
             let index = tp.pending.get(&fd).copied();
             let (text, shows) = judge(class, &own, &bytes);
+            // Runtimes read their own memory map for stack bounds: only a map naming a tool is a check.
+            if own == "/proc/self/maps" && shows != Some(true) {
+                return;
+            }
             match index {
                 Some(index) => {
                     if let Some(probe) = tp.items.get_mut(index) {

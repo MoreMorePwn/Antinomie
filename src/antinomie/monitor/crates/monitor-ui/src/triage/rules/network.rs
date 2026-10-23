@@ -155,57 +155,60 @@ fn connect(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
     }
     let task = st.task(cx);
     task.connects.push(time, LOGINS.0, (ip, port));
-    let recent: Vec<(IpAddr, u16)> = task.connects.items_since(time, SCAN.0).copied().collect();
-    let pairs: std::collections::BTreeSet<_> = recent.iter().collect();
-    let hosts_on_port = |wanted: u16| {
-        recent
+    if !task.scan_done {
+        let recent: Vec<(IpAddr, u16)> = task.connects.items_since(time, SCAN.0).copied().collect();
+        let pairs: std::collections::BTreeSet<_> = recent.iter().collect();
+        let hosts_on_port = recent
             .iter()
-            .filter(|(_, p)| *p == wanted)
+            .filter(|(_, other)| *other == port)
             .map(|(ip, _)| ip)
             .collect::<std::collections::BTreeSet<_>>()
-            .len()
-    };
-    if !task.scan_done && (pairs.len() >= SCAN.1 || hosts_on_port(port) >= SCAN.2) {
-        task.scan_done = true;
-        out.push(Hit::new(
-            "discovery.network_scan",
-            "scan",
-            format!(
-                "{} address and port pairs tried within 10 s ({} hosts on port {port})",
-                pairs.len(),
-                hosts_on_port(port)
-            ),
-        ));
+            .len();
+        if pairs.len() >= SCAN.1 || hosts_on_port >= SCAN.2 {
+            task.scan_done = true;
+            out.push(Hit::new(
+                "discovery.network_scan",
+                "scan",
+                format!(
+                    "{} address and port pairs tried within 10 s ({hosts_on_port} hosts on port {port})",
+                    pairs.len()
+                ),
+            ));
+        }
     }
-    let logins = task
-        .connects
-        .items()
-        .filter(|(_, p)| LOGIN_PORTS.contains(p))
-        .count();
-    if !task.login_done && LOGIN_PORTS.contains(&port) && logins >= LOGINS.1 {
-        task.login_done = true;
-        out.push(Hit::new(
-            "lateral.bruteforce",
-            "login ports",
-            format!("{logins} connections to login ports within a minute"),
-        ));
+    if !task.login_done && LOGIN_PORTS.contains(&port) {
+        let logins = task
+            .connects
+            .items()
+            .filter(|(_, p)| LOGIN_PORTS.contains(p))
+            .count();
+        if logins >= LOGINS.1 {
+            task.login_done = true;
+            out.push(Hit::new(
+                "lateral.bruteforce",
+                "login ports",
+                format!("{logins} connections to login ports within a minute"),
+            ));
+        }
     }
-    let exploited: std::collections::BTreeSet<_> = task
-        .connects
-        .items()
-        .filter(|(_, p)| EXPLOIT_PORTS.contains(p))
-        .map(|(ip, _)| *ip)
-        .collect();
-    if !task.exploit_done && EXPLOIT_PORTS.contains(&port) && exploited.len() >= EXPLOIT_HOSTS {
-        task.exploit_done = true;
-        out.push(Hit::new(
-            "lateral.service_exploit",
-            "services",
-            format!(
-                "commonly attacked service ports on {} hosts within a minute",
-                exploited.len()
-            ),
-        ));
+    if !task.exploit_done && EXPLOIT_PORTS.contains(&port) {
+        let exploited: std::collections::BTreeSet<_> = task
+            .connects
+            .items()
+            .filter(|(_, p)| EXPLOIT_PORTS.contains(p))
+            .map(|(ip, _)| *ip)
+            .collect();
+        if exploited.len() >= EXPLOIT_HOSTS {
+            task.exploit_done = true;
+            out.push(Hit::new(
+                "lateral.service_exploit",
+                "services",
+                format!(
+                    "commonly attacked service ports on {} hosts within a minute",
+                    exploited.len()
+                ),
+            ));
+        }
     }
     if port == 22 && task.ssh_hosts_read {
         out.push(Hit::new(
@@ -281,6 +284,14 @@ fn traffic(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
     let size = cx.ret.filter(|ret| *ret > 0).map_or(0, |ret| ret as u64);
     let remote = socket.peer.is_some_and(|(ip, _)| !private(ip));
     let time = cx.time();
+    if sending {
+        if let Some((ip, port)) = socket
+            .peer
+            .or_else(|| cx.address(4).as_ref().and_then(parse))
+        {
+            reached(cx, st, ip, port);
+        }
+    }
     let task = st.task(cx);
     task.active = true;
     if remote {
@@ -309,15 +320,23 @@ fn traffic(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
             .peer
             .or_else(|| cx.address(4).as_ref().and_then(parse));
         if let Some((ip, _)) = destination {
-            task.flood.push(time, NS, ip);
-            let same = task.flood.items().filter(|other| **other == ip).count();
-            if !task.flood_done && same > FLOOD_PER_SECOND {
-                task.flood_done = true;
-                out.push(Hit::new(
-                    "impact.ddos_flood",
-                    ip.to_string(),
-                    format!("{same} packets within a second to {ip}"),
-                ));
+            if !task.flood_done {
+                task.flood.push(time, NS, ip);
+                let busy =
+                    task.flood.len() > FLOOD_PER_SECOND && task.flood.len().is_multiple_of(64);
+                let same = if busy {
+                    task.flood.items().filter(|other| **other == ip).count()
+                } else {
+                    0
+                };
+                if same > FLOOD_PER_SECOND {
+                    task.flood_done = true;
+                    out.push(Hit::new(
+                        "impact.ddos_flood",
+                        ip.to_string(),
+                        format!("{same} packets within a second to {ip}"),
+                    ));
+                }
             }
         }
         let bytes = cx.payload(false);

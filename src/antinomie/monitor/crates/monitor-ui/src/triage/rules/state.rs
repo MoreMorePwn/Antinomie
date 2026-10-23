@@ -162,6 +162,8 @@ pub(super) struct State {
     pub image_keys: BTreeMap<FileKey, BTreeSet<u64>>,
     tasks: BTreeMap<u64, Task>,
     overflow: Task,
+    /// Tasks of Antinomie itself, which the rules leave alone.
+    pub app_tasks: BTreeSet<u64>,
     /// Tasks that entered a user namespace of their own.
     pub userns: BTreeSet<u64>,
     /// The credentials each task had at its last record.
@@ -283,32 +285,46 @@ impl State {
             .find(|other| other.op == Op::Renamed && other.role == Role::New)
             .map(|other| other.path.clone());
         let task = self.task(cx);
-        if touch.op == Op::Deleted && cx.ok && !made {
+        if touch.op == Op::Deleted && cx.ok && !made && !task.delete_done {
             task.deleted.push(time, MASS_DELETE.0, path.to_owned());
-            let folders: BTreeSet<_> = task
-                .deleted
-                .items()
-                .map(|path| parent(path).to_owned())
-                .collect();
-            if !task.delete_done && task.deleted.distinct() >= MASS_DELETE.1 && folders.len() >= 3 {
-                task.delete_done = true;
-                out.push(
-                    Hit::new(
-                        "impact.mass_delete",
-                        "bulk",
-                        format!("{} files the run did not create were deleted within 30 s, in {} directories", task.deleted.distinct(), folders.len()),
-                    )
-                    .detail(format!("Last deleted: {path}")),
-                );
+            // Counting distinct names is not free: look every few deletions once there are enough.
+            if task.deleted.len() >= MASS_DELETE.1 && task.deleted.len().is_multiple_of(16) {
+                let folders: BTreeSet<_> = task
+                    .deleted
+                    .items()
+                    .map(|path| parent(path).to_owned())
+                    .collect();
+                if task.deleted.distinct() >= MASS_DELETE.1 && folders.len() >= 3 {
+                    task.delete_done = true;
+                    out.push(
+                        Hit::new(
+                            "impact.mass_delete",
+                            "bulk",
+                            format!(
+                                "{} files the run did not create were deleted within 30 s, in {} directories",
+                                task.deleted.distinct(),
+                                folders.len()
+                            ),
+                        )
+                        .detail(format!("Last deleted: {path}")),
+                    );
+                }
             }
         }
-        if let (Op::Renamed, Some(target), true) = (touch.op, moved_to, cx.ok) {
+        if let (Op::Renamed, Some(target), true, false) =
+            (touch.op, moved_to, cx.ok, task.ransom_done)
+        {
             let (old, new) = (extension(path), extension(&target));
             if old != new && !new.is_empty() {
                 task.renamed
                     .push(time, RANSOM.0, (path.to_owned(), new.clone()));
-                let same = task.renamed.items().filter(|(_, ext)| *ext == new).count();
-                if !task.ransom_done && same >= RANSOM.1 {
+                let same = if task.renamed.len() >= RANSOM.1 && task.renamed.len().is_multiple_of(4)
+                {
+                    task.renamed.items().filter(|(_, ext)| *ext == new).count()
+                } else {
+                    0
+                };
+                if same >= RANSOM.1 {
                     task.ransom_done = true;
                     out.push(
                         Hit::new(
@@ -369,8 +385,11 @@ impl State {
     pub(super) fn listing(&mut self, cx: &Ctx, path: &str, out: &mut Vec<Hit>) {
         let time = cx.time();
         let task = self.task(cx);
-        task.dirs.push(time, FILE_SEARCH.0, path.to_owned());
-        if !task.search_done && task.dirs.distinct() >= FILE_SEARCH.1 {
+        if !task.search_done {
+            task.dirs.push(time, FILE_SEARCH.0, path.to_owned());
+        }
+        let look = task.dirs.len() >= FILE_SEARCH.1 && task.dirs.len().is_multiple_of(32);
+        if !task.search_done && look && task.dirs.distinct() >= FILE_SEARCH.1 {
             task.search_done = true;
             out.push(Hit::new(
                 "discovery.file_search",
