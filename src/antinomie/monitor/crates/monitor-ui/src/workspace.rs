@@ -525,7 +525,7 @@ impl WorkspaceLayout {
         }
         self.follow_debugger(app, ctx);
         egui::CentralPanel::default()
-            .frame(theme::frame(theme::bg()))
+            .frame(egui::Frame::NONE.fill(theme::bg()))
             .show(ctx, |ui| self.show_surface(app, ui, SurfaceIndex::main()));
         let surfaces: Vec<_> = (1..self.dock.surfaces_count())
             .filter(|index| self.dock.is_surface_valid(SurfaceIndex(*index)))
@@ -1046,6 +1046,40 @@ fn primary_release(input: &egui::InputState) -> Option<egui::Pos2> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn main_workspace_reaches_both_horizontal_edges() {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let mut app = crate::app::tests::app();
+        let mut layout = WorkspaceLayout::default();
+        for _ in 0..3 {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1280.0, 820.0),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| layout.show(&mut app, ctx),
+            );
+        }
+        let left = layout
+            .targets
+            .iter()
+            .filter(|(surface, _, _)| surface.is_main())
+            .map(|(_, _, rect)| rect.left())
+            .fold(f32::INFINITY, f32::min);
+        let right = layout
+            .targets
+            .iter()
+            .filter(|(surface, _, _)| surface.is_main())
+            .map(|(_, _, rect)| rect.right())
+            .fold(f32::NEG_INFINITY, f32::max);
+        assert!(left <= 1.0, "left gutter: {left}");
+        assert!(right >= 1279.0, "right gutter: {}", 1280.0 - right);
+    }
 
     fn pointer_frame(
         layout: &mut WorkspaceLayout,

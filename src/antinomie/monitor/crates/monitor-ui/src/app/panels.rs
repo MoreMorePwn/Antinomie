@@ -519,17 +519,7 @@ impl MonitorApp {
                     .is_some_and(|terminal| run_in_live_session(&self.snapshot, &terminal.run));
                 let mut commands = Vec::new();
                 if let Some(terminal) = self.terminals.get_mut(id) {
-                    ui.horizontal(|ui| {
-                        ui.label(run_status(&terminal.run));
-                        ui.label(format!("Root: {}", root_exit(&terminal.run)));
-                        if let Some(error) = terminal
-                            .snapshot_error
-                            .as_ref()
-                            .or(terminal.replay_error.as_ref())
-                        {
-                            crate::activity::warning(ui, error);
-                        }
-                    });
+                    terminal_header(ui, terminal);
                     terminal.last_paint = Some(Instant::now());
                     let interactive = live && terminal.interactive() && !self.closing;
                     let (data, resize) = if live {
@@ -559,6 +549,36 @@ impl MonitorApp {
             }
         }
     }
+}
+
+/// Compact process chrome, separated from the terminal grid and its selection.
+fn terminal_header(ui: &mut egui::Ui, terminal: &RunTerminal) {
+    egui::Frame::NONE
+        .fill(theme::raised())
+        .inner_margin(egui::Margin::symmetric(8, 5))
+        .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.horizontal_wrapped(|ui| {
+                ui.label(egui::RichText::new(egui_phosphor::regular::TERMINAL_WINDOW)
+                    .color(theme::palette().accent));
+                let name = std::path::Path::new(&terminal.run.request.path)
+                    .file_name().unwrap_or_default().to_string_lossy();
+                ui.label(egui::RichText::new(name).monospace().strong())
+                    .on_hover_text(&terminal.run.request.path);
+                ui.label(egui::RichText::new(format!("PID {}", terminal.run.pid))
+                    .small().color(theme::muted()));
+                ui.separator();
+                ui.label(run_status(&terminal.run));
+                ui.label(egui::RichText::new(format!("Root: {}", root_exit(&terminal.run)))
+                    .small().color(theme::muted()));
+                ui.label(egui::RichText::new(egui_phosphor::regular::INFO)
+                    .color(theme::muted()))
+                    .on_hover_text("Drag to select text. Double-click selects a word. Copy with Ctrl+Shift+C, Ctrl+Insert, or right-click. Ctrl+C interrupts when nothing is selected. Paste with Ctrl+Shift+V or Ctrl+V. Shift+PageUp/PageDown scrolls output.");
+            });
+            if let Some(error) = terminal.snapshot_error.as_ref().or(terminal.replay_error.as_ref()) {
+                crate::activity::warning(ui, error);
+            }
+        });
 }
 
 #[cfg(test)]
