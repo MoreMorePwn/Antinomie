@@ -574,7 +574,11 @@ fn native_layout_keeps_controls_and_trace_panels_separate_at_all_text_sizes() {
                 .1;
             assert!(label.right() < loss.left());
             assert!(
-                rect(&format!("Antinomie {APP_VERSION}")).right() > size.x - 48.0,
+                texts.iter().any(
+                    |(text, version)| text == &format!("Antinomie {APP_VERSION}")
+                        && version.top() >= label.top() - 4.0
+                        && version.right() > size.x - 48.0
+                ),
                 "loss meters must sit on the right edge"
             );
             assert!(rect("File").bottom() < rect("Syscalls").top());

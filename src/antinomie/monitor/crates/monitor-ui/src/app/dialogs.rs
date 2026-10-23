@@ -240,7 +240,7 @@ impl MonitorApp {
         }
         if self.launch_open {
             let mut open = true;
-            let viewport = ctx.screen_rect();
+            let viewport = crate::title_bar::content_rect(ctx);
             let width = 1000.0_f32.min((viewport.width() - 50.0).max(300.0));
             crate::widgets::window("Run program")
                 .id(Dialog::Launch.window_id())
@@ -249,13 +249,13 @@ impl MonitorApp {
                 .movable(true)
                 .resizable(true)
                 .default_width(width)
-                .default_height((ctx.screen_rect().height() - 100.0).max(240.0))
+                .default_height((viewport.height() - 100.0).max(240.0))
                 .default_pos(egui::pos2(
                     viewport.center().x - width * 0.5,
                     viewport.top() + 32.0,
                 ))
-                .max_width((ctx.screen_rect().width() - 50.0).max(300.0))
-                .max_height((ctx.screen_rect().height() - 90.0).max(200.0))
+                .max_width((viewport.width() - 50.0).max(300.0))
+                .max_height((viewport.height() - 90.0).max(200.0))
                 .show(ctx, |ui| {
                     self.launch_form(ui);
                 });
@@ -274,7 +274,7 @@ impl MonitorApp {
                 .default_width(660.0)
                 .default_height(0.0)
                 .max_width((ctx.screen_rect().width() - 50.0).max(300.0))
-                .max_height((ctx.screen_rect().height() - 90.0).max(200.0))
+                .max_height((crate::title_bar::content_rect(ctx).height() - 90.0).max(200.0))
                 .show(ctx, |ui| {
                     scroll_dialog(ui, ctx, |ui| {
                         self.upload_form(ui);
@@ -684,7 +684,7 @@ pub(super) fn text_size_control(ui: &mut egui::Ui, size: &mut f32) {
 }
 
 fn scroll_dialog(ui: &mut egui::Ui, ctx: &egui::Context, content: impl FnOnce(&mut egui::Ui)) {
-    let height = (ctx.screen_rect().height() - 110.0).max(150.0);
+    let height = (crate::title_bar::content_rect(ctx).height() - 110.0).max(150.0);
     // Measure against the viewport even when restored window geometry is short.
     ui.set_max_height(height);
     egui::ScrollArea::vertical()

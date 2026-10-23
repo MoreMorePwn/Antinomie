@@ -54,13 +54,13 @@ impl MonitorApp {
                     self.explorer_browser.invalidate();
                 }
             } else {
-                ui.colored_label(theme::muted(), "Browse files on this computer.");
                 choose |= ui
                     .add_enabled(
                         self.folder_picker.available(),
                         egui::Button::new("Choose folder…"),
                     )
                     .clicked();
+                ui.colored_label(theme::muted(), "Browse files on this computer.");
             }
             if self.folder_picker.checking() {
                 theme::loading_weak(ui, "Checking file chooser…");

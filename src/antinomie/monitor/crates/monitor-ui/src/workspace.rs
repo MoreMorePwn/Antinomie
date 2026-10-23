@@ -537,7 +537,7 @@ impl WorkspaceLayout {
                 .next()
                 .map(|panel| app.panel_title(panel))
                 .unwrap_or_else(|| "Workspace".into());
-            let builder = self.native_builder(index, title);
+            let builder = self.native_builder(index, title.clone());
             let mut closed = false;
             ctx.show_viewport_immediate(
                 egui::ViewportId::from_hash_of(("workspace", index)),
@@ -556,9 +556,11 @@ impl WorkspaceLayout {
                             .default_size([720.0, 480.0])
                             .show(ctx, |ui| self.show_surface(app, ui, surface));
                     } else {
+                        crate::title_bar::show(ctx, &title);
                         egui::CentralPanel::default()
-                            .frame(theme::frame(theme::bg()))
+                            .frame(egui::Frame::NONE.fill(theme::bg()))
                             .show(ctx, |ui| self.show_surface(app, ui, surface));
+                        crate::title_bar::resize(ctx);
                     }
                 },
             );
@@ -622,7 +624,7 @@ impl WorkspaceLayout {
     fn native_builder(&mut self, index: usize, title: String) -> egui::ViewportBuilder {
         // Observed geometry is persistence data, not a placement command every frame.
         let builder = self.native_builders.entry(index).or_insert_with(|| {
-            let mut builder = egui::ViewportBuilder::default()
+            let mut builder = crate::title_bar::builder(egui::ViewportBuilder::default())
                 .with_inner_size([820.0, 520.0])
                 .with_min_inner_size([360.0, 220.0]);
             if let Some(rect) = self.geometry.get(&index) {

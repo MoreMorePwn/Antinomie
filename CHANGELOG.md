@@ -6,6 +6,11 @@ it runs.
 
 ## 0.7.0 — Unreleased
 
+- **Workspace title bars.** Main and detached workspace windows use matching
+  custom title bars with vector minimize, maximize/restore and close controls,
+  native dragging and edge/corner resizing. Terminal-view close and application
+  shutdown retain their existing behavior.
+
 - **Terminal interaction and layout.** Live, saved and debugger terminals support
   mouse text selection, double-click word selection, clipboard shortcuts and a
   copy context menu. Ctrl+C interrupts when no text is selected. Terminal output
