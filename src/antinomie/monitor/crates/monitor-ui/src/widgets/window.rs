@@ -79,77 +79,79 @@ impl<'open> Dialog<'open> {
         } = self;
         let closable = open.is_some();
         let mut close = false;
-        let shown = window.show(ctx, |ui| {
-            let rule = ui.painter().add(egui::Shape::Noop);
-            let header = ui
-                .horizontal(|ui| {
-                    // Not selectable: dragging the title moves the window.
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(&title)
-                                .strong()
-                                // Strong text is the primary button's
-                                // white in the light theme: color it.
-                                .color(theme::text())
-                                .text_style(egui::TextStyle::Body),
-                        )
-                        .selectable(false),
-                    );
-                    // Room for the close button, which is placed at the
-                    // window's right edge once the width is known.
-                    if closable {
-                        ui.add_space(CLOSE_SIZE + 12.0);
-                    }
-                })
-                .response
-                .rect;
-            ui.add_space(6.0);
-            let rule_y = ui.cursor().top();
-            ui.add_space(8.0);
-            // In a child ui: contents that call `set_max_height` (egui then
-            // resets the cursor to the top of the ui) must not reach back
-            // over the title row.
-            let inner = ui.scope(add_contents).inner;
-            let width = ui.min_rect().x_range();
-            ui.painter().set(
-                rule,
-                egui::Shape::hline(
-                    width,
-                    rule_y,
-                    egui::Stroke::new(1.0_f32, theme::line_soft()),
-                ),
-            );
-            if !closable {
-                return inner;
-            }
-            let button = egui::Rect::from_min_size(
-                egui::pos2(width.max - CLOSE_SIZE, header.center().y - CLOSE_SIZE / 2.0),
-                egui::vec2(CLOSE_SIZE, CLOSE_SIZE),
-            );
-            // Painted and sensed without taking layout space, so the window
-            // does not grow by the button every frame.
-            let response = ui
-                .interact(button, ui.id().with("close"), egui::Sense::click())
-                .on_hover_text("Close");
-            let color = if response.hovered() {
-                theme::palette().text
-            } else {
-                theme::palette().muted
-            };
-            if response.hovered() {
-                ui.painter()
-                    .rect_filled(button, 4.0, theme::palette().hover);
-            }
-            ui.painter().text(
-                button.center(),
-                egui::Align2::CENTER_CENTER,
-                egui_phosphor::regular::X,
-                egui::TextStyle::Body.resolve(ui.style()),
-                color,
-            );
-            close = response.clicked();
-            inner
-        });
+        let shown = window
+            .constrain_to(crate::title_bar::content_rect(ctx))
+            .show(ctx, |ui| {
+                let rule = ui.painter().add(egui::Shape::Noop);
+                let header = ui
+                    .horizontal(|ui| {
+                        // Not selectable: dragging the title moves the window.
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(&title)
+                                    .strong()
+                                    // Strong text is the primary button's
+                                    // white in the light theme: color it.
+                                    .color(theme::text())
+                                    .text_style(egui::TextStyle::Body),
+                            )
+                            .selectable(false),
+                        );
+                        // Room for the close button, which is placed at the
+                        // window's right edge once the width is known.
+                        if closable {
+                            ui.add_space(CLOSE_SIZE + 12.0);
+                        }
+                    })
+                    .response
+                    .rect;
+                ui.add_space(6.0);
+                let rule_y = ui.cursor().top();
+                ui.add_space(8.0);
+                // In a child ui: contents that call `set_max_height` (egui then
+                // resets the cursor to the top of the ui) must not reach back
+                // over the title row.
+                let inner = ui.scope(add_contents).inner;
+                let width = ui.min_rect().x_range();
+                ui.painter().set(
+                    rule,
+                    egui::Shape::hline(
+                        width,
+                        rule_y,
+                        egui::Stroke::new(1.0_f32, theme::line_soft()),
+                    ),
+                );
+                if !closable {
+                    return inner;
+                }
+                let button = egui::Rect::from_min_size(
+                    egui::pos2(width.max - CLOSE_SIZE, header.center().y - CLOSE_SIZE / 2.0),
+                    egui::vec2(CLOSE_SIZE, CLOSE_SIZE),
+                );
+                // Painted and sensed without taking layout space, so the window
+                // does not grow by the button every frame.
+                let response = ui
+                    .interact(button, ui.id().with("close"), egui::Sense::click())
+                    .on_hover_text("Close");
+                let color = if response.hovered() {
+                    theme::palette().text
+                } else {
+                    theme::palette().muted
+                };
+                if response.hovered() {
+                    ui.painter()
+                        .rect_filled(button, 4.0, theme::palette().hover);
+                }
+                ui.painter().text(
+                    button.center(),
+                    egui::Align2::CENTER_CENTER,
+                    egui_phosphor::regular::X,
+                    egui::TextStyle::Body.resolve(ui.style()),
+                    color,
+                );
+                close = response.clicked();
+                inner
+            });
         if close {
             if let Some(open) = open {
                 *open = false;

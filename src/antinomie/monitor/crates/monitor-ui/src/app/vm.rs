@@ -472,7 +472,7 @@ impl MonitorApp {
         let mut credentials_required = false;
         let label_width = form_label_width(ctx);
         let column = label_width + 340.0;
-        let screen = ctx.screen_rect();
+        let screen = crate::title_bar::content_rect(ctx);
         let wide = screen.width() - 60.0 >= column * 2.0 + 24.0;
         let width = if wide {
             column * 2.0 + 24.0

@@ -3,7 +3,7 @@
 use super::*;
 
 #[test]
-#[ignore = "requires decorated X11; automatically checks terminal geometry and exits"]
+#[ignore = "requires X11; automatically checks custom-chrome terminal geometry and exits"]
 fn native_terminal_geometry_regression() {
     use std::sync::{Arc, Mutex};
     use winit::platform::x11::EventLoopBuilderExtX11;
@@ -11,7 +11,7 @@ fn native_terminal_geometry_regression() {
     struct Evidence {
         samples: Vec<(f32, egui::Pos2, egui::Vec2)>,
         raw_geometry: Vec<(f32, egui::Rect, egui::Rect)>,
-        decorated: bool,
+        custom_chrome: bool,
         retained: bool,
         reopened: bool,
     }
@@ -39,8 +39,10 @@ fn native_terminal_geometry_regression() {
                 }) {
                     let mut evidence = self.evidence.lock().expect("geometry evidence");
                     evidence.raw_geometry.push((elapsed, outer, inner));
-                    if inner.min.y - outer.min.y >= 10.0 {
-                        evidence.decorated = true;
+                    if inner.min.distance(outer.min) <= 2.0
+                        && (inner.size() - outer.size()).length() <= 2.0
+                    {
+                        evidence.custom_chrome = true;
                         self.settled_after.get_or_insert(elapsed + 0.7);
                     }
                     if self.settled_after.is_some_and(|after| elapsed >= after) {
@@ -62,7 +64,7 @@ fn native_terminal_geometry_regression() {
             if elapsed >= 5.0 && !self.closed {
                 self.closed = true;
                 self.settled_after = None;
-                self.app.close_terminal_view("geometry-terminal");
+                ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::Close);
             }
             if elapsed >= 5.5 && !self.reopened {
                 self.reopened = true;
@@ -78,6 +80,16 @@ fn native_terminal_geometry_regression() {
                     .contents()
                     .contains("GEOMETRY BUFFER RETAINED");
                 evidence.reopened = true;
+                assert_eq!(
+                    terminal.run.state,
+                    RunState::Running,
+                    "closing the view must not end the program"
+                );
+                assert!(!self
+                    .app
+                    .submitted
+                    .iter()
+                    .any(|c| matches!(c, Command::Stop | Command::Close)));
             }
             ctx.request_repaint_after(Duration::from_millis(10));
         }
@@ -87,7 +99,8 @@ fn native_terminal_geometry_regression() {
     eframe::run_native(
         "Antinomie Terminal Geometry QA",
         eframe::NativeOptions {
-            viewport: egui::ViewportBuilder::default().with_inner_size([1024.0, 720.0]),
+            viewport: crate::title_bar::builder(egui::ViewportBuilder::default())
+                .with_inner_size([1024.0, 720.0]),
             persist_window: false,
             event_loop_builder: Some(Box::new(|builder| {
                 builder.with_x11().with_any_thread(true);
@@ -116,15 +129,15 @@ fn native_terminal_geometry_regression() {
     .expect("native geometry fixture");
     let evidence = result.lock().expect("geometry evidence");
     eprintln!(
-        "Decorated: {}; samples: {}; buffer retained: {}; reopened: {}",
-        evidence.decorated,
+        "Custom chrome: {}; samples: {}; buffer retained: {}; reopened: {}",
+        evidence.custom_chrome,
         evidence.samples.len(),
         evidence.retained,
         evidence.reopened
     );
     assert!(
-        evidence.decorated,
-        "fixture requires a decorating X11 window manager"
+        evidence.custom_chrome,
+        "workspace must use its custom chrome without a second OS title bar"
     );
     eprintln!(
         "Raw geometry (time, outer rect, inner rect): {:?}",
@@ -190,7 +203,7 @@ fn native_terminal_geometry_regression() {
 }
 
 #[test]
-#[ignore = "requires decorated X11; maximizes a terminal window and exits"]
+#[ignore = "requires X11 window manager; maximizes a custom-chrome terminal and exits"]
 fn native_terminal_window_maximizes_and_grows_its_grid() {
     use std::sync::{Arc, Mutex};
     use winit::platform::x11::EventLoopBuilderExtX11;
@@ -235,7 +248,8 @@ fn native_terminal_window_maximizes_and_grows_its_grid() {
     eframe::run_native(
         "Antinomie Terminal Maximize QA",
         eframe::NativeOptions {
-            viewport: egui::ViewportBuilder::default().with_inner_size([1024.0, 720.0]),
+            viewport: crate::title_bar::builder(egui::ViewportBuilder::default())
+                .with_inner_size([1024.0, 720.0]),
             persist_window: false,
             event_loop_builder: Some(Box::new(|builder| {
                 builder.with_x11().with_any_thread(true);

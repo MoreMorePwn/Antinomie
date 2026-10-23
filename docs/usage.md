@@ -150,6 +150,14 @@ Panels can be dragged out into their own windows and docked back;
 **View → Reset layout** restores the default arrangement. Text size is under
 **Tools → Settings**.
 
+The main window and detached workspace windows use Antinomie's own title bar,
+matching the selected theme. Drag its title to move the window; double-click
+the title or use **Maximize/Restore** to toggle its size. The other controls
+minimize and close the window. Resize using its edges or corners. Closing a
+detached terminal hides its view and leaves its program running; closing the
+main application follows the normal VM shutdown path. Embedded floating panes
+retain their existing controls, and QEMU's separate display uses its own frame.
+
 **Tools → UI performance** shows the graphics renderer and recent UI update
 CPU timings. If WSLg selects software rendering, a compatible GPU driver can
 be selected for one launch with `antinomie --graphics-driver d3d12`; the dialog

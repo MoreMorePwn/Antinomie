@@ -33,6 +33,7 @@ mod table_sort;
 mod terminal;
 mod theme;
 mod time_format;
+mod title_bar;
 mod toasts;
 mod tools_page;
 mod trace;
@@ -179,7 +180,7 @@ fn native_options() -> eframe::NativeOptions {
     eframe::NativeOptions {
         // Matches the desktop entry (assets/antinomie.desktop) so the menu
         // icon applies to the running window.
-        viewport: eframe::egui::ViewportBuilder::default()
+        viewport: title_bar::builder(eframe::egui::ViewportBuilder::default())
             .with_app_id("antinomie")
             .with_title(format!("Antinomie {}", antinomie_monitor_core::APP_VERSION))
             .with_inner_size([1280.0, 820.0])

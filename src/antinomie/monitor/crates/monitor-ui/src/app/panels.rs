@@ -4,6 +4,10 @@ use super::*;
 
 impl MonitorApp {
     pub(super) fn draw(&mut self, ctx: &egui::Context) {
+        crate::title_bar::show(
+            ctx,
+            &format!("Antinomie {}", antinomie_monitor_core::APP_VERSION),
+        );
         if self.activity_notices_due {
             self.collect_notices(ctx);
             self.activity_notices_due = false;
@@ -34,6 +38,7 @@ impl MonitorApp {
         self.data_windows.show(ctx);
         self.file_drop_overlay(ctx);
         self.activity.ingest(ctx);
+        crate::title_bar::resize(ctx);
         for panel in crate::toasts::show(ctx) {
             self.focus_panel = Some(panel);
             ctx.request_repaint();
