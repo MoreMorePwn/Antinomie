@@ -386,7 +386,7 @@ pub(super) fn under(path: &str, directories: &[&str]) -> bool {
     })
 }
 
-/// The home directory part of a path: `/home/x` or `/root`, with what follows.
+/// What follows the home directory in a path, whether the home is under /home or is /root.
 pub(super) fn home_relative(path: &str) -> Option<&str> {
     if let Some(rest) = path.strip_prefix("/root/") {
         return Some(rest);

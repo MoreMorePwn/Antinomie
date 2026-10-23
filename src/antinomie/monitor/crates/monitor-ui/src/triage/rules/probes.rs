@@ -664,8 +664,14 @@ pub(super) fn rows(st: &State, files: &FdState) -> Vec<Agg> {
             continue;
         }
         let follow = follow_up(tp);
+        // A debugger's child calls PTRACE_TRACEME right before its exec: not a check.
+        let debugged = st.probes.traced_exec.contains(cookie);
         let mut kinds: BTreeMap<&'static str, Vec<&Probe>> = BTreeMap::new();
-        for probe in &tp.items {
+        for probe in tp
+            .items
+            .iter()
+            .filter(|probe| !(debugged && probe.what == "ptrace(PTRACE_TRACEME)"))
+        {
             kinds.entry(probe.class.row()).or_default().push(probe);
         }
         let node = files.process_images.get(&TaskKey {

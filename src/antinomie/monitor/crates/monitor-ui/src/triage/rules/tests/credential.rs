@@ -13,22 +13,26 @@ fn credential_stores_have_their_rules_and_tiers() {
         ("/etc/security/opasswd", "credential.shadow_read", "high"),
         ("/etc/shadow-", "credential.shadow_read", "high"),
         ("/root/.ssh/id_rsa", "credential.ssh_keys", "medium"),
-        ("/home/u/.ssh/id_ed25519", "credential.ssh_keys", "medium"),
+        (
+            "/home/user/.ssh/id_ed25519",
+            "credential.ssh_keys",
+            "medium",
+        ),
         ("/etc/ssh/ssh_host_rsa_key", "credential.ssh_keys", "medium"),
         ("/root/.aws/credentials", "credential.cloud_tokens", "high"),
-        ("/home/u/.kube/config", "credential.cloud_tokens", "high"),
+        ("/home/user/.kube/config", "credential.cloud_tokens", "high"),
         (
-            "/home/u/.docker/config.json",
+            "/home/user/.docker/config.json",
             "credential.cloud_tokens",
             "high",
         ),
         (
-            "/home/u/.config/gcloud/credentials.db",
+            "/home/user/.config/gcloud/credentials.db",
             "credential.cloud_tokens",
             "high",
         ),
         (
-            "/home/u/.git-credentials",
+            "/home/user/.git-credentials",
             "credential.cloud_tokens",
             "high",
         ),
@@ -38,28 +42,32 @@ fn credential_stores_have_their_rules_and_tiers() {
             "high",
         ),
         (
-            "/home/u/.mozilla/firefox/abc.default/logins.json",
+            "/home/user/.mozilla/firefox/abc.default/logins.json",
             "credential.browser_store",
             "medium",
         ),
         (
-            "/home/u/.config/google-chrome/Default/Login Data",
+            "/home/user/.config/google-chrome/Default/Login Data",
             "credential.browser_store",
             "medium",
         ),
-        ("/home/u/.bitcoin/wallet.dat", "credential.wallet", "medium"),
         (
-            "/home/u/.electrum/wallets/default_wallet",
+            "/home/user/.bitcoin/wallet.dat",
             "credential.wallet",
             "medium",
         ),
         (
-            "/home/u/.ethereum/keystore/UTC--2020",
+            "/home/user/.electrum/wallets/default_wallet",
+            "credential.wallet",
+            "medium",
+        ),
+        (
+            "/home/user/.ethereum/keystore/UTC--2020",
             "credential.wallet",
             "medium",
         ),
         ("/root/.bash_history", "credential.history_read", "low"),
-        ("/home/u/.zsh_history", "credential.history_read", "low"),
+        ("/home/user/.zsh_history", "credential.history_read", "low"),
         ("/tmp/krb5cc_1000", "credential.kerberos_ccache", "medium"),
         ("/etc/krb5.keytab", "credential.kerberos_ccache", "medium"),
     ] {
@@ -78,8 +86,8 @@ fn near_misses_are_not_credential_reads() {
         "/root/.ssh/id_rsa.pub",
         "/root/.ssh/known_hosts",
         "/etc/passwd",
-        "/home/u/.aws/notes.txt",
-        "/home/u/.mozilla/firefox/abc/places.sqlite",
+        "/home/user/.aws/notes.txt",
+        "/home/user/.mozilla/firefox/abc/places.sqlite",
         "/etc/ssh/ssh_host_rsa_key.pub",
         "/tmp/shadow",
     ] {
@@ -165,12 +173,16 @@ fn the_instance_metadata_service_is_high_even_when_nothing_answers() {
 fn many_documents_read_from_home_directories_is_a_local_sweep() {
     let mut calls = Vec::new();
     for n in 0..60 {
-        calls.push(open_read(1, &format!("/home/u/Documents/report{n}.pdf"), 3));
+        calls.push(open_read(
+            1,
+            &format!("/home/user/Documents/report{n}.pdf"),
+            3,
+        ));
     }
     let out = run(calls);
     assert_eq!(tier(&out, "collection.local_sweep").as_deref(), Some("low"));
     let few: Calls = (0..10)
-        .map(|n| open_read(1, &format!("/home/u/Documents/r{n}.pdf"), 3))
+        .map(|n| open_read(1, &format!("/home/user/Documents/r{n}.pdf"), 3))
         .collect();
     assert!(!has(&run(few), "collection.local_sweep"));
     let system: Calls = (0..60)

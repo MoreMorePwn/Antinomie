@@ -86,7 +86,7 @@ fn chmod_plus_x_in_a_staging_directory_is_medium_and_elsewhere_nothing() {
         "/tmp/payload",
         "/var/tmp/x",
         "/dev/shm/x",
-        "/home/u/.cache/x",
+        "/home/user/.cache/x",
     ] {
         let out = run(vec![chmod(1, path, 0o755)]);
         assert_eq!(
@@ -96,7 +96,7 @@ fn chmod_plus_x_in_a_staging_directory_is_medium_and_elsewhere_nothing() {
         );
     }
     assert!(!has(
-        &run(vec![chmod(1, "/home/u/tool", 0o755)]),
+        &run(vec![chmod(1, "/home/user/tool", 0o755)]),
         "execution.chmod_exec_temp"
     ));
     assert!(!has(
@@ -111,7 +111,7 @@ fn exec_from_a_staging_or_hidden_directory_is_medium_except_the_sample() {
     let row = rows(&out, "execution.temp_exec");
     assert_eq!(row.len(), 1);
     assert_eq!(list(row[0], "finding.technique"), ["T1027.011", "DET0344"]);
-    let hidden = run(vec![exec(1, "/home/u/.cache/x", &["x"])]);
+    let hidden = run(vec![exec(1, "/home/user/.cache/x", &["x"])]);
     assert_eq!(
         list(rows(&hidden, "execution.temp_exec")[0], "finding.technique"),
         ["T1564.001", "DET0032"]

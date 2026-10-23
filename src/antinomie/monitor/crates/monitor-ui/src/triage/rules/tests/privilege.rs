@@ -306,3 +306,37 @@ fn a_page_cache_overwrite_through_a_pipe_is_high() {
     ]);
     assert!(!has(&plain, "privilege.dirty_pipe"));
 }
+
+#[test]
+fn physical_and_kernel_memory_devices_are_high_for_any_access() {
+    for path in ["/dev/mem", "/dev/kmem", "/dev/port", "/proc/kcore"] {
+        for out in [
+            run(vec![open_read(1, path, 3)]),
+            run(vec![open_write(1, path, 3)]),
+        ] {
+            let row = rows(&out, "rootkit.dev_mem");
+            assert_eq!(row.len(), 1, "{path}");
+            assert_eq!(text(row[0], "finding.tier"), "high");
+            assert_eq!(text(row[0], "finding.category"), "rootkit");
+            assert_eq!(list(row[0], "finding.technique"), ["T1014", "DET0377"]);
+        }
+    }
+    assert!(!has(
+        &run(vec![open_read(1, "/dev/null", 3)]),
+        "rootkit.dev_mem"
+    ));
+}
+
+#[test]
+fn loading_or_attaching_an_ebpf_program_is_medium_and_creating_a_map_is_not() {
+    for (command, expected) in [(5, true), (8, true), (9, true), (0, false), (1, false)] {
+        let out = run(vec![sys(1, 321, "bpf", [command, 0, 0, 0, 0, 0], 3)]);
+        assert_eq!(has(&out, "bpf.program"), expected, "command {command}");
+    }
+    let out = run(vec![sys(1, 321, "bpf", [5, 0, 0, 0, 0, 0], 3)]);
+    assert_eq!(tier(&out, "bpf.program").as_deref(), Some("medium"));
+    assert_eq!(
+        text(rows(&out, "bpf.program")[0], "finding.category"),
+        "rootkit"
+    );
+}
