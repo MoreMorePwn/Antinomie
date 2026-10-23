@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The chips above Suspicious activity: tiers, categories, Show INFO and Show hidden.
-use super::rules::{Category, Tier};
+use super::rules::{Category, Tier, SUPPRESSION_VERSION};
 use super::*;
 
 impl TriageView {
@@ -17,6 +17,10 @@ impl TriageView {
             .scan
             .as_ref()
             .map_or(0, |scan| scan.counts.findings_capped);
+        let suppressed = self
+            .scan
+            .as_ref()
+            .map_or(0, |scan| scan.counts.findings_suppressed);
         let view = &mut self.scan_request.finding_view;
         let mut changed = false;
         for tier in [Tier::High, Tier::Medium, Tier::Low] {
@@ -65,7 +69,10 @@ impl TriageView {
             "Show hidden"
         };
         if toggle_chip(ui, hidden_label, view.show_hidden, Some(hidden))
-            .on_hover_text("Rows hidden as VM housekeeping or because the process is outside the run, which a cap or an allow-list never hides. Capped rows are counted in a \"+N more\" row.")
+            .on_hover_text(format!(
+                "Rows hidden because the process is outside the run's tree. {suppressed} frames of VM housekeeping (time sync, mirrors, link-local discovery) were skipped by the built-in suppression list, version {}; they are counted, not listed. Capped rows are counted in a \"+N more\" row.",
+                SUPPRESSION_VERSION
+            ))
             .clicked()
         {
             view.show_hidden = !view.show_hidden;

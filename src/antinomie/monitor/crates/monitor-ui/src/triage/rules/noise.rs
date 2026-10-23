@@ -110,6 +110,8 @@ pub(super) struct Agg {
     pub siblings: u64,
     /// Occurrences kept as extra evidence, after the first.
     pub samples: Vec<(u64, u64)>,
+    /// The capture and frame a row stands on, for a row found in packets.
+    pub packet: Option<(String, u64)>,
     /// The tier after context; set by [`settle`].
     pub tier: Tier,
     pub why: Vec<String>,

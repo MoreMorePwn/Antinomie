@@ -178,6 +178,8 @@ pub(super) struct Counts {
     /// Rows by tier (HIGH, MEDIUM, LOW) and the number of INFO matches.
     pub finding_tiers: [u64; 4],
     pub findings_hidden: u64,
+    /// Frames the built-in list of VM housekeeping skipped.
+    pub findings_suppressed: u64,
     pub findings_capped: u64,
     pub opened: u64,
     pub reads: u64,

@@ -4,6 +4,7 @@ mod credential;
 mod discovery;
 mod evasion;
 mod execution;
+mod frames;
 mod impact;
 mod injection;
 mod network;

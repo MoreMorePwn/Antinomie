@@ -212,7 +212,17 @@ fn observations(ui: &mut egui::Ui, scan: &ArchiveScan) -> bool {
                 "Observed activity",
                 "Select an observation for Details; double-click for its evidence.",
             );
-            for (index, finding) in scan.findings.iter().take(4).enumerate() {
+            // The worst rows first, then the earliest.
+            let mut worst: Vec<&Finding> = scan.findings.iter().collect();
+            worst.sort_by_key(|finding| {
+                rules::Tier::ALL.iter().position(|tier| {
+                    finding
+                        .cells
+                        .get(rules::COL_TIER)
+                        .is_some_and(|cell| cell.text == tier.tag())
+                })
+            });
+            for (index, finding) in worst.into_iter().take(4).enumerate() {
                 let severity = finding
                     .cells
                     .get(rules::COL_TIER)

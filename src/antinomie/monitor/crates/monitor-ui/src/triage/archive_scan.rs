@@ -438,6 +438,15 @@ pub(super) fn scan_archive_query(
                     RowKind::Session => {
                         // Sessions have a table and no detection input.
                         counts.sessions += 1;
+                        if let Some(first) = row.first() {
+                            engine.frame(
+                                rules::FrameKind::Session,
+                                &first.values,
+                                destination,
+                                port,
+                                clock_anchor,
+                            );
+                        }
                         return Ok(());
                     }
                 };
@@ -448,6 +457,19 @@ pub(super) fn scan_archive_query(
                 }
                 if !http {
                     files.journal.learn_dns(row);
+                }
+                if let Some(first) = row.first() {
+                    engine.frame(
+                        if http {
+                            rules::FrameKind::Http
+                        } else {
+                            rules::FrameKind::Dns
+                        },
+                        &first.values,
+                        destination,
+                        port,
+                        clock_anchor,
+                    );
                 }
                 if let Some(writer) = &mut event_journal {
                     if let Err(error) =
@@ -510,7 +532,9 @@ pub(super) fn scan_archive_query(
     counts.findings = output.badge;
     counts.finding_tiers = output.tiers;
     counts.findings_hidden = output.hidden;
+    counts.findings_suppressed = output.suppressed;
     counts.findings_capped = output.capped;
+    let finding_notes = output.notes;
     let suspicious = output.tasks;
     for finding in output.rows {
         if let Some(writer) = &mut journal {
@@ -644,6 +668,7 @@ pub(super) fn scan_archive_query(
         suspicious,
         findings,
         findings_omitted,
+        finding_notes,
         opened,
         opened_omitted,
         changed,

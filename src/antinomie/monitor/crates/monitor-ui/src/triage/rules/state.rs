@@ -123,8 +123,33 @@ pub(super) struct Task {
     pub net_elf: bool,
 }
 
+/// A task that reached an address with its own calls.
+#[derive(Clone)]
+pub(super) struct Contact {
+    pub cookie: u64,
+    pub pid: u32,
+    pub tid: u32,
+    pub image: Option<String>,
+}
+
+impl Contact {
+    pub(super) fn of(cx: &Ctx) -> Self {
+        Self {
+            cookie: cx.call.task_cookie,
+            pid: cx.event.pid,
+            tid: cx.event.tid,
+            image: cx.image.map(str::to_owned),
+        }
+    }
+}
+
 #[derive(Default)]
 pub(super) struct State {
+    /// Addresses the run's calls connected or sent to, with the first task to do so.
+    pub contacted: BTreeMap<std::net::IpAddr, Contact>,
+    /// The first task to talk to a name server.
+    pub dns_task: Option<Contact>,
+    pub frames: super::frames::Frames,
     /// The launched program's own image.
     pub sample: Option<String>,
     pub written: BTreeSet<String>,

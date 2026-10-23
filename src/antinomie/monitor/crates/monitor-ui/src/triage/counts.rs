@@ -116,7 +116,11 @@ impl TriageView {
             let tiers = scan.counts.finding_tiers;
             format!(
                 "{} high · {} medium · {} low · {} info · {} hidden",
-                tiers[0], tiers[1], tiers[2], tiers[3], scan.counts.findings_hidden
+                tiers[0],
+                tiers[1],
+                tiers[2],
+                tiers[3],
+                scan.counts.findings_hidden + scan.counts.findings_suppressed
             )
         });
         widgets::segmented(

@@ -690,6 +690,11 @@ impl TriageView {
                 format!("{omitted} rule matches are available on other query pages."),
             );
         }
+        if let Some(scan) = &self.scan {
+            for note in &scan.finding_notes {
+                crate::activity::warning(ui, note.clone());
+            }
+        }
         self.query_bar(
             ui,
             0,
@@ -1127,6 +1132,8 @@ struct ArchiveScan {
     suspicious: Suspicious,
     findings: Vec<Finding>,
     findings_omitted: u64,
+    /// Rules the scan could not evaluate, and why.
+    finding_notes: Vec<String>,
     opened: Vec<Vec<Cell>>,
     opened_omitted: u64,
     changed: Vec<Vec<Cell>>,
