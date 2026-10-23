@@ -1092,10 +1092,11 @@ fn unfinished_analysis_shows_progress_until_it_completes() {
     assert!(
         shown
             .iter()
-            .any(|text| text == "Analysis in progress: Entropy"),
+            .any(|text| text.contains("checks completed")
+                && text.contains("Starting the next check")),
         "{shown:?}"
     );
-    assert!(shown.iter().any(|text| text == "Running…"));
+    assert!(shown.iter().any(|text| text == "Waiting…"));
     assert!(shown.iter().any(|text| text == "0 rows"));
     assert!(shown
         .iter()
@@ -1103,14 +1104,13 @@ fn unfinished_analysis_shows_progress_until_it_completes() {
     let (output, _) = render(&ctx, &report, &mut state, size, Vec::new(), None);
     assert!(texts(&output)
         .iter()
-        .any(|(text, _)| text == "Analysis in progress: Entropy"));
+        .any(|(text, _)| text.contains("checks completed")
+            && text.contains("Starting the next check")));
 
     report.state = AnalysisState::Complete;
     report.sections.last_mut().unwrap().state = AnalysisSectionState::Complete;
     let shown = overview(&report, &mut state);
-    assert!(!shown
-        .iter()
-        .any(|text| text.starts_with("Analysis in progress")));
+    assert!(!shown.iter().any(|text| text.contains("checks completed")));
     assert!(!shown.iter().any(|text| text.starts_with("Running…")));
 }
 

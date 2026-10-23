@@ -87,7 +87,8 @@ fn worker_main() -> Result<(), String> {
     }
     report.specimen_sha256 = Some(format!("{:x}", Sha256::digest(&specimen)));
     report.specimen_len = Some(specimen.len() as u64);
-    for index in 0..report.sections.len() {
+    for index in super::progress::execution_order(&report) {
+        let _stage = super::progress::Stage::begin(Path::new("/output/progress"), &report, index);
         super::progress::publish(Path::new("/output"), &report, Some(index));
         analyze_section(
             &mut report.sections[index],

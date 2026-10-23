@@ -207,6 +207,7 @@ pub(super) fn disassemble(section: &mut AnalysisSection, specimen: &[u8], listin
         object::Architecture::X86_64_X32 => 64,
         _ => return objdump(section, listings),
     };
+    super::progress::tool_started("iced-x86", &[]);
     let mut named = functions(&file);
     let symbols = named.len();
     call_targets(&file, bitness, &mut named);

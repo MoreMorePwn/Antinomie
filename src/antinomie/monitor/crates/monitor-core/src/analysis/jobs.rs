@@ -17,7 +17,7 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     os::fd::OwnedFd,
-    os::unix::fs::{OpenOptionsExt, PermissionsExt},
+    os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt},
     os::unix::net::UnixStream,
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -116,7 +116,10 @@ pub(crate) fn fail(report: &mut AnalysisReport, state: AnalysisState, reason: im
     }
     report.reason = Some(reason);
     for section in &mut report.sections {
-        if section.state == AnalysisSectionState::Pending {
+        if matches!(
+            section.state,
+            AnalysisSectionState::Pending | AnalysisSectionState::Running
+        ) {
             section.state = AnalysisSectionState::Unavailable;
             section.summary = report.reason.clone().unwrap_or_default();
         }
@@ -339,7 +342,8 @@ impl Jobs {
             .map(|name| fs::metadata(job.directory.join(name)).map_or(0, |m| m.len()))
             .sum::<u64>()
             .saturating_add(directory_len(&job.directory.join("output/listings")).unwrap_or(0))
-            .saturating_add(directory_len(&job.directory.join("output/artifacts")).unwrap_or(0));
+            .saturating_add(directory_len(&job.directory.join("output/artifacts")).unwrap_or(0))
+            .saturating_add(directory_len(&job.directory.join("output/progress")).unwrap_or(0));
         if matches!(
             job.report.state,
             AnalysisState::Cancelled | AnalysisState::Partial | AnalysisState::Unavailable
@@ -714,6 +718,11 @@ fn spawn_worker_binary(
     let account = sandbox_passwd(&job.directory)?;
     let output = job.directory.join("output");
     fs::create_dir(&output).map_err(|e| e.to_string())?;
+    let progress = output.join("progress");
+    fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&progress)
+        .map_err(|e| e.to_string())?;
     let listings = output.join("listings");
     fs::create_dir(&listings).map_err(|e| e.to_string())?;
     fs::set_permissions(&listings, fs::Permissions::from_mode(0o700)).map_err(|e| e.to_string())?;
@@ -854,7 +863,10 @@ fn spawn_worker_binary(
         .arg("/output/listings")
         .arg("--bind")
         .arg(&artifacts)
-        .arg("/output/artifacts");
+        .arg("/output/artifacts")
+        .arg("--bind")
+        .arg(&progress)
+        .arg("/output/progress");
     // Analysis tools Antinomie installed, read-only.
     if let Some(tools) = tools.filter(|tools| tools.is_dir()) {
         cmd.arg("--ro-bind")
@@ -1142,7 +1154,12 @@ pub(super) fn read_report(
             matches!(
                 report.state,
                 AnalysisState::Complete | AnalysisState::Partial
-            )
+            ) && report.sections.iter().all(|s| {
+                !matches!(
+                    s.state,
+                    AnalysisSectionState::Pending | AnalysisSectionState::Running
+                )
+            })
         } else {
             matches!(
                 report.state,
@@ -1173,6 +1190,8 @@ pub fn open_report(directory: &Path) -> Result<AnalysisReport, String> {
     super::validation::validate_report(&report)?;
     Ok(report)
 }
+#[cfg(test)]
+mod progress_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
