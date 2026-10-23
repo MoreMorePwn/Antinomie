@@ -585,6 +585,7 @@ impl RunArtifactOwner {
                 run_id: run.id.clone(),
                 vm_id: run.vm_id.clone(),
                 boot_id: run.boot_id.clone(),
+                network_off: !run.request.capture_network,
                 memory_state: if run.request.memory_dump_on_exit {
                     RunArtifactState::WaitingForTreeExit
                 } else {

@@ -460,6 +460,11 @@ pub struct RunArtifacts {
     /// VM-wide packet captures; snapshot boundaries start new segments.
     pub network_captures: Vec<PathBuf>,
     pub network_state: RunArtifactState,
+    /// The run was started with network capture turned off, so no capture is
+    /// missing. A run saved before this field existed reads false, which keeps
+    /// its absent capture reported as missing evidence.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub network_off: bool,
     /// Directory containing `dump.json` and the post-exit VM `memory.elf`.
     pub memory_dump: Option<PathBuf>,
     pub memory_state: RunArtifactState,
