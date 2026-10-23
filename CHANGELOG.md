@@ -6,6 +6,12 @@ it runs.
 
 ## 0.7.0 — Unreleased
 
+- **Terminal interaction and layout.** Live, saved and debugger terminals support
+  mouse text selection, double-click word selection, clipboard shortcuts and a
+  copy context menu. Ctrl+C interrupts when no text is selected. Terminal output
+  fills its surface, with a block cursor, focus edge and a compact process header.
+  The main workspace no longer has outer left/right background gutters.
+
 - **Dependency security.** The locked transitive `ctutils` is updated to 0.4.4
   for RUSTSEC-2026-0385. The audit remains enabled; this does not suppress the
   advisory or change the other dependency applicability assessments.

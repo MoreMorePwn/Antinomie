@@ -2,6 +2,9 @@ use crate::theme;
 use eframe::egui::{self, Color32, Key, Sense, TextStyle};
 use std::time::{Duration, Instant};
 
+mod selection;
+use selection::Selection;
+
 /// Output lines kept above the screen for scrolling back.
 const SCROLLBACK: usize = 10_000;
 /// The backend accepts PTY sizes of 1..=256 rows and columns.
@@ -24,6 +27,7 @@ pub struct Terminal {
     column: u16,
     /// Last time the grid was drawn. A gap means the tab was hidden.
     last_show: Option<Instant>,
+    selection: Option<Selection>,
 }
 
 impl Default for Terminal {
@@ -35,6 +39,7 @@ impl Default for Terminal {
             wheel: egui::Vec2::ZERO,
             column: 0,
             last_show: None,
+            selection: None,
         }
     }
 }
@@ -51,6 +56,10 @@ impl Terminal {
     }
 
     pub fn process(&mut self, bytes: &[u8]) {
+        if self.selection.is_some() && !bytes.is_empty() {
+            self.process_selected(bytes);
+            return;
+        }
         // While the view is scrolled back, vt100 moves its own offset along
         // with each line entering the history; follow it so the lines being
         // read stay in place.
@@ -71,6 +80,7 @@ impl Terminal {
     }
 
     pub(crate) fn replay_resize(&mut self, rows: u16, cols: u16) {
+        self.selection = None;
         self.parser
             .screen_mut()
             .set_size(rows.clamp(1, MAX_ROWS), cols.clamp(1, MAX_COLS));
@@ -78,6 +88,7 @@ impl Terminal {
     }
 
     pub(crate) fn replace_screen(&mut self, rows: u16, cols: u16, data: &[u8]) {
+        self.selection = None;
         let size = (rows.clamp(1, MAX_ROWS), cols.clamp(1, MAX_COLS));
         // Redraw the screen in place instead of starting a new parser, so the
         // history above it survives PTY resizes and resyncs. Leave the
@@ -133,6 +144,7 @@ impl Terminal {
             .is_some_and(|shown| shown.elapsed() > Duration::from_millis(100));
         self.last_show = Some(Instant::now());
         let resize = if resize_parser && self.size != fit && !returning {
+            self.selection = None;
             self.size = fit;
             self.parser.screen_mut().set_size(fit.0, fit.1);
             Some(fit)
@@ -152,12 +164,10 @@ impl Terminal {
                 .max(1);
         }
         let grid = egui::vec2(f32::from(view_cols) * cell.x, f32::from(view_rows) * cell.y);
-        let (rect, response) = ui.allocate_exact_size(
-            grid + egui::vec2(BAR, if wide { BAR } else { 0.0 }),
-            Sense::click(),
-        );
+        let (rect, response) = ui.allocate_exact_size(available, Sense::click_and_drag());
         let grid = egui::Rect::from_min_size(rect.min, grid);
-        if response.clicked() {
+        ui.painter().rect_filled(rect, 0.0, theme::terminal());
+        if response.clicked() || response.drag_started() {
             response.request_focus();
         }
 
@@ -206,7 +216,7 @@ impl Terminal {
         self.column = self.column.min(max_column);
         let scrollbar_id = response.id.with("scrollbar");
         let track = egui::Rect::from_min_max(
-            egui::pos2(grid.right(), grid.top()),
+            egui::pos2(rect.right() - BAR, grid.top()),
             egui::pos2(rect.right(), grid.bottom()),
         );
         let first = max_offset - self.offset;
@@ -229,9 +239,24 @@ impl Terminal {
             }
         }
 
-        let painter = ui.painter_at(grid);
-        painter.rect_filled(grid, 0.0, theme::terminal());
         let (first, count) = view_lines(lines, shown, self.offset);
+        self.select(ui, &response, grid, cell, first, count, cols, history);
+        let painter = ui.painter_at(grid);
+        // The terminal occupies the entire pane, including fractional cells.
+        // Keep an unobtrusive inset focus edge rather than a second card frame.
+        ui.painter().rect_stroke(
+            rect,
+            0.0,
+            egui::Stroke::new(
+                1.0_f32,
+                if response.has_focus() {
+                    theme::palette().accent
+                } else {
+                    theme::line()
+                },
+            ),
+            egui::StrokeKind::Inside,
+        );
         let mut line = first;
         while line < first + count {
             // vt100 shows `rows` lines starting `scrollback` lines above the
@@ -252,6 +277,9 @@ impl Terminal {
                 top as u16..(top + span) as u16,
                 self.column..self.column + view_cols,
             );
+            self.paint_selection(
+                &painter, &font, cell, grid, line, first, top, span, view_cols,
+            );
             line += span;
         }
         self.parser.screen_mut().set_scrollback(0);
@@ -267,12 +295,16 @@ impl Terminal {
                         f32::from(col - self.column) * cell.x,
                         (line - first) as f32 * cell.y,
                     );
-                painter.rect_stroke(
-                    egui::Rect::from_min_size(pos, cell),
-                    0.0,
-                    egui::Stroke::new(1.0_f32, cursor_color()),
-                    egui::StrokeKind::Inside,
-                );
+                painter.rect_filled(egui::Rect::from_min_size(pos, cell), 0.0, cursor_color());
+                if let Some(content) = screen.cell(row, col) {
+                    painter.text(
+                        pos,
+                        egui::Align2::LEFT_TOP,
+                        content.contents(),
+                        font.clone(),
+                        theme::terminal(),
+                    );
+                }
             }
         }
         if self.offset > 0 {
@@ -302,9 +334,10 @@ impl Terminal {
         }
 
         let mut input = Vec::new();
-        let screen = self.parser.screen();
         let closing = ui.input(|state| state.viewport().close_requested());
         let queued_focus = closing && ui.memory(|memory| memory.has_focus(response.id));
+        let mut copied = self.copy_actions(ui, &response, history, rows, cols);
+        let screen = self.parser.screen();
         if enabled && (response.has_focus() || queued_focus) {
             ui.input(|state| {
                 for event in &state.events {
@@ -313,6 +346,12 @@ impl Terminal {
                         break;
                     }
                     match event {
+                        egui::Event::Copy if !copied && !state.modifiers.shift => {
+                            // egui-winit converts ordinary Ctrl+C into Copy.
+                            // Without a selection it must still interrupt the PTY.
+                            input.push(3);
+                            copied = true;
+                        }
                         egui::Event::Text(text) | egui::Event::Paste(text) => {
                             input.extend_from_slice(text.as_bytes())
                         }
@@ -322,7 +361,11 @@ impl Terminal {
                             modifiers,
                             ..
                         } => {
-                            if modifiers.ctrl && *key >= Key::A && *key <= Key::Z {
+                            if modifiers.ctrl && modifiers.shift && matches!(key, Key::C | Key::V) {
+                                // Clipboard commands are handled locally; never send ETX/SYN.
+                            } else if copied && modifiers.ctrl && *key == Key::C {
+                                // Do not also interrupt after copying a selection.
+                            } else if modifiers.ctrl && *key >= Key::A && *key <= Key::Z {
                                 input.push(*key as u8 - Key::A as u8 + 1);
                             } else if modifiers.shift
                                 && matches!(key, Key::PageUp | Key::PageDown | Key::Home | Key::End)
@@ -378,6 +421,7 @@ impl Terminal {
         }
         if !input.is_empty() {
             self.offset = 0;
+            self.selection = None;
         }
         (input, resize)
     }
@@ -804,9 +848,7 @@ mod tests {
                 .shapes
                 .iter()
                 .find_map(|shape| match &shape.shape {
-                    egui::Shape::Rect(rect) if rect.stroke.color == cursor_color() => {
-                        Some(rect.rect)
-                    }
+                    egui::Shape::Rect(rect) if rect.fill == cursor_color() => Some(rect.rect),
                     _ => None,
                 })
                 .expect("focused terminal must render its cursor");

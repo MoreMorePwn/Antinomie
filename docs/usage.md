@@ -136,6 +136,15 @@ packet history already has it, and specimen Content supports a byte-offset jump.
 Process terminals resize their grids with the window and retain up to 10,000
 history lines. Use the mouse wheel or scrollbar to read earlier output; the
 **newer lines** button or **Shift+End** returns to the newest output.
+Drag across terminal text to select it, or double-click a word. Copy with
+**Ctrl+Shift+C**, **Ctrl+Insert**, or **right-click → Copy selection**. This
+works in live terminals, saved output, and the debugger console. **Ctrl+C**
+copies a selection; without one it interrupts the running program. Paste with
+**Ctrl+Shift+V** or **Ctrl+V**. The context menu also offers **Select all output**
+and **Clear selection**. Copies contain plain text, joining soft-wrapped lines;
+selections whose cells change or leave retained history are cleared. A copy
+larger than 8 MiB is refused with an Activity warning. Host clipboard delivery
+still depends on the desktop display server.
 
 Panels can be dragged out into their own windows and docked back;
 **View → Reset layout** restores the default arrangement. Text size is under
