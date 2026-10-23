@@ -2,12 +2,17 @@
 use super::*;
 use object::{Object, ObjectSection, ObjectSymbol};
 use sha2::{Digest, Sha256};
-use std::{fs, io::Write, path::Path};
+use std::{cell::Cell, fs, io::Write, path::Path};
 
 pub(crate) const REPORT_MAX_SIZE: usize = 128 * 1024;
 const ENTRY_MAX_COUNT: usize = 2048;
 const VALUE_MAX_SIZE: usize = 4096;
 const TOOL_OUTPUT_MAX_SIZE: usize = 1024 * 1024;
+thread_local! {
+    /// Set when `entry` dropped a row at the report's row bound; the section's
+    /// full listing is then marked truncated. Cleared when a section starts.
+    static ROWS_DROPPED: Cell<bool> = const { Cell::new(false) };
+}
 /// Wall-clock budget of a decompiler run (analysis plus export).
 pub(super) const DECOMPILER_SECONDS: u64 = 840;
 
@@ -154,6 +159,7 @@ fn entry(
 ) {
     if section.entries.len() >= ENTRY_MAX_COUNT {
         section.state = AnalysisSectionState::Partial;
+        ROWS_DROPPED.set(true);
         return;
     }
     let mut value = value.into();
@@ -366,6 +372,7 @@ fn unavailable(section: &mut AnalysisSection, reason: impl Into<String>) {
 const TRIAGE_ENGINE: &str = "Antinomie byte triage 2 (object 0.40)";
 
 fn analyze_section(section: &mut AnalysisSection, specimen: &[u8], listings: &Path) {
+    ROWS_DROPPED.set(false);
     section.state = AnalysisSectionState::Complete;
     section.summary = "completed bounded static byte analysis".into();
     if matches!(
@@ -839,7 +846,7 @@ fn keep_listing(section: &mut AnalysisSection, listings: &Path) {
             break;
         }
     }
-    if let Ok(listing) = writer.finish(full) {
+    if let Ok(listing) = writer.finish(full || ROWS_DROPPED.get()) {
         if listing.truncated {
             section.state = AnalysisSectionState::Partial;
         }
@@ -1355,5 +1362,47 @@ mod tests {
             entry(&mut result, "row", "text", None);
         }
         assert_eq!(result.entries.len(), 2048);
+    }
+    fn structures_rows(count: usize) -> AnalysisSection {
+        ROWS_DROPPED.set(false);
+        let mut result = section(AnalysisKind::Structures);
+        result.state = AnalysisSectionState::Complete;
+        for index in 0..count {
+            structured_entry(
+                &mut result,
+                format!("row {index}"),
+                "value",
+                None,
+                AnalysisData::Field {
+                    group: "Headers".into(),
+                },
+            );
+        }
+        result
+    }
+    #[test]
+    fn listing_is_truncated_when_the_row_bound_dropped_rows() {
+        let mut result = structures_rows(ENTRY_MAX_COUNT + 5);
+        assert_eq!(result.entries.len(), ENTRY_MAX_COUNT);
+        keep_listing(&mut result, &listings());
+        let listing = result.listing.unwrap();
+        assert_eq!(listing.rows, ENTRY_MAX_COUNT as u64);
+        assert!(listing.truncated);
+        assert_eq!(result.state, AnalysisSectionState::Partial);
+    }
+    #[test]
+    fn listing_is_complete_when_every_row_fits() {
+        let mut result = structures_rows(ENTRY_MAX_COUNT);
+        keep_listing(&mut result, &listings());
+        let listing = result.listing.unwrap();
+        assert_eq!(listing.rows, ENTRY_MAX_COUNT as u64);
+        assert!(!listing.truncated);
+        assert_eq!(result.state, AnalysisSectionState::Complete);
+        // A later section on the same thread does not inherit the flag.
+        structures_rows(ENTRY_MAX_COUNT + 1);
+        let specimen = fs::read("/usr/bin/true").unwrap();
+        let mut real = section(AnalysisKind::Structures);
+        analyze_section(&mut real, &specimen, &listings());
+        assert!(!real.listing.unwrap().truncated);
     }
 }
