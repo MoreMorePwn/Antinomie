@@ -320,6 +320,9 @@ fn unscanned(report: &mut Report, staged: &Staged, reason: &str) {
     }
 }
 
+/// Why a run without network capture has no capture row to scan.
+pub(super) const CAPTURE_OFF: &str = "Network capture was turned off for this run";
+
 /// Why an input with no packet records is not scanned.
 pub(super) const NO_PACKETS: &str = "no packets captured";
 
@@ -413,6 +416,19 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
         report.selection = staged.selection.clone();
         report.warnings.push("No rules enabled".into());
         unscanned(&mut report, staged, "no rules enabled");
+        return Ok(report);
+    }
+    if staged.network_off && staged.captures.is_empty() {
+        // The run was started without capture: nothing is missing, so there
+        // is nothing to warn about, and Suricata is not looked for.
+        let mut report = Report::empty(Engine::Ids, staged.request.identity.clone());
+        report.state = State::Skipped;
+        report.selection = staged.selection.clone();
+        report.input(ScannedInput {
+            name: "Network capture".into(),
+            ..ScannedInput::new(InputKind::Capture, staged.request.directory.join("network"))
+                .skipped(CAPTURE_OFF)
+        });
         return Ok(report);
     }
     if staged.captures.iter().all(|capture| capture.packets == 0) {
@@ -856,6 +872,7 @@ mod tests {
             journal: None,
             skipped_inputs: vec![],
             unstaged: vec![],
+            network_off: false,
             warnings: vec![],
             selection: "test".into(),
             no_rules: false,
@@ -935,6 +952,64 @@ mod tests {
             b"not a capture at all, just text"
         )));
         assert!(!capture_is_empty(&dir.join("absent.pcap")));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_run_without_capture_is_skipped_with_a_neutral_reason() {
+        let dir = temp_dir("capture-off");
+        let mut staged = staged_over(&dir, &[]);
+        staged.network_off = true;
+        let report = scan(&staged, &dir).unwrap();
+        assert_eq!(report.state, State::Skipped);
+        // Nothing is missing, so there is nothing to warn about.
+        assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+        let inputs = report.inputs.unwrap();
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0].kind, InputKind::Capture);
+        assert_eq!(inputs[0].outcome, InputOutcome::Skipped);
+        assert_eq!(
+            inputs[0].reason,
+            "Network capture was turned off for this run"
+        );
+        // Suricata is neither looked for nor started.
+        assert!(report.sources.is_empty() && report.scanned_rules.is_none());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_capture_that_was_on_but_is_absent_stays_missing_with_the_warning() {
+        let dir = temp_dir("capture-failed");
+        // Capture was on (or the run predates the record): no segment was saved.
+        let staged = staged_over(&dir, &[]);
+        assert!(!staged.network_off);
+        let report = scan(&staged, &dir).unwrap();
+        assert_eq!(report.state, State::Missing);
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("not a clean result")
+                    && warning.starts_with("Evidence missing")),
+            "{:?}",
+            report.warnings
+        );
+        let row = &report.inputs.unwrap()[0];
+        assert_eq!(row.outcome, InputOutcome::Skipped);
+        assert_eq!(row.reason, "no network capture for this run");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_capture_of_a_run_with_capture_off_is_still_scanned() {
+        // A saved segment is evidence whatever the record says.
+        let dir = temp_dir("capture-off-with-file");
+        let pcap = dir.join("capture.pcap");
+        fs::write(&pcap, pcap_header()).unwrap();
+        let mut staged = staged_over(&dir, &[(&pcap, 0, true)]);
+        staged.network_off = true;
+        let report = scan(&staged, &dir).unwrap();
+        assert_eq!(report.state, State::Complete);
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1469,6 +1544,7 @@ mod tests {
             journal: None,
             skipped_inputs: vec![],
             unstaged: vec![],
+            network_off: false,
             warnings: vec![],
             selection: "et-test".into(),
             no_rules: false,

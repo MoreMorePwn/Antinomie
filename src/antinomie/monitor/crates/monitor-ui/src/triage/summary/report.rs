@@ -23,6 +23,7 @@ fn detector(
                     State::Unavailable => ("Unavailable", theme::muted()),
                     State::NoRules => ("No rules enabled", theme::warn()),
                     State::Missing => ("Evidence missing", theme::warn()),
+                    State::Skipped => ("Skipped", theme::muted()),
                 },
             };
             if compact {
