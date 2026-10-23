@@ -16,7 +16,7 @@ fn frame(
         .get_mut(&egui::ViewportId::ROOT)
         .unwrap()
         .maximized = Some(maximized);
-    let output = ctx.run(raw, |ctx| {
+    ctx.run(raw, |ctx| {
         show(ctx, "Antinomie custom title bar");
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
@@ -29,8 +29,7 @@ fn frame(
                 );
             });
         resize(ctx);
-    });
-    output
+    })
 }
 
 fn click(pos: Pos2, pressed: bool) -> egui::Event {
