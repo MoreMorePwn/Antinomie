@@ -365,6 +365,16 @@ impl Viewer {
         let (first, last, matching) = (page.offset, page.offset + page.rows.len(), page.matching);
         let mut to_page = None;
         ui.horizontal(|ui| {
+            let pages = matching.div_ceil(PAGE_SIZE as u64).max(1);
+            let mut number = first as u64 / PAGE_SIZE as u64 + 1;
+            ui.label("Go to page");
+            if ui
+                .add(egui::DragValue::new(&mut number).range(1..=pages))
+                .changed()
+            {
+                to_page = usize::try_from((number - 1).saturating_mul(PAGE_SIZE as u64)).ok();
+            }
+            ui.weak(format!("of {pages}"));
             if ui
                 .add_enabled(first > 0, egui::Button::new("Previous"))
                 .clicked()

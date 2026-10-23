@@ -479,6 +479,14 @@ impl StringsState {
                 self.page -= 1;
             }
             ui.label(format!("Page {} of {pages}", self.page + 1));
+            let mut page = self.page + 1;
+            ui.label("Go to page");
+            if ui
+                .add(egui::DragValue::new(&mut page).range(1..=pages.max(1)))
+                .changed()
+            {
+                self.page = page - 1;
+            }
             if ui
                 .add_enabled(self.page + 1 < pages, egui::Button::new("Next"))
                 .clicked()

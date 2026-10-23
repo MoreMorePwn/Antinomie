@@ -310,26 +310,39 @@ impl Session {
                 total,
                 capacity,
             }) => {
-                let result = self.request(
+                let result = self.request_typed(
                     control::SPECIMEN_READ,
                     &control::specimen_read(id, offset, capacity),
                     snapshot,
                     sender,
                     Duration::from_millis(100),
-                );
+                ).map_err(|error| match error {
+                    RequestError::Rejected { status, .. } if status == -rustix::io::Errno::NOENT.raw_os_error() => format!(
+                        "guest specimen handle {id} expired or was released; the original capture is unavailable; rerun with analysis enabled"),
+                    error => error.into_message(),
+                });
                 self.analysis.chunk(result, offset, total, capacity);
             }
             Some(crate::analysis::jobs::Action::Release(id)) => {
-                if let Err(error) = self.request(
+                let result = self.request_typed(
                     control::SPECIMEN_RELEASE,
                     &control::with_session(id),
                     snapshot,
                     sender,
                     Duration::from_millis(100),
-                ) {
-                    snapshot.last_error = Some(format!(
-                        "specimen release failed; guest expiry must reclaim handle {id}: {error}"
-                    ));
+                );
+                match result {
+                    Ok(_) => {}
+                    // Expiry already reclaimed it. Keep the acquisition failure
+                    // but do not report an already completed cleanup as a leak.
+                    Err(RequestError::Rejected { status, .. })
+                        if status == -rustix::io::Errno::NOENT.raw_os_error() => {}
+                    Err(error) => {
+                        snapshot.last_error = Some(format!(
+                            "specimen release failed; guest expiry must reclaim handle {id}: {}",
+                            error.into_message()
+                        ))
+                    }
                 }
             }
             None => {}

@@ -149,6 +149,7 @@ pub(crate) fn app() -> MonitorApp {
         archive_page_generation: 0,
         archive_page: Vec::new(),
         archive_offset: 0,
+        trace_paging: Default::default(),
         archive_next: None,
         archive_previous: Vec::new(),
         archive_pending: false,

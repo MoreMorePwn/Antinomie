@@ -72,6 +72,17 @@ for Antinomie 0.3.0 and newer):
 
 ## 3. Start it and run a program
 
+Saved **Syscall trace** recordings have a **Go to page** number beside
+**Calls/page**. Type a page number directly instead of stepping through arrows.
+Calls/page accepts any positive signed 64-bit value; **0** or **-1** shows all
+matching calls in one scrollable table. Large pages and all-matches mode load
+visible rows in windows of at most 256 calls, with a 64 MiB preview budget;
+they do not copy the entire recording into memory. A first jump through a
+filtered recording can scan the preceding matches in the background. Revisited
+ranges reuse a bounded cursor cache. Column sorting applies to the loaded window.
+Core strings and saved memory-analysis results also offer direct page entry;
+packet history already has it, and specimen Content supports a byte-offset jump.
+
 1. Select the VM and press **Start VM**. Only one VM runs at a time, and its
    network is disconnected by default.
 2. **Upload file** copies a program from the host (**Host file**) to a path in

@@ -6,6 +6,17 @@ it runs.
 
 ## 0.7.0 — Unreleased
 
+- **Archive navigation.** Syscall trace has direct page entry and accepts
+  positive page sizes above 256. Set calls/page to 0 or -1 for an all-matches
+  virtual table; visible rows load in bounded windows. Core strings and memory
+  analysis results also have direct page entry.
+
+- **Specimen acquisition.** Guest specimen transfers progress independently
+  of the single static-analysis worker, rotating between pending handles.
+  Waiting for Ghidra or another analysis tool no longer postpones acquisition
+  until a guest handle expires. Missing handles remain unavailable evidence;
+  cleanup of an already expired handle no longer produces a second leak error.
+
 - **Portable release checks.** TLS fixture checks accept TShark's older record
   label while verifying the ClientHello version and evidence; the debugger
   Restart unit test stays on its fake GDB. Newly reported dependency advisories

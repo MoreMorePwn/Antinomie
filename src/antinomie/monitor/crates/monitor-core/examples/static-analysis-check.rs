@@ -204,6 +204,10 @@ fn exercise(
     }
     let on = test.launch("/tmp/static-probe", vec!["ON".into()], true, 1000)?;
     test.terminal(&on, "marker=ON")?;
+    let mut queued = Vec::new();
+    for marker in ["QUEUED-A", "QUEUED-B"] {
+        queued.push(test.launch("/tmp/static-probe", vec![marker.into()], true, 1000)?);
+    }
     let report = test.report(&on)?;
     let expected = format!(
         "{:x}",
@@ -218,6 +222,20 @@ fn exercise(
     ) {
         return Err(format!("ELF analyzer unavailable: {report:?}"));
     }
+    for id in &queued {
+        let queued_report = test.report(id)?;
+        if queued_report.specimen_sha256.as_deref() != Some(expected.as_str())
+            || !matches!(
+                queued_report.state,
+                AnalysisState::Complete | AnalysisState::Partial
+            )
+        {
+            return Err(format!(
+                "queued specimen was not preserved: {queued_report:?}"
+            ));
+        }
+    }
+    println!("PASS three queued launch specimens retain the original ELF hash");
     println!(
         "PASS initial ELF capture and analyzer: {}",
         serde_json::to_string(&report).map_err(|e| e.to_string())?
@@ -361,7 +379,9 @@ fn main() {
                 bundle_dir: PathBuf::from(&args[0]),
                 headless: true,
                 force_tcg: true,
-                capture_quota_size: 128 * 1024 * 1024,
+                // Three concurrent jobs reserve bounded listing/scratch space
+                // before acquisition; the retained test evidence stays small.
+                capture_quota_size: 1024 * 1024 * 1024,
                 ..BackendOptions::default()
             })?,
             snapshot: Snapshot::default(),

@@ -35,6 +35,9 @@ impl MonitorApp {
             }
             Request::Invocations {
                 generation, cancel, ..
+            }
+            | Request::InvocationRange {
+                generation, cancel, ..
             } => {
                 cancel.store(true, Ordering::Relaxed);
                 if generation == self.archive_generation {
@@ -79,6 +82,7 @@ impl MonitorApp {
         };
         match request {
             Request::Invocations { .. }
+            | Request::InvocationRange { .. }
             | Request::Captured { .. }
             | Request::AsyncObservations { .. }
             | Request::ProcessTree { .. } => self.supersede(request),
@@ -190,6 +194,7 @@ impl MonitorApp {
             self.pending_archive,
             Some(
                 Request::Invocations { .. }
+                    | Request::InvocationRange { .. }
                     | Request::Captured { .. }
                     | Request::AsyncObservations { .. }
             )
@@ -206,14 +211,39 @@ impl MonitorApp {
         self.archive_total = None;
         self.archive_source_total = None;
         self.archive_offset = 0;
+        self.trace_paging = Default::default();
         self.archive_pending = false;
         self.archive_error = None;
     }
 
     pub(super) fn request_page(&mut self, offset: u64) {
-        let Some(directory) = self.trace_archive_directory() else {
+        if offset == 0 {
+            self.trace_paging = Default::default();
+            if self.settings.trace_page_size == 0 || self.settings.trace_page_size > 256 {
+                self.request_trace_window(0);
+                return;
+            }
+        }
+        let Some(directory) = self.prepare_trace_read() else {
             return;
         };
+        let request = Request::Invocations {
+            generation: self.archive_generation,
+            directory,
+            offset,
+            limit: self.settings.trace_page_size.clamp(1, 256),
+            capture: self.selected_capture.is_some(),
+            pid: self.selected_process,
+            query: self.applied_filter.clone(),
+            hidden_categories: self.archive_hidden_categories.clone(),
+            cancel: Arc::clone(self.archive_read_cancel.as_ref().expect("prepared read")),
+        };
+        self.queue_archive(request);
+        self.archive_pending = true;
+    }
+
+    pub(super) fn prepare_trace_read(&mut self) -> Option<PathBuf> {
+        let directory = self.trace_archive_directory()?;
         self.archive_generation = self.archive_generation.wrapping_add(1);
         if let Some(cancel) = self.archive_read_cancel.take() {
             cancel.store(true, Ordering::Relaxed);
@@ -227,24 +257,17 @@ impl MonitorApp {
         };
         self.archive_pending = false;
         self.archive_error = None;
-        let request = Request::Invocations {
-            generation: self.archive_generation,
-            directory,
-            offset,
-            limit: self.settings.trace_page_size,
-            capture: self.selected_capture.is_some(),
-            pid: self.selected_process,
-            query: self.applied_filter.clone(),
-            hidden_categories: self.archive_hidden_categories.clone(),
-            cancel,
-        };
-        self.queue_archive(request);
-        self.archive_pending = true;
+        Some(directory)
     }
 
     pub(super) fn next_archive_page(&mut self) {
+        if self.trace_paging.ranked {
+            self.jump_trace_page(self.trace_paging.page.saturating_add(1));
+            return;
+        }
         if let Some(offset) = self.archive_next {
             self.archive_previous.push(self.archive_offset);
+            self.trace_paging.page = self.trace_paging.page.saturating_add(1);
             self.request_page(offset);
         }
     }
@@ -455,6 +478,15 @@ impl MonitorApp {
                 self.archive_pending = false;
                 match result {
                     Ok(page) => {
+                        if let Some(start) = self.trace_paging.pending_start.take() {
+                            self.trace_paging.window_start = start;
+                            if let Some(next) = page.next_offset {
+                                self.trace_paging.remember(
+                                    start.saturating_add(page.invocations.len() as u64),
+                                    next,
+                                );
+                            }
+                        }
                         self.archive_total = total;
                         self.archive_source_total = source_total;
                         self.archive_page = page.invocations;
