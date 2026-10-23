@@ -6,6 +6,10 @@ it runs.
 
 ## 0.7.0 — Unreleased
 
+- **Dependency security.** The locked transitive `ctutils` is updated to 0.4.4
+  for RUSTSEC-2026-0385. The audit remains enabled; this does not suppress the
+  advisory or change the other dependency applicability assessments.
+
 - **Archive navigation.** Syscall trace has direct page entry and accepts
   positive page sizes above 256. Set calls/page to 0 or -1 for an all-matches
   virtual table; visible rows load in bounded windows. Core strings and memory

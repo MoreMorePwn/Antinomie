@@ -5,6 +5,13 @@ blocking for unreviewed advisories. Entries in `.cargo/audit.toml` are scoped
 applicability assessments, not claims that an upstream vulnerability was fixed.
 Dependency upgrades remain tracked in the existing dependency-advisory backlog.
 
+RUSTSEC-2026-0385, published on 2026-10-23, is resolved by updating the locked
+transitive `ctutils` from 0.4.3 to 0.4.4. The
+[upstream patch](https://github.com/RustCrypto/utils/pull/1569) corrects mask
+constant-time code generation and 32-bit `u128` comparisons. No audit exception
+was added for this advisory; the patch does not change the other assessments
+below or complete the broader YARA-X/Wasmtime update backlog.
+
 | Advisory | Source and applicability assessment |
 |---|---|
 | RUSTSEC-2026-0359 | [Upstream description](https://github.com/bytecodealliance/wasmtime/security/advisories/GHSA-wjc8-633q-pwxr): dropping attacker-defined chains of recursive Wasm types. Antinomie accepts YARA source and invokes YARA-X's compiler, rather than accepting guest Wasm or serialized compiled rule modules. YARA-X's generated module uses its own fixed type schema; Wasmtime's `gc` feature is disabled. This assessment must be revisited if raw/compiled Wasm imports, custom Wasm types or GC are enabled. |
