@@ -596,6 +596,7 @@ pub(super) fn section_report(id: &str, marker: &str) -> antinomie_monitor_core::
                     .collect(),
             },
         ],
+        layer: None,
     }
 }
 

@@ -152,6 +152,8 @@ pub(super) struct State {
     pub frames: super::frames::Frames,
     /// The launched program's own image.
     pub sample: Option<String>,
+    /// The packer verdict Static analysis gave the launched program.
+    pub packed: Option<super::engine::PackedImage>,
     pub written: BTreeSet<String>,
     pub written_names: BTreeSet<String>,
     pub written_keys: BTreeSet<FileKey>,
@@ -177,6 +179,14 @@ impl State {
             return &mut self.overflow;
         }
         self.tasks.entry(cx.call.task_cookie).or_default()
+    }
+
+    /// A fresh state for a run whose program Static analysis found packed.
+    pub(super) fn with_packed(packed: Option<super::engine::PackedImage>) -> Self {
+        Self {
+            packed,
+            ..Self::default()
+        }
     }
 
     pub(super) fn tasks(&self) -> &BTreeMap<u64, Task> {

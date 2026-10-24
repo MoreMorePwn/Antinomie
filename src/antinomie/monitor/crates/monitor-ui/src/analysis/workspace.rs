@@ -2,6 +2,7 @@
 mod capa_matrix;
 mod content;
 mod tabs;
+mod unpacking;
 
 use self::tabs::{FileInfo, Tab};
 use super::{
@@ -714,7 +715,7 @@ fn categories(
 pub(super) const NOT_REQUESTED: &str =
     "Not part of this analysis; start one with this check selected";
 
-const ALL_KINDS: [AnalysisKind; 12] = [
+const ALL_KINDS: [AnalysisKind; 13] = [
     AnalysisKind::Metadata,
     AnalysisKind::Structures,
     AnalysisKind::Strings,
@@ -727,6 +728,7 @@ const ALL_KINDS: [AnalysisKind; 12] = [
     AnalysisKind::Decompilation,
     AnalysisKind::Embedded,
     AnalysisKind::Floss,
+    AnalysisKind::Unpacking,
 ];
 
 fn state_tone(section: &AnalysisSection) -> crate::widgets::Tone {
@@ -997,6 +999,7 @@ mod tests {
                 AnalysisSection::new(AnalysisKind::Strings),
                 AnalysisSection::new(AnalysisKind::Capabilities),
             ],
+            layer: None,
         };
         report.sections[1].state = AnalysisSectionState::Running;
         let words: Vec<_> = report
