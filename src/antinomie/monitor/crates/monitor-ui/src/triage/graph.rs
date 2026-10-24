@@ -9,6 +9,7 @@
 //! them to the Triage view (selection, Details, the shared filter and chips).
 use super::*;
 
+mod axis;
 mod filter;
 mod index;
 mod input;
@@ -16,6 +17,7 @@ mod lanes;
 mod notify;
 mod paint;
 mod phases;
+mod ruler;
 mod strip;
 mod tab;
 mod view;
@@ -25,12 +27,15 @@ mod window;
 #[cfg(test)]
 mod bench;
 #[cfg(test)]
+mod spacing_tests;
+#[cfg(test)]
 mod sync_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod window_tests;
 
+pub(crate) use axis::Spacing;
 pub(super) use index::{Builder, GraphIndex};
 pub(super) use lanes::Lanes;
 pub(super) use notify::{HighRule, HighWatch};

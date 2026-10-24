@@ -131,6 +131,8 @@ struct Settings {
     toast_high_findings: bool,
     /// The size the activity graph's window opened at last, in points.
     graph_window: [f32; 2],
+    /// How the activity graph spaces findings along its time axis.
+    graph_spacing: crate::triage::GraphSpacing,
     /// Debug: draw the repaint rate in a corner of the window.
     show_fps: bool,
     /// Sidebar sections folded away.
@@ -198,6 +200,7 @@ impl Default for Settings {
             outbound_catalog: false,
             toast_high_findings: true,
             graph_window: crate::triage::GRAPH_WINDOW_SIZE,
+            graph_spacing: Default::default(),
             show_fps: false,
             vms_collapsed: false,
             library_collapsed: false,
@@ -745,10 +748,14 @@ impl eframe::App for MonitorApp {
             .set_toast_high(self.settings.toast_high_findings);
         self.triage
             .set_graph_window_size(self.settings.graph_window);
+        self.triage.set_graph_spacing(self.settings.graph_spacing);
         self.triage.tick(ctx, input);
         self.triage.show_finding_windows(ctx);
         if let Some(size) = self.triage.take_graph_window_size() {
             self.settings.graph_window = size;
+        }
+        if let Some(spacing) = self.triage.take_graph_spacing() {
+            self.settings.graph_spacing = spacing;
         }
         let close = ctx.input(|input| input.viewport().close_requested())
             || self

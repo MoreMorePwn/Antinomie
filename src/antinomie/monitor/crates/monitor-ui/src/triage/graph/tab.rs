@@ -109,6 +109,7 @@ impl TriageView {
             colors: super::paint::Colors::current(),
             clock: scan.clock_anchor.or(self.scan_request.clock_anchor),
             height,
+            spacing: self.graph_spacing,
         };
         let mut actions = widget::show(ui, state, &config);
         if details_beside {
@@ -158,6 +159,11 @@ impl TriageView {
                         cookies
                     };
                     self.set_filter(ctx, &parts);
+                }
+                Action::Spacing(spacing) => {
+                    self.graph_spacing = spacing;
+                    self.graph_spacing_changed = Some(spacing);
+                    ctx.request_repaint();
                 }
                 Action::Tier(tier) => self.toggle_tier_chip(tier),
                 Action::Category(category) => self.toggle_category_chip(category),

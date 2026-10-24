@@ -60,16 +60,20 @@ pub(crate) fn short_time_us(value: u64) -> String {
 }
 
 /// A tick on the activity graph's axis: the local time of day, with
-/// milliseconds when the ticks are closer than a second.
-pub(crate) fn axis_time(value: u64, millis: bool) -> String {
+/// milliseconds when the ticks are closer than a second and microseconds when
+/// they are closer than a millisecond.
+pub(crate) fn axis_time(value: u64, step_ns: f64) -> String {
+    let format = if step_ns >= 1e9 {
+        "%H:%M:%S"
+    } else if step_ns >= 1e6 {
+        "%H:%M:%S%.3f"
+    } else {
+        "%H:%M:%S%.6f"
+    };
     i64::try_from(value)
         .ok()
         .and_then(DateTime::<Utc>::from_timestamp_micros)
-        .map(|time| {
-            time.with_timezone(&Local)
-                .format(if millis { "%H:%M:%S%.3f" } else { "%H:%M:%S" })
-                .to_string()
-        })
+        .map(|time| time.with_timezone(&Local).format(format).to_string())
         .unwrap_or_else(|| "Unavailable".into())
 }
 

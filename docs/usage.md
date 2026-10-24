@@ -213,9 +213,24 @@ packet history already has it, and specimen Content supports a byte-offset jump.
   resizable window, one per run, with the same filter bar and chips and
   **Details beside the graph** (a splitter sets its width); the window's size is
   remembered, and a click in it selects the same row as in the table.
+  **Spacing: Events | Time** (bottom right of the graph, or `T`) chooses how
+  the time axis is laid out. **Events**, the default, gives every distinct moment
+  a finding happened at one slot of equal width, in time order, so a burst of
+  findings in a few milliseconds is as wide as the same number of findings
+  spread over minutes; the tick labels are the real times at slot boundaries, a
+  slanted break mark and the length of the gap show where a long stretch with
+  nothing in it was squeezed, and the phases, the severity curve and the heat
+  strip follow the same axis. **Time** is the true scale. The choice is
+  remembered in the settings. Under the axis, the **overview ruler** shows every
+  finding of the whole run squeezed into its width, with the stretch the graph
+  shows as a window on it: drag the window to pan, drag its edges to zoom, drag
+  across an empty part to show that stretch (a click there centres the window),
+  and double-click the ruler to show the whole run. A time range brushed for the
+  filter is marked on the ruler. It works in both spacings, in the tab and in the
+  window.
   Mouse: wheel scrolls the lanes, Shift+wheel or a drag pans, Ctrl+wheel or a
   pinch zooms at the pointer, a double-click on the axis zooms 2x. Keyboard (click the graph first): ←/→ previous and next
-  finding in time, ↑/↓ lane, Enter evidence, `F` fit, `+`/`-` zoom at the
+  finding in time, ↑/↓ lane, Enter evidence, `T` spacing, `F` fit, `+`/`-` zoom at the
   selection, Space fold the lane, `H` `M` `L` `I` the tier chips and Show INFO,
   `1`…`9` and `0` the first ten category chips.
 - **Triage › Summary** shows the same curve, phases and heat strip for the whole

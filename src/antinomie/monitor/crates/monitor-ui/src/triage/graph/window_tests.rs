@@ -351,6 +351,7 @@ fn every_label_fits_in_its_column_at_the_roomy_sizes() {
                     colors: Colors::of(Theme::Dark.palette()),
                     clock: None,
                     height: 720.0,
+                    spacing: Spacing::Time,
                 };
                 widget::show(ui, &mut state, &config);
             });
