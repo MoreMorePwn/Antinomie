@@ -204,6 +204,57 @@ fn network(ui: &mut egui::Ui, scan: &ArchiveScan) -> Option<Destination> {
     target
 }
 
+/// The IOC card: how many of the run's indicators matched a dataset.
+fn indicators(ui: &mut egui::Ui, view: &TriageView) -> bool {
+    presentation::frame()
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            presentation::heading(
+                ui,
+                "Indicators (IOC)",
+                "The run's endpoints, domains, URLs, TLS fingerprints and files, matched offline against abuse.ch datasets",
+            );
+            match view.ioc_headline() {
+                Some((matched, total, date)) => {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(
+                            RichText::new(matched.to_string())
+                                .size(27.0)
+                                .strong()
+                                .color(if matched > 0 { theme::error() } else { theme::text() }),
+                        );
+                        ui.label(format!(
+                            "of {total} indicator{} matched",
+                            if total == 1 { "" } else { "s" }
+                        ));
+                    });
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(if date.is_empty() {
+                                "No datasets are loaded: nothing was checked, which is not a clean result.".to_owned()
+                            } else {
+                                format!("Datasets dated {date}. No match is not a clean result.")
+                            })
+                            .small()
+                            .color(theme::muted()),
+                        )
+                        .wrap(),
+                    );
+                }
+                None => {
+                    ui.label(RichText::new("—").size(27.0).color(theme::muted()));
+                    ui.label(
+                        RichText::new("Indicators appear after the recording is indexed")
+                            .small()
+                            .color(theme::muted()),
+                    );
+                }
+            }
+            ui.button("Open IOC").clicked()
+        })
+        .inner
+}
+
 fn observations(ui: &mut egui::Ui, scan: &ArchiveScan) -> bool {
     presentation::frame()
         .show(ui, |ui| {
@@ -431,6 +482,10 @@ pub(super) fn content(
                 destination = Some(Destination::Graph);
             }
             pop_out |= strip.open_window;
+            ui.add_space(14.0);
+            if indicators(ui, view) {
+                destination = Some(Destination::Ioc);
+            }
             ui.add_space(14.0);
             if observations(ui, scan) {
                 destination = Some(Destination::Findings);

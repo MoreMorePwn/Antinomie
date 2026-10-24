@@ -13,6 +13,7 @@ mod engine;
 mod evasion;
 mod exec;
 mod frames;
+pub(super) mod ioc;
 mod network;
 mod noise;
 mod paths;

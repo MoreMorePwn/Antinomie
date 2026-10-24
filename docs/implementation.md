@@ -1144,6 +1144,178 @@ Host only. `AnalysisKind::Unpacking` is a Triage check (on by default); the code
   path is the report's path (or the same file name for a path typed relative). The
   verdict reaches the engine through `ScanRequest::packed` and `Options::packed`.
 
+### API keys window (0.7.1)
+
+Host only. `monitor-core/src/api_keys.rs` owns every key; `monitor-ui/src/api_keys_window.rs`
+is Tools > API keys.
+
+* **Storage.** `<data dir>/api-keys.json` (`{"schema":1,"keys":{"abusech":…,"malshare":…}}`),
+  written through `storage::atomic_json`, whose temporary file is created 0600
+  before a byte is written, then renamed; `<data dir>/api-key-use.json` holds
+  last-used times only. The abuse.ch Auth-Key is one entry for MalwareBazaar,
+  ThreatFox and URLhaus. A `samples/api-keys.json` from an older version moves
+  into the new file on first read and is deleted. Keys are not part of
+  Settings, run exports, catalogs or saved URLs.
+* **Handling.** A key travels as a `Secret` (its `Debug` prints no text).
+  `curl` gets it on standard input (`-H @-`, or `-K -` for MalShare), never on a
+  command line; `redact` removes it from error text that a server could echo.
+  `masked` shows the last four characters of a key of at least eight, else "set".
+* **Test.** abuse.ch: a one-sample MalwareBazaar tag search; MalShare:
+  `getlimit`. Both run in a worker and record a use time on success.
+* **Samples.** `samples::source_key` reads this store. The Malware samples
+  window has no key field: it shows a notice and an **Open API keys…** button
+  (`SamplesView::take_open_keys`) and reads the key again after a change.
+
+### IOC datasets in the Rule manager (0.7.1)
+
+Host only. `monitor-core/src/ioc/` holds the datasets; `monitor-ui/src/rules_window/ioc.rs`
+is the IOC tab of Tools > Detection rules; `monitor-core/src/known_fp.rs` is the
+false-positive list.
+
+* **Feeds.** `feeds.rs` has the table of seven (`threatfox`, `urlhaus`,
+  `urlhaus-payloads`, `feodo`, `sslbl-ip`, `sslbl-ja3`, `sslbl-cert`): URL
+  (never with a key), usual size, terms, whether the download needs the Auth-Key
+  (ThreatFox, URLhaus and the payload list do). Stored under
+  `<data dir>/ioc/feeds/<id>/`: `meta.json` (data file name, fetch time, record
+  count, size, SHA-256, URL) is the commit point, `data-<time>-<n>.txt` the plain
+  text, `last-error.json` the reason of a failed update. `settings.json` lists
+  the feeds switched off. Nothing of this is in the repository or in run exports.
+* **Update.** `download.rs`: manual only. A feed is fetched through the rule
+  manager's `Fetcher` (HTTPS only, bounded, cancellable; the Auth-Key goes to
+  curl's standard input and only to abuse.ch hosts, only for the feeds that
+  need it), into a private folder under `ioc/staging/`, unpacked if it is a zip, parsed completely
+  (a download with no records, or mostly lines that are not records, is
+  refused), then the new data file is renamed into the feed folder and
+  `meta.json` is replaced atomically; older data files are removed last. A
+  failure or cancel leaves the previous copy and `meta.json` untouched, records
+  the reason in `last-error.json` and is reported by name (`Updated 6 of 7.
+  Failed: SSLBL IP: …; the previous copy was kept`). Free space for the download
+  and the text is checked first. A dataset over 14 days old is flagged
+  (`FeedMeta::stale`).
+* **Parsing.** `records.rs` reads each feed as a stream, finding columns by the
+  names in the `#` header line (with fixed defaults) so a reordered file still
+  works. A line is reduced to the normal forms of the values it could match
+  (`kind.rs`: `ip:port`, domain, URL without scheme/default port/fragment,
+  SHA-256, MD5, SHA-1, JA3, certificate SHA-1); the full record is built only for
+  a value somebody asked about. The tests use small files in the feeds' real
+  formats; the real feeds are never downloaded by tests.
+* **Known false positives.** `known_fp.rs`: entries `{value, kind, dataset?,
+  reason, added}` in `<data dir>/known-false-positives.json`; `add`, `remove`,
+  `load` and `find` are the whole API, so another window can use the list.
+  An entry with a dataset excuses only that dataset's records; one without
+  excuses any.
+* **UI.** The IOC tab shows the Auth-Key state, a stale banner, a table (on/off,
+  dataset, used for, records, size, date, age, state, Download/Update), details
+  (source, terms, stored copy, last failure) and the false-positive list. It
+  uses the Settings permission for outbound downloads like the other tabs.
+
+### abuse.ch Suricata rule packs with update checks (0.7.1)
+
+Host only. `monitor-core/src/ruleset/abusech.rs` and `monitor-ui/src/rules_window/abusech.rs`
+(the **abuse.ch** tab of the IDS engine).
+
+* **Packs.** `LIVE_PACKS`: `abuse-ch-threatfox` and `abuse-ch-urlhaus` (Auth-Key),
+  `abuse-ch-feodo`, `abuse-ch-sslbl-ip`, `abuse-ch-sslbl-ja3` and
+  `abuse-ch-sslbl` (the certificate pack that was already in the catalog, same
+  id). Each is a `SourcePack` for the `ids` engine built from the file that was
+  just downloaded, so it goes through `install_source` like any pack (filter,
+  index, provenance, the previous version kept on failure). The aggressive files
+  are never listed.
+* **Pin.** The publisher rewrites the file in place, so the pin is the snapshot:
+  `revision` is abuse.ch's `Last updated` stamp (`YYYYMMDDTHHMMSSZ`, or `snapshot`
+  when the file states none) plus the first 8 hex of the SHA-256, and the source
+  is a pinned `file` download with that digest, so the install verifies exactly
+  what was checked.
+* **Check and update.** `check_live` downloads the file into staging, refuses
+  anything without a rule line, keeps it as `rules/live/<id>.rules` and records
+  `{at, sha256, size, stamp, rules}` in `rules/live/checks.json`. A pack is not
+  requested again until [`MIN_CHECK_SECONDS`] (300) have passed; inside that
+  window the recorded answer is returned and no request is made, however often the
+  button is pressed. `install_live` runs a check (reusing a fresh one) and installs
+  from the kept file through a `Fetcher` that copies it, so check plus install is
+  one request. `live_states` compares the installed pack's download digest with
+  the last snapshot: Not installed, Not checked, Up to date or Update available.
+* **Key.** The Auth-Key goes only to the two packs that need it (`FeedFetcher`
+  picks the keyed or the plain `Curl` by URL; `Curl::with_auth_key` writes the
+  header to curl's standard input and only for abuse.ch hosts).
+* **Tests.** Fixtures in the packs' real format and mock fetchers; no request
+  leaves the machine.
+
+### IOC window and the Network tabs (0.7.1)
+
+Host only. Core: `monitor-core/src/ioc/` (`indicator`, `verdict`, `online`,
+`export`, `strings`, `disk`). UI: `monitor-ui/src/triage/` (`ioc_scan.rs`,
+`ioc_view.rs` and `ioc_view/`, `net_tabs.rs`, `rules/ioc.rs`, `files/ioc.rs`).
+
+* **Collector.** `indicator::Collector` merges plain observations into
+  `Indicator`s of five types (endpoint, domain, URL, TLS group, file), each with
+  its sources, first and last time (host microseconds), per-source details,
+  evidence jumps and the normal-form values it can be matched by (`lookups`).
+  A private address, a local name or a file with no content has no lookup and
+  reads `Not checked`. A process is named only when exactly one process made a
+  matching call: an endpoint by its own `connect`/`sendto` calls, a URL or TLS
+  row by its `ip:port`, a domain by the addresses it resolved or reached, a file
+  by the task that made the call; several processes give `candidates` and no name.
+  Each list stops at 20,000 and counts what it dropped.
+* **Where the observations come from.** The packet scan: `Inventory`
+  (`triage/network.rs`) now also keeps the remote `ip:port` of every frame (the
+  non-local side, else the lower port), HTTP requests, DNS answer codes and TLS
+  sessions (client hello joined to the server hello and certificate by
+  `tcp.stream`; the certificate SHA-1 is computed from TShark's DER; TLS 1.3 hides
+  the certificate). New TShark fields: `tls.handshake.ja3s`,
+  `tls.handshake.certificate`, `frame.len`,
+  `tls.handshake.extensions.supported_version`. The rules pass
+  (`rules/ioc.rs`) logs each `connect`/datagram `sendto` and each successful exec
+  (with the guest's SHA-256 of the image when it is the program itself). The files
+  come from the existing `Change` records (`files/ioc.rs`): created, written at
+  close (with the guest's hash), changed, deleted. The sample's hashes and strings
+  come from the static report (`strings::scan` finds `ip:port`, URLs and domains;
+  file extensions are not domains). Not collected: the eBPF/audit `connect`
+  records (`kernel` source).
+* **Disk hashes.** `ioc/disk.rs`: with a saved, readable disk dump in the run's
+  recording folder, the created, changed and written files (up to 2,000, 256 MiB
+  each) are hashed by the sandboxed disk reader (`DiskRequest::Info`) for SHA-256
+  and MD5; the answer is kept while the dump and the list stay the same.
+* **Matching.** `verdict::scan_datasets` reads each usable feed once, as a stream,
+  for the set of wanted values; `Scan` indexes the hits by value (at most 6
+  records per value). `evaluate` decides the verdict from the loaded feeds that
+  can answer for the type (`coverage`), the hits, the known false positives
+  (`known_fp::find`, an entry for a dataset excuses only that dataset) and any
+  online answers; the date is that of the oldest feed that answered (the feed that
+  matched, for a match). A TLS row needs an SSLBL feed. The answer is cached in
+  `ScanRequest::ioc_cache` under a key of the wanted values and the datasets'
+  `(id, fetch time, switch)` list, so the 5-second refresh of a live run does not
+  read the feeds again; a dataset update, a false-positive entry or an online
+  answer changes the scan's stamp and rescans.
+* **Findings.** `ioc_scan::list_findings` hands each Matched indicator to
+  `Engine::ioc_match`, which records a `c2.ioc_match` row (category C2, T1071,
+  tier by confidence) with packet or call evidence, folded by task and object, so
+  it reaches the findings journal, the graph, the Summary and the live toast like
+  any other row. Known FP and online-excused values make none.
+* **View.** `View` keeps tab, filter text (the table filter language,
+  `FIELDS`), verdict chips, selection, the verdicts (rebuilt when the scan, the
+  false-positive list or the online answers change), a session-only online
+  switch and the online job. Export writes `<run>/ioc/ioc-<type>-<time>.csv|json`
+  (files 0600, never replacing one; CSV cells that start with `=+-@` get a
+  leading apostrophe). The online check (`ioc/online.rs`) asks ThreatFox
+  `search_ioc`/`search_hash` and URLhaus `host`/`url`/`payload`, key on curl's
+  stdin, only to abuse.ch hosts, 50 values at most per press, and stops at the
+  first refusal.
+* **Network section.** `NetLayout::New` shows Endpoints, Domains, URLs and TLS
+  (`net_tabs.rs`); `NetLayout::Old` is the 0.7.0 layout, reachable by the switch.
+  The new tables use their own query slots (17 to 19; URLs reuse slot 3 and its
+  HTTP fields), so the old tabs and their saved filters are unchanged, and
+  `ENDPOINT_FIELDS`, `DOMAIN_FIELDS` and `TLS_FIELDS` keep the old names
+  (`network.country`, `dns.name`, `session.alpn`) beside new ones. The IOC column
+  is added after paging, from the verdicts of the same scan.
+* **Tests.** Core: record parsing of each feed format from small fixtures, the
+  collector's process rule, verdicts under missing, partial, old datasets, false
+  positives and online answers, the online request shapes and key handling with a
+  mock transport, the CSV/JSON export. UI: a fixture pcap scanned with and without
+  datasets (served by a mock fetcher), the finding and its removal by a false
+  positive, the tabs and the layout switch, export, the session-only online
+  switch, and the rules-pass recorder.
+
 ### Accepted ANT-T0097 host UI performance (0.6.2)
 
 Remove render-time filesystem checks for host chooser availability; resolve

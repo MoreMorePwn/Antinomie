@@ -59,6 +59,32 @@ pub(super) fn source_stamp(
         stamp.push('|');
         stamp.push_str(&file(&directory.join(name)));
     }
+    // What the IOC list depends on besides the recording: the datasets, the
+    // false positives, the online answers kept with the run and the sample.
+    if let Some(dir) = &request.data_dir {
+        stamp.push_str(&format!(
+            "|ioc={}|{}",
+            ioc_scan::signature(dir),
+            file(&dir.join("known-false-positives.json"))
+        ));
+    }
+    stamp.push_str(&format!(
+        "|{}|{}",
+        file(&directory.join("ioc-online.json")),
+        request
+            .report
+            .as_ref()
+            .map_or_else(String::new, |report| format!(
+                "{}.{:?}.{}",
+                report.id,
+                report.state,
+                report
+                    .sections
+                    .iter()
+                    .map(|s| s.entries.len())
+                    .sum::<usize>()
+            ))
+    ));
     if let Some(pcap) = pcap {
         stamp.push_str(&format!("|{}={}", pcap.display(), file(pcap)));
     }
@@ -328,6 +354,11 @@ impl TriageView {
         let cancel_thread = Arc::clone(&cancel);
         let mut request = self.scan_request.clone();
         request.event_cache = self.scan.as_ref().and_then(|scan| scan.event_cache.clone());
+        request.ioc_cache = self
+            .scan
+            .as_ref()
+            .and_then(|scan| scan.ioc.as_ref())
+            .map(|ioc| ioc.cache.clone());
         // Only a timer refresh may find the recording as it was; the index
         // thread then answers `UNCHANGED` without reading or writing.
         if std::mem::take(&mut self.timer_refresh) {

@@ -51,7 +51,10 @@ mod graph;
 pub(crate) const GRAPH_WINDOW_SIZE: [f32; 2] = graph::DEFAULT_SIZE;
 #[cfg(test)]
 mod idle_tests;
+mod ioc_scan;
+mod ioc_view;
 mod kernel_records;
+mod net_tabs;
 mod network;
 mod network_index;
 mod normalized;
@@ -93,6 +96,7 @@ enum Section {
     Files,
     Network,
     Bpf,
+    Ioc,
 }
 
 /// What a table's filter bar holds besides the filter and the pager.
@@ -142,6 +146,24 @@ enum NetTab {
     Sessions,
 }
 
+/// Which arrangement of the Network section is drawn.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NetLayout {
+    /// Endpoints, Domains, URLs and TLS, read from TShark.
+    New,
+    /// The 0.7.0 tabs: IPs, Hosts, HTTP, DNS and Sessions.
+    Old,
+}
+
+/// The rebuilt Network tabs.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NewTab {
+    Endpoints,
+    Domains,
+    Urls,
+    Tls,
+}
+
 /// The time the refresh loop schedules by. Production adds nothing; a test
 /// moves it forward instead of sleeping through the refresh interval.
 #[derive(Clone, Copy, Default)]
@@ -167,6 +189,10 @@ pub(crate) struct TriageView {
     process: ProcessTab,
     files: FileTab,
     network: NetTab,
+    net_layout: NetLayout,
+    new_tab: NewTab,
+    /// The IOC section.
+    ioc: ioc_view::View,
     /// Case-insensitive substring for rule, process, summary, or evidence.
     /// Invocation chosen from a Suspicious activity row.
     selected_call_id: Option<trace::InvocationKey>,
@@ -230,6 +256,9 @@ impl Default for TriageView {
             process: ProcessTab::Tree,
             files: FileTab::Opened,
             network: NetTab::Http,
+            net_layout: NetLayout::New,
+            new_tab: NewTab::Endpoints,
+            ioc: ioc_view::View::default(),
             selected_call_id: None,
             scan_key: None,
             scan_cancel: None,
@@ -400,7 +429,11 @@ impl TriageView {
             self.graph_window.close();
             self.context_key = Some(key);
         }
+        if self.details_directory.as_deref() != input.archive {
+            self.ioc.reset_run(input.archive);
+        }
         self.details_directory = input.archive.map(Path::to_path_buf);
+        self.ioc_tick(ctx);
         self.properties.tick(ctx, &input);
         self.detection.tick(ctx, &input);
         self.scan_request.clock_anchor = input.clock_anchor;
@@ -470,11 +503,15 @@ impl TriageView {
             self.detection.show(ui, self.scan.as_ref());
             return self.take_navigation(ui.ctx());
         }
+        if self.section == Section::Ioc {
+            self.ioc_section(ui, &input);
+            return self.take_navigation(ui.ctx());
+        }
         if self.section == Section::Bpf {
             self.refresh_row(ui, &input);
         }
         let jump = match self.section {
-            Section::Summary | Section::Properties | Section::Detection => None,
+            Section::Summary | Section::Properties | Section::Detection | Section::Ioc => None,
             Section::Process => {
                 presentation::heading(ui, "Process activity", "");
                 self.process(ui, &input)
@@ -626,6 +663,11 @@ impl TriageView {
     }
 
     fn network(&mut self, ui: &mut egui::Ui, input: &TriageInput<'_>) {
+        if self.net_layout == NetLayout::New {
+            self.new_network(ui, input);
+            return;
+        }
+        self.layout_switch(ui);
         self.network_tabs(ui);
         let index = match self.network {
             NetTab::Ips => 6,
@@ -798,7 +840,14 @@ impl TriageView {
         if let Some(sort) = sorting::take_request(ui.ctx(), table_id) {
             // The sort runs on the full rows; a compact table draws a subset.
             self.scan_request.sorts[index] = sort.map(|mut sort| {
-                sort.column = file_tabs::full_column(index, sort.column);
+                sort.column = if index == 3
+                    && self.section == Section::Network
+                    && self.net_layout == NetLayout::New
+                {
+                    net_tabs::stored_url_column(sort.column)
+                } else {
+                    file_tabs::full_column(index, sort.column)
+                };
                 sort
             });
             self.scan_request.offsets[index] = 0;
@@ -1108,16 +1157,24 @@ struct ScanRequest {
     /// The run's earlier recording segments and their boots, oldest first,
     /// for the packet index (set by the scan).
     segments: Vec<(std::path::PathBuf, String)>,
+    /// The datasets' answer for the last scan, while nothing it depends on changed.
+    ioc_cache: Option<ioc_scan::Cache>,
+    /// The run's static analysis report: the sample's hashes and strings.
+    report: Option<Arc<antinomie_monitor_core::AnalysisReport>>,
 }
 
 const STORED_ROWS: usize = 2000;
 /// Query tables with their own filter, sort and page: findings 0, opened 1,
 /// changed 2, http 3, dns 4, read 5, ips 6, hosts 7, the file categories 8 to
-/// 15, then the TLS, QUIC and SSH sessions.
-const SLOTS: usize = 17;
+/// 15, then the TLS, QUIC and SSH sessions, then the rebuilt Network section's
+/// Endpoints, Domains and TLS tables.
+const SLOTS: usize = 20;
 /// Operation tabs with their own slot after the original eight.
 const FILE_TABS: usize = 8;
 const SESSION_SLOT: usize = 16;
+const ENDPOINT_SLOT: usize = 17;
+const DOMAIN_SLOT: usize = 18;
+const TLS_SLOT: usize = 19;
 /// The Details/selection table id of each filter slot, in slot order.
 const TABLE_IDS: [&str; SLOTS] = [
     "triage-findings",
@@ -1137,6 +1194,9 @@ const TABLE_IDS: [&str; SLOTS] = [
     "triage-probed",
     "triage-other",
     "triage-sessions",
+    "triage-endpoints",
+    "triage-domains",
+    "triage-tls",
 ];
 
 struct FindingJournal {
@@ -1195,7 +1255,24 @@ struct ArchiveScan {
     hosts_omitted: u64,
     sessions: Vec<Vec<Cell>>,
     sessions_omitted: u64,
+    /// The rebuilt Network tabs.
+    new_tabs: NewTabs,
+    /// The IOC window's list of the run and the datasets' answer.
+    ioc: Option<Arc<ioc_scan::IocScan>>,
     network_warning: Option<String>,
+}
+
+/// The rows of the rebuilt Network tabs and what their pages left out.
+#[derive(Default)]
+struct NewTabs {
+    endpoints: Vec<Vec<Cell>>,
+    endpoints_omitted: u64,
+    domains: Vec<Vec<Cell>>,
+    domains_omitted: u64,
+    tls: Vec<Vec<Cell>>,
+    tls_omitted: u64,
+    /// The URLs tab: the HTTP rows (HTTP/1 and cleartext HTTP/2) with their version and IOC verdict.
+    urls: Vec<Vec<Cell>>,
 }
 
 struct PacketSpool {
@@ -1205,7 +1282,11 @@ struct PacketSpool {
     size: u64,
 }
 
+#[derive(Default)]
 struct PacketIndex {
+    /// The rebuilt tabs and the capture's indicators.
+    new_tabs: NewTabs,
+    ioc: antinomie_monitor_core::ioc::indicator::Collector,
     /// Frame, destination IP and hostname counts before UI queries.
     counts: Option<(u64, u64, u64)>,
     coverage: String,

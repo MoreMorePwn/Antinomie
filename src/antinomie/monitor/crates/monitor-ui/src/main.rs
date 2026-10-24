@@ -1,5 +1,6 @@
 mod activity;
 mod analysis;
+mod api_keys_window;
 mod app;
 mod archive;
 mod bpf;

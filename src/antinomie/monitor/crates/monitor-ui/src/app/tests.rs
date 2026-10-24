@@ -90,6 +90,7 @@ pub(crate) fn app() -> MonitorApp {
         rules_generation: 0,
         vm_snapshots: crate::snapshots::SnapshotManager::default(),
         samples: crate::samples_view::SamplesView::default(),
+        api_keys: Default::default(),
         dependencies: crate::dependencies_window::DependenciesWindow::ready_for_test(),
         getting_started: Default::default(),
         show_older_bases: false,

@@ -129,6 +129,12 @@ fn get(curl: &Path, key: &str, params: &[(&str, &str)], max: u64) -> Result<Vec<
     Ok(body)
 }
 
+/// Ask MalShare for the key's daily limit: a cheap call that fails when the
+/// key is refused. Used by Tools > API keys > Test.
+pub fn check_key(curl: &Path, key: &str) -> Result<(), String> {
+    get(curl, key, &[("action", "getlimit")], 64 * 1024).map(|_| ())
+}
+
 /// MalShare answers a refusal (a bad key, the daily limit, an unknown
 /// sample) as a line of text: that text, when `body` is one.
 fn refusal(body: &[u8]) -> Option<String> {

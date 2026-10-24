@@ -16,6 +16,8 @@ pub(super) enum Tab {
     #[default]
     Installed,
     Catalog,
+    /// The IDS engine's abuse.ch packs, with update checks.
+    Abusech,
 }
 
 /// The source text of the rule shown in the details.
@@ -68,15 +70,13 @@ impl Model {
             self.ensure(data_dir);
         }
         ui.label(RichText::new("Installed packs and custom groups are the only production rules. Scans do not download rules or upload evidence.").color(theme::text()));
-        let mut engine = if self.engine == "regex" {
-            "regex"
-        } else {
-            ENGINES
-                .iter()
-                .find(|(id, _)| *id == self.engine)
-                .map_or("yara", |(id, _)| *id)
-        };
-        let items: Vec<_> = ENGINES
+        let mut engine = ENGINES
+            .iter()
+            .map(|(id, _)| *id)
+            .chain(["regex", super::ioc::TAB])
+            .find(|id| *id == self.engine)
+            .unwrap_or("yara");
+        let mut items: Vec<_> = ENGINES
             .iter()
             .map(|(id, label)| {
                 let count = self
@@ -91,17 +91,21 @@ impl Model {
                 )
             })
             .collect();
-        let mut items = items;
         items.push((
             "regex",
             TabItem::new("Strings regex").badge(self.regex.badge(), Tone::Plain),
         ));
+        items.push((super::ioc::TAB, TabItem::new("IOC")));
         if widgets::tabs(ui, items, &mut engine) {
             self.engine = engine.into();
             self.select_none();
         }
         if self.engine == "regex" {
             self.regex_tab(ui, data_dir);
+            return;
+        }
+        if self.engine == super::ioc::TAB {
+            self.ioc_tab(ui, data_dir, outbound);
             return;
         }
         if let Some(next) = self.engine_status(ui) {
@@ -123,24 +127,27 @@ impl Model {
             .filter(|o| o.engine == self.engine)
             .count();
         let mut tab = self.tab;
-        widgets::tabs(
-            ui,
-            [
-                (
-                    Tab::Installed,
-                    TabItem::new("Installed").badge(installed.to_string(), Tone::Plain),
-                ),
-                (
-                    Tab::Catalog,
-                    TabItem::new("Catalog").badge(offered.to_string(), Tone::Plain),
-                ),
-            ],
-            &mut tab,
-        );
+        let mut tabs = vec![
+            (
+                Tab::Installed,
+                TabItem::new("Installed").badge(installed.to_string(), Tone::Plain),
+            ),
+            (
+                Tab::Catalog,
+                TabItem::new("Catalog").badge(offered.to_string(), Tone::Plain),
+            ),
+        ];
+        if self.engine == "ids" {
+            tabs.push((Tab::Abusech, TabItem::new("abuse.ch")));
+        } else if tab == Tab::Abusech {
+            tab = Tab::Installed;
+        }
+        widgets::tabs(ui, tabs, &mut tab);
         self.tab = tab;
         match self.tab {
             Tab::Installed => self.installed_tab(ui, data_dir, *outbound),
             Tab::Catalog => self.catalog_tab(ui, data_dir, *outbound),
+            Tab::Abusech => self.abusech_tab(ui, data_dir, outbound),
         }
     }
 
@@ -197,7 +204,7 @@ impl Model {
         });
     }
 
-    fn notices(&mut self, ui: &mut egui::Ui, outbound: &mut bool) {
+    pub(super) fn notices(&mut self, ui: &mut egui::Ui, outbound: &mut bool) {
         if !*outbound {
             ui.horizontal_wrapped(|ui| {
                 crate::activity::warning(

@@ -10,7 +10,10 @@ use super::*;
 use antinomie_monitor_core::kernel_notes::{FileHash, FileId, FileIdKind, FileKey, HashKind};
 use std::collections::{BTreeMap, BTreeSet};
 
+mod ioc;
 mod view;
+
+pub(super) use ioc::IocFile;
 
 const READ_NAMES: &[&str] = &["read", "pread64", "readv", "preadv", "preadv2"];
 const TRACKED_FILES: usize = 8192;

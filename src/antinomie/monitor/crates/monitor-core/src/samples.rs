@@ -24,7 +24,6 @@ pub const BAZAAR_KEYS: &str = "https://auth.abuse.ch/";
 pub const ARCHIVE_PASSWORD: &str = "infected";
 /// Samples larger than this are refused (decrypted in memory).
 pub const MAX_SAMPLE: u64 = 256 * 1024 * 1024;
-const KEYS_FILE: &str = "api-keys.json";
 
 /// Where samples come from. Each takes the user's own API key.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -685,27 +684,18 @@ pub fn acknowledge(data_dir: &Path) -> Result<(), String> {
     )
 }
 
-#[derive(Default, Serialize, Deserialize)]
-#[serde(default)]
-struct Keys {
-    malwarebazaar: String,
-    malshare: String,
-}
-
-fn keys(data_dir: &Path) -> Keys {
-    fs::read(samples_dir(data_dir).join(KEYS_FILE))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<Keys>(&bytes).ok())
-        .unwrap_or_default()
-}
-
-/// A source's API key saved in the data folder (readable by the user only),
-/// or an empty string.
+/// A source's API key (see [`crate::api_keys`]), or an empty string.
 pub fn source_key(data_dir: &Path, source: Source) -> String {
-    let keys = keys(data_dir);
+    crate::api_keys::get(data_dir, source_api_key(source))
+        .expose()
+        .to_owned()
+}
+
+/// The saved key that serves a source.
+pub fn source_api_key(source: Source) -> crate::api_keys::ApiKey {
     match source {
-        Source::MalwareBazaar => keys.malwarebazaar,
-        Source::MalShare => keys.malshare,
+        Source::MalwareBazaar => crate::api_keys::ApiKey::Abusech,
+        Source::MalShare => crate::api_keys::ApiKey::MalShare,
     }
 }
 
@@ -719,18 +709,7 @@ pub fn save_api_key(data_dir: &Path, key: &str) -> Result<(), String> {
 }
 
 pub fn save_source_key(data_dir: &Path, source: Source, key: &str) -> Result<(), String> {
-    let dir = samples_dir(data_dir);
-    crate::storage::private_dir(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let path = dir.join(KEYS_FILE);
-    let mut keys = keys(data_dir);
-    let key = key.trim().to_owned();
-    match source {
-        Source::MalwareBazaar => keys.malwarebazaar = key,
-        Source::MalShare => keys.malshare = key,
-    }
-    crate::storage::atomic_json(&path, &keys)?;
-    use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).map_err(|e| e.to_string())
+    crate::api_keys::set(data_dir, source_api_key(source), key)
 }
 
 /// Searches worth trying for samples that run in the x86-64 guests.

@@ -84,8 +84,8 @@ impl SamplesView {
         if self.results.is_empty() {
             let text = if !self.key_saved {
                 format!(
-                    "Save a {} API key to list the newest samples.",
-                    self.source.label()
+                    "Set the {} in Tools > API keys to list the newest samples.",
+                    samples::source_api_key(self.source).label()
                 )
             } else if self.searching.is_some() {
                 format!("Asking {}…", self.source.label())
@@ -309,7 +309,14 @@ impl SamplesView {
             let source = self.results_source;
             let hash = listed_hash(&sample).unwrap_or("").to_owned();
             std::thread::spawn(move || {
-                let _ = sender.send(source.download(&curl, &key, &data, &sample));
+                let done = source.download(&curl, &key, &data, &sample);
+                if done.is_ok() {
+                    antinomie_monitor_core::api_keys::record_use(
+                        &data,
+                        samples::source_api_key(source),
+                    );
+                }
+                let _ = sender.send(done);
             });
             self.downloads.insert(hash, receiver);
         }

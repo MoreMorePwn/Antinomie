@@ -123,6 +123,14 @@ impl MonitorApp {
                     executable: true,
                 });
             }
+            if self.samples.take_open_keys() {
+                self.api_keys.open = true;
+            }
+        }
+        self.api_keys
+            .show(ctx, &self.options.data_dir, &self.options.curl);
+        if self.api_keys.take_changed() {
+            self.samples.key_changed();
         }
         self.getting_started_window(ctx);
         if self.about_open {
@@ -487,6 +495,7 @@ impl MonitorApp {
             Dialog::Import => self.import_open,
             Dialog::Download => self.download_open,
             Dialog::Samples => self.samples.open,
+            Dialog::ApiKeys => self.api_keys.open,
             Dialog::Snapshots => self.vm_snapshots.open,
             Dialog::SnapshotDecision => self.vm_snapshots.decision_open(),
             Dialog::Dependencies => self.dependencies.open,
@@ -520,6 +529,7 @@ impl MonitorApp {
             Dialog::Import => self.import_open = false,
             Dialog::Download => self.download_open = false,
             Dialog::Samples => self.samples.open = false,
+            Dialog::ApiKeys => self.api_keys.open = false,
             Dialog::Snapshots | Dialog::SnapshotDecision => self.vm_snapshots.close(),
             Dialog::Dependencies => self.dependencies.open = false,
             Dialog::GettingStarted => self.getting_started.open = false,

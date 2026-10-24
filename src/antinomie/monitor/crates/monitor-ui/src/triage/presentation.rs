@@ -68,6 +68,21 @@ pub(super) fn navigation(view: &mut TriageView, ui: &mut egui::Ui, input: &Triag
                 view.section = section;
             }
         }
+        // The IOC tab counts the run's indicators, red when one matched.
+        let ioc = match view.ioc_headline() {
+            Some((matched, total, _)) => crate::widgets::TabItem::new("IOC").badge(
+                total.to_string(),
+                if matched > 0 {
+                    crate::widgets::Tone::Error
+                } else {
+                    crate::widgets::Tone::Plain
+                },
+            ),
+            None => crate::widgets::TabItem::new("IOC"),
+        };
+        if crate::widgets::tab(ui, view.section == Section::Ioc, &ioc).clicked() {
+            view.section = Section::Ioc;
+        }
         let room = ui.available_width();
         if trail && room >= 120.0 {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
