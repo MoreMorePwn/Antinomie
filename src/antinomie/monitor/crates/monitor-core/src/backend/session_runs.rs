@@ -276,6 +276,36 @@ impl Session {
             }
         }
     }
+    /// Settle the analysis of every run that shows one in progress while no
+    /// job is behind it: the specimen can no longer be acquired.
+    pub(super) fn settle_orphaned_analyses(&mut self, reason: &str) {
+        let orphans: Vec<String> = self
+            .runs
+            .values()
+            .filter_map(|run| run.summary.analysis.as_ref())
+            .filter(|report| !self.analysis.tracks(&report.id))
+            .filter(|report| {
+                matches!(
+                    report.state,
+                    crate::analysis::AnalysisState::Acquiring
+                        | crate::analysis::AnalysisState::Queued
+                        | crate::analysis::AnalysisState::Running
+                )
+            })
+            .map(|report| report.id.clone())
+            .collect();
+        for id in orphans {
+            let settled = self.runs.values().find_map(|run| {
+                let report = run.summary.analysis.as_ref().filter(|r| r.id == id)?;
+                let mut report = report.clone();
+                crate::analysis::jobs::abandon(&mut report, reason)
+                    .then_some((run.summary.id.clone(), report))
+            });
+            if let Some((run_id, report)) = settled {
+                self.run_analysis(&run_id, &report);
+            }
+        }
+    }
     pub(super) fn analysis_updates(
         &mut self,
         snapshot: &mut Snapshot,
@@ -352,6 +382,10 @@ impl Session {
             None => {}
         }
         self.analysis_updates(snapshot, sender);
+        self.settle_orphaned_analyses(
+            "the analysis lost its job before it finished; the specimen cannot be acquired",
+        );
+        self.update_runs(snapshot);
     }
     /// Every guest process from `after_pid` on, read page by page and
     /// bounded so a fork storm cannot keep the enumeration going.

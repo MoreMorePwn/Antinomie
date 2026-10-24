@@ -14,7 +14,7 @@ impl Jobs {
         let mut job = self.acquiring.take()?;
         // This budget starts at acquisition, not at worker availability. Waiting
         // for a worker cannot extend the guest's 180-second idle lifetime.
-        if Instant::now() >= job.deadline {
+        if job.specimen_publication.is_none() && Instant::now() >= job.deadline {
             fail(
                 &mut job.report,
                 AnalysisState::Unavailable,
@@ -76,12 +76,28 @@ impl Jobs {
                 .unwrap_or_else(|| format!("{:x}", job.digest.clone().finalize())),
         );
         job.record_specimen_source(fetched);
+        // The transfer is over: publishing the report gets a budget of its
+        // own, so a stalled disk ends the job instead of holding the slot.
+        if job.specimen_publication.is_none() {
+            job.deadline = Instant::now() + PUBLICATION_DEADLINE;
+        }
         // The durable report must say Queued before the worker can see it.
         job.report.state = AnalysisState::Queued;
         match job.publish_specimen_report() {
             Ok(true) => {
                 self.updates.push((job.run_id.clone(), job.report.clone()));
                 self.queue.push_back(job);
+            }
+            Ok(false) if Instant::now() >= job.deadline => {
+                fail(
+                    &mut job.report,
+                    AnalysisState::Unavailable,
+                    format!(
+                        "specimen report publication did not finish within {} seconds; the disk is not answering",
+                        PUBLICATION_DEADLINE.as_secs()
+                    ),
+                );
+                self.finish(job);
             }
             Ok(false) => {
                 job.report.state = AnalysisState::Acquiring;
@@ -219,5 +235,107 @@ mod tests {
         assert!(jobs.active.is_none());
         drop(jobs);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_stalled_report_write_ends_the_job_and_frees_the_slot() {
+        let disk = storage::slow_disk::SlowDisk::install();
+        let root =
+            std::env::temp_dir().join(format!("ant-acquisition-publish-{}", storage::unique_id()));
+        let mut jobs = Jobs::default();
+        submit(&mut jobs, &root, 4, 0);
+        disk.pause();
+        // The empty specimen is complete; its report write is held up.
+        assert!(jobs.acquire_next().is_none());
+        assert_eq!(jobs.queue[0].report.state, AnalysisState::Acquiring);
+        assert!(jobs.queue[0].specimen_publication.is_some());
+        // Within its budget the job keeps waiting.
+        assert!(jobs.acquire_next().is_none());
+        assert_eq!(jobs.queue.len(), 1);
+        // Past it, the job fails with the reason.
+        jobs.queue[0].deadline = Instant::now() - Duration::from_secs(1);
+        assert!(jobs.acquire_next().is_none());
+        assert!(jobs.queue.is_empty());
+        assert!(jobs.acquiring.is_none());
+        disk.resume();
+        storage::settle_json_under(&root);
+        let report = open_report(&root.join("4")).unwrap();
+        assert_eq!(report.state, AnalysisState::Unavailable);
+        assert!(report.reason.unwrap().contains("did not finish within"));
+        // The next job is not stuck behind it.
+        submit(&mut jobs, &root, 5, 3);
+        assert!(matches!(
+            jobs.acquire_next(),
+            Some(Action::Read { id: 5, .. })
+        ));
+        drop(jobs);
+        storage::settle_json_under(&root);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_failed_fetch_frees_the_slot_for_the_next_job() {
+        let root =
+            std::env::temp_dir().join(format!("ant-acquisition-fail-{}", storage::unique_id()));
+        let mut jobs = Jobs::default();
+        let first = submit(&mut jobs, &root, 1, 3);
+        submit(&mut jobs, &root, 2, 3);
+        assert!(matches!(
+            jobs.acquire_next(),
+            Some(Action::Read { id: 1, .. })
+        ));
+        assert!(jobs.acquiring.is_some());
+        jobs.chunk(Err("guest handle expired".into()), 0, 3, 3);
+        assert!(jobs.acquiring.is_none());
+        assert!(matches!(jobs.next(), Some(Action::Release(1))));
+        assert!(matches!(jobs.next(), Some(Action::Read { id: 2, .. })));
+        let report = open_report(&root.join("1")).unwrap();
+        assert_eq!(report.id, first.id);
+        assert_eq!(report.state, AnalysisState::Unavailable);
+        assert!(report.reason.unwrap().contains("guest handle expired"));
+        drop(jobs);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_job_that_lost_its_guest_handle_is_unavailable_with_a_reason() {
+        let root =
+            std::env::temp_dir().join(format!("ant-acquisition-lost-{}", storage::unique_id()));
+        let mut jobs = Jobs::default();
+        submit(&mut jobs, &root, 1, 3);
+        jobs.queue[0].handle = None;
+        assert!(jobs.acquire_next().is_none());
+        assert!(!jobs.tracks(&open_report(&root.join("1")).unwrap().id));
+        let report = open_report(&root.join("1")).unwrap();
+        assert_eq!(report.state, AnalysisState::Unavailable);
+        assert_eq!(report.reason.as_deref(), Some("specimen handle missing"));
+        drop(jobs);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn abandoning_settles_only_work_that_has_not_finished() {
+        let selection = AnalysisSelection {
+            enabled: true,
+            checks: vec![AnalysisKind::Metadata],
+        };
+        let mut report = new_report("/tmp/sample", &selection);
+        assert!(abandon(&mut report, "the run did not start: boom"));
+        assert_eq!(report.state, AnalysisState::Unavailable);
+        assert_eq!(
+            report.reason.as_deref(),
+            Some("the run did not start: boom")
+        );
+        assert_eq!(report.sections[0].summary, "the run did not start: boom");
+        // Settled once; a second cause does not overwrite the first.
+        assert!(!abandon(&mut report, "later"));
+        assert_eq!(
+            report.reason.as_deref(),
+            Some("the run did not start: boom")
+        );
+        let mut running = new_report("/tmp/sample", &selection);
+        running.state = AnalysisState::Running;
+        assert!(abandon(&mut running, "gone"));
+        assert_eq!(running.state, AnalysisState::Partial);
     }
 }
