@@ -155,10 +155,18 @@ impl Window {
             );
         }
         let shown = self.shown(activity);
-        egui::SidePanel::left("file-activity-list")
-            .resizable(true)
-            .default_width(310.0)
-            .show_inside(ui, |ui| self.list(ui, activity, &shown));
+        // Beside each other when there is room, else the list above the history.
+        if ui.available_width() >= STACK_BELOW {
+            egui::SidePanel::left("file-activity-list")
+                .resizable(true)
+                .default_width(310.0)
+                .show_inside(ui, |ui| self.list(ui, activity, &shown));
+        } else {
+            egui::TopBottomPanel::top("file-activity-list")
+                .resizable(true)
+                .default_height(230.0)
+                .show_inside(ui, |ui| self.list(ui, activity, &shown));
+        }
         egui::CentralPanel::default().show_inside(ui, |ui| {
             match self.selected_file(activity) {
                 Some(file) => self.history(ui, activity, file, clock),
@@ -415,6 +423,9 @@ impl Window {
         ui.end_row();
     }
 }
+
+/// Narrower than this, the file list sits above the history.
+const STACK_BELOW: f32 = 700.0;
 
 /// Calls drawn in the table at once.
 const CALLS_SHOWN: usize = 200;
