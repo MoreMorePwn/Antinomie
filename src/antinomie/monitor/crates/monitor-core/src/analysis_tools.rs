@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Optional static-analysis tools Antinomie installs when the system has
 //! none: capa, Detect It Easy, Ghidra with its Java runtime, Volatility 3,
-//! Sigma, Magika and the gdb consoles GEF (bata24) and pwndbg. Each is downloaded from its upstream release, pinned by
-//! SHA-256, unpacked into `<data>/tools/<id>/` and mounted read-only into the
+//! Sigma, Magika, the gdb consoles GEF (bata24) and pwndbg, and the network
+//! routes' wireproxy and Tor. Each is downloaded from its upstream release,
+//! pinned by SHA-256, unpacked into `<data>/tools/<id>/` and mounted read-only into the
 //! analysis sandbox at `SANDBOX_DIR`. A tool installed on the system takes
 //! precedence, except Magika, which the Properties panel looks for here first.
 use serde::{Deserialize, Serialize};
@@ -29,6 +30,8 @@ pub const GHIDRA_SYSTEM: &[&str] = &[
 pub const RADARE2_SYSTEM: &[&str] = &["/usr/bin/r2", "/usr/local/bin/r2", "/usr/bin/radare2"];
 pub const MAGIKA_SYSTEM: &[&str] = &["/usr/bin/magika", "/usr/local/bin/magika"];
 pub const PWNDBG_SYSTEM: &[&str] = &["/usr/bin/pwndbg", "/usr/local/bin/pwndbg"];
+pub const WIREPROXY_SYSTEM: &[&str] = &["/usr/bin/wireproxy", "/usr/local/bin/wireproxy"];
+pub const TOR_SYSTEM: &[&str] = &["/usr/bin/tor", "/usr/sbin/tor", "/usr/local/bin/tor"];
 /// Magika as the sandbox sees the managed copy.
 pub const MAGIKA_MANAGED: &str = "/opt/antinomie-tools/magika/magika";
 
@@ -290,6 +293,49 @@ pub const PACKAGES: &[Package] = &[
         requirements: None,
         entry: "bin/pwndbg",
     },
+    // The network routes' programs. Each runs as a separate process of its
+    // own, started and stopped with the route; a copy on the system, or a
+    // path set in Settings > Network routes, is used before these.
+    Package {
+        id: "wireproxy",
+        name: "wireproxy",
+        version: "1.1.3",
+        purpose: "Userspace WireGuard with a SOCKS5 port, for the VPN route",
+        license: "ISC (wireproxy); wireguard-go and other Go modules under their own licenses",
+        downloads: &[Download {
+            file: "wireproxy_linux_amd64.tar.gz",
+            url: "https://github.com/windtf/wireproxy/releases/download/v1.1.3/wireproxy_linux_amd64.tar.gz",
+            sha256: "e88c1d090740373fc606c1bafd81d9a5eadc642cce5667616e20e9d7a444f51c",
+            size: 4_123_755,
+            archive: Archive::TarGz { strip: 0 },
+            into: "",
+        }],
+        requirements: None,
+        entry: "wireproxy",
+    },
+    // The Tor Expert Bundle is pinned from the Tor Project's archive, which
+    // keeps old versions (dist.torproject.org does not). The bundle carries
+    // tor with the libevent and OpenSSL it was built against, the pluggable
+    // transports (not used by Antinomie) and the licenses of all of them.
+    Package {
+        id: "tor",
+        name: "Tor",
+        version: "0.4.9.14 (Expert Bundle 15.0.26)",
+        purpose: "Tor client that Antinomie starts for the Tor route",
+        license: "BSD-3-Clause (Tor; this build is also marked GPL-3.0-or-later), OpenSSL \
+                  Apache-2.0, libevent BSD-3-Clause; the bundle's lyrebird and conjure \
+                  transports under their own licenses (docs/ in the bundle)",
+        downloads: &[Download {
+            file: "tor-expert-bundle-linux-x86_64-15.0.26.tar.gz",
+            url: "https://archive.torproject.org/tor-package-archive/torbrowser/15.0.26/tor-expert-bundle-linux-x86_64-15.0.26.tar.gz",
+            sha256: "19cf18726eecb362e0f21d27afa9ea9efe5da928bfdfbb1ceb5fe54519e87f4a",
+            size: 32_448_097,
+            archive: Archive::TarGz { strip: 0 },
+            into: "",
+        }],
+        requirements: None,
+        entry: "tor/tor",
+    },
 ];
 
 pub fn package(id: &str) -> Option<&'static Package> {
@@ -304,6 +350,8 @@ pub fn system_candidates(id: &str) -> &'static [&'static str] {
         "ghidra" => GHIDRA_SYSTEM,
         "magika" => MAGIKA_SYSTEM,
         "pwndbg" => PWNDBG_SYSTEM,
+        "wireproxy" => WIREPROXY_SYSTEM,
+        "tor" => TOR_SYSTEM,
         _ => &[],
     }
 }
@@ -360,6 +408,13 @@ fn installed_version(data_dir: &Path, package: &Package) -> Option<String> {
         serde_json::from_slice(&fs::read(directory.join("tool.json")).ok()?).ok()?;
     (manifest.id == package.id && directory.join(package.entry).exists())
         .then_some(manifest.version)
+}
+
+/// The program of an Antinomie-installed tool, when the tool is installed.
+pub fn managed_entry(data_dir: &Path, id: &str) -> Option<PathBuf> {
+    let package = package(id)?;
+    installed_version(data_dir, package)?;
+    Some(tools_dir(data_dir).join(package.id).join(package.entry))
 }
 
 /// Every optional tool with its system and Antinomie-installed state.
@@ -1268,6 +1323,122 @@ mod tests {
         assert!(notices.contains("pwndbg 2026.09.15"));
         assert!(notices.contains("Copyright (c) 2026 Dominik 'Disconnect3d' Czarnota"));
         assert!(notices.contains("GDB 17.2 (GPL-3.0-or-later)"));
+    }
+
+    #[test]
+    fn the_route_programs_are_pinned_to_the_releases_they_were_checked_against() {
+        let wireproxy = package("wireproxy").unwrap();
+        let [download] = wireproxy.downloads else {
+            panic!("one wireproxy download");
+        };
+        assert_eq!(
+            download.url,
+            format!(
+                "https://github.com/windtf/wireproxy/releases/download/v{}/{}",
+                wireproxy.version, download.file
+            )
+        );
+        assert_eq!(
+            download.sha256,
+            "e88c1d090740373fc606c1bafd81d9a5eadc642cce5667616e20e9d7a444f51c"
+        );
+        assert!(matches!(download.archive, Archive::TarGz { strip: 0 }));
+        assert_eq!(wireproxy.entry, "wireproxy");
+        assert!(wireproxy.license.starts_with("ISC"));
+
+        // Tor comes from the archive, which keeps old versions; dist.torproject.org
+        // removes them and would break the pin.
+        let tor = package("tor").unwrap();
+        let [download] = tor.downloads else {
+            panic!("one Tor download");
+        };
+        assert_eq!(
+            download.url,
+            "https://archive.torproject.org/tor-package-archive/torbrowser/15.0.26/\
+             tor-expert-bundle-linux-x86_64-15.0.26.tar.gz"
+        );
+        assert_eq!(
+            download.sha256,
+            "19cf18726eecb362e0f21d27afa9ea9efe5da928bfdfbb1ceb5fe54519e87f4a"
+        );
+        assert!(tor.version.starts_with("0.4.9.14"));
+        assert_eq!(tor.entry, "tor/tor");
+        assert!(tor.license.starts_with("BSD-3-Clause"));
+        assert!(TOR_SYSTEM.iter().all(|path| path.ends_with("/tor")));
+        assert!(WIREPROXY_SYSTEM.iter().all(|p| p.ends_with("/wireproxy")));
+    }
+
+    #[test]
+    fn the_notices_name_the_route_programs_with_the_pinned_hashes_and_terms() {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../../../THIRD-PARTY-NOTICES.md");
+        let Ok(notices) = fs::read_to_string(path) else {
+            return;
+        };
+        for id in ["wireproxy", "tor"] {
+            for download in package(id).unwrap().downloads {
+                assert!(notices.contains(download.sha256), "{id} hash");
+                assert!(notices.contains(download.url), "{id} url");
+            }
+        }
+        assert!(notices.contains("EF6E 286D DA85 EA2A 4BA7 DE68 4E2C 6E87 9329 8290"));
+    }
+
+    #[test]
+    fn a_tor_bundle_unpacks_with_its_program_runnable_and_is_found_once_installed() {
+        use std::os::unix::fs::PermissionsExt;
+        let root =
+            std::env::temp_dir().join(format!("ant-tools-tor-{}", crate::storage::unique_id()));
+        fs::create_dir_all(&root).unwrap();
+        let archive = root.join("bundle.tar.gz");
+        {
+            let encoder = flate2::write::GzEncoder::new(
+                File::create(&archive).unwrap(),
+                flate2::Compression::fast(),
+            );
+            let mut tar = tar::Builder::new(encoder);
+            for (name, mode) in [("tor/tor", 0o700), ("tor/libevent-2.1.so.7", 0o700)] {
+                let mut header = tar::Header::new_gnu();
+                header.set_size(3);
+                header.set_mode(mode);
+                header.set_cksum();
+                tar.append_data(&mut header, name, &b"abc"[..]).unwrap();
+            }
+            tar.into_inner().unwrap().finish().unwrap();
+        }
+        let download = Download {
+            file: "bundle.tar.gz",
+            url: "",
+            sha256: "",
+            size: 0,
+            archive: Archive::TarGz { strip: 0 },
+            into: "",
+        };
+        let data = root.join("data");
+        let tool = tools_dir(&data).join("tor");
+        unpack(&download, &archive, &tool).unwrap();
+        assert!(
+            fs::metadata(tool.join("tor/tor"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o100
+                != 0
+        );
+        // Not installed until the manifest is written, as for every tool.
+        assert_eq!(managed_entry(&data, "tor"), None);
+        let manifest = Manifest {
+            id: "tor".into(),
+            version: "x".into(),
+        };
+        fs::write(
+            tool.join("tool.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(managed_entry(&data, "tor"), Some(tool.join("tor/tor")));
+        assert_eq!(managed_entry(&data, "wireproxy"), None);
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
