@@ -413,6 +413,7 @@ fn needs_tool(
 ) {
     let (id, name) = match kind {
         AnalysisKind::Capabilities => ("capa", "capa"),
+        AnalysisKind::Floss => ("floss", "FLOSS"),
         AnalysisKind::Decompilation => ("ghidra", "Ghidra"),
         _ => return,
     };
@@ -516,6 +517,7 @@ pub(crate) fn section_title(kind: AnalysisKind) -> &'static str {
         AnalysisKind::Disassembly => "Disassembly",
         AnalysisKind::Decompilation => "Decompilation",
         AnalysisKind::Embedded => "Binwalk",
+        AnalysisKind::Floss => "FLOSS",
     }
 }
 

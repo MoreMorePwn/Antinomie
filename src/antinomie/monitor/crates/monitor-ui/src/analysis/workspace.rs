@@ -694,7 +694,7 @@ fn categories(
 pub(super) const NOT_REQUESTED: &str =
     "Not part of this analysis; start one with this check selected";
 
-const ALL_KINDS: [AnalysisKind; 11] = [
+const ALL_KINDS: [AnalysisKind; 12] = [
     AnalysisKind::Metadata,
     AnalysisKind::Structures,
     AnalysisKind::Strings,
@@ -706,6 +706,7 @@ const ALL_KINDS: [AnalysisKind; 11] = [
     AnalysisKind::Disassembly,
     AnalysisKind::Decompilation,
     AnalysisKind::Embedded,
+    AnalysisKind::Floss,
 ];
 
 fn state_tone(section: &AnalysisSection) -> crate::widgets::Tone {

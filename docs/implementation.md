@@ -993,6 +993,39 @@ Host only: `monitor-ui/src/triage/graph/`, nothing needs a guest change.
   screenshots under Xvfb), `graph/bench.rs` (120k findings: paint under 4 ms,
   no repaint when idle, memory, the million-finding build).
 
+### FLOSS strings in static analysis (0.7.1)
+
+Host only. `AnalysisKind::Floss` ("FLOSS strings (decoded, stack, tight)") is a
+Deep analysis check, off by default because a run takes minutes.
+
+* **Tool.** `analysis_tools.rs` has a `floss` package (Mandiant FLOSS 3.2.0, the
+  `floss-v3.2.0-linux.zip` release asset, 44 MB, one PyInstaller executable,
+  Apache-2.0) installed like capa; a system `/usr/bin/floss` or
+  `/usr/local/bin/floss` is used first. Tests use a shell script that prints
+  FLOSS output, never the tool or the network.
+* **ELF support.** FLOSS 3.2.0 loads x86 and x86-64 ELF files through vivisect
+  (checked on a dynamically linked ELF: stack and decoded strings of a small
+  program were found; static strings are switched off, `--no static`, because
+  the Strings category has them). Other machines are not emulated. A statically
+  linked program has thousands of routines and exceeds the 8 minute limit
+  (`floss::TIMEOUT_SECONDS`); the section is then `Unavailable` and says so. FLOSS
+  takes only files up to 16 MiB (`-L` is not passed).
+* **Run.** `analysis/floss.rs` starts `floss -j -q --disable-progress --no static
+  -- /input/specimen` in the analysis sandbox (offline, `/tmp` of 1 GiB like
+  capa, 32 MiB of output at most) and reads the JSON document: `decoded_strings`
+  (routine `decoding_routine`, seen at `decoded_at`), `stack_strings` and
+  `tight_strings` (`function`, `program_counter`) and `language_strings` (a
+  file offset). Strings are kept once per (type, text, routine). Addresses are
+  the ones FLOSS reports for its own load of the file (an ELF is placed at a
+  base of 0x2000000 when position independent), so they are recorded as
+  object addresses, not file offsets; language strings have file offsets.
+* **Rows.** `AnalysisData::FlossString { origin, encoding, function, address }`;
+  at most 50,000 rows go to `listings/floss.jsonl` (the report keeps 256 as a
+  preview) and the section is `Partial` when either bound cut rows.
+* **Progress.** The check runs after the light checks, in the same tier as capa;
+  the active tool shows as "FLOSS"; the worker deadline adds the run's
+  budget. The FLOSS tab shows its row count as a badge like Strings.
+
 ### Accepted ANT-T0097 host UI performance (0.6.2)
 
 Remove render-time filesystem checks for host chooser availability; resolve
