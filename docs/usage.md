@@ -124,19 +124,34 @@ user: no root, no firewall rules, no VPN client on the computer.
 | **None (drop)** | Nothing leaves. Connections and DNS go unanswered; the attempts are still captured. |
 | **Internet** | Connect to public addresses through this computer's connection. It cannot reach this computer or your local network unless you allow private addresses. |
 | **InetSim (fake services)** | Every name resolves to a fake address and every connection reaches a fake service (HTTP, SMTP; other ports accept and discard). Nothing leaves. |
-| **Tor** | Connect through your Tor's SOCKS port; Tor resolves the names. |
+| **Tor** | Connect through Tor, which Antinomie starts for the run (or through a SOCKS address of your own Tor); Tor resolves the names. |
 | **VPN (WireGuard)** | Connect through a WireGuard tunnel run by wireproxy (userspace, no root). |
 | **SOCKS5 proxy** | Connect through a SOCKS5 proxy you give (optional user name and password). |
 
 Pick the route in the Run form (**Network > Route**); the default comes from
 **Settings > Network routes**, where the other settings are too:
 
-* **Tor**: the SOCKS address of a Tor you run (a `tor` service listens on
-  `127.0.0.1:9050`). Antinomie does not start or install Tor.
+* **Tor**: either *Antinomie runs its own tor* (the default) or *Use a SOCKS
+  address*. With its own tor, Antinomie starts `tor` when the run claims the
+  route, on a free port of `127.0.0.1`, with a private data folder under its data
+  folder (`network/tor`, readable by you only) and no control port, and stops it
+  when the run ends. The run waits for Tor to finish bootstrapping (up to two
+  minutes) and does not start if it cannot; a first start is slower than later
+  ones, which reuse the folder. The other mode connects to a Tor you run yourself
+  (a `tor` service listens on `127.0.0.1:9050`) and starts nothing.
+* **Getting Tor and wireproxy**: you do not have to install them. A program you
+  name in Settings is used first, then one on `PATH` or in the usual system
+  places, then the copy Antinomie installed. Under the Tor and VPN settings the
+  page shows each program's status (on this system, installed by Antinomie with
+  its version, or not installed) and an **Install** button. Install downloads the
+  pinned release (wireproxy 1.1.3 from GitHub; the Tor Expert Bundle 15.0.26,
+  which holds tor 0.4.9.14, from archive.torproject.org), checks its SHA-256 and
+  unpacks it into your data folder. **Remove** deletes Antinomie's copy.
+  Downloads need `curl`; nothing is downloaded until you press Install.
 * **VPN**: a wireproxy configuration file with your WireGuard peer and a
   `[Socks5]` section (`BindAddress = 127.0.0.1:25344`), and the wireproxy program
-  if it is not on `PATH`. Antinomie starts wireproxy for the run and stops it
-  afterwards. OpenVPN is not supported: it needs a TUN device, which needs root.
+  if you want a different one than the above. Antinomie starts wireproxy for the
+  run and stops it afterwards. OpenVPN is not supported: it needs a TUN device, which needs root.
   If you have OpenVPN, run it yourself in a container with a SOCKS5 front end and
   use the SOCKS5 route.
 * **SOCKS5**: host, port and optional user name and password. The password is

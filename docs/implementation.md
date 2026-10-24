@@ -1039,8 +1039,9 @@ The gateway starts on `Drop` (nothing leaves) and a run changes it only through
 | InetSim | every A query answers the sinkhole (198.51.100.1), AAAA is empty | any address and port reaches the built-in services (HTTP, SMTP; other ports accept and discard, no TLS) or an external INetSim at `port + offset` | dropped, counted |
 | Tor, VPN, SOCKS5 | every A query answers a placeholder in 198.18.0.0/16 and the gateway remembers the name; the connection to that address is sent to the proxy as the **name** (SOCKS5 `ATYP 3`), so the proxy resolves it and no lookup leaves the host | SOCKS5 CONNECT through one upstream path (`socks.rs`, RFC 1928 with RFC 1929 login) | dropped, counted |
 
-* **One upstream SOCKS5 path.** Tor is the Tor SOCKS port (default
-  127.0.0.1:9050); Antinomie does not start Tor, the analyst runs it. VPN is
+* **One upstream SOCKS5 path.** Tor is either Antinomie's own tor (`TorMode::Own`,
+  the default; see below) or a SOCKS address the analyst gives (`TorMode::Socks`,
+  default 127.0.0.1:9050, nothing started). VPN is
   WireGuard through **wireproxy** (ISC licence): a userspace WireGuard client that
   exposes a SOCKS5 port, run as a separate process with the analyst's own
   configuration file. Antinomie starts it for the run (`managed.rs`: stdout and
@@ -1057,10 +1058,45 @@ The gateway starts on `Drop` (nothing leaves) and a run changes it only through
   Tor does not support it): UDP other than DNS and DHCP is dropped and counted.
   A name that does not exist therefore shows as a refused connection rather than
   NXDOMAIN. The 198.18.0.0/16 placeholders are cleared when the route changes.
-* **Tools.** INetSim (GPL-2.0), tor (BSD-3-Clause) and wireproxy (ISC) are
-  optional programs run as separate processes and are not bundled. They are user
-  provided; Settings > Network routes shows whether each is found on `PATH`.
-  Managed downloads (a pinned wireproxy and Tor Expert Bundle) are not done.
+* **Own tor** (`route/tor.rs`). `start_tor` runs in `Gateway::claim` through
+  `managed::start_for`, so a failure drops the process and leaves the gateway on
+  Drop. It makes `<data>/network/tor/<slot>` (the slot is the gateway's runtime
+  folder name; one tor per gateway, so two VMs never contend for a DataDirectory
+  lock) and its `data` folder with mode 0700, writes `torrc` (0600) with
+  `DataDirectory`, `SocksPort 127.0.0.1:<free port>`, `ControlPort 0`,
+  `CookieAuthentication 0`, `ClientOnly 1`, `SafeLogging 1`, `Log notice file
+  <slot>/tor.log` and, for the bundle, `GeoIPFile`/`GeoIPv6File`; no other
+  listener is configured. The port comes from binding 127.0.0.1:0 and releasing
+  it; if something takes it first tor cannot bind, exits, and the route reports
+  tor's own output (`tor.out`). tor runs with `--defaults-torrc` pointing at an
+  empty file and `-f torrc`, so the system's torrc files are not read. No control
+  connection is used: bootstrap progress is the last `Bootstrapped N%` line of
+  `tor.log`, truncated at each start, and 100% is the ready signal. The wait is
+  `managed::TOR_WAIT` (120 s); on expiry the error gives the last percentage and
+  its text and the log path. The bundle's tor needs its own libevent and OpenSSL,
+  so for the managed copy `LD_LIBRARY_PATH` is set to its `tor/` folder; a tor
+  from the system or a path the analyst set runs with the environment as it is.
+  The route's SOCKS port is filled in after tor starts (`RouteSpec::set_socks_port`)
+  and the usual SOCKS check (greeting plus the check target) runs before the
+  claim succeeds. The settings Test uses the slot `settings-test`.
+* **Tools.** INetSim (GPL-2.0) is user provided and not bundled. tor
+  (BSD-3-Clause) and wireproxy (ISC) are run as separate processes and are found
+  in this order by `config::find_program`: the path set in Settings (an error if
+  it is not a file), `PATH`, the usual system places
+  (`analysis_tools::system_candidates`), then Antinomie's own copy. The own copy
+  is a managed tool in `analysis_tools.rs`, installed on request and not part of
+  first run or the Library tools list (`is_route_tool`); Settings > Network routes
+  draws its row with `tools_page::tool_row`, the row Library uses. wireproxy 1.1.3
+  is the `wireproxy_linux_amd64.tar.gz` asset of windtf/wireproxy (SHA-256
+  `e88c1d09...`, the digest GitHub lists). Tor is the Tor Expert Bundle 15.0.26
+  (Linux x86-64; tor 0.4.9.14) from archive.torproject.org, which keeps old
+  versions where dist.torproject.org does not (SHA-256 `19cf1872...`). The
+  installer checks the SHA-256 only. The bundle's OpenPGP signature (Tor Browser
+  Developers key, EF6E 286D DA85 EA2A 4BA7 DE68 4E2C 6E87 9329 8290) was verified
+  once with `gpg` when the pin was made. Checking it at install time would need
+  the key shipped and an OpenPGP implementation (a new dependency, or `gpg`
+  on the user's machine) and would check nothing the pinned hash does not, since
+  the hash names those exact signed bytes.
 
 **Fail closed.** `route::claim_for_run` runs before the run's directory or
 artifacts exist. It picks the route (the request, else the saved default), builds
@@ -1080,8 +1116,8 @@ generation it was made under, so a connection opened right after a claim is not
 mistaken for an old one). ICMP echo is answered for the gateway's own addresses
 only and counted otherwise. Runs that overlap on one VM must use the same route
 ("another run in this VM is using the route ..."). The check runs on the worker
-thread before the sample starts, at most about 30 s (wireproxy start 15 s, check
-15 s).
+thread before the sample starts, at most about 30 s for wireproxy (start 15 s,
+check 15 s) and up to about 135 s for the own tor (bootstrap 120 s).
 
 **Metadata.** `RunSummary::route` (`run.json`) and `RunArtifacts::route`
 (`artifacts.json`) hold a `RouteRecord`: `kind`, a plain-text `label` (`Tor via
@@ -1110,7 +1146,8 @@ section: the **Route** selector (a Routed VM; any other VM names its fixed
 network) with what the route does and a warning for the Internet route or a
 missing setting. Settings > Network routes: default route, per-route
 configuration and a **Test** button (brings the route up the way a run would,
-including wireproxy). The route is shown in Run History's run details, above the
+including wireproxy and the own tor). The Tor and VPN sections show the
+program's status, version and Install/Remove button. The route is shown in Run History's run details, above the
 Triage run header, in Triage > Summary > Network evidence and in Triage > Network.
 
 **Tests.** `route/tests/` drives the real gateway over a Unix socket with a
@@ -1118,7 +1155,10 @@ scripted guest (DHCP, ARP, DNS, a small TCP client with retransmission) and a
 fake SOCKS5 server that is also the far end: Drop, InetSim (built-in and
 external), Tor, SOCKS5 with login, refusals, fail-closed claims, overlapping
 runs, reset on release, 400 KB up and 500 KB down, wireproxy start and stop with
-stand-in programs. No real Tor, VPN or Internet traffic is used.
+stand-in programs, and the own tor with a stand-in `tor` script (private modes,
+torrc contents, library path, bootstrap parsing, a tor that exits, stalls or
+does not speak SOCKS, stop on release). The managed tools are tested with the
+pins and unpacking only; no test downloads anything. No real Tor, VPN or Internet traffic is used.
 
 ### Accepted ANT-T0097 host UI performance (0.6.2)
 
