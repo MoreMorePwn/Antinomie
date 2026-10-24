@@ -12,7 +12,7 @@ use antinomie_monitor_core::{
 };
 use eframe::egui::{self, RichText};
 use egui_extras::{Column, TableBuilder};
-use std::{path::Path, sync::atomic::AtomicBool};
+use std::path::Path;
 
 /// The Rule manager tab this section answers to.
 pub(super) const TAB: &str = "ioc";
@@ -29,42 +29,6 @@ pub(super) struct State {
     pick: Option<&'static str>,
     #[cfg(test)]
     pub(super) fetcher: Option<std::sync::Arc<dyn Fetcher + Send + Sync>>,
-}
-
-/// Routes a request to the keyed or the plain curl: the Auth-Key goes only to
-/// the feeds that need it.
-pub(super) struct FeedFetcher {
-    plain: ruleset::Curl,
-    keyed: ruleset::Curl,
-}
-
-impl FeedFetcher {
-    pub(super) fn new(key: antinomie_monitor_core::api_keys::Secret) -> Self {
-        Self {
-            plain: ruleset::Curl::default(),
-            keyed: ruleset::Curl::default().with_auth_key(key),
-        }
-    }
-}
-
-impl Fetcher for FeedFetcher {
-    fn fetch(
-        &self,
-        url: &str,
-        dest: &Path,
-        max_size: u64,
-        cancel: &AtomicBool,
-        progress: &mut dyn FnMut(u64),
-    ) -> Result<(), String> {
-        let needs_key = ioc::FEEDS
-            .iter()
-            .any(|feed| feed.url == url && feed.needs_key)
-            || ruleset::LIVE_PACKS
-                .iter()
-                .any(|pack| pack.url == url && pack.needs_key);
-        let curl = if needs_key { &self.keyed } else { &self.plain };
-        curl.fetch(url, dest, max_size, cancel, progress)
-    }
 }
 
 fn size_text(bytes: u64) -> String {
@@ -170,7 +134,7 @@ impl Model {
                 .sum();
             ui.weak(format!(
                 "{usable} of {} loaded · {}",
-                self.ioc.statuses.len(),
+                self.ioc.statuses.iter().filter(|s| s.enabled).count(),
                 size_text(total)
             ));
         });
@@ -383,7 +347,10 @@ impl Model {
         };
         line(
             ui,
-            format!("Source: {}", feed.url.trim_start_matches("https://")),
+            format!(
+                "Source: {}",
+                feed.url_display().trim_start_matches("https://")
+            ),
         );
         line(
             ui,
@@ -472,7 +439,6 @@ impl Model {
         }
         let dir = data_dir.to_path_buf();
         let key = api_keys::get(&dir, ApiKey::Abusech);
-        let key_present = !key.is_empty();
         #[cfg(test)]
         let injected = self.ioc.fetcher.clone();
         self.status = match only {
@@ -485,7 +451,7 @@ impl Model {
                     *shown = line.to_owned();
                 }
             };
-            let real = FeedFetcher::new(key);
+            let real = ruleset::Curl::default();
             #[cfg(test)]
             let fetcher: &dyn Fetcher = match &injected {
                 Some(fetcher) => fetcher.as_ref(),
@@ -496,9 +462,9 @@ impl Model {
             let outcomes = match only {
                 Some(feed) => vec![ioc::Outcome {
                     feed,
-                    result: ioc::update_feed(&dir, feed, key_present, fetcher, &cancel, &mut show),
+                    result: ioc::update_feed(&dir, feed, &key, fetcher, &cancel, &mut show),
                 }],
-                None => ioc::update_all(&dir, key_present, fetcher, &cancel, &mut show),
+                None => ioc::update_all(&dir, &key, fetcher, &cancel, &mut show),
             };
             if outcomes
                 .iter()
@@ -528,7 +494,7 @@ mod tests {
     use crate::rules_window::source_tests::{click, joined, render};
     use std::{
         collections::BTreeMap,
-        sync::{Arc, Mutex},
+        sync::{atomic::AtomicBool, Arc, Mutex},
         thread,
         time::Duration,
     };
@@ -561,10 +527,14 @@ mod tests {
             _progress: &mut dyn FnMut(u64),
         ) -> Result<(), String> {
             self.calls.lock().unwrap().push(url.to_owned());
-            match self.files.get(url) {
+            let id = ioc::FEEDS
+                .iter()
+                .find(|feed| feed.owns(url))
+                .map(|feed| feed.id);
+            match id.and_then(|id| self.files.get(id)) {
                 Some(Ok(bytes)) => std::fs::write(dest, bytes).map_err(|e| e.to_string()),
                 Some(Err(error)) => Err(error.clone()),
-                None => Err(format!("{url} answered HTTP 404")),
+                None => Err(format!("{} answered HTTP 404", ruleset::redact_url(url))),
             }
         }
     }
@@ -580,13 +550,12 @@ mod tests {
             ("sslbl-ja3", SSLBL_JA3),
             ("sslbl-cert", SSLBL_CERT),
         ] {
-            let url = ioc::feeds::feed(id).unwrap().url.to_owned();
             let body = if failing.contains(&id) {
                 Err("download failed: Could not resolve host".to_owned())
             } else {
                 Ok(text.as_bytes().to_vec())
             };
-            served.files.insert(url, body);
+            served.files.insert(id.to_owned(), body);
         }
         served
     }

@@ -88,8 +88,13 @@ impl ApiKey {
             ApiKey::MalShare if !value.bytes().all(|byte| byte.is_ascii_alphanumeric()) => {
                 Some("a MalShare API key is letters and digits only".into())
             }
-            ApiKey::Abusech if !value.is_ascii() => {
-                Some("an abuse.ch Auth-Key is plain ASCII".into())
+            ApiKey::Abusech
+                if !value.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~')
+                }) =>
+            {
+                // The key is a path segment of the download URLs.
+                Some("an abuse.ch Auth-Key is letters, digits and - _ . ~ only".into())
             }
             _ => None,
         }
@@ -318,7 +323,18 @@ mod tests {
     fn unusable_keys_are_refused_and_change_nothing() {
         let dir = temp("refuse");
         set(&dir, ApiKey::MalShare, "abc123def456").unwrap();
-        for bad in ["", "has space", "line\nbreak", "ünï", &"x".repeat(300)] {
+        // The abuse.ch key is a path segment of download URLs.
+        for bad in [
+            "",
+            "has space",
+            "line\nbreak",
+            "ünï",
+            "a/b",
+            "k\"q",
+            "k?x=1",
+            "a%2Fb",
+            &"x".repeat(300),
+        ] {
             assert!(set(&dir, ApiKey::Abusech, bad).is_err(), "{bad:?}");
         }
         assert!(set(&dir, ApiKey::MalShare, "not-alphanumeric").is_err());

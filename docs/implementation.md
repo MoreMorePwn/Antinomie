@@ -1172,23 +1172,33 @@ Host only. `monitor-core/src/ioc/` holds the datasets; `monitor-ui/src/rules_win
 is the IOC tab of Tools > Detection rules; `monitor-core/src/known_fp.rs` is the
 false-positive list.
 
-* **Feeds.** `feeds.rs` has the table of seven (`threatfox`, `urlhaus`,
-  `urlhaus-payloads`, `feodo`, `sslbl-ip`, `sslbl-ja3`, `sslbl-cert`): URL
-  (never with a key), usual size, terms, whether the download needs the Auth-Key
-  (ThreatFox, URLhaus and the payload list do). Stored under
+* **Feeds.** `feeds.rs` has the table of eight (`threatfox`, `urlhaus`,
+  `urlhaus-payloads`, `feodo`, `sslbl-ip`, `sslbl-ja3`, `sslbl-cert`,
+  `urlhaus-recent`): URL, usual size, terms, whether the download needs the
+  Auth-Key (ThreatFox, URLhaus, the payload list and the recent list do) and
+  whether it is on by default (`urlhaus-recent` is not, so `update_all` and the
+  matcher skip it until it is switched on). The abuse.ch exports are
+  `https://{threatfox,urlhaus}-api.abuse.ch/v2/files/exports/<key>/…`
+  (`full.csv.zip`, `payload.csv.zip`, `recent.csv`); the table holds the URL as
+  a template with `{key}`, `Feed::url_for(&Secret)` fills it (an empty key, or
+  one with a character outside `A-Za-z0-9._~-`, is refused before any request),
+  `Feed::url_display()` shows `****` and `Feed::owns(url)` matches a URL to its
+  feed. Feodo and SSLBL are unchanged and keyless. Stored under
   `<data dir>/ioc/feeds/<id>/`: `meta.json` (data file name, fetch time, record
   count, size, SHA-256, URL) is the commit point, `data-<time>-<n>.txt` the plain
   text, `last-error.json` the reason of a failed update. `settings.json` lists
-  the feeds switched off. Nothing of this is in the repository or in run exports.
+  the feeds switched off and the ones switched on that are off by default. Nothing of this is in the repository or in run exports.
 * **Update.** `download.rs`: manual only. A feed is fetched through the rule
-  manager's `Fetcher` (HTTPS only, bounded, cancellable; the Auth-Key goes to
-  curl's standard input and only to abuse.ch hosts, only for the feeds that
-  need it), into a private folder under `ioc/staging/`, unpacked if it is a zip, parsed completely
+  manager's `Fetcher` (HTTPS only, bounded, cancellable), into a private folder
+  under `ioc/staging/`, unpacked if it is a zip (one `.csv`, `.txt` or `.json`
+  member is streamed to a fixed path, so the member's own name is never used;
+  at most 64 entries and the feed's text limit), parsed completely
   (a download with no records, or mostly lines that are not records, is
   refused), then the new data file is renamed into the feed folder and
   `meta.json` is replaced atomically; older data files are removed last. A
   failure or cancel leaves the previous copy and `meta.json` untouched, records
-  the reason in `last-error.json` and is reported by name (`Updated 6 of 7.
+  the reason in `last-error.json` (stored URLs and messages carry `****` for the
+  key) and is reported by name (`Updated 6 of 7.
   Failed: SSLBL IP: …; the previous copy was kept`). Free space for the download
   and the text is checked first. A dataset over 14 days old is flagged
   (`FeedMeta::stale`).
@@ -1214,7 +1224,9 @@ false-positive list.
 Host only. `monitor-core/src/ruleset/abusech.rs` and `monitor-ui/src/rules_window/abusech.rs`
 (the **abuse.ch** tab of the IDS engine).
 
-* **Packs.** `LIVE_PACKS`: `abuse-ch-threatfox` and `abuse-ch-urlhaus` (Auth-Key),
+* **Packs.** `LIVE_PACKS`: `abuse-ch-threatfox` (`threatfox_suricata.tar.gz`) and
+  `abuse-ch-urlhaus` (`urlhaus_ids.tar.gz`), both under
+  `…-api.abuse.ch/v2/files/exports/<key>/` (Auth-Key),
   `abuse-ch-feodo`, `abuse-ch-sslbl-ip`, `abuse-ch-sslbl-ja3` and
   `abuse-ch-sslbl` (the certificate pack that was already in the catalog, same
   id). Each is a `SourcePack` for the `ids` engine built from the file that was
@@ -1226,8 +1238,24 @@ Host only. `monitor-core/src/ruleset/abusech.rs` and `monitor-ui/src/rules_windo
   when the file states none) plus the first 8 hex of the SHA-256, and the source
   is a pinned `file` download with that digest, so the install verifies exactly
   what was checked.
-* **Check and update.** `check_live` downloads the file into staging, refuses
-  anything without a rule line, keeps it as `rules/live/<id>.rules` and records
+* **Archives.** `rules_text` recognizes a download by its first bytes: gzip is
+  read as a tar, `PK` as a zip, anything else as the rules text itself. Only
+  regular files whose name ends in `.rules` are taken (symlinks, hard links,
+  directories and every other member are skipped; a name with `..`, a leading
+  `/`, a backslash or a drive letter is skipped). Limits: 2,000 entries read,
+  64 rules files, 32 MiB of rules text in all and per member, and the gzip
+  stream is cut at four times that; an archive with no `.rules` member is an
+  error. The members are joined in name order into one rules text, and that
+  text is what is cached, pinned and installed (so the pin and the `file`
+  format below are unchanged). Nothing is ever written under a member's name.
+* **Retired pack.** `retired_if_empty` marks the SSLBL JA3 pack: abuse.ch still
+  serves `ja3_fingerprints.csv` (the IOC dataset) but `ja3_fingerprints.rules`
+  is empty. For that pack an empty or comment-only file is a valid answer with
+  0 rules (HTML or other text is still an error); `live_states` reports
+  `LiveStatus::Retired`, the tab shows "Retired upstream" with the install
+  buttons off, and `install_live` returns a message rather than installing.
+* **Check and update.** `check_live` downloads the file into staging, unpacks
+  it, refuses anything without a rule line, keeps it as `rules/live/<id>.rules` and records
   `{at, sha256, size, stamp, rules}` in `rules/live/checks.json`. A pack is not
   requested again until [`MIN_CHECK_SECONDS`] (300) have passed; inside that
   window the recorded answer is returned and no request is made, however often the
@@ -1235,9 +1263,23 @@ Host only. `monitor-core/src/ruleset/abusech.rs` and `monitor-ui/src/rules_windo
   from the kept file through a `Fetcher` that copies it, so check plus install is
   one request. `live_states` compares the installed pack's download digest with
   the last snapshot: Not installed, Not checked, Up to date or Update available.
-* **Key.** The Auth-Key goes only to the two packs that need it (`FeedFetcher`
-  picks the keyed or the plain `Curl` by URL; `Curl::with_auth_key` writes the
-  header to curl's standard input and only for abuse.ch hosts).
+* **Key.** The Auth-Key is a path segment of the two keyed URLs, so it is
+  handled as a secret everywhere a URL goes. `Curl` (`ruleset/source_fetch.rs`)
+  passes the URL to curl as a configuration on standard input (`-K -`,
+  `url = "…"`), never as an argument, so it is not in `ps` or
+  `/proc/<pid>/cmdline`; a URL with a quote, backslash or control character is
+  refused. The `Curl` type no longer holds a key or sends an `Auth-Key` header
+  (the online IOC check and the sample search still send theirs on stdin, as
+  before). `redact_url` turns `/exports/<key>/` into `/exports/****/` in every
+  message `Curl` produces (timeouts, size limits, redirects, HTTP status, curl's
+  stderr) and in `https_host` errors; `update_feed` and `check_live` also
+  remove the key text itself with `api_keys::redact`, so an error that echoes
+  the key without a URL is covered. Stored URLs (`meta.json`, the source pack
+  and registry) use `url_display()`. The key must be letters, digits and
+  `- _ . ~` (checked when it is saved and again when a URL is built). Status
+  codes: 401 or 403 from an abuse.ch host is "abuse.ch rejected the Auth-Key
+  (HTTP 401); check it in Tools > API keys", 410 is "abuse.ch has retired this
+  endpoint (HTTP 410); update Antinomie".
 * **Tests.** Fixtures in the packs' real format and mock fetchers; no request
   leaves the machine.
 

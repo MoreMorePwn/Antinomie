@@ -3,7 +3,7 @@
 //! abuse.ch regenerates about every five minutes, with a check for updates
 //! (which never asks a pack more often than every five minutes), the age of
 //! what is installed, and an update on demand.
-use super::{ioc::FeedFetcher, theme, Done, Model};
+use super::{theme, Done, Model};
 use crate::widgets::{self, table, Tone};
 use antinomie_monitor_core::{
     api_keys::{self, ApiKey},
@@ -37,6 +37,7 @@ fn state_chip(state: &LiveState) -> (&'static str, Tone) {
         LiveStatus::Unchecked => ("Not checked", Tone::Neutral),
         LiveStatus::Current => ("Up to date", Tone::Good),
         LiveStatus::UpdateAvailable => ("Update available", Tone::Accent),
+        LiveStatus::Retired => ("Retired upstream", Tone::Neutral),
     }
 }
 
@@ -159,7 +160,10 @@ impl Model {
                                         LiveStatus::NotInstalled => "Install",
                                         _ => "Update",
                                     };
-                                    let enabled = state.status != LiveStatus::Current;
+                                    let enabled = !matches!(
+                                        state.status,
+                                        LiveStatus::Current | LiveStatus::Retired
+                                    );
                                     if ui
                                         .add_enabled(enabled, egui::Button::new(label).small())
                                         .clicked()
@@ -206,7 +210,10 @@ impl Model {
         line(ui, format!("Matches: {}", pack.matches));
         line(
             ui,
-            format!("Source: {}", pack.url.trim_start_matches("https://")),
+            format!(
+                "Source: {}",
+                pack.url_display().trim_start_matches("https://")
+            ),
         );
         line(ui, format!("License: {}", pack.license));
         if let Some(installed) = &state.installed {
@@ -244,6 +251,12 @@ impl Model {
                 ),
             );
         }
+        if state.status == LiveStatus::Retired {
+            line(
+                ui,
+                "Retired upstream: abuse.ch now serves this file empty, so there is nothing to install. The JA3 list is still in the IOC datasets (SSLBL JA3).".to_owned(),
+            );
+        }
         for limit in pack.limits {
             line(ui, (*limit).to_owned());
         }
@@ -273,7 +286,7 @@ impl Model {
                     *shown = line.to_owned();
                 }
             };
-            let real = FeedFetcher::new(key);
+            let real = ruleset::Curl::default();
             #[cfg(test)]
             let fetcher: &dyn Fetcher = match &injected {
                 Some(fetcher) => fetcher.as_ref(),
@@ -297,15 +310,8 @@ impl Model {
                     continue;
                 }
                 if install {
-                    match ruleset::install_live(
-                        &dir,
-                        pack,
-                        key_present,
-                        fetcher,
-                        now,
-                        &cancel,
-                        &mut show,
-                    ) {
+                    match ruleset::install_live(&dir, pack, &key, fetcher, now, &cancel, &mut show)
+                    {
                         Ok(done) => {
                             installed_any = true;
                             lines.push(if done.already_installed {
@@ -317,15 +323,12 @@ impl Model {
                         Err(error) => lines.push(error),
                     }
                 } else {
-                    match ruleset::check_live(
-                        &dir,
-                        pack,
-                        key_present,
-                        fetcher,
-                        now,
-                        &cancel,
-                        &mut show,
-                    ) {
+                    match ruleset::check_live(&dir, pack, &key, fetcher, now, &cancel, &mut show) {
+                        Ok((checked, _)) if pack.retired_if_empty && checked.rules == 0 => lines
+                            .push(format!(
+                                "{}: retired upstream; abuse.ch now serves an empty file",
+                                pack.name
+                            )),
                         Ok((checked, true)) => lines.push(format!(
                             "{}: snapshot {} ({} rules)",
                             pack.name, checked.stamp, checked.rules

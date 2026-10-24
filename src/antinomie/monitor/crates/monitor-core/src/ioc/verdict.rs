@@ -393,6 +393,7 @@ pub fn counts(indicators: &[Indicator], verdicts: &[Verdict]) -> BTreeMap<Type, 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api_keys::Secret;
     use crate::ioc::{
         download::update_all,
         indicator::{Collector, Evidence, Hashes, Jump, Process, Seen, Source, TlsFacts, Via},
@@ -412,7 +413,7 @@ mod tests {
             _cancel: &AtomicBool,
             _progress: &mut dyn FnMut(u64),
         ) -> Result<(), String> {
-            let feed = feeds::FEEDS.iter().find(|feed| feed.url == url).unwrap();
+            let feed = feeds::FEEDS.iter().find(|feed| feed.owns(url)).unwrap();
             let text = match feed.id {
                 "threatfox" => THREATFOX,
                 "urlhaus" => URLHAUS,
@@ -566,7 +567,13 @@ mod tests {
 
     fn installed(name: &str) -> PathBuf {
         let dir = data_dir(name);
-        let outcomes = update_all(&dir, true, &Fixtures, &AtomicBool::new(false), &mut |_| {});
+        let outcomes = update_all(
+            &dir,
+            &Secret::new("fixture-key"),
+            &Fixtures,
+            &AtomicBool::new(false),
+            &mut |_| {},
+        );
         assert!(outcomes.iter().all(|o| o.result.is_ok()));
         dir
     }

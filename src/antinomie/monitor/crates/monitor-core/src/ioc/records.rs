@@ -212,7 +212,7 @@ impl Layout {
                 "last_seen_utc",
                 "confidence_level",
             ],
-            "urlhaus" => &[
+            "urlhaus" | "urlhaus-recent" => &[
                 "id",
                 "dateadded",
                 "url",
@@ -243,7 +243,7 @@ impl Layout {
                 printable: columns.at(&["malwareprintable"]).unwrap_or(usize::MAX),
                 confidence: columns.at(&["confidencelevel"]).unwrap_or(usize::MAX),
             },
-            "urlhaus" => Self::Urlhaus {
+            "urlhaus" | "urlhaus-recent" => Self::Urlhaus {
                 id: columns.at(&["id"]).unwrap_or(usize::MAX),
                 added: columns
                     .at(&["dateadded", "firstseen"])
