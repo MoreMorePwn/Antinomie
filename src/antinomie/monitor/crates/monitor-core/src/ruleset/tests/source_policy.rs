@@ -12,14 +12,24 @@ fn fake_curl(dir: &Path) -> Curl {
         &script,
         r#"#!/bin/sh
 out=""; url=""
+# The URL arrives as a curl configuration on standard input, and an argument
+# that names a URL or the key is a failure.
+for arg in "$@"; do
+  case "$arg" in
+    http*|*SECRETKEY*) echo "URL on the command line: $arg" >&2; exit 2;;
+  esac
+done
+url=$(cat)
 while [ $# -gt 0 ]; do
   case "$1" in
     --output) out="$2"; shift;;
-    --url) url="$2"; shift;;
   esac
   shift
 done
 case "$url" in
+  *status-401*) printf '401 ';;
+  *status-403*) printf '403 ';;
+  *status-410*) printf '410 ';;
   *bounce-ok*) printf '302 https://release-assets.githubusercontent.com/payload';;
   *bounce-away*) printf '302 https://evil.example.org/payload';;
   *bounce-plain*) printf '302 http://github.com/payload';;
@@ -233,4 +243,74 @@ fn a_pack_download_stages_in_a_private_directory_and_leaves_nothing_behind() {
     assert!(download_archive(&data, &pack, &missing, &AtomicBool::new(false)).is_err());
     assert_eq!(fs::read_dir(&staging).unwrap().count(), 0);
     let _ = fs::remove_dir_all(&data);
+}
+
+#[test]
+fn a_url_in_a_message_has_its_key_replaced_by_stars() {
+    let key = "SECRETKEY0123";
+    let url = format!("https://urlhaus-api.abuse.ch/v2/files/exports/{key}/full.csv.zip");
+    assert_eq!(
+        redact_url(&url),
+        "https://urlhaus-api.abuse.ch/v2/files/exports/****/full.csv.zip"
+    );
+    // No closing slash: the rest of the token is taken for the key.
+    assert_eq!(
+        redact_url(&format!("failed at /exports/{key}")),
+        "failed at /exports/****"
+    );
+    assert_eq!(
+        redact_url(&format!("{url} then \"{url}\" and ({url})")),
+        "https://urlhaus-api.abuse.ch/v2/files/exports/****/full.csv.zip then \
+         \"https://urlhaus-api.abuse.ch/v2/files/exports/****/full.csv.zip\" and \
+         (https://urlhaus-api.abuse.ch/v2/files/exports/****/full.csv.zip)"
+    );
+    assert_eq!(
+        redact_url("nothing to hide at /export/x/"),
+        "nothing to hide at /export/x/"
+    );
+    assert_eq!(
+        redact_url("https://sslbl.abuse.ch/blacklist/x.rules"),
+        "https://sslbl.abuse.ch/blacklist/x.rules"
+    );
+}
+
+#[test]
+fn the_key_is_never_on_the_command_line_and_never_in_an_error() {
+    let dir = temp_dir("policy-key");
+    let curl = fake_curl(&dir);
+    let key = "SECRETKEY0123";
+    let base = format!("https://urlhaus-api.abuse.ch/v2/files/exports/{key}");
+    // The fake curl fails if it sees the URL or the key as an argument.
+    assert_eq!(
+        get(&curl, &dir, &format!("{base}/full.csv.zip"), 100).unwrap(),
+        b"payload"
+    );
+    for (path, words) in [
+        ("status-401", "rejected the Auth-Key"),
+        ("status-403", "rejected the Auth-Key"),
+        ("status-410", "retired this endpoint"),
+    ] {
+        let error = get(&curl, &dir, &format!("{base}/{path}"), 100).unwrap_err();
+        assert!(error.contains(words), "{error}");
+        assert!(!error.contains(key), "{error}");
+    }
+    // The same codes from another publisher are a plain HTTP answer.
+    let other = get(&curl, &dir, "https://github.com/a/status-410", 100).unwrap_err();
+    assert!(
+        other.contains("HTTP 410") && !other.contains("retired"),
+        "{other}"
+    );
+    // Other failures name the URL with stars for the key.
+    for path in ["missing", "big", "loop"] {
+        let error = get(&curl, &dir, &format!("{base}/{path}"), 100).unwrap_err();
+        assert!(!error.contains(key), "{error}");
+    }
+    let missing = get(&curl, &dir, &format!("{base}/missing"), 100).unwrap_err();
+    assert!(missing.contains("/exports/****/missing"), "{missing}");
+    let large = get(&curl, &dir, &format!("{base}/big"), 100).unwrap_err();
+    assert!(large.contains("/exports/****/big"), "{large}");
+    // A quote would end the configuration line early.
+    let bad = get(&curl, &dir, &format!("{base}/x\"y"), 100).unwrap_err();
+    assert!(bad.contains("unacceptable") && !bad.contains(key), "{bad}");
+    let _ = fs::remove_dir_all(dir);
 }

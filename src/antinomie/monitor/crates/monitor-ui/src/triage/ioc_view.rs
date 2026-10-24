@@ -649,13 +649,14 @@ impl View {
         }
     }
 
-    /// The seven feeds as chips: name, and whether the copy is loaded.
+    /// The switched-on feeds as chips: name, and whether the copy is loaded.
     fn feed_states(&self) -> Vec<(String, bool)> {
         let Some(dir) = &self.data_dir else {
             return Vec::new();
         };
         feeds::status(dir)
             .into_iter()
+            .filter(|status| status.enabled)
             .map(|status| (status.feed.name.to_owned(), status.usable()))
             .collect()
     }
@@ -686,13 +687,13 @@ impl View {
                     ),
                 );
             }
-            let missing = feeds::FEEDS.len() - ioc.scan.loaded.len();
+            let wanted = self.feed_states().len();
+            let missing = wanted.saturating_sub(ioc.scan.loaded.len());
             if missing > 0 {
                 crate::activity::warning(
                     ui,
                     format!(
-                        "{missing} of {} feeds are not loaded. Indicators are checked against the feeds that are.",
-                        feeds::FEEDS.len()
+                        "{missing} of {wanted} feeds are not loaded. Indicators are checked against the feeds that are."
                     ),
                 );
             }

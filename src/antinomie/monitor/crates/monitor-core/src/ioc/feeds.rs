@@ -13,6 +13,7 @@
 //!   an update succeeds.
 //! * `settings.json` lists the feeds switched off.
 //! * `staging/` holds downloads in progress and is emptied afterwards.
+use crate::api_keys::Secret;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeSet,
@@ -54,6 +55,9 @@ pub struct Feed {
     pub name: &'static str,
     /// The file as abuse.ch names it.
     pub file: &'static str,
+    /// Where it is fetched. A feed that needs the Auth-Key has `{key}` in
+    /// the path (abuse.ch export URLs carry it there); never display or log
+    /// this with a key in it: use [`Feed::url_display`].
     pub url: &'static str,
     /// What the feed can match.
     pub used_for: &'static str,
@@ -64,9 +68,30 @@ pub struct Feed {
     pub needs_key: bool,
     /// Usual size of the plain text, in bytes; limits are derived from it.
     pub expected_size: u64,
+    /// Switched on until the person says otherwise. A smaller alternative to
+    /// another feed is off until it is asked for.
+    pub default_on: bool,
 }
 
+const KEY_MARK: &str = "{key}";
+
 impl Feed {
+    /// The URL to fetch, with the key in it. It goes to curl on standard input
+    /// and nowhere else.
+    pub fn url_for(&self, key: &Secret) -> Result<String, String> {
+        url_with_key(self.url, self.needs_key, key)
+    }
+
+    /// The URL as it may be shown: `/exports/****/` for the key.
+    pub fn url_display(&self) -> String {
+        self.url.replace(KEY_MARK, "****")
+    }
+
+    /// Whether `url` is this feed's URL with some key in it.
+    pub fn owns(&self, url: &str) -> bool {
+        template_owns(self.url, url)
+    }
+
     /// Most bytes one download may send.
     pub fn download_limit(&self) -> u64 {
         self.expected_size.saturating_mul(4).max(8 * 1024 * 1024)
@@ -85,43 +110,79 @@ impl Feed {
     }
 }
 
-/// The seven feeds, in the order the Rule manager lists them.
-pub const FEEDS: [Feed; 7] = [
+/// `template` with the key put into its `{key}` place. A key that is not a
+/// plain path segment is refused, so it cannot change the URL.
+pub fn url_with_key(template: &str, needs_key: bool, key: &Secret) -> Result<String, String> {
+    if !needs_key {
+        return Ok(template.to_owned());
+    }
+    let key = key.expose();
+    if key.is_empty() {
+        return Err("needs the abuse.ch Auth-Key; set it in Tools > API keys".into());
+    }
+    if !key
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~'))
+    {
+        return Err("the saved Auth-Key has characters a URL cannot carry; set it again in Tools > API keys".into());
+    }
+    Ok(template.replace(KEY_MARK, key))
+}
+
+/// Whether `url` is `template` with a path segment where `{key}` is.
+pub fn template_owns(template: &str, url: &str) -> bool {
+    match template.split_once(KEY_MARK) {
+        None => template == url,
+        Some((head, tail)) => {
+            url.len() > head.len() + tail.len()
+                && url.starts_with(head)
+                && url.ends_with(tail)
+                && !url[head.len()..url.len() - tail.len()].contains('/')
+        }
+    }
+}
+
+/// The feeds, in the order the Rule manager lists them. The seven datasets of
+/// the Rule manager come first; the last is the smaller URLhaus list.
+pub const FEEDS: [Feed; 8] = [
     Feed {
         id: "threatfox",
         name: "ThreatFox",
         file: "full.csv",
-        url: "https://threatfox.abuse.ch/export/csv/full/",
+        url: "https://threatfox-api.abuse.ch/v2/files/exports/{key}/full.csv.zip",
         used_for: "IP:port, domains, URLs, file hashes",
         home: "https://threatfox.abuse.ch/",
         format: Format::Csv,
         terms: Terms::FairUse,
         needs_key: true,
         expected_size: 118 * 1024 * 1024,
+        default_on: true,
     },
     Feed {
         id: "urlhaus",
         name: "URLhaus dump",
-        file: "csv.txt",
-        url: "https://urlhaus.abuse.ch/downloads/csv/",
+        file: "full.csv",
+        url: "https://urlhaus-api.abuse.ch/v2/files/exports/{key}/full.csv.zip",
         used_for: "URLs, hosts",
         home: "https://urlhaus.abuse.ch/",
         format: Format::Csv,
         terms: Terms::FairUse,
         needs_key: true,
         expected_size: 204 * 1024 * 1024,
+        default_on: true,
     },
     Feed {
         id: "urlhaus-payloads",
         name: "URLhaus payloads",
         file: "payload.csv",
-        url: "https://urlhaus.abuse.ch/downloads/payloads/",
+        url: "https://urlhaus-api.abuse.ch/v2/files/exports/{key}/payload.csv.zip",
         used_for: "SHA-256 and MD5 of served files",
         home: "https://urlhaus.abuse.ch/",
         format: Format::Csv,
         terms: Terms::FairUse,
         needs_key: true,
         expected_size: 312 * 1024 * 1024,
+        default_on: true,
     },
     Feed {
         id: "feodo",
@@ -134,6 +195,7 @@ pub const FEEDS: [Feed; 7] = [
         terms: Terms::Cc0,
         needs_key: false,
         expected_size: 512 * 1024,
+        default_on: true,
     },
     Feed {
         id: "sslbl-ip",
@@ -146,6 +208,7 @@ pub const FEEDS: [Feed; 7] = [
         terms: Terms::Cc0,
         needs_key: false,
         expected_size: 512 * 1024,
+        default_on: true,
     },
     Feed {
         id: "sslbl-ja3",
@@ -158,6 +221,7 @@ pub const FEEDS: [Feed; 7] = [
         terms: Terms::Cc0,
         needs_key: false,
         expected_size: 256 * 1024,
+        default_on: true,
     },
     Feed {
         id: "sslbl-cert",
@@ -170,6 +234,20 @@ pub const FEEDS: [Feed; 7] = [
         terms: Terms::Cc0,
         needs_key: false,
         expected_size: 1024 * 1024,
+        default_on: true,
+    },
+    Feed {
+        id: "urlhaus-recent",
+        name: "URLhaus recent",
+        file: "recent.csv",
+        url: "https://urlhaus-api.abuse.ch/v2/files/exports/{key}/recent.csv",
+        used_for: "URLs, hosts added in the last 30 days (smaller than the dump)",
+        home: "https://urlhaus.abuse.ch/",
+        format: Format::Csv,
+        terms: Terms::FairUse,
+        needs_key: true,
+        expected_size: 8 * 1024 * 1024,
+        default_on: false,
     },
 ];
 
@@ -311,6 +389,18 @@ fn read_error(data_dir: &Path, feed: &Feed) -> Option<String> {
 #[serde(default)]
 struct Settings {
     disabled: BTreeSet<String>,
+    /// Feeds that are off by default and were switched on.
+    enabled: BTreeSet<String>,
+}
+
+impl Settings {
+    fn is_on(&self, feed: &Feed) -> bool {
+        if feed.default_on {
+            !self.disabled.contains(feed.id)
+        } else {
+            self.enabled.contains(feed.id)
+        }
+    }
 }
 
 fn read_settings(data_dir: &Path) -> Settings {
@@ -327,8 +417,10 @@ pub fn set_enabled(data_dir: &Path, id: &str, enabled: bool) -> Result<(), Strin
     let mut settings = read_settings(data_dir);
     if enabled {
         settings.disabled.remove(id);
+        settings.enabled.insert(id.to_owned());
     } else {
         settings.disabled.insert(id.to_owned());
+        settings.enabled.remove(id);
     }
     crate::storage::private_dir(&root(data_dir)).map_err(|error| error.to_string())?;
     crate::storage::atomic_json(&root(data_dir).join(SETTINGS_FILE), &settings)
@@ -342,7 +434,7 @@ pub fn status(data_dir: &Path) -> Vec<FeedStatus> {
         .map(|feed| FeedStatus {
             feed,
             meta: read_meta(data_dir, feed),
-            enabled: !settings.disabled.contains(feed.id),
+            enabled: settings.is_on(feed),
             last_error: read_error(data_dir, feed),
         })
         .collect()
@@ -384,20 +476,61 @@ mod tests {
     }
 
     #[test]
+    fn a_keyed_url_carries_the_key_in_its_path_and_shows_it_as_stars() {
+        let feed = feed("threatfox").unwrap();
+        let key = Secret::new("abc123DEF-456_789.xyz");
+        let url = feed.url_for(&key).unwrap();
+        assert_eq!(
+            url,
+            "https://threatfox-api.abuse.ch/v2/files/exports/abc123DEF-456_789.xyz/full.csv.zip"
+        );
+        assert_eq!(
+            feed.url_display(),
+            "https://threatfox-api.abuse.ch/v2/files/exports/****/full.csv.zip"
+        );
+        assert!(
+            feed.owns(&url)
+                && !feed.owns("https://threatfox-api.abuse.ch/v2/files/exports/a/b/full.csv.zip")
+        );
+        assert!(!feed.owns("https://threatfox-api.abuse.ch/v2/files/exports//full.csv.zip"));
+        // No key, or one that could change the URL, makes no URL.
+        assert!(feed.url_for(&Secret::default()).is_err());
+        for bad in ["a/b", "a?b", "a#b", "a b", "a\"b", "a\\b", "..%2f"] {
+            assert!(feed.url_for(&Secret::new(bad)).is_err(), "{bad}");
+        }
+        // A feed with no key in its URL is the URL itself, whatever key is given.
+        let plain = self::feed("feodo").unwrap();
+        assert_eq!(plain.url_for(&key).unwrap(), plain.url);
+        assert!(plain.owns(plain.url));
+    }
+
+    #[test]
     fn the_feed_table_is_complete_and_keeps_keys_out_of_urls() {
-        assert_eq!(FEEDS.len(), 7);
+        assert_eq!(FEEDS.len(), 8);
         let mut ids: Vec<_> = FEEDS.iter().map(|feed| feed.id).collect();
         ids.sort_unstable();
         ids.dedup();
-        assert_eq!(ids.len(), 7);
+        assert_eq!(ids.len(), 8);
         for feed in &FEEDS {
             assert!(feed.url.starts_with("https://"), "{}", feed.id);
             assert!(!feed.url.contains(['?', '@', '=']), "{}", feed.id);
             assert!(crate::ruleset::is_abusech_host(
-                &crate::ruleset::https_host(feed.url).unwrap()
+                &crate::ruleset::https_host(&feed.url_display()).unwrap()
             ));
             assert!(feed.download_limit() >= feed.expected_size);
+            // The key is in the path of a keyed feed's URL, and only there.
+            assert_eq!(feed.url.contains("{key}"), feed.needs_key, "{}", feed.id);
+            assert!(!feed.url_display().contains("{key}"));
+            if feed.needs_key {
+                assert!(
+                    !feed.url.contains("downloads/") && !feed.url.contains("/export/"),
+                    "{}: the retired endpoints",
+                    feed.id
+                );
+                assert!(feed.url.contains("-api.abuse.ch/v2/files/exports/{key}/"));
+            }
         }
-        assert!(FEEDS.iter().filter(|feed| feed.needs_key).count() == 3);
+        assert!(FEEDS.iter().filter(|feed| feed.needs_key).count() == 4);
+        assert_eq!(FEEDS.iter().filter(|feed| !feed.default_on).count(), 1);
     }
 }
