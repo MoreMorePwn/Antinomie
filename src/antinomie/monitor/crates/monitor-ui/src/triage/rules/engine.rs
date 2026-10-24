@@ -9,12 +9,41 @@ use super::{collect_hits, probes, rows, spec, Hit, Tier};
 use std::collections::HashMap;
 
 /// What the scan asks of the engine.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 pub(in crate::triage) struct Options {
     /// Build INFO rows; their counts are kept either way.
     pub show_info: bool,
     /// A capture of the whole VM: only processes started during it are in scope.
     pub capture_all: bool,
+    /// What Static analysis found about the program the run starts, for
+    /// `evasion.packed_image`.
+    pub packed: Option<PackedImage>,
+}
+
+/// The packer verdict of the run's program, from its Static analysis.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::triage) struct PackedImage {
+    /// The program's path as the run was asked to start it.
+    pub path: String,
+    pub packer: String,
+    /// The packer's own headers had been changed.
+    pub modified: bool,
+    pub layers: u32,
+    pub sha256: String,
+}
+
+impl PackedImage {
+    /// The verdict of a report whose Unpacking found a packer.
+    pub(in crate::triage) fn of(report: &antinomie_monitor_core::AnalysisReport) -> Option<Self> {
+        let verdict = antinomie_monitor_core::packer_verdict(report)?;
+        Some(Self {
+            path: report.source_path.clone(),
+            packer: verdict.packer,
+            modified: verdict.modified,
+            layers: verdict.layers,
+            sha256: verdict.sha256,
+        })
+    }
 }
 
 /// The rows of a scan and what to count about them.
@@ -69,11 +98,12 @@ pub(in crate::triage) struct Engine {
 
 impl Engine {
     pub(in crate::triage) fn new(options: Options) -> Self {
+        let state = State::with_packed(options.packed.clone());
         Self {
             options,
             aggs: Vec::new(),
             index: HashMap::new(),
-            state: State::default(),
+            state,
             info_matches: 0,
             dropped: 0,
             notes: Vec::new(),

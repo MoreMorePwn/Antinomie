@@ -55,6 +55,8 @@ impl Stage {
             AnalysisKind::Capabilities => "Checking capa availability",
             AnalysisKind::Decompilation => "Checking decompiler availability",
             AnalysisKind::Embedded => "Checking binwalk availability",
+            AnalysisKind::Floss => "Checking FLOSS availability",
+            AnalysisKind::Unpacking => "Looking for packers",
             _ => "Built-in analysis",
         };
         CURRENT.with(|slot| {
@@ -97,6 +99,8 @@ pub(in crate::analysis) fn tool_started(path: &str, args: &[&str]) {
         };
         current.activity.tool = match name {
             "analyzeHeadless" => "Ghidra",
+            "floss" => "FLOSS",
+            "upx" => "UPX",
             "diec" | "die" => "Detect It Easy",
             "tar" if current.activity.kind == AnalysisKind::Capabilities => "Preparing capa rules",
             other => other,

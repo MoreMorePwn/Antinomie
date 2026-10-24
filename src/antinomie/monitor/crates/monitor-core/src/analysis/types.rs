@@ -16,6 +16,10 @@ pub enum AnalysisKind {
     Decompilation,
     /// Signatures of embedded files and data found by binwalk.
     Embedded,
+    /// Decoded, stack and tight strings recovered by FLOSS.
+    Floss,
+    /// Packer detection and the layers unpacking recovered from the file.
+    Unpacking,
 }
 
 impl AnalysisKind {
@@ -29,8 +33,9 @@ impl AnalysisKind {
         Self::Identification,
         Self::Capabilities,
         Self::Embedded,
+        Self::Unpacking,
     ];
-    pub const DEEP: &'static [Self] = &[Self::Disassembly, Self::Decompilation];
+    pub const DEEP: &'static [Self] = &[Self::Disassembly, Self::Decompilation, Self::Floss];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -45,6 +50,8 @@ impl AnalysisKind {
             Self::Disassembly => "Disassembly",
             Self::Decompilation => "Decompilation",
             Self::Embedded => "Embedded content",
+            Self::Floss => "FLOSS strings (decoded, stack, tight)",
+            Self::Unpacking => "Unpacking (packer and unpacked layers)",
         }
     }
 }
@@ -234,6 +241,36 @@ pub enum AnalysisData {
         offset: u64,
         description: String,
     },
+    /// A string FLOSS recovered. `origin` is "decoded", "stack", "tight" or
+    /// "language" (Go and Rust strings); the entry value is the text. The
+    /// addresses are the ones FLOSS reports for its own load of the file:
+    /// `function` is the routine that built or decoded the string and
+    /// `address` the place it was seen. A language string has neither and
+    /// is located by file offset instead.
+    FlossString {
+        origin: String,
+        encoding: String,
+        function: Option<u64>,
+        address: Option<u64>,
+    },
+    /// One phase of the unpack chain: the file as it came (index 0) or a layer
+    /// an unpacker recovered from the one before. The entry value describes it.
+    Layer {
+        index: u32,
+        /// "original", "UPX", "UPX (header repaired)".
+        method: String,
+        sha256: String,
+        size: u64,
+        /// The layer this one was unpacked from.
+        parent: Option<u32>,
+        /// The packer found in this layer, when there is one.
+        packer: Option<String>,
+        /// The layer's file in the report's artifacts (`layer-N.bin`).
+        file: Option<String>,
+        /// The report of this layer's own static analysis, once it is queued.
+        report_id: Option<String>,
+        note: String,
+    },
     /// A compiler, language, linker, packer or protector identification;
     /// the entry value is the evidence.
     Identification {
@@ -349,6 +386,18 @@ impl AnalysisSection {
     }
 }
 
+/// What a report is the analysis of when it is not a file of its own: a layer
+/// that unpacking recovered from another report's file.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnalysisLayer {
+    /// The report of the packed file.
+    pub parent_id: String,
+    /// Position in the unpack chain; the packed file is 0.
+    pub index: u32,
+    pub method: String,
+    pub parent_sha256: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AnalysisReport {
     pub id: String,
@@ -359,4 +408,7 @@ pub struct AnalysisReport {
     pub specimen_len: Option<u64>,
     pub reason: Option<String>,
     pub sections: Vec<AnalysisSection>,
+    /// Set when this analysis is of a layer unpacked from another report's file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layer: Option<AnalysisLayer>,
 }

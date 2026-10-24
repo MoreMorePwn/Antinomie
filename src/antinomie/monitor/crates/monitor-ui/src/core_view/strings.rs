@@ -100,6 +100,9 @@ pub(super) struct StringsState {
     order: Option<(Key, Arc<Vec<u32>>)>,
     deriving: Option<(Key, Receiver<Vec<u32>>)>,
     selected: Option<usize>,
+    /// The regex matches window over these strings and the core's socket
+    /// addresses.
+    regex: crate::regex_matches::RegexWindow,
 }
 
 impl StringsState {
@@ -251,6 +254,7 @@ impl StringsState {
         record: &CoreRecord,
     ) -> Option<details::CoreDetail> {
         self.poll();
+        self.regex.show(ui.ctx(), "core");
         if self
             .extracted
             .as_ref()
@@ -422,8 +426,38 @@ impl StringsState {
         Some(details::string(string, extracted.segment(string)))
     }
 
+    /// Open the regex matches window for the strings of `extracted`.
+    fn open_regex(&mut self, record: &CoreRecord, extracted: &Arc<Extracted>) {
+        let (strings, core) = (Arc::clone(extracted), record.core.clone());
+        let title = core
+            .source
+            .file_name()
+            .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+        self.regex.open_for(
+            &core.source.display().to_string(),
+            title,
+            Arc::new(move |rules, cancel| {
+                let mut scan = antinomie_monitor_core::strings_regex::scan_core(
+                    &strings.strings,
+                    rules,
+                    cancel,
+                );
+                if !cancel.load(Ordering::Relaxed) {
+                    let found = antinomie_monitor_core::strings_regex::sockaddrs(
+                        &core,
+                        cancel,
+                        &AtomicU64::new(0),
+                    )
+                    .map_err(|error| error.to_string())?;
+                    scan.add_sockaddrs(&found);
+                }
+                Ok(scan)
+            }),
+        );
+    }
+
     /// The filter, what was searched and the way to search again.
-    fn toolbar(&mut self, ui: &mut egui::Ui, record: &CoreRecord, extracted: &Extracted) {
+    fn toolbar(&mut self, ui: &mut egui::Ui, record: &CoreRecord, extracted: &Arc<Extracted>) {
         ui.horizontal(|ui| {
             if ui
                 .button("Search again")
@@ -432,6 +466,16 @@ impl StringsState {
             {
                 self.reset();
                 self.start(&record.core);
+            }
+            if ui
+                .button("Regex matches…")
+                .on_hover_text(
+                    "List the network, crypto, key, behaviour, attribution and encoded \
+                     matches in these strings, and the socket addresses in the core's memory",
+                )
+                .clicked()
+            {
+                self.open_regex(record, extracted);
             }
             ui.add(
                 egui::Label::new(egui::RichText::new(format!(

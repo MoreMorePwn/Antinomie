@@ -516,6 +516,7 @@ mod tests {
             specimen_len: None,
             reason: Some("synthetic test".into()),
             sections: vec![section],
+            layer: None,
         };
         fs::write(
             root.join("report.json"),

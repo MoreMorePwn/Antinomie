@@ -220,6 +220,7 @@ mod tests {
                     listing: None,
                     entries: Vec::new(),
                 }],
+                layer: None,
             };
             let fixture = Self { directory, report };
             fixture.save();

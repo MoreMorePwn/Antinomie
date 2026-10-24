@@ -1750,6 +1750,7 @@ fn an_exec_is_info_a_shell_is_an_interpreter_and_sigsuspend_is_not_privilege() {
         rules::Options {
             show_info: true,
             capture_all: false,
+            ..Default::default()
         },
     );
     let ls = all

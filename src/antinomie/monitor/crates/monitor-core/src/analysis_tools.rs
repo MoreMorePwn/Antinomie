@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Optional static-analysis tools Antinomie installs when the system has
-//! none: capa, Detect It Easy, Ghidra with its Java runtime, Volatility 3,
-//! Sigma, Magika and the gdb consoles GEF (bata24) and pwndbg. Each is downloaded from its upstream release, pinned by
+//! none: capa, FLOSS, UPX, Detect It Easy, Ghidra with its Java runtime,
+//! Volatility 3, Sigma, Magika and the gdb consoles GEF (bata24) and pwndbg.
+//! Each is downloaded from its upstream release, pinned by
 //! SHA-256, unpacked into `<data>/tools/<id>/` and mounted read-only into the
 //! analysis sandbox at `SANDBOX_DIR`. A tool installed on the system takes
 //! precedence, except Magika, which the Properties panel looks for here first.
@@ -21,6 +22,8 @@ pub const SANDBOX_DIR: &str = "/opt/antinomie-tools";
 
 /// System locations the analysis worker checks first, per tool.
 pub const CAPA_SYSTEM: &[&str] = &["/usr/bin/capa", "/usr/local/bin/capa"];
+pub const FLOSS_SYSTEM: &[&str] = &["/usr/bin/floss", "/usr/local/bin/floss"];
+pub const UPX_SYSTEM: &[&str] = &["/usr/bin/upx", "/usr/local/bin/upx"];
 pub const DIE_SYSTEM: &[&str] = &["/usr/bin/diec", "/usr/local/bin/diec"];
 pub const GHIDRA_SYSTEM: &[&str] = &[
     "/usr/share/ghidra/support/analyzeHeadless",
@@ -112,6 +115,43 @@ pub const PACKAGES: &[Package] = &[
         }],
         requirements: None,
         entry: "capa",
+    },
+    // One PyInstaller executable that unpacks itself into /tmp, like capa.
+    Package {
+        id: "floss",
+        name: "FLOSS",
+        version: "3.2.0",
+        purpose: "Decoded, stack and tight strings (and Go and Rust strings)",
+        license: "Apache-2.0 (Mandiant)",
+        downloads: &[Download {
+            file: "floss-v3.2.0-linux.zip",
+            url: "https://github.com/mandiant/flare-floss/releases/download/v3.2.0/floss-v3.2.0-linux.zip",
+            sha256: "c449366960b688769b6510662cd6db6a3bf9edada4e8a8878056becd324df52c",
+            size: 44_286_277,
+            archive: Archive::Zip { strip: 0 },
+            into: "",
+        }],
+        requirements: None,
+        entry: "floss",
+    },
+    // One static executable. It unpacks a file by decompressing its data; it
+    // never runs the file.
+    Package {
+        id: "upx",
+        name: "UPX",
+        version: "5.2.1",
+        purpose: "Unpacking UPX-packed programs in Unpacking",
+        license: "GPL-2.0-or-later with the UPX stub exception (UPX team)",
+        downloads: &[Download {
+            file: "upx-5.2.1-amd64_linux.tar.xz",
+            url: "https://github.com/upx/upx/releases/download/v5.2.1/upx-5.2.1-amd64_linux.tar.xz",
+            sha256: "402162aad30af47e60dbd767fb2e64ca394ace9727ba1f40283641f1d1b91657",
+            size: 664_048,
+            archive: Archive::TarXz { strip: 1 },
+            into: "",
+        }],
+        requirements: None,
+        entry: "upx",
     },
     Package {
         id: "die",
@@ -300,6 +340,8 @@ pub fn package(id: &str) -> Option<&'static Package> {
 pub fn system_candidates(id: &str) -> &'static [&'static str] {
     match id {
         "capa" => CAPA_SYSTEM,
+        "floss" => FLOSS_SYSTEM,
+        "upx" => UPX_SYSTEM,
         "die" => DIE_SYSTEM,
         "ghidra" => GHIDRA_SYSTEM,
         "magika" => MAGIKA_SYSTEM,

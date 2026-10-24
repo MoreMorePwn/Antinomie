@@ -56,6 +56,7 @@ mod sandbox_profile;
 pub mod snapshots;
 pub mod stealth;
 pub mod storage;
+pub mod strings_regex;
 pub mod syscall_groups;
 pub mod syscalls;
 mod transport;

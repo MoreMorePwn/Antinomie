@@ -11,11 +11,60 @@ const MINUTE: u64 = 60 * 1_000_000_000;
 pub(super) fn rules(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
     probes::call(cx, st, out);
     if cx.is_exec() {
+        packed_image(cx, st, out);
         exec_name(cx, st, out);
     } else {
         sleep(cx, st, out);
     }
     probes::behaviour(cx, st);
+}
+
+/// The run's own program is the file Static analysis found packed. It is judged
+/// at the first exec of the run's root task: the packer is a fact about the
+/// file, so this is not a claim about what the program did.
+fn packed_image(cx: &Ctx, st: &State, out: &mut Vec<Hit>) {
+    let Some(packed) = st.packed.as_ref() else {
+        return;
+    };
+    let (root, task) = (cx.event.root_task_cookie, cx.call.task_cookie);
+    let Some(path) = cx.exec_path().filter(|_| root != 0 && root == task) else {
+        return;
+    };
+    // The run was asked for a path as typed; the exec names the resolved one.
+    let same =
+        path == packed.path || (!packed.path.starts_with('/') && base(&path) == base(&packed.path));
+    if !same {
+        return;
+    }
+    let layers = packed.layers;
+    let mut hit = Hit::new(
+        "evasion.packed_image",
+        &path,
+        format!("{path} is packed with {}", packed.packer),
+    )
+    .detail(format!(
+        "Static analysis (Unpacking) found the file packed with {}; its SHA-256 as it came is {}.",
+        packed.packer, packed.sha256
+    ))
+    .detail(if layers == 0 {
+        "No layer could be recovered from it.".to_owned()
+    } else {
+        format!(
+            "{layers} unpacked {} recovered, each analysed on its own.",
+            if layers == 1 {
+                "layer was"
+            } else {
+                "layers were"
+            }
+        )
+    });
+    hit = if packed.modified {
+        hit.detail("The packer's own headers had been changed so that its unpacker refuses the file: MEDIUM.")
+    } else {
+        hit.tier(Tier::Low)
+            .detail("The packer's headers are as it writes them: LOW. A packer is common in legitimate software too.")
+    };
+    out.push(hit);
 }
 
 /// The new program's `argv[0]` is a kernel thread's or a daemon's name.

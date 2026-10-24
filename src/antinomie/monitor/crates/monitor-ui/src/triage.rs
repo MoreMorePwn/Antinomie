@@ -406,6 +406,7 @@ impl TriageView {
         self.scan_request.clock_anchor = input.clock_anchor;
         self.scan_request.started_ms = input.started_ms;
         self.scan_request.root_cookie = input.root_cookie;
+        self.scan_request.packed = input.analysis.and_then(rules::PackedImage::of);
         self.scan_request.run_finished = input.run_finished;
         self.scan_request.identity = input
             .vm_id
@@ -1090,6 +1091,8 @@ struct ScanRequest {
     started_ms: Option<u64>,
     ended_ms: Option<u64>,
     root_cookie: u64,
+    /// The packer verdict of the run's program, from its Static analysis.
+    packed: Option<rules::PackedImage>,
     address_lookup: AddressLookup,
     run_finished: bool,
     /// Stamp of the index on screen; a recording with the same stamp is not read again.

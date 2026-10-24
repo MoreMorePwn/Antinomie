@@ -133,9 +133,9 @@ pub(super) fn execution_order(report: &AnalysisReport) -> Vec<usize> {
         | AnalysisKind::Strings
         | AnalysisKind::Entropy
         | AnalysisKind::Hardening => 0,
-        AnalysisKind::Rules | AnalysisKind::Identification => 1,
+        AnalysisKind::Rules | AnalysisKind::Identification | AnalysisKind::Unpacking => 1,
         AnalysisKind::Embedded | AnalysisKind::Disassembly => 2,
-        AnalysisKind::Capabilities => 3,
+        AnalysisKind::Capabilities | AnalysisKind::Floss => 3,
         AnalysisKind::Decompilation => 4,
     });
     indices
@@ -151,6 +151,8 @@ pub(crate) fn worker_deadline(report: &AnalysisReport) -> Duration {
         .map(|section| match section.kind {
             AnalysisKind::Decompilation => super::worker::DECOMPILER_SECONDS + 120,
             AnalysisKind::Capabilities => 300,
+            AnalysisKind::Floss => super::floss::TIMEOUT_SECONDS + 60,
+            AnalysisKind::Unpacking => super::unpack::BUDGET_SECONDS + 30,
             AnalysisKind::Embedded => 200,
             AnalysisKind::Identification => 160,
             AnalysisKind::Disassembly | AnalysisKind::Rules => 90,
@@ -190,10 +192,12 @@ mod tests {
             AnalysisKind::Metadata,
             AnalysisKind::Identification,
             AnalysisKind::Embedded,
+            AnalysisKind::Floss,
         ];
         report.sections = kinds.iter().copied().map(AnalysisSection::new).collect();
         let order = execution_order(&report);
-        assert_eq!(order, [4, 3, 5, 2, 6, 1, 0]);
+        // Capa and FLOSS keep their relative order; Ghidra comes last.
+        assert_eq!(order, [4, 3, 5, 2, 6, 1, 7, 0]);
         assert_eq!(
             report.sections.iter().map(|s| s.kind).collect::<Vec<_>>(),
             kinds

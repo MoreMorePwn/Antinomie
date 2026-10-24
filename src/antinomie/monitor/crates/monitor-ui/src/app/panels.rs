@@ -393,12 +393,18 @@ impl MonitorApp {
                     }
                 }
                 for report in &self.snapshot.analysis_reports {
-                    reports.entry(report.id.clone()).or_insert_with(|| {
-                        format!(
-                            "{} — analysis only ({:?})",
-                            report.source_path, report.state
-                        )
-                    });
+                    reports
+                        .entry(report.id.clone())
+                        .or_insert_with(|| match &report.layer {
+                            Some(layer) => format!(
+                                "{} — layer {} unpacked by {} ({:?})",
+                                report.source_path, layer.index, layer.method, report.state
+                            ),
+                            None => format!(
+                                "{} — analysis only ({:?})",
+                                report.source_path, report.state
+                            ),
+                        });
                 }
                 let current = self
                     .selected_analysis

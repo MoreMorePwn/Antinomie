@@ -211,6 +211,7 @@ fn a_capture_of_the_whole_vm_keeps_only_what_started_during_it() {
             Options {
                 show_info: true,
                 capture_all: true,
+                ..Default::default()
             },
         )
     };
@@ -309,6 +310,7 @@ fn file_requests_through_io_uring_are_judged_by_the_file_rules_only() {
     let mut engine = Engine::new(Options {
         show_info: true,
         capture_all: false,
+        ..Default::default()
     });
     engine.observe(&write, &files, None, true);
     // A process rule on the same kind of call is not evaluated for a file request.

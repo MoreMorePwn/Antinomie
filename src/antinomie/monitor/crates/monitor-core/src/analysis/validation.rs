@@ -9,6 +9,13 @@ pub(crate) fn validate_report(report: &AnalysisReport) -> Result<(), String> {
     if serde_json::to_vec(report).map_err(|e| e.to_string())?.len() > REPORT_MAX_SIZE
         || report.sections.len() > AnalysisKind::TRIAGE.len() + AnalysisKind::DEEP.len()
         || report.id.len() > 128
+        || report.layer.as_ref().is_some_and(|layer| {
+            layer.parent_id.len() > 128
+                || layer.method.len() > 256
+                || layer.index == 0
+                || layer.index as usize > super::unpack::LAYER_MAX_COUNT
+                || layer.parent_sha256.len() != 64
+        })
         || report.source_path.len() > 4096
         || report.reason.as_ref().is_some_and(|s| s.len() > 4096)
         || report
@@ -267,6 +274,58 @@ pub(crate) fn validate_record(
                         && l.value == *offset
                         && l.file_range.is_none()
                 })
+        }
+        AnalysisData::Layer {
+            index,
+            method,
+            sha256,
+            size,
+            parent,
+            packer,
+            file,
+            report_id,
+            note,
+        } => {
+            let name = |text: &str| {
+                !text.is_empty()
+                    && text.len() <= 128
+                    && text
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+            };
+            kind == AnalysisKind::Unpacking
+                && *index as usize <= super::unpack::LAYER_MAX_COUNT
+                && bounded(method)
+                && !method.is_empty()
+                && sha256.len() == 64
+                && sha256.bytes().all(|b| b.is_ascii_hexdigit())
+                && *size <= super::unpack::LAYER_MAX_SIZE
+                && parent.is_some() == (*index != 0)
+                && parent.is_none_or(|parent| parent < *index)
+                && packer.as_deref().is_none_or(bounded)
+                && bounded(note)
+                // A layer's file is `layer-<index>.bin` in the report's folder
+                // and nothing else, so no path comes from the worker.
+                && file.as_deref().is_none_or(|file| *file == format!("layer-{index}.bin"))
+                && (*index != 0 || file.is_none())
+                && report_id.as_deref().is_none_or(name)
+                && location.is_none()
+        }
+        AnalysisData::FlossString {
+            origin,
+            encoding,
+            function,
+            ..
+        } => {
+            kind == AnalysisKind::Floss
+                && matches!(origin.as_str(), "decoded" | "stack" | "tight" | "language")
+                && bounded(encoding)
+                && !encoding.is_empty()
+                && if origin == "language" {
+                    location.is_none_or(|l| l.kind == AnalysisAddressKind::FileOffset)
+                } else {
+                    address_location(*function)
+                }
         }
         AnalysisData::Identification {
             category,

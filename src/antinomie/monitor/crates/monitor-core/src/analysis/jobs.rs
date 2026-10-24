@@ -26,9 +26,13 @@ use std::{
 
 mod acquisition;
 mod host_file;
+mod layers;
+mod sandbox_account;
 mod sandbox_run;
 mod specimen_publication;
 mod worker_exe;
+pub(crate) use sandbox_account::host_user_name;
+use sandbox_account::sandbox_passwd;
 pub(crate) use sandbox_run::{Mounts, run_sandboxed, run_sandboxed_with};
 pub(crate) use worker_exe::worker_executable;
 
@@ -72,6 +76,9 @@ pub(crate) struct Jobs {
     updates: Vec<(Option<String>, AnalysisReport)>,
     /// `<data>/tools`, mounted read-only into the worker sandbox.
     tools_dir: Option<PathBuf>,
+    /// Room the last submitter said the recordings have, for the analyses of
+    /// unpacked layers that follow an analysis.
+    available: u64,
 }
 pub(crate) enum Action {
     Read {
@@ -102,6 +109,7 @@ pub(crate) fn new_report(path: &str, selection: &AnalysisSelection) -> AnalysisR
                 entries: Vec::new(),
             })
             .collect(),
+        layer: None,
     }
 }
 pub(crate) fn fail(report: &mut AnalysisReport, state: AnalysisState, reason: impl Into<String>) {
@@ -162,6 +170,7 @@ impl Jobs {
         available: u64,
     ) -> AnalysisReport {
         let mut handle = None;
+        self.available = available;
         let result: Result<(), String> = (|| {
             let (id, total_len) = acquisition?;
             handle = Some(id);
@@ -180,15 +189,7 @@ impl Jobs {
                     REPORT_MAX_SIZE as u64
                         + 64 * 1024 * 1024
                         + super::listing::LISTINGS_MAX_TOTAL
-                        + if report
-                            .sections
-                            .iter()
-                            .any(|section| section.kind == AnalysisKind::Decompilation)
-                        {
-                            super::export::PROJECT_MAX_SIZE
-                        } else {
-                            0
-                        }
+                        + layers::extra_reserve(&report)
                         + 8192,
                 )
                 .ok_or("analysis quota overflow")?;
@@ -307,6 +308,7 @@ impl Jobs {
                 return;
             }
         }
+        self.queue_layers(&mut job);
         if let Err(error) = persist_report(&job.directory, &job.report) {
             fail(
                 &mut job.report,
@@ -732,10 +734,10 @@ fn spawn_worker_binary(
         .map_err(|e| e.to_string())?;
     let has = |kind| job.report.sections.iter().any(|s| s.kind == kind);
     let decompiler = has(AnalysisKind::Decompilation);
-    // capa unpacks itself into /tmp before it runs.
+    // capa and FLOSS unpack themselves into /tmp before they run.
     let tmp_size = if decompiler {
         "2147483648"
-    } else if has(AnalysisKind::Capabilities) {
+    } else if has(AnalysisKind::Capabilities) || has(AnalysisKind::Floss) {
         "1073741824"
     } else {
         "33554432"
@@ -933,70 +935,6 @@ fn cleanup_sandbox(process: &mut SandboxProcess, log: &mut SandboxLog) -> Result
     }
 }
 
-/// Resolve only the actual host UID's local account, never an inherited USER.
-/// This bounded lookup is for background analysis/export work, not rendering.
-pub(crate) fn host_user_name() -> Result<String, String> {
-    const ACCOUNT_DATABASE_MAX_SIZE: u64 = 1024 * 1024;
-    let mut encoded = Vec::new();
-    File::open("/etc/passwd")
-        .and_then(|file| {
-            file.take(ACCOUNT_DATABASE_MAX_SIZE + 1)
-                .read_to_end(&mut encoded)
-        })
-        .map_err(|error| format!("analysis account lookup unavailable: {error}"))?;
-    if encoded.len() as u64 > ACCOUNT_DATABASE_MAX_SIZE {
-        return Err("analysis account lookup exceeded 1 MiB bound".into());
-    }
-    let uid = rustix::process::getuid().as_raw();
-    let mut matched = None;
-    for line in encoded.split(|byte| *byte == b'\n') {
-        let mut fields = line.split(|byte| *byte == b':');
-        let name = fields.next().unwrap_or_default();
-        let _password = fields.next();
-        let candidate = fields
-            .next()
-            .and_then(|value| std::str::from_utf8(value).ok())
-            .and_then(|value| value.parse::<u32>().ok());
-        if candidate != Some(uid) {
-            continue;
-        }
-        if matched.is_some() {
-            return Err("analysis account lookup is ambiguous for current UID".into());
-        }
-        if name.is_empty()
-            || name.len() > 64
-            || !name
-                .iter()
-                .all(|byte| byte.is_ascii_alphanumeric() || b"_.-".contains(byte))
-        {
-            return Err("analysis account has an unsupported user name; Ghidra ownership cannot be established".into());
-        }
-        matched = Some(String::from_utf8(name.to_vec()).map_err(|error| error.to_string())?);
-    }
-    matched.ok_or_else(|| {
-        "current UID has no local account; Ghidra ownership cannot be established".into()
-    })
-}
-
-fn sandbox_passwd(directory: &Path) -> Result<PathBuf, String> {
-    let name = host_user_name()?;
-    let uid = rustix::process::getuid().as_raw();
-    let gid = rustix::process::getgid().as_raw();
-    let path = directory.join(format!("sandbox-account-{}.passwd", storage::unique_id()));
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&path)
-        .map_err(|error| format!("sandbox account mapping: {error}"))?;
-    // Only one name/UID/GID crosses the boundary. No host home, shell, password,
-    // GECOS, or other account is exposed. JVM settings stay in bounded tmpfs.
-    writeln!(file, "{name}:x:{uid}:{gid}::/tmp:/bin/false")
-        .and_then(|()| file.sync_all())
-        .map_err(|error| format!("sandbox account mapping: {error}"))?;
-    Ok(path)
-}
-
 const SANDBOX_LOG_MAX_SIZE: usize = 2 * 1024 * 1024;
 const SANDBOX_TAIL_MAX_SIZE: usize = 8192;
 const SANDBOX_LOG_HEAD_SIZE: usize = SANDBOX_LOG_MAX_SIZE - SANDBOX_TAIL_MAX_SIZE - 256;
@@ -1167,6 +1105,7 @@ pub(super) fn read_report(
             )
         })
         || report.specimen_sha256 != expected.specimen_sha256
+        || report.layer != expected.layer
     {
         return Err("worker report violates normalized identity/bounds contract".into());
     }
@@ -1307,6 +1246,7 @@ mod tests {
                 retained_len: 0,
                 updates: Vec::new(),
                 tools_dir: None,
+                available: 0,
             };
             let launcher = jobs.active.as_ref().unwrap().child.as_ref().unwrap().id();
             let children = PathBuf::from(format!("/proc/{launcher}/task/{launcher}/children"));

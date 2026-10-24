@@ -588,6 +588,13 @@ pub(in crate::triage) const SPECS: &[Spec] = &[
         &["T1497.001", "T1082"],
     ),
     rule(
+        "evasion.packed_image",
+        1,
+        T::Medium,
+        C::Evasion,
+        &["T1027.002"],
+    ),
+    rule(
         "evasion.long_sleep",
         1,
         T::Medium,
