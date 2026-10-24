@@ -2,7 +2,55 @@
 //! How a changed file is shown: its row in the Changed tab and its Details.
 use super::*;
 
+/// Differing runs kept for the File activity window, and octets in each.
+const RUNS_KEPT: usize = 32;
+const RUN_OCTETS: usize = 32;
+
 impl Change {
+    /// What the run saw of the file's bytes, for the File activity window:
+    /// the octets that differ between the first and the last it knew, in runs.
+    pub fn contents(&self) -> file_activity::Contents {
+        let offsets: BTreeSet<u64> = self
+            .original
+            .keys()
+            .chain(self.final_data.keys())
+            .copied()
+            .filter(|offset| self.byte_diff(*offset))
+            .collect();
+        let mut runs: Vec<file_activity::ByteRun> = Vec::new();
+        for offset in offsets {
+            let (before, after) = (
+                self.original.get(&offset).copied(),
+                self.final_data.get(&offset).copied(),
+            );
+            let continues = runs.last().is_some_and(|run| {
+                run.offset + run.after.len() as u64 == offset && run.after.len() < RUN_OCTETS
+            });
+            if continues {
+                if let Some(run) = runs.last_mut() {
+                    run.before.push(before);
+                    run.after.push(after);
+                }
+            } else if runs.len() < RUNS_KEPT {
+                runs.push(file_activity::ByteRun {
+                    offset,
+                    before: vec![before],
+                    after: vec![after],
+                });
+            } else {
+                break;
+            }
+        }
+        file_activity::Contents {
+            original_size: self.original_size,
+            final_size: self.final_size,
+            differing: self.diff_count(),
+            runs,
+            gaps: self.gaps.iter().copied().collect(),
+            hash: self.hash.clone(),
+        }
+    }
+
     pub fn row(&self, clock: Option<antinomie_monitor_core::HostClockAnchor>) -> Vec<Cell> {
         let mut row = vec![
             cell(

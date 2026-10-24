@@ -383,7 +383,7 @@ pub(super) fn scan_archive_query(
         ..TriageInput::empty()
     });
     let omitted_files = file_index.omitted_files;
-    let all_changes = file_index.finish();
+    let (all_changes, activity) = file_index.finish_all();
     counts.changed = all_changes.iter().filter(|change| change.real()).count() as u64;
     let file_changes: Vec<_> = all_changes
         .into_iter()
@@ -654,6 +654,7 @@ pub(super) fn scan_archive_query(
         clock_anchor,
         bpf,
         bpf_omitted,
+        file_activity: Arc::new(activity),
         file_changes: file_changes
             .into_iter()
             .skip(request.offsets[2])

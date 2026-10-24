@@ -22,6 +22,18 @@ impl CapturedPayload {
             })
         })
     }
+    /// The first `limit` octets of the transfer, up to the first one that was
+    /// not captured.
+    pub fn head(&self, limit: usize) -> Vec<u8> {
+        let mut head = Vec::new();
+        for (start, data) in &self.chunks {
+            if *start != head.len() as u64 || head.len() >= limit {
+                break;
+            }
+            head.extend(data.iter().take(limit - head.len()));
+        }
+        head
+    }
     pub fn preview(&self) -> String {
         let mut shown = vec![
             None;

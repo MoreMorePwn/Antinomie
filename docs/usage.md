@@ -174,6 +174,26 @@ packet history already has it, and specimen Content supports a byte-offset jump.
   finding in time, ↑/↓ lane, Enter evidence, `F` fit, `+`/`-` zoom at the
   selection, Space fold the lane, `H` `M` `L` `I` the tier chips and Show INFO,
   `1`…`9` and `0` the first ten category chips.
+- **Triage › Files › Per-file history…** opens the **File activity** window. The
+  left list holds every file the run touched, in order of the first call (also
+  those that were only opened, read or probed); **Hide stdio**, **Hide library**
+  and **Changed only** narrow it, the filter matches the path and any other name
+  the file was given, and the order can be first or last touched, most calls or
+  path. Choose a file to see its history as a graph: one box for each stretch of
+  the same call by the same process (create, open, read, write ×3, rename, delete),
+  joined in the order the calls happened, on a lane for each process involved.
+  Click a box to list its calls: time, process, call, result (a rename shows the new
+  name, a delete says whether another link remains), and for reads and writes the
+  **offset**, the **length** and the first 64 bytes the kernel captured. A write
+  that went past the end of the file as far as the run knew says so. **Content
+  changes** below lists the bytes the run changed where it captured both sides:
+  `0x00000001  42 43 → 7a 7a`, or `added` for bytes past the size it first saw
+  (`??` is a byte it did not capture, `∅` one beyond the known size), the file's
+  size before and after, and the guest's SHA-256 when it took one. Click a call
+  name to open the original syscall. An offset the run could not know (an append,
+  a descriptor it did not see opened) shows `unknown`, and bytes the kernel did not
+  capture show `not captured`; nothing is guessed. In **Changed files**, Details has
+  a **Per-file history…** button that opens the window on that file.
 - **Triage › Summary** shows the same curve, phases and heat strip for the whole
   run as **Main activity graph**; a click opens the Graph. When nothing is above
   LOW it is one line (`No medium or high activity · 11 low · 340 info`); the
@@ -207,9 +227,8 @@ packet history already has it, and specimen Content supports a byte-offset jump.
   started with shows **Not requested** and a **Run** button. Run adds that check
   to the same report without starting the analysis again: the specimen kept with
   the report is analysed by the one check, and its tab fills in when it ends.
-  A check that was unavailable (a missing tool, say) shows **Run** as well, to
-  try it again. The button waits while the analysis is still being made; no VM
-  has to be running, and the result is saved with the report like the others.
+  The button waits while the analysis is still being made; no VM has to be
+  running, and the result is saved with the report like the others.
 - **Static Analysis > Unpacking**: the unpack chain as phases, left to right: the
   file as it came (packed with UPX or not), then each layer UPX recovered from the
   one before, with size, SHA-256 and the packer found in it. A file packed twice

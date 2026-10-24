@@ -1,0 +1,553 @@
+// SPDX-License-Identifier: GPL-3.0-only
+//! The File activity window: every file the run touched on the left, and for
+//! the chosen one its history as a graph, the calls behind a chosen node and
+//! what is known of the bytes the run changed.
+use super::graph::{self, Layout};
+use super::{Activity, ByteRun, Event, FileActivity};
+use crate::theme;
+use crate::widgets::{self, Tone};
+use eframe::egui;
+
+/// How the list of files is ordered.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum Order {
+    #[default]
+    First,
+    Last,
+    Calls,
+    Path,
+}
+
+impl Order {
+    const ALL: [Self; 4] = [Self::First, Self::Last, Self::Calls, Self::Path];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::First => "First touched",
+            Self::Last => "Last touched",
+            Self::Calls => "Most calls",
+            Self::Path => "Path",
+        }
+    }
+}
+
+pub(in crate::triage) struct Window {
+    pub(super) open: bool,
+    pub(super) filter: String,
+    pub(super) hide_standard_io: bool,
+    pub(super) hide_libraries: bool,
+    pub(super) changed_only: bool,
+    pub(super) order: Order,
+    /// The chosen file: its path and first call, which survive a new index.
+    selected: Option<(String, u64)>,
+    node: Option<usize>,
+}
+
+impl Default for Window {
+    fn default() -> Self {
+        Self {
+            open: false,
+            filter: String::new(),
+            hide_standard_io: true,
+            hide_libraries: true,
+            changed_only: false,
+            order: Order::First,
+            selected: None,
+            node: None,
+        }
+    }
+}
+
+impl Window {
+    pub(in crate::triage) fn open(&mut self) {
+        self.open = true;
+    }
+
+    /// Open the window on the file at `path`.
+    pub(in crate::triage) fn open_on(&mut self, path: &str) {
+        self.open = true;
+        self.filter.clear();
+        self.selected = Some((path.to_owned(), 0));
+        self.node = None;
+    }
+
+    #[cfg(test)]
+    pub(in crate::triage) fn is_open(&self) -> bool {
+        self.open
+    }
+
+    /// The path of the chosen file and the chosen node, for the tests.
+    #[cfg(test)]
+    pub(super) fn chosen(&self) -> (Option<&str>, Option<usize>) {
+        (
+            self.selected.as_ref().map(|(path, _)| path.as_str()),
+            self.node,
+        )
+    }
+
+    /// The files the filter, toggles and order keep, as indices into the
+    /// activity.
+    pub(super) fn shown(&self, activity: &Activity) -> Vec<usize> {
+        let needle = self.filter.trim().to_lowercase();
+        let mut kept: Vec<usize> = activity
+            .files
+            .iter()
+            .enumerate()
+            .filter(|(_, file)| {
+                !(self.hide_standard_io && file.standard_io)
+                    && !(self.hide_libraries && file.library())
+                    && (!self.changed_only || file.changed())
+                    && (needle.is_empty()
+                        || file.path.to_lowercase().contains(&needle)
+                        || file
+                            .names
+                            .iter()
+                            .any(|name| name.to_lowercase().contains(&needle)))
+            })
+            .map(|(index, _)| index)
+            .collect();
+        let files = &activity.files;
+        match self.order {
+            Order::First => {}
+            Order::Last => kept.sort_by_key(|&i| std::cmp::Reverse(files[i].last_ns)),
+            Order::Calls => kept.sort_by_key(|&i| {
+                std::cmp::Reverse(files[i].events.len() as u64 + files[i].omitted)
+            }),
+            Order::Path => kept.sort_by(|&a, &b| files[a].path.cmp(&files[b].path)),
+        }
+        kept
+    }
+
+    fn selected_file<'a>(&self, activity: &'a Activity) -> Option<&'a FileActivity> {
+        let (path, first) = self.selected.as_ref()?;
+        activity
+            .files
+            .iter()
+            .find(|file| file.path == *path && file.first_ns == *first)
+            .or_else(|| {
+                activity
+                    .files
+                    .iter()
+                    .find(|file| file.path == *path || file.names.contains(path))
+            })
+    }
+
+    pub(in crate::triage) fn show(
+        &mut self,
+        ctx: &egui::Context,
+        activity: Option<&Activity>,
+        clock: Option<antinomie_monitor_core::HostClockAnchor>,
+    ) {
+        if !self.open {
+            return;
+        }
+        let mut open = true;
+        egui::Window::new("File activity · per-file history")
+            .id(egui::Id::new("triage-file-activity"))
+            .open(&mut open)
+            .default_size([1040.0, 600.0])
+            .resizable(true)
+            .show(ctx, |ui| match activity {
+                Some(activity) => self.body(ui, activity, clock),
+                None => {
+                    theme::loading_weak(ui, "Indexing this run’s files…");
+                }
+            });
+        self.open = open;
+    }
+
+    fn body(
+        &mut self,
+        ui: &mut egui::Ui,
+        activity: &Activity,
+        clock: Option<antinomie_monitor_core::HostClockAnchor>,
+    ) {
+        if activity.omitted_files > 0 || activity.omitted_events > 0 {
+            crate::activity::warning(
+                ui,
+                format!(
+                    "Kept the first {} files and {} calls per file; {} files and {} calls are not listed. Trace has every call.",
+                    super::FILES_MAX,
+                    super::EVENTS_PER_FILE,
+                    activity.omitted_files,
+                    activity.omitted_events
+                ),
+            );
+        }
+        let shown = self.shown(activity);
+        egui::SidePanel::left("file-activity-list")
+            .resizable(true)
+            .default_width(310.0)
+            .show_inside(ui, |ui| self.list(ui, activity, &shown));
+        egui::CentralPanel::default().show_inside(ui, |ui| {
+            match self.selected_file(activity) {
+                Some(file) => self.history(ui, activity, file, clock),
+                None => {
+                    ui.weak("Choose a file to see what the run did to it, step by step.");
+                }
+            };
+        });
+    }
+
+    fn list(&mut self, ui: &mut egui::Ui, activity: &Activity, shown: &[usize]) {
+        ui.add(
+            egui::TextEdit::singleline(&mut self.filter)
+                .hint_text(theme::hint_text("Filter by path"))
+                .desired_width(f32::INFINITY),
+        );
+        ui.horizontal_wrapped(|ui| {
+            for (label, flag, hover) in [
+                ("Hide stdio", &mut self.hide_standard_io, "Hide stdin, stdout, stderr"),
+                (
+                    "Hide library",
+                    &mut self.hide_libraries,
+                    "Hide shared libraries and the loader cache",
+                ),
+                (
+                    "Changed only",
+                    &mut self.changed_only,
+                    "Only files a call created, wrote, resized, renamed, linked, deleted or changed the attributes of",
+                ),
+            ] {
+                if widgets::toggle_chip(ui, label, *flag, None)
+                    .on_hover_text(hover)
+                    .clicked()
+                {
+                    *flag = !*flag;
+                }
+            }
+        });
+        egui::ComboBox::from_id_salt("file-activity-order")
+            .selected_text(self.order.label())
+            .show_ui(ui, |ui| {
+                for order in Order::ALL {
+                    ui.selectable_value(&mut self.order, order, order.label());
+                }
+            });
+        ui.weak(format!(
+            "{} of {} files",
+            shown.len(),
+            activity.files.len() as u64 + activity.omitted_files
+        ));
+        let row = ui.text_style_height(&egui::TextStyle::Body) * 2.0 + 10.0;
+        let selected = self
+            .selected_file(activity)
+            .map(|file| file as *const FileActivity);
+        let mut chosen = None;
+        egui::ScrollArea::vertical()
+            .id_salt("file-activity-files")
+            .auto_shrink([false, false])
+            .show_rows(ui, row, shown.len(), |ui, range| {
+                for &index in &shown[range] {
+                    let file = &activity.files[index];
+                    let is_selected = selected == Some(file as *const FileActivity);
+                    let response = ui
+                        .scope(|ui| {
+                            ui.set_min_width(ui.available_width());
+                            ui.vertical(|ui| {
+                                ui.add(
+                                    egui::Label::new(egui::RichText::new(&file.path).monospace())
+                                        .truncate()
+                                        .selectable(false),
+                                );
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(file.summary())
+                                            .small()
+                                            .color(theme::muted()),
+                                    )
+                                    .truncate()
+                                    .selectable(false),
+                                );
+                            });
+                        })
+                        .response
+                        .interact(egui::Sense::click());
+                    if is_selected {
+                        ui.painter().rect_filled(
+                            response.rect,
+                            3.0,
+                            theme::primary().gamma_multiply(0.18),
+                        );
+                    } else if response.hovered() {
+                        ui.painter().rect_filled(
+                            response.rect,
+                            3.0,
+                            theme::primary().gamma_multiply(0.08),
+                        );
+                    }
+                    if response.clicked() {
+                        chosen = Some((file.path.clone(), file.first_ns));
+                    }
+                }
+            });
+        if chosen.is_some() {
+            self.selected = chosen;
+            self.node = None;
+        }
+    }
+
+    fn history(
+        &mut self,
+        ui: &mut egui::Ui,
+        activity: &Activity,
+        file: &FileActivity,
+        clock: Option<antinomie_monitor_core::HostClockAnchor>,
+    ) {
+        egui::ScrollArea::vertical()
+            .id_salt("file-activity-history")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.add(
+                    egui::Label::new(egui::RichText::new(&file.path).strong().monospace()).wrap(),
+                );
+                ui.horizontal_wrapped(|ui| {
+                    if file.created {
+                        widgets::chip(ui, "created by the run", Tone::Good);
+                    }
+                    if file.deleted {
+                        widgets::chip(ui, "deleted", Tone::Error);
+                    }
+                    if !file.path_known {
+                        widgets::chip(ui, "path unknown", Tone::Warn);
+                    }
+                    if file.failed_only {
+                        widgets::chip(ui, "every call refused", Tone::Neutral);
+                    }
+                    ui.weak(file.summary());
+                });
+                for name in &file.names {
+                    ui.weak(format!("also seen as {name}"));
+                }
+                let layout = graph::layout(file);
+                ui.add_space(6.0);
+                if let Some(clicked) = graph::show(ui, activity, file, &layout, self.node) {
+                    self.node = Some(clicked);
+                }
+                if file.omitted > 0 {
+                    crate::activity::warning(
+                        ui,
+                        format!(
+                            "{} more calls are not listed; Trace has them.",
+                            file.omitted
+                        ),
+                    );
+                }
+                self.calls(ui, activity, file, &layout, clock);
+                contents(ui, file);
+            });
+    }
+
+    /// The calls behind the chosen node, or all of them.
+    fn calls(
+        &mut self,
+        ui: &mut egui::Ui,
+        activity: &Activity,
+        file: &FileActivity,
+        layout: &Layout,
+        clock: Option<antinomie_monitor_core::HostClockAnchor>,
+    ) {
+        let range = self
+            .node
+            .and_then(|node| layout.nodes.get(node))
+            .map_or(0..file.events.len(), |node| node.events.clone());
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(if self.node.is_some() {
+                    "Calls in the chosen step"
+                } else {
+                    "All calls"
+                })
+                .strong()
+                .color(theme::heading()),
+            );
+            if self.node.is_some() && ui.small_button("Show all").clicked() {
+                self.node = None;
+            }
+        });
+        egui::Grid::new("file-activity-calls")
+            .striped(true)
+            .num_columns(7)
+            .show(ui, |ui| {
+                for head in [
+                    "Time", "Process", "Call", "Result", "Offset", "Length", "Content",
+                ] {
+                    ui.label(egui::RichText::new(head).small().color(theme::muted()));
+                }
+                ui.end_row();
+                for event in file.events[range].iter().take(CALLS_SHOWN) {
+                    self.call_row(ui, activity, event, clock);
+                }
+            });
+        if file.events.len() > CALLS_SHOWN && self.node.is_none() {
+            ui.weak(format!(
+                "The first {CALLS_SHOWN} calls; choose a step for the rest."
+            ));
+        }
+    }
+
+    fn call_row(
+        &self,
+        ui: &mut egui::Ui,
+        activity: &Activity,
+        event: &Event,
+        clock: Option<antinomie_monitor_core::HostClockAnchor>,
+    ) {
+        ui.monospace(crate::time_format::guest_ns(clock, Some(event.time)));
+        ui.label(activity.process_label(event.process));
+        let call = ui.add(
+            egui::Label::new(egui::RichText::new(&event.operation).color(graph::tint(event.kind)))
+                .sense(egui::Sense::click()),
+        );
+        let call = call
+            .on_hover_text("Open the original syscall")
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        if call.clicked() {
+            ui.ctx().data_mut(|data| {
+                data.insert_temp(egui::Id::new("triage-call-jump"), event.key);
+            });
+        }
+        let mut result = event.result.clone();
+        if !event.note.is_empty() {
+            result.push_str(&format!(" · {}", event.note));
+        }
+        if let Some(other) = &event.other_path {
+            result.push_str(&format!(" → {other}"));
+        }
+        ui.add(egui::Label::new(result).wrap());
+        match event.offset {
+            Some(offset) => ui.monospace(format!("0x{offset:x}")),
+            None if event.len.is_some() => ui.weak("unknown"),
+            None => ui.label(""),
+        };
+        match event.len {
+            Some(len) => ui.monospace(format!("{len}")),
+            None => ui.label(""),
+        };
+        ui.add(egui::Label::new(egui::RichText::new(content_text(event)).monospace()).wrap());
+        ui.end_row();
+    }
+}
+
+/// Calls drawn in the table at once.
+const CALLS_SHOWN: usize = 200;
+
+/// What a transfer carried, as far as the kernel captured it.
+pub(super) fn content_text(event: &Event) -> String {
+    let Some(len) = event.len else {
+        return String::new();
+    };
+    if event.content.is_empty() {
+        return if len == 0 || event.success != Some(true) {
+            String::new()
+        } else {
+            "not captured".into()
+        };
+    }
+    let mut text: String = event.content.iter().map(|byte| printable(*byte)).collect();
+    if event.content_gap || (event.content.len() as u64) < len {
+        text.push_str(" …");
+    }
+    if event.extends {
+        text.push_str("  [extends the file]");
+    }
+    text
+}
+
+fn printable(byte: u8) -> String {
+    match byte {
+        b'\n' => "\\n".into(),
+        b'\r' => "\\r".into(),
+        b'\t' => "\\t".into(),
+        32..=126 => char::from(byte).to_string(),
+        _ => format!("\\x{byte:02x}"),
+    }
+}
+
+/// The bytes the run changed, where the run captured what they were and what
+/// they became.
+fn contents(ui: &mut egui::Ui, file: &FileActivity) {
+    let known = &file.contents;
+    if known.runs.is_empty() && known.gaps.is_empty() && known.hash.is_none() {
+        return;
+    }
+    ui.add_space(8.0);
+    ui.label(
+        egui::RichText::new("Content changes")
+            .strong()
+            .color(theme::heading()),
+    );
+    let size = |size: Option<u64>| size.map_or("unknown".to_owned(), |size| format!("{size} B"));
+    ui.weak(format!(
+        "Size before the run's first change: {} · at the end: {}",
+        size(known.original_size),
+        size(known.final_size)
+    ));
+    if let Some(hash) = &known.hash {
+        match hash.sha256_hex() {
+            Some(hex) => {
+                ui.label("SHA-256 the guest took of the file");
+                ui.monospace(hex);
+            }
+            None => {
+                ui.weak(format!(
+                    "The guest took no hash: {}.",
+                    hash.skipped().unwrap_or_else(|| "no digest".into())
+                ));
+            }
+        }
+    }
+    if known.differing > 0 {
+        ui.weak(format!(
+            "{} byte{} differ between what the run saw first and last; ?? = not captured, ∅ = beyond the known size.",
+            known.differing,
+            if known.differing == 1 { "" } else { "s" }
+        ));
+    }
+    for run in &known.runs {
+        ui.add(
+            egui::Label::new(egui::RichText::new(run_text(run, known.original_size)).monospace())
+                .wrap(),
+        );
+    }
+    if known.differing > known.runs.iter().map(|run| run.after.len()).sum::<usize>() {
+        ui.weak("More differences exist than are listed; Trace has the calls.");
+    }
+    for gap in &known.gaps {
+        crate::activity::warning(ui, *gap);
+    }
+}
+
+/// `0x0010  ?? ?? → 68 65  (he)`, `added` when the bytes lie past the end the
+/// run first saw.
+pub(super) fn run_text(run: &ByteRun, original_size: Option<u64>) -> String {
+    let hex = |bytes: &[Option<u8>], beyond: bool| {
+        bytes
+            .iter()
+            .map(|byte| match byte {
+                Some(byte) => format!("{byte:02x}"),
+                None if beyond => "∅".to_owned(),
+                None => "??".to_owned(),
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let added = original_size.is_some_and(|size| run.offset >= size);
+    let ascii: String = run
+        .after
+        .iter()
+        .map(|byte| match byte {
+            Some(byte @ 32..=126) => char::from(*byte),
+            Some(_) => '.',
+            None => '?',
+        })
+        .collect();
+    format!(
+        "{}0x{:08x}  {} → {}  |{ascii}|",
+        if added { "added " } else { "" },
+        run.offset,
+        hex(&run.before, added),
+        hex(&run.after, false)
+    )
+}

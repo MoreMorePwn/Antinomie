@@ -53,7 +53,7 @@ impl FileVisibility {
     }
 }
 
-fn library_path(path: &str) -> bool {
+pub(super) fn library_path(path: &str) -> bool {
     path.split('/')
         .any(|component| matches!(component, "lib" | "lib32" | "lib64" | "libx32"))
 }
