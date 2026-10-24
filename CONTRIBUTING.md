@@ -369,7 +369,15 @@ with `scripts/build-release.sh` and publishes the GitHub release with the
 version's changelog section as notes. Bases are built and uploaded
 separately (see the base distribution notes).
 
-Upload only `antinomie-X.Y.Z-linux-x86_64.tar.gz` and `SHA256SUMS` to an
+The tag workflow also builds the **full pack** (every managed tool,
+pre-downloaded; `scripts/build-full-pack.py`, described in docs/full-pack.md) and
+attaches `antinomie-X.Y.Z-full-pack-linux-x86_64.tar.xz`, its manifest and
+`SHA256SUMS-full-pack` after the release exists. Before the first release that
+carries it, read the licence notes in docs/full-pack.md: the pwndbg bundle's GDB
+and Volatility's licence need the maintainer's decision. `scripts/test-full-pack.py`
+(offline) runs in CI.
+
+Beyond the full pack, upload only `antinomie-X.Y.Z-linux-x86_64.tar.gz` and `SHA256SUMS` to an
 application release. Required notices remain inside the application archive.
 Publish separate guest sources/notices and supporting provenance in the
 documentation repository's support downloads, with a verified link from the

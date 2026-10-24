@@ -52,6 +52,16 @@ asset holds only the executable: its license is the repository's Apache-2.0
 LICENSE at https://github.com/google/magika. The Properties tab runs Magika from
 that folder in the offline sandbox, or the system's copy.
 
+The **full pack**, a separate release asset (docs/full-pack.md), is the exception
+to the statements below that Antinomie does not redistribute these tools: it
+carries unmodified copies of every tool in this section (capa, FLOSS, UPX,
+Detect It Easy, Ghidra and the Temurin JDK, Volatility 3, MemNixFS, Sigma's
+wheels, Magika, GEF, pwndbg, wireproxy and Tor) at the pinned versions, with
+the upstream licence files, any licence text the download lacks, and its own
+`THIRD-PARTY-NOTICES-FULL-PACK.md` that names each tool's source and the
+written offer for the source of its copyleft components (GDB in pwndbg, UPX,
+the JDK, Tor, Qt, libfuse, pySigma). The application archive carries none of them.
+
 The Debugger tab's gdb console runs the host's gdb with GEF or pwndbg. Neither
 is bundled; Library > Analysis tools downloads them on request into the user's
 data folder, pinned by SHA-256, and Antinomie does not redistribute them:
