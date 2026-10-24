@@ -8,7 +8,8 @@
 //! * `Internet`: TCP is connected from the host, DNS resolved by the host.
 //! * `InetSim`: every TCP connection and DNS name goes to fake services.
 //! * `Tor`, `Vpn`, `Socks5`: every TCP connection goes through a SOCKS5
-//!   proxy, with the destination name given to the proxy (no DNS leaks).
+//!   proxy (for Tor, a tor Antinomie starts for the run or one the analyst
+//!   runs; for the VPN, wireproxy), with the destination name given to the proxy (no DNS leaks).
 //!
 //! A route that cannot start fails closed: the run does not start, and the
 //! gateway itself starts on `Drop` and returns to it when the run ends.
@@ -29,12 +30,13 @@ mod qemu;
 mod run;
 mod socks;
 mod tcp;
+mod tor;
 mod upstream;
 
 pub use self::{
     config::{
-        InetSimConfig, InetSimMode, RouteConfig, RouteSpec, Socks5Config, TorConfig, VpnConfig,
-        load_config, save_config, tool_on_path,
+        InetSimConfig, InetSimMode, RouteConfig, RouteSpec, Socks5Config, TorConfig, TorMode,
+        VpnConfig, load_config, save_config, tool_on_path,
     },
     gateway::{Claimed, Gateway, GatewayNet},
     qemu::require_qemu_support,
@@ -52,7 +54,7 @@ pub enum RouteKind {
     Internet,
     /// Fake services (INetSim or the built-in responder).
     InetSim,
-    /// Through a Tor SOCKS port.
+    /// Through Tor: a tor Antinomie runs for the run, or a SOCKS port.
     Tor,
     /// Through WireGuard (wireproxy's SOCKS port).
     Vpn,
@@ -96,7 +98,8 @@ impl RouteKind {
                  service. Nothing leaves the host."
             }
             RouteKind::Tor => {
-                "Every connection goes through the Tor SOCKS port; names are resolved by Tor. \
+                "Every connection goes through Tor, which Antinomie starts for the run and stops \
+                 afterwards (or through a SOCKS address you set); names are resolved by Tor. \
                  UDP other than DNS is dropped."
             }
             RouteKind::Vpn => {
