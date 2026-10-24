@@ -160,13 +160,20 @@ impl TriageView {
                 };
                 if tab(
                     ui,
-                    self.files == value,
+                    self.files == value && !self.history_tab,
                     value.title(),
                     self.section_count(metric),
                     false,
                 ) {
                     self.files = value;
+                    self.history_tab = false;
                 }
+            }
+            let item = TabItem::new("Per-file history").tooltip(
+                "Every file the run touched, and for the chosen one its history as a graph with the processes involved and what was written where",
+            );
+            if widgets::tab(ui, self.history_tab, &item).clicked() {
+                self.history_tab = true;
             }
         });
     }

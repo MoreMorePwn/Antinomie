@@ -931,7 +931,7 @@ list of calls for the live view and the scan runs them through the same
 * **Not covered here.** `memory.write_then_exec`, `memory.unpacked_capture`,
   `evasion.cpuid_probe`, `evasion.timing_probe` and the root-level `rootkit.*` and
   `privilege.cred_overwrite` rules need new guest data. `evasion.packed_image` uses
-  the Static analysis Unpacking verdict (see Unpacking in phases, 0.7.1).
+  the Static analysis Unpacking verdict (see Unpacking layers, 0.7.1).
 * **Antinomie's own activity.** The resource collector of a base from before 0.7.0
   (uploaded as `/tmp/.antinomie-resource-<token>`, which removes itself) is
   recognised by that path and its tasks are left out. The terminal and the analyst's
@@ -1036,12 +1036,14 @@ Host only: `monitor-ui/src/triage/graph/`, nothing needs a guest change.
   screenshots under Xvfb), `graph/bench.rs` (120k findings: paint under 4 ms,
   no repaint when idle, memory, the million-finding build).
 
-### File activity window (0.7.1)
+### File activity: Per-file history tab (0.7.1)
 
-Host only; it uses what the recordings already hold. **Per-file history…** in Triage ›
-Files (and in a Changed file's Details) opens a floating `egui::Window` owned by
-`TriageView::file_window`, drawn from `TriageView::show` over whichever section is
-shown.
+Host only; it uses what the recordings already hold. **Per-file history** is a tab after
+Changed files in Triage › Files (`TriageView::history_tab`; a Changed file's Details
+button sets it and chooses the file). `file_activity::Window` (the tab's state, at
+`TriageView::file_history`) draws into the section's `Ui`. It was a floating
+`egui::Window`, whose side and central panels collapsed to a narrow frame with the
+content spilling outside it, and whose Result column wrapped letter by letter.
 
 * **Index** (`triage/file_activity.rs`). `FileIndex::note_activity` runs for every file
   call (in the early return of calls that change nothing and in the read/write path,
@@ -1238,9 +1240,9 @@ layout). The job's report is the saved one (same id, source path,
   `analysis/workspace_tests.rs` (Run enabled only when finished) and
   `app/tests/analysis.rs` (the command).
 
-### Regex matches window (0.7.1)
+### Regex matches pane and window (0.7.1)
 
-Host only. Core: `monitor-core/src/strings_regex/`; window: `monitor-ui/src/regex_matches.rs`.
+Host only. Core: `monitor-core/src/strings_regex/`; view: `monitor-ui/src/regex_matches.rs` (`RegexWindow`: `pane` for a pane, `show` for a window).
 
 * **Patterns.** `catalog.rs` lists the built-in ones by category (network,
   crypto, keys, Linux behaviour, attribution, encoded); an id never changes
@@ -1276,11 +1278,16 @@ Host only. Core: `monitor-core/src/strings_regex/`; window: `monitor-ui/src/rege
   holds the switched-off ids and up to 200 custom patterns (2,048 characters each,
   compiled with the same limits before they are saved). The Detection rules page has a
   Strings regex tab with the switches, the custom patterns and a "Try on" field.
-* **Window.** The scan runs on a worker thread; reopening a report whose scan
+* **Placement.** Static analysis draws `RegexWindow::pane` on the right of the Strings &
+  regex tab (`workspace/tabs.rs`, a `SidePanel`; a bottom panel under 900 points). The
+  pane asks for its scan once per report (`WorkspaceState::take_regex_request`, taken by
+  `app/panels.rs` as `ReportAction::ScanRegex`) when a Strings or FLOSS section is
+  done. Core dumps keep the floating window (`show`) behind **Regex matches…**.
+* **Scan.** The scan runs on a worker thread; reopening a report whose scan
   exists shows it as it was, **Scan again** rereads the configuration. A pattern that
   does not compile is listed in the window and skipped.
 
-### Unpacking in phases (0.7.1)
+### Unpacking layers (0.7.1)
 
 Host only. `AnalysisKind::Unpacking` is a Triage check (on by default); the code is
 `monitor-core/src/analysis/unpack.rs`, `unpack/upx.rs` and `jobs/layers.rs`.
@@ -1317,6 +1324,12 @@ Host only. `AnalysisKind::Unpacking` is a Triage check (on by default); the code
   `layers.json` in the folder repeats them. `unpack_layers(report)` and
   `packer_verdict(report)` read them back: these hashes are what the IOC window's
   Files list will take (that window is not in this branch).
+* **Tab** (`monitor-ui/src/analysis/workspace/unpacking.rs`). A `Layer` drop-down
+  (`WorkspaceState::unpack_layer`) chooses one layer; a group below shows its size,
+  hash, packer, note and, for an unpacked layer, **Show its analysis**. The first
+  version drew every layer as a framed phase in a horizontal scroll area; the frames
+  took the horizontal layout, so their text laid out in one row and wrapped letter by
+  letter.
 * **Layer analyses** (`jobs/layers.rs`). When a job with layers finishes, the host opens
   each `layer-N.bin` with `open_regular` (confined, not a link), checks size and SHA-256
   against the validated row, copies it as a host-file job into

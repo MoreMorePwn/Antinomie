@@ -314,7 +314,8 @@ The network capture is the guest's own view on every route.
   finding in time, ↑/↓ lane, Enter evidence, `T` spacing, `F` fit, `+`/`-` zoom at the
   selection, Space fold the lane, `H` `M` `L` `I` the tier chips and Show INFO,
   `1`…`9` and `0` the first ten category chips.
-- **Triage › Files › Per-file history…** opens the **File activity** window. The
+- **Triage › Files › Per-file history** is a tab beside Opened, Created and the other
+  categories (it was a floating window). The
   left list holds every file the run touched, in order of the first call (also
   those that were only opened, read or probed); **Hide stdio**, **Hide library**
   and **Changed only** narrow it, the filter matches the path and any other name
@@ -333,7 +334,7 @@ The network capture is the guest's own view on every route.
   name to open the original syscall. An offset the run could not know (an append,
   a descriptor it did not see opened) shows `unknown`, and bytes the kernel did not
   capture show `not captured`; nothing is guessed. In **Changed files**, Details has
-  a **Per-file history…** button that opens the window on that file.
+  a **Per-file history** button that opens the tab on that file.
 - **Triage › Summary** shows the same curve, phases and heat strip for the whole
   run as **Main activity graph**; a click opens the Graph. When nothing is above
   LOW it is one line (`No medium or high activity · 11 low · 340 info`); the
@@ -414,35 +415,38 @@ The network capture is the guest's own view on every route.
   banner); a report the tool could not produce fails with the reason instead
   of showing an empty table. A report takes about a minute on a 2 GiB dump.
 - **Static Analysis**: the selected run's report: an overview, then each
-  category; disassembly and decompilation are full listings with search. In the
-  **Strings** and **FLOSS** tabs, **Regex matches…** opens a window with every
-  pattern match in the strings, by category (Network, Crypto, Keys, Linux
+  category; disassembly and decompilation are full listings with search. The
+  **Strings & regex** tab lists the strings on the left and, on the right (below
+  them in a narrow pane), a **Regex matches** pane with every
+  pattern match in the Strings and FLOSS strings, by category (Network, Crypto, Keys, Linux
   behaviour, Attribution, Encoded) with a type for each match (IPv4 public or
   private, URL, Bitcoin address, persistence path, ...). Matches are checked to
   cut false positives: a domain must end in a real public suffix, `libc.so` and
   `install.sh` are files, a version number is not an IP address, and a Bitcoin
   address, Tox ID or token must pass its checksum or structure. Base64 and hex
   text is decoded and scanned again (two levels deep); the **Inside** column says
-  which. The same window opens from **Core dumps > Strings**, where it also lists
+  which. The same list opens as a window from **Core dumps > Strings**, where it also lists
   the binary `sockaddr_in` and `sockaddr_in6` structures in the core's memory.
   Switch patterns off or add your own in **Library > Detection rules > Strings
-  regex**; **Scan again** reads the change.
+  regex** (**Add patterns**: a name, a category and a regular expression that
+  fills the page's width); **Scan again** reads the change.
 - **Static Analysis > Overview > Categories**: a category the analysis was not
   started with shows **Not requested** and a **Run** button. Run adds that check
   to the same report without starting the analysis again: the specimen kept with
   the report is analysed by the one check, and its tab fills in when it ends.
   The button waits while the analysis is still being made; no VM has to be
   running, and the result is saved with the report like the others.
-- **Static Analysis > Unpacking**: the unpack chain as phases, left to right: the
-  file as it came (packed with UPX or not), then each layer UPX recovered from the
-  one before, with size, SHA-256 and the packer found in it. A file packed twice
+- **Static Analysis > Unpacking**: the unpack chain, one layer at a time. A
+  **Layer** drop-down chooses the file as it came (packed with UPX or not) or a layer
+  UPX recovered from the one before; below it are that layer's size, SHA-256 and the
+  packer found in it. A file packed twice
   gives two layers. UPX is needed for this (**Tools > Analysis tools** installs it);
   without it a packed file is reported as packed and left alone. Files whose UPX
   headers were tampered with (the `UPX!` magic overwritten, data appended) are
   repaired on a copy first and the layer says so (`UPX (header repaired)`).
   Each layer is analysed as a report of its own, the same checks as the packed
   file's, listed in the **Report** box as "layer N unpacked by UPX"; **Show its
-  analysis** in the phase opens it. The original file is never changed, the layers
+  analysis** under the chosen layer opens it. The original file is never changed, the layers
   are plain files that are not executable, at most three layers of 64 MiB each are
   kept, and unpacking stops after 4 minutes. Other packers are not unpacked; they
   need the program to run, which is for a later version (guest memory capture).

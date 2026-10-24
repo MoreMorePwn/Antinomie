@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The File activity graph and window: how a file's calls become nodes on
-//! lanes, the list's filters, and the window through a real egui pass.
+//! lanes, the list's filters, and the tab through a real egui pass.
 use super::graph::{self, NODES_MAX};
 use super::window::{content_text, run_text, Order, Window};
 use super::*;
@@ -256,6 +256,7 @@ struct Harness {
     ctx: egui::Context,
     window: Window,
     time: f64,
+    size: egui::Vec2,
 }
 
 const SIZE: egui::Vec2 = egui::vec2(1400.0, 900.0);
@@ -264,13 +265,18 @@ impl Harness {
     fn new() -> Self {
         let ctx = egui::Context::default();
         crate::theme::install(&ctx);
-        let mut window = Window::default();
-        window.open();
+        let window = Window::default();
         Self {
             ctx,
             window,
             time: 0.0,
+            size: SIZE,
         }
+    }
+
+    fn frame_sized(&mut self, activity: &Activity, size: egui::Vec2) -> Vec<(String, Rect)> {
+        self.size = size;
+        self.frame(activity, Vec::new())
     }
 
     fn frame(&mut self, activity: &Activity, events: Vec<egui::Event>) -> Vec<(String, Rect)> {
@@ -278,12 +284,14 @@ impl Harness {
         let window = &mut self.window;
         let output = self.ctx.run(
             egui::RawInput {
-                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, SIZE)),
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, self.size)),
                 events,
                 time: Some(self.time),
                 ..Default::default()
             },
-            |ctx| window.show(ctx, Some(activity), None),
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| window.show(ui, Some(activity), None));
+            },
         );
         fn collect(shape: &egui::epaint::Shape, out: &mut Vec<(String, Rect)>) {
             match shape {
@@ -411,11 +419,7 @@ fn a_call_opens_its_original_syscall_and_the_window_opens_on_a_given_path() {
 }
 
 #[test]
-fn a_closed_window_draws_nothing_and_an_unindexed_run_says_so() {
-    let activity = activity();
-    let mut harness = Harness::new();
-    harness.window.open = false;
-    assert!(harness.settle(&activity).is_empty());
+fn an_unindexed_run_says_so() {
     let mut harness = Harness::new();
     let window = &mut harness.window;
     let output = harness.ctx.run(
@@ -423,8 +427,31 @@ fn a_closed_window_draws_nothing_and_an_unindexed_run_says_so() {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, SIZE)),
             ..Default::default()
         },
-        |ctx| window.show(ctx, None, None),
+        |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| window.show(ui, None, None));
+        },
     );
     assert!(!output.shapes.is_empty());
-    assert!(window.is_open());
+}
+
+#[test]
+fn a_narrow_pane_stacks_the_file_list_above_the_history() {
+    let activity = activity();
+    let mut harness = Harness::new();
+    harness.window.open_on("/tmp/payload");
+    let mut shown = Vec::new();
+    for _ in 0..4 {
+        shown = harness.frame_sized(&activity, egui::vec2(520.0, 900.0));
+    }
+    let list = shown
+        .iter()
+        .find(|(text, _)| text == "Filter by path")
+        .expect("the filter")
+        .1;
+    let history = shown
+        .iter()
+        .find(|(text, _)| text == "All calls")
+        .expect("the calls")
+        .1;
+    assert!(history.top() > list.bottom(), "{history:?} under {list:?}");
 }

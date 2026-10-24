@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! The File activity window: every file the run touched on the left, and for
+//! The Per-file history tab of Triage > Files: every file the run touched on the left, and for
 //! the chosen one its history as a graph, the calls behind a chosen node and
 //! what is known of the bytes the run changed.
 use super::graph::{self, Layout};
@@ -32,7 +32,6 @@ impl Order {
 }
 
 pub(in crate::triage) struct Window {
-    pub(super) open: bool,
     pub(super) filter: String,
     pub(super) hide_standard_io: bool,
     pub(super) hide_libraries: bool,
@@ -46,7 +45,6 @@ pub(in crate::triage) struct Window {
 impl Default for Window {
     fn default() -> Self {
         Self {
-            open: false,
             filter: String::new(),
             hide_standard_io: true,
             hide_libraries: true,
@@ -59,21 +57,11 @@ impl Default for Window {
 }
 
 impl Window {
-    pub(in crate::triage) fn open(&mut self) {
-        self.open = true;
-    }
-
-    /// Open the window on the file at `path`.
+    /// Show the file at `path` (the caller switches to the tab).
     pub(in crate::triage) fn open_on(&mut self, path: &str) {
-        self.open = true;
         self.filter.clear();
         self.selected = Some((path.to_owned(), 0));
         self.node = None;
-    }
-
-    #[cfg(test)]
-    pub(in crate::triage) fn is_open(&self) -> bool {
-        self.open
     }
 
     /// The path of the chosen file and the chosen node, for the tests.
@@ -132,28 +120,20 @@ impl Window {
             })
     }
 
+    /// The tab's content: the file list on the left, the chosen file's
+    /// history on the right.
     pub(in crate::triage) fn show(
         &mut self,
-        ctx: &egui::Context,
+        ui: &mut egui::Ui,
         activity: Option<&Activity>,
         clock: Option<antinomie_monitor_core::HostClockAnchor>,
     ) {
-        if !self.open {
-            return;
+        match activity {
+            Some(activity) => self.body(ui, activity, clock),
+            None => {
+                theme::loading_weak(ui, "Indexing this run’s files…");
+            }
         }
-        let mut open = true;
-        egui::Window::new("File activity · per-file history")
-            .id(egui::Id::new("triage-file-activity"))
-            .open(&mut open)
-            .default_size([1040.0, 600.0])
-            .resizable(true)
-            .show(ctx, |ui| match activity {
-                Some(activity) => self.body(ui, activity, clock),
-                None => {
-                    theme::loading_weak(ui, "Indexing this run’s files…");
-                }
-            });
-        self.open = open;
     }
 
     fn body(
@@ -175,10 +155,18 @@ impl Window {
             );
         }
         let shown = self.shown(activity);
-        egui::SidePanel::left("file-activity-list")
-            .resizable(true)
-            .default_width(310.0)
-            .show_inside(ui, |ui| self.list(ui, activity, &shown));
+        // Beside each other when there is room, else the list above the history.
+        if ui.available_width() >= STACK_BELOW {
+            egui::SidePanel::left("file-activity-list")
+                .resizable(true)
+                .default_width(310.0)
+                .show_inside(ui, |ui| self.list(ui, activity, &shown));
+        } else {
+            egui::TopBottomPanel::top("file-activity-list")
+                .resizable(true)
+                .default_height(230.0)
+                .show_inside(ui, |ui| self.list(ui, activity, &shown));
+        }
         egui::CentralPanel::default().show_inside(ui, |ui| {
             match self.selected_file(activity) {
                 Some(file) => self.history(ui, activity, file, clock),
@@ -419,7 +407,9 @@ impl Window {
         if let Some(other) = &event.other_path {
             result.push_str(&format!(" → {other}"));
         }
-        ui.add(egui::Label::new(result).wrap());
+        // A result is a short phrase; wrapping it in a table cell broke it
+        // letter by letter.
+        ui.add(egui::Label::new(result).extend());
         match event.offset {
             Some(offset) => ui.monospace(format!("0x{offset:x}")),
             None if event.len.is_some() => ui.weak("unknown"),
@@ -433,6 +423,9 @@ impl Window {
         ui.end_row();
     }
 }
+
+/// Narrower than this, the file list sits above the history.
+const STACK_BELOW: f32 = 700.0;
 
 /// Calls drawn in the table at once.
 const CALLS_SHOWN: usize = 200;

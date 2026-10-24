@@ -151,16 +151,14 @@ impl TriageView {
     }
 
     pub(super) fn files(&mut self, ui: &mut egui::Ui, input: &TriageInput<'_>) {
-        if ui
-            .button("Per-file history…")
-            .on_hover_text(
-                "Open the File activity window: every file the run touched, and for the chosen one its history as a graph with the processes involved and what was written where",
-            )
-            .clicked()
-        {
-            self.file_window.open();
-        }
         self.file_tabs(ui);
+        if self.history_tab {
+            let activity = self.scan.as_ref().map(|scan| scan.file_activity.clone());
+            let clock = self.scan.as_ref().and_then(|scan| scan.clock_anchor);
+            self.file_history
+                .show(ui, activity.as_deref(), clock.or(input.clock_anchor));
+            return;
+        }
         let tab = self.files;
         let index = tab.slot();
         let (retained, total) = self.scan.as_ref().map_or((0, 0), |scan| {

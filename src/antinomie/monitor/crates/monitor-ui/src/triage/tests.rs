@@ -116,7 +116,9 @@ fn native_triage_fixture() {
             scan.read.push(row);
         }
     }
-    scan.file_changes = index.finish();
+    let (changes, activity) = index.finish_all();
+    scan.file_changes = changes;
+    scan.file_activity = Arc::new(activity);
     scan.changed = scan
         .file_changes
         .iter()
@@ -143,6 +145,12 @@ fn native_triage_fixture() {
         "changed" => {
             view.section = Section::Files;
             view.files = FileTab::Changed;
+        }
+        "history" => {
+            view.section = Section::Files;
+            view.files = FileTab::Changed;
+            view.file_history.open_on("/tmp/analysis-note.txt");
+            view.history_tab = true;
         }
         "http" => {
             view.section = Section::Network;

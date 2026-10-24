@@ -521,6 +521,11 @@ impl MonitorApp {
                     view.preview.as_ref(),
                     view.listing.as_ref(),
                 );
+                let action = action.or_else(|| {
+                    view.state
+                        .take_regex_request()
+                        .map(|report_id| crate::analysis::ReportAction::ScanRegex { report_id })
+                });
                 self.analysis_action("workspace", action);
             }
             Panel::RunHistory => self.run_history(ui),
