@@ -4,7 +4,7 @@
 //! when nothing is above LOW it is one line, and a click opens the full graph.
 use super::index::GraphIndex;
 use super::paint::{self, Colors};
-use super::view::{self, Frame, AXIS_H, CURVE_H, GAP, HEAT_ROW_H, PHASE_H};
+use super::view::{self, Frame, Metrics};
 use super::*;
 use eframe::egui::{Align2, Pos2, Sense};
 
@@ -21,6 +21,8 @@ pub(in crate::triage) struct Strip {
 pub(in crate::triage) struct Outcome {
     /// The strip was clicked: show the full graph.
     pub open_graph: bool,
+    /// The pop-out icon was clicked: show the graph in its own window.
+    pub open_window: bool,
 }
 
 /// The collapsed line: `No medium or high activity · 11 low · 340 info`.
@@ -69,6 +71,10 @@ impl Strip {
             if busy {
                 theme::spinner(ui);
             }
+            outcome.open_window = ui
+                .add(egui::Button::new(egui_phosphor::regular::ARROW_SQUARE_OUT).frame(false))
+                .on_hover_text("Open the activity graph in its own window")
+                .clicked();
             let line = summary_line(tiers);
             if open {
                 ui.label(RichText::new(line).small().color(theme::muted()));
@@ -89,8 +95,7 @@ impl Strip {
         let categories: Vec<usize> = (0..13)
             .filter(|bit| overview.categories & (1 << bit) != 0)
             .collect();
-        let height =
-            PHASE_H + GAP + CURVE_H + GAP + HEAT_ROW_H * categories.len() as f32 + GAP + AXIS_H;
+        let height = Metrics::strip_height(categories.len());
         let (rect, response) =
             ui.allocate_exact_size(egui::vec2(ui.available_width(), height), Sense::click());
         if overview.is_empty() && overview.geometry.is_none() {
@@ -104,7 +109,12 @@ impl Strip {
             return outcome;
         }
         let colors = Colors::current();
-        let frame = Frame::new(rect, view::fitted(overview.extent()), categories.len());
+        let frame = Frame::new(
+            rect,
+            view::fitted(overview.extent()),
+            categories.len(),
+            Metrics::compact(),
+        );
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 0.0, colors.panel);
         paint::phase_band(&painter, &frame, overview, &colors);
@@ -146,7 +156,7 @@ impl Strip {
             );
         }
         for (row, category) in categories.iter().enumerate() {
-            let y = frame.heat.top() + row as f32 * HEAT_ROW_H + HEAT_ROW_H / 2.0;
+            let y = frame.heat.top() + row as f32 * frame.m.heat_h + frame.m.heat_h / 2.0;
             paint::label(
                 &painter,
                 Pos2::new(left, y),

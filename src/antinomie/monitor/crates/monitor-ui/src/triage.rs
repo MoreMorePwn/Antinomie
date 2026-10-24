@@ -48,6 +48,9 @@ mod files;
 mod finding_bar;
 mod findings;
 mod graph;
+pub(crate) const GRAPH_WINDOW_SIZE: [f32; 2] = graph::DEFAULT_SIZE;
+#[cfg(test)]
+mod idle_tests;
 mod kernel_records;
 mod network;
 mod network_index;
@@ -58,8 +61,6 @@ mod process_details;
 mod process_tree;
 mod properties;
 mod refresh;
-#[cfg(test)]
-mod idle_tests;
 #[cfg(test)]
 mod refresh_tests;
 mod rules;
@@ -195,6 +196,8 @@ pub(crate) struct TriageView {
     scan_request: ScanRequest,
     /// The graph's window, selection and folded lanes.
     graph: graph::State,
+    /// The graph in its own window.
+    graph_window: graph::Window,
     /// The Summary strip's open or closed choice, for the session.
     strip: graph::Strip,
     /// Which HIGH rules of the run on screen already raised a toast.
@@ -247,6 +250,7 @@ impl Default for TriageView {
             bpf_export_status: String::new(),
             scan_request: ScanRequest::default(),
             graph: graph::State::default(),
+            graph_window: graph::Window::default(),
             strip: graph::Strip::default(),
             high_watch: graph::HighWatch::default(),
             toast_high: false,
@@ -393,6 +397,7 @@ impl TriageView {
         if self.context_key.as_deref() != Some(&key) {
             self.stop_scan();
             details::clear(ctx);
+            self.graph_window.close();
             self.context_key = Some(key);
         }
         self.details_directory = input.archive.map(Path::to_path_buf);
@@ -435,6 +440,7 @@ impl TriageView {
     /// triage section is showing.
     pub(crate) fn show_finding_windows(&mut self, ctx: &egui::Context) {
         self.detection.show_windows(ctx);
+        self.show_graph_window(ctx);
     }
 
     /// `Some(call_id)` on the frame a Suspicious activity row is clicked.

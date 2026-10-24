@@ -20,6 +20,7 @@ mod strip;
 mod tab;
 mod view;
 mod widget;
+mod window;
 
 #[cfg(test)]
 mod bench;
@@ -27,12 +28,15 @@ mod bench;
 mod sync_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod window_tests;
 
 pub(super) use index::{Builder, GraphIndex};
 pub(super) use lanes::Lanes;
 pub(super) use notify::{HighRule, HighWatch};
 pub(super) use strip::Strip;
 pub(super) use view::State;
+pub(super) use window::{Window, DEFAULT_SIZE};
 
 /// What one scan hands the UI for the graph.
 #[derive(Default)]

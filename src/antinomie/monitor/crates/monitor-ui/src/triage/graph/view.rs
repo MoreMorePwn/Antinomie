@@ -3,20 +3,82 @@
 //! where a time falls on the screen, and how zoom and pan move the window.
 use eframe::egui::{Pos2, Rect};
 
-/// Width of the lane-name column.
-pub(super) const LABEL_W: f32 = 168.0;
-pub(super) const PHASE_H: f32 = 18.0;
-pub(super) const CURVE_H: f32 = 46.0;
-pub(super) const HEAT_ROW_H: f32 = 11.0;
-pub(super) const AXIS_H: f32 = 24.0;
-pub(super) const LANE_H: f32 = 20.0;
 pub(super) const GAP: f32 = 3.0;
+/// The thinnest and the thickest a lane row is drawn.
+pub(super) const LANE_MIN: f32 = 24.0;
+pub(super) const LANE_MAX: f32 = 84.0;
+/// The graph never asks for less height than this; a shorter pane scrolls.
+pub(in crate::triage) const MIN_HEIGHT: f32 = 420.0;
 /// A bucket is drawn at the level where it is at least this wide.
 pub(super) const MIN_BUCKET_PX: f64 = 3.0;
 /// Individual findings are drawn when the window holds fewer than this.
 pub(super) const INDIVIDUAL_BELOW: usize = 5_000;
 /// The shortest window: one microsecond.
 pub(super) const MIN_SPAN_NS: f64 = 1_000.0;
+
+/// How tall each part is. The embedded and the windowed graph size their lanes
+/// and bands to the room they are given; the Summary strip is compact.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Metrics {
+    /// Width of the lane-name column.
+    pub label_w: f32,
+    pub phase_h: f32,
+    pub curve_h: f32,
+    /// One category row of the heat strip.
+    pub heat_h: f32,
+    pub axis_h: f32,
+    pub lane_h: f32,
+}
+
+impl Metrics {
+    /// The Summary strip: no lanes, small bands.
+    pub(super) fn compact() -> Self {
+        Self {
+            label_w: 168.0,
+            phase_h: 18.0,
+            curve_h: 46.0,
+            heat_h: 11.0,
+            axis_h: 24.0,
+            lane_h: 20.0,
+        }
+    }
+
+    /// The height of the strip's bands and axis.
+    pub(super) fn strip_height(heat_rows: usize) -> f32 {
+        let m = Self::compact();
+        m.phase_h + GAP + m.curve_h + GAP + m.heat_h * heat_rows as f32 + GAP + m.axis_h
+    }
+
+    /// Sizes for `lanes` rows in `whole`: lanes grow up to [`LANE_MAX`] to fill
+    /// the room, and a run with few lanes gives what is left to the curve.
+    pub(super) fn roomy(whole: Rect, heat_rows: usize, lanes: usize) -> Self {
+        let heat_h = if heat_rows > 8 { 12.0 } else { 14.0 };
+        let (phase_h, axis_h, curve_base) = (22.0, 26.0, 64.0);
+        let heat = if heat_rows > 0 {
+            heat_h * heat_rows as f32 + GAP
+        } else {
+            0.0
+        };
+        let fixed = phase_h + GAP + curve_base + GAP + heat + GAP + axis_h;
+        let area = (whole.height() - fixed).max(0.0);
+        let rows = lanes.max(1) as f32;
+        let lane_h = (area / rows).clamp(LANE_MIN, LANE_MAX);
+        let spare = (area - rows * lane_h).max(0.0);
+        Self {
+            label_w: (whole.width() * 0.16).clamp(190.0, 260.0),
+            phase_h,
+            curve_h: curve_base + spare.min(120.0),
+            heat_h,
+            axis_h,
+            lane_h,
+        }
+    }
+
+    /// The radius of a marker in a row this tall.
+    pub(super) fn glyph(&self) -> f32 {
+        (self.lane_h * 0.24).clamp(5.0, 9.0)
+    }
+}
 
 /// A drag in progress.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -63,11 +125,12 @@ pub(super) struct Frame {
     pub axis: Rect,
     pub t0: f64,
     pub t1: f64,
+    pub m: Metrics,
 }
 
 impl Frame {
-    pub(super) fn new(whole: Rect, window: (f64, f64), heat_rows: usize) -> Self {
-        let plot_left = whole.left() + LABEL_W;
+    pub(super) fn new(whole: Rect, window: (f64, f64), heat_rows: usize, m: Metrics) -> Self {
+        let plot_left = whole.left() + m.label_w;
         let mut y = whole.top();
         let band = |y: &mut f32, height: f32| {
             let rect = Rect::from_min_max(
@@ -77,10 +140,10 @@ impl Frame {
             *y += height + GAP;
             rect
         };
-        let phases = band(&mut y, PHASE_H);
-        let curve = band(&mut y, CURVE_H);
-        let heat = band(&mut y, HEAT_ROW_H * heat_rows as f32);
-        let axis_top = (whole.bottom() - AXIS_H).max(y);
+        let phases = band(&mut y, m.phase_h);
+        let curve = band(&mut y, m.curve_h);
+        let heat = band(&mut y, m.heat_h * heat_rows as f32);
+        let axis_top = (whole.bottom() - m.axis_h).max(y);
         let lanes = Rect::from_min_max(
             Pos2::new(plot_left, y),
             Pos2::new(whole.right(), (axis_top - GAP).max(y)),
@@ -104,6 +167,7 @@ impl Frame {
             axis,
             t0: window.0,
             t1: window.1.max(window.0 + 1.0),
+            m,
         }
     }
 
@@ -122,13 +186,13 @@ impl Frame {
 
     /// The rows whose band touches the lane area at `scroll`.
     pub(super) fn visible_rows(&self, scroll: f32, rows: usize) -> std::ops::Range<usize> {
-        let first = (scroll / LANE_H).floor().max(0.0) as usize;
-        let last = ((scroll + self.lanes.height()) / LANE_H).ceil() as usize;
+        let first = (scroll / self.m.lane_h).floor().max(0.0) as usize;
+        let last = ((scroll + self.lanes.height()) / self.m.lane_h).ceil() as usize;
         first.min(rows)..last.min(rows)
     }
 
     pub(super) fn row_top(&self, row: usize, scroll: f32) -> f32 {
-        self.lanes.top() + row as f32 * LANE_H - scroll
+        self.lanes.top() + row as f32 * self.m.lane_h - scroll
     }
 
     /// The row under `y` in the lane area.
@@ -136,7 +200,7 @@ impl Frame {
         if y < self.lanes.top() || y >= self.lanes.bottom() {
             return None;
         }
-        let row = ((y - self.lanes.top() + scroll) / LANE_H).floor();
+        let row = ((y - self.lanes.top() + scroll) / self.m.lane_h).floor();
         (row >= 0.0 && (row as usize) < rows).then_some(row as usize)
     }
 }
@@ -146,6 +210,16 @@ pub(super) fn fitted(extent: (u64, u64)) -> (f64, f64) {
     let (lo, hi) = (extent.0 as f64, extent.1 as f64);
     let margin = ((hi - lo) * 0.01).max(MIN_SPAN_NS / 2.0);
     (lo - margin, hi + margin)
+}
+
+/// The window a graph opens at: the findings with some room, however short
+/// their stretch of a long run is (a burst of a few milliseconds at the end of
+/// a minute is shown as the burst).
+pub(super) fn fitted_findings(findings: (u64, u64)) -> (f64, f64) {
+    let (lo, hi) = (findings.0 as f64, findings.1 as f64);
+    // A single finding has no stretch: half a millisecond either side.
+    let pad = ((hi - lo) * 0.06).max(500_000.0);
+    (lo - pad, hi + pad)
 }
 
 /// `window` zoomed by `factor` around `anchor`, kept inside `bounds`.

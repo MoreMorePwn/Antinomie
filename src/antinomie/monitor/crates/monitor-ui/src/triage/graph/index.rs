@@ -247,6 +247,10 @@ pub(in crate::triage) struct GraphIndex {
     pub categories: u16,
     /// Whether lane 0 (not tied to a process) holds a finding.
     pub lane0_used: bool,
+    /// The whole run: the findings and every process's first and last sight.
+    /// The buckets and `extent` cover the findings only, so a burst at the
+    /// end of a long run still gets the full resolution.
+    pub run: Option<(u64, u64)>,
 }
 
 impl GraphIndex {
@@ -258,7 +262,12 @@ impl GraphIndex {
         self.geometry.unwrap_or(Geometry::new(0, 0))
     }
 
-    /// The first and last ns the graph spans.
+    /// The first and last ns of the whole run, processes included.
+    pub(in crate::triage) fn run_extent(&self) -> (u64, u64) {
+        self.run.unwrap_or_else(|| self.extent())
+    }
+
+    /// The first and last ns of the findings.
     pub(in crate::triage) fn extent(&self) -> (u64, u64) {
         let geometry = self.geometry();
         (geometry.origin, geometry.end)
@@ -464,7 +473,7 @@ impl Builder {
     }
 
     pub(in crate::triage) fn finish(mut self) -> GraphIndex {
-        let mut span = self.extent;
+        let mut span: Option<(u64, u64)> = None;
         let mut widen = |from: u64, to: u64| {
             span = Some(span.map_or((from, to), |(lo, hi)| (lo.min(from), hi.max(to))));
         };
@@ -497,6 +506,7 @@ impl Builder {
         let Some((lo, hi)) = span else {
             return GraphIndex {
                 unplaced: self.unplaced,
+                run: self.extent,
                 lanes: self.lanes,
                 ..GraphIndex::default()
             };
@@ -559,6 +569,10 @@ impl Builder {
             unplaced: self.unplaced,
             categories,
             lane0_used: lane0,
+            run: Some(
+                self.extent
+                    .map_or((lo, hi), |(a, b)| (a.min(lo), b.max(hi))),
+            ),
         }
     }
 

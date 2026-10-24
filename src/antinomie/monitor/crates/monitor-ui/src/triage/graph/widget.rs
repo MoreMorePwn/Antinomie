@@ -5,7 +5,7 @@ use super::index::GraphIndex;
 use super::input::{self, Action, Hit, Layout};
 use super::lanes::Lane;
 use super::paint::{self, Colors};
-use super::view::{self, Drag, Frame, State, INDIVIDUAL_BELOW, LANE_H};
+use super::view::{self, Drag, Frame, State, INDIVIDUAL_BELOW};
 use super::*;
 use crate::triage::rules::{Category, Tier};
 use eframe::egui::{
@@ -55,7 +55,9 @@ pub(in crate::triage) fn show(ui: &mut egui::Ui, state: &mut State, cfg: &Config
 }
 
 fn window_of(state: &State, index: &GraphIndex) -> (f64, f64) {
-    state.window.unwrap_or_else(|| view::fitted(index.extent()))
+    state
+        .window
+        .unwrap_or_else(|| view::fitted_findings(index.extent()))
 }
 
 /// Mouse and keyboard.
@@ -68,7 +70,7 @@ fn handle(
     actions: &mut Vec<Action>,
 ) {
     let index = cfg.index;
-    let bounds = view::bounds(index.extent());
+    let bounds = view::bounds(index.run_extent());
     let layout = Layout::new(rect, state, index);
     let frame = layout.frame;
     // Wheel, pinch and Ctrl+wheel.
@@ -162,6 +164,7 @@ fn click(
             }
         }
         Some(Hit::Fit) => state.fit(),
+        Some(Hit::Run) => state.window = Some(view::fitted(index.run_extent())),
         Some(Hit::Axis) | None => {}
     }
 }
@@ -271,7 +274,7 @@ fn keys(
     bounds: (f64, f64),
     actions: &mut Vec<Action>,
 ) {
-    const WATCHED: [Key; 28] = [
+    const WATCHED: [Key; 29] = [
         Key::ArrowLeft,
         Key::ArrowRight,
         Key::ArrowUp,
@@ -280,6 +283,7 @@ fn keys(
         Key::Space,
         Key::Escape,
         Key::F,
+        Key::R,
         Key::H,
         Key::M,
         Key::L,
@@ -342,6 +346,7 @@ fn keys(
                 }
             }
             Key::F => state.fit(),
+            Key::R => state.window = Some(view::fitted(index.run_extent())),
             Key::Plus | Key::Equals | Key::Minus => {
                 let factor = if key == Key::Minus { 0.5 } else { 2.0 };
                 let anchor = selected
@@ -399,7 +404,12 @@ fn select(
     let window = window_of(state, index);
     state.window = Some(input::including(window, found.first_ns as f64, bounds));
     if let Some(row) = layout.row_of(found.lane) {
-        state.scroll = input::scroll_to(row, layout.scroll, layout.frame.lanes.height());
+        state.scroll = input::scroll_to(
+            row,
+            layout.scroll,
+            layout.frame.lanes.height(),
+            layout.frame.m.lane_h,
+        );
     }
 }
 
@@ -420,10 +430,10 @@ fn draw(painter: &Painter, layout: &Layout, state: &State, cfg: &Config) {
     paint::axis(
         painter,
         frame,
-        index.extent().0,
+        index.run_extent().0,
         cfg.clock,
         colors,
-        layout.fit.left() - 4.0,
+        layout.run.left() - 4.0,
     );
     footer(painter, layout, cfg);
 }
@@ -454,7 +464,7 @@ fn side_labels(painter: &Painter, layout: &Layout, colors: &Colors, tallest: u32
         Pos2::new(left, frame.phases.center().y),
         Align2::LEFT_CENTER,
         "phases",
-        11.0,
+        12.0,
         colors.muted,
     );
     paint::label(
@@ -462,7 +472,7 @@ fn side_labels(painter: &Painter, layout: &Layout, colors: &Colors, tallest: u32
         Pos2::new(left, frame.curve.top() + 8.0),
         Align2::LEFT_CENTER,
         "severity",
-        11.0,
+        12.0,
         colors.muted,
     );
     if tallest > 0 {
@@ -471,7 +481,7 @@ fn side_labels(painter: &Painter, layout: &Layout, colors: &Colors, tallest: u32
             Pos2::new(left, frame.curve.top() + 22.0),
             Align2::LEFT_CENTER,
             &format!("max {tallest}"),
-            10.0,
+            11.0,
             colors.muted,
         );
     }
@@ -480,11 +490,11 @@ fn side_labels(painter: &Painter, layout: &Layout, colors: &Colors, tallest: u32
             painter,
             Pos2::new(
                 left,
-                frame.heat.top() + row as f32 * view::HEAT_ROW_H + view::HEAT_ROW_H / 2.0,
+                frame.heat.top() + row as f32 * frame.m.heat_h + frame.m.heat_h / 2.0,
             ),
             Align2::LEFT_CENTER,
             Category::ALL[*category].chip(),
-            9.5,
+            (frame.m.heat_h - 2.0).min(10.5),
             colors.muted,
         );
     }
@@ -507,7 +517,7 @@ fn lanes(painter: &Painter, layout: &Layout, state: &State, cfg: &Config) {
         let top = frame.row_top(row, layout.scroll);
         let band = Rect::from_min_max(
             Pos2::new(frame.labels.left(), top),
-            Pos2::new(frame.whole.right(), top + LANE_H),
+            Pos2::new(frame.whole.right(), top + frame.m.lane_h),
         );
         clip.rect_filled(band, 0.0, colors.lane(row));
         lifeline_and_name(&clip, layout, index, colors, row, top);
@@ -525,7 +535,7 @@ fn lanes(painter: &Painter, layout: &Layout, state: &State, cfg: &Config) {
             clip.rect_stroke(
                 Rect::from_min_max(
                     Pos2::new(frame.labels.left(), top),
-                    Pos2::new(frame.whole.right(), top + LANE_H),
+                    Pos2::new(frame.whole.right(), top + frame.m.lane_h),
                 ),
                 0.0,
                 Stroke::new(1.0_f32, colors.selection),
@@ -546,7 +556,7 @@ fn lifeline_and_name(
     let frame = &layout.frame;
     let lane_index = layout.rows.lanes[row];
     let lane: &Lane = &index.lanes.list[lane_index as usize];
-    let center = top + LANE_H / 2.0;
+    let center = top + frame.m.lane_h / 2.0;
     if lane.last_ns > 0 {
         let (from, to) = (frame.x(lane.first_ns as f64), frame.x(lane.last_ns as f64));
         let stroke = Stroke::new(2.0_f32, colors.line);
@@ -575,13 +585,13 @@ fn lifeline_and_name(
     painter
         .with_clip_rect(Rect::from_min_max(
             Pos2::new(x, top),
-            Pos2::new(frame.labels.right() - 2.0, top + LANE_H),
+            Pos2::new(frame.labels.right() - 2.0, top + frame.m.lane_h),
         ))
         .text(
             Pos2::new(x + 14.0, center),
             Align2::LEFT_CENTER,
             name,
-            eframe::egui::FontId::proportional(12.0),
+            eframe::egui::FontId::proportional(if frame.m.lane_h >= 30.0 { 13.0 } else { 12.0 }),
             if lane_index == 0 {
                 colors.muted
             } else {
@@ -682,7 +692,7 @@ fn markers(
                 &mut shapes,
                 record.category,
                 Pos2::new(x, y),
-                5.0,
+                frame.m.glyph(),
                 color,
                 record.flags & index::HOLLOW != 0,
             );
@@ -691,14 +701,14 @@ fn markers(
                     Pos2::new(x + 7.0, y),
                     Align2::LEFT_CENTER,
                     format!("×{}", record.count),
-                    eframe::egui::FontId::proportional(10.0),
+                    eframe::egui::FontId::proportional(11.0),
                     colors.text,
                 );
             }
             if state.selected == Some(at) {
                 shapes.push(Shape::circle_stroke(
                     Pos2::new(x, y),
-                    8.0,
+                    frame.m.glyph() + 3.5,
                     Stroke::new(2.0_f32, colors.text),
                 ));
             }
@@ -733,7 +743,14 @@ fn markers(
             let flush = |pending: Option<(f32, index::Cell)>, shapes: &mut Vec<Shape>| {
                 if let Some((x, cell)) = pending {
                     let color = colors.tier[usize::from(cell.top).min(3)];
-                    paint::glyph(shapes, cell.lead, Pos2::new(x, y), 3.6, color, false);
+                    paint::glyph(
+                        shapes,
+                        cell.lead,
+                        Pos2::new(x, y),
+                        frame.m.glyph() * 0.72,
+                        color,
+                        false,
+                    );
                     if cell.total() > 1 {
                         shapes.push(Shape::circle_filled(
                             Pos2::new(x + 4.0, y - 4.5),
@@ -763,7 +780,7 @@ fn markers(
             {
                 shapes.push(Shape::circle_stroke(
                     Pos2::new(frame.x(record.first_ns as f64), layout.row_center(row)),
-                    8.0,
+                    frame.m.glyph() + 3.5,
                     Stroke::new(2.0_f32, colors.text),
                 ));
             }
@@ -829,18 +846,20 @@ fn footer(painter: &Painter, layout: &Layout, cfg: &Config) {
         10.5,
         colors.muted,
     );
-    painter.rect_stroke(
-        layout.fit,
-        3.0,
-        Stroke::new(1.0_f32, colors.line),
-        eframe::egui::StrokeKind::Inside,
-    );
-    paint::label(
-        painter,
-        layout.fit.center(),
-        Align2::CENTER_CENTER,
-        "Fit",
-        11.0,
-        colors.text,
-    );
+    for (rect, text) in [(layout.fit, "Fit"), (layout.run, "Run")] {
+        painter.rect_stroke(
+            rect,
+            3.0,
+            Stroke::new(1.0_f32, colors.line),
+            eframe::egui::StrokeKind::Inside,
+        );
+        paint::label(
+            painter,
+            rect.center(),
+            Align2::CENTER_CENTER,
+            text,
+            11.0,
+            colors.text,
+        );
+    }
 }

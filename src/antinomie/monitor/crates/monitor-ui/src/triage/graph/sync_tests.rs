@@ -16,7 +16,7 @@ use crate::triage::*;
 
 /// Three tasks of the run, each making rwx calls: findings in several lanes
 /// at several times.
-fn recording() -> PacketSpool {
+pub(super) fn recording() -> PacketSpool {
     let spool = PacketSpool::new().unwrap();
     let mut raw = Vec::new();
     write_rwx_tasks(&mut raw, 0..12, |call| 60 + (call % 3) as u32);
@@ -24,7 +24,7 @@ fn recording() -> PacketSpool {
     spool
 }
 
-fn scan_with(spool: &PacketSpool, request: &ScanRequest) -> ArchiveScan {
+pub(super) fn scan_with(spool: &PacketSpool, request: &ScanRequest) -> ArchiveScan {
     scan_archive_query(
         &spool.directory,
         None,
@@ -35,7 +35,7 @@ fn scan_with(spool: &PacketSpool, request: &ScanRequest) -> ArchiveScan {
     .unwrap()
 }
 
-fn request() -> ScanRequest {
+pub(super) fn request() -> ScanRequest {
     ScanRequest {
         root_cookie: 55,
         ..ScanRequest::default()
@@ -181,7 +181,7 @@ fn findings_are_placed_on_the_lane_of_their_process() {
     }
 }
 
-fn view_with(spool: &PacketSpool) -> TriageView {
+pub(super) fn view_with(spool: &PacketSpool) -> TriageView {
     let mut view = TriageView::default();
     view.scan = Some(scan_with(spool, &request()));
     view.section = Section::Process;
@@ -190,7 +190,7 @@ fn view_with(spool: &PacketSpool) -> TriageView {
     view
 }
 
-fn draw(ctx: &egui::Context, view: &mut TriageView, time: f64) -> egui::FullOutput {
+pub(super) fn draw(ctx: &egui::Context, view: &mut TriageView, time: f64) -> egui::FullOutput {
     let input = TriageInput {
         vm_id: Some("vm"),
         boot_id: Some("boot"),
@@ -669,4 +669,139 @@ fn native_graph_fixture() {
         }),
     )
     .expect("native graph fixture");
+}
+
+/// The Graph tab and the graph window of a real Triage view, for screenshots.
+///
+/// ANTINOMIE_QA_SCENE = tab (the Graph tab in a pane of ANTINOMIE_QA_PANE
+/// points tall, 520 by default) | window (the same, with the graph window
+/// open) | summary (the Summary strip); ANTINOMIE_QA_RUN = a copy of a run's
+/// directory to read (its `telemetry.raw` and `run.json`), else a small
+/// synthetic one; ANTINOMIE_QA_THEME, ANTINOMIE_QA_SIZE, ANTINOMIE_QA_SECONDS
+/// as for `native_graph_fixture`.
+#[test]
+#[ignore = "requires X11 native rendering; exits after the given seconds"]
+fn native_graph_view_fixture() {
+    use winit::platform::x11::EventLoopBuilderExtX11;
+    struct Fixture {
+        view: TriageView,
+        scene: String,
+        pane: f32,
+        deadline: std::time::Instant,
+        opened: bool,
+        _spool: Option<PacketSpool>,
+    }
+    impl eframe::App for Fixture {
+        fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+            let input = TriageInput {
+                vm_id: Some("vm"),
+                boot_id: Some("boot"),
+                run_id: Some("run"),
+                run_finished: true,
+                ..TriageInput::empty()
+            };
+            self.view.set_graph_window_size(super::window::DEFAULT_SIZE);
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.set_max_height(self.pane);
+                self.view.show(ui, input);
+            });
+            if self.scene == "window" && !self.opened {
+                self.opened = true;
+                self.view.open_graph_window(ctx);
+                // A finding selected, so Details beside the graph has something to say.
+                self.view.apply_graph_actions(
+                    ctx,
+                    vec![Action::Select {
+                        record: 2,
+                        focus: false,
+                    }],
+                );
+            }
+            self.view.show_finding_windows(ctx);
+            if std::time::Instant::now() > self.deadline {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            ctx.request_repaint_after(std::time::Duration::from_millis(200));
+        }
+    }
+    let var = |name: &str| std::env::var(name).unwrap_or_default();
+    let theme_choice = match var("ANTINOMIE_QA_THEME").as_str() {
+        "light" => theme::Theme::Light,
+        "blue" => theme::Theme::Blue,
+        _ => theme::Theme::Dark,
+    };
+    let (width, height) = var("ANTINOMIE_QA_SIZE")
+        .split_once('x')
+        .and_then(|(w, h)| Some((w.parse::<f32>().ok()?, h.parse::<f32>().ok()?)))
+        .unwrap_or((1280.0, 800.0));
+    let seconds = var("ANTINOMIE_QA_SECONDS").parse::<u64>().unwrap_or(20);
+    let pane = var("ANTINOMIE_QA_PANE").parse::<f32>().unwrap_or(520.0);
+    let scene = var("ANTINOMIE_QA_SCENE");
+    let (spool, mut request) = match var("ANTINOMIE_QA_RUN").as_str() {
+        "" => (Some(recording()), request()),
+        _ => (None, request()),
+    };
+    let directory = match &spool {
+        Some(spool) => spool.directory.clone(),
+        None => std::path::PathBuf::from(var("ANTINOMIE_QA_RUN")),
+    };
+    // A real run names its root task and clock in run.json.
+    if let Ok(text) = std::fs::read_to_string(directory.join("run.json")) {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+            request.root_cookie = json["root_task_cookie"].as_u64().unwrap_or(55);
+            request.started_ms = json["started_ms"].as_u64();
+            request.clock_anchor = json["clock_anchor"]["guest_ns"]
+                .as_u64()
+                .zip(json["clock_anchor"]["host_us"].as_u64())
+                .map(
+                    |(guest_ns, host_us)| antinomie_monitor_core::HostClockAnchor {
+                        guest_ns,
+                        host_us,
+                    },
+                );
+        }
+    }
+    request.run_finished = true;
+    let scan = scan_archive_query(
+        &directory,
+        None,
+        false,
+        &Arc::new(AtomicBool::new(false)),
+        &request,
+    )
+    .expect("the run's index");
+    let mut view = TriageView::default();
+    view.scan = Some(scan);
+    view.section = if scene == "summary" {
+        Section::Summary
+    } else {
+        Section::Process
+    };
+    view.process = ProcessTab::Graph;
+    view.context_key = Some("vm\nboot\nrun\n".into());
+    view.scan_request.identity = Some(("vm".into(), "boot".into(), "run".into()));
+    eframe::run_native(
+        "Antinomie Graph View QA",
+        eframe::NativeOptions {
+            viewport: egui::ViewportBuilder::default().with_inner_size([width, height]),
+            persist_window: false,
+            event_loop_builder: Some(Box::new(|builder| {
+                builder.with_any_thread(true);
+            })),
+            ..Default::default()
+        },
+        Box::new(move |cc| {
+            theme::install(&cc.egui_ctx);
+            theme::apply_theme(&cc.egui_ctx, theme_choice);
+            Ok(Box::new(Fixture {
+                view,
+                scene,
+                pane,
+                deadline: std::time::Instant::now() + std::time::Duration::from_secs(seconds),
+                opened: false,
+                _spool: spool,
+            }))
+        }),
+    )
+    .expect("native graph view fixture");
 }

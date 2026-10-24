@@ -566,8 +566,13 @@ fn a_point_on_a_marker_hits_it_and_one_far_from_any_hits_nothing() {
         None
     );
     assert!(
-        !input::hit_test(&layout, &index, 10.0, pos + egui::vec2(0.0, 20.0))
-            .is_some_and(|hit| matches!(hit, Hit::Marker { .. })),
+        !input::hit_test(
+            &layout,
+            &index,
+            10.0,
+            pos + egui::vec2(0.0, layout.frame.m.lane_h)
+        )
+        .is_some_and(|hit| matches!(hit, Hit::Marker { .. })),
         "the row below holds another lane"
     );
 }
@@ -858,7 +863,14 @@ fn clicking_a_chevron_folds_the_lane_and_the_row_count_drops() {
         harness.layout(&index).rows.lanes.len(),
         layout.rows.lanes.len() - 1
     );
-    harness.click(&index, chevron);
+    // The rows are taller now that there are fewer: the chevron is where the layout says.
+    harness.frame(&index, vec![]);
+    let folded = harness.layout(&index);
+    let again = Pos2::new(
+        folded.frame.labels.left() + 4.0 + 5.0 + 10.0,
+        folded.row_center(1),
+    );
+    harness.click(&index, again);
     assert!(harness.state.collapsed.is_empty());
 }
 
@@ -1097,7 +1109,7 @@ fn stepping_into_the_dark_brings_the_finding_into_view() {
     let mut harness = Harness::new();
     harness.focus_on(&index, 0);
     // Zoom to the start, then walk to the last finding, which is far to the right.
-    let bounds = view::bounds(index.extent());
+    let bounds = view::bounds(index.run_extent());
     harness.state.window = Some((bounds.0, bounds.0 + 3.0 * SF));
     harness.key(&index, Key::End);
     let window = harness.state.window.unwrap();

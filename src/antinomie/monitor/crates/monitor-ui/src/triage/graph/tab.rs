@@ -4,6 +4,7 @@
 //! asks for into filter text, chips and Details.
 use super::filter::Parts;
 use super::input::Action;
+use super::view;
 use super::widget::{self, Config};
 use super::*;
 use crate::triage::rules::Tier;
@@ -30,13 +31,21 @@ impl TriageView {
             return;
         };
         let index = &scan.graph.index;
+        let lanes = index.lanes.list.len().saturating_sub(1);
+        let [high, medium, low, info] = index.tiers;
+        let mut pop_out = false;
         ui.horizontal_wrapped(|ui| {
-            let [high, medium, low, info] = index.tiers;
+            pop_out = ui
+                .button(format!(
+                    "{} Open in window",
+                    egui_phosphor::regular::ARROW_SQUARE_OUT
+                ))
+                .on_hover_text("The graph in its own resizable window, with Details beside it")
+                .clicked();
             ui.colored_label(
                 theme::muted(),
                 format!(
-                    "{shown} findings ({high} high · {medium} medium · {low} low · {info} info) on {} lanes. Wheel scrolls lanes, Shift+wheel or drag pans, Ctrl+wheel zooms, drag the axis to filter by time.",
-                    index.lanes.list.len().saturating_sub(1)
+                    "{shown} findings ({high} high · {medium} medium · {low} low · {info} info) on {lanes} lanes. Wheel scrolls lanes, Shift+wheel or drag pans, Ctrl+wheel zooms, drag the axis to filter by time.",
                 ),
             );
             if unplaced > 0 {
@@ -46,18 +55,50 @@ impl TriageView {
                 );
             }
         });
+        if pop_out {
+            self.open_graph_window(ui.ctx());
+        }
+        // A pane shorter than the graph needs scrolls instead of squeezing it.
+        let available = ui.available_height();
+        let height = available.max(view::MIN_HEIGHT);
+        let mut state = std::mem::take(&mut self.graph);
+        if available < view::MIN_HEIGHT {
+            egui::ScrollArea::vertical()
+                .id_salt("graph-tab-scroll")
+                .auto_shrink([false, false])
+                .show(ui, |ui| self.draw_graph(ui, &mut state, false, height));
+        } else {
+            self.draw_graph(ui, &mut state, false, height);
+        }
+        self.graph = state;
+    }
+
+    /// The graph itself, in `height` points, in the tab or in the window.
+    /// `details_beside` is whether Details are on screen next to it, which a
+    /// click then has no need to bring forward.
+    pub(in crate::triage) fn draw_graph(
+        &mut self,
+        ui: &mut egui::Ui,
+        state: &mut view::State,
+        details_beside: bool,
+        height: f32,
+    ) {
+        let Some(scan) = &self.scan else {
+            theme::loading_weak(ui, "Indexing this run’s activity…");
+            return;
+        };
+        let index = &scan.graph.index;
         // The selection is the table's: follow it when it changed there.
         let selected_key = self.selected_call_id;
-        let current = self
-            .graph
+        let current = state
             .selected
             .and_then(|record| index.rows.get(record))
             .map(|row| row.key);
         if current != selected_key {
-            self.graph.selected = selected_key.and_then(|key| index.first_with_key(key));
+            state.selected = selected_key.and_then(|key| index.first_with_key(key));
         }
         // The brush is whatever the filter holds.
-        self.graph.brush = Parts::parse(&self.filter_drafts[0]).brush;
+        state.brush = Parts::parse(&self.filter_drafts[0]).brush;
         if index.is_empty() {
             ui.add_space(10.0);
             ui.weak("Nothing to chart: no finding in the current filter has a time.");
@@ -67,9 +108,16 @@ impl TriageView {
             index,
             colors: super::paint::Colors::current(),
             clock: scan.clock_anchor.or(self.scan_request.clock_anchor),
-            height: ui.available_height(),
+            height,
         };
-        let actions = widget::show(ui, &mut self.graph, &config);
+        let mut actions = widget::show(ui, state, &config);
+        if details_beside {
+            for action in &mut actions {
+                if let Action::Select { focus, .. } = action {
+                    *focus = false;
+                }
+            }
+        }
         self.apply_graph_actions(ui.ctx(), actions);
     }
 

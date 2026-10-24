@@ -3,7 +3,7 @@
 //! the severity curve, the category heat strip and the time axis.
 use super::index::GraphIndex;
 use super::phases::Phase;
-use super::view::{Frame, HEAT_ROW_H, MIN_BUCKET_PX};
+use super::view::{Frame, MIN_BUCKET_PX};
 use super::*;
 use crate::theme::Palette;
 use eframe::egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Shape, Stroke, Vec2};
@@ -373,11 +373,11 @@ pub(super) fn heat_strip(
     let width = geometry.width(level);
     let mut shapes = Vec::new();
     for (row, category) in categories.iter().enumerate() {
-        let top = frame.heat.top() + row as f32 * HEAT_ROW_H;
+        let top = frame.heat.top() + row as f32 * frame.m.heat_h;
         painter.rect_filled(
             Rect::from_min_max(
                 Pos2::new(frame.heat.left(), top + 1.0),
-                Pos2::new(frame.heat.right(), top + HEAT_ROW_H - 1.0),
+                Pos2::new(frame.heat.right(), top + frame.m.heat_h - 1.0),
             ),
             1.0,
             colors.bg,
@@ -396,7 +396,7 @@ pub(super) fn heat_strip(
             shapes.push(Shape::rect_filled(
                 Rect::from_min_max(
                     Pos2::new(from, top + 1.0),
-                    Pos2::new(to, top + HEAT_ROW_H - 1.0),
+                    Pos2::new(to, top + frame.m.heat_h - 1.0),
                 ),
                 0.0,
                 colors.tier[tier].gamma_multiply(alpha),
