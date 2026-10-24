@@ -938,6 +938,61 @@ list of calls for the live view and the scan runs them through the same
   commands are outside a run's tree, and in a capture of the whole VM outside the
   scope above.
 
+### Activity graph (0.7.1)
+
+Host only: `monitor-ui/src/triage/graph/`, nothing needs a guest change.
+
+* **Index.** The scan worker builds it from the rows the Suspicious table
+  filters: `Collector` (`graph.rs`) is fed every row the engine returns, once for
+  the table's view and filter (`GraphScan::index`, with lanes and the rows kept
+  so a marker can open Details) and once for the default view without lanes
+  (`GraphScan::overview`, which the Summary strip reads). A `Record` is 32 bytes
+  (time span, count, lane, tier, category, phase, flags) and sorted by time; rows
+  with no time are counted as `unplaced` and noted above the graph. Level 0
+  buckets are `2^shift` ns wide so the run fits in 4,096; a `Cell` is one
+  `(lane, bucket)` (rows by tier, worst tier, its category, category mask, first
+  record) and only non-empty cells exist. Levels above are kept only while they
+  hold at most half the cells of the one below, so the pyramid is at most twice
+  the base; a finer level than asked is merged on the fly in the paint loop.
+  Dense `Bin`s (tier counts, category counts and worst tier, phase weights) over
+  all lanes feed the curve, the heat strip and the phases. 120,000 findings on
+  2,000 lanes take about 11 MB; a million findings build in about 100 ms.
+* **Lanes.** `lanes.rs` takes the process nodes in depth-first order; a lane's
+  subtree is the lanes up to `subtree_end`, so folding is a range. Leaf siblings
+  with the same parent, program and arguments fold once there are eight. Findings
+  with no process of the run sit on lane 0. An injection finding (`injection.*`
+  with an object `pid N`) draws an arrow to the lane of that pid alive at the time.
+* **Phases.** `phases.rs`: each rule maps to a phase (by category; the download
+  rules and the anti-analysis checks by id). Each base bucket takes the phase with
+  the largest weighted sum; equal neighbours merge; a phase lasts until the next
+  begins; a span lighter than 5 or, with a neighbour, shorter than 2 % of the run
+  is absorbed into its heavier neighbour; at most 8 remain. INFO matches of
+  Discovery and anti-analysis rules are counted by the engine without rows
+  (`Output::info`) and 20 of them make a recon span.
+* **Widget.** `widget.rs` allocates one area and returns `Action`s; it never
+  touches the Triage view. `view.rs` is the window arithmetic, `input.rs` the
+  hit testing (lane from y, record from x within 7 px, the worst tier wins) and
+  the keyboard moves, `paint.rs` the colours (read from one `Palette`), the
+  category glyphs and the bands. Individual findings are drawn when fewer than
+  5,000 are in the window, otherwise one glyph per bucket at least 3 px wide.
+* **Filter sync.** `tab.rs` runs the Suspicious activity filter bar for the Graph
+  tab too (same draft, same chips, no pager). A brush, a lane or a phase is
+  written into the filter text after what the user typed (`filter.rs` parses it
+  back, so the filter is the one truth); the next frame's query bar re-reads the
+  index, so the table and the graph change together. Selection is
+  `selected_call_id` and the shared Details; a click in the graph sets
+  `table_focus`, which scrolls the table to the row.
+* **Live toast.** `notify.rs`: each scan carries the HIGH rules that have a
+  shown row. `HighWatch` raises one `toasts::push` per `(run, rule)` while the
+  run is live and `toasts::bump` adds `×N` to the same toast afterwards (a toast
+  that was dismissed stays gone). The switch is `Settings::toast_high_findings`.
+  With it on, a live run whose pane is hidden is still re-read every 15 s.
+* **Tests.** `graph/tests.rs` (index, phases, lanes, filter text, hit testing,
+  mouse and keyboard through egui, contrast of every theme), `graph/sync_tests.rs`
+  (filter sync with real scans, strip, toast, the `native_graph_fixture` for
+  screenshots under Xvfb), `graph/bench.rs` (120k findings: paint under 4 ms,
+  no repaint when idle, memory, the million-finding build).
+
 ### Accepted ANT-T0097 host UI performance (0.6.2)
 
 Remove render-time filesystem checks for host chooser availability; resolve

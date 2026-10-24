@@ -130,6 +130,38 @@ packet history already has it, and specimen Content supports a byte-offset jump.
   uptime, `TracerPid`, container markers, long sleeps) with the answer the guest
   gave, and a heuristic note on what the sample did in the next 30 seconds.
   `CPUID` and `RDTSC` checks leave no system call and are not visible.
+- **Triage › Process › Graph**: the same findings on process swimlanes against
+  time. The lanes follow the process tree (▾/▸ folds a subtree; many leaf
+  siblings of one program fold into one `name ×N` lane); markers take their
+  colour from the tier (HIGH red, MEDIUM amber, LOW cyan, INFO grey) and their
+  shape from the category, so colour is never the only cue. Above the lanes are
+  the **phases** of the run (recon, download, persistence, escalation,
+  hide/inject, C2, spread, impact: a stretch needs one HIGH, a MEDIUM with a LOW,
+  two MEDIUMs or five LOWs), a **severity curve** (HIGH counts 10, MEDIUM 4, LOW
+  1, scaled to the tallest bar in view) and a **heat strip** with one row per
+  category. Thin lines join a parent to the processes it started and an injecting
+  process to its target. The graph shows exactly what the Suspicious activity
+  table is filtered to: it shares the filter bar and the tier and category
+  chips. Hover a marker for its rule, tier, process, count and outcome; click it
+  to select the row (Details follows, and the table scrolls to it) and
+  double-click or press Enter for its first evidence. Click a lane name to keep
+  only that process (Shift: and its descendants); click a phase to keep only its
+  time range. Drag across the time axis to keep a time range, and press Escape
+  to lift it.
+  Mouse: wheel scrolls the lanes, Shift+wheel or a drag pans, Ctrl+wheel or a
+  pinch zooms at the pointer, a double-click on the axis zooms 2x, **Fit**
+  shows the whole run. Keyboard (click the graph first): ←/→ previous and next
+  finding in time, ↑/↓ lane, Enter evidence, `F` fit, `+`/`-` zoom at the
+  selection, Space fold the lane, `H` `M` `L` `I` the tier chips and Show INFO,
+  `1`…`9` and `0` the first ten category chips.
+- **Triage › Summary** shows the same curve, phases and heat strip for the whole
+  run as **Main activity graph**; a click opens the Graph. When nothing is above
+  LOW it is one line (`No medium or high activity · 11 low · 340 info`); the
+  arrow opens or closes it, and the choice is kept until you quit.
+- **Settings › Notifications › Toast for live HIGH findings** (on by default):
+  the first HIGH finding of each rule in a run that is still going raises one
+  toast; later matches of that rule add `×N` to it. It is raised when the run's
+  index is read again, every 5 s while Triage is shown and every 15 s otherwise.
 - **Network**: select an ongoing or saved capture from capture history, or start
   one there. Protocol colors help scan the packets; click an address, protocol
   or port to filter it, or use the counted dropdowns. The packet list and the
