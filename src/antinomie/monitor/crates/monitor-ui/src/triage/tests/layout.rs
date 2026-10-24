@@ -214,6 +214,26 @@ fn file_categories_are_tabs_with_counts() {
 }
 
 #[test]
+fn per_file_history_is_a_sub_tab_beside_the_file_categories() {
+    let ctx = context();
+    let (_temp, mut view) = view(Section::Files);
+    let out = settle(&ctx, &mut view);
+    assert!(!view.history_tab);
+    let history = find(&out, "Per-file history");
+    let opened = find(&out, "Opened files");
+    assert!(history.top() >= opened.top(), "the tab sits in the tab bar");
+    click(&ctx, &mut view, history.center());
+    assert!(view.history_tab);
+    let out = settle(&ctx, &mut view);
+    // The history fills the section: no filter bar of the tables, the file
+    // list and the prompt to choose a file, and no floating window.
+    assert!(has(&out, "Filter by path"), "{:?}", texts(&out));
+    // Another category leaves the history.
+    click(&ctx, &mut view, find(&out, "Opened files").center());
+    assert!(!view.history_tab);
+}
+
+#[test]
 fn file_toggles_are_chips_in_the_filter_bar_with_their_defaults() {
     let ctx = context();
     let (_temp, mut view) = view(Section::Files);

@@ -191,7 +191,9 @@ pub(crate) struct TriageView {
     process: ProcessTab,
     files: FileTab,
     /// The File activity window of the Files section.
-    file_window: file_activity::Window,
+    file_history: file_activity::Window,
+    /// The Per-file history tab is chosen instead of one of [`FileTab`].
+    history_tab: bool,
     network: NetTab,
     net_layout: NetLayout,
     new_tab: NewTab,
@@ -265,7 +267,8 @@ impl Default for TriageView {
             section: Section::Summary,
             process: ProcessTab::Tree,
             files: FileTab::Opened,
-            file_window: Default::default(),
+            file_history: Default::default(),
+            history_tab: false,
             network: NetTab::Http,
             net_layout: NetLayout::New,
             new_tab: NewTab::Endpoints,
@@ -422,6 +425,7 @@ impl TriageView {
     pub(crate) fn show_changed_path(&mut self, ctx: &egui::Context, path: &str) {
         self.section = Section::Files;
         self.files = FileTab::Changed;
+        self.history_tab = false;
         // A quote or backslash cannot be written in the filter's string.
         if !path.contains(['"', '\\']) && !path.chars().any(char::is_control) {
             let draft = format!("file.path == \"{path}\"");
@@ -520,11 +524,6 @@ impl TriageView {
         self.mark_shown(ui.ctx());
         presentation::navigation(self, ui, &input);
         self.tick(ui.ctx(), input);
-        // The File activity window floats above whichever section is shown.
-        let activity = self.scan.as_ref().map(|scan| scan.file_activity.clone());
-        let clock = self.scan.as_ref().and_then(|scan| scan.clock_anchor);
-        self.file_window
-            .show(ui.ctx(), activity.as_deref(), clock.or(input.clock_anchor));
         if self.section == Section::Summary {
             summary::show(self, ui, &input);
             return self.take_navigation(ui.ctx());

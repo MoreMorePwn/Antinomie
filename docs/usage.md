@@ -314,7 +314,8 @@ The network capture is the guest's own view on every route.
   finding in time, ↑/↓ lane, Enter evidence, `T` spacing, `F` fit, `+`/`-` zoom at the
   selection, Space fold the lane, `H` `M` `L` `I` the tier chips and Show INFO,
   `1`…`9` and `0` the first ten category chips.
-- **Triage › Files › Per-file history…** opens the **File activity** window. The
+- **Triage › Files › Per-file history** is a tab beside Opened, Created and the other
+  categories (it was a floating window). The
   left list holds every file the run touched, in order of the first call (also
   those that were only opened, read or probed); **Hide stdio**, **Hide library**
   and **Changed only** narrow it, the filter matches the path and any other name
@@ -333,7 +334,7 @@ The network capture is the guest's own view on every route.
   name to open the original syscall. An offset the run could not know (an append,
   a descriptor it did not see opened) shows `unknown`, and bytes the kernel did not
   capture show `not captured`; nothing is guessed. In **Changed files**, Details has
-  a **Per-file history…** button that opens the window on that file.
+  a **Per-file history** button that opens the tab on that file.
 - **Triage › Summary** shows the same curve, phases and heat strip for the whole
   run as **Main activity graph**; a click opens the Graph. When nothing is above
   LOW it is one line (`No medium or high activity · 11 low · 340 info`); the
