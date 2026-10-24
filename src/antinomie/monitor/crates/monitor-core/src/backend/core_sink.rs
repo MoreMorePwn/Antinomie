@@ -429,8 +429,11 @@ fn execute(state: &mut State, action: Action) -> Receipt {
 mod tests {
     use super::*;
     use std::time::{Duration, Instant};
+    /// Every job ends in an `fsync`, which can wait minutes on a disk that
+    /// other work keeps busy; only a lost receipt may end the wait.
+    const DISK_WAIT: Duration = Duration::from_secs(300);
     fn wait(sink: &mut Sink) -> Receipt {
-        let deadline = Instant::now() + Duration::from_secs(60);
+        let deadline = Instant::now() + DISK_WAIT;
         loop {
             if let Some(receipt) = sink.poll().unwrap() {
                 return receipt;
@@ -439,16 +442,33 @@ mod tests {
             thread::sleep(Duration::from_millis(5));
         }
     }
+    /// Submit what `action` builds, again until the pool takes it. The four
+    /// workers and the queue are shared by every test of the process, so a
+    /// full queue is not an answer: another test holds the room.
+    fn accept(sink: &mut Sink, mut action: impl FnMut() -> Action) {
+        let deadline = Instant::now() + DISK_WAIT;
+        while !sink.submit(action()).unwrap() {
+            assert!(Instant::now() < deadline, "the disk workers never had room");
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
     #[test]
     fn held_disk_job_does_not_block_owner_polling_or_accept_another_chunk() {
         let mut sink = Sink::new(std::env::temp_dir().join("unused-core-poll"));
-        let (release, held) = mpsc::channel();
-        assert!(sink.submit(Action::Hold(held)).unwrap());
+        let mut release = None;
+        accept(&mut sink, || {
+            let (sender, held) = mpsc::channel();
+            release = Some(sender);
+            Action::Hold(held)
+        });
+        let release = release.unwrap();
         let start = Instant::now();
         for _ in 0..1000 {
             assert!(sink.poll().unwrap().is_none());
         }
-        assert!(start.elapsed() < Duration::from_secs(1));
+        // Polling returns at once, never when the held job is done: that
+        // would not end before the release below. The bound is loose.
+        assert!(start.elapsed() < Duration::from_secs(30));
         assert!(
             !sink
                 .submit(Action::Init {
@@ -473,14 +493,11 @@ mod tests {
         let root = std::env::temp_dir().join(format!("ant-core-burst-{}", storage::unique_id()));
         let mut sink = Sink::new(root);
         let data = vec![0x5a; WRITE_LIMIT];
-        assert!(
-            sink.submit(Action::Write {
-                offset: 0,
-                data: data.clone(),
-                metadata: serde_json::json!({})
-            })
-            .unwrap()
-        );
+        accept(&mut sink, || Action::Write {
+            offset: 0,
+            data: data.clone(),
+            metadata: serde_json::json!({}),
+        });
         let receipt = wait(&mut sink);
         assert!(receipt.result.is_ok());
         assert_eq!(
@@ -501,14 +518,11 @@ mod tests {
     fn worker_reports_actual_prefix_hash_and_terminal_durability_errors() {
         let root = std::env::temp_dir().join(format!("ant-core-sink-{}", storage::unique_id()));
         let mut sink = Sink::new(root.clone());
-        assert!(
-            sink.submit(Action::Write {
-                offset: 0,
-                data: b"retained prefix".to_vec(),
-                metadata: serde_json::json!({"state":"in_progress"})
-            })
-            .unwrap()
-        );
+        accept(&mut sink, || Action::Write {
+            offset: 0,
+            data: b"retained prefix".to_vec(),
+            metadata: serde_json::json!({"state":"in_progress"}),
+        });
         let written = wait(&mut sink);
         assert!(written.result.is_ok());
         assert_eq!(written.size, 15);
@@ -516,14 +530,11 @@ mod tests {
             written.sha256,
             format!("{:x}", Sha256::digest(b"retained prefix"))
         );
-        assert!(
-            sink.submit(Action::Finish {
-                state: RunArtifactState::Partial,
-                generation: 3,
-                metadata: serde_json::json!({})
-            })
-            .unwrap()
-        );
+        accept(&mut sink, || Action::Finish {
+            state: RunArtifactState::Partial,
+            generation: 3,
+            metadata: serde_json::json!({}),
+        });
         let finished = wait(&mut sink);
         assert!(finished.result.is_ok());
         assert_eq!(finished.final_state, Some(RunArtifactState::Partial));
@@ -536,12 +547,9 @@ mod tests {
         let blocked = root.with_extension("blocked");
         std::fs::write(&blocked, b"file").unwrap();
         let mut sink = Sink::new(blocked.clone());
-        assert!(
-            sink.submit(Action::Init {
-                metadata: serde_json::json!({})
-            })
-            .unwrap()
-        );
+        accept(&mut sink, || Action::Init {
+            metadata: serde_json::json!({}),
+        });
         assert!(wait(&mut sink).result.is_err());
         std::fs::remove_file(blocked).unwrap();
     }
@@ -551,28 +559,22 @@ mod tests {
         let root = std::env::temp_dir().join(format!("ant-core-hole-{}", storage::unique_id()));
         let mut sink = Sink::new(root.clone());
         // A hole cannot come first: the file does not exist yet.
-        assert!(sink.submit(Action::Hole { offset: 0, len: 8 }).unwrap());
+        accept(&mut sink, || Action::Hole { offset: 0, len: 8 });
         assert!(wait(&mut sink).result.is_err());
         let write = |sink: &mut Sink, offset: u64, data: &[u8]| {
-            assert!(
-                sink.submit(Action::Write {
-                    offset,
-                    data: data.to_vec(),
-                    metadata: serde_json::json!({})
-                })
-                .unwrap()
-            );
+            accept(sink, || Action::Write {
+                offset,
+                data: data.to_vec(),
+                metadata: serde_json::json!({}),
+            });
             wait(sink)
         };
         assert!(write(&mut sink, 0, b"head").result.is_ok());
         let hole = 3 << 20;
-        assert!(
-            sink.submit(Action::Hole {
-                offset: 4,
-                len: hole
-            })
-            .unwrap()
-        );
+        accept(&mut sink, || Action::Hole {
+            offset: 4,
+            len: hole,
+        });
         let receipt = wait(&mut sink);
         assert!(receipt.result.is_ok());
         assert_eq!((receipt.size, receipt.allocated), (4 + hole, 4));
@@ -608,27 +610,21 @@ mod tests {
         let root = std::env::temp_dir().join(format!("ant-core-enospc-{}", storage::unique_id()));
         let mut sink = Sink::new(root.clone());
         sink.state.as_mut().unwrap().failure = Some(Failure::WriteAfter(5));
-        assert!(
-            sink.submit(Action::Write {
-                offset: 0,
-                data: b"retained suffix".to_vec(),
-                metadata: serde_json::json!({})
-            })
-            .unwrap()
-        );
+        accept(&mut sink, || Action::Write {
+            offset: 0,
+            data: b"retained suffix".to_vec(),
+            metadata: serde_json::json!({}),
+        });
         let receipt = wait(&mut sink);
         assert!(receipt.result.unwrap_err().contains("ENOSPC"));
         assert_eq!(receipt.size, 5);
         assert_eq!(receipt.sha256, format!("{:x}", Sha256::digest(b"retai")));
         assert_eq!(std::fs::read(root.join("process.elf")).unwrap(), b"retai");
-        assert!(
-            sink.submit(Action::Finish {
-                state: RunArtifactState::Partial,
-                generation: 1,
-                metadata: serde_json::json!({})
-            })
-            .unwrap()
-        );
+        accept(&mut sink, || Action::Finish {
+            state: RunArtifactState::Partial,
+            generation: 1,
+            metadata: serde_json::json!({}),
+        });
         let final_receipt = wait(&mut sink);
         assert!(final_receipt.result.is_ok());
         assert_eq!(final_receipt.final_state, Some(RunArtifactState::Partial));
@@ -644,24 +640,18 @@ mod tests {
             let root =
                 std::env::temp_dir().join(format!("ant-core-durability-{}", storage::unique_id()));
             let mut sink = Sink::new(root.clone());
-            assert!(
-                sink.submit(Action::Write {
-                    offset: 0,
-                    data: b"prefix".to_vec(),
-                    metadata: serde_json::json!({})
-                })
-                .unwrap()
-            );
+            accept(&mut sink, || Action::Write {
+                offset: 0,
+                data: b"prefix".to_vec(),
+                metadata: serde_json::json!({}),
+            });
             assert!(wait(&mut sink).result.is_ok());
             sink.state.as_mut().unwrap().failure = Some(failure);
-            assert!(
-                sink.submit(Action::Finish {
-                    state: RunArtifactState::Complete,
-                    generation: 1,
-                    metadata: serde_json::json!({})
-                })
-                .unwrap()
-            );
+            accept(&mut sink, || Action::Finish {
+                state: RunArtifactState::Complete,
+                generation: 1,
+                metadata: serde_json::json!({}),
+            });
             let receipt = wait(&mut sink);
             assert!(receipt.result.is_err());
             assert_eq!(receipt.size, 6);
@@ -682,28 +672,22 @@ mod tests {
         let mut sink = Sink::new(root.clone());
         let (release, gate) = mpsc::channel();
         sink.state.as_mut().unwrap().gate = Some(gate);
-        assert!(
-            sink.submit(Action::Write {
-                offset: 0,
-                data: b"prefix".to_vec(),
-                metadata: serde_json::json!({})
-            })
-            .unwrap()
-        );
+        accept(&mut sink, || Action::Write {
+            offset: 0,
+            data: b"prefix".to_vec(),
+            metadata: serde_json::json!({}),
+        });
         for _ in 0..1000 {
             assert!(sink.poll().unwrap().is_none());
         }
         sink.seal();
         release.send(()).unwrap();
         assert_eq!(wait(&mut sink).size, 6);
-        assert!(
-            sink.submit(Action::Finish {
-                state: RunArtifactState::Complete,
-                generation: 1,
-                metadata: serde_json::json!({})
-            })
-            .unwrap()
-        );
+        accept(&mut sink, || Action::Finish {
+            state: RunArtifactState::Complete,
+            generation: 1,
+            metadata: serde_json::json!({}),
+        });
         let receipt = wait(&mut sink);
         assert!(receipt.result.is_ok());
         assert_eq!(receipt.final_state, Some(RunArtifactState::Partial));
