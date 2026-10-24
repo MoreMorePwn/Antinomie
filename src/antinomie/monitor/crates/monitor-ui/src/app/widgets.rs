@@ -365,14 +365,19 @@ pub(super) fn tool_button(ui: &mut egui::Ui, button: ToolButton<'_>) -> bool {
     job.append(button.label, 6.0, egui::TextFormat::simple(font, label));
     let mut widget = egui::Button::new(job).min_size(egui::vec2(0.0, ui.spacing().interact_size.y));
     if button.active {
-        widget = widget
-            .fill(button.tone.gamma_multiply(0.18))
-            .stroke(egui::Stroke::new(1.0_f32, button.tone));
+        // Lit while its work runs: a tint of the tone, no outline.
+        widget = widget.fill(button.tone.gamma_multiply(0.18));
     }
-    ui.add_enabled(button.enabled, widget)
-        .on_hover_text(button.tooltip)
-        .on_disabled_hover_text(button.tooltip)
-        .clicked()
+    // No border at rest; the hover and pressed tints and the muted disabled
+    // text and icon are the feedback.
+    ui.scope(|ui| {
+        theme::borderless_buttons(ui);
+        ui.add_enabled(button.enabled, widget)
+            .on_hover_text(button.tooltip)
+            .on_disabled_hover_text(button.tooltip)
+            .clicked()
+    })
+    .inner
 }
 
 /// The main action of a dialog, in the primary color.
@@ -428,17 +433,22 @@ pub(super) fn status_line(ui: &mut egui::Ui, icon: &str, text: &str, color: egui
 }
 
 pub(super) fn icon(ui: &mut egui::Ui, icon: &str, tooltip: &str, enabled: bool) -> bool {
-    ui.add_enabled(
-        enabled,
-        egui::Button::new(RichText::new(icon).size(ui.text_style_height(&egui::TextStyle::Body)))
-            .frame(false)
+    ui.scope(|ui| {
+        theme::borderless_buttons(ui);
+        ui.add_enabled(
+            enabled,
+            egui::Button::new(
+                RichText::new(icon).size(ui.text_style_height(&egui::TextStyle::Body)),
+            )
             .min_size(egui::vec2(
                 ui.spacing().interact_size.y,
                 ui.spacing().interact_size.y,
             )),
-    )
-    .on_hover_text(tooltip)
-    .clicked()
+        )
+        .on_hover_text(tooltip)
+        .clicked()
+    })
+    .inner
 }
 
 #[cfg(test)]
