@@ -122,6 +122,61 @@ fn native_triage_fixture() {
         .iter()
         .map(|change| change.row(clock))
         .collect();
+    // Synthetic process tree and eBPF rows for the UI polish screenshots.
+    if scene == "tree" {
+        let mut calls = vec![
+            call(1, FORK, "fork", 42),
+            call(42, 59, "execve", 0),
+            call(1, FORK, "fork", 43),
+            call(43, 59, "execve", 0),
+        ];
+        for (at, call) in calls.iter_mut().enumerate() {
+            call.call_id = at as u64 + 1;
+        }
+        scan.process = process_nodes(&calls);
+        scan.suspicious = [
+            ((1, 1), (4, rules::Tier::High)),
+            ((42, 42), (2, rules::Tier::Medium)),
+            ((43, 43), (1, rules::Tier::Low)),
+        ]
+        .into();
+        if let Some(template) = scan.findings.first().cloned() {
+            scan.findings.clear();
+            for (pid, tier) in [
+                (42, rules::Tier::High),
+                (42, rules::Tier::Medium),
+                (42, rules::Tier::Low),
+                (42, rules::Tier::Info),
+            ] {
+                let mut finding = template.clone();
+                finding.cells[1] = cell(tier.tag(), tier.color(), false);
+                for (key, value) in &mut finding.values {
+                    match *key {
+                        "process.pid" | "process.cookie" => *value = RowValue::Number(pid),
+                        _ => {}
+                    }
+                }
+                scan.findings.push(finding);
+            }
+        }
+    }
+    if scene == "bpf" {
+        let mut load = call(1, 321, "bpf", 3);
+        load.entry.as_mut().unwrap().args = Some([5, 0, 0, 0, 0, 0]);
+        let mut filter = call(1, 317, "seccomp", 0);
+        filter.entry.as_mut().unwrap().args = Some([1, 0, 0, 0, 0, 0]);
+        let mut denied = call(1, 321, "bpf", -13);
+        denied.entry.as_mut().unwrap().args = Some([5, 0, 0, 0, 0, 0]);
+        let mut prctl = call(1, 157, "prctl", 0);
+        prctl.entry.as_mut().unwrap().args = Some([22, 2, 0, 0, 0, 0]);
+        for (at, call) in [&mut load, &mut filter, &mut denied, &mut prctl]
+            .into_iter()
+            .enumerate()
+        {
+            call.call_id = at as u64 + 1;
+        }
+        scan.bpf = page_notes(&[load, filter, denied, prctl]);
+    }
     let mut view = TriageView::default();
     view.scan = Some(scan);
     view.net_layout = NetLayout::Old;
@@ -132,6 +187,7 @@ fn native_triage_fixture() {
             view.section = Section::Process;
             view.process = ProcessTab::Suspicious;
         }
+        "bpf" => view.section = Section::Bpf,
         "opened" => {
             view.section = Section::Files;
             view.files = FileTab::Opened;
@@ -246,6 +302,22 @@ fn native_triage_fixture() {
                         row,
                     )
                 }),
+                "bpf" => scan.bpf.first().map(|note| {
+                    (
+                        "triage-bpf",
+                        vec!["Time", "Observation", "Outcome", "Evidence"],
+                        bpf_row(note, scan.clock_anchor),
+                    )
+                }),
+                "tree" => {
+                    let mut row = vec![cell("pid 42 cookie 42", theme::text(), true)];
+                    row[0].values = vec![
+                        ("process.pid", RowValue::Number(42)),
+                        ("process.cookie", RowValue::Number(42)),
+                        ("process.suspicious", RowValue::Number(4)),
+                    ];
+                    Some(("triage-process", vec!["Process"], row))
+                }
                 "findings" => scan.findings.first().map(|finding| {
                     let mut row = finding.cells.clone();
                     row[0].values.clone_from(&finding.values);
@@ -855,7 +927,7 @@ fn repeats_of_one_task_are_one_row_with_a_count_and_a_time_span() {
             > files::number(&row.values, "finding.first_ns")
     );
     assert_eq!(scan.counts.findings, 1);
-    assert_eq!(scan.suspicious.get(&(55, 55)), Some(&1));
+    assert_eq!(scan.suspicious.get(&(55, 55)).map(|found| found.0), Some(1));
 }
 
 #[test]
@@ -1574,6 +1646,11 @@ fn bpf_program_finding_skips_maps_and_requires_socket_level() {
     let notes = page_notes(&[bytes]);
     assert_eq!(notes.len(), 1);
     assert!(notes[0].heading.contains("BPF_PROG_LOAD"));
+    // The Observation column is a sentence: the step, then the call and thread.
+    assert_eq!(
+        notes[0].summary,
+        "Loaded program fd 0 · bpf(BPF_PROG_LOAD) in tid 1"
+    );
     assert!(notes[0].translation.is_none());
     assert_eq!(notes[0].outcome, "returned 0");
     assert_eq!(notes[0].lifecycle.as_deref(), Some("loaded program fd 0"));

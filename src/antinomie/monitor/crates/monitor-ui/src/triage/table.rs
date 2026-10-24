@@ -54,6 +54,7 @@ pub(super) fn column_widths<'a>(
                 "Time" | "First seen" | "Last seen" => (230.0, 500.0),
                 "Host" => (160.0, 400.0),
                 "Summary" => (360.0, 800.0),
+                "Observation" => (260.0, 340.0),
                 _ => (100.0, 320.0),
             };
             let heading = ui.fonts(|fonts| {
@@ -267,8 +268,18 @@ fn table_rows_with(
         } else {
             64.0
         };
-        builder = if index + 1 == headers.len() {
-            builder.column(Column::remainder().at_least(width))
+        // The text column takes the spare width; a short Evidence column does not.
+        let remainder = if id == "triage-bpf" {
+            1
+        } else {
+            headers.len() - 1
+        };
+        builder = if index == remainder {
+            builder.column(Column::remainder().at_least(if id == "triage-bpf" {
+                width.min(260.0)
+            } else {
+                width
+            }))
         } else {
             builder.column(Column::initial(width).at_least(minimum).resizable(true))
         };
@@ -332,15 +343,23 @@ fn table_rows_with(
                             .flatten()
                             .filter(|count| *count > 0);
                         if let Some(count) = suspect {
+                            // The chip wears the colour of the worst tier among
+                            // the process's observations.
+                            let tone = cell
+                                .values
+                                .iter()
+                                .find_map(|(key, value)| match value {
+                                    RowValue::Text(tag) if *key == "process.worst_tier" => {
+                                        rules::Tier::from_tag(tag)
+                                    }
+                                    _ => None,
+                                })
+                                .map_or(crate::widgets::Tone::Neutral, rules::Tier::tone);
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
-                                    crate::widgets::chip(
-                                        ui,
-                                        count.to_string(),
-                                        crate::widgets::Tone::Warn,
-                                    )
-                                    .on_hover_text("Suspicious observations in this process");
+                                    crate::widgets::chip(ui, count.to_string(), tone)
+                                        .on_hover_text("Suspicious observations in this process");
                                     ui.with_layout(
                                         egui::Layout::left_to_right(egui::Align::Center),
                                         draw,
@@ -360,7 +379,19 @@ fn table_rows_with(
                 }
                 if row.response().clicked() {
                     details::select(&row.response().ctx, id, headers, cells);
-                    details::clicked(&row.response().ctx, id);
+                    if id == "triage-process" {
+                        // A process opens its Suspicious activity; Details keep it selected.
+                        if let Some(pid) = cells
+                            .first()
+                            .and_then(|cell| files::number(&cell.values, "process.pid"))
+                        {
+                            row.response().ctx.data_mut(|data| {
+                                data.insert_temp(egui::Id::new(process_details::PROCESS_SCOPE), pid)
+                            });
+                        }
+                    } else {
+                        details::clicked(&row.response().ctx, id);
+                    }
                     row.response()
                         .ctx
                         .data_mut(|data| data.insert_temp(selected_id, key));

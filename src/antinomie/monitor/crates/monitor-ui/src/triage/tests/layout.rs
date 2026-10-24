@@ -133,11 +133,18 @@ fn process_views_are_one_segmented_control_with_counts() {
 fn a_process_row_carries_its_suspicious_count_as_a_warn_chip() {
     let (_temp, scan) = scan();
     assert!(
-        scan.suspicious.values().sum::<u64>() > 0,
+        scan.suspicious
+            .values()
+            .map(|(count, _)| count)
+            .sum::<u64>()
+            > 0,
         "the fixture's rwx calls are suspicious"
     );
     assert_eq!(
-        scan.suspicious.values().sum::<u64>(),
+        scan.suspicious
+            .values()
+            .map(|(count, _)| count)
+            .sum::<u64>(),
         scan.counts.findings,
         "every finding is counted for its task"
     );
@@ -146,7 +153,7 @@ fn a_process_row_carries_its_suspicious_count_as_a_warn_chip() {
         .iter()
         .find(|node| scan.suspicious.contains_key(&(node.cookie, node.pid)))
         .expect("a process with findings");
-    let count = scan.suspicious[&(node.cookie, node.pid)];
+    let (count, _) = scan.suspicious[&(node.cookie, node.pid)];
     let ctx = context();
     let mut out = egui::FullOutput::default();
     for time in 0..3 {
@@ -175,11 +182,16 @@ fn findings_are_tallied_for_the_task_that_made_them() {
     let values = [
         ("process.cookie", RowValue::Number(9)),
         ("process.pid", RowValue::Number(4)),
+        ("finding.tier", RowValue::Text("medium".into())),
     ];
     tally(&mut counts, &values);
     tally(&mut counts, &values);
+    let mut high = values.to_vec();
+    high[2].1 = RowValue::Text("high".into());
+    tally(&mut counts, &high);
+    tally(&mut counts, &values);
     tally(&mut counts, &[("process.pid", RowValue::Number(4))]);
-    assert_eq!(counts.get(&(9, 4)), Some(&2));
+    assert_eq!(counts.get(&(9, 4)), Some(&(4, rules::Tier::High)));
     assert_eq!(counts.len(), 1);
     assert_eq!(process_details::trace_filter(4, 9), "process.cookie == 9");
     assert_eq!(process_details::trace_filter(4, 0), "process.pid == 4");
@@ -701,4 +713,29 @@ fn the_details_of_an_evasion_row_list_each_check_the_answer_and_why_it_has_its_t
     );
     assert!(any("Why this tier"));
     assert!(any("Heuristic"));
+}
+
+#[test]
+fn tier_tones_follow_the_tier_colours() {
+    use crate::widgets::Tone;
+    let tones: Vec<Tone> = rules::Tier::ALL.iter().map(|tier| tier.tone()).collect();
+    assert_eq!(tones, [Tone::Error, Tone::Warn, Tone::Info, Tone::Neutral]);
+    assert_eq!(rules::Tier::from_tag("medium"), Some(rules::Tier::Medium));
+    assert_eq!(rules::Tier::from_tag("nope"), None);
+}
+
+#[test]
+fn clicking_a_process_opens_its_suspicious_activity() {
+    let ctx = context();
+    let (_temp, mut view) = view(Section::Process);
+    view.process = ProcessTab::Tree;
+    let out = settle(&ctx, &mut view);
+    let at = find(&out, "pid 55 cookie 55").center();
+    click(&ctx, &mut view, at);
+    settle(&ctx, &mut view);
+    assert!(view.section == Section::Process);
+    assert!(view.process == ProcessTab::Suspicious);
+    let draft =
+        ctx.data(|data| data.get_temp::<String>(egui::Id::new(("triage-filter-draft", 0usize))));
+    assert_eq!(draft.as_deref(), Some("process.pid == 55"));
 }

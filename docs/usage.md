@@ -256,6 +256,15 @@ The network capture is the guest's own view on every route.
 - **Run History**: every run on the selected VM, including earlier boots, with
   its command line, user, status and exit code. Double-click a run to open its
   Triage view. Select a trace entry to inspect its recorded call details.
+  The table spans the pane. A run's details list **Analysis enabled** as a tree:
+  the static analysis with its checks below it, then the capture options; a check
+  that produced no result, or a capture that was deleted or failed, is greyed.
+  Click a process in the run's recorded process tree to open **Syscall Trace**
+  filtered to that process (`process.pid == N`; clear the filter to see all).
+- **Triage › Process › Process tree**: click a process to open Suspicious
+  activity filtered to it. The number beside a process is its count of
+  suspicious observations, coloured by the worst tier among them (HIGH red,
+  MEDIUM amber, LOW cyan); in Details each observation wears its own tier.
 - **Triage › Process › Suspicious activity**: behaviour recognised in the run's
   calls, kernel records and packets. Each row has a tier (HIGH, MEDIUM, LOW;
   INFO is only counted unless **Show INFO** is on), a category and an ATT&CK
@@ -413,7 +422,8 @@ The network capture is the guest's own view on every route.
   module list or mounts, or a symbol table that does not match the kernel
   banner); a report the tool could not produce fails with the reason instead
   of showing an empty table. A report takes about a minute on a 2 GiB dump.
-- **Static Analysis**: the selected run's report: an overview, then each
+- **Static Analysis**: a **Run** button beside the file's hash opens the run the
+  report belongs to in Run History. The selected run's report: an overview, then each
   category; disassembly and decompilation are full listings with search. In the
   **Strings** and **FLOSS** tabs, **Regex matches…** opens a window with every
   pattern match in the strings, by category (Network, Crypto, Keys, Linux

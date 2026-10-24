@@ -2,15 +2,24 @@
 //! The process tree rebuilt from fork, clone and exec calls.
 use super::*;
 
-/// Suspicious observations per task, as `(task cookie, pid)`.
-pub(super) type Suspicious = std::collections::BTreeMap<(u64, u32), u64>;
+/// Suspicious observations per task, as `(task cookie, pid)`: how many, and
+/// the worst tier among them.
+pub(super) type Suspicious = std::collections::BTreeMap<(u64, u32), (u64, rules::Tier)>;
 
 /// Count one finding for the task it was observed in.
 pub(super) fn tally(counts: &mut Suspicious, values: &[(&'static str, RowValue)]) {
     let cookie = files::number(values, "process.cookie");
     let pid = files::number(values, "process.pid");
+    let tier = values.iter().find_map(|(key, value)| match value {
+        RowValue::Text(text) if *key == "finding.tier" => rules::Tier::from_tag(text),
+        _ => None,
+    });
     if let (Some(cookie), Some(pid)) = (cookie, pid) {
-        *counts.entry((cookie, pid as u32)).or_default() += 1;
+        let entry = counts
+            .entry((cookie, pid as u32))
+            .or_insert((0, rules::Tier::Info));
+        entry.0 += 1;
+        entry.1 = entry.1.max(tier.unwrap_or(rules::Tier::Info));
     }
 }
 
@@ -63,9 +72,16 @@ pub(super) fn process_tree_nodes(
                     RowValue::Number(i128::from(
                         suspicious
                             .get(&(node.cookie, node.pid))
-                            .copied()
-                            .unwrap_or(0),
+                            .map_or(0, |(count, _)| *count),
                     )),
+                ),
+                (
+                    "process.worst_tier",
+                    suspicious
+                        .get(&(node.cookie, node.pid))
+                        .map_or(RowValue::Missing, |(_, tier)| {
+                            RowValue::Text(tier.tag().to_owned())
+                        }),
                 ),
                 ("process.depth", RowValue::Number(node.depth as i128)),
                 (
