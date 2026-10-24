@@ -26,16 +26,28 @@ case $mode in
         ;;
 esac
 
-cflags=(-O2 -g -Wall -Wextra -Wno-unused-result -D_GNU_SOURCE -I"$source_dir")
-sources=("$source_dir/main.c" "$source_dir/net.c" "$source_dir/beaconing.c" "$source_dir/discovery.c"
-         "$source_dir/anti-analysis.c" "$source_dir/credential-access.c")
-scenarios=(recon http-beacon dns-tunnel tls-sni udp-beacon download dga persistence memfd-exec
-           ptrace-antidebug cred-read rule-markers)
-
-gcc "${cflags[@]}" "${sources[@]}" -o "$output/ant-sample-all" "${link[@]}"
+cflags=(-O2 -g -Wall -Wextra -D_GNU_SOURCE -I"$source_dir")
+# Everything but main.c is compiled once; main.c carries the scenario choice.
+shared=(common net beaconing discovery probes anti-analysis stage credential-access impact)
+objects=$(mktemp -d)
+trap 'rm -rf "$objects"' EXIT
+for name in "${shared[@]}"; do
+    gcc "${cflags[@]}" -c "$source_dir/$name.c" -o "$objects/$name.o"
+done
+link_all() { # SCENARIO-OR-EMPTY OUTPUT
+    local define=()
+    [[ -n $1 ]] && define=(-DSINGLE_SCENARIO="\"$1\"")
+    gcc "${cflags[@]}" "${define[@]}" "$source_dir/main.c" "$objects"/*.o -o "$2" "${link[@]}" -lm
+}
+link_all "" "$output/ant-sample-all"
+# The registry in main.c is the list of scenarios; build one binary for each.
+mapfile -t scenarios < <("$output/ant-sample-all" --list | awk -F'\t' '!/^#/ {print $1}')
+if [[ ${#scenarios[@]} -eq 0 ]]; then
+    echo "ant-sample-all --list printed no scenarios" >&2
+    exit 1
+fi
 for scenario in "${scenarios[@]}"; do
-    gcc "${cflags[@]}" -DSINGLE_SCENARIO="\"$scenario\"" "${sources[@]}" \
-        -o "$output/ant-sample-$scenario" "${link[@]}"
+    link_all "$scenario" "$output/ant-sample-$scenario"
 done
 
 if [[ ${#link[@]} -gt 0 ]]; then

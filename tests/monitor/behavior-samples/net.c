@@ -18,6 +18,8 @@
 #include <time.h>
 #include <unistd.h>
 
+int sample_dns_port = 53;
+
 void sample_delay(int milliseconds)
 {
     if (milliseconds <= 0)
@@ -44,20 +46,24 @@ int sample_mkdir_p(const char *path)
 {
     char copy[512];
     int length = snprintf(copy, sizeof copy, "%s", path);
-    if (length <= 0 || (size_t)length >= sizeof copy)
+    if (length <= 0 || (size_t)length >= sizeof copy) {
+        errno = ENAMETOOLONG;
         return -1;
+    }
+    struct stat info;
+    // Only components that are missing are created, so an existing tree
+    // produces no failed mkdir calls.
     for (char *cursor = copy + 1;; cursor++) {
         if (*cursor != '/' && *cursor != '\0')
             continue;
         char saved = *cursor;
         *cursor = '\0';
-        if (mkdir(copy, 0700) != 0 && errno != EEXIST)
+        if (stat(copy, &info) != 0 && mkdir(copy, 0700) != 0 && errno != EEXIST)
             return -1;
         *cursor = saved;
         if (!saved)
             break;
     }
-    struct stat info;
     return stat(path, &info) == 0 && S_ISDIR(info.st_mode) ? 0 : -1;
 }
 
@@ -163,9 +169,10 @@ ssize_t sample_recv_wait(int fd, void *buffer, size_t length, int timeout_ms)
     return recv(fd, buffer, length, 0);
 }
 
-int sample_http_request(const char *host, int port, const char *method, const char *path,
-                     const char *body, size_t body_len, unsigned long long *received)
+int sample_http_as(const char *host, int port, const char *host_header, const char *method,
+                const char *path, const char *body, unsigned long long *received)
 {
+    size_t body_len = body ? strlen(body) : 0;
     int fd = sample_dial(host, port, 1500);
     if (fd < 0)
         return -1;
@@ -178,7 +185,7 @@ int sample_http_request(const char *host, int port, const char *method, const ch
                           "Content-Type: application/x-www-form-urlencoded\r\n"
                           "Content-Length: %zu\r\n"
                           "Connection: close\r\n\r\n",
-                          method, path, host, SAMPLE_USER_AGENT, body_len);
+                          method, path, host_header, SAMPLE_USER_AGENT, body_len);
     int ok = length > 0 && (size_t)length < sizeof header &&
              sample_send_all(fd, header, (size_t)length) == 0 &&
              (body_len == 0 || sample_send_all(fd, body, body_len) == 0);
@@ -193,6 +200,95 @@ int sample_http_request(const char *host, int port, const char *method, const ch
     }
     close(fd);
     return ok ? 0 : -1;
+}
+
+int sample_http_request(const char *host, int port, const char *method, const char *path,
+                     const char *body, size_t body_len, unsigned long long *received)
+{
+    (void)body_len;
+    return sample_http_as(host, port, host, method, path, body, received);
+}
+
+#define FETCH_HEADER_MAX 1024
+
+ssize_t sample_http_fetch(const char *host, int port, const char *path, unsigned char *body,
+                       size_t cap, int *status)
+{
+    if (status)
+        *status = 0;
+    int fd = sample_dial(host, port, 1500);
+    if (fd < 0)
+        return -1;
+    char request[1024];
+    int length = snprintf(request, sizeof request,
+                          "GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: %s\r\n"
+                          "Accept: */*\r\nConnection: close\r\n\r\n",
+                          path, host, SAMPLE_USER_AGENT);
+    if (length <= 0 || (size_t)length >= sizeof request ||
+        sample_send_all(fd, request, (size_t)length) != 0) {
+        close(fd);
+        return -1;
+    }
+    // Peek for the end of the headers, then take exactly the headers: the body
+    // is then a read of its own, the way a downloader reads it.
+    char head[FETCH_HEADER_MAX + 1];
+    size_t head_len = 0;
+    for (int attempt = 0; attempt < 40; attempt++) {
+        struct pollfd ready = {.fd = fd, .events = POLLIN};
+        if (poll(&ready, 1, 100) <= 0)
+            continue;
+        ssize_t peeked = recv(fd, head, FETCH_HEADER_MAX, MSG_PEEK);
+        if (peeked <= 0)
+            break;
+        head[peeked] = '\0';
+        char *end = strstr(head, "\r\n\r\n");
+        if (end) {
+            head_len = (size_t)(end - head) + 4;
+            break;
+        }
+        if (peeked >= FETCH_HEADER_MAX)
+            break;
+    }
+    if (head_len == 0) {
+        close(fd);
+        return -1;
+    }
+    if (recv(fd, head, head_len, MSG_WAITALL) != (ssize_t)head_len) {
+        close(fd);
+        return -1;
+    }
+    head[head_len] = '\0';
+    int code = 0;
+    if (sscanf(head, "HTTP/%*d.%*d %d", &code) != 1)
+        code = 0;
+    if (status)
+        *status = code;
+    size_t total = 0;
+    while (total < cap) {
+        ssize_t got = sample_recv_wait(fd, body + total, cap - total, 400);
+        if (got <= 0)
+            break;
+        total += (size_t)got;
+    }
+    close(fd);
+    return code == 200 ? (ssize_t)total : -1;
+}
+
+int sample_touch_port(const char *host, int port)
+{
+    struct sockaddr_in target;
+    memset(&target, 0, sizeof target);
+    target.sin_family = AF_INET;
+    target.sin_port = htons((uint16_t)port);
+    if (inet_pton(AF_INET, host, &target.sin_addr) != 1)
+        return -1;
+    int fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+    if (fd < 0)
+        return -1;
+    int result = connect(fd, (struct sockaddr *)&target, sizeof target);
+    int started = result == 0 || errno == EINPROGRESS || errno == ECONNREFUSED;
+    close(fd);
+    return started ? 0 : -1;
 }
 
 size_t sample_dns_build(unsigned char *packet, const char *name, uint16_t type, uint16_t id)
@@ -235,11 +331,11 @@ int sample_dns_ask(const char *resolver, const char *name, uint16_t type, int wa
     struct sockaddr_in server;
     memset(&server, 0, sizeof server);
     server.sin_family = AF_INET;
-    // Port 53 needs root for a local sinkhole; SAMPLE_DNS_PORT lets a guest run
-    // the sinkhole on an unprivileged port without changing the sample.
+    // Port 53 needs root for a local sinkhole; --dns-port or SAMPLE_DNS_PORT
+    // lets a sinkhole run on an unprivileged port.
+    int port = sample_dns_port;
     const char *port_text = getenv("SAMPLE_DNS_PORT");
-    int port = 53;
-    if (port_text && *port_text) {
+    if (port == 53 && port_text && *port_text) {
         int parsed = atoi(port_text);
         if (parsed > 0 && parsed < 65536)
             port = parsed;
@@ -250,7 +346,8 @@ int sample_dns_ask(const char *resolver, const char *name, uint16_t type, int wa
         return 0;
     }
     unsigned char packet[512];
-    size_t length = sample_dns_build(packet, name, type, (uint16_t)(getpid() ^ wait_ms));
+    static uint16_t sequence;
+    size_t length = sample_dns_build(packet, name, type, (uint16_t)(getpid() * 31u + ++sequence));
     int answered = 0;
     if (sendto(fd, packet, length, 0, (struct sockaddr *)&server, sizeof server) > 0 && wait_ms > 0) {
         struct pollfd ready = {.fd = fd, .events = POLLIN};
