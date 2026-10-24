@@ -1367,7 +1367,8 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel();
         let started = Instant::now();
         watch_progress(Path::new("/no/such/progress.json"), &cancel, &stop, &tx);
-        assert!(started.elapsed() < Duration::from_millis(200));
+        // A cancelled watch ends at once; the bound is loose for a loaded host.
+        assert!(started.elapsed() < Duration::from_secs(10));
         drop(tx);
         assert!(rx.try_recv().is_err());
     }

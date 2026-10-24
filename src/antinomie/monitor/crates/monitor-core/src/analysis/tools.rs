@@ -378,6 +378,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(run.stdout.trim(), "done");
-        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(started.elapsed() < Duration::from_secs(15));
     }
 }

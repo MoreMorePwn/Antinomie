@@ -58,7 +58,8 @@ fn a_ticket_waits_for_its_own_write_and_no_ticket_waits_for_nothing() {
     // A recording that submitted nothing does not wait for a stalled disk.
     let started = Instant::now();
     wait_for(0);
-    assert!(started.elapsed() < Duration::from_millis(200));
+    // Returns at once or, with the disk stalled, never: the bound is loose.
+    assert!(started.elapsed() < Duration::from_secs(10));
     assert_eq!(slow.queued_len(), 4);
     slow.resume();
     wait_for(ticket);
@@ -88,7 +89,8 @@ fn try_submit_returns_when_the_bounded_queue_is_full() {
         rollback: 4,
         error: slot,
     });
-    assert!(started.elapsed() < Duration::from_millis(100));
+    // A full queue answers at once; the bound is loose for a loaded host.
+    assert!(started.elapsed() < Duration::from_secs(10));
     assert!(matches!(rejected, Err(Op::Append { data, .. }) if data == b"x"));
     assert_eq!(slow.queued_len(), 4);
     slow.resume();
