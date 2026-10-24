@@ -44,6 +44,7 @@ mod trace_paging;
 mod trace_run_selector;
 mod trace_sort;
 mod trace_view;
+mod ui_polish_shots;
 mod upload;
 mod vm_dialog;
 mod workspace;

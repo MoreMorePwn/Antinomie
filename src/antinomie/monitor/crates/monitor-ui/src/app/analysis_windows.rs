@@ -232,6 +232,10 @@ impl MonitorApp {
                 self.triage.show_properties();
                 self.focus_panel = Some(crate::workspace::Panel::Triage);
             }
+            Some(crate::analysis::ReportAction::OpenRun { run_id }) => {
+                self.select_run(Some(run_id));
+                self.focus_panel = Some(crate::workspace::Panel::RunHistory);
+            }
             Some(crate::analysis::ReportAction::OpenSection { report_id, kind }) => {
                 if let Err(reason) = self.open_analysis_section(report_id, kind) {
                     self.report_error(reason);

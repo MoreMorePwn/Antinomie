@@ -162,7 +162,11 @@ impl Strip {
                 &painter,
                 Pos2::new(left, y),
                 Align2::LEFT_CENTER,
-                rules::Category::ALL[*category].chip(),
+                &format!(
+                    "{} {}",
+                    paint::icon(*category as u8),
+                    rules::Category::ALL[*category].chip()
+                ),
                 9.5,
                 colors.muted,
             );

@@ -511,6 +511,10 @@ pub(crate) enum ReportAction {
     },
     /// Show the same file's identity in Triage › Properties.
     OpenTriageProperties,
+    /// Open the program run this report was made for in Run History.
+    OpenRun {
+        run_id: String,
+    },
     /// Read a page of a category's full listing, filtered by `query` and
     /// ordered by `sort` over the whole listing.
     ReadListing {

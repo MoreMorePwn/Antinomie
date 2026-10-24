@@ -613,6 +613,11 @@ impl TriageView {
         self.trace_scope = ctx.data_mut(|data| {
             data.remove_temp::<String>(egui::Id::new(process_details::TRACE_SCOPE))
         });
+        if let Some(pid) = ctx
+            .data_mut(|data| data.remove_temp::<u64>(egui::Id::new(process_details::PROCESS_SCOPE)))
+        {
+            self.scope_to_pid(ctx, Section::Process, pid);
+        }
         ctx.data_mut(|data| {
             data.remove_temp::<trace::InvocationKey>(egui::Id::new("triage-call-jump"))
         })
@@ -1371,6 +1376,8 @@ enum DupKind {
 
 struct BpfNote {
     heading: String,
+    /// One-line summary of the step, for the Observation column.
+    summary: String,
     outcome: String,
     /// Request phrase for a lifecycle step. Load, socket, and seccomp lines
     /// include `fd {result}` when the exit result is >= 0. Attach does too,
