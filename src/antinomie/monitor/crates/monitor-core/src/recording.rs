@@ -1185,6 +1185,7 @@ mod tests {
                 recording_error: None,
                 execution: None,
                 analysis: Some(report),
+                route: None,
             };
             settle_stale_analysis(&mut run);
             let report = run.analysis.unwrap();

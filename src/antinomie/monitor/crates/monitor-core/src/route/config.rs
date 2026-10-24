@@ -16,10 +16,25 @@ use std::{
 const CONFIG_DIR: &str = "network";
 const CONFIG_FILE: &str = "routes.json";
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TorMode {
+    /// Antinomie runs its own tor for the run: a private data folder, a free
+    /// SocksPort on 127.0.0.1, started with the route and stopped with it.
+    #[default]
+    Own,
+    /// Connect to a SOCKS address (a tor the analyst already runs).
+    Socks,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TorConfig {
-    /// Tor's SOCKS port, `host:port`.
+    pub mode: TorMode,
+    /// Own mode: the tor program; empty looks on `PATH`, in the system's
+    /// usual places and then at the copy Antinomie installed.
+    pub program: String,
+    /// Socks mode: Tor's SOCKS port, `host:port`.
     pub socks: String,
     /// `host:port` the route connects to through Tor before a run starts, to
     /// prove the circuit works; empty checks only that Tor answers SOCKS.
@@ -29,6 +44,8 @@ pub struct TorConfig {
 impl Default for TorConfig {
     fn default() -> Self {
         Self {
+            mode: TorMode::Own,
+            program: String::new(),
             socks: "127.0.0.1:9050".into(),
             probe: "check.torproject.org:443".into(),
         }
@@ -38,7 +55,8 @@ impl Default for TorConfig {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct VpnConfig {
-    /// The wireproxy executable; empty looks for `wireproxy` on PATH.
+    /// The wireproxy executable; empty looks on `PATH`, in the system's
+    /// usual places and then at the copy Antinomie installed.
     pub wireproxy: String,
     /// wireproxy's configuration file (WireGuard peer plus a `[Socks5]`
     /// section). Antinomie starts wireproxy with it for each run and stops it
@@ -222,6 +240,19 @@ pub struct WireproxyLaunch {
     pub config: PathBuf,
 }
 
+/// The tor Antinomie starts for the Tor route.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TorLaunch {
+    pub binary: PathBuf,
+    /// The Expert Bundle's own libevent and OpenSSL, set as the library
+    /// path; `None` for a tor from the system.
+    pub lib_dir: Option<PathBuf>,
+    /// The bundle's `geoip` files, when it has them.
+    pub geoip_dir: Option<PathBuf>,
+    /// Where each gateway gets its private data folder.
+    pub state_root: PathBuf,
+}
+
 /// One route, checked and resolved from the saved settings.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RouteSpec {
@@ -231,6 +262,7 @@ pub struct RouteSpec {
     pub(crate) probe: Option<(String, u16)>,
     pub label: String,
     pub wireproxy: Option<WireproxyLaunch>,
+    pub tor: Option<TorLaunch>,
 }
 
 impl RouteSpec {
@@ -242,6 +274,14 @@ impl RouteSpec {
             probe: None,
             label: RouteKind::Drop.label().into(),
             wireproxy: None,
+            tor: None,
+        }
+    }
+
+    /// Own-tor routes learn their SOCKS port when tor starts.
+    pub(crate) fn set_socks_port(&mut self, port: u16) {
+        if let Egress::Socks(proxy) = &mut self.egress {
+            proxy.port = port;
         }
     }
 }
@@ -269,6 +309,29 @@ pub fn tool_on_path(name: &str) -> Option<PathBuf> {
     find_on_path(name)
 }
 
+/// The program for a route tool, in the order the other tools use: the
+/// path set in Settings, `PATH`, the system's usual places, then the copy
+/// Antinomie installed under the data folder.
+fn find_program(id: &str, configured: &str, data_dir: &Path) -> Result<Option<PathBuf>, String> {
+    let configured = configured.trim();
+    if !configured.is_empty() {
+        let path = PathBuf::from(configured);
+        return if path.is_file() {
+            Ok(Some(path))
+        } else {
+            Err(format!("{} is not a file", path.display()))
+        };
+    }
+    Ok(find_on_path(id)
+        .or_else(|| {
+            crate::analysis_tools::system_candidates(id)
+                .iter()
+                .map(PathBuf::from)
+                .find(|path| path.is_file())
+        })
+        .or_else(|| crate::analysis_tools::managed_entry(data_dir, id)))
+}
+
 fn find_on_path(name: &str) -> Option<PathBuf> {
     std::env::split_paths(&std::env::var_os("PATH")?)
         .map(|dir| dir.join(name))
@@ -279,8 +342,9 @@ impl RouteConfig {
     /// The settings are well formed (nothing is looked up on disk or the
     /// network); used when they are saved.
     pub fn validate(&self) -> Result<(), String> {
-        let tor = host_port(&self.tor.socks).map_err(|e| format!("Tor SOCKS address: {e}"))?;
-        let _ = tor;
+        if self.tor.mode == TorMode::Socks {
+            host_port(&self.tor.socks).map_err(|e| format!("Tor SOCKS address: {e}"))?;
+        }
         check_probe(&self.tor.probe).map_err(|e| format!("Tor: {e}"))?;
         check_probe(&self.vpn.probe).map_err(|e| format!("VPN: {e}"))?;
         check_probe(&self.socks5.probe).map_err(|e| format!("SOCKS5: {e}"))?;
@@ -327,7 +391,11 @@ impl RouteConfig {
 
     /// `kind` ready to use, or why it cannot be: a missing setting, a
     /// missing file or program. Never falls back to another route.
-    pub fn spec(&self, kind: RouteKind) -> Result<RouteSpec, String> {
+    ///
+    /// `data_dir` is the app's data folder: Antinomie's own copies of tor
+    /// and wireproxy are looked for under it, and its tor keeps its private
+    /// data folder there.
+    pub fn spec(&self, data_dir: &Path, kind: RouteKind) -> Result<RouteSpec, String> {
         self.validate()?;
         let spec = |egress, probe, label: String, wireproxy| RouteSpec {
             kind,
@@ -335,6 +403,7 @@ impl RouteConfig {
             probe,
             label,
             wireproxy,
+            tor: None,
         };
         Ok(match kind {
             RouteKind::Drop => RouteSpec::drop_all(),
@@ -360,6 +429,39 @@ impl RouteConfig {
                 };
                 spec(Egress::Sink(Sink { address, external }), None, label, None)
             }
+            RouteKind::Tor if self.tor.mode == TorMode::Own => {
+                let binary = find_program("tor", &self.tor.program, data_dir)
+                    .map_err(|e| format!("Tor: {e}"))?
+                    .ok_or(
+                        "Tor: no tor program was found; install Tor in Settings > Network \
+                         routes, or use an existing SOCKS address",
+                    )?;
+                let bundle = crate::analysis_tools::managed_entry(data_dir, "tor");
+                let lib_dir = (bundle.as_ref() == Some(&binary))
+                    .then(|| binary.parent().map(Path::to_path_buf))
+                    .flatten();
+                let geoip_dir = lib_dir
+                    .as_ref()
+                    .and_then(|dir| dir.parent())
+                    .map(|root| root.join("data"));
+                let mut route = spec(
+                    Egress::Socks(SocksProxy {
+                        host: "127.0.0.1".into(),
+                        port: 0,
+                        credentials: None,
+                    }),
+                    check_probe(&self.tor.probe)?,
+                    "Tor (started by Antinomie)".into(),
+                    None,
+                );
+                route.tor = Some(TorLaunch {
+                    binary,
+                    lib_dir,
+                    geoip_dir,
+                    state_root: data_dir.join(CONFIG_DIR).join("tor"),
+                });
+                route
+            }
             RouteKind::Tor => {
                 let (host, port) = host_port(&self.tor.socks)?;
                 let label = format!("Tor via {host}:{port}");
@@ -382,17 +484,12 @@ impl RouteConfig {
                 let text = std::fs::read_to_string(config)
                     .map_err(|e| format!("VPN: {}: {e}", config.display()))?;
                 let (host, port) = wireproxy_socks(&text).map_err(|e| format!("VPN: {e}"))?;
-                let binary = if self.vpn.wireproxy.trim().is_empty() {
-                    find_on_path("wireproxy").ok_or(
-                        "VPN: wireproxy was not found on PATH; install it or set its path in \
-                         Settings",
-                    )?
-                } else {
-                    PathBuf::from(self.vpn.wireproxy.trim())
-                };
-                if !binary.is_file() {
-                    return Err(format!("VPN: {} is not a file", binary.display()));
-                }
+                let binary = find_program("wireproxy", &self.vpn.wireproxy, data_dir)
+                    .map_err(|e| format!("VPN: {e}"))?
+                    .ok_or(
+                        "VPN: wireproxy was not found; install it in Settings > Network \
+                         routes or set its path there",
+                    )?;
                 let label = format!("VPN (WireGuard via wireproxy, {host}:{port})");
                 spec(
                     Egress::Socks(SocksProxy {

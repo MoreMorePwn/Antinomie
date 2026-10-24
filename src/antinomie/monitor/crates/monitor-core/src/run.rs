@@ -507,6 +507,7 @@ mod tests {
             recording_error: None,
             execution: None,
             analysis: Some(crate::analysis::jobs::new_report("/tmp/sample", &selection)),
+            route: None,
         };
         let mut run = ProgramRun::new(summary, 1024 * 1024).unwrap();
         run.settle_unstarted_analysis("network capture start: QMP connect: timed out");

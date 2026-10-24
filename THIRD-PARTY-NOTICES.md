@@ -61,12 +61,19 @@ data folder, pinned by SHA-256, and Antinomie does not redistribute them:
 | GEF, bata24's fork (default console): `gef.py` at commit `fc085a60be334d38d498296187344e9e7d558587` of [bata24/gef](https://github.com/bata24/gef), SHA-256 `fabcdc13c8c7a81ceaa2af891f6ce4695d623adef98c8f2ccf365bbbf4df90ce`. It is a Python script that the system's gdb loads | MIT, Copyright (c) 2021-2026 bata24 (@bata_24), as in the repository's `LICENSE` and the header of `gef.py` at that commit; the fork derives from GEF by hugsy, also MIT |
 | pwndbg 2026.09.15 (alternative console): the upstream `pwndbg_2026.09.15_x86_64-portable.tar.xz` release asset of [pwndbg/pwndbg](https://github.com/pwndbg/pwndbg), SHA-256 `7ba64666ee595885ba4b0e073f85e423829103e9fdbe921ba4eef1acd9150803`, unpacked as it is and started through its own `bin/pwndbg` | MIT, Copyright (c) 2026 Dominik 'Disconnect3d' Czarnota, as in `LICENSE.md` at the `2026.09.15` tag. The portable build also holds GDB 17.2 (GPL-3.0-or-later), a Python 3.13 runtime (PSF license) and Python packages and libraries under their own licenses, whose license files arrive inside the download |
 
-The per-run network routes (Settings > Network routes) can use three programs
-that the user installs and runs themselves: Tor (BSD-3-Clause) for the Tor
-route, wireproxy (ISC) for the VPN route and INetSim (GPL-2.0) for an external
-InetSim. Antinomie neither bundles nor downloads them; it finds them on `PATH`,
-starts wireproxy as a separate process with the user's configuration file, and
-talks to Tor and INetSim over local sockets. OpenVPN is not used.
+The per-run network routes (Settings > Network routes) run three programs as
+separate processes, never linked into Antinomie: Tor for the Tor route,
+wireproxy for the VPN route and INetSim (GPL-2.0, which the user installs and
+runs; Antinomie only connects to it) for an external InetSim. A program set in
+Settings or found on `PATH` or in the system's usual locations is used first.
+When there is none, Settings > Network routes (and Library > Analysis tools)
+downloads Tor and wireproxy on request into the user's data folder, pinned by
+SHA-256, and Antinomie does not redistribute them. OpenVPN is not used.
+
+| Component | Terms / retained notice |
+|---|---|
+| wireproxy 1.1.3: the upstream `wireproxy_linux_amd64.tar.gz` release asset of [windtf/wireproxy](https://github.com/windtf/wireproxy), `https://github.com/windtf/wireproxy/releases/download/v1.1.3/wireproxy_linux_amd64.tar.gz`, SHA-256 `e88c1d090740373fc606c1bafd81d9a5eadc642cce5667616e20e9d7a444f51c` (the digest GitHub lists for the asset). The archive holds the one static executable | ISC license, as in the repository's `LICENSE`. The static Go binary also contains wireguard-go (MIT) and other Go modules under their own licenses, which the archive does not list; their notices are in the module sources named by the release |
+| Tor 0.4.9.14, from the Tor Expert Bundle 15.0.26 for Linux x86-64: `https://archive.torproject.org/tor-package-archive/torbrowser/15.0.26/tor-expert-bundle-linux-x86_64-15.0.26.tar.gz`, SHA-256 `19cf18726eecb362e0f21d27afa9ea9efe5da928bfdfbb1ceb5fe54519e87f4a`, unpacked as it is. The Tor Project's archive is used because dist.torproject.org removes old versions. The pin was checked against the release's detached OpenPGP signature (`.asc`, Tor Browser Developers signing key, primary fingerprint EF6E 286D DA85 EA2A 4BA7 DE68 4E2C 6E87 9329 8290); Antinomie checks the SHA-256 only | Tor: BSD-3-Clause, Copyright The Tor Project, Inc. and others; `tor --version` of this build also states that it is covered by GPL-3.0-or-later. The bundle ships libevent (BSD-3-Clause) and OpenSSL (Apache-2.0) and, unused by Antinomie, the lyrebird and conjure pluggable transports with Go modules under their own licenses; the license texts are in the bundle's `docs/` folder, which stays in the unpacked tool folder |
 
 For memory analysis, the same dialog (or **Install Volatility 3** in the
 Memory tab) downloads Volatility 3 2.28.2 (Volatility Software License 1.0)
