@@ -249,7 +249,7 @@ static void usage(const char *self, FILE *out)
            "   (a bare run is every scenario; --only a,b selects some)"
 #endif
     );
-    fprintf(out, "  --rounds N        repetitions per scenario (1-%d, default 3)\n"
+    fprintf(out, "  --rounds N        repetitions of the beacon scenarios (1-%d, default 3)\n"
            "  --delay MS        pause between rounds (0-%d, default 500)\n"
            "  --host ADDRESS    numeric IPv4 of the listener (default %s, the QEMU NAT host)\n"
            "  --port N          override the scenario's own port\n"
@@ -543,10 +543,10 @@ int main(int argc, char **argv)
     argv = expanded;
     struct options options = {.rounds = 3, .delay_ms = 500};
     int gap_ms = 1000;
+#ifndef SINGLE_SCENARIO
     const char *only = NULL;
-    int all = 0, listing = 0;
-    (void)all;
-    (void)only;
+#endif
+    int listing = 0;
     for (int i = 1; i < argc; i++) {
         const char *arg = argv[i];
         int has_value = i + 1 < argc;
@@ -565,7 +565,7 @@ int main(int argc, char **argv)
             options.real_paths = 1;
 #ifndef SINGLE_SCENARIO
         } else if (!strcmp(arg, "--all")) {
-            all = 1;
+            // The default: every scenario.
         } else if (!strcmp(arg, "--only") && has_value) {
             only = argv[++i];
             if (check_only(self, only) != 0)
