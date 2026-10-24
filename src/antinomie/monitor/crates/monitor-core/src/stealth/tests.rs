@@ -470,3 +470,141 @@ fn ovmf_descriptors_are_matched_by_interface_and_features() {
     assert_eq!(std::fs::read(&store).unwrap(), b"boot entries");
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+fn base_named(id: &str, support: &[&str]) -> crate::api::BaseSummary {
+    crate::api::BaseSummary {
+        id: id.into(),
+        label: id.into(),
+        directory: std::path::PathBuf::new(),
+        guest: None,
+        min_ram_mib: 0,
+        min_disk_gib: 0,
+        fixed_display: false,
+        size_bytes: 0,
+        revision: None,
+        min_app_version: None,
+        built_with: None,
+        stealth_support: support.iter().map(|item| (*item).to_owned()).collect(),
+    }
+}
+
+/// A profile that asks for every setting `fitted` can change.
+fn asks_for_everything() -> StealthProfile {
+    let mut profile = StealthProfile::realistic(StealthPreset::RealisticDesktop, "AuthenticAMD");
+    profile.firmware = Firmware::UefiSecureBoot;
+    profile.disk_bus = DiskBus::Sata;
+    profile.nat = NatNetwork::home();
+    profile.smt = true;
+    profile.realistic_topology = true;
+    profile.pointer = Pointer::UsbTablet;
+    profile.usb = false;
+    profile
+}
+
+#[test]
+fn every_setting_fitted_can_change_is_listed_with_a_line_for_the_setting() {
+    let profile = asks_for_everything();
+    let host = HostSupport {
+        ovmf: Ok(()),
+        ovmf_secure_boot: Ok(()),
+        smt: Err("no TOPOEXT".into()),
+    };
+    let fallbacks = profile.fallbacks(&BaseSupport::from_list(&[]), &host);
+    let settings: Vec<_> = fallbacks.iter().map(|fallback| fallback.setting).collect();
+    assert_eq!(
+        settings,
+        [
+            FallbackSetting::Firmware,
+            FallbackSetting::DiskBus,
+            FallbackSetting::Nat,
+            FallbackSetting::Smt,
+            FallbackSetting::Pointer
+        ]
+    );
+    let line = |setting| {
+        fallbacks
+            .iter()
+            .find(|fallback| fallback.setting == setting)
+            .unwrap()
+            .summary
+            .clone()
+    };
+    assert_eq!(
+        line(FallbackSetting::DiskBus),
+        "SATA (AHCI) not supported by this base: virtio will be used"
+    );
+    assert!(line(FallbackSetting::Firmware).ends_with("BIOS will be used"));
+    assert!(line(FallbackSetting::Nat).contains("10.0.2.0/24 will be used"));
+    assert!(line(FallbackSetting::Smt).contains("this host"));
+    assert!(line(FallbackSetting::Pointer).contains("virtio tablet will be used"));
+    // The same entries `fitted` changes, and its notes are these.
+    let (fitted, notes) = profile.fitted(&BaseSupport::from_list(&[]), &host);
+    assert_eq!(notes.len(), fallbacks.len());
+    assert_eq!(fitted.disk_bus, DiskBus::Virtio);
+    assert_eq!(fitted.firmware, Firmware::Bios);
+    assert_eq!(fitted.pointer, Pointer::VirtioTablet);
+    assert!(!fitted.smt);
+    // What the start log and the run's notes carry names the setting and why.
+    let log = fallbacks[1].log_line();
+    assert!(log.starts_with("Stealth setting not applied: SATA (AHCI) not supported by this base"));
+    assert!(log.contains("rebuild a BusyBox base"));
+}
+
+#[test]
+fn a_base_and_host_that_support_everything_ask_for_no_fallback() {
+    let profile = asks_for_everything();
+    let mut profile = profile;
+    profile.usb = true;
+    let support = BaseSupport::from_list(&["uefi".into(), "sata".into(), "dhcp".into()]);
+    assert!(profile.fallbacks(&support, &HostSupport::all()).is_empty());
+    assert!(
+        profile
+            .fallbacks(&BaseSupport::all(), &HostSupport::all())
+            .is_empty()
+    );
+    let (_, fallbacks) = profile.fitted_with(&BaseSupport::all(), &HostSupport::all());
+    assert!(fallbacks.is_empty());
+}
+
+#[test]
+fn a_vm_on_a_base_without_a_support_list_falls_back_and_one_with_it_does_not() {
+    let mut vm = crate::api::VmConfig {
+        stealth: StealthProfile::realistic(StealthPreset::RealisticDesktop, "GenuineIntel"),
+        ..Default::default()
+    };
+    vm.stealth.disk_bus = DiskBus::Sata;
+    vm.stealth.firmware = Firmware::Bios;
+    vm.stealth.nat = NatNetwork::default();
+    let old = base_named("old", &[]);
+    let new = base_named("new", &["sata", "uefi", "dhcp"]);
+    vm.base_identity = Some("old".into());
+    let bases = [old.clone(), new.clone()];
+    let host = HostSupport::all();
+    let found = vm_fallbacks(&vm, &bases, &host);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].setting, FallbackSetting::DiskBus);
+    // The one base that supports it is offered; the VM's own is not.
+    let offered = base_supporting(
+        &vm.stealth,
+        FallbackSetting::DiskBus,
+        Some("old"),
+        &bases,
+        &host,
+    );
+    assert_eq!(offered.map(|base| base.id.as_str()), Some("new"));
+    assert!(
+        base_supporting(
+            &vm.stealth,
+            FallbackSetting::DiskBus,
+            Some("old"),
+            std::slice::from_ref(&old),
+            &host
+        )
+        .is_none()
+    );
+    vm.base_identity = Some("new".into());
+    assert!(vm_fallbacks(&vm, &bases, &host).is_empty());
+    // A base that is not installed has nothing to compare with.
+    vm.base_identity = Some("gone".into());
+    assert!(vm_fallbacks(&vm, &bases, &host).is_empty());
+}

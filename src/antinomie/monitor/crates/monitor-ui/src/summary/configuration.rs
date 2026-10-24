@@ -3,7 +3,7 @@
 //! selected VM, as cards.
 use super::*;
 use antinomie_monitor_core::stealth::{
-    chassis_label, DiskBus, Firmware, StealthPreset, StealthProfile, MACHINES,
+    chassis_label, DiskBus, Fallback, Firmware, StealthPreset, StealthProfile, MACHINES,
 };
 use egui_phosphor::regular as icon;
 
@@ -46,8 +46,13 @@ pub(super) fn show(ui: &mut egui::Ui, vm: &VmConfig, snapshot: &Snapshot) {
         },
     );
     ui.add_space(10.0);
+    let fallbacks = antinomie_monitor_core::stealth::vm_fallbacks(
+        vm,
+        &snapshot.bases,
+        antinomie_monitor_core::stealth::HostSupport::cached(),
+    );
     resource_cards(ui, "summary-stealth", 1, 1, width.max(80.0), 10, |ui, _| {
-        stealth(ui, &vm.stealth, narrow)
+        stealth(ui, &vm.stealth, narrow, &fallbacks)
     });
 }
 
@@ -187,7 +192,7 @@ fn wait_label(microseconds: u32) -> String {
 }
 
 /// A rounded tag, tinted with `color`.
-fn pill(ui: &mut egui::Ui, text: &str, color: Color32) {
+fn pill(ui: &mut egui::Ui, text: &str, color: Color32) -> egui::Response {
     egui::Frame::new()
         .fill(color.gamma_multiply(0.16))
         .stroke(egui::Stroke::new(1.0_f32, color.gamma_multiply(0.7)))
@@ -195,7 +200,8 @@ fn pill(ui: &mut egui::Ui, text: &str, color: Color32) {
         .inner_margin(egui::Margin::symmetric(8, 1))
         .show(ui, |ui| {
             ui.label(RichText::new(text).small().color(color));
-        });
+        })
+        .response
 }
 
 fn on_off(on: bool, yes: &str, no: &str) -> String {
@@ -210,12 +216,27 @@ fn firmware_kind(firmware: Firmware) -> &'static str {
     }
 }
 
-fn stealth(ui: &mut egui::Ui, profile: &StealthProfile, narrow: bool) {
+fn stealth(ui: &mut egui::Ui, profile: &StealthProfile, narrow: bool, fallbacks: &[Fallback]) {
     ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new(icon::SHIELD).size(18.0).color(theme::blue()));
         ui.strong("Stealth profile");
         pill(ui, profile.preset.label(), theme::blue());
+        if !fallbacks.is_empty() {
+            pill(ui, "Stealth fallback", theme::warn()).on_hover_text(
+                fallbacks
+                    .iter()
+                    .map(|fallback| fallback.summary.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            );
+        }
     });
+    for fallback in fallbacks {
+        ui.colored_label(
+            theme::warn(),
+            format!("{} {}", icon::WARNING, fallback.summary),
+        );
+    }
     ui.add_space(2.0);
     let identity = &profile.identity;
     let machine = if profile.identity_enabled {
@@ -505,6 +526,74 @@ mod tests {
         };
         let texts = drawn(&stopped, &running, events);
         assert!(!texts.iter().any(|(text, _)| text == "<configure>"));
+    }
+
+    fn base_with(support: &[&str]) -> antinomie_monitor_core::BaseSummary {
+        antinomie_monitor_core::BaseSummary {
+            id: "base".into(),
+            label: "Base".into(),
+            directory: std::path::PathBuf::new(),
+            guest: None,
+            min_ram_mib: 0,
+            min_disk_gib: 0,
+            fixed_display: false,
+            size_bytes: 0,
+            revision: None,
+            min_app_version: None,
+            built_with: None,
+            stealth_support: support.iter().map(|item| (*item).to_owned()).collect(),
+        }
+    }
+
+    /// A VM that asks for SATA on firmware and a clock every host has.
+    fn sata_vm() -> VmConfig {
+        let mut profile =
+            StealthProfile::realistic(StealthPreset::RealisticDesktop, "GenuineIntel");
+        profile.disk_bus = DiskBus::Sata;
+        profile.firmware = Firmware::Bios;
+        profile.smt = false;
+        profile.nat = antinomie_monitor_core::stealth::NatNetwork::default();
+        VmConfig {
+            base_identity: Some("base".into()),
+            ..vm(profile)
+        }
+    }
+
+    #[test]
+    fn the_vm_header_warns_when_a_setting_falls_back_and_not_when_the_base_supports_it() {
+        let old = Snapshot {
+            bases: vec![base_with(&[])],
+            ..Snapshot::default()
+        };
+        let texts: Vec<String> = drawn(&sata_vm(), &old, Vec::new())
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect();
+        assert!(
+            texts.iter().any(|text| text == "Stealth fallback"),
+            "the badge: {texts:?}"
+        );
+        assert!(
+            texts
+                .iter()
+                .any(|text| text
+                    .contains("SATA (AHCI) not supported by this base: virtio will be used")),
+            "the setting's line: {texts:?}"
+        );
+        let new = Snapshot {
+            bases: vec![base_with(&["sata", "uefi", "dhcp"])],
+            ..Snapshot::default()
+        };
+        let texts: Vec<String> = drawn(&sata_vm(), &new, Vec::new())
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect();
+        assert!(
+            !texts
+                .iter()
+                .any(|text| text.contains("fallback") || text.contains("not supported")),
+            "a base that supports everything has no warning: {texts:?}"
+        );
     }
 
     #[test]

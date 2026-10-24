@@ -115,6 +115,33 @@ fn a_backend_error_is_a_toast_and_the_bar_keeps_only_the_saving_state() {
 }
 
 #[test]
+fn a_vm_that_started_with_a_setting_changed_warns_once_in_the_start_log() {
+    let mut app = app();
+    let ctx = context();
+    let line = "Stealth setting not applied: SATA (AHCI) not supported by this base: virtio will be used; the base boots from virtio only";
+    app.snapshot.active_vm = Some("vm".into());
+    app.snapshot.stealth_fallbacks = vec![line.into()];
+    app.activity_notices_due = true;
+    frames(&mut app, &ctx, 4);
+    let warned: Vec<_> = toasts(&ctx)
+        .into_iter()
+        .filter(|toast| toast.1 == "Stealth setting not applied")
+        .collect();
+    assert_eq!(warned.len(), 1, "{:?}", toasts(&ctx));
+    assert!(warned[0]
+        .2
+        .starts_with("SATA (AHCI) not supported by this base"));
+    assert_eq!(app.activity.counts().0, 1, "and in the Activity log");
+    // A VM that started as configured says nothing.
+    let mut quiet = super::app();
+    let ctx = context();
+    quiet.snapshot.active_vm = Some("vm".into());
+    quiet.activity_notices_due = true;
+    frames(&mut quiet, &ctx, 4);
+    assert!(toasts(&ctx).is_empty());
+}
+
+#[test]
 fn what_belongs_to_one_run_stays_in_activity_and_its_view() {
     let mut app = app();
     let ctx = context();
