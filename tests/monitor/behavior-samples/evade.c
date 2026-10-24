@@ -494,10 +494,16 @@ static unsigned parse_ignore(const char *list)
     return mask;
 }
 
+// stdout carries the scorecard; stderr repeats the line only when it goes somewhere else, so a
+// terminal that shows both streams prints it once.
 static void both(const char *text)
 {
     printf("%s\n", text);
     fflush(stdout);
+    struct stat out, err;
+    if (fstat(STDOUT_FILENO, &out) == 0 && fstat(STDERR_FILENO, &err) == 0 &&
+        out.st_dev == err.st_dev && out.st_ino == err.st_ino)
+        return;
     fprintf(stderr, "%s\n", text);
     fflush(stderr);
 }
@@ -546,7 +552,7 @@ int sample_gate_run(const struct options *options, const char *module)
         snprintf(line, sizeof line, "EVADE %s: %s", category_names[c], gate.reason[c]);
         both(line);
         size_t used = strlen(tripped);
-        snprintf(tripped + used, sizeof tripped - used, "%s%s", used ? "," : "", category_names[c]);
+        snprintf(tripped + used, sizeof gate.names - used, "%s%s", used ? "," : "", category_names[c]);
     }
     printf("%-11s %-17s verdict=%s tripped=%s checks=%d sandbox_hints=%d/%d\n", "GATE", module,
            gate.tripped ? "evade" : "proceed", tripped[0] ? tripped : "-", gate.checks, gate.hints,
