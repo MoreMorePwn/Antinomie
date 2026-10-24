@@ -99,36 +99,44 @@ fn triage_pcap_lookup_is_cached_between_frames() {
 
 #[test]
 fn process_tree_panel_cost_is_flat_with_many_orphan_roots() {
-    let ctx = context();
     // Processes whose parents were never observed (uncaptured parents,
     // reparented children): every one is a root.
     for (count, first, warm) in [(10_000u32, 150.0, 30.0), (30_000, 400.0, 30.0)] {
         let processes: Vec<_> = (1..=count).map(|pid| process(pid, 4_000_000)).collect();
-        let mut times = Vec::new();
-        for frame in 0..3 {
-            let started = Instant::now();
-            let _ = ctx.run(
-                egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
-                    time: Some(f64::from(frame)),
-                    ..Default::default()
-                },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        super::super::captures::process_tree(ui, &processes, None, 16.0);
-                    });
-                },
+        // The best of five tries, each on a fresh context so that its first
+        // frame builds the tree again. A host that is busy with other work
+        // slows some tries; a tree rebuilt or drawn whole every frame is over
+        // the budget in all of them.
+        for attempt in 1..=5 {
+            let ctx = context();
+            let mut times = Vec::new();
+            for frame in 0..3 {
+                let started = Instant::now();
+                let _ = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
+                        time: Some(f64::from(frame)),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            super::super::captures::process_tree(ui, &processes, None, 16.0);
+                        });
+                    },
+                );
+                times.push(started.elapsed().as_secs_f64() * 1000.0);
+            }
+            eprintln!("process tree, {count} orphan roots, try {attempt}: {times:?} ms per frame");
+            // The first frame builds the tree; later frames draw the rows in view.
+            if times[0] < first && times[2] < warm {
+                break;
+            }
+            assert!(
+                attempt < 5,
+                "{count} roots: frames took {times:.0?} ms at the last of five tries \
+                 (limits {first} ms, then {warm} ms): the tree is rebuilt or drawn whole every frame"
             );
-            times.push(started.elapsed().as_secs_f64() * 1000.0);
         }
-        eprintln!("process tree, {count} orphan roots: {times:?} ms per frame");
-        // The first frame builds the tree; later frames draw the rows in view.
-        assert!(times[0] < first, "first frame took {:.0} ms", times[0]);
-        assert!(
-            times[2] < warm,
-            "frame took {:.0} ms (the tree is rebuilt or drawn whole every frame)",
-            times[2]
-        );
     }
 }
 

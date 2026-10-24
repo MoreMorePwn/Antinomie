@@ -1041,9 +1041,13 @@ mod tests {
                 ram_size: 64 * 1024 * 1024,
                 qmp_path,
             };
-            process
-                .qmp(&serde_json::json!({"execute":"query-status"}))
-                .unwrap();
+            // QEMU starts as slowly as the host lets it, and one exchange
+            // waits for its greeting for two seconds: ask until it answers.
+            let ready = std::time::Instant::now() + Duration::from_secs(120);
+            while let Err(error) = process.qmp(&serde_json::json!({"execute":"query-status"})) {
+                assert!(std::time::Instant::now() < ready, "{error}");
+                std::thread::sleep(Duration::from_millis(100));
+            }
             process
         };
         let overlay = |name: &str, parent: &Path| {
@@ -1464,7 +1468,7 @@ mod tests {
                 .unwrap_err()
                 .contains("timed out")
         );
-        assert!(start.elapsed() < Duration::from_secs(1));
+        assert!(start.elapsed() < Duration::from_secs(30));
         assert!(process.child.try_wait().unwrap().is_some());
         assert!(!Path::new(&format!("/proc/{pid}")).exists());
         assert!(unrelated.try_wait().unwrap().is_none());

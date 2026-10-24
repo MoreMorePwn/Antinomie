@@ -418,7 +418,7 @@ mod tests {
         // Another test thread may fork while this file is open for writing;
         // the child holds the descriptor until it execs, and running the
         // script meanwhile fails with ETXTBSY.
-        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
         while std::time::Instant::now() < deadline {
             match std::process::Command::new(&path).output() {
                 Err(error) if error.raw_os_error() == Some(26) => {
@@ -507,24 +507,25 @@ mod tests {
         let python = fake_python(
             &dir,
             "python",
-            r#"sleep 0.3; echo '{"pysigma": "2.0.1", "pysigma-backend-sqlite": "2.1.0", "backend_import": "ok"}'"#,
+            // Once armed the probe answers only when released, so the call
+            // below can return before the answer only by not waiting for it.
+            r#"here=$(dirname "$0"); if test -e "$here/armed"; then while test ! -e "$here/go"; do sleep 0.02; done; fi; echo '{"pysigma": "2.0.1", "pysigma-backend-sqlite": "2.1.0", "backend_import": "ok"}'"#,
         );
         let config = ToolConfig::from_sigma_setting(python.to_str().unwrap());
         let (tx, rx) = std::sync::mpsc::channel();
         let tx = Mutex::new(tx);
-        let started = Instant::now();
+        std::fs::write(dir.join("armed"), b"").unwrap();
         let first = try_tool_facts(&config, move || {
             let _ = tx.lock().unwrap().send(());
         });
-        assert!(started.elapsed() < Duration::from_millis(250));
-        if first.is_none() {
-            rx.recv_timeout(Duration::from_secs(20)).unwrap();
-            // Suricata may still be probing; wait for both.
-            let deadline = Instant::now() + Duration::from_secs(20);
-            while try_tool_facts(&config, || {}).is_none() {
-                assert!(Instant::now() < deadline);
-                std::thread::sleep(Duration::from_millis(20));
-            }
+        assert!(first.is_none(), "the held probe cannot have answered");
+        std::fs::write(dir.join("go"), b"").unwrap();
+        rx.recv_timeout(Duration::from_secs(120)).unwrap();
+        // Suricata may still be probing; wait for both.
+        let deadline = Instant::now() + Duration::from_secs(120);
+        while try_tool_facts(&config, || {}).is_none() {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(20));
         }
         let facts = try_tool_facts(&config, || {}).unwrap();
         assert!(matches!(facts.sigma, ToolProbe::Found { .. }));
