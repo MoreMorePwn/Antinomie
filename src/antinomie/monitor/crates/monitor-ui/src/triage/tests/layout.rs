@@ -476,6 +476,65 @@ fn the_refresh_row_is_one_status_at_the_right_of_the_tab_bar() {
 }
 
 #[test]
+fn a_narrow_header_puts_the_status_under_wrapped_tabs_not_over_them() {
+    let ctx = context();
+    for width in [420.0, 520.0, 640.0, 760.0, 900.0] {
+        let (_temp, mut view) = view(Section::Files);
+        view.last_refresh = Some(Instant::now());
+        let mut out = egui::FullOutput::default();
+        for time in 0..4 {
+            out = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, 900.0),
+                    )),
+                    time: Some(f64::from(time) * 0.02),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        view.show(
+                            ui,
+                            TriageInput {
+                                vm_id: Some("vm"),
+                                boot_id: Some("boot"),
+                                run_id: Some("run"),
+                                pcap: Some(Path::new("/nonexistent/capture.pcap")),
+                                ..TriageInput::empty()
+                            },
+                        );
+                    });
+                },
+            );
+        }
+        let shown = texts(&out);
+        let status = shown
+            .iter()
+            .find(|(text, _)| text.starts_with("Refreshed "))
+            .unwrap_or_else(|| panic!("status missing at {width}: {shown:?}"))
+            .1;
+        for tab in [
+            "Summary",
+            "Properties",
+            "Detection",
+            "Process",
+            "Files",
+            "Network",
+            "eBPF",
+            "IOC",
+        ] {
+            let tab = find(&out, tab);
+            assert!(
+                !status.intersects(tab),
+                "status {status:?} overlaps {tab:?} at {width}: {:?}",
+                shown
+            );
+        }
+    }
+}
+
+#[test]
 fn every_table_still_sorts_from_its_headers() {
     let ctx = context();
     let (_temp, mut view) = view(Section::Network);
