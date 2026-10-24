@@ -189,7 +189,7 @@ pub fn host_allowed(origin: &str, target: &str) -> bool {
 pub fn https_host(url: &str) -> Result<String, String> {
     let rest = url
         .strip_prefix("https://")
-        .ok_or_else(|| format!("{url} is not an https URL"))?;
+        .ok_or_else(|| format!("{} is not an https URL", super::redact_url(url)))?;
     let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
     if authority.is_empty()
         || authority.contains('@')
@@ -201,10 +201,16 @@ pub fn https_host(url: &str) -> Result<String, String> {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '.')
         || !authority.contains('.')
     {
-        return Err(format!("{url} has an unacceptable host"));
+        return Err(format!(
+            "{} has an unacceptable host",
+            super::redact_url(url)
+        ));
     }
     if url.chars().any(|c| c.is_control() || c == ' ' || c == '\\') {
-        return Err(format!("{url} contains unacceptable characters"));
+        return Err(format!(
+            "{} contains unacceptable characters",
+            super::redact_url(url)
+        ));
     }
     Ok(authority.to_owned())
 }

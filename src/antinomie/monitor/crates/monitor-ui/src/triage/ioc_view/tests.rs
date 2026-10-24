@@ -5,6 +5,7 @@ use super::*;
 use crate::app::tests::texts;
 use crate::triage::tests::{http_pcap, write_rwx_calls};
 use antinomie_monitor_core::{
+    api_keys::Secret,
     ioc::{indicator::Type, update_all, verdict::Outcome},
     ruleset::Fetcher,
 };
@@ -31,7 +32,7 @@ impl Fetcher for Served {
         _cancel: &AtomicBool,
         _progress: &mut dyn FnMut(u64),
     ) -> Result<(), String> {
-        let feed = feeds::FEEDS.iter().find(|feed| feed.url == url).unwrap();
+        let feed = feeds::FEEDS.iter().find(|feed| feed.owns(url)).unwrap();
         let text = match feed.id {
             "threatfox" => THREATFOX,
             "urlhaus" => URLHAUS,
@@ -76,7 +77,13 @@ impl Fixture {
         let _ = std::fs::remove_dir_all(&data);
         std::fs::create_dir_all(&data).unwrap();
         if datasets {
-            let outcomes = update_all(&data, true, &Served, &AtomicBool::new(false), &mut |_| {});
+            let outcomes = update_all(
+                &data,
+                &Secret::new("fixture-key"),
+                &Served,
+                &AtomicBool::new(false),
+                &mut |_| {},
+            );
             assert!(outcomes.iter().all(|outcome| outcome.result.is_ok()));
         }
         Self { run, data }
