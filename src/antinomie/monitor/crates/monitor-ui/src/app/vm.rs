@@ -253,6 +253,19 @@ impl MonitorApp {
         }
     }
 
+    /// What the Run form offers for the running VM's network.
+    fn route_choice(&self) -> crate::route_ui::RouteChoice {
+        let network = self
+            .snapshot
+            .vms
+            .iter()
+            .find(|vm| Some(&vm.id) == self.snapshot.active_vm.as_ref())
+            .map_or(antinomie_monitor_core::VmNetwork::Disconnected, |vm| {
+                vm.network()
+            });
+        crate::route_ui::RouteChoice::new(network, &self.routes.config)
+    }
+
     pub(super) fn launch_form(&mut self, ui: &mut egui::Ui) {
         // Cancel stays usable when the VM stops or a launch is pending; only
         // the form and its actions wait for a running VM.
@@ -286,6 +299,7 @@ impl MonitorApp {
             None
         };
         let mut choose = false;
+        let route = self.route_choice();
         ui.add_enabled_ui(ready, |ui| {
             egui::ScrollArea::vertical()
                 .id_salt("run-setup")
@@ -304,6 +318,7 @@ impl MonitorApp {
                             debug_on_start,
                             core_limits: self.snapshot.guest_core_limits,
                             core_default_mib: self.settings.core_budget_mib,
+                            route,
                         },
                         crate::analysis::ProgramSource {
                             choice: &mut self.launch_source,
@@ -687,15 +702,17 @@ impl MonitorApp {
                             dialog_section(ui, "Network and telemetry");
                             form_grid("vm_network", ui).show(ui, |ui| {
                                 ui.label("Network");
-                                let mut mode = if app.draft.isolated_network { 1 } else if app.draft.nat { 2 } else { 0 };
+                                const MODES: [&str; 4] = ["Disconnected", "Isolated", "NAT (Internet)", "Routed (route per run)"];
+                                let mut mode = if app.draft.isolated_network { 1 } else if app.draft.routed { 3 } else if app.draft.nat { 2 } else { 0 };
                                 let previous = mode;
-                                egui::ComboBox::from_id_salt("network-mode").selected_text(["Disconnected", "Isolated", "NAT (Internet)"][mode])
-                                    .show_ui(ui, |ui| { for (value, label) in ["Disconnected", "Isolated", "NAT (Internet)"].iter().enumerate() {
+                                egui::ComboBox::from_id_salt("network-mode").selected_text(MODES[mode])
+                                    .show_ui(ui, |ui| { for (value, label) in MODES.iter().enumerate() {
                                         ui.selectable_value(&mut mode, value, *label);
                                     } });
                                 if mode != previous {
                                     app.draft.nat = false;
                                     app.draft.isolated_network = mode == 1;
+                                    app.draft.routed = mode == 3;
                                     if mode == 2 { *nat = true; }
                                 }
                                 ui.end_row();
@@ -714,8 +731,11 @@ impl MonitorApp {
                             if app.draft.isolated_network {
                                 ui.colored_label(theme::muted(), "Working interface with host/LAN/Internet forwarding blocked. Packet capture remains available.");
                             }
-                            if !app.draft.nat && !app.draft.isolated_network {
-                                crate::activity::warning(ui, "Disconnected: network capture is unavailable. Choose Isolated or NAT to capture packets.");
+                            if app.draft.routed && !app.draft.isolated_network {
+                                ui.colored_label(theme::muted(), "Routed: the network is Antinomie's own gateway. Each run picks where its traffic goes (none, Internet, InetSim, Tor, VPN or a SOCKS5 proxy; see Settings > Network routes). Between runs nothing leaves. Packet capture remains available.");
+                            }
+                            if !app.draft.has_network() {
+                                crate::activity::warning(ui, "Disconnected: network capture is unavailable. Choose Isolated, Routed or NAT to capture packets.");
                             }
                             if app.draft.nat {
                                 crate::activity::warning(ui,

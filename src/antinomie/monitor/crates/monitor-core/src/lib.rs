@@ -51,6 +51,7 @@ mod recapture;
 pub mod recording;
 mod recording_flush;
 mod resources;
+pub mod route;
 pub mod ruleset;
 mod run;
 pub mod samples;

@@ -20,6 +20,7 @@ impl Session {
         }
         let mut issues = vec![error];
         owner.tree_complete = true;
+        self.release_run_route(&mut owner);
         if owner.network.is_some() {
             if let Err(error) = self.stop_run_network(&mut owner) {
                 issues.push(error);

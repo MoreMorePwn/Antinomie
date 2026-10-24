@@ -87,6 +87,7 @@ fn the_page_list_has_no_keyboard_page_and_each_page_shows_its_settings() {
             "Scan retained evidence when it is ready",
         ),
         (SettingsPage::NetworkLookup, "Address lookup"),
+        (SettingsPage::NetworkRoutes, "Default route"),
         (SettingsPage::AnalysisTools, "Manage tools…"),
         (SettingsPage::Disks, "Extraction limit"),
         (SettingsPage::Advanced, "Show FPS counter"),
@@ -176,4 +177,77 @@ fn the_graph_spacing_defaults_to_equal_events_and_the_choice_is_kept() {
             .graph_spacing,
         GraphSpacing::Time
     );
+}
+
+#[test]
+fn the_routes_page_shows_every_route_and_says_openvpn_is_unsupported() {
+    let ctx = context();
+    let mut app = app();
+    // The page by itself on a tall screen: in the Settings window its lower
+    // sections are scrolled out of view.
+    let output = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(900.0, 2400.0),
+            )),
+            ..Default::default()
+        },
+        |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| app.routes_page(ui));
+        },
+    );
+    let visible = texts(&output);
+    for label in [
+        "Default route",
+        "Tor",
+        "VPN (WireGuard)",
+        "SOCKS5 proxy",
+        "InetSim (fake services)",
+        "Configuration file",
+        "Password",
+        "Save routes",
+    ] {
+        assert!(has(&visible, label), "{label}: {visible:?}");
+    }
+    assert!(visible.iter().any(|(text, _)| text.contains("OpenVPN")));
+    // Nothing is saved until Save routes is pressed, and nothing changed yet.
+    assert!(!app.routes.dirty_for_tests());
+}
+
+#[test]
+fn the_routes_page_is_in_the_settings_list_and_opens() {
+    let ctx = context();
+    let mut app = app();
+    app.settings_open = true;
+    let size = egui::vec2(1280.0, 820.0);
+    let visible = shown(&mut app, &ctx, size);
+    assert!(has(&visible, "Network routes"), "{visible:?}");
+    click_label(&mut app, &ctx, size, "Network routes");
+    assert_eq!(app.settings_page, SettingsPage::NetworkRoutes);
+    let visible = shown(&mut app, &ctx, size);
+    assert!(
+        has(&visible, "Default route") && has(&visible, "Tor"),
+        "{visible:?}"
+    );
+}
+
+#[test]
+fn the_run_form_names_the_fixed_network_of_a_vm_that_is_not_routed() {
+    use antinomie_monitor_core::{route::RouteKind, VmNetwork};
+    let ctx = context();
+    let mut request = ExecRequest {
+        route: Some(RouteKind::Tor),
+        ..ExecRequest::default()
+    };
+    let _ = ctx.run(egui::RawInput::default(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            crate::route_ui::selector(
+                ui,
+                &mut request,
+                &crate::route_ui::RouteChoice::fixed(VmNetwork::Nat),
+            )
+        });
+    });
+    assert_eq!(request.route, None);
 }

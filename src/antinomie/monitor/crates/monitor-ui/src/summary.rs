@@ -1113,12 +1113,11 @@ fn state_color(snapshot: &Snapshot, active: bool) -> Color32 {
     }
 }
 fn network_label(vm: &VmConfig) -> &'static str {
-    if vm.isolated_network {
-        "Isolated"
-    } else if vm.nat {
-        "NAT / external access"
-    } else {
-        "Disabled"
+    match vm.network() {
+        antinomie_monitor_core::VmNetwork::Isolated => "Isolated",
+        antinomie_monitor_core::VmNetwork::Routed => "Routed (route chosen per run)",
+        antinomie_monitor_core::VmNetwork::Nat => "NAT / external access",
+        antinomie_monitor_core::VmNetwork::Disconnected => "Disabled",
     }
 }
 fn age(time: Instant) -> String {

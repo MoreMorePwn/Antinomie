@@ -208,9 +208,11 @@ impl MonitorApp {
                 let recording_roots = locations
                     .map(|location| location.recording_directories.as_slice())
                     .unwrap_or_default();
-                let nat = self.snapshot.vms.iter().any(|config| {
-                    Some(&config.id) == vm.as_ref() && (config.nat || config.isolated_network)
-                });
+                let nat = self
+                    .snapshot
+                    .vms
+                    .iter()
+                    .any(|config| Some(&config.id) == vm.as_ref() && config.has_network());
                 let action = self.network_view.show(
                     ui,
                     NetworkContext {
