@@ -159,6 +159,7 @@ pub(super) fn scan_archive_query(
     let mut engine = rules::Engine::new(rules::Options {
         show_info: request.finding_view.show_info,
         capture_all: request.root_cookie == 0,
+        packed: request.packed.clone(),
     });
     let mut scoped_count = 0;
     // Calls whose saved async observations the pages only preview, and how many.

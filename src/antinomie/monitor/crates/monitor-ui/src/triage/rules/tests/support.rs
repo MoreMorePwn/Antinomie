@@ -20,6 +20,7 @@ pub(in crate::triage) fn run(calls: Calls) -> Output {
         Options {
             show_info: true,
             capture_all: false,
+            ..Default::default()
         },
     )
 }

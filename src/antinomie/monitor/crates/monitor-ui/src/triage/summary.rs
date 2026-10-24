@@ -223,6 +223,7 @@ mod tests {
             specimen_len: Some(85904),
             reason: None,
             sections: vec![],
+            layer: None,
         };
         use antinomie_monitor_core::analysis::detection::{Evidence, Finding, Identity, Report};
         let identity = Identity {

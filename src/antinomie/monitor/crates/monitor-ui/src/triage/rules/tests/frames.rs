@@ -68,6 +68,7 @@ impl Capture {
             engine: Engine::new(Options {
                 show_info: true,
                 capture_all: false,
+                ..Default::default()
             }),
             files: FdState::default(),
         }

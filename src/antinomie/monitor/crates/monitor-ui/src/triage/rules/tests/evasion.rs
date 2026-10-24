@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+use super::super::{Options, PackedImage};
 use super::support::*;
 
 #[test]
@@ -495,5 +496,73 @@ fn a_sleep_of_a_minute_before_any_work_is_medium_and_later_low() {
     assert!(has(
         &run(vec![sys(1, 7, "poll", [0, 0, 120_000, 0, 0, 0], 0)]),
         "evasion.long_sleep"
+    ));
+}
+
+#[test]
+fn a_packed_program_is_flagged_when_the_run_starts_it_and_tiered_by_its_headers() {
+    let packed = |modified| PackedImage {
+        path: "/home/user/sample".into(),
+        packer: "UPX".into(),
+        modified,
+        layers: 2,
+        sha256: "ab".repeat(32),
+    };
+    let start = |path: &str| {
+        let mut call = exec(1, path, &[path]);
+        for event in call.entry.iter_mut().chain(call.exit.iter_mut()) {
+            event.root_task_cookie = 1;
+        }
+        call
+    };
+    let judged = |packed: Option<PackedImage>, calls: Calls| {
+        run_with(
+            calls,
+            Options {
+                show_info: true,
+                packed,
+                ..Default::default()
+            },
+        )
+    };
+    // Standard UPX headers: LOW, with the facts in Details.
+    let out = judged(Some(packed(false)), vec![start("/home/user/sample")]);
+    assert_eq!(tier(&out, "evasion.packed_image").as_deref(), Some("low"));
+    let rows = rows(&out, "evasion.packed_image");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(list(rows[0], "finding.technique"), ["T1027.002"]);
+    let details = list(rows[0], "finding.detail").join("\n");
+    assert!(details.contains("packed with UPX"), "{details}");
+    assert!(
+        details.contains("2 unpacked layers were recovered"),
+        "{details}"
+    );
+    assert!(details.contains(&"ab".repeat(32)));
+    // Headers changed so that the unpacker refuses the file: MEDIUM.
+    let out = judged(Some(packed(true)), vec![start("/home/user/sample")]);
+    assert_eq!(
+        tier(&out, "evasion.packed_image").as_deref(),
+        Some("medium")
+    );
+    // A relative path as typed matches the resolved exec by file name.
+    let mut relative = packed(false);
+    relative.path = "./sample".into();
+    assert!(has(
+        &judged(Some(relative), vec![start("/home/user/sample")]),
+        "evasion.packed_image"
+    ));
+    // No verdict, another program, or a program started by a child: nothing.
+    assert!(!has(
+        &judged(None, vec![start("/home/user/sample")]),
+        "evasion.packed_image"
+    ));
+    assert!(!has(
+        &judged(Some(packed(false)), vec![start("/usr/bin/other")]),
+        "evasion.packed_image"
+    ));
+    let child = exec(2, "/home/user/sample", &["/home/user/sample"]);
+    assert!(!has(
+        &judged(Some(packed(false)), vec![child]),
+        "evasion.packed_image"
     ));
 }

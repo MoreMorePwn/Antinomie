@@ -20,6 +20,7 @@ pub(crate) mod first_run;
 mod page;
 #[cfg(test)]
 mod page_tests;
+mod regex_tab;
 #[cfg(test)]
 pub(crate) mod source_tests;
 mod sources;
@@ -89,6 +90,7 @@ pub(crate) struct Model {
     changed: bool,
     /// Tools the triage scans run; a manifest export qualifies packs against them.
     tools: ruleset::ToolConfig,
+    regex: regex_tab::RegexState,
 }
 
 impl Model {

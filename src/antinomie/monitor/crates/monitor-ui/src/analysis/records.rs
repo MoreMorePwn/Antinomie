@@ -146,6 +146,7 @@ impl Column {
                     AnalysisData::Symbol { address, .. } | AnalysisData::Export { address, .. } => {
                         *address
                     }
+                    AnalysisData::FlossString { function, .. } => *function,
                     _ => None,
                 }),
             _ => match (&record?.data, self) {
@@ -218,7 +219,10 @@ impl Column {
             (AnalysisData::Import { library, .. }, Self::Library) => {
                 library.clone().unwrap_or_else(|| "-".into())
             }
-            (AnalysisData::String { encoding, .. }, Self::Encoding) => encoding.clone(),
+            (
+                AnalysisData::String { encoding, .. } | AnalysisData::FlossString { encoding, .. },
+                Self::Encoding,
+            ) => encoding.clone(),
             (
                 AnalysisData::Symbol { scope, .. } | AnalysisData::Property { scope, .. },
                 Self::Scope,
@@ -273,6 +277,7 @@ pub(super) fn columns(kind: AnalysisKind, filter: Structure, legacy: bool) -> &'
         (AnalysisKind::Capabilities, _) => &[Name, Scope, Attack, Value],
         (AnalysisKind::Hardening, _) => &[Name, Scope, Value],
         (AnalysisKind::Embedded, _) => &[Offset, Value],
+        (AnalysisKind::Floss, _) => &[Name, Value, Address, Encoding],
         _ => &[Name, Value, Offset],
     }
 }
@@ -364,5 +369,44 @@ mod tests {
             columns(AnalysisKind::Strings, Structure::All, true),
             &[Column::Name, Column::Value, Column::Offset]
         );
+    }
+    #[test]
+    fn floss_rows_show_their_type_routine_encoding_and_text() {
+        let row = AnalysisEntry {
+            label: "stack".into(),
+            value: "http://evil.example/bot".into(),
+            offset: None,
+            record: Some(AnalysisRecord {
+                revision: 1,
+                id: 1,
+                location: Some(AnalysisLocation {
+                    kind: AnalysisAddressKind::ObjectAddress,
+                    value: 0x2000b39,
+                    file_range: None,
+                }),
+                data: AnalysisData::FlossString {
+                    origin: "stack".into(),
+                    encoding: "UTF-16LE".into(),
+                    function: Some(0x2000b39),
+                    address: Some(0x2000a30),
+                },
+            }),
+        };
+        let shown = columns(AnalysisKind::Floss, Structure::All, false);
+        assert_eq!(
+            shown,
+            &[
+                Column::Name,
+                Column::Value,
+                Column::Address,
+                Column::Encoding
+            ]
+        );
+        let cells: Vec<_> = shown.iter().map(|column| column.text(&row)).collect();
+        assert_eq!(
+            cells,
+            ["stack", "http://evil.example/bot", "0x2000b39", "UTF-16LE"]
+        );
+        assert!(searchable(&row).contains("utf-16le"));
     }
 }

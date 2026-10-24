@@ -930,8 +930,8 @@ list of calls for the live view and the scan runs them through the same
   UI says so); that needs a guest change.
 * **Not covered here.** `memory.write_then_exec`, `memory.unpacked_capture`,
   `evasion.cpuid_probe`, `evasion.timing_probe` and the root-level `rootkit.*` and
-  `privilege.cred_overwrite` rules need new guest data; `evasion.packed_image`
-  needs a static-analysis result.
+  `privilege.cred_overwrite` rules need new guest data. `evasion.packed_image` uses
+  the Static analysis Unpacking verdict (see Unpacking in phases, 0.7.1).
 * **Antinomie's own activity.** The resource collector of a base from before 0.7.0
   (uploaded as `/tmp/.antinomie-resource-<token>`, which removes itself) is
   recognised by that path and its tasks are left out. The terminal and the analyst's
@@ -1012,6 +1012,137 @@ Host only: `monitor-ui/src/triage/graph/`, nothing needs a guest change.
   (filter sync with real scans, strip, toast, the `native_graph_fixture` for
   screenshots under Xvfb), `graph/bench.rs` (120k findings: paint under 4 ms,
   no repaint when idle, memory, the million-finding build).
+
+### FLOSS strings in static analysis (0.7.1)
+
+Host only. `AnalysisKind::Floss` ("FLOSS strings (decoded, stack, tight)") is a
+Deep analysis check, off by default because a run takes minutes.
+
+* **Tool.** `analysis_tools.rs` has a `floss` package (Mandiant FLOSS 3.2.0, the
+  `floss-v3.2.0-linux.zip` release asset, 44 MB, one PyInstaller executable,
+  Apache-2.0) installed like capa; a system `/usr/bin/floss` or
+  `/usr/local/bin/floss` is used first. Tests use a shell script that prints
+  FLOSS output, never the tool or the network.
+* **ELF support.** FLOSS 3.2.0 loads x86 and x86-64 ELF files through vivisect
+  (checked on a dynamically linked ELF: stack and decoded strings of a small
+  program were found; static strings are switched off, `--no static`, because
+  the Strings category has them). Other machines are not emulated. A statically
+  linked program has thousands of routines and exceeds the 8 minute limit
+  (`floss::TIMEOUT_SECONDS`); the section is then `Unavailable` and says so. FLOSS
+  takes only files up to 16 MiB (`-L` is not passed).
+* **Run.** `analysis/floss.rs` starts `floss -j -q --disable-progress --no static
+  -- /input/specimen` in the analysis sandbox (offline, `/tmp` of 1 GiB like
+  capa, 32 MiB of output at most) and reads the JSON document: `decoded_strings`
+  (routine `decoding_routine`, seen at `decoded_at`), `stack_strings` and
+  `tight_strings` (`function`, `program_counter`) and `language_strings` (a
+  file offset). Strings are kept once per (type, text, routine). Addresses are
+  the ones FLOSS reports for its own load of the file (an ELF is placed at a
+  base of 0x2000000 when position independent), so they are recorded as
+  object addresses, not file offsets; language strings have file offsets.
+* **Rows.** `AnalysisData::FlossString { origin, encoding, function, address }`;
+  at most 50,000 rows go to `listings/floss.jsonl` (the report keeps 256 as a
+  preview) and the section is `Partial` when either bound cut rows.
+* **Progress.** The check runs after the light checks, in the same tier as capa;
+  the active tool shows as "FLOSS"; the worker deadline adds the run's
+  budget. The FLOSS tab shows its row count as a badge like Strings.
+
+### Regex matches window (0.7.1)
+
+Host only. Core: `monitor-core/src/strings_regex/`; window: `monitor-ui/src/regex_matches.rs`.
+
+* **Patterns.** `catalog.rs` lists the built-in ones by category (network,
+  crypto, keys, Linux behaviour, attribution, encoded); an id never changes
+  because the rule manager stores the ids it switched off. `RuleSet::build` compiles
+  them with the `regex` crate (size limits, so a pattern cannot be slow or huge)
+  and a `RegexSet` of the same patterns names the ones worth running on a string.
+  Matches are kept once per (pattern, text, encodings) with a repeat count; the list
+  holds 50,000 and the category counts keep growing past it.
+* **Validation** (`checks.rs`). Domains and the hosts of URLs and emails must end in
+  a known public suffix with a registrable name (`psl`, already linked by
+  `yara-x`); mixed-case names (`strings.Builder`) and the file-like suffixes
+  `so sh py pl pm rs md cc ml ps zip mov run lib` count as hosts only after a
+  scheme or an `@`. IPv4: four octets without leading zeros, not inside a longer
+  dotted number, not after `v`, `version`, `release`..., classed (public, private,
+  loopback, ...) in the type. IPv6 must parse. Bitcoin (base58check and bech32/bech32m),
+  Tox ID (XOR checksum), Monero (block structure; the Keccak checksum is not
+  verified and the note says so), JWT (header JSON with `alg`), SSH keys (blob
+  starts with the key type) and Telegram tokens are structurally checked. A domain or
+  address inside a URL or email is dropped in favour of the URL (`weak` patterns).
+* **Encoded.** `encoded.rs` decodes base64 (standard or URL-safe) and hex runs of at
+  least 24 characters (hex: 12 octets); a run is kept when it decodes to text (90 % printable
+  and a quarter letters) or to a known magic (ELF, ZIP, gzip, PE, script...). Text
+  is scanned again; two levels deep at most, 8,192 characters per string.
+* **Sources** (`sources.rs`). A report scan reads the Strings and FLOSS listings through
+  the validating `read_listing_page_with`, so a corrupt listing is rejected as it
+  is for the tables; string offsets become match offsets (UTF-16 counts two octets per
+  character). A core scan takes the extracted core strings (virtual addresses) and
+  `sockaddrs` reads the captured memory in 1 MiB blocks for `sockaddr_in`
+  (family 2, nonzero port, address not 0 or 255 or multicast, eight zero octets)
+  and `sockaddr_in6` (family 10, zero flow label, nonzero address and port, scope
+  up to 65535) on 2-octet boundaries, at most 20,000.
+* **Rule manager.** `Config` (`rules/strings-regex.json`, atomic write, 1 MiB read limit)
+  holds the switched-off ids and up to 200 custom patterns (2,048 characters each,
+  compiled with the same limits before they are saved). The Detection rules page has a
+  Strings regex tab with the switches, the custom patterns and a "Try on" field.
+* **Window.** The scan runs on a worker thread; reopening a report whose scan
+  exists shows it as it was, **Scan again** rereads the configuration. A pattern that
+  does not compile is listed in the window and skipped.
+
+### Unpacking in phases (0.7.1)
+
+Host only. `AnalysisKind::Unpacking` is a Triage check (on by default); the code is
+`monitor-core/src/analysis/unpack.rs`, `unpack/upx.rs` and `jobs/layers.rs`.
+
+* **Scope.** UPX only, on ELF (and PE through `upx -d`). Nothing runs the
+  specimen: `upx -d` decompresses data, the analysis worker is the offline bubblewrap
+  sandbox, a layer is written `0600`, the unpacker's work is confined to
+  `output/artifacts/unpack/` of the worker (a bind of the report's folder), and the
+  specimen's own file is never opened for writing (the unpacker works on copies).
+  Packers that must run the program, and unpacking by emulation or from guest memory
+  (the `memory.unpacked_capture` rule), need the guest and are 0.8.0 work. Other
+  unpackers were looked at: unlicense targets Themida/WinLicense PE files through
+  emulation and Frida (Windows, and it runs code); no non-executing unpacker exists for
+  common Linux packers other than UPX, so the chain is built so that a further unpacker
+  is another `detect` and `unpack` pair beside `upx.rs`.
+* **Limits.** Three layers (a file packed deeper stays packed and the section says so),
+  64 MiB per layer and 192 MiB in all (the worker's file size limit also holds), 60 s
+  for one `upx` run and 240 s for the whole section (the worker deadline adds 30 s), a
+  layer equal to one already seen stops the chain. The quota check reserves the 192 MiB
+  when the check is selected.
+* **Damaged headers** (`upx.rs`). A packed ELF has `l_info` right after its program
+  headers (checksum, `UPX!`, size, version, format) and, near its end, the pack header
+  (`UPX!`, the same version and format, method, level, sizes) with a 4-octet overlay
+  offset after it and, before it, a zero word with another `UPX!`. Detection looks for
+  the last place after `l_info` whose version and format are `l_info`'s and whose sizes
+  are plausible, whatever the magic says, so a file whose magic was overwritten is still
+  found and says what changed. Mending works on a copy: the magic restored in the three
+  places, nothing kept after the pack header. UPX 4.2.4 and 5.2.1 unpacked the mended
+  copy of a file with each place overwritten, and with appended data, to the original
+  byte for byte. A file with changes is tried mended first, then as it is; any other
+  file is tried as it is, then mended.
+* **Report.** One `Layer` row per phase (index, parent, method, SHA-256, size, packer,
+  file `layer-N.bin`, and the id of the layer's own analysis once the host queued it);
+  `layers.json` in the folder repeats them. `unpack_layers(report)` and
+  `packer_verdict(report)` read them back: these hashes are what the IOC window's
+  Files list will take (that window is not in this branch).
+* **Layer analyses** (`jobs/layers.rs`). When a job with layers finishes, the host opens
+  each `layer-N.bin` with `open_regular` (confined, not a link), checks size and SHA-256
+  against the validated row, copies it as a host-file job into
+  `<report folder>/layers/N/` and queues the packed file's checks without Unpacking.
+  The new report has id `<id>-L<N>`, `AnalysisReport::layer` (parent, index, method,
+  parent hash) and no run: the run keeps the packed file's report. The worker's rows
+  cannot name a report; only the host fills `report_id`, and a worker report whose
+  `layer` differs from the request is refused. A layer that cannot be checked is noted
+  in its row and not analysed. `analysis_directory` of a layer is its parent's folder
+  plus `layers/N`; the Report box lists it as "layer N unpacked by UPX" and it does not
+  take over the selection when it appears.
+* **Tool.** UPX 5.2.1 (`upx-5.2.1-amd64_linux.tar.xz`, 664 KB, SHA-256 pinned, one static
+  executable) is the `upx` package of Tools > Analysis tools; a system `upx` is used first.
+  Tests use a shell script in its place.
+* **Triage.** `evasion.packed_image` (Evasion, T1027.002, LOW; MEDIUM when the packer's
+  headers had been changed) is raised at the first exec of the run's root task when its
+  path is the report's path (or the same file name for a path typed relative). The
+  verdict reaches the engine through `ScanRequest::packed` and `Options::packed`.
 
 ### Accepted ANT-T0097 host UI performance (0.6.2)
 

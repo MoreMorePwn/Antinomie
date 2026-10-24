@@ -55,7 +55,7 @@ fn worker_main() -> Result<(), String> {
     // reservation, hundreds of open jars and a project database in /tmp.
     let (cpu, address_space, file_size, files) = if has(AnalysisKind::Decompilation) {
         (6 * DECOMPILER_SECONDS, None, Some(512 * 1024 * 1024), 8192)
-    } else if has(AnalysisKind::Capabilities) {
+    } else if has(AnalysisKind::Capabilities) || has(AnalysisKind::Floss) {
         (
             600,
             Some(8 * 1024 * 1024 * 1024),
@@ -294,6 +294,28 @@ pub(super) fn bound_data(data: &mut AnalysisData) -> bool {
         AnalysisData::String { encoding, .. } => bound(encoding),
         AnalysisData::Entropy { .. } => {}
         AnalysisData::Signature { description, .. } => bound(description),
+        AnalysisData::FlossString {
+            origin, encoding, ..
+        } => {
+            bound(origin);
+            bound(encoding);
+        }
+        AnalysisData::Layer {
+            method,
+            sha256,
+            packer,
+            file,
+            report_id,
+            note,
+            ..
+        } => {
+            bound(method);
+            bound(sha256);
+            bound(note);
+            for text in [packer, file, report_id].into_iter().flatten() {
+                bound(text);
+            }
+        }
         AnalysisData::Property {
             scope,
             observed,
@@ -810,6 +832,11 @@ fn analyze_section(section: &mut AnalysisSection, specimen: &[u8], listings: &Pa
         AnalysisKind::Rules => super::rules::scan(section, specimen),
         AnalysisKind::Capabilities => super::capa::capabilities(section),
         AnalysisKind::Embedded => super::binwalk::embedded(section, specimen.len() as u64),
+        AnalysisKind::Floss => super::floss::strings(section, specimen.len() as u64, listings),
+        AnalysisKind::Unpacking => {
+            let artifacts = listings.parent().unwrap_or(listings).join("artifacts");
+            super::unpack::unpack(section, specimen, &artifacts)
+        }
         AnalysisKind::Decompilation => super::decompile::decompile(section, specimen, listings),
     }
     // Headers, sections, segments, symbols, imports and exports of an

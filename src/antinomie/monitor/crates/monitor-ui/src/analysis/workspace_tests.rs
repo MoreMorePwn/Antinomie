@@ -14,6 +14,7 @@ fn fixture() -> AnalysisReport {
         specimen_len: Some(65536),
         reason: Some("Synthetic UI evidence; no analyzer was run".into()),
         sections: Vec::new(),
+        layer: None,
     };
     let mut structures = vec![AnalysisEntry {
         label: "Format".into(),
@@ -1186,6 +1187,7 @@ fn meaning_report() -> AnalysisReport {
         specimen_len: Some(4096),
         reason: None,
         sections: Vec::new(),
+        layer: None,
     };
     report.sections.push(AnalysisSection {
         kind: AnalysisKind::Strings,
@@ -2024,4 +2026,140 @@ fn structures_and_record_headers_sort_the_whole_listing_by_their_field() {
             "{header}"
         );
     }
+}
+
+fn unpacked_report() -> AnalysisReport {
+    let layer = |index: u32, packer: Option<&str>, report_id: Option<&str>| AnalysisEntry {
+        label: format!("Layer {index}"),
+        value: "UPX".into(),
+        offset: None,
+        record: Some(AnalysisRecord {
+            revision: 1,
+            id: u64::from(index) + 1,
+            location: None,
+            data: AnalysisData::Layer {
+                index,
+                method: if index == 0 {
+                    "original".into()
+                } else {
+                    "UPX (header repaired)".into()
+                },
+                sha256: format!("{index:x}").repeat(64),
+                size: 322_464 * (u64::from(index) + 1),
+                parent: index.checked_sub(1),
+                packer: packer.map(str::to_owned),
+                file: (index > 0).then(|| format!("layer-{index}.bin")),
+                report_id: report_id.map(str::to_owned),
+                note: if index == 0 {
+                    "The magic in the loader header was overwritten.".into()
+                } else {
+                    String::new()
+                },
+            },
+        }),
+    };
+    let mut section = AnalysisSection::new(AnalysisKind::Unpacking);
+    section.state = AnalysisSectionState::Complete;
+    section.summary = "Packed with UPX: 1 layer recovered, each one analysed on its own".into();
+    section.entries = vec![
+        layer(0, Some("UPX (header modified)"), None),
+        layer(1, None, Some("unpack-fixture-L1")),
+    ];
+    AnalysisReport {
+        id: "unpack-fixture".into(),
+        state: AnalysisState::Complete,
+        source_path: "/fixture/packed".into(),
+        specimen_sha256: None,
+        specimen_len: Some(322_464),
+        reason: None,
+        sections: vec![section],
+        layer: None,
+    }
+}
+
+#[test]
+fn the_unpacking_tab_shows_the_chain_as_phases_and_opens_a_layers_analysis() {
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let report = unpacked_report();
+    let mut state = WorkspaceState::default();
+    let size = egui::vec2(1280.0, 820.0);
+    // Binding the report resets the view, so the tab is chosen after a frame.
+    frame(
+        &ctx,
+        &report,
+        &mut state,
+        None,
+        size,
+        Vec::new(),
+        (None, None),
+    );
+    state.tab = Tab::Unpacking;
+    let mut output = egui::FullOutput::default();
+    for _ in 0..3 {
+        output = frame(
+            &ctx,
+            &report,
+            &mut state,
+            None,
+            size,
+            Vec::new(),
+            (None, None),
+        )
+        .0;
+    }
+    let shown = texts(&output);
+    for label in [
+        "Phase 1",
+        "As it came",
+        "Phase 2",
+        "Unpacked by UPX (header repaired)",
+        "Packed with UPX (header modified)",
+        "No packer found",
+        "Show its analysis",
+        "The magic in the loader header was overwritten.",
+    ] {
+        assert!(
+            shown.iter().any(|(text, _)| text == label),
+            "{label} in {shown:?}"
+        );
+    }
+    // The tab names its category in the strip.
+    assert!(shown.iter().any(|(text, _)| text == "Unpacking"));
+    let button = shown
+        .iter()
+        .find(|(text, _)| text == "Show its analysis")
+        .unwrap()
+        .1;
+    let clicked = press(
+        &ctx,
+        &report,
+        &mut state,
+        None,
+        size,
+        (egui::PointerButton::Primary, button.center()),
+        (None, None),
+    );
+    assert_eq!(
+        clicked.action,
+        Some(ReportAction::ShowReport {
+            report_id: "unpack-fixture-L1".into()
+        })
+    );
+    // A report without the check says so instead of drawing phases.
+    let mut none = unpacked_report();
+    none.sections.clear();
+    let output = frame(
+        &ctx,
+        &none,
+        &mut state,
+        None,
+        size,
+        Vec::new(),
+        (None, None),
+    )
+    .0;
+    assert!(texts(&output)
+        .iter()
+        .any(|(text, _)| text.contains("was not part of this analysis")));
 }

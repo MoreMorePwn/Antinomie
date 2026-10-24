@@ -98,6 +98,16 @@ impl MonitorApp {
         if let Some(directory) = self.analysis_directories.get(report_id) {
             return Some(directory.clone());
         }
+        // The analysis of an unpacked layer lives in its packed file's folder.
+        if let Some(layer) = self
+            .analysis_report(report_id)
+            .and_then(|r| r.layer.as_ref())
+        {
+            let (parent, index) = (layer.parent_id.clone(), layer.index);
+            return self
+                .analysis_directory(&parent)
+                .map(|directory| directory.join("layers").join(index.to_string()));
+        }
         if report_id.is_empty()
             || !report_id
                 .bytes()
@@ -165,6 +175,33 @@ impl MonitorApp {
             }
             Some(crate::analysis::ReportAction::Cancel(analysis_id)) => {
                 self.send(Command::CancelAnalysis { analysis_id })
+            }
+            Some(crate::analysis::ReportAction::ShowReport { report_id }) => {
+                if self.analysis_report(&report_id).is_some() {
+                    self.selected_analysis = Some(report_id);
+                } else {
+                    self.report_error("That analysis is no longer listed".into());
+                }
+            }
+            Some(crate::analysis::ReportAction::ScanRegex { report_id }) => {
+                let Some(directory) = self.analysis_directory(&report_id) else {
+                    self.report_error("Retained result directory is unavailable".into());
+                    return;
+                };
+                let title = self
+                    .analysis_report(&report_id)
+                    .map(|report| {
+                        report
+                            .source_path
+                            .rsplit('/')
+                            .next()
+                            .unwrap_or("")
+                            .to_owned()
+                    })
+                    .unwrap_or_default();
+                if let Some(view) = self.analysis_views.get_mut(view_key) {
+                    view.state.scan_regex(&report_id, title, directory);
+                }
             }
             Some(crate::analysis::ReportAction::OpenAnalysisTools) => {
                 self.open_library(crate::workspace::LibraryPage::Tools)

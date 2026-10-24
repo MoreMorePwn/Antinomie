@@ -10,7 +10,9 @@ pub(in crate::analysis) enum Tab {
     FileInfo,
     Content,
     Strings,
+    Floss,
     Binwalk,
+    Unpacking,
     Yara,
     Capa,
     Disassembly,
@@ -19,11 +21,13 @@ pub(in crate::analysis) enum Tab {
 }
 
 impl Tab {
-    pub(super) const ALL: [Self; 9] = [
+    pub(super) const ALL: [Self; 11] = [
         Self::FileInfo,
         Self::Content,
         Self::Strings,
+        Self::Floss,
         Self::Binwalk,
+        Self::Unpacking,
         Self::Yara,
         Self::Capa,
         Self::Disassembly,
@@ -36,7 +40,9 @@ impl Tab {
             Self::FileInfo => "File Info",
             Self::Content => "Content",
             Self::Strings => "Strings",
+            Self::Floss => "FLOSS",
             Self::Binwalk => "Binwalk",
+            Self::Unpacking => "Unpacking",
             Self::Yara => "YARA",
             Self::Capa => "Capa Matrix",
             Self::Disassembly => "Disassembly",
@@ -50,7 +56,9 @@ impl Tab {
         Some(match self {
             Self::FileInfo | Self::Content => return None,
             Self::Strings => AnalysisKind::Strings,
+            Self::Floss => AnalysisKind::Floss,
             Self::Binwalk => AnalysisKind::Embedded,
+            Self::Unpacking => AnalysisKind::Unpacking,
             Self::Yara => AnalysisKind::Rules,
             Self::Capa => AnalysisKind::Capabilities,
             Self::Disassembly => AnalysisKind::Disassembly,
@@ -186,6 +194,14 @@ pub(super) fn show(
             let filter = state.symbols;
             category(ui, report, state, listing, AnalysisKind::Structures, filter)
         }
+        Tab::Unpacking
+            if report
+                .sections
+                .iter()
+                .any(|s| s.kind == AnalysisKind::Unpacking) =>
+        {
+            unpacking::show(ui, report)
+        }
         Tab::Capa => {
             let section = report
                 .sections
@@ -257,7 +273,24 @@ fn header(
                 state.tab = Tab::Content;
             }
         }
-        action = export_controls(ui, report, None, true);
+        let scan = (matches!(state.tab, Tab::Strings | Tab::Floss)
+            && ui
+                .add_enabled(
+                    regex_ready(report),
+                    egui::Button::new(format!(
+                        "{} Regex matches…",
+                        egui_phosphor::regular::MAGNIFYING_GLASS
+                    )),
+                )
+                .on_hover_text(
+                    "List the network, crypto, key, Linux behaviour, attribution and \
+                     encoded matches in the Strings and FLOSS strings",
+                )
+                .clicked())
+        .then(|| ReportAction::ScanRegex {
+            report_id: report.id.clone(),
+        });
+        action = export_controls(ui, report, None, true).or(scan);
     });
     action
 }
@@ -332,7 +365,10 @@ fn category(
 
 /// The row count a tab shows as its badge: the categories that list findings.
 fn counted(tab: Tab, section: &AnalysisSection) -> Option<u64> {
-    if !matches!(tab, Tab::Strings | Tab::Binwalk | Tab::Yara | Tab::Capa) {
+    if !matches!(
+        tab,
+        Tab::Strings | Tab::Floss | Tab::Binwalk | Tab::Yara | Tab::Capa
+    ) {
         return None;
     }
     let rows = section
@@ -340,6 +376,18 @@ fn counted(tab: Tab, section: &AnalysisSection) -> Option<u64> {
         .as_ref()
         .map_or(section.entries.len() as u64, |listing| listing.rows);
     (rows > 0).then_some(rows)
+}
+
+/// Some strings are there to scan: a Strings or FLOSS section has finished.
+fn regex_ready(report: &AnalysisReport) -> bool {
+    report.sections.iter().any(|section| {
+        matches!(section.kind, AnalysisKind::Strings | AnalysisKind::Floss)
+            && matches!(
+                section.state,
+                antinomie_monitor_core::AnalysisSectionState::Complete
+                    | antinomie_monitor_core::AnalysisSectionState::Partial
+            )
+    })
 }
 
 fn pending(report: &AnalysisReport, kind: AnalysisKind) -> bool {

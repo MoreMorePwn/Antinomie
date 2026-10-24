@@ -412,7 +412,10 @@ impl MonitorApp {
                         if self.snapshot.analysis_reports.len() >= 8 {
                             self.snapshot.analysis_reports.remove(0);
                         }
-                        self.selected_analysis = Some(report.id.clone());
+                        // A layer's analysis follows the packed file's, which stays shown.
+                        if report.layer.is_none() {
+                            self.selected_analysis = Some(report.id.clone());
+                        }
                         self.snapshot.analysis_reports.push(report);
                     }
                 }
