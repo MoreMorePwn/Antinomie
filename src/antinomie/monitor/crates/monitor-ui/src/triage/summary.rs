@@ -161,6 +161,63 @@ mod tests {
     }
 
     #[test]
+    fn summary_names_the_runs_network_route_and_old_runs_read_not_recorded() {
+        let files = PacketSpool::new().unwrap();
+        let mut raw = std::fs::File::create(files.directory.join("telemetry.raw")).unwrap();
+        super::super::tests::write_rwx_calls(&mut raw, 0..1);
+        raw.sync_all().unwrap();
+        let scan = scan_archive(&files.directory, None, false, &AtomicBool::new(false)).unwrap();
+        let mut view = TriageView::default();
+        view.scan = Some(scan);
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let draw = |view: &mut TriageView| {
+            let mut texts = Vec::new();
+            for time in [0.0, 0.01] {
+                let output = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1100.0, 1600.0),
+                        )),
+                        time: Some(time),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            show(view, ui, &TriageInput::empty());
+                        });
+                    },
+                );
+                texts = crate::app::tests::texts(&output);
+            }
+            texts
+        };
+        // A view nobody has told the route yet reads as not recorded.
+        let before = draw(&mut view);
+        assert!(before.iter().any(|(t, _)| t == "Network route"));
+        assert!(before
+            .iter()
+            .any(|(t, _)| t == crate::route_ui::NOT_RECORDED));
+        let route = antinomie_monitor_core::route::RouteRecord {
+            kind: antinomie_monitor_core::route::RouteKind::Tor,
+            label: "Tor via 127.0.0.1:9050".into(),
+            via: antinomie_monitor_core::route::RouteVia::Gateway,
+            checked_ms: Some(1),
+            stats: None,
+        };
+        view.set_route_text(crate::route_ui::describe(Some(&route), None));
+        let after = draw(&mut view);
+        assert!(
+            after.iter().any(|(t, _)| t == "Tor via 127.0.0.1:9050"),
+            "{after:?}"
+        );
+        assert!(!after
+            .iter()
+            .any(|(t, _)| t == crate::route_ui::NOT_RECORDED));
+    }
+
+    #[test]
     #[ignore = "requires owned isolated X11; synthetic Summary / Detection fixture"]
     fn native_summary_and_detection_fixture() {
         use winit::platform::x11::EventLoopBuilderExtX11;

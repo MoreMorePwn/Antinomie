@@ -87,6 +87,7 @@ fn the_page_list_has_no_keyboard_page_and_each_page_shows_its_settings() {
             "Scan retained evidence when it is ready",
         ),
         (SettingsPage::NetworkLookup, "Address lookup"),
+        (SettingsPage::NetworkRoutes, "Default route"),
         (SettingsPage::AnalysisTools, "Manage tools…"),
         (SettingsPage::Disks, "Extraction limit"),
         (SettingsPage::Advanced, "Show FPS counter"),
@@ -154,4 +155,48 @@ fn recording_and_detection_options_are_kept_in_the_saved_settings() {
     assert_eq!(loaded.quota_gib, 8);
     assert!(!loaded.automatic_detection && loaded.outbound_catalog && loaded.show_fps);
     assert!(!loaded.disks.dump_hash);
+}
+
+#[test]
+fn the_routes_page_shows_every_route_and_says_openvpn_is_unsupported() {
+    let ctx = context();
+    let mut app = app();
+    app.settings_open = true;
+    app.settings_page = SettingsPage::NetworkRoutes;
+    let visible = shown(&mut app, &ctx, egui::vec2(1280.0, 1400.0));
+    for label in [
+        "Default route",
+        "Tor",
+        "VPN (WireGuard)",
+        "SOCKS5 proxy",
+        "InetSim (fake services)",
+        "Configuration file",
+        "Password",
+        "Save routes",
+    ] {
+        assert!(has(&visible, label), "{label}: {visible:?}");
+    }
+    assert!(visible.iter().any(|(text, _)| text.contains("OpenVPN")));
+    // Nothing is saved until Save routes is pressed, and nothing changed yet.
+    assert!(!app.routes.dirty_for_tests());
+}
+
+#[test]
+fn the_run_form_names_the_fixed_network_of_a_vm_that_is_not_routed() {
+    use antinomie_monitor_core::{route::RouteKind, VmNetwork};
+    let ctx = context();
+    let mut request = ExecRequest {
+        route: Some(RouteKind::Tor),
+        ..ExecRequest::default()
+    };
+    let _ = ctx.run(egui::RawInput::default(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            crate::route_ui::selector(
+                ui,
+                &mut request,
+                &crate::route_ui::RouteChoice::fixed(VmNetwork::Nat),
+            )
+        });
+    });
+    assert_eq!(request.route, None);
 }

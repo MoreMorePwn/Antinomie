@@ -86,6 +86,7 @@ impl MonitorApp {
             &self.snapshot.analysis_tools,
             self.snapshot.tool_install.as_ref(),
             !self.closing,
+            self.routes.programs(),
         ) {
             self.send(command);
         }

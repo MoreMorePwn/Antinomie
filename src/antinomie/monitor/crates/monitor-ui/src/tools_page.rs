@@ -7,6 +7,17 @@ use antinomie_monitor_core::{
 };
 use eframe::egui::{self, RichText};
 
+/// A program a network route can use, run as a separate process of the
+/// analyst's: whether it was found on `PATH` the last time this was looked
+/// up (at startup and when Settings > Network routes opens).
+#[derive(Clone, Debug)]
+pub(crate) struct RouteProgram {
+    pub name: &'static str,
+    pub purpose: &'static str,
+    pub licence: &'static str,
+    pub path: Option<std::path::PathBuf>,
+}
+
 fn size(bytes: u64) -> String {
     crate::values::file_size(bytes)
 }
@@ -17,6 +28,7 @@ pub(crate) fn show(
     tools: &[ToolStatus],
     install: Option<&ToolInstall>,
     enabled: bool,
+    route_programs: &[RouteProgram],
 ) -> Option<Command> {
     let mut command = None;
     let running = install.is_some_and(|install| !install.finished);
@@ -129,6 +141,37 @@ pub(crate) fn show(
                         ));
                     }
                 }
+            }
+            ui.add_space(8.0);
+            theme::section(ui, "Network route programs");
+            ui.add(
+                egui::Label::new(
+                    "Network routes use these programs, which you install from your \
+                     distribution; Antinomie runs them as separate processes and does not \
+                     bundle them. The routes are set up in Settings > Network routes.",
+                )
+                .wrap(),
+            );
+            for program in route_programs {
+                ui.separator();
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new(program.name).strong().color(theme::heading()));
+                    ui.label(RichText::new(program.purpose).color(theme::muted()));
+                    match &program.path {
+                        Some(path) => {
+                            ui.colored_label(theme::good(), "On this system");
+                            ui.label(
+                                RichText::new(path.display().to_string())
+                                    .monospace()
+                                    .color(theme::muted()),
+                            );
+                        }
+                        None => {
+                            ui.colored_label(theme::warn(), "Not found on PATH");
+                        }
+                    }
+                    ui.weak(program.licence);
+                });
             }
             ui.separator();
             ui.label(
