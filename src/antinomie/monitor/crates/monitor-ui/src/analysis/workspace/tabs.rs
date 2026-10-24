@@ -10,6 +10,7 @@ pub(in crate::analysis) enum Tab {
     FileInfo,
     Content,
     Strings,
+    Floss,
     Binwalk,
     Yara,
     Capa,
@@ -19,10 +20,11 @@ pub(in crate::analysis) enum Tab {
 }
 
 impl Tab {
-    pub(super) const ALL: [Self; 9] = [
+    pub(super) const ALL: [Self; 10] = [
         Self::FileInfo,
         Self::Content,
         Self::Strings,
+        Self::Floss,
         Self::Binwalk,
         Self::Yara,
         Self::Capa,
@@ -36,6 +38,7 @@ impl Tab {
             Self::FileInfo => "File Info",
             Self::Content => "Content",
             Self::Strings => "Strings",
+            Self::Floss => "FLOSS",
             Self::Binwalk => "Binwalk",
             Self::Yara => "YARA",
             Self::Capa => "Capa Matrix",
@@ -50,6 +53,7 @@ impl Tab {
         Some(match self {
             Self::FileInfo | Self::Content => return None,
             Self::Strings => AnalysisKind::Strings,
+            Self::Floss => AnalysisKind::Floss,
             Self::Binwalk => AnalysisKind::Embedded,
             Self::Yara => AnalysisKind::Rules,
             Self::Capa => AnalysisKind::Capabilities,
@@ -332,7 +336,10 @@ fn category(
 
 /// The row count a tab shows as its badge: the categories that list findings.
 fn counted(tab: Tab, section: &AnalysisSection) -> Option<u64> {
-    if !matches!(tab, Tab::Strings | Tab::Binwalk | Tab::Yara | Tab::Capa) {
+    if !matches!(
+        tab,
+        Tab::Strings | Tab::Floss | Tab::Binwalk | Tab::Yara | Tab::Capa
+    ) {
         return None;
     }
     let rows = section

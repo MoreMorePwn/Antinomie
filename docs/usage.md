@@ -19,8 +19,8 @@ application and base versions; existing VMs keep their pinned base.
   Memory tab) installs for Antinomie; it needs Python 3 (`python3`)
 - Static analysis runs in a bubblewrap sandbox (`bwrap`). Disassembly, rules
   and identification are built in. Decompilation (Ghidra), capabilities
-  (capa) and Detect It Easy use the system's copy when installed; otherwise
-  **Tools > Analysis tools** downloads them for Antinomie. The Properties tab
+  (capa), FLOSS strings and Detect It Easy use the system's copy when
+  installed; otherwise **Tools > Analysis tools** downloads them for Antinomie. The Properties tab
   computes ssdeep and TLSH itself; it also shows Magika's file type when
   **Tools > Analysis tools** has installed Magika (or the system has it)
 - The Network tab (packet list and details), Wireshark packet display filters
@@ -102,6 +102,15 @@ packet history already has it, and specimen Content supports a byte-offset jump.
    terminal window does not stop the program.
 5. **Static Analysis** in the launch dialog analyzes the program's file before
    it runs; pick the categories, from triage to disassembly and decompilation.
+   **FLOSS strings** (under Deep analysis, off by default) recovers the strings a
+   program builds on the stack or decodes at run time, which Strings cannot see;
+   it needs FLOSS from **Tools > Analysis tools** and can take several minutes
+   (a statically linked program may hit its 8 minute limit). FLOSS reads the file
+   with its own disassembler and emulates snippets of it; the program is never
+   run. Results are in the **FLOSS** tab beside Strings, one row per string with
+   its type (decoded, stack, tight, or language for Go and Rust strings), its
+   encoding and the address FLOSS reports for the routine. Files over 16 MiB are
+   not taken.
 6. **Attach to process** traces a process that is already running in the guest
    (and its future children); **Capture all** traces all of userspace. Neither
    stops or signals anything. A capture lists the processes it saw as a tree
