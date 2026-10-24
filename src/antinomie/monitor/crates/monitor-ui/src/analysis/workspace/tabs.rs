@@ -200,7 +200,7 @@ pub(super) fn show(
                 .iter()
                 .any(|s| s.kind == AnalysisKind::Unpacking) =>
         {
-            unpacking::show(ui, report)
+            unpacking::show(ui, report, &mut state.unpack_layer)
         }
         Tab::Capa => {
             let section = report
