@@ -514,6 +514,7 @@ mod tests {
             specimen_len: Some(data.len() as u64),
             reason: None,
             sections: vec![],
+            layer: None,
         }
     }
 

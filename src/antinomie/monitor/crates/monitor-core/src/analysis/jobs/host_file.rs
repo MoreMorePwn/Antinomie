@@ -29,10 +29,24 @@ impl Jobs {
                     Err(format!("{} is not a regular file", source.display()))
                 }
             });
-        let (mut input, total_len) = match opened {
-            Ok(opened) => opened,
-            Err(error) => return self.submit(None, report, directory, Err(error), available),
-        };
+        match opened {
+            Ok((file, total_len)) => {
+                self.submit_host_opened(report, directory, file, total_len, available)
+            }
+            Err(error) => self.submit(None, report, directory, Err(error), available),
+        }
+    }
+
+    /// [`submit_host_file`](Self::submit_host_file) for a file the caller has
+    /// opened and checked itself.
+    pub(crate) fn submit_host_opened(
+        &mut self,
+        report: AnalysisReport,
+        directory: PathBuf,
+        mut input: File,
+        total_len: u64,
+        available: u64,
+    ) -> AnalysisReport {
         let mut report = self.submit(
             None,
             report,

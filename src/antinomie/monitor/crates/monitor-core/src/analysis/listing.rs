@@ -34,6 +34,7 @@ pub(crate) fn file_name(kind: AnalysisKind) -> &'static str {
         AnalysisKind::Decompilation => "decompilation.jsonl",
         AnalysisKind::Embedded => "embedded.jsonl",
         AnalysisKind::Floss => "floss.jsonl",
+        AnalysisKind::Unpacking => "unpacking.jsonl",
     }
 }
 
@@ -500,6 +501,7 @@ mod tests {
             specimen_len: None,
             reason: Some("partial fixture".into()),
             sections: vec![section],
+            layer: None,
         };
         std::fs::write(
             root.join("report.json"),
@@ -610,6 +612,7 @@ mod tests {
             specimen_len: None,
             reason: None,
             sections: vec![section],
+            layer: None,
         };
         std::fs::write(
             root.join("report.json"),
@@ -662,6 +665,7 @@ mod tests {
             specimen_len: Some(0x1000),
             reason: None,
             sections: vec![section],
+            layer: None,
         };
         std::fs::write(
             root.join("report.json"),
@@ -709,6 +713,7 @@ mod tests {
             specimen_len: Some(0x1000),
             reason: None,
             sections: vec![section],
+            layer: None,
         };
         std::fs::write(
             root.join("report.json"),
