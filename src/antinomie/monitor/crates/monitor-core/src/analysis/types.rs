@@ -16,6 +16,8 @@ pub enum AnalysisKind {
     Decompilation,
     /// Signatures of embedded files and data found by binwalk.
     Embedded,
+    /// Decoded, stack and tight strings recovered by FLOSS.
+    Floss,
 }
 
 impl AnalysisKind {
@@ -30,7 +32,7 @@ impl AnalysisKind {
         Self::Capabilities,
         Self::Embedded,
     ];
-    pub const DEEP: &'static [Self] = &[Self::Disassembly, Self::Decompilation];
+    pub const DEEP: &'static [Self] = &[Self::Disassembly, Self::Decompilation, Self::Floss];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -45,6 +47,7 @@ impl AnalysisKind {
             Self::Disassembly => "Disassembly",
             Self::Decompilation => "Decompilation",
             Self::Embedded => "Embedded content",
+            Self::Floss => "FLOSS strings (decoded, stack, tight)",
         }
     }
 }
@@ -233,6 +236,18 @@ pub enum AnalysisData {
     Signature {
         offset: u64,
         description: String,
+    },
+    /// A string FLOSS recovered. `origin` is "decoded", "stack", "tight" or
+    /// "language" (Go and Rust strings); the entry value is the text. The
+    /// addresses are the ones FLOSS reports for its own load of the file:
+    /// `function` is the routine that built or decoded the string and
+    /// `address` the place it was seen. A language string has neither and
+    /// is located by file offset instead.
+    FlossString {
+        origin: String,
+        encoding: String,
+        function: Option<u64>,
+        address: Option<u64>,
     },
     /// A compiler, language, linker, packer or protector identification;
     /// the entry value is the evidence.

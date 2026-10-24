@@ -732,10 +732,10 @@ fn spawn_worker_binary(
         .map_err(|e| e.to_string())?;
     let has = |kind| job.report.sections.iter().any(|s| s.kind == kind);
     let decompiler = has(AnalysisKind::Decompilation);
-    // capa unpacks itself into /tmp before it runs.
+    // capa and FLOSS unpack themselves into /tmp before they run.
     let tmp_size = if decompiler {
         "2147483648"
-    } else if has(AnalysisKind::Capabilities) {
+    } else if has(AnalysisKind::Capabilities) || has(AnalysisKind::Floss) {
         "1073741824"
     } else {
         "33554432"
