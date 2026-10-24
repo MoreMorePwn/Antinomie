@@ -290,6 +290,13 @@ impl FileIndex {
     ) {
         for hash in kernel_records::write_hashes(call) {
             let Some(file) = hash.file else { continue };
+            self.activity.hash(
+                Some(file.key),
+                None,
+                event.timestamp_ns,
+                "closed after write",
+                &hash,
+            );
             if let Some(change) = self
                 .by_identity
                 .get(&file.key)
@@ -301,6 +308,13 @@ impl FileIndex {
         let Some(hash) = kernel_records::file_hash(call, HashKind::Delete) else {
             return;
         };
+        self.activity.hash(
+            kernel_records::file_id(call).map(|id| id.key),
+            Some(&displayed_path(call, event, files)),
+            event.timestamp_ns,
+            "before delete",
+            &hash,
+        );
         let group = kernel_records::file_id(call)
             .and_then(|id| self.by_identity.get(&id.key).cloned())
             .unwrap_or_else(|| displayed_path(call, event, files));
@@ -1973,5 +1987,33 @@ mod tests {
         assert_eq!(file.events.len(), 512);
         assert_eq!(file.omitted, 601 - 512);
         assert_eq!(activity.omitted_events, file.omitted);
+    }
+
+    #[test]
+    fn the_guests_hashes_join_the_files_history_in_order() {
+        let calls = [
+            create(1, "/tmp/h", 50, 1),
+            with_write_hash(
+                operation(2, 1, "write", 5, [3, 0, 5, 0, 0, 0], b"hello"),
+                50,
+                0,
+            ),
+            // The guest could not hash the file the second time.
+            with_write_hash(
+                operation(3, 1, "write", 5, [3, 0, 5, 0, 0, 0], b"again"),
+                50,
+                1,
+            ),
+        ];
+        let activity = index_with_hashes(&calls, &[]).finish_all().1;
+        let hashes = &file(&activity, "/tmp/h").hashes;
+        assert_eq!(hashes.len(), 2);
+        assert_eq!(hashes[0].moment, "closed after write");
+        assert_eq!(hashes[0].sha256.as_deref(), Some("cd".repeat(32).as_str()));
+        assert!(hashes[1].sha256.is_none() && hashes[1].skipped.is_some());
+        assert!(file(&activity, "/tmp/h")
+            .events
+            .iter()
+            .all(|e| e.via.is_none()));
     }
 }

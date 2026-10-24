@@ -1030,7 +1030,15 @@ shown.
   identity, offsets/lengths/content/extension, appends, refusals, bounds) and
   `triage/file_activity/tests.rs` (layout, limits, list filters, wording, the window
   through egui: choosing a file and a node, the syscall jump).
-* **Not in the host data (0.8.0, guest capture).** (1) Write payloads beyond what the
+* **Guest records.** Files are grouped by `lifecycle.file_id` (device, inode, generation),
+  so history follows a file across renames and hard links, and by path where no record
+  exists. io_uring and AIO requests arrive through `async_files` as the calls they stand
+  for and are marked `async` (`Event::via`). Hash records (`antinomie.hash/1` before a
+  delete, `/2` at the last close with `HASH_WRITES`) are kept in order as `HashNote`s with
+  their CHANGED flag and skip reason, and the window says when two digests differ.
+* **Not in the host data (0.8.0, guest capture).** (0) Writes through a shared mapping
+  leave no payload and no call; only a different hash at the last close shows the file
+  changed, and which bytes is unknown. (1) Write payloads beyond what the
   tracer captures per call: the bytes of a large write are cut and marked `…`; a
   per-file write journal or content-addressed chunks would give the whole content.
   (2) The file position of each read and write (`f_pos`/`ki_pos`): without it an
