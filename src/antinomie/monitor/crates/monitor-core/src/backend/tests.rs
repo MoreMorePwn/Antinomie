@@ -665,6 +665,26 @@ fn artifact_run(directory: PathBuf) -> RunSummary {
 }
 
 #[test]
+fn a_run_started_without_capture_records_that_capture_was_off() {
+    let mut run = artifact_run(PathBuf::new());
+    assert!(!RunArtifactOwner::new(&run).summary.network_off);
+    run.request.capture_network = false;
+    let owner = RunArtifactOwner::new(&run);
+    assert!(owner.summary.network_off);
+    assert_eq!(owner.summary.network_state, RunArtifactState::Disabled);
+    // Saved, then read back by the detector; absent on a capturing run.
+    let saved = serde_json::to_value(&owner.summary).unwrap();
+    assert_eq!(saved["network_off"], true);
+    let on = serde_json::to_value(&RunArtifactOwner::new(&artifact_run(PathBuf::new())).summary);
+    assert!(on.unwrap().get("network_off").is_none());
+    let old: RunArtifacts = serde_json::from_str(
+        r#"{"run_id":"r","vm_id":"v","boot_id":"b","network_captures":[],"network_state":"disabled"}"#,
+    )
+    .unwrap();
+    assert!(!old.network_off);
+}
+
+#[test]
 fn run_artifacts_wait_for_descendants_and_async_drain_then_queue_once() {
     let run = artifact_run(PathBuf::new());
     let mut owner = RunArtifactOwner::new(&run);
