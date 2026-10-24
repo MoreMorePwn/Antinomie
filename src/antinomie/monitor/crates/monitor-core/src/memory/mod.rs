@@ -20,7 +20,10 @@ use std::{
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering as AtomicOrdering},
+    },
     thread,
 };
 
@@ -49,6 +52,7 @@ pub const ONLINE_SYMBOLS: &str =
 pub const ONLINE_SYMBOLS_NAME: &str = "Abyss-W4tcher/volatility3-symbols";
 
 pub mod community;
+pub mod memnixfs;
 
 fn unix_ms() -> u64 {
     std::time::SystemTime::now()
@@ -358,7 +362,33 @@ pub enum RunState {
     Cancelled,
 }
 
-/// One Volatility plugin run on a dump.
+/// The program that made a run: the Memory tab's analysis backends.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Analyzer {
+    #[default]
+    Volatility,
+    MemNixFs,
+}
+
+impl Analyzer {
+    pub const ALL: [Analyzer; 2] = [Analyzer::Volatility, Analyzer::MemNixFs];
+    pub fn label(self) -> &'static str {
+        match self {
+            Analyzer::Volatility => "Volatility",
+            Analyzer::MemNixFs => "MemNixFS",
+        }
+    }
+    /// The analyser's name with its qualifier, for messages.
+    pub fn product(self) -> &'static str {
+        match self {
+            Analyzer::Volatility => "Volatility 3",
+            Analyzer::MemNixFs => "MemNixFS",
+        }
+    }
+}
+
+/// One plugin run (Volatility) or report run (MemNixFS) on a dump.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PluginRun {
@@ -379,9 +409,26 @@ pub struct PluginRun {
     /// The symbol table index searched online, when the dump had none.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub symbols_online: Option<String>,
+    /// The program that made it; runs saved before MemNixFS are Volatility's.
+    #[serde(skip_serializing_if = "is_volatility")]
+    pub analyzer: Analyzer,
+    /// Version of the analysis tool, when the run records it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_version: Option<String>,
+    /// How the dump file was read (its format), when the run records it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dump_format: Option<String>,
+    /// Why a finished result is only partial; empty when nothing is known
+    /// to be missing.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub partial: Vec<String>,
     /// Its folder (not saved).
     #[serde(skip)]
     pub dir: PathBuf,
+}
+
+fn is_volatility(analyzer: &Analyzer) -> bool {
+    *analyzer == Analyzer::Volatility
 }
 
 impl PluginRun {
@@ -788,6 +835,7 @@ impl Volatility {
             run: run.clone(),
             progress: shared.clone(),
             process: process.clone(),
+            stop: Arc::new(AtomicBool::new(false)),
         };
         thread::Builder::new()
             .name("antinomie-volatility".into())
@@ -815,6 +863,9 @@ pub struct RunHandle {
     pub run: PluginRun,
     progress: Arc<Mutex<Progress>>,
     process: Arc<Mutex<Option<Child>>>,
+    /// Asks a sandboxed run to stop (Volatility's is stopped through
+    /// `process`).
+    stop: Arc<AtomicBool>,
 }
 
 impl RunHandle {
@@ -822,6 +873,7 @@ impl RunHandle {
         self.progress.lock().map(|p| p.clone()).unwrap_or_default()
     }
     pub fn cancel(&self) {
+        self.stop.store(true, AtomicOrdering::Relaxed);
         if let Ok(mut progress) = self.progress.lock() {
             progress.cancelled = true;
         }
