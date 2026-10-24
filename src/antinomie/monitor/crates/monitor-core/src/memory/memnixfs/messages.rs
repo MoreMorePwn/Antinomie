@@ -29,11 +29,16 @@ pub(super) fn strip_colors(text: &str) -> String {
     out
 }
 
+/// MemNixFS's line for a table it believes is for another kernel.
+pub(super) const MISMATCH_MARKER: &str = "ISF/dump MISMATCH";
+
 /// Warnings of a finished run that make its result partial, in plain words.
-pub(super) fn partial_notes(log: &str) -> Vec<String> {
+/// `banner_verified`: the table's own banner is the dump's, so MemNixFS's
+/// mismatch line is a false alarm.
+pub(super) fn partial_notes(log: &str, banner_verified: bool) -> Vec<String> {
     const KNOWN: &[(&str, &str)] = &[
         (
-            "ISF/dump MISMATCH",
+            MISMATCH_MARKER,
             "MemNixFS could not match the symbol table to this dump's kernel banner; it used \
              the table's structure offsets as they are.",
         ),
@@ -56,6 +61,9 @@ pub(super) fn partial_notes(log: &str) -> Vec<String> {
     let mut other = 0;
     for line in log.lines() {
         let line = line.trim();
+        if banner_verified && line.contains(MISMATCH_MARKER) {
+            continue;
+        }
         if let Some((_, note)) = KNOWN.iter().find(|(marker, _)| line.contains(marker)) {
             if !notes.iter().any(|known| known == note) {
                 notes.push((*note).to_owned());
