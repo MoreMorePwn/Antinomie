@@ -211,6 +211,30 @@ fn url(value: &str) -> Option<String> {
     url_parts(value).map(|parts| parts.canonical())
 }
 
+/// SHA-1 of the first certificate in TShark's `tls.handshake.certificate`
+/// (hexadecimal DER, with or without colons; several certificates are
+/// separated by the unit separator), as lowercase hex.
+pub fn certificate_sha1(field: &str) -> Option<String> {
+    use sha1::{Digest, Sha1};
+    let first = field.split('\u{1f}').next()?.trim();
+    let digits: Vec<u8> = first.bytes().filter(|b| *b != b':').collect();
+    if digits.len() < 2
+        || !digits.len().is_multiple_of(2)
+        || !digits.iter().all(u8::is_ascii_hexdigit)
+    {
+        return None;
+    }
+    let der: Vec<u8> = digits
+        .chunks(2)
+        .map(|pair| {
+            let high = (pair[0] as char).to_digit(16).unwrap_or(0) as u8;
+            let low = (pair[1] as char).to_digit(16).unwrap_or(0) as u8;
+            high << 4 | low
+        })
+        .collect();
+    Some(format!("{:x}", Sha1::digest(&der)))
+}
+
 /// Whether `ip` can never be listed by a public feed: private, loopback,
 /// link-local, multicast, unspecified or broadcast. Documentation ranges
 /// count as public so examples and fixtures stay checkable.
@@ -306,6 +330,20 @@ mod tests {
         let parts = url_parts("http://198.51.100.77/bins/arm.sh").unwrap();
         assert_eq!(parts.effective_port(), 80);
         assert!(parts.address().is_some());
+    }
+
+    #[test]
+    fn a_certificate_field_gives_the_sha1_of_the_first_certificate() {
+        // SHA-1 of the three bytes 0x61 0x62 0x63 ("abc").
+        let expected = "a9993e364706816aba3e25717850c26c9cd0d89d";
+        assert_eq!(certificate_sha1("616263").as_deref(), Some(expected));
+        assert_eq!(
+            certificate_sha1("61:62:63\u{1f}ffff").as_deref(),
+            Some(expected)
+        );
+        assert_eq!(certificate_sha1(""), None);
+        assert_eq!(certificate_sha1("6162z3"), None);
+        assert_eq!(certificate_sha1("616"), None);
     }
 
     #[test]
