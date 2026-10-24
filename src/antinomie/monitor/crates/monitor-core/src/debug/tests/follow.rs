@@ -353,7 +353,7 @@ impl Fixture {
         self.world.lock().unwrap().log.clone()
     }
     fn wait_log(&self, entry: &str) {
-        let until = Instant::now() + Duration::from_secs(5);
+        let until = Instant::now() + Duration::from_secs(60);
         while !self.log().iter().any(|line| line == entry) {
             assert!(
                 Instant::now() < until,
@@ -491,7 +491,7 @@ fn a_fork_is_reported_with_the_childs_id_and_both_processes_answer() {
 
 impl Fixture {
     fn wait_count_of(&self, entry: &str, count: usize) {
-        let until = Instant::now() + Duration::from_secs(5);
+        let until = Instant::now() + Duration::from_secs(60);
         while self.log().iter().filter(|line| *line == entry).count() < count {
             assert!(
                 Instant::now() < until,

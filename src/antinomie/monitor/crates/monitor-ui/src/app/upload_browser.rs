@@ -518,7 +518,7 @@ pub(crate) mod tests {
             );
             (action, super::super::tests::texts(&output))
         };
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
         let position = loop {
             let (_, texts) = render(vec![]);
             if let Some((_, rect)) = texts

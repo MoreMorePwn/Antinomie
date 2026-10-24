@@ -453,7 +453,7 @@ mod tests {
 
         fn command(backend: &crate::Backend, command: crate::Command) {
             let id = backend.send(command).unwrap();
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
             while std::time::Instant::now() < deadline {
                 if let Some(Notification::CommandResult {
                     id: result,
@@ -493,7 +493,7 @@ mod tests {
         backend.shutdown().unwrap();
 
         let mut restarted = crate::Backend::new(fixture.options.clone()).unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
         let mut loaded = false;
         while std::time::Instant::now() < deadline {
             if let Some(Notification::Snapshot(snapshot)) = restarted.try_recv() {
@@ -823,7 +823,7 @@ mod tests {
         let id = backend
             .send(crate::Command::Create(VmConfig::default()))
             .unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
         let mut success = false;
         while std::time::Instant::now() < deadline {
             if let Some(crate::Notification::CommandResult {

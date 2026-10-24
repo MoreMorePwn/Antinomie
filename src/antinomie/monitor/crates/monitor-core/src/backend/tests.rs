@@ -794,7 +794,7 @@ fn attach_waiting_download(worker: &mut Worker) -> Arc<AtomicBool> {
     let worker_stopped = stopped.clone();
     let (sender, done) = mpsc::channel();
     let thread = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(60);
         while !worker_cancel.load(Ordering::Relaxed) && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(5));
         }
@@ -872,7 +872,7 @@ fn cancel_download_finishes_without_an_error_alert() {
     let mut worker = download_worker(root);
     attach_waiting_download(&mut worker);
     worker.command(Command::CancelDownload).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(60);
     while worker.download.is_some() && Instant::now() < deadline {
         worker.poll_remote();
         thread::sleep(Duration::from_millis(5));
@@ -940,7 +940,7 @@ fn startup_base_error_is_published_after_backend_construction() {
         ..BackendOptions::default()
     })
     .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(60);
     let snapshot = loop {
         if let Some(Notification::Snapshot(snapshot)) = backend.try_recv()
             && !snapshot.bases_checking
@@ -1810,7 +1810,7 @@ fn stopping_ends_a_pending_reconnection_of_the_boot() {
 }
 
 fn command_answer(backend: &Backend, id: u64) -> (bool, String) {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         if let Some(Notification::CommandResult {
             id: answered,

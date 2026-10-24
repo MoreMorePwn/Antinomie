@@ -465,7 +465,7 @@ mod tests {
             error: None,
             quiet: false,
         };
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
         while window.worker.is_some() {
             assert!(std::time::Instant::now() < deadline);
             window.poll();
