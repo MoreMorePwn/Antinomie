@@ -32,6 +32,9 @@ pub(crate) fn run_sandboxed(
     run_sandboxed_with(program, args, writable, &mounts, env, timeout, cancel)
 }
 
+/// Address space of a sandboxed tool, in octets.
+const ADDRESS_SPACE_SIZE: u64 = 8 * 1024 * 1024 * 1024;
+
 /// [`run_sandboxed`] with the managed tools folder as an optional mount.
 pub(crate) fn run_sandboxed_with(
     program: &Path,
@@ -41,6 +44,32 @@ pub(crate) fn run_sandboxed_with(
     env: &[(&str, &str)],
     timeout: Duration,
     cancel: &AtomicBool,
+) -> Result<(), String> {
+    run_sandboxed_sized(
+        program,
+        args,
+        writable,
+        mounts,
+        env,
+        timeout,
+        cancel,
+        ADDRESS_SPACE_SIZE,
+    )
+}
+
+/// [`run_sandboxed_with`] with the tool's address space (`prlimit --as`)
+/// set by the caller: a tool that maps a whole memory dump needs more than
+/// the default.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_sandboxed_sized(
+    program: &Path,
+    args: &[String],
+    writable: &Path,
+    mounts: &Mounts<'_>,
+    env: &[(&str, &str)],
+    timeout: Duration,
+    cancel: &AtomicBool,
+    address_space_size: u64,
 ) -> Result<(), String> {
     crate::dependencies::require_tool(Path::new("/usr/bin/bwrap"), "bubblewrap")?;
     crate::dependencies::require_tool(Path::new("/usr/bin/prlimit"), "prlimit")?;
@@ -69,14 +98,9 @@ pub(crate) fn run_sandboxed_with(
     let launch = sandbox_process::prepare(&mut cmd)?;
     cmd.arg("--chdir")
         .arg(writable)
-        .args([
-            "--",
-            "/usr/bin/prlimit",
-            "--as=8589934592",
-            "--nofile=1024",
-            "--core=0",
-            "--",
-        ])
+        .args(["--", "/usr/bin/prlimit"])
+        .arg(format!("--as={address_space_size}"))
+        .args(["--nofile=1024", "--core=0", "--"])
         .arg(program);
     for arg in args {
         cmd.arg(arg);
