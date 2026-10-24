@@ -295,6 +295,7 @@ pub(super) fn content(
     input: &TriageInput<'_>,
 ) -> Option<Destination> {
     let mut destination = None;
+    let mut pop_out = false;
     ui.horizontal_wrapped(|ui| {
         ui.label(
             RichText::new("Run overview")
@@ -428,10 +429,14 @@ pub(super) fn content(
             if strip.open_graph {
                 destination = Some(Destination::Graph);
             }
+            pop_out |= strip.open_window;
             ui.add_space(14.0);
             if observations(ui, scan) {
                 destination = Some(Destination::Findings);
             }
         });
+    if pop_out {
+        view.open_graph_window(ui.ctx());
+    }
     destination
 }

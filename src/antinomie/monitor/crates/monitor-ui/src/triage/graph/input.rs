@@ -4,7 +4,7 @@
 //! a window.
 use super::index::GraphIndex;
 use super::lanes::Rows;
-use super::view::{Frame, State, LANE_H};
+use super::view::{Frame, Metrics, State};
 use super::*;
 use crate::triage::rules::{Category, Tier};
 use eframe::egui::{Pos2, Rect};
@@ -53,6 +53,8 @@ pub(super) enum Hit {
     },
     Axis,
     Fit,
+    /// The whole run, not just the findings.
+    Run,
 }
 
 /// The frame of one draw and what is on its rows.
@@ -63,6 +65,8 @@ pub(super) struct Layout {
     /// The categories that have a heat row, in [`Category::ALL`] order.
     pub categories: Vec<usize>,
     pub fit: Rect,
+    /// The chip that shows the whole run, left of Fit.
+    pub run: Rect,
 }
 
 impl Layout {
@@ -70,10 +74,13 @@ impl Layout {
         let categories: Vec<usize> = (0..13)
             .filter(|bit| index.categories & (1 << bit) != 0)
             .collect();
-        let window = state.window.unwrap_or_else(|| view::fitted(index.extent()));
-        let frame = Frame::new(whole, window, categories.len());
+        let window = state
+            .window
+            .unwrap_or_else(|| view::fitted_findings(index.extent()));
         let rows = Rows::build(&index.lanes, &state.collapsed, index.lane0_used);
-        let content = rows.lanes.len() as f32 * LANE_H;
+        let metrics = Metrics::roomy(whole, categories.len(), rows.lanes.len());
+        let frame = Frame::new(whole, window, categories.len(), metrics);
+        let content = rows.lanes.len() as f32 * frame.m.lane_h;
         let scroll = state
             .scroll
             .clamp(0.0, (content - frame.lanes.height()).max(0.0));
@@ -81,12 +88,14 @@ impl Layout {
             Pos2::new(whole.right() - 40.0, frame.axis.top() + 3.0),
             eframe::egui::vec2(36.0, frame.axis.height() - 6.0),
         );
+        let run = fit.translate(eframe::egui::vec2(-44.0, 0.0));
         Self {
             frame,
             rows,
             scroll,
             categories,
             fit,
+            run,
         }
     }
 
@@ -101,13 +110,13 @@ impl Layout {
     }
 
     pub(super) fn row_center(&self, row: usize) -> f32 {
-        self.frame.row_top(row, self.scroll) + LANE_H / 2.0
+        self.frame.row_top(row, self.scroll) + self.frame.m.lane_h / 2.0
     }
 
     /// Whether a row is in the lane area now.
     pub(super) fn row_in_view(&self, row: usize) -> bool {
         let top = self.frame.row_top(row, self.scroll);
-        top + LANE_H > self.frame.lanes.top() && top < self.frame.lanes.bottom()
+        top + self.frame.m.lane_h > self.frame.lanes.top() && top < self.frame.lanes.bottom()
     }
 }
 
@@ -121,6 +130,9 @@ pub(super) fn hit_test(
     let frame = &layout.frame;
     if layout.fit.contains(pos) {
         return Some(Hit::Fit);
+    }
+    if layout.run.contains(pos) {
+        return Some(Hit::Run);
     }
     if frame.axis.contains(pos) {
         return Some(Hit::Axis);
@@ -217,7 +229,7 @@ pub(super) fn tooltip(
         } else {
             lines.push(format!(
                 "{:.3} s into the run",
-                record.first_ns.saturating_sub(index.extent().0) as f64 / 1e9
+                record.first_ns.saturating_sub(index.run_extent().0) as f64 / 1e9
             ));
         }
     }
@@ -298,12 +310,12 @@ pub(super) fn including(window: (f64, f64), ns: f64, bounds: (f64, f64)) -> (f64
 }
 
 /// The scroll that puts `row` in view.
-pub(super) fn scroll_to(row: usize, scroll: f32, area: f32) -> f32 {
-    let top = row as f32 * LANE_H;
+pub(super) fn scroll_to(row: usize, scroll: f32, area: f32, lane_h: f32) -> f32 {
+    let top = row as f32 * lane_h;
     if top < scroll {
         top
-    } else if top + LANE_H > scroll + area {
-        top + LANE_H - area
+    } else if top + lane_h > scroll + area {
+        top + lane_h - area
     } else {
         scroll
     }

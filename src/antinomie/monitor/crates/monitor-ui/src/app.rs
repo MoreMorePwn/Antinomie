@@ -129,6 +129,8 @@ struct Settings {
     outbound_catalog: bool,
     /// Toast for the first HIGH finding of each rule in a run that is still going.
     toast_high_findings: bool,
+    /// The size the activity graph's window opened at last, in points.
+    graph_window: [f32; 2],
     /// Debug: draw the repaint rate in a corner of the window.
     show_fps: bool,
     /// Sidebar sections folded away.
@@ -195,6 +197,7 @@ impl Default for Settings {
             automatic_detection: true,
             outbound_catalog: false,
             toast_high_findings: true,
+            graph_window: crate::triage::GRAPH_WINDOW_SIZE,
             show_fps: false,
             vms_collapsed: false,
             library_collapsed: false,
@@ -737,8 +740,13 @@ impl eframe::App for MonitorApp {
         self.triage.set_data_dir(&self.options.data_dir);
         self.triage
             .set_toast_high(self.settings.toast_high_findings);
+        self.triage
+            .set_graph_window_size(self.settings.graph_window);
         self.triage.tick(ctx, input);
         self.triage.show_finding_windows(ctx);
+        if let Some(size) = self.triage.take_graph_window_size() {
+            self.settings.graph_window = size;
+        }
         let close = ctx.input(|input| input.viewport().close_requested())
             || self
                 .smoke
