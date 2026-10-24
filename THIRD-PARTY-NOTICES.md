@@ -65,6 +65,18 @@ kernel's symbol table; the tool is not part of any base. The symbol table
 (`symbols.json.xz`) describes the base's Linux kernel and ships with it under
 the kernel's GPL-2.0.
 
+MemNixFS 1.2 (Apache-2.0, Youssef Ayman and Tarek Salama; the upstream
+`MemNixFS-1.2-Linux.tar.gz` release asset of
+[MemNixFS/MemNixFS](https://github.com/MemNixFS/MemNixFS), SHA-256
+`7fbdf390f213dbadb4ef0042999d676387e1e44c4b8678ee9f51af299a15b20f`) is the
+second memory-analysis backend, installed from the same dialog or the Memory
+tab. With it come two Debian shared libraries it was linked against, unpacked
+from the pinned `libfmt9` 9.1.0+ds1-2 (MIT) and `libfuse3-3` 3.14.0-4
+(LGPL-2.1-or-later) packages. The tool runs as a separate program in the
+analysis sandbox and its license file arrives with the download; Antinomie does
+not redistribute it, and Apache-2.0 is compatible with this GPL-3.0-only
+application in that arrangement.
+
 The Memory tab's community plugin catalog lists third-party Volatility 3
 plugins by their upstream repository, a pinned commit and the SHA-256 of each
 file; installing one downloads it from that repository into the user's data

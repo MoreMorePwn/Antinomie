@@ -15,17 +15,74 @@ impl MemoryView {
                 if cx.vm.is_none() {
                     "Select a VM to see its memory dumps."
                 } else if cx.running {
-                    "Dump the VM's memory, then pick a Volatility plugin to run on it. \
-                     Every result is saved with its dump."
+                    "Dump the VM's memory, then pick a Volatility plugin or a MemNixFS report \
+                     to run on it. Every result is saved with its dump."
                 } else {
                     "Start the VM and dump its memory, or import a dump made elsewhere. \
-                     Volatility 3 then analyses it: processes, open files, network \
-                     connections, kernel modules, injected code and more."
+                     Volatility 3 or MemNixFS then analyses it: processes, open files, \
+                     network connections, kernel modules, injected code and more."
                 },
             );
             return None;
         };
         ui.add_space(2.0);
+        self.analyzer_tabs(ui);
+        match self.analyzer {
+            Analyzer::Volatility => {
+                if let Some(next) = self.volatility_banner(ui, cx) {
+                    action = Some(next);
+                }
+            }
+            Analyzer::MemNixFs => {
+                if let Some(next) = self.engine_banner(ui, cx) {
+                    action = Some(next);
+                }
+            }
+        }
+        if !dump.complete() {
+            ui.add_space(8.0);
+            if let Some(error) = &dump.error {
+                crate::activity::error(ui, error);
+            } else {
+                ui.colored_label(theme::muted(), "This dump is still being written.");
+            }
+            return action;
+        }
+        match self.analyzer {
+            Analyzer::Volatility => {
+                if let Some(next) = self.plugin_bar(ui, &dump, cx) {
+                    action = Some(next);
+                }
+            }
+            Analyzer::MemNixFs => self.report_bar(ui, &dump, cx.font_size),
+        }
+        crate::toasts::take_failure(ui.ctx(), &mut self.status);
+        if let Some((message, _)) = &self.status {
+            ui.colored_label(theme::muted(), message);
+        }
+        ui.add_space(4.0);
+        egui::SidePanel::left("memory_runs")
+            .resizable(true)
+            .default_width(230.0)
+            .width_range(170.0..=420.0)
+            .frame(egui::Frame::new().inner_margin(egui::Margin {
+                right: 8,
+                ..Default::default()
+            }))
+            .show_inside(ui, |ui| self.run_list(ui, cx.font_size));
+        egui::CentralPanel::default()
+            .frame(egui::Frame::new())
+            .show_inside(ui, |ui| self.result_view(ui, &dump, cx.font_size));
+        action
+    }
+
+    /// The state of Volatility's plugin list: loading, or why it failed.
+    fn volatility_banner(
+        &mut self,
+        ui: &mut egui::Ui,
+        cx: &MemoryContext<'_>,
+    ) -> Option<MemoryAction> {
+        let mut action = None;
         let failed = match &self.catalog {
             Catalog::Failed(error) => Some(error.clone()),
             _ => None,
@@ -72,35 +129,6 @@ impl MemoryView {
                     });
             }
         }
-        if !dump.complete() {
-            ui.add_space(8.0);
-            if let Some(error) = &dump.error {
-                crate::activity::error(ui, error);
-            } else {
-                ui.colored_label(theme::muted(), "This dump is still being written.");
-            }
-            return action;
-        }
-        if let Some(next) = self.plugin_bar(ui, &dump, cx) {
-            action = Some(next);
-        }
-        crate::toasts::take_failure(ui.ctx(), &mut self.status);
-        if let Some((message, _)) = &self.status {
-            ui.colored_label(theme::muted(), message);
-        }
-        ui.add_space(4.0);
-        egui::SidePanel::left("memory_runs")
-            .resizable(true)
-            .default_width(230.0)
-            .width_range(170.0..=420.0)
-            .frame(egui::Frame::new().inner_margin(egui::Margin {
-                right: 8,
-                ..Default::default()
-            }))
-            .show_inside(ui, |ui| self.run_list(ui, cx.font_size));
-        egui::CentralPanel::default()
-            .frame(egui::Frame::new())
-            .show_inside(ui, |ui| self.result_view(ui, &dump, cx.font_size));
         action
     }
 
@@ -463,6 +491,8 @@ impl MemoryView {
             crate::query::FieldSpec::text("args", "Plugin arguments"),
             crate::query::FieldSpec::number("rows", "Retained result rows"),
             crate::query::FieldSpec::number("exit_code", "Tool exit code"),
+            crate::query::FieldSpec::text("analyzer", "Analysis backend (volatility or memnixfs)"),
+            crate::query::FieldSpec::boolean("partial", "Result known to miss something"),
         ]);
         let annotations: Vec<_> = self
             .runs
@@ -518,6 +548,10 @@ impl MemoryView {
                         (None, RunState::Finished) => theme::text(),
                     };
                     let mut title = run.short_name().to_owned();
+                    if run.analyzer != Analyzer::Volatility {
+                        title.push_str(" · ");
+                        title.push_str(run.analyzer.label());
+                    }
                     if !run.args.is_empty() {
                         title.push(' ');
                         title.push_str(&args_summary(run));
@@ -593,7 +627,10 @@ impl MemoryView {
                     }
                 }
                 if self.runs.is_empty() {
-                    ui.colored_label(theme::muted(), "No results yet: pick a plugin and Run");
+                    ui.colored_label(
+                        theme::muted(),
+                        "No results yet: pick a plugin or report and Run",
+                    );
                 }
             });
         if let Some(run) = delete {
@@ -607,7 +644,12 @@ impl MemoryView {
             }
         }
         if let Some(run) = rerun {
-            self.plugin = Some(run.plugin.clone());
+            self.analyzer = run.analyzer;
+            if run.analyzer == Analyzer::MemNixFs {
+                self.report = Some(run.plugin.trim_start_matches("memnixfs.").to_owned());
+            } else {
+                self.plugin = Some(run.plugin.clone());
+            }
             if let Catalog::Ready(_, catalog) = &self.catalog {
                 self.values
                     .insert(run.plugin.clone(), args_values(&run, &catalog.plugins));
@@ -634,7 +676,7 @@ impl MemoryView {
             ui.add_space(6.0);
             ui.colored_label(
                 theme::muted(),
-                "Select a row of a Volatility result to see all its values here",
+                "Select a row of a memory result to see all its values here",
             );
             return;
         };
@@ -691,7 +733,7 @@ pub(super) fn args_summary(run: &PluginRun) -> String {
     run.args.join(" ")
 }
 
-fn run_detail(run: &PluginRun, job: Option<&memory::Progress>) -> String {
+pub(super) fn run_detail(run: &PluginRun, job: Option<&memory::Progress>) -> String {
     if let Some(progress) = job {
         return if progress.step.is_empty() {
             "Running…".into()
@@ -705,6 +747,11 @@ fn run_detail(run: &PluginRun, job: Option<&memory::Progress>) -> String {
         .unwrap_or_default();
     match run.state {
         RunState::Running => "Did not finish (the app closed)".into(),
+        RunState::Finished if !run.partial.is_empty() => format!(
+            "{} · {} rows · {took} · partial",
+            clock(run.started_ms),
+            run.rows
+        ),
         RunState::Finished => format!("{} · {} rows · {took}", clock(run.started_ms), run.rows),
         RunState::Cancelled => format!("{} · cancelled", clock(run.started_ms)),
         RunState::Failed => format!(
@@ -778,7 +825,7 @@ pub(super) fn plugin_result_record(
         .collect()
 }
 
-fn plugin_run_row(
+pub(super) fn plugin_run_row(
     run: &PluginRun,
     annotation: Option<&antinomie_monitor_core::annotations::Annotation>,
 ) -> Vec<(&'static str, crate::query::RowValue)> {
@@ -791,7 +838,10 @@ fn plugin_run_row(
         annotation.map_or(&[], |value| value.tags.as_slice()),
     );
     row.extend([
-        ("entry.kind", RowValue::Text("volatility".into())),
+        (
+            "entry.kind",
+            RowValue::Text(run.analyzer.label().to_lowercase()),
+        ),
         ("entry.state", RowValue::Text(format!("{:?}", run.state))),
         (
             "entry.complete",
@@ -811,6 +861,11 @@ fn plugin_run_row(
             ),
         ),
         ("plugin", RowValue::Text(run.plugin.clone())),
+        (
+            "analyzer",
+            RowValue::Text(run.analyzer.label().to_lowercase()),
+        ),
+        ("partial", RowValue::Bool(!run.partial.is_empty())),
         ("state", RowValue::Text(format!("{:?}", run.state))),
         ("args", RowValue::Text(run.args.join(" "))),
         ("rows", RowValue::Number(i128::from(run.rows))),

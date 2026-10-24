@@ -113,9 +113,15 @@ pub(super) fn startup_problem(stderr: &str) -> String {
         ("libbz2.so", "libbz2-1.0"),
     ];
     let last = stderr.lines().last().unwrap_or("it did not start").trim();
-    if let Some(rest) = stderr.split("error while loading shared libraries: ").nth(1) {
+    if let Some(rest) = stderr
+        .split("error while loading shared libraries: ")
+        .nth(1)
+    {
         let library = rest.split(':').next().unwrap_or(rest).trim();
-        return match PACKAGES.iter().find(|(prefix, _)| library.starts_with(prefix)) {
+        return match PACKAGES
+            .iter()
+            .find(|(prefix, _)| library.starts_with(prefix))
+        {
             Some((_, package)) => format!(
                 "MemNixFS needs the system library {library}; on Debian/Ubuntu: \
                  sudo apt install {package}"

@@ -111,15 +111,23 @@ impl MemoryView {
                     job.run.plugin,
                     dump_title(dump)
                 ));
+                // MemNixFS reports no percentage: only its current step.
+                let counted = job.run.analyzer == Analyzer::Volatility;
                 ui.colored_label(
                     theme::muted(),
                     if progress.step.is_empty() {
-                        "Starting Volatility…".to_owned()
-                    } else {
+                        format!("Starting {}…", job.run.analyzer.product())
+                    } else if counted {
                         format!("{:.0}% {}", progress.percent, progress.step)
+                    } else {
+                        progress.step.clone()
                     },
                 );
-                ui.add(egui::ProgressBar::new(progress.percent / 100.0).desired_width(320.0));
+                if counted {
+                    ui.add(egui::ProgressBar::new(progress.percent / 100.0).desired_width(320.0));
+                } else {
+                    ui.spinner();
+                }
                 if ui.button("Cancel").clicked() {
                     job.cancel();
                 }
@@ -303,10 +311,13 @@ impl MemoryView {
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.toggle_value(&mut self.show_log, "Messages")
-                    .on_hover_text("Volatility's messages for this run");
+                    .on_hover_text(format!(
+                        "{}'s messages for this run",
+                        result.run.analyzer.label()
+                    ));
                 let text = self.text_view;
                 if crate::widgets::tab(ui, text, &crate::widgets::TabItem::new("Text"))
-                    .on_hover_text("The result as Volatility prints it")
+                    .on_hover_text("The result as plain text")
                     .clicked()
                 {
                     self.text_view = true;
@@ -335,7 +346,7 @@ impl MemoryView {
                     if ui
                         .button(format!("{} Copy", egui_phosphor::regular::COPY))
                         .on_hover_text(if self.text_view {
-                            "Copy this page as Volatility's text"
+                            "Copy this page as plain text"
                         } else {
                             "Copy this page as tab-separated text"
                         })
@@ -386,9 +397,34 @@ impl MemoryView {
         if result.run.state == RunState::Failed {
             crate::activity::error(
                 ui,
-                result.run.error.as_deref().unwrap_or("Volatility failed"),
+                result
+                    .run
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| format!("{} failed", result.run.analyzer.product())),
             );
             self.show_log = true;
+        }
+        // A finished result that is known to miss something says so.
+        if result.run.state == RunState::Finished && !result.run.partial.is_empty() {
+            crate::activity::warning_details(
+                ui,
+                format!(
+                    "Partial result: {}",
+                    result.run.partial.first().map_or("", String::as_str)
+                ),
+                result.run.partial.join("\n"),
+            );
+        }
+        if let Some(format) = &result.run.dump_format {
+            ui.colored_label(
+                theme::muted(),
+                format!(
+                    "{} {} · dump read as {format}",
+                    result.run.analyzer.label(),
+                    result.run.tool_version.as_deref().unwrap_or("")
+                ),
+            );
         }
         if self.show_log {
             egui::TopBottomPanel::bottom("memory_log")
@@ -532,7 +568,7 @@ impl MemoryView {
                                         .sense(egui::Sense::click()),
                                     )
                                     .on_hover_text(
-                                        "Sort: ascending, descending, then as Volatility gave it",
+                                        "Sort: ascending, descending, then as the analyser gave it",
                                     )
                                     .on_hover_cursor(egui::CursorIcon::PointingHand);
                                 if response.clicked() {

@@ -86,10 +86,7 @@ fn write(root: &Path, name: &str, bytes: &[u8]) -> PathBuf {
 fn guest_memory_dumps_are_told_from_other_files() {
     let root = temp("format");
     // QEMU dump-guest-memory: physical addresses, QEMU notes.
-    let qemu = elf_core(
-        &[(0, 0, 4096), (0xc0000, 0xc0000, 4096)],
-        &["CORE", "QEMU"],
-    );
+    let qemu = elf_core(&[(0, 0, 4096), (0xc0000, 0xc0000, 4096)], &["CORE", "QEMU"]);
     assert_eq!(
         format::classify(&write(&root, "qemu.elf", &qemu)),
         Ok(DumpFormat::ElfCore {
@@ -387,7 +384,10 @@ fn old_runs_are_volatility_and_new_ones_keep_their_tool() {
     assert_eq!(old.analyzer, Analyzer::Volatility);
     assert!(old.partial.is_empty() && old.tool_version.is_none());
     let saved = serde_json::to_value(&old).unwrap();
-    assert!(saved.get("analyzer").is_none(), "Volatility runs stay as before");
+    assert!(
+        saved.get("analyzer").is_none(),
+        "Volatility runs stay as before"
+    );
 
     let run = PluginRun {
         plugin: "memnixfs.processes".into(),
@@ -416,7 +416,11 @@ impl Fixture {
         let data = root.join("data");
         let tool = data.join("tools/memnixfs");
         fs::create_dir_all(tool.join("lib")).unwrap();
-        fs::write(tool.join("tool.json"), r#"{"id":"memnixfs","version":"1.2"}"#).unwrap();
+        fs::write(
+            tool.join("tool.json"),
+            r#"{"id":"memnixfs","version":"1.2"}"#,
+        )
+        .unwrap();
         let script = tool.join("memnixfs");
         fs::write(
             &script,
@@ -547,10 +551,16 @@ fn a_table_report_is_saved_like_a_volatility_result() {
     assert!(log.contains("[WRN] DTB unvalidated"), "{log}");
     assert!(!log.contains('\u{1b}'));
     // Offline, with a private home and the package's own libraries.
-    assert!(log.contains("HOME=/tmp LD=/opt/antinomie-tools/memnixfs/lib"), "{log}");
+    assert!(
+        log.contains("HOME=/tmp LD=/opt/antinomie-tools/memnixfs/lib"),
+        "{log}"
+    );
     assert!(!log.contains("network visible"));
     // The dump and its identity are untouched.
-    assert_eq!(crate::memory::list(std::slice::from_ref(&fixture.root))[0].id, dump.id);
+    assert_eq!(
+        crate::memory::list(std::slice::from_ref(&fixture.root))[0].id,
+        dump.id
+    );
 }
 
 #[test]
@@ -562,13 +572,20 @@ fn text_and_recovered_file_reports_are_browsable() {
     let text = fixture.wait(&tool.start(&dump, "triage").unwrap());
     assert_eq!(text.state, RunState::Finished, "{:?}", text.error);
     assert_eq!(text.rows, 2);
-    assert!(text.partial.iter().any(|note| note.contains("no saved symbol table")));
+    assert!(
+        text.partial
+            .iter()
+            .any(|note| note.contains("no saved symbol table"))
+    );
     assert!(text.files().join("triage.txt").is_file());
 
     let files = fixture.wait(&tool.start(&dump, "memnixfs.recovered_files").unwrap());
     assert_eq!(files.state, RunState::Finished, "{:?}", files.error);
     assert_eq!(files.rows, 3);
-    assert_eq!(fs::read(files.files().join("etc/passwd")).unwrap(), b"root:x:0:0\n");
+    assert_eq!(
+        fs::read(files.files().join("etc/passwd")).unwrap(),
+        b"root:x:0:0\n"
+    );
     assert!(files.files().join("tmp/dropper").is_file());
     let table = crate::memory::read_result(&files.output(), 10).unwrap();
     assert_eq!(table.columns[0].name, "PATH");
@@ -584,7 +601,10 @@ fn failures_and_missing_reports_are_stated() {
     fixture.mode("fail");
     let failed = fixture.wait(&tool.start(&dump, "processes").unwrap());
     assert_eq!(failed.state, RunState::Failed);
-    assert_eq!(failed.error.as_deref(), Some("MemNixFS: kernel did not resolve"));
+    assert_eq!(
+        failed.error.as_deref(),
+        Some("MemNixFS: kernel did not resolve")
+    );
     assert!(failed.partial.is_empty());
     let log = fs::read_to_string(failed.log()).unwrap();
     assert!(log.contains("could not find the kernel"));
@@ -594,7 +614,11 @@ fn failures_and_missing_reports_are_stated() {
     let missing = fixture.wait(&tool.start(&dump, "modules").unwrap());
     assert_eq!(missing.state, RunState::Failed);
     assert!(
-        missing.error.as_deref().unwrap().contains("has no modules for this dump"),
+        missing
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("has no modules for this dump"),
         "{:?}",
         missing.error
     );
@@ -621,7 +645,10 @@ fn only_guest_physical_memory_is_given_to_the_tool() {
     let tool = MemNixFs::locate(&fixture.data).unwrap();
 
     // A process core is an ELF core too, but not the guest's memory.
-    let core = elf_core(&[(0, 0x400000, 4096), (0, 0x7fff0000, 4096)], &["CORE", "LINUX"]);
+    let core = elf_core(
+        &[(0, 0x400000, 4096), (0, 0x7fff0000, 4096)],
+        &["CORE", "LINUX"],
+    );
     let dump = fixture.dump("core.1234", &core, true);
     let error = tool.start(&dump, "processes").unwrap_err();
     assert!(error.contains("process core"), "{error}");
@@ -630,15 +657,27 @@ fn only_guest_physical_memory_is_given_to_the_tool() {
     // A dump of another system, an unfinished or vanished one, an unknown report.
     let mut windows = fixture.dump("win.raw", &[0u8; 4096], false);
     windows.os = Os::Windows;
-    assert!(tool.start(&windows, "processes").unwrap_err().contains("Linux"));
+    assert!(
+        tool.start(&windows, "processes")
+            .unwrap_err()
+            .contains("Linux")
+    );
     let mut unfinished = fixture.dump("a.raw", &[0u8; 4096], false);
     unfinished.finished_ms = None;
-    assert!(tool.start(&unfinished, "processes").unwrap_err().contains("not complete"));
+    assert!(
+        tool.start(&unfinished, "processes")
+            .unwrap_err()
+            .contains("not complete")
+    );
     let gone = fixture.dump("gone.raw", &[0u8; 4096], false);
     fs::remove_file(gone.path()).unwrap();
     assert!(tool.start(&gone, "processes").unwrap_err().contains("gone"));
     let good = fixture.dump("good.elf", &guest_dump(), false);
-    assert!(tool.start(&good, "nonsense").unwrap_err().contains("unknown report"));
+    assert!(
+        tool.start(&good, "nonsense")
+            .unwrap_err()
+            .contains("unknown report")
+    );
 }
 
 #[test]

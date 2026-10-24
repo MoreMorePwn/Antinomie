@@ -15,9 +15,7 @@
 //! `--no-http-cache`, no symbol download), the dump and the dump's symbol
 //! table read-only, a private working folder, no home directory. Only
 //! whole-guest physical-memory dumps are passed to it (see [`format`]).
-use super::{
-    Analyzer, MemoryDump, Os, PluginRun, Progress, RunHandle, RunState, unix_ms,
-};
+use super::{Analyzer, MemoryDump, Os, PluginRun, Progress, RunHandle, RunState, unix_ms};
 use std::{
     fs::{self, File},
     io::{BufWriter, Write},
@@ -134,7 +132,15 @@ pub const REPORTS: &[Report] = &[
         help: "Every indicator with severity, confidence and evidence",
         path: "/json/findevil_indicators.json",
         kind: Kind::Table,
-        columns: &["severity", "type", "pid", "comm", "summary", "evidence", "confidence"],
+        columns: &[
+            "severity",
+            "type",
+            "pid",
+            "comm",
+            "summary",
+            "evidence",
+            "confidence",
+        ],
     },
     Report {
         name: "findings",
