@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The File activity graph and window: how a file's calls become nodes on
-//! lanes, the list's filters, and the window through a real egui pass.
+//! lanes, the list's filters, and the tab through a real egui pass.
 use super::graph::{self, NODES_MAX};
 use super::window::{content_text, run_text, Order, Window};
 use super::*;
@@ -264,8 +264,7 @@ impl Harness {
     fn new() -> Self {
         let ctx = egui::Context::default();
         crate::theme::install(&ctx);
-        let mut window = Window::default();
-        window.open();
+        let window = Window::default();
         Self {
             ctx,
             window,
@@ -283,7 +282,9 @@ impl Harness {
                 time: Some(self.time),
                 ..Default::default()
             },
-            |ctx| window.show(ctx, Some(activity), None),
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| window.show(ui, Some(activity), None));
+            },
         );
         fn collect(shape: &egui::epaint::Shape, out: &mut Vec<(String, Rect)>) {
             match shape {
@@ -411,11 +412,7 @@ fn a_call_opens_its_original_syscall_and_the_window_opens_on_a_given_path() {
 }
 
 #[test]
-fn a_closed_window_draws_nothing_and_an_unindexed_run_says_so() {
-    let activity = activity();
-    let mut harness = Harness::new();
-    harness.window.open = false;
-    assert!(harness.settle(&activity).is_empty());
+fn an_unindexed_run_says_so() {
     let mut harness = Harness::new();
     let window = &mut harness.window;
     let output = harness.ctx.run(
@@ -423,8 +420,9 @@ fn a_closed_window_draws_nothing_and_an_unindexed_run_says_so() {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, SIZE)),
             ..Default::default()
         },
-        |ctx| window.show(ctx, None, None),
+        |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| window.show(ui, None, None));
+        },
     );
     assert!(!output.shapes.is_empty());
-    assert!(window.is_open());
 }

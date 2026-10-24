@@ -112,6 +112,7 @@ impl TriageView {
         self.section = section;
         let slot = if section == Section::Files {
             self.files = FileTab::Opened;
+            self.history_tab = false;
             FileTab::Opened.slot()
         } else {
             self.process = ProcessTab::Suspicious;

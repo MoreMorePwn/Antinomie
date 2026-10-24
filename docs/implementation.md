@@ -1036,12 +1036,14 @@ Host only: `monitor-ui/src/triage/graph/`, nothing needs a guest change.
   screenshots under Xvfb), `graph/bench.rs` (120k findings: paint under 4 ms,
   no repaint when idle, memory, the million-finding build).
 
-### File activity window (0.7.1)
+### File activity: Per-file history tab (0.7.1)
 
-Host only; it uses what the recordings already hold. **Per-file history…** in Triage ›
-Files (and in a Changed file's Details) opens a floating `egui::Window` owned by
-`TriageView::file_window`, drawn from `TriageView::show` over whichever section is
-shown.
+Host only; it uses what the recordings already hold. **Per-file history** is a tab after
+Changed files in Triage › Files (`TriageView::history_tab`; a Changed file's Details
+button sets it and chooses the file). `file_activity::Window` (the tab's state, at
+`TriageView::file_history`) draws into the section's `Ui`. It was a floating
+`egui::Window`, whose side and central panels collapsed to a narrow frame with the
+content spilling outside it, and whose Result column wrapped letter by letter.
 
 * **Index** (`triage/file_activity.rs`). `FileIndex::note_activity` runs for every file
   call (in the early return of calls that change nothing and in the read/write path,
