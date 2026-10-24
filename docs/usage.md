@@ -179,7 +179,19 @@ packet history already has it, and specimen Content supports a byte-offset jump.
   selected line. Without TShark you see raw frames and bytes and a note to
   install it. **Open in Wireshark** opens the capture when installed.
 - **Static Analysis**: the selected run's report: an overview, then each
-  category; disassembly and decompilation are full listings with search.
+  category; disassembly and decompilation are full listings with search. In the
+  **Strings** and **FLOSS** tabs, **Regex matches…** opens a window with every
+  pattern match in the strings, by category (Network, Crypto, Keys, Linux
+  behaviour, Attribution, Encoded) with a type for each match (IPv4 public or
+  private, URL, Bitcoin address, persistence path, ...). Matches are checked to
+  cut false positives: a domain must end in a real public suffix, `libc.so` and
+  `install.sh` are files, a version number is not an IP address, and a Bitcoin
+  address, Tox ID or token must pass its checksum or structure. Base64 and hex
+  text is decoded and scanned again (two levels deep); the **Inside** column says
+  which. The same window opens from **Core dumps > Strings**, where it also lists
+  the binary `sockaddr_in` and `sockaddr_in6` structures in the core's memory.
+  Switch patterns off or add your own in **Library > Detection rules > Strings
+  regex**; **Scan again** reads the change.
 - **Details** and **Activity**: the selected call or run, and VM events.
   Right-click values to copy common numeric formats. Open captured data in its
   own window, initially UTF-8, then choose ASCII, hex, hexdump, Base64 or other
