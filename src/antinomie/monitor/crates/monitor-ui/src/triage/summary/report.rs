@@ -417,6 +417,18 @@ pub(super) fn content(
                 crate::activity::warning(ui, warning);
             }
             ui.add_space(14.0);
+            let busy = view.scan_rx.is_some();
+            let strip = view.strip.show(
+                ui,
+                &scan.graph.overview,
+                scan.counts.finding_tiers,
+                scan.clock_anchor.or(input.clock_anchor),
+                busy,
+            );
+            if strip.open_graph {
+                destination = Some(Destination::Graph);
+            }
+            ui.add_space(14.0);
             if observations(ui, scan) {
                 destination = Some(Destination::Findings);
             }

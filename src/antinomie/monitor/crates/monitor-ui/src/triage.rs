@@ -47,6 +47,7 @@ mod file_visibility;
 mod files;
 mod finding_bar;
 mod findings;
+mod graph;
 mod kernel_records;
 mod network;
 mod network_index;
@@ -99,6 +100,8 @@ enum Bar {
     Files,
     /// Tier and category chips, Show INFO and Show hidden.
     Findings,
+    /// The same chips for the graph, which has no pages.
+    Graph,
     /// The Open Packets button, enabled when the run has a capture.
     Network {
         packets: bool,
@@ -109,6 +112,7 @@ enum Bar {
 enum ProcessTab {
     Tree,
     Suspicious,
+    Graph,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -187,6 +191,18 @@ pub(crate) struct TriageView {
     refresh_seconds: u64,
     bpf_export_status: String,
     scan_request: ScanRequest,
+    /// The graph's window, selection and folded lanes.
+    graph: graph::State,
+    /// The Summary strip's open or closed choice, for the session.
+    strip: graph::Strip,
+    /// Which HIGH rules of the run on screen already raised a toast.
+    high_watch: graph::HighWatch,
+    /// Toast for a HIGH finding of a live run (Settings › Notifications).
+    toast_high: bool,
+    /// When a hidden pane last had its live run read for the toast.
+    hidden_poll: Option<Instant>,
+    /// A finding the Suspicious table should scroll to when it is next drawn.
+    table_focus: Option<trace::InvocationKey>,
     filter_drafts: [String; SLOTS],
     packet_jump: Option<u64>,
     packet_capture: Option<std::path::PathBuf>,
@@ -228,6 +244,12 @@ impl Default for TriageView {
             refresh_seconds: 5,
             bpf_export_status: String::new(),
             scan_request: ScanRequest::default(),
+            graph: graph::State::default(),
+            strip: graph::Strip::default(),
+            high_watch: graph::HighWatch::default(),
+            toast_high: false,
+            hidden_poll: None,
+            table_focus: None,
             filter_drafts: Default::default(),
             packet_jump: None,
             packet_capture: None,
@@ -314,6 +336,11 @@ impl TriageView {
             self.scan_request.address_lookup = mode;
             self.request_refresh();
         }
+    }
+
+    /// Settings › Notifications: raise a toast for a HIGH finding of a live run.
+    pub(crate) fn set_toast_high(&mut self, on: bool) {
+        self.toast_high = on;
     }
 
     /// The absolute guest paths of the selected run's Changed files (observed
@@ -582,6 +609,10 @@ impl TriageView {
                     self.suspicious(ui, input.invocations)
                 }
             }
+            ProcessTab::Graph => {
+                self.graph_tab(ui);
+                None
+            }
         }
     }
 
@@ -728,6 +759,7 @@ impl TriageView {
             rules::HEADERS,
             &rows,
             self.selected_call_id,
+            self.table_focus.take(),
         );
         if let Some(call_id) = clicked {
             self.selected_call_id = Some(call_id);
@@ -791,10 +823,10 @@ impl TriageView {
                 if bar == Bar::Files {
                     self.file_toggles(ui);
                 }
-                if bar == Bar::Findings {
+                if matches!(bar, Bar::Findings | Bar::Graph) {
                     self.finding_chips(ui);
                 }
-                if self.scan_key.is_some() {
+                if self.scan_key.is_some() && bar != Bar::Graph {
                     self.pager(ui, index, retained, total);
                 }
                 if let Bar::Network { packets } = bar {
@@ -1132,6 +1164,8 @@ struct ArchiveScan {
     suspicious: Suspicious,
     findings: Vec<Finding>,
     findings_omitted: u64,
+    /// The same rows as lanes and buckets, and the run's overview.
+    graph: graph::GraphScan,
     /// Rules the scan could not evaluate, and why.
     finding_notes: Vec<String>,
     opened: Vec<Vec<Cell>>,

@@ -9,6 +9,7 @@ enum Destination {
     Properties,
     Tasks,
     Findings,
+    Graph,
     Opened,
     Reads,
     Changed,
@@ -52,6 +53,10 @@ pub(super) fn show(view: &mut TriageView, ui: &mut egui::Ui, input: &TriageInput
             Destination::Findings => {
                 view.section = Section::Process;
                 view.process = ProcessTab::Suspicious;
+            }
+            Destination::Graph => {
+                view.section = Section::Process;
+                view.process = ProcessTab::Graph;
             }
             Destination::Opened => {
                 view.section = Section::Files;
