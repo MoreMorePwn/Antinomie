@@ -31,6 +31,18 @@ impl Spacing {
     }
 }
 
+/// Room kept before the first slot and after the last, in slots: 2% of the
+/// run, but never so much that a few findings are left in the middle of the
+/// plot with the sides empty (three slots at half a slot's room each would
+/// leave a sixth of the width empty at both ends).
+pub(super) fn slot_pad(slots: f64) -> f64 {
+    if slots <= 1.0 {
+        // A lone slot still gets a window as wide as one slot.
+        return 0.5;
+    }
+    (slots * 0.02).max(0.25)
+}
+
 /// A gap in time at least this many times the typical gap is marked.
 pub(super) const BREAK_RATIO: f64 = 8.0;
 /// Breaks drawn at most.
@@ -91,11 +103,6 @@ impl Axis {
         }
     }
 
-    /// Time spacing over no slots; what a view with no findings uses.
-    pub(in crate::triage) fn time() -> Self {
-        Self::new(Spacing::Time, &Slots::default())
-    }
-
     fn events(&self) -> bool {
         self.spacing == Spacing::Events && !self.slots.times.is_empty()
     }
@@ -149,7 +156,7 @@ impl Axis {
     pub(in crate::triage) fn all(&self, findings: (u64, u64)) -> (f64, f64) {
         if self.events() {
             let slots = self.slots.times.len() as f64;
-            let pad = (slots * 0.02).max(0.5);
+            let pad = slot_pad(slots);
             (-pad, slots - 1.0 + pad)
         } else {
             super::view::fitted_findings(findings)
@@ -161,7 +168,7 @@ impl Axis {
     pub(in crate::triage) fn run(&self, run: (u64, u64)) -> (f64, f64) {
         if self.events() {
             let slots = self.slots.times.len() as f64;
-            let pad = (slots * 0.02).max(0.5);
+            let pad = slot_pad(slots);
             (-pad, slots - 1.0 + pad)
         } else {
             super::view::fitted(run)

@@ -128,6 +128,9 @@ pub(in crate::triage) struct State {
     pub(super) drag: Option<Drag>,
     /// The overview ruler's marks, kept until the index, width or spacing changes.
     pub(super) ruler: Option<super::ruler::Marks>,
+    /// Where the widget was drawn last, for tests.
+    #[cfg(test)]
+    pub(super) drawn_in: Option<Rect>,
 }
 
 impl Default for State {
@@ -142,6 +145,8 @@ impl Default for State {
             brush: None,
             drag: None,
             ruler: None,
+            #[cfg(test)]
+            drawn_in: None,
         }
     }
 }

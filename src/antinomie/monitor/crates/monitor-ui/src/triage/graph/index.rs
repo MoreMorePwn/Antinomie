@@ -359,6 +359,9 @@ struct Counted {
 pub(in crate::triage) struct Builder {
     lanes: Lanes,
     keep_lanes: bool,
+    /// Whether the compact records and the slots are kept: the Summary strip
+    /// spaces its findings equally, as the graph does by default.
+    keep_records: bool,
     records: Vec<Record>,
     rows: Vec<Finding>,
     keep_rows: bool,
@@ -377,6 +380,7 @@ impl Builder {
         Self {
             lanes,
             keep_lanes: true,
+            keep_records: true,
             records: Vec::new(),
             rows: Vec::new(),
             keep_rows: true,
@@ -515,7 +519,7 @@ impl Builder {
         }
         // One slot for each distinct moment, in time order.
         let mut times: Vec<u64> = Vec::new();
-        if self.keep_lanes {
+        if self.keep_records {
             for record in &mut self.records {
                 if times.last() != Some(&record.first_ns) {
                     times.push(record.first_ns);
@@ -578,7 +582,7 @@ impl Builder {
         GraphIndex {
             geometry: Some(geometry),
             lanes: self.lanes,
-            records: if self.keep_lanes {
+            records: if self.keep_records {
                 self.records
             } else {
                 Vec::new()

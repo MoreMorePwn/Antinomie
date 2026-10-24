@@ -35,6 +35,10 @@ pub(in crate::triage) struct Config<'a> {
 pub(in crate::triage) fn show(ui: &mut egui::Ui, state: &mut State, cfg: &Config) -> Vec<Action> {
     let size = Vec2::new(ui.available_width(), cfg.height.max(240.0));
     let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
+    #[cfg(test)]
+    {
+        state.drawn_in = Some(rect);
+    }
     // A window kept in the other spacing's units is moved to this one's.
     if state.units != cfg.spacing {
         let axis = Axis::new(cfg.spacing, &cfg.index.slots);
