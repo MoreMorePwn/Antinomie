@@ -101,7 +101,7 @@ impl TriageView {
         Count::Ready(count)
     }
 
-    /// Process tree and Suspicious activity, one segmented control.
+    /// Process tree, Suspicious activity and Graph, one segmented control.
     pub(super) fn process_tabs(&mut self, ui: &mut egui::Ui) {
         let processes = self.section_count(Metric::Processes);
         let findings = self.section_count(Metric::Findings);
@@ -137,6 +137,12 @@ impl TriageView {
                         None => item,
                     }
                 }),
+                (
+                    ProcessTab::Graph,
+                    TabItem::new("Graph").tooltip(
+                        "The same findings on process swimlanes against time, with the severity curve, a category heat strip and the phases of the run",
+                    ),
+                ),
             ],
             &mut self.process,
         );

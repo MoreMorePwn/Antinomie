@@ -397,11 +397,14 @@ pub(super) fn finding_table(
     headers: &[&str],
     rows: &[Finding],
     selected: Option<trace::InvocationKey>,
+    scroll_to: Option<trace::InvocationKey>,
 ) -> Option<trace::InvocationKey> {
     let clicked = egui::ScrollArea::horizontal()
         .id_salt((id, "columns"))
         .auto_shrink([false, true])
-        .show(ui, |ui| finding_table_rows(ui, id, headers, rows, selected))
+        .show(ui, |ui| {
+            finding_table_rows(ui, id, headers, rows, selected, scroll_to)
+        })
         .inner;
     details::refresh_findings(ui.ctx(), id, headers, rows);
     clicked
@@ -429,6 +432,7 @@ fn finding_table_rows(
     headers: &[&str],
     rows: &[Finding],
     selected: Option<trace::InvocationKey>,
+    scroll_to: Option<trace::InvocationKey>,
 ) -> Option<trace::InvocationKey> {
     use egui_extras::{Column, TableBuilder};
     if rows.is_empty() {
@@ -469,6 +473,12 @@ fn finding_table_rows(
         } else {
             builder.column(Column::initial(width).at_least(64.0).resizable(true))
         };
+    }
+    // A row picked in the graph: scroll the table to where it sits now.
+    if let Some(shown) = scroll_to.and_then(|key| {
+        (0..rows.len()).find(|at| rows[order.as_ref().map_or(*at, |order| order[*at])].key == key)
+    }) {
+        builder = builder.scroll_to_row(shown, Some(egui::Align::Center));
     }
     builder
         .header(row_height, |mut header| {

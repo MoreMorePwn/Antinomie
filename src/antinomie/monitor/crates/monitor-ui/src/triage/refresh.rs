@@ -2,6 +2,9 @@
 //! When the index of the selected run is read again, and what a read costs.
 use super::*;
 
+/// How often a live run is read while its pane is hidden and the HIGH toast is on.
+pub(super) const HIDDEN_POLL: Duration = Duration::from_secs(15);
+
 /// The answer of an index thread that found the recording as the last index saw it.
 pub(super) const UNCHANGED: &str = "unchanged";
 
@@ -110,7 +113,17 @@ impl TriageView {
         }
         ctx.request_repaint_after(Duration::from_secs(self.refresh_seconds));
         if self.next_refresh.is_some_and(|due| self.clock.now() >= due) {
-            if idle && self.shown(ctx) {
+            let now = self.clock.now();
+            // With the toast on, a live run is read now and then even when the
+            // pane is hidden, so a HIGH finding is announced when it happens.
+            let watching = self.toast_high
+                && self
+                    .hidden_poll
+                    .is_none_or(|at| now.saturating_duration_since(at) >= HIDDEN_POLL);
+            if idle && (self.shown(ctx) || watching) {
+                if !self.shown(ctx) {
+                    self.hidden_poll = Some(now);
+                }
                 self.refresh_requested = true;
                 self.timer_refresh = true;
                 self.next_refresh = None;
@@ -359,6 +372,17 @@ impl TriageView {
                 if self.pending_generation == Some(generation) {
                     match result {
                         Ok(scan) => {
+                            let run = self.scan_request.identity.as_ref().map(|id| id.2.clone());
+                            if let Some(run) = run {
+                                // A scan that began while the run was going is a live one.
+                                self.high_watch.observe(
+                                    ctx,
+                                    &run,
+                                    !self.scan_began_finished,
+                                    self.toast_high,
+                                    &scan.graph.high,
+                                );
+                            }
                             if self.selected_call_id.is_some_and(|call_id| {
                                 !scan.findings.iter().any(|finding| finding.key == call_id)
                             }) {
@@ -421,6 +445,7 @@ impl TriageView {
         self.refresh_queued = false;
         self.timer_refresh = false;
         self.scan_began_finished = false;
+        self.hidden_poll = None;
         self.selected_call_id = None;
         self.bpf_export_status.clear();
         self.packet_jump = None;

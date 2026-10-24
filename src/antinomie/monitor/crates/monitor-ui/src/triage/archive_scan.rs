@@ -529,6 +529,11 @@ pub(super) fn scan_archive_query(
             Some("Network end time is estimated from this run’s last retained syscall.".into());
     }
     let output = engine.finish(&files);
+    let process = finish_processes(nodes);
+    let mut graph = graph::Collector::new(&process, request.finding_view);
+    for mark in &output.info {
+        graph.count_info(&request.finding_view, mark);
+    }
     counts.findings = output.badge;
     counts.finding_tiers = output.tiers;
     counts.findings_hidden = output.hidden;
@@ -543,12 +548,14 @@ pub(super) fn scan_archive_query(
                 journal = None;
             }
         }
-        if rules::view_keeps(&request.finding_view, &finding.values)
-            && finding_query.keep_table(&finding.values)
-        {
+        let in_table = rules::view_keeps(&request.finding_view, &finding.values)
+            && finding_query.keep_table(&finding.values);
+        graph.push(&finding, in_table);
+        if in_table {
             finding_page.push(finding)?;
         }
     }
+    let graph = graph.finish();
     let (findings, findings_omitted, _) = finding_page.finish()?;
     if complete && !cancel.load(Ordering::Relaxed) {
         if let Some(writer) = &mut journal {
@@ -664,10 +671,11 @@ pub(super) fn scan_archive_query(
             || pcap_open,
         #[cfg(test)]
         coverage,
-        process: finish_processes(nodes),
+        process,
         suspicious,
         findings,
         findings_omitted,
+        graph,
         finding_notes,
         opened,
         opened_omitted,

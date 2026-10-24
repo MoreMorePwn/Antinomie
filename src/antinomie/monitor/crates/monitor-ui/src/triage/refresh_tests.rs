@@ -179,3 +179,26 @@ fn run_that_ends_gets_one_last_index_even_when_hidden() {
     }
     assert_eq!(view.scan_generation, last);
 }
+
+/// Generations of index started in 40 s of a live run whose pane is hidden.
+fn hidden_reads(toast: bool) -> u64 {
+    let (spool, _raw) = spool_with_calls(0..20);
+    let ctx = egui::Context::default();
+    let mut view = TriageView::default();
+    view.refresh_seconds = 1;
+    view.set_toast_high(toast);
+    settle(&mut view, &ctx, &spool.directory, false, false);
+    let first = view.scan_generation;
+    for _ in 0..40 {
+        second(&mut view, &ctx, &spool.directory, false, false);
+    }
+    view.scan_generation - first
+}
+
+#[test]
+fn with_the_toast_on_a_hidden_live_run_is_read_every_fifteen_seconds_and_with_it_off_never() {
+    assert_eq!(hidden_reads(false), 0);
+    let reads = hidden_reads(true);
+    // Forty seconds: one read at once, then one each 15 s.
+    assert!((2..=3).contains(&reads), "{reads} reads in 40 s");
+}
