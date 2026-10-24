@@ -5,7 +5,7 @@
 use super::*;
 use crate::getting_started::{self as walkthrough, Facts, Status, Step};
 use crate::widgets::{tabs, TabItem, Tone};
-use antinomie_monitor_core::dependencies::Dependency;
+use antinomie_monitor_core::{analysis_tools, dependencies::Dependency};
 
 mod steps;
 
@@ -126,13 +126,19 @@ impl MonitorApp {
                 .snapshot
                 .analysis_tools
                 .iter()
-                .filter(|tool| !debugger::is_console_tool(&tool.id))
+                .filter(|tool| {
+                    !debugger::is_console_tool(&tool.id) && !analysis_tools::is_route_tool(&tool.id)
+                })
                 .count(),
             tools_missing: self
                 .snapshot
                 .analysis_tools
                 .iter()
-                .filter(|tool| !debugger::is_console_tool(&tool.id) && !tool.available())
+                .filter(|tool| {
+                    !debugger::is_console_tool(&tool.id)
+                        && !analysis_tools::is_route_tool(&tool.id)
+                        && !tool.available()
+                })
                 .count(),
             rule_engines: self
                 .rules_ui

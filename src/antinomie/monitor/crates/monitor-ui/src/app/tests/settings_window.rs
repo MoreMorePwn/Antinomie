@@ -194,6 +194,63 @@ fn the_routes_page_shows_every_route_and_says_openvpn_is_unsupported() {
 }
 
 #[test]
+fn the_routes_page_shows_install_version_and_status_of_tor_and_wireproxy() {
+    use antinomie_monitor_core::analysis_tools::ToolStatus;
+    let ctx = context();
+    let mut app = app();
+    let tool = |id: &str, name: &str, version: &str, installed: Option<&str>| ToolStatus {
+        id: id.into(),
+        name: name.into(),
+        purpose: "a route program".into(),
+        version: version.into(),
+        size: 4_000_000,
+        system: None,
+        installed: installed.map(str::to_owned),
+    };
+    app.snapshot.analysis_tools = vec![
+        tool("tor", "Tor", "0.4.9.14 (Expert Bundle 15.0.26)", None),
+        tool("wireproxy", "wireproxy", "1.1.3", Some("1.1.3")),
+    ];
+    let output = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(900.0, 2400.0),
+            )),
+            ..Default::default()
+        },
+        |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| app.routes_page(ui));
+        },
+    );
+    let visible = texts(&output);
+    // Tor is not installed: Install with its version; wireproxy is: its
+    // version and Remove. The default Tor mode is Antinomie's own tor.
+    assert!(
+        visible
+            .iter()
+            .any(|(text, _)| text.starts_with("Install 0.4.9.14 (Expert Bundle 15.0.26)")),
+        "{visible:?}"
+    );
+    assert!(has(&visible, "Not installed"), "{visible:?}");
+    assert!(
+        has(&visible, "Installed by Antinomie (1.1.3)"),
+        "{visible:?}"
+    );
+    assert!(has(&visible, "Remove"), "{visible:?}");
+    assert!(
+        visible
+            .iter()
+            .any(|(text, _)| text.contains("Antinomie runs its own tor")),
+        "{visible:?}"
+    );
+    assert!(
+        has(&visible, "Use a SOCKS address (a Tor you already run)"),
+        "{visible:?}"
+    );
+}
+
+#[test]
 fn the_routes_page_is_in_the_settings_list_and_opens() {
     let ctx = context();
     let mut app = app();
