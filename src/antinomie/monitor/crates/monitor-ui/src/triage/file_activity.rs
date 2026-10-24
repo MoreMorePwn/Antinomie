@@ -109,6 +109,9 @@ pub(super) struct Event {
     pub content_gap: bool,
     /// A write that went past the end of the file as far as it was known.
     pub extends: bool,
+    /// The kernel worker system that carried the call (`io_uring`, `AIO`);
+    /// such a call has no syscall of its own.
+    pub via: Option<&'static str>,
     /// The new name of a rename or link.
     pub other_path: Option<String>,
     /// A short remark ("1 link remains").
@@ -122,6 +125,19 @@ pub(super) struct ByteRun {
     /// `None` is an octet the run did not capture.
     pub before: Vec<Option<u8>>,
     pub after: Vec<Option<u8>>,
+}
+
+/// A hash the guest took of the file.
+#[derive(Clone, Debug)]
+pub(super) struct HashNote {
+    pub time: u64,
+    /// "closed after write", "before delete" or "exec image".
+    pub moment: &'static str,
+    pub sha256: Option<String>,
+    /// The file changed while the guest read it, so the digest may not match.
+    pub changed: bool,
+    /// Why there is no usable digest.
+    pub skipped: Option<String>,
 }
 
 /// What the change reconstruction knows of the file's contents.
@@ -156,6 +172,9 @@ pub(super) struct FileActivity {
     /// The kernel refused every call.
     pub failed_only: bool,
     pub contents: Contents,
+    /// Every hash the guest took of the file, in order: the run's evidence
+    /// that its bytes changed even where no write payload exists.
+    pub hashes: Vec<HashNote>,
 }
 
 impl FileActivity {
@@ -405,6 +424,7 @@ impl Builder {
                 deleted: false,
                 failed_only: true,
                 contents: Contents::default(),
+                hashes: Vec::new(),
             });
         if !file.path_known && path_known {
             file.path = path.clone();
@@ -455,6 +475,7 @@ impl Builder {
             content,
             content_gap,
             extends,
+            via: async_files::via(call),
             other_path: new_name.clone(),
             note,
         });
@@ -466,6 +487,34 @@ impl Builder {
             if self.current.len() < NAMES_TRACKED {
                 self.current.insert(name, key);
             }
+        }
+    }
+
+    /// A hash the guest took of the file `identity`, or else the one at `path`.
+    pub(super) fn hash(
+        &mut self,
+        identity: Option<FileKey>,
+        path: Option<&str>,
+        time: u64,
+        moment: &'static str,
+        hash: &FileHash,
+    ) {
+        let key = identity
+            .map(|id| format!("id:{}:{}:{}", id.dev, id.ino, id.generation))
+            .or_else(|| {
+                path.map(|path| self.current.get(path).cloned().unwrap_or(path.to_owned()))
+            });
+        let Some(file) = key.and_then(|key| self.files.get_mut(&key)) else {
+            return;
+        };
+        if file.hashes.len() < NAMES_MAX {
+            file.hashes.push(HashNote {
+                time,
+                moment,
+                sha256: hash.sha256_hex(),
+                changed: hash.changed,
+                skipped: hash.skipped(),
+            });
         }
     }
 

@@ -334,7 +334,7 @@ impl Window {
                     );
                 }
                 self.calls(ui, activity, file, &layout, clock);
-                contents(ui, file);
+                contents(ui, file, clock);
             });
     }
 
@@ -396,6 +396,7 @@ impl Window {
     ) {
         ui.monospace(crate::time_format::guest_ns(clock, Some(event.time)));
         ui.label(activity.process_label(event.process));
+        let async_mark = event.via.is_some();
         let call = ui.add(
             egui::Label::new(egui::RichText::new(&event.operation).color(graph::tint(event.kind)))
                 .sense(egui::Sense::click()),
@@ -409,6 +410,9 @@ impl Window {
             });
         }
         let mut result = event.result.clone();
+        if async_mark {
+            result.push_str(" · async");
+        }
         if !event.note.is_empty() {
             result.push_str(&format!(" · {}", event.note));
         }
@@ -467,9 +471,17 @@ fn printable(byte: u8) -> String {
 
 /// The bytes the run changed, where the run captured what they were and what
 /// they became.
-fn contents(ui: &mut egui::Ui, file: &FileActivity) {
+fn contents(
+    ui: &mut egui::Ui,
+    file: &FileActivity,
+    clock: Option<antinomie_monitor_core::HostClockAnchor>,
+) {
     let known = &file.contents;
-    if known.runs.is_empty() && known.gaps.is_empty() && known.hash.is_none() {
+    if known.runs.is_empty()
+        && known.gaps.is_empty()
+        && known.hash.is_none()
+        && file.hashes.is_empty()
+    {
         return;
     }
     ui.add_space(8.0);
@@ -498,6 +510,7 @@ fn contents(ui: &mut egui::Ui, file: &FileActivity) {
             }
         }
     }
+    hashes(ui, file, clock);
     if known.differing > 0 {
         ui.weak(format!(
             "{} byte{} differ between what the run saw first and last; ?? = not captured, ∅ = beyond the known size.",
@@ -516,6 +529,43 @@ fn contents(ui: &mut egui::Ui, file: &FileActivity) {
     }
     for gap in &known.gaps {
         crate::activity::warning(ui, *gap);
+    }
+}
+
+/// The guest's hashes in order. Two different digests prove the bytes changed
+/// between them, whether or not a write payload was captured (a shared mapping
+/// leaves none).
+fn hashes(
+    ui: &mut egui::Ui,
+    file: &FileActivity,
+    clock: Option<antinomie_monitor_core::HostClockAnchor>,
+) {
+    for (index, note) in file.hashes.iter().enumerate() {
+        let digest = note
+            .sha256
+            .as_deref()
+            .map_or("no digest".to_owned(), |hex| format!("SHA-256 {hex}"));
+        let mut text = format!(
+            "{} · {} · {digest}",
+            crate::time_format::guest_ns(clock, Some(note.time)),
+            note.moment
+        );
+        if note.changed {
+            text.push_str(" · changed while read, may not match");
+        }
+        if let Some(why) = &note.skipped {
+            text.push_str(&format!(" · {why}"));
+        }
+        ui.add(egui::Label::new(egui::RichText::new(text).monospace()).wrap());
+        let earlier = file.hashes[..index]
+            .iter()
+            .rev()
+            .find_map(|earlier| earlier.sha256.as_ref());
+        if let (Some(before), Some(after)) = (earlier, &note.sha256) {
+            if before != after {
+                ui.weak("The bytes differ from the earlier hash: the file changed in between.");
+            }
+        }
     }
 }
 

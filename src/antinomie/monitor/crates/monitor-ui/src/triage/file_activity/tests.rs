@@ -23,6 +23,7 @@ fn event(time: u64, kind: Kind, process: u32) -> Event {
         content: Vec::new(),
         content_gap: false,
         extends: false,
+        via: None,
         other_path: None,
         note: String::new(),
     }
@@ -43,6 +44,7 @@ fn file(path: &str, first_ns: u64, events: Vec<Event>) -> FileActivity {
         deleted: false,
         failed_only: false,
         contents: Contents::default(),
+        hashes: Vec::new(),
     }
 }
 
