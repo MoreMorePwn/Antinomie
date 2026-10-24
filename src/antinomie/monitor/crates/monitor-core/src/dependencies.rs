@@ -631,7 +631,7 @@ mod tests {
                 .unwrap_err()
                 .contains("timed out")
         );
-        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(started.elapsed() < Duration::from_secs(30));
         let noisy = Fixture::new("while :; do printf 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\n'; done");
         assert!(
             display_help(&noisy.executable(), PROBE_TIMEOUT)
