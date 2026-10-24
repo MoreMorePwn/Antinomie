@@ -119,10 +119,23 @@ pub(super) fn bpf_notes(input: &TriageInput<'_>) -> Vec<BpfNote> {
                 identity,
             )
         } else {
-            (None, None, None, None, bpf::BpfIdentity::default())
+            // No image, but the row still names its call: without these ids
+            // every such row has the same key and they select together.
+            let identity = bpf::BpfIdentity {
+                stream_id: invocation.stream_id,
+                cookie: Some(invocation.task_cookie),
+                pid: Some(event.pid),
+                tid: Some(event.tid),
+                timestamp_ns: (event.timestamp_ns != 0).then_some(event.timestamp_ns),
+                source_syscall: event.syscall_name.clone(),
+                event_id: Some(invocation.call_id),
+                ..Default::default()
+            };
+            (None, None, None, None, identity)
         };
         let result = invocation.exit.as_ref().and_then(|exit| exit.result);
         notes.push(BpfNote {
+            summary: summary(event, command, &outcome(invocation), result),
             heading: format!("{}  tid {}  {command}", event.syscall_name, event.tid),
             outcome: outcome(invocation),
             lifecycle: attach_of_loaded(command, invocation, &program_fds)
@@ -140,6 +153,20 @@ pub(super) fn bpf_notes(input: &TriageInput<'_>) -> Vec<BpfNote> {
         }
     }
     notes
+}
+
+/// One line of what happened, for the Observation column: the step and its
+/// result first, then the call and thread that made it.
+fn summary(event: &EventSummary, command: &str, outcome: &str, result: Option<i64>) -> String {
+    let step = bpf_lifecycle(command, result).unwrap_or_else(|| format!("{command}: {outcome}"));
+    let mut text = step;
+    if let Some(first) = text.get_mut(0..1) {
+        first.make_ascii_uppercase();
+    }
+    format!(
+        "{text} · {}({command}) in tid {}",
+        event.syscall_name, event.tid
+    )
 }
 
 fn captured_integer(invocation: &InvocationSummary, member: &str) -> Option<u64> {
@@ -319,7 +346,7 @@ pub(super) fn bpf_row(
             theme::text(),
             true,
         ),
-        cell(&note.heading, theme::text(), false),
+        cell(&note.summary, theme::text(), false),
         cell(&note.outcome, theme::text(), false),
         cell(
             note.identity
@@ -359,6 +386,7 @@ pub(super) fn bpf_detail(
     if !status.is_empty() {
         ui.label(status.as_str());
     }
+    ui.label(RichText::new(&note.heading).strong());
     if let Some(line) = &note.lifecycle {
         ui.label(line);
     }

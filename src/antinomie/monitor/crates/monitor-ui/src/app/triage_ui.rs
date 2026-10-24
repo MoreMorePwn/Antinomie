@@ -220,7 +220,7 @@ impl MonitorApp {
     }
 
     /// Show one process in Trace: the trace filter is set to `filter`.
-    fn scope_trace(&mut self, filter: String) {
+    pub(super) fn scope_trace(&mut self, filter: String) {
         self.selected_process = None;
         self.archive_selected = true;
         self.filter = filter;

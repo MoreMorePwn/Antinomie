@@ -374,9 +374,11 @@ fn every_label_fits_in_its_column_at_the_roomy_sizes() {
     ] {
         // "C2" is also a phase, drawn in the plot; one of them is in the column.
         assert!(
-            shown
-                .iter()
-                .any(|(text, rect)| text == name && rect.right() <= labels_right),
+            shown.iter().any(|(text, rect)| {
+                // A heat-strip row carries its category's icon before the name.
+                (text == name || text.ends_with(&format!(" {name}")))
+                    && rect.right() <= labels_right
+            }),
             "{name} is not drawn inside the label column: {shown:?}"
         );
     }

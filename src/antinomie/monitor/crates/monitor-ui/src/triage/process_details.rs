@@ -8,6 +8,10 @@ use crate::widgets::{self, Tone};
 /// left under for the app.
 pub(super) const TRACE_SCOPE: &str = "triage-trace-scope";
 
+/// Temp-data key a click on a Process tree row leaves its PID under; the view
+/// then opens Suspicious activity filtered to that process.
+pub(super) const PROCESS_SCOPE: &str = "triage-process-scope";
+
 /// Observations listed in Details; the rest are in Suspicious activity.
 const LISTED: usize = 12;
 
@@ -53,11 +57,8 @@ pub(super) fn show(view: &mut TriageView, ui: &mut egui::Ui, values: &[(&str, Ro
     }
     for finding in &listed {
         ui.horizontal_wrapped(|ui| {
-            let tone = if finding.cells[1].text == "high" {
-                Tone::Error
-            } else {
-                Tone::Warn
-            };
+            let tone = rules::Tier::from_tag(&finding.cells[1].text)
+                .map_or(Tone::Neutral, rules::Tier::tone);
             widgets::chip(ui, finding.cells[1].text.clone(), tone);
             let rule = egui::Label::new(RichText::new(&finding.cells[0].text).monospace())
                 .sense(egui::Sense::click());
@@ -108,7 +109,7 @@ pub(super) fn show(view: &mut TriageView, ui: &mut egui::Ui, values: &[(&str, Ro
 impl TriageView {
     /// Open `section`'s table (Files › Opened, or Process › Suspicious
     /// activity) filtered to one PID.
-    fn scope_to_pid(&mut self, ctx: &egui::Context, section: Section, pid: u64) {
+    pub(super) fn scope_to_pid(&mut self, ctx: &egui::Context, section: Section, pid: u64) {
         self.section = section;
         let slot = if section == Section::Files {
             self.files = FileTab::Opened;

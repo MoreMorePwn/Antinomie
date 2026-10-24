@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Colors and shapes of the graph: the glyph of each category, the phase band,
+//! Colors and shapes of the graph: the icon of each category, the phase band,
 //! the severity curve, the category heat strip and the time axis.
 use super::index::GraphIndex;
 use super::phases::Phase;
@@ -89,11 +89,46 @@ pub(in crate::triage) fn contrast(a: Color32, b: Color32) -> f64 {
     (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
 }
 
-/// The shape of a category's marker, by [`Category::index`] in `Category::ALL`:
-/// Execution ●, Persistence ■, Privilege ▲, Evasion ◆, Credential ⬟,
-/// Discovery ○, Injection ✚, C2 ★, Rootkit ⬢, Impact ✖, Collection ▼,
-/// Lateral ⇄, Exfiltration ⬆.
-pub(in crate::triage) fn glyph(
+/// The Phosphor icon of each category, by [`Category::index`] in
+/// `Category::ALL`: Execution play, Persistence anchor, Privilege arrow up,
+/// Evasion eye-slash, Credential key, Discovery magnifier, Injection syringe,
+/// C2 broadcast, Rootkit skull, Impact fire, Collection tray, Lateral arrows,
+/// Exfiltration upload.
+const ICONS: [&str; 13] = [
+    egui_phosphor::regular::PLAY,
+    egui_phosphor::regular::ANCHOR,
+    egui_phosphor::regular::ARROW_FAT_UP,
+    egui_phosphor::regular::EYE_SLASH,
+    egui_phosphor::regular::KEY,
+    egui_phosphor::regular::MAGNIFYING_GLASS,
+    egui_phosphor::regular::SYRINGE,
+    egui_phosphor::regular::BROADCAST,
+    egui_phosphor::regular::SKULL,
+    egui_phosphor::regular::FIRE,
+    egui_phosphor::regular::TRAY_ARROW_DOWN,
+    egui_phosphor::regular::ARROWS_LEFT_RIGHT,
+    egui_phosphor::regular::UPLOAD_SIMPLE,
+];
+
+pub(in crate::triage) fn icon(category: u8) -> &'static str {
+    ICONS[usize::from(category).min(ICONS.len() - 1)]
+}
+
+/// An icon colour that reads on a disc filled with `fill`.
+pub(in crate::triage) fn ink(fill: Color32) -> Color32 {
+    let luminance =
+        0.299 * f32::from(fill.r()) + 0.587 * f32::from(fill.g()) + 0.114 * f32::from(fill.b());
+    if luminance > 150.0 {
+        Color32::from_rgb(18, 20, 26)
+    } else {
+        Color32::WHITE
+    }
+}
+
+/// A finding's marker: its category's icon on a disc of the tier's colour;
+/// a hollow disc in the tier's colour when only packets showed it.
+pub(in crate::triage) fn marker(
+    painter: &Painter,
     shapes: &mut Vec<Shape>,
     category: u8,
     center: Pos2,
@@ -101,115 +136,30 @@ pub(in crate::triage) fn glyph(
     color: Color32,
     hollow: bool,
 ) {
-    let line = Stroke::new(if r < 4.0 { 1.2_f32 } else { 1.6_f32 }, color);
-    let polygon = |points: Vec<Pos2>| {
-        if hollow {
-            Shape::closed_line(points, line)
-        } else {
-            Shape::convex_polygon(points, color, Stroke::NONE)
-        }
+    let radius = r * 1.15;
+    let icon_color = if hollow {
+        shapes.push(Shape::circle_stroke(
+            center,
+            radius,
+            Stroke::new(1.5_f32, color),
+        ));
+        color
+    } else {
+        shapes.push(Shape::circle_filled(center, radius, color));
+        ink(color)
     };
-    let ring = |sides: usize, turn: f32| {
-        (0..sides)
-            .map(|i| {
-                let angle = turn + std::f32::consts::TAU * i as f32 / sides as f32;
-                center + Vec2::new(angle.cos(), angle.sin()) * r
-            })
-            .collect::<Vec<_>>()
-    };
-    let up = -std::f32::consts::FRAC_PI_2;
-    let shape = match category {
-        0 if hollow => Shape::circle_stroke(center, r, line),
-        0 => Shape::circle_filled(center, r, color),
-        1 => {
-            let rect = Rect::from_center_size(center, Vec2::splat(r * 1.7));
-            if hollow {
-                Shape::rect_stroke(rect, 0.0, line, eframe::egui::StrokeKind::Inside)
-            } else {
-                Shape::rect_filled(rect, 0.0, color)
-            }
-        }
-        2 => polygon(ring(3, up)),
-        3 => polygon(ring(4, up)),
-        4 => polygon(ring(5, up)),
-        5 => Shape::circle_stroke(center, r, Stroke::new(line.width * 1.2, color)),
-        6 => {
-            let arm = r * 1.1;
-            let width = Stroke::new(line.width * 1.4, color);
-            shapes.push(Shape::line_segment(
-                [center - Vec2::X * arm, center + Vec2::X * arm],
-                width,
-            ));
-            Shape::line_segment([center - Vec2::Y * arm, center + Vec2::Y * arm], width)
-        }
-        7 => star(center, r * 1.25, color, hollow, line),
-        8 => polygon(ring(6, 0.0)),
-        9 => {
-            let arm = r * 0.9;
-            let width = Stroke::new(line.width * 1.4, color);
-            shapes.push(Shape::line_segment(
-                [center + Vec2::new(-arm, -arm), center + Vec2::new(arm, arm)],
-                width,
-            ));
-            Shape::line_segment(
-                [center + Vec2::new(-arm, arm), center + Vec2::new(arm, -arm)],
-                width,
-            )
-        }
-        10 => polygon(ring(3, -up)),
-        11 => {
-            for shift in [-r * 0.55, r * 0.55] {
-                let tip = center + Vec2::new(shift + r * 0.4, 0.0);
-                shapes.push(Shape::line(
-                    vec![
-                        tip + Vec2::new(-r * 0.7, -r),
-                        tip,
-                        tip + Vec2::new(-r * 0.7, r),
-                    ],
-                    line,
-                ));
-            }
-            return;
-        }
-        _ => {
-            shapes.push(Shape::line_segment(
-                [
-                    center + Vec2::new(0.0, r),
-                    center + Vec2::new(0.0, -r * 0.3),
-                ],
-                Stroke::new(line.width * 1.4, color),
-            ));
-            polygon(vec![
-                center + Vec2::new(0.0, -r),
-                center + Vec2::new(-r * 0.9, -r * 0.1),
-                center + Vec2::new(r * 0.9, -r * 0.1),
-            ])
-        }
-    };
-    shapes.push(shape);
+    let galley = painter.layout_no_wrap(
+        icon(category).to_owned(),
+        FontId::proportional(radius * 1.35),
+        icon_color,
+    );
+    let at = center - galley.size() / 2.0;
+    shapes.push(Shape::galley(at, galley, icon_color));
 }
 
-fn star(center: Pos2, r: f32, color: Color32, hollow: bool, line: Stroke) -> Shape {
-    let points: Vec<Pos2> = (0..10)
-        .map(|i| {
-            let angle = -std::f32::consts::FRAC_PI_2 + std::f32::consts::TAU * i as f32 / 10.0;
-            let radius = if i % 2 == 0 { r } else { r * 0.45 };
-            center + Vec2::new(angle.cos(), angle.sin()) * radius
-        })
-        .collect();
-    if hollow {
-        return Shape::closed_line(points, line);
-    }
-    // A star is not convex: fill it as a fan around its center.
-    let mut mesh = eframe::egui::epaint::Mesh::default();
-    mesh.colored_vertex(center, color);
-    for point in &points {
-        mesh.colored_vertex(*point, color);
-    }
-    for i in 0..10u32 {
-        mesh.add_triangle(0, 1 + i, 1 + (i + 1) % 10);
-    }
-    Shape::mesh(mesh)
+/// A plain tier dot: what a dense or zoomed-out view draws instead of icons.
+pub(in crate::triage) fn dot(shapes: &mut Vec<Shape>, center: Pos2, r: f32, color: Color32) {
+    shapes.push(Shape::circle_filled(center, r, color));
 }
 
 pub(in crate::triage) fn label(

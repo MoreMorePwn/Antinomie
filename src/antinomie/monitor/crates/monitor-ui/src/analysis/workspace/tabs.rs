@@ -261,6 +261,17 @@ fn header(
                 ui.ctx().copy_text(hash.clone());
             }
         }
+        let run = state.linked_run().map(str::to_owned);
+        let mut open_run = None;
+        if let Some(run_id) = run {
+            if ui
+                .button(format!("{} Run", egui_phosphor::regular::PLAY_CIRCLE))
+                .on_hover_text(format!("Open run {run_id} in Run History"))
+                .clicked()
+            {
+                open_run = Some(ReportAction::OpenRun { run_id });
+            }
+        }
         if let Some(offset) = selected_offset(report, state) {
             if ui
                 .button(format!(
@@ -274,7 +285,7 @@ fn header(
                 state.tab = Tab::Content;
             }
         }
-        action = export_controls(ui, report, None, true);
+        action = open_run.or(export_controls(ui, report, None, true));
     });
     action
 }
