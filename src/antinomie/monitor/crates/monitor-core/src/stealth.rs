@@ -1035,41 +1035,95 @@ impl StealthProfile {
     /// This profile as the base and the host can boot it, and what changed:
     /// an entry they lack falls back to the choice every base and host has.
     pub fn fitted(&self, base: &BaseSupport, host: &HostSupport) -> (Self, Vec<String>) {
+        let (fitted, fallbacks) = self.fitted_with(base, host);
+        (fitted, fallbacks.iter().map(Fallback::note).collect())
+    }
+
+    /// [`fitted`](Self::fitted) with each difference as a [`Fallback`], so a
+    /// window can put it beside its setting and a log can list it.
+    pub fn fitted_with(&self, base: &BaseSupport, host: &HostSupport) -> (Self, Vec<Fallback>) {
         let mut fitted = self.clone();
-        let mut notes = Vec::new();
-        if let Some(reason) = firmware_unavailable(self.firmware, base, host) {
-            notes.push(format!("{}: {reason}; BIOS used", self.firmware.label()));
-            fitted.firmware = Firmware::Bios;
+        let fallbacks = self.fallbacks(base, host);
+        for fallback in &fallbacks {
+            match fallback.setting {
+                FallbackSetting::Firmware => fitted.firmware = Firmware::Bios,
+                FallbackSetting::DiskBus => fitted.disk_bus = DiskBus::Virtio,
+                FallbackSetting::Nat => fitted.nat = NatNetwork::default(),
+                FallbackSetting::Smt => fitted.smt = false,
+                FallbackSetting::Pointer => fitted.pointer = Pointer::VirtioTablet,
+            }
         }
         if fitted.firmware == Firmware::UefiSecureBoot {
             fitted.smm = true;
         }
+        (fitted, fallbacks)
+    }
+
+    /// What this profile asks for that the base or the host cannot give, in
+    /// the order the settings are fitted. Empty when everything is supported.
+    pub fn fallbacks(&self, base: &BaseSupport, host: &HostSupport) -> Vec<Fallback> {
+        let mut found = Vec::new();
+        if let Some(reason) = firmware_unavailable(self.firmware, base, host) {
+            let cause = if self.firmware.is_uefi() && !base.uefi {
+                "this base"
+            } else {
+                "this host"
+            };
+            found.push(Fallback {
+                setting: FallbackSetting::Firmware,
+                summary: format!(
+                    "{} not supported by {cause}: BIOS will be used",
+                    self.firmware.label()
+                ),
+                note: format!("{}: {reason}; BIOS used", self.firmware.label()),
+                reason,
+            });
+        }
         if let Some(reason) = disk_bus_unavailable(self.disk_bus, base) {
-            notes.push(format!(
-                "{} disk: {reason}; virtio used",
-                self.disk_bus.label()
-            ));
-            fitted.disk_bus = DiskBus::Virtio;
+            found.push(Fallback {
+                setting: FallbackSetting::DiskBus,
+                summary: format!(
+                    "{} not supported by this base: virtio will be used",
+                    self.disk_bus.label()
+                ),
+                note: format!("{} disk: {reason}; virtio used", self.disk_bus.label()),
+                reason: reason.into(),
+            });
         }
         if !self.nat.network.is_empty() && !base.dhcp {
-            notes.push(format!(
-                "NAT network {}: {NAT_STATIC}; 10.0.2.0/24 used",
-                self.nat.network
-            ));
-            fitted.nat = NatNetwork::default();
+            found.push(Fallback {
+                setting: FallbackSetting::Nat,
+                summary: format!(
+                    "NAT network {} not supported by this base: 10.0.2.0/24 will be used",
+                    self.nat.network
+                ),
+                note: format!(
+                    "NAT network {}: {NAT_STATIC}; 10.0.2.0/24 used",
+                    self.nat.network
+                ),
+                reason: NAT_STATIC.into(),
+            });
         }
         if self.smt
             && self.realistic_topology
             && let Err(reason) = &host.smt
         {
-            notes.push(format!("Two threads per core: {reason}; one used"));
-            fitted.smt = false;
+            found.push(Fallback {
+                setting: FallbackSetting::Smt,
+                summary: "Two threads per core not supported by this host: one will be used".into(),
+                note: format!("Two threads per core: {reason}; one used"),
+                reason: reason.clone(),
+            });
         }
         if self.pointer == Pointer::UsbTablet && !self.usb {
-            notes.push("USB tablet: no USB controllers; virtio tablet used".into());
-            fitted.pointer = Pointer::VirtioTablet;
+            found.push(Fallback {
+                setting: FallbackSetting::Pointer,
+                summary: "USB tablet needs a USB controller: virtio tablet will be used".into(),
+                note: "USB tablet: no USB controllers; virtio tablet used".into(),
+                reason: "no USB controllers".into(),
+            });
         }
-        (fitted, notes)
+        found
     }
 
     /// How common checks (systemd-detect-virt, DMI strings, the CPUID
@@ -1083,6 +1137,94 @@ impl StealthProfile {
             "unlikely"
         }
     }
+}
+
+/// A setting `fitted` changes: the profile asks for something the base, the
+/// host or the profile itself cannot give.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FallbackSetting {
+    Firmware,
+    DiskBus,
+    Nat,
+    Smt,
+    Pointer,
+}
+
+/// One difference between what a profile asks for and what a VM starts with.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Fallback {
+    pub setting: FallbackSetting,
+    /// One line for the setting itself: `SATA not supported by this base:
+    /// virtio will be used`.
+    pub summary: String,
+    /// Why, and what to do about it.
+    pub reason: String,
+    /// The long form, as the Still visible list and logs read it.
+    note: String,
+}
+
+impl Fallback {
+    pub fn note(&self) -> String {
+        self.note.clone()
+    }
+
+    /// The line a start log and a run's notes carry.
+    pub fn log_line(&self) -> String {
+        format!(
+            "Stealth setting not applied: {}; {}",
+            self.summary, self.reason
+        )
+    }
+}
+
+/// The base a VM starts from: the one it names, else the first installed
+/// base that is not a graphical guest base, else the first.
+pub fn vm_base<'a>(
+    identity: Option<&str>,
+    bases: &'a [crate::api::BaseSummary],
+) -> Option<&'a crate::api::BaseSummary> {
+    if let Some(identity) = identity {
+        return bases.iter().find(|base| base.id == identity);
+    }
+    bases
+        .iter()
+        .find(|base| base.guest.is_none())
+        .or_else(|| bases.first())
+}
+
+/// What a VM's profile asks for that its base or this host cannot give. A VM
+/// whose base is not installed has nothing to compare with: empty.
+pub fn vm_fallbacks(
+    vm: &crate::api::VmConfig,
+    bases: &[crate::api::BaseSummary],
+    host: &HostSupport,
+) -> Vec<Fallback> {
+    vm_base(vm.base_identity.as_deref(), bases).map_or_else(Vec::new, |base| {
+        vm.stealth
+            .fallbacks(&BaseSupport::from_list(&base.stealth_support), host)
+    })
+}
+
+/// An installed base, other than `current`, that supports every setting this
+/// profile has fallen back on for `setting`: where the user can switch to get
+/// what the profile asks for.
+pub fn base_supporting<'a>(
+    profile: &StealthProfile,
+    setting: FallbackSetting,
+    current: Option<&str>,
+    bases: &'a [crate::api::BaseSummary],
+    host: &HostSupport,
+) -> Option<&'a crate::api::BaseSummary> {
+    bases
+        .iter()
+        .filter(|base| Some(base.id.as_str()) != current)
+        .find(|base| {
+            let support = BaseSupport::from_list(&base.stealth_support);
+            !profile
+                .fallbacks(&support, host)
+                .iter()
+                .any(|fallback| fallback.setting == setting)
+        })
 }
 
 /// Why an older base keeps QEMU's NAT network.
@@ -1141,6 +1283,12 @@ impl HostSupport {
                 &host_cpuinfo("flags").unwrap_or_default(),
             ),
         }
+    }
+
+    /// The host as `qemu-system-x86_64` on the path sees it, read once.
+    pub fn cached() -> &'static Self {
+        static HOST: std::sync::OnceLock<HostSupport> = std::sync::OnceLock::new();
+        HOST.get_or_init(|| Self::detect(std::path::Path::new("qemu-system-x86_64")))
     }
 
     pub fn all() -> Self {

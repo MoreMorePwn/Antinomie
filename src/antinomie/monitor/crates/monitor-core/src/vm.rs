@@ -279,6 +279,9 @@ pub(crate) struct VmProcess {
     /// Folder holding the gateway's socket when it is not in `runtime_dir`
     /// (the path would be too long for a socket); removed on drop.
     net_dir: Option<PathBuf>,
+    /// What the stealth profile asked for and the base or host could not give,
+    /// one line each, for the start log and the run notes.
+    pub stealth_fallbacks: Vec<String>,
 }
 /// The QEMU command. Through util-linux `setpriv`, when installed, QEMU gets
 /// SIGKILL if the app dies, instead of running on with the VM's disk locked
@@ -471,7 +474,7 @@ impl VmProcess {
         }
         let (ram_path, ram_memory) = guest_ram(ram_path, ram_size)?;
         // The profile as this base and host can boot it.
-        let (stealth, _) = vm.stealth.fitted(
+        let (stealth, fallbacks) = vm.stealth.fitted_with(
             &crate::stealth::BaseSupport::from_list(&bundle.stealth_support),
             &crate::stealth::HostSupport::detect(&options.qemu),
         );
@@ -589,6 +592,10 @@ impl VmProcess {
             qmp_path,
             gateway,
             net_dir,
+            stealth_fallbacks: fallbacks
+                .iter()
+                .map(crate::stealth::Fallback::log_line)
+                .collect(),
         };
         if let Some((sizing, (width, height))) = initial_size {
             process.set_initial_window_size(sizing, width, height)?;
@@ -1094,6 +1101,7 @@ mod tests {
                 qmp_path,
                 gateway: None,
                 net_dir: None,
+                stealth_fallbacks: Vec::new(),
             };
             process
                 .qmp(&serde_json::json!({"execute":"query-status"}))
@@ -1520,6 +1528,7 @@ mod tests {
             qmp_path: "/nonexistent/qmp".into(),
             gateway: None,
             net_dir: None,
+            stealth_fallbacks: Vec::new(),
         };
         drop(process);
         assert!(!std::path::Path::new(&format!("/proc/{pid}")).exists());
@@ -1539,6 +1548,7 @@ mod tests {
             qmp_path: "/nonexistent/qmp".into(),
             gateway: None,
             net_dir: None,
+            stealth_fallbacks: Vec::new(),
         };
         let (sizing, _server) =
             crate::display::InitialWindowSize::stalled_for_test(Duration::from_millis(50));

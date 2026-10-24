@@ -21,6 +21,13 @@ impl MonitorApp {
             }
             now.insert(message);
         };
+        // What the running VM started without, so a setting that was never
+        // applied is not found out from a sample that evaded on it.
+        if snapshot.active_vm.is_some() {
+            for line in &snapshot.stealth_fallbacks {
+                emit(Level::Warn, line.clone());
+            }
+        }
         for message in crate::summary::health::notices(snapshot, &self.history) {
             emit(Level::Warn, message.to_string());
         }

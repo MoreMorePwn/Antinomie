@@ -2443,9 +2443,13 @@ keys enrolled for Secure Boot; each VM copies the store once
 Intel hosts and on AMD hosts whose CPU has TOPOEXT (without it QEMU warns that
 the CPU has no hyperthreading; with `+topoext` the guest sees `thread_siblings
 0-1`). `StealthProfile::fitted()` turns an entry the base or host lacks into
-BIOS, virtio, 10.0.2.0/24 or one thread per core at launch; the Stealth
-profile window shows such choices disabled with the reason and lists the
-fallbacks under "Still visible". A Debian base keeps virtio: its kernel
+BIOS, virtio, 10.0.2.0/24 or one thread per core at launch (`fallbacks()` lists
+each as a `Fallback`: setting, one summary line, reason); the Stealth profile
+window shows such choices disabled with the reason, puts the summary on the
+setting and at its top, and lists the fallbacks under "Still visible". The VM
+list and the Summary card carry a badge, the launch keeps the lines in
+`VmProcess::stealth_fallbacks` (the snapshot's `stealth_fallbacks`, warned once
+in Activity, and a note on each run of the boot). A Debian base keeps virtio: its kernel
 builds AHCI and NVMe as modules and its root is `/dev/vda` (APPEND, fstab);
 the Debian kernel was not rebuilt here.
 

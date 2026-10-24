@@ -290,6 +290,9 @@ impl Worker {
                 run.assembler
                     .set_event_table(session.vm.transport.event_table as usize);
                 run.summary.recording_error = None;
+                // What the VM started without, so a run that evaded on a
+                // setting that was never applied says so in its notes.
+                run.add_stealth_fallbacks(&session.process.stealth_fallbacks);
                 run.boot_bundle_identity = session.bundle.base_identity.clone();
                 run.disk_base_identity = session.disk_bundle.base_identity.clone();
                 run.tracer_hashing = tracer_hashing;
