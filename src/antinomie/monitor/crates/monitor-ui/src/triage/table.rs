@@ -367,7 +367,7 @@ fn table_rows_with(
                                 },
                             );
                         } else {
-                            crate::widgets::table::aligned(
+                            crate::widgets::table::aligned_cell(
                                 ui,
                                 crate::widgets::table::numeric_align(numeric_column(
                                     headers[column],
@@ -538,7 +538,7 @@ fn finding_table_rows(
                         let align = crate::widgets::table::numeric_align(numeric_column(
                             headers.get(column).copied().unwrap_or_default(),
                         ));
-                        crate::widgets::table::aligned(ui, align, |ui| {
+                        crate::widgets::table::aligned_cell(ui, align, |ui| {
                             ui.add(
                                 egui::Label::new(text)
                                     .truncate()

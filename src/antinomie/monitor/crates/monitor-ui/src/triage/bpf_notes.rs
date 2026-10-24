@@ -119,7 +119,19 @@ pub(super) fn bpf_notes(input: &TriageInput<'_>) -> Vec<BpfNote> {
                 identity,
             )
         } else {
-            (None, None, None, None, bpf::BpfIdentity::default())
+            // No image, but the row still names its call: without these ids
+            // every such row has the same key and they select together.
+            let identity = bpf::BpfIdentity {
+                stream_id: invocation.stream_id,
+                cookie: Some(invocation.task_cookie),
+                pid: Some(event.pid),
+                tid: Some(event.tid),
+                timestamp_ns: (event.timestamp_ns != 0).then_some(event.timestamp_ns),
+                source_syscall: event.syscall_name.clone(),
+                event_id: Some(invocation.call_id),
+                ..Default::default()
+            };
+            (None, None, None, None, identity)
         };
         let result = invocation.exit.as_ref().and_then(|exit| exit.result);
         notes.push(BpfNote {
