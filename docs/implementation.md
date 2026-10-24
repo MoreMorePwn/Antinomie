@@ -931,7 +931,7 @@ list of calls for the live view and the scan runs them through the same
 * **Not covered here.** `memory.write_then_exec`, `memory.unpacked_capture`,
   `evasion.cpuid_probe`, `evasion.timing_probe` and the root-level `rootkit.*` and
   `privilege.cred_overwrite` rules need new guest data. `evasion.packed_image` uses
-  the Static analysis Unpacking verdict (see Unpacking in phases, 0.7.1).
+  the Static analysis Unpacking verdict (see Unpacking layers, 0.7.1).
 * **Antinomie's own activity.** The resource collector of a base from before 0.7.0
   (uploaded as `/tmp/.antinomie-resource-<token>`, which removes itself) is
   recognised by that path and its tasks are left out. The terminal and the analyst's
