@@ -12,6 +12,7 @@ mod manual_core;
 mod process_core;
 mod recorder_health;
 mod run_network;
+mod run_route;
 mod saving;
 mod session_runs;
 mod session_transport;
@@ -575,6 +576,8 @@ struct RunArtifactOwner {
     last_network_stop: Option<Instant>,
     core: Option<process_core::Transfer>,
     core_stored_len: u64,
+    /// The run holds a route on the VM's gateway until its tree ends.
+    route_claim: Option<crate::route::RouteClaim>,
 }
 
 impl RunArtifactOwner {
@@ -595,6 +598,7 @@ impl RunArtifactOwner {
                 } else {
                     RunArtifactState::Disabled
                 },
+                route: run.route.clone(),
                 ..RunArtifacts::default()
             },
             network: None,
@@ -602,6 +606,7 @@ impl RunArtifactOwner {
             last_network_stop: None,
             core: None,
             core_stored_len: 0,
+            route_claim: None,
         }
     }
     /// Queues the summary for the persistence thread: the transport thread
