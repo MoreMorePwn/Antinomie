@@ -201,6 +201,14 @@ detached terminal hides its view and leaves its program running; closing the
 main application follows the normal VM shutdown path. Embedded floating panes
 retain their existing controls, and QEMU's separate display uses its own frame.
 
+**Tools → API keys** is the one place API keys are typed, replaced, tested or
+removed: the abuse.ch Auth-Key (MalwareBazaar, and the IOC datasets and rule
+packs that follow) and the MalShare key. Each key shows only its last four
+characters, which features use it and when it was last used; **Test** asks the
+service whether it accepts the key. Keys are kept in the data folder in a file
+only you can read and are never written to run exports, reports, logs or
+screenshots. Malware samples has no key field of its own: it points here.
+
 **Tools → UI performance** shows the graphics renderer and recent UI update
 CPU timings. If WSLg selects software rendering, a compatible GPU driver can
 be selected for one launch with `antinomie --graphics-driver d3d12`; the dialog

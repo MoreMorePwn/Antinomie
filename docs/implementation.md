@@ -993,6 +993,28 @@ Host only: `monitor-ui/src/triage/graph/`, nothing needs a guest change.
   screenshots under Xvfb), `graph/bench.rs` (120k findings: paint under 4 ms,
   no repaint when idle, memory, the million-finding build).
 
+### API keys window (0.7.1)
+
+Host only. `monitor-core/src/api_keys.rs` owns every key; `monitor-ui/src/api_keys_window.rs`
+is Tools > API keys.
+
+* **Storage.** `<data dir>/api-keys.json` (`{"schema":1,"keys":{"abusech":…,"malshare":…}}`),
+  written through `storage::atomic_json`, whose temporary file is created 0600
+  before a byte is written, then renamed; `<data dir>/api-key-use.json` holds
+  last-used times only. The abuse.ch Auth-Key is one entry for MalwareBazaar,
+  ThreatFox and URLhaus. A `samples/api-keys.json` from an older version moves
+  into the new file on first read and is deleted. Keys are not part of
+  Settings, run exports, catalogs or saved URLs.
+* **Handling.** A key travels as a `Secret` (its `Debug` prints no text).
+  `curl` gets it on standard input (`-H @-`, or `-K -` for MalShare), never on a
+  command line; `redact` removes it from error text that a server could echo.
+  `masked` shows the last four characters of a key of at least eight, else "set".
+* **Test.** abuse.ch: a one-sample MalwareBazaar tag search; MalShare:
+  `getlimit`. Both run in a worker and record a use time on success.
+* **Samples.** `samples::source_key` reads this store. The Malware samples
+  window has no key field: it shows a notice and an **Open API keys…** button
+  (`SamplesView::take_open_keys`) and reads the key again after a change.
+
 ### Accepted ANT-T0097 host UI performance (0.6.2)
 
 Remove render-time filesystem checks for host chooser availability; resolve

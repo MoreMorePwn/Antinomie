@@ -88,6 +88,7 @@ fn escape_closes_the_topmost_dialog_first() {
             Dialog::Import => app.import_open = true,
             Dialog::Download => app.download_open = true,
             Dialog::Samples => app.samples.open = true,
+            Dialog::ApiKeys => app.api_keys.open = true,
             Dialog::Dependencies => app.dependencies.open = true,
             Dialog::GettingStarted => app.getting_started.open = true,
             Dialog::Performance => app.performance.open = true,
