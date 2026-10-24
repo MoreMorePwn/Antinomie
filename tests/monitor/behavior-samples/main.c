@@ -28,6 +28,8 @@
 
 #define REAL_PATHS "--real-paths"
 #define WIDE "--wide"
+// Runs only when named (--only, or as its own binary); a bare run leaves it out.
+#define ONLY_SELECTED "only"
 
 // Registry order is the order of a run, which follows the phases of the
 // activity graph: recon, download, persistence, escalation, hide/inject, C2,
@@ -171,6 +173,19 @@ static const struct module modules[] = {
      "discovery.system_info,discovery.user_enum",
      "the strings are for YARA/Sigma and the Files tab, not for Suspicious activity",
      NULL, scenario_rule_markers},
+    {"evasive", "-",
+     "checks first (debugger, VM, container, sandbox); evades if any trips, else the whole chain",
+     "evasion.sandbox_probe,evasion.probe_then_exit,evasion.debugger_check,"
+     "evasion.container_check,evasion.traceme,discovery.system_info,discovery.network_config,"
+     "network.ip_literal,execution.dropped_exec,execution.chmod_exec_temp,execution.temp_exec,"
+     "execution.download_cradle,process.interpreter,process.exec,persistence.systemd,"
+     "persistence.xdg_autostart,persistence.shell_profile,persistence.ssh_authorized_keys,"
+     "persistence.pam,persistence.config_write,persistence.cron,persistence.at_job,"
+     "persistence.account,persistence.rc_init,persistence.module,network.beacon",
+     "evade path: the check rows, evasion.probe_then_exit (needs an answer that shows a VM) and "
+     "nothing else; proceed path: the check rows plus the chain's rows (recon, download, "
+     "persistence, beacon-loop, one exfil POST)",
+     ONLY_SELECTED, scenario_evasive},
     {"real-path-probes", "-",
      "opens real system paths that cannot be changed or read: absent names, no create, no read",
      "persistence.cron,persistence.at_job,persistence.systemd,persistence.rc_init,"
@@ -261,12 +276,18 @@ static void usage(const char *self, FILE *out)
            "  --wide            allow net-wide: a few packets to 203.0.113.0/24\n"
            "  --real-paths      allow real-path-probes: opens that cannot create or read\n"
            "  --gap MS          pause between scenarios in a full run (0-%d, default 1000)\n"
+           "  --evade           check for an analysis environment first and do nothing else if\n"
+           "                    one is found (ant-sample-evasive always does)\n"
+           "  --why             print every environment check and its answer\n"
+           "  --ignore LIST     skip check categories: debugger,vm,container,sandbox\n"
+           "  --evade-sleep MS  the evading sleep (0-%d, default 3000-4500)\n"
            "  --list            print the registry (name, phase, expected rules) and exit\n"
 #ifndef SINGLE_SCENARIO
            "  --all | --only a,b  run every scenario, or a comma-separated subset\n"
 #endif
            "  --help            this text\n\n",
-           SAMPLE_MAX_ROUNDS, SAMPLE_MAX_DELAY_MS, SAMPLE_REMOTE_ADDR, SAMPLE_DNS_ADDR, SAMPLE_MAX_GAP_MS);
+           SAMPLE_MAX_ROUNDS, SAMPLE_MAX_DELAY_MS, SAMPLE_REMOTE_ADDR, SAMPLE_DNS_ADDR, SAMPLE_MAX_GAP_MS,
+            SAMPLE_MAX_EVADE_SLEEP_MS);
     fprintf(out, "Default ports: HTTP %d, TLS %d, UDP %d. Start the sinkhole on the host with\n"
            "  python3 tests/monitor/sinkhole.py\n"
            "and pass the --host it prints. Endpoints are numeric IPv4 only; nothing is resolved.\n"
@@ -316,7 +337,7 @@ static int run_module(const struct module *module, const struct options *base)
 {
     struct options options = *base;
     current_name = module->name;
-    if (module->requires &&
+    if (module->requires && strcmp(module->requires, ONLY_SELECTED) != 0 &&
         !((!strcmp(module->requires, WIDE) && base->wide) ||
           (!strcmp(module->requires, REAL_PATHS) && base->real_paths))) {
         printf("== %s: %s (phase %s)\n", module->name, module->summary, module->phase);
@@ -474,6 +495,20 @@ static int valid_address(const char *self, const char *name, const char *text)
     return 0;
 }
 
+static int check_categories(const char *self, const char *list)
+{
+    char copy[128];
+    snprintf(copy, sizeof copy, "%s", list);
+    for (char *name = strtok(copy, ","); name; name = strtok(NULL, ","))
+        if (strcmp(name, "debugger") && strcmp(name, "vm") && strcmp(name, "container") &&
+            strcmp(name, "sandbox")) {
+            fprintf(stderr, "%s: --ignore takes debugger, vm, container or sandbox, not \"%s\"\n",
+                    self, name);
+            return -1;
+        }
+    return 0;
+}
+
 #ifndef SINGLE_SCENARIO
 static int wanted(const char *only, const char *name)
 {
@@ -541,7 +576,7 @@ int main(int argc, char **argv)
     expanded[expanded_count] = NULL;
     argc = expanded_count;
     argv = expanded;
-    struct options options = {.rounds = 3, .delay_ms = 500};
+    struct options options = {.rounds = 3, .delay_ms = 500, .evade_sleep_ms = -1};
     int gap_ms = 1000;
 #ifndef SINGLE_SCENARIO
     const char *only = NULL;
@@ -563,6 +598,21 @@ int main(int argc, char **argv)
             options.wide = 1;
         } else if (!strcmp(arg, "--real-paths")) {
             options.real_paths = 1;
+        } else if (!strcmp(arg, "--evade")) {
+            options.evade = 1;
+        } else if (!strcmp(arg, "--why")) {
+            options.why = 1;
+        } else if (!strcmp(arg, "--ignore") && has_value) {
+            options.ignore = argv[++i];
+            if (check_categories(self, options.ignore) != 0)
+                return 2;
+        } else if (!strcmp(arg, "--test-root") && has_value) {
+            // For tests only: the checks read their files below this directory.
+            options.test_root = argv[++i];
+        } else if (!strcmp(arg, "--evade-sleep") && has_value) {
+            if (parse_number(self, arg, argv[++i], 0, SAMPLE_MAX_EVADE_SLEEP_MS,
+                             &options.evade_sleep_ms) != 0)
+                return 2;
 #ifndef SINGLE_SCENARIO
         } else if (!strcmp(arg, "--all")) {
             // The default: every scenario.
@@ -618,16 +668,29 @@ int main(int argc, char **argv)
     int ran[MODULE_COUNT];
     memset(ran, 0, sizeof ran);
     int status = 0;
+    // --evade: look at the environment before anything else; an analysis
+    // environment ends the run quietly, as an evasive sample would.
+    int evaded = 0;
 #ifdef SINGLE_SCENARIO
-    for (size_t m = 0; m < MODULE_COUNT; m++)
+    int own_gate = !strcmp(SINGLE_SCENARIO, "evasive");
+#else
+    int own_gate = only && wanted(only, "evasive") && !strchr(only, ',');
+#endif
+    if (options.evade && !own_gate)
+        evaded = sample_gate_run(&options, "gate");
+#ifdef SINGLE_SCENARIO
+    for (size_t m = 0; m < MODULE_COUNT && !evaded; m++)
         if (!strcmp(modules[m].name, SINGLE_SCENARIO)) {
             ran[m] = 1;
             status |= run_module(&modules[m], &options);
         }
 #else
     int first = 1;
-    for (size_t m = 0; m < MODULE_COUNT; m++) {
+    for (size_t m = 0; m < MODULE_COUNT && !evaded; m++) {
         if (only && !wanted(only, modules[m].name))
+            continue;
+        // The evasive scenario is its own binary, or named with --only.
+        if (!only && modules[m].requires && !strcmp(modules[m].requires, ONLY_SELECTED))
             continue;
         // A bare run is the whole storyline, in phase order. The opt-in
         // scenarios appear in it as SKIP lines unless their option is given.
@@ -638,7 +701,13 @@ int main(int argc, char **argv)
         status |= run_module(&modules[m], &options);
     }
 #endif
+    if (evaded)
+        sample_pass("gate", "analysis environment detected: no scenario was run; decoy, last look "
+                         "and a short sleep follow, then exit 0");
     scorecard(ran);
     free(expanded);
+    // The evading tail comes last, after the scorecard, so nothing is written
+    // once the final look has been taken.
+    sample_gate_finish();
     return status || totals.fail ? 1 : 0;
 }

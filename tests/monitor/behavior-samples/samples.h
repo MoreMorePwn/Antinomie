@@ -72,6 +72,7 @@
 #define SAMPLE_MAX_ROUNDS 50
 #define SAMPLE_MAX_DELAY_MS 10000
 #define SAMPLE_MAX_GAP_MS 5000
+#define SAMPLE_MAX_EVADE_SLEEP_MS 5000
 
 struct options {
     int rounds;
@@ -91,6 +92,14 @@ struct options {
     // --real-paths opens real system paths in ways that cannot change them.
     int wide;
     int real_paths;
+    // The evasive gate: --evade on any binary, --why, --ignore LIST of
+    // categories (debugger,vm,container,sandbox), --evade-sleep MS (-1 picks
+    // 3.0-4.5 s) and, for tests only, --test-root DIR.
+    int evade;
+    int why;
+    const char *ignore;
+    const char *test_root;
+    int evade_sleep_ms;
 };
 
 // One scenario of the registry. `expect` is the comma-separated list of rule
@@ -122,6 +131,13 @@ void sample_skip(const char *module, const char *fmt, ...) __attribute__((format
 
 const char *sample_host(const struct options *options);
 int sample_port(const struct options *options, int fallback);
+
+// evade.c: run every environment check and print the verdict (EVADE lines on
+// stdout and stderr, a GATE line); 1 means "an analysis environment". The tail
+// of an evading run (decoy, last look, short sleep) is sample_gate_finish(), which
+// main calls after the scorecard so nothing is written after the last check.
+int sample_gate_run(const struct options *options, const char *module);
+void sample_gate_finish(void);
 
 // Create a directory and any missing parents.
 int sample_mkdir_p(const char *path);
@@ -232,6 +248,7 @@ SCENARIO(lateral_sim);
 SCENARIO(impact_sim);
 SCENARIO(rule_markers);
 SCENARIO(real_path_probes);
+SCENARIO(evasive);
 SCENARIO(net_wide);
 
 

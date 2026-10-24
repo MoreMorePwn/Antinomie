@@ -28,7 +28,7 @@ esac
 
 cflags=(-O2 -g -Wall -Wextra -D_GNU_SOURCE -I"$source_dir")
 # Everything but main.c is compiled once; main.c carries the scenario choice.
-shared=(common net beaconing discovery probes anti-analysis stage credential-access impact)
+shared=(common net evade beaconing discovery probes anti-analysis stage credential-access impact)
 objects=$(mktemp -d)
 trap 'rm -rf "$objects"' EXIT
 for name in "${shared[@]}"; do

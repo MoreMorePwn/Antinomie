@@ -90,6 +90,11 @@ activity over a minute so the graph can separate the phases.
 --wide            allow net-wide: a few packets to 203.0.113.0/24
 --real-paths      allow real-path-probes: opens that cannot create or read
 --gap MS          pause between scenarios in a full run (0-5000, default 1000)
+--evade           check for an analysis environment first; do nothing else if one is found
+--why             print every environment check and its answer (with the Stealth entry)
+--ignore LIST     skip check categories: debugger,vm,container,sandbox
+--evade-sleep MS  the evading sleep (0-5000; default 3000-4500)
+--test-root DIR   tests only: the checks read their files below DIR (see Evasive variant)
 --list            registry: name, phase, requires, expected rule ids, summary (tab separated)
 --all / --only a,b   select scenarios in ant-sample-all
 ```
@@ -118,6 +123,9 @@ SUMMARY     scenarios=28 pass=26 note=53 unavailable=1 fail=0 skip=2 expected_ru
 RULES       all               c2.bpf_backdoor,c2.bind_shell,...   (sorted union of the scenarios that ran)
 ```
 
+- Extra tags of the evasive variant: `CHECK` (one environment check and its answer,
+  with `--why`), `EVADE category: reasons` (also on stderr), `GATE` (the verdict) and
+  `PATH` (the rule ids of the path taken).
 - `EXPECT` is what Antinomie should list for the scenario; `DEPENDS` says what
   that depends on (root, a guest, a capture, a work directory under /tmp).
 - `PASS` is the scenario's own summary of what it did; `NOTE` is detail
@@ -166,6 +174,7 @@ exists there. A tier is the rule's own; failed or allow-listed matches are lower
 | `ant-sample-lateral-sim` | spread | `discovery.network_scan`, `lateral.bruteforce`, `lateral.ssh_spread` | `discovery.network_scan` (24 ports of the host), `lateral.bruteforce` (12 connects to ports 22 and 23), `lateral.ssh_spread` after the known_hosts read. Graph phase: spread. Loopback hosts are not counted: use the NAT host. |
 | `ant-sample-impact-sim` | impact | `impact.fork_bomb`, `impact.ransom_rewrite`, `impact.ransom_note`, `impact.inhibit_recovery`, `impact.service_stop`, `impact.reboot`, `impact.miner`, `impact.miner_tuning`, `impact.ddos_flood`, `impact.block_device_write` | Impact group: `impact.fork_bomb` (230 vforks), `impact.ransom_rewrite` and `impact.ransom_note`, miner/shutdown/lvremove stand-ins, `impact.ddos_flood` (1120 datagrams). Graph phase: impact. |
 | `ant-sample-rule-markers` | - | `discovery.system_info`, `discovery.user_enum` | Files tab / static analysis: YARA and Sigma tag strings in `rule-markers.txt`; Process tab: real `uname`, `id`, `crontab -l`, `cat` for Sigma process_creation rules. |
+| `ant-sample-evasive` (named with `--only evasive`, or its own binary) | - | see "Evasive variant": the check rows on both paths, the chain's rows only when it proceeds | Checks first; on a VM it prints `EVADE vm: ...` and exits 0 after 3-4.5 s; on a clean machine the whole chain runs. See below. |
 | `ant-sample-real-path-probes` (needs `--real-paths`) | - | `persistence.cron`, `persistence.at_job`, `persistence.systemd`, `persistence.rc_init`, `persistence.event_script`, `persistence.shell_profile`, `persistence.ssh_authorized_keys`, `persistence.xdg_autostart`, `persistence.udev`, `persistence.pam`, `persistence.module_autoload`, `persistence.apt_hook`, `persistence.web_shell`, `persistence.config_write`, `injection.ld_so_preload`, `injection.ld_so_conf`, `privilege.sudoers`, `evasion.audit_disable`, `evasion.log_clear`, `impact.block_device_write`, `impact.miner_tuning`, `credential.shadow_read`, `collection.keylog`, `collection.screen_capture`, `collection.av_capture` | Persistence/Injection/Privilege/Impact rows with the `failed` flag and one tier down; Files: the same system paths as failed opens. `credential.shadow_read` and the device rows appear only where the node exists and is readable (root). |
 | `ant-sample-net-wide` (needs `--wide`) | spread | `lateral.service_exploit`, `discovery.network_scan`, `exfil.large_upload` | `lateral.service_exploit` (6379 on three hosts), `discovery.network_scan` (port 8080 on twelve hosts), `exfil.large_upload` (1.12 MB of zeros over connected UDP); all toward 203.0.113.0/24. |
 
@@ -201,6 +210,97 @@ same address was seen, and otherwise marks it VM-wide (one tier lower).
 | `privilege.kernel_helper_hijack` | exact existing kernel files (`core_pattern`, `modprobe`, `uevent_helper`, `binfmt_misc/register`); opening them for writing is not harmless |
 | `rootkit.dev_mem` | exact device nodes `/dev/mem`, `/dev/kmem`, `/dev/port`, `/proc/kcore`; the samples do not open raw-memory devices, even read-only |
 | `process.exec` | INFO, counted for every program the samples start; it has no scenario of its own |
+
+## Evasive variant
+
+`ant-sample-evasive` behaves the way real evasive malware does: it asks the guest
+whether it is being analysed *before* doing anything, and leaves quietly if the
+answer is yes. The same gate is available on any binary as `--evade`
+(`ant-sample-all --evade`); a bare `ant-sample-all` run does not use it and does not
+include the `evasive` scenario, so the coverage suite is unchanged.
+
+**If any category trips** it prints one line per category, on stdout and on
+stderr, for example `EVADE vm: dmi sys_vendor=QEMU; mac VM prefix (52:54:00:12:34:56)`,
+then the scorecard, a decoy (reads `/etc/hostname`, prints `hello from ...`), one
+more look at the DMI vendor, `/proc/cpuinfo` and `/proc/uptime`, a bounded sleep
+of 3.0 to 4.5 s (`--evade-sleep MS`, at most 5 s), and exits 0. No download, no
+persistence, no beacon. Nothing is written after the last look, so Antinomie's
+`evasion.probe_then_exit` can see "exited within 5 s, no network, no file write,
+no new process" after a check that showed a VM.
+
+**If every check is clean** (`GATE ... verdict=proceed`) it runs the chain, using
+the code of the existing scenarios: `recon`, the hash-pinned `download` and
+run, `persistence`, `beacon-loop` (10 requests) and one exfil POST. The usual
+safety rules hold: numeric endpoints, bounded loops, only pinned payloads run.
+
+### The checks
+
+All are system calls Antinomie records. The last column is the entry of the
+Stealth profile window (VM settings > Stealth profile) that changes the answer;
+"none" means the profile does not shape it.
+
+| Category | Check | Trips when | Stealth entry |
+|---|---|---|---|
+| debugger | `TracerPid` in `/proc/self/status` | not 0 | none: Antinomie's debugger uses no ptrace |
+| debugger | `ptrace(PTRACE_TRACEME)` in a child | refused (EPERM) | none |
+| debugger | `LD_PRELOAD`, `LD_AUDIT` | set | none |
+| debugger | `/proc/self/maps` | names frida, gdbserver, valgrind, libfaketime, ... | none |
+| vm | DMI `sys_vendor`, `product_name` | QEMU, KVM, VirtualBox, VMware, Bochs, Xen, Parallels, Hyper-V, SeaBIOS, "Standard PC", ... | Hardware identity > Machine (System maker, Product) |
+| vm | DMI `board_vendor` | the same words | Hardware identity > Board maker |
+| vm | DMI `bios_vendor` | the same words | Hardware identity > BIOS vendor |
+| vm | DMI `chassis_type` | 1 or 2 (Other, Unknown) | Hardware identity > Chassis |
+| vm | `/proc/cpuinfo` `hypervisor` flag | set | CPU > Hide the hypervisor CPU flag |
+| vm | `/proc/cpuinfo` `model name` | QEMU, KVM, Virtual, TCG, ... | CPU > Model, Brand string, Pass the host CPU through |
+| vm | `/sys/class/net/*/address` | OUI 52:54:00, 08:00:27, 0a:00:27, 00:0c:29, 00:50:56, 00:05:69, 00:1c:14, 00:16:3e, 00:15:5d, 00:1c:42 | Network > MAC address |
+| vm | `/sys/class/net/*/device/vendor` | 0x1af4 (virtio), 0x15ad (VMware), 0x80ee (VirtualBox) | Network > Card (e1000e) |
+| vm | `/sys/block/*`, `device/model` | a `vd*` virtio disk, or a model naming QEMU, VBOX, VMware, Virtual | Storage and devices > Disk bus (SATA or NVMe) and Disk model |
+| vm | `current_clocksource` | kvm-clock, hyperv, xen | CPU > Hide the KVM signature |
+| vm (shown only) | `/sys/firmware/qemu_fw_cfg`, `/sys/bus/virtio/devices`, `/sys/hypervisor/type` | never decisive | none: listed under Still visible |
+| container | `/.dockerenv`, `/run/.containerenv`, `/proc/1/cgroup`, `/proc/self/cgroup`, `$container` | present, or names docker, kubepods, containerd, lxc, podman, crio | none: the guest is not a container |
+| sandbox | CPU count (`sched_getaffinity`), RAM (`sysinfo`), root filesystem size (`statfs`), process count (`/proc`), uptime (`/proc/uptime`) | at least 3 of: under 2 CPUs, under 1 GiB, under 4 GiB, under 10 processes, under 60 s | none: the VM's own size and a fresh boot |
+
+The sandbox hints are weak on purpose and need three of five: a default Antinomie
+guest (2 vCPUs, 2 GiB, 8 GiB) trips at most the uptime and the process count in
+its first minute. `--why` prints every answer with its Stealth entry, even when
+the sample proceeds, and `--ignore vm,debugger,container,sandbox` skips
+categories (for example `--ignore sandbox` to ignore the size hints).
+
+### Rules by path
+
+- **Evade:** `evasion.sandbox_probe` (MEDIUM, because several kinds of VM
+  evidence are read), `evasion.debugger_check`, `evasion.container_check`,
+  `evasion.traceme` (the child's `PTRACE_TRACEME`), `evasion.probe_then_exit`
+  (when an answer showed a VM and the process then exits within 5 s doing
+  nothing), `discovery.system_info` (the decoy) and `discovery.network_config`
+  (the MAC reads). `evasion.long_sleep` does not apply: the sleep is under 60 s.
+- **Proceed:** the same check rows (without `probe_then_exit`), then the full set
+  of the chain: `network.ip_literal`, `execution.download_cradle`,
+  `execution.dropped_exec`, `execution.chmod_exec_temp`, `execution.temp_exec`,
+  `process.interpreter`, the persistence group of `persistence`, `network.beacon`,
+  and the phases recon, download, persistence and C2 in the activity graph.
+
+### Two-run demo
+
+1. Start the sinkhole on the host (`--nat`), VM on NAT, Stealth preset
+   **Transparent** (the default). Wait a minute after boot, then run
+   `./ant-sample-evasive --host 10.0.2.2 --why`.
+   It prints `EVADE vm: dmi sys_vendor=QEMU; cpuinfo hypervisor flag set; mac VM
+   prefix (52:54:00:...)`, `hello`, and exits 0 after a few seconds. In Antinomie:
+   Suspicious activity shows the Evasion rows above and a `probe_then_exit` row;
+   the sinkhole saw nothing.
+2. Stop the VM, open VM settings > Stealth profile > Preset **Realistic desktop**
+   (SATA disk, e1000e card with an Intel MAC, real-looking DMI, no hypervisor
+   flag, host CPU passed through), start it, wait a minute and run the same
+   command. `GATE ... verdict=proceed`: the chain runs, the sinkhole logs recon,
+   `/install.sh`, ten beacons and the exfil POST, and the graph shows the phases.
+   If it still evades, `--why` shows which check and which Stealth entry to
+   change (a virtio disk or card, or a preset without the CPU entries).
+
+Tests: `python3 tests/monitor/test-evasive-sample.py` builds the binary and runs
+both paths against fixture directories (`--test-root DIR` reads every `/sys` and
+`/proc` file below `DIR`; `DIR/overrides` fakes CPU count, RAM, disk, process
+count, `container` and the TRACEME result). The flag is for tests only and is
+not part of the default behaviour.
 
 ## Simulating the connection and the exfiltration
 
