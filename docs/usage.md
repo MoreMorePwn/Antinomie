@@ -281,6 +281,20 @@ The network capture is the guest's own view on every route.
   uptime, `TracerPid`, container markers, long sleeps) with the answer the guest
   gave, and a heuristic note on what the sample did in the next 30 seconds.
   `CPUID` and `RDTSC` checks leave no system call and are not visible.
+- **Triage › eBPF & seccomp** and `bpf.program` in Suspicious activity: a program
+  load, and now also each way a program is attached, in order, so the table reads
+  load then attach for the same program. `bpf(BPF_LINK_CREATE)` (kprobe_multi,
+  fentry/fexit, LSM, cgroup, XDP, netfilter, uprobe_multi and the rest),
+  `bpf(BPF_RAW_TRACEPOINT_OPEN)` and `ioctl(PERF_EVENT_IOC_SET_BPF)` on an
+  earlier `perf_event_open` each give a row with the attach type, the target (the
+  tracepoint name, the kernel symbols, the cgroup fd or interface index, the
+  perf event type and config), the program fd and the call that loaded it, and
+  the result. Attaching to the whole kernel (kprobe, fentry/fexit, LSM, raw
+  tracepoint, a perf tracepoint or kprobe) is HIGH, cgroup, socket, XDP and
+  netfilter hooks are MEDIUM, and a failed attach is INFO. A target the recording
+  did not capture (an fentry/LSM function chosen at load, a perf kprobe's
+  symbol, a tracepoint known only by id) is shown as "not captured", never
+  guessed.
 - **Triage › Process › Graph**: the same findings on process swimlanes against
   time. The lanes follow the process tree (▾/▸ folds a subtree; many leaf
   siblings of one program fold into one `name ×N` lane); markers take their
