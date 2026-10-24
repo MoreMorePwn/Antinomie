@@ -3,10 +3,16 @@
 //! the matching of a run's indicators against them. Matching is offline; the
 //! only network traffic is the manual dataset update and the optional online
 //! check.
+pub mod disk;
 pub mod download;
+pub mod export;
 pub mod feeds;
+pub mod indicator;
 pub mod kind;
+pub mod online;
 pub mod records;
+pub mod strings;
+pub mod verdict;
 
 pub use self::{
     download::{Outcome, summary as update_summary, update_all, update_feed},
