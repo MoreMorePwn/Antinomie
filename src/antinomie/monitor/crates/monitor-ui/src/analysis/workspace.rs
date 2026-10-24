@@ -38,6 +38,8 @@ pub(crate) struct WorkspaceState {
     rows: RowWindows,
     /// The regex matches pane of Strings & regex, over the report's strings.
     regex: crate::regex_matches::RegexWindow,
+    /// The layer the Unpacking tab shows.
+    unpack_layer: usize,
     /// The report whose scan the pane has asked for, so it asks once.
     regex_asked: String,
     /// The pane wants its scan started; the app takes this once.

@@ -436,16 +436,17 @@ The network capture is the guest's own view on every route.
   the report is analysed by the one check, and its tab fills in when it ends.
   The button waits while the analysis is still being made; no VM has to be
   running, and the result is saved with the report like the others.
-- **Static Analysis > Unpacking**: the unpack chain as phases, left to right: the
-  file as it came (packed with UPX or not), then each layer UPX recovered from the
-  one before, with size, SHA-256 and the packer found in it. A file packed twice
+- **Static Analysis > Unpacking**: the unpack chain, one layer at a time. A
+  **Layer** drop-down chooses the file as it came (packed with UPX or not) or a layer
+  UPX recovered from the one before; below it are that layer's size, SHA-256 and the
+  packer found in it. A file packed twice
   gives two layers. UPX is needed for this (**Tools > Analysis tools** installs it);
   without it a packed file is reported as packed and left alone. Files whose UPX
   headers were tampered with (the `UPX!` magic overwritten, data appended) are
   repaired on a copy first and the layer says so (`UPX (header repaired)`).
   Each layer is analysed as a report of its own, the same checks as the packed
   file's, listed in the **Report** box as "layer N unpacked by UPX"; **Show its
-  analysis** in the phase opens it. The original file is never changed, the layers
+  analysis** under the chosen layer opens it. The original file is never changed, the layers
   are plain files that are not executable, at most three layers of 64 MiB each are
   kept, and unpacking stops after 4 minutes. Other packers are not unpacked; they
   need the program to run, which is for a later version (guest memory capture).

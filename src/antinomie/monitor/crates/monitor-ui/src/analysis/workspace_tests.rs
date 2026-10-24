@@ -1004,6 +1004,8 @@ fn native_analysis_workspace_fixture() {
                 let report = with_listing(fixture(), AnalysisKind::Strings, 12);
                 let page = listing_page(&report, AnalysisKind::Strings).ok();
                 (report, page)
+            } else if view_name == "unpack" {
+                (unpacked_report(), None)
             } else {
                 qa_report()
             };
@@ -1043,6 +1045,10 @@ fn native_analysis_workspace_fixture() {
                     "strings" => Tab::Strings,
                     _ => Tab::FileInfo,
                 };
+            }
+            if view_name == "unpack" {
+                state.tab = Tab::Unpacking;
+                state.unpack_layer = var("ANTINOMIE_QA_LAYER").parse().unwrap_or(0);
             }
             if regex_view {
                 state.tab = Tab::Strings;
@@ -2207,7 +2213,7 @@ fn unpacked_report() -> AnalysisReport {
 }
 
 #[test]
-fn the_unpacking_tab_shows_the_chain_as_phases_and_opens_a_layers_analysis() {
+fn the_unpacking_tab_picks_a_layer_from_a_drop_down_and_opens_its_analysis() {
     let ctx = egui::Context::default();
     crate::theme::install(&ctx);
     let report = unpacked_report();
@@ -2238,23 +2244,75 @@ fn the_unpacking_tab_shows_the_chain_as_phases_and_opens_a_layers_analysis() {
         .0;
     }
     let shown = texts(&output);
+    let has =
+        |shown: &[(String, egui::Rect)], label: &str| shown.iter().any(|(text, _)| text == label);
+    // The file as it came is chosen; no phase boxes and no link to itself.
     for label in [
-        "Phase 1",
+        "Layer",
+        "1 of 2",
         "As it came",
-        "Phase 2",
-        "Unpacked by UPX (header repaired)",
         "Packed with UPX (header modified)",
-        "No packer found",
-        "Show its analysis",
         "The magic in the loader header was overwritten.",
     ] {
-        assert!(
-            shown.iter().any(|(text, _)| text == label),
-            "{label} in {shown:?}"
-        );
+        assert!(has(&shown, label), "{label} in {shown:?}");
     }
+    assert!(!shown.iter().any(|(text, _)| text.starts_with("Phase ")));
+    assert!(!has(&shown, "Show its analysis"));
     // The tab names its category in the strip.
-    assert!(shown.iter().any(|(text, _)| text == "Unpacking"));
+    assert!(has(&shown, "Unpacking"));
+    // Open the drop-down and choose the unpacked layer.
+    let combo = shown
+        .iter()
+        .find(|(text, _)| text.starts_with("Layer 0 · As it came"))
+        .expect("the drop-down shows the chosen layer")
+        .1;
+    let opened = press(
+        &ctx,
+        &report,
+        &mut state,
+        None,
+        size,
+        (egui::PointerButton::Primary, combo.center()),
+        (None, None),
+    );
+    let entry = texts(&opened.output)
+        .into_iter()
+        .find(|(text, _)| text.starts_with("Layer 1 · Unpacked by UPX (header repaired)"))
+        .expect("the list names the unpacked layer")
+        .1;
+    press(
+        &ctx,
+        &report,
+        &mut state,
+        None,
+        size,
+        (egui::PointerButton::Primary, entry.center()),
+        (None, None),
+    );
+    assert_eq!(state.unpack_layer, 1);
+    let mut output = egui::FullOutput::default();
+    for _ in 0..3 {
+        output = frame(
+            &ctx,
+            &report,
+            &mut state,
+            None,
+            size,
+            Vec::new(),
+            (None, None),
+        )
+        .0;
+    }
+    let shown = texts(&output);
+    for label in [
+        "2 of 2",
+        "Unpacked by UPX (header repaired)",
+        "No packer found",
+        "Show its analysis",
+    ] {
+        assert!(has(&shown, label), "{label} in {shown:?}");
+    }
+    assert!(!has(&shown, "Packed with UPX (header modified)"));
     let button = shown
         .iter()
         .find(|(text, _)| text == "Show its analysis")

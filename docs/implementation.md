@@ -1287,7 +1287,7 @@ Host only. Core: `monitor-core/src/strings_regex/`; view: `monitor-ui/src/regex_
   exists shows it as it was, **Scan again** rereads the configuration. A pattern that
   does not compile is listed in the window and skipped.
 
-### Unpacking in phases (0.7.1)
+### Unpacking layers (0.7.1)
 
 Host only. `AnalysisKind::Unpacking` is a Triage check (on by default); the code is
 `monitor-core/src/analysis/unpack.rs`, `unpack/upx.rs` and `jobs/layers.rs`.
@@ -1324,6 +1324,12 @@ Host only. `AnalysisKind::Unpacking` is a Triage check (on by default); the code
   `layers.json` in the folder repeats them. `unpack_layers(report)` and
   `packer_verdict(report)` read them back: these hashes are what the IOC window's
   Files list will take (that window is not in this branch).
+* **Tab** (`monitor-ui/src/analysis/workspace/unpacking.rs`). A `Layer` drop-down
+  (`WorkspaceState::unpack_layer`) chooses one layer; a group below shows its size,
+  hash, packer, note and, for an unpacked layer, **Show its analysis**. The first
+  version drew every layer as a framed phase in a horizontal scroll area; the frames
+  took the horizontal layout, so their text laid out in one row and wrapped letter by
+  letter.
 * **Layer analyses** (`jobs/layers.rs`). When a job with layers finishes, the host opens
   each `layer-N.bin` with `open_regular` (confined, not a link), checks size and SHA-256
   against the validated row, copies it as a host-file job into
