@@ -416,7 +416,7 @@ fn work(mut run: PluginRun, job: &Job, progress: &Mutex<Progress>, stop: &Atomic
                 && job
                     .symbols
                     .as_deref()
-                    .is_some_and(|symbols| banner::matches(symbols, &job.dump));
+                    .is_some_and(|symbols| banner::matches(symbols, &job.dump, stop));
             run.partial = messages::partial_notes(&log, verified);
             run.partial.extend(converted.notes);
             if job.symbols.is_none() {

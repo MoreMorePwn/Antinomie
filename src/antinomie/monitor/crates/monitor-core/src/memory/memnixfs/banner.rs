@@ -10,7 +10,12 @@ use std::{
     collections::HashMap,
     fs::File,
     io::{BufReader, Read},
-    path::Path,
+    path::{Path, PathBuf},
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::SystemTime,
 };
 
 const XZ_MEMORY_LIMIT_KB: u32 = 256 * 1024;
@@ -68,13 +73,16 @@ fn base64(text: &str) -> Option<Vec<u8>> {
 }
 
 /// Whether `needle` occurs in the file, read in chunks.
-fn file_contains(path: &Path, needle: &[u8]) -> bool {
+fn file_contains(path: &Path, needle: &[u8], stop: &AtomicBool) -> bool {
     let Ok(mut file) = File::open(path) else {
         return false;
     };
     let mut buffer = vec![0u8; CHUNK + needle.len()];
     let mut kept = 0;
     loop {
+        if stop.load(Ordering::Relaxed) {
+            return false;
+        }
         let mut filled = kept;
         while filled < buffer.len() {
             match file.read(&mut buffer[filled..]) {
@@ -100,8 +108,36 @@ fn file_contains(path: &Path, needle: &[u8]) -> bool {
     }
 }
 
+type Key = (PathBuf, PathBuf, u64, Option<SystemTime>);
+
+/// Verdicts already reached, so the reports of one dump read the table and
+/// scan the dump once.
+static VERDICTS: Mutex<Option<HashMap<Key, bool>>> = Mutex::new(None);
+
 /// Whether the table's banner is the dump's kernel banner. False when either
-/// cannot be told, so a warning is never dropped on a guess.
-pub(super) fn matches(symbols: &Path, dump: &Path) -> bool {
-    table_banner(symbols).is_some_and(|banner| file_contains(dump, &banner))
+/// cannot be told or the run was stopped, so a warning is never dropped on a
+/// guess; only a finished check is remembered.
+pub(super) fn matches(symbols: &Path, dump: &Path, stop: &AtomicBool) -> bool {
+    let key = std::fs::metadata(dump).ok().map(|meta| {
+        (
+            symbols.to_path_buf(),
+            dump.to_path_buf(),
+            meta.len(),
+            meta.modified().ok(),
+        )
+    });
+    if let Some(key) = &key
+        && let Ok(cache) = VERDICTS.lock()
+        && let Some(verdict) = cache.as_ref().and_then(|cache| cache.get(key))
+    {
+        return *verdict;
+    }
+    let verdict = table_banner(symbols).is_some_and(|banner| file_contains(dump, &banner, stop));
+    if let Some(key) = key
+        && !stop.load(Ordering::Relaxed)
+        && let Ok(mut cache) = VERDICTS.lock()
+    {
+        cache.get_or_insert_with(HashMap::new).insert(key, verdict);
+    }
+    verdict
 }
