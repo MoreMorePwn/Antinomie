@@ -242,7 +242,9 @@ fn the_vm_dialog_row_and_the_sidebar_carry_a_warning_badge() {
     let output = render(&mut app, &ctx, size);
     let lines: Vec<String> = texts(&output).into_iter().map(|(text, _)| text).collect();
     assert!(
-        lines.iter().any(|text| text.ends_with("1 fall back")),
+        lines
+            .iter()
+            .any(|text| text.ends_with("1 setting falls back")),
         "the Stealth row of the dialog: {lines:?}"
     );
     // The VM in the sidebar list.
@@ -283,6 +285,7 @@ fn a_base_that_supports_every_setting_shows_no_warning_anywhere() {
         !lines.iter().any(|text| text.contains("will not be applied")
             || text.contains("Stealth fallback")
             || text.contains("fall back")
+            || text.contains("falls back")
             || text.contains("not supported by")),
         "{lines:?}"
     );
