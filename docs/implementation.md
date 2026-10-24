@@ -897,6 +897,24 @@ list of calls for the live view and the scan runs them through the same
   `network.rs` sockets; `frames.rs` the capture's DNS, HTTP and TLS/SSH rows;
   `evasion.rs` and `probes.rs` the anti-analysis checks. Correlated rules keep
   bounded per-task windows in `state.rs`.
+* **eBPF attach.** `bpf_attach.rs` reads the recorded `bpf_attr` bytes
+  (`arg1.attr`) at the `bpf_link_create` and `bpf_raw_tracepoint` offsets of Linux
+  6.12 and the strings patch 0008 captures (`arg1.attr.syms[i]`, `.path`, `.name`),
+  and the `perf_event_attr` of `perf_event_open` (`arg0.perf_event_attr`: type,
+  config). `BpfFds` follows, per task, program fds from a successful
+  `BPF_PROG_LOAD` and perf event fds, dropping them at `close`; the eBPF table
+  (`bpf_notes.rs`) and the rules (`State::bpf`, `process.rs`) share it, so an attach
+  row names the load call (`BpfNote::loaded_by`) and a SET_BPF names the
+  `perf_event_open` that made the fd. Tiers are set per hit on `bpf.program`
+  (ATT&CK T1014, DET0377, as for a load): kprobe_multi, fentry/fexit/modify_return,
+  LSM, struct_ops, raw tracepoint, perf tracepoint or dynamic-PMU (kprobe, uprobe)
+  events HIGH; cgroup, XDP, tcx, netkit, netfilter, iterator, uprobe_multi and
+  perf events of other types MEDIUM; a failed attach INFO under its own object so
+  it never folds into a success. Not captured today, and printed as such: the
+  kernel function of fentry/fexit/LSM (`attach_btf_id` is chosen at load and is
+  not resolved), a perf kprobe or uprobe symbol or path (`config1` is a pointer),
+  a perf tracepoint's name (only its id), the netfilter priority, and any attach
+  whose program or perf event was created before the slice (inherited fds).
 * **Noise.** A hit is lowered one tier for a failed call (unless failing is the
   signal; five failures of a HIGH rule keep the tier) and for an allow-listed
   program, folded by `(rule, task, object)`, and siblings of one parent with the

@@ -173,6 +173,8 @@ pub(super) struct State {
     /// The credentials each task had at its last record.
     pub creds: BTreeMap<u64, antinomie_monitor_core::kernel_notes::Credentials>,
     pub probes: Probes,
+    /// Program and perf event descriptors, to tie an attach to its load.
+    pub bpf: super::super::BpfFds,
 }
 
 impl State {
@@ -197,6 +199,7 @@ impl State {
 
     /// Bookkeeping after a call has been judged.
     pub(super) fn track(&mut self, cx: &Ctx) {
+        self.bpf.observe(cx.call);
         let time = cx.time();
         let (nr, root) = (cx.nr, cx.event.root_task_cookie);
         let cookie = cx.call.task_cookie;
