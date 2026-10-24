@@ -155,3 +155,25 @@ fn recording_and_detection_options_are_kept_in_the_saved_settings() {
     assert!(!loaded.automatic_detection && loaded.outbound_catalog && loaded.show_fps);
     assert!(!loaded.disks.dump_hash);
 }
+
+#[test]
+fn the_graph_spacing_defaults_to_equal_events_and_the_choice_is_kept() {
+    use crate::triage::GraphSpacing;
+    assert_eq!(Settings::default().graph_spacing, GraphSpacing::Events);
+    // A settings file from before the choice existed gets the default.
+    let old: Settings = serde_json::from_str(r#"{"bundle": "", "quota_gib": 4}"#).unwrap();
+    assert_eq!(old.graph_spacing, GraphSpacing::Events);
+    // The choice is saved by name and read back.
+    let chosen = Settings {
+        graph_spacing: GraphSpacing::Time,
+        ..Settings::default()
+    };
+    let text = serde_json::to_string(&chosen).unwrap();
+    assert!(text.contains(r#""graph_spacing":"time""#), "{text}");
+    assert_eq!(
+        serde_json::from_str::<Settings>(&text)
+            .unwrap()
+            .graph_spacing,
+        GraphSpacing::Time
+    );
+}

@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The graph widget: allocates its area, reads the mouse and keyboard, and
 //! paints. It never touches the Triage view; it returns what it wants done.
+use super::axis::{Axis, Spacing};
 use super::index::GraphIndex;
 use super::input::{self, Action, Hit, Layout};
 use super::lanes::Lane;
 use super::paint::{self, Colors};
+use super::ruler;
 use super::view::{self, Drag, Frame, State, INDIVIDUAL_BELOW};
 use super::*;
 use crate::triage::rules::{Category, Tier};
@@ -23,16 +25,42 @@ pub(in crate::triage) struct Config<'a> {
     pub clock: Option<antinomie_monitor_core::HostClockAnchor>,
     /// The height to take; the widget never asks for less than a usable area.
     pub height: f32,
+    /// How the findings are spaced along the time axis.
+    pub spacing: Spacing,
 }
 
 /// Draw the graph and say what to do about what the user did.
 pub(in crate::triage) fn show(ui: &mut egui::Ui, state: &mut State, cfg: &Config) -> Vec<Action> {
     let size = Vec2::new(ui.available_width(), cfg.height.max(240.0));
     let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
+    // A window kept in the other spacing's units is moved to this one's.
+    if state.units != cfg.spacing {
+        let axis = Axis::new(cfg.spacing, &cfg.index.slots);
+        state.window = state
+            .window
+            .map(|window| axis.convert_from(state.units, window));
+        state.units = cfg.spacing;
+        state.ruler = None;
+    }
     let mut actions = Vec::new();
     handle(ui, &response, rect, state, cfg, &mut actions);
     let layout = Layout::new(rect, state, cfg.index);
     state.scroll = layout.scroll;
+    // The ruler's marks cover the whole run; they are made again only when
+    // the findings, the width or the spacing change.
+    let columns = layout.frame.ruler.width().round().max(1.0) as usize;
+    if !state
+        .ruler
+        .as_ref()
+        .is_some_and(|marks| marks.is_for(cfg.index, &layout.frame.map, columns))
+    {
+        state.ruler = Some(ruler::Marks::build(
+            cfg.index,
+            &layout.frame.map,
+            layout.range,
+            columns,
+        ));
+    }
     let painter = ui.painter_at(rect);
     draw(&painter, &layout, state, cfg);
     if let Some(Hit::Marker { record, near }) = response
@@ -54,10 +82,11 @@ pub(in crate::triage) fn show(ui: &mut egui::Ui, state: &mut State, cfg: &Config
     actions
 }
 
+/// The window on the axis now, in its units.
 fn window_of(state: &State, index: &GraphIndex) -> (f64, f64) {
     state
         .window
-        .unwrap_or_else(|| view::fitted_findings(index.extent()))
+        .unwrap_or_else(|| Axis::new(state.units, &index.slots).all(index.extent()))
 }
 
 /// Mouse and keyboard.
@@ -70,25 +99,27 @@ fn handle(
     actions: &mut Vec<Action>,
 ) {
     let index = cfg.index;
-    let bounds = view::bounds(index.run_extent());
     let layout = Layout::new(rect, state, index);
-    let frame = layout.frame;
+    let bounds = layout.range;
+    let frame = layout.frame.clone();
+    let min_span = frame.map.min_span();
     // Wheel, pinch and Ctrl+wheel.
     if response.hovered() {
         let (scroll, zoom) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta()));
         let anchor = response
             .hover_pos()
-            .map_or((frame.t0 + frame.t1) / 2.0, |pos| frame.ns(pos.x));
+            .map_or((frame.t0 + frame.t1) / 2.0, |pos| frame.u_at(pos.x));
         if zoom != 1.0 {
-            state.window = Some(view::zoomed(
+            state.window = Some(view::zoomed_min(
                 window_of(state, index),
                 anchor,
                 f64::from(zoom),
                 bounds,
+                min_span,
             ));
         }
         if scroll.x != 0.0 {
-            let delta = -f64::from(scroll.x) * frame.ns_per_px();
+            let delta = -f64::from(scroll.x) * frame.u_per_px();
             state.window = Some(view::panned(window_of(state, index), delta, bounds));
         }
         if scroll.y != 0.0 {
@@ -105,7 +136,7 @@ fn handle(
     if let Some(pos) = response.interact_pointer_pos() {
         let hit = input::hit_test(&layout, index, DEPTH_PX, pos);
         if response.double_clicked() {
-            double_click(state, index, hit, pos, &layout, bounds, actions);
+            double_click(state, index, hit, pos, &layout, actions);
         } else if response.clicked() {
             let shift = ui.input(|i| i.modifiers.shift);
             click(state, index, hit, shift, &layout, actions);
@@ -123,7 +154,7 @@ fn handle(
                 },
             );
         });
-        keys(ui, state, index, rect, bounds, actions);
+        keys(ui, state, index, rect, cfg.spacing, actions);
     }
 }
 
@@ -164,8 +195,9 @@ fn click(
             }
         }
         Some(Hit::Fit) => state.fit(),
-        Some(Hit::Run) => state.window = Some(view::fitted(index.run_extent())),
-        Some(Hit::Axis) | None => {}
+        Some(Hit::Run) => state.window = Some(layout.range),
+        Some(Hit::Spacing(spacing)) => actions.push(Action::Spacing(spacing)),
+        Some(Hit::Axis) | Some(Hit::Ruler) | None => {}
     }
 }
 
@@ -175,7 +207,6 @@ fn double_click(
     hit: Option<Hit>,
     pos: Pos2,
     layout: &Layout,
-    bounds: (f64, f64),
     actions: &mut Vec<Action>,
 ) {
     match hit {
@@ -185,8 +216,16 @@ fn double_click(
         }
         Some(Hit::Axis) => {
             let window = window_of(state, index);
-            state.window = Some(view::zoomed(window, layout.frame.ns(pos.x), 2.0, bounds));
+            state.window = Some(view::zoomed_min(
+                window,
+                layout.frame.u_at(pos.x),
+                2.0,
+                layout.range,
+                layout.frame.map.min_span(),
+            ));
         }
+        // The whole run again.
+        Some(Hit::Ruler) => state.window = Some(layout.range),
         _ => {}
     }
 }
@@ -214,8 +253,20 @@ fn drag(
     let frame = &layout.frame;
     if response.drag_started() {
         let origin = ui.input(|i| i.pointer.press_origin());
+        let window = window_of(state, index);
         state.drag = origin.and_then(|pos| {
-            if frame.axis.contains(pos) && !layout.fit.contains(pos) {
+            if frame.ruler.contains(pos) {
+                Some(Drag::Ruler(ruler::begin(
+                    frame.ruler,
+                    layout.range,
+                    window,
+                    pos.x,
+                )))
+            } else if frame.axis.contains(pos)
+                && !layout.fit.contains(pos)
+                && !layout.run.contains(pos)
+                && !layout.spacing.iter().any(|chip| chip.contains(pos))
+            {
                 Some(Drag::Brush {
                     start: frame.ns(pos.x),
                     now: frame.ns(pos.x),
@@ -233,10 +284,25 @@ fn drag(
             let window = window_of(state, index);
             state.window = Some(view::panned(
                 window,
-                -f64::from(delta.x) * frame.ns_per_px(),
+                -f64::from(delta.x) * frame.u_per_px(),
                 bounds,
             ));
             state.scroll = layout.scroll - delta.y;
+        }
+        Some(Drag::Ruler(_)) if response.dragged() => {
+            if let Some(pos) = response.interact_pointer_pos() {
+                let window = window_of(state, index);
+                if let Some(moved) = ruler::drag(
+                    state,
+                    frame.ruler,
+                    layout.range,
+                    window,
+                    pos.x,
+                    frame.map.min_span(),
+                ) {
+                    state.window = Some(moved);
+                }
+            }
         }
         Some(Drag::Brush { start, .. }) if response.dragged() => {
             if let Some(pos) = response.interact_pointer_pos() {
@@ -249,8 +315,18 @@ fn drag(
         _ => {}
     }
     if response.drag_stopped() {
+        if let Some(Drag::Ruler(view::Ruler::Select { start, now })) = state.drag {
+            let window = window_of(state, index);
+            state.window = Some(ruler::selected(
+                frame.ruler,
+                layout.range,
+                window,
+                (start, now),
+                frame.map.min_span(),
+            ));
+        }
         if let Some(Drag::Brush { start, now }) = state.drag {
-            if (now - start).abs() / frame.ns_per_px() >= 3.0 {
+            if (frame.x(now) - frame.x(start)).abs() >= 3.0 {
                 let (from, to) = (
                     start.min(now).max(0.0) as u64,
                     start.max(now).max(0.0) as u64,
@@ -271,10 +347,10 @@ fn keys(
     state: &mut State,
     index: &GraphIndex,
     rect: Rect,
-    bounds: (f64, f64),
+    spacing: Spacing,
     actions: &mut Vec<Action>,
 ) {
-    const WATCHED: [Key; 29] = [
+    const WATCHED: [Key; 30] = [
         Key::ArrowLeft,
         Key::ArrowRight,
         Key::ArrowUp,
@@ -284,6 +360,7 @@ fn keys(
         Key::Escape,
         Key::F,
         Key::R,
+        Key::T,
         Key::H,
         Key::M,
         Key::L,
@@ -316,11 +393,13 @@ fn keys(
     });
     for key in pressed {
         let layout = Layout::new(rect, state, index);
-        let window = window_of(state, index);
+        let (window, bounds) = (window_of(state, index), layout.range);
+        let axis = &layout.frame.map;
+        let ns_window = (axis.to_ns(window.0), axis.to_ns(window.1));
         let selected = state.selected.filter(|at| *at < index.records.len());
         let mut pick = |record: Option<usize>, state: &mut State| {
             if let Some(record) = record {
-                select(state, index, &layout, record, bounds);
+                select(state, index, &layout, record);
                 actions.push(Action::Select {
                     record,
                     focus: false,
@@ -328,15 +407,15 @@ fn keys(
             }
         };
         match key {
-            Key::ArrowLeft => pick(input::step_time(index, selected, -1, window), state),
-            Key::ArrowRight => pick(input::step_time(index, selected, 1, window), state),
+            Key::ArrowLeft => pick(input::step_time(index, selected, -1, ns_window), state),
+            Key::ArrowRight => pick(input::step_time(index, selected, 1, ns_window), state),
             Key::Home => pick((!index.records.is_empty()).then_some(0), state),
             Key::End => pick(index.records.len().checked_sub(1), state),
             Key::ArrowUp | Key::ArrowDown => {
                 let direction = if key == Key::ArrowUp { -1 } else { 1 };
                 let next = match selected {
                     Some(from) => input::step_lane(index, &layout, from, direction),
-                    None => input::step_time(index, None, 1, window),
+                    None => input::step_time(index, None, 1, ns_window),
                 };
                 pick(next, state);
             }
@@ -346,13 +425,20 @@ fn keys(
                 }
             }
             Key::F => state.fit(),
-            Key::R => state.window = Some(view::fitted(index.run_extent())),
+            Key::R => state.window = Some(layout.range),
+            Key::T => actions.push(Action::Spacing(spacing.other())),
             Key::Plus | Key::Equals | Key::Minus => {
                 let factor = if key == Key::Minus { 0.5 } else { 2.0 };
                 let anchor = selected
-                    .map(|at| index.records[at].first_ns as f64)
+                    .map(|at| axis.to_u(index.records[at].first_ns as f64))
                     .unwrap_or((window.0 + window.1) / 2.0);
-                state.window = Some(view::zoomed(window, anchor, factor, bounds));
+                state.window = Some(view::zoomed_min(
+                    window,
+                    anchor,
+                    factor,
+                    bounds,
+                    axis.min_span(),
+                ));
             }
             Key::Space => {
                 if let Some(row) = selected.and_then(|at| layout.row_of(index.records[at].lane)) {
@@ -392,17 +478,12 @@ fn keys(
 }
 
 /// Select a record from the keyboard and bring it into view.
-fn select(
-    state: &mut State,
-    index: &GraphIndex,
-    layout: &Layout,
-    record: usize,
-    bounds: (f64, f64),
-) {
+fn select(state: &mut State, index: &GraphIndex, layout: &Layout, record: usize) {
     state.selected = Some(record);
     let found = &index.records[record];
     let window = window_of(state, index);
-    state.window = Some(input::including(window, found.first_ns as f64, bounds));
+    let at = layout.frame.map.to_u(found.first_ns as f64);
+    state.window = Some(input::including(window, at, layout.range));
     if let Some(row) = layout.row_of(found.lane) {
         state.scroll = input::scroll_to(
             row,
@@ -417,25 +498,56 @@ fn draw(painter: &Painter, layout: &Layout, state: &State, cfg: &Config) {
     let (frame, colors, index) = (&layout.frame, &cfg.colors, cfg.index);
     painter.rect_filled(frame.whole, 0.0, colors.panel);
     paint::phase_band(painter, frame, index, colors);
-    let tallest = paint::severity_curve(painter, frame, index, colors);
-    paint::heat_strip(painter, frame, index, colors, &layout.categories);
+    let visible = frame.visible_rows(layout.scroll, layout.rows.lanes.len());
+    let pass = paint::event_pass(layout, index, visible);
+    let tallest = paint::severity_curve(painter, frame, index, colors, pass.as_ref());
+    paint::heat_strip(
+        painter,
+        frame,
+        index,
+        colors,
+        &layout.categories,
+        pass.as_ref(),
+    );
     side_labels(painter, layout, colors, tallest);
-    lanes(painter, layout, state, cfg);
+    lanes(painter, layout, state, cfg, pass.as_ref());
     if let Some((from, to)) = state.brush {
         overlay(painter, frame, from as f64, to as f64, colors);
     }
     if let Some(Drag::Brush { start, now }) = state.drag {
         overlay(painter, frame, start.min(now), start.max(now), colors);
     }
+    // Ticks stop before the spacing label.
+    let right = layout.spacing[0].left() - 58.0;
     paint::axis(
         painter,
         frame,
         index.run_extent().0,
         cfg.clock,
         colors,
-        layout.run.left() - 4.0,
+        right,
     );
+    paint::breaks(painter, frame, colors, right);
     footer(painter, layout, cfg);
+    let axis = &frame.map;
+    let selecting = match state.drag {
+        Some(Drag::Ruler(view::Ruler::Select { start, now })) => Some((start, now)),
+        _ => None,
+    };
+    ruler::paint(
+        painter,
+        ruler::Drawing {
+            rect: frame.ruler,
+            range: layout.range,
+            window: (frame.t0, frame.t1),
+            marks: state.ruler.as_ref(),
+            brush: state
+                .brush
+                .map(|(from, to)| (axis.to_u(from as f64), axis.to_u(to as f64))),
+            selecting,
+        },
+        colors,
+    );
 }
 
 /// The band between two times, over the whole plot.
@@ -501,7 +613,13 @@ fn side_labels(painter: &Painter, layout: &Layout, colors: &Colors, tallest: u32
 }
 
 /// Lane names, lifelines, spawn and injection edges, and the markers.
-fn lanes(painter: &Painter, layout: &Layout, state: &State, cfg: &Config) {
+fn lanes(
+    painter: &Painter,
+    layout: &Layout,
+    state: &State,
+    cfg: &Config,
+    pass: Option<&paint::EventPass>,
+) {
     let (frame, colors, index) = (&layout.frame, &cfg.colors, cfg.index);
     let area = frame.lanes;
     let rows = layout.rows.lanes.len();
@@ -523,7 +641,7 @@ fn lanes(painter: &Painter, layout: &Layout, state: &State, cfg: &Config) {
         lifeline_and_name(&clip, layout, index, colors, row, top);
     }
     spawn_edges(&clip, layout, index, colors, visible.clone());
-    markers(&clip, layout, state, cfg, visible);
+    markers(&clip, layout, state, cfg, visible, pass);
     injection_edges(&clip, layout, cfg);
     if let Some(row) = state
         .selected
@@ -660,12 +778,14 @@ fn markers(
     state: &State,
     cfg: &Config,
     rows: std::ops::Range<usize>,
+    pass: Option<&paint::EventPass>,
 ) {
     let (frame, colors, index) = (&layout.frame, &cfg.colors, cfg.index);
     if index.is_empty() {
         return;
     }
-    let in_window = index.window(frame.t0, frame.t1);
+    let (ns0, ns1) = frame.ns_range();
+    let in_window = index.window(ns0, ns1);
     let mut shapes: Vec<Shape> = Vec::new();
     if in_window.len() < INDIVIDUAL_BELOW {
         let labelled = in_window.len() < LABELLED_BELOW;
@@ -676,7 +796,7 @@ fn markers(
             };
             let y = layout.row_center(row);
             let color = colors.tier[usize::from(record.tier).min(3)];
-            let x = frame.x(record.first_ns as f64);
+            let x = frame.x_rec(record);
             if record.last_ns > record.first_ns {
                 let end = frame
                     .x(record.last_ns as f64)
@@ -713,17 +833,54 @@ fn markers(
                 ));
             }
         }
+    } else if let Some(pass) = pass {
+        // Equal slots: the findings were put into columns of a few pixels,
+        // row by row, in one pass over the window.
+        let step = frame.plot.width() / pass.columns as f32;
+        for (place, cell) in pass.cells.iter().enumerate() {
+            let Some(cell) = cell else { continue };
+            let (row, column) = (pass.first_row + place / pass.columns, place % pass.columns);
+            let at = Pos2::new(
+                frame.plot.left() + (column as f32 + 0.5) * step,
+                layout.row_center(row),
+            );
+            let color = colors.tier[usize::from(cell.top).min(3)];
+            paint::glyph(
+                &mut shapes,
+                cell.lead,
+                at,
+                frame.m.glyph() * 0.72,
+                color,
+                false,
+            );
+            if cell.total() > 1 {
+                shapes.push(Shape::circle_filled(
+                    at + eframe::egui::vec2(4.0, -4.5),
+                    1.7,
+                    colors.text,
+                ));
+            }
+        }
+        if let Some(at) = state.selected.filter(|at| *at < index.records.len()) {
+            let record = &index.records[at];
+            if let Some(row) = layout
+                .row_of(record.lane)
+                .filter(|row| layout.row_in_view(*row))
+            {
+                shapes.push(Shape::circle_stroke(
+                    Pos2::new(frame.x_rec(record), layout.row_center(row)),
+                    frame.m.glyph() + 3.5,
+                    Stroke::new(2.0_f32, colors.text),
+                ));
+            }
+        }
     } else {
         let (wanted, ..) = paint::visible_buckets(index, frame);
         let (slot, level) = index.kept_level(wanted);
         let geometry = index.geometry();
         let width = geometry.width(level);
-        let low = (((frame.t0 - geometry.origin as f64) / width)
-            .floor()
-            .max(0.0)) as u32;
-        let high = (((frame.t1 - geometry.origin as f64) / width)
-            .ceil()
-            .max(0.0)) as u32;
+        let low = (((ns0 - geometry.origin as f64) / width).floor().max(0.0)) as u32;
+        let high = (((ns1 - geometry.origin as f64) / width).ceil().max(0.0)) as u32;
         let mut merged: Vec<index::Cell> = Vec::new();
         for row in rows {
             let lane = layout.rows.lanes[row];
@@ -779,7 +936,7 @@ fn markers(
                 .filter(|row| layout.row_in_view(*row))
             {
                 shapes.push(Shape::circle_stroke(
-                    Pos2::new(frame.x(record.first_ns as f64), layout.row_center(row)),
+                    Pos2::new(frame.x_rec(record), layout.row_center(row)),
                     frame.m.glyph() + 3.5,
                     Stroke::new(2.0_f32, colors.text),
                 ));
@@ -798,7 +955,7 @@ fn injection_edges(painter: &Painter, layout: &Layout, cfg: &Config) {
         let (Some(from_row), Some(to_row)) = (from_row, to_row) else {
             continue;
         };
-        let x = frame.x(record.first_ns as f64);
+        let x = frame.x_rec(record);
         if x < frame.plot.left()
             || x > frame.plot.right()
             || !layout.row_in_view(from_row)
@@ -833,10 +990,14 @@ fn injection_edges(painter: &Painter, layout: &Layout, cfg: &Config) {
 /// The curve's scale, the host zone and the Fit button.
 fn footer(painter: &Painter, layout: &Layout, cfg: &Config) {
     let (frame, colors) = (&layout.frame, &cfg.colors);
-    let caption = if cfg.clock.is_some() {
-        format!("Host time ({})", crate::time_format::zone_label())
-    } else {
-        "Guest time, from the start".to_owned()
+    let caption = match (cfg.spacing, cfg.clock.is_some()) {
+        (Spacing::Events, true) => format!(
+            "Equal spacing · host time ({})",
+            crate::time_format::zone_label()
+        ),
+        (Spacing::Events, false) => "Equal spacing · guest time".to_owned(),
+        (Spacing::Time, true) => format!("Host time ({})", crate::time_format::zone_label()),
+        (Spacing::Time, false) => "Guest time, from the start".to_owned(),
     };
     paint::label(
         &painter.with_clip_rect(frame.labels),
@@ -846,6 +1007,38 @@ fn footer(painter: &Painter, layout: &Layout, cfg: &Config) {
         10.5,
         colors.muted,
     );
+    // The spacing choice, the chosen one filled.
+    paint::label(
+        painter,
+        Pos2::new(layout.spacing[0].left() - 6.0, layout.spacing[0].center().y),
+        Align2::RIGHT_CENTER,
+        "Spacing",
+        10.5,
+        colors.muted,
+    );
+    for (chip, mode, text) in [
+        (layout.spacing[0], Spacing::Events, "Events"),
+        (layout.spacing[1], Spacing::Time, "Time"),
+    ] {
+        let on = cfg.spacing == mode;
+        if on {
+            painter.rect_filled(chip, 3.0, colors.accent.gamma_multiply(0.28));
+        }
+        painter.rect_stroke(
+            chip,
+            3.0,
+            Stroke::new(1.0_f32, if on { colors.accent } else { colors.line }),
+            eframe::egui::StrokeKind::Inside,
+        );
+        paint::label(
+            painter,
+            chip.center(),
+            Align2::CENTER_CENTER,
+            text,
+            11.0,
+            colors.text,
+        );
+    }
     for (rect, text) in [(layout.fit, "Fit"), (layout.run, "Run")] {
         painter.rect_stroke(
             rect,

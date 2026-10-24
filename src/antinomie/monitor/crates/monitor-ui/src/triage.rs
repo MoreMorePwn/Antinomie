@@ -48,6 +48,7 @@ mod files;
 mod finding_bar;
 mod findings;
 mod graph;
+pub(crate) use graph::Spacing as GraphSpacing;
 pub(crate) const GRAPH_WINDOW_SIZE: [f32; 2] = graph::DEFAULT_SIZE;
 #[cfg(test)]
 mod idle_tests;
@@ -198,6 +199,10 @@ pub(crate) struct TriageView {
     graph: graph::State,
     /// The graph in its own window.
     graph_window: graph::Window,
+    /// How findings are spaced along the graph's time axis.
+    graph_spacing: graph::Spacing,
+    /// A spacing chosen in the graph, for the app's settings.
+    graph_spacing_changed: Option<graph::Spacing>,
     /// The Summary strip's open or closed choice, for the session.
     strip: graph::Strip,
     /// Which HIGH rules of the run on screen already raised a toast.
@@ -251,6 +256,8 @@ impl Default for TriageView {
             scan_request: ScanRequest::default(),
             graph: graph::State::default(),
             graph_window: graph::Window::default(),
+            graph_spacing: graph::Spacing::default(),
+            graph_spacing_changed: None,
             strip: graph::Strip::default(),
             high_watch: graph::HighWatch::default(),
             toast_high: false,
@@ -342,6 +349,16 @@ impl TriageView {
             self.scan_request.address_lookup = mode;
             self.request_refresh();
         }
+    }
+
+    /// The spacing the graph opens with, from the app's settings.
+    pub(crate) fn set_graph_spacing(&mut self, spacing: graph::Spacing) {
+        self.graph_spacing = spacing;
+    }
+
+    /// A spacing chosen in the graph, to save in the settings.
+    pub(crate) fn take_graph_spacing(&mut self) -> Option<graph::Spacing> {
+        self.graph_spacing_changed.take()
     }
 
     /// Settings › Notifications: raise a toast for a HIGH finding of a live run.
