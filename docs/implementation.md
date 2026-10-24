@@ -1026,6 +1026,48 @@ Deep analysis check, off by default because a run takes minutes.
   the active tool shows as "FLOSS"; the worker deadline adds the run's
   budget. The FLOSS tab shows its row count as a badge like Strings.
 
+### Regex matches window (0.7.1)
+
+Host only. Core: `monitor-core/src/strings_regex/`; window: `monitor-ui/src/regex_matches.rs`.
+
+* **Patterns.** `catalog.rs` lists the built-in ones by category (network,
+  crypto, keys, Linux behaviour, attribution, encoded); an id never changes
+  because the rule manager stores the ids it switched off. `RuleSet::build` compiles
+  them with the `regex` crate (size limits, so a pattern cannot be slow or huge)
+  and a `RegexSet` of the same patterns names the ones worth running on a string.
+  Matches are kept once per (pattern, text, encodings) with a repeat count; the list
+  holds 50,000 and the category counts keep growing past it.
+* **Validation** (`checks.rs`). Domains and the hosts of URLs and emails must end in
+  a known public suffix with a registrable name (`psl`, already linked by
+  `yara-x`); mixed-case names (`strings.Builder`) and the file-like suffixes
+  `so sh py pl pm rs md cc ml ps zip mov run lib` count as hosts only after a
+  scheme or an `@`. IPv4: four octets without leading zeros, not inside a longer
+  dotted number, not after `v`, `version`, `release`..., classed (public, private,
+  loopback, ...) in the type. IPv6 must parse. Bitcoin (base58check and bech32/bech32m),
+  Tox ID (XOR checksum), Monero (block structure; the Keccak checksum is not
+  verified and the note says so), JWT (header JSON with `alg`), SSH keys (blob
+  starts with the key type) and Telegram tokens are structurally checked. A domain or
+  address inside a URL or email is dropped in favour of the URL (`weak` patterns).
+* **Encoded.** `encoded.rs` decodes base64 (standard or URL-safe) and hex runs of at
+  least 24 characters (hex: 12 octets); a run is kept when it decodes to text (90 % printable
+  and a quarter letters) or to a known magic (ELF, ZIP, gzip, PE, script...). Text
+  is scanned again; two levels deep at most, 8,192 characters per string.
+* **Sources** (`sources.rs`). A report scan reads the Strings and FLOSS listings through
+  the validating `read_listing_page_with`, so a corrupt listing is rejected as it
+  is for the tables; string offsets become match offsets (UTF-16 counts two octets per
+  character). A core scan takes the extracted core strings (virtual addresses) and
+  `sockaddrs` reads the captured memory in 1 MiB blocks for `sockaddr_in`
+  (family 2, nonzero port, address not 0 or 255 or multicast, eight zero octets)
+  and `sockaddr_in6` (family 10, zero flow label, nonzero address and port, scope
+  up to 65535) on 2-octet boundaries, at most 20,000.
+* **Rule manager.** `Config` (`rules/strings-regex.json`, atomic write, 1 MiB read limit)
+  holds the switched-off ids and up to 200 custom patterns (2,048 characters each,
+  compiled with the same limits before they are saved). The Detection rules page has a
+  Strings regex tab with the switches, the custom patterns and a "Try on" field.
+* **Window.** The scan runs on a worker thread; reopening a report whose scan
+  exists shows it as it was, **Scan again** rereads the configuration. A pattern that
+  does not compile is listed in the window and skipped.
+
 ### Accepted ANT-T0097 host UI performance (0.6.2)
 
 Remove render-time filesystem checks for host chooser availability; resolve
