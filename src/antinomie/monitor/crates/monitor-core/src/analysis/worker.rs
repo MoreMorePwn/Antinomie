@@ -45,11 +45,12 @@ fn worker_main() -> Result<(), String> {
         return Err("oversized worker request".into());
     }
     let mut report: AnalysisReport = serde_json::from_slice(&request).map_err(|e| e.to_string())?;
+    // Checks a finished analysis already has are not run again.
     let has = |kind| {
         report
             .sections
             .iter()
-            .any(|s: &AnalysisSection| s.kind == kind)
+            .any(|s: &AnalysisSection| s.kind == kind && s.state == AnalysisSectionState::Pending)
     };
     // A decompiler runs a JVM with many threads, a large address space
     // reservation, hundreds of open jars and a project database in /tmp.
@@ -92,7 +93,7 @@ fn worker_main() -> Result<(), String> {
     }
     report.specimen_sha256 = Some(format!("{:x}", Sha256::digest(&specimen)));
     report.specimen_len = Some(specimen.len() as u64);
-    for index in super::progress::execution_order(&report) {
+    for index in super::progress::pending_order(&report) {
         let _stage = super::progress::Stage::begin(Path::new("/output/progress"), &report, index);
         super::progress::publish(Path::new("/output"), &report, Some(index));
         analyze_section(

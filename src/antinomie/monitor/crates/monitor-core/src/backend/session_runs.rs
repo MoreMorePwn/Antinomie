@@ -264,6 +264,18 @@ impl Session {
         }
         Ok(())
     }
+    /// The run `id` has `report` as its analysis, in memory and saved.
+    pub(super) fn run_analysis(&mut self, id: &str, report: &crate::analysis::AnalysisReport) {
+        if let Some(run) = self.runs.values_mut().find(|r| r.summary.id == id) {
+            run.summary.analysis = Some(report.clone());
+            if let Err(error) = run.refresh_analysis_metadata() {
+                run.storage_error(format!("analysis metadata accounting: {error}"));
+            }
+            if let Err(error) = run.persist_summary() {
+                run.storage_error(format!("analysis metadata persistence: {error}"));
+            }
+        }
+    }
     pub(super) fn analysis_updates(
         &mut self,
         snapshot: &mut Snapshot,
@@ -271,15 +283,7 @@ impl Session {
     ) {
         for (run_id, report) in self.analysis.updates() {
             if let Some(id) = &run_id {
-                if let Some(run) = self.runs.values_mut().find(|r| &r.summary.id == id) {
-                    run.summary.analysis = Some(report.clone());
-                    if let Err(error) = run.refresh_analysis_metadata() {
-                        run.storage_error(format!("analysis metadata accounting: {error}"));
-                    }
-                    if let Err(error) = run.persist_summary() {
-                        run.storage_error(format!("analysis metadata persistence: {error}"));
-                    }
-                }
+                self.run_analysis(id, &report);
             } else {
                 if let Some(existing) = snapshot
                     .analysis_reports

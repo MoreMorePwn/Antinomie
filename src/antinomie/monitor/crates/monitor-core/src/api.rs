@@ -1640,6 +1640,14 @@ pub enum Command {
         path: PathBuf,
         analysis: crate::analysis::AnalysisSelection,
     },
+    /// Run checks the finished analysis kept in `directory` was not asked for
+    /// and add them to its report, without a VM and without analyzing again.
+    /// `run_id` is the run the report belongs to, when it is a run's.
+    AnalyzeMore {
+        directory: PathBuf,
+        run_id: Option<String>,
+        checks: Vec<crate::analysis::AnalysisKind>,
+    },
     OpenRecording {
         directory: PathBuf,
     },

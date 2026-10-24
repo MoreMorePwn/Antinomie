@@ -1850,6 +1850,67 @@ fn the_identity_card_says_where_the_specimen_came_from() {
 }
 
 #[test]
+fn a_category_the_report_lacks_can_be_run_once_the_analysis_has_finished() {
+    let size = egui::vec2(1280.0, 820.0);
+    for (state, enabled) in [
+        (AnalysisState::Partial, true),
+        (AnalysisState::Complete, true),
+        (AnalysisState::Running, false),
+        (AnalysisState::Queued, false),
+    ] {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut report = fixture();
+        report.state = state;
+        let mut state = WorkspaceState::default();
+        let mut output = egui::FullOutput::default();
+        for _ in 0..3 {
+            output = frame(
+                &ctx,
+                &report,
+                &mut state,
+                None,
+                size,
+                Vec::new(),
+                (None, None),
+            )
+            .0;
+        }
+        let missing = ALL_KINDS
+            .into_iter()
+            .find(|kind| report.sections.iter().all(|section| section.kind != *kind))
+            .unwrap();
+        let run = texts(&output)
+            .into_iter()
+            .find(|(text, _)| text == "Run")
+            .map(|(_, rect)| rect.center())
+            .unwrap();
+        let click = press(
+            &ctx,
+            &report,
+            &mut state,
+            None,
+            size,
+            (egui::PointerButton::Primary, run),
+            (None, None),
+        );
+        let expected = enabled.then(|| ReportAction::RunCheck {
+            report_id: report.id.clone(),
+            kind: missing,
+        });
+        // A running analysis may only be cancelled.
+        assert_eq!(
+            click
+                .action
+                .filter(|action| matches!(action, ReportAction::RunCheck { .. })),
+            expected,
+            "{:?}",
+            report.state
+        );
+    }
+}
+
+#[test]
 fn selecting_a_row_hands_it_to_the_details_panel_once() {
     let ctx = egui::Context::default();
     crate::theme::install(&ctx);

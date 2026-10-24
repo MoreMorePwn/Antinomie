@@ -43,12 +43,25 @@ impl Jobs {
         &mut self,
         report: AnalysisReport,
         directory: PathBuf,
+        input: File,
+        total_len: u64,
+        available: u64,
+    ) -> AnalysisReport {
+        self.submit_host_opened_for(None, report, directory, input, total_len, available)
+    }
+
+    /// [`submit_host_opened`](Self::submit_host_opened) for the analysis of a run.
+    pub(super) fn submit_host_opened_for(
+        &mut self,
+        run_id: Option<String>,
+        report: AnalysisReport,
+        directory: PathBuf,
         mut input: File,
         total_len: u64,
         available: u64,
     ) -> AnalysisReport {
         let mut report = self.submit(
-            None,
+            run_id.clone(),
             report,
             directory.clone(),
             Ok((NO_HANDLE, total_len)),
@@ -64,7 +77,7 @@ impl Jobs {
             }
             fail(&mut report, AnalysisState::Unavailable, error);
             let _ = persist_report(&directory, &report);
-            self.updates.push((None, report.clone()));
+            self.updates.push((run_id, report.clone()));
         }
         report
     }
