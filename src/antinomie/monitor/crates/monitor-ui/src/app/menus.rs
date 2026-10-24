@@ -319,6 +319,13 @@ impl MonitorApp {
                             self.samples.open = true;
                             ui.close_menu();
                         }
+                        if ui
+                            .button(format!("{} API keys…", egui_phosphor::regular::KEY))
+                            .clicked()
+                        {
+                            self.api_keys.open = true;
+                            ui.close_menu();
+                        }
                         if ui.button("App dependencies…").clicked() {
                             self.folder_picker.refresh(ctx);
                             self.dependencies.open = true;

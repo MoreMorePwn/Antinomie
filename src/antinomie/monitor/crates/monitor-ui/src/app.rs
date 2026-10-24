@@ -347,6 +347,7 @@ pub struct MonitorApp {
     rules_generation: u64,
     vm_snapshots: crate::snapshots::SnapshotManager,
     samples: crate::samples_view::SamplesView,
+    api_keys: crate::api_keys_window::ApiKeysWindow,
     dependencies: crate::dependencies_window::DependenciesWindow,
     getting_started: crate::getting_started::GettingStarted,
     /// Download base: also list bases for earlier Antinomie versions.
@@ -540,6 +541,7 @@ impl MonitorApp {
             rules_generation: 0,
             vm_snapshots: crate::snapshots::SnapshotManager::default(),
             samples: crate::samples_view::SamplesView::default(),
+            api_keys: Default::default(),
             dependencies,
             getting_started: Default::default(),
             show_older_bases: false,
@@ -855,6 +857,7 @@ enum Dialog {
     Import,
     Download,
     Samples,
+    ApiKeys,
     Snapshots,
     SnapshotDecision,
     Dependencies,
@@ -866,7 +869,7 @@ enum Dialog {
 }
 
 impl Dialog {
-    const ALL: [Dialog; 19] = [
+    const ALL: [Dialog; 20] = [
         Dialog::Confirm,
         Dialog::Name,
         Dialog::Transport,
@@ -878,6 +881,7 @@ impl Dialog {
         Dialog::Import,
         Dialog::Download,
         Dialog::Samples,
+        Dialog::ApiKeys,
         Dialog::Snapshots,
         Dialog::SnapshotDecision,
         Dialog::Dependencies,
@@ -902,6 +906,7 @@ impl Dialog {
             Dialog::Import => "import_base",
             Dialog::Download => "download_base",
             Dialog::Samples => crate::samples_view::WINDOW_ID,
+            Dialog::ApiKeys => crate::api_keys_window::WINDOW_ID,
             Dialog::Snapshots => crate::snapshots::WINDOW_ID,
             Dialog::SnapshotDecision => "snapshot_decision",
             Dialog::Dependencies => crate::dependencies_window::WINDOW_ID,

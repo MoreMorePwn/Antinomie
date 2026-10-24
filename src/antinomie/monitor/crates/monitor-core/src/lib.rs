@@ -2,6 +2,7 @@ pub mod analysis;
 pub mod analysis_tools;
 pub mod annotations;
 pub mod api;
+pub mod api_keys;
 mod archive_io;
 mod backend;
 pub mod build;
