@@ -261,6 +261,7 @@ fn upstream_kobalos_rule_matches_ram_in_the_complete_scan_pipeline() {
         include_dir: None,
         skipped_inputs: vec![],
         unstaged: vec![],
+        network_off: false,
     };
     let report = scan(&staged, &fixture.0).unwrap();
     assert_eq!(report.findings.len(), 1, "{report:?}");

@@ -98,6 +98,10 @@ pub(super) struct Staged {
     /// so the result is incomplete; this is not a coverage limit.
     #[serde(default)]
     pub unstaged: Vec<String>,
+    /// The run was started with network capture turned off, so there is no
+    /// capture to scan and none is missing.
+    #[serde(default)]
+    pub network_off: bool,
 }
 
 fn text(path: &Path) -> Result<String, String> {
@@ -364,6 +368,7 @@ fn stage(
         journal: None,
         skipped_inputs: vec![],
         unstaged: vec![],
+        network_off: false,
         warnings: vec![],
         selection: String::new(),
         no_rules: false,
@@ -406,6 +411,7 @@ fn stage(
             let artifacts = owned_artifacts(&request)?;
             let mut total = 0u64;
             if let Some(artifacts) = artifacts {
+                staged.network_off = artifacts.network_off && artifacts.network_captures.is_empty();
                 let live = artifacts.network_state != crate::RunArtifactState::Complete;
                 for path in artifacts.network_captures {
                     if cancel.load(Ordering::Relaxed) {
@@ -1315,6 +1321,72 @@ mod tests {
         fs::remove_dir_all(directory).unwrap();
     }
 
+    /// A run directory holding `artifacts.json` with `fields` merged over a
+    /// run that saved no capture.
+    fn run_without_capture(name: &str, fields: serde_json::Value) -> PathBuf {
+        let directory =
+            std::env::temp_dir().join(format!("ant-{name}-{}", crate::storage::unique_id()));
+        crate::storage::private_dir(&directory).unwrap();
+        let mut artifacts = serde_json::json!({"run_id":"r","vm_id":"v","boot_id":"b","network_captures":[],"network_state":"disabled","memory_dump":null,"memory_state":"disabled","core_dump":null,"core_state":"disabled","issues":[]});
+        artifacts
+            .as_object_mut()
+            .unwrap()
+            .extend(fields.as_object().unwrap().clone());
+        crate::storage::atomic_json(&directory.join("artifacts.json"), &artifacts).unwrap();
+        directory
+    }
+
+    fn staged_ids(directory: &Path) -> Staged {
+        let work = directory.join("work");
+        crate::storage::private_dir(&work).unwrap();
+        let request = Request {
+            engine: Engine::Ids,
+            identity: identity(),
+            directory: directory.to_path_buf(),
+            settings: Settings::default(),
+            source_digest: None,
+            frozen: None,
+        };
+        stage(request, &work, &Arc::new(AtomicBool::new(false)))
+            .unwrap()
+            .0
+    }
+
+    #[test]
+    fn only_a_run_recorded_as_captureless_is_staged_as_network_off() {
+        // Recorded off: no capture is missing.
+        let off = run_without_capture("net-off", serde_json::json!({"network_off": true}));
+        assert!(staged_ids(&off).network_off);
+        // Capture was on and failed: the evidence is missing.
+        let failed =
+            run_without_capture("net-failed", serde_json::json!({"network_state": "failed"}));
+        assert!(!staged_ids(&failed).network_off);
+        // A run saved before the record existed keeps reading as missing.
+        let old = run_without_capture("net-old", serde_json::json!({}));
+        assert!(!staged_ids(&old).network_off);
+        // No artifacts file at all: nothing says capture was turned off.
+        let bare =
+            std::env::temp_dir().join(format!("ant-net-bare-{}", crate::storage::unique_id()));
+        crate::storage::private_dir(&bare).unwrap();
+        assert!(!staged_ids(&bare).network_off);
+        for directory in [off, failed, old, bare] {
+            fs::remove_dir_all(directory).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_skipped_scan_never_becomes_partial() {
+        let mut staged = staged_ids(&run_without_capture("net-skip", serde_json::json!({})));
+        staged.request.settings.partial = true;
+        staged.unstaged.push("local rules: unreadable".into());
+        let mut report = Report::empty(Engine::Ids, identity());
+        report.state = State::Skipped;
+        finish_report(&mut report, &staged);
+        assert_eq!(report.state, State::Skipped);
+        assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+        fs::remove_dir_all(&staged.request.directory).unwrap();
+    }
+
     #[test]
     fn a_scan_of_evidence_still_being_captured_is_partial() {
         let mut staged = Staged {
@@ -1336,6 +1408,7 @@ mod tests {
             journal: None,
             skipped_inputs: vec![],
             unstaged: vec![],
+            network_off: false,
             warnings: vec!["pack x was not evaluated".into()],
             selection: String::new(),
             no_rules: false,
@@ -1579,6 +1652,7 @@ mod tests {
             journal: None,
             skipped_inputs: vec![],
             unstaged: vec![],
+            network_off: false,
             warnings: vec![],
             selection: String::new(),
             no_rules: false,

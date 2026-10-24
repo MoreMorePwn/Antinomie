@@ -249,6 +249,9 @@ pub enum State {
     NoRules,
     /// The engine was ready but the evidence it needs is absent or still open.
     Missing,
+    /// The engine had nothing to read because the run was set up without that
+    /// evidence (network capture turned off). Not a limit and not a result.
+    Skipped,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
