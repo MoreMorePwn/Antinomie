@@ -2,6 +2,7 @@
 //! What a point on the graph means, and where the keyboard moves the selection.
 //! Everything here is plain arithmetic over the index, so it is tested without
 //! a window.
+use super::axis::{Axis, Spacing};
 use super::index::GraphIndex;
 use super::lanes::Rows;
 use super::view::{Frame, Metrics, State};
@@ -31,6 +32,8 @@ pub(in crate::triage) enum Action {
     },
     Tier(Tier),
     Category(Category),
+    /// The spacing chip or `T` chose this spacing.
+    Spacing(Spacing),
 }
 
 /// What is under a point.
@@ -55,6 +58,10 @@ pub(super) enum Hit {
     Fit,
     /// The whole run, not just the findings.
     Run,
+    /// A chip that chooses the spacing.
+    Spacing(Spacing),
+    /// The overview ruler.
+    Ruler,
 }
 
 /// The frame of one draw and what is on its rows.
@@ -67,6 +74,11 @@ pub(super) struct Layout {
     pub fit: Rect,
     /// The chip that shows the whole run, left of Fit.
     pub run: Rect,
+    /// The Events and Time chips, left of Run.
+    pub spacing: [Rect; 2],
+    /// Where the whole run lies on the axis: the ruler spans it, and pan and
+    /// zoom stay inside it.
+    pub range: (f64, f64),
 }
 
 impl Layout {
@@ -74,12 +86,12 @@ impl Layout {
         let categories: Vec<usize> = (0..13)
             .filter(|bit| index.categories & (1 << bit) != 0)
             .collect();
-        let window = state
-            .window
-            .unwrap_or_else(|| view::fitted_findings(index.extent()));
+        let axis = Axis::new(state.units, &index.slots);
+        let window = state.window.unwrap_or_else(|| axis.all(index.extent()));
+        let range = axis.run(index.run_extent());
         let rows = Rows::build(&index.lanes, &state.collapsed, index.lane0_used);
         let metrics = Metrics::roomy(whole, categories.len(), rows.lanes.len());
-        let frame = Frame::new(whole, window, categories.len(), metrics);
+        let frame = Frame::new(whole, window, categories.len(), metrics, axis);
         let content = rows.lanes.len() as f32 * frame.m.lane_h;
         let scroll = state
             .scroll
@@ -89,6 +101,14 @@ impl Layout {
             eframe::egui::vec2(36.0, frame.axis.height() - 6.0),
         );
         let run = fit.translate(eframe::egui::vec2(-44.0, 0.0));
+        let chip = |right: f32, width: f32| {
+            Rect::from_min_size(
+                Pos2::new(right - width, fit.top()),
+                eframe::egui::vec2(width, fit.height()),
+            )
+        };
+        let time = chip(run.left() - 8.0, 44.0);
+        let events = chip(time.left() - 2.0, 58.0);
         Self {
             frame,
             rows,
@@ -96,6 +116,8 @@ impl Layout {
             categories,
             fit,
             run,
+            spacing: [events, time],
+            range,
         }
     }
 
@@ -133,6 +155,15 @@ pub(super) fn hit_test(
     }
     if layout.run.contains(pos) {
         return Some(Hit::Run);
+    }
+    if layout.spacing[0].contains(pos) {
+        return Some(Hit::Spacing(Spacing::Events));
+    }
+    if layout.spacing[1].contains(pos) {
+        return Some(Hit::Spacing(Spacing::Time));
+    }
+    if frame.ruler.contains(pos) {
+        return Some(Hit::Ruler);
     }
     if frame.axis.contains(pos) {
         return Some(Hit::Axis);

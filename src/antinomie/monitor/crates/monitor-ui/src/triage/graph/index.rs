@@ -38,6 +38,8 @@ pub(in crate::triage) struct Record {
     /// [`Phase::index`], or [`NO_PHASE`].
     pub phase: u8,
     pub flags: u8,
+    /// The place among the distinct moments, for Events spacing.
+    pub slot: u32,
 }
 
 impl Record {
@@ -64,7 +66,7 @@ pub(in crate::triage) struct Cell {
 }
 
 impl Cell {
-    fn of(record: &Record, at: usize, bucket: u32) -> Self {
+    pub(super) fn of(record: &Record, at: usize, bucket: u32) -> Self {
         let mut counts = [0; 4];
         counts[usize::from(record.tier).min(3)] = 1;
         Self {
@@ -78,7 +80,7 @@ impl Cell {
         }
     }
 
-    fn add(&mut self, record: &Record) {
+    pub(super) fn add(&mut self, record: &Record) {
         self.counts[usize::from(record.tier).min(3)] += 1;
         self.cats |= 1 << record.category;
         if record.tier < self.top {
@@ -132,7 +134,7 @@ impl Default for Bin {
 }
 
 impl Bin {
-    fn add(&mut self, record: &Record) {
+    pub(super) fn add(&mut self, record: &Record) {
         self.tiers[usize::from(record.tier).min(3)] += 1;
         let category = usize::from(record.category).min(12);
         self.cats[category] += 1;
@@ -251,6 +253,10 @@ pub(in crate::triage) struct GraphIndex {
     /// The buckets and `extent` cover the findings only, so a burst at the
     /// end of a long run still gets the full resolution.
     pub run: Option<(u64, u64)>,
+    /// The distinct moments of the findings, for Events spacing.
+    pub slots: super::axis::Slots,
+    /// Told apart from every other index, so a cache can tell it changed.
+    pub id: u64,
 }
 
 impl GraphIndex {
@@ -317,6 +323,7 @@ impl GraphIndex {
         let cells: usize = self.cells.iter().map(Vec::len).sum();
         let bins: usize = self.bins.iter().map(Vec::len).sum();
         self.records.len() * std::mem::size_of::<Record>()
+            + self.slots.times.len() * 8
             + cells * std::mem::size_of::<Cell>()
             + bins * std::mem::size_of::<Bin>()
             + self.lanes.list.len() * std::mem::size_of::<super::lanes::Lane>()
@@ -335,6 +342,11 @@ impl GraphIndex {
     pub(in crate::triage) fn first_with_key(&self, key: trace::InvocationKey) -> Option<usize> {
         self.rows.iter().position(|row| row.key == key)
     }
+}
+
+fn next_id() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// An INFO match counted at a time, with the phase it belongs to.
@@ -435,6 +447,7 @@ impl Builder {
             category: category.index() as u8,
             phase: phases::phase_of(rule, category).map_or(NO_PHASE, |phase| phase.index() as u8),
             flags: if hollow { HOLLOW } else { 0 },
+            slot: 0,
         };
         if self.keep_lanes && rule.starts_with("injection.") {
             if let Some(target) = injected_pid(text("finding.object").unwrap_or("")) {
@@ -500,6 +513,17 @@ impl Builder {
         if !sorted {
             self.sort();
         }
+        // One slot for each distinct moment, in time order.
+        let mut times: Vec<u64> = Vec::new();
+        if self.keep_lanes {
+            for record in &mut self.records {
+                if times.last() != Some(&record.first_ns) {
+                    times.push(record.first_ns);
+                }
+                record.slot = (times.len() - 1) as u32;
+            }
+        }
+        let slots = super::axis::Slots::new(times);
         for mark in &self.counted {
             widen(mark.ns, mark.ns);
         }
@@ -569,6 +593,8 @@ impl Builder {
             unplaced: self.unplaced,
             categories,
             lane0_used: lane0,
+            slots,
+            id: next_id(),
             run: Some(
                 self.extent
                     .map_or((lo, hi), |(a, b)| (a.min(lo), b.max(hi))),

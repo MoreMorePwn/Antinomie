@@ -278,13 +278,121 @@ pub(super) fn visible_buckets(index: &GraphIndex, frame: &Frame) -> (usize, u32,
     let level = index.level_for(frame.ns_per_px(), MIN_BUCKET_PX);
     let geometry = index.geometry();
     let width = geometry.width(level);
-    let low = (((frame.t0 - geometry.origin as f64) / width)
-        .floor()
-        .max(0.0)) as u32;
-    let high = (((frame.t1 - geometry.origin as f64) / width)
-        .ceil()
-        .max(0.0)) as u32;
+    let (ns0, ns1) = frame.ns_range();
+    let low = (((ns0 - geometry.origin as f64) / width).floor().max(0.0)) as u32;
+    let high = (((ns1 - geometry.origin as f64) / width).ceil().max(0.0)) as u32;
     (level, low, high)
+}
+
+/// What the severity curve and the heat strip draw: bins across the window and
+/// the x of each one's left edge.
+pub(super) struct Series<'a> {
+    pub bins: std::borrow::Cow<'a, [super::index::Bin]>,
+    pub range: std::ops::Range<usize>,
+    pub edge: Box<dyn Fn(usize) -> f32 + 'a>,
+}
+
+/// The bins of the window. In Time spacing they are the pyramid's; in Events
+/// spacing the buckets would be uneven on screen, so the findings of the window
+/// are counted into columns of a few pixels.
+pub(super) fn series<'a>(
+    frame: &'a Frame,
+    index: &'a GraphIndex,
+    pass: Option<&'a EventPass>,
+) -> Option<Series<'a>> {
+    let geometry = index.geometry?;
+    if let Some(pass) = pass {
+        let step = frame.plot.width() / pass.columns as f32;
+        let left = frame.plot.left();
+        return Some(Series {
+            bins: std::borrow::Cow::Borrowed(pass.bins.as_slice()),
+            range: 0..pass.columns,
+            edge: Box::new(move |at| left + at as f32 * step),
+        });
+    }
+    if frame.map.spacing == super::axis::Spacing::Events && !frame.map.slots.times.is_empty() {
+        let columns = (frame.plot.width() / MIN_BUCKET_PX as f32).ceil().max(1.0) as usize;
+        let mut bins = vec![super::index::Bin::default(); columns];
+        let (ns0, ns1) = frame.ns_range();
+        for record in &index.records[index.window(ns0, ns1)] {
+            let share = (f64::from(record.slot) - frame.t0) / (frame.t1 - frame.t0);
+            let column = (share * columns as f64).floor();
+            if (0.0..columns as f64).contains(&column) {
+                bins[column as usize].add(record);
+            }
+        }
+        let step = frame.plot.width() / columns as f32;
+        let left = frame.plot.left();
+        return Some(Series {
+            bins: std::borrow::Cow::Owned(bins),
+            range: 0..columns,
+            edge: Box::new(move |at| left + at as f32 * step),
+        });
+    }
+    let (level, low, high) = visible_buckets(index, frame);
+    let bins = index.bins.get(level)?;
+    let range = (low as usize).min(bins.len())..(high as usize + 1).min(bins.len());
+    let width = geometry.width(level);
+    Some(Series {
+        bins: std::borrow::Cow::Borrowed(bins.as_slice()),
+        range,
+        edge: Box::new(move |at| frame.x(geometry.origin as f64 + at as f64 * width)),
+    })
+}
+
+/// One pass over the findings of the window in Events spacing, shared by the
+/// severity curve, the heat strip and the markers: each finding is put into a
+/// column of a few pixels, in the bins of the curve and, on a visible row, in
+/// that row's cell.
+pub(super) struct EventPass {
+    pub columns: usize,
+    pub bins: Vec<super::index::Bin>,
+    /// One per visible row and column, row after row, from `first_row`.
+    pub cells: Vec<Option<super::index::Cell>>,
+    pub first_row: usize,
+}
+
+/// The pass for `layout`, or `None` when the spacing is Time (the pyramid does
+/// that) or the window holds few findings (they are drawn one by one).
+pub(super) fn event_pass(
+    layout: &super::input::Layout,
+    index: &GraphIndex,
+    rows: std::ops::Range<usize>,
+) -> Option<EventPass> {
+    let frame = &layout.frame;
+    if frame.map.spacing != super::axis::Spacing::Events || frame.map.slots.times.is_empty() {
+        return None;
+    }
+    let columns = (frame.plot.width() / MIN_BUCKET_PX as f32).ceil().max(1.0) as usize;
+    let mut bins = vec![super::index::Bin::default(); columns];
+    let mut cells: Vec<Option<super::index::Cell>> = vec![None; rows.len() * columns];
+    let (ns0, ns1) = frame.ns_range();
+    let scale = columns as f64 / (frame.t1 - frame.t0);
+    let window = index.window(ns0, ns1);
+    let begins = window.start;
+    for (at, record) in index.records[window].iter().enumerate() {
+        let column = ((f64::from(record.slot) - frame.t0) * scale).floor();
+        if !(0.0..columns as f64).contains(&column) {
+            continue;
+        }
+        let column = column as usize;
+        bins[column].add(record);
+        let Some(row) = layout.row_of(record.lane).filter(|row| rows.contains(row)) else {
+            continue;
+        };
+        match &mut cells[(row - rows.start) * columns + column] {
+            Some(cell) => cell.add(record),
+            none => {
+                *none = Some(super::index::Cell::of(record, begins + at, column as u32));
+            }
+        }
+    }
+    Some(EventPass {
+        columns,
+        bins,
+        cells,
+        first_row: rows.start,
+    })
 }
 
 /// The severity curve: a stacked area per tier, height the sum of weights per
@@ -294,16 +402,12 @@ pub(super) fn severity_curve(
     frame: &Frame,
     index: &GraphIndex,
     colors: &Colors,
+    pass: Option<&EventPass>,
 ) -> u32 {
     painter.rect_filled(frame.curve, 2.0, colors.bg);
-    let Some(geometry) = index.geometry else {
+    let Some(Series { bins, range, edge }) = series(frame, index, pass) else {
         return 0;
     };
-    let (level, low, high) = visible_buckets(index, frame);
-    let Some(bins) = index.bins.get(level) else {
-        return 0;
-    };
-    let range = (low as usize).min(bins.len())..(high as usize + 1).min(bins.len());
     let tallest = bins[range.clone()]
         .iter()
         .map(|bin| bin.weight())
@@ -314,17 +418,14 @@ pub(super) fn severity_curve(
     }
     let painter = painter.with_clip_rect(frame.curve);
     let scale = (frame.curve.height() - 3.0) / tallest as f32;
-    let width = geometry.width(level);
     let mut shapes = Vec::with_capacity(range.len() * 3);
     for at in range {
         let bin = &bins[at];
         if bin.weight() == 0 {
             continue;
         }
-        let from = frame.x(geometry.origin as f64 + at as f64 * width);
-        let to = frame
-            .x(geometry.origin as f64 + (at + 1) as f64 * width)
-            .max(from + 1.0);
+        let from = edge(at);
+        let to = edge(at + 1).max(from + 1.0);
         let mut base = frame.curve.bottom() - 1.0;
         // HIGH at the bottom, then MEDIUM, then LOW: the tier that matters sits on the floor.
         for tier in 0..3 {
@@ -353,15 +454,11 @@ pub(super) fn heat_strip(
     index: &GraphIndex,
     colors: &Colors,
     categories: &[usize],
+    pass: Option<&EventPass>,
 ) {
-    let Some(geometry) = index.geometry else {
+    let Some(Series { bins, range, edge }) = series(frame, index, pass) else {
         return;
     };
-    let (level, low, high) = visible_buckets(index, frame);
-    let Some(bins) = index.bins.get(level) else {
-        return;
-    };
-    let range = (low as usize).min(bins.len())..(high as usize + 1).min(bins.len());
     let tallest = bins[range.clone()]
         .iter()
         .flat_map(|bin| bin.cats.iter().copied())
@@ -370,7 +467,6 @@ pub(super) fn heat_strip(
         .max(1);
     let scale = (1.0 + tallest as f32).ln();
     let painter = painter.with_clip_rect(frame.heat);
-    let width = geometry.width(level);
     let mut shapes = Vec::new();
     for (row, category) in categories.iter().enumerate() {
         let top = frame.heat.top() + row as f32 * frame.m.heat_h;
@@ -387,10 +483,8 @@ pub(super) fn heat_strip(
             if count == 0 {
                 continue;
             }
-            let from = frame.x(geometry.origin as f64 + at as f64 * width);
-            let to = frame
-                .x(geometry.origin as f64 + (at + 1) as f64 * width)
-                .max(from + 1.0);
+            let from = edge(at);
+            let to = edge(at + 1).max(from + 1.0);
             let tier = usize::from(bins[at].top[*category]).min(3);
             let alpha = ((1.0 + count as f32).ln() / scale).clamp(0.2, 1.0);
             shapes.push(Shape::rect_filled(
@@ -423,11 +517,14 @@ pub(super) fn axis(
         [frame.axis.left_top(), frame.axis.right_top()],
         Stroke::new(1.0_f32, colors.line),
     );
-    let step = view::tick_step(frame.ns_per_px(), 110.0);
-    let mut tick = (frame.t0 / step).ceil() * step;
-    let mut drawn = 0;
-    while tick <= frame.t1 && drawn < 64 {
-        let x = frame.x(tick);
+    let ticks = tick_marks(frame);
+    let step_ns = ticks
+        .windows(2)
+        .map(|pair| pair[1].1 - pair[0].1)
+        .fold(f64::MAX, f64::min);
+    // One tick alone says nothing of its spacing: label it to the millisecond.
+    let step_ns = if step_ns == f64::MAX { 1e6 } else { step_ns };
+    for (x, ns) in ticks {
         painter.line_segment(
             [
                 Pos2::new(x, frame.axis.top()),
@@ -438,12 +535,97 @@ pub(super) fn axis(
         painter.text(
             Pos2::new(x + 3.0, frame.axis.top() + 6.0),
             Align2::LEFT_TOP,
-            axis_label(tick as u64, step, origin, clock),
+            axis_label(ns.max(0.0) as u64, step_ns, origin, clock),
             FontId::proportional(11.0),
             colors.muted,
         );
+    }
+}
+
+/// The ticks of the axis: the x and the time of each. In Time spacing they are
+/// at round times; in Events spacing at slot boundaries, so each label is the
+/// real time of a slot, and the labels are further apart where findings are
+/// scarce in time.
+pub(super) fn tick_marks(frame: &Frame) -> Vec<(f32, f64)> {
+    let mut ticks = Vec::new();
+    if frame.map.spacing == super::axis::Spacing::Events && !frame.map.slots.times.is_empty() {
+        let times = &frame.map.slots.times;
+        let step = view::tick_step(frame.u_per_px(), 110.0).max(1.0).round();
+        let mut at = (frame.t0 / step).ceil() * step;
+        while at <= frame.t1 && ticks.len() < 64 {
+            if at >= 0.0 && (at as usize) < times.len() {
+                ticks.push((frame.x_u(at), times[at as usize] as f64));
+            }
+            at += step;
+        }
+        return ticks;
+    }
+    let step = view::tick_step(frame.ns_per_px(), 110.0);
+    let mut tick = (frame.t0 / step).ceil() * step;
+    while tick <= frame.t1 && ticks.len() < 64 {
+        ticks.push((frame.x(tick), tick));
         tick += step;
-        drawn += 1;
+    }
+    ticks
+}
+
+/// How long a gap in time is, in words.
+pub(in crate::triage) fn gap_text(ns: u64) -> String {
+    let ns = ns as f64;
+    if ns < 1e3 {
+        format!("{ns:.0} ns")
+    } else if ns < 1e6 {
+        format!("{:.0} µs", ns / 1e3)
+    } else if ns < 1e9 {
+        format!("{:.0} ms", ns / 1e6)
+    } else if ns < 60e9 {
+        format!("{:.1} s", ns / 1e9)
+    } else if ns < 3600e9 {
+        format!("{:.1} min", ns / 60e9)
+    } else {
+        format!("{:.1} h", ns / 3600e9)
+    }
+}
+
+/// The breaks of Events spacing: where a long stretch of time with nothing in
+/// it was squeezed into one slot's width, a slanted pair of strokes on the axis,
+/// the length of the gap and a faint line up the plot.
+pub(super) fn breaks(painter: &Painter, frame: &Frame, colors: &Colors, right: f32) {
+    if frame.map.spacing != super::axis::Spacing::Events {
+        return;
+    }
+    let colour = colors.tier[1];
+    for (slot, gap) in frame.map.slots.breaks.iter() {
+        let x = frame.x_u(f64::from(*slot) + 0.5);
+        if x < frame.plot.left() + 2.0 || x > frame.plot.right() - 2.0 {
+            continue;
+        }
+        painter.line_segment(
+            [
+                Pos2::new(x, frame.phases.top()),
+                Pos2::new(x, frame.axis.top()),
+            ],
+            Stroke::new(1.0_f32, colour.gamma_multiply(0.22)),
+        );
+        let middle = frame.axis.top();
+        for shift in [-2.0, 2.0] {
+            painter.line_segment(
+                [
+                    Pos2::new(x + shift - 3.0, middle + 6.0),
+                    Pos2::new(x + shift + 3.0, middle - 6.0),
+                ],
+                Stroke::new(1.6_f32, colour),
+            );
+        }
+        if x < right - 50.0 {
+            painter.text(
+                Pos2::new(x + 7.0, middle - 9.0),
+                Align2::LEFT_CENTER,
+                gap_text(*gap),
+                FontId::proportional(10.0),
+                colour,
+            );
+        }
     }
 }
 
@@ -455,15 +637,17 @@ pub(in crate::triage) fn axis_label(
     clock: Option<antinomie_monitor_core::HostClockAnchor>,
 ) -> String {
     match clock.and_then(|clock| clock.host_us(ns)) {
-        Some(us) => crate::time_format::axis_time(us, step < 1e9),
+        Some(us) => crate::time_format::axis_time(us, step),
         None => {
             let seconds = ns.saturating_sub(origin) as f64 / 1e9;
             if step >= 1e9 {
                 format!("+{seconds:.0} s")
             } else if step >= 1e6 {
                 format!("+{seconds:.3} s")
-            } else {
+            } else if step >= 1e3 {
                 format!("+{:.0} µs", seconds * 1e6)
+            } else {
+                format!("+{} ns", ns.saturating_sub(origin))
             }
         }
     }

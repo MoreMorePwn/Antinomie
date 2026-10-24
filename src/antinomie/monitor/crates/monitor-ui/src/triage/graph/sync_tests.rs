@@ -8,6 +8,7 @@ use super::input::Action;
 use super::notify::{HighRule, HighWatch};
 use super::strip::{summary_line, Strip};
 use super::tests;
+use super::Spacing;
 use crate::activity::Level;
 use crate::app::tests::texts;
 use crate::triage::rules::{Category, Tier};
@@ -599,6 +600,7 @@ fn native_graph_fixture() {
         state: super::view::State,
         strip: Strip,
         scene: String,
+        spacing: Spacing,
         deadline: std::time::Instant,
     }
     impl eframe::App for Fixture {
@@ -620,6 +622,7 @@ fn native_graph_fixture() {
                         colors: super::paint::Colors::current(),
                         clock: None,
                         height: ui.available_height(),
+                        spacing: self.spacing,
                     };
                     super::widget::show(ui, &mut self.state, &config);
                 }
@@ -640,6 +643,10 @@ fn native_graph_fixture() {
         .split_once('x')
         .and_then(|(w, h)| Some((w.parse::<f32>().ok()?, h.parse::<f32>().ok()?)))
         .unwrap_or((1280.0, 820.0));
+    let spacing = match var("ANTINOMIE_QA_SPACING").as_str() {
+        "time" => Spacing::Time,
+        _ => Spacing::Events,
+    };
     let seconds = var("ANTINOMIE_QA_SECONDS").parse::<u64>().unwrap_or(20);
     let scene = var("ANTINOMIE_QA_SCENE");
     let index = match scene.as_str() {
@@ -664,6 +671,7 @@ fn native_graph_fixture() {
                 state: Default::default(),
                 strip: Strip::default(),
                 scene,
+                spacing,
                 deadline: std::time::Instant::now() + std::time::Duration::from_secs(seconds),
             }))
         }),
@@ -771,6 +779,10 @@ fn native_graph_view_fixture() {
     )
     .expect("the run's index");
     let mut view = TriageView::default();
+    view.set_graph_spacing(match var("ANTINOMIE_QA_SPACING").as_str() {
+        "time" => Spacing::Time,
+        _ => Spacing::Events,
+    });
     view.scan = Some(scan);
     view.section = if scene == "summary" {
         Section::Summary
