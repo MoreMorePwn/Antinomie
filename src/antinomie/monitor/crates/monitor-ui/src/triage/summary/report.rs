@@ -474,6 +474,7 @@ pub(super) fn content(
                 scan.counts.finding_tiers,
                 scan.clock_anchor.or(input.clock_anchor),
                 busy,
+                view.graph_spacing,
             );
             if strip.open_graph {
                 destination = Some(Destination::Graph);

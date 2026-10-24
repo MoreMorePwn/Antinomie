@@ -2,11 +2,12 @@
 //! The strip on Triage › Summary: the severity curve, the phase band and the
 //! category heat strip of the whole run, with no lanes. It shows on every run;
 //! when nothing is above LOW it is one line, and a click opens the full graph.
+use super::axis::{Axis, Spacing};
 use super::index::GraphIndex;
 use super::paint::{self, Colors};
-use super::view::{self, Frame, Metrics};
+use super::view::{Frame, Metrics};
 use super::*;
-use eframe::egui::{Align2, Pos2, Sense};
+use eframe::egui::{Align2, Pos2, Rect, Sense};
 
 /// What the strip remembers for the session.
 #[derive(Default)]
@@ -35,6 +36,20 @@ pub(in crate::triage) fn summary_line(tiers: [u64; 4]) -> String {
     }
 }
 
+/// The strip's frame in `rect`: the findings fill the plot, spaced as the
+/// graph spaces them (one slot per moment by default), so a few of them are
+/// spread over the width instead of bunched in a long run.
+pub(super) fn frame(
+    rect: Rect,
+    overview: &GraphIndex,
+    heat_rows: usize,
+    spacing: Spacing,
+) -> Frame {
+    let map = Axis::new(spacing, &overview.slots);
+    let window = map.all(overview.extent());
+    Frame::new(rect, window, heat_rows, Metrics::compact(), map)
+}
+
 impl Strip {
     fn is_open(&self, tiers: [u64; 4]) -> bool {
         self.open.unwrap_or(tiers[0] + tiers[1] > 0)
@@ -47,6 +62,7 @@ impl Strip {
         tiers: [u64; 4],
         clock: Option<antinomie_monitor_core::HostClockAnchor>,
         busy: bool,
+        spacing: Spacing,
     ) -> Outcome {
         let mut outcome = Outcome::default();
         let open = self.is_open(tiers);
@@ -109,13 +125,7 @@ impl Strip {
             return outcome;
         }
         let colors = Colors::current();
-        let frame = Frame::new(
-            rect,
-            view::fitted(overview.extent()),
-            categories.len(),
-            Metrics::compact(),
-            super::axis::Axis::time(),
-        );
+        let frame = frame(rect, overview, categories.len(), spacing);
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 0.0, colors.panel);
         paint::phase_band(&painter, &frame, overview, &colors);
