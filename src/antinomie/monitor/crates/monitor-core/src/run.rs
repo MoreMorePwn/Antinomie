@@ -99,6 +99,16 @@ impl ProgramRun {
                     }),
             });
     }
+    /// The program never ran, so its specimen will never be acquired: settle
+    /// a pending analysis with the reason, ready to be saved with the run.
+    pub fn settle_unstarted_analysis(&mut self, error: &str) {
+        if let Some(report) = self.summary.analysis.as_mut()
+            && crate::analysis::jobs::abandon(report, format!("the run did not start: {error}"))
+            && let Err(error) = self.refresh_analysis_metadata()
+        {
+            self.storage_error(format!("analysis metadata accounting: {error}"));
+        }
+    }
     /// Count only the new report's contribution to the two existing metadata files.
     pub fn refresh_analysis_metadata(&mut self) -> Result<(), String> {
         if self.summary.analysis.is_none() {
@@ -468,6 +478,52 @@ mod tests {
         }
         assert_eq!(run.stored_len(), increment as u64);
         assert!(increment > 0);
+        drop(run);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
+    fn a_run_that_did_not_start_settles_its_pending_analysis_in_run_json() {
+        let directory =
+            std::env::temp_dir().join(format!("ant-run-unstarted-{}", storage::unique_id()));
+        let selection = crate::analysis::AnalysisSelection {
+            enabled: true,
+            checks: vec![crate::analysis::AnalysisKind::Metadata],
+        };
+        let summary = RunSummary {
+            started_ms: None,
+            clock_anchor: None,
+            id: "run".into(),
+            vm_id: "vm".into(),
+            boot_id: "boot".into(),
+            session_id: 0,
+            root_task_cookie: 0,
+            pid: 0,
+            request: ExecRequest::default(),
+            directory: directory.clone(),
+            terminal_eof: false,
+            state: RunState::Unknown,
+            notes: Vec::new(),
+            recording_error: None,
+            execution: None,
+            analysis: Some(crate::analysis::jobs::new_report("/tmp/sample", &selection)),
+        };
+        let mut run = ProgramRun::new(summary, 1024 * 1024).unwrap();
+        run.settle_unstarted_analysis("network capture start: QMP connect: timed out");
+        run.persist_summary().unwrap();
+        storage::flush_json().unwrap();
+        let saved: RunSummary =
+            serde_json::from_reader(File::open(directory.join("run.json")).unwrap()).unwrap();
+        let report = saved.analysis.unwrap();
+        assert_eq!(report.state, crate::analysis::AnalysisState::Unavailable);
+        let reason = report.reason.unwrap();
+        assert!(reason.starts_with("the run did not start: network capture start"));
+        for section in &report.sections {
+            assert_eq!(
+                section.state,
+                crate::analysis::AnalysisSectionState::Unavailable
+            );
+            assert_eq!(section.summary, reason);
+        }
         drop(run);
         std::fs::remove_dir_all(directory).unwrap();
     }
