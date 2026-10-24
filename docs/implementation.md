@@ -1654,6 +1654,59 @@ meanwhile, but it takes the one job slot.
 `ImportQcow2Disk`; `Snapshot.disk_reference`. `DiskJobPurpose` gains
 `Reference`, `Carve` and `Import`. Settings are unchanged.
 
+## MemNixFS beside Volatility (0.7.1)
+
+MemNixFS 1.2 (<https://github.com/MemNixFS/MemNixFS>, Apache-2.0) is a second
+backend of the Memory tab for Linux dumps. `memory/memnixfs/` holds it;
+`PluginRun` gains `analyzer` (omitted for Volatility, so saved runs read as
+before), `tool_version`, `dump_format` and `partial` (reasons a finished
+result is known to miss something). A report run is saved as a plugin run
+(`run.json`, `output.jsonl`, `log.txt`, `files/`) under the dump's `runs/`, so
+the table, filters, Messages, Files and run list work unchanged, and the run
+names the dump by `dump_id` (the dump file is never copied or altered).
+
+**Package.** `analysis_tools::PACKAGES` pins the upstream
+`MemNixFS-1.2-Linux.tar.gz` release asset by SHA-256 (the Linux build is
+dynamic and links the system's libyara, libsnappy, liblzma, libmagic, jansson
+and libcrypto). It also needs `libfmt.so.9` and `libfuse3.so.3`, which newer
+distributions no longer ship; those two libraries come from the pinned Debian
+12 `libfmt9` and `libfuse3-3` packages into `lib/` beside the tool and are
+found through `LD_LIBRARY_PATH`. Only Antinomie's pinned install is used (no
+system copy). `MemNixFs::locate` runs `--help` once and turns a loader error
+into the Debian package that fixes it.
+
+**What it is given.** `format::classify` reads the header only. AVML, LiME,
+raw (headerless: the run is marked partial because addresses are assumed to
+start at 0) and ELF64 x86-64 cores whose segments carry physical addresses or a
+`QEMU` or `VMCOREINFO` note are accepted; a core whose segments all have a zero
+physical address is a process core and is refused, as are Windows dumps, ELF
+programs, other architectures, unfinished dumps and a dump file that is gone.
+
+**Sandbox.** The shared bubblewrap profile of the other tools
+(`run_sandboxed_sized`): no network, the dump and the saved
+`symbols/linux/symbols.json.xz` mounted read-only, the managed tools folder
+read-only, a private writable folder, `HOME=/tmp`, `--no-http-cache` (no symbol
+mirror lookup; `--auto-fetch` is never passed), `prlimit` with an address space
+of the dump size plus 6 GiB (at least 8 GiB), 45 minutes at most. A report is
+one `memnixfs export PATH DIR`; the dump is read once per run.
+
+**Partial and unavailable.** Stated, not hidden: known warnings of the tool
+(unvalidated page-table root, symbol table not matching the banner, unreadable
+modules list or mount namespaces) and up to four other `[WRN]` lines become
+`partial` notes, with one for a dump without a saved symbol table (the tool
+rebuilds one from the kernel's BTF), one for a headerless dump and one for rows
+cut at 500,000. A report the tool did not write fails the run with a message
+saying so; an error line of the tool becomes the run's error.
+
+**Check.** `cargo run --release --example memnixfs-check DATA RECORDING DUMP
+[SYMBOLS.xz] REPORT...` runs reports on a real dump. On a 2.0 GiB QEMU dump
+with the base's dwarf2json table (5 PT_LOAD ranges, no VMCOREINFO) it produced
+92 processes, 23 triage lines, the memory ranges and 22 recovered files in 50
+to 135 s, with partial notes (the DTB scan found no match; the table names
+its kernel `vmlinux`, so the tool reports a banner mismatch); processes and
+page-cache files were still recovered. Unit tests use a fake `memnixfs`
+script and generated headers; no dump is stored in the repository.
+
 ## Recording quota and pre-acknowledgement telemetry (0.6.2)
 
 The recording quota (Settings, 4 GiB by default) bounds what one VM boot may

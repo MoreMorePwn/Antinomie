@@ -16,7 +16,11 @@ application and base versions; existing VMs keep their pinned base.
   `musl-tools` for the compatibility collector used by older guest bases;
   prebuilt installs do not need that build tool.
 - Memory analysis runs Volatility 3, which **Tools > Analysis tools** (or the
-  Memory tab) installs for Antinomie; it needs Python 3 (`python3`)
+  Memory tab) installs for Antinomie; it needs Python 3 (`python3`). MemNixFS 1.2
+  is a second backend for Linux dumps, installed the same way (about 2 MB plus
+  two small Debian libraries); it also needs `bwrap`, `prlimit` and the
+  system libraries `libyara10 libsnappy1v5 liblzma5 libmagic1 libjansson4`
+  (the Memory tab names any that is missing)
 - Static analysis runs in a bubblewrap sandbox (`bwrap`). Disassembly, rules
   and identification are built in. Decompilation (Ghidra), capabilities
   (capa), FLOSS strings, UPX unpacking and Detect It Easy use the system's copy when
@@ -273,6 +277,26 @@ packet history already has it, and specimen Content supports a byte-offset jump.
   (protocol, info, every field), with a byte view that marks the bytes of the
   selected line. Without TShark you see raw frames and bytes and a note to
   install it. **Open in Wireshark** opens the capture when installed.
+- **Memory**: dumps of a VM's memory (or imported ones) and their analysis.
+  **Analyse with** picks the backend: Volatility 3 (plugins, any system) or
+  MemNixFS (Linux only; reports instead of plugins: processes, process tree,
+  hidden-process scan, TCP/UDP sockets, triage, indicators, findings, malfind,
+  YARA, IOCs, syscall table, modules, kernel log, shell history, timeline and
+  files recovered from the page cache). A run is saved with its dump and keeps
+  the dump's identity; it is listed beside Volatility's runs, opens in the same
+  table, text and Messages views, and its **Files** button opens the folder with
+  MemNixFS's raw export (recovered files included), to copy or save from. MemNixFS reads only a dump of the
+  guest's whole physical memory: QEMU `dump-guest-memory` ELF cores (what
+  Dump memory writes), LiME, AVML, kdump and raw images. A process core, a
+  Windows dump and anything else is refused with the reason. It runs offline
+  in the analysis sandbox (no network, the dump and its saved symbol table
+  read-only, a private working folder). With no saved symbol table it builds
+  one from the kernel's BTF. Whatever it could not read is stated: a finished
+  result with gaps is marked **partial** in the run list, with a banner that
+  lists the reasons (for example an unvalidated page-table root, unreadable
+  module list or mounts, or a symbol table that does not match the kernel
+  banner); a report the tool could not produce fails with the reason instead
+  of showing an empty table. A report takes about a minute on a 2 GiB dump.
 - **Static Analysis**: the selected run's report: an overview, then each
   category; disassembly and decompilation are full listings with search. In the
   **Strings** and **FLOSS** tabs, **Regex matches…** opens a window with every
