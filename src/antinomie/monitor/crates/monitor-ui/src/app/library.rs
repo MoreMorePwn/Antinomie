@@ -108,6 +108,9 @@ impl MonitorApp {
             Some(crate::rules_window::RulesAction::AnalysisTools) => {
                 self.open_library(LibraryPage::Tools)
             }
+            Some(crate::rules_window::RulesAction::ApiKeys) => {
+                self.api_keys.open = true;
+            }
             None => {}
         }
         // The triage view owns the live detection settings; keep the saved copy in step.
