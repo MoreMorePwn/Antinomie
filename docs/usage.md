@@ -35,19 +35,29 @@ application and base versions; existing VMs keep their pinned base.
   pySigma, which **Tools > Analysis tools** installs for Antinomie; it needs
   Python 3.11 or newer with venv support (`python3-venv` on Debian/Ubuntu).
 
-- **Tools > Detection rules > IOC** keeps seven abuse.ch datasets on your
-  computer for matching a run's indicators offline: ThreatFox `full.csv`, the
-  URLhaus dump and payload list, Feodo Tracker's `ipblocklist.json` and the
-  SSLBL IP, JA3 and certificate lists. They are stored in the data folder
-  (about 640 MB together), never in the project, and change only when you press
+- **Tools > Detection rules > IOC** keeps abuse.ch datasets on your computer
+  for matching a run's indicators offline: ThreatFox `full.csv`, the URLhaus
+  dump (`full.csv`, the URLs that are active or were added in the last 90 days)
+  and payload list, Feodo Tracker's `ipblocklist.json` and the SSLBL IP, JA3 and
+  certificate lists, which are seven on by default. An eighth, URLhaus
+  `recent.csv` (the last 30 days), is a smaller choice that is off until you
+  switch it on. They are stored in the data folder (about 640 MB together for
+  the seven), never in the project, and change only when you press
   **Download** or **Update** (or **Download / Update all**); nothing updates by
   itself. Each row shows its records, size, the date it was fetched and its age
   (a warning appears when a dataset is over 14 days old), its terms (Feodo and
   SSLBL are CC0; ThreatFox and URLhaus are free under abuse.ch's fair use with
   an Auth-Key set in **Tools > API keys**) and a switch. A download is saved
   whole or not at all: when one fails the previous copy stays in use and the
-  status line names the dataset that failed. The same tab lists the **known
-  false positives** you have marked, which you can remove.
+  status line names the dataset that failed. If abuse.ch answers that it does
+  not accept the Auth-Key, the line says so (check the key in **Tools > API
+  keys**); if it answers that the endpoint is retired, the line says to update
+  Antinomie. The Auth-Key is part of the address abuse.ch serves its ThreatFox
+  and URLhaus files from, so Antinomie hands the address to the download
+  program out of sight of other users of the computer, and shows it everywhere
+  as `/exports/****/`; the key does not appear in the details, the status line,
+  an error or a saved report. The same tab lists the **known false positives**
+  you have marked, which you can remove.
 
 - **Tools > Detection rules > IDS > abuse.ch** offers six Suricata rule packs from
   abuse.ch: ThreatFox, URLhaus (exact-URL HTTP rules), Feodo Tracker, SSLBL
@@ -58,8 +68,12 @@ application and base versions; existing VMs keep their pinned base.
   file with the installed one (a pack is asked at most once in five minutes, even
   if you press the button again); **Update** installs the newest snapshot and
   keeps the old version if it fails. ThreatFox and URLhaus need the Auth-Key in
-  **Tools > API keys**; Feodo and SSLBL are CC0 and need none. Nothing is fetched
-  until you press a button and have allowed downloads.
+  **Tools > API keys** (they are sent as `.tar.gz` archives, from which only the
+  `.rules` files are taken); Feodo and SSLBL are CC0 and need none. abuse.ch
+  no longer fills the SSLBL JA3 rules file, so that pack shows **Retired
+  upstream** and cannot be installed; the JA3 list is still available as an IOC
+  dataset. Nothing is fetched until you press a button and have allowed
+  downloads.
 
 ## 1. Get a base image
 
