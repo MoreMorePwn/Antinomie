@@ -33,21 +33,38 @@ pub trait Fetcher {
 #[derive(Clone, Debug)]
 pub struct Curl {
     program: PathBuf,
+    /// An abuse.ch Auth-Key, sent only to abuse.ch hosts and only through
+    /// curl's standard input (never on a command line).
+    auth_key: Option<crate::api_keys::Secret>,
 }
 
 impl Default for Curl {
     fn default() -> Self {
         Self {
             program: PathBuf::from("curl"),
+            auth_key: None,
         }
     }
+}
+
+/// Whether `host` is an abuse.ch service, the only place the Auth-Key goes.
+pub fn is_abusech_host(host: &str) -> bool {
+    host == "abuse.ch" || host.ends_with(".abuse.ch")
 }
 
 impl Curl {
     pub fn new(program: impl Into<PathBuf>) -> Self {
         Self {
             program: program.into(),
+            auth_key: None,
         }
+    }
+
+    /// Send this Auth-Key with requests to abuse.ch hosts. An empty key sends
+    /// nothing.
+    pub fn with_auth_key(mut self, key: crate::api_keys::Secret) -> Self {
+        self.auth_key = (!key.is_empty()).then_some(key);
+        self
     }
 
     fn hop(
@@ -59,33 +76,55 @@ impl Curl {
         progress: &mut dyn FnMut(u64),
     ) -> Result<Hop, String> {
         let _ = fs::remove_file(dest);
+        let key = self
+            .auth_key
+            .as_ref()
+            .filter(|_| https_host(url).is_ok_and(|host| is_abusech_host(&host)));
         // Redirects are followed by hand so that each target is checked.
-        let mut child = crate::http_fetch::command(
+        let mut command = crate::http_fetch::command(
             &self.program,
             &crate::http_fetch::Options {
                 fail: false,
                 ..crate::http_fetch::Options::new(DOWNLOAD_TIMEOUT as u32, max_size)
             },
-        )
-        .args([
-            "--speed-limit",
-            "1024",
-            "--speed-time",
-            "60",
-            "--user-agent",
-            concat!("Antinomie-rules/", env!("CARGO_PKG_VERSION")),
-            "--write-out",
-            "%{http_code} %{redirect_url}",
-            "--output",
-        ])
-        .arg(dest)
-        .arg("--url")
-        .arg(url)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| format!("curl: {error}"))?;
+        );
+        command
+            .args([
+                "--speed-limit",
+                "1024",
+                "--speed-time",
+                "60",
+                "--user-agent",
+                concat!("Antinomie-rules/", env!("CARGO_PKG_VERSION")),
+                "--write-out",
+                "%{http_code} %{redirect_url}",
+                "--output",
+            ])
+            .arg(dest)
+            .arg("--url")
+            .arg(url)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if key.is_some() {
+            // The header comes from standard input, so no other process can
+            // read the key from the argument list.
+            command.args(["--header", "@-"]).stdin(Stdio::piped());
+        }
+        let mut child = command
+            .spawn()
+            .map_err(|error| format!("curl: {}", redact_key(&error.to_string(), key)))?;
+        if let (Some(key), Some(mut stdin)) = (key, child.stdin.take()) {
+            use std::io::Write;
+            if let Err(error) = writeln!(stdin, "Auth-Key: {}", key.expose()) {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "curl: {}",
+                    redact_key(&error.to_string(), Some(key))
+                ));
+            }
+        }
         let started = Instant::now();
         let status = loop {
             if cancel.load(Ordering::Relaxed) {
@@ -123,6 +162,7 @@ impl Curl {
         }
         if !status.success() {
             let _ = fs::remove_file(dest);
+            let err = redact_key(&err, key);
             let reason = err.lines().last().unwrap_or("").trim();
             return Err(if reason.is_empty() {
                 format!("download failed ({status})")
@@ -143,6 +183,13 @@ impl Curl {
 struct Hop {
     code: u32,
     redirect: String,
+}
+
+fn redact_key(text: &str, key: Option<&crate::api_keys::Secret>) -> String {
+    match key {
+        Some(key) => crate::api_keys::redact(text, &[key]),
+        None => text.to_owned(),
+    }
 }
 
 impl Fetcher for Curl {

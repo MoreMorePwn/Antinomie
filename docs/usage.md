@@ -35,6 +35,20 @@ application and base versions; existing VMs keep their pinned base.
   pySigma, which **Tools > Analysis tools** installs for Antinomie; it needs
   Python 3.11 or newer with venv support (`python3-venv` on Debian/Ubuntu).
 
+- **Tools > Detection rules > IOC** keeps seven abuse.ch datasets on your
+  computer for matching a run's indicators offline: ThreatFox `full.csv`, the
+  URLhaus dump and payload list, Feodo Tracker's `ipblocklist.json` and the
+  SSLBL IP, JA3 and certificate lists. They are stored in the data folder
+  (about 640 MB together), never in the project, and change only when you press
+  **Download** or **Update** (or **Download / Update all**); nothing updates by
+  itself. Each row shows its records, size, the date it was fetched and its age
+  (a warning appears when a dataset is over 14 days old), its terms (Feodo and
+  SSLBL are CC0; ThreatFox and URLhaus are free under abuse.ch's fair use with
+  an Auth-Key set in **Tools > API keys**) and a switch. A download is saved
+  whole or not at all: when one fails the previous copy stays in use and the
+  status line names the dataset that failed. The same tab lists the **known
+  false positives** you have marked, which you can remove.
+
 ## 1. Get a base image
 
 The **Base images** section in the left sidebar lists installed bases. Use

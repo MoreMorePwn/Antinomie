@@ -1015,6 +1015,49 @@ is Tools > API keys.
   window has no key field: it shows a notice and an **Open API keys…** button
   (`SamplesView::take_open_keys`) and reads the key again after a change.
 
+### IOC datasets in the Rule manager (0.7.1)
+
+Host only. `monitor-core/src/ioc/` holds the datasets; `monitor-ui/src/rules_window/ioc.rs`
+is the IOC tab of Tools > Detection rules; `monitor-core/src/known_fp.rs` is the
+false-positive list.
+
+* **Feeds.** `feeds.rs` has the table of seven (`threatfox`, `urlhaus`,
+  `urlhaus-payloads`, `feodo`, `sslbl-ip`, `sslbl-ja3`, `sslbl-cert`): URL
+  (never with a key), usual size, terms, whether the download needs the Auth-Key
+  (ThreatFox, URLhaus and the payload list do). Stored under
+  `<data dir>/ioc/feeds/<id>/`: `meta.json` (data file name, fetch time, record
+  count, size, SHA-256, URL) is the commit point, `data-<time>-<n>.txt` the plain
+  text, `last-error.json` the reason of a failed update. `settings.json` lists
+  the feeds switched off. Nothing of this is in the repository or in run exports.
+* **Update.** `download.rs`: manual only. A feed is fetched through the rule
+  manager's `Fetcher` (HTTPS only, bounded, cancellable; the Auth-Key goes to
+  curl's standard input and only to abuse.ch hosts, only for the feeds that
+  need it), into a private folder under `ioc/staging/`, unpacked if it is a zip, parsed completely
+  (a download with no records, or mostly lines that are not records, is
+  refused), then the new data file is renamed into the feed folder and
+  `meta.json` is replaced atomically; older data files are removed last. A
+  failure or cancel leaves the previous copy and `meta.json` untouched, records
+  the reason in `last-error.json` and is reported by name (`Updated 6 of 7.
+  Failed: SSLBL IP: …; the previous copy was kept`). Free space for the download
+  and the text is checked first. A dataset over 14 days old is flagged
+  (`FeedMeta::stale`).
+* **Parsing.** `records.rs` reads each feed as a stream, finding columns by the
+  names in the `#` header line (with fixed defaults) so a reordered file still
+  works. A line is reduced to the normal forms of the values it could match
+  (`kind.rs`: `ip:port`, domain, URL without scheme/default port/fragment,
+  SHA-256, MD5, SHA-1, JA3, certificate SHA-1); the full record is built only for
+  a value somebody asked about. The tests use small files in the feeds' real
+  formats; the real feeds are never downloaded by tests.
+* **Known false positives.** `known_fp.rs`: entries `{value, kind, dataset?,
+  reason, added}` in `<data dir>/known-false-positives.json`; `add`, `remove`,
+  `load` and `find` are the whole API, so another window can use the list.
+  An entry with a dataset excuses only that dataset's records; one without
+  excuses any.
+* **UI.** The IOC tab shows the Auth-Key state, a stale banner, a table (on/off,
+  dataset, used for, records, size, date, age, state, Download/Update), details
+  (source, terms, stored copy, last failure) and the false-positive list. It
+  uses the Settings permission for outbound downloads like the other tabs.
+
 ### Accepted ANT-T0097 host UI performance (0.6.2)
 
 Remove render-time filesystem checks for host chooser availability; resolve

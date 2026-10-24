@@ -70,9 +70,11 @@ impl Model {
         ui.label(RichText::new("Installed packs and custom groups are the only production rules. Scans do not download rules or upload evidence.").color(theme::text()));
         let mut engine = ENGINES
             .iter()
-            .find(|(id, _)| *id == self.engine)
-            .map_or("yara", |(id, _)| *id);
-        let items: Vec<_> = ENGINES
+            .map(|(id, _)| *id)
+            .chain([super::ioc::TAB])
+            .find(|id| *id == self.engine)
+            .unwrap_or("yara");
+        let mut items: Vec<_> = ENGINES
             .iter()
             .map(|(id, label)| {
                 let count = self
@@ -87,9 +89,14 @@ impl Model {
                 )
             })
             .collect();
+        items.push((super::ioc::TAB, TabItem::new("IOC")));
         if widgets::tabs(ui, items, &mut engine) {
             self.engine = engine.into();
             self.select_none();
+        }
+        if self.engine == super::ioc::TAB {
+            self.ioc_tab(ui, data_dir, outbound);
+            return;
         }
         if let Some(next) = self.engine_status(ui) {
             self.requested = Some(next);
@@ -184,7 +191,7 @@ impl Model {
         });
     }
 
-    fn notices(&mut self, ui: &mut egui::Ui, outbound: &mut bool) {
+    pub(super) fn notices(&mut self, ui: &mut egui::Ui, outbound: &mut bool) {
         if !*outbound {
             ui.horizontal_wrapped(|ui| {
                 crate::activity::warning(

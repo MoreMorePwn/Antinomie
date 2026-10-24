@@ -17,6 +17,7 @@ use std::{
 
 mod catalog_tab;
 pub(crate) mod first_run;
+mod ioc;
 mod page;
 #[cfg(test)]
 mod page_tests;
@@ -31,6 +32,8 @@ use page::{RuleText, Tab};
 pub(crate) enum RulesAction {
     AppDependencies,
     AnalysisTools,
+    /// Tools > API keys, where the abuse.ch Auth-Key is set.
+    ApiKeys,
 }
 
 enum Done {
@@ -41,6 +44,8 @@ enum Done {
     Registry(Registry, String),
     Opened(Registry, Option<Catalog>, String),
     Status(String),
+    /// A dataset download finished; the text says what was updated or failed.
+    Ioc(String),
 }
 
 struct Job {
@@ -89,6 +94,8 @@ pub(crate) struct Model {
     changed: bool,
     /// Tools the triage scans run; a manifest export qualifies packs against them.
     tools: ruleset::ToolConfig,
+    /// The IOC tab: the abuse.ch datasets and the known false positives.
+    ioc: ioc::State,
 }
 
 impl Model {
@@ -240,6 +247,7 @@ impl Model {
                     self.changed = true;
                 }
                 Ok(Done::Status(text)) => self.status = text,
+                Ok(Done::Ioc(text)) => self.ioc_done(text),
                 Err(error) => {
                     self.changed |= !self.loaded;
                     self.status_error = Some(error.clone());
