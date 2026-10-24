@@ -1058,6 +1058,38 @@ false-positive list.
   (source, terms, stored copy, last failure) and the false-positive list. It
   uses the Settings permission for outbound downloads like the other tabs.
 
+### abuse.ch Suricata rule packs with update checks (0.7.1)
+
+Host only. `monitor-core/src/ruleset/abusech.rs` and `monitor-ui/src/rules_window/abusech.rs`
+(the **abuse.ch** tab of the IDS engine).
+
+* **Packs.** `LIVE_PACKS`: `abuse-ch-threatfox` and `abuse-ch-urlhaus` (Auth-Key),
+  `abuse-ch-feodo`, `abuse-ch-sslbl-ip`, `abuse-ch-sslbl-ja3` and
+  `abuse-ch-sslbl` (the certificate pack that was already in the catalog, same
+  id). Each is a `SourcePack` for the `ids` engine built from the file that was
+  just downloaded, so it goes through `install_source` like any pack (filter,
+  index, provenance, the previous version kept on failure). The aggressive files
+  are never listed.
+* **Pin.** The publisher rewrites the file in place, so the pin is the snapshot:
+  `revision` is abuse.ch's `Last updated` stamp (`YYYYMMDDTHHMMSSZ`, or `snapshot`
+  when the file states none) plus the first 8 hex of the SHA-256, and the source
+  is a pinned `file` download with that digest, so the install verifies exactly
+  what was checked.
+* **Check and update.** `check_live` downloads the file into staging, refuses
+  anything without a rule line, keeps it as `rules/live/<id>.rules` and records
+  `{at, sha256, size, stamp, rules}` in `rules/live/checks.json`. A pack is not
+  requested again until [`MIN_CHECK_SECONDS`] (300) have passed; inside that
+  window the recorded answer is returned and no request is made, however often the
+  button is pressed. `install_live` runs a check (reusing a fresh one) and installs
+  from the kept file through a `Fetcher` that copies it, so check plus install is
+  one request. `live_states` compares the installed pack's download digest with
+  the last snapshot: Not installed, Not checked, Up to date or Update available.
+* **Key.** The Auth-Key goes only to the two packs that need it (`FeedFetcher`
+  picks the keyed or the plain `Curl` by URL; `Curl::with_auth_key` writes the
+  header to curl's standard input and only for abuse.ch hosts).
+* **Tests.** Fixtures in the packs' real format and mock fetchers; no request
+  leaves the machine.
+
 ### Accepted ANT-T0097 host UI performance (0.6.2)
 
 Remove render-time filesystem checks for host chooser availability; resolve

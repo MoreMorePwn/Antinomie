@@ -16,6 +16,8 @@ pub(super) enum Tab {
     #[default]
     Installed,
     Catalog,
+    /// The IDS engine's abuse.ch packs, with update checks.
+    Abusech,
 }
 
 /// The source text of the rule shown in the details.
@@ -117,24 +119,27 @@ impl Model {
             .filter(|o| o.engine == self.engine)
             .count();
         let mut tab = self.tab;
-        widgets::tabs(
-            ui,
-            [
-                (
-                    Tab::Installed,
-                    TabItem::new("Installed").badge(installed.to_string(), Tone::Plain),
-                ),
-                (
-                    Tab::Catalog,
-                    TabItem::new("Catalog").badge(offered.to_string(), Tone::Plain),
-                ),
-            ],
-            &mut tab,
-        );
+        let mut tabs = vec![
+            (
+                Tab::Installed,
+                TabItem::new("Installed").badge(installed.to_string(), Tone::Plain),
+            ),
+            (
+                Tab::Catalog,
+                TabItem::new("Catalog").badge(offered.to_string(), Tone::Plain),
+            ),
+        ];
+        if self.engine == "ids" {
+            tabs.push((Tab::Abusech, TabItem::new("abuse.ch")));
+        } else if tab == Tab::Abusech {
+            tab = Tab::Installed;
+        }
+        widgets::tabs(ui, tabs, &mut tab);
         self.tab = tab;
         match self.tab {
             Tab::Installed => self.installed_tab(ui, data_dir, *outbound),
             Tab::Catalog => self.catalog_tab(ui, data_dir, *outbound),
+            Tab::Abusech => self.abusech_tab(ui, data_dir, outbound),
         }
     }
 

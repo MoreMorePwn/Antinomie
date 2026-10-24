@@ -49,6 +49,18 @@ application and base versions; existing VMs keep their pinned base.
   status line names the dataset that failed. The same tab lists the **known
   false positives** you have marked, which you can remove.
 
+- **Tools > Detection rules > IDS > abuse.ch** offers six Suricata rule packs from
+  abuse.ch: ThreatFox, URLhaus (exact-URL HTTP rules), Feodo Tracker, SSLBL
+  botnet C2 IPs, SSLBL JA3 fingerprints and the SSL certificate blacklist. The
+  *aggressive* variants, which abuse.ch itself warns produce false positives,
+  are not offered. abuse.ch regenerates these files about every five minutes, so
+  the tab shows how old each installed pack is and **Check** compares the live
+  file with the installed one (a pack is asked at most once in five minutes, even
+  if you press the button again); **Update** installs the newest snapshot and
+  keeps the old version if it fails. ThreatFox and URLhaus need the Auth-Key in
+  **Tools > API keys**; Feodo and SSLBL are CC0 and need none. Nothing is fetched
+  until you press a button and have allowed downloads.
+
 ## 1. Get a base image
 
 The **Base images** section in the left sidebar lists installed bases. Use

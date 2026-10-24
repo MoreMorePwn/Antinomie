@@ -15,6 +15,7 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
+mod abusech;
 mod catalog;
 mod engines;
 mod exclusions;
@@ -39,8 +40,8 @@ mod yara;
 pub(crate) use exclusions::selection_exclusion;
 
 pub use self::{
-    catalog::*, groups::*, index::*, packs::*, registry::*, requirements::*, rule_text::*,
-    selection::*, source_catalog::*, source_fetch::*, source_install::*,
+    abusech::*, catalog::*, groups::*, index::*, packs::*, registry::*, requirements::*,
+    rule_text::*, selection::*, source_catalog::*, source_fetch::*, source_install::*,
     source_yara::REPOSITORY_LICENSE_META,
 };
 use self::{
