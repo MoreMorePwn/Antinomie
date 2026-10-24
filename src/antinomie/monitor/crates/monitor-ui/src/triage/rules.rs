@@ -39,7 +39,7 @@ fn collect_hits(cx: &ctx::Ctx, st: &mut state::State) -> Vec<Hit> {
     hits
 }
 
-pub(super) use engine::{Engine, Options, Output};
+pub(super) use engine::{Engine, InfoMark, Options, Output};
 pub(super) use frames::{FrameKind, SUPPRESSION_VERSION};
 pub(super) use rows::{view_keeps, View, COL_PROCESS, COL_SUMMARY, COL_TIER, COL_TIME, HEADERS};
 pub(super) use table::{spec, Spec};
@@ -131,6 +131,14 @@ impl Category {
         Self::Lateral,
         Self::Exfiltration,
     ];
+
+    /// The place in [`Category::ALL`]: the chip's bit and the graph's heat row.
+    pub(super) fn index(self) -> usize {
+        Self::ALL
+            .iter()
+            .position(|other| *other == self)
+            .unwrap_or(0)
+    }
 
     /// The value of `finding.category` in a filter.
     pub(super) fn tag(self) -> &'static str {

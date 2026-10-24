@@ -35,6 +35,17 @@ pub(in crate::triage) struct Output {
     pub badge: u64,
     /// Rows counted for each task's chip in the process tree.
     pub tasks: Suspicious,
+    /// INFO matches that were counted without a row, by time: what the graph's
+    /// phases read when INFO rows are not built.
+    pub info: Vec<InfoMark>,
+}
+
+/// One INFO match kept as a count at a time, not as a row.
+pub(in crate::triage) struct InfoMark {
+    pub ns: u64,
+    pub count: u32,
+    pub rule: &'static str,
+    pub category: super::Category,
 }
 
 /// Where the host uploads the resource collector of a base from before 0.7.0; the
@@ -326,10 +337,21 @@ impl Engine {
         aggs.sort_by_key(|agg| agg.first_ns);
         let mut info_matches = self.info_matches;
         let mut shown = Vec::new();
+        let mut info = Vec::new();
         for agg in aggs {
             if agg.tier == Tier::Info {
                 info_matches += agg.count;
                 if !self.options.show_info {
+                    if !agg.hidden() && agg.first_ns != 0 {
+                        if let Some(spec) = spec(agg.rule) {
+                            info.push(InfoMark {
+                                ns: agg.first_ns,
+                                count: u32::try_from(agg.count).unwrap_or(u32::MAX),
+                                rule: agg.rule,
+                                category: spec.category,
+                            });
+                        }
+                    }
                     continue;
                 }
             }
@@ -346,6 +368,7 @@ impl Engine {
             notes: std::mem::take(&mut self.notes),
             badge: 0,
             tasks: Suspicious::new(),
+            info,
         };
         output.tiers[Tier::Info.index()] = info_matches;
         output.capped += held_back;
