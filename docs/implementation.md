@@ -2070,12 +2070,21 @@ rebuilds one from the kernel's BTF), one for a headerless dump and one for rows
 cut at 500,000. A report the tool did not write fails the run with a message
 saying so; an error line of the tool becomes the run's error.
 
+**False banner mismatch.** MemNixFS takes a table's kernel release from the
+dwarf2json metadata name or the file name (`vmlinux`, `symbols.json.xz`), not
+from `linux_banner`, so it logs `ISF/dump MISMATCH` for every base table even
+though the offsets are right. When the log has that line, `memnixfs/banner.rs`
+reads `linux_banner` from the table (xz JSON, base64 `constant_data`) and
+searches the dump for that exact text; if it is there, the note is dropped. An
+unreadable table or a different banner keeps the note.
+
 **Check.** `cargo run --release --example memnixfs-check DATA RECORDING DUMP
 [SYMBOLS.xz] REPORT...` runs reports on a real dump. On a 2.0 GiB QEMU dump
 with the base's dwarf2json table (5 PT_LOAD ranges, no VMCOREINFO) it produced
 92 processes, 23 triage lines, the memory ranges and 22 recovered files in 50
 to 135 s, with partial notes (the DTB scan found no match; the table names
-its kernel `vmlinux`, so the tool reports a banner mismatch); processes and
+its kernel `vmlinux`, so the tool reports a banner mismatch that the host
+then checks against the table's own banner); processes and
 page-cache files were still recovered. Unit tests use a fake `memnixfs`
 script and generated headers; no dump is stored in the repository.
 

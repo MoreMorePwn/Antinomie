@@ -26,6 +26,7 @@ use std::{
     time::Duration,
 };
 
+mod banner;
 mod convert;
 pub mod format;
 mod messages;
@@ -409,7 +410,14 @@ fn work(mut run: PluginRun, job: &Job, progress: &Mutex<Progress>, stop: &Atomic
             run.state = RunState::Finished;
             run.rows = converted.rows;
             run.exit_code = Some(0);
-            run.partial = messages::partial_notes(&log);
+            // MemNixFS compares the table's file name, not its banner, with
+            // the dump's kernel; the banner decides.
+            let verified = log.contains(messages::MISMATCH_MARKER)
+                && job
+                    .symbols
+                    .as_deref()
+                    .is_some_and(|symbols| banner::matches(symbols, &job.dump, stop));
+            run.partial = messages::partial_notes(&log, verified);
             run.partial.extend(converted.notes);
             if job.symbols.is_none() {
                 run.partial.push(messages::NO_SYMBOLS_NOTE.into());
