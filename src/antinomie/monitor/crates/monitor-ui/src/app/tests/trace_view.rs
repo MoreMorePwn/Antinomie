@@ -299,7 +299,11 @@ fn run_history_details_show_the_process_tree_then_the_enabled_analysis_only() {
             .top()
     };
     assert!(top("Recorded process tree") < top("Analysis enabled"));
-    assert!(top("Analysis enabled") < top("Static analysis: "));
+    // The static analysis is a branch with its checks below it.
+    assert!(top("Analysis enabled") < top("Static analysis"));
+    assert!(
+        top("Static analysis") < top(antinomie_monitor_core::AnalysisKind::Capabilities.label())
+    );
     top("Memory dump on exit");
     top("Network capture");
     assert!(!shown.iter().any(|(label, _)| label.contains("Core dump")));
