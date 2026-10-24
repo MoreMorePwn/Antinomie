@@ -279,8 +279,10 @@ The network capture is the guest's own view on every route.
 - **Triage › Process › Graph**: the same findings on process swimlanes against
   time. The lanes follow the process tree (▾/▸ folds a subtree; many leaf
   siblings of one program fold into one `name ×N` lane); markers take their
-  colour from the tier (HIGH red, MEDIUM amber, LOW cyan, INFO grey) and their
-  shape from the category, so colour is never the only cue. Above the lanes are
+  colour from the tier (HIGH red, MEDIUM amber, LOW cyan, INFO grey) and carry
+  the category's icon (a hollow disc when only packets showed the finding), so
+  colour is never the only cue; with many findings in view they become plain tier
+  dots. **Legend** on the toolbar explains every colour, icon, edge and band. Above the lanes are
   the **phases** of the run (recon, download, persistence, escalation,
   hide/inject, C2, spread, impact: a stretch needs one HIGH, a MEDIUM with a LOW,
   two MEDIUMs or five LOWs), a **severity curve** (HIGH counts 10, MEDIUM 4, LOW

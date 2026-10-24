@@ -18,6 +18,8 @@ use eframe::egui::{
 const DEPTH_PX: f32 = 10.0;
 /// Individual markers get a label with their count when fewer than this are in view.
 const LABELLED_BELOW: usize = 300;
+/// Icons need room: with more findings than this in view the markers are plain tier dots.
+const ICONS_BELOW: usize = 600;
 
 pub(in crate::triage) struct Config<'a> {
     pub index: &'a GraphIndex,
@@ -605,14 +607,19 @@ fn side_labels(painter: &Painter, layout: &Layout, colors: &Colors, tallest: u32
                 frame.heat.top() + row as f32 * frame.m.heat_h + frame.m.heat_h / 2.0,
             ),
             Align2::LEFT_CENTER,
-            Category::ALL[*category].chip(),
+            &format!(
+                "{} {}",
+                paint::icon(*category as u8),
+                Category::ALL[*category].chip()
+            ),
             (frame.m.heat_h - 2.0).min(10.5),
             colors.muted,
         );
     }
 }
 
-/// Lane names, lifelines, spawn and injection edges, and the markers.
+/// Lane names, lifelines, spawn and injection edges, and the markers: icons when
+/// the window holds few findings, plain tier dots when it holds many.
 fn lanes(
     painter: &Painter,
     layout: &Layout,
@@ -789,6 +796,7 @@ fn markers(
     let mut shapes: Vec<Shape> = Vec::new();
     if in_window.len() < INDIVIDUAL_BELOW {
         let labelled = in_window.len() < LABELLED_BELOW;
+        let icons = in_window.len() < ICONS_BELOW;
         for at in in_window {
             let record = &index.records[at];
             let Some(row) = layout.row_of(record.lane).filter(|row| rows.contains(row)) else {
@@ -808,14 +816,26 @@ fn markers(
                     ));
                 }
             }
-            paint::glyph(
-                &mut shapes,
-                record.category,
-                Pos2::new(x, y),
-                frame.m.glyph(),
-                color,
-                record.flags & index::HOLLOW != 0,
-            );
+            let hollow = record.flags & index::HOLLOW != 0;
+            if icons {
+                paint::marker(
+                    painter,
+                    &mut shapes,
+                    record.category,
+                    Pos2::new(x, y),
+                    frame.m.glyph(),
+                    color,
+                    hollow,
+                );
+            } else if hollow {
+                shapes.push(Shape::circle_stroke(
+                    Pos2::new(x, y),
+                    frame.m.glyph() * 0.62,
+                    Stroke::new(1.3_f32, color),
+                ));
+            } else {
+                paint::dot(&mut shapes, Pos2::new(x, y), frame.m.glyph() * 0.62, color);
+            }
             if record.count > 1 && labelled {
                 painter.text(
                     Pos2::new(x + 7.0, y),
@@ -845,14 +865,7 @@ fn markers(
                 layout.row_center(row),
             );
             let color = colors.tier[usize::from(cell.top).min(3)];
-            paint::glyph(
-                &mut shapes,
-                cell.lead,
-                at,
-                frame.m.glyph() * 0.72,
-                color,
-                false,
-            );
+            paint::dot(&mut shapes, at, frame.m.glyph() * 0.62, color);
             if cell.total() > 1 {
                 shapes.push(Shape::circle_filled(
                     at + eframe::egui::vec2(4.0, -4.5),
@@ -900,14 +913,7 @@ fn markers(
             let flush = |pending: Option<(f32, index::Cell)>, shapes: &mut Vec<Shape>| {
                 if let Some((x, cell)) = pending {
                     let color = colors.tier[usize::from(cell.top).min(3)];
-                    paint::glyph(
-                        shapes,
-                        cell.lead,
-                        Pos2::new(x, y),
-                        frame.m.glyph() * 0.72,
-                        color,
-                        false,
-                    );
+                    paint::dot(shapes, Pos2::new(x, y), frame.m.glyph() * 0.62, color);
                     if cell.total() > 1 {
                         shapes.push(Shape::circle_filled(
                             Pos2::new(x + 4.0, y - 4.5),

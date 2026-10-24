@@ -588,7 +588,8 @@ fn a_scan_reports_the_high_rules_it_found_and_a_poll_hands_them_to_the_toast() {
 /// X11 display; exits by itself.
 ///
 /// ANTINOMIE_QA_SCENE = sparse (a dropper, five findings) | dense (3,000
-/// findings on 60 lanes) | strip (the Summary strip),
+/// findings on 60 lanes) | mid (400 findings, 24 lanes) | strip (the Summary
+/// strip) | legend (the legend alone),
 /// ANTINOMIE_QA_THEME = dark | light | blue, ANTINOMIE_QA_SIZE = 1280x820,
 /// ANTINOMIE_QA_SECONDS = 20.
 #[test]
@@ -606,7 +607,9 @@ fn native_graph_fixture() {
     impl eframe::App for Fixture {
         fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
             egui::CentralPanel::default().show(ctx, |ui| {
-                if self.scene == "strip" {
+                if self.scene == "legend" {
+                    super::legend::body(ui);
+                } else if self.scene == "strip" {
                     self.strip.open = Some(true);
                     let tiers = self.index.tiers.map(u64::from);
                     self.strip.show(
@@ -651,6 +654,7 @@ fn native_graph_fixture() {
     let scene = var("ANTINOMIE_QA_SCENE");
     let index = match scene.as_str() {
         "dense" | "strip" => super::bench::synthetic(3_000, 60),
+        "mid" => super::bench::synthetic(400, 24),
         _ => tests::scene(),
     };
     eframe::run_native(
@@ -659,6 +663,7 @@ fn native_graph_fixture() {
             viewport: egui::ViewportBuilder::default().with_inner_size([width, height]),
             persist_window: false,
             event_loop_builder: Some(Box::new(|builder| {
+                builder.with_x11();
                 builder.with_any_thread(true);
             })),
             ..Default::default()

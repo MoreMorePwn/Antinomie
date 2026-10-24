@@ -42,6 +42,7 @@ impl TriageView {
                 ))
                 .on_hover_text("The graph in its own resizable window, with Details beside it")
                 .clicked();
+            super::legend::button(ui);
             ui.colored_label(
                 theme::muted(),
                 format!(

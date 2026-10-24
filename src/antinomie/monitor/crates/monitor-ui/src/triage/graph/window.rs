@@ -189,6 +189,7 @@ impl TriageView {
         ui.horizontal(|ui| {
             ui.checkbox(&mut self.graph_window.details, "Details beside the graph")
                 .on_hover_text("The selected finding, as in the Details panel");
+            super::legend::button(ui);
             if unplaced > 0 {
                 ui.colored_label(
                     theme::warn(),
