@@ -175,6 +175,7 @@ pub(crate) fn app() -> MonitorApp {
         upload_browser: Default::default(),
         explorer_browser: Default::default(),
         pending_upload: None,
+        uploaded: None,
         pending_launch: None,
         pending_launch_context: None,
         pending_sessions: BTreeMap::new(),
@@ -600,6 +601,7 @@ pub(super) fn section_report(id: &str, marker: &str) -> antinomie_monitor_core::
             },
         ],
         layer: None,
+        specimen_source: None,
     }
 }
 

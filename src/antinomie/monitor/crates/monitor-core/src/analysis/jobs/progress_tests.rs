@@ -58,6 +58,8 @@ fn production_sandbox_publishes_light_results_while_heavy_tool_runs() {
         report_len: 0,
         specimen_publication: None,
         progress: Default::default(),
+        host_copy: None,
+        supplement: None,
     };
     let mut child = spawn_worker_binary(&job, &executable, Some(&tools)).unwrap();
     let mut watch = progress::Watch::default();

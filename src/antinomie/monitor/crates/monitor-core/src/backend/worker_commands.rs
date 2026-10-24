@@ -691,6 +691,11 @@ impl Worker {
                 path,
                 analysis,
             } => self.analyze_host_file(&vm_id, &path, analysis),
+            Command::AnalyzeMore {
+                directory,
+                run_id,
+                checks,
+            } => self.analyze_more(&directory, run_id, &checks),
             Command::CancelAnalysis { analysis_id }
                 if self.host_analysis.cancel(&analysis_id).is_ok() =>
             {

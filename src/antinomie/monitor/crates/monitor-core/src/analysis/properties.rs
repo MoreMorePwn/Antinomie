@@ -515,6 +515,7 @@ mod tests {
             reason: None,
             sections: vec![],
             layer: None,
+            specimen_source: None,
         }
     }
 

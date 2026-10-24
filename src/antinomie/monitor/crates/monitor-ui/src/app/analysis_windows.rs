@@ -176,6 +176,28 @@ impl MonitorApp {
             Some(crate::analysis::ReportAction::Cancel(analysis_id)) => {
                 self.send(Command::CancelAnalysis { analysis_id })
             }
+            Some(crate::analysis::ReportAction::RunCheck { report_id, kind }) => {
+                let Some(directory) = self.analysis_directory(&report_id) else {
+                    self.report_error("Retained result directory is unavailable".into());
+                    return;
+                };
+                let run_id = self
+                    .snapshot
+                    .runs
+                    .iter()
+                    .chain(&self.history)
+                    .find(|run| {
+                        run.analysis
+                            .as_ref()
+                            .is_some_and(|report| report.id == report_id)
+                    })
+                    .map(|run| run.id.clone());
+                self.send(Command::AnalyzeMore {
+                    directory,
+                    run_id,
+                    checks: vec![kind],
+                });
+            }
             Some(crate::analysis::ReportAction::ShowReport { report_id }) => {
                 if self.analysis_report(&report_id).is_some() {
                     self.selected_analysis = Some(report_id);

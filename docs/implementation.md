@@ -1036,6 +1036,64 @@ Host only: `monitor-ui/src/triage/graph/`, nothing needs a guest change.
   screenshots under Xvfb), `graph/bench.rs` (120k findings: paint under 4 ms,
   no repaint when idle, memory, the million-finding build).
 
+### File activity window (0.7.1)
+
+Host only; it uses what the recordings already hold. **Per-file history…** in Triage ›
+Files (and in a Changed file's Details) opens a floating `egui::Window` owned by
+`TriageView::file_window`, drawn from `TriageView::show` over whichever section is
+shown.
+
+* **Index** (`triage/file_activity.rs`). `FileIndex::note_activity` runs for every file
+  call (in the early return of calls that change nothing and in the read/write path,
+  before the change bookkeeping), with the call's `file_category::Hit`s, the path (the
+  old name for a rename or link, the new one in `new_name`), the descriptor, the guest's
+  file identity and, for a successful read or write, a `Transfer`: offset, length, the
+  first 64 captured octets (`CapturedPayload::head`, up to the first uncaptured byte),
+  whether captured octets are fewer than the transferred, and whether the write ended
+  past the file's known size. `Builder` keys a file by its identity, else by the file its
+  name leads to (`current`: a rename or link moves or adds a name, an unlink or rename
+  frees one), else by the name, else by task and descriptor. Another identity at the
+  same name is a second entry. Bounds: 4096 files, 512 calls a file, 100,000 calls, 16
+  other names; the rest are counted and the window says so.
+* **Kinds.** Delete, Rename, Link, Create, Open, Exec, Write, Resize, Read, Attributes,
+  Map, Probe, Other, chosen from the hits in that order. A refused call is kept with its
+  errno; a file with only refusals is marked. A delete notes the links left from the
+  identity (`last name removed`, `1 link remains`); only a last name sets `deleted`.
+* **Contents.** `FileIndex::finish_all` joins each activity to its `Change` (by identity,
+  else path) for `Change::contents()`: sizes, the guest's hash, the change gaps and up
+  to 32 runs of 32 differing bytes from `original`/`final_data` (`ByteRun`, `?` for an
+  octet not captured, `added` past the original size). Nothing is inferred.
+* **Graph** (`file_activity/graph.rs`). `layout` merges neighbouring calls of the same
+  kind, process and outcome into nodes (60, then one `+N more` node), one lane per
+  process; `show` paints boxes and elbow arrows with the theme colours and hit-tests
+  clicks. `file_activity/window.rs` holds the list (filter, toggles, order, virtualised
+  rows), the header chips, the call grid (200 rows) and Content changes. The chosen
+  file is kept by path and first call so a new index keeps it.
+* **Tests.** `triage/files.rs` tests (story, links, identity reuse, rename without
+  identity, offsets/lengths/content/extension, appends, refusals, bounds) and
+  `triage/file_activity/tests.rs` (layout, limits, list filters, wording, the window
+  through egui: choosing a file and a node, the syscall jump).
+* **Guest records.** Files are grouped by `lifecycle.file_id` (device, inode, generation),
+  so history follows a file across renames and hard links, and by path where no record
+  exists. io_uring and AIO requests arrive through `async_files` as the calls they stand
+  for and are marked `async` (`Event::via`). Hash records (`antinomie.hash/1` before a
+  delete, `/2` at the last close with `HASH_WRITES`) are kept in order as `HashNote`s with
+  their CHANGED flag and skip reason, and the window says when two digests differ.
+* **Not in the host data (0.8.0, guest capture).** (0) Writes through a shared mapping
+  leave no payload and no call; only a different hash at the last close shows the file
+  changed, and which bytes is unknown. (1) Write payloads beyond what the
+  tracer captures per call: the bytes of a large write are cut and marked `…`; a
+  per-file write journal or content-addressed chunks would give the whole content.
+  (2) The file position of each read and write (`f_pos`/`ki_pos`): without it an
+  append, a shared descriptor and a descriptor opened before the capture have no offset.
+  (3) The file's contents before the run changed it: an overwritten, truncated or
+  deleted file, and a rename destination that was replaced, are known only from what
+  the run read; a copy-on-first-write capture (or at least a size, and a hash at open)
+  is missing. (4) Contents at the last close and just before an unlink: only SHA-256 up
+  to 16 MiB exists. (5) Writes through shared mappings (`msync`), `sendfile`,
+  `copy_file_range`, `splice`, reflinks and `fallocate` ranges. (6) The size after each
+  write, so that "extends the file" is exact and not derived from reads.
+
 ### FLOSS strings in static analysis (0.7.1)
 
 Host only. `AnalysisKind::Floss` ("FLOSS strings (decoded, stack, tight)") is a
@@ -1068,6 +1126,81 @@ Deep analysis check, off by default because a run takes minutes.
 * **Progress.** The check runs after the light checks, in the same tier as capa;
   the active tool shows as "FLOSS"; the worker deadline adds the run's
   budget. The FLOSS tab shows its row count as a badge like Strings.
+
+### Host copy of an uploaded specimen (0.7.1)
+
+Host and guest. Upload and Run puts the host file in the guest; static analysis
+of that run no longer has to read it back.
+
+* **Request.** The UI remembers the finished Upload and Run (`MonitorApp::uploaded`,
+  the upload intent with its VM, boot and recording identity) and sets
+  `ExecRequest::host_copy` (`#[serde(skip)]`: a host path is never saved with the
+  run) only when the run's path is the upload's guest path in the same session.
+* **Offer.** After `Jobs::submit` the backend calls `Jobs::offer_host_copy` when the
+  guest offers `EXEC_HASH_ROOT`. The file must be a regular file of exactly the
+  acquisition's length. It is copied to `specimen.host` in the report's folder,
+  synced, read back and hashed there, so the hash is of the store copy and a later
+  change of the original does not matter. The job keeps its guest handle but
+  `Job::hold_for_host_copy` stops `acquire_next` reading from it for ten
+  seconds (`HASH_WAIT`) or until a verdict.
+* **Verdict.** `session_transport` and the pre-acknowledgement replay pass every
+  ingested event to `launch_image_hash`: the `Exec` hash record of call 0 (the
+  launched image). A script's interpreter, a file that changed while read or a
+  hash the guest did not compute give no digest. `Jobs::guest_hash(run, digest)`
+  sets the job `Matched` when the digest equals the staged hash, otherwise
+  `Rejected`. A rejection or the end of the wait removes the staged copy and the
+  guest fetch goes ahead unchanged.
+* **Adoption.** On `Matched`, `specimen.host` is renamed to `specimen`, the partial
+  guest file is dropped, the handle is released unread and the report is queued
+  as after a transfer, so the analysis starts before (or without) the fetch.
+  `specimen_sha256` is the staged hash, which equals the guest's.
+* **Record.** `AnalysisReport::specimen_source` (`host_copy` or `guest`, absent in
+  reports from before this and for host-only analyses) is set by the host and
+  restored from the host's own report whenever a worker report is read
+  (`read_report`). The Identity card shows it as **Specimen source**.
+* **Limits.** The guest hashes files up to 16 MiB (`ANTC_HASH_FILE_MAX`); a larger
+  program has no guest hash and is fetched. The guest records no hash for a file
+  that has not run, so Analyze Only still fetches.
+* **Tests.** `jobs/host_copy.rs` (match, mismatch, no hash, late hash, wrong size,
+  the store copy is the one hashed, cancel cleanup, report round trip),
+  `backend/tests.rs` (which exec record may vouch), `app/tests/upload.rs` and
+  `analysis/workspace_tests.rs`.
+
+### Checks added to a finished analysis (0.7.1)
+
+Host only. The Categories card of the Static analysis Overview lists a **Run** button
+for every `AnalysisKind` the report has no section for. It sends `ReportAction::RunCheck` and the app `Command::AnalyzeMore
+{ directory, run_id, checks }`; the backend refuses a relative path or one with `..`
+and queues it on `host_analysis`, which needs no VM.
+
+* **Job** (`jobs/supplement.rs`, `Jobs::analyze_more`). The folder's `report.json` must
+  be `Complete` or `Partial`, no job of that report id may be waiting, and the kind must
+  be new (or `Unavailable`, which the backend accepts to run it again; the window does
+not offer that, because the extra button widened the Unavailable row past the narrow
+layout). The job's report is the saved one (same id, source path,
+  hash, specimen source) with the new sections `Pending`; its specimen is a host-file
+  copy of the retained `specimen` (`submit_host_opened_for`, which carries the run id)
+  in `<folder>/extra/<id>`, so quota, reservation, cancel and the worker sandbox are
+  the ordinary ones. The worker runs only `Pending` sections (`progress::pending_order`),
+  budgets only those (`worker_deadline`, rlimits, `/tmp` size), and `progress::merge`
+  leaves a finished section, listing included, as it is.
+* **Merge** (`Job::merge_supplement`, called from `Jobs::finish`). Carried sections are
+  taken from the saved report again, the new listings (`adopt_listings` skips carried
+  kinds) and `output/artifacts` move into the folder (an existing name is an error),
+  the job folder is removed and the report is saved in the folder as the original was.
+  A failed or cancelled check leaves its section `Unavailable` with the reason and makes
+  the report `Partial`. Unpacking queues its layers as it does after a first analysis
+  (`queue_layers` is skipped when Unpacking was already there). Retained bytes count only
+  what the job added (`Job::retained_len`).
+* **Updates.** Updates carry the report's id and the run id; `host_analysis_updates`
+  gives a run's report to the session run (`Session::run_analysis`, which saves the
+  run summary) and does not list it among the standalone reports. The window follows
+  by the `AnalysisUpdated` notification. A reopened recording reads `report.json`.
+* **Tests.** `jobs/supplement.rs` (join and persist, failed check, refusals),
+  `progress.rs` (pending-only order and deadline, finished sections kept),
+  `backend/worker_disks/tests.rs` (plain paths, run versus standalone),
+  `analysis/workspace_tests.rs` (Run enabled only when finished) and
+  `app/tests/analysis.rs` (the command).
 
 ### Regex matches window (0.7.1)
 

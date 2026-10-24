@@ -23,6 +23,11 @@ impl Jobs {
             self.finish(job);
             return None;
         }
+        // An uploaded program's host copy may stand in for the transfer.
+        if job.hold_for_host_copy() {
+            self.queue.push_back(job);
+            return None;
+        }
         if job.received_len < job.total_len {
             let Some(id) = job.handle else {
                 fail(
@@ -59,11 +64,18 @@ impl Jobs {
             self.finish(job);
             return None;
         }
+        let fetched = job.handle.is_some();
         if let Some(id) = job.handle.take() {
             self.release.push_back(id);
         }
         job.report.specimen_len = Some(job.total_len);
-        job.report.specimen_sha256 = Some(format!("{:x}", job.digest.clone().finalize()));
+        // The identity is the guest's hash either way: a host copy is only
+        // adopted when it equals the hash the guest recorded.
+        job.report.specimen_sha256 = Some(
+            job.adopted_sha256()
+                .unwrap_or_else(|| format!("{:x}", job.digest.clone().finalize())),
+        );
+        job.record_specimen_source(fetched);
         // The durable report must say Queued before the worker can see it.
         job.report.state = AnalysisState::Queued;
         match job.publish_specimen_report() {

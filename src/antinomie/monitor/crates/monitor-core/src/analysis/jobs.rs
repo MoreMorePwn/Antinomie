@@ -25,15 +25,18 @@ use std::{
 };
 
 mod acquisition;
+mod host_copy;
 mod host_file;
 mod layers;
 mod sandbox_account;
 mod sandbox_run;
 mod specimen_publication;
+mod supplement;
 mod worker_exe;
 pub(crate) use sandbox_account::host_user_name;
 use sandbox_account::sandbox_passwd;
 pub(crate) use sandbox_run::{Mounts, run_sandboxed, run_sandboxed_sized, run_sandboxed_with};
+pub(in crate::analysis) use supplement::carried;
 pub(crate) use worker_exe::worker_executable;
 
 static CLEANUP_PENDING: AtomicBool = AtomicBool::new(false);
@@ -64,6 +67,10 @@ pub(crate) struct Job {
     report_len: u64,
     specimen_publication: Option<storage::JsonReceipt>,
     progress: progress::Watch,
+    /// The uploaded file staged on the host while the guest's hash is awaited.
+    host_copy: Option<host_copy::HostCopy>,
+    /// Set when the job runs checks added to a finished analysis.
+    pub(super) supplement: Option<supplement::Supplement>,
 }
 #[derive(Default)]
 pub(crate) struct Jobs {
@@ -110,6 +117,7 @@ pub(crate) fn new_report(path: &str, selection: &AnalysisSelection) -> AnalysisR
             })
             .collect(),
         layer: None,
+        specimen_source: None,
     }
 }
 pub(crate) fn fail(report: &mut AnalysisReport, state: AnalysisState, reason: impl Into<String>) {
@@ -220,6 +228,8 @@ impl Jobs {
                 report_len: 0,
                 specimen_publication: None,
                 progress: Default::default(),
+                host_copy: None,
+                supplement: None,
             };
             self.queue.push_back(job);
             Ok(())
@@ -268,6 +278,7 @@ impl Jobs {
         report
     }
     fn finish(&mut self, mut job: Job) {
+        job.discard_host_copy();
         if let Some(id) = job.handle.take() {
             self.release.push_back(id);
         }
@@ -308,6 +319,7 @@ impl Jobs {
                 return;
             }
         }
+        job.merge_supplement();
         self.queue_layers(&mut job);
         if let Err(error) = persist_report(&job.directory, &job.report) {
             fail(
@@ -316,7 +328,7 @@ impl Jobs {
                 format!("analysis report persistence failed: {error}"),
             );
         }
-        let retained = directory_len(&job.directory).unwrap_or(job.reserved_len);
+        let retained = job.retained_len();
         self.retained_len = self.retained_len.saturating_add(retained);
         self.updates.push((job.run_id, job.report));
     }
@@ -376,14 +388,22 @@ impl Jobs {
                         ) {
                             Ok(report) => {
                                 job.report = report;
-                                adopt_listings(&job.directory, &mut job.report);
+                                adopt_listings(
+                                    &job.directory,
+                                    &mut job.report,
+                                    supplement::carried(&job.supplement),
+                                );
                             }
                             Err(error) => fail(&mut job.report, AnalysisState::Unavailable, error),
                         }
                     } else {
                         let kept = progress::salvage(&job.directory, &mut job.report);
                         if kept {
-                            adopt_listings(&job.directory, &mut job.report);
+                            adopt_listings(
+                                &job.directory,
+                                &mut job.report,
+                                supplement::carried(&job.supplement),
+                            );
                         }
                         fail(
                             &mut job.report,
@@ -633,8 +653,13 @@ impl Drop for Jobs {
 const TRANSFER_DEADLINE: Duration = Duration::from_secs(120);
 
 /// Move validated worker listings next to the report; a listing that fails
-/// validation is dropped and its category marked partial.
-pub(super) fn adopt_listings(directory: &Path, report: &mut AnalysisReport) {
+/// validation is dropped and its category marked partial. A `carried` category
+/// is one a finished analysis already had: the worker did not make its listing.
+pub(super) fn adopt_listings(
+    directory: &Path,
+    report: &mut AnalysisReport,
+    carried: &[AnalysisKind],
+) {
     let output = directory.join("output/listings");
     let target = directory.join("listings");
     let mut total = 0u64;
@@ -643,6 +668,9 @@ pub(super) fn adopt_listings(directory: &Path, report: &mut AnalysisReport) {
         let Some(listing) = section.listing.clone() else {
             continue;
         };
+        if carried.contains(&section.kind) {
+            continue;
+        }
         let name = super::listing::file_name(section.kind);
         total = total.saturating_add(listing.bytes);
         let result = if total > super::listing::LISTINGS_MAX_TOTAL {
@@ -732,7 +760,12 @@ fn spawn_worker_binary(
     fs::create_dir(&artifacts).map_err(|e| e.to_string())?;
     fs::set_permissions(&artifacts, fs::Permissions::from_mode(0o700))
         .map_err(|e| e.to_string())?;
-    let has = |kind| job.report.sections.iter().any(|s| s.kind == kind);
+    let has = |kind| {
+        job.report
+            .sections
+            .iter()
+            .any(|s| s.kind == kind && s.state == AnalysisSectionState::Pending)
+    };
     let decompiler = has(AnalysisKind::Decompilation);
     // capa and FLOSS unpack themselves into /tmp before they run.
     let tmp_size = if decompiler {
@@ -1069,8 +1102,10 @@ pub(super) fn read_report(
     if encoded.len() > REPORT_MAX_SIZE {
         return Err("worker report exceeded 128 KiB bound".into());
     }
-    let report: AnalysisReport =
+    let mut report: AnalysisReport =
         serde_json::from_slice(&encoded).map_err(|e| format!("worker report malformed: {e}"))?;
+    // Only the host says where the specimen came from.
+    report.specimen_source = expected.specimen_source;
     super::validation::validate_report(&report)?;
     if report.id != expected.id
         || report.source_path != expected.source_path
@@ -1239,6 +1274,8 @@ mod tests {
                     report_len: 0,
                     specimen_publication: None,
                     progress: Default::default(),
+                    host_copy: None,
+                    supplement: None,
                 }),
                 queue: VecDeque::new(),
                 acquiring: None,
@@ -1549,6 +1586,8 @@ time.sleep(30)
             report_len: 0,
             specimen_publication: None,
             progress: Default::default(),
+            host_copy: None,
+            supplement: None,
         };
         let started = Instant::now();
         let mut child = spawn_worker_binary(
@@ -1577,7 +1616,7 @@ time.sleep(30)
         );
         let mut report =
             read_report(&directory.join("output/report.json"), &job.report, true).unwrap();
-        adopt_listings(&directory, &mut report);
+        adopt_listings(&directory, &mut report, &[]);
         persist_report(&directory, &report).unwrap();
         for section in &report.sections {
             eprintln!(
@@ -1689,6 +1728,8 @@ time.sleep(30)
             report_len: 0,
             specimen_publication: None,
             progress: Default::default(),
+            host_copy: None,
+            supplement: None,
         };
         let mut child = spawn_worker_binary(
             &job,

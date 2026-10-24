@@ -593,6 +593,9 @@ fn identity(ui: &mut egui::Ui, report: &AnalysisReport) -> Option<ReportAction> 
     if let Some(hash) = &report.specimen_sha256 {
         rows.push(("SHA-256".to_owned(), hash.clone()));
     }
+    if let Some(source) = report.specimen_source {
+        rows.push(("Specimen source".to_owned(), source.label().to_owned()));
+    }
     for label in [
         "Format",
         "Architecture",
@@ -652,6 +655,11 @@ fn categories(
 ) -> Option<ReportAction> {
     use crate::widgets::{chip, Tone};
     let mut action = None;
+    // Checks can be added to an analysis that is not being made.
+    let finished = matches!(
+        report.state,
+        AnalysisState::Complete | AnalysisState::Partial
+    );
     crate::widgets::card(
         ui,
         "Categories",
@@ -673,6 +681,16 @@ fn categories(
                         ui.add_enabled(false, egui::Label::new(section_title(kind)))
                             .on_disabled_hover_text(NOT_REQUESTED);
                         chip(ui, "Not requested", Tone::Neutral);
+                        if run_button(
+                            ui,
+                            finished,
+                            "Run this check now; the rest of the analysis is not repeated",
+                        ) {
+                            action = Some(ReportAction::RunCheck {
+                                report_id: report.id.clone(),
+                                kind,
+                            });
+                        }
                     });
                     continue;
                 };
@@ -711,9 +729,17 @@ fn categories(
     action
 }
 
+/// The small Run button of a category; true when it was pressed.
+fn run_button(ui: &mut egui::Ui, enabled: bool, hover: &str) -> bool {
+    ui.add_enabled(enabled, egui::Button::new("Run").small())
+        .on_hover_text(hover)
+        .on_disabled_hover_text("Wait for the analysis to finish")
+        .clicked()
+}
+
 /// Why a category that is not in the report cannot be opened.
 pub(super) const NOT_REQUESTED: &str =
-    "Not part of this analysis; start one with this check selected";
+    "Not part of this analysis; Run in Overview > Categories adds it without starting over";
 
 const ALL_KINDS: [AnalysisKind; 13] = [
     AnalysisKind::Metadata,
@@ -1000,6 +1026,7 @@ mod tests {
                 AnalysisSection::new(AnalysisKind::Capabilities),
             ],
             layer: None,
+            specimen_source: None,
         };
         report.sections[1].state = AnalysisSectionState::Running;
         let words: Vec<_> = report

@@ -398,6 +398,27 @@ pub struct AnalysisLayer {
     pub parent_sha256: String,
 }
 
+/// Where the specimen of a run's analysis came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SpecimenSource {
+    /// The file the user uploaded, still on the host: copied into the run's
+    /// specimen store and used because its hash equals the one the guest
+    /// recorded.
+    HostCopy,
+    /// Read back from the guest.
+    Guest,
+}
+
+impl SpecimenSource {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::HostCopy => "host copy, hash matched guest",
+            Self::Guest => "fetched from guest",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AnalysisReport {
     pub id: String,
@@ -411,4 +432,9 @@ pub struct AnalysisReport {
     /// Set when this analysis is of a layer unpacked from another report's file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layer: Option<AnalysisLayer>,
+    /// Where the specimen came from; only the host sets it. The evidence
+    /// identity is the guest-recorded hash whichever it was. None for a report
+    /// from before this was recorded and for a host file with no guest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub specimen_source: Option<SpecimenSource>,
 }

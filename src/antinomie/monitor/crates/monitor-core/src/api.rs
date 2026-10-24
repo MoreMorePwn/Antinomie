@@ -491,6 +491,12 @@ pub struct ExecRequest {
     /// accepted there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route: Option<crate::route::RouteKind>,
+    /// The host file this program was uploaded from, when Upload and Run just
+    /// put it at `path`. Static analysis may use it instead of fetching the
+    /// program back, once the guest's hash of the executed file equals the
+    /// hash of the copy. Never saved with the run: it names a host path.
+    #[serde(skip)]
+    pub host_copy: Option<PathBuf>,
 }
 
 /// Persisted `artifacts.json` in a run directory links independently retained evidence.
@@ -1402,6 +1408,7 @@ impl Default for ExecRequest {
             core_timeout_ms: None,
             debug_on_start: false,
             route: None,
+            host_copy: None,
         }
     }
 }
@@ -1689,6 +1696,14 @@ pub enum Command {
         vm_id: String,
         path: PathBuf,
         analysis: crate::analysis::AnalysisSelection,
+    },
+    /// Run checks the finished analysis kept in `directory` was not asked for
+    /// and add them to its report, without a VM and without analyzing again.
+    /// `run_id` is the run the report belongs to, when it is a run's.
+    AnalyzeMore {
+        directory: PathBuf,
+        run_id: Option<String>,
+        checks: Vec<crate::analysis::AnalysisKind>,
     },
     OpenRecording {
         directory: PathBuf,

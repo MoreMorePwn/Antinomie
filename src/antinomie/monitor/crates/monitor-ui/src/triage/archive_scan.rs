@@ -383,7 +383,7 @@ pub(super) fn scan_archive_query(
         ..TriageInput::empty()
     });
     let omitted_files = file_index.omitted_files;
-    let all_changes = file_index.finish();
+    let (all_changes, activity) = file_index.finish_all();
     let ioc_files: Vec<files::IocFile> = all_changes
         .iter()
         .filter_map(files::Change::ioc_file)
@@ -672,6 +672,7 @@ pub(super) fn scan_archive_query(
         clock_anchor,
         bpf,
         bpf_omitted,
+        file_activity: Arc::new(activity),
         file_changes: file_changes
             .into_iter()
             .skip(request.offsets[2])

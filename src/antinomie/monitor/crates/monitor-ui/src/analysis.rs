@@ -495,6 +495,12 @@ pub(crate) enum ReportAction {
     },
     /// Open Tools > Analysis tools to install a missing tool.
     OpenAnalysisTools,
+    /// Run a check the analysis does not have, or could not run, and add it
+    /// to the report without repeating the rest.
+    RunCheck {
+        report_id: String,
+        kind: AnalysisKind,
+    },
     /// Make this report the one the Static Analysis panel shows.
     ShowReport {
         report_id: String,
@@ -814,6 +820,7 @@ mod tests {
                 })
                 .collect(),
             layer: None,
+            specimen_source: None,
         }
     }
 

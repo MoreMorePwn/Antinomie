@@ -290,7 +290,9 @@ fn requirements(
         Command::RefreshRemoteBases
         | Command::DownloadBase { .. }
         | Command::InstallTool { .. } => vec![Curl],
-        Command::AnalyzeOnly { .. } | Command::AnalyzeHostFile { .. } => vec![Bubblewrap],
+        Command::AnalyzeOnly { .. }
+        | Command::AnalyzeHostFile { .. }
+        | Command::AnalyzeMore { .. } => vec![Bubblewrap],
         Command::MeasureDisk { .. }
         | Command::OpenDiskReference { .. }
         | Command::SaveDiskPartition { .. } => vec![QemuImg],
