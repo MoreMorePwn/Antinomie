@@ -1123,6 +1123,42 @@ of that run no longer has to read it back.
   `backend/tests.rs` (which exec record may vouch), `app/tests/upload.rs` and
   `analysis/workspace_tests.rs`.
 
+### Pending analyses always settle (0.7.1)
+
+A run's `analysis` record starts as `acquiring` with every section `pending`. It is
+settled by `jobs::abandon` (Acquiring or Queued becomes `Unavailable`, Running becomes
+`Partial`, sections follow, the reason is kept) wherever the work cannot go on:
+
+* **The start failed.** `Session::failed_run_launch` calls
+  `ProgramRun::settle_unstarted_analysis` before it saves `run.json`, so a run whose
+  network capture or `EXEC` failed says `the run did not start: <error>`. (Before, the
+  record stayed `acquiring` forever.)
+* **The VM ended.** `Session::seal` shuts the job queue down, then settles any run whose
+  analysis is still active and has no job (`settle_orphaned_analyses`).
+* **The job was lost.** The same sweep runs after every analysis tick, so a run showing
+  an active analysis that `Jobs::tracks` does not know is settled the same pass.
+* **Load.** A saved run has no job queue behind it, so `saved_run` and `list_runs`
+  settle an active analysis in memory with "interrupted: the app or the VM ended first".
+  The files on disk are not rewritten.
+
+Every wait in acquisition has a bound and says why it ended, and a failed job always
+leaves the acquisition slot: `acquire_next` takes the job out of `acquiring` before it
+can fail, and `chunk` does the same.
+
+| Wait | Bound | When it expires |
+| --- | --- | --- |
+| Guest transfer (all chunks) | `TRANSFER_DEADLINE`, 120 s from submit | `Unavailable`, "specimen acquisition deadline exceeded" |
+| One guest read or release | 100 ms request timeout | the read fails the job; a release leaves guest expiry to reclaim it |
+| Guest hash for the host copy | `HASH_WAIT`, 10 s | the guest transfer goes ahead; waiting sections say why |
+| Copying and hashing the host file | `COPY_BUDGET`, 10 s, checked per 256 KiB | the offer is refused, the guest transfer goes ahead |
+| Durable report write | `PUBLICATION_DEADLINE`, 30 s from the end of the transfer | `Unavailable`, "did not finish within 30 seconds" |
+
+Tests: `jobs/acquisition.rs` (stalled report write, failed fetch frees the slot, lost
+handle, `abandon`), `jobs/host_copy.rs` (late and mismatching hash say why, copy
+budget), `run.rs` (a failed start is settled in `run.json`) and `recording.rs` (a saved
+run loads settled). The `Session` sweeps need a live session and are covered by the
+VM-backed examples, not by unit tests.
+
 ### Checks added to a finished analysis (0.7.1)
 
 Host only. The Categories card of the Static analysis Overview lists a **Run** button
