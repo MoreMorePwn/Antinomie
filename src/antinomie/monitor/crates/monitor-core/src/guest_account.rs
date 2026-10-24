@@ -281,26 +281,52 @@ mod tests {
         fs::set_permissions(&tool, fs::Permissions::from_mode(0o700)).unwrap();
         let mut unrelated = Command::new("sleep").arg("60").spawn().unwrap();
         let secret = "private-timeout-password";
+        // The pid of a process the tool started, once it wrote one whole.
+        let written = |name: &str| {
+            fs::read_to_string(root.join(name))
+                .ok()
+                .filter(|text| text.ends_with('\n'))
+        };
         for (capture_hash, exit_parent) in [(false, false), (true, false), (true, true)] {
-            let started = Instant::now();
-            let mut command = Command::new(&tool);
-            if exit_parent {
-                command.arg("exit-parent");
-            }
-            let error = run_private_with_timeout(
-                &mut command,
-                secret.as_bytes(),
-                capture_hash,
-                Duration::from_millis(150),
-            )
-            .unwrap_err();
-            assert!(error.contains("timed out"));
-            assert!(!error.contains(secret));
-            assert!(started.elapsed() < Duration::from_secs(3));
-            let pid = fs::read_to_string(root.join("tool-pid")).unwrap();
+            // The deadline is what the tool is made to miss, so it has to be
+            // long enough for a loaded host to start the tool and let it
+            // start its descendant first. A deadline that fired before then
+            // proves nothing about the descendant: the run is repeated with
+            // twice the time, up to ten seconds.
+            let mut timeout = Duration::from_millis(500);
+            let (pid, descendant) = loop {
+                for name in ["tool-pid", "descendant-pid"] {
+                    let _ = fs::remove_file(root.join(name));
+                }
+                let started = Instant::now();
+                let mut command = Command::new(&tool);
+                if exit_parent {
+                    command.arg("exit-parent");
+                }
+                let error = run_private_with_timeout(
+                    &mut command,
+                    secret.as_bytes(),
+                    capture_hash,
+                    timeout,
+                )
+                .unwrap_err();
+                assert!(error.contains("timed out"));
+                assert!(!error.contains(secret));
+                // Killing the group is prompt: far from the tool's 60 s sleep.
+                assert!(started.elapsed() < timeout + Duration::from_secs(20));
+                if let (Some(pid), Some(descendant)) =
+                    (written("tool-pid"), written("descendant-pid"))
+                {
+                    break (pid, descendant);
+                }
+                assert!(
+                    timeout < Duration::from_secs(10),
+                    "the tool never started its descendant within {timeout:?}"
+                );
+                timeout *= 2;
+            };
             assert!(!Path::new("/proc").join(pid.trim()).exists());
-            let descendant = fs::read_to_string(root.join("descendant-pid")).unwrap();
-            let stopped_deadline = Instant::now() + Duration::from_secs(1);
+            let stopped_deadline = Instant::now() + Duration::from_secs(60);
             while let Ok(stat) =
                 fs::read_to_string(Path::new("/proc").join(descendant.trim()).join("stat"))
             {

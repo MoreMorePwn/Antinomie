@@ -107,16 +107,21 @@ mod tests {
     fn kill_tree_stops_a_child_in_its_own_session_that_holds_the_pipe() {
         let mut command = Command::new("/bin/sh");
         command
-            .args(["-c", "setsid sleep 300 & wait"])
+            // The grandchild says it is in its own session, holding the pipe,
+            // before it sleeps; waiting for the line replaces a guess of how
+            // long the shell takes to start it.
+            .args(["-c", "setsid sh -c 'echo started; exec sleep 300' & wait"])
             .stdout(Stdio::piped());
         own_group(&mut command);
         let mut child = command.spawn().unwrap();
         let mut stdout = child.stdout.take().unwrap();
+        let mut line = [0u8; 8];
+        stdout.read_exact(&mut line[..8]).unwrap();
+        assert_eq!(&line, b"started\n");
         let reader = thread::spawn(move || {
             let mut text = Vec::new();
             let _ = stdout.read_to_end(&mut text);
         });
-        thread::sleep(Duration::from_millis(200));
         kill_tree(&mut child);
         assert!(join_within(reader, Duration::from_secs(10)).is_some());
     }

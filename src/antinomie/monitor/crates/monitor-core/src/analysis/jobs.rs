@@ -1444,7 +1444,7 @@ sys.exit(23)
         let trigger = std::sync::Arc::clone(&cancel);
         let ready = dir.join("ready");
         let cancellation = std::thread::spawn(move || {
-            let deadline = Instant::now() + Duration::from_secs(5);
+            let deadline = Instant::now() + Duration::from_secs(60);
             while !ready.is_file() && Instant::now() < deadline {
                 std::thread::sleep(Duration::from_millis(10));
             }

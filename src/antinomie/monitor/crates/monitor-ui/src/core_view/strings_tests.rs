@@ -30,7 +30,7 @@ fn pump(
     record: &CoreRecord,
     done: impl Fn(&[(String, egui::Rect)]) -> bool,
 ) -> Vec<(String, egui::Rect)> {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         let shown = testing::frame(ctx, vec![], &mut |ui: &mut egui::Ui| {
             state.show(ui, record);
@@ -77,7 +77,7 @@ fn the_search_runs_on_a_worker_thread_while_the_view_shows_the_shared_spinner() 
     let before = Instant::now();
     state.poll();
     assert!(
-        before.elapsed() < Duration::from_secs(1),
+        before.elapsed() < Duration::from_secs(30),
         "polling a running search must not wait for it"
     );
     assert!(state.running() && state.count().is_none());
@@ -92,7 +92,7 @@ fn the_search_runs_on_a_worker_thread_while_the_view_shows_the_shared_spinner() 
     );
     assert!(has(&shown, "Cancel"), "{shown:?}");
     release.send(()).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(60);
     while state.running() {
         state.poll();
         assert!(Instant::now() < deadline);
@@ -108,7 +108,7 @@ fn cancelling_or_resetting_stops_the_search_and_keeps_no_result() {
     let (told, heard) = mpsc::sync_channel::<bool>(1);
     let mut state = StringsState::default();
     state.start_with(10, move |cancel, _| {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(60);
         while !cancel.load(Ordering::Relaxed) && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(1));
         }

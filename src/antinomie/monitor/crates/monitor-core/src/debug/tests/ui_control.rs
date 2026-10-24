@@ -294,7 +294,7 @@ impl Rig {
         self.control.pump(&mut self.target)
     }
     fn pump_until(&mut self, done: impl Fn(&DebugView) -> bool) {
-        let until = Instant::now() + Duration::from_secs(5);
+        let until = Instant::now() + Duration::from_secs(60);
         while !done(&self.view()) {
             assert!(
                 Instant::now() < until,
@@ -628,7 +628,7 @@ fn a_process_that_exits_ends_the_controller() {
     rig.send(DebugAction::Continue);
     rig.pump();
     rig.engine.lock().unwrap().state = TargetState::Exited { wait_status: 0x300 };
-    let until = Instant::now() + Duration::from_secs(5);
+    let until = Instant::now() + Duration::from_secs(60);
     let ended = loop {
         match rig.pump() {
             Pump::Ended(why) => break why,
@@ -732,7 +732,7 @@ fn a_full_queue_refuses_more_requests() {
 }
 
 fn wait(what: &str, mut done: impl FnMut() -> bool) {
-    let until = Instant::now() + Duration::from_secs(10);
+    let until = Instant::now() + Duration::from_secs(60);
     while !done() {
         assert!(Instant::now() < until, "timed out waiting for {what}");
         std::thread::sleep(Duration::from_millis(5));

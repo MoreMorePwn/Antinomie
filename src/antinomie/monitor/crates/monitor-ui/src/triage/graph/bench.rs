@@ -18,6 +18,9 @@ use eframe::egui::{Pos2, Rect};
 use std::time::{Duration, Instant};
 
 const RUN_NS: u64 = 3_600_000_000_000;
+/// The design's paint budget at 1280x800, and the medians tried against it.
+const PAINT_BUDGET: Duration = Duration::from_millis(4);
+const PAINT_ATTEMPTS: usize = 5;
 
 /// A small deterministic generator, so a failing run can be repeated.
 struct Lcg(u64);
@@ -96,40 +99,60 @@ pub(super) fn synthetic(findings: usize, lane_count: usize) -> GraphIndex {
     builder.finish()
 }
 
-/// CPU time this thread has used, from the scheduler, or `None` where it does
-/// not say. Other tests run on the other threads while this one is timed, and
-/// waiting for a core is not the work the budget is about.
+/// CPU time this thread has used, from the kernel's per-thread clock. Other
+/// tests run on the other threads while this one is timed, and waiting for a
+/// core is not the work the budget is about. (`/proc/thread-self/schedstat`
+/// only moves when the scheduler runs, so a 2 ms frame often read as 0 there.)
 fn thread_cpu() -> Option<Duration> {
-    let stat = std::fs::read_to_string("/proc/thread-self/schedstat").ok()?;
-    let nanos: u64 = stat.split_whitespace().next()?.parse().ok()?;
-    Some(Duration::from_nanos(nanos))
+    let now = rustix::time::clock_gettime(rustix::time::ClockId::ThreadCPUTime);
+    Some(Duration::new(
+        u64::try_from(now.tv_sec).ok()?,
+        u32::try_from(now.tv_nsec).ok()?,
+    ))
+}
+
+/// The time `work` took on this thread: its CPU time where the scheduler
+/// reports it, else wall time. A paint budget is about the work, and a busy
+/// host that keeps the thread off a core for a while is not the work.
+pub(super) fn timed(work: impl FnOnce()) -> Duration {
+    let (started, cpu) = (Instant::now(), thread_cpu());
+    work();
+    match (cpu, thread_cpu()) {
+        (Some(before), Some(after)) => after.saturating_sub(before),
+        _ => started.elapsed(),
+    }
+}
+
+fn median(mut times: Vec<Duration>) -> Duration {
+    times.sort();
+    times[times.len() / 2]
 }
 
 /// One frame of the widget at 1280x800 over `index`: building the shapes and
 /// tessellating them, as the app does every frame it repaints.
 fn frame_time(ctx: &egui::Context, state: &mut State, index: &GraphIndex) -> Duration {
-    let started = Instant::now();
-    let output = ctx.run(
-        egui::RawInput {
-            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1280.0, 800.0))),
-            ..Default::default()
-        },
-        |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                let config = Config {
-                    index,
-                    colors: Colors::of(Theme::Dark.palette()),
-                    clock: None,
-                    height: 760.0,
-                    spacing: Spacing::Time,
-                };
-                widget::show(ui, state, &config);
-            });
-        },
-    );
-    let meshes = ctx.tessellate(output.shapes, output.pixels_per_point);
-    std::hint::black_box(meshes.len());
-    started.elapsed()
+    timed(|| {
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1280.0, 800.0))),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let config = Config {
+                        index,
+                        colors: Colors::of(Theme::Dark.palette()),
+                        clock: None,
+                        height: 760.0,
+                        spacing: Spacing::Time,
+                    };
+                    widget::show(ui, state, &config);
+                });
+            },
+        );
+        let meshes = ctx.tessellate(output.shapes, output.pixels_per_point);
+        std::hint::black_box(meshes.len());
+    })
 }
 
 #[test]
@@ -165,19 +188,29 @@ fn a_run_of_120k_findings_over_2000_lanes_paints_within_the_budget() {
         ),
     ] {
         state.window = window;
-        // The fastest of many frames: another test or program using the cores
-        // makes a frame slower, never faster, so this is what the paint costs.
-        let time = (0..60)
-            .map(|_| frame_time(&ctx, &mut state, &index))
-            .min()
-            .unwrap_or_default();
+        // The median of 15 frames, and the best of up to five such medians:
+        // a spike of cache or core contention from the host raises one
+        // measurement, never all of them, while a paint that is really over
+        // budget is over it every time.
+        let mut time = Duration::MAX;
+        for _ in 0..PAINT_ATTEMPTS {
+            let attempt = median(
+                (0..15)
+                    .map(|_| frame_time(&ctx, &mut state, &index))
+                    .collect(),
+            );
+            time = time.min(attempt);
+            if time <= PAINT_BUDGET || cfg!(debug_assertions) {
+                break;
+            }
+        }
         eprintln!("graph paint, 120k findings, {name}: {time:?}");
         worst = worst.max(time);
     }
     if !cfg!(debug_assertions) {
         assert!(
-            worst <= Duration::from_millis(4),
-            "the slowest view took {worst:?}; the budget is 4 ms"
+            worst <= PAINT_BUDGET,
+            "the slowest view took {worst:?} at best of {PAINT_ATTEMPTS}; the budget is 4 ms"
         );
     }
 }

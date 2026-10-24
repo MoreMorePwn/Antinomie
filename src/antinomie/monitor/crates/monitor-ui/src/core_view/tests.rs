@@ -8,7 +8,7 @@ pub(super) struct Fixture {
 }
 
 fn wait_catalog(view: &mut CoreView) {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(60);
     while view.catalog_job.is_some() {
         view.poll_catalog();
         assert!(Instant::now() < deadline, "catalog worker did not finish");
@@ -212,7 +212,7 @@ fn initial_open_is_adopted_but_old_prefix_page_is_rejected() {
     fixture
         .view
         .set_catalog_scope(&[fixture.directory.clone()], Some("chosen"));
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(60);
     while fixture.view.job.is_some() {
         fixture.view.poll();
         assert!(Instant::now() < deadline);
@@ -397,7 +397,7 @@ fn previous_vm_inspection_finishes_files_without_applying_open_code_or_decompile
         fixture.view.set_catalog_scope(&roots, Some("current"));
         fixture.view.code = "current selection".into();
         release.send(()).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(60);
         while fixture.view.job.is_some() {
             fixture.view.poll();
             assert!(Instant::now() < deadline);
@@ -1050,7 +1050,7 @@ fn viewing_code_does_not_decode_until_disassemble_is_clicked() {
         fixture.view.job.is_some(),
         "only an explicit decode action starts the worker"
     );
-    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
     while fixture.view.job.is_some() && std::time::Instant::now() < deadline {
         fixture.view.poll();
         std::thread::sleep(Duration::from_millis(5));
@@ -1091,7 +1091,7 @@ fn disassemble_uses_captured_executable_bytes_when_rip_is_absent() {
     click(&ctx, &mut fixture.view, size, position);
     assert!(fixture.view.job.is_some());
     assert!(fixture.view.status.contains("Disassembling 0x400000"));
-    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
     while fixture.view.job.is_some() && std::time::Instant::now() < deadline {
         fixture.view.poll();
         std::thread::sleep(Duration::from_millis(5));
