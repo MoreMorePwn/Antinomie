@@ -148,9 +148,17 @@ packet history already has it, and specimen Content supports a byte-offset jump.
   only that process (Shift: and its descendants); click a phase to keep only its
   time range. Drag across the time axis to keep a time range, and press Escape
   to lift it.
+  The graph opens fitted to the findings, so a burst of a few milliseconds at the
+  end of a minute-long run fills the plot; **Run** (or `R`) shows the whole run
+  and **Fit** (or `F`) goes back. Lanes grow to fill the room (a run with few
+  processes gets tall rows and larger markers) and shrink to a readable minimum
+  with many; a pane too short for the graph scrolls. **Open in window** (on the
+  tab, and the arrow icon on the Summary strip) opens the graph in its own
+  resizable window, one per run, with the same filter bar and chips and
+  **Details beside the graph** (a splitter sets its width); the window's size is
+  remembered, and a click in it selects the same row as in the table.
   Mouse: wheel scrolls the lanes, Shift+wheel or a drag pans, Ctrl+wheel or a
-  pinch zooms at the pointer, a double-click on the axis zooms 2x, **Fit**
-  shows the whole run. Keyboard (click the graph first): ←/→ previous and next
+  pinch zooms at the pointer, a double-click on the axis zooms 2x. Keyboard (click the graph first): ←/→ previous and next
   finding in time, ↑/↓ lane, Enter evidence, `F` fit, `+`/`-` zoom at the
   selection, Space fold the lane, `H` `M` `L` `I` the tier chips and Show INFO,
   `1`…`9` and `0` the first ten category chips.

@@ -982,6 +982,26 @@ Host only: `monitor-ui/src/triage/graph/`, nothing needs a guest change.
   index, so the table and the graph change together. Selection is
   `selected_call_id` and the shared Details; a click in the graph sets
   `table_focus`, which scrolls the table to the row.
+* **Room and window.** `view::Metrics::roomy` sizes the parts of the widget to
+  the area it is given: lanes are `LANE_MIN` (24) to `LANE_MAX` (84) points high
+  so a few lanes fill the height, what they cannot use goes to the curve, the
+  label column is 16 % of the width (190 to 260) and the markers' radius follows
+  the lane height. The Summary strip keeps `Metrics::compact`. The default window
+  is `fitted_findings` (the findings' extent plus 6 %), and the buckets cover the
+  findings only; `GraphIndex::run_extent` (processes included) bounds pan and
+  zoom and is what **Run** shows. A pane shorter than `MIN_HEIGHT` (420) wraps the
+  tab in a vertical scroll area. `window.rs` shows the graph in an immediate
+  egui viewport (`ViewportId` hashed from the run), the same way detached
+  workspace panels are drawn (custom title bar, `title_bar::resize`, an embedded
+  `widgets::window` fallback), from `show_finding_windows`; it has its own
+  `State`, shares the filter draft, chips and selection, lays Details out beside
+  the graph with a draggable splitter, and keeps each run's size for the session
+  and the last size in `Settings::graph_window`.
+* **Spinners.** `theme::spinner` turns in 100 ms steps and asks for a repaint
+  every 100 ms; egui's own `Spinner` repaints every frame, which on software GL
+  is the full frame rate for as long as an index is being read. All spinners go
+  through it, and `triage/idle_tests.rs` asserts an idle view asks for no repaint
+  within a second and a waiting one within 50 ms.
 * **Live toast.** `notify.rs`: each scan carries the HIGH rules that have a
   shown row. `HighWatch` raises one `toasts::push` per `(run, rule)` while the
   run is live and `toasts::bump` adds `×N` to the same toast afterwards (a toast
