@@ -13,6 +13,7 @@ pub(super) enum SettingsPage {
     Appearance,
     Recording,
     Detection,
+    Notifications,
     NetworkLookup,
     AnalysisTools,
     Disks,
@@ -20,10 +21,11 @@ pub(super) enum SettingsPage {
 }
 
 impl SettingsPage {
-    pub(super) const ALL: [SettingsPage; 7] = [
+    pub(super) const ALL: [SettingsPage; 8] = [
         SettingsPage::Appearance,
         SettingsPage::Recording,
         SettingsPage::Detection,
+        SettingsPage::Notifications,
         SettingsPage::NetworkLookup,
         SettingsPage::AnalysisTools,
         SettingsPage::Disks,
@@ -35,6 +37,7 @@ impl SettingsPage {
             SettingsPage::Appearance => "Appearance",
             SettingsPage::Recording => "Recording",
             SettingsPage::Detection => "Detection",
+            SettingsPage::Notifications => "Notifications",
             SettingsPage::NetworkLookup => "Network lookup",
             SettingsPage::AnalysisTools => "Analysis tools",
             SettingsPage::Disks => "Disks",
@@ -181,6 +184,7 @@ impl MonitorApp {
             SettingsPage::Appearance => self.appearance_page(ui, ctx),
             SettingsPage::Recording => self.recording_page(ui),
             SettingsPage::Detection => self.detection_page(ui),
+            SettingsPage::Notifications => self.notifications_page(ui),
             SettingsPage::NetworkLookup => self.lookup_page(ui),
             SettingsPage::AnalysisTools => self.tools_page(ui),
             SettingsPage::Disks => self.disks_page(ui),
@@ -334,6 +338,23 @@ impl MonitorApp {
             if ui.button("Open Detection rules…").clicked() {
                 self.open_library(crate::workspace::LibraryPage::Rules);
             }
+            ui.end_row();
+        });
+    }
+
+    fn notifications_page(&mut self, ui: &mut egui::Ui) {
+        form_grid("settings_notifications", ui).show(ui, |ui| {
+            ui.label("Live findings");
+            ui.vertical(|ui| {
+                ui.checkbox(
+                    &mut self.settings.toast_high_findings,
+                    "Toast for live HIGH findings",
+                );
+                hint(
+                    ui,
+                    "The first HIGH finding of each rule in a run that is still going raises one toast; later matches of the same rule add ×N to it. Applies at once.",
+                );
+            });
             ui.end_row();
         });
     }

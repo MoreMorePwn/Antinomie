@@ -127,6 +127,8 @@ struct Settings {
     automatic_detection: bool,
     /// Allow the explicit catalog check and rule-pack download buttons.
     outbound_catalog: bool,
+    /// Toast for the first HIGH finding of each rule in a run that is still going.
+    toast_high_findings: bool,
     /// Debug: draw the repaint rate in a corner of the window.
     show_fps: bool,
     /// Sidebar sections folded away.
@@ -192,6 +194,7 @@ impl Default for Settings {
             address_lookup: crate::triage::AddressLookup::Tshark,
             automatic_detection: true,
             outbound_catalog: false,
+            toast_high_findings: true,
             show_fps: false,
             vms_collapsed: false,
             library_collapsed: false,
@@ -732,6 +735,8 @@ impl eframe::App for MonitorApp {
             })
             .unwrap_or_else(crate::triage::TriageInput::empty);
         self.triage.set_data_dir(&self.options.data_dir);
+        self.triage
+            .set_toast_high(self.settings.toast_high_findings);
         self.triage.tick(ctx, input);
         self.triage.show_finding_windows(ctx);
         let close = ctx.input(|input| input.viewport().close_requested())
