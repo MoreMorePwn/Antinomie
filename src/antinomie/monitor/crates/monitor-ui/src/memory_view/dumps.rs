@@ -259,7 +259,7 @@ impl MemoryView {
                                 if dump.symbols {
                                     "Symbol table of its base included"
                                 } else {
-                                    "No symbol table: Volatility looks for one itself"
+                                    "No symbol table: Volatility looks for one itself, MemNixFS rebuilds one from the kernel"
                                 }
                             ));
                     if row.clicked() {

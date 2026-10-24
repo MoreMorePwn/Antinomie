@@ -1,15 +1,17 @@
-//! The Memory tab: RAM dumps of a VM and their analysis with Volatility 3,
-//! in the manner of Volatility Workbench. Pick a dump, pick a plugin and its
-//! options, run it; every run is saved with its dump and listed beside it, so
-//! an earlier result opens again without running the plugin again.
+//! The Memory tab: RAM dumps of a VM and their analysis with Volatility 3 or
+//! MemNixFS, in the manner of Volatility Workbench. Pick a dump, pick a
+//! plugin and its options (or a MemNixFS report), run it; every run is saved
+//! with its dump and listed beside it, so an earlier result opens again
+//! without running the plugin again.
 use crate::{
     network_view::{capture_row, format_date},
     theme::{self, ValueKind},
 };
 use antinomie_monitor_core::{
     memory::{
-        self, community, Column as ResultColumn, ColumnKind, DumpProgress, MemoryDump, OptionKind,
-        Os, PluginCatalog, PluginInfo, PluginRun, ResultTable, RunHandle, RunState, Volatility,
+        self, community, Analyzer, Column as ResultColumn, ColumnKind, DumpProgress, MemoryDump,
+        OptionKind, Os, PluginCatalog, PluginInfo, PluginRun, ResultTable, RunHandle, RunState,
+        Volatility,
     },
     BaseSummary, VmConfig,
 };
@@ -30,10 +32,11 @@ use std::{
 
 mod catalog;
 mod dumps;
+mod memnixfs;
 mod plugins;
 mod results;
 
-use self::{dumps::*, plugins::*, results::*};
+use self::{dumps::*, memnixfs::Engine, plugins::*, results::*};
 
 /// Rows of one result loaded for display.
 const RESULT_PAGE_LEN: usize = 1024;
@@ -44,6 +47,8 @@ pub(crate) enum MemoryAction {
     Dump,
     /// Install Volatility 3 (Tools → Analysis tools).
     InstallVolatility,
+    /// Install MemNixFS (Tools → Analysis tools).
+    InstallMemNixFs,
     /// Look up symbol tables online for dumps without one (a setting).
     OnlineSymbols(bool),
 }
@@ -63,6 +68,9 @@ pub(crate) struct MemoryContext<'a> {
     /// Volatility 3 is installed, or being installed.
     pub volatility_installed: bool,
     pub volatility_installing: bool,
+    /// MemNixFS is installed, or being installed.
+    pub memnixfs_installed: bool,
+    pub memnixfs_installing: bool,
     pub bases: &'a [BaseSummary],
     pub font_size: f32,
     /// Symbol tables of dumps without one are looked up online.
@@ -150,6 +158,11 @@ pub(crate) struct MemoryView {
     selected_run: Option<String>,
     jobs: Vec<RunHandle>,
     catalog: Catalog,
+    /// Which backend the next Run uses.
+    analyzer: Analyzer,
+    engine: Engine,
+    /// The MemNixFS report chosen (its name).
+    report: Option<String>,
     plugin: Option<String>,
     search: String,
     /// Option values typed per plugin.
@@ -192,6 +205,9 @@ impl Default for MemoryView {
             selected_run: None,
             jobs: Vec::new(),
             catalog: Catalog::Unknown,
+            analyzer: Analyzer::default(),
+            engine: Engine::Unknown,
+            report: None,
             plugin: None,
             search: String::new(),
             values: BTreeMap::new(),
@@ -331,6 +347,7 @@ impl MemoryView {
         if !self.jobs.is_empty()
             || self.loading.is_some()
             || matches!(self.catalog, Catalog::Loading(_))
+            || matches!(self.engine, Engine::Loading(_))
         {
             ctx.request_repaint_after(Duration::from_millis(250));
         }
@@ -393,7 +410,9 @@ impl MemoryView {
             ui.ctx().request_repaint_after(Duration::from_millis(250));
         }
         self.check_catalog(cx.volatility_installed);
+        self.check_engine(cx.memnixfs_installed);
         self.poll(ui.ctx(), cx.data_dir);
+        self.poll_engine(cx.data_dir);
         self.poll_picker();
 
         let mut action = None;

@@ -75,14 +75,12 @@ fn note_names(bytes: &[u8]) -> Vec<String> {
         let name_len = le32(bytes, at) as usize;
         let data_len = le32(bytes, at + 4) as usize;
         let name_end = at + 12 + name_len;
-        let next = (name_end + 3) / 4 * 4 + (data_len + 3) / 4 * 4;
+        let next = name_end.div_ceil(4) * 4 + data_len.div_ceil(4) * 4;
         if name_end > bytes.len() || next > bytes.len() || next <= at {
             break;
         }
         let name = &bytes[at + 12..name_end];
-        names.push(
-            String::from_utf8_lossy(name.strip_suffix(&[0]).unwrap_or(name)).into_owned(),
-        );
+        names.push(String::from_utf8_lossy(name.strip_suffix(&[0]).unwrap_or(name)).into_owned());
         at = next;
     }
     names
@@ -106,7 +104,9 @@ pub fn classify(path: &Path) -> Result<DumpFormat, String> {
             return Err("this is a Windows crash dump; MemNixFS reads Linux memory only".into());
         }
         Some(b"hibr" | b"HIBR" | b"wake" | b"WAKE") => {
-            return Err("this is a Windows hibernation file; MemNixFS reads Linux memory only".into());
+            return Err(
+                "this is a Windows hibernation file; MemNixFS reads Linux memory only".into(),
+            );
         }
         Some(b"\x7fELF") => {}
         _ => return Ok(DumpFormat::Raw),
@@ -137,9 +137,13 @@ pub fn classify(path: &Path) -> Result<DumpFormat, String> {
         .map_err(|e| format!("the ELF program headers cannot be read: {e}"))?;
     let (mut ranges, mut physical, mut notes_size) = (0usize, false, 0u64);
     let (mut qemu, mut vmcoreinfo) = (false, false);
-    for entry in table.chunks_exact(56) {
-        let (kind, offset, paddr, filesz) =
-            (le32(entry, 0), le64(entry, 8), le64(entry, 24), le64(entry, 32));
+    for entry in table.as_chunks::<56>().0 {
+        let (kind, offset, paddr, filesz) = (
+            le32(entry, 0),
+            le64(entry, 8),
+            le64(entry, 24),
+            le64(entry, 32),
+        );
         match kind {
             1 if filesz > 0 => {
                 ranges += 1;

@@ -251,7 +251,7 @@ pub const PACKAGES: &[Package] = &[
                 sha256: "bf535cec5e965823fd03199b4029f9e9f3952111eb12824b5d2b96c8cca1a918",
                 size: 88_108,
                 archive: Archive::DebFiles {
-                    prefix: "./usr/lib/x86_64-linux-gnu/libfuse3.so.3",
+                    prefix: "./lib/x86_64-linux-gnu/libfuse3.so.3",
                 },
                 into: "lib",
             },
