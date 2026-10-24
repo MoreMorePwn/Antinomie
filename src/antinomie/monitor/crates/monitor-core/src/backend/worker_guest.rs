@@ -2,6 +2,7 @@
 //! Commands executed inside the running guest.
 use super::*;
 use crate::debug::KernelDebugBackend;
+use session_transport::launch_image_hash;
 
 impl Worker {
     pub(super) fn guest_command(&mut self, command: Command) -> Result<String, String> {
@@ -381,6 +382,15 @@ impl Worker {
                         acquisition,
                         available,
                     ));
+                    // Only a guest that hashes the executed file can vouch for
+                    // the host's copy; any other falls back to the transfer.
+                    if let (Some(source), Some(report)) =
+                        (&request.host_copy, &run.summary.analysis)
+                        && tracer_hashing & control::EXEC_HASH_ROOT != 0
+                    {
+                        // A refusal leaves the guest transfer as it was.
+                        let _ = session.analysis.offer_host_copy(&report.id, source);
+                    }
                     if let Err(error) = run.refresh_analysis_metadata() {
                         run.storage_error(format!("analysis metadata accounting: {error}"));
                     }
@@ -410,8 +420,15 @@ impl Worker {
                             .stored_len()
                             .saturating_add(session.available().saturating_sub(run.stored_len())),
                     );
-                    if let Err(error) = run.assembler.ingest(&packet) {
-                        self.snapshot.last_error = Some(error.to_string());
+                    match run.assembler.ingest(&packet) {
+                        Ok(event) => {
+                            if let Some(hash) = event.as_ref().and_then(launch_image_hash) {
+                                session
+                                    .analysis
+                                    .guest_hash(&run.summary.id, hash.sha256_hex().as_deref());
+                            }
+                        }
+                        Err(error) => self.snapshot.last_error = Some(error.to_string()),
                     }
                     if let Some(error) = run.assembler.saving_error().map(str::to_owned) {
                         run.capture.error.get_or_insert(error.clone());

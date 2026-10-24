@@ -25,6 +25,7 @@ use std::{
 };
 
 mod acquisition;
+mod host_copy;
 mod host_file;
 mod layers;
 mod sandbox_account;
@@ -64,6 +65,8 @@ pub(crate) struct Job {
     report_len: u64,
     specimen_publication: Option<storage::JsonReceipt>,
     progress: progress::Watch,
+    /// The uploaded file staged on the host while the guest's hash is awaited.
+    host_copy: Option<host_copy::HostCopy>,
 }
 #[derive(Default)]
 pub(crate) struct Jobs {
@@ -110,6 +113,7 @@ pub(crate) fn new_report(path: &str, selection: &AnalysisSelection) -> AnalysisR
             })
             .collect(),
         layer: None,
+        specimen_source: None,
     }
 }
 pub(crate) fn fail(report: &mut AnalysisReport, state: AnalysisState, reason: impl Into<String>) {
@@ -220,6 +224,7 @@ impl Jobs {
                 report_len: 0,
                 specimen_publication: None,
                 progress: Default::default(),
+                host_copy: None,
             };
             self.queue.push_back(job);
             Ok(())
@@ -268,6 +273,7 @@ impl Jobs {
         report
     }
     fn finish(&mut self, mut job: Job) {
+        job.discard_host_copy();
         if let Some(id) = job.handle.take() {
             self.release.push_back(id);
         }
@@ -1069,8 +1075,10 @@ pub(super) fn read_report(
     if encoded.len() > REPORT_MAX_SIZE {
         return Err("worker report exceeded 128 KiB bound".into());
     }
-    let report: AnalysisReport =
+    let mut report: AnalysisReport =
         serde_json::from_slice(&encoded).map_err(|e| format!("worker report malformed: {e}"))?;
+    // Only the host says where the specimen came from.
+    report.specimen_source = expected.specimen_source;
     super::validation::validate_report(&report)?;
     if report.id != expected.id
         || report.source_path != expected.source_path
@@ -1239,6 +1247,7 @@ mod tests {
                     report_len: 0,
                     specimen_publication: None,
                     progress: Default::default(),
+                    host_copy: None,
                 }),
                 queue: VecDeque::new(),
                 acquiring: None,
@@ -1549,6 +1558,7 @@ time.sleep(30)
             report_len: 0,
             specimen_publication: None,
             progress: Default::default(),
+            host_copy: None,
         };
         let started = Instant::now();
         let mut child = spawn_worker_binary(
@@ -1689,6 +1699,7 @@ time.sleep(30)
             report_len: 0,
             specimen_publication: None,
             progress: Default::default(),
+            host_copy: None,
         };
         let mut child = spawn_worker_binary(
             &job,

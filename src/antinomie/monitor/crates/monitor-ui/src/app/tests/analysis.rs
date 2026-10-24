@@ -227,6 +227,7 @@ fn static_analysis_uses_selected_archive_report_without_submitting_work() {
         reason: Some("Acquisition unavailable in fixture".into()),
         sections: Vec::new(),
         layer: None,
+        specimen_source: None,
     };
     live.analysis = Some(report("live-report"));
     app.snapshot.runs.push(live.clone());
@@ -454,6 +455,7 @@ fn analyze_only_and_cancel_do_not_launch_or_stop_a_program() {
             reason: None,
             sections: Vec::new(),
             layer: None,
+            specimen_source: None,
         });
     app.selected_analysis = Some("standalone-job".into());
     let output = ctx.run(egui::RawInput::default(), |ctx| {
@@ -564,6 +566,7 @@ fn an_unpacked_layers_analysis_is_found_in_its_packed_files_folder_and_can_be_sh
                 method: "UPX".into(),
                 parent_sha256: "0".repeat(64),
             }),
+            specimen_source: None,
         });
     assert_eq!(
         app.analysis_directory("packed-report-L2"),

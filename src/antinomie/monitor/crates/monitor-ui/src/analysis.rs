@@ -805,6 +805,7 @@ mod tests {
                 })
                 .collect(),
             layer: None,
+            specimen_source: None,
         }
     }
 

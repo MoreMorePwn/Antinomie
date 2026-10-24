@@ -27,6 +27,24 @@ fn upload_and_run_waits_for_matching_success_without_executing() {
 }
 
 #[test]
+fn a_run_of_the_uploaded_file_carries_the_host_copy_for_this_session_only() {
+    let mut app = upload_app();
+    let source = PathBuf::from("/tmp/host sample");
+    app.upload_browser.selected = Some(source.clone());
+    assert_eq!(app.uploaded_host_file("/tmp/guest file"), None);
+    app.request_upload(true);
+    let id = app.pending_upload.as_ref().unwrap().id;
+    // Nothing is uploaded yet, so nothing to offer.
+    assert_eq!(app.uploaded_host_file("/tmp/guest file"), None);
+    app.complete_upload(id, true);
+    assert_eq!(app.uploaded_host_file("/tmp/guest file"), Some(source));
+    // Another program, or the same path in another boot, is not that file.
+    assert_eq!(app.uploaded_host_file("/tmp/another"), None);
+    app.snapshot.boot_id = Some("restored".into());
+    assert_eq!(app.uploaded_host_file("/tmp/guest file"), None);
+}
+
+#[test]
 fn upload_failure_plain_upload_and_closed_handoffs_never_open_run() {
     for (run_after, success, close) in [
         (true, false, false),

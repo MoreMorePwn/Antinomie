@@ -449,6 +449,8 @@ pub struct MonitorApp {
     upload_browser: upload_browser::Browser,
     explorer_browser: upload_browser::Browser,
     pending_upload: Option<upload::Pending>,
+    /// The last Upload and Run that finished: the host file now at its guest path.
+    uploaded: Option<upload::Intent>,
     pending_launch: Option<u64>,
     pending_launch_context: Option<PendingLaunch>,
     pending_sessions: BTreeMap<u64, PendingSession>,
@@ -631,6 +633,7 @@ impl MonitorApp {
             upload_browser: Default::default(),
             explorer_browser,
             pending_upload: None,
+            uploaded: None,
             pending_launch: None,
             pending_launch_context: None,
             pending_sessions: BTreeMap::new(),

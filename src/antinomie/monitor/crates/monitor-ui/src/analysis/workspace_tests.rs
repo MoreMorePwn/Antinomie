@@ -15,6 +15,7 @@ fn fixture() -> AnalysisReport {
         reason: Some("Synthetic UI evidence; no analyzer was run".into()),
         sections: Vec::new(),
         layer: None,
+        specimen_source: None,
     };
     let mut structures = vec![AnalysisEntry {
         label: "Format".into(),
@@ -1188,6 +1189,7 @@ fn meaning_report() -> AnalysisReport {
         reason: None,
         sections: Vec::new(),
         layer: None,
+        specimen_source: None,
     };
     report.sections.push(AnalysisSection {
         kind: AnalysisKind::Strings,
@@ -1807,6 +1809,47 @@ fn the_identity_card_links_to_triage_properties() {
 }
 
 #[test]
+fn the_identity_card_says_where_the_specimen_came_from() {
+    for (source, shown) in [
+        (None, None),
+        (
+            Some(antinomie_monitor_core::SpecimenSource::HostCopy),
+            Some("host copy, hash matched guest"),
+        ),
+        (
+            Some(antinomie_monitor_core::SpecimenSource::Guest),
+            Some("fetched from guest"),
+        ),
+    ] {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut report = fixture();
+        report.specimen_source = source;
+        let mut state = WorkspaceState::default();
+        let size = egui::vec2(1280.0, 820.0);
+        let mut output = egui::FullOutput::default();
+        for _ in 0..3 {
+            output = frame(
+                &ctx,
+                &report,
+                &mut state,
+                None,
+                size,
+                Vec::new(),
+                (None, None),
+            )
+            .0;
+        }
+        let texts = texts(&output);
+        let row = texts.iter().any(|(text, _)| text == "Specimen source");
+        assert_eq!(row, shown.is_some(), "{source:?}");
+        if let Some(label) = shown {
+            assert!(texts.iter().any(|(text, _)| text == label), "{texts:?}");
+        }
+    }
+}
+
+#[test]
 fn selecting_a_row_hands_it_to_the_details_panel_once() {
     let ctx = egui::Context::default();
     crate::theme::install(&ctx);
@@ -2074,6 +2117,7 @@ fn unpacked_report() -> AnalysisReport {
         reason: None,
         sections: vec![section],
         layer: None,
+        specimen_source: None,
     }
 }
 

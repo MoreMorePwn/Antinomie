@@ -4,6 +4,7 @@
 use super::*;
 use crate::analysis::LaunchSource;
 
+#[derive(Clone)]
 pub(super) struct Intent {
     source: PathBuf,
     destination: String,
@@ -196,6 +197,17 @@ impl MonitorApp {
         }
     }
 
+    /// The host file that was uploaded to `guest_path` in this VM session, for
+    /// the run of it: static analysis can then use the host's copy.
+    pub(super) fn uploaded_host_file(&self, guest_path: &str) -> Option<PathBuf> {
+        self.uploaded
+            .as_ref()
+            .filter(|upload| {
+                upload.destination == guest_path && upload.same_session(&self.snapshot)
+            })
+            .map(|upload| upload.source.clone())
+    }
+
     pub(super) fn submit_upload(&mut self, intent: Intent, overwrite: bool) {
         if !intent.same_session(&self.snapshot) || !self.running() || self.pending_upload.is_some()
         {
@@ -233,7 +245,8 @@ impl MonitorApp {
             self.report_warning("Upload completed; Run program was not opened because the selected VM session changed".into());
             return;
         }
-        self.exec.path = upload.intent.destination;
+        self.exec.path = upload.intent.destination.clone();
+        self.uploaded = Some(upload.intent);
         self.upload_open = false;
         self.launch_open = true;
         // The file is in the guest now: the dialog continues from its path.
