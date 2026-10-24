@@ -55,6 +55,7 @@ pub(super) fn navigation(view: &mut TriageView, ui: &mut egui::Ui, input: &Triag
     );
     let mut fits = true;
     crate::widgets::tab_row(ui, |ui| {
+        let first_line = ui.cursor().min.y;
         for (section, label) in [
             (Section::Summary, "Summary"),
             (Section::Properties, "Properties"),
@@ -83,8 +84,11 @@ pub(super) fn navigation(view: &mut TriageView, ui: &mut egui::Ui, input: &Triag
         if crate::widgets::tab(ui, view.section == Section::Ioc, &ioc).clicked() {
             view.section = Section::Ioc;
         }
-        let room = ui.available_width();
-        if trail && room >= 120.0 {
+        // `available_width` of a wrapping row is the whole row, not what the tabs left.
+        let room = ui.max_rect().right() - ui.cursor().min.x;
+        // Tabs that wrapped leave the status no line of its own to share.
+        let wrapped = ui.cursor().min.y - first_line > 1.0;
+        if trail && !wrapped && room >= 120.0 {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 fits = view.refresh_trail(ui, input, Some(room));
             });
@@ -94,9 +98,16 @@ pub(super) fn navigation(view: &mut TriageView, ui: &mut egui::Ui, input: &Triag
     });
     // A narrow pane puts the status under the bar instead.
     if !fits {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            view.refresh_trail(ui, input, None);
-        });
+        // A line tall enough for the status; a right-to-left layout otherwise
+        // takes the whole pane and the section below is pushed out of sight.
+        let height = ui.spacing().interact_size.y;
+        ui.allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), height),
+            egui::Layout::right_to_left(egui::Align::Center),
+            |ui| {
+                view.refresh_trail(ui, input, None);
+            },
+        );
     }
 }
 
