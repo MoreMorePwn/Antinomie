@@ -86,6 +86,7 @@ jobs:
           python3 tests/monitor/test-vm-regress.py
           python3 tests/monitor/test-sync-quilt-view.py
           python3 scripts/test-refresh-monitor-bundle.py
+          python3 scripts/test-full-pack.py
       - name: Shell scripts
         run: |
           shellcheck --severity=error scripts/*.sh tests/monitor/*.sh \

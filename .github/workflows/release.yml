@@ -81,3 +81,14 @@ jobs:
           gh release create "$GITHUB_REF_NAME"
           "dist/antinomie-$VERSION-linux-x86_64.tar.gz" dist/SHA256SUMS --verify-tag
           --title "Antinomie $VERSION" --notes-file notes.md
+      # A second asset: every managed tool, pre-downloaded and SHA-256 checked
+      # (docs/full-pack.md). It runs after the release exists, so a tool host
+      # being down never blocks the application release.
+      - name: Build and attach the full pack
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/build-full-pack.py --output dist --version "$VERSION"
+          gh release upload "$GITHUB_REF_NAME" \
+            "dist/antinomie-$VERSION-full-pack-linux-x86_64.tar.xz" \
+            "dist/antinomie-$VERSION-full-pack.manifest.json" dist/SHA256SUMS-full-pack
