@@ -36,8 +36,14 @@ pub(crate) struct WorkspaceState {
     content: content::ContentState,
     capa: capa_matrix::CapaState,
     rows: RowWindows,
-    /// The regex matches window over the report's strings.
+    /// The regex matches pane of Strings & regex, over the report's strings.
     regex: crate::regex_matches::RegexWindow,
+    /// The layer the Unpacking tab shows.
+    unpack_layer: usize,
+    /// The report whose scan the pane has asked for, so it asks once.
+    regex_asked: String,
+    /// The pane wants its scan started; the app takes this once.
+    regex_wanted: bool,
     /// The row last handed to the Details panel, so it is handed over once.
     published: Option<AnalysisEntry>,
 }
@@ -99,7 +105,14 @@ impl WorkspaceState {
         ctx.data_mut(|data| data.insert_temp(egui::Id::new(CHOSEN_ROW), chosen));
     }
 
-    /// Open the regex matches window for the report kept in `directory`.
+    /// The report whose regex scan the Strings & regex pane asked for, once.
+    pub(crate) fn take_regex_request(&mut self) -> Option<String> {
+        std::mem::take(&mut self.regex_wanted)
+            .then(|| self.report_id.clone())
+            .flatten()
+    }
+
+    /// Start the regex scan for the report kept in `directory`.
     pub(crate) fn scan_regex(
         &mut self,
         report_id: &str,
@@ -322,7 +335,6 @@ fn render(
     // The Content tab reads the same specimen preview as the bytes window.
     let bytes_visible = forced.is_some() || state.tab != Tab::Content;
     state.publish(ui.ctx(), report, forced);
-    state.regex.show(ui.ctx(), "static");
     let windows = state.rows.show(
         ui.ctx(),
         (&report.id, forced),
