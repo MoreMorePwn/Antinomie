@@ -491,6 +491,10 @@ pub(crate) enum ReportAction {
     },
     /// Open Tools > Analysis tools to install a missing tool.
     OpenAnalysisTools,
+    /// Open the regex matches window over the report's strings.
+    ScanRegex {
+        report_id: String,
+    },
     /// Show the same file's identity in Triage › Properties.
     OpenTriageProperties,
     /// Read a page of a category's full listing, filtered by `query` and

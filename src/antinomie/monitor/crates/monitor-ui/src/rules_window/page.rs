@@ -68,10 +68,14 @@ impl Model {
             self.ensure(data_dir);
         }
         ui.label(RichText::new("Installed packs and custom groups are the only production rules. Scans do not download rules or upload evidence.").color(theme::text()));
-        let mut engine = ENGINES
-            .iter()
-            .find(|(id, _)| *id == self.engine)
-            .map_or("yara", |(id, _)| *id);
+        let mut engine = if self.engine == "regex" {
+            "regex"
+        } else {
+            ENGINES
+                .iter()
+                .find(|(id, _)| *id == self.engine)
+                .map_or("yara", |(id, _)| *id)
+        };
         let items: Vec<_> = ENGINES
             .iter()
             .map(|(id, label)| {
@@ -87,9 +91,18 @@ impl Model {
                 )
             })
             .collect();
+        let mut items = items;
+        items.push((
+            "regex",
+            TabItem::new("Strings regex").badge(self.regex.badge(), Tone::Plain),
+        ));
         if widgets::tabs(ui, items, &mut engine) {
             self.engine = engine.into();
             self.select_none();
+        }
+        if self.engine == "regex" {
+            self.regex_tab(ui, data_dir);
+            return;
         }
         if let Some(next) = self.engine_status(ui) {
             self.requested = Some(next);

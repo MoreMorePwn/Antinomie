@@ -261,7 +261,24 @@ fn header(
                 state.tab = Tab::Content;
             }
         }
-        action = export_controls(ui, report, None, true);
+        let scan = (matches!(state.tab, Tab::Strings | Tab::Floss)
+            && ui
+                .add_enabled(
+                    regex_ready(report),
+                    egui::Button::new(format!(
+                        "{} Regex matches…",
+                        egui_phosphor::regular::MAGNIFYING_GLASS
+                    )),
+                )
+                .on_hover_text(
+                    "List the network, crypto, key, Linux behaviour, attribution and \
+                     encoded matches in the Strings and FLOSS strings",
+                )
+                .clicked())
+        .then(|| ReportAction::ScanRegex {
+            report_id: report.id.clone(),
+        });
+        action = export_controls(ui, report, None, true).or(scan);
     });
     action
 }
@@ -347,6 +364,18 @@ fn counted(tab: Tab, section: &AnalysisSection) -> Option<u64> {
         .as_ref()
         .map_or(section.entries.len() as u64, |listing| listing.rows);
     (rows > 0).then_some(rows)
+}
+
+/// Some strings are there to scan: a Strings or FLOSS section has finished.
+fn regex_ready(report: &AnalysisReport) -> bool {
+    report.sections.iter().any(|section| {
+        matches!(section.kind, AnalysisKind::Strings | AnalysisKind::Floss)
+            && matches!(
+                section.state,
+                antinomie_monitor_core::AnalysisSectionState::Complete
+                    | antinomie_monitor_core::AnalysisSectionState::Partial
+            )
+    })
 }
 
 fn pending(report: &AnalysisReport, kind: AnalysisKind) -> bool {
