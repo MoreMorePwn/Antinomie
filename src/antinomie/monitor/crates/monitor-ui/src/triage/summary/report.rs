@@ -400,14 +400,6 @@ pub(super) fn content(
                 });
                 return;
             };
-            if scan.partial || !input.run_finished {
-                presentation::badge(
-                    ui,
-                    "Retained prefix · counts may be lower bounds",
-                    theme::warn(),
-                );
-                ui.add_space(8.0);
-            }
             if let Some(error) = &scan.event_error {
                 crate::activity::warning(ui, error);
             }
