@@ -527,6 +527,7 @@ fn a_report_scan_reads_the_strings_and_floss_listings_with_their_offsets() {
         specimen_len: Some(100_000),
         reason: None,
         sections: vec![strings, floss],
+        layer: None,
     };
     std::fs::write(
         directory.join("report.json"),

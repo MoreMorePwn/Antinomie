@@ -18,6 +18,8 @@ pub enum AnalysisKind {
     Embedded,
     /// Decoded, stack and tight strings recovered by FLOSS.
     Floss,
+    /// Packer detection and the layers unpacking recovered from the file.
+    Unpacking,
 }
 
 impl AnalysisKind {
@@ -31,6 +33,7 @@ impl AnalysisKind {
         Self::Identification,
         Self::Capabilities,
         Self::Embedded,
+        Self::Unpacking,
     ];
     pub const DEEP: &'static [Self] = &[Self::Disassembly, Self::Decompilation, Self::Floss];
 
@@ -48,6 +51,7 @@ impl AnalysisKind {
             Self::Decompilation => "Decompilation",
             Self::Embedded => "Embedded content",
             Self::Floss => "FLOSS strings (decoded, stack, tight)",
+            Self::Unpacking => "Unpacking (packer and unpacked layers)",
         }
     }
 }
@@ -249,6 +253,24 @@ pub enum AnalysisData {
         function: Option<u64>,
         address: Option<u64>,
     },
+    /// One phase of the unpack chain: the file as it came (index 0) or a layer
+    /// an unpacker recovered from the one before. The entry value describes it.
+    Layer {
+        index: u32,
+        /// "original", "UPX", "UPX (header repaired)".
+        method: String,
+        sha256: String,
+        size: u64,
+        /// The layer this one was unpacked from.
+        parent: Option<u32>,
+        /// The packer found in this layer, when there is one.
+        packer: Option<String>,
+        /// The layer's file in the report's artifacts (`layer-N.bin`).
+        file: Option<String>,
+        /// The report of this layer's own static analysis, once it is queued.
+        report_id: Option<String>,
+        note: String,
+    },
     /// A compiler, language, linker, packer or protector identification;
     /// the entry value is the evidence.
     Identification {
@@ -364,6 +386,18 @@ impl AnalysisSection {
     }
 }
 
+/// What a report is the analysis of when it is not a file of its own: a layer
+/// that unpacking recovered from another report's file.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnalysisLayer {
+    /// The report of the packed file.
+    pub parent_id: String,
+    /// Position in the unpack chain; the packed file is 0.
+    pub index: u32,
+    pub method: String,
+    pub parent_sha256: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AnalysisReport {
     pub id: String,
@@ -374,4 +408,7 @@ pub struct AnalysisReport {
     pub specimen_len: Option<u64>,
     pub reason: Option<String>,
     pub sections: Vec<AnalysisSection>,
+    /// Set when this analysis is of a layer unpacked from another report's file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layer: Option<AnalysisLayer>,
 }

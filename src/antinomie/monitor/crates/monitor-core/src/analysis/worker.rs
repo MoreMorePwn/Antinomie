@@ -300,6 +300,22 @@ pub(super) fn bound_data(data: &mut AnalysisData) -> bool {
             bound(origin);
             bound(encoding);
         }
+        AnalysisData::Layer {
+            method,
+            sha256,
+            packer,
+            file,
+            report_id,
+            note,
+            ..
+        } => {
+            bound(method);
+            bound(sha256);
+            bound(note);
+            for text in [packer, file, report_id].into_iter().flatten() {
+                bound(text);
+            }
+        }
         AnalysisData::Property {
             scope,
             observed,
@@ -817,6 +833,10 @@ fn analyze_section(section: &mut AnalysisSection, specimen: &[u8], listings: &Pa
         AnalysisKind::Capabilities => super::capa::capabilities(section),
         AnalysisKind::Embedded => super::binwalk::embedded(section, specimen.len() as u64),
         AnalysisKind::Floss => super::floss::strings(section, specimen.len() as u64, listings),
+        AnalysisKind::Unpacking => {
+            let artifacts = listings.parent().unwrap_or(listings).join("artifacts");
+            super::unpack::unpack(section, specimen, &artifacts)
+        }
         AnalysisKind::Decompilation => super::decompile::decompile(section, specimen, listings),
     }
     // Headers, sections, segments, symbols, imports and exports of an
