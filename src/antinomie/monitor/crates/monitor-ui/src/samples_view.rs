@@ -342,8 +342,8 @@ pub(crate) struct SamplesView {
     key: String,
     key_saved: bool,
     key_loaded: bool,
-    /// The saved key is being replaced.
-    editing_key: bool,
+    /// The person asked for Tools > API keys; the app opens it.
+    want_keys: bool,
     /// The warning before first use was accepted in this data folder.
     acknowledged: bool,
     /// The acceptance checkbox of that warning.
@@ -587,14 +587,18 @@ impl SamplesView {
     fn search_all(&mut self, cx: &SamplesContext<'_>) {
         let (sender, receiver) = mpsc::channel();
         let (curl, key, source) = (cx.curl.to_path_buf(), self.key.clone(), self.source);
+        let data_dir = cx.data_dir.to_path_buf();
         self.search_generation = self.search_generation.wrapping_add(1);
         let generation = self.search_generation;
         std::thread::spawn(move || {
-            let _ = sender.send(SearchUpdate::Finished(
-                generation,
-                source,
-                source.newest_all(&curl, &key, SEARCH_LIMIT),
-            ));
+            let found = source.newest_all(&curl, &key, SEARCH_LIMIT);
+            if found.is_ok() {
+                antinomie_monitor_core::api_keys::record_use(
+                    &data_dir,
+                    samples::source_api_key(source),
+                );
+            }
+            let _ = sender.send(SearchUpdate::Finished(generation, source, found));
         });
         self.searching = Some(receiver);
         self.status = None;
@@ -604,14 +608,18 @@ impl SamplesView {
     fn search(&mut self, cx: &SamplesContext<'_>, text: String) {
         let (sender, receiver) = mpsc::channel();
         let (curl, key, source) = (cx.curl.to_path_buf(), self.key.clone(), self.source);
+        let data_dir = cx.data_dir.to_path_buf();
         self.search_generation = self.search_generation.wrapping_add(1);
         let generation = self.search_generation;
         std::thread::spawn(move || {
-            let _ = sender.send(SearchUpdate::Finished(
-                generation,
-                source,
-                source.find(&curl, &key, &text, SEARCH_LIMIT),
-            ));
+            let found = source.find(&curl, &key, &text, SEARCH_LIMIT);
+            if found.is_ok() {
+                antinomie_monitor_core::api_keys::record_use(
+                    &data_dir,
+                    samples::source_api_key(source),
+                );
+            }
+            let _ = sender.send(SearchUpdate::Finished(generation, source, found));
         });
         self.searching = Some(receiver);
         self.status = None;
@@ -628,6 +636,8 @@ impl SamplesView {
         }
         crate::toasts::take_failure(ctx, &mut self.status);
         if !self.open {
+            // The keys are set elsewhere: read them again when it opens.
+            self.key_loaded = false;
             return None;
         }
         if !self.key_loaded {
@@ -672,8 +682,8 @@ impl SamplesView {
                 ui.add_space(12.0);
                 self.source_row(ui, cx);
                 ui.add_space(10.0);
-                if !self.key_saved || self.editing_key {
-                    self.key_row(ui, cx);
+                if !self.key_saved {
+                    self.key_row(ui);
                     ui.add_space(12.0);
                 }
                 self.search_bar(ui, cx);
@@ -703,6 +713,11 @@ impl SamplesView {
             }
         }
         action
+    }
+
+    /// The person asked for Tools > API keys, where the key a source needs is set.
+    pub(crate) fn take_open_keys(&mut self) -> bool {
+        std::mem::take(&mut self.want_keys)
     }
 
     /// Shown instead of the window until the user accepts it once.
@@ -842,7 +857,6 @@ impl SamplesView {
             }
             self.key = samples::source_key(cx.data_dir, source);
             self.key_saved = !self.key.is_empty();
-            self.editing_key = false;
             self.results.clear();
             self.listing.clear();
             self.filters = Filters::default();
@@ -856,44 +870,16 @@ impl SamplesView {
         }
     }
 
-    fn key_row(&mut self, ui: &mut egui::Ui, cx: &SamplesContext<'_>) {
-        ui.horizontal(|ui| {
-            ui.label(format!("{} API key", self.source.label()));
-            let edit = ui.add(
-                egui::TextEdit::singleline(&mut self.key)
-                    .password(true)
-                    .hint_text(crate::theme::hint_text(match self.source {
-                        Source::MalwareBazaar => "free key from abuse.ch",
-                        Source::MalShare => "free key from malshare.com",
-                    }))
-                    .margin(theme::TEXT_EDIT_MARGIN)
-                    .desired_width(340.0),
-            );
-            if edit.changed() {
-                self.key_saved = false;
-            }
-            if ui
-                .add_enabled(
-                    !self.key_saved && !self.key.trim().is_empty(),
-                    egui::Button::new("Save key"),
-                )
-                .on_hover_text("Kept in the data folder, readable only by you")
-                .clicked()
-            {
-                match samples::save_source_key(cx.data_dir, self.source, &self.key) {
-                    Ok(()) => {
-                        self.key_saved = true;
-                        self.editing_key = false;
-                        self.listed = false;
-                        self.status = Some(("API key saved".into(), false));
-                    }
-                    Err(error) => self.status = Some((error, true)),
-                }
-            }
-            if self.editing_key && ui.button("Cancel").clicked() {
-                self.key = samples::source_key(cx.data_dir, self.source);
-                self.key_saved = !self.key.is_empty();
-                self.editing_key = false;
+    /// No key yet: it is set in Tools > API keys, not here.
+    fn key_row(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(format!(
+                "{} needs a {}.",
+                self.source.label(),
+                samples::source_api_key(self.source).label()
+            ));
+            if ui.button("Open API keys…").clicked() {
+                self.want_keys = true;
             }
             ui.hyperlink_to(
                 format!("Get a key {}", egui_phosphor::regular::ARROW_SQUARE_OUT),
@@ -902,20 +888,27 @@ impl SamplesView {
         });
     }
 
+    /// The key was changed in Tools > API keys: read it again.
+    pub(crate) fn key_changed(&mut self) {
+        self.key_loaded = false;
+        self.listed = false;
+    }
+
     fn search_bar(&mut self, ui: &mut egui::Ui, cx: &SamplesContext<'_>) {
         let mut search = None;
         let mut all = false;
         let ready = self.key_saved && self.searching.is_none();
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if self.key_saved
-                    && !self.editing_key
-                    && ui
-                        .button(format!("{} Key", egui_phosphor::regular::KEY))
-                        .on_hover_text(format!("Change the {} API key", self.source.label()))
-                        .clicked()
+                if ui
+                    .button(format!("{} Key", egui_phosphor::regular::KEY))
+                    .on_hover_text(format!(
+                        "Change the {} in Tools > API keys",
+                        samples::source_api_key(self.source).label()
+                    ))
+                    .clicked()
                 {
-                    self.editing_key = true;
+                    self.want_keys = true;
                 }
                 if ui
                     .add_enabled(ready, egui::Button::new("Newest (all)"))

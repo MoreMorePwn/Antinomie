@@ -20,6 +20,8 @@ fn view(section: Section) -> (PacketSpool, TriageView) {
     let mut view = TriageView::default();
     view.scan = Some(scan);
     view.section = section;
+    // These tests are about the 0.7.0 tabs; the new layout has its own tests.
+    view.net_layout = NetLayout::Old;
     view.context_key = Some("vm\nboot\nrun\n".into());
     (temp, view)
 }

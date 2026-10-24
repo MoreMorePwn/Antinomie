@@ -140,7 +140,32 @@ pub(super) fn collect(
     }
     let (ips, ips_omitted, _) = inventory_pages.remove(0);
     let (hosts, hosts_omitted, _) = inventory_pages.remove(0);
+    // The rebuilt tabs: the same filter, sort and page machinery, own slots.
+    let tables = inventory.finish();
+    let ioc = std::mem::take(&mut inventory.ioc);
+    let mut new_tabs = NewTabs::default();
+    for (slot, rows, fields) in [
+        (ENDPOINT_SLOT, tables.endpoints, network::ENDPOINT_FIELDS),
+        (DOMAIN_SLOT, tables.domains, network::DOMAIN_FIELDS),
+        (TLS_SLOT, tables.tls, network::TLS_FIELDS),
+    ] {
+        let query = query::compile_table(&request.filters[slot], fields);
+        let mut page = sorting::Page::new(request, slot, cancel);
+        for row in rows {
+            if query.keep_table(&row[0].values) {
+                page.push(row)?;
+            }
+        }
+        let (kept, omitted, _) = page.finish()?;
+        match slot {
+            ENDPOINT_SLOT => (new_tabs.endpoints, new_tabs.endpoints_omitted) = (kept, omitted),
+            DOMAIN_SLOT => (new_tabs.domains, new_tabs.domains_omitted) = (kept, omitted),
+            _ => (new_tabs.tls, new_tabs.tls_omitted) = (kept, omitted),
+        }
+    }
     Ok(PacketIndex {
+        new_tabs,
+        ioc,
         counts,
         coverage: coverage.join(". "),
         http,

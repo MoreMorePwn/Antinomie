@@ -15,8 +15,10 @@ use std::{
     time::Duration,
 };
 
+mod abusech;
 mod catalog_tab;
 pub(crate) mod first_run;
+mod ioc;
 mod page;
 #[cfg(test)]
 mod page_tests;
@@ -32,6 +34,8 @@ use page::{RuleText, Tab};
 pub(crate) enum RulesAction {
     AppDependencies,
     AnalysisTools,
+    /// Tools > API keys, where the abuse.ch Auth-Key is set.
+    ApiKeys,
 }
 
 enum Done {
@@ -42,6 +46,10 @@ enum Done {
     Registry(Registry, String),
     Opened(Registry, Option<Catalog>, String),
     Status(String),
+    /// A dataset download finished; the text says what was updated or failed.
+    Ioc(String),
+    /// abuse.ch packs were checked or installed; the flag says a pack was installed.
+    Live(String, bool),
 }
 
 struct Job {
@@ -91,6 +99,10 @@ pub(crate) struct Model {
     /// Tools the triage scans run; a manifest export qualifies packs against them.
     tools: ruleset::ToolConfig,
     regex: regex_tab::RegexState,
+    /// The IOC tab: the abuse.ch datasets and the known false positives.
+    ioc: ioc::State,
+    /// The abuse.ch tab of the IDS engine.
+    live: abusech::State,
 }
 
 impl Model {
@@ -242,6 +254,19 @@ impl Model {
                     self.changed = true;
                 }
                 Ok(Done::Status(text)) => self.status = text,
+                Ok(Done::Ioc(text)) => self.ioc_done(text),
+                Ok(Done::Live(text, installed)) => {
+                    // The registry is read again after an install and writes its
+                    // own status line, so the tab keeps what happened.
+                    self.live.note.clone_from(&text);
+                    self.status = text;
+                    if installed {
+                        // The registry changed: read it again.
+                        self.changed = true;
+                        self.loaded = false;
+                        self.rows_key.clear();
+                    }
+                }
                 Err(error) => {
                     self.changed |= !self.loaded;
                     self.status_error = Some(error.clone());

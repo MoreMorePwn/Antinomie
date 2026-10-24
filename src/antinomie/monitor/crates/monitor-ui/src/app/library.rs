@@ -61,7 +61,9 @@ impl MonitorApp {
             if library_row(ui, icon, page.title(), meta.as_deref())
                 .on_hover_text(match page {
                     LibraryPage::BaseImages => "Installed base images: open the page",
-                    LibraryPage::Rules => "YARA, IDS and Sigma rule packs: open the page",
+                    LibraryPage::Rules => {
+                        "YARA, IDS and Sigma rule packs and the IOC datasets: open the page"
+                    }
                     LibraryPage::Tools => "Optional static-analysis tools: open the page",
                 })
                 .clicked()
@@ -107,6 +109,9 @@ impl MonitorApp {
             }
             Some(crate::rules_window::RulesAction::AnalysisTools) => {
                 self.open_library(LibraryPage::Tools)
+            }
+            Some(crate::rules_window::RulesAction::ApiKeys) => {
+                self.api_keys.open = true;
             }
             None => {}
         }

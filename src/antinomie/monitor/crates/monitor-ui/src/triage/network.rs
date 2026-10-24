@@ -2,8 +2,12 @@
 //! Summaries of destinations and observed hostnames.
 //! Public-address enrichment runs in the index worker, never while drawing.
 use super::*;
+use antinomie_monitor_core::ioc::indicator::{
+    Collector, Evidence, Jump, Seen, Source, TlsFacts, Via,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+use std::net::IpAddr;
 
 /// How a public destination receives a country and organization.
 /// Local addresses are never queried.
@@ -98,6 +102,75 @@ pub(super) const SESSION_FIELDS: &[FieldSpec<'static>] = &[
     ),
 ];
 
+/// The rebuilt Endpoints tab: one row per remote `ip:port`.
+pub(super) const ENDPOINT_FIELDS: &[FieldSpec<'static>] = &[
+    FieldSpec::text("capture.path", "Capture segment of the first frame"),
+    FieldSpec::text("network.endpoint", "Remote ip:port"),
+    FieldSpec::text("network.ip", "Remote IP"),
+    FieldSpec::number("network.port", "Remote port"),
+    FieldSpec::text("network.protocol", "tcp or udp"),
+    FieldSpec::number("network.frames", "Frames to and from it"),
+    FieldSpec::number("network.bytes", "Bytes of those frames"),
+    FieldSpec::text(
+        "network.country",
+        "Country from locally configured TShark GeoIP data",
+    ),
+    FieldSpec::text("network.organization", "Organization from local ASN data"),
+    FieldSpec::number(
+        "network.first_us",
+        "First observed packet time in the capture clock",
+    ),
+    FieldSpec::number(
+        "network.last_us",
+        "Last observed packet time in the capture clock",
+    ),
+    FieldSpec::number("frame.number", "First observed frame"),
+];
+
+/// The rebuilt Domains tab: the Hosts fields, and the DNS names they merge.
+pub(super) const DOMAIN_FIELDS: &[FieldSpec<'static>] = &[
+    FieldSpec::text("capture.path", "Capture segment of the evidence packet"),
+    FieldSpec::number(
+        "network.first_us",
+        "First observed packet time in the capture clock",
+    ),
+    FieldSpec::number(
+        "network.last_us",
+        "Last observed packet time in the capture clock",
+    ),
+    FieldSpec::text("network.hostname", "DNS question, HTTP Host or TLS SNI"),
+    FieldSpec::text("dns.name", "Same as network.hostname"),
+    FieldSpec::tags(
+        "network.addresses",
+        "Observed DNS addresses or connection destinations",
+    ),
+    FieldSpec::number("network.count", "Observed requests or client hellos"),
+    FieldSpec::tags("network.sources", "DNS, HTTP or TLS"),
+    FieldSpec::tags("dns.rcode", "How DNS answered the name"),
+    FieldSpec::number("frame.number", "First original packet"),
+];
+
+/// The rebuilt TLS tab: sessions grouped by server name, server and JA3.
+pub(super) const TLS_FIELDS: &[FieldSpec<'static>] = &[
+    FieldSpec::text("capture.path", "Capture segment of the first hello"),
+    FieldSpec::number("frame.number", "First client hello"),
+    FieldSpec::number("frame.time_us", "Packet time in the capture clock"),
+    FieldSpec::text("network.endpoints", "Server ip:port"),
+    FieldSpec::text("session.server_name", "TLS or QUIC server name (SNI)"),
+    FieldSpec::tags("session.alpn", "ALPN protocols offered"),
+    FieldSpec::text("tls.sni", "TLS or QUIC server name (SNI)"),
+    FieldSpec::text("tls.endpoint", "Server ip:port"),
+    FieldSpec::text("tls.version", "The version the server hello named"),
+    FieldSpec::text("tls.ja3", "JA3 client fingerprint"),
+    FieldSpec::text("tls.ja4", "JA4 client fingerprint"),
+    FieldSpec::text("tls.ja3s", "JA3S server fingerprint"),
+    FieldSpec::text(
+        "tls.cert",
+        "SHA-1 of the server's certificate (not seen in TLS 1.3)",
+    ),
+    FieldSpec::number("tls.sessions", "Sessions in the group"),
+];
+
 #[derive(Default)]
 struct Host {
     capture: String,
@@ -107,14 +180,145 @@ struct Host {
     count: u64,
     addresses: BTreeSet<String>,
     sources: BTreeSet<String>,
+    /// How DNS answered the name: NOERROR, NXDOMAIN, ...
+    rcodes: BTreeSet<String>,
+}
+
+/// One remote `ip:port` the capture shows traffic with.
+#[derive(Default)]
+struct Endpoint {
+    capture: String,
+    frame: u64,
+    frames: u64,
+    bytes: u64,
+    first: Option<u64>,
+    last: Option<u64>,
+}
+
+/// One TLS session, as far as its hellos showed.
+#[derive(Default)]
+struct TlsSession {
+    capture: String,
+    frame: u64,
+    time: Option<u64>,
+    server: Option<(IpAddr, u16)>,
+    sni: String,
+    alpn: String,
+    version: String,
+    ja3: String,
+    ja4: String,
+    ja3s: String,
+    cert_sha1: String,
+}
+
+/// What a frame says about the two ends of its conversation.
+pub(super) struct PacketFacts<'a> {
+    pub source: &'a str,
+    pub source_port: &'a str,
+    pub destination: &'a str,
+    pub destination_port: &'a str,
+    pub protocol: &'static str,
+    pub frame: u64,
+    pub time: Option<u64>,
+    pub length: u64,
+}
+
+/// One HTTP request of the capture.
+pub(super) struct UrlFacts<'a> {
+    pub frame: u64,
+    pub time: Option<u64>,
+    pub method: &'a str,
+    pub host: &'a str,
+    pub uri: &'a str,
+    pub version: &'a str,
+    pub status: Option<u16>,
+    pub destination: &'a str,
+    pub port: &'a str,
+}
+
+/// The TLS fields of one frame.
+pub(super) struct TlsFrame<'a> {
+    pub frame: u64,
+    pub time: Option<u64>,
+    /// `tcp.stream`, empty for datagrams.
+    pub stream: &'a str,
+    pub source: (&'a str, &'a str),
+    pub destination: (&'a str, &'a str),
+    /// Handshake types in the frame (1 client hello, 2 server hello, 11 certificate).
+    pub kinds: Vec<&'a str>,
+    pub sni: &'a str,
+    pub alpn: &'a str,
+    pub version: &'a str,
+    pub supported: &'a str,
+    pub ja3: &'a str,
+    pub ja4: &'a str,
+    pub ja3s: &'a str,
+    pub certificate: &'a str,
 }
 
 #[derive(Default)]
 pub(super) struct Inventory {
     ips: BTreeMap<String, (u64, String, String, String)>,
     hosts: BTreeMap<String, Host>,
+    endpoints: BTreeMap<(IpAddr, u16, &'static str), Endpoint>,
+    tls: BTreeMap<String, TlsSession>,
+    /// The run's indicators the capture shows, for the IOC window.
+    pub ioc: Collector,
     pub capture: String,
     pub omitted: u64,
+}
+
+/// The tables of the Network section's rebuilt tabs.
+#[derive(Default)]
+pub(super) struct Tables {
+    pub endpoints: Vec<Vec<Cell>>,
+    pub domains: Vec<Vec<Cell>>,
+    pub tls: Vec<Vec<Cell>>,
+}
+
+fn port_of(text: &str) -> Option<u16> {
+    text.parse().ok()
+}
+
+/// TLS version names from TShark's hexadecimal or decimal codes.
+fn tls_version(code: &str) -> String {
+    let value = code.strip_prefix("0x").map_or_else(
+        || code.parse::<u32>().ok(),
+        |hex| u32::from_str_radix(hex, 16).ok(),
+    );
+    match value {
+        Some(0x0304) => "TLS 1.3".into(),
+        Some(0x0303) => "TLS 1.2".into(),
+        Some(0x0302) => "TLS 1.1".into(),
+        Some(0x0301) => "TLS 1.0".into(),
+        Some(0x0300) => "SSL 3.0".into(),
+        _ => String::new(),
+    }
+}
+
+/// A DNS response code by name; `NOERROR` with no answers says so.
+pub(super) fn rcode_name(code: i128, answered: bool) -> String {
+    match code {
+        0 if answered => "NOERROR".into(),
+        0 => "NOERROR, no answer".into(),
+        1 => "FORMERR".into(),
+        2 => "SERVFAIL".into(),
+        3 => "NXDOMAIN".into(),
+        4 => "NOTIMP".into(),
+        5 => "REFUSED".into(),
+        other => other.to_string(),
+    }
+}
+
+fn packet_evidence(capture: &str, frame: u64) -> Evidence {
+    Evidence {
+        source: Source::Pcap,
+        label: format!("Packets · frame {frame}"),
+        jump: Jump::Packet {
+            capture: capture.to_owned(),
+            frame,
+        },
+    }
 }
 
 impl Inventory {
@@ -156,6 +360,21 @@ impl Inventory {
             self.omitted += 1;
             return;
         }
+        let via = match source {
+            "DNS lookup" => Via::Dns,
+            "TLS SNI" | "QUIC SNI" => Via::Sni,
+            _ => Via::HttpHost,
+        };
+        let seen = Seen {
+            time_us: time,
+            evidence: Some(packet_evidence(&self.capture, frame)),
+            ..Seen::default()
+        };
+        let resolved: Vec<IpAddr> = addresses
+            .iter()
+            .filter_map(|address| address.parse().ok())
+            .collect();
+        self.ioc.domain(&name, via, &resolved, Source::Pcap, seen);
         let host = self.hosts.entry(name).or_insert_with(|| Host {
             capture: self.capture.clone(),
             frame,
@@ -173,6 +392,420 @@ impl Inventory {
         }
         host.sources.insert(source.into());
     }
+    /// How DNS answered a name.
+    pub fn host_rcode(&mut self, name: &str, rcode: &str) {
+        let name = name.trim().trim_end_matches('.').to_lowercase();
+        if let Some(host) = self.hosts.get_mut(&name) {
+            if host.rcodes.len() < 8 {
+                host.rcodes.insert(rcode.to_owned());
+            }
+        }
+    }
+
+    /// A frame of a conversation: counts it for the remote `ip:port`, the side
+    /// that is not local (else the lower port, else the destination).
+    pub fn packet(&mut self, facts: &PacketFacts<'_>) {
+        let (Ok(source), Ok(destination)) = (
+            facts.source.parse::<IpAddr>(),
+            facts.destination.parse::<IpAddr>(),
+        ) else {
+            return;
+        };
+        let (Some(source_port), Some(destination_port)) =
+            (port_of(facts.source_port), port_of(facts.destination_port))
+        else {
+            return;
+        };
+        let to_destination = match (
+            local_address(facts.source),
+            local_address(facts.destination),
+        ) {
+            (true, false) => true,
+            (false, true) => false,
+            _ => destination_port <= source_port,
+        };
+        let (ip, port) = if to_destination {
+            (destination, destination_port)
+        } else {
+            (source, source_port)
+        };
+        let key = (ip, port, facts.protocol);
+        if self.endpoints.len() >= INVENTORY_LIMIT && !self.endpoints.contains_key(&key) {
+            self.omitted += 1;
+            return;
+        }
+        let fresh = !self.endpoints.contains_key(&key);
+        let endpoint = self.endpoints.entry(key).or_insert_with(|| Endpoint {
+            capture: self.capture.clone(),
+            frame: facts.frame,
+            ..Endpoint::default()
+        });
+        endpoint.frames += 1;
+        endpoint.bytes = endpoint.bytes.saturating_add(facts.length);
+        endpoint.first = endpoint.first.into_iter().chain(facts.time).min();
+        endpoint.last = endpoint.last.into_iter().chain(facts.time).max();
+        // The first frame is the evidence; later ones only count.
+        let evidence = fresh.then(|| packet_evidence(&self.capture, facts.frame));
+        self.ioc.endpoint(
+            ip,
+            port,
+            facts.protocol,
+            Source::Pcap,
+            Seen {
+                time_us: facts.time,
+                evidence,
+                ..Seen::default()
+            },
+        );
+    }
+
+    /// An HTTP request (cleartext HTTP/1 or HTTP/2).
+    pub fn url(&mut self, facts: &UrlFacts<'_>) {
+        let endpoint = facts
+            .destination
+            .parse::<IpAddr>()
+            .ok()
+            .zip(port_of(facts.port));
+        self.ioc.url(
+            facts.method,
+            facts.host,
+            facts.uri,
+            facts.version,
+            facts.status,
+            endpoint,
+            Source::Pcap,
+            Seen {
+                time_us: facts.time,
+                evidence: Some(packet_evidence(&self.capture, facts.frame)),
+                ..Seen::default()
+            },
+        );
+    }
+
+    /// The TLS fields of a frame: a client hello starts a session, the server's
+    /// reply and certificate complete it.
+    pub fn tls_frame(&mut self, facts: &TlsFrame<'_>) {
+        let hello = facts.kinds.contains(&"1");
+        let reply = facts.kinds.iter().any(|kind| matches!(*kind, "2" | "11"))
+            || !facts.ja3s.is_empty()
+            || !facts.certificate.is_empty();
+        if !hello && !reply {
+            return;
+        }
+        let address = |pair: (&str, &str)| pair.0.parse::<IpAddr>().ok().zip(port_of(pair.1));
+        let (client, server) = if hello {
+            (address(facts.source), address(facts.destination))
+        } else {
+            (address(facts.destination), address(facts.source))
+        };
+        let (Some(client), Some(server)) = (client, server) else {
+            return;
+        };
+        let key = if facts.stream.is_empty() {
+            format!(
+                "{}|{}:{}>{}:{}",
+                self.capture, client.0, client.1, server.0, server.1
+            )
+        } else {
+            format!("{}|{}", self.capture, facts.stream)
+        };
+        if self.tls.len() >= INVENTORY_LIMIT && !self.tls.contains_key(&key) {
+            self.omitted += 1;
+            return;
+        }
+        let session = self.tls.entry(key).or_insert_with(|| TlsSession {
+            capture: self.capture.clone(),
+            frame: facts.frame,
+            time: facts.time,
+            ..TlsSession::default()
+        });
+        session.server = Some(server);
+        let fill = |slot: &mut String, value: &str| {
+            if slot.is_empty() && !value.is_empty() {
+                *slot = value.split('\u{1f}').next().unwrap_or("").to_owned();
+            }
+        };
+        if hello {
+            session.frame = facts.frame;
+            session.time = facts.time;
+            fill(&mut session.sni, facts.sni);
+            fill(&mut session.alpn, facts.alpn);
+            fill(&mut session.ja3, facts.ja3);
+            fill(&mut session.ja4, facts.ja4);
+        } else {
+            fill(&mut session.ja3s, facts.ja3s);
+            if session.cert_sha1.is_empty() {
+                if let Some(sha1) =
+                    antinomie_monitor_core::ioc::kind::certificate_sha1(facts.certificate)
+                {
+                    session.cert_sha1 = sha1;
+                }
+            }
+            if session.alpn.is_empty() {
+                fill(&mut session.alpn, facts.alpn);
+            }
+        }
+        let version = if facts.supported.is_empty() {
+            tls_version(facts.version.split('\u{1f}').next().unwrap_or(""))
+        } else {
+            // The highest version the hello names (a server hello names one).
+            facts
+                .supported
+                .split('\u{1f}')
+                .map(tls_version)
+                .find(|name| !name.is_empty())
+                .unwrap_or_default()
+        };
+        if !version.is_empty() && (reply || session.version.is_empty()) {
+            session.version = version;
+        }
+    }
+
+    /// The rebuilt Network section's tables, and the TLS sessions grouped for
+    /// the IOC window. Call once, when every segment has been read.
+    pub fn finish(&mut self) -> Tables {
+        let mut tables = Tables::default();
+        for ((ip, port, protocol), endpoint) in &self.endpoints {
+            let address = ip.to_string();
+            let (country, organization) = self
+                .ips
+                .get(&address)
+                .map_or(("", ""), |(_, country, organization, _)| {
+                    (country.as_str(), organization.as_str())
+                });
+            let shown = antinomie_monitor_core::ioc::kind::ip_port(*ip, *port);
+            let mut row = vec![
+                cell(&shown, theme::text(), true),
+                cell(*protocol, theme::text(), false),
+                cell(endpoint.frames.to_string(), theme::text(), true),
+                cell(
+                    crate::values::file_size(endpoint.bytes),
+                    theme::text(),
+                    true,
+                ),
+                cell(available(country), theme::text(), false),
+                cell(available(organization), theme::text(), false),
+                cell(
+                    endpoint
+                        .first
+                        .map_or("Unavailable".into(), crate::time_format::short_time_us),
+                    theme::text(),
+                    true,
+                ),
+                cell(
+                    endpoint
+                        .last
+                        .map_or("Unavailable".into(), crate::time_format::short_time_us),
+                    theme::text(),
+                    true,
+                ),
+            ];
+            row[0].values = vec![
+                ("capture.path", text_value(&endpoint.capture)),
+                ("network.endpoint", RowValue::Text(shown.clone())),
+                ("network.ip", RowValue::Text(address)),
+                ("network.port", RowValue::Number(i128::from(*port))),
+                ("network.protocol", RowValue::Text((*protocol).into())),
+                (
+                    "network.frames",
+                    RowValue::Number(i128::from(endpoint.frames)),
+                ),
+                (
+                    "network.bytes",
+                    RowValue::Number(i128::from(endpoint.bytes)),
+                ),
+                ("network.country", text_value(country)),
+                ("network.organization", text_value(organization)),
+                (
+                    "network.first_us",
+                    endpoint
+                        .first
+                        .map_or(RowValue::Missing, |time| RowValue::Number(i128::from(time))),
+                ),
+                (
+                    "network.last_us",
+                    endpoint
+                        .last
+                        .map_or(RowValue::Missing, |time| RowValue::Number(i128::from(time))),
+                ),
+                ("frame.number", RowValue::Number(i128::from(endpoint.frame))),
+            ];
+            tables.endpoints.push(row);
+        }
+        for (name, host) in &self.hosts {
+            let rcodes: Vec<String> = host.rcodes.iter().cloned().collect();
+            let mut row = vec![
+                cell(name, theme::text(), false),
+                cell(
+                    host.sources.iter().cloned().collect::<Vec<_>>().join(", "),
+                    theme::text(),
+                    false,
+                ),
+                cell(
+                    host.addresses
+                        .iter()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    theme::text(),
+                    true,
+                ),
+                cell(host.count.to_string(), theme::text(), true),
+                cell(
+                    host.first
+                        .map_or("Unavailable".into(), crate::time_format::short_time_us),
+                    theme::text(),
+                    true,
+                ),
+                cell(
+                    host.last
+                        .map_or("Unavailable".into(), crate::time_format::short_time_us),
+                    theme::text(),
+                    true,
+                ),
+                cell(
+                    if rcodes.is_empty() {
+                        "—".to_owned()
+                    } else {
+                        rcodes.join(", ")
+                    },
+                    theme::text(),
+                    false,
+                ),
+            ];
+            row[0].values = vec![
+                ("capture.path", text_value(&host.capture)),
+                ("network.hostname", RowValue::Text(name.clone())),
+                ("dns.name", RowValue::Text(name.clone())),
+                (
+                    "network.addresses",
+                    RowValue::List(host.addresses.iter().cloned().collect()),
+                ),
+                ("network.count", RowValue::Number(i128::from(host.count))),
+                (
+                    "network.first_us",
+                    host.first
+                        .map_or(RowValue::Missing, |time| RowValue::Number(i128::from(time))),
+                ),
+                (
+                    "network.last_us",
+                    host.last
+                        .map_or(RowValue::Missing, |time| RowValue::Number(i128::from(time))),
+                ),
+                (
+                    "network.sources",
+                    RowValue::List(host.sources.iter().cloned().collect()),
+                ),
+                ("dns.rcode", RowValue::List(rcodes)),
+                ("frame.number", RowValue::Number(i128::from(host.frame))),
+            ];
+            tables.domains.push(row);
+        }
+        // Sessions with the same server name, server and client fingerprint are one row.
+        let mut groups: BTreeMap<(String, String, String), (TlsSession, u64)> = BTreeMap::new();
+        for session in std::mem::take(&mut self.tls).into_values() {
+            let Some(server) = session.server else {
+                continue;
+            };
+            let name = antinomie_monitor_core::ioc::kind::ip_port(server.0, server.1);
+            let key = (session.sni.clone(), name, session.ja3.clone());
+            match groups.get_mut(&key) {
+                Some((first, count)) => {
+                    *count += 1;
+                    if first.ja3s.is_empty() {
+                        first.ja3s.clone_from(&session.ja3s);
+                    }
+                    if first.cert_sha1.is_empty() {
+                        first.cert_sha1.clone_from(&session.cert_sha1);
+                    }
+                    if first.version.is_empty() {
+                        first.version.clone_from(&session.version);
+                    }
+                }
+                None => {
+                    groups.insert(key, (session, 1));
+                }
+            }
+        }
+        for ((sni, endpoint, _), (session, count)) in &groups {
+            let (ip, port) = session.server.unwrap_or((IpAddr::from([0, 0, 0, 0]), 0));
+            for _ in 0..*count {
+                self.ioc.tls(
+                    (ip, port),
+                    TlsFacts {
+                        sni: sni.clone(),
+                        ja3: session.ja3.clone(),
+                        ja4: session.ja4.clone(),
+                        ja3s: session.ja3s.clone(),
+                        cert_sha1: session.cert_sha1.clone(),
+                        alpn: session.alpn.clone(),
+                        version: session.version.clone(),
+                    },
+                    Source::Pcap,
+                    Seen {
+                        time_us: session.time,
+                        evidence: Some(packet_evidence(&session.capture, session.frame)),
+                        ..Seen::default()
+                    },
+                );
+            }
+            let mut row = vec![
+                cell(format!("#{}", session.frame), theme::text(), true),
+                cell(
+                    if sni.is_empty() {
+                        "(none)"
+                    } else {
+                        sni.as_str()
+                    },
+                    theme::text(),
+                    false,
+                ),
+                cell(endpoint, theme::text(), true),
+                cell(&session.version, theme::text(), false),
+                cell(&session.alpn, theme::text(), false),
+                cell(&session.ja3, theme::text(), true),
+                cell(&session.ja4, theme::text(), true),
+                cell(&session.ja3s, theme::text(), true),
+                cell(&session.cert_sha1, theme::text(), true),
+                cell(count.to_string(), theme::text(), true),
+            ];
+            row[0].values = vec![
+                ("capture.path", text_value(&session.capture)),
+                ("frame.number", RowValue::Number(i128::from(session.frame))),
+                (
+                    "frame.time_us",
+                    session
+                        .time
+                        .map_or(RowValue::Missing, |time| RowValue::Number(i128::from(time))),
+                ),
+                ("network.endpoints", RowValue::Text(endpoint.clone())),
+                ("session.server_name", text_value(sni)),
+                ("tls.sni", text_value(sni)),
+                ("tls.endpoint", RowValue::Text(endpoint.clone())),
+                ("tls.version", text_value(&session.version)),
+                (
+                    "session.alpn",
+                    RowValue::List(if session.alpn.is_empty() {
+                        Vec::new()
+                    } else {
+                        session
+                            .alpn
+                            .split(',')
+                            .map(|a| a.trim().to_owned())
+                            .collect()
+                    }),
+                ),
+                ("tls.ja3", text_value(&session.ja3)),
+                ("tls.ja4", text_value(&session.ja4)),
+                ("tls.ja3s", text_value(&session.ja3s)),
+                ("tls.cert", text_value(&session.cert_sha1)),
+                ("tls.sessions", RowValue::Number(i128::from(*count))),
+            ];
+            tables.tls.push(row);
+        }
+        tables
+    }
+
     fn incomplete(&self) -> Vec<String> {
         self.ips
             .iter()

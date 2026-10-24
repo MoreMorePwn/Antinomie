@@ -137,6 +137,7 @@ impl TriageView {
         if self.scan_request.data_dir.as_deref() != Some(dir) {
             self.scan_request.data_dir = Some(dir.to_owned());
         }
+        self.ioc.set_data_dir(dir);
     }
 
     pub(crate) fn set_tools_dir(&mut self, dir: &std::path::Path) {
