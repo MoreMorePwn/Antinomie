@@ -18,6 +18,8 @@ impl Session {
             }
             return error;
         }
+        // The program did not run, so nothing will ever acquire its specimen.
+        run.settle_unstarted_analysis(&error);
         let mut issues = vec![error];
         owner.tree_complete = true;
         if owner.network.is_some() {
