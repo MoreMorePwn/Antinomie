@@ -223,6 +223,20 @@ fn process_running(marker: &str) -> bool {
         .any(|cmdline| String::from_utf8_lossy(&cmdline).contains(marker))
 }
 
+/// Whether no process carries `marker` any more. A killed worker is reaped a
+/// moment after the kill, and how long that takes depends on the host, so this
+/// waits for it, not for a fixed time.
+fn gone(marker: &str) -> bool {
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while process_running(marker) {
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    true
+}
+
 #[test]
 fn a_stalled_worker_is_killed_and_the_next_request_starts_a_new_one() {
     require_sandbox!();
@@ -236,11 +250,7 @@ fn a_stalled_worker_is_killed_and_the_next_request_starts_a_new_one() {
         reader.set_timeout(Duration::from_millis(800));
         let error = reader.request(DiskRequest::Probe).unwrap_err();
         assert!(error.contains("did not answer in time"), "{error}");
-        std::thread::sleep(Duration::from_millis(300));
-        assert!(
-            !process_running(&marker(31337)),
-            "the stalled worker was left running"
-        );
+        assert!(gone(&marker(31337)), "the stalled worker was left running");
 
         // A worker that dies at once reports why (its stderr), then is replaced.
         let dying = script_worker(&fixture, "echo 'cannot start' >&2; exit 3");
@@ -268,8 +278,7 @@ fn dropping_the_reader_stops_its_worker() {
         reader.set_timeout(Duration::from_millis(300));
         let _ = reader.request(DiskRequest::Probe);
         drop(reader);
-        std::thread::sleep(Duration::from_millis(300));
-        assert!(!process_running(&marker(41414)));
+        assert!(gone(&marker(41414)));
     });
 }
 
@@ -298,11 +307,7 @@ fn cancelling_a_diff_or_a_content_search_kills_its_reader_at_once() {
         canceller.join().unwrap();
         assert!(error.starts_with("cancelled"), "{error}");
         assert!(started.elapsed() < Duration::from_secs(10));
-        std::thread::sleep(Duration::from_millis(300));
-        assert!(
-            !process_running(&marker(61616)),
-            "the reader was left running"
-        );
+        assert!(gone(&marker(61616)), "the reader was left running");
         // The same flag stops a content search before it starts working.
         let error = reader
             .request(DiskRequest::Find {
@@ -313,7 +318,6 @@ fn cancelling_a_diff_or_a_content_search_kills_its_reader_at_once() {
             })
             .unwrap_err();
         assert!(error.starts_with("cancelled"), "{error}");
-        std::thread::sleep(Duration::from_millis(300));
-        assert!(!process_running(&marker(61616)));
+        assert!(gone(&marker(61616)));
     });
 }
