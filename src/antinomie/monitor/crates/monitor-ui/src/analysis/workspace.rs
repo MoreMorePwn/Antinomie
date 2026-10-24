@@ -12,7 +12,7 @@ use super::{
 };
 use antinomie_monitor_core::{
     AnalysisData, AnalysisEntry, AnalysisExportFormat, AnalysisKind, AnalysisListingPage,
-    AnalysisReport, AnalysisSection, AnalysisSpecimenPage, AnalysisState,
+    AnalysisReport, AnalysisSection, AnalysisSectionState, AnalysisSpecimenPage, AnalysisState,
 };
 use eframe::egui;
 use egui_extras::{Column as TableColumn, TableBuilder};
@@ -655,6 +655,11 @@ fn categories(
 ) -> Option<ReportAction> {
     use crate::widgets::{chip, Tone};
     let mut action = None;
+    // Checks can be added to an analysis that is not being made.
+    let finished = matches!(
+        report.state,
+        AnalysisState::Complete | AnalysisState::Partial
+    );
     crate::widgets::card(
         ui,
         "Categories",
@@ -676,6 +681,16 @@ fn categories(
                         ui.add_enabled(false, egui::Label::new(section_title(kind)))
                             .on_disabled_hover_text(NOT_REQUESTED);
                         chip(ui, "Not requested", Tone::Neutral);
+                        if run_button(
+                            ui,
+                            finished,
+                            "Run this check now; the rest of the analysis is not repeated",
+                        ) {
+                            action = Some(ReportAction::RunCheck {
+                                report_id: report.id.clone(),
+                                kind,
+                            });
+                        }
                     });
                     continue;
                 };
@@ -706,6 +721,15 @@ fn categories(
                             .map_or(section.entries.len() as u64, |listing| listing.rows);
                         ui.label(egui::RichText::new(format!("{rows} rows")).monospace());
                         chip(ui, state_word(report, section), state_tone(section));
+                        // A check that could not run may be tried again.
+                        if section.state == AnalysisSectionState::Unavailable
+                            && run_button(ui, finished, "Try this check again")
+                        {
+                            action = Some(ReportAction::RunCheck {
+                                report_id: report.id.clone(),
+                                kind,
+                            });
+                        }
                     },
                 );
             }
@@ -714,9 +738,17 @@ fn categories(
     action
 }
 
+/// The small Run button of a category; true when it was pressed.
+fn run_button(ui: &mut egui::Ui, enabled: bool, hover: &str) -> bool {
+    ui.add_enabled(enabled, egui::Button::new("Run").small())
+        .on_hover_text(hover)
+        .on_disabled_hover_text("Wait for the analysis to finish")
+        .clicked()
+}
+
 /// Why a category that is not in the report cannot be opened.
 pub(super) const NOT_REQUESTED: &str =
-    "Not part of this analysis; start one with this check selected";
+    "Not part of this analysis; Run in Overview > Categories adds it without starting over";
 
 const ALL_KINDS: [AnalysisKind; 13] = [
     AnalysisKind::Metadata,

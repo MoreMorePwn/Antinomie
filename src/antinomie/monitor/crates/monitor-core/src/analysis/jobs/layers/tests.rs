@@ -75,6 +75,7 @@ fn finished(name: &str) -> (Job, PathBuf) {
         specimen_publication: None,
         progress: Default::default(),
         host_copy: None,
+        supplement: None,
     };
     (job, root)
 }

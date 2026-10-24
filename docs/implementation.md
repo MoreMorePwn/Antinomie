@@ -1065,6 +1065,41 @@ of that run no longer has to read it back.
   `backend/tests.rs` (which exec record may vouch), `app/tests/upload.rs` and
   `analysis/workspace_tests.rs`.
 
+### Checks added to a finished analysis (0.7.1)
+
+Host only. The Categories card of the Static analysis Overview lists a **Run** button
+for every `AnalysisKind` the report has no section for, and for a section that is
+`Unavailable`. It sends `ReportAction::RunCheck` and the app `Command::AnalyzeMore
+{ directory, run_id, checks }`; the backend refuses a relative path or one with `..`
+and queues it on `host_analysis`, which needs no VM.
+
+* **Job** (`jobs/supplement.rs`, `Jobs::analyze_more`). The folder's `report.json` must
+  be `Complete` or `Partial`, no job of that report id may be waiting, and the kind must
+  be new (or `Unavailable`). The job's report is the saved one (same id, source path,
+  hash, specimen source) with the new sections `Pending`; its specimen is a host-file
+  copy of the retained `specimen` (`submit_host_opened_for`, which carries the run id)
+  in `<folder>/extra/<id>`, so quota, reservation, cancel and the worker sandbox are
+  the ordinary ones. The worker runs only `Pending` sections (`progress::pending_order`),
+  budgets only those (`worker_deadline`, rlimits, `/tmp` size), and `progress::merge`
+  leaves a finished section, listing included, as it is.
+* **Merge** (`Job::merge_supplement`, called from `Jobs::finish`). Carried sections are
+  taken from the saved report again, the new listings (`adopt_listings` skips carried
+  kinds) and `output/artifacts` move into the folder (an existing name is an error),
+  the job folder is removed and the report is saved in the folder as the original was.
+  A failed or cancelled check leaves its section `Unavailable` with the reason and makes
+  the report `Partial`. Unpacking queues its layers as it does after a first analysis
+  (`queue_layers` is skipped when Unpacking was already there). Retained bytes count only
+  what the job added (`Job::retained_len`).
+* **Updates.** Updates carry the report's id and the run id; `host_analysis_updates`
+  gives a run's report to the session run (`Session::run_analysis`, which saves the
+  run summary) and does not list it among the standalone reports. The window follows
+  by the `AnalysisUpdated` notification. A reopened recording reads `report.json`.
+* **Tests.** `jobs/supplement.rs` (join and persist, failed check, refusals),
+  `progress.rs` (pending-only order and deadline, finished sections kept),
+  `backend/worker_disks/tests.rs` (plain paths, run versus standalone),
+  `analysis/workspace_tests.rs` (Run enabled only when finished) and
+  `app/tests/analysis.rs` (the command).
+
 ### Regex matches window (0.7.1)
 
 Host only. Core: `monitor-core/src/strings_regex/`; window: `monitor-ui/src/regex_matches.rs`.

@@ -836,6 +836,59 @@ fn host_files_are_analyzed_through_the_ordinary_job_queue() {
     assert!(worker.snapshot.analysis_reports.is_empty());
 }
 
+#[test]
+fn checks_are_added_to_a_finished_analysis_without_a_vm_and_only_by_plain_paths() {
+    use crate::analysis::{AnalysisKind, AnalysisSectionState, AnalysisState};
+    let images = Images::new();
+    let mut worker = blank_worker(images.path("data"));
+    let folder = images.path("data/analysis");
+    storage::private_dir(&folder).unwrap();
+    let selection = crate::analysis::AnalysisSelection {
+        enabled: true,
+        checks: vec![AnalysisKind::Metadata],
+    };
+    let mut report = crate::analysis::jobs::new_report("/tmp/sample", &selection);
+    report.state = AnalysisState::Complete;
+    report.specimen_len = Some(3);
+    report.specimen_sha256 = Some(storage::sha256_hex(b"abc"));
+    report.sections[0].state = AnalysisSectionState::Complete;
+    fs::write(folder.join("specimen"), b"abc").unwrap();
+    storage::atomic_bytes(
+        &folder.join("report.json"),
+        &serde_json::to_vec(&report).unwrap(),
+    )
+    .unwrap();
+    let checks = [AnalysisKind::Strings];
+    assert!(
+        worker
+            .analyze_more(&PathBuf::from("data/analysis"), None, &checks)
+            .is_err()
+    );
+    assert!(
+        worker
+            .analyze_more(&folder.join("../analysis"), None, &checks)
+            .is_err()
+    );
+    assert!(
+        worker
+            .analyze_more(&folder, None, &[AnalysisKind::Metadata])
+            .is_err()
+    );
+    // A run's analysis is the run's, not a standalone report.
+    worker
+        .analyze_more(&folder, Some("run".into()), &checks)
+        .unwrap();
+    assert!(worker.snapshot.analysis_reports.is_empty());
+    assert!(worker.host_analysis.cancel(&report.id).is_ok());
+    worker.host_analysis_tick();
+    // A standalone one is listed beside the others, as its own id.
+    worker.analyze_more(&folder, None, &checks).unwrap();
+    let listed = &worker.snapshot.analysis_reports;
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].id, report.id);
+    assert_eq!(listed[0].sections.len(), 2);
+}
+
 fn dump_of(machine: &mut Machine, hash: bool) -> disks::dump::DiskDump {
     machine
         .command(Command::DumpDisk {

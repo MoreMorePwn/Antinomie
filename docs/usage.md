@@ -203,6 +203,13 @@ packet history already has it, and specimen Content supports a byte-offset jump.
   the binary `sockaddr_in` and `sockaddr_in6` structures in the core's memory.
   Switch patterns off or add your own in **Library > Detection rules > Strings
   regex**; **Scan again** reads the change.
+- **Static Analysis > Overview > Categories**: a category the analysis was not
+  started with shows **Not requested** and a **Run** button. Run adds that check
+  to the same report without starting the analysis again: the specimen kept with
+  the report is analysed by the one check, and its tab fills in when it ends.
+  A check that was unavailable (a missing tool, say) shows **Run** as well, to
+  try it again. The button waits while the analysis is still being made; no VM
+  has to be running, and the result is saved with the report like the others.
 - **Static Analysis > Unpacking**: the unpack chain as phases, left to right: the
   file as it came (packed with UPX or not), then each layer UPX recovered from the
   one before, with size, SHA-256 and the packer found in it. A file packed twice

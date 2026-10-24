@@ -73,6 +73,7 @@ mod tests {
             specimen_publication: None,
             progress: Default::default(),
             host_copy: None,
+            supplement: None,
         }
     }
 
