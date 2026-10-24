@@ -141,7 +141,28 @@ pub(crate) fn fail(report: &mut AnalysisReport, state: AnalysisState, reason: im
         }
     }
 }
+/// Settle a report nothing owns any more (the run never started, the VM ended,
+/// the job queue was lost on restart): a report still waiting or running
+/// becomes unavailable, or partial when a worker had begun, with `reason`.
+/// Returns whether the report changed.
+pub(crate) fn abandon(report: &mut AnalysisReport, reason: impl Into<String>) -> bool {
+    let state = match report.state {
+        AnalysisState::Acquiring | AnalysisState::Queued => AnalysisState::Unavailable,
+        AnalysisState::Running => AnalysisState::Partial,
+        _ => return false,
+    };
+    fail(report, state, reason);
+    true
+}
 impl Jobs {
+    /// Whether a job for report `id` is still queued, acquiring or running.
+    pub(crate) fn tracks(&self, id: &str) -> bool {
+        self.queue
+            .iter()
+            .chain(self.active.iter())
+            .chain(self.acquiring.iter())
+            .any(|job| job.report.id == id)
+    }
     pub fn with_tools(tools_dir: PathBuf) -> Self {
         let mut jobs = Self::default();
         jobs.tools_dir = Some(tools_dir);
@@ -651,6 +672,8 @@ impl Drop for Jobs {
 /// Wall-clock budget of one worker: decompilers analyze the whole program.
 /// Time a job has to receive its specimen once it starts.
 const TRANSFER_DEADLINE: Duration = Duration::from_secs(120);
+/// Time the durable report of an acquired specimen has to be written.
+const PUBLICATION_DEADLINE: Duration = Duration::from_secs(30);
 
 /// Move validated worker listings next to the report; a listing that fails
 /// validation is dropped and its category marked partial. A `carried` category

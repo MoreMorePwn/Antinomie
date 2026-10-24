@@ -10,6 +10,40 @@ use super::*;
 /// transfer goes ahead.
 const HASH_WAIT: Duration = Duration::from_secs(10);
 
+/// How long copying and hashing the host file may hold the backend worker. A
+/// slow or stalled mount ends the offer and the guest transfer goes ahead.
+const COPY_BUDGET: Duration = Duration::from_secs(10);
+
+/// Copy up to `len` bytes of `input` to `output`, and hash what is written,
+/// giving up when `deadline` passes.
+fn copy_within(
+    input: &mut impl Read,
+    output: &mut impl Write,
+    len: u64,
+    deadline: Instant,
+) -> std::io::Result<(u64, Sha256)> {
+    let mut digest = Sha256::new();
+    let mut buffer = vec![0u8; 256 * 1024];
+    let mut copied = 0u64;
+    while copied < len {
+        if Instant::now() >= deadline {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "copying the host file took too long",
+            ));
+        }
+        let want = buffer.len().min((len - copied) as usize);
+        let read = input.read(&mut buffer[..want])?;
+        if read == 0 {
+            break;
+        }
+        output.write_all(&buffer[..read])?;
+        digest.update(&buffer[..read]);
+        copied += read as u64;
+    }
+    Ok((copied, digest))
+}
+
 /// Where a staged host copy stands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Verdict {
@@ -38,6 +72,16 @@ impl Jobs {
     /// job keeps its guest handle but does not read from it until the guest's
     /// hash is known ([`guest_hash`](Self::guest_hash)) or the wait ends.
     pub(crate) fn offer_host_copy(&mut self, report_id: &str, source: &Path) -> Result<(), String> {
+        self.offer_host_copy_within(report_id, source, COPY_BUDGET)
+    }
+
+    fn offer_host_copy_within(
+        &mut self,
+        report_id: &str,
+        source: &Path,
+        budget: Duration,
+    ) -> Result<(), String> {
+        let deadline = Instant::now() + budget;
         let job = self
             .queue
             .iter_mut()
@@ -61,7 +105,7 @@ impl Jobs {
             .open(&path)
             .map_err(|e| e.to_string())?;
         let staged = (|| -> std::io::Result<String> {
-            let copied = std::io::copy(&mut (&mut input).take(job.total_len), &mut output)?;
+            let (copied, _) = copy_within(&mut input, &mut output, job.total_len, deadline)?;
             output.sync_all()?;
             if copied != job.total_len {
                 return Err(std::io::Error::other(
@@ -70,8 +114,17 @@ impl Jobs {
             }
             // Hash what is in the store, so the file cannot change between
             // the check and the analysis.
-            let mut digest = Sha256::new();
-            std::io::copy(&mut File::open(&path)?, &mut digest)?;
+            let (hashed, digest) = copy_within(
+                &mut File::open(&path)?,
+                &mut std::io::sink(),
+                copied,
+                deadline,
+            )?;
+            if hashed != copied {
+                return Err(std::io::Error::other(
+                    "the staged copy changed while hashed",
+                ));
+            }
             Ok(format!("{:x}", digest.finalize()))
         })();
         match staged {
@@ -127,8 +180,19 @@ impl Job {
                 }
                 false
             }
-            Verdict::Waiting(_) | Verdict::Rejected => {
+            Verdict::Waiting(_) => {
                 self.discard_host_copy();
+                self.note_pending(&format!(
+                    "the guest did not report the executed file's hash within {} seconds; fetching the file from the guest",
+                    HASH_WAIT.as_secs()
+                ));
+                false
+            }
+            Verdict::Rejected => {
+                self.discard_host_copy();
+                self.note_pending(
+                    "the guest's hash does not match the host copy; fetching the file from the guest",
+                );
                 false
             }
             Verdict::Adopted => false,
@@ -146,6 +210,16 @@ impl Job {
         self.disk_len = self.disk_len.saturating_sub(self.received_len);
         self.received_len = self.total_len;
         Ok(())
+    }
+
+    /// Say why acquisition is taking the guest transfer, on every section
+    /// that still waits for the specimen.
+    fn note_pending(&mut self, why: &str) {
+        for section in &mut self.report.sections {
+            if section.state == AnalysisSectionState::Pending {
+                section.summary = format!("pending acquisition; {why}");
+            }
+        }
     }
 
     /// Forget a staged copy that did not match, or was never needed.
@@ -319,7 +393,50 @@ mod tests {
         jobs.queue[0].host_copy.as_mut().unwrap().verdict =
             Verdict::Waiting(Instant::now() - Duration::from_secs(1));
         assert!(matches!(jobs.acquire_next(), Some(Action::Read { .. })));
-        assert!(jobs.acquiring.as_ref().unwrap().host_copy.is_none());
+        let job = jobs.acquiring.as_ref().unwrap();
+        assert!(job.host_copy.is_none());
+        // The wait ended without a hash, and the report says so.
+        assert!(
+            job.report.sections[0]
+                .summary
+                .contains("did not report the executed file's hash within 10 seconds")
+        );
+        settle(jobs, &root);
+    }
+
+    #[test]
+    fn a_mismatching_hash_is_said_on_the_waiting_sections() {
+        let root = directory("said");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("uploaded"), b"abc").unwrap();
+        let mut jobs = Jobs::default();
+        let id = submit(&mut jobs, &root, 3);
+        jobs.offer_host_copy(&id, &root.join("uploaded")).unwrap();
+        jobs.guest_hash(RUN, Some(&format!("{:x}", Sha256::digest(b"xyz"))));
+        assert!(matches!(jobs.acquire_next(), Some(Action::Read { .. })));
+        assert!(
+            jobs.acquiring.as_ref().unwrap().report.sections[0]
+                .summary
+                .contains("does not match the host copy")
+        );
+        settle(jobs, &root);
+    }
+
+    #[test]
+    fn copying_the_host_file_has_a_budget_and_leaves_nothing_behind() {
+        let root = directory("budget");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("uploaded"), b"abc").unwrap();
+        let mut jobs = Jobs::default();
+        let id = submit(&mut jobs, &root, 3);
+        let error = jobs
+            .offer_host_copy_within(&id, &root.join("uploaded"), Duration::ZERO)
+            .unwrap_err();
+        assert!(error.contains("took too long"), "{error}");
+        assert!(!root.join("analysis/specimen.host").exists());
+        assert!(jobs.queue[0].host_copy.is_none());
+        // The guest transfer starts at once.
+        assert!(matches!(jobs.acquire_next(), Some(Action::Read { .. })));
         settle(jobs, &root);
     }
 

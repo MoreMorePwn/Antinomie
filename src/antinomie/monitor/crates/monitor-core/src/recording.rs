@@ -874,6 +874,7 @@ fn saved_run(
             .and_then(|facts| facts.started_ms);
     }
     reopen_analysis_sidecar(root, &mut run)?;
+    settle_stale_analysis(&mut run);
     if matches!(run.state, RunState::Running | RunState::StopRequested) {
         run.state = RunState::Unknown;
     }
@@ -916,6 +917,7 @@ pub fn list_runs(data_root: &Path) -> Result<Vec<RunSummary>, RecordingError> {
                         .and_then(|facts| facts.started_ms);
             }
             reopen_analysis_sidecar(&data_root, &mut run)?;
+            settle_stale_analysis(&mut run);
             if matches!(run.state, RunState::Running | RunState::StopRequested) {
                 run.state = RunState::Unknown;
             }
@@ -987,6 +989,16 @@ pub fn list_runs(data_root: &Path) -> Result<Vec<RunSummary>, RecordingError> {
             .then_with(|| b.id.cmp(&a.id))
     });
     Ok(runs)
+}
+/// A saved run has no job queue behind it: an analysis still acquiring,
+/// queued or running was cut off with the session that owned it.
+fn settle_stale_analysis(run: &mut RunSummary) {
+    if let Some(report) = run.analysis.as_mut() {
+        crate::analysis::jobs::abandon(
+            report,
+            "the analysis was interrupted before it finished: the app or the VM ended first",
+        );
+    }
 }
 fn reopen_analysis_sidecar(root: &Path, run: &mut RunSummary) -> Result<(), RecordingError> {
     let Some(embedded) = run.analysis.as_ref() else {
@@ -1138,6 +1150,76 @@ mod tests {
             facts_for_health(health(0, 0), serde_json::json!("disk full")),
             Some(false)
         );
+    }
+    #[test]
+    fn a_saved_run_whose_analysis_never_finished_loads_as_unavailable() {
+        use crate::analysis::{AnalysisSelection, AnalysisState};
+        let root =
+            std::env::temp_dir().join(format!("ant-stale-analysis-{}", storage::unique_id()));
+        let selection = AnalysisSelection {
+            enabled: true,
+            checks: vec![crate::analysis::AnalysisKind::Metadata],
+        };
+        for (state, expected) in [
+            (AnalysisState::Acquiring, AnalysisState::Unavailable),
+            (AnalysisState::Queued, AnalysisState::Unavailable),
+            (AnalysisState::Running, AnalysisState::Partial),
+            (AnalysisState::Complete, AnalysisState::Complete),
+        ] {
+            let mut report = crate::analysis::jobs::new_report("/tmp/sample", &selection);
+            report.state = state;
+            let mut run = RunSummary {
+                started_ms: None,
+                clock_anchor: None,
+                id: "run".into(),
+                vm_id: "vm".into(),
+                boot_id: "boot".into(),
+                session_id: 0,
+                root_task_cookie: 0,
+                pid: 0,
+                request: ExecRequest::default(),
+                directory: root.clone(),
+                terminal_eof: false,
+                state: RunState::Unknown,
+                notes: Vec::new(),
+                recording_error: None,
+                execution: None,
+                analysis: Some(report),
+            };
+            settle_stale_analysis(&mut run);
+            let report = run.analysis.unwrap();
+            assert_eq!(report.state, expected);
+            if expected != state {
+                assert!(report.reason.unwrap().contains("interrupted"));
+                assert!(
+                    report
+                        .sections
+                        .iter()
+                        .all(|s| { s.state == crate::analysis::AnalysisSectionState::Unavailable })
+                );
+            } else {
+                assert!(report.reason.is_none());
+            }
+        }
+        // Through the loader, as the Run History reads a saved run.
+        let directory = root.join("runs/run");
+        fs::create_dir_all(&directory).unwrap();
+        let mut stuck = crate::analysis::jobs::new_report("/tmp/sample", &selection);
+        stuck.state = AnalysisState::Acquiring;
+        let run = serde_json::json!({
+            "id": "run", "vm_id": "vm", "boot_id": "boot", "session_id": 0,
+            "root_task_cookie": 0, "pid": 0, "request": ExecRequest::default(),
+            "directory": directory, "terminal_eof": false, "state": "Unknown",
+            "notes": [], "recording_error": null, "execution": null,
+            "analysis": stuck,
+        });
+        fs::write(directory.join("run.json"), run.to_string()).unwrap();
+        let root = fs::canonicalize(&root).unwrap();
+        let loaded = saved_run(&root, &root.join("runs/run"), "vm")
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.analysis.unwrap().state, AnalysisState::Unavailable);
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn matching_analysis_sidecar_refreshes_reaper_state_and_rejects_identity_change() {

@@ -755,6 +755,10 @@ impl Session {
         }
         self.analysis.shutdown();
         self.analysis_updates(snapshot, &mpsc::sync_channel(1).0);
+        self.settle_orphaned_analyses(&format!(
+            "the VM ended ({state}) before the analysis finished; the specimen was not acquired"
+        ));
+        self.update_runs(snapshot);
         for cookie in std::mem::take(&mut self.late_reads).into_values() {
             if let Some(run) = self.runs.get_mut(&cookie) {
                 run.terminal_reads_unanswered = run.terminal_reads_unanswered.saturating_add(1);
