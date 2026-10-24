@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Optional static-analysis tools Antinomie installs when the system has
 //! none: capa, FLOSS, UPX, Detect It Easy, Ghidra with its Java runtime,
-//! Volatility 3, Sigma, Magika and the gdb consoles GEF (bata24) and pwndbg.
-//! Each is downloaded from its upstream release, pinned by
+//! Volatility 3, MemNixFS, Sigma, Magika and the gdb consoles GEF (bata24) and
+//! pwndbg. Each is downloaded from its upstream release, pinned by
 //! SHA-256, unpacked into `<data>/tools/<id>/` and mounted read-only into the
 //! analysis sandbox at `SANDBOX_DIR`. A tool installed on the system takes
 //! precedence, except Magika, which the Properties panel looks for here first.
@@ -255,6 +255,49 @@ pub const PACKAGES: &[Package] = &[
         ],
         requirements: None,
         entry: "lib/volatility3/__init__.py",
+    },
+    // The upstream Linux build links the system's libyara, libsnappy, liblzma
+    // and libmagic, but needs libfmt 9 and libfuse 3 sonames that newer
+    // distributions no longer ship; the two Debian libraries come beside it.
+    // See memory::memnixfs for the checks and the sandbox it runs in.
+    Package {
+        id: "memnixfs",
+        name: "MemNixFS",
+        version: "1.2",
+        purpose: "Linux memory forensics of RAM dumps in the Memory tab (runs offline in the sandbox)",
+        license: "Apache-2.0 (MemNixFS); MIT (fmt 9); LGPL-2.1-or-later (libfuse 3)",
+        downloads: &[
+            Download {
+                file: "MemNixFS-1.2-Linux.tar.gz",
+                url: "https://github.com/MemNixFS/MemNixFS/releases/download/v1.2/MemNixFS-1.2-Linux.tar.gz",
+                sha256: "7fbdf390f213dbadb4ef0042999d676387e1e44c4b8678ee9f51af299a15b20f",
+                size: 2_197_017,
+                archive: Archive::TarGz { strip: 1 },
+                into: "",
+            },
+            Download {
+                file: "libfmt9_9.1.0+ds1-2_amd64.deb",
+                url: "https://deb.debian.org/debian/pool/main/f/fmtlib/libfmt9_9.1.0+ds1-2_amd64.deb",
+                sha256: "c3d405b6eabb1a521b60a57509826707f0e6f92b41cdfaae06bf1d7c37da2166",
+                size: 112_952,
+                archive: Archive::DebFiles {
+                    prefix: "./usr/lib/x86_64-linux-gnu/libfmt.so.9",
+                },
+                into: "lib",
+            },
+            Download {
+                file: "libfuse3-3_3.14.0-4_amd64.deb",
+                url: "https://deb.debian.org/debian/pool/main/f/fuse3/libfuse3-3_3.14.0-4_amd64.deb",
+                sha256: "bf535cec5e965823fd03199b4029f9e9f3952111eb12824b5d2b96c8cca1a918",
+                size: 88_108,
+                archive: Archive::DebFiles {
+                    prefix: "./lib/x86_64-linux-gnu/libfuse3.so.3",
+                },
+                into: "lib",
+            },
+        ],
+        requirements: None,
+        entry: "memnixfs",
     },
     // pip installs exactly the wheels the lock names; the system Python
     // creates the environment, so there is no interpreter to download.
@@ -998,10 +1041,11 @@ mod tests {
                 );
                 assert!(download.size > 0);
             }
-            // Volatility, Sigma and GEF only run from Antinomie's own pinned install.
+            // Volatility, MemNixFS, Sigma and GEF only run from Antinomie's own
+            // pinned install.
             assert_eq!(
                 system_candidates(package.id).is_empty(),
-                matches!(package.id, "volatility3" | "sigma" | "gef")
+                matches!(package.id, "volatility3" | "memnixfs" | "sigma" | "gef")
             );
         }
         // Magika is the official release binary of exactly the listed version,

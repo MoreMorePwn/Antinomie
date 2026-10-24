@@ -229,3 +229,51 @@ fn text_view_expands_tabs_like_a_terminal() {
     assert_eq!(expand_tabs("PID\tCOMM"), "PID     COMM");
     assert_eq!(expand_tabs("12345678\tx"), "12345678        x");
 }
+
+#[test]
+fn memnixfs_runs_are_marked_and_partial_results_say_so() {
+    let run = PluginRun {
+        id: "r1".into(),
+        dump_id: "d1".into(),
+        plugin: "memnixfs.processes".into(),
+        analyzer: Analyzer::MemNixFs,
+        state: RunState::Finished,
+        rows: 92,
+        partial: vec!["The kernel's page-table root was not validated.".into()],
+        ..PluginRun::default()
+    };
+    assert_eq!(run.short_name(), "processes");
+    assert!(run_detail(&run, None).ends_with(" · partial"));
+    let row = plugin_run_row(&run, None);
+    let field = |name: &str| {
+        row.iter()
+            .find(|(key, _)| *key == name)
+            .map(|(_, v)| v.clone())
+    };
+    assert_eq!(
+        field("entry.kind"),
+        Some(crate::query::RowValue::Text("memnixfs".into()))
+    );
+    assert_eq!(
+        field("analyzer"),
+        Some(crate::query::RowValue::Text("memnixfs".into()))
+    );
+    assert_eq!(field("partial"), Some(crate::query::RowValue::Bool(true)));
+    // A complete result and a Volatility run are not partial.
+    let whole = PluginRun {
+        partial: Vec::new(),
+        ..run.clone()
+    };
+    assert!(!run_detail(&whole, None).contains("partial"));
+    let volatility = PluginRun {
+        analyzer: Analyzer::Volatility,
+        plugin: "linux.pslist.PsList".into(),
+        ..whole
+    };
+    let row = plugin_run_row(&volatility, None);
+    assert!(row.contains(&(
+        "entry.kind",
+        crate::query::RowValue::Text("volatility".into())
+    )));
+    assert!(row.contains(&("partial", crate::query::RowValue::Bool(false))));
+}

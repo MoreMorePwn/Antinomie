@@ -317,6 +317,16 @@ impl MonitorApp {
                     .tool_install
                     .as_ref()
                     .is_some_and(|install| install.id == "volatility3" && !install.finished);
+                let memnixfs = self
+                    .snapshot
+                    .analysis_tools
+                    .iter()
+                    .find(|tool| tool.id == "memnixfs");
+                let installing_memnixfs = self
+                    .snapshot
+                    .tool_install
+                    .as_ref()
+                    .is_some_and(|install| install.id == "memnixfs" && !install.finished);
                 let action = self.memory_view.show(
                     ui,
                     crate::memory_view::MemoryContext {
@@ -335,6 +345,8 @@ impl MonitorApp {
                         volatility_installed: volatility
                             .is_some_and(|tool| tool.installed.is_some()),
                         volatility_installing: installing,
+                        memnixfs_installed: memnixfs.is_some_and(|tool| tool.installed.is_some()),
+                        memnixfs_installing: installing_memnixfs,
                         bases: &self.snapshot.bases,
                         font_size: self.settings.font_size,
                         online_symbols: self.settings.memory_online_symbols,
@@ -346,6 +358,11 @@ impl MonitorApp {
                     Some(crate::memory_view::MemoryAction::InstallVolatility) => {
                         self.send(Command::InstallTool {
                             id: "volatility3".into(),
+                        })
+                    }
+                    Some(crate::memory_view::MemoryAction::InstallMemNixFs) => {
+                        self.send(Command::InstallTool {
+                            id: "memnixfs".into(),
                         })
                     }
                     Some(crate::memory_view::MemoryAction::OnlineSymbols(on)) => {

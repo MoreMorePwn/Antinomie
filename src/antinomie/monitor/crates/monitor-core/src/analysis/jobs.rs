@@ -33,7 +33,7 @@ mod specimen_publication;
 mod worker_exe;
 pub(crate) use sandbox_account::host_user_name;
 use sandbox_account::sandbox_passwd;
-pub(crate) use sandbox_run::{Mounts, run_sandboxed, run_sandboxed_with};
+pub(crate) use sandbox_run::{Mounts, run_sandboxed, run_sandboxed_sized, run_sandboxed_with};
 pub(crate) use worker_exe::worker_executable;
 
 static CLEANUP_PENDING: AtomicBool = AtomicBool::new(false);
