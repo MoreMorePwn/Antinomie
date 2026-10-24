@@ -338,3 +338,191 @@ fn relative_times_and_program_names_read_briefly() {
     assert_eq!(program_name("/bin/"), "bin");
     assert_eq!(program_name("ls"), "ls");
 }
+
+/// Frames of one toolbar button on its own, with the pointer events given.
+fn button_frame(
+    ctx: &egui::Context,
+    events: Vec<egui::Event>,
+    enabled: bool,
+    active: bool,
+    time: f64,
+) -> egui::FullOutput {
+    ctx.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(400.0, 120.0),
+            )),
+            events,
+            time: Some(time),
+            ..Default::default()
+        },
+        |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                super::super::widgets::tool_button(
+                    ui,
+                    super::super::ToolButton {
+                        icon: egui_phosphor::regular::PLAY,
+                        label: "Start",
+                        tooltip: "Start the selected VM",
+                        enabled,
+                        tone: theme::good(),
+                        strong: true,
+                        active,
+                    },
+                );
+            });
+        },
+    )
+}
+
+/// The rectangles of a frame that could be a button's background or outline:
+/// small ones, with what they are filled and stroked with.
+fn small_rects(output: &egui::FullOutput) -> Vec<(egui::Color32, f32)> {
+    small_rects_at(output, egui::pos2(f32::NAN, f32::NAN))
+}
+
+/// The same, but only those holding `at` when it is a place (a tooltip or a
+/// shadow elsewhere is not the button).
+fn small_rects_at(output: &egui::FullOutput, at: egui::Pos2) -> Vec<(egui::Color32, f32)> {
+    fn walk(shape: &egui::Shape, at: egui::Pos2, found: &mut Vec<(egui::Color32, f32)>) {
+        match shape {
+            egui::Shape::Rect(rect)
+                if rect.rect.width() < 300.0
+                    && rect.rect.height() < 80.0
+                    && (at.x.is_nan() || rect.rect.contains(at)) =>
+            {
+                found.push((rect.fill, rect.stroke.width));
+            }
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| walk(shape, at, found)),
+            _ => {}
+        }
+    }
+    let mut found = Vec::new();
+    output
+        .shapes
+        .iter()
+        .for_each(|clipped| walk(&clipped.shape, at, &mut found));
+    found
+}
+
+#[test]
+fn toolbar_buttons_have_no_border_in_any_theme_and_still_answer_hover_press_and_disabled() {
+    for theme_choice in theme::Theme::ALL {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        theme::apply_theme(&ctx, theme_choice);
+        let name = theme_choice.label();
+        button_frame(&ctx, vec![], true, false, 0.0);
+        let idle = button_frame(&ctx, vec![], true, false, 0.1);
+        assert!(
+            small_rects(&idle)
+                .iter()
+                .all(|(fill, stroke)| *stroke == 0.0 && *fill == egui::Color32::TRANSPARENT),
+            "{name}: nothing is drawn around an idle button: {:?}",
+            small_rects(&idle)
+        );
+        let at = texts(&idle)
+            .into_iter()
+            .find(|(text, _)| text.ends_with("Start"))
+            .expect("the label")
+            .1
+            .center();
+        // The pointer moves a little on every frame, as a hand's does.
+        let wobble = std::cell::Cell::new(0.0_f32);
+        let pointer = |pressed: Option<bool>| {
+            wobble.set(wobble.get() + 0.4);
+            let at = at + egui::vec2(wobble.get() % 3.0, 0.0);
+            let mut events = vec![egui::Event::PointerMoved(at)];
+            if let Some(pressed) = pressed {
+                events.push(egui::Event::PointerButton {
+                    pos: at,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                });
+            }
+            events
+        };
+        let hovered = small_rects_at(&button_frame(&ctx, pointer(None), true, false, 0.2), at);
+        let tint = hovered
+            .iter()
+            .find(|(fill, _)| *fill != egui::Color32::TRANSPARENT)
+            .unwrap_or_else(|| panic!("{name}: the pointer over a button tints it: {hovered:?}"));
+        assert_eq!(tint.1, 0.0, "{name}: the tint has no outline");
+        assert_eq!(tint.0, theme::Theme::palette(theme_choice).hover);
+        // (egui settles hover over two frames: one more with the pointer there.)
+        button_frame(&ctx, pointer(None), true, false, 0.25);
+        button_frame(&ctx, pointer(Some(true)), true, false, 0.3);
+        // Held down, the button is in its pressed look on the frames after.
+        let pressed = small_rects_at(&button_frame(&ctx, pointer(None), true, false, 0.4), at);
+        let down = pressed
+            .iter()
+            .find(|(fill, _)| *fill != egui::Color32::TRANSPARENT)
+            .unwrap_or_else(|| panic!("{name}: pressed is tinted: {pressed:?}"));
+        assert_eq!(down.1, 0.0);
+        assert_ne!(down.0, tint.0, "{name}: pressed differs from hovered");
+        // Disabled, on a fresh context with the pointer free: no border, no tint
+        // under the pointer, muted text and icon.
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        theme::apply_theme(&ctx, theme_choice);
+        button_frame(&ctx, vec![], false, false, 0.0);
+        let disabled = button_frame(&ctx, pointer(None), false, false, 0.5);
+        let disabled = button_frame(&ctx, pointer(None), false, false, 0.6)
+            .shapes
+            .len()
+            .max(disabled.shapes.len());
+        assert!(disabled > 0);
+        let output = button_frame(&ctx, pointer(None), false, false, 0.7);
+        assert!(
+            small_rects_at(&output, at)
+                .iter()
+                .all(|(fill, stroke)| *stroke == 0.0 && *fill == egui::Color32::TRANSPARENT),
+            "{name}: a disabled button gets no tint from the pointer"
+        );
+        let muted = texts_with_color(&output)
+            .into_iter()
+            .filter(|(text, _)| {
+                text.ends_with("Start") || text.starts_with(egui_phosphor::regular::PLAY)
+            })
+            .all(|(_, color)| color == theme::Theme::palette(theme_choice).muted);
+        assert!(muted, "{name}: the disabled label and icon are muted");
+        // Lit (a capture running): a tint of its tone, still no outline.
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        theme::apply_theme(&ctx, theme_choice);
+        button_frame(&ctx, vec![], true, true, 0.8);
+        let lit = small_rects(&button_frame(&ctx, vec![], true, true, 0.9));
+        assert!(
+            lit.iter()
+                .any(|(fill, _)| *fill != egui::Color32::TRANSPARENT)
+                && lit.iter().all(|(_, stroke)| *stroke == 0.0),
+            "{name}: lit has a fill and no outline: {lit:?}"
+        );
+    }
+}
+
+fn texts_with_color(output: &egui::FullOutput) -> Vec<(String, egui::Color32)> {
+    fn walk(shape: &egui::Shape, found: &mut Vec<(String, egui::Color32)>) {
+        match shape {
+            egui::Shape::Text(text) => {
+                let color = text
+                    .galley
+                    .job
+                    .sections
+                    .first()
+                    .map_or(text.fallback_color, |section| section.format.color);
+                found.push((text.galley.text().to_owned(), color));
+            }
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| walk(shape, found)),
+            _ => {}
+        }
+    }
+    let mut found = Vec::new();
+    output
+        .shapes
+        .iter()
+        .for_each(|clipped| walk(&clipped.shape, &mut found));
+    found
+}

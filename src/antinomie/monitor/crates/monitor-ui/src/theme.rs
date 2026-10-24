@@ -247,6 +247,22 @@ pub fn section(ui: &mut egui::Ui, title: &str) -> egui::Response {
     ui.label(egui::RichText::new(title).strong().color(heading()))
 }
 
+/// Buttons without a border: nothing around them at rest, a tint when the
+/// pointer is over one and a stronger tint while it is pressed. Call it on a
+/// `Ui` scope that holds the buttons.
+pub fn borderless_buttons(ui: &mut egui::Ui) {
+    let palette = palette();
+    let widgets = &mut ui.visuals_mut().widgets;
+    widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
+    widgets.inactive.bg_stroke = Stroke::NONE;
+    widgets.hovered.weak_bg_fill = palette.hover;
+    widgets.hovered.bg_stroke = Stroke::NONE;
+    widgets.active.weak_bg_fill = palette.selection;
+    widgets.active.bg_stroke = Stroke::NONE;
+    widgets.open.weak_bg_fill = palette.hover;
+    widgets.open.bg_stroke = Stroke::NONE;
+}
+
 /// How often a visible spinner moves. egui's own `Spinner` asks for a repaint
 /// on every frame it is visible, which on a window that is otherwise idle
 /// means drawing at the full frame rate (on software GL, several cores) for as
