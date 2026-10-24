@@ -191,9 +191,14 @@ pub(super) fn preset_row(
             ui.colored_label(
                 theme::warn(),
                 format!(
-                    "{} {} fall back",
+                    "{} {} {}",
                     egui_phosphor::regular::WARNING,
-                    fallbacks.len()
+                    fallbacks.len(),
+                    if fallbacks.len() == 1 {
+                        "setting falls back"
+                    } else {
+                        "settings fall back"
+                    }
                 ),
             )
             .on_hover_text(
