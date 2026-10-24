@@ -384,8 +384,10 @@ fn native_regex_tab_fixture() {
         .unwrap_or((1100.0, 700.0));
     let dir = std::env::temp_dir().join(format!("ant-qa-rules-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let mut model = Model::default();
-    model.engine = "regex".into();
+    let model = Model {
+        engine: "regex".into(),
+        ..Model::default()
+    };
     eframe::run_native(
         "Antinomie Rules QA",
         eframe::NativeOptions {
