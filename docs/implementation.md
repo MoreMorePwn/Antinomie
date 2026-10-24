@@ -1026,6 +1026,45 @@ Deep analysis check, off by default because a run takes minutes.
   the active tool shows as "FLOSS"; the worker deadline adds the run's
   budget. The FLOSS tab shows its row count as a badge like Strings.
 
+### Host copy of an uploaded specimen (0.7.1)
+
+Host and guest. Upload and Run puts the host file in the guest; static analysis
+of that run no longer has to read it back.
+
+* **Request.** The UI remembers the finished Upload and Run (`MonitorApp::uploaded`,
+  the upload intent with its VM, boot and recording identity) and sets
+  `ExecRequest::host_copy` (`#[serde(skip)]`: a host path is never saved with the
+  run) only when the run's path is the upload's guest path in the same session.
+* **Offer.** After `Jobs::submit` the backend calls `Jobs::offer_host_copy` when the
+  guest offers `EXEC_HASH_ROOT`. The file must be a regular file of exactly the
+  acquisition's length. It is copied to `specimen.host` in the report's folder,
+  synced, read back and hashed there, so the hash is of the store copy and a later
+  change of the original does not matter. The job keeps its guest handle but
+  `Job::hold_for_host_copy` stops `acquire_next` reading from it for ten
+  seconds (`HASH_WAIT`) or until a verdict.
+* **Verdict.** `session_transport` and the pre-acknowledgement replay pass every
+  ingested event to `launch_image_hash`: the `Exec` hash record of call 0 (the
+  launched image). A script's interpreter, a file that changed while read or a
+  hash the guest did not compute give no digest. `Jobs::guest_hash(run, digest)`
+  sets the job `Matched` when the digest equals the staged hash, otherwise
+  `Rejected`. A rejection or the end of the wait removes the staged copy and the
+  guest fetch goes ahead unchanged.
+* **Adoption.** On `Matched`, `specimen.host` is renamed to `specimen`, the partial
+  guest file is dropped, the handle is released unread and the report is queued
+  as after a transfer, so the analysis starts before (or without) the fetch.
+  `specimen_sha256` is the staged hash, which equals the guest's.
+* **Record.** `AnalysisReport::specimen_source` (`host_copy` or `guest`, absent in
+  reports from before this and for host-only analyses) is set by the host and
+  restored from the host's own report whenever a worker report is read
+  (`read_report`). The Identity card shows it as **Specimen source**.
+* **Limits.** The guest hashes files up to 16 MiB (`ANTC_HASH_FILE_MAX`); a larger
+  program has no guest hash and is fetched. The guest records no hash for a file
+  that has not run, so Analyze Only still fetches.
+* **Tests.** `jobs/host_copy.rs` (match, mismatch, no hash, late hash, wrong size,
+  the store copy is the one hashed, cancel cleanup, report round trip),
+  `backend/tests.rs` (which exec record may vouch), `app/tests/upload.rs` and
+  `analysis/workspace_tests.rs`.
+
 ### Regex matches window (0.7.1)
 
 Host only. Core: `monitor-core/src/strings_regex/`; window: `monitor-ui/src/regex_matches.rs`.

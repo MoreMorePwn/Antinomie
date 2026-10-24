@@ -54,6 +54,7 @@ fn finished(name: &str) -> (Job, PathBuf) {
         reason: None,
         sections: vec![strings, unpacking],
         layer: None,
+        specimen_source: None,
     };
     let job = Job {
         run_id: Some("run-1".into()),
@@ -73,6 +74,7 @@ fn finished(name: &str) -> (Job, PathBuf) {
         report_len: 0,
         specimen_publication: None,
         progress: Default::default(),
+        host_copy: None,
     };
     (job, root)
 }

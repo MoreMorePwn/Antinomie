@@ -593,6 +593,9 @@ fn identity(ui: &mut egui::Ui, report: &AnalysisReport) -> Option<ReportAction> 
     if let Some(hash) = &report.specimen_sha256 {
         rows.push(("SHA-256".to_owned(), hash.clone()));
     }
+    if let Some(source) = report.specimen_source {
+        rows.push(("Specimen source".to_owned(), source.label().to_owned()));
+    }
     for label in [
         "Format",
         "Architecture",
@@ -1000,6 +1003,7 @@ mod tests {
                 AnalysisSection::new(AnalysisKind::Capabilities),
             ],
             layer: None,
+            specimen_source: None,
         };
         report.sections[1].state = AnalysisSectionState::Running;
         let words: Vec<_> = report

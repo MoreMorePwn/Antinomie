@@ -431,7 +431,10 @@ impl MonitorApp {
                 self.request_upload(true);
             } else {
                 match crate::analysis::snapshot(&self.exec, &self.args, &self.env, graphical) {
-                    Ok(request) => self.send(Command::Execute(request)),
+                    Ok(mut request) => {
+                        request.host_copy = self.uploaded_host_file(&request.path);
+                        self.send(Command::Execute(request))
+                    }
                     Err(reason) => self.report_error(reason),
                 }
                 if self.pending_launch.is_some() {

@@ -221,6 +221,7 @@ mod tests {
                     entries: Vec::new(),
                 }],
                 layer: None,
+                specimen_source: None,
             };
             let fixture = Self { directory, report };
             fixture.save();

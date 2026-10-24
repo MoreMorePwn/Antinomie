@@ -114,6 +114,14 @@ packet history already has it, and specimen Content supports a byte-offset jump.
    its type (decoded, stack, tight, or language for Go and Rust strings), its
    encoding and the address FLOSS reports for the routine. Files over 16 MiB are
    not taken.
+   When you run a file you just sent with **Upload and Run**, static analysis uses
+   the copy still on the host instead of reading the program back from the guest,
+   but only if the guest's own hash of the file that ran equals the hash of that
+   copy. If the file is gone, differs (the program rewrote itself, or another file
+   ran) or the guest recorded no hash for it, the program is fetched from the
+   guest as usual. The **Specimen source** row of the report's Identity card says
+   which happened ("host copy, hash matched guest" or "fetched from guest"); the
+   evidence identity is the guest's hash either way.
 6. **Attach to process** traces a process that is already running in the guest
    (and its future children); **Capture all** traces all of userspace. Neither
    stops or signals anything. A capture lists the processes it saw as a tree

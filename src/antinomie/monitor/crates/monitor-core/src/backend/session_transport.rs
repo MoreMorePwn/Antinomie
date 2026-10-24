@@ -72,7 +72,13 @@ impl Session {
                         )),
                 );
                 match run.assembler.ingest(&packet) {
-                    Ok(event) => note_guest_loss(&mut snapshot.health, event.as_ref()),
+                    Ok(event) => {
+                        note_guest_loss(&mut snapshot.health, event.as_ref());
+                        if let Some(hash) = event.as_ref().and_then(launch_image_hash) {
+                            self.analysis
+                                .guest_hash(&run.summary.id, hash.sha256_hex().as_deref());
+                        }
+                    }
                     Err(error) => {
                         snapshot.health.parser_errors += 1;
                         snapshot.last_error = Some(error.to_string());
@@ -975,6 +981,23 @@ pub(super) fn note_guest_loss(health: &mut Health, event: Option<&EventSummary>)
     if let Some(lost) = event.and_then(crate::kernel_notes::guest_lost) {
         health.guest_note_lost = health.guest_note_lost.max(lost);
     }
+}
+
+/// The guest's hash of the launched program's own image (the exec record of
+/// call 0), as far as it names the file: a script's interpreter or a file
+/// that changed while it was read yields a hash without a digest.
+pub(super) fn launch_image_hash(event: &EventSummary) -> Option<crate::kernel_notes::FileHash> {
+    if event.call_id != 0 {
+        return None;
+    }
+    let mut hash = crate::kernel_notes::file_hash(event)?;
+    if hash.kind != crate::kernel_notes::HashKind::Exec {
+        return None;
+    }
+    if hash.interpreter || hash.changed {
+        hash.sha256 = None;
+    }
+    Some(hash)
 }
 
 /// The first characters of an identifier, for status lines.

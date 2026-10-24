@@ -448,6 +448,12 @@ pub struct ExecRequest {
     /// the Phase 2 debugger; the run starts "Stopped at entry").
     #[serde(default)]
     pub debug_on_start: bool,
+    /// The host file this program was uploaded from, when Upload and Run just
+    /// put it at `path`. Static analysis may use it instead of fetching the
+    /// program back, once the guest's hash of the executed file equals the
+    /// hash of the copy. Never saved with the run: it names a host path.
+    #[serde(skip)]
+    pub host_copy: Option<PathBuf>,
 }
 
 /// Persisted `artifacts.json` in a run directory links independently retained evidence.
@@ -1345,6 +1351,7 @@ impl Default for ExecRequest {
             core_max_size: None,
             core_timeout_ms: None,
             debug_on_start: false,
+            host_copy: None,
         }
     }
 }

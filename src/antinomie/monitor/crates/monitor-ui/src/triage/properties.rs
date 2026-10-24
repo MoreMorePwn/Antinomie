@@ -501,6 +501,7 @@ mod tests {
             reason: None,
             sections: vec![],
             layer: None,
+            specimen_source: None,
         };
         let fields = engine::LABELS.iter().map(|label| engine::Property {
             label: (*label).into(),
@@ -957,6 +958,7 @@ mod tests {
             reason: None,
             sections: vec![],
             layer: None,
+            specimen_source: None,
         };
         let fields = engine::LABELS.iter().map(|label| engine::Property { label: (*label).into(), value: match *label { "MD5" => "abcdef0123456789".repeat(2), "SHA-1" => "abcdef0123".repeat(4), "SHA-256" => "abcdef0123456789".repeat(4), "File size" => "129736".into(), "Magic" => "ELF 64-bit LSB shared object, x86-64, dynamically linked, stripped".into(), "File type" => "Elf Dynamic X86_64".into(), "ssdeep" => "3072:LylQMXZZ86ZnAD1XBRPIHnh+m7m8z+kijtJNBPoEteKQvO6ysX:LyS0bxARPIHh15REteh2e".into(), _ => "Magika is not installed".into() }, available: matches!(*label, "MD5" | "SHA-1" | "SHA-256" | "File size" | "Magic" | "File type" | "ssdeep"), source: "Local verified specimen".into() }).collect();
         let result = FileProperties {
@@ -1008,6 +1010,7 @@ mod tests {
             reason: None,
             sections: vec![],
             layer: None,
+            specimen_source: None,
         };
         let mut view = View::default();
         let input = TriageInput {

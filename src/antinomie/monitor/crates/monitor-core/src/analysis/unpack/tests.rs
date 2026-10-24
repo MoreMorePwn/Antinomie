@@ -108,6 +108,7 @@ fn report_of(section: AnalysisSection) -> AnalysisReport {
         reason: None,
         sections: vec![section],
         layer: None,
+        specimen_source: None,
     }
 }
 

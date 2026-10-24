@@ -1911,3 +1911,25 @@ fn the_guest_lost_counter_reaches_health_and_never_goes_down() {
     note_guest_loss(&mut health, None);
     assert_eq!(health.guest_note_lost, 9);
 }
+
+#[test]
+fn only_the_launched_images_own_exec_hash_can_vouch_for_a_host_copy() {
+    use crate::kernel_notes::tests::lost_note;
+    let mut event = lost_note(0);
+    // The hash of a file some later call executed is not the launch image's.
+    assert!(session_transport::launch_image_hash(&event).is_none());
+    event.call_id = 0;
+    let hash = session_transport::launch_image_hash(&event).unwrap();
+    assert!(hash.sha256_hex().is_some_and(|hex| hex.len() == 64));
+    // A script's interpreter, or a file that changed while it was read, does
+    // not name the file that was uploaded.
+    for flag in [1, 2] {
+        let mut other = event.clone();
+        other.fields[0].preview[3] = flag;
+        let hash = session_transport::launch_image_hash(&other).unwrap();
+        assert!(hash.sha256_hex().is_none());
+    }
+    // A delete record is not an exec record.
+    event.fields[0].preview[0] = 2;
+    assert!(session_transport::launch_image_hash(&event).is_none());
+}
