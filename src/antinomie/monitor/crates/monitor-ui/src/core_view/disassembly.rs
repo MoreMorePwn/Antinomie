@@ -113,7 +113,7 @@ impl CoreView {
                         ui.label("Disassemble or decompile this core on demand.");
                         if self.job.is_some() {
                             ui.horizontal(|ui| {
-                                ui.spinner();
+                                crate::theme::spinner(ui);
                                 ui.label(if self.status.is_empty() {
                                     "Disassembling…"
                                 } else {

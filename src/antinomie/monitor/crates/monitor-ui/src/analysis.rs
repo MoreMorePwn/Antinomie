@@ -682,7 +682,7 @@ pub(crate) fn other_progress<'a>(
         seen.push(&report.id);
         if let Some(text) = progress_text(report) {
             ui.horizontal_wrapped(|ui| {
-                ui.add(egui::Spinner::new());
+                crate::theme::spinner(ui);
                 ui.colored_label(
                     crate::theme::muted(),
                     format!("{}: {text}", report.source_path),

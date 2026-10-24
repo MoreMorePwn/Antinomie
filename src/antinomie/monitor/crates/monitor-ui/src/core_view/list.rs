@@ -162,7 +162,7 @@ impl CoreView {
         }
         if self.job.is_some() {
             ui.horizontal_wrapped(|ui| {
-                ui.spinner();
+                crate::theme::spinner(ui);
                 ui.label("Working…");
                 if self.project_export_active && ui.button("Cancel export").clicked() {
                     self.cancelled.store(true, Ordering::Relaxed);
@@ -524,7 +524,7 @@ impl CoreView {
                     self.show_status(ui);
                 }
                 if self.job.is_some() {
-                    ui.spinner();
+                    crate::theme::spinner(ui);
                 }
                 ui.horizontal_wrapped(|ui| {
                     if ui.add_enabled(self.job.is_none() && self.roots.get(self.destination).is_some() && !self.source_path.trim().is_empty(), egui::Button::new("Import core")).clicked() {

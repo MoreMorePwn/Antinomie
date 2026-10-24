@@ -317,7 +317,7 @@ pub(super) fn content(
             view.request_refresh();
         }
         if view.scan_rx.is_some() {
-            ui.spinner();
+            crate::theme::spinner(ui);
         }
         if ui.button("Open properties").clicked() {
             destination = Some(Destination::Properties);

@@ -59,6 +59,8 @@ mod process_tree;
 mod properties;
 mod refresh;
 #[cfg(test)]
+mod idle_tests;
+#[cfg(test)]
 mod refresh_tests;
 mod rules;
 mod segments;

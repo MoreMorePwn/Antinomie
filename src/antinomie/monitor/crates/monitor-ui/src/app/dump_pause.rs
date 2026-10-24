@@ -51,7 +51,7 @@ impl MonitorApp {
             .frame(theme::frame(theme::raised()))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.spinner();
+                    crate::theme::spinner(ui);
                     ui.colored_label(theme::warn(), text);
                     ui.add(
                         egui::ProgressBar::new(fraction)

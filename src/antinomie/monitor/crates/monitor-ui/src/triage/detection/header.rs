@@ -230,7 +230,7 @@ impl View {
             self.scan_now(ui.ctx(), index, scan);
         }
         if self.rx.is_some() {
-            ui.spinner();
+            crate::theme::spinner(ui);
             if let Some(cancel) = &self.cancel {
                 if ui.button("Cancel").clicked() {
                     cancel.store(true, Ordering::Relaxed);

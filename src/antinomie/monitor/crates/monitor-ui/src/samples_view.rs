@@ -977,7 +977,7 @@ impl SamplesView {
                     search = Some(self.text.clone());
                 }
                 if self.searching.is_some() {
-                    ui.spinner();
+                    crate::theme::spinner(ui);
                 }
                 let edit = ui.add_sized(
                     egui::vec2(ui.available_width(), ui.spacing().interact_size.y),

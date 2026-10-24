@@ -247,12 +247,42 @@ pub fn section(ui: &mut egui::Ui, title: &str) -> egui::Response {
     ui.label(egui::RichText::new(title).strong().color(heading()))
 }
 
+/// How often a visible spinner moves. egui's own `Spinner` asks for a repaint
+/// on every frame it is visible, which on a window that is otherwise idle
+/// means drawing at the full frame rate (on software GL, several cores) for as
+/// long as some work is pending.
+const SPINNER_STEP: std::time::Duration = std::time::Duration::from_millis(100);
+
 /// A spinner as tall as the body text, for rows whose work is still pending.
-/// Show it only while the work runs; egui repaints a visible spinner, so an
-/// idle screen must not draw one.
+/// It turns in steps of [`SPINNER_STEP`], so a screen that only waits repaints
+/// ten times a second, not once a frame. Show it only while the work runs.
 pub fn spinner(ui: &mut egui::Ui) -> egui::Response {
+    let color = ui.visuals().strong_text_color();
+    spinner_colored(ui, color)
+}
+
+fn spinner_colored(ui: &mut egui::Ui, color: Color32) -> egui::Response {
     let size = ui.text_style_height(&TextStyle::Body);
-    ui.add(egui::Spinner::new().size(size))
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
+    response.widget_info(|| egui::WidgetInfo::new(egui::WidgetType::ProgressIndicator));
+    if ui.is_rect_visible(rect) {
+        ui.ctx().request_repaint_after(SPINNER_STEP);
+        let step = SPINNER_STEP.as_secs_f64();
+        let time = (ui.input(|input| input.time) / step).floor() * step;
+        let radius = rect.height() / 2.0 - 2.0;
+        let start = time * std::f64::consts::TAU;
+        let end = start + 240f64.to_radians() * time.sin();
+        let points: Vec<egui::Pos2> = (0..20)
+            .map(|i| {
+                let angle = start + (end - start) * f64::from(i) / 20.0;
+                let (sin, cos) = angle.sin_cos();
+                rect.center() + radius * egui::vec2(cos as f32, sin as f32)
+            })
+            .collect();
+        ui.painter()
+            .add(egui::Shape::line(points, Stroke::new(3.0_f32, color)));
+    }
+    response
 }
 
 /// `text` on one row with a spinner just left of it, in the default text color.
@@ -277,8 +307,7 @@ pub fn loading_colored(
     text: impl Into<egui::RichText>,
 ) -> egui::Response {
     ui.horizontal(|ui| {
-        let size = ui.text_style_height(&TextStyle::Body);
-        ui.add(egui::Spinner::new().size(size).color(color));
+        spinner_colored(ui, color);
         ui.colored_label(color, text);
     })
     .response

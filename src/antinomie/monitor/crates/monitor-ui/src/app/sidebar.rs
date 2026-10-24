@@ -311,7 +311,7 @@ impl MonitorApp {
                                 theme::error(),
                             );
                         } else if closing {
-                            ui.spinner();
+                            crate::theme::spinner(ui);
                             let message = "Waiting for guest shutdown and recording finalization…";
                             ui.add(egui::Label::new(RichText::new(message).color(theme::warn())).truncate())
                                 .on_hover_text(message);
