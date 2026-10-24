@@ -239,6 +239,13 @@ impl ProgramRun {
             self.summary.notes.push(note);
         }
     }
+    /// Note what the VM started without: stealth settings its base or host
+    /// could not give, one note each (`Fallback::log_line`).
+    pub fn add_stealth_fallbacks(&mut self, lines: &[String]) {
+        for line in lines {
+            self.add_note(line.clone());
+        }
+    }
     /// The program tree has ended and its terminal is closed: no more telemetry
     /// or output is expected, so the run's archive is complete as it stands.
     pub fn recording_complete(&self) -> bool {
@@ -799,6 +806,24 @@ mod tests {
             serde_json::from_reader(File::open(directory.join("run.json")).unwrap()).unwrap();
         assert_eq!(saved.notes.len(), MAX_NOTES);
         assert!(saved.recording_error.is_none());
+        drop(run);
+        crate::storage::settle_json_under(&directory);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
+    fn stealth_fallbacks_are_notes_of_the_run_and_never_stop_saving() {
+        let (mut run, directory) = open_run("ant-run-stealth-notes");
+        let lines = vec![
+            "Stealth setting not applied: SATA (AHCI) not supported by this base: virtio will be used; the base boots from virtio only".to_owned(),
+            "Stealth setting not applied: UEFI not supported by this host: BIOS will be used; no OVMF".to_owned(),
+        ];
+        run.add_stealth_fallbacks(&lines);
+        run.add_stealth_fallbacks(&lines);
+        assert_eq!(run.summary.notes, lines, "each once, in order");
+        assert!(run.summary.recording_error.is_none());
+        // A VM that started as configured adds nothing.
+        run.add_stealth_fallbacks(&[]);
+        assert_eq!(run.summary.notes.len(), 2);
         drop(run);
         crate::storage::settle_json_under(&directory);
         std::fs::remove_dir_all(directory).unwrap();

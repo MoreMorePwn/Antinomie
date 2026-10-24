@@ -1948,6 +1948,9 @@ pub struct Snapshot {
     pub process_page: Option<crate::observation::GuestProcessPage>,
     pub capture_dir: Option<PathBuf>,
     pub serial_log: Option<PathBuf>,
+    /// What the running VM's stealth profile asked for and the base or host
+    /// could not give, one line each; empty when it started as configured.
+    pub stealth_fallbacks: Vec<String>,
     /// The running guest kernel, once it has answered the INFO probe.
     pub guest_kernel: Option<GuestKernel>,
     /// What the guest accepts for process cores; None until it has answered.
