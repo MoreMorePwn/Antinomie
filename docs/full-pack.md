@@ -67,7 +67,9 @@ any licence file. `--no-network` uses the cache only. It writes
 (every tool, version, URL, hash, tree hash and licence file, plus the archive's
 size and hash) and `SHA256SUMS-full-pack`. Nothing is uploaded; the release
 workflow attaches the files after the application release exists, so an
-unavailable tool host never blocks the application itself.
+unavailable tool host never blocks the application itself. That step is off
+until the repository variable `ANTINOMIE_FULL_PACK` is `true`, because
+publishing the pack redistributes every tool under its own licence.
 
 A new managed tool needs an entry in `scripts/full-pack/policy.json` (its
 redistribution decision); the builder refuses to run without it.
