@@ -30,41 +30,76 @@ pub trait Fetcher {
 
 /// The system `curl`. Each hop is a separate process so that every redirect
 /// target is checked against the allowed hosts before it is requested.
+///
+/// The URL goes to curl on its standard input as a configuration (`-K -`),
+/// never on the command line: an abuse.ch export URL carries the Auth-Key in
+/// its path. Every message that names a URL shows it through [`redact_url`].
 #[derive(Clone, Debug)]
 pub struct Curl {
     program: PathBuf,
-    /// An abuse.ch Auth-Key, sent only to abuse.ch hosts and only through
-    /// curl's standard input (never on a command line).
-    auth_key: Option<crate::api_keys::Secret>,
 }
 
 impl Default for Curl {
     fn default() -> Self {
         Self {
             program: PathBuf::from("curl"),
-            auth_key: None,
         }
     }
 }
 
-/// Whether `host` is an abuse.ch service, the only place the Auth-Key goes.
+/// Whether `host` is an abuse.ch service.
 pub fn is_abusech_host(host: &str) -> bool {
     host == "abuse.ch" || host.ends_with(".abuse.ch")
+}
+
+/// `text` with the key of every `/exports/<key>/` URL path replaced by
+/// `****`, wherever the URL appears in it.
+pub fn redact_url(text: &str) -> String {
+    const MARK: &str = "/exports/";
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(MARK) {
+        let after = at + MARK.len();
+        out.push_str(&rest[..after]);
+        let tail = &rest[after..];
+        match tail.find('/') {
+            Some(end) if tail[..end].chars().all(|c| !c.is_whitespace() && c != '"') => {
+                out.push_str("****");
+                rest = &tail[end..];
+            }
+            _ => {
+                // No closing slash: the rest of the token is the key.
+                let end = tail
+                    .find(|c: char| c.is_whitespace() || c == '"' || c == '\'')
+                    .unwrap_or(tail.len());
+                out.push_str("****");
+                rest = &tail[end..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// What an HTTP status means for an abuse.ch download, in words.
+fn status_text(host: &str, code: u32) -> Option<&'static str> {
+    if !is_abusech_host(host) {
+        return None;
+    }
+    match code {
+        401 | 403 => {
+            Some("abuse.ch rejected the Auth-Key (HTTP 401); check it in Tools > API keys")
+        }
+        410 => Some("abuse.ch has retired this endpoint (HTTP 410); update Antinomie"),
+        _ => None,
+    }
 }
 
 impl Curl {
     pub fn new(program: impl Into<PathBuf>) -> Self {
         Self {
             program: program.into(),
-            auth_key: None,
         }
-    }
-
-    /// Send this Auth-Key with requests to abuse.ch hosts. An empty key sends
-    /// nothing.
-    pub fn with_auth_key(mut self, key: crate::api_keys::Secret) -> Self {
-        self.auth_key = (!key.is_empty()).then_some(key);
-        self
     }
 
     fn hop(
@@ -76,10 +111,15 @@ impl Curl {
         progress: &mut dyn FnMut(u64),
     ) -> Result<Hop, String> {
         let _ = fs::remove_file(dest);
-        let key = self
-            .auth_key
-            .as_ref()
-            .filter(|_| https_host(url).is_ok_and(|host| is_abusech_host(&host)));
+        // The configuration is one `url = "..."` line; a quote, backslash or
+        // line break in a URL would end it early.
+        if url.chars().any(|c| c.is_control() || c == '"' || c == '\\') {
+            return Err(format!(
+                "{} contains unacceptable characters",
+                redact_url(url)
+            ));
+        }
+        let shown = redact_url(url);
         // Redirects are followed by hand so that each target is checked.
         let mut command = crate::http_fetch::command(
             &self.program,
@@ -101,28 +141,19 @@ impl Curl {
                 "--output",
             ])
             .arg(dest)
-            .arg("--url")
-            .arg(url)
-            .stdin(Stdio::null())
+            .args(["-K", "-"])
+            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        if key.is_some() {
-            // The header comes from standard input, so no other process can
-            // read the key from the argument list.
-            command.args(["--header", "@-"]).stdin(Stdio::piped());
-        }
         let mut child = command
             .spawn()
-            .map_err(|error| format!("curl: {}", redact_key(&error.to_string(), key)))?;
-        if let (Some(key), Some(mut stdin)) = (key, child.stdin.take()) {
+            .map_err(|error| format!("curl: {}", redact_url(&error.to_string())))?;
+        if let Some(mut stdin) = child.stdin.take() {
             use std::io::Write;
-            if let Err(error) = writeln!(stdin, "Auth-Key: {}", key.expose()) {
+            if let Err(error) = writeln!(stdin, "url = \"{url}\"") {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(format!(
-                    "curl: {}",
-                    redact_key(&error.to_string(), Some(key))
-                ));
+                return Err(format!("curl: {}", redact_url(&error.to_string())));
             }
         }
         let started = Instant::now();
@@ -139,7 +170,9 @@ impl Curl {
                 let _ = child.kill();
                 let _ = child.wait();
                 let _ = fs::remove_file(dest);
-                return Err(format!("{url} sent more than the {max_size} bytes allowed"));
+                return Err(format!(
+                    "{shown} sent more than the {max_size} bytes allowed"
+                ));
             }
             match child.try_wait().map_err(|error| error.to_string())? {
                 Some(status) => break status,
@@ -147,7 +180,7 @@ impl Curl {
                     let _ = child.kill();
                     let _ = child.wait();
                     let _ = fs::remove_file(dest);
-                    return Err(format!("{url} timed out"));
+                    return Err(format!("{shown} timed out"));
                 }
                 None => std::thread::sleep(Duration::from_millis(100)),
             }
@@ -162,7 +195,7 @@ impl Curl {
         }
         if !status.success() {
             let _ = fs::remove_file(dest);
-            let err = redact_key(&err, key);
+            let err = redact_url(&err);
             let reason = err.lines().last().unwrap_or("").trim();
             return Err(if reason.is_empty() {
                 format!("download failed ({status})")
@@ -185,13 +218,6 @@ struct Hop {
     redirect: String,
 }
 
-fn redact_key(text: &str, key: Option<&crate::api_keys::Secret>) -> String {
-    match key {
-        Some(key) => crate::api_keys::redact(text, &[key]),
-        None => text.to_owned(),
-    }
-}
-
 impl Fetcher for Curl {
     fn fetch(
         &self,
@@ -209,24 +235,31 @@ impl Fetcher for Curl {
                 200 => return Ok(()),
                 301 | 302 | 303 | 307 | 308 => {
                     let host = https_host(&hop.redirect).map_err(|_| {
-                        format!("{current} redirected to a location that is not allowed")
+                        format!(
+                            "{} redirected to a location that is not allowed",
+                            redact_url(&current)
+                        )
                     })?;
                     if !host_allowed(&origin, &host) {
                         let _ = fs::remove_file(dest);
                         return Err(format!(
-                            "{url} redirected to {host}, which is not one of its hosts"
+                            "{} redirected to {host}, which is not one of its hosts",
+                            redact_url(url)
                         ));
                     }
                     current = hop.redirect;
                 }
                 code => {
                     let _ = fs::remove_file(dest);
-                    return Err(format!("{current} answered HTTP {code}"));
+                    if let Some(meaning) = status_text(&origin, code) {
+                        return Err(meaning.to_owned());
+                    }
+                    return Err(format!("{} answered HTTP {code}", redact_url(&current)));
                 }
             }
         }
         let _ = fs::remove_file(dest);
-        Err(format!("{url} redirected too many times"))
+        Err(format!("{} redirected too many times", redact_url(url)))
     }
 }
 
