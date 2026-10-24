@@ -12,7 +12,7 @@ use super::{
 };
 use antinomie_monitor_core::{
     AnalysisData, AnalysisEntry, AnalysisExportFormat, AnalysisKind, AnalysisListingPage,
-    AnalysisReport, AnalysisSection, AnalysisSectionState, AnalysisSpecimenPage, AnalysisState,
+    AnalysisReport, AnalysisSection, AnalysisSpecimenPage, AnalysisState,
 };
 use eframe::egui;
 use egui_extras::{Column as TableColumn, TableBuilder};
@@ -721,15 +721,6 @@ fn categories(
                             .map_or(section.entries.len() as u64, |listing| listing.rows);
                         ui.label(egui::RichText::new(format!("{rows} rows")).monospace());
                         chip(ui, state_word(report, section), state_tone(section));
-                        // A check that could not run may be tried again.
-                        if section.state == AnalysisSectionState::Unavailable
-                            && run_button(ui, finished, "Try this check again")
-                        {
-                            action = Some(ReportAction::RunCheck {
-                                report_id: report.id.clone(),
-                                kind,
-                            });
-                        }
                     },
                 );
             }
