@@ -35,6 +35,8 @@ pub(crate) struct WorkspaceState {
     content: content::ContentState,
     capa: capa_matrix::CapaState,
     rows: RowWindows,
+    /// The regex matches window over the report's strings.
+    regex: crate::regex_matches::RegexWindow,
     /// The row last handed to the Details panel, so it is handed over once.
     published: Option<AnalysisEntry>,
 }
@@ -94,6 +96,23 @@ impl WorkspaceState {
         };
         self.published = Some(chosen.entry.clone());
         ctx.data_mut(|data| data.insert_temp(egui::Id::new(CHOSEN_ROW), chosen));
+    }
+
+    /// Open the regex matches window for the report kept in `directory`.
+    pub(crate) fn scan_regex(
+        &mut self,
+        report_id: &str,
+        title: String,
+        directory: std::path::PathBuf,
+    ) {
+        let id = report_id.to_owned();
+        self.regex.open_for(
+            report_id,
+            title,
+            std::sync::Arc::new(move |rules, cancel| {
+                antinomie_monitor_core::strings_regex::scan_report(&directory, &id, rules, cancel)
+            }),
+        );
     }
 
     pub(crate) fn set_record(&mut self, id: &str, name: &str, path: &str, tags: Vec<String>) {
@@ -302,6 +321,7 @@ fn render(
     // The Content tab reads the same specimen preview as the bytes window.
     let bytes_visible = forced.is_some() || state.tab != Tab::Content;
     state.publish(ui.ctx(), report, forced);
+    state.regex.show(ui.ctx(), "static");
     let windows = state.rows.show(
         ui.ctx(),
         (&report.id, forced),

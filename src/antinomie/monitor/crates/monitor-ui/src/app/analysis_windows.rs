@@ -166,6 +166,26 @@ impl MonitorApp {
             Some(crate::analysis::ReportAction::Cancel(analysis_id)) => {
                 self.send(Command::CancelAnalysis { analysis_id })
             }
+            Some(crate::analysis::ReportAction::ScanRegex { report_id }) => {
+                let Some(directory) = self.analysis_directory(&report_id) else {
+                    self.report_error("Retained result directory is unavailable".into());
+                    return;
+                };
+                let title = self
+                    .analysis_report(&report_id)
+                    .map(|report| {
+                        report
+                            .source_path
+                            .rsplit('/')
+                            .next()
+                            .unwrap_or("")
+                            .to_owned()
+                    })
+                    .unwrap_or_default();
+                if let Some(view) = self.analysis_views.get_mut(view_key) {
+                    view.state.scan_regex(&report_id, title, directory);
+                }
+            }
             Some(crate::analysis::ReportAction::OpenAnalysisTools) => {
                 self.open_library(crate::workspace::LibraryPage::Tools)
             }

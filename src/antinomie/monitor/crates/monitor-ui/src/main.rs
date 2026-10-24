@@ -22,6 +22,7 @@ mod memory_probe;
 mod memory_view;
 mod network_view;
 mod query;
+mod regex_matches;
 mod rules_window;
 mod run_filter;
 mod run_recording;

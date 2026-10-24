@@ -681,6 +681,7 @@ impl eframe::App for MonitorApp {
             frame_started = Instant::now();
         }
         self.last_frame_start = Some(frame_started);
+        crate::regex_matches::remember_data_dir(&self.options.data_dir);
         self.dependencies.poll();
         self.drain();
         self.getting_started_tick();
