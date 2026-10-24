@@ -13,6 +13,7 @@ mod managed;
 mod metadata;
 mod qemu;
 mod socks_server;
+mod tor;
 mod traffic;
 
 use guest::Guest;
@@ -50,7 +51,9 @@ impl Rig {
 
     /// Claims `kind` for run `run` under `config`.
     pub fn claim(&self, run: &str, config: &RouteConfig, kind: RouteKind) -> Result<(), String> {
-        self.gateway.claim(run, config.spec(kind)?).map(|_| ())
+        self.gateway
+            .claim(run, config.spec(no_data(), kind)?)
+            .map(|_| ())
     }
 }
 
@@ -68,12 +71,18 @@ pub(super) const WAIT: Duration = Duration::from_secs(5);
 /// Settings for a route through the fake SOCKS5 server `socks`.
 pub(super) fn config_for(socks: &FakeSocks) -> RouteConfig {
     let mut config = RouteConfig::default();
+    config.tor.mode = super::TorMode::Socks;
     config.tor.socks = format!("127.0.0.1:{}", socks.port());
     config.tor.probe = String::new();
     config.socks5.host = "127.0.0.1".into();
     config.socks5.port = socks.port();
     config.socks5.probe = String::new();
     config
+}
+
+/// A data folder that does not exist: no installed tools, no tor state.
+pub(super) fn no_data() -> &'static std::path::Path {
+    std::path::Path::new("/nonexistent-antinomie-data")
 }
 
 pub(super) fn record_for(kind: RouteKind) -> RouteRecord {

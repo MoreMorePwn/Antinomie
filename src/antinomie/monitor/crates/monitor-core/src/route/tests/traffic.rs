@@ -283,6 +283,7 @@ fn a_route_that_is_down_fails_closed_and_never_falls_back() {
     };
     let mut rig = Rig::new("down");
     let mut config = RouteConfig::default();
+    config.tor.mode = crate::route::TorMode::Socks;
     config.tor.socks = format!("127.0.0.1:{port}");
     let error = rig.claim("run1", &config, RouteKind::Tor).unwrap_err();
     assert!(
