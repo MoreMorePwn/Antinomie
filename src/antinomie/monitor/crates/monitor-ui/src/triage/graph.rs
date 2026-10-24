@@ -14,6 +14,7 @@ mod filter;
 mod index;
 mod input;
 mod lanes;
+mod legend;
 mod notify;
 mod paint;
 mod phases;
