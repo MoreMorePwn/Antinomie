@@ -24,6 +24,7 @@ pub(super) fn full_column(slot: usize, shown: usize) -> usize {
     let columns = match slot {
         1 => OPENED_COLUMNS,
         5 => READ_COLUMNS,
+        ENDPOINT_SLOT | DOMAIN_SLOT | TLS_SLOT => return net_tabs::stored_column(slot, shown),
         _ => return shown,
     };
     columns.get(shown).copied().unwrap_or(shown)

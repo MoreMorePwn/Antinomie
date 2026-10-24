@@ -145,6 +145,8 @@ impl Contact {
 
 #[derive(Default)]
 pub(super) struct State {
+    /// Connections and executed programs for the IOC window.
+    pub ioc: super::ioc::Log,
     /// Addresses the run's calls connected or sent to, with the first task to do so.
     pub contacted: BTreeMap<std::net::IpAddr, Contact>,
     /// The first task to talk to a name server.

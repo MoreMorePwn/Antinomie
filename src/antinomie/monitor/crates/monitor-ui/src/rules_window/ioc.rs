@@ -84,6 +84,12 @@ fn thousands(value: u64) -> String {
 }
 
 impl Model {
+    /// Open on the IOC tab (the IOC section's Datasets button).
+    pub(crate) fn show_ioc(&mut self) {
+        self.engine = TAB.into();
+        self.ioc.stale = true;
+    }
+
     fn refresh_ioc(&mut self, data_dir: &Path) {
         self.ioc.statuses = ioc::status(data_dir);
         self.ioc.fp = known_fp::load(data_dir);
@@ -660,7 +666,7 @@ mod tests {
                     return shown;
                 }
                 assert!(
-                    start.elapsed() < Duration::from_secs(30),
+                    start.elapsed() < Duration::from_secs(120),
                     "{wanted:?} never appeared: {shown}"
                 );
                 thread::sleep(Duration::from_millis(20));

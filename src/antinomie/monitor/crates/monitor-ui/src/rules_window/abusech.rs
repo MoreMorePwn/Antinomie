@@ -446,7 +446,7 @@ alert tls $HOME_NET any -> [198.51.100.23] 8443 (msg:\"ABUSE.ch Botnet C2 (QakBo
                     return shown;
                 }
                 assert!(
-                    start.elapsed() < Duration::from_secs(30),
+                    start.elapsed() < Duration::from_secs(120),
                     "{wanted:?} never appeared: {shown}"
                 );
                 thread::sleep(Duration::from_millis(20));

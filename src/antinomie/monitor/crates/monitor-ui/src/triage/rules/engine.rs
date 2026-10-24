@@ -57,9 +57,9 @@ const ROWS_HELD: usize = 200_000;
 
 pub(in crate::triage) struct Engine {
     options: Options,
-    aggs: Vec<Agg>,
-    index: HashMap<(&'static str, u64, String), usize>,
-    state: State,
+    pub(super) aggs: Vec<Agg>,
+    pub(super) index: HashMap<(&'static str, u64, String), usize>,
+    pub(super) state: State,
     /// INFO matches that were counted without building a row.
     info_matches: u64,
     /// Matches past the bound on rows held; they are counted, not kept.
@@ -102,6 +102,7 @@ impl Engine {
             self.state.track(&cx);
             return;
         }
+        super::ioc::observe(&cx, &mut self.state.ioc);
         let mut hits = collect_hits(&cx, &mut self.state);
         // One call is one occurrence of a rule on an object, however many ways it touched it.
         let mut seen = std::collections::BTreeSet::new();
