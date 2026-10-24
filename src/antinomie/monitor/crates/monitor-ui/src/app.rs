@@ -23,6 +23,7 @@ mod menus;
 mod notices;
 mod panels;
 mod recording;
+mod route_settings;
 mod rules;
 mod run_kill;
 mod run_labels;
@@ -382,6 +383,8 @@ pub struct MonitorApp {
     triage_pcap: std::cell::RefCell<triage_pcap::PcapLookup>,
     /// The state of the selected run's saved captures and core.
     run_labels: run_labels::RunLabels,
+    /// Settings > Network routes.
+    routes: route_settings::RouteSettings,
     run_tree: Option<(String, crate::archive::ProcessTreeResult)>,
     run_tree_pending: Option<String>,
     archive_total: Option<u64>,
@@ -509,6 +512,7 @@ impl MonitorApp {
         if let Some(root) = settings.explorer_root.clone() {
             explorer_browser.reset(root);
         }
+        let routes = route_settings::RouteSettings::load(&options.data_dir);
         let mut app = Self {
             performance: crate::ui_performance::Performance::new(cc.gl.as_deref()),
             last_frame_start: None,
@@ -567,6 +571,7 @@ impl MonitorApp {
             cpu_history: Default::default(),
             triage_pcap: Default::default(),
             run_labels: Default::default(),
+            routes,
             run_tree: None,
             run_tree_pending: None,
             archive_total: None,

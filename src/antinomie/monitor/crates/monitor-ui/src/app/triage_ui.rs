@@ -31,6 +31,14 @@ impl MonitorApp {
             crate::activity::warning(ui, "No network capture is available for this run.");
         }
         crate::run_recording::show(ui, &run);
+        let route = crate::route_ui::describe(
+            run.route.as_ref(),
+            self.run_labels
+                .of(ui.ctx(), &run)
+                .and_then(|labels| labels.route),
+        );
+        crate::route_ui::line(ui, &route);
+        self.triage.set_route_text(route);
         if let Some(error) = &self.archive_error {
             crate::activity::warning(ui, error);
         }

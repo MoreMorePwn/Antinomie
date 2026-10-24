@@ -214,6 +214,8 @@ pub(crate) struct TriageView {
     details_directory: Option<std::path::PathBuf>,
     /// Absolute guest paths in the run's Changed files, for the Disks tab.
     changed_paths: Arc<std::collections::BTreeSet<String>>,
+    /// The words for the selected run's network route.
+    route: crate::route_ui::RouteText,
 }
 
 impl Default for TriageView {
@@ -258,6 +260,7 @@ impl Default for TriageView {
             context_key: None,
             details_directory: None,
             changed_paths: Arc::default(),
+            route: crate::route_ui::RouteText::default(),
         }
     }
 }
@@ -336,6 +339,11 @@ impl TriageView {
             self.scan_request.address_lookup = mode;
             self.request_refresh();
         }
+    }
+
+    /// The selected run's network route, shown in the Summary and Network.
+    pub(crate) fn set_route_text(&mut self, route: crate::route_ui::RouteText) {
+        self.route = route;
     }
 
     /// Settings › Notifications: raise a toast for a HIGH finding of a live run.
@@ -476,7 +484,11 @@ impl TriageView {
                 None
             }
             Section::Network => {
-                presentation::heading(ui, "Network activity", "");
+                presentation::heading(
+                    ui,
+                    "Network activity",
+                    &format!("Network route: {}", self.route.headline),
+                );
                 self.network(ui, &input);
                 None
             }

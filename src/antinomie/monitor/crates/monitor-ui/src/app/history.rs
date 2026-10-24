@@ -409,6 +409,10 @@ impl MonitorApp {
         self.run_tree_view(ui, &run, viewport);
         ui.add_space(6.0);
         let labels = self.run_labels.of(ui.ctx(), &run);
+        crate::route_ui::line(
+            ui,
+            &crate::route_ui::describe(run.route.as_ref(), labels.and_then(|labels| labels.route)),
+        );
         enabled_features(ui, &run, labels);
         launch_details(ui, &run);
     }
@@ -722,6 +726,7 @@ pub(super) fn listed(run: &RunSummary) -> RunSummary {
         terminal_eof: run.terminal_eof,
         state: run.state.clone(),
         notes: run.notes.clone(),
+        route: run.route.clone(),
         recording_error: run.recording_error.clone(),
         execution: run.execution.clone(),
         analysis: run

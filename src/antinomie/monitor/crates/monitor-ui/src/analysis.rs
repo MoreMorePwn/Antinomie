@@ -27,6 +27,8 @@ pub(crate) struct LaunchCapabilities {
     pub core_limits: Option<antinomie_monitor_core::CoreLimits>,
     /// The remembered default budget, MiB.
     pub core_default_mib: u32,
+    /// Where the run's network traffic can go on this VM.
+    pub route: crate::route_ui::RouteChoice,
 }
 
 /// Where the Run form leaves the budget the user picked, for the caller to remember.
@@ -123,6 +125,7 @@ fn capture_selection(
     crate::theme::section(ui, "Network");
     ui.checkbox(&mut request.capture_network, "Capture network from start until tree exits")
         .on_hover_text("Record VM network packets during this run. Packets are VM-wide, not attributed to this process.");
+    crate::route_ui::selector(ui, request, &capabilities.route);
 }
 
 /// Budget and deadline of the exit core, with what the guest accepts.
@@ -723,6 +726,9 @@ mod tests {
                             debug_on_start: false,
                             core_limits: None,
                             core_default_mib: 256,
+                            route: crate::route_ui::RouteChoice::fixed(
+                                antinomie_monitor_core::VmNetwork::Disconnected,
+                            ),
                         },
                     )
                 });
@@ -745,6 +751,9 @@ mod tests {
                         debug_on_start: false,
                         core_limits: None,
                         core_default_mib: 256,
+                        route: crate::route_ui::RouteChoice::fixed(
+                            antinomie_monitor_core::VmNetwork::Disconnected,
+                        ),
                     },
                 )
             });

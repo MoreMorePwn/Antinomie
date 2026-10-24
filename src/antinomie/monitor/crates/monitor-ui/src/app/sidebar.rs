@@ -42,6 +42,9 @@ impl MonitorApp {
         ]);
         if vm.isolated_network {
             machine.push((" · Isolated network".into(), theme::good()));
+        } else if vm.network() == antinomie_monitor_core::VmNetwork::Routed {
+            machine.push((" · ".into(), theme::muted()));
+            machine.push(("Routed".into(), theme::good()));
         } else if vm.nat {
             machine.push((" · ".into(), theme::muted()));
             machine.push(("NAT".into(), theme::info()));
@@ -92,12 +95,11 @@ impl MonitorApp {
                 vm.cpus,
                 vm.ram_mib,
                 vm.disk_gib,
-                if vm.isolated_network {
-                    "isolated"
-                } else if vm.nat {
-                    "NAT"
-                } else {
-                    "disconnected"
+                match vm.network() {
+                    antinomie_monitor_core::VmNetwork::Isolated => "isolated",
+                    antinomie_monitor_core::VmNetwork::Routed => "routed (a route per run)",
+                    antinomie_monitor_core::VmNetwork::Nat => "NAT",
+                    antinomie_monitor_core::VmNetwork::Disconnected => "disconnected",
                 }
             ));
             if let Some(last) = self.settings.last_runs.get(&vm.id) {

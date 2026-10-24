@@ -394,6 +394,7 @@ mod tests {
             terminal_eof: false,
             state,
             recording_error: Some(format!("failed {id}")),
+            route: None,
             execution: Some(RunExecution {
                 generation: 1,
                 live_task_count: 0,

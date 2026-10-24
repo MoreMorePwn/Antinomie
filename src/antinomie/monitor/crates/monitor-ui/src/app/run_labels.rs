@@ -15,6 +15,8 @@ const KEEP: Duration = Duration::from_secs(30);
 pub(super) struct Labels {
     pub network: &'static str,
     pub core: &'static str,
+    /// What the route gateway counted, once the run's tree ended.
+    pub route: Option<antinomie_monitor_core::route::RouteStats>,
 }
 
 type Answer = (String, Option<Labels>);
@@ -40,6 +42,7 @@ fn read(run: &RunSummary) -> Option<Labels> {
     Some(Labels {
         network: artifacts.network_label(),
         core: artifacts.core_label(),
+        route: artifacts.route.and_then(|route| route.stats),
     })
 }
 
