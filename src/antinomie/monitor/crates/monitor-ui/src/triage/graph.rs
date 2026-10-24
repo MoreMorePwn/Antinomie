@@ -28,6 +28,8 @@ mod window;
 #[cfg(test)]
 mod bench;
 #[cfg(test)]
+mod fill_tests;
+#[cfg(test)]
 mod spacing_tests;
 #[cfg(test)]
 mod sync_tests;
