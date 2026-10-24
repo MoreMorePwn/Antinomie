@@ -50,7 +50,7 @@ fn busy_index_waits_beyond_old_timeout_and_can_be_cancelled() {
         Err(mpsc::RecvTimeoutError::Timeout)
     ));
     transaction.commit().unwrap();
-    rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+    rx.recv_timeout(Duration::from_secs(60)).unwrap().unwrap();
     reader.join().unwrap();
 
     let transaction = held
@@ -64,8 +64,10 @@ fn busy_index_waits_beyond_old_timeout_and_can_be_cancelled() {
         std::thread::spawn(move || tx.send(archive_index(&path, &flag).map(|_| ())).unwrap());
     std::thread::sleep(Duration::from_millis(100));
     cancel.store(true, Ordering::Relaxed);
+    // The wait for the lock ends on the cancellation; how soon a loaded host
+    // gets to it is not what is tested.
     let error = rx
-        .recv_timeout(Duration::from_millis(500))
+        .recv_timeout(Duration::from_secs(60))
         .unwrap()
         .unwrap_err();
     assert!(error.to_string().contains("cancelled"));

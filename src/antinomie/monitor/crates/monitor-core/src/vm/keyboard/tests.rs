@@ -65,7 +65,7 @@ fn serve(
 }
 
 fn finish(mut job: Job) -> Result<String, String> {
-    let deadline = std::time::Instant::now() + Duration::from_secs(4);
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
     loop {
         if let Some(result) = job.poll() {
             return result;

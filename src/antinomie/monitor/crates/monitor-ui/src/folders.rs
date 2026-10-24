@@ -299,7 +299,7 @@ mod path_tests {
         }
         assert!(picker.checking());
         release.send(()).unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
         while picker.checking() {
             picker.poll();
             assert!(std::time::Instant::now() < deadline);

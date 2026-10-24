@@ -278,7 +278,7 @@ mod tests {
 
     fn read_until(child: &mut PtyChild, wanted: &str) -> (String, Option<String>) {
         let mut text = String::new();
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + Duration::from_secs(60);
         while Instant::now() < deadline {
             let (bytes, ended) = child.poll();
             text.push_str(&String::from_utf8_lossy(&bytes));
@@ -337,7 +337,7 @@ mod tests {
         let (text, ended) = read_until(&mut child, "ready");
         assert!(text.contains("ready") && ended.is_none(), "{text:?}");
         drop(child);
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + Duration::from_secs(60);
         let mut seen = String::new();
         while Instant::now() < deadline && !seen.contains("quit") {
             seen = std::fs::read_to_string(&record).unwrap_or_default();

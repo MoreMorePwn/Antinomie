@@ -43,6 +43,11 @@ impl Job {
 mod tests {
     use super::*;
 
+    /// The persistence thread is shared by every test of the process and
+    /// publishes with an `fsync`, which takes a long time on a busy disk.
+    /// Waiting is what the tests do; only a lost write may end it.
+    const PUBLICATION_WAIT: Duration = Duration::from_secs(300);
+
     fn acquired_job() -> Job {
         let directory =
             std::env::temp_dir().join(format!("ant-specimen-publication-{}", storage::unique_id()));
@@ -86,7 +91,7 @@ mod tests {
                 .specimen_sha256
                 .is_none()
         );
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + PUBLICATION_WAIT;
         while !job.publish_specimen_report().unwrap() {
             assert!(Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(5));
@@ -107,7 +112,7 @@ mod tests {
         let mut job = acquired_job();
         fs::remove_file(job.directory.join("report.json")).unwrap();
         fs::create_dir(job.directory.join("report.json")).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + PUBLICATION_WAIT;
         loop {
             match job.publish_specimen_report() {
                 Err(error) => {

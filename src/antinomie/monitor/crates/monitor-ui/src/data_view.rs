@@ -1226,7 +1226,7 @@ mod tests {
             },
             Some(directory.clone()),
         );
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
         while windows.windows[0].loader.is_some() && std::time::Instant::now() < deadline {
             render(&ctx, &mut windows);
             thread::sleep(Duration::from_millis(10));

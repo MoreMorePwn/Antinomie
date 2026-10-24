@@ -1549,6 +1549,11 @@ fn the_list_reads_the_recordings_again_when_a_job_ends_and_not_every_frame() {
     recordings.dump("first", 2_000_000, |_| {});
     let ctx = context();
     let mut scene = Scene::with_dumps(&recordings);
+    // The disk is measured already. Without a measurement the tab asks for
+    // one and waits for the answer for five seconds of the wall clock; the
+    // list is read again when that wait ends, which a slow host reaches
+    // before the test is over, and that read is not the one under test.
+    scene.measure = Some(measure());
     let mut view = DiskView::default();
     scene.settle(&mut view, &ctx);
     assert_eq!(view.dumps.len(), 1);

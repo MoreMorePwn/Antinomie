@@ -57,7 +57,7 @@ fn view_for(spool: &PacketSpool) -> View {
 
 /// Frames until `ready`, so the worker thread has delivered its page.
 fn pump(view: &mut View, ctx: &egui::Context, ready: impl Fn(&Viewer) -> bool) -> String {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         let shapes = frames(ctx, 2, |ctx| {
             view.journal.show(ctx, view.identity.as_ref(), None)

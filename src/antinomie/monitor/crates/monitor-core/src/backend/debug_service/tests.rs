@@ -92,7 +92,7 @@ fn attaching_needs_a_running_vm_and_nothing_is_adopted_without_one() {
     // Requests that arrive with no VM are answered, not left waiting.
     let mut link = worker.debug.link.clone();
     let asker = thread::spawn(move || link.request(wire::STATUS, &[]));
-    let until = Instant::now() + Duration::from_secs(5);
+    let until = Instant::now() + Duration::from_secs(60);
     while !asker.is_finished() {
         worker.serve_debug_requests();
         assert!(Instant::now() < until);

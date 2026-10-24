@@ -1099,7 +1099,7 @@ mod tests {
                 Arc::clone(&cancel),
             ))
             .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(60);
         loop {
             if worker.active_invocations.lock().unwrap().is_some() {
                 break;

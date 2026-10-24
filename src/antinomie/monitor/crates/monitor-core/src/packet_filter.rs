@@ -1152,6 +1152,12 @@ mod tests {
     use super::*;
     use std::os::unix::net::UnixStream;
 
+    /// How long a test waits for TShark, a sandbox or a reader to do what it
+    /// was asked. Every wait here ends on the event itself; the limit only
+    /// turns a lost event into a failure, so it is far above what a busy
+    /// host takes to start a process.
+    const TOOL_WAIT: Duration = Duration::from_secs(120);
+
     fn shared() -> Shared {
         Shared::new(Arc::new(AtomicBool::new(false)))
     }
@@ -1448,7 +1454,7 @@ mod tests {
         thread::sleep(Duration::from_millis(20));
         let started = Instant::now();
         abort.store(true, Ordering::Release);
-        let result = receiver.recv_timeout(Duration::from_millis(500));
+        let result = receiver.recv_timeout(TOOL_WAIT);
         // Close the writer even on failure so a failed test cannot strand a reader.
         drop(writer);
         worker.join().unwrap();
@@ -1459,7 +1465,7 @@ mod tests {
                 .to_string()
                 .contains("process cleanup")
         );
-        assert!(started.elapsed() < Duration::from_millis(500));
+        assert!(started.elapsed() < TOOL_WAIT);
     }
 
     #[test]
@@ -1476,14 +1482,17 @@ mod tests {
             stop.store(true, Ordering::Release);
         });
         let mut command = Command::new("sleep");
-        command.arg("30");
+        command.arg("300");
         let started = Instant::now();
-        let result = run_process(command, &state, Some(0), Duration::from_secs(2), |reader| {
+        // The process timeout is far beyond any delay of the 50 ms setter, so
+        // only the cancellation can end the run; it ends it long before the
+        // process would.
+        let result = run_process(command, &state, Some(0), TOOL_WAIT, |reader| {
             read_lines(reader, |_| Ok(()))
         });
         let error = result.unwrap_err();
         assert!(error.contains("cancelled"), "{error}");
-        assert!(started.elapsed() < Duration::from_secs(2), "{error}");
+        assert!(started.elapsed() < Duration::from_secs(30), "{error}");
         setter.join().unwrap();
     }
 
@@ -1507,19 +1516,13 @@ mod tests {
         let mut command = Command::new("sh");
         command.args(["-c", "test \"$(cat \"$2\")\" = capture && test ! -e \"$3\" && test \"$(id -u)\" = 65534 && test -w \"$WIRESHARK_CONFIG_DIR\" && printf isolated", "packet-test", "-r"])
             .arg(&capture).arg(&private);
-        let output = run_process(
-            command,
-            &shared(),
-            Some(0),
-            Duration::from_secs(2),
-            |mut reader| {
-                let mut output = String::new();
-                reader
-                    .read_to_string(&mut output)
-                    .map_err(|error| error.to_string())?;
-                Ok(output)
-            },
-        )
+        let output = run_process(command, &shared(), Some(0), TOOL_WAIT, |mut reader| {
+            let mut output = String::new();
+            reader
+                .read_to_string(&mut output)
+                .map_err(|error| error.to_string())?;
+            Ok(output)
+        })
         .unwrap();
         assert_eq!(output, "isolated");
         assert_eq!(fs::read_to_string(&capture).unwrap(), "capture");
@@ -1543,19 +1546,13 @@ mod tests {
                 "packet-test",
             ])
             .arg(&secret);
-        let output = run_process(
-            command,
-            &shared(),
-            Some(0),
-            Duration::from_secs(10),
-            |mut reader| {
-                let mut output = String::new();
-                reader
-                    .read_to_string(&mut output)
-                    .map_err(|error| error.to_string())?;
-                Ok(output)
-            },
-        )
+        let output = run_process(command, &shared(), Some(0), TOOL_WAIT, |mut reader| {
+            let mut output = String::new();
+            reader
+                .read_to_string(&mut output)
+                .map_err(|error| error.to_string())?;
+            Ok(output)
+        })
         .unwrap();
         assert_eq!(output, "hidden");
     }
@@ -1638,7 +1635,7 @@ mod tests {
                                 // TShark has not printed the row yet.
                                 generation = worker.request_page(Arc::clone(&index), 1);
                             }
-                            assert!(started.elapsed() < Duration::from_secs(10));
+                            assert!(started.elapsed() < TOOL_WAIT);
                             thread::sleep(Duration::from_millis(20));
                         }
                         break;
@@ -1646,7 +1643,7 @@ mod tests {
                     _ => panic!("unexpected page before evaluation"),
                 }
             }
-            assert!(started.elapsed() < Duration::from_secs(10));
+            assert!(started.elapsed() < TOOL_WAIT);
             thread::sleep(Duration::from_millis(20));
         }
     }

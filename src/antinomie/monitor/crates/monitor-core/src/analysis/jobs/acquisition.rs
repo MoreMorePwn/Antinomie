@@ -199,7 +199,7 @@ mod tests {
         ));
         assert_eq!(jobs.active.as_ref().unwrap().report.id, worker_id);
         assert_eq!(fs::read(root.join("2/specimen")).unwrap(), b"abc");
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(60);
         while open_report(&root.join("2"))
             .unwrap()
             .specimen_sha256

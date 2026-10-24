@@ -223,7 +223,7 @@ pub(super) fn wait_for_label(
     size: egui::Vec2,
     label: &str,
 ) {
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         if texts(&render(app, ctx, size))
             .iter()

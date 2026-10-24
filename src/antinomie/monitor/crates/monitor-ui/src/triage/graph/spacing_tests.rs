@@ -589,40 +589,42 @@ fn the_ruler_shows_the_brush_and_follows_the_filter() {
 
 #[test]
 fn a_graph_in_events_spacing_with_120k_findings_paints_within_the_budget_and_idles() {
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
     let index = super::bench::synthetic(120_000, 2_000);
     let ctx = egui::Context::default();
     theme::install(&ctx);
     let mut state = State::default();
     let frame = |state: &mut State| {
-        let started = Instant::now();
-        let output = ctx.run(
-            egui::RawInput {
-                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1280.0, 800.0))),
-                ..Default::default()
-            },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    let config = Config {
-                        index: &index,
-                        colors: Colors::of(Theme::Dark.palette()),
-                        clock: None,
-                        height: 760.0,
-                        spacing: Spacing::Events,
-                    };
-                    widget::show(ui, state, &config);
-                });
-            },
-        );
-        let meshes = ctx.tessellate(output.shapes, output.pixels_per_point);
-        std::hint::black_box(meshes.len());
-        let delay = output
-            .viewport_output
-            .values()
-            .map(|viewport| viewport.repaint_delay)
-            .min()
-            .unwrap_or(Duration::MAX);
-        (started.elapsed(), delay)
+        let mut delay = Duration::MAX;
+        let took = super::bench::timed(|| {
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1280.0, 800.0))),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let config = Config {
+                            index: &index,
+                            colors: Colors::of(Theme::Dark.palette()),
+                            clock: None,
+                            height: 760.0,
+                            spacing: Spacing::Events,
+                        };
+                        widget::show(ui, state, &config);
+                    });
+                },
+            );
+            let meshes = ctx.tessellate(output.shapes, output.pixels_per_point);
+            std::hint::black_box(meshes.len());
+            delay = output
+                .viewport_output
+                .values()
+                .map(|viewport| viewport.repaint_delay)
+                .min()
+                .unwrap_or(Duration::MAX);
+        });
+        (took, delay)
     };
     frame(&mut state);
     let slots = index.slots.times.len() as f64;
@@ -634,8 +636,9 @@ fn a_graph_in_events_spacing_with_120k_findings_paints_within_the_budget_and_idl
         Some((slots * 0.4, slots * 0.401)),
     ] {
         state.window = window;
-        // The fastest of many frames: other tests or programs using the cores
-        // only ever make a frame slower, so this is what the paint costs.
+        // The fastest of many frames, in this thread's CPU time: other tests
+        // or programs using the cores only ever make a frame slower, so this
+        // is what the paint costs.
         let best = (0..80)
             .map(|_| frame(&mut state).0)
             .min()
