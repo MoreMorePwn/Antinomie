@@ -15,6 +15,11 @@ application and base versions; existing VMs keep their pinned base.
   [CONTRIBUTING.md](../CONTRIBUTING.md). Host source builds also need
   `musl-tools` for the compatibility collector used by older guest bases;
   prebuilt installs do not need that build tool.
+- **No internet on the analysis computer?** The **full pack** (a second release
+  asset) carries every tool listed below, pre-downloaded and checked. After
+  installing the application, extract it and run `./install-full-pack.sh`; the
+  tools then show as installed in **Tools > Analysis tools**. See
+  [the full pack](full-pack.md).
 - Memory analysis runs Volatility 3, which **Tools > Analysis tools** (or the
   Memory tab) installs for Antinomie; it needs Python 3 (`python3`). MemNixFS 1.2
   is a second backend for Linux dumps, installed the same way (about 2 MB plus
