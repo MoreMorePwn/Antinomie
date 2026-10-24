@@ -415,19 +415,21 @@ The network capture is the guest's own view on every route.
   banner); a report the tool could not produce fails with the reason instead
   of showing an empty table. A report takes about a minute on a 2 GiB dump.
 - **Static Analysis**: the selected run's report: an overview, then each
-  category; disassembly and decompilation are full listings with search. In the
-  **Strings** and **FLOSS** tabs, **Regex matches…** opens a window with every
-  pattern match in the strings, by category (Network, Crypto, Keys, Linux
+  category; disassembly and decompilation are full listings with search. The
+  **Strings & regex** tab lists the strings on the left and, on the right (below
+  them in a narrow pane), a **Regex matches** pane with every
+  pattern match in the Strings and FLOSS strings, by category (Network, Crypto, Keys, Linux
   behaviour, Attribution, Encoded) with a type for each match (IPv4 public or
   private, URL, Bitcoin address, persistence path, ...). Matches are checked to
   cut false positives: a domain must end in a real public suffix, `libc.so` and
   `install.sh` are files, a version number is not an IP address, and a Bitcoin
   address, Tox ID or token must pass its checksum or structure. Base64 and hex
   text is decoded and scanned again (two levels deep); the **Inside** column says
-  which. The same window opens from **Core dumps > Strings**, where it also lists
+  which. The same list opens as a window from **Core dumps > Strings**, where it also lists
   the binary `sockaddr_in` and `sockaddr_in6` structures in the core's memory.
   Switch patterns off or add your own in **Library > Detection rules > Strings
-  regex**; **Scan again** reads the change.
+  regex** (**Add patterns**: a name, a category and a regular expression that
+  fills the page's width); **Scan again** reads the change.
 - **Static Analysis > Overview > Categories**: a category the analysis was not
   started with shows **Not requested** and a **Run** button. Run adds that check
   to the same report without starting the analysis again: the specimen kept with

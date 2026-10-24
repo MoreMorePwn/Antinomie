@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! The regex matches window: every match of the built-in and custom
+//! The regex matches view: every match of the built-in and custom
 //! patterns in a set of strings, by category, with a type for each match.
-//! Static analysis (Strings and FLOSS) and Core dumps (strings and binary
-//! socket addresses) each own one; the scan runs on a worker thread.
+//! Static analysis shows it as a pane of Strings & regex (Strings and FLOSS
+//! strings) and Core dumps in a window (strings and binary socket addresses);
+//! the scan runs on a worker thread.
 use crate::widgets::{
     self,
     table::{self, Cell, Mark},
@@ -178,6 +179,17 @@ impl RegexWindow {
             // A scan in progress is not wanted any more; the result stays.
             self.cancel();
         }
+    }
+
+    /// Draw the matches as a pane of the view that owns them (Static analysis
+    /// › Strings & regex); the scan is kept for as long as the owner is.
+    pub(crate) fn pane(&mut self, ui: &mut egui::Ui) {
+        self.poll();
+        if self.running.is_some() {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(75));
+        }
+        self.body(ui);
     }
 
     fn body(&mut self, ui: &mut egui::Ui) {

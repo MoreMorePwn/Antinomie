@@ -39,7 +39,7 @@ impl Tab {
         match self {
             Self::FileInfo => "File Info",
             Self::Content => "Content",
-            Self::Strings => "Strings",
+            Self::Strings => "Strings & regex",
             Self::Floss => "FLOSS",
             Self::Binwalk => "Binwalk",
             Self::Unpacking => "Unpacking",
@@ -227,6 +227,7 @@ pub(super) fn show(
                 }
             }
         }
+        Tab::Strings => strings_and_regex(ui, report, state, listing),
         tab => {
             let kind = tab.kind().expect("a single-category tab");
             category(ui, report, state, listing, kind, Structure::All)
@@ -273,24 +274,7 @@ fn header(
                 state.tab = Tab::Content;
             }
         }
-        let scan = (matches!(state.tab, Tab::Strings | Tab::Floss)
-            && ui
-                .add_enabled(
-                    regex_ready(report),
-                    egui::Button::new(format!(
-                        "{} Regex matches…",
-                        egui_phosphor::regular::MAGNIFYING_GLASS
-                    )),
-                )
-                .on_hover_text(
-                    "List the network, crypto, key, Linux behaviour, attribution and \
-                     encoded matches in the Strings and FLOSS strings",
-                )
-                .clicked())
-        .then(|| ReportAction::ScanRegex {
-            report_id: report.id.clone(),
-        });
-        action = export_controls(ui, report, None, true).or(scan);
+        action = export_controls(ui, report, None, true);
     });
     action
 }
@@ -361,6 +345,59 @@ fn category(
         return None;
     }
     results(ui, report, state, listing, None)
+}
+
+/// Narrower than this, the regex matches sit below the strings, not beside.
+const REGEX_BESIDE: f32 = 900.0;
+
+/// The Strings tab: the strings, and the regex matches over them on the right
+/// (below when the pane is narrow). The matches are scanned once the strings
+/// are ready; the pane's own button scans again.
+fn strings_and_regex(
+    ui: &mut egui::Ui,
+    report: &AnalysisReport,
+    state: &mut WorkspaceState,
+    listing: Option<&Result<AnalysisListingPage, String>>,
+) -> Option<ReportAction> {
+    let ready = regex_ready(report);
+    if ready && state.regex_asked != report.id {
+        state.regex_asked = report.id.clone();
+        state.regex_wanted = true;
+    }
+    let pane = |ui: &mut egui::Ui, regex: &mut crate::regex_matches::RegexWindow| {
+        ui.strong("Regex matches");
+        if ready {
+            regex.pane(ui);
+        } else {
+            ui.weak("The matches are listed once the Strings or FLOSS strings are done.");
+        }
+    };
+    let beside = ui.available_width() >= REGEX_BESIDE;
+    if beside {
+        egui::SidePanel::right("static-regex-pane")
+            .resizable(true)
+            .default_width(ui.available_width() * 0.4)
+            .width_range(320.0..=ui.available_width() * 0.7)
+            .show_inside(ui, |ui| pane(ui, &mut state.regex));
+    } else {
+        egui::TopBottomPanel::bottom("static-regex-pane")
+            .resizable(true)
+            .default_height(ui.available_height() * 0.45)
+            .show_inside(ui, |ui| pane(ui, &mut state.regex));
+    }
+    egui::CentralPanel::default()
+        .frame(egui::Frame::NONE)
+        .show_inside(ui, |ui| {
+            category(
+                ui,
+                report,
+                state,
+                listing,
+                AnalysisKind::Strings,
+                Structure::All,
+            )
+        })
+        .inner
 }
 
 /// The row count a tab shows as its badge: the categories that list findings.
