@@ -822,6 +822,9 @@ impl Worker {
                 self.snapshot.boot_id = Some(session.boot_id.clone());
                 self.snapshot.capture_dir = Some(session.capture.directory.clone());
                 self.snapshot.serial_log = Some(session.process.runtime_dir.join("serial.log"));
+                self.snapshot
+                    .stealth_fallbacks
+                    .clone_from(&session.process.stealth_fallbacks);
                 session.update_runs(&mut self.snapshot);
                 session.update_captures(&mut self.snapshot);
                 self.session = Some(session);

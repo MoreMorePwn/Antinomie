@@ -3,15 +3,15 @@
 //! guest. A preset fills every entry; editing one makes the profile Custom.
 use super::*;
 use antinomie_monitor_core::stealth::{
-    chassis_label, disk_bus_unavailable, firmware_unavailable, host_cpu_vendor, nat_unavailable,
-    BaseSupport, DiskBus, DiskMedia, Firmware, HostSupport, MachineIdentity, NatNetwork, NicModel,
-    Pointer, RtcClock, SmbiosEntry, StealthPreset, StealthProfile, CHASSIS, CPU_MODELS, MACHINES,
+    base_supporting, chassis_label, disk_bus_unavailable, firmware_unavailable, host_cpu_vendor,
+    BaseSupport, DiskBus, DiskMedia, Fallback, FallbackSetting, Firmware, HostSupport,
+    MachineIdentity, NatNetwork, NicModel, Pointer, RtcClock, SmbiosEntry, StealthPreset,
+    StealthProfile, CHASSIS, CPU_MODELS, MACHINES,
 };
 
 /// What the host offers (OVMF, clean SMT), read once.
 pub(super) fn host_support() -> &'static HostSupport {
-    static HOST: std::sync::OnceLock<HostSupport> = std::sync::OnceLock::new();
-    HOST.get_or_init(|| HostSupport::detect(std::path::Path::new("qemu-system-x86_64")))
+    HostSupport::cached()
 }
 
 /// A combo box whose unavailable choices are shown disabled with the reason.
@@ -42,12 +42,115 @@ fn choice<T: Copy + PartialEq>(
         });
 }
 
-/// A note under an entry the VM's base or the host cannot boot.
-fn falls_back(ui: &mut egui::Ui, reason: Option<String>) {
-    if let Some(reason) = reason {
+impl MonitorApp {
+    /// What a VM's stealth profile asks for that its base or this host cannot
+    /// give: the settings that fall back when it starts.
+    pub(crate) fn stealth_fallbacks_of(&self, vm: &VmConfig) -> Vec<Fallback> {
+        antinomie_monitor_core::stealth::vm_fallbacks(vm, &self.snapshot.bases, host_support())
+    }
+
+    pub(super) fn draft_stealth_fallbacks(&self) -> Vec<Fallback> {
+        self.stealth_fallbacks_of(&self.draft)
+    }
+}
+
+/// What the VM's base and this host cannot give of the profile, for the
+/// window: each difference is shown on its own setting, with a switch to an
+/// installed base that supports it.
+pub(super) struct Fit<'a> {
+    pub base: BaseSupport,
+    fallbacks: Vec<Fallback>,
+    bases: &'a [BaseSummary],
+    current: Option<&'a str>,
+    /// A base the user chose to switch the VM to.
+    pub switch: Option<String>,
+}
+
+impl<'a> Fit<'a> {
+    pub(super) fn new(
+        profile: &StealthProfile,
+        base: BaseSupport,
+        bases: &'a [BaseSummary],
+        current: Option<&'a str>,
+    ) -> Self {
+        Self {
+            fallbacks: profile.fallbacks(&base, host_support()),
+            base,
+            bases,
+            current,
+            switch: None,
+        }
+    }
+
+    /// The line on a setting that fell back, in a form grid: under the setting.
+    fn row(&mut self, ui: &mut egui::Ui, profile: &StealthProfile, setting: FallbackSetting) {
+        if self
+            .fallbacks
+            .iter()
+            .all(|fallback| fallback.setting != setting)
+        {
+            return;
+        }
         ui.label("");
-        ui.colored_label(theme::warn(), format!("Falls back: {reason}"));
+        ui.vertical(|ui| self.line(ui, profile, setting));
         ui.end_row();
+    }
+
+    /// The same line outside a grid.
+    fn line(&mut self, ui: &mut egui::Ui, profile: &StealthProfile, setting: FallbackSetting) {
+        let Some(fallback) = self.fallbacks.iter().find(|f| f.setting == setting) else {
+            return;
+        };
+        ui.add(
+            egui::Label::new(
+                RichText::new(format!(
+                    "{} {}",
+                    egui_phosphor::regular::WARNING,
+                    fallback.summary
+                ))
+                .color(theme::warn()),
+            )
+            .wrap(),
+        )
+        .on_hover_text(&fallback.reason);
+        ui.add(
+            egui::Label::new(
+                RichText::new(&fallback.reason)
+                    .small()
+                    .color(theme::muted()),
+            )
+            .wrap(),
+        );
+        if let Some(base) =
+            base_supporting(profile, setting, self.current, self.bases, host_support())
+            && ui
+                .button(format!("Use base {}", base.label))
+                .on_hover_text("Switch this VM to an installed base that supports the setting")
+                .clicked()
+        {
+            self.switch = Some(base.id.clone());
+        }
+    }
+
+    /// The top of the window: every setting that will not be applied, where it
+    /// is not hidden in a closed section.
+    fn summary(&self, ui: &mut egui::Ui) {
+        if self.fallbacks.is_empty() {
+            return;
+        }
+        crate::activity::warning(
+            ui,
+            format!(
+                "{} setting{} will not be applied as chosen:\n{}",
+                self.fallbacks.len(),
+                if self.fallbacks.len() == 1 { "" } else { "s" },
+                self.fallbacks
+                    .iter()
+                    .map(|fallback| format!("• {}", fallback.summary))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ),
+        );
     }
 }
 
@@ -68,9 +171,14 @@ fn preset_combo(ui: &mut egui::Ui, profile: &mut StealthProfile, id: &str) {
 }
 
 /// The row in the VM dialog: the preset and the window.
-pub(super) fn preset_row(ui: &mut egui::Ui, profile: &mut StealthProfile, open: &mut bool) {
+pub(super) fn preset_row(
+    ui: &mut egui::Ui,
+    profile: &mut StealthProfile,
+    open: &mut bool,
+    fallbacks: &[Fallback],
+) {
     ui.label("Stealth");
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         preset_combo(ui, profile, "vm_stealth_preset");
         if ui
             .button("Edit…")
@@ -78,6 +186,28 @@ pub(super) fn preset_row(ui: &mut egui::Ui, profile: &mut StealthProfile, open: 
             .clicked()
         {
             *open = !*open;
+        }
+        if !fallbacks.is_empty() {
+            ui.colored_label(
+                theme::warn(),
+                format!(
+                    "{} {} {}",
+                    egui_phosphor::regular::WARNING,
+                    fallbacks.len(),
+                    if fallbacks.len() == 1 {
+                        "setting falls back"
+                    } else {
+                        "settings fall back"
+                    }
+                ),
+            )
+            .on_hover_text(
+                fallbacks
+                    .iter()
+                    .map(|fallback| fallback.summary.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            );
         }
     });
     ui.end_row();
@@ -227,7 +357,8 @@ fn hardware(ui: &mut egui::Ui, profile: &mut StealthProfile) {
     }
 }
 
-fn firmware(ui: &mut egui::Ui, profile: &mut StealthProfile, base: &BaseSupport) {
+fn firmware(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
+    let base = fit.base;
     egui::Grid::new("vm_stealth_firmware")
         .num_columns(2)
         .spacing([12.0, 6.0])
@@ -239,13 +370,10 @@ fn firmware(ui: &mut egui::Ui, profile: &mut StealthProfile, base: &BaseSupport)
                 &mut profile.firmware,
                 Firmware::ALL,
                 Firmware::label,
-                |firmware| firmware_unavailable(firmware, base, host_support()),
+                |firmware| firmware_unavailable(firmware, &base, host_support()),
             );
             ui.end_row();
-            falls_back(
-                ui,
-                firmware_unavailable(profile.firmware, base, host_support()),
-            );
+            fit.row(ui, profile, FallbackSetting::Firmware);
             if profile.firmware == Firmware::UefiSecureBoot {
                 ui.label("");
                 ui.colored_label(
@@ -301,7 +429,7 @@ fn firmware(ui: &mut egui::Ui, profile: &mut StealthProfile, base: &BaseSupport)
         });
 }
 
-fn cpu(ui: &mut egui::Ui, profile: &mut StealthProfile) {
+fn cpu(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
     ui.checkbox(
         &mut profile.cpu_passthrough,
         "Pass the host CPU through (its real name and features)",
@@ -381,6 +509,7 @@ fn cpu(ui: &mut egui::Ui, profile: &mut StealthProfile) {
         Err(reason) => reason.clone(),
         Ok(()) => "Needs one socket with N cores".to_owned(),
     });
+    fit.line(ui, profile, FallbackSetting::Smt);
     ui.add_enabled(
         profile.cpu_passthrough,
         egui::Checkbox::new(&mut profile.host_cache_info, "The host's cache sizes"),
@@ -388,7 +517,7 @@ fn cpu(ui: &mut egui::Ui, profile: &mut StealthProfile) {
     .on_hover_text("QEMU otherwise reports its own cache sizes; passthrough only");
 }
 
-fn network(ui: &mut egui::Ui, profile: &mut StealthProfile, base: &BaseSupport) {
+fn network(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
     egui::Grid::new("vm_stealth_network")
         .num_columns(2)
         .spacing([12.0, 6.0])
@@ -482,7 +611,7 @@ fn network(ui: &mut egui::Ui, profile: &mut StealthProfile, base: &BaseSupport) 
                 text_row(ui, "Gateway", &mut profile.nat.gateway);
                 text_row(ui, "DNS server", &mut profile.nat.dns);
                 text_row(ui, "DHCP start", &mut profile.nat.dhcp_start);
-                falls_back(ui, nat_unavailable(base).map(str::to_owned));
+                fit.row(ui, profile, FallbackSetting::Nat);
             }
         });
     if !profile.nat.network.is_empty() {
@@ -494,7 +623,8 @@ fn network(ui: &mut egui::Ui, profile: &mut StealthProfile, base: &BaseSupport) 
     }
 }
 
-fn storage(ui: &mut egui::Ui, profile: &mut StealthProfile, base: &BaseSupport) {
+fn storage(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
+    let base = fit.base;
     egui::Grid::new("vm_stealth_storage")
         .num_columns(2)
         .spacing([12.0, 6.0])
@@ -506,13 +636,10 @@ fn storage(ui: &mut egui::Ui, profile: &mut StealthProfile, base: &BaseSupport) 
                 &mut profile.disk_bus,
                 DiskBus::ALL,
                 DiskBus::label,
-                |bus| disk_bus_unavailable(bus, base).map(str::to_owned),
+                |bus| disk_bus_unavailable(bus, &base).map(str::to_owned),
             );
             ui.end_row();
-            falls_back(
-                ui,
-                disk_bus_unavailable(profile.disk_bus, base).map(str::to_owned),
-            );
+            fit.row(ui, profile, FallbackSetting::DiskBus);
             if profile.disk_bus == DiskBus::Sata {
                 ui.label("Disk kind");
                 ui.horizontal(|ui| {
@@ -558,7 +685,7 @@ fn storage(ui: &mut egui::Ui, profile: &mut StealthProfile, base: &BaseSupport) 
     );
 }
 
-fn display(ui: &mut egui::Ui, profile: &mut StealthProfile) {
+fn display(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
     ui.label("Pointer");
     for &pointer in Pointer::ALL {
         let usable = pointer != Pointer::UsbTablet || profile.usb;
@@ -568,6 +695,7 @@ fn display(ui: &mut egui::Ui, profile: &mut StealthProfile) {
             ui.label(RichText::new(pointer.cost()).small().color(theme::muted()));
         });
     }
+    fit.line(ui, profile, FallbackSetting::Pointer);
     ui.add_space(4.0);
     ui.colored_label(
         theme::muted(),
@@ -607,7 +735,7 @@ pub(super) fn window(
     ctx: &egui::Context,
     open: &mut bool,
     profile: &mut StealthProfile,
-    base: &BaseSupport,
+    fit: &mut Fit,
     size_hints: &[&str],
     editable: bool,
     creating: bool,
@@ -629,6 +757,7 @@ pub(super) fn window(
                     ui.label("Preset");
                     preset_combo(ui, profile, "vm_stealth_window_preset");
                 });
+                fit.summary(ui);
                 egui::ScrollArea::vertical()
                     .id_salt("vm_stealth_scroll")
                     .max_height((ctx.screen_rect().height() - 260.0).max(120.0))
@@ -637,18 +766,18 @@ pub(super) fn window(
                             .default_open(true)
                             .show(ui, |ui| hardware(ui, profile));
                         egui::CollapsingHeader::new("Firmware and ACPI")
-                            .show(ui, |ui| firmware(ui, profile, base));
-                        egui::CollapsingHeader::new("CPU").show(ui, |ui| cpu(ui, profile));
+                            .show(ui, |ui| firmware(ui, profile, fit));
+                        egui::CollapsingHeader::new("CPU").show(ui, |ui| cpu(ui, profile, fit));
                         egui::CollapsingHeader::new("Network")
-                            .show(ui, |ui| network(ui, profile, base));
+                            .show(ui, |ui| network(ui, profile, fit));
                         egui::CollapsingHeader::new("Storage and devices").show(ui, |ui| {
-                            storage(ui, profile, base);
+                            storage(ui, profile, fit);
                             ui.add_space(6.0);
-                            display(ui, profile);
+                            display(ui, profile, fit);
                         });
                         egui::CollapsingHeader::new("Clock").show(ui, |ui| clock(ui, profile));
                         egui::CollapsingHeader::new("Still visible").show(ui, |ui| {
-                            let (fitted, notes) = profile.fitted(base, host_support());
+                            let (fitted, notes) = profile.fitted(&fit.base, host_support());
                             for giveaway in fitted.giveaways() {
                                 ui.label(format!("• {giveaway}"));
                             }

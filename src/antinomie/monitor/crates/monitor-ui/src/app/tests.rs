@@ -34,6 +34,7 @@ mod scanned_inputs;
 mod settings_window;
 mod startup;
 mod stealth;
+mod stealth_shots;
 mod terminal_windows;
 mod terminals;
 mod theme_setting;

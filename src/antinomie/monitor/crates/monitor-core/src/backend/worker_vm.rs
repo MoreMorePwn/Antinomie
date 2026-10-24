@@ -59,6 +59,7 @@ impl Worker {
         self.snapshot.process_page = None;
         self.snapshot.process_cores.clear();
         self.snapshot.boot_id = None;
+        self.snapshot.stealth_fallbacks.clear();
         self.snapshot.network_capture = None;
         self.publish();
         self.stopping.store(false, Ordering::Relaxed);
@@ -70,6 +71,9 @@ impl Worker {
                 .join(&boot_id);
             let process = VmProcess::launch(&self.options, &vm, &bundle)?;
             self.snapshot.serial_log = Some(process.runtime_dir.join("serial.log"));
+            self.snapshot
+                .stealth_fallbacks
+                .clone_from(&process.stealth_fallbacks);
             self.snapshot.boot_id = Some(boot_id.clone());
             let capture_dir = boot_dir.join("unassigned");
             let mut capture =

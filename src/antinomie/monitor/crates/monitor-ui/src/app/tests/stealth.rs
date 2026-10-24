@@ -156,3 +156,215 @@ fn summary_configure_opens_the_vm_dialog_for_a_stopped_vm() {
     assert!(!app.config_open);
     assert_eq!(ctx.data_mut(|data| data.get_temp::<bool>(flag)), None);
 }
+
+// ----- settings the base or the host cannot give -----
+
+const SATA_LINE: &str = "SATA (AHCI) not supported by this base: virtio will be used";
+
+/// A VM asking for SATA on a base with the given support, in the New VM dialog.
+fn sata_on_base(support: &[&str], others: &[(&str, &str, &[&str])]) -> MonitorApp {
+    use antinomie_monitor_core::stealth::{DiskBus, Firmware, NatNetwork};
+    let mut app = app();
+    let mut base = test_base("base", true);
+    base.label = "Current base".into();
+    base.stealth_support = support.iter().map(|item| (*item).to_owned()).collect();
+    app.snapshot.bases.push(base);
+    for (id, label, support) in others {
+        let mut other = test_base(id, true);
+        other.label = (*label).into();
+        other.stealth_support = support.iter().map(|item| (*item).to_owned()).collect();
+        app.snapshot.bases.push(other);
+    }
+    app.new_image();
+    app.draft.base_identity = Some("base".into());
+    // Settings every host has, so only the base decides.
+    let stealth = &mut app.draft.stealth;
+    stealth.disk_bus = DiskBus::Sata;
+    stealth.firmware = Firmware::Bios;
+    stealth.smt = false;
+    stealth.nat = NatNetwork::default();
+    stealth.usb = true;
+    app
+}
+
+#[test]
+fn the_window_says_on_the_setting_itself_that_it_falls_back() {
+    let size = egui::vec2(1280.0, 900.0);
+    let mut app = sata_on_base(&[], &[]);
+    app.stealth_open = true;
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    // At the top, where a closed section does not hide it.
+    for _ in 0..3 {
+        render(&mut app, &ctx, size);
+    }
+    let output = render(&mut app, &ctx, size);
+    let lines: Vec<String> = texts(&output).into_iter().map(|(text, _)| text).collect();
+    assert!(
+        lines
+            .iter()
+            .any(|text| text.contains("1 setting will not be applied") && text.contains(SATA_LINE)),
+        "{lines:?}"
+    );
+    assert!(!lines.iter().any(|text| text.starts_with("Use base")));
+    // Open the section holding the Disk bus: the line is on the setting.
+    click_label(&mut app, &ctx, size, "Storage and devices");
+    for _ in 0..2 {
+        render(&mut app, &ctx, size);
+    }
+    let output = render(&mut app, &ctx, size);
+    let lines: Vec<String> = texts(&output).into_iter().map(|(text, _)| text).collect();
+    let inline = lines
+        .iter()
+        .filter(|text| text.ends_with(SATA_LINE) && !text.contains('\n'))
+        .count();
+    assert_eq!(inline, 1, "beside the Disk bus: {lines:?}");
+    assert!(
+        lines
+            .iter()
+            .any(|text| text.contains("boots from virtio only")),
+        "and why: {lines:?}"
+    );
+}
+
+#[test]
+fn the_vm_dialog_row_and_the_sidebar_carry_a_warning_badge() {
+    let size = egui::vec2(1280.0, 900.0);
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let mut app = sata_on_base(&[], &[]);
+    let fallbacks = app.draft_stealth_fallbacks();
+    assert_eq!(fallbacks.len(), 1);
+    assert_eq!(fallbacks[0].summary, SATA_LINE);
+    for _ in 0..3 {
+        render(&mut app, &ctx, size);
+    }
+    let output = render(&mut app, &ctx, size);
+    let lines: Vec<String> = texts(&output).into_iter().map(|(text, _)| text).collect();
+    assert!(
+        lines
+            .iter()
+            .any(|text| text.ends_with("1 setting falls back")),
+        "the Stealth row of the dialog: {lines:?}"
+    );
+    // The VM in the sidebar list.
+    let mut vm = app.draft.clone();
+    vm.id = "vm".into();
+    vm.name = "Saved VM".into();
+    app.snapshot.vms.push(vm);
+    app.create_open = false;
+    for _ in 0..3 {
+        render(&mut app, &ctx, size);
+    }
+    let output = render(&mut app, &ctx, size);
+    let lines: Vec<String> = texts(&output).into_iter().map(|(text, _)| text).collect();
+    assert!(
+        lines.iter().any(|text| text.contains("Stealth fallback")),
+        "the sidebar row: {lines:?}"
+    );
+}
+
+#[test]
+fn a_base_that_supports_every_setting_shows_no_warning_anywhere() {
+    let size = egui::vec2(1280.0, 900.0);
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let mut app = sata_on_base(&["uefi", "sata", "nvme", "dhcp"], &[]);
+    assert!(app.draft_stealth_fallbacks().is_empty());
+    app.stealth_open = true;
+    let mut vm = app.draft.clone();
+    vm.id = "vm".into();
+    app.snapshot.vms.push(vm);
+    for _ in 0..3 {
+        render(&mut app, &ctx, size);
+    }
+    click_label(&mut app, &ctx, size, "Storage and devices");
+    let output = render(&mut app, &ctx, size);
+    let lines: Vec<String> = texts(&output).into_iter().map(|(text, _)| text).collect();
+    assert!(
+        !lines.iter().any(|text| text.contains("will not be applied")
+            || text.contains("Stealth fallback")
+            || text.contains("fall back")
+            || text.contains("falls back")
+            || text.contains("not supported by")),
+        "{lines:?}"
+    );
+}
+
+#[test]
+fn another_installed_base_that_supports_the_setting_is_offered_and_switches_the_vm() {
+    let size = egui::vec2(1280.0, 900.0);
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let mut app = sata_on_base(
+        &[],
+        &[
+            ("plain", "Plain base", &[]),
+            ("sata", "SATA base", &["sata", "uefi", "dhcp"]),
+        ],
+    );
+    app.stealth_open = true;
+    for _ in 0..3 {
+        render(&mut app, &ctx, size);
+    }
+    click_label(&mut app, &ctx, size, "Storage and devices");
+    for _ in 0..2 {
+        render(&mut app, &ctx, size);
+    }
+    click_label(&mut app, &ctx, size, "Use base SATA base");
+    assert_eq!(app.draft.base_identity.as_deref(), Some("sata"));
+    for _ in 0..3 {
+        render(&mut app, &ctx, size);
+    }
+    assert!(app.draft_stealth_fallbacks().is_empty());
+    let output = render(&mut app, &ctx, size);
+    let lines: Vec<String> = texts(&output).into_iter().map(|(text, _)| text).collect();
+    assert!(!lines.iter().any(|text| text.starts_with("Use base")));
+}
+
+#[test]
+fn without_a_supporting_base_installed_no_switch_is_offered() {
+    let size = egui::vec2(1280.0, 900.0);
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let mut app = sata_on_base(&[], &[("plain", "Plain base", &[])]);
+    app.stealth_open = true;
+    for _ in 0..3 {
+        render(&mut app, &ctx, size);
+    }
+    click_label(&mut app, &ctx, size, "Storage and devices");
+    let output = render(&mut app, &ctx, size);
+    let lines: Vec<String> = texts(&output).into_iter().map(|(text, _)| text).collect();
+    assert!(
+        lines.iter().any(|text| text.ends_with(SATA_LINE)),
+        "{lines:?}"
+    );
+    assert!(!lines.iter().any(|text| text.starts_with("Use base")));
+}
+
+#[test]
+fn the_run_header_lists_what_the_vm_started_without() {
+    let mut sample = run("run-1");
+    let line = "Stealth setting not applied: SATA (AHCI) not supported by this base: virtio will be used; the base boots from virtio only";
+    sample.notes.push(line.into());
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let output = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1280.0, 400.0),
+            )),
+            ..Default::default()
+        },
+        |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| crate::run_recording::show(ui, &sample));
+        },
+    );
+    let lines: Vec<String> = texts(&output).into_iter().map(|(text, _)| text).collect();
+    assert!(
+        lines.iter().any(|text| text == &format!("Note: {line}")),
+        "{lines:?}"
+    );
+    assert!(crate::run_recording::tooltip(&sample).contains("SATA (AHCI) not supported"));
+}

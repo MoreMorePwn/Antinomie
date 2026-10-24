@@ -99,6 +99,19 @@ The **Base images** section in the left sidebar lists installed bases. Use
 Bases are read-only templates. Right-click a base to make a **New VM from this
 base** or to **Delete base**. Deleting is refused while any VM still uses it.
 
+A VM's Stealth profile can ask for more than its base or this host can give: SATA
+or NVMe disks, UEFI, a NAT network of its own or two threads per core need a base
+built by Antinomie 0.7.0 or later (or a host with OVMF or a suitable CPU), and a
+base built earlier has no list of what it supports. Such a setting is not applied;
+the VM starts with the choice every base has (virtio, BIOS, 10.0.2.0/24, one
+thread per core). The app says so in several places: the **Stealth profile**
+window lists them at its top and on the setting itself ("SATA (AHCI) not supported
+by this base: virtio will be used"), with a **Use base** button when another
+installed base supports it; the VM dialog's Stealth row shows "N fall back"; the
+VM list and the Summary's **Stealth profile** card carry a **Stealth fallback**
+badge; and each start warns in **Activity** and adds the same lines as notes to
+every run of that boot, shown under the run's header.
+
 ## 2. Create a VM
 Choose **New VM**, pick the installed base, and set name, CPU count, RAM and
 disk size. Debian bases also ask for a username and password; the guest

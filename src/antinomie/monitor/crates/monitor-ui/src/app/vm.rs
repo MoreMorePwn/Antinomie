@@ -607,7 +607,8 @@ impl MonitorApp {
                             dialog_section(ui, "Display and emulation");
                             form_grid("vm_display", ui).show(ui, |ui| {
                                 launch_options(ui, &mut app.draft.launch);
-                                super::stealth::preset_row(ui, &mut app.draft.stealth, &mut app.stealth_open);
+                                let fallbacks = app.draft_stealth_fallbacks();
+                                super::stealth::preset_row(ui, &mut app.draft.stealth, &mut app.stealth_open, &fallbacks);
                             });
                         };
                         let storage = |app: &mut Self, ui: &mut egui::Ui, credentials_required: bool, nat: &mut bool| {
@@ -819,11 +820,19 @@ impl MonitorApp {
                     antinomie_monitor_core::stealth::BaseSupport::from_list(&base.stealth_support)
                 },
             );
+            let current = selected_base(&self.snapshot, self.draft.base_identity.as_deref())
+                .map(|base| base.id.clone());
+            let mut fit = super::stealth::Fit::new(
+                &self.draft.stealth,
+                base,
+                &self.snapshot.bases,
+                current.as_deref(),
+            );
             super::stealth::window(
                 ctx,
                 &mut self.stealth_open,
                 &mut self.draft.stealth,
-                &base,
+                &mut fit,
                 &antinomie_monitor_core::stealth::resource_hints(
                     self.draft.cpus,
                     self.draft.ram_mib,
@@ -832,6 +841,9 @@ impl MonitorApp {
                 editable,
                 creating,
             );
+            if let Some(base) = fit.switch.take() {
+                self.draft.base_identity = Some(base);
+            }
         }
         let open = open && !cancel;
         if !open {

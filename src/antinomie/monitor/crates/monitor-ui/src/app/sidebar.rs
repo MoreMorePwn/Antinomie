@@ -33,6 +33,7 @@ impl MonitorApp {
             }
             None => machine.push(("Base unavailable".into(), theme::warn())),
         }
+        let fallbacks = self.stealth_fallbacks_of(vm);
         machine.extend([
             (" · ".into(), theme::muted()),
             (vm.cpus.to_string(), number),
@@ -84,7 +85,16 @@ impl MonitorApp {
                 mark: ("●", color),
                 name: &vm.name,
                 state: Some((word, color)),
-                details: vec![machine, last],
+                details: if fallbacks.is_empty() {
+                    vec![machine, last]
+                } else {
+                    // Its own line: the base's label can fill the first.
+                    let badge = vec![(
+                        format!("{} Stealth fallback", egui_phosphor::regular::WARNING),
+                        theme::warn(),
+                    )];
+                    vec![machine, badge, last]
+                },
                 selected: self.selected.as_ref() == Some(&vm.id),
             },
         );
@@ -102,6 +112,9 @@ impl MonitorApp {
                     antinomie_monitor_core::VmNetwork::Disconnected => "disconnected",
                 }
             ));
+            for fallback in &fallbacks {
+                ui.colored_label(theme::warn(), fallback.summary.as_str());
+            }
             if let Some(last) = self.settings.last_runs.get(&vm.id) {
                 ui.label(format!("Latest run: {}", last.program));
             }
