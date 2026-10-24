@@ -27,20 +27,29 @@ pub(super) const TERMINAL_PASS_SLICE: Duration = Duration::from_millis(40);
 /// `timeout` for its reply; the first read always happens.
 pub(super) fn drain_pass(
     timeout: Duration,
+    read_once: impl FnMut(Duration) -> Result<TerminalRead, String>,
+) -> Result<(), String> {
+    drain_pass_on(Instant::now, timeout, read_once)
+}
+
+/// [`drain_pass`] reading the time from `clock`, which the tests drive.
+fn drain_pass_on(
+    mut clock: impl FnMut() -> Instant,
+    timeout: Duration,
     mut read_once: impl FnMut(Duration) -> Result<TerminalRead, String>,
 ) -> Result<(), String> {
-    let started = Instant::now();
+    let started = clock();
     let drain_until = started + TERMINAL_PASS_SLICE.min(timeout);
     let mut total = 0usize;
     loop {
-        let now = Instant::now();
+        let now = clock();
         let read = read_once(
             timeout
                 .saturating_sub(now.saturating_duration_since(started))
                 .min(drain_until.saturating_duration_since(now)),
         )?;
         total += read.len;
-        if !read.full || total >= TERMINAL_PASS_SIZE || Instant::now() >= drain_until {
+        if !read.full || total >= TERMINAL_PASS_SIZE || clock() >= drain_until {
             return Ok(());
         }
     }
