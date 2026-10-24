@@ -187,6 +187,14 @@ impl WorkspaceState {
         row
     }
 
+    /// The program run this report belongs to, when it has one.
+    pub(crate) fn linked_run(&self) -> Option<&str> {
+        self.identities.iter().find_map(|(key, value)| match value {
+            crate::query::RowValue::Text(id) if *key == "run.id" => Some(id.as_str()),
+            _ => None,
+        })
+    }
+
     pub(crate) fn record_context_for(
         &self,
         report: &AnalysisReport,
