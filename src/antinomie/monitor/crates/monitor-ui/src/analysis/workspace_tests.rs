@@ -1649,12 +1649,7 @@ fn categories_the_report_lacks_are_disabled_with_a_tooltip_and_the_others_count_
     // Strings has 1024 rows; Binwalk is not in this report.
     assert!(shown.iter().any(|(text, _)| text == "1024"), "{shown:?}");
     let tip = hover(&ctx, &report, &mut state, at("Binwalk").center());
-    assert!(
-        tip.iter().any(
-            |(text, _)| text == "Not part of this analysis; start one with this check selected"
-        ),
-        "{tip:?}"
-    );
+    assert!(tip.iter().any(|(text, _)| text == NOT_REQUESTED), "{tip:?}");
     state.tab = Tab::Strings;
     let before = state.tab;
     let pressed = press(
