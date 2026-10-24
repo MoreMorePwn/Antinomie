@@ -4,14 +4,24 @@
 # build-release.sh — build the release executable and the release archive
 # antinomie-<version>-linux-x86_64.tar.gz plus SHA256SUMS.
 #
-#   usage: scripts/build-release.sh OUTPUT_DIR
+#   usage: scripts/build-release.sh [--full-pack] OUTPUT_DIR
+#
+# --full-pack also builds antinomie-<version>-full-pack-linux-x86_64.tar.xz
+# (every managed tool, pre-downloaded and SHA-256 checked) with its manifest and
+# SHA256SUMS-full-pack, by scripts/build-full-pack.py. It downloads about 1 GB
+# from the tools' upstream hosts; nothing is uploaded.
 #
 # The executable names its sources by remapped paths (/antinomie, /cargo, /target),
 # never by this machine's home directory; the build fails if one remains.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-OUT="${1:?usage: scripts/build-release.sh OUTPUT_DIR}"
+full_pack=0
+if [[ "${1:-}" == --full-pack ]]; then
+    full_pack=1
+    shift
+fi
+OUT="${1:?usage: scripts/build-release.sh [--full-pack] OUTPUT_DIR}"
 MONITOR="$REPO/src/antinomie/monitor"
 CARGO_DIR="${CARGO_HOME:-$HOME/.cargo}"
 RUSTUP_DIR="${RUSTUP_HOME:-$HOME/.rustup}"
@@ -131,3 +141,6 @@ tar -C "$stage" --sort=name --owner=0 --group=0 --numeric-owner \
     --mtime="@${epoch}" -cf - "$name" | gzip -n >"$archive"
 (cd "$OUT" && sha256sum "$(basename "$archive")" > SHA256SUMS)
 cat "$OUT/SHA256SUMS"
+if [[ "$full_pack" == 1 ]]; then
+    python3 "$REPO/scripts/build-full-pack.py" --output "$OUT" --version "$version"
+fi

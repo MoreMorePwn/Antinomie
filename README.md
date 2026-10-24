@@ -74,6 +74,14 @@ This installs the application for your user and adds its desktop entry. Prebuilt
 application installs do not need Rust. Running `./install.sh` from a newer
 extracted release updates the executable; application data stays in place.
 
+### Offline install: the full pack
+
+Optional analysis tools (Ghidra, capa, FLOSS, Volatility 3, MemNixFS, Tor and
+others) are normally downloaded the first time you ask for them. The **full pack**
+is a second release asset with the same pinned, SHA-256-verified tools already
+inside, for computers that should not download anything. Install the application,
+extract the pack and run `./install-full-pack.sh`. See [docs/full-pack.md](docs/full-pack.md).
+
 ### Run this branch from source
 
 Install the [host build prerequisites](src/antinomie/monitor/README.md#build-and-run),
@@ -173,6 +181,7 @@ the recording is complete or every detection rule matched.
 | [Torture sample builder](tests/monitor/build-torture.sh) | Build the combined and individual workload executables. |
 | [Implementation contract](docs/implementation.md) | Supported behavior, wire contracts, measurements and limits. |
 | [Project layout](docs/project-layout.md) | Durable source, build outputs and artifact retention. |
+| [Full pack](docs/full-pack.md) | The offline bundle of every managed tool. |
 
 ## License
 
