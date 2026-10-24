@@ -79,6 +79,16 @@ pub(crate) fn listing_fields(kind: AnalysisKind) -> Vec<crate::query::FieldSpec<
         ],
         AnalysisKind::Metadata => vec![F::text("group", "Metadata group")],
         AnalysisKind::Embedded => vec![F::text("description", "binwalk signature description")],
+        AnalysisKind::Unpacking => vec![
+            F::number(
+                "layer",
+                "Position in the unpack chain; the file as it came is 0",
+            ),
+            F::text("method", "original, UPX or UPX (header repaired)"),
+            F::text("sha256", "SHA-256 of the layer"),
+            F::number("size", "Layer size in bytes"),
+            F::text("packer", "Packer found in the layer"),
+        ],
         AnalysisKind::Floss => vec![
             F::text("origin", "decoded, stack, tight or language"),
             F::text("encoding", "String encoding"),
@@ -282,6 +292,23 @@ pub(crate) fn listing_row(entry: &AnalysisEntry) -> Vec<(&'static str, crate::qu
                 ("code", V::Text(entry.value.clone())),
             ]);
             "source_line"
+        }
+        AnalysisData::Layer {
+            index,
+            method,
+            sha256,
+            size,
+            packer,
+            ..
+        } => {
+            row.extend([
+                ("layer", V::Number(i128::from(*index))),
+                ("method", V::Text(method.clone())),
+                ("sha256", V::Text(sha256.clone())),
+                ("size", number(Some(*size))),
+                ("packer", text(packer)),
+            ]);
+            "layer"
         }
         AnalysisData::FlossString {
             origin,

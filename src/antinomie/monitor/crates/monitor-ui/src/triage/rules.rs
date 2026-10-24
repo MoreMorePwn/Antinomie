@@ -39,7 +39,7 @@ fn collect_hits(cx: &ctx::Ctx, st: &mut state::State) -> Vec<Hit> {
     hits
 }
 
-pub(super) use engine::{Engine, InfoMark, Options, Output};
+pub(super) use engine::{Engine, InfoMark, Options, Output, PackedImage};
 pub(super) use frames::{FrameKind, SUPPRESSION_VERSION};
 pub(super) use rows::{view_keeps, View, COL_PROCESS, COL_SUMMARY, COL_TIER, COL_TIME, HEADERS};
 pub(super) use table::{spec, Spec};

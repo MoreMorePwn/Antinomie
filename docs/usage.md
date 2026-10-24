@@ -19,7 +19,7 @@ application and base versions; existing VMs keep their pinned base.
   Memory tab) installs for Antinomie; it needs Python 3 (`python3`)
 - Static analysis runs in a bubblewrap sandbox (`bwrap`). Disassembly, rules
   and identification are built in. Decompilation (Ghidra), capabilities
-  (capa), FLOSS strings and Detect It Easy use the system's copy when
+  (capa), FLOSS strings, UPX unpacking and Detect It Easy use the system's copy when
   installed; otherwise **Tools > Analysis tools** downloads them for Antinomie. The Properties tab
   computes ssdeep and TLSH itself; it also shows Magika's file type when
   **Tools > Analysis tools** has installed Magika (or the system has it)
@@ -102,6 +102,9 @@ packet history already has it, and specimen Content supports a byte-offset jump.
    terminal window does not stop the program.
 5. **Static Analysis** in the launch dialog analyzes the program's file before
    it runs; pick the categories, from triage to disassembly and decompilation.
+   **Unpacking** (Triage, on by default) looks for UPX packing; a packed file is unpacked
+   (without ever running it) and the result is a **layer** with its own hash and
+   its own static analysis. See **Static Analysis > Unpacking** below.
    **FLOSS strings** (under Deep analysis, off by default) recovers the strings a
    program builds on the stack or decodes at run time, which Strings cannot see;
    it needs FLOSS from **Tools > Analysis tools** and can take several minutes
@@ -192,6 +195,22 @@ packet history already has it, and specimen Content supports a byte-offset jump.
   the binary `sockaddr_in` and `sockaddr_in6` structures in the core's memory.
   Switch patterns off or add your own in **Library > Detection rules > Strings
   regex**; **Scan again** reads the change.
+- **Static Analysis > Unpacking**: the unpack chain as phases, left to right: the
+  file as it came (packed with UPX or not), then each layer UPX recovered from the
+  one before, with size, SHA-256 and the packer found in it. A file packed twice
+  gives two layers. UPX is needed for this (**Tools > Analysis tools** installs it);
+  without it a packed file is reported as packed and left alone. Files whose UPX
+  headers were tampered with (the `UPX!` magic overwritten, data appended) are
+  repaired on a copy first and the layer says so (`UPX (header repaired)`).
+  Each layer is analysed as a report of its own, the same checks as the packed
+  file's, listed in the **Report** box as "layer N unpacked by UPX"; **Show its
+  analysis** in the phase opens it. The original file is never changed, the layers
+  are plain files that are not executable, at most three layers of 64 MiB each are
+  kept, and unpacking stops after 4 minutes. Other packers are not unpacked; they
+  need the program to run, which is for a later version (guest memory capture).
+  When the program the run started is such a packed file, Triage shows
+  **Suspicious activity** `evasion.packed_image` (LOW for standard UPX, MEDIUM when the
+  packer's headers were changed) as a fact about the file.
 - **Details** and **Activity**: the selected call or run, and VM events.
   Right-click values to copy common numeric formats. Open captured data in its
   own window, initially UTF-8, then choose ASCII, hex, hexdump, Base64 or other

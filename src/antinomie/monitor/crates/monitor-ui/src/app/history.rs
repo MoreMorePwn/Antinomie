@@ -735,6 +735,7 @@ pub(super) fn listed(run: &RunSummary) -> RunSummary {
                 specimen_len: report.specimen_len,
                 reason: None,
                 sections: Vec::new(),
+                layer: None,
             }),
     }
 }

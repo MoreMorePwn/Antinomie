@@ -226,6 +226,7 @@ fn static_analysis_uses_selected_archive_report_without_submitting_work() {
         specimen_len: None,
         reason: Some("Acquisition unavailable in fixture".into()),
         sections: Vec::new(),
+        layer: None,
     };
     live.analysis = Some(report("live-report"));
     app.snapshot.runs.push(live.clone());
@@ -452,6 +453,7 @@ fn analyze_only_and_cancel_do_not_launch_or_stop_a_program() {
             specimen_len: None,
             reason: None,
             sections: Vec::new(),
+            layer: None,
         });
     app.selected_analysis = Some("standalone-job".into());
     let output = ctx.run(egui::RawInput::default(), |ctx| {
@@ -537,4 +539,49 @@ fn native_analysis_setup_fixture() {
         }),
     )
     .unwrap();
+}
+
+#[test]
+fn an_unpacked_layers_analysis_is_found_in_its_packed_files_folder_and_can_be_shown() {
+    let mut app = app();
+    let mut saved = run("packed-run");
+    saved.directory = "/saved/run".into();
+    saved.analysis = Some(section_report("packed-report", "PACKED"));
+    app.history.push(saved);
+    app.snapshot
+        .analysis_reports
+        .push(antinomie_monitor_core::AnalysisReport {
+            id: "packed-report-L2".into(),
+            state: antinomie_monitor_core::AnalysisState::Queued,
+            source_path: "/sample".into(),
+            specimen_sha256: None,
+            specimen_len: None,
+            reason: None,
+            sections: Vec::new(),
+            layer: Some(antinomie_monitor_core::AnalysisLayer {
+                parent_id: "packed-report".into(),
+                index: 2,
+                method: "UPX".into(),
+                parent_sha256: "0".repeat(64),
+            }),
+        });
+    assert_eq!(
+        app.analysis_directory("packed-report-L2"),
+        Some(PathBuf::from("/saved/run/analysis/layers/2"))
+    );
+    // Showing it makes it the report the panel follows; an unknown one is refused.
+    app.analysis_action(
+        "workspace",
+        Some(crate::analysis::ReportAction::ShowReport {
+            report_id: "packed-report-L2".into(),
+        }),
+    );
+    assert_eq!(app.selected_analysis.as_deref(), Some("packed-report-L2"));
+    app.analysis_action(
+        "workspace",
+        Some(crate::analysis::ReportAction::ShowReport {
+            report_id: "gone".into(),
+        }),
+    );
+    assert_eq!(app.selected_analysis.as_deref(), Some("packed-report-L2"));
 }

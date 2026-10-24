@@ -413,6 +413,7 @@ mod tests {
             specimen_len: Some(10_000),
             reason: None,
             sections: Vec::new(),
+            layer: None,
         };
         let ctx = egui::Context::default();
         let mut state = ContentState::default();
@@ -457,6 +458,7 @@ mod tests {
             specimen_len: Some(data.len() as u64),
             reason: None,
             sections: Vec::new(),
+            layer: None,
         };
         let preview = Ok(AnalysisSpecimenPage {
             report_id: report.id.clone(),

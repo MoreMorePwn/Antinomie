@@ -414,6 +414,7 @@ fn needs_tool(
     let (id, name) = match kind {
         AnalysisKind::Capabilities => ("capa", "capa"),
         AnalysisKind::Floss => ("floss", "FLOSS"),
+        AnalysisKind::Unpacking => ("upx", "UPX"),
         AnalysisKind::Decompilation => ("ghidra", "Ghidra"),
         _ => return,
     };
@@ -491,6 +492,10 @@ pub(crate) enum ReportAction {
     },
     /// Open Tools > Analysis tools to install a missing tool.
     OpenAnalysisTools,
+    /// Make this report the one the Static Analysis panel shows.
+    ShowReport {
+        report_id: String,
+    },
     /// Open the regex matches window over the report's strings.
     ScanRegex {
         report_id: String,
@@ -522,6 +527,7 @@ pub(crate) fn section_title(kind: AnalysisKind) -> &'static str {
         AnalysisKind::Decompilation => "Decompilation",
         AnalysisKind::Embedded => "Binwalk",
         AnalysisKind::Floss => "FLOSS",
+        AnalysisKind::Unpacking => "Unpacking",
     }
 }
 
@@ -798,6 +804,7 @@ mod tests {
                     section
                 })
                 .collect(),
+            layer: None,
         }
     }
 

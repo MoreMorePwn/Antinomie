@@ -12,6 +12,7 @@ pub(in crate::analysis) enum Tab {
     Strings,
     Floss,
     Binwalk,
+    Unpacking,
     Yara,
     Capa,
     Disassembly,
@@ -20,12 +21,13 @@ pub(in crate::analysis) enum Tab {
 }
 
 impl Tab {
-    pub(super) const ALL: [Self; 10] = [
+    pub(super) const ALL: [Self; 11] = [
         Self::FileInfo,
         Self::Content,
         Self::Strings,
         Self::Floss,
         Self::Binwalk,
+        Self::Unpacking,
         Self::Yara,
         Self::Capa,
         Self::Disassembly,
@@ -40,6 +42,7 @@ impl Tab {
             Self::Strings => "Strings",
             Self::Floss => "FLOSS",
             Self::Binwalk => "Binwalk",
+            Self::Unpacking => "Unpacking",
             Self::Yara => "YARA",
             Self::Capa => "Capa Matrix",
             Self::Disassembly => "Disassembly",
@@ -55,6 +58,7 @@ impl Tab {
             Self::Strings => AnalysisKind::Strings,
             Self::Floss => AnalysisKind::Floss,
             Self::Binwalk => AnalysisKind::Embedded,
+            Self::Unpacking => AnalysisKind::Unpacking,
             Self::Yara => AnalysisKind::Rules,
             Self::Capa => AnalysisKind::Capabilities,
             Self::Disassembly => AnalysisKind::Disassembly,
@@ -189,6 +193,14 @@ pub(super) fn show(
             );
             let filter = state.symbols;
             category(ui, report, state, listing, AnalysisKind::Structures, filter)
+        }
+        Tab::Unpacking
+            if report
+                .sections
+                .iter()
+                .any(|s| s.kind == AnalysisKind::Unpacking) =>
+        {
+            unpacking::show(ui, report)
         }
         Tab::Capa => {
             let section = report
