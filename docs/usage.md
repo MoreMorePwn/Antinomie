@@ -422,8 +422,8 @@ The network capture is the guest's own view on every route.
   one from the kernel's BTF. Whatever it could not read is stated: a finished
   result with gaps is marked **partial** in the run list, with a banner that
   lists the reasons (for example an unvalidated page-table root, unreadable
-  module list or mounts, or a symbol table that does not match the kernel
-  banner); a report the tool could not produce fails with the reason instead
+  module list or mounts, or a symbol table whose kernel banner is not the
+  dump's); a report the tool could not produce fails with the reason instead
   of showing an empty table. A report takes about a minute on a 2 GiB dump.
 - **Static Analysis**: a **Run** button beside the file's hash opens the run the
   report belongs to in Run History. The selected run's report: an overview, then each

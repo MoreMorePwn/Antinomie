@@ -317,14 +317,14 @@ fn messages_explain_partial_failed_and_unstartable_runs() {
         [DBG] modules: read state @ 0xffffffff8e744bf8 FAILED — stopping walk\n\
         [WRN] something new happened\n\
         [WRN] mountinfo: cannot read nsproxy.mnt_ns\n";
-    let notes = messages::partial_notes(log);
+    let notes = messages::partial_notes(log, false);
     assert_eq!(notes.len(), 5, "{notes:#?}");
     assert!(notes[0].contains("symbol table"));
     assert!(notes[1].contains("page-table root"));
     assert!(notes[2].contains("modules"));
     assert_eq!(notes[3], "MemNixFS warning: something new happened");
     assert!(notes[4].contains("Mount namespaces"));
-    assert!(messages::partial_notes("[INF] fine\n[DBG] fine too\n").is_empty());
+    assert!(messages::partial_notes("[INF] fine\n[DBG] fine too\n", false).is_empty());
 
     assert!(
         messages::failure(
@@ -444,6 +444,7 @@ if [ -e /etc/hostname ] && [ "$(cat /proc/net/dev 2>/dev/null | wc -l)" -gt 3 ];
 case "$mode" in
   fail) echo "[ERR] could not find the kernel" >&2; echo "Error: kernel did not resolve" >&2; exit 1;;
   sleep) sleep 120; exit 0;;
+  mismatch) echo "[ERR] ISF/dump MISMATCH! ISF is for kernel 'vmlinux' but" >&2;;
 esac
 echo "[INF] Format: kdump (ELF64 core)" >&2
 echo "[WRN] DTB unvalidated! Using best guess dtb=0x1" >&2
@@ -475,8 +476,12 @@ exit 0
     }
 
     fn dump(&self, name: &str, bytes: &[u8], symbols: bool) -> MemoryDump {
+        self.dump_with_table(name, bytes, symbols, b"isf")
+    }
+
+    fn dump_with_table(&self, name: &str, bytes: &[u8], symbols: bool, table: &[u8]) -> MemoryDump {
         let file = write(&self.root, name, bytes);
-        let table = write(&self.root, "isf.json.xz", b"isf");
+        let table = write(&self.root, "isf.json.xz", table);
         import(
             &self.root,
             &vm(),
@@ -698,4 +703,76 @@ fn the_tool_is_found_only_when_installed_and_able_to_start() {
     .unwrap();
     let error = MemNixFs::locate(&fixture.data).unwrap_err();
     assert!(error.contains("sudo apt install libsnappy1v5"), "{error}");
+}
+
+const BANNER: &str =
+    "Linux version 6.12.94 (debian-kernel@lists.debian.org) #1 SMP Debian 6.12.94-1";
+
+/// A symbol table (xz JSON) whose `linux_banner` holds `banner`.
+fn isf_with_banner(banner: &str) -> Vec<u8> {
+    use base64_shim::encode;
+    let json = format!(
+        r#"{{"metadata":{{"linux":{{"name":"vmlinux"}}}},"types":{{}},"symbols":{{"init_task":{{"address":1}},"linux_banner":{{"address":2,"constant_data":"{}"}}}}}}"#,
+        encode(format!("{banner}\n\0").as_bytes())
+    );
+    let mut writer =
+        lzma_rust2::XzWriter::new(Vec::new(), lzma_rust2::XzOptions::with_preset(1)).unwrap();
+    std::io::Write::write_all(&mut writer, json.as_bytes()).unwrap();
+    writer.finish().unwrap()
+}
+
+mod base64_shim {
+    pub fn encode(data: &[u8]) -> String {
+        const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = String::new();
+        for chunk in data.chunks(3) {
+            let n = chunk
+                .iter()
+                .enumerate()
+                .fold(0u32, |n, (i, b)| n | (u32::from(*b) << (16 - 8 * i)));
+            for i in 0..4 {
+                if i <= chunk.len() {
+                    out.push(T[(n >> (18 - 6 * i) & 63) as usize] as char);
+                } else {
+                    out.push('=');
+                }
+            }
+        }
+        out
+    }
+}
+
+#[test]
+fn a_matching_banner_drops_the_false_mismatch_and_a_different_one_keeps_it() {
+    let log = "[ERR] ISF/dump MISMATCH! ISF is for kernel 'vmlinux' but\n\
+               [WRN] DTB unvalidated! Using best guess dtb=0x1\n";
+    let verified = messages::partial_notes(log, true);
+    assert_eq!(verified.len(), 1, "{verified:?}");
+    assert!(verified[0].contains("page-table root"));
+    assert_eq!(messages::partial_notes(log, false).len(), 2);
+
+    let fixture = Fixture::new("banner");
+    let tool = MemNixFs::locate(&fixture.data).unwrap();
+    fixture.mode("mismatch");
+    let mut memory = guest_dump();
+    memory.extend_from_slice(b"\0junk\0");
+    memory.extend_from_slice(BANNER.as_bytes());
+    memory.extend_from_slice(b"\n\0");
+
+    let same = fixture.dump_with_table("same.elf", &memory, true, &isf_with_banner(BANNER));
+    let run = fixture.wait(&tool.start(&same, "memnixfs.processes").unwrap());
+    assert_eq!(run.state, RunState::Finished, "{:?}", run.error);
+    assert_eq!(run.partial.len(), 1, "{:?}", run.partial);
+    assert!(run.partial[0].contains("page-table root"));
+
+    let other = isf_with_banner(&BANNER.replace("6.12.94", "6.1.0"));
+    let different = fixture.dump_with_table("different.elf", &memory, true, &other);
+    let run = fixture.wait(&tool.start(&different, "memnixfs.processes").unwrap());
+    assert_eq!(run.partial.len(), 2, "{:?}", run.partial);
+    assert!(run.partial[0].contains("symbol table"));
+
+    // A table that cannot be read never drops the warning.
+    let broken = fixture.dump_with_table("broken.elf", &memory, true, b"isf");
+    let run = fixture.wait(&tool.start(&broken, "memnixfs.processes").unwrap());
+    assert_eq!(run.partial.len(), 2, "{:?}", run.partial);
 }
