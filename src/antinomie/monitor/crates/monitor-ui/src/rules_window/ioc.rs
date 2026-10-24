@@ -33,9 +33,18 @@ pub(super) struct State {
 
 /// Routes a request to the keyed or the plain curl: the Auth-Key goes only to
 /// the feeds that need it.
-struct FeedFetcher {
+pub(super) struct FeedFetcher {
     plain: ruleset::Curl,
     keyed: ruleset::Curl,
+}
+
+impl FeedFetcher {
+    pub(super) fn new(key: antinomie_monitor_core::api_keys::Secret) -> Self {
+        Self {
+            plain: ruleset::Curl::default(),
+            keyed: ruleset::Curl::default().with_auth_key(key),
+        }
+    }
 }
 
 impl Fetcher for FeedFetcher {
@@ -49,7 +58,10 @@ impl Fetcher for FeedFetcher {
     ) -> Result<(), String> {
         let needs_key = ioc::FEEDS
             .iter()
-            .any(|feed| feed.url == url && feed.needs_key);
+            .any(|feed| feed.url == url && feed.needs_key)
+            || ruleset::LIVE_PACKS
+                .iter()
+                .any(|pack| pack.url == url && pack.needs_key);
         let curl = if needs_key { &self.keyed } else { &self.plain };
         curl.fetch(url, dest, max_size, cancel, progress)
     }
@@ -467,10 +479,7 @@ impl Model {
                     *shown = line.to_owned();
                 }
             };
-            let real = FeedFetcher {
-                plain: ruleset::Curl::default(),
-                keyed: ruleset::Curl::default().with_auth_key(key),
-            };
+            let real = FeedFetcher::new(key);
             #[cfg(test)]
             let fetcher: &dyn Fetcher = match &injected {
                 Some(fetcher) => fetcher.as_ref(),
