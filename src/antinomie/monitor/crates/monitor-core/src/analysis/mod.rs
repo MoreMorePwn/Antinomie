@@ -11,6 +11,7 @@ mod capa;
 mod decompile;
 pub mod detection;
 mod disasm;
+mod floss;
 mod ident;
 mod listing;
 mod progress;

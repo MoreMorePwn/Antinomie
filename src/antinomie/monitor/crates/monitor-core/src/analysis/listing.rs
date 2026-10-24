@@ -33,6 +33,7 @@ pub(crate) fn file_name(kind: AnalysisKind) -> &'static str {
         AnalysisKind::Disassembly => "disassembly.jsonl",
         AnalysisKind::Decompilation => "decompilation.jsonl",
         AnalysisKind::Embedded => "embedded.jsonl",
+        AnalysisKind::Floss => "floss.jsonl",
     }
 }
 
@@ -346,6 +347,7 @@ fn structure_number(field: StructureField, entry: &AnalysisEntry) -> Option<u64>
                 AnalysisData::Symbol { address, .. } | AnalysisData::Export { address, .. } => {
                     *address
                 }
+                AnalysisData::FlossString { function, .. } => *function,
                 _ => None,
             }),
         _ => match (&record?.data, field) {

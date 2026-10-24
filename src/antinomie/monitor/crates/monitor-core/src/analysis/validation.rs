@@ -268,6 +268,22 @@ pub(crate) fn validate_record(
                         && l.file_range.is_none()
                 })
         }
+        AnalysisData::FlossString {
+            origin,
+            encoding,
+            function,
+            ..
+        } => {
+            kind == AnalysisKind::Floss
+                && matches!(origin.as_str(), "decoded" | "stack" | "tight" | "language")
+                && bounded(encoding)
+                && !encoding.is_empty()
+                && if origin == "language" {
+                    location.is_none_or(|l| l.kind == AnalysisAddressKind::FileOffset)
+                } else {
+                    address_location(*function)
+                }
+        }
         AnalysisData::Identification {
             category,
             name,

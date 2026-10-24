@@ -5,6 +5,11 @@
 //! for its report. The worker is this program, as the app's workers are.
 //!
 //! usage: host-analysis-check NEW_DATA_DIR FILE
+//!
+//! The environment can widen the check: `ANTINOMIE_CHECK_KINDS` is a comma
+//! separated list of categories to add (`floss`, `unpacking`) and
+//! `ANTINOMIE_CHECK_TOOLS` a folder of unpacked tools (`floss/floss`) that is
+//! copied to `<data dir>/tools`, so a tool needs no download.
 use antinomie_monitor_core::{
     AnalysisKind, AnalysisSectionState, AnalysisSelection, AnalysisState, Backend, BackendOptions,
     Command, Notification, Snapshot,
@@ -35,6 +40,31 @@ fn main() {
             "{:x}",
             Sha256::digest(fs::read(&file).map_err(|e| e.to_string())?)
         );
+        let mut checks = AnalysisKind::TRIAGE.to_vec();
+        for name in std::env::var("ANTINOMIE_CHECK_KINDS")
+            .unwrap_or_default()
+            .split(',')
+            .filter(|name| !name.is_empty())
+        {
+            checks.push(match name {
+                "floss" => AnalysisKind::Floss,
+                other => return Err(format!("unknown check {other}")),
+            });
+        }
+        if let Some(tools) = std::env::var_os("ANTINOMIE_CHECK_TOOLS") {
+            let target = data_dir.join("tools");
+            fs::create_dir_all(&target).map_err(|e| e.to_string())?;
+            let status = std::process::Command::new("cp")
+                .arg("-a")
+                .arg("--")
+                .arg(PathBuf::from(&tools).join("."))
+                .arg(&target)
+                .status()
+                .map_err(|e| e.to_string())?;
+            if !status.success() {
+                return Err("cannot copy the tools".into());
+            }
+        }
         let mut backend = Backend::new(BackendOptions {
             data_dir,
             ..BackendOptions::default()
@@ -45,7 +75,7 @@ fn main() {
             path: file,
             analysis: AnalysisSelection {
                 enabled: true,
-                checks: AnalysisKind::TRIAGE.to_vec(),
+                checks,
             },
         })?;
         let deadline = Instant::now() + Duration::from_secs(180);
