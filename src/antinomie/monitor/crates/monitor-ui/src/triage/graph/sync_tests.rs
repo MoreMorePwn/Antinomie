@@ -373,7 +373,9 @@ fn strip_text(
         },
         |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                open |= strip.show(ui, index, tiers, None, false).open_graph;
+                open |= strip
+                    .show(ui, index, tiers, None, false, Spacing::Events)
+                    .open_graph;
             });
         },
     );
@@ -618,6 +620,7 @@ fn native_graph_fixture() {
                         [tiers[0], tiers[1], tiers[2], 0],
                         None,
                         false,
+                        self.spacing,
                     );
                 } else {
                     let config = super::widget::Config {

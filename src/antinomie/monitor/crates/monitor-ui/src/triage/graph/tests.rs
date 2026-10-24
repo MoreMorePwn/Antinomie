@@ -209,7 +209,9 @@ fn an_overview_keeps_the_sums_over_time_and_nothing_else() {
     builder.push_record(record(S, 0, Tier::High, Category::Command));
     builder.push_record(record(2 * S, 0, Tier::Low, Category::Discovery));
     let overview = builder.finish();
-    assert!(overview.records.is_empty() && overview.cells.is_empty() && overview.rows.is_empty());
+    // The records stay (compact, for equal spacing); lanes' cells and rows do not.
+    assert_eq!(overview.records.len(), 2);
+    assert!(overview.cells.is_empty() && overview.rows.is_empty());
     assert_eq!(overview.tiers, [1, 0, 1, 0]);
     assert!(!overview.bins.is_empty());
 }

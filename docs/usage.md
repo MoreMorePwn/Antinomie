@@ -350,6 +350,10 @@ The network capture is the guest's own view on every route.
   run as **Main activity graph**; a click opens the Graph. When nothing is above
   LOW it is one line (`No medium or high activity · 11 low · 340 info`); the
   arrow opens or closes it, and the choice is kept until you quit.
+  Like the Graph it spaces its findings equally by default, so a few findings
+  fill the whole width instead of sitting in a sliver of a long run; it follows
+  the Graph's **Events** or **Time** choice. In both, a run with only a few
+  findings has them near the left and right edges of the plot.
 - **Settings › Notifications › Toast for live HIGH findings** (on by default):
   the first HIGH finding of each rule in a run that is still going raises one
   toast; later matches of that rule add `×N` to it. It is raised when the run's
