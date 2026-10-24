@@ -1,5 +1,5 @@
 use crate::{
-    api::{BackendOptions, VmAcceleration, VmConfig, VmCpuModel, VmLaunchOptions},
+    api::{BackendOptions, VmAcceleration, VmConfig, VmCpuModel, VmLaunchOptions, VmNetwork},
     storage::{Bundle, private_dir, unique_id, vm_dir},
 };
 use rustix::fs::MemfdFlags;
@@ -15,11 +15,23 @@ use std::{
     time::Duration,
 };
 
+/// The QEMU user-mode network of a VM. A Routed VM has none: its card is
+/// wired to the route gateway instead.
 fn user_network_backend(vm: &VmConfig) -> Option<&'static str> {
+    match vm.network() {
+        VmNetwork::Isolated => Some("user,id=net0,restrict=on"),
+        VmNetwork::Nat => Some("user,id=net0"),
+        VmNetwork::Routed | VmNetwork::Disconnected => None,
+    }
+}
+
+/// What a full-snapshot identity adds for the network: nothing for NAT and
+/// Disconnected, which older checkpoints were taken with.
+fn network_identity_key(vm: &VmConfig) -> Option<&'static str> {
     if vm.isolated_network {
-        Some("user,id=net0,restrict=on")
-    } else if vm.nat {
-        Some("user,id=net0")
+        Some("isolated_network")
+    } else if vm.routed {
+        Some("routed")
     } else {
         None
     }
@@ -262,6 +274,11 @@ pub(crate) struct VmProcess {
     pub bootstrap: u64,
     pub ram_size: u64,
     pub qmp_path: PathBuf,
+    /// The route gateway of a Routed VM; it ends with the process.
+    pub gateway: Option<crate::route::Gateway>,
+    /// Folder holding the gateway's socket when it is not in `runtime_dir`
+    /// (the path would be too long for a socket); removed on drop.
+    net_dir: Option<PathBuf>,
 }
 /// The QEMU command. Through util-linux `setpriv`, when installed, QEMU gets
 /// SIGKILL if the app dies, instead of running on with the VM's disk locked
@@ -469,6 +486,26 @@ impl VmProcess {
                 started: false,
             });
         }
+        // A Routed VM's gateway listens before QEMU starts, on the Drop
+        // route: nothing leaves until a run claims a route.
+        let mut gateway = None;
+        let mut net_dir = None;
+        let mut net_cleanup = None;
+        if vm.network() == VmNetwork::Routed {
+            crate::route::require_qemu_support(&options.qemu)?;
+            let mut dir = runtime_dir.clone();
+            if dir.join("net.sock").as_os_str().len() > 100 {
+                dir = std::env::temp_dir().join(format!("ant-{}", unique_id()));
+                private_dir(&dir).map_err(|e| e.to_string())?;
+                net_cleanup = Some(UnstartedRuntime {
+                    path: dir.clone(),
+                    started: false,
+                });
+                net_dir = Some(dir.clone());
+            }
+            let net = crate::route::GatewayNet::from_nat(&stealth.nat)?;
+            gateway = Some(crate::route::Gateway::start(&dir, net)?);
+        }
         let serial = File::create(runtime_dir.join("serial.log")).map_err(|e| e.to_string())?;
         let stderr = File::create(runtime_dir.join("qemu.log")).map_err(|e| e.to_string())?;
         let mut cmd = qemu_command(&options.qemu);
@@ -530,6 +567,11 @@ impl VmProcess {
                 .arg(crate::stealth::netdev_option(netdev, &stealth))
                 .arg("-device")
                 .arg(crate::stealth::nic_option(&stealth));
+        } else if let Some(gateway) = &gateway {
+            cmd.arg("-netdev")
+                .arg(gateway.netdev_option()?)
+                .arg("-device")
+                .arg(crate::stealth::nic_option(&stealth));
         } else {
             cmd.args(["-nic", "none"]);
         }
@@ -545,12 +587,17 @@ impl VmProcess {
             bootstrap,
             ram_size,
             qmp_path,
+            gateway,
+            net_dir,
         };
         if let Some((sizing, (width, height))) = initial_size {
             process.set_initial_window_size(sizing, width, height)?;
         }
         cleanup.started = true;
         if let Some(cleanup) = socket_cleanup.as_mut() {
+            cleanup.started = true;
+        }
+        if let Some(cleanup) = net_cleanup.as_mut() {
             cleanup.started = true;
         }
         Ok(process)
@@ -741,8 +788,8 @@ impl VmProcess {
         };
         let mut value = serde_json::json!({"launch_policy":2,"host_identity":host_identity,"qemu":String::from_utf8_lossy(&output.stdout),"machine":"q35,max-ram-below-4g=4G","cpus":vm.cpus,"ram_mib":vm.ram_mib,"nat":vm.nat,"launch":vm.launch,"transport":vm.transport,"acceleration":acceleration,"force_tcg":options.force_tcg,"headless":options.headless,"bootstrap_gpa":options.bootstrap_gpa,"bundle_identity":bundle.base_identity,"kernel_append":bundle.kernel_append,"kernel_version":bundle.kernel_version});
         // Keep pre-isolation checkpoints compatible for unchanged network setups.
-        if vm.isolated_network {
-            value["isolated_network"] = serde_json::Value::Bool(true);
+        if let Some(key) = network_identity_key(vm) {
+            value[key] = serde_json::Value::Bool(true);
         }
         let digest = Sha256::digest(serde_json::to_vec(&value).map_err(|e| e.to_string())?);
         Ok(digest.iter().map(|byte| format!("{byte:02x}")).collect())
@@ -917,6 +964,11 @@ impl Drop for VmProcess {
         {
             let _ = std::fs::remove_dir(parent);
         }
+        // The gateway stops and removes its socket before its folder goes.
+        drop(self.gateway.take());
+        if let Some(dir) = self.net_dir.take() {
+            let _ = std::fs::remove_dir_all(dir);
+        }
     }
 }
 #[cfg(test)]
@@ -1040,6 +1092,8 @@ mod tests {
                 bootstrap: 0,
                 ram_size: 64 * 1024 * 1024,
                 qmp_path,
+                gateway: None,
+                net_dir: None,
             };
             process
                 .qmp(&serde_json::json!({"execute":"query-status"}))
@@ -1101,6 +1155,33 @@ mod tests {
         failed.force_stop().unwrap();
     }
     use crate::api::{DisplayResolution, GuestProfile};
+
+    #[test]
+    fn a_routed_vm_has_no_user_network_and_changes_the_snapshot_identity() {
+        let mut vm = VmConfig::default();
+        assert_eq!(network_identity_key(&vm), None);
+        vm.routed = true;
+        assert_eq!(vm.network(), VmNetwork::Routed);
+        assert!(vm.has_network());
+        // Its card is wired to the gateway, not to QEMU's user network.
+        assert_eq!(user_network_backend(&vm), None);
+        assert_eq!(network_identity_key(&vm), Some("routed"));
+        // Isolated wins over Routed, and Routed over NAT.
+        vm.nat = true;
+        assert_eq!(vm.network(), VmNetwork::Routed);
+        assert_eq!(user_network_backend(&vm), None);
+        vm.isolated_network = true;
+        assert_eq!(vm.network(), VmNetwork::Isolated);
+        assert_eq!(user_network_backend(&vm), Some("user,id=net0,restrict=on"));
+        // A saved VM from before Routed existed reads as not routed.
+        let old: VmConfig = serde_json::from_str(
+            &serde_json::to_string(&VmConfig::default())
+                .unwrap()
+                .replace("\"routed\":false,", ""),
+        )
+        .unwrap();
+        assert!(!old.routed);
+    }
 
     #[test]
     fn isolated_network_overrides_nat_without_forwarding() {
@@ -1437,6 +1518,8 @@ mod tests {
             bootstrap: 0,
             ram_size: 0,
             qmp_path: "/nonexistent/qmp".into(),
+            gateway: None,
+            net_dir: None,
         };
         drop(process);
         assert!(!std::path::Path::new(&format!("/proc/{pid}")).exists());
@@ -1454,6 +1537,8 @@ mod tests {
             bootstrap: 0,
             ram_size: 0,
             qmp_path: "/nonexistent/qmp".into(),
+            gateway: None,
+            net_dir: None,
         };
         let (sizing, _server) =
             crate::display::InitialWindowSize::stalled_for_test(Duration::from_millis(50));
