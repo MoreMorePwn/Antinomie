@@ -82,10 +82,20 @@ pub fn numeric_align(numeric: bool) -> Align {
 }
 
 /// Run `add` with its widgets at the left (`Align::Min`) or right
-/// (`Align::Max`) edge of the cell.
+/// (`Align::Max`) edge of the cell, centred in its height: for headers.
 pub fn aligned(ui: &mut egui::Ui, align: Align, add: impl FnOnce(&mut egui::Ui)) {
     if align == Align::Max {
         ui.with_layout(Layout::right_to_left(Align::Center), add);
+    } else {
+        add(ui);
+    }
+}
+
+/// [`aligned`] for body cells of a table whose cells sit at the top of the
+/// row: a right-aligned cell keeps that baseline instead of drifting down.
+pub fn aligned_cell(ui: &mut egui::Ui, align: Align, add: impl FnOnce(&mut egui::Ui)) {
+    if align == Align::Max {
+        ui.with_layout(Layout::right_to_left(Align::Min), add);
     } else {
         add(ui);
     }

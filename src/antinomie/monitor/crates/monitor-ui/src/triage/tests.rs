@@ -2040,3 +2040,27 @@ fn every_filter_slot_draws_its_filter_bar() {
     }
     assert_eq!(TABLE_IDS[SESSION_SLOT], "triage-sessions");
 }
+
+#[test]
+fn bpf_rows_without_an_image_each_have_their_own_key() {
+    let calls: Vec<InvocationSummary> = (1..=4)
+        .map(|id| {
+            let mut load = call(1, 321, "bpf", 3);
+            load.entry.as_mut().unwrap().args = Some([5, 0, 0, 0, 0, 0]);
+            load.call_id = id;
+            load
+        })
+        .collect();
+    let notes = page_notes(&calls);
+    assert_eq!(notes.len(), 4);
+    let rows: Vec<Vec<Cell>> = notes.iter().map(|note| bpf_row(note, None)).collect();
+    let keys: Vec<String> = rows.iter().map(|row| evidence_key(row)).collect();
+    // Selecting one row matches exactly that row.
+    for (at, key) in keys.iter().enumerate() {
+        assert_eq!(
+            keys.iter().filter(|other| *other == key).count(),
+            1,
+            "row {at} shares its key"
+        );
+    }
+}
