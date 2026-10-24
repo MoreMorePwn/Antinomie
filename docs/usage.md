@@ -109,6 +109,64 @@ packet history already has it, and specimen Content supports a byte-offset jump.
 7. With the guest network connected, select **Capture network** to record
    packets of the VM's network interface outside the guest. Stop it to finish the capture;
    each start creates a separate retained pcap in the boot recording.
+   On a Routed VM, **Route** in the same section picks where the run's traffic goes
+   (see *Network routes* below).
+
+## Network routes
+
+A VM whose network is **Routed** (VM dialog > Network) lets you choose, for each
+run, where the sample's traffic goes. Between runs a Routed VM has a working
+network card and an address, but nothing leaves. Everything runs as your own
+user: no root, no firewall rules, no VPN client on the computer.
+
+| Route | What the sample can do |
+|---|---|
+| **None (drop)** | Nothing leaves. Connections and DNS go unanswered; the attempts are still captured. |
+| **Internet** | Connect to public addresses through this computer's connection. It cannot reach this computer or your local network unless you allow private addresses. |
+| **InetSim (fake services)** | Every name resolves to a fake address and every connection reaches a fake service (HTTP, SMTP; other ports accept and discard). Nothing leaves. |
+| **Tor** | Connect through your Tor's SOCKS port; Tor resolves the names. |
+| **VPN (WireGuard)** | Connect through a WireGuard tunnel run by wireproxy (userspace, no root). |
+| **SOCKS5 proxy** | Connect through a SOCKS5 proxy you give (optional user name and password). |
+
+Pick the route in the Run form (**Network > Route**); the default comes from
+**Settings > Network routes**, where the other settings are too:
+
+* **Tor**: the SOCKS address of a Tor you run (a `tor` service listens on
+  `127.0.0.1:9050`). Antinomie does not start or install Tor.
+* **VPN**: a wireproxy configuration file with your WireGuard peer and a
+  `[Socks5]` section (`BindAddress = 127.0.0.1:25344`), and the wireproxy program
+  if it is not on `PATH`. Antinomie starts wireproxy for the run and stops it
+  afterwards. OpenVPN is not supported: it needs a TUN device, which needs root.
+  If you have OpenVPN, run it yourself in a container with a SOCKS5 front end and
+  use the SOCKS5 route.
+* **SOCKS5**: host, port and optional user name and password. The password is
+  saved in your data folder, readable by you only, and never shown, logged or
+  exported.
+* **InetSim**: the built-in services, or an INetSim of your own. INetSim must
+  listen on high ports, because you run it as yourself: a guest connection to
+  port P goes to P plus the *port offset* (10000 by default). In `inetsim.conf`
+  that is, for example, `service_bind_address 127.0.0.1`, `http_bind_port 10080`,
+  `https_bind_port 10443`, `smtp_bind_port 10025`, `ftp_bind_port 10021` and a
+  `start_service` line for each. Antinomie answers DNS itself (every name resolves
+  to the fake address), so INetSim's DNS service is not used. The built-in
+  services have no TLS: HTTPS needs INetSim.
+* A **Test** button for each route brings it up the way a run would and says
+  whether it answers.
+
+A route that cannot start stops the run with the reason; Antinomie never falls
+back to another route, and in particular never to the plain Internet. The route
+is checked before the sample starts. Over Tor, VPN and SOCKS5, UDP other than DNS
+is dropped (the network capture still shows the attempts), and a name that does
+not exist shows as a refused connection. Ping is answered only for the gateway
+itself; IPv6 is not carried on any route.
+
+The route a run used is recorded with the run. It is shown in Run History's
+details, above Triage, in **Triage > Summary > Network evidence** and in
+**Triage > Network**, with what the gateway counted once the run ended. Runs from
+before routes existed read **Not recorded**. A VM that is not Routed has one fixed
+network (shown as the run's route); to choose per run, set the VM's network to
+Routed. A VM has one route at a time, so runs that overlap must use the same one.
+The network capture is the guest's own view on every route.
 
 ## 4. Read the results
 
