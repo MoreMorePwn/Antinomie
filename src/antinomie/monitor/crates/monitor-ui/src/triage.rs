@@ -31,6 +31,7 @@ pub(crate) const OPEN_INPUT: &str = "triage-open-input";
 mod archive_scan;
 mod async_files;
 mod auditd_events;
+mod bpf_attach;
 mod bpf_notes;
 mod counts;
 mod descriptors;
@@ -84,8 +85,8 @@ mod tracer_qa;
 #[cfg(test)]
 mod uring_qa;
 use self::{
-    archive_scan::*, bpf_notes::*, descriptors::*, file_category::FILE_FIELDS, file_events::*,
-    findings::*, pcap_scan::*, process_tree::*, refresh::*, table::*,
+    archive_scan::*, bpf_attach::BpfFds, bpf_notes::*, descriptors::*, file_category::FILE_FIELDS,
+    file_events::*, findings::*, pcap_scan::*, process_tree::*, refresh::*, table::*,
 };
 pub(crate) use network::AddressLookup;
 
@@ -1392,6 +1393,8 @@ struct BpfNote {
     /// Captured instruction bytes, when an image was isolated.
     bytes: Option<Vec<u8>>,
     identity: bpf::BpfIdentity,
+    /// For an attach: the call that loaded the program, when this slice saw it.
+    loaded_by: Option<u64>,
 }
 
 #[cfg(test)]

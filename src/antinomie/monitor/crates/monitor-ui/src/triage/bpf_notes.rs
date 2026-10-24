@@ -4,20 +4,16 @@ use super::*;
 
 pub(super) fn bpf_notes(input: &TriageInput<'_>) -> Vec<BpfNote> {
     let mut notes = Vec::new();
-    // File descriptors returned by successful BPF_PROG_LOAD calls in this slice.
-    let mut program_fds = Vec::<(u64, i64)>::new();
+    // Program and perf event descriptors seen so far in this slice.
+    let mut fds = BpfFds::default();
     for invocation in input.invocations {
         let Some(event) = trace::representative(invocation) else {
             continue;
         };
-        if event.syscall_name == "close" && succeeded(invocation) {
-            if let Some(fd) = call_args(invocation).and_then(|args| i64::try_from(args[0]).ok()) {
-                program_fds.retain(|key| *key != (invocation.task_cookie, fd));
-            }
-        }
         let recorded_args = event.args.or_else(|| call_args(invocation));
         let args = recorded_args.unwrap_or([0; 6]);
         let Some(command) = bpf_command(event, args) else {
+            fds.observe(invocation);
             continue;
         };
         let image = instruction_image(invocation, command);
@@ -134,32 +130,36 @@ pub(super) fn bpf_notes(input: &TriageInput<'_>) -> Vec<BpfNote> {
             (None, None, None, None, identity)
         };
         let result = invocation.exit.as_ref().and_then(|exit| exit.result);
+        let attached = bpf_attach::command_of(event, args)
+            .map(|command| bpf_attach::attach(invocation, command, args, &fds));
+        let lifecycle = if let Some(attached) = &attached {
+            Some(attached.lifecycle(result))
+        } else if command == bpf_attach::PERF_OPEN {
+            Some(bpf_attach::perf_open_text(invocation, result))
+        } else {
+            attach_of_loaded(command, invocation, &fds).or_else(|| bpf_lifecycle(command, result))
+        };
         notes.push(BpfNote {
-            summary: summary(event, command, &outcome(invocation), result),
+            summary: summary(event, command, &outcome(invocation), lifecycle.as_deref()),
             heading: format!("{}  tid {}  {command}", event.syscall_name, event.tid),
             outcome: outcome(invocation),
-            lifecycle: attach_of_loaded(command, invocation, &program_fds)
-                .or_else(|| bpf_lifecycle(command, result)),
+            lifecycle,
+            loaded_by: attached.as_ref().and_then(|attached| attached.loaded_by),
             translation,
             dump,
             export,
             bytes,
             identity,
         });
-        if command == "BPF_PROG_LOAD" {
-            if let Some(fd) = result.filter(|result| *result >= 0) {
-                program_fds.push((invocation.task_cookie, fd));
-            }
-        }
+        fds.observe(invocation);
     }
     notes
 }
 
 /// One line of what happened, for the Observation column: the step and its
 /// result first, then the call and thread that made it.
-fn summary(event: &EventSummary, command: &str, outcome: &str, result: Option<i64>) -> String {
-    let step = bpf_lifecycle(command, result).unwrap_or_else(|| format!("{command}: {outcome}"));
-    let mut text = step;
+fn summary(event: &EventSummary, command: &str, outcome: &str, lifecycle: Option<&str>) -> String {
+    let mut text = lifecycle.map_or_else(|| format!("{command}: {outcome}"), str::to_owned);
     if let Some(first) = text.get_mut(0..1) {
         first.make_ascii_uppercase();
     }
@@ -189,27 +189,21 @@ fn captured_integer(invocation: &InvocationSummary, member: &str) -> Option<u64>
 
 /// `attach requested of fd N` when a recorded argument is a program fd from
 /// an earlier successful load in this slice. No fd is guessed from a pointer.
-fn attach_of_loaded(
-    command: &str,
-    invocation: &InvocationSummary,
-    program_fds: &[(u64, i64)],
-) -> Option<String> {
+fn attach_of_loaded(command: &str, invocation: &InvocationSummary, fds: &BpfFds) -> Option<String> {
     if command != "BPF_PROG_ATTACH" {
         return None;
     }
     let fd = i64::try_from(captured_integer(invocation, "attach_bpf_fd")?).ok()?;
-    program_fds
-        .contains(&(invocation.task_cookie, fd))
-        .then(|| {
-            format!(
-                "{} of observed loaded fd {fd}",
-                if succeeded(invocation) {
-                    "attached"
-                } else {
-                    "attach attempted"
-                }
-            )
-        })
+    fds.program(invocation.task_cookie, fd).is_some().then(|| {
+        format!(
+            "{} of observed loaded fd {fd}",
+            if succeeded(invocation) {
+                "attached"
+            } else {
+                "attach attempted"
+            }
+        )
+    })
 }
 
 fn bpf_lifecycle(command: &str, result: Option<i64>) -> Option<String> {
@@ -242,6 +236,12 @@ fn classic_image(command: &str) -> bool {
 }
 
 pub(super) fn bpf_command(event: &EventSummary, args: [u64; 6]) -> Option<&'static str> {
+    if let Some(command) = bpf_attach::command_of(event, args) {
+        return Some(command);
+    }
+    if event.syscall_nr == 298 {
+        return Some(bpf_attach::PERF_OPEN);
+    }
     if let Some(command) = bpf::command_name(event) {
         return Some(command);
     }
@@ -389,6 +389,11 @@ pub(super) fn bpf_detail(
     ui.label(RichText::new(&note.heading).strong());
     if let Some(line) = &note.lifecycle {
         ui.label(line);
+    }
+    if let Some(call) = note.loaded_by {
+        ui.label(format!(
+            "Program loaded in call {call}; this is its attach."
+        ));
     }
     if note.translation.is_none() && note.dump.is_none() {
         ui.weak("The instruction image was not isolated.");
