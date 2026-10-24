@@ -256,6 +256,7 @@ struct Harness {
     ctx: egui::Context,
     window: Window,
     time: f64,
+    size: egui::Vec2,
 }
 
 const SIZE: egui::Vec2 = egui::vec2(1400.0, 900.0);
@@ -269,7 +270,13 @@ impl Harness {
             ctx,
             window,
             time: 0.0,
+            size: SIZE,
         }
+    }
+
+    fn frame_sized(&mut self, activity: &Activity, size: egui::Vec2) -> Vec<(String, Rect)> {
+        self.size = size;
+        self.frame(activity, Vec::new())
     }
 
     fn frame(&mut self, activity: &Activity, events: Vec<egui::Event>) -> Vec<(String, Rect)> {
@@ -277,7 +284,7 @@ impl Harness {
         let window = &mut self.window;
         let output = self.ctx.run(
             egui::RawInput {
-                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, SIZE)),
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, self.size)),
                 events,
                 time: Some(self.time),
                 ..Default::default()
@@ -425,4 +432,26 @@ fn an_unindexed_run_says_so() {
         },
     );
     assert!(!output.shapes.is_empty());
+}
+
+#[test]
+fn a_narrow_pane_stacks_the_file_list_above_the_history() {
+    let activity = activity();
+    let mut harness = Harness::new();
+    harness.window.open_on("/tmp/payload");
+    let mut shown = Vec::new();
+    for _ in 0..4 {
+        shown = harness.frame_sized(&activity, egui::vec2(520.0, 900.0));
+    }
+    let list = shown
+        .iter()
+        .find(|(text, _)| text == "Filter by path")
+        .expect("the filter")
+        .1;
+    let history = shown
+        .iter()
+        .find(|(text, _)| text == "All calls")
+        .expect("the calls")
+        .1;
+    assert!(history.top() > list.bottom(), "{history:?} under {list:?}");
 }
