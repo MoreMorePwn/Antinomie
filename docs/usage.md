@@ -158,6 +158,14 @@ packet history already has it, and specimen Content supports a byte-offset jump.
    its type (decoded, stack, tight, or language for Go and Rust strings), its
    encoding and the address FLOSS reports for the routine. Files over 16 MiB are
    not taken.
+   When you run a file you just sent with **Upload and Run**, static analysis uses
+   the copy still on the host instead of reading the program back from the guest,
+   but only if the guest's own hash of the file that ran equals the hash of that
+   copy. If the file is gone, differs (the program rewrote itself, or another file
+   ran) or the guest recorded no hash for it, the program is fetched from the
+   guest as usual. The **Specimen source** row of the report's Identity card says
+   which happened ("host copy, hash matched guest" or "fetched from guest"); the
+   evidence identity is the guest's hash either way.
 6. **Attach to process** traces a process that is already running in the guest
    (and its future children); **Capture all** traces all of userspace. Neither
    stops or signals anything. A capture lists the processes it saw as a tree
@@ -291,6 +299,26 @@ The network capture is the guest's own view on every route.
   finding in time, ↑/↓ lane, Enter evidence, `T` spacing, `F` fit, `+`/`-` zoom at the
   selection, Space fold the lane, `H` `M` `L` `I` the tier chips and Show INFO,
   `1`…`9` and `0` the first ten category chips.
+- **Triage › Files › Per-file history…** opens the **File activity** window. The
+  left list holds every file the run touched, in order of the first call (also
+  those that were only opened, read or probed); **Hide stdio**, **Hide library**
+  and **Changed only** narrow it, the filter matches the path and any other name
+  the file was given, and the order can be first or last touched, most calls or
+  path. Choose a file to see its history as a graph: one box for each stretch of
+  the same call by the same process (create, open, read, write ×3, rename, delete),
+  joined in the order the calls happened, on a lane for each process involved.
+  Click a box to list its calls: time, process, call, result (a rename shows the new
+  name, a delete says whether another link remains), and for reads and writes the
+  **offset**, the **length** and the first 64 bytes the kernel captured. A write
+  that went past the end of the file as far as the run knew says so. **Content
+  changes** below lists the bytes the run changed where it captured both sides:
+  `0x00000001  42 43 → 7a 7a`, or `added` for bytes past the size it first saw
+  (`??` is a byte it did not capture, `∅` one beyond the known size), the file's
+  size before and after, and the guest's SHA-256 when it took one. Click a call
+  name to open the original syscall. An offset the run could not know (an append,
+  a descriptor it did not see opened) shows `unknown`, and bytes the kernel did not
+  capture show `not captured`; nothing is guessed. In **Changed files**, Details has
+  a **Per-file history…** button that opens the window on that file.
 - **Triage › Summary** shows the same curve, phases and heat strip for the whole
   run as **Main activity graph**; a click opens the Graph. When nothing is above
   LOW it is one line (`No medium or high activity · 11 low · 340 info`); the
@@ -384,6 +412,12 @@ The network capture is the guest's own view on every route.
   the binary `sockaddr_in` and `sockaddr_in6` structures in the core's memory.
   Switch patterns off or add your own in **Library > Detection rules > Strings
   regex**; **Scan again** reads the change.
+- **Static Analysis > Overview > Categories**: a category the analysis was not
+  started with shows **Not requested** and a **Run** button. Run adds that check
+  to the same report without starting the analysis again: the specimen kept with
+  the report is analysed by the one check, and its tab fills in when it ends.
+  The button waits while the analysis is still being made; no VM has to be
+  running, and the result is saved with the report like the others.
 - **Static Analysis > Unpacking**: the unpack chain as phases, left to right: the
   file as it came (packed with UPX or not), then each layer UPX recovered from the
   one before, with size, SHA-256 and the packer found in it. A file packed twice

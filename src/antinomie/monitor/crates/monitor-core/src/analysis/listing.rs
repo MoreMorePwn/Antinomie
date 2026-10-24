@@ -502,6 +502,7 @@ mod tests {
             reason: Some("partial fixture".into()),
             sections: vec![section],
             layer: None,
+            specimen_source: None,
         };
         std::fs::write(
             root.join("report.json"),
@@ -613,6 +614,7 @@ mod tests {
             reason: None,
             sections: vec![section],
             layer: None,
+            specimen_source: None,
         };
         std::fs::write(
             root.join("report.json"),
@@ -666,6 +668,7 @@ mod tests {
             reason: None,
             sections: vec![section],
             layer: None,
+            specimen_source: None,
         };
         std::fs::write(
             root.join("report.json"),
@@ -714,6 +717,7 @@ mod tests {
             reason: None,
             sections: vec![section],
             layer: None,
+            specimen_source: None,
         };
         std::fs::write(
             root.join("report.json"),

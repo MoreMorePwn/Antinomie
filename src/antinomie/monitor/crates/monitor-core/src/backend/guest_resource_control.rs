@@ -74,6 +74,7 @@ impl Session {
             core_timeout_ms: None,
             debug_on_start: false,
             route: None,
+            host_copy: None,
         };
         let reply = match self.request_typed(
             control::EXEC,

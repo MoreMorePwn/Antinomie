@@ -789,6 +789,7 @@ mod tests {
             reason: None,
             sections: vec![metadata, found],
             layer: None,
+            specimen_source: None,
         }
     }
 

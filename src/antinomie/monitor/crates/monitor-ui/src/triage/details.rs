@@ -190,6 +190,9 @@ pub(super) fn show(view: &mut TriageView, ui: &mut egui::Ui) {
         if selected.table == "triage-changed" {
             disk_diff_link(ui, &selected);
             if let Some(change) = view.scan.as_ref().and_then(|scan| scan.file_changes.iter().find(|change| change.evidence_key() == selected.key)) {
+                if ui.button("Per-file history…").on_hover_text("Open this file in the File activity window").clicked() {
+                    view.file_window.open_on(&change.path);
+                }
                 change.show(ui, view.scan.as_ref().and_then(|scan| scan.clock_anchor));
             } else {
                 crate::activity::warning(ui, "This file's retained differences are no longer available in the current index.");

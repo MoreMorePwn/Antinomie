@@ -258,6 +258,9 @@ pub(super) struct FileIndex {
     pub omitted_files: u64,
     /// Recording segment being read (0 for the first).
     segment: usize,
+    /// What each call did to each file the run touched, for the File activity
+    /// window.
+    activity: file_activity::Builder,
 }
 
 impl FileIndex {
@@ -290,6 +293,13 @@ impl FileIndex {
     ) {
         for hash in kernel_records::write_hashes(call) {
             let Some(file) = hash.file else { continue };
+            self.activity.hash(
+                Some(file.key),
+                None,
+                event.timestamp_ns,
+                "closed after write",
+                &hash,
+            );
             if let Some(change) = self
                 .by_identity
                 .get(&file.key)
@@ -301,6 +311,13 @@ impl FileIndex {
         let Some(hash) = kernel_records::file_hash(call, HashKind::Delete) else {
             return;
         };
+        self.activity.hash(
+            kernel_records::file_id(call).map(|id| id.key),
+            Some(&displayed_path(call, event, files)),
+            event.timestamp_ns,
+            "before delete",
+            &hash,
+        );
         let group = kernel_records::file_id(call)
             .and_then(|id| self.by_identity.get(&id.key).cloned())
             .unwrap_or_else(|| displayed_path(call, event, files));
@@ -433,6 +450,7 @@ impl FileIndex {
                     self.bind_description(opened, group);
                 }
             }
+            self.note_activity(files, call, event, hits, fd, None);
             return None;
         }
         let observed = displayed_path(call, event, files);
@@ -680,6 +698,23 @@ impl FileIndex {
                 }
             })
         };
+        let transfer = (success && (reading || writing)).then(|| {
+            let known_size = self
+                .changes
+                .get(&group)
+                .and_then(|change| change.final_size);
+            file_activity::Transfer {
+                write: writing,
+                offset,
+                len: size,
+                content: bytes.head(file_activity::CONTENT_HEAD),
+                gap: bytes.len() as u64 != size,
+                extends: offset
+                    .zip(known_size)
+                    .is_some_and(|(offset, known)| offset.saturating_add(size) > known),
+            }
+        });
+        self.note_activity(files, call, event, hits, fd, transfer);
         if lifecycle_only && !self.changes.contains_key(&group) {
             return read_row;
         }
@@ -960,6 +995,48 @@ impl FileIndex {
         }
         group
     }
+    /// Tell the File activity index about a call on a file.
+    fn note_activity(
+        &mut self,
+        files: &FdState,
+        call: &InvocationSummary,
+        event: &EventSummary,
+        hits: &[Hit],
+        fd: Option<u64>,
+        transfer: Option<file_activity::Transfer>,
+    ) {
+        if hits.is_empty() && transfer.is_none() {
+            return;
+        }
+        let observed = displayed_path(call, event, files);
+        let (mut path, mut path_known, mut new_name) = (observed.clone(), observed != "—", None);
+        // A rename or link acts on the file by its old name and names it anew.
+        if hits
+            .iter()
+            .any(|hit| matches!(hit.category, Category::Renamed | Category::Linked))
+        {
+            for used in sigma_events::paths(files, call, event) {
+                match used.role {
+                    sigma_events::Role::Old => (path, path_known) = (used.name, true),
+                    sigma_events::Role::New => new_name = Some(used.name),
+                    sigma_events::Role::Subject => {}
+                }
+            }
+        }
+        self.activity.record(file_activity::Record {
+            path: &path,
+            path_known,
+            cookie: call.task_cookie,
+            fd,
+            identity: kernel_records::file_id(call),
+            call,
+            event,
+            image: process_image(files, event),
+            hits,
+            transfer,
+            new_name,
+        });
+    }
     fn remember_alias(&mut self, group: &str, alias: Option<String>) {
         if let Some(alias) = alias {
             let names = self.aliases.entry(group.to_owned()).or_default();
@@ -973,15 +1050,40 @@ impl FileIndex {
             self.description_group.insert(description, group);
         }
     }
+    #[cfg(test)]
     pub fn finish(self) -> Vec<Change> {
-        self.changes
+        self.finish_all().0
+    }
+
+    /// The changed files, and the activity of every file the run touched with
+    /// what the changes know of each one's contents.
+    pub fn finish_all(self) -> (Vec<Change>, file_activity::Activity) {
+        let by_path: BTreeMap<&str, &Change> = self
+            .changes
+            .values()
+            .map(|change| (change.path.as_str(), change))
+            .collect();
+        let by_identity: BTreeMap<FileKey, &Change> = self
+            .changes
+            .values()
+            .filter_map(|change| change.identity.map(|key| (key, change)))
+            .collect();
+        let activity = self.activity.finish(|file| {
+            file.identity
+                .and_then(|key| by_identity.get(&key))
+                .or_else(|| by_path.get(file.path.as_str()))
+                .map(|change| change.contents())
+        });
+        let changes = self
+            .changes
             .into_values()
             .filter(|change| change.changes || change.failed > 0)
             .map(|mut change| {
                 change.known_diff_count = Some(change.diff_count());
                 change
             })
-            .collect()
+            .collect();
+        (changes, activity)
     }
 }
 
@@ -1675,5 +1777,246 @@ mod tests {
         // A file whose story is all in one segment has none.
         let changes = index_with_hashes(&calls, &[1, 1, 1]).finish();
         assert!(!changes[0].lifecycle_text().contains("reconnected"));
+    }
+
+    use super::file_activity::{Activity, FileActivity, Kind};
+
+    fn activity_of(calls: &[InvocationSummary]) -> Activity {
+        build(calls).0.finish_all().1
+    }
+
+    fn file<'a>(activity: &'a Activity, path: &str) -> &'a FileActivity {
+        activity
+            .files
+            .iter()
+            .find(|file| file.path == path)
+            .unwrap_or_else(|| {
+                panic!(
+                    "{path} not in {:?}",
+                    activity.files.iter().map(|f| &f.path).collect::<Vec<_>>()
+                )
+            })
+    }
+
+    fn kinds(file: &FileActivity) -> Vec<Kind> {
+        file.events.iter().map(|event| event.kind).collect()
+    }
+
+    #[test]
+    fn the_activity_lists_every_file_touched_and_tells_each_ones_story_in_order() {
+        let calls = [
+            // Only looked at: opened and read, never changed.
+            named(1, 2, "open", 3, [0, 0, 0, 0, 0, 0], &["/etc/hosts"]),
+            operation(2, 0, "read", 4, [3, 0, 4, 0, 0, 0], b"host"),
+            // Made, written, renamed, linked and removed.
+            create(3, "/tmp/a", 100, 1),
+            operation(4, 1, "write", 1, [3, 0, 1, 0, 0, 0], b"x"),
+            identified(
+                named(5, 82, "rename", 0, [0; 6], &["/tmp/a", "/tmp/b"]),
+                2,
+                1,
+                100,
+            ),
+            identified(named(6, 87, "unlink", 0, [0; 6], &["/tmp/b"]), 4, 0, 100),
+            // Only its attributes were asked for.
+            named(7, 4, "stat", 0, [0; 6], &["/tmp/probed"]),
+        ];
+        let activity = activity_of(&calls);
+        assert_eq!(
+            activity
+                .files
+                .iter()
+                .map(|f| f.path.as_str())
+                .collect::<Vec<_>>(),
+            ["/etc/hosts", "/tmp/a", "/tmp/probed"],
+            "every touched file, in order of the first call"
+        );
+        let hosts = file(&activity, "/etc/hosts");
+        assert_eq!(kinds(hosts), [Kind::Open, Kind::Read]);
+        assert!(!hosts.changed() && !hosts.created && !hosts.deleted);
+        let a = file(&activity, "/tmp/a");
+        assert_eq!(
+            kinds(a),
+            [Kind::Create, Kind::Write, Kind::Rename, Kind::Delete]
+        );
+        assert_eq!(a.names, ["/tmp/b"], "the new name belongs to the same file");
+        assert!(a.created && a.deleted && a.changed());
+        assert_eq!(a.events[2].other_path.as_deref(), Some("/tmp/b"));
+        assert_eq!(a.events[3].note, "last name removed");
+        assert_eq!(a.summary(), "create → write → rename → delete");
+        assert_eq!(kinds(file(&activity, "/tmp/probed")), [Kind::Probe]);
+        // One process made every call.
+        assert_eq!(activity.processes.len(), 1);
+    }
+
+    #[test]
+    fn a_name_removed_while_another_link_remains_is_not_a_deletion() {
+        let calls = [
+            create(1, "/tmp/a", 100, 2),
+            identified(named(2, 87, "unlink", 0, [0; 6], &["/tmp/a"]), 4, 1, 100),
+        ];
+        let activity = activity_of(&calls);
+        let a = file(&activity, "/tmp/a");
+        assert!(!a.deleted);
+        assert_eq!(a.events[1].note, "1 link remains");
+    }
+
+    #[test]
+    fn a_name_a_new_file_takes_over_is_a_second_entry_in_the_activity() {
+        let calls = [
+            create(1, "/tmp/a", 100, 1),
+            identified(named(2, 87, "unlink", 0, [0; 6], &["/tmp/a"]), 4, 0, 100),
+            create(3, "/tmp/a", 200, 1),
+        ];
+        let activity = activity_of(&calls);
+        assert_eq!(activity.files.len(), 2);
+        assert!(activity.files[0].deleted);
+        assert!(!activity.files[1].deleted && activity.files[1].created);
+    }
+
+    #[test]
+    fn a_rename_without_identity_moves_the_name_to_the_file_for_later_calls() {
+        let calls = [
+            named(1, 2, "open", 3, [0, 0x42, 0, 0, 0, 0], &["/tmp/a"]),
+            named(2, 82, "rename", 0, [0; 6], &["/tmp/a", "/tmp/b"]),
+            // A call by the new name reaches the renamed file.
+            named(3, 87, "unlink", 0, [0; 6], &["/tmp/b"]),
+        ];
+        let activity = activity_of(&calls);
+        assert_eq!(activity.files.len(), 1, "{:?}", activity.files);
+        assert_eq!(
+            kinds(&activity.files[0]),
+            [Kind::Create, Kind::Rename, Kind::Delete]
+        );
+    }
+
+    #[test]
+    fn writes_keep_their_offset_length_and_captured_bytes_and_say_when_they_extend_the_file() {
+        let calls = [
+            open(2),
+            operation(2, 0, "read", 5, [3, 0, 5, 0, 0, 0], b"ABCDE"),
+            operation(3, 0, "read", 0, [3, 0, 5, 0, 0, 0], b""),
+            // Overwrites two bytes of what the run read.
+            operation(4, 18, "pwrite64", 2, [3, 0, 2, 1, 0, 0], b"zz"),
+            // Writes at the descriptor's position, past the end.
+            operation(5, 1, "write", 3, [3, 0, 3, 0, 0, 0], b"xyz"),
+            // The kernel captured none of these bytes.
+            operation(6, 1, "write", 4, [3, 0, 4, 0, 0, 0], b""),
+        ];
+        let activity = activity_of(&calls);
+        let file = file(&activity, "/tmp/file");
+        let writes: Vec<_> = file
+            .events
+            .iter()
+            .filter(|event| event.kind == Kind::Write)
+            .collect();
+        assert_eq!(writes.len(), 3);
+        assert_eq!(
+            (
+                writes[0].offset,
+                writes[0].len,
+                writes[0].content.as_slice()
+            ),
+            (Some(1), Some(2), &b"zz"[..])
+        );
+        assert!(!writes[0].extends, "inside the file as far as it was read");
+        assert_eq!(
+            (
+                writes[1].offset,
+                writes[1].len,
+                writes[1].content.as_slice()
+            ),
+            (Some(5), Some(3), &b"xyz"[..])
+        );
+        assert!(writes[1].extends);
+        assert_eq!((writes[2].offset, writes[2].len), (Some(8), Some(4)));
+        assert!(writes[2].content.is_empty(), "never invented");
+        let read = &file.events[1];
+        assert_eq!(
+            (read.kind, read.offset, read.len, read.content.as_slice()),
+            (Kind::Read, Some(0), Some(5), &b"ABCDE"[..])
+        );
+        // What the run changed, from what it read and what it wrote.
+        let runs = &file.contents.runs;
+        assert_eq!(runs[0].offset, 1);
+        assert_eq!(runs[0].before, [Some(b'B'), Some(b'C')]);
+        assert_eq!(runs[0].after, [Some(b'z'), Some(b'z')]);
+        assert_eq!(runs[1].offset, 5, "added past the known end");
+        assert_eq!(runs[1].before, [None, None, None]);
+        assert_eq!(file.contents.original_size, Some(5));
+    }
+
+    #[test]
+    fn an_append_or_a_shared_descriptor_has_a_length_and_no_offset() {
+        let calls = [
+            open(0x401),
+            operation(2, 1, "write", 2, [3, 0, 2, 0, 0, 0], b"ab"),
+        ];
+        let activity = activity_of(&calls);
+        let write = &file(&activity, "/tmp/file").events[1];
+        assert_eq!(
+            (write.kind, write.offset, write.len),
+            (Kind::Write, None, Some(2))
+        );
+        assert_eq!(write.content, b"ab");
+    }
+
+    #[test]
+    fn a_refused_call_is_listed_and_a_file_with_only_refusals_is_marked() {
+        let calls = [
+            named(1, 2, "open", -2, [0; 6], &["/tmp/missing"]),
+            open(0),
+            operation(3, 0, "read", -9, [3, 0, 4, 0, 0, 0], b""),
+        ];
+        let activity = activity_of(&calls);
+        let missing = file(&activity, "/tmp/missing");
+        assert!(missing.failed_only);
+        assert_eq!(missing.events[0].success, Some(false));
+        assert!(missing.events[0].result.starts_with("Failed"));
+        let seen = file(&activity, "/tmp/file");
+        assert!(!seen.failed_only, "the open worked");
+        assert_eq!(seen.events[1].success, Some(false));
+        assert!(!seen.changed());
+    }
+
+    #[test]
+    fn a_files_calls_and_the_files_are_bounded_and_the_rest_counted() {
+        let mut calls = vec![open(2)];
+        for id in 0..600u64 {
+            calls.push(operation(id + 2, 1, "write", 1, [3, 0, 1, 0, 0, 0], b"x"));
+        }
+        let activity = activity_of(&calls);
+        let file = file(&activity, "/tmp/file");
+        assert_eq!(file.events.len(), 512);
+        assert_eq!(file.omitted, 601 - 512);
+        assert_eq!(activity.omitted_events, file.omitted);
+    }
+
+    #[test]
+    fn the_guests_hashes_join_the_files_history_in_order() {
+        let calls = [
+            create(1, "/tmp/h", 50, 1),
+            with_write_hash(
+                operation(2, 1, "write", 5, [3, 0, 5, 0, 0, 0], b"hello"),
+                50,
+                0,
+            ),
+            // The guest could not hash the file the second time.
+            with_write_hash(
+                operation(3, 1, "write", 5, [3, 0, 5, 0, 0, 0], b"again"),
+                50,
+                1,
+            ),
+        ];
+        let activity = index_with_hashes(&calls, &[]).finish_all().1;
+        let hashes = &file(&activity, "/tmp/h").hashes;
+        assert_eq!(hashes.len(), 2);
+        assert_eq!(hashes[0].moment, "closed after write");
+        assert_eq!(hashes[0].sha256.as_deref(), Some("cd".repeat(32).as_str()));
+        assert!(hashes[1].sha256.is_none() && hashes[1].skipped.is_some());
+        assert!(file(&activity, "/tmp/h")
+            .events
+            .iter()
+            .all(|e| e.via.is_none()));
     }
 }

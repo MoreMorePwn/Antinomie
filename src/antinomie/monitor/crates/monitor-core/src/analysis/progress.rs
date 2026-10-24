@@ -76,6 +76,14 @@ impl Watch {
 /// false drops listing references (the files are not validated yet).
 pub(super) fn merge(report: &mut AnalysisReport, progress: AnalysisReport, keep_listings: bool) {
     for (section, new) in report.sections.iter_mut().zip(progress.sections) {
+        // What the host already holds finished is not the worker's to change;
+        // checks added to a finished analysis carry those sections along.
+        if !matches!(
+            section.state,
+            AnalysisSectionState::Pending | AnalysisSectionState::Running
+        ) {
+            continue;
+        }
         let finished = !matches!(
             new.state,
             AnalysisSectionState::Pending | AnalysisSectionState::Running
@@ -118,7 +126,11 @@ impl super::jobs::Job {
     /// unfinished.
     pub(super) fn keep_finished_sections(&mut self) {
         if progress::salvage(&self.directory, &mut self.report) {
-            super::jobs::adopt_listings(&self.directory, &mut self.report);
+            super::jobs::adopt_listings(
+                &self.directory,
+                &mut self.report,
+                super::jobs::carried(&self.supplement),
+            );
         }
     }
 }
@@ -141,6 +153,14 @@ pub(super) fn execution_order(report: &AnalysisReport) -> Vec<usize> {
     indices
 }
 
+/// [`execution_order`] of the checks still to run: a report that already has
+/// finished sections (checks added later) keeps them as they are.
+pub(super) fn pending_order(report: &AnalysisReport) -> Vec<usize> {
+    let mut order = execution_order(report);
+    order.retain(|&index| report.sections[index].state == AnalysisSectionState::Pending);
+    order
+}
+
 pub(crate) fn worker_deadline(report: &AnalysisReport) -> Duration {
     // The sum of the sections' own budgets, so one slow tool (capa at 4
     // minutes) cannot use up the time of a later one (decompilation); this is
@@ -148,6 +168,8 @@ pub(crate) fn worker_deadline(report: &AnalysisReport) -> Duration {
     let seconds: u64 = report
         .sections
         .iter()
+        // Checks a finished analysis already has are not run again.
+        .filter(|section| section.state == AnalysisSectionState::Pending)
         .map(|section| match section.kind {
             AnalysisKind::Decompilation => super::worker::DECOMPILER_SECONDS + 120,
             AnalysisKind::Capabilities => 300,
@@ -202,6 +224,34 @@ mod tests {
             report.sections.iter().map(|s| s.kind).collect::<Vec<_>>(),
             kinds
         );
+    }
+
+    #[test]
+    fn checks_added_to_a_finished_analysis_run_alone_and_leave_the_rest_as_it_is() {
+        let mut report = report();
+        report.sections = [
+            AnalysisKind::Decompilation,
+            AnalysisKind::Strings,
+            AnalysisKind::Capabilities,
+        ]
+        .map(AnalysisSection::new)
+        .to_vec();
+        report.sections[0].state = AnalysisSectionState::Complete;
+        report.sections[0].listing = Some(AnalysisListing {
+            rows: 3,
+            bytes: 30,
+            truncated: false,
+        });
+        // Only the pending checks run, and only they count toward the deadline.
+        assert_eq!(pending_order(&report), [1, 2]);
+        assert_eq!(worker_deadline(&report), Duration::from_secs(20 + 300));
+        // A live snapshot does not take the finished section's listing away.
+        let mut snapshot = report.clone();
+        snapshot.state = AnalysisState::Running;
+        snapshot.sections[1].state = AnalysisSectionState::Complete;
+        merge(&mut report, snapshot, false);
+        assert!(report.sections[0].listing.is_some());
+        assert_eq!(report.sections[1].state, AnalysisSectionState::Complete);
     }
 
     #[test]

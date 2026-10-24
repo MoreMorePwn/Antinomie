@@ -227,6 +227,7 @@ fn static_analysis_uses_selected_archive_report_without_submitting_work() {
         reason: Some("Acquisition unavailable in fixture".into()),
         sections: Vec::new(),
         layer: None,
+        specimen_source: None,
     };
     live.analysis = Some(report("live-report"));
     app.snapshot.runs.push(live.clone());
@@ -454,6 +455,7 @@ fn analyze_only_and_cancel_do_not_launch_or_stop_a_program() {
             reason: None,
             sections: Vec::new(),
             layer: None,
+            specimen_source: None,
         });
     app.selected_analysis = Some("standalone-job".into());
     let output = ctx.run(egui::RawInput::default(), |ctx| {
@@ -564,6 +566,7 @@ fn an_unpacked_layers_analysis_is_found_in_its_packed_files_folder_and_can_be_sh
                 method: "UPX".into(),
                 parent_sha256: "0".repeat(64),
             }),
+            specimen_source: None,
         });
     assert_eq!(
         app.analysis_directory("packed-report-L2"),
@@ -584,4 +587,37 @@ fn an_unpacked_layers_analysis_is_found_in_its_packed_files_folder_and_can_be_sh
         }),
     );
     assert_eq!(app.selected_analysis.as_deref(), Some("packed-report-L2"));
+}
+
+#[test]
+fn running_a_missing_check_asks_the_backend_to_add_it_to_the_runs_analysis() {
+    let mut app = app();
+    let mut saved = run("packed-run");
+    saved.directory = "/saved/run".into();
+    saved.analysis = Some(section_report("packed-report", "PACKED"));
+    app.history.push(saved);
+    app.analysis_action(
+        "workspace",
+        Some(crate::analysis::ReportAction::RunCheck {
+            report_id: "packed-report".into(),
+            kind: antinomie_monitor_core::AnalysisKind::Floss,
+        }),
+    );
+    assert!(matches!(
+        app.submitted.last(),
+        Some(Command::AnalyzeMore { directory, run_id, checks })
+            if directory == &PathBuf::from("/saved/run/analysis")
+                && run_id.as_deref() == Some("packed-run")
+                && checks == &[antinomie_monitor_core::AnalysisKind::Floss]
+    ));
+    // A report with no retained folder cannot be added to.
+    let sent = app.submitted.len();
+    app.analysis_action(
+        "workspace",
+        Some(crate::analysis::ReportAction::RunCheck {
+            report_id: "unknown".into(),
+            kind: antinomie_monitor_core::AnalysisKind::Floss,
+        }),
+    );
+    assert_eq!(app.submitted.len(), sent);
 }

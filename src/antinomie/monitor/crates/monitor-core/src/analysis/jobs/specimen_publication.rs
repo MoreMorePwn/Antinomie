@@ -72,6 +72,8 @@ mod tests {
             report_len: 0,
             specimen_publication: None,
             progress: Default::default(),
+            host_copy: None,
+            supplement: None,
         }
     }
 

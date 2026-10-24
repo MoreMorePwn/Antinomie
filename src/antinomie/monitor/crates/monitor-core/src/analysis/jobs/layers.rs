@@ -35,6 +35,10 @@ impl Jobs {
             job.report.state,
             AnalysisState::Complete | AnalysisState::Partial
         ) || job.report.layer.is_some()
+            // Checks added later queue the layers only for unpacking.
+            || job.supplement.as_ref().is_some_and(|supplement| {
+                supplement.carried.contains(&AnalysisKind::Unpacking)
+            })
         {
             return;
         }

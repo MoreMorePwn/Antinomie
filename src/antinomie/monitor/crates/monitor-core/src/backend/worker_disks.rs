@@ -574,6 +574,31 @@ impl Worker {
         Ok("static analysis of the extracted file queued".into())
     }
 
+    /// Queue checks that a finished analysis in `directory` does not have. The
+    /// analysis is not repeated; the new sections join its report.
+    pub(super) fn analyze_more(
+        &mut self,
+        directory: &Path,
+        run_id: Option<String>,
+        checks: &[crate::analysis::AnalysisKind],
+    ) -> Result<String, String> {
+        if directory
+            .components()
+            .any(|part| matches!(part, std::path::Component::ParentDir))
+            || !directory.is_absolute()
+        {
+            return Err("the analysis folder is not a plain absolute path".into());
+        }
+        self.host_analysis.analyze_more(
+            run_id,
+            directory,
+            checks,
+            self.options.capture_quota_size,
+        )?;
+        self.host_analysis_updates();
+        Ok("added checks queued".into())
+    }
+
     /// Advance host-file analysis jobs and publish their reports.
     pub(super) fn host_analysis_tick(&mut self) {
         // Host jobs never ask for guest reads; a release of the unused handle
@@ -588,6 +613,18 @@ impl Worker {
 
     fn host_analysis_updates(&mut self) {
         for (run_id, report) in self.host_analysis.updates() {
+            // Checks added to a run's analysis: the run holds the report.
+            if let Some(id) = &run_id {
+                if let Some(session) = self.session.as_mut() {
+                    session.run_analysis(id, &report);
+                    session.update_runs(&mut self.snapshot);
+                }
+                let _ = self
+                    .sender
+                    .try_send(Notification::AnalysisUpdated { run_id, report });
+                self.publish();
+                continue;
+            }
             if let Some(existing) = self
                 .snapshot
                 .analysis_reports

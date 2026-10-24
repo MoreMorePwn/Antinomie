@@ -15,6 +15,7 @@ fn fixture() -> AnalysisReport {
         reason: Some("Synthetic UI evidence; no analyzer was run".into()),
         sections: Vec::new(),
         layer: None,
+        specimen_source: None,
     };
     let mut structures = vec![AnalysisEntry {
         label: "Format".into(),
@@ -1188,6 +1189,7 @@ fn meaning_report() -> AnalysisReport {
         reason: None,
         sections: Vec::new(),
         layer: None,
+        specimen_source: None,
     };
     report.sections.push(AnalysisSection {
         kind: AnalysisKind::Strings,
@@ -1647,12 +1649,7 @@ fn categories_the_report_lacks_are_disabled_with_a_tooltip_and_the_others_count_
     // Strings has 1024 rows; Binwalk is not in this report.
     assert!(shown.iter().any(|(text, _)| text == "1024"), "{shown:?}");
     let tip = hover(&ctx, &report, &mut state, at("Binwalk").center());
-    assert!(
-        tip.iter().any(
-            |(text, _)| text == "Not part of this analysis; start one with this check selected"
-        ),
-        "{tip:?}"
-    );
+    assert!(tip.iter().any(|(text, _)| text == NOT_REQUESTED), "{tip:?}");
     state.tab = Tab::Strings;
     let before = state.tab;
     let pressed = press(
@@ -1804,6 +1801,108 @@ fn the_identity_card_links_to_triage_properties() {
     assert_eq!(click.action, Some(ReportAction::OpenTriageProperties));
     // The categories card lists the ones the report lacks as not requested.
     assert!(shown.iter().any(|(text, _)| text == "Not requested"));
+}
+
+#[test]
+fn the_identity_card_says_where_the_specimen_came_from() {
+    for (source, shown) in [
+        (None, None),
+        (
+            Some(antinomie_monitor_core::SpecimenSource::HostCopy),
+            Some("host copy, hash matched guest"),
+        ),
+        (
+            Some(antinomie_monitor_core::SpecimenSource::Guest),
+            Some("fetched from guest"),
+        ),
+    ] {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut report = fixture();
+        report.specimen_source = source;
+        let mut state = WorkspaceState::default();
+        let size = egui::vec2(1280.0, 820.0);
+        let mut output = egui::FullOutput::default();
+        for _ in 0..3 {
+            output = frame(
+                &ctx,
+                &report,
+                &mut state,
+                None,
+                size,
+                Vec::new(),
+                (None, None),
+            )
+            .0;
+        }
+        let texts = texts(&output);
+        let row = texts.iter().any(|(text, _)| text == "Specimen source");
+        assert_eq!(row, shown.is_some(), "{source:?}");
+        if let Some(label) = shown {
+            assert!(texts.iter().any(|(text, _)| text == label), "{texts:?}");
+        }
+    }
+}
+
+#[test]
+fn a_category_the_report_lacks_can_be_run_once_the_analysis_has_finished() {
+    let size = egui::vec2(1280.0, 820.0);
+    for (state, enabled) in [
+        (AnalysisState::Partial, true),
+        (AnalysisState::Complete, true),
+        (AnalysisState::Running, false),
+        (AnalysisState::Queued, false),
+    ] {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut report = fixture();
+        report.state = state;
+        let mut state = WorkspaceState::default();
+        let mut output = egui::FullOutput::default();
+        for _ in 0..3 {
+            output = frame(
+                &ctx,
+                &report,
+                &mut state,
+                None,
+                size,
+                Vec::new(),
+                (None, None),
+            )
+            .0;
+        }
+        let missing = ALL_KINDS
+            .into_iter()
+            .find(|kind| report.sections.iter().all(|section| section.kind != *kind))
+            .unwrap();
+        let run = texts(&output)
+            .into_iter()
+            .find(|(text, _)| text == "Run")
+            .map(|(_, rect)| rect.center())
+            .unwrap();
+        let click = press(
+            &ctx,
+            &report,
+            &mut state,
+            None,
+            size,
+            (egui::PointerButton::Primary, run),
+            (None, None),
+        );
+        let expected = enabled.then(|| ReportAction::RunCheck {
+            report_id: report.id.clone(),
+            kind: missing,
+        });
+        // A running analysis may only be cancelled.
+        assert_eq!(
+            click
+                .action
+                .filter(|action| matches!(action, ReportAction::RunCheck { .. })),
+            expected,
+            "{:?}",
+            report.state
+        );
+    }
 }
 
 #[test]
@@ -2074,6 +2173,7 @@ fn unpacked_report() -> AnalysisReport {
         reason: None,
         sections: vec![section],
         layer: None,
+        specimen_source: None,
     }
 }
 

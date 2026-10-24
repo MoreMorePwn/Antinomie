@@ -36,6 +36,7 @@ mod counts;
 mod descriptors;
 mod details;
 mod detection;
+mod file_activity;
 mod file_category;
 #[cfg(test)]
 mod file_category_tests;
@@ -189,6 +190,8 @@ pub(crate) struct TriageView {
     section: Section,
     process: ProcessTab,
     files: FileTab,
+    /// The File activity window of the Files section.
+    file_window: file_activity::Window,
     network: NetTab,
     net_layout: NetLayout,
     new_tab: NewTab,
@@ -262,6 +265,7 @@ impl Default for TriageView {
             section: Section::Summary,
             process: ProcessTab::Tree,
             files: FileTab::Opened,
+            file_window: Default::default(),
             network: NetTab::Http,
             net_layout: NetLayout::New,
             new_tab: NewTab::Endpoints,
@@ -516,6 +520,11 @@ impl TriageView {
         self.mark_shown(ui.ctx());
         presentation::navigation(self, ui, &input);
         self.tick(ui.ctx(), input);
+        // The File activity window floats above whichever section is shown.
+        let activity = self.scan.as_ref().map(|scan| scan.file_activity.clone());
+        let clock = self.scan.as_ref().and_then(|scan| scan.clock_anchor);
+        self.file_window
+            .show(ui.ctx(), activity.as_deref(), clock.or(input.clock_anchor));
         if self.section == Section::Summary {
             summary::show(self, ui, &input);
             return self.take_navigation(ui.ctx());
@@ -1254,6 +1263,8 @@ struct ArchiveScan {
     coverage: String,
     clock_anchor: Option<antinomie_monitor_core::HostClockAnchor>,
     file_changes: Vec<files::Change>,
+    /// Every file the run touched, for the File activity window.
+    file_activity: Arc<file_activity::Activity>,
     bpf: Vec<BpfNote>,
     bpf_omitted: u64,
     read: Vec<Vec<Cell>>,
