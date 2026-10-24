@@ -279,7 +279,7 @@ impl SamplesView {
                         if downloaded {
                             ui.colored_label(theme::good(), "Downloaded");
                         } else if self.downloads.contains_key(identity) {
-                            ui.spinner();
+                            crate::theme::spinner(ui);
                         } else if ui
                             .button(format!(
                                 "{} Download",

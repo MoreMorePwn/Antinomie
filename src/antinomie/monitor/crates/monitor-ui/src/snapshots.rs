@@ -226,12 +226,12 @@ impl SnapshotManager {
             ui.add_space(4.0);
             if let Some(progress) = progress {
                 ui.horizontal_wrapped(|ui| {
-                    ui.spinner();
+                    crate::theme::spinner(ui);
                     ui.label(&progress.stage);
                 });
             } else if self.pending.is_some() {
                 ui.horizontal(|ui| {
-                    ui.spinner();
+                    crate::theme::spinner(ui);
                     ui.label("Waiting for snapshot operation…");
                 });
             }

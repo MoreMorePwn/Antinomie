@@ -328,7 +328,7 @@ pub(super) fn byte_preview(
     finding: &Finding,
 ) {
     if loading {
-        ui.spinner();
+        crate::theme::spinner(ui);
     }
     match preview {
         Some(Ok((evidence, data))) if finding.evidence.contains(evidence) => {

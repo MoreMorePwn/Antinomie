@@ -349,7 +349,7 @@ impl View {
                             );
                             if unavailable {
                                 if self.rx.is_some() {
-                                    ui.spinner();
+                                    crate::theme::spinner(ui);
                                 }
                                 refresh_requested |= ui
                                     .add_enabled(

@@ -105,7 +105,7 @@ impl MemoryView {
             let progress = job.progress();
             ui.add_space(12.0);
             ui.vertical_centered(|ui| {
-                ui.spinner();
+                crate::theme::spinner(ui);
                 ui.label(format!(
                     "Running {} on {}",
                     job.run.plugin,
@@ -135,7 +135,7 @@ impl MemoryView {
             let mut retry = false;
             ui.horizontal(|ui| {
                 if self.loading.is_some() {
-                    ui.spinner();
+                    crate::theme::spinner(ui);
                     ui.colored_label(theme::muted(), "Loading the result…");
                     cancel = ui.button("Cancel query").clicked();
                 } else {
@@ -280,7 +280,7 @@ impl MemoryView {
         if self.loading.is_some() {
             let mut cancel = false;
             ui.horizontal_wrapped(|ui| {
-                ui.spinner();
+                crate::theme::spinner(ui);
                 ui.label("Querying every retained row…");
                 cancel = ui.button("Cancel query").clicked();
             });
