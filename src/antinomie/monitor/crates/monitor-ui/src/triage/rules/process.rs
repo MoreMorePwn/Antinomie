@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Rules for process, memory, credential and kernel-facing system calls.
+use super::super::bpf_attach as attach;
 use super::super::*;
 use super::ctx::{base, nr, Ctx};
 use super::state::State;
@@ -88,22 +89,41 @@ pub(super) fn rules(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
                 format!("{}: work through a ring makes few system calls", cx.name),
             ));
         }
-        321 => {
-            if let Some(command) = bpf::command_name(cx.event) {
-                if matches!(
-                    command,
-                    "BPF_PROG_LOAD" | "BPF_PROG_ATTACH" | "BPF_PROG_DETACH"
-                ) {
-                    out.push(Hit::new("bpf.program", command, command.to_owned()));
-                }
-            }
-        }
+        321 | nr::IOCTL => bpf_program(cx, st, out),
         nr::CLONE | 57 | 58 | nr::CLONE3 => forks(cx, st, out),
         nr::WRITE => dirty_pipe(cx, st, out),
         275 => splice(cx, st),
         _ => {}
     }
     credentials(cx, st, out);
+}
+
+/// A program loaded or attached through `bpf`, a link, a raw tracepoint or a perf event.
+fn bpf_program(cx: &Ctx, st: &State, out: &mut Vec<Hit>) {
+    if let Some(command) = attach::command_of(cx.event, cx.args) {
+        let attach = attach::attach(cx.call, command, cx.args, &st.bpf);
+        // A failed attach changed nothing: it is Info, and apart from a success.
+        let (tier, object) = if cx.failed {
+            (Tier::Info, format!("{command} {} (failed)", attach.kind))
+        } else {
+            (attach.tier, format!("{command} {}", attach.kind))
+        };
+        out.push(
+            Hit::new("bpf.program", object, attach.lifecycle(cx.ret))
+                .tier(tier)
+                .detail(format!("{command}: {}", attach.program()))
+                .detail(format!("Target: {}", attach.target)),
+        );
+        return;
+    }
+    if let Some(command) = bpf::command_name(cx.event) {
+        if matches!(
+            command,
+            "BPF_PROG_LOAD" | "BPF_PROG_ATTACH" | "BPF_PROG_DETACH"
+        ) {
+            out.push(Hit::new("bpf.program", command, command.to_owned()));
+        }
+    }
 }
 
 /// `PROT_WRITE | PROT_EXEC`, and writable memory flipped to executable.
