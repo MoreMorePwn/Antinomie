@@ -993,6 +993,56 @@ Host only: `monitor-ui/src/triage/graph/`, nothing needs a guest change.
   screenshots under Xvfb), `graph/bench.rs` (120k findings: paint under 4 ms,
   no repaint when idle, memory, the million-finding build).
 
+### File activity window (0.7.1)
+
+Host only; it uses what the recordings already hold. **Per-file history…** in Triage ›
+Files (and in a Changed file's Details) opens a floating `egui::Window` owned by
+`TriageView::file_window`, drawn from `TriageView::show` over whichever section is
+shown.
+
+* **Index** (`triage/file_activity.rs`). `FileIndex::note_activity` runs for every file
+  call (in the early return of calls that change nothing and in the read/write path,
+  before the change bookkeeping), with the call's `file_category::Hit`s, the path (the
+  old name for a rename or link, the new one in `new_name`), the descriptor, the guest's
+  file identity and, for a successful read or write, a `Transfer`: offset, length, the
+  first 64 captured octets (`CapturedPayload::head`, up to the first uncaptured byte),
+  whether captured octets are fewer than the transferred, and whether the write ended
+  past the file's known size. `Builder` keys a file by its identity, else by the file its
+  name leads to (`current`: a rename or link moves or adds a name, an unlink or rename
+  frees one), else by the name, else by task and descriptor. Another identity at the
+  same name is a second entry. Bounds: 4096 files, 512 calls a file, 100,000 calls, 16
+  other names; the rest are counted and the window says so.
+* **Kinds.** Delete, Rename, Link, Create, Open, Exec, Write, Resize, Read, Attributes,
+  Map, Probe, Other, chosen from the hits in that order. A refused call is kept with its
+  errno; a file with only refusals is marked. A delete notes the links left from the
+  identity (`last name removed`, `1 link remains`); only a last name sets `deleted`.
+* **Contents.** `FileIndex::finish_all` joins each activity to its `Change` (by identity,
+  else path) for `Change::contents()`: sizes, the guest's hash, the change gaps and up
+  to 32 runs of 32 differing bytes from `original`/`final_data` (`ByteRun`, `?` for an
+  octet not captured, `added` past the original size). Nothing is inferred.
+* **Graph** (`file_activity/graph.rs`). `layout` merges neighbouring calls of the same
+  kind, process and outcome into nodes (60, then one `+N more` node), one lane per
+  process; `show` paints boxes and elbow arrows with the theme colours and hit-tests
+  clicks. `file_activity/window.rs` holds the list (filter, toggles, order, virtualised
+  rows), the header chips, the call grid (200 rows) and Content changes. The chosen
+  file is kept by path and first call so a new index keeps it.
+* **Tests.** `triage/files.rs` tests (story, links, identity reuse, rename without
+  identity, offsets/lengths/content/extension, appends, refusals, bounds) and
+  `triage/file_activity/tests.rs` (layout, limits, list filters, wording, the window
+  through egui: choosing a file and a node, the syscall jump).
+* **Not in the host data (0.8.0, guest capture).** (1) Write payloads beyond what the
+  tracer captures per call: the bytes of a large write are cut and marked `…`; a
+  per-file write journal or content-addressed chunks would give the whole content.
+  (2) The file position of each read and write (`f_pos`/`ki_pos`): without it an
+  append, a shared descriptor and a descriptor opened before the capture have no offset.
+  (3) The file's contents before the run changed it: an overwritten, truncated or
+  deleted file, and a rename destination that was replaced, are known only from what
+  the run read; a copy-on-first-write capture (or at least a size, and a hash at open)
+  is missing. (4) Contents at the last close and just before an unlink: only SHA-256 up
+  to 16 MiB exists. (5) Writes through shared mappings (`msync`), `sendfile`,
+  `copy_file_range`, `splice`, reflinks and `fallocate` ranges. (6) The size after each
+  write, so that "extends the file" is exact and not derived from reads.
+
 ### FLOSS strings in static analysis (0.7.1)
 
 Host only. `AnalysisKind::Floss` ("FLOSS strings (decoded, stack, tight)") is a
@@ -1068,14 +1118,15 @@ of that run no longer has to read it back.
 ### Checks added to a finished analysis (0.7.1)
 
 Host only. The Categories card of the Static analysis Overview lists a **Run** button
-for every `AnalysisKind` the report has no section for, and for a section that is
-`Unavailable`. It sends `ReportAction::RunCheck` and the app `Command::AnalyzeMore
+for every `AnalysisKind` the report has no section for. It sends `ReportAction::RunCheck` and the app `Command::AnalyzeMore
 { directory, run_id, checks }`; the backend refuses a relative path or one with `..`
 and queues it on `host_analysis`, which needs no VM.
 
 * **Job** (`jobs/supplement.rs`, `Jobs::analyze_more`). The folder's `report.json` must
   be `Complete` or `Partial`, no job of that report id may be waiting, and the kind must
-  be new (or `Unavailable`). The job's report is the saved one (same id, source path,
+  be new (or `Unavailable`, which the backend accepts to run it again; the window does
+not offer that, because the extra button widened the Unavailable row past the narrow
+layout). The job's report is the saved one (same id, source path,
   hash, specimen source) with the new sections `Pending`; its specimen is a host-file
   copy of the retained `specimen` (`submit_host_opened_for`, which carries the run id)
   in `<folder>/extra/<id>`, so quota, reservation, cancel and the worker sandbox are
