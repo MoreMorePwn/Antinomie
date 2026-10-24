@@ -55,6 +55,13 @@ data folder, pinned by SHA-256, and Antinomie does not redistribute them:
 | GEF, bata24's fork (default console): `gef.py` at commit `fc085a60be334d38d498296187344e9e7d558587` of [bata24/gef](https://github.com/bata24/gef), SHA-256 `fabcdc13c8c7a81ceaa2af891f6ce4695d623adef98c8f2ccf365bbbf4df90ce`. It is a Python script that the system's gdb loads | MIT, Copyright (c) 2021-2026 bata24 (@bata_24), as in the repository's `LICENSE` and the header of `gef.py` at that commit; the fork derives from GEF by hugsy, also MIT |
 | pwndbg 2026.09.15 (alternative console): the upstream `pwndbg_2026.09.15_x86_64-portable.tar.xz` release asset of [pwndbg/pwndbg](https://github.com/pwndbg/pwndbg), SHA-256 `7ba64666ee595885ba4b0e073f85e423829103e9fdbe921ba4eef1acd9150803`, unpacked as it is and started through its own `bin/pwndbg` | MIT, Copyright (c) 2026 Dominik 'Disconnect3d' Czarnota, as in `LICENSE.md` at the `2026.09.15` tag. The portable build also holds GDB 17.2 (GPL-3.0-or-later), a Python 3.13 runtime (PSF license) and Python packages and libraries under their own licenses, whose license files arrive inside the download |
 
+The per-run network routes (Settings > Network routes) can use three programs
+that the user installs and runs themselves: Tor (BSD-3-Clause) for the Tor
+route, wireproxy (ISC) for the VPN route and INetSim (GPL-2.0) for an external
+InetSim. Antinomie neither bundles nor downloads them; it finds them on `PATH`,
+starts wireproxy as a separate process with the user's configuration file, and
+talks to Tor and INetSim over local sockets. OpenVPN is not used.
+
 For memory analysis, the same dialog (or **Install Volatility 3** in the
 Memory tab) downloads Volatility 3 2.28.2 (Volatility Software License 1.0)
 with pefile 2024.8.26 (MIT), Capstone 5.0.9 (BSD-3-Clause) and PyCryptodome
