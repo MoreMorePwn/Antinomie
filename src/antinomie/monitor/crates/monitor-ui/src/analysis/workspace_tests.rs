@@ -2263,3 +2263,66 @@ fn the_unpacking_tab_shows_the_chain_as_phases_and_opens_a_layers_analysis() {
         .iter()
         .any(|(text, _)| text.contains("was not part of this analysis")));
 }
+
+#[test]
+fn a_linked_run_is_a_header_button_not_a_link_above_the_file_name() {
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let report = fixture();
+    let mut state = WorkspaceState::default();
+    let size = egui::vec2(1280.0, 820.0);
+    let label = format!("{} Run", egui_phosphor::regular::PLAY_CIRCLE);
+    let shown = |output: &egui::FullOutput| {
+        texts(output)
+            .into_iter()
+            .filter(|(text, _)| *text == label)
+            .count()
+    };
+    let mut output = egui::FullOutput::default();
+    for _ in 0..3 {
+        output = frame(
+            &ctx,
+            &report,
+            &mut state,
+            None,
+            size,
+            Vec::new(),
+            (None, None),
+        )
+        .0;
+    }
+    assert_eq!(shown(&output), 0, "no run, no button");
+    state.set_identities(vec![(
+        "run.id",
+        crate::query::RowValue::Text("run-9".into()),
+    )]);
+    for _ in 0..3 {
+        output = frame(
+            &ctx,
+            &report,
+            &mut state,
+            None,
+            size,
+            Vec::new(),
+            (None, None),
+        )
+        .0;
+    }
+    assert_eq!(shown(&output), 1);
+    let at = center_of(&output, &label);
+    let click = press(
+        &ctx,
+        &report,
+        &mut state,
+        None,
+        size,
+        (egui::PointerButton::Primary, at),
+        (None, None),
+    );
+    assert_eq!(
+        click.action,
+        Some(ReportAction::OpenRun {
+            run_id: "run-9".into()
+        })
+    );
+}

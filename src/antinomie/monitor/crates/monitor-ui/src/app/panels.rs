@@ -482,26 +482,6 @@ impl MonitorApp {
                         .chain(&self.snapshot.analysis_reports),
                     shown.as_deref(),
                 );
-                if let Some(id) = shown.as_deref() {
-                    let related: Vec<_> = self
-                        .snapshot
-                        .runs
-                        .iter()
-                        .chain(&self.history)
-                        .filter(|run| run.analysis.as_ref().is_some_and(|r| r.id == id))
-                        .map(|run| (run.id.clone(), run.request.path.clone()))
-                        .collect();
-                    if let Some((run_id, path)) = related.first() {
-                        if ui
-                            .link(format!("{path} ({run_id})"))
-                            .on_hover_text("Open the related run")
-                            .clicked()
-                        {
-                            self.select_run(Some(run_id.clone()));
-                            self.focus_panel = Some(Panel::RunHistory);
-                        }
-                    }
-                }
                 let labels = report
                     .as_ref()
                     .map(|report| self.analysis_labels(ui, report));
