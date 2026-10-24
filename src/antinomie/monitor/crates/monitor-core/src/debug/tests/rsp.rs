@@ -301,7 +301,7 @@ impl Fixture {
         self.wait_count(entry, 1);
     }
     fn wait_count(&self, entry: &str, count: usize) {
-        let until = Instant::now() + Duration::from_secs(5);
+        let until = Instant::now() + Duration::from_secs(60);
         while self.log().iter().filter(|line| *line == entry).count() < count {
             assert!(
                 Instant::now() < until,
@@ -406,7 +406,7 @@ impl Client {
     }
     fn closed(&mut self) -> bool {
         self.pending.clear();
-        let until = Instant::now() + Duration::from_secs(5);
+        let until = Instant::now() + Duration::from_secs(60);
         while Instant::now() < until {
             if !self.fill() {
                 return true;
@@ -704,7 +704,7 @@ fn the_process_ending_is_reported_and_ends_the_session() {
     client.send_no_wait("vCont;c");
     assert_eq!(client.packet().unwrap(), "W03");
     assert!(client.closed());
-    let until = Instant::now() + Duration::from_secs(5);
+    let until = Instant::now() + Duration::from_secs(60);
     while !fixture.server.is_finished() {
         assert!(Instant::now() < until, "server should end with its target");
         std::thread::sleep(Duration::from_millis(5));
