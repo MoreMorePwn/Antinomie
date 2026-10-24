@@ -230,7 +230,10 @@ impl MonitorApp {
                     .column(Column::initial(225.0).at_least(150.0))
                     .sense(egui::Sense::click())
                     .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                    .column(Column::remainder().at_least(120.0))
+                    // Not resizable: a resizable column keeps the width it had, so a
+                    // remainder in the middle stopped following the pane. This one
+                    // takes whatever the others leave, and the table spans the pane.
+                    .column(Column::remainder().at_least(120.0).resizable(false))
                     .column(Column::initial(180.0).range(90.0..=400.0))
                     .column(Column::initial(190.0).range(90.0..=320.0))
                     .column(Column::initial(110.0).range(70.0..=220.0))
@@ -509,9 +512,13 @@ impl MonitorApp {
                 crate::theme::loading(ui, "Reading saved lifecycle records…");
             }
         }
+        // A recorded run's process opens Syscall Trace with the filter box
+        // set to that process, the same jump Triage's Details use.
         if let Some(selection) = selection {
-            self.select_process(selection);
-            self.focus_trace();
+            self.scope_trace(match selection {
+                captures::ProcessSelection::All => String::new(),
+                captures::ProcessSelection::Process(pid) => format!("process.pid == {pid}"),
+            });
         }
     }
 
@@ -836,19 +843,68 @@ pub(super) fn run_in_live_session(snapshot: &Snapshot, run: &RunSummary) -> bool
         })
 }
 
-/// What the run was started with: the static analyses and the capture
-/// options that were switched on, in the order the launch dialog lists them.
-fn enabled_features(ui: &mut egui::Ui, run: &RunSummary, labels: Option<run_labels::Labels>) {
+/// One line of the "Analysis enabled" tree.
+pub(super) struct Feature {
+    pub(super) depth: usize,
+    pub(super) text: String,
+    /// False when the run cannot show it: a check the tools could not make,
+    /// or evidence that was deleted or failed.
+    pub(super) available: bool,
+    hover: Option<String>,
+}
+
+impl Feature {
+    fn new(depth: usize, text: impl Into<String>) -> Self {
+        Self {
+            depth,
+            text: text.into(),
+            available: true,
+            hover: None,
+        }
+    }
+}
+
+/// Whether a saved capture or core can still be opened.
+fn artifact_available(state: Option<&str>) -> bool {
+    !matches!(state, Some("Deleted" | "Failed" | "Interrupted"))
+}
+
+/// The options the run was started with as a tree: the static analysis with
+/// its checks below it, then the capture options. Whatever the run cannot
+/// show is greyed.
+pub(super) fn feature_tree(run: &RunSummary, labels: Option<run_labels::Labels>) -> Vec<Feature> {
+    use antinomie_monitor_core::{AnalysisSectionState, AnalysisState};
     let request = &run.request;
     let mut features = Vec::new();
     if request.analysis.enabled {
-        features.extend(
-            request
-                .analysis
-                .checks
-                .iter()
-                .map(|kind| format!("Static analysis: {}", kind.label())),
-        );
+        features.push(Feature::new(0, "Static analysis"));
+        let report = run.analysis.as_ref();
+        let finished = report.is_some_and(|report| {
+            matches!(
+                report.state,
+                AnalysisState::Complete
+                    | AnalysisState::Partial
+                    | AnalysisState::Unavailable
+                    | AnalysisState::Cancelled
+            )
+        });
+        for kind in &request.analysis.checks {
+            let section = report
+                .and_then(|report| report.sections.iter().find(|section| section.kind == *kind));
+            let mut feature = Feature::new(1, kind.label());
+            match section {
+                Some(section) if section.state == AnalysisSectionState::Unavailable => {
+                    feature.available = false;
+                    feature.hover = Some(section.summary.clone());
+                }
+                None if finished => {
+                    feature.available = false;
+                    feature.hover = Some("This check produced no result".into());
+                }
+                _ => {}
+            }
+            features.push(feature);
+        }
     }
     for (on, label) in [
         (request.memory_dump_on_exit, "Memory dump on exit"),
@@ -856,38 +912,73 @@ fn enabled_features(ui: &mut egui::Ui, run: &RunSummary, labels: Option<run_labe
         (request.debug_on_start, "Debug on start"),
         (request.capture_network, "Network capture"),
     ] {
-        if on {
-            // What became of the capture and the core, once the run saved them.
-            let state = labels.and_then(|labels| match label {
-                "Core dump on exit" => Some(labels.core),
-                "Network capture" => Some(labels.network),
-                _ => None,
-            });
-            let budget = (label == "Core dump on exit")
-                .then_some(request.core_max_size)
-                .flatten()
-                .map(|size| {
-                    let deadline = request.core_timeout_ms.map_or(String::new(), |ms| {
-                        format!(" · deadline {:.1} s", f64::from(ms) / 1000.0)
-                    });
-                    format!(" · budget {} MiB{deadline}", size >> 20)
-                })
-                .unwrap_or_default();
-            features.push(match state {
+        if !on {
+            continue;
+        }
+        // What became of the capture and the core, once the run saved them.
+        let state = labels.and_then(|labels| match label {
+            "Core dump on exit" => Some(labels.core),
+            "Network capture" => Some(labels.network),
+            _ => None,
+        });
+        let budget = (label == "Core dump on exit")
+            .then_some(request.core_max_size)
+            .flatten()
+            .map(|size| {
+                let deadline = request.core_timeout_ms.map_or(String::new(), |ms| {
+                    format!(" · deadline {:.1} s", f64::from(ms) / 1000.0)
+                });
+                format!(" · budget {} MiB{deadline}", size >> 20)
+            })
+            .unwrap_or_default();
+        let mut feature = Feature::new(
+            0,
+            match state {
                 Some(state) => format!("{label}{budget} · {state}"),
                 None => format!("{label}{budget}"),
-            });
-        }
+            },
+        );
+        feature.available = artifact_available(state);
+        features.push(feature);
     }
+    features
+}
+
+/// What the run was started with, in the order the launch dialog lists it.
+fn enabled_features(ui: &mut egui::Ui, run: &RunSummary, labels: Option<run_labels::Labels>) {
+    let features = feature_tree(run, labels);
     ui.strong("Analysis enabled");
     if features.is_empty() {
         ui.colored_label(
             theme::muted(),
             "No analysis features were enabled for this run.",
         );
+        return;
     }
-    for feature in &features {
-        ui.label(format!("{}  {feature}", egui_phosphor::regular::CHECK));
+    let depths: Vec<usize> = features.iter().map(|feature| feature.depth).collect();
+    let mono = egui::TextStyle::Monospace.resolve(ui.style());
+    let body = egui::TextStyle::Body.resolve(ui.style());
+    for (feature, prefix) in features.iter().zip(crate::tree_lines::prefixes(&depths)) {
+        let mut job = prefix.job(&mono);
+        let (mark, color) = if feature.available {
+            (egui_phosphor::regular::CHECK, theme::text())
+        } else {
+            (egui_phosphor::regular::MINUS, theme::muted())
+        };
+        let suffix = if feature.available {
+            ""
+        } else {
+            " · unavailable"
+        };
+        job.append(
+            &format!("{mark}  {}{suffix}", feature.text),
+            0.0,
+            egui::TextFormat::simple(body.clone(), color),
+        );
+        let response = ui.label(job);
+        if let Some(hover) = feature.hover.as_deref().filter(|hover| !hover.is_empty()) {
+            response.on_hover_text(hover);
+        }
     }
 }
 

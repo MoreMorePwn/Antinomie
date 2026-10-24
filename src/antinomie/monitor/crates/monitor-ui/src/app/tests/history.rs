@@ -735,3 +735,115 @@ fn the_run_list_keeps_the_analysis_mark_without_copying_report_rows() {
         "drawing leaves the retained run whole"
     );
 }
+
+#[test]
+fn enabled_analysis_is_a_tree_with_unavailable_checks_greyed() {
+    use antinomie_monitor_core::AnalysisKind;
+    let mut run = run("r1");
+    run.request.analysis.enabled = true;
+    run.request.analysis.checks = vec![
+        AnalysisKind::Metadata,
+        AnalysisKind::Structures,
+        AnalysisKind::Rules,
+    ];
+    run.request.capture_network = true;
+    // Without a report nothing is known to be missing.
+    let tree = super::super::history::feature_tree(&run, None);
+    assert_eq!(tree.len(), 5);
+    assert!(tree.iter().all(|feature| feature.available));
+    assert_eq!(
+        tree.iter().map(|feature| feature.depth).collect::<Vec<_>>(),
+        [0, 1, 1, 1, 0]
+    );
+    // Structures is unavailable in the fixture's report and Rules has no section.
+    run.analysis = Some(super::section_report("rep", "m"));
+    let tree = super::super::history::feature_tree(&run, None);
+    let available = |name: &str| {
+        tree.iter()
+            .find(|feature| feature.text == name)
+            .unwrap_or_else(|| panic!("{name}"))
+            .available
+    };
+    assert!(available(AnalysisKind::Metadata.label()));
+    assert!(!available(AnalysisKind::Structures.label()));
+    assert!(!available(AnalysisKind::Rules.label()));
+    assert!(available("Network capture"));
+}
+
+#[test]
+fn run_history_table_follows_the_pane_width() {
+    let mut app = super::ui_polish_shots::history_fixture();
+    app.focus_panel = Some(Panel::RunHistory);
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let header_x = |app: &mut MonitorApp, width: f32| {
+        let mut x = 0.0;
+        for _ in 0..4 {
+            let output = render(app, &ctx, egui::vec2(width, 800.0));
+            x = texts(&output)
+                .into_iter()
+                .find(|(text, _)| text == "Arguments")
+                .map_or(x, |(_, rect)| rect.min.x);
+        }
+        x
+    };
+    let narrow = header_x(&mut app, 1100.0);
+    let wide = header_x(&mut app, 1700.0);
+    assert!(
+        wide > narrow + 400.0,
+        "the Executable column takes the extra width: {narrow} -> {wide}"
+    );
+}
+
+#[test]
+fn a_click_in_the_run_tree_filters_the_trace_to_that_process() {
+    let mut app = super::ui_polish_shots::history_fixture();
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let mut at = None;
+    for _ in 0..4 {
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 900.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| app.history_detail(ui));
+            },
+        );
+        at = texts(&output)
+            .into_iter()
+            .find(|(text, _)| text == "sh")
+            .map(|(_, rect)| rect.center());
+    }
+    let at = at.expect("the tree lists sh");
+    for pressed in [true, false] {
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 900.0),
+                )),
+                events: vec![
+                    egui::Event::PointerMoved(at),
+                    egui::Event::PointerButton {
+                        pos: at,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| app.history_detail(ui));
+            },
+        );
+    }
+    assert_eq!(app.filter, "process.pid == 43");
+    assert_eq!(app.applied_filter, "process.pid == 43");
+    assert!(app.focus_panel == Some(Panel::Trace));
+}
