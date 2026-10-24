@@ -195,7 +195,11 @@ fn the_badge_tiers_and_task_chip_count_visible_rows_of_low_and_above() {
     assert_eq!(out.tiers[1], 1, "one medium");
     assert_eq!(out.tiers[2], 1, "the shell is low");
     assert_eq!(out.badge, 4);
-    assert_eq!(out.tasks.get(&(1, 1)), Some(&4));
+    assert_eq!(
+        out.tasks.get(&(1, 1)),
+        Some(&(4, Tier::High)),
+        "the count, and the worst tier among the observations"
+    );
     assert_eq!(
         out.tasks.get(&(2, 2)),
         None,

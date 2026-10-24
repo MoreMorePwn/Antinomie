@@ -68,6 +68,22 @@ impl Tier {
         }
     }
 
+    /// The tier a `finding.tier` value names.
+    pub(super) fn from_tag(tag: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|tier| tier.tag() == tag)
+    }
+
+    /// The chip tone of the tier, matching the tier colours of the table.
+    pub(super) fn tone(self) -> crate::widgets::Tone {
+        use crate::widgets::Tone;
+        match self {
+            Self::High => Tone::Error,
+            Self::Medium => Tone::Warn,
+            Self::Low => Tone::Info,
+            Self::Info => Tone::Neutral,
+        }
+    }
+
     /// One tier lower; INFO stays INFO.
     pub(super) fn down(self) -> Self {
         match self {
