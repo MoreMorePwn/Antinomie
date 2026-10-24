@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The Strings regex tab of the Detection rules page: the patterns the regex
-//! matches windows of Static analysis and Core dumps use. Built-in patterns
+//! regex matches of Static analysis (Strings & regex) and Core dumps use. Built-in patterns
 //! can be switched off; patterns of your own can be added and removed. The
 //! choices are kept in the rules folder and read by the next scan.
 use super::{theme, Model};
@@ -108,19 +108,11 @@ impl RegexState {
 impl Model {
     pub(super) fn regex_tab(&mut self, ui: &mut egui::Ui, data_dir: &Path) {
         self.regex.load(data_dir);
-        ui.label(
-            RichText::new(
-                "These patterns find network, crypto, key, Linux behaviour, attribution and \
-                 encoded strings in the Regex matches windows of Static analysis and Core dumps. \
-                 A change applies to the next scan.",
-            )
-            .color(theme::text()),
-        );
         if let Some(error) = &self.regex.error {
             crate::activity::error(ui, error);
         }
         ui.add_space(4.0);
-        theme::section(ui, "Your patterns");
+        theme::section(ui, "Add patterns");
         self.custom_patterns(ui, data_dir);
         ui.add_space(4.0);
         theme::section(ui, "Built-in patterns");
@@ -158,9 +150,9 @@ impl Model {
         ui.horizontal_wrapped(|ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut self.regex.name)
-                    .hint_text("Type, such as Campaign marker")
+                    .hint_text(theme::hint_text("Name, e.g. Campaign marker"))
                     .char_limit(80)
-                    .desired_width(200.0),
+                    .desired_width(260.0),
             );
             egui::ComboBox::from_id_salt("regex-new-category")
                 .selected_text(self.regex.category.label())
@@ -169,13 +161,6 @@ impl Model {
                         ui.selectable_value(&mut self.regex.category, category, category.label());
                     }
                 });
-            ui.add(
-                egui::TextEdit::singleline(&mut self.regex.pattern)
-                    .hint_text("Regular expression")
-                    .char_limit(PATTERN_MAX_LEN)
-                    .font(egui::TextStyle::Monospace)
-                    .desired_width(320.0),
-            );
             let ready =
                 !full && !self.regex.name.trim().is_empty() && !self.regex.pattern.is_empty();
             if ui
@@ -186,11 +171,20 @@ impl Model {
                 self.regex.add(data_dir);
             }
         });
+        ui.add(
+            egui::TextEdit::singleline(&mut self.regex.pattern)
+                .hint_text(theme::hint_text(
+                    "Regular expression, such as evil[0-9]+\\.example\\.com",
+                ))
+                .char_limit(PATTERN_MAX_LEN)
+                .font(egui::TextStyle::Monospace)
+                .desired_width(f32::INFINITY),
+        );
         ui.horizontal(|ui| {
             ui.label("Try on");
             ui.add(
                 egui::TextEdit::singleline(&mut self.regex.sample)
-                    .hint_text("Paste a string to see what matches")
+                    .hint_text(theme::hint_text("Paste a string to see what matches"))
                     .desired_width(ui.available_width()),
             );
         });

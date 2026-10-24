@@ -1240,9 +1240,9 @@ layout). The job's report is the saved one (same id, source path,
   `analysis/workspace_tests.rs` (Run enabled only when finished) and
   `app/tests/analysis.rs` (the command).
 
-### Regex matches window (0.7.1)
+### Regex matches pane and window (0.7.1)
 
-Host only. Core: `monitor-core/src/strings_regex/`; window: `monitor-ui/src/regex_matches.rs`.
+Host only. Core: `monitor-core/src/strings_regex/`; view: `monitor-ui/src/regex_matches.rs` (`RegexWindow`: `pane` for a pane, `show` for a window).
 
 * **Patterns.** `catalog.rs` lists the built-in ones by category (network,
   crypto, keys, Linux behaviour, attribution, encoded); an id never changes
@@ -1278,7 +1278,12 @@ Host only. Core: `monitor-core/src/strings_regex/`; window: `monitor-ui/src/rege
   holds the switched-off ids and up to 200 custom patterns (2,048 characters each,
   compiled with the same limits before they are saved). The Detection rules page has a
   Strings regex tab with the switches, the custom patterns and a "Try on" field.
-* **Window.** The scan runs on a worker thread; reopening a report whose scan
+* **Placement.** Static analysis draws `RegexWindow::pane` on the right of the Strings &
+  regex tab (`workspace/tabs.rs`, a `SidePanel`; a bottom panel under 900 points). The
+  pane asks for its scan once per report (`WorkspaceState::take_regex_request`, taken by
+  `app/panels.rs` as `ReportAction::ScanRegex`) when a Strings or FLOSS section is
+  done. Core dumps keep the floating window (`show`) behind **Regex matches…**.
+* **Scan.** The scan runs on a worker thread; reopening a report whose scan
   exists shows it as it was, **Scan again** rereads the configuration. A pattern that
   does not compile is listed in the window and skipped.
 

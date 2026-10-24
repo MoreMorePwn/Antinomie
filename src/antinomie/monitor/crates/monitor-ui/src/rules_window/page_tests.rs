@@ -282,3 +282,130 @@ fn a_catalog_pack_shows_its_metadata_and_that_its_rules_come_after_install() {
     assert!(model.rows.is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn strings_regex_adds_patterns_with_grey_hints_and_a_full_width_expression() {
+    let mut fixture = Fixture::new("regex-add");
+    fixture.model.engine = "regex".into();
+    let shown = fixture.until("Add patterns");
+    let all = joined(&shown);
+    assert!(!all.contains("Your patterns"), "{all}");
+    assert!(!all.contains("These patterns find"), "{all}");
+    assert!(!all.contains("A change applies to the next scan"), "{all}");
+    // The placeholders are the grey hint colour, and the expression field
+    // spans the page.
+    let output = {
+        let model = &mut fixture.model;
+        let (dir, outbound) = (&fixture.dir, &mut fixture.outbound);
+        let mut detection = antinomie_monitor_core::analysis::detection::Settings::default();
+        let tools = ruleset::ToolConfig::default();
+        fixture.ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let _ = model.page(ui, dir, outbound, &tools, &mut detection);
+                });
+            },
+        )
+    };
+    fn hints(
+        shape: &egui::epaint::Shape,
+        clip: egui::Rect,
+        out: &mut Vec<(String, egui::Color32, egui::Rect)>,
+    ) {
+        match shape {
+            egui::epaint::Shape::Text(text) => {
+                if let Some(section) = text.galley.job.sections.first() {
+                    out.push((text.galley.text().to_owned(), section.format.color, clip));
+                }
+            }
+            egui::epaint::Shape::Vec(shapes) => shapes.iter().for_each(|s| hints(s, clip, out)),
+            _ => {}
+        }
+    }
+    let mut found = Vec::new();
+    for clipped in &output.shapes {
+        hints(&clipped.shape, clipped.clip_rect, &mut found);
+    }
+    for start in ["Name, e.g.", "Regular expression, such as"] {
+        let (text, color, _) = found
+            .iter()
+            .find(|(text, _, _)| text.starts_with(start))
+            .unwrap_or_else(|| panic!("no {start} hint"));
+        assert_eq!(*color, crate::theme::hint(), "{text}");
+    }
+    let (_, _, wide) = found
+        .iter()
+        .find(|(text, _, _)| text.starts_with("Regular expression, such as"))
+        .unwrap();
+    assert!(wide.width() > SIZE.x * 0.8, "{wide:?}");
+}
+
+/// The Strings regex tab in a real window, for screenshots.
+/// ANTINOMIE_QA_THEME = dark | light | blue, ANTINOMIE_QA_SIZE = 1100x700.
+#[test]
+#[ignore = "requires X11 native rendering; exits after 12 seconds"]
+fn native_regex_tab_fixture() {
+    use winit::platform::x11::EventLoopBuilderExtX11;
+    struct App {
+        model: Model,
+        dir: std::path::PathBuf,
+        outbound: bool,
+        deadline: std::time::Instant,
+    }
+    impl eframe::App for App {
+        fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let mut detection =
+                    antinomie_monitor_core::analysis::detection::Settings::default();
+                let tools = ruleset::ToolConfig::default();
+                let _ = self
+                    .model
+                    .page(ui, &self.dir, &mut self.outbound, &tools, &mut detection);
+            });
+            if std::time::Instant::now() > self.deadline {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            ctx.request_repaint_after(Duration::from_millis(200));
+        }
+    }
+    let var = |name: &str| std::env::var(name).unwrap_or_default();
+    let theme_choice = match var("ANTINOMIE_QA_THEME").as_str() {
+        "light" => crate::theme::Theme::Light,
+        "blue" => crate::theme::Theme::Blue,
+        _ => crate::theme::Theme::Dark,
+    };
+    let (width, height) = var("ANTINOMIE_QA_SIZE")
+        .split_once('x')
+        .and_then(|(w, h)| Some((w.parse::<f32>().ok()?, h.parse::<f32>().ok()?)))
+        .unwrap_or((1100.0, 700.0));
+    let dir = std::env::temp_dir().join(format!("ant-qa-rules-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut model = Model::default();
+    model.engine = "regex".into();
+    eframe::run_native(
+        "Antinomie Rules QA",
+        eframe::NativeOptions {
+            viewport: egui::ViewportBuilder::default().with_inner_size([width, height]),
+            persist_window: false,
+            event_loop_builder: Some(Box::new(|builder| {
+                builder.with_x11().with_any_thread(true);
+            })),
+            ..Default::default()
+        },
+        Box::new(move |cc| {
+            crate::theme::install(&cc.egui_ctx);
+            crate::theme::apply_theme(&cc.egui_ctx, theme_choice);
+            Ok(Box::new(App {
+                model,
+                dir,
+                outbound: false,
+                deadline: std::time::Instant::now() + Duration::from_secs(12),
+            }))
+        }),
+    )
+    .unwrap();
+}
