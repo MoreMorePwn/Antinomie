@@ -59,6 +59,25 @@ pub(crate) fn short_time_us(value: u64) -> String {
         .unwrap_or_else(|| "Unavailable".into())
 }
 
+/// A tick on the activity graph's axis: the local time of day, with
+/// milliseconds when the ticks are closer than a second.
+pub(crate) fn axis_time(value: u64, millis: bool) -> String {
+    i64::try_from(value)
+        .ok()
+        .and_then(DateTime::<Utc>::from_timestamp_micros)
+        .map(|time| {
+            time.with_timezone(&Local)
+                .format(if millis { "%H:%M:%S%.3f" } else { "%H:%M:%S" })
+                .to_string()
+        })
+        .unwrap_or_else(|| "Unavailable".into())
+}
+
+/// The host zone as the axis names it: `UTC+07:00`.
+pub(crate) fn zone_label() -> String {
+    format!("UTC{}", Local::now().format("%:z"))
+}
+
 pub(crate) fn guest_ns(anchor: Option<HostClockAnchor>, value: Option<u64>) -> String {
     anchor
         .zip(value)

@@ -121,6 +121,21 @@ impl Toasts {
         }
     }
 
+    /// Count another occurrence of a toast that is still in the stack and give
+    /// it its time again. A toast that was dismissed or has left stays gone.
+    pub(crate) fn bump(&mut self, level: Level, title: &str, detail: &str, by: u32) -> bool {
+        let Some(same) = self
+            .items
+            .iter_mut()
+            .find(|toast| toast.level == level && toast.title == title && toast.detail == detail)
+        else {
+            return false;
+        };
+        same.count = same.count.saturating_add(by.max(1));
+        same.left = lifetime(level);
+        true
+    }
+
     /// Advance the timers of the shown toasts by `dt` seconds. A hovered
     /// toast keeps its time; so does one still waiting behind the shown ones.
     pub(crate) fn tick(&mut self, dt: f64) {
@@ -175,6 +190,13 @@ pub(crate) fn push(
     ctx.request_repaint();
 }
 
+/// Add to the count of a toast already on screen; no new toast, no Activity row.
+pub(crate) fn bump(ctx: &egui::Context, level: Level, title: &str, detail: &str, by: u32) {
+    if with(ctx, |toasts| toasts.bump(level, title, detail, by)) {
+        ctx.request_repaint();
+    }
+}
+
 /// Raise a toast from one message (split into a title and a detail) and
 /// write its Activity row.
 pub(crate) fn notify(ctx: &egui::Context, level: Level, message: impl std::fmt::Display) {
@@ -222,6 +244,18 @@ pub(crate) fn snapshot(ctx: &egui::Context) -> Vec<(Level, String, String)> {
             .items()
             .iter()
             .map(|toast| (toast.level, toast.title.clone(), toast.detail.clone()))
+            .collect()
+    })
+}
+
+/// Title and count of every toast in the stack.
+#[cfg(test)]
+pub(crate) fn counts(ctx: &egui::Context) -> Vec<(String, u32)> {
+    with(ctx, |toasts| {
+        toasts
+            .items()
+            .iter()
+            .map(|toast| (toast.title.clone(), toast.count))
             .collect()
     })
 }
