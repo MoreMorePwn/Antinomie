@@ -276,6 +276,14 @@ impl Session {
                 }
             }
             owner.tree_complete = tree_complete;
+            if run.summary.route.as_ref().is_some_and(|route| {
+                route.via == crate::route::RouteVia::Gateway
+                    && route.kind != crate::route::RouteKind::Drop
+            }) {
+                // The restored VM's gateway starts on Drop: a restored run
+                // keeps no route it had (the record says what it used before).
+                owner.issue("snapshot recovery does not carry the run's network route over; the restored VM's traffic is dropped".into());
+            }
             if tree_complete && run.summary.request.memory_dump_on_exit {
                 owner.summary.memory_state = RunArtifactState::Interrupted;
                 owner.issue("the run already ended in the checkpoint; its previous post-exit RAM action is not replayed".into());

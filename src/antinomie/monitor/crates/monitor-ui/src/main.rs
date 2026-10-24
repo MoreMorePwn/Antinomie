@@ -24,6 +24,7 @@ mod memory_view;
 mod network_view;
 mod query;
 mod regex_matches;
+mod route_ui;
 mod rules_window;
 mod run_filter;
 mod run_recording;

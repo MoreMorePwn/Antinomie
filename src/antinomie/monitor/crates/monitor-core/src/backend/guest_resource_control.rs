@@ -73,6 +73,7 @@ impl Session {
             core_max_size: None,
             core_timeout_ms: None,
             debug_on_start: false,
+            route: None,
         };
         let reply = match self.request_typed(
             control::EXEC,

@@ -40,6 +40,7 @@ impl Fixture {
                 terminal_eof,
                 state,
                 notes: Vec::new(),
+                route: None,
                 recording_error: None,
                 execution: None,
                 analysis: None,

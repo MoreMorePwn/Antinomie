@@ -148,13 +148,18 @@ fn activity(ui: &mut egui::Ui, scan: &ArchiveScan) -> Option<Destination> {
     target
 }
 
-fn network(ui: &mut egui::Ui, scan: &ArchiveScan) -> Option<Destination> {
+fn network(
+    ui: &mut egui::Ui,
+    scan: &ArchiveScan,
+    route: &crate::route_ui::RouteText,
+) -> Option<Destination> {
     presentation::heading(
         ui,
         "Network evidence",
         "Captured VM traffic during this run",
     );
     let mut target = None;
+    crate::route_ui::line(ui, route);
     egui::Grid::new("triage-summary-network")
         .num_columns(2)
         .max_col_width(ui.available_width() * 0.66)
@@ -463,7 +468,7 @@ pub(super) fn content(
             presentation::pair(
                 ui,
                 |ui| left = activity(ui, scan),
-                |ui| right = network(ui, scan),
+                |ui| right = network(ui, scan, &view.route),
             );
             destination = left.or(right).or(destination);
             if let Some(warning) = &scan.network_warning {

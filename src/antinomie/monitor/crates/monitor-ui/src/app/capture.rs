@@ -105,9 +105,10 @@ impl MonitorApp {
 
     /// The running VM has NAT networking.
     fn running_nat(&self) -> bool {
-        self.snapshot.vms.iter().any(|vm| {
-            Some(&vm.id) == self.snapshot.active_vm.as_ref() && (vm.nat || vm.isolated_network)
-        })
+        self.snapshot
+            .vms
+            .iter()
+            .any(|vm| Some(&vm.id) == self.snapshot.active_vm.as_ref() && vm.has_network())
     }
 
     /// A network capture can be started or stopped now.

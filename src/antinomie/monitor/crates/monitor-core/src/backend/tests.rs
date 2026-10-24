@@ -659,6 +659,7 @@ fn artifact_run(directory: PathBuf) -> RunSummary {
         state: RunState::Running,
         recording_error: None,
         notes: Vec::new(),
+        route: None,
         execution: None,
         analysis: None,
     }
@@ -682,6 +683,23 @@ fn a_run_started_without_capture_records_that_capture_was_off() {
     )
     .unwrap();
     assert!(!old.network_off);
+}
+
+#[test]
+fn a_runs_route_is_copied_into_its_artifacts_and_old_runs_have_none() {
+    let mut run = artifact_run(PathBuf::new());
+    assert!(RunArtifactOwner::new(&run).summary.route.is_none());
+    run.route = Some(crate::route::RouteRecord {
+        kind: crate::route::RouteKind::Tor,
+        label: "Tor via 127.0.0.1:9050".into(),
+        via: crate::route::RouteVia::Gateway,
+        checked_ms: Some(1),
+        stats: None,
+    });
+    let owner = RunArtifactOwner::new(&run);
+    assert_eq!(owner.summary.route, run.route);
+    // The run that holds no claim has nothing to release.
+    assert!(owner.route_claim.is_none());
 }
 
 #[test]
@@ -1537,6 +1555,7 @@ fn pending_raw_copy_quota_failure_stops_existing_and_acknowledged_runs() {
                 state: RunState::Running,
                 recording_error: None,
                 notes: Vec::new(),
+                route: None,
                 execution: None,
                 analysis: None,
             },
@@ -1604,6 +1623,7 @@ fn object_saving_failure_preserves_raw_and_globally_denies_terminal_saving() {
                         state: RunState::Running,
                         recording_error: None,
                         notes: Vec::new(),
+                        route: None,
                         execution: None,
                         analysis: None,
                     },
@@ -1713,6 +1733,7 @@ fn final_health_counts_screen_and_keeps_errors_scoped_to_run() {
                 state: RunState::Running,
                 recording_error: None,
                 notes: Vec::new(),
+                route: None,
                 execution: None,
                 analysis: None,
             },

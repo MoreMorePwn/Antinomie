@@ -253,6 +253,10 @@ impl Worker {
                     .recording_directory
                     .join("runs")
                     .join(&run_id);
+                // The route comes up before anything of the run exists, and a
+                // route that cannot start is the run's error (no fallback).
+                let (route, route_claim) =
+                    session.claim_run_route(&self.options, &run_id, request.route)?;
                 let summary = RunSummary {
                     started_ms: None,
                     clock_anchor: None,
@@ -268,12 +272,20 @@ impl Worker {
                     state: RunState::Unknown,
                     recording_error: Some("execution has not been acknowledged".into()),
                     notes: Vec::new(),
+                    route: Some(route),
                     execution: None,
                     analysis: selected.then(|| {
                         crate::analysis::jobs::new_report(&request.path, &request.analysis)
                     }),
                 };
-                let mut run = ProgramRun::new(summary, session.capture.quota())?;
+                let run_id = summary.id.clone();
+                let mut run = match ProgramRun::new(summary, session.capture.quota()) {
+                    Ok(run) => run,
+                    Err(error) => {
+                        session.release_unowned_route(&run_id, route_claim);
+                        return Err(error);
+                    }
+                };
                 run.assembler
                     .set_event_table(session.vm.transport.event_table as usize);
                 run.summary.recording_error = None;
@@ -281,6 +293,7 @@ impl Worker {
                 run.disk_base_identity = session.disk_bundle.base_identity.clone();
                 run.tracer_hashing = tracer_hashing;
                 let mut artifacts = RunArtifactOwner::new(&run.summary);
+                artifacts.route_claim = route_claim;
                 let prepared = if request.capture_network {
                     session.start_run_network(&self.options, &mut artifacts)
                 } else {

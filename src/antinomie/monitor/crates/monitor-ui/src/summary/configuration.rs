@@ -143,7 +143,7 @@ fn storage(ui: &mut egui::Ui, vm: &VmConfig, snapshot: &Snapshot) {
 }
 
 fn network(ui: &mut egui::Ui, vm: &VmConfig) {
-    let connected = vm.nat || vm.isolated_network;
+    let connected = vm.has_network();
     title(
         ui,
         icon::NETWORK,

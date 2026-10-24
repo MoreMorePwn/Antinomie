@@ -213,6 +213,7 @@ fn run_summary(directory: &std::path::Path) -> RunSummary {
         terminal_eof: false,
         state: RunState::Running,
         notes: Vec::new(),
+        route: None,
         recording_error: None,
         execution: None,
         analysis: None,

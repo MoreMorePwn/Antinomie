@@ -290,7 +290,12 @@ impl Worker {
                     issues.push(error);
                 }
             }
-            if changed && let Err(error) = owner.save() {
+            // The run's tree ended: its route is released and the record
+            // keeps what the gateway counted.
+            let released = owner.tree_complete && session.release_run_route(&mut owner);
+            if (changed || released)
+                && let Err(error) = owner.save()
+            {
                 issues.push(error);
             }
             if cookie != 0 || owner.network.is_some() {

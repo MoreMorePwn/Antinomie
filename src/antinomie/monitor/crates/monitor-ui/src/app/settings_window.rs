@@ -15,18 +15,20 @@ pub(super) enum SettingsPage {
     Detection,
     Notifications,
     NetworkLookup,
+    NetworkRoutes,
     AnalysisTools,
     Disks,
     Advanced,
 }
 
 impl SettingsPage {
-    pub(super) const ALL: [SettingsPage; 8] = [
+    pub(super) const ALL: [SettingsPage; 9] = [
         SettingsPage::Appearance,
         SettingsPage::Recording,
         SettingsPage::Detection,
         SettingsPage::Notifications,
         SettingsPage::NetworkLookup,
+        SettingsPage::NetworkRoutes,
         SettingsPage::AnalysisTools,
         SettingsPage::Disks,
         SettingsPage::Advanced,
@@ -39,6 +41,7 @@ impl SettingsPage {
             SettingsPage::Detection => "Detection",
             SettingsPage::Notifications => "Notifications",
             SettingsPage::NetworkLookup => "Network lookup",
+            SettingsPage::NetworkRoutes => "Network routes",
             SettingsPage::AnalysisTools => "Analysis tools",
             SettingsPage::Disks => "Disks",
             SettingsPage::Advanced => "Advanced",
@@ -119,6 +122,9 @@ impl MonitorApp {
                                 if nav_item(ui, page.label(), self.settings_page == page).clicked()
                                 {
                                     self.settings_page = page;
+                                    if page == SettingsPage::NetworkRoutes {
+                                        self.open_routes_page();
+                                    }
                                 }
                             }
                         },
@@ -186,6 +192,7 @@ impl MonitorApp {
             SettingsPage::Detection => self.detection_page(ui),
             SettingsPage::Notifications => self.notifications_page(ui),
             SettingsPage::NetworkLookup => self.lookup_page(ui),
+            SettingsPage::NetworkRoutes => self.routes_page(ui),
             SettingsPage::AnalysisTools => self.tools_page(ui),
             SettingsPage::Disks => self.disks_page(ui),
             SettingsPage::Advanced => self.advanced_page(ui),

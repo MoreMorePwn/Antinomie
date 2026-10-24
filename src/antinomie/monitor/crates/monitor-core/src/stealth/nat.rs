@@ -88,6 +88,33 @@ impl NatNetwork {
         Ok(())
     }
 
+    /// The network as the Routed gateway hands it out: the address, prefix
+    /// length, gateway, DNS server and the guest's address. QEMU's defaults
+    /// when the profile gives none.
+    pub(crate) fn lease_plan(
+        &self,
+    ) -> Result<(Ipv4Addr, u8, Ipv4Addr, Ipv4Addr, Ipv4Addr), String> {
+        if self.network.is_empty() {
+            return Ok((
+                Ipv4Addr::new(10, 0, 2, 0),
+                24,
+                Ipv4Addr::new(10, 0, 2, 2),
+                Ipv4Addr::new(10, 0, 2, 3),
+                Ipv4Addr::new(10, 0, 2, 15),
+            ));
+        }
+        self.validate()?;
+        let (network, prefix) = self.parse()?;
+        let address = |text: &str| text.parse::<Ipv4Addr>().map_err(|e| e.to_string());
+        Ok((
+            Ipv4Addr::from(network),
+            prefix,
+            address(&self.gateway)?,
+            address(&self.dns)?,
+            address(&self.dhcp_start)?,
+        ))
+    }
+
     /// The `-netdev user` options, after `user,id=…`.
     pub(super) fn options(&self) -> String {
         if self.network.is_empty() {

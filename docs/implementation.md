@@ -1381,6 +1381,133 @@ Host only. Core: `monitor-core/src/ioc/` (`indicator`, `verdict`, `online`,
   positive, the tabs and the layout switch, export, the session-only online
   switch, and the rules-pass recorder.
 
+### Network routes (0.7.1)
+
+Per-run routing of the guest's traffic, modelled on CAPE's rooter options (none,
+Internet, InetSim, Tor, VPN) but without a root daemon: no iptables, no network
+namespace, no TUN or tap device, no `sudo`. Host side only; nothing is installed
+or patched in the guest. Code: `monitor-core/src/route.rs` and `route/`, the
+backend wiring in `backend/run_route.rs`, the interface in
+`monitor-ui/src/route_ui.rs` and `app/route_settings.rs`.
+
+**How guest networking worked.** A VM's network was QEMU user networking
+(`-netdev user,id=net0`, with `restrict=on` for Isolated) or no card at all
+(`-nic none`); `nat` and `isolated_network` in `VmConfig`. A network capture is
+a `filter-dump` object attached to `netdev=net0` over QMP, so it records the
+frames the guest NIC sees. The user-mode netdev is fixed for the VM's life,
+and slirp cannot send a connection through a SOCKS proxy, so a route cannot be
+chosen per run on it.
+
+**The Routed network.** A third mode, `VmConfig::routed` (VM dialog: Network >
+Routed), wires the NIC (`nic_option`, unchanged, so the stealth profile still
+applies) to `-netdev stream,id=net0,server=off,addr.type=unix,addr.path=<runtime
+folder>/net.sock` (QEMU 7.2 or newer; checked before launch). The socket is
+owned by a `Gateway` thread inside Antinomie, created before QEMU starts and
+stopped with the VM process (`VmProcess::gateway`). The gateway is the guest's
+whole network: ARP (MACs `52:55:` plus the address, as slirp does), a DHCP
+server giving the lease QEMU's user network gives (10.0.2.15/24, router
+10.0.2.2, DNS 10.0.2.3, or the profile's NAT network, so the guest configures
+itself unchanged), a DNS server, ICMP echo for its own addresses, and a small
+TCP endpoint per guest connection (`tcp.rs`: in-order segments, constant window,
+go-back-N retransmission; the link is a local socket and loses nothing). Each
+accepted connection is dialed upstream on a thread (`upstream.rs`) and the bytes
+are relayed through bounded queues, so a slow upstream is a segment the guest
+retransmits. IPv6, fragments and everything else are counted and dropped.
+Because the capture is on the NIC, **the pcap is the guest-side view on every
+route**; nothing about capture changed.
+
+**Routes.** `RouteKind`: `Drop`, `Internet`, `InetSim`, `Tor`, `Vpn`, `Socks5`.
+The gateway starts on `Drop` (nothing leaves) and a run changes it only through
+`Gateway::claim`.
+
+| Route | DNS | TCP | Other UDP |
+|---|---|---|---|
+| Drop | unanswered (counted) | SYN dropped, like a firewall (counted) | dropped, counted |
+| Internet | the host resolver, on a thread | the host connects, public addresses only: not the gateway, the guest network, loopback, link-local or (unless allowed in Settings) RFC 1918 | dropped, counted |
+| InetSim | every A query answers the sinkhole (198.51.100.1), AAAA is empty | any address and port reaches the built-in services (HTTP, SMTP; other ports accept and discard, no TLS) or an external INetSim at `port + offset` | dropped, counted |
+| Tor, VPN, SOCKS5 | every A query answers a placeholder in 198.18.0.0/16 and the gateway remembers the name; the connection to that address is sent to the proxy as the **name** (SOCKS5 `ATYP 3`), so the proxy resolves it and no lookup leaves the host | SOCKS5 CONNECT through one upstream path (`socks.rs`, RFC 1928 with RFC 1929 login) | dropped, counted |
+
+* **One upstream SOCKS5 path.** Tor is the Tor SOCKS port (default
+  127.0.0.1:9050); Antinomie does not start Tor, the analyst runs it. VPN is
+  WireGuard through **wireproxy** (ISC licence): a userspace WireGuard client that
+  exposes a SOCKS5 port, run as a separate process with the analyst's own
+  configuration file. Antinomie starts it for the run (`managed.rs`: stdout and
+  stderr to an owner-only `wireproxy.log`, refuses to start when something else
+  already listens on its port, waits for the port, kills it by its recorded
+  handle when the route is released or the VM ends). SOCKS5 is any proxy the
+  analyst gives, with optional user name and password.
+* **OpenVPN is unsupported.** It needs a TUN device (root or `CAP_NET_ADMIN`)
+  and there is no userspace OpenVPN client that exposes a socket. An analyst who
+  has OpenVPN can run it in a container or namespace of their own with a SOCKS5
+  front end and use the SOCKS5 route. Antinomie never uses `sudo`.
+* **DNS and UDP.** Over SOCKS5 and Tor, DNS is SOCKS5 hostname resolution (Tor's
+  DNSPort is not needed). UDP is not carried (SOCKS5 UDP ASSOCIATE is not used,
+  Tor does not support it): UDP other than DNS and DHCP is dropped and counted.
+  A name that does not exist therefore shows as a refused connection rather than
+  NXDOMAIN. The 198.18.0.0/16 placeholders are cleared when the route changes.
+* **Tools.** INetSim (GPL-2.0), tor (BSD-3-Clause) and wireproxy (ISC) are
+  optional programs run as separate processes and are not bundled. They are user
+  provided; Settings > Network routes shows whether each is found on `PATH`.
+  Managed downloads (a pinned wireproxy and Tor Expert Bundle) are not done.
+
+**Fail closed.** `route::claim_for_run` runs before the run's directory or
+artifacts exist. It picks the route (the request, else the saved default), builds
+the checked `RouteSpec` (a missing setting, file or program is an error) and calls
+`Gateway::claim`, which starts wireproxy, then **proves the route is up**: a SOCKS
+route must answer the SOCKS5 greeting and login and, when it has a check target
+(defaults: `check.torproject.org:443` for Tor, `1.1.1.1:443` for SOCKS5), connect
+to it through the proxy; an external INetSim must accept a connection. Any
+failure is the run's error, the gateway stays on Drop, wireproxy is stopped, and
+nothing falls back to another route or to the host's network. A VM that is not
+Routed has one fixed network: a request for another route is an error. A route
+that goes away mid-run (the proxy dies) makes new connections fail (refused), it
+does not redirect them. When the last run holding a route ends, the gateway goes
+back to Drop, every connection made under the route is reset and wireproxy is
+stopped (each connection and each placeholder address carries the route
+generation it was made under, so a connection opened right after a claim is not
+mistaken for an old one). ICMP echo is answered for the gateway's own addresses
+only and counted otherwise. Runs that overlap on one VM must use the same route
+("another run in this VM is using the route ..."). The check runs on the worker
+thread before the sample starts, at most about 30 s (wireproxy start 15 s, check
+15 s).
+
+**Metadata.** `RunSummary::route` (`run.json`) and `RunArtifacts::route`
+(`artifacts.json`) hold a `RouteRecord`: `kind`, a plain-text `label` (`Tor via
+127.0.0.1:9050`; host and port only), `via` (`gateway`, `vm_nat`, `vm_isolated`,
+`vm_disconnected`), `checked_ms` and, once the run's process tree ends, `stats`
+(TCP connections, failures, blocks, DNS queries and unanswered, UDP/ICMP/other
+dropped, bytes). Counts are for the whole VM during the run, like the capture.
+Both fields are absent in older runs, which the UI shows as "Not recorded". A run
+restored from a snapshot keeps its record, gets an issue saying the route is not
+carried over, and the restored VM's gateway starts on Drop. `ExecRequest::route`
+is the per-run choice (`None` is the saved default).
+
+**Settings and secrets.** `<data>/network/routes.json` (`RouteConfig`) is
+written through `storage::atomic_json` in a 0700 folder and chmod 0600, the same
+as the sample sources' `api-keys.json`; it holds the default route, the Tor
+address, the wireproxy program and configuration paths, the SOCKS5 host, port,
+user name and password, the InetSim mode, host, port offset and sinkhole, and
+the check targets. The backend reads it when a run starts, so the password is
+never sent through the command channel. `Debug` for the SOCKS5 settings and the
+resolved credentials is redacted; the password is not in a label, a record, a
+log or an export (the wireproxy configuration is the analyst's own file and is
+passed by path).
+
+**Interface.** VM dialog: Network > *Routed (route per run)*. Run form, Network
+section: the **Route** selector (a Routed VM; any other VM names its fixed
+network) with what the route does and a warning for the Internet route or a
+missing setting. Settings > Network routes: default route, per-route
+configuration and a **Test** button (brings the route up the way a run would,
+including wireproxy). The route is shown in Run History's run details, above the
+Triage run header, in Triage > Summary > Network evidence and in Triage > Network.
+
+**Tests.** `route/tests/` drives the real gateway over a Unix socket with a
+scripted guest (DHCP, ARP, DNS, a small TCP client with retransmission) and a
+fake SOCKS5 server that is also the far end: Drop, InetSim (built-in and
+external), Tor, SOCKS5 with login, refusals, fail-closed claims, overlapping
+runs, reset on release, 400 KB up and 500 KB down, wireproxy start and stop with
+stand-in programs. No real Tor, VPN or Internet traffic is used.
+
 ### Accepted ANT-T0097 host UI performance (0.6.2)
 
 Remove render-time filesystem checks for host chooser availability; resolve
