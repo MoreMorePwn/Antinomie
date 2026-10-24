@@ -314,12 +314,17 @@ fn strings_regex_adds_patterns_with_grey_hints_and_a_full_width_expression() {
     fn hints(
         shape: &egui::epaint::Shape,
         clip: egui::Rect,
-        out: &mut Vec<(String, egui::Color32, egui::Rect)>,
+        out: &mut Vec<(String, egui::Color32, egui::Rect, egui::Rect)>,
     ) {
         match shape {
             egui::epaint::Shape::Text(text) => {
                 if let Some(section) = text.galley.job.sections.first() {
-                    out.push((text.galley.text().to_owned(), section.format.color, clip));
+                    out.push((
+                        text.galley.text().to_owned(),
+                        section.format.color,
+                        clip,
+                        egui::Rect::from_min_size(text.pos, text.galley.size()),
+                    ));
                 }
             }
             egui::epaint::Shape::Vec(shapes) => shapes.iter().for_each(|s| hints(s, clip, out)),
@@ -331,15 +336,20 @@ fn strings_regex_adds_patterns_with_grey_hints_and_a_full_width_expression() {
         hints(&clipped.shape, clipped.clip_rect, &mut found);
     }
     for start in ["Name, e.g.", "Regular expression, such as"] {
-        let (text, color, _) = found
+        let (text, color, clip, rect) = found
             .iter()
-            .find(|(text, _, _)| text.starts_with(start))
+            .find(|(text, _, _, _)| text.starts_with(start))
             .unwrap_or_else(|| panic!("no {start} hint"));
         assert_eq!(*color, crate::theme::hint(), "{text}");
+        // The whole hint shows: the field is as wide as the hint is long.
+        assert!(
+            clip.right() >= rect.right(),
+            "{text} is cut: {rect:?} in {clip:?}"
+        );
     }
-    let (_, _, wide) = found
+    let (_, _, wide, _) = found
         .iter()
-        .find(|(text, _, _)| text.starts_with("Regular expression, such as"))
+        .find(|(text, _, _, _)| text.starts_with("Regular expression, such as"))
         .unwrap();
     assert!(wide.width() > SIZE.x * 0.8, "{wide:?}");
 }
