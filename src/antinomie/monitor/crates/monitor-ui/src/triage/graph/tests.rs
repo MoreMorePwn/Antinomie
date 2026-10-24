@@ -53,6 +53,7 @@ pub(super) fn record(ns: u64, lane: u32, tier: Tier, category: Category) -> Reco
         category: category.index() as u8,
         phase: phases::phase_of("", category).map_or(NO_PHASE, |phase| phase.index() as u8),
         flags: 0,
+        slot: 0,
     }
 }
 
@@ -524,10 +525,10 @@ fn the_rendered_filter_compiles_in_the_tables_language() {
 
 // ----- hit testing -----
 
-const SIZE: egui::Vec2 = egui::vec2(1100.0, 640.0);
-const WIDGET_HEIGHT: f32 = 520.0;
+pub(super) const SIZE: egui::Vec2 = egui::vec2(1100.0, 640.0);
+pub(super) const WIDGET_HEIGHT: f32 = 520.0;
 
-fn layout_of(index: &GraphIndex, state: &State) -> Layout {
+pub(super) fn layout_of(index: &GraphIndex, state: &State) -> Layout {
     Layout::new(
         Rect::from_min_size(Pos2::new(8.0, 8.0), egui::vec2(1084.0, WIDGET_HEIGHT)),
         state,
@@ -536,7 +537,7 @@ fn layout_of(index: &GraphIndex, state: &State) -> Layout {
 }
 
 /// Where a record's marker is drawn.
-fn marker_pos(layout: &Layout, index: &GraphIndex, at: usize) -> Pos2 {
+pub(super) fn marker_pos(layout: &Layout, index: &GraphIndex, at: usize) -> Pos2 {
     let record = &index.records[at];
     Pos2::new(
         layout.frame.x(record.first_ns as f64),
@@ -696,17 +697,19 @@ fn zoom_pan_and_the_window_stay_inside_the_run() {
 
 // ----- the widget through egui -----
 
-struct Harness {
-    ctx: egui::Context,
-    state: State,
-    time: f64,
-    rect: Rect,
+pub(super) struct Harness {
+    pub(super) ctx: egui::Context,
+    pub(super) state: State,
+    pub(super) time: f64,
+    pub(super) rect: Rect,
     /// Held down while the next frames run.
-    modifiers: Modifiers,
+    pub(super) modifiers: Modifiers,
+    /// The spacing the widget is told; Time unless a test says otherwise.
+    pub(super) spacing: Spacing,
 }
 
 impl Harness {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let ctx = egui::Context::default();
         theme::install(&ctx);
         Self {
@@ -715,13 +718,14 @@ impl Harness {
             time: 0.0,
             rect: Rect::NOTHING,
             modifiers: Modifiers::NONE,
+            spacing: Spacing::Time,
         }
     }
 
-    fn frame(&mut self, index: &GraphIndex, events: Vec<Event>) -> Vec<Action> {
+    pub(super) fn frame(&mut self, index: &GraphIndex, events: Vec<Event>) -> Vec<Action> {
         self.time += 0.03;
         let mut actions = Vec::new();
-        let (state, rect) = (&mut self.state, &mut self.rect);
+        let (state, rect, spacing) = (&mut self.state, &mut self.rect, self.spacing);
         let _ = self.ctx.run(
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, SIZE)),
@@ -741,6 +745,7 @@ impl Harness {
                         colors: Colors::of(Theme::Dark.palette()),
                         clock: None,
                         height: WIDGET_HEIGHT,
+                        spacing,
                     };
                     actions = widget::show(ui, state, &config);
                 });
@@ -749,11 +754,11 @@ impl Harness {
         actions
     }
 
-    fn layout(&self, index: &GraphIndex) -> Layout {
+    pub(super) fn layout(&self, index: &GraphIndex) -> Layout {
         Layout::new(self.rect, &self.state, index)
     }
 
-    fn press(&mut self, index: &GraphIndex, pos: Pos2, pressed: bool) -> Vec<Action> {
+    pub(super) fn press(&mut self, index: &GraphIndex, pos: Pos2, pressed: bool) -> Vec<Action> {
         self.frame(
             index,
             vec![
@@ -768,18 +773,23 @@ impl Harness {
         )
     }
 
-    fn click(&mut self, index: &GraphIndex, pos: Pos2) -> Vec<Action> {
+    pub(super) fn click(&mut self, index: &GraphIndex, pos: Pos2) -> Vec<Action> {
         self.press(index, pos, true);
         let actions = self.press(index, pos, false);
         self.time += 1.0;
         actions
     }
 
-    fn key(&mut self, index: &GraphIndex, key: Key) -> Vec<Action> {
+    pub(super) fn key(&mut self, index: &GraphIndex, key: Key) -> Vec<Action> {
         self.key_with(index, key, Modifiers::NONE)
     }
 
-    fn key_with(&mut self, index: &GraphIndex, key: Key, modifiers: Modifiers) -> Vec<Action> {
+    pub(super) fn key_with(
+        &mut self,
+        index: &GraphIndex,
+        key: Key,
+        modifiers: Modifiers,
+    ) -> Vec<Action> {
         let event = |pressed| Event::Key {
             key,
             physical_key: Some(key),
@@ -793,7 +803,7 @@ impl Harness {
     }
 
     /// Draw once so the area is known, then click the marker of `at` to focus the graph.
-    fn focus_on(&mut self, index: &GraphIndex, at: usize) {
+    pub(super) fn focus_on(&mut self, index: &GraphIndex, at: usize) {
         self.frame(index, vec![]);
         let pos = marker_pos(&self.layout(index), index, at);
         self.click(index, pos);
@@ -928,13 +938,13 @@ fn double_clicking_the_axis_zooms_two_times_at_the_pointer() {
     let mut harness = Harness::new();
     harness.frame(&index, vec![]);
     let frame = harness.layout(&index).frame;
-    let at = Pos2::new(frame.x(25.0 * SF), frame.axis.center().y);
+    let at = Pos2::new(frame.x(12.0 * SF), frame.axis.center().y);
     for pressed in [true, false, true, false] {
         harness.press(&index, at, pressed);
     }
     let window = harness.state.window.expect("zoomed");
     assert!(((frame.t1 - frame.t0) / (window.1 - window.0) - 2.0).abs() < 1e-6);
-    assert!(window.0 < 25.0 * SF && 25.0 * SF < window.1);
+    assert!(window.0 < 12.0 * SF && 12.0 * SF < window.1);
 }
 
 #[test]
@@ -1159,6 +1169,7 @@ fn the_widget_paints_in_each_theme_with_that_themes_colors() {
                         colors,
                         clock: None,
                         height: WIDGET_HEIGHT,
+                        spacing: Spacing::Time,
                     };
                     widget::show(ui, &mut state, &config);
                 });

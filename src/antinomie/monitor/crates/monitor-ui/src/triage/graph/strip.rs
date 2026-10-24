@@ -114,12 +114,13 @@ impl Strip {
             view::fitted(overview.extent()),
             categories.len(),
             Metrics::compact(),
+            super::axis::Axis::time(),
         );
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 0.0, colors.panel);
         paint::phase_band(&painter, &frame, overview, &colors);
-        let tallest = paint::severity_curve(&painter, &frame, overview, &colors);
-        paint::heat_strip(&painter, &frame, overview, &colors, &categories);
+        let tallest = paint::severity_curve(&painter, &frame, overview, &colors, None);
+        paint::heat_strip(&painter, &frame, overview, &colors, &categories, None);
         paint::axis(
             &painter,
             &frame,

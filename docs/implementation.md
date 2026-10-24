@@ -997,6 +997,29 @@ Host only: `monitor-ui/src/triage/graph/`, nothing needs a guest change.
   `State`, shares the filter draft, chips and selection, lays Details out beside
   the graph with a draggable splitter, and keeps each run's size for the session
   and the last size in `Settings::graph_window`.
+* **Spacing and the axis.** `axis.rs` maps a time to a place on the axis and
+  back. `Spacing::Time` is the identity; `Spacing::Events` gives each distinct
+  `first_ns` (`GraphIndex::slots`, built when the index is finished, with each
+  record's `slot`) one unit, linear in time between two slots and at the median
+  gap beyond the first and last. The window a graph shows (`State::window`) is
+  kept in the units of `State::units` and converted when the spacing changes,
+  so the same stretch stays on screen; pan, zoom and the shortest window
+  (`Axis::min_span`, 1.5 slots) are in those units. Gaps of at least 8 times the
+  median are `Slots::breaks` (at most 48, the widest). The pyramid stays by
+  time, so in Events spacing the findings of the window are counted into columns
+  of 3 pixels in one pass (`paint::event_pass`) that feeds the curve, the heat
+  strip and the markers (120k findings paint in about 3 ms); few findings are
+  still drawn one by one. Ticks are at slot boundaries (`paint::tick_marks`).
+  `Settings::graph_spacing` (default Events) is handed to the view and saved
+  back when the chip or `T` changes it.
+* **Overview ruler.** `ruler.rs` draws a strip under the axis from `Marks`: for
+  each pixel column the number of findings and the worst tier, over the whole
+  run in the current spacing, built again only when the index
+  (`GraphIndex::id`), the width or the spacing changes. The window on it is
+  `(t0, t1)`; `begin` decides from the pointer whether a drag moves the window,
+  pulls an edge or selects, `drag` and `selected` give the window, and a
+  double-click gives the whole run (`Layout::range`). The brush in the filter is
+  drawn on it from `State::brush`.
 * **Spinners.** `theme::spinner` turns in 100 ms steps and asks for a repaint
   every 100 ms; egui's own `Spinner` repaints every frame, which on software GL
   is the full frame rate for as long as an index is being read. All spinners go
