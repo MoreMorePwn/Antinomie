@@ -188,6 +188,50 @@ packet history already has it, and specimen Content supports a byte-offset jump.
   the first HIGH finding of each rule in a run that is still going raises one
   toast; later matches of that rule add `×N` to it. It is raised when the run's
   index is read again, every 5 s while Triage is shown and every 15 s otherwise.
+- **Triage › IOC**: the run's indicators of compromise, matched offline against
+  the abuse.ch datasets in **Tools > Detection rules > IOC**. The tabs are
+  **Endpoints** (`ip:port`), **Domains** (DNS questions, TLS server names, HTTP
+  Host headers and domain-like strings of the sample), **URLs** (HTTP method,
+  host and URI; HTTP/2 only when it is cleartext), **TLS** (server name, JA3, JA4,
+  JA3S and the certificate SHA-1) and **Files** (SHA-256 and MD5 of the sample,
+  executed programs, and files the run created, changed, deleted or left written;
+  the guest hashes executed, deleted and written files, and a saved disk dump of
+  the run adds MD5 for created and changed files, up to 2,000 files of 256 MiB).
+  Network rows come from TShark; each row shows its **sources** (`pcap`, `syscall`,
+  `disk`, `static`), the **process** when exactly one process made a matching call
+  (otherwise "unattributed", with the candidates in Details; a pcap row never
+  gets a guess), when it was first and last seen, and a verdict: **Matched**,
+  **Known FP**, **No match** or **Not checked**. Every verdict carries the
+  dataset's date. **No match is not a clean result**: the datasets list only
+  what abuse.ch has seen. Private, loopback, link-local and multicast addresses
+  and local names, and files with no recorded content, are listed as *Not checked*
+  and are not counted as matched or unmatched. JA4 and JA3S are shown but no
+  abuse.ch feed lists them. A matched indicator also appears in **Process >
+  Suspicious activity** as `c2.ioc_match` (HIGH, or MEDIUM below 75 % and LOW below
+  50 % confidence), with the packet or call as evidence, so it shows in the graph and the
+  Summary; a Known FP does not. **Jump** opens the packet or the call. **Mark as
+  false positive** (with an optional reason) adds the value to the known false
+  positives for the datasets that list it; **Export…** writes the rows listed as
+  CSV or JSON, with dataset dates and verdicts, into the run's `ioc` folder. The
+  filter bar takes `ioc.match == matched`, `ioc.value contains example`,
+  `tls.ja3 == "…"`, `file.role contains executed` and the other fields in the
+  guide. Update the datasets with **Datasets…**; with none loaded every row reads
+  Not checked, and a banner says the datasets are over 14 days old.
+  **Online lookups** are off at every start. When switched on (needs the Auth-Key)
+  **Check online** sends only public values with no offline match (never files,
+  never JA3 or certificate fingerprints, never a value a known false positive
+  excuses) to threatfox-api.abuse.ch and urlhaus-api.abuse.ch, at most 50 values
+  per press; the answers are marked *online* with their time and kept in the run's
+  folder (`ioc-online.json`). **Triage › Summary** has an IOC card with the
+  matched count and the dataset date.
+- **Triage › Network** shows **Endpoints**, **Domains**, **URLs** and **TLS**, all
+  read from TShark (the capture is VM-wide, so no row names a process), each with
+  an IOC column. The 0.7.0 tabs (IPs, Hosts, HTTP, DNS, Sessions) are one click
+  away: **Current layout (0.7.0)**. The filter field names of the old tabs
+  (`http.method`, `dns.name`, `session.alpn`, `network.country`, ...) work in the
+  new ones, so a saved filter keeps working; Endpoints add the port, protocol,
+  frames and bytes, Domains the DNS answer code, TLS one row per server name,
+  server and JA3.
 - **Network**: select an ongoing or saved capture from capture history, or start
   one there. Protocol colors help scan the packets; click an address, protocol
   or port to filter it, or use the counted dropdowns. The packet list and the

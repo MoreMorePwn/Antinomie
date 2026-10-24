@@ -51,6 +51,11 @@ pub(super) const TSHARK_FIELDS: &[&str] = &[
     "http2.headers.path",
     "tls.handshake.ja3",
     "tls.handshake.ja4",
+    "tls.handshake.ja3s",
+    "tls.handshake.certificate",
+    // The size of the frame and the version a hello names.
+    "frame.len",
+    "tls.handshake.extensions.supported_version",
 ];
 
 const F_PROTOCOL: usize = 36;
@@ -63,8 +68,12 @@ const F_H2_AUTHORITY: usize = 43;
 const F_H2_PATH: usize = 44;
 const F_JA3: usize = 45;
 const F_JA4: usize = 46;
-/// Columns older TShark releases lack (the TLS fingerprints).
-const FINGERPRINT_FIELDS: std::ops::Range<usize> = F_JA3..F_JA4 + 1;
+const F_JA3S: usize = 47;
+const F_CERT: usize = 48;
+const F_FRAME_LEN: usize = 49;
+const F_TLS_SUPPORTED: usize = 50;
+/// Columns older TShark releases lack (the TLS fingerprints and certificate).
+const FINGERPRINT_FIELDS: std::ops::Range<usize> = F_JA3..F_CERT + 1;
 /// Columns of the GeoIP lookup, requested only when it is configured.
 const GEOIP_FIELDS: std::ops::Range<usize> = 31..35;
 
@@ -401,6 +410,7 @@ pub(super) fn scan_pcap_query_observed(
         sessions: Vec::new(),
         sessions_omitted: 0,
         network_warning: None,
+        ..PacketIndex::default()
     };
     inventory.capture = path.display().to_string();
     let mut http_page = sorting::Page::new(request, 3, cancel);
@@ -454,6 +464,35 @@ pub(super) fn scan_pcap_query_observed(
                 field(33)
             },
         );
+        let source = if field(2).is_empty() {
+            field(3)
+        } else {
+            field(2)
+        };
+        let source_port = if field(6).is_empty() {
+            field(8)
+        } else {
+            field(6)
+        };
+        let destination_port = if field(7).is_empty() {
+            field(9)
+        } else {
+            field(7)
+        };
+        inventory.packet(&network::PacketFacts {
+            source,
+            source_port,
+            destination,
+            destination_port,
+            protocol: if field(6).is_empty() && field(7).is_empty() {
+                "udp"
+            } else {
+                "tcp"
+            },
+            frame,
+            time,
+            length: field(F_FRAME_LEN).parse().unwrap_or(0),
+        });
         let server_name_source = if field(F_PROTOCOL) == "QUIC" {
             "QUIC SNI"
         } else {
@@ -522,6 +561,17 @@ pub(super) fn scan_pcap_query_observed(
                     },
                 );
                 inventory.host(item(12), frame, time, &[destination.into()], "HTTP");
+                inventory.url(&network::UrlFacts {
+                    frame,
+                    time,
+                    method,
+                    host: item(12),
+                    uri: item(13),
+                    version: item(14),
+                    status,
+                    destination,
+                    port: destination_port,
+                });
                 observe(
                     RowKind::Http,
                     &row,
@@ -609,6 +659,12 @@ pub(super) fn scan_pcap_query_observed(
                     .cloned()
                     .collect();
                 inventory.host(name, frame, time, &addresses, "DNS lookup");
+                if let Some(code) = rcode {
+                    inventory.host_rcode(
+                        name,
+                        &network::rcode_name(i128::from(code), !answers.is_empty()),
+                    );
+                }
                 for at in [10, 6, 5, 2] {
                     row.remove(at);
                 }
@@ -661,11 +717,41 @@ pub(super) fn scan_pcap_query_observed(
                 &[destination.into()],
                 "HTTP/2",
             );
+            inventory.url(&network::UrlFacts {
+                frame,
+                time,
+                method,
+                host: item(F_H2_AUTHORITY),
+                uri: item(F_H2_PATH),
+                version: "HTTP/2",
+                status: None,
+                destination,
+                port: destination_port,
+            });
             observe(RowKind::Http, &row, destination, destination_port)?;
             if http_query.keep_table(&row[0].values) {
                 http_page.push(row)?;
             }
         }
+        inventory.tls_frame(&network::TlsFrame {
+            frame,
+            time,
+            stream: field(10),
+            source: (source, source_port),
+            destination: (destination, destination_port),
+            kinds: field(F_TLS_TYPE)
+                .split('\u{1f}')
+                .filter(|kind| !kind.is_empty())
+                .collect(),
+            sni: field(35),
+            alpn: field(F_ALPN),
+            version: field(40),
+            supported: field(F_TLS_SUPPORTED),
+            ja3: field(F_JA3),
+            ja4: field(F_JA4),
+            ja3s: field(F_JA3S),
+            certificate: field(F_CERT),
+        });
         // TLS and QUIC handshakes and SSH banners, as TShark parsed them
         // without any key: what the encrypted session names about itself.
         for row in session_rows(path, frame, time, &endpoints, &fields) {

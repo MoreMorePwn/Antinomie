@@ -1090,6 +1090,81 @@ Host only. `monitor-core/src/ruleset/abusech.rs` and `monitor-ui/src/rules_windo
 * **Tests.** Fixtures in the packs' real format and mock fetchers; no request
   leaves the machine.
 
+### IOC window and the Network tabs (0.7.1)
+
+Host only. Core: `monitor-core/src/ioc/` (`indicator`, `verdict`, `online`,
+`export`, `strings`, `disk`). UI: `monitor-ui/src/triage/` (`ioc_scan.rs`,
+`ioc_view.rs` and `ioc_view/`, `net_tabs.rs`, `rules/ioc.rs`, `files/ioc.rs`).
+
+* **Collector.** `indicator::Collector` merges plain observations into
+  `Indicator`s of five types (endpoint, domain, URL, TLS group, file), each with
+  its sources, first and last time (host microseconds), per-source details,
+  evidence jumps and the normal-form values it can be matched by (`lookups`).
+  A private address, a local name or a file with no content has no lookup and
+  reads `Not checked`. A process is named only when exactly one process made a
+  matching call: an endpoint by its own `connect`/`sendto` calls, a URL or TLS
+  row by its `ip:port`, a domain by the addresses it resolved or reached, a file
+  by the task that made the call; several processes give `candidates` and no name.
+  Each list stops at 20,000 and counts what it dropped.
+* **Where the observations come from.** The packet scan: `Inventory`
+  (`triage/network.rs`) now also keeps the remote `ip:port` of every frame (the
+  non-local side, else the lower port), HTTP requests, DNS answer codes and TLS
+  sessions (client hello joined to the server hello and certificate by
+  `tcp.stream`; the certificate SHA-1 is computed from TShark's DER; TLS 1.3 hides
+  the certificate). New TShark fields: `tls.handshake.ja3s`,
+  `tls.handshake.certificate`, `frame.len`,
+  `tls.handshake.extensions.supported_version`. The rules pass
+  (`rules/ioc.rs`) logs each `connect`/datagram `sendto` and each successful exec
+  (with the guest's SHA-256 of the image when it is the program itself). The files
+  come from the existing `Change` records (`files/ioc.rs`): created, written at
+  close (with the guest's hash), changed, deleted. The sample's hashes and strings
+  come from the static report (`strings::scan` finds `ip:port`, URLs and domains;
+  file extensions are not domains). Not collected: the eBPF/audit `connect`
+  records (`kernel` source).
+* **Disk hashes.** `ioc/disk.rs`: with a saved, readable disk dump in the run's
+  recording folder, the created, changed and written files (up to 2,000, 256 MiB
+  each) are hashed by the sandboxed disk reader (`DiskRequest::Info`) for SHA-256
+  and MD5; the answer is kept while the dump and the list stay the same.
+* **Matching.** `verdict::scan_datasets` reads each usable feed once, as a stream,
+  for the set of wanted values; `Scan` indexes the hits by value (at most 6
+  records per value). `evaluate` decides the verdict from the loaded feeds that
+  can answer for the type (`coverage`), the hits, the known false positives
+  (`known_fp::find`, an entry for a dataset excuses only that dataset) and any
+  online answers; the date is that of the oldest feed that answered (the feed that
+  matched, for a match). A TLS row needs an SSLBL feed. The answer is cached in
+  `ScanRequest::ioc_cache` under a key of the wanted values and the datasets'
+  `(id, fetch time, switch)` list, so the 5-second refresh of a live run does not
+  read the feeds again; a dataset update, a false-positive entry or an online
+  answer changes the scan's stamp and rescans.
+* **Findings.** `ioc_scan::list_findings` hands each Matched indicator to
+  `Engine::ioc_match`, which records a `c2.ioc_match` row (category C2, T1071,
+  tier by confidence) with packet or call evidence, folded by task and object, so
+  it reaches the findings journal, the graph, the Summary and the live toast like
+  any other row. Known FP and online-excused values make none.
+* **View.** `View` keeps tab, filter text (the table filter language,
+  `FIELDS`), verdict chips, selection, the verdicts (rebuilt when the scan, the
+  false-positive list or the online answers change), a session-only online
+  switch and the online job. Export writes `<run>/ioc/ioc-<type>-<time>.csv|json`
+  (files 0600, never replacing one; CSV cells that start with `=+-@` get a
+  leading apostrophe). The online check (`ioc/online.rs`) asks ThreatFox
+  `search_ioc`/`search_hash` and URLhaus `host`/`url`/`payload`, key on curl's
+  stdin, only to abuse.ch hosts, 50 values at most per press, and stops at the
+  first refusal.
+* **Network section.** `NetLayout::New` shows Endpoints, Domains, URLs and TLS
+  (`net_tabs.rs`); `NetLayout::Old` is the 0.7.0 layout, reachable by the switch.
+  The new tables use their own query slots (17 to 19; URLs reuse slot 3 and its
+  HTTP fields), so the old tabs and their saved filters are unchanged, and
+  `ENDPOINT_FIELDS`, `DOMAIN_FIELDS` and `TLS_FIELDS` keep the old names
+  (`network.country`, `dns.name`, `session.alpn`) beside new ones. The IOC column
+  is added after paging, from the verdicts of the same scan.
+* **Tests.** Core: record parsing of each feed format from small fixtures, the
+  collector's process rule, verdicts under missing, partial, old datasets, false
+  positives and online answers, the online request shapes and key handling with a
+  mock transport, the CSV/JSON export. UI: a fixture pcap scanned with and without
+  datasets (served by a mock fetcher), the finding and its removal by a false
+  positive, the tabs and the layout switch, export, the session-only online
+  switch, and the rules-pass recorder.
+
 ### Accepted ANT-T0097 host UI performance (0.6.2)
 
 Remove render-time filesystem checks for host chooser availability; resolve

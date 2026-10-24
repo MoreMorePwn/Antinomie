@@ -124,6 +124,7 @@ fn native_triage_fixture() {
         .collect();
     let mut view = TriageView::default();
     view.scan = Some(scan);
+    view.net_layout = NetLayout::Old;
     view.last_refresh = Some(Instant::now());
     view.context_key = Some("vm\nboot\nrun\n".into());
     match scene.as_str() {

@@ -383,6 +383,10 @@ pub(super) fn scan_archive_query(
     });
     let omitted_files = file_index.omitted_files;
     let all_changes = file_index.finish();
+    let ioc_files: Vec<files::IocFile> = all_changes
+        .iter()
+        .filter_map(files::Change::ioc_file)
+        .collect();
     counts.changed = all_changes.iter().filter(|change| change.real()).count() as u64;
     let file_changes: Vec<_> = all_changes
         .into_iter()
@@ -485,33 +489,15 @@ pub(super) fn scan_archive_query(
         .unwrap_or_else(|error| PacketIndex {
             counts: None,
             coverage: format!("pcap index failed: {error}"),
-            http: Vec::new(),
-            http_omitted: 0,
-            dns: Vec::new(),
-            dns_omitted: 0,
-            ips: Vec::new(),
-            ips_omitted: 0,
-            hosts: Vec::new(),
-            hosts_omitted: 0,
-            sessions: Vec::new(),
-            sessions_omitted: 0,
             network_warning: Some(format!("Network index unavailable: {error}")),
+            ..PacketIndex::default()
         }),
         None => PacketIndex {
             counts: None,
             coverage: "no pcap is recorded for this run; the loaded packet preview was not used"
                 .into(),
-            http: Vec::new(),
-            http_omitted: 0,
-            dns: Vec::new(),
-            dns_omitted: 0,
-            ips: Vec::new(),
-            ips_omitted: 0,
-            hosts: Vec::new(),
-            hosts_omitted: 0,
-            sessions: Vec::new(),
-            sessions_omitted: 0,
             network_warning: Some("No network capture is available for this run.".into()),
+            ..PacketIndex::default()
         },
     };
     if let Some(writer) = &mut event_journal {
@@ -528,6 +514,38 @@ pub(super) fn scan_archive_query(
         network.network_warning =
             Some("Network end time is estimated from this run’s last retained syscall.".into());
     }
+    // The IOC list: the capture's indicators, the calls', the sample's and the
+    // files'; matched against the datasets, and the matches listed as findings.
+    let capture_state = match (pcap, network.counts) {
+        (None, _) => ioc_scan::Capture::Off,
+        (Some(_), Some(_)) => ioc_scan::Capture::Read,
+        (Some(_), None) => ioc_scan::Capture::Failed(
+            network
+                .network_warning
+                .clone()
+                .unwrap_or_else(|| "it could not be indexed".into()),
+        ),
+    };
+    let ioc = ioc_scan::build(
+        ioc_scan::Gathered {
+            collector: std::mem::take(&mut network.ioc),
+            log: engine.take_ioc(),
+            files: ioc_files,
+            report: request.report.as_deref(),
+            clock: clock_anchor,
+            capture: capture_state,
+            frames: network.counts.map(|counts| counts.0),
+            disk: Default::default(),
+        },
+        request.data_dir.as_deref(),
+        &recording.directory,
+        request.ioc_cache.as_ref(),
+        cancel,
+    )?;
+    let (known, online) = ioc_scan::run_inputs(request.data_dir.as_deref(), &recording.directory);
+    let verdicts = ioc_scan::verdicts(&ioc, &known, &online);
+    ioc_scan::list_findings(&mut engine, &ioc, &verdicts, clock_anchor);
+    ioc_scan::annotate(&mut network.new_tabs, &network.http, &ioc, &verdicts);
     let output = engine.finish(&files);
     let process = finish_processes(nodes);
     let mut graph = graph::Collector::new(&process, request.finding_view);
@@ -692,6 +710,8 @@ pub(super) fn scan_archive_query(
         hosts_omitted: network.hosts_omitted,
         sessions: network.sessions,
         sessions_omitted: network.sessions_omitted,
+        new_tabs: network.new_tabs,
+        ioc: Some(Arc::new(ioc)),
         network_warning: network.network_warning,
     })
 }

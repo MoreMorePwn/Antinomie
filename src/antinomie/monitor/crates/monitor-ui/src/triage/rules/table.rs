@@ -874,6 +874,13 @@ pub(in crate::triage) const SPECS: &[Spec] = &[
         &["T1572", "DET0538", "T1090", "DET0445"],
     ),
     rule(
+        "c2.ioc_match",
+        1,
+        T::High,
+        C::Command,
+        &["T1071", "DET0444"],
+    ),
+    rule(
         "c2.elf_download",
         1,
         T::High,
