@@ -276,6 +276,11 @@ pub struct VmConfig {
     /// Takes precedence over `nat` when both are enabled.
     #[serde(default)]
     pub isolated_network: bool,
+    /// Routed network: the VM's NIC is wired to Antinomie's own gateway, and
+    /// each run picks where its traffic goes (see [`crate::route`]). Between
+    /// runs the gateway lets nothing out. `isolated_network` takes precedence.
+    #[serde(default)]
+    pub routed: bool,
     /// Host parent for newly created VM disk directories; None uses data_dir.
     #[serde(default)]
     pub disk_root: Option<PathBuf>,
@@ -294,6 +299,37 @@ pub struct VmConfig {
     #[serde(default)]
     pub stealth: crate::stealth::StealthProfile,
 }
+/// How a VM's network card is connected.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VmNetwork {
+    Disconnected,
+    /// QEMU user networking with `restrict=on`.
+    Isolated,
+    /// The per-run route gateway.
+    Routed,
+    /// QEMU user networking (NAT).
+    Nat,
+}
+
+impl VmConfig {
+    pub fn network(&self) -> VmNetwork {
+        if self.isolated_network {
+            VmNetwork::Isolated
+        } else if self.routed {
+            VmNetwork::Routed
+        } else if self.nat {
+            VmNetwork::Nat
+        } else {
+            VmNetwork::Disconnected
+        }
+    }
+
+    /// The VM has a network card (a capture can be taken).
+    pub fn has_network(&self) -> bool {
+        self.network() != VmNetwork::Disconnected
+    }
+}
+
 impl Default for VmConfig {
     fn default() -> Self {
         Self {
@@ -304,6 +340,7 @@ impl Default for VmConfig {
             disk_gib: 8,
             nat: false,
             isolated_network: false,
+            routed: false,
             disk_root: None,
             recording_root: None,
             base_identity: None,
@@ -448,6 +485,12 @@ pub struct ExecRequest {
     /// the Phase 2 debugger; the run starts "Stopped at entry").
     #[serde(default)]
     pub debug_on_start: bool,
+    /// Where this run's network traffic goes, on a Routed VM; `None` uses
+    /// the default of Settings > Network routes. A VM that is not Routed has
+    /// one fixed network, so only `None` (or the route it already is) is
+    /// accepted there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<crate::route::RouteKind>,
 }
 
 /// Persisted `artifacts.json` in a run directory links independently retained evidence.
@@ -476,6 +519,10 @@ pub struct RunArtifacts {
     pub core_saved_size: Option<u64>,
     pub core_logical_size: Option<u64>,
     pub issues: Vec<String>,
+    /// The network route the run used, with what the gateway counted once
+    /// the run's tree ended. Absent in runs saved before routes existed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub route: Option<crate::route::RouteRecord>,
     /// The user deleted the run's captures. Older releases ignore this field
     /// and read the unchanged state and the now-empty capture list.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -744,6 +791,10 @@ pub struct RunSummary {
     /// not keep. Unlike `recording_error` they never stop saving.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
+    /// The network route the run used; absent in runs saved before routes
+    /// existed (the UI says "not recorded").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<crate::route::RouteRecord>,
 }
 
 /// Maps one guest monotonic timeline to host wall time without changing the wire.
@@ -1345,6 +1396,7 @@ impl Default for ExecRequest {
             core_max_size: None,
             core_timeout_ms: None,
             debug_on_start: false,
+            route: None,
         }
     }
 }

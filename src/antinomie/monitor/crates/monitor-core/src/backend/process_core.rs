@@ -958,6 +958,7 @@ mod tests {
             state: RunState::Running,
             recording_error: None,
             notes: Vec::new(),
+            route: None,
             execution: None,
             analysis: None,
         }
