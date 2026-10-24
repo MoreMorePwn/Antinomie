@@ -147,12 +147,14 @@ impl Model {
             self.regex.apply(data_dir, changed);
         }
         let full = self.regex.config.custom.len() >= CUSTOM_MAX_COUNT;
-        ui.horizontal_wrapped(|ui| {
+        ui.horizontal(|ui| {
+            // The name takes what the category list and Add leave.
+            let name_width = (ui.available_width() - 190.0).max(300.0);
             ui.add(
                 egui::TextEdit::singleline(&mut self.regex.name)
                     .hint_text(theme::hint_text("Name, e.g. Campaign marker"))
                     .char_limit(80)
-                    .desired_width(260.0),
+                    .desired_width(name_width),
             );
             egui::ComboBox::from_id_salt("regex-new-category")
                 .selected_text(self.regex.category.label())
