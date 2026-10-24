@@ -776,3 +776,29 @@ fn a_matching_banner_drops_the_false_mismatch_and_a_different_one_keeps_it() {
     let run = fixture.wait(&tool.start(&broken, "memnixfs.processes").unwrap());
     assert_eq!(run.partial.len(), 2, "{:?}", run.partial);
 }
+
+#[test]
+fn the_banner_verdict_is_reached_once_per_dump_and_a_stop_gives_none() {
+    let root = temp("verdict");
+    fs::create_dir_all(&root).unwrap();
+    let dump = root.join("dump.bin");
+    let mut memory = vec![7u8; 1000];
+    memory.extend_from_slice(BANNER.as_bytes());
+    fs::write(&dump, &memory).unwrap();
+    let table = root.join("symbols.json.xz");
+    fs::write(&table, isf_with_banner(BANNER)).unwrap();
+    let go = AtomicBool::new(false);
+    let stopped = AtomicBool::new(true);
+
+    // Stopped: not verified, and not remembered.
+    assert!(!banner::matches(&table, &dump, &stopped));
+    assert!(banner::matches(&table, &dump, &go));
+    // The table is gone from under it: only a remembered verdict says yes.
+    fs::write(&table, b"not a table").unwrap();
+    assert!(banner::matches(&table, &dump, &go));
+    // Another dump is checked on its own.
+    let other = root.join("other.bin");
+    fs::write(&other, &memory).unwrap();
+    assert!(!banner::matches(&table, &other, &go));
+    fs::remove_dir_all(&root).unwrap();
+}
