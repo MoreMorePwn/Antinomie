@@ -35,7 +35,8 @@ license and source meta.
 Ghidra, radare2, capa, Detect It Easy, Magika, objdump, readelf and file are not
 bundled: the worker runs them when they are installed on the host. On the
 user's request (**Tools > Analysis tools**) the app downloads capa 9.4.0
-(Apache-2.0), Detect It Easy 3.21 (MIT, with Qt under LGPL-3.0) plus Ubuntu's
+(Apache-2.0), FLOSS 3.2.0 (Apache-2.0, Mandiant; the `floss-v3.2.0-linux.zip`
+release asset of mandiant/flare-floss, pinned by SHA-256), Detect It Easy 3.21 (MIT, with Qt under LGPL-3.0) plus Ubuntu's
 ICU 66 libraries (Unicode license), Ghidra 12.1.4 (Apache-2.0) with the
 Eclipse Temurin 21 JDK (GPL-2.0 with Classpath exception), and Magika 1.1.0
 (Apache-2.0, Google; the `magika-cli-x86_64-unknown-linux-gnu.tar.xz` release
