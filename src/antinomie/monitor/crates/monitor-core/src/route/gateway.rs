@@ -42,8 +42,7 @@ const MAX_FRAME: usize = 65_536;
 const DNS_TTL: u32 = 60;
 const DNS_IN_FLIGHT: usize = 16;
 const TICK: Duration = Duration::from_millis(100);
-/// How long a wireproxy start may take before the route is called down.
-const MANAGED_WAIT: Duration = Duration::from_secs(15);
+const MANAGED_WAIT: Duration = managed::WIREPROXY_WAIT;
 
 /// The addresses the gateway uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -242,22 +241,21 @@ impl Gateway {
                 current.spec.label
             ));
         }
-        let managed = match &spec.wireproxy {
-            Some(launch) => {
-                let socks = match &spec.egress {
-                    Egress::Socks(proxy) => (proxy.host.clone(), proxy.port),
-                    _ => return Err("VPN route without a SOCKS port".into()),
-                };
-                Some(managed::start_wireproxy(
-                    launch,
-                    (&socks.0, socks.1),
-                    &self.work_dir,
-                    MANAGED_WAIT,
-                )?)
-            }
-            None => None,
-        };
-        // On failure `managed` is dropped here, which stops wireproxy.
+        let mut spec = spec;
+        let slot = self
+            .work_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| name.replace(|c: char| !c.is_ascii_alphanumeric() && c != '-', "_"))
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| "gateway".into());
+        let managed = managed::start_for(
+            &mut spec,
+            &self.work_dir,
+            &slot,
+            (MANAGED_WAIT, managed::TOR_WAIT),
+        )?;
+        // On failure `managed` is dropped here, which stops wireproxy or tor.
         probe::check(&spec)?;
         let checked_ms = unix_ms();
         self.shared.install(Active {

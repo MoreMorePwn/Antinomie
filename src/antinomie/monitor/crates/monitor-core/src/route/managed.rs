@@ -21,6 +21,14 @@ pub struct Managed {
 }
 
 impl Managed {
+    pub(super) fn new(child: Child) -> Self {
+        Self { child }
+    }
+
+    pub(super) fn child_mut(&mut self) -> &mut Child {
+        &mut self.child
+    }
+
     #[cfg(test)]
     pub fn pid(&self) -> u32 {
         self.child.id()
@@ -97,4 +105,34 @@ pub(crate) fn start_wireproxy(
         }
         thread::sleep(Duration::from_millis(100));
     }
+}
+
+/// How long a wireproxy start may take before the route is called down.
+pub(crate) const WIREPROXY_WAIT: Duration = Duration::from_secs(15);
+/// How long tor may take to bootstrap. A first start downloads the network
+/// consensus, which is slow on a poor connection.
+pub(crate) const TOR_WAIT: Duration = Duration::from_secs(120);
+
+/// Starts what `spec` needs besides the connection itself: wireproxy for the
+/// VPN route, or an own tor, whose port then becomes the route's SOCKS port.
+/// `log_dir` holds wireproxy's log; `slot` names the tor's data folder.
+/// Dropping the result stops the program.
+pub(crate) fn start_for(
+    spec: &mut super::RouteSpec,
+    log_dir: &Path,
+    slot: &str,
+    waits: (Duration, Duration),
+) -> Result<Option<Managed>, String> {
+    if let Some(launch) = &spec.wireproxy {
+        let super::config::Egress::Socks(proxy) = &spec.egress else {
+            return Err("VPN route without a SOCKS port".into());
+        };
+        return start_wireproxy(launch, (&proxy.host, proxy.port), log_dir, waits.0).map(Some);
+    }
+    if let Some(launch) = spec.tor.clone() {
+        let (managed, port) = super::tor::start_tor(&launch, slot, waits.1)?;
+        spec.set_socks_port(port);
+        return Ok(Some(managed));
+    }
+    Ok(None)
 }

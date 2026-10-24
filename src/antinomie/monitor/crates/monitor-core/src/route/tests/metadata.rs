@@ -1,5 +1,5 @@
 //! How a run records its route, and how the choice of route is made.
-use super::{Rig, config_for, record_for, socks_server::FakeSocks};
+use super::{Rig, config_for, no_data, record_for, socks_server::FakeSocks};
 use crate::{
     api::{ExecRequest, RunArtifacts, VmNetwork},
     route::{RouteConfig, RouteKind, RouteStats, RouteVia, claim_for_run, release_for_run},
@@ -17,19 +17,19 @@ fn a_vm_that_is_not_routed_has_one_fixed_network_and_refuses_another() {
             RouteVia::VmDisconnected,
         ),
     ] {
-        let (record, claim) = claim_for_run(network, None, &config, "r", None).unwrap();
+        let (record, claim) = claim_for_run(network, None, no_data(), &config, "r", None).unwrap();
         assert!(claim.is_none());
         assert_eq!((record.kind, record.via), (kind, via));
         assert!(record.stats.is_none() && record.checked_ms.is_none());
         // Asking for what the network already is is fine.
-        claim_for_run(network, None, &config, "r", Some(kind)).unwrap();
+        claim_for_run(network, None, no_data(), &config, "r", Some(kind)).unwrap();
         // Anything else would be a route the VM cannot carry.
         let other = if kind == RouteKind::Tor {
             RouteKind::Vpn
         } else {
             RouteKind::Tor
         };
-        let error = claim_for_run(network, None, &config, "r", Some(other)).unwrap_err();
+        let error = claim_for_run(network, None, no_data(), &config, "r", Some(other)).unwrap_err();
         assert!(
             error.contains("fixed") && error.contains("Routed"),
             "{error}"
@@ -39,8 +39,15 @@ fn a_vm_that_is_not_routed_has_one_fixed_network_and_refuses_another() {
 
 #[test]
 fn a_routed_vm_without_its_gateway_does_not_run_anything() {
-    let error =
-        claim_for_run(VmNetwork::Routed, None, &RouteConfig::default(), "r", None).unwrap_err();
+    let error = claim_for_run(
+        VmNetwork::Routed,
+        None,
+        no_data(),
+        &RouteConfig::default(),
+        "r",
+        None,
+    )
+    .unwrap_err();
     assert!(error.contains("no network gateway"), "{error}");
 }
 
@@ -51,8 +58,15 @@ fn a_routed_run_records_the_route_and_what_the_gateway_counted() {
     let mut config = config_for(&socks);
     config.default_route = RouteKind::Tor;
     // No route asked for: the default of the settings.
-    let (mut record, claim) =
-        claim_for_run(VmNetwork::Routed, Some(&rig.gateway), &config, "run1", None).unwrap();
+    let (mut record, claim) = claim_for_run(
+        VmNetwork::Routed,
+        Some(&rig.gateway),
+        no_data(),
+        &config,
+        "run1",
+        None,
+    )
+    .unwrap();
     assert_eq!(record.kind, RouteKind::Tor);
     assert_eq!(record.via, RouteVia::Gateway);
     assert_eq!(record.label, format!("Tor via 127.0.0.1:{}", socks.port()));
@@ -65,6 +79,7 @@ fn a_routed_run_records_the_route_and_what_the_gateway_counted() {
     let (record, claim) = claim_for_run(
         VmNetwork::Routed,
         Some(&rig.gateway),
+        no_data(),
         &config,
         "run2",
         Some(RouteKind::InetSim),
@@ -81,6 +96,7 @@ fn a_route_that_cannot_start_is_the_runs_error() {
     let error = claim_for_run(
         VmNetwork::Routed,
         Some(&rig.gateway),
+        no_data(),
         &config,
         "run1",
         Some(RouteKind::Socks5),
@@ -138,6 +154,7 @@ fn nothing_secret_is_in_a_record() {
     let (mut record, claim) = claim_for_run(
         VmNetwork::Routed,
         Some(&rig.gateway),
+        no_data(),
         &config,
         "run1",
         Some(RouteKind::Socks5),

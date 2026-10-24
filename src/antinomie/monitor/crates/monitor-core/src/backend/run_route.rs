@@ -27,6 +27,7 @@ impl Session {
         crate::route::claim_for_run(
             network,
             self.process.gateway.as_ref(),
+            &options.data_dir,
             &config,
             run_id,
             requested,

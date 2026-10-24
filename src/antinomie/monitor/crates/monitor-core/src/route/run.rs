@@ -8,6 +8,7 @@
 //! here chooses another route than the one asked for.
 use super::{Gateway, RouteConfig, RouteKind, RouteRecord, RouteStats, RouteVia};
 use crate::api::VmNetwork;
+use std::{path::Path, time::Duration};
 
 /// What the route of a run needs to remember while the run lasts.
 #[derive(Clone, Copy, Debug)]
@@ -28,6 +29,7 @@ pub struct RouteClaim {
 pub fn claim_for_run(
     network: VmNetwork,
     gateway: Option<&Gateway>,
+    data_dir: &Path,
     config: &RouteConfig,
     run: &str,
     requested: Option<RouteKind>,
@@ -48,7 +50,7 @@ pub fn claim_for_run(
     }
     let gateway = gateway.ok_or("this Routed VM has no network gateway; restart the VM")?;
     let kind = requested.unwrap_or(config.default_route);
-    let spec = config.spec(kind)?;
+    let spec = config.spec(data_dir, kind)?;
     let label = spec.label.clone();
     let baseline = gateway.stats();
     let claimed = gateway.claim(run, spec)?;
@@ -82,26 +84,26 @@ pub fn release_for_run(
 }
 
 /// The check behind Settings > Network routes > Test: brings `kind` up the
-/// way a run would (starting wireproxy for the VPN route) and says whether
-/// it answers. Nothing stays running afterwards.
-pub fn test_route(config: &RouteConfig, kind: RouteKind) -> Result<String, String> {
-    let spec = config.spec(kind)?;
+/// way a run would (starting wireproxy for the VPN route, or the own tor for
+/// the Tor route) and says whether it answers. Nothing stays running
+/// afterwards.
+pub fn test_route(
+    data_dir: &Path,
+    config: &RouteConfig,
+    kind: RouteKind,
+) -> Result<String, String> {
+    let mut spec = config.spec(data_dir, kind)?;
     // wireproxy's log needs a private folder; it is removed with the check.
     let scratch =
         std::env::temp_dir().join(format!("ant-route-test-{}", crate::storage::unique_id()));
     crate::storage::private_dir(&scratch).map_err(|e| e.to_string())?;
     let result = (|| {
-        let managed = match (&spec.wireproxy, &spec.egress) {
-            (Some(launch), super::config::Egress::Socks(proxy)) => {
-                Some(super::managed::start_wireproxy(
-                    launch,
-                    (&proxy.host, proxy.port),
-                    &scratch,
-                    std::time::Duration::from_secs(15),
-                )?)
-            }
-            _ => None,
-        };
+        let managed = super::managed::start_for(
+            &mut spec,
+            &scratch,
+            "settings-test",
+            (Duration::from_secs(15), super::managed::TOR_WAIT),
+        )?;
         super::probe::check(&spec)?;
         drop(managed);
         Ok(format!("{} is up", spec.label))

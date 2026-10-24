@@ -342,6 +342,12 @@ pub fn package(id: &str) -> Option<&'static Package> {
     PACKAGES.iter().find(|package| package.id == id)
 }
 
+/// Whether a tool is a program of the network routes. They are set up in
+/// Settings > Network routes, not with the static-analysis tools.
+pub fn is_route_tool(id: &str) -> bool {
+    matches!(id, "wireproxy" | "tor")
+}
+
 /// The system locations of a tool, as the worker checks them.
 pub fn system_candidates(id: &str) -> &'static [&'static str] {
     match id {

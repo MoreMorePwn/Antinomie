@@ -1,5 +1,5 @@
 //! wireproxy as the VPN route starts it, with stand-in programs.
-use super::{WAIT, scratch};
+use super::{WAIT, no_data, scratch};
 use crate::route::{
     Gateway, GatewayNet, RouteConfig, RouteKind, config::WireproxyLaunch, managed::start_wireproxy,
 };
@@ -133,7 +133,7 @@ fn the_vpn_route_runs_wireproxy_for_the_run_and_stops_it_afterwards() {
     let net = GatewayNet::from_nat(&crate::stealth::NatNetwork::default()).unwrap();
     let gateway = Gateway::start(&dir, net).unwrap();
     gateway
-        .claim("run1", config.spec(RouteKind::Vpn).unwrap())
+        .claim("run1", config.spec(no_data(), RouteKind::Vpn).unwrap())
         .unwrap();
     assert_eq!(gateway.kind(), RouteKind::Vpn);
     // The tunnel's SOCKS port answers while the run holds the route.
@@ -172,7 +172,7 @@ fn a_tunnel_that_does_not_answer_its_check_stops_the_run_and_wireproxy() {
     let net = GatewayNet::from_nat(&crate::stealth::NatNetwork::default()).unwrap();
     let gateway = Gateway::start(&dir, net).unwrap();
     let error = gateway
-        .claim("run1", config.spec(RouteKind::Vpn).unwrap())
+        .claim("run1", config.spec(no_data(), RouteKind::Vpn).unwrap())
         .unwrap_err();
     assert!(error.contains("is not up"), "{error}");
     assert_eq!(gateway.kind(), RouteKind::Drop);
