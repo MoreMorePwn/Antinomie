@@ -1387,6 +1387,28 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    /// How long this thread spent runnable but waiting for a core, from the
+    /// scheduler, or `None` where it does not say.
+    fn run_queue_wait() -> Option<Duration> {
+        let stat = std::fs::read_to_string("/proc/thread-self/schedstat").ok()?;
+        let nanos: u64 = stat.split_whitespace().nth(1)?.parse().ok()?;
+        Some(Duration::from_nanos(nanos))
+    }
+
+    /// How long `work` kept the calling thread, less the time the thread was
+    /// ready to run and the host had no core for it. A UI thread that waits
+    /// on a lock, a disk or a join is still counted, which is what "blocking"
+    /// means; a busy machine that does not schedule the thread is not.
+    fn held_up(work: impl FnOnce()) -> Duration {
+        let (started, waiting) = (std::time::Instant::now(), run_queue_wait());
+        work();
+        let elapsed = started.elapsed();
+        match (waiting, run_queue_wait()) {
+            (Some(before), Some(after)) => elapsed.saturating_sub(after.saturating_sub(before)),
+            _ => elapsed,
+        }
+    }
+
     #[test]
     fn snapshot_preparation_does_not_block_ui_frames() {
         let dir = std::env::temp_dir().join(format!("ant-ui-prep-{}", std::process::id()));
@@ -1476,15 +1498,14 @@ mod tests {
             );
             std::thread::sleep(Duration::from_millis(20));
         }
-        let admitted = std::time::Instant::now();
-        assert!(matches!(
-            view.start_engine(&ctx, engine, None, false, "ready:pack", false),
-            Admit::Started
-        ));
+        let mut admission = None;
+        let admitted = held_up(|| {
+            admission = Some(view.start_engine(&ctx, engine, None, false, "ready:pack", false))
+        });
+        assert!(matches!(admission, Some(Admit::Started)));
         assert!(
-            admitted.elapsed() < Duration::from_millis(80),
-            "admitting the scan blocked the UI thread for {:?}",
-            admitted.elapsed()
+            admitted < Duration::from_millis(80),
+            "admitting the scan blocked the UI thread for {admitted:?}"
         );
         view.rules_generation = view.rules_generation.saturating_add(1);
         let mut frames = Vec::new();
@@ -1494,23 +1515,23 @@ mod tests {
                 std::time::Instant::now() < deadline,
                 "preparation did not finish"
             );
-            let frame = std::time::Instant::now();
-            let _ = ctx.run(
-                egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        egui::vec2(800.0, 480.0),
-                    )),
-                    ..Default::default()
-                },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        view.show(ui, None);
-                    });
-                },
-            );
-            view.tick(&ctx, &input);
-            frames.push(frame.elapsed());
+            frames.push(held_up(|| {
+                let _ = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(800.0, 480.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            view.show(ui, None);
+                        });
+                    },
+                );
+                view.tick(&ctx, &input);
+            }));
             std::thread::sleep(Duration::from_millis(5));
         }
         let slowest = frames.iter().copied().max().unwrap_or_default();
