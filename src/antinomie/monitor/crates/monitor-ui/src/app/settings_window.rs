@@ -401,7 +401,12 @@ impl MonitorApp {
         if self.snapshot.analysis_tools.is_empty() {
             theme::loading_weak(ui, "Reading the tool list…");
         }
-        for tool in &self.snapshot.analysis_tools {
+        for tool in self
+            .snapshot
+            .analysis_tools
+            .iter()
+            .filter(|tool| !antinomie_monitor_core::analysis_tools::is_route_tool(&tool.id))
+        {
             ui.separator();
             ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new(&tool.name).strong().color(theme::text()));

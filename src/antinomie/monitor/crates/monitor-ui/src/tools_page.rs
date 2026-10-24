@@ -2,7 +2,7 @@
 //! system has them, and installing Antinomie's own copy when it does not.
 use crate::theme;
 use antinomie_monitor_core::{
-    analysis_tools::{ToolInstall, ToolStatus},
+    analysis_tools::{self, ToolInstall, ToolStatus},
     Command,
 };
 use eframe::egui::{self, RichText};
@@ -31,7 +31,6 @@ pub(crate) fn show(
     route_programs: &[RouteProgram],
 ) -> Option<Command> {
     let mut command = None;
-    let running = install.is_some_and(|install| !install.finished);
     egui::ScrollArea::vertical()
         .id_salt("analysis_tools")
         .auto_shrink([false, false])
@@ -44,115 +43,29 @@ pub(crate) fn show(
             );
             ui.add_space(6.0);
             theme::section(ui, "Tools");
-            for tool in tools {
+            for tool in tools
+                .iter()
+                .filter(|tool| !analysis_tools::is_route_tool(&tool.id))
+            {
                 ui.separator();
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(&tool.name).strong().color(theme::heading()));
-                    ui.label(RichText::new(&tool.purpose).color(theme::muted()));
-                });
-                ui.horizontal_wrapped(|ui| {
-                    match (&tool.system, &tool.installed) {
-                        (Some(path), installed) => {
-                            ui.colored_label(theme::good(), "On this system");
-                            ui.label(RichText::new(path).monospace().color(theme::muted()));
-                            if let Some(version) = installed {
-                                ui.weak(if tool.id == "magika" {
-                                    // The Properties panel looks here first.
-                                    format!("(Antinomie's {version} also installed; used first)")
-                                } else {
-                                    format!("(Antinomie's {version} also installed; unused)")
-                                });
-                            }
-                        }
-                        (None, Some(version)) => {
-                            ui.colored_label(
-                                theme::good(),
-                                format!("Installed by Antinomie ({version})"),
-                            );
-                        }
-                        (None, None) => {
-                            ui.colored_label(theme::warn(), "Not installed");
-                        }
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let this = install.filter(|install| install.id == tool.id);
-                        if this.is_some_and(|install| !install.finished) {
-                            if ui.button("Cancel").clicked() {
-                                command = Some(Command::CancelToolInstall);
-                            }
-                        } else if tool.installed.is_some() {
-                            if ui
-                                .add_enabled(enabled && !running, egui::Button::new("Remove"))
-                                .on_hover_text("Delete Antinomie's copy")
-                                .clicked()
-                            {
-                                command = Some(Command::RemoveTool {
-                                    id: tool.id.clone(),
-                                });
-                            }
-                        } else if tool.system.is_none()
-                            && ui
-                                .add_enabled(
-                                    enabled && !running,
-                                    egui::Button::new(
-                                        RichText::new(format!(
-                                            "Install {} · {}",
-                                            tool.version,
-                                            size(tool.size)
-                                        ))
-                                        .color(theme::palette().primary_text),
-                                    )
-                                    .fill(theme::primary()),
-                                )
-                                .clicked()
-                        {
-                            command = Some(Command::InstallTool {
-                                id: tool.id.clone(),
-                            });
-                        }
-                    });
-                });
-                if let Some(install) = install.filter(|install| install.id == tool.id) {
-                    if install.finished {
-                        if let Some(error) = &install.error {
-                            crate::activity::error_toast(ui, error);
-                        }
-                    } else {
-                        let fraction = if install.total > 0 {
-                            install.received as f32 / install.total as f32
-                        } else {
-                            0.0
-                        };
-                        ui.add(egui::ProgressBar::new(fraction).text(
-                            match install.stage.as_str() {
-                                "download" => format!(
-                                    "Downloading {} of {}",
-                                    size(install.received),
-                                    size(install.total)
-                                ),
-                                "verify" => "Checking SHA-256".into(),
-                                "unpack" => "Unpacking".into(),
-                                "prepare" => "Creating the Python environment".into(),
-                                "packages" => {
-                                    "Installing the locked Python packages (SHA-256 checked)".into()
-                                }
-                                stage => stage.to_owned(),
-                            },
-                        ));
-                    }
+                if let Some(next) = tool_row(ui, tool, install, enabled) {
+                    command = Some(next);
                 }
             }
             ui.add_space(8.0);
             theme::section(ui, "Network route programs");
             ui.add(
                 egui::Label::new(
-                    "Network routes use these programs, which you install from your \
-                     distribution; Antinomie runs them as separate processes and does not \
-                     bundle them. The routes are set up in Settings > Network routes.",
+                    "Network routes run these programs as separate processes. Tor and wireproxy \
+                     are installed from Settings > Network routes when the system has none; \
+                     INetSim you install from your distribution.",
                 )
                 .wrap(),
             );
-            for program in route_programs {
+            for program in route_programs
+                .iter()
+                .filter(|program| !analysis_tools::is_route_tool(program.name))
+            {
                 ui.separator();
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new(program.name).strong().color(theme::heading()));
@@ -188,5 +101,110 @@ pub(crate) fn show(
                 .weak(),
             );
         });
+    command
+}
+
+/// One managed tool: its name, whether the system has it, the version
+/// Antinomie installed, and the Install, Remove or Cancel button with the
+/// progress of an installation under way. Library > Analysis tools and
+/// Settings > Network routes draw the same row.
+pub(crate) fn tool_row(
+    ui: &mut egui::Ui,
+    tool: &ToolStatus,
+    install: Option<&ToolInstall>,
+    enabled: bool,
+) -> Option<Command> {
+    let mut command = None;
+    let running = install.is_some_and(|install| !install.finished);
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(&tool.name).strong().color(theme::heading()));
+        ui.label(RichText::new(&tool.purpose).color(theme::muted()));
+    });
+    ui.horizontal_wrapped(|ui| {
+        match (&tool.system, &tool.installed) {
+            (Some(path), installed) => {
+                ui.colored_label(theme::good(), "On this system");
+                ui.label(RichText::new(path).monospace().color(theme::muted()));
+                if let Some(version) = installed {
+                    ui.weak(if tool.id == "magika" {
+                        // The Properties panel looks here first.
+                        format!("(Antinomie's {version} also installed; used first)")
+                    } else {
+                        format!("(Antinomie's {version} also installed; unused)")
+                    });
+                }
+            }
+            (None, Some(version)) => {
+                ui.colored_label(theme::good(), format!("Installed by Antinomie ({version})"));
+            }
+            (None, None) => {
+                ui.colored_label(theme::warn(), "Not installed");
+            }
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let this = install.filter(|install| install.id == tool.id);
+            if this.is_some_and(|install| !install.finished) {
+                if ui.button("Cancel").clicked() {
+                    command = Some(Command::CancelToolInstall);
+                }
+            } else if tool.installed.is_some() {
+                if ui
+                    .add_enabled(enabled && !running, egui::Button::new("Remove"))
+                    .on_hover_text("Delete Antinomie's copy")
+                    .clicked()
+                {
+                    command = Some(Command::RemoveTool {
+                        id: tool.id.clone(),
+                    });
+                }
+            } else if tool.system.is_none()
+                && ui
+                    .add_enabled(
+                        enabled && !running,
+                        egui::Button::new(
+                            RichText::new(format!(
+                                "Install {} · {}",
+                                tool.version,
+                                size(tool.size)
+                            ))
+                            .color(theme::palette().primary_text),
+                        )
+                        .fill(theme::primary()),
+                    )
+                    .clicked()
+            {
+                command = Some(Command::InstallTool {
+                    id: tool.id.clone(),
+                });
+            }
+        });
+    });
+    if let Some(install) = install.filter(|install| install.id == tool.id) {
+        if install.finished {
+            if let Some(error) = &install.error {
+                crate::activity::error_toast(ui, error);
+            }
+        } else {
+            let fraction = if install.total > 0 {
+                install.received as f32 / install.total as f32
+            } else {
+                0.0
+            };
+            ui.add(
+                egui::ProgressBar::new(fraction).text(match install.stage.as_str() {
+                    "download" => format!(
+                        "Downloading {} of {}",
+                        size(install.received),
+                        size(install.total)
+                    ),
+                    "verify" => "Checking SHA-256".into(),
+                    "unpack" => "Unpacking".into(),
+                    "prepare" => "Creating the Python environment".into(),
+                    "packages" => "Installing the locked Python packages (SHA-256 checked)".into(),
+                    stage => stage.to_owned(),
+                }),
+            );
+        }
+    }
     command
 }

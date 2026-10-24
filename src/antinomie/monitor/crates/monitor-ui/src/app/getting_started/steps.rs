@@ -337,7 +337,10 @@ impl MonitorApp {
             .snapshot
             .analysis_tools
             .iter()
-            .filter(|tool| !crate::app::debugger::is_console_tool(&tool.id))
+            .filter(|tool| {
+                !crate::app::debugger::is_console_tool(&tool.id)
+                    && !antinomie_monitor_core::analysis_tools::is_route_tool(&tool.id)
+            })
             .cloned()
             .collect();
         let install = self.snapshot.tool_install.clone();

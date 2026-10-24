@@ -10,7 +10,10 @@ use crate::{
     tools_page::RouteProgram,
     widgets::{chip, Tone},
 };
-use antinomie_monitor_core::route::{self, InetSimMode, RouteConfig, RouteKind};
+use antinomie_monitor_core::{
+    analysis_tools::ToolStatus,
+    route::{self, InetSimMode, RouteConfig, RouteKind, TorMode},
+};
 use std::{
     path::{Path, PathBuf},
     sync::mpsc::{self, Receiver},
@@ -21,7 +24,7 @@ type Tested = (RouteKind, Result<String, String>);
 
 fn look_up() -> Vec<RouteProgram> {
     [
-        ("tor", "Tor SOCKS port for the Tor route", "BSD-3-Clause"),
+        ("tor", "Tor client for the Tor route", "BSD-3-Clause"),
         (
             "wireproxy",
             "userspace WireGuard with a SOCKS5 port, for the VPN route",
@@ -125,13 +128,13 @@ impl RouteSettings {
         });
     }
 
-    fn start_test(&mut self, kind: RouteKind, ctx: &egui::Context) {
+    fn start_test(&mut self, kind: RouteKind, data_dir: PathBuf, ctx: &egui::Context) {
         let (tx, rx) = mpsc::sync_channel(1);
         let (config, repaint) = (self.draft.clone(), ctx.clone());
         let spawned = std::thread::Builder::new()
             .name("route-test".into())
             .spawn(move || {
-                let _ = tx.send((kind, route::test_route(&config, kind)));
+                let _ = tx.send((kind, route::test_route(&data_dir, &config, kind)));
                 repaint.request_repaint_of(egui::ViewportId::ROOT);
             });
         match spawned {
@@ -162,7 +165,7 @@ fn hint(ui: &mut egui::Ui, text: &str) {
     ui.add(egui::Label::new(RichText::new(text).small().color(theme::muted())).wrap());
 }
 
-fn program_chip(ui: &mut egui::Ui, name: &str, found: &Option<PathBuf>) {
+fn inetsim_chip(ui: &mut egui::Ui, name: &str, found: &Option<PathBuf>) {
     match found {
         Some(path) => {
             chip(ui, format!("{name} found"), Tone::Good).on_hover_text(path.display().to_string());
@@ -179,6 +182,38 @@ impl MonitorApp {
         self.routes.detect();
     }
 
+    /// The managed tool `id` as the page shows it: a copy found on `PATH`
+    /// counts as the system's, as it does when a route starts.
+    fn route_tool(&self, id: &str) -> Option<ToolStatus> {
+        let mut tool = self
+            .snapshot
+            .analysis_tools
+            .iter()
+            .find(|tool| tool.id == id)
+            .cloned()?;
+        if tool.system.is_none() {
+            tool.system = self
+                .routes
+                .program(id)
+                .map(|path| path.display().to_string());
+        }
+        Some(tool)
+    }
+
+    /// Install, version and status of a route program, drawn like the other
+    /// managed tools.
+    fn route_tool_row(&mut self, ui: &mut egui::Ui, id: &str) {
+        let Some(tool) = self.route_tool(id) else {
+            return;
+        };
+        let install = self.snapshot.tool_install.clone();
+        if let Some(command) =
+            crate::tools_page::tool_row(ui, &tool, install.as_ref(), !self.closing)
+        {
+            self.send(command);
+        }
+    }
+
     /// The Test button of one route and what its last test said.
     fn route_test(&mut self, ui: &mut egui::Ui, kind: RouteKind) {
         let busy = self.routes.testing.is_some();
@@ -187,11 +222,11 @@ impl MonitorApp {
                 .add_enabled(!busy, egui::Button::new("Test"))
                 .on_hover_text(
                     "Brings the route up the way a run would and connects through it to the \
-                     check target. VPN starts wireproxy for the test and stops it again.",
+                     check target. VPN starts wireproxy, and Tor its own tor, for the test and stops it again.",
                 )
                 .clicked()
             {
-                self.routes.start_test(kind, ui.ctx());
+                self.routes.start_test(kind, self.options.data_dir.clone(), ui.ctx());
             }
             if self
                 .routes
@@ -234,8 +269,6 @@ impl MonitorApp {
              Everything runs as your user: no root, no firewall rules.",
         );
         ui.add_space(6.0);
-        let found_tor = self.routes.program("tor");
-        let found_wireproxy = self.routes.program("wireproxy");
         let found_inetsim = self.routes.program("inetsim");
         let draft = &mut self.routes.draft;
         form_grid("settings_routes_default", ui).show(ui, |ui| {
@@ -265,24 +298,56 @@ impl MonitorApp {
         ui.separator();
         ui.label(RichText::new("Tor").strong().color(theme::heading()));
         form_grid("settings_routes_tor", ui).show(ui, |ui| {
-            ui.label("SOCKS address");
+            ui.label("Tor");
             ui.vertical(|ui| {
-                ui.add(text_field(&mut draft.tor.socks).desired_width(260.0));
-                hint(
-                    ui,
-                    "Where your Tor listens (a tor service uses 127.0.0.1:9050). Antinomie does \
-                     not start Tor; names are resolved by Tor.",
+                ui.radio_value(
+                    &mut draft.tor.mode,
+                    TorMode::Own,
+                    "Antinomie runs its own tor for each run",
+                );
+                ui.radio_value(
+                    &mut draft.tor.mode,
+                    TorMode::Socks,
+                    "Use a SOCKS address (a Tor you already run)",
                 );
             });
             ui.end_row();
+            if draft.tor.mode == TorMode::Own {
+                ui.label("tor program");
+                ui.vertical(|ui| {
+                    ui.add(text_field(&mut draft.tor.program).desired_width(260.0))
+                        .on_hover_text(
+                            "Path to a tor program; empty uses PATH, then the copy installed below.",
+                        );
+                    hint(
+                        ui,
+                        "Started when a run claims the route, on a free port of 127.0.0.1, with \
+                         a private data folder of its own and no control port; stopped when the \
+                         run ends. The run waits for Tor to finish bootstrapping and does not \
+                         start if it cannot.",
+                    );
+                });
+                ui.end_row();
+            } else {
+                ui.label("SOCKS address");
+                ui.vertical(|ui| {
+                    ui.add(text_field(&mut draft.tor.socks).desired_width(260.0));
+                    hint(
+                        ui,
+                        "Where your Tor listens (a tor service uses 127.0.0.1:9050). Antinomie \
+                         does not start it; names are resolved by Tor.",
+                    );
+                });
+                ui.end_row();
+            }
             ui.label("Check target");
             ui.add(text_field(&mut draft.tor.probe).desired_width(260.0))
                 .on_hover_text("host:port connected through Tor before a run; empty checks only that Tor answers.");
             ui.end_row();
-            ui.label("Program");
-            program_chip(ui, "tor", &found_tor);
-            ui.end_row();
         });
+        if self.routes.draft.tor.mode == TorMode::Own {
+            self.route_tool_row(ui, "tor");
+        }
         self.route_test(ui, RouteKind::Tor);
         ui.separator();
         let draft = &mut self.routes.draft;
@@ -295,8 +360,9 @@ impl MonitorApp {
             ui.label("wireproxy");
             ui.vertical(|ui| {
                 ui.add(text_field(&mut draft.vpn.wireproxy).desired_width(260.0))
-                    .on_hover_text("Path to the wireproxy program; empty uses PATH.");
-                program_chip(ui, "wireproxy", &found_wireproxy);
+                    .on_hover_text(
+                        "Path to the wireproxy program; empty uses PATH, then the copy installed below.",
+                    );
             });
             ui.end_row();
             ui.label("Configuration file");
@@ -324,6 +390,7 @@ impl MonitorApp {
             );
             ui.end_row();
         });
+        self.route_tool_row(ui, "wireproxy");
         self.route_test(ui, RouteKind::Vpn);
         ui.separator();
         let draft = &mut self.routes.draft;
@@ -400,7 +467,7 @@ impl MonitorApp {
                 .on_hover_text("Every name resolves to this address. It is never connected to.");
             ui.end_row();
             ui.label("Program");
-            program_chip(ui, "inetsim", &found_inetsim);
+            inetsim_chip(ui, "inetsim", &found_inetsim);
             ui.end_row();
         });
         ui.add_space(8.0);
