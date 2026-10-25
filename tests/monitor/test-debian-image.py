@@ -119,7 +119,7 @@ class DebianImageTests(unittest.TestCase):
         self.assertIn("--variant=important", unticked)
         customize = next(arg for arg in command if "antinomie-customize.sh debian" in arg)
         self.assertRegex(customize, r"Etc/UTC none none [0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-"
-                                    r"[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+                                    r"[89ab][0-9a-f]{3}-[0-9a-f]{12} http://deb.debian.org/debian$")
         # The desktops keep the installer's recommends and their documentation.
         desktop = image.mmdebstrap_command(image.options({}), Path("/w/r.tar"), Path("/w/c.sh"),
                                            Path("/w/p"))
@@ -139,18 +139,28 @@ class DebianImageTests(unittest.TestCase):
 
     def test_console_root_is_found_by_uuid_on_any_disk_bus(self):
         root = "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d"
-        self.assertEqual(image.fstab("none", root), f"UUID={root} / ext4 defaults 0 1\n")
+        # The installer's fstab: its header, the root by UUID with
+        # errors=remount-ro, the CD drive.
+        fstab = image.fstab("none", root)
+        self.assertTrue(fstab.startswith("# /etc/fstab: static file system information.\n"))
+        self.assertIn(f"\n# / was on {image.CONSOLE_ROOT_DEVICE} during installation\n"
+                      f"UUID={root} /               ext4    errors=remount-ro 0       1\n", fstab)
+        self.assertTrue(fstab.endswith("/dev/sr0        /media/cdrom0   udf,iso9660 user,noauto"
+                                       "     0       0\n"))
         self.assertEqual(image.fstab("xfce"), "/dev/vda / ext4 defaults 0 1\n")
         self.assertEqual(image.kernel_append("xfce"), image.APPEND)
-        self.assertNotIn("root=", image.kernel_append("none"))
-        self.assertIn("console=ttyS0", image.kernel_append("none"))
+        # GRUB's command line for a Debian install: no serial console, no panic=-1.
+        self.assertEqual(image.kernel_append("none", "6.12.94+deb13-amd64 (x) #1", root),
+                         f"BOOT_IMAGE=/boot/vmlinuz-6.12.94+deb13-amd64 root=UUID={root} ro quiet")
         script = image.customization_script()
-        self.assertIn("rootuuid=${8:-}", script)
-        self.assertIn("printf 'UUID=%s / ext4 defaults 0 1\\n' \"$rootuuid\"", script)
+        self.assertIn("rootuuid=${8:-} mirror=${9:-}", script)
+        self.assertIn("printf 'UUID=%s /               ext4    errors=remount-ro 0       1\\n'"
+                      " \"$rootuuid\"", script)
         with tempfile.TemporaryDirectory() as name:
             tarball = Path(name) / "rootfs.tar"
             for text, ok in ((image.fstab("none", root), True),
-                             (image.fstab("xfce"), False)):
+                             (image.fstab("xfce"), False),
+                             (f"UUID={root} / ext4 defaults 0 1\n", False)):
                 with tarfile.open(tarball, "w") as archive:
                     data = text.encode()
                     entry = tarfile.TarInfo("./etc/fstab")
@@ -198,6 +208,44 @@ class DebianImageTests(unittest.TestCase):
         self.assertTrue({"exim4-daemon-light", "systemd-timesyncd", "man-db", "lsof",
                          "bind9-dnsutils", "ifupdown", "dhcpcd-base", "task-english",
                          "tasksel-data"} <= names)
+
+    def test_console_configuration_is_the_installers(self):
+        script = image.customization_script()
+        sources = image.SOURCES_LIST.format(media="Debian GNU/Linux 13.1.0 _Trixie_ - Official "
+                                            "amd64 NETINST with firmware 20250906-10:22",
+                                            mirror="http://deb.debian.org/debian")
+        self.assertTrue(sources.startswith("#deb cdrom:[Debian GNU/Linux 13.1.0 _Trixie_"))
+        for line in ("deb http://deb.debian.org/debian/ trixie main non-free-firmware",
+                     "deb-src http://deb.debian.org/debian/ trixie main non-free-firmware",
+                     "deb http://security.debian.org/debian-security trixie-security main "
+                     "non-free-firmware",
+                     "deb http://deb.debian.org/debian/ trixie-updates main non-free-firmware",
+                     "# This system was installed using small removable media"):
+            self.assertIn(line + "\n", sources)
+        self.assertIn("apt-get -o Acquire::Languages=en update", script)
+        self.assertIn("# The following lines are desirable for IPv6 capable hosts\n", image.HOSTS)
+        # Locale, time zone and keyboard through debconf, as the installer.
+        self.assertIn("locales locales/default_environment_locale select", script)
+        self.assertIn("rm -f /etc/locale.gen\ndpkg-reconfigure -f noninteractive locales", script)
+        self.assertIn("dpkg-reconfigure -f noninteractive tzdata", script)
+        self.assertIn("rm -f /etc/timezone", script)
+        self.assertNotIn("> /etc/timezone", script)
+        self.assertIn("printf '0.0 0 0.0\\n0\\nUTC\\n' > /etc/adjtime", script)
+        self.assertIn("ln -sf /etc/machine-id /var/lib/dbus/machine-id", script)
+        self.assertIn("tasksel tasksel/first multiselect standard", script)
+        # /tmp stays on disk through a drop-in, not a mask.
+        self.assertNotIn("systemctl mask tmp.mount", script)
+        self.assertIn("ConditionPathIsMountPoint=/tmp", script)
+        self.assertIn("/etc/systemd/system/tmp.mount.d/override.conf", script)
+        with patch.object(image.os, "geteuid", return_value=1000):
+            command = image.mmdebstrap_command(image.options({"desktop": image.CONSOLE,
+                                                              "mirror": "http://m.example/debian/"}),
+                                               Path("/w/r.tar"), Path("/w/c.sh"), Path("/w/p"))
+        # The installation's logs stay; the mirror reaches sources.list.
+        self.assertIn("--skip=cleanup/reproducible", command)
+        customize = next(arg for arg in command if "antinomie-customize.sh" in arg
+                         and "chroot" in arg)
+        self.assertTrue(customize.endswith(" http://m.example/debian"), customize)
 
     def test_image_names_no_antinomie_file_and_masks_only_shipped_units(self):
         script = image.customization_script()

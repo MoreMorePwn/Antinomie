@@ -33,6 +33,13 @@ it runs.
   without curl and systemd-resolved; the package indexes stay. It takes its
   address with ifupdown and dhcpcd on `enp0s25`: its VMs' NIC sits at the
   onboard NIC's PCI slot whatever model the stealth profile picks.
+  Its configuration files are the installer's (sources.list with
+  non-free-firmware and deb-src, fstab, hosts, locale.gen, adjtime, the debconf
+  answers, the installation's dpkg and apt logs), `/tmp` stays on disk without
+  a mask, and it boots with GRUB's command line for Debian (`root=UUID=` of
+  the VM's own disk, `ro quiet`, no serial console, no `panic=-1`). Accounts
+  get the installer's groups and full-name field and a yescrypt password hash,
+  and each VM its own machine ID.
 - **Rootless Debian builds.** Native (`--mode=unshare`) Debian image builds
   move files in and out of the new root as the invoking user, so they no longer
   fail on the private staging directory; the conformance trace suite also runs

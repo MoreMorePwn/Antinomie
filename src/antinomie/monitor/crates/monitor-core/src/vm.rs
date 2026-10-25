@@ -185,6 +185,26 @@ fn initial_size(options: &BackendOptions, launch: &VmLaunchOptions) -> Option<(u
         .flatten()
 }
 
+/// The kernel command line for one VM's disk: a base that names its root by
+/// filesystem UUID (`root=UUID=`, Debian Minimal) names the UUID provisioning
+/// gave this VM's disk; a disk provisioned before that keeps the base's.
+pub(crate) fn vm_kernel_append(append: &str, root_uuid: Option<&str>) -> String {
+    let Some(uuid) = root_uuid else {
+        return append.to_owned();
+    };
+    append
+        .split(' ')
+        .map(|word| {
+            if word.starts_with("root=UUID=") {
+                format!("root=UUID={uuid}")
+            } else {
+                word.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn apply_launch_settings(
     command: &mut Command,
     options: &BackendOptions,
@@ -505,6 +525,17 @@ impl VmProcess {
         // Guests from revision 13 (Antinomie 0.3.0) size their telemetry rings
         // from the kernel command line; older guests keep 256 KiB rings.
         let mut boot = bundle.clone();
+        if bundle
+            .guest
+            .as_ref()
+            .is_some_and(|guest| guest.requires_credentials)
+            && let Ok(account) = crate::guest_account::GuestAccount::load(&vm_dir(options, &vm.id)?)
+        {
+            boot.kernel_append = vm_kernel_append(&boot.kernel_append, account.root_uuid());
+        }
+        if options.serial_console && !boot.kernel_append.contains("console=ttyS0") {
+            boot.kernel_append.push_str(" console=tty0 console=ttyS0");
+        }
         if bundle
             .antinomie_revision
             .is_some_and(|revision| revision >= 13)
@@ -923,6 +954,24 @@ impl Drop for VmProcess {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_vm_boots_the_root_uuid_its_disk_was_given() {
+        let base = "BOOT_IMAGE=/boot/vmlinuz-6.12.94+deb13-amd64 \
+                    root=UUID=0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d ro quiet";
+        assert_eq!(
+            vm_kernel_append(base, Some("11111111-2222-4333-8444-555555555555")),
+            "BOOT_IMAGE=/boot/vmlinuz-6.12.94+deb13-amd64 \
+             root=UUID=11111111-2222-4333-8444-555555555555 ro quiet"
+        );
+        // A disk provisioned before (no UUID of its own) and a base that
+        // names no root by UUID keep their command line.
+        assert_eq!(vm_kernel_append(base, None), base);
+        let busybox = "console=tty0 console=ttyS0 panic=-1";
+        assert_eq!(
+            vm_kernel_append(busybox, Some("11111111-2222-4333-8444-555555555555")),
+            busybox
+        );
+    }
     #[test]
     fn qmp_connect_waits_for_a_greeting_sent_after_the_socket_listens() {
         use std::io::{BufRead, BufReader};
