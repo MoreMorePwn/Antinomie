@@ -24,6 +24,7 @@ import struct
 import subprocess
 import tarfile
 import tempfile
+import uuid
 
 REPO = Path(__file__).resolve().parent.parent
 DEFAULT_OUT = REPO / "work/debian-xfce-base"
@@ -68,6 +69,10 @@ def profile(desktop):
 
 PROFILE = profile("xfce")
 APPEND = "root=/dev/vda rw rootwait console=tty0 console=ttyS0 panic=-1"
+# The console base names no root device: the bootstrap initrd mounts the VM's
+# only disk on whichever bus the stealth profile chose (virtio, SATA, NVMe),
+# and fstab finds it again by filesystem UUID, as a Debian install does.
+CONSOLE_APPEND = "console=tty0 console=ttyS0 panic=-1"
 SUITE = "trixie"
 SECURITY_MIRROR = "http://security.debian.org/debian-security"
 IMAGE_SIZE = 16 << 30
@@ -273,6 +278,24 @@ def packages(desktop):
     return PACKAGES + (task,) + extra
 
 
+def kernel_append(desktop):
+    return CONSOLE_APPEND if desktop == CONSOLE else APPEND
+
+
+def fstab(desktop, root_uuid=None):
+    """The root line: the console base mounts its root by UUID on any disk bus;
+    the desktops keep virtio's /dev/vda (their SATA and NVMe drivers are modules)."""
+    if desktop == CONSOLE:
+        return f"UUID={root_uuid} / ext4 defaults 0 1\n"
+    return "/dev/vda / ext4 defaults 0 1\n"
+
+
+def stealth_support(desktop, config, kernel):
+    """bundle.json stealth_support: SATA and NVMe roots only for the console
+    base, and only when its kernel builds those controllers in."""
+    return monitor_helpers().stealth_support(config, kernel, root_buses=desktop == CONSOLE)
+
+
 def image_size(desktop):
     return CONSOLE_IMAGE_SIZE if desktop == CONSOLE else IMAGE_SIZE
 
@@ -284,10 +307,11 @@ def display(desktop):
 
 def customization_script():
     """Run inside the new root: arguments hostname locale layout variant timezone
-    display-manager session (both "none" for the console base)."""
+    display-manager session (both "none" for the console base) and, for the
+    console base, the root filesystem's UUID."""
     return """#!/bin/sh
 set -eu
-hostname=$1 locale=$2 layout=$3 variant=$4 zone=$5 manager=$6 session=$7
+hostname=$1 locale=$2 layout=$3 variant=$4 zone=$5 manager=$6 session=$7 rootuuid=${8:-}
 export DEBIAN_FRONTEND=noninteractive
 test "$(. /etc/os-release; printf '%s' "$ID:$VERSION_ID")" = debian:13
 test "$(dpkg --print-architecture)" = amd64
@@ -356,7 +380,11 @@ if [ "$manager" = none ]; then
 else
     systemctl set-default graphical.target
 fi
-printf '/dev/vda / ext4 defaults 0 1\\n' > /etc/fstab
+if [ -n "$rootuuid" ]; then
+    printf 'UUID=%s / ext4 defaults 0 1\\n' "$rootuuid" > /etc/fstab
+else
+    printf '/dev/vda / ext4 defaults 0 1\\n' > /etc/fstab
+fi
 printf '%s' """ + shlex.quote(NETWORK_INTERFACES) + """ > /etc/network/interfaces
 printf '%s\\n' "$hostname" > /etc/hostname
 printf '127.0.0.1\\tlocalhost\\n127.0.1.1\\t%s\\n\\n::1\\tlocalhost ip6-localhost ip6-loopback\\nff02::1\\tip6-allnodes\\nff02::2\\tip6-allrouters\\n' "$hostname" > /etc/hosts
@@ -499,6 +527,10 @@ def mmdebstrap_command(values, tarball, script, provenance):
     arguments = " ".join([q(values[key]) for key in
                           ("hostname", "locale", "keyboard_layout", "keyboard_variant", "timezone")]
                          + [q(manager), q(session)])
+    if console:
+        # mkfs.ext4 gives the root this UUID (fstab_uuid reads it back, also
+        # from a cached root filesystem).
+        arguments += " " + str(uuid.uuid4())
     command.append(f'--customize-hook=chroot "$1" sh /tmp/antinomie-customize.sh {arguments}')
     command.append('--customize-hook=rm -f "$1/tmp/antinomie-customize.sh"')
     for path in ("/var/lib/antinomie-image/packages.tsv", "/etc/os-release"):
@@ -554,9 +586,30 @@ def debugfs_cat(raw, path):
                           capture_output=True, text=True).stdout
 
 
-def validate_image(raw):
-    if debugfs_cat(raw, "/etc/fstab") != "/dev/vda / ext4 defaults 0 1\n":
+def fstab_uuid(tarball):
+    """The root UUID the console base's fstab names, from the root filesystem tarball."""
+    with tarfile.open(tarball) as archive:
+        text = archive.extractfile("./etc/fstab").read().decode()
+    match = re.fullmatch(r"UUID=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) "
+                         r"/ ext4 defaults 0 1\n", text)
+    if not match:
+        raise RuntimeError("console base fstab does not mount its root by UUID")
+    return match[1]
+
+
+def filesystem_uuid(raw):
+    output = subprocess.run(["debugfs", "-R", "stats", str(raw)], check=True,
+                            capture_output=True, text=True).stdout
+    match = re.search(r"^Filesystem UUID:\s*(\S+)$", output, re.M)
+    return match[1] if match else None
+
+
+def validate_image(raw, desktop=None, root_uuid=None):
+    desktop = desktop or DEFAULTS["desktop"]
+    if debugfs_cat(raw, "/etc/fstab") != fstab(desktop, root_uuid):
         raise RuntimeError("image has unexpected fstab")
+    if desktop == CONSOLE and filesystem_uuid(raw) != root_uuid:
+        raise RuntimeError("root filesystem UUID does not match fstab")
     shadow = debugfs_cat(raw, "/etc/shadow").splitlines()
     if not any(line.startswith(("root:!", "root:*")) for line in shadow):
         raise RuntimeError("base root password must be locked")
@@ -593,13 +646,15 @@ def root_image(values, raw, staging, provenance, log, modules=None, cache=None):
     if modules is not None:
         add_modules(tarball, modules)
     size = image_size(values["desktop"])
+    root_uuid = fstab_uuid(tarball) if values["desktop"] == CONSOLE else None
     with raw.open("xb") as target:
         target.truncate(size)
-    subprocess.run(["mkfs.ext4", "-q", "-F", "-d", str(tarball), str(raw)],
+    subprocess.run(["mkfs.ext4", "-q", "-F", *(["-U", root_uuid] if root_uuid else []),
+                    "-d", str(tarball), str(raw)],
                    check=True, stdout=log, stderr=subprocess.STDOUT)
     xattrs = apply_xattrs(tarball, raw, staging, log)
     tarball.unlink()
-    validate_image(raw)
+    validate_image(raw, values["desktop"], root_uuid)
     return root | {
             "root_filesystem": "ext4", "root_size": size,
             "conversion": "mkfs.ext4 -d tarball; extended attributes set with debugfs",
@@ -669,7 +724,8 @@ def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=Fa
         (provenance / "build.json").write_text(json.dumps(record, indent=2) + "\n")
         manifest = {"format": 1, "kernel_version": "6.12.94", "schema_id": 1,
                     "kernel": "kernel", "initrd": "initrd.gz", "base_disk": "base.qcow2",
-                    "kernel_append": APPEND, "guest": profile(values["desktop"]),
+                    "kernel_append": kernel_append(values["desktop"]),
+                    "guest": profile(values["desktop"]),
                     "sha256": hashes}
         if symbols:
             shutil.copy2(symbols, bundle / "symbols.json.xz")
@@ -679,10 +735,11 @@ def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=Fa
         if values["name"]:
             manifest["name"] = values["name"]
         # NetworkManager (systemd-networkd on the console base) takes the NAT's
-        # DHCP answer; the root stays /dev/vda (APPEND, fstab), and Debian builds
-        # the SATA and NVMe drivers as modules.
-        manifest["stealth_support"] = helpers.stealth_support(kernel_config, bundle / "kernel",
-                                                              root_buses=False)
+        # DHCP answer. A desktop's root stays /dev/vda (APPEND, fstab) and Debian
+        # builds the SATA and NVMe drivers as modules; the console base mounts
+        # its root by UUID, so its kernel decides (built-in controllers only).
+        manifest["stealth_support"] = stealth_support(values["desktop"], kernel_config,
+                                                      bundle / "kernel")
         if helpers.fixed_display_config(kernel_config, bundle / "kernel"):
             manifest["fixed_display"] = True
             shutil.copy2(kernel_config, provenance / "kernel.config")

@@ -14,7 +14,9 @@ it runs.
   display manager or SSH server. It boots on BusyBox's kernel (no modules),
   takes its address with systemd-networkd, needs 1024 MiB RAM and 4 GiB disk,
   and its VMs ask for a per-VM account like the desktop bases and behave like
-  BusyBox on screen (console, App terminal runs). The bundle is about 350 MB.
+  BusyBox on screen (console, App terminal runs). Its root is mounted by
+  UUID, so stealth profiles can put its disk on SATA or NVMe as on BusyBox.
+  The bundle is about 350 MB.
   Runs on the 0.7.0 guest contract (revision 17); 0.7.0 apps run its bases too.
 - **Rootless Debian builds.** Native (`--mode=unshare`) Debian image builds
   move files in and out of the new root as the invoking user, so they no longer
