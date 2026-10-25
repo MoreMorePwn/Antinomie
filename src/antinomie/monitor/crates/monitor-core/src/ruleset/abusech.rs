@@ -136,11 +136,12 @@ pub const LIVE_PACKS: [LivePack; 6] = [
         license: CC0,
         license_url: "https://sslbl.abuse.ch/blacklist/",
         needs_key: false,
-        retired_if_empty: false,
+        retired_if_empty: true,
         matches: "TLS connections to botnet C2 servers by IP:port",
         limits: &[
             REGENERATED,
             "The aggressive variant is not offered because abuse.ch warns of false positives.",
+            "abuse.ch now serves this file with its header and no entries; the Feodo Tracker pack and dataset list botnet C2 IPs.",
         ],
     },
     LivePack {
@@ -710,8 +711,9 @@ alert tls $HOME_NET any -> [198.51.100.23] 8443 (msg:\"ABUSE.ch Botnet C2 (QakBo
             LIVE_PACKS
                 .iter()
                 .filter(|pack| pack.retired_if_empty)
-                .count(),
-            1
+                .map(|pack| pack.id)
+                .collect::<Vec<_>>(),
+            ["abuse-ch-sslbl-ip", "abuse-ch-sslbl-ja3"]
         );
         let ids: Vec<_> = LIVE_PACKS.iter().map(|pack| pack.id).collect();
         assert!(
@@ -838,7 +840,6 @@ alert tls $HOME_NET any -> [198.51.100.23] 8443 (msg:\"ABUSE.ch Botnet C2 (QakBo
         .unwrap();
         for body in [
             Ok("<html>Too many requests</html>".to_owned()),
-            Ok(String::new()),
             Err("download failed: timeout".to_owned()),
         ] {
             server.say(body);
@@ -862,6 +863,35 @@ alert tls $HOME_NET any -> [198.51.100.23] 8443 (msg:\"ABUSE.ch Botnet C2 (QakBo
             crate::storage::sha256_file_hex(&cache_path(&dir, pack)).unwrap(),
             good.sha256
         );
+        // An empty file is a refused download for a pack abuse.ch still fills,
+        // while the retired SSLBL IP pack answers with one.
+        let live = live_pack("abuse-ch-sslbl").unwrap();
+        let empty = Server::new("");
+        let error = check_live(
+            &dir,
+            live,
+            &Secret::default(),
+            &empty,
+            5_000,
+            &cancel,
+            &mut quiet,
+        )
+        .unwrap_err();
+        assert!(
+            error.starts_with("abuse.ch SSL certificate blacklist:"),
+            "{error}"
+        );
+        let (retired, _) = check_live(
+            &dir,
+            pack,
+            &Secret::default(),
+            &empty,
+            9_000,
+            &cancel,
+            &mut quiet,
+        )
+        .unwrap();
+        assert_eq!(retired.rules, 0, "a header-only file is the retired answer");
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -1209,14 +1239,19 @@ alert tls $HOME_NET any -> [198.51.100.23] 8443 (msg:\"ABUSE.ch Botnet C2 (QakBo
     }
 
     #[test]
-    fn an_empty_ja3_pack_is_retired_not_failed() {
+    fn an_empty_ja3_or_ip_pack_is_retired_not_failed() {
         let dir = dir("retired");
-        let pack = live_pack("abuse-ch-sslbl-ja3").unwrap();
         let cancel = AtomicBool::new(false);
-        for body in [
-            "",
-            "# abuse.ch SSLBL JA3\n# Last updated: 2026-10-22 10:15:00 UTC\n",
-        ] {
+        let mut cases = Vec::new();
+        for id in ["abuse-ch-sslbl-ja3", "abuse-ch-sslbl-ip"] {
+            for body in [
+                "",
+                "# abuse.ch SSLBL\n# Last updated: 2026-10-22 10:15:00 UTC\n",
+            ] {
+                cases.push((live_pack(id).unwrap(), body));
+            }
+        }
+        for (pack, body) in cases {
             let server = Server::new(body);
             let (checked, _) = check_live(
                 &dir,
@@ -1250,6 +1285,7 @@ alert tls $HOME_NET any -> [198.51.100.23] 8443 (msg:\"ABUSE.ch Botnet C2 (QakBo
         }
         // HTML in place of the pack is still an error, and so is an empty
         // file from any other pack.
+        let pack = live_pack("abuse-ch-sslbl-ip").unwrap();
         let html = Server::new("<html>Too many requests</html>");
         assert!(
             check_live(
@@ -1263,7 +1299,7 @@ alert tls $HOME_NET any -> [198.51.100.23] 8443 (msg:\"ABUSE.ch Botnet C2 (QakBo
             )
             .is_err()
         );
-        let other = live_pack("abuse-ch-sslbl-ip").unwrap();
+        let other = live_pack("abuse-ch-sslbl").unwrap();
         let empty = Server::new("");
         assert!(
             check_live(

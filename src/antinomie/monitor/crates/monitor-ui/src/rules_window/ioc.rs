@@ -483,6 +483,7 @@ fn state_chip(status: &FeedStatus, now: u64) -> (&'static str, Tone) {
         (None, true, _) => ("Failed to download", Tone::Warn),
         (None, false, _) => ("Not downloaded", Tone::Neutral),
         (Some(_), true, _) => ("Update failed", Tone::Warn),
+        (Some(_), false, _) if status.retired() => ("Retired upstream", Tone::Neutral),
         (Some(meta), false, _) if meta.stale(now) => ("Old", Tone::Warn),
         (Some(_), false, _) => ("Loaded", Tone::Good),
     }
@@ -500,6 +501,31 @@ mod tests {
     };
 
     const SIZE: egui::Vec2 = egui::vec2(1200.0, 1100.0);
+
+    #[test]
+    fn the_emptied_sslbl_ip_list_reads_retired_upstream_and_a_filled_one_loaded() {
+        let now = ioc::feeds::now_unix();
+        let status = |id: &str, records: u64| FeedStatus {
+            feed: ioc::feeds::feed(id).unwrap(),
+            meta: Some(ioc::feeds::FeedMeta {
+                records,
+                fetched_unix: now,
+                ..Default::default()
+            }),
+            enabled: true,
+            last_error: None,
+        };
+        assert_eq!(
+            state_chip(&status("sslbl-ip", 0), now),
+            ("Retired upstream", Tone::Neutral)
+        );
+        assert_eq!(
+            state_chip(&status("sslbl-ip", 4), now),
+            ("Loaded", Tone::Good)
+        );
+        // Another feed with no records is not called retired.
+        assert!(!status("sslbl-cert", 0).retired());
+    }
 
     // Small files in the feeds' real formats, with reserved example values.
     const THREATFOX: &str = "# \"first_seen_utc\", \"ioc_id\", \"ioc_value\", \"ioc_type\", \"threat_type\", \"fk_malware\", \"malware_alias\", \"malware_printable\", \"last_seen_utc\", \"confidence_level\"\n\"2026-09-02 10:11:12\", \"1831204\", \"203.0.113.45:443\", \"ip:port\", \"botnet_cc\", \"elf.mirai\", \"\", \"Mirai\", \"\", \"75\"\n";
