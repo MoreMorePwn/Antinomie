@@ -67,25 +67,54 @@ pub(in crate::triage) fn show(ui: &mut egui::Ui, state: &mut State, cfg: &Config
             columns,
         ));
     }
+    let hit = response
+        .hover_pos()
+        .filter(|_| !response.dragged())
+        .and_then(|pos| input::hit_test(&layout, cfg.index, DEPTH_PX, pos));
+    state.hovered = match hit {
+        Some(Hit::Marker { record, .. }) => Some(record),
+        _ => None,
+    };
     let painter = ui.painter_at(rect);
     draw(&painter, &layout, state, cfg);
-    if let Some(Hit::Marker { record, near }) = response
-        .hover_pos()
-        .and_then(|pos| input::hit_test(&layout, cfg.index, DEPTH_PX, pos))
-    {
+    if let Some(Hit::Marker { record, near }) = hit {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-        let lines = input::tooltip(cfg.index, record, near, cfg.clock);
-        response.on_hover_ui_at_pointer(|ui| {
-            for (at, line) in lines.iter().enumerate() {
-                if at == 0 {
-                    ui.strong(line);
-                } else {
-                    ui.label(line);
-                }
-            }
-        });
+        let tip = input::tooltip(cfg.index, record, near, cfg.clock);
+        response.on_hover_ui_at_pointer(|ui| tooltip_ui(ui, &tip));
     }
     actions
+}
+
+/// A marker's tooltip: the tier chip and category, the rule's name, what it
+/// did, then the facts in a two-column grid, so the answer to "what is this"
+/// is the first line and the details line up below it.
+fn tooltip_ui(ui: &mut egui::Ui, tip: &input::Tip) {
+    ui.set_max_width(380.0);
+    ui.horizontal(|ui| {
+        let (tier, category) = tip.heading.split_once(" · ").unwrap_or((&tip.heading, ""));
+        crate::widgets::chip(ui, tier, tip.tier.tone());
+        ui.label(RichText::new(category).small().color(theme::muted()));
+    });
+    if !tip.title.is_empty() {
+        ui.label(RichText::new(&tip.title).strong().color(theme::heading()));
+    }
+    if !tip.summary.is_empty() {
+        ui.add(egui::Label::new(RichText::new(&tip.summary).color(theme::text())).wrap());
+    }
+    ui.add_space(2.0);
+    egui::Grid::new("graph-tip")
+        .num_columns(2)
+        .spacing(Vec2::new(10.0, 2.0))
+        .show(ui, |ui| {
+            for (label, value) in &tip.facts {
+                ui.label(RichText::new(*label).small().color(theme::muted()));
+                ui.add(egui::Label::new(value).wrap());
+                ui.end_row();
+            }
+        });
+    if let Some(crowd) = &tip.crowd {
+        ui.label(RichText::new(crowd).small().color(theme::warn()));
+    }
 }
 
 /// The window on the axis now, in its units.
@@ -849,13 +878,6 @@ fn markers(
                     colors.text,
                 );
             }
-            if state.selected == Some(at) {
-                shapes.push(Shape::circle_stroke(
-                    Pos2::new(x, y),
-                    frame.m.glyph() + 3.5,
-                    Stroke::new(2.0_f32, colors.text),
-                ));
-            }
         }
     } else if let Some(pass) = pass {
         // Equal slots: the findings were put into columns of a few pixels,
@@ -875,19 +897,6 @@ fn markers(
                     at + eframe::egui::vec2(4.0, -4.5),
                     1.7,
                     colors.text,
-                ));
-            }
-        }
-        if let Some(at) = state.selected.filter(|at| *at < index.records.len()) {
-            let record = &index.records[at];
-            if let Some(row) = layout
-                .row_of(record.lane)
-                .filter(|row| layout.row_in_view(*row))
-            {
-                shapes.push(Shape::circle_stroke(
-                    Pos2::new(frame.x_rec(record), layout.row_center(row)),
-                    frame.m.glyph() + 3.5,
-                    Stroke::new(2.0_f32, colors.text),
                 ));
             }
         }
@@ -939,21 +948,48 @@ fn markers(
             }
             flush(pending, &mut shapes);
         }
-        if let Some(at) = state.selected.filter(|at| *at < index.records.len()) {
-            let record = &index.records[at];
-            if let Some(row) = layout
-                .row_of(record.lane)
-                .filter(|row| layout.row_in_view(*row))
-            {
-                shapes.push(Shape::circle_stroke(
-                    Pos2::new(frame.x_rec(record), layout.row_center(row)),
-                    frame.m.glyph() + 3.5,
-                    Stroke::new(2.0_f32, colors.text),
-                ));
-            }
+    }
+    // The marker under the pointer, then the selected one, in every drawing
+    // mode: the same two rings whether the findings are icons, dots or cells.
+    for (at, selected) in [(state.hovered, false), (state.selected, true)] {
+        let Some(at) = at.filter(|at| *at < index.records.len()) else {
+            continue;
+        };
+        let record = &index.records[at];
+        let Some(row) = layout
+            .row_of(record.lane)
+            .filter(|row| layout.row_in_view(*row))
+        else {
+            continue;
+        };
+        let center = Pos2::new(frame.x_rec(record), layout.row_center(row));
+        let radius = frame.m.glyph();
+        if selected {
+            shapes.push(Shape::circle_stroke(
+                center,
+                radius + 3.5,
+                Stroke::new(2.0_f32, colors.text),
+            ));
+        } else if state.selected != Some(at) {
+            hover_ring(&mut shapes, center, radius, colors);
         }
     }
     painter.extend(shapes);
+}
+
+/// The halo of a hovered marker: the accent colour, a soft disc under a
+/// solid ring, so it reads on the dark, light and blue themes alike.
+fn hover_ring(shapes: &mut Vec<Shape>, center: Pos2, radius: f32, colors: &Colors) {
+    shapes.push(Shape::circle_filled(
+        center,
+        radius + 4.0,
+        colors.accent.gamma_multiply(0.22),
+    ));
+    shapes.push(Shape::circle_stroke(
+        center,
+        radius + 4.0,
+        Stroke::new(1.5_f32, colors.accent),
+    ));
 }
 
 /// A curved arrow from an injector's marker to the target's lane.

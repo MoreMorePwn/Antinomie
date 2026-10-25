@@ -146,7 +146,7 @@ fn the_summary_strip_spreads_a_few_findings_over_its_whole_width() {
     }
     let overview = builder.finish();
     let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(1200.0, 160.0));
-    let events = super::strip::frame(rect, &overview, 1, Spacing::Events);
+    let events = super::strip::frame(rect, &overview, 1, Spacing::Events, 1.0);
     let layout_share = |frame: &super::view::Frame, at: usize| {
         (frame.x_rec(&overview.records[at]) - frame.plot.left()) / frame.plot.width()
     };
@@ -165,6 +165,6 @@ fn the_summary_strip_spreads_a_few_findings_over_its_whole_width() {
     // The equal slots: the three findings are a third of the plot, not a sliver.
     assert!(layout_share(&events, 2) - layout_share(&events, 0) > 0.3);
     // True time is still there to choose.
-    let time = super::strip::frame(rect, &overview, 1, Spacing::Time);
+    let time = super::strip::frame(rect, &overview, 1, Spacing::Time, 1.0);
     assert!(layout_share(&time, 2) - layout_share(&time, 0) < 0.05);
 }
