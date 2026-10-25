@@ -318,17 +318,13 @@ impl View {
                 for (title, subtitle, labels) in [
                     (
                         "File identification",
-                        "Format and size of the retained executable",
+                        "",
                         &["File type", "Magic", "File size"][..],
                     ),
-                    (
-                        "Exact hashes",
-                        "Identity of the captured specimen",
-                        &["SHA-256", "SHA-1", "MD5"][..],
-                    ),
+                    ("Exact hashes", "", &["SHA-256", "SHA-1", "MD5"][..]),
                     (
                         "Similarity & classifiers",
-                        "Fuzzy hashes computed locally, and Magika when it is installed",
+                        "",
                         &["ssdeep", "TLSH", "Magika"][..],
                     ),
                 ] {

@@ -318,22 +318,20 @@ fn run_in(ui: &mut egui::Ui, choice: &mut RunIn, uid: u32) {
             .response
             .labelled_by(label.id);
     });
-    ui.colored_label(crate::theme::muted(), choice.description());
+    let mut extra = String::new();
     if choice.guest_desktop() {
-        ui.colored_label(
-            crate::theme::muted(),
-            if uid == 0 {
-                "Log in on the VM display as a normal user first; a root run joins that user's desktop. The run also records the launch script."
-            } else {
-                "Log in on the VM display as this UID first. The run also records the launch script that joins the session."
-            },
-        );
+        extra.push_str(if uid == 0 {
+            "Log in on the VM display as a normal user first; a root run joins that user's desktop. The run also records the launch script."
+        } else {
+            "Log in on the VM display as this UID first. The run also records the launch script that joins the session."
+        });
     }
     if *choice == RunIn::GuestDesktopTerminal {
-        ui.colored_label(
-            crate::theme::muted(),
-            "The desktop's own terminal is started for this run, so the program stays in it. A guest with only another x-terminal-emulator may run the program outside the run; Capture All still records it.",
-        );
+        extra.push_str("\nThe desktop's own terminal is started for this run, so the program stays in it. A guest with only another x-terminal-emulator may run the program outside the run; Capture All still records it.");
+    }
+    let description = ui.colored_label(crate::theme::muted(), choice.description());
+    if !extra.is_empty() {
+        description.on_hover_text(extra.trim());
     }
 }
 
@@ -682,13 +680,6 @@ pub(crate) fn no_report(ui: &mut egui::Ui, run_selected: bool) {
                             ui.label(text);
                         });
                     }
-                    ui.add_space(4.0);
-                    ui.label(
-                        RichText::new(
-                            "Reports of earlier runs stay available from the selector above.",
-                        )
-                        .color(theme::muted()),
-                    );
                 });
             });
     });

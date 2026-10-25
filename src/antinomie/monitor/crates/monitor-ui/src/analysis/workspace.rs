@@ -369,7 +369,6 @@ fn export_controls(
     let mut action = None;
     ui.horizontal_wrapped(|ui| {
         ui.menu_button(if kind.is_some() { "Export category…" } else { "Export report…" }, |ui| {
-            ui.weak("Exports include all retained rows");
             for (label, format) in [("Plain text (.txt)", AnalysisExportFormat::Text), ("Structured results (.json)", AnalysisExportFormat::Json)] {
                 if ui.button(label).clicked() {
                     action = Some(ReportAction::Export { report_id: report.id.clone(), kind, format });
@@ -389,7 +388,9 @@ fn export_controls(
                     ui.close_menu();
                 }
             }
-        });
+        })
+        .response
+        .on_hover_text("Exports include all retained rows");
         if directory && ui.button("Open result directory").on_hover_text("Show retained report, specimen, complete listings and any native artifacts").clicked() {
             action = Some(ReportAction::ShowDirectory { report_id: report.id.clone() });
         }
@@ -690,15 +691,6 @@ fn categories(
         "Categories",
         |_| {},
         |ui| {
-            ui.add(
-                egui::Label::new(
-                    egui::RichText::new(
-                        "Click a category to open it; the icon opens it in a separate pane",
-                    )
-                    .color(crate::theme::muted()),
-                )
-                .wrap(),
-            );
             for kind in ALL_KINDS {
                 let Some(section) = report.sections.iter().find(|section| section.kind == kind)
                 else {

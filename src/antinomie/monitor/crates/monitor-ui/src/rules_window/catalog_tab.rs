@@ -165,7 +165,6 @@ impl Model {
         }
         ui.add_space(4.0);
         theme::section(ui, "Rules");
-        ui.weak("The rule list is available only after install. Nothing is downloaded to show it.");
     }
 
     /// Installed, an update of an installed pack, or only on offer.

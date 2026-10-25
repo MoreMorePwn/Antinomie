@@ -718,12 +718,6 @@ fn suspicious_activity_has_tier_and_category_chips_and_evasion_is_one_of_them() 
         .category_on(rules::Category::Evasion));
     assert_eq!(view.scan_request.offsets[0], 0);
     let out = settle(&ctx, &mut view);
-    assert!(
-        texts(&out)
-            .iter()
-            .any(|(text, _)| text.contains("CPUID and RDTSC run inside the program")),
-        "the Evasion chip says what is not visible"
-    );
     let again = texts(&out)
         .into_iter()
         .find(|(text, _)| text.contains("Evasion"))

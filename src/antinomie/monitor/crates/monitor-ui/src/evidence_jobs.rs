@@ -139,10 +139,11 @@ impl EvidenceJobs {
             let mut open = true;
             let mut save = false;
             crate::widgets::window("Export analysis result").open(&mut open).default_width(620.0).collapsible(false).show(ctx, |ui| {
-                ui.label(if export.format == AnalysisExportFormat::GhidraProject { "Destination: new directory for the Ghidra project and database" } else { "Destination: new file" });
+                ui.label(if export.format == AnalysisExportFormat::GhidraProject { "Destination: new directory" } else { "Destination: new file" });
                 ui.add(egui::TextEdit::singleline(&mut export.destination).desired_width(f32::INFINITY));
-                ui.label("Exports all saved rows in this category, including rows outside the current page/filter. Existing files are preserved.");
-                save = ui.add_enabled(!export.destination.trim().is_empty(), egui::Button::new("Export")).clicked();
+                save = ui.add_enabled(!export.destination.trim().is_empty(), egui::Button::new("Export"))
+                    .on_hover_text("Exports all saved rows in this category, including rows outside the current page/filter. Existing files are preserved.")
+                    .clicked();
             });
             if save {
                 if let Some(export) = self.export.take() {

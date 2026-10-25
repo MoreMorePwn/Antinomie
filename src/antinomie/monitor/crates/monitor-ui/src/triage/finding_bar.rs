@@ -52,8 +52,16 @@ impl TriageView {
             // The category's own icon where the others have a check mark: the
             // same one its markers and heat row carry in the graph.
             let icon = super::graph::category_icon(category);
+            let hover = if category == Category::Evasion {
+                format!(
+                    "{}\nEvasion lists the checks made through system calls and the answer each got. CPUID and RDTSC run inside the program and leave no call, so they are not visible here.",
+                    category.label()
+                )
+            } else {
+                category.label().to_owned()
+            };
             if toggle_chip_with(ui, icon, category.chip(), on, None)
-                .on_hover_text(category.label())
+                .on_hover_text(hover)
                 .clicked()
             {
                 if view.categories == 0 {
@@ -80,18 +88,6 @@ impl TriageView {
         {
             view.show_hidden = !view.show_hidden;
             changed = true;
-        }
-        if view.category_on(Category::Evasion) {
-            ui.add(
-                egui::Label::new(
-                    RichText::new(
-                        "Evasion lists the checks made through system calls and the answer each got. CPUID and RDTSC run inside the program and leave no call, so they are not visible here.",
-                    )
-                    .small()
-                    .color(theme::muted()),
-                )
-                .wrap(),
-            );
         }
         if changed {
             self.scan_request.offsets[0] = 0;

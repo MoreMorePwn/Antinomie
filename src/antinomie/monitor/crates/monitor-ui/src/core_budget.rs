@@ -74,10 +74,7 @@ pub(crate) fn caption(
         .guest_ram
         .map(|ram| format!(" ({} MiB RAM)", ram / MIB))
         .unwrap_or_default();
-    let mut text = format!(
-        "Guest accepts up to {} MiB{ram}. Stored bytes only: untouched mappings cost nothing.",
-        limits.max_size / MIB
-    );
+    let mut text = format!("Guest accepts up to {} MiB{ram}.", limits.max_size / MIB);
     let mut warn = false;
     if let Some(available) = available {
         text.push_str(&format!(

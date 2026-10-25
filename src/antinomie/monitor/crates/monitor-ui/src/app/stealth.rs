@@ -563,9 +563,6 @@ fn network(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
             });
             ui.end_row();
         });
-    if profile.nic != NicModel::VirtioNet {
-        ui.colored_label(theme::muted(), "Emulated cards are slower than virtio-net.");
-    }
     ui.colored_label(
         theme::muted(),
         "A network card exists only when the VM's network is Isolated or NAT.",

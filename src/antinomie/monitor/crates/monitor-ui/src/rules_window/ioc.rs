@@ -332,7 +332,7 @@ impl Model {
             .iter()
             .find(|status| Some(status.feed.id) == self.ioc.pick)
         else {
-            ui.weak("Select a dataset for its source and terms.");
+            ui.weak("Select a dataset.");
             return;
         };
         let feed = status.feed;

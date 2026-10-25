@@ -17,7 +17,7 @@ impl MonitorApp {
         let Some(run) = self.selected_triage_run() else {
             self.triage
                 .tick(ui.ctx(), crate::triage::TriageInput::empty());
-            ui.weak("Choose a program run above or in Run history.");
+            ui.weak("Select a run.");
             return;
         };
         let owned_pcap = self.owned_triage_pcap();

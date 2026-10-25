@@ -224,11 +224,11 @@ impl Change {
                 if shown == 512 { ui.weak("Byte preview limited to 512 differences; original syscall evidence retains captured data."); break; }
                 let before = byte_label(self.original.get(offset), self.original_size, *offset);
                 let after = byte_label(self.final_data.get(offset), self.final_size, *offset);
-                ui.monospace(format!("{offset:08x}  {before} → {after}"));
+                ui.monospace(format!("{offset:08x}  {before} → {after}"))
+                    .on_hover_text("?? = unavailable; ∅ = outside a known file extent.");
                 shown += 1;
             }
             if shown == 0 { ui.weak("No differing byte pairs available in captured ranges."); }
-            ui.weak("?? = unavailable; ∅ = outside a known file extent.");
             ui.label(RichText::new("Operation timeline").strong().color(theme::heading()));
             let rows: Vec<_> = self.operations.iter().map(|op| {
                 // A reconnect marker has no call of its own.

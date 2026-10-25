@@ -325,11 +325,10 @@ impl Model {
         ui.horizontal_wrapped(
             |ui| match (self.engine.as_str(), &facts.suricata, &facts.sigma) {
                 ("ids", probe @ ToolProbe::Found { .. }, _) => {
-                    ui.colored_label(theme::good(), format!("{} is installed.", probe.identity()));
-                    ui.colored_label(
-                        theme::muted(),
-                        "Rules that need unsupported keywords or datasets stay skipped.",
-                    );
+                    ui.colored_label(theme::good(), format!("{} is installed.", probe.identity()))
+                        .on_hover_text(
+                            "Rules that need unsupported keywords or datasets stay skipped.",
+                        );
                 }
                 ("ids", probe, _) => {
                     crate::activity::warning(

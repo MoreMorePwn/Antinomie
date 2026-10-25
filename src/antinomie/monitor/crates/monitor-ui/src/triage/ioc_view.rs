@@ -18,6 +18,10 @@ use antinomie_monitor_core::{
 };
 use std::collections::BTreeMap;
 
+/// The one full statement that no match proves nothing; the IOC headline
+/// carries it as a tooltip.
+pub(super) const NO_MATCH_NOTE: &str = "No match is not a clean result: a dataset only lists what abuse.ch has seen, and Antinomie checks only the datasets loaded on this machine.";
+
 mod detail;
 mod list;
 mod summary_tab;
@@ -494,11 +498,7 @@ impl TriageView {
 
     pub(super) fn ioc_section(&mut self, ui: &mut egui::Ui, input: &TriageInput<'_>) {
         let ioc = self.scan.as_ref().and_then(|scan| scan.ioc.clone());
-        presentation::heading(
-            ui,
-            "Indicators of compromise",
-            "Collected from this run's evidence and matched offline against the loaded datasets. No match is not a clean result.",
-        );
+        presentation::heading(ui, "Indicators of compromise", "");
         let Some(ioc) = ioc else {
             if self.scan_rx.is_some() || self.scan.is_none() {
                 theme::loading_weak(ui, "Collecting this run's indicators…");
@@ -667,7 +667,7 @@ impl View {
         if ioc.scan.loaded.is_empty() {
             crate::activity::warning(
                 ui,
-                "No datasets on this machine. Indicators are listed but not checked. Download the abuse.ch feeds (Datasets…) to match them offline.",
+                "No datasets loaded: indicators are not checked. Use Datasets… to download.",
             );
         } else {
             let oldest = ioc
@@ -682,7 +682,7 @@ impl View {
                 crate::activity::warning(
                     ui,
                     format!(
-                        "The datasets are {days} days old. New reports are missing, so No match is weaker than usual. Each verdict shows its dataset date ({}).",
+                        "Datasets are {days} days old ({}); new reports are missing.",
                         feeds::date_text(oldest)
                     ),
                 );
@@ -710,16 +710,13 @@ impl View {
         if self.online_on {
             ui.colored_label(
                 theme::blue(),
-                "Online check is on. Public indicators with no offline match are sent to abuse.ch when you press Check online. Files are never sent. Turn it off again when you are done.",
+                "Online check on: public indicators are sent to abuse.ch.",
             );
         }
         match &ioc.capture {
             Capture::Read => {}
             Capture::Off => {
-                ui.colored_label(
-                    theme::muted(),
-                    "Network capture was turned off for this run. Packet-based indicators were not collected; endpoints from system calls, strings in the sample and files are still listed.",
-                );
+                ui.colored_label(theme::muted(), "Network capture was off for this run.");
             }
             Capture::Failed(error) => {
                 crate::activity::warning(

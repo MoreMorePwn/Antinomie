@@ -142,7 +142,6 @@ impl DependenciesWindow {
             .collapsible(false)
             .default_width(640.0)
             .show(ctx, |ui| {
-                ui.label("Missing requirements block the actions listed below. You can still open saved recordings.");
                 if self.worker.is_some() {
                     crate::theme::loading(ui, "Checking this system…");
                 }
@@ -150,45 +149,64 @@ impl DependenciesWindow {
                     crate::activity::error_toast(ui, error);
                 }
                 if let Some(report) = &self.report {
-                    egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
-                        // Put repairs first so their commands stay visible even
-                        // on a small desktop or with enlarged application text;
-                        // optional tools follow the required ones.
-                        let rank = |check: &dependencies::Check| match (&check.problem, check.optional) {
-                            (Some(_), false) => 0,
-                            (Some(_), true) => 1,
-                            (None, _) => 2,
-                        };
-                        let mut ordered: Vec<_> = report.checks.iter().collect();
-                        ordered.sort_by_key(|check| rank(check));
-                        for check in ordered {
-                            ui.separator();
-                            ui.horizontal_wrapped(|ui| {
-                                ui.label(egui::RichText::new(check.name).strong().color(theme::heading()));
-                                let (color, state) = state_of(check);
-                                ui.colored_label(color, state);
-                            });
-                            ui.weak(check.purpose);
-                            if let Some(problem) = &check.problem {
-                                ui.label(problem);
+                    egui::ScrollArea::vertical()
+                        .max_height(420.0)
+                        .show(ui, |ui| {
+                            // Put repairs first so their commands stay visible even
+                            // on a small desktop or with enlarged application text;
+                            // optional tools follow the required ones.
+                            let rank = |check: &dependencies::Check| match (
+                                &check.problem,
+                                check.optional,
+                            ) {
+                                (Some(_), false) => 0,
+                                (Some(_), true) => 1,
+                                (None, _) => 2,
+                            };
+                            let mut ordered: Vec<_> = report.checks.iter().collect();
+                            ordered.sort_by_key(|check| rank(check));
+                            for check in ordered {
+                                ui.separator();
                                 ui.horizontal_wrapped(|ui| {
-                                    ui.label(check.hint);
-                                    if let Some(command) = check.hint.strip_prefix("On Debian/Ubuntu: ") {
-                                        if ui.small_button("Copy command").clicked() {
-                                            ui.ctx().copy_text(command.to_owned());
-                                        }
-                                    }
+                                    ui.label(
+                                        egui::RichText::new(check.name)
+                                            .strong()
+                                            .color(theme::heading()),
+                                    );
+                                    let (color, state) = state_of(check);
+                                    ui.colored_label(color, state);
                                 });
+                                ui.weak(check.purpose);
+                                if let Some(problem) = &check.problem {
+                                    ui.label(problem);
+                                    ui.horizontal_wrapped(|ui| {
+                                        ui.label(check.hint);
+                                        if let Some(command) =
+                                            check.hint.strip_prefix("On Debian/Ubuntu: ")
+                                        {
+                                            if ui.small_button("Copy command").clicked() {
+                                                ui.ctx().copy_text(command.to_owned());
+                                            }
+                                        }
+                                    });
+                                }
                             }
-                        }
-                    });
+                        });
                 }
                 if let Some(report) = &self.report {
                     install_section(ui, report);
                 }
                 ui.separator();
-                recheck = ui.add_enabled(self.worker.is_none(), egui::Button::new(egui::RichText::new("Check again").color(theme::palette().primary_text)).fill(theme::primary())).clicked();
-                ui.weak("Install with your system's package manager, then check again. Build tools and optional analysis tools are checked in their own dialogs.");
+                recheck = ui
+                    .add_enabled(
+                        self.worker.is_none(),
+                        egui::Button::new(
+                            egui::RichText::new("Check again").color(theme::palette().primary_text),
+                        )
+                        .fill(theme::primary()),
+                    )
+                    .clicked();
+                ui.weak("Check again after installing.");
             });
         if recheck {
             self.recheck(options);
@@ -219,10 +237,9 @@ pub(crate) fn install_section(ui: &mut egui::Ui, report: &Report) {
     ui.separator();
     theme::section(ui, "Install everything missing");
     if let Some(command) = &plan.command {
-        match plan.manager {
-            Some(manager) => ui.weak(format!("Detected {} from /etc/os-release.", manager.name())),
-            None => ui.weak("This distribution's package manager is not recognised; install the packages named above, then run the group step."),
-        };
+        if plan.manager.is_none() {
+            ui.weak("This distribution's package manager is not recognised; install the packages named above, then run the group step.");
+        }
         ui.horizontal_wrapped(|ui| {
             ui.add(egui::Label::new(egui::RichText::new(command).monospace()).selectable(true));
         });

@@ -193,7 +193,7 @@ fn engines_have_installed_and_catalog_tabs_and_keep_the_chosen_one() {
     );
     f.click("Installed");
     assert!(f.model.tab == Tab::Installed);
-    assert!(joined(&f.frame()).contains("No pack installed for this engine"));
+    assert!(joined(&f.frame()).contains("None installed."));
 }
 
 #[test]
@@ -221,7 +221,7 @@ fn a_pack_lists_all_its_rules_and_a_rule_shows_its_details_and_source() {
     let shown = f.frame();
     assert!(top_of(&shown, "Zeta_Rule") < top_of(&shown, "Alpha_Rule"));
     // A click on a rule shows its details and its source text.
-    assert!(joined(&shown).contains("Select a rule for its details"));
+    assert!(joined(&shown).contains("Select a rule."));
     f.click("Alpha_Rule");
     let shown = f.until("$a = \"alpha\"");
     let text = joined(&shown);
@@ -274,10 +274,6 @@ fn a_catalog_pack_shows_its_metadata_and_that_its_rules_come_after_install() {
     assert!(text.contains("Forge Core"), "{text}");
     assert!(text.contains("Available"), "{text}");
     assert!(text.contains("License: Each rule's own license"), "{text}");
-    assert!(
-        text.contains("The rule list is available only after install"),
-        "{text}"
-    );
     assert!(model.job.is_none(), "nothing was fetched");
     assert!(model.rows.is_empty());
     let _ = std::fs::remove_dir_all(&dir);

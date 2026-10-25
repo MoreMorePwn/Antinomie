@@ -36,7 +36,7 @@ impl MonitorApp {
     }
 
     fn step_base(&mut self, ui: &mut egui::Ui) {
-        ui.label("A base image is the guest Linux system with Antinomie's patched kernel. Every VM starts from one.");
+        ui.label("A base image is the guest Linux system with Antinomie's patched kernel.");
         for base in &self.snapshot.bases {
             ui.colored_label(
                 theme::good(),
@@ -130,7 +130,7 @@ impl MonitorApp {
     }
 
     fn step_vm(&mut self, ui: &mut egui::Ui) {
-        ui.label("A VM runs the program you analyse. The defaults below are a sensible start; the stealth profile makes it look like an ordinary desktop PC.");
+        ui.label("A VM runs the program you analyse.");
         for vm in &self.snapshot.vms {
             ui.colored_label(
                 theme::good(),
@@ -284,7 +284,10 @@ impl MonitorApp {
     }
 
     fn step_dependencies(&mut self, ui: &mut egui::Ui) {
-        ui.label("Antinomie needs these programs on this computer. Nothing is installed for you: copy the command and run it in a terminal.");
+        ui.label("Antinomie needs these programs on this computer.")
+            .on_hover_text(
+                "Nothing is installed for you: copy the command and run it in a terminal.",
+            );
         if self.dependencies.checking() {
             theme::loading(ui, "Checking this system…");
         }
@@ -332,7 +335,7 @@ impl MonitorApp {
     }
 
     fn step_tools(&mut self, ui: &mut egui::Ui) {
-        ui.label("Static analysis uses these tools. A missing one is downloaded from its upstream release (SHA-256 checked) into Antinomie's data folder.");
+        ui.label("Tools used by static analysis.").on_hover_text("A missing one is downloaded from its upstream release (SHA-256 checked) into Antinomie's data folder.");
         let tools: Vec<ToolStatus> = self
             .snapshot
             .analysis_tools
@@ -430,14 +433,11 @@ impl MonitorApp {
     }
 
     fn step_rules(&mut self, ui: &mut egui::Ui) {
-        ui.label("Rules tell the scans what to look for: YARA for files, an IDS for network captures, Sigma for behaviour. Downloads only happen from this page, from the hosts named below.");
+        ui.label("Rules tell the scans what to look for: YARA for files, an IDS for network captures, Sigma for behaviour.");
         let data_dir = self.options.data_dir.clone();
         let busy = self.rules_ui.is_busy();
         if !self.settings.outbound_catalog {
-            crate::activity::warning(
-                ui,
-                "Downloads are off: Antinomie contacts no server unless you allow it.",
-            );
+            crate::activity::warning(ui, "Downloads are off.");
             if ui.button("Allow downloads").clicked() {
                 self.settings.outbound_catalog = true;
             }
@@ -538,9 +538,6 @@ impl MonitorApp {
                 crate::activity::warning(ui, notice);
             }
         }
-        if !offers.is_empty() {
-            ui.weak("Unticked packs are not downloaded; packs with terms to read are off until you tick them.");
-        }
         let queued = !self.getting_started.rule_queue.is_empty();
         self.getting_started.rules_chosen = Some(chosen.clone());
         let (status, is_error, progress) = self.rules_ui.status_text();
@@ -583,7 +580,7 @@ impl MonitorApp {
     }
 
     fn step_finish(&mut self, ui: &mut egui::Ui, facts: &Facts) {
-        ui.label("Here is where things stand. Nothing is required: you can start working now and come back from Help > Getting started.");
+        ui.label("Nothing here is required.");
         ui.add_space(4.0);
         for step in Step::ALL.into_iter().filter(|step| *step != Step::Finish) {
             let status = walkthrough::status(step, facts, &self.settings.getting_started);

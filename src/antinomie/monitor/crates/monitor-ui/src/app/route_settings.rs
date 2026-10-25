@@ -161,8 +161,8 @@ impl RouteSettings {
     }
 }
 
-fn hint(ui: &mut egui::Ui, text: &str) {
-    ui.add(egui::Label::new(RichText::new(text).small().color(theme::muted())).wrap());
+fn hint(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    ui.add(egui::Label::new(RichText::new(text).small().color(theme::muted())).wrap())
 }
 
 fn inetsim_chip(ui: &mut egui::Ui, name: &str, found: &Option<PathBuf>) {
@@ -262,8 +262,7 @@ impl MonitorApp {
                 ),
             );
         }
-        hint(
-            ui,
+        hint(ui, "Used by VMs set to Routed; chosen per run.").on_hover_text(
             "Routes apply to VMs whose network is Routed. Each run picks one in the Run form; \
              a route that cannot start stops the run instead of falling back to another. \
              Everything runs as your user: no root, no firewall rules.",
@@ -286,12 +285,11 @@ impl MonitorApp {
             ui.end_row();
             ui.label("Internet");
             ui.vertical(|ui| {
-                ui.checkbox(&mut draft.allow_lan, "Allow private network addresses");
-                hint(
-                    ui,
-                    "Off: the Internet route reaches public addresses only, never this computer \
-                     or your local network.",
-                );
+                ui.checkbox(&mut draft.allow_lan, "Allow private network addresses")
+                    .on_hover_text(
+                        "Off: the Internet route reaches public addresses only, never this \
+                         computer or your local network.",
+                    );
             });
             ui.end_row();
         });
@@ -317,26 +315,22 @@ impl MonitorApp {
                 ui.vertical(|ui| {
                     ui.add(text_field(&mut draft.tor.program).desired_width(260.0))
                         .on_hover_text(
-                            "Path to a tor program; empty uses PATH, then the copy installed below.",
+                            "Path to a tor program; empty uses PATH, then the copy installed below.\n\
+                             Started when a run claims the route, on a free port of 127.0.0.1, with \
+                             a private data folder of its own and no control port; stopped when the \
+                             run ends. The run waits for Tor to finish bootstrapping and does not \
+                             start if it cannot.",
                         );
-                    hint(
-                        ui,
-                        "Started when a run claims the route, on a free port of 127.0.0.1, with \
-                         a private data folder of its own and no control port; stopped when the \
-                         run ends. The run waits for Tor to finish bootstrapping and does not \
-                         start if it cannot.",
-                    );
                 });
                 ui.end_row();
             } else {
                 ui.label("SOCKS address");
                 ui.vertical(|ui| {
-                    ui.add(text_field(&mut draft.tor.socks).desired_width(260.0));
-                    hint(
-                        ui,
-                        "Where your Tor listens (a tor service uses 127.0.0.1:9050). Antinomie \
-                         does not start it; names are resolved by Tor.",
-                    );
+                    ui.add(text_field(&mut draft.tor.socks).desired_width(260.0))
+                        .on_hover_text(
+                            "Where your Tor listens (a tor service uses 127.0.0.1:9050). Antinomie \
+                             does not start it; names are resolved by Tor.",
+                        );
                 });
                 ui.end_row();
             }
@@ -367,13 +361,13 @@ impl MonitorApp {
             ui.end_row();
             ui.label("Configuration file");
             ui.vertical(|ui| {
-                ui.add(text_field(&mut draft.vpn.config).desired_width(260.0));
-                hint(
-                    ui,
-                    "A wireproxy configuration with your WireGuard peer and a [Socks5] section \
-                     (BindAddress = 127.0.0.1:25344). Antinomie starts wireproxy for each run \
-                     and stops it afterwards. WireGuard runs in userspace, so no root is needed.",
-                );
+                ui.add(text_field(&mut draft.vpn.config).desired_width(260.0))
+                    .on_hover_text(
+                        "A wireproxy configuration with your WireGuard peer and a [Socks5] section. \
+                         Antinomie starts wireproxy for each run and stops it afterwards. \
+                         WireGuard runs in userspace, so no root is needed.",
+                    );
+                hint(ui, "Needs [Socks5] with BindAddress = 127.0.0.1:25344.");
             });
             ui.end_row();
             ui.label("Check target");
@@ -383,9 +377,8 @@ impl MonitorApp {
                 );
             ui.end_row();
             ui.label("OpenVPN");
-            hint(
-                ui,
-                "Not supported: OpenVPN needs a TUN device, which needs root. Run it yourself \
+            hint(ui, "Not supported.").on_hover_text(
+                "OpenVPN needs a TUN device, which needs root. Run it yourself \
                  (for example in a container) with a SOCKS5 front end and use the SOCKS5 route.",
             );
             ui.end_row();
@@ -409,14 +402,12 @@ impl MonitorApp {
             ui.label("User name");
             ui.add(text_field(&mut draft.socks5.username).desired_width(260.0));
             ui.end_row();
-            ui.label("Password");
+            ui.label("Password").on_hover_text(
+                "Saved in the data folder, readable by you only. Never logged, shown in run \
+                 records or exported.",
+            );
             ui.vertical(|ui| {
                 super::dialogs::password_input(ui, &mut draft.socks5.password, "route_socks5_password");
-                hint(
-                    ui,
-                    "Saved in the data folder, readable by you only. Never logged, shown in run \
-                     records or exported.",
-                );
             });
             ui.end_row();
             ui.label("Check target");
@@ -453,12 +444,11 @@ impl MonitorApp {
                 ui.end_row();
                 ui.label("Port offset");
                 ui.vertical(|ui| {
-                    ui.add(egui::DragValue::new(&mut draft.inetsim.port_offset).range(0..=60000));
-                    hint(
-                        ui,
-                        "A guest connection to port P goes to INetSim's port P plus the offset, \
-                         so INetSim can run as your user on high ports (bind its services there).",
-                    );
+                    ui.add(egui::DragValue::new(&mut draft.inetsim.port_offset).range(0..=60000))
+                        .on_hover_text(
+                            "A guest connection to port P goes to INetSim's port P plus the offset, \
+                             so INetSim can run as your user on high ports (bind its services there).",
+                        );
                 });
                 ui.end_row();
             }

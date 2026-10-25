@@ -79,8 +79,8 @@ fn nav_item(ui: &mut egui::Ui, label: &str, active: bool) -> egui::Response {
 }
 
 /// A hint line under a control, in the muted color.
-fn hint(ui: &mut egui::Ui, text: &str) {
-    ui.add(egui::Label::new(RichText::new(text).small().color(theme::muted())).wrap());
+fn hint(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    ui.add(egui::Label::new(RichText::new(text).small().color(theme::muted())).wrap())
 }
 
 impl MonitorApp {
@@ -225,7 +225,9 @@ impl MonitorApp {
                 }
             }
             ui.end_row();
-            ui.label("Density");
+            ui.label("Density").on_hover_text(
+                "Compact: tight rows and spacing. Comfortable: taller rows and roomier margins everywhere.",
+            );
             ui.vertical(|ui| {
                 let before = self.settings.compact;
                 widgets::segmented(
@@ -239,10 +241,6 @@ impl MonitorApp {
                 if self.settings.compact != before {
                     theme::set_compact(ctx, self.settings.compact);
                 }
-                hint(
-                    ui,
-                    "Compact: tight rows and spacing. Comfortable: taller rows and roomier margins everywhere.",
-                );
             });
             ui.end_row();
             ui.label("Trace colors");
@@ -253,8 +251,6 @@ impl MonitorApp {
             .on_hover_text("Tint each syscall by its category, like Wireshark's coloring rules");
             ui.end_row();
         });
-        ui.add_space(10.0);
-        hint(ui, "Appearance changes apply at once.");
     }
 
     fn recording_page(&mut self, ui: &mut egui::Ui) {
@@ -322,9 +318,8 @@ impl MonitorApp {
                 ui.checkbox(
                     &mut self.settings.automatic_detection,
                     "Scan retained evidence when it is ready",
-                );
-                hint(
-                    ui,
+                )
+                .on_hover_text(
                     "Runs each engine once per ready input and rule selection. Scan still works when this is off.",
                 );
             });
@@ -334,9 +329,8 @@ impl MonitorApp {
                 ui.checkbox(
                     &mut self.settings.outbound_catalog,
                     "Allow outbound catalog and rule downloads",
-                );
-                hint(
-                    ui,
+                )
+                .on_hover_text(
                     "Only the Detection rules Check and Download buttons use the network. Scans stay offline.",
                 );
             });
@@ -356,9 +350,8 @@ impl MonitorApp {
                 ui.checkbox(
                     &mut self.settings.toast_high_findings,
                     "Toast for live HIGH findings",
-                );
-                hint(
-                    ui,
+                )
+                .on_hover_text(
                     "The first HIGH finding of each rule in a run that is still going raises one toast; later matches of the same rule add ×N to it. Applies at once.",
                 );
             });
@@ -369,7 +362,9 @@ impl MonitorApp {
     fn lookup_page(&mut self, ui: &mut egui::Ui) {
         use crate::triage::AddressLookup;
         form_grid("settings_lookup", ui).show(ui, |ui| {
-            ui.label("Address lookup");
+            ui.label("Address lookup").on_hover_text(
+                "Public destination addresses get a country and organization. Local addresses stay “-” and “local network” and are never queried.",
+            );
             ui.vertical(|ui| {
                 for (mode, label) in [
                     (AddressLookup::Tshark, "TShark GeoIP only"),
@@ -381,22 +376,16 @@ impl MonitorApp {
                 ] {
                     ui.radio_value(&mut self.settings.address_lookup, mode, label);
                 }
-                hint(
-                    ui,
-                    "Public destination addresses get a country and organization. Local addresses stay “-” and “local network” and are never queried.",
-                );
             });
             ui.end_row();
         });
     }
 
     fn tools_page(&mut self, ui: &mut egui::Ui) {
-        ui.add(
-            egui::Label::new(
+        ui.add(egui::Label::new("Tools used by static analysis.").wrap())
+            .on_hover_text(
                 "Static analysis uses these tools when they are installed on this system. Downloads are checked by SHA-256 and used read-only by the analysis sandbox.",
-            )
-            .wrap(),
-        );
+            );
         ui.add_space(6.0);
         if self.snapshot.analysis_tools.is_empty() {
             theme::loading_weak(ui, "Reading the tool list…");
@@ -435,11 +424,9 @@ impl MonitorApp {
                         .map(|flavour| (flavour, crate::widgets::TabItem::new(flavour.label()))),
                     &mut self.settings.debugger.gdb_flavour,
                 );
-                hint(
-                    ui,
+                hint(ui, "Applies on next console start.").on_hover_text(
                     "The gdb in the Debugger tab. GEF (bata24) runs on this system's gdb; pwndbg \
-                     brings its own. Install either from Manage tools. Applies the next time the \
-                     console starts.",
+                     brings its own. Install either from Manage tools.",
                 );
             });
             ui.end_row();
@@ -498,12 +485,9 @@ impl MonitorApp {
             ui.vertical(|ui| {
                 ui.checkbox(&mut self.settings.show_fps, "Show FPS counter")
                     .on_hover_text(
-                        "Shows frames per second, frame time and UI build time in the window corner.",
+                        "Shows frames per second, frame time and UI build time in the window corner. \
+                         It reads only frames that are painted anyway, so an idle window shows idle.",
                     );
-                hint(
-                    ui,
-                    "It reads only frames that are painted anyway, so an idle window shows idle.",
-                );
             });
             ui.end_row();
         });
