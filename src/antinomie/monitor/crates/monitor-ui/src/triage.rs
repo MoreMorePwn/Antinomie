@@ -79,7 +79,7 @@ pub(crate) use sorting::{current as sort_current, header as sort_header, Spec as
 mod summary;
 mod table;
 #[cfg(test)]
-mod torture_qa;
+mod workload_qa;
 #[cfg(test)]
 mod tracer_qa;
 #[cfg(test)]

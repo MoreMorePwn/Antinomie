@@ -3,7 +3,7 @@
 //! plain file work, made by `uring-check record` (see its documentation):
 //!
 //! ```text
-//! uring-check record BUNDLE NEW_DATA_DIR TORTURE FIXTURE   # prints RUN label=dir
+//! uring-check record BUNDLE NEW_DATA_DIR WORKLOAD FIXTURE   # prints RUN label=dir
 //! ANTINOMIE_URING_RUNS='files=DIR;regfiles=DIR;syncfiles=DIR;aio=DIR;sqfiles=DIR;morefiles=DIR;script=DIR;async-io=DIR' \
 //!     cargo test --release -p antinomie-monitor-ui recorded_uring_triage -- --ignored
 //! ```
@@ -377,11 +377,11 @@ fn recorded_uring_triage() {
         &["script run through /bin/sh", "/tmp/uring-script.sh"],
     );
 
-    // The torture module: its linked write/read pairs on async.dat.
-    let torture = get("async-io");
-    has(torture, FileTab::Written, &["(io_uring)", "async.dat"]);
+    // The workload module: its linked write/read pairs on async.dat.
+    let workload = get("async-io");
+    has(workload, FileTab::Written, &["(io_uring)", "async.dat"]);
     has(
-        torture,
+        workload,
         FileTab::Read,
         &["By descriptor (io_uring)", "async.dat"],
     );

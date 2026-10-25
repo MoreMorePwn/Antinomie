@@ -4,7 +4,7 @@
 // detect.c — process starts, file names and connections that public SigmaHQ
 // Linux rules describe. Every command is harmless; the rules match its shape.
 // The commands are the ones the feature sample verified against SigmaHQ.
-#include "torture.h"
+#include "workload.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -68,7 +68,7 @@ MODULE(detect_sigma)
         ran += tool((char *[]){"rm", "-f", "./named-pipe", NULL});
         ran += tool((char *[]){"nohup", "true", NULL});
         // Pipelines whose whole command line the rules read. The decoded
-        // text is "echo antinomie-torture".
+        // text is "echo antinomie-workload".
         ran += tool((char *[]){"sh", "-c", "echo ZWNobyBhbnRpbm9taWUtdG9ydHVyZQo= | base64 -d | sh", NULL});
         ran += tool((char *[]){"sh", "-c", "uname -m | grep x86_64", NULL});
     }
@@ -87,7 +87,7 @@ MODULE(detect_sigma)
     ssize_t self_len = readlink("/proc/self/exe", self, sizeof self - 1);
     if (self_len > 0) {
         self[self_len] = 0;
-        const char *places[] = {"/tmp/antinomie-torture-tmp-exec", "/dev/shm/antinomie-torture-shm-exec"};
+        const char *places[] = {"/tmp/antinomie-workload-tmp-exec", "/dev/shm/antinomie-workload-shm-exec"};
         for (size_t i = 0; i < 2; i++) {
             char *copy[] = {"cp", self, (char *)places[i], NULL};
             if (run_wait(copy) == 0 && chmod(places[i], 0700) == 0) {

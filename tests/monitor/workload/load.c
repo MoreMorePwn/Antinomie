@@ -3,7 +3,7 @@
 //
 // load.c — volume: syscall rate, long sessions, captured buffers, terminal
 // output and short-lived runs.
-#include "torture.h"
+#include "workload.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -20,7 +20,7 @@
 #include <time.h>
 #include <unistd.h>
 
-// ---------------------------------------------------------------- syscall-flood
+// ---------------------------------------------------------------- syscall-load
 
 static atomic_ullong flood_calls;
 static atomic_int flood_stop;
@@ -45,9 +45,9 @@ static void *flood_worker(void *unused)
     return NULL;
 }
 
-MODULE(syscall_flood)
+MODULE(syscall_load)
 {
-    const char *name = "syscall-flood";
+    const char *name = "syscall-load";
     int wanted = seconds(options, 5, 15, 30);
     int duration = wanted > CAP_FLOOD_SECONDS ? CAP_FLOOD_SECONDS : wanted;
     if (duration < wanted)
@@ -179,7 +179,7 @@ MODULE(object_capture)
     return 0;
 }
 
-// ---------------------------------------------------------------- terminal-flood
+// ---------------------------------------------------------------- terminal-load
 
 static void out(const char *text, size_t len)
 {
@@ -192,9 +192,9 @@ static void out(const char *text, size_t len)
     }
 }
 
-MODULE(terminal_flood)
+MODULE(terminal_load)
 {
-    const char *name = "terminal-flood";
+    const char *name = "terminal-load";
     long lines = scaled(options, 2000);
     size_t long_line = (size_t)scaled(options, 16 << 10);
     unsigned long long bytes = 0;

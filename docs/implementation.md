@@ -115,7 +115,7 @@ choosers (`core_budget.rs`) in Run program, Dump core and Settings.
   guest maximum is half of RAM less 128 MiB (64 MiB to 1 GiB), pool twice that;
   exit cores still allocate 64 MiB when armed; deadline 5 s + 10 ms per MiB up to
   60 s. Buffering stays in the guest (no streaming during capture).
-* **Evidence** (BusyBox base, `core-size-check`, torture `crash-core`): light
+* **Evidence** (BusyBox base, `core-size-check`, workload `core-on-crash`): light
   33,996,800 bytes and heavy 134,660,096 bytes complete at budget 256 MiB (stack
   and vsyscall pages captured; heavy at 64 MiB is Partial, reason budget, cut at
   67,321,856 of 134,660,096); extreme 524,730,368 bytes complete at the 1 GiB cap
@@ -318,7 +318,7 @@ optional, so an older guest and an older host both keep working.
   when a worker was the last thread out, the leader had already taken the live
   count to zero and nothing recorded the root's wait status: RUN_STATUS said
   TREE_EXITED without ROOT_EXITED, which the host rejected. Evidence from the
-  previous base (series 0001-0042) and host: `guest-run` with `ant-torture --only
+  previous base (series 0001-0042) and host: `guest-run` with `ant-workload --only
   async-io --level light` as root on four vCPUs gave, for each of four runs with
   Core Dump on Exit, a complete core but no execution status, state `Unknown`,
   "inconsistent run status reply" and the 30-second completion deadline; one of
@@ -344,7 +344,7 @@ optional, so an older guest and an older host both keep working.
   unusable reply names its fields and no longer clears a recorded root exit
   (`ProgramRun::status_unreadable`).
   `examples/uring-check.rs` with `tests/monitor/uring-fixture.c`: `status` (the
-  torture module, linked pairs, cancellation, requests pending at exit, SQPOLL, a
+  workload module, linked pairs, cancellation, requests pending at exit, SQPOLL, a
   non-leader root exit, a crash, AIO, each with and without a core, then Stop of
   runs with workers, handled or ignoring SIGTERM), `boots` (the hardest cases on
   fresh boots), `legacy` (an older base: Finished, exit unknown or right).
@@ -383,7 +383,7 @@ optional, so an older guest and an older host both keep working.
   recordings: `uring-check record` (fixture modes `files`, `regfiles` with
   `OPENAT`, `WRITEV`/`READV`, `WRITE_FIXED`/`READ_FIXED`, a registered file and a
   direct-descriptor open, `syncfiles`, `aio` with vectors, `script`, and the
-  torture module) then the ignored test `recorded_uring_triage`
+  workload module) then the ignored test `recorded_uring_triage`
   (`triage/uring_qa.rs`), which prints every row it matched and fails on any
   that is missing. `uring-check` status modes boot two vCPUs; `record` boots one
   (see Limits).
@@ -830,7 +830,7 @@ optional (an older guest and an older host keep working).
 * **Async records under load (0056).** The publisher waited up to 10 ms before
   each record while its CPU's ring was more than half full, about 100 records
   a second on a busy guest, and the staging queue (1,024 records) overflowed:
-  ant-torture `--only async-io --level light` counted 10,256 async observation
+  ant-workload `--only async-io --level light` counted 10,256 async observation
   losses alone and 10,393 beside the other load modules (7,355 staged packets
   failed; 79 of 640 requests saved). In never-drop mode it now keeps an
   eighth of the ring spare, and a task that may sleep waits up to a second
@@ -865,7 +865,7 @@ optional (an older guest and an older host keep working).
   quota's, counted as such). A trace page whose previews would pass 64 MiB
   now ends early instead of failing.
 * **Stop after heavy file churn.** The guest writes back its page cache before
-  it powers off (`ksys_sync` in the SHUTDOWN handler); after ant-torture's
+  it powers off (`ksys_sync` in the SHUTDOWN handler); after ant-workload's
   file churn on a busy host that took 55 s, so the 10 s shutdown timeout
   forced the VM off and marked the capture forced. Stop polls QEMU's
   `query-blockstats`; while the guest's disk writes grow, the deadline moves

@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //
-// torture.h — shared core of the Antinomie stress samples.
+// workload.h — shared core of the Antinomie stress samples.
 //
 // Every module pushes one monitored feature as far as its level allows. All
 // work is benign, bounded by the caps below and removed afterwards; a module
 // that needs root warns and skips that part when run unprivileged.
-#ifndef ANTINOMIE_TORTURE_H
-#define ANTINOMIE_TORTURE_H
+#ifndef ANTINOMIE_WORKLOAD_H
+#define ANTINOMIE_WORKLOAD_H
 
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
@@ -76,17 +76,17 @@ char *memory_indicator_text(void);
 
 #define MODULE(id) int module_##id(const struct options *options)
 
-MODULE(syscall_flood);
+MODULE(syscall_load);
 MODULE(long_run);
 MODULE(object_capture);
-MODULE(terminal_flood);
+MODULE(terminal_load);
 MODULE(process_tree);
 MODULE(unkillable);
 MODULE(file_churn);
-MODULE(network_storm);
+MODULE(network_load);
 MODULE(async_io);
-MODULE(decoder_zoo);
-MODULE(crash_core);
+MODULE(decoder_variants);
+MODULE(core_on_crash);
 MODULE(memory_tricks);
 MODULE(detect_yara);
 MODULE(detect_sigma);

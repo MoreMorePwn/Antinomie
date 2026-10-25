@@ -3,11 +3,11 @@
 use super::*;
 
 #[test]
-#[ignore = "requires ANTINOMIE_TORTURE_RUN and ANTINOMIE_TORTURE_REPORT; optional ANTINOMIE_TORTURE_PCAP"]
-fn recorded_torture_triage() {
-    let directory = std::path::PathBuf::from(std::env::var_os("ANTINOMIE_TORTURE_RUN").unwrap());
-    let output = std::path::PathBuf::from(std::env::var_os("ANTINOMIE_TORTURE_REPORT").unwrap());
-    let pcap = std::env::var_os("ANTINOMIE_TORTURE_PCAP").map(std::path::PathBuf::from);
+#[ignore = "requires ANTINOMIE_WORKLOAD_RUN and ANTINOMIE_WORKLOAD_REPORT; optional ANTINOMIE_WORKLOAD_PCAP"]
+fn recorded_workload_triage() {
+    let directory = std::path::PathBuf::from(std::env::var_os("ANTINOMIE_WORKLOAD_RUN").unwrap());
+    let output = std::path::PathBuf::from(std::env::var_os("ANTINOMIE_WORKLOAD_REPORT").unwrap());
+    let pcap = std::env::var_os("ANTINOMIE_WORKLOAD_PCAP").map(std::path::PathBuf::from);
     let run: antinomie_monitor_core::RunSummary =
         serde_json::from_slice(&std::fs::read(directory.join("run.json")).unwrap()).unwrap();
     let request = ScanRequest {

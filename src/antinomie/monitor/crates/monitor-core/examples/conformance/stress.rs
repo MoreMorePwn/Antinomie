@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
-//! Stress groups: `ant-torture` at one level. Nothing describes the calls, so
+//! Stress groups: `ant-workload` at one level. Nothing describes the calls, so
 //! every one must be well formed (both phases, a result, no warning) and every
 //! record that is missing must be one the loss counters count.
 use crate::{Group, oracle, recording, trace, vm::GroupRun};
@@ -133,15 +133,15 @@ pub fn check(
         .cloned();
     match &scorecard {
         Some(line) if line.contains(" 0 fail") => {}
-        Some(line) => problems.push(format!("torture: {line}")),
-        None => problems.push("torture printed no scorecard".into()),
+        Some(line) => problems.push(format!("workload: {line}")),
+        None => problems.push("workload printed no scorecard".into()),
     }
     for line in transcript
         .other
         .iter()
         .filter(|line| line.starts_with("FAIL"))
     {
-        problems.push(format!("torture: {line}"));
+        problems.push(format!("workload: {line}"));
     }
     let seconds = run.run_seconds.max(0.001);
     let attempted = stats[5].max(1);
