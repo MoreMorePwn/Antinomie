@@ -300,8 +300,7 @@ impl MemoryView {
                     });
                 }
                 if self.dumps.is_empty() && cx.dumping.is_none() {
-                    ui.add_space(4.0);
-                    ui.colored_label(theme::muted(), "No memory dumps for this VM");
+                    theme::empty_state(ui, "No memory dumps for this VM");
                 }
             });
         if let Some(id) = select {

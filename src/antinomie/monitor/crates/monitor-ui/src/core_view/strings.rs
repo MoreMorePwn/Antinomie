@@ -326,6 +326,16 @@ impl StringsState {
             self.order.as_ref().map(|(_, order)| order.to_vec())
         };
         let count = shown.as_ref().map_or(extracted.strings.len(), Vec::len);
+        if count == 0 {
+            crate::theme::empty_state(
+                ui,
+                if extracted.strings.is_empty() {
+                    "No strings found in this core's memory"
+                } else {
+                    "No string matches the filter"
+                },
+            );
+        }
         let pages = count.div_ceil(PAGE_ROWS).max(1);
         self.page = self.page.min(pages - 1);
         self.pager(ui, count, extracted.strings.len(), pages);
