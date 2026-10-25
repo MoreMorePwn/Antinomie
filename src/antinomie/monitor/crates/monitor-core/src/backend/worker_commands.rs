@@ -748,7 +748,8 @@ impl Worker {
             storage::private_dir(dir).map_err(|e| e.to_string())?;
             storage::create_overlay(&self.options, dir, vm.disk_gib, &bundle)?;
             if let Some(credentials) = credentials {
-                let account = crate::guest_account::GuestAccount::from_credentials(credentials)?;
+                let mut account =
+                    crate::guest_account::GuestAccount::from_credentials(credentials)?;
                 account.provision(&dir.join("disk.qcow2"))?;
                 account.save(dir)?;
             }

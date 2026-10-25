@@ -164,8 +164,8 @@ work/monitor-host/antinomie-monitor --install-base work/debian-xfce-base
 ```
 
 Alternatively use **File > Import base** with the completed bundle directory.
-Creating a Debian VM still provisions its account with `virt-customize`
-(libguestfs).
+Creating a Debian VM provisions its account with `guestfish`
+(libguestfs), which also gives the disk its own filesystem UUID.
 In **New VM**, choose **Debian 13 (Xfce)**, then enter a username, password and
 confirmation. Minimum resources are 2048 MiB RAM and 16 GiB disk; the RAM
 ceiling is 8192 MiB. Creation provisions the disk offline and

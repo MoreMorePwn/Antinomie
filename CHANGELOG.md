@@ -18,6 +18,12 @@ it runs.
   UUID, so stealth profiles can put its disk on SATA or NVMe as on BusyBox.
   The bundle is about 350 MB.
   Runs on the 0.7.0 guest contract (revision 17); 0.7.0 apps run its bases too.
+- **Debian Minimal looks installed, not built.** The image no longer names
+  Antinomie or the build host (the package inventory, network and tmpfiles
+  file names, the build host's resolv.conf that systemd-resolved kept, masks for
+  agents that are not installed); the build fails if such a trace comes back.
+  Each new or reset Debian VM gets its own root filesystem UUID and directory
+  hash seed, and no sudoers.d file. Account provisioning now uses `guestfish`.
 - **Rootless Debian builds.** Native (`--mode=unshare`) Debian image builds
   move files in and out of the new root as the invoking user, so they no longer
   fail on the private staging directory; the conformance trace suite also runs

@@ -15,7 +15,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const HASH_TIMEOUT: Duration = Duration::from_secs(15);
-const PROVISION_TIMEOUT: Duration = Duration::from_secs(180);
+/// One libguestfs appliance run: the probe, or the provisioning itself
+/// (filesystem check, new UUID, directory reindex, account).
+const PROVISION_TIMEOUT: Duration = Duration::from_secs(240);
 
 #[cfg(test)]
 thread_local! {
@@ -30,15 +32,108 @@ pub(crate) fn fail_next_provision() {
 pub(crate) struct GuestAccount {
     username: String,
     password_hash: String,
+    /// The root filesystem UUID provisioning gave this VM's disk: every VM
+    /// gets its own, as every installation does. None for disks provisioned
+    /// before 0.7.1, which keep their base's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    root_uuid: Option<String>,
 }
 impl std::fmt::Debug for GuestAccount {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GuestAccount")
             .field("username", &self.username)
             .field("password_hash", &"[REDACTED]")
+            .field("root_uuid", &self.root_uuid)
             .finish()
     }
 }
+
+/// The VM disk as the libguestfs appliance sees it (always `/dev/sda`).
+#[derive(Debug, PartialEq, Eq)]
+struct DiskLayout {
+    /// The root filesystem: the whole disk (`/dev/sda`) or a partition.
+    root: String,
+}
+
+/// Whether `text` is a lowercase RFC 4122 UUID as `blkid` prints it.
+pub(crate) fn valid_uuid(text: &str) -> bool {
+    text.len() == 36
+        && text.bytes().enumerate().all(|(index, c)| match index {
+            8 | 13 | 18 | 23 => c == b'-',
+            _ => c.is_ascii_digit() || (b'a'..=b'f').contains(&c),
+        })
+}
+
+/// A random (version 4) UUID.
+fn random_uuid() -> Result<String, String> {
+    let mut bytes = [0u8; 16];
+    File::open("/dev/urandom")
+        .and_then(|mut source| source.read_exact(&mut bytes))
+        .map_err(|_| "cannot read /dev/urandom for the VM's filesystem UUID")?;
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    Ok(format!(
+        "{}-{}-{}-{}-{}",
+        &hex[..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..]
+    ))
+}
+
+/// A guestfish double-quoted string: backslash escapes for `\`, `"` and
+/// control characters (guestfish decodes them before the call).
+fn fish_quote(text: &str) -> String {
+    let mut quoted = String::with_capacity(text.len() + 2);
+    quoted.push('"');
+    for c in text.chars() {
+        match c {
+            '\\' => quoted.push_str("\\\\"),
+            '"' => quoted.push_str("\\\""),
+            '\n' => quoted.push_str("\\n"),
+            '\t' => quoted.push_str("\\t"),
+            c if c.is_control() => quoted.push_str(&format!("\\x{:02x}", c as u32)),
+            c => quoted.push(c),
+        }
+    }
+    quoted.push('"');
+    quoted
+}
+
+/// The ext4 root among the probe's `list-filesystems` lines.
+fn parse_probe(output: &str) -> Result<DiskLayout, String> {
+    let roots: Vec<&str> = output
+        .lines()
+        .filter_map(|line| line.split_once(": "))
+        .filter(|(_, kind)| kind.trim() == "ext4")
+        .map(|(device, _)| device.trim())
+        .collect();
+    match roots[..] {
+        [root]
+            if root
+                .strip_prefix("/dev/sda")
+                .is_some_and(|number| number.bytes().all(|c| c.is_ascii_digit())) =>
+        {
+            Ok(DiskLayout { root: root.into() })
+        }
+        _ => Err("the VM disk does not hold exactly one ext4 root filesystem".into()),
+    }
+}
+
+fn guestfish(executable: &Path, disk: &Path, writable: bool) -> Command {
+    let mut command = Command::new(executable);
+    command
+        .arg(if writable { "--rw" } else { "--ro" })
+        .args(["--no-progress-bars", "--format=qcow2", "-a"])
+        .arg(disk)
+        .env("LIBGUESTFS_BACKEND", "direct")
+        .env("LIBGUESTFS_DEBUG", "0")
+        .env("LIBGUESTFS_TRACE", "0");
+    command
+}
+
 impl GuestAccount {
     pub(crate) fn from_credentials(credentials: GuestCredentials) -> Result<Self, String> {
         Self::hash_with(credentials, Path::new("openssl"))
@@ -54,6 +149,7 @@ impl GuestAccount {
         let account = Self {
             username: credentials.username,
             password_hash,
+            root_uuid: None,
         };
         account.validate()?;
         Ok(account)
@@ -74,11 +170,22 @@ impl GuestAccount {
         {
             return Err("invalid salted SHA-512 password hash".into());
         }
+        if self
+            .root_uuid
+            .as_deref()
+            .is_some_and(|uuid| !valid_uuid(uuid))
+        {
+            return Err("invalid provisioned root filesystem UUID".into());
+        }
         Ok(())
     }
     /// The account's name (uid and gid 1000 in the guest).
     pub(crate) fn username(&self) -> &str {
         &self.username
+    }
+    /// The root filesystem UUID provisioning gave the VM's disk.
+    pub(crate) fn root_uuid(&self) -> Option<&str> {
+        self.root_uuid.as_deref()
     }
     pub(crate) fn save(&self, directory: &Path) -> Result<(), String> {
         self.validate()?;
@@ -106,36 +213,80 @@ impl GuestAccount {
         account.validate()?;
         Ok(account)
     }
-    pub(crate) fn provision(&self, disk: &Path) -> Result<(), String> {
+    /// Make the base's disk this VM's own, offline: a root filesystem UUID
+    /// and directory hash seed of its own (fstab follows), then the account.
+    pub(crate) fn provision(&mut self, disk: &Path) -> Result<(), String> {
         #[cfg(test)]
         if FAIL_PROVISION.with(|fail| fail.replace(false)) {
             return Err("injected offline provisioning failure".into());
         }
         let executable =
-            crate::dependencies::require_tool(Path::new("virt-customize"), "libguestfs-tools")?;
+            crate::dependencies::require_tool(Path::new("guestfish"), "libguestfs-tools")?;
         self.provision_with(disk, &executable)
     }
-    fn provision_with(&self, disk: &Path, executable: &Path) -> Result<(), String> {
+    fn provision_with(&mut self, disk: &Path, executable: &Path) -> Result<(), String> {
         self.validate()?;
-        let username = &self.username;
-        let hash = &self.password_hash;
-        let staging = format!("/root/.antinomie-account-{}", storage::unique_id());
-        // The libguestfs write operation keeps the hash out of guest shell argv too.
-        let script = format!(
-            "mkdir {staging}\nchmod 0700:{staging}\nwrite {staging}/password:{username}:{hash}\nchmod 0600:{staging}/password\nrun-command set -eu; trap 'rm -rf {staging}' EXIT; if getent passwd 1000 >/dev/null || getent group 1000 >/dev/null || getent passwd '{username}' >/dev/null || getent group '{username}' >/dev/null; then exit 1; fi; groupadd -g 1000 '{username}'; useradd -u 1000 -g 1000 -m -s /bin/bash '{username}'; usermod -a -G sudo '{username}'; chpasswd -e < {staging}/password; passwd -l root >/dev/null; printf '%s\\n' '{username} ALL=(ALL:ALL) ALL' > /etc/sudoers.d/antinomie-account; chmod 0440 /etc/sudoers.d/antinomie-account; visudo -cf /etc/sudoers.d/antinomie-account >/dev/null\n"
-        );
-        let mut command = Command::new(executable);
-        command
-            .args(["--no-network", "--no-logfile", "--format", "qcow2", "-a"])
-            .arg(disk)
-            .args(["--commands-from-file", "/dev/stdin"])
-            .env("LIBGUESTFS_BACKEND", "direct")
-            .env("LIBGUESTFS_DEBUG", "0")
-            .env("LIBGUESTFS_TRACE", "0");
-        run_private(command, script.as_bytes(), false)?;
+        let probe = run_private_with_timeout(
+            &mut guestfish(executable, disk, false),
+            b"run\nlist-filesystems\n",
+            true,
+            PROVISION_TIMEOUT,
+        )?;
+        let layout = parse_probe(&String::from_utf8_lossy(&probe))?;
+        let uuid = random_uuid()?;
+        let script = self.script(&layout, &uuid);
+        run_private(guestfish(executable, disk, true), script.as_bytes(), false)?;
         File::open(disk)
             .and_then(|file| file.sync_all())
-            .map_err(|_| "cannot sync provisioned disk".to_owned())
+            .map_err(|_| "cannot sync provisioned disk".to_owned())?;
+        self.root_uuid = Some(uuid);
+        Ok(())
+    }
+    /// The guestfish commands. The hash crosses as a file the guest's
+    /// chpasswd reads, never in a guest command line.
+    fn script(&self, layout: &DiskLayout, uuid: &str) -> String {
+        let username = &self.username;
+        let root = &layout.root;
+        let staging = format!("/root/.provision-{}", storage::unique_id());
+        // fstab names the root by UUID on the console base (the desktops
+        // name /dev/vda and keep their line).
+        let guest = format!(
+            "set -eu\ntrap 'rm -rf {staging}' EXIT\n\
+             sed -i -E 's|^UUID=[0-9A-Fa-f-]+([[:space:]]+/[[:space:]])|UUID={uuid}\\1|' /etc/fstab\n\
+             if getent passwd 1000 >/dev/null || getent group 1000 >/dev/null || getent passwd '{username}' >/dev/null || getent group '{username}' >/dev/null; then exit 1; fi\n\
+             groupadd -g 1000 '{username}'\n\
+             useradd -u 1000 -g 1000 -m -s /bin/bash '{username}'\n\
+             usermod -a -G sudo '{username}'\n\
+             chpasswd -e < {staging}/password\n\
+             passwd -l root >/dev/null\n"
+        );
+        // The directory hash seed has no tune2fs option: debugfs sets it and
+        // e2fsck -D reindexes every directory under it. Through the
+        // appliance's own tools (guestfish debug, which joins its words
+        // without their quotes); a disk keeps its base's seed where that is
+        // unavailable.
+        let reseed = format!(
+            "echo ssv hash_seed random | debugfs -w -f - {root} >/dev/null 2>&1 && e2fsck -fyD {root} >/dev/null 2>&1; test $? -lt 4"
+        );
+        [
+            "run".to_owned(),
+            format!("e2fsck-f {root}"),
+            format!("set-uuid {root} {uuid}"),
+            format!("-debug sh {}", fish_quote(&reseed)),
+            format!("mount {root} /"),
+            format!("mkdir {staging}"),
+            format!("chmod 0700 {staging}"),
+            format!(
+                "write {staging}/password {}",
+                fish_quote(&format!("{username}:{}", self.password_hash))
+            ),
+            format!("chmod 0600 {staging}/password"),
+            format!("write {staging}/provision.sh {}", fish_quote(&guest)),
+            format!("sh {}", fish_quote(&format!("sh {staging}/provision.sh"))),
+            "umount-all".to_owned(),
+            String::new(),
+        ]
+        .join("\n")
     }
 }
 
@@ -342,11 +493,14 @@ mod tests {
         GuestAccount {
             username: "analyst".into(),
             password_hash: format!("$6$fixturesalt${}", "a".repeat(86)),
+            root_uuid: None,
         }
     }
-    fn fake_tool(directory: &Path, fail: bool) -> std::path::PathBuf {
+    /// A guestfish stand-in: the read-only probe lists `filesystems`, the
+    /// writable run records its argv and commands.
+    fn fake_tool(directory: &Path, fail: bool, filesystems: &str) -> std::path::PathBuf {
         let path = directory.join("fake-tool");
-        fs::write(&path, format!("#!/bin/sh\nroot=$(dirname \"$0\")\nprintf '%s\\n' \"$@\" > \"$root/argv\"\ncat > \"$root/input\"\ncat \"$root/input\" >&2\nexit {}\n", if fail { 1 } else { 0 })).unwrap();
+        fs::write(&path, format!("#!/bin/sh\nroot=$(dirname \"$0\")\nif [ \"$1\" = --ro ]; then cat > \"$root/probe\"; printf '{filesystems}'; exit 0; fi\nprintf '%s\\n' \"$@\" > \"$root/argv\"\ncat > \"$root/input\"\ncat \"$root/input\" >&2\nexit {}\n", if fail { 1 } else { 0 })).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
         path
     }
@@ -356,27 +510,47 @@ mod tests {
         storage::private_dir(&root).unwrap();
         let disk = root.join("disk.qcow2");
         fs::write(&disk, b"unchanged disk fixture").unwrap();
-        let account = account();
+        let mut account = account();
         account
-            .provision_with(&disk, &fake_tool(&root, false))
+            .provision_with(&disk, &fake_tool(&root, false, "/dev/sda: ext4\\n"))
             .unwrap();
+        let uuid = account.root_uuid().unwrap().to_owned();
+        assert!(valid_uuid(&uuid), "{uuid}");
+        assert_eq!(
+            fs::read_to_string(root.join("probe")).unwrap(),
+            "run\nlist-filesystems\n"
+        );
         let argv = fs::read_to_string(root.join("argv")).unwrap();
-        assert!(argv.contains("--no-network\n--no-logfile"));
-        assert!(argv.contains("/dev/stdin"));
+        assert!(argv.starts_with("--rw\n--no-progress-bars\n--format=qcow2\n-a\n"));
         assert!(!argv.contains(&account.password_hash));
         assert!(!argv.contains(&account.username));
         let input = fs::read_to_string(root.join("input")).unwrap();
         assert!(input.contains(&account.password_hash));
-        let shell_command = input
-            .lines()
-            .find(|line| line.starts_with("run-command "))
-            .unwrap();
-        assert!(!shell_command.contains(&account.password_hash));
+        // The hash reaches the guest only as a file chpasswd reads.
+        for line in input.lines().filter(|line| !line.contains("/password ")) {
+            assert!(!line.contains(&account.password_hash), "{line}");
+        }
+        // A new identity before the root is mounted, then the account.
+        let position = |text: &str| input.find(text).unwrap_or_else(|| panic!("{text}"));
+        assert!(position("e2fsck-f /dev/sda\n") < position(&format!("set-uuid /dev/sda {uuid}")));
+        assert!(
+            position("-debug sh \"echo ssv hash_seed random | debugfs -w -f - /dev/sda")
+                < position("mount /dev/sda /")
+        );
+        assert!(input.contains(&format!("UUID={uuid}\\\\1|' /etc/fstab")));
         assert!(input.contains("groupadd -g 1000"));
         assert!(input.contains("useradd -u 1000 -g 1000"));
         assert!(!input.contains("NOPASSWD"));
+        assert!(!input.contains("sudoers"));
+        assert!(!input.to_lowercase().contains("antinomie"));
+        // Another provisioning, another identity.
+        let mut again = self::account();
+        again
+            .provision_with(&disk, &fake_tool(&root, false, "/dev/sda: ext4\\n"))
+            .unwrap();
+        assert_ne!(again.root_uuid(), Some(uuid.as_str()));
         let error = account
-            .provision_with(&disk, &fake_tool(&root, true))
+            .provision_with(&disk, &fake_tool(&root, true, "/dev/sda: ext4\\n"))
             .unwrap_err();
         assert!(!error.contains(&account.password_hash));
         assert!(!format!("{account:?}").contains(&account.password_hash));
@@ -385,8 +559,46 @@ mod tests {
                 .provision_with(&disk, &root.join("missing"))
                 .is_err()
         );
+        // No single ext4 root: nothing is written.
+        fs::remove_file(root.join("input")).unwrap();
+        for listing in [
+            "/dev/sda: xfs\\n",
+            "/dev/sda1: ext4\\n/dev/sda2: ext4\\n",
+            "/dev/sdb1: ext4\\n",
+        ] {
+            assert!(
+                account
+                    .provision_with(&disk, &fake_tool(&root, false, listing))
+                    .is_err()
+            );
+            assert!(!root.join("input").exists());
+        }
         assert_eq!(fs::read(&disk).unwrap(), b"unchanged disk fixture");
         fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn probe_finds_the_root_on_a_whole_disk_or_a_partition() {
+        assert_eq!(parse_probe("/dev/sda: ext4\n").unwrap().root, "/dev/sda");
+        assert_eq!(
+            parse_probe("/dev/sda1: ext4\n/dev/sda2: unknown\n/dev/sda5: swap\n")
+                .unwrap()
+                .root,
+            "/dev/sda1"
+        );
+        assert!(parse_probe("").is_err());
+        assert!(parse_probe("/dev/sda1; rm -rf /: ext4\n").is_err());
+        assert_eq!(fish_quote("a\"b\\c\nd"), "\"a\\\"b\\\\c\\nd\"");
+        assert!(valid_uuid("0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d"));
+        for bad in [
+            "0B1C2D3E-4F50-4A6B-8C7D-9E0F1A2B3C4D",
+            "0b1c2d3e4f504a6b8c7d9e0f1a2b3c4d",
+            "",
+        ] {
+            assert!(!valid_uuid(bad));
+        }
+        let mut record = account();
+        record.root_uuid = Some("not-a-uuid".into());
+        assert!(record.validate().is_err());
     }
     #[test]
     fn account_record_is_private_and_malformed_hashes_are_redacted() {

@@ -232,9 +232,9 @@ pub fn check(options: &BackendOptions) -> Report {
         ),
         tool(
             DebianAccount,
-            "virt-customize",
+            "guestfish",
             "Create Debian guest accounts",
-            Path::new("virt-customize"),
+            Path::new("guestfish"),
             "On Debian/Ubuntu: sudo apt install libguestfs-tools",
         ),
         tool(

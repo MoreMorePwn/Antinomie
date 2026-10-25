@@ -335,8 +335,12 @@ remove=$(dpkg-query -W -f='${binary:Package} ${db:Status-Status}\\n' | awk '$2 =
 if [ -n "$remove" ]; then
     apt-get -o APT::Get::AllowUnauthenticated=false -y purge $remove
 fi
+# Mask only units a package still ships: a mask for an absent unit would name
+# the agents a sandbox leaves out.
 for unit in ssh.service sshd.service ssh.socket qemu-guest-agent.service spice-vdagentd.service cloud-init-local.service cloud-init.service cloud-config.service cloud-final.service; do
-    systemctl mask "$unit"
+    if [ -e "/usr/lib/systemd/system/$unit" ] || [ -e "/lib/systemd/system/$unit" ]; then
+        systemctl mask "$unit"
+    fi
 done
 for name in $(awk -F: '$3 >= 1000 && $3 < 65534 {print $1}' /etc/passwd); do
     userdel -r "$name"
@@ -347,32 +351,34 @@ done
 passwd -l root
 rm -f /etc/ssh/ssh_host_* /var/lib/dbus/machine-id
 truncate -s 0 /etc/machine-id
-mkdir -p /var/lib/antinomie-image
+# systemd-resolved's postinst keeps the resolv.conf it replaced: the build
+# host's (its nameserver and search domain).
+rm -f /etc/.resolv.conf.systemd-resolved.bak
 # No automatic or guest login; the chosen desktop is the default session.
 case $manager in
 lightdm)
     mkdir -p /etc/lightdm/lightdm.conf.d
     greeter=
     if [ "$session" = xfce ]; then greeter='greeter-session=lightdm-gtk-greeter\\n'; fi
-    printf "[Seat:*]\\n${greeter}user-session=%s\\nautologin-user=\\nautologin-guest=false\\nallow-guest=false\\n" "$session" > /etc/lightdm/lightdm.conf.d/99-antinomie.conf
+    printf "[Seat:*]\\n${greeter}user-session=%s\\nautologin-user=\\nautologin-guest=false\\nallow-guest=false\\n" "$session" > /etc/lightdm/lightdm.conf.d/50-seat.conf
     ;;
 gdm3)
     sed -i 's/^#*\\s*AutomaticLoginEnable\\s*=.*/AutomaticLoginEnable = false/' /etc/gdm3/daemon.conf
     ;;
 sddm)
     mkdir -p /etc/sddm.conf.d
-    printf '[Autologin]\\nUser=\\nSession=%s\\n' "$session" > /etc/sddm.conf.d/99-antinomie.conf
+    printf '[Autologin]\\nUser=\\nSession=%s\\n' "$session" > /etc/sddm.conf.d/10-session.conf
     ;;
 none)
     # Console base: logins on the serial console and the virtual terminals;
     # systemd-networkd takes the DHCP address (no NetworkManager).
     mkdir -p /etc/systemd/network
-    printf '%s' """ + shlex.quote(CONSOLE_NETWORK) + """ > /etc/systemd/network/80-antinomie-dhcp.network
+    printf '%s' """ + shlex.quote(CONSOLE_NETWORK) + """ > /etc/systemd/network/20-wired.network
     systemctl enable systemd-networkd.service systemd-resolved.service
     # /tmp stays on the root disk, as on BusyBox: what a sample drops there is
     # in the VM's disk (Disks tab, disk dumps, checkpoints), not only in RAM.
     systemctl mask tmp.mount
-    printf 'L+ /etc/resolv.conf - - - - ../run/systemd/resolve/stub-resolv.conf\\n' > /etc/tmpfiles.d/antinomie-resolv.conf
+    printf 'L+ /etc/resolv.conf - - - - ../run/systemd/resolve/stub-resolv.conf\\n' > /etc/tmpfiles.d/resolv.conf
     ;;
 esac
 if [ "$manager" = none ]; then
@@ -403,7 +409,7 @@ if [ -n "$audit" ]; then
     exit 1
 fi
 apt-get -o APT::Get::AllowUnauthenticated=false -o Acquire::AllowInsecureRepositories=false check
-dpkg-query -W -f='${binary:Package}\\t${Version}\\t${Architecture}\\t${source:Package}\\t${source:Version}\\t${db:Status-Status}\\n' > /var/lib/antinomie-image/packages.tsv
+dpkg-query -W -f='${binary:Package}\\t${Version}\\t${Architecture}\\t${source:Package}\\t${source:Version}\\t${db:Status-Status}\\n' > /tmp/packages.tsv
 apt-get clean
 """
 
@@ -533,8 +539,10 @@ def mmdebstrap_command(values, tarball, script, provenance):
         arguments += " " + str(uuid.uuid4())
     command.append(f'--customize-hook=chroot "$1" sh /tmp/antinomie-customize.sh {arguments}')
     command.append('--customize-hook=rm -f "$1/tmp/antinomie-customize.sh"')
-    for path in ("/var/lib/antinomie-image/packages.tsv", "/etc/os-release"):
+    # The package inventory leaves the image with the build's provenance.
+    for path in ("/tmp/packages.tsv", "/etc/os-release"):
         command.append(f'--customize-hook=download {path} {q(str(provenance / Path(path).name))}')
+    command.append('--customize-hook=rm -f "$1/tmp/packages.tsv"')
     for path, name in (("usr/share/doc", "package-docs.tar.gz"), ("var/lib/apt/lists", "apt-lists.tar.gz")):
         command.append(f'--customize-hook=tar -C "$1" -czf "$1/tmp/{name}" {path}')
         command.append(f'--customize-hook=download /tmp/{name} {q(str(provenance / name))}')
@@ -544,6 +552,68 @@ def mmdebstrap_command(values, tarball, script, provenance):
                 f"deb {mirror} {SUITE} main", f"deb {mirror} {SUITE}-updates main",
                 f"deb {SECURITY_MIRROR} {SUITE}-security main"]
     return command
+
+
+# Places in the image where a build-host file would land (configuration,
+# state, homes); package payloads under /usr and the package indexes are not
+# scanned for host names that could also be ordinary words there.
+LEAK_SCAN = ("etc/", "var/", "root/", "home/")
+LEAK_SKIP = ("var/lib/apt/lists/", "var/cache/", "var/lib/dpkg/info/")
+# A Tailscale MagicDNS search domain and WSL's resolver address: the
+# development hosts' resolv.conf, which mmdebstrap copies into the new root.
+HOST_LEAK_PATTERNS = (re.compile(rb"\btail[0-9a-f]{4,}\.ts\.net\b"),
+                      re.compile(rb"\bnameserver[ \t]+10\.255\.255\.254\b"))
+
+
+def host_resolver_patterns(resolv=Path("/etc/resolv.conf")):
+    """The build host's own nameservers and search domains as patterns (loopback
+    stubs such as systemd-resolved's 127.0.0.53 are on every Debian system)."""
+    try:
+        text = resolv.read_text(errors="replace")
+    except OSError:
+        return []
+    patterns = []
+    for line in text.splitlines():
+        fields = line.split()
+        if len(fields) < 2 or fields[0].startswith(("#", ";")):
+            continue
+        if fields[0] == "nameserver" and not fields[1].startswith(("127.", "::1")):
+            patterns.append(re.compile(rb"\bnameserver[ \t]+" + re.escape(fields[1].encode())
+                                       + rb"(?![0-9.:])"))
+        elif fields[0] in ("search", "domain"):
+            patterns += [re.compile(rb"(?<![A-Za-z0-9.-])" + re.escape(domain.encode())
+                                    + rb"(?![A-Za-z0-9-])")
+                         for domain in fields[1:] if "." in domain.strip(".")]
+    return patterns
+
+
+def check_image_leaks(tarball, patterns=None):
+    """Fail the build when the root filesystem names Antinomie in a path, masks a
+    unit no package ships, or carries the build host's resolver configuration."""
+    patterns = HOST_LEAK_PATTERNS + tuple(host_resolver_patterns() if patterns is None
+                                          else patterns)
+    problems = []
+    units, masks = set(), []
+    with tarfile.open(tarball) as archive:
+        for member in archive:
+            name = member.name[2:] if member.name.startswith("./") else member.name
+            if "antinomie" in name.lower():
+                problems.append(f"/{name} names Antinomie")
+            if name.startswith(("usr/lib/systemd/system/", "lib/systemd/system/")):
+                units.add(name.rsplit("/", 1)[1])
+            if (name.startswith("etc/systemd/system/") and member.issym()
+                    and member.linkname == "/dev/null"):
+                masks.append(name)
+            if (not member.isfile() or not name.startswith(LEAK_SCAN)
+                    or name.startswith(LEAK_SKIP) or member.size > 16 << 20):
+                continue
+            data = archive.extractfile(member).read()
+            if any(pattern.search(data) for pattern in patterns):
+                problems.append(f"/{name} holds the build host's resolver configuration")
+    problems += [f"/{mask} masks a unit no package ships" for mask in masks
+                 if mask.rsplit("/", 1)[1] not in units]
+    if problems:
+        raise RuntimeError("image carries build traces: " + "; ".join(problems[:10]))
 
 
 def e2fsprogs_version():
@@ -643,6 +713,7 @@ def root_image(values, raw, staging, provenance, log, modules=None, cache=None):
             log.flush()
             shutil.copy2(log.name, provenance / "bootstrap.log")
             save_rootfs_cache(cache, tarball, provenance, root, values)
+    check_image_leaks(tarball)
     if modules is not None:
         add_modules(tarball, modules)
     size = image_size(values["desktop"])
