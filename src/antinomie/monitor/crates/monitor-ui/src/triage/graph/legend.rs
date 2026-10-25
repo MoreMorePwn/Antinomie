@@ -70,27 +70,21 @@ pub(in crate::triage) fn body(ui: &mut egui::Ui) {
     heading(ui, "Markers");
     ui.horizontal(|ui| {
         sample(ui, 0, colors.tier[1], true);
-        row(ui, "Hollow: only packets showed it, no system call.");
+        row(ui, "Hollow: packets only, no system call.");
     });
     ui.horizontal(|ui| {
         let (rect, _) = ui.allocate_exact_size(Vec2::splat(22.0), Sense::hover());
         ui.painter_at(rect)
             .circle_stroke(rect.center(), 10.0, Stroke::new(2.0_f32, colors.text));
-        row(
-            ui,
-            "Ring: the selected finding (also selected in the table).",
-        );
+        row(ui, "Ring: the selected finding.");
     });
     ui.horizontal(|ui| {
         ui.label(RichText::new("×3").small().color(colors.text));
-        row(ui, "Repeats folded into one finding, with their count.");
+        row(ui, "Repeats folded, with count.");
     });
     ui.horizontal(|ui| {
         dot(ui, colors.tier[1]);
-        row(
-            ui,
-            "Zoomed out or crowded: plain tier dots, a small dot marks several findings.",
-        );
+        row(ui, "Crowded: tier dots; a small dot is several findings.");
     });
     heading(ui, "Edges and breaks");
     ui.horizontal(|ui| {
@@ -105,10 +99,7 @@ pub(in crate::triage) fn body(ui: &mut egui::Ui) {
             Stroke::new(1.0_f32, colors.muted),
         );
         painter.circle_filled(Pos2::new(x, rect.bottom() - 3.0), 1.8, colors.muted);
-        row(
-            ui,
-            "Spawn: from the parent's lane to the child's, when it first appears.",
-        );
+        row(ui, "Spawn: parent lane to child lane.");
     });
     ui.horizontal(|ui| {
         let (rect, _) = ui.allocate_exact_size(Vec2::new(22.0, 22.0), Sense::hover());
@@ -116,10 +107,7 @@ pub(in crate::triage) fn body(ui: &mut egui::Ui) {
             [rect.left_bottom(), rect.right_top()],
             Stroke::new(1.5_f32, colors.injection),
         );
-        row(
-            ui,
-            "Injection: a curved red arrow from the injector's marker to the target's lane.",
-        );
+        row(ui, "Injection: red arrow, injector to target.");
     });
     ui.horizontal(|ui| {
         let (rect, _) = ui.allocate_exact_size(Vec2::new(22.0, 22.0), Sense::hover());
@@ -133,18 +121,15 @@ pub(in crate::triage) fn body(ui: &mut egui::Ui) {
                 Stroke::new(1.6_f32, colors.tier[1]),
             );
         }
-        row(ui, "Break: in Events spacing, a long quiet stretch squeezed into one slot; the number is its length.");
+        row(
+            ui,
+            "Break: quiet stretch squeezed into one slot; the number is its length.",
+        );
     });
     heading(ui, "Bands");
-    row(
-        ui,
-        "Phases: the run's stages (recon, download, persistence, escalation, ...).",
-    );
-    row(
-        ui,
-        "Severity curve: how many findings, by tier, fall in each stretch of time.",
-    );
-    row(ui, "Heat strip: one row per category with the icon beside its name; brighter is more findings.");
+    row(ui, "Phases: run stages");
+    row(ui, "Severity curve: findings per tier over time");
+    row(ui, "Heat strip: findings per category; brighter is more");
 }
 
 #[cfg(test)]

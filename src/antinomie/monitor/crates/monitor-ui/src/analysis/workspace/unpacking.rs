@@ -109,9 +109,7 @@ fn details(ui: &mut egui::Ui, layer: &UnpackLayer) -> Option<ReportAction> {
                 .wrap(),
             );
         }
-        if layer.index == 0 {
-            ui.weak("This is the file the analysis is of.");
-        } else {
+        if layer.index != 0 {
             match &layer.report_id {
                 Some(id) => {
                     if ui

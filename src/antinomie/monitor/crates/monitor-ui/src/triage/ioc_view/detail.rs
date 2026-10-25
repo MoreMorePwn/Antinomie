@@ -171,7 +171,7 @@ impl View {
                     ui.add(
                         egui::Label::new(
                             RichText::new(format!(
-                                "Not found in the loaded feeds{}. This is not a clean result: the datasets only list what abuse.ch has seen.",
+                                "Not found in the loaded feeds{}.",
                                 if verdict.partial() {
                                     format!(" ({} of {} feeds for this type)", verdict.feeds_used, verdict.feeds_needed)
                                 } else {

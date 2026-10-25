@@ -105,16 +105,10 @@ fn loaded(status: &FeedStatus, meta: &feeds::FeedMeta) -> LoadedFeed {
 /// The feeds that can answer for a type of indicator.
 pub fn coverage(ty: Type) -> &'static [&'static str] {
     match ty {
-        Type::Endpoint => &["threatfox", "feodo", "sslbl-ip", "urlhaus"],
+        Type::Endpoint => &["threatfox", "feodo", "urlhaus"],
         Type::Domain => &["threatfox", "urlhaus"],
         Type::Url => &["urlhaus", "threatfox"],
-        Type::Tls => &[
-            "sslbl-ja3",
-            "sslbl-cert",
-            "sslbl-ip",
-            "threatfox",
-            "urlhaus",
-        ],
+        Type::Tls => &["sslbl-ja3", "sslbl-cert", "threatfox", "urlhaus"],
         Type::File => &["urlhaus-payloads", "threatfox"],
     }
 }
@@ -419,7 +413,6 @@ mod tests {
                 "urlhaus" => URLHAUS,
                 "urlhaus-payloads" => PAYLOADS,
                 "feodo" => FEODO,
-                "sslbl-ip" => SSLBL_IP,
                 "sslbl-ja3" => SSLBL_JA3,
                 _ => SSLBL_CERT,
             };
@@ -579,11 +572,11 @@ mod tests {
     }
 
     #[test]
-    fn a_run_is_matched_against_all_seven_feeds() {
+    fn a_run_is_matched_against_all_six_feeds() {
         let dir = installed("all");
         let all = run();
         let scan = scan_datasets(&dir, &all, &AtomicBool::new(false)).unwrap();
-        assert_eq!(scan.loaded.len(), 7);
+        assert_eq!(scan.loaded.len(), 6);
         let verdicts = evaluate_all(&all, &scan, &[], &OnlineResults::default());
         let today = feeds::date_text(feeds::now_unix());
         let e1 = outcome(&all, &verdicts, "203.0.113.45:443");
@@ -592,7 +585,7 @@ mod tests {
         // ThreatFox (75) outranks the no-confidence feeds.
         assert_eq!(e1.primary().unwrap().record.feed, "threatfox");
         assert_eq!(e1.primary().unwrap().record.family, "Mirai");
-        assert!(e1.matches.len() >= 2, "feodo and sslbl list it too");
+        assert!(e1.matches.len() >= 2, "threatfox and feodo list it");
         assert_eq!(
             outcome(&all, &verdicts, "198.51.100.77:80")
                 .primary()
@@ -722,6 +715,37 @@ mod tests {
     }
 
     #[test]
+    fn a_run_endpoint_is_matched_by_each_ip_source_on_its_own() {
+        let all = run();
+        let all_feeds = [
+            "threatfox",
+            "urlhaus",
+            "urlhaus-payloads",
+            "feodo",
+            "sslbl-ja3",
+            "sslbl-cert",
+        ];
+        // (the only feed left on, the endpoint it must match)
+        for (only, endpoint) in [
+            ("feodo", "203.0.113.45:443"),
+            ("threatfox", "203.0.113.45:443"),
+            ("urlhaus", "198.51.100.77:80"),
+        ] {
+            let dir = installed("ip-source");
+            for id in all_feeds.iter().filter(|id| **id != only) {
+                feeds::set_enabled(&dir, id, false).unwrap();
+            }
+            let scan = scan_datasets(&dir, &all, &AtomicBool::new(false)).unwrap();
+            assert_eq!(scan.loaded.len(), 1, "{only}");
+            let verdicts = evaluate_all(&all, &scan, &[], &OnlineResults::default());
+            let found = outcome(&all, &verdicts, endpoint);
+            assert_eq!(found.outcome, Outcome::Matched, "{only}: {found:?}");
+            assert_eq!(found.primary().unwrap().record.feed, only);
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
     fn missing_or_partial_datasets_change_the_verdict_honestly() {
         let all = run();
         // Nothing downloaded: every row reads Not checked.
@@ -733,13 +757,14 @@ mod tests {
                 .iter()
                 .all(|v| v.outcome == Outcome::NotChecked && v.why == "no datasets downloaded")
         );
-        // SSLBL switched off: TLS rows are not checked, others use fewer feeds.
+        // SSLBL and Feodo switched off: TLS rows are not checked, others use
+        // fewer feeds.
         let dir = installed("partial");
-        for id in ["sslbl-ip", "sslbl-ja3", "sslbl-cert"] {
+        for id in ["feodo", "sslbl-ja3", "sslbl-cert"] {
             feeds::set_enabled(&dir, id, false).unwrap();
         }
         let scan = scan_datasets(&dir, &all, &AtomicBool::new(false)).unwrap();
-        assert_eq!(scan.loaded.len(), 4);
+        assert_eq!(scan.loaded.len(), 3);
         let verdicts = evaluate_all(&all, &scan, &[], &OnlineResults::default());
         let tls = all.iter().position(|i| i.ty == Type::Tls).unwrap();
         assert_eq!(
@@ -749,7 +774,7 @@ mod tests {
         let e = outcome(&all, &verdicts, "203.0.113.200:4444");
         assert_eq!(e.outcome, Outcome::NoMatch);
         assert!(
-            e.partial() && e.feeds_used == 3 && e.feeds_needed == 4,
+            e.partial() && e.feeds_used == 2 && e.feeds_needed == 3,
             "{e:?}"
         );
         let _ = std::fs::remove_dir_all(dir);

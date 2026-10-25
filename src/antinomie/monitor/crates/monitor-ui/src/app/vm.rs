@@ -733,13 +733,13 @@ impl MonitorApp {
                                 ui.end_row();
                             });
                             if app.draft.isolated_network {
-                                ui.colored_label(theme::muted(), "Working interface with host/LAN/Internet forwarding blocked. Packet capture remains available.");
+                                ui.colored_label(theme::muted(), "Isolated: no host or Internet access.");
                             }
                             if app.draft.routed && !app.draft.isolated_network {
-                                ui.colored_label(theme::muted(), "Routed: the network is Antinomie's own gateway. Each run picks where its traffic goes (none, Internet, InetSim, Tor, VPN or a SOCKS5 proxy; see Settings > Network routes). Between runs nothing leaves. Packet capture remains available.");
+                                ui.colored_label(theme::muted(), "Routed: each run picks a route (Settings > Network routes).");
                             }
                             if !app.draft.has_network() {
-                                crate::activity::warning(ui, "Disconnected: network capture is unavailable. Choose Isolated, Routed or NAT to capture packets.");
+                                crate::activity::warning(ui, "Disconnected: no network capture. Choose Isolated, Routed or NAT.");
                             }
                             if app.draft.nat {
                                 crate::activity::warning(ui,

@@ -179,12 +179,6 @@ enum Layout {
         signature: Option<usize>,
         filetype: Option<usize>,
     },
-    SslIp {
-        first: usize,
-        ip: usize,
-        port: usize,
-        reason: Option<usize>,
-    },
     SslJa3 {
         md5: usize,
         first: usize,
@@ -222,7 +216,6 @@ impl Layout {
                 "tags",
             ],
             "urlhaus-payloads" => &["firstseen", "url", "filetype", "md5", "sha256", "signature"],
-            "sslbl-ip" => &["firstseen", "dstip", "dstport"],
             "sslbl-ja3" => &["ja3_md5", "firstseen", "lastseen", "listingreason"],
             "sslbl-cert" => &["listingdate", "sha1", "listingreason"],
             _ => return None,
@@ -269,12 +262,6 @@ impl Layout {
                     filetype: columns.at(&["filetype"]),
                 }
             }
-            "sslbl-ip" => Self::SslIp {
-                first: columns.at(&["firstseen"]).unwrap_or(usize::MAX),
-                ip: columns.at(&["dstip", "ip"])?,
-                port: columns.at(&["dstport", "port"])?,
-                reason: columns.at(&["listingreason", "malware"]),
-            },
             "sslbl-ja3" => Self::SslJa3 {
                 md5: columns.at(&["ja3md5", "ja3"])?,
                 first: columns.at(&["firstseen"]).unwrap_or(usize::MAX),
@@ -353,14 +340,6 @@ impl Layout {
                 }
                 if let Some(value) = md5.and_then(|at| Kind::Md5.normalize(field(fields, at))) {
                     out.push((Kind::Md5, value));
-                }
-            }
-            Self::SslIp { ip, port, .. } => {
-                if let (Ok(ip), Ok(port)) = (
-                    field(fields, *ip).trim().parse::<std::net::IpAddr>(),
-                    field(fields, *port).trim().parse::<u16>(),
-                ) {
-                    out.push((Kind::IpPort, kind::ip_port(ip, port)));
                 }
             }
             Self::SslJa3 { md5, .. } => {
@@ -457,23 +436,6 @@ impl Layout {
                     (true, true) => "served by a URLhaus URL".to_owned(),
                 };
                 record.reference = format!("urlhaus.abuse.ch/browse.php?search={hash}");
-            }
-            Self::SslIp {
-                first,
-                ip,
-                port,
-                reason,
-            } => {
-                record.record_id = Kind::IpPort
-                    .normalize(&format!("{}:{}", field(fields, *ip), field(fields, *port)))
-                    .unwrap_or_default();
-                record.family = reason
-                    .map(|at| field(fields, at).to_owned())
-                    .filter(|text| !text.is_empty())
-                    .unwrap_or_else(|| "botnet C2".to_owned());
-                record.first_seen = day(field(fields, *first));
-                record.detail = "TLS server IP:port".into();
-                record.reference = "sslbl.abuse.ch/blacklist/".into();
             }
             Self::SslJa3 { md5, first, reason } => {
                 record.record_id = field(fields, *md5).to_owned();
@@ -709,14 +671,6 @@ pub(crate) mod fixtures {
 
     pub const FEODO: &str = "[{\"ip_address\":\"203.0.113.45\",\"port\":443,\"status\":\"online\",\"hostname\":null,\"as_number\":64500,\"as_name\":\"EXAMPLE\",\"country\":\"US\",\"first_seen\":\"2026-08-01 00:00:00\",\"last_online\":\"2026-10-20\",\"malware\":\"Dridex\"},{\"ip_address\":\"198.51.100.23\",\"port\":8443,\"status\":\"offline\",\"first_seen\":\"2026-07-01 00:00:00\",\"malware\":\"QakBot\"},{\"ip_address\":\"bad\",\"port\":1}]";
 
-    pub const SSLBL_IP: &str = "################################################################\n\
-# abuse.ch SSLBL SSL IP Blacklist (fixture)\n\
-################################################################\n\
-#\n\
-# Firstseen,DstIP,DstPort\n\
-2026-08-19 10:00:00,203.0.113.45,443\n\
-2026-08-20 10:00:00,198.51.100.23,8443\n";
-
     pub const SSLBL_JA3: &str = "# ja3_md5,Firstseen,Lastseen,Listingreason\n\
 f6d64cbcb6dead5e8e864400f056fa32,2026-08-19 10:00:00,2026-10-01 10:00:00,Gafgyt C&C\n";
 
@@ -865,18 +819,11 @@ mod tests {
     }
 
     #[test]
-    fn feodo_and_sslbl_feeds_are_read() {
+    fn feodo_and_the_remaining_sslbl_feeds_are_read() {
         let (hits, scanned) = scan_text("feodo", FEODO, &[(Kind::IpPort, "203.0.113.45:443")]);
         assert_eq!((hits.len(), scanned.records, scanned.skipped), (1, 2, 1));
         assert_eq!(hits[0].record.family, "Dridex");
         assert_eq!(hits[0].record.first_seen, "2026-08-01");
-        let (hits, _) = scan_text(
-            "sslbl-ip",
-            SSLBL_IP,
-            &[(Kind::IpPort, "198.51.100.23:8443")],
-        );
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].record.first_seen, "2026-08-20");
         let (hits, _) = scan_text(
             "sslbl-ja3",
             SSLBL_JA3,
@@ -905,21 +852,27 @@ mod tests {
 
     #[test]
     fn at_most_a_few_records_are_kept_for_one_value() {
-        let mut text = String::from("# Firstseen,DstIP,DstPort\n");
+        let mut text = String::from("# Listingdate,SHA1,Listingreason\n");
         for day in 1..20 {
-            text.push_str(&format!("2026-08-{day:02} 00:00:00,203.0.113.45,443\n"));
+            text.push_str(&format!(
+                "2026-08-{day:02} 00:00:00,2f22765d04931a078909145ca628d2264c852d7d,x\n"
+            ));
         }
-        let (hits, scanned) = scan_text("sslbl-ip", &text, &[(Kind::IpPort, "203.0.113.45:443")]);
+        let (hits, scanned) = scan_text(
+            "sslbl-cert",
+            &text,
+            &[(Kind::CertSha1, "2f22765d04931a078909145ca628d2264c852d7d")],
+        );
         assert_eq!(scanned.records, 19);
         assert_eq!(hits.len(), HITS_PER_KEY);
     }
 
     #[test]
     fn a_cancelled_pass_stops() {
-        let feed = feed("sslbl-ip").unwrap();
-        let mut text = String::from("# Firstseen,DstIP,DstPort\n");
+        let feed = feed("sslbl-cert").unwrap();
+        let mut text = String::from("# Listingdate,SHA1,Listingreason\n");
         for _ in 0..10_000 {
-            text.push_str("2026-08-01 00:00:00,203.0.113.45,443\n");
+            text.push_str("2026-08-01 00:00:00,2f22765d04931a078909145ca628d2264c852d7d,x\n");
         }
         let path = file(feed.file, &text);
         let cancel = AtomicBool::new(true);

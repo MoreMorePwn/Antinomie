@@ -270,28 +270,44 @@ impl CoreView {
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
                 if self.acquired.is_empty() && self.records.is_empty() && self.manual.is_empty() {
-                    crate::theme::empty_state(
-                        ui,
-                        "No core dumps. Dump a live process, enable Core Dump on Exit in Run program, or import a core.",
-                    );
+                    crate::theme::empty_state(ui, "No cores yet.");
                 }
                 for (index, core) in self.manual.iter().enumerate() {
-                    if !manual_shown[index] { continue; }
+                    if !manual_shown[index] {
+                        continue;
+                    }
                     let fallback = format!("PID {} · {}", core.target.tgid, core.id);
                     let title = crate::evidence::title(ui, &core.directory, &fallback);
                     let selected = self.selected_directory.as_ref() == Some(&core.directory);
                     let state = manual_status(core);
-                    let color = if core.issue.is_some() { crate::theme::warn() } else { crate::theme::text() };
-                    let row = crate::network_view::capture_row(ui, selected, (&title, color), &state, font_size)
-                        .on_hover_text(format!("{title}\n{state}\n{}", core.directory.display()));
+                    let color = if core.issue.is_some() {
+                        crate::theme::warn()
+                    } else {
+                        crate::theme::text()
+                    };
+                    let row = crate::network_view::capture_row(
+                        ui,
+                        selected,
+                        (&title, color),
+                        &state,
+                        font_size,
+                    )
+                    .on_hover_text(format!("{title}\n{state}\n{}", core.directory.display()));
                     let core_file = core.file.clone();
                     row.context_menu(|ui| {
                         crate::evidence::menu(ui, &core.directory);
                         crate::query::table_row_menu(ui, filter_id, &manual_filter_row(ui, core));
                         core_file_menu(ui, core_file.as_deref(), &mut file_action);
-                        core_project_menu(ui, &core.directory, self.job.is_none(), &mut project_action);
-                        if core.phase != ProcessCorePhase::Finished && can_cancel
-                            && ui.button("Cancel capture and resume").clicked() {
+                        core_project_menu(
+                            ui,
+                            &core.directory,
+                            self.job.is_none(),
+                            &mut project_action,
+                        );
+                        if core.phase != ProcessCorePhase::Finished
+                            && can_cancel
+                            && ui.button("Cancel capture and resume").clicked()
+                        {
                             action = Some(CoreAction::Cancel(core.id.clone()));
                             ui.close_menu();
                         }
@@ -299,7 +315,8 @@ impl CoreView {
                             && Some(core.boot_id.as_str()) == boot_id)
                             .then_some(crate::evidence_delete::CORE_CAPTURING);
                         if crate::evidence_delete::menu_item(ui, capturing) {
-                            delete = Some(Deletion::core(&core.directory, &title, DeleteKind::Core));
+                            delete =
+                                Some(Deletion::core(&core.directory, &title, DeleteKind::Core));
                         }
                     });
                     if row.clicked() && self.job.is_none() {
@@ -307,34 +324,55 @@ impl CoreView {
                     }
                 }
                 for (index, core) in self.acquired.iter().enumerate() {
-                    if !acquired_shown[index] { continue; }
+                    if !acquired_shown[index] {
+                        continue;
+                    }
                     let fallback = format!("Run {}", core.run_id);
                     let title = crate::evidence::title(ui, &core.directory, &fallback);
                     let selected = self.selected_directory.as_ref() == Some(&core.directory)
-                        || self.selected.as_ref().is_some_and(|record| record.dir == core.directory);
+                        || self
+                            .selected
+                            .as_ref()
+                            .is_some_and(|record| record.dir == core.directory);
                     let state = core.status_text();
                     let state = state.as_str();
                     let color = match core.state {
                         antinomie_monitor_core::RunArtifactState::Failed => crate::theme::error(),
                         antinomie_monitor_core::RunArtifactState::Partial
-                        | antinomie_monitor_core::RunArtifactState::Interrupted => crate::theme::warn(),
+                        | antinomie_monitor_core::RunArtifactState::Interrupted => {
+                            crate::theme::warn()
+                        }
                         _ => crate::theme::text(),
                     };
-                    let row = crate::network_view::capture_row(ui, selected, (&title, color), state, font_size)
-                        .on_hover_text(format!("{title}\n{state}\n{}", core.directory.display()));
+                    let row = crate::network_view::capture_row(
+                        ui,
+                        selected,
+                        (&title, color),
+                        state,
+                        font_size,
+                    )
+                    .on_hover_text(format!("{title}\n{state}\n{}", core.directory.display()));
                     let core_file = core.file.clone();
                     row.context_menu(|ui| {
                         crate::query::table_row_menu(ui, filter_id, &acquired_filter_row(ui, core));
                         // A deleted core has no files left to open or delete.
-                        if core.deleted.is_some() { return; }
+                        if core.deleted.is_some() {
+                            return;
+                        }
                         crate::evidence::menu(ui, &core.directory);
                         core_file_menu(ui, core_file.as_deref(), &mut file_action);
-                        core_project_menu(ui, &core.directory, self.job.is_none(), &mut project_action);
+                        core_project_menu(
+                            ui,
+                            &core.directory,
+                            self.job.is_none(),
+                            &mut project_action,
+                        );
                         let capturing = (core.state.in_progress()
                             && Some(core.boot_id.as_str()) == boot_id)
                             .then_some(crate::evidence_delete::CORE_CAPTURING);
                         if crate::evidence_delete::menu_item(ui, capturing) {
-                            delete = Some(Deletion::core(&core.directory, &title, DeleteKind::Core));
+                            delete =
+                                Some(Deletion::core(&core.directory, &title, DeleteKind::Core));
                         }
                     });
                     if row.clicked() && self.job.is_none() {
@@ -346,21 +384,44 @@ impl CoreView {
                     crate::theme::section(ui, "Imported cores");
                 }
                 for (index, record) in self.records.iter().enumerate() {
-                    if !imported_shown[index] { continue; }
+                    if !imported_shown[index] {
+                        continue;
+                    }
                     let title = crate::evidence::title(ui, &record.dir, &record.label);
                     let selected = self.selected_directory.as_ref() == Some(&record.dir)
-                        || self.selected.as_ref().is_some_and(|current| current.dir == record.dir);
-                    let detail = format!("{} threads · {} mappings", record.core.threads.len(), record.core.mappings.len());
-                    let row = crate::network_view::capture_row(ui, selected, (&title, crate::theme::text()), &detail, font_size)
-                        .on_hover_text(record.core.source.display().to_string());
+                        || self
+                            .selected
+                            .as_ref()
+                            .is_some_and(|current| current.dir == record.dir);
+                    let detail = format!(
+                        "{} threads · {} mappings",
+                        record.core.threads.len(),
+                        record.core.mappings.len()
+                    );
+                    let row = crate::network_view::capture_row(
+                        ui,
+                        selected,
+                        (&title, crate::theme::text()),
+                        &detail,
+                        font_size,
+                    )
+                    .on_hover_text(record.core.source.display().to_string());
                     let core_file = record.core.source.clone();
                     row.context_menu(|ui| {
                         crate::evidence::menu(ui, &record.dir);
-                        crate::query::table_row_menu(ui, filter_id, &imported_filter_row(ui, record));
+                        crate::query::table_row_menu(
+                            ui,
+                            filter_id,
+                            &imported_filter_row(ui, record),
+                        );
                         core_file_menu(ui, Some(&core_file), &mut file_action);
                         core_project_menu(ui, &record.dir, self.job.is_none(), &mut project_action);
                         if crate::evidence_delete::menu_item(ui, None) {
-                            delete = Some(Deletion::core(&record.dir, &title, DeleteKind::ImportedCore));
+                            delete = Some(Deletion::core(
+                                &record.dir,
+                                &title,
+                                DeleteKind::ImportedCore,
+                            ));
                         }
                     });
                     if row.clicked() && self.job.is_none() {

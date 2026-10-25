@@ -244,7 +244,6 @@ impl SnapshotManager {
             }
             let Some(tree) = tree else {
                 crate::theme::loading(ui, "Loading snapshots…");
-                ui.weak("Use Refresh if the snapshot list is unavailable.");
                 // The graph's room: the window keeps its size (and its
                 // close button its place) when the list arrives.
                 let cap = (ui.ctx().screen_rect().height() * 0.6).max(140.0);
@@ -359,8 +358,8 @@ impl SnapshotManager {
                         }
                     });
                 }
-                ui.colored_label(theme::good(), "● You are here — Unsaved changes");
-                ui.weak("Use Tab and Enter to select checkpoints and actions.");
+                ui.colored_label(theme::good(), "● You are here — Unsaved changes")
+                    .on_hover_text("Use Tab and Enter to select checkpoints and actions.");
             });
     }
 
@@ -526,16 +525,6 @@ impl SnapshotManager {
                 })
                 .wrap(),
             );
-            ui.add(
-                egui::Label::new(
-                    RichText::new(
-                        "Disk snapshots boot afresh. Disk + memory snapshots can resume running programs.",
-                    )
-                    .small()
-                    .color(theme::muted()),
-                )
-                .wrap(),
-            );
             return;
         };
         ui.add(egui::Label::new(RichText::new(&node.name).strong().color(theme::text())).wrap());
@@ -556,7 +545,8 @@ impl SnapshotManager {
             );
         });
         if node.deleted {
-            ui.colored_label(theme::muted(), "Hidden; retained for branch dependencies");
+            ui.colored_label(theme::muted(), "Hidden")
+                .on_hover_text("Retained for branch dependencies");
         }
         if !node.description.is_empty() {
             ui.add(egui::Label::new(RichText::new(&node.description).color(theme::muted())).wrap());
@@ -739,24 +729,13 @@ fn footer(ui: &mut egui::Ui) -> bool {
     let mut close = false;
     crate::widgets::footer_split(
         ui,
+        |_| {},
         |ui| {
-            // Leave room for Close: a long hint truncates, never widens the window.
-            let room = (ui.available_width() - 90.0).max(60.0);
-            ui.scope(|ui| {
-                ui.set_max_width(room);
-                ui.add(
-                    egui::Label::new(
-                        RichText::new(
-                            "Restore a checkpoint, then save another to create a branch.",
-                        )
-                        .small()
-                        .color(theme::muted()),
-                    )
-                    .truncate(),
-                );
-            });
+            close = ui
+                .button("Close")
+                .on_hover_text("Restore a checkpoint, then save another to create a branch.")
+                .clicked()
         },
-        |ui| close = ui.button("Close").clicked(),
     );
     close
 }
@@ -800,12 +779,15 @@ fn draft_form(ui: &mut egui::Ui, draft: &mut Draft, tree: &VmSnapshotTree) {
             .char_limit(4096),
     );
     ui.add_enabled_ui(tree.capabilities.can_create_disk, |ui| {
-        ui.radio_value(&mut draft.mode, VmSnapshotMode::Disk, "Disk only");
+        ui.radio_value(&mut draft.mode, VmSnapshotMode::Disk, "Disk only")
+            .on_hover_text("Restores files and boots afresh. Live snapshots are crash-consistent.");
     });
     ui.add_enabled_ui(tree.capabilities.can_create_full, |ui| {
-        ui.radio_value(&mut draft.mode, VmSnapshotMode::Full, "Disk + memory");
+        ui.radio_value(&mut draft.mode, VmSnapshotMode::Full, "Disk + memory")
+            .on_hover_text(
+                "Preserves RAM and running programs. Uses more storage and requires compatible guest recovery.",
+            );
     });
-    ui.weak(if draft.mode == VmSnapshotMode::Disk { "Restores files and boots afresh. Live snapshots are crash-consistent." } else { "Preserves RAM and running programs. Uses more storage and requires compatible guest recovery." });
 }
 
 fn valid_draft(draft: &Draft, tree: &VmSnapshotTree) -> bool {

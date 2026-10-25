@@ -86,11 +86,7 @@ impl NetworkView {
             crate::activity::warning(ui, error);
         }
         if let Some(error) = self.tshark_unavailable() {
-            tshark_missing_notice(
-                ui,
-                &error,
-                "Raw frames and their bytes are shown without protocol decoding.",
-            );
+            tshark_missing_notice(ui, &error, "Frames are shown raw, without decoding.");
         }
         if self.list.truncated && self.raw_frames() {
             crate::activity::warning(ui,

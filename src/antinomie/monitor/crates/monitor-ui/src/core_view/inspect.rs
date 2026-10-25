@@ -47,9 +47,9 @@ impl CoreView {
                     crate::activity::warning(ui, issue);
                 }
                 if core.file.is_some() {
-                    ui.label("Select this capture to open its retained data.");
+                    ui.label("Select this capture.");
                 } else {
-                    ui.add(egui::Label::new("No core file is retained yet. This view shows the recorded capture status; it does not wait for process exit.").wrap());
+                    ui.add(egui::Label::new("No core file yet.").wrap());
                 }
                 return;
             }
@@ -79,13 +79,13 @@ impl CoreView {
                 let explanation = if core.deleted.is_some() {
                     "This core was deleted. The run keeps its record."
                 } else if core.file.is_some() {
-                    "Select this capture to open its currently recorded data."
+                    "Select this capture."
                 } else if matches!(
                     core.state,
                     antinomie_monitor_core::RunArtifactState::WaitingForRootExit
                         | antinomie_monitor_core::RunArtifactState::InProgress
                 ) {
-                    "No core file is recorded yet. The capture is waiting for process exit or acquisition; recorded context and memory can be opened when available."
+                    "No core file yet."
                 } else {
                     "This capture retained no core file. Check run history for acquisition details."
                 };
@@ -94,7 +94,7 @@ impl CoreView {
                 crate::theme::loading(ui, "Opening core…");
             } else {
                 crate::theme::section(ui, "Process core");
-                ui.add(egui::Label::new("Select a core from the list to inspect its threads, memory mappings, disassembly and recovered notes.").wrap());
+                ui.add(egui::Label::new("Select a core.").wrap());
             }
             return;
         };
@@ -232,7 +232,7 @@ impl CoreView {
         crate::activity::notice(
             ui,
             crate::activity::Level::Info,
-            "Register values are recovered evidence. Stack unwinding, pointer chains, and debugger execution are not available for a saved core; attach the debugger to a live process for those.",
+            "Saved core: registers only, no unwinding.",
         );
         egui::ScrollArea::vertical()
             .id_salt("core-registers")
@@ -575,11 +575,10 @@ impl CoreView {
         ui.label(format!(
             "{} / {} octets captured",
             mapping.available_size, mapping.memory_size
-        ));
-        ui.add(egui::Label::new("?? = unavailable; 00 = captured zero.").wrap())
-            .on_hover_text(
-                "Unavailable memory can be absent, omitted by the memory filter, or truncated in the saved core.",
-            );
+        ))
+        .on_hover_text(
+            "?? = unavailable; 00 = captured zero. Unavailable memory can be absent, omitted by the memory filter, or truncated in the saved core.",
+        );
         ui.horizontal_wrapped(|ui| {
             if ui
                 .add_enabled(self.window_offset > 0, egui::Button::new("Previous span"))
@@ -776,9 +775,6 @@ fn notes_table(
 ) -> Option<details::CoreDetail> {
     use egui_extras::{Column, TableBuilder};
     const EM_DASH: &str = "—";
-    ui.label(
-        "Other notes are inventoried below; floating-point/XSAVE payloads are not decoded here.",
-    );
     crate::query::filter_edit(
         ui,
         query,

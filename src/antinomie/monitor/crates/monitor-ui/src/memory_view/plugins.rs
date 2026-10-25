@@ -674,10 +674,7 @@ impl MemoryView {
         });
         let Some((plugin, columns, row)) = row else {
             ui.add_space(6.0);
-            ui.colored_label(
-                theme::muted(),
-                "Select a row of a memory result to see all its values here",
-            );
+            ui.colored_label(theme::muted(), "Select a row.");
             return;
         };
         let mono = theme::mono(font_size - 1.0);

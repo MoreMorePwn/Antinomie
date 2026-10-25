@@ -69,7 +69,8 @@ impl Model {
         if !self.loaded {
             self.ensure(data_dir);
         }
-        ui.label(RichText::new("Installed packs and custom groups are the only production rules. Scans do not download rules or upload evidence.").color(theme::text()));
+        ui.label(RichText::new("Scans never use the network.").color(theme::text()))
+            .on_hover_text("Installed packs and custom groups are the only production rules. Scans do not download rules or upload evidence.");
         let mut engine = ENGINES
             .iter()
             .map(|(id, _)| *id)
@@ -207,24 +208,21 @@ impl Model {
     pub(super) fn notices(&mut self, ui: &mut egui::Ui, outbound: &mut bool) {
         if !*outbound {
             ui.horizontal_wrapped(|ui| {
-                crate::activity::warning(
-                    ui,
-                    "Downloads are off: Antinomie contacts no server unless you allow it.",
-                );
+                crate::activity::warning(ui, "Downloads are off.");
                 if ui
                     .button("Allow downloads")
-                    .on_hover_text(
-                        "Turns on Settings > Allow outbound catalog and rule downloads. \
+                    .on_hover_text(format!(
+                        "Antinomie contacts no server unless you allow it. This turns on Settings > Allow outbound catalog and rule downloads. \
                          Only Check for updates and installing or updating a pack use the network, \
-                         and only the hosts listed here; scans stay offline.",
-                    )
+                         and only the hosts listed here; scans stay offline.\n{}",
+                        self.hosts_line()
+                    ))
                     .clicked()
                 {
                     *outbound = true;
                     self.status = "Downloads allowed. Check for updates reads the catalog.".into();
                 }
             });
-            ui.add(egui::Label::new(RichText::new(self.hosts_line()).color(theme::text())).wrap());
         }
         // A failure was raised as a toast when it arrived.
         if self.status_error.as_deref() != Some(self.status.as_str()) && !self.status.is_empty() {
@@ -299,7 +297,7 @@ impl Model {
             self.select_none();
         }
         if rows.is_empty() {
-            ui.weak("No pack installed for this engine. Install one from the Catalog tab, or import your own rules below.");
+            ui.weak("None installed.");
         } else {
             self.sets_table(ui, data_dir, &rows);
         }
@@ -559,39 +557,43 @@ impl Model {
 
     /// The import fields of custom groups; they work for any engine.
     fn group_import(&mut self, ui: &mut egui::Ui, data_dir: &Path) {
-        egui::CollapsingHeader::new(RichText::new("Custom groups").strong().color(theme::heading()))
-            .id_salt("rules-groups")
-            .default_open(false)
-            .show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.group_name)
-                            .desired_width(140.0)
-                            .hint_text(theme::hint_text("Group name")),
-                    );
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.tags_text)
-                            .desired_width(140.0)
-                            .hint_text(theme::hint_text("Tags, comma separated")),
-                    );
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.import_path)
-                            .desired_width(ui.available_width().min(280.0))
-                            .hint_text(theme::hint_text("File or folder")),
-                    );
-                    if ui.button("Import").clicked() {
-                        let dir = data_dir.to_path_buf();
-                        let name = self.group_name.clone();
-                        let engine = self.engine.clone();
-                        let path = self.import_path.clone();
-                        self.spawn(move |_| {
-                            let id = ruleset::import_group(&dir, &name, &engine, Path::new(&path))?;
-                            Ok(Done::Message(format!("Imported {id} as a managed copy.")))
-                        });
-                    }
-                });
-                ui.weak("Select a custom group in the table to rename it, change its tags, replace or add rules.");
+        egui::CollapsingHeader::new(
+            RichText::new("Custom groups")
+                .strong()
+                .color(theme::heading()),
+        )
+        .id_salt("rules-groups")
+        .default_open(false)
+        .show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.group_name)
+                        .desired_width(140.0)
+                        .hint_text(theme::hint_text("Group name")),
+                );
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.tags_text)
+                        .desired_width(140.0)
+                        .hint_text(theme::hint_text("Tags, comma separated")),
+                );
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.import_path)
+                        .desired_width(ui.available_width().min(280.0))
+                        .hint_text(theme::hint_text("File or folder")),
+                );
+                if ui.button("Import").clicked() {
+                    let dir = data_dir.to_path_buf();
+                    let name = self.group_name.clone();
+                    let engine = self.engine.clone();
+                    let path = self.import_path.clone();
+                    self.spawn(move |_| {
+                        let id = ruleset::import_group(&dir, &name, &engine, Path::new(&path))?;
+                        Ok(Done::Message(format!("Imported {id} as a managed copy.")))
+                    });
+                }
             });
+            ui.weak("Select a group to edit it.");
+        });
     }
 
     fn group_actions(&mut self, ui: &mut egui::Ui, data_dir: &Path, id: &str) {
@@ -661,7 +663,6 @@ impl Model {
                 });
             }
         });
-        ui.weak("Name, tags and the file or folder come from the Custom groups fields above.");
     }
 
     // ---- Rules of the selected set ----
@@ -896,7 +897,7 @@ impl Model {
 
     fn rule_detail(&mut self, ui: &mut egui::Ui, height: f32, data_dir: &Path) {
         let Some(rule) = self.detail.and_then(|index| self.rows.get(index)).cloned() else {
-            ui.weak("Select a rule for its details and source text.");
+            ui.weak("Select a rule.");
             return;
         };
         let state = self.rule_state(&rule);

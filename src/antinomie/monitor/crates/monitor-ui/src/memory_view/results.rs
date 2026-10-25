@@ -95,10 +95,7 @@ impl MemoryView {
 
     pub(super) fn result_view(&mut self, ui: &mut egui::Ui, dump: &MemoryDump, font_size: f32) {
         let Some(run_id) = self.selected_run.clone() else {
-            empty_state(
-                ui,
-                "Pick a plugin and Run it: its result appears here and is saved with this dump.",
-            );
+            empty_state(ui, "Run a plugin.");
             return;
         };
         if let Some(job) = self.jobs.iter().find(|job| job.run.id == run_id) {

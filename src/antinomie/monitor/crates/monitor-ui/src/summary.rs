@@ -256,7 +256,6 @@ pub(crate) fn show(
             let Some(vm) = selected.and_then(|id| snapshot.vms.iter().find(|vm| vm.id == id))
             else {
                 ui.heading("Select a VM");
-                ui.label("Choose a VM to see its status, resources and recording health.");
                 if snapshot.vms.is_empty() {
                     ui.label("Create a VM from File → New VM, or add a base first.");
                 }

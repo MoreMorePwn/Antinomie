@@ -172,7 +172,7 @@ impl Window {
             match self.selected_file(activity) {
                 Some(file) => self.history(ui, activity, file, clock),
                 None => {
-                    ui.weak("Choose a file to see what the run did to it, step by step.");
+                    ui.weak("Select a file.");
                 }
             };
         });
@@ -399,9 +399,7 @@ impl Window {
                 });
             });
         if file.events.len() > CALLS_SHOWN && self.node.is_none() {
-            ui.weak(format!(
-                "The first {CALLS_SHOWN} calls; choose a step for the rest."
-            ));
+            ui.weak(format!("First {CALLS_SHOWN} calls."));
         }
     }
 }
@@ -585,7 +583,7 @@ fn contents(
     );
     let size = |size: Option<u64>| size.map_or("unknown".to_owned(), |size| format!("{size} B"));
     ui.weak(format!(
-        "Size before the run's first change: {} · at the end: {}",
+        "Size {} → {}",
         size(known.original_size),
         size(known.final_size)
     ));
@@ -606,10 +604,13 @@ fn contents(
     hashes(ui, file, clock);
     if known.differing > 0 {
         ui.weak(format!(
-            "{} byte{} differ between what the run saw first and last; ?? = not captured, ∅ = beyond the known size.",
+            "{} byte{} differ",
             known.differing,
             if known.differing == 1 { "" } else { "s" }
-        ));
+        ))
+        .on_hover_text(
+            "Between what the run saw first and last. ?? = not captured, ∅ = beyond the known size.",
+        );
     }
     for run in &known.runs {
         ui.add(

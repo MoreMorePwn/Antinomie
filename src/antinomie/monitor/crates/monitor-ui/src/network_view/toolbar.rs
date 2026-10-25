@@ -227,11 +227,7 @@ impl NetworkView {
             }
         }
         if self.display_pending {
-            theme::loading_colored(
-                ui,
-                theme::muted(),
-                "Applying display filter… Previous result stays visible.",
-            );
+            theme::loading_colored(ui, theme::muted(), "Applying filter…");
         }
         if let Some(index) = &self.display_index {
             ui.horizontal_wrapped(|ui| {
@@ -265,7 +261,7 @@ impl NetworkView {
                 }
             });
             if index.complete_extent() < index.identity().file_size {
-                ui.colored_label(theme::muted(), "The current display result includes complete records; an unfinished live record is waiting for more data.");
+                ui.colored_label(theme::muted(), "Live record incomplete.");
             }
         }
         if let Some(error) = &self.filter_error {

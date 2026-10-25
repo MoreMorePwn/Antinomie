@@ -387,7 +387,7 @@ fn choosing_a_file_draws_its_graph_and_choosing_a_node_lists_its_calls() {
     );
     assert!(shown
         .iter()
-        .any(|(text, _)| text.starts_with("Choose a file")));
+        .any(|(text, _)| text.starts_with("Select a file")));
     // Choose the dropped file.
     harness.click(&activity, center(&shown, "/tmp/payload"));
     let shown = harness.settle(&activity);
