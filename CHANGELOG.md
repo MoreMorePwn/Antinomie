@@ -24,6 +24,9 @@ it runs.
   agents that are not installed); the build fails if such a trace comes back.
   Each new or reset Debian VM gets its own root filesystem UUID and directory
   hash seed, and no sudoers.d file. Account provisioning now uses `guestfish`.
+  Files keep the change, access and birth times (with nanoseconds) their
+  installation gave them instead of 1970, and the filesystem's creation, mount
+  and write history reads like an installer's.
 - **Rootless Debian builds.** Native (`--mode=unshare`) Debian image builds
   move files in and out of the new root as the invoking user, so they no longer
   fail on the private staging directory; the conformance trace suite also runs
