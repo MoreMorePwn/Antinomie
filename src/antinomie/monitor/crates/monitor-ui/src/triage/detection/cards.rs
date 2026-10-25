@@ -21,9 +21,9 @@ pub(super) fn match_cards(
     if report.findings.is_empty() {
         return None;
     }
-    presentation::heading(ui, "Matches", "What each rule matched in this run");
+    presentation::heading(ui, "Matches", "");
     if rows.is_empty() {
-        ui.weak("No matches for this filter.");
+        ui.weak("No matches.");
         return None;
     }
     let mut opened = None;

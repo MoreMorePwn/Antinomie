@@ -473,8 +473,9 @@ impl NetworkView {
             && cx.active.is_none()
             && (cx.running || cx.recordings.is_some() || self.list.path.is_some())
         {
-            crate::activity::warning(ui,
-                "Disconnected: network capture is unavailable. Choose Isolated or NAT in VM settings. Saved captures can still be inspected.",
+            crate::activity::warning(
+                ui,
+                "Disconnected: no network capture. Saved captures can still be inspected.",
             );
         }
         if !self.hide_list {

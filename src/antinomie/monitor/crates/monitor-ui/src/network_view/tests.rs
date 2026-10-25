@@ -58,10 +58,7 @@ fn disconnected_capture_warning_is_visible_while_inspecting_saved_packets() {
             .into_iter()
             .map(|(text, _)| text)
             .collect();
-        assert_eq!(
-            text.contains("Disconnected: network capture is unavailable"),
-            !enabled
-        );
+        assert_eq!(text.contains("Disconnected: no network capture"), !enabled);
         assert!(
             view.list.path.is_some(),
             "saved capture selection is retained"

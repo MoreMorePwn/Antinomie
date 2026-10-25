@@ -149,7 +149,7 @@ impl TriageView {
                 ENDPOINT_SLOT,
                 network::ENDPOINT_FIELDS,
                 "network.country == US",
-                "Remote ip:port with the frames and bytes exchanged. Local addresses show “-” and “local network”; other rows use local TShark GeoIP data when it is configured.",
+                "",
             ),
             NewTab::Domains => (
                 DOMAIN_SLOT,
@@ -157,17 +157,12 @@ impl TriageView {
                 "dns.name contains example",
                 "DNS names, TLS server names and HTTP Host headers, merged by name.",
             ),
-            NewTab::Urls => (
-                3,
-                HTTP_FIELDS,
-                "http.method == GET",
-                "Encrypted request contents are unavailable. HTTP/2 is listed when it is cleartext.",
-            ),
+            NewTab::Urls => (3, HTTP_FIELDS, "http.method == GET", ""),
             NewTab::Tls => (
                 TLS_SLOT,
                 network::TLS_FIELDS,
                 "tls.sni contains example",
-                "TLS hellos and certificates as TShark parsed them, without keys: sessions with the same server name, server and JA3 are one row. Encrypted content stays encrypted.",
+                "",
             ),
         };
         let (count, omitted) = self
@@ -189,10 +184,7 @@ impl TriageView {
         if capture_missing && self.scan_rx.is_none() {
             let off = input.pcap.is_none();
             if off {
-                ui.colored_label(
-                    theme::muted(),
-                    "Skipped. No network capture was recorded for this run, so there is no packet data to read.",
-                );
+                ui.colored_label(theme::muted(), "Network capture was off for this run.");
             } else if let Some(warning) = self.scan.as_ref().and_then(|s| s.network_warning.clone())
             {
                 crate::activity::warning(ui, warning);
@@ -215,20 +207,12 @@ impl TriageView {
         if let Some(warning) = &scan.network_warning {
             crate::activity::warning(ui, warning);
         }
-        ui.horizontal_wrapped(|ui| {
-            ui.add(
-                egui::Label::new(
-                    RichText::new(format!(
-                        "{hint} This view comes from TShark only; the capture is VM-wide, so it names no process."
-                    ))
-                    .small()
-                    .color(theme::muted()),
-                )
-                .wrap(),
-            );
-        });
         let mut open_ioc = false;
         ui.horizontal_wrapped(|ui| {
+            if !hint.is_empty() {
+                ui.label(RichText::new(egui_phosphor::regular::INFO).color(theme::muted()))
+                    .on_hover_text(hint);
+            }
             if ui
                 .small_button("Open IOC")
                 .on_hover_text("Indicators with dataset matches, their process and evidence")

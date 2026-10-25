@@ -220,7 +220,12 @@ fn stealth(ui: &mut egui::Ui, profile: &StealthProfile, narrow: bool, fallbacks:
     ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new(icon::SHIELD).size(18.0).color(theme::blue()));
         ui.strong("Stealth profile");
-        pill(ui, profile.preset.label(), theme::blue());
+        let preset = pill(ui, profile.preset.label(), theme::blue());
+        if profile.preset == StealthPreset::Transparent {
+            preset.on_hover_text(
+                "QEMU's own identity. Choose a Realistic preset in Configure… to hide it.",
+            );
+        }
         if !fallbacks.is_empty() {
             pill(ui, "Stealth fallback", theme::warn()).on_hover_text(
                 fallbacks
@@ -372,15 +377,6 @@ fn stealth(ui: &mut egui::Ui, profile: &StealthProfile, narrow: bool, fallbacks:
             .on_hover_text(format!("• {}", giveaways.join("\n• ")));
         }
     });
-    if profile.preset == StealthPreset::Transparent {
-        ui.label(
-            RichText::new(
-                "QEMU's own identity. Choose a Realistic preset in Configure… to hide it.",
-            )
-            .small()
-            .color(theme::muted()),
-        );
-    }
 }
 
 #[cfg(test)]
@@ -493,7 +489,7 @@ mod tests {
         assert!(
             texts
                 .iter()
-                .any(|text| text.starts_with("QEMU's own identity")),
+                .any(|text| text.starts_with("Transparent QEMU")),
             "{texts:?}"
         );
         assert!(

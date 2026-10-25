@@ -176,7 +176,6 @@ impl TriageView {
                 theme::spinner(ui);
             }
             ui.colored_label(theme::muted(), self.refresh_status(input));
-            ui.weak("Host time").on_hover_text(HOST_TIME_NOTE);
         });
     }
 

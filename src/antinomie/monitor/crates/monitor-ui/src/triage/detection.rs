@@ -1019,7 +1019,7 @@ impl View {
         }
         let Some(result) = &self.results[index] else {
             if !scanning {
-                ui.weak("Not scanned. Choose Scan to evaluate this run.");
+                ui.weak("Not scanned.");
             }
             return;
         };
@@ -1063,7 +1063,7 @@ impl View {
                 {
                     "No rule matched the inputs that were scanned. Some inputs were not; see Scanned inputs."
                 }
-                State::Complete => "No rule matched the evaluated data.",
+                State::Complete => "No matches.",
                 State::NoRules => "No rules enabled. This is not a clean scan.",
                 State::Missing => "Evidence missing. This is not a clean scan.",
                 State::Skipped => header::SKIPPED_NOTE,

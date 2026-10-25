@@ -194,7 +194,7 @@ impl Model {
             .iter()
             .find(|state| Some(state.pack.id) == self.live.pick)
         else {
-            ui.weak("Select a pack for its source and terms.");
+            ui.weak("Select a pack.");
             return;
         };
         self.live_details(ui, state, now);

@@ -934,7 +934,7 @@ impl SamplesView {
                             egui::Button::new("Newest in range"),
                         )
                         .on_hover_text(
-                            "Official dated SHA-256 lists. This is separate from the last-24-hours list. Type is unknown until a sample is downloaded.",
+                            "Official dated SHA-256 lists. This is separate from the last-24-hours list. Cached-only mode covers local metadata. Archive dates are date-only observations, not first-seen timestamps. Type and architecture are unknown until a sample is downloaded.",
                         )
                         .clicked()
                 {
@@ -1051,17 +1051,18 @@ impl SamplesView {
                 );
             }
             if !self.catalog_errors.is_empty() {
-                egui::CollapsingHeader::new("Unavailable days / retry details").show(ui, |ui| {
-                    for error in &self.catalog_errors {
-                        crate::activity::warning(ui, error);
-                    }
-                    ui.label("Retry the range to resume. Successfully cached days are reused.");
-                });
+                egui::CollapsingHeader::new("Unavailable days / retry details")
+                    .show(ui, |ui| {
+                        for error in &self.catalog_errors {
+                            crate::activity::warning(ui, error);
+                        }
+                    })
+                    .header_response
+                    .on_hover_text(
+                        "Retry the range to resume. Successfully cached days are reused.",
+                    );
             }
-            ui.colored_label(
-                theme::muted(),
-                "MalShare: API lists cover the last 24 hours. Ranges cover up to 366 inclusive UTC days; cached-only mode covers local metadata. Archive dates are date-only observations, not first-seen timestamps. Type and architecture remain unknown.",
-            );
+            ui.colored_label(theme::muted(), "Last 24 hours; ranges up to 366 UTC days.");
             if all {
                 self.search_all(cx);
             } else if let Some(text) = search {

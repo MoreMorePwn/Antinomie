@@ -215,7 +215,7 @@ fn details_follow_the_triage_tab_and_return_to_the_trace() {
     let output = render(&mut app, &ctx, size);
     assert!(texts(&output)
         .iter()
-        .any(|(text, _)| text == "Select an entry in Triage to inspect it here."));
+        .any(|(text, _)| text == "Nothing selected."));
     assert!(!texts(&output)
         .iter()
         .any(|(text, _)| text == "Select a syscall in the trace to decode it here"));

@@ -439,7 +439,7 @@ fn run_history_filter_keeps_a_run_chosen_in_the_dropdown_and_says_it_is_hidden()
         Some("old"),
         "Run History drawing cleared the selection the user just made"
     );
-    assert!(mentions(&text, "hidden by this filter"), "{text:?}");
+    assert!(mentions(&text, "Hidden by filter"), "{text:?}");
     assert!(mentions(&text, "Clear filter"), "{text:?}");
 }
 
@@ -452,13 +452,13 @@ fn a_typed_run_filter_keeps_the_selected_run_and_clearing_it_shows_the_run_again
     app.run_query = "pid == 99999".into();
     let text = shown(&mut app, &ctx, Panel::RunHistory);
     assert_eq!(app.selected_run.as_deref(), Some("old"));
-    assert!(mentions(&text, "hidden by this filter"), "{text:?}");
+    assert!(mentions(&text, "Hidden by filter"), "{text:?}");
     app.run_filter = RunFilter::Live;
     app.clear_run_filter();
     let text = shown(&mut app, &ctx, Panel::RunHistory);
     assert_eq!(app.selected_run.as_deref(), Some("old"));
     assert!(app.run_query.is_empty() && app.run_filter == RunFilter::All);
-    assert!(!mentions(&text, "hidden by this filter"), "{text:?}");
+    assert!(!mentions(&text, "Hidden by filter"), "{text:?}");
 }
 
 #[test]

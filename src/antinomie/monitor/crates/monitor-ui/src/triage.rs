@@ -497,7 +497,7 @@ impl TriageView {
     ) -> Option<trace::InvocationKey> {
         if input.run_id.is_none() {
             self.tick(ui.ctx(), TriageInput::empty());
-            ui.weak("Select a program run to view triage.");
+            ui.weak("Select a run.");
             return None;
         }
         self.mark_shown(ui.ctx());
@@ -524,30 +524,17 @@ impl TriageView {
         }
         let jump = match self.section {
             Section::Summary | Section::Properties | Section::Detection | Section::Ioc => None,
-            Section::Process => {
-                presentation::heading(ui, "Process activity", "");
-                self.process(ui, &input)
-            }
+            Section::Process => self.process(ui, &input),
             Section::Files => {
-                presentation::heading(ui, "File activity", "");
                 self.files(ui, &input);
                 None
             }
             Section::Network => {
-                presentation::heading(
-                    ui,
-                    "Network activity",
-                    &format!("Network route: {}", self.route.headline),
-                );
+                ui.weak(format!("Route: {}", self.route.headline));
                 self.new_network(ui, &input);
                 None
             }
             Section::Bpf => {
-                presentation::heading(
-                    ui,
-                    "eBPF & seccomp",
-                    "Captured programs, filters and their syscall evidence",
-                );
                 let indexed = self.scan.as_ref().map(|scan| scan.bpf.as_slice());
                 if self.scan.as_ref().is_some_and(|scan| scan.bpf_omitted > 0) {
                     crate::activity::warning(ui, "Some BPF observations exceed the preview limit; original syscall evidence remains available.");

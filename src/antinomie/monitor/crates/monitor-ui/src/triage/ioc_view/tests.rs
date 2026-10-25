@@ -424,7 +424,6 @@ fn the_network_section_has_four_tabs_and_no_layout_switch() {
     ] {
         assert!(text.contains(wanted), "{wanted:?} missing: {text}");
     }
-    assert!(text.contains("names no process"), "{text}");
     assert!(!text.contains("Sessions"), "{text}");
     // A saved filter on a 0.7.0 field name still compiles for its table.
     for (fields, filter) in [
@@ -481,7 +480,11 @@ fn a_run_without_a_capture_says_the_network_tabs_were_skipped() {
             });
         },
     );
-    assert!(shown(&output).contains("Skipped"), "{}", shown(&output));
+    assert!(
+        shown(&output).contains("Network capture was off"),
+        "{}",
+        shown(&output)
+    );
 }
 
 #[test]

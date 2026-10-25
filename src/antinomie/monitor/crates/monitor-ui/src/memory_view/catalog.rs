@@ -112,7 +112,7 @@ impl MemoryView {
                     theme::muted(),
                     match import.os {
                         Os::Windows => "Windows symbols are downloaded from Microsoft's symbol server when a plugin first needs them.",
-                        Os::Linux => "Linux dumps need the symbol table of their exact kernel: pick the base a dump of an Antinomie VM was taken from; for other machines, Volatility finds distribution kernels' tables.",
+                        Os::Linux => "Pick the base this dump was taken from.",
                         Os::Mac => "macOS dumps need a symbol table for their kernel in Volatility's symbol folders.",
                     },
                 );

@@ -35,7 +35,7 @@ pub(crate) fn show(
         .id_salt("analysis_tools")
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            ui.label(
+            ui.label("Tools used by static analysis.").on_hover_text(
                 "Static analysis uses these tools when they are installed on this system. \
                  When one is missing, Antinomie can download it from its upstream release \
                  (checked by SHA-256) into its data folder; the analysis sandbox uses it \
@@ -87,19 +87,22 @@ pub(crate) fn show(
                 });
             }
             ui.separator();
-            ui.label(
-                RichText::new(
-                    "Licenses: capa Apache-2.0; Detect It Easy MIT (with Qt LGPL-3.0 and ICU); \
-                     Ghidra Apache-2.0 with the Eclipse Temurin JDK (GPL-2.0 with Classpath \
-                     exception); pySigma LGPL-3.0 with its SQLite backend LGPL-2.1, installed \
-                     from PyPI into its own environment; Magika Apache-2.0 (Google), one \
-                     executable from its GitHub release, which the Properties panel prefers \
-                     over a system copy. Set ANTINOMIE_ANALYSIS_TOOLS=managed to prefer \
-                     Antinomie's copies over the system's elsewhere.",
-                )
-                .small()
-                .weak(),
-            );
+            egui::CollapsingHeader::new("Licenses")
+                .default_open(false)
+                .show(ui, |ui| {
+                    ui.label(
+                        RichText::new(
+                            "capa Apache-2.0; Detect It Easy MIT (with Qt LGPL-3.0 and ICU); \
+                             Ghidra Apache-2.0 with the Eclipse Temurin JDK (GPL-2.0 with Classpath \
+                             exception); pySigma LGPL-3.0 with its SQLite backend LGPL-2.1, installed \
+                             from PyPI into its own environment; Magika Apache-2.0 (Google), one \
+                             executable from its GitHub release, which the Properties panel prefers \
+                             over a system copy.",
+                        )
+                        .small()
+                        .weak(),
+                    );
+                });
         });
     command
 }
