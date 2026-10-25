@@ -913,6 +913,7 @@ fn notes_table(
     let mut detail = None;
     crate::widgets::table::begin(ui);
     TableBuilder::new(ui)
+        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
         .max_scroll_height(table_height)
         .striped(true)
         .sense(egui::Sense::click())
