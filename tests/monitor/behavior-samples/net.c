@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //
-// net.c — bounded sockets, HTTP and DNS for the malware-activity samples.
-#include "malware.h"
+// net.c — bounded sockets, HTTP and DNS for the behavior samples.
+#include "samples.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -18,29 +18,29 @@
 #include <time.h>
 #include <unistd.h>
 
-void mal_delay(int milliseconds)
+void sample_delay(int milliseconds)
 {
     if (milliseconds <= 0)
         return;
-    if (milliseconds > MAL_MAX_DELAY_MS)
-        milliseconds = MAL_MAX_DELAY_MS;
+    if (milliseconds > SAMPLE_MAX_DELAY_MS)
+        milliseconds = SAMPLE_MAX_DELAY_MS;
     struct timespec ts = {.tv_sec = milliseconds / 1000,
                           .tv_nsec = (long)(milliseconds % 1000) * 1000000L};
     while (nanosleep(&ts, &ts) != 0 && errno == EINTR)
         ;
 }
 
-const char *mal_host(const struct options *options)
+const char *sample_host(const struct options *options)
 {
-    return options->host ? options->host : MAL_C2_ADDR;
+    return options->host ? options->host : SAMPLE_REMOTE_ADDR;
 }
 
-int mal_port(const struct options *options, int fallback)
+int sample_port(const struct options *options, int fallback)
 {
     return options->port > 0 ? options->port : fallback;
 }
 
-int mal_mkdir_p(const char *path)
+int sample_mkdir_p(const char *path)
 {
     char copy[512];
     int length = snprintf(copy, sizeof copy, "%s", path);
@@ -61,7 +61,7 @@ int mal_mkdir_p(const char *path)
     return stat(path, &info) == 0 && S_ISDIR(info.st_mode) ? 0 : -1;
 }
 
-size_t mal_hex(const char *input, char *output, size_t cap)
+size_t sample_hex(const char *input, char *output, size_t cap)
 {
     static const char digits[] = "0123456789abcdef";
     size_t at = 0;
@@ -74,7 +74,7 @@ size_t mal_hex(const char *input, char *output, size_t cap)
     return at;
 }
 
-size_t mal_fingerprint(char *output, size_t cap)
+size_t sample_fingerprint(char *output, size_t cap)
 {
     struct utsname info;
     char host[128] = "?";
@@ -89,7 +89,7 @@ size_t mal_fingerprint(char *output, size_t cap)
     return strlen(output);
 }
 
-int mal_dial(const char *host, int port, int timeout_ms)
+int sample_dial(const char *host, int port, int timeout_ms)
 {
     struct sockaddr_in target;
     memset(&target, 0, sizeof target);
@@ -136,7 +136,7 @@ int mal_dial(const char *host, int port, int timeout_ms)
     return fd;
 }
 
-int mal_send_all(int fd, const void *buffer, size_t length)
+int sample_send_all(int fd, const void *buffer, size_t length)
 {
     const char *cursor = buffer;
     while (length > 0) {
@@ -154,7 +154,7 @@ int mal_send_all(int fd, const void *buffer, size_t length)
     return 0;
 }
 
-ssize_t mal_recv_wait(int fd, void *buffer, size_t length, int timeout_ms)
+ssize_t sample_recv_wait(int fd, void *buffer, size_t length, int timeout_ms)
 {
     struct pollfd ready = {.fd = fd, .events = POLLIN};
     int waited = poll(&ready, 1, timeout_ms);
@@ -163,10 +163,10 @@ ssize_t mal_recv_wait(int fd, void *buffer, size_t length, int timeout_ms)
     return recv(fd, buffer, length, 0);
 }
 
-int mal_http_request(const char *host, int port, const char *method, const char *path,
+int sample_http_request(const char *host, int port, const char *method, const char *path,
                      const char *body, size_t body_len, unsigned long long *received)
 {
-    int fd = mal_dial(host, port, 1500);
+    int fd = sample_dial(host, port, 1500);
     if (fd < 0)
         return -1;
     char header[1024];
@@ -178,14 +178,14 @@ int mal_http_request(const char *host, int port, const char *method, const char 
                           "Content-Type: application/x-www-form-urlencoded\r\n"
                           "Content-Length: %zu\r\n"
                           "Connection: close\r\n\r\n",
-                          method, path, host, MAL_USER_AGENT, body_len);
+                          method, path, host, SAMPLE_USER_AGENT, body_len);
     int ok = length > 0 && (size_t)length < sizeof header &&
-             mal_send_all(fd, header, (size_t)length) == 0 &&
-             (body_len == 0 || mal_send_all(fd, body, body_len) == 0);
+             sample_send_all(fd, header, (size_t)length) == 0 &&
+             (body_len == 0 || sample_send_all(fd, body, body_len) == 0);
     if (ok && received) {
         char sink[4096];
         for (int i = 0; i < 4; i++) {
-            ssize_t got = mal_recv_wait(fd, sink, sizeof sink, 400);
+            ssize_t got = sample_recv_wait(fd, sink, sizeof sink, 400);
             if (got <= 0)
                 break;
             *received += (unsigned long long)got;
@@ -195,7 +195,7 @@ int mal_http_request(const char *host, int port, const char *method, const char 
     return ok ? 0 : -1;
 }
 
-size_t mal_dns_build(unsigned char *packet, const char *name, uint16_t type, uint16_t id)
+size_t sample_dns_build(unsigned char *packet, const char *name, uint16_t type, uint16_t id)
 {
     size_t length = 0;
     packet[length++] = (unsigned char)(id >> 8);
@@ -227,7 +227,7 @@ size_t mal_dns_build(unsigned char *packet, const char *name, uint16_t type, uin
     return length;
 }
 
-int mal_dns_ask(const char *resolver, const char *name, uint16_t type, int wait_ms)
+int sample_dns_ask(const char *resolver, const char *name, uint16_t type, int wait_ms)
 {
     int fd = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
     if (fd < 0)
@@ -235,9 +235,9 @@ int mal_dns_ask(const char *resolver, const char *name, uint16_t type, int wait_
     struct sockaddr_in server;
     memset(&server, 0, sizeof server);
     server.sin_family = AF_INET;
-    // Port 53 needs root for a local sinkhole; MAL_DNS_PORT lets a guest run
+    // Port 53 needs root for a local sinkhole; SAMPLE_DNS_PORT lets a guest run
     // the sinkhole on an unprivileged port without changing the sample.
-    const char *port_text = getenv("MAL_DNS_PORT");
+    const char *port_text = getenv("SAMPLE_DNS_PORT");
     int port = 53;
     if (port_text && *port_text) {
         int parsed = atoi(port_text);
@@ -250,7 +250,7 @@ int mal_dns_ask(const char *resolver, const char *name, uint16_t type, int wait_
         return 0;
     }
     unsigned char packet[512];
-    size_t length = mal_dns_build(packet, name, type, (uint16_t)(getpid() ^ wait_ms));
+    size_t length = sample_dns_build(packet, name, type, (uint16_t)(getpid() ^ wait_ms));
     int answered = 0;
     if (sendto(fd, packet, length, 0, (struct sockaddr *)&server, sizeof server) > 0 && wait_ms > 0) {
         struct pollfd ready = {.fd = fd, .events = POLLIN};
