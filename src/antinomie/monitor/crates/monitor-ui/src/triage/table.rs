@@ -257,6 +257,7 @@ fn table_rows_with(
     let mut builder = TableBuilder::new(ui)
         .id_salt(("triage-062", id))
         .striped(true)
+        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
         .resizable(true)
         .vscroll(true)
         .max_scroll_height(max_height)
@@ -459,6 +460,18 @@ fn numeric_column(header: &str) -> bool {
     )
 }
 
+/// The stored columns of a table in the order they are laid out. Time comes
+/// first in the Suspicious activity table, whose rows keep the order the
+/// filters, sorts and Details know them by.
+pub(super) fn display_order(id: &str, count: usize) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..count).collect();
+    if id == "triage-findings" && count == rules::HEADERS.len() {
+        order.retain(|column| *column != rules::COL_TIME);
+        order.insert(0, rules::COL_TIME);
+    }
+    order
+}
+
 fn finding_table_rows(
     ui: &mut egui::Ui,
     id: &str,
@@ -472,7 +485,10 @@ fn finding_table_rows(
         ui.colored_label(theme::muted(), "Nothing recorded for this view.");
         return None;
     }
-    let widths = column_widths(ui, headers, rows.iter().map(|row| row.cells.as_slice()));
+    let mut widths = column_widths(ui, headers, rows.iter().map(|row| row.cells.as_slice()));
+    // The columns as they are laid out: Time leads the Suspicious activity table.
+    let shown = display_order(id, headers.len());
+    widths = shown.iter().map(|&column| widths[column]).collect();
     let order = sorting::order(
         ui.ctx(),
         id,
@@ -495,13 +511,14 @@ fn finding_table_rows(
     let mut builder = TableBuilder::new(ui)
         .id_salt(("triage-062", id))
         .striped(true)
+        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
         .resizable(true)
         .vscroll(true)
         .max_scroll_height(max_height)
         .min_scrolled_height(0.0)
         .sense(egui::Sense::click());
     for (index, width) in widths.into_iter().enumerate() {
-        builder = if index + 1 == headers.len() {
+        builder = if index + 1 == shown.len() {
             builder.column(Column::remainder().at_least(width))
         } else {
             builder.column(Column::initial(width).at_least(64.0).resizable(true))
@@ -515,7 +532,10 @@ fn finding_table_rows(
     }
     builder
         .header(row_height, |mut header| {
-            for (column, title) in headers.iter().enumerate() {
+            // A header sorts by the stored column it shows, so the sort the
+            // query asks for needs no translation.
+            for &column in &shown {
+                let title = headers[column];
                 header.col(|ui| {
                     crate::widgets::table::aligned(
                         ui,
@@ -531,7 +551,11 @@ fn finding_table_rows(
                     .as_ref()
                     .map_or(row.index(), |order| order[row.index()])];
                 row.set_selected(selected == Some(finding.key));
-                for (column, cell) in finding.cells.iter().enumerate() {
+                for &column in &shown {
+                    let Some(cell) = finding.cells.get(column) else {
+                        row.col(|_| {});
+                        continue;
+                    };
                     row.col(|ui| {
                         let mut text = RichText::new(bounded_cell(&cell.text)).color(cell.color());
                         if cell.mono {
@@ -569,4 +593,26 @@ fn finding_table_rows(
             });
         });
     clicked
+}
+
+#[cfg(test)]
+mod display_tests {
+    use super::*;
+
+    #[test]
+    fn time_leads_the_suspicious_activity_table_and_no_other() {
+        let count = rules::HEADERS.len();
+        let findings = display_order("triage-findings", count);
+        assert_eq!(findings[0], rules::COL_TIME);
+        assert_eq!(rules::HEADERS[findings[0]], "Time");
+        // Every stored column is shown once, the rest in their old order.
+        let mut sorted = findings.clone();
+        sorted.sort_unstable();
+        assert_eq!(sorted, (0..count).collect::<Vec<_>>());
+        assert_eq!(findings[1], 0, "Rule follows Time");
+        assert_eq!(rules::HEADERS[findings[2]], "Tier");
+        // Other tables, and a findings table of another width, keep theirs.
+        assert_eq!(display_order("triage-opened", 5), vec![0, 1, 2, 3, 4]);
+        assert_eq!(display_order("triage-findings", 3), vec![0, 1, 2]);
+    }
 }
