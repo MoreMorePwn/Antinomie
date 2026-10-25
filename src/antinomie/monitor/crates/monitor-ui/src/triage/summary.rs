@@ -58,6 +58,7 @@ pub(super) fn show(view: &mut TriageView, ui: &mut egui::Ui, input: &TriageInput
             Destination::Graph => {
                 view.section = Section::Process;
                 view.process = ProcessTab::Graph;
+                view.clear_finding_filters(ui.ctx());
             }
             Destination::Opened => {
                 view.section = Section::Files;

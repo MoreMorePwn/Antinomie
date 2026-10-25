@@ -594,14 +594,76 @@ fn where_two_findings_overlap_the_worst_is_hit_and_the_rest_are_counted() {
         input::hit_test(&layout, &index, 10.0, pos),
         Some(Hit::Marker { record: 1, near: 3 })
     );
-    let lines = input::tooltip(&index, 1, 3, None);
+    let tip = input::tooltip(&index, 1, 3, None);
     assert!(
-        lines
-            .iter()
-            .any(|line| line.contains("HIGH") && line.contains("Command & control")),
-        "{lines:?}"
+        tip.heading.contains("HIGH") && tip.heading.contains("Command & control"),
+        "{tip:?}"
     );
-    assert!(lines.iter().any(|line| line.contains("3 findings")));
+    assert_eq!(tip.tier, Tier::High);
+    assert!(tip
+        .crowd
+        .as_deref()
+        .is_some_and(|text| text.contains("3 findings")));
+    assert!(
+        tip.facts.iter().any(|(label, _)| *label == "When"),
+        "{tip:?}"
+    );
+}
+
+#[test]
+fn the_marker_under_the_pointer_is_the_hovered_one_and_none_when_it_leaves() {
+    let index = scene();
+    let mut harness = Harness::new();
+    harness.frame(&index, vec![]);
+    let layout = harness.layout(&index);
+    assert_eq!(harness.state.hovered, None);
+    let at = marker_pos(&layout, &index, 0);
+    harness.frame(&index, vec![Event::PointerMoved(at)]);
+    harness.frame(&index, vec![]);
+    let hovered = harness
+        .state
+        .hovered
+        .expect("a marker is under the pointer");
+    assert!(hovered < index.records.len());
+    // The tooltip says what it is: tier chip, rule, process, when.
+    let tip = input::tooltip(&index, hovered, 1, None);
+    assert!(tip.heading.contains(" · "), "{tip:?}");
+    assert!(tip.facts.iter().any(|(label, _)| *label == "When"));
+    // Away from every marker nothing is hovered.
+    let away = Pos2::new(layout.frame.plot.left() + 2.0, layout.frame.axis.center().y);
+    harness.frame(&index, vec![Event::PointerMoved(away)]);
+    harness.frame(&index, vec![]);
+    assert_eq!(harness.state.hovered, None);
+}
+
+#[test]
+fn the_ruler_grips_are_wide_enough_to_take_hold_of() {
+    use super::ruler::{self, Spot};
+    const { assert!(ruler::GRAB >= 8.0, "the edge grab is at least 8 points") };
+    let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(1000.0, 20.0));
+    let (range, window) = ((0.0, 100.0), (20.0, 60.0));
+    let (left, right) = (
+        ruler::x_of(rect, range, window.0),
+        ruler::x_of(rect, range, window.1),
+    );
+    // Seven points either side of an edge still takes it.
+    for dx in [-7.0, -1.0, 0.0, 1.0, 7.0] {
+        assert_eq!(
+            ruler::spot(rect, range, window, left + dx),
+            Spot::LeftEdge,
+            "{dx}"
+        );
+        assert_eq!(
+            ruler::spot(rect, range, window, right + dx),
+            Spot::RightEdge,
+            "{dx}"
+        );
+    }
+    assert_eq!(
+        ruler::spot(rect, range, window, (left + right) / 2.0),
+        Spot::Window
+    );
+    assert_eq!(ruler::spot(rect, range, window, left - 30.0), Spot::Empty);
 }
 
 #[test]
@@ -1147,6 +1209,39 @@ fn markers_keep_three_to_one_contrast_against_the_lane_in_every_theme() {
                     Tier::ALL[tier].tag()
                 );
             }
+        }
+    }
+}
+
+#[test]
+fn the_hover_ring_and_the_tooltip_chips_read_in_every_theme() {
+    use super::paint::blend;
+    for theme in Theme::ALL {
+        let palette = theme.palette();
+        let colors = Colors::of(palette);
+        // The ring is the accent colour over the lane.
+        for row in [0, 1] {
+            let ratio = contrast(colors.accent, colors.lane(row));
+            assert!(
+                ratio >= 3.0,
+                "{} hover ring on lane {row}: {ratio:.2}:1",
+                theme.label()
+            );
+        }
+        // The tier chip of the tooltip: its text on its tint, laid on the
+        // tooltip's ground.
+        for (name, fg, bg) in [
+            ("high", palette.error, palette.error_bg),
+            ("medium", palette.warn, palette.warn_bg),
+            ("low", palette.info, palette.info_bg),
+            ("info", palette.muted, palette.neutral_bg),
+        ] {
+            let ratio = contrast(fg, blend(palette.panel, bg));
+            assert!(
+                ratio >= 3.0,
+                "{} {name} chip text: {ratio:.2}:1",
+                theme.label()
+            );
         }
     }
 }

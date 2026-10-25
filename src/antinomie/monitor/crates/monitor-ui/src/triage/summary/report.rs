@@ -513,6 +513,7 @@ pub(super) fn content(
             }
         });
     if pop_out {
+        view.clear_finding_filters(ui.ctx());
         view.open_graph_window(ui.ctx());
     }
     destination

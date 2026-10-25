@@ -11,7 +11,9 @@ use super::view::{self, Ruler, State};
 use eframe::egui::{Painter, Pos2, Rect, Shape, Stroke};
 
 /// How close to an edge of the window, in pixels, still takes the edge.
-pub(super) const GRAB: f32 = 5.0;
+pub(super) const GRAB: f32 = 8.0;
+/// Width of the grip drawn on each edge of the window, in pixels.
+const GRIP_W: f32 = 8.0;
 /// A drag shorter than this many pixels is a click.
 pub(super) const CLICK_PX: f32 = 3.0;
 
@@ -240,12 +242,29 @@ pub(super) fn paint(painter: &Painter, drawing: Drawing<'_>, colors: &Colors) {
         Stroke::new(1.5_f32, colors.accent),
         eframe::egui::StrokeKind::Inside,
     );
-    // A grip at each edge.
-    for x in [view.left() + 1.5, view.right() - 1.5] {
-        let middle = rect.center().y;
-        painter.line_segment(
-            [Pos2::new(x, middle - 5.0), Pos2::new(x, middle + 5.0)],
-            Stroke::new(2.0_f32, colors.accent),
+    // A grip at each edge: a handle as wide as the pointer's grab, with two
+    // light ridges, so the edges read as things to take hold of.
+    let grip_h = (rect.height() - 4.0).clamp(10.0, 20.0);
+    for x in [view.left(), view.right()] {
+        let handle = Rect::from_center_size(
+            Pos2::new(x, rect.center().y),
+            eframe::egui::vec2(GRIP_W, grip_h),
         );
+        let handle = if x == view.left() {
+            handle.translate(eframe::egui::vec2(GRIP_W / 2.0 - 1.0, 0.0))
+        } else {
+            handle.translate(eframe::egui::vec2(-GRIP_W / 2.0 + 1.0, 0.0))
+        };
+        painter.rect_filled(handle, 3.0, colors.accent);
+        let ridge = super::paint::ink(colors.accent).gamma_multiply(0.85);
+        for dx in [-1.25_f32, 1.25] {
+            painter.line_segment(
+                [
+                    Pos2::new(handle.center().x + dx, handle.center().y - grip_h * 0.28),
+                    Pos2::new(handle.center().x + dx, handle.center().y + grip_h * 0.28),
+                ],
+                Stroke::new(1.0_f32, ridge),
+            );
+        }
     }
 }
