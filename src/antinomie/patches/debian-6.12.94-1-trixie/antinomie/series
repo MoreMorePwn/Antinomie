@@ -1,60 +1,32 @@
-0001-antinomie-add-kernel-control-and-scoped-syscall-telemetry-over-v7.patch
-0002-antinomie-license-original-shared-transport-headers-under-mit.patch
-0003-antinomie-tag-launched-run-lineage-and-request-tree-stop.patch
-0004-antinomie-checkpoint-native-capture-and-async-run-tracking.patch
-0005-antinomie-capture-socket-options-by-level-and-name.patch
-0006-antinomie-decode-prctl-ptrace-keyctl-and-sysfs-selectors.patch
-0007-antinomie-capture-mount-quotactl-kexec-load-and-rseq-arguments.patch
-0008-antinomie-capture-bpf-attributes-and-implicit-signal-and-uretprobe-frames.patch
-0009-antinomie-record-clone-writes-semctl-arrays-and-deferred-pointers.patch
-0010-antinomie-observe-async-requests-in-their-address-space-and-at-aio-reap.patch
-0011-antinomie-address-review-of-async-reap-and-operand-capture.patch
-0012-antinomie-label-non-resident-pages-pace-async-publication-reap-vectored-aio.patch
-0013-antinomie-report-the-contract-revision-and-patch-series-identity.patch
-0014-antinomie-capture-bounded-initial-executable-specimens-for-static-analysis.patch
-0015-antinomie-keep-specimen-reservations-until-memory-is-freed.patch
-0016-antinomie-add-independent-process-tree-and-userspace-capture-sessions.patch
-0017-antinomie-recycle-retained-capture-records-without-a-per-boot-limit.patch
-0018-antinomie-size-telemetry-rings-at-boot-and-let-the-host-ask-senders-to-wait.patch
-0019-antinomie-add-fenced-guest-reattachment-for-snapshot-recovery.patch
-0020-antinomie-launch-programs-without-leading-their-session.patch
-0021-antinomie-retain-bounded-root-process-elf-cores-at-exit.patch
-0022-antinomie-serialize-retained-core-cleanup-and-report-interrupted-dumps.patch
-0023-antinomie-bound-memory-pressure-while-arming-exit-cores.patch
-0024-antinomie-preserve-immediate-sigkill-teardown-for-armed-cores.patch
-0025-antinomie-capture-live-process-cores-with-cooperative-pause-and-resume.patch
-0026-antinomie-distinguish-task-work-wakeups-from-pending-signals.patch
-0027-antinomie-do-not-mark-the-command-worker-as-memory-reclaim.patch
-0028-antinomie-sample-guest-ram-and-root-filesystem-usage-in-the-kernel.patch
-0029-antinomie-record-task-credentials-and-hash-executed-and-deleted-files.patch
-0030-antinomie-define-the-debugger-control-opcodes-and-make-room-for-them.patch
-0031-antinomie-add-a-ptrace-free-process-debug-engine.patch
-0032-antinomie-bound-the-spin-of-a-telemetry-sender-that-may-not-sleep.patch
-0033-antinomie-escalate-stop-to-sigkill-for-the-whole-run-after-a-grace-period.patch
-0034-antinomie-keep-process-cores-sparse-so-holes-do-not-use-up-the-size-limit.patch
-0035-antinomie-debug-engine-signal-stops-exact-steps-over-syscalls-and-string-loops-batched-registers.patch
-0036-antinomie-debug-engine-hardware-breakpoints-and-watchpoints.patch
-0037-antinomie-debug-engine-debug-on-start-and-the-auxiliary-vector.patch
-0038-antinomie-debug-engine-process-core-and-stop-under-a-debug-stop-signals-before-fatal-exits.patch
-0039-antinomie-size-process-cores-by-the-guest-s-memory-grow-the-buffer-in-chunks-report-why-a-core-is-cut.patch
-0040-antinomie-poll-the-control-worker-every-tick-while-a-finished-process-core-is-read.patch
-0041-antinomie-debugger-phase-3-wire-contract.patch
-0042-antinomie-debug-engine-follow-fork-vfork-and-exec-non-stop-threads-adoptable-sessions.patch
-0043-antinomie-count-io-uring-workers-in-the-run-so-the-root-s-exit-is-not-lost.patch
-0044-antinomie-publish-the-identity-of-the-files-a-call-acted-on-and-the-image-an-exec-loaded.patch
-0045-antinomie-hash-the-files-a-run-writes-at-their-last-close-and-the-launched-program-s-image-on-request.patch
-0046-antinomie-keep-the-host-s-boot-options-out-of-the-guest-s-command-line.patch
-0047-antinomie-leave-the-recorder-s-symbols-out-of-proc-kallsyms-and-wchan.patch
-0048-antinomie-do-not-name-guest-workers-after-the-recorder.patch
-0049-antinomie-do-not-enumerate-qemu-s-own-acpi-devices.patch
-0050-antinomie-start-a-program-as-a-job-of-a-closed-terminal-shell-on-request.patch
-0051-antinomie-a-failed-async-request-has-no-payload-to-lose-decode-termios2-and-process-group-ioctls.patch
-0052-antinomie-keep-the-efi-stub-from-placing-the-kernel-on-the-bootstrap-page.patch
-0053-antinomie-read-inputs-that-were-not-resident-at-entry-again-at-exit.patch
-0054-antinomie-publish-the-identity-of-a-removed-directory-and-of-splice-and-xattr-requests-files.patch
-0055-antinomie-an-io-uring-entry-only-one-process-can-write-is-attributed-to-it.patch
-0056-antinomie-async-records-wait-for-room-instead-of-being-lost-while-the-host-waits.patch
-0057-antinomie-an-io-uring-rename-link-or-unlink-names-its-file-from-the-operation.patch
-0058-antinomie-debug-engine-reads-a-thread-s-registers-only-while-its-stack-is-held.patch
-0059-antinomie-debug-engine-never-waits-without-bound-for-a-step.patch
-0060-antinomie-a-clone-clone-vfork-child-without-clone-vm-keeps-its-own-memory.patch
+# Antinomie guest kernel series, by topic. Generated from the canonical copy in
+# src/antinomie/core/6.12 by scripts/sync-quilt-view.py; edit the comments only.
+# See src/antinomie/patches/README.md.
+
+# Host control channel and transport
+0001-antinomie-add-the-host-control-channel-and-its-shared-memory-transport.patch
+# Licence of the shared transport headers (kept apart: a licence change)
+0002-antinomie-license-the-shared-transport-headers-under-mit.patch
+
+# System call recording
+0003-antinomie-add-the-generated-table-of-x86-64-system-calls.patch
+0004-antinomie-record-the-system-calls-of-launched-and-attached-processes.patch
+0005-antinomie-decode-system-call-arguments-by-syscall-family.patch
+
+# Runs and asynchronous I/O
+0006-antinomie-track-each-launched-run-and-stop-its-whole-process-tree.patch
+0007-antinomie-observe-io-uring-and-aio-requests.patch
+
+# Evidence: the executed image, lifecycle records, process cores
+0008-antinomie-capture-the-launched-program-s-executable-image.patch
+0009-antinomie-publish-credentials-file-identities-and-file-hashes.patch
+0010-antinomie-capture-process-cores-at-exit-and-on-request.patch
+
+# Debugging
+0011-antinomie-add-a-ptrace-free-debug-engine.patch
+
+# Guest services and launch
+0012-antinomie-sample-guest-memory-and-root-filesystem-usage.patch
+0013-antinomie-launch-programs-as-a-terminal-shell-would-have-run-them.patch
+
+# Hiding the recorder inside the guest
+0014-antinomie-hide-the-recorder-from-programs-in-the-guest.patch

@@ -1,0 +1,67 @@
+Description: antinomie: license the shared transport headers under MIT
+ abi.h, bootstrap_layout.h and queue.h describe the shared-memory
+ transport, and control_wire.h the control protocol. They are the
+ project's own work and hold only layouts, constants and the wire
+ specification, which the host application (GPL-3.0-only) and any
+ other host have to share with the guest. GPL-2.0-only kernel headers
+ could not be included there, so these four are relicensed under MIT,
+ with the copyright line. The kernel code that implements them stays
+ GPL-2.0-only.
+ .
+ This change is kept as a patch of its own because it changes a licence,
+ not behaviour: the previous patch introduces the headers under the
+ kernel's terms, and this one, in order, makes them MIT. What later
+ patches add to these headers is MIT as well.
+ .
+ No kernel file outside kernel/antinomie is touched, and the contract
+ does not change.
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-10-26
+
+---
+diff --git a/kernel/antinomie/abi.h b/kernel/antinomie/abi.h
+index a2019fc..cf82dde 100644
+--- a/kernel/antinomie/abi.h
++++ b/kernel/antinomie/abi.h
+@@ -1,4 +1,5 @@
+-/* SPDX-License-Identifier: GPL-2.0-only */
++/* SPDX-License-Identifier: MIT */
++/* Copyright (c) 2026 MikiMiku (MoreMorePwn) */
+ #ifndef ANTINOMIE_TRANSPORT_ABI_H
+ #define ANTINOMIE_TRANSPORT_ABI_H
+ #include <linux/types.h>
+diff --git a/kernel/antinomie/bootstrap_layout.h b/kernel/antinomie/bootstrap_layout.h
+index 1da2fd9..e756408 100644
+--- a/kernel/antinomie/bootstrap_layout.h
++++ b/kernel/antinomie/bootstrap_layout.h
+@@ -1,4 +1,5 @@
+-/* SPDX-License-Identifier: GPL-2.0-only */
++/* SPDX-License-Identifier: MIT */
++/* Copyright (c) 2026 MikiMiku (MoreMorePwn) */
+ #ifndef ANTINOMIE_BOOTSTRAP_LAYOUT_H
+ #define ANTINOMIE_BOOTSTRAP_LAYOUT_H
+ #define ANT_BOOT_GPA 0x70000000ULL
+diff --git a/kernel/antinomie/control_wire.h b/kernel/antinomie/control_wire.h
+index 812c3d3..3f3f873 100644
+--- a/kernel/antinomie/control_wire.h
++++ b/kernel/antinomie/control_wire.h
+@@ -1,4 +1,5 @@
+-/* SPDX-License-Identifier: GPL-2.0-only */
++/* SPDX-License-Identifier: MIT */
++/* Copyright (c) 2026 MikiMiku (MoreMorePwn) */
+ #ifndef ANTINOMIE_MONITOR_CONTROL_H
+ #define ANTINOMIE_MONITOR_CONTROL_H
+ 
+diff --git a/kernel/antinomie/queue.h b/kernel/antinomie/queue.h
+index 44cc02d..b28913a 100644
+--- a/kernel/antinomie/queue.h
++++ b/kernel/antinomie/queue.h
+@@ -1,4 +1,5 @@
+-/* SPDX-License-Identifier: GPL-2.0-only */
++/* SPDX-License-Identifier: MIT */
++/* Copyright (c) 2026 MikiMiku (MoreMorePwn) */
+ #ifndef ANTINOMIE_QUEUE_H
+ #define ANTINOMIE_QUEUE_H
+ #include "abi.h"
