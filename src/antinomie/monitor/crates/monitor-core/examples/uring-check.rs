@@ -768,10 +768,12 @@ fn boots(
             upload(&mut d, fixture, FIXTURE)?;
         }
         result(format!("boot {boot} of {count}: {:?}", d.snapshot.boot_id));
-        for case in CASES
-            .iter()
-            .filter(|c| matches!(c.label, "workload-async-io" | "threaded-root-exit" | "crash"))
-        {
+        for case in CASES.iter().filter(|c| {
+            matches!(
+                c.label,
+                "workload-async-io" | "threaded-root-exit" | "crash"
+            )
+        }) {
             for core in [true, false] {
                 if !run_case(&mut d, case, core, true)? {
                     failed.push(format!(
