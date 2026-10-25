@@ -4,10 +4,16 @@
 //! the group's programs, run one program as the group's user until its whole
 //! process tree ended, read the recorder's counters, stop the VM and keep only
 //! the run's recording.
+//!
+//! The base is BusyBox or a console Debian base (Debian Minimal). A base with
+//! a guest profile gets at least its resource minima, and when it asks for an
+//! account, a throwaway `conformance` account (UID 1000) with a random
+//! password; it is up when its console shows the login prompt.
 use antinomie_monitor_core::*;
 use std::{
     collections::BTreeMap,
     fs,
+    io::Read,
     path::{Path, PathBuf},
     thread,
     time::{Duration, Instant},
@@ -179,7 +185,45 @@ fn userspace_console(log: &[u8]) -> Vec<u8> {
     out
 }
 
-fn guest_ready(snapshot: &Snapshot) -> bool {
+/// What a base's console prints once its userspace is up: BusyBox's own line,
+/// or the getty prompt of a systemd base (Debian).
+fn ready_marker(guest: Option<&GuestProfile>) -> &'static [u8] {
+    if guest.is_some() {
+        b" login: "
+    } else {
+        b"BusyBox guest ready"
+    }
+}
+
+fn random_password() -> Result<String, String> {
+    let mut random = [0; 16];
+    fs::File::open("/dev/urandom")
+        .and_then(|mut source| source.read_exact(&mut random))
+        .map_err(|e| format!("/dev/urandom: {e}"))?;
+    Ok(random.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+/// The new VM's command: the plan's shape, raised to the base's minima, with
+/// an account when the base asks for one.
+fn create_command(plan: &VmPlan, guest: Option<&GuestProfile>) -> Result<Command, String> {
+    let vm = VmConfig {
+        name: "conformance".into(),
+        cpus: plan.cpus,
+        ram_mib: plan.ram_mib.max(guest.map_or(0, |guest| guest.min_ram_mib)),
+        disk_gib: 2.max(guest.map_or(0, |guest| guest.min_disk_gib)),
+        transport: plan.transport,
+        ..Default::default()
+    };
+    Ok(match guest.filter(|guest| guest.requires_credentials) {
+        Some(_) => Command::CreateWithCredentials {
+            vm,
+            credentials: GuestCredentials::new("conformance".into(), random_password()?)?,
+        },
+        None => Command::Create(vm),
+    })
+}
+
+fn guest_ready(snapshot: &Snapshot, marker: &[u8]) -> bool {
     snapshot.state == VmState::Running
         && snapshot
             .guest_kernel
@@ -192,8 +236,8 @@ fn guest_ready(snapshot: &Snapshot) -> bool {
             .and_then(|path| fs::read(path).ok())
             .is_some_and(|log| {
                 userspace_console(&log)
-                    .windows(19)
-                    .any(|part| part == b"BusyBox guest ready")
+                    .windows(marker.len())
+                    .any(|part| part == marker)
             })
 }
 
@@ -219,7 +263,8 @@ pub fn run_group(base: &Path, data_dir: &Path, plan: &VmPlan) -> Result<GroupRun
         replies: BTreeMap::new(),
         errors: Vec::new(),
     };
-    let result = drive(&mut driver, plan);
+    let guest = storage::Bundle::load(base)?.guest;
+    let result = drive(&mut driver, plan, guest.as_ref());
     // Whatever happened, the VM goes away with the backend.
     if driver.snapshot.state != VmState::Stopped {
         if let Err(error) = driver.command(Command::Stop, 600) {
@@ -237,23 +282,24 @@ pub fn run_group(base: &Path, data_dir: &Path, plan: &VmPlan) -> Result<GroupRun
     result
 }
 
-fn drive(driver: &mut Driver, plan: &VmPlan) -> Result<GroupRun, String> {
-    driver.command(
-        Command::Create(VmConfig {
-            name: "conformance".into(),
-            cpus: plan.cpus,
-            ram_mib: plan.ram_mib,
-            disk_gib: 2,
-            transport: plan.transport,
-            ..Default::default()
-        }),
-        60,
-    )?;
+fn drive(
+    driver: &mut Driver,
+    plan: &VmPlan,
+    guest: Option<&GuestProfile>,
+) -> Result<GroupRun, String> {
+    // Creating an account provisions the disk offline (virt-customize).
+    let seconds = if guest.is_some_and(|guest| guest.requires_credentials) {
+        600
+    } else {
+        60
+    };
+    driver.command(create_command(plan, guest)?, seconds)?;
     driver.wait("VM publication", 30, |s| !s.vms.is_empty())?;
     let vm_id = driver.snapshot.vms[0].id.clone();
     let booted = Instant::now();
     driver.command(Command::Start { vm_id }, 900)?;
-    driver.wait("guest boot", 240, guest_ready)?;
+    let marker = ready_marker(guest);
+    driver.wait("guest boot", 240, |snapshot| guest_ready(snapshot, marker))?;
     let boot_seconds = booted.elapsed().as_secs_f64();
     for (source, destination) in &plan.uploads {
         driver.command(
@@ -379,5 +425,51 @@ mod tests {
                 .any(|part| part == b"BusyBox guest ready")
         );
         assert_eq!(super::userspace_console(b"[1] a\n[x] b"), b"[x] b");
+    }
+
+    fn plan() -> super::VmPlan {
+        super::VmPlan {
+            cpus: 4,
+            ram_mib: 2048,
+            transport: Default::default(),
+            uploads: Vec::new(),
+            program: "/tmp/x".into(),
+            args: Vec::new(),
+            uid: 1000,
+            gid: 1000,
+            timeout: 1,
+        }
+    }
+
+    #[test]
+    fn busybox_and_debian_minimal_bases_get_their_vm_shape_and_marker() {
+        use antinomie_monitor_core::{Command, GuestProfile};
+        let Command::Create(vm) = super::create_command(&plan(), None).unwrap() else {
+            panic!("BusyBox needs no account");
+        };
+        assert_eq!((vm.ram_mib, vm.disk_gib), (2048, 2));
+        assert_eq!(super::ready_marker(None), b"BusyBox guest ready");
+        let minimal = GuestProfile {
+            id: "debian-minimal".into(),
+            label: "Debian 13 (Minimal)".into(),
+            min_ram_mib: 1024,
+            min_disk_gib: 4,
+            requires_credentials: true,
+            graphical: false,
+        };
+        let Command::CreateWithCredentials { vm, .. } =
+            super::create_command(&plan(), Some(&minimal)).unwrap()
+        else {
+            panic!("a Debian base needs its account");
+        };
+        assert_eq!((vm.ram_mib, vm.disk_gib), (2048, 4));
+        assert_eq!(super::ready_marker(Some(&minimal)), b" login: ");
+        let console =
+            b"[  OK  ] Started getty\n\nDebian GNU/Linux 13 debian ttyS0\n\ndebian login: ";
+        assert!(
+            super::userspace_console(console)
+                .windows(8)
+                .any(|part| part == b" login: ")
+        );
     }
 }

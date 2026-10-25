@@ -21,8 +21,14 @@ and its modules change, which skips installing the desktop. With --ccache, the
 kernel compiler output is cached there, so a new patch series recompiles only
 what it touched.
 
-JOB.json: {"format": 1, "profile": "busybox" | "debian-xfce", "options": {...},
-           "app_version": "0.1.0"}   (app_version optional: recorded as built_with)
+JOB.json: {"format": 1, "profile": "busybox" | "debian-xfce" | "debian-minimal",
+           "options": {...}, "app_version": "0.1.0"}
+           (app_version optional: recorded as built_with)
+
+debian-xfce is Debian 13 with the desktop its options choose; debian-minimal is
+the console-only Debian 13 base (no desktop). debian-minimal shares the minimal
+kernel profile with BusyBox (everything built in, no modules), so the kernel
+cached for a BusyBox build serves it too.
 """
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 MikiMiku (MoreMorePwn)
@@ -40,14 +46,17 @@ import tarfile
 KIT = Path(__file__).resolve().parent.parent
 ADAPTER = KIT / "src/antinomie/packaging/debian-6.12.94-1-trixie/adapter.conf"
 SERIES = KIT / "src/antinomie/core/6.12"
+DEBIAN_ANSWERS = {"name", "hostname", "locale", "keyboard_layout", "keyboard_variant",
+                  "timezone", "standard", "mirror", "proxy"}
 # Kernel profile, image recipe, accepted options, and free space (GiB) the
 # kernel build and the image build need.
 PROFILES = {
     "busybox": ("minimal", "build-monitor-image.py", {"hostname", "name"}, (5, 2)),
-    "debian-xfce": ("debian", "build-debian-image.py",
-                    {"name", "desktop", "hostname", "locale", "keyboard_layout", "keyboard_variant",
-                     "timezone", "standard", "mirror", "proxy"}, (30, 20)),
+    "debian-xfce": ("debian", "build-debian-image.py", DEBIAN_ANSWERS | {"desktop"}, (30, 20)),
+    "debian-minimal": ("minimal", "build-debian-image.py", DEBIAN_ANSWERS, (5, 6)),
 }
+# The image recipe's answer that selects the console-only Debian base.
+CONSOLE_DESKTOP = "none"
 
 
 def stage(name):
@@ -286,9 +295,14 @@ def build_image(profile, values, build, work, output, app_version=None, image_ca
             if option in values:
                 command += [f"--{option}", values[option]]
     else:
+        if profile == "debian-minimal":
+            values = {**values, "desktop": CONSOLE_DESKTOP}
         answers = work / "options.json"
         answers.write_text(json.dumps(values) + "\n")
-        command += ["--modules", build / "modules-install", "--options", answers]
+        command += ["--options", answers]
+        # The minimal kernel profile builds everything in and installs no modules.
+        if (build / "modules-install").is_dir() or PROFILES[profile][0] == "debian":
+            command += ["--modules", build / "modules-install"]
         if image_cache is not None:
             command += ["--rootfs-cache", image_cache]
     run(*command)

@@ -23,7 +23,16 @@ pub use crate::build_choices::{KEYBOARD_LAYOUTS, KEYBOARD_VARIANTS, LOCALES, TIM
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Kind {
     BusyBox,
+    /// Debian 13 with the installer desktop its options choose.
     DebianXfce,
+    /// Debian 13 without a desktop: console login, APT and standard tools.
+    DebianMinimal,
+}
+impl Kind {
+    /// Built from Debian packages with mmdebstrap (the installer-style answers apply).
+    pub fn is_debian(self) -> bool {
+        matches!(self, Self::DebianXfce | Self::DebianMinimal)
+    }
 }
 
 /// A buildable base offered by "Build base".
@@ -39,6 +48,11 @@ pub const BUILD_PROFILES: &[BuildProfile] = &[
         id: "busybox",
         label: "BusyBox (minimal)",
         kind: Kind::BusyBox,
+    },
+    BuildProfile {
+        id: "debian-minimal",
+        label: "Debian 13 (minimal, console)",
+        kind: Kind::DebianMinimal,
     },
     BuildProfile {
         id: "debian-xfce",
@@ -134,7 +148,8 @@ fn default_desktop() -> String {
     "xfce".into()
 }
 
-/// Installer answers. Debian uses all of them; BusyBox only the hostname.
+/// Installer answers. Debian uses all of them (the minimal base all but the
+/// desktop); BusyBox only the hostname.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BuildOptions {
     /// Display name of the built base; empty for the automatic name.
@@ -184,7 +199,7 @@ impl BuildOptions {
         if kind == Kind::BusyBox {
             return Ok(());
         }
-        if !DESKTOPS.iter().any(|desktop| desktop.id == self.desktop) {
+        if kind == Kind::DebianXfce && !DESKTOPS.iter().any(|desktop| desktop.id == self.desktop) {
             return Err(format!("unknown desktop {:?}", self.desktop));
         }
         if !LOCALES.iter().any(|(code, _)| *code == self.locale) {
@@ -225,9 +240,14 @@ impl BuildOptions {
                 "name": self.name.trim(),
                 "hostname": self.hostname,
             }),
-            Kind::DebianXfce => serde_json::json!({
+            Kind::DebianXfce => {
+                let mut options = self.job_options(Kind::DebianMinimal);
+                options["desktop"] = self.desktop.clone().into();
+                options
+            }
+            // The orchestrator chooses the console base itself: no desktop answer.
+            Kind::DebianMinimal => serde_json::json!({
                 "name": self.name.trim(),
-                "desktop": self.desktop,
                 "hostname": self.hostname,
                 "locale": self.locale,
                 "keyboard_layout": self.keyboard_layout,
@@ -237,6 +257,15 @@ impl BuildOptions {
                 "mirror": self.mirror,
                 "proxy": self.proxy,
             }),
+        }
+    }
+    /// The cached root filesystem these answers can reuse (`kit::image_cache`
+    /// name), for the Debian kinds.
+    pub(crate) fn rootfs_cache_name(&self, kind: Kind) -> Option<&str> {
+        match kind {
+            Kind::BusyBox => None,
+            Kind::DebianXfce => Some(&self.desktop),
+            Kind::DebianMinimal => Some("minimal"),
         }
     }
 }
@@ -255,6 +284,7 @@ pub fn valid_base_name(name: &str) -> Result<(), String> {
 pub fn automatic_base_name(kind: Kind, desktop: &str) -> String {
     match kind {
         Kind::BusyBox => "BusyBox".into(),
+        Kind::DebianMinimal => "Debian 13 (Minimal)".into(),
         Kind::DebianXfce => format!(
             "Debian 13 ({})",
             DESKTOPS
@@ -446,10 +476,12 @@ pub fn series_short() -> String {
     crate::kit::series_hash()[..12].to_string()
 }
 
-/// The kernel build profile a base kind uses (`build-monitor-kernel.sh`).
+/// The kernel build profile a base kind uses (`build-monitor-kernel.sh`). The
+/// console-only Debian base shares BusyBox's kernel: everything it needs is
+/// built in, so it carries no modules and reuses that cached kernel.
 pub(crate) fn kernel_profile(kind: Kind) -> &'static str {
     match kind {
-        Kind::BusyBox => "minimal",
+        Kind::BusyBox | Kind::DebianMinimal => "minimal",
         Kind::DebianXfce => "debian",
     }
 }
@@ -535,6 +567,22 @@ const DEBIAN_TOOLS: &[ToolSpec] = &[
     tool("dpkg-query", "dpkg"),
 ];
 
+/// The console Debian base: Debian's image tools, but the minimal kernel needs
+/// no `pahole`.
+const DEBIAN_MINIMAL_TOOLS: &[ToolSpec] = &[
+    tool("mmdebstrap", "mmdebstrap"),
+    tool("newuidmap", "uidmap"),
+    tool("qemu-img", "qemu-utils"),
+    tool("mkfs.ext4", "e2fsprogs"),
+    tool("debugfs", "e2fsprogs"),
+    tool("resize2fs", "e2fsprogs"),
+    tool("cpio", "cpio"),
+    tool("gzip", "gzip"),
+    tool("tar", "tar"),
+    tool("busybox", "busybox-static"),
+    tool("dpkg-query", "dpkg"),
+];
+
 /// The QEMU builder needs only the emulator, its image tool and curl.
 const QEMU_TOOLS: &[ToolSpec] = &[
     tool("qemu-system-x86_64", "qemu-system-x86"),
@@ -551,6 +599,7 @@ pub fn tools(kind: Kind, mode: BuildMode) -> Vec<ToolSpec> {
             all.extend_from_slice(match kind {
                 Kind::BusyBox => BUSYBOX_TOOLS,
                 Kind::DebianXfce => DEBIAN_TOOLS,
+                Kind::DebianMinimal => DEBIAN_MINIMAL_TOOLS,
             });
             all
         }
@@ -599,7 +648,7 @@ pub fn missing(kind: Kind, mode: BuildMode) -> Vec<ToolStatus> {
 /// Why native Debian builds cannot run here besides missing tools: rootless
 /// mmdebstrap needs a subordinate UID range for this user.
 pub fn native_obstacle(kind: Kind) -> Option<String> {
-    if kind != Kind::DebianXfce {
+    if !kind.is_debian() {
         return None;
     }
     let user = std::env::var("USER").unwrap_or_default();
@@ -747,6 +796,10 @@ mod tests {
     fn profiles_are_distinct_and_addressable() {
         assert!(profile("busybox").is_some());
         assert!(profile("debian-xfce").is_some());
+        assert_eq!(
+            profile("debian-minimal").map(|profile| profile.kind),
+            Some(Kind::DebianMinimal)
+        );
         assert!(profile("nope").is_none());
         let ids: std::collections::HashSet<_> = BUILD_PROFILES.iter().map(|p| p.id).collect();
         assert_eq!(ids.len(), BUILD_PROFILES.len());
@@ -754,7 +807,7 @@ mod tests {
 
     #[test]
     fn defaults_validate_and_bad_answers_are_named() {
-        for kind in [Kind::BusyBox, Kind::DebianXfce] {
+        for kind in [Kind::BusyBox, Kind::DebianXfce, Kind::DebianMinimal] {
             BuildOptions::defaults(kind).validate(kind).unwrap();
         }
         let good = BuildOptions::defaults(Kind::DebianXfce);
@@ -796,6 +849,59 @@ mod tests {
                 .len(),
             10
         );
+    }
+
+    #[test]
+    fn debian_minimal_takes_the_installer_answers_but_no_desktop() {
+        let mut options = BuildOptions::defaults(Kind::DebianMinimal);
+        // The desktop answer is not asked and not checked.
+        options.desktop = "anything".into();
+        options.validate(Kind::DebianMinimal).unwrap();
+        assert!(options.validate(Kind::DebianXfce).is_err());
+        options.timezone = "Mars/Olympus".into();
+        assert!(options.validate(Kind::DebianMinimal).is_err());
+        let options = BuildOptions::defaults(Kind::DebianMinimal);
+        let minimal = options.job_options(Kind::DebianMinimal);
+        let desktop = options.job_options(Kind::DebianXfce);
+        assert_eq!(minimal.as_object().unwrap().len(), 9);
+        assert!(minimal.get("desktop").is_none());
+        let mut without = desktop.as_object().unwrap().clone();
+        without.remove("desktop");
+        assert_eq!(serde_json::Value::Object(without), minimal);
+        assert_eq!(
+            options.rootfs_cache_name(Kind::DebianMinimal),
+            Some("minimal")
+        );
+        assert_eq!(
+            options.rootfs_cache_name(Kind::DebianXfce),
+            Some(options.desktop.as_str())
+        );
+        assert_eq!(options.rootfs_cache_name(Kind::BusyBox), None);
+        assert_eq!(
+            automatic_base_name(Kind::DebianMinimal, "xfce"),
+            "Debian 13 (Minimal)"
+        );
+        // It shares BusyBox's kernel, so its tools need no pahole.
+        assert_eq!(kernel_profile(Kind::DebianMinimal), "minimal");
+        assert_eq!(kernel_profile(Kind::DebianXfce), "debian");
+        let native: Vec<_> = tools(Kind::DebianMinimal, BuildMode::Native)
+            .iter()
+            .map(|tool| tool.tool)
+            .collect();
+        assert!(native.contains(&"mmdebstrap") && native.contains(&"newuidmap"));
+        assert!(!native.contains(&"pahole"));
+        assert!(Kind::DebianMinimal.is_debian() && !Kind::BusyBox.is_debian());
+    }
+
+    #[test]
+    fn recipes_build_the_console_base_on_the_minimal_kernel() {
+        let recipe = include_str!("../../../../../../scripts/build-debian-image.py");
+        assert!(recipe.contains(
+            r#"CONSOLE_PROFILE = {"id": "debian-minimal", "label": "Debian 13 (Minimal)","#
+        ));
+        assert!(recipe.contains(r#""requires_credentials": True, "graphical": False}"#));
+        let orchestrator = include_str!("../../../../../../scripts/build-base.py");
+        assert!(orchestrator.contains(r#""debian-minimal": ("minimal", "build-debian-image.py""#));
     }
 
     #[test]

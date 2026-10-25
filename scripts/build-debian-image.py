@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Build the Debian 13 Xfce bundle for the pinned Antinomie kernel with mmdebstrap.
+"""Build a Debian 13 bundle (a desktop, or the console-only Minimal base) for the
+pinned Antinomie kernel with mmdebstrap.
 
 The root filesystem is bootstrapped into a tarball (rootless with
 --mode=unshare, or as root inside the QEMU builder) and turned into an ext4
@@ -39,10 +40,26 @@ DESKTOPS = {
     "lxde": ("task-lxde-desktop", "lightdm", "LXDE", "LXDE", 2048),
     "lxqt": ("task-lxqt-desktop", "sddm", "lxqt", "LXQt", 2048),
 }
+# The installer's software choice with no desktop selected: the Debian Minimal
+# base, console login only (serial and virtual terminals), no X or display
+# manager. It keeps APT and the userspace below, boots in far less memory and
+# needs no kernel modules when the kernel builds in CONSOLE_BUILTIN (the
+# minimal kernel profile does).
+CONSOLE = "none"
+CONSOLE_PROFILE = {"id": "debian-minimal", "label": "Debian 13 (Minimal)",
+                   "min_ram_mib": 1024, "min_disk_gib": 4,
+                   "requires_credentials": True, "graphical": False}
+CONSOLE_IMAGE_SIZE = 4 << 30
+# What a module-less kernel must build in for the console base to boot, mount
+# its root, run systemd and take a DHCP address.
+CONSOLE_BUILTIN = ("EXT4_FS", "VIRTIO_BLK", "VIRTIO_NET", "DEVTMPFS", "CGROUPS", "FHANDLE",
+                   "UNIX", "INET", "PACKET")
 
 
 def profile(desktop):
-    """Guest profile of the base: one per desktop."""
+    """Guest profile of the base: one per desktop, and the console base."""
+    if desktop == CONSOLE:
+        return dict(CONSOLE_PROFILE)
     label, ram = DESKTOPS[desktop][3], DESKTOPS[desktop][4]
     return {"id": "debian-" + desktop, "label": f"Debian 13 ({label})",
             "min_ram_mib": ram, "min_disk_gib": 16,
@@ -69,6 +86,50 @@ PACKAGES = ("systemd-sysv", "sudo", "dbus-x11", "dbus-user-session", "network-ma
             "ca-certificates", "file", "bash-completion", "locales",
             "fonts-dejavu-core", "e2fsprogs", "keyboard-configuration",
             "console-setup", "tzdata")
+# The console base's packages on top of the "important" priority set (apt,
+# dpkg, udev, kmod, nano, cron, logrotate, ...; some of these are in it too and
+# are named so they stay), installed without recommends. Each entry says why
+# it is there; src/antinomie/packaging/debian-minimal-trixie/packages.txt is
+# the committed manifest (requested and resolved packages of the verified build).
+CONSOLE_PACKAGES = (
+    ("systemd-sysv", "systemd as init, as on every Debian base"),
+    ("systemd-resolved", "DNS for systemd-networkd's DHCP lease (/etc/resolv.conf stub)"),
+    ("dbus", "system bus for logind, hostnamectl, timedatectl and loginctl"),
+    ("libpam-systemd", "login sessions registered with logind"),
+    ("sudo", "the per-VM account's password-protected sudo"),
+    ("iproute2", "ip and ss"),
+    ("iputils-ping", "ping"),
+    ("procps", "ps, top, free, pgrep"),
+    ("psmisc", "pstree, killall, fuser"),
+    ("less", "pager"),
+    ("vim-tiny", "editor (nano comes with the important set)"),
+    ("curl", "HTTP client"),
+    ("wget", "HTTP client many samples and scripts expect"),
+    ("ca-certificates", "TLS trust store for curl, wget and apt over https"),
+    ("openssh-client", "ssh and scp from the guest (no SSH server)"),
+    ("python3", "interpreter many Linux samples and analysis helpers need"),
+    ("file", "identify uploaded files"),
+    ("xz-utils", "unpack .xz archives"),
+    ("bash-completion", "completion in the console shell"),
+    ("locales", "the chosen locale"),
+    ("keyboard-configuration", "the chosen console keyboard layout"),
+    ("console-setup", "applies the layout and font on the virtual terminals"),
+    ("tzdata", "the chosen time zone"),
+    ("e2fsprogs", "the root filesystem's tools"),
+)
+# Documentation and manual pages are left out of the console base while it is
+# bootstrapped (copyright files stay); packages installed later get theirs.
+CONSOLE_DPKG = ("path-exclude=/usr/share/doc/*", "path-include=/usr/share/doc/*/copyright",
+                "path-exclude=/usr/share/man/*", "path-exclude=/usr/share/info/*")
+# systemd-networkd takes the address of every wired interface from DHCP, so any
+# NIC model and name a stealth profile gives works.
+CONSOLE_NETWORK = """[Match]
+Type=ether
+Kind=!*
+
+[Network]
+DHCP=yes
+"""
 # Installer-style answers. Values are checked again inside the new system
 # against its locale, keyboard and time zone data.
 DEFAULTS = {"name": "", "desktop": "xfce", "hostname": "debian", "locale": "en_US.UTF-8",
@@ -116,6 +177,14 @@ def module_tree(modules, release):
 def kernel_uses_modules(config):
     return config is not None and any(line.endswith("=m")
                                       for line in config.read_text().splitlines())
+
+
+def built_in(config, symbols):
+    """Whether the kernel config builds every symbol in (not as a module)."""
+    if config is None:
+        return False
+    lines = set(config.read_text().splitlines())
+    return all(f"CONFIG_{symbol}=y" in lines for symbol in symbols)
 
 
 def initrd_provenance(root, provenance):
@@ -189,21 +258,33 @@ def options(values):
         raise RuntimeError("invalid time zone")
     if not isinstance(result["standard"], bool):
         raise RuntimeError("standard must be true or false")
-    if result["desktop"] not in DESKTOPS:
+    if result["desktop"] not in DESKTOPS and result["desktop"] != CONSOLE:
         raise RuntimeError(f"unknown desktop {result['desktop']!r}")
     return result
 
 
 def packages(desktop):
-    """Packages to install: the common set plus the desktop's task."""
+    """Packages to install: the common set plus the desktop's task, or the
+    console base's own set."""
+    if desktop == CONSOLE:
+        return tuple(package for package, _ in CONSOLE_PACKAGES)
     task = DESKTOPS[desktop][0]
     extra = ("lightdm-gtk-greeter",) if desktop == "xfce" else ()
     return PACKAGES + (task,) + extra
 
 
+def image_size(desktop):
+    return CONSOLE_IMAGE_SIZE if desktop == CONSOLE else IMAGE_SIZE
+
+
+def display(desktop):
+    """Display manager and default session; none for the console base."""
+    return (CONSOLE, CONSOLE) if desktop == CONSOLE else DESKTOPS[desktop][1:3]
+
+
 def customization_script():
     """Run inside the new root: arguments hostname locale layout variant timezone
-    display-manager session."""
+    display-manager session (both "none" for the console base)."""
     return """#!/bin/sh
 set -eu
 hostname=$1 locale=$2 layout=$3 variant=$4 zone=$5 manager=$6 session=$7
@@ -212,10 +293,14 @@ test "$(. /etc/os-release; printf '%s' "$ID:$VERSION_ID")" = debian:13
 test "$(dpkg --print-architecture)" = amd64
 grep -qx "$locale UTF-8" /usr/share/i18n/SUPPORTED || { echo "unsupported locale $locale" >&2; exit 1; }
 test -f "/usr/share/zoneinfo/$zone" || { echo "unknown time zone $zone" >&2; exit 1; }
-test -f "/usr/share/xsessions/$session.desktop" || test -f "/usr/share/wayland-sessions/$session.desktop" || \\
-    { echo "desktop session $session is not installed" >&2; exit 1; }
-test "$(cat /etc/X11/default-display-manager)" = "/usr/sbin/$manager" || \\
-    { echo "display manager is not $manager" >&2; exit 1; }
+if [ "$manager" = none ]; then
+    test ! -e /etc/X11/default-display-manager || { echo "the console base has a display manager" >&2; exit 1; }
+else
+    test -f "/usr/share/xsessions/$session.desktop" || test -f "/usr/share/wayland-sessions/$session.desktop" || \\
+        { echo "desktop session $session is not installed" >&2; exit 1; }
+    test "$(cat /etc/X11/default-display-manager)" = "/usr/sbin/$manager" || \\
+        { echo "display manager is not $manager" >&2; exit 1; }
+fi
 awk -v l="$layout" '/^! layout/ {s = 1; next} /^!/ {s = 0} s && $1 == l {f = 1} END {exit !f}' \\
     /usr/share/X11/xkb/rules/evdev.lst || { echo "unknown keyboard layout $layout" >&2; exit 1; }
 if [ -n "$variant" ]; then
@@ -254,8 +339,23 @@ sddm)
     mkdir -p /etc/sddm.conf.d
     printf '[Autologin]\\nUser=\\nSession=%s\\n' "$session" > /etc/sddm.conf.d/99-antinomie.conf
     ;;
+none)
+    # Console base: logins on the serial console and the virtual terminals;
+    # systemd-networkd takes the DHCP address (no NetworkManager).
+    mkdir -p /etc/systemd/network
+    printf '%s' """ + shlex.quote(CONSOLE_NETWORK) + """ > /etc/systemd/network/80-antinomie-dhcp.network
+    systemctl enable systemd-networkd.service systemd-resolved.service
+    # /tmp stays on the root disk, as on BusyBox: what a sample drops there is
+    # in the VM's disk (Disks tab, disk dumps, checkpoints), not only in RAM.
+    systemctl mask tmp.mount
+    printf 'L+ /etc/resolv.conf - - - - ../run/systemd/resolve/stub-resolv.conf\\n' > /etc/tmpfiles.d/antinomie-resolv.conf
+    ;;
 esac
-systemctl set-default graphical.target
+if [ "$manager" = none ]; then
+    systemctl set-default multi-user.target
+else
+    systemctl set-default graphical.target
+fi
 printf '/dev/vda / ext4 defaults 0 1\\n' > /etc/fstab
 printf '%s' """ + shlex.quote(NETWORK_INTERFACES) + """ > /etc/network/interfaces
 printf '%s\\n' "$hostname" > /etc/hostname
@@ -266,8 +366,9 @@ printf 'LANG=%s\\n' "$locale" > /etc/default/locale
 printf 'XKBMODEL="pc105"\\nXKBLAYOUT="%s"\\nXKBVARIANT="%s"\\nXKBOPTIONS=""\\n\\nBACKSPACE="guess"\\n' "$layout" "$variant" > /etc/default/keyboard
 ln -sf "/usr/share/zoneinfo/$zone" /etc/localtime
 printf '%s\\n' "$zone" > /etc/timezone
-# Build-time apt settings (recommends, proxy) are not part of the image.
-rm -f /etc/apt/apt.conf.d/99mmdebstrap
+# Build-time apt and dpkg settings (recommends, proxy, left-out documentation)
+# are not part of the image.
+rm -f /etc/apt/apt.conf.d/99mmdebstrap /etc/dpkg/dpkg.cfg.d/99mmdebstrap
 audit=$(dpkg --audit)
 if [ -n "$audit" ]; then
     printf '%s\\n' "$audit" >&2
@@ -375,28 +476,37 @@ def mmdebstrap_command(values, tarball, script, provenance):
     Kernel modules are added to the tarball afterwards (add_modules), so the
     bootstrapped system can be cached and reused with another kernel."""
     q = shlex.quote
+    console = values["desktop"] == CONSOLE
     command = ["mmdebstrap", "--mode=" + bootstrap_mode(),
                "--variant=" + ("standard" if values["standard"] else "important"),
                "--architectures=amd64", "--format=tar",
                "--include=" + ",".join(packages(values["desktop"])),
-               "--aptopt=APT::Install-Recommends \"true\"",
+               f'--aptopt=APT::Install-Recommends "{"false" if console else "true"}"',
                "--aptopt=APT::Get::AllowUnauthenticated \"false\"",
                "--aptopt=Acquire::AllowInsecureRepositories \"false\"",
                "--aptopt=Acquire::Retries \"3\""]
     if values["proxy"]:
         command.append(f'--aptopt=Acquire::http::Proxy "{values["proxy"]}"')
         command.append(f'--aptopt=Acquire::https::Proxy "{values["proxy"]}"')
-    command.append(f'--customize-hook=cp {q(str(script))} "$1/tmp/antinomie-customize.sh"')
-    manager, session = DESKTOPS[values["desktop"]][1:3]
+    if console:
+        command += ["--dpkgopt=" + option for option in CONSOLE_DPKG]
+    # Files cross into and out of the new root through mmdebstrap's upload and
+    # download hooks, which run as the invoking user: in unshare mode a plain
+    # hook runs as the namespace's root, which cannot read or write the
+    # invoking user's private staging directory.
+    command.append(f'--customize-hook=upload {q(str(script))} /tmp/antinomie-customize.sh')
+    manager, session = display(values["desktop"])
     arguments = " ".join([q(values[key]) for key in
                           ("hostname", "locale", "keyboard_layout", "keyboard_variant", "timezone")]
                          + [q(manager), q(session)])
     command.append(f'--customize-hook=chroot "$1" sh /tmp/antinomie-customize.sh {arguments}')
     command.append('--customize-hook=rm -f "$1/tmp/antinomie-customize.sh"')
     for path in ("/var/lib/antinomie-image/packages.tsv", "/etc/os-release"):
-        command.append(f'--customize-hook=cp "$1{path}" {q(str(provenance / Path(path).name))}')
+        command.append(f'--customize-hook=download {path} {q(str(provenance / Path(path).name))}')
     for path, name in (("usr/share/doc", "package-docs.tar.gz"), ("var/lib/apt/lists", "apt-lists.tar.gz")):
-        command.append(f'--customize-hook=tar -C "$1" -czf {q(str(provenance / name))} {path}')
+        command.append(f'--customize-hook=tar -C "$1" -czf "$1/tmp/{name}" {path}')
+        command.append(f'--customize-hook=download /tmp/{name} {q(str(provenance / name))}')
+        command.append(f'--customize-hook=rm -f "$1/tmp/{name}"')
     mirror = values["mirror"].rstrip("/")
     command += [SUITE, str(tarball),
                 f"deb {mirror} {SUITE} main", f"deb {mirror} {SUITE}-updates main",
@@ -482,15 +592,16 @@ def root_image(values, raw, staging, provenance, log, modules=None, cache=None):
             save_rootfs_cache(cache, tarball, provenance, root, values)
     if modules is not None:
         add_modules(tarball, modules)
+    size = image_size(values["desktop"])
     with raw.open("xb") as target:
-        target.truncate(IMAGE_SIZE)
+        target.truncate(size)
     subprocess.run(["mkfs.ext4", "-q", "-F", "-d", str(tarball), str(raw)],
                    check=True, stdout=log, stderr=subprocess.STDOUT)
     xattrs = apply_xattrs(tarball, raw, staging, log)
     tarball.unlink()
     validate_image(raw)
     return root | {
-            "root_filesystem": "ext4", "root_size": IMAGE_SIZE,
+            "root_filesystem": "ext4", "root_size": size,
             "conversion": "mkfs.ext4 -d tarball; extended attributes set with debugfs",
             "extended_attributes": xattrs,
             "kernel_modules": None if modules is None else f"/usr/lib/modules/{modules.name}"}
@@ -502,7 +613,8 @@ def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=Fa
         raise RuntimeError("output already exists; choose a new unpublished bundle path")
     values = options(values or {})
     release = kernel_release(kernel)
-    if kernel_uses_modules(kernel_config) and modules is None:
+    if kernel_uses_modules(kernel_config) and modules is None and not (
+            values["desktop"] == CONSOLE and built_in(kernel_config, CONSOLE_BUILTIN)):
         raise RuntimeError("kernel config builds modules; pass --modules with its install root")
     tree = module_tree(modules, release)
     helpers = monitor_helpers()
@@ -515,6 +627,10 @@ def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=Fa
     work.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="debian-image-", dir=work) as name:
         staging = Path(name)
+        if bootstrap_mode() == "unshare":
+            # mmdebstrap builds the root inside (TMPDIR), and the namespace's
+            # root, a subordinate UID, must reach it; nothing here is listable.
+            staging.chmod(0o711)
         bundle = staging / "bundle"
         provenance = bundle / "provenance"
         provenance.mkdir(parents=True)
@@ -541,7 +657,7 @@ def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=Fa
         record = {"built_at": datetime.now(timezone.utc).isoformat(),
                   "options": values, "root": root,
                   "apt_authentication": "Debian signed indexes; insecure repositories disallowed",
-                  "package_install_recommends": True,
+                  "package_install_recommends": values["desktop"] != CONSOLE,
                   "requested_packages": list(packages(values["desktop"])),
                   "package_inventory": "packages.tsv",
                   "kernel_sha256": hashes["kernel"], "kernel_release": release,
@@ -562,8 +678,9 @@ def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=Fa
         helpers.stamp_revision(manifest, bundle / "kernel", allow_unversioned, app_version)
         if values["name"]:
             manifest["name"] = values["name"]
-        # NetworkManager takes the NAT's DHCP answer; the root stays /dev/vda
-        # (APPEND, fstab) and Debian builds the SATA and NVMe drivers as modules.
+        # NetworkManager (systemd-networkd on the console base) takes the NAT's
+        # DHCP answer; the root stays /dev/vda (APPEND, fstab), and Debian builds
+        # the SATA and NVMe drivers as modules.
         manifest["stealth_support"] = helpers.stealth_support(kernel_config, bundle / "kernel",
                                                               root_buses=False)
         if helpers.fixed_display_config(kernel_config, bundle / "kernel"):
@@ -593,8 +710,10 @@ def main():
     parser.add_argument("--allow-unversioned", action="store_true",
                         help="accept a development kernel without a source id")
     parser.add_argument("--options", type=Path,
-                        help="JSON object of installer answers (hostname, locale, keyboard_layout, "
-                             "keyboard_variant, timezone, standard, mirror, proxy)")
+                        help="JSON object of installer answers (desktop: a DESKTOPS id or "
+                             "\"none\" for the console-only Debian Minimal base, hostname, "
+                             "locale, keyboard_layout, keyboard_variant, timezone, standard, "
+                             "mirror, proxy)")
     parser.add_argument("--work", type=Path, help="directory for temporary build files")
     parser.add_argument("--app-version", help="Antinomie version building this base")
     parser.add_argument("--rootfs-cache", type=Path,
