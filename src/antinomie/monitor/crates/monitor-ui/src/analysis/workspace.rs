@@ -36,7 +36,7 @@ pub(crate) struct WorkspaceState {
     content: content::ContentState,
     capa: capa_matrix::CapaState,
     rows: RowWindows,
-    /// The regex matches pane of Strings & regex, over the report's strings.
+    /// The regex matches pane of the Regex matches tab, over the report's strings.
     regex: crate::regex_matches::RegexWindow,
     /// The layer the Unpacking tab shows.
     unpack_layer: usize,
@@ -105,7 +105,7 @@ impl WorkspaceState {
         ctx.data_mut(|data| data.insert_temp(egui::Id::new(CHOSEN_ROW), chosen));
     }
 
-    /// The report whose regex scan the Strings & regex pane asked for, once.
+    /// The report whose regex scan the Regex matches tab asked for, once.
     pub(crate) fn take_regex_request(&mut self) -> Option<String> {
         std::mem::take(&mut self.regex_wanted)
             .then(|| self.report_id.clone())
@@ -335,7 +335,12 @@ fn render(
         }
         Some(kind) => {
             ui.separator();
-            if let Some(next) = results(ui, report, state, listing, Some(kind)) {
+            let next = if kind == AnalysisKind::Regex {
+                tabs::regex_view(ui, report, state)
+            } else {
+                results(ui, report, state, listing, Some(kind))
+            };
+            if let Some(next) = next {
                 action = Some(next);
             }
         }
@@ -725,19 +730,19 @@ fn categories(
                         }
                     },
                     |ui| {
-                        // The regex matches are read from the strings and shown
-                        // beside them: no listing of their own to open or count.
+                        if ui
+                            .button(egui_phosphor::regular::ARROW_SQUARE_OUT)
+                            .on_hover_text("Open category in a separate pane")
+                            .clicked()
+                        {
+                            action = Some(ReportAction::OpenSection {
+                                report_id: report.id.clone(),
+                                kind,
+                            });
+                        }
+                        // The regex matches are read from the strings: no
+                        // listing of their own to count.
                         if kind != AnalysisKind::Regex {
-                            if ui
-                                .button(egui_phosphor::regular::ARROW_SQUARE_OUT)
-                                .on_hover_text("Open category in a separate pane")
-                                .clicked()
-                            {
-                                action = Some(ReportAction::OpenSection {
-                                    report_id: report.id.clone(),
-                                    kind,
-                                });
-                            }
                             let rows = section
                                 .listing
                                 .as_ref()

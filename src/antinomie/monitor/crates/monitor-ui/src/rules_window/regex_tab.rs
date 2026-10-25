@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The Strings regex tab of the Detection rules page: the patterns the regex
-//! regex matches of Static analysis (Strings & regex) and Core dumps use. Built-in patterns
+//! regex matches of Static analysis (Regex matches) and Core dumps use. Built-in patterns
 //! can be switched off; patterns of your own can be added and removed. The
 //! choices are kept in the rules folder and read by the next scan.
 use super::{theme, Model};

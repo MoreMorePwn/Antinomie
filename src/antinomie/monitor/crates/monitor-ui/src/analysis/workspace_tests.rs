@@ -2352,7 +2352,7 @@ fn the_unpacking_tab_picks_a_layer_from_a_drop_down_and_opens_its_analysis() {
 }
 
 #[test]
-fn strings_and_regex_share_a_tab_with_the_matches_on_the_right() {
+fn strings_and_regex_matches_are_separate_tabs() {
     let ctx = egui::Context::default();
     crate::theme::install(&ctx);
     let mut report = with_listing(fixture(), AnalysisKind::Strings, 3);
@@ -2371,78 +2371,53 @@ fn strings_and_regex_share_a_tab_with_the_matches_on_the_right() {
             .find(|(text, _)| text == wanted)
             .map(|(_, rect)| rect)
     };
-    // The tab is named for both, and no separate button or window remains.
-    let (output, action) = frame(
-        &ctx,
-        &report,
-        &mut state,
-        None,
-        egui::vec2(1400.0, 800.0),
-        Vec::new(),
-        pages,
-    );
-    assert!(at(&output, "Strings & regex").is_some());
-    assert!(!texts(&output)
-        .iter()
-        .any(|(text, _)| text.contains("Regex matches…")));
-    // The first frame asks for the scan of this report, and only once.
+    let size = egui::vec2(1400.0, 800.0);
+    // Strings: its own rows, no regex pane beside them, no scan asked for.
+    let mut output = None;
+    for _ in 0..3 {
+        output = Some(frame(&ctx, &report, &mut state, None, size, Vec::new(), pages).0);
+    }
+    let output = output.unwrap();
+    assert!(at(&output, "Strings").is_some());
+    assert!(at(&output, "Regex matches").is_some(), "the tab's own name");
+    assert!(at(&output, "Strings & regex").is_none());
+    assert!(at(&output, "fixture string 0").is_some());
+    assert!(state.take_regex_request().is_none());
+    // The Regex matches tab: the scan of this report is asked for once, and
+    // the strings are not drawn.
+    state.tab = Tab::Regex;
+    let (output, action) = frame(&ctx, &report, &mut state, None, size, Vec::new(), pages);
     assert!(action.is_none());
     assert_eq!(state.take_regex_request().as_deref(), Some(&*report.id));
-    let (output, again) = frame(
-        &ctx,
-        &report,
-        &mut state,
-        None,
-        egui::vec2(1400.0, 800.0),
-        Vec::new(),
-        pages,
-    );
+    assert!(at(&output, "fixture string 0").is_none());
+    let (_, again) = frame(&ctx, &report, &mut state, None, size, Vec::new(), pages);
     assert!(again.is_none() && state.take_regex_request().is_none());
-    // Wide: the pane is right of the strings.
-    let pane = at(&output, "Regex matches").expect("the pane's heading");
-    let strings = at(&output, "fixture string 0")
-        .unwrap_or_else(|| panic!("a string row in {:?}", texts(&output)));
-    assert!(pane.left() > strings.right(), "{pane:?} {strings:?}");
-    // Narrow: it sits under them.
-    let mut narrow = None;
-    for _ in 0..4 {
-        narrow = Some(
-            frame(
-                &ctx,
-                &report,
-                &mut state,
-                None,
-                egui::vec2(700.0, 800.0),
-                Vec::new(),
-                pages,
-            )
-            .0,
-        );
-    }
-    let narrow = narrow.unwrap();
-    let pane = at(&narrow, "Regex matches").expect("the pane's heading");
-    let strings = at(&narrow, "fixture string 0")
-        .unwrap_or_else(|| panic!("a string row in {:?}", texts(&narrow)));
-    assert!(pane.top() > strings.bottom(), "{pane:?} {strings:?}");
-    // Other tabs have no pane.
-    state.tab = Tab::Floss;
-    let (floss, _) = frame(
+    // The category list opens each on its own tab.
+    state.show(AnalysisKind::Regex);
+    assert_eq!(state.tab, Tab::Regex);
+    state.show(AnalysisKind::Strings);
+    assert_eq!(state.tab, Tab::Strings);
+    // A separate pane for the matches asks for the scan too.
+    let mut pane = WorkspaceState::default();
+    pane.bind(&report.id);
+    let _ = frame(
         &ctx,
         &report,
-        &mut state,
-        None,
-        egui::vec2(1400.0, 800.0),
+        &mut pane,
+        Some(AnalysisKind::Regex),
+        size,
         Vec::new(),
         pages,
     );
-    assert!(at(&floss, "Regex matches").is_none());
+    assert_eq!(pane.take_regex_request().as_deref(), Some(&*report.id));
 }
 
 #[test]
 fn regex_matches_are_their_own_check_and_a_report_without_it_offers_to_run_it() {
     let ctx = egui::Context::default();
     crate::theme::install(&ctx);
-    // Strings alone: the tab opens, the pane says the check is not part of it.
+    // Strings alone: the Regex matches tab opens and says the check is not
+    // part of it.
     let report = with_listing(fixture(), AnalysisKind::Strings, 3);
     assert!(!report
         .sections
@@ -2451,7 +2426,7 @@ fn regex_matches_are_their_own_check_and_a_report_without_it_offers_to_run_it() 
     let page = listing_page(&report, AnalysisKind::Strings);
     let mut state = WorkspaceState::default();
     state.bind(&report.id);
-    state.tab = Tab::Strings;
+    state.tab = Tab::Regex;
     let pages = (None, Some(&page));
     let size = egui::vec2(1400.0, 800.0);
     let mut output = None;
