@@ -4,11 +4,13 @@
 
 # Antinomie
 
-**Follow a program from syscall to evidence.**
+**A local, kernel-level Linux malware sandbox.**
 
-A native Linux desktop for malware analysis and reverse engineering. Run a sample in a
-disposable QEMU guest whose patched kernel records what it does, with no agent
-in the guest and no `ptrace`.
+Antinomie runs Linux samples in disposable QEMU virtual machines on your own
+computer and observes them from inside the guest kernel. No agent runs in the
+guest and nothing uses `ptrace`, so a sample has little to find. Process, file,
+network, memory, disk and core evidence, static analysis, a debugger and Triage
+all work from one saved recording.
 
 [**Quick start**](#quick-start) ·
 [User guide](docs/usage.md) ·
@@ -32,14 +34,14 @@ with <b>synthetic data</b>, not a recorded malware run.</sub>
 </div>
 
 > [!WARNING]
-> **Antinomie runs real malware when you tell it to.** The sample executes inside
-> a QEMU guest, and a VM is a boundary, not a guarantee: hypervisor escapes are
-> rare but exist, and a sample you give network access can reach whatever that
-> route reaches. Use a dedicated machine or at least a user account with nothing
-> valuable, keep VM networking disconnected unless you need it, and prefer the
-> **None (drop)** or **InetSim** routes. Never run unknown files on a computer you
-> cannot afford to rebuild. Detections are leads to investigate, not a verdict
-> that a file is or is not malicious.
+> **Antinomie runs real malware when you ask it to.** The sample executes inside
+> a QEMU guest. A VM is a strong boundary, not an absolute one: guest-to-host
+> escapes are rare but possible, and a sample you give network access can reach
+> whatever that route reaches. Use a dedicated machine, or at least a user
+> account with nothing valuable, keep VM networking disconnected unless you need
+> it, and prefer the **None (drop)** or **InetSim** routes. Run unknown files
+> only on a computer you can rebuild. Detections are leads to investigate, not a
+> verdict that a file is or is not malicious.
 
 > [!NOTE]
 > This README describes **0.7.0, not yet released**, plus the 0.7.1 work on its
@@ -53,15 +55,15 @@ with <b>synthetic data</b>, not a recorded malware run.</sub>
 <tr>
 <td width="33%" valign="top">
 
-**The kernel does the watching**
+**A sandbox at kernel level**
 
-A patched Linux 6.12.94 guest kernel records system calls, arguments, return
-values and captured buffers. Nothing traces from inside the guest.
+Samples run in disposable QEMU VMs on your own machine. A patched Linux 6.12.94
+guest kernel does the observing, so no agent runs in the guest.
 
 </td>
 <td width="33%" valign="top">
 
-**Invisible to `ptrace` checks**
+**No `ptrace` in the guest**
 
 The kernel debugger uses no `ptrace` either: `TracerPid` stays 0 and the
 sample's own `PTRACE_TRACEME` succeeds.
@@ -107,14 +109,14 @@ bubblewrap sandbox, and nothing downloads until you ask.
 
 | Workspace | What it gives you |
 |---|---|
-| **Syscall trace** | Arguments, return values, decoded flags and captured buffers, with filters and links to evidence. |
+| **VM management** | Read-only bases, per-VM disks, branching snapshots, resource monitoring, stealth profiles and a stopped-VM disk browser. |
 | **Triage** | Process trees, per-file history, suspicious activity with an activity graph, HTTP/DNS/TLS metadata and detection results. |
-| **Debugger** | Debug on start or attach: threads, registers, memory, breakpoints, stepping, and GDB with GEF or pwndbg. |
+| **Network** | Saved PCAPs, TShark decoding with Wireshark display filters, and per-run routes: drop, Internet, InetSim, Tor, WireGuard or SOCKS5, without root. |
 | **Memory and cores** | Capture memory and process cores, browse mappings, and analyze dumps with Volatility 3 or MemNixFS. |
 | **Static analysis** | Hashes, strings (FLOSS), UPX unpacking, capa, disassembly and Ghidra decompilation. |
-| **Network** | Saved PCAPs, TShark decoding with Wireshark display filters, and per-run routes: drop, Internet, InetSim, Tor, WireGuard or SOCKS5, without root. |
+| **Debugger** | Debug on start or attach: threads, registers, memory, breakpoints, stepping, and GDB with GEF or pwndbg. |
+| **Syscall trace** | Kernel-recorded system calls with arguments, return values, decoded flags and captured buffers, with filters and links to evidence. |
 | **Detection rules** | Community and custom YARA, Suricata and Sigma collections, plus abuse.ch indicator datasets. |
-| **VM management** | Read-only bases, per-VM disks, branching snapshots, resource monitoring, stealth profiles and a stopped-VM disk browser. |
 
 Optional engines are installed from **Tools → Analysis tools** or provided by
 the host. See the [tool requirements](docs/usage.md#dependencies-and-analysis-tools).
@@ -248,8 +250,8 @@ terminal: `antinomie --check-dependencies`. The
   leave no system call and are not seen. A sample that reads its own code can
   find the debugger's `0xCC` breakpoint bytes; hardware breakpoints avoid that.
   Do not assume a sample cannot tell it is being analyzed.
-* **Telemetry can be lost.** Heavy stress can drop telemetry and reconnects can be
-  slow. Loss and partial-recording indicators stay on, and
+* **Telemetry can be lost.** Very heavy load can drop telemetry, and reconnects can
+  be slow. Loss and partial-recording indicators stay on, and
   [telemetry robustness](#roadmap) is planned.
 * **Linux x86-64 only.** Guests and the host are x86-64 Linux today.
 * **Tools are optional and pinned.** Engines run only if installed; downloads are
@@ -297,7 +299,7 @@ terminal: `antinomie --check-dependencies`. The
 | Capture | **TLS decryption**; **file write-content capture**; **per-packet process attribution** |
 | Depth | **MMU-level unpacking** and fileless capture; **root-level activity** (rootkits, LKMs, eBPF) |
 | Reach | **arm64 and RISC-V guests** |
-| Quality | **Telemetry robustness** (drops under stress, reconnect speed) |
+| Quality | **Telemetry robustness** (drops under heavy load, reconnect speed) |
 
 ## Documentation
 
@@ -312,14 +314,14 @@ terminal: `antinomie --check-dependencies`. The
 | [Full pack](docs/full-pack.md) | Build your own offline bundle of every managed tool. |
 
 <details>
-<summary><b>Testing: torture samples and the conformance suite</b></summary>
+<summary><b>Testing: workload samples and the conformance suite</b></summary>
 
 <br>
 
-The **torture samples** are controlled workload generators: syscall floods,
-process trees, file churn, network traffic, async I/O, unusual arguments,
-intentional crashes and detection markers. `ant-torture` combines the modules;
-individual `ant-*` programs isolate a feature at light, heavy or extreme levels.
+The **workload test samples** are controlled generators of system-call load,
+process trees, file activity, network traffic, async I/O, unusual arguments,
+crash handling and detection markers. `ant-torture` combines the modules;
+individual `ant-*` programs isolate one feature at several load levels.
 A sample's `PASS` means its action ran. The separate **conformance suite**
 checks what Antinomie recorded: arguments, results, captured bytes, identities,
 loss accounting and trace rendering. Build the samples with
