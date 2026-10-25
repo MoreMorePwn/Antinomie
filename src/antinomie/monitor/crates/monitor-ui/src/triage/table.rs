@@ -451,6 +451,8 @@ fn numeric_column(header: &str) -> bool {
             | "Response frame"
             | "Occurrences"
             | "Diff count"
+            | "Offset"
+            | "Length"
             | "Requests"
             | "Rcode"
             | "Evidence"

@@ -14,7 +14,10 @@ const NODE_WIDTH: f32 = 112.0;
 const NODE_HEIGHT: f32 = 30.0;
 const GAP: f32 = 36.0;
 const LANE_HEIGHT: f32 = 54.0;
-const GUTTER: f32 = 150.0;
+/// Room for the process names, which stay at the left while the nodes scroll.
+const GUTTER: f32 = 190.0;
+/// Space kept between a process name and the first node.
+const NAME_PAD: f32 = 8.0;
 
 /// A stretch of events drawn as one box.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -105,7 +108,7 @@ fn label(node: &Node) -> String {
 
 /// Where a node sits, relative to the graph's top left.
 fn place(node_index: usize, node: &Node) -> Rect {
-    let x = GUTTER + node_index as f32 * (NODE_WIDTH + GAP);
+    let x = GUTTER + GAP / 2.0 + node_index as f32 * (NODE_WIDTH + GAP);
     let y = node.lane as f32 * LANE_HEIGHT + (LANE_HEIGHT - NODE_HEIGHT) / 2.0;
     Rect::from_min_size(pos2(x, y), vec2(NODE_WIDTH, NODE_HEIGHT))
 }
@@ -120,47 +123,53 @@ pub(super) fn show(
     selected: Option<usize>,
 ) -> Option<usize> {
     let mut clicked = None;
-    let width = GUTTER + layout.nodes.len() as f32 * (NODE_WIDTH + GAP);
+    let width = GUTTER + GAP + layout.nodes.len() as f32 * (NODE_WIDTH + GAP);
     let height = layout.lanes.len().max(1) as f32 * LANE_HEIGHT;
     egui::ScrollArea::horizontal()
         .id_salt("file-activity-graph")
         .auto_shrink([false, true])
         .show(ui, |ui| {
             let (area, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
-            let painter = ui.painter_at(area);
             let origin = area.min.to_vec2();
-            // Lanes: a rule and the process's name at the left.
-            for (lane, process) in layout.lanes.iter().enumerate() {
-                let top = area.top() + lane as f32 * LANE_HEIGHT;
+            // The names stay at the left edge of what is on screen; nodes that
+            // scroll past them are cut off there instead of running under them.
+            let left = ui.clip_rect().left().max(area.left());
+            let gutter = Rect::from_min_max(
+                pos2(left, area.top()),
+                pos2((left + GUTTER).min(area.right()), area.bottom()),
+            );
+            let plot = ui.painter_at(area).with_clip_rect(Rect::from_min_max(
+                pos2(gutter.right(), area.top()),
+                area.right_bottom(),
+            ));
+            let painter = ui.painter_at(area);
+            for lane in 0..layout.lanes.len() {
                 painter.hline(
                     area.x_range(),
-                    top + LANE_HEIGHT,
+                    area.top() + (lane + 1) as f32 * LANE_HEIGHT,
                     Stroke::new(1.0_f32, theme::line_soft()),
-                );
-                painter.text(
-                    pos2(area.left() + 4.0, top + LANE_HEIGHT / 2.0),
-                    Align2::LEFT_CENTER,
-                    clip(&activity.process_label(*process), 20),
-                    egui::TextStyle::Small.resolve(ui.style()),
-                    theme::muted(),
                 );
             }
             for (index, pair) in layout.nodes.windows(2).enumerate() {
                 let from = place(index, &pair[0]).translate(origin);
                 let to = place(index + 1, &pair[1]).translate(origin);
-                edge(&painter, from.right_center(), to.left_center());
+                edge(&plot, from.right_center(), to.left_center());
             }
             for (index, node) in layout.nodes.iter().enumerate() {
                 let rect = place(index, node).translate(origin);
+                // A node hidden behind the names cannot be reached.
+                if rect.right() <= gutter.right() {
+                    continue;
+                }
                 let id = ui.id().with(("file-activity-node", index));
-                let response = ui.interact(rect, id, Sense::click());
+                let response = ui.interact(rect.intersect(plot.clip_rect()), id, Sense::click());
                 let tint = if node.failed {
                     theme::muted()
                 } else {
                     tint(node.kind)
                 };
                 let hot = response.hovered() || selected == Some(index);
-                painter.rect(
+                plot.rect(
                     rect,
                     6.0,
                     tint.gamma_multiply(if hot { 0.40 } else { 0.22 }),
@@ -174,7 +183,7 @@ pub(super) fn show(
                     ),
                     egui::StrokeKind::Inside,
                 );
-                painter.text(
+                plot.text(
                     rect.center(),
                     Align2::CENTER_CENTER,
                     label(node),
@@ -185,6 +194,33 @@ pub(super) fn show(
                     clicked = Some(index);
                 }
                 response.on_hover_text(tooltip(file, node));
+            }
+            // The gutter over the nodes: a solid ground, then one name per lane,
+            // cut to the room with its whole text on hover.
+            painter.rect_filled(gutter, 0.0, ui.visuals().panel_fill);
+            painter.vline(
+                gutter.right(),
+                gutter.y_range(),
+                Stroke::new(1.0_f32, theme::line_soft()),
+            );
+            let font = egui::TextStyle::Small.resolve(ui.style());
+            for (lane, process) in layout.lanes.iter().enumerate() {
+                let top = area.top() + lane as f32 * LANE_HEIGHT;
+                let full = activity.process_label(*process);
+                let shown = fit(&painter, &full, &font, GUTTER - 2.0 * NAME_PAD);
+                let at = pos2(gutter.left() + NAME_PAD, top + LANE_HEIGHT / 2.0);
+                let rect = painter.text(
+                    at,
+                    Align2::LEFT_CENTER,
+                    &shown,
+                    font.clone(),
+                    theme::muted(),
+                );
+                if shown != full {
+                    let id = ui.id().with(("file-activity-lane", lane));
+                    ui.interact(rect.expand2(vec2(NAME_PAD, 4.0)), id, Sense::hover())
+                        .on_hover_text(full);
+                }
             }
         });
     clicked
@@ -205,14 +241,30 @@ fn edge(painter: &egui::Painter, from: egui::Pos2, to: egui::Pos2) {
     ));
 }
 
-fn clip(text: &str, chars: usize) -> String {
-    if text.chars().count() <= chars {
-        text.to_owned()
-    } else {
-        let mut short: String = text.chars().take(chars.saturating_sub(1)).collect();
-        short.push('…');
-        short
+/// `text` cut with an ellipsis to fit `width` points in `font`.
+pub(super) fn fit(painter: &egui::Painter, text: &str, font: &egui::FontId, width: f32) -> String {
+    let measure = |text: &str| {
+        painter
+            .layout_no_wrap(text.to_owned(), font.clone(), Color32::WHITE)
+            .size()
+            .x
+    };
+    if measure(text) <= width {
+        return text.to_owned();
     }
+    let chars: Vec<char> = text.chars().collect();
+    // The longest start that still fits with the ellipsis.
+    let (mut low, mut high) = (0, chars.len());
+    while low < high {
+        let middle = (low + high).div_ceil(2);
+        let candidate: String = chars[..middle].iter().chain(['…'].iter()).collect();
+        if measure(&candidate) <= width {
+            low = middle;
+        } else {
+            high = middle - 1;
+        }
+    }
+    chars[..low].iter().chain(['…'].iter()).collect()
 }
 
 /// What the hover on a node says: how many calls, how many octets.
