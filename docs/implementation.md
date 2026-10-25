@@ -3120,13 +3120,31 @@ additions in `CONSOLE_PACKAGES` (tasksel, installation-report, discover,
 laptop-detect, eject, initramfs-tools, console-setup, sudo) and tasksel's
 language task for the locale (`task-english` for English), documentation and
 manual pages, the package indexes and apt's caches kept; no curl and no
-systemd-resolved. Networking is the installer's: ifupdown with dhcpcd and an
-`allow-hotplug enp0s25` stanza (`CONSOLE_INTERFACES`). The base's
-`stealth_support` adds `onboardnic`: the app then gives the NIC PCI address
-00:19.0 (`nic_option_for`, the integrated Intel NIC's slot on PC chipsets), so
-udev names it `enp0s25` whatever the model and whichever display or pointer
-devices take the first free slots; `/etc/resolv.conf` is a plain file dhcpcd
-rewrites from the lease. Packages configured during the build that recorded
+systemd-resolved. Networking is the installer's: ifupdown with dhcpcd. The
+base's `/etc/network/interfaces` has only the loopback (`CONSOLE_INTERFACES`); its
+`stealth_support` adds `onboardnic`, and the app puts the NIC at a fixed PCI
+slot of the profile's machine and writes the installer's `allow-hotplug`
+stanza for the name udev gives it there. `StealthProfile::nic_slot` takes the
+slot from the machine the identity copies (`MachineProfile::nic_slot`): Intel
+100-series and later chipsets (OptiPlex 7090, EliteDesk 800 G6, Latitude 5420,
+X12STH-F) have their I219 at 00:1f.6, `enp0s31f6` (`NicSlot::Pch`; q35's LPC
+bridge at 00:1f.0 is multifunction, so function 6 is free); profiles without
+an identity (Transparent), with an edited one, or copying an AMD machine (no
+integrated LAN on bus 0, and a root port would be QEMU's Red Hat one) keep
+00:19.0, `enp0s25`, the ICH9's place (`NicSlot::Ich`). `nic_option_for` adds
+the address whatever the model, so the name does not depend on which display
+or pointer devices take the first free slots (headless or not). Provisioning
+writes the stanza (`interface_commands`: everything from the installer's
+`# The primary network interface` comment on is replaced) and the account
+record keeps the interface (`GuestAccount::interface`; a record from before
+0.7.1 means `enp0s25`, which such a base wrote at build time); the launch puts
+the NIC at that interface's slot, so a disk and its NIC always agree, and
+both the user-mode network and the Routed gateway's `-device` use it. Saving
+a profile whose slot differs rewrites the stanza on the VM's disk
+(`set_interface`, VM stopped); with snapshots that is refused, since their
+disks name the old interface. A reset writes the current profile's.
+`/etc/resolv.conf` is a plain file dhcpcd rewrites from the lease. Packages
+configured during the build that recorded
 the build host's name (exim4's mail name) get the chosen hostname, and the
 leak check also fails on the build host's name. `multi-user.target`,
 `/tmp` on the root disk (a `tmp.mount` drop-in, unlike Debian 13's default tmpfs: dropped files reach the VM's disk, and the
@@ -3196,9 +3214,17 @@ on the serial port: its VMs ask for a serial console
 command line that names none; the app never sets it), since a readiness probe
 run would break the suite's whole-boot packet accounting. Provisioning creates the account as the installer's
 adduser does (full name `<Name>,,,`, the installer's groups where they exist,
-a 0700 home), with a yescrypt password hash (Perl's `crypt` through the host's
-libxcrypt; salted SHA-512 where that has no yescrypt), and writes a machine ID
-of the VM's own.
+a 0700 home) and writes a machine ID of the VM's own. The guest hashes the
+password itself: provisioning runs the guest's `chpasswd` (through PAM, as
+`passwd` does, so Debian 13 stores yescrypt `$y$`) with the password in a
+here-document of the guestfish `sh` command, never in a file on the disk or a
+command line, and the command prints the hash the guest stored
+(`password_commands`, `printed_hash`). The record keeps that hash; a reset sets
+it again with `chpasswd -e` and checks the guest kept it. Records written
+before 0.7.1 keep their host-made SHA-512 hashes (`validate_hash` takes both).
+The host needs no crypt of its own, only `guestfish` (App dependencies:
+`libguestfs-tools` on Debian, Ubuntu and Kali, `libguestfs` on Fedora,
+openSUSE and Arch).
 
 The disk and kernel are an installed PC's. The base disk carries an MBR table
 with one bootable root partition at 1 MiB (`console_disk`; mkfs and every
@@ -3208,20 +3234,44 @@ disk). Provisioning lays the VM's disk out as partman does
 in an extended `sda2` starting two sectors before it, about the VM's RAM (256
 MiB at least, a quarter of the disk at most), the last MiB free; the swap gets
 a UUID, fstab its line and `initramfs-tools/conf.d/resume` its UUID, the MBR a
-disk identifier of the VM's own, and `update-grub` writes `grub.cfg` for the
+disk identifier of the VM's own (set last, after unmounting: sfdisk makes
+the kernel read the table again and the partition nodes vanish for a moment), and `update-grub` writes `grub.cfg` for the
 VM's UUIDs. Growing the disk in the VM's settings grows the root the same way
 (`grow_disk`, keeping the swap's UUID and size); the bootstrap initrd grows only
-whole-disk roots (BusyBox, the desktops) now. The kernel is packaged as Debian
-packages it (`kernel_packages`): `linux-image-6.12.94+deb13-amd64` with
-linux-signed-amd64's control fields and the source package's maintainer
-scripts (depmod, `linux-update-symlinks` for `/vmlinuz` and `/initrd.img`,
-initramfs-tools building `/boot/initrd.img-*`), and the `linux-image-amd64`
-metapackage, installed before the rest of the customization (apt brings
-apparmor by recommends); GRUB (`grub-pc`, `os-prober`) is installed as the
-installer installs it. `/boot` holds the running kernel (mode 0600: it embeds
-the recorder; Debian's is world-readable), Debian's own configuration as the
-pinned source package resolves it (`debian-config`, written by the kernel build
-beside the profile's own) and Debian's `System.map` placeholder.
+whole-disk roots (BusyBox, the desktops) now. The kernel packages are
+Debian's own (`debian_kernel_debs`): `linux-image-6.12.94+deb13-amd64` and
+`linux-image-amd64` 6.12.94-1 exactly as linux-signed-amd64 6.12.94+1 shipped
+them to trixie-security, taken from snapshot.debian.org
+(`DEBIAN_KERNEL_ARCHIVE`, the day they were published). The archive's
+`InRelease` must verify against the Debian archive keyring (`gpgv`, else
+`sqv`), `main/binary-amd64/Packages.xz` must match its SHA-256 there, and each
+`.deb` the index entry and the SHA-256 pinned in `DEBIAN_KERNEL_PACKAGES`.
+build-base.py keeps them in its inputs directory (`--kernel-package-cache`);
+a copy there that matches its pin is used without the network, and the root
+filesystem cache knows them by the pins, so a cached root needs neither. They
+are installed before the rest of the customization (apt brings apparmor by
+recommends) and their maintainer scripts run as on an install (depmod,
+`linux-update-symlinks` for `/vmlinuz` and `/initrd.img`, initramfs-tools
+building `/boot/initrd.img-*` from Debian's modules); GRUB (`grub-pc`,
+`os-prober`) is installed as the installer installs it. So `/boot` holds
+Debian's signed image (0644), configuration and `System.map`, and
+`/usr/lib/modules/6.12.94+deb13-amd64` Debian's module tree; the build fails
+unless `dpkg --verify` reports nothing for both packages. QEMU boots the
+Antinomie kernel directly (`-kernel`), so the guest never holds it. The
+Antinomie kernel reports the same release, and its own few modules
+(`modules_archive`) go to that tree's `updates/`. depmod then runs once more
+with Debian's `kernel/` excluded (`-C` with `search updates` and `exclude
+kernel`, so no depmod.d file stays in the image), and the build checks that
+`modules.dep` names only `updates/`: the Antinomie kernel refuses Debian's
+modules (their `struct module` differs; "Exec format error" and a kernel log
+error each), so an index of them would have udev, systemd and the kernel's
+own module requests try two dozen at every boot, and depmod would make ours
+depend on Debian's (`x_tables`). A Debian module is therefore "not found" for
+modprobe, as a module the kernel lacks was before. The initramfs Debian's
+postinst built from all of Debian's modules stays; an `update-initramfs` in
+the guest builds a smaller one from the index. apt may install the image from
+the trixie mirror rather than the verified copy when the mirror carries the
+same version: the archive serves one file per version (the same SHA-256).
 
 The minimal kernel profile, shared with BusyBox, takes Debian 13's
 configuration where a program sees it (`DEBIAN_SHAPE`): Debian's LSM order with
@@ -3271,7 +3321,8 @@ local password login and sudo, root locked, SSH disabled, no autologin. Offline
 libguestfs provisioning precedes publication. Passwords must not be serialized
 in configuration/preferences/recordings, displayed in Debug, or passed in argv.
 A private0600 per-VM username/salted-hash provisioning record can support reset
-and duplicate; no plaintext retained. Reset reapplies original credentials and
+and duplicate; no plaintext retained. The hash is the one the guest's own
+chpasswd made at creation. Reset reapplies original credentials and
 publishes replacement disk only after provisioning succeeds. Existing VMs are
 not automatically converted or modified.
 

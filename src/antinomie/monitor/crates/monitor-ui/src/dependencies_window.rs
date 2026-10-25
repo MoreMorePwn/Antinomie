@@ -300,6 +300,23 @@ fn requirements(
             }
             required
         }
+        // Resetting a VM with a Debian account provisions its new disk again.
+        Command::Reset { vm_id, .. }
+            if snapshot
+                .vms
+                .iter()
+                .find(|vm| &vm.id == vm_id)
+                .and_then(|vm| {
+                    antinomie_monitor_core::stealth::vm_base(
+                        vm.base_identity.as_deref(),
+                        &snapshot.bases,
+                    )
+                })
+                .and_then(|base| base.guest.as_ref())
+                .is_some_and(|guest| guest.requires_credentials) =>
+        {
+            vec![QemuImg, DebianAccount]
+        }
         Command::Create(_) | Command::Reset { .. } | Command::CreateVmSnapshot { .. } => {
             vec![QemuImg]
         }
@@ -441,6 +458,55 @@ mod tests {
             .is_ok());
         assert!(window
             .require(&Command::ReconnectTransport, &options, &snapshot)
+            .is_ok());
+    }
+
+    #[test]
+    fn resetting_a_vm_with_a_debian_account_needs_guestfish() {
+        let window = DependenciesWindow::missing_for_test(Dependency::DebianAccount);
+        let options = BackendOptions::default();
+        let base = |id: &str, requires_credentials: bool| antinomie_monitor_core::BaseSummary {
+            id: id.into(),
+            label: id.into(),
+            directory: Default::default(),
+            guest: Some(antinomie_monitor_core::GuestProfile {
+                id: "debian-minimal".into(),
+                label: "Debian 13 (Minimal)".into(),
+                min_ram_mib: 1024,
+                min_disk_gib: 4,
+                requires_credentials,
+                graphical: false,
+            }),
+            min_ram_mib: 0,
+            min_disk_gib: 0,
+            fixed_display: false,
+            size_bytes: 0,
+            revision: None,
+            min_app_version: None,
+            built_with: None,
+            stealth_support: Vec::new(),
+        };
+        let vm = |id: &str, base: &str| VmConfig {
+            id: id.into(),
+            base_identity: Some(base.into()),
+            ..VmConfig::default()
+        };
+        let snapshot = Snapshot {
+            vms: vec![vm("debian", "minimal"), vm("plain", "other")],
+            bases: vec![base("minimal", true), base("other", false)],
+            ..Snapshot::default()
+        };
+        let reset = |vm_id: &str| Command::Reset {
+            vm_id: vm_id.into(),
+            confirmed: true,
+        };
+        let error = window
+            .require(&reset("debian"), &options, &snapshot)
+            .unwrap_err();
+        assert!(error.contains("missing test dependency"), "{error}");
+        assert!(window.require(&reset("plain"), &options, &snapshot).is_ok());
+        assert!(window
+            .require(&Command::Create(vm("new", "minimal")), &options, &snapshot)
             .is_ok());
     }
 

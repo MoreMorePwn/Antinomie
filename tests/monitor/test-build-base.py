@@ -79,10 +79,10 @@ class BuildBaseTests(unittest.TestCase):
             # A minimal kernel without modules: none are passed.
             self.assertNotIn("--modules", commands[0])
             self.assertNotIn("--debian-config", commands[0])
-            # Debian's resolved configuration goes to the console base's /boot.
-            (kernel / "debian-config").write_text("CONFIG_X=y\n")
-            base.build_image("debian-minimal", {}, kernel, work, Path("/o"))
-            self.assertIn("--debian-config", commands[-1])
+            # Debian's kernel packages are kept with the other Debian inputs.
+            self.assertNotIn("--kernel-package-cache", commands[0])
+            base.build_image("debian-minimal", {}, kernel, work, Path("/o"), inputs=Path("/in"))
+            self.assertEqual(commands[-1][-2:], ("--kernel-package-cache", Path("/in")))
             commands.pop()
             (kernel / "modules-install").mkdir()
             base.build_image("debian-xfce", {"desktop": "gnome"}, kernel, work, Path("/o"))

@@ -32,25 +32,54 @@ it runs.
   standard system utilities with recommends (exim4 for local mail, timesyncd,
   lsof, dig, man pages and documentation), tasksel and its language task,
   without curl and systemd-resolved; the package indexes stay. It takes its
-  address with ifupdown and dhcpcd on `enp0s25`: its VMs' NIC sits at the
-  onboard NIC's PCI slot whatever model the stealth profile picks.
+  address with ifupdown and dhcpcd on the interface the stealth profile's
+  machine would have.
   Its configuration files are the installer's (sources.list with
   non-free-firmware and deb-src, fstab, hosts, locale.gen, adjtime, the debconf
   answers, the installation's dpkg and apt logs), `/tmp` stays on disk without
   a mask, and it boots with GRUB's command line for Debian (`root=UUID=` of
   the VM's own disk, `ro quiet`, no serial console, no `panic=-1`). Accounts
-  get the installer's groups and full-name field and a yescrypt password hash,
-  and each VM its own machine ID.
+  get the installer's groups and full-name field, and each VM its own machine
+  ID.
   Its disk is partitioned as the installer partitions it (MBR, the root at
   1 MiB, a swap partition sized for the VM's RAM, laid out when the VM is
-  created or its disk grown), it carries GRUB and its kernel as Debian's
-  `linux-image-6.12.94+deb13-amd64` and `linux-image-amd64` packages with a
-  matching `/boot`, and its kernel reports Debian's release, compiler and
+  created or its disk grown), it carries GRUB and Debian's own
+  `linux-image-6.12.94+deb13-amd64` and `linux-image-amd64` packages (see
+  below), and its kernel reports Debian's release, compiler and
   configuration where programs look (AppArmor, the memory cgroup, HZ 250,
   8192 CPUs, perf_event_paranoid 3, no 9p, no netconsole). BusyBox shares the
   kernel and gets the same; the conformance goldens follow it (fanotify and
   landlock answer, AppArmor's bind error, HZ 250, the LSM list) and name the
   root disk by role so one golden serves both bases.
+- **Debian Minimal's /boot is Debian's.** The kernel packages in the image are
+  Debian's genuine `linux-image-6.12.94+deb13-amd64` and `linux-image-amd64`
+  6.12.94-1, fetched from snapshot.debian.org and checked against the Debian
+  archive's signed index and pinned SHA-256s (kept with the build inputs), so
+  `/boot` (the image world-readable as Debian ships it, its configuration,
+  System.map and an initramfs of Debian's modules) and the module tree are
+  what a real installation has and `dpkg --verify` reports nothing; the build
+  fails otherwise. QEMU still boots the Antinomie kernel directly, which the
+  guest no longer holds anywhere (it was `/boot/vmlinuz-*`, mode 0600). The
+  Antinomie kernel's few modules sit in the tree's `updates/` and are the only
+  ones the module index names, so nothing tries Debian's (which that kernel
+  refuses) at boot.
+- **Debian accounts hashed by the guest.** A new Debian VM's password is
+  hashed by the guest's own `chpasswd` (PAM and libcrypt), so it is stored as
+  Debian 13 stores it (yescrypt, `$y$`) whatever the host's crypt supports; the
+  host no longer hashes it with Perl or OpenSSL. The password reaches the guest
+  only on chpasswd's standard input, never as a file on the disk, and a reset
+  sets the recorded hash again. **App dependencies** names the package with
+  `guestfish` for each distribution (`libguestfs` on Fedora, openSUSE and
+  Arch; it said `guestfs-tools` before), and resetting such a VM checks for it.
+- **Debian Minimal's NIC follows the stealth profile.** The network card sits
+  where the profile's machine has its built-in LAN: PCI 00:1f.6 (`enp0s31f6`,
+  Intel's I219) for the Intel OptiPlex, EliteDesk 800, Latitude and Supermicro
+  X12 profiles, 00:19.0 (`enp0s25`) for Transparent, AMD machines and edited
+  identities, the same headless or with a display. The interfaces stanza is
+  written per VM when it is created or reset and again when a saved profile
+  moves the card (refused while the VM has snapshots), no longer at build
+  time. VMs created before keep `enp0s25` until they are reset or their
+  profile moves the card.
 - **Rootless Debian builds.** Native (`--mode=unshare`) Debian image builds
   move files in and out of the new root as the invoking user, so they no longer
   fail on the private staging directory; the conformance trace suite also runs
@@ -66,7 +95,10 @@ it runs.
   Regex matches are their own analysis choice beside Strings, and the regex
   add row is one line. The 0.7.0 Network tabs and the layout switch are gone.
   More lists say when they are empty (cores first), more tables span their
-  pane, and the terminal's focus edge shows on all four sides.
+  pane, and the terminal's focus edge shows on all four sides. Settings >
+  Network routes describes each route in one line (the full text is the
+  picker's tooltip), and an empty static analysis Details pane says
+  *Nothing selected.*
 - **abuse.ch downloads.** A dataset that needs the Auth-Key is refused before
   any request when none is set, with a message that names auth.abuse.ch; HTTP
   404, 429 and server errors are explained. The SSLBL IP list, which abuse.ch

@@ -14,7 +14,6 @@ use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-const HASH_TIMEOUT: Duration = Duration::from_secs(15);
 /// The groups the Debian installer adds its first user to, where they exist
 /// (sudo because root gets no password).
 const INSTALLER_GROUPS: &str =
@@ -22,6 +21,11 @@ const INSTALLER_GROUPS: &str =
 /// One libguestfs appliance run: the probe, or the provisioning itself
 /// (filesystem check, new UUID, directory reindex, account).
 const PROVISION_TIMEOUT: Duration = Duration::from_secs(240);
+/// The interface name a disk provisioned before 0.7.1 configures: the base
+/// wrote the stanza for the NIC at PCI 00:19.0 when it was built.
+const LEGACY_INTERFACE: &str = "enp0s25";
+/// What the guest prints before the account's password hash.
+const HASH_MARKER: &str = "hash:";
 
 #[cfg(test)]
 thread_local! {
@@ -41,6 +45,12 @@ pub(crate) struct GuestAccount {
     /// before 0.7.1, which keep their base's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     root_uuid: Option<String>,
+    /// The wired interface the disk's /etc/network/interfaces brings up (on
+    /// a base that names its NIC by PCI slot): written at provisioning and
+    /// when the stealth profile moves the NIC. None: [`LEGACY_INTERFACE`]
+    /// on such a base, nothing on others.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    interface: Option<String>,
 }
 impl std::fmt::Debug for GuestAccount {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -48,6 +58,7 @@ impl std::fmt::Debug for GuestAccount {
             .field("username", &self.username)
             .field("password_hash", &"[REDACTED]")
             .field("root_uuid", &self.root_uuid)
+            .field("interface", &self.interface)
             .finish()
     }
 }
@@ -112,19 +123,56 @@ pub(crate) fn valid_uuid(text: &str) -> bool {
         })
 }
 
-/// A yescrypt salt as crypt(3) makes it: 16 random bytes in crypt's base 64
-/// (the 22nd character carries the last two bits).
-fn yescrypt_salt() -> Result<String, String> {
-    const ALPHABET: &[u8; 64] = b"./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-    let mut bytes = [0u8; 22];
-    File::open("/dev/urandom")
-        .and_then(|mut source| source.read_exact(&mut bytes))
-        .map_err(|_| "cannot read /dev/urandom for the password salt")?;
-    Ok(bytes
-        .iter()
-        .enumerate()
-        .map(|(index, byte)| ALPHABET[usize::from(byte & if index < 21 { 63 } else { 3 })] as char)
-        .collect())
+/// The account's password as provisioning hands it to the guest's chpasswd,
+/// always on its standard input (a here-document), never in a file or on a
+/// command line.
+enum Password<'a> {
+    /// The password itself, for a new account: the guest hashes it with its
+    /// own PAM and libcrypt, as passwd does (yescrypt on Debian 13).
+    Plain(&'a str),
+    /// The hash the guest made when the account was created (a reset).
+    Hashed(&'a str),
+}
+
+/// Whether `name` can be a Linux network interface name in a guest file.
+fn valid_interface(name: &str) -> bool {
+    (1..=15).contains(&name.len())
+        && name
+            .bytes()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+}
+
+/// The guest commands that set the password (from `password`) and print the
+/// hash the guest stored, after [`HASH_MARKER`].
+fn password_commands(username: &str, password: &Password) -> String {
+    let (flag, secret) = match password {
+        Password::Plain(password) => ("", *password),
+        Password::Hashed(hash) => (" -e", *hash),
+    };
+    format!(
+        "set -eu\nchpasswd{flag} <<'ACCOUNT'\n{username}:{secret}\nACCOUNT\n\
+         hash=$(getent shadow '{username}' | cut -d: -f2)\n\
+         printf '{HASH_MARKER}%s\\n' \"$hash\"\n"
+    )
+}
+
+/// The hash the guest printed after [`HASH_MARKER`].
+fn printed_hash(output: &[u8]) -> Option<String> {
+    String::from_utf8_lossy(output)
+        .lines()
+        .rev()
+        .find_map(|line| line.trim().strip_prefix(HASH_MARKER).map(str::to_owned))
+}
+
+/// The installer's stanza for the VM's wired NIC (ifupdown runs dhcpcd for
+/// it), in place of everything from the stanza's comment on that the base or
+/// an earlier provisioning wrote.
+fn interface_commands(interface: &str, staging: &str) -> String {
+    format!(
+        "awk '/^# The primary network interface$/ {{exit}} {{line[++n] = $0}} END {{while (n > 0 && line[n] == \"\") n--; for (i = 1; i <= n; i++) print line[i]}}' /etc/network/interfaces > {staging}/interfaces\n\
+         printf '\\n# The primary network interface\\nallow-hotplug %s\\niface %s inet dhcp\\n# This is an autoconfigured IPv6 interface\\niface %s inet6 auto\\n' {interface} {interface} {interface} >> {staging}/interfaces\n\
+         cat {staging}/interfaces > /etc/network/interfaces\n"
+    )
 }
 
 /// A random 128-bit identifier in hex, as /etc/machine-id holds it.
@@ -172,6 +220,30 @@ fn fish_quote(text: &str) -> String {
     }
     quoted.push('"');
     quoted
+}
+
+/// The interface provisioning configures for a VM with `profile` on a base
+/// whose `stealth_support` names its NIC by PCI slot (`onboardnic`): the
+/// profile's slot's name. None on other bases (they configure their NIC
+/// themselves).
+pub(crate) fn provisioned_interface(
+    stealth_support: &[String],
+    profile: &crate::stealth::StealthProfile,
+) -> Option<&'static str> {
+    crate::stealth::BaseSupport::from_list(stealth_support)
+        .onboard_nic
+        .then(|| profile.nic_slot().interface())
+}
+
+/// A provisioned account for tests that need a record but no disk.
+#[cfg(test)]
+pub(crate) fn fixture(username: &str) -> GuestAccount {
+    GuestAccount {
+        username: username.into(),
+        password_hash: format!("$y$j9T${}${}", "s".repeat(22), "h".repeat(43)),
+        root_uuid: None,
+        interface: None,
+    }
 }
 
 /// The disk from the probe's output: the ext4 root among the
@@ -253,12 +325,7 @@ pub(crate) fn grow_disk(disk: &Path) -> Result<(), String> {
 }
 
 fn grow_disk_with(disk: &Path, executable: &Path) -> Result<(), String> {
-    let probe = run_private_with_timeout(
-        &mut guestfish(executable, disk, false),
-        PROBE,
-        true,
-        PROVISION_TIMEOUT,
-    )?;
+    let probe = run_private(&mut guestfish(executable, disk, false), PROBE, true)?;
     let layout = parse_probe(&String::from_utf8_lossy(&probe))?;
     let Some(root_last) = layout.root_last else {
         return Ok(());
@@ -277,7 +344,7 @@ fn grow_disk_with(disk: &Path, executable: &Path) -> Result<(), String> {
     script.extend(layout_commands(&layout, &plan, &uuid));
     script.push(String::new());
     run_private(
-        guestfish(executable, disk, true),
+        &mut guestfish(executable, disk, true),
         script.join("\n").as_bytes(),
         false,
     )?;
@@ -299,67 +366,59 @@ fn guestfish(executable: &Path, disk: &Path, writable: bool) -> Command {
 }
 
 impl GuestAccount {
-    /// The account with its password hashed as Debian 13 hashes it
-    /// (yescrypt, through the host's crypt(3) from Perl), or salted SHA-512
-    /// where the host's crypt has no yescrypt.
-    pub(crate) fn from_credentials(credentials: GuestCredentials) -> Result<Self, String> {
-        Self::yescrypt_with(credentials.clone(), Path::new("perl"))
-            .or_else(|_| Self::hash_with(credentials, Path::new("openssl")))
-    }
-    fn yescrypt_with(credentials: GuestCredentials, executable: &Path) -> Result<Self, String> {
-        let mut command = Command::new(executable);
-        command.args([
-            "-e",
-            "local $/; my $p = <STDIN>; my $h = crypt($p, $ARGV[0]); print $h if defined $h",
-            &format!("$y$j9T${}", yescrypt_salt()?),
-        ]);
-        Self::hashed(credentials, command)
-    }
-    fn hash_with(credentials: GuestCredentials, executable: &Path) -> Result<Self, String> {
-        let mut command = Command::new(executable);
-        command.args(["passwd", "-6", "-stdin"]);
-        Self::hashed(credentials, command)
-    }
-    fn hashed(credentials: GuestCredentials, command: Command) -> Result<Self, String> {
-        let hash = run_private(command, credentials.password.as_bytes(), true)?;
-        let password_hash = String::from_utf8(hash)
-            .map_err(|_| "invalid password hash output")?
-            .trim_end()
-            .to_owned();
-        let account = Self {
-            username: credentials.username,
-            password_hash,
-            root_uuid: None,
-        };
-        account.validate()?;
+    /// Create the account on a VM's new disk (see [`provision`](Self::provision)):
+    /// the guest's own chpasswd hashes the password, so the hash is the one
+    /// the guest's Debian makes (yescrypt on Debian 13), and the record keeps
+    /// that hash for later resets.
+    pub(crate) fn create(
+        credentials: GuestCredentials,
+        disk: &Path,
+        ram_mib: u32,
+        interface: Option<&str>,
+    ) -> Result<Self, String> {
+        let mut account = Self::unprovisioned(credentials.username)?;
+        let executable = Self::provision_tool()?;
+        account.provision_with(
+            disk,
+            &executable,
+            ram_mib,
+            &Password::Plain(&credentials.password),
+            interface,
+        )?;
         Ok(account)
+    }
+    fn unprovisioned(username: String) -> Result<Self, String> {
+        validate_guest_username(&username)?;
+        Ok(Self {
+            username,
+            password_hash: String::new(),
+            root_uuid: None,
+            interface: None,
+        })
+    }
+    fn provision_tool() -> Result<std::path::PathBuf, String> {
+        #[cfg(test)]
+        if FAIL_PROVISION.with(|fail| fail.replace(false)) {
+            return Err("injected offline provisioning failure".into());
+        }
+        crate::dependencies::require_tool(Path::new("guestfish"), "libguestfs-tools")
     }
     fn validate(&self) -> Result<(), String> {
         validate_guest_username(&self.username)?;
-        let parts: Vec<_> = self.password_hash.split('$').collect();
-        let crypt64 = |part: &&str| {
-            part.bytes()
-                .all(|c| c.is_ascii_alphanumeric() || c == b'.' || c == b'/')
-        };
-        // $6$salt$hash (SHA-512) or $y$j9T$salt$hash (yescrypt).
-        let sha512 = parts.len() == 4
-            && parts[1] == "6"
-            && (1..=16).contains(&parts[2].len())
-            && parts[3].len() == 86;
-        let yescrypt = parts.len() == 5
-            && parts[1] == "y"
-            && parts[2] == "j9T"
-            && (1..=86).contains(&parts[3].len())
-            && parts[4].len() == 43;
-        if !parts[0].is_empty() || !(sha512 || yescrypt) || !parts[2..].iter().all(crypt64) {
-            return Err("invalid salted yescrypt or SHA-512 password hash".into());
-        }
+        validate_hash(&self.password_hash)?;
         if self
             .root_uuid
             .as_deref()
             .is_some_and(|uuid| !valid_uuid(uuid))
         {
             return Err("invalid provisioned root filesystem UUID".into());
+        }
+        if self
+            .interface
+            .as_deref()
+            .is_some_and(|name| !valid_interface(name))
+        {
+            return Err("invalid provisioned network interface name".into());
         }
         Ok(())
     }
@@ -370,6 +429,12 @@ impl GuestAccount {
     /// The root filesystem UUID provisioning gave the VM's disk.
     pub(crate) fn root_uuid(&self) -> Option<&str> {
         self.root_uuid.as_deref()
+    }
+    /// The wired interface the disk configures, on a base that names its NIC
+    /// by PCI slot: the one provisioning wrote, or the base's own for a disk
+    /// provisioned before 0.7.1.
+    pub(crate) fn interface(&self) -> &str {
+        self.interface.as_deref().unwrap_or(LEGACY_INTERFACE)
     }
     pub(crate) fn save(&self, directory: &Path) -> Result<(), String> {
         self.validate()?;
@@ -398,29 +463,41 @@ impl GuestAccount {
         Ok(account)
     }
     /// Make the base's disk this VM's own, offline: a root filesystem UUID
-    /// and directory hash seed of its own (fstab follows), then the account.
-    pub(crate) fn provision(&mut self, disk: &Path, ram_mib: u32) -> Result<(), String> {
-        #[cfg(test)]
-        if FAIL_PROVISION.with(|fail| fail.replace(false)) {
-            return Err("injected offline provisioning failure".into());
-        }
-        let executable =
-            crate::dependencies::require_tool(Path::new("guestfish"), "libguestfs-tools")?;
-        self.provision_with(disk, &executable, ram_mib)
+    /// and directory hash seed of its own (fstab follows), the account with
+    /// its recorded hash, and, on a base that names its NIC by PCI slot, the
+    /// stanza for `interface`.
+    pub(crate) fn provision(
+        &mut self,
+        disk: &Path,
+        ram_mib: u32,
+        interface: Option<&str>,
+    ) -> Result<(), String> {
+        let executable = Self::provision_tool()?;
+        let hash = self.password_hash.clone();
+        self.provision_with(
+            disk,
+            &executable,
+            ram_mib,
+            &Password::Hashed(&hash),
+            interface,
+        )
     }
     fn provision_with(
         &mut self,
         disk: &Path,
         executable: &Path,
         ram_mib: u32,
+        password: &Password,
+        interface: Option<&str>,
     ) -> Result<(), String> {
-        self.validate()?;
-        let probe = run_private_with_timeout(
-            &mut guestfish(executable, disk, false),
-            PROBE,
-            true,
-            PROVISION_TIMEOUT,
-        )?;
+        validate_guest_username(&self.username)?;
+        if let Password::Hashed(hash) = password {
+            validate_hash(hash)?;
+        }
+        if interface.is_some_and(|name| !valid_interface(name)) {
+            return Err("invalid network interface name".into());
+        }
+        let probe = run_private(&mut guestfish(executable, disk, false), PROBE, true)?;
         let layout = parse_probe(&String::from_utf8_lossy(&probe))?;
         let uuid = random_uuid()?;
         let plan = layout
@@ -429,27 +506,92 @@ impl GuestAccount {
         let script = self.script(
             &layout,
             plan.as_ref(),
-            &uuid,
-            &random_uuid()?,
-            &random_hex()?,
+            &Identity {
+                uuid: &uuid,
+                swap_uuid: &random_uuid()?,
+                machine_id: &random_hex()?,
+            },
+            password,
+            interface,
         );
-        run_private(guestfish(executable, disk, true), script.as_bytes(), false)?;
+        let output = run_private(
+            &mut guestfish(executable, disk, true),
+            script.as_bytes(),
+            true,
+        )?;
+        let hash =
+            printed_hash(&output).ok_or("the guest did not report the account's password hash")?;
+        validate_hash(&hash)?;
+        if matches!(password, Password::Hashed(stored) if *stored != hash) {
+            return Err("the guest did not keep the account's password hash".into());
+        }
         File::open(disk)
             .and_then(|file| file.sync_all())
             .map_err(|_| "cannot sync provisioned disk".to_owned())?;
+        self.password_hash = hash;
         self.root_uuid = Some(uuid);
+        self.interface = interface.map(str::to_owned);
         Ok(())
     }
-    /// The guestfish commands. The hash crosses as a file the guest's
-    /// chpasswd reads, never in a guest command line.
+    /// Point the disk's network configuration at `interface` (the VM off):
+    /// the stealth profile moved the NIC to another PCI slot.
+    pub(crate) fn set_interface(&mut self, disk: &Path, interface: &str) -> Result<(), String> {
+        let executable = Self::provision_tool()?;
+        self.set_interface_with(disk, &executable, interface)
+    }
+    fn set_interface_with(
+        &mut self,
+        disk: &Path,
+        executable: &Path,
+        interface: &str,
+    ) -> Result<(), String> {
+        if !valid_interface(interface) {
+            return Err("invalid network interface name".into());
+        }
+        let probe = run_private(&mut guestfish(executable, disk, false), PROBE, true)?;
+        let layout = parse_probe(&String::from_utf8_lossy(&probe))?;
+        let staging = format!("/root/.provision-{}", storage::unique_id());
+        let guest = format!(
+            "set -eu\ntrap 'rm -rf {staging}' EXIT\n{}",
+            interface_commands(interface, &staging)
+        );
+        let script = [
+            "run".to_owned(),
+            format!("mount {} /", layout.root),
+            format!("mkdir {staging}"),
+            format!("chmod 0700 {staging}"),
+            format!("write {staging}/interface.sh {}", fish_quote(&guest)),
+            format!("sh {}", fish_quote(&format!("sh {staging}/interface.sh"))),
+            "umount-all".to_owned(),
+            String::new(),
+        ]
+        .join("\n");
+        run_private(
+            &mut guestfish(executable, disk, true),
+            script.as_bytes(),
+            false,
+        )?;
+        File::open(disk)
+            .and_then(|file| file.sync_all())
+            .map_err(|_| "cannot sync the VM disk".to_owned())?;
+        self.interface = Some(interface.to_owned());
+        Ok(())
+    }
+    /// The guestfish commands. The password reaches the guest's chpasswd as
+    /// a here-document of the `sh` command, never as a file on the disk.
     fn script(
         &self,
         layout: &DiskLayout,
         plan: Option<&PartitionPlan>,
-        uuid: &str,
-        swap_uuid: &str,
-        machine_id: &str,
+        identity: &Identity,
+        password: &Password,
+        interface: Option<&str>,
     ) -> String {
+        let Identity {
+            uuid,
+            swap_uuid,
+            machine_id,
+        } = *identity;
         let username = &self.username;
         let root = &layout.root;
         let staging = format!("/root/.provision-{}", storage::unique_id());
@@ -477,8 +619,8 @@ impl GuestAccount {
              for group in {INSTALLER_GROUPS}; do\n\
              \tif getent group \"$group\" >/dev/null; then adduser --quiet '{username}' \"$group\"; fi\n\
              done\n\
-             chpasswd -e < {staging}/password\n\
-             passwd -l root >/dev/null\n"
+             passwd -l root >/dev/null\n{}",
+            interface.map_or_else(String::new, |name| interface_commands(name, &staging))
         );
         // A partitioned disk: its swap partition in fstab and as the resume
         // device, as the installer leaves them, and GRUB's configuration for
@@ -512,14 +654,6 @@ impl GuestAccount {
         let mut commands = vec!["run".to_owned()];
         if let Some(plan) = plan {
             commands.extend(layout_commands(layout, plan, swap_uuid));
-            // The disk identifier (PARTUUIDs) of its own as well.
-            let id = u32::from_str_radix(&machine_id[..8], 16).unwrap_or(1);
-            commands.push(format!(
-                "-debug sh {}",
-                fish_quote(&format!(
-                    "sfdisk --disk-id /dev/sda 0x{id:08x} >/dev/null 2>&1"
-                ))
-            ));
         }
         commands.extend([
             format!("e2fsck-f {root}"),
@@ -528,32 +662,71 @@ impl GuestAccount {
             format!("mount {root} /"),
             format!("mkdir {staging}"),
             format!("chmod 0700 {staging}"),
-            format!(
-                "write {staging}/password {}",
-                fish_quote(&format!("{username}:{}", self.password_hash))
-            ),
-            format!("chmod 0600 {staging}/password"),
             format!("write {staging}/provision.sh {}", fish_quote(&guest)),
             format!("sh {}", fish_quote(&format!("sh {staging}/provision.sh"))),
+            // The password, set and hashed by the guest itself; it prints
+            // the hash it stored.
+            format!("sh {}", fish_quote(&password_commands(username, password))),
             // The installation's machine ID, its own per VM.
             format!(
                 "write /etc/machine-id {}",
                 fish_quote(&format!("{machine_id}\n"))
             ),
             "umount-all".to_owned(),
-            String::new(),
         ]);
+        if plan.is_some() {
+            // The disk identifier (PARTUUIDs) of its own as well, last:
+            // sfdisk makes the kernel read the partition table again, and
+            // the partitions' device nodes are gone for a moment.
+            let id = u32::from_str_radix(&machine_id[..8], 16).unwrap_or(1);
+            commands.push(format!(
+                "-debug sh {}",
+                fish_quote(&format!(
+                    "sfdisk --disk-id /dev/sda 0x{id:08x} >/dev/null 2>&1"
+                ))
+            ));
+        }
+        commands.push(String::new());
         commands.join("\n")
     }
 }
 
-fn run_private(mut command: Command, input: &[u8], capture_hash: bool) -> Result<Vec<u8>, String> {
-    let timeout = if capture_hash {
-        HASH_TIMEOUT
-    } else {
-        PROVISION_TIMEOUT
+/// The identifiers provisioning gives a disk.
+#[derive(Clone, Copy)]
+struct Identity<'a> {
+    uuid: &'a str,
+    swap_uuid: &'a str,
+    machine_id: &'a str,
+}
+
+/// A password hash as crypt(3) writes it to /etc/shadow: yescrypt
+/// (`$y$j9T$salt$hash`, Debian 11 on) or salted SHA-512 (`$6$`, the hash
+/// Antinomie made on the host before 0.7.1).
+fn validate_hash(hash: &str) -> Result<(), String> {
+    let parts: Vec<_> = hash.split('$').collect();
+    let crypt64 = |part: &&str| {
+        part.bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'.' || c == b'/')
     };
-    run_private_with_timeout(&mut command, input, capture_hash, timeout)
+    let sha512 = parts.len() == 4
+        && parts[1] == "6"
+        && (1..=16).contains(&parts[2].len())
+        && parts[3].len() == 86;
+    let yescrypt = parts.len() == 5
+        && parts[1] == "y"
+        && parts[2] == "j9T"
+        && (1..=86).contains(&parts[3].len())
+        && parts[4].len() == 43;
+    if !parts[0].is_empty() || !(sha512 || yescrypt) || !parts[2..].iter().all(crypt64) {
+        return Err("invalid salted yescrypt or SHA-512 password hash".into());
+    }
+    Ok(())
+}
+
+/// Run an offline tool with `input` on its standard input, its output
+/// discarded or (`capture`) returned, within one appliance run's time.
+fn run_private(command: &mut Command, input: &[u8], capture: bool) -> Result<Vec<u8>, String> {
+    run_private_with_timeout(command, input, capture, PROVISION_TIMEOUT)
 }
 
 fn terminate_owned_group(child: &mut Child) -> Result<(), String> {
@@ -673,388 +846,4 @@ fn run_private_with_timeout(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn tool_deadline_reaps_owned_child_and_preserves_unrelated_process() {
-        let root =
-            std::env::temp_dir().join(format!("ant-account-timeout-{}", storage::unique_id()));
-        storage::private_dir(&root).unwrap();
-        let tool = root.join("hung-tool");
-        fs::write(
-            &tool,
-            "#!/bin/sh\nroot=$(dirname \"$0\")\nprintf '%s\\n' \"$$\" > \"$root/tool-pid\"\ncat >/dev/null\nsleep 60 &\nprintf '%s\\n' \"$!\" > \"$root/descendant-pid\"\nif test \"$1\" = exit-parent; then exit 0; fi\nwait\n",
-        )
-        .unwrap();
-        fs::set_permissions(&tool, fs::Permissions::from_mode(0o700)).unwrap();
-        let mut unrelated = Command::new("sleep").arg("60").spawn().unwrap();
-        let secret = "private-timeout-password";
-        // The pid of a process the tool started, once it wrote one whole.
-        let written = |name: &str| {
-            fs::read_to_string(root.join(name))
-                .ok()
-                .filter(|text| text.ends_with('\n'))
-        };
-        for (capture_hash, exit_parent) in [(false, false), (true, false), (true, true)] {
-            // The deadline is what the tool is made to miss, so it has to be
-            // long enough for a loaded host to start the tool and let it
-            // start its descendant first. A deadline that fired before then
-            // proves nothing about the descendant: the run is repeated with
-            // twice the time, up to ten seconds.
-            let mut timeout = Duration::from_millis(500);
-            let (pid, descendant) = loop {
-                for name in ["tool-pid", "descendant-pid"] {
-                    let _ = fs::remove_file(root.join(name));
-                }
-                let started = Instant::now();
-                let mut command = Command::new(&tool);
-                if exit_parent {
-                    command.arg("exit-parent");
-                }
-                let error = run_private_with_timeout(
-                    &mut command,
-                    secret.as_bytes(),
-                    capture_hash,
-                    timeout,
-                )
-                .unwrap_err();
-                assert!(error.contains("timed out"));
-                assert!(!error.contains(secret));
-                // Killing the group is prompt: far from the tool's 60 s sleep.
-                assert!(started.elapsed() < timeout + Duration::from_secs(20));
-                if let (Some(pid), Some(descendant)) =
-                    (written("tool-pid"), written("descendant-pid"))
-                {
-                    break (pid, descendant);
-                }
-                assert!(
-                    timeout < Duration::from_secs(10),
-                    "the tool never started its descendant within {timeout:?}"
-                );
-                timeout *= 2;
-            };
-            assert!(!Path::new("/proc").join(pid.trim()).exists());
-            let stopped_deadline = Instant::now() + Duration::from_secs(60);
-            while let Ok(stat) =
-                fs::read_to_string(Path::new("/proc").join(descendant.trim()).join("stat"))
-            {
-                if stat.split_once(") ").unwrap().1.starts_with('Z') {
-                    break;
-                }
-                assert!(Instant::now() < stopped_deadline);
-                thread::sleep(Duration::from_millis(10));
-            }
-            assert!(unrelated.try_wait().unwrap().is_none());
-        }
-        unrelated.kill().unwrap();
-        unrelated.wait().unwrap();
-        fs::remove_dir_all(root).unwrap();
-    }
-    #[test]
-    fn oversized_tool_input_and_output_are_rejected_without_exposing_content() {
-        let error = run_private_with_timeout(
-            &mut Command::new("missing-tool"),
-            &[0; 4097],
-            true,
-            Duration::from_millis(100),
-        )
-        .unwrap_err();
-        assert!(error.contains("input exceeds limit"));
-        let mut command = Command::new("/bin/sh");
-        command.args(["-c", "cat >/dev/null; head -c 8192 /dev/zero"]);
-        let error = run_private_with_timeout(
-            &mut command,
-            b"private-output-password",
-            true,
-            Duration::from_secs(1),
-        )
-        .unwrap_err();
-        assert!(error.contains("output exceeded limit"));
-        assert!(!error.contains("private-output-password"));
-    }
-    /// The probe's answer for a whole-disk root (a desktop base) of 6 GiB.
-    const WHOLE_DISK: &str = "/dev/sda: ext4\\n6442450944\\n";
-    /// The console base's disk on a 6 GiB VM disk, before provisioning.
-    const PARTITIONED: &str = "/dev/sda1: ext4\\n6442450944\\n[0] = {\\n  part_num: 1\\n  part_start: 1048576\\n  part_end: 3222274047\\n  part_size: 3221225472\\n}\\n";
-    fn input_of(root: &Path) -> String {
-        fs::read_to_string(root.join("input")).unwrap()
-    }
-    fn account() -> GuestAccount {
-        GuestAccount {
-            username: "analyst".into(),
-            password_hash: format!("$6$fixturesalt${}", "a".repeat(86)),
-            root_uuid: None,
-        }
-    }
-    /// A guestfish stand-in: the read-only probe lists `filesystems`, the
-    /// writable run records its argv and commands.
-    fn fake_tool(directory: &Path, fail: bool, filesystems: &str) -> std::path::PathBuf {
-        let path = directory.join("fake-tool");
-        fs::write(&path, format!("#!/bin/sh\nroot=$(dirname \"$0\")\nif [ \"$1\" = --ro ]; then cat > \"$root/probe\"; printf '{filesystems}'; exit 0; fi\nprintf '%s\\n' \"$@\" > \"$root/argv\"\ncat > \"$root/input\"\ncat \"$root/input\" >&2\nexit {}\n", if fail { 1 } else { 0 })).unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
-        path
-    }
-    #[test]
-    fn offline_tool_uses_stdin_and_never_exposes_sensitive_output() {
-        let root = std::env::temp_dir().join(format!("ant-account-{}", storage::unique_id()));
-        storage::private_dir(&root).unwrap();
-        let disk = root.join("disk.qcow2");
-        fs::write(&disk, b"unchanged disk fixture").unwrap();
-        let mut account = account();
-        account
-            .provision_with(&disk, &fake_tool(&root, false, WHOLE_DISK), 1024)
-            .unwrap();
-        let uuid = account.root_uuid().unwrap().to_owned();
-        assert!(valid_uuid(&uuid), "{uuid}");
-        assert_eq!(
-            fs::read_to_string(root.join("probe")).unwrap().as_bytes(),
-            PROBE
-        );
-        // A whole-disk root keeps its disk as it is (it grows at boot).
-        assert!(!input_of(&root).contains("part-"));
-        let argv = fs::read_to_string(root.join("argv")).unwrap();
-        assert!(argv.starts_with("--rw\n--no-progress-bars\n--format=qcow2\n-a\n"));
-        assert!(!argv.contains(&account.password_hash));
-        assert!(!argv.contains(&account.username));
-        let input = fs::read_to_string(root.join("input")).unwrap();
-        assert!(input.contains(&account.password_hash));
-        // The hash reaches the guest only as a file chpasswd reads.
-        for line in input.lines().filter(|line| !line.contains("/password ")) {
-            assert!(!line.contains(&account.password_hash), "{line}");
-        }
-        // A new identity before the root is mounted, then the account.
-        let position = |text: &str| input.find(text).unwrap_or_else(|| panic!("{text}"));
-        assert!(position("e2fsck-f /dev/sda\n") < position(&format!("set-uuid /dev/sda {uuid}")));
-        assert!(
-            position("-debug sh \"echo ssv hash_seed random | debugfs -w -f - /dev/sda")
-                < position("mount /dev/sda /")
-        );
-        assert!(input.contains(&format!("UUID={uuid}\\\\1|' /etc/fstab")));
-        // The installer's adduser: the full name, its groups (where they
-        // exist), a private home; the installation's own machine ID.
-        assert!(input.contains("addgroup --quiet --gid 1000 'analyst'"));
-        assert!(input.contains(
-            "adduser --quiet --uid 1000 --gid 1000 --comment 'Analyst,,,' --disabled-password 'analyst'"
-        ));
-        assert!(input.contains(&format!("for group in {INSTALLER_GROUPS}; do")));
-        assert!(input.contains("chmod 0700 '/home/analyst'"));
-        let machine_id = input
-            .lines()
-            .find_map(|line| line.strip_prefix("write /etc/machine-id \""))
-            .unwrap();
-        assert!(
-            machine_id.len() == 32 + 3 && machine_id.ends_with("\\n\""),
-            "{machine_id}"
-        );
-        assert!(!input.contains("NOPASSWD"));
-        assert!(!input.contains("sudoers"));
-        assert!(!input.to_lowercase().contains("antinomie"));
-        // Another provisioning, another identity.
-        let mut again = self::account();
-        again
-            .provision_with(&disk, &fake_tool(&root, false, WHOLE_DISK), 1024)
-            .unwrap();
-        assert_ne!(again.root_uuid(), Some(uuid.as_str()));
-        let error = account
-            .provision_with(&disk, &fake_tool(&root, true, WHOLE_DISK), 1024)
-            .unwrap_err();
-        assert!(!error.contains(&account.password_hash));
-        assert!(!format!("{account:?}").contains(&account.password_hash));
-        assert!(
-            account
-                .provision_with(&disk, &root.join("missing"), 1024)
-                .is_err()
-        );
-        // No single ext4 root: nothing is written.
-        fs::remove_file(root.join("input")).unwrap();
-        for listing in [
-            "/dev/sda: xfs\\n",
-            "/dev/sda1: ext4\\n/dev/sda2: ext4\\n",
-            "/dev/sdb1: ext4\\n",
-        ] {
-            assert!(
-                account
-                    .provision_with(&disk, &fake_tool(&root, false, listing), 1024)
-                    .is_err()
-            );
-            assert!(!root.join("input").exists());
-        }
-        assert_eq!(fs::read(&disk).unwrap(), b"unchanged disk fixture");
-        fs::remove_dir_all(root).unwrap();
-    }
-    #[test]
-    fn partitions_follow_the_installer_and_the_vm() {
-        // A 6 GiB disk (12582912 sectors), a 3 GiB root, 1 GiB of RAM: the
-        // swap partition ends a MiB before the disk, the root a MiB before it.
-        let plan = partition_plan(12_582_912, 6_293_503, 1024, None);
-        assert_eq!(plan.swap, Some((10_483_712, 12_580_863)));
-        assert_eq!(plan.root_last, 10_481_663);
-        // A quarter of the disk at most; the root never shrinks.
-        assert_eq!(
-            partition_plan(12_582_912, 6_293_503, 8192, None).swap,
-            Some((9_435_136, 12_580_863))
-        );
-        let tight = partition_plan(8_388_608, 8_380_000, 1024, None);
-        assert_eq!((tight.root_last, tight.swap), (8_386_559, None));
-        let layout = parse_probe(
-            "/dev/sda1: ext4\n/dev/sda2: unknown\n/dev/sda5: swap\n6442450944\n[0] = {\n  part_num: 1\n  part_end: 5366611967\n}\n[1] = {\n  part_num: 5\n  part_end: 6441402367\n  part_size: 1073741824\n}\n0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d\n",
-        )
-        .unwrap();
-        assert_eq!(layout.root_last, Some(10_481_663));
-        assert_eq!(
-            layout.swap,
-            Some(("0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d".into(), 2_097_152))
-        );
-        let root = std::env::temp_dir().join(format!("ant-account-parts-{}", storage::unique_id()));
-        storage::private_dir(&root).unwrap();
-        let disk = root.join("disk.qcow2");
-        fs::write(&disk, b"disk").unwrap();
-        let mut account = account();
-        account
-            .provision_with(&disk, &fake_tool(&root, false, PARTITIONED), 1024)
-            .unwrap();
-        let input = input_of(&root);
-        let position = |text: &str| input.find(text).unwrap_or_else(|| panic!("{text}"));
-        assert!(
-            position("part-resize /dev/sda 1 10481663\n")
-                < position("part-add /dev/sda e 10483710 12580863\n")
-        );
-        assert!(
-            position("part-add /dev/sda l 10483712 12580863\n")
-                < position("mkswap /dev/sda5 uuid:")
-        );
-        assert!(position("resize2fs /dev/sda1\n") < position("mount /dev/sda1 /\n"));
-        assert!(input.contains("set-uuid /dev/sda1 "));
-        assert!(input.contains("sfdisk --disk-id /dev/sda 0x"));
-        assert!(input.contains("# swap was on /dev/sda5 during installation"));
-        assert!(input.contains("/etc/initramfs-tools/conf.d/resume"));
-        assert!(input.contains("update-grub"));
-        // Growing it later keeps the swap partition's UUID and size.
-        let grown = "/dev/sda1: ext4\n/dev/sda5: swap\n10737418240\n[0] = {\n  part_num: 1\n  part_end: 5366611967\n}\n[1] = {\n  part_num: 5\n  part_end: 6441402367\n  part_size: 1073741824\n}\n0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d\n";
-        grow_disk_with(&disk, &fake_tool(&root, false, &grown.replace('\n', "\\n"))).unwrap();
-        let input = input_of(&root);
-        assert!(
-            input.starts_with(
-                "run\npart-del /dev/sda 5\npart-del /dev/sda 2\npart-resize /dev/sda 1 18870271\n"
-            ),
-            "{input}"
-        );
-        assert!(input.contains("mkswap /dev/sda5 uuid:0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d\n"));
-        assert!(!input.contains("chpasswd"));
-        // A whole-disk root is left to the initrd.
-        fs::remove_file(root.join("input")).unwrap();
-        grow_disk_with(&disk, &fake_tool(&root, false, WHOLE_DISK)).unwrap();
-        assert!(!root.join("input").exists());
-        fs::remove_dir_all(root).unwrap();
-    }
-    #[test]
-    fn passwords_are_hashed_as_debian_13_hashes_them() {
-        let credentials = GuestCredentials::new("analyst".into(), "x".repeat(20)).unwrap();
-        let account = GuestAccount::from_credentials(credentials.clone()).unwrap();
-        // yescrypt where the host's crypt(3) has it (libxcrypt), else SHA-512.
-        if GuestAccount::yescrypt_with(credentials.clone(), Path::new("perl")).is_ok() {
-            assert!(account.password_hash.starts_with("$y$j9T$"));
-        }
-        assert!(GuestAccount::yescrypt_with(credentials, Path::new("/nonexistent/perl")).is_err());
-        let salt = yescrypt_salt().unwrap();
-        assert_eq!(salt.len(), 22);
-        assert!(matches!(salt.as_bytes()[21], b'.' | b'/' | b'0' | b'1'));
-        let mut record = self::account();
-        record.password_hash = format!("$y$j9T${}${}", "a".repeat(22), "b".repeat(43));
-        record.validate().unwrap();
-        for bad in [
-            format!("$y$j9T${}${}", "a".repeat(22), "b".repeat(42)),
-            format!("$y$jFT${}${}", "a".repeat(22), "b".repeat(43)),
-            format!("$y$j9T${}${}", "a:".repeat(11), "b".repeat(43)),
-            format!("$5$salt${}", "a".repeat(43)),
-        ] {
-            record.password_hash = bad;
-            assert!(record.validate().is_err());
-        }
-    }
-    #[test]
-    fn probe_finds_the_root_on_a_whole_disk_or_a_partition() {
-        let whole = parse_probe("/dev/sda: ext4\n6442450944\n").unwrap();
-        assert_eq!(
-            (whole.root.as_str(), whole.size),
-            ("/dev/sda", 6_442_450_944)
-        );
-        assert_eq!((whole.root_last, whole.swap), (None, None));
-        assert_eq!(
-            parse_probe("/dev/sda1: ext4\n/dev/sda2: unknown\n6442450944\n[0] = {\n  part_num: 1\n  part_end: 3222274047\n}\n")
-                .unwrap()
-                .root_last,
-            Some(6_293_503)
-        );
-        // No size, or a root partition the probe did not list.
-        assert!(parse_probe("/dev/sda: ext4\n").is_err());
-        assert!(parse_probe("/dev/sda1: ext4\n6442450944\n").is_err());
-        assert!(parse_probe("").is_err());
-        assert!(parse_probe("/dev/sda1; rm -rf /: ext4\n").is_err());
-        assert_eq!(fish_quote("a\"b\\c\nd"), "\"a\\\"b\\\\c\\nd\"");
-        assert!(valid_uuid("0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d"));
-        for bad in [
-            "0B1C2D3E-4F50-4A6B-8C7D-9E0F1A2B3C4D",
-            "0b1c2d3e4f504a6b8c7d9e0f1a2b3c4d",
-            "",
-        ] {
-            assert!(!valid_uuid(bad));
-        }
-        let mut record = account();
-        record.root_uuid = Some("not-a-uuid".into());
-        assert!(record.validate().is_err());
-    }
-    #[test]
-    fn account_record_is_private_and_malformed_hashes_are_redacted() {
-        let root =
-            std::env::temp_dir().join(format!("ant-account-record-{}", storage::unique_id()));
-        storage::private_dir(&root).unwrap();
-        let account = account();
-        account.save(&root).unwrap();
-        assert_eq!(
-            fs::metadata(root.join("guest-account.json"))
-                .unwrap()
-                .permissions()
-                .mode()
-                & 0o777,
-            0o600
-        );
-        assert_eq!(
-            GuestAccount::load(&root).unwrap().password_hash,
-            account.password_hash
-        );
-        fs::set_permissions(
-            root.join("guest-account.json"),
-            fs::Permissions::from_mode(0o644),
-        )
-        .unwrap();
-        assert!(GuestAccount::load(&root).is_err());
-        fs::set_permissions(
-            root.join("guest-account.json"),
-            fs::Permissions::from_mode(0o600),
-        )
-        .unwrap();
-        fs::write(
-            root.join("guest-account.json"),
-            br#"{"username":"analyst","password_hash":123456789}"#,
-        )
-        .unwrap();
-        assert!(!GuestAccount::load(&root).unwrap_err().contains("123456789"));
-        fs::remove_dir_all(root).unwrap();
-    }
-    #[test]
-    fn openssl_preserves_all_128_password_bytes_and_randomizes_salt() {
-        let mut command = Command::new("openssl");
-        command.args(["passwd", "-6", "-stdin", "-salt", "fixture"]);
-        let first = run_private(command, "x".repeat(128).as_bytes(), true).unwrap();
-        let mut command = Command::new("openssl");
-        command.args(["passwd", "-6", "-stdin", "-salt", "fixture"]);
-        let second =
-            run_private(command, format!("{}y", "x".repeat(127)).as_bytes(), true).unwrap();
-        assert_ne!(first, second);
-        let credentials = GuestCredentials::new("analyst".into(), "x".repeat(128)).unwrap();
-        let first = GuestAccount::from_credentials(credentials.clone()).unwrap();
-        let second = GuestAccount::from_credentials(credentials).unwrap();
-        assert_ne!(first.password_hash, second.password_hash);
-    }
-}
+mod tests;

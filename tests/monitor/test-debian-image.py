@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Focused image contract and rollback tests; no network or mmdebstrap run required."""
 # SPDX-License-Identifier: GPL-3.0-only
+import hashlib
 import importlib.util
+import os
 import io
 import json
 from pathlib import Path
@@ -127,9 +129,15 @@ class DebianImageTests(unittest.TestCase):
         self.assertFalse(any(arg.startswith("--dpkgopt=") for arg in desktop))
         script = image.customization_script()
         self.assertIn("systemctl set-default multi-user.target", script)
-        # ifupdown and dhcpcd for the onboard NIC, as the installer leaves them.
-        self.assertIn("allow-hotplug enp0s25\niface enp0s25 inet dhcp\n", image.CONSOLE_INTERFACES)
-        self.assertIn("# The primary network interface", image.CONSOLE_INTERFACES)
+        # ifupdown's file as the installer leaves it, without the wired NIC's
+        # stanza: provisioning writes it for the VM's NIC slot.
+        self.assertTrue(image.CONSOLE_INTERFACES.endswith("auto lo\niface lo inet loopback\n"))
+        self.assertNotIn("# The primary network interface", image.CONSOLE_INTERFACES)
+        self.assertNotIn("allow-hotplug", image.CONSOLE_INTERFACES)
+        # The app's provisioning recognises the stanza by the installer's comment.
+        account = (Path(image.__file__).parent.parent / "src/antinomie/monitor/crates/monitor-core/"
+                   "src/guest_account.rs").read_text()
+        self.assertIn("/^# The primary network interface$/", account)
         self.assertNotIn("systemd-networkd", script)
         self.assertNotIn("systemd-resolved.service", script)
         self.assertNotIn("/etc/systemd/network/", script)
@@ -601,77 +609,111 @@ class DebianImageTests(unittest.TestCase):
         self.assertIn("# / was on /dev/sda1 during installation",
                       image.fstab("none", "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d"))
 
-    def test_kernel_is_packaged_as_debian_packages_it(self):
-        if not shutil.which("dpkg-deb"):
-            self.skipTest("needs dpkg-deb")
+    def test_kernel_packages_are_debians_own_verified_through_the_signed_index(self):
+        # The pinned packages are linux-signed-amd64 6.12.94+1's, for the
+        # release the Antinomie kernel reports.
+        self.assertEqual([(name, version) for name, version, _ in image.DEBIAN_KERNEL_PACKAGES],
+                         [("linux-image-6.12.94+deb13-amd64", "6.12.94-1"),
+                          ("linux-image-amd64", "6.12.94-1")])
+        self.assertTrue(image.DEBIAN_KERNEL_ARCHIVE.startswith(
+            "https://snapshot.debian.org/archive/debian-security/"))
+        release = ("Origin: Debian\nSHA256:\n 00ff 12 main/binary-amd64/Packages\n"
+                   " abcd 34 main/binary-amd64/Packages.xz\n")
+        self.assertEqual(image.release_hash(release, "main/binary-amd64/Packages.xz"),
+                         ("abcd", 34))
+        with self.assertRaises(RuntimeError):
+            image.release_hash(release, "main/binary-i386/Packages.xz")
+        index = ("Package: linux-image-amd64\nVersion: 6.12.94-1\nArchitecture: amd64\n"
+                 "Description: x\n multi-line\nFilename: pool/a.deb\nSize: 9\nSHA256: aa\n\n"
+                 "Package: linux-image-amd64\nVersion: 6.12.95-1\nArchitecture: amd64\n"
+                 "Filename: pool/b.deb\nSize: 8\nSHA256: bb\n")
+        self.assertEqual(image.index_entries(index, {("linux-image-amd64", "6.12.94-1")}),
+                         {("linux-image-amd64", "6.12.94-1"): ("pool/a.deb", 9, "aa")})
+        with self.assertRaisesRegex(RuntimeError, "lacks linux-image-amd64 6.12.93-1"):
+            image.index_entries(index, {("linux-image-amd64", "6.12.93-1")})
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
-            kernel = root / "bzImage"
-            kernel.write_bytes(b"kernel image")
-            config = root / "debian-config"
-            config.write_text("CONFIG_EXT4_FS=y\nCONFIG_MODULE_SIG_KEY=\"certs/x.pem\"\n"
-                              "CONFIG_BUILD_SALT=\"x\"\nCONFIG_ANTINOMIE=y\n# CONFIG_9P_FS is not set\n")
-            modules = root / "lib/modules/6.12.94+deb13-amd64"
-            (modules / "kernel/net").mkdir(parents=True)
-            (modules / "kernel/net/x.ko").write_bytes(b"ko")
-            for generated in ("modules.order", "modules.builtin", "modules.dep", "modules.alias"):
-                (modules / generated).write_text("")
-            out = root / "out"
-            out.mkdir()
-            image_deb, meta_deb = image.kernel_packages(
-                kernel, "6.12.94+deb13-amd64 (debian-kernel@lists.debian.org) #1", modules,
-                config, out)
-            self.assertEqual(image_deb.name, "linux-image-6.12.94+deb13-amd64_6.12.94-1_amd64.deb")
-            self.assertEqual(meta_deb.name, "linux-image-amd64_6.12.94-1_amd64.deb")
-            field = lambda deb, key: subprocess.run(["dpkg-deb", "-f", str(deb), key],
-                                                    check=True, capture_output=True,
-                                                    text=True).stdout.strip()
-            self.assertEqual(field(image_deb, "Source"), "linux-signed-amd64 (6.12.94+1)")
-            self.assertEqual(field(image_deb, "Recommends"), "apparmor")
-            self.assertEqual(field(image_deb, "Description").splitlines()[0],
-                             "Linux 6.12 for 64-bit PCs (signed)")
-            self.assertEqual(field(meta_deb, "Depends"),
-                             "linux-image-6.12.94+deb13-amd64 (= 6.12.94-1)")
-            listing = subprocess.run(["dpkg-deb", "-c", str(image_deb)], check=True,
-                                     capture_output=True, text=True).stdout
-            self.assertRegex(listing, r"-rw------- root/root .* \./boot/vmlinuz-6\.12\.94\+deb13-amd64")
-            self.assertIn("./usr/lib/modules/6.12.94+deb13-amd64/kernel/net/x.ko", listing)
-            # depmod writes the module indexes in the postinst, as for Debian's.
-            self.assertNotIn("modules.dep", listing)
-            self.assertIn("./usr/lib/modules/6.12.94+deb13-amd64/modules.order", listing)
-            unpacked = root / "unpacked"
-            subprocess.run(["dpkg-deb", "-x", str(image_deb), str(unpacked)], check=True)
-            boot_config = (unpacked / "boot/config-6.12.94+deb13-amd64").read_text()
-            self.assertEqual(boot_config, "CONFIG_EXT4_FS=y\n# CONFIG_9P_FS is not set\n")
-            self.assertTrue((unpacked / "boot/System.map-6.12.94+deb13-amd64").read_text()
-                            .startswith("ffffffffffffffff B The real System.map"))
-            control = root / "control"
-            subprocess.run(["dpkg-deb", "-e", str(image_deb), str(control)], check=True)
-            self.assertIn("linux-update-symlinks $change $version $image_path",
-                          (control / "postinst").read_text())
-            self.assertIn("version=6.12.94+deb13-amd64\nimage_path=/boot/vmlinuz-$version",
-                          (control / "postinst").read_text())
-        # The customization purges Debian's kernels, not the console base's own.
-        self.assertIn('($1 ~ /^linux-image-/ && keep != "none")', image.customization_script())
-        # They go in before the rest of the customization; the cache knows them.
+            # Copies matching their pinned SHA-256 are used as they are; nothing
+            # is downloaded.
+            pinned = [(name, version, hashlib.sha256(name.encode()).hexdigest())
+                      for name, version, _ in image.DEBIAN_KERNEL_PACKAGES]
+            cache = root / "cache"
+            cache.mkdir()
+            for name, version, _ in pinned:
+                (cache / image.deb_name(name, version)).write_bytes(name.encode())
+            with patch.object(image, "DEBIAN_KERNEL_PACKAGES", tuple(pinned)), \
+                    patch.object(image, "fetch", side_effect=AssertionError("downloaded")):
+                debs = image.debian_kernel_debs(cache, root / "work")
+            self.assertEqual([deb.parent for deb in debs], [cache, cache])
+            # A copy that does not match goes back to the archive, whose
+            # InRelease must verify.
+            (cache / debs[0].name).write_bytes(b"tampered")
+            fetched = []
+            def fake_fetch(url, target, proxy=""):
+                fetched.append(url)
+                target.write_bytes(b"-----BEGIN PGP SIGNED MESSAGE-----\nforged\n")
+            with patch.object(image, "DEBIAN_KERNEL_PACKAGES", tuple(pinned)), \
+                    patch.object(image, "fetch", side_effect=fake_fetch):
+                with self.assertRaisesRegex(RuntimeError, "does not verify"):
+                    image.debian_kernel_debs(cache, root / "work")
+            self.assertEqual(fetched, [image.DEBIAN_KERNEL_ARCHIVE
+                                       + "/dists/trixie-security/InRelease"])
+            # The Antinomie kernel's modules: its .ko files, owned by root.
+            tree = root / "lib/modules/6.12.94+deb13-amd64"
+            (tree / "kernel/net/netfilter").mkdir(parents=True)
+            (tree / "kernel/net/netfilter/xt_mark.ko").write_bytes(b"ko")
+            (tree / "modules.order").write_text("")
+            archive = image.modules_archive(tree, root / "modules.tar")
+            with tarfile.open(archive) as members:
+                self.assertEqual([(m.name, m.uid, m.uname) for m in members],
+                                 [("net/netfilter/xt_mark.ko", 0, "root")])
+        # They go in before the rest of the customization: Debian's packages,
+        # then the modules under updates/ with depmod, then dpkg --verify.
         with patch.object(image.os, "geteuid", return_value=1000):
             command = image.mmdebstrap_command(image.options({"desktop": image.CONSOLE}),
                                                Path("/w/r.tar"), Path("/w/c.sh"), Path("/w/p"),
-                                               kernel_debs=(Path("/w/k/a.deb"), Path("/w/k/b.deb")))
+                                               kernel_debs=(Path("/w/k/a.deb"), Path("/w/k/b.deb")),
+                                               kernel_modules=Path("/w/k/m.tar"))
         hooks = [arg[len("--customize-hook="):] for arg in command
                  if arg.startswith("--customize-hook=")]
         install = hooks.index('chroot "$1" apt-get -o APT::Get::AllowUnauthenticated=false -y '
                               'install /tmp/a.deb /tmp/b.deb')
+        modules = hooks.index("upload /w/k/m.tar /tmp/kernel-modules.tar")
+        updates = "/usr/lib/modules/6.12.94+deb13-amd64/updates"
+        # The module index names only them (the search order for this run).
+        depmod = hooks.index(f"chroot \"$1\" sh -c 'mkdir -p {updates} && tar -x --no-same-owner "
+                             f"-C {updates} -f /tmp/kernel-modules.tar && printf '\"'\"'search "
+                             "updates\\nexclude kernel\\n'\"'\"' > /tmp/kernel-modules.conf && "
+                             "depmod -a -C /tmp/kernel-modules.conf 6.12.94+deb13-amd64 && ! grep "
+                             "-qv '\"'\"'^updates/'\"'\"' /usr/lib/modules/6.12.94+deb13-amd64/"
+                             "modules.dep'")
+        verify = hooks.index('chroot "$1" sh -c \'test -z "$(dpkg --verify '
+                             'linux-image-6.12.94+deb13-amd64 linux-image-amd64)"\'')
         self.assertLess(hooks.index("upload /w/k/a.deb /tmp/a.deb"), install)
-        self.assertLess(install, hooks.index("upload /w/c.sh /tmp/antinomie-customize.sh"))
+        self.assertLess(install, modules)
+        self.assertLess(modules, depmod)
+        self.assertLess(depmod, verify)
+        self.assertLess(verify, hooks.index("upload /w/c.sh /tmp/antinomie-customize.sh"))
+        # The customization purges Debian's kernels, not the console base's own.
+        self.assertIn('($1 ~ /^linux-image-/ && keep != "none")', image.customization_script())
+        # The cache knows the kernel inputs by their hashes.
         values = image.options({"desktop": image.CONSOLE})
+        first = image.rootfs_identity(values, ("aa", "bb"))
+        self.assertEqual(first["kernel_packages"], ["aa", "bb"])
+        self.assertNotEqual(first, image.rootfs_identity(values, ("aa", "cc")))
+        self.assertNotIn("kernel_packages", image.rootfs_identity(values))
+        # No Antinomie-made kernel package or /boot file is left in the recipe.
+        recipe = Path(image.__file__).read_text()
+        for gone in ("KERNEL_CONTROL", "KERNEL_IMAGE_MODE", "dpkg-deb\", \"--root-owner-group"):
+            self.assertNotIn(gone, recipe)
+
+    @unittest.skipUnless(os.environ.get("ANTINOMIE_NETWORK_TESTS"),
+                         "set ANTINOMIE_NETWORK_TESTS=1 to check the signed index online")
+    def test_pinned_kernel_packages_are_in_the_signed_archive_index(self):
         with tempfile.TemporaryDirectory() as name:
-            deb = Path(name) / "k.deb"
-            deb.write_bytes(b"one")
-            first = image.rootfs_identity(values, (deb,))
-            deb.write_bytes(b"two")
-            self.assertNotEqual(first, image.rootfs_identity(values, (deb,)))
-            self.assertNotIn("kernel_packages", image.rootfs_identity(values))
+            entries = image.signed_index_entries(Path(name))
+        for name, version, sha in image.DEBIAN_KERNEL_PACKAGES:
+            self.assertEqual(entries[(name, version)][2], sha)
 
     def test_modular_kernel_requires_matching_installed_modules(self):
         with tempfile.TemporaryDirectory() as name:

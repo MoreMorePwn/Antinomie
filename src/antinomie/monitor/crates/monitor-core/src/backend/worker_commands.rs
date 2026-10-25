@@ -534,6 +534,47 @@ impl Worker {
                         crate::guest_account::grow_disk(&disk)?;
                     }
                 }
+                // A base that names its NIC by slot: a new profile whose
+                // machine has its LAN elsewhere moves the NIC, and the disk's
+                // network configuration follows. (A disk provisioned before
+                // keeps the interface its record names until then.)
+                let moved = crate::guest_account::provisioned_interface(
+                    &boot_bundle.stealth_support,
+                    &vm.stealth,
+                )
+                .filter(|interface| {
+                    Some(*interface)
+                        != crate::guest_account::provisioned_interface(
+                            &boot_bundle.stealth_support,
+                            &current.stealth,
+                        )
+                });
+                if disk_bundle
+                    .guest
+                    .as_ref()
+                    .is_some_and(|guest| guest.requires_credentials)
+                    && let Some(interface) = moved
+                {
+                    let mut account = crate::guest_account::GuestAccount::load(&dir)?;
+                    if account.interface() != interface {
+                        if !crate::snapshots::list(&self.options, current)?
+                            .nodes
+                            .is_empty()
+                        {
+                            return Err(format!(
+                                "this profile moves the network card to {}, which its \
+                                 snapshots' disks do not configure; delete the snapshots \
+                                 or keep a machine with the same chipset",
+                                crate::stealth::NicSlot::from_interface(interface)
+                                    .unwrap_or_default()
+                                    .label()
+                            ));
+                        }
+                        let disk = crate::snapshots::active_disk(&self.options, current)?;
+                        account.set_interface(&disk, interface)?;
+                        account.save(&dir)?;
+                    }
+                }
                 let previous = current.clone();
                 let publication =
                     storage::save_vm_config(&self.options, &dir, &previous, &vm, &location);
@@ -762,9 +803,15 @@ impl Worker {
             storage::private_dir(dir).map_err(|e| e.to_string())?;
             storage::create_overlay(&self.options, dir, vm.disk_gib, &bundle)?;
             if let Some(credentials) = credentials {
-                let mut account =
-                    crate::guest_account::GuestAccount::from_credentials(credentials)?;
-                account.provision(&dir.join("disk.qcow2"), vm.ram_mib)?;
+                let account = crate::guest_account::GuestAccount::create(
+                    credentials,
+                    &dir.join("disk.qcow2"),
+                    vm.ram_mib,
+                    crate::guest_account::provisioned_interface(
+                        &bundle.stealth_support,
+                        &vm.stealth,
+                    ),
+                )?;
                 account.save(dir)?;
             }
             storage::atomic_json(&dir.join("config.json"), &vm)?;

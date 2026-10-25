@@ -105,6 +105,56 @@ impl NicModel {
     }
 }
 
+/// Where the network card sits on PCI bus 0 for a base that names its NIC by
+/// that place (stealth support `onboardnic`): the integrated LAN of the
+/// chipset the profile's machine has. udev names the interface from the slot
+/// whatever the card's model, and the slot stays the same whichever display
+/// or pointer devices take the first free slots.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum NicSlot {
+    /// 00:19.0 (`enp0s25`): the integrated Intel LAN of the ICH8 to 9 series
+    /// chipsets (82566 to I218), among them the ICH9 QEMU's q35 copies. The
+    /// place for a profile with no machine identity, or one with an AMD
+    /// chipset, which has no integrated LAN on bus 0.
+    #[default]
+    Ich,
+    /// 00:1f.6 (`enp0s31f6`): the integrated Intel LAN (I219) of the 100
+    /// series and later chipsets, beside the LPC bridge at 00:1f.0.
+    Pch,
+}
+
+impl NicSlot {
+    pub const ALL: [Self; 2] = [Self::Ich, Self::Pch];
+
+    /// The PCI address, as a `-device` option.
+    pub fn address(self) -> &'static str {
+        match self {
+            Self::Ich => "addr=0x19",
+            Self::Pch => "addr=0x1f.0x6",
+        }
+    }
+
+    /// The name udev's predictable naming gives the interface there.
+    pub fn interface(self) -> &'static str {
+        match self {
+            Self::Ich => "enp0s25",
+            Self::Pch => "enp0s31f6",
+        }
+    }
+
+    /// The slot whose interface is `name`, if it is one of these.
+    pub fn from_interface(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|slot| slot.interface() == name)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Ich => "PCI 00:19.0 (enp0s25)",
+            Self::Pch => "PCI 00:1f.6 (enp0s31f6)",
+        }
+    }
+}
+
 /// The machine's firmware.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Firmware {
@@ -383,6 +433,8 @@ pub struct MachineProfile {
     oem_strings: &'static [&'static str],
     /// The board's own network card: the maker's PCI subsystem IDs.
     nic_subsystem: &'static str,
+    /// Where the chipset's integrated LAN sits.
+    nic_slot: NicSlot,
     /// An optical drive in the chassis.
     cdrom: bool,
 }
@@ -420,6 +472,8 @@ pub const MACHINES: &[MachineProfile] = &[
             "15[0]",
         ],
         nic_subsystem: "1028:0a61",
+        // Q570: I219-LM.
+        nic_slot: NicSlot::Pch,
         cdrom: true,
     },
     MachineProfile {
@@ -446,6 +500,8 @@ pub const MACHINES: &[MachineProfile] = &[
             "CSM v01.06",
         ],
         nic_subsystem: "103c:8715",
+        // Q470: I219-LM.
+        nic_slot: NicSlot::Pch,
         cdrom: false,
     },
     MachineProfile {
@@ -467,6 +523,8 @@ pub const MACHINES: &[MachineProfile] = &[
         serial: SerialStyle::Lenovo,
         oem_strings: &["Lenovo ThinkCentre M75q Gen 2", "TVT-Enablement"],
         nic_subsystem: "17aa:3179",
+        // AMD: no integrated LAN on bus 0.
+        nic_slot: NicSlot::Ich,
         cdrom: false,
     },
     MachineProfile {
@@ -493,6 +551,8 @@ pub const MACHINES: &[MachineProfile] = &[
             "CSM v01.06",
         ],
         nic_subsystem: "103c:8770",
+        // AMD: no integrated LAN on bus 0.
+        nic_slot: NicSlot::Ich,
         cdrom: true,
     },
     MachineProfile {
@@ -515,6 +575,8 @@ pub const MACHINES: &[MachineProfile] = &[
             "15[3]",
         ],
         nic_subsystem: "1028:0a20",
+        // Tiger Lake PCH-LP: I219-LM.
+        nic_slot: NicSlot::Pch,
         cdrom: false,
     },
     MachineProfile {
@@ -536,6 +598,8 @@ pub const MACHINES: &[MachineProfile] = &[
         serial: SerialStyle::Lenovo,
         oem_strings: &["IBM ThinkPad Embedded Controller -[R23HT32W]-"],
         nic_subsystem: "17aa:22f5",
+        // AMD: no integrated LAN on bus 0.
+        nic_slot: NicSlot::Ich,
         cdrom: false,
     },
     MachineProfile {
@@ -561,6 +625,8 @@ pub const MACHINES: &[MachineProfile] = &[
         serial: SerialStyle::Supermicro,
         oem_strings: &["Default string"],
         nic_subsystem: "15d9:1c48",
+        // C252: I219-LM beside the I210.
+        nic_slot: NicSlot::Pch,
         cdrom: false,
     },
     MachineProfile {
@@ -582,6 +648,8 @@ pub const MACHINES: &[MachineProfile] = &[
         serial: SerialStyle::Supermicro,
         oem_strings: &["Default string"],
         nic_subsystem: "15d9:1c38",
+        // AMD: no integrated LAN on bus 0.
+        nic_slot: NicSlot::Ich,
         cdrom: false,
     },
 ];
@@ -847,6 +915,19 @@ impl StealthProfile {
     pub fn use_machine(&mut self, machine: &MachineProfile) {
         self.identity = MachineIdentity::from_machine(machine);
         self.identity_enabled = true;
+    }
+
+    /// Where a base that names its NIC by slot gets the network card: the
+    /// integrated LAN's place on the chipset of the machine the identity
+    /// copies; 00:19.0 without one (Transparent, an edited identity).
+    pub fn nic_slot(&self) -> NicSlot {
+        if !self.identity_enabled {
+            return NicSlot::Ich;
+        }
+        MACHINES
+            .iter()
+            .find(|machine| machine.id == self.identity.profile)
+            .map_or(NicSlot::Ich, |machine| machine.nic_slot)
     }
 
     /// Whether `machine` comes with an optical drive (QEMU's names QEMU).
@@ -1240,8 +1321,9 @@ pub struct BaseSupport {
     pub nvme: bool,
     /// The guest takes its address from DHCP, so any NAT network works.
     pub dhcp: bool,
-    /// The guest's network configuration names its NIC by the onboard slot
-    /// (`onboardnic`): the NIC goes to PCI 00:19.0, whatever its model.
+    /// The guest's network configuration names its NIC by its PCI slot
+    /// (`onboardnic`): the NIC goes to the profile's [`NicSlot`], whatever
+    /// its model, and provisioning writes the stanza for that interface.
     pub onboard_nic: bool,
 }
 
