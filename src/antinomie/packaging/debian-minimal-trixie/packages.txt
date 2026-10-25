@@ -1,10 +1,13 @@
 # Debian Minimal base (Debian 13 trixie amd64, console only): package manifest.
 #
 # Built by scripts/build-base.py with the debian-minimal profile, which runs
-# scripts/build-debian-image.py with desktop "none": mmdebstrap --variant=important
-# plus the requested packages below, without recommends, documentation and manual
-# pages left out (copyright files kept). The requested list is the recipe's
-# CONSOLE_PACKAGES (tests/monitor/test-debian-image.py checks they agree).
+# scripts/build-debian-image.py with desktop "none": what the Debian installer
+# installs with no desktop chosen, mmdebstrap --variant=standard (the
+# "standard system utilities" task) with recommends, the installer's own
+# additions requested below and tasksel's language task for the locale
+# (task-english for English); documentation, manual pages and the package
+# indexes kept. The requested list is the recipe's CONSOLE_PACKAGES
+# (tests/monitor/test-debian-image.py checks they agree).
 #
 # The installed list is the resolved inventory of the verified build
 # (bootstrapped 2026-10-25 from http://deb.debian.org/debian,
@@ -14,39 +17,32 @@
 # requested PACKAGE  REASON
 # installed<TAB>PACKAGE<TAB>VERSION<TAB>ARCHITECTURE<TAB>SOURCE<TAB>SOURCE_VERSION
 
-requested systemd-sysv            systemd as init, as on every Debian base
-requested systemd-resolved        DNS for systemd-networkd's DHCP lease (/etc/resolv.conf stub)
-requested dbus                    system bus for logind, hostnamectl, timedatectl and loginctl
-requested libpam-systemd          login sessions registered with logind
-requested sudo                    the per-VM account's password-protected sudo
-requested iproute2                ip and ss
-requested iputils-ping            ping
-requested procps                  ps, top, free, pgrep
-requested psmisc                  pstree, killall, fuser
-requested less                    pager
-requested vim-tiny                editor (nano comes with the important set)
-requested curl                    HTTP client
-requested wget                    HTTP client many samples and scripts expect
-requested ca-certificates         TLS trust store for curl, wget and apt over https
-requested openssh-client          ssh and scp from the guest (no SSH server)
-requested python3                 interpreter many Linux samples and analysis helpers need
-requested file                    identify uploaded files
-requested xz-utils                unpack .xz archives
-requested bash-completion         completion in the console shell
-requested locales                 the chosen locale
+requested tasksel                 the installer's task selector (tasksel-data names the language task)
+requested installation-report     installed by the Debian installer
+requested discover                the installer's hardware detection, kept on the installed system
+requested laptop-detect           installed by the installer for tasksel's laptop question
+requested eject                   installed by the installer
+requested initramfs-tools         the installer's initramfs generator (busybox, zstd by recommends)
 requested keyboard-configuration  the chosen console keyboard layout
 requested console-setup           applies the layout and font on the virtual terminals
-requested tzdata                  the chosen time zone
-requested e2fsprogs               the root filesystem's tools
+requested sudo                    the installer adds it when root gets no password; the per-VM account uses it
 
 installed	adduser	3.152	all	adduser	3.152
 installed	apt	3.0.3	amd64	apt	3.0.3
+installed	apt-listchanges	4.8	all	apt-listchanges	4.8
 installed	apt-utils	3.0.3	amd64	apt	3.0.3
 installed	base-files	13.8+deb13u7	amd64	base-files	13.8+deb13u7
 installed	base-passwd	3.6.7	amd64	base-passwd	3.6.7
 installed	bash	5.2.37-2+b10	amd64	bash	5.2.37-2
 installed	bash-completion	1:2.16.0-7	all	bash-completion	1:2.16.0-7
+installed	bind9-dnsutils	1:9.20.30-1~deb13u1	amd64	bind9	1:9.20.30-1~deb13u1
+installed	bind9-host	1:9.20.30-1~deb13u1	amd64	bind9	1:9.20.30-1~deb13u1
+installed	bind9-libs:amd64	1:9.20.30-1~deb13u1	amd64	bind9	1:9.20.30-1~deb13u1
+installed	bsd-mailx	8.1.2-0.20220412cvs-1.1	amd64	bsd-mailx	8.1.2-0.20220412cvs-1.1
+installed	bsdextrautils	2.41.5-0+deb13u1	amd64	util-linux	2.41.5-0+deb13u1
 installed	bsdutils	1:2.41.5-0+deb13u1	amd64	util-linux	2.41.5-0+deb13u1
+installed	busybox	1:1.37.0-6+b9	amd64	busybox	1:1.37.0-6
+installed	bzip2	1.0.8-6	amd64	bzip2	1.0.8-6
 installed	ca-certificates	20250419+deb13u1	all	ca-certificates	20250419+deb13u1
 installed	console-setup	1.242~deb13u1	all	console-setup	1.242~deb13u1
 installed	console-setup-linux	1.242~deb13u1	all	console-setup	1.242~deb13u1
@@ -54,37 +50,66 @@ installed	coreutils	9.7-3	amd64	coreutils	9.7-3
 installed	cpio	2.15+dfsg-2	amd64	cpio	2.15+dfsg-2
 installed	cron	3.0pl1-197	amd64	cron	3.0pl1-197
 installed	cron-daemon-common	3.0pl1-197	all	cron	3.0pl1-197
-installed	curl	8.14.1-2+deb13u7	amd64	curl	8.14.1-2+deb13u7
 installed	dash	0.5.12-12	amd64	dash	0.5.12-12
 installed	dbus	1.16.2-2	amd64	dbus	1.16.2-2
 installed	dbus-bin	1.16.2-2	amd64	dbus	1.16.2-2
 installed	dbus-daemon	1.16.2-2	amd64	dbus	1.16.2-2
 installed	dbus-session-bus-common	1.16.2-2	all	dbus	1.16.2-2
 installed	dbus-system-bus-common	1.16.2-2	all	dbus	1.16.2-2
+installed	dbus-user-session	1.16.2-2	amd64	dbus	1.16.2-2
 installed	debconf	1.5.91	all	debconf	1.5.91
 installed	debconf-i18n	1.5.91	all	debconf	1.5.91
 installed	debian-archive-keyring	2025.1	all	debian-archive-keyring	2025.1
+installed	debian-faq	12.2	all	debian-faq	12.2
 installed	debianutils	5.23.2	amd64	debianutils	5.23.2
 installed	dhcpcd-base	1:10.1.0-11+deb13u4	amd64	dhcpcd	1:10.1.0-11+deb13u4
+installed	dictionaries-common	1.30.10	all	dictionaries-common	1.30.10
 installed	diffutils	1:3.10-4	amd64	diffutils	1:3.10-4
+installed	discover	2.1.2-10.1	amd64	discover	2.1.2-10.1
+installed	discover-data	2.2013.01.13+nmu1	all	discover-data	2.2013.01.13+nmu1
+installed	distro-info-data	0.66+deb13u2	all	distro-info-data	0.66+deb13u2
 installed	dmidecode	3.6-2	amd64	dmidecode	3.6-2
+installed	dmsetup	2:1.02.205-2	amd64	lvm2	2.03.31-2
+installed	doc-debian	11.3+nmu1	all	doc-debian	11.3+nmu1
 installed	dpkg	1.22.22	amd64	dpkg	1.22.22
+installed	dracut-install	106-6	amd64	dracut	106-6
 installed	e2fsprogs	1.47.2-3+b12	amd64	e2fsprogs	1.47.2-3
+installed	e2fsprogs-l10n	1.47.2-3	all	e2fsprogs	1.47.2-3
+installed	eject	2.41.5-0+deb13u1	amd64	util-linux	2.41.5-0+deb13u1
+installed	emacsen-common	3.0.8	all	emacsen-common	3.0.8
+installed	exim4-base	4.98.2-1+deb13u5	amd64	exim4	4.98.2-1+deb13u5
+installed	exim4-config	4.98.2-1+deb13u5	all	exim4	4.98.2-1+deb13u5
+installed	exim4-daemon-light	4.98.2-1+deb13u5	amd64	exim4	4.98.2-1+deb13u5
 installed	fdisk	2.41.5-0+deb13u1	amd64	util-linux	2.41.5-0+deb13u1
 installed	file	1:5.46-5	amd64	file	1:5.46-5
 installed	findutils	4.10.0-3	amd64	findutils	4.10.0-3
 installed	gcc-14-base:amd64	14.2.0-19	amd64	gcc-14	14.2.0-19
+installed	gettext-base	0.23.1-2	amd64	gettext	0.23.1-2
 installed	grep	3.11-4	amd64	grep	3.11-4
+installed	groff-base	1.23.0-9	amd64	groff	1.23.0-9
 installed	gzip	1.13-1+deb13u1	amd64	gzip	1.13-1+deb13u1
 installed	hostname	3.25	amd64	hostname	3.25
+installed	iamerican	3.4.06-1	all	ispell	3.4.06-1
+installed	ibritish	3.4.06-1	all	ispell	3.4.06-1
+installed	ienglish-common	3.4.06-1	all	ispell	3.4.06-1
 installed	ifupdown	0.8.44+deb13u1	amd64	ifupdown	0.8.44+deb13u1
+installed	inetutils-telnet	2:2.6-3+deb13u3	amd64	inetutils	2:2.6-3+deb13u3
 installed	init	1.69~deb13u1	amd64	init-system-helpers	1.69~deb13u1
 installed	init-system-helpers	1.69~deb13u1	all	init-system-helpers	1.69~deb13u1
+installed	initramfs-tools	0.148.4	all	initramfs-tools	0.148.4
+installed	initramfs-tools-bin	0.148.4	amd64	initramfs-tools	0.148.4
+installed	initramfs-tools-core	0.148.4	all	initramfs-tools	0.148.4
+installed	installation-report	2.97	all	installation-report	2.97
 installed	iproute2	6.15.0-1	amd64	iproute2	6.15.0-1
 installed	iputils-ping	3:20240905-3	amd64	iputils	3:20240905-3
+installed	iso-codes	4.18.0-1	all	iso-codes	4.18.0-1
+installed	ispell	3.4.06-1	amd64	ispell	3.4.06-1
 installed	kbd	2.7.1-2	amd64	kbd	2.7.1-2
 installed	keyboard-configuration	1.242~deb13u1	all	console-setup	1.242~deb13u1
+installed	klibc-utils	2.0.14-1	amd64	klibc	2.0.14-1
 installed	kmod	34.2-2	amd64	kmod	34.2-2
+installed	krb5-locales	1.21.3-5+deb13u1	all	krb5	1.21.3-5+deb13u1
+installed	laptop-detect	0.16+nmu1	all	laptop-detect	0.16+nmu1
 installed	less	668-1	amd64	less	668-1
 installed	libacl1:amd64	2.3.2-2+b1	amd64	acl	2.3.2-2
 installed	libapparmor1:amd64	4.1.0-1	amd64	apparmor	4.1.0-1
@@ -94,48 +119,65 @@ installed	libaudit-common	1:4.0.2-2+deb13u1	all	audit	1:4.0.2-2+deb13u1
 installed	libaudit1:amd64	1:4.0.2-2+deb13u1	amd64	audit	1:4.0.2-2+deb13u1
 installed	libblkid1:amd64	2.41.5-0+deb13u1	amd64	util-linux	2.41.5-0+deb13u1
 installed	libbpf1:amd64	1:1.5.0-3	amd64	libbpf	1.5.0-3
-installed	libbrotli1:amd64	1.1.0-2+deb13u1	amd64	brotli	1.1.0-2+deb13u1
 installed	libbsd0:amd64	0.12.2-2	amd64	libbsd	0.12.2-2
 installed	libbz2-1.0:amd64	1.0.8-6	amd64	bzip2	1.0.8-6
 installed	libc-bin	2.41-12+deb13u4	amd64	glibc	2.41-12+deb13u4
 installed	libc-l10n	2.41-12+deb13u4	all	glibc	2.41-12+deb13u4
 installed	libc6:amd64	2.41-12+deb13u4	amd64	glibc	2.41-12+deb13u4
 installed	libcap-ng0:amd64	0.8.5-4+b1	amd64	libcap-ng	0.8.5-4
-installed	libcap2:amd64	1:2.75-10+deb13u1+b3	amd64	libcap2	1:2.75-10+deb13u1
 installed	libcap2-bin	1:2.75-10+deb13u1+b3	amd64	libcap2	1:2.75-10+deb13u1
+installed	libcap2:amd64	1:2.75-10+deb13u1+b3	amd64	libcap2	1:2.75-10+deb13u1
 installed	libcbor0.10:amd64	0.10.2-2	amd64	libcbor	0.10.2-2
 installed	libcom-err2:amd64	1.47.2-3+b12	amd64	e2fsprogs	1.47.2-3
 installed	libcrypt1:amd64	1:4.4.38-1	amd64	libxcrypt	1:4.4.38-1
-installed	libcurl4t64:amd64	8.14.1-2+deb13u7	amd64	curl	8.14.1-2+deb13u7
+installed	libcryptsetup12:amd64	2:2.7.5-2	amd64	cryptsetup	2:2.7.5-2
 installed	libdb5.3t64:amd64	5.3.28+dfsg2-9	amd64	db5.3	5.3.28+dfsg2-9
 installed	libdbus-1-3:amd64	1.16.2-2	amd64	dbus	1.16.2-2
 installed	libdebconfclient0:amd64	0.280	amd64	cdebconf	0.280
+installed	libdevmapper1.02.1:amd64	2:1.02.205-2	amd64	lvm2	2.03.31-2
+installed	libdiscover2	2.1.2-10.1	amd64	discover	2.1.2-10.1
 installed	libedit2:amd64	3.1-20250104-1	amd64	libedit	3.1-20250104-1
 installed	libelf1t64:amd64	0.192-4	amd64	elfutils	0.192-4
+installed	libevent-2.1-7t64:amd64	2.1.13-stable-1~deb13u1	amd64	libevent	2.1.13-stable-1~deb13u1
 installed	libexpat1:amd64	2.9.0-1~deb13u1	amd64	expat	2.9.0-1~deb13u1
 installed	libext2fs2t64:amd64	1.47.2-3+b12	amd64	e2fsprogs	1.47.2-3
 installed	libfdisk1:amd64	2.41.5-0+deb13u1	amd64	util-linux	2.41.5-0+deb13u1
 installed	libffi8:amd64	3.4.8-2	amd64	libffi	3.4.8-2
 installed	libfido2-1:amd64	1.15.0-1+b1	amd64	libfido2	1.15.0-1
+installed	libfile-fcntllock-perl	0.22-4+b4	amd64	libfile-fcntllock-perl	0.22-4
+installed	libfribidi0:amd64	1.0.16-1	amd64	fribidi	1.0.16-1
+installed	libfstrm0:amd64	0.6.1-1+b3	amd64	fstrm	0.6.1-1
 installed	libgcc-s1:amd64	14.2.0-19	amd64	gcc-14	14.2.0-19
+installed	libgdbm-compat4t64:amd64	1.24-2	amd64	gdbm	1.24-2
+installed	libgdbm6t64:amd64	1.24-2	amd64	gdbm	1.24-2
 installed	libgmp10:amd64	2:6.3.0+dfsg-3	amd64	gmp	2:6.3.0+dfsg-3
+installed	libgnutls-dane0t64:amd64	3.8.9-3+deb13u4	amd64	gnutls28	3.8.9-3+deb13u4
 installed	libgnutls30t64:amd64	3.8.9-3+deb13u4	amd64	gnutls28	3.8.9-3+deb13u4
+installed	libgpm2:amd64	1.20.7-11+b2	amd64	gpm	1.20.7-11
 installed	libgssapi-krb5-2:amd64	1.21.3-5+deb13u1	amd64	krb5	1.21.3-5+deb13u1
 installed	libhogweed6t64:amd64	3.10.1-1	amd64	nettle	3.10.1-1
+installed	libidn12:amd64	1.43-1	amd64	libidn	1.43-1
 installed	libidn2-0:amd64	2.3.8-2	amd64	libidn2	2.3.8-2
 installed	libjansson4:amd64	2.14-2+b3	amd64	jansson	2.14-2
+installed	libjemalloc2:amd64	5.3.0-3	amd64	jemalloc	5.3.0-3
+installed	libjson-c5:amd64	0.18+ds-1	amd64	json-c	0.18+ds-1
 installed	libk5crypto3:amd64	1.21.3-5+deb13u1	amd64	krb5	1.21.3-5+deb13u1
 installed	libkeyutils1:amd64	1.6.3-6	amd64	keyutils	1.6.3-6
+installed	libklibc:amd64	2.0.14-1	amd64	klibc	2.0.14-1
 installed	libkmod2:amd64	34.2-2	amd64	kmod	34.2-2
 installed	libkrb5-3:amd64	1.21.3-5+deb13u1	amd64	krb5	1.21.3-5+deb13u1
 installed	libkrb5support0:amd64	1.21.3-5+deb13u1	amd64	krb5	1.21.3-5+deb13u1
 installed	liblastlog2-2:amd64	2.41.5-0+deb13u1	amd64	util-linux	2.41.5-0+deb13u1
-installed	libldap2:amd64	2.6.10+dfsg-1	amd64	openldap	2.6.10+dfsg-1
+installed	liblmdb0:amd64	0.9.31-1+b2	amd64	lmdb	0.9.31-1
 installed	liblocale-gettext-perl	1.07-7+b1	amd64	liblocale-gettext-perl	1.07-7
+installed	liblockfile-bin	1.17-2	amd64	liblockfile	1.17-2
+installed	liblockfile1:amd64	1.17-2	amd64	liblockfile	1.17-2
+installed	liblsof0	4.99.4+dfsg-2	amd64	lsof	4.99.4+dfsg-2
 installed	liblz4-1:amd64	1.10.0-4	amd64	lz4	1.10.0-4
 installed	liblzma5:amd64	5.8.1-1+deb13u2	amd64	xz-utils	5.8.1-1+deb13u2
 installed	libmagic-mgc	1:5.46-5	amd64	file	1:5.46-5
 installed	libmagic1t64:amd64	1:5.46-5	amd64	file	1:5.46-5
+installed	libmaxminddb0:amd64	1.12.2-1	amd64	libmaxminddb	1.12.2-1
 installed	libmd0:amd64	1.1.0-2+b1	amd64	libmd	1.1.0-2
 installed	libmnl0:amd64	1.0.5-3	amd64	libmnl	1.0.5-3
 installed	libmount1:amd64	2.41.5-0+deb13u1	amd64	util-linux	2.41.5-0+deb13u1
@@ -145,24 +187,28 @@ installed	libnewt0.52:amd64	0.52.25-1	amd64	newt	0.52.25-1
 installed	libnftables1:amd64	1.1.3-1	amd64	nftables	1.1.3-1
 installed	libnftnl11:amd64	1.2.9-1	amd64	libnftnl	1.2.9-1
 installed	libnghttp2-14:amd64	1.64.0-1.1+deb13u1	amd64	nghttp2	1.64.0-1.1+deb13u1
-installed	libnghttp3-9:amd64	1.8.0-1	amd64	nghttp3	1.8.0-1
+installed	libnsl2:amd64	1.3.0-3+b3	amd64	libnsl	1.3.0-3
+installed	libnss-systemd:amd64	257.13-1~deb13u1	amd64	systemd	257.13-1~deb13u1
 installed	libp11-kit0:amd64	0.25.5-3	amd64	p11-kit	0.25.5-3
-installed	libpam-modules:amd64	1.7.0-5	amd64	pam	1.7.0-5
+installed	libpam-cap:amd64	1:2.75-10+deb13u1+b3	amd64	libcap2	1:2.75-10+deb13u1
 installed	libpam-modules-bin	1.7.0-5	amd64	pam	1.7.0-5
+installed	libpam-modules:amd64	1.7.0-5	amd64	pam	1.7.0-5
 installed	libpam-runtime	1.7.0-5	all	pam	1.7.0-5
 installed	libpam-systemd:amd64	257.13-1~deb13u1	amd64	systemd	257.13-1~deb13u1
+installed	libpam-wtmpdb:amd64	0.73.0-3+deb13u1	amd64	wtmpdb	0.73.0-3+deb13u1
 installed	libpam0g:amd64	1.7.0-5	amd64	pam	1.7.0-5
+installed	libpci3:amd64	1:3.13.0-2	amd64	pciutils	1:3.13.0-2
 installed	libpcre2-8-0:amd64	10.46-1~deb13u3	amd64	pcre2	10.46-1~deb13u3
+installed	libperl5.40:amd64	5.40.1-6+deb13u1	amd64	perl	5.40.1-6+deb13u1
+installed	libpipeline1:amd64	1.5.8-1	amd64	libpipeline	1.5.8-1
 installed	libpopt0:amd64	1.19+dfsg-2	amd64	popt	1.19+dfsg-2
 installed	libproc2-0:amd64	2:4.0.4-9	amd64	procps	2:4.0.4-9
+installed	libprotobuf-c1:amd64	1.5.1-1	amd64	protobuf-c	1.5.1-1
 installed	libpsl5t64:amd64	0.21.2-1.1+b1	amd64	libpsl	0.21.2-1.1
 installed	libpython3-stdlib:amd64	3.13.5-1	amd64	python3-defaults	3.13.5-1
 installed	libpython3.13-minimal:amd64	3.13.5-2+deb13u5	amd64	python3.13	3.13.5-2+deb13u5
 installed	libpython3.13-stdlib:amd64	3.13.5-2+deb13u5	amd64	python3.13	3.13.5-2+deb13u5
 installed	libreadline8t64:amd64	8.2-6	amd64	readline	8.2-6
-installed	librtmp1:amd64	2.4+20151223.gitfa8646d.1-2+b5	amd64	rtmpdump	2.4+20151223.gitfa8646d.1-2
-installed	libsasl2-2:amd64	2.1.28+dfsg1-9	amd64	cyrus-sasl2	2.1.28+dfsg1-9
-installed	libsasl2-modules-db:amd64	2.1.28+dfsg1-9	amd64	cyrus-sasl2	2.1.28+dfsg1-9
 installed	libseccomp2:amd64	2.6.0-2	amd64	libseccomp	2.6.0-2
 installed	libselinux1:amd64	3.8.1-1	amd64	libselinux	3.8.1-1
 installed	libsemanage-common	3.8.1-1	all	libsemanage	3.8.1-1
@@ -172,7 +218,6 @@ installed	libslang2:amd64	2.3.3-5+b2	amd64	slang2	2.3.3-5
 installed	libsmartcols1:amd64	2.41.5-0+deb13u1	amd64	util-linux	2.41.5-0+deb13u1
 installed	libsqlite3-0:amd64	3.46.1-7+deb13u2	amd64	sqlite3	3.46.1-7+deb13u2
 installed	libss2:amd64	1.47.2-3+b12	amd64	e2fsprogs	1.47.2-3
-installed	libssh2-1t64:amd64	1.11.1-1+deb13u2	amd64	libssh2	1.11.1-1+deb13u2
 installed	libssl3t64:amd64	3.5.7-1~deb13u3	amd64	openssl	3.5.7-1~deb13u3
 installed	libstdc++6:amd64	14.2.0-19	amd64	gcc-14	14.2.0-19
 installed	libsystemd-shared:amd64	257.13-1~deb13u1	amd64	systemd	257.13-1~deb13u1
@@ -184,54 +229,106 @@ installed	libtext-wrapi18n-perl	0.06-10	all	libtext-wrapi18n-perl	0.06-10
 installed	libtinfo6:amd64	6.5+20250216-2	amd64	ncurses	6.5+20250216-2
 installed	libtirpc-common	1.3.6+ds-1	all	libtirpc	1.3.6+ds-1
 installed	libtirpc3t64:amd64	1.3.6+ds-1	amd64	libtirpc	1.3.6+ds-1
+installed	libuchardet0:amd64	0.0.8-1+b2	amd64	uchardet	0.0.8-1
 installed	libudev1:amd64	257.13-1~deb13u1	amd64	systemd	257.13-1~deb13u1
+installed	libunbound8:amd64	1.26.2-0+deb13u1	amd64	unbound	1.26.2-0+deb13u1
 installed	libunistring5:amd64	1.3-2	amd64	libunistring	1.3-2
+installed	liburcu8t64:amd64	0.15.2-2	amd64	liburcu	0.15.2-2
+installed	libusb-1.0-0:amd64	2:1.0.28-1	amd64	libusb-1.0	2:1.0.28-1
 installed	libuuid1:amd64	2.41.5-0+deb13u1	amd64	util-linux	2.41.5-0+deb13u1
+installed	libuv1t64:amd64	1.50.0-2	amd64	libuv1	1.50.0-2
+installed	libwtmpdb0:amd64	0.73.0-3+deb13u1	amd64	wtmpdb	0.73.0-3+deb13u1
+installed	libx11-6:amd64	2:1.8.12-1	amd64	libx11	2:1.8.12-1
+installed	libx11-data	2:1.8.12-1	all	libx11	2:1.8.12-1
+installed	libxau6:amd64	1:1.0.11-1	amd64	libxau	1:1.0.11-1
+installed	libxcb1:amd64	1.17.0-2+b1	amd64	libxcb	1.17.0-2
+installed	libxdmcp6:amd64	1:1.1.5-1	amd64	libxdmcp	1:1.1.5-1
+installed	libxext6:amd64	2:1.3.4-1+b3	amd64	libxext	2:1.3.4-1
+installed	libxml2:amd64	2.12.7+dfsg+really2.9.14-2.1+deb13u3	amd64	libxml2	2.12.7+dfsg+really2.9.14-2.1+deb13u3
+installed	libxmuu1:amd64	2:1.1.3-3+b4	amd64	libxmu	2:1.1.3-3
 installed	libxtables12:amd64	1.8.11-2	amd64	iptables	1.8.11-2
 installed	libxxhash0:amd64	0.8.3-2	amd64	xxhash	0.8.3-2
 installed	libzstd1:amd64	1.5.7+dfsg-1	amd64	libzstd	1.5.7+dfsg-1
+installed	linux-base	4.12.1	all	linux-base	4.12.1
 installed	linux-sysctl-defaults	4.12.1	all	linux-base	4.12.1
 installed	locales	2.41-12+deb13u4	all	glibc	2.41-12+deb13u4
 installed	login	1:4.16.0-2+really2.41.5-0+deb13u1	amd64	util-linux	2.41.5-0+deb13u1
 installed	login.defs	1:4.17.4-2	all	shadow	1:4.17.4-2
 installed	logrotate	3.22.0-1	amd64	logrotate	3.22.0-1
 installed	logsave	1.47.2-3+b12	amd64	e2fsprogs	1.47.2-3
+installed	lsb-release	12.1-1	all	lsb-release-minimal	12.1-1
+installed	lsof	4.99.4+dfsg-2	amd64	lsof	4.99.4+dfsg-2
+installed	man-db	2.13.1-1	amd64	man-db	2.13.1-1
+installed	manpages	6.9.1-1	all	manpages	6.9.1-1
 installed	mawk	1.3.4.20250131-1	amd64	mawk	1.3.4.20250131-1
 installed	media-types	13.0.0	all	media-types	13.0.0
 installed	mount	2.41.5-0+deb13u1	amd64	util-linux	2.41.5-0+deb13u1
 installed	nano	8.4-1+deb13u1	amd64	nano	8.4-1+deb13u1
 installed	ncurses-base	6.5+20250216-2	all	ncurses	6.5+20250216-2
 installed	ncurses-bin	6.5+20250216-2	amd64	ncurses	6.5+20250216-2
+installed	ncurses-term	6.5+20250216-2	all	ncurses	6.5+20250216-2
 installed	netbase	6.5	all	netbase	6.5
+installed	netcat-traditional	1.10-50	amd64	netcat	1.10-50
 installed	nftables	1.1.3-1	amd64	nftables	1.1.3-1
 installed	openssh-client	1:10.0p1-7+deb13u4	amd64	openssh	1:10.0p1-7+deb13u4
 installed	openssl	3.5.7-1~deb13u3	amd64	openssl	3.5.7-1~deb13u3
 installed	openssl-provider-legacy	3.5.7-1~deb13u3	amd64	openssl	3.5.7-1~deb13u3
 installed	passwd	1:4.17.4-2	amd64	shadow	1:4.17.4-2
+installed	pci.ids	0.0~2025.06.09-1	all	pci.ids	0.0~2025.06.09-1
+installed	pciutils	1:3.13.0-2	amd64	pciutils	1:3.13.0-2
+installed	perl	5.40.1-6+deb13u1	amd64	perl	5.40.1-6+deb13u1
 installed	perl-base	5.40.1-6+deb13u1	amd64	perl	5.40.1-6+deb13u1
+installed	perl-modules-5.40	5.40.1-6+deb13u1	all	perl	5.40.1-6+deb13u1
 installed	procps	2:4.0.4-9	amd64	procps	2:4.0.4-9
 installed	psmisc	23.7-2	amd64	psmisc	23.7-2
+installed	publicsuffix	20250328.1952-0.1	all	publicsuffix	20250328.1952-0.1
+installed	python-apt-common	3.0.0	all	python-apt	3.0.0
 installed	python3	3.13.5-1	amd64	python3-defaults	3.13.5-1
+installed	python3-apt	3.0.0	amd64	python-apt	3.0.0
+installed	python3-certifi	2025.1.31+ds-1	all	python-certifi	2025.1.31+ds-1
+installed	python3-chardet	5.2.0+dfsg-2	all	chardet	5.2.0+dfsg-2
+installed	python3-charset-normalizer	3.4.2-1	amd64	python-charset-normalizer	3.4.2-1
+installed	python3-debconf	1.5.91	all	debconf	1.5.91
+installed	python3-debian	1.0.1	all	python-debian	1.0.1
+installed	python3-debianbts	4.1.1	all	python-debianbts	4.1.1
+installed	python3-idna	3.10-1+deb13u1	all	python-idna	3.10-1+deb13u1
 installed	python3-minimal	3.13.5-1	amd64	python3-defaults	3.13.5-1
+installed	python3-reportbug	13.2.0	all	reportbug	13.2.0
+installed	python3-requests	2.32.3+dfsg-5+deb13u1	all	requests	2.32.3+dfsg-5+deb13u1
+installed	python3-urllib3	2.3.0-3+deb13u2	all	python-urllib3	2.3.0-3+deb13u2
 installed	python3.13	3.13.5-2+deb13u5	amd64	python3.13	3.13.5-2+deb13u5
 installed	python3.13-minimal	3.13.5-2+deb13u5	amd64	python3.13	3.13.5-2+deb13u5
 installed	readline-common	8.2-6	all	readline	8.2-6
+installed	reportbug	13.2.0	all	reportbug	13.2.0
 installed	sed	4.9-2+deb13u1	amd64	sed	4.9-2+deb13u1
 installed	sensible-utils	0.0.25	all	sensible-utils	0.0.25
 installed	sqv	1.3.0-3+b2	amd64	rust-sequoia-sqv	1.3.0-3
 installed	sudo	1.9.16p2-3+deb13u2	amd64	sudo	1.9.16p2-3+deb13u2
 installed	systemd	257.13-1~deb13u1	amd64	systemd	257.13-1~deb13u1
-installed	systemd-resolved	257.13-1~deb13u1	amd64	systemd	257.13-1~deb13u1
+installed	systemd-cryptsetup	257.13-1~deb13u1	amd64	systemd	257.13-1~deb13u1
 installed	systemd-sysv	257.13-1~deb13u1	amd64	systemd	257.13-1~deb13u1
+installed	systemd-timesyncd	257.13-1~deb13u1	amd64	systemd	257.13-1~deb13u1
 installed	sysvinit-utils	3.14-4	amd64	sysvinit	3.14-4
 installed	tar	1.35+dfsg-3.1	amd64	tar	1.35+dfsg-3.1
+installed	task-english	3.81	all	tasksel	3.81
+installed	tasksel	3.81	all	tasksel	3.81
+installed	tasksel-data	3.81	all	tasksel	3.81
+installed	traceroute	1:2.1.6-1	amd64	traceroute	1:2.1.6-1
 installed	tzdata	2026e-0+deb13u1	all	tzdata	2026e-0+deb13u1
+installed	ucf	3.0052	all	ucf	3.0052
 installed	udev	257.13-1~deb13u1	amd64	systemd	257.13-1~deb13u1
 installed	util-linux	2.41.5-0+deb13u1	amd64	util-linux	2.41.5-0+deb13u1
+installed	util-linux-extra	2.41.5-0+deb13u1	amd64	util-linux	2.41.5-0+deb13u1
+installed	util-linux-locales	2.41.5-0+deb13u1	all	util-linux	2.41.5-0+deb13u1
 installed	vim-common	2:9.1.1230-2	all	vim	2:9.1.1230-2
 installed	vim-tiny	2:9.1.1230-2	amd64	vim	2:9.1.1230-2
+installed	wamerican	2020.12.07-4	all	scowl	2020.12.07-4
 installed	wget	1.25.0-2	amd64	wget	1.25.0-2
 installed	whiptail	0.52.25-1	amd64	newt	0.52.25-1
+installed	wtmpdb	0.73.0-3+deb13u1	amd64	wtmpdb	0.73.0-3+deb13u1
+installed	xauth	1:1.1.2-1.1	amd64	xauth	1:1.1.2-1.1
 installed	xkb-data	2.42-1	all	xkeyboard-config	2.42-1
+installed	xxd	2:9.1.1230-2	amd64	vim	2:9.1.1230-2
 installed	xz-utils	5.8.1-1+deb13u2	amd64	xz-utils	5.8.1-1+deb13u2
 installed	zlib1g:amd64	1:1.3.dfsg+really1.3.1-1+b1	amd64	zlib	1:1.3.dfsg+really1.3.1-1
+installed	zstd	1.5.7+dfsg-1	amd64	libzstd	1.5.7+dfsg-1

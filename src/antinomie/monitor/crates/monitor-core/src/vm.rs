@@ -454,8 +454,9 @@ impl VmProcess {
         }
         let (ram_path, ram_memory) = guest_ram(ram_path, ram_size)?;
         // The profile as this base and host can boot it.
+        let base_support = crate::stealth::BaseSupport::from_list(&bundle.stealth_support);
         let (stealth, _) = vm.stealth.fitted(
-            &crate::stealth::BaseSupport::from_list(&bundle.stealth_support),
+            &base_support,
             &crate::stealth::HostSupport::detect(&options.qemu),
         );
         let mut qmp_path = runtime_dir.join("qmp.sock");
@@ -529,7 +530,7 @@ impl VmProcess {
             cmd.arg("-netdev")
                 .arg(crate::stealth::netdev_option(netdev, &stealth))
                 .arg("-device")
-                .arg(crate::stealth::nic_option(&stealth));
+                .arg(crate::stealth::nic_option_for(&stealth, &base_support));
         } else {
             cmd.args(["-nic", "none"]);
         }

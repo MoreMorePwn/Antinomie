@@ -7,16 +7,16 @@ it runs.
 ## 0.7.1 — Unreleased
 
 - **Debian Minimal base.** **Build base…** offers a third base beside BusyBox
-  and the Debian desktops: console-only Debian 13 (trixie) with APT, systemd
-  and a small command-line set (curl, wget, ca-certificates, openssh-client,
-  iproute2, procps, less, vim-tiny, python3 and the rest listed with reasons in
+  and the Debian desktops: console-only Debian 13 (trixie) as the Debian
+  installer leaves it with no desktop chosen (the standard system utilities;
+  the inventory is in
   `src/antinomie/packaging/debian-minimal-trixie/packages.txt`), no desktop,
-  display manager or SSH server. It boots on BusyBox's kernel (no modules),
-  takes its address with systemd-networkd, needs 1024 MiB RAM and 4 GiB disk,
+  display manager or SSH server. It boots on BusyBox's kernel,
+  needs 1024 MiB RAM and 4 GiB disk,
   and its VMs ask for a per-VM account like the desktop bases and behave like
   BusyBox on screen (console, App terminal runs). Its root is mounted by
   UUID, so stealth profiles can put its disk on SATA or NVMe as on BusyBox.
-  The bundle is about 350 MB.
+  The bundle is about 700 MB.
   Runs on the 0.7.0 guest contract (revision 17); 0.7.0 apps run its bases too.
 - **Debian Minimal looks installed, not built.** The image no longer names
   Antinomie or the build host (the package inventory, network and tmpfiles
@@ -27,6 +27,12 @@ it runs.
   Files keep the change, access and birth times (with nanoseconds) their
   installation gave them instead of 1970, and the filesystem's creation, mount
   and write history reads like an installer's.
+  Its packages are what the Debian installer installs with no desktop: the
+  standard system utilities with recommends (exim4 for local mail, timesyncd,
+  lsof, dig, man pages and documentation), tasksel and its language task,
+  without curl and systemd-resolved; the package indexes stay. It takes its
+  address with ifupdown and dhcpcd on `enp0s25`: its VMs' NIC sits at the
+  onboard NIC's PCI slot whatever model the stealth profile picks.
 - **Rootless Debian builds.** Native (`--mode=unshare`) Debian image builds
   move files in and out of the new root as the invoking user, so they no longer
   fail on the private staging directory; the conformance trace suite also runs
