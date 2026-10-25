@@ -165,12 +165,12 @@ CONSOLE_PACKAGES = (
     ("grub-pc", "the installer's boot loader for a BIOS PC (each VM's grub.cfg is written for it)"),
     ("os-prober", "installed with GRUB by the installer"),
 )
-# Its wired NIC sits at PCI 00:19.0, the onboard Intel NIC's slot on PC
-# chipsets (bundle stealth_support "onboardnic"), so udev names it as on such
-# a PC whichever model the stealth profile picks, and the installer's stanza
-# for it is written once here.
-CONSOLE_NIC = "enp0s25"
-CONSOLE_INTERFACES = f"""# This file describes the network interfaces available on your system
+# The installer's interfaces file without its stanza for the wired NIC:
+# provisioning writes that per VM for the interface its stealth profile's NIC
+# slot gets (bundle stealth_support "onboardnic": enp0s25 at PCI 00:19.0,
+# enp0s31f6 at 00:1f.6), so udev names it as on that machine whichever model
+# the profile picks.
+CONSOLE_INTERFACES = """# This file describes the network interfaces available on your system
 # and how to activate them. For more information, see interfaces(5).
 
 source /etc/network/interfaces.d/*
@@ -178,12 +178,6 @@ source /etc/network/interfaces.d/*
 # The loopback network interface
 auto lo
 iface lo inet loopback
-
-# The primary network interface
-allow-hotplug {CONSOLE_NIC}
-iface {CONSOLE_NIC} inet dhcp
-# This is an autoconfigured IPv6 interface
-iface {CONSOLE_NIC} inet6 auto
 """
 # apt's history names the commands mmdebstrap ran; the installer's read like
 # this (its packages: those an entry installed on request).
@@ -452,7 +446,8 @@ sddm)
     ;;
 none)
     # Console base: logins on the serial console and the virtual terminals;
-    # ifupdown runs dhcpcd for the onboard NIC, as the installer sets it up.
+    # ifupdown runs dhcpcd for the wired NIC, as the installer sets it up
+    # (provisioning adds its stanza).
     printf '%s' """ + shlex.quote(CONSOLE_INTERFACES) + """ > /etc/network/interfaces
     # /tmp stays on the root disk, as on BusyBox: what a sample drops there is
     # in the VM's disk (Disks tab, disk dumps, checkpoints), not only in RAM.

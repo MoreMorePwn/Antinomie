@@ -3101,13 +3101,31 @@ additions in `CONSOLE_PACKAGES` (tasksel, installation-report, discover,
 laptop-detect, eject, initramfs-tools, console-setup, sudo) and tasksel's
 language task for the locale (`task-english` for English), documentation and
 manual pages, the package indexes and apt's caches kept; no curl and no
-systemd-resolved. Networking is the installer's: ifupdown with dhcpcd and an
-`allow-hotplug enp0s25` stanza (`CONSOLE_INTERFACES`). The base's
-`stealth_support` adds `onboardnic`: the app then gives the NIC PCI address
-00:19.0 (`nic_option_for`, the integrated Intel NIC's slot on PC chipsets), so
-udev names it `enp0s25` whatever the model and whichever display or pointer
-devices take the first free slots; `/etc/resolv.conf` is a plain file dhcpcd
-rewrites from the lease. Packages configured during the build that recorded
+systemd-resolved. Networking is the installer's: ifupdown with dhcpcd. The
+base's `/etc/network/interfaces` has only the loopback (`CONSOLE_INTERFACES`); its
+`stealth_support` adds `onboardnic`, and the app puts the NIC at a fixed PCI
+slot of the profile's machine and writes the installer's `allow-hotplug`
+stanza for the name udev gives it there. `StealthProfile::nic_slot` takes the
+slot from the machine the identity copies (`MachineProfile::nic_slot`): Intel
+100-series and later chipsets (OptiPlex 7090, EliteDesk 800 G6, Latitude 5420,
+X12STH-F) have their I219 at 00:1f.6, `enp0s31f6` (`NicSlot::Pch`; q35's LPC
+bridge at 00:1f.0 is multifunction, so function 6 is free); profiles without
+an identity (Transparent), with an edited one, or copying an AMD machine (no
+integrated LAN on bus 0, and a root port would be QEMU's Red Hat one) keep
+00:19.0, `enp0s25`, the ICH9's place (`NicSlot::Ich`). `nic_option_for` adds
+the address whatever the model, so the name does not depend on which display
+or pointer devices take the first free slots (headless or not). Provisioning
+writes the stanza (`interface_commands`: everything from the installer's
+`# The primary network interface` comment on is replaced) and the account
+record keeps the interface (`GuestAccount::interface`; a record from before
+0.7.1 means `enp0s25`, which such a base wrote at build time); the launch puts
+the NIC at that interface's slot, so a disk and its NIC always agree, and
+both the user-mode network and the Routed gateway's `-device` use it. Saving
+a profile whose slot differs rewrites the stanza on the VM's disk
+(`set_interface`, VM stopped); with snapshots that is refused, since their
+disks name the old interface. A reset writes the current profile's.
+`/etc/resolv.conf` is a plain file dhcpcd rewrites from the lease. Packages
+configured during the build that recorded
 the build host's name (exim4's mail name) get the chosen hostname, and the
 leak check also fails on the build host's name. `multi-user.target`,
 `/tmp` on the root disk (a `tmp.mount` drop-in, unlike Debian 13's default tmpfs: dropped files reach the VM's disk, and the
@@ -3197,7 +3215,8 @@ disk). Provisioning lays the VM's disk out as partman does
 in an extended `sda2` starting two sectors before it, about the VM's RAM (256
 MiB at least, a quarter of the disk at most), the last MiB free; the swap gets
 a UUID, fstab its line and `initramfs-tools/conf.d/resume` its UUID, the MBR a
-disk identifier of the VM's own, and `update-grub` writes `grub.cfg` for the
+disk identifier of the VM's own (set last, after unmounting: sfdisk makes
+the kernel read the table again and the partition nodes vanish for a moment), and `update-grub` writes `grub.cfg` for the
 VM's UUIDs. Growing the disk in the VM's settings grows the root the same way
 (`grow_disk`, keeping the swap's UUID and size); the bootstrap initrd grows only
 whole-disk roots (BusyBox, the desktops) now. The kernel packages are

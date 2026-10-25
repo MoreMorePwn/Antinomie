@@ -565,14 +565,26 @@ impl VmProcess {
         // Guests from revision 13 (Antinomie 0.3.0) size their telemetry rings
         // from the kernel command line; older guests keep 256 KiB rings.
         let mut boot = bundle.clone();
-        if bundle
+        let account = if bundle
             .guest
             .as_ref()
             .is_some_and(|guest| guest.requires_credentials)
-            && let Ok(account) = crate::guest_account::GuestAccount::load(&vm_dir(options, &vm.id)?)
         {
+            crate::guest_account::GuestAccount::load(&vm_dir(options, &vm.id)?).ok()
+        } else {
+            None
+        };
+        if let Some(account) = &account {
             boot.kernel_append = vm_kernel_append(&boot.kernel_append, account.root_uuid());
         }
+        // A base that names its NIC by slot: the slot of the interface its
+        // disk configures (provisioning and a profile change write it).
+        let nic_slot = base_support.onboard_nic.then(|| {
+            account
+                .as_ref()
+                .and_then(|account| crate::stealth::NicSlot::from_interface(account.interface()))
+                .unwrap_or_default()
+        });
         if options.serial_console && !boot.kernel_append.contains("console=ttyS0") {
             boot.kernel_append.push_str(" console=tty0 console=ttyS0");
         }
@@ -601,12 +613,12 @@ impl VmProcess {
             cmd.arg("-netdev")
                 .arg(crate::stealth::netdev_option(netdev, &stealth))
                 .arg("-device")
-                .arg(crate::stealth::nic_option_for(&stealth, &base_support));
+                .arg(crate::stealth::nic_option_for(&stealth, nic_slot));
         } else if let Some(gateway) = &gateway {
             cmd.arg("-netdev")
                 .arg(gateway.netdev_option()?)
                 .arg("-device")
-                .arg(crate::stealth::nic_option_for(&stealth, &base_support));
+                .arg(crate::stealth::nic_option_for(&stealth, nic_slot));
         } else {
             cmd.args(["-nic", "none"]);
         }

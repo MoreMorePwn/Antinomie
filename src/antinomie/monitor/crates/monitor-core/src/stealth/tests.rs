@@ -39,22 +39,20 @@ fn transparent_keeps_qemu_launch_options_and_rates_certain() {
     assert_eq!(profile.rating(), "certain");
     assert_eq!(smp_option(&profile, 4), "4");
     assert_eq!(nic_option(&profile), "virtio-net-pci,netdev=net0");
-    assert_eq!(
-        nic_option_for(&profile, &BaseSupport::from_list(&[])),
-        "virtio-net-pci,netdev=net0"
-    );
-    // A base that names its NIC by the onboard slot gets it there, any model.
+    assert_eq!(nic_option_for(&profile, None), "virtio-net-pci,netdev=net0");
+    // A base that names its NIC by slot gets it there, any model.
     let onboard = BaseSupport::from_list(&["dhcp".into(), "onboardnic".into()]);
     assert!(onboard.onboard_nic && BaseSupport::all().onboard_nic);
+    assert_eq!(profile.nic_slot(), NicSlot::Ich);
     assert_eq!(
-        nic_option_for(&profile, &onboard),
+        nic_option_for(&profile, Some(profile.nic_slot())),
         "virtio-net-pci,netdev=net0,addr=0x19"
     );
     let mut intel = profile.clone();
     intel.nic = NicModel::E1000e;
     assert_eq!(
-        nic_option_for(&intel, &onboard),
-        "e1000e,netdev=net0,addr=0x19"
+        nic_option_for(&intel, Some(NicSlot::Pch)),
+        "e1000e,netdev=net0,addr=0x1f.0x6"
     );
     assert_eq!(cpu_option(&profile, None, true, 4), None);
     assert_eq!(
@@ -624,4 +622,68 @@ fn a_vm_on_a_base_without_a_support_list_falls_back_and_one_with_it_does_not() {
     // A base that is not installed has nothing to compare with.
     vm.base_identity = Some("gone".into());
     assert!(vm_fallbacks(&vm, &bases, &host).is_empty());
+}
+
+#[test]
+fn the_nic_slot_follows_the_chipset_of_the_machine_the_profile_copies() {
+    // Every machine says where its chipset's LAN is: Intel's 100 series and
+    // later at 00:1f.6, AMD's (no LAN on bus 0) at the ICH's 00:19.0.
+    let expected = [
+        ("dell-optiplex-7090", NicSlot::Pch),
+        ("hp-elitedesk-800-g6", NicSlot::Pch),
+        ("lenovo-m75q-gen2", NicSlot::Ich),
+        ("hp-elitedesk-805-g8", NicSlot::Ich),
+        ("dell-latitude-5420", NicSlot::Pch),
+        ("lenovo-t14-gen3-amd", NicSlot::Ich),
+        ("supermicro-x12sth", NicSlot::Pch),
+        ("supermicro-h12ssl", NicSlot::Ich),
+    ];
+    assert_eq!(MACHINES.len(), expected.len());
+    for (id, slot) in expected {
+        let machine = MACHINES.iter().find(|machine| machine.id == id).unwrap();
+        let mut profile = StealthProfile::transparent();
+        profile.use_machine(machine);
+        assert_eq!(profile.nic_slot(), slot, "{id}");
+        assert_eq!(
+            machine.cpu_vendor == "GenuineIntel",
+            slot == NicSlot::Pch,
+            "{id}"
+        );
+        // The identity switched off, or edited away from a known machine:
+        // the ICH's slot, as for Transparent.
+        profile.identity_enabled = false;
+        assert_eq!(profile.nic_slot(), NicSlot::Ich);
+        profile.identity_enabled = true;
+        profile.identity.profile.clear();
+        assert_eq!(profile.nic_slot(), NicSlot::Ich);
+    }
+    // The presets: Intel hosts get the PCH's slot, AMD hosts the ICH's.
+    for (kind, vendor, slot) in [
+        (
+            StealthPreset::RealisticDesktop,
+            "GenuineIntel",
+            NicSlot::Pch,
+        ),
+        (StealthPreset::RealisticLaptop, "GenuineIntel", NicSlot::Pch),
+        (StealthPreset::RealisticServer, "GenuineIntel", NicSlot::Pch),
+        (
+            StealthPreset::RealisticDesktop,
+            "AuthenticAMD",
+            NicSlot::Ich,
+        ),
+        (StealthPreset::RealisticLaptop, "AuthenticAMD", NicSlot::Ich),
+        (StealthPreset::RealisticServer, "AuthenticAMD", NicSlot::Ich),
+    ] {
+        assert_eq!(StealthProfile::realistic(kind, vendor).nic_slot(), slot);
+    }
+    assert_eq!(StealthProfile::transparent().nic_slot(), NicSlot::Ich);
+    // The interface names udev gives each slot, and back.
+    for (slot, address, name) in [
+        (NicSlot::Ich, "addr=0x19", "enp0s25"),
+        (NicSlot::Pch, "addr=0x1f.0x6", "enp0s31f6"),
+    ] {
+        assert_eq!((slot.address(), slot.interface()), (address, name));
+        assert_eq!(NicSlot::from_interface(name), Some(slot));
+    }
+    assert_eq!(NicSlot::from_interface("eth0"), None);
 }

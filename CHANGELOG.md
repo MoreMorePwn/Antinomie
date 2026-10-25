@@ -32,8 +32,8 @@ it runs.
   standard system utilities with recommends (exim4 for local mail, timesyncd,
   lsof, dig, man pages and documentation), tasksel and its language task,
   without curl and systemd-resolved; the package indexes stay. It takes its
-  address with ifupdown and dhcpcd on `enp0s25`: its VMs' NIC sits at the
-  onboard NIC's PCI slot whatever model the stealth profile picks.
+  address with ifupdown and dhcpcd on the interface the stealth profile's
+  machine would have.
   Its configuration files are the installer's (sources.list with
   non-free-firmware and deb-src, fstab, hosts, locale.gen, adjtime, the debconf
   answers, the installation's dpkg and apt logs), `/tmp` stays on disk without
@@ -71,6 +71,15 @@ it runs.
   sets the recorded hash again. **App dependencies** names the package with
   `guestfish` for each distribution (`libguestfs` on Fedora, openSUSE and
   Arch; it said `guestfs-tools` before), and resetting such a VM checks for it.
+- **Debian Minimal's NIC follows the stealth profile.** The network card sits
+  where the profile's machine has its built-in LAN: PCI 00:1f.6 (`enp0s31f6`,
+  Intel's I219) for the Intel OptiPlex, EliteDesk 800, Latitude and Supermicro
+  X12 profiles, 00:19.0 (`enp0s25`) for Transparent, AMD machines and edited
+  identities, the same headless or with a display. The interfaces stanza is
+  written per VM when it is created or reset and again when a saved profile
+  moves the card (refused while the VM has snapshots), no longer at build
+  time. VMs created before keep `enp0s25` until they are reset or their
+  profile moves the card.
 - **Rootless Debian builds.** Native (`--mode=unshare`) Debian image builds
   move files in and out of the new root as the invoking user, so they no longer
   fail on the private staging directory; the conformance trace suite also runs

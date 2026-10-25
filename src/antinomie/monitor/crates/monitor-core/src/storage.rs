@@ -1181,8 +1181,14 @@ pub(crate) fn reset_vm_disk(
     let result = (|| -> Result<(), String> {
         create_overlay(options, &staging, vm.disk_gib, bundle)?;
         let disk = staging.join("disk.qcow2");
+        let interface =
+            crate::guest_account::provisioned_interface(&bundle.stealth_support, &vm.stealth);
         let account = account
-            .map(|mut account| account.provision(&disk, vm.ram_mib).map(|()| account))
+            .map(|mut account| {
+                account
+                    .provision(&disk, vm.ram_mib, interface)
+                    .map(|()| account)
+            })
             .transpose()?;
         File::open(&disk)
             .and_then(|file| file.sync_all())

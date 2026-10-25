@@ -129,9 +129,15 @@ class DebianImageTests(unittest.TestCase):
         self.assertFalse(any(arg.startswith("--dpkgopt=") for arg in desktop))
         script = image.customization_script()
         self.assertIn("systemctl set-default multi-user.target", script)
-        # ifupdown and dhcpcd for the onboard NIC, as the installer leaves them.
-        self.assertIn("allow-hotplug enp0s25\niface enp0s25 inet dhcp\n", image.CONSOLE_INTERFACES)
-        self.assertIn("# The primary network interface", image.CONSOLE_INTERFACES)
+        # ifupdown's file as the installer leaves it, without the wired NIC's
+        # stanza: provisioning writes it for the VM's NIC slot.
+        self.assertTrue(image.CONSOLE_INTERFACES.endswith("auto lo\niface lo inet loopback\n"))
+        self.assertNotIn("# The primary network interface", image.CONSOLE_INTERFACES)
+        self.assertNotIn("allow-hotplug", image.CONSOLE_INTERFACES)
+        # The app's provisioning recognises the stanza by the installer's comment.
+        account = (Path(image.__file__).parent.parent / "src/antinomie/monitor/crates/monitor-core/"
+                   "src/guest_account.rs").read_text()
+        self.assertIn("/^# The primary network interface$/", account)
         self.assertNotIn("systemd-networkd", script)
         self.assertNotIn("systemd-resolved.service", script)
         self.assertNotIn("/etc/systemd/network/", script)

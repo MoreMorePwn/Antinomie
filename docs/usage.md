@@ -127,6 +127,13 @@ VM list and the Summary's **Stealth profile** card carry a **Stealth fallback**
 badge; and each start warns in **Activity** and adds the same lines as notes to
 every run of that boot, shown under the run's header.
 
+On Debian Minimal the network card sits where the profile's machine has its
+built-in LAN, so the interface has that machine's name: `enp0s31f6` for the
+Intel desktops, laptop and server (their I219 at PCI 00:1f.6), `enp0s25`
+otherwise. Changing the profile to a machine with another slot moves the card
+and rewrites the VM's network configuration when you save; a VM with snapshots
+keeps its slot (delete the snapshots, or pick a machine with the same chipset).
+
 ## 2. Create a VM
 Choose **New VM**, pick the installed base, and set name, CPU count, RAM and
 disk size. Debian bases (desktop and Minimal) also ask for a username and
