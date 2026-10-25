@@ -113,6 +113,18 @@ impl RouteKind {
         }
     }
 
+    /// [`explain`](Self::explain) in one short line, for a form's hint.
+    pub fn summary(self) -> &'static str {
+        match self {
+            RouteKind::Drop => "Nothing leaves; attempts are still captured.",
+            RouteKind::Internet => "Direct to the Internet, never the host or LAN.",
+            RouteKind::InetSim => "Fake DNS and services; nothing leaves the host.",
+            RouteKind::Tor => "Through Tor; UDP besides DNS is dropped.",
+            RouteKind::Vpn => "Through a WireGuard tunnel; UDP besides DNS is dropped.",
+            RouteKind::Socks5 => "Through your SOCKS5 proxy; UDP besides DNS is dropped.",
+        }
+    }
+
     /// Short name for tables and the run header.
     pub fn short(self) -> &'static str {
         match self {

@@ -11,6 +11,11 @@ application and base versions; existing VMs keep their pinned base.
 - QEMU (`qemu-system-x86_64`, `qemu-img`) with its GTK display backend;
   on Debian/Ubuntu install `qemu-system-x86 qemu-utils qemu-system-gui`.
   KVM (`/dev/kvm`) strongly recommended; TCG works without it
+- `guestfish` (libguestfs) for VMs of the Debian bases: creating, resetting
+  and growing their disks and setting up their account. It is in
+  `libguestfs-tools` on Debian, Ubuntu and Kali and in `libguestfs` on Fedora,
+  openSUSE and Arch; **Tools > App dependencies** checks it and names the
+  package for your distribution
 - Rust to build the app; building kernels and bases needs the tools listed in
   [CONTRIBUTING.md](../CONTRIBUTING.md). Host source builds also need
   `musl-tools` for the compatibility collector used by older guest bases;
@@ -121,6 +126,13 @@ installed base supports it; the VM dialog's Stealth row shows "N fall back"; the
 VM list and the Summary's **Stealth profile** card carry a **Stealth fallback**
 badge; and each start warns in **Activity** and adds the same lines as notes to
 every run of that boot, shown under the run's header.
+
+On Debian Minimal the network card sits where the profile's machine has its
+built-in LAN, so the interface has that machine's name: `enp0s31f6` for the
+Intel desktops, laptop and server (their I219 at PCI 00:1f.6), `enp0s25`
+otherwise. Changing the profile to a machine with another slot moves the card
+and rewrites the VM's network configuration when you save; a VM with snapshots
+keeps its slot (delete the snapshots, or pick a machine with the same chipset).
 
 ## 2. Create a VM
 Choose **New VM**, pick the installed base, and set name, CPU count, RAM and

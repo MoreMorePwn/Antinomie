@@ -284,7 +284,8 @@ def save_cached_kernel(cache, kept, kernel_profile):
     print(f"kernel cached in {cache}", flush=True)
 
 
-def build_image(profile, values, build, work, output, app_version=None, image_cache=None):
+def build_image(profile, values, build, work, output, app_version=None, image_cache=None,
+                inputs=None):
     recipe = KIT / "scripts" / PROFILES[profile][1]
     command = [sys.executable, recipe, "--kernel", build / "arch/x86/boot/bzImage",
                "--kernel-config", build / ".config", "--symbols", build / "symbols.json.xz",
@@ -306,9 +307,10 @@ def build_image(profile, values, build, work, output, app_version=None, image_ca
         # The minimal kernel profile builds everything in and installs no modules.
         if (build / "modules-install").is_dir() or PROFILES[profile][0] == "debian":
             command += ["--modules", build / "modules-install"]
-        # Debian's resolved configuration, for the console base's /boot.
-        if (build / "debian-config").is_file():
-            command += ["--debian-config", build / "debian-config"]
+        # The console base's /boot and module tree are Debian's own packages,
+        # kept with the other Debian inputs.
+        if profile == "debian-minimal" and inputs is not None:
+            command += ["--kernel-package-cache", inputs]
         if image_cache is not None:
             command += ["--rootfs-cache", image_cache]
     run(*command)
@@ -356,7 +358,7 @@ def main():
             require_space(args.work, image_space)
         stage("image")
         build_image(profile, values, build, args.work, args.output, app_version,
-                    args.image_cache)
+                    args.image_cache, args.inputs)
         if not args.keep_kernel_build:
             shutil.rmtree(build)
         stage("done")

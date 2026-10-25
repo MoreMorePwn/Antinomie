@@ -1181,8 +1181,14 @@ pub(crate) fn reset_vm_disk(
     let result = (|| -> Result<(), String> {
         create_overlay(options, &staging, vm.disk_gib, bundle)?;
         let disk = staging.join("disk.qcow2");
+        let interface =
+            crate::guest_account::provisioned_interface(&bundle.stealth_support, &vm.stealth);
         let account = account
-            .map(|mut account| account.provision(&disk, vm.ram_mib).map(|()| account))
+            .map(|mut account| {
+                account
+                    .provision(&disk, vm.ram_mib, interface)
+                    .map(|()| account)
+            })
             .transpose()?;
         File::open(&disk)
             .and_then(|file| file.sync_all())
@@ -1980,10 +1986,7 @@ mod tests {
         private_dir(&location.disk_directory).unwrap();
         create_overlay(&options, &location.disk_directory, vm.disk_gib, &bundle).unwrap();
         atomic_json(&location.disk_directory.join("config.json"), &vm).unwrap();
-        let account = crate::guest_account::GuestAccount::from_credentials(
-            crate::api::GuestCredentials::new("analyst".into(), "fixturepassword".into()).unwrap(),
-        )
-        .unwrap();
+        let account = crate::guest_account::fixture("analyst");
         account.save(&location.disk_directory).unwrap();
         crate::locations::publish(&options, &location).unwrap();
         let old = fs::read(location.disk_directory.join("disk.qcow2")).unwrap();

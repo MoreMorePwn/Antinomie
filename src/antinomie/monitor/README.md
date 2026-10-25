@@ -120,9 +120,11 @@ additions listed with reasons in `CONSOLE_PACKAGES`
 (`scripts/build-debian-image.py`; resolved inventory of the verified build in
 `src/antinomie/packaging/debian-minimal-trixie/packages.txt`) and the package
 indexes. It boots on the minimal kernel profile it shares with BusyBox (every
-driver it uses built in) and takes its address with ifupdown and dhcpcd on
-`enp0s25`: its VMs' NIC sits at the onboard NIC's PCI slot 00:19.0 whatever
-model the stealth profile picks.
+driver it uses built in) and takes its address with ifupdown and dhcpcd on the
+interface its stealth profile's machine would have: the NIC sits at that
+chipset's integrated LAN slot whatever model the profile picks (00:1f.6,
+`enp0s31f6`, for the Intel machines; 00:19.0, `enp0s25`, otherwise), and the
+stanza is written when the VM is created, reset or its profile moves the NIC.
 `/tmp` stays on the root disk (a `tmp.mount` drop-in, not a mask), as on BusyBox, so files a
 sample drops there are in the VM's disk for the Disks tab and disk dumps. The
 root is mounted by filesystem UUID, so a stealth profile may put the disk on
@@ -167,7 +169,8 @@ work/monitor-host/antinomie-monitor --install-base work/debian-xfce-base
 
 Alternatively use **File > Import base** with the completed bundle directory.
 Creating a Debian VM provisions its account with `guestfish`
-(libguestfs), which also gives the disk its own filesystem UUID.
+(libguestfs), which also gives the disk its own filesystem UUID. The guest's
+own `chpasswd` hashes the password (yescrypt on Debian 13).
 In **New VM**, choose **Debian 13 (Xfce)**, then enter a username, password and
 confirmation. Minimum resources are 2048 MiB RAM and 16 GiB disk; the RAM
 ceiling is 8192 MiB. Creation provisions the disk offline and
@@ -178,7 +181,7 @@ appears in QEMU's separate display window; program terminals stay in the monitor
 Passwords accept 8..128 UTF-8 bytes without NUL/CR/LF. They are transient,
 redacted in Debug output and absent from VM configuration, UI settings and
 recording metadata. A private mode-0600 `guest-account.json` retains the username
-and salted password hash for reset and duplication. Protect this file as
+and the salted password hash the guest made, for reset and duplication. Protect this file as
 sensitive credential material. Reset reapplies the original account, not later
 guest password changes; duplicate inherits the current disk and original reset
 credentials. Recording remains full-content: credentials typed into a monitored
