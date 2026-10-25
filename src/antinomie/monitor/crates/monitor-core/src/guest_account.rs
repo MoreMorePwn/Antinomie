@@ -14,7 +14,6 @@ use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-const HASH_TIMEOUT: Duration = Duration::from_secs(15);
 /// The groups the Debian installer adds its first user to, where they exist
 /// (sudo because root gets no password).
 const INSTALLER_GROUPS: &str =
@@ -22,6 +21,8 @@ const INSTALLER_GROUPS: &str =
 /// One libguestfs appliance run: the probe, or the provisioning itself
 /// (filesystem check, new UUID, directory reindex, account).
 const PROVISION_TIMEOUT: Duration = Duration::from_secs(240);
+/// What the guest prints before the account's password hash.
+const HASH_MARKER: &str = "hash:";
 
 #[cfg(test)]
 thread_local! {
@@ -112,19 +113,37 @@ pub(crate) fn valid_uuid(text: &str) -> bool {
         })
 }
 
-/// A yescrypt salt as crypt(3) makes it: 16 random bytes in crypt's base 64
-/// (the 22nd character carries the last two bits).
-fn yescrypt_salt() -> Result<String, String> {
-    const ALPHABET: &[u8; 64] = b"./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-    let mut bytes = [0u8; 22];
-    File::open("/dev/urandom")
-        .and_then(|mut source| source.read_exact(&mut bytes))
-        .map_err(|_| "cannot read /dev/urandom for the password salt")?;
-    Ok(bytes
-        .iter()
-        .enumerate()
-        .map(|(index, byte)| ALPHABET[usize::from(byte & if index < 21 { 63 } else { 3 })] as char)
-        .collect())
+/// The account's password as provisioning hands it to the guest's chpasswd,
+/// always on its standard input (a here-document), never in a file or on a
+/// command line.
+enum Password<'a> {
+    /// The password itself, for a new account: the guest hashes it with its
+    /// own PAM and libcrypt, as passwd does (yescrypt on Debian 13).
+    Plain(&'a str),
+    /// The hash the guest made when the account was created (a reset).
+    Hashed(&'a str),
+}
+
+/// The guest commands that set the password (from `password`) and print the
+/// hash the guest stored, after [`HASH_MARKER`].
+fn password_commands(username: &str, password: &Password) -> String {
+    let (flag, secret) = match password {
+        Password::Plain(password) => ("", *password),
+        Password::Hashed(hash) => (" -e", *hash),
+    };
+    format!(
+        "set -eu\nchpasswd{flag} <<'ACCOUNT'\n{username}:{secret}\nACCOUNT\n\
+         hash=$(getent shadow '{username}' | cut -d: -f2)\n\
+         printf '{HASH_MARKER}%s\\n' \"$hash\"\n"
+    )
+}
+
+/// The hash the guest printed after [`HASH_MARKER`].
+fn printed_hash(output: &[u8]) -> Option<String> {
+    String::from_utf8_lossy(output)
+        .lines()
+        .rev()
+        .find_map(|line| line.trim().strip_prefix(HASH_MARKER).map(str::to_owned))
 }
 
 /// A random 128-bit identifier in hex, as /etc/machine-id holds it.
@@ -172,6 +191,16 @@ fn fish_quote(text: &str) -> String {
     }
     quoted.push('"');
     quoted
+}
+
+/// A provisioned account for tests that need a record but no disk.
+#[cfg(test)]
+pub(crate) fn fixture(username: &str) -> GuestAccount {
+    GuestAccount {
+        username: username.into(),
+        password_hash: format!("$y$j9T${}${}", "s".repeat(22), "h".repeat(43)),
+        root_uuid: None,
+    }
 }
 
 /// The disk from the probe's output: the ext4 root among the
@@ -253,12 +282,7 @@ pub(crate) fn grow_disk(disk: &Path) -> Result<(), String> {
 }
 
 fn grow_disk_with(disk: &Path, executable: &Path) -> Result<(), String> {
-    let probe = run_private_with_timeout(
-        &mut guestfish(executable, disk, false),
-        PROBE,
-        true,
-        PROVISION_TIMEOUT,
-    )?;
+    let probe = run_private(&mut guestfish(executable, disk, false), PROBE, true)?;
     let layout = parse_probe(&String::from_utf8_lossy(&probe))?;
     let Some(root_last) = layout.root_last else {
         return Ok(());
@@ -277,7 +301,7 @@ fn grow_disk_with(disk: &Path, executable: &Path) -> Result<(), String> {
     script.extend(layout_commands(&layout, &plan, &uuid));
     script.push(String::new());
     run_private(
-        guestfish(executable, disk, true),
+        &mut guestfish(executable, disk, true),
         script.join("\n").as_bytes(),
         false,
     )?;
@@ -299,61 +323,43 @@ fn guestfish(executable: &Path, disk: &Path, writable: bool) -> Command {
 }
 
 impl GuestAccount {
-    /// The account with its password hashed as Debian 13 hashes it
-    /// (yescrypt, through the host's crypt(3) from Perl), or salted SHA-512
-    /// where the host's crypt has no yescrypt.
-    pub(crate) fn from_credentials(credentials: GuestCredentials) -> Result<Self, String> {
-        Self::yescrypt_with(credentials.clone(), Path::new("perl"))
-            .or_else(|_| Self::hash_with(credentials, Path::new("openssl")))
-    }
-    fn yescrypt_with(credentials: GuestCredentials, executable: &Path) -> Result<Self, String> {
-        let mut command = Command::new(executable);
-        command.args([
-            "-e",
-            "local $/; my $p = <STDIN>; my $h = crypt($p, $ARGV[0]); print $h if defined $h",
-            &format!("$y$j9T${}", yescrypt_salt()?),
-        ]);
-        Self::hashed(credentials, command)
-    }
-    fn hash_with(credentials: GuestCredentials, executable: &Path) -> Result<Self, String> {
-        let mut command = Command::new(executable);
-        command.args(["passwd", "-6", "-stdin"]);
-        Self::hashed(credentials, command)
-    }
-    fn hashed(credentials: GuestCredentials, command: Command) -> Result<Self, String> {
-        let hash = run_private(command, credentials.password.as_bytes(), true)?;
-        let password_hash = String::from_utf8(hash)
-            .map_err(|_| "invalid password hash output")?
-            .trim_end()
-            .to_owned();
-        let account = Self {
-            username: credentials.username,
-            password_hash,
-            root_uuid: None,
-        };
-        account.validate()?;
+    /// Create the account on a VM's new disk (see [`provision`](Self::provision)):
+    /// the guest's own chpasswd hashes the password, so the hash is the one
+    /// the guest's Debian makes (yescrypt on Debian 13), and the record keeps
+    /// that hash for later resets.
+    pub(crate) fn create(
+        credentials: GuestCredentials,
+        disk: &Path,
+        ram_mib: u32,
+    ) -> Result<Self, String> {
+        let mut account = Self::unprovisioned(credentials.username)?;
+        let executable = Self::provision_tool()?;
+        account.provision_with(
+            disk,
+            &executable,
+            ram_mib,
+            &Password::Plain(&credentials.password),
+        )?;
         Ok(account)
+    }
+    fn unprovisioned(username: String) -> Result<Self, String> {
+        validate_guest_username(&username)?;
+        Ok(Self {
+            username,
+            password_hash: String::new(),
+            root_uuid: None,
+        })
+    }
+    fn provision_tool() -> Result<std::path::PathBuf, String> {
+        #[cfg(test)]
+        if FAIL_PROVISION.with(|fail| fail.replace(false)) {
+            return Err("injected offline provisioning failure".into());
+        }
+        crate::dependencies::require_tool(Path::new("guestfish"), "libguestfs-tools")
     }
     fn validate(&self) -> Result<(), String> {
         validate_guest_username(&self.username)?;
-        let parts: Vec<_> = self.password_hash.split('$').collect();
-        let crypt64 = |part: &&str| {
-            part.bytes()
-                .all(|c| c.is_ascii_alphanumeric() || c == b'.' || c == b'/')
-        };
-        // $6$salt$hash (SHA-512) or $y$j9T$salt$hash (yescrypt).
-        let sha512 = parts.len() == 4
-            && parts[1] == "6"
-            && (1..=16).contains(&parts[2].len())
-            && parts[3].len() == 86;
-        let yescrypt = parts.len() == 5
-            && parts[1] == "y"
-            && parts[2] == "j9T"
-            && (1..=86).contains(&parts[3].len())
-            && parts[4].len() == 43;
-        if !parts[0].is_empty() || !(sha512 || yescrypt) || !parts[2..].iter().all(crypt64) {
-            return Err("invalid salted yescrypt or SHA-512 password hash".into());
-        }
+        validate_hash(&self.password_hash)?;
         if self
             .root_uuid
             .as_deref()
@@ -398,29 +404,25 @@ impl GuestAccount {
         Ok(account)
     }
     /// Make the base's disk this VM's own, offline: a root filesystem UUID
-    /// and directory hash seed of its own (fstab follows), then the account.
+    /// and directory hash seed of its own (fstab follows), and the account
+    /// with its recorded hash.
     pub(crate) fn provision(&mut self, disk: &Path, ram_mib: u32) -> Result<(), String> {
-        #[cfg(test)]
-        if FAIL_PROVISION.with(|fail| fail.replace(false)) {
-            return Err("injected offline provisioning failure".into());
-        }
-        let executable =
-            crate::dependencies::require_tool(Path::new("guestfish"), "libguestfs-tools")?;
-        self.provision_with(disk, &executable, ram_mib)
+        let executable = Self::provision_tool()?;
+        let hash = self.password_hash.clone();
+        self.provision_with(disk, &executable, ram_mib, &Password::Hashed(&hash))
     }
     fn provision_with(
         &mut self,
         disk: &Path,
         executable: &Path,
         ram_mib: u32,
+        password: &Password,
     ) -> Result<(), String> {
-        self.validate()?;
-        let probe = run_private_with_timeout(
-            &mut guestfish(executable, disk, false),
-            PROBE,
-            true,
-            PROVISION_TIMEOUT,
-        )?;
+        validate_guest_username(&self.username)?;
+        if let Password::Hashed(hash) = password {
+            validate_hash(hash)?;
+        }
+        let probe = run_private(&mut guestfish(executable, disk, false), PROBE, true)?;
         let layout = parse_probe(&String::from_utf8_lossy(&probe))?;
         let uuid = random_uuid()?;
         let plan = layout
@@ -429,27 +431,45 @@ impl GuestAccount {
         let script = self.script(
             &layout,
             plan.as_ref(),
-            &uuid,
-            &random_uuid()?,
-            &random_hex()?,
+            &Identity {
+                uuid: &uuid,
+                swap_uuid: &random_uuid()?,
+                machine_id: &random_hex()?,
+            },
+            password,
         );
-        run_private(guestfish(executable, disk, true), script.as_bytes(), false)?;
+        let output = run_private(
+            &mut guestfish(executable, disk, true),
+            script.as_bytes(),
+            true,
+        )?;
+        let hash =
+            printed_hash(&output).ok_or("the guest did not report the account's password hash")?;
+        validate_hash(&hash)?;
+        if matches!(password, Password::Hashed(stored) if *stored != hash) {
+            return Err("the guest did not keep the account's password hash".into());
+        }
         File::open(disk)
             .and_then(|file| file.sync_all())
             .map_err(|_| "cannot sync provisioned disk".to_owned())?;
+        self.password_hash = hash;
         self.root_uuid = Some(uuid);
         Ok(())
     }
-    /// The guestfish commands. The hash crosses as a file the guest's
-    /// chpasswd reads, never in a guest command line.
+    /// The guestfish commands. The password reaches the guest's chpasswd as
+    /// a here-document of the `sh` command, never as a file on the disk.
     fn script(
         &self,
         layout: &DiskLayout,
         plan: Option<&PartitionPlan>,
-        uuid: &str,
-        swap_uuid: &str,
-        machine_id: &str,
+        identity: &Identity,
+        password: &Password,
     ) -> String {
+        let Identity {
+            uuid,
+            swap_uuid,
+            machine_id,
+        } = *identity;
         let username = &self.username;
         let root = &layout.root;
         let staging = format!("/root/.provision-{}", storage::unique_id());
@@ -477,7 +497,6 @@ impl GuestAccount {
              for group in {INSTALLER_GROUPS}; do\n\
              \tif getent group \"$group\" >/dev/null; then adduser --quiet '{username}' \"$group\"; fi\n\
              done\n\
-             chpasswd -e < {staging}/password\n\
              passwd -l root >/dev/null\n"
         );
         // A partitioned disk: its swap partition in fstab and as the resume
@@ -528,13 +547,11 @@ impl GuestAccount {
             format!("mount {root} /"),
             format!("mkdir {staging}"),
             format!("chmod 0700 {staging}"),
-            format!(
-                "write {staging}/password {}",
-                fish_quote(&format!("{username}:{}", self.password_hash))
-            ),
-            format!("chmod 0600 {staging}/password"),
             format!("write {staging}/provision.sh {}", fish_quote(&guest)),
             format!("sh {}", fish_quote(&format!("sh {staging}/provision.sh"))),
+            // The password, set and hashed by the guest itself; it prints
+            // the hash it stored.
+            format!("sh {}", fish_quote(&password_commands(username, password))),
             // The installation's machine ID, its own per VM.
             format!(
                 "write /etc/machine-id {}",
@@ -547,13 +564,42 @@ impl GuestAccount {
     }
 }
 
-fn run_private(mut command: Command, input: &[u8], capture_hash: bool) -> Result<Vec<u8>, String> {
-    let timeout = if capture_hash {
-        HASH_TIMEOUT
-    } else {
-        PROVISION_TIMEOUT
+/// The identifiers provisioning gives a disk.
+#[derive(Clone, Copy)]
+struct Identity<'a> {
+    uuid: &'a str,
+    swap_uuid: &'a str,
+    machine_id: &'a str,
+}
+
+/// A password hash as crypt(3) writes it to /etc/shadow: yescrypt
+/// (`$y$j9T$salt$hash`, Debian 11 on) or salted SHA-512 (`$6$`, the hash
+/// Antinomie made on the host before 0.7.1).
+fn validate_hash(hash: &str) -> Result<(), String> {
+    let parts: Vec<_> = hash.split('$').collect();
+    let crypt64 = |part: &&str| {
+        part.bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'.' || c == b'/')
     };
-    run_private_with_timeout(&mut command, input, capture_hash, timeout)
+    let sha512 = parts.len() == 4
+        && parts[1] == "6"
+        && (1..=16).contains(&parts[2].len())
+        && parts[3].len() == 86;
+    let yescrypt = parts.len() == 5
+        && parts[1] == "y"
+        && parts[2] == "j9T"
+        && (1..=86).contains(&parts[3].len())
+        && parts[4].len() == 43;
+    if !parts[0].is_empty() || !(sha512 || yescrypt) || !parts[2..].iter().all(crypt64) {
+        return Err("invalid salted yescrypt or SHA-512 password hash".into());
+    }
+    Ok(())
+}
+
+/// Run an offline tool with `input` on its standard input, its output
+/// discarded or (`capture`) returned, within one appliance run's time.
+fn run_private(command: &mut Command, input: &[u8], capture: bool) -> Result<Vec<u8>, String> {
+    run_private_with_timeout(command, input, capture, PROVISION_TIMEOUT)
 }
 
 fn terminate_owned_group(child: &mut Child) -> Result<(), String> {
@@ -779,18 +825,23 @@ mod tests {
     fn input_of(root: &Path) -> String {
         fs::read_to_string(root.join("input")).unwrap()
     }
+    /// The hash the fake guest reports, as Debian 13's chpasswd makes one.
+    fn guest_hash() -> String {
+        format!("$y$j9T${}${}", "s".repeat(22), "h".repeat(43))
+    }
     fn account() -> GuestAccount {
         GuestAccount {
             username: "analyst".into(),
-            password_hash: format!("$6$fixturesalt${}", "a".repeat(86)),
+            password_hash: guest_hash(),
             root_uuid: None,
         }
     }
     /// A guestfish stand-in: the read-only probe lists `filesystems`, the
-    /// writable run records its argv and commands.
+    /// writable run records its argv and commands and prints the hash the
+    /// guest stored, as the provisioning script's last `sh` does.
     fn fake_tool(directory: &Path, fail: bool, filesystems: &str) -> std::path::PathBuf {
         let path = directory.join("fake-tool");
-        fs::write(&path, format!("#!/bin/sh\nroot=$(dirname \"$0\")\nif [ \"$1\" = --ro ]; then cat > \"$root/probe\"; printf '{filesystems}'; exit 0; fi\nprintf '%s\\n' \"$@\" > \"$root/argv\"\ncat > \"$root/input\"\ncat \"$root/input\" >&2\nexit {}\n", if fail { 1 } else { 0 })).unwrap();
+        fs::write(&path, format!("#!/bin/sh\nroot=$(dirname \"$0\")\nif [ \"$1\" = --ro ]; then cat > \"$root/probe\"; printf '{filesystems}'; exit 0; fi\nprintf '%s\\n' \"$@\" > \"$root/argv\"\ncat > \"$root/input\"\ncat \"$root/input\" >&2\nprintf 'hash:%s\\n' '{}'\nexit {}\n", guest_hash(), if fail { 1 } else { 0 })).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
         path
     }
@@ -800,10 +851,18 @@ mod tests {
         storage::private_dir(&root).unwrap();
         let disk = root.join("disk.qcow2");
         fs::write(&disk, b"unchanged disk fixture").unwrap();
-        let mut account = account();
+        // A new account: the guest hashes the password itself.
+        let secret = "private-provision-password";
+        let mut account = GuestAccount::unprovisioned("analyst".into()).unwrap();
         account
-            .provision_with(&disk, &fake_tool(&root, false, WHOLE_DISK), 1024)
+            .provision_with(
+                &disk,
+                &fake_tool(&root, false, WHOLE_DISK),
+                1024,
+                &Password::Plain(secret),
+            )
             .unwrap();
+        assert_eq!(account.password_hash, guest_hash());
         let uuid = account.root_uuid().unwrap().to_owned();
         assert!(valid_uuid(&uuid), "{uuid}");
         assert_eq!(
@@ -814,14 +873,20 @@ mod tests {
         assert!(!input_of(&root).contains("part-"));
         let argv = fs::read_to_string(root.join("argv")).unwrap();
         assert!(argv.starts_with("--rw\n--no-progress-bars\n--format=qcow2\n-a\n"));
-        assert!(!argv.contains(&account.password_hash));
+        assert!(!argv.contains(secret));
         assert!(!argv.contains(&account.username));
-        let input = fs::read_to_string(root.join("input")).unwrap();
-        assert!(input.contains(&account.password_hash));
-        // The hash reaches the guest only as a file chpasswd reads.
-        for line in input.lines().filter(|line| !line.contains("/password ")) {
-            assert!(!line.contains(&account.password_hash), "{line}");
-        }
+        let input = input_of(&root);
+        // The password reaches only the guest's chpasswd, on its standard
+        // input: never in a file written to the disk.
+        let carrying: Vec<_> = input.lines().filter(|line| line.contains(secret)).collect();
+        assert_eq!(carrying.len(), 1, "{input}");
+        assert!(
+            carrying[0].starts_with("sh \"set -eu\\nchpasswd <<'ACCOUNT'\\nanalyst:private-provision-password\\nACCOUNT\\n"),
+            "{}",
+            carrying[0]
+        );
+        assert!(!input.contains("/password"));
+        assert!(!input.contains("chpasswd -e"));
         // A new identity before the root is mounted, then the account.
         let position = |text: &str| input.find(text).unwrap_or_else(|| panic!("{text}"));
         assert!(position("e2fsck-f /dev/sda\n") < position(&format!("set-uuid /dev/sda {uuid}")));
@@ -829,6 +894,7 @@ mod tests {
             position("-debug sh \"echo ssv hash_seed random | debugfs -w -f - /dev/sda")
                 < position("mount /dev/sda /")
         );
+        assert!(position("provision.sh\"\n") < position("chpasswd"));
         assert!(input.contains(&format!("UUID={uuid}\\\\1|' /etc/fstab")));
         // The installer's adduser: the full name, its groups (where they
         // exist), a private home; the installation's own machine ID.
@@ -849,20 +915,50 @@ mod tests {
         assert!(!input.contains("NOPASSWD"));
         assert!(!input.contains("sudoers"));
         assert!(!input.to_lowercase().contains("antinomie"));
-        // Another provisioning, another identity.
-        let mut again = self::account();
+        // A reset sets the recorded hash again, and gets a new identity.
+        let mut again = account.clone();
         again
-            .provision_with(&disk, &fake_tool(&root, false, WHOLE_DISK), 1024)
+            .provision_with(
+                &disk,
+                &fake_tool(&root, false, WHOLE_DISK),
+                1024,
+                &Password::Hashed(&guest_hash()),
+            )
             .unwrap();
         assert_ne!(again.root_uuid(), Some(uuid.as_str()));
+        let input = input_of(&root);
+        assert!(input.contains(&format!(
+            "chpasswd -e <<'ACCOUNT'\\nanalyst:{}\\nACCOUNT",
+            guest_hash()
+        )));
+        assert!(!input.contains(secret));
+        // The guest keeping another hash than the recorded one is an error.
+        let other = format!("$6$fixturesalt${}", "a".repeat(86));
+        assert!(
+            account
+                .provision_with(
+                    &disk,
+                    &fake_tool(&root, false, WHOLE_DISK),
+                    1024,
+                    &Password::Hashed(&other),
+                )
+                .unwrap_err()
+                .contains("did not keep")
+        );
         let error = account
-            .provision_with(&disk, &fake_tool(&root, true, WHOLE_DISK), 1024)
+            .provision_with(
+                &disk,
+                &fake_tool(&root, true, WHOLE_DISK),
+                1024,
+                &Password::Plain(secret),
+            )
             .unwrap_err();
+        assert!(!error.contains(secret));
         assert!(!error.contains(&account.password_hash));
         assert!(!format!("{account:?}").contains(&account.password_hash));
         assert!(
             account
-                .provision_with(&disk, &root.join("missing"), 1024)
+                .provision_with(&disk, &root.join("missing"), 1024, &Password::Plain(secret),)
                 .is_err()
         );
         // No single ext4 root: nothing is written.
@@ -874,7 +970,12 @@ mod tests {
         ] {
             assert!(
                 account
-                    .provision_with(&disk, &fake_tool(&root, false, listing), 1024)
+                    .provision_with(
+                        &disk,
+                        &fake_tool(&root, false, listing),
+                        1024,
+                        &Password::Plain(secret),
+                    )
                     .is_err()
             );
             assert!(!root.join("input").exists());
@@ -911,7 +1012,12 @@ mod tests {
         fs::write(&disk, b"disk").unwrap();
         let mut account = account();
         account
-            .provision_with(&disk, &fake_tool(&root, false, PARTITIONED), 1024)
+            .provision_with(
+                &disk,
+                &fake_tool(&root, false, PARTITIONED),
+                1024,
+                &Password::Hashed(&guest_hash()),
+            )
             .unwrap();
         let input = input_of(&root);
         let position = |text: &str| input.find(text).unwrap_or_else(|| panic!("{text}"));
@@ -948,29 +1054,36 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
-    fn passwords_are_hashed_as_debian_13_hashes_them() {
-        let credentials = GuestCredentials::new("analyst".into(), "x".repeat(20)).unwrap();
-        let account = GuestAccount::from_credentials(credentials.clone()).unwrap();
-        // yescrypt where the host's crypt(3) has it (libxcrypt), else SHA-512.
-        if GuestAccount::yescrypt_with(credentials.clone(), Path::new("perl")).is_ok() {
-            assert!(account.password_hash.starts_with("$y$j9T$"));
-        }
-        assert!(GuestAccount::yescrypt_with(credentials, Path::new("/nonexistent/perl")).is_err());
-        let salt = yescrypt_salt().unwrap();
-        assert_eq!(salt.len(), 22);
-        assert!(matches!(salt.as_bytes()[21], b'.' | b'/' | b'0' | b'1'));
-        let mut record = self::account();
-        record.password_hash = format!("$y$j9T${}${}", "a".repeat(22), "b".repeat(43));
-        record.validate().unwrap();
+    fn the_guest_reports_the_hash_it_stored() {
+        // The guest's chpasswd hashes (yescrypt on Debian 13); the record
+        // also takes the SHA-512 hashes of disks provisioned before 0.7.1.
+        validate_hash(&guest_hash()).unwrap();
+        validate_hash(&format!("$6$fixturesalt${}", "a".repeat(86))).unwrap();
         for bad in [
             format!("$y$j9T${}${}", "a".repeat(22), "b".repeat(42)),
             format!("$y$jFT${}${}", "a".repeat(22), "b".repeat(43)),
             format!("$y$j9T${}${}", "a:".repeat(11), "b".repeat(43)),
             format!("$5$salt${}", "a".repeat(43)),
+            "!".into(),
+            String::new(),
         ] {
-            record.password_hash = bad;
-            assert!(record.validate().is_err());
+            assert!(validate_hash(&bad).is_err(), "{bad}");
         }
+        assert_eq!(
+            printed_hash(format!("noise\nhash:{}\n", guest_hash()).as_bytes()),
+            Some(guest_hash())
+        );
+        assert_eq!(printed_hash(b"no marker\n"), None);
+        // A password with shell and here-document characters stays one
+        // line of chpasswd's input; the hash goes in with -e.
+        let commands = password_commands("analyst", &Password::Plain("a'b\"$(x)`ACCOUNT"));
+        assert!(commands.contains("chpasswd <<'ACCOUNT'\nanalyst:a'b\"$(x)`ACCOUNT\nACCOUNT\n"));
+        let commands = password_commands("analyst", &Password::Hashed(&guest_hash()));
+        assert!(commands.contains(&format!(
+            "chpasswd -e <<'ACCOUNT'\nanalyst:{}\n",
+            guest_hash()
+        )));
+        assert!(GuestAccount::unprovisioned("root".into()).is_err());
     }
     #[test]
     fn probe_finds_the_root_on_a_whole_disk_or_a_partition() {
@@ -1041,20 +1154,5 @@ mod tests {
         .unwrap();
         assert!(!GuestAccount::load(&root).unwrap_err().contains("123456789"));
         fs::remove_dir_all(root).unwrap();
-    }
-    #[test]
-    fn openssl_preserves_all_128_password_bytes_and_randomizes_salt() {
-        let mut command = Command::new("openssl");
-        command.args(["passwd", "-6", "-stdin", "-salt", "fixture"]);
-        let first = run_private(command, "x".repeat(128).as_bytes(), true).unwrap();
-        let mut command = Command::new("openssl");
-        command.args(["passwd", "-6", "-stdin", "-salt", "fixture"]);
-        let second =
-            run_private(command, format!("{}y", "x".repeat(127)).as_bytes(), true).unwrap();
-        assert_ne!(first, second);
-        let credentials = GuestCredentials::new("analyst".into(), "x".repeat(128)).unwrap();
-        let first = GuestAccount::from_credentials(credentials.clone()).unwrap();
-        let second = GuestAccount::from_credentials(credentials).unwrap();
-        assert_ne!(first.password_hash, second.password_hash);
     }
 }

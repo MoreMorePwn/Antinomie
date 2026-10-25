@@ -762,9 +762,11 @@ impl Worker {
             storage::private_dir(dir).map_err(|e| e.to_string())?;
             storage::create_overlay(&self.options, dir, vm.disk_gib, &bundle)?;
             if let Some(credentials) = credentials {
-                let mut account =
-                    crate::guest_account::GuestAccount::from_credentials(credentials)?;
-                account.provision(&dir.join("disk.qcow2"), vm.ram_mib)?;
+                let account = crate::guest_account::GuestAccount::create(
+                    credentials,
+                    &dir.join("disk.qcow2"),
+                    vm.ram_mib,
+                )?;
                 account.save(dir)?;
             }
             storage::atomic_json(&dir.join("config.json"), &vm)?;

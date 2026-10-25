@@ -233,7 +233,7 @@ pub fn check(options: &BackendOptions) -> Report {
         tool(
             DebianAccount,
             "guestfish",
-            "Create Debian guest accounts",
+            "Create and reset VMs of the Debian bases (their account, disk and network card)",
             Path::new("guestfish"),
             "On Debian/Ubuntu: sudo apt install libguestfs-tools",
         ),

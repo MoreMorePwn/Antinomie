@@ -3177,9 +3177,17 @@ on the serial port: its VMs ask for a serial console
 command line that names none; the app never sets it), since a readiness probe
 run would break the suite's whole-boot packet accounting. Provisioning creates the account as the installer's
 adduser does (full name `<Name>,,,`, the installer's groups where they exist,
-a 0700 home), with a yescrypt password hash (Perl's `crypt` through the host's
-libxcrypt; salted SHA-512 where that has no yescrypt), and writes a machine ID
-of the VM's own.
+a 0700 home) and writes a machine ID of the VM's own. The guest hashes the
+password itself: provisioning runs the guest's `chpasswd` (through PAM, as
+`passwd` does, so Debian 13 stores yescrypt `$y$`) with the password in a
+here-document of the guestfish `sh` command, never in a file on the disk or a
+command line, and the command prints the hash the guest stored
+(`password_commands`, `printed_hash`). The record keeps that hash; a reset sets
+it again with `chpasswd -e` and checks the guest kept it. Records written
+before 0.7.1 keep their host-made SHA-512 hashes (`validate_hash` takes both).
+The host needs no crypt of its own, only `guestfish` (App dependencies:
+`libguestfs-tools` on Debian, Ubuntu and Kali, `libguestfs` on Fedora,
+openSUSE and Arch).
 
 The disk and kernel are an installed PC's. The base disk carries an MBR table
 with one bootable root partition at 1 MiB (`console_disk`; mkfs and every
@@ -3252,7 +3260,8 @@ local password login and sudo, root locked, SSH disabled, no autologin. Offline
 libguestfs provisioning precedes publication. Passwords must not be serialized
 in configuration/preferences/recordings, displayed in Debug, or passed in argv.
 A private0600 per-VM username/salted-hash provisioning record can support reset
-and duplicate; no plaintext retained. Reset reapplies original credentials and
+and duplicate; no plaintext retained. The hash is the one the guest's own
+chpasswd made at creation. Reset reapplies original credentials and
 publishes replacement disk only after provisioning succeeds. Existing VMs are
 not automatically converted or modified.
 

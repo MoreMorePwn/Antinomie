@@ -39,8 +39,8 @@ it runs.
   answers, the installation's dpkg and apt logs), `/tmp` stays on disk without
   a mask, and it boots with GRUB's command line for Debian (`root=UUID=` of
   the VM's own disk, `ro quiet`, no serial console, no `panic=-1`). Accounts
-  get the installer's groups and full-name field and a yescrypt password hash,
-  and each VM its own machine ID.
+  get the installer's groups and full-name field, and each VM its own machine
+  ID.
   Its disk is partitioned as the installer partitions it (MBR, the root at
   1 MiB, a swap partition sized for the VM's RAM, laid out when the VM is
   created or its disk grown), it carries GRUB and its kernel as Debian's
@@ -51,6 +51,14 @@ it runs.
   kernel and gets the same; the conformance goldens follow it (fanotify and
   landlock answer, AppArmor's bind error, HZ 250, the LSM list) and name the
   root disk by role so one golden serves both bases.
+- **Debian accounts hashed by the guest.** A new Debian VM's password is
+  hashed by the guest's own `chpasswd` (PAM and libcrypt), so it is stored as
+  Debian 13 stores it (yescrypt, `$y$`) whatever the host's crypt supports; the
+  host no longer hashes it with Perl or OpenSSL. The password reaches the guest
+  only on chpasswd's standard input, never as a file on the disk, and a reset
+  sets the recorded hash again. **App dependencies** names the package with
+  `guestfish` for each distribution (`libguestfs` on Fedora, openSUSE and
+  Arch; it said `guestfs-tools` before), and resetting such a VM checks for it.
 - **Rootless Debian builds.** Native (`--mode=unshare`) Debian image builds
   move files in and out of the new root as the invoking user, so they no longer
   fail on the private staging directory; the conformance trace suite also runs

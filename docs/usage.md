@@ -11,6 +11,11 @@ application and base versions; existing VMs keep their pinned base.
 - QEMU (`qemu-system-x86_64`, `qemu-img`) with its GTK display backend;
   on Debian/Ubuntu install `qemu-system-x86 qemu-utils qemu-system-gui`.
   KVM (`/dev/kvm`) strongly recommended; TCG works without it
+- `guestfish` (libguestfs) for VMs of the Debian bases: creating, resetting
+  and growing their disks and setting up their account. It is in
+  `libguestfs-tools` on Debian, Ubuntu and Kali and in `libguestfs` on Fedora,
+  openSUSE and Arch; **Tools > App dependencies** checks it and names the
+  package for your distribution
 - Rust to build the app; building kernels and bases needs the tools listed in
   [CONTRIBUTING.md](../CONTRIBUTING.md). Host source builds also need
   `musl-tools` for the compatibility collector used by older guest bases;
