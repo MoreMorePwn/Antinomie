@@ -25,6 +25,11 @@ mod view;
 mod widget;
 mod window;
 
+/// The icon the graph draws for a finding category.
+pub(super) fn category_icon(category: rules::Category) -> &'static str {
+    paint::icon(category.index() as u8)
+}
+
 #[cfg(test)]
 mod bench;
 #[cfg(test)]
