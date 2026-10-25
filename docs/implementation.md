@@ -2364,7 +2364,8 @@ Debian base's modules and the bundles' `kernel_version`.
 **Base defaults.** BusyBox and Debian bases default to the hostname `debian`
 (the Debian installer's default), the BusyBox base names uid 1000 `user`
 (home `/home/user/`), the Debian account form proposes `user`, and neither
-image gives the root filesystem a label (nothing mounts it by label).
+image gives the root filesystem a label (nothing mounts it by label; Debian
+Minimal mounts it by UUID).
 
 **Known limits** (what neither a launch option nor the guest kernel removes
 without a cost to observation or a separate design):
@@ -2431,7 +2432,7 @@ not part of the identity), which the image builders compute:
 | Value | Written when |
 | --- | --- |
 | `uefi` | The kernel has `EFI` and `EFI_STUB` and its bzImage holds the EFI stub's bootstrap page claim (0052, found by its warning text) |
-| `sata`, `nvme` | The initrd searches that bus for the root disk and the kernel has `ATA SATA_AHCI SCSI BLK_DEV_SD`, or `BLK_DEV_NVME`, built in (BusyBox bases; the minimal kernel profile now builds NVMe in) |
+| `sata`, `nvme` | The initrd searches that bus for the root disk and the kernel has `ATA SATA_AHCI SCSI BLK_DEV_SD`, or `BLK_DEV_NVME`, built in (BusyBox and Debian Minimal bases; the minimal kernel profile now builds NVMe in) |
 | `dhcp` | The guest takes its address from DHCP (BusyBox bases now; Debian desktop bases through NetworkManager, Debian Minimal through systemd-networkd) |
 
 The host offers OVMF when QEMU's firmware descriptors (the user's and
@@ -3061,17 +3062,28 @@ and name), systemd-resolved with a tmpfiles link for `/etc/resolv.conf`,
 `multi-user.target`, `/tmp` on the root disk (`tmp.mount` masked, unlike
 Debian 13's default tmpfs: dropped files reach the VM's disk, and the
 conformance cases and goldens, which expect BusyBox's on-disk `/tmp`, pass
-unchanged), a 4 GiB root. Everything else (account removal, masked
-SSH and guest agents, locked root, apt check, provenance, initrd, fstab and
-`kernel_append`) is the desktop path.
+unchanged), a 4 GiB root. Its root is found without naming a device: fstab
+mounts `UUID=<root uuid>` (a fresh UUID per bootstrap, given to `mkfs.ext4
+-U` and read back from a cached root filesystem's fstab; the build checks
+fstab and the filesystem agree), and `kernel_append` is BusyBox's
+`console=tty0 console=ttyS0 panic=-1` without `root=` (the bootstrap initrd
+mounts the VM's only disk, `/dev/vda`, `/dev/sda` or `/dev/nvme0n1`). A UUID,
+not a label, because a Debian install mounts by UUID and a fixed label would
+name the sandbox to a sample reading `/dev/disk/by-label`. Everything else
+(account removal, masked SSH and guest agents, locked root, apt check,
+provenance, initrd) is the desktop path; the desktops keep `/dev/vda` in
+fstab and `root=/dev/vda`.
 
 Its kernel is the **minimal** profile, the BusyBox kernel: it builds in every
 driver and systemd prerequisite the console base uses (`CONSOLE_BUILTIN` is
 checked when no modules are given), so the base carries no modules and a
 cached BusyBox kernel serves it (`kit::kernel_cache(.., "minimal")`). The
 recipe accepts a modular kernel without `--modules` only for this base and
-only when `CONSOLE_BUILTIN` is built in. `stealth_support` stays `uefi, dhcp`
-like the desktops (the root is `/dev/vda` in fstab). The root filesystem cache
+only when `CONSOLE_BUILTIN` is built in. `stealth_support` is decided by the
+kernel as for BusyBox (`root_buses` only for this base): the minimal kernel
+builds `ATA SATA_AHCI SCSI BLK_DEV_SD` and `BLK_DEV_NVME` in, so the base
+offers `uefi, sata, nvme, dhcp`; the desktops, whose controllers are Debian
+modules, stay `uefi, dhcp`. The root filesystem cache
 is `images/rootfs-debian-minimal.tar`.
 
 Rootless builds: mmdebstrap's hooks run as the user namespace's root, a
