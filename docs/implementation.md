@@ -1792,6 +1792,25 @@ torrc contents, library path, bootstrap parsing, a tor that exits, stalls or
 does not speak SOCKS, stop on release). The managed tools are tested with the
 pins and unpacking only; no test downloads anything. No real Tor, VPN or Internet traffic is used.
 
+### Guest patch series by topic (0.7.1)
+
+The 60 guest patches, written in development order (0004 alone was 40% of the
+series, 23 had no description, io_uring was spread over five patches), are
+regrouped into fourteen topic patches, each with a description of what it adds,
+why, which kernel files it hooks and why there, and its contract revision. The
+licence patch for the shared headers stays separate (0002). Mapping, file map,
+how the two copies relate and how to verify a rewrite:
+`src/antinomie/patches/README.md`. Series numbers elsewhere in this document
+and in `CHANGELOG.md` before this entry are the old ones.
+
+The patched source tree matches the 60-patch one (checked by applying both to
+the pristine Debian source and `diff -r`; see below for the one comment), so
+the contract stays at revision 17. The series hash changes, so `CONFIG_ANTINOMIE_SOURCE_ID` of a new
+kernel and the kernel cache key do; hosts do not pin it. Each patch builds on
+the ones before it. One comment in `native_capture.c` named an internal ticket;
+it now reads "never read, by design", the only difference from the 60-patch
+tree.
+
 ### Accepted host UI performance (0.6.2)
 
 Remove render-time filesystem checks for host chooser availability; resolve

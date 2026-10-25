@@ -1,0 +1,3394 @@
+From 7a72e9b9633ca06bc5ae790403db6bff20aa877b Mon Sep 17 00:00:00 2001
+From: MikiMiku <jonathanirvinjo@gmail.com>
+Date: Mon, 26 Oct 2026 09:07:00 +0700
+Subject: [PATCH] antinomie: observe io_uring and AIO requests
+
+A program can do its I/O without a system call per operation: through
+an io_uring ring it fills itself, or through Linux AIO. The work then
+happens later, often on another thread, and the system call that
+started it shows little of it. Record each request as it moves through
+the kernel.
+
+A request gets an id and a series of records published under its
+submitter's identity: the submission (the SQE or iocb as the kernel
+copied it), acceptance or rejection, its input payload at issue, its
+output payload and result at completion, cancellation, and the final
+record. Typed operands describe what an opcode points to (paths,
+socket addresses, epoll events, timeouts, futex waits, provided
+buffers, file table updates, socket commands); a command it does not
+know is an explicit no-decoder gap. Payloads are read in the
+submitter's address space by whichever task runs the request (an io-wq
+worker or the SQPOLL thread shares it). An AIO read that completes in
+interrupt context, where its buffers cannot be read, is held in a
+64-entry reap table and its output is read when io_getevents() hands
+the event back, from a copy of the iovec array the kernel imported.
+Submissions from the SQPOLL thread or from outside the ring creator's
+thread group are attributed to the creator, and an entry only one
+process can have written is marked as written by that process.
+
+Records are staged in a queue and published by a worker that leaves
+room in the CPU's ring for system call events (half of it, or an eighth
+when the host asks senders to wait); a task that may sleep waits for
+room in the queue instead of losing its record. The run counts requests
+in flight and their losses, and RUN_STATUS reports ASYNC_COMPLETE only
+when every request was observed. async_capture.c decodes the arguments
+of io_uring_setup, io_uring_enter, io_uring_register and the AIO system
+calls; the recorder learns to publish a record on behalf of a request's
+origin, with that task's identity and sequence counters.
+
+Hooked kernel files:
+- io_uring/io_uring.c: ring creation and teardown, submission,
+  completion, cancellation and request free, where a request's life
+  begins and ends.
+- io_uring/io_uring.h holds the helpers the opcode files use, and
+  io_uring/{epoll,fs,futex,kbuf,net,openclose,rsrc,rw,statx,timeout,
+  uring_cmd,waitid,xattr}.c describe their operands and payloads in
+  their prep and issue functions, the only places that know them.
+- include/linux/io_uring_types.h adds the request's state at the end
+  of struct io_kiocb (cmd_to_io_kiocb() needs ->cmd at offset 0, which
+  a BUILD_BUG_ON keeps) and the ring creator to struct io_ring_ctx.
+- fs/aio.c: submission, completion under the completion lock (with the
+  ring slot it used), the reap in io_getevents(), and the context's
+  and the address space's teardown.
+- include/linux/sched.h and kernel/fork.c give each task event and
+  packet counters, so its own events and the records published for its
+  requests share one sequence.
+
+Contract: async records are part of application protocol 1. The
+attribution flag PRODUCER_PROCESS and the async payload rules are
+additive within revision 17.
+---
+ fs/aio.c                          |  66 ++-
+ include/linux/antinomie_monitor.h | 104 ++++
+ include/linux/io_uring_types.h    |  11 +
+ include/linux/sched.h             |   2 +
+ io_uring/epoll.c                  |   3 +
+ io_uring/fs.c                     |  16 +
+ io_uring/futex.c                  |   6 +
+ io_uring/io_uring.c               | 108 ++++
+ io_uring/io_uring.h               |  74 +++
+ io_uring/kbuf.c                   |   2 +
+ io_uring/net.c                    | 112 +++-
+ io_uring/net.h                    |   5 +
+ io_uring/openclose.c              |   4 +
+ io_uring/rsrc.c                   |   7 +
+ io_uring/rw.c                     |  27 +
+ io_uring/statx.c                  |   5 +
+ io_uring/timeout.c                |   6 +
+ io_uring/uring_cmd.c              |  47 +-
+ io_uring/waitid.c                 |   6 +
+ io_uring/xattr.c                  |  20 +
+ kernel/antinomie/Makefile         |   3 +-
+ kernel/antinomie/async.c          | 911 ++++++++++++++++++++++++++++++
+ kernel/antinomie/async.h          |  64 +++
+ kernel/antinomie/async_capture.c  | 434 ++++++++++++++
+ kernel/antinomie/async_capture.h  |  11 +
+ kernel/antinomie/recorder.c       | 281 ++++++++-
+ kernel/antinomie/run.c            |  45 ++
+ kernel/antinomie/run.h            |   4 +
+ kernel/fork.c                     |   2 +
+ 29 files changed, 2359 insertions(+), 27 deletions(-)
+ create mode 100644 kernel/antinomie/async.c
+ create mode 100644 kernel/antinomie/async.h
+ create mode 100644 kernel/antinomie/async_capture.c
+ create mode 100644 kernel/antinomie/async_capture.h
+
+diff --git a/fs/aio.c b/fs/aio.c
+index e892017..db8658a 100644
+--- a/fs/aio.c
++++ b/fs/aio.c
+@@ -12,6 +12,7 @@
+ #define pr_fmt(fmt) "%s: " fmt, __func__
+ 
+ #include <linux/kernel.h>
++#include <linux/antinomie_monitor.h>
+ #include <linux/init.h>
+ #include <linux/errno.h>
+ #include <linux/time.h>
+@@ -195,6 +196,9 @@ struct poll_iocb {
+  * or directly as just 'ki_filp' in this struct.
+  */
+ struct aio_kiocb {
++#ifdef CONFIG_ANTINOMIE
++	struct ant_async		*ant_async;
++#endif
+ 	union {
+ 		struct file		*ki_filp;
+ 		struct kiocb		rw;
+@@ -619,6 +623,7 @@ static void free_ioctx(struct work_struct *work)
+ 					  free_rwork);
+ 	pr_debug("freeing %p\n", ctx);
+ 
++	ant_monitor_aio_ctx_free(ctx);
+ 	aio_free_ring(ctx);
+ 	free_percpu(ctx->cpu);
+ 	percpu_ref_exit(&ctx->reqs);
+@@ -895,6 +900,7 @@ void exit_aio(struct mm_struct *mm)
+ 	struct ctx_rq_wait wait;
+ 	int i, skipped;
+ 
++	ant_monitor_aio_exit(mm);
+ 	if (!table)
+ 		return;
+ 
+@@ -1065,6 +1071,9 @@ static inline struct aio_kiocb *aio_get_req(struct kioctx *ctx)
+ 	}
+ 
+ 	percpu_ref_get(&ctx->reqs);
++#ifdef CONFIG_ANTINOMIE
++	req->ant_async = NULL;
++#endif
+ 	req->ki_ctx = ctx;
+ 	INIT_LIST_HEAD(&req->ki_list);
+ 	refcount_set(&req->ki_refcnt, 2);
+@@ -1102,6 +1111,9 @@ static struct kioctx *lookup_ioctx(unsigned long ctx_id)
+ 
+ static inline void iocb_destroy(struct aio_kiocb *iocb)
+ {
++#ifdef CONFIG_ANTINOMIE
++	ant_monitor_async_abandon(&iocb->ant_async);
++#endif
+ 	if (iocb->ki_eventfd)
+ 		eventfd_ctx_put(iocb->ki_eventfd);
+ 	if (iocb->ki_filp)
+@@ -1125,7 +1137,11 @@ static void aio_complete(struct aio_kiocb *iocb)
+ 	struct io_event	*ev_page, *event;
+ 	unsigned tail, pos, head, avail;
+ 	unsigned long	flags;
++#ifdef CONFIG_ANTINOMIE
++	u64 ant_request = ant_monitor_async_id(&iocb->ant_async);
+ 
++	ant_monitor_async_complete(&iocb->ant_async, iocb->ki_res.res, 0, true);
++#endif
+ 	/*
+ 	 * Add a completion event to the ring buffer. Must be done holding
+ 	 * ctx->completion_lock to prevent other code from messing with the tail
+@@ -1143,6 +1159,11 @@ static void aio_complete(struct aio_kiocb *iocb)
+ 	event = ev_page + pos % AIO_EVENTS_PER_PAGE;
+ 
+ 	*event = iocb->ki_res;
++#ifdef CONFIG_ANTINOMIE
++	/* Before the tail moves, so a reader cannot consume an unstamped slot. */
++	ant_monitor_aio_completed(ant_request, ctx, pos - AIO_EVENTS_OFFSET,
++				  iocb->ki_res.res);
++#endif
+ 
+ 	flush_dcache_folio(ctx->ring_folios[pos / AIO_EVENTS_PER_PAGE]);
+ 
+@@ -1275,6 +1296,7 @@ static long aio_read_events_ring(struct kioctx *ctx,
+ 			ret = -EFAULT;
+ 			goto out;
+ 		}
++		ant_monitor_aio_consumed(ctx, head, avail);
+ 
+ 		ret += avail;
+ 		head += avail;
+@@ -1584,6 +1606,12 @@ static int aio_read(struct kiocb *req, const struct iocb *iocb,
+ 	struct iov_iter iter;
+ 	struct file *file;
+ 	int ret;
++#ifdef CONFIG_ANTINOMIE
++	struct aio_kiocb *tracked = container_of(req, struct aio_kiocb, rw);
++	struct iov_iter observed;
++	ssize_t result;
++	u64 deferred;
++#endif
+ 
+ 	ret = aio_prep_rw(req, iocb, READ);
+ 	if (ret)
+@@ -1598,8 +1626,27 @@ static int aio_read(struct kiocb *req, const struct iocb *iocb,
+ 	if (ret < 0)
+ 		return ret;
+ 	ret = rw_verify_area(READ, file, &req->ki_pos, iov_iter_count(&iter));
+-	if (!ret)
++	if (!ret) {
++#ifdef CONFIG_ANTINOMIE
++		/* A queued read may complete in interrupt context, where its
++		 * buffers cannot be read; io_getevents() reads them instead.
++		 */
++		deferred = ant_monitor_aio_defer(&tracked->ant_async, tracked->ki_ctx,
++						 &iter);
++		observed = iter;
++		result = file->f_op->read_iter(req, &iter);
++		if (result != -EIOCBQUEUED)
++			ant_monitor_aio_undefer(&tracked->ant_async, deferred);
++		/* A failed read wrote no output, so there is no payload to miss. */
++		if (result < 0 && result != -EIOCBQUEUED)
++			ant_monitor_async_scalar(&tracked->ant_async);
++		if (result >= 0)
++			ant_monitor_async_iter(&tracked->ant_async, &observed, result, 0, true);
++		aio_rw_done(req, result);
++#else
+ 		aio_rw_done(req, file->f_op->read_iter(req, &iter));
++#endif
++	}
+ 	kfree(iovec);
+ 	return ret;
+ }
+@@ -1627,6 +1674,11 @@ static int aio_write(struct kiocb *req, const struct iocb *iocb,
+ 		return ret;
+ 	ret = rw_verify_area(WRITE, file, &req->ki_pos, iov_iter_count(&iter));
+ 	if (!ret) {
++#ifdef CONFIG_ANTINOMIE
++		struct aio_kiocb *tracked = container_of(req, struct aio_kiocb, rw);
++
++		ant_monitor_async_iter(&tracked->ant_async, &iter, iov_iter_count(&iter), 0, false);
++#endif
+ 		if (S_ISREG(file_inode(file)->i_mode))
+ 			kiocb_start_write(req);
+ 		req->ki_flags |= IOCB_WRITE;
+@@ -2049,7 +2101,19 @@ static int io_submit_one(struct kioctx *ctx, struct iocb __user *user_iocb,
+ 	if (unlikely(!req))
+ 		return -EAGAIN;
+ 
++#ifdef CONFIG_ANTINOMIE
++	req->ant_async = ant_monitor_async_begin(ANT_ASYNC_AIO,
++						 iocb.aio_lio_opcode, iocb.aio_data,
++						 compat || iocb.aio_lio_opcode == IOCB_CMD_PREAD ||
++						 iocb.aio_lio_opcode == IOCB_CMD_PWRITE ||
++						 iocb.aio_lio_opcode == IOCB_CMD_PREADV ||
++						 iocb.aio_lio_opcode == IOCB_CMD_PWRITEV ?
++						 ANT_ASYNC_PAYLOAD_GAP : 0, &iocb, sizeof(iocb));
++#endif
+ 	err = __io_submit_one(ctx, &iocb, user_iocb, req, compat);
++#ifdef CONFIG_ANTINOMIE
++	ant_monitor_async_accepted(&req->ant_async, err);
++#endif
+ 
+ 	/* Done with the synchronous reference */
+ 	iocb_put(req);
+diff --git a/include/linux/antinomie_monitor.h b/include/linux/antinomie_monitor.h
+index c999120..1ea5863 100644
+--- a/include/linux/antinomie_monitor.h
++++ b/include/linux/antinomie_monitor.h
+@@ -6,7 +6,17 @@ struct task_struct;
+ struct pt_regs;
+ struct ant_task;
+ struct ant_run;
++struct ant_async;
++struct iov_iter;
++struct mm_struct;
+ struct linux_binprm;
++#define ANT_ASYNC_IO_URING 1
++#define ANT_ASYNC_AIO 2
++#define ANT_ASYNC_PAYLOAD_GAP BIT(0)
++#define ANT_ASYNC_PRODUCER_UNKNOWN BIT(1)
++#define ANT_ASYNC_ABANDONED BIT(2)
++/* The submitting process wrote the entry; which of its threads is not known. */
++#define ANT_ASYNC_PRODUCER_PROCESS BIT(3)
+ #ifdef CONFIG_ANTINOMIE
+ void ant_monitor_enter(struct pt_regs *regs, long nr);
+ void ant_monitor_exit(struct pt_regs *regs);
+@@ -22,6 +32,41 @@ int ant_monitor_launch(const char *path, char **argv, char **envp);
+ void ant_monitor_stats(void *out);
+ int ant_monitor_run_status(u64 root_cookie, void *out);
+ void ant_monitor_run_stopped(u64 root_cookie);
++struct ant_async *ant_monitor_async_begin(u8 system, u32 opcode, u64 user_data,
++					  u32 flags, const void *descriptor, size_t descriptor_len);
++struct ant_async *ant_monitor_async_begin_attributed(struct task_struct *owner,
++						     u64 root_cookie, u64 task_cookie,
++						     u8 system, u32 opcode, u64 user_data,
++						     u32 flags, const void *descriptor,
++						     size_t descriptor_len);
++void ant_monitor_async_accepted(struct ant_async **slot, int result);
++void ant_monitor_async_complete(struct ant_async **slot, s64 result,
++				u32 flags, bool final);
++void ant_monitor_async_abandon(struct ant_async **slot);
++void ant_monitor_async_link_completion(struct ant_async **source,
++				       struct ant_async **target, s64 result, u32 flags);
++void ant_monitor_async_unavailable(void);
++void ant_monitor_async_iter(struct ant_async **slot,
++			    const struct iov_iter *iter, size_t size,
++			    u64 result_offset, bool output);
++void ant_monitor_async_memory(struct ant_async **slot, const char *key,
++			      const char *layout, u16 encoding, u64 address,
++			      const void *snapshot, u64 size, bool output, bool complete);
++void ant_monitor_async_scalar(struct ant_async **slot);
++void ant_monitor_async_address(struct ant_async **slot, const char *key,
++			       const char *layout, u64 address, u64 size);
++void ant_monitor_async_gap(struct ant_async **slot, const char *key, u64 address);
++void ant_monitor_async_extent(struct ant_async **slot, const char *key, const char *layout,
++			      u64 address, u64 size);
++u64 ant_monitor_aio_defer(struct ant_async **slot, const void *ioctx,
++			  const struct iov_iter *iter);
++void ant_monitor_aio_undefer(struct ant_async **slot, u64 request_id);
++u64 ant_monitor_async_id(struct ant_async **slot);
++void ant_monitor_aio_completed(u64 request_id, const void *ioctx, unsigned int ring_slot,
++			       s64 res);
++void ant_monitor_aio_consumed(const void *ioctx, unsigned int first, unsigned int count);
++void ant_monitor_aio_exit(struct mm_struct *mm);
++void ant_monitor_aio_ctx_free(const void *ioctx);
+ void ant_monitor_operand(u8 arg, const char *key, const char *layout, const void *data,
+ 			 size_t size);
+ #else
+@@ -33,6 +78,65 @@ static inline void ant_monitor_exec(void) {}
+ static inline void ant_monitor_exec_names(const struct linux_binprm *bprm) {}
+ static inline void ant_monitor_task_exit(bool group_dead) {}
+ static inline void ant_monitor_release(struct task_struct *task) {}
++static inline struct ant_async *ant_monitor_async_begin(u8 system, u32 opcode,
++							u64 user_data, u32 flags,
++							const void *descriptor,
++							size_t descriptor_len)
++{
++	return NULL;
++}
++
++static inline struct ant_async *ant_monitor_async_begin_attributed(struct task_struct *owner,
++								   u64 root_cookie,
++								   u64 task_cookie, u8 system,
++								   u32 opcode, u64 user_data,
++								   u32 flags,
++								   const void *descriptor,
++								   size_t descriptor_len)
++{
++	return NULL;
++}
++
++static inline void ant_monitor_async_accepted(struct ant_async **slot, int result) {}
++static inline void ant_monitor_async_complete(struct ant_async **slot, s64 result,
++					      u32 flags, bool final) {}
++static inline void ant_monitor_async_abandon(struct ant_async **slot) {}
++static inline void ant_monitor_async_link_completion(struct ant_async **source,
++						     struct ant_async **target,
++						     s64 result, u32 flags) {}
++static inline void ant_monitor_async_unavailable(void) {}
++static inline void ant_monitor_async_iter(struct ant_async **slot,
++					  const struct iov_iter *iter, size_t size,
++					  u64 result_offset, bool output) {}
++static inline void ant_monitor_async_memory(struct ant_async **slot, const char *key,
++					    const char *layout, u16 encoding, u64 address,
++					    const void *snapshot, u64 size,
++					    bool output, bool complete) {}
++static inline void ant_monitor_async_scalar(struct ant_async **slot) {}
++static inline void ant_monitor_async_address(struct ant_async **slot, const char *key,
++					     const char *layout, u64 address, u64 size) {}
++static inline void ant_monitor_async_gap(struct ant_async **slot, const char *key,
++					 u64 address) {}
++static inline void ant_monitor_async_extent(struct ant_async **slot, const char *key,
++					    const char *layout, u64 address, u64 size) {}
++static inline u64 ant_monitor_aio_defer(struct ant_async **slot, const void *ioctx,
++					const struct iov_iter *iter)
++{
++	return 0;
++}
++
++static inline void ant_monitor_aio_undefer(struct ant_async **slot, u64 request_id) {}
++static inline u64 ant_monitor_async_id(struct ant_async **slot)
++{
++	return 0;
++}
++
++static inline void ant_monitor_aio_completed(u64 request_id, const void *ioctx,
++					     unsigned int ring_slot, s64 res) {}
++static inline void ant_monitor_aio_consumed(const void *ioctx, unsigned int first,
++					    unsigned int count) {}
++static inline void ant_monitor_aio_ctx_free(const void *ioctx) {}
++static inline void ant_monitor_aio_exit(struct mm_struct *mm) {}
+ static inline void ant_monitor_operand(u8 arg, const char *key, const char *layout,
+ 				       const void *data, size_t size) {}
+ #endif
+diff --git a/include/linux/io_uring_types.h b/include/linux/io_uring_types.h
+index 6d47d0d..21d484d 100644
+--- a/include/linux/io_uring_types.h
++++ b/include/linux/io_uring_types.h
+@@ -237,6 +237,13 @@ struct io_ring_ctx {
+ 		unsigned int		iowq_limits_set : 1;
+ 
+ 		struct task_struct	*submitter_task;
++#ifdef CONFIG_ANTINOMIE
++		/* Ring creator: SQPOLL and foreign submissions are attributed here. */
++		struct pid		*ant_tgid;
++		struct task_struct	*ant_creator;
++		u64			ant_root_cookie;
++		u64			ant_task_cookie;
++#endif
+ 		struct io_rings		*rings;
+ 		struct percpu_ref	refs;
+ 
+@@ -663,6 +670,10 @@ struct io_kiocb {
+ 		u64			extra1;
+ 		u64			extra2;
+ 	} big_cqe;
++#ifdef CONFIG_ANTINOMIE
++	/* Never first: cmd_to_io_kiocb() relies on ->cmd at offset 0. */
++	struct ant_async		*ant_async;
++#endif
+ };
+ 
+ struct io_overflow_cqe {
+diff --git a/include/linux/sched.h b/include/linux/sched.h
+index 91e25da..ae3ed73 100644
+--- a/include/linux/sched.h
++++ b/include/linux/sched.h
+@@ -806,6 +806,8 @@ struct task_struct {
+ 	u64 ant_observer_cookie;
+ 	struct ant_task *ant_monitor;
+ 	struct ant_run *ant_run;
++	atomic64_t ant_event_seq;
++	atomic64_t ant_packet_seq;
+ 	bool ant_root_process;
+ 	bool ant_counted;
+ #endif
+diff --git a/io_uring/epoll.c b/io_uring/epoll.c
+index 89bff20..74f2211 100644
+--- a/io_uring/epoll.c
++++ b/io_uring/epoll.c
+@@ -38,6 +38,9 @@ int io_epoll_ctl_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
+ 		ev = u64_to_user_ptr(READ_ONCE(sqe->addr));
+ 		if (copy_from_user(&epoll->event, ev, sizeof(*ev)))
+ 			return -EFAULT;
++		ant_uring_memory(req, "async.operand.epoll_event",
++				 "linux-6.12.94/x86_64/epoll_event", 3,
++				 (unsigned long)ev, &epoll->event, sizeof(*ev), false, true);
+ 	}
+ 
+ 	return 0;
+diff --git a/io_uring/fs.c b/io_uring/fs.c
+index eccea85..924132d 100644
+--- a/io_uring/fs.c
++++ b/io_uring/fs.c
+@@ -72,6 +72,10 @@ int io_renameat_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
+ 		putname(ren->oldpath);
+ 		return PTR_ERR(ren->newpath);
+ 	}
++	ant_uring_memory(req, "async.operand.oldpath", "", 2, (unsigned long)oldf,
++			 ren->oldpath->name, strlen(ren->oldpath->name) + 1, false, false);
++	ant_uring_memory(req, "async.operand.newpath", "", 2, (unsigned long)newf,
++			 ren->newpath->name, strlen(ren->newpath->name) + 1, false, true);
+ 
+ 	req->flags |= REQ_F_NEED_CLEANUP;
+ 	req->flags |= REQ_F_FORCE_ASYNC;
+@@ -121,6 +125,8 @@ int io_unlinkat_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
+ 	un->filename = getname(fname);
+ 	if (IS_ERR(un->filename))
+ 		return PTR_ERR(un->filename);
++	ant_uring_memory(req, "async.operand.path", "", 2, (unsigned long)fname,
++			 un->filename->name, strlen(un->filename->name) + 1, false, true);
+ 
+ 	req->flags |= REQ_F_NEED_CLEANUP;
+ 	req->flags |= REQ_F_FORCE_ASYNC;
+@@ -168,6 +174,8 @@ int io_mkdirat_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
+ 	mkd->filename = getname(fname);
+ 	if (IS_ERR(mkd->filename))
+ 		return PTR_ERR(mkd->filename);
++	ant_uring_memory(req, "async.operand.path", "", 2, (unsigned long)fname,
++			 mkd->filename->name, strlen(mkd->filename->name) + 1, false, true);
+ 
+ 	req->flags |= REQ_F_NEED_CLEANUP;
+ 	req->flags |= REQ_F_FORCE_ASYNC;
+@@ -218,6 +226,10 @@ int io_symlinkat_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
+ 		putname(sl->oldpath);
+ 		return PTR_ERR(sl->newpath);
+ 	}
++	ant_uring_memory(req, "async.operand.oldpath", "", 2, (unsigned long)oldpath,
++			 sl->oldpath->name, strlen(sl->oldpath->name) + 1, false, false);
++	ant_uring_memory(req, "async.operand.newpath", "", 2, (unsigned long)newpath,
++			 sl->newpath->name, strlen(sl->newpath->name) + 1, false, true);
+ 
+ 	req->flags |= REQ_F_NEED_CLEANUP;
+ 	req->flags |= REQ_F_FORCE_ASYNC;
+@@ -263,6 +275,10 @@ int io_linkat_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
+ 		putname(lnk->oldpath);
+ 		return PTR_ERR(lnk->newpath);
+ 	}
++	ant_uring_memory(req, "async.operand.oldpath", "", 2, (unsigned long)oldf,
++			 lnk->oldpath->name, strlen(lnk->oldpath->name) + 1, false, false);
++	ant_uring_memory(req, "async.operand.newpath", "", 2, (unsigned long)newf,
++			 lnk->newpath->name, strlen(lnk->newpath->name) + 1, false, true);
+ 
+ 	req->flags |= REQ_F_NEED_CLEANUP;
+ 	req->flags |= REQ_F_FORCE_ASYNC;
+diff --git a/io_uring/futex.c b/io_uring/futex.c
+index a3d2b70..bae915c 100644
+--- a/io_uring/futex.c
++++ b/io_uring/futex.c
+@@ -186,6 +186,9 @@ int io_futex_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
+ 	    !futex_validate_input(iof->futex_flags, iof->futex_mask))
+ 		return -EINVAL;
+ 
++	/* The word is compared or woken; the SQE carries the operation's value. */
++	ant_uring_address(req, "async.operand.futex", "linux-6.12.94/x86_64/u32",
++			  (unsigned long)iof->uaddr, sizeof(u32));
+ 	return 0;
+ }
+ 
+@@ -230,6 +233,9 @@ int io_futexv_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
+ 		kfree(futexv);
+ 		return ret;
+ 	}
++	ant_uring_memory(req, "async.operand.futexv", "linux-6.12.94/x86_64/futex_waitv[]", 3,
++			 (unsigned long)iof->uwaitv, NULL,
++			 iof->futex_nr * sizeof(struct futex_waitv), false, true);
+ 
+ 	iof->futexv_owned = 0;
+ 	iof->futexv_unqueued = 0;
+diff --git a/io_uring/io_uring.c b/io_uring/io_uring.c
+index 03c6ab5..dda8c39 100644
+--- a/io_uring/io_uring.c
++++ b/io_uring/io_uring.c
+@@ -231,6 +231,7 @@ static inline void req_fail_link_node(struct io_kiocb *req, int res)
+ 
+ static inline void io_req_add_to_cache(struct io_kiocb *req, struct io_ring_ctx *ctx)
+ {
++	ant_uring_abandon(req);
+ 	wq_stack_add_head(&req->comp_list, &ctx->submit_state.free_list);
+ }
+ 
+@@ -874,6 +875,7 @@ bool io_req_post_cqe(struct io_kiocb *req, s32 res, u32 cflags)
+ 	}
+ 
+ 	ctx->submit_state.cq_flush = true;
++	ant_uring_complete(req, res, cflags, false);
+ 	return posted;
+ }
+ 
+@@ -898,6 +900,7 @@ static void io_req_complete_post(struct io_kiocb *req, unsigned issue_flags)
+ 		return;
+ 	}
+ 
++	ant_uring_complete(req, req->cqe.res, req->cqe.flags, true);
+ 	io_cq_lock(ctx);
+ 	if (!(req->flags & REQ_F_CQE_SKIP)) {
+ 		if (!io_fill_cqe_req(ctx, req))
+@@ -932,6 +935,9 @@ void io_req_defer_failed(struct io_kiocb *req, s32 res)
+  */
+ static void io_preinit_req(struct io_kiocb *req, struct io_ring_ctx *ctx)
+ {
++#ifdef CONFIG_ANTINOMIE
++	req->ant_async = NULL;
++#endif
+ 	req->ctx = ctx;
+ 	req->link = NULL;
+ 	req->async_data = NULL;
+@@ -2148,6 +2154,86 @@ static __cold int io_submit_fail_init(const struct io_uring_sqe *sqe,
+ 	return 0;
+ }
+ 
++#ifdef CONFIG_ANTINOMIE
++static u32 ant_uring_payload_flags(u8 opcode)
++{
++	switch (opcode) {
++	case IORING_OP_NOP:
++	case IORING_OP_FSYNC:
++	case IORING_OP_POLL_ADD:
++	case IORING_OP_POLL_REMOVE:
++	case IORING_OP_ASYNC_CANCEL:
++	case IORING_OP_SYNC_FILE_RANGE:
++	case IORING_OP_CLOSE:
++	case IORING_OP_FALLOCATE:
++	case IORING_OP_FADVISE:
++	case IORING_OP_MADVISE:
++	case IORING_OP_SPLICE:
++	case IORING_OP_REMOVE_BUFFERS:
++	case IORING_OP_TEE:
++	case IORING_OP_SHUTDOWN:
++	case IORING_OP_MSG_RING:
++	case IORING_OP_SOCKET:
++	case IORING_OP_FIXED_FD_INSTALL:
++	case IORING_OP_FTRUNCATE:
++	case IORING_OP_LISTEN:
++		return 0;
++	default:
++		return ANT_ASYNC_PAYLOAD_GAP;
++	}
++}
++
++/* User page tables that map the ring page at @offset of @pages: the per-page
++ * count, which this kernel keeps for every page of a large folio too.
++ */
++static int ant_uring_mappings(struct page **pages, unsigned int npages, unsigned long offset)
++{
++	unsigned long index = offset >> PAGE_SHIFT;
++
++	if (!pages || index >= npages)
++		return 0;
++	return atomic_read(&pages[index]->_mapcount) + 1;
++}
++
++/* Whether a task outside the submitting process could have written @sqe: a
++ * process writes a ring's entries and moves its tail only through a mapping
++ * of them, so a ring whose entry page and ring page are each mapped once
++ * (its creator's mapping, or none) was written by a thread of the process
++ * that maps it. A fork that keeps the mapping, another process that mapped
++ * the ring's descriptor, a MAP_SHARED buffer of a NO_MMAP ring or a second
++ * mapping of the same process each map them more than once.
++ */
++static bool ant_uring_shared(struct io_ring_ctx *ctx, const struct io_uring_sqe *sqe)
++{
++	return ant_uring_mappings(ctx->sqe_pages, ctx->n_sqe_pages,
++				  (unsigned long)sqe - (unsigned long)ctx->sq_sqes) > 1 ||
++		ant_uring_mappings(ctx->ring_pages, ctx->n_ring_pages, 0) > 1;
++}
++
++/* The SQPOLL thread and tasks outside the creator's thread group submit on
++ * behalf of the ring creator's run (contract 14.3); they, and a ring another
++ * process maps, leave the entry's writer unknown. Otherwise the entry was
++ * written by a thread of the submitting process, which one is not known.
++ */
++static struct ant_async *ant_uring_begin(struct io_ring_ctx *ctx,
++					 const struct io_uring_sqe *sqe)
++{
++	u8 opcode = READ_ONCE(sqe->opcode);
++	u64 user_data = READ_ONCE(sqe->user_data);
++	u32 flags = ant_uring_payload_flags(opcode);
++	size_t len = ctx->flags & IORING_SETUP_SQE128 ? 128 : sizeof(*sqe);
++
++	if ((current->flags & PF_IO_WORKER) ||
++	    task_tgid(current) != ctx->ant_tgid)
++		return ant_monitor_async_begin_attributed(ctx->ant_creator, ctx->ant_root_cookie,
++							  ctx->ant_task_cookie, ANT_ASYNC_IO_URING,
++							  opcode, user_data, flags, sqe, len);
++	flags |= ant_uring_shared(ctx, sqe) ? ANT_ASYNC_PRODUCER_UNKNOWN :
++		ANT_ASYNC_PRODUCER_PROCESS;
++	return ant_monitor_async_begin(ANT_ASYNC_IO_URING, opcode, user_data, flags, sqe, len);
++}
++#endif
++
+ static inline int io_submit_sqe(struct io_ring_ctx *ctx, struct io_kiocb *req,
+ 			 const struct io_uring_sqe *sqe)
+ 	__must_hold(&ctx->uring_lock)
+@@ -2155,7 +2241,16 @@ static inline int io_submit_sqe(struct io_ring_ctx *ctx, struct io_kiocb *req,
+ 	struct io_submit_link *link = &ctx->submit_state.link;
+ 	int ret;
+ 
++#ifdef CONFIG_ANTINOMIE
++	/* The entering task is the submission observer. An mmap SQE does not
++	 * establish which process wrote it.
++	 */
++	req->ant_async = ant_uring_begin(ctx, sqe);
++#endif
+ 	ret = io_init_req(ctx, req, sqe);
++#ifdef CONFIG_ANTINOMIE
++	ant_monitor_async_accepted(&req->ant_async, ret);
++#endif
+ 	if (unlikely(ret))
+ 		return io_submit_fail_init(sqe, req, ret);
+ 
+@@ -2741,6 +2836,11 @@ static __cold void io_ring_ctx_free(struct io_ring_ctx *ctx)
+ 		put_cred(ctx->sq_creds);
+ 	if (ctx->submitter_task)
+ 		put_task_struct(ctx->submitter_task);
++#ifdef CONFIG_ANTINOMIE
++	put_pid(ctx->ant_tgid);
++	if (ctx->ant_creator)
++		put_task_struct(ctx->ant_creator);
++#endif
+ 
+ 	/* there are no registered resources left, nobody uses it */
+ 	if (ctx->rsrc_node)
+@@ -3549,6 +3649,12 @@ static __cold int io_uring_create(unsigned entries, struct io_uring_params *p,
+ 	ctx = io_ring_ctx_alloc(p);
+ 	if (!ctx)
+ 		return -ENOMEM;
++#ifdef CONFIG_ANTINOMIE
++	ctx->ant_tgid = get_pid(task_tgid(current));
++	ctx->ant_creator = get_task_struct(current);
++	ctx->ant_root_cookie = current->ant_root_cookie;
++	ctx->ant_task_cookie = current->ant_cookie;
++#endif
+ 
+ 	ctx->clockid = CLOCK_MONOTONIC;
+ 	ctx->clock_offset = 0;
+@@ -3841,6 +3947,8 @@ static int __init io_uring_init(void)
+ 	BUILD_BUG_ON((SQE_VALID_FLAGS | SQE_COMMON_FLAGS) != SQE_VALID_FLAGS);
+ 
+ 	BUILD_BUG_ON(__REQ_F_LAST_BIT > 8 * sizeof_field(struct io_kiocb, flags));
++	/* cmd_to_io_kiocb() casts the command back to its request. */
++	BUILD_BUG_ON(offsetof(struct io_kiocb, cmd) != 0);
+ 
+ 	BUILD_BUG_ON(sizeof(atomic_t) != sizeof(u32));
+ 
+diff --git a/io_uring/io_uring.h b/io_uring/io_uring.h
+index f1d3b49..59a2676 100644
+--- a/io_uring/io_uring.h
++++ b/io_uring/io_uring.h
+@@ -2,6 +2,7 @@
+ #define IOU_CORE_H
+ 
+ #include <linux/errno.h>
++#include <linux/antinomie_monitor.h>
+ #include <linux/lockdep.h>
+ #include <linux/resume_user_mode.h>
+ #include <linux/kasan.h>
+@@ -35,6 +36,78 @@ enum {
+ 	IOU_STOP_MULTISHOT	= -ECANCELED,
+ };
+ 
++static inline void ant_uring_complete(struct io_kiocb *req, s32 result,
++				      u32 flags, bool final)
++{
++#ifdef CONFIG_ANTINOMIE
++	ant_monitor_async_complete(&req->ant_async, result, flags, final);
++#endif
++}
++
++static inline void ant_uring_abandon(struct io_kiocb *req)
++{
++#ifdef CONFIG_ANTINOMIE
++	ant_monitor_async_abandon(&req->ant_async);
++#endif
++}
++
++static inline void ant_uring_iter(struct io_kiocb *req, const struct iov_iter *iter,
++				  size_t size, u64 offset, bool output)
++{
++#ifdef CONFIG_ANTINOMIE
++	ant_monitor_async_iter(&req->ant_async, iter, size, offset, output);
++#endif
++}
++
++static inline void ant_uring_link_completion(struct io_kiocb *req,
++					     struct io_kiocb *notif, s32 result)
++{
++#ifdef CONFIG_ANTINOMIE
++	ant_monitor_async_link_completion(&req->ant_async, &notif->ant_async,
++					  result, IORING_CQE_F_MORE);
++#endif
++}
++
++static inline void ant_uring_memory(struct io_kiocb *req, const char *key,
++				    const char *layout, u16 encoding, u64 address,
++				    const void *snapshot, u64 size, bool output, bool complete)
++{
++#ifdef CONFIG_ANTINOMIE
++	ant_monitor_async_memory(&req->ant_async, key, layout, encoding, address,
++				 snapshot, size, output, complete);
++#endif
++}
++
++static inline void ant_uring_scalar(struct io_kiocb *req)
++{
++#ifdef CONFIG_ANTINOMIE
++	ant_monitor_async_scalar(&req->ant_async);
++#endif
++}
++
++static inline void ant_uring_address(struct io_kiocb *req, const char *key,
++				     const char *layout, u64 address, u64 size)
++{
++#ifdef CONFIG_ANTINOMIE
++	ant_monitor_async_address(&req->ant_async, key, layout, address, size);
++#endif
++}
++
++static inline void ant_uring_extent(struct io_kiocb *req, const char *key,
++				    const char *layout, u64 address, u64 size)
++{
++#ifdef CONFIG_ANTINOMIE
++	ant_monitor_async_extent(&req->ant_async, key, layout, address, size);
++#endif
++}
++
++static inline void ant_uring_gap(struct io_kiocb *req, const char *key, u64 address)
++{
++#ifdef CONFIG_ANTINOMIE
++	ant_monitor_async_gap(&req->ant_async, key, address);
++#endif
++}
++
+ struct io_wait_queue {
+ 	struct wait_queue_entry wq;
+ 	struct io_ring_ctx *ctx;
+@@ -364,6 +437,7 @@ static inline void io_req_complete_defer(struct io_kiocb *req)
+ 
+ 	lockdep_assert_held(&req->ctx->uring_lock);
+ 
++	ant_uring_complete(req, req->cqe.res, req->cqe.flags, true);
+ 	wq_list_add_tail(&req->comp_list, &state->compl_reqs);
+ }
+ 
+diff --git a/io_uring/kbuf.c b/io_uring/kbuf.c
+index df5ba0d..ed30d18 100644
+--- a/io_uring/kbuf.c
++++ b/io_uring/kbuf.c
+@@ -558,6 +558,8 @@ int io_provide_buffers_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe
+ 	if (tmp + p->nbufs > MAX_BIDS_PER_BGID)
+ 		return -EINVAL;
+ 	p->bid = tmp;
++	/* Reads that later select a buffer record its bytes through their iterator. */
++	ant_uring_address(req, "async.operand.buffers", "", p->addr, size);
+ 	return 0;
+ }
+ 
+diff --git a/io_uring/net.c b/io_uring/net.c
+index 8eb0ebd..c59b113 100644
+--- a/io_uring/net.c
++++ b/io_uring/net.c
+@@ -328,7 +328,7 @@ static int io_sendmsg_copy_hdr(struct io_kiocb *req,
+ 			       struct io_async_msghdr *iomsg)
+ {
+ 	struct io_sr_msg *sr = io_kiocb_to_cmd(req, struct io_sr_msg);
+-	struct user_msghdr msg;
++	struct user_msghdr msg = {};
+ 	int ret;
+ 
+ 	iomsg->msg.msg_name = &iomsg->addr;
+@@ -356,6 +356,23 @@ static int io_sendmsg_copy_hdr(struct io_kiocb *req,
+ 
+ 	/* save msg_control as sys_sendmsg() overwrites it */
+ 	sr->msg_control = iomsg->msg.msg_control_user;
++	if (!ret) {
++		ant_uring_iter(req, &iomsg->msg.msg_iter, iov_iter_count(&iomsg->msg.msg_iter),
++			       0, false);
++		if (iomsg->msg.msg_namelen)
++			ant_uring_memory(req, "async.operand.sockaddr",
++					 "linux-6.12.94/x86_64/sockaddr", 3,
++					 (unsigned long)msg.msg_name, iomsg->msg.msg_name,
++					 iomsg->msg.msg_namelen, false, false);
++		if (iomsg->msg.msg_controllen)
++			ant_uring_memory(req, "async.operand.control",
++					 "linux-6.12.94/x86_64/cmsghdr[]", 3,
++					 (unsigned long)sr->msg_control, NULL,
++					 iomsg->msg.msg_controllen, false, false);
++		ant_uring_memory(req, "async.operand.msghdr",
++				 "linux-6.12.94/x86_64/user_msghdr", 3,
++				 (unsigned long)sr->umsg, &msg, sizeof(msg), false, true);
++	}
+ 	return ret;
+ }
+ 
+@@ -572,6 +589,8 @@ int io_sendmsg(struct io_kiocb *req, unsigned int issue_flags)
+ 
+ 	kmsg->msg.msg_control_user = sr->msg_control;
+ 
++	ant_uring_iter(req, &kmsg->msg.msg_iter, iov_iter_count(&kmsg->msg.msg_iter),
++		       sr->done_io, false);
+ 	ret = __sys_sendmsg_sock(sock, &kmsg->msg, flags);
+ 
+ 	if (ret < min_ret) {
+@@ -671,6 +690,12 @@ int io_send(struct io_kiocb *req, unsigned int issue_flags)
+ 
+ 	flags &= ~MSG_INTERNAL_SENDMSG_FLAGS;
+ 	kmsg->msg.msg_flags = flags;
++	ant_uring_iter(req, &kmsg->msg.msg_iter, iov_iter_count(&kmsg->msg.msg_iter),
++		       sr->done_io, false);
++	if (kmsg->msg.msg_namelen)
++		ant_uring_memory(req, "async.operand.sockaddr", "linux-6.12.94/x86_64/sockaddr",
++				 3, (unsigned long)sr->addr, kmsg->msg.msg_name,
++				 kmsg->msg.msg_namelen, false, true);
+ 	ret = sock_sendmsg(sock, &kmsg->msg);
+ 	if (ret < min_ret) {
+ 		if (ret == -EAGAIN && (issue_flags & IO_URING_F_NONBLOCK))
+@@ -726,7 +751,7 @@ static int io_recvmsg_mshot_prep(struct io_kiocb *req,
+ static int io_recvmsg_copy_hdr(struct io_kiocb *req,
+ 			       struct io_async_msghdr *iomsg)
+ {
+-	struct user_msghdr msg;
++	struct user_msghdr msg = {};
+ 	int ret;
+ 
+ 	iomsg->msg.msg_name = &iomsg->addr;
+@@ -756,6 +781,14 @@ static int io_recvmsg_copy_hdr(struct io_kiocb *req,
+ 	ret = __copy_msghdr(&iomsg->msg, &msg, &iomsg->uaddr);
+ 	if (unlikely(ret))
+ 		return ret;
++#ifdef CONFIG_ANTINOMIE
++	iomsg->ant_name_size = max(msg.msg_namelen, 0);
++	iomsg->ant_control_size = msg.msg_controllen;
++	iomsg->ant_control_address = (unsigned long)msg.msg_control;
++	ant_uring_memory(req, "async.operand.msghdr", "linux-6.12.94/x86_64/user_msghdr", 3,
++			 (unsigned long)io_kiocb_to_cmd(req, struct io_sr_msg)->umsg,
++			 &msg, sizeof(msg), false, false);
++#endif
+ 
+ 	return io_recvmsg_mshot_prep(req, iomsg, msg.msg_namelen,
+ 					msg.msg_controllen);
+@@ -964,6 +997,8 @@ static int io_recvmsg_multishot(struct socket *sock, struct io_sr_msg *io,
+ 	int err;
+ 	int copy_len;
+ 	struct io_recvmsg_multishot_hdr hdr;
++	struct iov_iter observed = kmsg->msg.msg_iter;
++	struct io_kiocb *req = cmd_to_io_kiocb(io);
+ 
+ 	if (kmsg->namelen)
+ 		kmsg->msg.msg_name = &hdr.addr;
+@@ -977,6 +1012,7 @@ static int io_recvmsg_multishot(struct socket *sock, struct io_sr_msg *io,
+ 	*finished = err <= 0;
+ 	if (err < 0)
+ 		return err;
++	ant_uring_iter(req, &observed, min_t(size_t, err, observed.count), 0, true);
+ 
+ 	hdr.msg = (struct io_uring_recvmsg_out) {
+ 		.controllen = kmsg->controllen - kmsg->msg.msg_controllen,
+@@ -1006,6 +1042,19 @@ static int io_recvmsg_multishot(struct socket *sock, struct io_sr_msg *io,
+ 		*finished = true;
+ 		return -EFAULT;
+ 	}
++	if (copy_len > sizeof(hdr.msg))
++		ant_uring_memory(req, "async.operand.sockaddr", "linux-6.12.94/x86_64/sockaddr",
++				 3, (unsigned long)io->buf + sizeof(hdr.msg), &hdr.addr,
++				 copy_len - sizeof(hdr.msg), true, false);
++	if (hdr.msg.controllen)
++		ant_uring_memory(req, "async.operand.control", flags & MSG_CMSG_COMPAT ?
++				 "linux-6.12.94/x86/compat_cmsghdr[]" :
++				 "linux-6.12.94/x86_64/cmsghdr[]",
++				 3, (unsigned long)io->buf + sizeof(hdr.msg) + kmsg->namelen,
++				 NULL, hdr.msg.controllen, true, false);
++	ant_uring_memory(req, "async.operand.recvmsg_out",
++			 "linux-6.12.94/x86_64/io_uring_recvmsg_out", 3,
++			 (unsigned long)io->buf, &hdr.msg, sizeof(hdr.msg), true, true);
+ 
+ 	return sizeof(struct io_uring_recvmsg_out) + kmsg->namelen +
+ 			kmsg->controllen + err;
+@@ -1016,6 +1065,7 @@ int io_recvmsg(struct io_kiocb *req, unsigned int issue_flags)
+ 	struct io_sr_msg *sr = io_kiocb_to_cmd(req, struct io_sr_msg);
+ 	struct io_async_msghdr *kmsg = req->async_data;
+ 	struct io_br_sel sel = { };
++	struct iov_iter observed;
+ 	struct socket *sock;
+ 	unsigned flags;
+ 	int ret, min_ret = 0;
+@@ -1056,6 +1106,7 @@ int io_recvmsg(struct io_kiocb *req, unsigned int issue_flags)
+ 
+ 	kmsg->msg.msg_get_inq = 1;
+ 	kmsg->msg.msg_inq = -1;
++	observed = kmsg->msg.msg_iter;
+ 	if (req->flags & REQ_F_APOLL_MULTISHOT) {
+ 		ret = io_recvmsg_multishot(sock, sr, kmsg, flags,
+ 					   &mshot_finished);
+@@ -1066,6 +1117,33 @@ int io_recvmsg(struct io_kiocb *req, unsigned int issue_flags)
+ 
+ 		ret = __sys_recvmsg_sock(sock, &kmsg->msg, sr->umsg,
+ 					 kmsg->uaddr, flags);
++		if (ret >= 0)
++			ant_uring_iter(req, &observed, min_t(size_t, ret, observed.count),
++				       sr->done_io, true);
++#ifdef CONFIG_ANTINOMIE
++		if (ret >= 0 && !req->ctx->compat) {
++			u64 control_size = (unsigned long)kmsg->msg.msg_control_user -
++				kmsg->ant_control_address;
++			u64 name_size = min_t(u32, kmsg->ant_name_size,
++					      max(kmsg->msg.msg_namelen, 0));
++
++			if (kmsg->uaddr && name_size)
++				ant_uring_memory(req, "async.operand.sockaddr",
++						 "linux-6.12.94/x86_64/sockaddr", 3,
++						 (unsigned long)kmsg->uaddr, NULL,
++						 name_size, true, false);
++			if (control_size)
++				ant_uring_memory(req, "async.operand.control",
++						 "linux-6.12.94/x86_64/cmsghdr[]", 3,
++						 kmsg->ant_control_address, NULL,
++						 min_t(u64, control_size, kmsg->ant_control_size),
++						 true, false);
++			ant_uring_memory(req, "async.operand.msghdr",
++					 "linux-6.12.94/x86_64/user_msghdr", 3,
++					 (unsigned long)sr->umsg, NULL, sizeof(struct user_msghdr),
++					 true, true);
++		}
++#endif
+ 	}
+ 
+ 	if (ret < min_ret) {
+@@ -1173,6 +1251,7 @@ int io_recv(struct io_kiocb *req, unsigned int issue_flags)
+ 	struct io_sr_msg *sr = io_kiocb_to_cmd(req, struct io_sr_msg);
+ 	struct io_async_msghdr *kmsg = req->async_data;
+ 	struct io_br_sel sel;
++	struct iov_iter observed;
+ 	struct socket *sock;
+ 	unsigned flags;
+ 	int ret, min_ret = 0;
+@@ -1209,7 +1288,11 @@ int io_recv(struct io_kiocb *req, unsigned int issue_flags)
+ 	if (flags & MSG_WAITALL)
+ 		min_ret = iov_iter_count(&kmsg->msg.msg_iter);
+ 
++	observed = kmsg->msg.msg_iter;
+ 	ret = sock_recvmsg(sock, &kmsg->msg, flags);
++	if (ret >= 0)
++		ant_uring_iter(req, &observed, min_t(size_t, ret, observed.count),
++			       sr->done_io, true);
+ 	if (ret < min_ret) {
+ 		if (ret == -EAGAIN && force_nonblock) {
+ 			io_kbuf_recycle(req, sel.buf_list, issue_flags);
+@@ -1441,6 +1524,12 @@ int io_send_zc(struct io_kiocb *req, unsigned int issue_flags)
+ 
+ 	kmsg->msg.msg_flags = msg_flags;
+ 	kmsg->msg.msg_ubuf = &io_notif_to_data(zc->notif)->uarg;
++	ant_uring_iter(req, &kmsg->msg.msg_iter, iov_iter_count(&kmsg->msg.msg_iter),
++		       zc->done_io, false);
++	if (kmsg->msg.msg_namelen)
++		ant_uring_memory(req, "async.operand.sockaddr", "linux-6.12.94/x86_64/sockaddr",
++				 3, (unsigned long)zc->addr, kmsg->msg.msg_name,
++				 kmsg->msg.msg_namelen, false, true);
+ 	ret = sock_sendmsg(sock, &kmsg->msg);
+ 
+ 	if (unlikely(ret < min_ret)) {
+@@ -1463,6 +1552,7 @@ int io_send_zc(struct io_kiocb *req, unsigned int issue_flags)
+ 	else if (zc->done_io)
+ 		ret = zc->done_io;
+ 
++	ant_uring_link_completion(req, zc->notif, ret);
+ 	/*
+ 	 * If we're in io-wq we can't rely on tw ordering guarantees, defer
+ 	 * flushing notif to io_send_zc_cleanup()
+@@ -1503,6 +1593,8 @@ int io_sendmsg_zc(struct io_kiocb *req, unsigned int issue_flags)
+ 	kmsg->msg.msg_control_user = sr->msg_control;
+ 	kmsg->msg.msg_ubuf = &io_notif_to_data(sr->notif)->uarg;
+ 	kmsg->msg.sg_from_iter = io_sg_from_iter_iovec;
++	ant_uring_iter(req, &kmsg->msg.msg_iter, iov_iter_count(&kmsg->msg.msg_iter),
++		       sr->done_io, false);
+ 	ret = __sys_sendmsg_sock(sock, &kmsg->msg, flags);
+ 
+ 	if (unlikely(ret < min_ret)) {
+@@ -1523,6 +1615,7 @@ int io_sendmsg_zc(struct io_kiocb *req, unsigned int issue_flags)
+ 	else if (sr->done_io)
+ 		ret = sr->done_io;
+ 
++	ant_uring_link_completion(req, sr->notif, ret);
+ 	/*
+ 	 * If we're in io-wq we can't rely on tw ordering guarantees, defer
+ 	 * flushing notif to io_send_zc_cleanup()
+@@ -1544,8 +1637,11 @@ void io_sendrecv_fail(struct io_kiocb *req)
+ 		req->cqe.res = sr->done_io;
+ 
+ 	if ((req->flags & REQ_F_NEED_CLEANUP) &&
+-	    (req->opcode == IORING_OP_SEND_ZC || req->opcode == IORING_OP_SENDMSG_ZC))
++	    (req->opcode == IORING_OP_SEND_ZC || req->opcode == IORING_OP_SENDMSG_ZC)) {
+ 		req->cqe.flags |= IORING_CQE_F_MORE;
++		if (sr->notif)
++			ant_uring_link_completion(req, sr->notif, req->cqe.res);
++	}
+ }
+ 
+ #define ACCEPT_FLAGS	(IORING_ACCEPT_MULTISHOT | IORING_ACCEPT_DONTWAIT | \
+@@ -1720,6 +1816,7 @@ int io_connect_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
+ {
+ 	struct io_connect *conn = io_kiocb_to_cmd(req, struct io_connect);
+ 	struct io_async_msghdr *io;
++	int ret;
+ 
+ 	if (sqe->len || sqe->buf_index || sqe->rw_flags || sqe->splice_fd_in)
+ 		return -EINVAL;
+@@ -1732,7 +1829,12 @@ int io_connect_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
+ 	if (unlikely(!io))
+ 		return -ENOMEM;
+ 
+-	return move_addr_to_kernel(conn->addr, conn->addr_len, &io->addr);
++	ret = move_addr_to_kernel(conn->addr, conn->addr_len, &io->addr);
++	if (ret)
++		return ret;
++	ant_uring_memory(req, "async.operand.sockaddr", "linux-6.12.94/x86_64/sockaddr", 3,
++			 (unsigned long)conn->addr, &io->addr, conn->addr_len, false, true);
++	return 0;
+ }
+ 
+ int io_connect(struct io_kiocb *req, unsigned int issue_flags)
+@@ -1825,6 +1927,8 @@ int io_bind_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
+ 		return ret;
+ 	if (io_bind_file_create(io, bind->addr_len))
+ 		req->flags |= REQ_F_FORCE_ASYNC;
++	ant_uring_memory(req, "async.operand.sockaddr", "linux-6.12.94/x86_64/sockaddr", 3,
++			 (unsigned long)uaddr, &io->addr, bind->addr_len, false, true);
+ 	return 0;
+ }
+ 
+diff --git a/io_uring/net.h b/io_uring/net.h
+index 52bfee0..67fddfd 100644
+--- a/io_uring/net.h
++++ b/io_uring/net.h
+@@ -15,6 +15,11 @@ struct io_async_msghdr {
+ 	struct sockaddr __user		*uaddr;
+ 	struct msghdr			msg;
+ 	struct sockaddr_storage		addr;
++#ifdef CONFIG_ANTINOMIE
++	u32				ant_name_size;
++	size_t				ant_control_size;
++	u64				ant_control_address;
++#endif
+ #endif
+ };
+ 
+diff --git a/io_uring/openclose.c b/io_uring/openclose.c
+index cea2d86..6f40e38 100644
+--- a/io_uring/openclose.c
++++ b/io_uring/openclose.c
+@@ -79,6 +79,8 @@ static int __io_openat_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe
+ 	open->nofile = rlimit(RLIMIT_NOFILE);
+ 	if (io_openat_force_async(open))
+ 		req->flags |= REQ_F_FORCE_ASYNC;
++	ant_uring_memory(req, "async.operand.path", "", 2, (unsigned long)fname,
++			 open->filename->name, strlen(open->filename->name) + 1, false, true);
+ 	return 0;
+ }
+ 
+@@ -103,6 +105,8 @@ int io_openat2_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
+ 	len = READ_ONCE(sqe->len);
+ 	if (len < OPEN_HOW_SIZE_VER0)
+ 		return -EINVAL;
++	ant_uring_memory(req, "async.operand.open_how", "linux-6.12.94/x86_64/open_how",
++			 3, (unsigned long)how, NULL, len, false, false);
+ 
+ 	ret = copy_struct_from_user(&open->how, sizeof(open->how), how, len);
+ 	if (ret)
+diff --git a/io_uring/rsrc.c b/io_uring/rsrc.c
+index 1687e35..873d639 100644
+--- a/io_uring/rsrc.c
++++ b/io_uring/rsrc.c
+@@ -554,6 +554,13 @@ int io_files_update_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
+ 	if (!up->nr_args)
+ 		return -EINVAL;
+ 	up->arg = READ_ONCE(sqe->addr);
++	/* Bounded by the table limit the update is checked against later. */
++	if (up->nr_args > IORING_MAX_FIXED_FILES)
++		ant_uring_extent(req, "async.operand.fds", "linux-6.12.94/x86_64/int[]", up->arg,
++				 (u64)up->nr_args * sizeof(__s32));
++	else
++		ant_uring_memory(req, "async.operand.fds", "linux-6.12.94/x86_64/int[]", 3,
++				 up->arg, NULL, (u64)up->nr_args * sizeof(__s32), false, true);
+ 	return 0;
+ }
+ 
+diff --git a/io_uring/rw.c b/io_uring/rw.c
+index ab2c092..25e2755 100644
+--- a/io_uring/rw.c
++++ b/io_uring/rw.c
+@@ -31,6 +31,23 @@ struct io_rw {
+ 	rwf_t				flags;
+ };
+ 
++static void ant_uring_rw_capture(struct io_kiocb *req, bool output, ssize_t result)
++{
++#ifdef CONFIG_ANTINOMIE
++	struct io_async_rw *rw = req->async_data;
++	struct io_rw *cmd = io_kiocb_to_cmd(req, struct io_rw);
++	struct iov_iter iter;
++
++	if (!req->ant_async || !rw ||
++	    (output && (result < 0 || (cmd->kiocb.ki_flags & IOCB_WRITE))))
++		return;
++	iter = rw->iter;
++	iov_iter_restore(&iter, &rw->iter_state);
++	ant_monitor_async_iter(&req->ant_async, &iter,
++			       output ? result : iov_iter_count(&iter), rw->bytes_done, output);
++#endif
++}
++
+ static bool io_file_supports_nowait(struct io_kiocb *req, __poll_t mask)
+ {
+ 	/* If FMODE_NOWAIT is set for a file, we're golden */
+@@ -144,6 +161,8 @@ static inline int io_import_iovec(int rw, struct io_kiocb *req,
+ 		return ret;
+ 
+ 	iov_iter_save_state(&io->iter, &io->iter_state);
++	if (rw == ITER_SOURCE)
++		ant_uring_rw_capture(req, false, 0);
+ 	return 0;
+ }
+ 
+@@ -349,6 +368,8 @@ static int io_prep_rw_fixed(struct io_kiocb *req, const struct io_uring_sqe *sqe
+ 	io = req->async_data;
+ 	ret = io_import_fixed(ddir, &io->iter, req->imu, rw->addr, rw->len);
+ 	iov_iter_save_state(&io->iter, &io->iter_state);
++	if (!ret && ddir == ITER_SOURCE)
++		ant_uring_rw_capture(req, false, 0);
+ 	return ret;
+ }
+ 
+@@ -516,6 +537,7 @@ void io_req_rw_complete(struct io_kiocb *req, struct io_tw_state *ts)
+ 	if ((kiocb->ki_flags & IOCB_DIO_CALLER_COMP) && kiocb->dio_complete) {
+ 		long res = kiocb->dio_complete(rw->kiocb.private);
+ 
++		ant_uring_rw_capture(req, true, res);
+ 		io_req_set_res(req, io_fixup_rw_res(req, res), 0);
+ 	}
+ 
+@@ -536,6 +558,7 @@ static void io_complete_rw(struct kiocb *kiocb, long res)
+ 	if (!kiocb->dio_complete || !(kiocb->ki_flags & IOCB_DIO_CALLER_COMP)) {
+ 		if (__io_complete_rw_common(req, res))
+ 			return;
++		ant_uring_rw_capture(req, true, res);
+ 		io_req_set_res(req, io_fixup_rw_res(req, res), 0);
+ 	}
+ 	req->io_task_work.func = io_req_rw_complete;
+@@ -558,6 +581,7 @@ static void io_complete_rw_iopoll(struct kiocb *kiocb, long res)
+ 	}
+ 
+ 	/* order with io_iopoll_complete() checking ->iopoll_completed */
++	ant_uring_rw_capture(req, true, res);
+ 	smp_store_release(&req->iopoll_completed, 1);
+ }
+ 
+@@ -600,6 +624,7 @@ static int kiocb_done(struct io_kiocb *req, ssize_t ret,
+ 		if (!__io_complete_rw_common(req, ret)) {
+ 			u32 cflags = 0;
+ 
++			ant_uring_rw_capture(req, true, ret);
+ 			/*
+ 			 * Safe to call io_end from here as we're inline
+ 			 * from the submission path.
+@@ -920,6 +945,8 @@ static int __io_read(struct io_kiocb *req, struct io_br_sel *sel,
+ 		 * above or inside this loop. Advance the iter by the bytes
+ 		 * that were consumed.
+ 		 */
++		if (ret > 0 && ret < iov_iter_count(&io->iter))
++			ant_uring_rw_capture(req, true, ret);
+ 		iov_iter_advance(&io->iter, ret);
+ 		if (!iov_iter_count(&io->iter))
+ 			break;
+diff --git a/io_uring/statx.c b/io_uring/statx.c
+index f7f9b20..076bb89 100644
+--- a/io_uring/statx.c
++++ b/io_uring/statx.c
+@@ -48,6 +48,8 @@ int io_statx_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
+ 
+ 	req->flags |= REQ_F_NEED_CLEANUP;
+ 	req->flags |= REQ_F_FORCE_ASYNC;
++	ant_uring_memory(req, "async.operand.path", "", 2, (unsigned long)path,
++			 sx->filename->name, strlen(sx->filename->name) + 1, false, false);
+ 	return 0;
+ }
+ 
+@@ -59,6 +61,9 @@ int io_statx(struct io_kiocb *req, unsigned int issue_flags)
+ 	WARN_ON_ONCE(issue_flags & IO_URING_F_NONBLOCK);
+ 
+ 	ret = do_statx(sx->dfd, sx->filename, sx->flags, sx->mask, sx->buffer);
++	if (!ret)
++		ant_uring_memory(req, "async.operand.statx", "linux-6.12.94/x86_64/statx", 3,
++				 (unsigned long)sx->buffer, NULL, sizeof(struct statx), true, true);
+ 	io_req_set_res(req, ret, 0);
+ 	return IOU_OK;
+ }
+diff --git a/io_uring/timeout.c b/io_uring/timeout.c
+index 9cc5776..120ba7e 100644
+--- a/io_uring/timeout.c
++++ b/io_uring/timeout.c
+@@ -443,9 +443,13 @@ int io_timeout_remove_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
+ 			return -EFAULT;
+ 		if (tr->ts.tv_sec < 0 || tr->ts.tv_nsec < 0)
+ 			return -EINVAL;
++		ant_uring_memory(req, "async.operand.timeout", "linux-6.12.94/x86_64/timespec64",
++				 3, READ_ONCE(sqe->addr2), &tr->ts, sizeof(tr->ts), false, true);
+ 	} else if (tr->flags) {
+ 		/* timeout removal doesn't support flags */
+ 		return -EINVAL;
++	} else {
++		ant_uring_scalar(req);
+ 	}
+ 
+ 	return 0;
+@@ -542,6 +546,8 @@ static int __io_timeout_prep(struct io_kiocb *req,
+ 
+ 	if (data->ts.tv_sec < 0 || data->ts.tv_nsec < 0)
+ 		return -EINVAL;
++	ant_uring_memory(req, "async.operand.timeout", "linux-6.12.94/x86_64/timespec64", 3,
++			 READ_ONCE(sqe->addr), &data->ts, sizeof(data->ts), false, true);
+ 
+ 	data->mode = io_translate_timeout_mode(flags);
+ 	hrtimer_init(&data->timer, io_timeout_get_clock(data), data->mode);
+diff --git a/io_uring/uring_cmd.c b/io_uring/uring_cmd.c
+index e5d0cc8..6a8e4c4 100644
+--- a/io_uring/uring_cmd.c
++++ b/io_uring/uring_cmd.c
+@@ -16,6 +16,12 @@
+ #include "rsrc.h"
+ #include "uring_cmd.h"
+ 
++/* Internal: the Antinomie operand of this command was recorded. Outside the
++ * user flag mask and the kernel's own internal flags.
++ */
++#define ANT_URING_CMD_RECORDED BIT(29)
++static_assert(!(ANT_URING_CMD_RECORDED & (IORING_URING_CMD_MASK | IORING_URING_CMD_CANCELABLE)));
++
+ static struct uring_cache *io_uring_async_get(struct io_kiocb *req)
+ {
+ 	struct io_ring_ctx *ctx = req->ctx;
+@@ -251,6 +257,25 @@ int io_uring_cmd(struct io_kiocb *req, unsigned int issue_flags)
+ 		req->iopoll_completed = 0;
+ 	}
+ 
++#ifdef CONFIG_ANTINOMIE
++	/* Before the call, which may complete the request. Socket option commands
++	 * record their own operand; any other command is driver-specific and
++	 * stays an explicit gap. A retried issue records nothing again.
++	 */
++	if (!(ioucmd->flags & ANT_URING_CMD_RECORDED)) {
++		bool socket_cmd = false;
++#if defined(CONFIG_NET)
++		socket_cmd = !!sock_from_file(file);
++#endif
++		ioucmd->flags |= ANT_URING_CMD_RECORDED;
++		if (socket_cmd && (ioucmd->cmd_op == SOCKET_URING_OP_SIOCINQ ||
++				   ioucmd->cmd_op == SOCKET_URING_OP_SIOCOUTQ))
++			ant_uring_scalar(req);
++		else if (!socket_cmd || (ioucmd->cmd_op != SOCKET_URING_OP_GETSOCKOPT &&
++					 ioucmd->cmd_op != SOCKET_URING_OP_SETSOCKOPT))
++			ant_uring_gap(req, "async.operand.uring_cmd", 0);
++	}
++#endif
+ 	ret = file->f_op->uring_cmd(ioucmd, issue_flags);
+ 	if (ret == -EAGAIN) {
+ 		struct uring_cache *cache = req->async_data;
+@@ -285,6 +310,21 @@ void io_uring_cmd_issue_blocking(struct io_uring_cmd *ioucmd)
+ 	io_req_queue_iowq(req);
+ }
+ 
++#define ANT_URING_OPTVAL_MAX (128 * 1024)
++
++/* Raw by optlen, as slice 2A records options without a decoder; above the
++ * ceiling only the declared size is recorded.
++ */
++static void ant_uring_optval(struct io_kiocb *req, void __user *optval, int optlen,
++			     bool output)
++{
++	if (optlen > ANT_URING_OPTVAL_MAX)
++		ant_uring_extent(req, "async.operand.optval", "", (unsigned long)optval, optlen);
++	else
++		ant_uring_memory(req, "async.operand.optval", "", 1, (unsigned long)optval,
++				 NULL, optlen, output, true);
++}
++
+ static inline int io_uring_cmd_getsockopt(struct socket *sock,
+ 					  struct io_uring_cmd *cmd,
+ 					  unsigned int issue_flags)
+@@ -304,8 +344,11 @@ static inline int io_uring_cmd_getsockopt(struct socket *sock,
+ 	err = do_sock_getsockopt(sock, compat, level, optname,
+ 				 USER_SOCKPTR(optval),
+ 				 KERNEL_SOCKPTR(&optlen));
+-	if (err)
++	if (err) {
++		ant_uring_scalar(cmd_to_io_kiocb(cmd));
+ 		return err;
++	}
++	ant_uring_optval(cmd_to_io_kiocb(cmd), optval, optlen, true);
+ 
+ 	/* On success, return optlen */
+ 	return optlen;
+@@ -325,6 +368,8 @@ static inline int io_uring_cmd_setsockopt(struct socket *sock,
+ 	optlen = READ_ONCE(cmd->sqe->optlen);
+ 	level = READ_ONCE(cmd->sqe->level);
+ 	optval_s = USER_SOCKPTR(optval);
++	if (optlen >= 0)
++		ant_uring_optval(cmd_to_io_kiocb(cmd), optval, optlen, false);
+ 
+ 	return do_sock_setsockopt(sock, compat, level, optname, optval_s,
+ 				  optlen);
+diff --git a/io_uring/waitid.c b/io_uring/waitid.c
+index ef22837..cef6ca0 100644
+--- a/io_uring/waitid.c
++++ b/io_uring/waitid.c
+@@ -111,6 +111,12 @@ static int io_waitid_finish(struct io_kiocb *req, int ret)
+ 
+ 	if (!io_waitid_copy_si(req, signo))
+ 		ret = -EFAULT;
++	if (!ret && io_kiocb_to_cmd(req, struct io_waitid)->infop)
++		ant_uring_memory(req, "async.operand.siginfo", "linux-6.12.94/x86_64/siginfo_t", 3,
++				 (unsigned long)io_kiocb_to_cmd(req, struct io_waitid)->infop,
++				 NULL, sizeof(siginfo_t), true, true);
++	else
++		ant_uring_scalar(req);
+ 	io_waitid_free(req);
+ 	return ret;
+ }
+diff --git a/io_uring/xattr.c b/io_uring/xattr.c
+index 6cf41c3..3cba03b 100644
+--- a/io_uring/xattr.c
++++ b/io_uring/xattr.c
+@@ -35,6 +35,13 @@ void io_xattr_cleanup(struct io_kiocb *req)
+ 
+ static void io_xattr_finish(struct io_kiocb *req, int ret)
+ {
++	struct io_xattr *ix = io_kiocb_to_cmd(req, struct io_xattr);
++
++	if (ret >= 0 && (req->opcode == IORING_OP_GETXATTR ||
++			 req->opcode == IORING_OP_FGETXATTR))
++		ant_uring_memory(req, "async.operand.xattr_value", "", 1,
++				 (unsigned long)ix->ctx.cvalue, ix->ctx.kvalue,
++				 min_t(size_t, ret, ix->ctx.size), true, true);
+ 	req->flags &= ~REQ_F_NEED_CLEANUP;
+ 
+ 	io_xattr_cleanup(req);
+@@ -73,6 +80,8 @@ static int __io_getxattr_prep(struct io_kiocb *req,
+ 		kfree(ix->ctx.kname);
+ 		return ret;
+ 	}
++	ant_uring_memory(req, "async.operand.xattr_name", "", 2, (unsigned long)name,
++			 ix->ctx.kname->name, ret + 1, false, false);
+ 
+ 	req->flags |= REQ_F_NEED_CLEANUP;
+ 	req->flags |= REQ_F_FORCE_ASYNC;
+@@ -100,6 +109,9 @@ int io_getxattr_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
+ 	if (IS_ERR(ix->filename)) {
+ 		ret = PTR_ERR(ix->filename);
+ 		ix->filename = NULL;
++	} else {
++		ant_uring_memory(req, "async.operand.path", "", 2, (unsigned long)path,
++				 ix->filename->name, strlen(ix->filename->name) + 1, false, false);
+ 	}
+ 
+ 	return ret;
+@@ -171,6 +183,11 @@ static int __io_setxattr_prep(struct io_kiocb *req,
+ 		kfree(ix->ctx.kname);
+ 		return ret;
+ 	}
++	ant_uring_memory(req, "async.operand.xattr_name", "", 2, (unsigned long)name,
++			 ix->ctx.kname->name, strlen(ix->ctx.kname->name) + 1, false, false);
++	ant_uring_memory(req, "async.operand.xattr_value", "", 1,
++			 (unsigned long)ix->ctx.cvalue, ix->ctx.kvalue, ix->ctx.size, false,
++			 req->opcode == IORING_OP_FSETXATTR);
+ 
+ 	req->flags |= REQ_F_NEED_CLEANUP;
+ 	req->flags |= REQ_F_FORCE_ASYNC;
+@@ -193,6 +210,9 @@ int io_setxattr_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
+ 	if (IS_ERR(ix->filename)) {
+ 		ret = PTR_ERR(ix->filename);
+ 		ix->filename = NULL;
++	} else {
++		ant_uring_memory(req, "async.operand.path", "", 2, (unsigned long)path,
++				 ix->filename->name, strlen(ix->filename->name) + 1, false, true);
+ 	}
+ 
+ 	return ret;
+diff --git a/kernel/antinomie/Makefile b/kernel/antinomie/Makefile
+index 3f8f3aa..cdb949f 100644
+--- a/kernel/antinomie/Makefile
++++ b/kernel/antinomie/Makefile
+@@ -1,2 +1,3 @@
+-obj-y += bootstrap.o guest.o recorder.o control.o run.o native_capture.o
++obj-y += bootstrap.o guest.o recorder.o control.o run.o async.o native_capture.o
++obj-y += async_capture.o
+ obj-y += observer.o
+diff --git a/kernel/antinomie/async.c b/kernel/antinomie/async.c
+new file mode 100644
+index 0000000..f9666e2
+--- /dev/null
++++ b/kernel/antinomie/async.c
+@@ -0,0 +1,911 @@
++// SPDX-License-Identifier: GPL-2.0-only
++#include <linux/antinomie_monitor.h>
++#include <linux/antinomie.h>
++#include <linux/atomic.h>
++#include <linux/cred.h>
++#include <linux/delay.h>
++#include <linux/errno.h>
++#include <linux/jiffies.h>
++#include <linux/ktime.h>
++#include <linux/overflow.h>
++#include <linux/refcount.h>
++#include <linux/sched/mm.h>
++#include <linux/sched/task.h>
++#include <linux/sched/signal.h>
++#include <linux/slab.h>
++#include <linux/spinlock.h>
++#include <linux/uio.h>
++#include <linux/workqueue.h>
++#include <uapi/linux/io_uring.h>
++
++#include "abi.h"
++#include "async.h"
++#include "capture_api.h"
++#include "run.h"
++#include "observer.h"
++
++#define ANT_ASYNC_REQUEST_COUNT 256
++#define ANT_ASYNC_RECORD_COUNT 1024
++#define ANT_AIO_REAP_COUNT 64
++
++struct ant_async {
++	struct ant_async_event event;
++	struct ant_task *capture;
++	refcount_t refs;
++	atomic_t capture_busy;
++	u64 output_end;
++	bool payload_failed;
++	/* The reap table owns the missing output (contract 14.2). */
++	bool payload_deferred;
++};
++
++/* An AIO read whose completion could not read user memory. Its output is
++ * read when the submitting address space reaps the event (stage 7). The ring
++ * is writable by the process, so reaping is matched on the ring slot and
++ * result the kernel recorded at completion, never on event contents.
++ */
++struct ant_aio_reap {
++	struct ant_async_event event;
++	struct mm_struct *mm;
++	const void *ioctx;	/* compared only */
++	u64 buf, len;
++	/* A vectored read: the kernel's copy of its iovec array, owned here. */
++	struct iovec *iov;
++	unsigned long nr_segs;
++	s64 res;
++	unsigned int ring_slot;
++	bool completed, used;
++};
++
++struct ant_async_record {
++	struct ant_async_event event;
++	size_t packet_len;
++	u8 packet[144 + 4096];
++};
++
++static atomic_t request_count = ATOMIC_INIT(0);
++static atomic64_t request_ids = ATOMIC64_INIT(0);
++static struct ant_async_record records[ANT_ASYNC_RECORD_COUNT];
++static unsigned int record_head, record_tail, record_count;
++static DEFINE_SPINLOCK(record_lock);
++/* Slot publication/detachment and request metadata share this lock. Taking a
++ * reference while the slot is protected closes the final-completion race.
++ * Never acquire request_lock while holding record_lock.
++ */
++static DEFINE_SPINLOCK(request_lock);
++static void publish_records(struct work_struct *work);
++static DECLARE_WORK(publish_work, publish_records);
++static struct ant_aio_reap reaps[ANT_AIO_REAP_COUNT];
++static atomic_t reap_used = ATOMIC_INIT(0);
++/* Taken from interrupt completions too; request_lock may nest inside it and
++ * it nests inside the AIO completion_lock.
++ */
++static DEFINE_SPINLOCK(reap_lock);
++
++static void event_hold(const struct ant_async_event *event)
++{
++	get_task_struct(event->origin);
++	if (event->owner)
++		get_task_struct(event->owner);
++}
++
++static void event_release(const struct ant_async_event *event)
++{
++	if (event->owner)
++		put_task_struct(event->owner);
++	put_task_struct(event->origin);
++}
++
++/* How long a record waits for room in the staging queue: about what one
++ * send waits for room in its ring when the host asks senders to wait.
++ */
++#define ANT_ASYNC_STAGE_WAIT_MS 1000
++
++/* Take record_lock with room for one record. When the queue is full and the
++ * caller may sleep while the host asks senders to wait instead of dropping
++ * (never-drop mode), wait for the publisher to make room, as a send would
++ * wait for its ring; an interrupt completion or a caller holding a lock
++ * cannot, nor can anyone once the wait ran out. False, unlocked, when there
++ * is no room.
++ */
++static bool stage_lock(unsigned long *irqflags)
++{
++	unsigned long deadline = 0;
++
++	for (;;) {
++		spin_lock_irqsave(&record_lock, *irqflags);
++		if (record_count < ANT_ASYNC_RECORD_COUNT)
++			return true;
++		spin_unlock_irqrestore(&record_lock, *irqflags);
++		if (!in_task() || !preemptible() || rcu_preempt_depth() || !ant_send_waits())
++			return false;
++		if (!deadline)
++			deadline = jiffies + msecs_to_jiffies(ANT_ASYNC_STAGE_WAIT_MS);
++		else if (time_after(jiffies, deadline))
++			return false;
++		schedule_work(&publish_work);
++		usleep_range(100, 200);
++	}
++}
++
++static void stage_record(struct ant_async *request, u32 stage, s64 result,
++			 u64 flags, bool final)
++{
++	struct ant_async_event *event;
++	struct ant_async_event observed;
++	unsigned long irqflags;
++
++	spin_lock_irqsave(&request_lock, irqflags);
++	observed = request->event;
++	spin_unlock_irqrestore(&request_lock, irqflags);
++	/* The subsystem owns request until this hook returns. A queued record
++	 * takes a separate task reference and never retains the request pointer.
++	 */
++	if (!stage_lock(&irqflags)) {
++		ant_run_async_loss(request->event.root_cookie);
++		return;
++	}
++	records[record_tail].packet_len = 0;
++	event = &records[record_tail].event;
++	*event = observed;
++	event->stage = stage;
++	event->result = result;
++	event->flags |= flags;
++	event->final = final;
++	event->timestamp_ns = ktime_get_ns();
++	event->cpu = raw_smp_processor_id();
++	if (stage != 1)
++		event->descriptor_len = 0;
++	event_hold(event);
++	record_tail = (record_tail + 1) % ANT_ASYNC_RECORD_COUNT;
++	record_count++;
++	spin_unlock_irqrestore(&record_lock, irqflags);
++	schedule_work(&publish_work);
++}
++
++/* A burst of queued records is published by one worker on one CPU. Before
++ * each record it waits, up to ANT_ASYNC_PACE_MS, until that CPU's ring has
++ * room to spare, so the burst cannot crowd out the syscall events of tasks
++ * running there: half the ring when a full ring drops a send, an eighth when
++ * senders wait for room instead (never-drop mode), which is still room for a
++ * sender that cannot wait long (one in atomic context spins briefly). After
++ * the wait it publishes anyway; drops are counted. Half a ring in never-drop
++ * mode was too much: a busy guest's rings are always fuller than that, and at
++ * 10 ms a record the worker could not keep up with one io_uring submission of
++ * a few hundred requests.
++ */
++#define ANT_ASYNC_PACE_MS 10
++
++static void await_room(void)
++{
++	unsigned long deadline = jiffies + msecs_to_jiffies(ANT_ASYNC_PACE_MS);
++	u32 spare = ant_ring_size() / (ant_send_waits() ? 8 : 2);
++
++	while (ant_send_room() < spare && time_before(jiffies, deadline))
++		usleep_range(100, 200);
++}
++
++static void publish_records(struct work_struct *work)
++{
++	static struct ant_async_record record;
++	unsigned long irqflags;
++	int error;
++
++	for (;;) {
++		spin_lock_irqsave(&record_lock, irqflags);
++		if (!record_count) {
++			spin_unlock_irqrestore(&record_lock, irqflags);
++			return;
++		}
++		record = records[record_head];
++		record_head = (record_head + 1) % ANT_ASYNC_RECORD_COUNT;
++		record_count--;
++		spin_unlock_irqrestore(&record_lock, irqflags);
++		await_room();
++		if (record.packet_len) {
++			error = ant_send(record.packet, record.packet_len);
++			if (error)
++				ant_monitor_async_send_failed();
++		} else {
++			error = ant_monitor_async_publish(&record.event);
++		}
++		if (error)
++			ant_run_async_loss(record.event.root_cookie);
++		event_release(&record.event);
++		cond_resched();
++	}
++}
++
++int ant_async_stage_packet(const struct ant_async_event *event,
++			   const void *packet, size_t packet_len)
++{
++	struct ant_async_record *record;
++	unsigned long irqflags;
++
++	if (packet_len > sizeof(record->packet))
++		return -EMSGSIZE;
++	if (!stage_lock(&irqflags)) {
++		ant_run_async_loss(event->root_cookie);
++		return -ENOSPC;
++	}
++	record = &records[record_tail];
++	record->event = *event;
++	record->packet_len = packet_len;
++	memcpy(record->packet, packet, packet_len);
++	event_hold(event);
++	record_tail = (record_tail + 1) % ANT_ASYNC_RECORD_COUNT;
++	record_count++;
++	spin_unlock_irqrestore(&record_lock, irqflags);
++	schedule_work(&publish_work);
++	return 0;
++}
++
++static struct ant_async *begin(struct task_struct *owner, u64 root_cookie, u64 task_cookie,
++			       u64 capture_cookie,
++			       u8 system, u32 opcode, u64 user_data, u32 flags,
++			       const void *descriptor, size_t descriptor_len)
++{
++	const struct cred *cred = current_cred();
++	struct ant_async *request;
++	struct ant_async_event *event;
++
++	if (descriptor_len > sizeof(event->descriptor)) {
++		ant_run_async_incomplete(root_cookie);
++		return NULL;
++	}
++	if (!atomic_add_unless(&request_count, 1, ANT_ASYNC_REQUEST_COUNT)) {
++		ant_run_async_loss(root_cookie);
++		ant_run_async_incomplete(root_cookie);
++		return NULL;
++	}
++	request = kzalloc(sizeof(*request), GFP_NOWAIT);
++	if (!request) {
++		atomic_dec(&request_count);
++		ant_run_async_loss(root_cookie);
++		ant_run_async_incomplete(root_cookie);
++		return NULL;
++	}
++	event = &request->event;
++	refcount_set(&request->refs, 1);
++	atomic_set(&request->capture_busy, 0);
++	request->capture = ant_monitor_async_capture_alloc();
++	event->origin = current;
++	get_task_struct(current);
++	if (owner) {
++		event->owner = owner;
++		get_task_struct(owner);
++	}
++	event->mm = current->mm;
++	event->request_id = atomic64_inc_return(&request_ids);
++	/* An attributed request was not submitted by a call of its owner. */
++	event->parent_call_id = owner ? 0 : ant_monitor_parent_call_id();
++	event->entry_ns = ktime_get_ns();
++	event->cpu = raw_smp_processor_id();
++	event->root_cookie = root_cookie;
++	event->capture_cookie = capture_cookie;
++	event->task_cookie = task_cookie;
++	event->start_boot_ns = current->start_boottime;
++	event->pid = task_tgid_nr(current);
++	event->tid = task_pid_nr(current);
++	event->opcode = opcode;
++	event->user_data = user_data;
++	event->flags = flags;
++	event->system = system;
++	event->uid = from_kuid(&init_user_ns, cred->uid);
++	event->gid = from_kgid(&init_user_ns, cred->gid);
++	event->euid = from_kuid(&init_user_ns, cred->euid);
++	event->egid = from_kgid(&init_user_ns, cred->egid);
++	event->descriptor_len = descriptor_len;
++	memcpy(event->descriptor, descriptor, descriptor_len);
++	ant_run_async_start(event->root_cookie);
++	/* A writer that is not proven to be the submitting process. */
++	if (flags & ~(ANT_ASYNC_PAYLOAD_GAP | ANT_ASYNC_PRODUCER_PROCESS))
++		ant_run_async_incomplete(event->root_cookie);
++	stage_record(request, 1, 0, 0, false);
++	return request;
++}
++
++struct ant_async *ant_monitor_async_begin(u8 system, u32 opcode, u64 user_data,
++					  u32 flags, const void *descriptor, size_t descriptor_len)
++{
++	u64 capture_cookie = ant_observer_admit(current);
++
++	if (!READ_ONCE(current->ant_root_cookie) && !capture_cookie)
++		return NULL;
++	return begin(NULL, READ_ONCE(current->ant_root_cookie), ant_monitor_cookie(current),
++		     capture_cookie, system, opcode,
++		     user_data, flags, descriptor, descriptor_len);
++}
++
++/* Contract 14.3: the submitting task is not the ring's producer of record. */
++struct ant_async *ant_monitor_async_begin_attributed(struct task_struct *owner,
++						     u64 root_cookie, u64 task_cookie,
++						     u8 system, u32 opcode, u64 user_data,
++						     u32 flags, const void *descriptor,
++						     size_t descriptor_len)
++{
++	u64 capture_cookie = ant_observer_admit(owner);
++
++	if (!root_cookie && !capture_cookie)
++		return NULL;
++	return begin(owner, root_cookie, task_cookie ?: ant_monitor_cookie(owner),
++		     capture_cookie, system, opcode, user_data,
++		     flags | ANT_ASYNC_PRODUCER_UNKNOWN, descriptor, descriptor_len);
++}
++
++static struct ant_async *get_request(struct ant_async **slot, bool final)
++{
++	struct ant_async *request;
++	unsigned long irqflags;
++
++	spin_lock_irqsave(&request_lock, irqflags);
++	request = *slot;
++	if (request) {
++		if (final)
++			*slot = NULL;
++		else
++			refcount_inc(&request->refs);
++	}
++	spin_unlock_irqrestore(&request_lock, irqflags);
++	return request;
++}
++
++static void put_request(struct ant_async *request)
++{
++	if (!refcount_dec_and_test(&request->refs))
++		return;
++	event_release(&request->event);
++	ant_monitor_async_capture_free(request->capture);
++	kfree(request);
++	atomic_dec(&request_count);
++}
++
++static void finish_request(struct ant_async *request)
++{
++	unsigned long irqflags;
++	bool payload_missing;
++
++	spin_lock_irqsave(&request_lock, irqflags);
++	payload_missing = (request->event.flags & ANT_ASYNC_PAYLOAD_GAP) &&
++		!request->payload_failed && !request->payload_deferred;
++	spin_unlock_irqrestore(&request_lock, irqflags);
++	if (payload_missing)
++		ant_run_async_loss(request->event.root_cookie);
++	ant_run_async_finish(request->event.root_cookie);
++	put_request(request);
++}
++
++bool ant_async_iter_covers_payload(const struct ant_async_event *event)
++{
++	const struct io_uring_sqe *sqe = (const void *)event->descriptor;
++
++	if (event->system == ANT_ASYNC_AIO)
++		return true;
++	switch (event->opcode) {
++	case IORING_OP_READV: case IORING_OP_WRITEV:
++	case IORING_OP_READ_FIXED: case IORING_OP_WRITE_FIXED:
++	case IORING_OP_READ: case IORING_OP_WRITE:
++	case IORING_OP_RECV:
++		return true;
++	case IORING_OP_SEND: case IORING_OP_SEND_ZC:
++		return !sqe->addr2;
++	default:
++		/* An iterator does not include msg_name, msg_control or other
++		 * opcode-specific nested operands. Keep their gap explicit.
++		 */
++		return false;
++	}
++}
++
++static bool rw_output(const struct ant_async_event *event)
++{
++	if (event->system == ANT_ASYNC_AIO)
++		return true;
++	return event->opcode == IORING_OP_READ || event->opcode == IORING_OP_READV ||
++		event->opcode == IORING_OP_READ_FIXED;
++}
++
++void ant_monitor_async_iter(struct ant_async **slot,
++			    const struct iov_iter *iter, size_t size,
++			    u64 result_offset, bool output)
++{
++	struct ant_async *request = get_request(slot, false);
++	struct ant_async_event event;
++	unsigned long irqflags;
++	u64 output_end = 0;
++	bool acquired, failed, gap = false;
++
++	if (!request)
++		return;
++	spin_lock_irqsave(&request_lock, irqflags);
++	event = request->event;
++	if (output && rw_output(&event)) {
++		/* A successful tail cannot establish observation of a missing prefix. */
++		gap = result_offset > request->output_end ||
++			check_add_overflow(result_offset, (u64)size, &output_end);
++		if (gap) {
++			request->event.flags |= ANT_ASYNC_PAYLOAD_GAP;
++			request->payload_failed = true;
++			event.flags |= ANT_ASYNC_PAYLOAD_GAP;
++		}
++	}
++	spin_unlock_irqrestore(&request_lock, irqflags);
++	acquired = !atomic_cmpxchg(&request->capture_busy, 0, 1);
++	if (!acquired) {
++		failed = true;
++	} else {
++		failed = !request->capture || ant_monitor_async_capture(request->capture,
++				&event, iter, size, result_offset, output);
++	}
++	spin_lock_irqsave(&request_lock, irqflags);
++	if (!failed && output && rw_output(&event) && !gap)
++		request->output_end = max(request->output_end, output_end);
++	if (failed) {
++		request->event.flags |= ANT_ASYNC_PAYLOAD_GAP;
++		request->payload_failed = true;
++	} else if (!request->payload_failed && ant_async_iter_covers_payload(&event)) {
++		request->event.flags &= ~ANT_ASYNC_PAYLOAD_GAP;
++	}
++	spin_unlock_irqrestore(&request_lock, irqflags);
++	if (acquired)
++		atomic_set_release(&request->capture_busy, 0);
++	if (failed || gap)
++		ant_run_async_loss(request->event.root_cookie);
++	put_request(request);
++}
++
++void ant_monitor_async_memory(struct ant_async **slot, const char *key,
++			      const char *layout, u16 encoding, u64 address,
++			      const void *snapshot, u64 size, bool output, bool complete)
++{
++	struct ant_async *request = get_request(slot, false);
++	struct ant_async_event event;
++	unsigned long irqflags;
++	bool failed;
++
++	if (!request)
++		return;
++	spin_lock_irqsave(&request_lock, irqflags);
++	event = request->event;
++	spin_unlock_irqrestore(&request_lock, irqflags);
++	if (atomic_cmpxchg(&request->capture_busy, 0, 1)) {
++		failed = true;
++	} else {
++		failed = !request->capture || ant_monitor_async_capture_memory(request->capture,
++				&event, key, layout, encoding, address, snapshot, size,
++				output ? 4 : 1, -1);
++		atomic_set_release(&request->capture_busy, 0);
++	}
++	spin_lock_irqsave(&request_lock, irqflags);
++	if (failed) {
++		request->event.flags |= ANT_ASYNC_PAYLOAD_GAP;
++		request->payload_failed = true;
++	} else if (complete && !request->payload_failed) {
++		request->event.flags &= ~ANT_ASYNC_PAYLOAD_GAP;
++	}
++	spin_unlock_irqrestore(&request_lock, irqflags);
++	if (failed)
++		ant_run_async_loss(request->event.root_cookie);
++	put_request(request);
++}
++
++/* A request that ends with an error moved no data: whatever payload it
++ * would have had was never transferred, so there is nothing left to observe.
++ * Its final record carries no payload gap and finishing it counts no loss.
++ * A capture that had already failed keeps its gap (and was counted then).
++ */
++static void failed_without_payload(struct ant_async *request, s64 result)
++{
++	unsigned long irqflags;
++
++	if (result >= 0)
++		return;
++	spin_lock_irqsave(&request_lock, irqflags);
++	if (!request->payload_failed)
++		request->event.flags &= ~ANT_ASYNC_PAYLOAD_GAP;
++	spin_unlock_irqrestore(&request_lock, irqflags);
++}
++
++void ant_monitor_async_accepted(struct ant_async **slot, int result)
++{
++	struct ant_async *request = get_request(slot, result < 0);
++
++	if (!request)
++		return;
++	if (result < 0) {
++		failed_without_payload(request, result);
++		stage_record(request, 3, result, 0, true);
++		finish_request(request);
++	} else {
++		stage_record(request, 2, result, 0, false);
++		put_request(request);
++	}
++}
++
++void ant_monitor_async_complete(struct ant_async **slot, s64 result,
++				u32 flags, bool final)
++{
++	struct ant_async *request = get_request(slot, final);
++
++	if (!request)
++		return;
++	if (final)
++		failed_without_payload(request, result);
++	stage_record(request, result == -ECANCELED ? 5 : 4, result,
++		     (u64)flags << 32, final);
++	if (final)
++		finish_request(request);
++	else
++		put_request(request);
++}
++
++void ant_monitor_async_abandon(struct ant_async **slot)
++{
++	struct ant_async *request = get_request(slot, true);
++
++	if (!request)
++		return;
++	ant_run_async_incomplete(request->event.root_cookie);
++	stage_record(request, 6, -ENODATA, ANT_ASYNC_ABANDONED, true);
++	finish_request(request);
++}
++
++void ant_monitor_async_link_completion(struct ant_async **source,
++				       struct ant_async **target, s64 result, u32 flags)
++{
++	struct ant_async *request = get_request(source, false);
++	unsigned long irqflags;
++	bool transferred = false;
++
++	if (!request)
++		return;
++	stage_record(request, result == -ECANCELED ? 5 : 4, result,
++		     (u64)flags << 32, false);
++	/* Both subsystem objects remain owned by the caller. Transfer the slot
++	 * reference, not the origin identity or an additional pending request.
++	 */
++	spin_lock_irqsave(&request_lock, irqflags);
++	if (*source == request && !*target) {
++		*target = request;
++		*source = NULL;
++		transferred = true;
++	}
++	spin_unlock_irqrestore(&request_lock, irqflags);
++	if (!transferred)
++		ant_run_async_incomplete(request->event.root_cookie);
++	put_request(request);
++}
++
++void ant_monitor_async_unavailable(void)
++{
++	if (READ_ONCE(current->ant_root_cookie))
++		ant_run_async_incomplete(current->ant_root_cookie);
++}
++
++/* The request has no payload beyond its scalar submission (contract 14.4). */
++void ant_monitor_async_scalar(struct ant_async **slot)
++{
++	struct ant_async *request = get_request(slot, false);
++	unsigned long irqflags;
++
++	if (!request)
++		return;
++	spin_lock_irqsave(&request_lock, irqflags);
++	if (!request->payload_failed)
++		request->event.flags &= ~ANT_ASYNC_PAYLOAD_GAP;
++	spin_unlock_irqrestore(&request_lock, irqflags);
++	put_request(request);
++}
++
++static void status_field(struct ant_async **slot, const char *key, const char *layout,
++			 u64 address, u64 size, bool output, int status, bool complete)
++{
++	struct ant_async *request = get_request(slot, false);
++	struct ant_async_event event;
++	unsigned long irqflags;
++	bool failed;
++
++	if (!request)
++		return;
++	spin_lock_irqsave(&request_lock, irqflags);
++	event = request->event;
++	spin_unlock_irqrestore(&request_lock, irqflags);
++	if (atomic_cmpxchg(&request->capture_busy, 0, 1)) {
++		failed = true;
++	} else {
++		failed = !request->capture || ant_monitor_async_capture_memory(request->capture,
++				&event, key, layout, 3, address, NULL, size,
++				output ? 4 : 1, status);
++		atomic_set_release(&request->capture_busy, 0);
++	}
++	spin_lock_irqsave(&request_lock, irqflags);
++	if (failed) {
++		request->event.flags |= ANT_ASYNC_PAYLOAD_GAP;
++		request->payload_failed = true;
++	} else if (complete && !request->payload_failed) {
++		request->event.flags &= ~ANT_ASYNC_PAYLOAD_GAP;
++	}
++	spin_unlock_irqrestore(&request_lock, irqflags);
++	if (failed)
++		ant_run_async_loss(request->event.root_cookie);
++	put_request(request);
++}
++
++/* Memory the kernel compares, wakes or hands out later: its address and
++ * extent are the operand, its bytes are not.
++ */
++void ant_monitor_async_address(struct ant_async **slot, const char *key,
++			       const char *layout, u64 address, u64 size)
++{
++	status_field(slot, key, layout, address, size, false, ANT_ADDRESS_ONLY, true);
++}
++
++/* An operand whose extent is beyond the recorder's ceiling: its declared size
++ * is recorded with no bytes, and the payload gap stays set.
++ */
++void ant_monitor_async_extent(struct ant_async **slot, const char *key, const char *layout,
++			      u64 address, u64 size)
++{
++	status_field(slot, key, layout, address, size, false, ANT_INVALID_EXTENT, false);
++}
++
++/* An operand without a decoder. The request's payload gap stays set. */
++void ant_monitor_async_gap(struct ant_async **slot, const char *key, u64 address)
++{
++	status_field(slot, key, "", address, U64_MAX, false, ANT_NO_DECODER, false);
++}
++
++/* Register an AIO read before it is started, so an interrupt completion that
++ * races with read_iter() cannot count the missing output before it is owned.
++ */
++u64 ant_monitor_aio_defer(struct ant_async **slot, const void *ioctx,
++			  const struct iov_iter *iter)
++{
++	struct ant_async *request;
++	struct ant_aio_reap *entry = NULL;
++	struct iovec *iov = NULL;
++	unsigned long irqflags, reapflags, nr_segs = 0;
++	u64 buf = 0, request_id = 0;
++	int i;
++
++	/* PREAD imports a single user buffer. PREADV with more than one
++	 * segment keeps the iovec array the kernel imported, so the reap reads
++	 * exactly the buffers the read filled, whatever the process later
++	 * writes to its own array.
++	 */
++	if (iter_is_ubuf(iter)) {
++		buf = (unsigned long)iter->ubuf + iter->iov_offset;
++	} else if (iter_is_iovec(iter) && !iter->iov_offset) {
++		nr_segs = iter->nr_segs;
++		iov = kmemdup_array(iter_iov(iter), nr_segs, sizeof(*iov),
++				    GFP_KERNEL | __GFP_NOWARN);
++		if (!iov)
++			return 0;
++	} else {
++		return 0;
++	}
++	request = get_request(slot, false);
++	if (!request) {
++		kfree(iov);
++		return 0;
++	}
++	spin_lock_irqsave(&reap_lock, reapflags);
++	for (i = 0; i < ANT_AIO_REAP_COUNT; i++) {
++		if (!reaps[i].used) {
++			entry = &reaps[i];
++			break;
++		}
++	}
++	if (entry) {
++		spin_lock_irqsave(&request_lock, irqflags);
++		entry->event = request->event;
++		request->payload_deferred = true;
++		spin_unlock_irqrestore(&request_lock, irqflags);
++		event_hold(&entry->event);
++		entry->mm = current->mm;
++		entry->ioctx = ioctx;
++		entry->buf = buf;
++		entry->len = iov_iter_count(iter);
++		entry->iov = iov;
++		entry->nr_segs = nr_segs;
++		entry->res = 0;
++		entry->completed = false;
++		entry->used = true;
++		atomic_inc(&reap_used);
++		request_id = entry->event.request_id;
++	}
++	spin_unlock_irqrestore(&reap_lock, reapflags);
++	/* A full table leaves the gap to finish_request(), which counts it. */
++	if (!entry)
++		kfree(iov);
++	put_request(request);
++	return request_id;
++}
++
++static void reap_release(struct ant_aio_reap *entry)
++{
++	kfree(entry->iov);
++	event_release(&entry->event);
++}
++
++/* Removes the entry for request_id; the caller releases its event. */
++static bool reap_take(struct ant_aio_reap *out, u64 request_id)
++{
++	unsigned long flags;
++	bool found = false;
++	int i;
++
++	spin_lock_irqsave(&reap_lock, flags);
++	for (i = 0; i < ANT_AIO_REAP_COUNT; i++) {
++		if (reaps[i].used && reaps[i].event.request_id == request_id) {
++			*out = reaps[i];
++			reaps[i].used = false;
++			atomic_dec(&reap_used);
++			found = true;
++			break;
++		}
++	}
++	spin_unlock_irqrestore(&reap_lock, flags);
++	return found;
++}
++
++/* read_iter() did not queue the request: its result is observed inline. */
++void ant_monitor_aio_undefer(struct ant_async **slot, u64 request_id)
++{
++	struct ant_async *request;
++	struct ant_aio_reap entry;
++	unsigned long irqflags;
++
++	if (!request_id || !reap_take(&entry, request_id))
++		return;
++	reap_release(&entry);
++	request = get_request(slot, false);
++	if (!request)
++		return;
++	spin_lock_irqsave(&request_lock, irqflags);
++	request->payload_deferred = false;
++	spin_unlock_irqrestore(&request_lock, irqflags);
++	put_request(request);
++}
++
++u64 ant_monitor_async_id(struct ant_async **slot)
++{
++	struct ant_async *request;
++	unsigned long irqflags;
++	u64 id = 0;
++
++	spin_lock_irqsave(&request_lock, irqflags);
++	request = *slot;
++	if (request)
++		id = request->event.request_id;
++	spin_unlock_irqrestore(&request_lock, irqflags);
++	return id;
++}
++
++/* Called under the AIO completion_lock as the event is written to ring_slot.
++ * A read without output has nothing to observe: its entry is dropped.
++ */
++void ant_monitor_aio_completed(u64 request_id, const void *ioctx, unsigned int ring_slot,
++			       s64 res)
++{
++	struct ant_aio_reap dropped;
++	unsigned long flags;
++	bool drop = false;
++	int i;
++
++	if (!request_id || !atomic_read(&reap_used))
++		return;
++	spin_lock_irqsave(&reap_lock, flags);
++	for (i = 0; i < ANT_AIO_REAP_COUNT; i++) {
++		struct ant_aio_reap *entry = &reaps[i];
++
++		if (!entry->used || entry->event.request_id != request_id ||
++		    entry->ioctx != ioctx)
++			continue;
++		if (res <= 0) {
++			dropped = *entry;
++			entry->used = false;
++			atomic_dec(&reap_used);
++			drop = true;
++		} else {
++			entry->ring_slot = ring_slot;
++			entry->res = res;
++			entry->completed = true;
++		}
++		break;
++	}
++	spin_unlock_irqrestore(&reap_lock, flags);
++	if (drop)
++		reap_release(&dropped);
++}
++
++static int reap_capture(const struct ant_aio_reap *entry, u64 size)
++{
++	struct ant_task *ctx = ant_monitor_async_capture_alloc();
++	struct iov_iter iter;
++	int error;
++
++	if (!ctx)
++		return -ENOMEM;
++	if (entry->iov) {
++		iov_iter_init(&iter, ITER_DEST, entry->iov, entry->nr_segs, entry->len);
++		error = ant_monitor_async_capture_stage(ctx, &entry->event, &iter, size,
++							0, true, 7);
++	} else {
++		error = ant_monitor_async_capture_memory(ctx, &entry->event,
++							 "async.payload.output", "", 1,
++							 entry->buf, NULL, size, 7, -1);
++	}
++	ant_monitor_async_capture_free(ctx);
++	return error;
++}
++
++/* io_getevents() copied ring slots [first, first + count) to the process. */
++void ant_monitor_aio_consumed(const void *ioctx, unsigned int first, unsigned int count)
++{
++	struct ant_aio_reap entry;
++	unsigned long flags;
++	bool found;
++	int i;
++
++	while (atomic_read(&reap_used)) {
++		found = false;
++		spin_lock_irqsave(&reap_lock, flags);
++		for (i = 0; i < ANT_AIO_REAP_COUNT; i++) {
++			struct ant_aio_reap *candidate = &reaps[i];
++
++			if (!candidate->used || !candidate->completed ||
++			    candidate->ioctx != ioctx || candidate->mm != current->mm ||
++			    candidate->ring_slot - first >= count)
++				continue;
++			entry = *candidate;
++			candidate->used = false;
++			atomic_dec(&reap_used);
++			found = true;
++			break;
++		}
++		spin_unlock_irqrestore(&reap_lock, flags);
++		if (!found)
++			return;
++		entry.event.result = entry.res;
++		entry.event.flags &= ~ANT_ASYNC_PAYLOAD_GAP;
++		if (reap_capture(&entry, min_t(u64, entry.res, entry.len)))
++			ant_run_async_loss(entry.event.root_cookie);
++		reap_release(&entry);
++	}
++}
++
++/* Entries left unreaped when their context or address space goes away. */
++static void reap_drop(struct mm_struct *mm, const void *ioctx)
++{
++	struct ant_aio_reap entry;
++	unsigned long flags;
++	int i;
++
++	if (!atomic_read(&reap_used))
++		return;
++	for (i = 0; i < ANT_AIO_REAP_COUNT; i++) {
++		spin_lock_irqsave(&reap_lock, flags);
++		if (!reaps[i].used || (mm && reaps[i].mm != mm) ||
++		    (ioctx && reaps[i].ioctx != ioctx)) {
++			spin_unlock_irqrestore(&reap_lock, flags);
++			continue;
++		}
++		entry = reaps[i];
++		reaps[i].used = false;
++		atomic_dec(&reap_used);
++		spin_unlock_irqrestore(&reap_lock, flags);
++		ant_run_async_loss(entry.event.root_cookie);
++		reap_release(&entry);
++	}
++}
++
++void ant_monitor_aio_exit(struct mm_struct *mm)
++{
++	reap_drop(mm, NULL);
++}
++
++void ant_monitor_aio_ctx_free(const void *ioctx)
++{
++	reap_drop(NULL, ioctx);
++}
+diff --git a/kernel/antinomie/async.h b/kernel/antinomie/async.h
+new file mode 100644
+index 0000000..5dff0c4
+--- /dev/null
++++ b/kernel/antinomie/async.h
+@@ -0,0 +1,64 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef _ANTINOMIE_ASYNC_H
++#define _ANTINOMIE_ASYNC_H
++
++#include <linux/types.h>
++
++struct task_struct;
++struct mm_struct;
++struct ant_task;
++struct iov_iter;
++
++struct ant_async_event {
++	struct task_struct *origin;
++	/* Attributed requests (contract 14.3): the ring creator, whose task
++	 * cookie the event carries and whose counters sequence its packets.
++	 */
++	struct task_struct *owner;
++	/* Compared, never dereferenced: identifies the origin's address space. */
++	struct mm_struct *mm;
++	u64 request_id;
++	u64 parent_call_id;
++	u64 entry_ns;
++	u64 timestamp_ns;
++	u64 root_cookie;
++	u64 capture_cookie;
++	u64 task_cookie;
++	u64 start_boot_ns;
++	u64 user_data;
++	s64 result;
++	u32 opcode;
++	u32 stage;
++	u32 cpu;
++	u64 flags;
++	u32 pid, tid;
++	u32 uid, gid, euid, egid;
++	u16 descriptor_len;
++	u8 system;
++	bool final;
++	u8 descriptor[128];
++};
++
++u64 ant_monitor_parent_call_id(void);
++bool ant_async_iter_covers_payload(const struct ant_async_event *event);
++int ant_monitor_async_publish(const struct ant_async_event *event);
++struct ant_task *ant_monitor_async_capture_alloc(void);
++void ant_monitor_async_capture_free(struct ant_task *ctx);
++int ant_monitor_async_capture_memory(struct ant_task *ctx,
++				     const struct ant_async_event *event, const char *key,
++				     const char *layout, u16 encoding, u64 address,
++				     const void *snapshot, u64 size, u32 stage, int status);
++bool ant_async_same_space(const struct ant_async_event *event);
++int ant_monitor_async_capture(struct ant_task *ctx,
++			      const struct ant_async_event *event,
++			      const struct iov_iter *iter, size_t size,
++			      u64 result_offset, bool output);
++int ant_monitor_async_capture_stage(struct ant_task *ctx,
++				    const struct ant_async_event *event,
++				    const struct iov_iter *iter, size_t size,
++				    u64 result_offset, bool output, u32 stage);
++int ant_async_stage_packet(const struct ant_async_event *event,
++			   const void *packet, size_t packet_len);
++void ant_monitor_async_send_failed(void);
++
++#endif
+diff --git a/kernel/antinomie/async_capture.c b/kernel/antinomie/async_capture.c
+new file mode 100644
+index 0000000..efa232d
+--- /dev/null
++++ b/kernel/antinomie/async_capture.c
+@@ -0,0 +1,434 @@
++// SPDX-License-Identifier: GPL-2.0-only
++#include <linux/aio_abi.h>
++#include <linux/cpumask.h>
++#include <linux/fs.h>
++#include <linux/io_uring_types.h>
++#include <linux/log2.h>
++#include <linux/overflow.h>
++#include <linux/signal.h>
++#include <linux/slab.h>
++#include <linux/uaccess.h>
++#include <linux/uio.h>
++#include <uapi/linux/io_uring.h>
++
++#include "async_capture.h"
++#include "capture_api.h"
++
++/* Pinned registration ceilings from io_uring/rsrc.c and kbuf.c. */
++#define ANT_FIXED_FILE_COUNT BIT(20)
++#define ANT_REG_BUFFER_COUNT BIT(14)
++#define ANT_PBUF_COUNT 65535
++#define ANT_SQ_COUNT 32768
++#define ANT_CQ_COUNT (2 * ANT_SQ_COUNT)
++
++struct ant_uring_setup {
++	struct io_uring_params params;
++	u64 rings_size;
++	u64 sqes_size;
++	bool valid;
++};
++
++struct ant_aio_sigset {
++	u64 sigmask;
++	u64 sigset_size;
++};
++
++static void bytes_field(struct ant_task *ctx, u8 arg, const char *key,
++			const char *layout, u64 address, u64 size,
++			enum ant_status status)
++{
++	ant_capture_field(ctx, arg, key, layout, layout[0] ? 3 : 1, address,
++			  NULL, size, size, status);
++}
++
++static bool snapshot_field(struct ant_task *ctx, u8 arg, const char *key,
++			   const char *layout, u64 address, void *out, size_t size)
++{
++	int error = address ? copy_from_user_nofault(out,
++			(void __user *)(unsigned long)address, size) : -EFAULT;
++
++	ant_capture_field(ctx, arg, key, layout, 3, address, error ? NULL : out,
++			  size, size, !address ? ANT_NULL_POINTER :
++			  error ? ANT_COPY_FAULT : ANT_COMPLETE);
++	return !error;
++}
++
++static void array_field(struct ant_task *ctx, u8 arg, const char *key,
++			const char *layout, u64 address, u64 count,
++			u64 unit, u64 ceiling)
++{
++	u64 size;
++	bool invalid = count > ceiling || check_mul_overflow(count, unit, &size);
++
++	if (invalid)
++		size = U64_MAX;
++	bytes_field(ctx, arg, key, layout, address, size,
++		    invalid ? ANT_INVALID_EXTENT : ANT_COMPLETE);
++}
++
++static void signal_mask(struct ant_task *ctx, u8 arg, u64 address, u64 size)
++{
++	bytes_field(ctx, arg, "signal.mask", "linux-6.12.94/x86_64/sigset_t",
++		    address, sizeof(sigset_t),
++		    size == sizeof(sigset_t) ? ANT_COMPLETE : ANT_INVALID_EXTENT);
++}
++
++static void aio_submission(struct ant_task *ctx, const u64 a[6])
++{
++	u64 ptr, index, count = a[1];
++	struct iocb iocb;
++	char key[96];
++
++	array_field(ctx, 2, "arg2.iocbpp", "linux-6.12.94/x86_64/pointer[]",
++		    a[2], count, sizeof(ptr), LONG_MAX / sizeof(ptr));
++	if ((s64)count < 0 || count > LONG_MAX / sizeof(ptr))
++		return;
++	for (index = 0; index < count && !ant_capture_lost(ctx); index++) {
++		if (a[2] > ULONG_MAX - index * sizeof(ptr))
++			return;
++		scnprintf(key, sizeof(key), "arg2.iocbpp[%llu]", index);
++		if (!snapshot_field(ctx, 2, key, "linux-6.12.94/x86_64/pointer",
++				    a[2] + index * sizeof(ptr), &ptr, sizeof(ptr)))
++			return;
++		scnprintf(key, sizeof(key), "arg2.iocb[%llu]", index);
++		if (!snapshot_field(ctx, 2, key, "linux-6.12.94/x86_64/iocb", ptr,
++				    &iocb, sizeof(iocb)))
++			return;
++		if (iocb.aio_lio_opcode == IOCB_CMD_PREADV ||
++		    iocb.aio_lio_opcode == IOCB_CMD_PWRITEV) {
++			scnprintf(key, sizeof(key), "arg2.iocb[%llu].iov", index);
++			array_field(ctx, 2, key, "linux-6.12.94/x86_64/iovec[]",
++				    iocb.aio_buf, iocb.aio_nbytes, sizeof(struct iovec),
++				    UIO_MAXIOV);
++		} else if (iocb.aio_lio_opcode == IOCB_CMD_PWRITE) {
++			scnprintf(key, sizeof(key), "arg2.iocb[%llu].input", index);
++			array_field(ctx, 2, key, "", iocb.aio_buf, iocb.aio_nbytes,
++				    1, MAX_RW_COUNT);
++		} else if (iocb.aio_lio_opcode == IOCB_CMD_PREAD) {
++			scnprintf(key, sizeof(key), "arg2.iocb[%llu].output", index);
++			bytes_field(ctx, 2, key, "", iocb.aio_buf, iocb.aio_nbytes,
++				    ANT_ASYNC_UNOBSERVED);
++		} else if (iocb.aio_lio_opcode != IOCB_CMD_FSYNC &&
++			   iocb.aio_lio_opcode != IOCB_CMD_FDSYNC &&
++			   iocb.aio_lio_opcode != IOCB_CMD_POLL) {
++			scnprintf(key, sizeof(key), "arg2.iocb[%llu].variant", index);
++			bytes_field(ctx, 2, key, "", iocb.aio_buf, U64_MAX, ANT_NO_DECODER);
++		}
++	}
++}
++
++struct registration {
++	u16 size;
++	u8 phases;
++	bool array;
++	const char *layout;
++	s16 arg_count;
++};
++
++#define REG(op, type, phases_) \
++	[op] = { sizeof(struct type), phases_, false, "linux-6.12.94/x86_64/" #type, 1 }
++#define REG_COUNT(op, type, phases_, count_) \
++	[op] = { sizeof(struct type), phases_, false, "linux-6.12.94/x86_64/" #type, count_ }
++#define REGS(op, type, phases_) \
++	[op] = { sizeof(struct type), phases_, true, "linux-6.12.94/x86_64/" #type "[]" }
++#define REG_INT(op, phases_) \
++	[op] = { sizeof(u32), phases_, false, "linux-6.12.94/x86_64/int", 1 }
++
++static const struct registration registrations[IORING_REGISTER_LAST] = {
++	REGS(IORING_REGISTER_BUFFERS, iovec, 1),
++	[IORING_REGISTER_FILES] = { sizeof(u32), 1, true, "linux-6.12.94/x86_64/int[]" },
++	REG_INT(IORING_REGISTER_EVENTFD, 1),
++	REG_INT(IORING_REGISTER_EVENTFD_ASYNC, 1),
++	REG_COUNT(IORING_REGISTER_FILES_UPDATE, io_uring_files_update, 1, 0),
++	REGS(IORING_REGISTER_RESTRICTIONS, io_uring_restriction, 1),
++	REG_COUNT(IORING_REGISTER_FILES2, io_uring_rsrc_register, 1, -1),
++	REG_COUNT(IORING_REGISTER_BUFFERS2, io_uring_rsrc_register, 1, -1),
++	REG_COUNT(IORING_REGISTER_FILES_UPDATE2, io_uring_rsrc_update2, 1, -1),
++	REG_COUNT(IORING_REGISTER_BUFFERS_UPDATE, io_uring_rsrc_update2, 1, -1),
++	[IORING_REGISTER_IOWQ_AFF] = { 1, 1, true, "linux-6.12.94/x86_64/cpumask" },
++	[IORING_REGISTER_IOWQ_MAX_WORKERS] = { 2 * sizeof(u32), 3, false,
++		"linux-6.12.94/x86_64/int[2]", 2 },
++	REGS(IORING_REGISTER_RING_FDS, io_uring_rsrc_update, 3),
++	REGS(IORING_UNREGISTER_RING_FDS, io_uring_rsrc_update, 1),
++	REG(IORING_REGISTER_PBUF_RING, io_uring_buf_reg, 1),
++	REG(IORING_UNREGISTER_PBUF_RING, io_uring_buf_reg, 1),
++	REG(IORING_REGISTER_SYNC_CANCEL, io_uring_sync_cancel_reg, 1),
++	REG_COUNT(IORING_REGISTER_FILE_ALLOC_RANGE, io_uring_file_index_range, 1, -2),
++	REG(IORING_REGISTER_PBUF_STATUS, io_uring_buf_status, 3),
++	REG(IORING_REGISTER_NAPI, io_uring_napi, 3),
++	REG(IORING_UNREGISTER_NAPI, io_uring_napi, 2),
++	REG_COUNT(IORING_REGISTER_CLOCK, io_uring_clock_register, 1, -2),
++	REG(IORING_REGISTER_CLONE_BUFFERS, io_uring_clone_buffers, 1),
++};
++
++static void registration_nested(struct ant_task *ctx, u32 opcode,
++				const u64 a[6])
++{
++	struct io_uring_rsrc_register reg;
++	struct io_uring_rsrc_update2 update;
++	struct io_uring_buf_reg pbuf;
++	u32 count = a[3];
++	u64 address = a[2];
++	bool buffers = opcode == IORING_REGISTER_BUFFERS2 ||
++		opcode == IORING_REGISTER_BUFFERS_UPDATE;
++	u64 ceiling = buffers ? ANT_REG_BUFFER_COUNT : ANT_FIXED_FILE_COUNT;
++
++	if (opcode == IORING_REGISTER_FILES2 || opcode == IORING_REGISTER_BUFFERS2) {
++		if (count != sizeof(reg))
++			return;
++		if (copy_from_user_nofault(&reg, (void __user *)(unsigned long)address,
++					   sizeof(reg)))
++			goto copy_fault;
++		if (!(reg.flags & IORING_RSRC_REGISTER_SPARSE))
++			array_field(ctx, 2, "arg2.resources", buffers ?
++				    "linux-6.12.94/x86_64/iovec[]" : "linux-6.12.94/x86_64/int[]",
++				    reg.data, reg.nr, buffers ? sizeof(struct iovec) : sizeof(u32),
++				    ceiling);
++		if (reg.tags)
++			array_field(ctx, 2, "arg2.tags", "linux-6.12.94/x86_64/u64[]",
++				    reg.tags, reg.nr, sizeof(u64), ceiling);
++	} else if (opcode == IORING_REGISTER_FILES_UPDATE ||
++		   opcode == IORING_REGISTER_FILES_UPDATE2 ||
++		   opcode == IORING_REGISTER_BUFFERS_UPDATE) {
++		memset(&update, 0, sizeof(update));
++		if (copy_from_user_nofault(&update, (void __user *)(unsigned long)address,
++					   opcode == IORING_REGISTER_FILES_UPDATE ?
++					   sizeof(struct io_uring_rsrc_update) : sizeof(update)))
++			goto copy_fault;
++		if (opcode != IORING_REGISTER_FILES_UPDATE && count != sizeof(update))
++			return;
++		array_field(ctx, 2, "arg2.resources", buffers ?
++			    "linux-6.12.94/x86_64/iovec[]" : "linux-6.12.94/x86_64/int[]",
++			    update.data, opcode == IORING_REGISTER_FILES_UPDATE ? count : update.nr,
++			    buffers ? sizeof(struct iovec) : sizeof(u32), ceiling);
++		if (update.tags)
++			array_field(ctx, 2, "arg2.tags", "linux-6.12.94/x86_64/u64[]",
++				    update.tags, update.nr, sizeof(u64), ceiling);
++	} else if (opcode == IORING_REGISTER_PBUF_RING) {
++		if (copy_from_user_nofault(&pbuf, (void __user *)(unsigned long)address,
++					   sizeof(pbuf)))
++			goto copy_fault;
++		if (!(pbuf.flags & IOU_PBUF_RING_MMAP))
++			array_field(ctx, 2, "arg2.buffer_ring",
++				    "linux-6.12.94/x86_64/io_uring_buf[]",
++				    pbuf.ring_addr, pbuf.ring_entries, sizeof(struct io_uring_buf),
++				    ANT_PBUF_COUNT);
++	}
++	return;
++copy_fault:
++	bytes_field(ctx, 2, "arg2.nested", "", address, U64_MAX, ANT_COPY_FAULT);
++}
++
++static void uring_register(struct ant_task *ctx, const u64 a[6], bool output)
++{
++	u32 opcode = (u32)a[1] & ~IORING_REGISTER_USE_REGISTERED_RING;
++	u32 count = a[3];
++	const struct registration *reg;
++	u64 size;
++
++	if (opcode >= ARRAY_SIZE(registrations)) {
++		if (!output)
++			bytes_field(ctx, 2, "arg2.register_variant", "", a[2], U64_MAX,
++				    ANT_NO_DECODER);
++		return;
++	}
++	if (opcode == IORING_REGISTER_PROBE) {
++		size = sizeof(struct io_uring_probe) +
++			min_t(u32, count, IORING_OP_LAST) * sizeof(struct io_uring_probe_op);
++		bytes_field(ctx, 2, "arg2.probe", "linux-6.12.94/x86_64/io_uring_probe",
++			    a[2], size, count <= 256 ? ANT_COMPLETE : ANT_INVALID_EXTENT);
++		return;
++	}
++	reg = &registrations[opcode];
++	if (!reg->size || !(reg->phases & (output ? 2 : 1)))
++		return;
++	size = reg->array ? (u64)count * reg->size : reg->size;
++	if (opcode == IORING_REGISTER_IOWQ_AFF)
++		size = min_t(u64, size, cpumask_size());
++	if (reg->arg_count && count != (reg->arg_count == -1 ? reg->size :
++				       reg->arg_count == -2 ? 0 : reg->arg_count)) {
++		ant_capture_field(ctx, 2, "arg2.register", reg->layout, 3, a[2],
++				  NULL, size, count, ANT_INVALID_EXTENT);
++		return;
++	}
++	if ((opcode == IORING_REGISTER_BUFFERS && count > ANT_REG_BUFFER_COUNT) ||
++	    (opcode == IORING_REGISTER_FILES && count > ANT_FIXED_FILE_COUNT) ||
++	    ((opcode == IORING_REGISTER_RING_FDS || opcode == IORING_UNREGISTER_RING_FDS) &&
++	     (!count || count > IO_RINGFD_REG_MAX)) ||
++	    (opcode == IORING_REGISTER_RESTRICTIONS && count >
++	     IORING_RESTRICTION_LAST + IORING_REGISTER_LAST + IORING_OP_LAST)) {
++		bytes_field(ctx, 2, "arg2.register", reg->layout, a[2], size,
++			    ANT_INVALID_EXTENT);
++		return;
++	}
++	bytes_field(ctx, 2, "arg2.register", reg->layout, a[2], size, ANT_COMPLETE);
++	if (!output && !ant_capture_lost(ctx))
++		registration_nested(ctx, opcode, a);
++}
++
++static void uring_enter(struct ant_task *ctx, const u64 a[6])
++{
++	struct io_uring_getevents_arg arg;
++
++	if (!a[4])
++		return;
++	if ((u32)a[3] & IORING_ENTER_EXT_ARG) {
++		if (a[5] != sizeof(arg)) {
++			bytes_field(ctx, 4, "arg4.ext_arg",
++				    "linux-6.12.94/x86_64/io_uring_getevents_arg",
++				    a[4], a[5], ANT_INVALID_EXTENT);
++			return;
++		}
++		if (!snapshot_field(ctx, 4, "arg4.ext_arg",
++				    "linux-6.12.94/x86_64/io_uring_getevents_arg",
++				    a[4], &arg, sizeof(arg)))
++			return;
++		if (arg.sigmask)
++			signal_mask(ctx, 4, arg.sigmask, arg.sigmask_sz);
++		if (arg.ts)
++			bytes_field(ctx, 4, "arg4.timeout", "linux-6.12.94/x86_64/timespec",
++				    arg.ts, sizeof(struct __kernel_timespec), ANT_COMPLETE);
++	} else {
++		signal_mask(ctx, 4, a[4], a[5]);
++	}
++}
++
++static void setup_release(void *state)
++{
++	kfree(state);
++}
++
++/* Mirror the pinned setup validation and rings_size layout. The stored entry
++ * addresses/capacities prevent a changed output params block redirecting capture.
++ */
++static bool setup_sizes(struct ant_uring_setup *state, u64 requested)
++{
++	struct io_uring_params *p = &state->params;
++	u64 sq, cq, size;
++
++	requested = (u32)requested;
++	if (!requested || (requested > ANT_SQ_COUNT && !(p->flags & IORING_SETUP_CLAMP)))
++		return false;
++	sq = roundup_pow_of_two(min_t(u64, requested, ANT_SQ_COUNT));
++	if (p->flags & IORING_SETUP_CQSIZE) {
++		cq = p->cq_entries;
++		if (!cq || (cq > ANT_CQ_COUNT && !(p->flags & IORING_SETUP_CLAMP)))
++			return false;
++		cq = roundup_pow_of_two(min_t(u64, cq, ANT_CQ_COUNT));
++		if (cq < sq)
++			return false;
++	} else {
++		cq = 2 * sq;
++	}
++	size = sizeof(struct io_rings) + cq * sizeof(struct io_uring_cqe);
++	if (p->flags & IORING_SETUP_CQE32)
++		size *= 2;
++#ifdef CONFIG_SMP
++	size = ALIGN(size, SMP_CACHE_BYTES);
++#endif
++	if (!(p->flags & IORING_SETUP_NO_SQARRAY))
++		size += sq * sizeof(u32);
++	state->rings_size = size;
++	state->sqes_size = sq * sizeof(struct io_uring_sqe) *
++		(p->flags & IORING_SETUP_SQE128 ? 2 : 1);
++	return true;
++}
++
++static void uring_setup(struct ant_task *ctx, const u64 a[6], bool output, long result)
++{
++	struct ant_uring_setup *state = ant_capture_state(ctx);
++	struct io_uring_params params;
++	enum ant_status status;
++
++	if (output && result < 0)
++		return;
++	if (!snapshot_field(ctx, 1, "arg1.params", "linux-6.12.94/x86_64/io_uring_params",
++			    a[1], &params, sizeof(params)))
++		return;
++	if (!output) {
++		if (!(params.flags & IORING_SETUP_NO_MMAP))
++			return;
++		state = kzalloc(sizeof(*state), GFP_NOWAIT);
++		if (!state) {
++			bytes_field(ctx, 1, "arg1.user_memory", "", 0, U64_MAX,
++				    ANT_RESOURCE_EXHAUSTED);
++			return;
++		}
++		state->params = params;
++		state->valid = setup_sizes(state, a[0]);
++		ant_capture_set_state(ctx, state, setup_release);
++	} else if (!state) {
++		if (params.flags & IORING_SETUP_NO_MMAP)
++			bytes_field(ctx, 1, "arg1.user_memory", "", 0, U64_MAX,
++				    ANT_CONTEXT_MISSING);
++		return;
++	}
++	status = state->valid ? ANT_COMPLETE : ANT_INVALID_EXTENT;
++	/* sq_off.user_addr backs SQEs; cq_off.user_addr backs the shared rings. */
++	bytes_field(ctx, 1, "arg1.user_rings", "linux-6.12.94/x86_64/io_rings",
++		    state->params.cq_off.user_addr, state->valid ? state->rings_size : U64_MAX,
++		    status);
++	bytes_field(ctx, 1, "arg1.user_sqes", "linux-6.12.94/x86_64/io_uring_sqe[]",
++		    state->params.sq_off.user_addr, state->valid ? state->sqes_size : U64_MAX,
++		    status);
++}
++
++u8 ant_async_capture(struct ant_task *ctx, u64 nr, const u64 a[6],
++		     bool output, long result)
++{
++	struct ant_aio_sigset sig;
++	u8 mask;
++
++	switch (nr) {
++	case 206:
++		mask = BIT(1);
++		if (!output || !result)
++			bytes_field(ctx, 1, "arg1.context_id", "linux-6.12.94/x86_64/aio_context_t",
++				    a[1], sizeof(u64), ANT_COMPLETE);
++		break;
++	case 208: case 333:
++		mask = BIT(3) | BIT(4) | (nr == 333 ? BIT(5) : 0);
++		if (output && result > 0)
++			array_field(ctx, 3, "arg3.events", "linux-6.12.94/x86_64/io_event[]",
++				    a[3], result, sizeof(struct io_event), a[2]);
++		if (!output && a[4])
++			bytes_field(ctx, 4, "arg4.timeout", "linux-6.12.94/x86_64/timespec",
++				    a[4], sizeof(struct __kernel_timespec), ANT_COMPLETE);
++		if (!output && nr == 333 && a[5] &&
++		    snapshot_field(ctx, 5, "arg5.sigset", "linux-6.12.94/x86_64/__aio_sigset",
++				   a[5], &sig, sizeof(sig)) && sig.sigmask)
++			signal_mask(ctx, 5, sig.sigmask, sig.sigset_size);
++		break;
++	case 209:
++		mask = BIT(2);
++		if (!output)
++			aio_submission(ctx, a);
++		break;
++	case 210:
++		mask = BIT(1) | BIT(2);
++		if (!output)
++			bytes_field(ctx, 1, "arg1.iocb", "linux-6.12.94/x86_64/iocb",
++				    a[1], sizeof(struct iocb), ANT_COMPLETE);
++		else if (!result)
++			bytes_field(ctx, 2, "arg2.event", "linux-6.12.94/x86_64/io_event",
++				    a[2], sizeof(struct io_event), ANT_COMPLETE);
++		break;
++	case 425:
++		mask = BIT(1);
++		uring_setup(ctx, a, output, result);
++		break;
++	case 426:
++		mask = BIT(4);
++		if (!output)
++			uring_enter(ctx, a);
++		break;
++	case 427:
++		mask = BIT(2);
++		if (!output || result >= 0)
++			uring_register(ctx, a, output);
++		break;
++	default:
++		return 0;
++	}
++	return ANT_CAPTURE_OWNED | mask;
++}
+diff --git a/kernel/antinomie/async_capture.h b/kernel/antinomie/async_capture.h
+new file mode 100644
+index 0000000..d682e0c
+--- /dev/null
++++ b/kernel/antinomie/async_capture.h
+@@ -0,0 +1,11 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef _ANTINOMIE_ASYNC_CAPTURE_H
++#define _ANTINOMIE_ASYNC_CAPTURE_H
++
++#include <linux/types.h>
++struct ant_task;
++
++u8 ant_async_capture(struct ant_task *ctx, u64 nr, const u64 args[6],
++		     bool output, long result);
++
++#endif
+diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
+index 9808798..332fe5e 100644
+--- a/kernel/antinomie/recorder.c
++++ b/kernel/antinomie/recorder.c
+@@ -7,6 +7,8 @@
+ #include <linux/file.h>
+ #include <linux/fs.h>
+ #include <linux/init.h>
++#include <linux/interrupt.h>
++#include <linux/iov_iter.h>
+ #include <linux/ktime.h>
+ #include <linux/random.h>
+ #include <linux/sched.h>
+@@ -24,9 +26,11 @@
+ #include <asm/syscall.h>
+ 
+ #include "run.h"
++#include "async.h"
+ #include "native_syscalls.h"
+ #include "capture_api.h"
+ #include "native_capture.h"
++#include "async_capture.h"
+ #include "observer.h"
+ 
+ /* Scratch bounds packet size, never the logical capture extent. A task owns
+@@ -74,6 +78,9 @@ struct ant_task {
+ 	bool active, busy, entry_lost, sock_capacity_valid, kernel_imported;
+ 	struct iovec *iov;
+ 	u32 iov_count;
++	const struct ant_async_event *async_event;
++	struct iov_iter *iter_source;
++	bool async_staged, async_output;
+ 	void *native_state;
+ 	void (*native_release)(void *state);
+ 	/* One kernel-imported operand handed over during the current syscall. */
+@@ -111,6 +118,8 @@ static int publish(struct ant_task *ctx, u8 kind, u32 object_id,
+ 		   u64 object_offset, u64 object_size, size_t body_len)
+ {
+ 	u8 *p = ctx->packet;
++	const struct ant_async_event *async = ctx->async_event;
++	struct task_struct *origin = !async ? current : async->owner ?: async->origin;
+ 	int error;
+ 
+ 	memset(p, 0, ANT_HEADER_SIZE);
+@@ -123,14 +132,15 @@ static int publish(struct ant_task *ctx, u8 kind, u32 object_id,
+ 	put_unaligned_le32(ctx->flags, p + 16);
+ 	put_unaligned_le32(ANT_SCHEMA, p + 20);
+ 	put_unaligned_le64(stream_id, p + 24);
+-	put_unaligned_le64(current->ant_cookie, p + 32);
++	put_unaligned_le64(async ? async->task_cookie : current->ant_cookie, p + 32);
+ 	put_unaligned_le64(ctx->call_id, p + 40);
+ 	put_unaligned_le64(ctx->event_seq, p + 48);
+-	put_unaligned_le64(++ctx->packet_seq, p + 56);
++	ctx->packet_seq = atomic64_inc_return(&origin->ant_packet_seq);
++	put_unaligned_le64(ctx->packet_seq, p + 56);
+ 	put_unaligned_le64(ctx->timestamp_ns, p + 64);
+-	put_unaligned_le32(task_tgid_nr(current), p + 72);
+-	put_unaligned_le32(task_pid_nr(current), p + 76);
+-	put_unaligned_le32(raw_smp_processor_id(), p + 80);
++	put_unaligned_le32(async ? async->pid : task_tgid_nr(current), p + 72);
++	put_unaligned_le32(async ? async->tid : task_pid_nr(current), p + 76);
++	put_unaligned_le32(async ? async->cpu : raw_smp_processor_id(), p + 80);
+ 	put_unaligned_le32(1, p + 84);
+ 	put_unaligned_le64(ctx->nr, p + 88);
+ 	put_unaligned_le16(ctx->abi, p + 96);
+@@ -140,11 +150,13 @@ static int publish(struct ant_task *ctx, u8 kind, u32 object_id,
+ 	put_unaligned_le64(object_offset, p + 104);
+ 	put_unaligned_le64(object_size, p + 112);
+ 	put_unaligned_le32(body_len, p + 120);
+-	put_unaligned_le64(current->ant_root_cookie, p + 128);
+-	put_unaligned_le64(ctx->capture_cookie, p + 136);
++	put_unaligned_le64(async ? async->root_cookie : current->ant_root_cookie, p + 128);
++	put_unaligned_le64(async ? async->capture_cookie : ctx->capture_cookie, p + 136);
+ 	ctx->packet_count++;
+ 	atomic64_inc(&packets_attempted);
+-	error = ant_send(p, ANT_HEADER_SIZE + body_len);
++	error = ctx->async_staged ?
++		ant_async_stage_packet(async, p, ANT_HEADER_SIZE + body_len) :
++		ant_send(p, ANT_HEADER_SIZE + body_len);
+ 	if (error) {
+ 		ctx->failed_count++;
+ 		ctx->state |= 2;
+@@ -158,12 +170,14 @@ static void event_begin(struct ant_task *ctx, u8 phase, long result)
+ {
+ 	u8 *body = ctx->packet + ANT_HEADER_SIZE;
+ 	const struct cred *cred = current_cred();
++	const struct ant_async_event *async = ctx->async_event;
++	struct task_struct *origin = !async ? current : async->owner ?: async->origin;
+ 	u32 validity = BIT(6) | BIT(9);
+ 	int i;
+ 
+ 	ctx->phase = phase;
+-	ctx->timestamp_ns = ktime_get_ns();
+-	ctx->event_seq++;
++	ctx->timestamp_ns = async ? async->timestamp_ns : ktime_get_ns();
++	ctx->event_seq = atomic64_inc_return(&origin->ant_event_seq);
+ 	ctx->object_count = ctx->packet_count = ctx->failed_count = ctx->state = 0;
+ 	ctx->object_id = 0;
+ 	ctx->flags = 0;
+@@ -188,11 +202,11 @@ static void event_begin(struct ant_task *ctx, u8 phase, long result)
+ 	put_unaligned_le64(ctx->entry_ns, body + 64);
+ 	put_unaligned_le64(ctx->ip, body + 72);
+ 	put_unaligned_le64(ctx->sp, body + 80);
+-	put_unaligned_le32(from_kuid(&init_user_ns, cred->uid), body + 88);
+-	put_unaligned_le32(from_kgid(&init_user_ns, cred->gid), body + 92);
+-	put_unaligned_le32(from_kuid(&init_user_ns, cred->euid), body + 96);
+-	put_unaligned_le32(from_kgid(&init_user_ns, cred->egid), body + 100);
+-	put_unaligned_le64(current->start_boottime, body + 104);
++	put_unaligned_le32(async ? async->uid : from_kuid(&init_user_ns, cred->uid), body + 88);
++	put_unaligned_le32(async ? async->gid : from_kgid(&init_user_ns, cred->gid), body + 92);
++	put_unaligned_le32(async ? async->euid : from_kuid(&init_user_ns, cred->euid), body + 96);
++	put_unaligned_le32(async ? async->egid : from_kgid(&init_user_ns, cred->egid), body + 100);
++	put_unaligned_le64(async ? async->start_boot_ns : current->start_boottime, body + 104);
+ 	validity |= ctx->arg_count == 255 ? 0x3f : (1U << ctx->arg_count) - 1;
+ 	if (ctx->entry_ns)
+ 		validity |= BIT(7) | BIT(8) | BIT(10);
+@@ -270,7 +284,8 @@ static void recapture_note(struct ant_task *ctx, u8 arg_index, const char *key,
+ {
+ 	struct ant_recapture *r;
+ 
+-	if (ctx->phase != 1 || ctx->kernel_imported || ctx->exec_walk || !address ||
++	if (ctx->phase != 1 || ctx->async_event || ctx->kernel_imported ||
++	    ctx->iter_source || ctx->exec_walk || !address ||
+ 	    ctx->recapture_count >= ANT_RECAPTURE_MAX ||
+ 	    strlen(key) >= ANT_RECAPTURE_KEY_SIZE)
+ 		return;
+@@ -303,6 +318,19 @@ static void recapture_drop(struct ant_task *ctx, u8 arg_index, const char *key)
+ 			ctx->recapture[i].done = true;
+ }
+ 
++static size_t iter_user_copy(void __user *base, size_t progress, size_t len,
++			     void *out, void *unused)
++{
++	return copy_from_user_nofault(out + progress, base, len) ? len : 0;
++}
++
++static size_t iter_kernel_copy(void *base, size_t progress, size_t len,
++			       void *out, void *unused)
++{
++	memcpy(out + progress, base, len);
++	return 0;
++}
++
+ static void field(struct ant_task *ctx, u8 arg_index, const char *key,
+ 		  const char *layout, u16 encoding, u64 address,
+ 		  const void *snapshot, u64 object_size, u64 declared_size,
+@@ -322,7 +350,7 @@ static void field(struct ant_task *ctx, u8 arg_index, const char *key,
+ 	memset(body, 0, 40);
+ 	body[0] = arg_index;
+ 	/* A recaptured input keeps its direction although it is read at exit. */
+-	body[1] = !ctx->field_mark && ctx->phase == 2 ? 2 : 1;
++	body[1] = !ctx->field_mark && (ctx->phase == 2 || ctx->async_output) ? 2 : 1;
+ 	put_unaligned_le16(encoding, body + 2);
+ 	put_unaligned_le16(ctx->kernel_imported ? 3 : ctx->phase == 3 ? 5 : ctx->phase,
+ 			   body + 4);
+@@ -339,7 +367,7 @@ static void field(struct ant_task *ctx, u8 arg_index, const char *key,
+ 		status = fault_status(address, object_size == U64_MAX ? 1 : object_size);
+ 	if (publish(ctx, 2, id, 0, object_size, 40 + key_len + layout_len))
+ 		status = ANT_ABORTED_ON_LOSS;
+-	if (!address && !snapshot && status == ANT_COMPLETE)
++	if (!address && !snapshot && !ctx->iter_source && status == ANT_COMPLETE)
+ 		status = ANT_NULL_POINTER;
+ 	if (status == ANT_COMPLETE && object_size != U64_MAX &&
+ 	    object_size > ULONG_MAX - address)
+@@ -348,14 +376,19 @@ static void field(struct ant_task *ctx, u8 arg_index, const char *key,
+ 		size_t chunk_size = min_t(u64, ANT_CHUNK_SIZE,
+ 					object_size - captured_len);
+ 
+-		if (snapshot)
++		if (ctx->iter_source)
++			error = iterate_and_advance2(ctx->iter_source, chunk_size, body,
++						     NULL, iter_user_copy, iter_kernel_copy) ==
++				chunk_size ? 0 : -EFAULT;
++		else if (snapshot)
+ 			memcpy(body, snapshot + captured_len, chunk_size);
+ 		else
+ 			error = copy_from_user_nofault(body,
+ 				(void __user *)(unsigned long)(address + captured_len),
+ 				chunk_size);
+ 		if (error) {
+-			status = fault_status(address + captured_len, chunk_size);
++			status = ctx->iter_source ? ANT_COPY_FAULT :
++				fault_status(address + captured_len, chunk_size);
+ 			break;
+ 		}
+ 		chunk_count++;
+@@ -642,6 +675,8 @@ static void capture_entry(struct ant_task *ctx)
+ 		return;
+ 	}
+ 	handled = ant_native_capture(ctx, ctx->nr, a, false, 0);
++	if (!(handled & ANT_CAPTURE_OWNED))
++		handled |= ant_async_capture(ctx, ctx->nr, a, false, 0);
+ 	if (handled & ANT_CAPTURE_OWNED)
+ 		return;
+ 	switch (ctx->nr) {
+@@ -736,6 +771,8 @@ static void capture_exit(struct ant_task *ctx, long result)
+ 		return;
+ 	if (ant_native_capture(ctx, ctx->nr, a, true, result) & ANT_CAPTURE_OWNED)
+ 		return;
++	if (ant_async_capture(ctx, ctx->nr, a, true, result) & ANT_CAPTURE_OWNED)
++		return;
+ 	switch (ctx->nr) {
+ 	case 0: case 45:
+ 		if (result > 0)
+@@ -1112,6 +1149,210 @@ static void lifecycle(struct ant_task *ctx, const char *key, u64 value)
+ 	ctx->busy = false;
+ }
+ 
++u64 ant_monitor_parent_call_id(void)
++{
++	struct ant_task *ctx = current->ant_monitor;
++
++	return ctx && ctx->active ? ctx->call_id : 0;
++}
++
++static void async_fields(struct ant_task *ctx, const struct ant_async_event *event)
++{
++	static const char * const keys[] = {
++		"async.request_id", "async.stage", "async.parent_call_id",
++		"async.result", "async.final", "async.opcode", "async.user_data",
++		"async.flags",
++	};
++	u64 values[] = { event->request_id, event->stage, event->parent_call_id,
++		(u64)event->result, event->final, event->opcode, event->user_data,
++		event->flags };
++	const char *system = event->system == ANT_ASYNC_IO_URING ? "io_uring" : "AIO";
++	u8 scalar[8];
++	int i;
++
++	for (i = 0; i < ARRAY_SIZE(values) && !ctx->failed_count; i++) {
++		put_unaligned_le64(values[i], scalar);
++		field(ctx, 255, keys[i], "", 4, 0, scalar, sizeof(scalar),
++		      sizeof(scalar), ANT_COMPLETE);
++	}
++	field(ctx, 255, "async.system", "", 2, 0, system, strlen(system) + 1,
++	      strlen(system) + 1, ANT_COMPLETE);
++}
++
++static void async_context(struct ant_task *ctx, const struct ant_async_event *event)
++{
++	ctx->async_event = event;
++	ctx->call_id = event->parent_call_id;
++	ctx->entry_ns = event->entry_ns;
++	ctx->nr = event->parent_call_id ?
++		(event->system == ANT_ASYNC_IO_URING ? 426 : 209) : U64_MAX;
++	ctx->abi = 1;
++	event_begin(ctx, 3, 0);
++	async_fields(ctx, event);
++}
++
++int ant_monitor_async_publish(const struct ant_async_event *event)
++{
++	struct ant_task *ctx;
++	int error;
++
++	ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
++	if (!ctx)
++		return -ENOMEM;
++	async_context(ctx, event);
++	if (event->descriptor_len) {
++		ctx->kernel_imported = true;
++		field(ctx, 255, "async.submission", event->system == ANT_ASYNC_IO_URING ?
++		      "linux-6.12.94/x86_64/io_uring_sqe" : "linux-6.12.94/x86_64/iocb",
++		      3, 0, event->descriptor, event->descriptor_len,
++		      event->descriptor_len, ANT_COMPLETE);
++		ctx->kernel_imported = false;
++	}
++	if (event->flags & ANT_ASYNC_PAYLOAD_GAP)
++		field(ctx, 255, "async.payload", "", 1, 0, NULL, U64_MAX,
++		      U64_MAX, ANT_ASYNC_UNOBSERVED);
++	event_end(ctx);
++	error = ctx->failed_count ? -ENOSPC : 0;
++	kfree(ctx);
++	return error;
++}
++
++struct ant_task *ant_monitor_async_capture_alloc(void)
++{
++	return kzalloc(sizeof(struct ant_task), GFP_NOWAIT);
++}
++
++void ant_monitor_async_capture_free(struct ant_task *ctx)
++{
++	kfree(ctx);
++}
++
++/* Contract 14.1: user memory named by a request is read by any task running in
++ * the origin's address space (the submitter, its io-wq workers, the SQPOLL
++ * thread), never from interrupt context. The origin reference keeps its
++ * signal_struct alive, so a recycled mm pointer cannot match another group.
++ */
++bool ant_async_same_space(const struct ant_async_event *event)
++{
++	return !in_interrupt() && current->mm && current->mm == event->mm &&
++		current->signal == event->origin->signal;
++}
++
++/* status < 0 derives the status from the context; otherwise it is recorded
++ * as given with no bytes copied (ADDRESS_ONLY, NO_DECODER).
++ */
++int ant_monitor_async_capture_memory(struct ant_task *ctx,
++				     const struct ant_async_event *event, const char *key,
++				     const char *layout, u16 encoding, u64 address,
++				     const void *snapshot, u64 size, u32 stage, int status)
++{
++	struct ant_async_event observed = *event;
++	enum ant_status observed_status = ANT_COMPLETE;
++	int error;
++
++	observed.stage = stage;
++	observed.final = false;
++	observed.descriptor_len = 0;
++	observed.timestamp_ns = ktime_get_ns();
++	observed.cpu = raw_smp_processor_id();
++	if (status >= 0)
++		observed_status = status;
++	else if (size && !snapshot && !ant_async_same_space(event))
++		observed_status = ANT_ASYNC_UNOBSERVED;
++	ctx->async_staged = true;
++	ctx->async_output = stage != 1;
++	async_context(ctx, &observed);
++	ctx->flags |= ANT_OBSERVATIONAL;
++	ctx->kernel_imported = !!snapshot;
++	field(ctx, 255, key, layout, encoding, address, snapshot, size,
++	      size, observed_status);
++	ctx->kernel_imported = false;
++	event_end(ctx);
++	error = ctx->failed_count || (ctx->state & 1) ? -ENODATA : 0;
++	ctx->async_event = NULL;
++	return error;
++}
++
++int ant_monitor_async_capture(struct ant_task *ctx,
++			      const struct ant_async_event *event,
++			      const struct iov_iter *source, size_t size,
++			      u64 result_offset, bool output)
++{
++	return ant_monitor_async_capture_stage(ctx, event, source, size, result_offset,
++					       output, output ? 4 : 1);
++}
++
++int ant_monitor_async_capture_stage(struct ant_task *ctx,
++				    const struct ant_async_event *event,
++				    const struct iov_iter *source, size_t size,
++				    u64 result_offset, bool output, u32 stage)
++{
++	struct ant_async_event observed = *event;
++	struct iov_iter iter = *source;
++	u64 values[] = { output ? 2 : 1, source->count, result_offset };
++	static const char * const keys[] = { "async.payload.direction",
++		"async.payload.requested_size", "async.payload.result_offset" };
++	enum ant_status status = ANT_COMPLETE;
++	u8 scalar[8];
++	int i, error;
++
++	if (ctx->busy)
++		return -EBUSY;
++	ctx->busy = true;
++	observed.stage = stage;
++	observed.final = false;
++	observed.descriptor_len = 0;
++	observed.timestamp_ns = ktime_get_ns();
++	observed.cpu = raw_smp_processor_id();
++	if (size > source->count) {
++		status = ANT_INVALID_EXTENT;
++	} else if (user_backed_iter(source)) {
++		/* IRQ completions and foreign address spaces cannot read the
++		 * iterator's user memory; they report unavailable content.
++		 */
++		if (size && !ant_async_same_space(event))
++			status = ANT_ASYNC_UNOBSERVED;
++	} else if (!iov_iter_is_bvec(source) && !iov_iter_is_kvec(source)) {
++		status = ANT_NO_DECODER;
++	}
++	if (status == ANT_COMPLETE) {
++		if (ant_async_iter_covers_payload(event))
++			observed.flags &= ~ANT_ASYNC_PAYLOAD_GAP;
++	} else {
++		observed.flags |= ANT_ASYNC_PAYLOAD_GAP;
++	}
++	ctx->async_staged = true;
++	ctx->async_output = output;
++	async_context(ctx, &observed);
++	ctx->flags |= ANT_OBSERVATIONAL;
++	for (i = 0; i < ARRAY_SIZE(values) && !ctx->failed_count; i++) {
++		put_unaligned_le64(values[i], scalar);
++		field(ctx, 255, keys[i], "", 4, 0, scalar, sizeof(scalar),
++		      sizeof(scalar), ANT_COMPLETE);
++	}
++	if (iter_is_iovec(source)) {
++		ctx->kernel_imported = true;
++		field(ctx, 255, "async.payload.iov", "linux-6.12.94/x86_64/iovec[]",
++		      3, 0, iter_iov(source), source->nr_segs * sizeof(struct iovec),
++		      source->nr_segs * sizeof(struct iovec), ANT_COMPLETE);
++		ctx->kernel_imported = false;
++	}
++	ctx->iter_source = &iter;
++	field(ctx, 255, output ? "async.payload.output" : "async.payload.input",
++	      "", 1, 0, NULL, size, source->count, status);
++	ctx->iter_source = NULL;
++	event_end(ctx);
++	error = ctx->failed_count || (ctx->state & 1) ? -ENODATA : 0;
++	ctx->busy = false;
++	ctx->async_event = NULL;
++	return error;
++}
++
++void ant_monitor_async_send_failed(void)
++{
++	atomic64_inc(&packets_failed);
++}
++
+ int ant_monitor_launch(const char *path, char **argv, char **envp)
+ {
+ 	struct ant_task *ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
+diff --git a/kernel/antinomie/run.c b/kernel/antinomie/run.c
+index 55e595e..de88fad 100644
+--- a/kernel/antinomie/run.c
++++ b/kernel/antinomie/run.c
+@@ -172,6 +172,51 @@ void ant_monitor_run_stopped(u64 root_cookie)
+ 	spin_unlock_irqrestore(&run_lock, irqflags);
+ }
+ 
++static void async_update(u64 root_cookie, int change, bool loss)
++{
++	struct ant_run *run;
++	unsigned long irqflags;
++
++	spin_lock_irqsave(&run_lock, irqflags);
++	run = find_run(root_cookie);
++	if (run) {
++		if (change > 0)
++			run->async_count++;
++		else if (change < 0 && run->async_count)
++			run->async_count--;
++		else if (change < 0)
++			run->flags |= ANTC_RUN_OBSERVATION_INCOMPLETE;
++		if (!change) {
++			if (loss)
++				run->async_losses++;
++			else
++				run->flags |= ANTC_RUN_OBSERVATION_INCOMPLETE;
++		}
++		run->generation++;
++	}
++	spin_unlock_irqrestore(&run_lock, irqflags);
++}
++
++void ant_run_async_start(u64 root_cookie)
++{
++	async_update(root_cookie, 1, false);
++}
++
++void ant_run_async_finish(u64 root_cookie)
++{
++	async_update(root_cookie, -1, false);
++}
++
++void ant_run_async_loss(u64 root_cookie)
++{
++	async_update(root_cookie, 0, true);
++}
++
++void ant_run_async_incomplete(u64 root_cookie)
++{
++	async_update(root_cookie, 0, false);
++}
++
+ /* Signal every task that carries this run's launch cookie. RCU protects the
+  * traversal; each signal uses a referenced task, never a PID, so membership
+  * survives PTY reaping and root exit. A fork that races the pass can escape it.
+diff --git a/kernel/antinomie/run.h b/kernel/antinomie/run.h
+index 0a6ed04..a24d413 100644
+--- a/kernel/antinomie/run.h
++++ b/kernel/antinomie/run.h
+@@ -11,5 +11,9 @@ void ant_run_fork(struct task_struct *parent, struct task_struct *child);
+ bool ant_run_exit(struct task_struct *task, bool group_dead);
+ int ant_run_signal(u64 root_cookie, int sig, bool *issued);
+ void ant_run_stop_arm(u64 root_cookie, u32 grace_ms);
++void ant_run_async_start(u64 root_cookie);
++void ant_run_async_finish(u64 root_cookie);
++void ant_run_async_loss(u64 root_cookie);
++void ant_run_async_incomplete(u64 root_cookie);
+ 
+ #endif
+diff --git a/kernel/fork.c b/kernel/fork.c
+index c36bec1..7c82868 100644
+--- a/kernel/fork.c
++++ b/kernel/fork.c
+@@ -1144,6 +1144,8 @@ static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
+ 	tsk->ant_observer_cookie = 0;
+ 	tsk->ant_monitor = NULL;
+ 	tsk->ant_run = NULL;
++	atomic64_set(&tsk->ant_event_seq, 0);
++	atomic64_set(&tsk->ant_packet_seq, 0);
+ 	tsk->ant_root_process = false;
+ 	tsk->ant_counted = false;
+ #endif
+-- 
+2.53.0
+

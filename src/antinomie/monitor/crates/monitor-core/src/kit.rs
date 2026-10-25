@@ -310,10 +310,28 @@ mod tests {
         ] {
             assert!(names.contains(&required), "{required}");
         }
+        // The whole series, starting with the patch that reports its identity.
+        let series = names
+            .iter()
+            .filter(|name| name.starts_with(SERIES_DIR) && name.ends_with(".patch"))
+            .count();
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../../..");
+        let on_disk = fs::read_dir(repo.join(SERIES_DIR))
+            .unwrap()
+            .filter(|entry| {
+                entry
+                    .as_ref()
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .ends_with(".patch")
+            })
+            .count();
+        assert_eq!(series, on_disk);
         assert!(
             names
                 .iter()
-                .any(|name| name.starts_with("src/antinomie/core/6.12/0013-"))
+                .any(|name| name.starts_with("src/antinomie/core/6.12/0001-"))
         );
         let input = orig_input().unwrap();
         assert_eq!(input.name, "linux_6.12.94.orig.tar.xz");
