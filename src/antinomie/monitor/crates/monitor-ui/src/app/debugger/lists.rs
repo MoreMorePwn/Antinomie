@@ -58,6 +58,7 @@ pub(super) fn threads(
     let row_height = row_height(ui);
     table::begin(ui);
     TableBuilder::new(ui)
+        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
         .id_salt(TABLE)
         .striped(true)
         .sense(egui::Sense::click())
@@ -222,6 +223,7 @@ pub(super) fn breakpoints(
     let row_height = row_height(ui);
     table::begin(ui);
     TableBuilder::new(ui)
+        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
         .id_salt(TABLE)
         .striped(true)
         .column(Column::auto().at_least(40.0))

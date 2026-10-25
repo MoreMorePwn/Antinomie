@@ -50,7 +50,7 @@ fn file(path: &str, first_ns: u64, events: Vec<Event>) -> FileActivity {
 
 /// Two processes: a dropper that writes a file and a shell that renames and
 /// deletes it, plus a library, a standard stream and a file only read.
-fn activity() -> Activity {
+pub(in crate::triage) fn activity() -> Activity {
     let mut dropped = file(
         "/tmp/payload",
         10,
@@ -337,6 +337,28 @@ impl Harness {
     }
 }
 
+impl Harness {
+    fn double_click(&mut self, activity: &Activity, at: Pos2) {
+        for _ in 0..2 {
+            for pressed in [true, false] {
+                self.frame(
+                    activity,
+                    vec![
+                        egui::Event::PointerMoved(at),
+                        egui::Event::PointerButton {
+                            pos: at,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                );
+            }
+        }
+        self.time += 1.0;
+    }
+}
+
 fn center(shown: &[(String, Rect)], text: &str) -> Pos2 {
     shown
         .iter()
@@ -399,7 +421,7 @@ fn choosing_a_file_draws_its_graph_and_choosing_a_node_lists_its_calls() {
 }
 
 #[test]
-fn a_call_opens_its_original_syscall_and_the_window_opens_on_a_given_path() {
+fn a_call_row_shows_in_details_and_a_double_click_opens_its_original_syscall() {
     let activity = activity();
     let mut harness = Harness::new();
     harness.window.open_on("/tmp/payload");
@@ -411,11 +433,117 @@ fn a_call_opens_its_original_syscall_and_the_window_opens_on_a_given_path() {
         .find(|(text, _)| text == "pwrite64")
         .map(|(_, rect)| rect.center())
         .unwrap();
+    // One click selects the row and brings Details forward: it opens nothing.
     harness.click(&activity, first_write);
+    let selected = harness.ctx.data(|data| {
+        data.get_temp::<String>(egui::Id::new((
+            "triage-selected-row",
+            super::window::CALLS_TABLE,
+        )))
+    });
+    assert!(selected.is_some(), "the clicked call is the selected row");
+    assert_eq!(
+        harness
+            .ctx
+            .data(|data| data.get_temp::<bool>(egui::Id::new("triage-details-focus"))),
+        Some(true),
+        "Details come forward"
+    );
+    assert_eq!(
+        harness
+            .ctx
+            .data(|data| data.get_temp::<trace::InvocationKey>(egui::Id::new("triage-call-jump"))),
+        None
+    );
+    // A double click opens the original syscall, as in the other tables.
+    harness.double_click(&activity, first_write);
     let jump = harness
         .ctx
         .data(|data| data.get_temp::<trace::InvocationKey>(egui::Id::new("triage-call-jump")));
     assert_eq!(jump, Some((1, 2, 11)));
+}
+
+#[test]
+fn a_call_row_carries_what_the_original_syscall_is_found_by_and_all_seven_columns() {
+    let activity = activity();
+    let dropped = &activity.files[3];
+    let cells = super::window::call_cells(&activity, &dropped.events[1], None);
+    assert_eq!(cells.len(), 7);
+    assert_eq!(cells[2].text, "pwrite64");
+    assert_eq!(cells[4].text, "0x0");
+    assert_eq!(cells[5].text, "4");
+    let first = &cells[0].values;
+    for (name, want) in [("stream.id", 1), ("process.cookie", 2), ("event.id", 11)] {
+        assert!(
+            first.iter().any(|(key, value)| *key == name
+                && matches!(value, RowValue::Number(number) if *number == want)),
+            "{name} in {first:?}"
+        );
+    }
+}
+
+#[test]
+fn a_click_on_a_file_shows_it_in_details_and_an_empty_list_says_why() {
+    let activity = activity();
+    let mut harness = Harness::new();
+    let shown = harness.settle(&activity);
+    harness.click(&activity, center(&shown, "/tmp/payload"));
+    assert_eq!(
+        harness
+            .ctx
+            .data(|data| data.get_temp::<bool>(egui::Id::new("triage-details-focus"))),
+        Some(true)
+    );
+    let cells = super::window::file_cells(&activity.files[3], None);
+    let text = |at: usize| cells[at].text.as_str();
+    assert_eq!(text(0), "/tmp/payload");
+    assert!(text(5).starts_with("create"), "{}", text(5));
+    assert_eq!(text(6), "created by the run, deleted");
+    assert_eq!(text(4), "5");
+    // With every file hidden the list says so, and with none it says that.
+    harness.window.filter = "no such file".into();
+    let shown = harness.settle(&activity);
+    assert!(
+        shown
+            .iter()
+            .any(|(text, _)| text == "No file matches the filter"),
+        "{:?}",
+        shown.iter().map(|s| &s.0).collect::<Vec<_>>()
+    );
+    let mut empty = Harness::new();
+    let nothing = Activity::default();
+    let shown = empty.settle(&nothing);
+    assert!(
+        shown
+            .iter()
+            .any(|(text, _)| text == "The run touched no files"),
+        "{:?}",
+        shown.iter().map(|s| &s.0).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn a_long_process_name_is_cut_to_the_gutter_and_the_graph_leaves_it_room() {
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let font = egui::FontId::proportional(11.0);
+    let long = "123456 /usr/lib/very/long/path/to/an/image/with/a/long/name";
+    let width = 150.0;
+    let _ = ctx.run(egui::RawInput::default(), |ctx| {
+        let painter = ctx.layer_painter(egui::LayerId::background());
+        let short = graph::fit(&painter, long, &font, width);
+        assert!(short.ends_with('…') && short.len() < long.len(), "{short}");
+        let measured = painter
+            .layout_no_wrap(short.clone(), font.clone(), egui::Color32::WHITE)
+            .size()
+            .x;
+        assert!(measured <= width, "{short} is {measured} wide");
+        // A name that fits is left as it is.
+        assert_eq!(graph::fit(&painter, "42 sh", &font, width), "42 sh");
+        assert_eq!(graph::fit(&painter, "", &font, width), "");
+        // Nothing fits in no room: only the ellipsis stays.
+        assert_eq!(graph::fit(&painter, long, &font, 0.0), "…");
+    });
 }
 
 #[test]

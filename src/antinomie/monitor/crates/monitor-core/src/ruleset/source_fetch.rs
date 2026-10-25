@@ -81,18 +81,25 @@ pub fn redact_url(text: &str) -> String {
     out
 }
 
-/// What an HTTP status means for an abuse.ch download, in words.
-fn status_text(host: &str, code: u32) -> Option<&'static str> {
+/// What an HTTP status means for an abuse.ch download, in words: what is
+/// wrong, and what to do about it.
+fn status_text(host: &str, code: u32, url: &str) -> Option<String> {
     if !is_abusech_host(host) {
         return None;
     }
-    match code {
-        401 | 403 => {
-            Some("abuse.ch rejected the Auth-Key (HTTP 401); check it in Tools > API keys")
-        }
-        410 => Some("abuse.ch has retired this endpoint (HTTP 410); update Antinomie"),
-        _ => None,
-    }
+    Some(match code {
+        401 | 403 => format!(
+            "abuse.ch rejected the Auth-Key (HTTP {code}); check it in Tools > API keys, or get a free one at auth.abuse.ch"
+        ),
+        404 => format!(
+            "abuse.ch has no file at {} (HTTP 404); the export may have moved or been renamed, so update Antinomie",
+            redact_url(url)
+        ),
+        410 => "abuse.ch has retired this endpoint (HTTP 410); update Antinomie".to_owned(),
+        429 => "abuse.ch asks to slow down (HTTP 429); try again later".to_owned(),
+        500..=599 => format!("abuse.ch had a problem answering (HTTP {code}); try again later"),
+        _ => return None,
+    })
 }
 
 impl Curl {
@@ -251,8 +258,8 @@ impl Fetcher for Curl {
                 }
                 code => {
                     let _ = fs::remove_file(dest);
-                    if let Some(meaning) = status_text(&origin, code) {
-                        return Err(meaning.to_owned());
+                    if let Some(meaning) = status_text(&origin, code, &current) {
+                        return Err(meaning);
                     }
                     return Err(format!("{} answered HTTP {code}", redact_url(&current)));
                 }

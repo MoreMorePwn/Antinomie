@@ -472,6 +472,197 @@ fn a_click_on_the_open_strip_opens_the_full_graph() {
     assert!(opened);
 }
 
+/// One pass of the strip with the pointer at `at` (when given), the events and
+/// the keyboard modifiers held.
+fn strip_pass(
+    strip: &mut Strip,
+    index: &GraphIndex,
+    ctx: &egui::Context,
+    events: Vec<egui::Event>,
+    modifiers: egui::Modifiers,
+) -> Vec<(String, egui::Rect)> {
+    let output = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1000.0, 900.0),
+            )),
+            events,
+            modifiers,
+            ..Default::default()
+        },
+        |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                strip.show(ui, index, [1, 0, 1, 0], None, false, Spacing::Events);
+            });
+        },
+    );
+    texts(&output)
+}
+
+fn click_at(strip: &mut Strip, index: &GraphIndex, ctx: &egui::Context, at: egui::Pos2) {
+    for pressed in [true, false] {
+        strip_pass(
+            strip,
+            index,
+            ctx,
+            vec![
+                egui::Event::PointerMoved(at),
+                egui::Event::PointerButton {
+                    pos: at,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+            egui::Modifiers::NONE,
+        );
+    }
+}
+
+fn band_gap(shown: &[(String, egui::Rect)]) -> f32 {
+    let y = |label: &str| {
+        shown
+            .iter()
+            .find(|(text, _)| text == label)
+            .unwrap()
+            .1
+            .center()
+            .y
+    };
+    y("severity") - y("phases")
+}
+
+#[test]
+fn the_strip_grows_with_zoom_in_and_shrinks_with_zoom_out_within_limits() {
+    let mut strip = Strip::default();
+    assert_eq!(strip.zoom, 1.0);
+    strip.step_zoom(1);
+    assert!((strip.zoom - 1.25).abs() < 1e-3, "{}", strip.zoom);
+    for _ in 0..20 {
+        strip.step_zoom(1);
+    }
+    assert_eq!(strip.zoom, super::strip::ZOOM_MAX);
+    for _ in 0..40 {
+        strip.step_zoom(-1);
+    }
+    assert_eq!(strip.zoom, super::strip::ZOOM_MIN);
+    strip.reset_zoom();
+    assert_eq!(strip.zoom, 1.0);
+    // Nothing a wheel can send leaves the limits or the number line.
+    assert_eq!(super::strip::clamp_zoom(f32::NAN), 1.0);
+    assert_eq!(super::strip::clamp_zoom(f32::INFINITY), 1.0);
+    assert_eq!(super::strip::clamp_zoom(100.0), super::strip::ZOOM_MAX);
+    assert_eq!(super::strip::clamp_zoom(0.0), super::strip::ZOOM_MIN);
+    // Taller by the zoom, and every band with it.
+    use super::view::Metrics;
+    let normal = Metrics::strip_height(3, 1.0);
+    let doubled = Metrics::strip_height(3, 2.0);
+    assert!(doubled > normal * 1.6, "{normal} -> {doubled}");
+    assert!(Metrics::zoomed(2.0).text == 2.0 && Metrics::compact().text == 1.0);
+}
+
+#[test]
+fn the_strip_buttons_and_ctrl_wheel_zoom_it_and_the_percentage_resets_it() {
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let busy = small_overview(Tier::High);
+    let mut strip = Strip::default();
+    let shown = strip_pass(&mut strip, &busy, &ctx, vec![], egui::Modifiers::NONE);
+    let normal_gap = band_gap(&shown);
+    let button = |shown: &[(String, egui::Rect)], glyph: &str| {
+        shown
+            .iter()
+            .find(|(text, _)| text == glyph)
+            .unwrap_or_else(|| panic!("{glyph:?} button in {shown:?}"))
+            .1
+            .center()
+    };
+    let plus = egui_phosphor::regular::MAGNIFYING_GLASS_PLUS;
+    let minus = egui_phosphor::regular::MAGNIFYING_GLASS_MINUS;
+    click_at(&mut strip, &busy, &ctx, button(&shown, plus));
+    assert!((strip.zoom - 1.25).abs() < 1e-3, "{}", strip.zoom);
+    let shown = strip_pass(&mut strip, &busy, &ctx, vec![], egui::Modifiers::NONE);
+    assert!(band_gap(&shown) > normal_gap, "the bands are taller");
+    assert!(shown.iter().any(|(text, _)| text == "125%"), "{shown:?}");
+    // The percentage takes it back to normal.
+    let reset = shown
+        .iter()
+        .find(|(text, _)| text == "125%")
+        .unwrap()
+        .1
+        .center();
+    click_at(&mut strip, &busy, &ctx, reset);
+    assert_eq!(strip.zoom, 1.0);
+    click_at(&mut strip, &busy, &ctx, button(&shown, minus));
+    assert!(strip.zoom < 1.0, "{}", strip.zoom);
+    strip.reset_zoom();
+    // Ctrl+wheel over the bands.
+    let shown = strip_pass(&mut strip, &busy, &ctx, vec![], egui::Modifiers::NONE);
+    let band = shown.iter().find(|(text, _)| text == "severity").unwrap().1;
+    let over = egui::pos2(band.right() + 300.0, band.center().y);
+    strip_pass(
+        &mut strip,
+        &busy,
+        &ctx,
+        vec![egui::Event::PointerMoved(over)],
+        egui::Modifiers::NONE,
+    );
+    for _ in 0..30 {
+        strip_pass(
+            &mut strip,
+            &busy,
+            &ctx,
+            vec![egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Line,
+                delta: egui::vec2(0.0, 1.0),
+                modifiers: egui::Modifiers::CTRL,
+            }],
+            egui::Modifiers::CTRL,
+        );
+    }
+    assert!(strip.zoom > 1.0, "Ctrl+wheel up zooms in: {}", strip.zoom);
+    for _ in 0..80 {
+        strip_pass(
+            &mut strip,
+            &busy,
+            &ctx,
+            vec![egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Line,
+                delta: egui::vec2(0.0, -1.0),
+                modifiers: egui::Modifiers::CTRL,
+            }],
+            egui::Modifiers::CTRL,
+        );
+    }
+    assert!(
+        strip.zoom < 1.0,
+        "Ctrl+wheel down zooms out: {}",
+        strip.zoom
+    );
+    assert!(strip.zoom >= super::strip::ZOOM_MIN);
+    // egui spreads a Ctrl+wheel step over the frames that follow; let it end.
+    for _ in 0..400 {
+        strip_pass(&mut strip, &busy, &ctx, vec![], egui::Modifiers::NONE);
+    }
+    // A plain wheel never zooms.
+    strip.reset_zoom();
+    for _ in 0..10 {
+        strip_pass(
+            &mut strip,
+            &busy,
+            &ctx,
+            vec![egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Line,
+                delta: egui::vec2(0.0, 3.0),
+                modifiers: egui::Modifiers::NONE,
+            }],
+            egui::Modifiers::NONE,
+        );
+    }
+    assert_eq!(strip.zoom, 1.0);
+}
+
 #[test]
 fn the_summary_shows_the_strip_on_every_run_and_a_click_goes_to_the_graph() {
     let spool = recording();
@@ -485,6 +676,92 @@ fn the_summary_shows_the_strip_on_every_run_and_a_click_goes_to_the_graph() {
     assert!(texts(&out)
         .iter()
         .any(|(text, _)| text == "Main activity graph"));
+}
+
+#[test]
+fn opening_the_graph_from_the_strip_or_its_window_adds_no_filter_and_drops_stale_ones() {
+    let spool = recording();
+    let mut view = view_with(&spool);
+    view.section = Section::Summary;
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    // A fresh view: nothing to drop, nothing added.
+    view.clear_finding_filters(&ctx);
+    assert!(view.filter_drafts[0].is_empty() && view.scan_request.filters[0].is_empty());
+    assert_eq!(view.scan_request.finding_view.tiers, 0);
+    // Left from the table: a filter, a tier chip and a category chip.
+    view.filter_drafts[0] = "finding.tier == high".into();
+    view.scan_request.filters[0] = "finding.tier == high".into();
+    view.scan_request.finding_view.tiers = 1;
+    view.scan_request.finding_view.categories = 4;
+    view.scan_request.finding_view.show_info = true;
+    view.scan_request.offsets[0] = 500;
+    view.clear_finding_filters(&ctx);
+    assert!(view.filter_drafts[0].is_empty() && view.scan_request.filters[0].is_empty());
+    assert_eq!(view.scan_request.finding_view.tiers, 0);
+    assert_eq!(view.scan_request.finding_view.categories, 0);
+    assert_eq!(view.scan_request.offsets[0], 0);
+    assert!(
+        view.scan_request.finding_view.show_info,
+        "Show INFO is the person's switch, not a filter the strip put there"
+    );
+    // The click itself, through the Summary: it lands on the graph with the
+    // filter bar empty.
+    view.filter_drafts[0] = "process.pid == 1".into();
+    view.scan_request.filters[0] = "process.pid == 1".into();
+    let mut time = 0.0;
+    let mut pass = |view: &mut TriageView, events: Vec<egui::Event>| {
+        time += 0.05;
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1100.0, 1600.0),
+                )),
+                time: Some(time),
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    crate::triage::summary::show(view, ui, &TriageInput::empty());
+                });
+            },
+        )
+    };
+    pass(&mut view, vec![]);
+    let out = pass(&mut view, vec![]);
+    let band = out_text(&out, "severity");
+    let at = egui::pos2(band.right() + 300.0, band.center().y);
+    for pressed in [true, false] {
+        pass(
+            &mut view,
+            vec![
+                egui::Event::PointerMoved(at),
+                egui::Event::PointerButton {
+                    pos: at,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+    }
+    assert!(view.section == Section::Process && view.process == ProcessTab::Graph);
+    assert!(
+        view.filter_drafts[0].is_empty(),
+        "{}",
+        view.filter_drafts[0]
+    );
+    assert!(view.scan_request.filters[0].is_empty());
+}
+
+fn out_text(out: &egui::FullOutput, label: &str) -> egui::Rect {
+    texts(out)
+        .into_iter()
+        .find(|(text, _)| text == label)
+        .unwrap_or_else(|| panic!("{label:?} not drawn"))
+        .1
 }
 
 // ----- the live HIGH toast -----
@@ -691,7 +968,10 @@ fn native_graph_fixture() {
 ///
 /// ANTINOMIE_QA_SCENE = tab (the Graph tab in a pane of ANTINOMIE_QA_PANE
 /// points tall, 520 by default) | window (the same, with the graph window
-/// open) | summary (the Summary strip); ANTINOMIE_QA_RUN = a copy of a run's
+/// open) | summary (the Summary strip) | perfile (Files > Per-file history
+/// with a sample file activity) | files | network | suspicious | tree |
+/// properties | detection | ebpf | ioc (that section of Triage); ANTINOMIE_QA_ZOOM
+/// = the Summary strip's zoom (0.6 to 3, 1 by default); ANTINOMIE_QA_RUN = a copy of a run's
 /// directory to read (its `telemetry.raw` and `run.json`), else a small
 /// synthetic one; ANTINOMIE_QA_THEME, ANTINOMIE_QA_SIZE, ANTINOMIE_QA_SECONDS
 /// as for `native_graph_fixture`.
@@ -791,13 +1071,33 @@ fn native_graph_view_fixture() {
         "time" => Spacing::Time,
         _ => Spacing::Events,
     });
+    let mut scan = scan;
+    if scene == "perfile" {
+        scan.file_activity = Arc::new(super::super::file_activity::tests::activity());
+    }
     view.scan = Some(scan);
-    view.section = if scene == "summary" {
-        Section::Summary
-    } else {
-        Section::Process
+    if let Ok(zoom) = std::env::var("ANTINOMIE_QA_ZOOM") {
+        view.strip.zoom = super::strip::clamp_zoom(zoom.parse().unwrap_or(1.0));
+    }
+    let (section, process) = match scene.as_str() {
+        "summary" => (Section::Summary, ProcessTab::Graph),
+        "perfile" | "files" => (Section::Files, ProcessTab::Graph),
+        "network" => (Section::Network, ProcessTab::Graph),
+        "suspicious" => (Section::Process, ProcessTab::Suspicious),
+        "tree" => (Section::Process, ProcessTab::Tree),
+        "properties" => (Section::Properties, ProcessTab::Graph),
+        "detection" => (Section::Detection, ProcessTab::Graph),
+        "ebpf" => (Section::Bpf, ProcessTab::Graph),
+        "ioc" => (Section::Ioc, ProcessTab::Graph),
+        _ => (Section::Process, ProcessTab::Graph),
     };
-    view.process = ProcessTab::Graph;
+    view.section = section;
+    view.process = process;
+    view.history_tab = scene == "perfile";
+    if scene == "perfile" {
+        view.file_history
+            .open_on(&std::env::var("ANTINOMIE_QA_FILE").unwrap_or_else(|_| "/tmp/payload".into()));
+    }
     view.context_key = Some("vm\nboot\nrun\n".into());
     view.scan_request.identity = Some(("vm".into(), "boot".into(), "run".into()));
     eframe::run_native(

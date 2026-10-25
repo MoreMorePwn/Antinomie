@@ -440,6 +440,7 @@ impl Viewer {
             );
             crate::widgets::table::begin(ui);
             let mut table = TableBuilder::new(ui)
+                .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
                 .id_salt("journal-rows")
                 .striped(true)
                 .sense(egui::Sense::click())

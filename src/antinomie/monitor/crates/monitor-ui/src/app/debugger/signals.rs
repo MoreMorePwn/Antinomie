@@ -50,6 +50,7 @@ pub(super) fn rows(
     let row_height = widgets_table::row_height(egui::TextStyle::Body.resolve(ui.style()).size);
     widgets_table::begin(ui);
     TableBuilder::new(ui)
+        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
         .id_salt(TABLE)
         .striped(true)
         .column(Column::auto().at_least(110.0))

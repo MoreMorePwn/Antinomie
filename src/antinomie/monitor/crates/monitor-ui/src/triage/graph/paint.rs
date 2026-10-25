@@ -202,7 +202,7 @@ pub(super) fn phase_band(painter: &Painter, frame: &Frame, index: &GraphIndex, c
             Stroke::new(1.0_f32, tint.gamma_multiply(0.8)),
             eframe::egui::StrokeKind::Inside,
         );
-        let font = FontId::proportional(11.0);
+        let font = FontId::proportional(11.0 * frame.m.text);
         let text = painter.layout_no_wrap(span.phase.label().to_owned(), font, colors.text);
         // The label only when it fits inside the span.
         if text.size().x + 6.0 <= rect.width() {
@@ -486,7 +486,7 @@ pub(super) fn axis(
             Pos2::new(x + 3.0, frame.axis.top() + 6.0),
             Align2::LEFT_TOP,
             axis_label(ns.max(0.0) as u64, step_ns, origin, clock),
-            FontId::proportional(11.0),
+            FontId::proportional(11.0 * frame.m.text),
             colors.muted,
         );
     }
@@ -500,7 +500,9 @@ pub(super) fn tick_marks(frame: &Frame) -> Vec<(f32, f64)> {
     let mut ticks = Vec::new();
     if frame.map.spacing == super::axis::Spacing::Events && !frame.map.slots.times.is_empty() {
         let times = &frame.map.slots.times;
-        let step = view::tick_step(frame.u_per_px(), 110.0).max(1.0).round();
+        let step = view::tick_step(frame.u_per_px(), 110.0 * f64::from(frame.m.text.max(1.0)))
+            .max(1.0)
+            .round();
         let mut at = (frame.t0 / step).ceil() * step;
         while at <= frame.t1 && ticks.len() < 64 {
             if at >= 0.0 && (at as usize) < times.len() {
@@ -510,7 +512,7 @@ pub(super) fn tick_marks(frame: &Frame) -> Vec<(f32, f64)> {
         }
         return ticks;
     }
-    let step = view::tick_step(frame.ns_per_px(), 110.0);
+    let step = view::tick_step(frame.ns_per_px(), 110.0 * f64::from(frame.m.text.max(1.0)));
     let mut tick = (frame.t0 / step).ceil() * step;
     while tick <= frame.t1 && ticks.len() < 64 {
         ticks.push((frame.x(tick), tick));
@@ -572,7 +574,7 @@ pub(super) fn breaks(painter: &Painter, frame: &Frame, colors: &Colors, right: f
                 Pos2::new(x + 7.0, middle - 9.0),
                 Align2::LEFT_CENTER,
                 gap_text(*gap),
-                FontId::proportional(10.0),
+                FontId::proportional(10.0 * frame.m.text),
                 colour,
             );
         }

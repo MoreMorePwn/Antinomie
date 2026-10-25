@@ -480,6 +480,14 @@ fn analyze_section(section: &mut AnalysisSection, specimen: &[u8], listings: &Pa
                 "whole-file and up to 64 measured regions; entropy is not a packing verdict".into();
         }
         AnalysisKind::Strings => strings(section, specimen, listings),
+        // The patterns are those of the Rule manager as they are when the
+        // matches are read, so none are fixed in the report: this check says
+        // the run asked for them, and the Strings & regex tab lists them.
+        AnalysisKind::Regex => {
+            section.summary =
+                "regex patterns are matched over the strings when the Strings & regex tab opens"
+                    .into();
+        }
         AnalysisKind::Structures | AnalysisKind::Hardening => match object::File::parse(specimen) {
             Ok(file) => {
                 if section.kind == AnalysisKind::Structures {

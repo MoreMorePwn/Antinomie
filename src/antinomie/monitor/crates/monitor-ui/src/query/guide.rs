@@ -56,6 +56,7 @@ pub(crate) fn guide(ctx: &egui::Context) {
             use egui_extras::{Column, TableBuilder};
             crate::widgets::table::begin(ui);
             TableBuilder::new(ui)
+                .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
                 .id_salt("filter-keywords")
                 .striped(true)
                 .column(Column::initial(160.0))
@@ -76,7 +77,8 @@ pub(crate) fn guide(ctx: &egui::Context) {
                                 ui.label(kind);
                             });
                             row.col(|ui| {
-                                ui.label(meaning);
+                                ui.add(egui::Label::new(meaning).truncate())
+                                    .on_hover_text(meaning);
                             });
                     });
                 });

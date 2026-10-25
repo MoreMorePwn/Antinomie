@@ -7,7 +7,7 @@ impl TriageView {
     /// Chips that narrow the table. With none of a group selected the whole
     /// group shows; a click selects one and further clicks add to or remove from it.
     pub(super) fn finding_chips(&mut self, ui: &mut egui::Ui) {
-        use crate::widgets::toggle_chip;
+        use crate::widgets::{toggle_chip, toggle_chip_with};
         let counts = self.scan.as_ref().map(|scan| scan.counts.finding_tiers);
         let hidden = self
             .scan
@@ -49,7 +49,10 @@ impl TriageView {
         ui.separator();
         for category in Category::ALL {
             let on = view.categories == 0 || view.category_on(category);
-            if toggle_chip(ui, category.chip(), on, None)
+            // The category's own icon where the others have a check mark: the
+            // same one its markers and heat row carry in the graph.
+            let icon = super::graph::category_icon(category);
+            if toggle_chip_with(ui, icon, category.chip(), on, None)
                 .on_hover_text(category.label())
                 .clicked()
             {

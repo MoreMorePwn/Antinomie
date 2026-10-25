@@ -91,11 +91,13 @@ pub fn aligned(ui: &mut egui::Ui, align: Align, add: impl FnOnce(&mut egui::Ui))
     }
 }
 
-/// [`aligned`] for body cells of a table whose cells sit at the top of the
-/// row: a right-aligned cell keeps that baseline instead of drifting down.
+/// [`aligned`] for body cells of a table whose cells are centred in the row
+/// (`cell_layout(left_to_right(Center))`): a right-aligned cell is centred in
+/// the row too, so numbers and text in one row share a middle line however
+/// their fonts differ.
 pub fn aligned_cell(ui: &mut egui::Ui, align: Align, add: impl FnOnce(&mut egui::Ui)) {
     if align == Align::Max {
-        ui.with_layout(Layout::right_to_left(Align::Min), add);
+        ui.with_layout(Layout::right_to_left(Align::Center), add);
     } else {
         add(ui);
     }

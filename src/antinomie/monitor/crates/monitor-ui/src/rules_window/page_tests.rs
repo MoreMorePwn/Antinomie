@@ -347,11 +347,32 @@ fn strings_regex_adds_patterns_with_grey_hints_and_a_full_width_expression() {
             "{text} is cut: {rect:?} in {clip:?}"
         );
     }
-    let (_, _, wide, _) = found
+    // One row: the name, the expression and Add side by side, the expression
+    // taking what the others leave.
+    let rect_of = |start: &str| {
+        found
+            .iter()
+            .find(|(text, _, _, _)| text.starts_with(start))
+            .map(|(_, _, clip, rect)| (*clip, *rect))
+            .unwrap()
+    };
+    let (_, name) = rect_of("Name, e.g.");
+    let (wide_clip, wide) = rect_of("Regular expression, such as");
+    assert!(
+        (name.center().y - wide.center().y).abs() < 4.0,
+        "the name {name:?} and the expression {wide:?} share a row"
+    );
+    assert!(wide.left() > name.right(), "{name:?} then {wide:?}");
+    assert!(wide_clip.width() > SIZE.x * 0.45, "{wide_clip:?}");
+    let (_, _, _, add) = *found
         .iter()
-        .find(|(text, _, _, _)| text.starts_with("Regular expression, such as"))
-        .unwrap();
-    assert!(wide.width() > SIZE.x * 0.8, "{wide:?}");
+        .find(|(text, _, _, _)| text == "Add")
+        .expect("the Add button");
+    assert!(
+        (add.center().y - wide.center().y).abs() < 6.0 && add.left() >= wide_clip.right() - 1.0,
+        "Add {add:?} ends the row of {wide_clip:?}"
+    );
+    assert!(add.right() <= SIZE.x, "{add:?}");
 }
 
 /// The Strings regex tab in a real window, for screenshots.

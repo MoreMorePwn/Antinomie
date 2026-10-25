@@ -222,56 +222,82 @@ fn marker_at(layout: &Layout, index: &GraphIndex, row: usize, x: f32) -> Option<
     best.map(|(_, _, record)| Hit::Marker { record, near })
 }
 
-/// The lines of a marker's tooltip: rule, tier, category, process, time, count, outcome.
+/// What a marker's tooltip says, ready to lay out: the tier it is coloured by,
+/// a heading, the finding's title, labelled facts and a closing hint.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Tip {
+    /// The tier the chip is coloured by.
+    pub tier: Tier,
+    /// `HIGH · Command & control`.
+    pub heading: String,
+    /// The rule's name; empty when only the packed record is known.
+    pub title: String,
+    /// What the finding did, in a sentence.
+    pub summary: String,
+    /// Label and value, in display order.
+    pub facts: Vec<(&'static str, String)>,
+    /// How many findings share the point, when more than one.
+    pub crowd: Option<String>,
+}
+
+/// A marker's tooltip: rule, tier, category, process, time, count, outcome.
 pub(super) fn tooltip(
     index: &GraphIndex,
     record: usize,
     near: usize,
     clock: Option<antinomie_monitor_core::HostClockAnchor>,
-) -> Vec<String> {
-    let mut lines = Vec::new();
+) -> Tip {
+    let mut tip = Tip {
+        tier: Tier::Info,
+        heading: String::new(),
+        title: String::new(),
+        summary: String::new(),
+        facts: Vec::new(),
+        crowd: None,
+    };
+    let mut facts: Vec<(&'static str, String)> = Vec::new();
     if let Some(row) = index.rows.get(record) {
         let cell = |column: usize| row.cells.get(column).map(|cell| cell.text.clone());
-        lines.push(cell(0).unwrap_or_default());
-        lines.push(format!(
-            "{} · {}",
-            cell(rules::COL_TIER).unwrap_or_default().to_uppercase(),
-            cell(2).unwrap_or_default()
-        ));
-        lines.push(cell(rules::COL_PROCESS).unwrap_or_default());
-        lines.push(cell(rules::COL_SUMMARY).unwrap_or_default());
-        lines.push(format!("Count {}", cell(5).unwrap_or_default()));
-        lines.push(format!("Outcome: {}", cell(11).unwrap_or_default()));
+        let tier = cell(rules::COL_TIER).unwrap_or_default();
+        tip.tier = Tier::from_tag(&tier.to_lowercase()).unwrap_or(Tier::Info);
+        tip.heading = format!("{} · {}", tier.to_uppercase(), cell(2).unwrap_or_default());
+        tip.title = cell(0).unwrap_or_default();
+        tip.summary = cell(rules::COL_SUMMARY).unwrap_or_default();
+        facts.push(("Process", cell(rules::COL_PROCESS).unwrap_or_default()));
+        facts.push(("Count", cell(5).unwrap_or_default()));
+        facts.push(("Outcome", cell(11).unwrap_or_default()));
     } else if let Some(record) = index.records.get(record) {
-        lines.push(format!(
+        tip.tier = Tier::ALL[usize::from(record.tier).min(3)];
+        tip.heading = format!(
             "{} · {}",
-            Tier::ALL[usize::from(record.tier).min(3)]
-                .tag()
-                .to_uppercase(),
+            tip.tier.tag().to_uppercase(),
             Category::ALL[usize::from(record.category).min(12)].label()
-        ));
-        lines.push(format!("Count {}", record.count));
+        );
+        facts.push(("Count", record.count.to_string()));
     }
     if let Some(record) = index.records.get(record) {
         // Without a host anchor the guest time has no wall clock to show.
         let time = crate::time_format::guest_ns(clock, Some(record.first_ns));
-        if clock.is_some() && time != "Unavailable" {
-            lines.push(time);
+        let when = if clock.is_some() && time != "Unavailable" {
+            time
         } else {
-            lines.push(format!(
+            format!(
                 "{:.3} s into the run",
                 record.first_ns.saturating_sub(index.run_extent().0) as f64 / 1e9
-            ));
-        }
+            )
+        };
+        facts.insert(0, ("When", when));
     }
+    tip.facts = facts
+        .into_iter()
+        .filter(|(_, value)| !value.is_empty())
+        .collect();
     if near > 1 {
-        lines.push(format!(
-            "{} findings under the pointer; the worst is shown",
-            near
+        tip.crowd = Some(format!(
+            "{near} findings under the pointer; the worst is shown"
         ));
     }
-    lines.retain(|line| !line.is_empty());
-    lines
+    tip
 }
 
 /// The previous (`-1`) or next (`1`) record in time, from `from`; with no

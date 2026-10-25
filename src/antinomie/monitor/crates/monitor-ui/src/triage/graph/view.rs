@@ -33,6 +33,8 @@ pub(super) struct Metrics {
     /// The overview ruler under the axis; none in the Summary strip.
     pub ruler_h: f32,
     pub lane_h: f32,
+    /// What the labels' text sizes are multiplied by: 1 except in a zoomed strip.
+    pub text: f32,
 }
 
 impl Metrics {
@@ -46,12 +48,29 @@ impl Metrics {
             axis_h: 24.0,
             ruler_h: 0.0,
             lane_h: 20.0,
+            text: 1.0,
         }
     }
 
-    /// The height of the strip's bands and axis.
-    pub(super) fn strip_height(heat_rows: usize) -> f32 {
-        let m = Self::compact();
+    /// The Summary strip at `zoom` times its size: every band, the label
+    /// column and the text grow together.
+    pub(super) fn zoomed(zoom: f32) -> Self {
+        let base = Self::compact();
+        Self {
+            label_w: base.label_w * zoom,
+            phase_h: base.phase_h * zoom,
+            curve_h: base.curve_h * zoom,
+            heat_h: base.heat_h * zoom,
+            axis_h: base.axis_h * zoom,
+            ruler_h: 0.0,
+            lane_h: base.lane_h * zoom,
+            text: zoom,
+        }
+    }
+
+    /// The height of the strip's bands and axis at `zoom`.
+    pub(super) fn strip_height(heat_rows: usize, zoom: f32) -> f32 {
+        let m = Self::zoomed(zoom);
         m.phase_h + GAP + m.curve_h + GAP + m.heat_h * heat_rows as f32 + GAP + m.axis_h
     }
 
@@ -79,6 +98,7 @@ impl Metrics {
             axis_h,
             ruler_h,
             lane_h,
+            text: 1.0,
         }
     }
 
@@ -123,6 +143,9 @@ pub(in crate::triage) struct State {
     pub collapsed: std::collections::BTreeSet<(u64, u32)>,
     /// The record selected in the graph.
     pub selected: Option<usize>,
+    /// The record under the pointer this frame, which gets a ring and a
+    /// tooltip.
+    pub(super) hovered: Option<usize>,
     /// The time range brushed, which the filter holds.
     pub brush: Option<(u64, u64)>,
     pub(super) drag: Option<Drag>,
@@ -142,6 +165,7 @@ impl Default for State {
             scroll: 0.0,
             collapsed: Default::default(),
             selected: None,
+            hovered: None,
             brush: None,
             drag: None,
             ruler: None,

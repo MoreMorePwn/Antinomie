@@ -22,6 +22,24 @@ it runs.
   move files in and out of the new root as the invoking user, so they no longer
   fail on the private staging directory; the conformance trace suite also runs
   on a Debian Minimal base (account, minima, login prompt).
+- **UI polish.** The Summary detector cards say *Queued* or *Scanning* instead
+  of *Not scanned* while a scan waits or runs. The Main activity graph has zoom
+  buttons and Ctrl+wheel (60 % to 300 %), its click opens the graph without
+  carrying a filter along, and the graph's overview ruler has wide grips and a
+  hover card and ring on markers. Per-file history is the first Files tab with
+  its file count, keeps process names clear of its graph, shows its calls in a
+  table that spans the pane and shows a clicked file or call in Details.
+  Suspicious activity starts with Time and its category chips wear their icons.
+  Regex matches are their own analysis choice beside Strings, and the regex
+  add row is one line. The 0.7.0 Network tabs and the layout switch are gone.
+  More lists say when they are empty (cores first), more tables span their
+  pane, and the terminal's focus edge shows on all four sides.
+- **abuse.ch downloads.** A dataset that needs the Auth-Key is refused before
+  any request when none is set, with a message that names auth.abuse.ch; HTTP
+  404, 429 and server errors are explained. The SSLBL IP list, which abuse.ch
+  now serves with a header and no entries, is kept as a copy of no records and
+  shown as *Retired upstream* instead of failing, in the IOC datasets and the
+  IDS packs. The free-space check no longer asks gigabytes for a 300 MB list.
 
 ## 0.7.0 — Unreleased
 

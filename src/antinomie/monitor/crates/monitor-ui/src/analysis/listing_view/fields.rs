@@ -78,6 +78,8 @@ pub(crate) fn listing_fields(kind: AnalysisKind) -> Vec<crate::query::FieldSpec<
             F::text("version", "Identified version, when present"),
         ],
         AnalysisKind::Metadata => vec![F::text("group", "Metadata group")],
+        // The regex matches are read from the strings, not listed on their own.
+        AnalysisKind::Regex => Vec::new(),
         AnalysisKind::Embedded => vec![F::text("description", "binwalk signature description")],
         AnalysisKind::Unpacking => vec![
             F::number(

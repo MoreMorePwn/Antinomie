@@ -126,6 +126,8 @@ pub(super) fn locate(kind: AnalysisKind, current: FileInfo) -> (Tab, FileInfo) {
         AnalysisKind::Identification => info(FileInfo::Identification),
         AnalysisKind::Entropy => info(FileInfo::Entropy),
         AnalysisKind::Structures => info(FileInfo::Sections),
+        // The matches are a pane of the Strings tab.
+        AnalysisKind::Regex => (Tab::Strings, current),
         kind => (
             Tab::ALL
                 .into_iter()
@@ -147,9 +149,13 @@ pub(super) fn show(
     ui.add_space(4.0);
     crate::widgets::tab_row(ui, |ui| {
         for tab in Tab::ALL {
-            let section = tab
-                .kind()
-                .and_then(|kind| report.sections.iter().find(|section| section.kind == kind));
+            let section = tab.kind().and_then(|kind| {
+                report.sections.iter().find(|section| {
+                    // Strings & regex opens for either of its two checks.
+                    section.kind == kind
+                        || (tab == Tab::Strings && section.kind == AnalysisKind::Regex)
+                })
+            });
             let pending = tab.kind().is_some_and(|kind| pending(report, kind));
             let title = if pending {
                 format!(
@@ -370,14 +376,38 @@ fn strings_and_regex(
     state: &mut WorkspaceState,
     listing: Option<&Result<AnalysisListingPage, String>>,
 ) -> Option<ReportAction> {
-    let ready = regex_ready(report);
+    let requested = report
+        .sections
+        .iter()
+        .any(|section| section.kind == AnalysisKind::Regex);
+    let ready = requested && regex_ready(report);
     if ready && state.regex_asked != report.id {
         state.regex_asked = report.id.clone();
         state.regex_wanted = true;
     }
-    let pane = |ui: &mut egui::Ui, regex: &mut crate::regex_matches::RegexWindow| {
+    let finished = matches!(
+        report.state,
+        antinomie_monitor_core::AnalysisState::Complete
+            | antinomie_monitor_core::AnalysisState::Partial
+    );
+    let mut action = None;
+    let pane = |ui: &mut egui::Ui,
+                regex: &mut crate::regex_matches::RegexWindow,
+                action: &mut Option<ReportAction>| {
         ui.strong("Regex matches");
-        if ready {
+        if !requested {
+            ui.weak("Regex matches are not part of this analysis.");
+            if super::run_button(
+                ui,
+                finished,
+                "Run this check now; the rest of the analysis is not repeated",
+            ) {
+                *action = Some(ReportAction::RunCheck {
+                    report_id: report.id.clone(),
+                    kind: AnalysisKind::Regex,
+                });
+            }
+        } else if ready {
             regex.pane(ui);
         } else {
             ui.weak("The matches are listed once the Strings or FLOSS strings are done.");
@@ -389,14 +419,14 @@ fn strings_and_regex(
             .resizable(true)
             .default_width(ui.available_width() * 0.4)
             .width_range(320.0..=ui.available_width() * 0.7)
-            .show_inside(ui, |ui| pane(ui, &mut state.regex));
+            .show_inside(ui, |ui| pane(ui, &mut state.regex, &mut action));
     } else {
         egui::TopBottomPanel::bottom("static-regex-pane")
             .resizable(true)
             .default_height(ui.available_height() * 0.45)
-            .show_inside(ui, |ui| pane(ui, &mut state.regex));
+            .show_inside(ui, |ui| pane(ui, &mut state.regex, &mut action));
     }
-    egui::CentralPanel::default()
+    let strings = egui::CentralPanel::default()
         .frame(egui::Frame::NONE)
         .show_inside(ui, |ui| {
             category(
@@ -408,7 +438,8 @@ fn strings_and_regex(
                 Structure::All,
             )
         })
-        .inner
+        .inner;
+    action.or(strings)
 }
 
 /// The row count a tab shows as its badge: the categories that list findings.

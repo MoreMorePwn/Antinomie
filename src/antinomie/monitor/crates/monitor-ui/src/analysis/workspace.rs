@@ -725,21 +725,25 @@ fn categories(
                         }
                     },
                     |ui| {
-                        if ui
-                            .button(egui_phosphor::regular::ARROW_SQUARE_OUT)
-                            .on_hover_text("Open category in a separate pane")
-                            .clicked()
-                        {
-                            action = Some(ReportAction::OpenSection {
-                                report_id: report.id.clone(),
-                                kind,
-                            });
+                        // The regex matches are read from the strings and shown
+                        // beside them: no listing of their own to open or count.
+                        if kind != AnalysisKind::Regex {
+                            if ui
+                                .button(egui_phosphor::regular::ARROW_SQUARE_OUT)
+                                .on_hover_text("Open category in a separate pane")
+                                .clicked()
+                            {
+                                action = Some(ReportAction::OpenSection {
+                                    report_id: report.id.clone(),
+                                    kind,
+                                });
+                            }
+                            let rows = section
+                                .listing
+                                .as_ref()
+                                .map_or(section.entries.len() as u64, |listing| listing.rows);
+                            ui.label(egui::RichText::new(format!("{rows} rows")).monospace());
                         }
-                        let rows = section
-                            .listing
-                            .as_ref()
-                            .map_or(section.entries.len() as u64, |listing| listing.rows);
-                        ui.label(egui::RichText::new(format!("{rows} rows")).monospace());
                         chip(ui, state_word(report, section), state_tone(section));
                     },
                 );
@@ -761,10 +765,11 @@ fn run_button(ui: &mut egui::Ui, enabled: bool, hover: &str) -> bool {
 pub(super) const NOT_REQUESTED: &str =
     "Not part of this analysis; Run in Overview > Categories adds it without starting over";
 
-const ALL_KINDS: [AnalysisKind; 13] = [
+const ALL_KINDS: [AnalysisKind; 14] = [
     AnalysisKind::Metadata,
     AnalysisKind::Structures,
     AnalysisKind::Strings,
+    AnalysisKind::Regex,
     AnalysisKind::Entropy,
     AnalysisKind::Hardening,
     AnalysisKind::Rules,

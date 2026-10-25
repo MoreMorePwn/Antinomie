@@ -5,6 +5,7 @@
 use super::graph::{self, Layout};
 use super::{Activity, ByteRun, Event, FileActivity};
 use crate::theme;
+use crate::triage::{details, Cell, RowValue};
 use crate::widgets::{self, Tone};
 use eframe::egui;
 
@@ -160,12 +161,12 @@ impl Window {
             egui::SidePanel::left("file-activity-list")
                 .resizable(true)
                 .default_width(310.0)
-                .show_inside(ui, |ui| self.list(ui, activity, &shown));
+                .show_inside(ui, |ui| self.list(ui, activity, &shown, clock));
         } else {
             egui::TopBottomPanel::top("file-activity-list")
                 .resizable(true)
                 .default_height(230.0)
-                .show_inside(ui, |ui| self.list(ui, activity, &shown));
+                .show_inside(ui, |ui| self.list(ui, activity, &shown, clock));
         }
         egui::CentralPanel::default().show_inside(ui, |ui| {
             match self.selected_file(activity) {
@@ -177,7 +178,13 @@ impl Window {
         });
     }
 
-    fn list(&mut self, ui: &mut egui::Ui, activity: &Activity, shown: &[usize]) {
+    fn list(
+        &mut self,
+        ui: &mut egui::Ui,
+        activity: &Activity,
+        shown: &[usize],
+        clock: Option<antinomie_monitor_core::HostClockAnchor>,
+    ) {
         ui.add(
             egui::TextEdit::singleline(&mut self.filter)
                 .hint_text(theme::hint_text("Filter by path"))
@@ -217,6 +224,16 @@ impl Window {
             shown.len(),
             activity.files.len() as u64 + activity.omitted_files
         ));
+        if shown.is_empty() {
+            theme::empty_state(
+                ui,
+                if activity.files.is_empty() {
+                    "The run touched no files"
+                } else {
+                    "No file matches the filter"
+                },
+            );
+        }
         let row = ui.text_style_height(&egui::TextStyle::Body) * 2.0 + 10.0;
         let selected = self
             .selected_file(activity)
@@ -272,6 +289,13 @@ impl Window {
         if chosen.is_some() {
             self.selected = chosen;
             self.node = None;
+            // A click shows the file in Details, as a click on a row of any
+            // other Triage table does.
+            if let Some(file) = self.selected_file(activity) {
+                let ctx = ui.ctx();
+                details::select(ctx, FILE_TABLE, FILE_HEADERS, &file_cells(file, clock));
+                details::clicked(ctx, FILE_TABLE);
+            }
         }
     }
 
@@ -354,73 +378,31 @@ impl Window {
                 self.node = None;
             }
         });
-        egui::Grid::new("file-activity-calls")
-            .striped(true)
-            .num_columns(7)
+        let rows: Vec<Vec<Cell>> = file.events[range]
+            .iter()
+            .take(CALLS_SHOWN)
+            .map(|event| call_cells(activity, event, clock))
+            .collect();
+        // The shared Triage table: it takes the panel's width however short
+        // its content, a click shows the call in Details and a double-click
+        // opens the original syscall, as in every other Triage table.
+        // Room for exactly its rows, so the table's ground does not fill the
+        // rest of the pane; wide content scrolls sideways.
+        let row = ui.text_style_height(&egui::TextStyle::Body).max(14.0) + 8.0;
+        let height = (row + ui.spacing().item_spacing.y) * (rows.len() as f32 + 1.0) + 48.0;
+        egui::ScrollArea::horizontal()
+            .id_salt("file-activity-calls-columns")
+            .auto_shrink([false, true])
             .show(ui, |ui| {
-                for head in [
-                    "Time", "Process", "Call", "Result", "Offset", "Length", "Content",
-                ] {
-                    ui.label(egui::RichText::new(head).small().color(theme::muted()));
-                }
-                ui.end_row();
-                for event in file.events[range].iter().take(CALLS_SHOWN) {
-                    self.call_row(ui, activity, event, clock);
-                }
+                ui.allocate_ui(egui::vec2(ui.available_width(), height), |ui| {
+                    crate::triage::table::table_rows(ui, CALLS_TABLE, CALL_HEADERS, &rows);
+                });
             });
         if file.events.len() > CALLS_SHOWN && self.node.is_none() {
             ui.weak(format!(
                 "The first {CALLS_SHOWN} calls; choose a step for the rest."
             ));
         }
-    }
-
-    fn call_row(
-        &self,
-        ui: &mut egui::Ui,
-        activity: &Activity,
-        event: &Event,
-        clock: Option<antinomie_monitor_core::HostClockAnchor>,
-    ) {
-        ui.monospace(crate::time_format::guest_ns(clock, Some(event.time)));
-        ui.label(activity.process_label(event.process));
-        let async_mark = event.via.is_some();
-        let call = ui.add(
-            egui::Label::new(egui::RichText::new(&event.operation).color(graph::tint(event.kind)))
-                .sense(egui::Sense::click()),
-        );
-        let call = call
-            .on_hover_text("Open the original syscall")
-            .on_hover_cursor(egui::CursorIcon::PointingHand);
-        if call.clicked() {
-            ui.ctx().data_mut(|data| {
-                data.insert_temp(egui::Id::new("triage-call-jump"), event.key);
-            });
-        }
-        let mut result = event.result.clone();
-        if async_mark {
-            result.push_str(" · async");
-        }
-        if !event.note.is_empty() {
-            result.push_str(&format!(" · {}", event.note));
-        }
-        if let Some(other) = &event.other_path {
-            result.push_str(&format!(" → {other}"));
-        }
-        // A result is a short phrase; wrapping it in a table cell broke it
-        // letter by letter.
-        ui.add(egui::Label::new(result).extend());
-        match event.offset {
-            Some(offset) => ui.monospace(format!("0x{offset:x}")),
-            None if event.len.is_some() => ui.weak("unknown"),
-            None => ui.label(""),
-        };
-        match event.len {
-            Some(len) => ui.monospace(format!("{len}")),
-            None => ui.label(""),
-        };
-        ui.add(egui::Label::new(egui::RichText::new(content_text(event)).monospace()).wrap());
-        ui.end_row();
     }
 }
 
@@ -429,6 +411,124 @@ const STACK_BELOW: f32 = 700.0;
 
 /// Calls drawn in the table at once.
 const CALLS_SHOWN: usize = 200;
+
+/// The id of the calls table, which Details knows it by.
+pub(in crate::triage) const CALLS_TABLE: &str = "triage-file-calls";
+/// The id the chosen file is known by in Details.
+pub(in crate::triage) const FILE_TABLE: &str = "triage-file-history";
+const CALL_HEADERS: &[&str] = &[
+    "Time", "Process", "Call", "Result", "Offset", "Length", "Content",
+];
+const FILE_HEADERS: &[&str] = &[
+    "Path",
+    "Also seen as",
+    "First touched",
+    "Last touched",
+    "Calls",
+    "Steps",
+    "State",
+    "Size before",
+    "Size at the end",
+    "SHA-256",
+];
+
+/// One call as a row of the calls table. The first cell carries what the
+/// original syscall is found by, so Details offers it and a double-click opens it.
+pub(super) fn call_cells(
+    activity: &Activity,
+    event: &Event,
+    clock: Option<antinomie_monitor_core::HostClockAnchor>,
+) -> Vec<Cell> {
+    use crate::triage::table::cell;
+    let mut result = event.result.clone();
+    if event.via.is_some() {
+        result.push_str(" · async");
+    }
+    if !event.note.is_empty() {
+        result.push_str(&format!(" · {}", event.note));
+    }
+    if let Some(other) = &event.other_path {
+        result.push_str(&format!(" → {other}"));
+    }
+    let offset = match event.offset {
+        Some(offset) => format!("0x{offset:x}"),
+        None if event.len.is_some() => "unknown".to_owned(),
+        None => String::new(),
+    };
+    let (stream, task, call) = event.key;
+    let mut time = cell(
+        crate::time_format::guest_ns(clock, Some(event.time)),
+        theme::text(),
+        true,
+    );
+    time.values = vec![
+        ("stream.id", RowValue::Number(i128::from(stream))),
+        ("process.cookie", RowValue::Number(i128::from(task))),
+        ("event.id", RowValue::Number(i128::from(call))),
+    ];
+    vec![
+        time,
+        cell(activity.process_label(event.process), theme::text(), false),
+        cell(&event.operation, graph::tint(event.kind), false),
+        cell(result, theme::text(), false),
+        cell(offset, theme::text(), true),
+        cell(
+            event.len.map(|len| len.to_string()).unwrap_or_default(),
+            theme::text(),
+            true,
+        ),
+        cell(content_text(event), theme::text(), true),
+    ]
+}
+
+/// The chosen file as Details shows it.
+pub(super) fn file_cells(
+    file: &FileActivity,
+    clock: Option<antinomie_monitor_core::HostClockAnchor>,
+) -> Vec<Cell> {
+    use crate::triage::table::cell;
+    let size = |size: Option<u64>| size.map_or("unknown".to_owned(), |size| format!("{size} B"));
+    let mut state = Vec::new();
+    if file.created {
+        state.push("created by the run");
+    }
+    if file.deleted {
+        state.push("deleted");
+    }
+    if !file.path_known {
+        state.push("path unknown");
+    }
+    if file.failed_only {
+        state.push("every call refused");
+    }
+    let calls = file.events.len() as u64 + file.omitted;
+    let hash = file
+        .contents
+        .hash
+        .as_ref()
+        .and_then(|hash| hash.sha256_hex())
+        .unwrap_or_default();
+    vec![
+        cell(&file.path, theme::text(), true),
+        cell(file.names.join(", "), theme::text(), true),
+        cell(
+            crate::time_format::guest_ns(clock, Some(file.first_ns)),
+            theme::text(),
+            true,
+        ),
+        cell(
+            crate::time_format::guest_ns(clock, Some(file.last_ns)),
+            theme::text(),
+            true,
+        ),
+        cell(calls.to_string(), theme::text(), true),
+        cell(file.summary(), theme::text(), false),
+        cell(state.join(", "), theme::text(), false),
+        cell(size(file.contents.original_size), theme::text(), true),
+        cell(size(file.contents.final_size), theme::text(), true),
+        cell(hash, theme::text(), true),
+    ]
+}
 
 /// What a transfer carried, as far as the kernel captured it.
 pub(super) fn content_text(event: &Event) -> String {

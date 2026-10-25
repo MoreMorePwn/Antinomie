@@ -96,6 +96,7 @@ pub(super) fn pane(ui: &mut egui::Ui, view: &DebugView, actions: &mut Vec<PanelA
     let row_height = table::row_height(egui::TextStyle::Body.resolve(ui.style()).size);
     table::begin(ui);
     TableBuilder::new(ui)
+        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
         .id_salt(TABLE)
         .striped(true)
         .column(Column::auto().at_least(60.0))

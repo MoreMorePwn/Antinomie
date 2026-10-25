@@ -177,6 +177,21 @@ impl MonitorApp {
                 format!("Showing {} of {total} calls", invocations.len()),
             );
         }
+        // A saved recording says so only once its count is in: until then
+        // the pager is still counting.
+        if invocations.is_empty()
+            && !self.archive_pending
+            && (!archived || self.archive_total == Some(0))
+        {
+            theme::empty_state(
+                ui,
+                if total == 0 {
+                    "No syscalls in this trace yet"
+                } else {
+                    "No syscall matches the filter or the shown categories"
+                },
+            );
+        }
         let font = self.settings.font_size;
         let height = theme::row_height(font);
         let header_height = font + 12.0;
