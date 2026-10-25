@@ -3,7 +3,7 @@
 //! Part 1: the syscall trace log. Groups `user` (UID 1000), `root` (UID 0) and
 //! `threads` run the oracle fixture (tests/monitor/conformance/trace/fixture);
 //! `stress-light`, `stress-heavy`, `stress-extreme` and `stress-lossy` run
-//! `ant-torture`. Oracle groups are judged call by call; every group must be
+//! `ant-workload`. Oracle groups are judged call by call; every group must be
 //! free of warnings and errors and account for every lost record.
 use crate::{
     Context, Group, GroupKind, Outcome, Part, attribution, golden,
@@ -17,11 +17,11 @@ use std::collections::BTreeMap;
 pub struct TracePart;
 
 const FIXTURE: &str = "/tmp/trace-fixture";
-const TORTURE: &str = "/tmp/ant-torture";
-/// The torture modules that load the syscall trace (network, terminal,
+const WORKLOAD: &str = "/tmp/ant-workload";
+/// The workload modules that load the syscall trace (network, terminal,
 /// detection and crash modules belong to other parts).
 const STRESS_MODULES: &str =
-    "syscall-flood,object-capture,process-tree,file-churn,async-io,decoder-zoo,argv-env,timing";
+    "syscall-load,object-capture,process-tree,file-churn,async-io,decoder-variants,argv-env,timing";
 
 fn oracle_group(context: &Context, name: &str, uid: u32) -> Group {
     Group {
@@ -57,8 +57,8 @@ fn stress_group(context: &Context, name: &str, level: &str, transport: Transport
             cpus: 4,
             ram_mib: 2048,
             transport,
-            uploads: vec![(context.bin().join("ant-torture"), TORTURE.into())],
-            program: TORTURE.into(),
+            uploads: vec![(context.bin().join("ant-workload"), WORKLOAD.into())],
+            program: WORKLOAD.into(),
             args: vec![
                 "--level".into(),
                 level.into(),

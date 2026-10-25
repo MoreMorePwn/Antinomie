@@ -3,7 +3,7 @@
 //
 // files.c — file changes at volume: the Files tab, changed-file diffs and
 // recovered files.
-#include "torture.h"
+#include "workload.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -59,7 +59,7 @@ MODULE(file_churn)
                 chmod(other, 0640);
                 break;
             case 1:
-                setxattr(other, "user.antinomie", "torture", 7, 0);
+                setxattr(other, "user.antinomie", "workload", 7, 0);
                 break;
             case 2:
                 truncate(other, (off_t)size / 2);

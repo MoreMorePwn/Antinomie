@@ -4,8 +4,8 @@
 // main.c — options, module registry, result lines and the scorecard.
 //
 // Built with -DSINGLE_MODULE="name" the program is that one stress sample
-// (ant-<name>); without it, it is ant-torture with every module.
-#include "torture.h"
+// (ant-<name>); without it, it is ant-workload with every module.
+#include "workload.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -20,17 +20,17 @@
 #include <unistd.h>
 
 static const struct module modules[] = {
-    {"syscall-flood", "cheap syscalls on every CPU: transport, TRL, shedding", module_syscall_flood},
+    {"syscall-load", "cheap syscalls on every CPU: transport, TRL, shedding", module_syscall_load},
     {"long-run", "steady mixed activity for minutes: long-session recording, quota", module_long_run},
     {"object-capture", "buffers from 1 byte to MiBs: captured objects, packs", module_object_capture},
-    {"terminal-flood", "long lines, ANSI, UTF-8, binary: terminal drain and scrollback", module_terminal_flood},
+    {"terminal-load", "long lines, ANSI, UTF-8, binary: terminal drain and scrollback", module_terminal_load},
     {"process-tree", "wide, deep, threaded and orphaned processes: process tree", module_process_tree},
     {"unkillable", "ignores SIGTERM with setsid and daemon children: Stop/Kill run", module_unkillable},
     {"file-churn", "thousands of file changes: Files tab and recovered files", module_file_churn},
-    {"network-storm", "connects, UDP, DNS flood, IPv6: network capture and IDS input", module_network_storm},
+    {"network-load", "connects, UDP, DNS flood, IPv6: network capture and IDS input", module_network_load},
     {"async-io", "io_uring with many requests in flight: async observation", module_async_io},
-    {"decoder-zoo", "rare syscalls with odd arguments: argument decoders", module_decoder_zoo},
-    {"crash-core", "large heap then a crash: core on exit and memory dumps", module_crash_core},
+    {"decoder-variants", "rare syscalls with odd arguments: argument decoders", module_decoder_variants},
+    {"core-on-crash", "large heap then a crash: core on exit and memory dumps", module_core_on_crash},
     {"memory-tricks", "RWX, memfd exec, mprotect flips: suspicious memory, YARA memory", module_memory_tricks},
     {"detect-yara", "markers in the binary, a dropped file and memory: YARA targets", module_detect_yara},
     {"detect-sigma", "command lines, file names and connects Sigma rules describe", module_detect_sigma},
@@ -244,7 +244,7 @@ static void usage(const char *self)
 static int run_module(const struct module *module, const struct options *base)
 {
     struct options options = *base;
-    char template[] = "/tmp/antinomie-torture-XXXXXX";
+    char template[] = "/tmp/antinomie-workload-XXXXXX";
     if (!base->workdir[0]) {
         if (!mkdtemp(template)) {
             fail(module->name, "work directory: %s", strerror(errno));

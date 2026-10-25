@@ -1,28 +1,28 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //
-// static-zoo.c — one small program built many ways for static analysis:
+// static-corpus.c — one small program built many ways for static analysis:
 // stripped or not, PIE or not, each hardening option on or off, static,
 // packed with payloads and a high-entropy region, or huge.
 //
-// build-torture.sh compiles the variants; ZOO_GENERATED pulls in the
+// build-workload.sh compiles the variants; CORPUS_GENERATED pulls in the
 // generated payloads, functions, strings and sections.
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
-#ifdef ZOO_GENERATED
-#include "static-zoo-generated.h"
+#ifdef CORPUS_GENERATED
+#include "static-corpus-generated.h"
 #endif
 
 // Readable strings for the Strings tab, including ones that look like
 // configuration and indicators but are inert.
 static const char *const notes[] = {
-    "antinomie static zoo sample",
-    "http://example.invalid/antinomie/static-zoo",
-    "/etc/antinomie/static-zoo.conf",
+    "antinomie static corpus sample",
+    "http://example.invalid/antinomie/static-corpus",
+    "/etc/antinomie/static-corpus.conf",
     "HKEY-style text that is not a registry key",
-    "SELECT name FROM static_zoo WHERE inert = 1",
+    "SELECT name FROM static_corpus WHERE inert = 1",
     "-----BEGIN NOT A KEY----- antinomie -----END NOT A KEY-----",
 };
 
@@ -38,14 +38,14 @@ int main(int argc, char **argv)
 {
     char buffer[64];
     // A fixed-size copy keeps a stack buffer for the canary to protect.
-    strncpy(buffer, argc > 1 ? argv[1] : "zoo", sizeof buffer - 1);
+    strncpy(buffer, argc > 1 ? argv[1] : "corpus", sizeof buffer - 1);
     buffer[sizeof buffer - 1] = 0;
     uint32_t hash = checksum((const unsigned char *)buffer, strlen(buffer));
     for (size_t i = 0; i < sizeof notes / sizeof notes[0]; i++)
         hash ^= checksum((const unsigned char *)notes[i], strlen(notes[i]));
-#ifdef ZOO_GENERATED
-    hash ^= zoo_generated();
+#ifdef CORPUS_GENERATED
+    hash ^= corpus_generated();
 #endif
-    printf("static zoo %s: checksum %08x\n", buffer, hash);
+    printf("static corpus %s: checksum %08x\n", buffer, hash);
     return 0;
 }

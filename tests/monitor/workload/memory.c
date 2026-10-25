@@ -3,7 +3,7 @@
 //
 // memory.c — process cores and memory dumps, suspicious memory use, and the
 // three YARA targets (the executable, a dropped file, memory only).
-#include "torture.h"
+#include "workload.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -69,11 +69,11 @@ int crash_role(const char *kind, long mib)
     return 0;
 }
 
-// ---------------------------------------------------------------- crash-core
+// ---------------------------------------------------------------- core-on-crash
 
-MODULE(crash_core)
+MODULE(core_on_crash)
 {
-    const char *name = "crash-core";
+    const char *name = "core-on-crash";
     long mib = options->level == LEVEL_LIGHT ? 32 : options->level == LEVEL_HEAVY ? 128 : 500;
     char self[4096];
     ssize_t len = readlink("/proc/self/exe", self, sizeof self - 1);
@@ -115,7 +115,7 @@ MODULE(crash_core)
     note(name, "take a live core now (Dump core), then it crashes for the core on exit");
     note(name, "a complete core is about %ld MiB; check it is not cut short", mib);
     hold(wait);
-    printf("crash-core: crashing now with SIGSEGV\n");
+    printf("core-on-crash: crashing now with SIGSEGV\n");
     fflush(stdout);
     crash_role("segv", 0);
 #endif
@@ -149,7 +149,7 @@ MODULE(memory_tricks)
     }
     pass(name, "%ld mprotect flips between writable and executable", flipped);
     // A copy of this program in a memfd, executed from there.
-    int memfd = (int)syscall(SYS_memfd_create, "antinomie-torture", MFD_CLOEXEC);
+    int memfd = (int)syscall(SYS_memfd_create, "antinomie-workload", MFD_CLOEXEC);
     int self = open("/proc/self/exe", O_RDONLY | O_CLOEXEC);
     if (memfd >= 0 && self >= 0) {
         char chunk[65536];
@@ -210,10 +210,10 @@ MODULE(detect_yara)
              in_executable);
     else
         unavailable(name, "this build carries no executable indicators (only ant-detect-yara "
-                          "and ant-torture do)");
+                          "and ant-workload do)");
     size_t len = 0;
     char *dropped = dropped_indicator_text(&len);
-    const char *path = "/tmp/antinomie-torture-yara-dropped.txt";
+    const char *path = "/tmp/antinomie-workload-yara-dropped.txt";
     if (dropped && write_file(path, dropped, len, 0600) == 0)
         pass(name, "dropped %s with the Mozi kill-switch text (kept for recovery)", path);
     else

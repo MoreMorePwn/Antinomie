@@ -320,12 +320,12 @@ terminal: `antinomie --check-dependencies`. The
 
 The **workload test samples** are controlled generators of system-call load,
 process trees, file activity, network traffic, async I/O, unusual arguments,
-crash handling and detection markers. `ant-torture` combines the modules;
+crash handling and detection markers. `ant-workload` combines the modules;
 individual `ant-*` programs isolate one feature at several load levels.
 A sample's `PASS` means its action ran. The separate **conformance suite**
 checks what Antinomie recorded: arguments, results, captured bytes, identities,
 loss accounting and trace rendering. Build the samples with
-[`build-torture.sh`](tests/monitor/build-torture.sh).
+[`build-workload.sh`](tests/monitor/build-workload.sh).
 
 </details>
 

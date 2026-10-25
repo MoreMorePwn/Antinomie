@@ -14,9 +14,9 @@
 //
 // The dropped-file and memory strings are stored XOR-encoded (key 0x5a) and
 // decoded at run time, so the executable does not match those two rules.
-// Only ant-detect-yara and ant-torture carry the plain executable strings;
+// Only ant-detect-yara and ant-workload carry the plain executable strings;
 // the other samples must not be reported as a wiper or a worm.
-#include "torture.h"
+#include "workload.h"
 
 #include <stdlib.h>
 #include <string.h>

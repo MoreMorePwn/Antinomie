@@ -3,7 +3,7 @@
 //
 // process.c — process trees, a run that resists stopping, argument vectors,
 // and the child roles the program re-executes itself into.
-#include "torture.h"
+#include "workload.h"
 
 #include <errno.h>
 #include <fcntl.h>
