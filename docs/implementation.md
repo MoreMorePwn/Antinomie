@@ -1038,6 +1038,17 @@ Host only: `monitor-ui/src/triage/graph/`, nothing needs a guest change.
   pulls an edge or selects, `drag` and `selected` give the window, and a
   double-click gives the whole run (`Layout::range`). The brush in the filter is
   drawn on it from `State::brush`.
+* **Hover, grips and the strip's zoom.** `State::hovered` is the marker under the
+  pointer this frame (set before `draw`, from the same hit test the tooltip uses): it
+  gets an accent ring (`hover_ring`) and `input::tooltip` returns a `Tip` that
+  `tooltip_ui` lays out as a tier chip, the rule, what it did and a grid of facts. The
+  ruler's grips are `GRIP_W` wide handles and the edge grab is `GRAB` (8 points). The
+  Summary strip keeps `Strip::zoom` (0.6 to 3, buttons step 1.25, Ctrl+wheel through
+  `zoom_delta`, the percentage resets): `Metrics::zoomed` scales the bands, the label
+  column and `Metrics::text`, which the strip's labels and the axis multiply their font
+  sizes by; painting stays one pass over the overview index, so zoom costs no more at
+  120,000 findings. Opening the graph from the strip or its pop-out calls
+  `TriageView::clear_finding_filters`, so the graph starts on what the strip shows.
 * **Spinners.** `theme::spinner` turns in 100 ms steps and asks for a repaint
   every 100 ms; egui's own `Spinner` repaints every frame, which on software GL
   is the full frame rate for as long as an index is being read. All spinners go
@@ -1049,16 +1060,18 @@ Host only: `monitor-ui/src/triage/graph/`, nothing needs a guest change.
   that was dismissed stays gone). The switch is `Settings::toast_high_findings`.
   With it on, a live run whose pane is hidden is still re-read every 15 s.
 * **Tests.** `graph/tests.rs` (index, phases, lanes, filter text, hit testing,
-  mouse and keyboard through egui, contrast of every theme), `graph/sync_tests.rs`
-  (filter sync with real scans, strip, toast, the `native_graph_fixture` for
-  screenshots under Xvfb), `graph/bench.rs` (120k findings: paint under 4 ms,
+  mouse and keyboard through egui, contrast of every theme, hover and the ruler's
+  grips), `graph/sync_tests.rs` (filter sync with real scans, strip and its zoom,
+  toast, the `native_graph_fixture` and `native_graph_view_fixture` for screenshots
+  under Xvfb; the latter takes `ANTINOMIE_QA_SCENE`, `ANTINOMIE_QA_ZOOM` and
+  `ANTINOMIE_QA_FILE`), `graph/bench.rs` (120k findings: paint under 4 ms,
   no repaint when idle, memory, the million-finding build).
 
 ### File activity: Per-file history tab (0.7.1)
 
-Host only; it uses what the recordings already hold. **Per-file history** is a tab after
-Changed files in Triage › Files (`TriageView::history_tab`; a Changed file's Details
-button sets it and chooses the file). `file_activity::Window` (the tab's state, at
+Host only; it uses what the recordings already hold. **Per-file history** is the first tab
+of Triage › Files, with the number of files on it (`Metric::History`;
+`TriageView::history_tab`; a Changed file's Details button sets it and chooses the file). `file_activity::Window` (the tab's state, at
 `TriageView::file_history`) draws into the section's `Ui`. It was a floating
 `egui::Window`, whose side and central panels collapsed to a narrow frame with the
 content spilling outside it, and whose Result column wrapped letter by letter.
@@ -1086,8 +1099,16 @@ content spilling outside it, and whose Result column wrapped letter by letter.
 * **Graph** (`file_activity/graph.rs`). `layout` merges neighbouring calls of the same
   kind, process and outcome into nodes (60, then one `+N more` node), one lane per
   process; `show` paints boxes and elbow arrows with the theme colours and hit-tests
-  clicks. `file_activity/window.rs` holds the list (filter, toggles, order, virtualised
-  rows), the header chips, the call grid (200 rows) and Content changes. The chosen
+  clicks. The process names sit in a gutter that stays at the left of what is on screen
+  (nodes are clipped at its edge); a name is cut to the gutter by `fit` and its whole
+  text is the tooltip. `file_activity/window.rs` holds the list (filter, toggles, order,
+  virtualised rows), the header chips, the calls (200 rows) and Content changes. The
+  calls are the shared Triage table (`triage::table::table_rows`, table id
+  `triage-file-calls`, in a horizontal scroll area sized to its rows) so it spans the
+  pane like the others; a click on a row or on a file of the list selects it in the
+  shared Details (`details::select`; tables `triage-file-calls` and
+  `triage-file-history`), and a double-click on a call opens the original syscall (the
+  first cell carries `stream.id`, `process.cookie` and `event.id`). The chosen
   file is kept by path and first call so a new index keeps it.
 * **Tests.** `triage/files.rs` tests (story, links, identity reuse, rename without
   identity, offsets/lengths/content/extension, appends, refusals, bounds) and
@@ -1300,7 +1321,14 @@ Host only. Core: `monitor-core/src/strings_regex/`; view: `monitor-ui/src/regex_
   regex tab (`workspace/tabs.rs`, a `SidePanel`; a bottom panel under 900 points). The
   pane asks for its scan once per report (`WorkspaceState::take_regex_request`, taken by
   `app/panels.rs` as `ReportAction::ScanRegex`) when a Strings or FLOSS section is
-  done. Core dumps keep the floating window (`show`) behind **Regex matches…**.
+  done **and** the report has a Regex section (`AnalysisKind::Regex`, "Regex matches",
+  a Triage check after Strings that needs Strings or FLOSS, `AnalysisSelection::validate`).
+  The section is a marker: the worker records that the run asked for the matches, the
+  matches themselves are read with the patterns as they are when the tab opens. A report
+  without it (one made before 0.7.1's change, or with the check off) shows "Regex matches
+  are not part of this analysis" and a **Run** button (`ReportAction::RunCheck`); the
+  Overview's Categories lists Regex beside Strings and opens the Strings tab for it.
+  Core dumps keep the floating window (`show`) behind **Regex matches…**.
 * **Scan.** The scan runs on a worker thread; reopening a report whose scan
   exists shows it as it was, **Scan again** rereads the configuration. A pattern that
   does not compile is listed in the window and skipped.
@@ -1471,9 +1499,14 @@ Host only. `monitor-core/src/ruleset/abusech.rs` and `monitor-ui/src/rules_windo
   error. The members are joined in name order into one rules text, and that
   text is what is cached, pinned and installed (so the pin and the `file`
   format below are unchanged). Nothing is ever written under a member's name.
-* **Retired pack.** `retired_if_empty` marks the SSLBL JA3 pack: abuse.ch still
-  serves `ja3_fingerprints.csv` (the IOC dataset) but `ja3_fingerprints.rules`
-  is empty. For that pack an empty or comment-only file is a valid answer with
+* **Retired pack.** `retired_if_empty` marks the SSLBL JA3 pack (abuse.ch still
+  serves `ja3_fingerprints.csv`, the IOC dataset, but `ja3_fingerprints.rules`
+  is empty) and the SSLBL botnet C2 IP pack (`sslipblacklist.rules` and the
+  `.csv` hold a header and no entries; abuse.ch has not changed them since
+  2026-06-30). `ioc::feeds::Feed::retired_if_empty` does the same for the IOC dataset
+  `sslbl-ip`: a header-only file under 64 KiB is stored as a copy of no records
+  (`FeedStatus::retired`, shown as "Retired upstream") and counts as updated; HTML or
+  any other text without records is still "the file holds no records". For those packs an empty or comment-only file is a valid answer with
   0 rules (HTML or other text is still an error); `live_states` reports
   `LiveStatus::Retired`, the tab shows "Retired upstream" with the install
   buttons off, and `install_live` returns a message rather than installing.
@@ -1501,8 +1534,14 @@ Host only. `monitor-core/src/ruleset/abusech.rs` and `monitor-ui/src/rules_windo
   and registry) use `url_display()`. The key must be letters, digits and
   `- _ . ~` (checked when it is saved and again when a URL is built). Status
   codes: 401 or 403 from an abuse.ch host is "abuse.ch rejected the Auth-Key
-  (HTTP 401); check it in Tools > API keys", 410 is "abuse.ch has retired this
-  endpoint (HTTP 410); update Antinomie".
+  (HTTP 401); check it in Tools > API keys, or get a free one at auth.abuse.ch",
+  404 is "abuse.ch has no file at this address (HTTP 404); the export may have moved
+  or been renamed, so update Antinomie", 410 is "abuse.ch has retired this
+  endpoint (HTTP 410); update Antinomie", 429 and 5xx say to try again later. A feed
+  that needs the key and has none is refused before any request ("needs the abuse.ch
+  Auth-Key (free at auth.abuse.ch); set it in Tools > API keys"). The free-space check
+  of a dataset download is three times its expected size (at least 64 MiB), not the
+  sum of the largest download and text the limits allow.
 * **Tests.** Fixtures in the packs' real format and mock fetchers; no request
   leaves the machine.
 
@@ -1566,10 +1605,12 @@ Host only. Core: `monitor-core/src/ioc/` (`indicator`, `verdict`, `online`,
   `search_ioc`/`search_hash` and URLhaus `host`/`url`/`payload`, key on curl's
   stdin, only to abuse.ch hosts, 50 values at most per press, and stops at the
   first refusal.
-* **Network section.** `NetLayout::New` shows Endpoints, Domains, URLs and TLS
-  (`net_tabs.rs`); `NetLayout::Old` is the 0.7.0 layout, reachable by the switch.
-  The new tables use their own query slots (17 to 19; URLs reuse slot 3 and its
-  HTTP fields), so the old tabs and their saved filters are unchanged, and
+* **Network section.** It shows Endpoints, Domains, URLs and TLS (`net_tabs.rs`).
+  The 0.7.0 layout (IPs, Hosts, HTTP, DNS, Sessions) and the switch to it were removed
+  after 0.7.1's preview: the scan no longer pages those rows (the DNS and session rows
+  still go to the observer for the detection rules, the Domains and TLS tabs and the
+  journal). The tables use their own query slots (17 to 19; URLs reuse slot 3 and its
+  HTTP fields), and
   `ENDPOINT_FIELDS`, `DOMAIN_FIELDS` and `TLS_FIELDS` keep the old names
   (`network.country`, `dns.name`, `session.alpn`) beside new ones. The IOC column
   is added after paging, from the verdicts of the same scan.
