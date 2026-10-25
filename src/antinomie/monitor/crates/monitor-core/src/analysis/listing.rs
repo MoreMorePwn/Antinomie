@@ -25,6 +25,7 @@ pub(crate) fn file_name(kind: AnalysisKind) -> &'static str {
         AnalysisKind::Metadata => "metadata.jsonl",
         AnalysisKind::Structures => "structures.jsonl",
         AnalysisKind::Strings => "strings.jsonl",
+        AnalysisKind::Regex => "regex.jsonl",
         AnalysisKind::Entropy => "entropy.jsonl",
         AnalysisKind::Hardening => "hardening.jsonl",
         AnalysisKind::Rules => "rules.jsonl",
