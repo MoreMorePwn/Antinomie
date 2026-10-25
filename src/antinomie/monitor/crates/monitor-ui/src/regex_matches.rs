@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The regex matches view: every match of the built-in and custom
 //! patterns in a set of strings, by category, with a type for each match.
-//! Static analysis shows it as a pane of Strings & regex (Strings and FLOSS
+//! Static analysis shows it as the Regex matches tab (over Strings and FLOSS
 //! strings) and Core dumps in a window (strings and binary socket addresses);
 //! the scan runs on a worker thread.
 use crate::widgets::{
