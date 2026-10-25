@@ -20,8 +20,6 @@ fn view(section: Section) -> (PacketSpool, TriageView) {
     let mut view = TriageView::default();
     view.scan = Some(scan);
     view.section = section;
-    // These tests are about the 0.7.0 tabs; the new layout has its own tests.
-    view.net_layout = NetLayout::Old;
     view.context_key = Some("vm\nboot\nrun\n".into());
     (temp, view)
 }
@@ -349,45 +347,62 @@ fn flagged_file_rows_get_a_warn_bar_and_a_warn_location() {
     assert_eq!(bars(&["temp"]), 0);
 }
 
+fn rows_of(headers: &[&str], count: usize) -> Vec<Vec<Cell>> {
+    (0..count)
+        .map(|at| {
+            let mut row: Vec<Cell> = headers
+                .iter()
+                .map(|header| cell(*header, theme::text(), false))
+                .collect();
+            row[0].values = vec![("frame.number", RowValue::Number(at as i128 + 3))];
+            row
+        })
+        .collect()
+}
+
 #[test]
-fn network_views_are_tabs_with_counts_and_dns_keeps_its_columns() {
+fn network_views_are_tabs_with_counts_and_urls_start_with_the_frame() {
     let ctx = context();
     let (_temp, mut view) = view(Section::Network);
     {
         let scan = view.scan.as_mut().unwrap();
         scan.network_counts = Some((100, 5, 7));
-        scan.counts.http = 11;
-        scan.counts.dns = 13;
-        let mut row: Vec<Cell> = DNS_HEADERS
-            .iter()
-            .map(|header| cell(*header, theme::text(), false))
-            .collect();
-        row[0].values = vec![("frame.number", RowValue::Number(3))];
-        scan.dns = vec![row];
+        scan.new_tabs.endpoints = rows_of(net_tabs::ENDPOINT_HEADERS, 5);
+        scan.new_tabs.domains = rows_of(net_tabs::DOMAIN_HEADERS, 7);
+        scan.http = rows_of(HTTP_HEADERS, 11);
+        scan.new_tabs.urls = rows_of(net_tabs::URL_HEADERS, 11);
+        scan.new_tabs.tls = rows_of(net_tabs::TLS_HEADERS, 3);
     }
-    view.network = NetTab::Http;
     let out = settle(&ctx, &mut view);
-    for (tab, count) in [("IPs", "5"), ("Hosts", "7"), ("HTTP", "11"), ("DNS", "13")] {
+    for (tab, count) in [
+        ("Endpoints", "5"),
+        ("Domains", "7"),
+        ("URLs", "11"),
+        ("TLS", "3"),
+    ] {
         assert!(has(&out, tab), "{tab}");
         assert!(has(&out, count), "{count}");
     }
-    click(&ctx, &mut view, find(&out, "DNS").center());
-    assert!(view.network == NetTab::Dns);
-    // DNS keeps the columns it had before 0.7.0: no Time column.
-    assert_eq!(DNS_HEADERS[..2], ["Frame", "Endpoint"]);
-    let out = settle(&ctx, &mut view);
-    let frame = find(&out, "Frame");
-    let time = texts(&out)
-        .into_iter()
-        .filter(|(text, rect)| text == "Time" && (rect.top() - frame.top()).abs() < 3.0)
-        .count();
-    assert_eq!(time, 0, "{:?}", texts(&out));
+    // The old IPs, Hosts, HTTP, DNS and Sessions tabs and their switch are gone.
+    for gone in [
+        "Layout",
+        "New layout",
+        "Current layout",
+        "Hosts",
+        "Sessions",
+    ] {
+        assert!(!has(&out, gone), "{gone}");
+    }
+    click(&ctx, &mut view, find(&out, "URLs").center());
+    assert!(view.new_tab == NewTab::Urls);
+    assert_eq!(net_tabs::URL_HEADERS[..3], ["Frame", "Time", "Endpoint"]);
 }
 
 #[test]
 fn open_packets_routes_to_the_capture_and_a_row_still_jumps_to_its_frame() {
     let ctx = context();
     let (_temp, mut view) = view(Section::Network);
+    view.scan.as_mut().unwrap().network_counts = Some((10, 1, 1));
     let out = settle(&ctx, &mut view);
     // One button; it does nothing until pressed.
     assert!(!view.take_open_packets());
@@ -553,26 +568,21 @@ fn every_table_still_sorts_from_its_headers() {
     {
         let scan = view.scan.as_mut().unwrap();
         scan.network_counts = Some((10, 1, 1));
-        let mut row: Vec<Cell> = DNS_HEADERS
-            .iter()
-            .map(|header| cell(*header, theme::text(), false))
-            .collect();
-        row[0].values = vec![("frame.number", RowValue::Number(3))];
-        scan.dns = vec![row];
+        scan.new_tabs.urls = rows_of(net_tabs::URL_HEADERS, 1);
     }
-    view.network = NetTab::Dns;
+    view.new_tab = NewTab::Urls;
     let out = settle(&ctx, &mut view);
-    // The Endpoint header (second column) is a sort button of the DNS table.
-    let time = texts(&out)
+    // The Endpoint header (third column) is a sort button of the URLs table.
+    let endpoint = texts(&out)
         .into_iter()
         .find(|(text, rect)| text.starts_with("Endpoint") && rect.top() > 120.0)
         .unwrap()
         .1;
-    click(&ctx, &mut view, time.center());
+    click(&ctx, &mut view, endpoint.center());
     // The query bar takes the request on the next frame.
     draw(&ctx, &mut view, vec![], 2.0);
-    let sort = view.scan_request.sorts[4].expect("a sort of the DNS slot");
-    assert_eq!(sort.column, 1);
+    let sort = view.scan_request.sorts[3].expect("a sort of the HTTP slot");
+    assert_eq!(sort.column, 2);
 }
 
 #[test]
@@ -618,15 +628,12 @@ fn numeric_columns_sit_at_the_right_edge_of_their_cells() {
     {
         let scan = view.scan.as_mut().unwrap();
         scan.network_counts = Some((10, 1, 1));
-        let mut row: Vec<Cell> = DNS_HEADERS
-            .iter()
-            .map(|header| cell(*header, theme::text(), false))
-            .collect();
-        row[0] = cell("#3", theme::text(), true);
-        row[0].values = vec![("frame.number", RowValue::Number(3))];
-        scan.dns = vec![row];
+        let mut rows = rows_of(net_tabs::URL_HEADERS, 1);
+        rows[0][0] = cell("#3", theme::text(), true);
+        rows[0][0].values = vec![("frame.number", RowValue::Number(3))];
+        scan.new_tabs.urls = rows;
     }
-    view.network = NetTab::Dns;
+    view.new_tab = NewTab::Urls;
     let out = settle(&ctx, &mut view);
     let header = find(&out, "Frame");
     let frame = find(&out, "#3");

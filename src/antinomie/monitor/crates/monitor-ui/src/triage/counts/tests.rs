@@ -26,16 +26,6 @@ fn section_totals_ignore_preview_pages_and_filters_and_keep_missing_network_dist
     ] {
         assert_eq!(view.section_count(metric), Count::Ready(count));
     }
-    assert_eq!(view.section_count(Metric::Dns), Count::Unavailable);
-    view.scan.as_mut().unwrap().network_counts = Some((50_000, 123, 456));
-    for (metric, count) in [
-        (Metric::Ips, 123),
-        (Metric::Hosts, 456),
-        (Metric::Http, 3456),
-        (Metric::Dns, 7890),
-    ] {
-        assert_eq!(view.section_count(metric), Count::Ready(count));
-    }
     let (_tx, rx) = mpsc::channel();
     view.scan_rx = Some(rx);
     assert_eq!(view.section_count(Metric::Opened), Count::Pending);

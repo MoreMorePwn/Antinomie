@@ -62,11 +62,6 @@ enum Metric {
     Changed,
     /// An operation tab other than Opened and Read.
     File(FileTab),
-    Ips,
-    Hosts,
-    Http,
-    Dns,
-    Sessions,
 }
 
 impl TriageView {
@@ -84,19 +79,6 @@ impl TriageView {
             Metric::Reads => scan.counts.reads,
             Metric::Changed => scan.counts.changed,
             Metric::File(tab) => scan.counts.tabs[tab.slot() - 8],
-            Metric::Ips | Metric::Hosts | Metric::Http | Metric::Dns | Metric::Sessions => {
-                let Some((_, ips, hosts)) = scan.network_counts else {
-                    return Count::Unavailable;
-                };
-                match metric {
-                    Metric::Ips => ips,
-                    Metric::Hosts => hosts,
-                    Metric::Http => scan.counts.http,
-                    Metric::Dns => scan.counts.dns,
-                    Metric::Sessions => scan.counts.sessions,
-                    _ => unreachable!(),
-                }
-            }
         };
         Count::Ready(count)
     }
@@ -174,28 +156,6 @@ impl TriageView {
             );
             if widgets::tab(ui, self.history_tab, &item).clicked() {
                 self.history_tab = true;
-            }
-        });
-    }
-
-    pub(super) fn network_tabs(&mut self, ui: &mut egui::Ui) {
-        widgets::tab_row(ui, |ui| {
-            for (value, title, metric) in [
-                (NetTab::Ips, "IPs", Metric::Ips),
-                (NetTab::Hosts, "Hosts", Metric::Hosts),
-                (NetTab::Http, "HTTP", Metric::Http),
-                (NetTab::Dns, "DNS", Metric::Dns),
-                (NetTab::Sessions, "Sessions", Metric::Sessions),
-            ] {
-                if tab(
-                    ui,
-                    self.network == value,
-                    title,
-                    self.section_count(metric),
-                    false,
-                ) {
-                    self.network = value;
-                }
             }
         });
     }
