@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
 #
-# commit.sh — turn one commit in an adapter's author repo into a DEP-3 Quilt
-# patch, add it to the adapter's series, and stage everything in this repo.
+# commit.sh — export one commit of an adapter's author repo as the next patch
+# of the guest series, regenerate the Quilt view, and stage both in this repo.
 #
 #   usage: [ADAPTER=name] scripts/commit.sh [commit-ish]
 #
-# Prerequisite: the change is already committed in work/<adapter>/core.
+# Prerequisite: the change is already committed in work/<adapter>/core. The
+# mail-format patch in src/antinomie/core/<line> is the canonical copy; the
+# DEP-3 Quilt patch is generated from it by scripts/sync-quilt-view.py, with
+# the commit's subject as Description and its body as the long description (a
+# last paragraph of Origin:/Forwarded:/Bug: lines sets those fields). See
+# src/antinomie/patches/README.md for changing an existing topic patch instead.
 # Afterwards the generated files are staged; finish with a normal
 # `git commit` / `git push` in this repository.
 #
@@ -22,7 +27,6 @@ PKG="$REPO/src/antinomie/packaging/$ADAPTER"
 
 CORE="$REPO/work/$ADAPTER/core"
 VIEW="$REPO/src/antinomie/patches/$ADAPTER/antinomie"
-SERIES="$VIEW/series"
 COREDIR="$REPO/src/antinomie/core/$UPSTREAM_LINE"
 
 [ -e "$CORE/.git" ] || { echo "commit: author repo missing; run scripts/bootstrap.sh first" >&2; exit 1; }
@@ -38,66 +42,34 @@ if ! git diff --quiet || ! git diff --cached --quiet; then
 fi
 
 # ---- show what will become the patch ---------------------------------------
-git show --stat --no-color --format='commit %h%n%s%n%n' "$COMMIT"
+git show --stat --no-color --format='commit %h%n%s%n%n%b' "$COMMIT"
 read -r -p "Show full diff? [y/N] " ans
 if [[ "$ans" =~ ^[Yy]$ ]]; then
   git show --no-color --format= "$COMMIT" | ${PAGER:-less}
 fi
-
-# ---- DEP-3 metadata --------------------------------------------------------
-subject="$(git log -1 --format=%s "$COMMIT")"
-read -r -p "Description [$subject]: " desc; desc="${desc:-$subject}"
-read -r -p "Long description (optional): " body
-author="$(git log -1 --format='%an <%ae>' "$COMMIT")"
-read -r -p "Author [$author]: " a; author="${a:-$author}"
-read -r -p "Origin [project]: " origin; origin="${origin:-project}"
-read -r -p "Forwarded [no]: " fwd; fwd="${fwd:-no}"
-today="$(date +%F)"
-read -r -p "Last-Update [$today]: " lu; lu="${lu:-$today}"
-read -r -p "Bug/CVE (optional): " bug
+read -r -p "Export it as the next series patch? [y/N] " ans
+[[ "$ans" =~ ^[Yy]$ ]] || exit 1
 
 # ---- next series number ----------------------------------------------------
-last="$(ls "$VIEW" 2>/dev/null | sed -n 's/^\([0-9]\{4\}\)-.*/\1/p' | sort -n | tail -1)"
+last="$(ls "$COREDIR" 2>/dev/null | sed -n 's/^\([0-9]\{4\}\)-.*/\1/p' | sort -n | tail -1)"
 # 10# keeps zero-padded numbers such as 0008 from being read as octal.
-num="$(printf '%04d' $(( 10#${last:-0} + 1 )))"
+num=$(( 10#${last:-0} + 1 ))
 
-# ---- filename --------------------------------------------------------------
-slug="$(printf '%s' "$desc" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-')"
-slug="${slug#-}"; slug="${slug%-}"; slug="${slug#antinomie-}"
-fname="${num}-antinomie-${slug}.patch"
-
-# ---- write the Quilt patch (DEP-3 header + diff) ---------------------------
-{
-  printf 'Description: %s\n' "$desc"
-  printf 'Author: %s\n'      "$author"
-  printf 'Origin: %s\n'      "$origin"
-  printf 'Forwarded: %s\n'   "$fwd"
-  printf 'Last-Update: %s\n' "$lu"
-  [ -n "$bug" ] && printf 'Bug: %s\n' "$bug"
-  printf '\n'
-  [ -n "$body" ] && printf '%s\n' "$body"
-  printf '\n---\n'
-  git show --no-color --format= --no-ext-diff "$COMMIT"
-} > "$VIEW/$fname"
-
-# ---- add to the adapter series ---------------------------------------------
-grep -qxF "$fname" "$SERIES" 2>/dev/null || printf '%s\n' "$fname" >> "$SERIES"
-
-# ---- export the mail-format core patch -------------------------------------
-corepatch="$(git format-patch -o "$COREDIR" --start-number "$((10#$num))" -1 "$COMMIT")"
+# ---- export the canonical patch, then derive the Quilt view ----------------
+corepatch="$(git format-patch -N -o "$COREDIR" --start-number "$num" -1 "$COMMIT")"
+python3 "$REPO/scripts/sync-quilt-view.py"
 
 # ---- stage in this repo ----------------------------------------------------
 cd "$REPO"
-git add "$VIEW/$fname" "$SERIES" "$corepatch"
+git add "$corepatch" "$VIEW"
 git status --short
 
 cat <<EOF
 
-Patch written:  $VIEW/$fname
-Series:         $SERIES
 Core patch:     $corepatch
+Quilt view:     $VIEW (regenerated)
 
 Next:
-  git commit -m "${desc}"
+  git commit -m "$(git -C "$CORE" log -1 --format=%s "$COMMIT")"
   git push
 EOF

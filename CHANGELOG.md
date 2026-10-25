@@ -80,6 +80,19 @@ it runs.
   `decoder-variants`, `core-on-crash`) and the behavior samples replace the
   malware-named ones (`ant-sample-*`, `build-behavior-samples.sh`). Older
   entries keep the names they were written with.
+- **Guest kernel patches by topic.** The guest's patch series is fourteen
+  documented patches, one per part of the design (control channel and
+  transport, the MIT licence of the shared headers, the system call table, the
+  recorder and capture sessions, argument decoders, run tracking and Stop,
+  io_uring and AIO, the executable image, credentials and file records,
+  process cores, the debug engine, resource samples, launch modes, hiding the
+  recorder), instead of 60 in the order they were written;
+  `src/antinomie/patches/README.md` maps the topics, the files they hook and
+  the old patch numbers that entries below cite. The patched kernel source is
+  byte-identical and the contract stays at revision 17, so every base keeps
+  working; only the series hash in a new kernel's source id changes, and the
+  app builds its kernel once more. The Quilt view is now regenerated whole from
+  the canonical series (`scripts/sync-quilt-view.py`), with DEP-3 descriptions.
 
 ## 0.7.0 — Unreleased
 
