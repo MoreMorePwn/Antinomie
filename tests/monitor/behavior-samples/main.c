@@ -3,10 +3,10 @@
 //
 // main.c — options, scenario registry, result lines and scorecard.
 //
-// Built with -DSINGLE_SCENARIO="name" the program is that one malware-activity
-// sample (ant-mal-<name>); without it, it is ant-malware and runs every
+// Built with -DSINGLE_SCENARIO="name" the program is that one behavior
+// sample (ant-sample-<name>); without it, it is ant-sample-all and runs every
 // scenario in order.
-#include "malware.h"
+#include "samples.h"
 
 #include <errno.h>
 #include <dirent.h>
@@ -21,25 +21,25 @@ static const struct module modules[] = {
     {"recon", "host discovery, staging file and an exfil POST", scenario_recon},
     {"http-beacon", "periodic HTTP check-ins with a browser User-Agent", scenario_http_beacon},
     {"dns-tunnel", "encoded labels in DNS questions to a dead resolver", scenario_dns_tunnel},
-    {"tls-sni", "TLS ClientHello with a malware-style SNI name", scenario_tls_sni},
+    {"tls-sni", "TLS ClientHello with a SNI name that looks like a C2 domain", scenario_tls_sni},
     {"udp-beacon", "JSON check-in datagrams to a callback port", scenario_udp_beacon},
-    {"stage2", "HTTP GET of a secondary payload that is never executed", scenario_stage2},
+    {"download", "HTTP GET of a secondary payload that is never executed", scenario_download},
     {"dga", "deterministic domain-generation candidates, never resolved", scenario_dga},
-    {"persist-sim", "autostart, systemd and crontab shapes inside the work directory",
-     scenario_persist_sim},
+    {"persistence", "autostart, systemd and crontab shapes inside the work directory",
+     scenario_persistence},
     {"memfd-exec", "anonymous memfd, RWX mapping and a self re-exec", scenario_memfd_exec},
     {"ptrace-antidebug", "TracerPid, instrumented mappings and a TRACEME check",
      scenario_ptrace_antidebug},
     {"cred-read", "decoy credential files and presence checks of standard paths",
      scenario_cred_read},
-    {"rule-bait", "technique and Sigma tag strings plus benign discovery commands",
-     scenario_rule_bait},
+    {"rule-markers", "technique and Sigma tag strings plus benign discovery commands",
+     scenario_rule_markers},
 };
 #define MODULE_COUNT (sizeof modules / sizeof modules[0])
 
 static unsigned passes, notes, unavailables, failures;
 
-long mal_scaled(const struct options *options, long light)
+long sample_scaled(const struct options *options, long light)
 {
     long rounds = options->rounds > 0 ? options->rounds : 1;
     return light * rounds;
@@ -62,10 +62,10 @@ static void line(const char *tag, const char *module, const char *fmt, va_list a
         va_end(args);                                                                              \
         counter++;                                                                                 \
     }
-RESULT(mal_pass, "PASS", passes)
-RESULT(mal_note, "NOTE", notes)
-RESULT(mal_unavailable, "UNAVAILABLE", unavailables)
-RESULT(mal_fail, "FAIL", failures)
+RESULT(sample_pass, "PASS", passes)
+RESULT(sample_note, "NOTE", notes)
+RESULT(sample_unavailable, "UNAVAILABLE", unavailables)
+RESULT(sample_fail, "FAIL", failures)
 
 static void usage(const char *self)
 {
@@ -78,12 +78,12 @@ static void usage(const char *self)
            " [--all | --only a,b,...]"
 #endif
     );
-    printf("Bounded malware-activity samples. The default destination is the QEMU user-network\n"
+    printf("Bounded behavior samples. The default destination is the QEMU user-network\n"
            "host 10.0.2.2, so a NAT guest reaches a listener on the host; pass --host\n"
            "198.51.100.23 or 127.0.0.1 --port 9 for an unroutable or refused baseline.\n"
            "Downloaded data is never executed and file writes stay in the work directory.\n"
            "Defaults: --rounds 3 --delay 500, host %s, HTTP %d, TLS %d, UDP %d, resolver %s.\n",
-           MAL_C2_ADDR, MAL_HTTP_PORT, MAL_TLS_PORT, MAL_UDP_PORT, MAL_DNS_ADDR);
+           SAMPLE_REMOTE_ADDR, SAMPLE_HTTP_PORT, SAMPLE_TLS_PORT, SAMPLE_UDP_PORT, SAMPLE_DNS_ADDR);
 }
 
 static void remove_tree(const char *path)
@@ -113,10 +113,10 @@ static void remove_tree(const char *path)
 static int run_module(const struct module *module, const struct options *base)
 {
     struct options options = *base;
-    char template[] = "/tmp/antinomie-malware-XXXXXX";
+    char template[] = "/tmp/antinomie-sample-XXXXXX";
     if (!base->workdir[0]) {
         if (!mkdtemp(template)) {
-            mal_fail(module->name, "work directory: %s", strerror(errno));
+            sample_fail(module->name, "work directory: %s", strerror(errno));
             return 1;
         }
         snprintf(options.workdir, sizeof options.workdir, "%s", template);
@@ -124,16 +124,16 @@ static int run_module(const struct module *module, const struct options *base)
         int length = snprintf(options.workdir, sizeof options.workdir, "%.200s/%s",
                               base->workdir, module->name);
         if (length < 0 || (size_t)length >= sizeof options.workdir) {
-            mal_fail(module->name, "work directory path too long");
+            sample_fail(module->name, "work directory path too long");
             return 1;
         }
         // The directory is removed afterwards, so never adopt one that exists.
         if (access(options.workdir, F_OK) == 0) {
-            mal_fail(module->name, "work directory %s already exists", options.workdir);
+            sample_fail(module->name, "work directory %s already exists", options.workdir);
             return 1;
         }
-        if (mal_mkdir_p(base->workdir) != 0 || mal_mkdir_p(options.workdir) != 0) {
-            mal_fail(module->name, "work directory: %s", strerror(errno));
+        if (sample_mkdir_p(base->workdir) != 0 || sample_mkdir_p(options.workdir) != 0) {
+            sample_fail(module->name, "work directory: %s", strerror(errno));
             return 1;
         }
     }
@@ -145,7 +145,7 @@ static int run_module(const struct module *module, const struct options *base)
     if (!options.keep) {
         remove_tree(options.workdir);
         if (access(options.workdir, F_OK) == 0)
-            mal_note(module->name, "cleanup left %s in place", options.workdir);
+            sample_note(module->name, "cleanup left %s in place", options.workdir);
         // Only removes the base when this run created it and nothing else is
         // in it; an existing --workdir tree is left alone.
         if (base->workdir[0])
@@ -186,7 +186,7 @@ int main(int argc, char **argv)
     argv = expanded;
     // Set by memfd-exec in the child it re-executes from its memfd. Return
     // before parsing options so the child cannot start another generation.
-    const char *memfd_child = getenv("MAL_MEMFD_CHILD");
+    const char *memfd_child = getenv("SAMPLE_MEMFD_CHILD");
     if (memfd_child && *memfd_child) {
         printf("PASS        memfd-child     re-executed from an anonymous memfd and exiting\n");
         fflush(stdout);
@@ -230,8 +230,8 @@ int main(int argc, char **argv)
     }
     if (options.rounds < 1)
         options.rounds = 1;
-    if (options.rounds > MAL_MAX_ROUNDS)
-        options.rounds = MAL_MAX_ROUNDS;
+    if (options.rounds > SAMPLE_MAX_ROUNDS)
+        options.rounds = SAMPLE_MAX_ROUNDS;
     if (options.delay_ms < 0)
         options.delay_ms = 0;
     int status = 0;
@@ -243,7 +243,7 @@ int main(int argc, char **argv)
             status = run_module(&modules[m], &options);
 #else
     if (!all && !only) {
-        // A bare ./ant-malware runs every scenario; --only still selects a
+        // A bare ./ant-sample-all runs every scenario; --only still selects a
         // subset and --list prints the registry without running anything.
         all = 1;
     }

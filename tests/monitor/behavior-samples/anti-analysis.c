@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //
-// evasion.c — in-memory execution and anti-debug shapes.
+// anti-analysis.c — in-memory execution and anti-debug shapes.
 //
 // The memfd sample writes a copy of itself into an anonymous memfd, maps it
 // PROT_READ|PROT_WRITE|PROT_EXEC and re-executes it in a child that exits
 // immediately. The executed bytes are this binary, not downloaded content, so
 // the "downloaded bytes are never executed" rule still holds. The child is
-// recognised by MAL_MEMFD_CHILD and returns before parsing options.
+// recognised by SAMPLE_MEMFD_CHILD and returns before parsing options.
 //
 // The anti-debug sample only observes: TracerPid, its own mappings and
 // LD_PRELOAD. It never detaches or kills a tracer.
-#include "malware.h"
+#include "samples.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -60,31 +60,31 @@ SCENARIO(memfd_exec)
     (void)options;
     int self = open("/proc/self/exe", O_RDONLY | O_CLOEXEC);
     if (self < 0) {
-        mal_fail(name, "/proc/self/exe: %s", strerror(errno));
+        sample_fail(name, "/proc/self/exe: %s", strerror(errno));
         return 1;
     }
     struct stat info;
     if (fstat(self, &info) != 0 || info.st_size <= 0) {
-        mal_fail(name, "fstat: %s", strerror(errno));
+        sample_fail(name, "fstat: %s", strerror(errno));
         close(self);
         return 1;
     }
     size_t size = (size_t)info.st_size;
     if (size > (8u << 20)) {
-        mal_fail(name, "sample is %zu bytes; the 8 MiB cap applies", size);
+        sample_fail(name, "sample is %zu bytes; the 8 MiB cap applies", size);
         close(self);
         return 1;
     }
     int fd = memfd_create("antinomie-stage", MFD_CLOEXEC);
     if (fd < 0) {
-        mal_fail(name, "memfd_create: %s", strerror(errno));
+        sample_fail(name, "memfd_create: %s", strerror(errno));
         close(self);
         return 1;
     }
     int ok = ftruncate(fd, (off_t)size) == 0 && copy_fd(self, fd, size) == 0;
     close(self);
     if (!ok) {
-        mal_fail(name, "writing %zu bytes into the memfd: %s", size, strerror(errno));
+        sample_fail(name, "writing %zu bytes into the memfd: %s", size, strerror(errno));
         close(fd);
         return 1;
     }
@@ -106,7 +106,7 @@ SCENARIO(memfd_exec)
 
     int pipefd[2];
     if (pipe2(pipefd, O_CLOEXEC) != 0) {
-        mal_fail(name, "pipe: %s", strerror(errno));
+        sample_fail(name, "pipe: %s", strerror(errno));
         if (mapping != MAP_FAILED)
             munmap(mapping, size);
         close(fd);
@@ -114,7 +114,7 @@ SCENARIO(memfd_exec)
     }
     pid_t child = fork();
     if (child < 0) {
-        mal_fail(name, "fork: %s", strerror(errno));
+        sample_fail(name, "fork: %s", strerror(errno));
         close(pipefd[0]);
         close(pipefd[1]);
         if (mapping != MAP_FAILED)
@@ -124,7 +124,7 @@ SCENARIO(memfd_exec)
     }
     if (child == 0) {
         close(pipefd[0]);
-        setenv("MAL_MEMFD_CHILD", "1", 1);
+        setenv("SAMPLE_MEMFD_CHILD", "1", 1);
         char *const argv[] = {(char *)"antinomie-stage", NULL};
         fexecve(fd, argv, environ);
         int saved = errno;
@@ -146,12 +146,12 @@ SCENARIO(memfd_exec)
                          : rwx                  ? "RWX"
                                                 : "RW+mprotect(RX)";
     if (got == (ssize_t)sizeof child_errno)
-        mal_note(name, "fexecve failed with %s; nothing ran", strerror(child_errno));
+        sample_note(name, "fexecve failed with %s; nothing ran", strerror(child_errno));
     else if (WIFEXITED(status) && WEXITSTATUS(status) == 0)
-        mal_note(name, "child exited 0 after re-executing from the memfd");
+        sample_note(name, "child exited 0 after re-executing from the memfd");
     else
-        mal_note(name, "child ended with wait status 0x%x", status);
-    mal_pass(name, "%zu bytes into memfd \"antinomie-stage\", %s mapping (magic 0x%08x)", size,
+        sample_note(name, "child ended with wait status 0x%x", status);
+    sample_pass(name, "%zu bytes into memfd \"antinomie-stage\", %s mapping (magic 0x%08x)", size,
              mapped, magic);
     return 0;
 }
@@ -222,17 +222,17 @@ SCENARIO(ptrace_antidebug)
     }
 
     if (tracer > 0)
-        mal_note(name, "TracerPid %d: the sample is being traced; this is expected under a "
+        sample_note(name, "TracerPid %d: the sample is being traced; this is expected under a "
                        "ptrace monitor", tracer);
     else if (tracer == 0)
-        mal_note(name, "TracerPid 0: no tracer attached according to /proc/self/status");
+        sample_note(name, "TracerPid 0: no tracer attached according to /proc/self/status");
     else
-        mal_note(name, "/proc/self/status is unavailable in this guest");
+        sample_note(name, "/proc/self/status is unavailable in this guest");
     if (hits > 0)
-        mal_note(name, "%d mapping(s) name an instrumentation tool, first %s", hits, first);
+        sample_note(name, "%d mapping(s) name an instrumentation tool, first %s", hits, first);
     if (preload && *preload)
-        mal_note(name, "LD_PRELOAD is set to %s", preload);
-    mal_pass(name, "TracerPid %d, %d instrumented mappings, LD_PRELOAD %s, PTRACE_TRACEME %s",
+        sample_note(name, "LD_PRELOAD is set to %s", preload);
+    sample_pass(name, "TracerPid %d, %d instrumented mappings, LD_PRELOAD %s, PTRACE_TRACEME %s",
              tracer, hits < 0 ? 0 : hits, preload && *preload ? "set" : "unset",
              traceme == 0   ? "accepted"
              : traceme == 1 ? "refused with EPERM (already traced)"
