@@ -891,10 +891,11 @@ static void inet4_cases(void)
     DONE();
     memcpy(&wrong, &lo, sizeof lo);
     wrong.sin_family = AF_INET6;
-    CALL("bind.inet_wrong_family", bind, EINVAL, spare, &wrong, sizeof wrong);
+    CALL("bind.inet_wrong_family", bind, EAFNOSUPPORT, spare, &wrong, sizeof wrong);
     in_buf(1, &wrong, sizeof wrong);
-    why("SELinux (selinux_socket_bind) rejects an AF_INET6 address shorter than "
-        "SIN6_LEN_RFC2133 with EINVAL before the protocol's own EAFNOSUPPORT check");
+    why("the protocol rejects an AF_INET6 address on an AF_INET socket with EAFNOSUPPORT; "
+        "AppArmor, the guest's major LSM as on Debian, leaves it to the protocol (SELinux "
+        "would answer EINVAL first)");
     DONE();
     memset(&far, 0, sizeof far);
     far.sin_family = AF_INET;

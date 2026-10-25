@@ -16,8 +16,9 @@ it runs.
   and its VMs ask for a per-VM account like the desktop bases and behave like
   BusyBox on screen (console, App terminal runs). Its root is mounted by
   UUID, so stealth profiles can put its disk on SATA or NVMe as on BusyBox.
-  The bundle is about 700 MB.
-  Runs on the 0.7.0 guest contract (revision 17); 0.7.0 apps run its bases too.
+  The bundle is about 890 MB.
+  Runs on the 0.7.0 guest contract (revision 17); its VMs need this app's
+  provisioning and launch (an older app gives them no network and no grown disk).
 - **Debian Minimal looks installed, not built.** The image no longer names
   Antinomie or the build host (the package inventory, network and tmpfiles
   file names, the build host's resolv.conf that systemd-resolved kept, masks for
@@ -40,6 +41,16 @@ it runs.
   the VM's own disk, `ro quiet`, no serial console, no `panic=-1`). Accounts
   get the installer's groups and full-name field and a yescrypt password hash,
   and each VM its own machine ID.
+  Its disk is partitioned as the installer partitions it (MBR, the root at
+  1 MiB, a swap partition sized for the VM's RAM, laid out when the VM is
+  created or its disk grown), it carries GRUB and its kernel as Debian's
+  `linux-image-6.12.94+deb13-amd64` and `linux-image-amd64` packages with a
+  matching `/boot`, and its kernel reports Debian's release, compiler and
+  configuration where programs look (AppArmor, the memory cgroup, HZ 250,
+  8192 CPUs, perf_event_paranoid 3, no 9p, no netconsole). BusyBox shares the
+  kernel and gets the same; the conformance goldens follow it (fanotify and
+  landlock answer, AppArmor's bind error, HZ 250, the LSM list) and name the
+  root disk by role so one golden serves both bases.
 - **Rootless Debian builds.** Native (`--mode=unshare`) Debian image builds
   move files in and out of the new root as the invoking user, so they no longer
   fail on the private staging directory; the conformance trace suite also runs

@@ -340,9 +340,13 @@ if [ -z "$root" ]; then
     done
 fi
 mount -t ext4 -o rw ${root:-/dev/vda} /newroot || exec sh
-# Grow the filesystem to the VM's disk while mounted: offline, resize2fs
-# refuses a filesystem mounted since its last full check (every base disk).
-resize2fs $root || echo 'Guest filesystem resize failed'
+# Grow a whole-disk root (BusyBox, the desktops) to the VM's disk while
+# mounted: offline, resize2fs refuses a filesystem mounted since its last full
+# check (every base disk). A partitioned disk was laid out when its VM was
+# provisioned, as an installer lays out its disk.
+if [ ! -e "/sys/class/block/${root#/dev/}/partition" ]; then
+    resize2fs $root || echo 'Guest filesystem resize failed'
+fi
 if [ $mode = ro ]; then
     mount -o remount,ro /newroot
 fi

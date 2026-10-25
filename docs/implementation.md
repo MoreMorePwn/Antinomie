@@ -2139,7 +2139,7 @@ the build host's name (exim4's mail name) get the chosen hostname, and the
 leak check also fails on the build host's name. `multi-user.target`,
 `/tmp` on the root disk (a `tmp.mount` drop-in, unlike Debian 13's default tmpfs: dropped files reach the VM's disk, and the
 conformance cases and goldens, which expect BusyBox's on-disk `/tmp`, pass
-unchanged), a 4 GiB root. Its root is found without naming a device: fstab
+unchanged), a 4 GiB disk. Its root is found without naming a device: fstab
 mounts `UUID=<root uuid>` (a fresh UUID per bootstrap, given to `mkfs.ext4
 -U` and read back from a cached root filesystem's fstab; the build checks
 fstab and the filesystem agree), and `kernel_append` names it the way GRUB
@@ -2207,6 +2207,41 @@ adduser does (full name `<Name>,,,`, the installer's groups where they exist,
 a 0700 home), with a yescrypt password hash (Perl's `crypt` through the host's
 libxcrypt; salted SHA-512 where that has no yescrypt), and writes a machine ID
 of the VM's own.
+
+The disk and kernel are an installed PC's. The base disk carries an MBR table
+with one bootable root partition at 1 MiB (`console_disk`; mkfs and every
+debugfs pass work at that offset, `CONSOLE_ROOT_SIZE` 3 GiB of the 4 GiB
+disk). Provisioning lays the VM's disk out as partman does
+(`partition_plan`): the root grown to a MiB before the swap partition, `sda5`
+in an extended `sda2` starting two sectors before it, about the VM's RAM (256
+MiB at least, a quarter of the disk at most), the last MiB free; the swap gets
+a UUID, fstab its line and `initramfs-tools/conf.d/resume` its UUID, the MBR a
+disk identifier of the VM's own, and `update-grub` writes `grub.cfg` for the
+VM's UUIDs. Growing the disk in the VM's settings grows the root the same way
+(`grow_disk`, keeping the swap's UUID and size); the bootstrap initrd grows only
+whole-disk roots (BusyBox, the desktops) now. The kernel is packaged as Debian
+packages it (`kernel_packages`): `linux-image-6.12.94+deb13-amd64` with
+linux-signed-amd64's control fields and the source package's maintainer
+scripts (depmod, `linux-update-symlinks` for `/vmlinuz` and `/initrd.img`,
+initramfs-tools building `/boot/initrd.img-*`), and the `linux-image-amd64`
+metapackage, installed before the rest of the customization (apt brings
+apparmor by recommends); GRUB (`grub-pc`, `os-prober`) is installed as the
+installer installs it. `/boot` holds the running kernel (mode 0600: it embeds
+the recorder; Debian's is world-readable), Debian's own configuration as the
+pinned source package resolves it (`debian-config`, written by the kernel build
+beside the profile's own) and Debian's `System.map` placeholder.
+
+The minimal kernel profile, shared with BusyBox, takes Debian 13's
+configuration where a program sees it (`DEBIAN_SHAPE`): Debian's LSM order with
+AppArmor the active major LSM, lockdown (none), landlock, TOMOYO, BPF, IPE, IMA
+and EVM; the memory controller and cgroup BPF; HZ 250; 8192 CPUs (MAXSMP);
+perf_event_paranoid 3 (Debian's patch); efivarfs, FUSE, nftables and fq_codel
+built in; scheduler autogroup and Debian's hardening defaults; no 9p, no
+netconsole, no cgroup debug controller, no legacy TIOCSTI. The release is
+Debian's (`6.12.94+deb13-amd64`), it is compiled with
+`x86_64-linux-gnu-gcc-14` where the host has it (Debian's compiler and the
+string `/proc/version` shows), and the few modular options are built and
+installed so the base has a module tree.
 
 Its kernel is the **minimal** profile, the BusyBox kernel: it builds in every
 driver and systemd prerequisite the console base uses (`CONSOLE_BUILTIN` is

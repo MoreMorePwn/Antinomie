@@ -219,9 +219,9 @@ static void mount_cases(void)
         ora_fail("system: mount point");
     for (size_t i = 0; i < sizeof mount_options; i += 4096)
         (void)*(volatile char *)(mount_options + i);
-    CALL("mount.real_device_unprivileged", mount, EPERM, "/dev/vda", "sys-mnt", "ext4",
+    CALL("mount.real_device_unprivileged", mount, EPERM, "/dev/vdb", "sys-mnt", "ext4",
          MS_RDONLY, NULL);
-    in_str(0, "/dev/vda");
+    in_str(0, "/dev/vdb");
     in_str(1, "sys-mnt");
     in_str(2, "ext4");
     why("may_mount() needs CAP_SYS_ADMIN in the mount namespace: the device is never opened");

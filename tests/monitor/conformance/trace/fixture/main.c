@@ -154,6 +154,17 @@ int main(int argc, char **argv)
     }
     group_line("start", group);
     group_line("workdir", work_dir);
+    // The root disk differs between bases (a whole disk, or the partition a
+    // Debian install mounts): golden files name it, and the work directory's
+    // device number, by role.
+    char root_dev[256], work_dev[32];
+    struct stat work_st;
+    ora_root_device(root_dev, sizeof root_dev);
+    group_line("rootdev", root_dev);
+    if (stat(work_dir, &work_st) == 0) {
+        snprintf(work_dev, sizeof work_dev, "%u", (unsigned)work_st.st_dev);
+        group_line("workdev", work_dev);
+    }
     role("main", getpid());
     for (size_t i = 0; i < AREA_COUNT; i++) {
         if (!selected(&areas[i], group, argc, argv))

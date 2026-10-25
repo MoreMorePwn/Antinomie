@@ -58,7 +58,11 @@ flowchart LR
    code (table cells, Info column, argument rows, field previews and one frame of
    the inspector) and writes `OUT_DIR/render/GROUP.jsonl`.
 5. `matrix.rs` writes `OUT_DIR/trace-matrix.json` and `trace-matrix.txt`;
-   `golden.rs` compares with `trace/golden/GROUP.txt`.
+   `golden.rs` compares with `trace/golden/GROUP.txt`. Golden lines name the
+   root disk (`<root-dev>`: BusyBox's whole disk, a Debian Minimal partition)
+   and the work directory's device number (`<work-dev>`) by role, as the
+   fixture reports them (`ANT_GROUP` `rootdev`, `workdev`), so one golden
+   serves both bases.
 
 Reports: `OUT_DIR/trace/GROUP.json` (every case, problem, gap, the accounting and
 throughput), the matrix, `render/`, and on a golden mismatch

@@ -16,8 +16,8 @@ chroot.work_dir | chroot(filename=".") = 0 | arg0.path:complete:"."
 clock_settime.monotonic | clock_settime(which_clock=CLOCK_MONOTONIC, tp=<data>) = EINVAL | arg1.data:complete
 clock_settime.same_time | clock_settime(which_clock=CLOCK_REALTIME, tp=<data>) = <value> | arg1.data:complete
 delete_module.missing | delete_module(name_user="ant_missing", flags=O_NONBLOCK) = ENOENT | arg0.path:complete:"ant_missing"
-fanotify_init.notify | fanotify_init(flags=FAN_CLASS_NOTIF|FAN_CLOEXEC, event_f_flags=O_RDONLY) = ENOSYS |
-fanotify_mark.work_dir | fanotify_mark(fanotify_fd=-1, flags=FAN_MARK_INODE|FAN_MARK_ADD, mask=32, fd=AT_FDCWD, pathname="<work>") = ENOSYS | arg4.path:complete:"<work>"
+fanotify_init.notify | fanotify_init(flags=FAN_CLASS_NOTIF|FAN_CLOEXEC, event_f_flags=O_RDONLY) = 3 |
+fanotify_mark.work_dir | fanotify_mark(fanotify_fd=3, flags=FAN_MARK_INODE|FAN_MARK_ADD, mask=32, fd=AT_FDCWD, pathname="<work>") = 0 | arg4.path:complete:"<work>"
 finit_module.bad_flags | finit_module(fd=3, uargs="", flags=0x40) = EINVAL | arg1.path:complete:""
 finit_module.badf | finit_module(fd=999, uargs="", flags=0x0) = EBADF | arg1.path:complete:""
 finit_module.not_a_module | finit_module(fd=3, uargs="", flags=0x0) = ENOEXEC | arg1.path:complete:""
@@ -88,7 +88,7 @@ process_mrelease.badf | process_mrelease(pidfd=<pid>, flags=0x0) = EBADF |
 process_mrelease.killed_target | process_mrelease(pidfd=<pid>, flags=0x0) = 0 |
 process_mrelease.live_target | process_mrelease(pidfd=<pid>, flags=0x0) = EINVAL |
 process_mrelease.reaped_target | process_mrelease(pidfd=<pid>, flags=0x0) = ESRCH |
-quotactl.getfmt_root_device | quotactl(cmd=Q_GETFMT / USRQUOTA, special="/dev/vda", id=0, addr=<addr>) = ESRCH | arg1.special:complete:"/dev/vda"
+quotactl.getfmt_root_device | quotactl(cmd=Q_GETFMT / USRQUOTA, special="<root-dev>", id=0, addr=<addr>) = ESRCH | arg1.special:complete:"<root-dev>"
 reboot.bad_magic | reboot(magic1=LINUX_REBOOT_MAGIC1, magic2=Unknown magic 0x5678, cmd=LINUX_REBOOT_CMD_CAD_OFF, arg=NULL) = EINVAL |
 reboot.cad_off | reboot(magic1=LINUX_REBOOT_MAGIC1, magic2=LINUX_REBOOT_MAGIC2, cmd=LINUX_REBOOT_CMD_CAD_OFF, arg=NULL) = 0 |
 reboot.cad_restore | reboot(magic1=LINUX_REBOOT_MAGIC1, magic2=LINUX_REBOOT_MAGIC2, cmd=LINUX_REBOOT_CMD_CAD_OFF, arg=NULL) = 0 |

@@ -129,7 +129,7 @@ root is mounted by filesystem UUID, so a stealth profile may put the disk on
 virtio, SATA (AHCI) or NVMe.
 The account, sudo, locked root, masked SSH and provenance are as on the desktop
 bases. Minimum resources are 1024 MiB RAM and 4 GiB disk; the bundle is about
-700 MB (`base.qcow2` about 690 MB of a 4 GiB root). **Build base…** offers it
+890 MB (`base.qcow2` about 850 MB of a 4 GiB disk). **Build base…** offers it
 as **Debian 13 (minimal, console)**. From a checkout:
 
 ```bash

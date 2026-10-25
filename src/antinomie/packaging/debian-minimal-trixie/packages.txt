@@ -4,9 +4,10 @@
 # scripts/build-debian-image.py with desktop "none": what the Debian installer
 # installs with no desktop chosen, mmdebstrap --variant=standard (the
 # "standard system utilities" task) with recommends, the installer's own
-# additions requested below and tasksel's language task for the locale
-# (task-english for English); documentation, manual pages and the package
-# indexes kept. The requested list is the recipe's CONSOLE_PACKAGES
+# additions requested below (GRUB among them), tasksel's language task for the
+# locale (task-english for English) and the base's kernel as Debian packages it
+# (linux-image-6.12.94+deb13-amd64 and linux-image-amd64, built by the recipe);
+# documentation, manual pages and the package indexes kept. The requested list is the recipe's CONSOLE_PACKAGES
 # (tests/monitor/test-debian-image.py checks they agree).
 #
 # The installed list is the resolved inventory of the verified build
@@ -26,8 +27,11 @@ requested initramfs-tools         the installer's initramfs generator (busybox, 
 requested keyboard-configuration  the chosen console keyboard layout
 requested console-setup           applies the layout and font on the virtual terminals
 requested sudo                    the installer adds it when root gets no password; the per-VM account uses it
+requested grub-pc                 the installer's boot loader for a BIOS PC (each VM's grub.cfg is written for it)
+requested os-prober               installed with GRUB by the installer
 
 installed	adduser	3.152	all	adduser	3.152
+installed	apparmor	4.1.0-1	amd64	apparmor	4.1.0-1
 installed	apt	3.0.3	amd64	apt	3.0.3
 installed	apt-listchanges	4.8	all	apt-listchanges	4.8
 installed	apt-utils	3.0.3	amd64	apt	3.0.3
@@ -87,6 +91,10 @@ installed	gcc-14-base:amd64	14.2.0-19	amd64	gcc-14	14.2.0-19
 installed	gettext-base	0.23.1-2	amd64	gettext	0.23.1-2
 installed	grep	3.11-4	amd64	grep	3.11-4
 installed	groff-base	1.23.0-9	amd64	groff	1.23.0-9
+installed	grub-common	2.12-9+deb13u2	amd64	grub2	2.12-9+deb13u2
+installed	grub-pc	2.12-9+deb13u2	amd64	grub2	2.12-9+deb13u2
+installed	grub-pc-bin	2.12-9+deb13u2	amd64	grub2	2.12-9+deb13u2
+installed	grub2-common	2.12-9+deb13u2	amd64	grub2	2.12-9+deb13u2
 installed	gzip	1.13-1+deb13u1	amd64	gzip	1.13-1+deb13u1
 installed	hostname	3.25	amd64	hostname	3.25
 installed	iamerican	3.4.06-1	all	ispell	3.4.06-1
@@ -119,6 +127,7 @@ installed	libaudit-common	1:4.0.2-2+deb13u1	all	audit	1:4.0.2-2+deb13u1
 installed	libaudit1:amd64	1:4.0.2-2+deb13u1	amd64	audit	1:4.0.2-2+deb13u1
 installed	libblkid1:amd64	2.41.5-0+deb13u1	amd64	util-linux	2.41.5-0+deb13u1
 installed	libbpf1:amd64	1:1.5.0-3	amd64	libbpf	1.5.0-3
+installed	libbrotli1:amd64	1.1.0-2+deb13u1	amd64	brotli	1.1.0-2+deb13u1
 installed	libbsd0:amd64	0.12.2-2	amd64	libbsd	0.12.2-2
 installed	libbz2-1.0:amd64	1.0.8-6	amd64	bzip2	1.0.8-6
 installed	libc-bin	2.41-12+deb13u4	amd64	glibc	2.41-12+deb13u4
@@ -137,6 +146,8 @@ installed	libdebconfclient0:amd64	0.280	amd64	cdebconf	0.280
 installed	libdevmapper1.02.1:amd64	2:1.02.205-2	amd64	lvm2	2.03.31-2
 installed	libdiscover2	2.1.2-10.1	amd64	discover	2.1.2-10.1
 installed	libedit2:amd64	3.1-20250104-1	amd64	libedit	3.1-20250104-1
+installed	libefiboot1t64:amd64	38-3.1+b1	amd64	efivar	38-3.1
+installed	libefivar1t64:amd64	38-3.1+b1	amd64	efivar	38-3.1
 installed	libelf1t64:amd64	0.192-4	amd64	elfutils	0.192-4
 installed	libevent-2.1-7t64:amd64	2.1.13-stable-1~deb13u1	amd64	libevent	2.1.13-stable-1~deb13u1
 installed	libexpat1:amd64	2.9.0-1~deb13u1	amd64	expat	2.9.0-1~deb13u1
@@ -145,8 +156,10 @@ installed	libfdisk1:amd64	2.41.5-0+deb13u1	amd64	util-linux	2.41.5-0+deb13u1
 installed	libffi8:amd64	3.4.8-2	amd64	libffi	3.4.8-2
 installed	libfido2-1:amd64	1.15.0-1+b1	amd64	libfido2	1.15.0-1
 installed	libfile-fcntllock-perl	0.22-4+b4	amd64	libfile-fcntllock-perl	0.22-4
+installed	libfreetype6:amd64	2.13.3+dfsg-1+deb13u1	amd64	freetype	2.13.3+dfsg-1+deb13u1
 installed	libfribidi0:amd64	1.0.16-1	amd64	fribidi	1.0.16-1
 installed	libfstrm0:amd64	0.6.1-1+b3	amd64	fstrm	0.6.1-1
+installed	libfuse3-4:amd64	3.17.2-3	amd64	fuse3	3.17.2-3
 installed	libgcc-s1:amd64	14.2.0-19	amd64	gcc-14	14.2.0-19
 installed	libgdbm-compat4t64:amd64	1.24-2	amd64	gdbm	1.24-2
 installed	libgdbm6t64:amd64	1.24-2	amd64	gdbm	1.24-2
@@ -201,6 +214,7 @@ installed	libpci3:amd64	1:3.13.0-2	amd64	pciutils	1:3.13.0-2
 installed	libpcre2-8-0:amd64	10.46-1~deb13u3	amd64	pcre2	10.46-1~deb13u3
 installed	libperl5.40:amd64	5.40.1-6+deb13u1	amd64	perl	5.40.1-6+deb13u1
 installed	libpipeline1:amd64	1.5.8-1	amd64	libpipeline	1.5.8-1
+installed	libpng16-16t64:amd64	1.6.48-1+deb13u6	amd64	libpng1.6	1.6.48-1+deb13u6
 installed	libpopt0:amd64	1.19+dfsg-2	amd64	popt	1.19+dfsg-2
 installed	libproc2-0:amd64	2:4.0.4-9	amd64	procps	2:4.0.4-9
 installed	libprotobuf-c1:amd64	1.5.1-1	amd64	protobuf-c	1.5.1-1
@@ -250,6 +264,8 @@ installed	libxtables12:amd64	1.8.11-2	amd64	iptables	1.8.11-2
 installed	libxxhash0:amd64	0.8.3-2	amd64	xxhash	0.8.3-2
 installed	libzstd1:amd64	1.5.7+dfsg-1	amd64	libzstd	1.5.7+dfsg-1
 installed	linux-base	4.12.1	all	linux-base	4.12.1
+installed	linux-image-6.12.94+deb13-amd64	6.12.94-1	amd64	linux-signed-amd64	6.12.94+1
+installed	linux-image-amd64	6.12.94-1	amd64	linux-signed-amd64	6.12.94+1
 installed	linux-sysctl-defaults	4.12.1	all	linux-base	4.12.1
 installed	locales	2.41-12+deb13u4	all	glibc	2.41-12+deb13u4
 installed	login	1:4.16.0-2+really2.41.5-0+deb13u1	amd64	util-linux	2.41.5-0+deb13u1
@@ -273,6 +289,7 @@ installed	nftables	1.1.3-1	amd64	nftables	1.1.3-1
 installed	openssh-client	1:10.0p1-7+deb13u4	amd64	openssh	1:10.0p1-7+deb13u4
 installed	openssl	3.5.7-1~deb13u3	amd64	openssl	3.5.7-1~deb13u3
 installed	openssl-provider-legacy	3.5.7-1~deb13u3	amd64	openssl	3.5.7-1~deb13u3
+installed	os-prober	1.83	amd64	os-prober	1.83
 installed	passwd	1:4.17.4-2	amd64	shadow	1:4.17.4-2
 installed	pci.ids	0.0~2025.06.09-1	all	pci.ids	0.0~2025.06.09-1
 installed	pciutils	1:3.13.0-2	amd64	pciutils	1:3.13.0-2
