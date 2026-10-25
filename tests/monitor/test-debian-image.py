@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 import importlib.util
 import io
+import json
 from pathlib import Path
 import re
 import shutil
@@ -574,14 +575,103 @@ class DebianImageTests(unittest.TestCase):
             data = bytearray(0x300)
             data[0x202:0x206] = b"HdrS"
             struct.pack_into("<H", data, 0x20e, 0x40)
-            for version in (b"6.12.94-custom", b"6.13.0", b"6.12.940"):
+            for version in (b"6.12.94-custom", b"6.12.94+deb13-amd64", b"6.13.0", b"6.12.940"):
                 data[0x240:0x280] = version + b"\0" * (64 - len(version))
                 kernel.write_bytes(data)
-                if version == b"6.12.94-custom":
+                if version.startswith(b"6.12.94") and version != b"6.12.940":
                     self.assertEqual(image.kernel_release(kernel), version.decode())
                 else:
                     with self.assertRaises(RuntimeError):
                         image.kernel_release(kernel)
+
+    def test_console_disk_is_the_installers_partitioned_disk(self):
+        if not shutil.which("sfdisk"):
+            self.skipTest("needs sfdisk")
+        with tempfile.TemporaryDirectory() as name:
+            raw = Path(name) / "root.raw"
+            device = image.console_disk(raw, image.CONSOLE_IMAGE_SIZE, image.random.Random(5))
+            self.assertEqual(device, f"{raw}?offset={1 << 20}")
+            table = json.loads(subprocess.run(["sfdisk", "--json", str(raw)], check=True,
+                                              capture_output=True, text=True).stdout)
+            [root] = table["partitiontable"]["partitions"]
+            self.assertEqual(table["partitiontable"]["label"], "dos")
+            self.assertEqual((root["start"], root["size"], root["type"], root.get("bootable")),
+                             (2048, image.CONSOLE_ROOT_SIZE // 512, "83", True))
+        self.assertEqual(image.CONSOLE_ROOT_DEVICE, "/dev/sda1")
+        self.assertIn("# / was on /dev/sda1 during installation",
+                      image.fstab("none", "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d"))
+
+    def test_kernel_is_packaged_as_debian_packages_it(self):
+        if not shutil.which("dpkg-deb"):
+            self.skipTest("needs dpkg-deb")
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            kernel = root / "bzImage"
+            kernel.write_bytes(b"kernel image")
+            config = root / "debian-config"
+            config.write_text("CONFIG_EXT4_FS=y\nCONFIG_MODULE_SIG_KEY=\"certs/x.pem\"\n"
+                              "CONFIG_BUILD_SALT=\"x\"\nCONFIG_ANTINOMIE=y\n# CONFIG_9P_FS is not set\n")
+            modules = root / "lib/modules/6.12.94+deb13-amd64"
+            (modules / "kernel/net").mkdir(parents=True)
+            (modules / "kernel/net/x.ko").write_bytes(b"ko")
+            for generated in ("modules.order", "modules.builtin", "modules.dep", "modules.alias"):
+                (modules / generated).write_text("")
+            out = root / "out"
+            out.mkdir()
+            image_deb, meta_deb = image.kernel_packages(
+                kernel, "6.12.94+deb13-amd64 (debian-kernel@lists.debian.org) #1", modules,
+                config, out)
+            self.assertEqual(image_deb.name, "linux-image-6.12.94+deb13-amd64_6.12.94-1_amd64.deb")
+            self.assertEqual(meta_deb.name, "linux-image-amd64_6.12.94-1_amd64.deb")
+            field = lambda deb, key: subprocess.run(["dpkg-deb", "-f", str(deb), key],
+                                                    check=True, capture_output=True,
+                                                    text=True).stdout.strip()
+            self.assertEqual(field(image_deb, "Source"), "linux-signed-amd64 (6.12.94+1)")
+            self.assertEqual(field(image_deb, "Recommends"), "apparmor")
+            self.assertEqual(field(image_deb, "Description").splitlines()[0],
+                             "Linux 6.12 for 64-bit PCs (signed)")
+            self.assertEqual(field(meta_deb, "Depends"),
+                             "linux-image-6.12.94+deb13-amd64 (= 6.12.94-1)")
+            listing = subprocess.run(["dpkg-deb", "-c", str(image_deb)], check=True,
+                                     capture_output=True, text=True).stdout
+            self.assertRegex(listing, r"-rw------- root/root .* \./boot/vmlinuz-6\.12\.94\+deb13-amd64")
+            self.assertIn("./usr/lib/modules/6.12.94+deb13-amd64/kernel/net/x.ko", listing)
+            # depmod writes the module indexes in the postinst, as for Debian's.
+            self.assertNotIn("modules.dep", listing)
+            self.assertIn("./usr/lib/modules/6.12.94+deb13-amd64/modules.order", listing)
+            unpacked = root / "unpacked"
+            subprocess.run(["dpkg-deb", "-x", str(image_deb), str(unpacked)], check=True)
+            boot_config = (unpacked / "boot/config-6.12.94+deb13-amd64").read_text()
+            self.assertEqual(boot_config, "CONFIG_EXT4_FS=y\n# CONFIG_9P_FS is not set\n")
+            self.assertTrue((unpacked / "boot/System.map-6.12.94+deb13-amd64").read_text()
+                            .startswith("ffffffffffffffff B The real System.map"))
+            control = root / "control"
+            subprocess.run(["dpkg-deb", "-e", str(image_deb), str(control)], check=True)
+            self.assertIn("linux-update-symlinks $change $version $image_path",
+                          (control / "postinst").read_text())
+            self.assertIn("version=6.12.94+deb13-amd64\nimage_path=/boot/vmlinuz-$version",
+                          (control / "postinst").read_text())
+        # The customization purges Debian's kernels, not the console base's own.
+        self.assertIn('($1 ~ /^linux-image-/ && keep != "none")', image.customization_script())
+        # They go in before the rest of the customization; the cache knows them.
+        with patch.object(image.os, "geteuid", return_value=1000):
+            command = image.mmdebstrap_command(image.options({"desktop": image.CONSOLE}),
+                                               Path("/w/r.tar"), Path("/w/c.sh"), Path("/w/p"),
+                                               kernel_debs=(Path("/w/k/a.deb"), Path("/w/k/b.deb")))
+        hooks = [arg[len("--customize-hook="):] for arg in command
+                 if arg.startswith("--customize-hook=")]
+        install = hooks.index('chroot "$1" apt-get -o APT::Get::AllowUnauthenticated=false -y '
+                              'install /tmp/a.deb /tmp/b.deb')
+        self.assertLess(hooks.index("upload /w/k/a.deb /tmp/a.deb"), install)
+        self.assertLess(install, hooks.index("upload /w/c.sh /tmp/antinomie-customize.sh"))
+        values = image.options({"desktop": image.CONSOLE})
+        with tempfile.TemporaryDirectory() as name:
+            deb = Path(name) / "k.deb"
+            deb.write_bytes(b"one")
+            first = image.rootfs_identity(values, (deb,))
+            deb.write_bytes(b"two")
+            self.assertNotEqual(first, image.rootfs_identity(values, (deb,)))
+            self.assertNotIn("kernel_packages", image.rootfs_identity(values))
 
     def test_modular_kernel_requires_matching_installed_modules(self):
         with tempfile.TemporaryDirectory() as name:

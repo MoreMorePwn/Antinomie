@@ -1182,7 +1182,7 @@ pub(crate) fn reset_vm_disk(
         create_overlay(options, &staging, vm.disk_gib, bundle)?;
         let disk = staging.join("disk.qcow2");
         let account = account
-            .map(|mut account| account.provision(&disk).map(|()| account))
+            .map(|mut account| account.provision(&disk, vm.ram_mib).map(|()| account))
             .transpose()?;
         File::open(&disk)
             .and_then(|file| file.sync_all())

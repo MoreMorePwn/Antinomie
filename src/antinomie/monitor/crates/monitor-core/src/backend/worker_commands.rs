@@ -512,9 +512,10 @@ impl Worker {
                             "disk resizing is blocked while snapshots retain disk geometry".into(),
                         );
                     }
+                    let disk = crate::snapshots::active_disk(&self.options, current)?;
                     let output = std::process::Command::new(&self.options.qemu_img)
                         .arg("resize")
-                        .arg(crate::snapshots::active_disk(&self.options, current)?)
+                        .arg(&disk)
                         .arg(format!("{}G", vm.disk_gib))
                         .output()
                         .map_err(|e| e.to_string())?;
@@ -523,6 +524,14 @@ impl Worker {
                             "disk resize: {}",
                             String::from_utf8_lossy(&output.stderr)
                         ));
+                    }
+                    // A provisioned (partitioned) root grows with its disk.
+                    if disk_bundle
+                        .guest
+                        .as_ref()
+                        .is_some_and(|guest| guest.requires_credentials)
+                    {
+                        crate::guest_account::grow_disk(&disk)?;
                     }
                 }
                 let previous = current.clone();
@@ -750,7 +759,7 @@ impl Worker {
             if let Some(credentials) = credentials {
                 let mut account =
                     crate::guest_account::GuestAccount::from_credentials(credentials)?;
-                account.provision(&dir.join("disk.qcow2"))?;
+                account.provision(&dir.join("disk.qcow2"), vm.ram_mib)?;
                 account.save(dir)?;
             }
             storage::atomic_json(&dir.join("config.json"), &vm)?;

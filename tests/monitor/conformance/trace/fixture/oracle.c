@@ -494,6 +494,20 @@ void role(const char *name, long id)
     lined("ANT_ROLE {\"role\":\"%s\",\"id\":%ld}\n", name, id);
 }
 
+void ora_root_device(char *out, size_t size)
+{
+    char line[512], device[256], target[256];
+    snprintf(out, size, "/dev/vda");
+    FILE *mounts = fopen("/proc/self/mounts", "re");
+    if (!mounts)
+        return;
+    while (fgets(line, sizeof line, mounts))
+        if (sscanf(line, "%255s %255s", device, target) == 2 && !strcmp(target, "/") &&
+            !strncmp(device, "/dev/", 5))
+            snprintf(out, size, "%s", device);
+    fclose(mounts);
+}
+
 void group_line(const char *what, const char *name)
 {
     lined("ANT_GROUP {\"%s\":\"%s\",\"pid\":%d}\n", what, name, getpid());

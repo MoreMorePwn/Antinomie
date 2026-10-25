@@ -44,12 +44,20 @@ config="$source_tree/scripts/config"
 # A new patch series changes the source id in every object's configuration
 # header but not their preprocessed code: ccache's preprocessor mode still
 # hits, so only the files the series touched are compiled again.
+# The minimal profile compiles with Debian 13's own compiler where the host has
+# it (Debian's kernel build names x86_64-linux-gnu-gcc-14, as /proc/version
+# then shows); the debian profile keeps the host's gcc.
+cc=gcc
+if [[ $profile == minimal ]] && command -v x86_64-linux-gnu-gcc-14 >/dev/null; then
+    cc=x86_64-linux-gnu-gcc-14
+fi
 compiler=()
+[[ $cc == gcc ]] || compiler=(CC="$cc" HOSTCC="$cc")
 if [[ -n ${ANTINOMIE_CCACHE_DIR:-} ]] && command -v ccache >/dev/null; then
     export CCACHE_DIR=$ANTINOMIE_CCACHE_DIR CCACHE_MAXSIZE=${CCACHE_MAXSIZE:-8G}
     export CCACHE_BASEDIR=$source_tree CCACHE_NOHASHDIR=1 CCACHE_COMPILERCHECK=content
     mkdir -p "$CCACHE_DIR"
-    compiler=(CC="ccache gcc" HOSTCC="ccache gcc")
+    compiler=(CC="ccache $cc" HOSTCC="ccache $cc")
     ccache --zero-stats >/dev/null
 fi
 
@@ -124,6 +132,25 @@ MINIMAL_EXTRA="ANON_VMA_NAME SCHED_CORE"
 # q35's AHCI, NVMe), built in for the minimal profile: the bootstrap initrd has
 # no module loader. The Debian profile keeps Debian's modules (virtio root only).
 DISK_BUSES="ATA SATA_AHCI SCSI BLK_DEV_SD BLK_DEV_NVME"
+# Debian 13's configuration where a program can see it (uname, /proc,
+# /sys/kernel/security/lsm, the cgroup controllers, /proc/filesystems,
+# perf_event_paranoid, kernel_max), for the minimal profile: the pinned
+# package's LSM set and order with AppArmor active, the memory controller and
+# cgroup BPF, HZ 250, 8192 CPUs, its hardening and scheduler defaults, efivarfs
+# built in (no module loader at boot), FUSE, nftables and fq_codel; no 9p, no
+# cgroup debug controller, no legacy TIOCSTI.
+DEBIAN_SHAPE="SECURITY SECURITYFS SECURITY_NETWORK SECURITY_PATH AUDIT
+    SECURITY_APPARMOR SECURITY_APPARMOR_HASH DEFAULT_SECURITY_APPARMOR SECURITY_LANDLOCK
+    SECURITY_LOCKDOWN_LSM LOCK_DOWN_KERNEL_FORCE_NONE SECURITY_TOMOYO BPF_LSM SECURITY_IPE
+    INTEGRITY IMA EVM MEMCG CGROUP_BPF DEBUG_KERNEL MAXSMP HZ_250
+    SECURITY_PERF_EVENTS_RESTRICT EFIVAR_FS FANOTIFY FANOTIFY_ACCESS_PERMISSIONS FUSE_FS
+    NF_TABLES NF_TABLES_INET NET_SCH_FQ_CODEL NET_SCH_DEFAULT DEFAULT_FQ_CODEL SCHED_AUTOGROUP
+    INIT_ON_ALLOC_DEFAULT_ON HARDENED_USERCOPY SLAB_FREELIST_HARDENED SLAB_FREELIST_RANDOM"
+DEBIAN_SHAPE_OFF="CGROUP_DEBUG NET_9P 9P_FS LEGACY_TIOCSTI NETCONSOLE HZ_1000 DEFAULT_SECURITY_SELINUX
+    DEFAULT_PFIFO_FAST"
+DEBIAN_LSM="landlock,lockdown,yama,loadpin,safesetid,integrity,apparmor,selinux,smack,tomoyo,bpf,ipe"
+# Debian's kernel release suffix (uname -r 6.12.94+deb13-amd64).
+DEBIAN_LOCALVERSION="+deb13-amd64"
 # Built in for both profiles: the bootstrap initrd has no module loader, and the
 # fixed display needs virtio-gpu before userspace starts.
 DEBIAN_BUILTIN="ANTINOMIE UNIX98_PTYS IKCONFIG VIRTIO VIRTIO_PCI VIRTIO_BLK EXT4_FS
@@ -162,24 +189,49 @@ if [[ $profile == minimal ]]; then
         INPUT INPUT_EVDEV INPUT_KEYBOARD INPUT_MOUSE KEYBOARD_ATKBD MOUSE_PS2 \
         SERIO SERIO_I8042 VIRTIO_INPUT HID HID_GENERIC USB_SUPPORT USB \
         USB_XHCI_HCD USB_XHCI_PCI USB_HID RTC_CLASS RTC_DRV_CMOS $DISK_BUSES \
-        $DEBIAN_PARITY $MINIMAL_EXTRA; do
+        $DEBIAN_PARITY $MINIMAL_EXTRA $DEBIAN_SHAPE; do
         "$config" --file "$build_tree/.config" --enable "$symbol"
     done
-    "$config" --file "$build_tree/.config" --disable IKCONFIG_PROC
-    # The release is exactly 6.12.94, as from the prepared tree, also when an
-    # author tree is a git checkout (no -g<commit>, no "+").
+    for symbol in IKCONFIG_PROC $DEBIAN_SHAPE_OFF; do
+        "$config" --file "$build_tree/.config" --disable "$symbol"
+    done
+    "$config" --file "$build_tree/.config" --set-str LSM "$DEBIAN_LSM"
+    # The release is Debian's, 6.12.94+deb13-amd64, also when an author tree is
+    # a git checkout (no -g<commit>, no extra "+").
+    "$config" --file "$build_tree/.config" --set-str LOCALVERSION "$DEBIAN_LOCALVERSION"
     "$config" --file "$build_tree/.config" --disable LOCALVERSION_AUTO
     # DWARF in vmlinux, for the base's Volatility symbol table (as Debian).
     "$config" --file "$build_tree/.config" --disable DEBUG_INFO_NONE \
         --enable DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT
     "$config" --file "$build_tree/.config" --set-str INITRAMFS_SOURCE ""
     "$config" --file "$build_tree/.config" --set-str ANTINOMIE_SOURCE_ID "$source_id"
-    make -C "$source_tree" O="$build_tree" olddefconfig
+    make -C "$source_tree" O="$build_tree" "${compiler[@]}" olddefconfig
     # shellcheck disable=SC2086
-    require_symbols ANTINOMIE IKCONFIG DEBUG_INFO $DISK_BUSES $DEBIAN_PARITY $MINIMAL_EXTRA
+    require_symbols ANTINOMIE IKCONFIG DEBUG_INFO $DISK_BUSES $DEBIAN_PARITY $MINIMAL_EXTRA \
+        $DEBIAN_SHAPE
+    grep -qx 'CONFIG_HZ=250' "$build_tree/.config" && grep -qx 'CONFIG_NR_CPUS=8192' "$build_tree/.config" &&
+        grep -qxF "CONFIG_LSM=\"$DEBIAN_LSM\"" "$build_tree/.config" ||
+        { echo "Debian's HZ, NR_CPUS or LSM order did not survive olddefconfig" >&2; exit 1; }
     require_source_id
-    make -C "$source_tree" O="$build_tree" "${compiler[@]}" LOCALVERSION= -j"$jobs" bzImage
-    [[ ${#compiler[@]} -eq 0 ]] || ccache --show-stats >&2
+    # Debian's own configuration as the pinned package resolves it: the base's
+    # /boot/config (the running kernel's would name the profile).
+    fragments=("$debian_config/config" "$debian_config/kernelarch-x86/config"
+               "$debian_config/amd64/config")
+    if [[ -f ${fragments[0]} ]]; then
+        rm -rf "$build_tree/debian-reference"
+        mkdir -p "$build_tree/debian-reference"
+        cat "${fragments[@]}" > "$build_tree/debian-reference/.config"
+        make -C "$source_tree" O="$build_tree/debian-reference" "${compiler[@]}" olddefconfig >/dev/null
+        mv "$build_tree/debian-reference/.config" "$build_tree/debian-config"
+        rm -rf "$build_tree/debian-reference"
+    fi
+    # The few options the profile leaves modular (netfilter targets, a thermal
+    # driver) are built and installed, so the base carries a module tree.
+    make -C "$source_tree" O="$build_tree" "${compiler[@]}" LOCALVERSION= -j"$jobs" bzImage modules
+    [[ ${ANTINOMIE_CCACHE_DIR:-} == "" ]] || ! command -v ccache >/dev/null || ccache --show-stats >&2
+    rm -rf "$build_tree/modules-install"
+    make -C "$source_tree" O="$build_tree" "${compiler[@]}" LOCALVERSION= \
+        INSTALL_MOD_PATH="$build_tree/modules-install" INSTALL_MOD_STRIP=1 modules_install >/dev/null
     echo "$build_tree/arch/x86/boot/bzImage"
     exit 0
 fi
