@@ -89,9 +89,9 @@ it runs.
   recorder), instead of 60 in the order they were written;
   `src/antinomie/patches/README.md` maps the topics, the files they hook and
   the old patch numbers that entries below cite. The patched kernel source is
-  byte-identical and the contract stays at revision 17, so every base keeps
-  working; only the series hash in a new kernel's source id changes, and the
-  app builds its kernel once more. The Quilt view is now regenerated whole from
+  unchanged apart from one reworded comment, and the contract stays at
+  revision 17, so every base keeps working; the series hash in a new kernel's
+  source id changes, and the app builds its kernel once more. The Quilt view is now regenerated whole from
   the canonical series (`scripts/sync-quilt-view.py`), with DEP-3 descriptions.
 
 ## 0.7.0 — Unreleased
