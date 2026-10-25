@@ -584,6 +584,64 @@ fn debian_new_vm_dialog_fits_large_text_and_enforces_profile_minima() {
 }
 
 #[test]
+fn debian_minimal_new_vm_asks_for_the_account_with_console_minima() {
+    let mut app = app();
+    app.snapshot
+        .bases
+        .push(antinomie_monitor_core::BaseSummary {
+            id: "debian-minimal".into(),
+            label: "Debian 13 (Minimal)".into(),
+            directory: "/bases/debian-minimal".into(),
+            min_ram_mib: 1024,
+            min_disk_gib: 4,
+            fixed_display: true,
+            size_bytes: 0,
+            revision: Some(APP_REVISION),
+            min_app_version: None,
+            built_with: None,
+            stealth_support: vec!["uefi".into(), "dhcp".into()],
+            guest: Some(antinomie_monitor_core::GuestProfile {
+                id: "debian-minimal".into(),
+                label: "Debian 13 (Minimal)".into(),
+                min_ram_mib: 1024,
+                min_disk_gib: 4,
+                requires_credentials: true,
+                graphical: false,
+            }),
+        });
+    app.new_image();
+    app.draft.base_identity = Some("debian-minimal".into());
+    app.draft.ram_mib = 256;
+    app.draft.disk_gib = 1;
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    for _ in 0..4 {
+        render(&mut app, &ctx, egui::vec2(1280.0, 900.0));
+    }
+    let output = render(&mut app, &ctx, egui::vec2(1280.0, 900.0));
+    // Raised to the console base's minima, far below a desktop's.
+    assert_eq!(app.draft.ram_mib, 1024);
+    assert_eq!(app.draft.disk_gib, 4);
+    let visible = texts(&output);
+    for label in ["Username", "Password", "Confirm password", "Create VM"] {
+        assert!(
+            visible.iter().any(|(text, _)| text == label),
+            "missing {label}"
+        );
+    }
+    // Like the desktop bases, the account is required and stays transient.
+    assert!(app.create_vm().is_err());
+    app.credentials.password = "console-password".into();
+    app.credentials.confirmation = app.credentials.password.clone();
+    app.create_vm().unwrap();
+    assert!(app.submitted.iter().any(|command| matches!(
+        command,
+        Command::CreateWithCredentials { vm, .. } if vm.ram_mib == 1024 && vm.disk_gib == 4
+    )));
+    assert!(!format!("{:?}", app.submitted).contains("console-password"));
+}
+
+#[test]
 #[ignore = "requires X11 native rendering; exits after 20 seconds"]
 fn native_debian_setup_fixture() {
     use winit::platform::x11::EventLoopBuilderExtX11;

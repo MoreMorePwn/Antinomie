@@ -870,9 +870,10 @@ impl BuildRun {
             line("the kernel for this app version is cached; only the image is built");
         }
         // Debian images reuse a recent root filesystem with the same answers.
-        let image_cache = job["options"]["desktop"]
-            .as_str()
-            .map(|desktop| crate::kit::image_cache(&root, desktop));
+        let image_cache = self
+            .options
+            .rootfs_cache_name(self.kind)
+            .map(|name| crate::kit::image_cache(&root, name));
         if image_cache.as_ref().is_some_and(|cache| cache.is_file()) {
             line("a root filesystem for these answers is cached; it is reused if recent");
         }
