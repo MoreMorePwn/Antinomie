@@ -146,13 +146,15 @@ extracted release updates the executable; application data stays in place.
 Other distributions are not documented here: the requirements below name the
 programs needed, but only Debian/Ubuntu package names have been checked.
 
-### Offline install: the full pack
+### Offline install: build a full pack
 
 Optional analysis tools (Ghidra, capa, FLOSS, Volatility 3, MemNixFS, Tor and
-others) are normally downloaded the first time you ask for them. The **full pack**
-is a second release asset with the same pinned, SHA-256-verified tools already
-inside, for computers that should not download anything. Install the application,
-extract the pack and run `./install-full-pack.sh`. See [docs/full-pack.md](docs/full-pack.md).
+others) are normally downloaded the first time you ask for them. For a computer
+that should not download anything, build a **full pack** on a connected machine
+with `scripts/build-full-pack.py`: it fetches the same pinned, SHA-256-verified
+tools from their upstream hosts. Copy it over, extract it and run
+`./install-full-pack.sh`. Antinomie does not publish a pack. See
+[docs/full-pack.md](docs/full-pack.md).
 
 ### Run this branch from source
 
@@ -271,7 +273,7 @@ the recording is complete or every detection rule matched.
 | [Torture sample builder](tests/monitor/build-torture.sh) | Build the combined and individual workload executables. |
 | [Implementation contract](docs/implementation.md) | Supported behavior, wire contracts, measurements and limits. |
 | [Project layout](docs/project-layout.md) | Durable source, build outputs and artifact retention. |
-| [Full pack](docs/full-pack.md) | The offline bundle of every managed tool. |
+| [Full pack](docs/full-pack.md) | Build your own offline bundle of every managed tool. |
 
 ## Roadmap
 
