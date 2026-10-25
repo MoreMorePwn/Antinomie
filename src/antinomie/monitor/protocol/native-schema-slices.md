@@ -1,6 +1,6 @@
 # Native Schema Slice Contract: 2A, 2B, 2G
 
-ANT-T0009 producer/consumer contract, revision 9, 2026-10-08 (Sections 8–16 record revisions 2–9). Section 9 and the 2B fixtures were approved by the user on 2026-10-07.
+Producer/consumer contract, revision 9, 2026-10-08 (Sections 8–16 record revisions 2–9). Section 9 and the 2B fixtures were approved by the user on 2026-10-07.
 Status: approved by the user on 2026-10-07, including choice (a) for unknown
 socket options (raw `optval` up to `optlen`, capped at 128 KiB). Revision 2
 records corrections found while implementing and testing slice 2A; see Section 8.
@@ -216,7 +216,7 @@ and the host labels the row Not implemented.
 | Member | Meaning |
 |---|---|
 | `label` | Stable case name. The probe prints it as `"label"` in its `ANT_CASE` line; sequential `case_id` values are not stable across probe edits |
-| `result` | `zero`, `nonnegative`, `positive`, or `errno:<NAME>`; alternatives separated by `|` when the pinned kernel profiles legitimately differ (ANT-T0022) |
+| `result` | `zero`, `nonnegative`, `positive`, or `errno:<NAME>`; alternatives separated by `|` when the pinned kernel profiles legitimately differ |
 | `fields` | The complete set of fields recorded for that invocation, in both phases. A missing or extra field fails the case |
 | `phase` | `entry` or `exit` |
 | `size`, `captured`, `declared` | Object size, bytes actually captured, and declared length; `"max"` stands for `U64_MAX`, and `"result"` for the case's return value (revision 3) |
@@ -316,7 +316,7 @@ The host decodes `flags` (`RSEQ_FLAG_UNREGISTER`); this group already exists.
 
 - `mount` success runs in a forked child that calls
   `unshare(CLONE_NEWUSER | CLONE_NEWNS)` and mounts a 1 MiB tmpfs on the probe's
-  private `mnt` directory. This needs `CONFIG_USER_NS` (on since ANT-T0022). The
+  private `mnt` directory. This needs `CONFIG_USER_NS` (on in the minimal kernel configuration). The
   mount disappears with the child's namespace.
 - `kexec_load` and the privileged `quotactl` paths run as UID 1000 and are
   rejected (`EPERM`, `ENOENT` or `ESRCH`; the guest root is ext4 without quotas,
@@ -596,9 +596,9 @@ These follow the rules above; no fixture changes.
 - **semctl (13.2).** `GETALL` records its array only when the copy to the caller
   succeeds (13.5); an array above 1 MiB is `ANT_RESOURCE_EXHAUSTED`.
 
-## 15. Revision 8: ANT-T0009 follow-up fixes (2026-10-08)
+## 15. Revision 8: follow-up fixes (2026-10-08)
 
-The user asked for the problems found during ANT-T0009 to be fixed on
+The user asked for the problems found in the first verification to be fixed on
 2026-10-08 and chose, for 15.1, to label such fields rather than have the
 recorder fault pages in. Fixtures: `fixtures/native-schema/residency.json` and
 the case `2f.aio_direct_readv_reaped` in `fixtures/native-schema-async/2f.json`.
@@ -645,7 +645,7 @@ fields of a stage 4 read: `async.payload.direction`, `async.payload.requested_si
 copy) and `async.payload.output` with the `res` bytes in iovec order. A
 one-segment `PREADV` is imported as a single buffer and is recorded like `PREAD`.
 
-## 16. Revision 9: kernel revision and source identity (ANT-T0027, 2026-10-08)
+## 16. Revision 9: kernel revision and source identity (2026-10-08)
 
 From this revision the contract revision is part of the protocol, not only of
 this document. `ANTC_REVISION` in the shared control header (`control.h`, the
@@ -661,7 +661,7 @@ here. The wire layout, record schema 1 and control version 1 are unchanged.
 | Bundles and catalog | `antinomie_revision` and `antinomie_source`, both or neither, written by the image builders from the kernel's embedded configuration; not part of the base identity (the configuration hash already is). Builders refuse a kernel without a source id unless `--allow-unversioned` |
 | Host | Refuses to import, download, install a build of or start a base whose revision is newer than its own. Labels bases current, outdated, needs a newer app, or no revision. Reports a running kernel whose revision or series differs from its base's record, or that is newer than the host. The boot capture manifest records the kernel's answer as `guest_kernel` |
 
-## 17. Revision 16: live process cores (ANT-T0057, 0.6.0)
+## 17. Revision 16: live process cores (0.6.0)
 
 Transport ABI9 and revision-15 Core Dump on Exit remain compatible. A live core
 uses exact leader task cookie/start_boot_ns/TGID identity within the current boot.

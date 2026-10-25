@@ -964,7 +964,7 @@ static void process_vm_self_cases(void)
     in_key("arg3.remote_iov", remote, sizeof remote);
     remote_iov_status(2);
     volatile_case();
-    why("the remote side is recorded by address only (ANT-T0009)");
+    why("the remote side is recorded by address only");
     DONE();
     memcpy(all, src1, sizeof src1);
     memcpy(all + sizeof src1, src2, sizeof src2);

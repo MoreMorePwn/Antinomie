@@ -12,13 +12,13 @@ locked dependency license expressions, and records notice-document gaps without
 claiming full legal clearance. Release packaging includes that inventory.
 
 This brief is the shared implementation contract. User authorized implementation
-on 2026-10-01. Core workers/review use gpt-6.1-sol; bounded support may use Luna.
+on 2026-10-01.
 The accepted 0.5.0 snapshot/reconnect extension below supersedes the historical
 V7-only restriction; older requirements remain recorded for their releases.
 
 ## Accepted requirements
 
-### Accepted kernel-native guest resources (0.7.0, ANT-T0084 follow-up)
+### Accepted kernel-native guest resources (0.7.0)
 
 Contract revision 17 replaces the temporary guest collector with the kernel
 `RESOURCES` command (`0x1070`, header-only request, 96-byte reply; layout in
@@ -99,7 +99,7 @@ additive and an older guest answers `-EOPNOTSUPP`. Layouts are in
 * **Phase 3** (fork and exec following, non-stop, re-adoption, the panel's
   process and signal controls) is described after the panel.
 
-### Accepted ANT-T0120 configurable process-core size (0.7.0)
+### Accepted configurable process-core size (0.7.0)
 
 The 64 MiB / 5 s ceiling of process cores is configurable. The guest series gains
 0039 (limits from guest RAM, chunked buffer, one budget enforcer, `CORE_CAPS`
@@ -1789,7 +1789,7 @@ torrc contents, library path, bootstrap parsing, a tor that exits, stalls or
 does not speak SOCKS, stop on release). The managed tools are tested with the
 pins and unpacking only; no test downloads anything. No real Tor, VPN or Internet traffic is used.
 
-### Accepted ANT-T0097 host UI performance (0.6.2)
+### Accepted host UI performance (0.6.2)
 
 Remove render-time filesystem checks for host chooser availability; resolve
 and cache its program asynchronously at startup and explicit capability refresh.
@@ -1823,7 +1823,7 @@ No guest, image, shared-memory ABI, dependency or release-tag change is needed.
   option. Never execute automatically after upload.
 - Kernel implements control, upload, execution, tracing, and terminal I/O;
   no auxiliary guest control helper, except the explicitly approved temporary
-  resource-only collector in ANT-T0084 below, which only revision 11 to 16
+  resource-only collector described below, which only revision 11 to 16
   kernels still use (revision 17 samples resources in the kernel). Ordinary init, shell and target programs
   remain userspace processes.
 - Launch path, argument list, cwd, environment, UID/GID. Default unprivileged.
@@ -1842,8 +1842,7 @@ No guest, image, shared-memory ABI, dependency or release-tag change is needed.
 
 ## Disks tab: the disks of a stopped VM (0.7.0, phases 1 to 3)
 
-Accepted design: the documentation checkout's "Disks Tab - Implementation
-Design" v2, phases 1 to 3 (the dumps are described after the limits below,
+Accepted design: Disks tab implementation design v2, phases 1 to 3 (the dumps are described after the limits below,
 phase 3 after them). Host only; no guest kernel change.
 
 **Mechanism.** The VM's qcow2 chain (`snapshots::active_disk`) is flattened by
@@ -2596,9 +2595,9 @@ was scanned. Clicking a row opens the executable in Static Analysis, a PCAP
 in Network, the core in Core dumps, the memory dump in Memory, or a
 recovered file's folder.
 
-## Accepted ANT-T0091 run triage (0.6.2)
+## Accepted run triage (0.6.2)
 
-ANT-T0101 reorganizes triage presentation around section navigation,
+A later change reorganizes triage presentation around section navigation,
 detector comparison and complementary behavior/network sections. The specimen
 name, path and hash are not repeated above the tabs. Detection shows each
 rule’s recorded explanation and match location. Local destination addresses
@@ -2614,7 +2613,7 @@ off the render path: the default is local TShark GeoIP, and dig/whois runs
 only in the index worker when that setting is selected. Local addresses are
 never queried.
 
-ANT-T0099 extends these host-only views with exact operation-time executable
+A later change extends these host-only views with exact operation-time executable
 labels, standard-stream/library visibility controls and stable column sorting
 before archive pagination. Sorted process lists retain parent/depth fields in
 Details; recorded order restores tree indentation. A temporary SQLite spool
@@ -2827,7 +2826,7 @@ and incomplete-evidence warnings near the run selector. Preserve the current
 native palette, proportional navigation and monospace evidence values; use
 resizable columns, horizontal table scrolling and bounded lower detail panes.
 
-ANT-T0093 supersedes the inline lower-pane presentation: every triage entry's
+A later change supersedes the inline lower-pane presentation: every triage entry's
 single-click information belongs in the existing shared Details dock panel.
 Include suspicious activity, process tree, Opened/Read/Changed files, IPs/Hosts/
 HTTP/DNS and BPF decoding/export. Remove row-content hover popups and duplicate
@@ -2835,19 +2834,19 @@ inline inspectors; preserve filter context menus and double-click exact evidence
 navigation. Details follows Triage using the existing active/split/detached
 panel rules. Changing run/VM clears selection and pending evidence jumps.
 
-## Accepted ANT-T0087 aligned VM status cards (0.6.1)
+## Accepted aligned VM status cards (0.6.1)
 
-The ANT-T0087 visual clarification requires equal-height VM Status resource
+The visual clarification requires equal-height VM Status resource
 cards within each responsive row. Render the contents once, measure that row's
 tallest card and extend all of its frame backgrounds to the shared height in
 the same frame. Apply this to guest pairs and host pairs/triples; single-column
 cards retain natural height. Width/data/font changes must not depend on a stale
 height cache or clip wrapped notes. Measurements and monitoring stay unchanged.
 
-## Accepted ANT-T0086 upload/picker and collector follow-up (0.6.1)
+## Accepted upload/picker and collector follow-up (0.6.1)
 
 The latest user clarification supersedes the dialog-tree and immediate-send
-portions of ANT-T0082/83: keep the sidebar Explorer tree, fill its pane width,
+portions of the earlier upload browser: keep the sidebar Explorer tree, fill its pane width,
 and align folder/Refresh left using proportional text. Upload has a native file
 chooser button and manual path fields, with no second tree. Sidebar Send and Run
 only prefills Upload; it does not submit. Opening Upload hides Run program.
@@ -2864,7 +2863,7 @@ upload and token across Exec readiness attempts; never upload it again. Unknown
 outcomes, other rejections and transfer failures are never retried. Existing guest images,
 kernel and protocol stay unchanged; the producer backlog remains 0.7.0.
 
-## Historical accepted ANT-T0082 upload browser and Run handoff (0.6.1)
+## Historical accepted upload browser and Run handoff (0.6.1)
 
 User authorized a new release-0.6.1 branch and an Upload file workflow that
 chooses a host folder through the filesystem explorer, displays its expandable
@@ -2876,14 +2875,14 @@ Overwrite confirmation retains the chosen action; closing cancels the handoff
 without claiming to cancel a guest write already submitted. Reuse the existing
 single-file guest protocol and 0.6.0 bases; no guest/image/transport changes.
 
-The accepted ANT-T0083 clarification adds a persistent Explorer section below
+The accepted clarification adds a persistent Explorer section below
 Base images. Choose its host root independently of the Upload dialog; double-click
 a regular file or use right-click Send and Run to submit the existing upload and
 success-only Run dialog handoff. Right-click Open Directory opens the containing
 host folder (the folder itself for directory entries). Stopped/wrongly selected
 VMs and pending uploads cannot admit another send. Folded bases never hide Explorer.
 
-## Accepted ANT-T0084 resource observations and UI repairs (0.6.1)
+## Accepted resource observations and UI repairs (0.6.1)
 
 The user's follow-up requests explicit disconnected-network capture warnings,
 loss-counter definitions on hover and repair of growing subwindows, while keeping
@@ -2904,7 +2903,7 @@ snapshots and reconnect, never replay uncertain side effects or carry readings
 across a timeline. Collector syscalls remain observable in Capture All; this is
 not a stealth guarantee. Kernel-native production is deferred to 0.7.0.
 
-## Accepted ANT-T0085 tab dragging and docking feedback (0.6.1)
+## Accepted tab dragging and docking feedback (0.6.1)
 
 The user reports unclear/nonworking tab movement and requests the expected
 drag shadow. Preserve the native dock tree and saved arrangements. Drag tab
@@ -2916,7 +2915,7 @@ tabs and update the corresponding Details context on a committed drop. Escape
 and missing-release cancellation must not silently detach or move a tab; a lone
 tab cannot promise a split into an empty source group. No guest/backend changes.
 
-## Accepted ANT-T0057 manual cores and performance Summary (0.6.0)
+## Accepted manual cores and performance Summary (0.6.0)
 
 User authorized a real Dump core action beside Dump memory and inside Core dumps,
 choosing pause/capture/resume of a selected live process. Use validated guest
@@ -2924,7 +2923,7 @@ boot/task/start/TGID identity, a nonfatal bounded guest rendezvous and native EL
 notes, with truthful unavailable memory and independent repeated host captures.
 Do not use the exit-core rendezvous, kill the target, replay uncertain acquisition
 or add a guest helper. The revision-16 extension retains ABI9 and ordinary
-revision-15 exit captures; ANT-T0057 defines its accepted wire and lifecycle.
+revision-15 exit captures; the manual-core section defines its accepted wire and lifecycle.
 
 Summary uses native performance charts/meters with measured QEMU/host values,
 per-VM identity, bounded sample history and explicit unknown states. Guest RAM
@@ -2932,7 +2931,7 @@ utilization remains unavailable. Run program gains title dragging while preservi
 its initial viewport-limited size and final actions. Other debugger features and
 release/base publication remain separate.
 
-## Accepted ANT-T0056 process core and VM Summary update (0.6.0)
+## Accepted process core and VM Summary update (0.6.0)
 
 User authorized the planned 0.6.0 guest process-core-on-exit backlog and a native
 Summary tab immediately before Run History, showing VM status, health and
@@ -2954,7 +2953,7 @@ list on the left, selected evidence and analysis tabs on the right, and a separa
 import dialog. Waiting/unfinished entries, names/tags and lazy inspection remain
 available. This changes presentation only; core acquisition/recovery is unchanged.
 
-## Accepted ANT-T0055 host evidence update (0.5.0)
+## Accepted host evidence update (0.5.0)
 
 User authorized inspection, completion and release of current 0.5.0, with guest
 acquisition work deferred to 0.6.0. Static-analysis priority is result readability.
@@ -2975,11 +2974,11 @@ Isolated networking uses QEMU user networking with restrict=on, no forwarding,
 TFTP or SMB. Exact process core capture before exit, all-thread register freezing
 and pre-free memory capture require new guest support and remain 0.6.0 backlog.
 No guest rebuild is necessary for these host additions; already-built current
-0.5.0 bases are reused. The documentation acceptance record is ANT-T0055.
+0.5.0 bases are reused.
 
 ## Ownership
 
-### Accepted ANT-T0042 Update
+### Accepted 0.3.0 update
 
 User authorized local Antinomie 0.3.0 on 2026-10-09 and the usability follow-up
 on 2026-10-10. Capture All retains a per-process tree; revision-13 bases use
@@ -2993,11 +2992,10 @@ bounded scrollback. Details offer numeric copy formats and bounded captured-data
 windows; analysis displays ongoing progress. Optional guest-desktop launches
 join an already logged-in graphical session using the run's kernel-controlled
 process tree. No persistent guest helper or automatic login is introduced.
-The task record and resumption contract are ANT-T0042 in the documentation task
-directory. Product commits and binaries stay local until the user's testing;
+Product commits and binaries stay local until the user's testing;
 documentation publication is independent of that product-release decision.
 
-### Accepted ANT-T0033 Update
+### Accepted static-analysis results update
 
 User authorized the native static-analysis workspace redesign on 2026-10-08.
 One workspace is the default; selecting a category updates local results and
@@ -3005,11 +3003,11 @@ separate dockable section panes open only on explicit request. Typed available
 evidence drives searchable/sortable tables, selected details and bounded read-only
 specimen previews. Legacy generic reports remain readable. Acquisition, launch
 scope, engine availability, guest controls and V7 remain unchanged. No new analyzer
-dependency or guest image build is needed. The revision-1 result contract and
-acceptance record are ANT-T0033 in the documentation task directory. Development
+dependency or guest image build is needed. The revision-1 result contract is
+this update. Development
 and the rebuilt executable stay in feature/static-analysis pending integration.
 
-### Accepted ANT-T0025 Update
+### Accepted static-analysis launch update
 
 User authorized complete static-analysis acquisition/backend and launch setup
 on 2026-10-08. Run Program opens launch fields left, opt-in analysis checkboxes
@@ -3017,15 +3015,14 @@ right and a final Run button. Initial executable only; no descendant/later exec
 static acquisition. Triage plus optional deep analysis, local/no network default,
 exact initial guest exec-file acquisition with bounded wait, failure continues
 execution and reports unavailable. Retained reports reopen without rescanning.
-The frozen revision-1 implementation contract is in the documentation task
-directory, ANT-T0025 - Implementation Contract.md. Application control revision
+Application control revision
 10 adds optional specimen controls; V7 remains unchanged, revision-9 guests
 still launch with explicit analysis unavailable. Resource/isolation/compatibility
 limits and engine gaps must be recorded, not presented as complete clean scans.
 Development is isolated in feature/static-analysis; preserve concurrent dirty
 image-builder work and do not replace the normal executable before integration.
 
-### Accepted ANT-T0012 Update
+### Accepted display settings update
 
 User authorized saved per-VM guest/window resolution, fullscreen, fit-to-window,
 KVM/TCG acceleration and bounded CPU-model choices in New VM/settings. Typed
@@ -3038,10 +3035,9 @@ bounded owned-window X11/XWayland initial-size operation; fullscreen/headless
 paths need none. Existing x11rb/rustix packages provide safe display operations.
 New immutable bundles declare fixed_display capability; legacy hashes and user
 disks stay intact. No kernel/transport revision, guest helper or free-form QEMU
-arguments. Detailed revision 3 contract is ANT-T0012 in the documentation task
-directory.
+arguments. Revision 3 of the contract is this update.
 
-### Accepted ANT-T0015 Update
+### Accepted Debian Xfce fidelity update
 
 User found the Debian Xfce guest did not resemble a VM installed from the Debian
 ISO; analysis showed a `virt-builder debian-13` cloud template plus a curated
@@ -3054,10 +3050,9 @@ minimum. `openssh-server`, `qemu-guest-agent`, `spice-vdagent`, `cloud-init`,
 `cloud-guest-utils` and `linux-image-*` remain purged; root stays locked, no
 ordinary users exist in the base, `/dev/vda` remains the fstab root and the
 hostname stays `antinomie`. No kernel, transport or application change; existing
-bundles, VM disks and recordings are untouched. Task record is ANT-T0015 in the
-documentation task directory.
+bundles, VM disks and recordings are untouched.
 
-### Accepted ANT-T0014 Update
+### Accepted guest cursor update
 
 User reported that after the absolute-pointer fix the guest showed two cursors
 (the guest's software cursor plus the host pointer). The fixed-resolution path
@@ -3071,9 +3066,9 @@ VMware-like pointer. Both virtio-gpu and Bochs DRM use the `Virtual-1` virtual
 connector, so existing fixed-display bundles whose kernels build
 `DRM_VIRTIO_GPU=y` remain compatible. Image/bundle capability checks now require
 `DRM_VIRTIO_GPU` and `DRM_VIRTIO_GPU_KMS`. No kernel, transport or user-disk
-change. Task record is ANT-T0014 in the documentation task directory.
+change.
 
-### Accepted ANT-T0013 Update
+### Accepted guest pointer update
 
 User reported the guest mouse pointer stuck at the display center: clicks reached
 the guest but motion did not move the cursor. Cause is the QEMU GTK relative
@@ -3083,8 +3078,7 @@ attaching an absolute pointing device to all non-headless launches. Use
 controller) so the host pointer is tracked directly and never grabbed. The
 existing guest kernel already binds `CONFIG_VIRTIO_INPUT`, so this is a
 launch-argument change only: no kernel, transport, bundle or user-disk change.
-Headless launches are unaffected. Task record is ANT-T0013 in the documentation
-task directory.
+Headless launches are unaffected.
 
 ### Debian Minimal base (0.7.1)
 
@@ -3134,7 +3128,7 @@ staging directory, so files cross through mmdebstrap's `upload` and
 is made traversable (0711) in unshare mode. Builds before this ran only in the
 QEMU builder (`--mode=root`).
 
-### Accepted ANT-T0010 Update
+### Accepted Debian Xfce VM base update
 
 The user authorized full Debian userspace on 2026-10-06, selected Xfce and
 requested per-VM credential creation with password-protected sudo. Add Debian13
@@ -3156,15 +3150,12 @@ publishes replacement disk only after provisioning succeeds. Existing VMs are
 not automatically converted or modified.
 
 Image build uses authenticated Debian inputs and retains system account file
-ownership, package provenance and licenses. Full source task/API/check contract
-is `Agents/Tasks/ANT-T0010 - Debian Xfce VM Base.md` in the docs checkout. This
-does not complete ANT-T0009's remaining syscall/async semantics.
+ownership, package provenance and licenses. This
+does not complete the remaining syscall/async semantics of the native syscalls update below.
 
-### Accepted ANT-T0009 Update
+### Accepted full native syscalls and dockable workspace update
 
-The user approved these changes on 2026-10-06. The task record is
-`Agents/Tasks/ANT-T0009 - Full Native Syscalls and Dockable Workspace.md` in
-the documentation checkout. Earlier 30-syscall requirements remain historical,
+The user approved these changes on 2026-10-06. Earlier 30-syscall requirements remain historical,
 not the completion target for this update.
 
 - Cover all 375 named native `common`/`64` syscall slots in Linux 6.12.94.
@@ -3203,7 +3194,7 @@ kernel/core/UI ownership and an independent review gate. Do not claim the whole
 task delivered while native content/async cases remain unimplemented. Existing
 archives and per-VM disks are compatibility inputs, not disposable fixtures.
 
-### Accepted ANT-T0008 Update
+### Accepted native terminal windows update
 
 The user approved these changes on 2026-10-05:
 
@@ -3241,7 +3232,7 @@ The user approved these changes on 2026-10-05:
 - Cleanup removes old generated test VM disks/captures only after migration
   validation; kernel author/source trees, build inputs and executable remain.
 
-Core/UI workers freeze public run-addressed types before dependent rendering.
+Core and UI freeze public run-addressed types before dependent rendering.
 Core owns archive validation/paging and headless terminal persistence; UI uses
 owned API values and performs offline disk reads outside the rendering thread.
 Existing `vt100 0.15` may be used by core without adding a new external package.
@@ -3250,14 +3241,13 @@ is linked from the system and required upstream notices are retained.
 Run/session maps, previews, pages and queues remain bounded; new recording
 payloads count against the recording quota and preserve explicit failures.
 
-- Guest worker: kernel author tree work/debian-6.12.94-1-trixie/core, new guest
+- Guest: kernel patch series under src/antinomie/core, new guest
   protocol header src/antinomie/monitor/protocol/control.h, guest source manifest.
-- Host worker: src/antinomie/monitor/crates/monitor-core only, public backend API.
-- UI worker: src/antinomie/monitor/crates/monitor-ui only, depends on monitor-core.
-- Coordinator: workspace Cargo.toml, build/test/rootfs scripts, integration,
-  patch exports, final documentation. Workers must not commit outer repository.
-- No nested delegation, no wholesale refactor of transport. Return concise
-  changed files / tests / failures / outstanding work. Never invent test results.
+- Host: src/antinomie/monitor/crates/monitor-core only, public backend API.
+- UI: src/antinomie/monitor/crates/monitor-ui only, depends on monitor-core.
+- Workspace level: Cargo.toml, build/test/rootfs scripts, integration and patch
+  exports.
+- No wholesale refactor of transport.
 
 ## Telemetry protocol
 
@@ -3283,7 +3273,7 @@ Lifecycle hooks must follow descendants regardless of selected syscall number.
 
 ## Host/control contract
 
-Guest worker establishes protocol/control.h promptly and tells host worker
+The guest side establishes protocol/control.h promptly and tells the host side
 when ready. Opcodes: 0x1001 upload begin, 0x1002 upload chunk, 0x1003 commit,
 0x1004 abort, 0x1010 exec, 0x1011 terminal input, 0x1012 terminal read,
 0x1013 terminal resize, 0x1014 signal, 0x1020 recorder stats,
@@ -3294,7 +3284,7 @@ Persistent health/loss counters queryable even after telemetry loss.
 Rust backend runs blocking ant_init/poll/read on one owner thread. It exposes
 owned commands and bounded UI snapshots, handles reply matching and telemetry,
 and keeps collection/persistence independent of frontend frame rate. Shared
-public API types should be established early by host worker for UI worker.
+public API types should be established early by the host side for the UI.
 
 ## Verification
 
@@ -3303,11 +3293,6 @@ upload static test program/shell script, launch with UID/cwd/env, terminal I/O,
 entry/exit + buffer bytes, descendant execution, invalid pointers, telemetry
 overflow, disk persistence/reset and graceful/forced shutdown. Include CPU/RAM
 variants if feasible. Use actual measured results and record unavailable tests.
-
-All final docs in the separate documentation repository. Obsidian
-Mermaid. Declarations/arguments/returns in tables; executable source explained
-using short excerpts with actual filename/line numbers and prose below. Preserve
-unrelated v5 walkthrough edit. Coordinator commits/pushes docs after validation.
 
 ## Accepted snapshot and reconnect extension (0.5.0)
 

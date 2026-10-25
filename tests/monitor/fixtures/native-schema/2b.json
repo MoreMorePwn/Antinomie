@@ -1,5 +1,5 @@
 {
-  "contract": "native-schema-slices.md revision 3; expectations for the ANT-T0022 minimal kernel configuration",
+  "contract": "native-schema-slices.md revision 3; expectations for the minimal kernel configuration",
   "slice": "2b",
   "setup": {
     "notes": [
@@ -18,11 +18,11 @@
       "ptrace.getsigmask_badsize passes size 4; ptrace.peeksiginfo asks for one entry from the per-thread queue (the pending SIGUSR1)",
       "ptrace.get_thread_area reads TLS index 12; ptrace.arch_prctl_get_fs passes ARCH_GET_FS as data and the output pointer as addr",
       "keyctl cases use a 'user' key 'ant:probe' with payload 'secret-payload' added by add_key to the process keyring; read_query passes a NULL buffer",
-      "keyctl.dh_compute uses that key for all three parameters (CONFIG_KEY_DH_OPERATIONS=y since ANT-T0022; a user key's payload is not valid DH parameters, so EINVAL); pkey_query fails because user keys have no asymmetric operations; instantiate_iov fails without an authorization key",
+      "keyctl.dh_compute uses that key for all three parameters (CONFIG_KEY_DH_OPERATIONS=y in the minimal kernel configuration; a user key's payload is not valid DH parameters, so EINVAL); pkey_query fails because user keys have no asymmetric operations; instantiate_iov fails without an authorization key",
       "keyctl.join_session creates the session keyring 'ant-session' for the probe process only; keyctl.revoke revokes the probe key last",
       "sysfs.name uses the index returned by sysfs.index; bad_index is 9999; unknown uses option 9",
       "unknown selectors: prctl 0x7fffffff, ptrace 0x7fff, keyctl 0x7fff",
-      "prctl.get_tid_address succeeds because the minimal kernel enables CONFIG_CHECKPOINT_RESTORE (ANT-T0022); the probe main thread's clear_child_tid address is compared as observed"
+      "prctl.get_tid_address succeeds because the minimal kernel enables CONFIG_CHECKPOINT_RESTORE; the probe main thread's clear_child_tid address is compared as observed"
     ]
   },
   "cases": [

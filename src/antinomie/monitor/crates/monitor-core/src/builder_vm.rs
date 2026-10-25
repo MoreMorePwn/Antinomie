@@ -1,4 +1,4 @@
-//! QEMU base builder (ANT-T0028): builds a base inside a Debian VM so the host
+//! QEMU base builder: builds a base inside a Debian VM so the host
 //! needs only QEMU and curl.
 //!
 //! The builder boots Debian's official genericcloud image (its SHA-512 is taken

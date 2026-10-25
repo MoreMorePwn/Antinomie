@@ -146,7 +146,7 @@ only **Run in: App terminal**.
 
 ## Debian desktop base
 
-**Build base…** builds this base without a repository checkout (ANT-T0028).
+**Build base…** builds this base without a repository checkout.
 Natively it needs the kernel tool suite plus `mmdebstrap`, `uidmap` (and a
 subordinate UID range), `dwarves`, e2fsprogs 1.47.1 or newer and `qemu-utils`;
 the QEMU builder needs only QEMU and curl and downloads Debian's cloud image
@@ -439,14 +439,7 @@ Test outputs are disposable under `work/`; production application data is not.
 Set `ANTINOMIE_TEST_QUOTA_SIZE=1024` for the headless quota-cutoff scenario; use
 a fresh, short data path so its QMP Unix socket fits the system path limit.
 
-## Agent skills
-
-Root `AGENTS.md` defines shared conventions and skill routing. Rust workers read
-relevant `rust-skills` rules, the native UI worker also reads `frontend-design`,
-and the kernel worker reads the project-specific `antinomie-kernel` skill.
-`security-threat-model` is installed for explicit threat-model work, not run
-automatically as a substitute for behavioral tests. Keep local skills focused;
-read only the rules needed for the current responsibility.
+## Contract checks
 
 The kernel build runs `tests/monitor/check-contracts.sh` to reject drift between
 exported guest copies and the host transport/control contracts.

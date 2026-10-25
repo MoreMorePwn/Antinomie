@@ -1,6 +1,6 @@
 use std::{env, fs, path::Path};
 
-/// Repository files the app writes out as its base build kit (ANT-T0028), in
+/// Repository files the app writes out as its base build kit, in
 /// their repository layout.
 const KIT_FILES: &[&str] = &[
     "LICENSE",
