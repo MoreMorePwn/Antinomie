@@ -114,6 +114,10 @@ each component. Use the same release version as the product checkout.
 
 Edit the source. Put bulk code in **new files** under `kernel/antinomie/`;
 keep hooks into existing files small and in regions no distro patch touches.
+The series is one patch per topic
+([src/antinomie/patches/README.md](src/antinomie/patches/README.md)): a change
+to a topic that exists is a fixup of that topic's commit, re-exported as the
+README describes; a new topic is a new commit, exported as below.
 
 ```bash
 git add -p
@@ -124,13 +128,15 @@ Turn the commit into the durable artifacts and stage them:
 
 ```bash
 cd ~/src/antinomie
-scripts/commit.sh                    # prompts for DEP-3 headers
+scripts/commit.sh                    # exports the patch, regenerates the Quilt view
 ```
 
-The Quilt view lives beside the mail-format series in `src/antinomie/core/6.12`;
-`python3 scripts/sync-quilt-view.py` adds a view patch and its `series` line for
-any series patch that lacks one (`--check` only reports), so the view cannot fall
-behind a patch added another way.
+The mail-format series in `src/antinomie/core/6.12` is the canonical copy: the
+build applies and hashes it. The Quilt view beside it is generated from it;
+`python3 scripts/sync-quilt-view.py` rewrites the view (DEP-3 headers from the
+commit messages, the same diffs, `series` in order with its section comments
+kept) and `--check` only reports, so the view cannot fall out of step with a
+patch added or changed another way.
 
 Then verify it applies and builds in the disposable tree:
 
@@ -166,13 +172,21 @@ appended.
 
 ## 6. Patch conventions
 
-- **Naming:** `NNNN-antinomie-<slug>.patch`, numbered in application order.
-  `scripts/commit.sh` assigns the number.
+- **Topics:** one patch per part of the design, in dependency order; each
+  patch builds on the ones before it. Its commit message says what it adds,
+  why, which existing kernel files it hooks and why there, and the contract
+  revision, in plain English without ticket ids.
+- **Naming:** `NNNN-antinomie-<slug>.patch`, numbered in application order
+  (`git format-patch` truncates the canonical copy's names; the Quilt view
+  keeps the whole subject). `scripts/commit.sh` assigns the number.
 - **Ordering:** entries appear in `src/antinomie/patches/<adapter>/antinomie/series`
-  in the same order, and the fenced block in `debian/patches/series` is last.
-- **DEP-3 headers:** every patch carries `Description`, `Author`, `Origin`,
-  `Forwarded`, `Last-Update`, and `Bug`/CVE where applicable. `commit.sh`
-  prompts for these.
+  in the same order, under section comments, and the fenced block in
+  `debian/patches/series` is last.
+- **DEP-3 headers:** every Quilt patch carries `Description`, `Author`, `Origin`,
+  `Forwarded`, `Last-Update`, and `Bug`/CVE where applicable, generated from
+  the commit: the subject is `Description`, the body its long description, and
+  a last paragraph of `Origin:`, `Forwarded:` or `Bug:` lines sets those fields
+  (otherwise `Origin: project`, `Forwarded: no`).
 - **Minimality:** bulk code in new files under `kernel/antinomie/`; hooks into
   existing files (`arch/x86/entry/…`, `kernel/Makefile`, `kernel/Kconfig`,
   `mm/`) as small as possible.
