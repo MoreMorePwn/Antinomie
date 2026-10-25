@@ -3,6 +3,35 @@
 //! Report overview composed from cached run evidence, never from render-time I/O.
 use super::*;
 
+/// The status chip of a detector card. A scan waiting or running outranks an
+/// older result, so a card never says "Not scanned" while its engine is queued
+/// or being checked.
+fn scan_status(
+    activity: Option<detection::ScanActivity>,
+    result: Option<&Result<antinomie_monitor_core::analysis::detection::Report, String>>,
+) -> (&'static str, egui::Color32) {
+    if let Some(activity) = activity {
+        let color = if activity == detection::ScanActivity::Running {
+            theme::blue()
+        } else {
+            theme::muted()
+        };
+        return (activity.label(), color);
+    }
+    match result {
+        None => ("Not scanned", theme::muted()),
+        Some(Err(_)) => ("Failed", theme::error()),
+        Some(Ok(report)) => match report.state {
+            State::Complete => ("Complete", theme::blue()),
+            State::Partial => ("Partial", theme::warn()),
+            State::Unavailable => ("Unavailable", theme::muted()),
+            State::NoRules => ("No rules enabled", theme::warn()),
+            State::Missing => ("Evidence missing", theme::warn()),
+            State::Skipped => ("Skipped", theme::muted()),
+        },
+    }
+}
+
 fn detector(
     ui: &mut egui::Ui,
     view: &TriageView,
@@ -14,18 +43,8 @@ fn detector(
         .fill(theme::panel())
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            let (status, color) = match &view.detection.results[index] {
-                None => ("Not scanned", theme::muted()),
-                Some(Err(_)) => ("Failed", theme::error()),
-                Some(Ok(report)) => match report.state {
-                    State::Complete => ("Complete", theme::blue()),
-                    State::Partial => ("Partial", theme::warn()),
-                    State::Unavailable => ("Unavailable", theme::muted()),
-                    State::NoRules => ("No rules enabled", theme::warn()),
-                    State::Missing => ("Evidence missing", theme::warn()),
-                    State::Skipped => ("Skipped", theme::muted()),
-                },
-            };
+            let activity = view.detection.scan_activity(index);
+            let (status, color) = scan_status(activity, view.detection.results[index].as_ref());
             if compact {
                 return ui
                     .horizontal_wrapped(|ui| {
@@ -86,9 +105,13 @@ fn detector(
             } else {
                 ui.label(RichText::new("—").size(27.0).color(theme::muted()));
                 ui.label(
-                    RichText::new("No evaluated result")
-                        .small()
-                        .color(theme::muted()),
+                    RichText::new(match activity {
+                        Some(detection::ScanActivity::Running) => "Scan in progress",
+                        Some(detection::ScanActivity::Queued) => "Waiting for its turn",
+                        None => "No evaluated result",
+                    })
+                    .small()
+                    .color(theme::muted()),
                 );
             }
             ui.horizontal_wrapped(|ui| {
@@ -493,4 +516,32 @@ pub(super) fn content(
         view.open_graph_window(ui.ctx());
     }
     destination
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use detection::ScanActivity;
+
+    #[test]
+    fn a_card_does_not_say_not_scanned_while_its_scan_waits_or_runs() {
+        assert_eq!(scan_status(None, None).0, "Not scanned");
+        assert_eq!(
+            scan_status(Some(ScanActivity::Queued), None).0,
+            "Queued",
+            "waiting for its turn"
+        );
+        assert_eq!(
+            scan_status(Some(ScanActivity::Running), None).0,
+            "Scanning",
+            "being checked"
+        );
+        // A scan waiting or running outranks an older failed result.
+        let failed = Err("boom".to_owned());
+        assert_eq!(scan_status(None, Some(&failed)).0, "Failed");
+        assert_eq!(
+            scan_status(Some(ScanActivity::Running), Some(&failed)).0,
+            "Scanning"
+        );
+    }
 }
