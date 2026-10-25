@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! The abuse.ch tab of the IDS engine in the Rule manager: six Suricata packs
+//! The abuse.ch tab of the IDS engine in the Rule manager: five Suricata packs
 //! abuse.ch regenerates about every five minutes, with a check for updates
 //! (which never asks a pack more often than every five minutes), the age of
 //! what is installed, and an update on demand.
@@ -58,7 +58,8 @@ impl Model {
         );
         self.notices(ui, outbound);
         ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("abuse.ch Auth-Key").color(theme::muted()));
+            ui.label(RichText::new("abuse.ch Auth-Key").color(theme::muted()))
+                .on_hover_text("ThreatFox and URLhaus need it; Feodo Tracker and SSLBL do not.");
             if has_key {
                 ui.colored_label(theme::good(), format!("set ({})", api_keys::masked(&key)));
             } else {
@@ -67,7 +68,6 @@ impl Model {
             if ui.button("API keys…").clicked() {
                 self.requested = Some(super::RulesAction::ApiKeys);
             }
-            ui.weak("ThreatFox and URLhaus need it; Feodo Tracker and SSLBL do not.");
         });
         let busy = self.job.is_some();
         if !self.live.note.is_empty() {
@@ -372,7 +372,7 @@ mod tests {
     };
 
     const SIZE: egui::Vec2 = egui::vec2(1300.0, 1100.0);
-    const SIP: &str = "# abuse.ch SSLBL botnet C2 IP rules (fixture)\n# Last updated: 2026-10-22 10:15:00 UTC\n\
+    const SIP: &str = "# abuse.ch Feodo Tracker botnet C2 IP rules (fixture)\n# Last updated: 2026-10-22 10:15:00 UTC\n\
 alert tls $HOME_NET any -> [203.0.113.45] 443 (msg:\"ABUSE.ch Botnet C2 (Gafgyt)\"; flow:established,to_server; sid:902202; rev:1;)\n\
 alert tls $HOME_NET any -> [198.51.100.23] 8443 (msg:\"ABUSE.ch Botnet C2 (QakBot)\"; flow:established,to_server; sid:902203; rev:1;)\n";
 
@@ -464,7 +464,7 @@ alert tls $HOME_NET any -> [198.51.100.23] 8443 (msg:\"ABUSE.ch Botnet C2 (QakBo
     }
 
     #[test]
-    fn the_ids_engine_lists_the_six_packs_and_fetches_nothing_by_looking() {
+    fn the_ids_engine_lists_the_five_packs_and_fetches_nothing_by_looking() {
         let mut fixture = Fixture::new("list");
         fixture.frame();
         let shown = fixture.frame();
@@ -484,16 +484,16 @@ alert tls $HOME_NET any -> [198.51.100.23] 8443 (msg:\"ABUSE.ch Botnet C2 (QakBo
         let dir = fixture.dir.clone();
         fixture
             .model
-            .live_run(&dir, true, Some("abuse-ch-sslbl-ip"), true);
+            .live_run(&dir, true, Some("abuse-ch-feodo"), true);
         let shown = fixture.until("installed with 2 rules");
-        assert!(shown.contains("abuse.ch SSLBL botnet C2 IPs"), "{shown}");
+        assert!(shown.contains("abuse.ch Feodo Tracker"), "{shown}");
         let shown = fixture.until("Up to date");
         assert!(shown.contains("Up to date"), "{shown}");
         assert_eq!(fixture.server.calls.lock().unwrap().len(), 1);
         // A check straight after reuses the answer: no second request.
         fixture
             .model
-            .live_run(&dir, true, Some("abuse-ch-sslbl-ip"), false);
+            .live_run(&dir, true, Some("abuse-ch-feodo"), false);
         let shown = fixture.until("at most once in five minutes");
         assert!(shown.contains("checked"), "{shown}");
         assert_eq!(fixture.server.calls.lock().unwrap().len(), 1);

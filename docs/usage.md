@@ -47,11 +47,11 @@ application and base versions; existing VMs keep their pinned base.
 - **Tools > Detection rules > IOC** keeps abuse.ch datasets on your computer
   for matching a run's indicators offline: ThreatFox `full.csv`, the URLhaus
   dump (`full.csv`, the URLs that are active or were added in the last 90 days)
-  and payload list, Feodo Tracker's `ipblocklist.json` and the SSLBL IP, JA3 and
-  certificate lists, which are seven on by default. An eighth, URLhaus
+  and payload list, Feodo Tracker's `ipblocklist.json` and the SSLBL JA3 and
+  certificate lists, which are six on by default. A seventh, URLhaus
   `recent.csv` (the last 30 days), is a smaller choice that is off until you
   switch it on. They are stored in the data folder (about 640 MB together for
-  the seven), never in the project, and change only when you press
+  the six), never in the project, and change only when you press
   **Download** or **Update** (or **Download / Update all**); nothing updates by
   itself. Each row shows its records, size, the date it was fetched and its age
   (a warning appears when a dataset is over 14 days old), its terms (Feodo and
@@ -63,20 +63,21 @@ application and base versions; existing VMs keep their pinned base.
   keys**, or get a free one at auth.abuse.ch); if it answers that the endpoint
   is retired or the file is not there (HTTP 410 or 404) the line says to update
   Antinomie, and a slow-down or server error says to try again later. A dataset
-  that needs the key is refused before any request when none is set. abuse.ch
-  now serves the SSLBL IP list with its header and no entries; Antinomie keeps
-  that as a copy of no records and the row says **Retired upstream**, instead of
-  reporting a failed download (any other empty or non-list answer still fails).
-  The Auth-Key is part of the address abuse.ch serves its ThreatFox
+  that needs the key is refused before any request when none is set. Run
+  endpoints are matched against IP addresses from Feodo Tracker (botnet C2
+  IP:port), ThreatFox (`ip:port` indicators) and URLhaus (URLs and hosts that
+  are IP addresses); abuse.ch retired the SSLBL IP list, so Antinomie no longer
+  offers it, and a copy left on disk by an earlier version is ignored and
+  removed by the next update. The Auth-Key is part of the address abuse.ch serves its ThreatFox
   and URLhaus files from, so Antinomie hands the address to the download
   program out of sight of other users of the computer, and shows it everywhere
   as `/exports/****/`; the key does not appear in the details, the status line,
   an error or a saved report. The same tab lists the **known false positives**
   you have marked, which you can remove.
 
-- **Tools > Detection rules > IDS > abuse.ch** offers six Suricata rule packs from
+- **Tools > Detection rules > IDS > abuse.ch** offers five Suricata rule packs from
   abuse.ch: ThreatFox, URLhaus (exact-URL HTTP rules), Feodo Tracker, SSLBL
-  botnet C2 IPs, SSLBL JA3 fingerprints and the SSL certificate blacklist. The
+  JA3 fingerprints and the SSL certificate blacklist. The
   *aggressive* variants, which abuse.ch itself warns produce false positives,
   are not offered. abuse.ch regenerates these files about every five minutes, so
   the tab shows how old each installed pack is and **Check** compares the live
@@ -84,10 +85,9 @@ application and base versions; existing VMs keep their pinned base.
   if you press the button again); **Update** installs the newest snapshot and
   keeps the old version if it fails. ThreatFox and URLhaus need the Auth-Key in
   **Tools > API keys** (they are sent as `.tar.gz` archives, from which only the
-  `.rules` files are taken); Feodo and SSLBL are CC0 and need none. abuse.ch
-  no longer fills the SSLBL JA3 rules file or the SSLBL botnet C2 IP file, so
-  those packs show **Retired upstream** and cannot be installed; the JA3 list is
-  still available as an IOC dataset and Feodo Tracker lists botnet C2 IPs.
+  `.rules` files are taken); Feodo and SSLBL are CC0 and need none. When
+  abuse.ch serves the SSLBL JA3 rules file empty, that pack shows **Retired
+  upstream** and cannot be installed; the JA3 list is also an IOC dataset.
   Nothing is fetched until you press a button and have allowed downloads.
 
 ## 1. Get a base image
@@ -176,7 +176,7 @@ packet history already has it, and specimen Content supports a byte-offset jump.
 5. **Static Analysis** in the launch dialog analyzes the program's file before
    it runs; pick the categories, from triage to disassembly and decompilation.
    **Strings** and **Regex matches** are two choices (Triage, on by default): the
-   regex patterns are matched over the strings and listed in the Strings & regex
+   regex patterns are matched over the strings and listed in the Regex matches
    tab, which needs Strings or FLOSS strings. **Unpacking** (Triage, on by default) looks for UPX packing; a packed file is unpacked
    (without ever running it) and the result is a **layer** with its own hash and
    its own static analysis. See **Static Analysis > Unpacking** below.
@@ -489,8 +489,8 @@ The network capture is the guest's own view on every route.
 - **Static Analysis**: a **Run** button beside the file's hash opens the run the
   report belongs to in Run History. The selected run's report: an overview, then each
   category; disassembly and decompilation are full listings with search. The
-  **Strings & regex** tab lists the strings on the left and, on the right (below
-  them in a narrow pane), a **Regex matches** pane with every
+  **Strings** tab lists the strings, and the separate **Regex matches** tab
+  (also an Overview category, and it opens in its own pane) shows every
   pattern match in the Strings and FLOSS strings, by category (Network, Crypto, Keys, Linux
   behaviour, Attribution, Encoded) with a type for each match (IPv4 public or
   private, URL, Bitcoin address, persistence path, ...). Matches are checked to

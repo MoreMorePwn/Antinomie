@@ -1317,9 +1317,10 @@ Host only. Core: `monitor-core/src/strings_regex/`; view: `monitor-ui/src/regex_
   holds the switched-off ids and up to 200 custom patterns (2,048 characters each,
   compiled with the same limits before they are saved). The Detection rules page has a
   Strings regex tab with the switches, the custom patterns and a "Try on" field.
-* **Placement.** Static analysis draws `RegexWindow::pane` on the right of the Strings &
-  regex tab (`workspace/tabs.rs`, a `SidePanel`; a bottom panel under 900 points). The
-  pane asks for its scan once per report (`WorkspaceState::take_regex_request`, taken by
+* **Placement.** Static analysis draws `RegexWindow::pane` in its own Regex matches tab
+  (`workspace/tabs.rs::regex_view`; the same view fills a separate pane opened from the
+  category list, and the tab stays enabled when the check was not requested so it can
+  offer Run). The tab asks for its scan once per report (`WorkspaceState::take_regex_request`, taken by
   `app/panels.rs` as `ReportAction::ScanRegex`) when a Strings or FLOSS section is
   done **and** the report has a Regex section (`AnalysisKind::Regex`, "Regex matches",
   a Triage check after Strings that needs Strings or FLOSS, `AnalysisSelection::validate`).
@@ -1327,8 +1328,11 @@ Host only. Core: `monitor-core/src/strings_regex/`; view: `monitor-ui/src/regex_
   matches themselves are read with the patterns as they are when the tab opens. A report
   without it (one made before 0.7.1's change, or with the check off) shows "Regex matches
   are not part of this analysis" and a **Run** button (`ReportAction::RunCheck`); the
-  Overview's Categories lists Regex beside Strings and opens the Strings tab for it.
+  Overview's Categories lists Regex beside Strings and opens the Regex matches tab for it.
   Core dumps keep the floating window (`show`) behind **Regex matches…**.
+  A saved `AnalysisSelection` is read through `SelectionWire`: one without the
+  `regex_split` mark that lists Strings or FLOSS gets Regex added once, and it is
+  written back with the mark, so unchecking Regex later sticks.
 * **Scan.** The scan runs on a worker thread; reopening a report whose scan
   exists shows it as it was, **Scan again** rereads the configuration. A pattern that
   does not compile is listed in the window and skipped.
@@ -1423,8 +1427,8 @@ Host only. `monitor-core/src/ioc/` holds the datasets; `monitor-ui/src/rules_win
 is the IOC tab of Tools > Detection rules; `monitor-core/src/known_fp.rs` is the
 false-positive list.
 
-* **Feeds.** `feeds.rs` has the table of eight (`threatfox`, `urlhaus`,
-  `urlhaus-payloads`, `feodo`, `sslbl-ip`, `sslbl-ja3`, `sslbl-cert`,
+* **Feeds.** `feeds.rs` has the table of seven (`threatfox`, `urlhaus`,
+  `urlhaus-payloads`, `feodo`, `sslbl-ja3`, `sslbl-cert`,
   `urlhaus-recent`): URL, usual size, terms, whether the download needs the
   Auth-Key (ThreatFox, URLhaus, the payload list and the recent list do) and
   whether it is on by default (`urlhaus-recent` is not, so `update_all` and the
@@ -1449,8 +1453,8 @@ false-positive list.
   `meta.json` is replaced atomically; older data files are removed last. A
   failure or cancel leaves the previous copy and `meta.json` untouched, records
   the reason in `last-error.json` (stored URLs and messages carry `****` for the
-  key) and is reported by name (`Updated 6 of 7.
-  Failed: SSLBL IP: …; the previous copy was kept`). Free space for the download
+  key) and is reported by name (`Updated 5 of 6.
+  Failed: SSLBL JA3: …; the previous copy was kept`). Free space for the download
   and the text is checked first. A dataset over 14 days old is flagged
   (`FeedMeta::stale`).
 * **Parsing.** `records.rs` reads each feed as a stream, finding columns by the
@@ -1478,7 +1482,7 @@ Host only. `monitor-core/src/ruleset/abusech.rs` and `monitor-ui/src/rules_windo
 * **Packs.** `LIVE_PACKS`: `abuse-ch-threatfox` (`threatfox_suricata.tar.gz`) and
   `abuse-ch-urlhaus` (`urlhaus_ids.tar.gz`), both under
   `…-api.abuse.ch/v2/files/exports/<key>/` (Auth-Key),
-  `abuse-ch-feodo`, `abuse-ch-sslbl-ip`, `abuse-ch-sslbl-ja3` and
+  `abuse-ch-feodo`, `abuse-ch-sslbl-ja3` and
   `abuse-ch-sslbl` (the certificate pack that was already in the catalog, same
   id). Each is a `SourcePack` for the `ids` engine built from the file that was
   just downloaded, so it goes through `install_source` like any pack (filter,
@@ -1499,17 +1503,16 @@ Host only. `monitor-core/src/ruleset/abusech.rs` and `monitor-ui/src/rules_windo
   error. The members are joined in name order into one rules text, and that
   text is what is cached, pinned and installed (so the pin and the `file`
   format below are unchanged). Nothing is ever written under a member's name.
-* **Retired pack.** `retired_if_empty` marks the SSLBL JA3 pack (abuse.ch still
-  serves `ja3_fingerprints.csv`, the IOC dataset, but `ja3_fingerprints.rules`
-  is empty) and the SSLBL botnet C2 IP pack (`sslipblacklist.rules` and the
-  `.csv` hold a header and no entries; abuse.ch has not changed them since
-  2026-06-30). `ioc::feeds::Feed::retired_if_empty` does the same for the IOC dataset
-  `sslbl-ip`: a header-only file under 64 KiB is stored as a copy of no records
-  (`FeedStatus::retired`, shown as "Retired upstream") and counts as updated; HTML or
-  any other text without records is still "the file holds no records". For those packs an empty or comment-only file is a valid answer with
-  0 rules (HTML or other text is still an error); `live_states` reports
-  `LiveStatus::Retired`, the tab shows "Retired upstream" with the install
-  buttons off, and `install_live` returns a message rather than installing.
+* **Retired pack.** `retired_if_empty` marks the SSLBL JA3 pack: if abuse.ch
+  serves `ja3_fingerprints.rules` empty, an empty or comment-only file is a
+  valid answer with 0 rules (HTML or other text is still an error);
+  `live_states` reports `LiveStatus::Retired`, the tab shows "Retired
+  upstream" with the install buttons off, and `install_live` returns a message
+  rather than installing. The SSLBL IP list (`sslipblacklist.csv`/`.rules`,
+  header only since 2026-06-30) has no dataset and no pack; a stored copy under
+  `ioc/feeds/sslbl-ip/` is ignored and `update_all` removes it
+  (`feeds::remove_withdrawn`). IP matching comes from `feodo`, `threatfox`
+  `ip:port` and `urlhaus` (URLs and IP hosts).
 * **Check and update.** `check_live` downloads the file into staging, unpacks
   it, refuses anything without a rule line, keeps it as `rules/live/<id>.rules` and records
   `{at, sha256, size, stamp, rules}` in `rules/live/checks.json`. A pack is not
@@ -1586,7 +1589,7 @@ Host only. Core: `monitor-core/src/ioc/` (`indicator`, `verdict`, `online`,
   can answer for the type (`coverage`), the hits, the known false positives
   (`known_fp::find`, an entry for a dataset excuses only that dataset) and any
   online answers; the date is that of the oldest feed that answered (the feed that
-  matched, for a match). A TLS row needs an SSLBL feed. The answer is cached in
+  matched, for a match). A TLS row needs an SSLBL feed (JA3 or certificate). The answer is cached in
   `ScanRequest::ioc_cache` under a key of the wanted values and the datasets'
   `(id, fetch time, switch)` list, so the 5-second refresh of a live run does not
   read the feeds again; a dataset update, a false-positive entry or an online

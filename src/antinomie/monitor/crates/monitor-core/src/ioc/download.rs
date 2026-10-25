@@ -26,8 +26,6 @@ const STALE_STAGING: Duration = Duration::from_secs(24 * 3600);
 const ZIP_MAGIC: &[u8] = b"PK\x03\x04";
 /// Entries a feed's zip may hold; the feeds send one file.
 const MAX_ZIP_ENTRIES: usize = 64;
-/// The most a retired list may hold and still be taken for a header alone.
-const RETIRED_MAX_SIZE: u64 = 64 * 1024;
 
 /// What an update of one feed ended with.
 #[derive(Debug)]
@@ -207,11 +205,7 @@ fn update_inner(
         let (size, sha256) = unpack(&download, &text, feed)?;
         let _ = fs::remove_file(&download);
         let scanned = records::count(&text, feed, cancel)?;
-        // A list abuse.ch has stopped filling is a header and nothing more.
-        // That is its answer, kept as a copy of no records, so Antinomie says
-        // so and the feed stops failing; a file of anything else is refused.
-        let retired = feed.retired_if_empty && scanned.skipped == 0 && size < RETIRED_MAX_SIZE;
-        if scanned.records == 0 && !retired {
+        if scanned.records == 0 {
             return Err("the file holds no records".into());
         }
         if scanned.skipped > scanned.records {
@@ -267,6 +261,7 @@ pub fn update_all(
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(&str),
 ) -> Vec<Outcome> {
+    feeds::remove_withdrawn(data_dir);
     let statuses = feeds::status(data_dir);
     let total = statuses.iter().filter(|status| status.enabled).count();
     let mut outcomes = Vec::new();
@@ -394,7 +389,6 @@ mod tests {
             .with("urlhaus", Ok(zip_of("csv.txt", URLHAUS)))
             .with("urlhaus-payloads", Ok(PAYLOADS.as_bytes().to_vec()))
             .with("feodo", Ok(FEODO.as_bytes().to_vec()))
-            .with("sslbl-ip", Ok(SSLBL_IP.as_bytes().to_vec()))
             .with("sslbl-ja3", Ok(SSLBL_JA3.as_bytes().to_vec()))
             .with("sslbl-cert", Ok(SSLBL_CERT.as_bytes().to_vec()))
     }
@@ -406,12 +400,12 @@ mod tests {
         let dir = data_dir("all");
         let cancel = AtomicBool::new(false);
         let outcomes = update_all(&dir, &key(), &all_fixtures(), &cancel, &mut quiet);
-        assert_eq!(outcomes.len(), 7);
+        assert_eq!(outcomes.len(), 6);
         assert!(
             outcomes.iter().all(|outcome| outcome.result.is_ok()),
             "{outcomes:?}"
         );
-        assert_eq!(summary(&outcomes), "Updated 7 datasets.");
+        assert_eq!(summary(&outcomes), "Updated 6 datasets.");
         let statuses = feeds::status(&dir);
         let threatfox = &statuses[0];
         let meta = threatfox.meta.as_ref().unwrap();
@@ -462,16 +456,16 @@ mod tests {
         let first = update_all(&dir, &key(), &all_fixtures(), &cancel, &mut quiet);
         assert!(first.iter().all(|outcome| outcome.result.is_ok()));
         let before = feeds::status(&dir)[4].meta.clone().unwrap();
-        // SSLBL IP now fails; the others succeed with new content.
+        // SSLBL JA3 now fails; the others succeed with new content.
         let mut broken = all_fixtures();
         broken.serve.insert(
-            "sslbl-ip".into(),
+            "sslbl-ja3".into(),
             Err("download failed: Could not resolve host".into()),
         );
         let second = update_all(&dir, &key(), &broken, &cancel, &mut quiet);
         let text = summary(&second);
         assert!(
-            text.starts_with("Updated 6 of 7. Failed: SSLBL IP:"),
+            text.starts_with("Updated 5 of 6. Failed: SSLBL JA3:"),
             "{text}"
         );
         assert!(text.contains("the previous copy was kept"), "{text}");
@@ -491,7 +485,7 @@ mod tests {
         assert!(
             fs::read_to_string(feeds::data_path(&dir, after.feed).unwrap())
                 .unwrap()
-                .contains("203.0.113.45")
+                .contains("f6d64cbcb6dead5e8e864400f056fa32")
         );
         // A later success clears the failure.
         let third = update_all(&dir, &key(), &all_fixtures(), &cancel, &mut quiet);
@@ -507,7 +501,7 @@ mod tests {
         let feed = feeds::feed("sslbl-cert").unwrap();
         let good = Mock::default().with("sslbl-cert", Ok(SSLBL_CERT.as_bytes().to_vec()));
         update_feed(&dir, feed, &Secret::default(), &good, &cancel, &mut quiet).unwrap();
-        let before = feeds::status(&dir)[6].meta.clone().unwrap();
+        let before = feeds::status(&dir)[5].meta.clone().unwrap();
         for body in [
             b"<html><body>429 Too Many Requests</body></html>".to_vec(),
             Vec::new(),
@@ -518,7 +512,7 @@ mod tests {
             let error =
                 update_feed(&dir, feed, &Secret::default(), &bad, &cancel, &mut quiet).unwrap_err();
             assert!(error.starts_with("SSLBL certificates:"), "{error}");
-            assert_eq!(feeds::status(&dir)[6].meta.as_ref(), Some(&before));
+            assert_eq!(feeds::status(&dir)[5].meta.as_ref(), Some(&before));
         }
         let leftovers: Vec<_> = fs::read_dir(feeds::feed_dir(&dir, feed))
             .unwrap()
@@ -541,11 +535,11 @@ mod tests {
             .filter(|outcome| outcome.result.is_ok())
             .map(|outcome| outcome.feed.id)
             .collect();
-        assert_eq!(ok, ["feodo", "sslbl-ip", "sslbl-ja3", "sslbl-cert"]);
+        assert_eq!(ok, ["feodo", "sslbl-ja3", "sslbl-cert"]);
         let calls = mock.calls.borrow();
         assert_eq!(
             calls.len(),
-            4,
+            3,
             "no request for a feed that needs the key: {calls:?}"
         );
         let text = summary(&outcomes);
@@ -563,7 +557,7 @@ mod tests {
         assert!(feeds::set_enabled(&dir, "nope", false).is_err());
         let mock = all_fixtures();
         let outcomes = update_all(&dir, &key(), &mock, &AtomicBool::new(false), &mut quiet);
-        assert_eq!(outcomes.len(), 6);
+        assert_eq!(outcomes.len(), 5);
         assert!(outcomes.iter().all(|outcome| outcome.feed.id != "feodo"));
         let status = &feeds::status(&dir)[3];
         assert!(!status.enabled && status.meta.is_none() && !status.usable());
@@ -794,41 +788,13 @@ mod tests {
     }
 
     #[test]
-    fn the_emptied_sslbl_ip_list_is_kept_as_a_copy_of_no_records_not_failed() {
+    fn a_header_only_file_or_a_page_is_refused_not_kept() {
         let header = "################################################################\n\
-                      # abuse.ch SSLBL IP Blacklist (CSV)\n\
+                      # abuse.ch SSLBL Certificate Blacklist (CSV)\n\
                       # Last updated: 2026-06-30 04:53:19 UTC\n\
                       ################################################################\n\
-                      # Firstseen,DstIP,DstPort\n";
+                      # Listingdate,SHA1,Listingreason\n";
         let dir = data_dir("emptied");
-        let feed = feeds::feed("sslbl-ip").unwrap();
-        let mock = Mock::default().with("sslbl-ip", Ok(header.as_bytes().to_vec()));
-        let meta = update_feed(
-            &dir,
-            feed,
-            &Secret::default(),
-            &mock,
-            &AtomicBool::new(false),
-            &mut quiet,
-        )
-        .unwrap();
-        assert_eq!(meta.records, 0);
-        let status = feeds::status(&dir)
-            .into_iter()
-            .find(|status| status.feed.id == "sslbl-ip")
-            .unwrap();
-        assert!(status.retired() && status.last_error.is_none());
-        // It is in "Updated 7 datasets" with the others, not among the failures.
-        let outcomes = update_all(
-            &dir,
-            &key(),
-            &all_fixtures().with("sslbl-ip", Ok(header.as_bytes().to_vec())),
-            &AtomicBool::new(false),
-            &mut quiet,
-        );
-        assert_eq!(summary(&outcomes), "Updated 7 datasets.");
-        // The same header from a feed abuse.ch still fills is still refused,
-        // and so is a page where the list should be.
         let cert = feeds::feed("sslbl-cert").unwrap();
         let mock = Mock::default().with("sslbl-cert", Ok(header.as_bytes().to_vec()));
         let error = update_feed(
@@ -842,12 +808,12 @@ mod tests {
         .unwrap_err();
         assert!(error.contains("the file holds no records"), "{error}");
         let page = Mock::default().with(
-            "sslbl-ip",
+            "sslbl-cert",
             Ok(b"<html><body>429 Too Many Requests</body></html>".to_vec()),
         );
         let error = update_feed(
             &dir,
-            feed,
+            cert,
             &Secret::default(),
             &page,
             &AtomicBool::new(false),
@@ -935,7 +901,7 @@ mod tests {
         let dir = data_dir("recent");
         let mock = all_fixtures().with("urlhaus-recent", Ok(URLHAUS.as_bytes().to_vec()));
         let outcomes = update_all(&dir, &key(), &mock, &AtomicBool::new(false), &mut quiet);
-        assert_eq!(outcomes.len(), 7);
+        assert_eq!(outcomes.len(), 6);
         assert!(
             outcomes
                 .iter()
@@ -943,7 +909,7 @@ mod tests {
         );
         feeds::set_enabled(&dir, "urlhaus-recent", true).unwrap();
         let outcomes = update_all(&dir, &key(), &mock, &AtomicBool::new(false), &mut quiet);
-        assert_eq!(outcomes.len(), 8);
+        assert_eq!(outcomes.len(), 7);
         let recent = outcomes.last().unwrap();
         assert_eq!(recent.feed.id, "urlhaus-recent");
         assert!(recent.result.is_ok(), "{:?}", recent.result);

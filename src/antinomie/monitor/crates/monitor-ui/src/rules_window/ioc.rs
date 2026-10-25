@@ -84,7 +84,8 @@ impl Model {
         );
         self.notices(ui, outbound);
         ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("abuse.ch Auth-Key").color(theme::muted()));
+            ui.label(RichText::new("abuse.ch Auth-Key").color(theme::muted()))
+                .on_hover_text("ThreatFox and URLhaus need it; Feodo Tracker and SSLBL do not.");
             match &self.ioc.key_masked {
                 Some(masked) => ui.colored_label(theme::good(), format!("set ({masked})")),
                 None => ui.colored_label(theme::warn(), "not set"),
@@ -92,7 +93,6 @@ impl Model {
             if ui.button("API keys…").clicked() {
                 self.requested = Some(super::RulesAction::ApiKeys);
             }
-            ui.weak("ThreatFox and URLhaus need it; Feodo Tracker and SSLBL do not.");
         });
         let now = ioc::feeds::now_unix();
         self.ioc_stale_banner(ui, now);
@@ -483,7 +483,6 @@ fn state_chip(status: &FeedStatus, now: u64) -> (&'static str, Tone) {
         (None, true, _) => ("Failed to download", Tone::Warn),
         (None, false, _) => ("Not downloaded", Tone::Neutral),
         (Some(_), true, _) => ("Update failed", Tone::Warn),
-        (Some(_), false, _) if status.retired() => ("Retired upstream", Tone::Neutral),
         (Some(meta), false, _) if meta.stale(now) => ("Old", Tone::Warn),
         (Some(_), false, _) => ("Loaded", Tone::Good),
     }
@@ -502,37 +501,11 @@ mod tests {
 
     const SIZE: egui::Vec2 = egui::vec2(1200.0, 1100.0);
 
-    #[test]
-    fn the_emptied_sslbl_ip_list_reads_retired_upstream_and_a_filled_one_loaded() {
-        let now = ioc::feeds::now_unix();
-        let status = |id: &str, records: u64| FeedStatus {
-            feed: ioc::feeds::feed(id).unwrap(),
-            meta: Some(ioc::feeds::FeedMeta {
-                records,
-                fetched_unix: now,
-                ..Default::default()
-            }),
-            enabled: true,
-            last_error: None,
-        };
-        assert_eq!(
-            state_chip(&status("sslbl-ip", 0), now),
-            ("Retired upstream", Tone::Neutral)
-        );
-        assert_eq!(
-            state_chip(&status("sslbl-ip", 4), now),
-            ("Loaded", Tone::Good)
-        );
-        // Another feed with no records is not called retired.
-        assert!(!status("sslbl-cert", 0).retired());
-    }
-
     // Small files in the feeds' real formats, with reserved example values.
     const THREATFOX: &str = "# \"first_seen_utc\", \"ioc_id\", \"ioc_value\", \"ioc_type\", \"threat_type\", \"fk_malware\", \"malware_alias\", \"malware_printable\", \"last_seen_utc\", \"confidence_level\"\n\"2026-09-02 10:11:12\", \"1831204\", \"203.0.113.45:443\", \"ip:port\", \"botnet_cc\", \"elf.mirai\", \"\", \"Mirai\", \"\", \"75\"\n";
     const URLHAUS: &str = "# id,dateadded,url,url_status,last_online,threat,tags\n\"1\",\"2026-10-11 08:00:00\",\"http://198.51.100.77/x\",\"online\",\"\",\"malware_download\",\"mirai\"\n";
     const PAYLOADS: &str = "# firstseen,url,filetype,md5,sha256,signature\n\"2026-10-11 08:00:02\",\"http://x.example/a\",\"elf\",\"87221652a79fc3c9b04cde0b335fdd5b\",\"f66025c51e65b02ffdaf55ea9460656a0b79598cb7db1514dc7a23a81b4cf1aa\",\"Mirai\"\n";
     const FEODO: &str = "[{\"ip_address\":\"203.0.113.45\",\"port\":443,\"status\":\"online\",\"first_seen\":\"2026-08-01 00:00:00\",\"malware\":\"Dridex\"},{\"ip_address\":\"198.51.100.23\",\"port\":8443,\"status\":\"offline\",\"malware\":\"QakBot\"}]";
-    const SSLBL_IP: &str = "# Firstseen,DstIP,DstPort\n2026-08-19 10:00:00,203.0.113.45,443\n";
     const SSLBL_JA3: &str = "# ja3_md5,Firstseen,Lastseen,Listingreason\nf6d64cbcb6dead5e8e864400f056fa32,2026-08-19 10:00:00,2026-10-01 10:00:00,Gafgyt C&C\n";
     const SSLBL_CERT: &str = "# Listingdate,SHA1,Listingreason\n2026-08-19 10:00:00,2f22765d04931a078909145ca628d2264c852d7d,Gafgyt C&C\n";
 
@@ -572,7 +545,6 @@ mod tests {
             ("urlhaus", URLHAUS),
             ("urlhaus-payloads", PAYLOADS),
             ("feodo", FEODO),
-            ("sslbl-ip", SSLBL_IP),
             ("sslbl-ja3", SSLBL_JA3),
             ("sslbl-cert", SSLBL_CERT),
         ] {
@@ -696,7 +668,7 @@ mod tests {
         assert!(shown.contains("not set"), "{shown}");
         assert!(shown.contains("Downloads are off"), "{shown}");
         assert!(shown.contains("Known false positives"), "{shown}");
-        assert!(shown.contains("0 of 7 loaded"), "{shown}");
+        assert!(shown.contains("0 of 6 loaded"), "{shown}");
         // Nothing was fetched or written by looking.
         assert!(!ioc::feeds::root(&fixture.dir).join("feeds").exists());
     }
@@ -711,9 +683,9 @@ mod tests {
         fixture.frame();
         fixture.click("Download / Update all");
         let shown = fixture.until("Failed: SSLBL JA3");
-        assert!(shown.contains("Updated 6 of 7"), "{shown}");
-        assert_eq!(server.calls.lock().unwrap().len(), 7);
-        let shown = fixture.until("6 of 7 loaded");
+        assert!(shown.contains("Updated 5 of 6"), "{shown}");
+        assert_eq!(server.calls.lock().unwrap().len(), 6);
+        let shown = fixture.until("5 of 6 loaded");
         assert!(
             shown.contains("The last update of SSLBL JA3 failed"),
             "{shown}"
