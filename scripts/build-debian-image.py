@@ -17,6 +17,7 @@ import io
 import json
 import os
 from pathlib import Path
+import random
 import re
 import shlex
 import shutil
@@ -453,12 +454,13 @@ def load_rootfs_cache(cache, values, staging, provenance, log):
                 member = archive.getmember("provenance/" + name)
                 with archive.extractfile(member) as source, (provenance / name).open("wb") as target:
                     shutil.copyfileobj(source, target)
-            with archive.extractfile("rootfs.tar") as source, \
-                    (staging / "rootfs.tar").open("wb") as target:
-                shutil.copyfileobj(source, target, 1 << 20)
+            for name in ("rootfs.tar", INODE_TIMES):
+                with archive.extractfile(name) as source, \
+                        (staging / name).open("wb") as target:
+                    shutil.copyfileobj(source, target, 1 << 20)
     except (tarfile.TarError, KeyError, ValueError, OSError, TypeError) as error:
         print(f"cached root filesystem unusable ({error}); bootstrapping", flush=True)
-        for name in ("rootfs.tar",):
+        for name in ("rootfs.tar", INODE_TIMES):
             (staging / name).unlink(missing_ok=True)
         return None
     print(f"using the root filesystem bootstrapped {manifest['built_at']}", flush=True)
@@ -479,6 +481,7 @@ def save_rootfs_cache(cache, tarball, provenance, root, values):
         for name in ROOTFS_PROVENANCE:
             archive.add(provenance / name, arcname="provenance/" + name)
         archive.add(tarball, arcname="rootfs.tar")
+        archive.add(tarball.with_name(INODE_TIMES), arcname=INODE_TIMES)
     os.replace(partial, cache)
     print(f"root filesystem cached in {cache}", flush=True)
 
@@ -505,12 +508,13 @@ def bootstrap_mode():
     return "root" if os.geteuid() == 0 else "unshare"
 
 
-def mmdebstrap_command(values, tarball, script, provenance):
+def mmdebstrap_command(values, tarball, script, provenance, times=None):
     """The mmdebstrap invocation; hooks run as (namespace) root with "$1" the new root.
     Kernel modules are added to the tarball afterwards (add_modules), so the
     bootstrapped system can be cached and reused with another kernel."""
     q = shlex.quote
     console = values["desktop"] == CONSOLE
+    times = times or tarball.with_name(INODE_TIMES)
     command = ["mmdebstrap", "--mode=" + bootstrap_mode(),
                "--variant=" + ("standard" if values["standard"] else "important"),
                "--architectures=amd64", "--format=tar",
@@ -547,6 +551,13 @@ def mmdebstrap_command(values, tarball, script, provenance):
         command.append(f'--customize-hook=tar -C "$1" -czf "$1/tmp/{name}" {path}')
         command.append(f'--customize-hook=download /tmp/{name} {q(str(provenance / name))}')
         command.append(f'--customize-hook=rm -f "$1/tmp/{name}"')
+    # Last: every path's access, change, birth and modification time as the
+    # installation left them, for the ext4 image (mkfs.ext4 -d takes only
+    # modification times from the tarball).
+    command.append("--customize-hook=find \"$1\" -xdev -printf " + q(TIMES_FORMAT)
+                   + ' > "$1/tmp/inode-times"')
+    command.append(f'--customize-hook=download /tmp/inode-times {q(str(times))}')
+    command.append('--customize-hook=rm -f "$1/tmp/inode-times"')
     mirror = values["mirror"].rstrip("/")
     command += [SUITE, str(tarball),
                 f"deb {mirror} {SUITE} main", f"deb {mirror} {SUITE}-updates main",
@@ -614,6 +625,98 @@ def check_image_leaks(tarball, patterns=None):
                  if mask.rsplit("/", 1)[1] not in units]
     if problems:
         raise RuntimeError("image carries build traces: " + "; ".join(problems[:10]))
+
+
+# find(1) -printf for the recorded times: path, atime, ctime, birth time and
+# mtime (seconds with nanoseconds), NUL-separated.
+TIMES_FORMAT = r"%P\0%A@\0%C@\0%B@\0%T@\0"
+INODE_TIMES = "inode-times"
+# Mount points find stats through to the filesystem mounted there.
+TIMES_MOUNTS = ("dev", "proc", "sys", "run")
+
+
+def parse_time(text):
+    """find's "SECONDS.FRACTION" as (seconds, nanoseconds); None for unknown (-1)."""
+    whole, _, fraction = text.partition(".")
+    if not whole.isdigit():
+        return None
+    return int(whole), int((fraction + "000000000")[:9] or 0)
+
+
+def read_inode_times(path):
+    """{tar path: (atime, ctime, birth, mtime)} from the recorded find output."""
+    fields = path.read_bytes().split(b"\0")
+    times = {}
+    for index in range(0, len(fields) - 4, 5):
+        name = fields[index].decode("utf-8", "surrogateescape")
+        if name.split("/", 1)[0] in TIMES_MOUNTS:
+            continue
+        times[name] = tuple(parse_time(field.decode()) for field in fields[index + 1:index + 5])
+    return times
+
+
+def install_timeline(tarball, recorded, rng):
+    """Per path (tar name without "./"): atime, ctime, crtime and mtime as
+    (seconds, nanoseconds), and the installation's first and last moment.
+
+    A path keeps the times its installation gave it (mmdebstrap's tarball
+    clamps modification times to the moment it started): changed no earlier
+    than modified, born no later than changed, accessed no earlier than born
+    (tar gives an extracted file its package's time as access time). A path
+    the installation did not record (added afterwards) was born when the
+    installation ended."""
+    known = [value for times in recorded.values() for value in times[1:3] if value]
+    start, end = min(known), max(known)
+    plan = {}
+    with tarfile.open(tarball) as archive:
+        for member in archive:
+            name = member.name.rstrip("/")
+            name = "" if name == "." else name[2:] if name.startswith("./") else name
+            if member.islnk():
+                continue
+            atime, ctime, birth, mtime = recorded.get(name, (None,) * 4)
+            mtime = mtime or (int(member.mtime), 0)
+            if ctime is None:
+                ctime = max(mtime, (end[0], rng.randrange(10 ** 9)))
+            ctime = max(ctime, mtime)
+            birth = min(birth or ctime, ctime)
+            atime = max(atime or ctime, birth)
+            plan[name] = (atime, ctime, birth, mtime)
+    return plan, start, end
+
+
+def debugfs_path(name):
+    if any(c in name for c in '"\n\\'):
+        raise RuntimeError(f"unsupported path for debugfs {name!r}")
+    return '"/' + name + '"'
+
+
+def apply_timeline(raw, plan, start, end, staging, log, rng):
+    """Write the timeline into the image, and the superblock of a filesystem
+    the installer made just before it (mkfs, one mount at /target, its writes)."""
+    commands = []
+    for name, times in plan.items():
+        path = debugfs_path(name) if name else "/"
+        for field, (seconds, nanoseconds) in zip(("atime", "ctime", "crtime", "mtime"), times):
+            commands.append(f"set_inode_field {path} {field} @{seconds}")
+            commands.append(f"set_inode_field {path} {field}_extra {nanoseconds << 2}")
+    stats = subprocess.run(["debugfs", "-R", "stats", str(raw)], check=True,
+                           capture_output=True, text=True).stdout
+    blocks = int(re.search(r"^Block count:\s*(\d+)", stats, re.M)[1])
+    free = int(re.search(r"^Free blocks:\s*(\d+)", stats, re.M)[1])
+    size = int(re.search(r"^Block size:\s*(\d+)", stats, re.M)[1])
+    written = (blocks - free) * size // 1024
+    commands += [f"ssv mtime @{start[0] - rng.randrange(5, 20)}", "ssv mnt_count 1",
+                 "ssv last_mounted /target",
+                 f"ssv kbytes_written {written + written * rng.randrange(20, 45) // 100}"]
+    script = staging / "times.debugfs"
+    script.write_text("\n".join(commands) + "\n")
+    # debugfs stamps its own last write time on close.
+    subprocess.run(["debugfs", "-w", "-f", str(script), str(raw)], check=True,
+                   stdout=subprocess.DEVNULL, stderr=log,
+                   env=os.environ | {"E2FSPROGS_FAKE_TIME": str(end[0] + rng.randrange(2, 9))})
+    script.unlink()
+    return len(plan)
 
 
 def e2fsprogs_version():
@@ -693,12 +796,13 @@ def validate_image(raw, desktop=None, root_uuid=None):
 
 def root_image(values, raw, staging, provenance, log, modules=None, cache=None):
     tarball = staging / "rootfs.tar"
+    times = staging / INODE_TIMES
     root = load_rootfs_cache(cache, values, staging, provenance, log)
     if root is None:
         script = staging / "customize.sh"
         script.write_text(customization_script())
         shutil.copy2(script, provenance / "customize.sh")
-        command = mmdebstrap_command(values, tarball, script, provenance)
+        command = mmdebstrap_command(values, tarball, script, provenance, times)
         (provenance / "mmdebstrap.json").write_text(json.dumps(command, indent=2) + "\n")
         # mmdebstrap assembles the system in $TMPDIR; /tmp is a small tmpfs on
         # Debian 13 (and in the cloud builder), far too small for a desktop.
@@ -718,18 +822,25 @@ def root_image(values, raw, staging, provenance, log, modules=None, cache=None):
         add_modules(tarball, modules)
     size = image_size(values["desktop"])
     root_uuid = fstab_uuid(tarball) if values["desktop"] == CONSOLE else None
+    rng = random.SystemRandom()
+    plan, start, end = install_timeline(tarball, read_inode_times(times), rng)
+    # The installer partitions and formats the disk a minute or two before it
+    # installs the first package.
+    made = {"E2FSPROGS_FAKE_TIME": str(start[0] - rng.randrange(40, 160))}
     with raw.open("xb") as target:
         target.truncate(size)
     subprocess.run(["mkfs.ext4", "-q", "-F", *(["-U", root_uuid] if root_uuid else []),
                     "-d", str(tarball), str(raw)],
-                   check=True, stdout=log, stderr=subprocess.STDOUT)
+                   check=True, stdout=log, stderr=subprocess.STDOUT, env=os.environ | made)
     xattrs = apply_xattrs(tarball, raw, staging, log)
+    timed = apply_timeline(raw, plan, start, end, staging, log, rng)
     tarball.unlink()
     validate_image(raw, values["desktop"], root_uuid)
     return root | {
             "root_filesystem": "ext4", "root_size": size,
-            "conversion": "mkfs.ext4 -d tarball; extended attributes set with debugfs",
-            "extended_attributes": xattrs,
+            "conversion": "mkfs.ext4 -d tarball; extended attributes and the installation's "
+                          "access, change and birth times set with debugfs",
+            "extended_attributes": xattrs, "timed_paths": timed,
             "kernel_modules": None if modules is None else f"/usr/lib/modules/{modules.name}"}
 
 

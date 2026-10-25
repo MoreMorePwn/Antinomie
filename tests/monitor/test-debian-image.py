@@ -242,6 +242,89 @@ class DebianImageTests(unittest.TestCase):
                     image.check_image_leaks(self._tarball(name, {**clean, **files}, links),
                                             patterns)
 
+    def test_installation_times_reach_every_path(self):
+        # find -printf output: path, atime, ctime, birth, mtime.
+        record = b"".join(field + b"\0" for field in (
+            b"", b"1761385000.100000000", b"1761385010.200000000", b"1761384990.300000000",
+            b"1761385010.200000000",
+            b"etc", b"1761385100.5", b"1761385100.5", b"1761384995.000000001", b"1761385100.5",
+            b"etc/hostname", b"1761385050.123456789", b"1761385040.987654321", b"-1",
+            b"1761385040.987654321",
+            b"usr/bin/bash", b"1761385060.111111111", b"1761385020.222222222",
+            b"1761385020.222222222", b"1752339501.000000000",
+            b"proc", b"1700000000.0", b"1700000000.0", b"1700000000.0", b"1700000000.0"))
+        self.assertEqual(image.parse_time("1761385040.987654321"), (1761385040, 987654321))
+        self.assertEqual(image.parse_time("12.5"), (12, 500000000))
+        self.assertIsNone(image.parse_time("-1"))
+        with tempfile.TemporaryDirectory() as name:
+            times = Path(name) / "inode-times"
+            times.write_bytes(record)
+            recorded = image.read_inode_times(times)
+            self.assertNotIn("proc", recorded)
+            self.assertIsNone(recorded["etc/hostname"][2])
+            tarball = Path(name) / "rootfs.tar"
+            with tarfile.open(tarball, "w", format=tarfile.PAX_FORMAT) as archive:
+                for path, mtime, data in (("./", 1761385010, None), ("./etc", 1761385200, None),
+                                          ("./etc/hostname", 1761385040, b"debian\n"),
+                                          ("./usr", 1761385000, None),
+                                          ("./usr/bin", 1761385000, None),
+                                          ("./usr/bin/bash", 1752339501, b"#!"),
+                                          ("./etc/added-later", 1761385300, b"x")):
+                    entry = tarfile.TarInfo(path)
+                    entry.mtime = mtime
+                    if data is None:
+                        entry.type = tarfile.DIRTYPE
+                    else:
+                        entry.size = len(data)
+                    archive.addfile(entry, io.BytesIO(data or b""))
+            rng = image.random.Random(1)
+            plan, start, end = image.install_timeline(tarball, recorded, rng)
+            # Access times are not part of the timeline (tar gives package times).
+            self.assertEqual(start, (1761384990, 300000000))
+            self.assertEqual(end, (1761385100, 500000000))
+            for path, (atime, ctime, birth, mtime) in plan.items():
+                with self.subTest(path=path):
+                    self.assertGreaterEqual(ctime, mtime)
+                    self.assertLessEqual(birth, ctime)
+                    self.assertGreaterEqual(atime, birth)
+                    self.assertGreater(ctime[0], 86400)
+            # The installation's own times and nanoseconds survive.
+            self.assertEqual(plan["etc/hostname"][:2], ((1761385050, 123456789),
+                                                       (1761385040, 987654321)))
+            self.assertEqual(plan["etc/hostname"][3], (1761385040, 987654321))
+            # Unknown birth: born when changed. Package files keep their mtime.
+            self.assertEqual(plan["etc/hostname"][2], plan["etc/hostname"][1])
+            self.assertEqual(plan["usr/bin/bash"][3], (1752339501, 0))
+            # The record's modification times win over the tarball's clamped ones.
+            self.assertEqual(plan["etc"][3], (1761385100, 500000000))
+            # Not recorded: changed when the installation ended, or later.
+            self.assertGreaterEqual(plan["etc/added-later"][1][0], 1761385300)
+            self.assertEqual(plan[""][1], (1761385010, 200000000))
+            if image.e2fsprogs_version() >= image.MIN_E2FSPROGS and shutil.which("debugfs"):
+                raw = Path(name) / "root.raw"
+                with raw.open("wb") as target:
+                    target.truncate(32 << 20)
+                subprocess.run(["mkfs.ext4", "-q", "-F", "-d", str(tarball), str(raw)],
+                               check=True)
+                with (Path(name) / "log").open("w") as log:
+                    self.assertEqual(image.apply_timeline(raw, plan, start, end, Path(name), log,
+                                                          rng), len(plan))
+                stat = subprocess.run(["debugfs", "-R", "stat /etc/hostname", str(raw)],
+                                      capture_output=True, text=True, check=True).stdout
+                self.assertIn("ctime: 0x68fc9a50:eb79a2c4", stat)
+                self.assertIn("atime: 0x68fc9a5a:1d6f3454", stat)
+                self.assertIn("crtime: 0x68fc9a50:eb79a2c4", stat)
+                self.assertIn("mtime: 0x68fc9a50:eb79a2c4", stat)
+                # The record's modification time replaces the tarball's.
+                etc = subprocess.run(["debugfs", "-R", "stat /etc", str(raw)],
+                                     capture_output=True, text=True, check=True).stdout
+                self.assertIn("mtime: 0x68fc9a8c:77359400", etc)
+                stats = subprocess.run(["dumpe2fs", "-h", str(raw)], capture_output=True,
+                                       text=True, check=True).stdout
+                self.assertRegex(stats, r"Mount count:\s+1\n")
+                self.assertRegex(stats, r"Last mounted on:\s+/target\n")
+                self.assertRegex(stats, r"Last write time:\s+\w+ Oct 2[56] \d\d:\d\d:\d\d 2025\n")
+
     def test_files_cross_the_new_root_as_the_invoking_user(self):
         # In unshare mode a plain hook runs as the namespace's root, which can
         # neither read the staged script nor write the provenance directory.
@@ -253,6 +336,9 @@ class DebianImageTests(unittest.TestCase):
         self.assertIn("upload /w/c.sh /tmp/antinomie-customize.sh", hooks)
         self.assertIn("download /etc/os-release /w/p/os-release", hooks)
         self.assertIn("download /tmp/package-docs.tar.gz /w/p/package-docs.tar.gz", hooks)
+        # The installation's inode times are recorded after every change.
+        self.assertTrue(hooks[-3].startswith('find "$1" -xdev -printf '), hooks[-3])
+        self.assertEqual(hooks[-2], "download /tmp/inode-times /w/inode-times")
         for hook in hooks:
             if not hook.startswith(("upload ", "download ")):
                 self.assertNotIn("/w/", hook)
@@ -344,6 +430,7 @@ class DebianImageTests(unittest.TestCase):
                 archive.addfile(entry, io.BytesIO(data))
             for file in image.ROOTFS_PROVENANCE:
                 (provenance / file).write_text(file)
+            (staging / image.INODE_TIMES).write_bytes(b"etc\0" + b"1\0" * 4)
             values = image.options({"desktop": "gnome"})
             record = {"bootstrap": "mmdebstrap", "root_built_at": "2026-10-09T00:00:00+00:00",
                       "reused_from_cache": False}
@@ -351,6 +438,7 @@ class DebianImageTests(unittest.TestCase):
             now = image.datetime(2026, 10, 10, tzinfo=image.timezone.utc)
             image.save_rootfs_cache(cache, rootfs, provenance, record, values)
             rootfs.unlink()
+            (staging / image.INODE_TIMES).unlink()
             shutil.rmtree(provenance)
             provenance.mkdir()
             log = io.StringIO()
@@ -360,6 +448,8 @@ class DebianImageTests(unittest.TestCase):
                 reused = image.load_rootfs_cache(cache, values, staging, provenance, log)
                 self.assertTrue(reused["reused_from_cache"])
                 self.assertEqual((provenance / "packages.tsv").read_text(), "packages.tsv")
+                # The installation's inode times come back with the tarball.
+                self.assertEqual((staging / image.INODE_TIMES).read_bytes(), b"etc\0" + b"1\0" * 4)
                 with tarfile.open(rootfs) as archive:
                     self.assertIn("./etc/hostname", archive.getnames())
                 other = image.options({"desktop": "xfce"})

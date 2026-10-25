@@ -2156,6 +2156,20 @@ best effort), fstab's `UUID=` root line follows, and the account is created as
 before without a sudoers.d file (the `sudo` group already allows it). Reset
 provisions again and records the new UUID.
 
+The image carries the installation's own timeline. `mkfs.ext4 -d` takes only
+modification times from the tarball (every change and access time was the
+epoch, every birth time the moment of mkfs), so the last customize hook records
+each path's access, change, birth and modification time with nanoseconds
+(`find -printf`, stored as `inode-times` beside the tarball and in the root
+filesystem cache), and `apply_timeline` writes them back with debugfs: changed
+no earlier than modified (cleanup after the record touched some directories),
+born no later than changed, accessed no earlier than born; a path added after
+the record was born when the installation ended. The superblock follows an
+installer's disk: created a minute or two before the first package (mkfs runs
+under `E2FSPROGS_FAKE_TIME`), last mounted (once, at `/target`) just before it,
+last written when the installation ended, and lifetime writes a little above
+the space in use.
+
 Its kernel is the **minimal** profile, the BusyBox kernel: it builds in every
 driver and systemd prerequisite the console base uses (`CONSOLE_BUILTIN` is
 checked when no modules are given), so the base carries no modules and a
