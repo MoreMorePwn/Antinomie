@@ -72,14 +72,18 @@ impl PackageManager {
 /// apt, dnf, pacman, zypper. KVM access is a group, not a package.
 ///
 /// The dnf names were checked against packages.fedoraproject.org (qemu-system-
-/// x86-core, qemu-img, qemu-ui-gtk, guestfs-tools with virt-customize,
-/// wireshark-cli) and the zypper names against the openSUSE Tumbleweed oss
-/// repository (qemu-x86, qemu-tools, qemu-ui-gtk, guestfs-tools, wireshark,
-/// wireshark-ui-qt, zenity, bubblewrap, suricata, curl, util-linux). Not
+/// x86-core, qemu-img, qemu-ui-gtk, wireshark-cli) and the zypper names
+/// against the openSUSE Tumbleweed oss repository (qemu-x86, qemu-tools,
+/// qemu-ui-gtk, wireshark, wireshark-ui-qt, zenity, bubblewrap, suricata,
+/// curl, util-linux). guestfish (`/usr/bin/guestfish`) is in libguestfs-tools
+/// on Debian and its derivatives and in `libguestfs` elsewhere: Fedora's
+/// file list (mdapi, rawhide, f43, f44), openSUSE Tumbleweed's
+/// libguestfs-1.60.1 package header and Arch's extra/libguestfs file list
+/// (guestfs-tools carries the virt-* tools there, not guestfish). Not
 /// confirmed against an index: zypper `python3` (a capability that resolves to
 /// the current python3xx package), which of dnf `python3` / zypper
-/// `python3` carries `ensurepip`, and the pacman and apt names, which no
-/// package index was consulted for.
+/// `python3` carries `ensurepip`, and the other pacman and apt names, which
+/// no package index was consulted for.
 pub const PACKAGES: &[(Dependency, [&str; 4])] = &[
     (
         Dependency::Qemu,
@@ -106,12 +110,7 @@ pub const PACKAGES: &[(Dependency, [&str; 4])] = &[
     (Dependency::Curl, ["curl", "curl", "curl", "curl"]),
     (
         Dependency::DebianAccount,
-        [
-            "libguestfs-tools",
-            "guestfs-tools",
-            "libguestfs",
-            "guestfs-tools",
-        ],
+        ["libguestfs-tools", "libguestfs", "libguestfs", "libguestfs"],
     ),
     (
         Dependency::Bubblewrap,

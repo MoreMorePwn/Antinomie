@@ -167,7 +167,8 @@ work/monitor-host/antinomie-monitor --install-base work/debian-xfce-base
 
 Alternatively use **File > Import base** with the completed bundle directory.
 Creating a Debian VM provisions its account with `guestfish`
-(libguestfs), which also gives the disk its own filesystem UUID.
+(libguestfs), which also gives the disk its own filesystem UUID. The guest's
+own `chpasswd` hashes the password (yescrypt on Debian 13).
 In **New VM**, choose **Debian 13 (Xfce)**, then enter a username, password and
 confirmation. Minimum resources are 2048 MiB RAM and 16 GiB disk; the RAM
 ceiling is 8192 MiB. Creation provisions the disk offline and
@@ -178,7 +179,7 @@ appears in QEMU's separate display window; program terminals stay in the monitor
 Passwords accept 8..128 UTF-8 bytes without NUL/CR/LF. They are transient,
 redacted in Debug output and absent from VM configuration, UI settings and
 recording metadata. A private mode-0600 `guest-account.json` retains the username
-and salted password hash for reset and duplication. Protect this file as
+and the salted password hash the guest made, for reset and duplication. Protect this file as
 sensitive credential material. Reset reapplies the original account, not later
 guest password changes; duplicate inherits the current disk and original reset
 credentials. Recording remains full-content: credentials typed into a monitored
