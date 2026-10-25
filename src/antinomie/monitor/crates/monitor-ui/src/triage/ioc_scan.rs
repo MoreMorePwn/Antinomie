@@ -930,12 +930,12 @@ mod tests {
     fn the_datasets_are_read_once_while_nothing_changes() {
         let data = std::env::temp_dir().join(format!("ant-ioc-scan-cache-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&data);
-        let feed = feeds::feed("sslbl-ip").unwrap();
+        let feed = feeds::feed("feodo").unwrap();
         let dir = data.join("ioc").join("feeds").join(feed.id);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join("data-1-a.txt"),
-            "# Firstseen,DstIP,DstPort\n2026-08-19 10:00:00,203.0.113.45,443\n",
+            r#"[{"ip_address":"203.0.113.45","port":443,"status":"online","first_seen":"2026-08-19 10:00:00","malware":"Dridex"}]"#,
         )
         .unwrap();
         std::fs::write(
@@ -988,7 +988,7 @@ mod tests {
         .unwrap();
         assert!(!Arc::ptr_eq(&first.scan, &other.scan));
         // A dataset switched off changes the key too.
-        feeds::set_enabled(&data, "sslbl-ip", false).unwrap();
+        feeds::set_enabled(&data, "feodo", false).unwrap();
         let off = build(
             gathered(log(), Vec::new(), None, Default::default()),
             Some(&data),
