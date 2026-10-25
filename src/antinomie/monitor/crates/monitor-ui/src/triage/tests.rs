@@ -181,7 +181,6 @@ fn native_triage_fixture() {
     }
     let mut view = TriageView::default();
     view.scan = Some(scan);
-    view.net_layout = NetLayout::Old;
     view.last_refresh = Some(Instant::now());
     view.context_key = Some("vm\nboot\nrun\n".into());
     match scene.as_str() {
@@ -210,15 +209,15 @@ fn native_triage_fixture() {
         }
         "http" => {
             view.section = Section::Network;
-            view.network = NetTab::Http;
+            view.new_tab = NewTab::Urls;
         }
-        "dns" => {
+        "domains" => {
             view.section = Section::Network;
-            view.network = NetTab::Dns;
+            view.new_tab = NewTab::Domains;
         }
-        "hosts" => {
+        "endpoints" => {
             view.section = Section::Network;
-            view.network = NetTab::Hosts;
+            view.new_tab = NewTab::Endpoints;
         }
         _ => {
             view.section = Section::Process;
@@ -291,25 +290,6 @@ fn native_triage_fixture() {
                     .first()
                     .cloned()
                     .map(|row| ("triage-http", HTTP_HEADERS.to_vec(), row)),
-                "dns" => scan
-                    .dns
-                    .first()
-                    .cloned()
-                    .map(|row| ("triage-dns", DNS_HEADERS.to_vec(), row)),
-                "hosts" => scan.hosts.first().cloned().map(|row| {
-                    (
-                        "triage-hosts",
-                        vec![
-                            "Hostname",
-                            "Resolved / connected IPs",
-                            "First seen",
-                            "Last seen",
-                            "Requests",
-                            "Source",
-                        ],
-                        row,
-                    )
-                }),
                 "bpf" => scan.bpf.first().map(|note| {
                     (
                         "triage-bpf",
@@ -510,7 +490,10 @@ fn network_rows_are_bounded_to_the_run_host_time_window() {
     };
     let scan = scan_pcap_query(&path, false, &Arc::new(AtomicBool::new(false)), &request).unwrap();
     assert!(
-        scan.http.is_empty() && scan.dns.is_empty() && scan.ips.is_empty() && scan.hosts.is_empty()
+        scan.http.is_empty()
+            && scan
+                .counts
+                .is_some_and(|counts| counts.1 == 0 && counts.2 == 0)
     );
 }
 
@@ -565,38 +548,48 @@ fn real_tshark_dns_ipv4_ipv6_and_retry_rows_preserve_original_frames_and_respons
     std::fs::write(&path, dns_pcap()).unwrap();
     let cancel = Arc::new(AtomicBool::new(false));
     for live in [false, true] {
-        let index = scan_pcap_query(&path, live, &cancel, &ScanRequest::default()).unwrap();
-        assert_eq!(index.dns.len(), 3, "{}", index.coverage);
+        // The DNS rows reach the observer, which feeds the detection rules,
+        // the Domains tab and the journal; no table lists them on their own.
+        let mut dns: Vec<Vec<Cell>> = Vec::new();
+        let index = scan_pcap_query_observed(
+            &path,
+            live,
+            &cancel,
+            &ScanRequest::default(),
+            &mut network::Inventory::default(),
+            &mut |kind, row, _, _| {
+                if kind == RowKind::Dns {
+                    dns.push(row.to_vec());
+                }
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(dns.len(), 3, "{}", index.coverage);
         assert_eq!(
-            index
-                .dns
-                .iter()
+            dns.iter()
                 .map(|row| row[0].text.as_str())
                 .collect::<Vec<_>>(),
             ["#1", "#2", "#4"]
         );
-        // The table keeps the v0.6.2 columns: no Time column.
+        // The rows keep the v0.6.2 columns: no Time column.
         assert_eq!(DNS_HEADERS[..2], ["Frame", "Endpoint"]);
         assert!(!DNS_HEADERS.contains(&"Time"));
-        assert!(index.dns.iter().all(|row| row.len() == DNS_HEADERS.len()));
-        assert!(index.dns.iter().all(|row| row[2].text == "example.com"));
-        assert_eq!(index.dns[0][6].text, "3");
-        assert_eq!(index.dns[2][6].text, "5");
-        assert!(index.dns[0][5].text.contains("93.184.216.34"));
-        assert!(index.dns[2][1].text.contains("::1"));
-        assert_eq!(index.dns[0][3].text, "A");
-        assert!(!index.ips.is_empty());
-        assert_eq!(index.hosts.len(), 1);
-        assert!(index.dns[1][0]
+        assert!(dns.iter().all(|row| row.len() == DNS_HEADERS.len()));
+        assert!(dns.iter().all(|row| row[2].text == "example.com"));
+        assert_eq!(dns[0][6].text, "3");
+        assert_eq!(dns[2][6].text, "5");
+        assert!(dns[0][5].text.contains("93.184.216.34"));
+        assert!(dns[2][1].text.contains("::1"));
+        assert_eq!(dns[0][3].text, "A");
+        let counts = index.counts.expect("the capture's counts");
+        assert!(counts.1 > 0, "destination IPs");
+        assert_eq!(counts.2, 1, "one hostname");
+        assert!(dns[1][0]
             .values
             .iter()
             .any(|(name, value)| *name == "dns.retry" && matches!(value, RowValue::Bool(true))));
     }
-    let mut request = ScanRequest::default();
-    request.filters[4] = "dns.retry == true".into();
-    let index = scan_pcap_query(&path, false, &cancel, &request).unwrap();
-    assert_eq!(index.dns.len(), 1);
-    assert_eq!(index.dns[0][0].text, "#2");
 }
 
 fn dns_pcap() -> Vec<u8> {
@@ -993,20 +986,23 @@ fn encrypted_and_binary_sessions_h2c_requests_and_quic_hosts_come_from_tshark() 
     let cancel = Arc::new(AtomicBool::new(false));
     let mut inventory = network::Inventory::default();
     let mut kinds = Vec::new();
+    let mut sessions: Vec<Vec<Cell>> = Vec::new();
     let index = scan_pcap_query_observed(
         &path,
         false,
         &cancel,
         &ScanRequest::default(),
         &mut inventory,
-        &mut |kind, _, _, _| {
+        &mut |kind, row, _, _| {
             kinds.push(kind);
+            if kind == RowKind::Session {
+                sessions.push(row.to_vec());
+            }
             Ok(())
         },
     )
     .unwrap();
-    let rows: Vec<Vec<String>> = index
-        .sessions
+    let rows: Vec<Vec<String>> = sessions
         .iter()
         .map(|row| row.iter().map(|cell| cell.text.clone()).collect())
         .collect();
@@ -1149,8 +1145,7 @@ fn recorded_triage_sample_populates_every_evidence_table() {
         "findings": scan.findings.iter().map(|finding| finding.cells.iter()
             .map(|cell| cell.text.clone()).collect::<Vec<_>>()).collect::<Vec<_>>(),
         "opened": rows(&scan.opened), "read": rows(&scan.read), "changed": rows(&scan.changed),
-        "http": rows(&scan.http), "dns": rows(&scan.dns),
-        "ips": rows(&scan.ips), "hosts": rows(&scan.hosts),
+        "http": rows(&scan.http),
         "bpf_observations": scan.bpf.len(), "network_warning": scan.network_warning,
         "journal": scan.event_journal,
     });
@@ -1160,9 +1155,7 @@ fn recorded_triage_sample_populates_every_evidence_table() {
     )
     .unwrap();
     assert!(scan.process.len() >= 4, "{value}");
-    for key in [
-        "findings", "opened", "read", "changed", "http", "dns", "ips", "hosts",
-    ] {
+    for key in ["findings", "opened", "read", "changed", "http"] {
         assert!(
             !value[key].as_array().unwrap().is_empty(),
             "empty {key}: {value}"
@@ -2038,7 +2031,7 @@ fn every_filter_slot_draws_its_filter_bar() {
                 view.query_bar(
                     ui,
                     index,
-                    network::SESSION_FIELDS,
+                    network::TLS_FIELDS,
                     "session.alpn contains h2",
                     (0, 0),
                     Bar::Plain,

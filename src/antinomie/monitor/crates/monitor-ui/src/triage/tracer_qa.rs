@@ -326,20 +326,6 @@ fn recorded_tracer_triage() {
             );
         }
         // The DNS queries of both segments' captures: a Sigma input.
-        let queried = |scan: &ArchiveScan, name: &str| {
-            scan.dns
-                .iter()
-                .any(|row| row.iter().any(|cell| cell.text.contains(name)))
-        };
-        println!(
-            "DNS whole run: tick-0 {} tick-29 {}",
-            queried(&whole, "tick-0.tracer.test"),
-            queried(&whole, "tick-29.tracer.test")
-        );
-        expect(
-            queried(&whole, "tick-0.tracer.test") && queried(&whole, "tick-29.tracer.test"),
-            "DNS rows of both segments' captures".into(),
-        );
         for name in ["tick-0.tracer.test", "tick-29.tracer.test"] {
             expect(
                 event_for(&events, "dns_query", "QueryName", name).is_some(),

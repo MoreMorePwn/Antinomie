@@ -39,8 +39,7 @@ fn recorded_torture_triage() {
         "changed": scan.changed.len(), "changed_omitted": scan.changed_omitted,
         "bpf": scan.bpf.len(), "bpf_omitted": scan.bpf_omitted,
         "http": scan.http.len(), "http_omitted": scan.http_omitted,
-        "dns": scan.dns.len(), "dns_omitted": scan.dns_omitted,
-        "ips": scan.ips.len(), "hosts": scan.hosts.len(), "network_warning": scan.network_warning,
+        "dns": scan.counts.dns, "network_counts": scan.network_counts, "network_warning": scan.network_warning,
     });
     let mut view = TriageView::default();
     view.scan = Some(scan);
@@ -84,9 +83,13 @@ fn recorded_torture_triage() {
                             view.files(ui, &input);
                         }
                         5..=8 => {
-                            view.network =
-                                [NetTab::Ips, NetTab::Hosts, NetTab::Http, NetTab::Dns][pane - 5];
-                            view.network(ui, &input);
+                            view.new_tab = [
+                                NewTab::Endpoints,
+                                NewTab::Domains,
+                                NewTab::Urls,
+                                NewTab::Tls,
+                            ][pane - 5];
+                            view.new_network(ui, &input);
                         }
                         _ => summary::show(&mut view, ui, &input),
                     });

@@ -140,25 +140,7 @@ pub(super) enum FileTab {
     Changed,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum NetTab {
-    Ips,
-    Hosts,
-    Http,
-    Dns,
-    Sessions,
-}
-
-/// Which arrangement of the Network section is drawn.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum NetLayout {
-    /// Endpoints, Domains, URLs and TLS, read from TShark.
-    New,
-    /// The 0.7.0 tabs: IPs, Hosts, HTTP, DNS and Sessions.
-    Old,
-}
-
-/// The rebuilt Network tabs.
+/// The Network tabs.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum NewTab {
     Endpoints,
@@ -195,8 +177,6 @@ pub(crate) struct TriageView {
     file_history: file_activity::Window,
     /// The Per-file history tab is chosen instead of one of [`FileTab`].
     history_tab: bool,
-    network: NetTab,
-    net_layout: NetLayout,
     new_tab: NewTab,
     /// The IOC section.
     ioc: ioc_view::View,
@@ -270,8 +250,6 @@ impl Default for TriageView {
             files: FileTab::Opened,
             file_history: Default::default(),
             history_tab: false,
-            network: NetTab::Http,
-            net_layout: NetLayout::New,
             new_tab: NewTab::Endpoints,
             ioc: ioc_view::View::default(),
             selected_call_id: None,
@@ -561,7 +539,7 @@ impl TriageView {
                     "Network activity",
                     &format!("Network route: {}", self.route.headline),
                 );
-                self.network(ui, &input);
+                self.new_network(ui, &input);
                 None
             }
             Section::Bpf => {
@@ -705,96 +683,6 @@ impl TriageView {
         }
     }
 
-    fn network(&mut self, ui: &mut egui::Ui, input: &TriageInput<'_>) {
-        if self.net_layout == NetLayout::New {
-            self.new_network(ui, input);
-            return;
-        }
-        self.layout_switch(ui);
-        self.network_tabs(ui);
-        let index = match self.network {
-            NetTab::Ips => 6,
-            NetTab::Hosts => 7,
-            NetTab::Http => 3,
-            NetTab::Dns => 4,
-            NetTab::Sessions => SESSION_SLOT,
-        };
-        let fields = match self.network {
-            NetTab::Ips => network::IP_FIELDS,
-            NetTab::Hosts => network::HOST_FIELDS,
-            NetTab::Http => HTTP_FIELDS,
-            NetTab::Dns => DNS_FIELDS,
-            NetTab::Sessions => network::SESSION_FIELDS,
-        };
-        let example = match self.network {
-            NetTab::Ips => "network.country == US",
-            NetTab::Hosts => "network.hostname contains update",
-            NetTab::Http => "http.method == GET",
-            NetTab::Dns => "dns.name contains example",
-            NetTab::Sessions => "session.alpn contains h2",
-        };
-        let (count, omitted) = self
-            .scan
-            .as_ref()
-            .map_or((0, 0), |scan| match self.network {
-                NetTab::Ips => (scan.ips.len(), scan.ips_omitted),
-                NetTab::Hosts => (scan.hosts.len(), scan.hosts_omitted),
-                NetTab::Http => (scan.http.len(), scan.http_omitted),
-                NetTab::Dns => (scan.dns.len(), scan.dns_omitted),
-                NetTab::Sessions => (scan.sessions.len(), scan.sessions_omitted),
-            });
-        let packets = input.pcap.is_some();
-        self.query_bar(
-            ui,
-            index,
-            fields,
-            example,
-            (count, count as u64 + omitted),
-            Bar::Network { packets },
-        );
-        let Some(scan) = &self.scan else {
-            theme::loading_weak(ui, "Indexing this run’s capture…");
-            return;
-        };
-        if let Some(warning) = &scan.network_warning {
-            crate::activity::warning(ui, warning);
-        }
-        match self.network {
-            NetTab::Ips => {
-                ui.weak(match self.scan_request.address_lookup {
-                    AddressLookup::Tshark => "Local addresses show “-” and “local network”. Other rows use local TShark GeoIP data when it is configured.",
-                    AddressLookup::Whois => "Local addresses show “-” and “local network”. Public addresses use dig and whois on this machine.",
-                    AddressLookup::TsharkThenWhois => "Local addresses show “-” and “local network”. Public addresses use local TShark GeoIP, then dig and whois when country or organization is missing.",
-                });
-                table(
-                    ui,
-                    "triage-ips",
-                    &["IP", "Country", "Organization"],
-                    &scan.ips,
-                );
-            }
-            NetTab::Hosts => table(
-                ui,
-                "triage-hosts",
-                &[
-                    "Hostname",
-                    "Resolved / connected IPs",
-                    "First seen",
-                    "Last seen",
-                    "Requests",
-                    "Source",
-                ],
-                &scan.hosts,
-            ),
-            NetTab::Http => table(ui, "triage-http", HTTP_HEADERS, &scan.http),
-            NetTab::Dns => table(ui, "triage-dns", DNS_HEADERS, &scan.dns),
-            NetTab::Sessions => {
-                ui.weak("TLS and QUIC hellos and SSH banners as TShark parsed them, without keys. Encrypted content stays encrypted.");
-                table(ui, "triage-sessions", SESSION_HEADERS, &scan.sessions)
-            }
-        }
-    }
-
     fn suspicious(
         &mut self,
         ui: &mut egui::Ui,
@@ -883,10 +771,7 @@ impl TriageView {
         if let Some(sort) = sorting::take_request(ui.ctx(), table_id) {
             // The sort runs on the full rows; a compact table draws a subset.
             self.scan_request.sorts[index] = sort.map(|mut sort| {
-                sort.column = if index == 3
-                    && self.section == Section::Network
-                    && self.net_layout == NetLayout::New
-                {
+                sort.column = if index == 3 && self.section == Section::Network {
                     net_tabs::stored_url_column(sort.column)
                 } else {
                     file_tabs::full_column(index, sort.column)
@@ -1156,21 +1041,6 @@ const HTTP_FIELDS: &[FieldSpec<'static>] = &[
         "Unknown unless socket identity supports exact attribution",
     ),
 ];
-const DNS_FIELDS: &[FieldSpec<'static>] = &[
-    FieldSpec::text("capture.path", "Owning capture segment"),
-    FieldSpec::number("frame.number", "Original query frame"),
-    FieldSpec::number("frame.time_us", "Captured Unix microseconds"),
-    FieldSpec::text("network.endpoints", "Recorded source and destination"),
-    FieldSpec::number("dns.id", "Transaction ID"),
-    FieldSpec::text("dns.name", "Queried domain"),
-    FieldSpec::text("dns.type", "Query type"),
-    FieldSpec::text("dns.class", "Query class"),
-    FieldSpec::text("dns.protocol", "UDP or TCP"),
-    FieldSpec::number("dns.rcode", "Observed response code"),
-    FieldSpec::tags("dns.answers", "Observed response answers"),
-    FieldSpec::boolean("dns.retry", "Retry when backed by decoder evidence"),
-];
-
 #[derive(Clone, Default)]
 struct ScanRequest {
     /// The chips above Suspicious activity.
@@ -1292,15 +1162,7 @@ struct ArchiveScan {
     file_tabs: [FileRows; FILE_TABS],
     http: Vec<Vec<Cell>>,
     http_omitted: u64,
-    dns: Vec<Vec<Cell>>,
-    dns_omitted: u64,
-    ips: Vec<Vec<Cell>>,
-    ips_omitted: u64,
-    hosts: Vec<Vec<Cell>>,
-    hosts_omitted: u64,
-    sessions: Vec<Vec<Cell>>,
-    sessions_omitted: u64,
-    /// The rebuilt Network tabs.
+    /// The Network tabs.
     new_tabs: NewTabs,
     /// The IOC window's list of the run and the datasets' answer.
     ioc: Option<Arc<ioc_scan::IocScan>>,
@@ -1329,7 +1191,7 @@ struct PacketSpool {
 
 #[derive(Default)]
 struct PacketIndex {
-    /// The rebuilt tabs and the capture's indicators.
+    /// The tabs and the capture's indicators.
     new_tabs: NewTabs,
     ioc: antinomie_monitor_core::ioc::indicator::Collector,
     /// Frame, destination IP and hostname counts before UI queries.
@@ -1337,14 +1199,6 @@ struct PacketIndex {
     coverage: String,
     http: Vec<Vec<Cell>>,
     http_omitted: u64,
-    dns: Vec<Vec<Cell>>,
-    dns_omitted: u64,
-    ips: Vec<Vec<Cell>>,
-    ips_omitted: u64,
-    hosts: Vec<Vec<Cell>>,
-    hosts_omitted: u64,
-    sessions: Vec<Vec<Cell>>,
-    sessions_omitted: u64,
     network_warning: Option<String>,
 }
 

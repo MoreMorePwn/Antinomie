@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! The Network section's new layout: Endpoints, Domains, URLs and TLS, all
-//! read from TShark. The capture is VM-wide, so no row names a process; the
-//! IOC column says whether the row's indicator matches a dataset, and the
-//! IOC section holds the process, the sources and the evidence. A switch
-//! brings back the 0.7.0 tabs (IPs, Hosts, HTTP, DNS, Sessions).
+//! The Network section: Endpoints, Domains, URLs and TLS, all read from
+//! TShark. The capture is VM-wide, so no row names a process; the IOC column
+//! says whether the row's indicator matches a dataset, and the IOC section
+//! holds the process, the sources and the evidence.
 use super::counts::{tab, Count};
 use super::*;
 use crate::widgets;
 
-const ENDPOINT_HEADERS: &[&str] = &[
+pub(super) const ENDPOINT_HEADERS: &[&str] = &[
     "Endpoint",
     "IOC",
     "Proto",
@@ -19,7 +18,7 @@ const ENDPOINT_HEADERS: &[&str] = &[
     "First seen",
     "Last seen",
 ];
-const DOMAIN_HEADERS: &[&str] = &[
+pub(super) const DOMAIN_HEADERS: &[&str] = &[
     "Domain",
     "IOC",
     "Seen as",
@@ -31,10 +30,10 @@ const DOMAIN_HEADERS: &[&str] = &[
 ];
 /// The 0.7.0 HTTP columns, with the verdict after the endpoint and the protocol
 /// version before the response (the response frame stays in Details).
-const URL_HEADERS: &[&str] = &[
+pub(super) const URL_HEADERS: &[&str] = &[
     "Frame", "Time", "Endpoint", "IOC", "Method", "Host", "URI", "Version", "Response",
 ];
-const TLS_HEADERS: &[&str] = &[
+pub(super) const TLS_HEADERS: &[&str] = &[
     "Frame",
     "Server name",
     "IOC",
@@ -106,26 +105,6 @@ pub(super) fn stored_column(slot: usize, shown: usize) -> usize {
 }
 
 impl TriageView {
-    /// The layout switch above the Network tabs.
-    pub(super) fn layout_switch(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("Layout").small().color(theme::muted()));
-            widgets::segmented(
-                ui,
-                [
-                    (NetLayout::New, widgets::TabItem::new("New layout")),
-                    (
-                        NetLayout::Old,
-                        widgets::TabItem::new("Current layout (0.7.0)")
-                            .tooltip("IPs, Hosts, HTTP, DNS and Sessions, as 0.7.0 showed them"),
-                    ),
-                ],
-                &mut self.net_layout,
-            );
-        });
-        ui.add_space(4.0);
-    }
-
     fn new_count(&self, which: NewTab) -> Count {
         if self.scan_rx.is_some() {
             return Count::Pending;
@@ -147,7 +126,6 @@ impl TriageView {
     }
 
     pub(super) fn new_network(&mut self, ui: &mut egui::Ui, input: &TriageInput<'_>) {
-        self.layout_switch(ui);
         widgets::tab_row(ui, |ui| {
             for (value, title) in [
                 (NewTab::Endpoints, "Endpoints"),

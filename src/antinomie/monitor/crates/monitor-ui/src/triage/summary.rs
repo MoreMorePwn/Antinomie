@@ -77,22 +77,18 @@ pub(super) fn show(view: &mut TriageView, ui: &mut egui::Ui, input: &TriageInput
             }
             Destination::Ips => {
                 view.section = Section::Network;
-                view.network = NetTab::Ips;
                 view.new_tab = NewTab::Endpoints;
             }
             Destination::Hosts => {
                 view.section = Section::Network;
-                view.network = NetTab::Hosts;
                 view.new_tab = NewTab::Domains;
             }
             Destination::Http => {
                 view.section = Section::Network;
-                view.network = NetTab::Http;
                 view.new_tab = NewTab::Urls;
             }
             Destination::Dns => {
                 view.section = Section::Network;
-                view.network = NetTab::Dns;
                 view.new_tab = NewTab::Domains;
             }
             Destination::Ioc => view.section = Section::Ioc,
