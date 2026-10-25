@@ -254,7 +254,7 @@ impl Model {
         if state.status == LiveStatus::Retired {
             line(
                 ui,
-                "Retired upstream: abuse.ch now serves this file empty, so there is nothing to install. The JA3 list is still in the IOC datasets (SSLBL JA3).".to_owned(),
+                "Retired upstream: abuse.ch now serves this file empty, so there is nothing to install.".to_owned(),
             );
         }
         for limit in pack.limits {

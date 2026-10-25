@@ -76,10 +76,23 @@ pub fn chip(ui: &mut egui::Ui, text: impl Into<String>, tone: Tone) -> egui::Res
 /// through), with an optional muted count. Returns the click; the caller flips
 /// the flag.
 pub fn toggle_chip(ui: &mut egui::Ui, label: &str, on: bool, count: Option<u64>) -> egui::Response {
+    toggle_chip_with(ui, egui_phosphor::regular::CHECK, label, on, count)
+}
+
+/// [`toggle_chip`] with `icon` where the check mark is, for a filter whose
+/// values have an icon of their own (the finding categories). It shows only
+/// while the chip is on; an off chip is dimmed and struck through as before.
+pub fn toggle_chip_with(
+    ui: &mut egui::Ui,
+    icon: &str,
+    label: &str,
+    on: bool,
+    count: Option<u64>,
+) -> egui::Response {
     let palette = theme::palette();
     let color = if on { palette.text } else { palette.muted };
     let mut text = if on {
-        format!("{} {label}", egui_phosphor::regular::CHECK)
+        format!("{icon} {label}")
     } else {
         label.to_owned()
     };

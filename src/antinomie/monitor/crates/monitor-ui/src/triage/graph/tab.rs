@@ -195,6 +195,31 @@ impl TriageView {
         }
     }
 
+    /// Open the graph, from the Summary strip, on every finding the strip
+    /// shows: a text filter, a time range, a lane and the tier and category
+    /// chips left from the table are dropped, so the graph starts where the
+    /// strip is and a click adds no filter. Show INFO and Show hidden stay as
+    /// they were.
+    pub(in crate::triage) fn clear_finding_filters(&mut self, ctx: &egui::Context) {
+        let view = &mut self.scan_request.finding_view;
+        let changed = !self.filter_drafts[0].is_empty()
+            || !self.scan_request.filters[0].is_empty()
+            || view.tiers != 0
+            || view.categories != 0;
+        if !changed {
+            return;
+        }
+        view.tiers = 0;
+        view.categories = 0;
+        self.filter_drafts[0].clear();
+        self.scan_request.filters[0].clear();
+        self.scan_request.offsets[0] = 0;
+        ctx.data_mut(|data| {
+            data.remove_temp::<String>(egui::Id::new(("triage-filter-draft", 0usize)))
+        });
+        self.request_query_refresh();
+    }
+
     /// Put `parts` in the filter bar; the next frame's query bar applies it.
     fn set_filter(&mut self, ctx: &egui::Context, parts: &Parts) {
         let text = parts.render();

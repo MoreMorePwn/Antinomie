@@ -26,6 +26,8 @@ const STALE_STAGING: Duration = Duration::from_secs(24 * 3600);
 const ZIP_MAGIC: &[u8] = b"PK\x03\x04";
 /// Entries a feed's zip may hold; the feeds send one file.
 const MAX_ZIP_ENTRIES: usize = 64;
+/// The most a retired list may hold and still be taken for a header alone.
+const RETIRED_MAX_SIZE: u64 = 64 * 1024;
 
 /// What an update of one feed ended with.
 #[derive(Debug)]
@@ -165,7 +167,10 @@ fn update_inner(
     let staging = feeds::staging_dir(data_dir).join(crate::storage::unique_id());
     crate::storage::private_dir(&staging).map_err(|error| error.to_string())?;
     let result = (|| {
-        let needed = feed.download_limit().saturating_add(feed.text_limit());
+        // The download and the plain text it unpacks to, with room to spare:
+        // not the largest the limits would let them be, which for a 300 MB
+        // dataset asked for gigabytes and refused a download that fits.
+        let needed = feed.expected_size.saturating_mul(3).max(64 * 1024 * 1024);
         let free = free_space(&staging)?;
         if free < needed {
             return Err(format!(
@@ -202,7 +207,11 @@ fn update_inner(
         let (size, sha256) = unpack(&download, &text, feed)?;
         let _ = fs::remove_file(&download);
         let scanned = records::count(&text, feed, cancel)?;
-        if scanned.records == 0 {
+        // A list abuse.ch has stopped filling is a header and nothing more.
+        // That is its answer, kept as a copy of no records, so Antinomie says
+        // so and the feed stops failing; a file of anything else is refused.
+        let retired = feed.retired_if_empty && scanned.skipped == 0 && size < RETIRED_MAX_SIZE;
+        if scanned.records == 0 && !retired {
             return Err("the file holds no records".into());
         }
         if scanned.skipped > scanned.records {
@@ -707,6 +716,146 @@ mod tests {
             );
             let _ = fs::remove_dir_all(dir);
         }
+    }
+
+    #[test]
+    fn a_missing_file_a_slow_down_and_a_server_error_say_what_to_do() {
+        for (code, words) in [
+            (
+                404,
+                "abuse.ch has no file at https://urlhaus-api.abuse.ch/v2/files/exports/****/payload.csv.zip (HTTP 404)",
+            ),
+            (403, "abuse.ch rejected the Auth-Key (HTTP 403)"),
+            (429, "abuse.ch asks to slow down (HTTP 429)"),
+            (503, "abuse.ch had a problem answering (HTTP 503)"),
+        ] {
+            let dir = data_dir("codes");
+            let body = dir.join("body.json");
+            fs::write(&body, format!(r#"{{"message":"{KEY}"}}"#)).unwrap();
+            let curl = Curl::new(fake_curl(&dir, &body, code));
+            let feed = feeds::feed("urlhaus-payloads").unwrap();
+            let error = update_feed(
+                &dir,
+                feed,
+                &key(),
+                &curl,
+                &AtomicBool::new(false),
+                &mut quiet,
+            )
+            .unwrap_err();
+            assert!(error.contains(words), "{error}");
+            assert!(error.contains("the previous copy was kept"), "{error}");
+            assert!(!error.contains(KEY), "{error}");
+            match code {
+                404 => assert!(error.contains("update Antinomie"), "{error}"),
+                403 => assert!(error.contains("auth.abuse.ch"), "{error}"),
+                _ => assert!(error.contains("try again later"), "{error}"),
+            }
+            let _ = fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
+    fn a_feed_that_needs_the_key_says_where_to_get_one_and_asks_for_nothing() {
+        let dir = data_dir("nokey");
+        let mock = all_fixtures();
+        for id in ["urlhaus-payloads", "urlhaus", "threatfox"] {
+            let feed = feeds::feed(id).unwrap();
+            let error = update_feed(
+                &dir,
+                feed,
+                &Secret::default(),
+                &mock,
+                &AtomicBool::new(false),
+                &mut quiet,
+            )
+            .unwrap_err();
+            assert!(
+                error.contains("needs the abuse.ch Auth-Key")
+                    && error.contains("auth.abuse.ch")
+                    && error.contains("Tools > API keys"),
+                "{error}"
+            );
+            assert!(error.contains("the previous copy was kept"), "{error}");
+        }
+        assert!(mock.calls.borrow().is_empty(), "no request without a key");
+        // The key-free feeds do not ask for one.
+        let sslbl = feeds::feed("sslbl-cert").unwrap();
+        update_feed(
+            &dir,
+            sslbl,
+            &Secret::default(),
+            &mock,
+            &AtomicBool::new(false),
+            &mut quiet,
+        )
+        .unwrap();
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_emptied_sslbl_ip_list_is_kept_as_a_copy_of_no_records_not_failed() {
+        let header = "################################################################\n\
+                      # abuse.ch SSLBL IP Blacklist (CSV)\n\
+                      # Last updated: 2026-06-30 04:53:19 UTC\n\
+                      ################################################################\n\
+                      # Firstseen,DstIP,DstPort\n";
+        let dir = data_dir("emptied");
+        let feed = feeds::feed("sslbl-ip").unwrap();
+        let mock = Mock::default().with("sslbl-ip", Ok(header.as_bytes().to_vec()));
+        let meta = update_feed(
+            &dir,
+            feed,
+            &Secret::default(),
+            &mock,
+            &AtomicBool::new(false),
+            &mut quiet,
+        )
+        .unwrap();
+        assert_eq!(meta.records, 0);
+        let status = feeds::status(&dir)
+            .into_iter()
+            .find(|status| status.feed.id == "sslbl-ip")
+            .unwrap();
+        assert!(status.retired() && status.last_error.is_none());
+        // It is in "Updated 7 datasets" with the others, not among the failures.
+        let outcomes = update_all(
+            &dir,
+            &key(),
+            &all_fixtures().with("sslbl-ip", Ok(header.as_bytes().to_vec())),
+            &AtomicBool::new(false),
+            &mut quiet,
+        );
+        assert_eq!(summary(&outcomes), "Updated 7 datasets.");
+        // The same header from a feed abuse.ch still fills is still refused,
+        // and so is a page where the list should be.
+        let cert = feeds::feed("sslbl-cert").unwrap();
+        let mock = Mock::default().with("sslbl-cert", Ok(header.as_bytes().to_vec()));
+        let error = update_feed(
+            &dir,
+            cert,
+            &Secret::default(),
+            &mock,
+            &AtomicBool::new(false),
+            &mut quiet,
+        )
+        .unwrap_err();
+        assert!(error.contains("the file holds no records"), "{error}");
+        let page = Mock::default().with(
+            "sslbl-ip",
+            Ok(b"<html><body>429 Too Many Requests</body></html>".to_vec()),
+        );
+        let error = update_feed(
+            &dir,
+            feed,
+            &Secret::default(),
+            &page,
+            &AtomicBool::new(false),
+            &mut quiet,
+        )
+        .unwrap_err();
+        assert!(error.contains("the file holds no records"), "{error}");
+        let _ = fs::remove_dir_all(dir);
     }
 
     /// A fetcher whose failure echoes the URL it was asked for and the key, the

@@ -56,53 +56,7 @@ pub(super) fn in_window(request: &ScanRequest, packet_us: Option<u64>) -> bool {
                 .is_some_and(|end| packet_us.is_none_or(|time| time / 1000 > end)))
 }
 
-pub(super) const IP_FIELDS: &[FieldSpec<'static>] = &[
-    FieldSpec::text("capture.path", "Capture segment of the evidence packet"),
-    FieldSpec::text("network.ip", "Observed destination IP"),
-    FieldSpec::text(
-        "network.country",
-        "Country from locally configured TShark GeoIP data",
-    ),
-    FieldSpec::text("network.organization", "Organization from local ASN data"),
-    FieldSpec::number("frame.number", "First observed destination packet"),
-];
-pub(super) const HOST_FIELDS: &[FieldSpec<'static>] = &[
-    FieldSpec::text("capture.path", "Capture segment of the evidence packet"),
-    FieldSpec::number(
-        "network.first_us",
-        "First observed packet time in the capture clock",
-    ),
-    FieldSpec::number(
-        "network.last_us",
-        "Last observed packet time in the capture clock",
-    ),
-    FieldSpec::text("network.hostname", "DNS question, HTTP Host or TLS SNI"),
-    FieldSpec::tags(
-        "network.addresses",
-        "Observed DNS addresses or connection destinations",
-    ),
-    FieldSpec::number("network.count", "Observed requests or client hellos"),
-    FieldSpec::tags("network.sources", "DNS, HTTP or TLS"),
-    FieldSpec::number("frame.number", "First original packet"),
-];
-
-pub(super) const SESSION_FIELDS: &[FieldSpec<'static>] = &[
-    FieldSpec::text("capture.path", "Capture segment of the evidence packet"),
-    FieldSpec::number("frame.number", "Original packet"),
-    FieldSpec::number("frame.time_us", "Packet time in the capture clock"),
-    FieldSpec::text("network.endpoints", "Source and destination endpoints"),
-    FieldSpec::text("session.protocol", "Protocol column TShark printed"),
-    FieldSpec::text("session.kind", "client hello, server hello or banner"),
-    FieldSpec::text("session.server_name", "TLS or QUIC server name (SNI)"),
-    FieldSpec::tags("session.alpn", "ALPN protocols offered or chosen"),
-    FieldSpec::text("session.details", "Cipher suites or the SSH banner"),
-    FieldSpec::text(
-        "session.fingerprint",
-        "JA3 and JA4 when TShark computes them",
-    ),
-];
-
-/// The rebuilt Endpoints tab: one row per remote `ip:port`.
+/// The Endpoints tab: one row per remote `ip:port`.
 pub(super) const ENDPOINT_FIELDS: &[FieldSpec<'static>] = &[
     FieldSpec::text("capture.path", "Capture segment of the first frame"),
     FieldSpec::text("network.endpoint", "Remote ip:port"),

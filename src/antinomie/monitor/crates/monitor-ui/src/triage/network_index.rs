@@ -42,12 +42,7 @@ pub(super) fn collect(
         warnings.push("Only the first 128 capture segments fit the analysis budget".into());
     }
     let mut http_page = sorting::Page::new(request, 3, cancel);
-    let mut dns_page = sorting::Page::new(request, 4, cancel);
-    let mut session_page = sorting::Page::new(request, SESSION_SLOT, cancel);
     let http_query = query::compile_table(&request.filters[3], HTTP_FIELDS);
-    let dns_query = query::compile_table(&request.filters[4], DNS_FIELDS);
-    let session_query =
-        query::compile_table(&request.filters[SESSION_SLOT], network::SESSION_FIELDS);
     let mut inventory = network::Inventory::default();
     let mut inner = request.clone();
     inner.offsets = [0; SLOTS];
@@ -82,17 +77,8 @@ pub(super) fn collect(
             &mut inventory,
             &mut |kind, row, destination, port| {
                 observe(path, kind, row, destination, port)?;
-                match kind {
-                    RowKind::Http if http_query.keep_table(&row[0].values) => {
-                        http_page.push(row.to_vec())?
-                    }
-                    RowKind::Dns if dns_query.keep_table(&row[0].values) => {
-                        dns_page.push(row.to_vec())?
-                    }
-                    RowKind::Session if session_query.keep_table(&row[0].values) => {
-                        session_page.push(row.to_vec())?
-                    }
-                    _ => {}
+                if kind == RowKind::Http && http_query.keep_table(&row[0].values) {
+                    http_page.push(row.to_vec())?;
                 }
                 Ok(())
             },
@@ -120,27 +106,9 @@ pub(super) fn collect(
         warnings.push("Streams are correlated within each capture segment; snapshot boundaries interrupt reassembly.".into());
     }
     let (http, http_omitted, _) = http_page.finish()?;
-    let (dns, dns_omitted, _) = dns_page.finish()?;
-    let (sessions, sessions_omitted, _) = session_page.finish()?;
     let (ips, hosts) = inventory.rows();
     let counts = Some((frames, ips.len() as u64, hosts.len() as u64));
-    let mut inventory_pages = Vec::new();
-    for (slot, rows, fields) in [
-        (6, ips, network::IP_FIELDS),
-        (7, hosts, network::HOST_FIELDS),
-    ] {
-        let query = query::compile_table(&request.filters[slot], fields);
-        let mut page = sorting::Page::new(request, slot, cancel);
-        for row in rows {
-            if query.keep_table(&row[0].values) {
-                page.push(row)?;
-            }
-        }
-        inventory_pages.push(page.finish()?);
-    }
-    let (ips, ips_omitted, _) = inventory_pages.remove(0);
-    let (hosts, hosts_omitted, _) = inventory_pages.remove(0);
-    // The rebuilt tabs: the same filter, sort and page machinery, own slots.
+    // The tabs: the same filter, sort and page machinery, own slots.
     let tables = inventory.finish();
     let ioc = std::mem::take(&mut inventory.ioc);
     let mut new_tabs = NewTabs::default();
@@ -170,14 +138,6 @@ pub(super) fn collect(
         coverage: coverage.join(". "),
         http,
         http_omitted,
-        dns,
-        dns_omitted,
-        ips,
-        ips_omitted,
-        hosts,
-        hosts_omitted,
-        sessions,
-        sessions_omitted,
         network_warning: (!warnings.is_empty()).then(|| warnings.join("; ")),
     })
 }

@@ -60,8 +60,14 @@ application and base versions; existing VMs keep their pinned base.
   whole or not at all: when one fails the previous copy stays in use and the
   status line names the dataset that failed. If abuse.ch answers that it does
   not accept the Auth-Key, the line says so (check the key in **Tools > API
-  keys**); if it answers that the endpoint is retired, the line says to update
-  Antinomie. The Auth-Key is part of the address abuse.ch serves its ThreatFox
+  keys**, or get a free one at auth.abuse.ch); if it answers that the endpoint
+  is retired or the file is not there (HTTP 410 or 404) the line says to update
+  Antinomie, and a slow-down or server error says to try again later. A dataset
+  that needs the key is refused before any request when none is set. abuse.ch
+  now serves the SSLBL IP list with its header and no entries; Antinomie keeps
+  that as a copy of no records and the row says **Retired upstream**, instead of
+  reporting a failed download (any other empty or non-list answer still fails).
+  The Auth-Key is part of the address abuse.ch serves its ThreatFox
   and URLhaus files from, so Antinomie hands the address to the download
   program out of sight of other users of the computer, and shows it everywhere
   as `/exports/****/`; the key does not appear in the details, the status line,
@@ -79,10 +85,10 @@ application and base versions; existing VMs keep their pinned base.
   keeps the old version if it fails. ThreatFox and URLhaus need the Auth-Key in
   **Tools > API keys** (they are sent as `.tar.gz` archives, from which only the
   `.rules` files are taken); Feodo and SSLBL are CC0 and need none. abuse.ch
-  no longer fills the SSLBL JA3 rules file, so that pack shows **Retired
-  upstream** and cannot be installed; the JA3 list is still available as an IOC
-  dataset. Nothing is fetched until you press a button and have allowed
-  downloads.
+  no longer fills the SSLBL JA3 rules file or the SSLBL botnet C2 IP file, so
+  those packs show **Retired upstream** and cannot be installed; the JA3 list is
+  still available as an IOC dataset and Feodo Tracker lists botnet C2 IPs.
+  Nothing is fetched until you press a button and have allowed downloads.
 
 ## 1. Get a base image
 
@@ -169,7 +175,9 @@ packet history already has it, and specimen Content supports a byte-offset jump.
    terminal window does not stop the program.
 5. **Static Analysis** in the launch dialog analyzes the program's file before
    it runs; pick the categories, from triage to disassembly and decompilation.
-   **Unpacking** (Triage, on by default) looks for UPX packing; a packed file is unpacked
+   **Strings** and **Regex matches** are two choices (Triage, on by default): the
+   regex patterns are matched over the strings and listed in the Strings & regex
+   tab, which needs Strings or FLOSS strings. **Unpacking** (Triage, on by default) looks for UPX packing; a packed file is unpacked
    (without ever running it) and the result is a **layer** with its own hash and
    its own static analysis. See **Static Analysis > Unpacking** below.
    **FLOSS strings** (under Deep analysis, off by default) recovers the strings a
@@ -289,11 +297,12 @@ The network capture is the guest's own view on every route.
   suspicious observations, coloured by the worst tier among them (HIGH red,
   MEDIUM amber, LOW cyan); in Details each observation wears its own tier.
 - **Triage › Process › Suspicious activity**: behaviour recognised in the run's
-  calls, kernel records and packets. Each row has a tier (HIGH, MEDIUM, LOW;
+  calls, kernel records and packets, with the **Time** of each row first. Each row has a tier (HIGH, MEDIUM, LOW;
   INFO is only counted unless **Show INFO** is on), a category and an ATT&CK
   reference. Repeats fold into one row with a count, a failed call or a program
   that does the thing as its job lowers the tier by one, and **Details** says
-  why a row has its tier. The chips narrow the table by tier and category. A row
+  why a row has its tier. The chips narrow the table by tier and category (each
+  category chip carries the icon its markers have in the graph). A row
   is something to look at, not a verdict. **Evasion** lists every anti-analysis
   check the sample made through system calls (machine identity, CPU, MAC address,
   uptime, `TracerPid`, container markers, long sleeps) with the answer the guest
@@ -327,7 +336,9 @@ The network capture is the guest's own view on every route.
   category. Thin lines join a parent to the processes it started and an injecting
   process to its target. The graph shows exactly what the Suspicious activity
   table is filtered to: it shares the filter bar and the tier and category
-  chips. Hover a marker for its rule, tier, process, count and outcome; click it
+  chips. Hover a marker for a card with a tier chip, the rule, what it did and
+  when, the process, count and outcome (the marker gets a ring in the accent
+  colour); click it
   to select the row (Details follows, and the table scrolls to it) and
   double-click or press Enter for its first evidence. Click a lane name to keep
   only that process (Shift: and its descendants); click a phase to keep only its
@@ -352,7 +363,8 @@ The network capture is the guest's own view on every route.
   strip follow the same axis. **Time** is the true scale. The choice is
   remembered in the settings. Under the axis, the **overview ruler** shows every
   finding of the whole run squeezed into its width, with the stretch the graph
-  shows as a window on it: drag the window to pan, drag its edges to zoom, drag
+  shows as a window on it: drag the window to pan, drag its edges (the wide
+  grips at each end) to zoom, drag
   across an empty part to show that stretch (a click there centres the window),
   and double-click the ruler to show the whole run. A time range brushed for the
   filter is marked on the ruler. It works in both spacings, in the tab and in the
@@ -362,8 +374,8 @@ The network capture is the guest's own view on every route.
   finding in time, ↑/↓ lane, Enter evidence, `T` spacing, `F` fit, `+`/`-` zoom at the
   selection, Space fold the lane, `H` `M` `L` `I` the tier chips and Show INFO,
   `1`…`9` and `0` the first ten category chips.
-- **Triage › Files › Per-file history** is a tab beside Opened, Created and the other
-  categories (it was a floating window). The
+- **Triage › Files › Per-file history** is the first tab of Files, before Opened, with
+  the number of files the run touched on it (it was a floating window). The
   left list holds every file the run touched, in order of the first call (also
   those that were only opened, read or probed); **Hide stdio**, **Hide library**
   and **Changed only** narrow it, the filter matches the path and any other name
@@ -371,20 +383,28 @@ The network capture is the guest's own view on every route.
   path. Choose a file to see its history as a graph: one box for each stretch of
   the same call by the same process (create, open, read, write ×3, rename, delete),
   joined in the order the calls happened, on a lane for each process involved.
-  Click a box to list its calls: time, process, call, result (a rename shows the new
+  Process names stay at the left of the graph while it scrolls, cut to fit (the
+  whole name is the tooltip). A click on a file in the list shows it in Details (its
+  names, first and last call, steps, state, sizes and hash).
+  Click a box to list its calls in a table that spans the pane: time, process, call, result (a rename shows the new
   name, a delete says whether another link remains), and for reads and writes the
-  **offset**, the **length** and the first 64 bytes the kernel captured. A write
+  **offset**, the **length** and the first 64 bytes the kernel captured. A click on a call
+  shows it in Details, with **Open original syscall**, and a double-click opens it. A write
   that went past the end of the file as far as the run knew says so. **Content
   changes** below lists the bytes the run changed where it captured both sides:
   `0x00000001  42 43 → 7a 7a`, or `added` for bytes past the size it first saw
   (`??` is a byte it did not capture, `∅` one beyond the known size), the file's
-  size before and after, and the guest's SHA-256 when it took one. Click a call
-  name to open the original syscall. An offset the run could not know (an append,
+  size before and after, and the guest's SHA-256 when it took one. An offset the run could not know (an append,
   a descriptor it did not see opened) shows `unknown`, and bytes the kernel did not
   capture show `not captured`; nothing is guessed. In **Changed files**, Details has
   a **Per-file history** button that opens the tab on that file.
-- **Triage › Summary** shows the same curve, phases and heat strip for the whole
-  run as **Main activity graph**; a click opens the Graph. When nothing is above
+- **Triage › Summary** has a card for each detection engine (YARA, IDS, Sigma). Its
+  status reads **Queued** while the scan waits for its turn and **Scanning** while it
+  is checked, **Not scanned** only when neither is the case. It also shows the same curve, phases and heat strip for the whole
+  run as **Main activity graph**; a click opens the Graph (nothing is filtered by
+  it). The magnifier buttons beside the title, and Ctrl+wheel over the strip, make
+  it larger or smaller (60 % to 300 %, bands, labels and text together); the
+  percentage takes it back to 100 %. When nothing is above
   LOW it is one line (`No medium or high activity · 11 low · 340 info`); the
   arrow opens or closes it, and the choice is kept until you quit.
   Like the Graph it spaces its findings equally by default, so a few findings
@@ -433,8 +453,8 @@ The network capture is the guest's own view on every route.
   matched count and the dataset date.
 - **Triage › Network** shows **Endpoints**, **Domains**, **URLs** and **TLS**, all
   read from TShark (the capture is VM-wide, so no row names a process), each with
-  an IOC column. The 0.7.0 tabs (IPs, Hosts, HTTP, DNS, Sessions) are one click
-  away: **Current layout (0.7.0)**. The filter field names of the old tabs
+  an IOC column. The 0.7.0 tabs (IPs, Hosts, HTTP, DNS, Sessions) and the switch
+  between the layouts are gone. The filter field names of the old tabs
   (`http.method`, `dns.name`, `session.alpn`, `network.country`, ...) work in the
   new ones, so a saved filter keeps working; Endpoints add the port, protocol,
   frames and bytes, Domains the DNS answer code, TLS one row per server name,
@@ -481,8 +501,13 @@ The network capture is the guest's own view on every route.
   which. The same list opens as a window from **Core dumps > Strings**, where it also lists
   the binary `sockaddr_in` and `sockaddr_in6` structures in the core's memory.
   Switch patterns off or add your own in **Library > Detection rules > Strings
-  regex** (**Add patterns**: a name, a category and a regular expression that
-  fills the page's width); **Scan again** reads the change.
+  regex** (**Add patterns**: a name, a category, a regular expression that
+  fills the rest of the row, and **Add**, all on one row); **Scan again** reads the change. An analysis that was not started
+  with **Regex matches** shows **Not part of this analysis** and a **Run** button there.
+- A list, table or tab with nothing in it says so in one muted line, in the words the
+  Disks list uses (`No disk dumps for this VM`): the Core dumps list, a core's threads,
+  mappings, strings and notes, the Per-file history list and the guest process list of
+  the attach dialog do too, and a filter that matches nothing says that.
 - **Static Analysis > Overview > Categories**: a category the analysis was not
   started with shows **Not requested** and a **Run** button. Run adds that check
   to the same report without starting the analysis again: the specimen kept with

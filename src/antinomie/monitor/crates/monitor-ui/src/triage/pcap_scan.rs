@@ -401,25 +401,12 @@ pub(super) fn scan_pcap_query_observed(
         coverage: String::new(),
         http: Vec::new(),
         http_omitted: 0,
-        dns: Vec::new(),
-        dns_omitted: 0,
-        ips: Vec::new(),
-        ips_omitted: 0,
-        hosts: Vec::new(),
-        hosts_omitted: 0,
-        sessions: Vec::new(),
-        sessions_omitted: 0,
         network_warning: None,
         ..PacketIndex::default()
     };
     inventory.capture = path.display().to_string();
     let mut http_page = sorting::Page::new(request, 3, cancel);
-    let mut dns_page = sorting::Page::new(request, 4, cancel);
-    let mut session_page = sorting::Page::new(request, SESSION_SLOT, cancel);
     let http_query = query::compile_table(&request.filters[3], HTTP_FIELDS);
-    let dns_query = query::compile_table(&request.filters[4], DNS_FIELDS);
-    let session_query =
-        query::compile_table(&request.filters[SESSION_SLOT], network::SESSION_FIELDS);
     let mut line = String::new();
     loop {
         if cancel.load(Ordering::Relaxed) {
@@ -678,9 +665,6 @@ pub(super) fn scan_pcap_query_observed(
                         field(7)
                     },
                 )?;
-                if dns_query.keep_table(&row[0].values) {
-                    dns_page.push(row)?;
-                }
             }
         }
         let destination_port = if field(7).is_empty() {
@@ -756,9 +740,6 @@ pub(super) fn scan_pcap_query_observed(
         // without any key: what the encrypted session names about itself.
         for row in session_rows(path, frame, time, &endpoints, &fields) {
             observe(RowKind::Session, &row, destination, destination_port)?;
-            if session_query.keep_table(&row[0].values) {
-                session_page.push(row)?;
-            }
         }
     }
     if request.address_lookup != AddressLookup::Tshark {
@@ -767,35 +748,8 @@ pub(super) fn scan_pcap_query_observed(
     let (ips, hosts) = inventory.rows();
     index.counts = Some((extent.packet_count, ips.len() as u64, hosts.len() as u64));
     let (http, http_omitted, http_count) = http_page.finish()?;
-    let (dns, dns_omitted, dns_count) = dns_page.finish()?;
-    let (sessions, sessions_omitted, _) = session_page.finish()?;
     index.http = http;
     index.http_omitted = http_omitted;
-    index.dns = dns;
-    index.dns_omitted = dns_omitted;
-    index.sessions = sessions;
-    index.sessions_omitted = sessions_omitted;
-    for (slot, rows, fields) in [
-        (6, ips, network::IP_FIELDS),
-        (7, hosts, network::HOST_FIELDS),
-    ] {
-        let query = query::compile_table(&request.filters[slot], fields);
-        let mut page = sorting::Page::new(request, slot, cancel);
-        for row in rows
-            .into_iter()
-            .filter(|row| query.keep_table(&row[0].values))
-        {
-            page.push(row)?;
-        }
-        let (rows, omitted, _) = page.finish()?;
-        if slot == 6 {
-            index.ips = rows;
-            index.ips_omitted = omitted;
-        } else {
-            index.hosts = rows;
-            index.hosts_omitted = omitted;
-        }
-    }
     if inventory.omitted > 0 {
         let retention =
             "Network inventory retention limit reached; packet evidence remains available.";
@@ -804,7 +758,7 @@ pub(super) fn scan_pcap_query_observed(
             None => retention.into(),
         });
     }
-    index.coverage = format!("TShark parses every packet; {} capture frames; complete-record extent {}/{} octets; HTTP matches {http_count}, DNS matches {dns_count}; HTTP/1 response correlation uses decoder frame links; attribution unknown. TLS and QUIC server names, ALPN and SSH banners come from handshakes read without keys; the content of HTTPS, HTTP/3 and encrypted DNS stays encrypted, and cleartext HTTP/2 requests are listed without their responses{}",
+    index.coverage = format!("TShark parses every packet; {} capture frames; complete-record extent {}/{} octets; HTTP matches {http_count}; HTTP/1 response correlation uses decoder frame links; attribution unknown. TLS and QUIC server names, ALPN and SSH banners come from handshakes read without keys; the content of HTTPS, HTTP/3 and encrypted DNS stays encrypted, and cleartext HTTP/2 requests are listed without their responses{}",
         extent.packet_count, extent.complete_extent, extent.file_size,
         if pcap_open { "; live prefix watermark; final capture requires reanalysis" } else { "" });
     Ok(index)

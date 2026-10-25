@@ -2,7 +2,9 @@
 //! Native fixture for the Run History and Static Analysis polish screenshots.
 //! Needs an X11 display; exits by itself.
 //!
-//! ANTINOMIE_QA_SCENE = history | static | details
+//! ANTINOMIE_QA_SCENE = history | static | details | terminal | empty (an app with no runs,
+//! cores, dumps or captures, showing the panel named by ANTINOMIE_QA_PANEL =
+//! core | memory | disks | network | trace | static | history | summary | activity)
 //! ANTINOMIE_QA_THEME = dark | light | blue, ANTINOMIE_QA_SIZE = 1280x820,
 //! ANTINOMIE_QA_SECONDS = 25.
 use super::*;
@@ -87,14 +89,35 @@ fn native_ui_polish_fixture() {
     impl eframe::App for QaApp {
         fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
             if Instant::now() >= self.deadline {
+                // A running VM would ask before the window may close.
+                self.app.snapshot.active_vm = None;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
             if !self.seeded {
                 self.seeded = true;
-                self.app.focus_panel = Some(if self.scene == "static" {
-                    crate::workspace::Panel::StaticAnalysis
+                use crate::workspace::Panel;
+                self.app.focus_panel = Some(if self.scene == "empty" {
+                    match std::env::var("ANTINOMIE_QA_PANEL")
+                        .unwrap_or_default()
+                        .as_str()
+                    {
+                        "core" => Panel::CoreDump,
+                        "memory" => Panel::Memory,
+                        "disks" => Panel::Disks,
+                        "network" => Panel::Network,
+                        "trace" => Panel::Trace,
+                        "static" => Panel::StaticAnalysis,
+                        "summary" => Panel::Summary,
+                        "activity" => Panel::Activity,
+                        "triage" => Panel::Triage,
+                        _ => Panel::RunHistory,
+                    }
+                } else if self.scene == "terminal" {
+                    Panel::Terminal("term-shot".into())
+                } else if self.scene == "static" {
+                    Panel::StaticAnalysis
                 } else {
-                    crate::workspace::Panel::RunHistory
+                    Panel::RunHistory
                 });
             }
             if self.scene == "details" {
@@ -132,6 +155,22 @@ fn native_ui_polish_fixture() {
         Box::new(move |cc| {
             theme::install(&cc.egui_ctx);
             let mut app = history_fixture();
+            if scene == "empty" {
+                app = analysis_setup_fixture();
+                app.launch_open = false;
+            }
+            if scene == "terminal" {
+                // A saved run's terminal in its tab; click in it for the focus edge.
+                let mut finished = run("term-shot");
+                finished.request.path = "/usr/bin/demo".into();
+                finished.state = RunState::Finished;
+                let mut terminal = RunTerminal::new(finished);
+                terminal.open = true;
+                terminal
+                    .terminal
+                    .process(b"analyst@vm:~$ ./demo\r\nhello from the guest\r\nanalyst@vm:~$ ");
+                app.terminals.insert("term-shot".into(), terminal);
+            }
             app.settings.set_theme(theme_choice);
             theme::apply_theme(&cc.egui_ctx, theme_choice);
             if scene == "static" {

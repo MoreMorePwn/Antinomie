@@ -143,6 +143,7 @@ pub(super) fn execution_order(report: &AnalysisReport) -> Vec<usize> {
         AnalysisKind::Metadata
         | AnalysisKind::Structures
         | AnalysisKind::Strings
+        | AnalysisKind::Regex
         | AnalysisKind::Entropy
         | AnalysisKind::Hardening => 0,
         AnalysisKind::Rules | AnalysisKind::Identification | AnalysisKind::Unpacking => 1,

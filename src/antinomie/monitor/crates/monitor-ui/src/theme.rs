@@ -247,6 +247,15 @@ pub fn section(ui: &mut egui::Ui, title: &str) -> egui::Response {
     ui.label(egui::RichText::new(title).strong().color(heading()))
 }
 
+/// What a list, table or tab says when it has nothing in it: one muted line a
+/// little below its heading, as the Disks and Memory lists have always said
+/// "No disk dumps for this VM". Say what is missing, and for a list that is
+/// empty because of a filter, that nothing matches.
+pub fn empty_state(ui: &mut egui::Ui, text: impl Into<String>) -> egui::Response {
+    ui.add_space(4.0);
+    ui.add(egui::Label::new(egui::RichText::new(text).color(muted())).wrap())
+}
+
 /// Buttons without a border: nothing around them at rest, a tint when the
 /// pointer is over one and a stronger tint while it is pressed. Call it on a
 /// `Ui` scope that holds the buttons.

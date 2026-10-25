@@ -261,6 +261,7 @@ impl Journal {
         }
         crate::widgets::table::begin(ui);
         TableBuilder::new(ui)
+            .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
             .column(Column::exact(84.0))
             .column(Column::exact(60.0))
             .column(Column::remainder())

@@ -405,7 +405,7 @@ fn the_online_check_is_off_by_default_and_needs_the_key() {
 }
 
 #[test]
-fn the_new_network_layout_has_four_tabs_and_the_switch_brings_back_the_old_ones() {
+fn the_network_section_has_four_tabs_and_no_layout_switch() {
     if !tshark() {
         return;
     }
@@ -423,8 +423,6 @@ fn the_new_network_layout_has_four_tabs_and_the_switch_brings_back_the_old_ones(
         "93.184.216.34:80",
         "tcp",
         "Matched",
-        "New layout",
-        "Current layout (0.7.0)",
     ] {
         assert!(text.contains(wanted), "{wanted:?} missing: {text}");
     }
@@ -447,18 +445,13 @@ fn the_new_network_layout_has_four_tabs_and_the_switch_brings_back_the_old_ones(
         text.contains("GET") && text.contains("example.com") && text.contains("Matched"),
         "{text}"
     );
-    // The switch.
-    view.net_layout = NetLayout::Old;
+    // The 0.7.0 layout and its switch are gone: the four tabs are all there is.
     let text = shown(&settle(&ctx, &mut view));
-    for wanted in [
-        "IPs",
-        "Hosts",
-        "HTTP",
-        "DNS",
-        "Sessions",
-        "Current layout (0.7.0)",
-    ] {
+    for wanted in ["Endpoints", "Domains", "URLs", "TLS"] {
         assert!(text.contains(wanted), "{wanted:?} missing: {text}");
+    }
+    for gone in ["Current layout (0.7.0)", "New layout", "Sessions"] {
+        assert!(!text.contains(gone), "{gone:?} present: {text}");
     }
 }
 

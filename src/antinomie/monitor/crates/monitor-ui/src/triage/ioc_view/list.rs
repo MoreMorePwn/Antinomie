@@ -336,7 +336,7 @@ impl View {
                     .column(Column::exact(130.0))
                     .column(Column::exact(96.0))
                     .column(Column::exact(96.0))
-                    .column(Column::initial(230.0).at_least(140.0).clip(true))
+                    .column(Column::remainder().at_least(140.0).clip(true))
                     .column(Column::exact(70.0))
                     .max_scroll_height(height)
                     .min_scrolled_height(0.0)

@@ -9,6 +9,7 @@ mod cards;
 mod coverage;
 mod finding;
 mod header;
+pub(in crate::triage) use header::ScanActivity;
 mod inputs;
 mod journal;
 mod selection;

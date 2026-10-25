@@ -71,6 +71,9 @@ pub struct Feed {
     /// Switched on until the person says otherwise. A smaller alternative to
     /// another feed is off until it is asked for.
     pub default_on: bool,
+    /// abuse.ch has stopped filling this list: a file with only comment lines
+    /// is its answer, kept as a copy of no records, not a failed download.
+    pub retired_if_empty: bool,
 }
 
 const KEY_MARK: &str = "{key}";
@@ -118,7 +121,10 @@ pub fn url_with_key(template: &str, needs_key: bool, key: &Secret) -> Result<Str
     }
     let key = key.expose();
     if key.is_empty() {
-        return Err("needs the abuse.ch Auth-Key; set it in Tools > API keys".into());
+        return Err(
+            "needs the abuse.ch Auth-Key (free at auth.abuse.ch); set it in Tools > API keys"
+                .into(),
+        );
     }
     if !key
         .bytes()
@@ -157,6 +163,7 @@ pub const FEEDS: [Feed; 8] = [
         needs_key: true,
         expected_size: 118 * 1024 * 1024,
         default_on: true,
+        retired_if_empty: false,
     },
     Feed {
         id: "urlhaus",
@@ -170,6 +177,7 @@ pub const FEEDS: [Feed; 8] = [
         needs_key: true,
         expected_size: 204 * 1024 * 1024,
         default_on: true,
+        retired_if_empty: false,
     },
     Feed {
         id: "urlhaus-payloads",
@@ -183,6 +191,7 @@ pub const FEEDS: [Feed; 8] = [
         needs_key: true,
         expected_size: 312 * 1024 * 1024,
         default_on: true,
+        retired_if_empty: false,
     },
     Feed {
         id: "feodo",
@@ -196,6 +205,7 @@ pub const FEEDS: [Feed; 8] = [
         needs_key: false,
         expected_size: 512 * 1024,
         default_on: true,
+        retired_if_empty: false,
     },
     Feed {
         id: "sslbl-ip",
@@ -209,6 +219,7 @@ pub const FEEDS: [Feed; 8] = [
         needs_key: false,
         expected_size: 512 * 1024,
         default_on: true,
+        retired_if_empty: true,
     },
     Feed {
         id: "sslbl-ja3",
@@ -222,6 +233,7 @@ pub const FEEDS: [Feed; 8] = [
         needs_key: false,
         expected_size: 256 * 1024,
         default_on: true,
+        retired_if_empty: false,
     },
     Feed {
         id: "sslbl-cert",
@@ -235,6 +247,7 @@ pub const FEEDS: [Feed; 8] = [
         needs_key: false,
         expected_size: 1024 * 1024,
         default_on: true,
+        retired_if_empty: false,
     },
     Feed {
         id: "urlhaus-recent",
@@ -248,6 +261,7 @@ pub const FEEDS: [Feed; 8] = [
         needs_key: true,
         expected_size: 8 * 1024 * 1024,
         default_on: false,
+        retired_if_empty: false,
     },
 ];
 
@@ -337,6 +351,11 @@ pub struct FeedStatus {
 }
 
 impl FeedStatus {
+    /// The copy holds no records because abuse.ch serves this list empty.
+    pub fn retired(&self) -> bool {
+        self.feed.retired_if_empty && self.meta.as_ref().is_some_and(|meta| meta.records == 0)
+    }
+
     /// A copy is stored and the feed is switched on.
     pub fn usable(&self) -> bool {
         self.meta.is_some() && self.enabled

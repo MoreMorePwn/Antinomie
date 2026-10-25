@@ -205,7 +205,11 @@ impl CoreView {
 
     pub(super) fn context(&mut self, ui: &mut egui::Ui, record: &CoreRecord) {
         let Some(thread) = record.core.threads.get(self.thread_index) else {
-            self.thread_picker(ui, record);
+            if record.core.threads.is_empty() {
+                crate::theme::empty_state(ui, "No threads recorded in this core");
+            } else {
+                self.thread_picker(ui, record);
+            }
             return;
         };
         ui.horizontal_wrapped(|ui| {
@@ -352,6 +356,16 @@ impl CoreView {
             shown.len(),
             record.core.mappings.len()
         ));
+        if shown.is_empty() {
+            crate::theme::empty_state(
+                ui,
+                if record.core.mappings.is_empty() {
+                    "No memory mappings in this core"
+                } else {
+                    "No mapping matches the filter"
+                },
+            );
+        }
         if !shown.contains(&self.mapping_index) {
             self.mapping_index = usize::MAX;
             self.page = None;
@@ -893,6 +907,16 @@ fn notes_table(
         .collect();
     let row_count = rows.len();
     ui.weak(format!("{row_count} / {total} notes"));
+    if row_count == 0 {
+        crate::theme::empty_state(
+            ui,
+            if total == 0 {
+                "No recovered notes in this core"
+            } else {
+                "No note matches the filter"
+            },
+        );
+    }
     let selection_id = ui.id().with(("core-note-detail", &record.dir));
     if ui
         .data(|data| data.get_temp::<NoteRow>(selection_id))
@@ -913,6 +937,7 @@ fn notes_table(
     let mut detail = None;
     crate::widgets::table::begin(ui);
     TableBuilder::new(ui)
+        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
         .max_scroll_height(table_height)
         .striped(true)
         .sense(egui::Sense::click())
