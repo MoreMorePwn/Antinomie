@@ -2,8 +2,8 @@
 //! The stealth profile as QEMU launch options. Each one adds only what
 //! differs from QEMU's defaults, so a Transparent profile launches as before.
 use super::{
-    DiskBus, DiskMedia, Firmware, NicModel, Pointer, RtcClock, SmbiosEntry, StealthProfile,
-    firmware, host_cpu_vendor, host_cpuinfo, smbios,
+    DiskBus, DiskMedia, Firmware, NicModel, NicSlot, Pointer, RtcClock, SmbiosEntry,
+    StealthProfile, firmware, host_cpu_vendor, host_cpuinfo, smbios,
 };
 use std::{path::Path, process::Command};
 
@@ -144,18 +144,13 @@ pub(crate) fn nic_option(profile: &StealthProfile) -> String {
     device
 }
 
-/// Where PC chipsets put the integrated Intel NIC: PCI 00:19.0. udev names
-/// a NIC there `enp0s25` whatever its model, so a base that configures that
-/// interface (stealth support `onboardnic`) finds it under every profile and
-/// with or without a display or pointer device taking the first free slots.
-pub(crate) const ONBOARD_NIC_ADDRESS: &str = "addr=0x19";
-
-/// [`nic_option`] for a base: at the onboard slot when the base expects it.
-pub(crate) fn nic_option_for(profile: &StealthProfile, base: &super::BaseSupport) -> String {
+/// [`nic_option`] at `slot`, for a base that names its NIC by PCI slot
+/// (stealth support `onboardnic`); elsewhere QEMU picks the first free slot.
+pub(crate) fn nic_option_for(profile: &StealthProfile, slot: Option<NicSlot>) -> String {
     let mut device = nic_option(profile);
-    if base.onboard_nic {
+    if let Some(slot) = slot {
         device.push(',');
-        device.push_str(ONBOARD_NIC_ADDRESS);
+        device.push_str(slot.address());
     }
     device
 }
