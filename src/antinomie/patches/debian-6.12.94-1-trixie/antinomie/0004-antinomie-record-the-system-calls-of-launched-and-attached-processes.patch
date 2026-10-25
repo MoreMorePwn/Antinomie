@@ -1,0 +1,1819 @@
+Description: antinomie: record the system calls of launched and attached processes
+ Record what a program does, from inside the guest kernel, without
+ ptrace, a tracer process or anything the program can see. For each
+ system call of a traced task the recorder publishes an Entry event with
+ the arguments and the input memory they point to, and an Exit event
+ with the result and the output memory. Lifecycle events say when the
+ program was launched (with its path, argv and environment), forked a
+ child, completed an exec and exited. Every event is a sequence of
+ records in the per-CPU telemetry rings: a 144-byte header (stream, task
+ cookie, call id, event and packet sequence, timestamps, pid and tid,
+ CPU, launch cookie and capture cookie) and the fields, each sent in
+ chunks of at most 4 KiB.
+ .
+ Memory is read without faulting. A field the recorder could not read
+ says why: copy fault, invalid extent, no decoder, resource exhausted,
+ lost to a full ring, or not resident (the range is mapped and readable
+ but not yet in memory, such as a forked child's literals). An input
+ that was not resident at entry is read again at the end of the call
+ and published with the Exit, marked as recaptured; after a successful
+ exec the exec's own copy of the path and the new image's argument and
+ environment strings stand in for the caller's memory. Failures and
+ losses are counted (STATS) and marked in the events they affect.
+ .
+ Two scopes are traced. A program the host launched, with every
+ descendant: the launch tags the task with a cookie that its children
+ inherit. And capture sessions, for processes the host did not start:
+ PROCESS_LIST pages through the guest's processes, CAPTURE_ATTACH traces
+ one process and its future descendants, CAPTURE_ALL every user process,
+ and CAPTURE_STOP and CAPTURE_STATUS end and query a session. One
+ session is active at a time; capture ids are never reused within a
+ boot and the 64 most recent stay addressable.
+ .
+ The calls the recorder traces, their argument counts and the names of
+ undecoded pointer arguments come from the system call table. The
+ common calls have built-in decoders (read, write, readv, writev, open,
+ openat, stat, fstat, unlink, rename, execve, execveat, connect, bind,
+ accept, sendto, recvfrom, clone and terminal ioctls); the next patch
+ adds the decoders for the other families.
+ .
+ Hooked kernel files:
+ - arch/x86/entry/common.c calls the recorder at system call entry and
+   exit, the only places that see every native call with its registers.
+ - kernel/fork.c clears the task fields in dup_task_struct(), tags a
+   traced parent's child under tasklist_lock before it can run (so a
+   capture session cannot miss a thread), publishes the fork after it,
+   and frees the task's context with the task.
+ - fs/exec.c records the exec commit, and keeps the exec's copy of the
+   path for a recapture.
+ - kernel/exit.c records the task's exit.
+ - include/linux/sched.h adds the task's cookies, its recorder context
+   and whether it is counted.
+ .
+ Contract: telemetry records are application protocol 1, header minor 2
+ (the capture cookie at offset 136). Capture sessions came with
+ revisions 11 and 12; the recapture marks (FIELD_BEGIN flags RECAPTURED
+ and KERNEL_COPY) are additive within revision 17, and a host that does
+ not read them sees the fields as before.
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-10-26
+
+---
+diff --git a/arch/x86/entry/common.c b/arch/x86/entry/common.c
+index 040ff04..0c6bdd0 100644
+--- a/arch/x86/entry/common.c
++++ b/arch/x86/entry/common.c
+@@ -20,6 +20,7 @@
+ #include <linux/syscalls.h>
+ #include <linux/uaccess.h>
+ #include <linux/init.h>
++#include <linux/antinomie_monitor.h>
+ 
+ #include <asm/apic.h>
+ #include <asm/desc.h>
+@@ -74,11 +75,13 @@ __visible noinstr bool do_syscall_64(struct pt_regs *regs, int nr)
+ 	nr = syscall_enter_from_user_mode(regs, nr);
+ 
+ 	instrumentation_begin();
++	ant_monitor_enter(regs, nr);
+ 
+ 	if (!do_syscall_x64(regs, nr) && !do_syscall_x32(regs, nr) && nr != -1) {
+ 		/* Invalid system call, but still a system call. */
+ 		regs->ax = __x64_sys_ni_syscall(regs);
+ 	}
++	ant_monitor_exit(regs);
+ 
+ 	instrumentation_end();
+ 	syscall_exit_to_user_mode(regs);
+@@ -155,12 +158,15 @@ static __always_inline void do_syscall_32_irqs_on(struct pt_regs *regs, int nr)
+ 	 */
+ 	unsigned int unr = nr;
+ 
++	ant_monitor_enter(regs, nr);
++
+ 	if (likely(unr < IA32_NR_syscalls)) {
+ 		unr = array_index_nospec(unr, IA32_NR_syscalls);
+ 		regs->ax = ia32_sys_call(regs, unr);
+ 	} else if (nr != -1) {
+ 		regs->ax = __ia32_sys_ni_syscall(regs);
+ 	}
++	ant_monitor_exit(regs);
+ }
+ 
+ #ifdef CONFIG_IA32_EMULATION
+diff --git a/fs/exec.c b/fs/exec.c
+index 030240d..718cdfa 100644
+--- a/fs/exec.c
++++ b/fs/exec.c
+@@ -33,6 +33,7 @@
+ #include <linux/swap.h>
+ #include <linux/string.h>
+ #include <linux/init.h>
++#include <linux/antinomie_monitor.h>
+ #include <linux/sched/mm.h>
+ #include <linux/sched/coredump.h>
+ #include <linux/sched/signal.h>
+@@ -1848,6 +1849,8 @@ static int exec_binprm(struct linux_binprm *bprm)
+ 
+ 	audit_bprm(bprm);
+ 	trace_sched_process_exec(current, old_pid, bprm);
++	ant_monitor_exec();
++	ant_monitor_exec_names(bprm);
+ 	ptrace_event(PTRACE_EVENT_EXEC, old_vpid);
+ 	proc_exec_connector(current);
+ 	return 0;
+diff --git a/include/linux/antinomie_monitor.h b/include/linux/antinomie_monitor.h
+new file mode 100644
+index 0000000..fe40e30
+--- /dev/null
++++ b/include/linux/antinomie_monitor.h
+@@ -0,0 +1,34 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef _LINUX_ANTINOMIE_MONITOR_H
++#define _LINUX_ANTINOMIE_MONITOR_H
++#include <linux/types.h>
++struct task_struct;
++struct pt_regs;
++struct ant_task;
++struct linux_binprm;
++#ifdef CONFIG_ANTINOMIE
++void ant_monitor_enter(struct pt_regs *regs, long nr);
++void ant_monitor_exit(struct pt_regs *regs);
++void ant_monitor_fork(struct task_struct *child);
++void ant_monitor_fork_prepare(struct task_struct *child);
++u64 ant_monitor_cookie(struct task_struct *task);
++u64 ant_monitor_stream_id(void);
++void ant_monitor_exec(void);
++void ant_monitor_exec_names(const struct linux_binprm *bprm);
++void ant_monitor_task_exit(void);
++void ant_monitor_release(struct task_struct *task);
++int ant_monitor_launch(const char *path, char **argv, char **envp);
++void ant_monitor_stats(void *out);
++int ant_monitor_run_status(u64 root_cookie, void *out);
++void ant_monitor_run_stopped(u64 root_cookie);
++#else
++static inline void ant_monitor_enter(struct pt_regs *regs, long nr) {}
++static inline void ant_monitor_exit(struct pt_regs *regs) {}
++static inline void ant_monitor_fork(struct task_struct *child) {}
++static inline void ant_monitor_fork_prepare(struct task_struct *child) {}
++static inline void ant_monitor_exec(void) {}
++static inline void ant_monitor_exec_names(const struct linux_binprm *bprm) {}
++static inline void ant_monitor_task_exit(void) {}
++static inline void ant_monitor_release(struct task_struct *task) {}
++#endif
++#endif
+diff --git a/include/linux/sched.h b/include/linux/sched.h
+index f9ffe42..18c3d86 100644
+--- a/include/linux/sched.h
++++ b/include/linux/sched.h
+@@ -800,6 +800,14 @@ struct task_struct {
+ 	 */
+ 	randomized_struct_fields_start
+ 
++#ifdef CONFIG_ANTINOMIE
++	u64 ant_cookie;
++	u64 ant_root_cookie;
++	u64 ant_observer_cookie;
++	struct ant_task *ant_monitor;
++	bool ant_counted;
++#endif
++
+ 	void				*stack;
+ 	refcount_t			usage;
+ 	/* Per task flags (PF_*), defined further below: */
+diff --git a/kernel/antinomie/Makefile b/kernel/antinomie/Makefile
+index 1b603b1..2cf3f23 100644
+--- a/kernel/antinomie/Makefile
++++ b/kernel/antinomie/Makefile
+@@ -1 +1,2 @@
+-obj-y += bootstrap.o guest.o control.o
++obj-y += bootstrap.o guest.o recorder.o control.o
++obj-y += observer.o
+diff --git a/kernel/antinomie/control.c b/kernel/antinomie/control.c
+index b598a01..a4ce499 100644
+--- a/kernel/antinomie/control.c
++++ b/kernel/antinomie/control.c
+@@ -1,5 +1,6 @@
+ // SPDX-License-Identifier: GPL-2.0-only
+ #include <linux/antinomie.h>
++#include <linux/antinomie_monitor.h>
+ #include <linux/cred.h>
+ #include <linux/tty.h>
+ #include <linux/devpts_fs.h>
+@@ -21,6 +22,7 @@
+ #include <linux/unaligned.h>
+ #include <linux/workqueue.h>
+ #include "control_wire.h"
++#include "observer.h"
+ 
+ #define ANT_SESSION_MAX 64
+ 
+@@ -216,9 +218,13 @@ static int launch_init(struct subprocess_info *info, struct cred *cred)
+ 	fput(slave);
+ 	if (fd > 2)
+ 		close_fd(fd);
++	if (error)
++		return error;
++	error = ant_monitor_launch(launch->path, launch->argv, launch->envp);
+ 	if (error)
+ 		return error;
+ 	session->pid = task_pid_nr(current);
++	session->task_cookie = current->ant_cookie;
+ 	session->pgrp = get_task_pid(current, PIDTYPE_PGID);
+ 	return 0;
+ }
+@@ -461,6 +467,9 @@ static int command(const void *data, size_t args_len, void *reply,
+ 	if (opcode != ANTC_UPLOAD_BEGIN && get_unaligned_le32(args + 4))
+ 		return -EINVAL;
+ 	switch (opcode) {
++	case ANTC_PROCESS_LIST: case ANTC_CAPTURE_ATTACH: case ANTC_CAPTURE_ALL:
++	case ANTC_CAPTURE_STOP: case ANTC_CAPTURE_STATUS:
++		return ant_observer_command(opcode, args, args_len, reply, capacity, reply_len);
+ 	case ANTC_UPLOAD_BEGIN:
+ 		return upload_begin(args, args_len, reply, reply_len);
+ 	case ANTC_UPLOAD_CHUNK: case ANTC_UPLOAD_COMMIT: case ANTC_UPLOAD_ABORT:
+@@ -470,6 +479,12 @@ static int command(const void *data, size_t args_len, void *reply,
+ 	case ANTC_TERMINAL_INPUT: case ANTC_TERMINAL_READ:
+ 	case ANTC_TERMINAL_RESIZE: case ANTC_SIGNAL:
+ 		return terminal_command(opcode, args, args_len, reply, capacity, reply_len);
++	case ANTC_STATS:
++		if (args_len != 8 || capacity < 80)
++			return -EINVAL;
++		ant_monitor_stats(reply);
++		*reply_len = 80;
++		return 0;
+ 	case ANTC_INFO:
+ 		if (args_len != 8 || capacity < ANTC_INFO_SIZE)
+ 			return -EINVAL;
+@@ -498,7 +513,9 @@ static int __init ant_control_init(void)
+ 	static const u32 opcodes[] = { ANTC_INFO, ANTC_UPLOAD_BEGIN,
+ 		ANTC_UPLOAD_CHUNK, ANTC_UPLOAD_COMMIT, ANTC_UPLOAD_ABORT, ANTC_EXEC,
+ 		ANTC_TERMINAL_INPUT, ANTC_TERMINAL_READ, ANTC_TERMINAL_RESIZE,
+-		ANTC_SIGNAL, ANTC_SHUTDOWN };
++		ANTC_SIGNAL, ANTC_STATS,
++		ANTC_SHUTDOWN, ANTC_PROCESS_LIST, ANTC_CAPTURE_ATTACH,
++		ANTC_CAPTURE_ALL, ANTC_CAPTURE_STOP, ANTC_CAPTURE_STATUS };
+ 	int i, error;
+ 
+ 	for (i = 0; i < ARRAY_SIZE(opcodes); i++) {
+diff --git a/kernel/antinomie/control_wire.h b/kernel/antinomie/control_wire.h
+index 3f3f873..87464f8 100644
+--- a/kernel/antinomie/control_wire.h
++++ b/kernel/antinomie/control_wire.h
+@@ -22,9 +22,24 @@
+ #define ANTC_TERMINAL_READ 0x1012
+ #define ANTC_TERMINAL_RESIZE 0x1013
+ #define ANTC_SIGNAL 0x1014
++#define ANTC_STATS 0x1020
+ #define ANTC_INFO 0x1021
+ #define ANTC_INFO_SIZE 160
+ #define ANTC_SHUTDOWN 0x1030
++#define ANTC_PROCESS_LIST 0x1050
++#define ANTC_CAPTURE_ATTACH 0x1051
++#define ANTC_CAPTURE_ALL 0x1052
++#define ANTC_CAPTURE_STOP 0x1053
++#define ANTC_CAPTURE_STATUS 0x1054
++#define ANTC_PROCESS_PAGE_MAX 64
++#define ANTC_PROCESS_ENTRY_SIZE 64
++#define ANTC_CAPTURE_STATUS_SIZE 32
++#define ANTC_CAPTURE_RETAINED 64
++#define ANTC_CAPTURE_ACTIVE 1
++#define ANTC_CAPTURE_STOPPED 2
++#define ANTC_CAPTURE_TAILS_POSSIBLE 4
++#define ANTC_CAPTURE_PROCESS 1
++#define ANTC_CAPTURE_USERSPACE 2
+ #define ANTC_UPLOAD_OVERWRITE 1
+ #define ANTC_UPLOAD_EXECUTABLE 2
+ 
+@@ -56,12 +71,43 @@
+  * SIGNAL: header, u64 session_id at 8, u32 signal at 16,
+  * u32 reserved=0 at 20. Signals launch process group. Empty success reply.
+  *
++ * STATS: header only. Reply: ten u64 counters in order: stream_id,
++ * tasks_created, tasks_live, calls_entered, events_attempted,
++ * packets_attempted, packets_failed, copy_faults, schema_gaps,
++ * context_failures (80 bytes). Counters persist despite telemetry loss.
+  * INFO: header only. Reply (160 bytes): u32 revision at 0 (ANTC_REVISION),
+  * u32 reserved=0 at 4, source id at 8 (80 bytes), kernel release at 88
+  * (64 bytes), reserved zero at 152. Strings are NUL terminated and padded.
+  * The source id is CONFIG_ANTINOMIE_SOURCE_ID, "<revision>:<series sha256>",
+  * or empty for an unversioned build. Kernels before revision 9 return
+- * -EOPNOTSUPP.
++ * -EOPNOTSUPP. INFO is registered before every other opcode, so INFO
++ * unsupported while STATS succeeds identifies such a kernel.
++ * PROCESS_LIST: header flags=0, u32 after_pid at 8, u32 capacity at 12,
++ * 1..64. Non-atomic live pagination of userspace process leaders, ascending
++ * PID. Reply: u64 stream_id at 0, u32 count at 8, u32 next_pid at 12
++ * (0 ends enumeration), then count 64-byte entries: u64 task_cookie at 0,
++ * u64 start_boottime at 8, u32 tgid at 16, u32 parent_tgid at 20,
++ * u32 uid/gid/thread_count at 24/28/32, u32 flags=0 at 36, comm[16] at 40
++ * (NUL terminated), reserved zeros at 56..63. PID is not authorization.
++ * CAPTURE_ATTACH: header flags=0, u64 leader task_cookie at 8,
++ * u64 start_boottime at 16, u32 tgid at 24, u32 reserved=0 at 28.
++ * Validates live identity, includes current thread group and future descendants
++ * only. CAPTURE_ALL: header only; existing/future userspace observations.
++ * Both reply with u64 capture_cookie at 0 and u64 stream_id at 8 (16 bytes).
++ * One active observer at a time. Capture IDs count up from 1 and are never
++ * reused within a boot; there is no per-boot capture limit (revision 12).
++ * STOP and STATUS address the 64 most recent captures; an older cookie
++ * returns -ESRCH like an unknown one (such a capture has necessarily stopped).
++ * Existing launched-run root ownership and PTYs remain unchanged.
++ * CAPTURE_STOP / STATUS: header flags=0, u64 capture_cookie at 8.
++ * STATUS cookie=0 queries the active observer (all-zero reply if none).
++ * STOP requires a nonzero known cookie, is idempotent, never signals tasks.
++ * Both return 32-byte status: u64 cookie at 0, u32 flags at 8, u32 mode at 12,
++ * u64 start_ns at 16, u64 stop_ns at 24. STOP closes admission; admitted calls
++ * and async requests retain their old capture ID and may publish later tails.
++ * STOPPED|TAILS_POSSIBLE does not promise delivery/drain or complete capture.
++ * ANTT minor 2 / 144-byte header adds capture_cookie at offset 136, preserving
++ * launched root cookie at 128. Capture attribution is frozen on admission.
+  * SHUTDOWN: header only; empty success reply, delayed kernel_power_off.
+  */
+ #endif
+diff --git a/kernel/antinomie/observer.c b/kernel/antinomie/observer.c
+new file mode 100644
+index 0000000..acf19c9
+--- /dev/null
++++ b/kernel/antinomie/observer.c
+@@ -0,0 +1,227 @@
++// SPDX-License-Identifier: GPL-2.0-only
++#include <linux/antinomie_monitor.h>
++#include <linux/cred.h>
++#include <linux/errno.h>
++#include <linux/ktime.h>
++#include <linux/rcupdate.h>
++#include <linux/sched/signal.h>
++#include <linux/unaligned.h>
++
++#include "control_wire.h"
++#include "observer.h"
++
++struct ant_observer {
++	u64 cookie;
++	u64 start_ns;
++	u64 stop_ns;
++	u32 mode;
++};
++
++/* The control owner serializes writes. A ring keeps the most recent captures
++ * addressable; cookies count up for the whole boot and are never reused, so a
++ * recycled slot cannot alias an older capture. A slot is recycled only after
++ * its capture stopped and an RCU grace period passed, so admission readers
++ * never see its immutable fields change under them.
++ */
++static struct ant_observer observers[ANTC_CAPTURE_RETAINED];
++static u64 last_cookie;
++static struct ant_observer __rcu *active_observer;
++
++static struct ant_observer *slot(u64 cookie)
++{
++	return &observers[(cookie - 1) % ANTC_CAPTURE_RETAINED];
++}
++
++u64 ant_observer_admit(struct task_struct *task)
++{
++	struct ant_observer *observer;
++	u64 cookie = 0;
++
++	rcu_read_lock();
++	observer = rcu_dereference(active_observer);
++	if (observer && !(READ_ONCE(task->flags) & (PF_KTHREAD | PF_USER_WORKER)) &&
++	    (observer->mode == ANTC_CAPTURE_USERSPACE ||
++	     READ_ONCE(task->ant_observer_cookie) == observer->cookie))
++		cookie = observer->cookie;
++	rcu_read_unlock();
++	return cookie;
++}
++
++static int process_list(const u8 *args, size_t args_len, u8 *reply,
++			size_t capacity, size_t *reply_len)
++{
++	struct task_struct *page[ANTC_PROCESS_PAGE_MAX + 1], *task;
++	const struct cred *cred;
++	u32 after, limit, count = 0, pid;
++	unsigned int i, pos;
++	u8 *entry;
++
++	if (args_len != 16)
++		return -EINVAL;
++	after = get_unaligned_le32(args + 8);
++	limit = get_unaligned_le32(args + 12);
++	if (!limit || limit > ANTC_PROCESS_PAGE_MAX)
++		return -EINVAL;
++	if (capacity < 16 + limit * ANTC_PROCESS_ENTRY_SIZE)
++		return -EMSGSIZE;
++
++	/* Retain one extra leader to distinguish a full final page. tasklist_lock
++	 * protects leader/thread-group lifetimes through encoding the bounded page.
++	 */
++	read_lock(&tasklist_lock);
++	for_each_process(task) {
++		pid = task_tgid_nr(task);
++		if (pid <= after || task->flags & (PF_KTHREAD | PF_USER_WORKER) ||
++		    !atomic_read(&task->signal->live))
++			continue;
++		for (pos = 0; pos < count; pos++)
++			if (pid < task_tgid_nr(page[pos]))
++				break;
++		if (pos > limit)
++			continue;
++		if (count < limit + 1)
++			count++;
++		for (i = count - 1; i > pos; i--)
++			page[i] = page[i - 1];
++		page[pos] = task;
++	}
++	memset(reply, 0, 16 + min(count, limit) * ANTC_PROCESS_ENTRY_SIZE);
++	put_unaligned_le64(ant_monitor_stream_id(), reply);
++	put_unaligned_le32(min(count, limit), reply + 8);
++	if (count > limit)
++		put_unaligned_le32(task_tgid_nr(page[limit - 1]), reply + 12);
++	for (i = 0; i < min(count, limit); i++) {
++		task = page[i];
++		entry = reply + 16 + i * ANTC_PROCESS_ENTRY_SIZE;
++		put_unaligned_le64(ant_monitor_cookie(task), entry);
++		put_unaligned_le64(task->start_boottime, entry + 8);
++		put_unaligned_le32(task_tgid_nr(task), entry + 16);
++		put_unaligned_le32(task_tgid_nr(task->real_parent), entry + 20);
++		cred = get_task_cred(task);
++		put_unaligned_le32(from_kuid(&init_user_ns, cred->uid), entry + 24);
++		put_unaligned_le32(from_kgid(&init_user_ns, cred->gid), entry + 28);
++		put_cred(cred);
++		put_unaligned_le32(get_nr_threads(task), entry + 32);
++		__get_task_comm((char *)entry + 40, TASK_COMM_LEN, task);
++	}
++	read_unlock(&tasklist_lock);
++	*reply_len = 16 + min(count, limit) * ANTC_PROCESS_ENTRY_SIZE;
++	return 0;
++}
++
++static void status_reply(const struct ant_observer *observer, u8 *reply)
++{
++	memset(reply, 0, ANTC_CAPTURE_STATUS_SIZE);
++	if (!observer)
++		return;
++	put_unaligned_le64(observer->cookie, reply);
++	put_unaligned_le32(observer->stop_ns ?
++		ANTC_CAPTURE_STOPPED | ANTC_CAPTURE_TAILS_POSSIBLE : ANTC_CAPTURE_ACTIVE,
++		reply + 8);
++	put_unaligned_le32(observer->mode, reply + 12);
++	put_unaligned_le64(observer->start_ns, reply + 16);
++	put_unaligned_le64(observer->stop_ns, reply + 24);
++}
++
++static int start(u32 opcode, const u8 *args, size_t args_len, u8 *reply,
++		 size_t capacity, size_t *reply_len)
++{
++	struct ant_observer *observer;
++	struct task_struct *leader = NULL, *task;
++	u64 cookie = 0, start_ns = 0;
++	u32 pid = 0;
++
++	if (opcode == ANTC_CAPTURE_ATTACH) {
++		if (args_len != 32 || get_unaligned_le32(args + 28))
++			return -EINVAL;
++		cookie = get_unaligned_le64(args + 8);
++		start_ns = get_unaligned_le64(args + 16);
++		pid = get_unaligned_le32(args + 24);
++		if (!cookie || !pid)
++			return -EINVAL;
++	} else if (args_len != 8) {
++		return -EINVAL;
++	}
++	if (capacity < 16)
++		return -EMSGSIZE;
++	if (rcu_access_pointer(active_observer))
++		return -EBUSY;
++	if (last_cookie == U64_MAX)
++		return -ENOSPC;
++	observer = slot(last_cookie + 1);
++	/* The slot's previous capture stopped (only one is ever active); wait out
++	 * admission readers that loaded it before the stop.
++	 */
++	if (observer->cookie)
++		synchronize_rcu();
++
++	/* Fork copies the marker before publication under this same lock. An
++	 * attach therefore includes exactly the threads present at this boundary.
++	 */
++	write_lock_irq(&tasklist_lock);
++	if (opcode == ANTC_CAPTURE_ATTACH) {
++		for_each_process(task)
++			if (task_tgid_nr(task) == pid) {
++				leader = task;
++				break;
++			}
++		if (!leader || leader->flags & (PF_KTHREAD | PF_USER_WORKER) ||
++		    !atomic_read(&leader->signal->live) ||
++		    READ_ONCE(leader->ant_cookie) != cookie ||
++		    leader->start_boottime != start_ns) {
++			write_unlock_irq(&tasklist_lock);
++			return -ESRCH;
++		}
++	}
++	observer->cookie = ++last_cookie;
++	observer->stop_ns = 0;
++	observer->mode = opcode == ANTC_CAPTURE_ATTACH ?
++		ANTC_CAPTURE_PROCESS : ANTC_CAPTURE_USERSPACE;
++	observer->start_ns = ktime_get_ns();
++	if (leader) {
++		WRITE_ONCE(leader->ant_observer_cookie, observer->cookie);
++		for_each_thread(leader, task)
++			WRITE_ONCE(task->ant_observer_cookie, observer->cookie);
++	}
++	rcu_assign_pointer(active_observer, observer);
++	write_unlock_irq(&tasklist_lock);
++	put_unaligned_le64(observer->cookie, reply);
++	put_unaligned_le64(ant_monitor_stream_id(), reply + 8);
++	*reply_len = 16;
++	return 0;
++}
++
++int ant_observer_command(u32 opcode, const u8 *args, size_t args_len,
++			 void *reply, size_t capacity, size_t *reply_len)
++{
++	struct ant_observer *observer;
++	u64 cookie;
++
++	if (opcode == ANTC_PROCESS_LIST)
++		return process_list(args, args_len, reply, capacity, reply_len);
++	if (opcode == ANTC_CAPTURE_ATTACH || opcode == ANTC_CAPTURE_ALL)
++		return start(opcode, args, args_len, reply, capacity, reply_len);
++	if (args_len != 16)
++		return -EINVAL;
++	if (capacity < ANTC_CAPTURE_STATUS_SIZE)
++		return -EMSGSIZE;
++	cookie = get_unaligned_le64(args + 8);
++	if (!cookie && opcode == ANTC_CAPTURE_STOP)
++		return -EINVAL;
++	if (!cookie && opcode == ANTC_CAPTURE_STATUS) {
++		observer = rcu_access_pointer(active_observer);
++	} else {
++		if (!cookie || cookie > last_cookie)
++			return -ESRCH;
++		observer = slot(cookie);
++		if (observer->cookie != cookie)
++			return -ESRCH;
++	}
++	if (opcode == ANTC_CAPTURE_STOP && !observer->stop_ns) {
++		observer->stop_ns = ktime_get_ns();
++		rcu_assign_pointer(active_observer, NULL);
++	}
++	status_reply(observer, reply);
++	*reply_len = ANTC_CAPTURE_STATUS_SIZE;
++	return 0;
++}
+diff --git a/kernel/antinomie/observer.h b/kernel/antinomie/observer.h
+new file mode 100644
+index 0000000..c7df2a9
+--- /dev/null
++++ b/kernel/antinomie/observer.h
+@@ -0,0 +1,13 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef _ANTINOMIE_OBSERVER_H
++#define _ANTINOMIE_OBSERVER_H
++
++#include <linux/types.h>
++
++struct task_struct;
++
++u64 ant_observer_admit(struct task_struct *task);
++int ant_observer_command(u32 opcode, const u8 *args, size_t args_len,
++			 void *reply, size_t capacity, size_t *reply_len);
++
++#endif
+diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
+new file mode 100644
+index 0000000..9167ee4
+--- /dev/null
++++ b/kernel/antinomie/recorder.c
+@@ -0,0 +1,1157 @@
++// SPDX-License-Identifier: GPL-2.0-only
++#include <linux/antinomie.h>
++#include <linux/antinomie_monitor.h>
++#include <linux/binfmts.h>
++#include <linux/cred.h>
++#include <linux/compat.h>
++#include <linux/file.h>
++#include <linux/fs.h>
++#include <linux/init.h>
++#include <linux/ktime.h>
++#include <linux/random.h>
++#include <linux/sched.h>
++#include <linux/sched/signal.h>
++#include <linux/slab.h>
++#include <linux/mm.h>
++#include <linux/socket.h>
++#include <linux/uaccess.h>
++#include <linux/uio.h>
++#include <linux/unaligned.h>
++#include <uapi/linux/major.h>
++#include <uapi/asm/termios.h>
++#include <asm/stat.h>
++#include <asm/syscall.h>
++
++#include "native_syscalls.h"
++#include "observer.h"
++
++/* Scratch bounds packet size, never the logical capture extent. A task owns
++ * its context across migration; failure to allocate does not lose lineage.
++ */
++#define ANT_CHUNK_SIZE 4096
++#define ANT_HEADER_SIZE 144
++#define ANT_X32_BIT 0x40000000UL
++#define ANT_SCHEMA 1
++#define ANT_INCOMPLETE 1
++#define ANT_OBSERVATIONAL 8
++#define ANT_LIFECYCLE 16
++/* FIELD_BEGIN flags word (contract 22): the field is a later capture of an
++ * input the Entry could not read, and its bytes are the kernel's own copy.
++ */
++#define ANT_FIELD_RECAPTURED 8
++#define ANT_FIELD_KERNEL_COPY 16
++#define ANT_RECAPTURE_MAX 8
++#define ANT_RECAPTURE_KEY_SIZE 96
++
++enum ant_status {
++	ANT_COMPLETE, ANT_COPY_FAULT, ANT_INVALID_EXTENT, ANT_UNKNOWN_EXTENT,
++	ANT_NO_DECODER, ANT_NULL_POINTER, ANT_ADDRESS_ONLY, ANT_ASYNC_UNOBSERVED,
++	ANT_RESOURCE_EXHAUSTED, ANT_ABORTED_ON_LOSS, ANT_CONTEXT_MISSING,
++	ANT_NOT_WRITTEN, ANT_NOT_RESIDENT,
++};
++
++/* An input field recorded NOT_RESIDENT at entry, read again at exit. */
++struct ant_recapture {
++	u64 address, size, declared_size;
++	const char *layout;
++	u16 encoding;
++	u8 arg_index;
++	bool string, exec_path, done;
++	char key[ANT_RECAPTURE_KEY_SIZE];
++};
++
++/* Where an exec vector's entry walk stopped on a non-resident page. */
++struct ant_exec_resume {
++	u64 vector, index, pointer;
++	u8 arg_index;
++	bool pending, pointer_read;
++};
++
++struct ant_task {
++	u64 call_id, event_seq, packet_seq, nr, args[6];
++	u64 capture_cookie;
++	u64 entry_ns, timestamp_ns, ip, sp;
++	u64 object_count, packet_count, failed_count, state;
++	u32 flags, object_id, sock_capacity;
++	u8 phase, abi, arg_count;
++	bool active, busy, entry_lost, sock_capacity_valid, kernel_imported;
++	struct iovec *iov;
++	u32 iov_count;
++	/* Contract 22: inputs to read again at exit, without allocating. */
++	struct ant_recapture recapture[ANT_RECAPTURE_MAX];
++	struct ant_exec_resume exec_resume[2];
++	struct mm_struct *entry_mm;
++	char *exec_name;
++	u64 exec_budget, exec_argc, exec_envc;
++	u32 field_mark;
++	u8 recapture_count;
++	enum ant_status last_status;
++	bool string_field, exec_walk, exec_committed, exec_argv_intact;
++	u8 packet[ANT_HEADER_SIZE + ANT_CHUNK_SIZE];
++};
++
++static u64 stream_id;
++static atomic64_t cookies = ATOMIC64_INIT(0);
++static atomic64_t tasks_created = ATOMIC64_INIT(0);
++static atomic64_t tasks_live = ATOMIC64_INIT(0);
++static atomic64_t calls_entered = ATOMIC64_INIT(0);
++static atomic64_t events_attempted = ATOMIC64_INIT(0);
++static atomic64_t packets_attempted = ATOMIC64_INIT(0);
++static atomic64_t packets_failed = ATOMIC64_INIT(0);
++static atomic64_t copy_faults = ATOMIC64_INIT(0);
++static atomic64_t schema_gaps = ATOMIC64_INIT(0);
++static atomic64_t context_failures = ATOMIC64_INIT(0);
++
++static int publish(struct ant_task *ctx, u8 kind, u32 object_id,
++		   u64 object_offset, u64 object_size, size_t body_len)
++{
++	u8 *p = ctx->packet;
++	int error;
++
++	memset(p, 0, ANT_HEADER_SIZE);
++	memcpy(p, "ANTT", 4);
++	put_unaligned_le16(1, p + 4);
++	put_unaligned_le16(2, p + 6);
++	put_unaligned_le16(ANT_HEADER_SIZE, p + 8);
++	put_unaligned_le16(1, p + 10);
++	put_unaligned_le32(ANT_HEADER_SIZE + body_len, p + 12);
++	put_unaligned_le32(ctx->flags, p + 16);
++	put_unaligned_le32(ANT_SCHEMA, p + 20);
++	put_unaligned_le64(stream_id, p + 24);
++	put_unaligned_le64(current->ant_cookie, p + 32);
++	put_unaligned_le64(ctx->call_id, p + 40);
++	put_unaligned_le64(ctx->event_seq, p + 48);
++	put_unaligned_le64(++ctx->packet_seq, p + 56);
++	put_unaligned_le64(ctx->timestamp_ns, p + 64);
++	put_unaligned_le32(task_tgid_nr(current), p + 72);
++	put_unaligned_le32(task_pid_nr(current), p + 76);
++	put_unaligned_le32(raw_smp_processor_id(), p + 80);
++	put_unaligned_le32(1, p + 84);
++	put_unaligned_le64(ctx->nr, p + 88);
++	put_unaligned_le16(ctx->abi, p + 96);
++	p[98] = ctx->phase;
++	p[99] = kind;
++	put_unaligned_le32(object_id, p + 100);
++	put_unaligned_le64(object_offset, p + 104);
++	put_unaligned_le64(object_size, p + 112);
++	put_unaligned_le32(body_len, p + 120);
++	put_unaligned_le64(current->ant_root_cookie, p + 128);
++	put_unaligned_le64(ctx->capture_cookie, p + 136);
++	ctx->packet_count++;
++	atomic64_inc(&packets_attempted);
++	error = ant_send(p, ANT_HEADER_SIZE + body_len);
++	if (error) {
++		ctx->failed_count++;
++		ctx->state |= 2;
++		ctx->flags |= ANT_INCOMPLETE;
++		atomic64_inc(&packets_failed);
++	}
++	return error;
++}
++
++static void event_begin(struct ant_task *ctx, u8 phase, long result)
++{
++	u8 *body = ctx->packet + ANT_HEADER_SIZE;
++	const struct cred *cred = current_cred();
++	u32 validity = BIT(6) | BIT(9);
++	int i;
++
++	ctx->phase = phase;
++	ctx->timestamp_ns = ktime_get_ns();
++	ctx->event_seq++;
++	ctx->object_count = ctx->packet_count = ctx->failed_count = ctx->state = 0;
++	ctx->object_id = 0;
++	ctx->flags = 0;
++	if (phase == 3)
++		ctx->flags |= ANT_LIFECYCLE;
++	if (phase == 2 && ctx->entry_lost)
++		ctx->flags |= ANT_INCOMPLETE | 2;
++	memset(body, 0, 120);
++	for (i = 0; i < 6; i++)
++		put_unaligned_le64(ctx->args[i], body + i * 8);
++	body[48] = ctx->arg_count;
++	if (phase == 2) {
++		body[49] = result >= 0 ? 1 : 2;
++		if (ctx->abi != 1)
++			body[49] = 4;
++		if (result == -ERESTARTSYS || result == -ERESTARTNOINTR ||
++		    result == -ERESTARTNOHAND || result == -ERESTART_RESTARTBLOCK)
++			body[49] = 3;
++		put_unaligned_le16(1, body + 50);
++		put_unaligned_le64(result, body + 56);
++	}
++	put_unaligned_le64(ctx->entry_ns, body + 64);
++	put_unaligned_le64(ctx->ip, body + 72);
++	put_unaligned_le64(ctx->sp, body + 80);
++	put_unaligned_le32(from_kuid(&init_user_ns, cred->uid), body + 88);
++	put_unaligned_le32(from_kgid(&init_user_ns, cred->gid), body + 92);
++	put_unaligned_le32(from_kuid(&init_user_ns, cred->euid), body + 96);
++	put_unaligned_le32(from_kgid(&init_user_ns, cred->egid), body + 100);
++	put_unaligned_le64(current->start_boottime, body + 104);
++	validity |= ctx->arg_count == 255 ? 0x3f : (1U << ctx->arg_count) - 1;
++	if (ctx->entry_ns)
++		validity |= BIT(7) | BIT(8) | BIT(10);
++	put_unaligned_le32(validity, body + 112);
++	atomic64_inc(&events_attempted);
++	publish(ctx, 1, 0, 0, 0, 120);
++}
++
++static void event_end(struct ant_task *ctx)
++{
++	u8 *body = ctx->packet + ANT_HEADER_SIZE;
++
++	put_unaligned_le64(ctx->object_count, body);
++	put_unaligned_le64(ctx->packet_count + 1, body + 8);
++	put_unaligned_le64(ctx->failed_count, body + 16);
++	put_unaligned_le64(ctx->state, body + 24);
++	publish(ctx, 5, 0, 0, 0, 32);
++}
++
++/* A no-fault copy fails on any page that is not resident, although the kernel
++ * would fault it in for the syscall. When every byte of [address, address +
++ * len) lies in readable mappings of the caller, the field is recorded as
++ * ANT_NOT_RESIDENT: mapped, not present, and never faulted in by the recorder.
++ * Otherwise, or when the classification would have to wait for mmap_lock,
++ * it stays ANT_COPY_FAULT.
++ */
++static enum ant_status fault_status(u64 address, u64 len)
++{
++	struct mm_struct *mm = current->mm;
++	struct vm_area_struct *vma;
++	enum ant_status status = ANT_COPY_FAULT;
++	u64 end;
++
++	if (!in_task() || !mm || (current->flags & PF_KTHREAD) || !address ||
++	    check_add_overflow(address, max_t(u64, len, 1), &end) ||
++	    end > TASK_SIZE_MAX || !mmap_read_trylock(mm))
++		return ANT_COPY_FAULT;
++	for (vma = vma_lookup(mm, address); vma && (vma->vm_flags & VM_READ);
++	     vma = vma_lookup(mm, vma->vm_end)) {
++		if (vma->vm_end >= end) {
++			status = ANT_NOT_RESIDENT;
++			break;
++		}
++	}
++	mmap_read_unlock(mm);
++	return status;
++}
++
++static void incomplete(struct ant_task *ctx, enum ant_status status)
++{
++	if (status == ANT_COMPLETE || status == ANT_NULL_POINTER ||
++	    status == ANT_ADDRESS_ONLY || status == ANT_NOT_WRITTEN)
++		return;
++	ctx->flags |= ANT_INCOMPLETE;
++	ctx->state |= 1;
++	if (status == ANT_NO_DECODER) {
++		ctx->state |= 8;
++		atomic64_inc(&schema_gaps);
++	} else if (status == ANT_COPY_FAULT || status == ANT_NOT_RESIDENT) {
++		atomic64_inc(&copy_faults);
++	} else if (status == ANT_RESOURCE_EXHAUSTED || status == ANT_CONTEXT_MISSING) {
++		ctx->state |= 4;
++		atomic64_inc(&context_failures);
++	}
++}
++
++/* Contract 22. An input of a syscall's own Entry that was not resident is
++ * remembered (address, extent, key), at most ANT_RECAPTURE_MAX per call, and
++ * read again at exit, where the call itself has usually faulted it in. Exec
++ * vectors keep their own resume point instead (ant_exec_resume).
++ */
++static void recapture_note(struct ant_task *ctx, u8 arg_index, const char *key,
++			   const char *layout, u16 encoding, u64 address,
++			   u64 object_size, u64 declared_size)
++{
++	struct ant_recapture *r;
++
++	if (ctx->phase != 1 || ctx->kernel_imported || ctx->exec_walk || !address ||
++	    ctx->recapture_count >= ANT_RECAPTURE_MAX ||
++	    strlen(key) >= ANT_RECAPTURE_KEY_SIZE)
++		return;
++	r = &ctx->recapture[ctx->recapture_count++];
++	r->address = address;
++	r->size = object_size;
++	r->declared_size = declared_size;
++	r->layout = layout;
++	r->encoding = encoding;
++	r->arg_index = arg_index;
++	r->string = ctx->string_field;
++	r->exec_path = r->string && ((ctx->nr == 59 && arg_index == 0) ||
++					 (ctx->nr == 322 && arg_index == 1));
++	r->done = false;
++	strscpy(r->key, key, sizeof(r->key));
++}
++
++/* An Exit field with the argument and key of a remembered input is the
++ * call's own output for that buffer (an in/out buffer); the input is not read
++ * a second time. Another argument's output under the same key (the old mask
++ * of rt_sigprocmask) is a different buffer.
++ */
++static void recapture_drop(struct ant_task *ctx, u8 arg_index, const char *key)
++{
++	int i;
++
++	for (i = 0; i < ctx->recapture_count; i++)
++		if (ctx->recapture[i].arg_index == arg_index &&
++		    !strcmp(ctx->recapture[i].key, key))
++			ctx->recapture[i].done = true;
++}
++
++static void field(struct ant_task *ctx, u8 arg_index, const char *key,
++		  const char *layout, u16 encoding, u64 address,
++		  const void *snapshot, u64 object_size, u64 declared_size,
++		  enum ant_status status)
++{
++	u8 *body = ctx->packet + ANT_HEADER_SIZE;
++	size_t key_len = strlen(key), layout_len = strlen(layout);
++	u64 captured_len = 0, chunk_count = 0;
++	u32 id = ++ctx->object_id;
++	int error = 0;
++
++	ctx->object_count++;
++	if (address && ctx->phase != 3)
++		ctx->flags |= ANT_OBSERVATIONAL;
++	if (ctx->phase == 2 && !ctx->field_mark && ctx->recapture_count)
++		recapture_drop(ctx, arg_index, key);
++	memset(body, 0, 40);
++	body[0] = arg_index;
++	/* A recaptured input keeps its direction although it is read at exit. */
++	body[1] = !ctx->field_mark && ctx->phase == 2 ? 2 : 1;
++	put_unaligned_le16(encoding, body + 2);
++	put_unaligned_le16(ctx->kernel_imported ? 3 : ctx->phase == 3 ? 5 : ctx->phase,
++			   body + 4);
++	put_unaligned_le64(address, body + 8);
++	put_unaligned_le64(declared_size, body + 24);
++	put_unaligned_le16(key_len, body + 32);
++	put_unaligned_le16(layout_len, body + 34);
++	put_unaligned_le32((encoding == 2 ? 2 : 0) |
++			     (encoding == 1 && (ctx->nr == 1 || ctx->nr == 20 || ctx->nr == 44) &&
++			      declared_size > object_size ? 4 : 0) | ctx->field_mark, body + 36);
++	memcpy(body + 40, key, key_len);
++	memcpy(body + 40 + key_len, layout, layout_len);
++	if (status == ANT_COPY_FAULT && !snapshot)
++		status = fault_status(address, object_size == U64_MAX ? 1 : object_size);
++	if (publish(ctx, 2, id, 0, object_size, 40 + key_len + layout_len))
++		status = ANT_ABORTED_ON_LOSS;
++	if (!address && !snapshot && status == ANT_COMPLETE)
++		status = ANT_NULL_POINTER;
++	if (status == ANT_COMPLETE && object_size != U64_MAX &&
++	    object_size > ULONG_MAX - address)
++		status = ANT_INVALID_EXTENT;
++	while (status == ANT_COMPLETE && captured_len < object_size) {
++		size_t chunk_size = min_t(u64, ANT_CHUNK_SIZE,
++					object_size - captured_len);
++
++		if (snapshot)
++			memcpy(body, snapshot + captured_len, chunk_size);
++		else
++			error = copy_from_user_nofault(body,
++				(void __user *)(unsigned long)(address + captured_len),
++				chunk_size);
++		if (error) {
++			status = fault_status(address + captured_len, chunk_size);
++			break;
++		}
++		chunk_count++;
++		captured_len += chunk_size;
++		if (publish(ctx, 3, id, captured_len - chunk_size, object_size, chunk_size))
++			status = ANT_ABORTED_ON_LOSS;
++	}
++	incomplete(ctx, status);
++	ctx->last_status = status;
++	if (status == ANT_NOT_RESIDENT && !snapshot)
++		recapture_note(ctx, arg_index, key, layout, encoding, address,
++			       object_size, declared_size);
++	put_unaligned_le64(object_size, body);
++	put_unaligned_le64(captured_len, body + 8);
++	put_unaligned_le32(status, body + 16);
++	put_unaligned_le32(error, body + 20);
++	put_unaligned_le64(chunk_count, body + 24);
++	publish(ctx, 4, id, 0, object_size, 32);
++}
++
++static void user_field(struct ant_task *ctx, u8 arg_index, const char *key,
++		       const char *layout, u16 encoding, u64 address, u64 size)
++{
++	field(ctx, arg_index, key, layout, encoding, address, NULL,
++	      size, size, ANT_COMPLETE);
++}
++
++static u64 user_string(struct ant_task *ctx, u8 arg_index, const char *key,
++		       u64 address, u64 ceiling)
++{
++	long len = address ? strnlen_user_nofault((void __user *)(unsigned long)address,
++					       ceiling) : 0;
++	enum ant_status status = ANT_COMPLETE;
++
++	if (!address)
++		status = ANT_NULL_POINTER;
++	else if (!len)
++		status = ANT_COPY_FAULT;
++	else if (len > ceiling)
++		status = ANT_INVALID_EXTENT;
++	ctx->string_field = true;
++	field(ctx, arg_index, key, "", 2, address, NULL,
++	      status == ANT_COMPLETE ? len : U64_MAX, ceiling, status);
++	ctx->string_field = false;
++	return status == ANT_COMPLETE ? len : 0;
++}
++
++/* Walks an exec vector from @index. At entry, a pointer or string on a page
++ * that is not resident ends the walk and leaves the point to resume from at
++ * exit (contract 22); there a value that still cannot be read is not recorded.
++ */
++static void exec_vector(struct ant_task *ctx, int slot, u8 arg_index, u64 address,
++			u64 index, u64 *budget)
++{
++	struct ant_exec_resume *resume = &ctx->exec_resume[slot];
++	bool entry = ctx->phase == 1;
++	enum ant_status status;
++	u64 ptr, used, ceiling;
++	char key[80];
++	long len;
++
++	if (!address)
++		return;
++	for (; index < MAX_ARG_STRINGS; index++) {
++		if (*budget < sizeof(ptr) || address > ULONG_MAX - index * sizeof(ptr)) {
++			scnprintf(key, sizeof(key), "arg%u.vector", arg_index);
++			field(ctx, arg_index, key, "", 1, address, NULL,
++			      U64_MAX, *budget, ANT_INVALID_EXTENT);
++			return;
++		}
++		if (!entry && resume->pointer_read) {
++			/* The Entry recorded this pointer; only its string was missing. */
++			ptr = resume->pointer;
++			resume->pointer_read = false;
++		} else {
++			status = copy_from_user_nofault(&ptr,
++				(void __user *)(unsigned long)(address + index * sizeof(ptr)),
++				sizeof(ptr)) ? fault_status(address + index * sizeof(ptr),
++							    sizeof(ptr)) : ANT_COMPLETE;
++			if (!entry && status != ANT_COMPLETE)
++				return;
++			scnprintf(key, sizeof(key), "arg%u.ptr[%llu]", arg_index, index);
++			field(ctx, arg_index, key, "linux-6.12.94/x86_64/pointer", 3,
++			      address + index * sizeof(ptr), &ptr, sizeof(ptr), sizeof(ptr),
++			      status);
++			if (status == ANT_NOT_RESIDENT)
++				*resume = (struct ant_exec_resume){ .vector = address,
++					.index = index, .arg_index = arg_index, .pending = true };
++			if (status != ANT_COMPLETE || !ptr || ctx->failed_count)
++				return;
++			*budget -= sizeof(ptr);
++		}
++		ceiling = min_t(u64, MAX_ARG_STRLEN, *budget);
++		if (!entry) {
++			len = strnlen_user_nofault((void __user *)(unsigned long)ptr, ceiling);
++			if (len <= 0 || len > ceiling)
++				return;
++		}
++		scnprintf(key, sizeof(key), "arg%u.string[%llu]", arg_index, index);
++		used = user_string(ctx, arg_index, key, ptr, ceiling);
++		if (!used && entry && ctx->last_status == ANT_NOT_RESIDENT)
++			*resume = (struct ant_exec_resume){ .vector = address,
++				.index = index, .pointer = ptr, .arg_index = arg_index,
++				.pending = true, .pointer_read = true };
++		if (!used || ctx->failed_count)
++			return;
++		*budget -= used;
++	}
++}
++
++static void vector_entry(struct ant_task *ctx, bool input)
++{
++	u64 count = ctx->args[2];
++	u64 i, remaining = MAX_RW_COUNT;
++	char key[80];
++	enum ant_status status = ANT_COMPLETE;
++
++	if (count > UIO_MAXIOV)
++		status = ANT_INVALID_EXTENT;
++	else if (count) {
++		ctx->iov = kmalloc_array(count, sizeof(*ctx->iov), GFP_NOWAIT);
++		if (!ctx->iov)
++			status = ANT_RESOURCE_EXHAUSTED;
++		else if (copy_from_user_nofault(ctx->iov,
++				(void __user *)(unsigned long)ctx->args[1], count * sizeof(*ctx->iov)))
++			status = ANT_COPY_FAULT;
++		else
++			ctx->iov_count = count;
++	}
++	field(ctx, 1, "arg1.iov", "linux-6.12.94/x86_64/iovec[]", 3,
++	      ctx->args[1], ctx->iov,
++	      count > UIO_MAXIOV ? U64_MAX : count * sizeof(*ctx->iov),
++	      count > UIO_MAXIOV ? U64_MAX : count * sizeof(*ctx->iov), status);
++	if (!input || status != ANT_COMPLETE)
++		return;
++	for (i = 0; i < ctx->iov_count && !ctx->failed_count; i++) {
++		u64 size = min_t(u64, ctx->iov[i].iov_len, remaining);
++
++		scnprintf(key, sizeof(key), "arg1.iov[%llu].data", i);
++		field(ctx, 1, key, "", 1, (unsigned long)ctx->iov[i].iov_base, NULL,
++		      size, ctx->iov[i].iov_len,
++		      ctx->iov[i].iov_len > SSIZE_MAX ? ANT_INVALID_EXTENT : ANT_COMPLETE);
++		remaining -= size;
++	}
++}
++
++static void vector_exit(struct ant_task *ctx, long result)
++{
++	u64 remaining = result > 0 ? result : 0, i;
++	char key[80];
++
++	if (!ctx->iov && ctx->args[2]) {
++		field(ctx, 1, "arg1.iov.output", "", 1, ctx->args[1], NULL,
++		      U64_MAX, U64_MAX, ANT_CONTEXT_MISSING);
++		return;
++	}
++	for (i = 0; i < ctx->iov_count && remaining && !ctx->failed_count; i++) {
++		u64 size = min_t(u64, remaining, ctx->iov[i].iov_len);
++
++		scnprintf(key, sizeof(key), "arg1.iov[%llu].data", i);
++		user_field(ctx, 1, key, "", 1, (unsigned long)ctx->iov[i].iov_base, size);
++		remaining -= size;
++	}
++}
++
++static bool selected(long nr)
++{
++	if (in_ia32_syscall() || (nr & ANT_X32_BIT))
++		return true;
++	return nr >= 0 && nr < ARRAY_SIZE(ant_native_syscalls) &&
++		ant_native_syscalls[nr].valid;
++}
++
++static void ioctl_field(struct ant_task *ctx, bool output, long result)
++{
++	struct fd fd = fdget(ctx->args[0]);
++	struct file *file = fd_file(fd);
++	u32 major;
++	u64 size = U64_MAX;
++	const char *layout = "";
++	bool tty_file = false, input = false;
++
++	if (file && S_ISCHR(file_inode(file)->i_mode)) {
++		major = imajor(file_inode(file));
++		tty_file = major == TTY_MAJOR || major == TTYAUX_MAJOR ||
++			(major >= UNIX98_PTY_SLAVE_MAJOR &&
++			 major < UNIX98_PTY_SLAVE_MAJOR + UNIX98_PTY_MAJOR_COUNT);
++	}
++	if (tty_file)
++		switch (ctx->args[1]) {
++		case TCSETS: case TCSETSW: case TCSETSF:
++			input = true;
++			fallthrough;
++		case TCGETS:
++			size = sizeof(struct termios);
++			layout = "linux-6.12.94/x86_64/termios";
++			break;
++		case TCSETS2: case TCSETSW2: case TCSETSF2:
++			input = true;
++			fallthrough;
++		case TCGETS2:
++			/* glibc's tcgetattr() and isatty() ask with TCGETS2. */
++			size = sizeof(struct termios2);
++			layout = "linux-6.12.94/x86_64/termios2";
++			break;
++		case TIOCSWINSZ:
++			input = true;
++			fallthrough;
++		case TIOCGWINSZ:
++			size = sizeof(struct winsize);
++			layout = "linux-6.12.94/x86_64/winsize";
++			break;
++		case TIOCSPGRP:
++			input = true;
++			fallthrough;
++		case TIOCGPGRP: case TIOCGSID:
++			size = sizeof(pid_t);
++			layout = "linux-6.12.94/x86_64/pid_t";
++			break;
++		case FIONREAD:
++			size = sizeof(int);
++			layout = "linux-6.12.94/x86_64/int";
++			break;
++		}
++	fdput(fd);
++	if (size == U64_MAX) {
++		if (!output)
++			field(ctx, 2, "arg2.ioctl", "", 1, ctx->args[2], NULL,
++			      U64_MAX, U64_MAX, ANT_NO_DECODER);
++	} else if ((input && !output) || (!input && output && !result)) {
++		user_field(ctx, 2, "arg2.ioctl", layout, 3, ctx->args[2], size);
++	}
++}
++
++static void capture_entry(struct ant_task *ctx)
++{
++	u64 *a = ctx->args;
++	u64 budget;
++	int error;
++
++	if (ctx->abi != 1) {
++		field(ctx, 255, "schema.unsupported_abi", "", 1, 0, NULL,
++		      U64_MAX, U64_MAX, ANT_NO_DECODER);
++		return;
++	}
++	if (ctx->arg_count == 255) {
++		field(ctx, 255, "schema.argument_metadata", "", 1, 0, NULL,
++		      U64_MAX, U64_MAX, ANT_NO_DECODER);
++		return;
++	}
++	switch (ctx->nr) {
++	case 1: case 44:
++		field(ctx, 1, "arg1.data", "", 1, a[1], NULL,
++		      min_t(u64, a[2], MAX_RW_COUNT), a[2], ANT_COMPLETE);
++		if (ctx->nr == 44 && a[4])
++			field(ctx, 4, "arg4.address", "linux-6.12.94/x86_64/sockaddr", 3,
++			      a[4], NULL, a[5], a[5],
++			      a[5] > sizeof(struct sockaddr_storage) ? ANT_INVALID_EXTENT : ANT_COMPLETE);
++		break;
++	case 2: case 4: case 87:
++		user_string(ctx, 0, "arg0.path", a[0], PATH_MAX);
++		break;
++	case 257: case 322:
++		user_string(ctx, 1, "arg1.path", a[1], PATH_MAX);
++		if (ctx->nr == 257)
++			break;
++		fallthrough;
++	case 59:
++		if (ctx->nr == 59)
++			user_string(ctx, 0, "arg0.path", a[0], PATH_MAX);
++		budget = max_t(u64, ARG_MAX,
++			min_t(u64, _STK_LIM * 3 / 4, rlimit(RLIMIT_STACK) / 4));
++		ctx->exec_walk = true;
++		exec_vector(ctx, 0, ctx->nr == 59 ? 1 : 2, a[ctx->nr == 59 ? 1 : 2], 0, &budget);
++		exec_vector(ctx, 1, ctx->nr == 59 ? 2 : 3, a[ctx->nr == 59 ? 2 : 3], 0, &budget);
++		ctx->exec_walk = false;
++		ctx->exec_budget = budget;
++		break;
++	case 82:
++		user_string(ctx, 0, "arg0.path", a[0], PATH_MAX);
++		user_string(ctx, 1, "arg1.path", a[1], PATH_MAX);
++		break;
++	case 19: case 20:
++		vector_entry(ctx, ctx->nr == 20);
++		break;
++	case 42: case 49:
++		field(ctx, 1, "arg1.address", "linux-6.12.94/x86_64/sockaddr", 3,
++		      a[1], NULL, a[2], a[2],
++		      a[2] > sizeof(struct sockaddr_storage) ? ANT_INVALID_EXTENT : ANT_COMPLETE);
++		break;
++	case 43: case 45:
++		if (a[ctx->nr == 43 ? 2 : 5]) {
++			error = copy_from_user_nofault(&ctx->sock_capacity,
++				(void __user *)(unsigned long)a[ctx->nr == 43 ? 2 : 5], sizeof(u32));
++			field(ctx, ctx->nr == 43 ? 2 : 5, "address.capacity",
++			      "linux-6.12.94/x86_64/socklen_t", 3,
++			      a[ctx->nr == 43 ? 2 : 5], &ctx->sock_capacity,
++			      sizeof(u32), sizeof(u32), error ? ANT_COPY_FAULT : ANT_COMPLETE);
++			if (error)
++				ctx->sock_capacity = 0;
++			else
++				ctx->sock_capacity_valid = true;
++		}
++		break;
++	case 16:
++		ioctl_field(ctx, false, 0);
++		break;
++	case 56:
++		if (a[0] & (CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID))
++			field(ctx, 3, "arg3.child_tid", "", 1, a[3], NULL,
++			      sizeof(u32), sizeof(u32), ANT_NO_DECODER);
++		break;
++	default: {
++		const struct ant_native_syscall *schema = &ant_native_syscalls[ctx->nr];
++		char key[96];
++		int i;
++
++		/* Legacy output-only fields are defined at exit below. */
++		if (ctx->nr == 0 || ctx->nr == 5)
++			break;
++		for (i = 0; i < 6 && !ctx->failed_count; i++) {
++			if (!(schema->pointer_mask & BIT(i)))
++				continue;
++			scnprintf(key, sizeof(key), "arg%d.%s", i,
++				  schema->argument_names[i] ?: "pointer");
++			field(ctx, i, key, "", 1, a[i], NULL, U64_MAX,
++			      U64_MAX, a[i] ? ANT_NO_DECODER : ANT_NULL_POINTER);
++		}
++		break;
++	}
++	}
++}
++
++static void capture_exit(struct ant_task *ctx, long result)
++{
++	u64 *a = ctx->args;
++	u32 len = 0;
++	u8 address_index, length_index;
++	int error;
++
++	if (ctx->abi != 1)
++		return;
++	switch (ctx->nr) {
++	case 0: case 45:
++		if (result > 0)
++			user_field(ctx, 1, "arg1.data", "", 1, a[1],
++				   min_t(u64, result, min_t(u64, a[2], MAX_RW_COUNT)));
++		if (ctx->nr == 0)
++			break;
++		fallthrough;
++	case 43:
++		address_index = ctx->nr == 43 ? 1 : 4;
++		length_index = ctx->nr == 43 ? 2 : 5;
++		if (result >= 0 && a[address_index] && a[length_index]) {
++			error = copy_from_user_nofault(&len,
++				(void __user *)(unsigned long)a[length_index], sizeof(len));
++			field(ctx, length_index, "address.length",
++			      "linux-6.12.94/x86_64/socklen_t", 3, a[length_index], &len,
++			      sizeof(len), sizeof(len), error ? ANT_COPY_FAULT : ANT_COMPLETE);
++			if (!error)
++				field(ctx, address_index, "address.data",
++				      "linux-6.12.94/x86_64/sockaddr", 3, a[address_index], NULL,
++				      min_t(u64, sizeof(struct sockaddr_storage),
++					    min(len, ctx->sock_capacity)), ctx->sock_capacity,
++				      ctx->sock_capacity_valid ? ANT_COMPLETE : ANT_CONTEXT_MISSING);
++		}
++		break;
++	case 4: case 5:
++		if (!result)
++			user_field(ctx, 1, "arg1.stat", "linux-6.12.94/x86_64/stat", 3,
++				   a[1], sizeof(struct stat));
++		break;
++	case 19:
++		vector_exit(ctx, result);
++		break;
++	case 16:
++		ioctl_field(ctx, true, result);
++		break;
++	case 56:
++		if (result > 0 && (a[0] & CLONE_PARENT_SETTID))
++			user_field(ctx, 2, "arg2.parent_tid", "linux-6.12.94/x86_64/pid_t", 3,
++				   a[2], sizeof(u32));
++		break;
++	}
++}
++
++/* Whether every page of [address, address + size) can be read without
++ * faulting; a recaptured field is published only then.
++ */
++static bool resident(u64 address, u64 size)
++{
++	u64 page, last;
++	u8 byte;
++
++	if (check_add_overflow(address, size - 1, &last))
++		return false;
++	for (page = address & PAGE_MASK;; page += PAGE_SIZE) {
++		if (copy_from_user_nofault(&byte,
++				(void __user *)(unsigned long)max(page, address), 1))
++			return false;
++		if (page == (last & PAGE_MASK))
++			return true;
++	}
++}
++
++static void recapture_field(struct ant_task *ctx, const struct ant_recapture *r)
++{
++	u64 size = r->size;
++	long len;
++
++	if (r->string) {
++		len = strnlen_user_nofault((void __user *)(unsigned long)r->address,
++					   r->declared_size);
++		if (len <= 0 || len > r->declared_size)
++			return;
++		size = len;
++		ctx->string_field = true;
++	} else if (!size || size == U64_MAX || !resident(r->address, size)) {
++		return;
++	}
++	field(ctx, r->arg_index, r->key, r->layout, r->encoding, r->address, NULL,
++	      size, r->declared_size, ANT_COMPLETE);
++	ctx->string_field = false;
++}
++
++/* After a successful exec the caller's memory is gone, but the kernel copied
++ * the argument and environment strings to the new image's stack, which no
++ * user code has run on yet: [arg_start, arg_end) and [env_start, env_end).
++ * The strings from the resume point on are read from there. An interpreter
++ * (a script, binfmt_misc) rewrote the argument list, so only its environment
++ * is recovered.
++ */
++static void exec_recover(struct ant_task *ctx, int slot)
++{
++	const struct ant_exec_resume *resume = &ctx->exec_resume[slot];
++	struct mm_struct *mm = current->mm;
++	u64 start, end, count = slot ? ctx->exec_envc : ctx->exec_argc, i, limit;
++	char key[80];
++	long len;
++
++	if (!resume->pending || !mm || (!slot && !ctx->exec_argv_intact))
++		return;
++	spin_lock(&mm->arg_lock);
++	start = slot ? mm->env_start : mm->arg_start;
++	end = slot ? mm->env_end : mm->arg_end;
++	spin_unlock(&mm->arg_lock);
++	for (i = 0; i < count && start < end && !ctx->failed_count; i++) {
++		limit = min_t(u64, end - start, MAX_ARG_STRLEN);
++		len = strnlen_user_nofault((void __user *)(unsigned long)start, limit);
++		if (len <= 0 || len > limit)
++			return;
++		if (i >= resume->index) {
++			scnprintf(key, sizeof(key), "arg%u.string[%llu]", resume->arg_index, i);
++			ctx->string_field = true;
++			field(ctx, resume->arg_index, key, "", 2, start, NULL, len,
++			      MAX_ARG_STRLEN, ANT_COMPLETE);
++			ctx->string_field = false;
++		}
++		start += len;
++	}
++}
++
++/* Contract 22, at the end of the Exit: each input the Entry recorded
++ * NOT_RESIDENT is read again, still without faulting, and published only if
++ * all of it is resident now, marked RECAPTURED. If the call replaced the
++ * address space (a successful exec), the caller's memory is gone: the path is
++ * the exec's own copy and the vectors are read from the new image, marked
++ * KERNEL_COPY too; nothing else is read.
++ */
++static void recapture(struct ant_task *ctx)
++{
++	bool same_mm = current->mm == ctx->entry_mm;
++	const struct ant_recapture *r;
++	int i;
++
++	if (!ctx->recapture_count && !ctx->exec_resume[0].pending &&
++	    !ctx->exec_resume[1].pending)
++		return;
++	ctx->field_mark = ANT_FIELD_RECAPTURED;
++	for (i = 0; i < ctx->recapture_count && !ctx->failed_count; i++) {
++		r = &ctx->recapture[i];
++		if (r->done)
++			continue;
++		if (same_mm) {
++			recapture_field(ctx, r);
++		} else if (r->exec_path && ctx->exec_name) {
++			ctx->field_mark |= ANT_FIELD_KERNEL_COPY;
++			ctx->kernel_imported = true;
++			field(ctx, r->arg_index, r->key, "", 2, r->address, ctx->exec_name,
++			      strlen(ctx->exec_name) + 1, r->declared_size, ANT_COMPLETE);
++			ctx->kernel_imported = false;
++			ctx->field_mark = ANT_FIELD_RECAPTURED;
++		}
++	}
++	for (i = 0; i < ARRAY_SIZE(ctx->exec_resume) && !ctx->failed_count; i++) {
++		if (!ctx->exec_resume[i].pending)
++			continue;
++		if (same_mm) {
++			exec_vector(ctx, i, ctx->exec_resume[i].arg_index,
++				    ctx->exec_resume[i].vector, ctx->exec_resume[i].index,
++				    &ctx->exec_budget);
++		} else if (ctx->exec_committed) {
++			ctx->field_mark |= ANT_FIELD_KERNEL_COPY;
++			exec_recover(ctx, i);
++			ctx->field_mark = ANT_FIELD_RECAPTURED;
++		}
++	}
++	ctx->field_mark = 0;
++}
++
++static void recapture_reset(struct ant_task *ctx)
++{
++	ctx->recapture_count = 0;
++	memset(ctx->exec_resume, 0, sizeof(ctx->exec_resume));
++	ctx->exec_committed = false;
++	kfree(ctx->exec_name);
++	ctx->exec_name = NULL;
++}
++
++/* At an exec's commit, still inside the traced call: the exec's own copy of
++ * the path, kept only when the Entry could not read it, and what the exit
++ * needs to find the strings on the new image's stack.
++ */
++void ant_monitor_exec_names(const struct linux_binprm *bprm)
++{
++	struct ant_task *ctx = current->ant_monitor;
++	const char *name = bprm->filename;
++	char prefix[24];
++	int i, n;
++
++	if (!ctx || !ctx->active || ctx->busy || ctx->abi != 1 ||
++	    (ctx->nr != 59 && ctx->nr != 322))
++		return;
++	ctx->exec_committed = true;
++	ctx->exec_argv_intact = bprm->interp == bprm->filename;
++	ctx->exec_argc = bprm->argc;
++	ctx->exec_envc = bprm->envc;
++	for (i = 0; i < ctx->recapture_count; i++) {
++		if (!ctx->recapture[i].exec_path || ctx->exec_name)
++			continue;
++		/* execveat relative to a descriptor names "/dev/fd/N" (empty path)
++		 * or "/dev/fd/N/<path>"; the caller's string is what follows.
++		 */
++		if (bprm->fdpath) {
++			n = scnprintf(prefix, sizeof(prefix), "/dev/fd/%d", (int)ctx->args[0]);
++			if (strncmp(name, prefix, n))
++				return;
++			name += n;
++			if (*name == '/')
++				name++;
++			else if (*name)
++				return;
++		}
++		ctx->exec_name = kstrdup(name, GFP_KERNEL | __GFP_NOWARN);
++	}
++}
++
++void ant_monitor_enter(struct pt_regs *regs, long nr)
++{
++	struct ant_task *ctx;
++	u64 capture_cookie;
++	int i;
++
++	if (!selected(nr))
++		return;
++	capture_cookie = ant_observer_admit(current);
++	if (!READ_ONCE(current->ant_root_cookie) && !capture_cookie)
++		return;
++	ant_monitor_cookie(current);
++	ctx = current->ant_monitor;
++	if (!ctx) {
++		ctx = kzalloc(sizeof(*ctx), GFP_NOWAIT);
++		if (!ctx) {
++			atomic64_inc(&context_failures);
++			return;
++		}
++		current->ant_monitor = ctx;
++	}
++	if (ctx->busy)
++		return;
++	if (!current->ant_counted) {
++		current->ant_counted = true;
++		atomic64_inc(&tasks_created);
++		atomic64_inc(&tasks_live);
++	}
++	ctx->capture_cookie = capture_cookie;
++	ctx->busy = true;
++	kfree(ctx->iov);
++	ctx->iov = NULL;
++	ctx->iov_count = 0;
++	ctx->sock_capacity = 0;
++	ctx->sock_capacity_valid = false;
++	recapture_reset(ctx);
++	ctx->entry_mm = current->mm;
++	ctx->nr = nr;
++	ctx->abi = in_ia32_syscall() ? 0 : nr & ANT_X32_BIT ? 2 : 1;
++	ctx->arg_count = ctx->abi == 1 ? ant_native_syscalls[nr].argc : 255;
++	ctx->call_id++;
++	ctx->entry_ns = ktime_get_ns();
++	ctx->ip = instruction_pointer(regs);
++	ctx->sp = user_stack_pointer(regs);
++	syscall_get_arguments(current, regs, (unsigned long *)ctx->args);
++	if (ctx->arg_count != 255)
++		for (i = ctx->arg_count; i < 6; i++)
++			ctx->args[i] = 0;
++	ctx->active = true;
++	ctx->entry_lost = false;
++	atomic64_inc(&calls_entered);
++	event_begin(ctx, 1, 0);
++	capture_entry(ctx);
++	event_end(ctx);
++	ctx->entry_lost = ctx->failed_count != 0;
++	ctx->busy = false;
++}
++
++void ant_monitor_exit(struct pt_regs *regs)
++{
++	struct ant_task *ctx = current->ant_monitor;
++
++	if (!ctx || !ctx->active || ctx->busy)
++		return;
++	ctx->busy = true;
++	event_begin(ctx, 2, regs->ax);
++	capture_exit(ctx, regs->ax);
++	recapture(ctx);
++	event_end(ctx);
++	recapture_reset(ctx);
++	ctx->active = false;
++	kfree(ctx->iov);
++	ctx->iov = NULL;
++	ctx->iov_count = 0;
++	ctx->busy = false;
++}
++
++static void lifecycle(struct ant_task *ctx, const char *key, u64 value)
++{
++	u8 scalar[8];
++	u64 capture_cookie;
++
++	if (!ctx || ctx->busy)
++		return;
++	if (!ctx->active) {
++		capture_cookie = ant_observer_admit(current);
++		if (!READ_ONCE(current->ant_root_cookie) && !capture_cookie)
++			return;
++		ctx->capture_cookie = capture_cookie;
++	}
++	ctx->busy = true;
++	put_unaligned_le64(value, scalar);
++	event_begin(ctx, 3, 0);
++	field(ctx, 255, key, "", 4, 0, scalar, sizeof(scalar), sizeof(scalar), ANT_COMPLETE);
++	event_end(ctx);
++	ctx->busy = false;
++}
++
++int ant_monitor_launch(const char *path, char **argv, char **envp)
++{
++	struct ant_task *ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
++	char key[80];
++	u64 index;
++	u8 cookie[8];
++
++	if (!ctx)
++		return -ENOMEM;
++	ant_monitor_cookie(current);
++	WRITE_ONCE(current->ant_root_cookie, current->ant_cookie);
++	current->ant_monitor = ctx;
++	if (!current->ant_counted) {
++		current->ant_counted = true;
++		atomic64_inc(&tasks_created);
++		atomic64_inc(&tasks_live);
++	}
++	ctx->capture_cookie = ant_observer_admit(current);
++	ctx->nr = U64_MAX;
++	ctx->abi = 1;
++	ctx->busy = true;
++	event_begin(ctx, 3, 0);
++	put_unaligned_le64(current->ant_cookie, cookie);
++	field(ctx, 255, "lifecycle.launch", "", 4, 0, cookie, sizeof(cookie), sizeof(cookie), ANT_COMPLETE);
++	ctx->kernel_imported = true;
++	field(ctx, 255, "context.exec.path", "", 2, 0, path, strlen(path) + 1,
++	      strlen(path) + 1, ANT_COMPLETE);
++	for (index = 0; argv[index] && !ctx->failed_count; index++) {
++		scnprintf(key, sizeof(key), "context.exec.argv[%llu]", index);
++		field(ctx, 255, key, "", 2, 0, argv[index], strlen(argv[index]) + 1,
++		      strlen(argv[index]) + 1, ANT_COMPLETE);
++	}
++	for (index = 0; envp[index] && !ctx->failed_count; index++) {
++		scnprintf(key, sizeof(key), "context.exec.envp[%llu]", index);
++		field(ctx, 255, key, "", 2, 0, envp[index], strlen(envp[index]) + 1,
++		      strlen(envp[index]) + 1, ANT_COMPLETE);
++	}
++	ctx->kernel_imported = false;
++	event_end(ctx);
++	ctx->busy = false;
++	return 0;
++}
++
++u64 ant_monitor_cookie(struct task_struct *task)
++{
++	u64 cookie = READ_ONCE(task->ant_cookie), previous;
++
++	if (cookie)
++		return cookie;
++	cookie = atomic64_inc_return(&cookies);
++	previous = cmpxchg(&task->ant_cookie, 0, cookie);
++	return previous ?: cookie;
++}
++
++u64 ant_monitor_stream_id(void)
++{
++	return stream_id;
++}
++
++/* Called under tasklist_lock before publication, without allocating or sending.
++ * The command owner uses that lock to attach all current process threads.
++ */
++void ant_monitor_fork_prepare(struct task_struct *child)
++{
++	WRITE_ONCE(child->ant_observer_cookie, READ_ONCE(current->ant_observer_cookie));
++	if (!current->ant_root_cookie || child->flags & PF_USER_WORKER)
++		return;
++	ant_monitor_cookie(child);
++	WRITE_ONCE(child->ant_root_cookie, READ_ONCE(current->ant_root_cookie));
++	child->ant_counted = true;
++	atomic64_inc(&tasks_created);
++	atomic64_inc(&tasks_live);
++}
++
++void ant_monitor_fork(struct task_struct *child)
++{
++	struct ant_task *ctx = current->ant_monitor;
++	u8 scalar[8];
++	u64 values[4];
++	static const char * const keys[] = { "lifecycle.child_cookie", "lifecycle.child_pid",
++		"lifecycle.child_tgid", "lifecycle.child_start_boot_ns" };
++	int i;
++
++	if (!ctx || ctx->busy || (!ctx->active &&
++	    !current->ant_root_cookie && !ant_observer_admit(current)))
++		return;
++	ant_monitor_cookie(child);
++	if (!ctx->active)
++		ctx->capture_cookie = ant_observer_admit(current);
++	ctx->busy = true;
++	event_begin(ctx, 3, 0);
++	values[0] = child->ant_cookie;
++	values[1] = task_pid_nr(child);
++	values[2] = task_tgid_nr(child);
++	values[3] = child->start_boottime;
++	for (i = 0; i < ARRAY_SIZE(values); i++) {
++		put_unaligned_le64(values[i], scalar);
++		field(ctx, 255, keys[i], "", 4, 0, scalar, sizeof(scalar), sizeof(scalar), ANT_COMPLETE);
++	}
++	event_end(ctx);
++	ctx->busy = false;
++}
++
++void ant_monitor_exec(void)
++{
++	lifecycle(current->ant_monitor, "lifecycle.exec_commit", task_pid_nr(current));
++}
++
++void ant_monitor_task_exit(void)
++{
++	lifecycle(current->ant_monitor, "lifecycle.task_exit", current->exit_code);
++	if (current->ant_counted) {
++		current->ant_counted = false;
++		atomic64_dec(&tasks_live);
++	}
++}
++
++void ant_monitor_release(struct task_struct *task)
++{
++	struct ant_task *ctx = task->ant_monitor;
++
++	if (ctx) {
++		kfree(ctx->iov);
++		kfree(ctx->exec_name);
++		kfree(ctx);
++	}
++}
++
++void ant_monitor_stats(void *out)
++{
++	u64 values[] = { stream_id, atomic64_read(&tasks_created), atomic64_read(&tasks_live),
++		atomic64_read(&calls_entered), atomic64_read(&events_attempted),
++		atomic64_read(&packets_attempted), atomic64_read(&packets_failed),
++		atomic64_read(&copy_faults), atomic64_read(&schema_gaps),
++		atomic64_read(&context_failures) };
++	int i;
++
++	for (i = 0; i < ARRAY_SIZE(values); i++)
++		put_unaligned_le64(values[i], out + i * sizeof(u64));
++}
++
++static int __init ant_recorder_init(void)
++{
++	stream_id = get_random_u64();
++	if (!stream_id)
++		stream_id = 1;
++	return 0;
++}
++subsys_initcall(ant_recorder_init);
+diff --git a/kernel/exit.c b/kernel/exit.c
+index e798078..a8cc574 100644
+--- a/kernel/exit.c
++++ b/kernel/exit.c
+@@ -6,6 +6,7 @@
+  */
+ 
+ #include <linux/mm.h>
++#include <linux/antinomie_monitor.h>
+ #include <linux/slab.h>
+ #include <linux/sched/autogroup.h>
+ #include <linux/sched/mm.h>
+@@ -937,6 +938,7 @@ void __noreturn do_exit(long code)
+ 	if (group_dead)
+ 		acct_process();
+ 	trace_sched_process_exit(tsk);
++	ant_monitor_task_exit();
+ 
+ 	exit_sem(tsk);
+ 	exit_shm(tsk);
+diff --git a/kernel/fork.c b/kernel/fork.c
+index c39f8d3..81b8618 100644
+--- a/kernel/fork.c
++++ b/kernel/fork.c
+@@ -13,6 +13,7 @@
+  */
+ 
+ #include <linux/anon_inodes.h>
++#include <linux/antinomie_monitor.h>
+ #include <linux/slab.h>
+ #include <linux/sched/autogroup.h>
+ #include <linux/sched/mm.h>
+@@ -991,6 +992,7 @@ static inline void put_signal_struct(struct signal_struct *sig)
+ 
+ void __put_task_struct(struct task_struct *tsk)
+ {
++	ant_monitor_release(tsk);
+ 	WARN_ON(!tsk->exit_state);
+ 	WARN_ON(refcount_read(&tsk->usage));
+ 	WARN_ON(tsk == current);
+@@ -1136,6 +1138,13 @@ static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
+ 	err = arch_dup_task_struct(tsk, orig);
+ 	if (err)
+ 		goto free_tsk;
++#ifdef CONFIG_ANTINOMIE
++	tsk->ant_cookie = 0;
++	tsk->ant_root_cookie = 0;
++	tsk->ant_observer_cookie = 0;
++	tsk->ant_monitor = NULL;
++	tsk->ant_counted = false;
++#endif
+ 
+ 	err = alloc_thread_stack_node(tsk, node);
+ 	if (err)
+@@ -2582,6 +2591,7 @@ __latent_entropy struct task_struct *copy_process(
+ 	}
+ 
+ 	/* No more failure paths after this point. */
++	ant_monitor_fork_prepare(p);
+ 
+ 	/*
+ 	 * Copy seccomp details explicitly here, in case they were changed
+@@ -2838,6 +2848,7 @@ pid_t kernel_clone(struct kernel_clone_args *args)
+ 	 * might get invalid after that point, if the thread exits quickly.
+ 	 */
+ 	trace_sched_process_fork(current, p);
++	ant_monitor_fork(p);
+ 
+ 	pid = get_task_pid(p, PIDTYPE_PID);
+ 	nr = pid_vnr(pid);

@@ -1,0 +1,625 @@
+Description: antinomie: track each launched run and stop its whole process tree
+ A launched program is rarely one process: it forks, daemonizes, calls
+ setsid() and leaves orphans behind. The host needs to know when all of
+ it is gone and to be able to end all of it.
+ .
+ run.c keeps a run object for each launch, for the whole boot. Every
+ thread that descends from the launched program joins it at fork and
+ leaves it at exit; the run counts live and total tasks and records the
+ root process's wait status. The io_uring worker and SQPOLL threads the
+ kernel adds to a process belong to it too: they get no cookie and are
+ not observed, but they are counted, because the thread that leaves a
+ group last, which can be such a worker, is the one that reports the
+ root's exit. RUN_STATUS returns the run's state in 64 bytes: root
+ exited, tree exited, stop requested, kill escalated, the counts and the
+ root's wait status (protocol/run-status.md).
+ .
+ STOP_RUN sends SIGTERM to every task of the run, wherever it moved
+ (another session, a reparented orphan), and arms an escalation: after a
+ grace period (4 s by default; 100..30000 ms in the optional 24-byte
+ request, and a later Stop only brings the deadline forward) the guest
+ itself sends SIGKILL to every task of the run still alive, and repeats
+ it every 250 ms, at most 20 times, while any remain. RUN_STATUS then
+ reports KILL_ESCALATED, so the host can tell a program that ignored
+ SIGTERM. The work runs on the system unbound workqueue.
+ .
+ Hooked kernel files:
+ - include/linux/sched.h and kernel/fork.c add and clear the task's run
+   and whether it belongs to the launched process itself.
+ - kernel/exit.c tells the recorder whether the exiting thread is the
+   last of its group, which is when the root's status is final.
+ .
+ Contract: STOP_RUN and RUN_STATUS predate the numbered revisions. The
+ escalation, its 24-byte request and the KILL_ESCALATED flag are
+ additive within revision 17: an earlier host sends 16 bytes and ignores
+ the flag.
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-10-26
+
+---
+diff --git a/include/linux/antinomie_monitor.h b/include/linux/antinomie_monitor.h
+index 8e0b267..c999120 100644
+--- a/include/linux/antinomie_monitor.h
++++ b/include/linux/antinomie_monitor.h
+@@ -5,6 +5,7 @@
+ struct task_struct;
+ struct pt_regs;
+ struct ant_task;
++struct ant_run;
+ struct linux_binprm;
+ #ifdef CONFIG_ANTINOMIE
+ void ant_monitor_enter(struct pt_regs *regs, long nr);
+@@ -15,7 +16,7 @@ u64 ant_monitor_cookie(struct task_struct *task);
+ u64 ant_monitor_stream_id(void);
+ void ant_monitor_exec(void);
+ void ant_monitor_exec_names(const struct linux_binprm *bprm);
+-void ant_monitor_task_exit(void);
++void ant_monitor_task_exit(bool group_dead);
+ void ant_monitor_release(struct task_struct *task);
+ int ant_monitor_launch(const char *path, char **argv, char **envp);
+ void ant_monitor_stats(void *out);
+@@ -30,7 +31,7 @@ static inline void ant_monitor_fork(struct task_struct *child) {}
+ static inline void ant_monitor_fork_prepare(struct task_struct *child) {}
+ static inline void ant_monitor_exec(void) {}
+ static inline void ant_monitor_exec_names(const struct linux_binprm *bprm) {}
+-static inline void ant_monitor_task_exit(void) {}
++static inline void ant_monitor_task_exit(bool group_dead) {}
+ static inline void ant_monitor_release(struct task_struct *task) {}
+ static inline void ant_monitor_operand(u8 arg, const char *key, const char *layout,
+ 				       const void *data, size_t size) {}
+diff --git a/include/linux/sched.h b/include/linux/sched.h
+index 18c3d86..91e25da 100644
+--- a/include/linux/sched.h
++++ b/include/linux/sched.h
+@@ -805,6 +805,8 @@ struct task_struct {
+ 	u64 ant_root_cookie;
+ 	u64 ant_observer_cookie;
+ 	struct ant_task *ant_monitor;
++	struct ant_run *ant_run;
++	bool ant_root_process;
+ 	bool ant_counted;
+ #endif
+ 
+diff --git a/kernel/antinomie/Makefile b/kernel/antinomie/Makefile
+index 53436b2..3f8f3aa 100644
+--- a/kernel/antinomie/Makefile
++++ b/kernel/antinomie/Makefile
+@@ -1,2 +1,2 @@
+-obj-y += bootstrap.o guest.o recorder.o control.o native_capture.o
++obj-y += bootstrap.o guest.o recorder.o control.o run.o native_capture.o
+ obj-y += observer.o
+diff --git a/kernel/antinomie/control.c b/kernel/antinomie/control.c
+index a4ce499..b58eaca 100644
+--- a/kernel/antinomie/control.c
++++ b/kernel/antinomie/control.c
+@@ -23,6 +23,7 @@
+ #include <linux/workqueue.h>
+ #include "control_wire.h"
+ #include "observer.h"
++#include "run.h"
+ 
+ #define ANT_SESSION_MAX 64
+ 
+@@ -454,6 +455,37 @@ static int terminal_command(u32 opcode, const u8 *args, size_t args_len,
+ 	return tty->ops->resize ? tty->ops->resize(tty, &ws) : tty_do_resize(tty, &ws);
+ }
+ 
++static int stop_run(const u8 *args, size_t args_len)
++{
++	u64 root_cookie;
++	u32 grace_ms = 0;
++	bool issued;
++	int error;
++
++	if (args_len != 16 && args_len != 24)
++		return -EINVAL;
++	root_cookie = get_unaligned_le64(args + 8);
++	if (!root_cookie)
++		return -EINVAL;
++	if (args_len == 24) {
++		grace_ms = get_unaligned_le32(args + 16);
++		if (get_unaligned_le32(args + 20) ||
++		    (grace_ms && (grace_ms < 100 || grace_ms > 30000)))
++			return -EINVAL;
++	}
++
++	/* Membership survives PTY reaping and root exit. Concurrent forks can
++	 * escape this pass, so success only reports an issued signal request;
++	 * the escalation to SIGKILL (run.c) covers a task that ignores SIGTERM.
++	 */
++	error = ant_run_signal(root_cookie, SIGTERM, &issued);
++	if (issued) {
++		ant_monitor_run_stopped(root_cookie);
++		ant_run_stop_arm(root_cookie, grace_ms);
++	}
++	return error;
++}
++
+ static int command(const void *data, size_t args_len, void *reply,
+ 		   size_t capacity, size_t *reply_len, void *context)
+ {
+@@ -463,7 +495,7 @@ static int command(const void *data, size_t args_len, void *reply,
+ 	*reply_len = 0;
+ 	if (args_len < ANTC_HEADER_SIZE || get_unaligned_le16(args) != ANTC_VERSION ||
+ 	    get_unaligned_le16(args + 2) != ANTC_HEADER_SIZE)
+-		return -EPROTO;
++		return opcode == ANTC_RUN_STATUS ? -EINVAL : -EPROTO;
+ 	if (opcode != ANTC_UPLOAD_BEGIN && get_unaligned_le32(args + 4))
+ 		return -EINVAL;
+ 	switch (opcode) {
+@@ -479,6 +511,22 @@ static int command(const void *data, size_t args_len, void *reply,
+ 	case ANTC_TERMINAL_INPUT: case ANTC_TERMINAL_READ:
+ 	case ANTC_TERMINAL_RESIZE: case ANTC_SIGNAL:
+ 		return terminal_command(opcode, args, args_len, reply, capacity, reply_len);
++	case ANTC_STOP_RUN:
++		return stop_run(args, args_len);
++	case ANTC_RUN_STATUS: {
++		u64 root_cookie;
++		int error;
++
++		if (args_len != 16 || capacity < 64)
++			return -EINVAL;
++		root_cookie = get_unaligned_le64(args + 8);
++		if (!root_cookie)
++			return -EINVAL;
++		error = ant_monitor_run_status(root_cookie, reply);
++		if (!error)
++			*reply_len = 64;
++		return error;
++	}
+ 	case ANTC_STATS:
+ 		if (args_len != 8 || capacity < 80)
+ 			return -EINVAL;
+@@ -513,7 +561,7 @@ static int __init ant_control_init(void)
+ 	static const u32 opcodes[] = { ANTC_INFO, ANTC_UPLOAD_BEGIN,
+ 		ANTC_UPLOAD_CHUNK, ANTC_UPLOAD_COMMIT, ANTC_UPLOAD_ABORT, ANTC_EXEC,
+ 		ANTC_TERMINAL_INPUT, ANTC_TERMINAL_READ, ANTC_TERMINAL_RESIZE,
+-		ANTC_SIGNAL, ANTC_STATS,
++		ANTC_SIGNAL, ANTC_STOP_RUN, ANTC_RUN_STATUS, ANTC_STATS,
+ 		ANTC_SHUTDOWN, ANTC_PROCESS_LIST, ANTC_CAPTURE_ATTACH,
+ 		ANTC_CAPTURE_ALL, ANTC_CAPTURE_STOP, ANTC_CAPTURE_STATUS };
+ 	int i, error;
+diff --git a/kernel/antinomie/control_wire.h b/kernel/antinomie/control_wire.h
+index 87464f8..3c875c0 100644
+--- a/kernel/antinomie/control_wire.h
++++ b/kernel/antinomie/control_wire.h
+@@ -22,6 +22,15 @@
+ #define ANTC_TERMINAL_READ 0x1012
+ #define ANTC_TERMINAL_RESIZE 0x1013
+ #define ANTC_SIGNAL 0x1014
++#define ANTC_STOP_RUN 0x1015
++#define ANTC_RUN_STATUS 0x1016
++#define ANTC_RUN_STATUS_SIZE 64
++#define ANTC_RUN_ROOT_EXITED 1
++#define ANTC_RUN_TREE_EXITED 2
++#define ANTC_RUN_STOP_REQUESTED 4
++#define ANTC_RUN_ASYNC_COMPLETE 8
++#define ANTC_RUN_OBSERVATION_INCOMPLETE 16
++#define ANTC_RUN_KILL_ESCALATED 32
+ #define ANTC_STATS 0x1020
+ #define ANTC_INFO 0x1021
+ #define ANTC_INFO_SIZE 160
+@@ -70,6 +79,20 @@
+  * u16 pixel_width at 20, u16 pixel_height at 22. Empty success reply.
+  * SIGNAL: header, u64 session_id at 8, u32 signal at 16,
+  * u32 reserved=0 at 20. Signals launch process group. Empty success reply.
++ * STOP_RUN: header flags=0, nonzero u64 root_task_cookie at 8 (16 bytes), or
++ * 24 bytes with u32 grace_ms at 16 (0 selects the default, 4000; otherwise
++ * 100..30000) and u32 reserved=0 at 20.
++ * Requests SIGTERM for each traced task with this inherited launch cookie,
++ * including descendants after root exit or PTY/session reaping. Empty reply.
++ * Status 0 means signal requests issued, not proven tree termination; -ESRCH
++ * means no signalable matching task. Concurrent forks may escape this pass.
++ * After the grace period the guest itself sends SIGKILL to every task of the
++ * run still alive and repeats it every 250 ms (20 passes at most) while tasks
++ * remain, and sets RUN_STATUS flag KILL_ESCALATED (32). A later STOP_RUN only
++ * brings the deadline forward.
++ * RUN_STATUS: header flags=0, nonzero u64 root cookie at 8 (16 bytes).
++ * Success: 64-byte reply specified in protocol/run-status.md. Task/tree
++ * completion, root wait status, async observations and saving are distinct.
+  *
+  * STATS: header only. Reply: ten u64 counters in order: stream_id,
+  * tasks_created, tasks_live, calls_entered, events_attempted,
+diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
+index 2f95cf7..9808798 100644
+--- a/kernel/antinomie/recorder.c
++++ b/kernel/antinomie/recorder.c
+@@ -23,6 +23,7 @@
+ #include <asm/stat.h>
+ #include <asm/syscall.h>
+ 
++#include "run.h"
+ #include "native_syscalls.h"
+ #include "capture_api.h"
+ #include "native_capture.h"
+@@ -1117,10 +1118,16 @@ int ant_monitor_launch(const char *path, char **argv, char **envp)
+ 	char key[80];
+ 	u64 index;
+ 	u8 cookie[8];
++	int error;
+ 
+ 	if (!ctx)
+ 		return -ENOMEM;
+ 	ant_monitor_cookie(current);
++	error = ant_run_launch(current, current->ant_cookie);
++	if (error) {
++		kfree(ctx);
++		return error;
++	}
+ 	WRITE_ONCE(current->ant_root_cookie, current->ant_cookie);
+ 	current->ant_monitor = ctx;
+ 	if (!current->ant_counted) {
+@@ -1176,10 +1183,21 @@ u64 ant_monitor_stream_id(void)
+ void ant_monitor_fork_prepare(struct task_struct *child)
+ {
+ 	WRITE_ONCE(child->ant_observer_cookie, READ_ONCE(current->ant_observer_cookie));
+-	if (!current->ant_root_cookie || child->flags & PF_USER_WORKER)
++	if (!current->ant_run)
+ 		return;
++	/* An io_uring worker is a thread of the creating process, but not a
++	 * task the program started: it is invisible to the observer and carries
++	 * no cookie. The run still counts it, because the process is not gone,
++	 * and its status not final, until the group's last thread has exited,
++	 * and that can be a worker (see ant_run_exit()).
++	 */
++	if (child->flags & PF_USER_WORKER) {
++		ant_run_fork(current, child);
++		return;
++	}
+ 	ant_monitor_cookie(child);
+ 	WRITE_ONCE(child->ant_root_cookie, READ_ONCE(current->ant_root_cookie));
++	ant_run_fork(current, child);
+ 	child->ant_counted = true;
+ 	atomic64_inc(&tasks_created);
+ 	atomic64_inc(&tasks_live);
+@@ -1219,8 +1237,9 @@ void ant_monitor_exec(void)
+ 	lifecycle(current->ant_monitor, "lifecycle.exec_commit", task_pid_nr(current));
+ }
+ 
+-void ant_monitor_task_exit(void)
++void ant_monitor_task_exit(bool group_dead)
+ {
++	ant_run_exit(current, group_dead);
+ 	lifecycle(current->ant_monitor, "lifecycle.task_exit", current->exit_code);
+ 	if (current->ant_counted) {
+ 		current->ant_counted = false;
+diff --git a/kernel/antinomie/run.c b/kernel/antinomie/run.c
+new file mode 100644
+index 0000000..55e595e
+--- /dev/null
++++ b/kernel/antinomie/run.c
+@@ -0,0 +1,285 @@
++// SPDX-License-Identifier: GPL-2.0-only
++#include <linux/antinomie_monitor.h>
++#include <linux/errno.h>
++#include <linux/sched.h>
++#include <linux/sched/signal.h>
++#include <linux/sched/task.h>
++#include <linux/spinlock.h>
++#include <linux/unaligned.h>
++#include <linux/workqueue.h>
++
++#include "control_wire.h"
++#include "run.h"
++
++#define ANT_RUN_COUNT 64
++
++/* Stop escalation. STOP_RUN sends SIGTERM to every task of a run; a task that
++ * ignores or blocks it would then run on for ever. The guest therefore sends
++ * SIGKILL to the whole run after a grace period, with no help from the host.
++ * SIGKILL is repeated every ANT_STOP_RECHECK_MS while tasks of the run are still live
++ * (a fork that raced the first pass), at most ANT_STOP_PASSES times.
++ */
++#define ANT_STOP_GRACE_DEFAULT_MS 4000U
++#define ANT_STOP_RECHECK_MS 250U
++#define ANT_STOP_PASSES 20U
++
++struct ant_run {
++	u64 root_cookie;
++	u64 generation;
++	u64 live_count;
++	u64 async_count;
++	u64 async_losses;
++	u64 task_count;
++	u32 flags;
++	s32 root_status;
++	bool stop_armed;
++	u32 stop_passes;
++	unsigned long kill_at;
++};
++
++/* Boot-lifetime objects never move or disappear. Task and async ownership can
++ * safely retain their address; this lock serializes every status transition.
++ */
++static struct ant_run runs[ANT_RUN_COUNT];
++static unsigned int run_count;
++static DEFINE_SPINLOCK(run_lock);
++static void stop_escalate(struct work_struct *work);
++static DECLARE_DELAYED_WORK(stop_work, stop_escalate);
++/* Whether stop_work is queued and when it fires; both under run_lock. */
++static bool stop_scheduled;
++static unsigned long stop_next;
++
++static struct ant_run *find_run(u64 cookie)
++{
++	unsigned int i;
++
++	for (i = 0; i < run_count; i++)
++		if (runs[i].root_cookie == cookie)
++			return &runs[i];
++	return NULL;
++}
++
++int ant_run_launch(struct task_struct *task, u64 cookie)
++{
++	struct ant_run *run;
++	unsigned long irqflags;
++
++	spin_lock_irqsave(&run_lock, irqflags);
++	if (run_count == ANT_RUN_COUNT) {
++		spin_unlock_irqrestore(&run_lock, irqflags);
++		return -ENOSPC;
++	}
++	run = &runs[run_count++];
++	run->root_cookie = cookie;
++	run->generation = 1;
++	run->live_count = 1;
++	run->task_count = 1;
++	task->ant_run = run;
++	task->ant_root_process = true;
++	spin_unlock_irqrestore(&run_lock, irqflags);
++	return 0;
++}
++
++void ant_run_fork(struct task_struct *parent, struct task_struct *child)
++{
++	struct ant_run *run = parent->ant_run;
++	unsigned long irqflags;
++
++	if (!run)
++		return;
++	spin_lock_irqsave(&run_lock, irqflags);
++	child->ant_run = run;
++	child->ant_root_process = parent->ant_root_process &&
++		same_thread_group(parent, child);
++	run->live_count++;
++	run->task_count++;
++	run->generation++;
++	spin_unlock_irqrestore(&run_lock, irqflags);
++}
++
++/* Every thread of a run's process counts, including the io_uring workers
++ * (iou-wrk, iou-sqp) the kernel adds to it: the root's wait status is taken by
++ * the thread that leaves the group last, and with a group exit that can be
++ * a worker well after the leader has gone. A worker
++ * that was not counted left the run with TREE_EXITED and no ROOT_EXITED.
++ */
++bool ant_run_exit(struct task_struct *task, bool group_dead)
++{
++	struct ant_run *run = task->ant_run;
++	unsigned long irqflags;
++
++	if (!run)
++		return false;
++	spin_lock_irqsave(&run_lock, irqflags);
++	/* Detachment also makes a repeated exit observation harmless. */
++	task->ant_run = NULL;
++	/* Root status follows the launched process, including nonleader exec.
++	 * Match wait_task_zombie(): an internal de_thread leader death and a
++	 * leader-only pthread_exit are not root-process completion.
++	 */
++	if (task->ant_root_process && group_dead) {
++		run->root_status = task->signal->flags & SIGNAL_GROUP_EXIT ?
++			task->signal->group_exit_code : task->group_leader->exit_code;
++		run->flags |= ANTC_RUN_ROOT_EXITED;
++	}
++	if (!--run->live_count)
++		run->flags |= ANTC_RUN_TREE_EXITED;
++	run->generation++;
++	spin_unlock_irqrestore(&run_lock, irqflags);
++	return true;
++}
++
++int ant_monitor_run_status(u64 root_cookie, void *out)
++{
++	struct ant_run *run;
++	unsigned long irqflags;
++	u8 *p = out;
++	u32 flags;
++
++	spin_lock_irqsave(&run_lock, irqflags);
++	run = find_run(root_cookie);
++	if (!run) {
++		spin_unlock_irqrestore(&run_lock, irqflags);
++		return -ESRCH;
++	}
++	flags = run->flags;
++	if (!run->async_count && !(flags & ANTC_RUN_OBSERVATION_INCOMPLETE))
++		flags |= ANTC_RUN_ASYNC_COMPLETE;
++	put_unaligned_le64(run->root_cookie, p);
++	put_unaligned_le64(run->generation, p + 8);
++	put_unaligned_le64(run->live_count, p + 16);
++	put_unaligned_le64(run->async_count, p + 24);
++	put_unaligned_le32(flags, p + 32);
++	put_unaligned_le32(run->root_status, p + 36);
++	put_unaligned_le64(run->async_losses, p + 40);
++	put_unaligned_le64(run->task_count, p + 48);
++	put_unaligned_le64(0, p + 56);
++	spin_unlock_irqrestore(&run_lock, irqflags);
++	return 0;
++}
++
++void ant_monitor_run_stopped(u64 root_cookie)
++{
++	struct ant_run *run;
++	unsigned long irqflags;
++
++	spin_lock_irqsave(&run_lock, irqflags);
++	run = find_run(root_cookie);
++	if (run && !(run->flags & ANTC_RUN_STOP_REQUESTED)) {
++		run->flags |= ANTC_RUN_STOP_REQUESTED;
++		run->generation++;
++	}
++	spin_unlock_irqrestore(&run_lock, irqflags);
++}
++
++/* Signal every task that carries this run's launch cookie. RCU protects the
++ * traversal; each signal uses a referenced task, never a PID, so membership
++ * survives PTY reaping and root exit. A fork that races the pass can escape it.
++ * Returns the first error other than -ESRCH, else 0 if a signal was issued, else
++ * -ESRCH.
++ */
++int ant_run_signal(u64 root_cookie, int sig, bool *issued)
++{
++	struct task_struct *process, *task;
++	int error, first_error = 0;
++
++	*issued = false;
++	rcu_read_lock();
++	for_each_process_thread(process, task) {
++		if (!READ_ONCE(task->ant_cookie) ||
++		    READ_ONCE(task->ant_root_cookie) != root_cookie)
++			continue;
++		get_task_struct(task);
++		error = send_sig(sig, task, 1);
++		put_task_struct(task);
++		if (!error)
++			*issued = true;
++		else if (error != -ESRCH && !first_error)
++			first_error = error;
++	}
++	rcu_read_unlock();
++	if (first_error)
++		return first_error;
++	return *issued ? 0 : -ESRCH;
++}
++
++/* Schedule the escalation check for the earliest deadline. Caller holds
++ * run_lock, which orders this against the work's own reschedule.
++ */
++static void stop_schedule_locked(unsigned long at)
++{
++	if (stop_scheduled && !time_before(at, stop_next))
++		return;
++	stop_scheduled = true;
++	stop_next = at;
++	mod_delayed_work(system_unbound_wq, &stop_work, at > jiffies ? at - jiffies : 0);
++}
++
++/* Arm the SIGKILL escalation of a run whose Stop was accepted. A repeated Stop
++ * can only bring the deadline forward. grace_ms 0 selects the default.
++ */
++void ant_run_stop_arm(u64 root_cookie, u32 grace_ms)
++{
++	struct ant_run *run;
++	unsigned long irqflags, at;
++
++	at = jiffies + msecs_to_jiffies(grace_ms ?: ANT_STOP_GRACE_DEFAULT_MS);
++	spin_lock_irqsave(&run_lock, irqflags);
++	run = find_run(root_cookie);
++	if (run && !(run->flags & ANTC_RUN_TREE_EXITED)) {
++		if (!run->stop_armed || time_before(at, run->kill_at))
++			run->kill_at = at;
++		if (!run->stop_armed)
++			run->stop_passes = 0;
++		run->stop_armed = true;
++		stop_schedule_locked(run->kill_at);
++	}
++	spin_unlock_irqrestore(&run_lock, irqflags);
++}
++
++static void stop_escalate(struct work_struct *work)
++{
++	u64 cookies[ANT_RUN_COUNT];
++	unsigned int i, due = 0, n;
++	unsigned long irqflags, now;
++	struct ant_run *run;
++	bool issued;
++
++	spin_lock_irqsave(&run_lock, irqflags);
++	now = jiffies;
++	stop_scheduled = false;
++	for (i = 0; i < run_count; i++) {
++		run = &runs[i];
++		if (!run->stop_armed)
++			continue;
++		if (run->flags & ANTC_RUN_TREE_EXITED) {
++			run->stop_armed = false;
++		} else if (!time_before(now, run->kill_at)) {
++			cookies[due++] = run->root_cookie;
++		}
++	}
++	spin_unlock_irqrestore(&run_lock, irqflags);
++
++	for (n = 0; n < due; n++) {
++		issued = false;
++		ant_run_signal(cookies[n], SIGKILL, &issued);
++		spin_lock_irqsave(&run_lock, irqflags);
++		run = find_run(cookies[n]);
++		if (run && run->stop_armed) {
++			if (issued && !(run->flags & ANTC_RUN_KILL_ESCALATED)) {
++				run->flags |= ANTC_RUN_KILL_ESCALATED;
++				run->generation++;
++			}
++			run->kill_at = jiffies + msecs_to_jiffies(ANT_STOP_RECHECK_MS);
++			if (++run->stop_passes >= ANT_STOP_PASSES)
++				run->stop_armed = false;
++		}
++		spin_unlock_irqrestore(&run_lock, irqflags);
++	}
++
++	spin_lock_irqsave(&run_lock, irqflags);
++	for (i = 0; i < run_count; i++)
++		if (runs[i].stop_armed && !(runs[i].flags & ANTC_RUN_TREE_EXITED))
++			stop_schedule_locked(runs[i].kill_at);
++	spin_unlock_irqrestore(&run_lock, irqflags);
++}
+diff --git a/kernel/antinomie/run.h b/kernel/antinomie/run.h
+new file mode 100644
+index 0000000..0a6ed04
+--- /dev/null
++++ b/kernel/antinomie/run.h
+@@ -0,0 +1,15 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef _ANTINOMIE_RUN_H
++#define _ANTINOMIE_RUN_H
++
++#include <linux/types.h>
++
++struct task_struct;
++
++int ant_run_launch(struct task_struct *task, u64 cookie);
++void ant_run_fork(struct task_struct *parent, struct task_struct *child);
++bool ant_run_exit(struct task_struct *task, bool group_dead);
++int ant_run_signal(u64 root_cookie, int sig, bool *issued);
++void ant_run_stop_arm(u64 root_cookie, u32 grace_ms);
++
++#endif
+diff --git a/kernel/exit.c b/kernel/exit.c
+index a8cc574..f800bd8 100644
+--- a/kernel/exit.c
++++ b/kernel/exit.c
+@@ -938,7 +938,7 @@ void __noreturn do_exit(long code)
+ 	if (group_dead)
+ 		acct_process();
+ 	trace_sched_process_exit(tsk);
+-	ant_monitor_task_exit();
++	ant_monitor_task_exit(group_dead);
+ 
+ 	exit_sem(tsk);
+ 	exit_shm(tsk);
+diff --git a/kernel/fork.c b/kernel/fork.c
+index 81b8618..c36bec1 100644
+--- a/kernel/fork.c
++++ b/kernel/fork.c
+@@ -1143,6 +1143,8 @@ static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
+ 	tsk->ant_root_cookie = 0;
+ 	tsk->ant_observer_cookie = 0;
+ 	tsk->ant_monitor = NULL;
++	tsk->ant_run = NULL;
++	tsk->ant_root_process = false;
+ 	tsk->ant_counted = false;
+ #endif
+ 

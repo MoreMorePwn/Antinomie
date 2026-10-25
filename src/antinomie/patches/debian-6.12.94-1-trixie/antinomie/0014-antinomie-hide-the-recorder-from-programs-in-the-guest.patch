@@ -1,0 +1,493 @@
+Description: antinomie: hide the recorder from programs in the guest
+ A sample that looks for a sandbox reads world-readable files. Remove
+ what the recorder itself put there.
+ .
+ - Boot options: the host passes antinomie_boot_gpa= and
+   antinomie_ring_kib= on the command line. setup_arch() now cuts every
+   antinomie_* option out of the line before it is first printed and
+   applies it as an early parameter, so /proc/cmdline and the kernel log
+   never show it. The decompressor still reads the original line.
+ - Symbols: /proc/kallsyms lists every kernel symbol by name to any user,
+   and /proc/<pid>/wchan names the function a task sleeps in.
+   section_begin.o and section_end.o, linked first and last in
+   kernel/antinomie, bracket the recorder's sections, and
+   ant_symbol_hidden() answers for those ranges and for the hooks'
+   names elsewhere; both files skip them. The bootstrap's early parameter
+   handler is renamed after the recorder for the same reason. The
+   kernel's own symbol table stays complete for stack traces, kprobes
+   and the debugger.
+ - Worker names: a kworker shows the workqueue it last served. The
+   control, process core and debug queues are named events_unbound like
+   the system queue, and the resource refresh runs on the system queue.
+ - ACPI: QEMU's own devices (_HID QEMU*, such as fw_cfg) are not
+   enumerated, so sysfs and /proc/ioports do not name QEMU.
+ .
+ Hooked kernel files:
+ - arch/x86/kernel/setup.c: the command line, before its first print.
+ - kernel/kallsyms.c and fs/proc/base.c: the /proc/kallsyms listing and
+   wchan.
+ - drivers/acpi/scan.c: the device scan.
+ .
+ Root can still find the recorder (/proc/kcore, a kprobe by name);
+ that is inspecting the kernel, not reading a listing. The host passes
+ the same options as before.
+ .
+ Contract: unchanged (revision 17).
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-10-26
+
+---
+diff --git a/arch/x86/kernel/setup.c b/arch/x86/kernel/setup.c
+index 4b80081..8bf3edd 100644
+--- a/arch/x86/kernel/setup.c
++++ b/arch/x86/kernel/setup.c
+@@ -18,6 +18,7 @@
+ #include <linux/memblock.h>
+ #ifdef CONFIG_ANTINOMIE
+ #include <linux/antinomie.h>
++#include <linux/antinomie_stealth.h>
+ #endif
+ #include <linux/panic_notifier.h>
+ #include <linux/pci.h>
+@@ -754,6 +755,9 @@ void __init setup_arch(char **cmdline_p)
+ 	 */
+ 	__flush_tlb_all();
+ #else
++#ifdef CONFIG_ANTINOMIE
++	ant_cmdline_take(boot_command_line);
++#endif
+ 	printk(KERN_INFO "Command line: %s\n", boot_command_line);
+ 	boot_cpu_data.x86_phys_bits = MAX_PHYSMEM_BITS;
+ #endif
+diff --git a/drivers/acpi/scan.c b/drivers/acpi/scan.c
+index 0774cc6..7cbeba2 100644
+--- a/drivers/acpi/scan.c
++++ b/drivers/acpi/scan.c
+@@ -12,6 +12,7 @@
+ #include <linux/acpi.h>
+ #include <linux/acpi_iort.h>
+ #include <linux/acpi_viot.h>
++#include <linux/antinomie_stealth.h>
+ #include <linux/iommu.h>
+ #include <linux/signal.h>
+ #include <linux/kthread.h>
+@@ -2135,7 +2136,7 @@ static acpi_status acpi_bus_check_add(acpi_handle handle, bool first_pass,
+ 
+ 	switch (acpi_type) {
+ 	case ACPI_TYPE_DEVICE:
+-		if (acpi_device_should_be_hidden(handle))
++		if (acpi_device_should_be_hidden(handle) || ant_acpi_device_hidden(handle))
+ 			return AE_OK;
+ 
+ 		if (first_pass) {
+diff --git a/fs/proc/base.c b/fs/proc/base.c
+index 704cf6a..cea11a1 100644
+--- a/fs/proc/base.c
++++ b/fs/proc/base.c
+@@ -98,6 +98,7 @@
+ #include <linux/cn_proc.h>
+ #include <linux/ksm.h>
+ #include <uapi/linux/lsm.h>
++#include <linux/antinomie_stealth.h>
+ #include <trace/events/oom.h>
+ #include "internal.h"
+ #include "fd.h"
+@@ -428,7 +429,8 @@ static int proc_pid_wchan(struct seq_file *m, struct pid_namespace *ns,
+ 		goto print0;
+ 
+ 	wchan = get_wchan(task);
+-	if (wchan && !lookup_symbol_name(wchan, symname)) {
++	if (wchan && !lookup_symbol_name(wchan, symname) &&
++	    !ant_symbol_hidden(wchan, symname)) {
+ 		seq_puts(m, symname);
+ 		return 0;
+ 	}
+diff --git a/include/linux/antinomie_stealth.h b/include/linux/antinomie_stealth.h
+new file mode 100644
+index 0000000..6a27fed
+--- /dev/null
++++ b/include/linux/antinomie_stealth.h
+@@ -0,0 +1,27 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef ANTINOMIE_STEALTH_H
++#define ANTINOMIE_STEALTH_H
++#include <linux/types.h>
++
++#ifdef CONFIG_ANTINOMIE
++/* Architecture setup, before the command line is first printed: take the
++ * host's antinomie_* options out of it and apply them. */
++void ant_cmdline_take(char *cmdline);
++/* Whether a program reading symbols by name (/proc/kallsyms, wchan) must not
++ * see this one: the recorder's own. name may be NULL. */
++bool ant_symbol_hidden(unsigned long address, const char *name);
++/* ACPI scan: whether the device (an acpi_handle) is one of QEMU's own, which
++ * the guest does not enumerate. */
++bool ant_acpi_device_hidden(void *handle);
++#else
++static inline void ant_cmdline_take(char *cmdline) { }
++static inline bool ant_symbol_hidden(unsigned long address, const char *name)
++{
++	return false;
++}
++static inline bool ant_acpi_device_hidden(void *handle)
++{
++	return false;
++}
++#endif
++#endif
+diff --git a/kernel/antinomie/Makefile b/kernel/antinomie/Makefile
+index 6e8c29a..becb81d 100644
+--- a/kernel/antinomie/Makefile
++++ b/kernel/antinomie/Makefile
+@@ -1,3 +1,6 @@
++# section_begin.o first and section_end.o last: they bracket this directory's
++# symbols in vmlinux (sections.h).
++obj-y += section_begin.o
+ obj-y += bootstrap.o guest.o recorder.o control.o run.o async.o native_capture.o
+ obj-y += async_capture.o
+ obj-y += specimen.o
+@@ -8,3 +11,5 @@ obj-y += resources.o
+ obj-y += hash.o
+ obj-y += debug.o debug_x86.o
+ obj-y += fileid.o
++obj-y += stealth.o
++obj-y += section_end.o
+diff --git a/kernel/antinomie/bootstrap.c b/kernel/antinomie/bootstrap.c
+index b460eb6..89dae99 100644
+--- a/kernel/antinomie/bootstrap.c
++++ b/kernel/antinomie/bootstrap.c
+@@ -8,7 +8,7 @@
+ static bool reserved;
+ static u64 bootstrap_gpa = ANT_BOOT_GPA;
+ 
+-static int __init set_bootstrap_gpa(char *value)
++static int __init ant_boot_gpa_param(char *value)
+ {
+ 	u64 gpa;
+ 	if (!value || kstrtoull(value, 0, &gpa) || (gpa & (ANT_BOOT_SIZE - 1)) ||
+@@ -17,7 +17,7 @@ static int __init set_bootstrap_gpa(char *value)
+ 	bootstrap_gpa = gpa;
+ 	return 0;
+ }
+-early_param("antinomie_boot_gpa", set_bootstrap_gpa);
++early_param("antinomie_boot_gpa", ant_boot_gpa_param);
+ 
+ void __init ant_bootstrap_reserve(void)
+ {
+diff --git a/kernel/antinomie/debug.c b/kernel/antinomie/debug.c
+index 231b7cd..8cecc9c 100644
+--- a/kernel/antinomie/debug.c
++++ b/kernel/antinomie/debug.c
+@@ -3711,7 +3711,8 @@ bool ant_debug_active(void)
+ 
+ static int __init ant_debug_init(void)
+ {
+-	dbg_worker = alloc_workqueue("antinomie-debug", WQ_UNBOUND, 1);
++	/* Named like the system's: a worker shows the queue it last ran for. */
++	dbg_worker = alloc_workqueue("events_unbound", WQ_UNBOUND, 1);
+ 	return dbg_worker ? 0 : -ENOMEM;
+ }
+ late_initcall(ant_debug_init);
+diff --git a/kernel/antinomie/guest.c b/kernel/antinomie/guest.c
+index f2167b3..23f3209 100644
+--- a/kernel/antinomie/guest.c
++++ b/kernel/antinomie/guest.c
+@@ -469,9 +469,10 @@ static int __init ant_guest_init(void)
+ 	 * TTY queue events_unbound. WQ_MEM_RECLAIM makes that flush trip
+ 	 * check_flush_dependency. Flags stay 0 so the worker may complete
+ 	 * the read. The queue stays ordered, so commands, EOF and shutdown
+-	 * keep one sequence.
++	 * keep one sequence. A worker shows the name of the queue it last ran
++	 * work for (kworker/uN:M-name), so it is named like the system's.
+ 	 */
+-	worker = alloc_ordered_workqueue("antinomie-control", 0);
++	worker = alloc_ordered_workqueue("events_unbound", 0);
+ 	if (!worker) goto free_rings;
+ 	control->geometry.version = ANT_ABI;
+ 	control->geometry.session = get_random_u64() ?: 1;
+diff --git a/kernel/antinomie/manual_core.c b/kernel/antinomie/manual_core.c
+index 13696d1..5b45436 100644
+--- a/kernel/antinomie/manual_core.c
++++ b/kernel/antinomie/manual_core.c
+@@ -656,7 +656,8 @@ int ant_manual_command(u32 opcode, const u8 *args, size_t args_len,
+ 
+ static int __init ant_manual_init(void)
+ {
+-	manual_worker = alloc_workqueue("antinomie-core", WQ_UNBOUND, 1);
++	/* Named like the system's: a worker shows the queue it last ran for. */
++	manual_worker = alloc_workqueue("events_unbound", WQ_UNBOUND, 1);
+ 	return manual_worker ? 0 : -ENOMEM;
+ }
+ late_initcall(ant_manual_init);
+diff --git a/kernel/antinomie/resources.c b/kernel/antinomie/resources.c
+index 3d8d172..04a3e10 100644
+--- a/kernel/antinomie/resources.c
++++ b/kernel/antinomie/resources.c
+@@ -2,10 +2,11 @@
+ /* Kernel-native guest resource sample: RAM accounting and root filesystem use.
+  *
+  * The control handler never blocks on the filesystem. It returns the latest
+- * completed sample and, when that sample is old, queues one refresh on a
+- * dedicated single-slot workqueue. At most one refresh is in flight, so a
+- * statfs that blocks leaves the previous sample visibly aging instead of
+- * stalling the control worker or accumulating work.
++ * completed sample and, when that sample is old, queues one refresh on the
++ * system unbound workqueue. At most one refresh is in flight, so a statfs that
++ * blocks leaves the previous sample visibly aging instead of stalling the
++ * control worker or accumulating work. (A workqueue of its own would name
++ * every worker that ran a refresh after it in the guest's process list.)
+  */
+ #include <linux/fs.h>
+ #include <linux/fs_struct.h>
+@@ -37,7 +38,6 @@ struct ant_resource_sample {
+ };
+ 
+ static DEFINE_SPINLOCK(lock);
+-static struct workqueue_struct *res_wq;
+ static struct ant_resource_sample latest;
+ static bool running;
+ static u64 started_ns;
+@@ -156,8 +156,6 @@ int ant_resources_command(const void *args, size_t args_len, void *reply,
+ 
+ 	if (args_len != ANTC_HEADER_SIZE || capacity < ANTC_RESOURCES_SIZE)
+ 		return -EINVAL;
+-	if (!res_wq)
+-		return -EOPNOTSUPP;
+ 	now = ktime_get_ns();
+ 	spin_lock_irqsave(&lock, flags);
+ 	if (!running && (!latest.sequence || now - latest.done_ns >= REFRESH_NS)) {
+@@ -172,7 +170,7 @@ int ant_resources_command(const void *args, size_t args_len, void *reply,
+ 	}
+ 	spin_unlock_irqrestore(&lock, flags);
+ 	if (start)
+-		queue_work(res_wq, &refresh_work);
++		queue_work(system_unbound_wq, &refresh_work);
+ 	if (sample.sequence)
+ 		age = (now - sample.done_ns) / NSEC_PER_MSEC;
+ 
+@@ -194,10 +192,3 @@ int ant_resources_command(const void *args, size_t args_len, void *reply,
+ 	*reply_len = ANTC_RESOURCES_SIZE;
+ 	return 0;
+ }
+-
+-static int __init ant_resources_init(void)
+-{
+-	res_wq = alloc_workqueue("antinomie_resources", WQ_UNBOUND, 1);
+-	return 0;
+-}
+-late_initcall(ant_resources_init);
+diff --git a/kernel/antinomie/section_begin.c b/kernel/antinomie/section_begin.c
+new file mode 100644
+index 0000000..5fa72c5
+--- /dev/null
++++ b/kernel/antinomie/section_begin.c
+@@ -0,0 +1,5 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* Linked first in this directory: where its sections start (sections.h). */
++#include "sections.h"
++
++ANT_SECTION_LABELS(begin);
+diff --git a/kernel/antinomie/section_end.c b/kernel/antinomie/section_end.c
+new file mode 100644
+index 0000000..450c7ab
+--- /dev/null
++++ b/kernel/antinomie/section_end.c
+@@ -0,0 +1,5 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* Linked last in this directory: where its sections end (sections.h). */
++#include "sections.h"
++
++ANT_SECTION_LABELS(end);
+diff --git a/kernel/antinomie/sections.h b/kernel/antinomie/sections.h
+new file mode 100644
+index 0000000..d369e62
+--- /dev/null
++++ b/kernel/antinomie/sections.h
+@@ -0,0 +1,33 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/* A label at the start (section_begin.c, linked first in this directory) and
++ * at the end (section_end.c, linked last) of each section the recorder's
++ * objects put symbols in. The linker keeps one directory's input sections of
++ * a kind together and in link order, so each pair brackets exactly this
++ * directory's functions and data (ant_symbol_hidden()).
++ */
++#ifndef ANT_SECTIONS_H
++#define ANT_SECTIONS_H
++
++#include <linux/objtool.h>
++
++/* The text labels are addresses, never call targets: no ENDBR (objtool). */
++#define ANT_SECTION_LABEL(name, section, flags, note)	\
++	asm(".pushsection " section "," flags "\n"	\
++	    ".globl " #name "\n"			\
++	    #name ":\n"					\
++	    note					\
++	    ".popsection\n")
++
++#define ANT_SECTION_LABELS(where)							\
++	ANT_SECTION_LABEL(ant_text_##where, ".text", "\"ax\"", ANNOTATE_NOENDBR);	\
++	ANT_SECTION_LABEL(ant_rodata_##where, ".rodata", "\"a\"", "");		\
++	ANT_SECTION_LABEL(ant_data_##where, ".data", "\"aw\"", "");		\
++	ANT_SECTION_LABEL(ant_bss_##where, ".bss", "\"aw\",@nobits", "");	\
++	ANT_SECTION_LABEL(ant_percpu_##where, ".data..percpu", "\"aw\"", "")
++
++extern const char ant_text_begin[], ant_text_end[];
++extern const char ant_rodata_begin[], ant_rodata_end[];
++extern const char ant_data_begin[], ant_data_end[];
++extern const char ant_bss_begin[], ant_bss_end[];
++extern const char ant_percpu_begin[], ant_percpu_end[];
++#endif
+diff --git a/kernel/antinomie/stealth.c b/kernel/antinomie/stealth.c
+new file mode 100644
+index 0000000..6f72f09
+--- /dev/null
++++ b/kernel/antinomie/stealth.c
+@@ -0,0 +1,123 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* What the guest kernel keeps from the programs it runs: Antinomie's own
++ * traces in interfaces any program can read.
++ *
++ * The host passes its boot options (antinomie_boot_gpa=, antinomie_ring_kib=)
++ * on the kernel command line. They are taken out of it before the kernel
++ * first prints it, applied here, and never reach the saved command line:
++ * /proc/cmdline and the kernel log show the rest of the line only.
++ *
++ * The recorder's symbols (this directory's functions and data, and the hooks
++ * elsewhere named ant_*) are left out of what programs read by name:
++ * /proc/kallsyms and /proc/<pid>/wchan. The kernel itself still has them, so
++ * stack traces, kprobes and every internal lookup work as before.
++ *
++ * QEMU's own ACPI devices (HID QEMU0001 pvpanic, QEMU0002 fw_cfg, ...) are not
++ * enumerated: no driver of this kernel uses them, and enumerated they appear
++ * in /sys/bus/acpi/devices and /proc/ioports by their QEMU names.
++ */
++#include <linux/acpi.h>
++#include <linux/antinomie_stealth.h>
++#include <linux/ctype.h>
++#include <linux/init.h>
++#include <linux/kernel.h>
++#include <linux/slab.h>
++#include <linux/string.h>
++#include <asm/setup.h>
++#include "sections.h"
++
++#define ANT_OPTION_PREFIX "antinomie_"
++
++static char ant_options[COMMAND_LINE_SIZE] __initdata;
++
++/* Remove every antinomie_* option from cmdline, in place, and apply them as
++ * early parameters. Other options, quoted values and their order are kept;
++ * the spaces around a removed option collapse to one. */
++void __init ant_cmdline_take(char *cmdline)
++{
++	char *in = cmdline, *out = cmdline;
++	size_t taken = 0;
++
++	while (*in) {
++		const char *start;
++		bool quoted = false;
++		size_t len;
++
++		if (isspace(*in)) {
++			*out++ = *in++;
++			continue;
++		}
++		start = in;
++		while (*in && (quoted || !isspace(*in))) {
++			if (*in == '"')
++				quoted = !quoted;
++			in++;
++		}
++		len = in - start;
++		if (len > strlen(ANT_OPTION_PREFIX) &&
++		    !strncmp(start, ANT_OPTION_PREFIX, strlen(ANT_OPTION_PREFIX))) {
++			if (taken + len + 2 <= sizeof(ant_options)) {
++				if (taken)
++					ant_options[taken++] = ' ';
++				memcpy(ant_options + taken, start, len);
++				taken += len;
++				ant_options[taken] = '\0';
++			}
++			/* Drop the space before it; the one after it stays. */
++			while (out > cmdline && isspace(out[-1]))
++				out--;
++			continue;
++		}
++		memmove(out, start, len);
++		out += len;
++	}
++	*out = '\0';
++	in = skip_spaces(cmdline);
++	if (in != cmdline)
++		memmove(cmdline, in, strlen(in) + 1);
++	if (taken)
++		parse_early_options(ant_options);
++}
++
++static const struct {
++	const char *begin, *end;
++} ant_sections[] = {
++	{ ant_text_begin, ant_text_end },
++	{ ant_rodata_begin, ant_rodata_end },
++	{ ant_data_begin, ant_data_end },
++	{ ant_bss_begin, ant_bss_end },
++	/* Per-CPU symbols are offsets into the per-CPU area, in kallsyms too. */
++	{ ant_percpu_begin, ant_percpu_end },
++};
++
++/* ant_* and what the build names after it: __pfx_ant_*, __ksymtab_ant_*,
++ * __setup_ant_*, the initcall entries (__initcall__kmod_..._ant_*_init). */
++static bool ant_symbol_name(const char *name)
++{
++	return !strncmp(name, "ant_", 4) || strstr(name, "_ant_") || strstr(name, "antinomie");
++}
++
++bool ant_symbol_hidden(unsigned long address, const char *name)
++{
++	size_t i;
++
++	for (i = 0; i < ARRAY_SIZE(ant_sections); i++)
++		if (address >= (unsigned long)ant_sections[i].begin &&
++		    address < (unsigned long)ant_sections[i].end)
++			return true;
++	return name && ant_symbol_name(name);
++}
++
++#ifdef CONFIG_ACPI
++bool ant_acpi_device_hidden(void *handle)
++{
++	struct acpi_device_info *info;
++	bool hidden;
++
++	if (ACPI_FAILURE(acpi_get_object_info(handle, &info)))
++		return false;
++	hidden = (info->valid & ACPI_VALID_HID) && !strncmp(info->hardware_id.string, "QEMU", 4);
++	kfree(info);
++	return hidden;
++}
++#endif
+diff --git a/kernel/kallsyms.c b/kernel/kallsyms.c
+index 9d3f0c1..de15d47 100644
+--- a/kernel/kallsyms.c
++++ b/kernel/kallsyms.c
+@@ -31,6 +31,7 @@
+ #include <linux/kernel.h>
+ #include <linux/bsearch.h>
+ #include <linux/btf_ids.h>
++#include <linux/antinomie_stealth.h>
+ 
+ #include "kallsyms_internal.h"
+ 
+@@ -737,6 +738,10 @@ static int s_show(struct seq_file *m, void *p)
+ 	if (!iter->name[0])
+ 		return 0;
+ 
++	/* Nor does the guest see the recorder's own. */
++	if (ant_symbol_hidden(iter->value, iter->name))
++		return 0;
++
+ 	value = iter->show_value ? (void *)iter->value : NULL;
+ 
+ 	if (iter->module_name[0]) {
