@@ -107,7 +107,9 @@ class DebianImageTests(unittest.TestCase):
         for option in image.CONSOLE_DPKG:
             self.assertIn("--dpkgopt=" + option, command)
         self.assertIn("--dpkgopt=path-include=/usr/share/doc/*/copyright", command)
-        self.assertTrue(any(arg.endswith("Etc/UTC none none") for arg in command), command)
+        customize = next(arg for arg in command if "antinomie-customize.sh debian" in arg)
+        self.assertRegex(customize, r"Etc/UTC none none [0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-"
+                                    r"[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
         # The desktops keep the installer's recommends and their documentation.
         desktop = image.mmdebstrap_command(image.options({}), Path("/w/r.tar"), Path("/w/c.sh"),
                                            Path("/w/p"))
@@ -119,6 +121,51 @@ class DebianImageTests(unittest.TestCase):
         self.assertIn("Type=ether", script)
         self.assertIn("rm -f /etc/apt/apt.conf.d/99mmdebstrap /etc/dpkg/dpkg.cfg.d/99mmdebstrap",
                       script)
+
+    def test_console_root_is_found_by_uuid_on_any_disk_bus(self):
+        root = "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d"
+        self.assertEqual(image.fstab("none", root), f"UUID={root} / ext4 defaults 0 1\n")
+        self.assertEqual(image.fstab("xfce"), "/dev/vda / ext4 defaults 0 1\n")
+        self.assertEqual(image.kernel_append("xfce"), image.APPEND)
+        self.assertNotIn("root=", image.kernel_append("none"))
+        self.assertIn("console=ttyS0", image.kernel_append("none"))
+        script = image.customization_script()
+        self.assertIn("rootuuid=${8:-}", script)
+        self.assertIn("printf 'UUID=%s / ext4 defaults 0 1\\n' \"$rootuuid\"", script)
+        with tempfile.TemporaryDirectory() as name:
+            tarball = Path(name) / "rootfs.tar"
+            for text, ok in ((image.fstab("none", root), True),
+                             (image.fstab("xfce"), False)):
+                with tarfile.open(tarball, "w") as archive:
+                    data = text.encode()
+                    entry = tarfile.TarInfo("./etc/fstab")
+                    entry.size = len(data)
+                    archive.addfile(entry, io.BytesIO(data))
+                if ok:
+                    self.assertEqual(image.fstab_uuid(tarball), root)
+                else:
+                    with self.assertRaises(RuntimeError):
+                        image.fstab_uuid(tarball)
+            if image.e2fsprogs_version() >= image.MIN_E2FSPROGS and shutil.which("debugfs"):
+                raw = Path(name) / "root.raw"
+                with raw.open("wb") as target:
+                    target.truncate(16 << 20)
+                subprocess.run(["mkfs.ext4", "-q", "-F", "-U", root, str(raw)], check=True)
+                self.assertEqual(image.filesystem_uuid(raw), root)
+
+    def test_only_the_console_base_claims_sata_and_nvme_and_only_when_built_in(self):
+        with tempfile.TemporaryDirectory() as name:
+            config, kernel = Path(name) / "config", Path(name) / "kernel"
+            kernel.write_bytes(b"no EFI stub page claim")
+            buses = "".join(f"CONFIG_{symbol}=y\n" for symbol in
+                            ("ATA", "SATA_AHCI", "SCSI", "BLK_DEV_SD", "BLK_DEV_NVME"))
+            config.write_text(buses)
+            self.assertEqual(image.stealth_support("none", config, kernel), ["sata", "nvme", "dhcp"])
+            self.assertEqual(image.stealth_support("xfce", config, kernel), ["dhcp"])
+            # Debian's own configuration builds the controllers as modules.
+            config.write_text(buses.replace("SATA_AHCI=y", "SATA_AHCI=m")
+                              .replace("BLK_DEV_NVME=y", "BLK_DEV_NVME=m"))
+            self.assertEqual(image.stealth_support("none", config, kernel), ["dhcp"])
 
     def test_console_manifest_lists_the_requested_packages(self):
         manifest = (REPO / "src/antinomie/packaging/debian-minimal-trixie/packages.txt").read_text()

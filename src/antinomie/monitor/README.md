@@ -122,7 +122,9 @@ no modules), takes its address with systemd-networkd and systemd-resolved, and
 installs without recommends; documentation and manual pages are left out while
 it is bootstrapped (copyright files stay; packages installed later get theirs).
 `/tmp` stays on the root disk (`tmp.mount` masked), as on BusyBox, so files a
-sample drops there are in the VM's disk for the Disks tab and disk dumps.
+sample drops there are in the VM's disk for the Disks tab and disk dumps. The
+root is mounted by filesystem UUID, so a stealth profile may put the disk on
+virtio, SATA (AHCI) or NVMe.
 The account, sudo, locked root, masked SSH and provenance are as on the desktop
 bases. Minimum resources are 1024 MiB RAM and 4 GiB disk; the bundle is about
 350 MB (`base.qcow2` about 320 MB of a 4 GiB root). **Build base…** offers it
