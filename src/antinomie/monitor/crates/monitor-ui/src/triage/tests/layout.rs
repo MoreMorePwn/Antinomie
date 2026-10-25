@@ -642,6 +642,38 @@ fn numeric_columns_sit_at_the_right_edge_of_their_cells() {
 }
 
 #[test]
+fn category_chips_wear_their_category_icon_where_the_others_have_a_check_mark() {
+    let ctx = context();
+    let (_temp, mut view) = view(Section::Process);
+    view.process = ProcessTab::Suspicious;
+    let out = settle(&ctx, &mut view);
+    let shown = texts(&out);
+    let icon = |name: &str| {
+        let category = rules::Category::ALL
+            .iter()
+            .find(|category| category.chip() == name)
+            .unwrap_or_else(|| panic!("no category chip {name}"));
+        graph::category_icon(*category)
+    };
+    for name in ["Execution", "Persistence", "Privilege", "Evasion", "C2"] {
+        let want = format!("{} {name}", icon(name));
+        assert!(
+            shown.iter().any(|(text, _)| *text == want),
+            "{want:?} missing in {shown:?}"
+        );
+        let check = format!("{} {name}", egui_phosphor::regular::CHECK);
+        assert!(
+            !shown.iter().any(|(text, _)| *text == check),
+            "{check:?} still drawn"
+        );
+    }
+    // The tier chips keep the check mark.
+    assert!(shown
+        .iter()
+        .any(|(text, _)| text.starts_with(egui_phosphor::regular::CHECK) && text.contains("HIGH")));
+}
+
+#[test]
 fn suspicious_activity_has_tier_and_category_chips_and_evasion_is_one_of_them() {
     let ctx = context();
     let (_temp, mut view) = view(Section::Process);

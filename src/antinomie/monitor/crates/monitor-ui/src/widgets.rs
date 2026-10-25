@@ -35,7 +35,7 @@ mod window;
 
 pub use card::{card, link};
 pub use tabs::{segmented, tab, tab_row, tabs, TabItem};
-pub use tone::{chip, toggle_chip, Tone};
+pub use tone::{chip, toggle_chip, toggle_chip_with, Tone};
 pub use window::{footer, footer_split, window, Dialog};
 
 #[cfg(test)]
