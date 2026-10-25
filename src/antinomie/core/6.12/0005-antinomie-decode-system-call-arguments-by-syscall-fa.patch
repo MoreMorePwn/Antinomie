@@ -151,7 +151,7 @@ index 0000000..6bde7c3
 +#endif
 diff --git a/kernel/antinomie/native_capture.c b/kernel/antinomie/native_capture.c
 new file mode 100644
-index 0000000..a492565
+index 0000000..edb8c18
 --- /dev/null
 +++ b/kernel/antinomie/native_capture.c
 @@ -0,0 +1,3641 @@
@@ -1180,7 +1180,7 @@ index 0000000..a492565
 +		return;
 +	for (index = 0; index < remote->iov_count && !ant_capture_lost(ctx); index++) {
 +		scnprintf(key, sizeof(key), "arg3.remote_iov[%u].data", index);
-+		/* The other process's memory is never read (user decision, ANT-T0009). */
++		/* The other process's memory is never read, by design. */
 +		ant_capture_field(ctx, 3, key, "", 1,
 +				  (unsigned long)remote->iov[index].iov_base, NULL,
 +				  remote->iov[index].iov_len, remote->iov[index].iov_len,
