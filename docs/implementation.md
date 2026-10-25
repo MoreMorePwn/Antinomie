@@ -2135,9 +2135,26 @@ fstab and the filesystem agree), and `kernel_append` is BusyBox's
 mounts the VM's only disk, `/dev/vda`, `/dev/sda` or `/dev/nvme0n1`). A UUID,
 not a label, because a Debian install mounts by UUID and a fixed label would
 name the sandbox to a sample reading `/dev/disk/by-label`. Everything else
-(account removal, masked SSH and guest agents, locked root, apt check,
-provenance, initrd) is the desktop path; the desktops keep `/dev/vda` in
-fstab and `root=/dev/vda`.
+(account removal, masks for SSH and guest agents only where a package still
+ships the unit, locked root, apt check, provenance, initrd) is the desktop
+path; the desktops keep `/dev/vda` in fstab and `root=/dev/vda`.
+
+Nothing in the image names Antinomie or the build host: the package inventory
+is written to `/tmp` and leaves with the provenance, the network and tmpfiles
+snippets and the desktops' display-manager snippets have stock-looking names,
+systemd-resolved's backup of the resolv.conf it replaced (the build host's, as
+mmdebstrap copied it) is removed, and the build fails (`check_image_leaks`) on
+a path naming Antinomie, a `/dev/null` mask for a unit no package ships, or a
+configuration or state file holding the build host's nameserver or search
+domain (read from its `/etc/resolv.conf`; WSL's resolver and Tailscale
+MagicDNS names always). Creating a VM provisions it offline with `guestfish`
+(it was `virt-customize`): a read-only probe finds the one ext4 filesystem,
+then the root filesystem gets a UUID of its own (`set-uuid` after `e2fsck -f`;
+the account record keeps it as `root_uuid`), a directory hash seed of its own
+(`debugfs ssv hash_seed random` and `e2fsck -fD` through `guestfish debug`,
+best effort), fstab's `UUID=` root line follows, and the account is created as
+before without a sudoers.d file (the `sudo` group already allows it). Reset
+provisions again and records the new UUID.
 
 Its kernel is the **minimal** profile, the BusyBox kernel: it builds in every
 driver and systemd prerequisite the console base uses (`CONSOLE_BUILTIN` is

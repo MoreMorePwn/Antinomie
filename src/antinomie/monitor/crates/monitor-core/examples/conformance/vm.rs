@@ -287,7 +287,7 @@ fn drive(
     plan: &VmPlan,
     guest: Option<&GuestProfile>,
 ) -> Result<GroupRun, String> {
-    // Creating an account provisions the disk offline (virt-customize).
+    // Creating an account provisions the disk offline (guestfish).
     let seconds = if guest.is_some_and(|guest| guest.requires_credentials) {
         600
     } else {

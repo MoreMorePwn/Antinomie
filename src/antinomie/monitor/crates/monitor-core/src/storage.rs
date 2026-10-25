@@ -1181,13 +1181,15 @@ pub(crate) fn reset_vm_disk(
     let result = (|| -> Result<(), String> {
         create_overlay(options, &staging, vm.disk_gib, bundle)?;
         let disk = staging.join("disk.qcow2");
-        if let Some(account) = account {
-            account.provision(&disk)?;
-        }
+        let account = account
+            .map(|mut account| account.provision(&disk).map(|()| account))
+            .transpose()?;
         File::open(&disk)
             .and_then(|file| file.sync_all())
             .map_err(|e| e.to_string())?;
         fs::rename(&disk, directory.join("disk.qcow2")).map_err(|e| e.to_string())?;
+        // The new disk's filesystem UUID, for the kernel command line.
+        account.map_or(Ok(()), |account| account.save(directory))?;
         File::open(directory)
             .and_then(|file| file.sync_all())
             .map_err(|e| format!("reset disk is published; directory durability is uncertain: {e}"))
