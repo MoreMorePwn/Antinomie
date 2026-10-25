@@ -5,8 +5,9 @@
 # installs with no desktop chosen, mmdebstrap --variant=standard (the
 # "standard system utilities" task) with recommends, the installer's own
 # additions requested below (GRUB among them), tasksel's language task for the
-# locale (task-english for English) and the base's kernel as Debian packages it
-# (linux-image-6.12.94+deb13-amd64 and linux-image-amd64, built by the recipe);
+# locale (task-english for English) and Debian's own kernel packages
+# (linux-image-6.12.94+deb13-amd64 and linux-image-amd64 6.12.94-1, verified
+# against the archive's signed index);
 # documentation, manual pages and the package indexes kept. The requested list is the recipe's CONSOLE_PACKAGES
 # (tests/monitor/test-debian-image.py checks they agree).
 #
