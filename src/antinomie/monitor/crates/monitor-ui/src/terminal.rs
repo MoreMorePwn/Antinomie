@@ -44,6 +44,14 @@ impl Default for Terminal {
     }
 }
 
+/// Where the focus edge is drawn in a pane of `rect`: one point inside it, so
+/// all four sides show. A line on the pane's own border is clipped by the
+/// panel or window around it on the sides that meet it, which left only the
+/// right and bottom edges to be seen.
+fn focus_edge(rect: egui::Rect) -> egui::Rect {
+    rect.shrink(1.0)
+}
+
 impl Terminal {
     #[cfg(test)]
     pub(crate) fn contents(&self) -> String {
@@ -245,7 +253,7 @@ impl Terminal {
         // The terminal occupies the entire pane, including fractional cells.
         // Keep an unobtrusive inset focus edge rather than a second card frame.
         ui.painter().rect_stroke(
-            rect,
+            focus_edge(rect),
             0.0,
             egui::Stroke::new(
                 1.0_f32,
@@ -857,6 +865,44 @@ mod tests {
             assert!((cursor.left() - 2.0 * cell.x).abs() < 0.01);
             assert!((cursor.top() - cell.y).abs() < 0.01);
         }
+    }
+
+    #[test]
+    fn the_focus_edge_is_drawn_inside_the_pane_so_all_four_sides_show() {
+        let pane = egui::vec2(480.0, 300.0);
+        let accent = crate::theme::palette().accent;
+        let edge_of = |live: bool, color: egui::Color32| {
+            // A context of its own each time: focus is kept in it.
+            let ctx = egui::Context::default();
+            crate::theme::install(&ctx);
+            let mut terminal = Terminal::default();
+            terminal.process(b"prompt$ ");
+            let (output, ..) = frame(&ctx, &mut terminal, pane, Vec::new(), live);
+            output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Rect(rect)
+                    if rect.stroke.color == color && rect.stroke.width > 0.0 =>
+                {
+                    Some(rect.rect)
+                }
+                _ => None,
+            })
+        };
+        let whole = egui::Rect::from_min_size(egui::Pos2::ZERO, pane);
+        let focused = edge_of(true, accent).expect("a focused terminal draws its edge");
+        // A point in from every side of the pane: a line on the pane's own
+        // border is hidden by what surrounds it, on the left and top as well
+        // as on the right and bottom.
+        assert!(
+            focused.left() >= whole.left() + 1.0
+                && focused.top() >= whole.top() + 1.0
+                && focused.right() <= whole.right() - 1.0
+                && focused.bottom() <= whole.bottom() - 1.0,
+            "{focused:?} in {whole:?}"
+        );
+        assert_eq!(focused, super::focus_edge(whole));
+        // An unfocused one keeps the same place, in the line colour.
+        let quiet = edge_of(false, crate::theme::line()).expect("the quiet edge");
+        assert_eq!(quiet, focused);
     }
 
     /// Runs one frame of a terminal filling `pane`, live or recorded.
