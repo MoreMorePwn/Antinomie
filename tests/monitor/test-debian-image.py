@@ -3,7 +3,9 @@
 # SPDX-License-Identifier: GPL-3.0-only
 import importlib.util
 import io
+import json
 from pathlib import Path
+import re
 import shutil
 import struct
 import tarfile
@@ -90,10 +92,14 @@ class DebianImageTests(unittest.TestCase):
         self.assertEqual(image.image_size("xfce"), image.IMAGE_SIZE)
         console = image.packages("none")
         self.assertEqual(len(console), len(set(console)))
-        for package in ("systemd-sysv", "systemd-resolved", "sudo", "openssh-client", "python3",
-                        "curl", "wget", "ca-certificates", "iproute2", "procps", "less",
-                        "vim-tiny", "locales", "keyboard-configuration", "tzdata"):
+        # The installer's additions on top of its standard task.
+        for package in ("tasksel", "installation-report", "discover", "laptop-detect", "eject",
+                        "initramfs-tools", "keyboard-configuration", "console-setup", "sudo"):
             self.assertIn(package, console)
+        # Not installed by the installer: curl (wget is standard) and
+        # systemd-resolved (ifupdown and dhcpcd write resolv.conf).
+        for package in ("curl", "systemd-resolved", "systemd-networkd"):
+            self.assertNotIn(package, console)
         for package in console:
             self.assertFalse(package.startswith(("task-", "xserver", "lightdm", "gdm", "sddm",
                                                  "network-manager", "openssh-server",
@@ -102,40 +108,60 @@ class DebianImageTests(unittest.TestCase):
         with patch.object(image.os, "geteuid", return_value=1000):
             command = image.mmdebstrap_command(values, Path("/w/r.tar"), Path("/w/c.sh"),
                                                Path("/w/p"))
-        self.assertIn('--aptopt=APT::Install-Recommends "false"', command)
-        self.assertIn("--variant=important", command)
-        for option in image.CONSOLE_DPKG:
-            self.assertIn("--dpkgopt=" + option, command)
-        self.assertIn("--dpkgopt=path-include=/usr/share/doc/*/copyright", command)
+        # The installer's standard task with recommends, documentation kept,
+        # the package indexes kept.
+        self.assertIn('--aptopt=APT::Install-Recommends "true"', command)
+        self.assertIn("--variant=standard", command)
+        self.assertFalse(any(arg.startswith("--dpkgopt=") for arg in command))
+        self.assertIn("--skip=cleanup/apt/lists", command)
+        self.assertIn("--skip=cleanup/apt/cache", command)
+        unticked = image.mmdebstrap_command(image.options({"desktop": "none", "standard": False}),
+                                            Path("/w/r.tar"), Path("/w/c.sh"), Path("/w/p"))
+        self.assertIn("--variant=important", unticked)
         customize = next(arg for arg in command if "antinomie-customize.sh debian" in arg)
         self.assertRegex(customize, r"Etc/UTC none none [0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-"
-                                    r"[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+                                    r"[89ab][0-9a-f]{3}-[0-9a-f]{12} http://deb.debian.org/debian$")
         # The desktops keep the installer's recommends and their documentation.
         desktop = image.mmdebstrap_command(image.options({}), Path("/w/r.tar"), Path("/w/c.sh"),
                                            Path("/w/p"))
         self.assertFalse(any(arg.startswith("--dpkgopt=") for arg in desktop))
         script = image.customization_script()
         self.assertIn("systemctl set-default multi-user.target", script)
-        self.assertIn("80-antinomie-dhcp.network", script)
-        self.assertIn("systemctl mask tmp.mount", script)
-        self.assertIn("Type=ether", script)
+        # ifupdown and dhcpcd for the onboard NIC, as the installer leaves them.
+        self.assertIn("allow-hotplug enp0s25\niface enp0s25 inet dhcp\n", image.CONSOLE_INTERFACES)
+        self.assertIn("# The primary network interface", image.CONSOLE_INTERFACES)
+        self.assertNotIn("systemd-networkd", script)
+        self.assertNotIn("systemd-resolved.service", script)
+        self.assertNotIn("/etc/systemd/network/", script)
+        self.assertIn("/usr/share/tasksel/descs/debian-tasks.desc", script)
+        self.assertIn("exim4/mailname", script)
         self.assertIn("rm -f /etc/apt/apt.conf.d/99mmdebstrap /etc/dpkg/dpkg.cfg.d/99mmdebstrap",
                       script)
 
     def test_console_root_is_found_by_uuid_on_any_disk_bus(self):
         root = "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d"
-        self.assertEqual(image.fstab("none", root), f"UUID={root} / ext4 defaults 0 1\n")
+        # The installer's fstab: its header, the root by UUID with
+        # errors=remount-ro, the CD drive.
+        fstab = image.fstab("none", root)
+        self.assertTrue(fstab.startswith("# /etc/fstab: static file system information.\n"))
+        self.assertIn(f"\n# / was on {image.CONSOLE_ROOT_DEVICE} during installation\n"
+                      f"UUID={root} /               ext4    errors=remount-ro 0       1\n", fstab)
+        self.assertTrue(fstab.endswith("/dev/sr0        /media/cdrom0   udf,iso9660 user,noauto"
+                                       "     0       0\n"))
         self.assertEqual(image.fstab("xfce"), "/dev/vda / ext4 defaults 0 1\n")
         self.assertEqual(image.kernel_append("xfce"), image.APPEND)
-        self.assertNotIn("root=", image.kernel_append("none"))
-        self.assertIn("console=ttyS0", image.kernel_append("none"))
+        # GRUB's command line for a Debian install: no serial console, no panic=-1.
+        self.assertEqual(image.kernel_append("none", "6.12.94+deb13-amd64 (x) #1", root),
+                         f"BOOT_IMAGE=/boot/vmlinuz-6.12.94+deb13-amd64 root=UUID={root} ro quiet")
         script = image.customization_script()
-        self.assertIn("rootuuid=${8:-}", script)
-        self.assertIn("printf 'UUID=%s / ext4 defaults 0 1\\n' \"$rootuuid\"", script)
+        self.assertIn("rootuuid=${8:-} mirror=${9:-}", script)
+        self.assertIn("printf 'UUID=%s /               ext4    errors=remount-ro 0       1\\n'"
+                      " \"$rootuuid\"", script)
         with tempfile.TemporaryDirectory() as name:
             tarball = Path(name) / "rootfs.tar"
             for text, ok in ((image.fstab("none", root), True),
-                             (image.fstab("xfce"), False)):
+                             (image.fstab("xfce"), False),
+                             (f"UUID={root} / ext4 defaults 0 1\n", False)):
                 with tarfile.open(tarball, "w") as archive:
                     data = text.encode()
                     entry = tarfile.TarInfo("./etc/fstab")
@@ -160,12 +186,13 @@ class DebianImageTests(unittest.TestCase):
             buses = "".join(f"CONFIG_{symbol}=y\n" for symbol in
                             ("ATA", "SATA_AHCI", "SCSI", "BLK_DEV_SD", "BLK_DEV_NVME"))
             config.write_text(buses)
-            self.assertEqual(image.stealth_support("none", config, kernel), ["sata", "nvme", "dhcp"])
+            self.assertEqual(image.stealth_support("none", config, kernel),
+                             ["sata", "nvme", "dhcp", "onboardnic"])
             self.assertEqual(image.stealth_support("xfce", config, kernel), ["dhcp"])
             # Debian's own configuration builds the controllers as modules.
             config.write_text(buses.replace("SATA_AHCI=y", "SATA_AHCI=m")
                               .replace("BLK_DEV_NVME=y", "BLK_DEV_NVME=m"))
-            self.assertEqual(image.stealth_support("none", config, kernel), ["dhcp"])
+            self.assertEqual(image.stealth_support("none", config, kernel), ["dhcp", "onboardnic"])
 
     def test_console_manifest_lists_the_requested_packages(self):
         manifest = (REPO / "src/antinomie/packaging/debian-minimal-trixie/packages.txt").read_text()
@@ -177,7 +204,212 @@ class DebianImageTests(unittest.TestCase):
         names = {fields[1].split(":")[0] for fields in resolved}
         self.assertTrue(set(requested) <= names)
         self.assertFalse(names & {"openssh-server", "network-manager", "xserver-xorg-core",
-                                  "qemu-guest-agent", "cloud-init"})
+                                  "qemu-guest-agent", "cloud-init", "curl", "systemd-resolved"})
+        # What the installer's standard task with recommends brings.
+        self.assertTrue({"exim4-daemon-light", "systemd-timesyncd", "man-db", "lsof",
+                         "bind9-dnsutils", "ifupdown", "dhcpcd-base", "task-english",
+                         "tasksel-data"} <= names)
+
+    def test_console_configuration_is_the_installers(self):
+        script = image.customization_script()
+        sources = image.SOURCES_LIST.format(media="Debian GNU/Linux 13.1.0 _Trixie_ - Official "
+                                            "amd64 NETINST with firmware 20250906-10:22",
+                                            mirror="http://deb.debian.org/debian")
+        self.assertTrue(sources.startswith("#deb cdrom:[Debian GNU/Linux 13.1.0 _Trixie_"))
+        for line in ("deb http://deb.debian.org/debian/ trixie main non-free-firmware",
+                     "deb-src http://deb.debian.org/debian/ trixie main non-free-firmware",
+                     "deb http://security.debian.org/debian-security trixie-security main "
+                     "non-free-firmware",
+                     "deb http://deb.debian.org/debian/ trixie-updates main non-free-firmware",
+                     "# This system was installed using small removable media"):
+            self.assertIn(line + "\n", sources)
+        self.assertIn("apt-get -o Acquire::Languages=en update", script)
+        self.assertIn("# The following lines are desirable for IPv6 capable hosts\n", image.HOSTS)
+        # Locale, time zone and keyboard through debconf, as the installer.
+        self.assertIn("locales locales/default_environment_locale select", script)
+        self.assertIn("rm -f /etc/locale.gen\ndpkg-reconfigure -f noninteractive locales", script)
+        self.assertIn("dpkg-reconfigure -f noninteractive tzdata", script)
+        self.assertIn("rm -f /etc/timezone", script)
+        self.assertNotIn("> /etc/timezone", script)
+        self.assertIn("printf '0.0 0 0.0\\n0\\nUTC\\n' > /etc/adjtime", script)
+        self.assertIn("ln -sf /etc/machine-id /var/lib/dbus/machine-id", script)
+        self.assertIn("tasksel tasksel/first multiselect standard", script)
+        # /tmp stays on disk through a drop-in, not a mask.
+        self.assertNotIn("systemctl mask tmp.mount", script)
+        self.assertIn("ConditionPathIsMountPoint=/tmp", script)
+        self.assertIn("/etc/systemd/system/tmp.mount.d/override.conf", script)
+        with patch.object(image.os, "geteuid", return_value=1000):
+            command = image.mmdebstrap_command(image.options({"desktop": image.CONSOLE,
+                                                              "mirror": "http://m.example/debian/"}),
+                                               Path("/w/r.tar"), Path("/w/c.sh"), Path("/w/p"))
+        # The installation's logs stay; the mirror reaches sources.list.
+        self.assertIn("--skip=cleanup/reproducible", command)
+        customize = next(arg for arg in command if "antinomie-customize.sh" in arg
+                         and "chroot" in arg)
+        self.assertTrue(customize.endswith(" http://m.example/debian"), customize)
+
+    def test_image_names_no_antinomie_file_and_masks_only_shipped_units(self):
+        script = image.customization_script()
+        # Every file the recipe writes into the image has a stock-looking name.
+        for path in re.findall(r"(?:> |-p )(/(?:etc|var|usr)/\S+)", script):
+            self.assertNotIn("antinomie", path.lower(), path)
+        self.assertIn('if [ -e "/usr/lib/systemd/system/$unit" ]', script)
+        self.assertIn("rm -f /etc/.resolv.conf.systemd-resolved.bak", script)
+        self.assertNotIn("/var/lib/antinomie-image", script)
+        with patch.object(image.os, "geteuid", return_value=1000):
+            command = image.mmdebstrap_command(image.options({"desktop": image.CONSOLE}),
+                                               Path("/w/r.tar"), Path("/w/c.sh"), Path("/w/p"))
+        hooks = [arg[len("--customize-hook="):] for arg in command
+                 if arg.startswith("--customize-hook=")]
+        download = hooks.index("download /tmp/packages.tsv /w/p/packages.tsv")
+        self.assertGreater(hooks.index('rm -f "$1/tmp/packages.tsv"'), download)
+
+    def _tarball(self, root, files, links=()):
+        tarball = Path(root) / "rootfs.tar"
+        with tarfile.open(tarball, "w", format=tarfile.PAX_FORMAT) as archive:
+            for name, text in files.items():
+                data = text.encode()
+                entry = tarfile.TarInfo("./" + name)
+                entry.size = len(data)
+                archive.addfile(entry, io.BytesIO(data))
+            for name, target in links:
+                entry = tarfile.TarInfo("./" + name)
+                entry.type = tarfile.SYMTYPE
+                entry.linkname = target
+                archive.addfile(entry)
+        return tarball
+
+    def test_build_host_name_is_a_trace_but_not_the_image_name(self):
+        patterns = image.host_name_patterns("debian", {"MikiMiku", "MikiMiku.localdomain",
+                                                       "debian", "localhost", "lab"})
+        self.assertEqual(len(patterns), 2)
+        self.assertTrue(any(p.search(b"mikimiku.localdomain\n") for p in patterns))
+        self.assertFalse(any(p.search(b"debian\n127.0.1.1 lab\n") for p in patterns))
+        self.assertEqual(image.host_name_patterns("lab", {"lab.example"}), [])
+        with tempfile.TemporaryDirectory() as name:
+            tarball = self._tarball(name, {"etc/mailname": "MikiMiku.localdomain\n"})
+            with self.assertRaisesRegex(RuntimeError, "build traces"):
+                image.check_image_leaks(tarball, patterns)
+
+    def test_build_fails_on_build_host_traces(self):
+        clean = {"etc/hostname": "debian\n",
+                 "usr/lib/systemd/system/tmp.mount": "[Mount]\n",
+                 "usr/lib/systemd/resolv.conf": "nameserver 127.0.0.53\n",
+                 "usr/share/doc/x/README": "see http://ts.net.example/ and 10.255.255.254\n",
+                 "etc/apt/sources.list": "deb http://deb.debian.org/debian trixie main\n"}
+        host = Path(tempfile.mkdtemp()) / "resolv.conf"
+        self.addCleanup(shutil.rmtree, host.parent)
+        host.write_text("# generated by WSL\nnameserver 10.255.255.254\nnameserver 127.0.0.53\n"
+                        "search taild7cded.ts.net corp.example.org lan\n")
+        patterns = image.host_resolver_patterns(host)
+        self.assertEqual(len(patterns), 3)  # 127.0.0.53 and the dotless "lan" are not host-specific
+        self.assertEqual(image.host_resolver_patterns(host.parent / "missing"), [])
+        bad = (
+            ({"etc/.resolv.conf.systemd-resolved.bak":
+              "nameserver 10.255.255.254\nsearch taild7cded.ts.net\n"}, ()),
+            ({"etc/resolv.conf": "search tail0a1b2c.ts.net\n"}, ()),
+            ({"var/log/installer/syslog": "domain corp.example.org\n"}, ()),
+            # debconf keeps what a package's configuration asked (exim4's FQDN).
+            ({"var/cache/debconf/config.dat": "Value: MikiMiku.taild7cded.ts.net\n"}, ()),
+            ({"var/lib/antinomie-image/packages.tsv": "bash\n"}, ()),
+            ({"etc/tmpfiles.d/antinomie-resolv.conf": "L+ /etc/resolv.conf\n"}, ()),
+            ({}, (("etc/systemd/system/qemu-guest-agent.service", "/dev/null"),)),
+        )
+        with tempfile.TemporaryDirectory() as name:
+            image.check_image_leaks(self._tarball(name, clean, (
+                ("etc/systemd/system/tmp.mount", "/dev/null"),)), patterns)
+            for files, links in bad:
+                with self.subTest(files=files, links=links), \
+                        self.assertRaisesRegex(RuntimeError, "build traces"):
+                    image.check_image_leaks(self._tarball(name, {**clean, **files}, links),
+                                            patterns)
+
+    def test_installation_times_reach_every_path(self):
+        # find -printf output: path, atime, ctime, birth, mtime.
+        record = b"".join(field + b"\0" for field in (
+            b"", b"1761385000.100000000", b"1761385010.200000000", b"1761384990.300000000",
+            b"1761385010.200000000",
+            b"etc", b"1761385100.5", b"1761385100.5", b"1761384995.000000001", b"1761385100.5",
+            b"etc/hostname", b"1761385050.123456789", b"1761385040.987654321", b"-1",
+            b"1761385040.987654321",
+            b"usr/bin/bash", b"1761385060.111111111", b"1761385020.222222222",
+            b"1761385020.222222222", b"1752339501.000000000",
+            b"proc", b"1700000000.0", b"1700000000.0", b"1700000000.0", b"1700000000.0"))
+        self.assertEqual(image.parse_time("1761385040.987654321"), (1761385040, 987654321))
+        self.assertEqual(image.parse_time("12.5"), (12, 500000000))
+        self.assertIsNone(image.parse_time("-1"))
+        self.assertEqual(image.debugfs_path("usr/lib/systemd/system/system-systemd\\x2dcryptsetup.slice"),
+                         '"/usr/lib/systemd/system/system-systemd\\x2dcryptsetup.slice"')
+        with self.assertRaises(RuntimeError):
+            image.debugfs_path('etc/a"b')
+        with tempfile.TemporaryDirectory() as name:
+            times = Path(name) / "inode-times"
+            times.write_bytes(record)
+            recorded = image.read_inode_times(times)
+            self.assertNotIn("proc", recorded)
+            self.assertIsNone(recorded["etc/hostname"][2])
+            tarball = Path(name) / "rootfs.tar"
+            with tarfile.open(tarball, "w", format=tarfile.PAX_FORMAT) as archive:
+                for path, mtime, data in (("./", 1761385010, None), ("./etc", 1761385200, None),
+                                          ("./etc/hostname", 1761385040, b"debian\n"),
+                                          ("./usr", 1761385000, None),
+                                          ("./usr/bin", 1761385000, None),
+                                          ("./usr/bin/bash", 1752339501, b"#!"),
+                                          ("./etc/added-later", 1761385300, b"x")):
+                    entry = tarfile.TarInfo(path)
+                    entry.mtime = mtime
+                    if data is None:
+                        entry.type = tarfile.DIRTYPE
+                    else:
+                        entry.size = len(data)
+                    archive.addfile(entry, io.BytesIO(data or b""))
+            rng = image.random.Random(1)
+            plan, start, end = image.install_timeline(tarball, recorded, rng)
+            # Access times are not part of the timeline (tar gives package times).
+            self.assertEqual(start, (1761384990, 300000000))
+            self.assertEqual(end, (1761385100, 500000000))
+            for path, (atime, ctime, birth, mtime) in plan.items():
+                with self.subTest(path=path):
+                    self.assertGreaterEqual(ctime, mtime)
+                    self.assertLessEqual(birth, ctime)
+                    self.assertGreaterEqual(atime, birth)
+                    self.assertGreater(ctime[0], 86400)
+            # The installation's own times and nanoseconds survive.
+            self.assertEqual(plan["etc/hostname"][:2], ((1761385050, 123456789),
+                                                       (1761385040, 987654321)))
+            self.assertEqual(plan["etc/hostname"][3], (1761385040, 987654321))
+            # Unknown birth: born when changed. Package files keep their mtime.
+            self.assertEqual(plan["etc/hostname"][2], plan["etc/hostname"][1])
+            self.assertEqual(plan["usr/bin/bash"][3], (1752339501, 0))
+            # The record's modification times win over the tarball's clamped ones.
+            self.assertEqual(plan["etc"][3], (1761385100, 500000000))
+            # Not recorded: changed when the installation ended, or later.
+            self.assertGreaterEqual(plan["etc/added-later"][1][0], 1761385300)
+            self.assertEqual(plan[""][1], (1761385010, 200000000))
+            if image.e2fsprogs_version() >= image.MIN_E2FSPROGS and shutil.which("debugfs"):
+                raw = Path(name) / "root.raw"
+                with raw.open("wb") as target:
+                    target.truncate(32 << 20)
+                subprocess.run(["mkfs.ext4", "-q", "-F", "-d", str(tarball), str(raw)],
+                               check=True)
+                with (Path(name) / "log").open("w") as log:
+                    self.assertEqual(image.apply_timeline(raw, plan, start, end, Path(name), log,
+                                                          rng), len(plan))
+                stat = subprocess.run(["debugfs", "-R", "stat /etc/hostname", str(raw)],
+                                      capture_output=True, text=True, check=True).stdout
+                self.assertIn("ctime: 0x68fc9a50:eb79a2c4", stat)
+                self.assertIn("atime: 0x68fc9a5a:1d6f3454", stat)
+                self.assertIn("crtime: 0x68fc9a50:eb79a2c4", stat)
+                self.assertIn("mtime: 0x68fc9a50:eb79a2c4", stat)
+                # The record's modification time replaces the tarball's.
+                etc = subprocess.run(["debugfs", "-R", "stat /etc", str(raw)],
+                                     capture_output=True, text=True, check=True).stdout
+                self.assertIn("mtime: 0x68fc9a8c:77359400", etc)
+                stats = subprocess.run(["dumpe2fs", "-h", str(raw)], capture_output=True,
+                                       text=True, check=True).stdout
+                self.assertRegex(stats, r"Mount count:\s+1\n")
+                self.assertRegex(stats, r"Last mounted on:\s+/target\n")
+                self.assertRegex(stats, r"Last write time:\s+\w+ Oct 2[56] \d\d:\d\d:\d\d 2025\n")
 
     def test_files_cross_the_new_root_as_the_invoking_user(self):
         # In unshare mode a plain hook runs as the namespace's root, which can
@@ -190,6 +422,9 @@ class DebianImageTests(unittest.TestCase):
         self.assertIn("upload /w/c.sh /tmp/antinomie-customize.sh", hooks)
         self.assertIn("download /etc/os-release /w/p/os-release", hooks)
         self.assertIn("download /tmp/package-docs.tar.gz /w/p/package-docs.tar.gz", hooks)
+        # The installation's inode times are recorded after every change.
+        self.assertTrue(hooks[-3].startswith('find "$1" -xdev -printf '), hooks[-3])
+        self.assertEqual(hooks[-2], "download /tmp/inode-times /w/inode-times")
         for hook in hooks:
             if not hook.startswith(("upload ", "download ")):
                 self.assertNotIn("/w/", hook)
@@ -281,6 +516,7 @@ class DebianImageTests(unittest.TestCase):
                 archive.addfile(entry, io.BytesIO(data))
             for file in image.ROOTFS_PROVENANCE:
                 (provenance / file).write_text(file)
+            (staging / image.INODE_TIMES).write_bytes(b"etc\0" + b"1\0" * 4)
             values = image.options({"desktop": "gnome"})
             record = {"bootstrap": "mmdebstrap", "root_built_at": "2026-10-09T00:00:00+00:00",
                       "reused_from_cache": False}
@@ -288,6 +524,7 @@ class DebianImageTests(unittest.TestCase):
             now = image.datetime(2026, 10, 10, tzinfo=image.timezone.utc)
             image.save_rootfs_cache(cache, rootfs, provenance, record, values)
             rootfs.unlink()
+            (staging / image.INODE_TIMES).unlink()
             shutil.rmtree(provenance)
             provenance.mkdir()
             log = io.StringIO()
@@ -297,6 +534,8 @@ class DebianImageTests(unittest.TestCase):
                 reused = image.load_rootfs_cache(cache, values, staging, provenance, log)
                 self.assertTrue(reused["reused_from_cache"])
                 self.assertEqual((provenance / "packages.tsv").read_text(), "packages.tsv")
+                # The installation's inode times come back with the tarball.
+                self.assertEqual((staging / image.INODE_TIMES).read_bytes(), b"etc\0" + b"1\0" * 4)
                 with tarfile.open(rootfs) as archive:
                     self.assertIn("./etc/hostname", archive.getnames())
                 other = image.options({"desktop": "xfce"})
@@ -336,14 +575,103 @@ class DebianImageTests(unittest.TestCase):
             data = bytearray(0x300)
             data[0x202:0x206] = b"HdrS"
             struct.pack_into("<H", data, 0x20e, 0x40)
-            for version in (b"6.12.94-custom", b"6.13.0", b"6.12.940"):
+            for version in (b"6.12.94-custom", b"6.12.94+deb13-amd64", b"6.13.0", b"6.12.940"):
                 data[0x240:0x280] = version + b"\0" * (64 - len(version))
                 kernel.write_bytes(data)
-                if version == b"6.12.94-custom":
+                if version.startswith(b"6.12.94") and version != b"6.12.940":
                     self.assertEqual(image.kernel_release(kernel), version.decode())
                 else:
                     with self.assertRaises(RuntimeError):
                         image.kernel_release(kernel)
+
+    def test_console_disk_is_the_installers_partitioned_disk(self):
+        if not shutil.which("sfdisk"):
+            self.skipTest("needs sfdisk")
+        with tempfile.TemporaryDirectory() as name:
+            raw = Path(name) / "root.raw"
+            device = image.console_disk(raw, image.CONSOLE_IMAGE_SIZE, image.random.Random(5))
+            self.assertEqual(device, f"{raw}?offset={1 << 20}")
+            table = json.loads(subprocess.run(["sfdisk", "--json", str(raw)], check=True,
+                                              capture_output=True, text=True).stdout)
+            [root] = table["partitiontable"]["partitions"]
+            self.assertEqual(table["partitiontable"]["label"], "dos")
+            self.assertEqual((root["start"], root["size"], root["type"], root.get("bootable")),
+                             (2048, image.CONSOLE_ROOT_SIZE // 512, "83", True))
+        self.assertEqual(image.CONSOLE_ROOT_DEVICE, "/dev/sda1")
+        self.assertIn("# / was on /dev/sda1 during installation",
+                      image.fstab("none", "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d"))
+
+    def test_kernel_is_packaged_as_debian_packages_it(self):
+        if not shutil.which("dpkg-deb"):
+            self.skipTest("needs dpkg-deb")
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            kernel = root / "bzImage"
+            kernel.write_bytes(b"kernel image")
+            config = root / "debian-config"
+            config.write_text("CONFIG_EXT4_FS=y\nCONFIG_MODULE_SIG_KEY=\"certs/x.pem\"\n"
+                              "CONFIG_BUILD_SALT=\"x\"\nCONFIG_ANTINOMIE=y\n# CONFIG_9P_FS is not set\n")
+            modules = root / "lib/modules/6.12.94+deb13-amd64"
+            (modules / "kernel/net").mkdir(parents=True)
+            (modules / "kernel/net/x.ko").write_bytes(b"ko")
+            for generated in ("modules.order", "modules.builtin", "modules.dep", "modules.alias"):
+                (modules / generated).write_text("")
+            out = root / "out"
+            out.mkdir()
+            image_deb, meta_deb = image.kernel_packages(
+                kernel, "6.12.94+deb13-amd64 (debian-kernel@lists.debian.org) #1", modules,
+                config, out)
+            self.assertEqual(image_deb.name, "linux-image-6.12.94+deb13-amd64_6.12.94-1_amd64.deb")
+            self.assertEqual(meta_deb.name, "linux-image-amd64_6.12.94-1_amd64.deb")
+            field = lambda deb, key: subprocess.run(["dpkg-deb", "-f", str(deb), key],
+                                                    check=True, capture_output=True,
+                                                    text=True).stdout.strip()
+            self.assertEqual(field(image_deb, "Source"), "linux-signed-amd64 (6.12.94+1)")
+            self.assertEqual(field(image_deb, "Recommends"), "apparmor")
+            self.assertEqual(field(image_deb, "Description").splitlines()[0],
+                             "Linux 6.12 for 64-bit PCs (signed)")
+            self.assertEqual(field(meta_deb, "Depends"),
+                             "linux-image-6.12.94+deb13-amd64 (= 6.12.94-1)")
+            listing = subprocess.run(["dpkg-deb", "-c", str(image_deb)], check=True,
+                                     capture_output=True, text=True).stdout
+            self.assertRegex(listing, r"-rw------- root/root .* \./boot/vmlinuz-6\.12\.94\+deb13-amd64")
+            self.assertIn("./usr/lib/modules/6.12.94+deb13-amd64/kernel/net/x.ko", listing)
+            # depmod writes the module indexes in the postinst, as for Debian's.
+            self.assertNotIn("modules.dep", listing)
+            self.assertIn("./usr/lib/modules/6.12.94+deb13-amd64/modules.order", listing)
+            unpacked = root / "unpacked"
+            subprocess.run(["dpkg-deb", "-x", str(image_deb), str(unpacked)], check=True)
+            boot_config = (unpacked / "boot/config-6.12.94+deb13-amd64").read_text()
+            self.assertEqual(boot_config, "CONFIG_EXT4_FS=y\n# CONFIG_9P_FS is not set\n")
+            self.assertTrue((unpacked / "boot/System.map-6.12.94+deb13-amd64").read_text()
+                            .startswith("ffffffffffffffff B The real System.map"))
+            control = root / "control"
+            subprocess.run(["dpkg-deb", "-e", str(image_deb), str(control)], check=True)
+            self.assertIn("linux-update-symlinks $change $version $image_path",
+                          (control / "postinst").read_text())
+            self.assertIn("version=6.12.94+deb13-amd64\nimage_path=/boot/vmlinuz-$version",
+                          (control / "postinst").read_text())
+        # The customization purges Debian's kernels, not the console base's own.
+        self.assertIn('($1 ~ /^linux-image-/ && keep != "none")', image.customization_script())
+        # They go in before the rest of the customization; the cache knows them.
+        with patch.object(image.os, "geteuid", return_value=1000):
+            command = image.mmdebstrap_command(image.options({"desktop": image.CONSOLE}),
+                                               Path("/w/r.tar"), Path("/w/c.sh"), Path("/w/p"),
+                                               kernel_debs=(Path("/w/k/a.deb"), Path("/w/k/b.deb")))
+        hooks = [arg[len("--customize-hook="):] for arg in command
+                 if arg.startswith("--customize-hook=")]
+        install = hooks.index('chroot "$1" apt-get -o APT::Get::AllowUnauthenticated=false -y '
+                              'install /tmp/a.deb /tmp/b.deb')
+        self.assertLess(hooks.index("upload /w/k/a.deb /tmp/a.deb"), install)
+        self.assertLess(install, hooks.index("upload /w/c.sh /tmp/antinomie-customize.sh"))
+        values = image.options({"desktop": image.CONSOLE})
+        with tempfile.TemporaryDirectory() as name:
+            deb = Path(name) / "k.deb"
+            deb.write_bytes(b"one")
+            first = image.rootfs_identity(values, (deb,))
+            deb.write_bytes(b"two")
+            self.assertNotEqual(first, image.rootfs_identity(values, (deb,)))
+            self.assertNotIn("kernel_packages", image.rootfs_identity(values))
 
     def test_modular_kernel_requires_matching_installed_modules(self):
         with tempfile.TemporaryDirectory() as name:

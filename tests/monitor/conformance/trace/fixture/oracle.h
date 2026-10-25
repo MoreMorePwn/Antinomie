@@ -143,6 +143,8 @@ void remote_noreturn(int wait_status);
 void role(const char *name, long id);
 // Free-form group marker lines for the checker ("ANT_GROUP start user").
 void group_line(const char *what, const char *name);
+// The block device mounted at / (/dev/vda when /proc/self/mounts names none).
+void ora_root_device(char *out, size_t size);
 
 // Touch every page of the program image and its writable data, so the
 // recorder's no-fault copies find what the program passes from them. main()

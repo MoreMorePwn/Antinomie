@@ -815,25 +815,11 @@ static void mrelease_cases(void)
 
 // --- queries and kernel interfaces that need root to succeed
 
-static void root_device(char *out, size_t size)
-{
-    char line[512], device[256], target[256];
-    snprintf(out, size, "/dev/vda");
-    FILE *mounts = fopen("/proc/self/mounts", "re");
-    if (!mounts)
-        return;
-    while (fgets(line, sizeof line, mounts))
-        if (sscanf(line, "%255s %255s", device, target) == 2 && !strcmp(target, "/") &&
-            !strncmp(device, "/dev/", 5))
-            snprintf(out, size, "%s", device);
-    fclose(mounts);
-}
-
 static void query_cases(void)
 {
     char device[256];
     unsigned int format = 0;
-    root_device(device, sizeof device);
+    ora_root_device(device, sizeof device);
     long got = CALL("quotactl.getfmt_root_device", quotactl, WANT_ANY, QCMD(Q_GETFMT, USRQUOTA),
                     device, 0, &format);
     in_str(1, device);

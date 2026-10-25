@@ -8,7 +8,9 @@
 //! The base is BusyBox or a console Debian base (Debian Minimal). A base with
 //! a guest profile gets at least its resource minima, and when it asks for an
 //! account, a throwaway `conformance` account (UID 1000) with a random
-//! password; it is up when its console shows the login prompt.
+//! password; it is up when its console shows the login prompt. A Debian
+//! base's command line names no serial console (as on a PC), so the
+//! harness's VMs ask for one (`BackendOptions::serial_console`).
 use antinomie_monitor_core::*;
 use std::{
     collections::BTreeMap,
@@ -251,6 +253,7 @@ pub fn run_group(base: &Path, data_dir: &Path, plan: &VmPlan) -> Result<GroupRun
         bundle_dir: base.to_path_buf(),
         data_dir: data_dir.to_path_buf(),
         headless: true,
+        serial_console: true,
         capture_quota_size: 8 * 1024 * 1024 * 1024,
         // The app's own shutdown timeout: a guest that is still writing back
         // a load group's file churn when it powers off is waited for while
@@ -287,7 +290,7 @@ fn drive(
     plan: &VmPlan,
     guest: Option<&GuestProfile>,
 ) -> Result<GroupRun, String> {
-    // Creating an account provisions the disk offline (virt-customize).
+    // Creating an account provisions the disk offline (guestfish).
     let seconds = if guest.is_some_and(|guest| guest.requires_credentials) {
         600
     } else {

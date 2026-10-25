@@ -211,6 +211,8 @@ def keep_artifacts(build, work):
     shutil.copy2(build / "arch/x86/boot/bzImage", kept / "arch/x86/boot/bzImage")
     shutil.copy2(build / ".config", kept / ".config")
     shutil.copy2(build / "symbols.json.xz", kept / "symbols.json.xz")
+    if (build / "debian-config").is_file():
+        shutil.copy2(build / "debian-config", kept / "debian-config")
     if (build / "modules-install").is_dir():
         shutil.move(build / "modules-install", kept / "modules-install")
     shutil.rmtree(build)
@@ -274,7 +276,8 @@ def save_cached_kernel(cache, kept, kernel_profile):
         entry = tarfile.TarInfo("kernel-cache.json")
         entry.size = len(manifest)
         archive.addfile(entry, io.BytesIO(manifest))
-        for name in ("arch/x86/boot/bzImage", ".config", "symbols.json.xz", "modules-install"):
+        for name in ("arch/x86/boot/bzImage", ".config", "symbols.json.xz", "debian-config",
+                     "modules-install"):
             if (kept / name).exists():
                 archive.add(kept / name, arcname=name, filter=portable)
     os.replace(partial, cache)
@@ -303,6 +306,9 @@ def build_image(profile, values, build, work, output, app_version=None, image_ca
         # The minimal kernel profile builds everything in and installs no modules.
         if (build / "modules-install").is_dir() or PROFILES[profile][0] == "debian":
             command += ["--modules", build / "modules-install"]
+        # Debian's resolved configuration, for the console base's /boot.
+        if (build / "debian-config").is_file():
+            command += ["--debian-config", build / "debian-config"]
         if image_cache is not None:
             command += ["--rootfs-cache", image_cache]
     run(*command)

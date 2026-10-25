@@ -145,6 +145,10 @@ pub struct Transcript {
     pub areas: Vec<String>,
     /// The fixture's private directory, for golden files.
     pub work_dir: Option<String>,
+    /// The root block device and the work directory's device number, which
+    /// differ between bases (whole disk or partition), for golden files.
+    pub root_device: Option<String>,
+    pub work_device: Option<String>,
     pub fixture_failures: Vec<String>,
     pub done: Option<serde_json::Value>,
     /// Lines that start with ANT_ but did not parse.
@@ -183,6 +187,12 @@ pub fn parse(text: &str) -> Transcript {
                     }
                     if let Some(dir) = value["workdir"].as_str() {
                         transcript.work_dir = Some(dir.to_owned());
+                    }
+                    if let Some(device) = value["rootdev"].as_str() {
+                        transcript.root_device = Some(device.to_owned());
+                    }
+                    if let Some(number) = value["workdev"].as_str() {
+                        transcript.work_device = Some(number.to_owned());
                     }
                 }),
             "ANT_FIXTURE_FAIL" => {

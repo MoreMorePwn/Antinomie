@@ -15,7 +15,13 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const HASH_TIMEOUT: Duration = Duration::from_secs(15);
-const PROVISION_TIMEOUT: Duration = Duration::from_secs(180);
+/// The groups the Debian installer adds its first user to, where they exist
+/// (sudo because root gets no password).
+const INSTALLER_GROUPS: &str =
+    "cdrom floppy sudo audio dip video plugdev users netdev bluetooth lpadmin scanner";
+/// One libguestfs appliance run: the probe, or the provisioning itself
+/// (filesystem check, new UUID, directory reindex, account).
+const PROVISION_TIMEOUT: Duration = Duration::from_secs(240);
 
 #[cfg(test)]
 thread_local! {
@@ -30,22 +36,291 @@ pub(crate) fn fail_next_provision() {
 pub(crate) struct GuestAccount {
     username: String,
     password_hash: String,
+    /// The root filesystem UUID provisioning gave this VM's disk: every VM
+    /// gets its own, as every installation does. None for disks provisioned
+    /// before 0.7.1, which keep their base's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    root_uuid: Option<String>,
 }
 impl std::fmt::Debug for GuestAccount {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GuestAccount")
             .field("username", &self.username)
             .field("password_hash", &"[REDACTED]")
+            .field("root_uuid", &self.root_uuid)
             .finish()
     }
 }
+
+/// The VM disk as the libguestfs appliance sees it (always `/dev/sda`).
+#[derive(Debug, PartialEq, Eq)]
+struct DiskLayout {
+    /// The root filesystem: the whole disk (`/dev/sda`) or a partition.
+    root: String,
+    /// The disk's size in bytes.
+    size: u64,
+    /// The root partition's last sector, on a partitioned disk.
+    root_last: Option<u64>,
+    /// The swap partition (sda5) a provisioned disk has: its UUID and sectors.
+    swap: Option<(String, u64)>,
+}
+
+/// Sectors in a MiB, partman's alignment.
+const MIB_SECTORS: u64 = 2048;
+/// The probe: filesystems, the disk's size, its partitions and the swap
+/// partition's UUID (absent before provisioning).
+const PROBE: &[u8] =
+    b"run\nlist-filesystems\nblockdev-getsize64 /dev/sda\n-part-list /dev/sda\n-vfs-uuid /dev/sda5\n";
+
+/// Where the installer's partitions go on a disk of `sectors`: the root grown
+/// to the swap partition (sda5 in an extended sda2 that starts two sectors
+/// before it), the last MiB left free, as partman lays them out. The swap is
+/// `swap` sectors, or the VM's RAM (at least 256 MiB, at most a quarter of the
+/// disk); none when the root could not keep its present size.
+#[derive(Debug, PartialEq, Eq)]
+struct PartitionPlan {
+    root_last: u64,
+    /// The swap partition's first sector and the disk's last used sector.
+    swap: Option<(u64, u64)>,
+}
+
+fn partition_plan(sectors: u64, root_last: u64, ram_mib: u32, swap: Option<u64>) -> PartitionPlan {
+    let end = (sectors / MIB_SECTORS - 1) * MIB_SECTORS;
+    let wanted = swap.unwrap_or_else(|| {
+        (u64::from(ram_mib) * MIB_SECTORS)
+            .min(sectors / 4 / MIB_SECTORS * MIB_SECTORS)
+            .max(256 * MIB_SECTORS)
+    });
+    match end.checked_sub(wanted) {
+        Some(start) if start > MIB_SECTORS + root_last => PartitionPlan {
+            root_last: start - MIB_SECTORS - 1,
+            swap: Some((start, end - 1)),
+        },
+        _ => PartitionPlan {
+            root_last: (end - 1).max(root_last),
+            swap: None,
+        },
+    }
+}
+
+/// Whether `text` is a lowercase RFC 4122 UUID as `blkid` prints it.
+pub(crate) fn valid_uuid(text: &str) -> bool {
+    text.len() == 36
+        && text.bytes().enumerate().all(|(index, c)| match index {
+            8 | 13 | 18 | 23 => c == b'-',
+            _ => c.is_ascii_digit() || (b'a'..=b'f').contains(&c),
+        })
+}
+
+/// A yescrypt salt as crypt(3) makes it: 16 random bytes in crypt's base 64
+/// (the 22nd character carries the last two bits).
+fn yescrypt_salt() -> Result<String, String> {
+    const ALPHABET: &[u8; 64] = b"./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+    let mut bytes = [0u8; 22];
+    File::open("/dev/urandom")
+        .and_then(|mut source| source.read_exact(&mut bytes))
+        .map_err(|_| "cannot read /dev/urandom for the password salt")?;
+    Ok(bytes
+        .iter()
+        .enumerate()
+        .map(|(index, byte)| ALPHABET[usize::from(byte & if index < 21 { 63 } else { 3 })] as char)
+        .collect())
+}
+
+/// A random 128-bit identifier in hex, as /etc/machine-id holds it.
+fn random_hex() -> Result<String, String> {
+    let mut bytes = [0u8; 16];
+    File::open("/dev/urandom")
+        .and_then(|mut source| source.read_exact(&mut bytes))
+        .map_err(|_| "cannot read /dev/urandom for the machine ID")?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+/// A random (version 4) UUID.
+fn random_uuid() -> Result<String, String> {
+    let mut bytes = [0u8; 16];
+    File::open("/dev/urandom")
+        .and_then(|mut source| source.read_exact(&mut bytes))
+        .map_err(|_| "cannot read /dev/urandom for the VM's filesystem UUID")?;
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    Ok(format!(
+        "{}-{}-{}-{}-{}",
+        &hex[..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..]
+    ))
+}
+
+/// A guestfish double-quoted string: backslash escapes for `\`, `"` and
+/// control characters (guestfish decodes them before the call).
+fn fish_quote(text: &str) -> String {
+    let mut quoted = String::with_capacity(text.len() + 2);
+    quoted.push('"');
+    for c in text.chars() {
+        match c {
+            '\\' => quoted.push_str("\\\\"),
+            '"' => quoted.push_str("\\\""),
+            '\n' => quoted.push_str("\\n"),
+            '\t' => quoted.push_str("\\t"),
+            c if c.is_control() => quoted.push_str(&format!("\\x{:02x}", c as u32)),
+            c => quoted.push(c),
+        }
+    }
+    quoted.push('"');
+    quoted
+}
+
+/// The disk from the probe's output: the ext4 root among the
+/// `list-filesystems` lines, the size, `part-list` entries and the swap UUID.
+fn parse_probe(output: &str) -> Result<DiskLayout, String> {
+    let mut roots = Vec::new();
+    let (mut size, mut swap_uuid, mut part) = (None, None, 0);
+    let mut parts: std::collections::BTreeMap<u64, (u64, u64)> = Default::default();
+    for line in output.lines().map(str::trim) {
+        if let Some((device, kind)) = line.split_once(": ").filter(|(d, _)| d.starts_with('/')) {
+            if kind.trim() == "ext4" {
+                roots.push(device.trim());
+            }
+        } else if let Some(value) = line.strip_prefix("part_num: ") {
+            part = value.parse().unwrap_or(0);
+        } else if let Some(value) = line.strip_prefix("part_end: ") {
+            parts.entry(part).or_default().1 = value.parse().unwrap_or(0);
+        } else if let Some(value) = line.strip_prefix("part_size: ") {
+            parts.entry(part).or_default().0 = value.parse().unwrap_or(0);
+        } else if valid_uuid(line) {
+            swap_uuid = Some(line.to_owned());
+        } else if size.is_none() && !line.is_empty() && line.bytes().all(|c| c.is_ascii_digit()) {
+            size = line.parse::<u64>().ok();
+        }
+    }
+    let root = match roots[..] {
+        [root]
+            if root
+                .strip_prefix("/dev/sda")
+                .is_some_and(|number| number.bytes().all(|c| c.is_ascii_digit())) =>
+        {
+            root.to_owned()
+        }
+        _ => return Err("the VM disk does not hold exactly one ext4 root filesystem".into()),
+    };
+    let size = size.ok_or("the VM disk's size is unknown")?;
+    let root_last = (root == "/dev/sda1")
+        .then(|| parts.get(&1).map(|(_, end)| end / 512))
+        .flatten();
+    if root == "/dev/sda1" && root_last.is_none() {
+        return Err("the VM disk's root partition is not where the base put it".into());
+    }
+    let swap = swap_uuid.zip(parts.get(&5).map(|(length, _)| length / 512));
+    Ok(DiskLayout {
+        root,
+        size,
+        root_last,
+        swap,
+    })
+}
+
+/// The guestfish commands that lay a partitioned disk out for `plan`: the
+/// root partition grown (a provisioned disk's swap partitions removed first
+/// and made again at the end), the swap partition, the root filesystem grown.
+fn layout_commands(layout: &DiskLayout, plan: &PartitionPlan, swap_uuid: &str) -> Vec<String> {
+    let mut commands = Vec::new();
+    if layout.swap.is_some() {
+        commands.extend(["part-del /dev/sda 5".into(), "part-del /dev/sda 2".into()]);
+    }
+    commands.push(format!("part-resize /dev/sda 1 {}", plan.root_last));
+    if let Some((start, last)) = plan.swap {
+        commands.extend([
+            format!("part-add /dev/sda e {} {last}", start - 2),
+            format!("part-add /dev/sda l {start} {last}"),
+            "part-set-mbr-id /dev/sda 5 0x82".into(),
+            format!("mkswap /dev/sda5 uuid:{swap_uuid}"),
+        ]);
+    }
+    commands.extend(["e2fsck-f /dev/sda1".into(), "resize2fs /dev/sda1".into()]);
+    commands
+}
+
+/// Grow a VM disk's root to a disk made larger (its VM off): the root
+/// partition and filesystem, the swap partition kept at the end with its
+/// UUID and size. A whole-disk root (BusyBox, the desktops) grows at boot.
+pub(crate) fn grow_disk(disk: &Path) -> Result<(), String> {
+    let executable = crate::dependencies::require_tool(Path::new("guestfish"), "libguestfs-tools")?;
+    grow_disk_with(disk, &executable)
+}
+
+fn grow_disk_with(disk: &Path, executable: &Path) -> Result<(), String> {
+    let probe = run_private_with_timeout(
+        &mut guestfish(executable, disk, false),
+        PROBE,
+        true,
+        PROVISION_TIMEOUT,
+    )?;
+    let layout = parse_probe(&String::from_utf8_lossy(&probe))?;
+    let Some(root_last) = layout.root_last else {
+        return Ok(());
+    };
+    let plan = partition_plan(
+        layout.size / 512,
+        root_last,
+        0,
+        layout.swap.as_ref().map(|(_, sectors)| *sectors),
+    );
+    let uuid = layout
+        .swap
+        .as_ref()
+        .map_or_else(random_uuid, |(uuid, _)| Ok(uuid.clone()))?;
+    let mut script = vec!["run".to_owned()];
+    script.extend(layout_commands(&layout, &plan, &uuid));
+    script.push(String::new());
+    run_private(
+        guestfish(executable, disk, true),
+        script.join("\n").as_bytes(),
+        false,
+    )?;
+    File::open(disk)
+        .and_then(|file| file.sync_all())
+        .map_err(|_| "cannot sync the grown disk".to_owned())
+}
+
+fn guestfish(executable: &Path, disk: &Path, writable: bool) -> Command {
+    let mut command = Command::new(executable);
+    command
+        .arg(if writable { "--rw" } else { "--ro" })
+        .args(["--no-progress-bars", "--format=qcow2", "-a"])
+        .arg(disk)
+        .env("LIBGUESTFS_BACKEND", "direct")
+        .env("LIBGUESTFS_DEBUG", "0")
+        .env("LIBGUESTFS_TRACE", "0");
+    command
+}
+
 impl GuestAccount {
+    /// The account with its password hashed as Debian 13 hashes it
+    /// (yescrypt, through the host's crypt(3) from Perl), or salted SHA-512
+    /// where the host's crypt has no yescrypt.
     pub(crate) fn from_credentials(credentials: GuestCredentials) -> Result<Self, String> {
-        Self::hash_with(credentials, Path::new("openssl"))
+        Self::yescrypt_with(credentials.clone(), Path::new("perl"))
+            .or_else(|_| Self::hash_with(credentials, Path::new("openssl")))
+    }
+    fn yescrypt_with(credentials: GuestCredentials, executable: &Path) -> Result<Self, String> {
+        let mut command = Command::new(executable);
+        command.args([
+            "-e",
+            "local $/; my $p = <STDIN>; my $h = crypt($p, $ARGV[0]); print $h if defined $h",
+            &format!("$y$j9T${}", yescrypt_salt()?),
+        ]);
+        Self::hashed(credentials, command)
     }
     fn hash_with(credentials: GuestCredentials, executable: &Path) -> Result<Self, String> {
         let mut command = Command::new(executable);
         command.args(["passwd", "-6", "-stdin"]);
+        Self::hashed(credentials, command)
+    }
+    fn hashed(credentials: GuestCredentials, command: Command) -> Result<Self, String> {
         let hash = run_private(command, credentials.password.as_bytes(), true)?;
         let password_hash = String::from_utf8(hash)
             .map_err(|_| "invalid password hash output")?
@@ -54,6 +329,7 @@ impl GuestAccount {
         let account = Self {
             username: credentials.username,
             password_hash,
+            root_uuid: None,
         };
         account.validate()?;
         Ok(account)
@@ -61,24 +337,39 @@ impl GuestAccount {
     fn validate(&self) -> Result<(), String> {
         validate_guest_username(&self.username)?;
         let parts: Vec<_> = self.password_hash.split('$').collect();
-        if parts.len() != 4
-            || !parts[0].is_empty()
-            || parts[1] != "6"
-            || parts[2].is_empty()
-            || parts[2].len() > 16
-            || parts[3].len() != 86
-            || !parts[2..].iter().all(|part| {
-                part.bytes()
-                    .all(|c| c.is_ascii_alphanumeric() || c == b'.' || c == b'/')
-            })
+        let crypt64 = |part: &&str| {
+            part.bytes()
+                .all(|c| c.is_ascii_alphanumeric() || c == b'.' || c == b'/')
+        };
+        // $6$salt$hash (SHA-512) or $y$j9T$salt$hash (yescrypt).
+        let sha512 = parts.len() == 4
+            && parts[1] == "6"
+            && (1..=16).contains(&parts[2].len())
+            && parts[3].len() == 86;
+        let yescrypt = parts.len() == 5
+            && parts[1] == "y"
+            && parts[2] == "j9T"
+            && (1..=86).contains(&parts[3].len())
+            && parts[4].len() == 43;
+        if !parts[0].is_empty() || !(sha512 || yescrypt) || !parts[2..].iter().all(crypt64) {
+            return Err("invalid salted yescrypt or SHA-512 password hash".into());
+        }
+        if self
+            .root_uuid
+            .as_deref()
+            .is_some_and(|uuid| !valid_uuid(uuid))
         {
-            return Err("invalid salted SHA-512 password hash".into());
+            return Err("invalid provisioned root filesystem UUID".into());
         }
         Ok(())
     }
     /// The account's name (uid and gid 1000 in the guest).
     pub(crate) fn username(&self) -> &str {
         &self.username
+    }
+    /// The root filesystem UUID provisioning gave the VM's disk.
+    pub(crate) fn root_uuid(&self) -> Option<&str> {
+        self.root_uuid.as_deref()
     }
     pub(crate) fn save(&self, directory: &Path) -> Result<(), String> {
         self.validate()?;
@@ -106,36 +397,153 @@ impl GuestAccount {
         account.validate()?;
         Ok(account)
     }
-    pub(crate) fn provision(&self, disk: &Path) -> Result<(), String> {
+    /// Make the base's disk this VM's own, offline: a root filesystem UUID
+    /// and directory hash seed of its own (fstab follows), then the account.
+    pub(crate) fn provision(&mut self, disk: &Path, ram_mib: u32) -> Result<(), String> {
         #[cfg(test)]
         if FAIL_PROVISION.with(|fail| fail.replace(false)) {
             return Err("injected offline provisioning failure".into());
         }
         let executable =
-            crate::dependencies::require_tool(Path::new("virt-customize"), "libguestfs-tools")?;
-        self.provision_with(disk, &executable)
+            crate::dependencies::require_tool(Path::new("guestfish"), "libguestfs-tools")?;
+        self.provision_with(disk, &executable, ram_mib)
     }
-    fn provision_with(&self, disk: &Path, executable: &Path) -> Result<(), String> {
+    fn provision_with(
+        &mut self,
+        disk: &Path,
+        executable: &Path,
+        ram_mib: u32,
+    ) -> Result<(), String> {
         self.validate()?;
-        let username = &self.username;
-        let hash = &self.password_hash;
-        let staging = format!("/root/.antinomie-account-{}", storage::unique_id());
-        // The libguestfs write operation keeps the hash out of guest shell argv too.
-        let script = format!(
-            "mkdir {staging}\nchmod 0700:{staging}\nwrite {staging}/password:{username}:{hash}\nchmod 0600:{staging}/password\nrun-command set -eu; trap 'rm -rf {staging}' EXIT; if getent passwd 1000 >/dev/null || getent group 1000 >/dev/null || getent passwd '{username}' >/dev/null || getent group '{username}' >/dev/null; then exit 1; fi; groupadd -g 1000 '{username}'; useradd -u 1000 -g 1000 -m -s /bin/bash '{username}'; usermod -a -G sudo '{username}'; chpasswd -e < {staging}/password; passwd -l root >/dev/null; printf '%s\\n' '{username} ALL=(ALL:ALL) ALL' > /etc/sudoers.d/antinomie-account; chmod 0440 /etc/sudoers.d/antinomie-account; visudo -cf /etc/sudoers.d/antinomie-account >/dev/null\n"
+        let probe = run_private_with_timeout(
+            &mut guestfish(executable, disk, false),
+            PROBE,
+            true,
+            PROVISION_TIMEOUT,
+        )?;
+        let layout = parse_probe(&String::from_utf8_lossy(&probe))?;
+        let uuid = random_uuid()?;
+        let plan = layout
+            .root_last
+            .map(|root_last| partition_plan(layout.size / 512, root_last, ram_mib, None));
+        let script = self.script(
+            &layout,
+            plan.as_ref(),
+            &uuid,
+            &random_uuid()?,
+            &random_hex()?,
         );
-        let mut command = Command::new(executable);
-        command
-            .args(["--no-network", "--no-logfile", "--format", "qcow2", "-a"])
-            .arg(disk)
-            .args(["--commands-from-file", "/dev/stdin"])
-            .env("LIBGUESTFS_BACKEND", "direct")
-            .env("LIBGUESTFS_DEBUG", "0")
-            .env("LIBGUESTFS_TRACE", "0");
-        run_private(command, script.as_bytes(), false)?;
+        run_private(guestfish(executable, disk, true), script.as_bytes(), false)?;
         File::open(disk)
             .and_then(|file| file.sync_all())
-            .map_err(|_| "cannot sync provisioned disk".to_owned())
+            .map_err(|_| "cannot sync provisioned disk".to_owned())?;
+        self.root_uuid = Some(uuid);
+        Ok(())
+    }
+    /// The guestfish commands. The hash crosses as a file the guest's
+    /// chpasswd reads, never in a guest command line.
+    fn script(
+        &self,
+        layout: &DiskLayout,
+        plan: Option<&PartitionPlan>,
+        uuid: &str,
+        swap_uuid: &str,
+        machine_id: &str,
+    ) -> String {
+        let username = &self.username;
+        let root = &layout.root;
+        let staging = format!("/root/.provision-{}", storage::unique_id());
+        // The installer asks for a full name; the account name stands in.
+        let full_name: String = username
+            .chars()
+            .enumerate()
+            .map(|(index, c)| {
+                if index == 0 {
+                    c.to_ascii_uppercase()
+                } else {
+                    c
+                }
+            })
+            .collect();
+        // fstab names the root by UUID on the console base (the desktops
+        // name /dev/vda and keep their line).
+        let guest = format!(
+            "set -eu\ntrap 'rm -rf {staging}' EXIT\n\
+             sed -i -E 's|^UUID=[0-9A-Fa-f-]+([[:space:]]+/[[:space:]])|UUID={uuid}\\1|' /etc/fstab\n\
+             if getent passwd 1000 >/dev/null || getent group 1000 >/dev/null || getent passwd '{username}' >/dev/null || getent group '{username}' >/dev/null; then exit 1; fi\n\
+             addgroup --quiet --gid 1000 '{username}'\n\
+             adduser --quiet --uid 1000 --gid 1000 --comment '{full_name},,,' --disabled-password '{username}'\n\
+             chmod 0700 '/home/{username}'\n\
+             for group in {INSTALLER_GROUPS}; do\n\
+             \tif getent group \"$group\" >/dev/null; then adduser --quiet '{username}' \"$group\"; fi\n\
+             done\n\
+             chpasswd -e < {staging}/password\n\
+             passwd -l root >/dev/null\n"
+        );
+        // A partitioned disk: its swap partition in fstab and as the resume
+        // device, as the installer leaves them, and GRUB's configuration for
+        // this disk's UUIDs.
+        let swap = plan.is_some_and(|plan| plan.swap.is_some());
+        let guest = if plan.is_some() {
+            let swap_lines = if swap {
+                format!(
+                    "awk -v u={swap_uuid} '/^\\/dev\\/sr0/ {{print \"# swap was on /dev/sda5 during installation\"; printf \"UUID=%s none            swap    sw              0       0\\n\", u}} {{print}}' /etc/fstab > {staging}/fstab\n\
+                     cat {staging}/fstab > /etc/fstab\n\
+                     mkdir -p /etc/initramfs-tools/conf.d\n\
+                     printf 'RESUME=UUID=%s\\n' {swap_uuid} > /etc/initramfs-tools/conf.d/resume\n"
+                )
+            } else {
+                String::new()
+            };
+            format!(
+                "{guest}{swap_lines}if command -v update-grub >/dev/null; then update-grub >/dev/null 2>&1 || true; fi\n"
+            )
+        } else {
+            guest
+        };
+        // The directory hash seed has no tune2fs option: debugfs sets it and
+        // e2fsck -D reindexes every directory under it. Through the
+        // appliance's own tools (guestfish debug, which joins its words
+        // without their quotes); a disk keeps its base's seed where that is
+        // unavailable.
+        let reseed = format!(
+            "echo ssv hash_seed random | debugfs -w -f - {root} >/dev/null 2>&1 && e2fsck -fyD {root} >/dev/null 2>&1; test $? -lt 4"
+        );
+        let mut commands = vec!["run".to_owned()];
+        if let Some(plan) = plan {
+            commands.extend(layout_commands(layout, plan, swap_uuid));
+            // The disk identifier (PARTUUIDs) of its own as well.
+            let id = u32::from_str_radix(&machine_id[..8], 16).unwrap_or(1);
+            commands.push(format!(
+                "-debug sh {}",
+                fish_quote(&format!(
+                    "sfdisk --disk-id /dev/sda 0x{id:08x} >/dev/null 2>&1"
+                ))
+            ));
+        }
+        commands.extend([
+            format!("e2fsck-f {root}"),
+            format!("set-uuid {root} {uuid}"),
+            format!("-debug sh {}", fish_quote(&reseed)),
+            format!("mount {root} /"),
+            format!("mkdir {staging}"),
+            format!("chmod 0700 {staging}"),
+            format!(
+                "write {staging}/password {}",
+                fish_quote(&format!("{username}:{}", self.password_hash))
+            ),
+            format!("chmod 0600 {staging}/password"),
+            format!("write {staging}/provision.sh {}", fish_quote(&guest)),
+            format!("sh {}", fish_quote(&format!("sh {staging}/provision.sh"))),
+            // The installation's machine ID, its own per VM.
+            format!(
+                "write /etc/machine-id {}",
+                fish_quote(&format!("{machine_id}\n"))
+            ),
+            "umount-all".to_owned(),
+            String::new(),
+        ]);
+        commands.join("\n")
     }
 }
 
@@ -364,15 +772,25 @@ mod tests {
         assert!(error.contains("output exceeded limit"));
         assert!(!error.contains("private-output-password"));
     }
+    /// The probe's answer for a whole-disk root (a desktop base) of 6 GiB.
+    const WHOLE_DISK: &str = "/dev/sda: ext4\\n6442450944\\n";
+    /// The console base's disk on a 6 GiB VM disk, before provisioning.
+    const PARTITIONED: &str = "/dev/sda1: ext4\\n6442450944\\n[0] = {\\n  part_num: 1\\n  part_start: 1048576\\n  part_end: 3222274047\\n  part_size: 3221225472\\n}\\n";
+    fn input_of(root: &Path) -> String {
+        fs::read_to_string(root.join("input")).unwrap()
+    }
     fn account() -> GuestAccount {
         GuestAccount {
             username: "analyst".into(),
             password_hash: format!("$6$fixturesalt${}", "a".repeat(86)),
+            root_uuid: None,
         }
     }
-    fn fake_tool(directory: &Path, fail: bool) -> std::path::PathBuf {
+    /// A guestfish stand-in: the read-only probe lists `filesystems`, the
+    /// writable run records its argv and commands.
+    fn fake_tool(directory: &Path, fail: bool, filesystems: &str) -> std::path::PathBuf {
         let path = directory.join("fake-tool");
-        fs::write(&path, format!("#!/bin/sh\nroot=$(dirname \"$0\")\nprintf '%s\\n' \"$@\" > \"$root/argv\"\ncat > \"$root/input\"\ncat \"$root/input\" >&2\nexit {}\n", if fail { 1 } else { 0 })).unwrap();
+        fs::write(&path, format!("#!/bin/sh\nroot=$(dirname \"$0\")\nif [ \"$1\" = --ro ]; then cat > \"$root/probe\"; printf '{filesystems}'; exit 0; fi\nprintf '%s\\n' \"$@\" > \"$root/argv\"\ncat > \"$root/input\"\ncat \"$root/input\" >&2\nexit {}\n", if fail { 1 } else { 0 })).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
         path
     }
@@ -382,37 +800,209 @@ mod tests {
         storage::private_dir(&root).unwrap();
         let disk = root.join("disk.qcow2");
         fs::write(&disk, b"unchanged disk fixture").unwrap();
-        let account = account();
+        let mut account = account();
         account
-            .provision_with(&disk, &fake_tool(&root, false))
+            .provision_with(&disk, &fake_tool(&root, false, WHOLE_DISK), 1024)
             .unwrap();
+        let uuid = account.root_uuid().unwrap().to_owned();
+        assert!(valid_uuid(&uuid), "{uuid}");
+        assert_eq!(
+            fs::read_to_string(root.join("probe")).unwrap().as_bytes(),
+            PROBE
+        );
+        // A whole-disk root keeps its disk as it is (it grows at boot).
+        assert!(!input_of(&root).contains("part-"));
         let argv = fs::read_to_string(root.join("argv")).unwrap();
-        assert!(argv.contains("--no-network\n--no-logfile"));
-        assert!(argv.contains("/dev/stdin"));
+        assert!(argv.starts_with("--rw\n--no-progress-bars\n--format=qcow2\n-a\n"));
         assert!(!argv.contains(&account.password_hash));
         assert!(!argv.contains(&account.username));
         let input = fs::read_to_string(root.join("input")).unwrap();
         assert!(input.contains(&account.password_hash));
-        let shell_command = input
+        // The hash reaches the guest only as a file chpasswd reads.
+        for line in input.lines().filter(|line| !line.contains("/password ")) {
+            assert!(!line.contains(&account.password_hash), "{line}");
+        }
+        // A new identity before the root is mounted, then the account.
+        let position = |text: &str| input.find(text).unwrap_or_else(|| panic!("{text}"));
+        assert!(position("e2fsck-f /dev/sda\n") < position(&format!("set-uuid /dev/sda {uuid}")));
+        assert!(
+            position("-debug sh \"echo ssv hash_seed random | debugfs -w -f - /dev/sda")
+                < position("mount /dev/sda /")
+        );
+        assert!(input.contains(&format!("UUID={uuid}\\\\1|' /etc/fstab")));
+        // The installer's adduser: the full name, its groups (where they
+        // exist), a private home; the installation's own machine ID.
+        assert!(input.contains("addgroup --quiet --gid 1000 'analyst'"));
+        assert!(input.contains(
+            "adduser --quiet --uid 1000 --gid 1000 --comment 'Analyst,,,' --disabled-password 'analyst'"
+        ));
+        assert!(input.contains(&format!("for group in {INSTALLER_GROUPS}; do")));
+        assert!(input.contains("chmod 0700 '/home/analyst'"));
+        let machine_id = input
             .lines()
-            .find(|line| line.starts_with("run-command "))
+            .find_map(|line| line.strip_prefix("write /etc/machine-id \""))
             .unwrap();
-        assert!(!shell_command.contains(&account.password_hash));
-        assert!(input.contains("groupadd -g 1000"));
-        assert!(input.contains("useradd -u 1000 -g 1000"));
+        assert!(
+            machine_id.len() == 32 + 3 && machine_id.ends_with("\\n\""),
+            "{machine_id}"
+        );
         assert!(!input.contains("NOPASSWD"));
+        assert!(!input.contains("sudoers"));
+        assert!(!input.to_lowercase().contains("antinomie"));
+        // Another provisioning, another identity.
+        let mut again = self::account();
+        again
+            .provision_with(&disk, &fake_tool(&root, false, WHOLE_DISK), 1024)
+            .unwrap();
+        assert_ne!(again.root_uuid(), Some(uuid.as_str()));
         let error = account
-            .provision_with(&disk, &fake_tool(&root, true))
+            .provision_with(&disk, &fake_tool(&root, true, WHOLE_DISK), 1024)
             .unwrap_err();
         assert!(!error.contains(&account.password_hash));
         assert!(!format!("{account:?}").contains(&account.password_hash));
         assert!(
             account
-                .provision_with(&disk, &root.join("missing"))
+                .provision_with(&disk, &root.join("missing"), 1024)
                 .is_err()
         );
+        // No single ext4 root: nothing is written.
+        fs::remove_file(root.join("input")).unwrap();
+        for listing in [
+            "/dev/sda: xfs\\n",
+            "/dev/sda1: ext4\\n/dev/sda2: ext4\\n",
+            "/dev/sdb1: ext4\\n",
+        ] {
+            assert!(
+                account
+                    .provision_with(&disk, &fake_tool(&root, false, listing), 1024)
+                    .is_err()
+            );
+            assert!(!root.join("input").exists());
+        }
         assert_eq!(fs::read(&disk).unwrap(), b"unchanged disk fixture");
         fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn partitions_follow_the_installer_and_the_vm() {
+        // A 6 GiB disk (12582912 sectors), a 3 GiB root, 1 GiB of RAM: the
+        // swap partition ends a MiB before the disk, the root a MiB before it.
+        let plan = partition_plan(12_582_912, 6_293_503, 1024, None);
+        assert_eq!(plan.swap, Some((10_483_712, 12_580_863)));
+        assert_eq!(plan.root_last, 10_481_663);
+        // A quarter of the disk at most; the root never shrinks.
+        assert_eq!(
+            partition_plan(12_582_912, 6_293_503, 8192, None).swap,
+            Some((9_435_136, 12_580_863))
+        );
+        let tight = partition_plan(8_388_608, 8_380_000, 1024, None);
+        assert_eq!((tight.root_last, tight.swap), (8_386_559, None));
+        let layout = parse_probe(
+            "/dev/sda1: ext4\n/dev/sda2: unknown\n/dev/sda5: swap\n6442450944\n[0] = {\n  part_num: 1\n  part_end: 5366611967\n}\n[1] = {\n  part_num: 5\n  part_end: 6441402367\n  part_size: 1073741824\n}\n0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d\n",
+        )
+        .unwrap();
+        assert_eq!(layout.root_last, Some(10_481_663));
+        assert_eq!(
+            layout.swap,
+            Some(("0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d".into(), 2_097_152))
+        );
+        let root = std::env::temp_dir().join(format!("ant-account-parts-{}", storage::unique_id()));
+        storage::private_dir(&root).unwrap();
+        let disk = root.join("disk.qcow2");
+        fs::write(&disk, b"disk").unwrap();
+        let mut account = account();
+        account
+            .provision_with(&disk, &fake_tool(&root, false, PARTITIONED), 1024)
+            .unwrap();
+        let input = input_of(&root);
+        let position = |text: &str| input.find(text).unwrap_or_else(|| panic!("{text}"));
+        assert!(
+            position("part-resize /dev/sda 1 10481663\n")
+                < position("part-add /dev/sda e 10483710 12580863\n")
+        );
+        assert!(
+            position("part-add /dev/sda l 10483712 12580863\n")
+                < position("mkswap /dev/sda5 uuid:")
+        );
+        assert!(position("resize2fs /dev/sda1\n") < position("mount /dev/sda1 /\n"));
+        assert!(input.contains("set-uuid /dev/sda1 "));
+        assert!(input.contains("sfdisk --disk-id /dev/sda 0x"));
+        assert!(input.contains("# swap was on /dev/sda5 during installation"));
+        assert!(input.contains("/etc/initramfs-tools/conf.d/resume"));
+        assert!(input.contains("update-grub"));
+        // Growing it later keeps the swap partition's UUID and size.
+        let grown = "/dev/sda1: ext4\n/dev/sda5: swap\n10737418240\n[0] = {\n  part_num: 1\n  part_end: 5366611967\n}\n[1] = {\n  part_num: 5\n  part_end: 6441402367\n  part_size: 1073741824\n}\n0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d\n";
+        grow_disk_with(&disk, &fake_tool(&root, false, &grown.replace('\n', "\\n"))).unwrap();
+        let input = input_of(&root);
+        assert!(
+            input.starts_with(
+                "run\npart-del /dev/sda 5\npart-del /dev/sda 2\npart-resize /dev/sda 1 18870271\n"
+            ),
+            "{input}"
+        );
+        assert!(input.contains("mkswap /dev/sda5 uuid:0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d\n"));
+        assert!(!input.contains("chpasswd"));
+        // A whole-disk root is left to the initrd.
+        fs::remove_file(root.join("input")).unwrap();
+        grow_disk_with(&disk, &fake_tool(&root, false, WHOLE_DISK)).unwrap();
+        assert!(!root.join("input").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn passwords_are_hashed_as_debian_13_hashes_them() {
+        let credentials = GuestCredentials::new("analyst".into(), "x".repeat(20)).unwrap();
+        let account = GuestAccount::from_credentials(credentials.clone()).unwrap();
+        // yescrypt where the host's crypt(3) has it (libxcrypt), else SHA-512.
+        if GuestAccount::yescrypt_with(credentials.clone(), Path::new("perl")).is_ok() {
+            assert!(account.password_hash.starts_with("$y$j9T$"));
+        }
+        assert!(GuestAccount::yescrypt_with(credentials, Path::new("/nonexistent/perl")).is_err());
+        let salt = yescrypt_salt().unwrap();
+        assert_eq!(salt.len(), 22);
+        assert!(matches!(salt.as_bytes()[21], b'.' | b'/' | b'0' | b'1'));
+        let mut record = self::account();
+        record.password_hash = format!("$y$j9T${}${}", "a".repeat(22), "b".repeat(43));
+        record.validate().unwrap();
+        for bad in [
+            format!("$y$j9T${}${}", "a".repeat(22), "b".repeat(42)),
+            format!("$y$jFT${}${}", "a".repeat(22), "b".repeat(43)),
+            format!("$y$j9T${}${}", "a:".repeat(11), "b".repeat(43)),
+            format!("$5$salt${}", "a".repeat(43)),
+        ] {
+            record.password_hash = bad;
+            assert!(record.validate().is_err());
+        }
+    }
+    #[test]
+    fn probe_finds_the_root_on_a_whole_disk_or_a_partition() {
+        let whole = parse_probe("/dev/sda: ext4\n6442450944\n").unwrap();
+        assert_eq!(
+            (whole.root.as_str(), whole.size),
+            ("/dev/sda", 6_442_450_944)
+        );
+        assert_eq!((whole.root_last, whole.swap), (None, None));
+        assert_eq!(
+            parse_probe("/dev/sda1: ext4\n/dev/sda2: unknown\n6442450944\n[0] = {\n  part_num: 1\n  part_end: 3222274047\n}\n")
+                .unwrap()
+                .root_last,
+            Some(6_293_503)
+        );
+        // No size, or a root partition the probe did not list.
+        assert!(parse_probe("/dev/sda: ext4\n").is_err());
+        assert!(parse_probe("/dev/sda1: ext4\n6442450944\n").is_err());
+        assert!(parse_probe("").is_err());
+        assert!(parse_probe("/dev/sda1; rm -rf /: ext4\n").is_err());
+        assert_eq!(fish_quote("a\"b\\c\nd"), "\"a\\\"b\\\\c\\nd\"");
+        assert!(valid_uuid("0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d"));
+        for bad in [
+            "0B1C2D3E-4F50-4A6B-8C7D-9E0F1A2B3C4D",
+            "0b1c2d3e4f504a6b8c7d9e0f1a2b3c4d",
+            "",
+        ] {
+            assert!(!valid_uuid(bad));
+        }
+        let mut record = account();
+        record.root_uuid = Some("not-a-uuid".into());
+        assert!(record.validate().is_err());
     }
     #[test]
     fn account_record_is_private_and_malformed_hashes_are_redacted() {

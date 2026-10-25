@@ -11,15 +11,18 @@ filesystems are used.
 # Copyright (c) 2026 MikiMiku (MoreMorePwn)
 import argparse
 from datetime import datetime, timedelta, timezone
+import gzip
 import hashlib
 import importlib.util
 import io
 import json
 import os
 from pathlib import Path
+import random
 import re
 import shlex
 import shutil
+import socket
 import struct
 import subprocess
 import tarfile
@@ -69,10 +72,61 @@ def profile(desktop):
 
 PROFILE = profile("xfce")
 APPEND = "root=/dev/vda rw rootwait console=tty0 console=ttyS0 panic=-1"
-# The console base names no root device: the bootstrap initrd mounts the VM's
-# only disk on whichever bus the stealth profile chose (virtio, SATA, NVMe),
-# and fstab finds it again by filesystem UUID, as a Debian install does.
-CONSOLE_APPEND = "console=tty0 console=ttyS0 panic=-1"
+# The console base's command line is the one GRUB gives a Debian install: the
+# kernel image, the root by filesystem UUID (each VM's own: the app names the
+# UUID provisioning gave its disk), mounted read-only for the boot-time fsck,
+# and quiet; no serial console and no panic=-1. The bootstrap initrd finds the
+# UUID on whichever bus the stealth profile chose (virtio, SATA, NVMe).
+CONSOLE_APPEND = "BOOT_IMAGE=/boot/vmlinuz-{release} root=UUID={uuid} ro quiet"
+# The console base's disk is the installer's guided "all files in one
+# partition" on a BIOS PC: an MBR table, the root at 1 MiB (bootable), where
+# fstab's comment says the installer saw it. Provisioning grows the root to the
+# VM's disk and adds the swap partition (sda5 in an extended sda2) for its RAM.
+CONSOLE_ROOT_DEVICE = "/dev/sda1"
+CONSOLE_ROOT_OFFSET = 1 << 20
+CONSOLE_ROOT_SIZE = 3 << 30
+FSTAB_HEADER = """# /etc/fstab: static file system information.
+#
+# Use 'blkid' to print the universally unique identifier for a
+# device; this may be used with UUID= as a more robust way to name devices
+# that works even if disks are added and removed. See fstab(5).
+#
+# systemd generates mount units based on this file, see systemd.mount(5).
+# Please run 'systemctl daemon-reload' after you make changes here.
+#
+# <file system> <mount point>   <type>  <options>       <dump>  <pass>
+"""
+FSTAB_ROOT = "UUID={uuid} /               ext4    errors=remount-ro 0       1\n"
+FSTAB_CDROM = "/dev/sr0        /media/cdrom0   udf,iso9660 user,noauto     0       0\n"
+HOSTS = """127.0.0.1	localhost
+127.0.1.1	{hostname}
+
+# The following lines are desirable for IPv6 capable hosts
+::1     localhost ip6-localhost ip6-loopback
+ff02::1 ip6-allnodes
+ff02::2 ip6-allrouters
+"""
+# apt-setup's sources.list after a netinst install from a USB stick with the
+# network mirror chosen ({media} is the image's label, {mirror} the mirror).
+SOURCES_LIST = """#deb cdrom:[{media}]/ trixie contrib main non-free-firmware
+
+deb {mirror}/ trixie main non-free-firmware
+deb-src {mirror}/ trixie main non-free-firmware
+
+deb http://security.debian.org/debian-security trixie-security main non-free-firmware
+deb-src http://security.debian.org/debian-security trixie-security main non-free-firmware
+
+# trixie-updates, to get updates before a point release is made;
+# see https://www.debian.org/doc/manuals/debian-reference/ch02.en.html#_updates_and_backports
+deb {mirror}/ trixie-updates main non-free-firmware
+deb-src {mirror}/ trixie-updates main non-free-firmware
+
+# This system was installed using small removable media
+# (e.g. netinst, live or single CD). The matching "deb cdrom"
+# entries were disabled at the end of the installation process.
+# For information about how to use removable media with apt,
+# see https://wiki.debian.org/AptMedia
+"""
 SUITE = "trixie"
 SECURITY_MIRROR = "http://security.debian.org/debian-security"
 IMAGE_SIZE = 16 << 30
@@ -91,49 +145,66 @@ PACKAGES = ("systemd-sysv", "sudo", "dbus-x11", "dbus-user-session", "network-ma
             "ca-certificates", "file", "bash-completion", "locales",
             "fonts-dejavu-core", "e2fsprogs", "keyboard-configuration",
             "console-setup", "tzdata")
-# The console base's packages on top of the "important" priority set (apt,
-# dpkg, udev, kmod, nano, cron, logrotate, ...; some of these are in it too and
-# are named so they stay), installed without recommends. Each entry says why
+# The console base is what the Debian installer leaves with no desktop chosen:
+# its "standard system utilities" task (mmdebstrap's standard variant: the
+# required, important and standard priorities) with recommends (exim4 as the
+# local MTA on 127.0.0.1:25, timesyncd, dbus-user-session, the ispell
+# dictionaries), the installer's own additions below, and the language task
+# tasksel picks for the locale (task-english for English). Each entry says why
 # it is there; src/antinomie/packaging/debian-minimal-trixie/packages.txt is
 # the committed manifest (requested and resolved packages of the verified build).
 CONSOLE_PACKAGES = (
-    ("systemd-sysv", "systemd as init, as on every Debian base"),
-    ("systemd-resolved", "DNS for systemd-networkd's DHCP lease (/etc/resolv.conf stub)"),
-    ("dbus", "system bus for logind, hostnamectl, timedatectl and loginctl"),
-    ("libpam-systemd", "login sessions registered with logind"),
-    ("sudo", "the per-VM account's password-protected sudo"),
-    ("iproute2", "ip and ss"),
-    ("iputils-ping", "ping"),
-    ("procps", "ps, top, free, pgrep"),
-    ("psmisc", "pstree, killall, fuser"),
-    ("less", "pager"),
-    ("vim-tiny", "editor (nano comes with the important set)"),
-    ("curl", "HTTP client"),
-    ("wget", "HTTP client many samples and scripts expect"),
-    ("ca-certificates", "TLS trust store for curl, wget and apt over https"),
-    ("openssh-client", "ssh and scp from the guest (no SSH server)"),
-    ("python3", "interpreter many Linux samples and analysis helpers need"),
-    ("file", "identify uploaded files"),
-    ("xz-utils", "unpack .xz archives"),
-    ("bash-completion", "completion in the console shell"),
-    ("locales", "the chosen locale"),
+    ("tasksel", "the installer's task selector (tasksel-data names the language task)"),
+    ("installation-report", "installed by the Debian installer"),
+    ("discover", "the installer's hardware detection, kept on the installed system"),
+    ("laptop-detect", "installed by the installer for tasksel's laptop question"),
+    ("eject", "installed by the installer"),
+    ("initramfs-tools", "the installer's initramfs generator (busybox, zstd by recommends)"),
     ("keyboard-configuration", "the chosen console keyboard layout"),
     ("console-setup", "applies the layout and font on the virtual terminals"),
-    ("tzdata", "the chosen time zone"),
-    ("e2fsprogs", "the root filesystem's tools"),
+    ("sudo", "the installer adds it when root gets no password; the per-VM account uses it"),
+    ("grub-pc", "the installer's boot loader for a BIOS PC (each VM's grub.cfg is written for it)"),
+    ("os-prober", "installed with GRUB by the installer"),
 )
-# Documentation and manual pages are left out of the console base while it is
-# bootstrapped (copyright files stay); packages installed later get theirs.
-CONSOLE_DPKG = ("path-exclude=/usr/share/doc/*", "path-include=/usr/share/doc/*/copyright",
-                "path-exclude=/usr/share/man/*", "path-exclude=/usr/share/info/*")
-# systemd-networkd takes the address of every wired interface from DHCP, so any
-# NIC model and name a stealth profile gives works.
-CONSOLE_NETWORK = """[Match]
-Type=ether
-Kind=!*
+# Its wired NIC sits at PCI 00:19.0, the onboard Intel NIC's slot on PC
+# chipsets (bundle stealth_support "onboardnic"), so udev names it as on such
+# a PC whichever model the stealth profile picks, and the installer's stanza
+# for it is written once here.
+CONSOLE_NIC = "enp0s25"
+CONSOLE_INTERFACES = f"""# This file describes the network interfaces available on your system
+# and how to activate them. For more information, see interfaces(5).
 
-[Network]
-DHCP=yes
+source /etc/network/interfaces.d/*
+
+# The loopback network interface
+auto lo
+iface lo inet loopback
+
+# The primary network interface
+allow-hotplug {CONSOLE_NIC}
+iface {CONSOLE_NIC} inet dhcp
+# This is an autoconfigured IPv6 interface
+iface {CONSOLE_NIC} inet6 auto
+"""
+# apt's history names the commands mmdebstrap ran; the installer's read like
+# this (its packages: those an entry installed on request).
+HISTORY_AWK = r"""NR == FNR {
+    if ($0 ~ /^Start-Date:/) n++
+    if ($0 ~ /^Install: /) {
+        list = ""
+        count = split(substr($0, 10), items, /\), /)
+        for (i = 1; i <= count; i++)
+            if (items[i] !~ /automatic/) { split(items[i], name, ":"); list = list " " name[1] }
+        packages[n] = list
+    }
+    next
+}
+/^Start-Date:/ { m++ }
+/^Commandline:/ {
+    print "Commandline: apt-get -o APT::Status-Fd=4 -o APT::Keep-Fds::=5 -o APT::Keep-Fds::=6 -q -y --no-remove install" packages[m]
+    next
+}
+{ print }
 """
 # Installer-style answers. Values are checked again inside the new system
 # against its locale, keyboard and time zone data.
@@ -141,6 +212,9 @@ DEFAULTS = {"name": "", "desktop": "xfce", "hostname": "debian", "locale": "en_U
             "keyboard_layout": "us",
             "keyboard_variant": "", "timezone": "Etc/UTC", "standard": False,
             "mirror": "http://deb.debian.org/debian", "proxy": ""}
+# The installer preselects "standard system utilities"; the console base keeps
+# that default when the answer is not given.
+CONSOLE_DEFAULTS = {"standard": True}
 PATTERNS = {"locale": r"[a-z]{2,3}(?:_[A-Z]{2})?(?:@[a-z]+)?\.UTF-8",
             "keyboard_layout": r"[a-z]{2,8}", "keyboard_variant": r"[a-z0-9_-]{0,32}",
             "timezone": r"[A-Z][A-Za-z_+-]*(?:/[A-Za-z0-9_+-]+){0,2}",
@@ -164,7 +238,7 @@ def kernel_release(kernel):
             raise RuntimeError("kernel must be an x86 Linux bzImage")
         source.seek(0x200 + struct.unpack_from("<H", header, 0x20e)[0])
         release = source.read(512).split(b"\0", 1)[0].decode("ascii")
-    if not re.match(r"6\.12\.94(?:[- ]|$)", release):
+    if not re.match(r"6\.12\.94(?:[-+ ]|$)", release):
         raise RuntimeError("kernel must retain pinned Linux 6.12.94")
     return release
 
@@ -251,7 +325,8 @@ def options(values):
     unknown = set(values) - set(DEFAULTS)
     if unknown:
         raise RuntimeError("unknown image options: " + ", ".join(sorted(unknown)))
-    result = {**DEFAULTS, **values}
+    result = {**DEFAULTS, **(CONSOLE_DEFAULTS if values.get("desktop") == CONSOLE else {}),
+              **values}
     monitor_helpers().valid_hostname(result["hostname"])
     if not isinstance(result["name"], str):
         raise RuntimeError("base name must be text")
@@ -278,22 +353,27 @@ def packages(desktop):
     return PACKAGES + (task,) + extra
 
 
-def kernel_append(desktop):
-    return CONSOLE_APPEND if desktop == CONSOLE else APPEND
+def kernel_append(desktop, release=None, root_uuid=None):
+    if desktop == CONSOLE:
+        return CONSOLE_APPEND.format(release=release.split()[0], uuid=root_uuid)
+    return APPEND
 
 
 def fstab(desktop, root_uuid=None):
-    """The root line: the console base mounts its root by UUID on any disk bus;
-    the desktops keep virtio's /dev/vda (their SATA and NVMe drivers are modules)."""
+    """The console base's fstab is the installer's (root by UUID on any disk bus,
+    errors=remount-ro, the CD drive); the desktops keep virtio's /dev/vda (their
+    SATA and NVMe drivers are modules)."""
     if desktop == CONSOLE:
-        return f"UUID={root_uuid} / ext4 defaults 0 1\n"
+        return (FSTAB_HEADER + f"# / was on {CONSOLE_ROOT_DEVICE} during installation\n"
+                + FSTAB_ROOT.format(uuid=root_uuid) + FSTAB_CDROM)
     return "/dev/vda / ext4 defaults 0 1\n"
 
 
 def stealth_support(desktop, config, kernel):
     """bundle.json stealth_support: SATA and NVMe roots only for the console
     base, and only when its kernel builds those controllers in."""
-    return monitor_helpers().stealth_support(config, kernel, root_buses=desktop == CONSOLE)
+    support = monitor_helpers().stealth_support(config, kernel, root_buses=desktop == CONSOLE)
+    return support + ["onboardnic"] if desktop == CONSOLE else support
 
 
 def image_size(desktop):
@@ -311,7 +391,7 @@ def customization_script():
     console base, the root filesystem's UUID."""
     return """#!/bin/sh
 set -eu
-hostname=$1 locale=$2 layout=$3 variant=$4 zone=$5 manager=$6 session=$7 rootuuid=${8:-}
+hostname=$1 locale=$2 layout=$3 variant=$4 zone=$5 manager=$6 session=$7 rootuuid=${8:-} mirror=${9:-}
 export DEBIAN_FRONTEND=noninteractive
 test "$(. /etc/os-release; printf '%s' "$ID:$VERSION_ID")" = debian:13
 test "$(dpkg --print-architecture)" = amd64
@@ -331,12 +411,18 @@ if [ -n "$variant" ]; then
     awk -v v="$variant" -v l="$layout:" '/^! variant/ {s = 1; next} /^!/ {s = 0} s && $1 == v && $2 == l {f = 1} END {exit !f}' \\
         /usr/share/X11/xkb/rules/evdev.lst || { echo "unknown keyboard variant $variant for $layout" >&2; exit 1; }
 fi
-remove=$(dpkg-query -W -f='${binary:Package} ${db:Status-Status}\\n' | awk '$2 == "installed" && ($1 ~ /^openssh-server(:|$)/ || $1 ~ /^qemu-guest-agent(:|$)/ || $1 ~ /^spice-vdagent(:|$)/ || $1 ~ /^cloud-init/ || $1 ~ /^cloud-guest-utils(:|$)/ || $1 ~ /^linux-image-/) {print $1}')
+# Debian's own kernels go (the base boots its own); the console base's own
+# kernel packages stay.
+remove=$(dpkg-query -W -f='${binary:Package} ${db:Status-Status}\\n' | awk -v keep="$manager" '$2 == "installed" && ($1 ~ /^openssh-server(:|$)/ || $1 ~ /^qemu-guest-agent(:|$)/ || $1 ~ /^spice-vdagent(:|$)/ || $1 ~ /^cloud-init/ || $1 ~ /^cloud-guest-utils(:|$)/ || ($1 ~ /^linux-image-/ && keep != "none")) {print $1}')
 if [ -n "$remove" ]; then
     apt-get -o APT::Get::AllowUnauthenticated=false -y purge $remove
 fi
+# Mask only units a package still ships: a mask for an absent unit would name
+# the agents a sandbox leaves out.
 for unit in ssh.service sshd.service ssh.socket qemu-guest-agent.service spice-vdagentd.service cloud-init-local.service cloud-init.service cloud-config.service cloud-final.service; do
-    systemctl mask "$unit"
+    if [ -e "/usr/lib/systemd/system/$unit" ] || [ -e "/lib/systemd/system/$unit" ]; then
+        systemctl mask "$unit"
+    fi
 done
 for name in $(awk -F: '$3 >= 1000 && $3 < 65534 {print $1}' /etc/passwd); do
     userdel -r "$name"
@@ -347,32 +433,50 @@ done
 passwd -l root
 rm -f /etc/ssh/ssh_host_* /var/lib/dbus/machine-id
 truncate -s 0 /etc/machine-id
-mkdir -p /var/lib/antinomie-image
+# systemd-resolved's postinst keeps the resolv.conf it replaced: the build
+# host's (its nameserver and search domain).
+rm -f /etc/.resolv.conf.systemd-resolved.bak
 # No automatic or guest login; the chosen desktop is the default session.
 case $manager in
 lightdm)
     mkdir -p /etc/lightdm/lightdm.conf.d
     greeter=
     if [ "$session" = xfce ]; then greeter='greeter-session=lightdm-gtk-greeter\\n'; fi
-    printf "[Seat:*]\\n${greeter}user-session=%s\\nautologin-user=\\nautologin-guest=false\\nallow-guest=false\\n" "$session" > /etc/lightdm/lightdm.conf.d/99-antinomie.conf
+    printf "[Seat:*]\\n${greeter}user-session=%s\\nautologin-user=\\nautologin-guest=false\\nallow-guest=false\\n" "$session" > /etc/lightdm/lightdm.conf.d/50-seat.conf
     ;;
 gdm3)
     sed -i 's/^#*\\s*AutomaticLoginEnable\\s*=.*/AutomaticLoginEnable = false/' /etc/gdm3/daemon.conf
     ;;
 sddm)
     mkdir -p /etc/sddm.conf.d
-    printf '[Autologin]\\nUser=\\nSession=%s\\n' "$session" > /etc/sddm.conf.d/99-antinomie.conf
+    printf '[Autologin]\\nUser=\\nSession=%s\\n' "$session" > /etc/sddm.conf.d/10-session.conf
     ;;
 none)
     # Console base: logins on the serial console and the virtual terminals;
-    # systemd-networkd takes the DHCP address (no NetworkManager).
-    mkdir -p /etc/systemd/network
-    printf '%s' """ + shlex.quote(CONSOLE_NETWORK) + """ > /etc/systemd/network/80-antinomie-dhcp.network
-    systemctl enable systemd-networkd.service systemd-resolved.service
+    # ifupdown runs dhcpcd for the onboard NIC, as the installer sets it up.
+    printf '%s' """ + shlex.quote(CONSOLE_INTERFACES) + """ > /etc/network/interfaces
     # /tmp stays on the root disk, as on BusyBox: what a sample drops there is
     # in the VM's disk (Disks tab, disk dumps, checkpoints), not only in RAM.
-    systemctl mask tmp.mount
-    printf 'L+ /etc/resolv.conf - - - - ../run/systemd/resolve/stub-resolv.conf\\n' > /etc/tmpfiles.d/antinomie-resolv.conf
+    # A condition in a drop-in, as "systemctl edit" leaves it, not a mask.
+    mkdir -p /etc/systemd/system/tmp.mount.d
+    printf '[Unit]\\nConditionPathIsMountPoint=/tmp\\n' > /etc/systemd/system/tmp.mount.d/override.conf
+    mkdir -p /media/cdrom0
+    ln -s cdrom0 /media/cdrom
+    # apt-setup's sources.list, named after the netinst image of this point
+    # release (built when base-files was), and the indexes it lists.
+    built=$(zcat /usr/share/doc/base-files/changelog.gz | sed -n 's/^ -- .*>  //p' | head -n 1)
+    media="Debian GNU/Linux $(cat /etc/debian_version).0 _Trixie_ - Official amd64 NETINST with firmware $(date -u -d "$built" +%Y%m%d-%H:%M)"
+    sources=""" + shlex.quote(SOURCES_LIST) + """
+    url=$(printf '%s' "$mirror" | sed 's/[&|\\]/\\\\&/g')
+    printf '%s' "$sources" | sed -e "s|{media}|$media|" -e "s|{mirror}|$url|g" > /etc/apt/sources.list
+    apt-get -o Acquire::Languages=en update
+    # Answers the installer leaves in the debconf database.
+    printf 'tasksel tasksel/first multiselect standard\\npopularity-contest popularity-contest/participate boolean false\\n' | debconf-set-selections || true
+    # tasksel's language task for the locale (task-english for English).
+    task=$(awk -v l="${locale%%_*}" '/^Task:/ {t = $2} /^Test-lang:/ {for (i = 2; i <= NF; i++) if ($i == l) print t}' /usr/share/tasksel/descs/debian-tasks.desc | head -n 1)
+    if [ -n "$task" ]; then
+        apt-get -o APT::Get::AllowUnauthenticated=false -y install "task-$task"
+    fi
     ;;
 esac
 if [ "$manager" = none ]; then
@@ -381,19 +485,40 @@ else
     systemctl set-default graphical.target
 fi
 if [ -n "$rootuuid" ]; then
-    printf 'UUID=%s / ext4 defaults 0 1\\n' "$rootuuid" > /etc/fstab
+    { printf '%s' """ + shlex.quote(FSTAB_HEADER + f"# / was on {CONSOLE_ROOT_DEVICE} during installation\n") + """
+      printf """ + shlex.quote(FSTAB_ROOT.format(uuid="%s").replace("\n", "\\n")) + """ "$rootuuid"
+      printf '%s' """ + shlex.quote(FSTAB_CDROM) + """; } > /etc/fstab
 else
     printf '/dev/vda / ext4 defaults 0 1\\n' > /etc/fstab
 fi
-printf '%s' """ + shlex.quote(NETWORK_INTERFACES) + """ > /etc/network/interfaces
+[ "$manager" = none ] || printf '%s' """ + shlex.quote(NETWORK_INTERFACES) + """ > /etc/network/interfaces
 printf '%s\\n' "$hostname" > /etc/hostname
-printf '127.0.0.1\\tlocalhost\\n127.0.1.1\\t%s\\n\\n::1\\tlocalhost ip6-localhost ip6-loopback\\nff02::1\\tip6-allnodes\\nff02::2\\tip6-allrouters\\n' "$hostname" > /etc/hosts
-printf '%s UTF-8\\n' "$locale" > /etc/locale.gen
-locale-gen
-printf 'LANG=%s\\n' "$locale" > /etc/default/locale
+# Packages configured while the build host's name was the system's take the
+# chosen one (exim4's mail name and local domains).
+if [ -f /etc/exim4/update-exim4.conf.conf ]; then
+    printf 'exim4-config exim4/mailname string %s\\nexim4-config exim4/dc_other_hostnames string %s\\n' "$hostname" "$hostname" | debconf-set-selections
+    printf 'SUBST exim4/dc_other_hostnames fqdn %s\\n' "$hostname" | debconf-communicate exim4-config >/dev/null
+    printf '%s\\n' "$hostname" > /etc/mailname
+    sed -i "s/^dc_other_hostnames=.*/dc_other_hostnames='$hostname'/" /etc/exim4/update-exim4.conf.conf
+    update-exim4.conf
+fi
+hosts=""" + shlex.quote(HOSTS) + """
+printf '%s' "$hosts" | sed "s/{hostname}/$hostname/" > /etc/hosts
+# Locale, keyboard and time zone as the installer answers them: through
+# debconf, so locale.gen is the full commented list and the answers stay.
+printf 'locales locales/locales_to_be_generated multiselect %s UTF-8\\nlocales locales/default_environment_locale select %s\\n' "$locale" "$locale" | debconf-set-selections
+rm -f /etc/locale.gen
+dpkg-reconfigure -f noninteractive locales
+printf 'keyboard-configuration keyboard-configuration/xkb-keymap select %s\\nkeyboard-configuration keyboard-configuration/layoutcode string %s\\nkeyboard-configuration keyboard-configuration/variantcode string %s\\n' "$layout" "$layout" "$variant" | debconf-set-selections
 printf 'XKBMODEL="pc105"\\nXKBLAYOUT="%s"\\nXKBVARIANT="%s"\\nXKBOPTIONS=""\\n\\nBACKSPACE="guess"\\n' "$layout" "$variant" > /etc/default/keyboard
+area=${zone%%/*} city=${zone#*/}
+printf 'tzdata tzdata/Areas select %s\\ntzdata tzdata/Zones/%s select %s\\n' "$area" "$area" "$city" | debconf-set-selections
 ln -sf "/usr/share/zoneinfo/$zone" /etc/localtime
-printf '%s\\n' "$zone" > /etc/timezone
+rm -f /etc/timezone
+dpkg-reconfigure -f noninteractive tzdata
+# The installer's hardware clock answer, and D-Bus's link to the machine ID.
+printf '0.0 0 0.0\\n0\\nUTC\\n' > /etc/adjtime
+ln -sf /etc/machine-id /var/lib/dbus/machine-id
 # Build-time apt and dpkg settings (recommends, proxy, left-out documentation)
 # are not part of the image.
 rm -f /etc/apt/apt.conf.d/99mmdebstrap /etc/dpkg/dpkg.cfg.d/99mmdebstrap
@@ -403,9 +528,152 @@ if [ -n "$audit" ]; then
     exit 1
 fi
 apt-get -o APT::Get::AllowUnauthenticated=false -o Acquire::AllowInsecureRepositories=false check
-dpkg-query -W -f='${binary:Package}\\t${Version}\\t${Architecture}\\t${source:Package}\\t${source:Version}\\t${db:Status-Status}\\n' > /var/lib/antinomie-image/packages.tsv
-apt-get clean
+dpkg-query -W -f='${binary:Package}\\t${Version}\\t${Architecture}\\t${source:Package}\\t${source:Version}\\t${db:Status-Status}\\n' > /tmp/packages.tsv
+if [ "$manager" = none ] && [ -f /var/log/apt/history.log ]; then
+    awk """ + shlex.quote(HISTORY_AWK) + """ /var/log/apt/history.log /var/log/apt/history.log > /tmp/history.log
+    cat /tmp/history.log > /var/log/apt/history.log
+    rm -f /tmp/history.log
+fi
+if [ "$manager" = none ]; then
+    # The resolver the installer's DHCP lease named; dhcpcd rewrites it at boot.
+    printf 'nameserver 192.168.1.1\\n' > /etc/resolv.conf
+    find /var/cache/apt/archives -name '*.deb' -delete
+else
+    apt-get clean
+fi
 """
+
+
+# The kernel as Debian packages it, for the console base: the versioned image
+# package linux-signed-amd64 builds (its name, control fields and maintainer
+# scripts from the pinned source package's templates) and the linux-image-amd64
+# metapackage. Its /boot carries the running kernel, Debian's configuration
+# file as the pinned package resolves it (the running kernel's own would name
+# the minimal profile and the recorder) and Debian's System.map placeholder.
+# The image is root's only (Debian's is world-readable): it embeds the
+# recorder.
+KERNEL_SOURCE = REPO / "src/debian/linux_6.12.94-1.debian.tar.xz"
+ADAPTER = REPO / "src/antinomie/packaging/debian-6.12.94-1-trixie/adapter.conf"
+KERNEL_IMAGE_MODE = 0o600
+KERNEL_CONTROL = """Package: linux-image-{release}
+Source: linux-signed-amd64 ({upstream}+{revision})
+Version: {version}
+Architecture: amd64
+Maintainer: Debian Kernel Team <debian-kernel@lists.debian.org>
+Installed-Size: {size}
+Pre-Depends: linux-base (>= 4.12~)
+Depends: kmod, initramfs-tools (>= 0.120+deb8u2) | linux-initramfs-tool
+Recommends: apparmor
+Suggests: firmware-linux-free, linux-doc-{line}, debian-kernel-handbook, grub-pc | grub-efi-amd64 | extlinux
+Conflicts: linux-image-{release}-unsigned
+Breaks: fwupdate (<< 12-7), initramfs-tools (<< 0.120+deb8u2), wireless-regdb (<< 2019.06.03-1~)
+Replaces: linux-image-{release}-unsigned
+Built-Using: linux (= {version})
+Section: kernel
+Priority: optional
+Homepage: https://www.kernel.org/
+Description: Linux {line} for 64-bit PCs (signed)
+ The Linux kernel {line} and modules for use on PCs with AMD64, Intel 64 or
+ VIA Nano processors.
+ .
+ The kernel image is signed for use with Secure Boot.
+"""
+KERNEL_META_CONTROL = """Package: linux-image-amd64
+Source: linux-signed-amd64 ({upstream}+{revision})
+Version: {version}
+Architecture: amd64
+Maintainer: Debian Kernel Team <debian-kernel@lists.debian.org>
+Installed-Size: {size}
+Depends: linux-image-{release} (= {version})
+Provides: linux-latest-modules-{release}, virtualbox-guest-modules, wireguard-modules (= 1.0.0)
+Section: kernel
+Priority: optional
+Homepage: https://www.kernel.org/
+Description: Linux for 64-bit PCs (signed) (meta-package)
+ This package depends on the latest Linux kernel and modules for use on PCs
+ with AMD64, Intel 64 or VIA Nano processors.
+"""
+
+
+def adapter_value(name):
+    for line in ADAPTER.read_text().splitlines():
+        if line.startswith(name + "="):
+            return line.split("=", 1)[1].strip("'\"")
+    raise RuntimeError(f"{name} missing from {ADAPTER.name}")
+
+
+def debian_config_text(config):
+    """A kernel configuration as Debian installs it in /boot (debian/rules.real
+    drops the signing and build salt lines)."""
+    return "".join(line for line in config.read_text().splitlines(keepends=True)
+                   if not re.match(r"(# )?CONFIG_(MODULE_SIG_(ALL|KEY)|SYSTEM_TRUSTED_KEYS|"
+                                   r"BUILD_SALT|ANTINOMIE\w*)[ =]", line))
+
+
+def kernel_packages(kernel, release, modules, debian_config, work):
+    """Build linux-image-RELEASE and linux-image-amd64 under work; return both .debs."""
+    release = release.split()[0]
+    version = adapter_value("SOURCE_VERSION")
+    upstream, revision = version.rsplit("-", 1)
+    line = ".".join(upstream.split(".")[:2])
+    names = ("preinst", "postinst", "prerm", "postrm")
+    with tarfile.open(KERNEL_SOURCE) as source:
+        read = lambda name: source.extractfile(name).read()
+        scripts = {name: read(f"debian/templates/image.{name}.in").decode() for name in names}
+        copyright = read("debian/copyright")
+        changelog = read("debian/changelog")
+    image = work / "linux-image"
+    boot = image / "boot"
+    boot.mkdir(parents=True)
+    shutil.copyfile(kernel, boot / f"vmlinuz-{release}")
+    (boot / f"vmlinuz-{release}").chmod(KERNEL_IMAGE_MODE)
+    (boot / f"config-{release}").write_text(debian_config_text(debian_config))
+    (boot / f"System.map-{release}").write_text(
+        "ffffffffffffffff B The real System.map is in the linux-image-<version>-dbg package\n")
+    tree = image / "usr/lib/modules" / release
+    tree.parent.mkdir(parents=True)
+    if modules is None:
+        tree.mkdir()
+    else:
+        shutil.copytree(modules, tree, symlinks=True)
+    for generated in tree.glob("modules.*"):
+        # depmod writes these in the postinst, as for Debian's package.
+        if generated.name not in ("modules.order", "modules.builtin", "modules.builtin.modinfo"):
+            generated.unlink()
+    doc = image / f"usr/share/doc/linux-image-{release}"
+    doc.mkdir(parents=True)
+    (doc / "copyright").write_bytes(copyright)
+    (doc / "changelog.Debian.gz").write_bytes(gzip.compress(changelog, 9, mtime=0))
+    debs = []
+    meta = work / "linux-image-amd64"
+    (meta / "usr/share/doc").mkdir(parents=True)
+    (meta / "usr/share/doc/linux-image-amd64").symlink_to(f"linux-image-{release}")
+    for root, template, name in ((image, KERNEL_CONTROL, f"linux-image-{release}"),
+                                 (meta, KERNEL_META_CONTROL, "linux-image-amd64")):
+        control = root / "DEBIAN"
+        control.mkdir()
+        size = sum(path.stat().st_size for path in root.rglob("*")
+                   if path.is_file() and not path.is_symlink()) // 1024 + 1
+        (control / "control").write_text(template.format(
+            release=release, version=version, upstream=upstream, revision=revision,
+            line=line, size=size))
+        if root is image:
+            for script, text in scripts.items():
+                path = control / script
+                path.write_text(text.replace("@abiname@@localversion@", release)
+                                .replace("@image-stem@", "vmlinuz"))
+                path.chmod(0o755)
+        sums = []
+        for path in sorted(p for p in root.rglob("*") if p.is_file() and not p.is_symlink()
+                           and "DEBIAN" not in p.relative_to(root).parts):
+            sums.append(f"{hashlib.md5(path.read_bytes()).hexdigest()}  "
+                        f"{path.relative_to(root)}\n")
+        (control / "md5sums").write_text("".join(sums))
+        deb = work / f"{name}_{version}_amd64.deb"
+        subprocess.run(["dpkg-deb", "--root-owner-group", "-Zxz", "--build", str(root), str(deb)],
+                       check=True, stdout=subprocess.DEVNULL)
+        debs.append(deb)
+    return debs
 
 
 # What the bootstrap writes into provenance/; a cached root filesystem keeps them.
@@ -416,17 +684,22 @@ ROOTFS_PROVENANCE = ("packages.tsv", "os-release", "package-docs.tar.gz", "apt-l
 ROOTFS_CACHE_DAYS = int(os.environ.get("ANTINOMIE_ROOTFS_CACHE_DAYS", "30"))
 
 
-def rootfs_identity(values):
-    """What the root filesystem depends on: this recipe and the answers that
-    shape it (the base name and the apt proxy do not)."""
+def rootfs_identity(values, kernel_debs=()):
+    """What the root filesystem depends on: this recipe, the answers that shape
+    it (the base name and the apt proxy do not) and the console base's kernel
+    packages."""
     keys = ("desktop", "hostname", "locale", "keyboard_layout", "keyboard_variant",
             "timezone", "standard", "mirror")
-    return {"format": 1,
-            "recipe_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-            "options": {key: values[key] for key in keys}}
+    identity = {"format": 1,
+                "recipe_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+                "options": {key: values[key] for key in keys}}
+    if kernel_debs:
+        identity["kernel_packages"] = [hashlib.sha256(deb.read_bytes()).hexdigest()
+                                       for deb in kernel_debs]
+    return identity
 
 
-def load_rootfs_cache(cache, values, staging, provenance, log):
+def load_rootfs_cache(cache, values, staging, provenance, log, kernel_debs=()):
     """Unpack a cached root filesystem tarball that matches this recipe and is
     recent enough; return its record, or None to bootstrap."""
     if cache is None or not cache.is_file():
@@ -434,7 +707,7 @@ def load_rootfs_cache(cache, values, staging, provenance, log):
     try:
         with tarfile.open(cache) as archive:
             manifest = json.load(archive.extractfile("rootfs-cache.json"))
-            if manifest.get("identity") != rootfs_identity(values):
+            if manifest.get("identity") != rootfs_identity(values, kernel_debs):
                 print("cached root filesystem is from another recipe or answers; bootstrapping",
                       flush=True)
                 return None
@@ -447,12 +720,13 @@ def load_rootfs_cache(cache, values, staging, provenance, log):
                 member = archive.getmember("provenance/" + name)
                 with archive.extractfile(member) as source, (provenance / name).open("wb") as target:
                     shutil.copyfileobj(source, target)
-            with archive.extractfile("rootfs.tar") as source, \
-                    (staging / "rootfs.tar").open("wb") as target:
-                shutil.copyfileobj(source, target, 1 << 20)
+            for name in ("rootfs.tar", INODE_TIMES):
+                with archive.extractfile(name) as source, \
+                        (staging / name).open("wb") as target:
+                    shutil.copyfileobj(source, target, 1 << 20)
     except (tarfile.TarError, KeyError, ValueError, OSError, TypeError) as error:
         print(f"cached root filesystem unusable ({error}); bootstrapping", flush=True)
-        for name in ("rootfs.tar",):
+        for name in ("rootfs.tar", INODE_TIMES):
             (staging / name).unlink(missing_ok=True)
         return None
     print(f"using the root filesystem bootstrapped {manifest['built_at']}", flush=True)
@@ -460,11 +734,11 @@ def load_rootfs_cache(cache, values, staging, provenance, log):
     return manifest["root"] | {"reused_from_cache": True}
 
 
-def save_rootfs_cache(cache, tarball, provenance, root, values):
+def save_rootfs_cache(cache, tarball, provenance, root, values, kernel_debs=()):
     """Store the bootstrapped root filesystem (before kernel modules) atomically."""
     partial = cache.with_name(cache.name + ".part")
     cache.parent.mkdir(parents=True, exist_ok=True)
-    manifest = json.dumps({"identity": rootfs_identity(values), "root": root,
+    manifest = json.dumps({"identity": rootfs_identity(values, kernel_debs), "root": root,
                            "built_at": root["root_built_at"]}).encode()
     with tarfile.open(partial, "w") as archive:
         entry = tarfile.TarInfo("rootfs-cache.json")
@@ -473,6 +747,7 @@ def save_rootfs_cache(cache, tarball, provenance, root, values):
         for name in ROOTFS_PROVENANCE:
             archive.add(provenance / name, arcname="provenance/" + name)
         archive.add(tarball, arcname="rootfs.tar")
+        archive.add(tarball.with_name(INODE_TIMES), arcname=INODE_TIMES)
     os.replace(partial, cache)
     print(f"root filesystem cached in {cache}", flush=True)
 
@@ -499,17 +774,18 @@ def bootstrap_mode():
     return "root" if os.geteuid() == 0 else "unshare"
 
 
-def mmdebstrap_command(values, tarball, script, provenance):
+def mmdebstrap_command(values, tarball, script, provenance, times=None, kernel_debs=()):
     """The mmdebstrap invocation; hooks run as (namespace) root with "$1" the new root.
     Kernel modules are added to the tarball afterwards (add_modules), so the
     bootstrapped system can be cached and reused with another kernel."""
     q = shlex.quote
     console = values["desktop"] == CONSOLE
+    times = times or tarball.with_name(INODE_TIMES)
     command = ["mmdebstrap", "--mode=" + bootstrap_mode(),
                "--variant=" + ("standard" if values["standard"] else "important"),
                "--architectures=amd64", "--format=tar",
                "--include=" + ",".join(packages(values["desktop"])),
-               f'--aptopt=APT::Install-Recommends "{"false" if console else "true"}"',
+               '--aptopt=APT::Install-Recommends "true"',
                "--aptopt=APT::Get::AllowUnauthenticated \"false\"",
                "--aptopt=Acquire::AllowInsecureRepositories \"false\"",
                "--aptopt=Acquire::Retries \"3\""]
@@ -517,11 +793,24 @@ def mmdebstrap_command(values, tarball, script, provenance):
         command.append(f'--aptopt=Acquire::http::Proxy "{values["proxy"]}"')
         command.append(f'--aptopt=Acquire::https::Proxy "{values["proxy"]}"')
     if console:
-        command += ["--dpkgopt=" + option for option in CONSOLE_DPKG]
+        # The package indexes and apt's caches of them stay, as after the
+        # installer's apt update (the downloaded packages go), and so do the
+        # installation's logs (dpkg, alternatives, apt history).
+        command += ["--skip=cleanup/apt/lists", "--skip=cleanup/apt/cache",
+                    "--skip=cleanup/reproducible"]
     # Files cross into and out of the new root through mmdebstrap's upload and
     # download hooks, which run as the invoking user: in unshare mode a plain
     # hook runs as the namespace's root, which cannot read or write the
     # invoking user's private staging directory.
+    # The kernel packages go in first, as the installer installs the kernel
+    # before the rest; apt brings what they depend on and recommend.
+    for deb in kernel_debs:
+        command.append(f'--customize-hook=upload {q(str(deb))} /tmp/{deb.name}')
+    if kernel_debs:
+        command.append('--customize-hook=chroot "$1" apt-get -o APT::Get::AllowUnauthenticated=false '
+                       '-y install ' + " ".join(f"/tmp/{deb.name}" for deb in kernel_debs))
+        command.append('--customize-hook=rm -f ' + " ".join(f'"$1/tmp/{deb.name}"'
+                                                         for deb in kernel_debs))
     command.append(f'--customize-hook=upload {q(str(script))} /tmp/antinomie-customize.sh')
     manager, session = display(values["desktop"])
     arguments = " ".join([q(values[key]) for key in
@@ -529,21 +818,201 @@ def mmdebstrap_command(values, tarball, script, provenance):
                          + [q(manager), q(session)])
     if console:
         # mkfs.ext4 gives the root this UUID (fstab_uuid reads it back, also
-        # from a cached root filesystem).
-        arguments += " " + str(uuid.uuid4())
+        # from a cached root filesystem); the mirror goes into sources.list.
+        arguments += " " + str(uuid.uuid4()) + " " + q(values["mirror"].rstrip("/"))
     command.append(f'--customize-hook=chroot "$1" sh /tmp/antinomie-customize.sh {arguments}')
     command.append('--customize-hook=rm -f "$1/tmp/antinomie-customize.sh"')
-    for path in ("/var/lib/antinomie-image/packages.tsv", "/etc/os-release"):
+    # The package inventory leaves the image with the build's provenance.
+    for path in ("/tmp/packages.tsv", "/etc/os-release"):
         command.append(f'--customize-hook=download {path} {q(str(provenance / Path(path).name))}')
+    command.append('--customize-hook=rm -f "$1/tmp/packages.tsv"')
     for path, name in (("usr/share/doc", "package-docs.tar.gz"), ("var/lib/apt/lists", "apt-lists.tar.gz")):
         command.append(f'--customize-hook=tar -C "$1" -czf "$1/tmp/{name}" {path}')
         command.append(f'--customize-hook=download /tmp/{name} {q(str(provenance / name))}')
         command.append(f'--customize-hook=rm -f "$1/tmp/{name}"')
+    # Last: every path's access, change, birth and modification time as the
+    # installation left them, for the ext4 image (mkfs.ext4 -d takes only
+    # modification times from the tarball).
+    command.append("--customize-hook=find \"$1\" -xdev -printf " + q(TIMES_FORMAT)
+                   + ' > "$1/tmp/inode-times"')
+    command.append(f'--customize-hook=download /tmp/inode-times {q(str(times))}')
+    command.append('--customize-hook=rm -f "$1/tmp/inode-times"')
     mirror = values["mirror"].rstrip("/")
     command += [SUITE, str(tarball),
                 f"deb {mirror} {SUITE} main", f"deb {mirror} {SUITE}-updates main",
                 f"deb {SECURITY_MIRROR} {SUITE}-security main"]
     return command
+
+
+# Places in the image where a build-host file would land (configuration,
+# state, homes); package payloads under /usr and the package indexes are not
+# scanned for host names that could also be ordinary words there.
+LEAK_SCAN = ("etc/", "var/", "root/", "home/")
+LEAK_SKIP = ("var/lib/apt/lists/", "var/cache/apt/", "var/lib/dpkg/info/")
+# A Tailscale MagicDNS search domain and WSL's resolver address: the
+# development hosts' resolv.conf, which mmdebstrap copies into the new root.
+HOST_LEAK_PATTERNS = (re.compile(rb"\btail[0-9a-f]{4,}\.ts\.net\b"),
+                      re.compile(rb"\bnameserver[ \t]+10\.255\.255\.254\b"))
+
+
+def host_resolver_patterns(resolv=Path("/etc/resolv.conf")):
+    """The build host's own nameservers and search domains as patterns (loopback
+    stubs such as systemd-resolved's 127.0.0.53 are on every Debian system)."""
+    try:
+        text = resolv.read_text(errors="replace")
+    except OSError:
+        return []
+    patterns = []
+    for line in text.splitlines():
+        fields = line.split()
+        if len(fields) < 2 or fields[0].startswith(("#", ";")):
+            continue
+        if fields[0] == "nameserver" and not fields[1].startswith(("127.", "::1")):
+            patterns.append(re.compile(rb"\bnameserver[ \t]+" + re.escape(fields[1].encode())
+                                       + rb"(?![0-9.:])"))
+        elif fields[0] in ("search", "domain"):
+            patterns += [re.compile(rb"(?<![A-Za-z0-9.-])" + re.escape(domain.encode())
+                                    + rb"(?![A-Za-z0-9-])")
+                         for domain in fields[1:] if "." in domain.strip(".")]
+    return patterns
+
+
+def host_name_patterns(chosen, names=None):
+    """The build host's own name, which packages configured during the build
+    can record (exim4's mail name): every name but the one the image takes and
+    the installer's default."""
+    if names is None:
+        names = {socket.gethostname(), socket.getfqdn()}
+    return [re.compile(rb"(?i)(?<![A-Za-z0-9-])" + re.escape(name.encode())
+                       + rb"(?![A-Za-z0-9-])")
+            for name in sorted(names)
+            if len(name) >= 4 and name.split(".")[0].lower() not in
+            {chosen.lower(), "debian", "localhost"}]
+
+
+def check_image_leaks(tarball, patterns=None, hostname="debian"):
+    """Fail the build when the root filesystem names Antinomie in a path, masks a
+    unit no package ships, or carries the build host's resolver configuration
+    or name."""
+    patterns = HOST_LEAK_PATTERNS + tuple(
+        host_resolver_patterns() + host_name_patterns(hostname) if patterns is None
+        else patterns)
+    problems = []
+    units, masks = set(), []
+    with tarfile.open(tarball) as archive:
+        for member in archive:
+            name = member.name[2:] if member.name.startswith("./") else member.name
+            if "antinomie" in name.lower():
+                problems.append(f"/{name} names Antinomie")
+            if name.startswith(("usr/lib/systemd/system/", "lib/systemd/system/")):
+                units.add(name.rsplit("/", 1)[1])
+            if (name.startswith("etc/systemd/system/") and member.issym()
+                    and member.linkname == "/dev/null"):
+                masks.append(name)
+            if (not member.isfile() or not name.startswith(LEAK_SCAN)
+                    or name.startswith(LEAK_SKIP) or member.size > 16 << 20):
+                continue
+            data = archive.extractfile(member).read()
+            if any(pattern.search(data) for pattern in patterns):
+                problems.append(f"/{name} holds the build host's name or resolver")
+    problems += [f"/{mask} masks a unit no package ships" for mask in masks
+                 if mask.rsplit("/", 1)[1] not in units]
+    if problems:
+        raise RuntimeError("image carries build traces: " + "; ".join(problems[:10]))
+
+
+# find(1) -printf for the recorded times: path, atime, ctime, birth time and
+# mtime (seconds with nanoseconds), NUL-separated.
+TIMES_FORMAT = r"%P\0%A@\0%C@\0%B@\0%T@\0"
+INODE_TIMES = "inode-times"
+# Mount points find stats through to the filesystem mounted there.
+TIMES_MOUNTS = ("dev", "proc", "sys", "run")
+
+
+def parse_time(text):
+    """find's "SECONDS.FRACTION" as (seconds, nanoseconds); None for unknown (-1)."""
+    whole, _, fraction = text.partition(".")
+    if not whole.isdigit():
+        return None
+    return int(whole), int((fraction + "000000000")[:9] or 0)
+
+
+def read_inode_times(path):
+    """{tar path: (atime, ctime, birth, mtime)} from the recorded find output."""
+    fields = path.read_bytes().split(b"\0")
+    times = {}
+    for index in range(0, len(fields) - 4, 5):
+        name = fields[index].decode("utf-8", "surrogateescape")
+        if name.split("/", 1)[0] in TIMES_MOUNTS:
+            continue
+        times[name] = tuple(parse_time(field.decode()) for field in fields[index + 1:index + 5])
+    return times
+
+
+def install_timeline(tarball, recorded, rng):
+    """Per path (tar name without "./"): atime, ctime, crtime and mtime as
+    (seconds, nanoseconds), and the installation's first and last moment.
+
+    A path keeps the times its installation gave it (mmdebstrap's tarball
+    clamps modification times to the moment it started): changed no earlier
+    than modified, born no later than changed, accessed no earlier than born
+    (tar gives an extracted file its package's time as access time). A path
+    the installation did not record (added afterwards) was born when the
+    installation ended."""
+    known = [value for times in recorded.values() for value in times[1:3] if value]
+    start, end = min(known), max(known)
+    plan = {}
+    with tarfile.open(tarball) as archive:
+        for member in archive:
+            name = member.name.rstrip("/")
+            name = "" if name == "." else name[2:] if name.startswith("./") else name
+            if member.islnk():
+                continue
+            atime, ctime, birth, mtime = recorded.get(name, (None,) * 4)
+            mtime = mtime or (int(member.mtime), 0)
+            if ctime is None:
+                ctime = max(mtime, (end[0], rng.randrange(10 ** 9)))
+            ctime = max(ctime, mtime)
+            birth = min(birth or ctime, ctime)
+            atime = max(atime or ctime, birth)
+            plan[name] = (atime, ctime, birth, mtime)
+    return plan, start, end
+
+
+def debugfs_path(name):
+    """A path as one debugfs argument (inside quotes, a backslash is itself:
+    systemd's escaped unit names keep theirs)."""
+    if any(c in name for c in '"\n'):
+        raise RuntimeError(f"unsupported path for debugfs {name!r}")
+    return '"/' + name + '"'
+
+
+def apply_timeline(raw, plan, start, end, staging, log, rng):
+    """Write the timeline into the image, and the superblock of a filesystem
+    the installer made just before it (mkfs, one mount at /target, its writes)."""
+    commands = []
+    for name, times in plan.items():
+        path = debugfs_path(name) if name else "/"
+        for field, (seconds, nanoseconds) in zip(("atime", "ctime", "crtime", "mtime"), times):
+            commands.append(f"set_inode_field {path} {field} @{seconds}")
+            commands.append(f"set_inode_field {path} {field}_extra {nanoseconds << 2}")
+    stats = subprocess.run(["debugfs", "-R", "stats", str(raw)], check=True,
+                           capture_output=True, text=True).stdout
+    blocks = int(re.search(r"^Block count:\s*(\d+)", stats, re.M)[1])
+    free = int(re.search(r"^Free blocks:\s*(\d+)", stats, re.M)[1])
+    size = int(re.search(r"^Block size:\s*(\d+)", stats, re.M)[1])
+    written = (blocks - free) * size // 1024
+    commands += [f"ssv mtime @{start[0] - rng.randrange(5, 20)}", "ssv mnt_count 1",
+                 "ssv last_mounted /target",
+                 f"ssv kbytes_written {written + written * rng.randrange(20, 45) // 100}"]
+    script = staging / "times.debugfs"
+    script.write_text("\n".join(commands) + "\n")
+    # debugfs stamps its own last write time on close.
+    subprocess.run(["debugfs", "-w", "-f", str(script), str(raw)], check=True,
+                   stdout=subprocess.DEVNULL, stderr=log,
+                   env=os.environ | {"E2FSPROGS_FAKE_TIME": str(end[0] + rng.randrange(2, 9))})
+    script.unlink()
+    return len(plan)
 
 
 def e2fsprogs_version():
@@ -590,9 +1059,9 @@ def fstab_uuid(tarball):
     """The root UUID the console base's fstab names, from the root filesystem tarball."""
     with tarfile.open(tarball) as archive:
         text = archive.extractfile("./etc/fstab").read().decode()
-    match = re.fullmatch(r"UUID=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) "
-                         r"/ ext4 defaults 0 1\n", text)
-    if not match:
+    match = re.search(r"^UUID=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) "
+                      r"+/ ", text, re.M)
+    if not match or text != fstab(CONSOLE, match[1]):
         raise RuntimeError("console base fstab does not mount its root by UUID")
     return match[1]
 
@@ -621,19 +1090,35 @@ def validate_image(raw, desktop=None, root_uuid=None):
         raise RuntimeError("base must leave GID 1000 free for per-VM credentials")
 
 
-def root_image(values, raw, staging, provenance, log, modules=None, cache=None):
+def console_disk(raw, size, rng):
+    """The console base's MBR disk with its one (bootable) root partition; the
+    root filesystem is made inside it at CONSOLE_ROOT_OFFSET."""
+    with raw.open("xb") as target:
+        target.truncate(size)
+    layout = (f"label: dos\nlabel-id: 0x{rng.randrange(1 << 32):08x}\n"
+              f"start={CONSOLE_ROOT_OFFSET // 512}, size={CONSOLE_ROOT_SIZE // 512}, "
+              "type=83, bootable\n")
+    subprocess.run(["sfdisk", "--quiet", "--no-reread", "--no-tell-kernel", str(raw)],
+                   input=layout, text=True, check=True, stdout=subprocess.DEVNULL)
+    return f"{raw}?offset={CONSOLE_ROOT_OFFSET}"
+
+
+def root_image(values, raw, staging, provenance, log, modules=None, cache=None,
+               kernel_debs=()):
     tarball = staging / "rootfs.tar"
-    root = load_rootfs_cache(cache, values, staging, provenance, log)
+    times = staging / INODE_TIMES
+    root = load_rootfs_cache(cache, values, staging, provenance, log, kernel_debs)
     if root is None:
         script = staging / "customize.sh"
         script.write_text(customization_script())
         shutil.copy2(script, provenance / "customize.sh")
-        command = mmdebstrap_command(values, tarball, script, provenance)
+        command = mmdebstrap_command(values, tarball, script, provenance, times, kernel_debs)
         (provenance / "mmdebstrap.json").write_text(json.dumps(command, indent=2) + "\n")
         # mmdebstrap assembles the system in $TMPDIR; /tmp is a small tmpfs on
         # Debian 13 (and in the cloud builder), far too small for a desktop.
+        # The installer runs in UTC, so its logs (dpkg, apt) are in UTC.
         subprocess.run(command, check=True, stdout=log, stderr=subprocess.STDOUT,
-                       env=os.environ | {"TMPDIR": str(staging)})
+                       env=os.environ | {"TMPDIR": str(staging), "TZ": "UTC"})
         root = {"bootstrap": "mmdebstrap", "mode": bootstrap_mode(),
                 "variant": "standard" if values["standard"] else "important",
                 "suite": SUITE, "mirror": values["mirror"], "security_mirror": SECURITY_MIRROR,
@@ -642,28 +1127,43 @@ def root_image(values, raw, staging, provenance, log, modules=None, cache=None):
         if cache is not None:
             log.flush()
             shutil.copy2(log.name, provenance / "bootstrap.log")
-            save_rootfs_cache(cache, tarball, provenance, root, values)
+            save_rootfs_cache(cache, tarball, provenance, root, values, kernel_debs)
+    check_image_leaks(tarball, hostname=values["hostname"])
     if modules is not None:
         add_modules(tarball, modules)
     size = image_size(values["desktop"])
     root_uuid = fstab_uuid(tarball) if values["desktop"] == CONSOLE else None
-    with raw.open("xb") as target:
-        target.truncate(size)
+    rng = random.SystemRandom()
+    plan, start, end = install_timeline(tarball, read_inode_times(times), rng)
+    # The installer partitions and formats the disk a minute or two before it
+    # installs the first package.
+    made = {"E2FSPROGS_FAKE_TIME": str(start[0] - rng.randrange(40, 160))}
+    if values["desktop"] == CONSOLE:
+        device = console_disk(raw, size, rng)
+        placement = ["-E", f"offset={CONSOLE_ROOT_OFFSET}"]
+        extent = [f"{CONSOLE_ROOT_SIZE >> 10}k"]
+    else:
+        with raw.open("xb") as target:
+            target.truncate(size)
+        device, placement, extent = str(raw), [], []
     subprocess.run(["mkfs.ext4", "-q", "-F", *(["-U", root_uuid] if root_uuid else []),
-                    "-d", str(tarball), str(raw)],
-                   check=True, stdout=log, stderr=subprocess.STDOUT)
-    xattrs = apply_xattrs(tarball, raw, staging, log)
+                    *placement, "-d", str(tarball), str(raw), *extent],
+                   check=True, stdout=log, stderr=subprocess.STDOUT, env=os.environ | made)
+    xattrs = apply_xattrs(tarball, device, staging, log)
+    timed = apply_timeline(device, plan, start, end, staging, log, rng)
     tarball.unlink()
-    validate_image(raw, values["desktop"], root_uuid)
+    validate_image(device, values["desktop"], root_uuid)
     return root | {
-            "root_filesystem": "ext4", "root_size": size,
-            "conversion": "mkfs.ext4 -d tarball; extended attributes set with debugfs",
-            "extended_attributes": xattrs,
+            "root_filesystem": "ext4", "root_size": size, "root_uuid": root_uuid,
+            "conversion": "mkfs.ext4 -d tarball; extended attributes and the installation's "
+                          "access, change and birth times set with debugfs",
+            "extended_attributes": xattrs, "timed_paths": timed,
             "kernel_modules": None if modules is None else f"/usr/lib/modules/{modules.name}"}
 
 
 def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=False,
-          values=None, work=None, app_version=None, rootfs_cache=None, symbols=None):
+          values=None, work=None, app_version=None, rootfs_cache=None, symbols=None,
+          debian_config=None):
     if output.exists():
         raise RuntimeError("output already exists; choose a new unpublished bundle path")
     values = options(values or {})
@@ -692,9 +1192,20 @@ def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=Fa
         shutil.copy2(kernel, bundle / "kernel")
         raw = staging / "root.raw"
         log_path = staging / "bootstrap.log"
+        kernel_debs = ()
+        if values["desktop"] == CONSOLE:
+            # The console base installs its kernel as Debian packages; their
+            # modules are its module tree.
+            debs = staging / "kernel-packages"
+            debs.mkdir()
+            debs.chmod(0o755)
+            kernel_debs = kernel_packages(kernel, release, tree, debian_config or kernel_config,
+                                          debs)
+            tree = None
         try:
             with log_path.open("w") as log:
-                root = root_image(values, raw, staging, provenance, log, tree, rootfs_cache)
+                root = root_image(values, raw, staging, provenance, log, tree, rootfs_cache,
+                                  kernel_debs)
         except (RuntimeError, subprocess.CalledProcessError):
             # The log dies with the staging directory; show why it failed.
             lines = log_path.read_text(errors="replace").splitlines()
@@ -712,7 +1223,7 @@ def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=Fa
         record = {"built_at": datetime.now(timezone.utc).isoformat(),
                   "options": values, "root": root,
                   "apt_authentication": "Debian signed indexes; insecure repositories disallowed",
-                  "package_install_recommends": values["desktop"] != CONSOLE,
+                  "package_install_recommends": True,
                   "requested_packages": list(packages(values["desktop"])),
                   "package_inventory": "packages.tsv",
                   "kernel_sha256": hashes["kernel"], "kernel_release": release,
@@ -724,7 +1235,8 @@ def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=Fa
         (provenance / "build.json").write_text(json.dumps(record, indent=2) + "\n")
         manifest = {"format": 1, "kernel_version": "6.12.94", "schema_id": 1,
                     "kernel": "kernel", "initrd": "initrd.gz", "base_disk": "base.qcow2",
-                    "kernel_append": kernel_append(values["desktop"]),
+                    "kernel_append": kernel_append(values["desktop"], release,
+                                                   root.get("root_uuid")),
                     "guest": profile(values["desktop"]),
                     "sha256": hashes}
         if symbols:
@@ -766,6 +1278,8 @@ def main():
                         help="modules_install root (INSTALL_MOD_PATH) matching the kernel")
     parser.add_argument("--allow-unversioned", action="store_true",
                         help="accept a development kernel without a source id")
+    parser.add_argument("--debian-config", type=Path,
+                        help="Debian's resolved kernel configuration (the console base's /boot)")
     parser.add_argument("--options", type=Path,
                         help="JSON object of installer answers (desktop: a DESKTOPS id or "
                              "\"none\" for the console-only Debian Minimal base, hostname, "
@@ -780,7 +1294,7 @@ def main():
     if not args.kernel.is_file():
         parser.error("an existing patched Linux 6.12.94 kernel is required")
     for tool in ("mmdebstrap", "mkfs.ext4", "mke2fs", "debugfs", "qemu-img", "cpio", "gzip",
-                 "busybox", "resize2fs", "dpkg-query", "tar"):
+                 "busybox", "resize2fs", "dpkg-query", "tar", "sfdisk", "dpkg-deb"):
         if shutil.which(tool) is None:
             parser.error("required installed tool missing: " + tool)
     try:
@@ -789,7 +1303,7 @@ def main():
             raise RuntimeError("options must be a JSON object")
         build(args.kernel, args.output, args.kernel_config, args.modules,
               args.allow_unversioned, values, args.work, args.app_version, args.rootfs_cache,
-              args.symbols)
+              args.symbols, args.debian_config)
     except (RuntimeError, OSError, ValueError, subprocess.CalledProcessError) as error:
         parser.exit(1, "Debian image build failed: " + str(error) + "\n")
     print(args.output)

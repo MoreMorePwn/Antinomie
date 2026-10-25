@@ -21,11 +21,14 @@ fn looks_like_address(text: &str) -> bool {
         .is_some_and(|digits| digits.len() >= 5 && digits.chars().all(|c| c.is_ascii_hexdigit()))
 }
 
-/// What a golden line must not depend on: process and thread IDs, and the
-/// fixture's private directory.
+/// What a golden line must not depend on: process and thread IDs, the
+/// fixture's private directory, and the base's root disk (a whole disk on
+/// BusyBox, a partition on Debian) and its device number.
 pub struct Volatile {
     pub ids: BTreeSet<String>,
     pub work_dir: Option<String>,
+    pub root_device: Option<String>,
+    pub work_device: Option<String>,
 }
 
 /// One value as the golden file keeps it. Only values that name a process
@@ -52,6 +55,14 @@ fn normal(text: &str, volatile: &Volatile, pidish: bool) -> String {
         {
             return format!("{head}{owner}<pid>");
         }
+    }
+    if volatile.work_device.as_deref() == Some(text) {
+        return "<work-dev>".into();
+    }
+    if let Some(device) = &volatile.root_device
+        && (text == device || text == format!("\"{device}\""))
+    {
+        return text.replace(device.as_str(), "<root-dev>");
     }
     let mut text = text.to_owned();
     if let Some(dir) = &volatile.work_dir {
@@ -248,6 +259,8 @@ pub fn check(context: &Context, reports: &[GroupReport], views: &Views) -> Resul
         let mut ids = Volatile {
             ids: BTreeSet::new(),
             work_dir: transcript.work_dir.clone(),
+            root_device: transcript.root_device.clone(),
+            work_device: transcript.work_device.clone(),
         };
         let mut volatile: BTreeMap<u64, bool> = BTreeMap::new();
         for expect in &transcript.expects {
@@ -310,6 +323,8 @@ mod tests {
         let ids = super::Volatile {
             ids: Default::default(),
             work_dir: None,
+            root_device: None,
+            work_device: None,
         };
         assert_eq!(super::data("06 00 00 00 b6 c8", &ids), "<bytes>");
         assert_eq!(super::data("\"io-at\"", &ids), "\"io-at\"");
@@ -323,7 +338,16 @@ mod tests {
         let ids = super::Volatile {
             ids: ["1234".to_owned()].into_iter().collect(),
             work_dir: Some("/tmp/ant-conformance-AbC123".into()),
+            root_device: Some("/dev/vda1".into()),
+            work_device: Some("64769".into()),
         };
+        // The root disk and its device number by role, whichever the base.
+        assert_eq!(
+            super::normal("\"/dev/vda1\"", &ids, false),
+            "\"<root-dev>\""
+        );
+        assert_eq!(super::normal("64769", &ids, false), "<work-dev>");
+        assert_eq!(super::normal("\"/dev/vda\"", &ids, false), "\"/dev/vda\"");
         assert_eq!(super::normal("0x7ffe00001000", &ids, false), "<addr>");
         assert_eq!(super::normal("1234", &ids, true), "<pid>");
         assert_eq!(super::normal("-1", &ids, true), "-1");

@@ -144,6 +144,22 @@ pub(crate) fn nic_option(profile: &StealthProfile) -> String {
     device
 }
 
+/// Where PC chipsets put the integrated Intel NIC: PCI 00:19.0. udev names
+/// a NIC there `enp0s25` whatever its model, so a base that configures that
+/// interface (stealth support `onboardnic`) finds it under every profile and
+/// with or without a display or pointer device taking the first free slots.
+pub(crate) const ONBOARD_NIC_ADDRESS: &str = "addr=0x19";
+
+/// [`nic_option`] for a base: at the onboard slot when the base expects it.
+pub(crate) fn nic_option_for(profile: &StealthProfile, base: &super::BaseSupport) -> String {
+    let mut device = nic_option(profile);
+    if base.onboard_nic {
+        device.push(',');
+        device.push_str(ONBOARD_NIC_ADDRESS);
+    }
+    device
+}
+
 /// The `-netdev user` value: `base` (`user,id=net0` with its restrictions)
 /// with the profile's addresses.
 pub(crate) fn netdev_option(base: &str, profile: &StealthProfile) -> String {
