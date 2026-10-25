@@ -64,7 +64,7 @@ pub(crate) fn details(ui: &mut egui::Ui) {
         .ctx()
         .data(|data| data.get_temp::<ChosenRow>(egui::Id::new(CHOSEN_ROW)));
     let Some(chosen) = chosen else {
-        ui.weak("Nothing selected. Select a row in Static analysis to inspect it here.");
+        ui.weak("Nothing selected.");
         return;
     };
     ui.horizontal_wrapped(|ui| {

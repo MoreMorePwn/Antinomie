@@ -277,10 +277,13 @@ impl MonitorApp {
                     .selected_text(draft.default_route.label())
                     .show_ui(ui, |ui| {
                         for kind in RouteKind::ALL {
-                            ui.selectable_value(&mut draft.default_route, kind, kind.label());
+                            ui.selectable_value(&mut draft.default_route, kind, kind.label())
+                                .on_hover_text(kind.explain());
                         }
-                    });
-                hint(ui, draft.default_route.explain());
+                    })
+                    .response
+                    .on_hover_text(draft.default_route.explain());
+                hint(ui, draft.default_route.summary());
             });
             ui.end_row();
             ui.label("Internet");
