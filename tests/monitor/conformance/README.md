@@ -14,7 +14,7 @@ cargo run --release --locked -j 2 -p antinomie-monitor-core --example conformanc
 
 | Argument | Meaning |
 |---|---|
-| `BASE_DIR` | A BusyBox base bundle (`bundle.json`, kernel, initrd, `base.qcow2`) with guest series 0001 onwards |
+| `BASE_DIR` | A BusyBox base bundle (`bundle.json`, kernel, initrd, `base.qcow2`) with guest series 0001 onwards, or a Debian Minimal base: its VMs get the base's minimum RAM and disk and a throwaway `conformance` account (UID 1000) and count as booted at the console login prompt (its `/tmp` is on the root filesystem, as BusyBox's is) |
 | `OUT_DIR` | Where fixtures, recordings and reports go; reruns replace a group's folder |
 | `--groups` | Only these fixture groups (default: all) |
 | `--recheck` | Check the runs already in `OUT_DIR` without booting anything |

@@ -13,8 +13,9 @@ full   quick, the debugger, audit, io_uring, tracer, stealth and snapshot
 auto   full when the diff against REF touches the kernel/host contract (guest
        patches, transport, protocol docs, ANTC_REVISION), otherwise quick
 
-BASE is a BusyBox base bundle built from the current guest series. Everything
-a check writes goes under --out (default vm-regress-out): logs, runs, the
+BASE is a BusyBox base bundle built from the current guest series; the quick
+tier also runs on a Debian Minimal base (its VMs get a throwaway account and
+the base's minima). Everything a check writes goes under --out (default vm-regress-out): logs, runs, the
 fixtures built from tests/monitor and private HOME and XDG folders per check.
 The app's own data and settings are never used.
 """
@@ -659,7 +660,8 @@ def exit_code(results, order):
 def parser():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("tier", choices=("quick", "full", "auto"))
-    p.add_argument("base", help="BusyBox base bundle of the current guest series")
+    p.add_argument("base", help="BusyBox base bundle of the current guest series "
+                   "(quick: or a Debian Minimal base)")
     p.add_argument("--old-base", help="an older BusyBox base: legacy checks and the new-host interop direction")
     p.add_argument("--old-host", metavar="REV|PATH",
                    help="old host for interop: a git rev built in a temporary worktree, or a built checkout "

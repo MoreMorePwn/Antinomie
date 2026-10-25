@@ -4,6 +4,23 @@ All notable changes to Antinomie. Versions follow semantic versioning; see
 [CONTRIBUTING.md](CONTRIBUTING.md#12-versioning). Each version says which bases
 it runs.
 
+## 0.7.1 — Unreleased
+
+- **Debian Minimal base.** **Build base…** offers a third base beside BusyBox
+  and the Debian desktops: console-only Debian 13 (trixie) with APT, systemd
+  and a small command-line set (curl, wget, ca-certificates, openssh-client,
+  iproute2, procps, less, vim-tiny, python3 and the rest listed with reasons in
+  `src/antinomie/packaging/debian-minimal-trixie/packages.txt`), no desktop,
+  display manager or SSH server. It boots on BusyBox's kernel (no modules),
+  takes its address with systemd-networkd, needs 1024 MiB RAM and 4 GiB disk,
+  and its VMs ask for a per-VM account like the desktop bases and behave like
+  BusyBox on screen (console, App terminal runs). The bundle is about 350 MB.
+  Runs on the 0.7.0 guest contract (revision 17); 0.7.0 apps run its bases too.
+- **Rootless Debian builds.** Native (`--mode=unshare`) Debian image builds
+  move files in and out of the new root as the invoking user, so they no longer
+  fail on the private staging directory; the conformance trace suite also runs
+  on a Debian Minimal base (account, minima, login prompt).
+
 ## 0.7.0 — Unreleased
 
 - **Workspace title bars.** Main and detached workspace windows use matching

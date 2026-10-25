@@ -110,6 +110,38 @@ truncated evidence as partial. Archived reports reopen without running analysis.
 Cancel stops the analysis job, not the guest program. Missing tools, isolation
 failure and resource limits remain explicit report states.
 
+## Debian Minimal base
+
+Console-only Debian 13 (trixie, amd64): no desktop, display manager or X, a
+login on the serial console and the virtual terminals, APT, and the
+command-line set listed with reasons in `CONSOLE_PACKAGES`
+(`scripts/build-debian-image.py`; resolved inventory of the verified build in
+`src/antinomie/packaging/debian-minimal-trixie/packages.txt`). It boots on the
+minimal kernel profile it shares with BusyBox (every driver it uses built in,
+no modules), takes its address with systemd-networkd and systemd-resolved, and
+installs without recommends; documentation and manual pages are left out while
+it is bootstrapped (copyright files stay; packages installed later get theirs).
+`/tmp` stays on the root disk (`tmp.mount` masked), as on BusyBox, so files a
+sample drops there are in the VM's disk for the Disks tab and disk dumps.
+The account, sudo, locked root, masked SSH and provenance are as on the desktop
+bases. Minimum resources are 1024 MiB RAM and 4 GiB disk; the bundle is about
+350 MB (`base.qcow2` about 320 MB of a 4 GiB root). **Build base…** offers it
+as **Debian 13 (minimal, console)**. From a checkout:
+
+```bash
+printf '{"format":1,"profile":"debian-minimal","options":{}}\n' > job.json
+scripts/build-base.py --job job.json --inputs src/debian --work /var/tmp/build \
+    --output work/debian-minimal-base [--kernel-cache KERNEL-minimal.tar]
+work/monitor-host/antinomie-monitor --install-base work/debian-minimal-base
+```
+
+A rootless (`--mode=unshare`) bootstrap needs a `--work` directory whose every
+parent the subordinate UIDs can traverse (not a mode-0700 home) and
+`mmdebstrap` installed outside such a directory; the QEMU builder runs as root
+and has neither limit. In **New VM** the base asks for a username and password
+like the desktop bases; its VMs show the console in QEMU's window and offer
+only **Run in: App terminal**.
+
 ## Debian desktop base
 
 **Build base…** builds this base without a repository checkout (ANT-T0028).

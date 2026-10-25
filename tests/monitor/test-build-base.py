@@ -32,6 +32,10 @@ class BuildBaseTests(unittest.TestCase):
             job = Path(name) / "job.json"
             cases = [({"format": 1, "profile": "busybox", "options": {"hostname": "a"}}, None),
                      ({"format": 1, "profile": "debian-xfce", "options": {"locale": "en_US.UTF-8"}}, None),
+                     ({"format": 1, "profile": "debian-minimal",
+                       "options": {"locale": "en_US.UTF-8", "standard": True}}, None),
+                     ({"format": 1, "profile": "debian-minimal", "options": {"desktop": "xfce"}},
+                      "not offered"),
                      ({"format": 1, "profile": "busybox", "options": {"locale": "x"}}, "not offered"),
                      ({"format": 2, "profile": "busybox"}, "format 1"),
                      ({"format": 1, "profile": "windows"}, "unknown profile"),
@@ -59,6 +63,25 @@ class BuildBaseTests(unittest.TestCase):
         self.assertIn('parser.add_argument("--hostname", default="debian")', recipe)
         app = (REPO / "src/antinomie/monitor/crates/monitor-core/src/build.rs").read_text()
         self.assertIn('hostname: "debian".into()', app)
+
+    def test_debian_minimal_is_the_console_recipe_on_the_minimal_kernel(self):
+        self.assertEqual(base.PROFILES["debian-minimal"][:2], ("minimal", "build-debian-image.py"))
+        self.assertEqual(base.PROFILES["busybox"][0], "minimal")
+        commands = []
+        with tempfile.TemporaryDirectory() as name, \
+                unittest.mock.patch.object(base, "run", lambda *args, **_: commands.append(args)):
+            work, kernel = Path(name) / "work", Path(name) / "kernel"
+            work.mkdir()
+            kernel.mkdir()
+            base.build_image("debian-minimal", {"hostname": "lab"}, kernel, work, Path("/o"))
+            answers = json.loads((work / "options.json").read_text())
+            self.assertEqual(answers, {"hostname": "lab", "desktop": "none"})
+            # The minimal kernel installs no modules: none are passed.
+            self.assertNotIn("--modules", commands[0])
+            (kernel / "modules-install").mkdir()
+            base.build_image("debian-xfce", {"desktop": "gnome"}, kernel, work, Path("/o"))
+            self.assertIn("--modules", commands[1])
+            self.assertEqual(json.loads((work / "options.json").read_text()), {"desktop": "gnome"})
 
     def test_missing_or_wrong_tarball_is_refused_before_unpacking(self):
         with tempfile.TemporaryDirectory() as name:

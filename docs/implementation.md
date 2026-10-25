@@ -2432,7 +2432,7 @@ not part of the identity), which the image builders compute:
 | --- | --- |
 | `uefi` | The kernel has `EFI` and `EFI_STUB` and its bzImage holds the EFI stub's bootstrap page claim (0052, found by its warning text) |
 | `sata`, `nvme` | The initrd searches that bus for the root disk and the kernel has `ATA SATA_AHCI SCSI BLK_DEV_SD`, or `BLK_DEV_NVME`, built in (BusyBox bases; the minimal kernel profile now builds NVMe in) |
-| `dhcp` | The guest takes its address from DHCP (BusyBox bases now; Debian bases through NetworkManager) |
+| `dhcp` | The guest takes its address from DHCP (BusyBox bases now; Debian desktop bases through NetworkManager, Debian Minimal through systemd-networkd) |
 
 The host offers OVMF when QEMU's firmware descriptors (the user's and
 `/etc/qemu/firmware`, then `share/qemu/firmware` of the QEMU in use and
@@ -3043,6 +3043,43 @@ existing guest kernel already binds `CONFIG_VIRTIO_INPUT`, so this is a
 launch-argument change only: no kernel, transport, bundle or user-disk change.
 Headless launches are unaffected. Task record is ANT-T0013 in the documentation
 task directory.
+
+### Debian Minimal base (0.7.1)
+
+A third buildable base beside BusyBox and the Debian desktops: console-only
+Debian 13 (profile `debian-minimal`, guest id `debian-minimal`, label
+`Debian 13 (Minimal)`, 1024 MiB / 4 GiB minima, `requires_credentials` as on
+the desktop bases, `graphical: false` so the VM behaves like BusyBox: QEMU's
+default VGA console, no `-vga virtio`, no Run in desktop choices, Stop's configured
+timeout without the desktops' 30 s floor). The same recipe builds it
+(`build-debian-image.py` with the installer answer `desktop: "none"`, which
+`build-base.py` sets for the profile; the job offers every Debian answer but
+the desktop): the important set plus `CONSOLE_PACKAGES` without recommends,
+documentation left out by dpkg path excludes that the image drops again,
+systemd-networkd for every wired NIC (`Type=ether`, so any stealth NIC model
+and name), systemd-resolved with a tmpfiles link for `/etc/resolv.conf`,
+`multi-user.target`, `/tmp` on the root disk (`tmp.mount` masked, unlike
+Debian 13's default tmpfs: dropped files reach the VM's disk, and the
+conformance cases and goldens, which expect BusyBox's on-disk `/tmp`, pass
+unchanged), a 4 GiB root. Everything else (account removal, masked
+SSH and guest agents, locked root, apt check, provenance, initrd, fstab and
+`kernel_append`) is the desktop path.
+
+Its kernel is the **minimal** profile, the BusyBox kernel: it builds in every
+driver and systemd prerequisite the console base uses (`CONSOLE_BUILTIN` is
+checked when no modules are given), so the base carries no modules and a
+cached BusyBox kernel serves it (`kit::kernel_cache(.., "minimal")`). The
+recipe accepts a modular kernel without `--modules` only for this base and
+only when `CONSOLE_BUILTIN` is built in. `stealth_support` stays `uefi, dhcp`
+like the desktops (the root is `/dev/vda` in fstab). The root filesystem cache
+is `images/rootfs-debian-minimal.tar`.
+
+Rootless builds: mmdebstrap's hooks run as the user namespace's root, a
+subordinate UID that cannot read or write the invoking user's mode-0700
+staging directory, so files cross through mmdebstrap's `upload` and
+`download` special hooks (run as the invoking user), and the staging directory
+is made traversable (0711) in unshare mode. Builds before this ran only in the
+QEMU builder (`--mode=root`).
 
 ### Accepted ANT-T0010 Update
 
