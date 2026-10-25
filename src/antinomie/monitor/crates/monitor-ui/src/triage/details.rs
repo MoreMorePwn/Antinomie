@@ -41,6 +41,8 @@ const TABLES: &[&str] = &[
     "triage-ids",
     "triage-sigma",
     "file-operation-timeline",
+    super::file_activity::CALLS_TABLE,
+    super::file_activity::FILE_TABLE,
 ];
 
 pub(super) fn clear(ctx: &egui::Context) {
@@ -128,6 +130,8 @@ fn title(table: &str) -> &str {
         "triage-dns" => "DNS request",
         "triage-sessions" => "Network session",
         "triage-bpf" => "BPF observation",
+        "triage-file-calls" => "File call",
+        "triage-file-history" => "File history",
         _ => "Selected evidence",
     }
 }

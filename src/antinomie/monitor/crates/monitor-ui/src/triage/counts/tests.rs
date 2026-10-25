@@ -26,6 +26,8 @@ fn section_totals_ignore_preview_pages_and_filters_and_keep_missing_network_dist
     ] {
         assert_eq!(view.section_count(metric), Count::Ready(count));
     }
+    // Per-file history counts every file the run touched.
+    assert_eq!(view.section_count(Metric::History), Count::Ready(0));
     let (_tx, rx) = mpsc::channel();
     view.scan_rx = Some(rx);
     assert_eq!(view.section_count(Metric::Opened), Count::Pending);

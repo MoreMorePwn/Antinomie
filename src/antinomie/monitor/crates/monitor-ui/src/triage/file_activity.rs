@@ -15,10 +15,10 @@ use std::collections::BTreeMap;
 mod graph;
 mod window;
 
-pub(super) use window::Window;
+pub(super) use window::{Window, CALLS_TABLE, FILE_TABLE};
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;
 
 /// Files kept; the rest are counted.
 const FILES_MAX: usize = 4096;

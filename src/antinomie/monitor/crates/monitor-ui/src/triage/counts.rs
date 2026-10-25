@@ -60,6 +60,8 @@ enum Metric {
     Opened,
     Reads,
     Changed,
+    /// Per-file history: the files the run touched.
+    History,
     /// An operation tab other than Opened and Read.
     File(FileTab),
 }
@@ -78,6 +80,9 @@ impl TriageView {
             Metric::Opened => scan.counts.opened,
             Metric::Reads => scan.counts.reads,
             Metric::Changed => scan.counts.changed,
+            Metric::History => {
+                scan.file_activity.files.len() as u64 + scan.file_activity.omitted_files
+            }
             Metric::File(tab) => scan.counts.tabs[tab.slot() - 8],
         };
         Count::Ready(count)
@@ -133,6 +138,17 @@ impl TriageView {
 
     pub(super) fn file_tabs(&mut self, ui: &mut egui::Ui) {
         widgets::tab_row(ui, |ui| {
+            // Per-file history leads: it is the way into every file the run
+            // touched, with how many there are.
+            let count = self.section_count(Metric::History);
+            let item = TabItem::new("Per-file history")
+                .badge(count.label(), count.tone(false))
+                .tooltip(
+                    "Every file the run touched, and for the chosen one its history as a graph with the processes involved and what was written where",
+                );
+            if widgets::tab(ui, self.history_tab, &item).clicked() {
+                self.history_tab = true;
+            }
             for value in FileTab::ALL {
                 let metric = match value {
                     FileTab::Opened => Metric::Opened,
@@ -150,12 +166,6 @@ impl TriageView {
                     self.files = value;
                     self.history_tab = false;
                 }
-            }
-            let item = TabItem::new("Per-file history").tooltip(
-                "Every file the run touched, and for the chosen one its history as a graph with the processes involved and what was written where",
-            );
-            if widgets::tab(ui, self.history_tab, &item).clicked() {
-                self.history_tab = true;
             }
         });
     }
