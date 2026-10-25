@@ -21,6 +21,7 @@ import random
 import re
 import shlex
 import shutil
+import socket
 import struct
 import subprocess
 import tarfile
@@ -92,49 +93,44 @@ PACKAGES = ("systemd-sysv", "sudo", "dbus-x11", "dbus-user-session", "network-ma
             "ca-certificates", "file", "bash-completion", "locales",
             "fonts-dejavu-core", "e2fsprogs", "keyboard-configuration",
             "console-setup", "tzdata")
-# The console base's packages on top of the "important" priority set (apt,
-# dpkg, udev, kmod, nano, cron, logrotate, ...; some of these are in it too and
-# are named so they stay), installed without recommends. Each entry says why
+# The console base is what the Debian installer leaves with no desktop chosen:
+# its "standard system utilities" task (mmdebstrap's standard variant: the
+# required, important and standard priorities) with recommends (exim4 as the
+# local MTA on 127.0.0.1:25, timesyncd, dbus-user-session, the ispell
+# dictionaries), the installer's own additions below, and the language task
+# tasksel picks for the locale (task-english for English). Each entry says why
 # it is there; src/antinomie/packaging/debian-minimal-trixie/packages.txt is
 # the committed manifest (requested and resolved packages of the verified build).
 CONSOLE_PACKAGES = (
-    ("systemd-sysv", "systemd as init, as on every Debian base"),
-    ("systemd-resolved", "DNS for systemd-networkd's DHCP lease (/etc/resolv.conf stub)"),
-    ("dbus", "system bus for logind, hostnamectl, timedatectl and loginctl"),
-    ("libpam-systemd", "login sessions registered with logind"),
-    ("sudo", "the per-VM account's password-protected sudo"),
-    ("iproute2", "ip and ss"),
-    ("iputils-ping", "ping"),
-    ("procps", "ps, top, free, pgrep"),
-    ("psmisc", "pstree, killall, fuser"),
-    ("less", "pager"),
-    ("vim-tiny", "editor (nano comes with the important set)"),
-    ("curl", "HTTP client"),
-    ("wget", "HTTP client many samples and scripts expect"),
-    ("ca-certificates", "TLS trust store for curl, wget and apt over https"),
-    ("openssh-client", "ssh and scp from the guest (no SSH server)"),
-    ("python3", "interpreter many Linux samples and analysis helpers need"),
-    ("file", "identify uploaded files"),
-    ("xz-utils", "unpack .xz archives"),
-    ("bash-completion", "completion in the console shell"),
-    ("locales", "the chosen locale"),
+    ("tasksel", "the installer's task selector (tasksel-data names the language task)"),
+    ("installation-report", "installed by the Debian installer"),
+    ("discover", "the installer's hardware detection, kept on the installed system"),
+    ("laptop-detect", "installed by the installer for tasksel's laptop question"),
+    ("eject", "installed by the installer"),
+    ("initramfs-tools", "the installer's initramfs generator (busybox, zstd by recommends)"),
     ("keyboard-configuration", "the chosen console keyboard layout"),
     ("console-setup", "applies the layout and font on the virtual terminals"),
-    ("tzdata", "the chosen time zone"),
-    ("e2fsprogs", "the root filesystem's tools"),
+    ("sudo", "the installer adds it when root gets no password; the per-VM account uses it"),
 )
-# Documentation and manual pages are left out of the console base while it is
-# bootstrapped (copyright files stay); packages installed later get theirs.
-CONSOLE_DPKG = ("path-exclude=/usr/share/doc/*", "path-include=/usr/share/doc/*/copyright",
-                "path-exclude=/usr/share/man/*", "path-exclude=/usr/share/info/*")
-# systemd-networkd takes the address of every wired interface from DHCP, so any
-# NIC model and name a stealth profile gives works.
-CONSOLE_NETWORK = """[Match]
-Type=ether
-Kind=!*
+# Its wired NIC sits at PCI 00:19.0, the onboard Intel NIC's slot on PC
+# chipsets (bundle stealth_support "onboardnic"), so udev names it as on such
+# a PC whichever model the stealth profile picks, and the installer's stanza
+# for it is written once here.
+CONSOLE_NIC = "enp0s25"
+CONSOLE_INTERFACES = f"""# This file describes the network interfaces available on your system
+# and how to activate them. For more information, see interfaces(5).
 
-[Network]
-DHCP=yes
+source /etc/network/interfaces.d/*
+
+# The loopback network interface
+auto lo
+iface lo inet loopback
+
+# The primary network interface
+allow-hotplug {CONSOLE_NIC}
+iface {CONSOLE_NIC} inet dhcp
+# This is an autoconfigured IPv6 interface
+iface {CONSOLE_NIC} inet6 auto
 """
 # Installer-style answers. Values are checked again inside the new system
 # against its locale, keyboard and time zone data.
@@ -142,6 +138,9 @@ DEFAULTS = {"name": "", "desktop": "xfce", "hostname": "debian", "locale": "en_U
             "keyboard_layout": "us",
             "keyboard_variant": "", "timezone": "Etc/UTC", "standard": False,
             "mirror": "http://deb.debian.org/debian", "proxy": ""}
+# The installer preselects "standard system utilities"; the console base keeps
+# that default when the answer is not given.
+CONSOLE_DEFAULTS = {"standard": True}
 PATTERNS = {"locale": r"[a-z]{2,3}(?:_[A-Z]{2})?(?:@[a-z]+)?\.UTF-8",
             "keyboard_layout": r"[a-z]{2,8}", "keyboard_variant": r"[a-z0-9_-]{0,32}",
             "timezone": r"[A-Z][A-Za-z_+-]*(?:/[A-Za-z0-9_+-]+){0,2}",
@@ -252,7 +251,8 @@ def options(values):
     unknown = set(values) - set(DEFAULTS)
     if unknown:
         raise RuntimeError("unknown image options: " + ", ".join(sorted(unknown)))
-    result = {**DEFAULTS, **values}
+    result = {**DEFAULTS, **(CONSOLE_DEFAULTS if values.get("desktop") == CONSOLE else {}),
+              **values}
     monitor_helpers().valid_hostname(result["hostname"])
     if not isinstance(result["name"], str):
         raise RuntimeError("base name must be text")
@@ -294,7 +294,8 @@ def fstab(desktop, root_uuid=None):
 def stealth_support(desktop, config, kernel):
     """bundle.json stealth_support: SATA and NVMe roots only for the console
     base, and only when its kernel builds those controllers in."""
-    return monitor_helpers().stealth_support(config, kernel, root_buses=desktop == CONSOLE)
+    support = monitor_helpers().stealth_support(config, kernel, root_buses=desktop == CONSOLE)
+    return support + ["onboardnic"] if desktop == CONSOLE else support
 
 
 def image_size(desktop):
@@ -372,14 +373,16 @@ sddm)
     ;;
 none)
     # Console base: logins on the serial console and the virtual terminals;
-    # systemd-networkd takes the DHCP address (no NetworkManager).
-    mkdir -p /etc/systemd/network
-    printf '%s' """ + shlex.quote(CONSOLE_NETWORK) + """ > /etc/systemd/network/20-wired.network
-    systemctl enable systemd-networkd.service systemd-resolved.service
+    # ifupdown runs dhcpcd for the onboard NIC, as the installer sets it up.
+    printf '%s' """ + shlex.quote(CONSOLE_INTERFACES) + """ > /etc/network/interfaces
     # /tmp stays on the root disk, as on BusyBox: what a sample drops there is
     # in the VM's disk (Disks tab, disk dumps, checkpoints), not only in RAM.
     systemctl mask tmp.mount
-    printf 'L+ /etc/resolv.conf - - - - ../run/systemd/resolve/stub-resolv.conf\\n' > /etc/tmpfiles.d/resolv.conf
+    # tasksel's language task for the locale (task-english for English).
+    task=$(awk -v l="${locale%%_*}" '/^Task:/ {t = $2} /^Test-lang:/ {for (i = 2; i <= NF; i++) if ($i == l) print t}' /usr/share/tasksel/descs/debian-tasks.desc | head -n 1)
+    if [ -n "$task" ]; then
+        apt-get -o APT::Get::AllowUnauthenticated=false -y install "task-$task"
+    fi
     ;;
 esac
 if [ "$manager" = none ]; then
@@ -392,8 +395,17 @@ if [ -n "$rootuuid" ]; then
 else
     printf '/dev/vda / ext4 defaults 0 1\\n' > /etc/fstab
 fi
-printf '%s' """ + shlex.quote(NETWORK_INTERFACES) + """ > /etc/network/interfaces
+[ "$manager" = none ] || printf '%s' """ + shlex.quote(NETWORK_INTERFACES) + """ > /etc/network/interfaces
 printf '%s\\n' "$hostname" > /etc/hostname
+# Packages configured while the build host's name was the system's take the
+# chosen one (exim4's mail name and local domains).
+if [ -f /etc/exim4/update-exim4.conf.conf ]; then
+    printf 'exim4-config exim4/mailname string %s\\nexim4-config exim4/dc_other_hostnames string %s\\n' "$hostname" "$hostname" | debconf-set-selections
+    printf 'SUBST exim4/dc_other_hostnames fqdn %s\\n' "$hostname" | debconf-communicate exim4-config >/dev/null
+    printf '%s\\n' "$hostname" > /etc/mailname
+    sed -i "s/^dc_other_hostnames=.*/dc_other_hostnames='$hostname'/" /etc/exim4/update-exim4.conf.conf
+    update-exim4.conf
+fi
 printf '127.0.0.1\\tlocalhost\\n127.0.1.1\\t%s\\n\\n::1\\tlocalhost ip6-localhost ip6-loopback\\nff02::1\\tip6-allnodes\\nff02::2\\tip6-allrouters\\n' "$hostname" > /etc/hosts
 printf '%s UTF-8\\n' "$locale" > /etc/locale.gen
 locale-gen
@@ -411,7 +423,13 @@ if [ -n "$audit" ]; then
 fi
 apt-get -o APT::Get::AllowUnauthenticated=false -o Acquire::AllowInsecureRepositories=false check
 dpkg-query -W -f='${binary:Package}\\t${Version}\\t${Architecture}\\t${source:Package}\\t${source:Version}\\t${db:Status-Status}\\n' > /tmp/packages.tsv
-apt-get clean
+if [ "$manager" = none ]; then
+    # The resolver the installer's DHCP lease named; dhcpcd rewrites it at boot.
+    printf 'nameserver 192.168.1.1\\n' > /etc/resolv.conf
+    find /var/cache/apt/archives -name '*.deb' -delete
+else
+    apt-get clean
+fi
 """
 
 
@@ -519,7 +537,7 @@ def mmdebstrap_command(values, tarball, script, provenance, times=None):
                "--variant=" + ("standard" if values["standard"] else "important"),
                "--architectures=amd64", "--format=tar",
                "--include=" + ",".join(packages(values["desktop"])),
-               f'--aptopt=APT::Install-Recommends "{"false" if console else "true"}"',
+               '--aptopt=APT::Install-Recommends "true"',
                "--aptopt=APT::Get::AllowUnauthenticated \"false\"",
                "--aptopt=Acquire::AllowInsecureRepositories \"false\"",
                "--aptopt=Acquire::Retries \"3\""]
@@ -527,7 +545,9 @@ def mmdebstrap_command(values, tarball, script, provenance, times=None):
         command.append(f'--aptopt=Acquire::http::Proxy "{values["proxy"]}"')
         command.append(f'--aptopt=Acquire::https::Proxy "{values["proxy"]}"')
     if console:
-        command += ["--dpkgopt=" + option for option in CONSOLE_DPKG]
+        # The package indexes and apt's caches of them stay, as after the
+        # installer's apt update (the downloaded packages go).
+        command += ["--skip=cleanup/apt/lists", "--skip=cleanup/apt/cache"]
     # Files cross into and out of the new root through mmdebstrap's upload and
     # download hooks, which run as the invoking user: in unshare mode a plain
     # hook runs as the namespace's root, which cannot read or write the
@@ -569,7 +589,7 @@ def mmdebstrap_command(values, tarball, script, provenance, times=None):
 # state, homes); package payloads under /usr and the package indexes are not
 # scanned for host names that could also be ordinary words there.
 LEAK_SCAN = ("etc/", "var/", "root/", "home/")
-LEAK_SKIP = ("var/lib/apt/lists/", "var/cache/", "var/lib/dpkg/info/")
+LEAK_SKIP = ("var/lib/apt/lists/", "var/cache/apt/", "var/lib/dpkg/info/")
 # A Tailscale MagicDNS search domain and WSL's resolver address: the
 # development hosts' resolv.conf, which mmdebstrap copies into the new root.
 HOST_LEAK_PATTERNS = (re.compile(rb"\btail[0-9a-f]{4,}\.ts\.net\b"),
@@ -598,11 +618,26 @@ def host_resolver_patterns(resolv=Path("/etc/resolv.conf")):
     return patterns
 
 
-def check_image_leaks(tarball, patterns=None):
+def host_name_patterns(chosen, names=None):
+    """The build host's own name, which packages configured during the build
+    can record (exim4's mail name): every name but the one the image takes and
+    the installer's default."""
+    if names is None:
+        names = {socket.gethostname(), socket.getfqdn()}
+    return [re.compile(rb"(?i)(?<![A-Za-z0-9-])" + re.escape(name.encode())
+                       + rb"(?![A-Za-z0-9-])")
+            for name in sorted(names)
+            if len(name) >= 4 and name.split(".")[0].lower() not in
+            {chosen.lower(), "debian", "localhost"}]
+
+
+def check_image_leaks(tarball, patterns=None, hostname="debian"):
     """Fail the build when the root filesystem names Antinomie in a path, masks a
-    unit no package ships, or carries the build host's resolver configuration."""
-    patterns = HOST_LEAK_PATTERNS + tuple(host_resolver_patterns() if patterns is None
-                                          else patterns)
+    unit no package ships, or carries the build host's resolver configuration
+    or name."""
+    patterns = HOST_LEAK_PATTERNS + tuple(
+        host_resolver_patterns() + host_name_patterns(hostname) if patterns is None
+        else patterns)
     problems = []
     units, masks = set(), []
     with tarfile.open(tarball) as archive:
@@ -620,7 +655,7 @@ def check_image_leaks(tarball, patterns=None):
                 continue
             data = archive.extractfile(member).read()
             if any(pattern.search(data) for pattern in patterns):
-                problems.append(f"/{name} holds the build host's resolver configuration")
+                problems.append(f"/{name} holds the build host's name or resolver")
     problems += [f"/{mask} masks a unit no package ships" for mask in masks
                  if mask.rsplit("/", 1)[1] not in units]
     if problems:
@@ -686,7 +721,9 @@ def install_timeline(tarball, recorded, rng):
 
 
 def debugfs_path(name):
-    if any(c in name for c in '"\n\\'):
+    """A path as one debugfs argument (inside quotes, a backslash is itself:
+    systemd's escaped unit names keep theirs)."""
+    if any(c in name for c in '"\n'):
         raise RuntimeError(f"unsupported path for debugfs {name!r}")
     return '"/' + name + '"'
 
@@ -817,7 +854,7 @@ def root_image(values, raw, staging, provenance, log, modules=None, cache=None):
             log.flush()
             shutil.copy2(log.name, provenance / "bootstrap.log")
             save_rootfs_cache(cache, tarball, provenance, root, values)
-    check_image_leaks(tarball)
+    check_image_leaks(tarball, hostname=values["hostname"])
     if modules is not None:
         add_modules(tarball, modules)
     size = image_size(values["desktop"])
@@ -894,7 +931,7 @@ def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=Fa
         record = {"built_at": datetime.now(timezone.utc).isoformat(),
                   "options": values, "root": root,
                   "apt_authentication": "Debian signed indexes; insecure repositories disallowed",
-                  "package_install_recommends": values["desktop"] != CONSOLE,
+                  "package_install_recommends": True,
                   "requested_packages": list(packages(values["desktop"])),
                   "package_inventory": "packages.tsv",
                   "kernel_sha256": hashes["kernel"], "kernel_release": release,

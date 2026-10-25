@@ -1502,7 +1502,7 @@ not part of the identity), which the image builders compute:
 | --- | --- |
 | `uefi` | The kernel has `EFI` and `EFI_STUB` and its bzImage holds the EFI stub's bootstrap page claim (0052, found by its warning text) |
 | `sata`, `nvme` | The initrd searches that bus for the root disk and the kernel has `ATA SATA_AHCI SCSI BLK_DEV_SD`, or `BLK_DEV_NVME`, built in (BusyBox and Debian Minimal bases; the minimal kernel profile now builds NVMe in) |
-| `dhcp` | The guest takes its address from DHCP (BusyBox bases now; Debian desktop bases through NetworkManager, Debian Minimal through systemd-networkd) |
+| `dhcp` | The guest takes its address from DHCP (BusyBox bases now; Debian desktop bases through NetworkManager, Debian Minimal through ifupdown and dhcpcd) |
 
 The host offers OVMF when QEMU's firmware descriptors (the user's and
 `/etc/qemu/firmware`, then `share/qemu/firmware` of the QEMU in use and
@@ -2120,11 +2120,23 @@ default VGA console, no `-vga virtio`, no Run in desktop choices, Stop's configu
 timeout without the desktops' 30 s floor). The same recipe builds it
 (`build-debian-image.py` with the installer answer `desktop: "none"`, which
 `build-base.py` sets for the profile; the job offers every Debian answer but
-the desktop): the important set plus `CONSOLE_PACKAGES` without recommends,
-documentation left out by dpkg path excludes that the image drops again,
-systemd-networkd for every wired NIC (`Type=ether`, so any stealth NIC model
-and name), systemd-resolved with a tmpfiles link for `/etc/resolv.conf`,
-`multi-user.target`, `/tmp` on the root disk (`tmp.mount` masked, unlike
+the desktop): what the Debian installer leaves with no desktop chosen, the
+standard task (mmdebstrap's `standard` variant, the default answer for this
+base) with recommends (exim4 on 127.0.0.1:25 as the local MTA, as the
+installer installs it; timesyncd; the ispell dictionaries), the installer's own
+additions in `CONSOLE_PACKAGES` (tasksel, installation-report, discover,
+laptop-detect, eject, initramfs-tools, console-setup, sudo) and tasksel's
+language task for the locale (`task-english` for English), documentation and
+manual pages, the package indexes and apt's caches kept; no curl and no
+systemd-resolved. Networking is the installer's: ifupdown with dhcpcd and an
+`allow-hotplug enp0s25` stanza (`CONSOLE_INTERFACES`). The base's
+`stealth_support` adds `onboardnic`: the app then gives the NIC PCI address
+00:19.0 (`nic_option_for`, the integrated Intel NIC's slot on PC chipsets), so
+udev names it `enp0s25` whatever the model and whichever display or pointer
+devices take the first free slots; `/etc/resolv.conf` is a plain file dhcpcd
+rewrites from the lease. Packages configured during the build that recorded
+the build host's name (exim4's mail name) get the chosen hostname, and the
+leak check also fails on the build host's name. `multi-user.target`, `/tmp` on the root disk (`tmp.mount` masked, unlike
 Debian 13's default tmpfs: dropped files reach the VM's disk, and the
 conformance cases and goldens, which expect BusyBox's on-disk `/tmp`, pass
 unchanged), a 4 GiB root. Its root is found without naming a device: fstab

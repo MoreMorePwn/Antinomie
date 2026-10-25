@@ -25,7 +25,7 @@ mod tests;
 pub use firmware::{Ovmf, find_ovmf};
 pub(crate) use launch::{
     apply, cpu_option, disk_args, escape, firmware_args, machine_options, netdev_option,
-    nic_option, pointer_args, smp_option,
+    nic_option_for, pointer_args, smp_option,
 };
 pub use nat::NatNetwork;
 
@@ -1098,6 +1098,9 @@ pub struct BaseSupport {
     pub nvme: bool,
     /// The guest takes its address from DHCP, so any NAT network works.
     pub dhcp: bool,
+    /// The guest's network configuration names its NIC by the onboard slot
+    /// (`onboardnic`): the NIC goes to PCI 00:19.0, whatever its model.
+    pub onboard_nic: bool,
 }
 
 impl BaseSupport {
@@ -1108,6 +1111,7 @@ impl BaseSupport {
             sata: has("sata"),
             nvme: has("nvme"),
             dhcp: has("dhcp"),
+            onboard_nic: has("onboardnic"),
         }
     }
 
@@ -1118,6 +1122,7 @@ impl BaseSupport {
             sata: true,
             nvme: true,
             dhcp: true,
+            onboard_nic: true,
         }
     }
 }

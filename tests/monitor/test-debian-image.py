@@ -91,10 +91,14 @@ class DebianImageTests(unittest.TestCase):
         self.assertEqual(image.image_size("xfce"), image.IMAGE_SIZE)
         console = image.packages("none")
         self.assertEqual(len(console), len(set(console)))
-        for package in ("systemd-sysv", "systemd-resolved", "sudo", "openssh-client", "python3",
-                        "curl", "wget", "ca-certificates", "iproute2", "procps", "less",
-                        "vim-tiny", "locales", "keyboard-configuration", "tzdata"):
+        # The installer's additions on top of its standard task.
+        for package in ("tasksel", "installation-report", "discover", "laptop-detect", "eject",
+                        "initramfs-tools", "keyboard-configuration", "console-setup", "sudo"):
             self.assertIn(package, console)
+        # Not installed by the installer: curl (wget is standard) and
+        # systemd-resolved (ifupdown and dhcpcd write resolv.conf).
+        for package in ("curl", "systemd-resolved", "systemd-networkd"):
+            self.assertNotIn(package, console)
         for package in console:
             self.assertFalse(package.startswith(("task-", "xserver", "lightdm", "gdm", "sddm",
                                                  "network-manager", "openssh-server",
@@ -103,11 +107,16 @@ class DebianImageTests(unittest.TestCase):
         with patch.object(image.os, "geteuid", return_value=1000):
             command = image.mmdebstrap_command(values, Path("/w/r.tar"), Path("/w/c.sh"),
                                                Path("/w/p"))
-        self.assertIn('--aptopt=APT::Install-Recommends "false"', command)
-        self.assertIn("--variant=important", command)
-        for option in image.CONSOLE_DPKG:
-            self.assertIn("--dpkgopt=" + option, command)
-        self.assertIn("--dpkgopt=path-include=/usr/share/doc/*/copyright", command)
+        # The installer's standard task with recommends, documentation kept,
+        # the package indexes kept.
+        self.assertIn('--aptopt=APT::Install-Recommends "true"', command)
+        self.assertIn("--variant=standard", command)
+        self.assertFalse(any(arg.startswith("--dpkgopt=") for arg in command))
+        self.assertIn("--skip=cleanup/apt/lists", command)
+        self.assertIn("--skip=cleanup/apt/cache", command)
+        unticked = image.mmdebstrap_command(image.options({"desktop": "none", "standard": False}),
+                                            Path("/w/r.tar"), Path("/w/c.sh"), Path("/w/p"))
+        self.assertIn("--variant=important", unticked)
         customize = next(arg for arg in command if "antinomie-customize.sh debian" in arg)
         self.assertRegex(customize, r"Etc/UTC none none [0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-"
                                     r"[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
@@ -117,9 +126,14 @@ class DebianImageTests(unittest.TestCase):
         self.assertFalse(any(arg.startswith("--dpkgopt=") for arg in desktop))
         script = image.customization_script()
         self.assertIn("systemctl set-default multi-user.target", script)
-        self.assertIn("/etc/systemd/network/20-wired.network", script)
-        self.assertIn("systemctl mask tmp.mount", script)
-        self.assertIn("Type=ether", script)
+        # ifupdown and dhcpcd for the onboard NIC, as the installer leaves them.
+        self.assertIn("allow-hotplug enp0s25\niface enp0s25 inet dhcp\n", image.CONSOLE_INTERFACES)
+        self.assertIn("# The primary network interface", image.CONSOLE_INTERFACES)
+        self.assertNotIn("systemd-networkd", script)
+        self.assertNotIn("systemd-resolved.service", script)
+        self.assertNotIn("/etc/systemd/network/", script)
+        self.assertIn("/usr/share/tasksel/descs/debian-tasks.desc", script)
+        self.assertIn("exim4/mailname", script)
         self.assertIn("rm -f /etc/apt/apt.conf.d/99mmdebstrap /etc/dpkg/dpkg.cfg.d/99mmdebstrap",
                       script)
 
@@ -161,12 +175,13 @@ class DebianImageTests(unittest.TestCase):
             buses = "".join(f"CONFIG_{symbol}=y\n" for symbol in
                             ("ATA", "SATA_AHCI", "SCSI", "BLK_DEV_SD", "BLK_DEV_NVME"))
             config.write_text(buses)
-            self.assertEqual(image.stealth_support("none", config, kernel), ["sata", "nvme", "dhcp"])
+            self.assertEqual(image.stealth_support("none", config, kernel),
+                             ["sata", "nvme", "dhcp", "onboardnic"])
             self.assertEqual(image.stealth_support("xfce", config, kernel), ["dhcp"])
             # Debian's own configuration builds the controllers as modules.
             config.write_text(buses.replace("SATA_AHCI=y", "SATA_AHCI=m")
                               .replace("BLK_DEV_NVME=y", "BLK_DEV_NVME=m"))
-            self.assertEqual(image.stealth_support("none", config, kernel), ["dhcp"])
+            self.assertEqual(image.stealth_support("none", config, kernel), ["dhcp", "onboardnic"])
 
     def test_console_manifest_lists_the_requested_packages(self):
         manifest = (REPO / "src/antinomie/packaging/debian-minimal-trixie/packages.txt").read_text()
@@ -178,7 +193,11 @@ class DebianImageTests(unittest.TestCase):
         names = {fields[1].split(":")[0] for fields in resolved}
         self.assertTrue(set(requested) <= names)
         self.assertFalse(names & {"openssh-server", "network-manager", "xserver-xorg-core",
-                                  "qemu-guest-agent", "cloud-init"})
+                                  "qemu-guest-agent", "cloud-init", "curl", "systemd-resolved"})
+        # What the installer's standard task with recommends brings.
+        self.assertTrue({"exim4-daemon-light", "systemd-timesyncd", "man-db", "lsof",
+                         "bind9-dnsutils", "ifupdown", "dhcpcd-base", "task-english",
+                         "tasksel-data"} <= names)
 
     def test_image_names_no_antinomie_file_and_masks_only_shipped_units(self):
         script = image.customization_script()
@@ -211,6 +230,18 @@ class DebianImageTests(unittest.TestCase):
                 archive.addfile(entry)
         return tarball
 
+    def test_build_host_name_is_a_trace_but_not_the_image_name(self):
+        patterns = image.host_name_patterns("debian", {"MikiMiku", "MikiMiku.localdomain",
+                                                       "debian", "localhost", "lab"})
+        self.assertEqual(len(patterns), 2)
+        self.assertTrue(any(p.search(b"mikimiku.localdomain\n") for p in patterns))
+        self.assertFalse(any(p.search(b"debian\n127.0.1.1 lab\n") for p in patterns))
+        self.assertEqual(image.host_name_patterns("lab", {"lab.example"}), [])
+        with tempfile.TemporaryDirectory() as name:
+            tarball = self._tarball(name, {"etc/mailname": "MikiMiku.localdomain\n"})
+            with self.assertRaisesRegex(RuntimeError, "build traces"):
+                image.check_image_leaks(tarball, patterns)
+
     def test_build_fails_on_build_host_traces(self):
         clean = {"etc/hostname": "debian\n",
                  "usr/lib/systemd/system/tmp.mount": "[Mount]\n",
@@ -229,6 +260,8 @@ class DebianImageTests(unittest.TestCase):
               "nameserver 10.255.255.254\nsearch taild7cded.ts.net\n"}, ()),
             ({"etc/resolv.conf": "search tail0a1b2c.ts.net\n"}, ()),
             ({"var/log/installer/syslog": "domain corp.example.org\n"}, ()),
+            # debconf keeps what a package's configuration asked (exim4's FQDN).
+            ({"var/cache/debconf/config.dat": "Value: MikiMiku.taild7cded.ts.net\n"}, ()),
             ({"var/lib/antinomie-image/packages.tsv": "bash\n"}, ()),
             ({"etc/tmpfiles.d/antinomie-resolv.conf": "L+ /etc/resolv.conf\n"}, ()),
             ({}, (("etc/systemd/system/qemu-guest-agent.service", "/dev/null"),)),
@@ -256,6 +289,10 @@ class DebianImageTests(unittest.TestCase):
         self.assertEqual(image.parse_time("1761385040.987654321"), (1761385040, 987654321))
         self.assertEqual(image.parse_time("12.5"), (12, 500000000))
         self.assertIsNone(image.parse_time("-1"))
+        self.assertEqual(image.debugfs_path("usr/lib/systemd/system/system-systemd\\x2dcryptsetup.slice"),
+                         '"/usr/lib/systemd/system/system-systemd\\x2dcryptsetup.slice"')
+        with self.assertRaises(RuntimeError):
+            image.debugfs_path('etc/a"b')
         with tempfile.TemporaryDirectory() as name:
             times = Path(name) / "inode-times"
             times.write_bytes(record)

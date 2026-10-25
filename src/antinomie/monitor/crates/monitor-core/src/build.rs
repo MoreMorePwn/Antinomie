@@ -175,7 +175,7 @@ pub const DEFAULT_MIRROR: &str = "http://deb.debian.org/debian";
 impl BuildOptions {
     /// Defaults for a profile; the Debian locale, keyboard and time zone follow
     /// this host when it has a recognised value, as the Debian installer guesses.
-    pub fn defaults(_kind: Kind) -> Self {
+    pub fn defaults(kind: Kind) -> Self {
         let host = HostLocale::detect();
         Self {
             name: String::new(),
@@ -187,7 +187,9 @@ impl BuildOptions {
             keyboard_layout: host.layout.clone().unwrap_or_else(|| "us".into()),
             keyboard_variant: host.layout.and(host.variant).unwrap_or_default(),
             timezone: host.timezone.unwrap_or_else(|| "Etc/UTC".into()),
-            standard: false,
+            // The installer preselects the standard system utilities; the
+            // console base is that installation with no desktop.
+            standard: kind == Kind::DebianMinimal,
             mirror: DEFAULT_MIRROR.into(),
             proxy: String::new(),
         }
@@ -861,6 +863,7 @@ mod tests {
         options.timezone = "Mars/Olympus".into();
         assert!(options.validate(Kind::DebianMinimal).is_err());
         let options = BuildOptions::defaults(Kind::DebianMinimal);
+        assert!(options.standard && !BuildOptions::defaults(Kind::DebianXfce).standard);
         let minimal = options.job_options(Kind::DebianMinimal);
         let desktop = options.job_options(Kind::DebianXfce);
         assert_eq!(minimal.as_object().unwrap().len(), 9);

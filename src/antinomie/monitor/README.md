@@ -112,22 +112,24 @@ failure and resource limits remain explicit report states.
 
 ## Debian Minimal base
 
-Console-only Debian 13 (trixie, amd64): no desktop, display manager or X, a
-login on the serial console and the virtual terminals, APT, and the
-command-line set listed with reasons in `CONSOLE_PACKAGES`
+Console-only Debian 13 (trixie, amd64) as the Debian installer leaves it with
+no desktop chosen: no display manager or X, a login on the serial console and
+the virtual terminals, the standard system utilities with recommends (exim4 as
+the local MTA, timesyncd, man pages and documentation), the installer's own
+additions listed with reasons in `CONSOLE_PACKAGES`
 (`scripts/build-debian-image.py`; resolved inventory of the verified build in
-`src/antinomie/packaging/debian-minimal-trixie/packages.txt`). It boots on the
-minimal kernel profile it shares with BusyBox (every driver it uses built in,
-no modules), takes its address with systemd-networkd and systemd-resolved, and
-installs without recommends; documentation and manual pages are left out while
-it is bootstrapped (copyright files stay; packages installed later get theirs).
+`src/antinomie/packaging/debian-minimal-trixie/packages.txt`) and the package
+indexes. It boots on the minimal kernel profile it shares with BusyBox (every
+driver it uses built in) and takes its address with ifupdown and dhcpcd on
+`enp0s25`: its VMs' NIC sits at the onboard NIC's PCI slot 00:19.0 whatever
+model the stealth profile picks.
 `/tmp` stays on the root disk (`tmp.mount` masked), as on BusyBox, so files a
 sample drops there are in the VM's disk for the Disks tab and disk dumps. The
 root is mounted by filesystem UUID, so a stealth profile may put the disk on
 virtio, SATA (AHCI) or NVMe.
 The account, sudo, locked root, masked SSH and provenance are as on the desktop
 bases. Minimum resources are 1024 MiB RAM and 4 GiB disk; the bundle is about
-350 MB (`base.qcow2` about 320 MB of a 4 GiB root). **Build base…** offers it
+700 MB (`base.qcow2` about 690 MB of a 4 GiB root). **Build base…** offers it
 as **Debian 13 (minimal, console)**. From a checkout:
 
 ```bash
