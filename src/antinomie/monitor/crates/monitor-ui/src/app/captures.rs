@@ -196,6 +196,12 @@ impl ProcessPicker {
                 .map(|index| processes[index])
                 .collect();
                 ui.weak(format!("{} / {total} processes in this page", processes.len()));
+                if processes.is_empty() && self.pending.is_none() {
+                    crate::theme::empty_state(
+                        ui,
+                        if total == 0 { "No guest processes listed" } else { "No process matches the filter" },
+                    );
+                }
                 if self.selected.as_ref().is_some_and(|selected| !processes.iter().any(|process| &process.identity == selected)) { self.selected = None; }
                 // Table body yields space to the selection summary, final actions,
                 // its header and horizontal scrollbar at every font size.

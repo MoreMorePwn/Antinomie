@@ -231,16 +231,21 @@ pub(super) fn show(
     let structure_columns: Vec<(&str, Column)> = match state.scope {
         Some(scope) if kind == AnalysisKind::Structures => records::columns(kind, scope, false)
             .iter()
-            .map(|column| {
+            .enumerate()
+            .map(|(at, column)| {
                 let width = if *column == records::Column::Value {
                     300.0
                 } else {
                     140.0
                 };
-                (
-                    column.label(),
-                    Column::initial(width).at_least(70.0).clip(true),
-                )
+                // The last column takes what the others leave, so the table
+                // spans the pane.
+                let spec = if at + 1 == records::columns(kind, scope, false).len() {
+                    Column::remainder().at_least(70.0).clip(true)
+                } else {
+                    Column::initial(width).at_least(70.0).clip(true)
+                };
+                (column.label(), spec)
             })
             .collect(),
         _ => Vec::new(),

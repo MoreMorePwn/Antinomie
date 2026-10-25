@@ -270,8 +270,10 @@ impl CoreView {
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
                 if self.acquired.is_empty() && self.records.is_empty() && self.manual.is_empty() {
-                    ui.add_space(8.0);
-                    ui.add(egui::Label::new("No core dumps. Dump a live process, enable Core Dump on Exit in Run program, or import a core.").wrap());
+                    crate::theme::empty_state(
+                        ui,
+                        "No core dumps. Dump a live process, enable Core Dump on Exit in Run program, or import a core.",
+                    );
                 }
                 for (index, core) in self.manual.iter().enumerate() {
                     if !manual_shown[index] { continue; }
