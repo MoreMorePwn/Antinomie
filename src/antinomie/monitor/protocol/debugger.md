@@ -290,8 +290,8 @@ parent hits while the child runs is missed. In non-stop gdb steps over a
 breakpoint itself (the engine does not hold a thread while it does). `rwatch` is
 unsupported. Direct reads of the program's own code still see a software
 breakpoint's byte while the group runs (use `hbreak`). A thread that reaches a
-breakpoint byte just after a `STOP_RUN` took it out gets `SIGTRAP`. The Quilt view
-of the series stops at 0038; the guest patches are `src/antinomie/core/6.12`.
+breakpoint byte just after a `STOP_RUN` took it out gets `SIGTRAP`. The engine is
+guest patch 0011 of `src/antinomie/core/6.12`.
 A panel watchpoint covers 8 bytes from its address.
 
 Fixed in Phase 3 (they were P2 limits): threads created while the group runs get

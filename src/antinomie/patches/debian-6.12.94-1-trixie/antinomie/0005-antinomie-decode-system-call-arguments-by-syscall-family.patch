@@ -1,0 +1,4052 @@
+Description: antinomie: decode system call arguments by syscall family
+ The recorder alone captures a pointer argument only when it knows the
+ extent of what it points to; every other pointer is recorded as an
+ address with a no-decoder gap. Add structured decoders for the families
+ whose memory is the interesting part of the call, written against the
+ pinned kernel's own handlers so that what is captured is what the
+ kernel read or wrote: message and socket calls (including socket
+ options by level and name, mmsg and ancillary data), extended
+ attributes, signal masks and signal frames (rt_sigreturn with its FPU
+ and xstate, uretprobe), poll, select and epoll, futex, sched
+ attributes, clone and clone3, process_vm_readv/writev (remote segments
+ are address-only: the other process's memory is never read), System V
+ IPC and message queues, memory policies, seccomp and classic BPF
+ programs, file handles, the new mount API and mount, quotactl,
+ kexec_load, rseq, capabilities, Landlock, LSM attributes, fcntl,
+ arch_prctl, prctl, ptrace, keyctl, sysfs and bpf (the attribute block
+ and each command's nested buffers, with sizes from the map object).
+ .
+ A decoder runs at entry and at exit, may own a call's whole capture,
+ and returns the pointer arguments it recognised so the recorder does
+ not report them as gaps. Selectors and layouts it does not know keep an
+ explicit no-decoder gap; writes the kernel makes later, in the child or
+ at its exit (clone's child tid, a robust list, rseq updates), are marked
+ asynchronous rather than guessed. capture_api.h is the interface the
+ recorder gives decoders: fields, strings, loss, and per-call state kept
+ from entry to exit; the status codes move there from recorder.c.
+ .
+ Hooked kernel file:
+ - ipc/sem.c hands its own copy of a semctl GETALL or SETALL array to
+   the recorder (ant_monitor_operand()), because only the kernel knows
+   the array's length (sem_nsems). The copy is bounded and recorded at
+   exit as kernel-imported, only after the copy to user succeeded.
+ .
+ Contract: the field layouts are those of revision 17; a host that does
+ not know a key shows it as an unknown field.
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-10-26
+
+---
+diff --git a/include/linux/antinomie_monitor.h b/include/linux/antinomie_monitor.h
+index fe40e30..8e0b267 100644
+--- a/include/linux/antinomie_monitor.h
++++ b/include/linux/antinomie_monitor.h
+@@ -21,6 +21,8 @@ int ant_monitor_launch(const char *path, char **argv, char **envp);
+ void ant_monitor_stats(void *out);
+ int ant_monitor_run_status(u64 root_cookie, void *out);
+ void ant_monitor_run_stopped(u64 root_cookie);
++void ant_monitor_operand(u8 arg, const char *key, const char *layout, const void *data,
++			 size_t size);
+ #else
+ static inline void ant_monitor_enter(struct pt_regs *regs, long nr) {}
+ static inline void ant_monitor_exit(struct pt_regs *regs) {}
+@@ -30,5 +32,7 @@ static inline void ant_monitor_exec(void) {}
+ static inline void ant_monitor_exec_names(const struct linux_binprm *bprm) {}
+ static inline void ant_monitor_task_exit(void) {}
+ static inline void ant_monitor_release(struct task_struct *task) {}
++static inline void ant_monitor_operand(u8 arg, const char *key, const char *layout,
++				       const void *data, size_t size) {}
+ #endif
+ #endif
+diff --git a/ipc/sem.c b/ipc/sem.c
+index a39cdc7..d9fe053 100644
+--- a/ipc/sem.c
++++ b/ipc/sem.c
+@@ -86,6 +86,7 @@
+ #include <linux/ipc_namespace.h>
+ #include <linux/sched/wake_q.h>
+ #include <linux/nospec.h>
++#include <linux/antinomie_monitor.h>
+ #include <linux/rhashtable.h>
+ 
+ #include <linux/uaccess.h>
+@@ -1468,6 +1469,10 @@ static int semctl_main(struct ipc_namespace *ns, int semid, int semnum,
+ 		err = 0;
+ 		if (copy_to_user(array, sem_io, nsems*sizeof(ushort)))
+ 			err = -EFAULT;
++		else
++			ant_monitor_operand(3, "arg3.array",
++					    "linux-6.12.94/x86_64/unsigned_short[]",
++					    sem_io, nsems * sizeof(ushort));
+ 		goto out_free;
+ 	}
+ 	case SETALL:
+@@ -1495,6 +1500,8 @@ static int semctl_main(struct ipc_namespace *ns, int semid, int semnum,
+ 			err = -EFAULT;
+ 			goto out_free;
+ 		}
++		ant_monitor_operand(3, "arg3.array", "linux-6.12.94/x86_64/unsigned_short[]",
++				    sem_io, nsems * sizeof(ushort));
+ 
+ 		for (i = 0; i < nsems; i++) {
+ 			if (sem_io[i] > SEMVMX) {
+diff --git a/kernel/antinomie/Makefile b/kernel/antinomie/Makefile
+index 2cf3f23..53436b2 100644
+--- a/kernel/antinomie/Makefile
++++ b/kernel/antinomie/Makefile
+@@ -1,2 +1,2 @@
+-obj-y += bootstrap.o guest.o recorder.o control.o
++obj-y += bootstrap.o guest.o recorder.o control.o native_capture.o
+ obj-y += observer.o
+diff --git a/kernel/antinomie/capture_api.h b/kernel/antinomie/capture_api.h
+new file mode 100644
+index 0000000..6bde7c3
+--- /dev/null
++++ b/kernel/antinomie/capture_api.h
+@@ -0,0 +1,32 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef _ANTINOMIE_CAPTURE_API_H
++#define _ANTINOMIE_CAPTURE_API_H
++
++#include <linux/types.h>
++
++struct ant_task;
++
++enum ant_status {
++	ANT_COMPLETE, ANT_COPY_FAULT, ANT_INVALID_EXTENT, ANT_UNKNOWN_EXTENT,
++	ANT_NO_DECODER, ANT_NULL_POINTER, ANT_ADDRESS_ONLY, ANT_ASYNC_UNOBSERVED,
++	ANT_RESOURCE_EXHAUSTED, ANT_ABORTED_ON_LOSS, ANT_CONTEXT_MISSING,
++	ANT_NOT_WRITTEN, ANT_NOT_RESIDENT,
++};
++
++/* A native family returns this bit when it owns the whole syscall capture,
++ * plus bits 0..5 for recognized pointer arguments across both phases.
++ */
++#define ANT_CAPTURE_OWNED BIT(7)
++
++void ant_capture_field(struct ant_task *ctx, u8 arg_index, const char *key,
++		       const char *layout, u16 encoding, u64 address,
++		       const void *snapshot, u64 object_size, u64 declared_size,
++		       enum ant_status status);
++u64 ant_capture_string(struct ant_task *ctx, u8 arg_index, const char *key,
++		       u64 address, u64 ceiling);
++bool ant_capture_lost(struct ant_task *ctx);
++void *ant_capture_state(struct ant_task *ctx);
++void ant_capture_set_state(struct ant_task *ctx, void *state,
++			   void (*release)(void *));
++
++#endif
+diff --git a/kernel/antinomie/native_capture.c b/kernel/antinomie/native_capture.c
+new file mode 100644
+index 0000000..edb8c18
+--- /dev/null
++++ b/kernel/antinomie/native_capture.c
+@@ -0,0 +1,3641 @@
++// SPDX-License-Identifier: GPL-2.0-only
++#include <linux/bpf.h>
++#include <linux/fs.h>
++#include <linux/fdtable.h>
++#include <linux/exportfs.h>
++#include <linux/limits.h>
++#include <linux/ipc_namespace.h>
++#include <linux/module.h>
++#include <linux/msg.h>
++#include <linux/nsproxy.h>
++#include <linux/pid_namespace.h>
++#include <linux/prctl.h>
++#include <linux/quota.h>
++#include <linux/dqblk_xfs.h>
++#include <linux/ptrace.h>
++#include <linux/regset.h>
++#include <linux/sched.h>
++#include <linux/sem.h>
++#include <linux/shm.h>
++#include <linux/syslog.h>
++#include <linux/signal.h>
++#include <linux/slab.h>
++#include <linux/socket.h>
++#include <linux/in.h>
++#include <linux/in6.h>
++#include <linux/ipv6.h>
++#include <linux/net_tstamp.h>
++#include <linux/tcp.h>
++#include <net/tcp.h>
++#include <linux/time.h>
++#include <linux/uaccess.h>
++#include <linux/uio.h>
++#include <linux/utsname.h>
++#include <uapi/linux/resource.h>
++#include <uapi/linux/capability.h>
++#include <uapi/linux/eventpoll.h>
++#include <uapi/linux/futex.h>
++#include <uapi/linux/keyctl.h>
++#include <uapi/linux/kexec.h>
++#include <uapi/linux/rseq.h>
++#include <uapi/linux/filter.h>
++#include <uapi/linux/landlock.h>
++#include <uapi/linux/lsm.h>
++#include <uapi/linux/mman.h>
++#include <uapi/linux/mount.h>
++#include <uapi/linux/mqueue.h>
++#include <uapi/linux/poll.h>
++#include <uapi/linux/openat2.h>
++#include <uapi/linux/perf_event.h>
++#include <uapi/linux/reboot.h>
++#include <uapi/linux/sched/types.h>
++#include <uapi/linux/shm.h>
++#include <uapi/linux/seccomp.h>
++#include <uapi/linux/stat.h>
++#include <uapi/linux/sysinfo.h>
++#include <uapi/linux/time_types.h>
++#include <uapi/linux/times.h>
++#include <uapi/linux/timex.h>
++#include <uapi/linux/utime.h>
++#include <uapi/linux/xattr.h>
++#include <asm/stat.h>
++#include <asm/statfs.h>
++#include <asm/ldt.h>
++#include <asm/prctl.h>
++#include <asm/user.h>
++#include <asm/fpu/types.h>
++#include <asm/sigframe.h>
++
++#include "capture_api.h"
++#include "native_capture.h"
++
++enum ant_phase_rule {
++	ANT_INPUT, ANT_OUTPUT_ZERO, ANT_OUTPUT_POSITIVE, ANT_OUTPUT_NONNEGATIVE,
++	ANT_OUTPUT_INTERRUPTED, ANT_BOTH_NONNEGATIVE,
++};
++
++enum ant_length_rule {
++	ANT_FIXED, ANT_PATH, ANT_BUFFER_INPUT, ANT_BUFFER_OUTPUT,
++	ANT_GROUP_INPUT, ANT_GROUP_OUTPUT,
++};
++
++struct ant_field_rule {
++	u16 nr;
++	u8 arg_index;
++	u8 phase;
++	u8 length;
++	u8 length_arg;
++	u64 object_size;
++	const char *layout;
++};
++
++#define LAYOUT(name) "linux-6.12.94/x86_64/" name
++#define PATH_FIELD(n, a) { n, a, ANT_INPUT, ANT_PATH, 0, PATH_MAX, "" }
++#define STRING_FIELD(n, a, max) { n, a, ANT_INPUT, ANT_PATH, 0, max, "" }
++#define FIXED_FIELD(n, a, p, t, l) { n, a, p, ANT_FIXED, 0, sizeof(t), LAYOUT(l) }
++#define INPUT_FIELD(n, a, t, l) FIXED_FIELD(n, a, ANT_INPUT, t, l)
++#define OUTPUT_FIELD(n, a, t, l) FIXED_FIELD(n, a, ANT_OUTPUT_ZERO, t, l)
++#define BUFFER_FIELD(n, a, p, k, len, ceiling) { n, a, p, k, len, ceiling, "" }
++
++/* Extents are native Linux layouts or syscall-defined lengths. Output-only
++ * buffers never follow a pointer from an exit-time descriptor.
++ */
++static const struct ant_field_rule field_rules[] = {
++	PATH_FIELD(6, 0), OUTPUT_FIELD(6, 1, struct stat, "stat"),
++	PATH_FIELD(21, 0), OUTPUT_FIELD(22, 0, int[2], "int[2]"),
++	INPUT_FIELD(35, 0, struct __kernel_timespec, "timespec"),
++	FIXED_FIELD(35, 1, ANT_OUTPUT_INTERRUPTED, struct __kernel_timespec, "timespec"),
++	OUTPUT_FIELD(36, 1, struct __kernel_old_itimerval, "itimerval"),
++	INPUT_FIELD(38, 1, struct __kernel_old_itimerval, "itimerval"),
++	OUTPUT_FIELD(38, 2, struct __kernel_old_itimerval, "itimerval"),
++	FIXED_FIELD(40, 2, ANT_BOTH_NONNEGATIVE, loff_t, "loff_t"),
++	FIXED_FIELD(61, 1, ANT_OUTPUT_POSITIVE, int, "wait_status"),
++	FIXED_FIELD(61, 3, ANT_OUTPUT_POSITIVE, struct rusage, "rusage"),
++	OUTPUT_FIELD(63, 0, struct new_utsname, "utsname"),
++	PATH_FIELD(76, 0), PATH_FIELD(80, 0), PATH_FIELD(83, 0),
++	PATH_FIELD(84, 0), PATH_FIELD(85, 0), PATH_FIELD(86, 0), PATH_FIELD(86, 1),
++	PATH_FIELD(88, 0), PATH_FIELD(88, 1), PATH_FIELD(89, 0),
++	PATH_FIELD(90, 0), PATH_FIELD(92, 0), PATH_FIELD(94, 0),
++	OUTPUT_FIELD(96, 0, struct __kernel_old_timeval, "timeval"),
++	OUTPUT_FIELD(96, 1, struct timezone, "timezone"),
++	OUTPUT_FIELD(97, 1, struct rlimit, "rlimit"),
++	OUTPUT_FIELD(98, 1, struct rusage, "rusage"),
++	OUTPUT_FIELD(99, 0, struct sysinfo, "sysinfo"),
++	FIXED_FIELD(100, 0, ANT_OUTPUT_NONNEGATIVE, struct tms, "tms"),
++	FIXED_FIELD(247, 2, ANT_OUTPUT_ZERO, siginfo_t, "siginfo_t"),
++	OUTPUT_FIELD(247, 4, struct rusage, "rusage"),
++	OUTPUT_FIELD(118, 0, u32, "uid_t"), OUTPUT_FIELD(118, 1, u32, "uid_t"),
++	OUTPUT_FIELD(118, 2, u32, "uid_t"), OUTPUT_FIELD(120, 0, u32, "gid_t"),
++	OUTPUT_FIELD(120, 1, u32, "gid_t"), OUTPUT_FIELD(120, 2, u32, "gid_t"),
++	PATH_FIELD(132, 0), INPUT_FIELD(132, 1, struct utimbuf, "utimbuf"),
++	PATH_FIELD(133, 0), PATH_FIELD(137, 0),
++	OUTPUT_FIELD(136, 1, struct ustat, "ustat"),
++	OUTPUT_FIELD(137, 1, struct statfs, "statfs"),
++	OUTPUT_FIELD(138, 1, struct statfs, "statfs"),
++	INPUT_FIELD(142, 1, struct sched_param, "sched_param"),
++	OUTPUT_FIELD(143, 1, struct sched_param, "sched_param"),
++	INPUT_FIELD(144, 2, struct sched_param, "sched_param"),
++	OUTPUT_FIELD(148, 1, struct __kernel_timespec, "timespec"),
++	PATH_FIELD(155, 0), PATH_FIELD(155, 1),
++	INPUT_FIELD(160, 1, struct rlimit, "rlimit"), PATH_FIELD(161, 0),
++	PATH_FIELD(163, 0),
++	FIXED_FIELD(159, 0, ANT_BOTH_NONNEGATIVE, struct __kernel_timex, "timex"),
++	INPUT_FIELD(164, 0, struct __kernel_old_timeval, "timeval"),
++	INPUT_FIELD(164, 1, struct timezone, "timezone"),
++	PATH_FIELD(166, 0), PATH_FIELD(167, 0), PATH_FIELD(168, 0),
++	STRING_FIELD(176, 0, MODULE_NAME_LEN),
++	FIXED_FIELD(201, 0, ANT_OUTPUT_NONNEGATIVE, __kernel_old_time_t, "time_t"),
++	INPUT_FIELD(222, 1, struct sigevent, "sigevent"),
++	OUTPUT_FIELD(222, 2, int, "timer_t"),
++	INPUT_FIELD(223, 2, struct __kernel_itimerspec, "itimerspec"),
++	OUTPUT_FIELD(223, 3, struct __kernel_itimerspec, "itimerspec"),
++	OUTPUT_FIELD(224, 1, struct __kernel_itimerspec, "itimerspec"),
++	INPUT_FIELD(227, 1, struct __kernel_timespec, "timespec"),
++	OUTPUT_FIELD(228, 1, struct __kernel_timespec, "timespec"),
++	OUTPUT_FIELD(229, 1, struct __kernel_timespec, "timespec"),
++	INPUT_FIELD(230, 2, struct __kernel_timespec, "timespec"),
++	FIXED_FIELD(230, 3, ANT_OUTPUT_INTERRUPTED, struct __kernel_timespec, "timespec"),
++	PATH_FIELD(235, 0), INPUT_FIELD(235, 1, struct __kernel_old_timeval[2], "timeval[2]"),
++	PATH_FIELD(241, 0), PATH_FIELD(254, 1),
++	PATH_FIELD(240, 0), INPUT_FIELD(240, 3, struct mq_attr, "mq_attr"),
++	INPUT_FIELD(245, 1, struct mq_attr, "mq_attr"),
++	OUTPUT_FIELD(245, 2, struct mq_attr, "mq_attr"),
++	PATH_FIELD(258, 1), PATH_FIELD(259, 1), PATH_FIELD(260, 1),
++	PATH_FIELD(261, 1), INPUT_FIELD(261, 2, struct __kernel_old_timeval[2], "timeval[2]"),
++	PATH_FIELD(262, 1), OUTPUT_FIELD(262, 2, struct stat, "stat"),
++	PATH_FIELD(263, 1), PATH_FIELD(264, 1), PATH_FIELD(264, 3),
++	PATH_FIELD(265, 1), PATH_FIELD(265, 3), PATH_FIELD(266, 0), PATH_FIELD(266, 2),
++	PATH_FIELD(267, 1), PATH_FIELD(268, 1), PATH_FIELD(269, 1),
++	FIXED_FIELD(275, 1, ANT_BOTH_NONNEGATIVE, loff_t, "loff_t"),
++	FIXED_FIELD(275, 3, ANT_BOTH_NONNEGATIVE, loff_t, "loff_t"),
++	PATH_FIELD(280, 1), INPUT_FIELD(280, 2, struct __kernel_timespec[2], "timespec[2]"),
++	INPUT_FIELD(286, 2, struct __kernel_itimerspec, "itimerspec"),
++	OUTPUT_FIELD(286, 3, struct __kernel_itimerspec, "itimerspec"),
++	OUTPUT_FIELD(287, 1, struct __kernel_itimerspec, "itimerspec"),
++	OUTPUT_FIELD(274, 1, u64, "robust_list_head_pointer"),
++	OUTPUT_FIELD(274, 2, size_t, "size_t"),
++	OUTPUT_FIELD(293, 0, int[2], "int[2]"), PATH_FIELD(301, 4),
++	INPUT_FIELD(302, 2, struct rlimit64, "rlimit64"),
++	OUTPUT_FIELD(302, 3, struct rlimit64, "rlimit64"),
++	OUTPUT_FIELD(309, 0, u32, "unsigned_int"), OUTPUT_FIELD(309, 1, u32, "unsigned_int"),
++	STRING_FIELD(313, 1, SSIZE_MAX), PATH_FIELD(316, 1), PATH_FIELD(316, 3),
++	FIXED_FIELD(305, 1, ANT_BOTH_NONNEGATIVE, struct __kernel_timex, "timex"),
++	STRING_FIELD(319, 0, NAME_MAX - (sizeof("memfd:") - 1) + 1),
++	FIXED_FIELD(326, 1, ANT_BOTH_NONNEGATIVE, loff_t, "loff_t"),
++	FIXED_FIELD(326, 3, ANT_BOTH_NONNEGATIVE, loff_t, "loff_t"),
++	PATH_FIELD(332, 1), OUTPUT_FIELD(332, 4, struct statx, "statx"),
++	PATH_FIELD(428, 1), PATH_FIELD(429, 1), PATH_FIELD(429, 3),
++	STRING_FIELD(430, 0, PAGE_SIZE), PATH_FIELD(433, 1), PATH_FIELD(439, 1),
++	PATH_FIELD(452, 1),
++	INPUT_FIELD(451, 1, struct cachestat_range, "cachestat_range"),
++	OUTPUT_FIELD(451, 2, struct cachestat, "cachestat"),
++	BUFFER_FIELD(320, 3, ANT_INPUT, ANT_BUFFER_INPUT, 2, U64_MAX),
++	STRING_FIELD(248, 0, 32), STRING_FIELD(248, 1, 4096),
++	STRING_FIELD(249, 0, 32), STRING_FIELD(249, 1, 4096),
++	STRING_FIELD(249, 2, PAGE_SIZE),
++	BUFFER_FIELD(248, 2, ANT_INPUT, ANT_BUFFER_INPUT, 3, 1024 * 1024 - 1),
++	BUFFER_FIELD(175, 0, ANT_INPUT, ANT_BUFFER_INPUT, 1, U64_MAX),
++	STRING_FIELD(175, 2, SSIZE_MAX),
++	BUFFER_FIELD(17, 1, ANT_OUTPUT_NONNEGATIVE, ANT_BUFFER_OUTPUT, 2, MAX_RW_COUNT),
++	BUFFER_FIELD(18, 1, ANT_INPUT, ANT_BUFFER_INPUT, 2, MAX_RW_COUNT),
++	BUFFER_FIELD(78, 1, ANT_OUTPUT_NONNEGATIVE, ANT_BUFFER_OUTPUT, 2, U32_MAX),
++	BUFFER_FIELD(79, 0, ANT_OUTPUT_NONNEGATIVE, ANT_BUFFER_OUTPUT, 1, U64_MAX),
++	BUFFER_FIELD(89, 1, ANT_OUTPUT_NONNEGATIVE, ANT_BUFFER_OUTPUT, 2, INT_MAX),
++	BUFFER_FIELD(217, 1, ANT_OUTPUT_NONNEGATIVE, ANT_BUFFER_OUTPUT, 2, U32_MAX),
++	BUFFER_FIELD(267, 2, ANT_OUTPUT_NONNEGATIVE, ANT_BUFFER_OUTPUT, 3, INT_MAX),
++	BUFFER_FIELD(318, 0, ANT_OUTPUT_NONNEGATIVE, ANT_BUFFER_OUTPUT, 1, MAX_RW_COUNT),
++	BUFFER_FIELD(115, 1, ANT_OUTPUT_NONNEGATIVE, ANT_GROUP_OUTPUT, 0, NGROUPS_MAX),
++	BUFFER_FIELD(116, 1, ANT_INPUT, ANT_GROUP_INPUT, 0, NGROUPS_MAX),
++};
++
++static bool phase_matches(u8 phase, bool output, long result)
++{
++	if (!output)
++		return phase == ANT_INPUT || phase == ANT_BOTH_NONNEGATIVE;
++	switch (phase) {
++	case ANT_OUTPUT_ZERO:
++		return result == 0;
++	case ANT_OUTPUT_POSITIVE:
++		return result > 0;
++	case ANT_OUTPUT_NONNEGATIVE: case ANT_BOTH_NONNEGATIVE:
++		return result >= 0;
++	case ANT_OUTPUT_INTERRUPTED:
++		return result == -EINTR;
++	default:
++		return false;
++	}
++}
++
++static void capture_rule(struct ant_task *ctx, const struct ant_field_rule *rule,
++			 const u64 args[6], bool output, long result)
++{
++	u64 size = rule->object_size, declared = size;
++	enum ant_status status = ANT_COMPLETE;
++	char key[64];
++
++	if (!phase_matches(rule->phase, output, result))
++		return;
++	if (rule->nr == 230 && rule->arg_index == 3 && (args[1] & TIMER_ABSTIME))
++		return;
++	scnprintf(key, sizeof(key), "arg%u.%s", rule->arg_index,
++		  rule->length == ANT_PATH ? "path" : "data");
++	if (rule->length == ANT_PATH) {
++		ant_capture_string(ctx, rule->arg_index, key,
++				   args[rule->arg_index], size);
++		return;
++	}
++	if (rule->length != ANT_FIXED) {
++		declared = args[rule->length_arg];
++		if (rule->object_size == U32_MAX)
++			declared = (u32)declared;
++		else if (rule->object_size == INT_MAX ||
++			 rule->length == ANT_GROUP_INPUT || rule->length == ANT_GROUP_OUTPUT)
++			declared = (s32)declared < 0 ? U64_MAX : (u32)declared;
++		size = min(declared, rule->object_size);
++		if (rule->length == ANT_BUFFER_OUTPUT || rule->length == ANT_GROUP_OUTPUT)
++			size = declared ? min_t(u64, size, result) : 0;
++		if (declared > rule->object_size && rule->object_size != MAX_RW_COUNT)
++			status = ANT_INVALID_EXTENT;
++		if (rule->length == ANT_GROUP_INPUT || rule->length == ANT_GROUP_OUTPUT) {
++			size *= sizeof(u32);
++			declared = declared > NGROUPS_MAX ? U64_MAX : declared * sizeof(u32);
++		}
++	}
++	ant_capture_field(ctx, rule->arg_index, key, rule->layout,
++			  rule->length == ANT_FIXED ? 3 : 1,
++			  args[rule->arg_index], NULL, size, declared, status);
++}
++
++struct ant_vector_state {
++	u32 iov_count;
++	struct iovec iov[];
++};
++
++struct ant_message_state {
++	struct user_msghdr entry;
++	struct ant_vector_state *vector;
++};
++
++struct ant_address_state {
++	int capacity;
++};
++
++struct ant_mmsg_state {
++	u32 capacity;
++	u32 saved_count;
++	struct ant_message_state *messages[];
++};
++
++static void release_allocation(void *owned)
++{
++	kfree(owned);
++}
++
++static void capture_optional(struct ant_task *ctx, u8 arg, u64 address,
++			     const char *key, const char *layout, u64 size)
++{
++	if (address && !ant_capture_lost(ctx))
++		ant_capture_field(ctx, arg, key, layout, 3, address, NULL,
++				  size, size, ANT_COMPLETE);
++}
++
++static struct ant_vector_state *save_vector(struct ant_task *ctx, u8 arg,
++					    u64 address, u64 count, const char *key)
++{
++	struct ant_vector_state *state = NULL;
++	enum ant_status status = ANT_COMPLETE;
++	u64 size = count <= UIO_MAXIOV ? count * sizeof(struct iovec) : U64_MAX;
++	u32 index;
++
++	if (count > UIO_MAXIOV) {
++		status = ANT_INVALID_EXTENT;
++	} else {
++		state = kzalloc(struct_size(state, iov, count), GFP_NOWAIT);
++		if (!state) {
++			status = ANT_RESOURCE_EXHAUSTED;
++		} else if (count && copy_from_user_nofault(state->iov,
++				(void __user *)(unsigned long)address, size)) {
++			status = address ? ANT_COPY_FAULT : ANT_NULL_POINTER;
++		} else {
++			state->iov_count = count;
++			for (index = 0; index < count; index++)
++				if (state->iov[index].iov_len > SSIZE_MAX) {
++					status = ANT_INVALID_EXTENT;
++					break;
++				}
++		}
++	}
++	ant_capture_field(ctx, arg, key, LAYOUT("iovec[]"), 3, address,
++			  state ? state->iov : NULL, size, size, status);
++	if (status != ANT_COMPLETE) {
++		kfree(state);
++		return NULL;
++	}
++	return state;
++}
++
++static void vector_data(struct ant_task *ctx, struct ant_vector_state *state,
++			u8 arg, const char *prefix, u64 remaining)
++{
++	u32 index;
++	char key[96];
++
++	for (index = 0; index < state->iov_count && !ant_capture_lost(ctx); index++) {
++		u64 size = min_t(u64, state->iov[index].iov_len, remaining);
++
++		scnprintf(key, sizeof(key), "%s[%u].data", prefix, index);
++		ant_capture_field(ctx, arg, key, "", 1,
++				  (unsigned long)state->iov[index].iov_base, NULL,
++				  size, state->iov[index].iov_len, ANT_COMPLETE);
++		remaining -= size;
++	}
++}
++
++static void capture_vector(struct ant_task *ctx, const u64 args[6],
++			   bool output, long result, bool input)
++{
++	struct ant_vector_state *state;
++
++	if (ant_capture_lost(ctx))
++		return;
++	if (!output) {
++		state = save_vector(ctx, 1, args[1], args[2], "arg1.iov");
++		ant_capture_set_state(ctx, state, release_allocation);
++		if (state && input)
++			vector_data(ctx, state, 1, "arg1.iov", MAX_RW_COUNT);
++	} else if (!input && result >= 0) {
++		state = ant_capture_state(ctx);
++		if (!state)
++			ant_capture_field(ctx, 1, "arg1.iov.output", "", 1,
++					  args[1], NULL, U64_MAX, U64_MAX,
++					  ANT_CONTEXT_MISSING);
++		else
++			vector_data(ctx, state, 1, "arg1.iov", min_t(u64, result, MAX_RW_COUNT));
++	}
++}
++
++static void release_message(void *owned)
++{
++	struct ant_message_state *state = owned;
++
++	kfree(state->vector);
++	kfree(state);
++}
++
++static void release_mmsg(void *owned)
++{
++	struct ant_mmsg_state *state = owned;
++	u32 index;
++
++	for (index = 0; index < state->saved_count; index++)
++		if (state->messages[index])
++			release_message(state->messages[index]);
++	kfree(state);
++}
++
++static void capture_mmsg_payload(struct ant_task *ctx, struct ant_message_state *state,
++				 const char *prefix, const struct user_msghdr *observed,
++				 u64 transferred, bool output)
++{
++	char key[64];
++	u64 size;
++
++	scnprintf(key, sizeof(key), "%s.iov", prefix);
++	if (state->vector)
++		vector_data(ctx, state->vector, 1, key, output ?
++			    min_t(u64, transferred, MAX_RW_COUNT) : MAX_RW_COUNT);
++	else if (output)
++		ant_capture_field(ctx, 1, key, "", 1,
++				  (unsigned long)state->entry.msg_iov, NULL,
++				  U64_MAX, U64_MAX, ANT_CONTEXT_MISSING);
++	if (ant_capture_lost(ctx))
++		return;
++	if (state->entry.msg_name) {
++		size = state->entry.msg_namelen < 0 || (output && observed->msg_namelen < 0) ?
++			U64_MAX : min_t(u64, sizeof(struct sockaddr_storage),
++			output ? min(state->entry.msg_namelen, observed->msg_namelen) :
++			state->entry.msg_namelen);
++		scnprintf(key, sizeof(key), "%s.name", prefix);
++		ant_capture_field(ctx, 1, key, LAYOUT("sockaddr"), 3,
++				  (unsigned long)state->entry.msg_name, NULL, size,
++				  state->entry.msg_namelen,
++				  size == U64_MAX ? ANT_INVALID_EXTENT : ANT_COMPLETE);
++	}
++	if (state->entry.msg_control && !ant_capture_lost(ctx)) {
++		size = output ? min(state->entry.msg_controllen, observed->msg_controllen) :
++			state->entry.msg_controllen;
++		scnprintf(key, sizeof(key), "%s.control", prefix);
++		ant_capture_field(ctx, 1, key, LAYOUT("cmsghdr[]"), 3,
++				  (unsigned long)state->entry.msg_control, NULL, size,
++				  state->entry.msg_controllen,
++				  !output && size > INT_MAX ? ANT_INVALID_EXTENT : ANT_COMPLETE);
++	}
++}
++
++static void capture_mmsg(struct ant_task *ctx, const u64 args[6],
++			 bool output, long result, bool input)
++{
++	struct ant_mmsg_state *state;
++	struct ant_message_state *message;
++	struct mmsghdr observed;
++	enum ant_status status;
++	u32 capacity = input ? min_t(u32, args[2], UIO_MAXIOV) : (u32)args[2];
++	u32 index, count;
++	u64 address, header_size, size = (u64)capacity * sizeof(struct mmsghdr);
++	char prefix[48], key[64];
++
++	BUILD_BUG_ON(sizeof(struct mmsghdr) != 64);
++	if (!output) {
++		state = kzalloc(struct_size(state, messages, capacity), GFP_NOWAIT);
++		if (!state) {
++			ant_capture_field(ctx, 1, "arg1.mmsg.context", LAYOUT("mmsghdr[]"), 3,
++					  args[1], NULL, size, size, ANT_RESOURCE_EXHAUSTED);
++			return;
++		}
++		state->capacity = capacity;
++		ant_capture_set_state(ctx, state, release_mmsg);
++		count = capacity;
++	} else {
++		if (result <= 0)
++			return;
++		state = ant_capture_state(ctx);
++		if (!state) {
++			ant_capture_field(ctx, 1, "arg1.mmsg.output", LAYOUT("mmsghdr[]"), 3,
++					  args[1], NULL, min_t(u64, result, capacity) *
++					  sizeof(struct mmsghdr), size, ANT_CONTEXT_MISSING);
++			return;
++		}
++		count = min_t(u64, result, state->capacity);
++	}
++	for (index = 0; index < count && !ant_capture_lost(ctx); index++) {
++		scnprintf(prefix, sizeof(prefix), "arg1.mmsg.%u", index);
++		scnprintf(key, sizeof(key), "%s.header", prefix);
++		address = args[1] + (u64)index * sizeof(struct mmsghdr);
++		if (args[1] > U64_MAX - (u64)index * sizeof(struct mmsghdr)) {
++			ant_capture_field(ctx, 1, key, LAYOUT("mmsghdr"), 3,
++					  args[1], NULL, sizeof(observed), sizeof(observed),
++					  ANT_INVALID_EXTENT);
++			break;
++		}
++		header_size = output ? sizeof(observed) : sizeof(observed.msg_hdr);
++		status = copy_from_user_nofault(&observed,
++						(void __user *)(unsigned long)address,
++						header_size) ?
++			ANT_COPY_FAULT : ANT_COMPLETE;
++		ant_capture_field(ctx, 1, key, output ? LAYOUT("mmsghdr") : LAYOUT("msghdr"),
++				  3, address, &observed, header_size, header_size, status);
++		if (status != ANT_COMPLETE || ant_capture_lost(ctx))
++			break;
++		if (!output) {
++			message = kzalloc(sizeof(*message), GFP_NOWAIT);
++			if (!message) {
++				ant_capture_field(ctx, 1, key, "", 1, address, NULL,
++						  sizeof(*message), sizeof(*message),
++						  ANT_RESOURCE_EXHAUSTED);
++				break;
++			}
++			message->entry = observed.msg_hdr;
++			state->messages[index] = message;
++			state->saved_count = index + 1;
++			scnprintf(key, sizeof(key), "%s.iov", prefix);
++			message->vector = save_vector(ctx, 1, (unsigned long)message->entry.msg_iov,
++						      message->entry.msg_iovlen, key);
++			if (input && !ant_capture_lost(ctx))
++				capture_mmsg_payload(ctx, message, prefix, NULL, 0, false);
++		} else if (!input) {
++			message = index < state->saved_count ? state->messages[index] : NULL;
++			if (message)
++				capture_mmsg_payload(ctx, message, prefix, &observed.msg_hdr,
++						     observed.msg_len, true);
++			else
++				ant_capture_field(ctx, 1, key, "", 1, address, NULL,
++						  sizeof(observed), sizeof(observed),
++						  ANT_CONTEXT_MISSING);
++		}
++	}
++	if (!input)
++		capture_optional(ctx, 4, args[4], output ? "arg4.timeout.observed" :
++				 "arg4.timeout", LAYOUT("timespec"),
++				 sizeof(struct __kernel_timespec));
++}
++
++static void capture_message(struct ant_task *ctx, const u64 args[6],
++			    bool output, long result, bool input)
++{
++	struct ant_message_state *state;
++	struct user_msghdr observed;
++	enum ant_status status;
++	u64 size;
++
++	if (ant_capture_lost(ctx))
++		return;
++	if (!output) {
++		state = kzalloc(sizeof(*state), GFP_NOWAIT);
++		if (!state) {
++			ant_capture_field(ctx, 1, "arg1.msghdr", LAYOUT("msghdr"), 3,
++					  args[1], NULL, sizeof(observed), sizeof(observed),
++					  ANT_RESOURCE_EXHAUSTED);
++			return;
++		}
++		status = copy_from_user_nofault(&state->entry,
++						(void __user *)(unsigned long)args[1],
++						sizeof(state->entry)) ?
++			ANT_COPY_FAULT : ANT_COMPLETE;
++		ant_capture_field(ctx, 1, "arg1.msghdr", LAYOUT("msghdr"), 3,
++				  args[1], &state->entry, sizeof(state->entry),
++				  sizeof(state->entry), status);
++		if (status != ANT_COMPLETE) {
++			kfree(state);
++			return;
++		}
++		ant_capture_set_state(ctx, state, release_message);
++		if (ant_capture_lost(ctx))
++			return;
++		state->vector = save_vector(ctx, 1, (unsigned long)state->entry.msg_iov,
++					    state->entry.msg_iovlen, "arg1.msghdr.iov");
++		if (input && state->vector)
++			vector_data(ctx, state->vector, 1, "arg1.msghdr.iov", MAX_RW_COUNT);
++		if (input && !ant_capture_lost(ctx)) {
++			size = !state->entry.msg_name ? 0 : state->entry.msg_namelen < 0 ? U64_MAX :
++				min_t(u64, state->entry.msg_namelen,
++				      sizeof(struct sockaddr_storage));
++			ant_capture_field(ctx, 1, "arg1.msghdr.name", LAYOUT("sockaddr"), 3,
++					  (unsigned long)state->entry.msg_name, NULL,
++					  size, state->entry.msg_namelen,
++					  size == U64_MAX ? ANT_INVALID_EXTENT : ANT_COMPLETE);
++			if (!ant_capture_lost(ctx))
++				ant_capture_field(ctx, 1, "arg1.msghdr.control",
++						  LAYOUT("cmsghdr[]"), 3,
++						  (unsigned long)state->entry.msg_control, NULL,
++						  state->entry.msg_controllen,
++						  state->entry.msg_controllen,
++						  state->entry.msg_controllen > INT_MAX ?
++						  ANT_INVALID_EXTENT : ANT_COMPLETE);
++		}
++		return;
++	}
++	if (input || result < 0)
++		return;
++	state = ant_capture_state(ctx);
++	if (!state) {
++		ant_capture_field(ctx, 1, "arg1.msghdr.output", "", 1, args[1], NULL,
++				  U64_MAX, U64_MAX, ANT_CONTEXT_MISSING);
++		return;
++	}
++	status = copy_from_user_nofault(&observed,
++					(void __user *)(unsigned long)args[1], sizeof(observed)) ?
++		ANT_COPY_FAULT : ANT_COMPLETE;
++	ant_capture_field(ctx, 1, "arg1.msghdr.output", LAYOUT("msghdr"), 3,
++			  args[1], &observed, sizeof(observed), sizeof(observed), status);
++	if (state->vector && !ant_capture_lost(ctx))
++		vector_data(ctx, state->vector, 1, "arg1.msghdr.iov",
++			    min_t(u64, result, MAX_RW_COUNT));
++	else if (!ant_capture_lost(ctx))
++		ant_capture_field(ctx, 1, "arg1.msghdr.iov.output", "", 1,
++				  (unsigned long)state->entry.msg_iov, NULL,
++				  U64_MAX, U64_MAX, ANT_CONTEXT_MISSING);
++	if (status != ANT_COMPLETE || ant_capture_lost(ctx))
++		return;
++	size = !state->entry.msg_name ? 0 :
++		state->entry.msg_namelen < 0 || observed.msg_namelen < 0 ? U64_MAX :
++		min_t(u64, sizeof(struct sockaddr_storage),
++		      min(state->entry.msg_namelen, observed.msg_namelen));
++	ant_capture_field(ctx, 1, "arg1.msghdr.name", LAYOUT("sockaddr"), 3,
++			  (unsigned long)state->entry.msg_name, NULL, size,
++			  state->entry.msg_namelen,
++			  size == U64_MAX ? ANT_INVALID_EXTENT : ANT_COMPLETE);
++	if (!ant_capture_lost(ctx))
++		ant_capture_field(ctx, 1, "arg1.msghdr.control", LAYOUT("cmsghdr[]"), 3,
++				  (unsigned long)state->entry.msg_control, NULL,
++				  min(state->entry.msg_controllen, observed.msg_controllen),
++				  state->entry.msg_controllen, ANT_COMPLETE);
++}
++
++static void capture_address(struct ant_task *ctx, const u64 args[6],
++			    bool output, long result)
++{
++	struct ant_address_state *state;
++	int length;
++	enum ant_status status;
++
++	if (ant_capture_lost(ctx) || !args[1])
++		return;
++	if (!output) {
++		state = kzalloc(sizeof(*state), GFP_NOWAIT);
++		if (!state)
++			status = ANT_RESOURCE_EXHAUSTED;
++		else if (copy_from_user_nofault(&state->capacity,
++						(void __user *)(unsigned long)args[2],
++						sizeof(state->capacity)))
++			status = ANT_COPY_FAULT;
++		else
++			status = state->capacity < 0 ? ANT_INVALID_EXTENT : ANT_COMPLETE;
++		ant_capture_field(ctx, 2, "arg2.socklen.capacity", LAYOUT("socklen_t"), 3,
++				  args[2], state ? &state->capacity : NULL,
++				  sizeof(int), sizeof(int), status);
++		if (status != ANT_COMPLETE) {
++			kfree(state);
++			state = NULL;
++		}
++		ant_capture_set_state(ctx, state, release_allocation);
++		return;
++	}
++	if (result < 0)
++		return;
++	state = ant_capture_state(ctx);
++	status = copy_from_user_nofault(&length,
++					(void __user *)(unsigned long)args[2], sizeof(length)) ?
++		ANT_COPY_FAULT : ANT_COMPLETE;
++	ant_capture_field(ctx, 2, "arg2.socklen.output", LAYOUT("socklen_t"), 3,
++			  args[2], &length, sizeof(length), sizeof(length), status);
++	if (status != ANT_COMPLETE || ant_capture_lost(ctx))
++		return;
++	status = !state ? ANT_CONTEXT_MISSING : length < 0 ? ANT_INVALID_EXTENT : ANT_COMPLETE;
++	ant_capture_field(ctx, 1, "arg1.sockaddr", LAYOUT("sockaddr"), 3,
++			  args[1], NULL, status == ANT_COMPLETE ?
++			  min_t(u64, sizeof(struct sockaddr_storage),
++				min(length, state->capacity)) : U64_MAX,
++			  state ? state->capacity : U64_MAX, status);
++}
++
++static void capture_xattr(struct ant_task *ctx, u64 nr, const u64 args[6],
++			  bool output, long result)
++{
++	bool path = nr != 190 && nr != 193 && nr != 196 && nr != 199;
++	char key[64];
++	u64 capacity, size;
++	u8 index;
++
++	if (!output) {
++		if (path)
++			ant_capture_string(ctx, 0, "arg0.path", args[0], PATH_MAX);
++		if (nr < 194 || nr >= 197) {
++			if (!ant_capture_lost(ctx))
++				ant_capture_string(ctx, 1, "arg1.xattr_name", args[1],
++						   XATTR_NAME_MAX + 1);
++		}
++	}
++	if (ant_capture_lost(ctx) || nr >= 197 || (nr >= 191 && !output) || (nr <= 190 && output))
++		return;
++	if (output && result < 0)
++		return;
++	index = nr < 194 ? 2 : 1;
++	capacity = args[index + 1];
++	size = output ? min_t(u64, min_t(u64, capacity,
++		nr < 194 ? XATTR_SIZE_MAX : XATTR_LIST_MAX), result) : capacity;
++	scnprintf(key, sizeof(key), "arg%u.xattr_data", index);
++	ant_capture_field(ctx, index, key, "", 1, args[index], NULL, size, capacity,
++			  !output && capacity > XATTR_SIZE_MAX ?
++			  ANT_INVALID_EXTENT : ANT_COMPLETE);
++}
++
++static void capture_sigmask(struct ant_task *ctx, u8 arg, u64 address, u64 size)
++{
++	if (!address || ant_capture_lost(ctx))
++		return;
++	ant_capture_field(ctx, arg, "signal.mask", LAYOUT("sigset_t"), 3,
++			  address, NULL, sizeof(sigset_t), size,
++			  size == sizeof(sigset_t) ? ANT_COMPLETE : ANT_INVALID_EXTENT);
++}
++
++static void capture_poll(struct ant_task *ctx, u64 nr, const u64 args[6],
++			 bool output, long result)
++{
++	u64 count = (u32)args[1], size = count * sizeof(struct pollfd);
++
++	if (ant_capture_lost(ctx))
++		return;
++	if (!output || result >= 0 || result == -EINTR ||
++	    result == -ERESTARTNOHAND || result == -ERESTART_RESTARTBLOCK)
++		ant_capture_field(ctx, 0, "arg0.pollfd", LAYOUT("pollfd[]"), 3,
++				  args[0], NULL, size, size,
++				  count > rlimit(RLIMIT_NOFILE) ?
++				  ANT_INVALID_EXTENT : ANT_COMPLETE);
++	if (nr != 271 || ant_capture_lost(ctx))
++		return;
++	if (!output) {
++		ant_capture_field(ctx, 2, "arg2.timeout", LAYOUT("timespec"), 3,
++				  args[2], NULL, sizeof(struct __kernel_timespec),
++				  sizeof(struct __kernel_timespec), ANT_COMPLETE);
++		capture_sigmask(ctx, 3, args[3], args[4]);
++	} else if (result >= 0 || result == -EINTR || result == -ERESTARTNOHAND) {
++		ant_capture_field(ctx, 2, "arg2.timeout.observed", LAYOUT("timespec"), 3,
++				  args[2], NULL, sizeof(struct __kernel_timespec),
++				  sizeof(struct __kernel_timespec), ANT_COMPLETE);
++	}
++}
++
++static void capture_epoll(struct ant_task *ctx, u64 nr, const u64 args[6],
++			  bool output, long result)
++{
++	u64 size;
++	s32 capacity = args[2];
++
++	if (ant_capture_lost(ctx))
++		return;
++	if (nr == 233) {
++		if (!output && args[1] != EPOLL_CTL_DEL)
++			ant_capture_field(ctx, 3, "arg3.epoll_event", LAYOUT("epoll_event"), 3,
++					  args[3], NULL, sizeof(struct epoll_event),
++					  sizeof(struct epoll_event),
++					  args[1] == EPOLL_CTL_ADD || args[1] == EPOLL_CTL_MOD ?
++					  ANT_COMPLETE : ANT_NO_DECODER);
++		return;
++	}
++	if (!output) {
++		if (nr == 441)
++			ant_capture_field(ctx, 3, "arg3.timeout", LAYOUT("timespec"), 3,
++					  args[3], NULL, sizeof(struct __kernel_timespec),
++					  sizeof(struct __kernel_timespec), ANT_COMPLETE);
++		if (nr != 232)
++			capture_sigmask(ctx, 4, args[4], args[5]);
++	} else if (result >= 0) {
++		size = capacity > 0 ? min_t(u64, result, capacity) * sizeof(struct epoll_event) : 0;
++		ant_capture_field(ctx, 1, "arg1.epoll_events", LAYOUT("epoll_event[]"), 3,
++				  args[1], NULL, size,
++				  capacity > 0 ? (u64)capacity * sizeof(struct epoll_event) : 0,
++				  capacity <= 0 || capacity > INT_MAX / sizeof(struct epoll_event) ?
++				  ANT_INVALID_EXTENT : ANT_COMPLETE);
++	}
++}
++
++static void capture_signals(struct ant_task *ctx, u64 nr, const u64 args[6],
++			    bool output, long result)
++{
++	u8 arg;
++
++	switch (nr) {
++	case 13:
++		arg = output ? 2 : 1;
++		if ((!output || result == 0) && args[arg])
++			ant_capture_field(ctx, arg, output ? "arg2.sigaction" : "arg1.sigaction",
++					  LAYOUT("sigaction"), 3, args[arg], NULL,
++					  sizeof(struct sigaction), sizeof(struct sigaction),
++					  args[3] == sizeof(sigset_t) ?
++					  ANT_COMPLETE : ANT_INVALID_EXTENT);
++		break;
++	case 14:
++		if (!output || result == 0)
++			capture_sigmask(ctx, output ? 2 : 1, args[output ? 2 : 1], args[3]);
++		break;
++	case 127:
++		if (output && result == 0)
++			ant_capture_field(ctx, 0, "arg0.pending", LAYOUT("sigset_t"), 3,
++					  args[0], NULL, args[1], args[1],
++					  args[1] <= sizeof(sigset_t) ?
++					  ANT_COMPLETE : ANT_INVALID_EXTENT);
++		break;
++	case 128:
++		if (!output) {
++			capture_sigmask(ctx, 0, args[0], args[3]);
++			capture_optional(ctx, 2, args[2], "arg2.timeout", LAYOUT("timespec"),
++					 sizeof(struct __kernel_timespec));
++		} else if (result > 0) {
++			capture_optional(ctx, 1, args[1], "arg1.siginfo", LAYOUT("siginfo_t"),
++					 sizeof(siginfo_t));
++		}
++		break;
++	case 129: case 297: case 424:
++		arg = nr == 297 ? 3 : 2;
++		if (!output)
++			capture_optional(ctx, arg, args[arg], "signal.siginfo",
++					 LAYOUT("siginfo_t"), sizeof(siginfo_t));
++		break;
++	case 130: case 282: case 289:
++		if (!output)
++			capture_sigmask(ctx, nr == 130 ? 0 : 1,
++					args[nr == 130 ? 0 : 1], args[nr == 130 ? 1 : 2]);
++		break;
++	case 131:
++		if (!output || result == 0)
++			capture_optional(ctx, output ? 1 : 0, args[output ? 1 : 0],
++					 output ? "arg1.stack" : "arg0.stack",
++					 LAYOUT("stack_t"), sizeof(stack_t));
++		break;
++	default:
++		break;
++	}
++	/* Function, restorer and alternate-stack addresses in native structures
++	 * are roles, not permission to copy executable code or stack contents.
++	 */
++	BUILD_BUG_ON(sizeof(struct sigaction) != 32);
++	BUILD_BUG_ON(sizeof(siginfo_t) != 128);
++	BUILD_BUG_ON(sizeof(stack_t) != 24);
++}
++
++struct ant_select_state {
++	u64 bitmap_size;
++};
++
++struct ant_sigset_pack {
++	sigset_t __user *mask;
++	size_t size;
++};
++
++static void capture_select(struct ant_task *ctx, u64 nr, const u64 args[6],
++			   bool output, long result)
++{
++	struct ant_select_state *state;
++	struct ant_sigset_pack pack;
++	enum ant_status status = ANT_COMPLETE;
++	u64 size;
++	s32 count = args[0];
++	u32 max_fds;
++	u8 arg;
++	char key[48];
++
++	if (!output) {
++		state = kzalloc(sizeof(*state), GFP_NOWAIT);
++		if (!state) {
++			status = ANT_RESOURCE_EXHAUSTED;
++		} else if (count < 0) {
++			status = ANT_INVALID_EXTENT;
++		} else {
++			rcu_read_lock();
++			max_fds = files_fdtable(current->files)->max_fds;
++			rcu_read_unlock();
++			size = min_t(u32, count, max_fds);
++			state->bitmap_size = DIV_ROUND_UP(size, BITS_PER_LONG) *
++				sizeof(unsigned long);
++		}
++		if (status == ANT_COMPLETE)
++			ant_capture_set_state(ctx, state, release_allocation);
++		else
++			kfree(state);
++	} else {
++		state = ant_capture_state(ctx);
++		if (!state)
++			status = ANT_CONTEXT_MISSING;
++	}
++	if (!output || result >= 0) {
++		size = status == ANT_COMPLETE ? state->bitmap_size : U64_MAX;
++		for (arg = 1; arg <= 3 && !ant_capture_lost(ctx); arg++) {
++			if (!args[arg])
++				continue;
++			scnprintf(key, sizeof(key), "arg%u.fdset", arg);
++			ant_capture_field(ctx, arg, key, LAYOUT("unsigned_long[]"), 3,
++					  args[arg], NULL, size, size, status);
++		}
++	}
++	if (!ant_capture_lost(ctx))
++		capture_optional(ctx, 4, args[4], output ? "arg4.timeout.observed" :
++				 "arg4.timeout", nr == 23 ? LAYOUT("timeval") :
++				 LAYOUT("timespec"), sizeof(struct __kernel_timespec));
++	if (nr == 270 && !output && args[5] && !ant_capture_lost(ctx)) {
++		status = copy_from_user_nofault(&pack, (void __user *)(unsigned long)args[5],
++						sizeof(pack)) ?
++			ANT_COPY_FAULT : ANT_COMPLETE;
++		ant_capture_field(ctx, 5, "arg5.sigset_pack", LAYOUT("sigset_argpack"), 3,
++				  args[5], &pack, sizeof(pack), sizeof(pack), status);
++		if (status == ANT_COMPLETE && !ant_capture_lost(ctx))
++			capture_sigmask(ctx, 5, (unsigned long)pack.mask, pack.size);
++	}
++}
++
++static bool capture_versioned(struct ant_task *ctx, u8 arg, u64 address,
++			      u64 size, u64 minimum, u64 known_size,
++			      const char *key, const char *layout)
++{
++	enum ant_status status = size < minimum || size > PAGE_SIZE ?
++		ANT_INVALID_EXTENT : ANT_COMPLETE;
++	char extension_key[64];
++
++	ant_capture_field(ctx, arg, key, layout, 3, address, NULL,
++			  min(size, known_size), size, status);
++	if (status == ANT_COMPLETE && size > known_size && !ant_capture_lost(ctx)) {
++		scnprintf(extension_key, sizeof(extension_key), "%s.extension", key);
++		ant_capture_field(ctx, arg, extension_key, "", 1, address + known_size,
++				  NULL, size - known_size, size - known_size,
++				  address > U64_MAX - known_size ?
++				  ANT_INVALID_EXTENT : ANT_COMPLETE);
++	}
++	return status == ANT_COMPLETE;
++}
++
++static void capture_schedattr(struct ant_task *ctx, u64 nr, const u64 args[6],
++			      bool output, long result)
++{
++	u32 size;
++	enum ant_status status;
++
++	if (nr == 315) {
++		if (output && result == 0)
++			ant_capture_field(ctx, 1, "arg1.sched_attr", LAYOUT("sched_attr"), 3,
++					  args[1], NULL, min_t(u64, (u32)args[2],
++					  sizeof(struct sched_attr)), (u32)args[2], ANT_COMPLETE);
++		return;
++	}
++	if (output) {
++		if (result == -E2BIG)
++			capture_optional(ctx, 1, args[1], "arg1.sched_attr.required_size",
++					 LAYOUT("u32"), sizeof(u32));
++		return;
++	}
++	status = copy_from_user_nofault(&size, (void __user *)(unsigned long)args[1],
++					sizeof(size)) ?
++		ANT_COPY_FAULT : ANT_COMPLETE;
++	if (status != ANT_COMPLETE) {
++		ant_capture_field(ctx, 1, "arg1.sched_attr.size", LAYOUT("u32"), 3,
++				  args[1], NULL, sizeof(size), sizeof(size), status);
++		return;
++	}
++	capture_versioned(ctx, 1, args[1], size ? size : SCHED_ATTR_SIZE_VER0,
++			  SCHED_ATTR_SIZE_VER0, sizeof(struct sched_attr),
++			  "arg1.sched_attr", LAYOUT("sched_attr"));
++}
++
++static void capture_clone3(struct ant_task *ctx, const u64 args[6],
++			   bool output, long result)
++{
++	struct clone_args *state;
++	enum ant_status status;
++	u64 size;
++
++	if (!output) {
++		if (!capture_versioned(ctx, 0, args[0], args[1], CLONE_ARGS_SIZE_VER0,
++				       sizeof(*state), "arg0.clone_args", LAYOUT("clone_args")) ||
++		    ant_capture_lost(ctx))
++			return;
++		state = kzalloc(sizeof(*state), GFP_NOWAIT);
++		if (!state)
++			status = ANT_RESOURCE_EXHAUSTED;
++		else if (copy_from_user_nofault(state, (void __user *)(unsigned long)args[0],
++						min_t(u64, args[1], sizeof(*state))))
++			status = ANT_COPY_FAULT;
++		else
++			status = ANT_COMPLETE;
++		if (status != ANT_COMPLETE) {
++			ant_capture_field(ctx, 0, "arg0.clone_args.context", "", 1,
++					  args[0], NULL, sizeof(*state), args[1], status);
++			kfree(state);
++			return;
++		}
++		ant_capture_set_state(ctx, state, release_allocation);
++		if (state->set_tid || state->set_tid_size) {
++			size = state->set_tid_size <= MAX_PID_NS_LEVEL ?
++				state->set_tid_size * sizeof(pid_t) : U64_MAX;
++			status = state->set_tid_size && state->set_tid_size <= MAX_PID_NS_LEVEL ?
++				ANT_COMPLETE : ANT_INVALID_EXTENT;
++			ant_capture_field(ctx, 0, "arg0.clone_args.set_tid", LAYOUT("pid_t[]"), 3,
++					  state->set_tid, NULL, size, size, status);
++		}
++		return;
++	}
++	if (result <= 0)
++		return;
++	state = ant_capture_state(ctx);
++	if (!state) {
++		ant_capture_field(ctx, 0, "arg0.clone_args.output", "", 1,
++				  args[0], NULL, U64_MAX, U64_MAX, ANT_CONTEXT_MISSING);
++		return;
++	}
++	if (state->flags & CLONE_PIDFD)
++		capture_optional(ctx, 0, state->pidfd, "arg0.clone_args.pidfd",
++				 LAYOUT("int"), sizeof(int));
++	if (state->flags & CLONE_PARENT_SETTID)
++		capture_optional(ctx, 0, state->parent_tid, "arg0.clone_args.parent_tid",
++				 LAYOUT("pid_t"), sizeof(pid_t));
++	/* The child writes its own TID before returning to user space, and the
++	 * kernel clears it when the child exits; neither is visible here.
++	 */
++	if ((state->flags & CLONE_CHILD_SETTID) && !ant_capture_lost(ctx))
++		ant_capture_field(ctx, 0, "arg0.clone_args.child_tid", LAYOUT("pid_t"), 3,
++				  state->child_tid, NULL, sizeof(pid_t), sizeof(pid_t),
++				  ANT_ASYNC_UNOBSERVED);
++	if ((state->flags & CLONE_CHILD_CLEARTID) && !ant_capture_lost(ctx))
++		ant_capture_field(ctx, 0, "arg0.clone_args.clear_child_tid", LAYOUT("pid_t"), 3,
++				  state->child_tid, NULL, sizeof(pid_t), sizeof(pid_t),
++				  ANT_ASYNC_UNOBSERVED);
++}
++
++static void capture_process_vm(struct ant_task *ctx, const u64 args[6],
++			       bool output, long result, bool input)
++{
++	struct ant_vector_state *remote;
++	u32 index;
++	char key[64];
++
++	capture_vector(ctx, args, output, result, input);
++	if (output || ant_capture_lost(ctx))
++		return;
++	remote = save_vector(ctx, 3, args[3], args[4], "arg3.remote_iov");
++	if (!remote)
++		return;
++	for (index = 0; index < remote->iov_count && !ant_capture_lost(ctx); index++) {
++		scnprintf(key, sizeof(key), "arg3.remote_iov[%u].data", index);
++		/* The other process's memory is never read, by design. */
++		ant_capture_field(ctx, 3, key, "", 1,
++				  (unsigned long)remote->iov[index].iov_base, NULL,
++				  remote->iov[index].iov_len, remote->iov[index].iov_len,
++				  ANT_ADDRESS_ONLY);
++	}
++	kfree(remote);
++}
++
++static void capture_ipc_control(struct ant_task *ctx, u64 nr, const u64 args[6],
++				bool output, long result)
++{
++	u32 command = args[nr == 66 ? 2 : 1];
++	u8 arg = nr == 66 ? 3 : 2;
++	u64 size = U64_MAX;
++	const char *layout = "";
++	bool input = command == IPC_SET, ignored = false;
++	enum ant_status status = ANT_COMPLETE;
++
++	if (nr == 31) {
++		switch (command) {
++		case IPC_SET: case IPC_STAT: case SHM_STAT: case SHM_STAT_ANY:
++			size = sizeof(struct shmid64_ds);
++			layout = LAYOUT("shmid64_ds");
++			break;
++		case IPC_INFO:
++			size = sizeof(struct shminfo64);
++			layout = LAYOUT("shminfo64");
++			break;
++		case SHM_INFO:
++			size = sizeof(struct shm_info);
++			layout = LAYOUT("shm_info");
++			break;
++		case IPC_RMID: case SHM_LOCK: case SHM_UNLOCK:
++			ignored = true;
++			break;
++		}
++	} else if (nr == 71) {
++		switch (command) {
++		case IPC_SET: case IPC_STAT: case MSG_STAT: case MSG_STAT_ANY:
++			size = sizeof(struct msqid64_ds);
++			layout = LAYOUT("msqid64_ds");
++			break;
++		case IPC_INFO: case MSG_INFO:
++			size = sizeof(struct msginfo);
++			layout = LAYOUT("msginfo");
++			break;
++		case IPC_RMID:
++			ignored = true;
++			break;
++		}
++	} else {
++		switch (command) {
++		case IPC_SET: case IPC_STAT: case SEM_STAT: case SEM_STAT_ANY:
++			size = sizeof(struct semid64_ds);
++			layout = LAYOUT("semid64_ds");
++			break;
++		case IPC_INFO: case SEM_INFO:
++			size = sizeof(struct seminfo);
++			layout = LAYOUT("seminfo");
++			break;
++		case GETALL: case SETALL:
++			/* ipc/sem.c hands over the kernel's own array copy (sem_nsems
++			 * entries) through ant_monitor_operand(); nothing to read here.
++			 */
++			ignored = true;
++			break;
++		case IPC_RMID: case GETVAL: case GETPID: case GETNCNT: case GETZCNT: case SETVAL:
++			ignored = true;
++			break;
++		}
++	}
++	if (ignored || ant_capture_lost(ctx))
++		return;
++	if (size == U64_MAX && status == ANT_COMPLETE) {
++		if (!output)
++			ant_capture_field(ctx, arg, "ipc.unknown_selector", "", 1,
++					  args[arg], NULL, U64_MAX, U64_MAX, ANT_NO_DECODER);
++		return;
++	}
++	if ((input && !output) || (!input && output && result >= 0))
++		ant_capture_field(ctx, arg, "ipc.control", layout, 3,
++				  args[arg], NULL, size, size, status);
++}
++
++static void capture_ipc_data(struct ant_task *ctx, u64 nr, const u64 args[6],
++			     bool output, long result)
++{
++	u64 count, size;
++	enum ant_status status;
++
++	if (nr == 30 || nr == 67) {
++		if (!output)
++			ant_capture_field(ctx, nr == 30 ? 1 : 0, "shm.mapping_address", "", 1,
++					  args[nr == 30 ? 1 : 0], NULL, 0, 0, ANT_ADDRESS_ONLY);
++		return;
++	}
++	if (nr == 65 || nr == 220) {
++		if (output)
++			return;
++		count = (u32)args[2];
++		status = count && count <= READ_ONCE(current->nsproxy->ipc_ns->sem_ctls[2]) ?
++			ANT_COMPLETE : ANT_INVALID_EXTENT;
++		size = count * sizeof(struct sembuf);
++		ant_capture_field(ctx, 1, "arg1.semops", LAYOUT("sembuf[]"), 3,
++				  args[1], NULL, size, size, status);
++		if (nr == 220)
++			capture_optional(ctx, 3, args[3], "arg3.timeout", LAYOUT("timespec"),
++					 sizeof(struct __kernel_timespec));
++		return;
++	}
++	if ((nr == 69 && output) || (nr == 70 && (!output || result < 0)))
++		return;
++	count = nr == 69 ? args[2] : min_t(u64, args[2], result);
++	status = (s64)args[2] < 0 ||
++		(nr == 69 && args[2] > READ_ONCE(current->nsproxy->ipc_ns->msg_ctlmax)) ?
++		ANT_INVALID_EXTENT : ANT_COMPLETE;
++	size = count <= U64_MAX - sizeof(long) ? count + sizeof(long) : U64_MAX;
++	ant_capture_field(ctx, 1, "arg1.message", LAYOUT("msgbuf"), 3,
++			  args[1], NULL, size,
++			  args[2] <= U64_MAX - sizeof(long) ? args[2] + sizeof(long) : U64_MAX,
++			  status);
++}
++
++static void capture_mqueue(struct ant_task *ctx, u64 nr, const u64 args[6],
++			   bool output, long result)
++{
++	struct sigevent event;
++	enum ant_status status;
++	u64 size;
++
++	if (nr == 244) {
++		if (output || !args[1])
++			return;
++		status = copy_from_user_nofault(&event, (void __user *)(unsigned long)args[1],
++						sizeof(event)) ?
++			ANT_COPY_FAULT : ANT_COMPLETE;
++		ant_capture_field(ctx, 1, "arg1.notification", LAYOUT("sigevent"), 3,
++				  args[1], &event, sizeof(event), sizeof(event), status);
++		if (status == ANT_COMPLETE && event.sigev_notify == SIGEV_THREAD)
++			capture_optional(ctx, 1, (unsigned long)event.sigev_value.sival_ptr,
++					 "arg1.notification.cookie", "", NOTIFY_COOKIE_LEN);
++		return;
++	}
++	if (!output)
++		capture_optional(ctx, 4, args[4], "arg4.timeout", LAYOUT("timespec"),
++				 sizeof(struct __kernel_timespec));
++	if ((nr == 242 && !output) || (nr == 243 && output && result >= 0)) {
++		size = nr == 242 ? args[2] : min_t(u64, args[2], result);
++		if (!ant_capture_lost(ctx))
++			ant_capture_field(ctx, 1, "arg1.message", "", 1, args[1], NULL,
++					  size, args[2], ANT_COMPLETE);
++		if (nr == 243)
++			capture_optional(ctx, 3, args[3], "arg3.priority", LAYOUT("u32"),
++					 sizeof(u32));
++	}
++}
++
++static void capture_memory_masks(struct ant_task *ctx, u64 nr, const u64 args[6],
++				 bool output, long result)
++{
++	u64 size, bits;
++	u8 arg, end;
++	enum ant_status status;
++	char key[48];
++
++	if (nr == 203 || nr == 204) {
++		if ((nr == 203 && !output) || (nr == 204 && output && result >= 0)) {
++			size = min_t(u64, (u32)args[1], cpumask_size());
++			if (output)
++				size = min_t(u64, size, result);
++			ant_capture_field(ctx, 2, "arg2.cpu_mask", LAYOUT("unsigned_long[]"), 3,
++					  args[2], NULL, size, (u32)args[1], ANT_COMPLETE);
++		}
++		return;
++	}
++	if (nr == 239) {
++		if (!output || result != 0)
++			return;
++		capture_optional(ctx, 0, args[0], "arg0.policy", LAYOUT("int"), sizeof(int));
++		arg = 1;
++		end = 1;
++		bits = args[2] - 1;
++	} else {
++		if (output)
++			return;
++		arg = nr == 237 ? 3 : nr == 238 ? 1 : 2;
++		end = nr == 256 ? 3 : arg;
++		bits = args[nr == 237 ? 4 : nr == 238 ? 2 : 1] - 1;
++	}
++	status = bits <= PAGE_SIZE * BITS_PER_BYTE ? ANT_COMPLETE : ANT_INVALID_EXTENT;
++	size = status == ANT_COMPLETE ? DIV_ROUND_UP(bits, BITS_PER_LONG) *
++		sizeof(unsigned long) : U64_MAX;
++	for (; arg <= end && !ant_capture_lost(ctx); arg++) {
++		if (!args[arg] || !bits)
++			continue;
++		scnprintf(key, sizeof(key), "arg%u.node_mask", arg);
++		ant_capture_field(ctx, arg, key, LAYOUT("unsigned_long[]"), 3,
++				  args[arg], NULL, size, size, status);
++	}
++}
++
++static void capture_waiter_values(struct ant_task *ctx, u64 address, u32 count)
++{
++	struct futex_waitv waiter;
++	u32 index;
++	enum ant_status status;
++	u64 item_address;
++	void __user *user_address;
++	char key[64];
++
++	for (index = 0; index < count && !ant_capture_lost(ctx); index++) {
++		item_address = address + (u64)index * sizeof(waiter);
++		user_address = (void __user *)(unsigned long)item_address;
++		if (address > U64_MAX - (u64)index * sizeof(waiter) ||
++		    copy_from_user_nofault(&waiter, user_address, sizeof(waiter))) {
++			ant_capture_field(ctx, 0, "arg0.waiter.context", "", 1, address, NULL,
++					  sizeof(waiter), sizeof(waiter), ANT_CONTEXT_MISSING);
++			break;
++		}
++		status = waiter.flags & ~(FUTEX2_SIZE_MASK | FUTEX2_NUMA | FUTEX2_PRIVATE) ?
++			ANT_NO_DECODER : waiter.__reserved ||
++			(waiter.flags & FUTEX2_SIZE_MASK) != FUTEX2_SIZE_U32 ?
++			ANT_INVALID_EXTENT : ANT_COMPLETE;
++		scnprintf(key, sizeof(key), "arg0.waiters.%u.futex.observed", index);
++		ant_capture_field(ctx, 0, key, LAYOUT("u32"), 3,
++				  waiter.uaddr, NULL, sizeof(u32), sizeof(u32), status);
++	}
++}
++
++static void capture_futex(struct ant_task *ctx, u64 nr, const u64 args[6],
++			  bool output, long result)
++{
++	u32 command = (u32)args[1] & FUTEX_CMD_MASK;
++	u64 count, size;
++	bool timeout = false, second = false, modifies = false;
++	enum ant_status status;
++
++	if (nr == 449 || nr == 456) {
++		if (output)
++			return;
++		count = nr == 456 ? 2 : (u32)args[1];
++		size = count * sizeof(struct futex_waitv);
++		status = count && count <= FUTEX_WAITV_MAX ? ANT_COMPLETE : ANT_INVALID_EXTENT;
++		ant_capture_field(ctx, 0, "arg0.waiters", LAYOUT("futex_waitv[]"), 3,
++				  args[0], NULL, size, size, status);
++		if (status == ANT_COMPLETE)
++			capture_waiter_values(ctx, args[0], count);
++		if (nr == 449)
++			capture_optional(ctx, 3, args[3], "arg3.timeout", LAYOUT("timespec"),
++					 sizeof(struct __kernel_timespec));
++		return;
++	}
++	if (nr == 454 || nr == 455) {
++		if (!output) {
++			status = (args[3] & FUTEX2_SIZE_MASK) == FUTEX2_SIZE_U32 ?
++				ANT_COMPLETE : ANT_INVALID_EXTENT;
++			ant_capture_field(ctx, 0, "arg0.futex.observed", LAYOUT("u32"), 3,
++					  args[0], NULL, sizeof(u32), sizeof(u32), status);
++			if (nr == 455)
++				capture_optional(ctx, 4, args[4], "arg4.timeout",
++						 LAYOUT("timespec"),
++						 sizeof(struct __kernel_timespec));
++		}
++		return;
++	}
++	switch (command) {
++	case FUTEX_WAIT: case FUTEX_WAIT_BITSET:
++		timeout = true;
++		break;
++	case FUTEX_WAKE: case FUTEX_WAKE_BITSET:
++		break;
++	case FUTEX_REQUEUE: case FUTEX_CMP_REQUEUE:
++		second = true;
++		break;
++	case FUTEX_WAKE_OP: case FUTEX_CMP_REQUEUE_PI:
++		second = true;
++		modifies = true;
++		break;
++	case FUTEX_WAIT_REQUEUE_PI:
++		timeout = true;
++		second = true;
++		modifies = true;
++		break;
++	case FUTEX_LOCK_PI: case FUTEX_LOCK_PI2:
++		timeout = true;
++		modifies = true;
++		break;
++	case FUTEX_UNLOCK_PI: case FUTEX_TRYLOCK_PI:
++		modifies = true;
++		break;
++	default:
++		if (!output)
++			ant_capture_field(ctx, 0, "futex.unknown_selector", "", 1, args[0], NULL,
++					  U64_MAX, U64_MAX, ANT_NO_DECODER);
++		return;
++	}
++	if (!output || (modifies && result >= 0)) {
++		capture_optional(ctx, 0, args[0], "arg0.futex.observed", LAYOUT("u32"),
++				 sizeof(u32));
++		if (second)
++			capture_optional(ctx, 4, args[4], "arg4.futex.observed", LAYOUT("u32"),
++					 sizeof(u32));
++	}
++	if (!output && timeout)
++		capture_optional(ctx, 3, args[3], "arg3.timeout", LAYOUT("timespec"),
++				 sizeof(struct __kernel_timespec));
++}
++
++/* A classic BPF program header and the instruction array it points to. The
++ * array lives in the caller's memory and its length is bounded by BPF_MAXINSNS.
++ */
++static void capture_fprog(struct ant_task *ctx, u8 arg, u64 address, u64 declared,
++			  const char *key)
++{
++	struct sock_fprog program;
++	enum ant_status status;
++	char filter_key[64];
++	u64 size;
++
++	if (declared != sizeof(program)) {
++		ant_capture_field(ctx, arg, key, LAYOUT("sock_fprog"), 3, address, NULL,
++				  min_t(u64, declared, sizeof(program)), declared,
++				  ANT_INVALID_EXTENT);
++		return;
++	}
++	status = copy_from_user_nofault(&program, (void __user *)(unsigned long)address,
++					sizeof(program)) ? ANT_COPY_FAULT : ANT_COMPLETE;
++	ant_capture_field(ctx, arg, key, LAYOUT("sock_fprog"), 3,
++			  address, &program, sizeof(program), sizeof(program), status);
++	if (status != ANT_COMPLETE || ant_capture_lost(ctx))
++		return;
++	size = (u64)program.len * sizeof(struct sock_filter);
++	scnprintf(filter_key, sizeof(filter_key), "%s.filter", key);
++	ant_capture_field(ctx, arg, filter_key, LAYOUT("sock_filter[]"), 3,
++			  (unsigned long)program.filter, NULL, size, size,
++			  program.len && program.len <= BPF_MAXINSNS ?
++			  ANT_COMPLETE : ANT_INVALID_EXTENT);
++}
++
++static void capture_seccomp(struct ant_task *ctx, const u64 args[6],
++			    bool output, long result)
++{
++	switch ((u32)args[0]) {
++	case SECCOMP_SET_MODE_STRICT:
++		break;
++	case SECCOMP_SET_MODE_FILTER:
++		if (!output)
++			capture_fprog(ctx, 2, args[2], sizeof(struct sock_fprog), "arg2.program");
++		break;
++	case SECCOMP_GET_ACTION_AVAIL:
++		if (!output)
++			capture_optional(ctx, 2, args[2], "arg2.action", LAYOUT("u32"),
++					 sizeof(u32));
++		break;
++	case SECCOMP_GET_NOTIF_SIZES:
++		if (output && result == 0)
++			capture_optional(ctx, 2, args[2], "arg2.sizes",
++					 LAYOUT("seccomp_notif_sizes"),
++					 sizeof(struct seccomp_notif_sizes));
++		break;
++	default:
++		if (!output)
++			ant_capture_field(ctx, 2, "seccomp.unknown_selector", "", 1,
++					  args[2], NULL, U64_MAX, U64_MAX, ANT_NO_DECODER);
++		break;
++	}
++}
++
++static void capture_handle(struct ant_task *ctx, u64 nr, const u64 args[6],
++			   bool output, long result)
++{
++	struct file_handle header;
++	u32 *capacity;
++	u8 arg = nr == 303 ? 2 : 1;
++	enum ant_status status;
++	u64 size;
++
++	if (!output && nr == 303) {
++		ant_capture_string(ctx, 1, "arg1.path", args[1], PATH_MAX);
++		if (ant_capture_lost(ctx))
++			return;
++	}
++	if (output && (nr != 303 || (result != 0 && result != -EOVERFLOW)))
++		return;
++	status = copy_from_user_nofault(&header, (void __user *)(unsigned long)args[arg],
++					sizeof(header)) ?
++		ANT_COPY_FAULT : ANT_COMPLETE;
++	ant_capture_field(ctx, arg, "handle.header", LAYOUT("file_handle"), 3,
++			  args[arg], &header, sizeof(header), sizeof(header), status);
++	if (status != ANT_COMPLETE || ant_capture_lost(ctx))
++		return;
++	if (!output && nr == 303) {
++		capacity = kmalloc(sizeof(*capacity), GFP_NOWAIT);
++		if (!capacity) {
++			ant_capture_field(ctx, arg, "handle.context", "", 1, args[arg], NULL,
++					  sizeof(header), sizeof(header), ANT_RESOURCE_EXHAUSTED);
++		} else {
++			*capacity = header.handle_bytes;
++			ant_capture_set_state(ctx, capacity, release_allocation);
++		}
++		return;
++	}
++	if (output) {
++		capture_optional(ctx, 3, args[3], "arg3.mount_id",
++				 args[4] & AT_HANDLE_MNT_ID_UNIQUE ? LAYOUT("u64") : LAYOUT("int"),
++				 args[4] & AT_HANDLE_MNT_ID_UNIQUE ? sizeof(u64) : sizeof(int));
++		if (result == -EOVERFLOW)
++			return;
++		capacity = ant_capture_state(ctx);
++		status = !capacity ? ANT_CONTEXT_MISSING : header.handle_bytes > *capacity ||
++			*capacity > MAX_HANDLE_SZ ? ANT_INVALID_EXTENT : ANT_COMPLETE;
++	} else {
++		status = !header.handle_bytes || header.handle_bytes > MAX_HANDLE_SZ ?
++			ANT_INVALID_EXTENT : ANT_COMPLETE;
++	}
++	size = header.handle_bytes;
++	if (args[arg] > U64_MAX - sizeof(header))
++		status = ANT_INVALID_EXTENT;
++	if (!ant_capture_lost(ctx))
++		ant_capture_field(ctx, arg, "handle.bytes", "", 1,
++				  args[arg] + sizeof(header), NULL, size, size, status);
++}
++
++static void capture_fsconfig(struct ant_task *ctx, const u64 args[6], bool output)
++{
++	u32 command = args[1];
++	u64 size;
++
++	if (output)
++		return;
++	switch (command) {
++	case FSCONFIG_CMD_CREATE: case FSCONFIG_CMD_CREATE_EXCL: case FSCONFIG_CMD_RECONFIGURE:
++		return;
++	case FSCONFIG_SET_FLAG: case FSCONFIG_SET_FD:
++		ant_capture_string(ctx, 2, "arg2.key", args[2], 256);
++		return;
++	case FSCONFIG_SET_STRING: case FSCONFIG_SET_BINARY:
++	case FSCONFIG_SET_PATH: case FSCONFIG_SET_PATH_EMPTY:
++		ant_capture_string(ctx, 2, "arg2.key", args[2], 256);
++		if (ant_capture_lost(ctx))
++			return;
++		if (command == FSCONFIG_SET_BINARY) {
++			size = (u32)args[4];
++			ant_capture_field(ctx, 3, "arg3.value", "", 1, args[3], NULL, size, size,
++					  (s32)size > 0 && size <= 1024 * 1024 ?
++					  ANT_COMPLETE : ANT_INVALID_EXTENT);
++		} else {
++			ant_capture_string(ctx, 3, "arg3.value", args[3],
++					   command == FSCONFIG_SET_STRING ? 256 : PATH_MAX);
++		}
++		return;
++	default:
++		ant_capture_field(ctx, 3, "fsconfig.unknown_selector", "", 1,
++				  args[3], NULL, U64_MAX, U64_MAX, ANT_NO_DECODER);
++	}
++}
++
++static void capture_capabilities(struct ant_task *ctx, u64 nr, const u64 args[6],
++				 bool output, long result)
++{
++	u32 version, *word_count;
++	u64 size;
++	enum ant_status status;
++
++	if (!output) {
++		status = copy_from_user_nofault(&version, (void __user *)(unsigned long)args[0],
++						sizeof(version)) ?
++			ANT_COPY_FAULT : ANT_COMPLETE;
++		ant_capture_field(ctx, 0, "arg0.version", LAYOUT("u32"), 3,
++				  args[0], &version, sizeof(version), sizeof(version), status);
++		if (status != ANT_COMPLETE || ant_capture_lost(ctx))
++			return;
++		word_count = kzalloc(sizeof(*word_count), GFP_NOWAIT);
++		if (!word_count) {
++			ant_capture_field(ctx, 0, "arg0.context", "", 1, args[0], NULL,
++					  sizeof(version), sizeof(version), ANT_RESOURCE_EXHAUSTED);
++			return;
++		}
++		switch (version) {
++		case _LINUX_CAPABILITY_VERSION_1:
++			*word_count = 1;
++			break;
++		case _LINUX_CAPABILITY_VERSION_2: case _LINUX_CAPABILITY_VERSION_3:
++			*word_count = 2;
++			break;
++		}
++		ant_capture_set_state(ctx, word_count, release_allocation);
++		if (!*word_count || (nr == 125 && !args[1]))
++			return;
++		capture_optional(ctx, 0, args[0] + sizeof(u32), "arg0.pid", LAYOUT("pid_t"),
++				 sizeof(pid_t));
++	} else {
++		word_count = ant_capture_state(ctx);
++		if (!word_count) {
++			if (nr == 125 && result == 0 && args[1])
++				ant_capture_field(ctx, 1, "arg1.capabilities", "", 1, args[1], NULL,
++						  U64_MAX, U64_MAX, ANT_CONTEXT_MISSING);
++			return;
++		}
++		if (!*word_count && (result == -EINVAL || (nr == 125 && result == 0))) {
++			capture_optional(ctx, 0, args[0], "arg0.required_version", LAYOUT("u32"),
++					 sizeof(u32));
++			return;
++		}
++	}
++	if ((nr == 126 && !output) || (nr == 125 && output && result == 0 && args[1])) {
++		size = *word_count * sizeof(struct __user_cap_data_struct);
++		if (!ant_capture_lost(ctx))
++			ant_capture_field(ctx, 1, "arg1.capabilities", LAYOUT("cap_data[]"), 3,
++					  args[1], NULL, size, size, ANT_COMPLETE);
++	}
++}
++
++static void capture_reboot(struct ant_task *ctx, const u64 args[6], bool output)
++{
++	if (output)
++		return;
++	switch ((u32)args[2]) {
++	case LINUX_REBOOT_CMD_RESTART2:
++		ant_capture_string(ctx, 3, "arg3.restart_command", args[3], 255);
++		break;
++	case LINUX_REBOOT_CMD_RESTART: case LINUX_REBOOT_CMD_HALT:
++	case LINUX_REBOOT_CMD_POWER_OFF: case LINUX_REBOOT_CMD_CAD_ON:
++	case LINUX_REBOOT_CMD_CAD_OFF: case LINUX_REBOOT_CMD_SW_SUSPEND:
++	case LINUX_REBOOT_CMD_KEXEC:
++		break;
++	default:
++		ant_capture_field(ctx, 3, "reboot.unknown_selector", "", 1,
++				  args[3], NULL, U64_MAX, U64_MAX, ANT_NO_DECODER);
++	}
++}
++
++static void capture_landlock_rule(struct ant_task *ctx, const u64 args[6], bool output)
++{
++	u64 size;
++	const char *layout;
++
++	if (output)
++		return;
++	switch ((u32)args[1]) {
++	case LANDLOCK_RULE_PATH_BENEATH:
++		size = sizeof(struct landlock_path_beneath_attr);
++		layout = LAYOUT("landlock_path_beneath_attr");
++		break;
++	case LANDLOCK_RULE_NET_PORT:
++		size = sizeof(struct landlock_net_port_attr);
++		layout = LAYOUT("landlock_net_port_attr");
++		break;
++	default:
++		ant_capture_field(ctx, 2, "landlock.unknown_rule", "", 1,
++				  args[2], NULL, U64_MAX, U64_MAX, ANT_NO_DECODER);
++		return;
++	}
++	ant_capture_field(ctx, 2, "arg2.rule", layout, 3, args[2], NULL,
++			  size, size, ANT_COMPLETE);
++}
++
++static void capture_sized_input(struct ant_task *ctx, u8 arg, u64 address, u8 offset,
++				u64 minimum, u64 known_size, const char *key,
++				const char *layout, bool zero_is_original)
++{
++	u32 size;
++	enum ant_status status;
++	void __user *user_address = (void __user *)(unsigned long)(address + offset);
++
++	status = address > U64_MAX - offset ? ANT_INVALID_EXTENT :
++		copy_from_user_nofault(&size, user_address, sizeof(size)) ?
++		ANT_COPY_FAULT : ANT_COMPLETE;
++	if (status != ANT_COMPLETE) {
++		ant_capture_field(ctx, arg, key, LAYOUT("u32"), 3, address + offset,
++				  NULL, sizeof(size), sizeof(size), status);
++		return;
++	}
++	capture_versioned(ctx, arg, address, !size && zero_is_original ? minimum : size,
++			  minimum, known_size, key, layout);
++}
++
++static void capture_mount_queries(struct ant_task *ctx, u64 nr, const u64 args[6],
++				  bool output, long result)
++{
++	u32 written;
++	u64 size;
++	enum ant_status status;
++
++	if (!output) {
++		capture_sized_input(ctx, 0, args[0], 0, MNT_ID_REQ_SIZE_VER0,
++				    sizeof(struct mnt_id_req), "arg0.mount_request",
++				    LAYOUT("mnt_id_req"), false);
++		return;
++	}
++	if (result < 0)
++		return;
++	if (nr == 458) {
++		size = min_t(u64, args[2], result) * sizeof(u64);
++		ant_capture_field(ctx, 1, "arg1.mount_ids", LAYOUT("u64[]"), 3,
++				  args[1], NULL, size, args[2] <= 1000000 ? args[2] *
++				  sizeof(u64) : U64_MAX,
++				  args[2] <= 1000000 ? ANT_COMPLETE : ANT_INVALID_EXTENT);
++		return;
++	}
++	if (args[2] < sizeof(written)) {
++		size = args[2];
++		status = ANT_COMPLETE;
++	} else {
++		status = copy_from_user_nofault(&written, (void __user *)(unsigned long)args[1],
++						sizeof(written)) ?
++			ANT_COPY_FAULT : ANT_COMPLETE;
++		size = status == ANT_COMPLETE ? written : U64_MAX;
++		if (status == ANT_COMPLETE &&
++		    (size > args[2] || size < min_t(u64, args[2], sizeof(struct statmount))))
++			status = ANT_INVALID_EXTENT;
++	}
++	ant_capture_field(ctx, 1, "arg1.statmount", LAYOUT("statmount"), 3,
++			  args[1], NULL, size, args[2], status);
++}
++
++static void capture_lsm(struct ant_task *ctx, u64 nr, const u64 args[6],
++			bool output, long result)
++{
++	u8 size_arg = nr == 461 ? 1 : 2;
++	u8 data_arg = nr == 461 ? 0 : 1;
++	u32 observed, *capacity;
++	enum ant_status status;
++	u64 size;
++
++	if (nr == 460) {
++		if (!output) {
++			status = (u32)args[2] >= sizeof(struct lsm_ctx) &&
++				(u32)args[2] <= PAGE_SIZE ?
++				ANT_COMPLETE : ANT_INVALID_EXTENT;
++			ant_capture_field(ctx, 1, "arg1.context", LAYOUT("lsm_ctx"), 3,
++					  args[1], NULL, (u32)args[2], (u32)args[2], status);
++		}
++		return;
++	}
++	if (output && result < 0 && result != -E2BIG)
++		return;
++	status = copy_from_user_nofault(&observed, (void __user *)(unsigned long)args[size_arg],
++					sizeof(observed)) ?
++		ANT_COPY_FAULT : ANT_COMPLETE;
++	ant_capture_field(ctx, size_arg, output ? "lsm.returned_size" : "lsm.capacity",
++			  LAYOUT("u32"), 3, args[size_arg], &observed,
++			  sizeof(observed), sizeof(observed), status);
++	if (status != ANT_COMPLETE || ant_capture_lost(ctx))
++		return;
++	if (!output) {
++		capacity = kmalloc(sizeof(*capacity), GFP_NOWAIT);
++		if (!capacity) {
++			ant_capture_field(ctx, size_arg, "lsm.context", "", 1,
++					  args[size_arg], NULL, sizeof(observed), sizeof(observed),
++					  ANT_RESOURCE_EXHAUSTED);
++		} else {
++			*capacity = observed;
++			ant_capture_set_state(ctx, capacity, release_allocation);
++		}
++		if (nr == 459 && args[3] == LSM_FLAG_SINGLE)
++			capture_optional(ctx, 1, args[1], "arg1.lsm_selector", LAYOUT("lsm_ctx"),
++					 sizeof(struct lsm_ctx));
++		return;
++	}
++	if (result == -E2BIG || !args[data_arg])
++		return;
++	capacity = ant_capture_state(ctx);
++	status = !capacity ? ANT_CONTEXT_MISSING : observed > *capacity ?
++		ANT_INVALID_EXTENT : ANT_COMPLETE;
++	size = status == ANT_COMPLETE ? observed : U64_MAX;
++	ant_capture_field(ctx, data_arg, "lsm.output", nr == 461 ? LAYOUT("u64[]") :
++			  LAYOUT("lsm_ctx[]"), 3, args[data_arg], NULL, size,
++			  capacity ? *capacity : U64_MAX, status);
++}
++
++static void capture_gap(struct ant_task *ctx, const char *key, enum ant_status status)
++{
++	if (!ant_capture_lost(ctx))
++		ant_capture_field(ctx, 255, key, "", 1, 0, NULL,
++				  U64_MAX, U64_MAX, status);
++}
++
++static void capture_fcntl(struct ant_task *ctx, const u64 args[6],
++			  bool output, long result)
++{
++	u64 size;
++	const char *layout;
++	bool input = false, returns_data = false;
++
++	switch ((u32)args[1]) {
++	case F_GETLK: case F_OFD_GETLK:
++		input = true;
++		returns_data = true;
++		fallthrough;
++	case F_SETLK: case F_SETLKW: case F_OFD_SETLK: case F_OFD_SETLKW:
++		input = true;
++		size = sizeof(struct flock);
++		layout = LAYOUT("flock");
++		break;
++	case F_SETOWN_EX:
++		input = true;
++		fallthrough;
++	case F_GETOWN_EX:
++		returns_data = !input;
++		size = sizeof(struct f_owner_ex);
++		layout = LAYOUT("f_owner_ex");
++		break;
++	case F_GETOWNER_UIDS:
++		returns_data = true;
++		size = 2 * sizeof(u32);
++		layout = LAYOUT("uid_t[2]");
++		break;
++	case F_SET_RW_HINT:
++		input = true;
++		fallthrough;
++	case F_GET_RW_HINT:
++		returns_data = !input;
++		size = sizeof(u64);
++		layout = LAYOUT("u64");
++		break;
++	case F_DUPFD: case F_DUPFD_CLOEXEC: case F_CREATED_QUERY: case F_DUPFD_QUERY:
++	case F_GETFD: case F_SETFD: case F_GETFL: case F_SETFL:
++	case F_GETOWN: case F_SETOWN: case F_GETSIG: case F_SETSIG:
++	case F_GETLEASE: case F_SETLEASE: case F_NOTIFY:
++	case F_SETPIPE_SZ: case F_GETPIPE_SZ: case F_ADD_SEALS: case F_GET_SEALS:
++		return;
++	default:
++		if (!output)
++			capture_gap(ctx, "fcntl.unknown_selector", ANT_NO_DECODER);
++		return;
++	}
++	if ((!output && input) || (output && returns_data && result == 0))
++		ant_capture_field(ctx, 2, "arg2.fcntl", layout, 3,
++				  args[2], NULL, size, size, ANT_COMPLETE);
++}
++
++static void capture_arch_prctl(struct ant_task *ctx, const u64 args[6],
++			       bool output, long result)
++{
++	switch ((u32)args[0]) {
++	case ARCH_GET_FS: case ARCH_GET_GS: case ARCH_GET_XCOMP_SUPP:
++	case ARCH_GET_XCOMP_PERM: case ARCH_GET_XCOMP_GUEST_PERM:
++	case ARCH_GET_UNTAG_MASK: case ARCH_GET_MAX_TAG_BITS: case ARCH_SHSTK_STATUS:
++		if (output && result == 0)
++			ant_capture_field(ctx, 1, "arg1.arch_value", LAYOUT("unsigned_long"), 3,
++					  args[1], NULL, sizeof(unsigned long),
++					  sizeof(unsigned long), ANT_COMPLETE);
++		return;
++	case ARCH_SET_FS: case ARCH_SET_GS: case ARCH_SET_CPUID: case ARCH_GET_CPUID:
++	case ARCH_MAP_VDSO_X32: case ARCH_MAP_VDSO_32: case ARCH_MAP_VDSO_64:
++	case ARCH_REQ_XCOMP_PERM: case ARCH_REQ_XCOMP_GUEST_PERM:
++	case ARCH_ENABLE_TAGGED_ADDR: case ARCH_FORCE_TAGGED_SVA:
++	case ARCH_SHSTK_ENABLE: case ARCH_SHSTK_DISABLE: case ARCH_SHSTK_LOCK:
++	case ARCH_SHSTK_UNLOCK:
++		return;
++	default:
++		if (!output)
++			capture_gap(ctx, "arch_prctl.unknown_selector", ANT_NO_DECODER);
++	}
++}
++
++static void capture_remaining_small(struct ant_task *ctx, u64 nr, const u64 args[6],
++				    bool output, long result)
++{
++	u64 size;
++	u8 arg;
++	const char *layout;
++	bool input;
++	enum ant_status status;
++
++	if (nr == 103) {
++		if ((u32)args[0] >= SYSLOG_ACTION_READ &&
++		    (u32)args[0] <= SYSLOG_ACTION_READ_CLEAR) {
++			if (output && result >= 0) {
++				status = (s32)args[2] >= 0 ? ANT_COMPLETE : ANT_INVALID_EXTENT;
++				ant_capture_field(ctx, 1, "arg1.log", "", 1, args[1], NULL,
++						  min_t(u64, (u32)args[2], result), (u32)args[2],
++						  status);
++			}
++		} else if ((u32)args[0] > SYSLOG_ACTION_SIZE_BUFFER && !output) {
++			ant_capture_field(ctx, 1, "syslog.unknown_selector", "", 1,
++					  args[1], NULL, U64_MAX, U64_MAX, ANT_NO_DECODER);
++		}
++		return;
++	}
++	if (nr == 154) {
++		input = args[0] == 1 || args[0] == 0x11;
++		if (input && !output)
++			ant_capture_field(ctx, 1, "arg1.ldt_entry", LAYOUT("user_desc"), 3,
++					  args[1], NULL, sizeof(struct user_desc), args[2],
++					  args[2] == sizeof(struct user_desc) ?
++					  ANT_COMPLETE : ANT_INVALID_EXTENT);
++		else if (!input && (args[0] == 0 || args[0] == 2) && output && (s32)result >= 0)
++			ant_capture_field(ctx, 1, "arg1.ldt", "", 1, args[1], NULL,
++					  min_t(u64, (u32)result, args[2]), args[2], ANT_COMPLETE);
++		else if (!input && args[0] != 0 && args[0] != 2 && !output)
++			ant_capture_field(ctx, 1, "modify_ldt.unknown_selector", "", 1,
++					  args[1], NULL, U64_MAX, U64_MAX, ANT_NO_DECODER);
++		return;
++	}
++	if (nr == 298) {
++		if (!output)
++			capture_sized_input(ctx, 0, args[0], sizeof(u32), PERF_ATTR_SIZE_VER0,
++					    sizeof(struct perf_event_attr), "arg0.perf_event_attr",
++					    LAYOUT("perf_event_attr"), true);
++		else if (result == -E2BIG)
++			capture_optional(ctx, 0, args[0] + sizeof(u32), "arg0.required_size",
++					 LAYOUT("u32"), sizeof(u32));
++		return;
++	}
++	for (arg = output ? 4 : 2; arg <= (output ? 4 : 3) && !ant_capture_lost(ctx); arg++) {
++		if (!args[arg])
++			continue;
++		size = args[1] <= U64_MAX / (arg == 2 ? sizeof(u64) : sizeof(int)) ?
++			args[1] * (arg == 2 ? sizeof(u64) : sizeof(int)) : U64_MAX;
++		layout = arg == 2 ? LAYOUT("address[]") : LAYOUT("int[]");
++		if (!output || result >= 0)
++			ant_capture_field(ctx, arg, "move_pages.array", layout, 3,
++					  args[arg], NULL, size, size,
++					  size == U64_MAX ? ANT_INVALID_EXTENT : ANT_COMPLETE);
++	}
++}
++
++/* Selector families (slice 2B). Pointer roles follow the pinned kernel/sys.c,
++ * kernel/ptrace.c, arch/x86/kernel/ptrace.c, security/keys and fs/filesystems.c.
++ */
++#define ANT_ANON_VMA_NAME_MAX 80	/* ANON_VMA_NAME_MAX_LEN, kernel/sys.c */
++#define ANT_KEY_TYPE_MAX 32		/* char type[32], security/keys/keyctl.c */
++#define ANT_KEY_DESC_MAX 4096		/* KEY_MAX_DESC_SIZE, security/keys/keyctl.c */
++#define ANT_KEY_UPDATE_MAX PAGE_SIZE	/* keyctl_update_key() payload limit */
++#define ANT_KEY_PAYLOAD_MAX (1024 * 1024 - 1)	/* keyctl_instantiate_key() */
++#define ANT_KDF_HASH_MAX 128		/* CRYPTO_MAX_ALG_NAME */
++#define ANT_KDF_OTHERINFO_MAX 64	/* KEYCTL_KDF_MAX_OI_LEN, security/keys/internal.h */
++
++static void capture_fixed(struct ant_task *ctx, u8 arg, const char *key, const char *layout,
++			  u64 address, u64 size)
++{
++	ant_capture_field(ctx, arg, key, layout, 3, address, NULL, size, size, ANT_COMPLETE);
++}
++
++/* A fixed struct in the caller's memory: input of a SET request at entry, or
++ * output of the paired GET request after success.
++ */
++static void capture_paired(struct ant_task *ctx, bool output, long result, bool get,
++			   const char *key, const char *layout, u64 address, u64 size)
++{
++	if (output == get && (!output || result == 0))
++		capture_fixed(ctx, 3, key, layout, address, size);
++}
++
++/* The kernel returns the full length but copies only what fits the caller's buffer. */
++static void capture_truncated(struct ant_task *ctx, u8 arg, const char *key,
++			      const char *layout, u64 address, u64 capacity, long result)
++{
++	if (address && result >= 0)
++		ant_capture_field(ctx, arg, key, layout, 1, address, NULL,
++				  min_t(u64, capacity, result), result, ANT_COMPLETE);
++}
++
++static void capture_bounded(struct ant_task *ctx, u8 arg, const char *key, u64 address,
++			    u64 length, u64 ceiling)
++{
++	if (address || length)
++		ant_capture_field(ctx, arg, key, "", 1, address, NULL,
++				  min(length, ceiling), length,
++				  length > ceiling ? ANT_INVALID_EXTENT : ANT_COMPLETE);
++}
++
++static void capture_prctl_mm(struct ant_task *ctx, const u64 args[6], bool output, long result)
++{
++	const u64 auxv_max = sizeof_field(struct mm_struct, saved_auxv);
++	struct prctl_mm_map map;
++	enum ant_status status;
++
++	switch (args[1]) {
++	case PR_SET_MM_MAP:
++		if (output)
++			return;
++		if (args[3] != sizeof(map)) {
++			ant_capture_field(ctx, 2, "arg2.mm_map", LAYOUT("prctl_mm_map"), 3, args[2],
++					  NULL, min_t(u64, args[3], sizeof(map)), args[3],
++					  ANT_INVALID_EXTENT);
++			return;
++		}
++		status = copy_from_user_nofault(&map, (void __user *)(unsigned long)args[2],
++						sizeof(map)) ? ANT_COPY_FAULT : ANT_COMPLETE;
++		ant_capture_field(ctx, 2, "arg2.mm_map", LAYOUT("prctl_mm_map"), 3, args[2],
++				  &map, sizeof(map), sizeof(map), status);
++		if (status == ANT_COMPLETE && map.auxv && !ant_capture_lost(ctx))
++			ant_capture_field(ctx, 2, "arg2.mm_map.auxv", LAYOUT("unsigned_long[]"), 3,
++					  (unsigned long)map.auxv, NULL,
++					  min_t(u64, map.auxv_size, auxv_max), map.auxv_size,
++					  map.auxv_size > auxv_max ? ANT_INVALID_EXTENT :
++					  ANT_COMPLETE);
++		return;
++	case PR_SET_MM_MAP_SIZE:
++		if (output && result == 0)
++			capture_fixed(ctx, 2, "arg2.size", LAYOUT("u32"), args[2], sizeof(u32));
++		return;
++	case PR_SET_MM_AUXV:
++		if (!output)
++			ant_capture_field(ctx, 2, "arg2.auxv", LAYOUT("unsigned_long[]"), 3,
++					  args[2],
++					  NULL, min(args[3], auxv_max), args[3],
++					  args[3] > auxv_max ? ANT_INVALID_EXTENT : ANT_COMPLETE);
++		return;
++	case PR_SET_MM_START_CODE: case PR_SET_MM_END_CODE: case PR_SET_MM_START_DATA:
++	case PR_SET_MM_END_DATA: case PR_SET_MM_START_STACK: case PR_SET_MM_START_BRK:
++	case PR_SET_MM_BRK: case PR_SET_MM_ARG_START: case PR_SET_MM_ARG_END:
++	case PR_SET_MM_ENV_START: case PR_SET_MM_ENV_END: case PR_SET_MM_EXE_FILE:
++		return;
++	default:
++		if (!output)
++			capture_gap(ctx, "prctl.unknown_selector", ANT_NO_DECODER);
++	}
++}
++
++static void capture_prctl(struct ant_task *ctx, const u64 args[6], bool output, long result)
++{
++	switch ((u32)args[0]) {
++	case PR_SET_NAME:
++		if (!output)
++			ant_capture_string(ctx, 1, "arg1.name", args[1], TASK_COMM_LEN);
++		return;
++	case PR_GET_NAME:
++		if (output && result == 0)
++			capture_fixed(ctx, 1, "arg1.name", LAYOUT("char[16]"), args[1],
++				      TASK_COMM_LEN);
++		return;
++	case PR_GET_PDEATHSIG: case PR_GET_CHILD_SUBREAPER: case PR_GET_TSC:
++		if (output && result == 0)
++			capture_fixed(ctx, 1, "arg1.value", LAYOUT("int"), args[1], sizeof(int));
++		return;
++	case PR_GET_TID_ADDRESS:
++		if (output && result == 0)
++			capture_fixed(ctx, 1, "arg1.tid_address", LAYOUT("address"), args[1],
++				      sizeof(unsigned long));
++		return;
++	case PR_GET_AUXV:
++		if (output)
++			capture_truncated(ctx, 1, "arg1.auxv", LAYOUT("unsigned_long[]"), args[1],
++					  args[2], result);
++		return;
++	case PR_SET_SECCOMP:
++		if (!output && args[1] == SECCOMP_MODE_FILTER)
++			capture_fprog(ctx, 2, args[2], sizeof(struct sock_fprog), "arg2.program");
++		return;
++	case PR_SET_MM:
++		capture_prctl_mm(ctx, args, output, result);
++		return;
++	case PR_SET_VMA:
++		if (output)
++			return;
++		if (args[1] == PR_SET_VMA_ANON_NAME) {
++			if (args[4])
++				ant_capture_string(ctx, 4, "arg4.name", args[4],
++						   ANT_ANON_VMA_NAME_MAX);
++		} else {
++			capture_gap(ctx, "prctl.unknown_selector", ANT_NO_DECODER);
++		}
++		return;
++	case PR_SET_SYSCALL_USER_DISPATCH:
++		/* The kernel reads the selector byte later, on every syscall. */
++		if (!output && args[1] == PR_SYS_DISPATCH_ON && args[4])
++			ant_capture_field(ctx, 4, "arg4.selector", LAYOUT("u8"), 3, args[4], NULL,
++					  1, 1, ANT_ASYNC_UNOBSERVED);
++		return;
++	case PR_SCHED_CORE:
++		if (output && result == 0 && args[1] == PR_SCHED_CORE_GET)
++			capture_fixed(ctx, 4, "arg4.cookie", LAYOUT("u64"), args[4], sizeof(u64));
++		return;
++	case PR_SET_PDEATHSIG: case PR_GET_DUMPABLE: case PR_SET_DUMPABLE:
++	case PR_GET_UNALIGN: case PR_SET_UNALIGN: case PR_GET_KEEPCAPS: case PR_SET_KEEPCAPS:
++	case PR_GET_FPEMU: case PR_SET_FPEMU: case PR_GET_FPEXC: case PR_SET_FPEXC:
++	case PR_GET_TIMING: case PR_SET_TIMING: case PR_GET_ENDIAN: case PR_SET_ENDIAN:
++	case PR_GET_SECCOMP: case PR_CAPBSET_READ: case PR_CAPBSET_DROP: case PR_SET_TSC:
++	case PR_GET_SECUREBITS: case PR_SET_SECUREBITS: case PR_GET_TIMERSLACK:
++	case PR_SET_TIMERSLACK: case PR_TASK_PERF_EVENTS_DISABLE:
++	case PR_TASK_PERF_EVENTS_ENABLE: case PR_MCE_KILL: case PR_MCE_KILL_GET:
++	case PR_SET_PTRACER: case PR_SET_CHILD_SUBREAPER: case PR_SET_NO_NEW_PRIVS:
++	case PR_GET_NO_NEW_PRIVS: case PR_SET_THP_DISABLE: case PR_GET_THP_DISABLE:
++	case PR_MPX_ENABLE_MANAGEMENT: case PR_MPX_DISABLE_MANAGEMENT:
++	case PR_SET_FP_MODE: case PR_GET_FP_MODE: case PR_CAP_AMBIENT:
++	case PR_SVE_SET_VL: case PR_SVE_GET_VL: case PR_GET_SPECULATION_CTRL:
++	case PR_SET_SPECULATION_CTRL: case PR_PAC_RESET_KEYS: case PR_SET_TAGGED_ADDR_CTRL:
++	case PR_GET_TAGGED_ADDR_CTRL: case PR_SET_IO_FLUSHER: case PR_GET_IO_FLUSHER:
++	case PR_PAC_SET_ENABLED_KEYS: case PR_PAC_GET_ENABLED_KEYS:
++	case PR_SME_SET_VL: case PR_SME_GET_VL: case PR_SET_MDWE: case PR_GET_MDWE:
++	case PR_SET_MEMORY_MERGE: case PR_GET_MEMORY_MERGE: case PR_RISCV_V_SET_CONTROL:
++	case PR_RISCV_V_GET_CONTROL: case PR_RISCV_SET_ICACHE_FLUSH_CTX:
++	case PR_PPC_GET_DEXCR: case PR_PPC_SET_DEXCR:
++		return;
++	default:
++		if (!output)
++			capture_gap(ctx, "prctl.unknown_selector", ANT_NO_DECODER);
++	}
++}
++
++struct ant_regset_state {
++	struct iovec iov;
++};
++
++/* Largest native regset in bytes, for SETREGSET input. */
++static u64 regset_ceiling(void)
++{
++	const struct user_regset_view *view = task_user_regset_view(current);
++	u64 ceiling = 0;
++	unsigned int index;
++
++	for (index = 0; index < view->n; index++)
++		ceiling = max_t(u64, ceiling,
++				(u64)view->regsets[index].n * view->regsets[index].size);
++	return ceiling;
++}
++
++static void capture_regset(struct ant_task *ctx, const u64 args[6], bool output, long result,
++			   bool set)
++{
++	struct ant_regset_state *state;
++	enum ant_status status;
++	u64 length, ceiling;
++
++	if (!output) {
++		state = kzalloc(sizeof(*state), GFP_NOWAIT);
++		if (!state) {
++			ant_capture_field(ctx, 3, "arg3.iovec", LAYOUT("iovec"), 3, args[3], NULL,
++					  sizeof(struct iovec), sizeof(struct iovec),
++					  ANT_RESOURCE_EXHAUSTED);
++			return;
++		}
++		status = copy_from_user_nofault(&state->iov, (void __user *)(unsigned long)args[3],
++						sizeof(state->iov)) ? ANT_COPY_FAULT : ANT_COMPLETE;
++		ant_capture_field(ctx, 3, "arg3.iovec", LAYOUT("iovec"), 3, args[3], &state->iov,
++				  sizeof(state->iov), sizeof(state->iov), status);
++		if (status != ANT_COMPLETE) {
++			kfree(state);
++			return;
++		}
++		ant_capture_set_state(ctx, state, release_allocation);
++		if (set && !ant_capture_lost(ctx)) {
++			ceiling = regset_ceiling();
++			ant_capture_field(ctx, 3, "arg3.iovec.data", "", 1,
++					  (unsigned long)state->iov.iov_base, NULL,
++					  min_t(u64, state->iov.iov_len, ceiling),
++					  state->iov.iov_len,
++					  state->iov.iov_len > ceiling ? ANT_INVALID_EXTENT :
++					  ANT_COMPLETE);
++		}
++		return;
++	}
++	if (result || ant_capture_lost(ctx))
++		return;
++	state = ant_capture_state(ctx);
++	status = copy_from_user_nofault(&length, (void __user *)(unsigned long)
++					(args[3] + offsetof(struct iovec, iov_len)),
++					sizeof(length)) ? ANT_COPY_FAULT : ANT_COMPLETE;
++	ant_capture_field(ctx, 3, "arg3.iov_len", LAYOUT("u64"), 3,
++			  args[3] + offsetof(struct iovec, iov_len), &length, sizeof(length),
++			  sizeof(length), status);
++	if (set || ant_capture_lost(ctx))
++		return;
++	if (!state || status != ANT_COMPLETE) {
++		ant_capture_field(ctx, 3, "arg3.iovec.data", "", 1, 0, NULL, U64_MAX, U64_MAX,
++				  ANT_CONTEXT_MISSING);
++		return;
++	}
++	ant_capture_field(ctx, 3, "arg3.iovec.data", "", 1, (unsigned long)state->iov.iov_base,
++			  NULL, min_t(u64, length, state->iov.iov_len), length,
++			  length > state->iov.iov_len ? ANT_INVALID_EXTENT : ANT_COMPLETE);
++}
++
++static bool arch_prctl_returns_value(u64 code)
++{
++	switch (code) {
++	case ARCH_GET_FS: case ARCH_GET_GS: case ARCH_GET_XCOMP_SUPP:
++	case ARCH_GET_XCOMP_PERM: case ARCH_GET_XCOMP_GUEST_PERM:
++	case ARCH_GET_UNTAG_MASK: case ARCH_GET_MAX_TAG_BITS: case ARCH_SHSTK_STATUS:
++		return true;
++	default:
++		return false;
++	}
++}
++
++static void capture_ptrace(struct ant_task *ctx, const u64 args[6], bool output, long result)
++{
++	struct ptrace_peeksiginfo_args peek;
++	u8 data = 3;
++
++	switch (args[0]) {
++	case PTRACE_PEEKTEXT: case PTRACE_PEEKDATA:
++		/* Tracee addresses are in another address space; never dereference them. */
++		if (!output)
++			ant_capture_field(ctx, 2, "arg2.tracee_address", LAYOUT("unsigned_long"), 3,
++					  args[2], NULL, sizeof(unsigned long),
++					  sizeof(unsigned long), ANT_ADDRESS_ONLY);
++		fallthrough;
++	case PTRACE_PEEKUSR:
++		if (output && result == 0)
++			capture_fixed(ctx, data, "arg3.word", LAYOUT("unsigned_long"), args[data],
++				      sizeof(unsigned long));
++		return;
++	case PTRACE_POKETEXT: case PTRACE_POKEDATA:
++		if (!output)
++			ant_capture_field(ctx, 2, "arg2.tracee_address", LAYOUT("unsigned_long"), 3,
++					  args[2], NULL, sizeof(unsigned long),
++					  sizeof(unsigned long), ANT_ADDRESS_ONLY);
++		return;
++	case PTRACE_GETREGS: case PTRACE_SETREGS:
++		capture_paired(ctx, output, result, args[0] == PTRACE_GETREGS, "arg3.regs",
++			       LAYOUT("user_regs_struct"), args[data],
++			       sizeof(struct user_regs_struct));
++		return;
++	case PTRACE_GETFPREGS: case PTRACE_SETFPREGS:
++		capture_paired(ctx, output, result, args[0] == PTRACE_GETFPREGS, "arg3.fpregs",
++			       LAYOUT("user_i387_struct"), args[data],
++			       sizeof(struct user_i387_struct));
++		return;
++	case PTRACE_GETREGSET: case PTRACE_SETREGSET:
++		capture_regset(ctx, args, output, result, args[0] == PTRACE_SETREGSET);
++		return;
++	case PTRACE_GETSIGINFO: case PTRACE_SETSIGINFO:
++		capture_paired(ctx, output, result, args[0] == PTRACE_GETSIGINFO, "arg3.siginfo",
++			       LAYOUT("siginfo_t"), args[data], sizeof(siginfo_t));
++		return;
++	case PTRACE_PEEKSIGINFO:
++		if (!output) {
++			capture_fixed(ctx, 2, "arg2.args", LAYOUT("ptrace_peeksiginfo_args"),
++				      args[2],
++				      sizeof(peek));
++		} else if (result > 0 && result <= INT_MAX) {
++			capture_fixed(ctx, data, "arg3.siginfo", LAYOUT("siginfo_t[]"), args[data],
++				      (u64)result * sizeof(siginfo_t));
++		}
++		return;
++	case PTRACE_GETSIGMASK: case PTRACE_SETSIGMASK:
++		if (args[2] == sizeof(sigset_t))
++			capture_paired(ctx, output, result, args[0] == PTRACE_GETSIGMASK,
++				       "arg3.sigmask", LAYOUT("sigset_t"), args[data],
++				       sizeof(sigset_t));
++		return;
++	case PTRACE_GETEVENTMSG:
++		if (output && result == 0)
++			capture_fixed(ctx, data, "arg3.message", LAYOUT("unsigned_long"),
++				      args[data],
++				      sizeof(unsigned long));
++		return;
++	case PTRACE_GET_THREAD_AREA: case PTRACE_SET_THREAD_AREA:
++		capture_paired(ctx, output, result, args[0] == PTRACE_GET_THREAD_AREA, "arg3.desc",
++			       LAYOUT("user_desc"), args[data], sizeof(struct user_desc));
++		return;
++	case PTRACE_ARCH_PRCTL:
++		/* arch_ptrace() calls do_arch_prctl_64(child, data, addr): data is the
++		 * arch_prctl code and addr the value or output pointer.
++		 */
++		if (output && result == 0 && arch_prctl_returns_value(args[3]))
++			capture_fixed(ctx, 2, "arg2.value", LAYOUT("unsigned_long"), args[2],
++				      sizeof(unsigned long));
++		return;
++	case PTRACE_GET_SYSCALL_INFO:
++		if (output)
++			capture_truncated(ctx, data, "arg3.info", LAYOUT("ptrace_syscall_info"),
++					  args[data], args[2], result);
++		return;
++	case PTRACE_GET_RSEQ_CONFIGURATION:
++		if (output)
++			capture_truncated(ctx, data, "arg3.config",
++					  LAYOUT("ptrace_rseq_configuration"),
++					  args[data], args[2], result);
++		return;
++	case PTRACE_SECCOMP_GET_FILTER:
++		if (output && result > 0 && result <= BPF_MAXINSNS && args[data])
++			capture_fixed(ctx, data, "arg3.filter", LAYOUT("sock_filter[]"), args[data],
++				      (u64)result * sizeof(struct sock_filter));
++		return;
++	case PTRACE_SECCOMP_GET_METADATA:
++		if (!output && args[2] >= sizeof(u64))
++			capture_fixed(ctx, data, "arg3.filter_off", LAYOUT("u64"), args[data],
++				      sizeof(u64));
++		else if (output && result >= 0)
++			ant_capture_field(ctx, data, "arg3.metadata", LAYOUT("seccomp_metadata"), 3,
++					  args[data], NULL,
++					  min_t(u64, args[2], sizeof(struct seccomp_metadata)),
++					  args[2], ANT_COMPLETE);
++		return;
++	case PTRACE_SET_SYSCALL_USER_DISPATCH_CONFIG:
++	case PTRACE_GET_SYSCALL_USER_DISPATCH_CONFIG:
++		if (args[2] == sizeof(struct ptrace_sud_config))
++			capture_paired(ctx, output, result,
++				       args[0] == PTRACE_GET_SYSCALL_USER_DISPATCH_CONFIG,
++				       "arg3.config", LAYOUT("ptrace_sud_config"), args[data],
++				       sizeof(struct ptrace_sud_config));
++		return;
++	case PTRACE_TRACEME: case PTRACE_ATTACH: case PTRACE_SEIZE: case PTRACE_INTERRUPT:
++	case PTRACE_LISTEN: case PTRACE_CONT: case PTRACE_SYSCALL: case PTRACE_SINGLESTEP:
++	case PTRACE_SINGLEBLOCK: case PTRACE_SYSEMU: case PTRACE_SYSEMU_SINGLESTEP:
++	case PTRACE_KILL: case PTRACE_DETACH: case PTRACE_SETOPTIONS:
++	case PTRACE_OLDSETOPTIONS: case PTRACE_POKEUSR:
++	case PTRACE_GETFPXREGS: case PTRACE_SETFPXREGS:
++		return;
++	default:
++		if (!output)
++			capture_gap(ctx, "ptrace.unknown_selector", ANT_NO_DECODER);
++	}
++}
++
++struct ant_pkey_state {
++	struct keyctl_pkey_params params;
++};
++
++static void capture_keyctl_pkey(struct ant_task *ctx, const u64 args[6], bool output,
++				long result)
++{
++	struct ant_pkey_state *state;
++	enum ant_status status;
++
++	if (!output) {
++		state = kzalloc(sizeof(*state), GFP_NOWAIT);
++		status = !state ? ANT_RESOURCE_EXHAUSTED :
++			copy_from_user_nofault(&state->params,
++					       (void __user *)(unsigned long)args[1],
++					       sizeof(state->params)) ?
++			ANT_COPY_FAULT : ANT_COMPLETE;
++		ant_capture_field(ctx, 1, "arg1.params", LAYOUT("keyctl_pkey_params"), 3, args[1],
++				  state ? &state->params : NULL, sizeof(state->params),
++				  sizeof(state->params), status);
++		if (!ant_capture_lost(ctx))
++			ant_capture_string(ctx, 2, "arg2.info", args[2], PAGE_SIZE);
++		if (status != ANT_COMPLETE) {
++			kfree(state);
++			return;
++		}
++		ant_capture_set_state(ctx, state, release_allocation);
++		if (!ant_capture_lost(ctx))
++			capture_bounded(ctx, 3, "arg3.input", args[3], state->params.in_len,
++					ANT_KEY_PAYLOAD_MAX);
++		if ((u32)args[0] == KEYCTL_PKEY_VERIFY && !ant_capture_lost(ctx))
++			capture_bounded(ctx, 4, "arg4.signature", args[4], state->params.in2_len,
++					ANT_KEY_PAYLOAD_MAX);
++		return;
++	}
++	if ((u32)args[0] == KEYCTL_PKEY_VERIFY || result < 0 || ant_capture_lost(ctx))
++		return;
++	state = ant_capture_state(ctx);
++	if (!state)
++		ant_capture_field(ctx, 4, "arg4.output", "", 1, args[4], NULL, U64_MAX, U64_MAX,
++				  ANT_CONTEXT_MISSING);
++	else
++		capture_truncated(ctx, 4, "arg4.output", "", args[4], state->params.out_len,
++				  result);
++}
++
++static void capture_keyctl_dh(struct ant_task *ctx, const u64 args[6], bool output, long result)
++{
++	struct keyctl_kdf_params kdf;
++	enum ant_status status;
++
++	if (output) {
++		capture_truncated(ctx, 2, "arg2.buffer", "", args[2], args[3], result);
++		return;
++	}
++	capture_fixed(ctx, 1, "arg1.params", LAYOUT("keyctl_dh_params"), args[1],
++		      sizeof(struct keyctl_dh_params));
++	if (!args[4] || ant_capture_lost(ctx))
++		return;
++	status = copy_from_user_nofault(&kdf, (void __user *)(unsigned long)args[4],
++					sizeof(kdf)) ? ANT_COPY_FAULT : ANT_COMPLETE;
++	ant_capture_field(ctx, 4, "arg4.kdf", LAYOUT("keyctl_kdf_params"), 3, args[4], &kdf,
++			  sizeof(kdf), sizeof(kdf), status);
++	if (status != ANT_COMPLETE || ant_capture_lost(ctx))
++		return;
++	if (kdf.hashname)
++		ant_capture_string(ctx, 4, "arg4.kdf.hashname", (unsigned long)kdf.hashname,
++				   ANT_KDF_HASH_MAX);
++	if (!ant_capture_lost(ctx))
++		capture_bounded(ctx, 4, "arg4.kdf.otherinfo", (unsigned long)kdf.otherinfo,
++				kdf.otherinfolen, ANT_KDF_OTHERINFO_MAX);
++}
++
++static void capture_keyctl(struct ant_task *ctx, const u64 args[6], bool output, long result)
++{
++	struct ant_vector_state *vector;
++
++	switch ((u32)args[0]) {
++	case KEYCTL_JOIN_SESSION_KEYRING:
++		if (!output && args[1])
++			ant_capture_string(ctx, 1, "arg1.name", args[1], ANT_KEY_DESC_MAX);
++		return;
++	case KEYCTL_UPDATE:
++		if (!output)
++			capture_bounded(ctx, 2, "arg2.payload", args[2], args[3],
++					ANT_KEY_UPDATE_MAX);
++		return;
++	case KEYCTL_INSTANTIATE:
++		if (!output)
++			capture_bounded(ctx, 2, "arg2.payload", args[2], args[3],
++					ANT_KEY_PAYLOAD_MAX);
++		return;
++	case KEYCTL_INSTANTIATE_IOV:
++		if (output)
++			return;
++		vector = save_vector(ctx, 2, args[2], args[3], "arg2.iov");
++		if (vector)
++			vector_data(ctx, vector, 2, "arg2.iov", ANT_KEY_PAYLOAD_MAX);
++		kfree(vector);
++		return;
++	case KEYCTL_DESCRIBE: case KEYCTL_READ: case KEYCTL_GET_SECURITY:
++		if (output)
++			capture_truncated(ctx, 2, "arg2.buffer", "", args[2], args[3], result);
++		return;
++	case KEYCTL_SEARCH:
++		if (output)
++			return;
++		ant_capture_string(ctx, 2, "arg2.type", args[2], ANT_KEY_TYPE_MAX);
++		if (!ant_capture_lost(ctx))
++			ant_capture_string(ctx, 3, "arg3.description", args[3], ANT_KEY_DESC_MAX);
++		return;
++	case KEYCTL_RESTRICT_KEYRING:
++		if (output)
++			return;
++		if (args[2])
++			ant_capture_string(ctx, 2, "arg2.type", args[2], ANT_KEY_TYPE_MAX);
++		if (args[3] && !ant_capture_lost(ctx))
++			ant_capture_string(ctx, 3, "arg3.restriction", args[3], PAGE_SIZE);
++		return;
++	case KEYCTL_DH_COMPUTE:
++		capture_keyctl_dh(ctx, args, output, result);
++		return;
++	case KEYCTL_PKEY_QUERY:
++		if (!output)
++			ant_capture_string(ctx, 3, "arg3.info", args[3], PAGE_SIZE);
++		else if (result == 0)
++			capture_fixed(ctx, 4, "arg4.query", LAYOUT("keyctl_pkey_query"), args[4],
++				      sizeof(struct keyctl_pkey_query));
++		return;
++	case KEYCTL_PKEY_ENCRYPT: case KEYCTL_PKEY_DECRYPT: case KEYCTL_PKEY_SIGN:
++	case KEYCTL_PKEY_VERIFY:
++		capture_keyctl_pkey(ctx, args, output, result);
++		return;
++	case KEYCTL_CAPABILITIES:
++		if (output)
++			capture_truncated(ctx, 1, "arg1.buffer", "", args[1], args[2], result);
++		return;
++	case KEYCTL_GET_KEYRING_ID: case KEYCTL_REVOKE: case KEYCTL_CHOWN: case KEYCTL_SETPERM:
++	case KEYCTL_CLEAR: case KEYCTL_LINK: case KEYCTL_UNLINK: case KEYCTL_NEGATE:
++	case KEYCTL_SET_REQKEY_KEYRING: case KEYCTL_SET_TIMEOUT: case KEYCTL_ASSUME_AUTHORITY:
++	case KEYCTL_SESSION_TO_PARENT: case KEYCTL_REJECT: case KEYCTL_INVALIDATE:
++	case KEYCTL_GET_PERSISTENT: case KEYCTL_MOVE: case KEYCTL_WATCH_KEY:
++		return;
++	default:
++		if (!output)
++			capture_gap(ctx, "keyctl.unknown_selector", ANT_NO_DECODER);
++	}
++}
++
++static void capture_sysfs(struct ant_task *ctx, const u64 args[6], bool output, long result)
++{
++	switch (args[0]) {
++	case 1:
++		if (!output)
++			ant_capture_string(ctx, 1, "arg1.fsname", args[1], PATH_MAX);
++		return;
++	case 2:
++		/* The kernel writes the name and its NUL; read back exactly that string. */
++		if (output && result == 0)
++			ant_capture_string(ctx, 2, "arg2.fsname", args[2], PATH_MAX);
++		return;
++	case 3:
++		return;
++	default:
++		if (!output)
++			capture_gap(ctx, "sysfs.unknown_selector", ANT_NO_DECODER);
++	}
++}
++
++/* Slice 2C: mount, quota control, kexec_load and rseq. Roles follow the pinned
++ * fs/namespace.c, fs/quota/quota.c, kernel/kexec.c and kernel/rseq.c.
++ */
++
++/* copy_mount_options() reads up to one page and stops at the first unreadable
++ * byte. Pages are readable as a whole, so probing each page's first byte gives
++ * the same prefix. A non-resident page may also read as unreadable here.
++ */
++static void capture_mount_data(struct ant_task *ctx, u64 address)
++{
++	u64 first = PAGE_SIZE - offset_in_page(address), prefix;
++	char byte;
++
++	if (!address)
++		return;
++	if (copy_from_user_nofault(&byte, (void __user *)(unsigned long)address, 1))
++		prefix = 0;
++	else if (first >= PAGE_SIZE ||
++		 !copy_from_user_nofault(&byte, (void __user *)(unsigned long)(address + first), 1))
++		prefix = PAGE_SIZE;
++	else
++		prefix = first;
++	if (prefix)
++		ant_capture_field(ctx, 4, "arg4.data", LAYOUT("mount_options"), 1, address, NULL,
++				  prefix, PAGE_SIZE, ANT_COMPLETE);
++	if (prefix < PAGE_SIZE && !ant_capture_lost(ctx))
++		ant_capture_field(ctx, 4, "arg4.data.tail", "", 1, address + prefix, NULL,
++				  PAGE_SIZE - prefix, PAGE_SIZE - prefix, ANT_COPY_FAULT);
++}
++
++static void capture_mount(struct ant_task *ctx, const u64 args[6], bool output)
++{
++	if (output)
++		return;
++	if (args[0])
++		ant_capture_string(ctx, 0, "arg0.dev_name", args[0], PATH_MAX);
++	if (!ant_capture_lost(ctx))
++		ant_capture_string(ctx, 1, "arg1.dir_name", args[1], PATH_MAX);
++	if (args[2] && !ant_capture_lost(ctx))
++		ant_capture_string(ctx, 2, "arg2.type", args[2], PATH_MAX);
++	if (!ant_capture_lost(ctx))
++		capture_mount_data(ctx, args[4]);
++}
++
++/* quotactl(cmd, special, id, addr) and quotactl_fd(fd, cmd, id, addr) share
++ * the subcommand roles of addr (argument 3 in both).
++ */
++static void capture_quota_addr(struct ant_task *ctx, u32 cmd, u64 address, bool output,
++			       long result, bool fd_variant)
++{
++	switch (cmd >> SUBCMDSHIFT) {
++	case Q_QUOTAON:
++		/* quotactl_fd rejects Q_QUOTAON; it has no path argument. */
++		if (!output && !fd_variant)
++			ant_capture_string(ctx, 3, "arg3.quota_file", address, PATH_MAX);
++		return;
++	case Q_GETFMT:
++		capture_paired(ctx, output, result, true, "arg3.format", LAYOUT("u32"), address,
++			       sizeof(u32));
++		return;
++	case Q_GETINFO: case Q_SETINFO:
++		capture_paired(ctx, output, result, cmd >> SUBCMDSHIFT == Q_GETINFO, "arg3.info",
++			       LAYOUT("if_dqinfo"), address, sizeof(struct if_dqinfo));
++		return;
++	case Q_GETQUOTA: case Q_SETQUOTA:
++		capture_paired(ctx, output, result, cmd >> SUBCMDSHIFT == Q_GETQUOTA, "arg3.dqblk",
++			       LAYOUT("if_dqblk"), address, sizeof(struct if_dqblk));
++		return;
++	case Q_GETNEXTQUOTA:
++		capture_paired(ctx, output, result, true, "arg3.dqblk", LAYOUT("if_nextdqblk"),
++			       address, sizeof(struct if_nextdqblk));
++		return;
++	case Q_XQUOTAON: case Q_XQUOTAOFF: case Q_XQUOTARM:
++		capture_paired(ctx, output, result, false, "arg3.flags", LAYOUT("u32"), address,
++			       sizeof(u32));
++		return;
++	case Q_XGETQSTAT:
++		capture_paired(ctx, output, result, true, "arg3.stat", LAYOUT("fs_quota_stat"),
++			       address, sizeof(struct fs_quota_stat));
++		return;
++	case Q_XGETQSTATV:
++		/* The kernel reads only qs_version before writing the whole result. */
++		if (!output)
++			capture_fixed(ctx, 3, "arg3.qs_version", LAYOUT("u8"), address, 1);
++		else
++			capture_paired(ctx, output, result, true, "arg3.stat",
++				       LAYOUT("fs_quota_statv"), address,
++				       sizeof(struct fs_quota_statv));
++		return;
++	case Q_XSETQLIM: case Q_XGETQUOTA: case Q_XGETNEXTQUOTA:
++		capture_paired(ctx, output, result, cmd >> SUBCMDSHIFT != Q_XSETQLIM, "arg3.dquot",
++			       LAYOUT("fs_disk_quota"), address, sizeof(struct fs_disk_quota));
++		return;
++	case Q_QUOTAOFF: case Q_SYNC: case Q_XQUOTASYNC:
++		return;
++	default:
++		if (!output)
++			capture_gap(ctx, "quotactl.unknown_selector", ANT_NO_DECODER);
++	}
++}
++
++/* The user layout of struct kexec_segment; uapi/linux/kexec.h hides it from
++ * kernel code, and the kernel's own copy adds a kbuf union.
++ */
++struct ant_kexec_segment {
++	u64 buf;
++	u64 bufsz;
++	u64 mem;
++	u64 memsz;
++};
++
++static_assert(sizeof(struct ant_kexec_segment) == 4 * sizeof(unsigned long));
++
++static void capture_kexec_load(struct ant_task *ctx, const u64 args[6], bool output)
++{
++	struct ant_kexec_segment segments[KEXEC_SEGMENT_MAX];
++	enum ant_status status;
++	u64 count = args[1], size;
++	unsigned int index;
++	char key[48];
++
++	if (output)
++		return;
++	size = count <= U64_MAX / sizeof(segments[0]) ? count * sizeof(segments[0]) : U64_MAX;
++	if (count > KEXEC_SEGMENT_MAX) {
++		ant_capture_field(ctx, 2, "arg2.segments", LAYOUT("kexec_segment[]"), 3, args[2],
++				  NULL, size, size, ANT_INVALID_EXTENT);
++		return;
++	}
++	status = count && copy_from_user_nofault(segments, (void __user *)(unsigned long)args[2],
++						 size) ? ANT_COPY_FAULT : ANT_COMPLETE;
++	ant_capture_field(ctx, 2, "arg2.segments", LAYOUT("kexec_segment[]"), 3, args[2],
++			  segments, size, size, status);
++	if (status != ANT_COMPLETE)
++		return;
++	for (index = 0; index < count && !ant_capture_lost(ctx); index++) {
++		if (!segments[index].bufsz)
++			continue;
++		scnprintf(key, sizeof(key), "arg2.segments[%u].buf", index);
++		/* Bounded like write(); larger images are flagged, not truncated silently. */
++		ant_capture_field(ctx, 2, key, "", 1, segments[index].buf, NULL,
++				  min_t(u64, segments[index].bufsz, MAX_RW_COUNT),
++				  segments[index].bufsz,
++				  segments[index].bufsz > MAX_RW_COUNT ? ANT_INVALID_EXTENT :
++				  ANT_COMPLETE);
++	}
++}
++
++static void capture_rseq(struct ant_task *ctx, const u64 args[6], bool output, long result)
++{
++	u64 size = min_t(u64, (u32)args[1], sizeof(struct rseq));
++
++	if (!output) {
++		ant_capture_field(ctx, 0, "arg0.rseq", LAYOUT("rseq"), 3, args[0], NULL, size,
++				  (u32)args[1], ANT_COMPLETE);
++	} else if (result == 0 && ((u32)args[2] & RSEQ_FLAG_UNREGISTER)) {
++		capture_fixed(ctx, 0, "arg0.rseq", LAYOUT("rseq"), args[0], size);
++	} else if (result == 0) {
++		/* The kernel writes the CPU, node and mm ids on later returns to user. */
++		ant_capture_field(ctx, 0, "arg0.rseq.updates", LAYOUT("rseq"), 3, args[0], NULL,
++				  sizeof(struct rseq), sizeof(struct rseq), ANT_ASYNC_UNOBSERVED);
++	}
++}
++
++/* Slice 2E: frames the kernel reads from the user stack instead of an
++ * argument. Their fields use index 255 and context.* keys.
++ */
++static void capture_rt_sigreturn(struct ant_task *ctx)
++{
++	unsigned long address = current_pt_regs()->sp - sizeof(long);
++	struct fxregs_state fx;
++	struct rt_sigframe frame;
++	struct _fpx_sw_bytes *sw = (struct _fpx_sw_bytes *)fx.sw_reserved;
++	enum ant_status status;
++	u64 fpstate, limit;
++	u32 magic2;
++
++	status = copy_from_user_nofault(&frame, (void __user *)address, sizeof(frame)) ?
++		ANT_COPY_FAULT : ANT_COMPLETE;
++	ant_capture_field(ctx, 255, "context.rt_sigframe", LAYOUT("rt_sigframe"), 3, address,
++			  &frame, sizeof(frame), sizeof(frame), status);
++	fpstate = (unsigned long)frame.uc.uc_mcontext.fpstate;
++	if (status != ANT_COMPLETE || !fpstate || ant_capture_lost(ctx))
++		return;
++	status = copy_from_user_nofault(&fx, (void __user *)(unsigned long)fpstate, sizeof(fx)) ?
++		ANT_COPY_FAULT : ANT_COMPLETE;
++	ant_capture_field(ctx, 255, "context.fpstate", LAYOUT("fxregs_state"), 3, fpstate, &fx,
++			  sizeof(fx), sizeof(fx), status);
++	/* check_xstate_in_sigframe(): if any check fails, the kernel ignores the
++	 * extension and restores the legacy state only, so nothing more is read.
++	 */
++	limit = min_t(u64, sw->extended_size, current->thread.fpu.fpstate->user_size);
++	if (status != ANT_COMPLETE || sw->magic1 != FP_XSTATE_MAGIC1 ||
++	    sw->xstate_size < sizeof(fx) + sizeof(struct xstate_header) ||
++	    sw->xstate_size > limit || ant_capture_lost(ctx) ||
++	    copy_from_user_nofault(&magic2, (void __user *)(unsigned long)
++				   (fpstate + sw->xstate_size), sizeof(magic2)) ||
++	    magic2 != FP_XSTATE_MAGIC2)
++		return;
++	ant_capture_field(ctx, 255, "context.fpstate.xstate", LAYOUT("xstate"), 3,
++			  fpstate + sizeof(fx), NULL, sw->xstate_size - sizeof(fx),
++			  sw->xstate_size - sizeof(fx), ANT_COMPLETE);
++}
++
++/* The uretprobe trampoline saves r11, rcx and rax at sp before the syscall. */
++static void capture_uretprobe(struct ant_task *ctx)
++{
++	ant_capture_field(ctx, 255, "context.uretprobe_regs", LAYOUT("uretprobe_regs"), 3,
++			  current_pt_regs()->sp, NULL, 3 * sizeof(unsigned long),
++			  3 * sizeof(unsigned long), ANT_COMPLETE);
++}
++
++/* Slice 2H: bpf(cmd, attr, size). Nested fields come from the snapshot of the
++ * attribute block taken here, never from a second read of user memory, except
++ * for lengths the kernel writes back, which are re-read at exit.
++ */
++#define ANT_BPF_MAX_INSNS 1000000	/* BPF_COMPLEXITY_LIMIT_INSNS */
++#define ANT_BPF_MAX_BTF (16 * 1024 * 1024)	/* BTF_MAX_SIZE, kernel/bpf/btf.c */
++#define ANT_BPF_REC_MIN 8		/* MIN_BPF_FUNCINFO_SIZE */
++#define ANT_BPF_REC_MAX 252		/* MAX_FUNCINFO_REC_SIZE */
++#define ANT_BPF_MULTI_MAX BIT(20)	/* MAX_KPROBE_MULTI_CNT / MAX_UPROBE_MULTI_CNT */
++
++struct ant_bpf_state {
++	union bpf_attr attr;
++	u32 size;
++	u32 key_size;
++	u32 value_size;
++	u32 batch_size;
++	bool map_known;
++	bool map_info;
++};
++
++/* Key, value and batch-token sizes as kernel/bpf/syscall.c computes them. */
++static void bpf_map_sizes(struct ant_bpf_state *state, u32 fd)
++{
++#ifdef CONFIG_BPF_SYSCALL
++	struct bpf_map *map = bpf_map_get(fd);
++
++	if (IS_ERR(map))
++		return;
++	state->map_known = true;
++	state->key_size = map->key_size;
++	switch (map->map_type) {
++	case BPF_MAP_TYPE_PERCPU_HASH: case BPF_MAP_TYPE_LRU_PERCPU_HASH:
++	case BPF_MAP_TYPE_PERCPU_ARRAY: case BPF_MAP_TYPE_PERCPU_CGROUP_STORAGE:
++		state->value_size = round_up(map->value_size, 8) * num_possible_cpus();
++		break;
++	case BPF_MAP_TYPE_PERF_EVENT_ARRAY: case BPF_MAP_TYPE_CGROUP_ARRAY:
++	case BPF_MAP_TYPE_ARRAY_OF_MAPS: case BPF_MAP_TYPE_PROG_ARRAY:
++	case BPF_MAP_TYPE_HASH_OF_MAPS:
++		state->value_size = sizeof(u32);
++		break;
++	default:
++		state->value_size = map->value_size;
++	}
++	switch (map->map_type) {
++	case BPF_MAP_TYPE_HASH: case BPF_MAP_TYPE_PERCPU_HASH:
++	case BPF_MAP_TYPE_LRU_HASH: case BPF_MAP_TYPE_LRU_PERCPU_HASH:
++		state->batch_size = sizeof(u32);
++		break;
++	default:
++		state->batch_size = map->key_size;
++	}
++	bpf_map_put(map);
++#endif
++}
++
++static void bpf_buffer(struct ant_task *ctx, const char *key, const char *layout, u64 address,
++		       u64 count, u64 element, u64 ceiling)
++{
++	u64 size = element && count <= U64_MAX / element ? count * element : U64_MAX;
++
++	if (!address || ant_capture_lost(ctx))
++		return;
++	ant_capture_field(ctx, 1, key, layout, 1, address, NULL, min(size, ceiling), size,
++			  size > ceiling ? ANT_INVALID_EXTENT : ANT_COMPLETE);
++}
++
++static void bpf_map_buffer(struct ant_task *ctx, struct ant_bpf_state *state, const char *key,
++			   u64 address, u64 count, u32 element)
++{
++	if (!address || ant_capture_lost(ctx))
++		return;
++	if (!state->map_known)
++		ant_capture_field(ctx, 1, key, "", 1, address, NULL, U64_MAX, U64_MAX,
++				  ANT_CONTEXT_MISSING);
++	else
++		bpf_buffer(ctx, key, "", address, count, element, MAX_RW_COUNT);
++}
++
++/* A length the kernel rewrote in the attribute block, if the caller's block
++ * covers it; recorded before the output it bounds.
++ */
++static bool bpf_rewritten(struct ant_task *ctx, struct ant_bpf_state *state, u64 attr,
++			  size_t offset, const char *key, u32 *value)
++{
++	enum ant_status status;
++
++	if (offset + sizeof(u32) > state->size || ant_capture_lost(ctx))
++		return false;
++	status = copy_from_user_nofault(value, (void __user *)(unsigned long)(attr + offset),
++					sizeof(*value)) ? ANT_COPY_FAULT : ANT_COMPLETE;
++	ant_capture_field(ctx, 1, key, LAYOUT("u32"), 3, attr + offset, value, sizeof(*value),
++			  sizeof(*value), status);
++	return status == ANT_COMPLETE;
++}
++
++static void bpf_log(struct ant_task *ctx, const char *key, u64 address, u32 size)
++{
++	/* The verifier writes its log on failure too; read back the string it wrote. */
++	if (address && size && !ant_capture_lost(ctx))
++		ant_capture_string(ctx, 1, key, address, size);
++}
++
++static void capture_bpf_link_create(struct ant_task *ctx, const union bpf_attr *a)
++{
++	u64 names, index, address;
++	char key[64];
++	u32 cnt;
++
++	switch (a->link_create.attach_type) {
++	case BPF_TRACE_KPROBE_MULTI: case BPF_TRACE_KPROBE_SESSION:
++		cnt = a->link_create.kprobe_multi.cnt;
++		names = a->link_create.kprobe_multi.syms;
++		bpf_buffer(ctx, "arg1.attr.syms", LAYOUT("char_ptr[]"), names, cnt, sizeof(u64),
++			   ANT_BPF_MULTI_MAX * sizeof(u64));
++		for (index = 0; names && cnt <= ANT_BPF_MULTI_MAX && index < cnt &&
++		     !ant_capture_lost(ctx); index++) {
++			if (copy_from_user_nofault(&address, (void __user *)(unsigned long)
++						   (names + index * sizeof(u64)), sizeof(address)))
++				break;
++			scnprintf(key, sizeof(key), "arg1.attr.syms[%llu]", index);
++			ant_capture_string(ctx, 1, key, address, KSYM_NAME_LEN);
++		}
++		bpf_buffer(ctx, "arg1.attr.addrs", LAYOUT("u64[]"),
++			   a->link_create.kprobe_multi.addrs, cnt, sizeof(u64),
++			   ANT_BPF_MULTI_MAX * sizeof(u64));
++		bpf_buffer(ctx, "arg1.attr.cookies", LAYOUT("u64[]"),
++			   a->link_create.kprobe_multi.cookies, cnt, sizeof(u64),
++			   ANT_BPF_MULTI_MAX * sizeof(u64));
++		return;
++	case BPF_TRACE_UPROBE_MULTI:
++		cnt = a->link_create.uprobe_multi.cnt;
++		if (a->link_create.uprobe_multi.path && !ant_capture_lost(ctx))
++			ant_capture_string(ctx, 1, "arg1.attr.path",
++					   a->link_create.uprobe_multi.path, PATH_MAX);
++		bpf_buffer(ctx, "arg1.attr.offsets", LAYOUT("u64[]"),
++			   a->link_create.uprobe_multi.offsets, cnt, sizeof(u64),
++			   ANT_BPF_MULTI_MAX * sizeof(u64));
++		bpf_buffer(ctx, "arg1.attr.ref_ctr_offsets", LAYOUT("u64[]"),
++			   a->link_create.uprobe_multi.ref_ctr_offsets, cnt, sizeof(u64),
++			   ANT_BPF_MULTI_MAX * sizeof(u64));
++		bpf_buffer(ctx, "arg1.attr.cookies", LAYOUT("u64[]"),
++			   a->link_create.uprobe_multi.cookies, cnt, sizeof(u64),
++			   ANT_BPF_MULTI_MAX * sizeof(u64));
++		return;
++	case BPF_TRACE_ITER:
++		bpf_buffer(ctx, "arg1.attr.iter_info", LAYOUT("bpf_iter_link_info"),
++			   a->link_create.iter_info, a->link_create.iter_info_len, 1, PAGE_SIZE);
++		return;
++	default:
++		return;
++	}
++}
++
++static void capture_bpf_entry(struct ant_task *ctx, struct ant_bpf_state *state, u32 cmd)
++{
++	const union bpf_attr *a = &state->attr;
++
++	switch (cmd) {
++	case BPF_MAP_LOOKUP_ELEM: case BPF_MAP_LOOKUP_AND_DELETE_ELEM:
++	case BPF_MAP_DELETE_ELEM: case BPF_MAP_UPDATE_ELEM: case BPF_MAP_GET_NEXT_KEY:
++		bpf_map_sizes(state, a->map_fd);
++		bpf_map_buffer(ctx, state, "arg1.attr.key", a->key, 1, state->key_size);
++		if (cmd == BPF_MAP_UPDATE_ELEM)
++			bpf_map_buffer(ctx, state, "arg1.attr.value", a->value, 1,
++				       state->value_size);
++		return;
++	case BPF_MAP_LOOKUP_BATCH: case BPF_MAP_LOOKUP_AND_DELETE_BATCH:
++	case BPF_MAP_UPDATE_BATCH: case BPF_MAP_DELETE_BATCH:
++		bpf_map_sizes(state, a->batch.map_fd);
++		bpf_map_buffer(ctx, state, "arg1.attr.in_batch", a->batch.in_batch, 1,
++			       state->batch_size);
++		if (cmd == BPF_MAP_UPDATE_BATCH || cmd == BPF_MAP_DELETE_BATCH)
++			bpf_map_buffer(ctx, state, "arg1.attr.keys", a->batch.keys, a->batch.count,
++				       state->key_size);
++		if (cmd == BPF_MAP_UPDATE_BATCH)
++			bpf_map_buffer(ctx, state, "arg1.attr.values", a->batch.values,
++				       a->batch.count, state->value_size);
++		return;
++	case BPF_PROG_LOAD:
++		bpf_buffer(ctx, "arg1.attr.insns", LAYOUT("bpf_insn[]"), a->insns, a->insn_cnt,
++			   sizeof(struct bpf_insn), ANT_BPF_MAX_INSNS * sizeof(struct bpf_insn));
++		if (a->license && !ant_capture_lost(ctx))
++			ant_capture_string(ctx, 1, "arg1.attr.license", a->license, 128);
++		if (a->func_info_rec_size >= ANT_BPF_REC_MIN &&
++		    a->func_info_rec_size <= ANT_BPF_REC_MAX)
++			bpf_buffer(ctx, "arg1.attr.func_info", LAYOUT("bpf_func_info[]"),
++				   a->func_info, a->func_info_cnt, a->func_info_rec_size,
++				   MAX_RW_COUNT);
++		if (a->line_info_rec_size >= ANT_BPF_REC_MIN &&
++		    a->line_info_rec_size <= ANT_BPF_REC_MAX)
++			bpf_buffer(ctx, "arg1.attr.line_info", LAYOUT("bpf_line_info[]"),
++				   a->line_info, a->line_info_cnt, a->line_info_rec_size,
++				   MAX_RW_COUNT);
++		bpf_buffer(ctx, "arg1.attr.core_relos", LAYOUT("bpf_core_relo[]"), a->core_relos,
++			   a->core_relo_cnt, a->core_relo_rec_size, MAX_RW_COUNT);
++		/* Linux 6.12 has no fd_array count, so its extent is unknown. */
++		if (a->fd_array)
++			capture_gap(ctx, "bpf.fd_array_unbounded", ANT_NO_DECODER);
++		return;
++	case BPF_BTF_LOAD:
++		bpf_buffer(ctx, "arg1.attr.btf", "", a->btf, a->btf_size, 1, ANT_BPF_MAX_BTF);
++		return;
++	case BPF_OBJ_PIN: case BPF_OBJ_GET:
++		if (!ant_capture_lost(ctx))
++			ant_capture_string(ctx, 1, "arg1.attr.pathname", a->pathname, PATH_MAX);
++		return;
++	case BPF_PROG_TEST_RUN:
++		bpf_buffer(ctx, "arg1.attr.data_in", "", a->test.data_in, a->test.data_size_in, 1,
++			   MAX_RW_COUNT);
++		bpf_buffer(ctx, "arg1.attr.ctx_in", "", a->test.ctx_in, a->test.ctx_size_in, 1,
++			   MAX_RW_COUNT);
++		return;
++	case BPF_OBJ_GET_INFO_BY_FD:
++		bpf_map_sizes(state, a->info.bpf_fd);
++		state->map_info = state->map_known;
++		/* Pointers inside the info structures are not followed. */
++		capture_gap(ctx, "bpf.info_nested", ANT_NO_DECODER);
++		return;
++	case BPF_RAW_TRACEPOINT_OPEN:
++		if (a->raw_tracepoint.name && !ant_capture_lost(ctx))
++			ant_capture_string(ctx, 1, "arg1.attr.name", a->raw_tracepoint.name, 128);
++		return;
++	case BPF_LINK_CREATE:
++		capture_bpf_link_create(ctx, a);
++		return;
++	default:
++		return;
++	}
++}
++
++static void capture_bpf_exit(struct ant_task *ctx, struct ant_bpf_state *state, u32 cmd,
++			     u64 attr, long result)
++{
++	const union bpf_attr *a = &state->attr;
++	u32 count;
++
++	switch (cmd) {
++	case BPF_MAP_LOOKUP_ELEM: case BPF_MAP_LOOKUP_AND_DELETE_ELEM:
++		if (result == 0)
++			bpf_map_buffer(ctx, state, "arg1.attr.value", a->value, 1,
++				       state->value_size);
++		return;
++	case BPF_MAP_GET_NEXT_KEY:
++		if (result == 0)
++			bpf_map_buffer(ctx, state, "arg1.attr.next_key", a->next_key, 1,
++				       state->key_size);
++		return;
++	case BPF_MAP_LOOKUP_BATCH: case BPF_MAP_LOOKUP_AND_DELETE_BATCH:
++		/* -ENOENT reports the end of the map after copying what was found. */
++		if ((result != 0 && result != -ENOENT) ||
++		    !bpf_rewritten(ctx, state, attr, offsetof(union bpf_attr, batch.count),
++				   "arg1.attr.count", &count))
++			return;
++		count = min(count, a->batch.count);
++		bpf_map_buffer(ctx, state, "arg1.attr.out_batch", a->batch.out_batch, 1,
++			       state->batch_size);
++		bpf_map_buffer(ctx, state, "arg1.attr.keys", a->batch.keys, count, state->key_size);
++		bpf_map_buffer(ctx, state, "arg1.attr.values", a->batch.values, count,
++			       state->value_size);
++		return;
++	case BPF_PROG_LOAD:
++		bpf_log(ctx, "arg1.attr.log_buf", a->log_buf, a->log_size);
++		return;
++	case BPF_BTF_LOAD:
++		bpf_log(ctx, "arg1.attr.btf_log_buf", a->btf_log_buf, a->btf_log_size);
++		return;
++	case BPF_PROG_TEST_RUN:
++		if (result)
++			return;
++		if (a->test.data_out &&
++		    bpf_rewritten(ctx, state, attr, offsetof(union bpf_attr, test.data_size_out),
++				  "arg1.attr.data_size_out", &count))
++			bpf_buffer(ctx, "arg1.attr.data_out", "", a->test.data_out,
++				   min(count, a->test.data_size_out), 1, MAX_RW_COUNT);
++		if (a->test.ctx_out &&
++		    bpf_rewritten(ctx, state, attr, offsetof(union bpf_attr, test.ctx_size_out),
++				  "arg1.attr.ctx_size_out", &count))
++			bpf_buffer(ctx, "arg1.attr.ctx_out", "", a->test.ctx_out,
++				   min(count, a->test.ctx_size_out), 1, MAX_RW_COUNT);
++		return;
++	case BPF_OBJ_GET_INFO_BY_FD:
++		if (result ||
++		    !bpf_rewritten(ctx, state, attr, offsetof(union bpf_attr, info.info_len),
++				   "arg1.attr.info_len", &count))
++			return;
++		bpf_buffer(ctx, "arg1.attr.info",
++			   state->map_info ? LAYOUT("bpf_map_info") : LAYOUT("bpf_info"),
++			   a->info.info, min(count, a->info.info_len), 1, PAGE_SIZE);
++		return;
++	case BPF_PROG_QUERY:
++		if (result ||
++		    !bpf_rewritten(ctx, state, attr, offsetof(union bpf_attr, query.prog_cnt),
++				   "arg1.attr.prog_cnt", &count))
++			return;
++		count = min(count, a->query.prog_cnt);
++		bpf_buffer(ctx, "arg1.attr.prog_ids", LAYOUT("u32[]"), a->query.prog_ids, count,
++			   sizeof(u32), MAX_RW_COUNT);
++		bpf_buffer(ctx, "arg1.attr.prog_attach_flags", LAYOUT("u32[]"),
++			   a->query.prog_attach_flags, count, sizeof(u32), MAX_RW_COUNT);
++		bpf_buffer(ctx, "arg1.attr.link_ids", LAYOUT("u32[]"), a->query.link_ids, count,
++			   sizeof(u32), MAX_RW_COUNT);
++		bpf_buffer(ctx, "arg1.attr.link_attach_flags", LAYOUT("u32[]"),
++			   a->query.link_attach_flags, count, sizeof(u32), MAX_RW_COUNT);
++		return;
++	case BPF_TASK_FD_QUERY:
++		if (!result && a->task_fd_query.buf &&
++		    bpf_rewritten(ctx, state, attr, offsetof(union bpf_attr, task_fd_query.buf_len),
++				  "arg1.attr.buf_len", &count) && !ant_capture_lost(ctx))
++			ant_capture_string(ctx, 1, "arg1.attr.buf", a->task_fd_query.buf,
++					   min(count + 1, a->task_fd_query.buf_len));
++		return;
++	default:
++		return;
++	}
++}
++
++static bool bpf_known_command(u32 cmd)
++{
++	switch (cmd) {
++	case BPF_MAP_CREATE: case BPF_MAP_LOOKUP_ELEM: case BPF_MAP_UPDATE_ELEM:
++	case BPF_MAP_DELETE_ELEM: case BPF_MAP_GET_NEXT_KEY: case BPF_PROG_LOAD:
++	case BPF_OBJ_PIN: case BPF_OBJ_GET: case BPF_PROG_ATTACH: case BPF_PROG_DETACH:
++	case BPF_PROG_TEST_RUN: case BPF_PROG_GET_NEXT_ID: case BPF_MAP_GET_NEXT_ID:
++	case BPF_PROG_GET_FD_BY_ID: case BPF_MAP_GET_FD_BY_ID: case BPF_OBJ_GET_INFO_BY_FD:
++	case BPF_PROG_QUERY: case BPF_RAW_TRACEPOINT_OPEN: case BPF_BTF_LOAD:
++	case BPF_BTF_GET_FD_BY_ID: case BPF_TASK_FD_QUERY: case BPF_MAP_LOOKUP_AND_DELETE_ELEM:
++	case BPF_MAP_FREEZE: case BPF_BTF_GET_NEXT_ID: case BPF_MAP_LOOKUP_BATCH:
++	case BPF_MAP_LOOKUP_AND_DELETE_BATCH: case BPF_MAP_UPDATE_BATCH:
++	case BPF_MAP_DELETE_BATCH: case BPF_LINK_CREATE: case BPF_LINK_UPDATE:
++	case BPF_LINK_GET_FD_BY_ID: case BPF_LINK_GET_NEXT_ID: case BPF_ENABLE_STATS:
++	case BPF_ITER_CREATE: case BPF_LINK_DETACH: case BPF_PROG_BIND_MAP:
++	case BPF_TOKEN_CREATE:
++		return true;
++	default:
++		return false;
++	}
++}
++
++static void capture_bpf(struct ant_task *ctx, const u64 args[6], bool output, long result)
++{
++	struct ant_bpf_state *state;
++	enum ant_status status;
++	u32 cmd = args[0], size = args[2];
++	u64 copied;
++
++	if (output) {
++		state = ant_capture_state(ctx);
++		if (state && !ant_capture_lost(ctx))
++			capture_bpf_exit(ctx, state, cmd, args[1], result);
++		return;
++	}
++	if (size > PAGE_SIZE) {
++		ant_capture_field(ctx, 1, "arg1.attr", LAYOUT("bpf_attr"), 3, args[1], NULL,
++				  size, size, ANT_INVALID_EXTENT);
++		return;
++	}
++	state = kzalloc(sizeof(*state), GFP_NOWAIT);
++	copied = min_t(u64, size, sizeof(state->attr));
++	status = !state ? ANT_RESOURCE_EXHAUSTED :
++		copy_from_user_nofault(&state->attr, (void __user *)(unsigned long)args[1],
++				       copied) ? ANT_COPY_FAULT : ANT_COMPLETE;
++	ant_capture_field(ctx, 1, "arg1.attr", bpf_known_command(cmd) ? LAYOUT("bpf_attr") : "",
++			  3, args[1], state ? &state->attr : NULL, copied, size, status);
++	if (size > sizeof(state->attr) && !ant_capture_lost(ctx))
++		ant_capture_field(ctx, 1, "arg1.attr.extension", "", 1,
++				  args[1] + sizeof(state->attr), NULL,
++				  size - sizeof(state->attr), size - sizeof(state->attr),
++				  ANT_COMPLETE);
++	if (!bpf_known_command(cmd))
++		capture_gap(ctx, "bpf.unknown_selector", ANT_NO_DECODER);
++	if (status != ANT_COMPLETE || !bpf_known_command(cmd)) {
++		kfree(state);
++		return;
++	}
++	state->size = size;
++	ant_capture_set_state(ctx, state, release_allocation);
++	if (!ant_capture_lost(ctx))
++		capture_bpf_entry(ctx, state, cmd);
++}
++
++/* Socket options. The table below was reviewed against the pinned
++ * net/core/sock.c, net/ipv4/ip_sockglue.c, net/ipv6/ipv6_sockglue.c and
++ * net/ipv4/tcp.c handlers. A (level, optname) pair absent from it is still
++ * captured as raw bytes bounded by optlen, with an explicit no-decoder gap.
++ */
++#define ANT_SOCKOPT_CEILING (128 * 1024)	/* pinned default optmem_max */
++#define ANT_IPT_SO_BASE 64	/* IPT_SO_SET_REPLACE / IPT_SO_GET_INFO */
++#define ANT_IPT_SO_LAST 67	/* IPT_SO_GET_REVISION_TARGET */
++
++enum ant_sockopt_set {
++	ANT_SET_UNKNOWN, ANT_SET_INT, ANT_SET_INT_OR_BYTE, ANT_SET_FIXED,
++	ANT_SET_BY_LENGTH, ANT_SET_BYTES, ANT_SET_FPROG, ANT_SET_LABELED,
++	ANT_SET_NESTED,
++};
++
++enum ant_sockopt_get {
++	ANT_GET_UNKNOWN, ANT_GET_INT, ANT_GET_INT_OR_BYTE, ANT_GET_FIXED,
++	ANT_GET_LABELED, ANT_GET_FILTER_COUNT, ANT_GET_INPUT_NESTED,
++};
++
++struct ant_sockopt_rule {
++	s32 level;
++	s32 name;
++	u8 set;
++	u8 get;
++	u32 size;
++	u32 alt_size;
++	const char *layout;
++	const char *alt_layout;
++};
++
++#define SO_INT(l, n) { l, n, ANT_SET_INT, ANT_GET_INT, sizeof(int), 0, LAYOUT("int"), NULL }
++#define SO_INT_GET(l, n) { l, n, ANT_SET_UNKNOWN, ANT_GET_INT, sizeof(int), 0, LAYOUT("int"), NULL }
++#define SO_BYTE(l, n) { l, n, ANT_SET_INT_OR_BYTE, ANT_GET_INT_OR_BYTE, sizeof(int), 1, \
++			LAYOUT("int"), LAYOUT("u8") }
++#define SO_FIXED(l, n, t, name) { l, n, ANT_SET_FIXED, ANT_GET_FIXED, sizeof(t), 0, \
++				  LAYOUT(name), NULL }
++#define SO_FIXED_GET(l, n, t, name) { l, n, ANT_SET_UNKNOWN, ANT_GET_FIXED, sizeof(t), 0, \
++				      LAYOUT(name), NULL }
++#define SO_BY_LENGTH(l, n, t, name, alt, alt_name) { l, n, ANT_SET_BY_LENGTH, ANT_GET_FIXED, \
++	sizeof(t), sizeof(alt), LAYOUT(name), LAYOUT(alt_name) }
++#define SO_BYTES(l, n, ceiling) { l, n, ANT_SET_BYTES, ANT_GET_LABELED, ceiling, 0, \
++				  LAYOUT("char[]"), NULL }
++#define SO_LABELED(l, n, ceiling, name) { l, n, ANT_SET_LABELED, ANT_GET_LABELED, ceiling, 0, \
++					  LAYOUT(name), NULL }
++#define SO_LABELED_GET(l, n, name) { l, n, ANT_SET_UNKNOWN, ANT_GET_LABELED, 0, 0, \
++				     LAYOUT(name), NULL }
++#define SO_NESTED(l, n, name) { l, n, ANT_SET_NESTED, ANT_GET_LABELED, 0, 0, LAYOUT(name), NULL }
++#define SO_NESTED_IO(l, n, name) { l, n, ANT_SET_NESTED, ANT_GET_INPUT_NESTED, 0, 0, \
++				   LAYOUT(name), NULL }
++
++static const struct ant_sockopt_rule sockopt_rules[] = {
++	SO_INT(SOL_SOCKET, SO_DEBUG), SO_INT(SOL_SOCKET, SO_REUSEADDR),
++	SO_INT(SOL_SOCKET, SO_TYPE), SO_INT(SOL_SOCKET, SO_ERROR),
++	SO_INT(SOL_SOCKET, SO_DONTROUTE), SO_INT(SOL_SOCKET, SO_BROADCAST),
++	SO_INT(SOL_SOCKET, SO_SNDBUF), SO_INT(SOL_SOCKET, SO_RCVBUF),
++	SO_INT(SOL_SOCKET, SO_SNDBUFFORCE), SO_INT(SOL_SOCKET, SO_RCVBUFFORCE),
++	SO_INT(SOL_SOCKET, SO_KEEPALIVE), SO_INT(SOL_SOCKET, SO_OOBINLINE),
++	SO_INT(SOL_SOCKET, SO_NO_CHECK), SO_INT(SOL_SOCKET, SO_PRIORITY),
++	SO_INT(SOL_SOCKET, SO_PASSCRED), SO_INT(SOL_SOCKET, SO_PASSPIDFD),
++	SO_INT(SOL_SOCKET, SO_RCVLOWAT), SO_INT(SOL_SOCKET, SO_BSDCOMPAT),
++	SO_INT(SOL_SOCKET, SO_REUSEPORT), SO_INT(SOL_SOCKET, SO_PASSSEC),
++	SO_INT(SOL_SOCKET, SO_TIMESTAMP_OLD), SO_INT(SOL_SOCKET, SO_TIMESTAMP_NEW),
++	SO_INT(SOL_SOCKET, SO_TIMESTAMPNS_OLD), SO_INT(SOL_SOCKET, SO_TIMESTAMPNS_NEW),
++	SO_INT(SOL_SOCKET, SO_PROTOCOL), SO_INT(SOL_SOCKET, SO_DOMAIN),
++	SO_INT(SOL_SOCKET, SO_MARK), SO_INT(SOL_SOCKET, SO_RCVMARK),
++	SO_INT(SOL_SOCKET, SO_RXQ_OVFL), SO_INT(SOL_SOCKET, SO_WIFI_STATUS),
++	SO_INT(SOL_SOCKET, SO_PEEK_OFF), SO_INT(SOL_SOCKET, SO_NOFCS),
++	SO_INT(SOL_SOCKET, SO_LOCK_FILTER), SO_INT(SOL_SOCKET, SO_SELECT_ERR_QUEUE),
++	SO_INT(SOL_SOCKET, SO_BUSY_POLL), SO_INT(SOL_SOCKET, SO_PREFER_BUSY_POLL),
++	SO_INT(SOL_SOCKET, SO_BUSY_POLL_BUDGET), SO_INT(SOL_SOCKET, SO_INCOMING_CPU),
++	SO_INT(SOL_SOCKET, SO_CNX_ADVICE), SO_INT(SOL_SOCKET, SO_ZEROCOPY),
++	SO_INT(SOL_SOCKET, SO_BINDTOIFINDEX), SO_INT(SOL_SOCKET, SO_TXREHASH),
++	SO_INT(SOL_SOCKET, SO_BUF_LOCK), SO_INT(SOL_SOCKET, SO_RESERVE_MEM),
++	SO_INT(SOL_SOCKET, SO_ATTACH_BPF), SO_INT(SOL_SOCKET, SO_ATTACH_REUSEPORT_EBPF),
++	SO_INT(SOL_SOCKET, SO_DETACH_FILTER), SO_INT(SOL_SOCKET, SO_DETACH_REUSEPORT_BPF),
++	SO_INT_GET(SOL_SOCKET, SO_ACCEPTCONN), SO_INT_GET(SOL_SOCKET, SO_SNDLOWAT),
++	SO_INT_GET(SOL_SOCKET, SO_PEERPIDFD), SO_INT_GET(SOL_SOCKET, SO_INCOMING_NAPI_ID),
++	SO_INT_GET(SOL_SOCKET, SO_BPF_EXTENSIONS),
++	SO_FIXED(SOL_SOCKET, SO_LINGER, struct linger, "linger"),
++	SO_FIXED(SOL_SOCKET, SO_RCVTIMEO_OLD, struct __kernel_old_timeval, "__kernel_old_timeval"),
++	SO_FIXED(SOL_SOCKET, SO_SNDTIMEO_OLD, struct __kernel_old_timeval, "__kernel_old_timeval"),
++	SO_FIXED(SOL_SOCKET, SO_RCVTIMEO_NEW,
++		 struct __kernel_sock_timeval, "__kernel_sock_timeval"),
++	SO_FIXED(SOL_SOCKET, SO_SNDTIMEO_NEW,
++		 struct __kernel_sock_timeval, "__kernel_sock_timeval"),
++	SO_FIXED(SOL_SOCKET, SO_TXTIME, struct sock_txtime, "sock_txtime"),
++	SO_FIXED_GET(SOL_SOCKET, SO_PEERCRED, struct ucred, "ucred"),
++	SO_FIXED_GET(SOL_SOCKET, SO_COOKIE, u64, "u64"),
++	SO_FIXED_GET(SOL_SOCKET, SO_NETNS_COOKIE, u64, "u64"),
++	SO_BY_LENGTH(SOL_SOCKET, SO_TIMESTAMPING_OLD, struct so_timestamping, "so_timestamping",
++		     int, "int"),
++	SO_BY_LENGTH(SOL_SOCKET, SO_TIMESTAMPING_NEW, struct so_timestamping, "so_timestamping",
++		     int, "int"),
++	SO_BY_LENGTH(SOL_SOCKET, SO_MAX_PACING_RATE, u64, "u64", int, "int"),
++	SO_BYTES(SOL_SOCKET, SO_BINDTODEVICE, IFNAMSIZ - 1),
++	/* SO_GET_FILTER shares SO_ATTACH_FILTER's number; the direction selects it. */
++	{ SOL_SOCKET, SO_ATTACH_FILTER, ANT_SET_FPROG, ANT_GET_FILTER_COUNT, 0, 0,
++	  LAYOUT("sock_filter[]"), NULL },
++	{ SOL_SOCKET, SO_ATTACH_REUSEPORT_CBPF, ANT_SET_FPROG, ANT_GET_UNKNOWN, 0, 0, NULL, NULL },
++	SO_LABELED(SOL_SOCKET, SO_DEVMEM_DONTNEED, ANT_SOCKOPT_CEILING, "dmabuf_token[]"),
++	SO_LABELED_GET(SOL_SOCKET, SO_PEERNAME, "sockaddr"),
++	SO_LABELED_GET(SOL_SOCKET, SO_PEERSEC, "char[]"),
++	SO_LABELED_GET(SOL_SOCKET, SO_PEERGROUPS, "gid_t[]"),
++	SO_LABELED_GET(SOL_SOCKET, SO_MEMINFO, "u32[]"),
++
++	SO_BYTE(IPPROTO_IP, IP_PKTINFO), SO_BYTE(IPPROTO_IP, IP_RECVTTL),
++	SO_BYTE(IPPROTO_IP, IP_RECVOPTS), SO_BYTE(IPPROTO_IP, IP_RECVTOS),
++	SO_BYTE(IPPROTO_IP, IP_RETOPTS), SO_BYTE(IPPROTO_IP, IP_TOS),
++	SO_BYTE(IPPROTO_IP, IP_TTL), SO_BYTE(IPPROTO_IP, IP_HDRINCL),
++	SO_BYTE(IPPROTO_IP, IP_MTU_DISCOVER), SO_BYTE(IPPROTO_IP, IP_RECVERR),
++	SO_BYTE(IPPROTO_IP, IP_ROUTER_ALERT), SO_BYTE(IPPROTO_IP, IP_FREEBIND),
++	SO_BYTE(IPPROTO_IP, IP_PASSSEC), SO_BYTE(IPPROTO_IP, IP_TRANSPARENT),
++	SO_BYTE(IPPROTO_IP, IP_MINTTL), SO_BYTE(IPPROTO_IP, IP_NODEFRAG),
++	SO_BYTE(IPPROTO_IP, IP_BIND_ADDRESS_NO_PORT), SO_BYTE(IPPROTO_IP, IP_UNICAST_IF),
++	SO_BYTE(IPPROTO_IP, IP_MULTICAST_TTL), SO_BYTE(IPPROTO_IP, IP_MULTICAST_ALL),
++	SO_BYTE(IPPROTO_IP, IP_MULTICAST_LOOP), SO_BYTE(IPPROTO_IP, IP_RECVORIGDSTADDR),
++	SO_BYTE(IPPROTO_IP, IP_CHECKSUM), SO_BYTE(IPPROTO_IP, IP_RECVFRAGSIZE),
++	SO_BYTE(IPPROTO_IP, IP_RECVERR_RFC4884), SO_BYTE(IPPROTO_IP, IP_LOCAL_PORT_RANGE),
++	SO_INT_GET(IPPROTO_IP, IP_MTU), SO_INT_GET(IPPROTO_IP, IP_PROTOCOL),
++	SO_LABELED(IPPROTO_IP, IP_OPTIONS, 40, "ip_options"),
++	SO_LABELED(IPPROTO_IP, IP_MULTICAST_IF, sizeof(struct ip_mreqn), "ip_multicast_if"),
++	SO_LABELED_GET(IPPROTO_IP, IP_PKTOPTIONS, "cmsghdr[]"),
++	SO_BY_LENGTH(IPPROTO_IP, IP_ADD_MEMBERSHIP, struct ip_mreqn, "ip_mreqn",
++		     struct ip_mreq, "ip_mreq"),
++	SO_BY_LENGTH(IPPROTO_IP, IP_DROP_MEMBERSHIP, struct ip_mreqn, "ip_mreqn",
++		     struct ip_mreq, "ip_mreq"),
++	SO_FIXED(IPPROTO_IP, IP_ADD_SOURCE_MEMBERSHIP, struct ip_mreq_source, "ip_mreq_source"),
++	SO_FIXED(IPPROTO_IP, IP_DROP_SOURCE_MEMBERSHIP, struct ip_mreq_source, "ip_mreq_source"),
++	SO_FIXED(IPPROTO_IP, IP_BLOCK_SOURCE, struct ip_mreq_source, "ip_mreq_source"),
++	SO_FIXED(IPPROTO_IP, IP_UNBLOCK_SOURCE, struct ip_mreq_source, "ip_mreq_source"),
++	SO_FIXED(IPPROTO_IP, MCAST_JOIN_GROUP, struct group_req, "group_req"),
++	SO_FIXED(IPPROTO_IP, MCAST_LEAVE_GROUP, struct group_req, "group_req"),
++	SO_FIXED(IPPROTO_IP, MCAST_JOIN_SOURCE_GROUP, struct group_source_req, "group_source_req"),
++	SO_FIXED(IPPROTO_IP, MCAST_LEAVE_SOURCE_GROUP, struct group_source_req, "group_source_req"),
++	SO_FIXED(IPPROTO_IP, MCAST_BLOCK_SOURCE, struct group_source_req, "group_source_req"),
++	SO_FIXED(IPPROTO_IP, MCAST_UNBLOCK_SOURCE, struct group_source_req, "group_source_req"),
++	SO_NESTED_IO(IPPROTO_IP, IP_MSFILTER, "ip_msfilter"),
++	SO_NESTED_IO(IPPROTO_IP, MCAST_MSFILTER, "group_filter"),
++	SO_NESTED(IPPROTO_IP, IP_IPSEC_POLICY, "xfrm_userpolicy_info"),
++	SO_NESTED(IPPROTO_IP, IP_XFRM_POLICY, "xfrm_userpolicy_info"),
++
++	SO_INT(IPPROTO_IPV6, IPV6_ADDRFORM), SO_INT(IPPROTO_IPV6, IPV6_MTU_DISCOVER),
++	SO_INT(IPPROTO_IPV6, IPV6_MTU), SO_INT(IPPROTO_IPV6, IPV6_RECVERR),
++	SO_INT(IPPROTO_IPV6, IPV6_ROUTER_ALERT), SO_INT(IPPROTO_IPV6, IPV6_ROUTER_ALERT_ISOLATE),
++	SO_INT(IPPROTO_IPV6, IPV6_V6ONLY), SO_INT(IPPROTO_IPV6, IPV6_RECVPKTINFO),
++	SO_INT(IPPROTO_IPV6, IPV6_2292PKTINFO), SO_INT(IPPROTO_IPV6, IPV6_RECVHOPLIMIT),
++	SO_INT(IPPROTO_IPV6, IPV6_2292HOPLIMIT), SO_INT(IPPROTO_IPV6, IPV6_RECVRTHDR),
++	SO_INT(IPPROTO_IPV6, IPV6_2292RTHDR), SO_INT(IPPROTO_IPV6, IPV6_RECVHOPOPTS),
++	SO_INT(IPPROTO_IPV6, IPV6_2292HOPOPTS), SO_INT(IPPROTO_IPV6, IPV6_RECVDSTOPTS),
++	SO_INT(IPPROTO_IPV6, IPV6_2292DSTOPTS), SO_INT(IPPROTO_IPV6, IPV6_TCLASS),
++	SO_INT(IPPROTO_IPV6, IPV6_RECVTCLASS), SO_INT(IPPROTO_IPV6, IPV6_FLOWINFO),
++	SO_INT(IPPROTO_IPV6, IPV6_RECVPATHMTU), SO_INT(IPPROTO_IPV6, IPV6_TRANSPARENT),
++	SO_INT(IPPROTO_IPV6, IPV6_FREEBIND), SO_INT(IPPROTO_IPV6, IPV6_RECVORIGDSTADDR),
++	SO_INT(IPPROTO_IPV6, IPV6_UNICAST_HOPS), SO_INT(IPPROTO_IPV6, IPV6_MULTICAST_HOPS),
++	SO_INT(IPPROTO_IPV6, IPV6_MULTICAST_LOOP), SO_INT(IPPROTO_IPV6, IPV6_UNICAST_IF),
++	SO_INT(IPPROTO_IPV6, IPV6_MULTICAST_IF), SO_INT(IPPROTO_IPV6, IPV6_MULTICAST_ALL),
++	SO_INT(IPPROTO_IPV6, IPV6_AUTOFLOWLABEL), SO_INT(IPPROTO_IPV6, IPV6_DONTFRAG),
++	SO_INT(IPPROTO_IPV6, IPV6_RECVERR_RFC4884), SO_INT(IPPROTO_IPV6, IPV6_RECVFRAGSIZE),
++	SO_INT(IPPROTO_IPV6, IPV6_ADDR_PREFERENCES), SO_INT(IPPROTO_IPV6, IPV6_MINHOPCOUNT),
++	SO_INT(IPPROTO_IPV6, IPV6_FLOWINFO_SEND),
++	SO_FIXED(IPPROTO_IPV6, IPV6_ADD_MEMBERSHIP, struct ipv6_mreq, "ipv6_mreq"),
++	SO_FIXED(IPPROTO_IPV6, IPV6_DROP_MEMBERSHIP, struct ipv6_mreq, "ipv6_mreq"),
++	SO_FIXED(IPPROTO_IPV6, IPV6_JOIN_ANYCAST, struct ipv6_mreq, "ipv6_mreq"),
++	SO_FIXED(IPPROTO_IPV6, IPV6_LEAVE_ANYCAST, struct ipv6_mreq, "ipv6_mreq"),
++	SO_FIXED(IPPROTO_IPV6, IPV6_PKTINFO, struct in6_pktinfo, "in6_pktinfo"),
++	SO_FIXED(IPPROTO_IPV6, MCAST_JOIN_GROUP, struct group_req, "group_req"),
++	SO_FIXED(IPPROTO_IPV6, MCAST_LEAVE_GROUP, struct group_req, "group_req"),
++	SO_FIXED(IPPROTO_IPV6, MCAST_JOIN_SOURCE_GROUP,
++		 struct group_source_req, "group_source_req"),
++	SO_FIXED(IPPROTO_IPV6, MCAST_LEAVE_SOURCE_GROUP,
++		 struct group_source_req, "group_source_req"),
++	SO_FIXED(IPPROTO_IPV6, MCAST_BLOCK_SOURCE, struct group_source_req, "group_source_req"),
++	SO_FIXED(IPPROTO_IPV6, MCAST_UNBLOCK_SOURCE, struct group_source_req, "group_source_req"),
++	SO_LABELED(IPPROTO_IPV6, IPV6_HOPOPTS, ANT_SOCKOPT_CEILING, "ipv6_opt_hdr"),
++	SO_LABELED(IPPROTO_IPV6, IPV6_RTHDR, ANT_SOCKOPT_CEILING, "ipv6_opt_hdr"),
++	SO_LABELED(IPPROTO_IPV6, IPV6_DSTOPTS, ANT_SOCKOPT_CEILING, "ipv6_opt_hdr"),
++	SO_LABELED(IPPROTO_IPV6, IPV6_RTHDRDSTOPTS, ANT_SOCKOPT_CEILING, "ipv6_opt_hdr"),
++	SO_LABELED(IPPROTO_IPV6, IPV6_2292PKTOPTIONS, ANT_SOCKOPT_CEILING, "cmsghdr[]"),
++	SO_LABELED(IPPROTO_IPV6, IPV6_FLOWLABEL_MGR, ANT_SOCKOPT_CEILING, "in6_flowlabel_req"),
++	SO_NESTED_IO(IPPROTO_IPV6, MCAST_MSFILTER, "group_filter"),
++	SO_NESTED(IPPROTO_IPV6, IPV6_IPSEC_POLICY, "xfrm_userpolicy_info"),
++	SO_NESTED(IPPROTO_IPV6, IPV6_XFRM_POLICY, "xfrm_userpolicy_info"),
++
++	SO_INT(IPPROTO_TCP, TCP_NODELAY), SO_INT(IPPROTO_TCP, TCP_MAXSEG),
++	SO_INT(IPPROTO_TCP, TCP_CORK), SO_INT(IPPROTO_TCP, TCP_KEEPIDLE),
++	SO_INT(IPPROTO_TCP, TCP_KEEPINTVL), SO_INT(IPPROTO_TCP, TCP_KEEPCNT),
++	SO_INT(IPPROTO_TCP, TCP_SYNCNT), SO_INT(IPPROTO_TCP, TCP_LINGER2),
++	SO_INT(IPPROTO_TCP, TCP_DEFER_ACCEPT), SO_INT(IPPROTO_TCP, TCP_WINDOW_CLAMP),
++	SO_INT(IPPROTO_TCP, TCP_QUICKACK), SO_INT(IPPROTO_TCP, TCP_USER_TIMEOUT),
++	SO_INT(IPPROTO_TCP, TCP_REPAIR), SO_INT(IPPROTO_TCP, TCP_REPAIR_QUEUE),
++	SO_INT(IPPROTO_TCP, TCP_QUEUE_SEQ), SO_INT(IPPROTO_TCP, TCP_FASTOPEN),
++	SO_INT(IPPROTO_TCP, TCP_FASTOPEN_CONNECT), SO_INT(IPPROTO_TCP, TCP_FASTOPEN_NO_COOKIE),
++	SO_INT(IPPROTO_TCP, TCP_TIMESTAMP), SO_INT(IPPROTO_TCP, TCP_NOTSENT_LOWAT),
++	SO_INT(IPPROTO_TCP, TCP_THIN_LINEAR_TIMEOUTS), SO_INT(IPPROTO_TCP, TCP_THIN_DUPACK),
++	SO_INT(IPPROTO_TCP, TCP_SAVE_SYN), SO_INT(IPPROTO_TCP, TCP_INQ),
++	SO_INT(IPPROTO_TCP, TCP_TX_DELAY),
++	SO_BYTES(IPPROTO_TCP, TCP_CONGESTION, TCP_CA_NAME_MAX - 1),
++	SO_BYTES(IPPROTO_TCP, TCP_ULP, TCP_ULP_NAME_MAX - 1),
++	SO_FIXED(IPPROTO_TCP, TCP_MD5SIG, struct tcp_md5sig, "tcp_md5sig"),
++	SO_FIXED(IPPROTO_TCP, TCP_MD5SIG_EXT, struct tcp_md5sig, "tcp_md5sig"),
++	SO_FIXED(IPPROTO_TCP, TCP_REPAIR_WINDOW, struct tcp_repair_window, "tcp_repair_window"),
++	SO_LABELED(IPPROTO_TCP, TCP_FASTOPEN_KEY, 2 * TCP_FASTOPEN_KEY_LENGTH, "tcp_fastopen_key"),
++	SO_LABELED(IPPROTO_TCP, TCP_REPAIR_OPTIONS, ANT_SOCKOPT_CEILING, "tcp_repair_opt[]"),
++	SO_LABELED(IPPROTO_TCP, TCP_AO_ADD_KEY, ANT_SOCKOPT_CEILING, "tcp_ao_add"),
++	SO_LABELED(IPPROTO_TCP, TCP_AO_DEL_KEY, ANT_SOCKOPT_CEILING, "tcp_ao_del"),
++	SO_LABELED(IPPROTO_TCP, TCP_AO_INFO, ANT_SOCKOPT_CEILING, "tcp_ao_info_opt"),
++	SO_LABELED(IPPROTO_TCP, TCP_AO_REPAIR, ANT_SOCKOPT_CEILING, "tcp_ao_repair"),
++	SO_LABELED_GET(IPPROTO_TCP, TCP_INFO, "tcp_info"),
++	SO_LABELED_GET(IPPROTO_TCP, TCP_CC_INFO, "tcp_cc_info"),
++	SO_LABELED_GET(IPPROTO_TCP, TCP_SAVED_SYN, ""),
++	{ IPPROTO_TCP, TCP_ZEROCOPY_RECEIVE, ANT_SET_UNKNOWN, ANT_GET_INPUT_NESTED, 0, 0,
++	  LAYOUT("tcp_zerocopy_receive"), NULL },
++	{ IPPROTO_TCP, TCP_AO_GET_KEYS, ANT_SET_UNKNOWN, ANT_GET_INPUT_NESTED, 0, 0,
++	  LAYOUT("tcp_ao_getsockopt"), NULL },
++};
++
++struct ant_sockopt_state {
++	s32 capacity;
++};
++
++static const struct ant_sockopt_rule *sockopt_rule(s32 level, s32 name)
++{
++	unsigned int index;
++
++	for (index = 0; index < ARRAY_SIZE(sockopt_rules); index++)
++		if (sockopt_rules[index].level == level && sockopt_rules[index].name == name)
++			return &sockopt_rules[index];
++	return NULL;
++}
++
++/* netfilter table replacement and queries carry nested counter pointers and
++ * variable entry blobs. The IP handlers pass only options they do not know to
++ * netfilter (IPV6_RECVTCLASS and IPV6_TCLASS share this range), so this applies
++ * only when no rule matched.
++ */
++static bool sockopt_netfilter(const struct ant_sockopt_rule *rule, s32 level, s32 name)
++{
++	return !rule && (level == IPPROTO_IP || level == IPPROTO_IPV6) &&
++		name >= ANT_IPT_SO_BASE && name <= ANT_IPT_SO_LAST;
++}
++
++static void sockopt_raw(struct ant_task *ctx, const char *key, const char *layout,
++			u64 address, s32 length, u64 ceiling)
++{
++	ant_capture_field(ctx, 3, key, layout, 1, address, NULL,
++			  min_t(u64, length, ceiling), length,
++			  length > ceiling ? ANT_INVALID_EXTENT : ANT_COMPLETE);
++}
++
++static void capture_setsockopt(struct ant_task *ctx, const u64 args[6])
++{
++	const struct ant_sockopt_rule *rule = sockopt_rule(args[1], args[2]);
++	s32 length = args[4];
++	u64 address = args[3];
++	enum ant_status status;
++	u64 size;
++
++	if (length < 0)
++		return;
++	if (sockopt_netfilter(rule, args[1], args[2])) {
++		sockopt_raw(ctx, "arg3.optval", LAYOUT("ipt_replace"), address, length,
++			    ANT_SOCKOPT_CEILING);
++		capture_gap(ctx, "sockopt.unsupported_nested", ANT_NO_DECODER);
++		return;
++	}
++	switch (rule ? rule->set : ANT_SET_UNKNOWN) {
++	case ANT_SET_INT:
++	case ANT_SET_INT_OR_BYTE:
++		if (rule->set == ANT_SET_INT_OR_BYTE && length && length < sizeof(int)) {
++			ant_capture_field(ctx, 3, "arg3.optval", rule->alt_layout, 3, address,
++					  NULL, 1, length, ANT_COMPLETE);
++			return;
++		}
++		fallthrough;
++	case ANT_SET_FIXED:
++		size = min_t(u64, length, rule->size);
++		status = length >= rule->size ? ANT_COMPLETE : ANT_INVALID_EXTENT;
++		ant_capture_field(ctx, 3, "arg3.optval", rule->layout, 3, address, NULL,
++				  size, length, status);
++		return;
++	case ANT_SET_BY_LENGTH:
++		if (length >= rule->size)
++			ant_capture_field(ctx, 3, "arg3.optval", rule->layout, 3, address,
++					  NULL, rule->size, length, ANT_COMPLETE);
++		else
++			ant_capture_field(ctx, 3, "arg3.optval", rule->alt_layout, 3, address,
++					  NULL, min_t(u64, length, rule->alt_size), length,
++					  length >= rule->alt_size ? ANT_COMPLETE :
++					  ANT_INVALID_EXTENT);
++		return;
++	case ANT_SET_BYTES:
++		/* The kernel copies at most this many bytes and terminates them itself. */
++		ant_capture_field(ctx, 3, "arg3.optval", rule->layout, 1, address, NULL,
++				  min_t(u64, length, rule->size), length, ANT_COMPLETE);
++		return;
++	case ANT_SET_FPROG:
++		capture_fprog(ctx, 3, address, length, "arg3.optval");
++		return;
++	case ANT_SET_LABELED:
++		sockopt_raw(ctx, "arg3.optval", rule->layout, address, length, rule->size);
++		return;
++	case ANT_SET_NESTED:
++		sockopt_raw(ctx, "arg3.optval", rule->layout, address, length,
++			    ANT_SOCKOPT_CEILING);
++		capture_gap(ctx, "sockopt.unsupported_nested", ANT_NO_DECODER);
++		return;
++	default:
++		sockopt_raw(ctx, "arg3.optval", "", address, length, ANT_SOCKOPT_CEILING);
++		capture_gap(ctx, "sockopt.unknown_option", ANT_NO_DECODER);
++	}
++}
++
++static void capture_getsockopt(struct ant_task *ctx, const u64 args[6],
++			       bool output, long result)
++{
++	const struct ant_sockopt_rule *rule = sockopt_rule(args[1], args[2]);
++	u8 get = rule ? rule->get : ANT_GET_UNKNOWN;
++	struct ant_sockopt_state *state;
++	enum ant_status status;
++	const char *layout;
++	s32 length;
++	u64 size, ceiling;
++
++	if (sockopt_netfilter(rule, args[1], args[2]))
++		get = ANT_GET_INPUT_NESTED;
++	status = copy_from_user_nofault(&length, (void __user *)(unsigned long)args[4],
++					sizeof(length)) ? ANT_COPY_FAULT : ANT_COMPLETE;
++	if (output && result)
++		return;
++	ant_capture_field(ctx, 4, "arg4.optlen", LAYOUT("int"), 3, args[4], &length,
++			  sizeof(length), sizeof(length), status);
++	if (!output) {
++		if (get == ANT_GET_UNKNOWN)
++			capture_gap(ctx, "sockopt.unknown_option", ANT_NO_DECODER);
++		if (status != ANT_COMPLETE || ant_capture_lost(ctx))
++			return;
++		if (get == ANT_GET_INPUT_NESTED && length > 0) {
++			sockopt_raw(ctx, "arg3.optval_in", rule ? rule->layout : "",
++				    args[3], length, ANT_SOCKOPT_CEILING);
++			capture_gap(ctx, "sockopt.unsupported_nested", ANT_NO_DECODER);
++		}
++		state = kzalloc(sizeof(*state), GFP_NOWAIT);
++		if (!state)
++			return;
++		state->capacity = length;
++		ant_capture_set_state(ctx, state, release_allocation);
++		return;
++	}
++	if (ant_capture_lost(ctx))
++		return;
++	state = ant_capture_state(ctx);
++	if (!state || status != ANT_COMPLETE) {
++		ant_capture_field(ctx, 3, "arg3.optval", "", 1, args[3], NULL,
++				  U64_MAX, U64_MAX, ANT_CONTEXT_MISSING);
++		return;
++	}
++	layout = rule ? rule->layout : "";
++	ceiling = ANT_SOCKOPT_CEILING;
++	switch (get) {
++	case ANT_GET_INT_OR_BYTE:
++		if (length < sizeof(int))
++			layout = rule->alt_layout;
++		fallthrough;
++	case ANT_GET_INT:
++	case ANT_GET_FIXED:
++		ceiling = rule->size;
++		break;
++	case ANT_GET_FILTER_COUNT:
++		/* SO_GET_FILTER counts instructions, not bytes, in optlen. */
++		if (length < 0 || length > BPF_MAXINSNS)
++			length = -1;
++		else
++			length *= sizeof(struct sock_filter);
++		ceiling = BPF_MAXINSNS * sizeof(struct sock_filter);
++		break;
++	case ANT_GET_UNKNOWN:
++		layout = "";
++		break;
++	}
++	if (length < 0 || (get != ANT_GET_FILTER_COUNT && length > state->capacity)) {
++		ant_capture_field(ctx, 3, "arg3.optval", layout, 1, args[3], NULL,
++				  U64_MAX, length, ANT_INVALID_EXTENT);
++		return;
++	}
++	size = min_t(u64, length, ceiling);
++	ant_capture_field(ctx, 3, "arg3.optval", layout, 1, args[3], NULL, size, length,
++			  length > ceiling ? ANT_INVALID_EXTENT : ANT_COMPLETE);
++}
++
++u8 ant_native_capture(struct ant_task *ctx, u64 nr, const u64 args[6],
++		      bool output, long result)
++{
++	u8 mask = 0;
++	unsigned int index;
++
++	switch (nr) {
++	case 101:
++		capture_ptrace(ctx, args, output, result);
++		return ANT_CAPTURE_OWNED | BIT(2) | BIT(3);
++	case 165:
++		capture_mount(ctx, args, output);
++		return ANT_CAPTURE_OWNED | BIT(0) | BIT(1) | BIT(2) | BIT(4);
++	case 179:
++		if (!output && args[1])
++			ant_capture_string(ctx, 1, "arg1.special", args[1], PATH_MAX);
++		if (!ant_capture_lost(ctx))
++			capture_quota_addr(ctx, args[0], args[3], output, result, false);
++		return ANT_CAPTURE_OWNED | BIT(1) | BIT(3);
++	case 443:
++		capture_quota_addr(ctx, args[1], args[3], output, result, true);
++		return ANT_CAPTURE_OWNED | BIT(3);
++	case 246:
++		capture_kexec_load(ctx, args, output);
++		return ANT_CAPTURE_OWNED | BIT(2);
++	case 334:
++		capture_rseq(ctx, args, output, result);
++		return ANT_CAPTURE_OWNED | BIT(0);
++	case 139:
++		capture_sysfs(ctx, args, output, result);
++		return ANT_CAPTURE_OWNED | BIT(1) | BIT(2);
++	case 157:
++		capture_prctl(ctx, args, output, result);
++		return ANT_CAPTURE_OWNED | BIT(1) | BIT(2) | BIT(4);
++	case 250:
++		capture_keyctl(ctx, args, output, result);
++		return ANT_CAPTURE_OWNED | BIT(1) | BIT(2) | BIT(3) | BIT(4);
++	case 15:
++		if (!output)
++			capture_rt_sigreturn(ctx);
++		return ANT_CAPTURE_OWNED;
++	case 335:
++		if (!output)
++			capture_uretprobe(ctx);
++		return ANT_CAPTURE_OWNED;
++	case 321:
++		capture_bpf(ctx, args, output, result);
++		return ANT_CAPTURE_OWNED | BIT(1);
++	case 72:
++		capture_fcntl(ctx, args, output, result);
++		return ANT_CAPTURE_OWNED | BIT(2);
++	case 158:
++		capture_arch_prctl(ctx, args, output, result);
++		return ANT_CAPTURE_OWNED | BIT(1);
++	case 103: case 154: case 279: case 298:
++		capture_remaining_small(ctx, nr, args, output, result);
++		return ANT_CAPTURE_OWNED | (nr == 298 ? BIT(0) : nr == 279 ?
++			BIT(2) | BIT(3) | BIT(4) : BIT(1));
++	case 457: case 458:
++		capture_mount_queries(ctx, nr, args, output, result);
++		return ANT_CAPTURE_OWNED | BIT(0) | BIT(1);
++	case 459: case 460: case 461:
++		capture_lsm(ctx, nr, args, output, result);
++		return ANT_CAPTURE_OWNED | (nr == 461 ? BIT(0) | BIT(1) :
++			BIT(1) | (nr == 459 ? BIT(2) : 0));
++	case 125: case 126:
++		capture_capabilities(ctx, nr, args, output, result);
++		return ANT_CAPTURE_OWNED | BIT(0) | BIT(1);
++	case 169:
++		capture_reboot(ctx, args, output);
++		return ANT_CAPTURE_OWNED | BIT(3);
++	case 278:
++		capture_vector(ctx, args, output, result, true);
++		return ANT_CAPTURE_OWNED | BIT(1);
++	case 303: case 304:
++		capture_handle(ctx, nr, args, output, result);
++		return ANT_CAPTURE_OWNED | BIT(1) | (nr == 303 ? BIT(2) | BIT(3) : 0);
++	case 317:
++		capture_seccomp(ctx, args, output, result);
++		return ANT_CAPTURE_OWNED | BIT(2);
++	case 431:
++		capture_fsconfig(ctx, args, output);
++		return ANT_CAPTURE_OWNED | BIT(2) | BIT(3);
++	case 440:
++		if (!output) {
++			struct ant_vector_state *vector;
++
++			vector = save_vector(ctx, 1, args[1], args[2], "arg1.remote_ranges");
++			kfree(vector);
++		}
++		return ANT_CAPTURE_OWNED | BIT(1);
++	case 442:
++		if (!output) {
++			ant_capture_string(ctx, 1, "arg1.path", args[1], PATH_MAX);
++			if (!ant_capture_lost(ctx))
++				capture_versioned(ctx, 3, args[3], args[4], MOUNT_ATTR_SIZE_VER0,
++						  sizeof(struct mount_attr), "arg3.mount_attr",
++						  LAYOUT("mount_attr"));
++		}
++		return ANT_CAPTURE_OWNED | BIT(1) | BIT(3);
++	case 444:
++		if (!output && !args[2])
++			capture_versioned(ctx, 0, args[0], args[1], sizeof(u64),
++					  sizeof(struct landlock_ruleset_attr), "arg0.ruleset",
++					  LAYOUT("landlock_ruleset_attr"));
++		return ANT_CAPTURE_OWNED | BIT(0);
++	case 445:
++		capture_landlock_rule(ctx, args, output);
++		return ANT_CAPTURE_OWNED | BIT(2);
++	case 27:
++		if (output && result == 0) {
++			u64 pages = (args[1] >> PAGE_SHIFT) + !!(args[1] & ~PAGE_MASK);
++
++			ant_capture_field(ctx, 2, "arg2.residency", "", 1,
++					  args[2], NULL, pages, pages, ANT_COMPLETE);
++		}
++		return ANT_CAPTURE_OWNED | BIT(2);
++	case 170: case 171:
++		if (!output)
++			ant_capture_field(ctx, 0, "arg0.name", "", 1, args[0], NULL,
++					  (u32)args[1], (u32)args[1],
++					  (s32)args[1] >= 0 && (u32)args[1] <= __NEW_UTS_LEN ?
++					  ANT_COMPLETE : ANT_INVALID_EXTENT);
++		return ANT_CAPTURE_OWNED | BIT(0);
++	case 202: case 449: case 454: case 455: case 456:
++		capture_futex(ctx, nr, args, output, result);
++		mask = nr == 202 ? BIT(0) | BIT(3) | BIT(4) :
++			nr == 449 ? BIT(0) | BIT(3) : nr == 455 ? BIT(0) | BIT(4) : BIT(0);
++		return ANT_CAPTURE_OWNED | mask;
++	case 203: case 204: case 237: case 238: case 239: case 256:
++		capture_memory_masks(ctx, nr, args, output, result);
++		mask = nr == 203 || nr == 204 ? BIT(2) : nr == 237 ? BIT(3) :
++			nr == 238 ? BIT(1) : nr == 239 ? BIT(0) | BIT(1) : BIT(2) | BIT(3);
++		return ANT_CAPTURE_OWNED | mask;
++	case 218:
++		/* Zeroed and futex-woken by the kernel when the thread exits. */
++		if (!output)
++			ant_capture_field(ctx, 0, "arg0.clear_child_tid", LAYOUT("pid_t"), 3,
++					  args[0], NULL, sizeof(u32), sizeof(u32),
++					  ANT_ASYNC_UNOBSERVED);
++		return ANT_CAPTURE_OWNED | BIT(0);
++	case 273:
++		if (output)
++			return ANT_CAPTURE_OWNED | BIT(0);
++		if (args[1] != sizeof(struct robust_list_head)) {
++			ant_capture_field(ctx, 0, "arg0.head", LAYOUT("robust_list_head"), 3,
++					  args[0], NULL,
++					  min_t(u64, args[1], sizeof(struct robust_list_head)),
++					  args[1], ANT_INVALID_EXTENT);
++			return ANT_CAPTURE_OWNED | BIT(0);
++		}
++		/* The kernel stores only the pointer and walks the list at thread exit. */
++		capture_fixed(ctx, 0, "arg0.head", LAYOUT("robust_list_head"), args[0],
++			      sizeof(struct robust_list_head));
++		if (!ant_capture_lost(ctx))
++			ant_capture_field(ctx, 0, "arg0.head.traversal", LAYOUT("robust_list_head"),
++					  3, args[0], NULL, sizeof(struct robust_list_head),
++					  sizeof(struct robust_list_head), ANT_ASYNC_UNOBSERVED);
++		return ANT_CAPTURE_OWNED | BIT(0);
++	case 242: case 243: case 244:
++		capture_mqueue(ctx, nr, args, output, result);
++		return ANT_CAPTURE_OWNED | BIT(1) | (nr == 244 ? 0 : BIT(4)) |
++			(nr == 243 ? BIT(3) : 0);
++	case 299: case 307:
++		capture_mmsg(ctx, args, output, result, nr == 307);
++		return ANT_CAPTURE_OWNED | BIT(1) | (nr == 299 ? BIT(4) : 0);
++	case 310: case 311:
++		capture_process_vm(ctx, args, output, result, nr == 311);
++		return ANT_CAPTURE_OWNED | BIT(1) | BIT(3);
++	case 31: case 66: case 71:
++		capture_ipc_control(ctx, nr, args, output, result);
++		return ANT_CAPTURE_OWNED | (nr == 66 ? BIT(3) : BIT(2));
++	case 30: case 65: case 67: case 69: case 70: case 220:
++		capture_ipc_data(ctx, nr, args, output, result);
++		mask = nr == 67 ? BIT(0) : BIT(1);
++		return ANT_CAPTURE_OWNED | mask | (nr == 220 ? BIT(3) : 0);
++	case 13: case 14: case 127: case 128: case 129: case 130: case 131:
++	case 282: case 289: case 297: case 424:
++		capture_signals(ctx, nr, args, output, result);
++		mask = nr == 13 || nr == 14 ? BIT(1) | BIT(2) : nr == 128 ? 7 :
++			nr == 131 ? 3 : nr == 129 || nr == 424 ? BIT(2) :
++			nr == 297 ? BIT(3) : nr == 282 || nr == 289 ? BIT(1) : BIT(0);
++		return ANT_CAPTURE_OWNED | mask;
++	case 23: case 270:
++		capture_select(ctx, nr, args, output, result);
++		return ANT_CAPTURE_OWNED | BIT(1) | BIT(2) | BIT(3) | BIT(4) |
++			(nr == 270 ? BIT(5) : 0);
++	case 314: case 315:
++		capture_schedattr(ctx, nr, args, output, result);
++		return ANT_CAPTURE_OWNED | BIT(1);
++	case 435:
++		capture_clone3(ctx, args, output, result);
++		return ANT_CAPTURE_OWNED | BIT(0);
++	case 437:
++		if (!output) {
++			ant_capture_string(ctx, 1, "arg1.path", args[1], PATH_MAX);
++			if (!ant_capture_lost(ctx))
++				capture_versioned(ctx, 2, args[2], args[3], sizeof(struct open_how),
++						  sizeof(struct open_how), "arg2.open_how",
++						  LAYOUT("open_how"));
++		}
++		return ANT_CAPTURE_OWNED | BIT(1) | BIT(2);
++	case 309:
++		if (output && result == 0) {
++			capture_optional(ctx, 0, args[0], "arg0.cpu", LAYOUT("u32"), sizeof(u32));
++			capture_optional(ctx, 1, args[1], "arg1.node", LAYOUT("u32"), sizeof(u32));
++		}
++		if (!output && args[2] && !ant_capture_lost(ctx))
++			ant_capture_field(ctx, 2, "arg2.ignored_cache", "", 1,
++					  args[2], NULL, 0, 0, ANT_NOT_WRITTEN);
++		return ANT_CAPTURE_OWNED | BIT(0) | BIT(1) | BIT(2);
++	case 7: case 271:
++		capture_poll(ctx, nr, args, output, result);
++		return ANT_CAPTURE_OWNED | BIT(0) | (nr == 271 ? BIT(2) | BIT(3) : 0);
++	case 232: case 233: case 281: case 441:
++		capture_epoll(ctx, nr, args, output, result);
++		mask = nr == 233 ? BIT(3) : BIT(1);
++		if (nr == 281 || nr == 441)
++			mask |= BIT(4);
++		if (nr == 441)
++			mask |= BIT(3);
++		return ANT_CAPTURE_OWNED | mask;
++	case 295: case 296: case 327: case 328:
++		capture_vector(ctx, args, output, result, nr == 296 || nr == 328);
++		return ANT_CAPTURE_OWNED | BIT(1);
++	case 46: case 47:
++		capture_message(ctx, args, output, result, nr == 46);
++		return ANT_CAPTURE_OWNED | BIT(1);
++	case 51: case 52: case 288:
++		capture_address(ctx, args, output, result);
++		return ANT_CAPTURE_OWNED | BIT(1) | BIT(2);
++	case 54:
++		if (!output)
++			capture_setsockopt(ctx, args);
++		return ANT_CAPTURE_OWNED | BIT(3);
++	case 55:
++		capture_getsockopt(ctx, args, output, result);
++		return ANT_CAPTURE_OWNED | BIT(3) | BIT(4);
++	case 53:
++		if (output && result == 0 && !ant_capture_lost(ctx))
++			ant_capture_field(ctx, 3, "arg3.socketpair", LAYOUT("int[2]"), 3,
++					  args[3], NULL, 2 * sizeof(int), 2 * sizeof(int),
++					  ANT_COMPLETE);
++		return ANT_CAPTURE_OWNED | BIT(3);
++	case 188 ... 199:
++		capture_xattr(ctx, nr, args, output, result);
++		mask = nr == 190 || nr == 193 || nr == 196 || nr == 199 ? 0 : BIT(0);
++		mask |= nr < 194 ? BIT(1) | BIT(2) : BIT(1);
++		return ANT_CAPTURE_OWNED | mask;
++	default:
++		break;
++	}
++	for (index = 0; index < ARRAY_SIZE(field_rules); index++) {
++		const struct ant_field_rule *rule = &field_rules[index];
++
++		if (rule->nr != nr)
++			continue;
++		mask |= BIT(rule->arg_index);
++		if (!ant_capture_lost(ctx))
++			capture_rule(ctx, rule, args, output, result);
++	}
++	return mask ? ANT_CAPTURE_OWNED | mask : 0;
++}
+diff --git a/kernel/antinomie/native_capture.h b/kernel/antinomie/native_capture.h
+new file mode 100644
+index 0000000..ebf09f6
+--- /dev/null
++++ b/kernel/antinomie/native_capture.h
+@@ -0,0 +1,12 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef _ANTINOMIE_NATIVE_CAPTURE_H
++#define _ANTINOMIE_NATIVE_CAPTURE_H
++
++#include <linux/types.h>
++
++struct ant_task;
++
++u8 ant_native_capture(struct ant_task *ctx, u64 nr, const u64 args[6],
++		      bool output, long result);
++
++#endif
+diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
+index 9167ee4..2f95cf7 100644
+--- a/kernel/antinomie/recorder.c
++++ b/kernel/antinomie/recorder.c
+@@ -11,6 +11,7 @@
+ #include <linux/random.h>
+ #include <linux/sched.h>
+ #include <linux/sched/signal.h>
++#include <linux/sizes.h>
+ #include <linux/slab.h>
+ #include <linux/mm.h>
+ #include <linux/socket.h>
+@@ -23,6 +24,8 @@
+ #include <asm/syscall.h>
+ 
+ #include "native_syscalls.h"
++#include "capture_api.h"
++#include "native_capture.h"
+ #include "observer.h"
+ 
+ /* Scratch bounds packet size, never the logical capture extent. A task owns
+@@ -43,13 +46,6 @@
+ #define ANT_RECAPTURE_MAX 8
+ #define ANT_RECAPTURE_KEY_SIZE 96
+ 
+-enum ant_status {
+-	ANT_COMPLETE, ANT_COPY_FAULT, ANT_INVALID_EXTENT, ANT_UNKNOWN_EXTENT,
+-	ANT_NO_DECODER, ANT_NULL_POINTER, ANT_ADDRESS_ONLY, ANT_ASYNC_UNOBSERVED,
+-	ANT_RESOURCE_EXHAUSTED, ANT_ABORTED_ON_LOSS, ANT_CONTEXT_MISSING,
+-	ANT_NOT_WRITTEN, ANT_NOT_RESIDENT,
+-};
+-
+ /* An input field recorded NOT_RESIDENT at entry, read again at exit. */
+ struct ant_recapture {
+ 	u64 address, size, declared_size;
+@@ -77,6 +73,14 @@ struct ant_task {
+ 	bool active, busy, entry_lost, sock_capacity_valid, kernel_imported;
+ 	struct iovec *iov;
+ 	u32 iov_count;
++	void *native_state;
++	void (*native_release)(void *state);
++	/* One kernel-imported operand handed over during the current syscall. */
++	const char *operand_key, *operand_layout;
++	void *operand;
++	u64 operand_size;
++	u8 operand_arg;
++	bool operand_set;
+ 	/* Contract 22: inputs to read again at exit, without allocating. */
+ 	struct ant_recapture recapture[ANT_RECAPTURE_MAX];
+ 	struct ant_exec_resume exec_resume[2];
+@@ -398,6 +402,40 @@ static u64 user_string(struct ant_task *ctx, u8 arg_index, const char *key,
+ 	return status == ANT_COMPLETE ? len : 0;
+ }
+ 
++void ant_capture_field(struct ant_task *ctx, u8 arg_index, const char *key,
++		       const char *layout, u16 encoding, u64 address,
++		       const void *snapshot, u64 object_size, u64 declared_size,
++		       enum ant_status status)
++{
++	field(ctx, arg_index, key, layout, encoding, address, snapshot, object_size,
++	      declared_size, status);
++}
++
++u64 ant_capture_string(struct ant_task *ctx, u8 arg_index, const char *key,
++		       u64 address, u64 ceiling)
++{
++	return user_string(ctx, arg_index, key, address, ceiling);
++}
++
++bool ant_capture_lost(struct ant_task *ctx)
++{
++	return ctx->failed_count != 0;
++}
++
++void *ant_capture_state(struct ant_task *ctx)
++{
++	return ctx->native_state;
++}
++
++void ant_capture_set_state(struct ant_task *ctx, void *state,
++			   void (*release)(void *))
++{
++	if (ctx->native_state && ctx->native_release)
++		ctx->native_release(ctx->native_state);
++	ctx->native_state = state;
++	ctx->native_release = release;
++}
++
+ /* Walks an exec vector from @index. At entry, a pointer or string on a page
+  * that is not resident ends the walk and leaves the point to resume from at
+  * exit (contract 22); there a value that still cannot be read is not recorded.
+@@ -589,6 +627,7 @@ static void capture_entry(struct ant_task *ctx)
+ {
+ 	u64 *a = ctx->args;
+ 	u64 budget;
++	u8 handled;
+ 	int error;
+ 
+ 	if (ctx->abi != 1) {
+@@ -601,6 +640,9 @@ static void capture_entry(struct ant_task *ctx)
+ 		      U64_MAX, U64_MAX, ANT_NO_DECODER);
+ 		return;
+ 	}
++	handled = ant_native_capture(ctx, ctx->nr, a, false, 0);
++	if (handled & ANT_CAPTURE_OWNED)
++		return;
+ 	switch (ctx->nr) {
+ 	case 1: case 44:
+ 		field(ctx, 1, "arg1.data", "", 1, a[1], NULL,
+@@ -659,9 +701,7 @@ static void capture_entry(struct ant_task *ctx)
+ 		ioctl_field(ctx, false, 0);
+ 		break;
+ 	case 56:
+-		if (a[0] & (CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID))
+-			field(ctx, 3, "arg3.child_tid", "", 1, a[3], NULL,
+-			      sizeof(u32), sizeof(u32), ANT_NO_DECODER);
++		/* clone() writes nothing the parent can read at entry; see exit. */
+ 		break;
+ 	default: {
+ 		const struct ant_native_syscall *schema = &ant_native_syscalls[ctx->nr];
+@@ -672,7 +712,7 @@ static void capture_entry(struct ant_task *ctx)
+ 		if (ctx->nr == 0 || ctx->nr == 5)
+ 			break;
+ 		for (i = 0; i < 6 && !ctx->failed_count; i++) {
+-			if (!(schema->pointer_mask & BIT(i)))
++			if (!(schema->pointer_mask & BIT(i)) || (handled & BIT(i)))
+ 				continue;
+ 			scnprintf(key, sizeof(key), "arg%d.%s", i,
+ 				  schema->argument_names[i] ?: "pointer");
+@@ -693,6 +733,8 @@ static void capture_exit(struct ant_task *ctx, long result)
+ 
+ 	if (ctx->abi != 1)
+ 		return;
++	if (ant_native_capture(ctx, ctx->nr, a, true, result) & ANT_CAPTURE_OWNED)
++		return;
+ 	switch (ctx->nr) {
+ 	case 0: case 45:
+ 		if (result > 0)
+@@ -730,9 +772,23 @@ static void capture_exit(struct ant_task *ctx, long result)
+ 		ioctl_field(ctx, true, result);
+ 		break;
+ 	case 56:
+-		if (result > 0 && (a[0] & CLONE_PARENT_SETTID))
++		if (result <= 0)
++			break;
++		if (a[0] & CLONE_PARENT_SETTID)
+ 			user_field(ctx, 2, "arg2.parent_tid", "linux-6.12.94/x86_64/pid_t", 3,
+ 				   a[2], sizeof(u32));
++		if (a[0] & CLONE_PIDFD)
++			user_field(ctx, 2, "arg2.pidfd", "linux-6.12.94/x86_64/int", 3,
++				   a[2], sizeof(int));
++		/* The child writes its own TID before returning to user space, and
++		 * the kernel clears it when the child exits; neither is visible here.
++		 */
++		if (a[0] & CLONE_CHILD_SETTID)
++			field(ctx, 3, "arg3.child_tid", "linux-6.12.94/x86_64/pid_t", 3, a[3],
++			      NULL, sizeof(u32), sizeof(u32), ANT_ASYNC_UNOBSERVED);
++		if (a[0] & CLONE_CHILD_CLEARTID)
++			field(ctx, 3, "arg3.clear_child_tid", "linux-6.12.94/x86_64/pid_t", 3,
++			      a[3], NULL, sizeof(u32), sizeof(u32), ANT_ASYNC_UNOBSERVED);
+ 		break;
+ 	}
+ }
+@@ -908,6 +964,51 @@ void ant_monitor_exec_names(const struct linux_binprm *bprm)
+ 	}
+ }
+ 
++static void operand_clear(struct ant_task *ctx)
++{
++	kvfree(ctx->operand);
++	ctx->operand = NULL;
++	ctx->operand_set = false;
++}
++
++#define ANT_OPERAND_MAX SZ_1M
++
++/* A kernel path hands over its own copy of a user operand whose extent only
++ * the kernel knows; it is emitted at this syscall's exit as kernel-imported.
++ */
++void ant_monitor_operand(u8 arg, const char *key, const char *layout, const void *data,
++			 size_t size)
++{
++	struct ant_task *ctx = current->ant_monitor;
++
++	if (!ctx || !ctx->active)
++		return;
++	operand_clear(ctx);
++	ctx->operand_key = key;
++	ctx->operand_layout = layout;
++	ctx->operand_arg = arg;
++	ctx->operand_size = size;
++	/* Callers hold no locks. Namespace root can raise the extent (SEMMSL),
++	 * so it is bounded and a failed copy is recorded, not warned about.
++	 */
++	ctx->operand = size && size <= ANT_OPERAND_MAX ?
++		kvmemdup(data, size, GFP_KERNEL | __GFP_NOWARN) : NULL;
++	ctx->operand_set = true;
++}
++
++static void operand_emit(struct ant_task *ctx)
++{
++	if (!ctx->operand_set)
++		return;
++	ctx->kernel_imported = true;
++	field(ctx, ctx->operand_arg, ctx->operand_key, ctx->operand_layout, 3,
++	      ctx->operand_arg < 6 ? ctx->args[ctx->operand_arg] : 0, ctx->operand,
++	      ctx->operand_size, ctx->operand_size,
++	      ctx->operand || !ctx->operand_size ? ANT_COMPLETE : ANT_RESOURCE_EXHAUSTED);
++	ctx->kernel_imported = false;
++	operand_clear(ctx);
++}
++
+ void ant_monitor_enter(struct pt_regs *regs, long nr)
+ {
+ 	struct ant_task *ctx;
+@@ -938,6 +1039,8 @@ void ant_monitor_enter(struct pt_regs *regs, long nr)
+ 	}
+ 	ctx->capture_cookie = capture_cookie;
+ 	ctx->busy = true;
++	ant_capture_set_state(ctx, NULL, NULL);
++	operand_clear(ctx);
+ 	kfree(ctx->iov);
+ 	ctx->iov = NULL;
+ 	ctx->iov_count = 0;
+@@ -974,11 +1077,13 @@ void ant_monitor_exit(struct pt_regs *regs)
+ 		return;
+ 	ctx->busy = true;
+ 	event_begin(ctx, 2, regs->ax);
++	operand_emit(ctx);
+ 	capture_exit(ctx, regs->ax);
+ 	recapture(ctx);
+ 	event_end(ctx);
+ 	recapture_reset(ctx);
+ 	ctx->active = false;
++	ant_capture_set_state(ctx, NULL, NULL);
+ 	kfree(ctx->iov);
+ 	ctx->iov = NULL;
+ 	ctx->iov_count = 0;
+@@ -1128,6 +1233,8 @@ void ant_monitor_release(struct task_struct *task)
+ 	struct ant_task *ctx = task->ant_monitor;
+ 
+ 	if (ctx) {
++		ant_capture_set_state(ctx, NULL, NULL);
++		operand_clear(ctx);
+ 		kfree(ctx->iov);
+ 		kfree(ctx->exec_name);
+ 		kfree(ctx);
