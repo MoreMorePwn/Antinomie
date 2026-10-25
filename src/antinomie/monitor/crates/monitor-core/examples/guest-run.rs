@@ -36,6 +36,9 @@
 //! `"allow_incomplete": true` keeps diagnostic results after a run completion
 //! deadline. The report records the error; it never treats that run as complete.
 //!
+//! The report carries the Summary resource feed's last guest reading
+//! (`guest_resources`: memory and root filesystem) taken before the VM stops.
+//!
 //! `"capture_all": true` starts Capture All once the guest is up, before the
 //! runs, and stops it after them; the report then includes its summary.
 //!
@@ -618,6 +621,13 @@ fn run() -> Result<Value, String> {
     session.settle(|snapshot| snapshot.memory_dump.is_none(), 180)?;
     let recorder = session.command(Command::RecorderStats, 120)?;
     let health = session.snapshot.health.clone();
+    // The Summary resource feed's last guest reading (memory, root disk).
+    let guest_resources = session
+        .snapshot
+        .vm_resources
+        .as_ref()
+        .and_then(|resources| resources.guest.as_ref())
+        .map(|guest| format!("{guest:?}"));
     // Stopping waits for queued recording writes, which a long never-drop
     // run can leave in the hundreds of megabytes.
     session.command(Command::Stop, 600)?;
@@ -637,7 +647,8 @@ fn run() -> Result<Value, String> {
     session.backend.shutdown()?;
     Ok(
         json!({"vm_id": vm_id, "base": base, "boot_seconds": boot_seconds,
-              "runs": runs, "recorder": recorder, "health": health, "capture": capture,
+              "runs": runs, "recorder": recorder, "health": health,
+              "guest_resources": guest_resources, "capture": capture,
               "network_captures": network_captures, "screenshot": screenshot}),
     )
 }

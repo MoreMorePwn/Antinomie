@@ -97,10 +97,12 @@ not build a guest kernel or base image.
    network recording requires a connected guest network.
 4. Inspect the live views, then reopen the saved run from **Run History**.
 
-**BusyBox** is the small, fast-booting guest for command-line samples. A
-**Debian desktop** base provides a fuller userspace. Choose a base compatible
-with the application; installing a newer app does not replace an existing VM's
-pinned base.
+**BusyBox** is the small, fast-booting guest for command-line samples.
+**Debian Minimal** is console-only Debian 13 with APT and the standard
+command-line tools, for samples that need a real Debian userspace without a
+desktop. A **Debian desktop** base adds the graphical session. Choose a base
+compatible with the application; installing a newer app does not replace an
+existing VM's pinned base.
 
 The default data directory is `~/antinomie`. It contains your bases, VM disks and
 recordings. See the [user guide](docs/usage.md) for controls, transport settings,

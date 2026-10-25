@@ -79,6 +79,92 @@ class DebianImageTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             image.options({"desktop": "windows"})
 
+    def test_console_base_has_no_desktop_and_keeps_apt_and_the_tools(self):
+        values = image.options({"desktop": image.CONSOLE})
+        self.assertEqual(image.CONSOLE, "none")
+        self.assertEqual(image.profile("none"), {
+            "id": "debian-minimal", "label": "Debian 13 (Minimal)", "min_ram_mib": 1024,
+            "min_disk_gib": 4, "requires_credentials": True, "graphical": False})
+        self.assertNotIn("none", image.DESKTOPS)
+        self.assertEqual(image.image_size("none"), 4 << 30)
+        self.assertEqual(image.image_size("xfce"), image.IMAGE_SIZE)
+        console = image.packages("none")
+        self.assertEqual(len(console), len(set(console)))
+        for package in ("systemd-sysv", "systemd-resolved", "sudo", "openssh-client", "python3",
+                        "curl", "wget", "ca-certificates", "iproute2", "procps", "less",
+                        "vim-tiny", "locales", "keyboard-configuration", "tzdata"):
+            self.assertIn(package, console)
+        for package in console:
+            self.assertFalse(package.startswith(("task-", "xserver", "lightdm", "gdm", "sddm",
+                                                 "network-manager", "openssh-server",
+                                                 "dbus-x11", "fonts-")), package)
+        self.assertTrue(all(reason for _, reason in image.CONSOLE_PACKAGES))
+        with patch.object(image.os, "geteuid", return_value=1000):
+            command = image.mmdebstrap_command(values, Path("/w/r.tar"), Path("/w/c.sh"),
+                                               Path("/w/p"))
+        self.assertIn('--aptopt=APT::Install-Recommends "false"', command)
+        self.assertIn("--variant=important", command)
+        for option in image.CONSOLE_DPKG:
+            self.assertIn("--dpkgopt=" + option, command)
+        self.assertIn("--dpkgopt=path-include=/usr/share/doc/*/copyright", command)
+        self.assertTrue(any(arg.endswith("Etc/UTC none none") for arg in command), command)
+        # The desktops keep the installer's recommends and their documentation.
+        desktop = image.mmdebstrap_command(image.options({}), Path("/w/r.tar"), Path("/w/c.sh"),
+                                           Path("/w/p"))
+        self.assertFalse(any(arg.startswith("--dpkgopt=") for arg in desktop))
+        script = image.customization_script()
+        self.assertIn("systemctl set-default multi-user.target", script)
+        self.assertIn("80-antinomie-dhcp.network", script)
+        self.assertIn("systemctl mask tmp.mount", script)
+        self.assertIn("Type=ether", script)
+        self.assertIn("rm -f /etc/apt/apt.conf.d/99mmdebstrap /etc/dpkg/dpkg.cfg.d/99mmdebstrap",
+                      script)
+
+    def test_console_manifest_lists_the_requested_packages(self):
+        manifest = (REPO / "src/antinomie/packaging/debian-minimal-trixie/packages.txt").read_text()
+        requested = [line.split()[1] for line in manifest.splitlines()
+                     if line.startswith("requested ")]
+        self.assertEqual(requested, list(image.packages("none")))
+        resolved = [line.split("\t") for line in manifest.splitlines()
+                    if line.startswith("installed\t")]
+        names = {fields[1].split(":")[0] for fields in resolved}
+        self.assertTrue(set(requested) <= names)
+        self.assertFalse(names & {"openssh-server", "network-manager", "xserver-xorg-core",
+                                  "qemu-guest-agent", "cloud-init"})
+
+    def test_files_cross_the_new_root_as_the_invoking_user(self):
+        # In unshare mode a plain hook runs as the namespace's root, which can
+        # neither read the staged script nor write the provenance directory.
+        with patch.object(image.os, "geteuid", return_value=1000):
+            command = image.mmdebstrap_command(image.options({}), Path("/w/r.tar"),
+                                               Path("/w/c.sh"), Path("/w/p"))
+        hooks = [arg[len("--customize-hook="):] for arg in command
+                 if arg.startswith("--customize-hook=")]
+        self.assertIn("upload /w/c.sh /tmp/antinomie-customize.sh", hooks)
+        self.assertIn("download /etc/os-release /w/p/os-release", hooks)
+        self.assertIn("download /tmp/package-docs.tar.gz /w/p/package-docs.tar.gz", hooks)
+        for hook in hooks:
+            if not hook.startswith(("upload ", "download ")):
+                self.assertNotIn("/w/", hook)
+
+    def test_console_base_needs_no_modules_when_the_kernel_builds_them_in(self):
+        with tempfile.TemporaryDirectory() as name:
+            config = Path(name) / "config"
+            config.write_text("".join(f"CONFIG_{symbol}=y\n" for symbol in image.CONSOLE_BUILTIN)
+                              + "CONFIG_EFIVAR_FS=m\n")
+            self.assertTrue(image.kernel_uses_modules(config))
+            self.assertTrue(image.built_in(config, image.CONSOLE_BUILTIN))
+            config.write_text("CONFIG_EXT4_FS=y\nCONFIG_VIRTIO_NET=m\n")
+            self.assertFalse(image.built_in(config, image.CONSOLE_BUILTIN))
+            self.assertFalse(image.built_in(None, image.CONSOLE_BUILTIN))
+            kernel = Path(name) / "kernel"
+            kernel.write_bytes(b"kernel")
+            for desktop in ("xfce", "none"):
+                with self.subTest(desktop=desktop), \
+                        patch.object(image, "kernel_release", return_value="6.12.94"), \
+                        self.assertRaisesRegex(RuntimeError, "--modules"):
+                    image.build(kernel, Path(name) / "out", config, values={"desktop": desktop})
+
     def test_options_are_validated(self):
         self.assertEqual(image.options({})["hostname"], "debian")
         self.assertEqual(image.options({"name": "  Lab desktop  "})["name"], "Lab desktop")

@@ -43,7 +43,7 @@ impl Page {
 pub fn pages(kind: Kind) -> &'static [Page] {
     match kind {
         Kind::BusyBox => &[Page::Base, Page::Mode, Page::Hostname, Page::Summary],
-        Kind::DebianXfce => &[
+        Kind::DebianXfce | Kind::DebianMinimal => &[
             Page::Base,
             Page::Mode,
             Page::Language,
@@ -67,7 +67,8 @@ pub struct BuildWizard {
     profile: usize,
     page: usize,
     mode: BuildMode,
-    options: [BuildOptions; 2],
+    /// Answers per `BUILD_PROFILES` entry.
+    options: [BuildOptions; 3],
     search: String,
     /// Show the last build's progress instead of the questions.
     show_status: bool,
@@ -82,10 +83,9 @@ impl Default for BuildWizard {
             profile: 0,
             page: 0,
             mode: BuildMode::Automatic,
-            options: [
-                BuildOptions::defaults(Kind::BusyBox),
-                BuildOptions::defaults(Kind::DebianXfce),
-            ],
+            options: std::array::from_fn(|index| {
+                BuildOptions::defaults(BUILD_PROFILES[index].kind)
+            }),
             search: String::new(),
             show_status: true,
             detected: build::HostLocale::detect(),
@@ -206,6 +206,10 @@ impl BuildWizard {
         for (index, profile) in BUILD_PROFILES.iter().enumerate() {
             let detail = match profile.kind {
                 Kind::BusyBox => "Small console guest, fast to build",
+                Kind::DebianMinimal => {
+                    "Debian 13 without a desktop: console login, APT and standard tools; \
+                     shares BusyBox's kernel"
+                }
                 Kind::DebianXfce => "Debian 13 with the desktop you choose, as from the installer",
             };
             ui.radio_value(&mut self.profile, index, profile.label)
@@ -384,10 +388,18 @@ impl BuildWizard {
 
     fn software(&mut self, ui: &mut egui::Ui) -> bool {
         ui.label("Choose software to install.");
-        ui.label(RichText::new("Debian desktop environment").strong());
+        let minimal = self.kind() == Kind::DebianMinimal;
         let detected = self.detected.desktop.clone();
         let options = &mut self.options[self.profile];
-        for desktop in build::DESKTOPS {
+        if minimal {
+            ui.label(
+                "No desktop environment: the guest has a console login on its serial and \
+                 virtual terminals, APT and the standard Debian command-line tools.",
+            );
+        } else {
+            ui.label(RichText::new("Debian desktop environment").strong());
+        }
+        for desktop in build::DESKTOPS.iter().filter(|_| !minimal) {
             ui.horizontal(|ui| {
                 ui.radio_value(&mut options.desktop, desktop.id.to_string(), desktop.label);
                 if detected.as_deref() == Some(desktop.id) {
@@ -423,7 +435,7 @@ impl BuildWizard {
         ui.small("The proxy is used while building and is not kept in the image.");
         let mut probe = options.clone();
         probe.hostname = "probe".into();
-        match probe.validate(Kind::DebianXfce) {
+        match probe.validate(self.kind()) {
             Ok(()) => true,
             Err(error) if error.contains("mirror") || error.contains("proxy") => {
                 crate::activity::error(ui, error);
@@ -465,7 +477,18 @@ impl BuildWizard {
             ("Build", mode),
             ("Hostname", options.hostname.clone()),
         ];
-        if kind == Kind::DebianXfce {
+        if kind.is_debian() {
+            let software = if kind == Kind::DebianMinimal {
+                "Console only, no desktop".to_string()
+            } else {
+                format!(
+                    "{} desktop",
+                    build::DESKTOPS
+                        .iter()
+                        .find(|desktop| desktop.id == options.desktop)
+                        .map_or(options.desktop.as_str(), |desktop| desktop.label)
+                )
+            };
             rows.extend([
                 ("Locale", options.locale.clone()),
                 (
@@ -480,11 +503,7 @@ impl BuildWizard {
                 (
                     "Software",
                     format!(
-                        "{} desktop{}",
-                        build::DESKTOPS
-                            .iter()
-                            .find(|desktop| desktop.id == options.desktop)
-                            .map_or(options.desktop.as_str(), |desktop| desktop.label),
+                        "{software}{}",
                         if options.standard {
                             ", standard system utilities"
                         } else {
@@ -520,6 +539,15 @@ impl BuildWizard {
             }
             (Kind::BusyBox, false) => {
                 "The kernel is compiled first (about 10 minutes); later builds reuse it."
+            }
+            (Kind::DebianMinimal, true) => {
+                "The kernel for this revision is already built (BusyBox bases share it): only \
+                 the system is installed (mostly package downloads). Needs about 6 GiB of free \
+                 disk space."
+            }
+            (Kind::DebianMinimal, false) => {
+                "The kernel is compiled first (about 10 minutes; BusyBox bases share it); later \
+                 builds reuse it. Needs about 11 GiB of free disk space."
             }
             (Kind::DebianXfce, true) => {
                 "The kernel for this revision is already built: only the system is installed \
@@ -726,9 +754,36 @@ mod tests {
     }
 
     #[test]
+    fn debian_minimal_asks_like_the_installer_without_a_desktop() {
+        assert_eq!(pages(Kind::DebianMinimal), pages(Kind::DebianXfce));
+        let wizard = BuildWizard::default();
+        assert_eq!(wizard.options.len(), BUILD_PROFILES.len());
+        let index = BUILD_PROFILES
+            .iter()
+            .position(|profile| profile.id == "debian-minimal")
+            .unwrap();
+        let busybox = BUILD_PROFILES
+            .iter()
+            .position(|profile| profile.id == "busybox")
+            .unwrap();
+        assert_eq!(index, busybox + 1, "offered next to BusyBox");
+        let wizard = BuildWizard {
+            profile: index,
+            ..BuildWizard::default()
+        };
+        let request = wizard.request();
+        assert_eq!(request.profile, "debian-minimal");
+        request.options.validate(Kind::DebianMinimal).unwrap();
+    }
+
+    #[test]
     fn request_carries_the_selected_profile_mode_and_answers() {
+        let debian = BUILD_PROFILES
+            .iter()
+            .position(|profile| profile.id == "debian-xfce")
+            .unwrap();
         let mut wizard = BuildWizard {
-            profile: 1,
+            profile: debian,
             mode: BuildMode::Qemu,
             ..BuildWizard::default()
         };

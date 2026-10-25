@@ -42,18 +42,23 @@ The **Base images** section in the left sidebar lists installed bases. Use
 
 - **Download base…**: fetch a published, checksum-verified base.
 - **Import base…**: install a bundle folder you already have.
-- **Build base…**: build one with the app's own build kit. A short wizard asks
+- **Build base…**: build one with the app's own build kit. Choose **BusyBox**,
+  **Debian 13 (minimal, console)** or **Debian 13 (desktop)**. A short wizard asks
   installer-style questions (hostname; for Debian also language, keyboard, time
   zone, software and mirror), then builds on this Linux host when the tool suite
   is installed or inside a QEMU builder VM otherwise, and installs the result.
+  Debian Minimal has no desktop: it boots to a console login (the program
+  terminals stay in the app, as with BusyBox), keeps APT, and shares BusyBox's
+  kernel, so it builds in minutes once that kernel is cached.
 
 Bases are read-only templates. Right-click a base to make a **New VM from this
 base** or to **Delete base**. Deleting is refused while any VM still uses it.
 
 ## 2. Create a VM
 Choose **New VM**, pick the installed base, and set name, CPU count, RAM and
-disk size. Debian bases also ask for a username and password; the guest
-account is created for you. Each VM gets its own disk layered on the base, so
+disk size. Debian bases (desktop and Minimal) also ask for a username and
+password; the guest account is created for you. Debian Minimal needs at least
+1024 MiB RAM and 4 GiB disk. Each VM gets its own disk layered on the base, so
 the base never changes.
 
 Right-click a VM for **Rename**, **Duplicate** (the VM must be stopped),
