@@ -7,7 +7,7 @@
 #
 # Static x86-64 programs for the BusyBox guests:
 #   trace-fixture   the syscall trace oracle fixture (trace/fixture/*.c)
-#   ant-torture     the stress samples (tests/monitor/torture), every module
+#   ant-workload     the stress samples (tests/monitor/workload), every module
 set -euo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 output=${1:?usage: build-fixtures.sh OUTPUT_DIR}
@@ -17,9 +17,9 @@ cflags=(-static -O2 -g -Wall -Wextra -Werror -pthread -D_GNU_SOURCE)
 fixture="$here/trace/fixture"
 gcc "${cflags[@]}" -I"$fixture" "$fixture"/*.c -o "$output/trace-fixture"
 
-torture="$here/../torture"
-gcc -static -O2 -g -Wall -Wextra -Wno-unused-result -pthread -D_GNU_SOURCE -I"$torture" \
-    "$torture"/main.c "$torture"/load.c "$torture"/process.c "$torture"/files.c \
-    "$torture"/network.c "$torture"/kernel.c "$torture"/memory.c "$torture"/detect.c \
-    "$torture"/indicators.c -o "$output/ant-torture"
-echo "built $output/trace-fixture $output/ant-torture"
+workload="$here/../workload"
+gcc -static -O2 -g -Wall -Wextra -Wno-unused-result -pthread -D_GNU_SOURCE -I"$workload" \
+    "$workload"/main.c "$workload"/load.c "$workload"/process.c "$workload"/files.c \
+    "$workload"/network.c "$workload"/kernel.c "$workload"/memory.c "$workload"/detect.c \
+    "$workload"/indicators.c -o "$output/ant-workload"
+echo "built $output/trace-fixture $output/ant-workload"

@@ -1,4 +1,4 @@
-//! Syscall groups for coloring the trace (ANT-T0034), in the manner of
+//! Syscall groups for coloring the trace, in the manner of
 //! Wireshark's coloring rules. Every native x86-64 syscall belongs to exactly
 //! one group; a test checks that against `protocol/native-syscalls.json`.
 

@@ -1,4 +1,4 @@
-//! "Build base" wizard (ANT-T0028): Debian-installer-style questions, then a
+//! "Build base" wizard: Debian-installer-style questions, then a
 //! build that runs natively or in the QEMU builder VM and installs itself.
 
 use crate::theme;

@@ -6,7 +6,7 @@
 // Without --public all traffic stays between the guest and its NAT gateway or
 // nameserver (it still crosses the virtual network card, so the VM-wide
 // capture sees it), plus loopback sockets. --public adds example.com.
-#include "torture.h"
+#include "workload.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -231,9 +231,9 @@ static int http_get(const char *host, const char *path, const char *agent, unsig
     return 0;
 }
 
-MODULE(network_storm)
+MODULE(network_load)
 {
-    const char *name = "network-storm";
+    const char *name = "network-load";
     char gateway[64] = "", nameserver[64] = "";
     int have_gateway = default_gateway(gateway, sizeof gateway) == 0;
     int have_dns = first_nameserver(nameserver, sizeof nameserver) == 0;
@@ -247,7 +247,7 @@ MODULE(network_storm)
         long answered = 0;
         char host[128];
         for (long i = 0; i < queries; i++) {
-            snprintf(host, sizeof host, "q%05ld.flood.antinomie-torture.invalid", i);
+            snprintf(host, sizeof host, "q%05ld.flood.antinomie-workload.invalid", i);
             answered += dns_query(sock, &server, host, i % 2 ? 28 : 1, (uint16_t)i, i % 50 == 0 ? 200 : 0);
             if (i % 50 == 49)
                 pause_us(20000);
@@ -296,7 +296,7 @@ MODULE(network_storm)
         unsigned long long bytes = 0;
         long requests = scaled(options, 5), ok = 0;
         for (long i = 0; i < requests; i++)
-            ok += http_get("example.com", "/", "AntinomieTorture/1.0", &bytes) == 0;
+            ok += http_get("example.com", "/", "AntinomieWorkload/1.0", &bytes) == 0;
         pass(name, "%ld of %ld HTTP requests to example.com, %llu bytes", ok, requests, bytes);
     } else {
         note(name, "public hosts not contacted; pass --public to add HTTP to example.com");

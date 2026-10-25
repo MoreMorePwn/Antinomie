@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //
-// malware.h — shared core of the Antinomie malware-activity samples.
+// samples.h — shared core of the Antinomie behavior samples.
 //
 // These are deliberately not stress tests. Each scenario reproduces the shape
 // of one behaviour an analyst triages, with the harmful part replaced by a
@@ -17,9 +17,9 @@
 //
 // The samples exist to exercise syscall capture, network triage, static
 // analysis and detection rules with traffic and file activity that looks like
-// malware but only ever talk to the address they are given.
-#ifndef ANTINOMIE_MALWARE_H
-#define ANTINOMIE_MALWARE_H
+// real malware but only ever talk to the address they are given.
+#ifndef ANTINOMIE_SAMPLES_H
+#define ANTINOMIE_SAMPLES_H
 
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
@@ -32,21 +32,21 @@
 // (10.0.2.2), so a listener on the host receives the payload when the VM has
 // NAT enabled. Outside QEMU use --host 198.51.100.23 (TEST-NET, unroutable) or
 // --host 127.0.0.1 --port 9 (refused) for the offline baseline.
-#define MAL_C2_ADDR "10.0.2.2"
-#define MAL_C2_HOST "c2.likma.invalid"
-#define MAL_DNS_ADDR "10.0.2.2"
-#define MAL_SNI "update.likma.invalid"
-#define MAL_EXFIL_DOMAIN "exfil.likma.invalid"
-#define MAL_UDP_PORT 4444
-#define MAL_HTTP_PORT 8080
-#define MAL_TLS_PORT 8443
+#define SAMPLE_REMOTE_ADDR "10.0.2.2"
+#define SAMPLE_REMOTE_HOST "remote.antinomie.invalid"
+#define SAMPLE_DNS_ADDR "10.0.2.2"
+#define SAMPLE_SNI "update.antinomie.invalid"
+#define SAMPLE_EXFIL_DOMAIN "exfil.antinomie.invalid"
+#define SAMPLE_UDP_PORT 4444
+#define SAMPLE_HTTP_PORT 8080
+#define SAMPLE_TLS_PORT 8443
 
-#define MAL_USER_AGENT                                                                             \
+#define SAMPLE_USER_AGENT                                                                             \
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "                      \
     "Chrome/124.0.0.0 Safari/537.36"
 
-#define MAL_MAX_ROUNDS 50
-#define MAL_MAX_DELAY_MS 10000
+#define SAMPLE_MAX_ROUNDS 50
+#define SAMPLE_MAX_DELAY_MS 10000
 
 struct options {
     int rounds;
@@ -68,42 +68,42 @@ struct module {
     int (*run)(const struct options *options);
 };
 
-long mal_scaled(const struct options *options, long light);
-void mal_delay(int milliseconds);
+long sample_scaled(const struct options *options, long light);
+void sample_delay(int milliseconds);
 
-// One result line, formatted like the torture samples so existing parsers and
+// One result line, formatted like the workload samples so existing parsers and
 // the app's run output read it the same way.
-void mal_pass(const char *module, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
-void mal_note(const char *module, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
-void mal_unavailable(const char *module, const char *fmt, ...)
+void sample_pass(const char *module, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+void sample_note(const char *module, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+void sample_unavailable(const char *module, const char *fmt, ...)
     __attribute__((format(printf, 2, 3)));
-void mal_fail(const char *module, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+void sample_fail(const char *module, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 
-const char *mal_host(const struct options *options);
-int mal_port(const struct options *options, int fallback);
+const char *sample_host(const struct options *options);
+int sample_port(const struct options *options, int fallback);
 
 // Create a directory and any missing parents.
-int mal_mkdir_p(const char *path);
+int sample_mkdir_p(const char *path);
 
 // Hex-encode at most cap-1 bytes; returns the output length.
-size_t mal_hex(const char *input, char *output, size_t cap);
+size_t sample_hex(const char *input, char *output, size_t cap);
 // "id=...&host=...&uid=...&sys=...&arch=..." for a check-in body.
-size_t mal_fingerprint(char *output, size_t cap);
+size_t sample_fingerprint(char *output, size_t cap);
 
 // TCP connect with a bounded wait; returns a blocking fd or -1 (errno set).
-int mal_dial(const char *host, int port, int timeout_ms);
-int mal_send_all(int fd, const void *buffer, size_t length);
-ssize_t mal_recv_wait(int fd, void *buffer, size_t length, int timeout_ms);
+int sample_dial(const char *host, int port, int timeout_ms);
+int sample_send_all(int fd, const void *buffer, size_t length);
+ssize_t sample_recv_wait(int fd, void *buffer, size_t length, int timeout_ms);
 
 // Method/path against host:port with the sample User-Agent. A non-NULL
 // received counter collects at most four reads of response headers/body.
-int mal_http_request(const char *host, int port, const char *method, const char *path,
+int sample_http_request(const char *host, int port, const char *method, const char *path,
                      const char *body, size_t body_len, unsigned long long *received);
 
 // Build one DNS question (header + one name + qtype/qclass IN).
-size_t mal_dns_build(unsigned char *packet, const char *name, uint16_t type, uint16_t id);
+size_t sample_dns_build(unsigned char *packet, const char *name, uint16_t type, uint16_t id);
 // Send it to resolver:53 and wait; returns 1 when an answer arrived.
-int mal_dns_ask(const char *resolver, const char *name, uint16_t type, int wait_ms);
+int sample_dns_ask(const char *resolver, const char *name, uint16_t type, int wait_ms);
 
 #define SCENARIO(id) int scenario_##id(const struct options *options)
 
@@ -112,12 +112,12 @@ SCENARIO(http_beacon);
 SCENARIO(dns_tunnel);
 SCENARIO(tls_sni);
 SCENARIO(udp_beacon);
-SCENARIO(stage2);
+SCENARIO(download);
 SCENARIO(dga);
-SCENARIO(persist_sim);
+SCENARIO(persistence);
 SCENARIO(memfd_exec);
 SCENARIO(ptrace_antidebug);
 SCENARIO(cred_read);
-SCENARIO(rule_bait);
+SCENARIO(rule_markers);
 
 #endif

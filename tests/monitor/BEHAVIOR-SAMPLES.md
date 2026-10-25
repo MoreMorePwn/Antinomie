@@ -1,6 +1,6 @@
-# Malware-activity samples
+# Behavior samples
 
-`ant-mal-*` are small static x86-64 ELFs that reproduce the *shape* of malware
+`ant-sample-*` are small static x86-64 ELFs that reproduce the *shape* of attacker
 behaviour for testing Antinomie end to end. They are not stress tests: each
 scenario does one thing an analyst would triage, then exits.
 
@@ -22,14 +22,14 @@ Everything harmful is replaced by a harmless destination:
 - every loop is bounded by `--rounds` (1-50).
 
 Options accept both `--host 10.0.2.2` and `--host=10.0.2.2`. A bare
-`./ant-malware` runs every scenario; `--only a,b` selects a subset and `--list`
+`./ant-sample-all` runs every scenario; `--only a,b` selects a subset and `--list`
 prints the registry.
 
 ## Build
 
 ```sh
-tests/monitor/build-malware.sh /tmp/ant-malware
-tests/monitor/build-malware.sh /tmp/ant-malware --dynamic
+tests/monitor/build-behavior-samples.sh /tmp/ant-sample-all
+tests/monitor/build-behavior-samples.sh /tmp/ant-sample-all --dynamic
 ```
 
 Static is the default (glibc, no `PT_INTERP`), which runs on every guest base.
@@ -38,19 +38,19 @@ Static is the default (glibc, no `PT_INTERP`), which runs on every guest base.
 
 | Binary | Shape |
 |---|---|
-| `ant-mal-recon` | `uname`/hostname/uid fingerprint, staging file, exfil POST |
-| `ant-mal-http-beacon` | periodic `POST /gate.php` check-ins, browser User-Agent |
-| `ant-mal-dns-tunnel` | fingerprint hex-encoded into A and TXT questions |
-| `ant-mal-tls-sni` | TLS 1.2 ClientHello with SNI `update.likma.invalid` |
-| `ant-mal-udp-beacon` | JSON check-in datagrams to port 4444 |
-| `ant-mal-stage2` | `GET /stage2.bin`, counted but never executed |
-| `ant-mal-dga` | deterministic 2026-style DGA candidates, printed only |
-| `ant-mal-persist-sim` | autostart, systemd user unit, crontab shape, self-copy |
-| `ant-mal-memfd-exec` | anonymous memfd, RWX mapping, self re-exec via `fexecve` |
-| `ant-mal-ptrace-antidebug` | `TracerPid`, instrumented mappings, `PTRACE_TRACEME` check |
-| `ant-mal-cred-read` | decoy credential files read, standard paths only `stat`ed |
-| `ant-mal-rule-bait` | MITRE/Sigma tag strings plus four benign discovery commands |
-| `ant-malware` | every scenario in order |
+| `ant-sample-recon` | `uname`/hostname/uid fingerprint, staging file, exfil POST |
+| `ant-sample-http-beacon` | periodic `POST /gate.php` check-ins, browser User-Agent |
+| `ant-sample-dns-tunnel` | fingerprint hex-encoded into A and TXT questions |
+| `ant-sample-tls-sni` | TLS 1.2 ClientHello with SNI `update.antinomie.invalid` |
+| `ant-sample-udp-beacon` | JSON check-in datagrams to port 4444 |
+| `ant-sample-download` | `GET /download.bin`, counted but never executed |
+| `ant-sample-dga` | deterministic 2026-style DGA candidates, printed only |
+| `ant-sample-persistence` | autostart, systemd user unit, crontab shape, self-copy |
+| `ant-sample-memfd-exec` | anonymous memfd, RWX mapping, self re-exec via `fexecve` |
+| `ant-sample-ptrace-antidebug` | `TracerPid`, instrumented mappings, `PTRACE_TRACEME` check |
+| `ant-sample-cred-read` | decoy credential files read, standard paths only `stat`ed |
+| `ant-sample-rule-markers` | MITRE/Sigma tag strings plus four benign discovery commands |
+| `ant-sample-all` | every scenario in order |
 
 Defaults: `--rounds 3 --delay 500`, host `10.0.2.2` (the QEMU NAT host), HTTP
 8080, TLS 8443, UDP 4444, resolver `10.0.2.2`.
@@ -60,17 +60,17 @@ Defaults: `--rounds 3 --delay 500`, host `10.0.2.2` (the QEMU NAT host), HTTP
 ```text
 --rounds N        repetitions per scenario (1-50, default 3)
 --delay MS        pause between rounds (default 500)
---host ADDRESS    C2 address (default 10.0.2.2, the QEMU NAT host)
+--host ADDRESS    remote address (default 10.0.2.2, the QEMU NAT host)
 --port N          override the scenario's port
 --resolver ADDR   DNS server for dns-tunnel (default 10.0.2.2)
 --workdir DIR     base for per-scenario work directories
 --keep            keep the work directory for evidence inspection
 --cred-home       cred-read: plant decoys under $HOME (never overwrites)
 --list            list scenarios
---all / --only a,b   select scenarios in ant-malware
+--all / --only a,b   select scenarios in ant-sample-all
 ```
 
-`MAL_DNS_PORT` (environment) moves `dns-tunnel` off port 53, so a sinkhole can
+`SAMPLE_DNS_PORT` (environment) moves `dns-tunnel` off port 53, so a sinkhole can
 run unprivileged.
 
 ## Simulating the connection and the exfiltration
@@ -85,7 +85,7 @@ Leave the guest network isolated or point at a closed port. The sample records
 `socket` → `connect` → `sendto` and the failure reason:
 
 ```sh
-./ant-mal-http-beacon --host 127.0.0.1 --port 9 --rounds 1
+./ant-sample-http-beacon --host 127.0.0.1 --port 9 --rounds 1
 ```
 
 Expect `Connection refused` and `0/1 check-ins`. Use this to verify the syscall
@@ -93,20 +93,20 @@ view, error classification and the "attempted, not delivered" wording.
 
 ### 2. Local sinkhole — full application-layer exchange (recommended)
 
-`malware-sinkhole.py` listens on loopback and answers HTTP, TLS, UDP and DNS, so
+`sinkhole.py` listens on loopback and answers HTTP, TLS, UDP and DNS, so
 the sample's `recv` path also runs and the capture contains request *and*
 response. Nothing leaves the machine.
 
 ```sh
-python3 tests/monitor/malware-sinkhole.py \
+python3 tests/monitor/sinkhole.py \
     --http-port 8080 --tls-port 8443 --udp-port 4444 --dns-port 5353
 
-./ant-mal-http-beacon --host 127.0.0.1 --port 8080 --rounds 1
-./ant-mal-recon       --host 127.0.0.1 --port 8080 --rounds 1
-./ant-mal-stage2      --host 127.0.0.1 --port 8080 --rounds 1
-./ant-mal-tls-sni     --host 127.0.0.1 --port 8443 --rounds 1
-./ant-mal-udp-beacon  --host 127.0.0.1 --port 4444 --rounds 1
-MAL_DNS_PORT=5353 ./ant-mal-dns-tunnel --resolver 127.0.0.1 --rounds 1
+./ant-sample-http-beacon --host 127.0.0.1 --port 8080 --rounds 1
+./ant-sample-recon       --host 127.0.0.1 --port 8080 --rounds 1
+./ant-sample-download      --host 127.0.0.1 --port 8080 --rounds 1
+./ant-sample-tls-sni     --host 127.0.0.1 --port 8443 --rounds 1
+./ant-sample-udp-beacon  --host 127.0.0.1 --port 4444 --rounds 1
+SAMPLE_DNS_PORT=5353 ./ant-sample-dns-tunnel --resolver 127.0.0.1 --rounds 1
 ```
 
 The sinkhole logs each exchange to stdout and `sinkhole.log`, decoding the HTTP
@@ -116,7 +116,7 @@ the Suricata/YARA rules in `feature-sample.rules` and `triage-sample.rules`
 fire on a capture. Use `--dns-mode answer --dns-answer 127.0.0.1` to make the
 tunnel resolver path succeed instead of returning NXDOMAIN.
 
-`--dns-port 53` needs root; 5353 plus `MAL_DNS_PORT` avoids that. The sample
+`--dns-port 53` needs root; 5353 plus `SAMPLE_DNS_PORT` avoids that. The sample
 still sends to 53 unless the variable is set, so set both or neither.
 
 ### 2b. NAT guest → host listener (prints PWNED)
@@ -129,17 +129,17 @@ guest itself is 10.0.2.15). Nothing needs to be forwarded into the guest.
 On the host:
 
 ```sh
-python3 tests/monitor/malware-sinkhole.py --nat --pwned \
+python3 tests/monitor/sinkhole.py --nat --pwned \
     --http-port 8080 --tls-port 8443 --udp-port 4444 --dns-port 5353
 ```
 
 `--nat` binds 0.0.0.0 and prints the guest-side recipe. In the guest:
 
 ```sh
-./ant-mal-recon      --host 10.0.2.2 --port 8080 --rounds 1
-./ant-mal-http-beacon --host 10.0.2.2 --port 8080 --rounds 1
-./ant-mal-udp-beacon --host 10.0.2.2 --port 4444 --rounds 1
-MAL_DNS_PORT=5353 ./ant-mal-dns-tunnel --resolver 10.0.2.2 --rounds 1
+./ant-sample-recon      --host 10.0.2.2 --port 8080 --rounds 1
+./ant-sample-http-beacon --host 10.0.2.2 --port 8080 --rounds 1
+./ant-sample-udp-beacon --host 10.0.2.2 --port 4444 --rounds 1
+SAMPLE_DNS_PORT=5353 ./ant-sample-dns-tunnel --resolver 10.0.2.2 --rounds 1
 ```
 
 The listener prints a banner on the first payload and a `PWNED <proto> <bytes>
@@ -166,7 +166,7 @@ capture even though no reply comes back. Antinomie's Network tab (TShark decode,
 Wireshark display filters)
 then shows the request with `tcp.flags.syn == 1 and tcp.flags.ack == 0`, the
 HTTP request in `http.request`, or the DNS query in `dns.qry.name`. This is the
-closest to real malware traffic without contacting a third party.
+closest to real attack traffic without contacting a third party.
 
 Two environment caveats: behind a transparent proxy TEST-NET connects can be
 *accepted* while returning no data — the samples then print "request sent, no
@@ -185,8 +185,8 @@ response" rather than claiming delivery. And an intercepting resolver may answer
 4. `--keep` leaves `stage/recon.txt`, the persistence shapes and the decoy
    credential files for the Files tab and YARA scans.
 
-Options accept `--opt value` and `--opt=value`; a bare `./ant-malware` runs all
-scenarios, so `./ant-malware --rounds 1 --delay 0` is a quick full pass.
+Options accept `--opt value` and `--opt=value`; a bare `./ant-sample-all` runs all
+scenarios, so `./ant-sample-all --rounds 1 --delay 0` is a quick full pass.
 
 `memfd-exec` and `ptrace-antidebug` are the two scenarios to run when the guest
 uses a ptrace-based monitor. The memfd child announces itself as `memfd-child`

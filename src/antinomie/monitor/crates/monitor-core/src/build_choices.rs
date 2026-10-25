@@ -1,4 +1,4 @@
-//! Choices offered by the base build wizard (ANT-T0028).
+//! Choices offered by the base build wizard.
 //!
 //! Keyboard layouts and variants were captured from xkb-data `evdev.lst` and
 //! time zones from tzdata `zone1970.tab` on 2026-10-08; the locale list is a

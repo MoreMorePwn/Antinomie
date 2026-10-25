@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 /* Test shim: delays fsync/fdatasync by SLOW_FSYNC_MS (default 187, the median
- * measured under WSL in ANT-T0009 2B) to reproduce a slow host disk. With
+ * measured under WSL) to reproduce a slow host disk. With
  * SLOW_FSYNC_LOG set it logs time, thread name and file for each call.
  *
  *   cc -shared -fPIC -O2 tests/monitor/slow-fsync.c -o slow-fsync.so -ldl

@@ -1,4 +1,4 @@
-//! The base build kit the app carries (ANT-T0028).
+//! The base build kit the app carries.
 //!
 //! `build.rs` embeds the repository files a base build needs, in their
 //! repository layout: the orchestrator, kernel build script, image recipes,

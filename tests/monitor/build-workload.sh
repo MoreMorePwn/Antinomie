@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-only
 #
-# build-torture.sh — build the Antinomie stress samples.
+# build-workload.sh — build the Antinomie stress samples.
 #
-#   usage: tests/monitor/build-torture.sh OUTPUT_DIR [--static]
+#   usage: tests/monitor/build-workload.sh OUTPUT_DIR [--static]
 #
-# Writes OUTPUT_DIR/ant-torture (every module), one ant-<module> per module,
+# Writes OUTPUT_DIR/ant-workload (every module), one ant-<module> per module,
 # and the ant-static-* variants for static analysis. The default build links
 # glibc dynamically and stops if a binary would need a newer glibc than the
 # Debian trixie guest has (2.41); --static links the samples statically (the
@@ -15,8 +15,8 @@
 # "Stress Samples - Arguments and Walkthrough.md".
 set -euo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-source_dir="$here/torture"
-output=${1:?usage: build-torture.sh OUTPUT_DIR [--static]}
+source_dir="$here/workload"
+output=${1:?usage: build-workload.sh OUTPUT_DIR [--static]}
 mode=${2:-}
 mkdir -p "$output"
 output=$(cd "$output" && pwd)
@@ -33,8 +33,8 @@ cflags=(-O2 -g -Wall -Wextra -Wno-unused-result -pthread -D_GNU_SOURCE -I"$sourc
 sources=("$source_dir"/main.c "$source_dir"/load.c "$source_dir"/process.c "$source_dir"/files.c
     "$source_dir"/network.c "$source_dir"/kernel.c "$source_dir"/memory.c "$source_dir"/detect.c
     "$source_dir"/indicators.c)
-modules=(syscall-flood long-run object-capture terminal-flood process-tree unkillable file-churn
-    network-storm async-io decoder-zoo crash-core memory-tricks detect-yara detect-sigma detect-ids
+modules=(syscall-load long-run object-capture terminal-load process-tree unkillable file-churn
+    network-load async-io decoder-variants core-on-crash memory-tricks detect-yara detect-sigma detect-ids
     argv-env timing)
 
 check_glibc() {
@@ -47,8 +47,8 @@ check_glibc() {
     fi
 }
 
-gcc "${cflags[@]}" "${sources[@]}" -o "$output/ant-torture" "${link[@]}"
-check_glibc "$output/ant-torture"
+gcc "${cflags[@]}" "${sources[@]}" -o "$output/ant-workload" "${link[@]}"
+check_glibc "$output/ant-workload"
 for module in "${modules[@]}"; do
     gcc "${cflags[@]}" -DSINGLE_MODULE="\"$module\"" -DSINGLE_ID_"${module//-/_}" "${sources[@]}" \
         -o "$output/ant-$module" "${link[@]}"
@@ -56,7 +56,7 @@ for module in "${modules[@]}"; do
 done
 
 # Static analysis variants. Their data is generated reproducibly.
-generated="$output/.static-zoo"
+generated="$output/.static-corpus"
 mkdir -p "$generated/packed" "$generated/huge"
 python3 -I - "$generated" <<'EOF'
 import gzip, io, random, struct, sys, zipfile, zlib
@@ -77,51 +77,51 @@ def png(width, height):
 # Packed: a 256 KiB high-entropy block and embedded gzip, ZIP and PNG.
 rng = random.Random(0x5EED)
 noise = bytes(rng.getrandbits(8) for _ in range(256 * 1024))
-text = b"Antinomie static zoo: embedded payload.\n" * 64
+text = b"Antinomie static corpus: embedded payload.\n" * 64
 buffer = io.BytesIO()
-with gzip.GzipFile(filename="zoo.txt", mode="wb", fileobj=buffer, mtime=0) as stream:
+with gzip.GzipFile(filename="corpus.txt", mode="wb", fileobj=buffer, mtime=0) as stream:
     stream.write(text)
 archive = io.BytesIO()
 with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
-    info = zipfile.ZipInfo("zoo/readme.txt", date_time=(2026, 1, 1, 0, 0, 0))
+    info = zipfile.ZipInfo("corpus/readme.txt", date_time=(2026, 1, 1, 0, 0, 0))
     bundle.writestr(info, text)
-with open(f"{root}/packed/static-zoo-generated.h", "w") as out:
+with open(f"{root}/packed/static-corpus-generated.h", "w") as out:
     out.write("#include <stdint.h>\n#include <stddef.h>\n")
-    for name, data in (("zoo_noise", noise), ("zoo_gzip", buffer.getvalue()),
-                       ("zoo_zip", archive.getvalue()), ("zoo_png", png(48, 48))):
+    for name, data in (("corpus_noise", noise), ("corpus_gzip", buffer.getvalue()),
+                       ("corpus_zip", archive.getvalue()), ("corpus_png", png(48, 48))):
         out.write(array(name, data))
-    out.write("static uint32_t zoo_generated(void)\n{\n    uint32_t hash = 0;\n")
-    for name in ("zoo_noise", "zoo_gzip", "zoo_zip", "zoo_png"):
+    out.write("static uint32_t corpus_generated(void)\n{\n    uint32_t hash = 0;\n")
+    for name in ("corpus_noise", "corpus_gzip", "corpus_zip", "corpus_png"):
         out.write(f"    for (size_t i = 0; i < sizeof {name}; i += 97) hash = hash * 31 + {name}[i];\n")
     out.write("    return hash;\n}\n")
 
 # Huge: thousands of functions and strings, and hundreds of named sections.
 functions, strings, sections = 3000, 2000, 200
-with open(f"{root}/huge/static-zoo-generated.h", "w") as out:
+with open(f"{root}/huge/static-corpus-generated.h", "w") as out:
     out.write("#include <stdint.h>\n#include <stddef.h>\n")
     for n in range(functions):
-        out.write(f"__attribute__((noinline)) uint32_t zoo_function_{n:04d}(uint32_t x) "
+        out.write(f"__attribute__((noinline)) uint32_t corpus_function_{n:04d}(uint32_t x) "
                   f"{{ return (x ^ {n * 2654435761 & 0xffffffff}u) * {n | 1}u + {n}u; }}\n")
-    out.write("static uint32_t (*const zoo_functions[])(uint32_t) = {\n")
-    out.write(",\n".join(f"    zoo_function_{n:04d}" for n in range(functions)) + "\n};\n")
-    out.write("static const char *const zoo_strings[] = {\n")
-    out.write(",\n".join(f'    "antinomie static zoo string {n:04d} with some readable text"'
+    out.write("static uint32_t (*const corpus_functions[])(uint32_t) = {\n")
+    out.write(",\n".join(f"    corpus_function_{n:04d}" for n in range(functions)) + "\n};\n")
+    out.write("static const char *const corpus_strings[] = {\n")
+    out.write(",\n".join(f'    "antinomie static corpus string {n:04d} with some readable text"'
                          for n in range(strings)) + "\n};\n")
     for n in range(sections):
-        out.write(f'__attribute__((used, section(".ant.zoo.{n:03d}"))) '
-                  f'static const char zoo_section_{n:03d}[] = "section {n:03d}";\n')
-    out.write("static uint32_t zoo_generated(void)\n{\n    uint32_t hash = 1;\n"
-              "    for (size_t i = 0; i < sizeof zoo_functions / sizeof zoo_functions[0]; i++)\n"
-              "        hash = zoo_functions[i](hash);\n"
-              "    for (size_t i = 0; i < sizeof zoo_strings / sizeof zoo_strings[0]; i++)\n"
-              "        hash += (uint32_t)zoo_strings[i][i % 30];\n    return hash;\n}\n")
+        out.write(f'__attribute__((used, section(".ant.corpus.{n:03d}"))) '
+                  f'static const char corpus_section_{n:03d}[] = "section {n:03d}";\n')
+    out.write("static uint32_t corpus_generated(void)\n{\n    uint32_t hash = 1;\n"
+              "    for (size_t i = 0; i < sizeof corpus_functions / sizeof corpus_functions[0]; i++)\n"
+              "        hash = corpus_functions[i](hash);\n"
+              "    for (size_t i = 0; i < sizeof corpus_strings / sizeof corpus_strings[0]; i++)\n"
+              "        hash += (uint32_t)corpus_strings[i][i % 30];\n    return hash;\n}\n")
 EOF
 
-zoo="$source_dir/static-zoo.c"
+corpus="$source_dir/static-corpus.c"
 variant() {
     local name=$1
     shift
-    gcc -Wall -Wextra "$@" "$zoo" -o "$output/ant-static-$name"
+    gcc -Wall -Wextra "$@" "$corpus" -o "$output/ant-static-$name"
 }
 variant symbols -O0 -g
 variant stripped -O2 -s
@@ -132,8 +132,8 @@ variant unprotected -O0 -fno-stack-protector -U_FORTIFY_SOURCE -fno-pie -no-pie 
 variant hardened -O2 -fstack-protector-strong -D_FORTIFY_SOURCE=3 -fstack-clash-protection \
     -fcf-protection -fPIE -pie -Wl,-z,relro,-z,now
 variant static -O2 -static
-variant packed -O2 -DZOO_GENERATED -I"$generated/packed"
-variant huge -O1 -DZOO_GENERATED -I"$generated/huge"
+variant packed -O2 -DCORPUS_GENERATED -I"$generated/packed"
+variant huge -O1 -DCORPUS_GENERATED -I"$generated/huge"
 for file in "$output"/ant-static-*; do
     [[ $file == *-static ]] || check_glibc "$file"
 done

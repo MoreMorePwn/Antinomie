@@ -79,11 +79,11 @@ pub(crate) use sorting::{current as sort_current, header as sort_header, Spec as
 mod summary;
 mod table;
 #[cfg(test)]
-mod torture_qa;
-#[cfg(test)]
 mod tracer_qa;
 #[cfg(test)]
 mod uring_qa;
+#[cfg(test)]
+mod workload_qa;
 use self::{
     archive_scan::*, bpf_attach::BpfFds, bpf_notes::*, descriptors::*, file_category::FILE_FIELDS,
     file_events::*, findings::*, pcap_scan::*, process_tree::*, refresh::*, table::*,

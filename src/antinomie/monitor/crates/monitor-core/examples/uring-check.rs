@@ -5,14 +5,14 @@
 //! the guest's RUN_STATUS, never from terminal EOF or a workload marker, and a
 //! worker thread of the kernel never leaves the status inconsistent.
 //!
-//!   uring-check status BUNDLE NEW_DATA_DIR TORTURE FIXTURE
-//!   uring-check boots  BUNDLE NEW_DATA_DIR TORTURE FIXTURE [COUNT]
-//!   uring-check legacy BUNDLE NEW_DATA_DIR TORTURE FIXTURE
-//!   uring-check record BUNDLE NEW_DATA_DIR TORTURE FIXTURE
+//!   uring-check status BUNDLE NEW_DATA_DIR WORKLOAD FIXTURE
+//!   uring-check boots  BUNDLE NEW_DATA_DIR WORKLOAD FIXTURE [COUNT]
+//!   uring-check legacy BUNDLE NEW_DATA_DIR WORKLOAD FIXTURE
+//!   uring-check record BUNDLE NEW_DATA_DIR WORKLOAD FIXTURE
 //!
-//! TORTURE is the static `ant-torture` sample and FIXTURE the static
+//! WORKLOAD is the static `ant-workload` sample and FIXTURE the static
 //! `tests/monitor/uring-fixture` program. `status` runs every case with and
-//! without a core on exit: the torture async-io module, linked pairs on
+//! without a core on exit: the workload async-io module, linked pairs on
 //! workers, cancellation, requests pending at exit, a kernel submission thread,
 //! a root that exits from a non-leader thread, a crash, and Stop of a run
 //! with workers (with and without a handled SIGTERM). `boots` repeats the
@@ -21,7 +21,7 @@
 //! Finished, with the root's exit code unknown or right, never invented.
 //! `record` runs the file stories Triage reads (io_uring, AIO and plain system
 //! calls on one file, an SQPOLL ring, sync, splice, attribute and directory
-//! requests, a script exec, the torture async-io module) on four vCPUs, stops the
+//! requests, a script exec, the workload async-io module) on four vCPUs, stops the
 //! VM so the recordings are complete, and prints a `RUN label=directory` line
 //! for each; the ignored test `recorded_uring_triage` of the app's triage
 //! module reads them (see its documentation). The data folder must be new and
@@ -258,13 +258,13 @@ struct Case {
     leaderless: bool,
 }
 
-const TORTURE: &str = "/tmp/ant-torture";
+const WORKLOAD: &str = "/tmp/ant-workload";
 const FIXTURE: &str = "/tmp/uring-fixture";
 
 const CASES: &[Case] = &[
     Case {
-        label: "torture-async-io",
-        program: TORTURE,
+        label: "workload-async-io",
+        program: WORKLOAD,
         args: &["--only", "async-io", "--level", "light"],
         end: End::Exit(0),
         workers: true,
@@ -581,22 +581,22 @@ fn prepare(
     bundle: &str,
     data: &str,
     name: &str,
-    torture: &str,
+    workload: &str,
     fixture: &str,
     cpus: u16,
 ) -> Result<Driver, String> {
     let mut d = setup(bundle, data, name, cpus)?;
-    upload(&mut d, torture, TORTURE)?;
+    upload(&mut d, workload, WORKLOAD)?;
     upload(&mut d, fixture, FIXTURE)?;
     Ok(d)
 }
 
-fn status(bundle: &str, data: &str, torture: &str, fixture: &str) -> Result<(), String> {
+fn status(bundle: &str, data: &str, workload: &str, fixture: &str) -> Result<(), String> {
     let mut d = prepare(
         bundle,
         data,
         "io_uring status",
-        torture,
+        workload,
         fixture,
         STATUS_CPUS,
     )?;
@@ -674,12 +674,12 @@ fn record_run(
     Ok(())
 }
 
-fn record(bundle: &str, data: &str, torture: &str, fixture: &str) -> Result<(), String> {
+fn record(bundle: &str, data: &str, workload: &str, fixture: &str) -> Result<(), String> {
     let mut d = prepare(
         bundle,
         data,
         "io_uring record",
-        torture,
+        workload,
         fixture,
         RECORD_CPUS,
     )?;
@@ -701,7 +701,7 @@ fn record(bundle: &str, data: &str, torture: &str, fixture: &str) -> Result<(), 
         &mut d,
         &mut runs,
         "async-io",
-        TORTURE,
+        WORKLOAD,
         &["--only", "async-io", "--level", "light"],
     )?;
     // The recordings are complete when the VM has stopped.
@@ -729,7 +729,7 @@ fn finish(mode: &str, failed: Vec<String>) -> Result<(), String> {
 fn boots(
     bundle: &str,
     data: &str,
-    torture: &str,
+    workload: &str,
     fixture: &str,
     count: usize,
 ) -> Result<(), String> {
@@ -737,7 +737,7 @@ fn boots(
         bundle,
         data,
         "io_uring boots",
-        torture,
+        workload,
         fixture,
         STATUS_CPUS,
     )?;
@@ -764,14 +764,16 @@ fn boots(
                             log.windows(19).any(|part| part == b"BusyBox guest ready")
                         })
             })?;
-            upload(&mut d, torture, TORTURE)?;
+            upload(&mut d, workload, WORKLOAD)?;
             upload(&mut d, fixture, FIXTURE)?;
         }
         result(format!("boot {boot} of {count}: {:?}", d.snapshot.boot_id));
-        for case in CASES
-            .iter()
-            .filter(|c| matches!(c.label, "torture-async-io" | "threaded-root-exit" | "crash"))
-        {
+        for case in CASES.iter().filter(|c| {
+            matches!(
+                c.label,
+                "workload-async-io" | "threaded-root-exit" | "crash"
+            )
+        }) {
             for core in [true, false] {
                 if !run_case(&mut d, case, core, true)? {
                     failed.push(format!(
@@ -786,12 +788,12 @@ fn boots(
     finish("boots", failed)
 }
 
-fn legacy(bundle: &str, data: &str, torture: &str, fixture: &str) -> Result<(), String> {
+fn legacy(bundle: &str, data: &str, workload: &str, fixture: &str) -> Result<(), String> {
     let mut d = prepare(
         bundle,
         data,
         "io_uring legacy",
-        torture,
+        workload,
         fixture,
         STATUS_CPUS,
     )?;
@@ -814,17 +816,17 @@ fn main() {
         .collect::<Vec<_>>()
         .as_slice()
     {
-        ["status", bundle, data, torture, fixture] => status(bundle, data, torture, fixture),
-        ["legacy", bundle, data, torture, fixture] => legacy(bundle, data, torture, fixture),
-        ["record", bundle, data, torture, fixture] => record(bundle, data, torture, fixture),
-        ["boots", bundle, data, torture, fixture] => boots(bundle, data, torture, fixture, 3),
-        ["boots", bundle, data, torture, fixture, count] => count
+        ["status", bundle, data, workload, fixture] => status(bundle, data, workload, fixture),
+        ["legacy", bundle, data, workload, fixture] => legacy(bundle, data, workload, fixture),
+        ["record", bundle, data, workload, fixture] => record(bundle, data, workload, fixture),
+        ["boots", bundle, data, workload, fixture] => boots(bundle, data, workload, fixture, 3),
+        ["boots", bundle, data, workload, fixture, count] => count
             .parse()
             .map_err(|_| "COUNT must be a number".to_string())
-            .and_then(|count| boots(bundle, data, torture, fixture, count)),
+            .and_then(|count| boots(bundle, data, workload, fixture, count)),
         _ => {
             eprintln!(
-                "usage: uring-check status|legacy|record|boots BUNDLE NEW_DATA_DIR TORTURE FIXTURE [COUNT]"
+                "usage: uring-check status|legacy|record|boots BUNDLE NEW_DATA_DIR WORKLOAD FIXTURE [COUNT]"
             );
             std::process::exit(2);
         }

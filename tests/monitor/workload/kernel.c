@@ -3,7 +3,7 @@
 //
 // kernel.c — asynchronous requests (io_uring) and rare system calls with
 // unusual arguments for the argument decoders.
-#include "torture.h"
+#include "workload.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -192,7 +192,7 @@ MODULE(async_io)
     return 0;
 }
 
-// ---------------------------------------------------------------- decoder-zoo
+// ---------------------------------------------------------------- decoder-variants
 
 static unsigned long long decoded;
 #define TRY(expr) ((void)(expr), decoded++)
@@ -238,7 +238,7 @@ static void tracing(void)
 
 static void keys(void)
 {
-    long key = syscall(SYS_add_key, "user", "antinomie:torture", "benign payload", 14,
+    long key = syscall(SYS_add_key, "user", "antinomie:workload", "benign payload", 14,
                        KEY_SPEC_PROCESS_KEYRING);
     decoded++;
     if (key >= 0) {
@@ -278,7 +278,7 @@ static void odd_arguments(const struct options *options)
     TRY(read(-1, buffer, sizeof buffer));                       // EBADF
     TRY(syscall(SYS_write, 1, NULL, 10));                       // EFAULT
     TRY(mmap(NULL, (size_t)1 << 46, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0)); // ENOMEM
-    TRY(open("/nonexistent/antinomie/torture", O_RDONLY));      // ENOENT
+    TRY(open("/nonexistent/antinomie/workload", O_RDONLY));      // ENOENT
     TRY(open(options->workdir, O_PATH | O_NOFOLLOW | O_DIRECTORY));
     TRY(ioctl(1, TIOCGWINSZ, buffer));
     TRY(ioctl(open("/dev/null", O_RDONLY), 0x5401feed, 0));     // ENOTTY
@@ -376,9 +376,9 @@ static void privileged(const struct options *options, const char *name)
     }
 }
 
-MODULE(decoder_zoo)
+MODULE(decoder_variants)
 {
-    const char *name = "decoder-zoo";
+    const char *name = "decoder-variants";
     long rounds = scaled(options, 1);
     decoded = 0;
     for (long i = 0; i < rounds; i++) {

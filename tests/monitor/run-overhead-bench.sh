@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# run-overhead-bench.sh — ANT-T0009 Phase 3: the same pinned four-thread
+# run-overhead-bench.sh — Phase 3: the same pinned four-thread
 # workload (tests/monitor/overhead-bench.c) on four vCPUs under three kernels
 # states, REPEAT times each:
 #
