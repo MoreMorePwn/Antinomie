@@ -245,6 +245,12 @@ impl WorkspaceState {
         (self.tab, self.file_info) = tabs::locate(kind, self.file_info);
     }
 
+    /// The tab of `kind` in front, for the screenshot fixture.
+    #[cfg(test)]
+    pub(crate) fn show_category(&mut self, kind: AnalysisKind) {
+        self.show(kind);
+    }
+
     /// Carry out what a row's context menu chose.
     fn run_row(&mut self, command: Option<RowCommand>) {
         match command {
