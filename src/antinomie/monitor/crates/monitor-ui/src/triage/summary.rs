@@ -22,7 +22,15 @@ enum Destination {
 }
 
 fn metric(ui: &mut egui::Ui, title: &str, value: Option<u64>) -> bool {
-    ui.add(egui::Label::new(title).wrap());
+    metric_hover(ui, title, value, "")
+}
+
+/// `metric` with a tooltip on its title.
+fn metric_hover(ui: &mut egui::Ui, title: &str, value: Option<u64>, hover: &str) -> bool {
+    let label = ui.add(egui::Label::new(title).wrap());
+    if !hover.is_empty() {
+        label.on_hover_text(hover);
+    }
     let clicked = ui
         .add_enabled(
             value.is_some(),

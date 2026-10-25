@@ -17,7 +17,6 @@ const THREATFOX: &str = "# \"first_seen_utc\", \"ioc_id\", \"ioc_value\", \"ioc_
 const URLHAUS: &str = "# id,dateadded,url,url_status,last_online,threat,tags\n\"3350918\",\"2026-10-11 08:00:00\",\"http://example.com/\",\"online\",\"\",\"malware_download\",\"mirai,elf\"\n";
 const PAYLOADS: &str = "# firstseen,url,filetype,md5,sha256,signature\n\"2026-10-11 08:00:02\",\"http://x.example/a\",\"elf\",\"87221652a79fc3c9b04cde0b335fdd5b\",\"f66025c51e65b02ffdaf55ea9460656a0b79598cb7db1514dc7a23a81b4cf1aa\",\"Mirai\"\n";
 const FEODO: &str = "[{\"ip_address\":\"203.0.113.45\",\"port\":443,\"status\":\"online\",\"first_seen\":\"2026-08-01 00:00:00\",\"malware\":\"Dridex\"}]";
-const SSLBL_IP: &str = "# Firstseen,DstIP,DstPort\n2026-08-19 10:00:00,203.0.113.45,443\n";
 const SSLBL_JA3: &str = "# ja3_md5,Firstseen,Lastseen,Listingreason\nf6d64cbcb6dead5e8e864400f056fa32,2026-08-19 10:00:00,2026-10-01 10:00:00,Gafgyt C&C\n";
 const SSLBL_CERT: &str = "# Listingdate,SHA1,Listingreason\n2026-08-19 10:00:00,2f22765d04931a078909145ca628d2264c852d7d,Gafgyt C&C\n";
 
@@ -38,7 +37,6 @@ impl Fetcher for Served {
             "urlhaus" => URLHAUS,
             "urlhaus-payloads" => PAYLOADS,
             "feodo" => FEODO,
-            "sslbl-ip" => SSLBL_IP,
             "sslbl-ja3" => SSLBL_JA3,
             _ => SSLBL_CERT,
         };
@@ -232,7 +230,7 @@ fn a_dataset_match_is_listed_as_a_finding_and_a_known_false_positive_removes_it(
     let fixture = Fixture::new(true);
     let scan = fixture.scan(None);
     let ioc = scan.ioc.clone().unwrap();
-    assert_eq!(ioc.scan.loaded.len(), 7);
+    assert_eq!(ioc.scan.loaded.len(), 6);
     let verdicts = ioc_scan::verdicts(&ioc, &[], &OnlineResults::default());
     let (at, _) = find(&ioc, Type::Endpoint, "93.184.216.34:80");
     assert_eq!(verdicts[at].outcome, Outcome::Matched);
@@ -426,7 +424,6 @@ fn the_network_section_has_four_tabs_and_no_layout_switch() {
     ] {
         assert!(text.contains(wanted), "{wanted:?} missing: {text}");
     }
-    assert!(text.contains("names no process"), "{text}");
     assert!(!text.contains("Sessions"), "{text}");
     // A saved filter on a 0.7.0 field name still compiles for its table.
     for (fields, filter) in [
@@ -483,7 +480,11 @@ fn a_run_without_a_capture_says_the_network_tabs_were_skipped() {
             });
         },
     );
-    assert!(shown(&output).contains("Skipped"), "{}", shown(&output));
+    assert!(
+        shown(&output).contains("Network capture was off"),
+        "{}",
+        shown(&output)
+    );
 }
 
 #[test]

@@ -82,7 +82,7 @@ const FAIR_USE: &str = "abuse.ch fair use: free to use with an Auth-Key; see the
 const REGENERATED: &str = "abuse.ch regenerates this file about every five minutes, so the pack is a snapshot; Check for updates compares it with the live file.";
 
 /// The packs, in the order they are listed.
-pub const LIVE_PACKS: [LivePack; 6] = [
+pub const LIVE_PACKS: [LivePack; 5] = [
     LivePack {
         id: "abuse-ch-threatfox",
         name: "abuse.ch ThreatFox",
@@ -129,22 +129,6 @@ pub const LIVE_PACKS: [LivePack; 6] = [
         ],
     },
     LivePack {
-        id: "abuse-ch-sslbl-ip",
-        name: "abuse.ch SSLBL botnet C2 IPs",
-        url: "https://sslbl.abuse.ch/blacklist/sslipblacklist.rules",
-        homepage: "https://sslbl.abuse.ch/",
-        license: CC0,
-        license_url: "https://sslbl.abuse.ch/blacklist/",
-        needs_key: false,
-        retired_if_empty: true,
-        matches: "TLS connections to botnet C2 servers by IP:port",
-        limits: &[
-            REGENERATED,
-            "The aggressive variant is not offered because abuse.ch warns of false positives.",
-            "abuse.ch now serves this file with its header and no entries; the Feodo Tracker pack and dataset list botnet C2 IPs.",
-        ],
-    },
-    LivePack {
         id: "abuse-ch-sslbl-ja3",
         name: "abuse.ch SSLBL JA3 fingerprints",
         url: "https://sslbl.abuse.ch/blacklist/ja3_fingerprints.rules",
@@ -156,7 +140,6 @@ pub const LIVE_PACKS: [LivePack; 6] = [
         matches: "TLS clients by JA3 fingerprint",
         limits: &[
             REGENERATED,
-            "abuse.ch now serves this file empty; the JA3 list lives on in the IOC datasets (SSLBL JA3).",
             "Rules that use a JA3 keyword are reported and not loaded when Suricata has no JA3 support.",
         ],
     },
@@ -649,7 +632,7 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
 
-    const SIP: &str = "# abuse.ch SSLBL botnet C2 IP rules (fixture)\n# Last updated: 2026-10-22 10:15:00 UTC\n\
+    const SIP: &str = "# abuse.ch Feodo Tracker botnet C2 IP rules (fixture)\n# Last updated: 2026-10-22 10:15:00 UTC\n\
 alert tls $HOME_NET any -> [203.0.113.45] 443 (msg:\"ABUSE.ch Botnet C2 (Gafgyt)\"; flow:established,to_server; reference:url,sslbl.abuse.ch/ip/203.0.113.45; sid:902202; rev:1;)\n\
 alert tls $HOME_NET any -> [198.51.100.23] 8443 (msg:\"ABUSE.ch Botnet C2 (QakBot)\"; flow:established,to_server; sid:902203; rev:1;)\n";
 
@@ -706,14 +689,14 @@ alert tls $HOME_NET any -> [198.51.100.23] 8443 (msg:\"ABUSE.ch Botnet C2 (QakBo
 
     #[test]
     fn the_pack_table_matches_the_card() {
-        assert_eq!(LIVE_PACKS.len(), 6);
+        assert_eq!(LIVE_PACKS.len(), 5);
         assert_eq!(
             LIVE_PACKS
                 .iter()
                 .filter(|pack| pack.retired_if_empty)
                 .map(|pack| pack.id)
                 .collect::<Vec<_>>(),
-            ["abuse-ch-sslbl-ip", "abuse-ch-sslbl-ja3"]
+            ["abuse-ch-sslbl-ja3"]
         );
         let ids: Vec<_> = LIVE_PACKS.iter().map(|pack| pack.id).collect();
         assert!(
@@ -758,7 +741,7 @@ alert tls $HOME_NET any -> [198.51.100.23] 8443 (msg:\"ABUSE.ch Botnet C2 (QakBo
     #[test]
     fn a_check_downloads_once_and_not_again_within_five_minutes() {
         let dir = dir("throttle");
-        let pack = live_pack("abuse-ch-sslbl-ip").unwrap();
+        let pack = live_pack("abuse-ch-feodo").unwrap();
         let server = Server::new(SIP);
         let cancel = AtomicBool::new(false);
         let (first, used) = check_live(
@@ -825,7 +808,7 @@ alert tls $HOME_NET any -> [198.51.100.23] 8443 (msg:\"ABUSE.ch Botnet C2 (QakBo
     #[test]
     fn a_bad_download_is_refused_and_the_last_snapshot_stays() {
         let dir = dir("bad");
-        let pack = live_pack("abuse-ch-sslbl-ip").unwrap();
+        let pack = live_pack("abuse-ch-feodo").unwrap();
         let server = Server::new(SIP);
         let cancel = AtomicBool::new(false);
         let (good, _) = check_live(
@@ -853,18 +836,14 @@ alert tls $HOME_NET any -> [198.51.100.23] 8443 (msg:\"ABUSE.ch Botnet C2 (QakBo
                 &mut quiet,
             )
             .unwrap_err();
-            assert!(
-                error.starts_with("abuse.ch SSLBL botnet C2 IPs:"),
-                "{error}"
-            );
+            assert!(error.starts_with("abuse.ch Feodo Tracker:"), "{error}");
         }
         assert_eq!(read_checks(&dir).get(pack.id), Some(&good));
         assert_eq!(
             crate::storage::sha256_file_hex(&cache_path(&dir, pack)).unwrap(),
             good.sha256
         );
-        // An empty file is a refused download for a pack abuse.ch still fills,
-        // while the retired SSLBL IP pack answers with one.
+        // An empty file is a refused download for a pack abuse.ch still fills.
         let live = live_pack("abuse-ch-sslbl").unwrap();
         let empty = Server::new("");
         let error = check_live(
@@ -881,29 +860,18 @@ alert tls $HOME_NET any -> [198.51.100.23] 8443 (msg:\"ABUSE.ch Botnet C2 (QakBo
             error.starts_with("abuse.ch SSL certificate blacklist:"),
             "{error}"
         );
-        let (retired, _) = check_live(
-            &dir,
-            pack,
-            &Secret::default(),
-            &empty,
-            9_000,
-            &cancel,
-            &mut quiet,
-        )
-        .unwrap();
-        assert_eq!(retired.rules, 0, "a header-only file is the retired answer");
         let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
     fn install_then_update_on_demand_with_age_and_status() {
         let dir = dir("install");
-        let pack = live_pack("abuse-ch-sslbl-ip").unwrap();
+        let pack = live_pack("abuse-ch-feodo").unwrap();
         let server = Server::new(SIP);
         let cancel = AtomicBool::new(false);
         let registry = || load_registry(&dir).unwrap();
         assert_eq!(
-            live_states(&dir, &registry())[3].status,
+            live_states(&dir, &registry())[2].status,
             LiveStatus::NotInstalled
         );
         let installed = install_live(
@@ -923,7 +891,7 @@ alert tls $HOME_NET any -> [198.51.100.23] 8443 (msg:\"ABUSE.ch Botnet C2 (QakBo
             1,
             "install used the checked file, not a second request"
         );
-        let state = &live_states(&dir, &registry())[3];
+        let state = &live_states(&dir, &registry())[2];
         assert_eq!(state.status, LiveStatus::Current);
         let shown = state.installed.as_ref().unwrap();
         assert!(
@@ -953,7 +921,7 @@ alert tls $HOME_NET any -> [198.51.100.23] 8443 (msg:\"ABUSE.ch Botnet C2 (QakBo
             "the 5-minute rule holds even with a newer file waiting"
         );
         assert_eq!(
-            live_states(&dir, &registry())[3].status,
+            live_states(&dir, &registry())[2].status,
             LiveStatus::Current
         );
         let (_, used) = check_live(
@@ -968,7 +936,7 @@ alert tls $HOME_NET any -> [198.51.100.23] 8443 (msg:\"ABUSE.ch Botnet C2 (QakBo
         .unwrap();
         assert!(used);
         assert_eq!(
-            live_states(&dir, &registry())[3].status,
+            live_states(&dir, &registry())[2].status,
             LiveStatus::UpdateAvailable
         );
         let updated = install_live(
@@ -983,7 +951,7 @@ alert tls $HOME_NET any -> [198.51.100.23] 8443 (msg:\"ABUSE.ch Botnet C2 (QakBo
         .unwrap();
         assert!(updated.version.starts_with("20261022T102000Z-"));
         assert_eq!(
-            live_states(&dir, &registry())[3].status,
+            live_states(&dir, &registry())[2].status,
             LiveStatus::Current
         );
         // The same snapshot again is already installed.
@@ -1004,7 +972,7 @@ alert tls $HOME_NET any -> [198.51.100.23] 8443 (msg:\"ABUSE.ch Botnet C2 (QakBo
     #[test]
     fn a_failed_install_keeps_the_installed_version() {
         let dir = dir("keep");
-        let pack = live_pack("abuse-ch-sslbl-ip").unwrap();
+        let pack = live_pack("abuse-ch-feodo").unwrap();
         let server = Server::new(SIP);
         let cancel = AtomicBool::new(false);
         install_live(
@@ -1239,11 +1207,11 @@ alert tls $HOME_NET any -> [198.51.100.23] 8443 (msg:\"ABUSE.ch Botnet C2 (QakBo
     }
 
     #[test]
-    fn an_empty_ja3_or_ip_pack_is_retired_not_failed() {
+    fn an_empty_ja3_pack_is_retired_not_failed() {
         let dir = dir("retired");
         let cancel = AtomicBool::new(false);
         let mut cases = Vec::new();
-        for id in ["abuse-ch-sslbl-ja3", "abuse-ch-sslbl-ip"] {
+        for id in ["abuse-ch-sslbl-ja3"] {
             for body in [
                 "",
                 "# abuse.ch SSLBL\n# Last updated: 2026-10-22 10:15:00 UTC\n",
@@ -1285,7 +1253,7 @@ alert tls $HOME_NET any -> [198.51.100.23] 8443 (msg:\"ABUSE.ch Botnet C2 (QakBo
         }
         // HTML in place of the pack is still an error, and so is an empty
         // file from any other pack.
-        let pack = live_pack("abuse-ch-sslbl-ip").unwrap();
+        let pack = live_pack("abuse-ch-feodo").unwrap();
         let html = Server::new("<html>Too many requests</html>");
         assert!(
             check_live(

@@ -99,7 +99,7 @@ fn each_library_entry_opens_its_page_in_the_main_area() {
     let shown = settle(&mut app, &ctx);
     assert!(shown
         .iter()
-        .any(|(text, _)| text.starts_with("Static analysis uses these tools")));
+        .any(|(text, _)| text == "Network route programs"));
     click_label(&mut app, &ctx, SIZE, "Detection rules");
     let shown = settle(&mut app, &ctx);
     assert!(shown.iter().any(|(text, _)| text == "YARA"), "{shown:?}");
@@ -116,7 +116,7 @@ fn links_to_the_old_windows_open_the_pages() {
     let shown = settle(&mut app, &ctx);
     assert!(shown
         .iter()
-        .any(|(text, _)| text.starts_with("Static analysis uses these tools")));
+        .any(|(text, _)| text == "Network route programs"));
     assert!(
         app.library_requests.is_empty(),
         "the workspace took the request"

@@ -91,7 +91,7 @@ fn registers_are_grouped_in_cards_with_a_thread_row_and_a_banner() {
     }
     assert!(shown
         .iter()
-        .any(|(text, _)| text.starts_with("Register values are recovered evidence")));
+        .any(|(text, _)| text.starts_with("Saved core: registers only")));
     let rip = shown.iter().find(|(text, _)| text == "rip").unwrap().1;
     let rax = shown.iter().find(|(text, _)| text == "rax").unwrap().1;
     assert!(

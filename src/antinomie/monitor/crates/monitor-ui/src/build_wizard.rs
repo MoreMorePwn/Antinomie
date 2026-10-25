@@ -298,7 +298,8 @@ impl BuildWizard {
     }
 
     fn language(&mut self, ui: &mut egui::Ui) -> bool {
-        ui.label("Choose the language and locale of the installed system.");
+        ui.label("Language")
+            .on_hover_text("Choose the language and locale of the installed system.");
         let scroll = self.take_scroll(Page::Language);
         let options = &mut self.options[self.profile];
         pick_list(
@@ -431,8 +432,8 @@ impl BuildWizard {
             egui::TextEdit::singleline(&mut options.proxy)
                 .desired_width(420.0)
                 .hint_text(theme::hint_text("http://user:password@host:port/")),
-        );
-        ui.small("The proxy is used while building and is not kept in the image.");
+        )
+        .on_hover_text("The proxy is used while building and is not kept in the image.");
         let mut probe = options.clone();
         probe.hostname = "probe".into();
         match probe.validate(self.kind()) {
@@ -454,9 +455,9 @@ impl BuildWizard {
                 egui::TextEdit::singleline(&mut self.options[self.profile].name)
                     .desired_width(320.0)
                     .hint_text(crate::theme::hint_text(&automatic)),
-            );
+            )
+            .on_hover_text("Shown in the base list; leave empty for the automatic name.");
         });
-        ui.small("Shown in the base list; leave empty for the automatic name.");
         ui.add_space(6.0);
         let options = self.options[self.profile].clone();
         let mode = match build::resolve_mode(kind, self.mode) {
@@ -534,29 +535,15 @@ impl BuildWizard {
             });
         ui.add_space(6.0);
         ui.small(match (kind, kernel_cached) {
-            (Kind::BusyBox, true) => {
-                "The kernel for this app version is already built: only the image is made (a few minutes)."
-            }
-            (Kind::BusyBox, false) => {
-                "The kernel is compiled first (about 10 minutes); later builds reuse it."
-            }
-            (Kind::DebianMinimal, true) => {
-                "The kernel for this revision is already built (BusyBox bases share it): only \
-                 the system is installed (mostly package downloads). Needs about 6 GiB of free \
-                 disk space."
-            }
+            (Kind::BusyBox, true) => "Kernel already built.",
+            (Kind::BusyBox, false) => "Kernel build ~10 min (cached afterwards).",
+            (Kind::DebianMinimal, true) => "Kernel already built. Needs about 6 GiB free.",
             (Kind::DebianMinimal, false) => {
-                "The kernel is compiled first (about 10 minutes; BusyBox bases share it); later \
-                 builds reuse it. Needs about 11 GiB of free disk space."
+                "Kernel build ~10 min (cached afterwards). Needs about 11 GiB free."
             }
-            (Kind::DebianXfce, true) => {
-                "The kernel for this revision is already built: only the system is installed \
-                 (mostly package downloads). Needs about 20 GiB of free disk space."
-            }
+            (Kind::DebianXfce, true) => "Kernel already built. Needs about 20 GiB free.",
             (Kind::DebianXfce, false) => {
-                "The Debian kernel with all its modules is compiled first, which can take one to \
-                 two hours; later builds of this revision reuse it. Needs about 50 GiB of free \
-                 disk space."
+                "Kernel build 1-2 hours (cached afterwards). Needs about 50 GiB free."
             }
         });
         match options.validate(kind) {

@@ -116,10 +116,12 @@ impl ProcessPicker {
             .max_height((viewport.height() - 32.0).max(160.0))
             .show(ctx, |ui| {
                 if debug {
-                    ui.add(egui::Label::new("Attach gdb, IDA, Ghidra or radare2 to a process. Nothing runs in the guest: the kernel stops and inspects the process without ptrace, so it sees no tracer. The process keeps running until a debugger connects.").wrap());
+                    ui.add(egui::Label::new("Attach gdb, IDA, Ghidra or radare2 to a process.").wrap())
+                        .on_hover_text("Nothing runs in the guest: the kernel stops and inspects the process without ptrace, so it sees no tracer. The process keeps running until a debugger connects.");
                 }
                 if core {
-                    ui.add(egui::Label::new("Briefly pause this process and its threads, capture a native ELF core, then resume. Resident memory only; unavailable pages remain marked.").wrap());
+                    ui.add(egui::Label::new("Briefly pause this process, capture a native ELF core, then resume.").wrap())
+                        .on_hover_text("Its threads are paused too. Resident memory only; unavailable pages remain marked.");
                     let limits = core_context.limits;
                     // Start from the remembered default, and follow a guest that lowers it.
                     if self.core_budget == 0
@@ -139,7 +141,8 @@ impl ProcessPicker {
                     }
                     let (text, warn) = crate::core_budget::caption(limits.as_ref(), core_context.available, u64::from(self.core_budget));
                     let text = RichText::new(text);
-                    ui.add(egui::Label::new(if warn { text.color(theme::warn()) } else { text.weak() }).wrap());
+                    ui.add(egui::Label::new(if warn { text.color(theme::warn()) } else { text.weak() }).wrap())
+                        .on_hover_text("Stored bytes only: untouched mappings cost nothing.");
                 }
                 ui.horizontal_wrapped(|ui| {
                     if icon(

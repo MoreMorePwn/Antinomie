@@ -36,7 +36,7 @@ pub(crate) struct WorkspaceState {
     content: content::ContentState,
     capa: capa_matrix::CapaState,
     rows: RowWindows,
-    /// The regex matches pane of Strings & regex, over the report's strings.
+    /// The regex matches pane of the Regex matches tab, over the report's strings.
     regex: crate::regex_matches::RegexWindow,
     /// The layer the Unpacking tab shows.
     unpack_layer: usize,
@@ -105,7 +105,7 @@ impl WorkspaceState {
         ctx.data_mut(|data| data.insert_temp(egui::Id::new(CHOSEN_ROW), chosen));
     }
 
-    /// The report whose regex scan the Strings & regex pane asked for, once.
+    /// The report whose regex scan the Regex matches tab asked for, once.
     pub(crate) fn take_regex_request(&mut self) -> Option<String> {
         std::mem::take(&mut self.regex_wanted)
             .then(|| self.report_id.clone())
@@ -245,6 +245,12 @@ impl WorkspaceState {
         (self.tab, self.file_info) = tabs::locate(kind, self.file_info);
     }
 
+    /// The tab of `kind` in front, for the screenshot fixture.
+    #[cfg(test)]
+    pub(crate) fn show_category(&mut self, kind: AnalysisKind) {
+        self.show(kind);
+    }
+
     /// Carry out what a row's context menu chose.
     fn run_row(&mut self, command: Option<RowCommand>) {
         match command {
@@ -335,7 +341,12 @@ fn render(
         }
         Some(kind) => {
             ui.separator();
-            if let Some(next) = results(ui, report, state, listing, Some(kind)) {
+            let next = if kind == AnalysisKind::Regex {
+                tabs::regex_view(ui, report, state)
+            } else {
+                results(ui, report, state, listing, Some(kind))
+            };
+            if let Some(next) = next {
                 action = Some(next);
             }
         }
@@ -364,7 +375,6 @@ fn export_controls(
     let mut action = None;
     ui.horizontal_wrapped(|ui| {
         ui.menu_button(if kind.is_some() { "Export category…" } else { "Export report…" }, |ui| {
-            ui.weak("Exports include all retained rows");
             for (label, format) in [("Plain text (.txt)", AnalysisExportFormat::Text), ("Structured results (.json)", AnalysisExportFormat::Json)] {
                 if ui.button(label).clicked() {
                     action = Some(ReportAction::Export { report_id: report.id.clone(), kind, format });
@@ -384,7 +394,9 @@ fn export_controls(
                     ui.close_menu();
                 }
             }
-        });
+        })
+        .response
+        .on_hover_text("Exports include all retained rows");
         if directory && ui.button("Open result directory").on_hover_text("Show retained report, specimen, complete listings and any native artifacts").clicked() {
             action = Some(ReportAction::ShowDirectory { report_id: report.id.clone() });
         }
@@ -685,15 +697,6 @@ fn categories(
         "Categories",
         |_| {},
         |ui| {
-            ui.add(
-                egui::Label::new(
-                    egui::RichText::new(
-                        "Click a category to open it; the icon opens it in a separate pane",
-                    )
-                    .color(crate::theme::muted()),
-                )
-                .wrap(),
-            );
             for kind in ALL_KINDS {
                 let Some(section) = report.sections.iter().find(|section| section.kind == kind)
                 else {
@@ -725,19 +728,19 @@ fn categories(
                         }
                     },
                     |ui| {
-                        // The regex matches are read from the strings and shown
-                        // beside them: no listing of their own to open or count.
+                        if ui
+                            .button(egui_phosphor::regular::ARROW_SQUARE_OUT)
+                            .on_hover_text("Open category in a separate pane")
+                            .clicked()
+                        {
+                            action = Some(ReportAction::OpenSection {
+                                report_id: report.id.clone(),
+                                kind,
+                            });
+                        }
+                        // The regex matches are read from the strings: no
+                        // listing of their own to count.
                         if kind != AnalysisKind::Regex {
-                            if ui
-                                .button(egui_phosphor::regular::ARROW_SQUARE_OUT)
-                                .on_hover_text("Open category in a separate pane")
-                                .clicked()
-                            {
-                                action = Some(ReportAction::OpenSection {
-                                    report_id: report.id.clone(),
-                                    kind,
-                                });
-                            }
                             let rows = section
                                 .listing
                                 .as_ref()

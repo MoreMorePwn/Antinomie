@@ -14,8 +14,7 @@ pub(crate) fn guide(ctx: &egui::Context) {
         .resizable(true)
         .default_size([760.0, 540.0])
         .show(ctx, |ui| {
-            ui.label("Use typed fields to compare values. A bare word searches the row. Text comparisons are case-sensitive; lower(field) makes text matching case-insensitive.");
-            ui.label("Unavailable values stay missing. Packet filters use the installed TShark engine and its own field registry.");
+            ui.label("Bare words search the row; text compares are case-sensitive, lower(field) ignores case.");
             let query_id = egui::Id::new("filter-guide-query");
             let mut query = ui.ctx().data(|data| data.get_temp::<String>(query_id).unwrap_or_default());
             ui.add(
@@ -36,7 +35,6 @@ pub(crate) fn guide(ctx: &egui::Context) {
                 ui.monospace(line);
             }
             ui.add_space(4.0);
-            ui.label("Fields available in this filter. Right-click a value to build a clause.");
             let rows: Vec<_> = rows.iter().filter(|(field, kind, meaning)| {
                 needle.is_empty() || field.to_lowercase().contains(&needle)
                     || kind.to_lowercase().contains(&needle)

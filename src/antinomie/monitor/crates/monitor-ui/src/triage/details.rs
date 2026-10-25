@@ -167,12 +167,12 @@ pub(super) fn show(view: &mut TriageView, ui: &mut egui::Ui) {
         .ctx()
         .data(|data| data.get_temp::<Selection>(selection_id()))
     else {
-        ui.weak("Select an entry in Triage to inspect it here.");
+        ui.weak("Nothing selected.");
         return;
     };
     egui::ScrollArea::vertical().id_salt("triage-shared-details")
         .auto_shrink([false, false]).show(ui, |ui| {
-        presentation::heading(ui, title(&selected.table), "Selected evidence");
+        presentation::heading(ui, title(&selected.table), "");
         presentation::frame().show(ui, |ui| {
         ui.set_width(ui.available_width());
         egui::Grid::new("triage-detail-values").num_columns(2).spacing(egui::vec2(14.0, 9.0))

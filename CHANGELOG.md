@@ -37,9 +37,10 @@ it runs.
 - **abuse.ch downloads.** A dataset that needs the Auth-Key is refused before
   any request when none is set, with a message that names auth.abuse.ch; HTTP
   404, 429 and server errors are explained. The SSLBL IP list, which abuse.ch
-  now serves with a header and no entries, is kept as a copy of no records and
-  shown as *Retired upstream* instead of failing, in the IOC datasets and the
-  IDS packs. The free-space check no longer asks gigabytes for a 300 MB list.
+  retired (it now serves a header and no entries), is removed: no IOC dataset,
+  no IDS pack, no row. A copy left on disk is ignored and removed by the next
+  update. Run endpoints are still matched against Feodo Tracker, ThreatFox
+  `ip:port` and URLhaus IP hosts. The free-space check no longer asks gigabytes for a 300 MB list.
 - **Test sample names.** The stress samples are now the workload samples
   (`ant-workload`, `build-workload.sh`, `ANTINOMIE_WORKLOAD_*`), their modules
   have plain names (`syscall-load`, `terminal-load`, `network-load`,

@@ -124,11 +124,7 @@ fn detector(
 }
 
 fn activity(ui: &mut egui::Ui, scan: &ArchiveScan) -> Option<Destination> {
-    presentation::heading(
-        ui,
-        "Behavior & files",
-        "Observed operations across the selected run",
-    );
+    presentation::heading(ui, "Behavior & files", "");
     let mut target = None;
     egui::Grid::new("triage-summary-activity")
         .num_columns(2)
@@ -176,11 +172,7 @@ fn network(
     scan: &ArchiveScan,
     route: &crate::route_ui::RouteText,
 ) -> Option<Destination> {
-    presentation::heading(
-        ui,
-        "Network evidence",
-        "Captured VM traffic during this run",
-    );
+    presentation::heading(ui, "Network evidence", "");
     let mut target = None;
     crate::route_ui::line(ui, route);
     egui::Grid::new("triage-summary-network")
@@ -215,20 +207,16 @@ fn network(
                     Destination::Dns,
                 ),
             ] {
-                if metric(ui, title, count) {
+                let hover = if title == "HTTP/1 requests" {
+                    "Encrypted request contents are unavailable."
+                } else {
+                    ""
+                };
+                if super::metric_hover(ui, title, count, hover) {
                     target = Some(destination);
                 }
             }
         });
-    ui.add_space(5.0);
-    ui.add(
-        egui::Label::new(
-            RichText::new("Encrypted request contents are unavailable.")
-                .small()
-                .color(theme::muted()),
-        )
-        .wrap(),
-    );
     target
 }
 
@@ -237,11 +225,7 @@ fn indicators(ui: &mut egui::Ui, view: &TriageView) -> bool {
     presentation::frame()
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            presentation::heading(
-                ui,
-                "Indicators (IOC)",
-                "The run's endpoints, domains, URLs, TLS fingerprints and files, matched offline against abuse.ch datasets",
-            );
+            presentation::heading(ui, "Indicators (IOC)", "");
             match view.ioc_headline() {
                 Some((matched, total, date)) => {
                     ui.horizontal_wrapped(|ui| {
@@ -249,19 +233,24 @@ fn indicators(ui: &mut egui::Ui, view: &TriageView) -> bool {
                             RichText::new(matched.to_string())
                                 .size(27.0)
                                 .strong()
-                                .color(if matched > 0 { theme::error() } else { theme::text() }),
+                                .color(if matched > 0 {
+                                    theme::error()
+                                } else {
+                                    theme::text()
+                                }),
                         );
                         ui.label(format!(
                             "of {total} indicator{} matched",
                             if total == 1 { "" } else { "s" }
-                        ));
+                        ))
+                        .on_hover_text(super::super::ioc_view::NO_MATCH_NOTE);
                     });
                     ui.add(
                         egui::Label::new(
                             RichText::new(if date.is_empty() {
-                                "No datasets are loaded: nothing was checked, which is not a clean result.".to_owned()
+                                "No datasets loaded".to_owned()
                             } else {
-                                format!("Datasets dated {date}. No match is not a clean result.")
+                                format!("Datasets dated {date}")
                             })
                             .small()
                             .color(theme::muted()),
@@ -287,11 +276,7 @@ fn observations(ui: &mut egui::Ui, scan: &ArchiveScan) -> bool {
     presentation::frame()
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            presentation::heading(
-                ui,
-                "Observed activity",
-                "Select an observation for Details; double-click for its evidence.",
-            );
+            presentation::heading(ui, "Observed activity", "");
             // The worst rows first, then the earliest.
             let mut worst: Vec<&Finding> = scan.findings.iter().collect();
             worst.sort_by_key(|finding| {
@@ -362,7 +347,7 @@ fn observations(ui: &mut egui::Ui, scan: &ArchiveScan) -> bool {
                 ui.add_space(5.0);
             }
             if scan.findings.is_empty() {
-                ui.weak("Open suspicious activity to inspect the run's indexed observations.");
+                ui.weak("No observations.");
             }
             ui.button("Open suspicious activity").clicked()
         })
@@ -414,23 +399,14 @@ pub(super) fn content(
             }
             let Some(scan) = &view.scan else {
                 presentation::frame().show(ui, |ui| {
-                    presentation::heading_busy(
-                        ui,
-                        "Preparing run evidence",
-                        "Whole-run counts appear after the recording is indexed.",
-                        true,
-                    );
+                    presentation::heading_busy(ui, "Preparing run evidence", "", true);
                 });
                 return;
             };
             if let Some(error) = &scan.event_error {
                 crate::activity::warning(ui, error);
             }
-            presentation::heading(
-                ui,
-                "Detection evidence",
-                "Rule matches from the selected run's retained evidence",
-            );
+            presentation::heading(ui, "Detection evidence", "");
             if ui.available_width() >= 620.0 {
                 ui.columns(3, |columns| {
                     for (index, engine) in [Engine::Yara, Engine::Ids, Engine::Sigma]
@@ -454,13 +430,7 @@ pub(super) fn content(
                 }
             }
             ui.add_space(8.0);
-            if view.detection.references.is_empty() {
-                ui.label(
-                    RichText::new("No rule-supplied ATT&CK references in the loaded results.")
-                        .small()
-                        .color(theme::muted()),
-                );
-            } else {
+            if !view.detection.references.is_empty() {
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new("MITRE ATT&CK").small().color(theme::muted()));
                     for reference in view.detection.references.iter().take(16) {

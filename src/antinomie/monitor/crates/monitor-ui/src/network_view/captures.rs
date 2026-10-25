@@ -239,10 +239,6 @@ impl NetworkView {
                     ui.end_row();
                 }
             });
-        ui.colored_label(
-            theme::muted(),
-            "Select a packet in the Network tab to see its layers and bytes here.",
-        );
     }
 
     /// The right-click menu of a capture; the deletion it asked for, if any.

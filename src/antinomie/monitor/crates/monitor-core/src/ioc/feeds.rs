@@ -71,9 +71,6 @@ pub struct Feed {
     /// Switched on until the person says otherwise. A smaller alternative to
     /// another feed is off until it is asked for.
     pub default_on: bool,
-    /// abuse.ch has stopped filling this list: a file with only comment lines
-    /// is its answer, kept as a copy of no records, not a failed download.
-    pub retired_if_empty: bool,
 }
 
 const KEY_MARK: &str = "{key}";
@@ -150,7 +147,7 @@ pub fn template_owns(template: &str, url: &str) -> bool {
 
 /// The feeds, in the order the Rule manager lists them. The seven datasets of
 /// the Rule manager come first; the last is the smaller URLhaus list.
-pub const FEEDS: [Feed; 8] = [
+pub const FEEDS: [Feed; 7] = [
     Feed {
         id: "threatfox",
         name: "ThreatFox",
@@ -163,7 +160,6 @@ pub const FEEDS: [Feed; 8] = [
         needs_key: true,
         expected_size: 118 * 1024 * 1024,
         default_on: true,
-        retired_if_empty: false,
     },
     Feed {
         id: "urlhaus",
@@ -177,7 +173,6 @@ pub const FEEDS: [Feed; 8] = [
         needs_key: true,
         expected_size: 204 * 1024 * 1024,
         default_on: true,
-        retired_if_empty: false,
     },
     Feed {
         id: "urlhaus-payloads",
@@ -191,7 +186,6 @@ pub const FEEDS: [Feed; 8] = [
         needs_key: true,
         expected_size: 312 * 1024 * 1024,
         default_on: true,
-        retired_if_empty: false,
     },
     Feed {
         id: "feodo",
@@ -205,21 +199,6 @@ pub const FEEDS: [Feed; 8] = [
         needs_key: false,
         expected_size: 512 * 1024,
         default_on: true,
-        retired_if_empty: false,
-    },
-    Feed {
-        id: "sslbl-ip",
-        name: "SSLBL IP",
-        file: "sslipblacklist.csv",
-        url: "https://sslbl.abuse.ch/blacklist/sslipblacklist.csv",
-        used_for: "TLS server IP:port",
-        home: "https://sslbl.abuse.ch/",
-        format: Format::Csv,
-        terms: Terms::Cc0,
-        needs_key: false,
-        expected_size: 512 * 1024,
-        default_on: true,
-        retired_if_empty: true,
     },
     Feed {
         id: "sslbl-ja3",
@@ -233,7 +212,6 @@ pub const FEEDS: [Feed; 8] = [
         needs_key: false,
         expected_size: 256 * 1024,
         default_on: true,
-        retired_if_empty: false,
     },
     Feed {
         id: "sslbl-cert",
@@ -247,7 +225,6 @@ pub const FEEDS: [Feed; 8] = [
         needs_key: false,
         expected_size: 1024 * 1024,
         default_on: true,
-        retired_if_empty: false,
     },
     Feed {
         id: "urlhaus-recent",
@@ -261,7 +238,6 @@ pub const FEEDS: [Feed; 8] = [
         needs_key: true,
         expected_size: 8 * 1024 * 1024,
         default_on: false,
-        retired_if_empty: false,
     },
 ];
 
@@ -277,6 +253,17 @@ pub fn root(data_dir: &Path) -> PathBuf {
 
 pub(super) fn feed_dir(data_dir: &Path, feed: &Feed) -> PathBuf {
     root(data_dir).join("feeds").join(feed.id)
+}
+
+/// Datasets Antinomie no longer offers; a copy left on disk is ignored, and
+/// removed by the next update.
+const REMOVED_FEEDS: &[&str] = &["sslbl-ip"];
+
+/// Delete the stored copies of the datasets that are no longer offered.
+pub(super) fn remove_withdrawn(data_dir: &Path) {
+    for id in REMOVED_FEEDS {
+        let _ = fs::remove_dir_all(root(data_dir).join("feeds").join(id));
+    }
 }
 
 pub(super) fn staging_dir(data_dir: &Path) -> PathBuf {
@@ -351,11 +338,6 @@ pub struct FeedStatus {
 }
 
 impl FeedStatus {
-    /// The copy holds no records because abuse.ch serves this list empty.
-    pub fn retired(&self) -> bool {
-        self.feed.retired_if_empty && self.meta.as_ref().is_some_and(|meta| meta.records == 0)
-    }
-
     /// A copy is stored and the feed is switched on.
     pub fn usable(&self) -> bool {
         self.meta.is_some() && self.enabled
@@ -525,11 +507,11 @@ mod tests {
 
     #[test]
     fn the_feed_table_is_complete_and_keeps_keys_out_of_urls() {
-        assert_eq!(FEEDS.len(), 8);
+        assert_eq!(FEEDS.len(), 7);
         let mut ids: Vec<_> = FEEDS.iter().map(|feed| feed.id).collect();
         ids.sort_unstable();
         ids.dedup();
-        assert_eq!(ids.len(), 8);
+        assert_eq!(ids.len(), 7);
         for feed in &FEEDS {
             assert!(feed.url.starts_with("https://"), "{}", feed.id);
             assert!(!feed.url.contains(['?', '@', '=']), "{}", feed.id);
@@ -551,5 +533,27 @@ mod tests {
         }
         assert!(FEEDS.iter().filter(|feed| feed.needs_key).count() == 4);
         assert_eq!(FEEDS.iter().filter(|feed| !feed.default_on).count(), 1);
+    }
+
+    #[test]
+    fn a_withdrawn_dataset_on_disk_is_ignored_and_then_removed() {
+        let dir = std::env::temp_dir().join(format!("ant-feeds-{}", crate::storage::unique_id()));
+        let old = root(&dir).join("feeds").join("sslbl-ip");
+        fs::create_dir_all(&old).unwrap();
+        fs::write(old.join("meta.json"), b"{\"records\":0}").unwrap();
+        fs::write(
+            root(&dir).join(SETTINGS_FILE),
+            br#"{"disabled":["sslbl-ip"],"enabled":["sslbl-ip"]}"#,
+        )
+        .unwrap();
+        let statuses = status(&dir);
+        assert_eq!(statuses.len(), FEEDS.len());
+        assert!(statuses.iter().all(|status| status.feed.id != "sslbl-ip"));
+        assert!(feed("sslbl-ip").is_none());
+        assert!(old.exists(), "reading leaves it alone");
+        remove_withdrawn(&dir);
+        assert!(!old.exists());
+        remove_withdrawn(&dir);
+        let _ = fs::remove_dir_all(dir);
     }
 }

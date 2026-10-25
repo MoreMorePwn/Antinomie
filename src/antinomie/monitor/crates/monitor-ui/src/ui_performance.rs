@@ -184,7 +184,7 @@ impl Performance {
                 if software_renderer(&self.renderer) {
                     crate::activity::warning(ui, "Software rendering uses the CPU and can slow the whole window.");
                 }
-                if ui.button("Copy WSL D3D12 launch command").clicked() {
+                if ui.button("Copy WSL D3D12 launch command").on_hover_text("For WSLg with a compatible GPU driver. Close Antinomie normally before using the command. It applies only to that launch.").clicked() {
                     // After a rebuild the running image is " (deleted)"; the
                     // command should start the new build at the same path.
                     let exe = std::env::current_exe().map(|exe| {
@@ -199,10 +199,9 @@ impl Performance {
                         Err(error) => self.error = Some(error.to_string()),
                     }
                 }
-                ui.add(egui::Label::new("For WSLg with a compatible GPU driver. Close Antinomie normally before using the command. It applies only to that launch.").wrap());
                 if let Some(error) = &self.error { crate::activity::error_toast(ui, error); }
                 ui.separator();
-                ui.strong("UI update CPU time");
+                ui.strong("UI update CPU time").on_hover_text("App update/layout work, excluding GPU rendering and presentation. Idle intervals are intentional; they are not frame latency.");
                 let mut sorted: Vec<_> = self.samples.iter().copied().collect();
                 sorted.sort_by(f64::total_cmp);
                 if !sorted.is_empty() {
@@ -211,7 +210,6 @@ impl Performance {
                     ui.label(format!("Median {median:.2} ms · p95 {p95:.2} ms · {} samples", sorted.len()));
                 }
                 if let Some(interval) = self.interval_ms { ui.label(format!("Last update interval: {interval:.1} ms")); }
-                ui.add(egui::Label::new("App update/layout work, excluding GPU rendering and presentation. Idle intervals are intentional; they are not frame latency.").wrap());
                 if ui.button("Reset timings").clicked() { self.samples.clear(); self.last_frame = None; }
             });
         if self.open {

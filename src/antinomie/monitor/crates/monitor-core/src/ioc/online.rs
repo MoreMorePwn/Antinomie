@@ -530,7 +530,7 @@ mod tests {
         let all = c.finish();
         // A scan with a feed loaded and no hits: everything checkable is No match.
         let scan = Scan {
-            loaded: ["threatfox", "urlhaus", "sslbl-ip", "sslbl-ja3", "feodo"]
+            loaded: ["threatfox", "urlhaus", "sslbl-ja3", "feodo"]
                 .iter()
                 .map(|id| {
                     let feed = crate::ioc::feeds::feed(id).unwrap();

@@ -8,7 +8,7 @@ pub enum AnalysisKind {
     Structures,
     Strings,
     /// The built-in and custom regex patterns, matched over the strings.
-    /// Its own choice, though its matches are listed in the Strings & regex tab.
+    /// Its own choice, though its matches are listed in the Regex matches tab.
     Regex,
     Entropy,
     Hardening,
@@ -62,10 +62,58 @@ impl AnalysisKind {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(from = "SelectionWire", into = "SelectionWire")]
 pub struct AnalysisSelection {
     pub enabled: bool,
     pub checks: Vec<AnalysisKind>,
+}
+
+/// How a selection is stored. `regex_split` marks a selection written after
+/// Regex matches became their own check: one without it, saved while Regex
+/// matches were part of Strings, gets Regex added once when it is read, and
+/// is written back with the mark so a later unchecking sticks.
+#[derive(Serialize, Deserialize)]
+#[serde(default)]
+struct SelectionWire {
+    enabled: bool,
+    checks: Vec<AnalysisKind>,
+    regex_split: bool,
+}
+
+impl Default for SelectionWire {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            checks: AnalysisKind::TRIAGE.to_vec(),
+            regex_split: false,
+        }
+    }
+}
+
+impl From<SelectionWire> for AnalysisSelection {
+    fn from(wire: SelectionWire) -> Self {
+        let mut checks = wire.checks;
+        let strings = checks
+            .iter()
+            .any(|kind| matches!(kind, AnalysisKind::Strings | AnalysisKind::Floss));
+        if !wire.regex_split && strings && !checks.contains(&AnalysisKind::Regex) {
+            checks.push(AnalysisKind::Regex);
+        }
+        Self {
+            enabled: wire.enabled,
+            checks,
+        }
+    }
+}
+
+impl From<AnalysisSelection> for SelectionWire {
+    fn from(selection: AnalysisSelection) -> Self {
+        Self {
+            enabled: selection.enabled,
+            checks: selection.checks,
+            regex_split: true,
+        }
+    }
 }
 
 impl Default for AnalysisSelection {
@@ -450,4 +498,46 @@ pub struct AnalysisReport {
     /// from before this was recorded and for a host file with no guest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub specimen_source: Option<SpecimenSource>,
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use super::*;
+
+    fn read(json: &str) -> AnalysisSelection {
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn a_selection_saved_before_the_split_gets_regex_once() {
+        let old = read(r#"{"enabled":true,"checks":["strings","entropy"]}"#);
+        assert_eq!(
+            old.checks,
+            [
+                AnalysisKind::Strings,
+                AnalysisKind::Entropy,
+                AnalysisKind::Regex
+            ]
+        );
+        let floss = read(r#"{"enabled":true,"checks":["floss"]}"#);
+        assert_eq!(floss.checks, [AnalysisKind::Floss, AnalysisKind::Regex]);
+        // No strings, no regex.
+        let none = read(r#"{"enabled":true,"checks":["entropy"]}"#);
+        assert_eq!(none.checks, [AnalysisKind::Entropy]);
+        // A missing field is the default, which already has it.
+        assert_eq!(read("{}").checks, AnalysisKind::TRIAGE);
+    }
+
+    #[test]
+    fn the_migration_is_idempotent_and_leaves_a_later_choice_alone() {
+        let old = read(r#"{"enabled":true,"checks":["strings"]}"#);
+        let saved = serde_json::to_string(&old).unwrap();
+        assert_eq!(read(&saved), old);
+        // The user unchecks Regex, saves, and reloads: it stays off.
+        let mut chosen = old;
+        chosen.checks.retain(|kind| *kind != AnalysisKind::Regex);
+        let saved = serde_json::to_string(&chosen).unwrap();
+        assert_eq!(read(&saved).checks, [AnalysisKind::Strings]);
+        assert_eq!(read(&serde_json::to_string(&read(&saved)).unwrap()), chosen);
+    }
 }

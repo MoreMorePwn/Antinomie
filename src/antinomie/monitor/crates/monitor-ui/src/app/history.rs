@@ -160,7 +160,7 @@ impl MonitorApp {
                 .as_ref()
                 .is_some_and(|id| !runs.iter().any(|run| &run.id == id))
         {
-            ui.colored_label(theme::muted(), "The selected run is hidden by this filter.");
+            ui.colored_label(theme::muted(), "Hidden by filter.");
             if ui.link("Clear filter").clicked() {
                 self.clear_run_filter();
             }

@@ -176,7 +176,7 @@ fn vm_network_section_warns_only_for_disconnected_mode() {
         assert_eq!(
             visible
                 .iter()
-                .any(|(text, _)| text.contains("Disconnected: network capture is unavailable")),
+                .any(|(text, _)| text.contains("Disconnected: no network capture")),
             mode == 0
         );
     }

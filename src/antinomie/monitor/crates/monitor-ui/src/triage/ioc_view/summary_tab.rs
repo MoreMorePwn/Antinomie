@@ -66,17 +66,17 @@ impl View {
                     ))
                     .strong()
                     .color(theme::heading()),
+                )
+                .on_hover_text(
+                    "Click a row to open it in its tab. Known FP rows are not counted as matches.",
                 );
                 if ioc.scan.loaded.is_empty() {
-                    ui.colored_label(
-                        theme::muted(),
-                        "Nothing was checked, because no datasets are loaded. This is not a clean result.",
-                    );
+                    // The banner above says that nothing was checked.
                 } else if total.matched == 0 {
                     ui.colored_label(
                         theme::muted(),
                         format!(
-                            "No indicator matched the loaded datasets ({}). This is not a clean result.",
+                            "No match in datasets dated {}.",
                             ioc.scan.loaded.iter().map(|f| f.date.clone()).min().unwrap_or_default()
                         ),
                     );
@@ -113,10 +113,6 @@ impl View {
                             next = Some(Tab::Of(indicator.ty));
                         }
                     }
-                    ui.colored_label(
-                        theme::muted(),
-                        "Click a row to open it in its tab. Known FP rows are not counted as matches.",
-                    );
                 }
                 ui.add_space(10.0);
                 presentation::frame().show(ui, |ui| {

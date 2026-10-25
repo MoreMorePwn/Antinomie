@@ -747,7 +747,7 @@ fn sidebar_selection_shows_unfinished_capture_without_old_core_context() {
     let content = texts(&output);
     assert!(content
         .iter()
-        .any(|(text, _)| text.contains("No core file is recorded yet")));
+        .any(|(text, _)| text.contains("No core file yet")));
     assert!(!content.iter().any(|(text, _)| text == "rip"));
     assert!(
         fixture.view.records.len() == 1,
@@ -805,7 +805,7 @@ fn unfinished_manual_core_shows_recorded_status_without_stale_context() {
         .any(|(text, _)| text == "Capture pause has not been released yet"));
     assert!(content
         .iter()
-        .any(|(text, _)| text.contains("does not wait for process exit")));
+        .any(|(text, _)| text.contains("No core file yet")));
     assert!(!content.iter().any(|(text, _)| text == "rip"));
     assert!(content.iter().any(|(text, _)| text.contains("Dump core")));
     assert_eq!(fixture.view.records.len(), 1);

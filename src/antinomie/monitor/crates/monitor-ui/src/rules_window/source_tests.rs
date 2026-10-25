@@ -192,11 +192,13 @@ fn the_manager_shows_source_license_hosts_and_the_off_by_default_option() {
     assert!(text.contains("Source: github.com/example/forge"), "{text}");
     assert!(text.contains("License: Each rule's own license"), "{text}");
     assert!(text.contains("from github.com"), "{text}");
-    // The consent names the hosts before downloads are allowed.
+    // The consent names the hosts (on the Allow downloads tooltip) before
+    // downloads are allowed.
     assert!(text.contains("Downloads are off"), "{text}");
-    assert!(text.contains("Rule downloads contact only:"), "{text}");
-    assert!(text.contains("codeload.github.com"), "{text}");
-    assert!(text.contains("huggingface.co"), "{text}");
+    let hosts = model.hosts_line();
+    assert!(hosts.contains("Rule downloads contact only:"), "{hosts}");
+    assert!(hosts.contains("codeload.github.com"), "{hosts}");
+    assert!(hosts.contains("huggingface.co"), "{hosts}");
     // The no-license option exists, is off, and shows no warning yet.
     assert!(
         text.contains("Include rules from repositories without a license"),
