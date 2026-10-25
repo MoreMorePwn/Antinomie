@@ -394,8 +394,8 @@ impl BuildWizard {
         let options = &mut self.options[self.profile];
         if minimal {
             ui.label(
-                "No desktop environment: the guest has a console login on its serial and \
-                 virtual terminals, APT and the standard Debian command-line tools.",
+                "No desktop environment: the guest has a console login on its virtual \
+                 terminals, APT and the standard Debian command-line tools.",
             );
         } else {
             ui.label(RichText::new("Debian desktop environment").strong());

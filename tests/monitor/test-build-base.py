@@ -76,8 +76,14 @@ class BuildBaseTests(unittest.TestCase):
             base.build_image("debian-minimal", {"hostname": "lab"}, kernel, work, Path("/o"))
             answers = json.loads((work / "options.json").read_text())
             self.assertEqual(answers, {"hostname": "lab", "desktop": "none"})
-            # The minimal kernel installs no modules: none are passed.
+            # A minimal kernel without modules: none are passed.
             self.assertNotIn("--modules", commands[0])
+            self.assertNotIn("--debian-config", commands[0])
+            # Debian's resolved configuration goes to the console base's /boot.
+            (kernel / "debian-config").write_text("CONFIG_X=y\n")
+            base.build_image("debian-minimal", {}, kernel, work, Path("/o"))
+            self.assertIn("--debian-config", commands[-1])
+            commands.pop()
             (kernel / "modules-install").mkdir()
             base.build_image("debian-xfce", {"desktop": "gnome"}, kernel, work, Path("/o"))
             self.assertIn("--modules", commands[1])
@@ -104,6 +110,7 @@ class BuildBaseTests(unittest.TestCase):
             (kept / "arch/x86/boot/bzImage").write_bytes(b"kernel")
             (kept / ".config").write_text("CONFIG_X=y\n")
             (kept / "symbols.json.xz").write_bytes(b"isf")
+            (kept / "debian-config").write_text("CONFIG_Y=m\n")
             modules = kept / "modules-install/lib/modules/6.12.94"
             modules.mkdir(parents=True)
             (modules / "modules.dep").write_text("")
@@ -115,6 +122,7 @@ class BuildBaseTests(unittest.TestCase):
             loaded = base.load_cached_kernel(cache, "debian", work)
             self.assertEqual((loaded / "arch/x86/boot/bzImage").read_bytes(), b"kernel")
             self.assertEqual((loaded / "symbols.json.xz").read_bytes(), b"isf")
+            self.assertEqual((loaded / "debian-config").read_text(), "CONFIG_Y=m\n")
             self.assertTrue((loaded / "modules-install/lib/modules/6.12.94/modules.dep").is_file())
             self.assertFalse((loaded / "modules-install/lib/modules/6.12.94/build").is_symlink())
             self.assertIsNone(base.load_cached_kernel(cache, "minimal", work))

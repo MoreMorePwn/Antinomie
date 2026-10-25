@@ -300,7 +300,7 @@ def initrd_tree(root):
     for directory in ("bin", "dev", "proc", "sys", "newroot"):
         (root / directory).mkdir(parents=True, exist_ok=True)
     install_binary("/usr/bin/busybox", root, "/bin/busybox")
-    for applet in ("sh", "mount", "mkdir", "sleep", "switch_root", "echo"):
+    for applet in ("sh", "mount", "mkdir", "sleep", "switch_root", "echo", "cat", "findfs"):
         (root / "bin" / applet).symlink_to("busybox")
     install_binary(shutil.which("resize2fs"), root, "/bin/resize2fs")
     write_file(root, "/init", """#!/bin/sh
@@ -309,19 +309,47 @@ mount -t devtmpfs devtmpfs /dev
 exec </dev/console >/dev/console 2>&1
 mount -t proc proc /proc
 mount -t sysfs sysfs /sys
-# The root disk is the VM's only disk, on the bus its stealth profile chose:
+# A Debian-shaped command line names the root by filesystem UUID and asks for
+# it read-only (the boot's fsck, then fstab's remount); without one the root
+# is the VM's only disk. Either is on the bus the stealth profile chose:
 # virtio, SATA or NVMe.
+uuid= mode=rw
+for arg in $(cat /proc/cmdline); do
+    case $arg in
+    root=UUID=*) uuid=${arg#root=UUID=} ;;
+    ro) mode=ro ;;
+    rw) mode=rw ;;
+    esac
+done
 root=
 for n in 1 2 3 4 5 6 7 8 9 10; do
-    for disk in /dev/vda /dev/sda /dev/nvme0n1; do
-        [ -b $disk ] && root=$disk && break 2
-    done
+    if [ -n "$uuid" ]; then
+        root=$(findfs "UUID=$uuid" 2>/dev/null) && break
+    else
+        for disk in /dev/vda /dev/sda /dev/nvme0n1; do
+            [ -b $disk ] && root=$disk && break 2
+        done
+    fi
     sleep 1
 done
+# No filesystem with that UUID (a disk from before its VM had one of its
+# own): the root partition or the disk.
+if [ -z "$root" ]; then
+    for disk in /dev/vda1 /dev/sda1 /dev/nvme0n1p1 /dev/vda /dev/sda /dev/nvme0n1; do
+        [ -b $disk ] && root=$disk && break
+    done
+fi
 mount -t ext4 -o rw ${root:-/dev/vda} /newroot || exec sh
-# Grow the filesystem to the VM's disk while mounted: offline, resize2fs
-# refuses a filesystem mounted since its last full check (every base disk).
-resize2fs $root || echo 'Guest filesystem resize failed'
+# Grow a whole-disk root (BusyBox, the desktops) to the VM's disk while
+# mounted: offline, resize2fs refuses a filesystem mounted since its last full
+# check (every base disk). A partitioned disk was laid out when its VM was
+# provisioned, as an installer lays out its disk.
+if [ ! -e "/sys/class/block/${root#/dev/}/partition" ]; then
+    resize2fs $root || echo 'Guest filesystem resize failed'
+fi
+if [ $mode = ro ]; then
+    mount -o remount,ro /newroot
+fi
 mount --move /dev /newroot/dev
 mount --move /proc /newroot/proc
 mount --move /sys /newroot/sys

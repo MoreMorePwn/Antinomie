@@ -39,6 +39,23 @@ fn transparent_keeps_qemu_launch_options_and_rates_certain() {
     assert_eq!(profile.rating(), "certain");
     assert_eq!(smp_option(&profile, 4), "4");
     assert_eq!(nic_option(&profile), "virtio-net-pci,netdev=net0");
+    assert_eq!(
+        nic_option_for(&profile, &BaseSupport::from_list(&[])),
+        "virtio-net-pci,netdev=net0"
+    );
+    // A base that names its NIC by the onboard slot gets it there, any model.
+    let onboard = BaseSupport::from_list(&["dhcp".into(), "onboardnic".into()]);
+    assert!(onboard.onboard_nic && BaseSupport::all().onboard_nic);
+    assert_eq!(
+        nic_option_for(&profile, &onboard),
+        "virtio-net-pci,netdev=net0,addr=0x19"
+    );
+    let mut intel = profile.clone();
+    intel.nic = NicModel::E1000e;
+    assert_eq!(
+        nic_option_for(&intel, &onboard),
+        "e1000e,netdev=net0,addr=0x19"
+    );
     assert_eq!(cpu_option(&profile, None, true, 4), None);
     assert_eq!(
         cpu_option(&profile, Some("max"), true, 4).as_deref(),

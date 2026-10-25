@@ -54,7 +54,7 @@ bind.inet_loopback | bind(fd=5, umyaddr=127.0.0.1:0, addrlen=16) = 0 | arg1.addr
 bind.inet_not_local | bind(fd=6, umyaddr=192.0.2.1:0, addrlen=16) = EADDRNOTAVAIL | arg1.address:complete:192.0.2.1:0
 bind.inet_short_length | bind(fd=6, umyaddr=127.0.0.1:0, addrlen=8) = EINVAL | arg1.address:complete:127.0.0.1:0
 bind.inet_udp | bind(fd=9, umyaddr=127.0.0.1:0, addrlen=16) = 0 | arg1.address:complete:127.0.0.1:0
-bind.inet_wrong_family | bind(fd=6, umyaddr=<bytes>, addrlen=16) = EINVAL | arg1.address:complete:<bytes>
+bind.inet_wrong_family | bind(fd=6, umyaddr=<bytes>, addrlen=16) = EAFNOSUPPORT | arg1.address:complete:<bytes>
 bind.notsock | bind(fd=3, umyaddr=unix:<work>/net-dgram, addrlen=40) = ENOTSOCK | arg1.address:complete:unix:<work>/net-dgram
 bind.null_empty | bind(fd=7, umyaddr=NULL, addrlen=0) = EINVAL | arg1.address:null pointer:uncaptured
 bind.too_long | bind(fd=7, umyaddr=<addr>, addrlen=200) = EINVAL | arg1.address:invalid extent:uncaptured !3
@@ -117,7 +117,7 @@ clock_getres.monotonic_raw | clock_getres(which_clock=CLOCK_MONOTONIC_RAW, tp=<b
 clock_getres.null_result | clock_getres(which_clock=CLOCK_MONOTONIC, tp=NULL) = 0 | arg1.data:null pointer
 clock_getres.process_cputime | clock_getres(which_clock=CLOCK_PROCESS_CPUTIME_ID, tp=<bytes>) = 0 | arg1.data:complete
 clock_getres.realtime | clock_getres(which_clock=CLOCK_REALTIME, tp=<bytes>) = 0 | arg1.data:complete
-clock_getres.realtime_coarse | clock_getres(which_clock=CLOCK_REALTIME_COARSE, tp=<bytes>) = 0 | arg1.data:complete
+clock_getres.realtime_coarse | clock_getres(which_clock=CLOCK_REALTIME_COARSE, tp="\0\0\0\0\0\0\0\0\0\t=") = 0 | arg1.data:complete
 clock_getres.tai | clock_getres(which_clock=CLOCK_TAI, tp=<bytes>) = 0 | arg1.data:complete
 clock_getres.thread_cputime | clock_getres(which_clock=CLOCK_THREAD_CPUTIME_ID, tp=<bytes>) = 0 | arg1.data:complete
 clock_gettime.bad_clock | clock_gettime(which_clock=Unknown clock 0x63, tp=<addr>) = EINVAL |
@@ -285,12 +285,19 @@ fadvise64.bad_advice | fadvise64(fd=3, offset=0, len=0, advice=Unknown advice 0x
 fadvise64.sequential | fadvise64(fd=3, offset=0, len=0, advice=POSIX_FADV_SEQUENTIAL) = 0 |
 fallocate.bad_mode | fallocate(fd=3, mode=0x80, offset=0, len=4096) = EOPNOTSUPP |
 fallocate.extend | fallocate(fd=3, mode=0x0, offset=0, len=8192) = 0 |
-fanotify_init.bad_flags | fanotify_init(flags=FAN_CLASS_NOTIF|FAN_REPORT_FID|0x80000000, event_f_flags=O_RDONLY) = ENOSYS |
-fanotify_init.no_fid | fanotify_init(flags=FAN_CLASS_NOTIF, event_f_flags=O_RDONLY) = ENOSYS |
-fanotify_init.unlimited_queue | fanotify_init(flags=FAN_CLASS_NOTIF|FAN_UNLIMITED_QUEUE|FAN_REPORT_FID, event_f_flags=O_RDONLY) = ENOSYS |
-fanotify_init.unprivileged_fid | fanotify_init(flags=FAN_CLASS_NOTIF|FAN_CLOEXEC|FAN_REPORT_FID, event_f_flags=O_RDONLY) = ENOSYS |
-fanotify_mark.badf | fanotify_mark(fanotify_fd=999, flags=FAN_MARK_INODE|FAN_MARK_ADD, mask=2, fd=AT_FDCWD, pathname="ev-file") = ENOSYS | arg4.path:complete:"ev-file"
-fanotify_mark.not_fanotify | fanotify_mark(fanotify_fd=4, flags=FAN_MARK_INODE|FAN_MARK_ADD, mask=2, fd=AT_FDCWD, pathname="ev-file") = ENOSYS | arg4.path:complete:"ev-file"
+fanotify_init.bad_flags | fanotify_init(flags=FAN_CLASS_NOTIF|FAN_REPORT_FID|0x80000000, event_f_flags=O_RDONLY) = EINVAL |
+fanotify_init.no_fid | fanotify_init(flags=FAN_CLASS_NOTIF, event_f_flags=O_RDONLY) = EPERM |
+fanotify_init.unlimited_queue | fanotify_init(flags=FAN_CLASS_NOTIF|FAN_UNLIMITED_QUEUE|FAN_REPORT_FID, event_f_flags=O_RDONLY) = EPERM |
+fanotify_init.unprivileged_fid | fanotify_init(flags=FAN_CLASS_NOTIF|FAN_CLOEXEC|FAN_REPORT_FID, event_f_flags=O_RDONLY) = 9 |
+fanotify_mark.bad_flags | fanotify_mark(fanotify_fd=9, flags=FAN_MARK_INODE|FAN_MARK_ADD|0x80000000, mask=2, fd=AT_FDCWD, pathname="ev-file") = EINVAL | arg4.path:complete:"ev-file"
+fanotify_mark.badf | fanotify_mark(fanotify_fd=999, flags=FAN_MARK_INODE|FAN_MARK_ADD, mask=2, fd=AT_FDCWD, pathname="ev-file") = EBADF | arg4.path:complete:"ev-file"
+fanotify_mark.filesystem | fanotify_mark(fanotify_fd=9, flags=FAN_MARK_FILESYSTEM|FAN_MARK_ADD, mask=2, fd=AT_FDCWD, pathname=".") = EPERM | arg4.path:complete:"."
+fanotify_mark.inode | fanotify_mark(fanotify_fd=9, flags=FAN_MARK_INODE|FAN_MARK_ADD, mask=10, fd=AT_FDCWD, pathname="ev-file") = 0 | arg4.path:complete:"ev-file"
+fanotify_mark.missing | fanotify_mark(fanotify_fd=9, flags=FAN_MARK_INODE|FAN_MARK_ADD, mask=2, fd=AT_FDCWD, pathname="ev-missing") = ENOENT | arg4.path:complete:"ev-missing"
+fanotify_mark.mount | fanotify_mark(fanotify_fd=9, flags=FAN_MARK_MOUNT|FAN_MARK_ADD, mask=2, fd=AT_FDCWD, pathname=".") = EPERM | arg4.path:complete:"."
+fanotify_mark.not_fanotify | fanotify_mark(fanotify_fd=4, flags=FAN_MARK_INODE|FAN_MARK_ADD, mask=2, fd=AT_FDCWD, pathname="ev-file") = EINVAL | arg4.path:complete:"ev-file"
+fanotify_mark.null_path_dirfd | fanotify_mark(fanotify_fd=9, flags=FAN_MARK_INODE|FAN_MARK_ADD, mask=2, fd=3, pathname=NULL) = 0 | arg4.path:null pointer:uncaptured
+fanotify_mark.remove | fanotify_mark(fanotify_fd=9, flags=FAN_MARK_INODE|FAN_MARK_REMOVE, mask=10, fd=AT_FDCWD, pathname="ev-file") = 0 | arg4.path:complete:"ev-file"
 fchdir.back | fchdir(fd=3) = 0 |
 fchdir.badf | fchdir(fd=999) = EBADF |
 fchdir.not_dir | fchdir(fd=5) = ENOTDIR |
@@ -742,22 +749,22 @@ kill.bad_signal | kill(pid=<pid>, sig=99) = EINVAL |
 kill.child_sigterm | kill(pid=<pid>, sig=SIGTERM) = 0 |
 kill.no_such_process | kill(pid=<pid>, sig=0) = ESRCH |
 kill.self_probe | kill(pid=<pid>, sig=0) = 0 |
-landlock_add_rule.bad_flags | landlock_add_rule(ruleset_fd=-1, rule_type=LANDLOCK_RULE_PATH_BENEATH, rule_attr=<bytes>, flags=0x1) = ENOSYS | arg2.rule:complete:<bytes>
-landlock_add_rule.bad_ruleset | landlock_add_rule(ruleset_fd=999, rule_type=LANDLOCK_RULE_PATH_BENEATH, rule_attr=<bytes>, flags=0x0) = ENOSYS | arg2.rule:complete:<bytes>
-landlock_add_rule.net_port | landlock_add_rule(ruleset_fd=-1, rule_type=LANDLOCK_RULE_NET_PORT, rule_attr=<bytes>, flags=0x0) = ENOSYS | arg2.rule:complete:<bytes>
-landlock_add_rule.not_handled | landlock_add_rule(ruleset_fd=-1, rule_type=LANDLOCK_RULE_PATH_BENEATH, rule_attr=<bytes>, flags=0x0) = ENOSYS | arg2.rule:complete:<bytes>
-landlock_add_rule.path_beneath | landlock_add_rule(ruleset_fd=-1, rule_type=LANDLOCK_RULE_PATH_BENEATH, rule_attr=<bytes>, flags=0x0) = ENOSYS | arg2.rule:complete:<bytes>
-landlock_add_rule.unknown_type | landlock_add_rule(ruleset_fd=-1, rule_type=Unknown rule type 0x63, rule_attr=<addr>, flags=0x0) = ENOSYS | landlock.unknown_rule:no decoder:uncaptured !3
-landlock_create_ruleset.bad_flags | landlock_create_ruleset(attr=<addr>, size=8, flags=0x80) = ENOSYS |
-landlock_create_ruleset.fs_and_net | landlock_create_ruleset(attr=<bytes>, size=16, flags=0x0) = ENOSYS | arg0.ruleset:complete:<bytes>
-landlock_create_ruleset.fs_v1 | landlock_create_ruleset(attr=<bytes>, size=8, flags=0x0) = ENOSYS | arg0.ruleset:complete:<bytes>
-landlock_create_ruleset.nothing_handled | landlock_create_ruleset(attr=<bytes>, size=16, flags=0x0) = ENOSYS | arg0.ruleset:complete:<bytes>
-landlock_create_ruleset.too_small | landlock_create_ruleset(attr=<addr>, size=4, flags=0x0) = ENOSYS | arg0.ruleset:invalid extent:uncaptured !3
-landlock_create_ruleset.version | landlock_create_ruleset(attr=NULL, size=0, flags=LANDLOCK_CREATE_RULESET_VERSION) = ENOSYS |
-landlock_restrict_self.bad_fd | landlock_restrict_self(ruleset_fd=999, flags=0x0) = ENOSYS |
-landlock_restrict_self.bad_flags | landlock_restrict_self(ruleset_fd=-1, flags=0x1) = ENOSYS |
-landlock_restrict_self.enforce | landlock_restrict_self(ruleset_fd=-1, flags=0x0) = ENOSYS |
-landlock_restrict_self.without_no_new_privs | landlock_restrict_self(ruleset_fd=-1, flags=0x0) = ENOSYS |
+landlock_add_rule.bad_flags | landlock_add_rule(ruleset_fd=5, rule_type=LANDLOCK_RULE_PATH_BENEATH, rule_attr=<bytes>, flags=0x1) = EINVAL | arg2.rule:complete:<bytes>
+landlock_add_rule.bad_ruleset | landlock_add_rule(ruleset_fd=999, rule_type=LANDLOCK_RULE_PATH_BENEATH, rule_attr=<bytes>, flags=0x0) = EBADF | arg2.rule:complete:<bytes>
+landlock_add_rule.net_port | landlock_add_rule(ruleset_fd=6, rule_type=LANDLOCK_RULE_NET_PORT, rule_attr=<bytes>, flags=0x0) = 0 | arg2.rule:complete:<bytes>
+landlock_add_rule.not_handled | landlock_add_rule(ruleset_fd=5, rule_type=LANDLOCK_RULE_PATH_BENEATH, rule_attr=<bytes>, flags=0x0) = EINVAL | arg2.rule:complete:<bytes>
+landlock_add_rule.path_beneath | landlock_add_rule(ruleset_fd=5, rule_type=LANDLOCK_RULE_PATH_BENEATH, rule_attr=<bytes>, flags=0x0) = 0 | arg2.rule:complete:<bytes>
+landlock_add_rule.unknown_type | landlock_add_rule(ruleset_fd=5, rule_type=Unknown rule type 0x63, rule_attr=<addr>, flags=0x0) = EINVAL | landlock.unknown_rule:no decoder:uncaptured !3
+landlock_create_ruleset.bad_flags | landlock_create_ruleset(attr=<addr>, size=8, flags=0x80) = EINVAL |
+landlock_create_ruleset.fs_and_net | landlock_create_ruleset(attr=<bytes>, size=16, flags=0x0) = 6 | arg0.ruleset:complete:<bytes>
+landlock_create_ruleset.fs_v1 | landlock_create_ruleset(attr=<bytes>, size=8, flags=0x0) = 5 | arg0.ruleset:complete:<bytes>
+landlock_create_ruleset.nothing_handled | landlock_create_ruleset(attr=<bytes>, size=16, flags=0x0) = ENOMSG | arg0.ruleset:complete:<bytes>
+landlock_create_ruleset.too_small | landlock_create_ruleset(attr=<addr>, size=4, flags=0x0) = EINVAL | arg0.ruleset:invalid extent:uncaptured !3
+landlock_create_ruleset.version | landlock_create_ruleset(attr=NULL, size=0, flags=LANDLOCK_CREATE_RULESET_VERSION) = 6 |
+landlock_restrict_self.bad_fd | landlock_restrict_self(ruleset_fd=999, flags=0x0) = EBADF |
+landlock_restrict_self.bad_flags | landlock_restrict_self(ruleset_fd=5, flags=0x1) = EINVAL |
+landlock_restrict_self.enforce | landlock_restrict_self(ruleset_fd=5, flags=0x0) = 0 |
+landlock_restrict_self.without_no_new_privs | landlock_restrict_self(ruleset_fd=5, flags=0x0) = EPERM |
 lchown.symlink | lchown(filename="meta-link", user=1000, group=1000) = 0 | arg0.path:complete:"meta-link"
 lchown.to_root | lchown(filename="meta-link", user=0, group=0) = EPERM | arg0.path:complete:"meta-link"
 lgetxattr.file | lgetxattr(path="xs-file", name="user.lset", value="VALUE-ONE", size=128) = 9 | arg0.path:complete:"xs-file" arg1.xattr_name:complete:"user.lset" arg2.xattr_data:complete
@@ -802,12 +809,12 @@ lsetxattr.file | lsetxattr(path="xs-file", name="user.lset", value="VALUE-ONE", 
 lsetxattr.symlink_user | lsetxattr(path="xs-link", name="user.ant", value="VALUE-ONE", size=9, flags=0x0) = EPERM | arg0.path:complete:"xs-link" arg1.xattr_name:complete:"user.ant" arg2.xattr_data:complete:"VALUE-ONE"
 lsm_get_self_attr.bad_flags | lsm_get_self_attr(attr=100, ctx=<addr>, size=<bytes>, flags=0x2) = EINVAL | lsm.capacity:complete:<bytes>
 lsm_get_self_attr.current | lsm_get_self_attr(attr=100, ctx=<data>, size=<data>, flags=0x0) = <value> | lsm.capacity:complete lsm.returned_size:complete lsm.output:complete
-lsm_get_self_attr.single_selinux | lsm_get_self_attr(attr=100, ctx=<data>, size=<data>, flags=LSM_FLAG_SINGLE) = <value> | lsm.capacity:complete arg1.lsm_selector:complete lsm.returned_size:complete lsm.output:complete
+lsm_get_self_attr.single_selinux | lsm_get_self_attr(attr=100, ctx=<data>, size=<data>, flags=LSM_FLAG_SINGLE) = EOPNOTSUPP | lsm.capacity:complete arg1.lsm_selector:complete
 lsm_get_self_attr.undefined_attr | lsm_get_self_attr(attr=0, ctx=<addr>, size=<bytes>, flags=0x0) = EINVAL | lsm.capacity:complete:<bytes>
-lsm_list_modules.all | lsm_list_modules(ids="d\0\0\0\0\0\0\0i\0\0\0\0\0\0\0e", size=<bytes>, flags=0x0) = 3 | lsm.capacity:complete:<bytes> lsm.returned_size:complete lsm.output:complete
+lsm_list_modules.all | lsm_list_modules(ids="d\0\0\0\0\0\0\0n\0\0\0\0\0\0\0l\0\0\0\0\0\0\0i\0\0\0\0\0\0\0h\0\0\0\0\0\0\0g"..., size="P", flags=0x0) = 10 | lsm.capacity:complete:<bytes> lsm.returned_size:complete lsm.output:complete
 lsm_list_modules.bad_flags | lsm_list_modules(ids=<addr>, size=<bytes>, flags=0x1) = EINVAL | lsm.capacity:complete:<bytes>
 lsm_list_modules.bad_size_pointer | lsm_list_modules(ids=<addr>, size=0x1, flags=0x0) = EFAULT | lsm.capacity:copy fault:uncaptured !3
-lsm_list_modules.too_small | lsm_list_modules(ids=<addr>, size=<bytes>, flags=0x0) = E2BIG | lsm.capacity:complete:<bytes> lsm.returned_size:complete
+lsm_list_modules.too_small | lsm_list_modules(ids=<addr>, size="P", flags=0x0) = E2BIG | lsm.capacity:complete:<bytes> lsm.returned_size:complete
 lsm_set_self_attr.bad_flags | lsm_set_self_attr(attr=100, ctx=<bytes>, size=32, flags=0x1) = EINVAL | arg1.context:complete:<bytes>
 lsm_set_self_attr.too_small | lsm_set_self_attr(attr=100, ctx=<addr>, size=8, flags=0x0) = EINVAL | arg1.context:invalid extent:uncaptured !3
 lsm_set_self_attr.unknown_module | lsm_set_self_attr(attr=100, ctx=<bytes>, size=32, flags=0x0) = EOPNOTSUPP | arg1.context:complete:<bytes>
@@ -933,7 +940,7 @@ modify_ldt.write_empty_entry | modify_ldt(func=17, ptr="\0\0\0\0\0\0\0\0\0\0\0\0
 modify_ldt.write_legacy_clear | modify_ldt(func=1, ptr=<bytes>, bytecount=16) = 0 | arg1.ldt_entry:complete:<bytes>
 mount.bind_unprivileged | mount(dev_name=".", dir_name="sys-mnt", type=NULL, flags=MS_BIND, data=NULL) = EPERM | arg0.dev_name:complete:"." arg1.dir_name:complete:"sys-mnt"
 mount.null_dir | mount(dev_name="none", dir_name=NULL, type="tmpfs", flags=0x0, data=NULL) = EFAULT | arg0.dev_name:complete:"none" arg1.dir_name:null pointer:uncaptured arg2.type:complete:"tmpfs"
-mount.real_device_unprivileged | mount(dev_name="/dev/vda", dir_name="sys-mnt", type="ext4", flags=MS_RDONLY, data=NULL) = EPERM | arg0.dev_name:complete:"/dev/vda" arg1.dir_name:complete:"sys-mnt" arg2.type:complete:"ext4"
+mount.real_device_unprivileged | mount(dev_name="/dev/vdb", dir_name="sys-mnt", type="ext4", flags=MS_RDONLY, data=NULL) = EPERM | arg0.dev_name:complete:"/dev/vdb" arg1.dir_name:complete:"sys-mnt" arg2.type:complete:"ext4"
 mount.tmpfs_options_unprivileged | mount(dev_name="ant-tmpfs", dir_name="sys-mnt", type="tmpfs", flags=MS_NOSUID|MS_NODEV, data="size=1m,mode=0700"...) = EPERM | arg0.dev_name:complete:"ant-tmpfs" arg1.dir_name:complete:"sys-mnt" arg2.type:complete:"tmpfs" arg4.data:complete:"size=1m,mode=0700"...
 mount_setattr.bad_flags | mount_setattr(dfd=AT_FDCWD, path=".", flags=<addr>, uattr=<bytes>, usize=32) = EINVAL | arg1.path:complete:"." arg3.mount_attr:complete:<bytes>
 mount_setattr.small_size | mount_setattr(dfd=AT_FDCWD, path=".", flags=0x0, uattr=<addr>, usize=8) = EINVAL | arg1.path:complete:"." arg3.mount_attr:invalid extent:uncaptured !3
@@ -1109,7 +1116,7 @@ openat2.unknown_resolve | openat2(dfd=AT_FDCWD, filename="io-at", how=<bytes>, s
 pause.woken | pause() = ERESTARTNOHAND |
 perf_event_open.attr_fault | perf_event_open(attr_uptr=0x1, pid=0, cpu=-1, group_fd=-1, flags=0x0) = EFAULT | arg0.perf_event_attr:copy fault:uncaptured !3
 perf_event_open.bad_flags | perf_event_open(attr_uptr=<bytes>, pid=0, cpu=-1, group_fd=-1, flags=<addr>) = EINVAL | arg0.perf_event_attr:complete:<bytes>
-perf_event_open.self_task_clock | perf_event_open(attr_uptr=<bytes>, pid=0, cpu=-1, group_fd=-1, flags=PERF_FLAG_FD_CLOEXEC) = 3 | arg0.perf_event_attr:complete:<bytes>
+perf_event_open.self_task_clock | perf_event_open(attr_uptr=<bytes>, pid=0, cpu=-1, group_fd=-1, flags=PERF_FLAG_FD_CLOEXEC) = EACCES | arg0.perf_event_attr:complete:<bytes>
 perf_event_open.size_zero_bad_sample | perf_event_open(attr_uptr=<bytes>, pid=0, cpu=-1, group_fd=-1, flags=0x0) = EINVAL | arg0.perf_event_attr:complete:<bytes>
 perf_event_open.small_size | perf_event_open(attr_uptr=<bytes>, pid=0, cpu=-1, group_fd=-1, flags=0x0) = E2BIG | arg0.perf_event_attr:invalid extent:uncaptured arg0.required_size:complete !3
 personality.query | personality(personality=4294967295) = 0 |
@@ -1186,7 +1193,7 @@ prctl.set_dumpable_bad | prctl(option=PR_SET_DUMPABLE, arg2=2, arg3=0, arg4=0, a
 prctl.set_dumpable_off | prctl(option=PR_SET_DUMPABLE, arg2=0, arg3=0, arg4=0, arg5=0) = 0 |
 prctl.set_dumpable_same | prctl(option=PR_SET_DUMPABLE, arg2=1, arg3=0, arg4=0, arg5=0) = 0 |
 prctl.set_name | prctl(option=PR_SET_NAME, arg2="ant-process", arg3=0, arg4=0, arg5=0) = 0 | arg1.name:complete:"ant-process"
-prctl.set_name_long | prctl(option=PR_SET_NAME, arg2=5279634, arg3=0, arg4=0, arg5=0) = 0 | arg1.name:invalid extent:uncaptured !3
+prctl.set_name_long | prctl(option=PR_SET_NAME, arg2=5279695, arg3=0, arg4=0, arg5=0) = 0 | arg1.name:invalid extent:uncaptured !3
 prctl.set_no_new_privs | prctl(option=PR_SET_NO_NEW_PRIVS, arg2=1, arg3=0, arg4=0, arg5=0) = 0 |
 prctl.set_no_new_privs_bad_args | prctl(option=PR_SET_NO_NEW_PRIVS, arg2=1, arg3=1, arg4=0, arg5=0) = EINVAL |
 prctl.set_seccomp_filter | prctl(option=PR_SET_SECCOMP, arg2=2, arg3=<bytes>, arg4=0, arg5=0) = 0 | arg2.program:complete:<bytes> arg2.program.filter:complete:<bytes>
@@ -1766,7 +1773,7 @@ sync_file_range.write | sync_file_range(fd=3, offset=0, nbytes=4096, flags=SYNC_
 syncfs.badf | syncfs(fd=999) = EBADF |
 syncfs.file | syncfs(fd=3) = 0 |
 sysfs.bad_index | sysfs(option=filesystem index to name, arg1=9999, arg2=<handle>) = EINVAL |
-sysfs.fs_count | sysfs(option=filesystem count, arg1=0, arg2=0) = 29 |
+sysfs.fs_count | sysfs(option=filesystem count, arg1=0, arg2=0) = 32 |
 sysfs.fs_index | sysfs(option=filesystem name to index, arg1="proc", arg2=0) = 3 | arg1.fsname:complete:"proc"
 sysfs.fs_name | sysfs(option=filesystem index to name, arg1=3, arg2="proc") = 0 | arg2.fsname:complete
 sysfs.missing_name | sysfs(option=filesystem name to index, arg1="ant-nofs", arg2=0) = EINVAL | arg1.fsname:complete:"ant-nofs"
@@ -1882,7 +1889,7 @@ userfaultfd.bad_flags | userfaultfd(flags=UFFD_USER_MODE_ONLY|0x2) = ENOSYS |
 userfaultfd.kernel_faults | userfaultfd(flags=O_CLOEXEC) = ENOSYS |
 userfaultfd.user_mode_only | userfaultfd(flags=O_CLOEXEC|O_NONBLOCK|UFFD_USER_MODE_ONLY) = ENOSYS |
 ustat.no_device | ustat(dev=0, ubuf=<addr>) = EINVAL |
-ustat.work_dir_device | ustat(dev=64768, ubuf=<data>) = <value> | arg1.data:complete
+ustat.work_dir_device | ustat(dev=<work-dev>, ubuf=<data>) = <value> | arg1.data:complete
 utime.explicit | utime(filename="meta-file", times=<bytes>) = 0 | arg0.path:complete:"meta-file" arg1.data:complete:<bytes>
 utime.missing | utime(filename="meta-missing", times=<bytes>) = ENOENT | arg0.path:complete:"meta-missing" arg1.data:complete:<bytes>
 utime.now | utime(filename="meta-file", times=NULL) = 0 | arg0.path:complete:"meta-file" arg1.data:null pointer:uncaptured

@@ -2476,7 +2476,7 @@ not part of the identity), which the image builders compute:
 | --- | --- |
 | `uefi` | The kernel has `EFI` and `EFI_STUB` and its bzImage holds the EFI stub's bootstrap page claim (0052, found by its warning text) |
 | `sata`, `nvme` | The initrd searches that bus for the root disk and the kernel has `ATA SATA_AHCI SCSI BLK_DEV_SD`, or `BLK_DEV_NVME`, built in (BusyBox and Debian Minimal bases; the minimal kernel profile now builds NVMe in) |
-| `dhcp` | The guest takes its address from DHCP (BusyBox bases now; Debian desktop bases through NetworkManager, Debian Minimal through systemd-networkd) |
+| `dhcp` | The guest takes its address from DHCP (BusyBox bases now; Debian desktop bases through NetworkManager, Debian Minimal through ifupdown and dhcpcd) |
 
 The host offers OVMF when QEMU's firmware descriptors (the user's and
 `/etc/qemu/firmware`, then `share/qemu/firmware` of the QEMU in use and
@@ -3093,24 +3093,128 @@ default VGA console, no `-vga virtio`, no Run in desktop choices, Stop's configu
 timeout without the desktops' 30 s floor). The same recipe builds it
 (`build-debian-image.py` with the installer answer `desktop: "none"`, which
 `build-base.py` sets for the profile; the job offers every Debian answer but
-the desktop): the important set plus `CONSOLE_PACKAGES` without recommends,
-documentation left out by dpkg path excludes that the image drops again,
-systemd-networkd for every wired NIC (`Type=ether`, so any stealth NIC model
-and name), systemd-resolved with a tmpfiles link for `/etc/resolv.conf`,
-`multi-user.target`, `/tmp` on the root disk (`tmp.mount` masked, unlike
-Debian 13's default tmpfs: dropped files reach the VM's disk, and the
+the desktop): what the Debian installer leaves with no desktop chosen, the
+standard task (mmdebstrap's `standard` variant, the default answer for this
+base) with recommends (exim4 on 127.0.0.1:25 as the local MTA, as the
+installer installs it; timesyncd; the ispell dictionaries), the installer's own
+additions in `CONSOLE_PACKAGES` (tasksel, installation-report, discover,
+laptop-detect, eject, initramfs-tools, console-setup, sudo) and tasksel's
+language task for the locale (`task-english` for English), documentation and
+manual pages, the package indexes and apt's caches kept; no curl and no
+systemd-resolved. Networking is the installer's: ifupdown with dhcpcd and an
+`allow-hotplug enp0s25` stanza (`CONSOLE_INTERFACES`). The base's
+`stealth_support` adds `onboardnic`: the app then gives the NIC PCI address
+00:19.0 (`nic_option_for`, the integrated Intel NIC's slot on PC chipsets), so
+udev names it `enp0s25` whatever the model and whichever display or pointer
+devices take the first free slots; `/etc/resolv.conf` is a plain file dhcpcd
+rewrites from the lease. Packages configured during the build that recorded
+the build host's name (exim4's mail name) get the chosen hostname, and the
+leak check also fails on the build host's name. `multi-user.target`,
+`/tmp` on the root disk (a `tmp.mount` drop-in, unlike Debian 13's default tmpfs: dropped files reach the VM's disk, and the
 conformance cases and goldens, which expect BusyBox's on-disk `/tmp`, pass
-unchanged), a 4 GiB root. Its root is found without naming a device: fstab
+unchanged), a 4 GiB disk. Its root is found without naming a device: fstab
 mounts `UUID=<root uuid>` (a fresh UUID per bootstrap, given to `mkfs.ext4
 -U` and read back from a cached root filesystem's fstab; the build checks
-fstab and the filesystem agree), and `kernel_append` is BusyBox's
-`console=tty0 console=ttyS0 panic=-1` without `root=` (the bootstrap initrd
-mounts the VM's only disk, `/dev/vda`, `/dev/sda` or `/dev/nvme0n1`). A UUID,
+fstab and the filesystem agree), and `kernel_append` names it the way GRUB
+does (`root=UUID=`, below). A UUID,
 not a label, because a Debian install mounts by UUID and a fixed label would
 name the sandbox to a sample reading `/dev/disk/by-label`. Everything else
-(account removal, masked SSH and guest agents, locked root, apt check,
-provenance, initrd) is the desktop path; the desktops keep `/dev/vda` in
-fstab and `root=/dev/vda`.
+(account removal, masks for SSH and guest agents only where a package still
+ships the unit, locked root, apt check, provenance, initrd) is the desktop
+path; the desktops keep `/dev/vda` in fstab and `root=/dev/vda`.
+
+Nothing in the image names Antinomie or the build host: the package inventory
+is written to `/tmp` and leaves with the provenance, the network and tmpfiles
+snippets and the desktops' display-manager snippets have stock-looking names,
+systemd-resolved's backup of the resolv.conf it replaced (the build host's, as
+mmdebstrap copied it) is removed, and the build fails (`check_image_leaks`) on
+a path naming Antinomie, a `/dev/null` mask for a unit no package ships, or a
+configuration or state file holding the build host's nameserver or search
+domain (read from its `/etc/resolv.conf`; WSL's resolver and Tailscale
+MagicDNS names always). Creating a VM provisions it offline with `guestfish`
+(it was `virt-customize`): a read-only probe finds the one ext4 filesystem,
+then the root filesystem gets a UUID of its own (`set-uuid` after `e2fsck -f`;
+the account record keeps it as `root_uuid`), a directory hash seed of its own
+(`debugfs ssv hash_seed random` and `e2fsck -fD` through `guestfish debug`,
+best effort), fstab's `UUID=` root line follows, and the account is created as
+before without a sudoers.d file (the `sudo` group already allows it). Reset
+provisions again and records the new UUID.
+
+The image carries the installation's own timeline. `mkfs.ext4 -d` takes only
+modification times from the tarball (every change and access time was the
+epoch, every birth time the moment of mkfs), so the last customize hook records
+each path's access, change, birth and modification time with nanoseconds
+(`find -printf`, stored as `inode-times` beside the tarball and in the root
+filesystem cache), and `apply_timeline` writes them back with debugfs: changed
+no earlier than modified (cleanup after the record touched some directories),
+born no later than changed, accessed no earlier than born; a path added after
+the record was born when the installation ended. The superblock follows an
+installer's disk: created a minute or two before the first package (mkfs runs
+under `E2FSPROGS_FAKE_TIME`), last mounted (once, at `/target`) just before it,
+last written when the installation ended, and lifetime writes a little above
+the space in use.
+
+Its configuration files are the installer's: apt-setup's `sources.list` (the
+netinst image's commented `cdrom` line named after the point release, `main
+non-free-firmware`, `deb-src`, the updates comment block, the removable-media
+note) with the indexes it lists fetched; fstab's commented header,
+`errors=remount-ro` and the `/dev/sr0` line (`/media/cdrom0` and the `cdrom`
+link exist); `/etc/hosts` with the IPv6 comment; locale, keyboard and time
+zone answered through debconf (`locale.gen` the full commented list,
+`default_environment_locale` set, no `/etc/timezone`); `/etc/adjtime` UTC;
+D-Bus's `machine-id` link; `tasksel/first` and popcon answers; the
+installation's dpkg, alternatives and apt logs (`--skip=cleanup/reproducible`).
+`/tmp` stays on the root disk through a `tmp.mount.d/override.conf` condition
+(`ConditionPathIsMountPoint=/tmp`), not a mask. Its command line is GRUB's:
+`BOOT_IMAGE=/boot/vmlinuz-<release> root=UUID=<uuid> ro quiet` (no serial
+console, no `panic=-1`); the app replaces the UUID with the one provisioning
+gave the VM's disk (`vm_kernel_append`, from the account record), and the
+bootstrap initrd finds it with `findfs` on any bus (falling back to the first
+disk for a disk from before), mounts it, grows it, and remounts it read-only
+for the boot's fsck. The conformance harness still waits for the login prompt
+on the serial port: its VMs ask for a serial console
+(`BackendOptions::serial_console` appends `console=tty0 console=ttyS0` to a
+command line that names none; the app never sets it), since a readiness probe
+run would break the suite's whole-boot packet accounting. Provisioning creates the account as the installer's
+adduser does (full name `<Name>,,,`, the installer's groups where they exist,
+a 0700 home), with a yescrypt password hash (Perl's `crypt` through the host's
+libxcrypt; salted SHA-512 where that has no yescrypt), and writes a machine ID
+of the VM's own.
+
+The disk and kernel are an installed PC's. The base disk carries an MBR table
+with one bootable root partition at 1 MiB (`console_disk`; mkfs and every
+debugfs pass work at that offset, `CONSOLE_ROOT_SIZE` 3 GiB of the 4 GiB
+disk). Provisioning lays the VM's disk out as partman does
+(`partition_plan`): the root grown to a MiB before the swap partition, `sda5`
+in an extended `sda2` starting two sectors before it, about the VM's RAM (256
+MiB at least, a quarter of the disk at most), the last MiB free; the swap gets
+a UUID, fstab its line and `initramfs-tools/conf.d/resume` its UUID, the MBR a
+disk identifier of the VM's own, and `update-grub` writes `grub.cfg` for the
+VM's UUIDs. Growing the disk in the VM's settings grows the root the same way
+(`grow_disk`, keeping the swap's UUID and size); the bootstrap initrd grows only
+whole-disk roots (BusyBox, the desktops) now. The kernel is packaged as Debian
+packages it (`kernel_packages`): `linux-image-6.12.94+deb13-amd64` with
+linux-signed-amd64's control fields and the source package's maintainer
+scripts (depmod, `linux-update-symlinks` for `/vmlinuz` and `/initrd.img`,
+initramfs-tools building `/boot/initrd.img-*`), and the `linux-image-amd64`
+metapackage, installed before the rest of the customization (apt brings
+apparmor by recommends); GRUB (`grub-pc`, `os-prober`) is installed as the
+installer installs it. `/boot` holds the running kernel (mode 0600: it embeds
+the recorder; Debian's is world-readable), Debian's own configuration as the
+pinned source package resolves it (`debian-config`, written by the kernel build
+beside the profile's own) and Debian's `System.map` placeholder.
+
+The minimal kernel profile, shared with BusyBox, takes Debian 13's
+configuration where a program sees it (`DEBIAN_SHAPE`): Debian's LSM order with
+AppArmor the active major LSM, lockdown (none), landlock, TOMOYO, BPF, IPE, IMA
+and EVM; the memory controller and cgroup BPF; HZ 250; 8192 CPUs (MAXSMP);
+perf_event_paranoid 3 (Debian's patch); efivarfs, FUSE, nftables and fq_codel
+built in; scheduler autogroup and Debian's hardening defaults; no 9p, no
+netconsole, no cgroup debug controller, no legacy TIOCSTI. The release is
+Debian's (`6.12.94+deb13-amd64`), it is compiled with
+`x86_64-linux-gnu-gcc-14` where the host has it (Debian's compiler and the
+string `/proc/version` shows), and the few modular options are built and
+installed so the base has a module tree.
 
 Its kernel is the **minimal** profile, the BusyBox kernel: it builds in every
 driver and systemd prerequisite the console base uses (`CONSOLE_BUILTIN` is
