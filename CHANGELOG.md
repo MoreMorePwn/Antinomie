@@ -43,14 +43,26 @@ it runs.
   ID.
   Its disk is partitioned as the installer partitions it (MBR, the root at
   1 MiB, a swap partition sized for the VM's RAM, laid out when the VM is
-  created or its disk grown), it carries GRUB and its kernel as Debian's
-  `linux-image-6.12.94+deb13-amd64` and `linux-image-amd64` packages with a
-  matching `/boot`, and its kernel reports Debian's release, compiler and
+  created or its disk grown), it carries GRUB and Debian's own
+  `linux-image-6.12.94+deb13-amd64` and `linux-image-amd64` packages (see
+  below), and its kernel reports Debian's release, compiler and
   configuration where programs look (AppArmor, the memory cgroup, HZ 250,
   8192 CPUs, perf_event_paranoid 3, no 9p, no netconsole). BusyBox shares the
   kernel and gets the same; the conformance goldens follow it (fanotify and
   landlock answer, AppArmor's bind error, HZ 250, the LSM list) and name the
   root disk by role so one golden serves both bases.
+- **Debian Minimal's /boot is Debian's.** The kernel packages in the image are
+  Debian's genuine `linux-image-6.12.94+deb13-amd64` and `linux-image-amd64`
+  6.12.94-1, fetched from snapshot.debian.org and checked against the Debian
+  archive's signed index and pinned SHA-256s (kept with the build inputs), so
+  `/boot` (the image world-readable as Debian ships it, its configuration,
+  System.map and an initramfs of Debian's modules) and the module tree are
+  what a real installation has and `dpkg --verify` reports nothing; the build
+  fails otherwise. QEMU still boots the Antinomie kernel directly, which the
+  guest no longer holds anywhere (it was `/boot/vmlinuz-*`, mode 0600). The
+  Antinomie kernel's few modules sit in the tree's `updates/` and are the only
+  ones the module index names, so nothing tries Debian's (which that kernel
+  refuses) at boot.
 - **Debian accounts hashed by the guest.** A new Debian VM's password is
   hashed by the guest's own `chpasswd` (PAM and libcrypt), so it is stored as
   Debian 13 stores it (yescrypt, `$y$`) whatever the host's crypt supports; the
