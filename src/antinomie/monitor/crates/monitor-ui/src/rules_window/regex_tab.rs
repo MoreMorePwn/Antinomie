@@ -105,6 +105,11 @@ impl RegexState {
     }
 }
 
+/// The name field, the Add button and the least the expression is given, in points.
+const NAME_WIDTH: f32 = 240.0;
+const ADD_WIDTH: f32 = 48.0;
+const MIN_PATTERN_WIDTH: f32 = 160.0;
+
 impl Model {
     pub(super) fn regex_tab(&mut self, ui: &mut egui::Ui, data_dir: &Path) {
         self.regex.load(data_dir);
@@ -147,14 +152,14 @@ impl Model {
             self.regex.apply(data_dir, changed);
         }
         let full = self.regex.config.custom.len() >= CUSTOM_MAX_COUNT;
+        // One row: the name, its category, the expression, which takes
+        // everything the others leave, and Add.
         ui.horizontal(|ui| {
-            // The name takes what the category list and Add leave.
-            let name_width = (ui.available_width() - 190.0).max(300.0);
             ui.add(
                 egui::TextEdit::singleline(&mut self.regex.name)
                     .hint_text(theme::hint_text("Name, e.g. Campaign marker"))
                     .char_limit(80)
-                    .desired_width(name_width),
+                    .desired_width(NAME_WIDTH),
             );
             egui::ComboBox::from_id_salt("regex-new-category")
                 .selected_text(self.regex.category.label())
@@ -163,25 +168,30 @@ impl Model {
                         ui.selectable_value(&mut self.regex.category, category, category.label());
                     }
                 });
+            let pattern_width = (ui.available_width() - ADD_WIDTH - ui.spacing().item_spacing.x)
+                .max(MIN_PATTERN_WIDTH);
+            ui.add(
+                egui::TextEdit::singleline(&mut self.regex.pattern)
+                    .hint_text(theme::hint_text(
+                        "Regular expression, such as evil[0-9]+\\.example\\.com",
+                    ))
+                    .char_limit(PATTERN_MAX_LEN)
+                    .font(egui::TextStyle::Monospace)
+                    .desired_width(pattern_width),
+            );
             let ready =
                 !full && !self.regex.name.trim().is_empty() && !self.regex.pattern.is_empty();
             if ui
-                .add_enabled(ready, egui::Button::new("Add"))
+                .add_enabled(
+                    ready,
+                    egui::Button::new("Add").min_size(egui::vec2(ADD_WIDTH, 0.0)),
+                )
                 .on_hover_text("Rust regex syntax, matched against every string")
                 .clicked()
             {
                 self.regex.add(data_dir);
             }
         });
-        ui.add(
-            egui::TextEdit::singleline(&mut self.regex.pattern)
-                .hint_text(theme::hint_text(
-                    "Regular expression, such as evil[0-9]+\\.example\\.com",
-                ))
-                .char_limit(PATTERN_MAX_LEN)
-                .font(egui::TextStyle::Monospace)
-                .desired_width(f32::INFINITY),
-        );
         ui.horizontal(|ui| {
             ui.label("Try on");
             ui.add(
