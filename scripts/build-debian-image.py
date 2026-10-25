@@ -71,10 +71,56 @@ def profile(desktop):
 
 PROFILE = profile("xfce")
 APPEND = "root=/dev/vda rw rootwait console=tty0 console=ttyS0 panic=-1"
-# The console base names no root device: the bootstrap initrd mounts the VM's
-# only disk on whichever bus the stealth profile chose (virtio, SATA, NVMe),
-# and fstab finds it again by filesystem UUID, as a Debian install does.
-CONSOLE_APPEND = "console=tty0 console=ttyS0 panic=-1"
+# The console base's command line is the one GRUB gives a Debian install: the
+# kernel image, the root by filesystem UUID (each VM's own: the app names the
+# UUID provisioning gave its disk), mounted read-only for the boot-time fsck,
+# and quiet; no serial console and no panic=-1. The bootstrap initrd finds the
+# UUID on whichever bus the stealth profile chose (virtio, SATA, NVMe).
+CONSOLE_APPEND = "BOOT_IMAGE=/boot/vmlinuz-{release} root=UUID={uuid} ro quiet"
+# Where the installer saw the root filesystem (fstab's comment).
+CONSOLE_ROOT_DEVICE = "/dev/sda"
+FSTAB_HEADER = """# /etc/fstab: static file system information.
+#
+# Use 'blkid' to print the universally unique identifier for a
+# device; this may be used with UUID= as a more robust way to name devices
+# that works even if disks are added and removed. See fstab(5).
+#
+# systemd generates mount units based on this file, see systemd.mount(5).
+# Please run 'systemctl daemon-reload' after you make changes here.
+#
+# <file system> <mount point>   <type>  <options>       <dump>  <pass>
+"""
+FSTAB_ROOT = "UUID={uuid} /               ext4    errors=remount-ro 0       1\n"
+FSTAB_CDROM = "/dev/sr0        /media/cdrom0   udf,iso9660 user,noauto     0       0\n"
+HOSTS = """127.0.0.1	localhost
+127.0.1.1	{hostname}
+
+# The following lines are desirable for IPv6 capable hosts
+::1     localhost ip6-localhost ip6-loopback
+ff02::1 ip6-allnodes
+ff02::2 ip6-allrouters
+"""
+# apt-setup's sources.list after a netinst install from a USB stick with the
+# network mirror chosen ({media} is the image's label, {mirror} the mirror).
+SOURCES_LIST = """#deb cdrom:[{media}]/ trixie contrib main non-free-firmware
+
+deb {mirror}/ trixie main non-free-firmware
+deb-src {mirror}/ trixie main non-free-firmware
+
+deb http://security.debian.org/debian-security trixie-security main non-free-firmware
+deb-src http://security.debian.org/debian-security trixie-security main non-free-firmware
+
+# trixie-updates, to get updates before a point release is made;
+# see https://www.debian.org/doc/manuals/debian-reference/ch02.en.html#_updates_and_backports
+deb {mirror}/ trixie-updates main non-free-firmware
+deb-src {mirror}/ trixie-updates main non-free-firmware
+
+# This system was installed using small removable media
+# (e.g. netinst, live or single CD). The matching "deb cdrom"
+# entries were disabled at the end of the installation process.
+# For information about how to use removable media with apt,
+# see https://wiki.debian.org/AptMedia
+"""
 SUITE = "trixie"
 SECURITY_MIRROR = "http://security.debian.org/debian-security"
 IMAGE_SIZE = 16 << 30
@@ -131,6 +177,26 @@ allow-hotplug {CONSOLE_NIC}
 iface {CONSOLE_NIC} inet dhcp
 # This is an autoconfigured IPv6 interface
 iface {CONSOLE_NIC} inet6 auto
+"""
+# apt's history names the commands mmdebstrap ran; the installer's read like
+# this (its packages: those an entry installed on request).
+HISTORY_AWK = r"""NR == FNR {
+    if ($0 ~ /^Start-Date:/) n++
+    if ($0 ~ /^Install: /) {
+        list = ""
+        count = split(substr($0, 10), items, /\), /)
+        for (i = 1; i <= count; i++)
+            if (items[i] !~ /automatic/) { split(items[i], name, ":"); list = list " " name[1] }
+        packages[n] = list
+    }
+    next
+}
+/^Start-Date:/ { m++ }
+/^Commandline:/ {
+    print "Commandline: apt-get -o APT::Status-Fd=4 -o APT::Keep-Fds::=5 -o APT::Keep-Fds::=6 -q -y --no-remove install" packages[m]
+    next
+}
+{ print }
 """
 # Installer-style answers. Values are checked again inside the new system
 # against its locale, keyboard and time zone data.
@@ -279,15 +345,19 @@ def packages(desktop):
     return PACKAGES + (task,) + extra
 
 
-def kernel_append(desktop):
-    return CONSOLE_APPEND if desktop == CONSOLE else APPEND
+def kernel_append(desktop, release=None, root_uuid=None):
+    if desktop == CONSOLE:
+        return CONSOLE_APPEND.format(release=release.split()[0], uuid=root_uuid)
+    return APPEND
 
 
 def fstab(desktop, root_uuid=None):
-    """The root line: the console base mounts its root by UUID on any disk bus;
-    the desktops keep virtio's /dev/vda (their SATA and NVMe drivers are modules)."""
+    """The console base's fstab is the installer's (root by UUID on any disk bus,
+    errors=remount-ro, the CD drive); the desktops keep virtio's /dev/vda (their
+    SATA and NVMe drivers are modules)."""
     if desktop == CONSOLE:
-        return f"UUID={root_uuid} / ext4 defaults 0 1\n"
+        return (FSTAB_HEADER + f"# / was on {CONSOLE_ROOT_DEVICE} during installation\n"
+                + FSTAB_ROOT.format(uuid=root_uuid) + FSTAB_CDROM)
     return "/dev/vda / ext4 defaults 0 1\n"
 
 
@@ -313,7 +383,7 @@ def customization_script():
     console base, the root filesystem's UUID."""
     return """#!/bin/sh
 set -eu
-hostname=$1 locale=$2 layout=$3 variant=$4 zone=$5 manager=$6 session=$7 rootuuid=${8:-}
+hostname=$1 locale=$2 layout=$3 variant=$4 zone=$5 manager=$6 session=$7 rootuuid=${8:-} mirror=${9:-}
 export DEBIAN_FRONTEND=noninteractive
 test "$(. /etc/os-release; printf '%s' "$ID:$VERSION_ID")" = debian:13
 test "$(dpkg --print-architecture)" = amd64
@@ -377,7 +447,21 @@ none)
     printf '%s' """ + shlex.quote(CONSOLE_INTERFACES) + """ > /etc/network/interfaces
     # /tmp stays on the root disk, as on BusyBox: what a sample drops there is
     # in the VM's disk (Disks tab, disk dumps, checkpoints), not only in RAM.
-    systemctl mask tmp.mount
+    # A condition in a drop-in, as "systemctl edit" leaves it, not a mask.
+    mkdir -p /etc/systemd/system/tmp.mount.d
+    printf '[Unit]\\nConditionPathIsMountPoint=/tmp\\n' > /etc/systemd/system/tmp.mount.d/override.conf
+    mkdir -p /media/cdrom0
+    ln -s cdrom0 /media/cdrom
+    # apt-setup's sources.list, named after the netinst image of this point
+    # release (built when base-files was), and the indexes it lists.
+    built=$(zcat /usr/share/doc/base-files/changelog.gz | sed -n 's/^ -- .*>  //p' | head -n 1)
+    media="Debian GNU/Linux $(cat /etc/debian_version).0 _Trixie_ - Official amd64 NETINST with firmware $(date -u -d "$built" +%Y%m%d-%H:%M)"
+    sources=""" + shlex.quote(SOURCES_LIST) + """
+    url=$(printf '%s' "$mirror" | sed 's/[&|\\]/\\\\&/g')
+    printf '%s' "$sources" | sed -e "s|{media}|$media|" -e "s|{mirror}|$url|g" > /etc/apt/sources.list
+    apt-get -o Acquire::Languages=en update
+    # Answers the installer leaves in the debconf database.
+    printf 'tasksel tasksel/first multiselect standard\\npopularity-contest popularity-contest/participate boolean false\\n' | debconf-set-selections || true
     # tasksel's language task for the locale (task-english for English).
     task=$(awk -v l="${locale%%_*}" '/^Task:/ {t = $2} /^Test-lang:/ {for (i = 2; i <= NF; i++) if ($i == l) print t}' /usr/share/tasksel/descs/debian-tasks.desc | head -n 1)
     if [ -n "$task" ]; then
@@ -391,7 +475,9 @@ else
     systemctl set-default graphical.target
 fi
 if [ -n "$rootuuid" ]; then
-    printf 'UUID=%s / ext4 defaults 0 1\\n' "$rootuuid" > /etc/fstab
+    { printf '%s' """ + shlex.quote(FSTAB_HEADER + f"# / was on {CONSOLE_ROOT_DEVICE} during installation\n") + """
+      printf """ + shlex.quote(FSTAB_ROOT.format(uuid="%s").replace("\n", "\\n")) + """ "$rootuuid"
+      printf '%s' """ + shlex.quote(FSTAB_CDROM) + """; } > /etc/fstab
 else
     printf '/dev/vda / ext4 defaults 0 1\\n' > /etc/fstab
 fi
@@ -406,13 +492,23 @@ if [ -f /etc/exim4/update-exim4.conf.conf ]; then
     sed -i "s/^dc_other_hostnames=.*/dc_other_hostnames='$hostname'/" /etc/exim4/update-exim4.conf.conf
     update-exim4.conf
 fi
-printf '127.0.0.1\\tlocalhost\\n127.0.1.1\\t%s\\n\\n::1\\tlocalhost ip6-localhost ip6-loopback\\nff02::1\\tip6-allnodes\\nff02::2\\tip6-allrouters\\n' "$hostname" > /etc/hosts
-printf '%s UTF-8\\n' "$locale" > /etc/locale.gen
-locale-gen
-printf 'LANG=%s\\n' "$locale" > /etc/default/locale
+hosts=""" + shlex.quote(HOSTS) + """
+printf '%s' "$hosts" | sed "s/{hostname}/$hostname/" > /etc/hosts
+# Locale, keyboard and time zone as the installer answers them: through
+# debconf, so locale.gen is the full commented list and the answers stay.
+printf 'locales locales/locales_to_be_generated multiselect %s UTF-8\\nlocales locales/default_environment_locale select %s\\n' "$locale" "$locale" | debconf-set-selections
+rm -f /etc/locale.gen
+dpkg-reconfigure -f noninteractive locales
+printf 'keyboard-configuration keyboard-configuration/xkb-keymap select %s\\nkeyboard-configuration keyboard-configuration/layoutcode string %s\\nkeyboard-configuration keyboard-configuration/variantcode string %s\\n' "$layout" "$layout" "$variant" | debconf-set-selections
 printf 'XKBMODEL="pc105"\\nXKBLAYOUT="%s"\\nXKBVARIANT="%s"\\nXKBOPTIONS=""\\n\\nBACKSPACE="guess"\\n' "$layout" "$variant" > /etc/default/keyboard
+area=${zone%%/*} city=${zone#*/}
+printf 'tzdata tzdata/Areas select %s\\ntzdata tzdata/Zones/%s select %s\\n' "$area" "$area" "$city" | debconf-set-selections
 ln -sf "/usr/share/zoneinfo/$zone" /etc/localtime
-printf '%s\\n' "$zone" > /etc/timezone
+rm -f /etc/timezone
+dpkg-reconfigure -f noninteractive tzdata
+# The installer's hardware clock answer, and D-Bus's link to the machine ID.
+printf '0.0 0 0.0\\n0\\nUTC\\n' > /etc/adjtime
+ln -sf /etc/machine-id /var/lib/dbus/machine-id
 # Build-time apt and dpkg settings (recommends, proxy, left-out documentation)
 # are not part of the image.
 rm -f /etc/apt/apt.conf.d/99mmdebstrap /etc/dpkg/dpkg.cfg.d/99mmdebstrap
@@ -423,6 +519,11 @@ if [ -n "$audit" ]; then
 fi
 apt-get -o APT::Get::AllowUnauthenticated=false -o Acquire::AllowInsecureRepositories=false check
 dpkg-query -W -f='${binary:Package}\\t${Version}\\t${Architecture}\\t${source:Package}\\t${source:Version}\\t${db:Status-Status}\\n' > /tmp/packages.tsv
+if [ "$manager" = none ] && [ -f /var/log/apt/history.log ]; then
+    awk """ + shlex.quote(HISTORY_AWK) + """ /var/log/apt/history.log /var/log/apt/history.log > /tmp/history.log
+    cat /tmp/history.log > /var/log/apt/history.log
+    rm -f /tmp/history.log
+fi
 if [ "$manager" = none ]; then
     # The resolver the installer's DHCP lease named; dhcpcd rewrites it at boot.
     printf 'nameserver 192.168.1.1\\n' > /etc/resolv.conf
@@ -546,8 +647,10 @@ def mmdebstrap_command(values, tarball, script, provenance, times=None):
         command.append(f'--aptopt=Acquire::https::Proxy "{values["proxy"]}"')
     if console:
         # The package indexes and apt's caches of them stay, as after the
-        # installer's apt update (the downloaded packages go).
-        command += ["--skip=cleanup/apt/lists", "--skip=cleanup/apt/cache"]
+        # installer's apt update (the downloaded packages go), and so do the
+        # installation's logs (dpkg, alternatives, apt history).
+        command += ["--skip=cleanup/apt/lists", "--skip=cleanup/apt/cache",
+                    "--skip=cleanup/reproducible"]
     # Files cross into and out of the new root through mmdebstrap's upload and
     # download hooks, which run as the invoking user: in unshare mode a plain
     # hook runs as the namespace's root, which cannot read or write the
@@ -559,8 +662,8 @@ def mmdebstrap_command(values, tarball, script, provenance, times=None):
                          + [q(manager), q(session)])
     if console:
         # mkfs.ext4 gives the root this UUID (fstab_uuid reads it back, also
-        # from a cached root filesystem).
-        arguments += " " + str(uuid.uuid4())
+        # from a cached root filesystem); the mirror goes into sources.list.
+        arguments += " " + str(uuid.uuid4()) + " " + q(values["mirror"].rstrip("/"))
     command.append(f'--customize-hook=chroot "$1" sh /tmp/antinomie-customize.sh {arguments}')
     command.append('--customize-hook=rm -f "$1/tmp/antinomie-customize.sh"')
     # The package inventory leaves the image with the build's provenance.
@@ -800,9 +903,9 @@ def fstab_uuid(tarball):
     """The root UUID the console base's fstab names, from the root filesystem tarball."""
     with tarfile.open(tarball) as archive:
         text = archive.extractfile("./etc/fstab").read().decode()
-    match = re.fullmatch(r"UUID=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) "
-                         r"/ ext4 defaults 0 1\n", text)
-    if not match:
+    match = re.search(r"^UUID=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) "
+                      r"+/ ", text, re.M)
+    if not match or text != fstab(CONSOLE, match[1]):
         raise RuntimeError("console base fstab does not mount its root by UUID")
     return match[1]
 
@@ -843,8 +946,9 @@ def root_image(values, raw, staging, provenance, log, modules=None, cache=None):
         (provenance / "mmdebstrap.json").write_text(json.dumps(command, indent=2) + "\n")
         # mmdebstrap assembles the system in $TMPDIR; /tmp is a small tmpfs on
         # Debian 13 (and in the cloud builder), far too small for a desktop.
+        # The installer runs in UTC, so its logs (dpkg, apt) are in UTC.
         subprocess.run(command, check=True, stdout=log, stderr=subprocess.STDOUT,
-                       env=os.environ | {"TMPDIR": str(staging)})
+                       env=os.environ | {"TMPDIR": str(staging), "TZ": "UTC"})
         root = {"bootstrap": "mmdebstrap", "mode": bootstrap_mode(),
                 "variant": "standard" if values["standard"] else "important",
                 "suite": SUITE, "mirror": values["mirror"], "security_mirror": SECURITY_MIRROR,
@@ -874,7 +978,7 @@ def root_image(values, raw, staging, provenance, log, modules=None, cache=None):
     tarball.unlink()
     validate_image(raw, values["desktop"], root_uuid)
     return root | {
-            "root_filesystem": "ext4", "root_size": size,
+            "root_filesystem": "ext4", "root_size": size, "root_uuid": root_uuid,
             "conversion": "mkfs.ext4 -d tarball; extended attributes and the installation's "
                           "access, change and birth times set with debugfs",
             "extended_attributes": xattrs, "timed_paths": timed,
@@ -943,7 +1047,8 @@ def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=Fa
         (provenance / "build.json").write_text(json.dumps(record, indent=2) + "\n")
         manifest = {"format": 1, "kernel_version": "6.12.94", "schema_id": 1,
                     "kernel": "kernel", "initrd": "initrd.gz", "base_disk": "base.qcow2",
-                    "kernel_append": kernel_append(values["desktop"]),
+                    "kernel_append": kernel_append(values["desktop"], release,
+                                                   root.get("root_uuid")),
                     "guest": profile(values["desktop"]),
                     "sha256": hashes}
         if symbols:

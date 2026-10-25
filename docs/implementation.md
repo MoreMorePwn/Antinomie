@@ -2136,15 +2136,14 @@ udev names it `enp0s25` whatever the model and whichever display or pointer
 devices take the first free slots; `/etc/resolv.conf` is a plain file dhcpcd
 rewrites from the lease. Packages configured during the build that recorded
 the build host's name (exim4's mail name) get the chosen hostname, and the
-leak check also fails on the build host's name. `multi-user.target`, `/tmp` on the root disk (`tmp.mount` masked, unlike
-Debian 13's default tmpfs: dropped files reach the VM's disk, and the
+leak check also fails on the build host's name. `multi-user.target`,
+`/tmp` on the root disk (a `tmp.mount` drop-in, unlike Debian 13's default tmpfs: dropped files reach the VM's disk, and the
 conformance cases and goldens, which expect BusyBox's on-disk `/tmp`, pass
 unchanged), a 4 GiB root. Its root is found without naming a device: fstab
 mounts `UUID=<root uuid>` (a fresh UUID per bootstrap, given to `mkfs.ext4
 -U` and read back from a cached root filesystem's fstab; the build checks
-fstab and the filesystem agree), and `kernel_append` is BusyBox's
-`console=tty0 console=ttyS0 panic=-1` without `root=` (the bootstrap initrd
-mounts the VM's only disk, `/dev/vda`, `/dev/sda` or `/dev/nvme0n1`). A UUID,
+fstab and the filesystem agree), and `kernel_append` names it the way GRUB
+does (`root=UUID=`, below). A UUID,
 not a label, because a Debian install mounts by UUID and a fixed label would
 name the sandbox to a sample reading `/dev/disk/by-label`. Everything else
 (account removal, masks for SSH and guest agents only where a package still
@@ -2181,6 +2180,33 @@ installer's disk: created a minute or two before the first package (mkfs runs
 under `E2FSPROGS_FAKE_TIME`), last mounted (once, at `/target`) just before it,
 last written when the installation ended, and lifetime writes a little above
 the space in use.
+
+Its configuration files are the installer's: apt-setup's `sources.list` (the
+netinst image's commented `cdrom` line named after the point release, `main
+non-free-firmware`, `deb-src`, the updates comment block, the removable-media
+note) with the indexes it lists fetched; fstab's commented header,
+`errors=remount-ro` and the `/dev/sr0` line (`/media/cdrom0` and the `cdrom`
+link exist); `/etc/hosts` with the IPv6 comment; locale, keyboard and time
+zone answered through debconf (`locale.gen` the full commented list,
+`default_environment_locale` set, no `/etc/timezone`); `/etc/adjtime` UTC;
+D-Bus's `machine-id` link; `tasksel/first` and popcon answers; the
+installation's dpkg, alternatives and apt logs (`--skip=cleanup/reproducible`).
+`/tmp` stays on the root disk through a `tmp.mount.d/override.conf` condition
+(`ConditionPathIsMountPoint=/tmp`), not a mask. Its command line is GRUB's:
+`BOOT_IMAGE=/boot/vmlinuz-<release> root=UUID=<uuid> ro quiet` (no serial
+console, no `panic=-1`); the app replaces the UUID with the one provisioning
+gave the VM's disk (`vm_kernel_append`, from the account record), and the
+bootstrap initrd finds it with `findfs` on any bus (falling back to the first
+disk for a disk from before), mounts it, grows it, and remounts it read-only
+for the boot's fsck. The conformance harness still waits for the login prompt
+on the serial port: its VMs ask for a serial console
+(`BackendOptions::serial_console` appends `console=tty0 console=ttyS0` to a
+command line that names none; the app never sets it), since a readiness probe
+run would break the suite's whole-boot packet accounting. Provisioning creates the account as the installer's
+adduser does (full name `<Name>,,,`, the installer's groups where they exist,
+a 0700 home), with a yescrypt password hash (Perl's `crypt` through the host's
+libxcrypt; salted SHA-512 where that has no yescrypt), and writes a machine ID
+of the VM's own.
 
 Its kernel is the **minimal** profile, the BusyBox kernel: it builds in every
 driver and systemd prerequisite the console base uses (`CONSOLE_BUILTIN` is

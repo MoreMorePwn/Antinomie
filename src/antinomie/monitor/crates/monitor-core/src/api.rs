@@ -389,6 +389,10 @@ pub struct BackendOptions {
     pub bootstrap_gpa: Option<u64>,
     pub force_tcg: bool,
     pub headless: bool,
+    /// Test harnesses: put the kernel console and a login on the first serial
+    /// port of a base whose command line names none (Debian's), so its boot
+    /// shows in the serial log. The app leaves it off.
+    pub serial_console: bool,
 }
 impl Default for BackendOptions {
     fn default() -> Self {
@@ -409,6 +413,7 @@ impl Default for BackendOptions {
             bootstrap_gpa: None,
             force_tcg: false,
             headless: false,
+            serial_console: false,
         }
     }
 }

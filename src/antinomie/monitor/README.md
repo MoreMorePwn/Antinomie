@@ -113,8 +113,8 @@ failure and resource limits remain explicit report states.
 ## Debian Minimal base
 
 Console-only Debian 13 (trixie, amd64) as the Debian installer leaves it with
-no desktop chosen: no display manager or X, a login on the serial console and
-the virtual terminals, the standard system utilities with recommends (exim4 as
+no desktop chosen: no display manager or X, a login on the virtual
+terminals (no serial console, as on a PC), the standard system utilities with recommends (exim4 as
 the local MTA, timesyncd, man pages and documentation), the installer's own
 additions listed with reasons in `CONSOLE_PACKAGES`
 (`scripts/build-debian-image.py`; resolved inventory of the verified build in
@@ -123,7 +123,7 @@ indexes. It boots on the minimal kernel profile it shares with BusyBox (every
 driver it uses built in) and takes its address with ifupdown and dhcpcd on
 `enp0s25`: its VMs' NIC sits at the onboard NIC's PCI slot 00:19.0 whatever
 model the stealth profile picks.
-`/tmp` stays on the root disk (`tmp.mount` masked), as on BusyBox, so files a
+`/tmp` stays on the root disk (a `tmp.mount` drop-in, not a mask), as on BusyBox, so files a
 sample drops there are in the VM's disk for the Disks tab and disk dumps. The
 root is mounted by filesystem UUID, so a stealth profile may put the disk on
 virtio, SATA (AHCI) or NVMe.

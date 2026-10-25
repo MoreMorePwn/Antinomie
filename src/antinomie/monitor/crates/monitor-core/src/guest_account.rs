@@ -15,6 +15,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const HASH_TIMEOUT: Duration = Duration::from_secs(15);
+/// The groups the Debian installer adds its first user to, where they exist
+/// (sudo because root gets no password).
+const INSTALLER_GROUPS: &str =
+    "cdrom floppy sudo audio dip video plugdev users netdev bluetooth lpadmin scanner";
 /// One libguestfs appliance run: the probe, or the provisioning itself
 /// (filesystem check, new UUID, directory reindex, account).
 const PROVISION_TIMEOUT: Duration = Duration::from_secs(240);
@@ -62,6 +66,30 @@ pub(crate) fn valid_uuid(text: &str) -> bool {
             8 | 13 | 18 | 23 => c == b'-',
             _ => c.is_ascii_digit() || (b'a'..=b'f').contains(&c),
         })
+}
+
+/// A yescrypt salt as crypt(3) makes it: 16 random bytes in crypt's base 64
+/// (the 22nd character carries the last two bits).
+fn yescrypt_salt() -> Result<String, String> {
+    const ALPHABET: &[u8; 64] = b"./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+    let mut bytes = [0u8; 22];
+    File::open("/dev/urandom")
+        .and_then(|mut source| source.read_exact(&mut bytes))
+        .map_err(|_| "cannot read /dev/urandom for the password salt")?;
+    Ok(bytes
+        .iter()
+        .enumerate()
+        .map(|(index, byte)| ALPHABET[usize::from(byte & if index < 21 { 63 } else { 3 })] as char)
+        .collect())
+}
+
+/// A random 128-bit identifier in hex, as /etc/machine-id holds it.
+fn random_hex() -> Result<String, String> {
+    let mut bytes = [0u8; 16];
+    File::open("/dev/urandom")
+        .and_then(|mut source| source.read_exact(&mut bytes))
+        .map_err(|_| "cannot read /dev/urandom for the machine ID")?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
 /// A random (version 4) UUID.
@@ -135,12 +163,28 @@ fn guestfish(executable: &Path, disk: &Path, writable: bool) -> Command {
 }
 
 impl GuestAccount {
+    /// The account with its password hashed as Debian 13 hashes it
+    /// (yescrypt, through the host's crypt(3) from Perl), or salted SHA-512
+    /// where the host's crypt has no yescrypt.
     pub(crate) fn from_credentials(credentials: GuestCredentials) -> Result<Self, String> {
-        Self::hash_with(credentials, Path::new("openssl"))
+        Self::yescrypt_with(credentials.clone(), Path::new("perl"))
+            .or_else(|_| Self::hash_with(credentials, Path::new("openssl")))
+    }
+    fn yescrypt_with(credentials: GuestCredentials, executable: &Path) -> Result<Self, String> {
+        let mut command = Command::new(executable);
+        command.args([
+            "-e",
+            "local $/; my $p = <STDIN>; my $h = crypt($p, $ARGV[0]); print $h if defined $h",
+            &format!("$y$j9T${}", yescrypt_salt()?),
+        ]);
+        Self::hashed(credentials, command)
     }
     fn hash_with(credentials: GuestCredentials, executable: &Path) -> Result<Self, String> {
         let mut command = Command::new(executable);
         command.args(["passwd", "-6", "-stdin"]);
+        Self::hashed(credentials, command)
+    }
+    fn hashed(credentials: GuestCredentials, command: Command) -> Result<Self, String> {
         let hash = run_private(command, credentials.password.as_bytes(), true)?;
         let password_hash = String::from_utf8(hash)
             .map_err(|_| "invalid password hash output")?
@@ -157,18 +201,22 @@ impl GuestAccount {
     fn validate(&self) -> Result<(), String> {
         validate_guest_username(&self.username)?;
         let parts: Vec<_> = self.password_hash.split('$').collect();
-        if parts.len() != 4
-            || !parts[0].is_empty()
-            || parts[1] != "6"
-            || parts[2].is_empty()
-            || parts[2].len() > 16
-            || parts[3].len() != 86
-            || !parts[2..].iter().all(|part| {
-                part.bytes()
-                    .all(|c| c.is_ascii_alphanumeric() || c == b'.' || c == b'/')
-            })
-        {
-            return Err("invalid salted SHA-512 password hash".into());
+        let crypt64 = |part: &&str| {
+            part.bytes()
+                .all(|c| c.is_ascii_alphanumeric() || c == b'.' || c == b'/')
+        };
+        // $6$salt$hash (SHA-512) or $y$j9T$salt$hash (yescrypt).
+        let sha512 = parts.len() == 4
+            && parts[1] == "6"
+            && (1..=16).contains(&parts[2].len())
+            && parts[3].len() == 86;
+        let yescrypt = parts.len() == 5
+            && parts[1] == "y"
+            && parts[2] == "j9T"
+            && (1..=86).contains(&parts[3].len())
+            && parts[4].len() == 43;
+        if !parts[0].is_empty() || !(sha512 || yescrypt) || !parts[2..].iter().all(crypt64) {
+            return Err("invalid salted yescrypt or SHA-512 password hash".into());
         }
         if self
             .root_uuid
@@ -234,7 +282,7 @@ impl GuestAccount {
         )?;
         let layout = parse_probe(&String::from_utf8_lossy(&probe))?;
         let uuid = random_uuid()?;
-        let script = self.script(&layout, &uuid);
+        let script = self.script(&layout, &uuid, &random_hex()?);
         run_private(guestfish(executable, disk, true), script.as_bytes(), false)?;
         File::open(disk)
             .and_then(|file| file.sync_all())
@@ -244,19 +292,34 @@ impl GuestAccount {
     }
     /// The guestfish commands. The hash crosses as a file the guest's
     /// chpasswd reads, never in a guest command line.
-    fn script(&self, layout: &DiskLayout, uuid: &str) -> String {
+    fn script(&self, layout: &DiskLayout, uuid: &str, machine_id: &str) -> String {
         let username = &self.username;
         let root = &layout.root;
         let staging = format!("/root/.provision-{}", storage::unique_id());
+        // The installer asks for a full name; the account name stands in.
+        let full_name: String = username
+            .chars()
+            .enumerate()
+            .map(|(index, c)| {
+                if index == 0 {
+                    c.to_ascii_uppercase()
+                } else {
+                    c
+                }
+            })
+            .collect();
         // fstab names the root by UUID on the console base (the desktops
         // name /dev/vda and keep their line).
         let guest = format!(
             "set -eu\ntrap 'rm -rf {staging}' EXIT\n\
              sed -i -E 's|^UUID=[0-9A-Fa-f-]+([[:space:]]+/[[:space:]])|UUID={uuid}\\1|' /etc/fstab\n\
              if getent passwd 1000 >/dev/null || getent group 1000 >/dev/null || getent passwd '{username}' >/dev/null || getent group '{username}' >/dev/null; then exit 1; fi\n\
-             groupadd -g 1000 '{username}'\n\
-             useradd -u 1000 -g 1000 -m -s /bin/bash '{username}'\n\
-             usermod -a -G sudo '{username}'\n\
+             addgroup --quiet --gid 1000 '{username}'\n\
+             adduser --quiet --uid 1000 --gid 1000 --comment '{full_name},,,' --disabled-password '{username}'\n\
+             chmod 0700 '/home/{username}'\n\
+             for group in {INSTALLER_GROUPS}; do\n\
+             \tif getent group \"$group\" >/dev/null; then adduser --quiet '{username}' \"$group\"; fi\n\
+             done\n\
              chpasswd -e < {staging}/password\n\
              passwd -l root >/dev/null\n"
         );
@@ -283,6 +346,11 @@ impl GuestAccount {
             format!("chmod 0600 {staging}/password"),
             format!("write {staging}/provision.sh {}", fish_quote(&guest)),
             format!("sh {}", fish_quote(&format!("sh {staging}/provision.sh"))),
+            // The installation's machine ID, its own per VM.
+            format!(
+                "write /etc/machine-id {}",
+                fish_quote(&format!("{machine_id}\n"))
+            ),
             "umount-all".to_owned(),
             String::new(),
         ]
@@ -538,8 +606,22 @@ mod tests {
                 < position("mount /dev/sda /")
         );
         assert!(input.contains(&format!("UUID={uuid}\\\\1|' /etc/fstab")));
-        assert!(input.contains("groupadd -g 1000"));
-        assert!(input.contains("useradd -u 1000 -g 1000"));
+        // The installer's adduser: the full name, its groups (where they
+        // exist), a private home; the installation's own machine ID.
+        assert!(input.contains("addgroup --quiet --gid 1000 'analyst'"));
+        assert!(input.contains(
+            "adduser --quiet --uid 1000 --gid 1000 --comment 'Analyst,,,' --disabled-password 'analyst'"
+        ));
+        assert!(input.contains(&format!("for group in {INSTALLER_GROUPS}; do")));
+        assert!(input.contains("chmod 0700 '/home/analyst'"));
+        let machine_id = input
+            .lines()
+            .find_map(|line| line.strip_prefix("write /etc/machine-id \""))
+            .unwrap();
+        assert!(
+            machine_id.len() == 32 + 3 && machine_id.ends_with("\\n\""),
+            "{machine_id}"
+        );
         assert!(!input.contains("NOPASSWD"));
         assert!(!input.contains("sudoers"));
         assert!(!input.to_lowercase().contains("antinomie"));
@@ -575,6 +657,31 @@ mod tests {
         }
         assert_eq!(fs::read(&disk).unwrap(), b"unchanged disk fixture");
         fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn passwords_are_hashed_as_debian_13_hashes_them() {
+        let credentials = GuestCredentials::new("analyst".into(), "x".repeat(20)).unwrap();
+        let account = GuestAccount::from_credentials(credentials.clone()).unwrap();
+        // yescrypt where the host's crypt(3) has it (libxcrypt), else SHA-512.
+        if GuestAccount::yescrypt_with(credentials.clone(), Path::new("perl")).is_ok() {
+            assert!(account.password_hash.starts_with("$y$j9T$"));
+        }
+        assert!(GuestAccount::yescrypt_with(credentials, Path::new("/nonexistent/perl")).is_err());
+        let salt = yescrypt_salt().unwrap();
+        assert_eq!(salt.len(), 22);
+        assert!(matches!(salt.as_bytes()[21], b'.' | b'/' | b'0' | b'1'));
+        let mut record = self::account();
+        record.password_hash = format!("$y$j9T${}${}", "a".repeat(22), "b".repeat(43));
+        record.validate().unwrap();
+        for bad in [
+            format!("$y$j9T${}${}", "a".repeat(22), "b".repeat(42)),
+            format!("$y$jFT${}${}", "a".repeat(22), "b".repeat(43)),
+            format!("$y$j9T${}${}", "a:".repeat(11), "b".repeat(43)),
+            format!("$5$salt${}", "a".repeat(43)),
+        ] {
+            record.password_hash = bad;
+            assert!(record.validate().is_err());
+        }
     }
     #[test]
     fn probe_finds_the_root_on_a_whole_disk_or_a_partition() {
