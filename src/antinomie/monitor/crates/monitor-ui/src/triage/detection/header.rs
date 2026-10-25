@@ -84,6 +84,25 @@ fn state_tone(state_value: &State) -> egui::Color32 {
     }
 }
 
+/// An engine's scan that has not finished.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::triage) enum ScanActivity {
+    /// Waiting for its turn.
+    Queued,
+    /// Being checked now.
+    Running,
+}
+
+impl ScanActivity {
+    /// The status the Summary card shows in place of "Not scanned".
+    pub(in crate::triage) fn label(self) -> &'static str {
+        match self {
+            Self::Queued => "Queued",
+            Self::Running => "Scanning",
+        }
+    }
+}
+
 impl View {
     fn tab_count(&self, index: usize) -> super::super::counts::Count {
         use super::super::counts::Count;
@@ -286,6 +305,18 @@ impl View {
             )
     }
 
+    /// Where the engine's scan stands while it has not finished: waiting its
+    /// turn (queued, or preparing the rule sets) or being checked.
+    pub(in crate::triage) fn scan_activity(&self, index: usize) -> Option<ScanActivity> {
+        if self.busy == Some(index) || self.phase[index] == "running" {
+            Some(ScanActivity::Running)
+        } else if matches!(self.phase[index].as_str(), "queued" | "preparing") {
+            Some(ScanActivity::Queued)
+        } else {
+            None
+        }
+    }
+
     /// Left to right: the scan status (only when no scan runs), the matched
     /// rules, their state and how much was evaluated.
     fn status_parts(&self, index: usize, scanning: bool) -> Vec<StatusPart> {
@@ -481,6 +512,29 @@ mod tests {
                 super::super::super::counts::Count::Unavailable
             );
         }
+    }
+
+    #[test]
+    fn a_queued_or_preparing_scan_is_waiting_and_a_running_one_is_checking() {
+        let mut view = View::default();
+        assert_eq!(view.scan_activity(0), None);
+        for (phase, activity) in [
+            ("queued", Some(ScanActivity::Queued)),
+            ("preparing", Some(ScanActivity::Queued)),
+            ("running", Some(ScanActivity::Running)),
+            ("idle", None),
+            ("failed", None),
+            ("canceled", None),
+        ] {
+            view.phase[1] = phase.into();
+            assert_eq!(view.scan_activity(1), activity, "{phase}");
+        }
+        view.phase[1].clear();
+        view.busy = Some(1);
+        assert_eq!(view.scan_activity(1), Some(ScanActivity::Running));
+        assert_eq!(view.scan_activity(2), None);
+        assert_eq!(ScanActivity::Queued.label(), "Queued");
+        assert_eq!(ScanActivity::Running.label(), "Scanning");
     }
 
     #[test]
