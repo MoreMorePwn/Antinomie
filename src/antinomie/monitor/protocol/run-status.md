@@ -1,6 +1,6 @@
 # Run Status Control Contract
 
-ANT-T0009 producer/consumer contract, revision 1, 2026-10-06.
+Producer/consumer contract, revision 1, 2026-10-06.
 The existing V7 transport and application control header remain unchanged.
 This defines an additive command; old guests can reject it and the host must
 then keep execution status unknown instead of inferring completion from PTY EOF.

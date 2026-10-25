@@ -76,8 +76,7 @@ types explicitly SKIP. These counts cover this safe workload, not full semantic
 coverage. The verifier's 13 regression tests include cross-identity and repeated
 case mismatches, corrupted payloads, duplicate request identities, missing-prefix
 capture, and an unobserved retry. The recorded evidence and remaining native
-schema/async gaps live in the ANT-T0009 verification report in the documentation
-checkout.
+schema/async gaps are listed above.
 
 The guest cleanup check is required before the terminal emits `NATIVE PASS`.
 Irreversible system operations such as reboot, global mount changes and module

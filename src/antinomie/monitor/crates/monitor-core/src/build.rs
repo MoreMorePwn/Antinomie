@@ -1,4 +1,4 @@
-//! Base builds (ANT-T0028): installer-style options, native or QEMU builder.
+//! Base builds: installer-style options, native or QEMU builder.
 //!
 //! The app carries its build kit (see `kit`), so a build needs no repository
 //! checkout. Native mode runs the kit's orchestrator on this host and needs the
@@ -83,7 +83,7 @@ pub struct Desktop {
     pub id: &'static str,
     pub label: &'static str,
     /// Checked to build and boot with its login setup. All installer desktops
-    /// are accepted (ANT-T0028: Xfce built and booted, GNOME built by the
+    /// are accepted (Xfce built and booted, GNOME built by the
     /// user, the rest accepted by the user without a test build); a desktop
     /// added later starts unverified and is offered as untested.
     pub verified: bool,
