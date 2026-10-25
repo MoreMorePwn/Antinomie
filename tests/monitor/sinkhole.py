@@ -1,32 +1,32 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-only
 # Copyright (c) 2026 MikiMiku (MoreMorePwn)
-"""malware-sinkhole — a local listener for the Antinomie malware samples.
+"""sinkhole — a local listener for the Antinomie behavior samples.
 
 The samples default to the QEMU user-network host (10.0.2.2). To see a complete
 application-layer exchange, run this listener and point the sample at it, on
 the guest's loopback or, for a NAT guest, on the host:
 
-    python3 malware-sinkhole.py --http-port 8080 --tls-port 8443 \
+    python3 sinkhole.py --http-port 8080 --tls-port 8443 \
         --udp-port 4444 --dns-port 5353
 
-    ./ant-mal-http-beacon --host 127.0.0.1 --port 8080 --rounds 1
-    ./ant-mal-tls-sni    --host 127.0.0.1 --port 8443 --rounds 1
-    ./ant-mal-udp-beacon --host 127.0.0.1 --port 4444 --rounds 1
-    MAL_DNS_PORT=5353 ./ant-mal-dns-tunnel --resolver 127.0.0.1 --rounds 1
+    ./ant-sample-http-beacon --host 127.0.0.1 --port 8080 --rounds 1
+    ./ant-sample-tls-sni    --host 127.0.0.1 --port 8443 --rounds 1
+    ./ant-sample-udp-beacon --host 127.0.0.1 --port 4444 --rounds 1
+    SAMPLE_DNS_PORT=5353 ./ant-sample-dns-tunnel --resolver 127.0.0.1 --rounds 1
 
 For a NAT guest, run it on the host and reach it at the QEMU user-network
 gateway (10.0.2.2). --nat binds 0.0.0.0 and prints the guest recipe; --pwned
 prints a banner and a PWNED line whenever a payload arrives:
 
-    python3 malware-sinkhole.py --nat --pwned --http-port 8080 ...
+    python3 sinkhole.py --nat --pwned --http-port 8080 ...
     # in the guest:
-    ./ant-mal-recon --host 10.0.2.2 --port 8080 --rounds 1
+    ./ant-sample-recon --host 10.0.2.2 --port 8080 --rounds 1
 
 It logs each request to stdout and to --log (default sinkhole.log) and answers
 so the sample's recv() path runs too. Nothing leaves the machine. Port 53 needs
-root; use 5353 and MAL_DNS_PORT otherwise. The sample's DNS client sends to
-port 53 unless MAL_DNS_PORT overrides it.
+root; use 5353 and SAMPLE_DNS_PORT otherwise. The sample's DNS client sends to
+port 53 unless SAMPLE_DNS_PORT overrides it.
 """
 
 import argparse
@@ -235,7 +235,7 @@ def dns_server(host, port, mode, address):
         sink.bind((host, port))
     except PermissionError:
         log("dns", f"cannot bind {host}:{port} (port 53 needs root); use --dns-port 5353 "
-                   f"and MAL_DNS_PORT=5353")
+                   f"and SAMPLE_DNS_PORT=5353")
         return
     log("dns", f"listening on {host}:{port} mode={mode}")
 
@@ -294,17 +294,17 @@ def main():
         print("Enable NAT (not Isolated) in the VM settings and point the sample at 10.0.2.2.",
               flush=True)
     print(f"\nPoint the samples at {guest_host}:", flush=True)
-    print(f"  ./ant-mal-http-beacon --host {guest_host} --port {options.http_port} --rounds 1",
+    print(f"  ./ant-sample-http-beacon --host {guest_host} --port {options.http_port} --rounds 1",
           flush=True)
-    print(f"  ./ant-mal-recon       --host {guest_host} --port {options.http_port} --rounds 1",
+    print(f"  ./ant-sample-recon       --host {guest_host} --port {options.http_port} --rounds 1",
           flush=True)
-    print(f"  ./ant-mal-stage2      --host {guest_host} --port {options.http_port} --rounds 1",
+    print(f"  ./ant-sample-download      --host {guest_host} --port {options.http_port} --rounds 1",
           flush=True)
-    print(f"  ./ant-mal-tls-sni     --host {guest_host} --port {options.tls_port} --rounds 1",
+    print(f"  ./ant-sample-tls-sni     --host {guest_host} --port {options.tls_port} --rounds 1",
           flush=True)
-    print(f"  ./ant-mal-udp-beacon  --host {guest_host} --port {options.udp_port} --rounds 1",
+    print(f"  ./ant-sample-udp-beacon  --host {guest_host} --port {options.udp_port} --rounds 1",
           flush=True)
-    print(f"  MAL_DNS_PORT={options.dns_port} ./ant-mal-dns-tunnel --resolver {guest_host} "
+    print(f"  SAMPLE_DNS_PORT={options.dns_port} ./ant-sample-dns-tunnel --resolver {guest_host} "
           f"--rounds 1", flush=True)
     print("Ctrl-C to stop.\n", flush=True)
 

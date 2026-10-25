@@ -352,7 +352,7 @@ def plan(tier, ctx):
         return Check(name, group, example(mode, args[0], bundle, runs / name, *args[1:], ex=ex), str(cwd),
                      timeout, needs=needs)
 
-    torture, urfix = fix / "ant-torture", fix / "uring-fixture"
+    workload, urfix = fix / "ant-workload", fix / "uring-fixture"
     checks += [
         *[Check(f"conf-{group}", "full",
                 example("conformance", "trace", base, runs / f"conf-{group}", "--groups", group),
@@ -361,9 +361,9 @@ def plan(tier, ctx):
         vm_check("debug-p3", "full", "debug-check", ["p3", fix / "debug"]),
         vm_check("audit-stop", "full", "audit-check", ["stop", fix / "audit-fixture"]),
         vm_check("audit-core", "full", "audit-check", ["core", fix / "audit-fixture"]),
-        vm_check("uring-status", "full", "uring-check", ["status", torture, urfix], timeout=3000),
-        vm_check("uring-boots", "full", "uring-check", ["boots", torture, urfix], timeout=3000),
-        vm_check("uring-legacy", "full", "uring-check", ["legacy", torture, urfix], bundle=old_base,
+        vm_check("uring-status", "full", "uring-check", ["status", workload, urfix], timeout=3000),
+        vm_check("uring-boots", "full", "uring-check", ["boots", workload, urfix], timeout=3000),
+        vm_check("uring-legacy", "full", "uring-check", ["legacy", workload, urfix], bundle=old_base,
                  timeout=3000, needs=("old_base",)),
         vm_check("tracer-record", "full", "tracer-check", ["record", fix / "tracer-fixture"]),
         vm_check("tracer-legacy", "full", "tracer-check", ["legacy", fix / "tracer-fixture"], bundle=old_base,
@@ -379,7 +379,7 @@ def plan(tier, ctx):
     old, olds = ctx["old"], ctx["old_base"]
     interop = [
         ("io-old-new-stealth", "stealth-check", ["measure", fix / "stealth-probe"], base, old),
-        ("io-old-new-uring", "uring-check", ["status", torture, urfix], base, old),
+        ("io-old-new-uring", "uring-check", ["status", workload, urfix], base, old),
         ("io-old-new-tracer", "tracer-check", ["record", fix / "tracer-fixture"], base, old),
         ("io-old-new-audit", "audit-check", ["core", fix / "audit-fixture"], base, old),
         ("io-old-new-p3", "debug-check", ["p3", fix / "debug"], base, old),
@@ -439,7 +439,7 @@ def build_fixtures(out):
         if not Path(source).exists():
             raise Failure(f"no {name} source on this host ({source})")
         shutil.copy2(os.path.realpath(source), root / name)
-    code, _ = run_logged([str(TESTS / "build-torture.sh"), str(fix), "--static"], env, str(ROOT), log, 1800)
+    code, _ = run_logged([str(TESTS / "build-workload.sh"), str(fix), "--static"], env, str(ROOT), log, 1800)
     if code != 0:
         raise Failure(f"building the stress samples failed, see {log}")
     stamp.write_text("built\n")

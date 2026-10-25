@@ -95,8 +95,7 @@ the guest requires 16 KiB of free result space, not an empty result ring.
 Sixteen maximum-sized results can remain unread; smaller results use less space.
 The control allocation is 1 MiB. Duplicate/older dispatched command IDs return
 `-ESTALE`; cached responses have been removed. New IDs execute even with identical
-arguments. Rebuild guest and host together; older ABIs are rejected. See the
-[benchmark and verification report](../../../Documentation/Antinomie/random/Shared%20Memory%20v7%20-%20Benchmark%20and%20Source%20Walkthrough.md).
+arguments. Rebuild guest and host together; older ABIs are rejected.
 
 `host_timeout_ms` configures the guest's host-liveness watchdog: zero selects
 250 ms; 1..60000 ms are supported. `ant_set_host_timeout()` changes it at runtime;

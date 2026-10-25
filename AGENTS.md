@@ -1,25 +1,14 @@
 # Antinomie engineering conventions
 
-The enduring project guide is the documentation checkout's `Agents/README.md`.
-Use `$ANTINOMIE_GUIDE_DIR/README.md` if configured, or locate the existing
-documentation checkout; do not duplicate policy or auto-clone it. Never record
-machine-specific paths, user names or agent tool directories in this repository.
-Read the index and applicable workflow/delegation/engineering/skills chapters
-before writing. Report missing guidance before risky changes. Higher-priority
-instructions and explicit user scope prevail over the project guide.
+Contributor guide for people and coding tools. Read docs/implementation.md and
+CONTRIBUTING.md before changing code. The implementation document records the
+accepted scope and contracts; do not redesign a neighboring module on your own,
+and do not implement a new version, a redesign or an unrelated fix without the
+maintainer's approval. Never record machine-specific paths, user names or tool
+directories in this repository. Explicit maintainer instructions take priority
+over this guide.
 
-Selected work is tracked in the docs `Kanban.md` and `Agents/Tasks/` with scope,
-owned paths, baseline/contracts, acceptance checks, budget and checkpoints.
-Use bounded subagents when useful and permitted; dependent coding needs an
-accepted shared contract, disjoint ownership and coordinator review/integration.
-Do not implement a new version/redesign or unrelated fix without user approval;
-record proposed changes in Backlog. Reread guidance explicitly after updates.
-
-Read docs/implementation.md and CONTRIBUTING.md before changing code.
-The implementation brief records accepted scope; ask the coordinator about
-contract changes instead of independently redesigning a neighboring module.
-
-## Ownership and maintainability
+## Conventions
 
 - Every new application release starts on a fresh `release-X.Y.Z` branch before
   versioned work begins; use `scripts/new-release.sh X.Y.Z` from the current
@@ -50,30 +39,14 @@ contract changes instead of independently redesigning a neighboring module.
 - Partial failures must release owned files/tasks/PTYs/threads and produce
   observable status. No silently ignored spawn/read/write/fsync errors.
 
-## Skills
-
-Skills are named here; agents find them in their own installed skills.
-
-- Host Rust and UI workers: the `rust-skills` skill; read relevant rules only
-  (API, ownership, errors, unsafe, concurrency, tests).
-- UI worker also: the `frontend-design` skill. Apply native operational-tool
-  design; web hero guidance is irrelevant to this application.
-- Explicit threat-model requests: the `security-threat-model` skill.
-  Do not invoke for generic code review/design; keep models grounded in actual
-  implemented boundaries. Ordinary boundary review still follows project rules.
-- Kernel worker: the `antinomie-kernel` skill plus pinned
-  kernel headers/source and CONTRIBUTING.md; Rust rules do not replace Linux
-  locking/lifecycle APIs.
-
 ## Verification and handoff
 
 - Run formatting, focused build/checks and meaningful behavioral tests.
 - Negative cases: malformed/truncated records, invalid copy pointers, command
   rejection, full rings, full recordings, and shutdown races where applicable.
-- Return changed files, exact checks/results, remaining limitations. Summaries
-  are short; logs/results live in work/. Never label unrun tests as passing.
-- Workers edit only assigned files; coordinator commits outer repository and
-  documentation. No nested subagents. Preserve unrelated user changes.
+- Report the changed files, the exact checks and their results, and remaining
+  limitations. Keep summaries short. Never label unrun tests as passing.
+- Change only the files your task needs and preserve unrelated changes.
 - Full kernel source trees and VM images stay outside tracked source files.
 - User-created persistent VM data never lives in disposable work/ build trees.
 - Follow docs/project-layout.md: `work/` and Cargo `target/` are disposable;
@@ -82,8 +55,7 @@ Skills are named here; agents find them in their own installed skills.
 
 ## Licensing and provenance
 
-Read LICENSING.md, THIRD-PARTY-NOTICES.md and the guide's
-`Licensing and Provenance.md` before importing code/assets or preparing a release.
+Read LICENSING.md and THIRD-PARTY-NOTICES.md before importing code/assets or preparing a release.
 Original eligible host/tooling code defaults to GPL-3.0-only from 0.7.0 with the project identity
 `MikiMiku (MoreMorePwn)`; preserve kernel and upstream/file-specific terms.
 Do not commit unnecessary third-party branding, reference mockups or research
@@ -95,4 +67,4 @@ provenance are mandatory exceptions; never remove or disguise them.
 Public arguments, return values and declaration purposes use tables. Walkthrough
 excerpts include source filename and actual line numbers with explanation below.
 Mermaid blocks stay unnumbered. Document measured benchmark environment and
-limitations. Coordinator commits/pushes docs repo after validation.
+limitations.

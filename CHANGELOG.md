@@ -40,6 +40,12 @@ it runs.
   now serves with a header and no entries, is kept as a copy of no records and
   shown as *Retired upstream* instead of failing, in the IOC datasets and the
   IDS packs. The free-space check no longer asks gigabytes for a 300 MB list.
+- **Test sample names.** The stress samples are now the workload samples
+  (`ant-workload`, `build-workload.sh`, `ANTINOMIE_WORKLOAD_*`), their modules
+  have plain names (`syscall-load`, `terminal-load`, `network-load`,
+  `decoder-variants`, `core-on-crash`) and the behavior samples replace the
+  malware-named ones (`ant-sample-*`, `build-behavior-samples.sh`). Older
+  entries keep the names they were written with.
 
 ## 0.7.0 — Unreleased
 
