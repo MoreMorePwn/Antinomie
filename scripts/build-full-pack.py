@@ -12,7 +12,8 @@ hash-checked wheels that install-full-pack.py turns into that environment.
 
     usage: scripts/build-full-pack.py --output DIR [--version X.Y.Z] [options]
 
-Nothing is uploaded or published. See docs/full-pack.md.
+The pack is built by the person who uses it; Antinomie does not publish one.
+Nothing is uploaded. See docs/full-pack.md.
 """
 import argparse
 import hashlib
@@ -34,7 +35,7 @@ REGISTRY = REPO / "src/antinomie/monitor/crates/monitor-core/src/analysis_tools.
 CARGO = REPO / "src/antinomie/monitor/Cargo.toml"
 HERE = Path(__file__).resolve().parent / "full-pack"
 
-# GitHub refuses release assets of 2 GiB or more; keep a margin.
+# Keep the archive under 2 GiB so it fits common file-size limits.
 DEFAULT_MAX_ARCHIVE = 2_000_000_000
 DEFAULT_MAX_UNPACKED = 6 * 1024**3
 DEFAULT_SIGMA_PYTHONS = "3.11,3.12,3.13"
@@ -474,8 +475,10 @@ def git(*args):
 
 def notices(version, rows, excluded, registry_commit):
     out = [f"# Antinomie {version} full pack: third-party notices\n",
-           "This pack redistributes unmodified, SHA-256-pinned releases of the tools "
-           "below, laid out the way Antinomie installs them. Each tool keeps its own "
+           "This pack holds unmodified, SHA-256-pinned releases of the tools below, "
+           "downloaded from their upstream hosts by the person who built it and laid "
+           "out the way Antinomie installs them. Whoever passes the pack on to others "
+           "redistributes these tools and must meet their licences. Each tool keeps its own "
            "licence; the licence files that arrive with a tool are inside its folder "
            "under `tools/<id>/`, and any licence text the upstream download does not "
            "carry is in `licenses/<id>/`. The application's own notices are in "
@@ -502,11 +505,11 @@ def notices(version, rows, excluded, registry_commit):
     out.append("## Source code for copyleft components\n")
     out.append("Components licensed under the GPL, LGPL or similar (GDB inside the pwndbg "
                "portable build, UPX, the Temurin JDK, Tor, Qt and ICU in Detect It Easy, "
-               "libfuse, pySigma and its backend, and others) are redistributed unmodified. "
+               "libfuse, pySigma and its backend, and others) are included unmodified. "
                "Their corresponding source is available from the upstream locations in the "
-               "table above. The maintainers will also provide it on request for three years "
-               "from the date of this pack: open an issue at "
-               "https://github.com/MoreMorePwn/Antinomie/issues.\n")
+               "table above. Whoever passes this pack on must make that source available "
+               "as those licences require; the Antinomie project does not distribute "
+               "this pack and makes no source offer for it.\n")
     return "\n".join(out)
 
 
@@ -702,7 +705,7 @@ def main(argv=None):
               f"{unpacked:,} unpacked; budget {args.max_archive_bytes:,}")
         if size > args.max_archive_bytes:
             raise PackError(f"archive {size:,} exceeds the size budget {args.max_archive_bytes:,} "
-                            "(GitHub release assets must stay under 2 GiB)")
+                            "(the archive must stay under 2 GiB)")
         print((out / "SHA256SUMS-full-pack").read_text().strip())
     finally:
         shutil.rmtree(work, ignore_errors=True)

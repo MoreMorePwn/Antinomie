@@ -4,9 +4,13 @@
 
 The application archive does not contain the optional analysis tools: the app
 downloads each on request (**Tools > Analysis tools**, Settings > Network
-routes, the Memory tab). The **full pack** is a second release asset that carries
-all of them, already downloaded and checked, for computers that should not
-download anything on first use, or that are offline.
+routes, the Memory tab). For computers that should not download anything on
+first use, or that are offline, build a **full pack**: one archive with all of
+them, already downloaded and checked. Build it on a connected machine, copy it
+over and install it there.
+
+Antinomie does not publish a full pack. Each tool is downloaded from its own
+upstream host by the person who builds the pack, exactly as the app would.
 
 It holds the tools Antinomie manages: capa, FLOSS, UPX, Detect It Easy, Ghidra
 with its Temurin JDK, Volatility 3, MemNixFS, Sigma (pySigma), Magika, GEF,
@@ -17,9 +21,30 @@ packs, IOC datasets or the system packages (QEMU, TShark, bubblewrap): those are
 downloaded or installed separately. A tool already installed on the system still
 takes precedence over the pack's copy.
 
+## Build it
+
+On a connected machine with a checkout of this repository:
+
+```sh
+python3 scripts/build-full-pack.py --output dist           # needs curl, tar, xz, pip
+python3 scripts/test-full-pack.py                          # offline self-test
+```
+
+The builder fetches each pinned URL (HTTPS only) into `dist/.full-pack-cache`,
+checks size and SHA-256, unpacks with the app's rules (stripped path components,
+no `..`, safe symlinks, file modes), and fails if a tool lacks its entry file or
+any licence file. `--no-network` uses the cache only. It writes
+`antinomie-X.Y.Z-full-pack-linux-x86_64.tar.xz`, `antinomie-X.Y.Z-full-pack.manifest.json`
+(every tool, version, URL, hash, tree hash and licence file, plus the archive's
+size and hash) and `SHA256SUMS-full-pack`. Nothing is uploaded.
+
+A new managed tool needs an entry in `scripts/full-pack/policy.json` (its
+redistribution notes); the builder refuses to run without it.
+
 ## Install
 
-Install the application first (see the [overview](../README.md#quick-start)), then:
+Copy the three files to the offline computer. Install the application first
+(see the [overview](../README.md#quick-start)), then:
 
 ```sh
 sha256sum --check SHA256SUMS-full-pack
@@ -51,29 +76,6 @@ antinomie-X.Y.Z-full-pack/
   install-full-pack.sh  install-full-pack.py
 ```
 
-## Build it
-
-```sh
-python3 scripts/build-full-pack.py --output dist           # needs curl, tar, xz, pip
-scripts/build-release.sh --full-pack dist                  # the application archive too
-python3 scripts/test-full-pack.py                          # offline self-test
-```
-
-The builder fetches each pinned URL (HTTPS only) into `dist/.full-pack-cache`,
-checks size and SHA-256, unpacks with the app's rules (stripped path components,
-no `..`, safe symlinks, file modes), and fails if a tool lacks its entry file or
-any licence file. `--no-network` uses the cache only. It writes
-`antinomie-X.Y.Z-full-pack-linux-x86_64.tar.xz`, `antinomie-X.Y.Z-full-pack.manifest.json`
-(every tool, version, URL, hash, tree hash and licence file, plus the archive's
-size and hash) and `SHA256SUMS-full-pack`. Nothing is uploaded; the release
-workflow attaches the files after the application release exists, so an
-unavailable tool host never blocks the application itself. That step is off
-until the repository variable `ANTINOMIE_FULL_PACK` is `true`, because
-publishing the pack redistributes every tool under its own licence.
-
-A new managed tool needs an entry in `scripts/full-pack/policy.json` (its
-redistribution decision); the builder refuses to run without it.
-
 ## Size
 
 The pinned downloads add up to 1,079,424,617 octets (about 1.0 GiB). Unpacked, the
@@ -81,16 +83,19 @@ tools take roughly 2.5 to 3 GiB (Ghidra and its JDK are the bulk; the pwndbg
 build alone is about 665 MiB). The compressed archive is expected to be about
 1.0 to 1.3 GiB; these are estimates, and the builder prints the real numbers.
 It enforces a budget: the archive must stay under 2,000,000,000 octets
-(`--max-archive-bytes`; GitHub refuses release assets of 2 GiB), and the unpacked
+(`--max-archive-bytes`), and the unpacked
 tools under 6 GiB (`--max-unpacked-bytes`). Building needs about three times the
 download size in free disk space.
 
 ## Licences
 
-The pack redistributes unmodified upstream releases. Each tool's licence files
-stay in its folder; `THIRD-PARTY-NOTICES-FULL-PACK.md` lists versions, hashes and
-the source locations, with a written offer for the corresponding source of
-copyleft components. This table is a summary, not legal advice.
+The pack holds unmodified upstream releases. Each tool's licence files stay in
+its folder; `THIRD-PARTY-NOTICES-FULL-PACK.md` lists versions, hashes and the
+source locations. Using a pack you built on your own computers is the same as
+installing each tool from the app. **Passing it on to others** (a colleague, a
+team share, a download) redistributes every tool in it, and you then take on the
+obligations in the last column, such as making the source of GDB (in pwndbg)
+available. This table is a summary, not legal advice.
 
 | Tool | Licence | In the pack | What it requires |
 |---|---|---|---|
@@ -99,18 +104,17 @@ copyleft components. This table is a summary, not legal advice.
 | Detect It Easy | MIT; Qt LGPL-3.0; ICU Unicode | yes | LGPL libraries stay replaceable shared libraries; ICU copyright file kept. |
 | Ghidra | Apache-2.0 | yes | Licence, NOTICE and licenses folder kept. |
 | Temurin 21 JDK (with Ghidra) | GPL-2.0 with Classpath Exception | yes | Legal notices kept; source available (offer). |
-| Volatility 3 and its wheels | Volatility Software License 1.0; MIT; BSD | yes, flagged | The licence text must travel with it (supplied). Its copyleft covers "Additions", including wrappers that run it and parse its results: maintainer review recommended before publishing. |
+| Volatility 3 and its wheels | Volatility Software License 1.0; MIT; BSD | yes, flagged | The licence text must travel with it (supplied). Its copyleft covers "Additions", including wrappers that run it and parse its results: read it before passing a pack on. |
 | MemNixFS (with libfmt, libfuse3) | Apache-2.0; MIT; LGPL-2.1+ | yes | libfuse3 stays a shared library; Debian copyright files kept. |
 | Sigma (pySigma and wheels) | LGPL-3.0; LGPL-2.1; others | yes | Unmodified wheels with their dist-info licences. |
 | Magika | Apache-2.0 | yes | The release asset has only the executable: the licence text is supplied. |
 | GEF (bata24) | MIT | yes | Licence text supplied. |
-| pwndbg portable | MIT; bundles GDB 17.2 (GPL-3.0+), Python (PSF) and libraries | yes, flagged | The pack becomes a distribution of GDB: GPL-3.0 source availability applies (offer); the maintainer must be ready to honour it. |
+| pwndbg portable | MIT; bundles GDB 17.2 (GPL-3.0+), Python (PSF) and libraries | yes, flagged | A pack passed on is a distribution of GDB: GPL-3.0 source availability applies to whoever passes it on. |
 | wireproxy | ISC; wireguard-go MIT and other Go modules | yes | Licence text supplied; embedded Go module notices are not listed upstream. |
 | Tor Expert Bundle | BSD-3-Clause (also marked GPL-3.0+); libevent BSD; OpenSSL Apache-2.0; transports | yes | The bundle's docs/ licence folder is kept; redistribute unmodified. |
 
 No managed tool's licence forbids redistribution, so none is left out. To leave
 one out, set `"redistribute": false` in `scripts/full-pack/policy.json`; the
 notices then list it as left out and the app downloads it on request as usual.
-[THIRD-PARTY-NOTICES.md](../THIRD-PARTY-NOTICES.md) says the application does not
-redistribute these tools; that describes the application archive, and the same
-file names the full pack as the exception.
+[THIRD-PARTY-NOTICES.md](../THIRD-PARTY-NOTICES.md) covers the application
+archive, which carries none of these tools.
