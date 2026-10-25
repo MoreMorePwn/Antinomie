@@ -95,7 +95,10 @@ it runs.
   Regex matches are their own analysis choice beside Strings, and the regex
   add row is one line. The 0.7.0 Network tabs and the layout switch are gone.
   More lists say when they are empty (cores first), more tables span their
-  pane, and the terminal's focus edge shows on all four sides.
+  pane, and the terminal's focus edge shows on all four sides. Settings >
+  Network routes describes each route in one line (the full text is the
+  picker's tooltip), and an empty static analysis Details pane says
+  *Nothing selected.*
 - **abuse.ch downloads.** A dataset that needs the Auth-Key is refused before
   any request when none is set, with a message that names auth.abuse.ch; HTTP
   404, 429 and server errors are explained. The SSLBL IP list, which abuse.ch

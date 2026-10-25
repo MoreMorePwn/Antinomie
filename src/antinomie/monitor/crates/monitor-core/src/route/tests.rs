@@ -100,6 +100,9 @@ fn route_kinds_have_words_for_the_ui() {
     for kind in RouteKind::ALL {
         assert!(!kind.label().is_empty() && !kind.short().is_empty());
         assert!(kind.explain().len() > 20);
+        // The settings form's hint is one short line; the rest is the tooltip.
+        assert!(kind.summary().len() <= 60, "{}", kind.summary());
+        assert!(kind.summary().len() < kind.explain().len());
     }
     assert_eq!(RouteKind::default(), RouteKind::Drop);
     let _ = RouteStats::default();
