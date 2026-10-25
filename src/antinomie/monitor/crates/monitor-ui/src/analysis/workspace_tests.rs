@@ -2355,7 +2355,11 @@ fn the_unpacking_tab_picks_a_layer_from_a_drop_down_and_opens_its_analysis() {
 fn strings_and_regex_share_a_tab_with_the_matches_on_the_right() {
     let ctx = egui::Context::default();
     crate::theme::install(&ctx);
-    let report = with_listing(fixture(), AnalysisKind::Strings, 3);
+    let mut report = with_listing(fixture(), AnalysisKind::Strings, 3);
+    // The analysis asked for the regex matches as its own choice.
+    let mut regex = AnalysisSection::new(AnalysisKind::Regex);
+    regex.state = AnalysisSectionState::Complete;
+    report.sections.push(regex);
     let page = listing_page(&report, AnalysisKind::Strings);
     let mut state = WorkspaceState::default();
     state.bind(&report.id);
@@ -2432,6 +2436,82 @@ fn strings_and_regex_share_a_tab_with_the_matches_on_the_right() {
         pages,
     );
     assert!(at(&floss, "Regex matches").is_none());
+}
+
+#[test]
+fn regex_matches_are_their_own_check_and_a_report_without_it_offers_to_run_it() {
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    // Strings alone: the tab opens, the pane says the check is not part of it.
+    let report = with_listing(fixture(), AnalysisKind::Strings, 3);
+    assert!(!report
+        .sections
+        .iter()
+        .any(|section| section.kind == AnalysisKind::Regex));
+    let page = listing_page(&report, AnalysisKind::Strings);
+    let mut state = WorkspaceState::default();
+    state.bind(&report.id);
+    state.tab = Tab::Strings;
+    let pages = (None, Some(&page));
+    let size = egui::vec2(1400.0, 800.0);
+    let mut output = None;
+    for _ in 0..4 {
+        output = Some(frame(&ctx, &report, &mut state, None, size, Vec::new(), pages).0);
+    }
+    let output = output.unwrap();
+    let shown = texts(&output);
+    assert!(
+        shown
+            .iter()
+            .any(|(text, _)| text == "Regex matches are not part of this analysis."),
+        "{shown:?}"
+    );
+    assert!(state.take_regex_request().is_none(), "no scan is asked for");
+    // Its Run button adds the check without starting over.
+    let run = shown
+        .iter()
+        .find(|(text, _)| text == "Run")
+        .unwrap_or_else(|| panic!("a Run button in {shown:?}"))
+        .1;
+    let clicked = press(
+        &ctx,
+        &report,
+        &mut state,
+        None,
+        size,
+        (egui::PointerButton::Primary, run.center()),
+        pages,
+    );
+    assert_eq!(
+        clicked.action,
+        Some(ReportAction::RunCheck {
+            report_id: report.id.clone(),
+            kind: AnalysisKind::Regex,
+        })
+    );
+    // The selection treats the two as separate choices, Regex after Strings,
+    // and refuses Regex with nothing to read.
+    use antinomie_monitor_core::AnalysisSelection;
+    let kinds = AnalysisKind::TRIAGE;
+    let strings = kinds.iter().position(|kind| *kind == AnalysisKind::Strings);
+    let regex = kinds.iter().position(|kind| *kind == AnalysisKind::Regex);
+    assert!(strings.is_some() && regex == strings.map(|at| at + 1));
+    assert_eq!(AnalysisKind::Regex.label(), "Regex matches");
+    let alone = AnalysisSelection {
+        enabled: true,
+        checks: vec![AnalysisKind::Regex],
+    };
+    assert!(alone.validate().unwrap_err().contains("Strings or FLOSS"));
+    let with_strings = AnalysisSelection {
+        enabled: true,
+        checks: vec![AnalysisKind::Strings, AnalysisKind::Regex],
+    };
+    assert!(with_strings.validate().is_ok());
+    let strings_only = AnalysisSelection {
+        enabled: true,
+        checks: vec![AnalysisKind::Strings],
+    };
+    assert!(strings_only.validate().is_ok());
 }
 
 #[test]

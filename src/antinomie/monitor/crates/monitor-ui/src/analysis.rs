@@ -531,6 +531,7 @@ pub(crate) fn section_title(kind: AnalysisKind) -> &'static str {
         AnalysisKind::Metadata => "Metadata",
         AnalysisKind::Structures => "Structures",
         AnalysisKind::Strings => "Strings",
+        AnalysisKind::Regex => "Regex matches",
         AnalysisKind::Entropy => "Entropy",
         AnalysisKind::Hardening => "Hardening",
         AnalysisKind::Rules => "Rules",

@@ -7,6 +7,9 @@ pub enum AnalysisKind {
     Metadata,
     Structures,
     Strings,
+    /// The built-in and custom regex patterns, matched over the strings.
+    /// Its own choice, though its matches are listed in the Strings & regex tab.
+    Regex,
     Entropy,
     Hardening,
     Rules,
@@ -27,6 +30,7 @@ impl AnalysisKind {
         Self::Metadata,
         Self::Structures,
         Self::Strings,
+        Self::Regex,
         Self::Entropy,
         Self::Hardening,
         Self::Rules,
@@ -42,6 +46,7 @@ impl AnalysisKind {
             Self::Metadata => "File metadata and hashes",
             Self::Structures => "Headers, sections, imports and exports",
             Self::Strings => "Strings",
+            Self::Regex => "Regex matches",
             Self::Entropy => "Entropy",
             Self::Hardening => "Hardening indicators",
             Self::Rules => "Rule matches",
@@ -84,6 +89,14 @@ impl AnalysisSelection {
         }
         if self.enabled && self.checks.is_empty() {
             return Err("select at least one static analysis".into());
+        }
+        if self.checks.contains(&AnalysisKind::Regex)
+            && !self
+                .checks
+                .iter()
+                .any(|kind| matches!(kind, AnalysisKind::Strings | AnalysisKind::Floss))
+        {
+            return Err("Regex matches need Strings or FLOSS strings".into());
         }
         Ok(())
     }
