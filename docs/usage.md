@@ -2,7 +2,7 @@
 
 [← Back to the overview](../README.md)
 
-This guide follows the 0.7.0 source branch. Available controls depend on the
+This guide follows 0.7.1. Available controls depend on the
 application and base versions; existing VMs keep their pinned base.
 
 ## Dependencies and analysis tools

@@ -4,7 +4,12 @@ All notable changes to Antinomie. Versions follow semantic versioning; see
 [CONTRIBUTING.md](CONTRIBUTING.md#12-versioning). Each version says which bases
 it runs.
 
-## 0.7.1 — Unreleased
+## 0.7.1 — 2026-10-26
+
+The first release since 0.6.2: 0.7.0 was not published separately, so this
+section lists both.
+
+### Since the 0.7.0 work
 
 - **Debian Minimal base.** **Build base…** offers a third base beside BusyBox
   and the Debian desktops: console-only Debian 13 (trixie) as the Debian
@@ -126,7 +131,7 @@ it runs.
   source id changes, and the app builds its kernel once more. The Quilt view is now regenerated whole from
   the canonical series (`scripts/sync-quilt-view.py`), with DEP-3 descriptions.
 
-## 0.7.0 — Unreleased
+### 0.7.0 work (not released separately)
 
 - **Workspace title bars.** Main and detached workspace windows use matching
   custom title bars with vector minimize, maximize/restore and close controls,
