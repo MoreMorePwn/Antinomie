@@ -410,6 +410,12 @@ fn partitions_follow_the_installer_and_the_vm() {
     assert!(position("umount-all\n") < position("sfdisk --disk-id /dev/sda 0x"));
     assert!(input.contains("# swap was on /dev/sda5 during installation"));
     assert!(input.contains("update-grub"));
+    // GRUB's boot code goes into this disk's MBR (its core.img names this
+    // disk's root UUID) before grub.cfg is written, as grub-installer does.
+    assert!(position("grub-install --force /dev/sda") < position("update-grub"));
+    assert!(input.contains("grub-pc grub-pc/install_devices multiselect /dev/sda"));
+    // The whole provisioning still fits the tool's standard input.
+    assert!(input.len() < 4096, "{}", input.len());
     // The initramfs helper reaches the appliance as a file, runs after the
     // account's files and before the disk is unmounted, names the swap
     // partition's UUID and the installer's root partition, and is gone

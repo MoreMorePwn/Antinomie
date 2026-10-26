@@ -26,6 +26,17 @@ const PROVISION_TIMEOUT: Duration = Duration::from_secs(240);
 const LEGACY_INTERFACE: &str = "enp0s25";
 /// What the guest prints before the account's password hash.
 const HASH_MARKER: &str = "hash:";
+/// GRUB on a partitioned (BIOS) disk as the installer's grub-installer sets it
+/// up: `grub-install --force` writes the boot code into the MBR and the gap
+/// before the first partition, with /boot/grub/i386-pc beside it (core.img
+/// finds this disk's root by its UUID, so every VM gets its own); the
+/// device goes into debconf for grub-pc's upgrades (the plain name: the
+/// appliance's by-id links are its own); update-grub writes grub.cfg.
+const BOOT_LOADER: &str = "if [ -d /usr/lib/grub/i386-pc ]; then\n\
+     \tgrub-install --force /dev/sda >/dev/null 2>&1\n\
+     \tprintf 'grub-pc grub-pc/install_devices multiselect /dev/sda\\ngrub-pc grub-pc/install_devices_empty boolean false\\ngrub-pc grub-pc/install_devices_empty seen false\\n' | debconf-set-selections\n\
+     fi\n\
+     if command -v update-grub >/dev/null; then update-grub >/dev/null 2>&1 || true; fi\n";
 /// Puts the resume device into the disk's initramfs images as
 /// update-initramfs does; it runs in the guest with the guest's python3 and
 /// zstd (both in the Debian Minimal base).
@@ -651,9 +662,7 @@ impl GuestAccount {
             } else {
                 String::new()
             };
-            format!(
-                "{guest}{swap_lines}if command -v update-grub >/dev/null; then update-grub >/dev/null 2>&1 || true; fi\n"
-            )
+            format!("{guest}{swap_lines}{BOOT_LOADER}")
         } else {
             guest
         };

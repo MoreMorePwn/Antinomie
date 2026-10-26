@@ -6,6 +6,10 @@ it runs.
 
 ## 0.8.0 — unreleased
 
+- **Debian Minimal disks carry GRUB's boot code.** Provisioning runs
+  `grub-install` as the installer does, so the VM's MBR and `/boot/grub` hold
+  GRUB (and debconf its install device) instead of an empty boot sector.
+
 - **Debian Minimal's kernel banner is Debian's.** `/proc/version` now matches
   the banner of Debian's own `/boot/vmlinuz` exactly, down to the linker
   version (a Kali or Debian testing host linked it with binutils 2.47, Debian

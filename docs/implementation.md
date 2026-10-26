@@ -3240,8 +3240,19 @@ in an extended `sda2` starting two sectors before it, about the VM's RAM (256
 MiB at least, a quarter of the disk at most), the last MiB free; the swap gets
 a UUID, fstab its line, the MBR a
 disk identifier of the VM's own (set last, after unmounting: sfdisk makes
-the kernel read the table again and the partition nodes vanish for a moment), and `update-grub` writes `grub.cfg` for the
-VM's UUIDs. The resume device is the installer's answer (base-installer writes
+the kernel read the table again and the partition nodes vanish for a moment), and GRUB is set up as the
+installer's grub-installer does it (`BOOT_LOADER`): `grub-install --force
+/dev/sda` writes the boot code into the MBR and the gap before the root
+partition and `/boot/grub/i386-pc` (core.img finds the root by this VM's UUID,
+so each VM runs it), debconf gets `grub-pc/install_devices` (`/dev/sda`: the
+appliance's by-id links name its own disk, not the VM's) with
+`install_devices_empty false`, and `update-grub` writes `grub.cfg` for the
+VM's UUIDs. A sample reading the disk's first sectors finds GRUB, as on an
+installed PC. QEMU still boots the Antinomie kernel directly. UEFI profiles
+get the same BIOS-layout disk (MBR, `grub-pc`, no ESP or `debian` boot entry);
+a UEFI layout (GPT, an ESP of about 1 GB before the root as trixie's
+partitioner makes it, shim and grub-efi) needs a second disk layout and is not
+built yet. The resume device is the installer's answer (base-installer writes
 `/etc/initramfs-tools/conf.d/resume` just before it installs the kernel):
 `RESUME=UUID=<swap uuid>`, or `RESUME=none` when the disk has no room for a
 swap partition. Because the installer writes it first, update-initramfs copies
