@@ -62,6 +62,18 @@ it runs.
   live HIGH findings** is now off by default. The setting is stored under a new
   key because 0.7 saved its default for everyone: a machine that has it on
   turns it on again once.
+### Guest
+
+- **Architecture-neutral guest patches.** The shared patches no longer assume
+  x86-64: system calls are keyed by their `__NR_` names, registers are read
+  through the kernel's portable helpers, and what only x86 has (its system call
+  table, its decoders, the debug registers, the system call entry hook and the
+  boot-time reservation of the bootstrap page) is in per-architecture files and
+  one x86-64 hook patch (the series is fifteen patches). No change on x86-64.
+  The host reads the guest's architecture from the debug engine's capability
+  reply when it identifies the guest and decodes x86-64 guests only. No wire
+  change; a new base is needed for the new series identity, and older bases
+  keep working.
 
 ## 0.7.1 — 2026-10-26
 

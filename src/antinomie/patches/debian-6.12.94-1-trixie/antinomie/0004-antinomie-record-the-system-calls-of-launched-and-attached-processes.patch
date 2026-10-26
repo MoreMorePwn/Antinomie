@@ -31,15 +31,21 @@ Description: antinomie: record the system calls of launched and attached process
  boot and the 64 most recent stay addressable.
  .
  The calls the recorder traces, their argument counts and the names of
- undecoded pointer arguments come from the system call table. The
+ undecoded pointer arguments come from the architecture's system call
+ table (<asm/antinomie_syscalls.h>), and which ABI a call belongs to and
+ how layouts are named from <asm/antinomie.h>; the recorder names
+ system calls by their __NR_ constants, never by number. The
  common calls have built-in decoders (read, write, readv, writev, open,
  openat, stat, fstat, unlink, rename, execve, execveat, connect, bind,
  accept, sendto, recvfrom, clone and terminal ioctls); the next patch
  adds the decoders for the other families.
  .
+ The architecture calls ant_monitor_enter() and ant_monitor_exit() at
+ system call entry and exit, the only places that see every call with
+ its registers (the x86-64 hooks are in the last patch); the exit reads
+ the result with syscall_get_return_value().
+ .
  Hooked kernel files:
- - arch/x86/entry/common.c calls the recorder at system call entry and
-   exit, the only places that see every native call with its registers.
  - kernel/fork.c clears the task fields in dup_task_struct(), tags a
    traced parent's child under tasklist_lock before it can run (so a
    capture session cannot miss a thread), publishes the fork after it,
@@ -61,48 +67,6 @@ Forwarded: no
 Last-Update: 2026-10-26
 
 ---
-diff --git a/arch/x86/entry/common.c b/arch/x86/entry/common.c
-index 040ff04..0c6bdd0 100644
---- a/arch/x86/entry/common.c
-+++ b/arch/x86/entry/common.c
-@@ -20,6 +20,7 @@
- #include <linux/syscalls.h>
- #include <linux/uaccess.h>
- #include <linux/init.h>
-+#include <linux/antinomie_monitor.h>
- 
- #include <asm/apic.h>
- #include <asm/desc.h>
-@@ -74,11 +75,13 @@ __visible noinstr bool do_syscall_64(struct pt_regs *regs, int nr)
- 	nr = syscall_enter_from_user_mode(regs, nr);
- 
- 	instrumentation_begin();
-+	ant_monitor_enter(regs, nr);
- 
- 	if (!do_syscall_x64(regs, nr) && !do_syscall_x32(regs, nr) && nr != -1) {
- 		/* Invalid system call, but still a system call. */
- 		regs->ax = __x64_sys_ni_syscall(regs);
- 	}
-+	ant_monitor_exit(regs);
- 
- 	instrumentation_end();
- 	syscall_exit_to_user_mode(regs);
-@@ -155,12 +158,15 @@ static __always_inline void do_syscall_32_irqs_on(struct pt_regs *regs, int nr)
- 	 */
- 	unsigned int unr = nr;
- 
-+	ant_monitor_enter(regs, nr);
-+
- 	if (likely(unr < IA32_NR_syscalls)) {
- 		unr = array_index_nospec(unr, IA32_NR_syscalls);
- 		regs->ax = ia32_sys_call(regs, unr);
- 	} else if (nr != -1) {
- 		regs->ax = __ia32_sys_ni_syscall(regs);
- 	}
-+	ant_monitor_exit(regs);
- }
- 
- #ifdef CONFIG_IA32_EMULATION
 diff --git a/fs/exec.c b/fs/exec.c
 index 030240d..718cdfa 100644
 --- a/fs/exec.c
@@ -126,10 +90,10 @@ index 030240d..718cdfa 100644
  	return 0;
 diff --git a/include/linux/antinomie_monitor.h b/include/linux/antinomie_monitor.h
 new file mode 100644
-index 0000000..fe40e30
+index 0000000..414b683
 --- /dev/null
 +++ b/include/linux/antinomie_monitor.h
-@@ -0,0 +1,34 @@
+@@ -0,0 +1,48 @@
 +/* SPDX-License-Identifier: GPL-2.0-only */
 +#ifndef _LINUX_ANTINOMIE_MONITOR_H
 +#define _LINUX_ANTINOMIE_MONITOR_H
@@ -138,6 +102,20 @@ index 0000000..fe40e30
 +struct pt_regs;
 +struct ant_task;
 +struct linux_binprm;
++/* The abi field of a record: a system call of an ABI the recorder has no table
++ * for, or of the native one (<asm/antinomie_syscalls.h>).
++ */
++#define ANT_ABI_NONE 0
++#define ANT_ABI_NATIVE 1
++#ifdef CONFIG_ANTINOMIE
++#include <asm/antinomie.h>
++/* Layout name of a captured object of the native ABI, and of its compat ABI. */
++#define ANT_LAYOUT(type) "linux-6.12.94/" ANT_ARCH_LAYOUT "/" type
++#define ANT_COMPAT_LAYOUT(type) "linux-6.12.94/" ANT_ARCH_COMPAT_LAYOUT "/" type
++#else
++#define ANT_LAYOUT(type) type
++#define ANT_COMPAT_LAYOUT(type) type
++#endif
 +#ifdef CONFIG_ANTINOMIE
 +void ant_monitor_enter(struct pt_regs *regs, long nr);
 +void ant_monitor_exit(struct pt_regs *regs);
@@ -586,10 +564,10 @@ index 0000000..c7df2a9
 +#endif
 diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
 new file mode 100644
-index 0000000..9167ee4
+index 0000000..0a077e3
 --- /dev/null
 +++ b/kernel/antinomie/recorder.c
-@@ -0,0 +1,1157 @@
+@@ -0,0 +1,1162 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +#include <linux/antinomie.h>
 +#include <linux/antinomie_monitor.h>
@@ -613,8 +591,8 @@ index 0000000..9167ee4
 +#include <uapi/asm/termios.h>
 +#include <asm/stat.h>
 +#include <asm/syscall.h>
++#include <asm/antinomie_syscalls.h>
 +
-+#include "native_syscalls.h"
 +#include "observer.h"
 +
 +/* Scratch bounds packet size, never the logical capture extent. A task owns
@@ -622,7 +600,6 @@ index 0000000..9167ee4
 + */
 +#define ANT_CHUNK_SIZE 4096
 +#define ANT_HEADER_SIZE 144
-+#define ANT_X32_BIT 0x40000000UL
 +#define ANT_SCHEMA 1
 +#define ANT_INCOMPLETE 1
 +#define ANT_OBSERVATIONAL 8
@@ -764,7 +741,7 @@ index 0000000..9167ee4
 +	body[48] = ctx->arg_count;
 +	if (phase == 2) {
 +		body[49] = result >= 0 ? 1 : 2;
-+		if (ctx->abi != 1)
++		if (ctx->abi != ANT_ABI_NATIVE)
 +			body[49] = 4;
 +		if (result == -ERESTARTSYS || result == -ERESTARTNOINTR ||
 +		    result == -ERESTARTNOHAND || result == -ERESTART_RESTARTBLOCK)
@@ -869,8 +846,8 @@ index 0000000..9167ee4
 +	r->encoding = encoding;
 +	r->arg_index = arg_index;
 +	r->string = ctx->string_field;
-+	r->exec_path = r->string && ((ctx->nr == 59 && arg_index == 0) ||
-+					 (ctx->nr == 322 && arg_index == 1));
++	r->exec_path = r->string && ((ctx->nr == __NR_execve && arg_index == 0) ||
++					 (ctx->nr == __NR_execveat && arg_index == 1));
 +	r->done = false;
 +	strscpy(r->key, key, sizeof(r->key));
 +}
@@ -918,7 +895,8 @@ index 0000000..9167ee4
 +	put_unaligned_le16(key_len, body + 32);
 +	put_unaligned_le16(layout_len, body + 34);
 +	put_unaligned_le32((encoding == 2 ? 2 : 0) |
-+			     (encoding == 1 && (ctx->nr == 1 || ctx->nr == 20 || ctx->nr == 44) &&
++			     (encoding == 1 && (ctx->nr == __NR_write || ctx->nr == __NR_writev ||
++						ctx->nr == __NR_sendto) &&
 +			      declared_size > object_size ? 4 : 0) | ctx->field_mark, body + 36);
 +	memcpy(body + 40, key, key_len);
 +	memcpy(body + 40 + key_len, layout, layout_len);
@@ -1025,7 +1003,7 @@ index 0000000..9167ee4
 +			if (!entry && status != ANT_COMPLETE)
 +				return;
 +			scnprintf(key, sizeof(key), "arg%u.ptr[%llu]", arg_index, index);
-+			field(ctx, arg_index, key, "linux-6.12.94/x86_64/pointer", 3,
++			field(ctx, arg_index, key, ANT_LAYOUT("pointer"), 3,
 +			      address + index * sizeof(ptr), &ptr, sizeof(ptr), sizeof(ptr),
 +			      status);
 +			if (status == ANT_NOT_RESIDENT)
@@ -1072,7 +1050,7 @@ index 0000000..9167ee4
 +		else
 +			ctx->iov_count = count;
 +	}
-+	field(ctx, 1, "arg1.iov", "linux-6.12.94/x86_64/iovec[]", 3,
++	field(ctx, 1, "arg1.iov", ANT_LAYOUT("iovec[]"), 3,
 +	      ctx->args[1], ctx->iov,
 +	      count > UIO_MAXIOV ? U64_MAX : count * sizeof(*ctx->iov),
 +	      count > UIO_MAXIOV ? U64_MAX : count * sizeof(*ctx->iov), status);
@@ -1110,7 +1088,7 @@ index 0000000..9167ee4
 +
 +static bool selected(long nr)
 +{
-+	if (in_ia32_syscall() || (nr & ANT_X32_BIT))
++	if (ant_arch_syscall_abi(nr) != ANT_ABI_NATIVE)
 +		return true;
 +	return nr >= 0 && nr < ARRAY_SIZE(ant_native_syscalls) &&
 +		ant_native_syscalls[nr].valid;
@@ -1138,7 +1116,7 @@ index 0000000..9167ee4
 +			fallthrough;
 +		case TCGETS:
 +			size = sizeof(struct termios);
-+			layout = "linux-6.12.94/x86_64/termios";
++			layout = ANT_LAYOUT("termios");
 +			break;
 +		case TCSETS2: case TCSETSW2: case TCSETSF2:
 +			input = true;
@@ -1146,25 +1124,25 @@ index 0000000..9167ee4
 +		case TCGETS2:
 +			/* glibc's tcgetattr() and isatty() ask with TCGETS2. */
 +			size = sizeof(struct termios2);
-+			layout = "linux-6.12.94/x86_64/termios2";
++			layout = ANT_LAYOUT("termios2");
 +			break;
 +		case TIOCSWINSZ:
 +			input = true;
 +			fallthrough;
 +		case TIOCGWINSZ:
 +			size = sizeof(struct winsize);
-+			layout = "linux-6.12.94/x86_64/winsize";
++			layout = ANT_LAYOUT("winsize");
 +			break;
 +		case TIOCSPGRP:
 +			input = true;
 +			fallthrough;
 +		case TIOCGPGRP: case TIOCGSID:
 +			size = sizeof(pid_t);
-+			layout = "linux-6.12.94/x86_64/pid_t";
++			layout = ANT_LAYOUT("pid_t");
 +			break;
 +		case FIONREAD:
 +			size = sizeof(int);
-+			layout = "linux-6.12.94/x86_64/int";
++			layout = ANT_LAYOUT("int");
 +			break;
 +		}
 +	fdput(fd);
@@ -1183,7 +1161,7 @@ index 0000000..9167ee4
 +	u64 budget;
 +	int error;
 +
-+	if (ctx->abi != 1) {
++	if (ctx->abi != ANT_ABI_NATIVE) {
 +		field(ctx, 255, "schema.unsupported_abi", "", 1, 0, NULL,
 +		      U64_MAX, U64_MAX, ANT_NO_DECODER);
 +		return;
@@ -1194,52 +1172,55 @@ index 0000000..9167ee4
 +		return;
 +	}
 +	switch (ctx->nr) {
-+	case 1: case 44:
++	case __NR_write: case __NR_sendto:
 +		field(ctx, 1, "arg1.data", "", 1, a[1], NULL,
 +		      min_t(u64, a[2], MAX_RW_COUNT), a[2], ANT_COMPLETE);
-+		if (ctx->nr == 44 && a[4])
-+			field(ctx, 4, "arg4.address", "linux-6.12.94/x86_64/sockaddr", 3,
++		if (ctx->nr == __NR_sendto && a[4])
++			field(ctx, 4, "arg4.address", ANT_LAYOUT("sockaddr"), 3,
 +			      a[4], NULL, a[5], a[5],
 +			      a[5] > sizeof(struct sockaddr_storage) ? ANT_INVALID_EXTENT : ANT_COMPLETE);
 +		break;
-+	case 2: case 4: case 87:
++	case __NR_open: case __NR_stat: case __NR_unlink:
 +		user_string(ctx, 0, "arg0.path", a[0], PATH_MAX);
 +		break;
-+	case 257: case 322:
++	case __NR_openat: case __NR_execveat:
 +		user_string(ctx, 1, "arg1.path", a[1], PATH_MAX);
-+		if (ctx->nr == 257)
++		if (ctx->nr == __NR_openat)
 +			break;
 +		fallthrough;
-+	case 59:
-+		if (ctx->nr == 59)
++	case __NR_execve:
++		if (ctx->nr == __NR_execve)
 +			user_string(ctx, 0, "arg0.path", a[0], PATH_MAX);
 +		budget = max_t(u64, ARG_MAX,
 +			min_t(u64, _STK_LIM * 3 / 4, rlimit(RLIMIT_STACK) / 4));
 +		ctx->exec_walk = true;
-+		exec_vector(ctx, 0, ctx->nr == 59 ? 1 : 2, a[ctx->nr == 59 ? 1 : 2], 0, &budget);
-+		exec_vector(ctx, 1, ctx->nr == 59 ? 2 : 3, a[ctx->nr == 59 ? 2 : 3], 0, &budget);
++		exec_vector(ctx, 0, ctx->nr == __NR_execve ? 1 : 2,
++			    a[ctx->nr == __NR_execve ? 1 : 2], 0, &budget);
++		exec_vector(ctx, 1, ctx->nr == __NR_execve ? 2 : 3,
++			    a[ctx->nr == __NR_execve ? 2 : 3], 0, &budget);
 +		ctx->exec_walk = false;
 +		ctx->exec_budget = budget;
 +		break;
-+	case 82:
++	case __NR_rename:
 +		user_string(ctx, 0, "arg0.path", a[0], PATH_MAX);
 +		user_string(ctx, 1, "arg1.path", a[1], PATH_MAX);
 +		break;
-+	case 19: case 20:
-+		vector_entry(ctx, ctx->nr == 20);
++	case __NR_readv: case __NR_writev:
++		vector_entry(ctx, ctx->nr == __NR_writev);
 +		break;
-+	case 42: case 49:
-+		field(ctx, 1, "arg1.address", "linux-6.12.94/x86_64/sockaddr", 3,
++	case __NR_connect: case __NR_bind:
++		field(ctx, 1, "arg1.address", ANT_LAYOUT("sockaddr"), 3,
 +		      a[1], NULL, a[2], a[2],
 +		      a[2] > sizeof(struct sockaddr_storage) ? ANT_INVALID_EXTENT : ANT_COMPLETE);
 +		break;
-+	case 43: case 45:
-+		if (a[ctx->nr == 43 ? 2 : 5]) {
++	case __NR_accept: case __NR_recvfrom:
++		if (a[ctx->nr == __NR_accept ? 2 : 5]) {
 +			error = copy_from_user_nofault(&ctx->sock_capacity,
-+				(void __user *)(unsigned long)a[ctx->nr == 43 ? 2 : 5], sizeof(u32));
-+			field(ctx, ctx->nr == 43 ? 2 : 5, "address.capacity",
-+			      "linux-6.12.94/x86_64/socklen_t", 3,
-+			      a[ctx->nr == 43 ? 2 : 5], &ctx->sock_capacity,
++				(void __user *)(unsigned long)a[ctx->nr == __NR_accept ? 2 : 5],
++				sizeof(u32));
++			field(ctx, ctx->nr == __NR_accept ? 2 : 5, "address.capacity",
++			      ANT_LAYOUT("socklen_t"), 3,
++			      a[ctx->nr == __NR_accept ? 2 : 5], &ctx->sock_capacity,
 +			      sizeof(u32), sizeof(u32), error ? ANT_COPY_FAULT : ANT_COMPLETE);
 +			if (error)
 +				ctx->sock_capacity = 0;
@@ -1247,10 +1228,10 @@ index 0000000..9167ee4
 +				ctx->sock_capacity_valid = true;
 +		}
 +		break;
-+	case 16:
++	case __NR_ioctl:
 +		ioctl_field(ctx, false, 0);
 +		break;
-+	case 56:
++	case __NR_clone:
 +		if (a[0] & (CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID))
 +			field(ctx, 3, "arg3.child_tid", "", 1, a[3], NULL,
 +			      sizeof(u32), sizeof(u32), ANT_NO_DECODER);
@@ -1261,7 +1242,7 @@ index 0000000..9167ee4
 +		int i;
 +
 +		/* Legacy output-only fields are defined at exit below. */
-+		if (ctx->nr == 0 || ctx->nr == 5)
++		if (ctx->nr == __NR_read || ctx->nr == __NR_fstat)
 +			break;
 +		for (i = 0; i < 6 && !ctx->failed_count; i++) {
 +			if (!(schema->pointer_mask & BIT(i)))
@@ -1283,47 +1264,47 @@ index 0000000..9167ee4
 +	u8 address_index, length_index;
 +	int error;
 +
-+	if (ctx->abi != 1)
++	if (ctx->abi != ANT_ABI_NATIVE)
 +		return;
 +	switch (ctx->nr) {
-+	case 0: case 45:
++	case __NR_read: case __NR_recvfrom:
 +		if (result > 0)
 +			user_field(ctx, 1, "arg1.data", "", 1, a[1],
 +				   min_t(u64, result, min_t(u64, a[2], MAX_RW_COUNT)));
-+		if (ctx->nr == 0)
++		if (ctx->nr == __NR_read)
 +			break;
 +		fallthrough;
-+	case 43:
-+		address_index = ctx->nr == 43 ? 1 : 4;
-+		length_index = ctx->nr == 43 ? 2 : 5;
++	case __NR_accept:
++		address_index = ctx->nr == __NR_accept ? 1 : 4;
++		length_index = ctx->nr == __NR_accept ? 2 : 5;
 +		if (result >= 0 && a[address_index] && a[length_index]) {
 +			error = copy_from_user_nofault(&len,
 +				(void __user *)(unsigned long)a[length_index], sizeof(len));
 +			field(ctx, length_index, "address.length",
-+			      "linux-6.12.94/x86_64/socklen_t", 3, a[length_index], &len,
++			      ANT_LAYOUT("socklen_t"), 3, a[length_index], &len,
 +			      sizeof(len), sizeof(len), error ? ANT_COPY_FAULT : ANT_COMPLETE);
 +			if (!error)
 +				field(ctx, address_index, "address.data",
-+				      "linux-6.12.94/x86_64/sockaddr", 3, a[address_index], NULL,
++				      ANT_LAYOUT("sockaddr"), 3, a[address_index], NULL,
 +				      min_t(u64, sizeof(struct sockaddr_storage),
 +					    min(len, ctx->sock_capacity)), ctx->sock_capacity,
 +				      ctx->sock_capacity_valid ? ANT_COMPLETE : ANT_CONTEXT_MISSING);
 +		}
 +		break;
-+	case 4: case 5:
++	case __NR_stat: case __NR_fstat:
 +		if (!result)
-+			user_field(ctx, 1, "arg1.stat", "linux-6.12.94/x86_64/stat", 3,
++			user_field(ctx, 1, "arg1.stat", ANT_LAYOUT("stat"), 3,
 +				   a[1], sizeof(struct stat));
 +		break;
-+	case 19:
++	case __NR_readv:
 +		vector_exit(ctx, result);
 +		break;
-+	case 16:
++	case __NR_ioctl:
 +		ioctl_field(ctx, true, result);
 +		break;
-+	case 56:
++	case __NR_clone:
 +		if (result > 0 && (a[0] & CLONE_PARENT_SETTID))
-+			user_field(ctx, 2, "arg2.parent_tid", "linux-6.12.94/x86_64/pid_t", 3,
++			user_field(ctx, 2, "arg2.parent_tid", ANT_LAYOUT("pid_t"), 3,
 +				   a[2], sizeof(u32));
 +		break;
 +	}
@@ -1473,8 +1454,8 @@ index 0000000..9167ee4
 +	char prefix[24];
 +	int i, n;
 +
-+	if (!ctx || !ctx->active || ctx->busy || ctx->abi != 1 ||
-+	    (ctx->nr != 59 && ctx->nr != 322))
++	if (!ctx || !ctx->active || ctx->busy || ctx->abi != ANT_ABI_NATIVE ||
++	    (ctx->nr != __NR_execve && ctx->nr != __NR_execveat))
 +		return;
 +	ctx->exec_committed = true;
 +	ctx->exec_argv_intact = bprm->interp == bprm->filename;
@@ -1538,8 +1519,8 @@ index 0000000..9167ee4
 +	recapture_reset(ctx);
 +	ctx->entry_mm = current->mm;
 +	ctx->nr = nr;
-+	ctx->abi = in_ia32_syscall() ? 0 : nr & ANT_X32_BIT ? 2 : 1;
-+	ctx->arg_count = ctx->abi == 1 ? ant_native_syscalls[nr].argc : 255;
++	ctx->abi = ant_arch_syscall_abi(nr);
++	ctx->arg_count = ctx->abi == ANT_ABI_NATIVE ? ant_native_syscalls[nr].argc : 255;
 +	ctx->call_id++;
 +	ctx->entry_ns = ktime_get_ns();
 +	ctx->ip = instruction_pointer(regs);
@@ -1561,12 +1542,14 @@ index 0000000..9167ee4
 +void ant_monitor_exit(struct pt_regs *regs)
 +{
 +	struct ant_task *ctx = current->ant_monitor;
++	long result;
 +
 +	if (!ctx || !ctx->active || ctx->busy)
 +		return;
 +	ctx->busy = true;
-+	event_begin(ctx, 2, regs->ax);
-+	capture_exit(ctx, regs->ax);
++	result = syscall_get_return_value(current, regs);
++	event_begin(ctx, 2, result);
++	capture_exit(ctx, result);
 +	recapture(ctx);
 +	event_end(ctx);
 +	recapture_reset(ctx);
@@ -1617,7 +1600,7 @@ index 0000000..9167ee4
 +	}
 +	ctx->capture_cookie = ant_observer_admit(current);
 +	ctx->nr = U64_MAX;
-+	ctx->abi = 1;
++	ctx->abi = ANT_ABI_NATIVE;
 +	ctx->busy = true;
 +	event_begin(ctx, 3, 0);
 +	put_unaligned_le64(current->ant_cookie, cookie);

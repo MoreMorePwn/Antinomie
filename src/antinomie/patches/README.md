@@ -1,7 +1,7 @@
 # The Antinomie guest kernel patch series
 
 The guest kernel is Debian's `linux` 6.12.94-1 (trixie) with Antinomie's own
-patch series on top. The series is fourteen topic patches; each one adds one
+patch series on top. The series is fifteen topic patches; each one adds one
 part of the design and says, in its description, what it adds, why, which
 existing kernel files it hooks and why there, and which contract revision it
 belongs to.
@@ -35,20 +35,21 @@ changes. Line counts are added/removed lines of the patch.
 
 | # | Patch | Lines | Own new files | Hooked kernel files |
 |---|---|---|---|---|
-| 1 | add the host control channel and its shared-memory transport | +1462 | `kernel/antinomie/{abi.h,queue.h,bootstrap_layout.h,bootstrap.c,guest.c,control.c,control_wire.h,Kconfig,Makefile}`, `include/linux/antinomie.h`, `include/linux/antinomie_boot.h` | `arch/x86/kernel/setup.c`, `arch/x86/boot/compressed/kaslr.c`, `drivers/firmware/efi/libstub/x86-stub.c`, `init/Kconfig`, `kernel/Makefile` |
+| 1 | add the host control channel and its shared-memory transport | +1391 | `kernel/antinomie/{abi.h,queue.h,bootstrap_layout.h,bootstrap.c,guest.c,control.c,control_wire.h,Kconfig,Makefile}`, `include/linux/antinomie.h`, `include/linux/antinomie_boot.h` | `init/Kconfig`, `kernel/Makefile` |
 | 2 | license the shared transport headers under MIT | +8 -4 | none (`abi.h`, `bootstrap_layout.h`, `queue.h`, `control_wire.h` change licence) | none |
-| 3 | add the generated table of x86-64 system calls | +4381 | `kernel/antinomie/native_syscalls.h` (generated) | none |
-| 4 | record the system calls of launched and attached processes | +1528 -3 | `kernel/antinomie/{recorder.c,observer.c,observer.h}`, `include/linux/antinomie_monitor.h` | `arch/x86/entry/common.c`, `kernel/fork.c`, `kernel/exit.c`, `fs/exec.c`, `include/linux/sched.h` |
-| 5 | decode system call arguments by syscall family | +3816 -13 | `kernel/antinomie/{native_capture.c,native_capture.h,capture_api.h}` | `ipc/sem.c` |
+| 3 | add the x86-64 definitions and system call table | +4424 | `arch/x86/include/asm/antinomie.h`, `arch/x86/include/asm/antinomie_syscalls.h` (generated) | none |
+| 4 | record the system calls of launched and attached processes | +1541 -3 | `kernel/antinomie/{recorder.c,observer.c,observer.h}`, `include/linux/antinomie_monitor.h` | `kernel/fork.c`, `kernel/exit.c`, `fs/exec.c`, `include/linux/sched.h` |
+| 5 | decode system call arguments by syscall family | +3938 -13 | `kernel/antinomie/{native_capture.c,native_capture.h,capture_api.h,capture_x86.c}` | `ipc/sem.c` |
 | 6 | track each launched run and stop its whole process tree | +403 -8 | `kernel/antinomie/{run.c,run.h}` | `include/linux/sched.h`, `kernel/fork.c`, `kernel/exit.c` |
-| 7 | observe io_uring and AIO requests | +2359 -27 | `kernel/antinomie/{async.c,async.h,async_capture.c,async_capture.h}` | `io_uring/{io_uring.c,io_uring.h,epoll.c,fs.c,futex.c,kbuf.c,net.c,net.h,openclose.c,rsrc.c,rw.c,statx.c,timeout.c,uring_cmd.c,waitid.c,xattr.c}`, `include/linux/io_uring_types.h`, `fs/aio.c`, `include/linux/sched.h`, `kernel/fork.c` |
-| 8 | capture the launched program's executable image | +575 -5 | `kernel/antinomie/{specimen.c,specimen.h}` | `fs/exec.c` |
+| 7 | observe io_uring and AIO requests | +2363 -27 | `kernel/antinomie/{async.c,async.h,async_capture.c,async_capture.h}` | `io_uring/{io_uring.c,io_uring.h,epoll.c,fs.c,futex.c,kbuf.c,net.c,net.h,openclose.c,rsrc.c,rw.c,statx.c,timeout.c,uring_cmd.c,waitid.c,xattr.c}`, `include/linux/io_uring_types.h`, `fs/aio.c`, `include/linux/sched.h`, `kernel/fork.c` |
+| 8 | capture the launched program's executable image | +574 -5 | `kernel/antinomie/{specimen.c,specimen.h}` | `fs/exec.c` |
 | 9 | publish credentials, file identities and file hashes | +1468 -7 | `kernel/antinomie/{fileid.c,fileid.h,hash.c,hash.h,notes.h}` | `kernel/cred.c`, `kernel/audit.c`, `fs/open.c`, `fs/namei.c`, `fs/exec.c`, `fs/file_table.c`, `fs/aio.c`, `io_uring/{io_uring.c,io_uring.h,fs.c,openclose.c,splice.c}`, `include/linux/sched.h`, `kernel/fork.c` |
-| 10 | capture process cores at exit and on request | +2320 -57 | `kernel/antinomie/{process_core.c,process_core.h,manual_core.c}` | `fs/coredump.c`, `fs/binfmt_elf.c`, `include/linux/coredump.h`, `kernel/exit.c`, `kernel/signal.c` |
-| 11 | add a ptrace-free debug engine | +4487 -13 | `kernel/antinomie/{debug.c,debug.h,debug_x86.c}` | `kernel/signal.c`, `kernel/entry/common.c`, `kernel/fork.c`, `fs/exec.c`, `mm/memory.c` |
+| 10 | capture process cores at exit and on request | +2321 -57 | `kernel/antinomie/{process_core.c,process_core.h,manual_core.c}` | `fs/coredump.c`, `fs/binfmt_elf.c`, `include/linux/coredump.h`, `kernel/exit.c`, `kernel/signal.c` |
+| 11 | add a ptrace-free debug engine | +4488 -13 | `kernel/antinomie/{debug.c,debug.h,debug_x86.c}` | `kernel/signal.c`, `kernel/entry/common.c`, `kernel/fork.c`, `fs/exec.c`, `mm/memory.c` |
 | 12 | sample guest memory and root filesystem usage | +234 | `kernel/antinomie/{resources.c,resources.h}` | none |
 | 13 | launch programs as a terminal shell would have run them | +74 -4 | none (`control.c`, `control_wire.h`) | none |
-| 14 | hide the recorder from programs in the guest | +227 -23 | `kernel/antinomie/{stealth.c,sections.h,section_begin.c,section_end.c}`, `include/linux/antinomie_stealth.h` | `arch/x86/kernel/setup.c`, `kernel/kallsyms.c`, `fs/proc/base.c`, `drivers/acpi/scan.c` |
+| 14 | hide the recorder from programs in the guest | +223 -23 | `kernel/antinomie/{stealth.c,sections.h,section_begin.c,section_end.c}`, `include/linux/antinomie_stealth.h` | `kernel/kallsyms.c`, `fs/proc/base.c`, `drivers/acpi/scan.c` |
+| 15 | hook the x86-64 architecture | +94 | none | `arch/x86/entry/common.c`, `arch/x86/kernel/setup.c`, `arch/x86/boot/compressed/kaslr.c`, `drivers/firmware/efi/libstub/x86-stub.c` (the x86 EFI stub) |
 
 Every topic also adds its part of the files shared by all of them:
 `control.c` (dispatch), `control_wire.h` (the wire contract), `antinomie_monitor.h`
@@ -59,6 +60,34 @@ them MIT, and what later patches add to them is MIT.
 
 Patch 1 builds alone; each later patch builds on the ones before it
 (checked with an out-of-tree `bzImage` build of every prefix of the series).
+
+## Architectures
+
+The shared patches know nothing of the CPU architecture. What the recorder
+needs from it comes from two headers of the architecture's own tree, added by
+patch 3 for x86-64: `<asm/antinomie.h>` (the ABI of a system call being
+entered, the ABI name in layout names, whether a task has a 32-bit address
+space) and `<asm/antinomie_syscalls.h>`, the native system call table that
+`scripts/generate-native-syscalls.py --arch x86_64` generates. Every decoder is
+keyed by the system call's `__NR_` name, never by number, and the portable
+helpers (`syscall_get_return_value()`, `syscall_get_arguments()`,
+`instruction_pointer()`, `user_stack_pointer()`, `ELF_ARCH`) stand for the
+registers. What only the architecture has lives in `kernel/antinomie/*_x86.c`,
+built for x86-64 only and kept in that directory so that the stealth section
+labels bracket it: `capture_x86.c` (arch_prctl, modify_ldt, uretprobe, the
+signal frame rt_sigreturn reads, x86 ptrace requests) and `debug_x86.c`
+(breakpoints, single step, debug registers, register sets). The architecture's
+calls into the recorder, its system call entry and exit, the bootstrap page's
+reservation and the boot options, are patch 15, the only patch that changes
+architecture code. A port to another architecture adds those two headers, its
+`*_<arch>.c` files and a patch like 15, and guards the legacy system calls its
+table lacks (`open`, `stat`, `fork` and others on arm64 and RISC-V). Without its
+hook patch the series builds but records nothing and has no transport.
+
+The guest names its architecture (the ELF machine of its native ABI) in the
+debug engine's CAPS reply, which the host asks for when it identifies a
+revision-17 guest; the host decodes x86-64 guests only and launches nothing on
+another.
 
 ## Series identity
 

@@ -1,37 +1,101 @@
-From 0a98edb8c4e7b64e19d241e680672290a10d9c48 Mon Sep 17 00:00:00 2001
+From ba8dc42685d850299b9b34f45687f6218697de3b Mon Sep 17 00:00:00 2001
 From: MikiMiku <jonathanirvinjo@gmail.com>
-Date: Mon, 26 Oct 2026 09:03:00 +0700
-Subject: [PATCH] antinomie: add the generated table of x86-64 system calls
+Date: Mon, 26 Oct 2026 15:20:14 +0700
+Subject: [PATCH] antinomie: add the x86-64 definitions and system call table
 
-native_syscalls.h lists every native x86-64 system call of Linux 6.12.94
-(463 slots): whether the slot exists, its argument count, which
-arguments are pointers and which are strings, and each argument's name
-and C type, as the kernel declares them. It is generated from the
-pinned source and is not meant to be edited by hand.
+The recorder knows nothing of the architecture it runs on except what
+two headers of the architecture's own tree tell it. This patch adds
+x86-64's.
 
-The recorder in the next patch uses it to decide which calls it traces,
-how many arguments an event carries, and what to name a pointer
-argument it has no decoder for. It is a patch of its own so that the
-review of the recorder is not buried in data; nothing includes it yet,
-so this patch changes no object.
+arch/x86/include/asm/antinomie_syscalls.h lists every native x86-64
+system call of Linux 6.12.94 (463 slots): whether the slot exists, its
+argument count, which arguments are pointers and which are strings,
+and each argument's name and C type, as the kernel declares them.
+scripts/generate-native-syscalls.py generates it from the pinned
+source (the x86-64 syscall table and include/linux/syscalls.h); it is
+not meant to be edited by hand.
 
-No kernel file outside kernel/antinomie is touched, and the contract
-does not change.
+arch/x86/include/asm/antinomie.h names the ABI in the layout names of
+captured objects (x86_64, and x86 for the 32-bit compat ABI), tells
+which ABI a system call being entered belongs to (native, x32, or ia32
+which has no table), and whether a task has a 32-bit address space,
+whose cores the native writer does not take.
+
+The rest of the series reaches these through <linux/antinomie_monitor.h>
+and keys every system call by its __NR_ name, so another architecture
+brings its own two headers, its hook patch and its per-architecture
+files (capture_<arch>.c, debug_<arch>.c) without changing the shared
+code. It is a patch of its own so that the review of the recorder is
+not buried in data; nothing includes the headers yet, so this patch
+changes no object.
+
+Only arch/x86 is touched, and the contract does not change.
 ---
- kernel/antinomie/native_syscalls.h | 4381 ++++++++++++++++++++++++++++
- 1 file changed, 4381 insertions(+)
- create mode 100644 kernel/antinomie/native_syscalls.h
+ arch/x86/include/asm/antinomie.h          |   43 +
+ arch/x86/include/asm/antinomie_syscalls.h | 4381 +++++++++++++++++++++
+ 2 files changed, 4424 insertions(+)
+ create mode 100644 arch/x86/include/asm/antinomie.h
+ create mode 100644 arch/x86/include/asm/antinomie_syscalls.h
 
-diff --git a/kernel/antinomie/native_syscalls.h b/kernel/antinomie/native_syscalls.h
+diff --git a/arch/x86/include/asm/antinomie.h b/arch/x86/include/asm/antinomie.h
 new file mode 100644
-index 0000000..bace48d
+index 0000000..77da4d8
 --- /dev/null
-+++ b/kernel/antinomie/native_syscalls.h
++++ b/arch/x86/include/asm/antinomie.h
+@@ -0,0 +1,43 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/*
++ * What the Antinomie recorder (kernel/antinomie) needs to know about x86-64.
++ * An architecture with a port provides this header and
++ * <asm/antinomie_syscalls.h>, the generated table of its native system calls;
++ * the recorder's code keys system calls by their __NR_ names and has no other
++ * architecture knowledge. Included through <linux/antinomie_monitor.h>.
++ */
++#ifndef _ASM_X86_ANTINOMIE_H
++#define _ASM_X86_ANTINOMIE_H
++
++#include <linux/thread_info.h>
++#include <asm/unistd.h>
++
++/* Layout names of captured objects are "linux-6.12.94/<ABI>/<type>": the
++ * native ABI's, and the 32-bit compat ABI's (an io_uring ring of a 32-bit
++ * process).
++ */
++#define ANT_ARCH_LAYOUT "x86_64"
++#define ANT_ARCH_COMPAT_LAYOUT "x86"
++
++/* x32: native system call numbers with __X32_SYSCALL_BIT set (the recorded
++ * number keeps the bit); there is no table for its own entries.
++ */
++#define ANT_ABI_X32 2
++
++/* The ABI of the system call being entered, the abi field of its records. */
++static __always_inline u16 ant_arch_syscall_abi(long nr)
++{
++	if (in_ia32_syscall())
++		return ANT_ABI_NONE;
++	return nr & __X32_SYSCALL_BIT ? ANT_ABI_X32 : ANT_ABI_NATIVE;
++}
++
++/* The current task has a 32-bit address space (ia32 or x32): the process-core
++ * writer and its readers handle native 64-bit processes only.
++ */
++static __always_inline bool ant_arch_compat_task(void)
++{
++	return test_thread_flag(TIF_ADDR32);
++}
++
++#endif
+diff --git a/arch/x86/include/asm/antinomie_syscalls.h b/arch/x86/include/asm/antinomie_syscalls.h
+new file mode 100644
+index 0000000..22534e0
+--- /dev/null
++++ b/arch/x86/include/asm/antinomie_syscalls.h
 @@ -0,0 +1,4381 @@
 +/* SPDX-License-Identifier: GPL-2.0-only */
-+/* Generated native declaration facts; do not hand-edit. */
-+#ifndef ANTINOMIE_NATIVE_SYSCALLS_H
-+#define ANTINOMIE_NATIVE_SYSCALLS_H
++/* Generated native declaration facts of x86_64 (scripts/generate-native-syscalls.py); do not hand-edit. */
++#ifndef _ASM_ANTINOMIE_SYSCALLS_H
++#define _ASM_ANTINOMIE_SYSCALLS_H
 +struct ant_native_syscall {
 +	u8 valid, argc, pointer_mask, string_mask;
 +	const char *name;

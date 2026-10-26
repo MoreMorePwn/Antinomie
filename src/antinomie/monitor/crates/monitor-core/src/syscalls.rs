@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! Pinned native declaration metadata and argument-specific flag interpretation.
+//!
+//! The table is x86-64's (`protocol/native-syscalls.json`, generated per
+//! architecture). A session decodes records only from a guest whose INFO
+//! reports x86-64 (`GuestArch`); it launches and traces nothing on another.
 use serde::Deserialize;
 use std::sync::OnceLock;
 

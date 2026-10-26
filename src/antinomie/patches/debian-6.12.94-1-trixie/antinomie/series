@@ -7,8 +7,8 @@
 # Licence of the shared transport headers (kept apart: a licence change)
 0002-antinomie-license-the-shared-transport-headers-under-mit.patch
 
-# System call recording
-0003-antinomie-add-the-generated-table-of-x86-64-system-calls.patch
+# System call recording (0003: the x86-64 definitions it reads)
+0003-antinomie-add-the-x86-64-definitions-and-system-call-table.patch
 0004-antinomie-record-the-system-calls-of-launched-and-attached-processes.patch
 0005-antinomie-decode-system-call-arguments-by-syscall-family.patch
 
@@ -30,3 +30,6 @@
 
 # Hiding the recorder inside the guest
 0014-antinomie-hide-the-recorder-from-programs-in-the-guest.patch
+
+# The x86-64 architecture's hooks (the rest of the series is the same on every architecture)
+0015-antinomie-hook-the-x86-64-architecture.patch

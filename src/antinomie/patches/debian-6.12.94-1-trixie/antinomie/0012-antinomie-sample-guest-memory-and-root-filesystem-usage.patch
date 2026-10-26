@@ -21,17 +21,17 @@ Last-Update: 2026-10-26
 
 ---
 diff --git a/kernel/antinomie/Makefile b/kernel/antinomie/Makefile
-index 6e22c7c..6e8c29a 100644
+index 51b40a8..a5a55d3 100644
 --- a/kernel/antinomie/Makefile
 +++ b/kernel/antinomie/Makefile
-@@ -4,6 +4,7 @@ obj-y += specimen.o
+@@ -7,6 +7,7 @@ obj-y += specimen.o
  obj-y += observer.o
  obj-y += process_core.o
  obj-y += manual_core.o
 +obj-y += resources.o
  obj-y += hash.o
- obj-y += debug.o debug_x86.o
- obj-y += fileid.o
+ obj-y += debug.o
+ obj-$(CONFIG_X86_64) += debug_x86.o
 diff --git a/kernel/antinomie/control.c b/kernel/antinomie/control.c
 index cb51da8..c36cf60 100644
 --- a/kernel/antinomie/control.c

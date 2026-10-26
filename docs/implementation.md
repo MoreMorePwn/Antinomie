@@ -1812,6 +1812,48 @@ the ones before it. One comment in `native_capture.c` named an internal ticket;
 it now reads "never read, by design", the only difference from the 60-patch
 tree.
 
+### Architecture-neutral guest patches (0.8.0)
+
+The shared patches no longer assume x86-64; x86-64 behaves as before. The
+series is fifteen patches (`src/antinomie/patches/README.md`, "Architectures"):
+
+* **Per-architecture headers.** Patch 3 is now x86-64's two headers in its own
+  tree: `arch/x86/include/asm/antinomie_syscalls.h`, the generated native table
+  (`scripts/generate-native-syscalls.py --arch x86_64`, which still writes
+  `protocol/native-syscalls.json`, unchanged), and `arch/x86/include/asm/antinomie.h`:
+  the ABI of a system call being entered (native, x32, or ia32 without a table),
+  the ABI name in layout names (`ANT_LAYOUT()`, `ANT_COMPAT_LAYOUT()` in
+  `<linux/antinomie_monitor.h>`) and whether a task has a 32-bit address space.
+* **Syscall identity.** Every decoder, the field rules and every syscall check
+  of the recorder use the kernel's `__NR_` names, never numbers; the extended
+  attribute family is decoded by what each call does instead of number ranges.
+  The x86-only decoders (arch_prctl, modify_ldt, uretprobe, the rt_sigreturn
+  signal frame, x86 ptrace requests) moved to `capture_x86.c`, which
+  `native_capture.c` asks for any call it has no family for.
+* **Portable helpers.** The exit hook reads the result with
+  `syscall_get_return_value()`, the debug engine the PC with
+  `instruction_pointer()`, the x86 decoders the stack with `user_stack_pointer()`;
+  the core reader checks `ELF_ARCH`.
+* **Architecture hooks in one patch.** Patch 15 holds every change to
+  architecture code (`arch/x86/entry/common.c`, `arch/x86/kernel/setup.c`,
+  `arch/x86/boot/compressed/kaslr.c` and the x86 EFI stub). `capture_x86.c` and
+  `debug_x86.c` stay in `kernel/antinomie/` and are built for x86-64 only: the
+  stealth section labels bracket that directory, and the symbols of a file under
+  `arch/` would be listed in `/proc/kallsyms`.
+* **Handshake.** After INFO the host asks a revision-17 guest for the debug
+  engine's CAPS and takes its ELF machine (offset 4, 62 for x86-64) as the
+  guest's architecture; an older guest is x86-64. No new wire field: an INFO
+  flag was tried first and dropped, because a 0.7 guest counts a refused flag as
+  a bad command (the conformance groups and the health view then report one)
+  and a 0.7 host rejects a nonzero reserved word in INFO. The host keeps the
+  architecture in `GuestKernel::arch` (recordings without it read as x86-64),
+  decodes x86-64 guests only, and on another architecture says why and refuses
+  launches.
+
+How "no behaviour change" was checked is in the task record and the release
+notes of the branch: the recorder's objects compared before and after, and the
+conformance and stress groups on bases built from both series.
+
 ### Accepted host UI performance (0.6.2)
 
 Remove render-time filesystem checks for host chooser availability; resolve

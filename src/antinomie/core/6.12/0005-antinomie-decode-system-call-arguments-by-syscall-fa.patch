@@ -1,6 +1,6 @@
-From 78a93976b2921444dcfce8b8b7c79d2a10bd4030 Mon Sep 17 00:00:00 2001
+From 7415da8b2e72e6ca81f225cd7050fc967335a147 Mon Sep 17 00:00:00 2001
 From: MikiMiku <jonathanirvinjo@gmail.com>
-Date: Mon, 26 Oct 2026 09:05:00 +0700
+Date: Mon, 26 Oct 2026 15:20:14 +0700
 Subject: [PATCH] antinomie: decode system call arguments by syscall family
 
 The recorder alone captures a pointer argument only when it knows the
@@ -35,26 +35,35 @@ Hooked kernel file:
   the array's length (sem_nsems). The copy is bounded and recorded at
   exit as kernel-imported, only after the copy to user succeeded.
 
+Every decoder is keyed by the system call's __NR_ name. What only x86
+has is in capture_x86.c, which native_capture.c asks for any call it has
+no family for, and capture_ptrace() for every request first
+(capture_api.h): arch_prctl, modify_ldt and uretprobe, the signal frame
+rt_sigreturn reads from the user stack, and the ptrace requests whose
+operand is an x86 structure or that only x86 defines.
+
 Contract: the field layouts are those of revision 17; a host that does
 not know a key shows it as an unknown field.
 ---
  include/linux/antinomie_monitor.h |    4 +
  ipc/sem.c                         |    7 +
  kernel/antinomie/Makefile         |    2 +-
- kernel/antinomie/capture_api.h    |   32 +
- kernel/antinomie/native_capture.c | 3641 +++++++++++++++++++++++++++++
+ kernel/antinomie/capture_api.h    |   73 +
+ kernel/antinomie/capture_x86.c    |  180 ++
+ kernel/antinomie/native_capture.c | 3543 +++++++++++++++++++++++++++++
  kernel/antinomie/native_capture.h |   12 +
  kernel/antinomie/recorder.c       |  131 +-
- 7 files changed, 3816 insertions(+), 13 deletions(-)
+ 8 files changed, 3939 insertions(+), 13 deletions(-)
  create mode 100644 kernel/antinomie/capture_api.h
+ create mode 100644 kernel/antinomie/capture_x86.c
  create mode 100644 kernel/antinomie/native_capture.c
  create mode 100644 kernel/antinomie/native_capture.h
 
 diff --git a/include/linux/antinomie_monitor.h b/include/linux/antinomie_monitor.h
-index fe40e30..8e0b267 100644
+index 414b683..5d81326 100644
 --- a/include/linux/antinomie_monitor.h
 +++ b/include/linux/antinomie_monitor.h
-@@ -21,6 +21,8 @@ int ant_monitor_launch(const char *path, char **argv, char **envp);
+@@ -35,6 +35,8 @@ int ant_monitor_launch(const char *path, char **argv, char **envp);
  void ant_monitor_stats(void *out);
  int ant_monitor_run_status(u64 root_cookie, void *out);
  void ant_monitor_run_stopped(u64 root_cookie);
@@ -63,7 +72,7 @@ index fe40e30..8e0b267 100644
  #else
  static inline void ant_monitor_enter(struct pt_regs *regs, long nr) {}
  static inline void ant_monitor_exit(struct pt_regs *regs) {}
-@@ -30,5 +32,7 @@ static inline void ant_monitor_exec(void) {}
+@@ -44,5 +46,7 @@ static inline void ant_monitor_exec(void) {}
  static inline void ant_monitor_exec_names(const struct linux_binprm *bprm) {}
  static inline void ant_monitor_task_exit(void) {}
  static inline void ant_monitor_release(struct task_struct *task) {}
@@ -72,7 +81,7 @@ index fe40e30..8e0b267 100644
  #endif
  #endif
 diff --git a/ipc/sem.c b/ipc/sem.c
-index a39cdc7..d9fe053 100644
+index a39cdc7..1b2cd5e 100644
 --- a/ipc/sem.c
 +++ b/ipc/sem.c
 @@ -86,6 +86,7 @@
@@ -89,7 +98,7 @@ index a39cdc7..d9fe053 100644
  			err = -EFAULT;
 +		else
 +			ant_monitor_operand(3, "arg3.array",
-+					    "linux-6.12.94/x86_64/unsigned_short[]",
++					    ANT_LAYOUT("unsigned_short[]"),
 +					    sem_io, nsems * sizeof(ushort));
  		goto out_free;
  	}
@@ -98,7 +107,7 @@ index a39cdc7..d9fe053 100644
  			err = -EFAULT;
  			goto out_free;
  		}
-+		ant_monitor_operand(3, "arg3.array", "linux-6.12.94/x86_64/unsigned_short[]",
++		ant_monitor_operand(3, "arg3.array", ANT_LAYOUT("unsigned_short[]"),
 +				    sem_io, nsems * sizeof(ushort));
  
  		for (i = 0; i < nsems; i++) {
@@ -113,14 +122,17 @@ index 2cf3f23..53436b2 100644
  obj-y += observer.o
 diff --git a/kernel/antinomie/capture_api.h b/kernel/antinomie/capture_api.h
 new file mode 100644
-index 0000000..6bde7c3
+index 0000000..a87cfe0
 --- /dev/null
 +++ b/kernel/antinomie/capture_api.h
-@@ -0,0 +1,32 @@
+@@ -0,0 +1,73 @@
 +/* SPDX-License-Identifier: GPL-2.0-only */
 +#ifndef _ANTINOMIE_CAPTURE_API_H
 +#define _ANTINOMIE_CAPTURE_API_H
 +
++#include <linux/antinomie_monitor.h>
++#include <linux/bits.h>
++#include <linux/limits.h>
 +#include <linux/types.h>
 +
 +struct ant_task;
@@ -148,13 +160,237 @@ index 0000000..6bde7c3
 +void ant_capture_set_state(struct ant_task *ctx, void *state,
 +			   void (*release)(void *));
 +
++/* A capture gap of the call (index 255) under key, unless capture already stopped. */
++static inline void capture_gap(struct ant_task *ctx, const char *key, enum ant_status status)
++{
++	if (!ant_capture_lost(ctx))
++		ant_capture_field(ctx, 255, key, "", 1, 0, NULL,
++				  U64_MAX, U64_MAX, status);
++}
++
++static inline void capture_fixed(struct ant_task *ctx, u8 arg, const char *key,
++				 const char *layout, u64 address, u64 size)
++{
++	ant_capture_field(ctx, arg, key, layout, 3, address, NULL, size, size, ANT_COMPLETE);
++}
++
++/* A fixed struct in the caller's memory: input of a SET request at entry, or
++ * output of the paired GET request after success.
++ */
++static inline void capture_paired(struct ant_task *ctx, bool output, long result, bool get,
++				  const char *key, const char *layout, u64 address, u64 size)
++{
++	if (output == get && (!output || result == 0))
++		capture_fixed(ctx, 3, key, layout, address, size);
++}
++
++/* Architecture decoders (capture_<arch>.c): system calls only the architecture
++ * has, the signal frame rt_sigreturn reads, and requests whose operand is an
++ * architecture structure.
++ *
++ * ant_arch_capture() returns what ant_native_capture() returns for the call
++ * (ANT_CAPTURE_OWNED and the pointer arguments it recognized), or 0 when the
++ * architecture has no decoder for it. ant_arch_capture_ptrace() is true when
++ * the ptrace request is the architecture's and was handled.
++ */
++u8 ant_arch_capture(struct ant_task *ctx, u64 nr, const u64 args[6],
++		    bool output, long result);
++bool ant_arch_capture_ptrace(struct ant_task *ctx, const u64 args[6],
++			     bool output, long result);
++
 +#endif
+diff --git a/kernel/antinomie/capture_x86.c b/kernel/antinomie/capture_x86.c
+new file mode 100644
+index 0000000..3393fb2
+--- /dev/null
++++ b/kernel/antinomie/capture_x86.c
+@@ -0,0 +1,180 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* x86-64 decoders (capture_api.h): the system calls only x86 has (arch_prctl,
++ * modify_ldt, uretprobe), the signal frame rt_sigreturn reads from the user
++ * stack, and the ptrace requests whose operand is an x86 structure or that
++ * only x86 defines. native_capture.c asks here for every call it has no
++ * family for, and capture_ptrace() for every request first.
++ */
++#include <linux/antinomie_monitor.h>
++#include <linux/ptrace.h>
++#include <linux/uaccess.h>
++#include <asm/ldt.h>
++#include <asm/prctl.h>
++#include <asm/user.h>
++#include <asm/fpu/types.h>
++#include <asm/sigframe.h>
++
++#include "capture_api.h"
++
++#define LAYOUT(name) ANT_LAYOUT(name)
++
++static void capture_arch_prctl(struct ant_task *ctx, const u64 args[6],
++			       bool output, long result)
++{
++	switch ((u32)args[0]) {
++	case ARCH_GET_FS: case ARCH_GET_GS: case ARCH_GET_XCOMP_SUPP:
++	case ARCH_GET_XCOMP_PERM: case ARCH_GET_XCOMP_GUEST_PERM:
++	case ARCH_GET_UNTAG_MASK: case ARCH_GET_MAX_TAG_BITS: case ARCH_SHSTK_STATUS:
++		if (output && result == 0)
++			ant_capture_field(ctx, 1, "arg1.arch_value", LAYOUT("unsigned_long"), 3,
++					  args[1], NULL, sizeof(unsigned long),
++					  sizeof(unsigned long), ANT_COMPLETE);
++		return;
++	case ARCH_SET_FS: case ARCH_SET_GS: case ARCH_SET_CPUID: case ARCH_GET_CPUID:
++	case ARCH_MAP_VDSO_X32: case ARCH_MAP_VDSO_32: case ARCH_MAP_VDSO_64:
++	case ARCH_REQ_XCOMP_PERM: case ARCH_REQ_XCOMP_GUEST_PERM:
++	case ARCH_ENABLE_TAGGED_ADDR: case ARCH_FORCE_TAGGED_SVA:
++	case ARCH_SHSTK_ENABLE: case ARCH_SHSTK_DISABLE: case ARCH_SHSTK_LOCK:
++	case ARCH_SHSTK_UNLOCK:
++		return;
++	default:
++		if (!output)
++			capture_gap(ctx, "arch_prctl.unknown_selector", ANT_NO_DECODER);
++	}
++}
++
++static bool arch_prctl_returns_value(u64 code)
++{
++	switch (code) {
++	case ARCH_GET_FS: case ARCH_GET_GS: case ARCH_GET_XCOMP_SUPP:
++	case ARCH_GET_XCOMP_PERM: case ARCH_GET_XCOMP_GUEST_PERM:
++	case ARCH_GET_UNTAG_MASK: case ARCH_GET_MAX_TAG_BITS: case ARCH_SHSTK_STATUS:
++		return true;
++	default:
++		return false;
++	}
++}
++
++static void capture_modify_ldt(struct ant_task *ctx, const u64 args[6],
++			       bool output, long result)
++{
++	bool input;
++
++	input = args[0] == 1 || args[0] == 0x11;
++	if (input && !output)
++		ant_capture_field(ctx, 1, "arg1.ldt_entry", LAYOUT("user_desc"), 3,
++				  args[1], NULL, sizeof(struct user_desc), args[2],
++				  args[2] == sizeof(struct user_desc) ?
++				  ANT_COMPLETE : ANT_INVALID_EXTENT);
++	else if (!input && (args[0] == 0 || args[0] == 2) && output && (s32)result >= 0)
++		ant_capture_field(ctx, 1, "arg1.ldt", "", 1, args[1], NULL,
++				  min_t(u64, (u32)result, args[2]), args[2], ANT_COMPLETE);
++	else if (!input && args[0] != 0 && args[0] != 2 && !output)
++		ant_capture_field(ctx, 1, "modify_ldt.unknown_selector", "", 1,
++				  args[1], NULL, U64_MAX, U64_MAX, ANT_NO_DECODER);
++}
++
++/* Slice 2E: frames the kernel reads from the user stack instead of an
++ * argument. Their fields use index 255 and context.* keys.
++ */
++static void capture_rt_sigreturn(struct ant_task *ctx)
++{
++	unsigned long address = user_stack_pointer(current_pt_regs()) - sizeof(long);
++	struct fxregs_state fx;
++	struct rt_sigframe frame;
++	struct _fpx_sw_bytes *sw = (struct _fpx_sw_bytes *)fx.sw_reserved;
++	enum ant_status status;
++	u64 fpstate, limit;
++	u32 magic2;
++
++	status = copy_from_user_nofault(&frame, (void __user *)address, sizeof(frame)) ?
++		ANT_COPY_FAULT : ANT_COMPLETE;
++	ant_capture_field(ctx, 255, "context.rt_sigframe", LAYOUT("rt_sigframe"), 3, address,
++			  &frame, sizeof(frame), sizeof(frame), status);
++	fpstate = (unsigned long)frame.uc.uc_mcontext.fpstate;
++	if (status != ANT_COMPLETE || !fpstate || ant_capture_lost(ctx))
++		return;
++	status = copy_from_user_nofault(&fx, (void __user *)(unsigned long)fpstate, sizeof(fx)) ?
++		ANT_COPY_FAULT : ANT_COMPLETE;
++	ant_capture_field(ctx, 255, "context.fpstate", LAYOUT("fxregs_state"), 3, fpstate, &fx,
++			  sizeof(fx), sizeof(fx), status);
++	/* check_xstate_in_sigframe(): if any check fails, the kernel ignores the
++	 * extension and restores the legacy state only, so nothing more is read.
++	 */
++	limit = min_t(u64, sw->extended_size, current->thread.fpu.fpstate->user_size);
++	if (status != ANT_COMPLETE || sw->magic1 != FP_XSTATE_MAGIC1 ||
++	    sw->xstate_size < sizeof(fx) + sizeof(struct xstate_header) ||
++	    sw->xstate_size > limit || ant_capture_lost(ctx) ||
++	    copy_from_user_nofault(&magic2, (void __user *)(unsigned long)
++				   (fpstate + sw->xstate_size), sizeof(magic2)) ||
++	    magic2 != FP_XSTATE_MAGIC2)
++		return;
++	ant_capture_field(ctx, 255, "context.fpstate.xstate", LAYOUT("xstate"), 3,
++			  fpstate + sizeof(fx), NULL, sw->xstate_size - sizeof(fx),
++			  sw->xstate_size - sizeof(fx), ANT_COMPLETE);
++}
++
++/* The uretprobe trampoline saves r11, rcx and rax at sp before the syscall. */
++static void capture_uretprobe(struct ant_task *ctx)
++{
++	ant_capture_field(ctx, 255, "context.uretprobe_regs", LAYOUT("uretprobe_regs"), 3,
++			  user_stack_pointer(current_pt_regs()), NULL, 3 * sizeof(unsigned long),
++			  3 * sizeof(unsigned long), ANT_COMPLETE);
++}
++
++u8 ant_arch_capture(struct ant_task *ctx, u64 nr, const u64 args[6],
++		    bool output, long result)
++{
++	switch (nr) {
++	case __NR_rt_sigreturn:
++		if (!output)
++			capture_rt_sigreturn(ctx);
++		return ANT_CAPTURE_OWNED;
++	case __NR_uretprobe:
++		if (!output)
++			capture_uretprobe(ctx);
++		return ANT_CAPTURE_OWNED;
++	case __NR_arch_prctl:
++		capture_arch_prctl(ctx, args, output, result);
++		return ANT_CAPTURE_OWNED | BIT(1);
++	case __NR_modify_ldt:
++		capture_modify_ldt(ctx, args, output, result);
++		return ANT_CAPTURE_OWNED | BIT(1);
++	default:
++		return 0;
++	}
++}
++
++bool ant_arch_capture_ptrace(struct ant_task *ctx, const u64 args[6],
++			     bool output, long result)
++{
++	switch (args[0]) {
++	case PTRACE_GETREGS: case PTRACE_SETREGS:
++		capture_paired(ctx, output, result, args[0] == PTRACE_GETREGS, "arg3.regs",
++			       LAYOUT("user_regs_struct"), args[3],
++			       sizeof(struct user_regs_struct));
++		return true;
++	case PTRACE_GETFPREGS: case PTRACE_SETFPREGS:
++		capture_paired(ctx, output, result, args[0] == PTRACE_GETFPREGS, "arg3.fpregs",
++			       LAYOUT("user_i387_struct"), args[3],
++			       sizeof(struct user_i387_struct));
++		return true;
++	case PTRACE_GET_THREAD_AREA: case PTRACE_SET_THREAD_AREA:
++		capture_paired(ctx, output, result, args[0] == PTRACE_GET_THREAD_AREA, "arg3.desc",
++			       LAYOUT("user_desc"), args[3], sizeof(struct user_desc));
++		return true;
++	case PTRACE_ARCH_PRCTL:
++		/* arch_ptrace() calls do_arch_prctl_64(child, data, addr): data is the
++		 * arch_prctl code and addr the value or output pointer.
++		 */
++		if (output && result == 0 && arch_prctl_returns_value(args[3]))
++			capture_fixed(ctx, 2, "arg2.value", LAYOUT("unsigned_long"), args[2],
++				      sizeof(unsigned long));
++		return true;
++	case PTRACE_SINGLEBLOCK: case PTRACE_SYSEMU: case PTRACE_SYSEMU_SINGLESTEP:
++	case PTRACE_OLDSETOPTIONS: case PTRACE_GETFPXREGS: case PTRACE_SETFPXREGS:
++		return true;
++	default:
++		return false;
++	}
++}
 diff --git a/kernel/antinomie/native_capture.c b/kernel/antinomie/native_capture.c
 new file mode 100644
-index 0000000..edb8c18
+index 0000000..f750037
 --- /dev/null
 +++ b/kernel/antinomie/native_capture.c
-@@ -0,0 +1,3641 @@
+@@ -0,0 +1,3543 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +#include <linux/bpf.h>
 +#include <linux/fs.h>
@@ -217,11 +453,6 @@ index 0000000..edb8c18
 +#include <uapi/linux/xattr.h>
 +#include <asm/stat.h>
 +#include <asm/statfs.h>
-+#include <asm/ldt.h>
-+#include <asm/prctl.h>
-+#include <asm/user.h>
-+#include <asm/fpu/types.h>
-+#include <asm/sigframe.h>
 +
 +#include "capture_api.h"
 +#include "native_capture.h"
@@ -246,7 +477,7 @@ index 0000000..edb8c18
 +	const char *layout;
 +};
 +
-+#define LAYOUT(name) "linux-6.12.94/x86_64/" name
++#define LAYOUT(name) ANT_LAYOUT(name)
 +#define PATH_FIELD(n, a) { n, a, ANT_INPUT, ANT_PATH, 0, PATH_MAX, "" }
 +#define STRING_FIELD(n, a, max) { n, a, ANT_INPUT, ANT_PATH, 0, max, "" }
 +#define FIXED_FIELD(n, a, p, t, l) { n, a, p, ANT_FIXED, 0, sizeof(t), LAYOUT(l) }
@@ -258,111 +489,120 @@ index 0000000..edb8c18
 + * buffers never follow a pointer from an exit-time descriptor.
 + */
 +static const struct ant_field_rule field_rules[] = {
-+	PATH_FIELD(6, 0), OUTPUT_FIELD(6, 1, struct stat, "stat"),
-+	PATH_FIELD(21, 0), OUTPUT_FIELD(22, 0, int[2], "int[2]"),
-+	INPUT_FIELD(35, 0, struct __kernel_timespec, "timespec"),
-+	FIXED_FIELD(35, 1, ANT_OUTPUT_INTERRUPTED, struct __kernel_timespec, "timespec"),
-+	OUTPUT_FIELD(36, 1, struct __kernel_old_itimerval, "itimerval"),
-+	INPUT_FIELD(38, 1, struct __kernel_old_itimerval, "itimerval"),
-+	OUTPUT_FIELD(38, 2, struct __kernel_old_itimerval, "itimerval"),
-+	FIXED_FIELD(40, 2, ANT_BOTH_NONNEGATIVE, loff_t, "loff_t"),
-+	FIXED_FIELD(61, 1, ANT_OUTPUT_POSITIVE, int, "wait_status"),
-+	FIXED_FIELD(61, 3, ANT_OUTPUT_POSITIVE, struct rusage, "rusage"),
-+	OUTPUT_FIELD(63, 0, struct new_utsname, "utsname"),
-+	PATH_FIELD(76, 0), PATH_FIELD(80, 0), PATH_FIELD(83, 0),
-+	PATH_FIELD(84, 0), PATH_FIELD(85, 0), PATH_FIELD(86, 0), PATH_FIELD(86, 1),
-+	PATH_FIELD(88, 0), PATH_FIELD(88, 1), PATH_FIELD(89, 0),
-+	PATH_FIELD(90, 0), PATH_FIELD(92, 0), PATH_FIELD(94, 0),
-+	OUTPUT_FIELD(96, 0, struct __kernel_old_timeval, "timeval"),
-+	OUTPUT_FIELD(96, 1, struct timezone, "timezone"),
-+	OUTPUT_FIELD(97, 1, struct rlimit, "rlimit"),
-+	OUTPUT_FIELD(98, 1, struct rusage, "rusage"),
-+	OUTPUT_FIELD(99, 0, struct sysinfo, "sysinfo"),
-+	FIXED_FIELD(100, 0, ANT_OUTPUT_NONNEGATIVE, struct tms, "tms"),
-+	FIXED_FIELD(247, 2, ANT_OUTPUT_ZERO, siginfo_t, "siginfo_t"),
-+	OUTPUT_FIELD(247, 4, struct rusage, "rusage"),
-+	OUTPUT_FIELD(118, 0, u32, "uid_t"), OUTPUT_FIELD(118, 1, u32, "uid_t"),
-+	OUTPUT_FIELD(118, 2, u32, "uid_t"), OUTPUT_FIELD(120, 0, u32, "gid_t"),
-+	OUTPUT_FIELD(120, 1, u32, "gid_t"), OUTPUT_FIELD(120, 2, u32, "gid_t"),
-+	PATH_FIELD(132, 0), INPUT_FIELD(132, 1, struct utimbuf, "utimbuf"),
-+	PATH_FIELD(133, 0), PATH_FIELD(137, 0),
-+	OUTPUT_FIELD(136, 1, struct ustat, "ustat"),
-+	OUTPUT_FIELD(137, 1, struct statfs, "statfs"),
-+	OUTPUT_FIELD(138, 1, struct statfs, "statfs"),
-+	INPUT_FIELD(142, 1, struct sched_param, "sched_param"),
-+	OUTPUT_FIELD(143, 1, struct sched_param, "sched_param"),
-+	INPUT_FIELD(144, 2, struct sched_param, "sched_param"),
-+	OUTPUT_FIELD(148, 1, struct __kernel_timespec, "timespec"),
-+	PATH_FIELD(155, 0), PATH_FIELD(155, 1),
-+	INPUT_FIELD(160, 1, struct rlimit, "rlimit"), PATH_FIELD(161, 0),
-+	PATH_FIELD(163, 0),
-+	FIXED_FIELD(159, 0, ANT_BOTH_NONNEGATIVE, struct __kernel_timex, "timex"),
-+	INPUT_FIELD(164, 0, struct __kernel_old_timeval, "timeval"),
-+	INPUT_FIELD(164, 1, struct timezone, "timezone"),
-+	PATH_FIELD(166, 0), PATH_FIELD(167, 0), PATH_FIELD(168, 0),
-+	STRING_FIELD(176, 0, MODULE_NAME_LEN),
-+	FIXED_FIELD(201, 0, ANT_OUTPUT_NONNEGATIVE, __kernel_old_time_t, "time_t"),
-+	INPUT_FIELD(222, 1, struct sigevent, "sigevent"),
-+	OUTPUT_FIELD(222, 2, int, "timer_t"),
-+	INPUT_FIELD(223, 2, struct __kernel_itimerspec, "itimerspec"),
-+	OUTPUT_FIELD(223, 3, struct __kernel_itimerspec, "itimerspec"),
-+	OUTPUT_FIELD(224, 1, struct __kernel_itimerspec, "itimerspec"),
-+	INPUT_FIELD(227, 1, struct __kernel_timespec, "timespec"),
-+	OUTPUT_FIELD(228, 1, struct __kernel_timespec, "timespec"),
-+	OUTPUT_FIELD(229, 1, struct __kernel_timespec, "timespec"),
-+	INPUT_FIELD(230, 2, struct __kernel_timespec, "timespec"),
-+	FIXED_FIELD(230, 3, ANT_OUTPUT_INTERRUPTED, struct __kernel_timespec, "timespec"),
-+	PATH_FIELD(235, 0), INPUT_FIELD(235, 1, struct __kernel_old_timeval[2], "timeval[2]"),
-+	PATH_FIELD(241, 0), PATH_FIELD(254, 1),
-+	PATH_FIELD(240, 0), INPUT_FIELD(240, 3, struct mq_attr, "mq_attr"),
-+	INPUT_FIELD(245, 1, struct mq_attr, "mq_attr"),
-+	OUTPUT_FIELD(245, 2, struct mq_attr, "mq_attr"),
-+	PATH_FIELD(258, 1), PATH_FIELD(259, 1), PATH_FIELD(260, 1),
-+	PATH_FIELD(261, 1), INPUT_FIELD(261, 2, struct __kernel_old_timeval[2], "timeval[2]"),
-+	PATH_FIELD(262, 1), OUTPUT_FIELD(262, 2, struct stat, "stat"),
-+	PATH_FIELD(263, 1), PATH_FIELD(264, 1), PATH_FIELD(264, 3),
-+	PATH_FIELD(265, 1), PATH_FIELD(265, 3), PATH_FIELD(266, 0), PATH_FIELD(266, 2),
-+	PATH_FIELD(267, 1), PATH_FIELD(268, 1), PATH_FIELD(269, 1),
-+	FIXED_FIELD(275, 1, ANT_BOTH_NONNEGATIVE, loff_t, "loff_t"),
-+	FIXED_FIELD(275, 3, ANT_BOTH_NONNEGATIVE, loff_t, "loff_t"),
-+	PATH_FIELD(280, 1), INPUT_FIELD(280, 2, struct __kernel_timespec[2], "timespec[2]"),
-+	INPUT_FIELD(286, 2, struct __kernel_itimerspec, "itimerspec"),
-+	OUTPUT_FIELD(286, 3, struct __kernel_itimerspec, "itimerspec"),
-+	OUTPUT_FIELD(287, 1, struct __kernel_itimerspec, "itimerspec"),
-+	OUTPUT_FIELD(274, 1, u64, "robust_list_head_pointer"),
-+	OUTPUT_FIELD(274, 2, size_t, "size_t"),
-+	OUTPUT_FIELD(293, 0, int[2], "int[2]"), PATH_FIELD(301, 4),
-+	INPUT_FIELD(302, 2, struct rlimit64, "rlimit64"),
-+	OUTPUT_FIELD(302, 3, struct rlimit64, "rlimit64"),
-+	OUTPUT_FIELD(309, 0, u32, "unsigned_int"), OUTPUT_FIELD(309, 1, u32, "unsigned_int"),
-+	STRING_FIELD(313, 1, SSIZE_MAX), PATH_FIELD(316, 1), PATH_FIELD(316, 3),
-+	FIXED_FIELD(305, 1, ANT_BOTH_NONNEGATIVE, struct __kernel_timex, "timex"),
-+	STRING_FIELD(319, 0, NAME_MAX - (sizeof("memfd:") - 1) + 1),
-+	FIXED_FIELD(326, 1, ANT_BOTH_NONNEGATIVE, loff_t, "loff_t"),
-+	FIXED_FIELD(326, 3, ANT_BOTH_NONNEGATIVE, loff_t, "loff_t"),
-+	PATH_FIELD(332, 1), OUTPUT_FIELD(332, 4, struct statx, "statx"),
-+	PATH_FIELD(428, 1), PATH_FIELD(429, 1), PATH_FIELD(429, 3),
-+	STRING_FIELD(430, 0, PAGE_SIZE), PATH_FIELD(433, 1), PATH_FIELD(439, 1),
-+	PATH_FIELD(452, 1),
-+	INPUT_FIELD(451, 1, struct cachestat_range, "cachestat_range"),
-+	OUTPUT_FIELD(451, 2, struct cachestat, "cachestat"),
-+	BUFFER_FIELD(320, 3, ANT_INPUT, ANT_BUFFER_INPUT, 2, U64_MAX),
-+	STRING_FIELD(248, 0, 32), STRING_FIELD(248, 1, 4096),
-+	STRING_FIELD(249, 0, 32), STRING_FIELD(249, 1, 4096),
-+	STRING_FIELD(249, 2, PAGE_SIZE),
-+	BUFFER_FIELD(248, 2, ANT_INPUT, ANT_BUFFER_INPUT, 3, 1024 * 1024 - 1),
-+	BUFFER_FIELD(175, 0, ANT_INPUT, ANT_BUFFER_INPUT, 1, U64_MAX),
-+	STRING_FIELD(175, 2, SSIZE_MAX),
-+	BUFFER_FIELD(17, 1, ANT_OUTPUT_NONNEGATIVE, ANT_BUFFER_OUTPUT, 2, MAX_RW_COUNT),
-+	BUFFER_FIELD(18, 1, ANT_INPUT, ANT_BUFFER_INPUT, 2, MAX_RW_COUNT),
-+	BUFFER_FIELD(78, 1, ANT_OUTPUT_NONNEGATIVE, ANT_BUFFER_OUTPUT, 2, U32_MAX),
-+	BUFFER_FIELD(79, 0, ANT_OUTPUT_NONNEGATIVE, ANT_BUFFER_OUTPUT, 1, U64_MAX),
-+	BUFFER_FIELD(89, 1, ANT_OUTPUT_NONNEGATIVE, ANT_BUFFER_OUTPUT, 2, INT_MAX),
-+	BUFFER_FIELD(217, 1, ANT_OUTPUT_NONNEGATIVE, ANT_BUFFER_OUTPUT, 2, U32_MAX),
-+	BUFFER_FIELD(267, 2, ANT_OUTPUT_NONNEGATIVE, ANT_BUFFER_OUTPUT, 3, INT_MAX),
-+	BUFFER_FIELD(318, 0, ANT_OUTPUT_NONNEGATIVE, ANT_BUFFER_OUTPUT, 1, MAX_RW_COUNT),
-+	BUFFER_FIELD(115, 1, ANT_OUTPUT_NONNEGATIVE, ANT_GROUP_OUTPUT, 0, NGROUPS_MAX),
-+	BUFFER_FIELD(116, 1, ANT_INPUT, ANT_GROUP_INPUT, 0, NGROUPS_MAX),
++	PATH_FIELD(__NR_lstat, 0), OUTPUT_FIELD(__NR_lstat, 1, struct stat, "stat"),
++	PATH_FIELD(__NR_access, 0), OUTPUT_FIELD(__NR_pipe, 0, int[2], "int[2]"),
++	INPUT_FIELD(__NR_nanosleep, 0, struct __kernel_timespec, "timespec"),
++	FIXED_FIELD(__NR_nanosleep, 1, ANT_OUTPUT_INTERRUPTED, struct __kernel_timespec,
++		    "timespec"),
++	OUTPUT_FIELD(__NR_getitimer, 1, struct __kernel_old_itimerval, "itimerval"),
++	INPUT_FIELD(__NR_setitimer, 1, struct __kernel_old_itimerval, "itimerval"),
++	OUTPUT_FIELD(__NR_setitimer, 2, struct __kernel_old_itimerval, "itimerval"),
++	FIXED_FIELD(__NR_sendfile, 2, ANT_BOTH_NONNEGATIVE, loff_t, "loff_t"),
++	FIXED_FIELD(__NR_wait4, 1, ANT_OUTPUT_POSITIVE, int, "wait_status"),
++	FIXED_FIELD(__NR_wait4, 3, ANT_OUTPUT_POSITIVE, struct rusage, "rusage"),
++	OUTPUT_FIELD(__NR_uname, 0, struct new_utsname, "utsname"), PATH_FIELD(__NR_truncate, 0),
++	PATH_FIELD(__NR_chdir, 0), PATH_FIELD(__NR_mkdir, 0), PATH_FIELD(__NR_rmdir, 0),
++	PATH_FIELD(__NR_creat, 0), PATH_FIELD(__NR_link, 0), PATH_FIELD(__NR_link, 1),
++	PATH_FIELD(__NR_symlink, 0), PATH_FIELD(__NR_symlink, 1), PATH_FIELD(__NR_readlink, 0),
++	PATH_FIELD(__NR_chmod, 0), PATH_FIELD(__NR_chown, 0), PATH_FIELD(__NR_lchown, 0),
++	OUTPUT_FIELD(__NR_gettimeofday, 0, struct __kernel_old_timeval, "timeval"),
++	OUTPUT_FIELD(__NR_gettimeofday, 1, struct timezone, "timezone"),
++	OUTPUT_FIELD(__NR_getrlimit, 1, struct rlimit, "rlimit"),
++	OUTPUT_FIELD(__NR_getrusage, 1, struct rusage, "rusage"),
++	OUTPUT_FIELD(__NR_sysinfo, 0, struct sysinfo, "sysinfo"),
++	FIXED_FIELD(__NR_times, 0, ANT_OUTPUT_NONNEGATIVE, struct tms, "tms"),
++	FIXED_FIELD(__NR_waitid, 2, ANT_OUTPUT_ZERO, siginfo_t, "siginfo_t"),
++	OUTPUT_FIELD(__NR_waitid, 4, struct rusage, "rusage"),
++	OUTPUT_FIELD(__NR_getresuid, 0, u32, "uid_t"),
++	OUTPUT_FIELD(__NR_getresuid, 1, u32, "uid_t"),
++	OUTPUT_FIELD(__NR_getresuid, 2, u32, "uid_t"),
++	OUTPUT_FIELD(__NR_getresgid, 0, u32, "gid_t"),
++	OUTPUT_FIELD(__NR_getresgid, 1, u32, "gid_t"),
++	OUTPUT_FIELD(__NR_getresgid, 2, u32, "gid_t"), PATH_FIELD(__NR_utime, 0),
++	INPUT_FIELD(__NR_utime, 1, struct utimbuf, "utimbuf"), PATH_FIELD(__NR_mknod, 0),
++	PATH_FIELD(__NR_statfs, 0), OUTPUT_FIELD(__NR_ustat, 1, struct ustat, "ustat"),
++	OUTPUT_FIELD(__NR_statfs, 1, struct statfs, "statfs"),
++	OUTPUT_FIELD(__NR_fstatfs, 1, struct statfs, "statfs"),
++	INPUT_FIELD(__NR_sched_setparam, 1, struct sched_param, "sched_param"),
++	OUTPUT_FIELD(__NR_sched_getparam, 1, struct sched_param, "sched_param"),
++	INPUT_FIELD(__NR_sched_setscheduler, 2, struct sched_param, "sched_param"),
++	OUTPUT_FIELD(__NR_sched_rr_get_interval, 1, struct __kernel_timespec, "timespec"),
++	PATH_FIELD(__NR_pivot_root, 0), PATH_FIELD(__NR_pivot_root, 1),
++	INPUT_FIELD(__NR_setrlimit, 1, struct rlimit, "rlimit"), PATH_FIELD(__NR_chroot, 0),
++	PATH_FIELD(__NR_acct, 0),
++	FIXED_FIELD(__NR_adjtimex, 0, ANT_BOTH_NONNEGATIVE, struct __kernel_timex, "timex"),
++	INPUT_FIELD(__NR_settimeofday, 0, struct __kernel_old_timeval, "timeval"),
++	INPUT_FIELD(__NR_settimeofday, 1, struct timezone, "timezone"), PATH_FIELD(__NR_umount2, 0),
++	PATH_FIELD(__NR_swapon, 0), PATH_FIELD(__NR_swapoff, 0),
++	STRING_FIELD(__NR_delete_module, 0, MODULE_NAME_LEN),
++	FIXED_FIELD(__NR_time, 0, ANT_OUTPUT_NONNEGATIVE, __kernel_old_time_t, "time_t"),
++	INPUT_FIELD(__NR_timer_create, 1, struct sigevent, "sigevent"),
++	OUTPUT_FIELD(__NR_timer_create, 2, int, "timer_t"),
++	INPUT_FIELD(__NR_timer_settime, 2, struct __kernel_itimerspec, "itimerspec"),
++	OUTPUT_FIELD(__NR_timer_settime, 3, struct __kernel_itimerspec, "itimerspec"),
++	OUTPUT_FIELD(__NR_timer_gettime, 1, struct __kernel_itimerspec, "itimerspec"),
++	INPUT_FIELD(__NR_clock_settime, 1, struct __kernel_timespec, "timespec"),
++	OUTPUT_FIELD(__NR_clock_gettime, 1, struct __kernel_timespec, "timespec"),
++	OUTPUT_FIELD(__NR_clock_getres, 1, struct __kernel_timespec, "timespec"),
++	INPUT_FIELD(__NR_clock_nanosleep, 2, struct __kernel_timespec, "timespec"),
++	FIXED_FIELD(__NR_clock_nanosleep, 3, ANT_OUTPUT_INTERRUPTED, struct __kernel_timespec,
++		    "timespec"),
++	PATH_FIELD(__NR_utimes, 0),
++	INPUT_FIELD(__NR_utimes, 1, struct __kernel_old_timeval[2], "timeval[2]"),
++	PATH_FIELD(__NR_mq_unlink, 0), PATH_FIELD(__NR_inotify_add_watch, 1),
++	PATH_FIELD(__NR_mq_open, 0), INPUT_FIELD(__NR_mq_open, 3, struct mq_attr, "mq_attr"),
++	INPUT_FIELD(__NR_mq_getsetattr, 1, struct mq_attr, "mq_attr"),
++	OUTPUT_FIELD(__NR_mq_getsetattr, 2, struct mq_attr, "mq_attr"), PATH_FIELD(__NR_mkdirat, 1),
++	PATH_FIELD(__NR_mknodat, 1), PATH_FIELD(__NR_fchownat, 1), PATH_FIELD(__NR_futimesat, 1),
++	INPUT_FIELD(__NR_futimesat, 2, struct __kernel_old_timeval[2], "timeval[2]"),
++	PATH_FIELD(__NR_newfstatat, 1), OUTPUT_FIELD(__NR_newfstatat, 2, struct stat, "stat"),
++	PATH_FIELD(__NR_unlinkat, 1), PATH_FIELD(__NR_renameat, 1), PATH_FIELD(__NR_renameat, 3),
++	PATH_FIELD(__NR_linkat, 1), PATH_FIELD(__NR_linkat, 3), PATH_FIELD(__NR_symlinkat, 0),
++	PATH_FIELD(__NR_symlinkat, 2), PATH_FIELD(__NR_readlinkat, 1), PATH_FIELD(__NR_fchmodat, 1),
++	PATH_FIELD(__NR_faccessat, 1),
++	FIXED_FIELD(__NR_splice, 1, ANT_BOTH_NONNEGATIVE, loff_t, "loff_t"),
++	FIXED_FIELD(__NR_splice, 3, ANT_BOTH_NONNEGATIVE, loff_t, "loff_t"),
++	PATH_FIELD(__NR_utimensat, 1),
++	INPUT_FIELD(__NR_utimensat, 2, struct __kernel_timespec[2], "timespec[2]"),
++	INPUT_FIELD(__NR_timerfd_settime, 2, struct __kernel_itimerspec, "itimerspec"),
++	OUTPUT_FIELD(__NR_timerfd_settime, 3, struct __kernel_itimerspec, "itimerspec"),
++	OUTPUT_FIELD(__NR_timerfd_gettime, 1, struct __kernel_itimerspec, "itimerspec"),
++	OUTPUT_FIELD(__NR_get_robust_list, 1, u64, "robust_list_head_pointer"),
++	OUTPUT_FIELD(__NR_get_robust_list, 2, size_t, "size_t"),
++	OUTPUT_FIELD(__NR_pipe2, 0, int[2], "int[2]"), PATH_FIELD(__NR_fanotify_mark, 4),
++	INPUT_FIELD(__NR_prlimit64, 2, struct rlimit64, "rlimit64"),
++	OUTPUT_FIELD(__NR_prlimit64, 3, struct rlimit64, "rlimit64"),
++	OUTPUT_FIELD(__NR_getcpu, 0, u32, "unsigned_int"),
++	OUTPUT_FIELD(__NR_getcpu, 1, u32, "unsigned_int"),
++	STRING_FIELD(__NR_finit_module, 1, SSIZE_MAX), PATH_FIELD(__NR_renameat2, 1),
++	PATH_FIELD(__NR_renameat2, 3),
++	FIXED_FIELD(__NR_clock_adjtime, 1, ANT_BOTH_NONNEGATIVE, struct __kernel_timex, "timex"),
++	STRING_FIELD(__NR_memfd_create, 0, NAME_MAX - (sizeof("memfd:") - 1) + 1),
++	FIXED_FIELD(__NR_copy_file_range, 1, ANT_BOTH_NONNEGATIVE, loff_t, "loff_t"),
++	FIXED_FIELD(__NR_copy_file_range, 3, ANT_BOTH_NONNEGATIVE, loff_t, "loff_t"),
++	PATH_FIELD(__NR_statx, 1), OUTPUT_FIELD(__NR_statx, 4, struct statx, "statx"),
++	PATH_FIELD(__NR_open_tree, 1), PATH_FIELD(__NR_move_mount, 1),
++	PATH_FIELD(__NR_move_mount, 3), STRING_FIELD(__NR_fsopen, 0, PAGE_SIZE),
++	PATH_FIELD(__NR_fspick, 1), PATH_FIELD(__NR_faccessat2, 1), PATH_FIELD(__NR_fchmodat2, 1),
++	INPUT_FIELD(__NR_cachestat, 1, struct cachestat_range, "cachestat_range"),
++	OUTPUT_FIELD(__NR_cachestat, 2, struct cachestat, "cachestat"),
++	BUFFER_FIELD(__NR_kexec_file_load, 3, ANT_INPUT, ANT_BUFFER_INPUT, 2, U64_MAX),
++	STRING_FIELD(__NR_add_key, 0, 32), STRING_FIELD(__NR_add_key, 1, 4096),
++	STRING_FIELD(__NR_request_key, 0, 32), STRING_FIELD(__NR_request_key, 1, 4096),
++	STRING_FIELD(__NR_request_key, 2, PAGE_SIZE),
++	BUFFER_FIELD(__NR_add_key, 2, ANT_INPUT, ANT_BUFFER_INPUT, 3, 1024 * 1024 - 1),
++	BUFFER_FIELD(__NR_init_module, 0, ANT_INPUT, ANT_BUFFER_INPUT, 1, U64_MAX),
++	STRING_FIELD(__NR_init_module, 2, SSIZE_MAX),
++	BUFFER_FIELD(__NR_pread64, 1, ANT_OUTPUT_NONNEGATIVE, ANT_BUFFER_OUTPUT, 2, MAX_RW_COUNT),
++	BUFFER_FIELD(__NR_pwrite64, 1, ANT_INPUT, ANT_BUFFER_INPUT, 2, MAX_RW_COUNT),
++	BUFFER_FIELD(__NR_getdents, 1, ANT_OUTPUT_NONNEGATIVE, ANT_BUFFER_OUTPUT, 2, U32_MAX),
++	BUFFER_FIELD(__NR_getcwd, 0, ANT_OUTPUT_NONNEGATIVE, ANT_BUFFER_OUTPUT, 1, U64_MAX),
++	BUFFER_FIELD(__NR_readlink, 1, ANT_OUTPUT_NONNEGATIVE, ANT_BUFFER_OUTPUT, 2, INT_MAX),
++	BUFFER_FIELD(__NR_getdents64, 1, ANT_OUTPUT_NONNEGATIVE, ANT_BUFFER_OUTPUT, 2, U32_MAX),
++	BUFFER_FIELD(__NR_readlinkat, 2, ANT_OUTPUT_NONNEGATIVE, ANT_BUFFER_OUTPUT, 3, INT_MAX),
++	BUFFER_FIELD(__NR_getrandom, 0, ANT_OUTPUT_NONNEGATIVE, ANT_BUFFER_OUTPUT, 1, MAX_RW_COUNT),
++	BUFFER_FIELD(__NR_getgroups, 1, ANT_OUTPUT_NONNEGATIVE, ANT_GROUP_OUTPUT, 0, NGROUPS_MAX),
++	BUFFER_FIELD(__NR_setgroups, 1, ANT_INPUT, ANT_GROUP_INPUT, 0, NGROUPS_MAX),
 +};
 +
 +static bool phase_matches(u8 phase, bool output, long result)
@@ -392,7 +632,7 @@ index 0000000..edb8c18
 +
 +	if (!phase_matches(rule->phase, output, result))
 +		return;
-+	if (rule->nr == 230 && rule->arg_index == 3 && (args[1] & TIMER_ABSTIME))
++	if (rule->nr == __NR_clock_nanosleep && rule->arg_index == 3 && (args[1] & TIMER_ABSTIME))
 +		return;
 +	scnprintf(key, sizeof(key), "arg%u.%s", rule->arg_index,
 +		  rule->length == ANT_PATH ? "path" : "data");
@@ -815,10 +1055,37 @@ index 0000000..edb8c18
 +			  state ? state->capacity : U64_MAX, status);
 +}
 +
-+static void capture_xattr(struct ant_task *ctx, u64 nr, const u64 args[6],
-+			  bool output, long result)
++/* The extended attribute calls by what they do: each names a file by path, by
++ * path without following a final link, or by descriptor.
++ */
++enum ant_xattr_op { ANT_XATTR_NONE, ANT_XATTR_SET, ANT_XATTR_GET, ANT_XATTR_LIST,
++		    ANT_XATTR_REMOVE };
++
++static enum ant_xattr_op xattr_op(u64 nr)
 +{
-+	bool path = nr != 190 && nr != 193 && nr != 196 && nr != 199;
++	switch (nr) {
++	case __NR_setxattr: case __NR_lsetxattr: case __NR_fsetxattr:
++		return ANT_XATTR_SET;
++	case __NR_getxattr: case __NR_lgetxattr: case __NR_fgetxattr:
++		return ANT_XATTR_GET;
++	case __NR_listxattr: case __NR_llistxattr: case __NR_flistxattr:
++		return ANT_XATTR_LIST;
++	case __NR_removexattr: case __NR_lremovexattr: case __NR_fremovexattr:
++		return ANT_XATTR_REMOVE;
++	default:
++		return ANT_XATTR_NONE;
++	}
++}
++
++static bool xattr_by_path(u64 nr)
++{
++	return nr != __NR_fsetxattr && nr != __NR_fgetxattr && nr != __NR_flistxattr &&
++		nr != __NR_fremovexattr;
++}
++
++static void capture_xattr(struct ant_task *ctx, enum ant_xattr_op op, bool path,
++			  const u64 args[6], bool output, long result)
++{
 +	char key[64];
 +	u64 capacity, size;
 +	u8 index;
@@ -826,20 +1093,22 @@ index 0000000..edb8c18
 +	if (!output) {
 +		if (path)
 +			ant_capture_string(ctx, 0, "arg0.path", args[0], PATH_MAX);
-+		if (nr < 194 || nr >= 197) {
++		if (op != ANT_XATTR_LIST) {
 +			if (!ant_capture_lost(ctx))
 +				ant_capture_string(ctx, 1, "arg1.xattr_name", args[1],
 +						   XATTR_NAME_MAX + 1);
 +		}
 +	}
-+	if (ant_capture_lost(ctx) || nr >= 197 || (nr >= 191 && !output) || (nr <= 190 && output))
++	/* A value is input to SET; a value or name list is output of GET and LIST. */
++	if (ant_capture_lost(ctx) || op == ANT_XATTR_REMOVE ||
++	    (op != ANT_XATTR_SET && !output) || (op == ANT_XATTR_SET && output))
 +		return;
 +	if (output && result < 0)
 +		return;
-+	index = nr < 194 ? 2 : 1;
++	index = op != ANT_XATTR_LIST ? 2 : 1;
 +	capacity = args[index + 1];
 +	size = output ? min_t(u64, min_t(u64, capacity,
-+		nr < 194 ? XATTR_SIZE_MAX : XATTR_LIST_MAX), result) : capacity;
++		op != ANT_XATTR_LIST ? XATTR_SIZE_MAX : XATTR_LIST_MAX), result) : capacity;
 +	scnprintf(key, sizeof(key), "arg%u.xattr_data", index);
 +	ant_capture_field(ctx, index, key, "", 1, args[index], NULL, size, capacity,
 +			  !output && capacity > XATTR_SIZE_MAX ?
@@ -868,7 +1137,7 @@ index 0000000..edb8c18
 +				  args[0], NULL, size, size,
 +				  count > rlimit(RLIMIT_NOFILE) ?
 +				  ANT_INVALID_EXTENT : ANT_COMPLETE);
-+	if (nr != 271 || ant_capture_lost(ctx))
++	if (nr != __NR_ppoll || ant_capture_lost(ctx))
 +		return;
 +	if (!output) {
 +		ant_capture_field(ctx, 2, "arg2.timeout", LAYOUT("timespec"), 3,
@@ -890,7 +1159,7 @@ index 0000000..edb8c18
 +
 +	if (ant_capture_lost(ctx))
 +		return;
-+	if (nr == 233) {
++	if (nr == __NR_epoll_ctl) {
 +		if (!output && args[1] != EPOLL_CTL_DEL)
 +			ant_capture_field(ctx, 3, "arg3.epoll_event", LAYOUT("epoll_event"), 3,
 +					  args[3], NULL, sizeof(struct epoll_event),
@@ -900,11 +1169,11 @@ index 0000000..edb8c18
 +		return;
 +	}
 +	if (!output) {
-+		if (nr == 441)
++		if (nr == __NR_epoll_pwait2)
 +			ant_capture_field(ctx, 3, "arg3.timeout", LAYOUT("timespec"), 3,
 +					  args[3], NULL, sizeof(struct __kernel_timespec),
 +					  sizeof(struct __kernel_timespec), ANT_COMPLETE);
-+		if (nr != 232)
++		if (nr != __NR_epoll_wait)
 +			capture_sigmask(ctx, 4, args[4], args[5]);
 +	} else if (result >= 0) {
 +		size = capacity > 0 ? min_t(u64, result, capacity) * sizeof(struct epoll_event) : 0;
@@ -922,7 +1191,7 @@ index 0000000..edb8c18
 +	u8 arg;
 +
 +	switch (nr) {
-+	case 13:
++	case __NR_rt_sigaction:
 +		arg = output ? 2 : 1;
 +		if ((!output || result == 0) && args[arg])
 +			ant_capture_field(ctx, arg, output ? "arg2.sigaction" : "arg1.sigaction",
@@ -931,18 +1200,18 @@ index 0000000..edb8c18
 +					  args[3] == sizeof(sigset_t) ?
 +					  ANT_COMPLETE : ANT_INVALID_EXTENT);
 +		break;
-+	case 14:
++	case __NR_rt_sigprocmask:
 +		if (!output || result == 0)
 +			capture_sigmask(ctx, output ? 2 : 1, args[output ? 2 : 1], args[3]);
 +		break;
-+	case 127:
++	case __NR_rt_sigpending:
 +		if (output && result == 0)
 +			ant_capture_field(ctx, 0, "arg0.pending", LAYOUT("sigset_t"), 3,
 +					  args[0], NULL, args[1], args[1],
 +					  args[1] <= sizeof(sigset_t) ?
 +					  ANT_COMPLETE : ANT_INVALID_EXTENT);
 +		break;
-+	case 128:
++	case __NR_rt_sigtimedwait:
 +		if (!output) {
 +			capture_sigmask(ctx, 0, args[0], args[3]);
 +			capture_optional(ctx, 2, args[2], "arg2.timeout", LAYOUT("timespec"),
@@ -952,18 +1221,19 @@ index 0000000..edb8c18
 +					 sizeof(siginfo_t));
 +		}
 +		break;
-+	case 129: case 297: case 424:
-+		arg = nr == 297 ? 3 : 2;
++	case __NR_rt_sigqueueinfo: case __NR_rt_tgsigqueueinfo: case __NR_pidfd_send_signal:
++		arg = nr == __NR_rt_tgsigqueueinfo ? 3 : 2;
 +		if (!output)
 +			capture_optional(ctx, arg, args[arg], "signal.siginfo",
 +					 LAYOUT("siginfo_t"), sizeof(siginfo_t));
 +		break;
-+	case 130: case 282: case 289:
++	case __NR_rt_sigsuspend: case __NR_signalfd: case __NR_signalfd4:
 +		if (!output)
-+			capture_sigmask(ctx, nr == 130 ? 0 : 1,
-+					args[nr == 130 ? 0 : 1], args[nr == 130 ? 1 : 2]);
++			capture_sigmask(ctx, nr == __NR_rt_sigsuspend ? 0 : 1,
++					args[nr == __NR_rt_sigsuspend ? 0 : 1],
++					args[nr == __NR_rt_sigsuspend ? 1 : 2]);
 +		break;
-+	case 131:
++	case __NR_sigaltstack:
 +		if (!output || result == 0)
 +			capture_optional(ctx, output ? 1 : 0, args[output ? 1 : 0],
 +					 output ? "arg1.stack" : "arg0.stack",
@@ -1036,9 +1306,9 @@ index 0000000..edb8c18
 +	}
 +	if (!ant_capture_lost(ctx))
 +		capture_optional(ctx, 4, args[4], output ? "arg4.timeout.observed" :
-+				 "arg4.timeout", nr == 23 ? LAYOUT("timeval") :
++				 "arg4.timeout", nr == __NR_select ? LAYOUT("timeval") :
 +				 LAYOUT("timespec"), sizeof(struct __kernel_timespec));
-+	if (nr == 270 && !output && args[5] && !ant_capture_lost(ctx)) {
++	if (nr == __NR_pselect6 && !output && args[5] && !ant_capture_lost(ctx)) {
 +		status = copy_from_user_nofault(&pack, (void __user *)(unsigned long)args[5],
 +						sizeof(pack)) ?
 +			ANT_COPY_FAULT : ANT_COMPLETE;
@@ -1075,7 +1345,7 @@ index 0000000..edb8c18
 +	u32 size;
 +	enum ant_status status;
 +
-+	if (nr == 315) {
++	if (nr == __NR_sched_getattr) {
 +		if (output && result == 0)
 +			ant_capture_field(ctx, 1, "arg1.sched_attr", LAYOUT("sched_attr"), 3,
 +					  args[1], NULL, min_t(u64, (u32)args[2],
@@ -1192,14 +1462,14 @@ index 0000000..edb8c18
 +static void capture_ipc_control(struct ant_task *ctx, u64 nr, const u64 args[6],
 +				bool output, long result)
 +{
-+	u32 command = args[nr == 66 ? 2 : 1];
-+	u8 arg = nr == 66 ? 3 : 2;
++	u32 command = args[nr == __NR_semctl ? 2 : 1];
++	u8 arg = nr == __NR_semctl ? 3 : 2;
 +	u64 size = U64_MAX;
 +	const char *layout = "";
 +	bool input = command == IPC_SET, ignored = false;
 +	enum ant_status status = ANT_COMPLETE;
 +
-+	if (nr == 31) {
++	if (nr == __NR_shmctl) {
 +		switch (command) {
 +		case IPC_SET: case IPC_STAT: case SHM_STAT: case SHM_STAT_ANY:
 +			size = sizeof(struct shmid64_ds);
@@ -1217,7 +1487,7 @@ index 0000000..edb8c18
 +			ignored = true;
 +			break;
 +		}
-+	} else if (nr == 71) {
++	} else if (nr == __NR_msgctl) {
 +		switch (command) {
 +		case IPC_SET: case IPC_STAT: case MSG_STAT: case MSG_STAT_ANY:
 +			size = sizeof(struct msqid64_ds);
@@ -1271,13 +1541,14 @@ index 0000000..edb8c18
 +	u64 count, size;
 +	enum ant_status status;
 +
-+	if (nr == 30 || nr == 67) {
++	if (nr == __NR_shmat || nr == __NR_shmdt) {
 +		if (!output)
-+			ant_capture_field(ctx, nr == 30 ? 1 : 0, "shm.mapping_address", "", 1,
-+					  args[nr == 30 ? 1 : 0], NULL, 0, 0, ANT_ADDRESS_ONLY);
++			ant_capture_field(ctx, nr == __NR_shmat ? 1 : 0, "shm.mapping_address",
++					  "", 1, args[nr == __NR_shmat ? 1 : 0], NULL, 0, 0,
++					  ANT_ADDRESS_ONLY);
 +		return;
 +	}
-+	if (nr == 65 || nr == 220) {
++	if (nr == __NR_semop || nr == __NR_semtimedop) {
 +		if (output)
 +			return;
 +		count = (u32)args[2];
@@ -1286,16 +1557,16 @@ index 0000000..edb8c18
 +		size = count * sizeof(struct sembuf);
 +		ant_capture_field(ctx, 1, "arg1.semops", LAYOUT("sembuf[]"), 3,
 +				  args[1], NULL, size, size, status);
-+		if (nr == 220)
++		if (nr == __NR_semtimedop)
 +			capture_optional(ctx, 3, args[3], "arg3.timeout", LAYOUT("timespec"),
 +					 sizeof(struct __kernel_timespec));
 +		return;
 +	}
-+	if ((nr == 69 && output) || (nr == 70 && (!output || result < 0)))
++	if ((nr == __NR_msgsnd && output) || (nr == __NR_msgrcv && (!output || result < 0)))
 +		return;
-+	count = nr == 69 ? args[2] : min_t(u64, args[2], result);
++	count = nr == __NR_msgsnd ? args[2] : min_t(u64, args[2], result);
 +	status = (s64)args[2] < 0 ||
-+		(nr == 69 && args[2] > READ_ONCE(current->nsproxy->ipc_ns->msg_ctlmax)) ?
++		(nr == __NR_msgsnd && args[2] > READ_ONCE(current->nsproxy->ipc_ns->msg_ctlmax)) ?
 +		ANT_INVALID_EXTENT : ANT_COMPLETE;
 +	size = count <= U64_MAX - sizeof(long) ? count + sizeof(long) : U64_MAX;
 +	ant_capture_field(ctx, 1, "arg1.message", LAYOUT("msgbuf"), 3,
@@ -1311,7 +1582,7 @@ index 0000000..edb8c18
 +	enum ant_status status;
 +	u64 size;
 +
-+	if (nr == 244) {
++	if (nr == __NR_mq_notify) {
 +		if (output || !args[1])
 +			return;
 +		status = copy_from_user_nofault(&event, (void __user *)(unsigned long)args[1],
@@ -1327,12 +1598,13 @@ index 0000000..edb8c18
 +	if (!output)
 +		capture_optional(ctx, 4, args[4], "arg4.timeout", LAYOUT("timespec"),
 +				 sizeof(struct __kernel_timespec));
-+	if ((nr == 242 && !output) || (nr == 243 && output && result >= 0)) {
-+		size = nr == 242 ? args[2] : min_t(u64, args[2], result);
++	if ((nr == __NR_mq_timedsend && !output) ||
++	    (nr == __NR_mq_timedreceive && output && result >= 0)) {
++		size = nr == __NR_mq_timedsend ? args[2] : min_t(u64, args[2], result);
 +		if (!ant_capture_lost(ctx))
 +			ant_capture_field(ctx, 1, "arg1.message", "", 1, args[1], NULL,
 +					  size, args[2], ANT_COMPLETE);
-+		if (nr == 243)
++		if (nr == __NR_mq_timedreceive)
 +			capture_optional(ctx, 3, args[3], "arg3.priority", LAYOUT("u32"),
 +					 sizeof(u32));
 +	}
@@ -1346,8 +1618,9 @@ index 0000000..edb8c18
 +	enum ant_status status;
 +	char key[48];
 +
-+	if (nr == 203 || nr == 204) {
-+		if ((nr == 203 && !output) || (nr == 204 && output && result >= 0)) {
++	if (nr == __NR_sched_setaffinity || nr == __NR_sched_getaffinity) {
++		if ((nr == __NR_sched_setaffinity && !output) ||
++		    (nr == __NR_sched_getaffinity && output && result >= 0)) {
 +			size = min_t(u64, (u32)args[1], cpumask_size());
 +			if (output)
 +				size = min_t(u64, size, result);
@@ -1356,7 +1629,7 @@ index 0000000..edb8c18
 +		}
 +		return;
 +	}
-+	if (nr == 239) {
++	if (nr == __NR_get_mempolicy) {
 +		if (!output || result != 0)
 +			return;
 +		capture_optional(ctx, 0, args[0], "arg0.policy", LAYOUT("int"), sizeof(int));
@@ -1366,9 +1639,9 @@ index 0000000..edb8c18
 +	} else {
 +		if (output)
 +			return;
-+		arg = nr == 237 ? 3 : nr == 238 ? 1 : 2;
-+		end = nr == 256 ? 3 : arg;
-+		bits = args[nr == 237 ? 4 : nr == 238 ? 2 : 1] - 1;
++		arg = nr == __NR_mbind ? 3 : nr == __NR_set_mempolicy ? 1 : 2;
++		end = nr == __NR_migrate_pages ? 3 : arg;
++		bits = args[nr == __NR_mbind ? 4 : nr == __NR_set_mempolicy ? 2 : 1] - 1;
 +	}
 +	status = bits <= PAGE_SIZE * BITS_PER_BYTE ? ANT_COMPLETE : ANT_INVALID_EXTENT;
 +	size = status == ANT_COMPLETE ? DIV_ROUND_UP(bits, BITS_PER_LONG) *
@@ -1418,28 +1691,28 @@ index 0000000..edb8c18
 +	bool timeout = false, second = false, modifies = false;
 +	enum ant_status status;
 +
-+	if (nr == 449 || nr == 456) {
++	if (nr == __NR_futex_waitv || nr == __NR_futex_requeue) {
 +		if (output)
 +			return;
-+		count = nr == 456 ? 2 : (u32)args[1];
++		count = nr == __NR_futex_requeue ? 2 : (u32)args[1];
 +		size = count * sizeof(struct futex_waitv);
 +		status = count && count <= FUTEX_WAITV_MAX ? ANT_COMPLETE : ANT_INVALID_EXTENT;
 +		ant_capture_field(ctx, 0, "arg0.waiters", LAYOUT("futex_waitv[]"), 3,
 +				  args[0], NULL, size, size, status);
 +		if (status == ANT_COMPLETE)
 +			capture_waiter_values(ctx, args[0], count);
-+		if (nr == 449)
++		if (nr == __NR_futex_waitv)
 +			capture_optional(ctx, 3, args[3], "arg3.timeout", LAYOUT("timespec"),
 +					 sizeof(struct __kernel_timespec));
 +		return;
 +	}
-+	if (nr == 454 || nr == 455) {
++	if (nr == __NR_futex_wake || nr == __NR_futex_wait) {
 +		if (!output) {
 +			status = (args[3] & FUTEX2_SIZE_MASK) == FUTEX2_SIZE_U32 ?
 +				ANT_COMPLETE : ANT_INVALID_EXTENT;
 +			ant_capture_field(ctx, 0, "arg0.futex.observed", LAYOUT("u32"), 3,
 +					  args[0], NULL, sizeof(u32), sizeof(u32), status);
-+			if (nr == 455)
++			if (nr == __NR_futex_wait)
 +				capture_optional(ctx, 4, args[4], "arg4.timeout",
 +						 LAYOUT("timespec"),
 +						 sizeof(struct __kernel_timespec));
@@ -1554,16 +1827,16 @@ index 0000000..edb8c18
 +{
 +	struct file_handle header;
 +	u32 *capacity;
-+	u8 arg = nr == 303 ? 2 : 1;
++	u8 arg = nr == __NR_name_to_handle_at ? 2 : 1;
 +	enum ant_status status;
 +	u64 size;
 +
-+	if (!output && nr == 303) {
++	if (!output && nr == __NR_name_to_handle_at) {
 +		ant_capture_string(ctx, 1, "arg1.path", args[1], PATH_MAX);
 +		if (ant_capture_lost(ctx))
 +			return;
 +	}
-+	if (output && (nr != 303 || (result != 0 && result != -EOVERFLOW)))
++	if (output && (nr != __NR_name_to_handle_at || (result != 0 && result != -EOVERFLOW)))
 +		return;
 +	status = copy_from_user_nofault(&header, (void __user *)(unsigned long)args[arg],
 +					sizeof(header)) ?
@@ -1572,7 +1845,7 @@ index 0000000..edb8c18
 +			  args[arg], &header, sizeof(header), sizeof(header), status);
 +	if (status != ANT_COMPLETE || ant_capture_lost(ctx))
 +		return;
-+	if (!output && nr == 303) {
++	if (!output && nr == __NR_name_to_handle_at) {
 +		capacity = kmalloc(sizeof(*capacity), GFP_NOWAIT);
 +		if (!capacity) {
 +			ant_capture_field(ctx, arg, "handle.context", "", 1, args[arg], NULL,
@@ -1668,25 +1941,26 @@ index 0000000..edb8c18
 +			break;
 +		}
 +		ant_capture_set_state(ctx, word_count, release_allocation);
-+		if (!*word_count || (nr == 125 && !args[1]))
++		if (!*word_count || (nr == __NR_capget && !args[1]))
 +			return;
 +		capture_optional(ctx, 0, args[0] + sizeof(u32), "arg0.pid", LAYOUT("pid_t"),
 +				 sizeof(pid_t));
 +	} else {
 +		word_count = ant_capture_state(ctx);
 +		if (!word_count) {
-+			if (nr == 125 && result == 0 && args[1])
++			if (nr == __NR_capget && result == 0 && args[1])
 +				ant_capture_field(ctx, 1, "arg1.capabilities", "", 1, args[1], NULL,
 +						  U64_MAX, U64_MAX, ANT_CONTEXT_MISSING);
 +			return;
 +		}
-+		if (!*word_count && (result == -EINVAL || (nr == 125 && result == 0))) {
++		if (!*word_count && (result == -EINVAL || (nr == __NR_capget && result == 0))) {
 +			capture_optional(ctx, 0, args[0], "arg0.required_version", LAYOUT("u32"),
 +					 sizeof(u32));
 +			return;
 +		}
 +	}
-+	if ((nr == 126 && !output) || (nr == 125 && output && result == 0 && args[1])) {
++	if ((nr == __NR_capset && !output) ||
++	    (nr == __NR_capget && output && result == 0 && args[1])) {
 +		size = *word_count * sizeof(struct __user_cap_data_struct);
 +		if (!ant_capture_lost(ctx))
 +			ant_capture_field(ctx, 1, "arg1.capabilities", LAYOUT("cap_data[]"), 3,
@@ -1773,7 +2047,7 @@ index 0000000..edb8c18
 +	}
 +	if (result < 0)
 +		return;
-+	if (nr == 458) {
++	if (nr == __NR_listmount) {
 +		size = min_t(u64, args[2], result) * sizeof(u64);
 +		ant_capture_field(ctx, 1, "arg1.mount_ids", LAYOUT("u64[]"), 3,
 +				  args[1], NULL, size, args[2] <= 1000000 ? args[2] *
@@ -1800,13 +2074,13 @@ index 0000000..edb8c18
 +static void capture_lsm(struct ant_task *ctx, u64 nr, const u64 args[6],
 +			bool output, long result)
 +{
-+	u8 size_arg = nr == 461 ? 1 : 2;
-+	u8 data_arg = nr == 461 ? 0 : 1;
++	u8 size_arg = nr == __NR_lsm_list_modules ? 1 : 2;
++	u8 data_arg = nr == __NR_lsm_list_modules ? 0 : 1;
 +	u32 observed, *capacity;
 +	enum ant_status status;
 +	u64 size;
 +
-+	if (nr == 460) {
++	if (nr == __NR_lsm_set_self_attr) {
 +		if (!output) {
 +			status = (u32)args[2] >= sizeof(struct lsm_ctx) &&
 +				(u32)args[2] <= PAGE_SIZE ?
@@ -1836,7 +2110,7 @@ index 0000000..edb8c18
 +			*capacity = observed;
 +			ant_capture_set_state(ctx, capacity, release_allocation);
 +		}
-+		if (nr == 459 && args[3] == LSM_FLAG_SINGLE)
++		if (nr == __NR_lsm_get_self_attr && args[3] == LSM_FLAG_SINGLE)
 +			capture_optional(ctx, 1, args[1], "arg1.lsm_selector", LAYOUT("lsm_ctx"),
 +					 sizeof(struct lsm_ctx));
 +		return;
@@ -1847,16 +2121,10 @@ index 0000000..edb8c18
 +	status = !capacity ? ANT_CONTEXT_MISSING : observed > *capacity ?
 +		ANT_INVALID_EXTENT : ANT_COMPLETE;
 +	size = status == ANT_COMPLETE ? observed : U64_MAX;
-+	ant_capture_field(ctx, data_arg, "lsm.output", nr == 461 ? LAYOUT("u64[]") :
-+			  LAYOUT("lsm_ctx[]"), 3, args[data_arg], NULL, size,
++	ant_capture_field(ctx, data_arg, "lsm.output",
++			  nr == __NR_lsm_list_modules ? LAYOUT("u64[]") : LAYOUT("lsm_ctx[]"),
++			  3, args[data_arg], NULL, size,
 +			  capacity ? *capacity : U64_MAX, status);
-+}
-+
-+static void capture_gap(struct ant_task *ctx, const char *key, enum ant_status status)
-+{
-+	if (!ant_capture_lost(ctx))
-+		ant_capture_field(ctx, 255, key, "", 1, 0, NULL,
-+				  U64_MAX, U64_MAX, status);
 +}
 +
 +static void capture_fcntl(struct ant_task *ctx, const u64 args[6],
@@ -1913,41 +2181,15 @@ index 0000000..edb8c18
 +				  args[2], NULL, size, size, ANT_COMPLETE);
 +}
 +
-+static void capture_arch_prctl(struct ant_task *ctx, const u64 args[6],
-+			       bool output, long result)
-+{
-+	switch ((u32)args[0]) {
-+	case ARCH_GET_FS: case ARCH_GET_GS: case ARCH_GET_XCOMP_SUPP:
-+	case ARCH_GET_XCOMP_PERM: case ARCH_GET_XCOMP_GUEST_PERM:
-+	case ARCH_GET_UNTAG_MASK: case ARCH_GET_MAX_TAG_BITS: case ARCH_SHSTK_STATUS:
-+		if (output && result == 0)
-+			ant_capture_field(ctx, 1, "arg1.arch_value", LAYOUT("unsigned_long"), 3,
-+					  args[1], NULL, sizeof(unsigned long),
-+					  sizeof(unsigned long), ANT_COMPLETE);
-+		return;
-+	case ARCH_SET_FS: case ARCH_SET_GS: case ARCH_SET_CPUID: case ARCH_GET_CPUID:
-+	case ARCH_MAP_VDSO_X32: case ARCH_MAP_VDSO_32: case ARCH_MAP_VDSO_64:
-+	case ARCH_REQ_XCOMP_PERM: case ARCH_REQ_XCOMP_GUEST_PERM:
-+	case ARCH_ENABLE_TAGGED_ADDR: case ARCH_FORCE_TAGGED_SVA:
-+	case ARCH_SHSTK_ENABLE: case ARCH_SHSTK_DISABLE: case ARCH_SHSTK_LOCK:
-+	case ARCH_SHSTK_UNLOCK:
-+		return;
-+	default:
-+		if (!output)
-+			capture_gap(ctx, "arch_prctl.unknown_selector", ANT_NO_DECODER);
-+	}
-+}
-+
 +static void capture_remaining_small(struct ant_task *ctx, u64 nr, const u64 args[6],
 +				    bool output, long result)
 +{
 +	u64 size;
 +	u8 arg;
 +	const char *layout;
-+	bool input;
 +	enum ant_status status;
 +
-+	if (nr == 103) {
++	if (nr == __NR_syslog) {
 +		if ((u32)args[0] >= SYSLOG_ACTION_READ &&
 +		    (u32)args[0] <= SYSLOG_ACTION_READ_CLEAR) {
 +			if (output && result >= 0) {
@@ -1962,22 +2204,7 @@ index 0000000..edb8c18
 +		}
 +		return;
 +	}
-+	if (nr == 154) {
-+		input = args[0] == 1 || args[0] == 0x11;
-+		if (input && !output)
-+			ant_capture_field(ctx, 1, "arg1.ldt_entry", LAYOUT("user_desc"), 3,
-+					  args[1], NULL, sizeof(struct user_desc), args[2],
-+					  args[2] == sizeof(struct user_desc) ?
-+					  ANT_COMPLETE : ANT_INVALID_EXTENT);
-+		else if (!input && (args[0] == 0 || args[0] == 2) && output && (s32)result >= 0)
-+			ant_capture_field(ctx, 1, "arg1.ldt", "", 1, args[1], NULL,
-+					  min_t(u64, (u32)result, args[2]), args[2], ANT_COMPLETE);
-+		else if (!input && args[0] != 0 && args[0] != 2 && !output)
-+			ant_capture_field(ctx, 1, "modify_ldt.unknown_selector", "", 1,
-+					  args[1], NULL, U64_MAX, U64_MAX, ANT_NO_DECODER);
-+		return;
-+	}
-+	if (nr == 298) {
++	if (nr == __NR_perf_event_open) {
 +		if (!output)
 +			capture_sized_input(ctx, 0, args[0], sizeof(u32), PERF_ATTR_SIZE_VER0,
 +					    sizeof(struct perf_event_attr), "arg0.perf_event_attr",
@@ -2010,22 +2237,6 @@ index 0000000..edb8c18
 +#define ANT_KEY_PAYLOAD_MAX (1024 * 1024 - 1)	/* keyctl_instantiate_key() */
 +#define ANT_KDF_HASH_MAX 128		/* CRYPTO_MAX_ALG_NAME */
 +#define ANT_KDF_OTHERINFO_MAX 64	/* KEYCTL_KDF_MAX_OI_LEN, security/keys/internal.h */
-+
-+static void capture_fixed(struct ant_task *ctx, u8 arg, const char *key, const char *layout,
-+			  u64 address, u64 size)
-+{
-+	ant_capture_field(ctx, arg, key, layout, 3, address, NULL, size, size, ANT_COMPLETE);
-+}
-+
-+/* A fixed struct in the caller's memory: input of a SET request at entry, or
-+ * output of the paired GET request after success.
-+ */
-+static void capture_paired(struct ant_task *ctx, bool output, long result, bool get,
-+			   const char *key, const char *layout, u64 address, u64 size)
-+{
-+	if (output == get && (!output || result == 0))
-+		capture_fixed(ctx, 3, key, layout, address, size);
-+}
 +
 +/* The kernel returns the full length but copies only what fits the caller's buffer. */
 +static void capture_truncated(struct ant_task *ctx, u8 arg, const char *key,
@@ -2248,23 +2459,13 @@ index 0000000..edb8c18
 +			  length > state->iov.iov_len ? ANT_INVALID_EXTENT : ANT_COMPLETE);
 +}
 +
-+static bool arch_prctl_returns_value(u64 code)
-+{
-+	switch (code) {
-+	case ARCH_GET_FS: case ARCH_GET_GS: case ARCH_GET_XCOMP_SUPP:
-+	case ARCH_GET_XCOMP_PERM: case ARCH_GET_XCOMP_GUEST_PERM:
-+	case ARCH_GET_UNTAG_MASK: case ARCH_GET_MAX_TAG_BITS: case ARCH_SHSTK_STATUS:
-+		return true;
-+	default:
-+		return false;
-+	}
-+}
-+
 +static void capture_ptrace(struct ant_task *ctx, const u64 args[6], bool output, long result)
 +{
 +	struct ptrace_peeksiginfo_args peek;
 +	u8 data = 3;
 +
++	if (ant_arch_capture_ptrace(ctx, args, output, result))
++		return;
 +	switch (args[0]) {
 +	case PTRACE_PEEKTEXT: case PTRACE_PEEKDATA:
 +		/* Tracee addresses are in another address space; never dereference them. */
@@ -2283,16 +2484,6 @@ index 0000000..edb8c18
 +			ant_capture_field(ctx, 2, "arg2.tracee_address", LAYOUT("unsigned_long"), 3,
 +					  args[2], NULL, sizeof(unsigned long),
 +					  sizeof(unsigned long), ANT_ADDRESS_ONLY);
-+		return;
-+	case PTRACE_GETREGS: case PTRACE_SETREGS:
-+		capture_paired(ctx, output, result, args[0] == PTRACE_GETREGS, "arg3.regs",
-+			       LAYOUT("user_regs_struct"), args[data],
-+			       sizeof(struct user_regs_struct));
-+		return;
-+	case PTRACE_GETFPREGS: case PTRACE_SETFPREGS:
-+		capture_paired(ctx, output, result, args[0] == PTRACE_GETFPREGS, "arg3.fpregs",
-+			       LAYOUT("user_i387_struct"), args[data],
-+			       sizeof(struct user_i387_struct));
 +		return;
 +	case PTRACE_GETREGSET: case PTRACE_SETREGSET:
 +		capture_regset(ctx, args, output, result, args[0] == PTRACE_SETREGSET);
@@ -2321,18 +2512,6 @@ index 0000000..edb8c18
 +		if (output && result == 0)
 +			capture_fixed(ctx, data, "arg3.message", LAYOUT("unsigned_long"),
 +				      args[data],
-+				      sizeof(unsigned long));
-+		return;
-+	case PTRACE_GET_THREAD_AREA: case PTRACE_SET_THREAD_AREA:
-+		capture_paired(ctx, output, result, args[0] == PTRACE_GET_THREAD_AREA, "arg3.desc",
-+			       LAYOUT("user_desc"), args[data], sizeof(struct user_desc));
-+		return;
-+	case PTRACE_ARCH_PRCTL:
-+		/* arch_ptrace() calls do_arch_prctl_64(child, data, addr): data is the
-+		 * arch_prctl code and addr the value or output pointer.
-+		 */
-+		if (output && result == 0 && arch_prctl_returns_value(args[3]))
-+			capture_fixed(ctx, 2, "arg2.value", LAYOUT("unsigned_long"), args[2],
 +				      sizeof(unsigned long));
 +		return;
 +	case PTRACE_GET_SYSCALL_INFO:
@@ -2371,10 +2550,7 @@ index 0000000..edb8c18
 +		return;
 +	case PTRACE_TRACEME: case PTRACE_ATTACH: case PTRACE_SEIZE: case PTRACE_INTERRUPT:
 +	case PTRACE_LISTEN: case PTRACE_CONT: case PTRACE_SYSCALL: case PTRACE_SINGLESTEP:
-+	case PTRACE_SINGLEBLOCK: case PTRACE_SYSEMU: case PTRACE_SYSEMU_SINGLESTEP:
-+	case PTRACE_KILL: case PTRACE_DETACH: case PTRACE_SETOPTIONS:
-+	case PTRACE_OLDSETOPTIONS: case PTRACE_POKEUSR:
-+	case PTRACE_GETFPXREGS: case PTRACE_SETFPXREGS:
++	case PTRACE_KILL: case PTRACE_DETACH: case PTRACE_SETOPTIONS: case PTRACE_POKEUSR:
 +		return;
 +	default:
 +		if (!output)
@@ -2713,54 +2889,6 @@ index 0000000..edb8c18
 +		ant_capture_field(ctx, 0, "arg0.rseq.updates", LAYOUT("rseq"), 3, args[0], NULL,
 +				  sizeof(struct rseq), sizeof(struct rseq), ANT_ASYNC_UNOBSERVED);
 +	}
-+}
-+
-+/* Slice 2E: frames the kernel reads from the user stack instead of an
-+ * argument. Their fields use index 255 and context.* keys.
-+ */
-+static void capture_rt_sigreturn(struct ant_task *ctx)
-+{
-+	unsigned long address = current_pt_regs()->sp - sizeof(long);
-+	struct fxregs_state fx;
-+	struct rt_sigframe frame;
-+	struct _fpx_sw_bytes *sw = (struct _fpx_sw_bytes *)fx.sw_reserved;
-+	enum ant_status status;
-+	u64 fpstate, limit;
-+	u32 magic2;
-+
-+	status = copy_from_user_nofault(&frame, (void __user *)address, sizeof(frame)) ?
-+		ANT_COPY_FAULT : ANT_COMPLETE;
-+	ant_capture_field(ctx, 255, "context.rt_sigframe", LAYOUT("rt_sigframe"), 3, address,
-+			  &frame, sizeof(frame), sizeof(frame), status);
-+	fpstate = (unsigned long)frame.uc.uc_mcontext.fpstate;
-+	if (status != ANT_COMPLETE || !fpstate || ant_capture_lost(ctx))
-+		return;
-+	status = copy_from_user_nofault(&fx, (void __user *)(unsigned long)fpstate, sizeof(fx)) ?
-+		ANT_COPY_FAULT : ANT_COMPLETE;
-+	ant_capture_field(ctx, 255, "context.fpstate", LAYOUT("fxregs_state"), 3, fpstate, &fx,
-+			  sizeof(fx), sizeof(fx), status);
-+	/* check_xstate_in_sigframe(): if any check fails, the kernel ignores the
-+	 * extension and restores the legacy state only, so nothing more is read.
-+	 */
-+	limit = min_t(u64, sw->extended_size, current->thread.fpu.fpstate->user_size);
-+	if (status != ANT_COMPLETE || sw->magic1 != FP_XSTATE_MAGIC1 ||
-+	    sw->xstate_size < sizeof(fx) + sizeof(struct xstate_header) ||
-+	    sw->xstate_size > limit || ant_capture_lost(ctx) ||
-+	    copy_from_user_nofault(&magic2, (void __user *)(unsigned long)
-+				   (fpstate + sw->xstate_size), sizeof(magic2)) ||
-+	    magic2 != FP_XSTATE_MAGIC2)
-+		return;
-+	ant_capture_field(ctx, 255, "context.fpstate.xstate", LAYOUT("xstate"), 3,
-+			  fpstate + sizeof(fx), NULL, sw->xstate_size - sizeof(fx),
-+			  sw->xstate_size - sizeof(fx), ANT_COMPLETE);
-+}
-+
-+/* The uretprobe trampoline saves r11, rcx and rax at sp before the syscall. */
-+static void capture_uretprobe(struct ant_task *ctx)
-+{
-+	ant_capture_field(ctx, 255, "context.uretprobe_regs", LAYOUT("uretprobe_regs"), 3,
-+			  current_pt_regs()->sp, NULL, 3 * sizeof(unsigned long),
-+			  3 * sizeof(unsigned long), ANT_COMPLETE);
 +}
 +
 +/* Slice 2H: bpf(cmd, attr, size). Nested fields come from the snapshot of the
@@ -3540,83 +3668,73 @@ index 0000000..edb8c18
 +	unsigned int index;
 +
 +	switch (nr) {
-+	case 101:
++	case __NR_ptrace:
 +		capture_ptrace(ctx, args, output, result);
 +		return ANT_CAPTURE_OWNED | BIT(2) | BIT(3);
-+	case 165:
++	case __NR_mount:
 +		capture_mount(ctx, args, output);
 +		return ANT_CAPTURE_OWNED | BIT(0) | BIT(1) | BIT(2) | BIT(4);
-+	case 179:
++	case __NR_quotactl:
 +		if (!output && args[1])
 +			ant_capture_string(ctx, 1, "arg1.special", args[1], PATH_MAX);
 +		if (!ant_capture_lost(ctx))
 +			capture_quota_addr(ctx, args[0], args[3], output, result, false);
 +		return ANT_CAPTURE_OWNED | BIT(1) | BIT(3);
-+	case 443:
++	case __NR_quotactl_fd:
 +		capture_quota_addr(ctx, args[1], args[3], output, result, true);
 +		return ANT_CAPTURE_OWNED | BIT(3);
-+	case 246:
++	case __NR_kexec_load:
 +		capture_kexec_load(ctx, args, output);
 +		return ANT_CAPTURE_OWNED | BIT(2);
-+	case 334:
++	case __NR_rseq:
 +		capture_rseq(ctx, args, output, result);
 +		return ANT_CAPTURE_OWNED | BIT(0);
-+	case 139:
++	case __NR_sysfs:
 +		capture_sysfs(ctx, args, output, result);
 +		return ANT_CAPTURE_OWNED | BIT(1) | BIT(2);
-+	case 157:
++	case __NR_prctl:
 +		capture_prctl(ctx, args, output, result);
 +		return ANT_CAPTURE_OWNED | BIT(1) | BIT(2) | BIT(4);
-+	case 250:
++	case __NR_keyctl:
 +		capture_keyctl(ctx, args, output, result);
 +		return ANT_CAPTURE_OWNED | BIT(1) | BIT(2) | BIT(3) | BIT(4);
-+	case 15:
-+		if (!output)
-+			capture_rt_sigreturn(ctx);
-+		return ANT_CAPTURE_OWNED;
-+	case 335:
-+		if (!output)
-+			capture_uretprobe(ctx);
-+		return ANT_CAPTURE_OWNED;
-+	case 321:
++	case __NR_bpf:
 +		capture_bpf(ctx, args, output, result);
 +		return ANT_CAPTURE_OWNED | BIT(1);
-+	case 72:
++	case __NR_fcntl:
 +		capture_fcntl(ctx, args, output, result);
 +		return ANT_CAPTURE_OWNED | BIT(2);
-+	case 158:
-+		capture_arch_prctl(ctx, args, output, result);
-+		return ANT_CAPTURE_OWNED | BIT(1);
-+	case 103: case 154: case 279: case 298:
++	case __NR_syslog: case __NR_move_pages: case __NR_perf_event_open:
 +		capture_remaining_small(ctx, nr, args, output, result);
-+		return ANT_CAPTURE_OWNED | (nr == 298 ? BIT(0) : nr == 279 ?
-+			BIT(2) | BIT(3) | BIT(4) : BIT(1));
-+	case 457: case 458:
++		return ANT_CAPTURE_OWNED | (nr == __NR_perf_event_open ? BIT(0) :
++			nr == __NR_move_pages ? BIT(2) | BIT(3) | BIT(4) : BIT(1));
++	case __NR_statmount: case __NR_listmount:
 +		capture_mount_queries(ctx, nr, args, output, result);
 +		return ANT_CAPTURE_OWNED | BIT(0) | BIT(1);
-+	case 459: case 460: case 461:
++	case __NR_lsm_get_self_attr: case __NR_lsm_set_self_attr: case __NR_lsm_list_modules:
 +		capture_lsm(ctx, nr, args, output, result);
-+		return ANT_CAPTURE_OWNED | (nr == 461 ? BIT(0) | BIT(1) :
-+			BIT(1) | (nr == 459 ? BIT(2) : 0));
-+	case 125: case 126:
++		return ANT_CAPTURE_OWNED | (nr == __NR_lsm_list_modules ? BIT(0) | BIT(1) :
++			BIT(1) | (nr == __NR_lsm_get_self_attr ? BIT(2) : 0));
++	case __NR_capget: case __NR_capset:
 +		capture_capabilities(ctx, nr, args, output, result);
 +		return ANT_CAPTURE_OWNED | BIT(0) | BIT(1);
-+	case 169:
++	case __NR_reboot:
 +		capture_reboot(ctx, args, output);
 +		return ANT_CAPTURE_OWNED | BIT(3);
-+	case 278:
++	case __NR_vmsplice:
 +		capture_vector(ctx, args, output, result, true);
 +		return ANT_CAPTURE_OWNED | BIT(1);
-+	case 303: case 304:
++	case __NR_name_to_handle_at: case __NR_open_by_handle_at:
 +		capture_handle(ctx, nr, args, output, result);
-+		return ANT_CAPTURE_OWNED | BIT(1) | (nr == 303 ? BIT(2) | BIT(3) : 0);
-+	case 317:
++		return ANT_CAPTURE_OWNED | BIT(1) |
++			(nr == __NR_name_to_handle_at ? BIT(2) | BIT(3) : 0);
++	case __NR_seccomp:
 +		capture_seccomp(ctx, args, output, result);
 +		return ANT_CAPTURE_OWNED | BIT(2);
-+	case 431:
++	case __NR_fsconfig:
 +		capture_fsconfig(ctx, args, output);
 +		return ANT_CAPTURE_OWNED | BIT(2) | BIT(3);
-+	case 440:
++	case __NR_process_madvise:
 +		if (!output) {
 +			struct ant_vector_state *vector;
 +
@@ -3624,7 +3742,7 @@ index 0000000..edb8c18
 +			kfree(vector);
 +		}
 +		return ANT_CAPTURE_OWNED | BIT(1);
-+	case 442:
++	case __NR_mount_setattr:
 +		if (!output) {
 +			ant_capture_string(ctx, 1, "arg1.path", args[1], PATH_MAX);
 +			if (!ant_capture_lost(ctx))
@@ -3633,16 +3751,16 @@ index 0000000..edb8c18
 +						  LAYOUT("mount_attr"));
 +		}
 +		return ANT_CAPTURE_OWNED | BIT(1) | BIT(3);
-+	case 444:
++	case __NR_landlock_create_ruleset:
 +		if (!output && !args[2])
 +			capture_versioned(ctx, 0, args[0], args[1], sizeof(u64),
 +					  sizeof(struct landlock_ruleset_attr), "arg0.ruleset",
 +					  LAYOUT("landlock_ruleset_attr"));
 +		return ANT_CAPTURE_OWNED | BIT(0);
-+	case 445:
++	case __NR_landlock_add_rule:
 +		capture_landlock_rule(ctx, args, output);
 +		return ANT_CAPTURE_OWNED | BIT(2);
-+	case 27:
++	case __NR_mincore:
 +		if (output && result == 0) {
 +			u64 pages = (args[1] >> PAGE_SHIFT) + !!(args[1] & ~PAGE_MASK);
 +
@@ -3650,31 +3768,35 @@ index 0000000..edb8c18
 +					  args[2], NULL, pages, pages, ANT_COMPLETE);
 +		}
 +		return ANT_CAPTURE_OWNED | BIT(2);
-+	case 170: case 171:
++	case __NR_sethostname: case __NR_setdomainname:
 +		if (!output)
 +			ant_capture_field(ctx, 0, "arg0.name", "", 1, args[0], NULL,
 +					  (u32)args[1], (u32)args[1],
 +					  (s32)args[1] >= 0 && (u32)args[1] <= __NEW_UTS_LEN ?
 +					  ANT_COMPLETE : ANT_INVALID_EXTENT);
 +		return ANT_CAPTURE_OWNED | BIT(0);
-+	case 202: case 449: case 454: case 455: case 456:
++	case __NR_futex: case __NR_futex_waitv: case __NR_futex_wake: case __NR_futex_wait:
++	case __NR_futex_requeue:
 +		capture_futex(ctx, nr, args, output, result);
-+		mask = nr == 202 ? BIT(0) | BIT(3) | BIT(4) :
-+			nr == 449 ? BIT(0) | BIT(3) : nr == 455 ? BIT(0) | BIT(4) : BIT(0);
++		mask = nr == __NR_futex ? BIT(0) | BIT(3) | BIT(4) :
++			nr == __NR_futex_waitv ? BIT(0) | BIT(3) :
++			nr == __NR_futex_wait ? BIT(0) | BIT(4) : BIT(0);
 +		return ANT_CAPTURE_OWNED | mask;
-+	case 203: case 204: case 237: case 238: case 239: case 256:
++	case __NR_sched_setaffinity: case __NR_sched_getaffinity: case __NR_mbind:
++	case __NR_set_mempolicy: case __NR_get_mempolicy: case __NR_migrate_pages:
 +		capture_memory_masks(ctx, nr, args, output, result);
-+		mask = nr == 203 || nr == 204 ? BIT(2) : nr == 237 ? BIT(3) :
-+			nr == 238 ? BIT(1) : nr == 239 ? BIT(0) | BIT(1) : BIT(2) | BIT(3);
++		mask = nr == __NR_sched_setaffinity || nr == __NR_sched_getaffinity ? BIT(2) :
++			nr == __NR_mbind ? BIT(3) : nr == __NR_set_mempolicy ? BIT(1) :
++			nr == __NR_get_mempolicy ? BIT(0) | BIT(1) : BIT(2) | BIT(3);
 +		return ANT_CAPTURE_OWNED | mask;
-+	case 218:
++	case __NR_set_tid_address:
 +		/* Zeroed and futex-woken by the kernel when the thread exits. */
 +		if (!output)
 +			ant_capture_field(ctx, 0, "arg0.clear_child_tid", LAYOUT("pid_t"), 3,
 +					  args[0], NULL, sizeof(u32), sizeof(u32),
 +					  ANT_ASYNC_UNOBSERVED);
 +		return ANT_CAPTURE_OWNED | BIT(0);
-+	case 273:
++	case __NR_set_robust_list:
 +		if (output)
 +			return ANT_CAPTURE_OWNED | BIT(0);
 +		if (args[1] != sizeof(struct robust_list_head)) {
@@ -3692,41 +3814,47 @@ index 0000000..edb8c18
 +					  3, args[0], NULL, sizeof(struct robust_list_head),
 +					  sizeof(struct robust_list_head), ANT_ASYNC_UNOBSERVED);
 +		return ANT_CAPTURE_OWNED | BIT(0);
-+	case 242: case 243: case 244:
++	case __NR_mq_timedsend: case __NR_mq_timedreceive: case __NR_mq_notify:
 +		capture_mqueue(ctx, nr, args, output, result);
-+		return ANT_CAPTURE_OWNED | BIT(1) | (nr == 244 ? 0 : BIT(4)) |
-+			(nr == 243 ? BIT(3) : 0);
-+	case 299: case 307:
-+		capture_mmsg(ctx, args, output, result, nr == 307);
-+		return ANT_CAPTURE_OWNED | BIT(1) | (nr == 299 ? BIT(4) : 0);
-+	case 310: case 311:
-+		capture_process_vm(ctx, args, output, result, nr == 311);
++		return ANT_CAPTURE_OWNED | BIT(1) | (nr == __NR_mq_notify ? 0 : BIT(4)) |
++			(nr == __NR_mq_timedreceive ? BIT(3) : 0);
++	case __NR_recvmmsg: case __NR_sendmmsg:
++		capture_mmsg(ctx, args, output, result, nr == __NR_sendmmsg);
++		return ANT_CAPTURE_OWNED | BIT(1) | (nr == __NR_recvmmsg ? BIT(4) : 0);
++	case __NR_process_vm_readv: case __NR_process_vm_writev:
++		capture_process_vm(ctx, args, output, result, nr == __NR_process_vm_writev);
 +		return ANT_CAPTURE_OWNED | BIT(1) | BIT(3);
-+	case 31: case 66: case 71:
++	case __NR_shmctl: case __NR_semctl: case __NR_msgctl:
 +		capture_ipc_control(ctx, nr, args, output, result);
-+		return ANT_CAPTURE_OWNED | (nr == 66 ? BIT(3) : BIT(2));
-+	case 30: case 65: case 67: case 69: case 70: case 220:
++		return ANT_CAPTURE_OWNED | (nr == __NR_semctl ? BIT(3) : BIT(2));
++	case __NR_shmat: case __NR_semop: case __NR_shmdt: case __NR_msgsnd: case __NR_msgrcv:
++	case __NR_semtimedop:
 +		capture_ipc_data(ctx, nr, args, output, result);
-+		mask = nr == 67 ? BIT(0) : BIT(1);
-+		return ANT_CAPTURE_OWNED | mask | (nr == 220 ? BIT(3) : 0);
-+	case 13: case 14: case 127: case 128: case 129: case 130: case 131:
-+	case 282: case 289: case 297: case 424:
++		mask = nr == __NR_shmdt ? BIT(0) : BIT(1);
++		return ANT_CAPTURE_OWNED | mask | (nr == __NR_semtimedop ? BIT(3) : 0);
++	case __NR_rt_sigaction: case __NR_rt_sigprocmask: case __NR_rt_sigpending:
++	case __NR_rt_sigtimedwait: case __NR_rt_sigqueueinfo: case __NR_rt_sigsuspend:
++	case __NR_sigaltstack:
++	case __NR_signalfd: case __NR_signalfd4: case __NR_rt_tgsigqueueinfo:
++	case __NR_pidfd_send_signal:
 +		capture_signals(ctx, nr, args, output, result);
-+		mask = nr == 13 || nr == 14 ? BIT(1) | BIT(2) : nr == 128 ? 7 :
-+			nr == 131 ? 3 : nr == 129 || nr == 424 ? BIT(2) :
-+			nr == 297 ? BIT(3) : nr == 282 || nr == 289 ? BIT(1) : BIT(0);
++		mask = nr == __NR_rt_sigaction || nr == __NR_rt_sigprocmask ? BIT(1) | BIT(2) :
++			nr == __NR_rt_sigtimedwait ? 7 : nr == __NR_sigaltstack ? 3 :
++			nr == __NR_rt_sigqueueinfo || nr == __NR_pidfd_send_signal ? BIT(2) :
++			nr == __NR_rt_tgsigqueueinfo ? BIT(3) :
++			nr == __NR_signalfd || nr == __NR_signalfd4 ? BIT(1) : BIT(0);
 +		return ANT_CAPTURE_OWNED | mask;
-+	case 23: case 270:
++	case __NR_select: case __NR_pselect6:
 +		capture_select(ctx, nr, args, output, result);
 +		return ANT_CAPTURE_OWNED | BIT(1) | BIT(2) | BIT(3) | BIT(4) |
-+			(nr == 270 ? BIT(5) : 0);
-+	case 314: case 315:
++			(nr == __NR_pselect6 ? BIT(5) : 0);
++	case __NR_sched_setattr: case __NR_sched_getattr:
 +		capture_schedattr(ctx, nr, args, output, result);
 +		return ANT_CAPTURE_OWNED | BIT(1);
-+	case 435:
++	case __NR_clone3:
 +		capture_clone3(ctx, args, output, result);
 +		return ANT_CAPTURE_OWNED | BIT(0);
-+	case 437:
++	case __NR_openat2:
 +		if (!output) {
 +			ant_capture_string(ctx, 1, "arg1.path", args[1], PATH_MAX);
 +			if (!ant_capture_lost(ctx))
@@ -3735,7 +3863,7 @@ index 0000000..edb8c18
 +						  LAYOUT("open_how"));
 +		}
 +		return ANT_CAPTURE_OWNED | BIT(1) | BIT(2);
-+	case 309:
++	case __NR_getcpu:
 +		if (output && result == 0) {
 +			capture_optional(ctx, 0, args[0], "arg0.cpu", LAYOUT("u32"), sizeof(u32));
 +			capture_optional(ctx, 1, args[1], "arg1.node", LAYOUT("u32"), sizeof(u32));
@@ -3744,45 +3872,55 @@ index 0000000..edb8c18
 +			ant_capture_field(ctx, 2, "arg2.ignored_cache", "", 1,
 +					  args[2], NULL, 0, 0, ANT_NOT_WRITTEN);
 +		return ANT_CAPTURE_OWNED | BIT(0) | BIT(1) | BIT(2);
-+	case 7: case 271:
++	case __NR_poll: case __NR_ppoll:
 +		capture_poll(ctx, nr, args, output, result);
-+		return ANT_CAPTURE_OWNED | BIT(0) | (nr == 271 ? BIT(2) | BIT(3) : 0);
-+	case 232: case 233: case 281: case 441:
++		return ANT_CAPTURE_OWNED | BIT(0) | (nr == __NR_ppoll ? BIT(2) | BIT(3) : 0);
++	case __NR_epoll_wait: case __NR_epoll_ctl: case __NR_epoll_pwait: case __NR_epoll_pwait2:
 +		capture_epoll(ctx, nr, args, output, result);
-+		mask = nr == 233 ? BIT(3) : BIT(1);
-+		if (nr == 281 || nr == 441)
++		mask = nr == __NR_epoll_ctl ? BIT(3) : BIT(1);
++		if (nr == __NR_epoll_pwait || nr == __NR_epoll_pwait2)
 +			mask |= BIT(4);
-+		if (nr == 441)
++		if (nr == __NR_epoll_pwait2)
 +			mask |= BIT(3);
 +		return ANT_CAPTURE_OWNED | mask;
-+	case 295: case 296: case 327: case 328:
-+		capture_vector(ctx, args, output, result, nr == 296 || nr == 328);
++	case __NR_preadv: case __NR_pwritev: case __NR_preadv2: case __NR_pwritev2:
++		capture_vector(ctx, args, output, result,
++			       nr == __NR_pwritev || nr == __NR_pwritev2);
 +		return ANT_CAPTURE_OWNED | BIT(1);
-+	case 46: case 47:
-+		capture_message(ctx, args, output, result, nr == 46);
++	case __NR_sendmsg: case __NR_recvmsg:
++		capture_message(ctx, args, output, result, nr == __NR_sendmsg);
 +		return ANT_CAPTURE_OWNED | BIT(1);
-+	case 51: case 52: case 288:
++	case __NR_getsockname: case __NR_getpeername: case __NR_accept4:
 +		capture_address(ctx, args, output, result);
 +		return ANT_CAPTURE_OWNED | BIT(1) | BIT(2);
-+	case 54:
++	case __NR_setsockopt:
 +		if (!output)
 +			capture_setsockopt(ctx, args);
 +		return ANT_CAPTURE_OWNED | BIT(3);
-+	case 55:
++	case __NR_getsockopt:
 +		capture_getsockopt(ctx, args, output, result);
 +		return ANT_CAPTURE_OWNED | BIT(3) | BIT(4);
-+	case 53:
++	case __NR_socketpair:
 +		if (output && result == 0 && !ant_capture_lost(ctx))
 +			ant_capture_field(ctx, 3, "arg3.socketpair", LAYOUT("int[2]"), 3,
 +					  args[3], NULL, 2 * sizeof(int), 2 * sizeof(int),
 +					  ANT_COMPLETE);
 +		return ANT_CAPTURE_OWNED | BIT(3);
-+	case 188 ... 199:
-+		capture_xattr(ctx, nr, args, output, result);
-+		mask = nr == 190 || nr == 193 || nr == 196 || nr == 199 ? 0 : BIT(0);
-+		mask |= nr < 194 ? BIT(1) | BIT(2) : BIT(1);
++	case __NR_setxattr: case __NR_lsetxattr: case __NR_fsetxattr:
++	case __NR_getxattr: case __NR_lgetxattr: case __NR_fgetxattr:
++	case __NR_listxattr: case __NR_llistxattr: case __NR_flistxattr:
++	case __NR_removexattr: case __NR_lremovexattr: case __NR_fremovexattr: {
++		enum ant_xattr_op op = xattr_op(nr);
++
++		capture_xattr(ctx, op, xattr_by_path(nr), args, output, result);
++		mask = xattr_by_path(nr) ? BIT(0) : 0;
++		mask |= op == ANT_XATTR_SET || op == ANT_XATTR_GET ? BIT(1) | BIT(2) : BIT(1);
 +		return ANT_CAPTURE_OWNED | mask;
++	}
 +	default:
++		mask = ant_arch_capture(ctx, nr, args, output, result);
++		if (mask)
++			return mask;
 +		break;
 +	}
 +	for (index = 0; index < ARRAY_SIZE(field_rules); index++) {
@@ -3815,7 +3953,7 @@ index 0000000..ebf09f6
 +
 +#endif
 diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
-index 9167ee4..2f95cf7 100644
+index 0a077e3..3013b53 100644
 --- a/kernel/antinomie/recorder.c
 +++ b/kernel/antinomie/recorder.c
 @@ -11,6 +11,7 @@
@@ -3828,14 +3966,14 @@ index 9167ee4..2f95cf7 100644
  #include <linux/socket.h>
 @@ -23,6 +24,8 @@
  #include <asm/syscall.h>
+ #include <asm/antinomie_syscalls.h>
  
- #include "native_syscalls.h"
 +#include "capture_api.h"
 +#include "native_capture.h"
  #include "observer.h"
  
  /* Scratch bounds packet size, never the logical capture extent. A task owns
-@@ -43,13 +46,6 @@
+@@ -42,13 +45,6 @@
  #define ANT_RECAPTURE_MAX 8
  #define ANT_RECAPTURE_KEY_SIZE 96
  
@@ -3849,7 +3987,7 @@ index 9167ee4..2f95cf7 100644
  /* An input field recorded NOT_RESIDENT at entry, read again at exit. */
  struct ant_recapture {
  	u64 address, size, declared_size;
-@@ -77,6 +73,14 @@ struct ant_task {
+@@ -76,6 +72,14 @@ struct ant_task {
  	bool active, busy, entry_lost, sock_capacity_valid, kernel_imported;
  	struct iovec *iov;
  	u32 iov_count;
@@ -3912,7 +4050,7 @@ index 9167ee4..2f95cf7 100644
 +	u8 handled;
  	int error;
  
- 	if (ctx->abi != 1) {
+ 	if (ctx->abi != ANT_ABI_NATIVE) {
 @@ -601,6 +640,9 @@ static void capture_entry(struct ant_task *ctx)
  		      U64_MAX, U64_MAX, ANT_NO_DECODER);
  		return;
@@ -3921,12 +4059,12 @@ index 9167ee4..2f95cf7 100644
 +	if (handled & ANT_CAPTURE_OWNED)
 +		return;
  	switch (ctx->nr) {
- 	case 1: case 44:
+ 	case __NR_write: case __NR_sendto:
  		field(ctx, 1, "arg1.data", "", 1, a[1], NULL,
-@@ -659,9 +701,7 @@ static void capture_entry(struct ant_task *ctx)
+@@ -662,9 +704,7 @@ static void capture_entry(struct ant_task *ctx)
  		ioctl_field(ctx, false, 0);
  		break;
- 	case 56:
+ 	case __NR_clone:
 -		if (a[0] & (CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID))
 -			field(ctx, 3, "arg3.child_tid", "", 1, a[3], NULL,
 -			      sizeof(u32), sizeof(u32), ANT_NO_DECODER);
@@ -3934,8 +4072,8 @@ index 9167ee4..2f95cf7 100644
  		break;
  	default: {
  		const struct ant_native_syscall *schema = &ant_native_syscalls[ctx->nr];
-@@ -672,7 +712,7 @@ static void capture_entry(struct ant_task *ctx)
- 		if (ctx->nr == 0 || ctx->nr == 5)
+@@ -675,7 +715,7 @@ static void capture_entry(struct ant_task *ctx)
+ 		if (ctx->nr == __NR_read || ctx->nr == __NR_fstat)
  			break;
  		for (i = 0; i < 6 && !ctx->failed_count; i++) {
 -			if (!(schema->pointer_mask & BIT(i)))
@@ -3943,41 +4081,41 @@ index 9167ee4..2f95cf7 100644
  				continue;
  			scnprintf(key, sizeof(key), "arg%d.%s", i,
  				  schema->argument_names[i] ?: "pointer");
-@@ -693,6 +733,8 @@ static void capture_exit(struct ant_task *ctx, long result)
+@@ -696,6 +736,8 @@ static void capture_exit(struct ant_task *ctx, long result)
  
- 	if (ctx->abi != 1)
+ 	if (ctx->abi != ANT_ABI_NATIVE)
  		return;
 +	if (ant_native_capture(ctx, ctx->nr, a, true, result) & ANT_CAPTURE_OWNED)
 +		return;
  	switch (ctx->nr) {
- 	case 0: case 45:
+ 	case __NR_read: case __NR_recvfrom:
  		if (result > 0)
-@@ -730,9 +772,23 @@ static void capture_exit(struct ant_task *ctx, long result)
+@@ -733,9 +775,23 @@ static void capture_exit(struct ant_task *ctx, long result)
  		ioctl_field(ctx, true, result);
  		break;
- 	case 56:
+ 	case __NR_clone:
 -		if (result > 0 && (a[0] & CLONE_PARENT_SETTID))
 +		if (result <= 0)
 +			break;
 +		if (a[0] & CLONE_PARENT_SETTID)
- 			user_field(ctx, 2, "arg2.parent_tid", "linux-6.12.94/x86_64/pid_t", 3,
+ 			user_field(ctx, 2, "arg2.parent_tid", ANT_LAYOUT("pid_t"), 3,
  				   a[2], sizeof(u32));
 +		if (a[0] & CLONE_PIDFD)
-+			user_field(ctx, 2, "arg2.pidfd", "linux-6.12.94/x86_64/int", 3,
++			user_field(ctx, 2, "arg2.pidfd", ANT_LAYOUT("int"), 3,
 +				   a[2], sizeof(int));
 +		/* The child writes its own TID before returning to user space, and
 +		 * the kernel clears it when the child exits; neither is visible here.
 +		 */
 +		if (a[0] & CLONE_CHILD_SETTID)
-+			field(ctx, 3, "arg3.child_tid", "linux-6.12.94/x86_64/pid_t", 3, a[3],
++			field(ctx, 3, "arg3.child_tid", ANT_LAYOUT("pid_t"), 3, a[3],
 +			      NULL, sizeof(u32), sizeof(u32), ANT_ASYNC_UNOBSERVED);
 +		if (a[0] & CLONE_CHILD_CLEARTID)
-+			field(ctx, 3, "arg3.clear_child_tid", "linux-6.12.94/x86_64/pid_t", 3,
++			field(ctx, 3, "arg3.clear_child_tid", ANT_LAYOUT("pid_t"), 3,
 +			      a[3], NULL, sizeof(u32), sizeof(u32), ANT_ASYNC_UNOBSERVED);
  		break;
  	}
  }
-@@ -908,6 +964,51 @@ void ant_monitor_exec_names(const struct linux_binprm *bprm)
+@@ -911,6 +967,51 @@ void ant_monitor_exec_names(const struct linux_binprm *bprm)
  	}
  }
  
@@ -4029,7 +4167,7 @@ index 9167ee4..2f95cf7 100644
  void ant_monitor_enter(struct pt_regs *regs, long nr)
  {
  	struct ant_task *ctx;
-@@ -938,6 +1039,8 @@ void ant_monitor_enter(struct pt_regs *regs, long nr)
+@@ -941,6 +1042,8 @@ void ant_monitor_enter(struct pt_regs *regs, long nr)
  	}
  	ctx->capture_cookie = capture_cookie;
  	ctx->busy = true;
@@ -4038,12 +4176,12 @@ index 9167ee4..2f95cf7 100644
  	kfree(ctx->iov);
  	ctx->iov = NULL;
  	ctx->iov_count = 0;
-@@ -974,11 +1077,13 @@ void ant_monitor_exit(struct pt_regs *regs)
- 		return;
+@@ -979,11 +1082,13 @@ void ant_monitor_exit(struct pt_regs *regs)
  	ctx->busy = true;
- 	event_begin(ctx, 2, regs->ax);
+ 	result = syscall_get_return_value(current, regs);
+ 	event_begin(ctx, 2, result);
 +	operand_emit(ctx);
- 	capture_exit(ctx, regs->ax);
+ 	capture_exit(ctx, result);
  	recapture(ctx);
  	event_end(ctx);
  	recapture_reset(ctx);
@@ -4052,7 +4190,7 @@ index 9167ee4..2f95cf7 100644
  	kfree(ctx->iov);
  	ctx->iov = NULL;
  	ctx->iov_count = 0;
-@@ -1128,6 +1233,8 @@ void ant_monitor_release(struct task_struct *task)
+@@ -1133,6 +1238,8 @@ void ant_monitor_release(struct task_struct *task)
  	struct ant_task *ctx = task->ant_monitor;
  
  	if (ctx) {

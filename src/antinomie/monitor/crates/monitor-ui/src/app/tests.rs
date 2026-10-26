@@ -320,8 +320,7 @@ pub(super) fn observer_fixture(app: &mut MonitorApp) {
     app.snapshot.boot_id = Some("boot".into());
     app.snapshot.guest_kernel = Some(antinomie_monitor_core::GuestKernel {
         revision: Some(11),
-        source: None,
-        release: None,
+        ..Default::default()
     });
     app.snapshot.vms.push(VmConfig {
         id: "vm".into(),

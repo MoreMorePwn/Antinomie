@@ -11,8 +11,11 @@ Description: antinomie: add a ptrace-free debug engine
  view and travel as blobs tagged with their ELF note type, memory from
  access_remote_vm(). debug.c is the architecture-neutral engine and
  debug_x86.c knows the breakpoint instruction, trap recognition, single
- step and the register sets, so another architecture adds a file and no
- wire change.
+ step, the debug registers and the register sets, so another architecture
+ adds a file (built for that architecture only) and no wire change; the
+ engine itself reads a stopped thread's PC with instruction_pointer().
+ CAPS names the architecture (its ELF machine), and the host reads it
+ when it identifies the guest, before it decodes any record.
  .
  What it offers: attach by identity, stop, continue and single-step;
  software breakpoints written only while the group runs and taken out at
@@ -68,7 +71,7 @@ index 8016798..856cd27 100644
  	proc_exec_connector(current);
  	return 0;
 diff --git a/include/linux/antinomie_monitor.h b/include/linux/antinomie_monitor.h
-index b225a84..40a0be5 100644
+index 89e39cb..b8024ac 100644
 --- a/include/linux/antinomie_monitor.h
 +++ b/include/linux/antinomie_monitor.h
 @@ -2,6 +2,8 @@
@@ -80,9 +83,9 @@ index b225a84..40a0be5 100644
  struct task_struct;
  struct pt_regs;
  struct ant_task;
-@@ -31,6 +33,66 @@ struct linux_binprm;
- #define ANT_FILE_ID_UNLINK 4
- #define ANT_FILE_ID_ISSUE 5
+@@ -45,6 +47,66 @@ struct linux_binprm;
+ #define ANT_COMPAT_LAYOUT(type) type
+ #endif
  #ifdef CONFIG_ANTINOMIE
 +DECLARE_STATIC_KEY_FALSE(ant_dbg_shadow_key);
 +void ant_dbg_shadow_read(struct mm_struct *mm, unsigned long addr, void *buf, int len);
@@ -147,7 +150,7 @@ index b225a84..40a0be5 100644
  void ant_monitor_enter(struct pt_regs *regs, long nr);
  void ant_monitor_exit(struct pt_regs *regs);
  void ant_monitor_fork(struct task_struct *child);
-@@ -98,6 +160,18 @@ void ant_monitor_aio_ctx_free(const void *ioctx);
+@@ -112,6 +174,18 @@ void ant_monitor_aio_ctx_free(const void *ioctx);
  void ant_monitor_operand(u8 arg, const char *key, const char *layout, const void *data,
  			 size_t size);
  #else
@@ -167,14 +170,15 @@ index b225a84..40a0be5 100644
  static inline void ant_monitor_exit(struct pt_regs *regs) {}
  static inline void ant_monitor_fork(struct task_struct *child) {}
 diff --git a/kernel/antinomie/Makefile b/kernel/antinomie/Makefile
-index 566c0d2..6e22c7c 100644
+index bee0ffc..51b40a8 100644
 --- a/kernel/antinomie/Makefile
 +++ b/kernel/antinomie/Makefile
-@@ -5,4 +5,5 @@ obj-y += observer.o
+@@ -8,4 +8,6 @@ obj-y += observer.o
  obj-y += process_core.o
  obj-y += manual_core.o
  obj-y += hash.o
-+obj-y += debug.o debug_x86.o
++obj-y += debug.o
++obj-$(CONFIG_X86_64) += debug_x86.o
  obj-y += fileid.o
 diff --git a/kernel/antinomie/control.c b/kernel/antinomie/control.c
 index 1cbab79..cb51da8 100644
@@ -626,7 +630,7 @@ index 879528e..f4578c0 100644
  #endif
 diff --git a/kernel/antinomie/debug.c b/kernel/antinomie/debug.c
 new file mode 100644
-index 0000000..231b7cd
+index 0000000..6ed67ca
 --- /dev/null
 +++ b/kernel/antinomie/debug.c
 @@ -0,0 +1,3717 @@
@@ -1624,7 +1628,7 @@ index 0000000..231b7cd
 +	s = session_of(current);
 +	t = s && !READ_ONCE(s->teardown) ? find_thread(s, current) : NULL;
 +	if (t && READ_ONCE(t->stepping)) {
-+		if (READ_ONCE(t->step_rep) && regs->ip == READ_ONCE(t->step_pc)) {
++		if (READ_ONCE(t->step_rep) && instruction_pointer(regs) == READ_ONCE(t->step_pc)) {
 +			/* One iteration of a repeated string instruction retired:
 +			 * the trap flag stays set, the next one traps again.
 +			 */
@@ -1666,7 +1670,7 @@ index 0000000..231b7cd
 +			type == HW_BREAKPOINT_W ? ANTC_DEBUG_BP_HW_WRITE : ANTC_DEBUG_BP_HW_ACCESS;
 +		/* An instruction breakpoint is hit before the instruction ran. */
 +		if (type == HW_BREAKPOINT_X)
-+			t->rf_pc = regs->ip;
++			t->rf_pc = instruction_pointer(regs);
 +		WRITE_ONCE(t->pending, type == HW_BREAKPOINT_X ? ANTC_DEBUG_EVENT_HWBREAK :
 +			   ANTC_DEBUG_EVENT_WATCH);
 +		queue_thread(s, t);
@@ -4760,7 +4764,7 @@ index b717282..f2167b3 100644
  
  static int __init ant_guest_init(void)
 diff --git a/kernel/antinomie/manual_core.c b/kernel/antinomie/manual_core.c
-index d403831..13696d1 100644
+index 67d4107..8db80aa 100644
 --- a/kernel/antinomie/manual_core.c
 +++ b/kernel/antinomie/manual_core.c
 @@ -23,6 +23,7 @@
@@ -4838,7 +4842,7 @@ index 108ba1a..cc8aee8 100644
  			/*
  			 * Start a group exit and wake everybody up.
  			 * This way we don't have other threads
-@@ -2808,6 +2809,13 @@ bool get_signal(struct ksignal *ksig)
+@@ -2808,6 +2809,13 @@ relock:
  		if (!signr)
  			break; /* will return 0 */
  

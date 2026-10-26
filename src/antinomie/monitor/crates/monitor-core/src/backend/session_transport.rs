@@ -450,6 +450,7 @@ impl Session {
                 Ok(())
             }
             KernelProbe::Info(_)
+            | KernelProbe::Arch(_)
             | KernelProbe::Stats(_)
             | KernelProbe::Core(..)
             | KernelProbe::Tracer(..) => self.drain_replies(snapshot, sender),
@@ -469,10 +470,16 @@ impl Session {
             KernelProbe::Info(id) if id == reply_id => {
                 self.kernel_probe = if status == 0 {
                     match control::info(payload) {
-                        Ok(kernel) => self.kernel_identified(kernel, snapshot),
-                        Err(error) => snapshot.last_error = Some(format!("guest info: {error}")),
+                        Ok(kernel) => {
+                            let revision = kernel.revision;
+                            self.kernel_identified(kernel, snapshot);
+                            self.arch_probe_start(revision, snapshot)
+                        }
+                        Err(error) => {
+                            snapshot.last_error = Some(format!("guest info: {error}"));
+                            self.core_probe_start(snapshot)
+                        }
                     }
-                    self.core_probe_start(snapshot)
                 } else if status == -EOPNOTSUPP {
                     match self.transport.send(control::STATS, &control::header(0)) {
                         Ok(id) => KernelProbe::Stats(id),
@@ -494,6 +501,20 @@ impl Session {
                 };
                 true
             }
+            KernelProbe::Arch(id) if id == reply_id => {
+                // A guest that cannot say (a development kernel without the
+                // debug engine) is taken as x86-64, as every older guest is.
+                if status == 0 {
+                    match control::arch_caps(payload) {
+                        Ok(arch) => self.arch_identified(arch, snapshot),
+                        Err(error) => {
+                            snapshot.last_error = Some(format!("guest architecture: {error}"))
+                        }
+                    }
+                }
+                self.kernel_probe = self.core_probe_start(snapshot);
+                true
+            }
             KernelProbe::Core(id, attempts) if id == reply_id => {
                 self.kernel_probe = self.core_caps_reply(status, payload, attempts, snapshot);
                 true
@@ -503,6 +524,35 @@ impl Session {
                 true
             }
             _ => false,
+        }
+    }
+    /// Ask a revision-17 guest's debug engine for its architecture: the
+    /// guest's own account of whose system call numbers, layouts and registers
+    /// its records use. An older guest is x86-64 and is not asked.
+    fn arch_probe_start(&mut self, revision: Option<u32>, snapshot: &mut Snapshot) -> KernelProbe {
+        if revision.is_some_and(|revision| revision >= 17) {
+            match self.transport.send(
+                crate::debug::wire::CAPS,
+                &crate::debug::wire::caps_request(),
+            ) {
+                Ok(id) => return KernelProbe::Arch(id),
+                Err(error) => snapshot.last_error = Some(format!("guest architecture: {error}")),
+            }
+        }
+        self.core_probe_start(snapshot)
+    }
+    fn arch_identified(&mut self, arch: crate::api::GuestArch, snapshot: &mut Snapshot) {
+        if !arch.supported() {
+            snapshot.last_error = Some(unsupported_arch(arch));
+        }
+        for kernel in [
+            self.capture.guest_kernel.as_mut(),
+            snapshot.guest_kernel.as_mut(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            kernel.arch = arch;
         }
     }
     /// Ask a revision-15 or newer guest for its process-core limits; an older
@@ -1036,6 +1086,15 @@ pub(super) fn take_pending_flush_steps(
     pending: &mut Vec<crate::recording_flush::Step>,
 ) -> Vec<crate::recording_flush::Step> {
     std::mem::take(pending)
+}
+
+/// Why nothing runs on a guest whose architecture this host cannot decode.
+pub(super) fn unsupported_arch(arch: crate::api::GuestArch) -> String {
+    format!(
+        "the guest kernel is {}: this Antinomie decodes x86-64 guests only, so it \
+         neither launches nor traces programs there",
+        arch.label()
+    )
 }
 
 #[cfg(test)]

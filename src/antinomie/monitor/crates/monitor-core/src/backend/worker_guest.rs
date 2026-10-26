@@ -240,6 +240,11 @@ impl Worker {
                 // The offer comes from a probe after boot. A launch that beat it
                 // would silently drop the shell-job shape and the hashing, so it
                 // waits instead, like the core limits do.
+                if let Some(kernel) = self.snapshot.guest_kernel.as_ref()
+                    && !kernel.arch.supported()
+                {
+                    return Err(super::session_transport::unsupported_arch(kernel.arch));
+                }
                 let offered = control::tracer_offer(self.snapshot.guest_tracer)?;
                 let tracer_hashing =
                     offered & (control::EXEC_HASH_ROOT | control::EXEC_HASH_WRITES);

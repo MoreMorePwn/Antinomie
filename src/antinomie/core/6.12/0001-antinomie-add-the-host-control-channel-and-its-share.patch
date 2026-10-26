@@ -1,6 +1,6 @@
-From db6ef6ac3cd4987255406d7b4367c9dfc0ed3ae1 Mon Sep 17 00:00:00 2001
+From 9c2a8493d29fbbca71e369ae9b7a9ade74f4a447 Mon Sep 17 00:00:00 2001
 From: MikiMiku <jonathanirvinjo@gmail.com>
-Date: Mon, 26 Oct 2026 09:01:00 +0700
+Date: Mon, 26 Oct 2026 15:20:14 +0700
 Subject: [PATCH] antinomie: add the host control channel and its shared-memory
  transport
 
@@ -33,15 +33,13 @@ process group, report what the kernel is (INFO) and power the guest
 off.
 
 Hooked kernel files:
-- arch/x86/kernel/setup.c reserves the bootstrap page from memblock
-  before the kernel allocates memory, so nothing else takes it.
-- arch/x86/boot/compressed/kaslr.c and
-  drivers/firmware/efi/libstub/x86-stub.c keep the decompressor's and
-  the EFI stub's random placement of the kernel off that page. Either
-  could otherwise put the kernel on it, and the transport would never
-  come up.
 - init/Kconfig and kernel/Makefile add CONFIG_ANTINOMIE and the
   kernel/antinomie directory.
+
+The architecture reserves the bootstrap page from memblock
+(ant_bootstrap_reserve()) before the kernel allocates memory, and keeps
+the kernel's own placement off it; the x86-64 hooks are in the last
+patch of the series.
 
 Contract: INFO reports contract revision 17 (ANTC_REVISION), the
 revision of the whole series, and CONFIG_ANTINOMIE_SOURCE_ID,
@@ -51,23 +49,20 @@ waits in revision 13 (transport ABI 8) and the reattachment fence in
 revision 14 (transport ABI 9). A kernel without INFO answers it with
 -EOPNOTSUPP.
 ---
- arch/x86/boot/compressed/kaslr.c        |  20 +
- arch/x86/kernel/setup.c                 |   6 +
- drivers/firmware/efi/libstub/x86-stub.c |  58 +++
- include/linux/antinomie.h               |  40 ++
- include/linux/antinomie_boot.h          |   6 +
- init/Kconfig                            |   1 +
- kernel/Makefile                         |   2 +
- kernel/antinomie/Kconfig                |  17 +
- kernel/antinomie/Makefile               |   1 +
- kernel/antinomie/abi.h                  | 114 ++++++
- kernel/antinomie/bootstrap.c            |  38 ++
- kernel/antinomie/bootstrap_layout.h     |   6 +
- kernel/antinomie/control.c              | 514 ++++++++++++++++++++++++
- kernel/antinomie/control_wire.h         |  66 +++
- kernel/antinomie/guest.c                | 494 +++++++++++++++++++++++
- kernel/antinomie/queue.h                |  79 ++++
- 16 files changed, 1462 insertions(+)
+ include/linux/antinomie.h           |  40 +++
+ include/linux/antinomie_boot.h      |   6 +
+ init/Kconfig                        |   1 +
+ kernel/Makefile                     |   2 +
+ kernel/antinomie/Kconfig            |  20 ++
+ kernel/antinomie/Makefile           |   1 +
+ kernel/antinomie/abi.h              | 114 ++++++
+ kernel/antinomie/bootstrap.c        |  38 ++
+ kernel/antinomie/bootstrap_layout.h |   6 +
+ kernel/antinomie/control.c          | 514 ++++++++++++++++++++++++++++
+ kernel/antinomie/control_wire.h     |  66 ++++
+ kernel/antinomie/guest.c            | 494 ++++++++++++++++++++++++++
+ kernel/antinomie/queue.h            |  79 +++++
+ 13 files changed, 1381 insertions(+)
  create mode 100644 include/linux/antinomie.h
  create mode 100644 include/linux/antinomie_boot.h
  create mode 100644 kernel/antinomie/Kconfig
@@ -80,171 +75,6 @@ revision 14 (transport ABI 9). A kernel without INFO answers it with
  create mode 100644 kernel/antinomie/guest.c
  create mode 100644 kernel/antinomie/queue.h
 
-diff --git a/arch/x86/boot/compressed/kaslr.c b/arch/x86/boot/compressed/kaslr.c
-index f4d8237..2dd562f 100644
---- a/arch/x86/boot/compressed/kaslr.c
-+++ b/arch/x86/boot/compressed/kaslr.c
-@@ -23,6 +23,9 @@
- #include "error.h"
- #include "../string.h"
- #include "efi.h"
-+#ifdef CONFIG_ANTINOMIE
-+#include <linux/antinomie_boot.h>
-+#endif
- 
- #include <generated/compile.h>
- #include <linux/module.h>
-@@ -92,6 +95,9 @@ enum mem_avoid_index {
- 	MEM_AVOID_INITRD,
- 	MEM_AVOID_CMDLINE,
- 	MEM_AVOID_BOOTPARAMS,
-+#ifdef CONFIG_ANTINOMIE
-+	MEM_AVOID_ANTINOMIE,
-+#endif
- 	MEM_AVOID_MEMMAP_BEGIN,
- 	MEM_AVOID_MEMMAP_END = MEM_AVOID_MEMMAP_BEGIN + MAX_MEMMAP_REGIONS - 1,
- 	MEM_AVOID_MAX,
-@@ -257,6 +263,16 @@ static void handle_mem_options(void)
- 		if (!val && strcmp(param, "--") == 0)
- 			break;
- 
-+#ifdef CONFIG_ANTINOMIE
-+		if (!strcmp(param, "antinomie_boot_gpa")) {
-+			u64 gpa;
-+
-+			if (val && !kstrtoull(val, 0, &gpa) && !(gpa & (ANT_BOOT_SIZE - 1)) &&
-+			    gpa >= 0x100000 && gpa <= ~0ULL - ANT_BOOT_SIZE)
-+				mem_avoid[MEM_AVOID_ANTINOMIE].start = gpa;
-+			continue;
-+		}
-+#endif
- 		if (!strcmp(param, "memmap")) {
- 			mem_avoid_memmap(val);
- 		} else if (IS_ENABLED(CONFIG_X86_64) && strstr(param, "hugepages")) {
-@@ -394,6 +410,10 @@ static void mem_avoid_init(unsigned long input, unsigned long input_size,
- 	/* We don't need to set a mapping for setup_data. */
- 
- 	/* Mark the memmap regions we need to avoid */
-+#ifdef CONFIG_ANTINOMIE
-+	mem_avoid[MEM_AVOID_ANTINOMIE].start = ANT_BOOT_GPA;
-+	mem_avoid[MEM_AVOID_ANTINOMIE].size = ANT_BOOT_SIZE;
-+#endif
- 	handle_mem_options();
- 
- 	/* Enumerate the immovable memory regions */
-diff --git a/arch/x86/kernel/setup.c b/arch/x86/kernel/setup.c
-index 93844a2..4b80081 100644
---- a/arch/x86/kernel/setup.c
-+++ b/arch/x86/kernel/setup.c
-@@ -16,6 +16,9 @@
- #include <linux/initrd.h>
- #include <linux/iscsi_ibft.h>
- #include <linux/memblock.h>
-+#ifdef CONFIG_ANTINOMIE
-+#include <linux/antinomie.h>
-+#endif
- #include <linux/panic_notifier.h>
- #include <linux/pci.h>
- #include <linux/root_dev.h>
-@@ -991,6 +994,9 @@ void __init setup_arch(char **cmdline_p)
- 
- 	memblock_set_current_limit(ISA_END_ADDRESS);
- 	e820__memblock_setup();
-+#ifdef CONFIG_ANTINOMIE
-+	ant_bootstrap_reserve();
-+#endif
- 
- 	/*
- 	 * Needs to run after memblock setup because it needs the physical
-diff --git a/drivers/firmware/efi/libstub/x86-stub.c b/drivers/firmware/efi/libstub/x86-stub.c
-index f8e465d..9d2bfb4 100644
---- a/drivers/firmware/efi/libstub/x86-stub.c
-+++ b/drivers/firmware/efi/libstub/x86-stub.c
-@@ -21,6 +21,10 @@
- #include "efistub.h"
- #include "x86-stub.h"
- 
-+#ifdef CONFIG_ANTINOMIE
-+#include <linux/antinomie_boot.h>
-+#endif
-+
- extern char _bss[], _ebss[];
- 
- const efi_system_table_t *efi_system_table;
-@@ -847,12 +851,62 @@ static void error(char *str)
- 
- static const char *cmdline_memmap_override;
- 
-+#ifdef CONFIG_ANTINOMIE
-+static u64 ant_boot_gpa = ANT_BOOT_GPA;
-+
-+/*
-+ * antinomie_boot_gpa=, checked as the decompressor and the kernel check it;
-+ * the last valid one counts.
-+ */
-+static void ant_parse_boot_gpa(const char *cmdline)
-+{
-+	static const char name[] = "antinomie_boot_gpa=";
-+	const char *p = cmdline;
-+
-+	while ((p = strstr(p, name))) {
-+		bool word = p == cmdline || isspace(p[-1]);
-+		char *end;
-+		u64 gpa;
-+
-+		p += sizeof(name) - 1;
-+		gpa = simple_strtoull(p, &end, 0);
-+		if (word && end != p && (!*end || isspace(*end)) &&
-+		    !(gpa & (ANT_BOOT_SIZE - 1)) && gpa >= 0x100000 &&
-+		    gpa <= ~0ULL - ANT_BOOT_SIZE)
-+			ant_boot_gpa = gpa;
-+	}
-+}
-+
-+/*
-+ * The host's bootstrap page is ordinary free memory to the firmware. Claim it
-+ * before the kernel, its initrd and boot data are placed, so that physical
-+ * KASLR cannot put the kernel on it (the decompressor avoids it the same way
-+ * when there is no EFI). As loader data it is RAM again after exit_boot(),
-+ * and the kernel reserves it from memblock (ant_bootstrap_reserve()).
-+ */
-+static void ant_claim_boot_page(void)
-+{
-+	efi_physical_addr_t addr = ant_boot_gpa;
-+	efi_status_t status;
-+
-+	status = efi_bs_call(allocate_pages, EFI_ALLOCATE_ADDRESS, EFI_LOADER_DATA,
-+			     ANT_BOOT_SIZE / EFI_PAGE_SIZE, &addr);
-+	if (status != EFI_SUCCESS)
-+		efi_warn("Bootstrap page 0x%llx is not free: 0x%lx\n", ant_boot_gpa,
-+			 status);
-+}
-+#endif
-+
- static efi_status_t parse_options(const char *cmdline)
- {
- 	static const char opts[][14] = {
- 		"mem=", "memmap=", "hugepages="
- 	};
- 
-+#ifdef CONFIG_ANTINOMIE
-+	ant_parse_boot_gpa(cmdline);
-+#endif
-+
- 	for (int i = 0; i < ARRAY_SIZE(opts); i++) {
- 		const char *p = strstr(cmdline, opts[i]);
- 
-@@ -995,6 +1049,10 @@ void __noreturn efi_stub_entry(efi_handle_t handle,
- 	if (efi_mem_encrypt > 0)
- 		hdr->xloadflags |= XLF_MEM_ENCRYPTION;
- 
-+#ifdef CONFIG_ANTINOMIE
-+	ant_claim_boot_page();
-+#endif
-+
- 	status = efi_decompress_kernel(&kernel_entry);
- 	if (status != EFI_SUCCESS) {
- 		efi_err("Failed to decompress kernel\n");
 diff --git a/include/linux/antinomie.h b/include/linux/antinomie.h
 new file mode 100644
 index 0000000..a7d5c03
@@ -330,10 +160,10 @@ index 87866b0..c20e08d 100644
  obj-$(CONFIG_VHOST_TASK) += vhost_task.o
 diff --git a/kernel/antinomie/Kconfig b/kernel/antinomie/Kconfig
 new file mode 100644
-index 0000000..bc4d01a
+index 0000000..3ff7199
 --- /dev/null
 +++ b/kernel/antinomie/Kconfig
-@@ -0,0 +1,17 @@
+@@ -0,0 +1,20 @@
 +config ANTINOMIE
 +	bool "Antinomie host control and syscall recorder"
 +	depends on X86_64 && UNIX98_PTYS
@@ -341,6 +171,9 @@ index 0000000..bc4d01a
 +	  Host control, PTY sessions and observational syscall telemetry over
 +	  the Antinomie V7 memory transport. Only host-launched tasks and their
 +	  descendants are traced. Host access includes guest execution authority.
++	  An architecture with a port provides <asm/antinomie.h>, the generated
++	  <asm/antinomie_syscalls.h> and hooks in its own arch/ tree; x86-64 is
++	  the only one.
 +
 +config ANTINOMIE_SOURCE_ID
 +	string "Antinomie patch-series identity"

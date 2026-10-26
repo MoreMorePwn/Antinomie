@@ -1,0 +1,256 @@
+From 2b262b8753d35e00e6ea30e8d64fbc936b014c44 Mon Sep 17 00:00:00 2001
+From: MikiMiku <jonathanirvinjo@gmail.com>
+Date: Mon, 26 Oct 2026 15:20:14 +0700
+Subject: [PATCH] antinomie: hook the x86-64 architecture
+
+Everything the series changes in the x86 architecture's own code, kept
+in one patch so that the rest of the series is the same on every
+architecture: a port adds a patch like this one, its <asm/antinomie.h>
+and generated <asm/antinomie_syscalls.h>, and its per-architecture
+files. Without it the series builds, but records nothing and has no
+transport.
+
+Hooked kernel files:
+- arch/x86/entry/common.c calls the recorder at system call entry and
+  exit, in do_syscall_64() and the 32-bit entry, the only places that
+  see every call with its registers. A 32-bit call is recorded with
+  its ABI and no table.
+- arch/x86/kernel/setup.c reserves the bootstrap page from memblock
+  right after the e820 map is set up, before the kernel allocates
+  memory, so nothing else takes it; and takes the antinomie_* boot
+  options out of the command line before the kernel first prints it.
+- arch/x86/boot/compressed/kaslr.c and the x86 EFI stub
+  (drivers/firmware/efi/libstub/x86-stub.c) keep the decompressor's
+  and the EFI stub's random placement of the kernel off the bootstrap
+  page. Either could otherwise put the kernel on it, and the transport
+  would never come up.
+
+Contract: unchanged (revision 17).
+---
+ arch/x86/boot/compressed/kaslr.c        | 20 +++++++++
+ arch/x86/entry/common.c                 |  6 +++
+ arch/x86/kernel/setup.c                 | 10 +++++
+ drivers/firmware/efi/libstub/x86-stub.c | 58 +++++++++++++++++++++++++
+ 4 files changed, 94 insertions(+)
+
+diff --git a/arch/x86/boot/compressed/kaslr.c b/arch/x86/boot/compressed/kaslr.c
+index f4d8237..2dd562f 100644
+--- a/arch/x86/boot/compressed/kaslr.c
++++ b/arch/x86/boot/compressed/kaslr.c
+@@ -23,6 +23,9 @@
+ #include "error.h"
+ #include "../string.h"
+ #include "efi.h"
++#ifdef CONFIG_ANTINOMIE
++#include <linux/antinomie_boot.h>
++#endif
+ 
+ #include <generated/compile.h>
+ #include <linux/module.h>
+@@ -92,6 +95,9 @@ enum mem_avoid_index {
+ 	MEM_AVOID_INITRD,
+ 	MEM_AVOID_CMDLINE,
+ 	MEM_AVOID_BOOTPARAMS,
++#ifdef CONFIG_ANTINOMIE
++	MEM_AVOID_ANTINOMIE,
++#endif
+ 	MEM_AVOID_MEMMAP_BEGIN,
+ 	MEM_AVOID_MEMMAP_END = MEM_AVOID_MEMMAP_BEGIN + MAX_MEMMAP_REGIONS - 1,
+ 	MEM_AVOID_MAX,
+@@ -257,6 +263,16 @@ static void handle_mem_options(void)
+ 		if (!val && strcmp(param, "--") == 0)
+ 			break;
+ 
++#ifdef CONFIG_ANTINOMIE
++		if (!strcmp(param, "antinomie_boot_gpa")) {
++			u64 gpa;
++
++			if (val && !kstrtoull(val, 0, &gpa) && !(gpa & (ANT_BOOT_SIZE - 1)) &&
++			    gpa >= 0x100000 && gpa <= ~0ULL - ANT_BOOT_SIZE)
++				mem_avoid[MEM_AVOID_ANTINOMIE].start = gpa;
++			continue;
++		}
++#endif
+ 		if (!strcmp(param, "memmap")) {
+ 			mem_avoid_memmap(val);
+ 		} else if (IS_ENABLED(CONFIG_X86_64) && strstr(param, "hugepages")) {
+@@ -394,6 +410,10 @@ static void mem_avoid_init(unsigned long input, unsigned long input_size,
+ 	/* We don't need to set a mapping for setup_data. */
+ 
+ 	/* Mark the memmap regions we need to avoid */
++#ifdef CONFIG_ANTINOMIE
++	mem_avoid[MEM_AVOID_ANTINOMIE].start = ANT_BOOT_GPA;
++	mem_avoid[MEM_AVOID_ANTINOMIE].size = ANT_BOOT_SIZE;
++#endif
+ 	handle_mem_options();
+ 
+ 	/* Enumerate the immovable memory regions */
+diff --git a/arch/x86/entry/common.c b/arch/x86/entry/common.c
+index 040ff04..0c6bdd0 100644
+--- a/arch/x86/entry/common.c
++++ b/arch/x86/entry/common.c
+@@ -20,6 +20,7 @@
+ #include <linux/syscalls.h>
+ #include <linux/uaccess.h>
+ #include <linux/init.h>
++#include <linux/antinomie_monitor.h>
+ 
+ #include <asm/apic.h>
+ #include <asm/desc.h>
+@@ -74,11 +75,13 @@ __visible noinstr bool do_syscall_64(struct pt_regs *regs, int nr)
+ 	nr = syscall_enter_from_user_mode(regs, nr);
+ 
+ 	instrumentation_begin();
++	ant_monitor_enter(regs, nr);
+ 
+ 	if (!do_syscall_x64(regs, nr) && !do_syscall_x32(regs, nr) && nr != -1) {
+ 		/* Invalid system call, but still a system call. */
+ 		regs->ax = __x64_sys_ni_syscall(regs);
+ 	}
++	ant_monitor_exit(regs);
+ 
+ 	instrumentation_end();
+ 	syscall_exit_to_user_mode(regs);
+@@ -155,12 +158,15 @@ static __always_inline void do_syscall_32_irqs_on(struct pt_regs *regs, int nr)
+ 	 */
+ 	unsigned int unr = nr;
+ 
++	ant_monitor_enter(regs, nr);
++
+ 	if (likely(unr < IA32_NR_syscalls)) {
+ 		unr = array_index_nospec(unr, IA32_NR_syscalls);
+ 		regs->ax = ia32_sys_call(regs, unr);
+ 	} else if (nr != -1) {
+ 		regs->ax = __ia32_sys_ni_syscall(regs);
+ 	}
++	ant_monitor_exit(regs);
+ }
+ 
+ #ifdef CONFIG_IA32_EMULATION
+diff --git a/arch/x86/kernel/setup.c b/arch/x86/kernel/setup.c
+index 93844a2..8bf3edd 100644
+--- a/arch/x86/kernel/setup.c
++++ b/arch/x86/kernel/setup.c
+@@ -16,6 +16,10 @@
+ #include <linux/initrd.h>
+ #include <linux/iscsi_ibft.h>
+ #include <linux/memblock.h>
++#ifdef CONFIG_ANTINOMIE
++#include <linux/antinomie.h>
++#include <linux/antinomie_stealth.h>
++#endif
+ #include <linux/panic_notifier.h>
+ #include <linux/pci.h>
+ #include <linux/root_dev.h>
+@@ -751,6 +755,9 @@ void __init setup_arch(char **cmdline_p)
+ 	 */
+ 	__flush_tlb_all();
+ #else
++#ifdef CONFIG_ANTINOMIE
++	ant_cmdline_take(boot_command_line);
++#endif
+ 	printk(KERN_INFO "Command line: %s\n", boot_command_line);
+ 	boot_cpu_data.x86_phys_bits = MAX_PHYSMEM_BITS;
+ #endif
+@@ -991,6 +998,9 @@ void __init setup_arch(char **cmdline_p)
+ 
+ 	memblock_set_current_limit(ISA_END_ADDRESS);
+ 	e820__memblock_setup();
++#ifdef CONFIG_ANTINOMIE
++	ant_bootstrap_reserve();
++#endif
+ 
+ 	/*
+ 	 * Needs to run after memblock setup because it needs the physical
+diff --git a/drivers/firmware/efi/libstub/x86-stub.c b/drivers/firmware/efi/libstub/x86-stub.c
+index f8e465d..9d2bfb4 100644
+--- a/drivers/firmware/efi/libstub/x86-stub.c
++++ b/drivers/firmware/efi/libstub/x86-stub.c
+@@ -21,6 +21,10 @@
+ #include "efistub.h"
+ #include "x86-stub.h"
+ 
++#ifdef CONFIG_ANTINOMIE
++#include <linux/antinomie_boot.h>
++#endif
++
+ extern char _bss[], _ebss[];
+ 
+ const efi_system_table_t *efi_system_table;
+@@ -847,12 +851,62 @@ static void error(char *str)
+ 
+ static const char *cmdline_memmap_override;
+ 
++#ifdef CONFIG_ANTINOMIE
++static u64 ant_boot_gpa = ANT_BOOT_GPA;
++
++/*
++ * antinomie_boot_gpa=, checked as the decompressor and the kernel check it;
++ * the last valid one counts.
++ */
++static void ant_parse_boot_gpa(const char *cmdline)
++{
++	static const char name[] = "antinomie_boot_gpa=";
++	const char *p = cmdline;
++
++	while ((p = strstr(p, name))) {
++		bool word = p == cmdline || isspace(p[-1]);
++		char *end;
++		u64 gpa;
++
++		p += sizeof(name) - 1;
++		gpa = simple_strtoull(p, &end, 0);
++		if (word && end != p && (!*end || isspace(*end)) &&
++		    !(gpa & (ANT_BOOT_SIZE - 1)) && gpa >= 0x100000 &&
++		    gpa <= ~0ULL - ANT_BOOT_SIZE)
++			ant_boot_gpa = gpa;
++	}
++}
++
++/*
++ * The host's bootstrap page is ordinary free memory to the firmware. Claim it
++ * before the kernel, its initrd and boot data are placed, so that physical
++ * KASLR cannot put the kernel on it (the decompressor avoids it the same way
++ * when there is no EFI). As loader data it is RAM again after exit_boot(),
++ * and the kernel reserves it from memblock (ant_bootstrap_reserve()).
++ */
++static void ant_claim_boot_page(void)
++{
++	efi_physical_addr_t addr = ant_boot_gpa;
++	efi_status_t status;
++
++	status = efi_bs_call(allocate_pages, EFI_ALLOCATE_ADDRESS, EFI_LOADER_DATA,
++			     ANT_BOOT_SIZE / EFI_PAGE_SIZE, &addr);
++	if (status != EFI_SUCCESS)
++		efi_warn("Bootstrap page 0x%llx is not free: 0x%lx\n", ant_boot_gpa,
++			 status);
++}
++#endif
++
+ static efi_status_t parse_options(const char *cmdline)
+ {
+ 	static const char opts[][14] = {
+ 		"mem=", "memmap=", "hugepages="
+ 	};
+ 
++#ifdef CONFIG_ANTINOMIE
++	ant_parse_boot_gpa(cmdline);
++#endif
++
+ 	for (int i = 0; i < ARRAY_SIZE(opts); i++) {
+ 		const char *p = strstr(cmdline, opts[i]);
+ 
+@@ -995,6 +1049,10 @@ void __noreturn efi_stub_entry(efi_handle_t handle,
+ 	if (efi_mem_encrypt > 0)
+ 		hdr->xloadflags |= XLF_MEM_ENCRYPTION;
+ 
++#ifdef CONFIG_ANTINOMIE
++	ant_claim_boot_page();
++#endif
++
+ 	status = efi_decompress_kernel(&kernel_entry);
+ 	if (status != EFI_SUCCESS) {
+ 		efi_err("Failed to decompress kernel\n");
+-- 
+2.53.0
+

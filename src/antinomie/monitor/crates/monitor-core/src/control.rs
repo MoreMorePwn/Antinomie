@@ -477,7 +477,8 @@ pub(crate) fn core_chunk(
         _ => Err("invalid core reply flags, length or extent".into()),
     }
 }
-/// Decode an INFO reply: the kernel's revision, source id and release.
+/// Decode an INFO reply: the kernel's revision, source id and release. Its
+/// architecture comes from the debug engine's CAPS ([`arch_caps`]).
 pub(crate) fn info(reply: &[u8]) -> Result<crate::api::GuestKernel, String> {
     if reply.len() != INFO_SIZE {
         return Err("invalid guest info reply length".into());
@@ -518,7 +519,24 @@ pub(crate) fn info(reply: &[u8]) -> Result<crate::api::GuestKernel, String> {
         revision: Some(revision),
         source,
         release: Some(release),
+        arch: crate::api::GuestArch::X86_64,
     })
+}
+/// The guest's architecture from a debug CAPS reply (debug ABI 1: u32 abi at
+/// 0, the ELF machine at 4). Every revision-17 guest has the debug engine; its
+/// CAPS is the guest's own account of whose system call numbers, layouts and
+/// registers its records use.
+pub(crate) fn arch_caps(reply: &[u8]) -> Result<crate::api::GuestArch, String> {
+    use crate::parser::u32_at;
+    if reply.len() < crate::debug::wire::CAPS_SIZE {
+        return Err("debug capability reply is too short".into());
+    }
+    let abi = u32_at(reply, 0).map_err(|e| e.to_string())?;
+    if abi != crate::debug::wire::ABI {
+        return Err(format!("unsupported debug ABI {abi}"));
+    }
+    let machine = u32_at(reply, 4).map_err(|e| e.to_string())?;
+    Ok(crate::api::GuestArch::from_elf_machine(machine))
 }
 #[cfg(test)]
 mod tests {
@@ -840,6 +858,7 @@ mod tests {
         assert_eq!(info.revision, Some(9));
         assert_eq!(info.source.as_deref(), Some(series.as_str()));
         assert_eq!(info.release.as_deref(), Some("6.12.94-g1"));
+        assert_eq!(info.arch, crate::api::GuestArch::X86_64);
         let unversioned = super::info(&info_reply(9, "", "6.12.94")).unwrap();
         assert_eq!(unversioned.source, None);
         for bad in [
@@ -856,6 +875,22 @@ mod tests {
         let mut dirty = info_reply(9, "", "6.12.94");
         dirty[100] = b'x';
         assert!(super::info(&dirty).is_err());
+    }
+    #[test]
+    fn debug_caps_name_the_guest_architecture() {
+        use crate::api::GuestArch;
+        let caps = |abi: u32, machine: u32| {
+            let mut reply = vec![0; crate::debug::wire::CAPS_SIZE];
+            reply[0..4].copy_from_slice(&abi.to_le_bytes());
+            reply[4..8].copy_from_slice(&machine.to_le_bytes());
+            reply
+        };
+        assert_eq!(arch_caps(&caps(1, 62)), Ok(GuestArch::X86_64));
+        assert_eq!(arch_caps(&caps(1, 183)), Ok(GuestArch::Unsupported(183)));
+        assert_eq!(arch_caps(&caps(1, 0)), Ok(GuestArch::Unsupported(0)));
+        assert!(!GuestArch::Unsupported(183).supported());
+        assert!(arch_caps(&caps(2, 62)).is_err());
+        assert!(arch_caps(&caps(1, 62)[..47]).is_err());
     }
     #[test]
     fn rejects_embedded_nul_and_relative_execution() {

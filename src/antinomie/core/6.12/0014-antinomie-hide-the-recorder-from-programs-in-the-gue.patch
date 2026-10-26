@@ -1,6 +1,6 @@
-From 18d5d2f57ba256e28aeaf5f08b975ac75246cfc5 Mon Sep 17 00:00:00 2001
+From ee0008698d8b2762a577f32dbfb7b3eba0ea4c70 Mon Sep 17 00:00:00 2001
 From: MikiMiku <jonathanirvinjo@gmail.com>
-Date: Mon, 26 Oct 2026 09:14:00 +0700
+Date: Mon, 26 Oct 2026 15:20:14 +0700
 Subject: [PATCH] antinomie: hide the recorder from programs in the guest
 
 A sample that looks for a sandbox reads world-readable files. Remove
@@ -26,8 +26,11 @@ what the recorder itself put there.
 - ACPI: QEMU's own devices (_HID QEMU*, such as fw_cfg) are not
   enumerated, so sysfs and /proc/ioports do not name QEMU.
 
+The architecture takes the options out of the command line before the
+kernel first prints it (ant_cmdline_take(); the x86-64 hook is in the
+last patch).
+
 Hooked kernel files:
-- arch/x86/kernel/setup.c: the command line, before its first print.
 - kernel/kallsyms.c and fs/proc/base.c: the /proc/kallsyms listing and
   wchan.
 - drivers/acpi/scan.c: the device scan.
@@ -38,7 +41,6 @@ the same options as before.
 
 Contract: unchanged (revision 17).
 ---
- arch/x86/kernel/setup.c           |   4 +
  drivers/acpi/scan.c               |   3 +-
  fs/proc/base.c                    |   4 +-
  include/linux/antinomie_stealth.h |  27 +++++++
@@ -53,35 +55,13 @@ Contract: unchanged (revision 17).
  kernel/antinomie/sections.h       |  33 ++++++++
  kernel/antinomie/stealth.c        | 123 ++++++++++++++++++++++++++++++
  kernel/kallsyms.c                 |   5 ++
- 15 files changed, 227 insertions(+), 23 deletions(-)
+ 14 files changed, 223 insertions(+), 23 deletions(-)
  create mode 100644 include/linux/antinomie_stealth.h
  create mode 100644 kernel/antinomie/section_begin.c
  create mode 100644 kernel/antinomie/section_end.c
  create mode 100644 kernel/antinomie/sections.h
  create mode 100644 kernel/antinomie/stealth.c
 
-diff --git a/arch/x86/kernel/setup.c b/arch/x86/kernel/setup.c
-index 4b80081..8bf3edd 100644
---- a/arch/x86/kernel/setup.c
-+++ b/arch/x86/kernel/setup.c
-@@ -18,6 +18,7 @@
- #include <linux/memblock.h>
- #ifdef CONFIG_ANTINOMIE
- #include <linux/antinomie.h>
-+#include <linux/antinomie_stealth.h>
- #endif
- #include <linux/panic_notifier.h>
- #include <linux/pci.h>
-@@ -754,6 +755,9 @@ void __init setup_arch(char **cmdline_p)
- 	 */
- 	__flush_tlb_all();
- #else
-+#ifdef CONFIG_ANTINOMIE
-+	ant_cmdline_take(boot_command_line);
-+#endif
- 	printk(KERN_INFO "Command line: %s\n", boot_command_line);
- 	boot_cpu_data.x86_phys_bits = MAX_PHYSMEM_BITS;
- #endif
 diff --git a/drivers/acpi/scan.c b/drivers/acpi/scan.c
 index 0774cc6..7cbeba2 100644
 --- a/drivers/acpi/scan.c
@@ -159,7 +139,7 @@ index 0000000..6a27fed
 +#endif
 +#endif
 diff --git a/kernel/antinomie/Makefile b/kernel/antinomie/Makefile
-index 6e8c29a..becb81d 100644
+index a5a55d3..0aab119 100644
 --- a/kernel/antinomie/Makefile
 +++ b/kernel/antinomie/Makefile
 @@ -1,3 +1,6 @@
@@ -167,11 +147,11 @@ index 6e8c29a..becb81d 100644
 +# symbols in vmlinux (sections.h).
 +obj-y += section_begin.o
  obj-y += bootstrap.o guest.o recorder.o control.o run.o async.o native_capture.o
- obj-y += async_capture.o
- obj-y += specimen.o
-@@ -8,3 +11,5 @@ obj-y += resources.o
- obj-y += hash.o
- obj-y += debug.o debug_x86.o
+ # Per-architecture files: <name>_<arch>.c, built here so that the section
+ # labels bracket them too.
+@@ -12,3 +15,5 @@ obj-y += hash.o
+ obj-y += debug.o
+ obj-$(CONFIG_X86_64) += debug_x86.o
  obj-y += fileid.o
 +obj-y += stealth.o
 +obj-y += section_end.o
@@ -198,7 +178,7 @@ index b460eb6..89dae99 100644
  void __init ant_bootstrap_reserve(void)
  {
 diff --git a/kernel/antinomie/debug.c b/kernel/antinomie/debug.c
-index 231b7cd..8cecc9c 100644
+index 6ed67ca..a71441c 100644
 --- a/kernel/antinomie/debug.c
 +++ b/kernel/antinomie/debug.c
 @@ -3711,7 +3711,8 @@ bool ant_debug_active(void)
@@ -215,7 +195,7 @@ diff --git a/kernel/antinomie/guest.c b/kernel/antinomie/guest.c
 index f2167b3..23f3209 100644
 --- a/kernel/antinomie/guest.c
 +++ b/kernel/antinomie/guest.c
-@@ -469,9 +469,10 @@ static int __init ant_guest_init(void)
+@@ -469,9 +469,10 @@ retry:
  	 * TTY queue events_unbound. WQ_MEM_RECLAIM makes that flush trip
  	 * check_flush_dependency. Flags stay 0 so the worker may complete
  	 * the read. The queue stays ordered, so commands, EOF and shutdown
@@ -229,10 +209,10 @@ index f2167b3..23f3209 100644
  	control->geometry.version = ANT_ABI;
  	control->geometry.session = get_random_u64() ?: 1;
 diff --git a/kernel/antinomie/manual_core.c b/kernel/antinomie/manual_core.c
-index 13696d1..5b45436 100644
+index 8db80aa..cfbe73e 100644
 --- a/kernel/antinomie/manual_core.c
 +++ b/kernel/antinomie/manual_core.c
-@@ -656,7 +656,8 @@ int ant_manual_command(u32 opcode, const u8 *args, size_t args_len,
+@@ -656,7 +656,8 @@ unlock:
  
  static int __init ant_manual_init(void)
  {

@@ -1,6 +1,6 @@
-From dc908bcd66a119546e0c2fa32addab291e1f8ae9 Mon Sep 17 00:00:00 2001
+From 2bd1b1dd6bbc1f8e2c13cd561761bee9aeb3bea0 Mon Sep 17 00:00:00 2001
 From: MikiMiku <jonathanirvinjo@gmail.com>
-Date: Mon, 26 Oct 2026 09:10:00 +0700
+Date: Mon, 26 Oct 2026 15:20:14 +0700
 Subject: [PATCH] antinomie: capture process cores at exit and on request
 
 Give the host the memory of the program it launched, as an ELF core the
@@ -380,7 +380,7 @@ index 47335a0..9005620 100644
  }
  
 diff --git a/fs/coredump.c b/fs/coredump.c
-index 64894ba..c9788b6 100644
+index 64894ba..00bfd7a 100644
 --- a/fs/coredump.c
 +++ b/fs/coredump.c
 @@ -1,5 +1,6 @@
@@ -431,7 +431,7 @@ index 64894ba..c9788b6 100644
 +	int error;
 +
 +	if (!current->mm->binfmt || !current->mm->binfmt->core_dump ||
-+	    test_thread_flag(TIF_ADDR32))
++	    ant_arch_compat_task())
 +		return -EOPNOTSUPP;
 +	for (i = 0; i < vma_count; i++)
 +		cprm.vma_data_size += vmas[i].dump_size;
@@ -467,7 +467,7 @@ index 64894ba..c9788b6 100644
 +	};
 +	int error;
 +
-+	if (!mm || !mm->binfmt || !mm->binfmt->core_dump || test_thread_flag(TIF_ADDR32))
++	if (!mm || !mm->binfmt || !mm->binfmt->core_dump || ant_arch_compat_task())
 +		return -EOPNOTSUPP;
 +	/* Bound metadata before the Linux writer allocates its snapshots. */
 +	if (get_nr_threads(current) > 256)
@@ -564,7 +564,7 @@ index 64894ba..c9788b6 100644
  		/*
  		 * To avoid having to allocate page tables for virtual address
  		 * ranges that have never been used yet, and also to make it
-@@ -1213,6 +1360,15 @@ static unsigned long vma_dump_size(struct vm_area_struct *vma,
+@@ -1213,6 +1360,15 @@ whole:
  	return vma->vm_end - vma->vm_start;
  }
  
@@ -581,7 +581,7 @@ index 64894ba..c9788b6 100644
   * Helper function for iterating across a vma list.  It ensures that the caller
   * will visit `gate_vma' prior to terminating the search.
 diff --git a/include/linux/antinomie_monitor.h b/include/linux/antinomie_monitor.h
-index 5216787..b225a84 100644
+index 89dbe5a..89e39cb 100644
 --- a/include/linux/antinomie_monitor.h
 +++ b/include/linux/antinomie_monitor.h
 @@ -15,6 +15,7 @@ struct inode;
@@ -592,7 +592,7 @@ index 5216787..b225a84 100644
  struct linux_binprm;
  #define ANT_ASYNC_IO_URING 1
  #define ANT_ASYNC_AIO 2
-@@ -49,6 +50,10 @@ struct ant_hash_job *ant_monitor_delete_prepare(const struct path *parent,
+@@ -63,6 +64,10 @@ struct ant_hash_job *ant_monitor_delete_prepare(const struct path *parent,
  void ant_monitor_delete_done(struct ant_hash_job *job, int error);
  void ant_monitor_close_write(struct file *file);
  void ant_monitor_specimen_exec(struct file *file);
@@ -603,7 +603,7 @@ index 5216787..b225a84 100644
  void ant_monitor_task_exit(bool group_dead);
  void ant_monitor_release(struct task_struct *task);
  int ant_monitor_launch(const char *path, char **argv, char **envp);
-@@ -114,6 +119,20 @@ static inline struct ant_hash_job *ant_monitor_delete_prepare(const struct path
+@@ -128,6 +133,20 @@ static inline struct ant_hash_job *ant_monitor_delete_prepare(const struct path
  static inline void ant_monitor_delete_done(struct ant_hash_job *job, int error) {}
  static inline void ant_monitor_close_write(struct file *file) {}
  static inline void ant_monitor_specimen_exec(struct file *file) {}
@@ -698,10 +698,10 @@ index 76e4180..593d637 100644
  #define coredump_report(...)
  #define coredump_report_failure(...)
 diff --git a/kernel/antinomie/Makefile b/kernel/antinomie/Makefile
-index e51982b..566c0d2 100644
+index 795867d..bee0ffc 100644
 --- a/kernel/antinomie/Makefile
 +++ b/kernel/antinomie/Makefile
-@@ -2,5 +2,7 @@ obj-y += bootstrap.o guest.o recorder.o control.o run.o async.o native_capture.o
+@@ -5,5 +5,7 @@ obj-$(CONFIG_X86_64) += capture_x86.o
  obj-y += async_capture.o
  obj-y += specimen.o
  obj-y += observer.o
@@ -1073,7 +1073,7 @@ index 58209ed..b717282 100644
  static int __init ant_guest_init(void)
 diff --git a/kernel/antinomie/manual_core.c b/kernel/antinomie/manual_core.c
 new file mode 100644
-index 0000000..d403831
+index 0000000..67d4107
 --- /dev/null
 +++ b/kernel/antinomie/manual_core.c
 @@ -0,0 +1,667 @@
@@ -1284,7 +1284,7 @@ index 0000000..d403831
 +	    current->start_boottime != session->identity.start_ns ||
 +	    task_tgid_nr(current) != session->identity.tgid ||
 +	    !current->mm->binfmt || !current->mm->binfmt->core_dump ||
-+	    test_thread_flag(TIF_ADDR32) ||
++	    ant_arch_compat_task() ||
 +	    test_bit(MMF_MULTIPROCESS, &current->mm->flags) ||
 +	    READ_ONCE(current->signal->core_state) ||
 +	    READ_ONCE(current->signal->flags) & SIGNAL_GROUP_EXIT ||
@@ -1746,7 +1746,7 @@ index 0000000..d403831
 +#endif
 diff --git a/kernel/antinomie/process_core.c b/kernel/antinomie/process_core.c
 new file mode 100644
-index 0000000..9198338
+index 0000000..109f347
 --- /dev/null
 +++ b/kernel/antinomie/process_core.c
 @@ -0,0 +1,1001 @@
@@ -2388,7 +2388,7 @@ index 0000000..9198338
 +	    memcmp(elf->e_ident, ELFMAG, SELFMAG) ||
 +	    elf->e_ident[EI_CLASS] != ELFCLASS64 ||
 +	    elf->e_ident[EI_DATA] != ELFDATA2LSB ||
-+	    elf->e_type != ET_CORE || elf->e_machine != EM_X86_64 ||
++	    elf->e_type != ET_CORE || elf->e_machine != ELF_ARCH ||
 +	    elf->e_phentsize != sizeof(*ph) || elf->e_phnum == PN_XNUM)
 +		return 0;
 +	/* The header and the program headers are written back to back, so they

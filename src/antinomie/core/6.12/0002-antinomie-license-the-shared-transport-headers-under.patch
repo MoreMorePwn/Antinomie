@@ -1,4 +1,4 @@
-From b3e2574f2f8da98207e636c5d3055f54dc97f0f4 Mon Sep 17 00:00:00 2001
+From 2fd99001a1119405f1e6aa0580c378a605653e72 Mon Sep 17 00:00:00 2001
 From: MikiMiku <jonathanirvinjo@gmail.com>
 Date: Mon, 26 Oct 2026 09:02:00 +0700
 Subject: [PATCH] antinomie: license the shared transport headers under MIT

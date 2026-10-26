@@ -1,6 +1,6 @@
-From 837fe1d5ebd0092588d6a0be6780a3e3ce182b08 Mon Sep 17 00:00:00 2001
+From 81a7b85c86b9d41811f6d13ef57edb8cb8d6e42e Mon Sep 17 00:00:00 2001
 From: MikiMiku <jonathanirvinjo@gmail.com>
-Date: Mon, 26 Oct 2026 09:12:00 +0700
+Date: Mon, 26 Oct 2026 15:20:14 +0700
 Subject: [PATCH] antinomie: sample guest memory and root filesystem usage
 
 The host shows how much of the guest's memory and root filesystem is in
@@ -29,17 +29,17 @@ Contract: revision 17 (RESOURCES, 0x1070, 96-byte reply).
  create mode 100644 kernel/antinomie/resources.h
 
 diff --git a/kernel/antinomie/Makefile b/kernel/antinomie/Makefile
-index 6e22c7c..6e8c29a 100644
+index 51b40a8..a5a55d3 100644
 --- a/kernel/antinomie/Makefile
 +++ b/kernel/antinomie/Makefile
-@@ -4,6 +4,7 @@ obj-y += specimen.o
+@@ -7,6 +7,7 @@ obj-y += specimen.o
  obj-y += observer.o
  obj-y += process_core.o
  obj-y += manual_core.o
 +obj-y += resources.o
  obj-y += hash.o
- obj-y += debug.o debug_x86.o
- obj-y += fileid.o
+ obj-y += debug.o
+ obj-$(CONFIG_X86_64) += debug_x86.o
 diff --git a/kernel/antinomie/control.c b/kernel/antinomie/control.c
 index cb51da8..c36cf60 100644
 --- a/kernel/antinomie/control.c

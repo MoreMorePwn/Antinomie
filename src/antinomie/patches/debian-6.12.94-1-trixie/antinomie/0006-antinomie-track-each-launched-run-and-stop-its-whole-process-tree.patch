@@ -40,7 +40,7 @@ Last-Update: 2026-10-26
 
 ---
 diff --git a/include/linux/antinomie_monitor.h b/include/linux/antinomie_monitor.h
-index 8e0b267..c999120 100644
+index 5d81326..7e36047 100644
 --- a/include/linux/antinomie_monitor.h
 +++ b/include/linux/antinomie_monitor.h
 @@ -5,6 +5,7 @@
@@ -49,9 +49,9 @@ index 8e0b267..c999120 100644
  struct ant_task;
 +struct ant_run;
  struct linux_binprm;
- #ifdef CONFIG_ANTINOMIE
- void ant_monitor_enter(struct pt_regs *regs, long nr);
-@@ -15,7 +16,7 @@ u64 ant_monitor_cookie(struct task_struct *task);
+ /* The abi field of a record: a system call of an ABI the recorder has no table
+  * for, or of the native one (<asm/antinomie_syscalls.h>).
+@@ -29,7 +30,7 @@ u64 ant_monitor_cookie(struct task_struct *task);
  u64 ant_monitor_stream_id(void);
  void ant_monitor_exec(void);
  void ant_monitor_exec_names(const struct linux_binprm *bprm);
@@ -60,7 +60,7 @@ index 8e0b267..c999120 100644
  void ant_monitor_release(struct task_struct *task);
  int ant_monitor_launch(const char *path, char **argv, char **envp);
  void ant_monitor_stats(void *out);
-@@ -30,7 +31,7 @@ static inline void ant_monitor_fork(struct task_struct *child) {}
+@@ -44,7 +45,7 @@ static inline void ant_monitor_fork(struct task_struct *child) {}
  static inline void ant_monitor_fork_prepare(struct task_struct *child) {}
  static inline void ant_monitor_exec(void) {}
  static inline void ant_monitor_exec_names(const struct linux_binprm *bprm) {}
@@ -223,18 +223,18 @@ index 87464f8..3c875c0 100644
   * STATS: header only. Reply: ten u64 counters in order: stream_id,
   * tasks_created, tasks_live, calls_entered, events_attempted,
 diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
-index 2f95cf7..9808798 100644
+index 3013b53..8225b61 100644
 --- a/kernel/antinomie/recorder.c
 +++ b/kernel/antinomie/recorder.c
-@@ -23,6 +23,7 @@
- #include <asm/stat.h>
+@@ -24,6 +24,7 @@
  #include <asm/syscall.h>
+ #include <asm/antinomie_syscalls.h>
  
 +#include "run.h"
- #include "native_syscalls.h"
  #include "capture_api.h"
  #include "native_capture.h"
-@@ -1117,10 +1118,16 @@ int ant_monitor_launch(const char *path, char **argv, char **envp)
+ #include "observer.h"
+@@ -1122,10 +1123,16 @@ int ant_monitor_launch(const char *path, char **argv, char **envp)
  	char key[80];
  	u64 index;
  	u8 cookie[8];
@@ -251,7 +251,7 @@ index 2f95cf7..9808798 100644
  	WRITE_ONCE(current->ant_root_cookie, current->ant_cookie);
  	current->ant_monitor = ctx;
  	if (!current->ant_counted) {
-@@ -1176,10 +1183,21 @@ u64 ant_monitor_stream_id(void)
+@@ -1181,10 +1188,21 @@ u64 ant_monitor_stream_id(void)
  void ant_monitor_fork_prepare(struct task_struct *child)
  {
  	WRITE_ONCE(child->ant_observer_cookie, READ_ONCE(current->ant_observer_cookie));
@@ -274,7 +274,7 @@ index 2f95cf7..9808798 100644
  	child->ant_counted = true;
  	atomic64_inc(&tasks_created);
  	atomic64_inc(&tasks_live);
-@@ -1219,8 +1237,9 @@ void ant_monitor_exec(void)
+@@ -1224,8 +1242,9 @@ void ant_monitor_exec(void)
  	lifecycle(current->ant_monitor, "lifecycle.exec_commit", task_pid_nr(current));
  }
  

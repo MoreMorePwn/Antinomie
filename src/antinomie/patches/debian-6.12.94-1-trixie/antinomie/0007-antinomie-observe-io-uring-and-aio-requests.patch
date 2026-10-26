@@ -107,7 +107,7 @@ index e892017..db8658a 100644
  	req->ki_ctx = ctx;
  	INIT_LIST_HEAD(&req->ki_list);
  	refcount_set(&req->ki_refcnt, 2);
-@@ -1102,6 +1111,9 @@ static struct kioctx *lookup_ioctx(unsigned long ctx_id)
+@@ -1102,6 +1111,9 @@ out:
  
  static inline void iocb_destroy(struct aio_kiocb *iocb)
  {
@@ -224,7 +224,7 @@ index e892017..db8658a 100644
  	/* Done with the synchronous reference */
  	iocb_put(req);
 diff --git a/include/linux/antinomie_monitor.h b/include/linux/antinomie_monitor.h
-index c999120..1ea5863 100644
+index 7e36047..30d54ad 100644
 --- a/include/linux/antinomie_monitor.h
 +++ b/include/linux/antinomie_monitor.h
 @@ -6,7 +6,17 @@ struct task_struct;
@@ -242,10 +242,10 @@ index c999120..1ea5863 100644
 +#define ANT_ASYNC_ABANDONED BIT(2)
 +/* The submitting process wrote the entry; which of its threads is not known. */
 +#define ANT_ASYNC_PRODUCER_PROCESS BIT(3)
- #ifdef CONFIG_ANTINOMIE
- void ant_monitor_enter(struct pt_regs *regs, long nr);
- void ant_monitor_exit(struct pt_regs *regs);
-@@ -22,6 +32,41 @@ int ant_monitor_launch(const char *path, char **argv, char **envp);
+ /* The abi field of a record: a system call of an ABI the recorder has no table
+  * for, or of the native one (<asm/antinomie_syscalls.h>).
+  */
+@@ -36,6 +46,41 @@ int ant_monitor_launch(const char *path, char **argv, char **envp);
  void ant_monitor_stats(void *out);
  int ant_monitor_run_status(u64 root_cookie, void *out);
  void ant_monitor_run_stopped(u64 root_cookie);
@@ -287,7 +287,7 @@ index c999120..1ea5863 100644
  void ant_monitor_operand(u8 arg, const char *key, const char *layout, const void *data,
  			 size_t size);
  #else
-@@ -33,6 +78,65 @@ static inline void ant_monitor_exec(void) {}
+@@ -47,6 +92,65 @@ static inline void ant_monitor_exec(void) {}
  static inline void ant_monitor_exec_names(const struct linux_binprm *bprm) {}
  static inline void ant_monitor_task_exit(bool group_dead) {}
  static inline void ant_monitor_release(struct task_struct *task) {}
@@ -396,7 +396,7 @@ index 91e25da..ae3ed73 100644
  	bool ant_counted;
  #endif
 diff --git a/io_uring/epoll.c b/io_uring/epoll.c
-index 89bff20..74f2211 100644
+index 89bff20..69ae55a 100644
 --- a/io_uring/epoll.c
 +++ b/io_uring/epoll.c
 @@ -38,6 +38,9 @@ int io_epoll_ctl_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
@@ -404,7 +404,7 @@ index 89bff20..74f2211 100644
  		if (copy_from_user(&epoll->event, ev, sizeof(*ev)))
  			return -EFAULT;
 +		ant_uring_memory(req, "async.operand.epoll_event",
-+				 "linux-6.12.94/x86_64/epoll_event", 3,
++				 ANT_LAYOUT("epoll_event"), 3,
 +				 (unsigned long)ev, &epoll->event, sizeof(*ev), false, true);
  	}
  
@@ -465,7 +465,7 @@ index eccea85..924132d 100644
  	req->flags |= REQ_F_NEED_CLEANUP;
  	req->flags |= REQ_F_FORCE_ASYNC;
 diff --git a/io_uring/futex.c b/io_uring/futex.c
-index a3d2b70..bae915c 100644
+index a3d2b70..13a4e6e 100644
 --- a/io_uring/futex.c
 +++ b/io_uring/futex.c
 @@ -186,6 +186,9 @@ int io_futex_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
@@ -473,7 +473,7 @@ index a3d2b70..bae915c 100644
  		return -EINVAL;
  
 +	/* The word is compared or woken; the SQE carries the operation's value. */
-+	ant_uring_address(req, "async.operand.futex", "linux-6.12.94/x86_64/u32",
++	ant_uring_address(req, "async.operand.futex", ANT_LAYOUT("u32"),
 +			  (unsigned long)iof->uaddr, sizeof(u32));
  	return 0;
  }
@@ -482,7 +482,7 @@ index a3d2b70..bae915c 100644
  		kfree(futexv);
  		return ret;
  	}
-+	ant_uring_memory(req, "async.operand.futexv", "linux-6.12.94/x86_64/futex_waitv[]", 3,
++	ant_uring_memory(req, "async.operand.futexv", ANT_LAYOUT("futex_waitv[]"), 3,
 +			 (unsigned long)iof->uwaitv, NULL,
 +			 iof->futex_nr * sizeof(struct futex_waitv), false, true);
  
@@ -777,7 +777,7 @@ index df5ba0d..ed30d18 100644
  }
  
 diff --git a/io_uring/net.c b/io_uring/net.c
-index 8eb0ebd..c59b113 100644
+index 8eb0ebd..92b1710 100644
 --- a/io_uring/net.c
 +++ b/io_uring/net.c
 @@ -328,7 +328,7 @@ static int io_sendmsg_copy_hdr(struct io_kiocb *req,
@@ -798,16 +798,16 @@ index 8eb0ebd..c59b113 100644
 +			       0, false);
 +		if (iomsg->msg.msg_namelen)
 +			ant_uring_memory(req, "async.operand.sockaddr",
-+					 "linux-6.12.94/x86_64/sockaddr", 3,
++					 ANT_LAYOUT("sockaddr"), 3,
 +					 (unsigned long)msg.msg_name, iomsg->msg.msg_name,
 +					 iomsg->msg.msg_namelen, false, false);
 +		if (iomsg->msg.msg_controllen)
 +			ant_uring_memory(req, "async.operand.control",
-+					 "linux-6.12.94/x86_64/cmsghdr[]", 3,
++					 ANT_LAYOUT("cmsghdr[]"), 3,
 +					 (unsigned long)sr->msg_control, NULL,
 +					 iomsg->msg.msg_controllen, false, false);
 +		ant_uring_memory(req, "async.operand.msghdr",
-+				 "linux-6.12.94/x86_64/user_msghdr", 3,
++				 ANT_LAYOUT("user_msghdr"), 3,
 +				 (unsigned long)sr->umsg, &msg, sizeof(msg), false, true);
 +	}
  	return ret;
@@ -822,14 +822,14 @@ index 8eb0ebd..c59b113 100644
  	ret = __sys_sendmsg_sock(sock, &kmsg->msg, flags);
  
  	if (ret < min_ret) {
-@@ -671,6 +690,12 @@ int io_send(struct io_kiocb *req, unsigned int issue_flags)
+@@ -671,6 +690,12 @@ retry_bundle:
  
  	flags &= ~MSG_INTERNAL_SENDMSG_FLAGS;
  	kmsg->msg.msg_flags = flags;
 +	ant_uring_iter(req, &kmsg->msg.msg_iter, iov_iter_count(&kmsg->msg.msg_iter),
 +		       sr->done_io, false);
 +	if (kmsg->msg.msg_namelen)
-+		ant_uring_memory(req, "async.operand.sockaddr", "linux-6.12.94/x86_64/sockaddr",
++		ant_uring_memory(req, "async.operand.sockaddr", ANT_LAYOUT("sockaddr"),
 +				 3, (unsigned long)sr->addr, kmsg->msg.msg_name,
 +				 kmsg->msg.msg_namelen, false, true);
  	ret = sock_sendmsg(sock, &kmsg->msg);
@@ -852,7 +852,7 @@ index 8eb0ebd..c59b113 100644
 +	iomsg->ant_name_size = max(msg.msg_namelen, 0);
 +	iomsg->ant_control_size = msg.msg_controllen;
 +	iomsg->ant_control_address = (unsigned long)msg.msg_control;
-+	ant_uring_memory(req, "async.operand.msghdr", "linux-6.12.94/x86_64/user_msghdr", 3,
++	ant_uring_memory(req, "async.operand.msghdr", ANT_LAYOUT("user_msghdr"), 3,
 +			 (unsigned long)io_kiocb_to_cmd(req, struct io_sr_msg)->umsg,
 +			 &msg, sizeof(msg), false, false);
 +#endif
@@ -881,17 +881,17 @@ index 8eb0ebd..c59b113 100644
  		return -EFAULT;
  	}
 +	if (copy_len > sizeof(hdr.msg))
-+		ant_uring_memory(req, "async.operand.sockaddr", "linux-6.12.94/x86_64/sockaddr",
++		ant_uring_memory(req, "async.operand.sockaddr", ANT_LAYOUT("sockaddr"),
 +				 3, (unsigned long)io->buf + sizeof(hdr.msg), &hdr.addr,
 +				 copy_len - sizeof(hdr.msg), true, false);
 +	if (hdr.msg.controllen)
 +		ant_uring_memory(req, "async.operand.control", flags & MSG_CMSG_COMPAT ?
-+				 "linux-6.12.94/x86/compat_cmsghdr[]" :
-+				 "linux-6.12.94/x86_64/cmsghdr[]",
++				 ANT_COMPAT_LAYOUT("compat_cmsghdr[]") :
++				 ANT_LAYOUT("cmsghdr[]"),
 +				 3, (unsigned long)io->buf + sizeof(hdr.msg) + kmsg->namelen,
 +				 NULL, hdr.msg.controllen, true, false);
 +	ant_uring_memory(req, "async.operand.recvmsg_out",
-+			 "linux-6.12.94/x86_64/io_uring_recvmsg_out", 3,
++			 ANT_LAYOUT("io_uring_recvmsg_out"), 3,
 +			 (unsigned long)io->buf, &hdr.msg, sizeof(hdr.msg), true, true);
  
  	return sizeof(struct io_uring_recvmsg_out) + kmsg->namelen +
@@ -904,7 +904,7 @@ index 8eb0ebd..c59b113 100644
  	struct socket *sock;
  	unsigned flags;
  	int ret, min_ret = 0;
-@@ -1056,6 +1106,7 @@ int io_recvmsg(struct io_kiocb *req, unsigned int issue_flags)
+@@ -1056,6 +1106,7 @@ retry_multishot:
  
  	kmsg->msg.msg_get_inq = 1;
  	kmsg->msg.msg_inq = -1;
@@ -912,7 +912,7 @@ index 8eb0ebd..c59b113 100644
  	if (req->flags & REQ_F_APOLL_MULTISHOT) {
  		ret = io_recvmsg_multishot(sock, sr, kmsg, flags,
  					   &mshot_finished);
-@@ -1066,6 +1117,33 @@ int io_recvmsg(struct io_kiocb *req, unsigned int issue_flags)
+@@ -1066,6 +1117,33 @@ retry_multishot:
  
  		ret = __sys_recvmsg_sock(sock, &kmsg->msg, sr->umsg,
  					 kmsg->uaddr, flags);
@@ -928,17 +928,17 @@ index 8eb0ebd..c59b113 100644
 +
 +			if (kmsg->uaddr && name_size)
 +				ant_uring_memory(req, "async.operand.sockaddr",
-+						 "linux-6.12.94/x86_64/sockaddr", 3,
++						 ANT_LAYOUT("sockaddr"), 3,
 +						 (unsigned long)kmsg->uaddr, NULL,
 +						 name_size, true, false);
 +			if (control_size)
 +				ant_uring_memory(req, "async.operand.control",
-+						 "linux-6.12.94/x86_64/cmsghdr[]", 3,
++						 ANT_LAYOUT("cmsghdr[]"), 3,
 +						 kmsg->ant_control_address, NULL,
 +						 min_t(u64, control_size, kmsg->ant_control_size),
 +						 true, false);
 +			ant_uring_memory(req, "async.operand.msghdr",
-+					 "linux-6.12.94/x86_64/user_msghdr", 3,
++					 ANT_LAYOUT("user_msghdr"), 3,
 +					 (unsigned long)sr->umsg, NULL, sizeof(struct user_msghdr),
 +					 true, true);
 +		}
@@ -954,7 +954,7 @@ index 8eb0ebd..c59b113 100644
  	struct socket *sock;
  	unsigned flags;
  	int ret, min_ret = 0;
-@@ -1209,7 +1288,11 @@ int io_recv(struct io_kiocb *req, unsigned int issue_flags)
+@@ -1209,7 +1288,11 @@ retry_multishot:
  	if (flags & MSG_WAITALL)
  		min_ret = iov_iter_count(&kmsg->msg.msg_iter);
  
@@ -973,7 +973,7 @@ index 8eb0ebd..c59b113 100644
 +	ant_uring_iter(req, &kmsg->msg.msg_iter, iov_iter_count(&kmsg->msg.msg_iter),
 +		       zc->done_io, false);
 +	if (kmsg->msg.msg_namelen)
-+		ant_uring_memory(req, "async.operand.sockaddr", "linux-6.12.94/x86_64/sockaddr",
++		ant_uring_memory(req, "async.operand.sockaddr", ANT_LAYOUT("sockaddr"),
 +				 3, (unsigned long)zc->addr, kmsg->msg.msg_name,
 +				 kmsg->msg.msg_namelen, false, true);
  	ret = sock_sendmsg(sock, &kmsg->msg);
@@ -1033,7 +1033,7 @@ index 8eb0ebd..c59b113 100644
 +	ret = move_addr_to_kernel(conn->addr, conn->addr_len, &io->addr);
 +	if (ret)
 +		return ret;
-+	ant_uring_memory(req, "async.operand.sockaddr", "linux-6.12.94/x86_64/sockaddr", 3,
++	ant_uring_memory(req, "async.operand.sockaddr", ANT_LAYOUT("sockaddr"), 3,
 +			 (unsigned long)conn->addr, &io->addr, conn->addr_len, false, true);
 +	return 0;
  }
@@ -1043,7 +1043,7 @@ index 8eb0ebd..c59b113 100644
  		return ret;
  	if (io_bind_file_create(io, bind->addr_len))
  		req->flags |= REQ_F_FORCE_ASYNC;
-+	ant_uring_memory(req, "async.operand.sockaddr", "linux-6.12.94/x86_64/sockaddr", 3,
++	ant_uring_memory(req, "async.operand.sockaddr", ANT_LAYOUT("sockaddr"), 3,
 +			 (unsigned long)uaddr, &io->addr, bind->addr_len, false, true);
  	return 0;
  }
@@ -1065,7 +1065,7 @@ index 52bfee0..67fddfd 100644
  };
  
 diff --git a/io_uring/openclose.c b/io_uring/openclose.c
-index cea2d86..6f40e38 100644
+index cea2d86..8f16910 100644
 --- a/io_uring/openclose.c
 +++ b/io_uring/openclose.c
 @@ -79,6 +79,8 @@ static int __io_openat_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe
@@ -1081,13 +1081,13 @@ index cea2d86..6f40e38 100644
  	len = READ_ONCE(sqe->len);
  	if (len < OPEN_HOW_SIZE_VER0)
  		return -EINVAL;
-+	ant_uring_memory(req, "async.operand.open_how", "linux-6.12.94/x86_64/open_how",
++	ant_uring_memory(req, "async.operand.open_how", ANT_LAYOUT("open_how"),
 +			 3, (unsigned long)how, NULL, len, false, false);
  
  	ret = copy_struct_from_user(&open->how, sizeof(open->how), how, len);
  	if (ret)
 diff --git a/io_uring/rsrc.c b/io_uring/rsrc.c
-index 1687e35..873d639 100644
+index 1687e35..0df5fe8 100644
 --- a/io_uring/rsrc.c
 +++ b/io_uring/rsrc.c
 @@ -554,6 +554,13 @@ int io_files_update_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
@@ -1096,10 +1096,10 @@ index 1687e35..873d639 100644
  	up->arg = READ_ONCE(sqe->addr);
 +	/* Bounded by the table limit the update is checked against later. */
 +	if (up->nr_args > IORING_MAX_FIXED_FILES)
-+		ant_uring_extent(req, "async.operand.fds", "linux-6.12.94/x86_64/int[]", up->arg,
++		ant_uring_extent(req, "async.operand.fds", ANT_LAYOUT("int[]"), up->arg,
 +				 (u64)up->nr_args * sizeof(__s32));
 +	else
-+		ant_uring_memory(req, "async.operand.fds", "linux-6.12.94/x86_64/int[]", 3,
++		ant_uring_memory(req, "async.operand.fds", ANT_LAYOUT("int[]"), 3,
 +				 up->arg, NULL, (u64)up->nr_args * sizeof(__s32), false, true);
  	return 0;
  }
@@ -1192,7 +1192,7 @@ index ab2c092..25e2755 100644
  		if (!iov_iter_count(&io->iter))
  			break;
 diff --git a/io_uring/statx.c b/io_uring/statx.c
-index f7f9b20..076bb89 100644
+index f7f9b20..4fdd4bd 100644
 --- a/io_uring/statx.c
 +++ b/io_uring/statx.c
 @@ -48,6 +48,8 @@ int io_statx_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
@@ -1209,20 +1209,20 @@ index f7f9b20..076bb89 100644
  
  	ret = do_statx(sx->dfd, sx->filename, sx->flags, sx->mask, sx->buffer);
 +	if (!ret)
-+		ant_uring_memory(req, "async.operand.statx", "linux-6.12.94/x86_64/statx", 3,
++		ant_uring_memory(req, "async.operand.statx", ANT_LAYOUT("statx"), 3,
 +				 (unsigned long)sx->buffer, NULL, sizeof(struct statx), true, true);
  	io_req_set_res(req, ret, 0);
  	return IOU_OK;
  }
 diff --git a/io_uring/timeout.c b/io_uring/timeout.c
-index 9cc5776..120ba7e 100644
+index 9cc5776..1892ed3 100644
 --- a/io_uring/timeout.c
 +++ b/io_uring/timeout.c
 @@ -443,9 +443,13 @@ int io_timeout_remove_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
  			return -EFAULT;
  		if (tr->ts.tv_sec < 0 || tr->ts.tv_nsec < 0)
  			return -EINVAL;
-+		ant_uring_memory(req, "async.operand.timeout", "linux-6.12.94/x86_64/timespec64",
++		ant_uring_memory(req, "async.operand.timeout", ANT_LAYOUT("timespec64"),
 +				 3, READ_ONCE(sqe->addr2), &tr->ts, sizeof(tr->ts), false, true);
  	} else if (tr->flags) {
  		/* timeout removal doesn't support flags */
@@ -1236,7 +1236,7 @@ index 9cc5776..120ba7e 100644
  
  	if (data->ts.tv_sec < 0 || data->ts.tv_nsec < 0)
  		return -EINVAL;
-+	ant_uring_memory(req, "async.operand.timeout", "linux-6.12.94/x86_64/timespec64", 3,
++	ant_uring_memory(req, "async.operand.timeout", ANT_LAYOUT("timespec64"), 3,
 +			 READ_ONCE(sqe->addr), &data->ts, sizeof(data->ts), false, true);
  
  	data->mode = io_translate_timeout_mode(flags);
@@ -1329,7 +1329,7 @@ index e5d0cc8..6a8e4c4 100644
  	return do_sock_setsockopt(sock, compat, level, optname, optval_s,
  				  optlen);
 diff --git a/io_uring/waitid.c b/io_uring/waitid.c
-index ef22837..cef6ca0 100644
+index ef22837..e00e3be 100644
 --- a/io_uring/waitid.c
 +++ b/io_uring/waitid.c
 @@ -111,6 +111,12 @@ static int io_waitid_finish(struct io_kiocb *req, int ret)
@@ -1337,7 +1337,7 @@ index ef22837..cef6ca0 100644
  	if (!io_waitid_copy_si(req, signo))
  		ret = -EFAULT;
 +	if (!ret && io_kiocb_to_cmd(req, struct io_waitid)->infop)
-+		ant_uring_memory(req, "async.operand.siginfo", "linux-6.12.94/x86_64/siginfo_t", 3,
++		ant_uring_memory(req, "async.operand.siginfo", ANT_LAYOUT("siginfo_t"), 3,
 +				 (unsigned long)io_kiocb_to_cmd(req, struct io_waitid)->infop,
 +				 NULL, sizeof(siginfo_t), true, true);
 +	else
@@ -1405,12 +1405,15 @@ index 6cf41c3..3cba03b 100644
  
  	return ret;
 diff --git a/kernel/antinomie/Makefile b/kernel/antinomie/Makefile
-index 3f8f3aa..cdb949f 100644
+index 3f8f3aa..c9ffe35 100644
 --- a/kernel/antinomie/Makefile
 +++ b/kernel/antinomie/Makefile
-@@ -1,2 +1,3 @@
+@@ -1,2 +1,6 @@
 -obj-y += bootstrap.o guest.o recorder.o control.o run.o native_capture.o
 +obj-y += bootstrap.o guest.o recorder.o control.o run.o async.o native_capture.o
++# Per-architecture files: <name>_<arch>.c, built here so that the section
++# labels bracket them too.
++obj-$(CONFIG_X86_64) += capture_x86.o
 +obj-y += async_capture.o
  obj-y += observer.o
 diff --git a/kernel/antinomie/async.c b/kernel/antinomie/async.c
@@ -2402,7 +2405,7 @@ index 0000000..5dff0c4
 +#endif
 diff --git a/kernel/antinomie/async_capture.c b/kernel/antinomie/async_capture.c
 new file mode 100644
-index 0000000..efa232d
+index 0000000..383c6ed
 --- /dev/null
 +++ b/kernel/antinomie/async_capture.c
 @@ -0,0 +1,434 @@
@@ -2476,7 +2479,7 @@ index 0000000..efa232d
 +
 +static void signal_mask(struct ant_task *ctx, u8 arg, u64 address, u64 size)
 +{
-+	bytes_field(ctx, arg, "signal.mask", "linux-6.12.94/x86_64/sigset_t",
++	bytes_field(ctx, arg, "signal.mask", ANT_LAYOUT("sigset_t"),
 +		    address, sizeof(sigset_t),
 +		    size == sizeof(sigset_t) ? ANT_COMPLETE : ANT_INVALID_EXTENT);
 +}
@@ -2487,7 +2490,7 @@ index 0000000..efa232d
 +	struct iocb iocb;
 +	char key[96];
 +
-+	array_field(ctx, 2, "arg2.iocbpp", "linux-6.12.94/x86_64/pointer[]",
++	array_field(ctx, 2, "arg2.iocbpp", ANT_LAYOUT("pointer[]"),
 +		    a[2], count, sizeof(ptr), LONG_MAX / sizeof(ptr));
 +	if ((s64)count < 0 || count > LONG_MAX / sizeof(ptr))
 +		return;
@@ -2495,17 +2498,17 @@ index 0000000..efa232d
 +		if (a[2] > ULONG_MAX - index * sizeof(ptr))
 +			return;
 +		scnprintf(key, sizeof(key), "arg2.iocbpp[%llu]", index);
-+		if (!snapshot_field(ctx, 2, key, "linux-6.12.94/x86_64/pointer",
++		if (!snapshot_field(ctx, 2, key, ANT_LAYOUT("pointer"),
 +				    a[2] + index * sizeof(ptr), &ptr, sizeof(ptr)))
 +			return;
 +		scnprintf(key, sizeof(key), "arg2.iocb[%llu]", index);
-+		if (!snapshot_field(ctx, 2, key, "linux-6.12.94/x86_64/iocb", ptr,
++		if (!snapshot_field(ctx, 2, key, ANT_LAYOUT("iocb"), ptr,
 +				    &iocb, sizeof(iocb)))
 +			return;
 +		if (iocb.aio_lio_opcode == IOCB_CMD_PREADV ||
 +		    iocb.aio_lio_opcode == IOCB_CMD_PWRITEV) {
 +			scnprintf(key, sizeof(key), "arg2.iocb[%llu].iov", index);
-+			array_field(ctx, 2, key, "linux-6.12.94/x86_64/iovec[]",
++			array_field(ctx, 2, key, ANT_LAYOUT("iovec[]"),
 +				    iocb.aio_buf, iocb.aio_nbytes, sizeof(struct iovec),
 +				    UIO_MAXIOV);
 +		} else if (iocb.aio_lio_opcode == IOCB_CMD_PWRITE) {
@@ -2534,17 +2537,17 @@ index 0000000..efa232d
 +};
 +
 +#define REG(op, type, phases_) \
-+	[op] = { sizeof(struct type), phases_, false, "linux-6.12.94/x86_64/" #type, 1 }
++	[op] = { sizeof(struct type), phases_, false, ANT_LAYOUT(#type), 1 }
 +#define REG_COUNT(op, type, phases_, count_) \
-+	[op] = { sizeof(struct type), phases_, false, "linux-6.12.94/x86_64/" #type, count_ }
++	[op] = { sizeof(struct type), phases_, false, ANT_LAYOUT(#type), count_ }
 +#define REGS(op, type, phases_) \
-+	[op] = { sizeof(struct type), phases_, true, "linux-6.12.94/x86_64/" #type "[]" }
++	[op] = { sizeof(struct type), phases_, true, ANT_LAYOUT(#type "[]") }
 +#define REG_INT(op, phases_) \
-+	[op] = { sizeof(u32), phases_, false, "linux-6.12.94/x86_64/int", 1 }
++	[op] = { sizeof(u32), phases_, false, ANT_LAYOUT("int"), 1 }
 +
 +static const struct registration registrations[IORING_REGISTER_LAST] = {
 +	REGS(IORING_REGISTER_BUFFERS, iovec, 1),
-+	[IORING_REGISTER_FILES] = { sizeof(u32), 1, true, "linux-6.12.94/x86_64/int[]" },
++	[IORING_REGISTER_FILES] = { sizeof(u32), 1, true, ANT_LAYOUT("int[]") },
 +	REG_INT(IORING_REGISTER_EVENTFD, 1),
 +	REG_INT(IORING_REGISTER_EVENTFD_ASYNC, 1),
 +	REG_COUNT(IORING_REGISTER_FILES_UPDATE, io_uring_files_update, 1, 0),
@@ -2553,9 +2556,9 @@ index 0000000..efa232d
 +	REG_COUNT(IORING_REGISTER_BUFFERS2, io_uring_rsrc_register, 1, -1),
 +	REG_COUNT(IORING_REGISTER_FILES_UPDATE2, io_uring_rsrc_update2, 1, -1),
 +	REG_COUNT(IORING_REGISTER_BUFFERS_UPDATE, io_uring_rsrc_update2, 1, -1),
-+	[IORING_REGISTER_IOWQ_AFF] = { 1, 1, true, "linux-6.12.94/x86_64/cpumask" },
++	[IORING_REGISTER_IOWQ_AFF] = { 1, 1, true, ANT_LAYOUT("cpumask") },
 +	[IORING_REGISTER_IOWQ_MAX_WORKERS] = { 2 * sizeof(u32), 3, false,
-+		"linux-6.12.94/x86_64/int[2]", 2 },
++		ANT_LAYOUT("int[2]"), 2 },
 +	REGS(IORING_REGISTER_RING_FDS, io_uring_rsrc_update, 3),
 +	REGS(IORING_UNREGISTER_RING_FDS, io_uring_rsrc_update, 1),
 +	REG(IORING_REGISTER_PBUF_RING, io_uring_buf_reg, 1),
@@ -2589,11 +2592,11 @@ index 0000000..efa232d
 +			goto copy_fault;
 +		if (!(reg.flags & IORING_RSRC_REGISTER_SPARSE))
 +			array_field(ctx, 2, "arg2.resources", buffers ?
-+				    "linux-6.12.94/x86_64/iovec[]" : "linux-6.12.94/x86_64/int[]",
++				    ANT_LAYOUT("iovec[]") : ANT_LAYOUT("int[]"),
 +				    reg.data, reg.nr, buffers ? sizeof(struct iovec) : sizeof(u32),
 +				    ceiling);
 +		if (reg.tags)
-+			array_field(ctx, 2, "arg2.tags", "linux-6.12.94/x86_64/u64[]",
++			array_field(ctx, 2, "arg2.tags", ANT_LAYOUT("u64[]"),
 +				    reg.tags, reg.nr, sizeof(u64), ceiling);
 +	} else if (opcode == IORING_REGISTER_FILES_UPDATE ||
 +		   opcode == IORING_REGISTER_FILES_UPDATE2 ||
@@ -2606,11 +2609,11 @@ index 0000000..efa232d
 +		if (opcode != IORING_REGISTER_FILES_UPDATE && count != sizeof(update))
 +			return;
 +		array_field(ctx, 2, "arg2.resources", buffers ?
-+			    "linux-6.12.94/x86_64/iovec[]" : "linux-6.12.94/x86_64/int[]",
++			    ANT_LAYOUT("iovec[]") : ANT_LAYOUT("int[]"),
 +			    update.data, opcode == IORING_REGISTER_FILES_UPDATE ? count : update.nr,
 +			    buffers ? sizeof(struct iovec) : sizeof(u32), ceiling);
 +		if (update.tags)
-+			array_field(ctx, 2, "arg2.tags", "linux-6.12.94/x86_64/u64[]",
++			array_field(ctx, 2, "arg2.tags", ANT_LAYOUT("u64[]"),
 +				    update.tags, update.nr, sizeof(u64), ceiling);
 +	} else if (opcode == IORING_REGISTER_PBUF_RING) {
 +		if (copy_from_user_nofault(&pbuf, (void __user *)(unsigned long)address,
@@ -2618,7 +2621,7 @@ index 0000000..efa232d
 +			goto copy_fault;
 +		if (!(pbuf.flags & IOU_PBUF_RING_MMAP))
 +			array_field(ctx, 2, "arg2.buffer_ring",
-+				    "linux-6.12.94/x86_64/io_uring_buf[]",
++				    ANT_LAYOUT("io_uring_buf[]"),
 +				    pbuf.ring_addr, pbuf.ring_entries, sizeof(struct io_uring_buf),
 +				    ANT_PBUF_COUNT);
 +	}
@@ -2643,7 +2646,7 @@ index 0000000..efa232d
 +	if (opcode == IORING_REGISTER_PROBE) {
 +		size = sizeof(struct io_uring_probe) +
 +			min_t(u32, count, IORING_OP_LAST) * sizeof(struct io_uring_probe_op);
-+		bytes_field(ctx, 2, "arg2.probe", "linux-6.12.94/x86_64/io_uring_probe",
++		bytes_field(ctx, 2, "arg2.probe", ANT_LAYOUT("io_uring_probe"),
 +			    a[2], size, count <= 256 ? ANT_COMPLETE : ANT_INVALID_EXTENT);
 +		return;
 +	}
@@ -2683,18 +2686,18 @@ index 0000000..efa232d
 +	if ((u32)a[3] & IORING_ENTER_EXT_ARG) {
 +		if (a[5] != sizeof(arg)) {
 +			bytes_field(ctx, 4, "arg4.ext_arg",
-+				    "linux-6.12.94/x86_64/io_uring_getevents_arg",
++				    ANT_LAYOUT("io_uring_getevents_arg"),
 +				    a[4], a[5], ANT_INVALID_EXTENT);
 +			return;
 +		}
 +		if (!snapshot_field(ctx, 4, "arg4.ext_arg",
-+				    "linux-6.12.94/x86_64/io_uring_getevents_arg",
++				    ANT_LAYOUT("io_uring_getevents_arg"),
 +				    a[4], &arg, sizeof(arg)))
 +			return;
 +		if (arg.sigmask)
 +			signal_mask(ctx, 4, arg.sigmask, arg.sigmask_sz);
 +		if (arg.ts)
-+			bytes_field(ctx, 4, "arg4.timeout", "linux-6.12.94/x86_64/timespec",
++			bytes_field(ctx, 4, "arg4.timeout", ANT_LAYOUT("timespec"),
 +				    arg.ts, sizeof(struct __kernel_timespec), ANT_COMPLETE);
 +	} else {
 +		signal_mask(ctx, 4, a[4], a[5]);
@@ -2750,7 +2753,7 @@ index 0000000..efa232d
 +
 +	if (output && result < 0)
 +		return;
-+	if (!snapshot_field(ctx, 1, "arg1.params", "linux-6.12.94/x86_64/io_uring_params",
++	if (!snapshot_field(ctx, 1, "arg1.params", ANT_LAYOUT("io_uring_params"),
 +			    a[1], &params, sizeof(params)))
 +		return;
 +	if (!output) {
@@ -2773,10 +2776,10 @@ index 0000000..efa232d
 +	}
 +	status = state->valid ? ANT_COMPLETE : ANT_INVALID_EXTENT;
 +	/* sq_off.user_addr backs SQEs; cq_off.user_addr backs the shared rings. */
-+	bytes_field(ctx, 1, "arg1.user_rings", "linux-6.12.94/x86_64/io_rings",
++	bytes_field(ctx, 1, "arg1.user_rings", ANT_LAYOUT("io_rings"),
 +		    state->params.cq_off.user_addr, state->valid ? state->rings_size : U64_MAX,
 +		    status);
-+	bytes_field(ctx, 1, "arg1.user_sqes", "linux-6.12.94/x86_64/io_uring_sqe[]",
++	bytes_field(ctx, 1, "arg1.user_sqes", ANT_LAYOUT("io_uring_sqe[]"),
 +		    state->params.sq_off.user_addr, state->valid ? state->sqes_size : U64_MAX,
 +		    status);
 +}
@@ -2788,49 +2791,49 @@ index 0000000..efa232d
 +	u8 mask;
 +
 +	switch (nr) {
-+	case 206:
++	case __NR_io_setup:
 +		mask = BIT(1);
 +		if (!output || !result)
-+			bytes_field(ctx, 1, "arg1.context_id", "linux-6.12.94/x86_64/aio_context_t",
++			bytes_field(ctx, 1, "arg1.context_id", ANT_LAYOUT("aio_context_t"),
 +				    a[1], sizeof(u64), ANT_COMPLETE);
 +		break;
-+	case 208: case 333:
-+		mask = BIT(3) | BIT(4) | (nr == 333 ? BIT(5) : 0);
++	case __NR_io_getevents: case __NR_io_pgetevents:
++		mask = BIT(3) | BIT(4) | (nr == __NR_io_pgetevents ? BIT(5) : 0);
 +		if (output && result > 0)
-+			array_field(ctx, 3, "arg3.events", "linux-6.12.94/x86_64/io_event[]",
++			array_field(ctx, 3, "arg3.events", ANT_LAYOUT("io_event[]"),
 +				    a[3], result, sizeof(struct io_event), a[2]);
 +		if (!output && a[4])
-+			bytes_field(ctx, 4, "arg4.timeout", "linux-6.12.94/x86_64/timespec",
++			bytes_field(ctx, 4, "arg4.timeout", ANT_LAYOUT("timespec"),
 +				    a[4], sizeof(struct __kernel_timespec), ANT_COMPLETE);
-+		if (!output && nr == 333 && a[5] &&
-+		    snapshot_field(ctx, 5, "arg5.sigset", "linux-6.12.94/x86_64/__aio_sigset",
++		if (!output && nr == __NR_io_pgetevents && a[5] &&
++		    snapshot_field(ctx, 5, "arg5.sigset", ANT_LAYOUT("__aio_sigset"),
 +				   a[5], &sig, sizeof(sig)) && sig.sigmask)
 +			signal_mask(ctx, 5, sig.sigmask, sig.sigset_size);
 +		break;
-+	case 209:
++	case __NR_io_submit:
 +		mask = BIT(2);
 +		if (!output)
 +			aio_submission(ctx, a);
 +		break;
-+	case 210:
++	case __NR_io_cancel:
 +		mask = BIT(1) | BIT(2);
 +		if (!output)
-+			bytes_field(ctx, 1, "arg1.iocb", "linux-6.12.94/x86_64/iocb",
++			bytes_field(ctx, 1, "arg1.iocb", ANT_LAYOUT("iocb"),
 +				    a[1], sizeof(struct iocb), ANT_COMPLETE);
 +		else if (!result)
-+			bytes_field(ctx, 2, "arg2.event", "linux-6.12.94/x86_64/io_event",
++			bytes_field(ctx, 2, "arg2.event", ANT_LAYOUT("io_event"),
 +				    a[2], sizeof(struct io_event), ANT_COMPLETE);
 +		break;
-+	case 425:
++	case __NR_io_uring_setup:
 +		mask = BIT(1);
 +		uring_setup(ctx, a, output, result);
 +		break;
-+	case 426:
++	case __NR_io_uring_enter:
 +		mask = BIT(4);
 +		if (!output)
 +			uring_enter(ctx, a);
 +		break;
-+	case 427:
++	case __NR_io_uring_register:
 +		mask = BIT(2);
 +		if (!output || result >= 0)
 +			uring_register(ctx, a, output);
@@ -2858,7 +2861,7 @@ index 0000000..d682e0c
 +
 +#endif
 diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
-index 9808798..332fe5e 100644
+index 8225b61..2e95d52 100644
 --- a/kernel/antinomie/recorder.c
 +++ b/kernel/antinomie/recorder.c
 @@ -7,6 +7,8 @@
@@ -2870,19 +2873,18 @@ index 9808798..332fe5e 100644
  #include <linux/ktime.h>
  #include <linux/random.h>
  #include <linux/sched.h>
-@@ -24,9 +26,11 @@
- #include <asm/syscall.h>
+@@ -25,8 +27,10 @@
+ #include <asm/antinomie_syscalls.h>
  
  #include "run.h"
 +#include "async.h"
- #include "native_syscalls.h"
  #include "capture_api.h"
  #include "native_capture.h"
 +#include "async_capture.h"
  #include "observer.h"
  
  /* Scratch bounds packet size, never the logical capture extent. A task owns
-@@ -74,6 +78,9 @@ struct ant_task {
+@@ -73,6 +77,9 @@ struct ant_task {
  	bool active, busy, entry_lost, sock_capacity_valid, kernel_imported;
  	struct iovec *iov;
  	u32 iov_count;
@@ -2892,7 +2894,7 @@ index 9808798..332fe5e 100644
  	void *native_state;
  	void (*native_release)(void *state);
  	/* One kernel-imported operand handed over during the current syscall. */
-@@ -111,6 +118,8 @@ static int publish(struct ant_task *ctx, u8 kind, u32 object_id,
+@@ -110,6 +117,8 @@ static int publish(struct ant_task *ctx, u8 kind, u32 object_id,
  		   u64 object_offset, u64 object_size, size_t body_len)
  {
  	u8 *p = ctx->packet;
@@ -2901,7 +2903,7 @@ index 9808798..332fe5e 100644
  	int error;
  
  	memset(p, 0, ANT_HEADER_SIZE);
-@@ -123,14 +132,15 @@ static int publish(struct ant_task *ctx, u8 kind, u32 object_id,
+@@ -122,14 +131,15 @@ static int publish(struct ant_task *ctx, u8 kind, u32 object_id,
  	put_unaligned_le32(ctx->flags, p + 16);
  	put_unaligned_le32(ANT_SCHEMA, p + 20);
  	put_unaligned_le64(stream_id, p + 24);
@@ -2922,7 +2924,7 @@ index 9808798..332fe5e 100644
  	put_unaligned_le32(1, p + 84);
  	put_unaligned_le64(ctx->nr, p + 88);
  	put_unaligned_le16(ctx->abi, p + 96);
-@@ -140,11 +150,13 @@ static int publish(struct ant_task *ctx, u8 kind, u32 object_id,
+@@ -139,11 +149,13 @@ static int publish(struct ant_task *ctx, u8 kind, u32 object_id,
  	put_unaligned_le64(object_offset, p + 104);
  	put_unaligned_le64(object_size, p + 112);
  	put_unaligned_le32(body_len, p + 120);
@@ -2939,7 +2941,7 @@ index 9808798..332fe5e 100644
  	if (error) {
  		ctx->failed_count++;
  		ctx->state |= 2;
-@@ -158,12 +170,14 @@ static void event_begin(struct ant_task *ctx, u8 phase, long result)
+@@ -157,12 +169,14 @@ static void event_begin(struct ant_task *ctx, u8 phase, long result)
  {
  	u8 *body = ctx->packet + ANT_HEADER_SIZE;
  	const struct cred *cred = current_cred();
@@ -2956,7 +2958,7 @@ index 9808798..332fe5e 100644
  	ctx->object_count = ctx->packet_count = ctx->failed_count = ctx->state = 0;
  	ctx->object_id = 0;
  	ctx->flags = 0;
-@@ -188,11 +202,11 @@ static void event_begin(struct ant_task *ctx, u8 phase, long result)
+@@ -187,11 +201,11 @@ static void event_begin(struct ant_task *ctx, u8 phase, long result)
  	put_unaligned_le64(ctx->entry_ns, body + 64);
  	put_unaligned_le64(ctx->ip, body + 72);
  	put_unaligned_le64(ctx->sp, body + 80);
@@ -2973,7 +2975,7 @@ index 9808798..332fe5e 100644
  	validity |= ctx->arg_count == 255 ? 0x3f : (1U << ctx->arg_count) - 1;
  	if (ctx->entry_ns)
  		validity |= BIT(7) | BIT(8) | BIT(10);
-@@ -270,7 +284,8 @@ static void recapture_note(struct ant_task *ctx, u8 arg_index, const char *key,
+@@ -269,7 +283,8 @@ static void recapture_note(struct ant_task *ctx, u8 arg_index, const char *key,
  {
  	struct ant_recapture *r;
  
@@ -2983,7 +2985,7 @@ index 9808798..332fe5e 100644
  	    ctx->recapture_count >= ANT_RECAPTURE_MAX ||
  	    strlen(key) >= ANT_RECAPTURE_KEY_SIZE)
  		return;
-@@ -303,6 +318,19 @@ static void recapture_drop(struct ant_task *ctx, u8 arg_index, const char *key)
+@@ -302,6 +317,19 @@ static void recapture_drop(struct ant_task *ctx, u8 arg_index, const char *key)
  			ctx->recapture[i].done = true;
  }
  
@@ -3003,7 +3005,7 @@ index 9808798..332fe5e 100644
  static void field(struct ant_task *ctx, u8 arg_index, const char *key,
  		  const char *layout, u16 encoding, u64 address,
  		  const void *snapshot, u64 object_size, u64 declared_size,
-@@ -322,7 +350,7 @@ static void field(struct ant_task *ctx, u8 arg_index, const char *key,
+@@ -321,7 +349,7 @@ static void field(struct ant_task *ctx, u8 arg_index, const char *key,
  	memset(body, 0, 40);
  	body[0] = arg_index;
  	/* A recaptured input keeps its direction although it is read at exit. */
@@ -3052,16 +3054,16 @@ index 9808798..332fe5e 100644
  	if (handled & ANT_CAPTURE_OWNED)
  		return;
  	switch (ctx->nr) {
-@@ -736,6 +771,8 @@ static void capture_exit(struct ant_task *ctx, long result)
+@@ -739,6 +774,8 @@ static void capture_exit(struct ant_task *ctx, long result)
  		return;
  	if (ant_native_capture(ctx, ctx->nr, a, true, result) & ANT_CAPTURE_OWNED)
  		return;
 +	if (ant_async_capture(ctx, ctx->nr, a, true, result) & ANT_CAPTURE_OWNED)
 +		return;
  	switch (ctx->nr) {
- 	case 0: case 45:
+ 	case __NR_read: case __NR_recvfrom:
  		if (result > 0)
-@@ -1112,6 +1149,210 @@ static void lifecycle(struct ant_task *ctx, const char *key, u64 value)
+@@ -1117,6 +1154,211 @@ static void lifecycle(struct ant_task *ctx, const char *key, u64 value)
  	ctx->busy = false;
  }
  
@@ -3101,8 +3103,9 @@ index 9808798..332fe5e 100644
 +	ctx->call_id = event->parent_call_id;
 +	ctx->entry_ns = event->entry_ns;
 +	ctx->nr = event->parent_call_id ?
-+		(event->system == ANT_ASYNC_IO_URING ? 426 : 209) : U64_MAX;
-+	ctx->abi = 1;
++		(event->system == ANT_ASYNC_IO_URING ? __NR_io_uring_enter : __NR_io_submit) :
++		U64_MAX;
++	ctx->abi = ANT_ABI_NATIVE;
 +	event_begin(ctx, 3, 0);
 +	async_fields(ctx, event);
 +}
@@ -3119,7 +3122,7 @@ index 9808798..332fe5e 100644
 +	if (event->descriptor_len) {
 +		ctx->kernel_imported = true;
 +		field(ctx, 255, "async.submission", event->system == ANT_ASYNC_IO_URING ?
-+		      "linux-6.12.94/x86_64/io_uring_sqe" : "linux-6.12.94/x86_64/iocb",
++		      ANT_LAYOUT("io_uring_sqe") : ANT_LAYOUT("iocb"),
 +		      3, 0, event->descriptor, event->descriptor_len,
 +		      event->descriptor_len, ANT_COMPLETE);
 +		ctx->kernel_imported = false;
@@ -3248,7 +3251,7 @@ index 9808798..332fe5e 100644
 +	}
 +	if (iter_is_iovec(source)) {
 +		ctx->kernel_imported = true;
-+		field(ctx, 255, "async.payload.iov", "linux-6.12.94/x86_64/iovec[]",
++		field(ctx, 255, "async.payload.iov", ANT_LAYOUT("iovec[]"),
 +		      3, 0, iter_iov(source), source->nr_segs * sizeof(struct iovec),
 +		      source->nr_segs * sizeof(struct iovec), ANT_COMPLETE);
 +		ctx->kernel_imported = false;

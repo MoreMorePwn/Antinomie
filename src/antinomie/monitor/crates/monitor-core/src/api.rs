@@ -1188,6 +1188,48 @@ pub struct GuestKernel {
     /// Patch-series SHA-256; `None` for a development or legacy kernel.
     pub source: Option<String>,
     pub release: Option<String>,
+    /// Whose system call numbers, layouts and registers the guest's records
+    /// use. Recordings from before it was reported are x86-64.
+    #[serde(default)]
+    pub arch: GuestArch,
+}
+
+/// A guest kernel's CPU architecture: the ELF machine its debug engine's CAPS
+/// names, asked when the host identifies a revision-17 guest. This host
+/// decodes x86-64 guests only; an older guest is x86-64.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GuestArch {
+    #[default]
+    #[allow(non_camel_case_types)]
+    X86_64,
+    /// Another architecture, by its ELF machine number: no decoder here.
+    Unsupported(u32),
+}
+
+impl GuestArch {
+    /// `EM_X86_64`.
+    pub const ELF_X86_64: u32 = 62;
+
+    /// The architecture of an ELF machine number.
+    pub fn from_elf_machine(machine: u32) -> Self {
+        match machine {
+            Self::ELF_X86_64 => Self::X86_64,
+            other => Self::Unsupported(other),
+        }
+    }
+
+    /// Whether this host has the architecture's system call table, layouts
+    /// and register views.
+    pub fn supported(self) -> bool {
+        matches!(self, Self::X86_64)
+    }
+
+    pub fn label(self) -> String {
+        match self {
+            Self::X86_64 => "x86-64".into(),
+            Self::Unsupported(machine) => format!("ELF machine {machine}"),
+        }
+    }
 }
 
 /// What a guest's tracer offers beyond the records every revision-17 guest

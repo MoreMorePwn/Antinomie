@@ -1,6 +1,6 @@
-From 5da3800d3690aeeb9f58b2f42c09c1eaa821ca6b Mon Sep 17 00:00:00 2001
+From 5700ba69bc7adcb17721277bb347df18bd753b4d Mon Sep 17 00:00:00 2001
 From: MikiMiku <jonathanirvinjo@gmail.com>
-Date: Mon, 26 Oct 2026 09:08:00 +0700
+Date: Mon, 26 Oct 2026 15:20:14 +0700
 Subject: [PATCH] antinomie: capture the launched program's executable image
 
 Keep a copy of the file a launch executed, for static analysis on the
@@ -50,7 +50,7 @@ index 718cdfa..81ca5e9 100644
  	if (retval < 0)
  		goto out;
 diff --git a/include/linux/antinomie_monitor.h b/include/linux/antinomie_monitor.h
-index 1ea5863..b3699e1 100644
+index 30d54ad..5607840 100644
 --- a/include/linux/antinomie_monitor.h
 +++ b/include/linux/antinomie_monitor.h
 @@ -7,6 +7,7 @@ struct pt_regs;
@@ -61,7 +61,7 @@ index 1ea5863..b3699e1 100644
  struct iov_iter;
  struct mm_struct;
  struct linux_binprm;
-@@ -26,6 +27,7 @@ u64 ant_monitor_cookie(struct task_struct *task);
+@@ -40,6 +41,7 @@ u64 ant_monitor_cookie(struct task_struct *task);
  u64 ant_monitor_stream_id(void);
  void ant_monitor_exec(void);
  void ant_monitor_exec_names(const struct linux_binprm *bprm);
@@ -69,7 +69,7 @@ index 1ea5863..b3699e1 100644
  void ant_monitor_task_exit(bool group_dead);
  void ant_monitor_release(struct task_struct *task);
  int ant_monitor_launch(const char *path, char **argv, char **envp);
-@@ -76,6 +78,7 @@ static inline void ant_monitor_fork(struct task_struct *child) {}
+@@ -90,6 +92,7 @@ static inline void ant_monitor_fork(struct task_struct *child) {}
  static inline void ant_monitor_fork_prepare(struct task_struct *child) {}
  static inline void ant_monitor_exec(void) {}
  static inline void ant_monitor_exec_names(const struct linux_binprm *bprm) {}
@@ -78,11 +78,12 @@ index 1ea5863..b3699e1 100644
  static inline void ant_monitor_release(struct task_struct *task) {}
  static inline struct ant_async *ant_monitor_async_begin(u8 system, u32 opcode,
 diff --git a/kernel/antinomie/Makefile b/kernel/antinomie/Makefile
-index cdb949f..2ada5c4 100644
+index c9ffe35..8f8bb7f 100644
 --- a/kernel/antinomie/Makefile
 +++ b/kernel/antinomie/Makefile
-@@ -1,3 +1,4 @@
- obj-y += bootstrap.o guest.o recorder.o control.o run.o async.o native_capture.o
+@@ -3,4 +3,5 @@ obj-y += bootstrap.o guest.o recorder.o control.o run.o async.o native_capture.o
+ # labels bracket them too.
+ obj-$(CONFIG_X86_64) += capture_x86.o
  obj-y += async_capture.o
 +obj-y += specimen.o
  obj-y += observer.o

@@ -18,6 +18,15 @@ from clang import cindex
 
 ROOT = Path(__file__).resolve().parent.parent
 KERNEL = ROOT / "work/debian-6.12.94-1-trixie/core"
+# One generated table per architecture: its syscall table, the table's ABI
+# columns that make up the native ABI, the expected row count, the per-arch
+# C header the guest recorder includes (<asm/antinomie_syscalls.h>) and the
+# preprocessor symbols that select the arch's prototypes in syscalls.h.
+ARCHES = {
+    "x86_64": {"table": "arch/x86/entry/syscalls/syscall_64.tbl", "abis": ("common", "64"),
+               "count": 375, "c_header": "arch/x86/include/asm/antinomie_syscalls.h",
+               "defines": ("-DCONFIG_X86_64=1",)},
+}
 DECLARATION = re.compile(r"asmlinkage\s+long\s+(sys_\w+)\s*\((.*?)\)\s*;", re.S)
 COMMENT = re.compile(r"/\*.*?\*/|//[^\n]*", re.S)
 KEYWORDS = {"const", "unsigned", "signed", "long", "short", "int", "char",
@@ -56,21 +65,22 @@ ARGUMENT_NAMES = {
 }
 
 
-def native_table(kernel):
+def native_table(kernel, arch):
     version = dict(re.findall(r"^(VERSION|PATCHLEVEL|SUBLEVEL)\s*=\s*(\d+)\s*$",
                              (kernel / "Makefile").read_text(), re.M))
     if [version.get(key) for key in ("VERSION", "PATCHLEVEL", "SUBLEVEL")] != ["6", "12", "94"]:
         raise ValueError("native metadata requires the pinned Linux 6.12.94 tree")
     rows = []
-    table = kernel / "arch/x86/entry/syscalls/syscall_64.tbl"
+    spec = ARCHES[arch]
+    table = kernel / spec["table"]
     for line in table.read_text().splitlines():
         columns = line.partition("#")[0].split()
-        if len(columns) < 3 or columns[1] not in ("common", "64"):
+        if len(columns) < 3 or columns[1] not in spec["abis"]:
             continue
         rows.append({"number": int(columns[0]), "abi": columns[1],
                      "name": columns[2],
                      "entry_point": columns[3] if len(columns) > 3 else None})
-    if len(rows) != 375 or len({r["number"] for r in rows}) != len(rows):
+    if len(rows) != spec["count"] or len({r["number"] for r in rows}) != len(rows):
         raise ValueError("pinned native syscall table changed; review the baseline")
     return table, rows
 
@@ -91,13 +101,13 @@ def pointer_aliases(kernel):
     return aliases
 
 
-def declarations(kernel):
+def declarations(kernel, arch):
     header = kernel / "include/linux/syscalls.h"
     text = COMMENT.sub("", header.read_text())
     text = re.sub(r"^\s*#\s*include[^\n]*", "", text, flags=re.M)
     text = subprocess.run(
         ["cc", "-E", "-P", "-x", "c", "-DBITS_PER_LONG=64",
-         "-DCONFIG_X86_64=1", "-D__ARCH_WANT_SYS_UTIME=1", "-"], input=text, text=True,
+         *ARCHES[arch]["defines"], "-D__ARCH_WANT_SYS_UTIME=1", "-"], input=text, text=True,
         check=True, capture_output=True).stdout
     signatures = [(name, re.sub(r"\b__(?:user|force|kernel|iomem)\b", "", args))
                   for name, args in DECLARATION.findall(text)]
@@ -208,9 +218,9 @@ def flags_for(name, index, arg):
     return groups.get((name, index), "unknown" if arg["name"] in ("flags", "flag") else None)
 
 
-def generate(kernel, output, c_header):
-    table, rows = native_table(kernel)
-    header, prototypes = declarations(kernel)
+def generate(kernel, arch, output, c_header):
+    table, rows = native_table(kernel, arch)
+    header, prototypes = declarations(kernel, arch)
     missing = []
     for row in rows:
         entry = row["entry_point"]
@@ -233,7 +243,7 @@ def generate(kernel, output, c_header):
     if missing:
         raise ValueError("unresolved native prototypes:\n" + "\n".join(missing))
     document = {
-        "kernel_version": "6.12.94", "architecture": "x86_64",
+        "kernel_version": "6.12.94", "architecture": arch,
         "schema_revision": 1, "native_count": len(rows),
         "provenance": {"table": str(table.relative_to(kernel)),
                        "table_sha256": hashlib.sha256(table.read_bytes()).hexdigest(),
@@ -247,8 +257,9 @@ def generate(kernel, output, c_header):
     }
     output.write_text(json.dumps(document, indent=2) + "\n")
     lines = ["/* SPDX-License-Identifier: GPL-2.0-only */",
-             "/* Generated native declaration facts; do not hand-edit. */",
-             "#ifndef ANTINOMIE_NATIVE_SYSCALLS_H", "#define ANTINOMIE_NATIVE_SYSCALLS_H",
+             f"/* Generated native declaration facts of {arch}"
+             " (scripts/generate-native-syscalls.py); do not hand-edit. */",
+             "#ifndef _ASM_ANTINOMIE_SYSCALLS_H", "#define _ASM_ANTINOMIE_SYSCALLS_H",
              "struct ant_native_syscall {", "\tu8 valid, argc, pointer_mask, string_mask;",
              "\tconst char *name;", "\tconst char *argument_names[6];",
              "\tconst char *argument_types[6];", "};",
@@ -280,10 +291,13 @@ def generate(kernel, output, c_header):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--kernel", type=Path, default=KERNEL)
+    parser.add_argument("--arch", choices=sorted(ARCHES), default="x86_64")
     parser.add_argument("--output", type=Path, default=ROOT / "src/antinomie/monitor/protocol/native-syscalls.json")
-    parser.add_argument("--c-header", type=Path, default=KERNEL / "kernel/antinomie/native_syscalls.h")
+    parser.add_argument("--c-header", type=Path,
+                        help="default: the arch's header in the kernel tree")
     args = parser.parse_args()
-    generate(args.kernel, args.output, args.c_header)
+    generate(args.kernel, args.arch, args.output,
+             args.c_header or args.kernel / ARCHES[args.arch]["c_header"])
 
 
 if __name__ == "__main__":
