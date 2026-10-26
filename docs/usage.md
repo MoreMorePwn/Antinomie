@@ -561,6 +561,19 @@ selections whose cells change or leave retained history are cleared. A copy
 larger than 8 MiB is refused with an Activity warning. Host clipboard delivery
 still depends on the desktop display server.
 
+Each process terminal has a **Formatted / Raw** switch in its header. Formatted
+draws the output as a terminal does, including bold and italic. **Raw** shows
+the byte stream as text with the escapes written out (`\e` is ESC, `\xNN` a
+control byte, `\r` and `\n` the line ends, `\\` a backslash), with the same
+10,000-line scrollback. Escapes that can hide output are highlighted: cursor
+moves and line erases, a carriage return or backspace that lets later text
+overwrite the line, concealed text (SGR 8), control strings such as the window
+title and hyperlinks, the clipboard command OSC 52 (in red), and switches to the
+alternate screen. Hover a highlight for what it does. Raw has a **Find** field
+(case-insensitive, with previous and next). Copy from Formatted gives plain
+text; copy from Raw gives the escaped text. A saved run opens in whichever view
+is chosen.
+
 Panels can be dragged out into their own windows and docked back;
 **View → Reset layout** restores the default arrangement. Text size is under
 **Tools → Settings**.

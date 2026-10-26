@@ -45,7 +45,10 @@ impl RunTerminal {
     }
 
     pub(crate) fn begin_replay(&mut self) {
+        // A reopened run keeps the view it was shown in.
+        let view = self.terminal.view();
         self.terminal = Terminal::default();
+        self.terminal.set_view(view);
         self.generation = self.generation.wrapping_add(1);
         self.replay_offset = Some(0);
         self.replay_pending = false;
@@ -161,5 +164,38 @@ mod tests {
         assert_eq!(terminal.terminal.contents(), "restored!");
         terminal.screen(2, 24, 80, b"old snapshot");
         assert_eq!(terminal.terminal.contents(), "restored!");
+    }
+
+    #[test]
+    fn a_recorded_run_reopens_in_either_view() {
+        use crate::terminal::View;
+        let run = RunSummary {
+            started_ms: None,
+            clock_anchor: None,
+            id: "one".into(),
+            vm_id: "vm".into(),
+            boot_id: "boot".into(),
+            session_id: 1,
+            root_task_cookie: 1,
+            pid: 2,
+            request: ExecRequest::default(),
+            directory: "run".into(),
+            terminal_eof: true,
+            state: RunState::Finished,
+            notes: Vec::new(),
+            route: None,
+            recording_error: None,
+            execution: None,
+            analysis: None,
+        };
+        for view in [View::Formatted, View::Raw] {
+            let mut terminal = RunTerminal::new(run.clone());
+            terminal.terminal.set_view(view);
+            terminal.begin_replay();
+            assert_eq!(terminal.terminal.view(), view);
+            terminal.output(1, b"\x1b[31mhello\x1b[0m\r\n", true);
+            assert!(terminal.terminal.contents().contains("hello"));
+            assert!(terminal.terminal.raw_stream().contains("\\e[31mhello"));
+        }
     }
 }

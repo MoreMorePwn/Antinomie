@@ -265,15 +265,15 @@ impl Terminal {
         }
     }
 
-    pub(super) fn copy_actions(
-        &mut self,
-        ui: &mut egui::Ui,
+    /// Whether this frame asks to copy: the Copy event, Ctrl+Shift+C, Ctrl+C
+    /// over a selection, or Ctrl+Insert, while `response` has focus.
+    pub(super) fn copy_requested(
+        &self,
+        ui: &egui::Ui,
         response: &egui::Response,
-        history: usize,
-        rows: u16,
-        cols: u16,
+        selected: bool,
     ) -> bool {
-        let copy = response.has_focus()
+        response.has_focus()
             && ui.input(|i| {
                 i.events.iter().any(|event| match event {
                     egui::Event::Copy => true,
@@ -282,11 +282,7 @@ impl Terminal {
                         pressed: true,
                         modifiers,
                         ..
-                    } => {
-                        modifiers.ctrl
-                            && (modifiers.shift
-                                || self.selection.is_some_and(|s| s.anchor != s.head))
-                    }
+                    } => modifiers.ctrl && (modifiers.shift || selected),
                     egui::Event::Key {
                         key: Key::Insert,
                         pressed: true,
@@ -295,7 +291,19 @@ impl Terminal {
                     } => modifiers.ctrl,
                     _ => false,
                 })
-            });
+            })
+    }
+
+    pub(super) fn copy_actions(
+        &mut self,
+        ui: &mut egui::Ui,
+        response: &egui::Response,
+        history: usize,
+        rows: u16,
+        cols: u16,
+    ) -> bool {
+        let selected = self.selection.is_some_and(|s| s.anchor != s.head);
+        let copy = self.copy_requested(ui, response, selected);
         let mut copied = copy && self.copy_selection(ui, history);
         response.context_menu(|ui| {
             if ui
@@ -389,11 +397,11 @@ impl Terminal {
                 if let Some(content) = screen.cell(screen_row, col)
                     && !content.is_wide_continuation()
                 {
-                    painter.text(
+                    paint_glyph(
+                        painter,
                         position(col),
-                        egui::Align2::LEFT_TOP,
-                        content.contents(),
-                        font.clone(),
+                        content,
+                        font,
                         theme::terminal_text(),
                     );
                 }

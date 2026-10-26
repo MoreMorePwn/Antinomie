@@ -2,6 +2,8 @@ use crate::theme;
 use eframe::egui::{self, Color32, Key, Sense, TextStyle};
 use std::time::{Duration, Instant};
 
+mod raw;
+mod raw_view;
 mod selection;
 use selection::Selection;
 
@@ -14,9 +16,33 @@ const MAX_COLS: u16 = 256;
 /// guest's PTY does not change size when history first appears.
 const BAR: f32 = 10.0;
 const MIN_THUMB: f32 = 16.0;
+/// How far the second pass of a bold glyph is drawn to the right.
+const BOLD_SHIFT: f32 = 0.6;
+
+/// How the output is shown.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum View {
+    /// The screen as a terminal draws it.
+    #[default]
+    Formatted,
+    /// The byte stream with escapes written out.
+    Raw,
+}
+
+/// The grid that fits a pane, from `Terminal::prepare`.
+struct Prepared {
+    font: egui::FontId,
+    cell: egui::Vec2,
+    available: egui::Vec2,
+    fit: (u16, u16),
+    resize: Option<(u16, u16)>,
+}
 
 pub struct Terminal {
     parser: vt100::Parser,
+    view: View,
+    raw: raw::RawLog,
+    raw_view: raw_view::RawView,
     size: (u16, u16),
     /// Lines between the newest output and the bottom of the view; 0 follows
     /// new output.
@@ -34,6 +60,9 @@ impl Default for Terminal {
     fn default() -> Self {
         Self {
             parser: vt100::Parser::new(24, 80, SCROLLBACK),
+            view: View::Formatted,
+            raw: raw::RawLog::default(),
+            raw_view: raw_view::RawView::default(),
             size: (0, 0),
             offset: 0,
             wheel: egui::Vec2::ZERO,
@@ -58,12 +87,36 @@ impl Terminal {
         self.parser.screen().contents()
     }
 
+    /// The Raw view's text, one line per row, for tests.
+    #[cfg(test)]
+    pub(crate) fn raw_stream(&self) -> String {
+        self.raw
+            .lines()
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     #[cfg(test)]
     pub(crate) fn size(&self) -> (u16, u16) {
         self.parser.screen().size()
     }
 
+    pub(crate) fn view(&self) -> View {
+        self.view
+    }
+
+    pub(crate) fn set_view(&mut self, view: View) {
+        if self.view != view {
+            self.view = view;
+            self.offset = 0;
+            self.wheel = egui::Vec2::ZERO;
+        }
+    }
+
     pub fn process(&mut self, bytes: &[u8]) {
+        self.raw.push(bytes);
         if self.selection.is_some() && !bytes.is_empty() {
             self.process_selected(bytes);
             return;
@@ -107,6 +160,9 @@ impl Terminal {
             .process(b"\x1b[?1049l\x1b[r\x1b[?6l\x1b[m\x1b[H\x1b[2J");
         self.parser.process(data);
         self.size = size;
+        self.raw
+            .note("[screen refreshed: output before this point may be missing]");
+        self.raw.push(data);
     }
 
     /// Lines kept above the screen.
@@ -126,23 +182,14 @@ impl Terminal {
         self.show_grid(ui, enabled, true)
     }
 
-    /// Draws the terminal into the space left in `ui`. A live terminal
-    /// (`resize_parser`) fits its grid to that space and reports the new PTY
-    /// size; a recorded one keeps its grid and shows as many lines of it and
-    /// its history as fit.
-    pub(crate) fn show_grid(
-        &mut self,
-        ui: &mut egui::Ui,
-        enabled: bool,
-        resize_parser: bool,
-    ) -> (Vec<u8>, Option<(u16, u16)>) {
+    /// The font, cell size and grid that fit the space left in `ui`, with the
+    /// PTY size to report when a live terminal must change.
+    fn prepare(&mut self, ui: &egui::Ui, resize_parser: bool) -> Option<Prepared> {
         let font = TextStyle::Monospace.resolve(ui.style());
         let cell =
             ui.fonts(|fonts| egui::vec2(fonts.glyph_width(&font, 'M'), fonts.row_height(&font)));
         let available = ui.available_size();
-        let Some(fit) = fit_grid(available, cell) else {
-            return (Vec::new(), None);
-        };
+        let fit = fit_grid(available, cell)?;
         // Coming back to a hidden terminal paints the bytes already drained
         // into the parser. A PTY resize on that same frame would reflow or
         // clear the screen before those bytes are visible, so the size change
@@ -159,32 +206,27 @@ impl Terminal {
         } else {
             None
         };
-        let (rows, cols) = self.parser.screen().size();
-        let (mut view_rows, view_cols) = if resize_parser {
-            (rows, cols)
-        } else {
-            (fit.0, cols.min(fit.1))
-        };
-        let wide = cols > view_cols;
-        if wide {
-            view_rows = fit_grid(available - egui::vec2(0.0, BAR), cell)
-                .map_or(1, |(rows, _)| rows)
-                .max(1);
-        }
-        let grid = egui::vec2(f32::from(view_cols) * cell.x, f32::from(view_rows) * cell.y);
-        let (rect, response) = ui.allocate_exact_size(available, Sense::click_and_drag());
-        let grid = egui::Rect::from_min_size(rect.min, grid);
-        ui.painter().rect_filled(rect, 0.0, theme::terminal());
-        if response.clicked() || response.drag_started() {
-            response.request_focus();
-        }
+        Some(Prepared {
+            font,
+            cell,
+            available,
+            fit,
+            resize,
+        })
+    }
 
-        let history = self.history();
-        let lines = history + usize::from(rows);
-        let shown = usize::from(view_rows);
-        let max_offset = lines.saturating_sub(shown);
-        let page = shown.saturating_sub(1).max(1) as isize;
-        let max_column = cols - view_cols;
+    /// Wheel and Shift+navigation scrolling shared by both views.
+    #[allow(clippy::too_many_arguments)]
+    fn scroll_input(
+        &mut self,
+        ui: &egui::Ui,
+        rect: egui::Rect,
+        cell: egui::Vec2,
+        response: &egui::Response,
+        max_offset: usize,
+        page: isize,
+        max_column: u16,
+    ) {
         if ui.rect_contains_pointer(rect) {
             let delta = ui.input(|state| state.raw_scroll_delta);
             if delta != egui::Vec2::ZERO {
@@ -220,6 +262,188 @@ impl Terminal {
                 }
             });
         }
+    }
+
+    /// The button that returns a scrolled-back view to the newest output.
+    fn jump_button(&mut self, ui: &mut egui::Ui, grid: egui::Rect, response: &egui::Response) {
+        if self.offset > 0 {
+            let below = self.offset;
+            let jump = ui
+                .scope_builder(
+                    egui::UiBuilder::new()
+                        .max_rect(grid.shrink(6.0))
+                        .layout(egui::Layout::right_to_left(egui::Align::Max)),
+                    |ui| {
+                        ui.add(
+                            egui::Button::new(format!(
+                                "{} {below} newer line{}",
+                                egui_phosphor::regular::ARROW_LINE_DOWN,
+                                if below == 1 { "" } else { "s" }
+                            ))
+                            .fill(theme::raised()),
+                        )
+                        .on_hover_text("Jump to the newest output (Shift+End)")
+                    },
+                )
+                .inner;
+            if jump.clicked() {
+                self.offset = 0;
+                response.request_focus();
+            }
+        }
+    }
+
+    /// Keyboard input for the guest, as the bytes its PTY expects. `copied`
+    /// is set when a copy took the key, so it does not also interrupt.
+    fn read_input(
+        &mut self,
+        ui: &egui::Ui,
+        response: &egui::Response,
+        enabled: bool,
+        copied: &mut bool,
+    ) -> Vec<u8> {
+        let mut input = Vec::new();
+        let closing = ui.input(|state| state.viewport().close_requested());
+        let queued_focus = closing && ui.memory(|memory| memory.has_focus(response.id));
+        let screen = self.parser.screen();
+        if enabled && (response.has_focus() || queued_focus) {
+            ui.input(|state| {
+                for event in &state.events {
+                    // Viewport Close is untimestamped; focus-loss events delimit ordered input.
+                    if closing && matches!(event, egui::Event::WindowFocused(false)) {
+                        break;
+                    }
+                    match event {
+                        egui::Event::Copy if !*copied && !state.modifiers.shift => {
+                            // egui-winit converts ordinary Ctrl+C into Copy.
+                            // Without a selection it must still interrupt the PTY.
+                            input.push(3);
+                            *copied = true;
+                        }
+                        egui::Event::Text(text) | egui::Event::Paste(text) => {
+                            input.extend_from_slice(text.as_bytes())
+                        }
+                        egui::Event::Key {
+                            key,
+                            pressed: true,
+                            modifiers,
+                            ..
+                        } => {
+                            if modifiers.ctrl && modifiers.shift && matches!(key, Key::C | Key::V) {
+                                // Clipboard commands are handled locally; never send ETX/SYN.
+                            } else if *copied && modifiers.ctrl && *key == Key::C {
+                                // Do not also interrupt after copying a selection.
+                            } else if modifiers.ctrl && *key >= Key::A && *key <= Key::Z {
+                                input.push(*key as u8 - Key::A as u8 + 1);
+                            } else if modifiers.shift
+                                && matches!(key, Key::PageUp | Key::PageDown | Key::Home | Key::End)
+                            {
+                                // Scrolls the history above instead.
+                            } else {
+                                input.extend_from_slice(match key {
+                                    Key::Enter => b"\r",
+                                    Key::Backspace => b"\x7f",
+                                    Key::Tab => b"\t",
+                                    Key::Escape => b"\x1b",
+                                    Key::ArrowUp => {
+                                        if screen.application_cursor() {
+                                            b"\x1bOA"
+                                        } else {
+                                            b"\x1b[A"
+                                        }
+                                    }
+                                    Key::ArrowDown => {
+                                        if screen.application_cursor() {
+                                            b"\x1bOB"
+                                        } else {
+                                            b"\x1b[B"
+                                        }
+                                    }
+                                    Key::ArrowRight => {
+                                        if screen.application_cursor() {
+                                            b"\x1bOC"
+                                        } else {
+                                            b"\x1b[C"
+                                        }
+                                    }
+                                    Key::ArrowLeft => {
+                                        if screen.application_cursor() {
+                                            b"\x1bOD"
+                                        } else {
+                                            b"\x1b[D"
+                                        }
+                                    }
+                                    Key::Home => b"\x1b[H",
+                                    Key::End => b"\x1b[F",
+                                    Key::Delete => b"\x1b[3~",
+                                    Key::PageUp => b"\x1b[5~",
+                                    Key::PageDown => b"\x1b[6~",
+                                    _ => b"",
+                                });
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            });
+        }
+        if !input.is_empty() {
+            self.offset = 0;
+            self.selection = None;
+        }
+        input
+    }
+
+    /// Draws the terminal into the space left in `ui`. A live terminal
+    /// (`resize_parser`) fits its grid to that space and reports the new PTY
+    /// size; a recorded one keeps its grid and shows as many lines of it and
+    /// its history as fit.
+    pub(crate) fn show_grid(
+        &mut self,
+        ui: &mut egui::Ui,
+        enabled: bool,
+        resize_parser: bool,
+    ) -> (Vec<u8>, Option<(u16, u16)>) {
+        if self.view == View::Raw {
+            return self.show_raw(ui, enabled, resize_parser);
+        }
+        let Some(Prepared {
+            font,
+            cell,
+            available,
+            fit,
+            resize,
+        }) = self.prepare(ui, resize_parser)
+        else {
+            return (Vec::new(), None);
+        };
+        let (rows, cols) = self.parser.screen().size();
+        let (mut view_rows, view_cols) = if resize_parser {
+            (rows, cols)
+        } else {
+            (fit.0, cols.min(fit.1))
+        };
+        let wide = cols > view_cols;
+        if wide {
+            view_rows = fit_grid(available - egui::vec2(0.0, BAR), cell)
+                .map_or(1, |(rows, _)| rows)
+                .max(1);
+        }
+        let grid = egui::vec2(f32::from(view_cols) * cell.x, f32::from(view_rows) * cell.y);
+        let (rect, response) = ui.allocate_exact_size(available, Sense::click_and_drag());
+        let grid = egui::Rect::from_min_size(rect.min, grid);
+        ui.painter().rect_filled(rect, 0.0, theme::terminal());
+        if response.clicked() || response.drag_started() {
+            response.request_focus();
+        }
+
+        let history = self.history();
+        let lines = history + usize::from(rows);
+        let shown = usize::from(view_rows);
+        let max_offset = lines.saturating_sub(shown);
+        let page = shown.saturating_sub(1).max(1) as isize;
+        let max_column = cols - view_cols;
+        self.scroll_input(ui, rect, cell, &response, max_offset, page, max_column);
         self.offset = self.offset.min(max_offset);
         self.column = self.column.min(max_column);
         let scrollbar_id = response.id.with("scrollbar");
@@ -315,122 +539,10 @@ impl Terminal {
                 }
             }
         }
-        if self.offset > 0 {
-            let below = self.offset;
-            let jump = ui
-                .scope_builder(
-                    egui::UiBuilder::new()
-                        .max_rect(grid.shrink(6.0))
-                        .layout(egui::Layout::right_to_left(egui::Align::Max)),
-                    |ui| {
-                        ui.add(
-                            egui::Button::new(format!(
-                                "{} {below} newer line{}",
-                                egui_phosphor::regular::ARROW_LINE_DOWN,
-                                if below == 1 { "" } else { "s" }
-                            ))
-                            .fill(theme::raised()),
-                        )
-                        .on_hover_text("Jump to the newest output (Shift+End)")
-                    },
-                )
-                .inner;
-            if jump.clicked() {
-                self.offset = 0;
-                response.request_focus();
-            }
-        }
+        self.jump_button(ui, grid, &response);
 
-        let mut input = Vec::new();
-        let closing = ui.input(|state| state.viewport().close_requested());
-        let queued_focus = closing && ui.memory(|memory| memory.has_focus(response.id));
         let mut copied = self.copy_actions(ui, &response, history, rows, cols);
-        let screen = self.parser.screen();
-        if enabled && (response.has_focus() || queued_focus) {
-            ui.input(|state| {
-                for event in &state.events {
-                    // Viewport Close is untimestamped; focus-loss events delimit ordered input.
-                    if closing && matches!(event, egui::Event::WindowFocused(false)) {
-                        break;
-                    }
-                    match event {
-                        egui::Event::Copy if !copied && !state.modifiers.shift => {
-                            // egui-winit converts ordinary Ctrl+C into Copy.
-                            // Without a selection it must still interrupt the PTY.
-                            input.push(3);
-                            copied = true;
-                        }
-                        egui::Event::Text(text) | egui::Event::Paste(text) => {
-                            input.extend_from_slice(text.as_bytes())
-                        }
-                        egui::Event::Key {
-                            key,
-                            pressed: true,
-                            modifiers,
-                            ..
-                        } => {
-                            if modifiers.ctrl && modifiers.shift && matches!(key, Key::C | Key::V) {
-                                // Clipboard commands are handled locally; never send ETX/SYN.
-                            } else if copied && modifiers.ctrl && *key == Key::C {
-                                // Do not also interrupt after copying a selection.
-                            } else if modifiers.ctrl && *key >= Key::A && *key <= Key::Z {
-                                input.push(*key as u8 - Key::A as u8 + 1);
-                            } else if modifiers.shift
-                                && matches!(key, Key::PageUp | Key::PageDown | Key::Home | Key::End)
-                            {
-                                // Scrolls the history above instead.
-                            } else {
-                                input.extend_from_slice(match key {
-                                    Key::Enter => b"\r",
-                                    Key::Backspace => b"\x7f",
-                                    Key::Tab => b"\t",
-                                    Key::Escape => b"\x1b",
-                                    Key::ArrowUp => {
-                                        if screen.application_cursor() {
-                                            b"\x1bOA"
-                                        } else {
-                                            b"\x1b[A"
-                                        }
-                                    }
-                                    Key::ArrowDown => {
-                                        if screen.application_cursor() {
-                                            b"\x1bOB"
-                                        } else {
-                                            b"\x1b[B"
-                                        }
-                                    }
-                                    Key::ArrowRight => {
-                                        if screen.application_cursor() {
-                                            b"\x1bOC"
-                                        } else {
-                                            b"\x1b[C"
-                                        }
-                                    }
-                                    Key::ArrowLeft => {
-                                        if screen.application_cursor() {
-                                            b"\x1bOD"
-                                        } else {
-                                            b"\x1b[D"
-                                        }
-                                    }
-                                    Key::Home => b"\x1b[H",
-                                    Key::End => b"\x1b[F",
-                                    Key::Delete => b"\x1b[3~",
-                                    Key::PageUp => b"\x1b[5~",
-                                    Key::PageDown => b"\x1b[6~",
-                                    _ => b"",
-                                });
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            });
-        }
-        if !input.is_empty() {
-            self.offset = 0;
-            self.selection = None;
-        }
+        let input = self.read_input(ui, &response, enabled, &mut copied);
         (input, resize)
     }
 }
@@ -500,13 +612,7 @@ fn paint_rows(
                 color(content.fgcolor(), theme::terminal_text())
             };
             if !content.is_wide_continuation() {
-                painter.text(
-                    pos,
-                    egui::Align2::LEFT_TOP,
-                    content.contents(),
-                    font.clone(),
-                    fg,
-                );
+                paint_glyph(painter, pos, content, font, fg);
             }
             if content.underline() {
                 painter.line_segment(
@@ -518,6 +624,40 @@ fn paint_rows(
                 );
             }
         }
+    }
+}
+
+/// Draws one cell's text. Italic slants the glyph; bold draws it a second
+/// time a little to the right, which thickens the stroke in any font.
+fn paint_glyph(
+    painter: &egui::Painter,
+    pos: egui::Pos2,
+    content: &vt100::Cell,
+    font: &egui::FontId,
+    fg: Color32,
+) {
+    let text = content.contents();
+    if text.is_empty() {
+        return;
+    }
+    let draw = |pos: egui::Pos2| {
+        if content.italic() {
+            let format = egui::TextFormat {
+                font_id: font.clone(),
+                color: fg,
+                italics: true,
+                ..Default::default()
+            };
+            let job = egui::text::LayoutJob::single_section(text.to_owned(), format);
+            let galley = painter.layout_job(job);
+            painter.galley(pos, galley, fg);
+        } else {
+            painter.text(pos, egui::Align2::LEFT_TOP, text, font.clone(), fg);
+        }
+    };
+    draw(pos);
+    if content.bold() {
+        draw(pos + egui::vec2(BOLD_SHIFT, 0.0));
     }
 }
 

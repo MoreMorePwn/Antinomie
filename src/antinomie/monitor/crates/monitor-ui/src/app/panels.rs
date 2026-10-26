@@ -572,7 +572,7 @@ impl MonitorApp {
 }
 
 /// Compact process chrome, separated from the terminal grid and its selection.
-fn terminal_header(ui: &mut egui::Ui, terminal: &RunTerminal) {
+fn terminal_header(ui: &mut egui::Ui, terminal: &mut RunTerminal) {
     egui::Frame::NONE
         .fill(theme::raised())
         .inner_margin(egui::Margin::symmetric(8, 5))
@@ -591,9 +591,11 @@ fn terminal_header(ui: &mut egui::Ui, terminal: &RunTerminal) {
                 ui.label(run_status(&terminal.run));
                 ui.label(egui::RichText::new(format!("Root: {}", root_exit(&terminal.run)))
                     .small().color(theme::muted()));
+                ui.separator();
+                terminal.terminal.view_controls(ui);
                 ui.label(egui::RichText::new(egui_phosphor::regular::INFO)
                     .color(theme::muted()))
-                    .on_hover_text("Drag to select text. Double-click selects a word. Copy with Ctrl+Shift+C, Ctrl+Insert, or right-click. Ctrl+C interrupts when nothing is selected. Paste with Ctrl+Shift+V or Ctrl+V. Shift+PageUp/PageDown scrolls output.");
+                    .on_hover_text("Drag to select text. Double-click selects a word. Copy with Ctrl+Shift+C, Ctrl+Insert, or right-click. Ctrl+C interrupts when nothing is selected. Paste with Ctrl+Shift+V or Ctrl+V. Shift+PageUp/PageDown scrolls output. Raw shows escape codes as text; Copy then gives that text.");
             });
             if let Some(error) = terminal.snapshot_error.as_ref().or(terminal.replay_error.as_ref()) {
                 crate::activity::warning(ui, error);

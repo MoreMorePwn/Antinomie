@@ -14,6 +14,12 @@ it runs.
   packages had rebuilt it from the index of the Antinomie kernel's modules,
   leaving none). New bases only for the module part; the resume device needs
   this app's provisioning.
+- **Terminal Raw view.** Each process terminal has a **Formatted / Raw**
+  switch. Raw shows the byte stream with escapes written out, searchable and
+  copyable, and highlights the escapes that can hide output (cursor moves,
+  line erases, overwrites, concealed text, control strings including the OSC 52
+  clipboard command, the alternate screen). Formatted now draws bold and italic.
+  Saved runs open in either view.
 
 ## 0.7.1 — 2026-10-26
 
