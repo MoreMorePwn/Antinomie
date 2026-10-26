@@ -35,7 +35,7 @@ changes. Line counts are added/removed lines of the patch.
 
 | # | Patch | Lines | Own new files | Hooked kernel files |
 |---|---|---|---|---|
-| 1 | add the host control channel and its shared-memory transport | +1391 | `kernel/antinomie/{abi.h,queue.h,bootstrap_layout.h,bootstrap.c,guest.c,control.c,control_wire.h,Kconfig,Makefile}`, `include/linux/antinomie.h`, `include/linux/antinomie_boot.h` | `init/Kconfig`, `kernel/Makefile` |
+| 1 | add the host control channel and its shared-memory transport | +1417 | `kernel/antinomie/{abi.h,queue.h,bootstrap_layout.h,bootstrap.c,guest.c,control.c,control_wire.h,Kconfig,Makefile}`, `include/linux/antinomie.h`, `include/linux/antinomie_boot.h` | `init/Kconfig`, `kernel/Makefile` |
 | 2 | license the shared transport headers under MIT | +8 -4 | none (`abi.h`, `bootstrap_layout.h`, `queue.h`, `control_wire.h` change licence) | none |
 | 3 | add the x86-64 definitions and system call table | +4424 | `arch/x86/include/asm/antinomie.h`, `arch/x86/include/asm/antinomie_syscalls.h` (generated) | none |
 | 4 | record the system calls of launched and attached processes | +1541 -3 | `kernel/antinomie/{recorder.c,observer.c,observer.h}`, `include/linux/antinomie_monitor.h` | `kernel/fork.c`, `kernel/exit.c`, `fs/exec.c`, `include/linux/sched.h` |

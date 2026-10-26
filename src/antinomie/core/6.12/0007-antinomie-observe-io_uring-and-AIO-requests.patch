@@ -1,6 +1,6 @@
-From a6fc9e2458be8ec268730c529e4b5607c16f700c Mon Sep 17 00:00:00 2001
+From 827d6b458b796a80e1e9b802fba0f7b6d67f64ed Mon Sep 17 00:00:00 2001
 From: MikiMiku <jonathanirvinjo@gmail.com>
-Date: Mon, 26 Oct 2026 15:20:14 +0700
+Date: Mon, 26 Oct 2026 19:53:01 +0700
 Subject: [PATCH] antinomie: observe io_uring and AIO requests
 
 A program can do its I/O without a system call per operation: through

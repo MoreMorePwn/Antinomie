@@ -1,6 +1,6 @@
-From ee0008698d8b2762a577f32dbfb7b3eba0ea4c70 Mon Sep 17 00:00:00 2001
+From 2e69bf3bfc713f35d57be2fe5d625380f935e056 Mon Sep 17 00:00:00 2001
 From: MikiMiku <jonathanirvinjo@gmail.com>
-Date: Mon, 26 Oct 2026 15:20:14 +0700
+Date: Mon, 26 Oct 2026 19:53:01 +0700
 Subject: [PATCH] antinomie: hide the recorder from programs in the guest
 
 A sample that looks for a sandbox reads world-readable files. Remove
@@ -192,10 +192,10 @@ index 6ed67ca..a71441c 100644
  }
  late_initcall(ant_debug_init);
 diff --git a/kernel/antinomie/guest.c b/kernel/antinomie/guest.c
-index f2167b3..23f3209 100644
+index 596553e..69f9b4d 100644
 --- a/kernel/antinomie/guest.c
 +++ b/kernel/antinomie/guest.c
-@@ -469,9 +469,10 @@ retry:
+@@ -501,9 +501,10 @@ retry:
  	 * TTY queue events_unbound. WQ_MEM_RECLAIM makes that flush trip
  	 * check_flush_dependency. Flags stay 0 so the worker may complete
  	 * the read. The queue stays ordered, so commands, EOF and shutdown

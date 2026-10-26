@@ -4716,7 +4716,7 @@ index 0000000..8ff7b76
 +}
 +late_initcall(ant_dbg_x86_init);
 diff --git a/kernel/antinomie/guest.c b/kernel/antinomie/guest.c
-index b717282..f2167b3 100644
+index d55f9cb..596553e 100644
 --- a/kernel/antinomie/guest.c
 +++ b/kernel/antinomie/guest.c
 @@ -16,6 +16,7 @@
@@ -4727,7 +4727,7 @@ index b717282..f2167b3 100644
  
  /* The longest a sender that may not sleep spins for room in a full ring, whatever
   * wait the host asked for: it holds a CPU, and with interrupts off a spin of
-@@ -51,7 +52,7 @@ struct ant_handler {
+@@ -54,7 +55,7 @@ struct ant_handler {
  	ant_command_handler fn;
  	void *context;
  };
@@ -4736,7 +4736,7 @@ index b717282..f2167b3 100644
  static DECLARE_RWSEM(handler_lock);
  static u8 command_args[ANT_MAX_COMMAND_LEN], command_result[ANT_MAX_RESULT_LEN];
  static u64 last_request_id;
-@@ -75,7 +76,7 @@ static bool service_resume(void)
+@@ -78,7 +79,7 @@ static bool service_resume(void)
  	/* Fence acknowledgment waits until manual acquisition owns no parks.
  	 * Completed immutable evidence remains retained across reattachment.
  	 */
@@ -4745,7 +4745,7 @@ index b717282..f2167b3 100644
  		return true;
  	floor = max(last_request_id, ANT_ACQ(&boot->resume_sequence_floor));
  	cursor = request_tail;
-@@ -395,12 +396,13 @@ static void control_tick(struct work_struct *work)
+@@ -427,12 +428,13 @@ static void control_tick(struct work_struct *work)
  	}
  	service_commands();
  	ANT_REL(&control->guest_heartbeat, control->guest_heartbeat + 1);

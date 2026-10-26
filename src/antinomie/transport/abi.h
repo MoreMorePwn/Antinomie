@@ -87,8 +87,9 @@ struct ant_control {
 	__u8 guest_pad[28];
 	__u64 host_heartbeat;
 	__u32 host_timeout_ms;
-	/* Zero: a send to a full ring drops. Otherwise a sender spins up to this
-	 * long (at most ANT_SEND_WAIT_MAX_US) while the host is live. */
+	/* Zero: a send to a full ring drops. Otherwise a sender waits while the
+	 * host is live, until the host has taken nothing from its ring for this
+	 * long (at most ANT_SEND_WAIT_MAX_US). */
 	__u32 send_wait_us;
 	__u8 host_pad[312];
 	struct ant_queue requests, responses;

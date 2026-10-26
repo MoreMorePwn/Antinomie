@@ -22,7 +22,7 @@ Last-Update: 2026-10-26
 
 ---
 diff --git a/kernel/antinomie/abi.h b/kernel/antinomie/abi.h
-index a2019fc..cf82dde 100644
+index f060efa..cd61acf 100644
 --- a/kernel/antinomie/abi.h
 +++ b/kernel/antinomie/abi.h
 @@ -1,4 +1,5 @@

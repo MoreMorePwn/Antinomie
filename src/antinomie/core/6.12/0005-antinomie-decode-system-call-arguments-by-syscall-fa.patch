@@ -1,6 +1,6 @@
-From 7415da8b2e72e6ca81f225cd7050fc967335a147 Mon Sep 17 00:00:00 2001
+From a2e62ebd2c19148881c000331eed9f06526c5a2f Mon Sep 17 00:00:00 2001
 From: MikiMiku <jonathanirvinjo@gmail.com>
-Date: Mon, 26 Oct 2026 15:20:14 +0700
+Date: Mon, 26 Oct 2026 19:53:01 +0700
 Subject: [PATCH] antinomie: decode system call arguments by syscall family
 
 The recorder alone captures a pointer argument only when it knows the

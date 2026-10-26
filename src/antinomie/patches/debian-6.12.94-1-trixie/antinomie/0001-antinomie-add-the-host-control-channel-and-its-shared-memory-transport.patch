@@ -11,8 +11,11 @@ Description: antinomie: add the host control channel and its shared-memory trans
  every 10 ms and calls the handler registered for each opcode;
  ant_send() lets any kernel code put a record in the calling CPU's ring
  without allocating or sleeping. When the host asks senders to wait for
- room instead of dropping, a sender that may sleep waits as long as the
- host allows (at most 10 s) and one that may not spins for at most
+ room instead of dropping, a sender that may sleep waits, on its CPU
+ and in turn with that CPU's other waiting senders (freed room goes to
+ them first), for as long as the host keeps reading that CPU's ring: it
+ gives up only when the host took nothing from it for the whole wait the
+ host set (at most 10 s). One that may not sleep spins for at most
  200 microseconds. ant_send_room() and ant_send_waits() let a caller
  that publishes in bulk pace itself. A fenced reattachment lets a host
  that reconnected, or restored a snapshot, take the queues over without
@@ -51,10 +54,10 @@ Last-Update: 2026-10-26
 ---
 diff --git a/include/linux/antinomie.h b/include/linux/antinomie.h
 new file mode 100644
-index 0000000..a7d5c03
+index 0000000..43f9d98
 --- /dev/null
 +++ b/include/linux/antinomie.h
-@@ -0,0 +1,40 @@
+@@ -0,0 +1,43 @@
 +/* SPDX-License-Identifier: GPL-2.0-only */
 +#ifndef ANTINOMIE_GUEST_API_H
 +#define ANTINOMIE_GUEST_API_H
@@ -63,8 +66,11 @@ index 0000000..a7d5c03
 +/* Task context only. data is valid kernel memory; copied before return.
 + * Zero means local acceptance, not delivery. No allocation or sleep on send.
 + * A full ring returns -ENOSPC at once, unless the host set a send wait: then
-+ * the sender spins, preemption off, until room appears, the wait ends or the
-+ * host stops being live. A zero-length message is valid. Maximum payload
++ * the sender waits for room while the host is live and keeps taking records
++ * from this CPU's ring, and fails when the host took none for the whole wait.
++ * A sender that may sleep sleeps on its CPU and gets freed room in turn, before
++ * later senders; one that may not spins at most 200 microseconds. A zero-length
++ * message is valid. Maximum payload
 + * length is the smallest ring capacity minus framing (ANT_MAX_MESSAGE_LEN).
 + */
 +int ant_send(const void *data, size_t payload_len);
@@ -167,10 +173,10 @@ index 0000000..1b603b1
 +obj-y += bootstrap.o guest.o control.o
 diff --git a/kernel/antinomie/abi.h b/kernel/antinomie/abi.h
 new file mode 100644
-index 0000000..a2019fc
+index 0000000..f060efa
 --- /dev/null
 +++ b/kernel/antinomie/abi.h
-@@ -0,0 +1,114 @@
+@@ -0,0 +1,115 @@
 +/* SPDX-License-Identifier: GPL-2.0-only */
 +#ifndef ANTINOMIE_TRANSPORT_ABI_H
 +#define ANTINOMIE_TRANSPORT_ABI_H
@@ -259,8 +265,9 @@ index 0000000..a2019fc
 +	__u8 guest_pad[28];
 +	__u64 host_heartbeat;
 +	__u32 host_timeout_ms;
-+	/* Zero: a send to a full ring drops. Otherwise a sender spins up to this
-+	 * long (at most ANT_SEND_WAIT_MAX_US) while the host is live. */
++	/* Zero: a send to a full ring drops. Otherwise a sender waits while the
++	 * host is live, until the host has taken nothing from its ring for this
++	 * long (at most ANT_SEND_WAIT_MAX_US). */
 +	__u32 send_wait_us;
 +	__u8 host_pad[312];
 +	struct ant_queue requests, responses;
@@ -935,10 +942,10 @@ index 0000000..812c3d3
 +#endif
 diff --git a/kernel/antinomie/guest.c b/kernel/antinomie/guest.c
 new file mode 100644
-index 0000000..58209ed
+index 0000000..04a643d
 --- /dev/null
 +++ b/kernel/antinomie/guest.c
-@@ -0,0 +1,494 @@
+@@ -0,0 +1,526 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +#include <linux/antinomie.h>
 +#include <linux/cpu.h>
@@ -968,9 +975,12 @@ index 0000000..58209ed
 +	struct page *pages;
 +	void *data;
 +};
++/* One per CPU, used with preemption off. A sender that must wait for room
++ * takes a turn (next_ticket) and stays on its CPU until serving reaches it.
++ */
 +struct ant_producer {
 +	u64 head, cached_tail, attempted, dropped, waits, wait_ns;
-+	u32 index;
++	u32 index, next_ticket, serving;
 +	bool fault;
 +};
 +static DEFINE_PER_CPU(struct ant_producer, producers);
@@ -1085,9 +1095,9 @@ index 0000000..58209ed
 +	struct ant_producer *p;
 +	struct ant_queue *q;
 +	struct ant_message msg = { .payload_len = payload_len };
-+	u64 waited_from = 0, now;
-+	u32 wait_us;
-+	bool may_sleep;
++	u64 waited_from = 0, progress_at = 0, tail = 0, now;
++	u32 wait_us, ticket = 0;
++	bool may_sleep, queued = false;
 +	int error;
 +
 +	if (!in_task()) return -EWOULDBLOCK;
@@ -1102,37 +1112,62 @@ index 0000000..58209ed
 +		error = -EPROTO;
 +		goto drop;
 +	}
++	may_sleep = preempt_count() == 1 && !irqs_disabled() && !rcu_preempt_depth();
 +	for (;;) {
-+		error = ant_space(q, ring_size, p->head, &p->cached_tail, ant_span(payload_len));
++		/* Room freed while senders wait is theirs, in turn: a sender that
++		 * may sleep and finds others waiting queues behind them instead of
++		 * taking it. One that may not sleep never queues; it takes room
++		 * when there is some. */
++		if (!queued && may_sleep && p->serving != p->next_ticket)
++			error = -ENOSPC;
++		else if (queued && ticket != p->serving)
++			error = -ENOSPC;
++		else
++			error = ant_space(q, ring_size, p->head, &p->cached_tail,
++					  ant_span(payload_len));
 +		if (error != -ENOSPC)
 +			break;
 +		/* The host may ask senders to wait for room instead of dropping,
-+		 * bounded and only while it is live. A sender that may sleep
-+		 * sleeps, so the control worker and other tasks keep running;
-+		 * one in atomic context spins, and only briefly. */
-+		may_sleep = preempt_count() == 1 && !irqs_disabled() && !rcu_preempt_depth();
++		 * only while it is live and keeps reading this ring: the wait ends
++		 * when the host has taken nothing from it for the whole send wait.
++		 * A sender that may sleep sleeps on this CPU, so the control worker
++		 * and other tasks keep running; one in atomic context spins, and
++		 * only briefly. */
 +		wait_us = min_t(u32, READ_ONCE(control->send_wait_us), ANT_SEND_WAIT_MAX_US);
 +		if (!may_sleep)
 +			wait_us = min_t(u32, wait_us, ANT_SEND_ATOMIC_WAIT_US);
-+		if (!wait_us || !READ_ONCE(control->live))
-+			break;
 +		now = local_clock();
 +		if (!waited_from) {
-+			waited_from = now;
++			waited_from = progress_at = now;
++			tail = ANT_ACQ(&q->tail);
 +			p->waits++;
-+		} else if (now - waited_from >= (u64)wait_us * NSEC_PER_USEC) {
-+			break;
++		} else if (ANT_ACQ(&q->tail) != tail) {
++			tail = ANT_ACQ(&q->tail);
++			progress_at = now;
++		}
++		if (!wait_us || !READ_ONCE(control->live) ||
++		    now - progress_at >= (u64)wait_us * NSEC_PER_USEC) {
++			/* A queued sender gives up in its turn, so the ones behind it
++			 * keep theirs; they see the same dead host or idle ring. */
++			if (!queued || ticket == p->serving) {
++				error = -ENOSPC;
++				break;
++			}
 +		}
 +		if (may_sleep) {
-+			/* Only our own preempt_disable is held: sleep, then take this
-+			 * CPU's producer again (the task may have moved). */
++			if (!queued) {
++				/* Stay on this CPU while asleep: the turn is this
++				 * ring's. */
++				ticket = p->next_ticket++;
++				queued = true;
++				migrate_disable();
++			}
++			/* Only our own preempt_disable is held. */
 +			WRITE_ONCE(q->attempted, p->attempted);
 +			WRITE_ONCE(q->waits, p->waits);
 +			preempt_enable();
 +			usleep_range(50, 100);
 +			preempt_disable();
-+			p = this_cpu_ptr(&producers);
-+			q = &directory[p->index];
 +			if (p->fault) {
 +				error = -EPROTO;
 +				break;
@@ -1141,6 +1176,8 @@ index 0000000..58209ed
 +		}
 +		cpu_relax();
 +	}
++	if (queued)
++		p->serving++;
 +	if (waited_from) {
 +		p->wait_ns += local_clock() - waited_from;
 +		WRITE_ONCE(q->waits, p->waits);
@@ -1161,6 +1198,8 @@ index 0000000..58209ed
 +	WRITE_ONCE(q->attempted, p->attempted);
 +	WRITE_ONCE(q->dropped, p->dropped);
 +	preempt_enable();
++	if (queued)
++		migrate_enable();
 +	return error;
 +}
 +EXPORT_SYMBOL_GPL(ant_send);

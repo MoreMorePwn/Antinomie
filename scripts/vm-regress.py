@@ -47,7 +47,7 @@ CONTRACT_PATHS = (
 REVISION_LINE = r"^[[:space:]]*(#[[:space:]]*define[[:space:]]+ANTC_REVISION[[:space:]]|(pub(\([a-z]+\))?[[:space:]]+)?const[[:space:]]+REVISION:)"
 
 QUICK_GROUPS = "user,root,threads"
-STRESS_GROUPS = ("stress-light", "stress-heavy", "stress-extreme", "stress-lossy")
+STRESS_GROUPS = ("stress-light", "stress-heavy", "stress-extreme", "stress-lossy", "stress-contended")
 MIN_MEM_KIB = 5 * 1024 * 1024
 GIB = 1024**3
 # What a finished check leaves that only matters for debugging it: VM disks and recordings.

@@ -1,6 +1,6 @@
-From 2bd1b1dd6bbc1f8e2c13cd561761bee9aeb3bea0 Mon Sep 17 00:00:00 2001
+From ceb37840c28725f48b1575317cc62a8bfb9002f0 Mon Sep 17 00:00:00 2001
 From: MikiMiku <jonathanirvinjo@gmail.com>
-Date: Mon, 26 Oct 2026 15:20:14 +0700
+Date: Mon, 26 Oct 2026 19:53:01 +0700
 Subject: [PATCH] antinomie: capture process cores at exit and on request
 
 Give the host the memory of the program it launched, as an ELF core the
@@ -1034,7 +1034,7 @@ index ad80551..879528e 100644
   * Success: 64-byte reply specified in protocol/run-status.md. Task/tree
   * completion, root wait status, async observations and saving are distinct.
 diff --git a/kernel/antinomie/guest.c b/kernel/antinomie/guest.c
-index 58209ed..b717282 100644
+index 04a643d..d55f9cb 100644
 --- a/kernel/antinomie/guest.c
 +++ b/kernel/antinomie/guest.c
 @@ -15,6 +15,7 @@
@@ -1045,7 +1045,7 @@ index 58209ed..b717282 100644
  
  /* The longest a sender that may not sleep spins for room in a full ring, whatever
   * wait the host asked for: it holds a CPU, and with interrupts off a spin of
-@@ -71,6 +72,11 @@ static bool service_resume(void)
+@@ -74,6 +75,11 @@ static bool service_resume(void)
  
  	if (!nonce || nonce == ANT_ACQ(&boot->resume_ack))
  		return false;
@@ -1057,7 +1057,7 @@ index 58209ed..b717282 100644
  	floor = max(last_request_id, ANT_ACQ(&boot->resume_sequence_floor));
  	cursor = request_tail;
  	seen = request_head_seen;
-@@ -389,7 +395,12 @@ static void control_tick(struct work_struct *work)
+@@ -421,7 +427,12 @@ static void control_tick(struct work_struct *work)
  	}
  	service_commands();
  	ANT_REL(&control->guest_heartbeat, control->guest_heartbeat + 1);

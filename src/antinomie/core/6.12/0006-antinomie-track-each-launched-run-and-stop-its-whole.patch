@@ -1,6 +1,6 @@
-From a6b9eb44175f32ee45cb23420e39786c56b5af72 Mon Sep 17 00:00:00 2001
+From 33605226354816a568dee66b6aeca84cec523478 Mon Sep 17 00:00:00 2001
 From: MikiMiku <jonathanirvinjo@gmail.com>
-Date: Mon, 26 Oct 2026 15:20:14 +0700
+Date: Mon, 26 Oct 2026 19:53:01 +0700
 Subject: [PATCH] antinomie: track each launched run and stop its whole process
  tree
 

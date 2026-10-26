@@ -29,9 +29,12 @@ struct ant_cpu {
 	struct page *pages;
 	void *data;
 };
+/* One per CPU, used with preemption off. A sender that must wait for room
+ * takes a turn (next_ticket) and stays on its CPU until serving reaches it.
+ */
 struct ant_producer {
 	u64 head, cached_tail, attempted, dropped, waits, wait_ns;
-	u32 index;
+	u32 index, next_ticket, serving;
 	bool fault;
 };
 static DEFINE_PER_CPU(struct ant_producer, producers);
@@ -151,9 +154,9 @@ int ant_send(const void *data, size_t payload_len)
 	struct ant_producer *p;
 	struct ant_queue *q;
 	struct ant_message msg = { .payload_len = payload_len };
-	u64 waited_from = 0, now;
-	u32 wait_us;
-	bool may_sleep;
+	u64 waited_from = 0, progress_at = 0, tail = 0, now;
+	u32 wait_us, ticket = 0;
+	bool may_sleep, queued = false;
 	int error;
 
 	if (!in_task()) return -EWOULDBLOCK;
@@ -168,37 +171,62 @@ int ant_send(const void *data, size_t payload_len)
 		error = -EPROTO;
 		goto drop;
 	}
+	may_sleep = preempt_count() == 1 && !irqs_disabled() && !rcu_preempt_depth();
 	for (;;) {
-		error = ant_space(q, ring_size, p->head, &p->cached_tail, ant_span(payload_len));
+		/* Room freed while senders wait is theirs, in turn: a sender that
+		 * may sleep and finds others waiting queues behind them instead of
+		 * taking it. One that may not sleep never queues; it takes room
+		 * when there is some. */
+		if (!queued && may_sleep && p->serving != p->next_ticket)
+			error = -ENOSPC;
+		else if (queued && ticket != p->serving)
+			error = -ENOSPC;
+		else
+			error = ant_space(q, ring_size, p->head, &p->cached_tail,
+					  ant_span(payload_len));
 		if (error != -ENOSPC)
 			break;
 		/* The host may ask senders to wait for room instead of dropping,
-		 * bounded and only while it is live. A sender that may sleep
-		 * sleeps, so the control worker and other tasks keep running;
-		 * one in atomic context spins, and only briefly. */
-		may_sleep = preempt_count() == 1 && !irqs_disabled() && !rcu_preempt_depth();
+		 * only while it is live and keeps reading this ring: the wait ends
+		 * when the host has taken nothing from it for the whole send wait.
+		 * A sender that may sleep sleeps on this CPU, so the control worker
+		 * and other tasks keep running; one in atomic context spins, and
+		 * only briefly. */
 		wait_us = min_t(u32, READ_ONCE(control->send_wait_us), ANT_SEND_WAIT_MAX_US);
 		if (!may_sleep)
 			wait_us = min_t(u32, wait_us, ANT_SEND_ATOMIC_WAIT_US);
-		if (!wait_us || !READ_ONCE(control->live))
-			break;
 		now = local_clock();
 		if (!waited_from) {
-			waited_from = now;
+			waited_from = progress_at = now;
+			tail = ANT_ACQ(&q->tail);
 			p->waits++;
-		} else if (now - waited_from >= (u64)wait_us * NSEC_PER_USEC) {
-			break;
+		} else if (ANT_ACQ(&q->tail) != tail) {
+			tail = ANT_ACQ(&q->tail);
+			progress_at = now;
+		}
+		if (!wait_us || !READ_ONCE(control->live) ||
+		    now - progress_at >= (u64)wait_us * NSEC_PER_USEC) {
+			/* A queued sender gives up in its turn, so the ones behind it
+			 * keep theirs; they see the same dead host or idle ring. */
+			if (!queued || ticket == p->serving) {
+				error = -ENOSPC;
+				break;
+			}
 		}
 		if (may_sleep) {
-			/* Only our own preempt_disable is held: sleep, then take this
-			 * CPU's producer again (the task may have moved). */
+			if (!queued) {
+				/* Stay on this CPU while asleep: the turn is this
+				 * ring's. */
+				ticket = p->next_ticket++;
+				queued = true;
+				migrate_disable();
+			}
+			/* Only our own preempt_disable is held. */
 			WRITE_ONCE(q->attempted, p->attempted);
 			WRITE_ONCE(q->waits, p->waits);
 			preempt_enable();
 			usleep_range(50, 100);
 			preempt_disable();
-			p = this_cpu_ptr(&producers);
-			q = &directory[p->index];
 			if (p->fault) {
 				error = -EPROTO;
 				break;
@@ -207,6 +235,8 @@ int ant_send(const void *data, size_t payload_len)
 		}
 		cpu_relax();
 	}
+	if (queued)
+		p->serving++;
 	if (waited_from) {
 		p->wait_ns += local_clock() - waited_from;
 		WRITE_ONCE(q->waits, p->waits);
@@ -227,6 +257,8 @@ out:
 	WRITE_ONCE(q->attempted, p->attempted);
 	WRITE_ONCE(q->dropped, p->dropped);
 	preempt_enable();
+	if (queued)
+		migrate_enable();
 	return error;
 }
 EXPORT_SYMBOL_GPL(ant_send);

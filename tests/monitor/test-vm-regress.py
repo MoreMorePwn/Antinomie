@@ -163,6 +163,7 @@ class PlanTests(unittest.TestCase):
         names = [c.name for c in vm.plan("full", self.ctx())]
         self.assertEqual(names[0], "conf-quick")
         for name in ("conf-stress-light", "conf-stress-heavy", "conf-stress-extreme", "conf-stress-lossy",
+                     "conf-stress-contended",
                      "debug-p2", "debug-p3", "audit-stop", "audit-core", "uring-status",
                      "uring-boots", "uring-legacy", "tracer-record", "tracer-legacy", "tracer-qa",
                      "debugger-live", "stealth", "snapshot", "io-old-new-p3", "io-new-old-audit"):

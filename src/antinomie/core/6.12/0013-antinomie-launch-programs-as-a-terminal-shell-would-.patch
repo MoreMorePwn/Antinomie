@@ -1,4 +1,4 @@
-From 56b48868494b8895e2d92b2c966bd211d3d253d6 Mon Sep 17 00:00:00 2001
+From b6a1b4ce158d09b49f0f619547a20921f1327015 Mon Sep 17 00:00:00 2001
 From: MikiMiku <jonathanirvinjo@gmail.com>
 Date: Mon, 26 Oct 2026 09:13:00 +0700
 Subject: [PATCH] antinomie: launch programs as a terminal shell would have run

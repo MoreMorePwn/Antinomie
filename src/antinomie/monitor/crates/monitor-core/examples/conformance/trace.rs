@@ -363,6 +363,17 @@ impl Part for TracePart {
             lossless: false,
             ..TransportSettings::default()
         };
+        // Never drop, with the smallest ring and a short wait: senders find
+        // their ring full all the time and compete for the room the host
+        // frees. A waiting sender that loses that race for the whole wait
+        // drops; with turns and a wait that ends only when the host stops
+        // reading, none should.
+        let contended = TransportSettings {
+            ring_kib: 256,
+            lossless: true,
+            max_wait_ms: 100,
+            ..TransportSettings::default()
+        };
         vec![
             oracle_group(context, "user", 1000),
             oracle_group(context, "root", 0),
@@ -389,6 +400,7 @@ impl Part for TracePart {
                 TransportSettings::default(),
             ),
             stress_group(context, "stress-lossy", "heavy", lossy),
+            stress_group(context, "stress-contended", "heavy", contended),
         ]
     }
 
