@@ -23,7 +23,8 @@ const DOCKERFILE: &str = "src/antinomie/packaging/container/Dockerfile";
 pub const IMAGE_REPOSITORY: &str = "antinomie-builder";
 /// Label on builder images, and on the containers a build starts.
 const IMAGE_LABEL: &str = "org.antinomie.builder=1";
-const CONTAINER_LABEL: &str = "org.antinomie.build=1";
+/// Label key on the containers a build starts; its value is the owner's process id.
+const CONTAINER_LABEL: &str = "org.antinomie.build";
 /// How long a probe's answer is reused.
 const PROBE_TTL: Duration = Duration::from_secs(20);
 /// How long an engine's own probe commands may take.
@@ -427,14 +428,38 @@ pub struct RunSpec<'a> {
     pub gid: u32,
 }
 
-/// The `run` arguments of a build, after the program name.
-pub fn run_args(spec: &RunSpec) -> Vec<String> {
-    let mount = |host: &Path, inside: &str, mode: &str| {
-        vec![
+/// The `-v` arguments of a build: what the container sees of the host.
+fn mounts(spec: &RunSpec) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut mount = |host: &Path, inside: &str, mode: &str| {
+        args.extend([
             "-v".to_owned(),
             format!("{}:{inside}:{mode}", host.display()),
-        ]
+        ]);
     };
+    mount(spec.kit, "/kit", "ro");
+    mount(spec.job, "/job.json", "ro");
+    mount(spec.inputs, "/inputs", "rw");
+    mount(spec.work, "/work", "rw");
+    // The orchestrator creates its output folder, so its parent is mounted.
+    if let Some(parent) = spec.output.parent() {
+        mount(parent, "/out", "rw");
+    }
+    if let Some(parent) = spec.kernel_cache.parent() {
+        mount(parent, "/cache/kernels", "rw");
+    }
+    mount(spec.ccache, "/ccache", "rw");
+    if let Some(parent) = spec.image_cache.and_then(Path::parent) {
+        mount(parent, "/cache/images", "rw");
+    }
+    args
+}
+
+/// Folders a root-equivalent engine's build writes as root.
+const OWNED_FOLDERS: &str = "/work /out /inputs /cache /ccache";
+
+/// The `run` arguments of a build, after the program name.
+pub fn run_args(spec: &RunSpec) -> Vec<String> {
     let mut args = owned(&[
         "run",
         "--rm",
@@ -442,7 +467,7 @@ pub fn run_args(spec: &RunSpec) -> Vec<String> {
         "--name",
         spec.name,
         "--label",
-        CONTAINER_LABEL,
+        &format!("{CONTAINER_LABEL}={}", std::process::id()),
         // mmdebstrap builds the image's root as the container's root: it needs
         // mount, which an unprivileged container (and its seccomp/AppArmor
         // profile) refuses.
@@ -457,32 +482,18 @@ pub fn run_args(spec: &RunSpec) -> Vec<String> {
         "-e".into(),
         format!("ANTINOMIE_BUILDER_IMAGE={}", spec.image),
     ]);
-    args.extend(mount(spec.kit, "/kit", "ro"));
-    args.extend(mount(spec.job, "/job.json", "ro"));
-    args.extend(mount(spec.inputs, "/inputs", "rw"));
-    args.extend(mount(spec.work, "/work", "rw"));
-    // The orchestrator creates its output folder, so its parent is mounted.
+    args.extend(mounts(spec));
+    args.push(spec.image.to_owned());
     let output_name = spec
         .output
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
-    if let Some(parent) = spec.output.parent() {
-        args.extend(mount(parent, "/out", "rw"));
-    }
     let kernel_name = spec
         .kernel_cache
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
-    if let Some(parent) = spec.kernel_cache.parent() {
-        args.extend(mount(parent, "/cache/kernels", "rw"));
-    }
-    args.extend(mount(spec.ccache, "/ccache", "rw"));
-    if let Some(parent) = spec.image_cache.and_then(Path::parent) {
-        args.extend(mount(parent, "/cache/images", "rw"));
-    }
-    args.push(spec.image.to_owned());
     let mut build = Vec::new();
     if let Some(nice) = spec.nice {
         build.extend(["nice".to_owned(), "-n".into(), nice.to_string()]);
@@ -523,12 +534,32 @@ pub fn run_args(spec: &RunSpec) -> Vec<String> {
             "sh".into(),
             "-c".into(),
             format!(
-                "{quoted}; status=$?; chown -R {}:{} /work /out /inputs /cache /ccache 2>/dev/null; exit $status",
+                "{quoted}; status=$?; chown -R {}:{} {OWNED_FOLDERS} 2>/dev/null; exit $status",
                 spec.uid, spec.gid
             ),
         ]);
     }
     args
+}
+
+/// Hands the folders of a build that was stopped (a cancel kills the shell that
+/// would have done it) back to the user, with a throwaway container.
+pub fn restore_ownership(spec: &RunSpec, runner: &dyn Runner) {
+    if spec.rootless {
+        return;
+    }
+    let mut args = owned(&["run", "--rm"]);
+    args.extend(mounts(spec));
+    args.push(spec.image.to_owned());
+    args.extend([
+        "sh".into(),
+        "-c".into(),
+        format!(
+            "chown -R {}:{} {OWNED_FOLDERS} 2>/dev/null; true",
+            spec.uid, spec.gid
+        ),
+    ]);
+    let _ = runner.run(spec.engine.program(), &args, Duration::from_secs(300));
 }
 
 /// Builds the image from the kit's Dockerfile, streaming the engine's output.
@@ -553,17 +584,18 @@ pub fn build_image(
     )
 }
 
-/// Removes the containers earlier builds left (a crashed app can), so a build
-/// never starts beside them.
-pub fn remove_stale_containers(engine: Engine, runner: &dyn Runner) {
+/// Removes the containers a build whose owner has since died left (a crashed
+/// app can), never one a running app is still using.
+pub fn remove_stale_containers(engine: Engine, runner: &dyn Runner, alive: &dyn Fn(u32) -> bool) {
     let Ok(listing) = runner.run(
         engine.program(),
         &owned(&[
             "ps",
             "-a",
-            "-q",
             "--filter",
             &format!("label={CONTAINER_LABEL}"),
+            "--format",
+            &format!("{{{{.ID}}}} {{{{index .Labels \"{CONTAINER_LABEL}\"}}}}"),
         ]),
         PROBE_TIMEOUT,
     ) else {
@@ -571,8 +603,16 @@ pub fn remove_stale_containers(engine: Engine, runner: &dyn Runner) {
     };
     let ids: Vec<String> = listing
         .stdout
-        .split_whitespace()
-        .map(str::to_owned)
+        .lines()
+        .filter_map(|line| {
+            let (id, owner) = line.split_once(' ')?;
+            // An owner that is not a live process id, or is none, is gone.
+            owner
+                .trim()
+                .parse::<u32>()
+                .map_or(true, |pid| !alive(pid))
+                .then(|| id.to_owned())
+        })
         .collect();
     if ids.is_empty() {
         return;
@@ -580,6 +620,11 @@ pub fn remove_stale_containers(engine: Engine, runner: &dyn Runner) {
     let mut args = owned(&["rm", "-f"]);
     args.extend(ids);
     let _ = runner.run(engine.program(), &args, Duration::from_secs(60));
+}
+
+/// Whether process `pid` exists.
+pub fn process_alive(pid: u32) -> bool {
+    Path::new(&format!("/proc/{pid}")).exists()
 }
 
 /// Runs one build in a container and removes the container however it ends.
@@ -603,6 +648,9 @@ pub fn run_build(
         &owned(&["rm", "-f", spec.name]),
         Duration::from_secs(60),
     );
+    if result.is_err() {
+        restore_ownership(spec, &SystemRunner);
+    }
     result
 }
 
@@ -850,7 +898,10 @@ mod tests {
         let line = args.join(" ");
         assert_eq!(&args[..3], ["run", "--rm", "--init"]);
         assert!(line.contains("--name antinomie-build-1"));
-        assert!(line.contains("--label org.antinomie.build=1"));
+        assert!(line.contains(&format!(
+            "--label org.antinomie.build={}",
+            std::process::id()
+        )));
         assert!(line.contains("--cap-add=SYS_ADMIN"));
         for mount in [
             "/data/build/kit-1:/kit:ro",
@@ -900,6 +951,20 @@ mod tests {
     }
 
     #[test]
+    fn a_stopped_build_hands_its_folders_back_under_a_root_equivalent_engine() {
+        let fake = Fake::new(vec![("docker run", ok(""))]);
+        restore_ownership(&spec(false, None), &fake);
+        let calls = fake.calls.borrow();
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].starts_with("docker run --rm -v "));
+        assert!(calls[0].contains("antinomie-builder:abc sh -c chown -R 1000:1001 /work /out"));
+        // Rootless Podman's root is the user already.
+        let none = Fake::new(vec![]);
+        restore_ownership(&spec(true, None), &none);
+        assert!(none.calls.borrow().is_empty());
+    }
+
+    #[test]
     fn only_builder_images_are_listed_and_removed() {
         let current = image_tag().unwrap();
         let listing = format!(
@@ -932,14 +997,18 @@ mod tests {
     }
 
     #[test]
-    fn earlier_builds_containers_are_removed_and_nothing_else() {
-        let fake = Fake::new(vec![("podman ps", ok("a1\nb2\n")), ("podman rm", ok(""))]);
-        remove_stale_containers(Engine::Podman, &fake);
+    fn only_containers_of_dead_owners_are_removed() {
+        let fake = Fake::new(vec![
+            ("podman ps", ok("a1 4242\nb2 31337\nc3 \nd4 not-a-pid\n")),
+            ("podman rm", ok("")),
+        ]);
+        // 4242 still runs: its build is going on and must not be touched.
+        remove_stale_containers(Engine::Podman, &fake, &|pid| pid == 4242);
         let calls = fake.calls.borrow();
-        assert!(calls[0].contains("--filter label=org.antinomie.build=1"));
-        assert_eq!(calls[1], "podman rm -f a1 b2");
-        let none = Fake::new(vec![("podman ps", ok("\n"))]);
-        remove_stale_containers(Engine::Podman, &none);
+        assert!(calls[0].contains("--filter label=org.antinomie.build"));
+        assert_eq!(calls[1], "podman rm -f b2 c3 d4");
+        let none = Fake::new(vec![("podman ps", ok("a1 4242\n"))]);
+        remove_stale_containers(Engine::Podman, &none, &|_| true);
         assert_eq!(none.calls.borrow().len(), 1);
     }
 
@@ -975,5 +1044,59 @@ mod tests {
         assert_eq!(recent_image_failure().as_deref(), Some("no network"));
         *IMAGE_FAILURE.lock().unwrap() = None;
         assert!(recent_image_failure().is_none());
+    }
+
+    /// Against a real Docker daemon: `cargo test -- --ignored real_docker`.
+    #[test]
+    #[ignore = "needs a Docker daemon the user may use"]
+    fn real_docker_probes_lists_and_removes_only_builder_images() {
+        let ready = probe(Engine::Docker, &SystemRunner, &|p| {
+            build::which(p).is_some()
+        })
+        .unwrap();
+        assert!(!ready.rootless && !ready.version.is_empty());
+        // A throwaway builder image (the pinned base plus the label).
+        let dir = std::env::temp_dir().join(format!("ant-builder-image-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let base = pinned_base().unwrap();
+        std::fs::write(
+            dir.join("Dockerfile"),
+            format!("FROM {base}\nLABEL org.antinomie.builder=1\n"),
+        )
+        .unwrap();
+        let tag = "antinomie-builder:unit-test";
+        let built = Command::new("docker")
+            .args(["build", "-q", "-t", tag])
+            .arg(&dir)
+            .output()
+            .unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(
+            built.status.success(),
+            "{}",
+            String::from_utf8_lossy(&built.stderr)
+        );
+        let images = list_images(Engine::Docker, &SystemRunner).unwrap();
+        assert!(
+            images
+                .iter()
+                .any(|image| image.tag == tag && !image.current)
+        );
+        assert!(
+            images
+                .iter()
+                .all(|image| image.tag.starts_with("antinomie-builder:"))
+        );
+        remove_image(Engine::Docker, &SystemRunner, tag).unwrap();
+        assert!(
+            !list_images(Engine::Docker, &SystemRunner)
+                .unwrap()
+                .iter()
+                .any(|image| image.tag == tag)
+        );
+        // The pinned base itself is untouched, and a foreign image is refused.
+        assert!(remove_image(Engine::Docker, &SystemRunner, "debian:trixie").is_err());
+        // No build container is left (a name nothing has).
+        remove_stale_containers(Engine::Docker, &SystemRunner, &process_alive);
     }
 }

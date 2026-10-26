@@ -831,7 +831,7 @@ impl BuildRun {
         let ready = c::probe(engine, &c::SystemRunner, &|program| {
             build::which(program).is_some()
         })?;
-        c::remove_stale_containers(engine, &c::SystemRunner);
+        c::remove_stale_containers(engine, &c::SystemRunner, &c::process_alive);
         let tag = c::image_tag()?;
         if !c::image_present(engine, &c::SystemRunner).unwrap_or(false) {
             line(&format!(

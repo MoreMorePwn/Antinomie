@@ -140,7 +140,7 @@ def require_debian_toolchain(kernel_profile):
 
 
 CONTAINER_DOCKERFILE = KIT / "src/antinomie/packaging/container/Dockerfile"
-CONTAINER_LABEL = "org.antinomie.build=1"
+CONTAINER_LABEL = "org.antinomie.build"
 IMAGE_LABEL = "org.antinomie.builder=1"
 
 
@@ -202,8 +202,13 @@ def run_in_container(args, choice):
     """Run this script in the container builder; the container is always removed."""
     engine, rootless = pick_container_engine(choice)
     tag = ensure_container_image(engine)
-    stale = subprocess.run([engine, "ps", "-a", "-q", "--filter", f"label={CONTAINER_LABEL}"],
-                           capture_output=True, text=True).stdout.split()
+    # Containers of builds whose owner died (a crash) go; a running build's stay.
+    listing = subprocess.run([engine, "ps", "-a", "--filter", f"label={CONTAINER_LABEL}",
+                              "--format", '{{.ID}} {{index .Labels "' + CONTAINER_LABEL + '"}}'],
+                             capture_output=True, text=True).stdout.splitlines()
+    stale = [line.split()[0] for line in listing if line.split()
+             and not (len(line.split()) > 1 and line.split()[1].isdigit()
+                      and Path(f"/proc/{line.split()[1]}").exists())]
     if stale:
         subprocess.run([engine, "rm", "-f", *stale], capture_output=True)
     for folder in (args.work, args.inputs, args.output.parent):
@@ -228,7 +233,7 @@ def run_in_container(args, choice):
         mounts.append((args.ccache.resolve(), "/ccache", "rw"))
         inner += ["--ccache", "/ccache"]
     name = f"antinomie-build-{os.urandom(8).hex()}"
-    command = [engine, "run", "--rm", "--init", "--name", name, "--label", CONTAINER_LABEL,
+    command = [engine, "run", "--rm", "--init", "--name", name, "--label", f"{CONTAINER_LABEL}={os.getpid()}",
                "--cap-add=SYS_ADMIN", "--cap-add=MKNOD", "--security-opt", "apparmor=unconfined",
                "-e", "ANTINOMIE_BUILDER=1", "-e", f"ANTINOMIE_BUILDER_IMAGE={tag}"]
     for host, inside, mode in mounts:
@@ -242,10 +247,20 @@ def run_in_container(args, choice):
         command += ["sh", "-c", f"{quoted}; status=$?; chown -R {os.getuid()}:{os.getgid()} "
                     "/work /out /inputs /cache /ccache 2>/dev/null; exit $status"]
     print(f"building in a {engine} container from {tag}", flush=True)
+    returncode = 1
     try:
-        return subprocess.run([str(word) for word in command]).returncode
+        returncode = subprocess.run([str(word) for word in command]).returncode
+        return returncode
     finally:
         subprocess.run([engine, "rm", "-f", name], capture_output=True)
+        if returncode and not rootless:
+            # A stopped build never reached its chown: hand the folders back.
+            volumes = [word for pair in zip(["-v"] * len(mounts),
+                                            [f"{host}:{inside}:{mode}" for host, inside, mode
+                                             in mounts]) for word in pair]
+            subprocess.run([engine, "run", "--rm", *volumes, tag, "sh", "-c",
+                            f"chown -R {os.getuid()}:{os.getgid()} /work /out /inputs /cache "
+                            "/ccache 2>/dev/null; true"], capture_output=True)
 
 
 def load_job(path):

@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -71,7 +72,7 @@ case "$1" in
   version) [ {version_exit} -eq 0 ] || {{ echo '{stderr}' >&2; exit {version_exit}; }}; echo 26.1.5 ;;
   info) echo '{rootless}' ;;
   image) {'exit 0' if have_image else 'exit 1'} ;;
-  ps) echo stale1 ;;
+  ps) echo "stale1 99999999"; echo "mine $PPID" ;;
 esac
 exit 0
 """)
@@ -131,7 +132,7 @@ exit 0
                 self.assertTrue(any(c.startswith(f"build --label org.antinomie.builder=1 -t {tag}")
                                     for c in calls), calls)
                 (run,) = [c for c in calls if c.startswith("run ")]
-                for part in ("--rm", "--init", "--label org.antinomie.build=1",
+                for part in ("--rm", "--init", f"--label org.antinomie.build={os.getpid()}",
                              "--cap-add=SYS_ADMIN", f"-v {root}/o:/out:rw",
                              f"-v {root}/k:/cache/kernels:rw", f"-v {root}/i:/cache/images:rw",
                              f"-v {root}/cc:/ccache:rw", "-v " + str(base.KIT) + ":/kit:ro",
@@ -144,6 +145,7 @@ exit 0
                 # The container is removed, and stale ones of earlier builds too.
                 self.assertTrue(any(c.startswith("rm -f antinomie-build-") for c in calls))
                 self.assertIn("rm -f stale1", calls)
+                self.assertNotIn("mine", " ".join(c for c in calls if c.startswith("rm -f")))
 
     def test_a_kernel_cached_by_the_container_builder_serves_other_builders(self):
         with tempfile.TemporaryDirectory() as name:
