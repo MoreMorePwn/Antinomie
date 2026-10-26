@@ -19,31 +19,26 @@ use std::time::{Duration, Instant};
 const INSTALLER_GROUPS: &str =
     "cdrom floppy sudo audio dip video plugdev users netdev bluetooth lpadmin scanner";
 /// One libguestfs appliance run: the probe, or the provisioning itself
-/// (filesystem check, new UUID, directory reindex, account).
-const PROVISION_TIMEOUT: Duration = Duration::from_secs(240);
+/// (filesystem check, new UUID, directory reindex, account, GRUB, the
+/// initramfs). grub-install for UEFI alone takes over a minute in the
+/// appliance on a loaded host.
+const PROVISION_TIMEOUT: Duration = Duration::from_secs(600);
 /// The interface name a disk provisioned before 0.7.1 configures: the base
 /// wrote the stanza for the NIC at PCI 00:19.0 when it was built.
 const LEGACY_INTERFACE: &str = "enp0s25";
 /// What the guest prints before the account's password hash.
 const HASH_MARKER: &str = "hash:";
-/// GRUB on a partitioned (BIOS) disk as the installer's grub-installer sets it
-/// up: `grub-install --force` writes the boot code into the MBR and the gap
-/// before the first partition, with /boot/grub/i386-pc beside it (core.img
-/// finds this disk's root by its UUID, so every VM gets its own); the
-/// device goes into debconf for grub-pc's upgrades (the plain name: the
-/// appliance's by-id links are its own); update-grub writes grub.cfg.
-const BOOT_LOADER: &str = "if [ -d /usr/lib/grub/i386-pc ]; then\n\
-     \tgrub-install --force /dev/sda >/dev/null 2>&1\n\
-     \tprintf 'grub-pc grub-pc/install_devices multiselect /dev/sda\\ngrub-pc grub-pc/install_devices_empty boolean false\\ngrub-pc grub-pc/install_devices_empty seen false\\n' | debconf-set-selections\n\
-     fi\n\
-     if command -v update-grub >/dev/null; then update-grub >/dev/null 2>&1 || true; fi\n";
+/// GRUB as the installer's grub-installer sets it up, for a BIOS (MBR) or
+/// UEFI (GPT) disk; it runs in the guest beside [`INITRD_RESUME`].
+const BOOT_LOADER: &str = include_str!("guest_account/boot_loader.sh");
 /// Puts the resume device into the disk's initramfs images as
 /// update-initramfs does; it runs in the guest with the guest's python3 and
 /// zstd (both in the Debian Minimal base).
 const INITRD_RESUME: &str = include_str!("guest_account/initrd_resume.py");
-/// The partition the installer installed to, as fstab's comment names it
-/// (`/dev/sda1`): the device the initramfs's files were made on.
-const INSTALL_DEVICE: &str = "8:1";
+/// The disk's major device number (sd): the initramfs's files were made on
+/// the partition the installer installed to, as fstab's comment names it
+/// (`/dev/sda1`, or `/dev/sda2` after the ESP).
+const INSTALL_MAJOR: u32 = 8;
 
 #[cfg(test)]
 thread_local! {
@@ -90,16 +85,28 @@ struct DiskLayout {
     size: u64,
     /// The root partition's last sector, on a partitioned disk.
     root_last: Option<u64>,
-    /// The swap partition (sda5) a provisioned disk has: its UUID and sectors.
+    /// The swap partition (sda5, sda3 on GPT) a provisioned disk has: its
+    /// UUID and sectors.
     swap: Option<(String, u64)>,
+    /// A GPT disk (the UEFI layout: ESP sda1, root sda2, swap sda3).
+    gpt: bool,
+}
+impl DiskLayout {
+    /// The root partition's number on a partitioned disk.
+    fn root_number(&self) -> u32 {
+        if self.gpt { 2 } else { 1 }
+    }
+    /// The swap partition's number.
+    fn swap_number(&self) -> u32 {
+        if self.gpt { 3 } else { 5 }
+    }
 }
 
 /// Sectors in a MiB, partman's alignment.
 const MIB_SECTORS: u64 = 2048;
 /// The probe: filesystems, the disk's size, its partitions and the swap
 /// partition's UUID (absent before provisioning).
-const PROBE: &[u8] =
-    b"run\nlist-filesystems\nblockdev-getsize64 /dev/sda\n-part-list /dev/sda\n-vfs-uuid /dev/sda5\n";
+const PROBE: &[u8] = b"run\nlist-filesystems\nblockdev-getsize64 /dev/sda\n-part-list /dev/sda\n-part-get-parttype /dev/sda\n-vfs-uuid /dev/sda5\n-vfs-uuid /dev/sda3\n";
 
 /// Where the installer's partitions go on a disk of `sectors`: the root grown
 /// to the swap partition (sda5 in an extended sda2 that starts two sectors
@@ -113,7 +120,13 @@ struct PartitionPlan {
     swap: Option<(u64, u64)>,
 }
 
-fn partition_plan(sectors: u64, root_last: u64, ram_mib: u32, swap: Option<u64>) -> PartitionPlan {
+fn partition_plan(
+    sectors: u64,
+    root_last: u64,
+    ram_mib: u32,
+    swap: Option<u64>,
+    gpt: bool,
+) -> PartitionPlan {
     let end = (sectors / MIB_SECTORS - 1) * MIB_SECTORS;
     let wanted = swap.unwrap_or_else(|| {
         (u64::from(ram_mib) * MIB_SECTORS)
@@ -122,7 +135,13 @@ fn partition_plan(sectors: u64, root_last: u64, ram_mib: u32, swap: Option<u64>)
     });
     match end.checked_sub(wanted) {
         Some(start) if start > MIB_SECTORS + root_last => PartitionPlan {
-            root_last: start - MIB_SECTORS - 1,
+            // On MBR the extended partition holding sda5 takes the MiB before
+            // it; on GPT the swap partition follows the root.
+            root_last: if gpt {
+                start - 1
+            } else {
+                start - MIB_SECTORS - 1
+            },
             swap: Some((start, end - 1)),
         },
         _ => PartitionPlan {
@@ -268,13 +287,15 @@ pub(crate) fn fixture(username: &str) -> GuestAccount {
 /// `list-filesystems` lines, the size, `part-list` entries and the swap UUID.
 fn parse_probe(output: &str) -> Result<DiskLayout, String> {
     let mut roots = Vec::new();
-    let (mut size, mut swap_uuid, mut part) = (None, None, 0);
+    let (mut size, mut swap_uuid, mut part, mut gpt) = (None, None, 0, false);
     let mut parts: std::collections::BTreeMap<u64, (u64, u64)> = Default::default();
     for line in output.lines().map(str::trim) {
         if let Some((device, kind)) = line.split_once(": ").filter(|(d, _)| d.starts_with('/')) {
             if kind.trim() == "ext4" {
                 roots.push(device.trim());
             }
+        } else if line == "gpt" {
+            gpt = true;
         } else if let Some(value) = line.strip_prefix("part_num: ") {
             part = value.parse().unwrap_or(0);
         } else if let Some(value) = line.strip_prefix("part_end: ") {
@@ -298,18 +319,24 @@ fn parse_probe(output: &str) -> Result<DiskLayout, String> {
         _ => return Err("the VM disk does not hold exactly one ext4 root filesystem".into()),
     };
     let size = size.ok_or("the VM disk's size is unknown")?;
-    let root_last = (root == "/dev/sda1")
-        .then(|| parts.get(&1).map(|(_, end)| end / 512))
-        .flatten();
-    if root == "/dev/sda1" && root_last.is_none() {
+    let (root_number, swap_number) = if gpt { (2, 3) } else { (1, 5) };
+    let partitioned = root != "/dev/sda";
+    if partitioned && root != format!("/dev/sda{root_number}") {
         return Err("the VM disk's root partition is not where the base put it".into());
     }
-    let swap = swap_uuid.zip(parts.get(&5).map(|(length, _)| length / 512));
+    let root_last = partitioned
+        .then(|| parts.get(&root_number).map(|(_, end)| end / 512))
+        .flatten();
+    if partitioned && root_last.is_none() {
+        return Err("the VM disk's root partition is not where the base put it".into());
+    }
+    let swap = swap_uuid.zip(parts.get(&swap_number).map(|(length, _)| length / 512));
     Ok(DiskLayout {
         root,
         size,
         root_last,
         swap,
+        gpt,
     })
 }
 
@@ -318,19 +345,47 @@ fn parse_probe(output: &str) -> Result<DiskLayout, String> {
 /// and made again at the end), the swap partition, the root filesystem grown.
 fn layout_commands(layout: &DiskLayout, plan: &PartitionPlan, swap_uuid: &str) -> Vec<String> {
     let mut commands = Vec::new();
-    if layout.swap.is_some() {
+    let (root, swap) = (layout.root_number(), layout.swap_number());
+    if layout.gpt {
+        // A disk made larger keeps its backup GPT at the old end.
+        commands.push("part-expand-gpt /dev/sda".into());
+        if layout.swap.is_some() {
+            commands.push(format!("part-del /dev/sda {swap}"));
+        }
+    } else if layout.swap.is_some() {
         commands.extend(["part-del /dev/sda 5".into(), "part-del /dev/sda 2".into()]);
     }
-    commands.push(format!("part-resize /dev/sda 1 {}", plan.root_last));
+    commands.push(format!("part-resize /dev/sda {root} {}", plan.root_last));
     if let Some((start, last)) = plan.swap {
-        commands.extend([
-            format!("part-add /dev/sda e {} {last}", start - 2),
-            format!("part-add /dev/sda l {start} {last}"),
-            "part-set-mbr-id /dev/sda 5 0x82".into(),
-            format!("mkswap /dev/sda5 uuid:{swap_uuid}"),
-        ]);
+        if layout.gpt {
+            commands.extend([
+                format!("part-add /dev/sda p {start} {last}"),
+                format!(
+                    "part-set-gpt-type /dev/sda {swap} {}",
+                    crate::uefi_disk::SWAP_TYPE
+                ),
+                // partman leaves GPT partition names empty; parted's
+                // mkpart (part-add) names them "primary".
+                format!(
+                    "-debug sh {}",
+                    fish_quote(&format!(
+                        "sgdisk --change-name={swap}: /dev/sda >/dev/null 2>&1"
+                    ))
+                ),
+            ]);
+        } else {
+            commands.extend([
+                format!("part-add /dev/sda e {} {last}", start - 2),
+                format!("part-add /dev/sda l {start} {last}"),
+                "part-set-mbr-id /dev/sda 5 0x82".into(),
+            ]);
+        }
+        commands.push(format!("mkswap /dev/sda{swap} uuid:{swap_uuid}"));
     }
-    commands.extend(["e2fsck-f /dev/sda1".into(), "resize2fs /dev/sda1".into()]);
+    commands.extend([
+        format!("e2fsck-f /dev/sda{root}"),
+        format!("resize2fs /dev/sda{root}"),
+    ]);
     commands
 }
 
@@ -353,6 +408,7 @@ fn grow_disk_with(disk: &Path, executable: &Path) -> Result<(), String> {
         root_last,
         0,
         layout.swap.as_ref().map(|(_, sectors)| *sectors),
+        layout.gpt,
     );
     let uuid = layout
         .swap
@@ -518,9 +574,9 @@ impl GuestAccount {
         let probe = run_private(&mut guestfish(executable, disk, false), PROBE, true)?;
         let layout = parse_probe(&String::from_utf8_lossy(&probe))?;
         let uuid = random_uuid()?;
-        let plan = layout
-            .root_last
-            .map(|root_last| partition_plan(layout.size / 512, root_last, ram_mib, None));
+        let plan = layout.root_last.map(|root_last| {
+            partition_plan(layout.size / 512, root_last, ram_mib, None, layout.gpt)
+        });
         // A partitioned disk's initramfs gets its resume device; the helper
         // reaches the appliance as a file (guestfish upload), since the
         // script on standard input has to stay small.
@@ -532,6 +588,12 @@ impl GuestAccount {
                 uuid: &uuid,
                 swap_uuid: &random_uuid()?,
                 machine_id: &random_hex()?,
+                gpt_guids: &[
+                    random_uuid()?,
+                    random_uuid()?,
+                    random_uuid()?,
+                    random_uuid()?,
+                ],
             },
             password,
             interface,
@@ -617,6 +679,7 @@ impl GuestAccount {
             uuid,
             swap_uuid,
             machine_id,
+            gpt_guids,
         } = *identity;
         let username = &self.username;
         let root = &layout.root;
@@ -656,13 +719,14 @@ impl GuestAccount {
         let guest = if plan.is_some() {
             let swap_lines = if swap {
                 format!(
-                    "awk -v u={swap_uuid} '/^\\/dev\\/sr0/ {{print \"# swap was on /dev/sda5 during installation\"; printf \"UUID=%s none            swap    sw              0       0\\n\", u}} {{print}}' /etc/fstab > {staging}/fstab\n\
-                     cat {staging}/fstab > /etc/fstab\n"
+                    "awk -v u={swap_uuid} '/^\\/dev\\/sr0/ {{print \"# swap was on /dev/sda{} during installation\"; printf \"UUID=%s none            swap    sw              0       0\\n\", u}} {{print}}' /etc/fstab > {staging}/fstab\n\
+                     cat {staging}/fstab > /etc/fstab\n",
+                    layout.swap_number()
                 )
             } else {
                 String::new()
             };
-            format!("{guest}{swap_lines}{BOOT_LOADER}")
+            format!("{guest}{swap_lines}")
         } else {
             guest
         };
@@ -678,6 +742,10 @@ impl GuestAccount {
         if let Some(plan) = plan {
             commands.extend(layout_commands(layout, plan, swap_uuid));
         }
+        if layout.gpt {
+            // The VM's own EFI system partition, as partman formats it.
+            commands.push("mkfs vfat /dev/sda1".to_owned());
+        }
         commands.extend([
             format!("e2fsck-f {root}"),
             format!("set-uuid {root} {uuid}"),
@@ -688,6 +756,9 @@ impl GuestAccount {
             format!("write {staging}/provision.sh {}", fish_quote(&guest)),
             format!("sh {}", fish_quote(&format!("sh {staging}/provision.sh"))),
         ]);
+        if layout.gpt {
+            commands.push("mount /dev/sda1 /boot/efi".to_owned());
+        }
         if let Some(helper) = initrd_helper {
             // The installer's resume answer: the swap partition, or none.
             let resume = if swap {
@@ -695,17 +766,24 @@ impl GuestAccount {
             } else {
                 "RESUME=none".to_owned()
             };
-            // Beside the staging directory, which provision.sh removed.
-            let script = format!("{staging}.initrd.py");
+            // Beside the staging directory, which provision.sh removed: GRUB
+            // for the disk's firmware, then the initramfs's resume device.
+            let (initrd, loader) = (format!("{staging}.initrd.py"), format!("{staging}.grub.sh"));
+            let firmware = if layout.gpt { "uefi" } else { "bios" };
+            let device = format!("{INSTALL_MAJOR}:{}", layout.root_number());
             commands.extend([
                 format!(
-                    "upload {} {script}",
-                    fish_quote(&helper.to_string_lossy())
+                    "upload {} {initrd}",
+                    fish_quote(&helper.join(HelperFile::INITRD).to_string_lossy())
+                ),
+                format!(
+                    "upload {} {loader}",
+                    fish_quote(&helper.join(HelperFile::BOOT_LOADER).to_string_lossy())
                 ),
                 format!(
                     "sh {}",
                     fish_quote(&format!(
-                        "trap 'rm -f {script}' EXIT\nmkdir -p /etc/initramfs-tools/conf.d\npython3 -I {script} {resume} {INSTALL_DEVICE}\n"
+                        "set -eu\ntrap 'rm -f {initrd} {loader}' EXIT\nsh {loader} {firmware}\nmkdir -p /etc/initramfs-tools/conf.d\npython3 -I {initrd} {resume} {device}\n"
                     ))
                 ),
             ]);
@@ -721,7 +799,15 @@ impl GuestAccount {
             ),
             "umount-all".to_owned(),
         ]);
-        if plan.is_some() {
+        if layout.gpt {
+            // The disk's and the partitions' GUIDs of its own, last (the
+            // partition table is read again).
+            commands.push(format!("part-set-disk-guid /dev/sda {}", gpt_guids[0]));
+            let partitions = if swap { 3 } else { 2 };
+            for (number, guid) in gpt_guids[1..=partitions].iter().enumerate() {
+                commands.push(format!("part-set-gpt-guid /dev/sda {} {guid}", number + 1));
+            }
+        } else if plan.is_some() {
             // The disk identifier (PARTUUIDs) of its own as well, last:
             // sfdisk makes the kernel read the partition table again, and
             // the partitions' device nodes are gone for a moment.
@@ -738,23 +824,26 @@ impl GuestAccount {
     }
 }
 
-/// [`INITRD_RESUME`] in a private host file for the appliance's upload,
-/// removed when dropped.
+/// [`INITRD_RESUME`] and [`BOOT_LOADER`] in a private host folder for the
+/// appliance's upload, removed when dropped.
 struct HelperFile {
     directory: std::path::PathBuf,
 }
 impl HelperFile {
+    const INITRD: &str = "initrd.py";
+    const BOOT_LOADER: &str = "boot-loader.sh";
     fn new() -> Result<Self, String> {
         let directory =
             std::env::temp_dir().join(format!("antinomie-provision-{}", storage::unique_id()));
         let helper = Self { directory };
         storage::private_dir(&helper.directory)
-            .and_then(|()| fs::write(helper.path(), INITRD_RESUME))
-            .map_err(|_| "cannot stage the initramfs helper for provisioning")?;
+            .and_then(|()| fs::write(helper.directory.join(Self::INITRD), INITRD_RESUME))
+            .and_then(|()| fs::write(helper.directory.join(Self::BOOT_LOADER), BOOT_LOADER))
+            .map_err(|_| "cannot stage the provisioning helpers")?;
         Ok(helper)
     }
     fn path(&self) -> std::path::PathBuf {
-        self.directory.join("initrd.py")
+        self.directory.clone()
     }
 }
 impl Drop for HelperFile {
@@ -768,6 +857,8 @@ impl Drop for HelperFile {
 struct Identity<'a> {
     uuid: &'a str,
     swap_uuid: &'a str,
+    /// A GPT disk's GUID and its partitions' (ESP, root, swap).
+    gpt_guids: &'a [String; 4],
     machine_id: &'a str,
 }
 

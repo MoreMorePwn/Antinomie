@@ -205,7 +205,7 @@ impl Worker {
     ) -> Result<JobSpec, String> {
         crate::snapshots::recover_pending(&self.options, vm)?;
         let bundle: Bundle = storage::read_json(&dir.join("bundle.json"))?;
-        crate::snapshots::validate_active(&self.options, vm, &bundle.base_disk)?;
+        crate::snapshots::validate_active(&self.options, vm, bundle.vm_disk())?;
         let relative = |path: &Path| {
             path.strip_prefix(dir)
                 .unwrap_or(path)
@@ -231,7 +231,7 @@ impl Worker {
                     &self.options,
                     vm,
                     &checkpoint.path,
-                    &bundle.base_disk,
+                    bundle.vm_disk(),
                 )?;
                 let record = DiskSourceRecord {
                     kind: DiskSourceKind::Checkpoint {
@@ -245,8 +245,8 @@ impl Worker {
                 (checkpoint.path, record)
             }
             DiskSourceSpec::Base => {
-                let base = fs::canonicalize(&bundle.base_disk)
-                    .map_err(|error| format!("{}: {error}", bundle.base_disk.display()))?;
+                let base = fs::canonicalize(bundle.vm_disk())
+                    .map_err(|error| format!("{}: {error}", bundle.vm_disk().display()))?;
                 if !fs::metadata(&base).is_ok_and(|metadata| metadata.is_file()) {
                     return Err("the VM's installed base image is missing".into());
                 }

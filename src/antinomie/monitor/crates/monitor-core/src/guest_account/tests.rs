@@ -361,15 +361,15 @@ fn the_nic_stanza_replaces_the_one_before_it() {
 fn partitions_follow_the_installer_and_the_vm() {
     // A 6 GiB disk (12582912 sectors), a 3 GiB root, 1 GiB of RAM: the
     // swap partition ends a MiB before the disk, the root a MiB before it.
-    let plan = partition_plan(12_582_912, 6_293_503, 1024, None);
+    let plan = partition_plan(12_582_912, 6_293_503, 1024, None, false);
     assert_eq!(plan.swap, Some((10_483_712, 12_580_863)));
     assert_eq!(plan.root_last, 10_481_663);
     // A quarter of the disk at most; the root never shrinks.
     assert_eq!(
-        partition_plan(12_582_912, 6_293_503, 8192, None).swap,
+        partition_plan(12_582_912, 6_293_503, 8192, None, false).swap,
         Some((9_435_136, 12_580_863))
     );
-    let tight = partition_plan(8_388_608, 8_380_000, 1024, None);
+    let tight = partition_plan(8_388_608, 8_380_000, 1024, None, false);
     assert_eq!((tight.root_last, tight.swap), (8_386_559, None));
     let layout = parse_probe(
         "/dev/sda1: ext4\n/dev/sda2: unknown\n/dev/sda5: swap\n6442450944\n[0] = {\n  part_num: 1\n  part_end: 5366611967\n}\n[1] = {\n  part_num: 5\n  part_end: 6441402367\n  part_size: 1073741824\n}\n0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d\n",
@@ -409,24 +409,26 @@ fn partitions_follow_the_installer_and_the_vm() {
     // partition.
     assert!(position("umount-all\n") < position("sfdisk --disk-id /dev/sda 0x"));
     assert!(input.contains("# swap was on /dev/sda5 during installation"));
-    assert!(input.contains("update-grub"));
+    assert!(BOOT_LOADER.contains("update-grub"));
     // GRUB's boot code goes into this disk's MBR (its core.img names this
-    // disk's root UUID) before grub.cfg is written, as grub-installer does.
-    assert!(position("grub-install --force /dev/sda") < position("update-grub"));
-    assert!(input.contains("grub-pc grub-pc/install_devices multiselect /dev/sda"));
+    // disk's root UUID) before grub.cfg is written, as grub-installer does:
+    // the helper runs for the BIOS disk.
+    assert!(BOOT_LOADER.find("grub-install --force /dev/sda") < BOOT_LOADER.find("update-grub"));
+    assert!(BOOT_LOADER.contains("grub-pc grub-pc/install_devices multiselect /dev/sda"));
+    assert!(input.contains(".grub.sh bios\\n"), "{input}");
     // The whole provisioning still fits the tool's standard input.
     assert!(input.len() < 4096, "{}", input.len());
     // The initramfs helper reaches the appliance as a file, runs after the
     // account's files and before the disk is unmounted, names the swap
     // partition's UUID and the installer's root partition, and is gone
     // from the host afterwards.
-    let upload = input
+    let uploads: Vec<_> = input
         .lines()
-        .find(|line| line.starts_with("upload "))
-        .expect("helper upload");
-    let host_helper = upload.split('"').nth(1).unwrap();
-    assert!(host_helper.ends_with("/initrd.py"), "{upload}");
-    assert!(!Path::new(host_helper).exists());
+        .filter(|line| line.starts_with("upload "))
+        .map(|line| line.split('"').nth(1).unwrap().to_owned())
+        .collect();
+    assert!(uploads[0].ends_with("/initrd.py") && uploads[1].ends_with("/boot-loader.sh"));
+    assert!(uploads.iter().all(|path| !Path::new(path).exists()));
     let swap_uuid = input
         .split("mkswap /dev/sda5 uuid:")
         .nth(1)
@@ -566,14 +568,17 @@ fn the_initramfs_takes_the_resume_answer_the_installer_gives() {
         size: 4 << 30,
         root_last: Some(8_386_559),
         swap: None,
+        gpt: false,
     };
+    let guids = gpt_guids();
     let identity = Identity {
         uuid: "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d",
         swap_uuid: "1c2d3e4f-5061-4b7c-8d9e-0f1a2b3c4d5e",
         machine_id: "00112233445566778899aabbccddeeff",
+        gpt_guids: &guids,
     };
     let hash = guest_hash();
-    let helper = Path::new("/host/initrd.py");
+    let helper = Path::new("/host");
     // No room for a swap partition: the installer answers "none".
     let tight = PartitionPlan {
         root_last: 8_386_559,
@@ -588,6 +593,7 @@ fn the_initramfs_takes_the_resume_answer_the_installer_gives() {
         Some(helper),
     );
     assert!(script.contains("upload \"/host/initrd.py\" /root/.provision-"));
+    assert!(script.contains("upload \"/host/boot-loader.sh\" /root/.provision-"));
     assert!(script.contains(" RESUME=none 8:1\\n"), "{script}");
     assert!(!script.contains("RESUME=UUID="));
     // The helper's own text is never in the script on standard input.
@@ -607,4 +613,98 @@ fn the_initramfs_takes_the_resume_answer_the_installer_gives() {
         None,
     );
     assert!(!script.contains("upload ") && !script.contains("RESUME="));
+}
+
+fn gpt_guids() -> [String; 4] {
+    [
+        "11111111-2222-4333-8444-555555555551".into(),
+        "11111111-2222-4333-8444-555555555552".into(),
+        "11111111-2222-4333-8444-555555555553".into(),
+        "11111111-2222-4333-8444-555555555554".into(),
+    ]
+}
+
+#[test]
+fn a_uefi_disk_is_laid_out_and_set_up_as_the_installer_does() {
+    // The derived UEFI disk on an 8 GiB VM disk: ESP sda1, root sda2.
+    let layout = parse_probe(
+        "/dev/sda1: vfat\n/dev/sda2: ext4\n8589934592\n[0] = {\n  part_num: 1\n  part_end: 681574399\n}\n[1] = {\n  part_num: 2\n  part_end: 3902799871\n}\ngpt\n",
+    )
+    .unwrap();
+    assert!(layout.gpt);
+    assert_eq!(layout.root, "/dev/sda2");
+    assert_eq!(layout.root_last, Some(7_622_655));
+    // The swap partition follows the root directly (no extended partition).
+    let plan = partition_plan(16_777_216, 7_622_655, 1024, None, true);
+    assert_eq!(plan.swap, Some((14_678_016, 16_775_167)));
+    assert_eq!(plan.root_last, 14_678_015);
+    let guids = gpt_guids();
+    let identity = Identity {
+        uuid: "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d",
+        swap_uuid: "1c2d3e4f-5061-4b7c-8d9e-0f1a2b3c4d5e",
+        machine_id: "00112233445566778899aabbccddeeff",
+        gpt_guids: &guids,
+    };
+    let hash = guest_hash();
+    let script = account().script(
+        &layout,
+        Some(&plan),
+        &identity,
+        &Password::Hashed(&hash),
+        Some("enp0s31f6"),
+        Some(Path::new("/host")),
+    );
+    let position = |text: &str| {
+        script
+            .find(text)
+            .unwrap_or_else(|| panic!("{text}\n{script}"))
+    };
+    assert!(position("part-expand-gpt /dev/sda\n") < position("part-resize /dev/sda 2 14678015\n"));
+    assert!(
+        position("part-add /dev/sda p 14678016 16775167\n") < position("mkswap /dev/sda3 uuid:")
+    );
+    assert!(script.contains("part-set-gpt-type /dev/sda 3 0657FD6D-A4AB-43C4-84E5-0933C84B4F4F\n"));
+    assert!(!script.contains("part-add /dev/sda e") && !script.contains("sfdisk"));
+    assert!(position("resize2fs /dev/sda2\n") < position("mount /dev/sda2 /\n"));
+    // The ESP is formatted for this VM and mounted for grub-install.
+    assert!(position("mkfs vfat /dev/sda1\n") < position("mount /dev/sda2 /\n"));
+    assert!(position("mount /dev/sda2 /\n") < position("mount /dev/sda1 /boot/efi\n"));
+    assert!(position("mount /dev/sda1 /boot/efi\n") < position(".grub.sh uefi\\n"));
+    assert!(script.contains("# swap was on /dev/sda3 during installation"));
+    assert!(script.contains(" RESUME=UUID=1c2d3e4f-5061-4b7c-8d9e-0f1a2b3c4d5e 8:2\\n"));
+    // The disk's and its partitions' GUIDs of its own, after unmounting.
+    assert!(
+        position("umount-all\n")
+            < position("part-set-disk-guid /dev/sda 11111111-2222-4333-8444-555555555551\n")
+    );
+    for number in 1..=3 {
+        assert!(script.contains(&format!(
+            "part-set-gpt-guid /dev/sda {number} 11111111-2222-4333-8444-55555555555{}\n",
+            number + 1
+        )));
+    }
+    assert!(script.len() < 4096, "{}", script.len());
+    // The guest side: fstab's ESP line, grub-install for UEFI with the
+    // removable-media copy and without touching the firmware's variables.
+    assert!(BOOT_LOADER.contains("--target=x86_64-efi --efi-directory=/boot/efi"));
+    assert!(BOOT_LOADER.contains("--force-extra-removable --no-nvram"));
+    assert!(BOOT_LOADER.contains("[[:space:]]+/boot/efi[[:space:]]"));
+    // Growing a GPT disk moves the backup table and keeps sda3.
+    let grown = parse_probe(
+        "/dev/sda1: vfat\n/dev/sda2: ext4\n/dev/sda3: swap\n12884901888\n[0] = {\n  part_num: 2\n  part_end: 7514095615\n}\n[1] = {\n  part_num: 3\n  part_end: 8588886015\n  part_size: 1073741824\n}\ngpt\n2b3c4d5e-6f70-4a8b-9c0d-1e2f3a4b5c6d\n",
+    )
+    .unwrap();
+    assert_eq!(
+        grown.swap,
+        Some(("2b3c4d5e-6f70-4a8b-9c0d-1e2f3a4b5c6d".into(), 2_097_152))
+    );
+    let commands = layout_commands(
+        &grown,
+        &partition_plan(25_165_824, 14_675_967, 0, Some(2_097_152), true),
+        "u",
+    );
+    assert_eq!(
+        commands[..2],
+        ["part-expand-gpt /dev/sda", "part-del /dev/sda 3"]
+    );
 }

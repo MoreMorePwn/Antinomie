@@ -30,7 +30,14 @@ impl Worker {
         let disk_bundle: Bundle = storage::read_json(&dir.join("bundle.json"))?;
         disk_bundle.verify_installed()?;
         crate::snapshots::recover_pending(&self.options, &vm)?;
-        crate::snapshots::validate_active(&self.options, &vm, &disk_bundle.base_disk)?;
+        crate::snapshots::validate_active(&self.options, &vm, disk_bundle.vm_disk())?;
+        if disk_bundle.uefi.uefi_disk.is_some()
+            && crate::uefi_disk::existing(&disk_bundle)?.is_none()
+        {
+            return Err(
+                "this VM's UEFI base disk is missing; reset the VM to lay it out again".into(),
+            );
+        }
         storage::validate_guest_transition(&disk_bundle, &bundle)?;
         storage::validate_vm_bundle(&self.options, &vm, &disk_bundle)?;
         storage::validate_vm_bundle(&self.options, &vm, &bundle)?;

@@ -1323,6 +1323,7 @@ mod tests {
             name: None,
             symbols: None,
             stealth_support: Vec::new(),
+            uefi: Default::default(),
         }
     }
 

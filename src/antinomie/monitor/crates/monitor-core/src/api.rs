@@ -1896,6 +1896,13 @@ pub struct VmSnapshotProgress {
     pub vm_id: String,
     pub stage: String,
 }
+/// A base's UEFI disk being laid out (once per base, for its first UEFI VM).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BaseLayoutProgress {
+    /// The base's name, or its identity when it has none.
+    pub base: String,
+    pub stage: String,
+}
 
 /// A debugger attached to one guest process (see `crate::debug`).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1929,6 +1936,8 @@ pub struct Snapshot {
     pub vm_resources: Option<VmResources>,
     pub vm_snapshot_trees: std::collections::BTreeMap<String, VmSnapshotTree>,
     pub vm_snapshot_progress: Option<VmSnapshotProgress>,
+    /// A base's UEFI disk being laid out.
+    pub base_layout: Option<BaseLayoutProgress>,
     /// The running VM's network capture, while one runs.
     pub network_capture: Option<crate::network::NetworkCapture>,
     /// The memory dump QEMU is writing, while it writes.

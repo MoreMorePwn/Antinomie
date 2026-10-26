@@ -3274,11 +3274,67 @@ so each VM runs it), debconf gets `grub-pc/install_devices` (`/dev/sda`: the
 appliance's by-id links name its own disk, not the VM's) with
 `install_devices_empty false`, and `update-grub` writes `grub.cfg` for the
 VM's UUIDs. A sample reading the disk's first sectors finds GRUB, as on an
-installed PC. QEMU still boots the Antinomie kernel directly. UEFI profiles
-get the same BIOS-layout disk (MBR, `grub-pc`, no ESP or `debian` boot entry);
-a UEFI layout (GPT, an ESP of about 1 GB before the root as trixie's
-partitioner makes it, shim and grub-efi) needs a second disk layout and is not
-built yet. The resume device is the installer's answer (base-installer writes
+installed PC. QEMU still boots the Antinomie kernel directly (the GRUB steps
+run from the uploaded `guest_account/boot_loader.sh`, `bios` or `uefi`).
+
+A VM whose stealth profile boots UEFI (OVMF, with or without Secure Boot)
+gets a UEFI PC's disk instead (`uefi_disk.rs`). The Debian installer lays a
+UEFI disk out differently: GPT, the EFI system partition first (trixie's
+partman-auto `recipes-amd64-efi`; FAT32, mounted on `/boot/efi` with
+`umask=0077`), then the root, then swap; and its grub-installer installs
+os-prober, `grub-efi-amd64` (bringing `grub-efi-amd64-signed`, `shim-signed`,
+`efibootmgr` and `mokutil` by recommends) and asks for `shim-signed`, instead
+of grub-pc. An ext4 root cannot move, so the image recipe builds both
+installations: it bootstraps the system without a boot loader
+(`BOOT_LOADERS`), copies it to `/tmp/uefi-root` before the last steps, installs
+the BIOS boot loader into the system and the UEFI one into the copy (each
+apt transaction as grub-installer makes it, the ESP's mount point made first
+as partman mounts it, `grub2/force_efi_extra_removable` answered as
+grub-installer answers it for an empty ESP, fstab with the ESP's line and
+`# / was on /dev/sda2`), runs the installation's finish (`FINISH`: apt's
+history rewritten, the inventory, the resolver) in both, and keeps only what
+differs: `scripts/debian-uefi-delta.py` writes every path of the UEFI system
+that is new or differs (type, mode, owner, size, modification time, link,
+device) to `uefi-root.tar.xz` and records the BIOS paths it lacks and the
+delta paths' access, change, birth and modification times, with the disk's
+geometry, in `uefi-layout.json` (both in the bundle, part of its identity, a
+few MB). The ESP is the size partman gives the app's default 8 GiB disk
+(`95small_disk`: about 680 MB, 1 MiB to 650 MiB); the root follows at 650 MiB
+with the base's root size.
+
+The first UEFI VM of a base has the app derive the base's UEFI disk once,
+beside the base disk (`base-uefi.qcow2`, with `base-uefi.json` naming the base
+identity, the recipe and its SHA-256): after a free-space check (the base
+disk's allocated size, eight times the delta and 1 GiB more, else a clear
+refusal before anything is written) one guestfish run lays GPT out on a new
+qcow2 of the base disk's size (partition types set, names empty as partman
+leaves them), copies the root filesystem sparsely after the ESP, removes the
+recorded paths, unpacks the delta and sets the delta's times with debugfs on
+the unmounted filesystem. The stages show in a progress window ("Preparing
+the UEFI disk"). The VM's disk is then an overlay of that disk, and its copy
+of the base record names it (`uefi_disk`, `Bundle::vm_disk`), which every
+backing check, snapshot, Disks tab source, deletion, duplication and data
+migration uses. A reset lays the disk out again if it is gone; a start
+refuses a UEFI disk whose checksum changed. Provisioning recognises the GPT
+disk (`part-get-parttype`): the root is `sda2`, swap goes to `sda3` right
+after it (type Linux swap, after `part-expand-gpt` moves the backup GPT to the
+end of a larger disk), the ESP gets a FAT filesystem of the VM's own, fstab
+its UUID, and `grub-install --target=x86_64-efi --efi-directory=/boot/efi
+--force-extra-removable --no-nvram` puts the shim and GRUB in `EFI/debian` and
+`EFI/BOOT`; the disk and its partitions get GUIDs of their own last, and the
+initramfs's device numbers say `8:2`. The firmware's `debian` boot entry is
+written by the bootstrap initrd: on a UEFI boot (`/sys/firmware/efi`) from a
+GPT disk whose first partition is an ESP, it builds the load option efibootmgr
+would (`HD(1,GPT,<partition GUID>,<start>,<size>)/File(\EFI\debian\shimx64.efi)`,
+description `debian`, active), writes it as the first free `Boot####` (or
+replaces its own older one) through efivarfs and puts it first in
+`BootOrder`, so the VM's variable store keeps it. BIOS VMs keep the base disk
+unchanged, and a saved profile cannot switch an existing VM between BIOS and
+UEFI (its disk was installed for one; a new VM is needed). What stays
+different: OVMF boots the Antinomie kernel from QEMU's loader, so
+`BootCurrent` names that entry, not `debian`.
+
+The resume device is the installer's answer (base-installer writes
 `/etc/initramfs-tools/conf.d/resume` just before it installs the kernel):
 `RESUME=UUID=<swap uuid>`, or `RESUME=none` when the disk has no room for a
 swap partition. Because the installer writes it first, update-initramfs copies

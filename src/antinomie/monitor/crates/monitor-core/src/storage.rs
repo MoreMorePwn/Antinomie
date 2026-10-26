@@ -416,6 +416,10 @@ pub struct Bundle {
     /// part of the identity.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stealth_support: Vec<String>,
+    /// A Debian Minimal base's UEFI layout, and in a VM's copy the derived
+    /// UEFI disk (`crate::uefi_disk`).
+    #[serde(flatten)]
+    pub uefi: crate::uefi_disk::UefiFiles,
 }
 fn is_false(value: &bool) -> bool {
     !value
@@ -447,7 +451,24 @@ impl Bundle {
         b.base_disk = resolve(&b.base_disk)?;
         b.initrd = b.initrd.as_ref().map(|p| resolve(p)).transpose()?;
         b.symbols = b.symbols.as_ref().map(|p| resolve(p)).transpose()?;
+        b.uefi.uefi_root = b.uefi.uefi_root.as_ref().map(|p| resolve(p)).transpose()?;
+        b.uefi.uefi_layout = b
+            .uefi
+            .uefi_layout
+            .as_ref()
+            .map(|p| resolve(p))
+            .transpose()?;
+        if b.uefi.uefi_root.is_some() != b.uefi.uefi_layout.is_some() {
+            return Err("bundle names only one of its UEFI layout files".into());
+        }
+        // Laid out by the app per installed base, never imported.
+        b.uefi.uefi_disk = None;
         Ok(b)
+    }
+    /// The disk a VM's own disk is an overlay of: the base disk, or for a
+    /// VM laid out for UEFI the base's derived UEFI disk.
+    pub(crate) fn vm_disk(&self) -> &Path {
+        self.uefi.uefi_disk.as_deref().unwrap_or(&self.base_disk)
     }
     fn validate_revision(&self) -> Result<(), String> {
         match (&self.antinomie_revision, &self.antinomie_source) {
@@ -549,6 +570,18 @@ impl Bundle {
             digest.update(b"antinomie-volatility-symbols-v1");
             digest.update(checksum(file, path)?);
         }
+        // Absent in bases before 0.8.0, whose identity stays as it was.
+        if let (Some(root), Some(layout)) = (&self.uefi.uefi_root, &self.uefi.uefi_layout) {
+            digest.update(b"antinomie-uefi-layout-v1");
+            for path in [root, layout] {
+                let file = crate::archive_io::open_regular(
+                    path.parent().ok_or("missing artifact parent")?,
+                    path,
+                )
+                .map_err(|e| e.to_string())?;
+                digest.update(checksum(file, path)?);
+            }
+        }
         Ok(format!("{:x}", digest.finalize()))
     }
     /// Import a content-addressed immutable base outside disposable build trees.
@@ -566,6 +599,11 @@ impl Bundle {
                     (Some(&self.base_disk), "base.qcow2"),
                     (self.initrd.as_ref(), "initrd"),
                     (self.symbols.as_ref(), SYMBOLS_FILE),
+                    (self.uefi.uefi_root.as_ref(), crate::uefi_disk::ROOT_FILE),
+                    (
+                        self.uefi.uefi_layout.as_ref(),
+                        crate::uefi_disk::LAYOUT_FILE,
+                    ),
                 ] {
                     if let Some(source) = source {
                         let destination = staging.join(name);
@@ -595,6 +633,19 @@ impl Bundle {
                     name: self.name.clone(),
                     symbols: self.symbols.as_ref().map(|_| staging.join(SYMBOLS_FILE)),
                     stealth_support: self.stealth_support.clone(),
+                    uefi: crate::uefi_disk::UefiFiles {
+                        uefi_root: self
+                            .uefi
+                            .uefi_root
+                            .as_ref()
+                            .map(|_| staging.join(crate::uefi_disk::ROOT_FILE)),
+                        uefi_layout: self
+                            .uefi
+                            .uefi_layout
+                            .as_ref()
+                            .map(|_| staging.join(crate::uefi_disk::LAYOUT_FILE)),
+                        uefi_disk: None,
+                    },
                 };
                 if copied.identity()? != identity {
                     return Err("bundle changed during import; copies rejected".into());
@@ -634,6 +685,17 @@ impl Bundle {
             name: self.name,
             symbols: self.symbols.as_ref().map(|_| target.join(SYMBOLS_FILE)),
             stealth_support: self.stealth_support,
+            uefi: crate::uefi_disk::UefiFiles {
+                uefi_root: self
+                    .uefi
+                    .uefi_root
+                    .map(|_| target.join(crate::uefi_disk::ROOT_FILE)),
+                uefi_layout: self
+                    .uefi
+                    .uefi_layout
+                    .map(|_| target.join(crate::uefi_disk::LAYOUT_FILE)),
+                uefi_disk: None,
+            },
         };
         installed.verify_installed()?;
         atomic_json(&target.join("bundle.json"), &installed)?;
@@ -1080,7 +1142,7 @@ fn migrate_data_with_proc(
                     serde_json::from_reader(File::open(bundle).map_err(|e| e.to_string())?)
                         .map_err(|e| e.to_string())?;
                 let relative = bundle
-                    .base_disk
+                    .vm_disk()
                     .strip_prefix(destination)
                     .map_err(|_| "migration overlay backing is outside verified data root")?;
                 let verified_base = staging.join(relative);
@@ -1089,7 +1151,7 @@ fn migrate_data_with_proc(
                 }
                 let result = Command::new("qemu-img")
                     .args(["rebase", "-u", "-f", "qcow2", "-F", "qcow2", "-b"])
-                    .arg(&bundle.base_disk)
+                    .arg(bundle.vm_disk())
                     .arg(&disk)
                     .output()
                     .map_err(|e| e.to_string())?;
@@ -1130,14 +1192,17 @@ pub(crate) fn create_overlay(
 ) -> Result<(), String> {
     crate::dependencies::require_tool(&options.qemu_img, "qemu-utils")?;
     bundle.verify_installed()?;
-    validate_disk_chain(options, &bundle.base_disk, None)?;
+    validate_disk_chain(options, bundle.vm_disk(), None)?;
+    if bundle.uefi.uefi_disk.is_some() && crate::uefi_disk::existing(bundle)?.is_none() {
+        return Err("the base's UEFI disk is missing".into());
+    }
     let disk = dir.join("disk.qcow2");
     if disk.exists() {
         return Err("VM disk already exists".into());
     }
     let result = Command::new(&options.qemu_img)
         .args(["create", "-f", "qcow2", "-F", "qcow2", "-b"])
-        .arg(&bundle.base_disk)
+        .arg(bundle.vm_disk())
         .arg(&disk)
         .arg(format!("{disk_gib}G"))
         .output()
@@ -1165,7 +1230,7 @@ pub(crate) fn reset_vm_disk(
     validate_disk_chain(
         options,
         &directory.join("disk.qcow2"),
-        Some(&bundle.base_disk),
+        Some(bundle.vm_disk()),
     )?;
     let account = if bundle
         .guest
@@ -1241,7 +1306,7 @@ pub(crate) fn duplicate_vm(
     } else {
         None
     };
-    crate::snapshots::validate_active(options, source, &bundle.base_disk)?;
+    crate::snapshots::validate_active(options, source, bundle.vm_disk())?;
     let mut vm = source.clone();
     vm.id = vm_id(&name);
     vm.name = name;
@@ -1342,7 +1407,7 @@ pub(crate) fn delete_vm(options: &BackendOptions, id: &str) -> Result<(), String
     }
     let bundle: Bundle = read_json(&dir.join("bundle.json"))?;
     bundle.verify_installed()?;
-    crate::snapshots::validate_active(options, &config, &bundle.base_disk)?;
+    crate::snapshots::validate_active(options, &config, bundle.vm_disk())?;
     crate::locations::publish(options, &crate::locations::locations(options, id)?)?;
     let mut paths = Vec::new();
     for name in ["disk.qcow2", "config.json", "bundle.json"] {
@@ -1359,7 +1424,7 @@ pub(crate) fn delete_vm(options: &BackendOptions, id: &str) -> Result<(), String
     paths.extend(crate::snapshots::deletion_paths(
         options,
         &config,
-        &bundle.base_disk,
+        bundle.vm_disk(),
     )?);
     let account = dir.join("guest-account.json");
     if account.exists() || fs::symlink_metadata(&account).is_ok() {
@@ -1766,6 +1831,7 @@ mod tests {
             name: None,
             symbols: None,
             stealth_support: Vec::new(),
+            uefi: Default::default(),
         }
         .install(&options)
         .unwrap();
@@ -2083,6 +2149,7 @@ mod tests {
             name: None,
             symbols: None,
             stealth_support: Vec::new(),
+            uefi: Default::default(),
         };
         bundle.base_identity = Some(bundle.identity().unwrap());
         let vm = source.join("vms/old-id");
@@ -2316,6 +2383,7 @@ mod tests {
             name: None,
             symbols: None,
             stealth_support: Vec::new(),
+            uefi: Default::default(),
         };
         let options = BackendOptions {
             data_dir: directory.join("data"),

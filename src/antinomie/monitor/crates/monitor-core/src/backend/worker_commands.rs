@@ -541,6 +541,26 @@ impl Worker {
                         crate::guest_account::grow_disk(&disk)?;
                     }
                 }
+                // The disk was installed for the firmware its profile booted
+                // when it was created (a UEFI disk on a base with a UEFI
+                // layout); a profile that no longer matches it needs a new VM.
+                if disk_bundle
+                    .guest
+                    .as_ref()
+                    .is_some_and(|guest| guest.requires_credentials)
+                {
+                    let installed = disk_bundle.uefi.uefi_disk.is_some();
+                    if crate::uefi_disk::wanted(&boot_bundle, &vm.stealth) != installed
+                        && crate::uefi_disk::wanted(&boot_bundle, &current.stealth) == installed
+                    {
+                        return Err(format!(
+                            "this VM's disk was installed for {}; for a profile that boots {}, \
+                             create a new VM",
+                            crate::uefi_disk::installed_for(&disk_bundle),
+                            if installed { "BIOS" } else { "UEFI" }
+                        ));
+                    }
+                }
                 // A base that names its NIC by slot: a new profile whose
                 // machine has its LAN elsewhere moves the NIC, and the disk's
                 // network configuration follows. (A disk provisioned before
@@ -675,8 +695,14 @@ impl Worker {
                     .find(|v| v.id == vm_id)
                     .ok_or("unknown VM")?;
                 let dir = storage::vm_dir(&self.options, &vm_id)?;
-                let bundle: Bundle = storage::read_json(&dir.join("bundle.json"))?;
-                storage::reset_vm_disk(&self.options, &dir, vm, &bundle)?;
+                let mut bundle: Bundle = storage::read_json(&dir.join("bundle.json"))?;
+                let vm = vm.clone();
+                // A UEFI disk that is gone is laid out again.
+                if bundle.uefi.uefi_disk.is_some() {
+                    bundle.uefi.uefi_disk = None;
+                    bundle = self.uefi_bundle(bundle)?;
+                }
+                storage::reset_vm_disk(&self.options, &dir, &vm, &bundle)?;
                 Ok("VM reset to base".into())
             }
             Command::UpdateOptions {
@@ -771,6 +797,35 @@ impl Worker {
             other => self.guest_command(other),
         }
     }
+    /// `bundle` with the base's UEFI disk as the VM's backing, laying the
+    /// disk out first if the base has none yet; the stages show in the
+    /// snapshot while it runs.
+    fn uefi_bundle(&mut self, mut bundle: Bundle) -> Result<Bundle, String> {
+        let base = bundle
+            .name
+            .clone()
+            .or_else(|| {
+                bundle
+                    .base_identity
+                    .as_ref()
+                    .map(|id| id.chars().take(12).collect())
+            })
+            .unwrap_or_default();
+        let qemu_img = self.options.qemu_img.clone();
+        let mut stage = |text: &str| {
+            self.snapshot.base_layout = Some(crate::api::BaseLayoutProgress {
+                base: base.clone(),
+                stage: text.to_owned(),
+            });
+            self.publish();
+        };
+        let disk = crate::uefi_disk::derive(&qemu_img, &bundle, &mut stage);
+        self.snapshot.base_layout = None;
+        self.publish();
+        bundle.uefi.uefi_disk = Some(disk?);
+        Ok(bundle)
+    }
+
     pub(super) fn create(
         &mut self,
         mut vm: VmConfig,
@@ -803,6 +858,13 @@ impl Worker {
             .into());
         }
         vm.base_identity = bundle.base_identity.clone();
+        // A UEFI profile on a base with a UEFI layout: the VM's disk is an
+        // overlay of the base's UEFI disk (laid out now if this is the first).
+        let bundle = if requires_credentials && crate::uefi_disk::wanted(&bundle, &vm.stealth) {
+            self.uefi_bundle(bundle)?
+        } else {
+            bundle
+        };
         let location = crate::locations::prepare(&self.options, &mut vm)?;
         let dir = &location.disk_directory;
         fs::create_dir(dir).map_err(|e| e.to_string())?;

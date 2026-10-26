@@ -1353,6 +1353,7 @@ fn base_import_and_failed_credential_creation_preserve_published_state() {
             name: None,
             symbols: None,
             stealth_support: Vec::new(),
+            uefi: Default::default(),
         };
         storage::atomic_json(&source.join("bundle.json"), &bundle).unwrap();
         worker
@@ -1789,6 +1790,7 @@ fn final_health_counts_screen_and_keeps_errors_scoped_to_run() {
         name: None,
         symbols: None,
         stealth_support: Vec::new(),
+        uefi: Default::default(),
     };
     capture
         .manifest(&VmConfig::default(), &bundle, &bundle, "clean")

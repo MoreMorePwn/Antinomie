@@ -166,6 +166,15 @@ CONSOLE_PACKAGES = (
     ("grub-pc", "the installer's boot loader for a BIOS PC (each VM's grub.cfg is written for it)"),
     ("os-prober", "installed with GRUB by the installer"),
 )
+# The installer's last steps (grub-installer): os-prober, then the boot loader
+# for the firmware, each as its own apt transaction. The console base installs
+# them after the rest of the system, once for its BIOS disk and once in a copy
+# of the system for the UEFI layout (grub-efi-amd64 brings shim-signed,
+# grub-efi-amd64-signed, efibootmgr and mokutil by recommends; grub-installer
+# then asks for shim-signed itself, which changes nothing). The rest of
+# CONSOLE_PACKAGES is bootstrapped with the system.
+BOOT_LOADERS = {"bios": (("os-prober",), ("grub-pc",)),
+                "uefi": (("os-prober",), ("grub-efi-amd64",), ("shim-signed",))}
 # The installer's interfaces file without its stanza for the wired NIC:
 # provisioning writes that per VM for the interface its stealth profile's NIC
 # slot gets (bundle stealth_support "onboardnic": enp0s25 at PCI 00:19.0,
@@ -309,7 +318,8 @@ def initrd_provenance(root, provenance):
             continue
         relative = str(path.relative_to(root))
         source = {"bin/busybox": Path("/usr/bin/busybox"),
-                  "bin/resize2fs": Path(shutil.which("resize2fs"))}.get(
+                  "bin/resize2fs": Path(shutil.which("resize2fs")),
+                  "bin/chattr": Path(shutil.which("chattr"))}.get(
                       relative, Path("/") / relative)
         ownership = subprocess.check_output(
             ["dpkg-query", "--search", str(source.resolve())], text=True).splitlines()
@@ -376,11 +386,20 @@ def options(values):
     return result
 
 
-def packages(desktop):
-    """Packages to install: the common set plus the desktop's task, or the
-    console base's own set."""
+def requested_packages(desktop):
+    """The packages the installation asks for by name (the manifest's list):
+    for the console base its set with the BIOS boot loader."""
     if desktop == CONSOLE:
         return tuple(package for package, _ in CONSOLE_PACKAGES)
+    return packages(desktop)
+
+
+def packages(desktop):
+    """Packages to bootstrap: the common set plus the desktop's task, or the
+    console base's own set (its boot loader comes last, BOOT_LOADERS)."""
+    if desktop == CONSOLE:
+        loaders = {name for steps in BOOT_LOADERS.values() for step in steps for name in step}
+        return tuple(package for package, _ in CONSOLE_PACKAGES if package not in loaders)
     task = DESKTOPS[desktop][0]
     extra = ("lightdm-gtk-greeter",) if desktop == "xfce" else ()
     return PACKAGES + (task,) + extra
@@ -416,6 +435,96 @@ def image_size(desktop):
 def display(desktop):
     """Display manager and default session; none for the console base."""
     return (CONSOLE, CONSOLE) if desktop == CONSOLE else DESKTOPS[desktop][1:3]
+
+
+# The end of every installation (the installer's finish-install): build-time
+# apt and dpkg settings (recommends, proxy, left-out documentation) leave, the
+# system is checked and inventoried, apt's history reads like the installer's,
+# and the console base gets the resolver its DHCP lease named. In the console
+# base this runs after the boot loader, in the BIOS system and in its UEFI copy
+# ($manager is "none" there); a desktop runs it at the end of its customization.
+FINISH = """# Build-time apt and dpkg settings (recommends, proxy, left-out documentation)
+# are not part of the image.
+rm -f /etc/apt/apt.conf.d/99mmdebstrap /etc/dpkg/dpkg.cfg.d/99mmdebstrap
+audit=$(dpkg --audit)
+if [ -n "$audit" ]; then
+    printf '%s\\n' "$audit" >&2
+    exit 1
+fi
+apt-get -o APT::Get::AllowUnauthenticated=false -o Acquire::AllowInsecureRepositories=false check
+dpkg-query -W -f='${binary:Package}\\t${Version}\\t${Architecture}\\t${source:Package}\\t${source:Version}\\t${db:Status-Status}\\n' > /tmp/packages.tsv
+if [ "$manager" = none ] && [ -f /var/log/apt/history.log ]; then
+    awk """ + shlex.quote(HISTORY_AWK) + """ /var/log/apt/history.log /var/log/apt/history.log > /tmp/history.log
+    cat /tmp/history.log > /var/log/apt/history.log
+    rm -f /tmp/history.log
+fi
+if [ "$manager" = none ]; then
+    # The resolver the installer's DHCP lease named; dhcpcd rewrites it at boot.
+    printf 'nameserver 192.168.1.1\\n' > /etc/resolv.conf
+    find /var/cache/apt/archives -name '*.deb' -delete
+else
+    apt-get clean
+fi
+"""
+
+
+# The installer's UEFI disk (trixie's partman-auto, recipes-amd64-efi): the
+# EFI system partition first (FAT32, mkfs.fat -F 32, mounted on /boot/efi with
+# umask=0077), then the root, then swap (added per VM, as on the BIOS disk), on
+# a GPT disk. The ESP is the size the installer gives the app's default 8 GiB
+# disk (95small_disk: 512-1024 MB at priority 542, about 680 MB); a derived
+# disk is laid out once per base, so every VM gets that size.
+UEFI_ESP_FIRST = CONSOLE_ROOT_OFFSET // 512
+UEFI_ESP_SECTORS = (650 << 20) // 512 - UEFI_ESP_FIRST
+UEFI_ROOT_FIRST = 650 << 20 >> 9
+# fstab as partman writes it for that disk (the VM's UUIDs: provisioning).
+UEFI_FSTAB_ESP = ("# /boot/efi was on /dev/sda1 during installation\n"
+                  "UUID={uuid}  /boot/efi       vfat    umask=0077      0       1\n")
+UEFI_ROOT_DEVICE = "/dev/sda2"
+UEFI_ESP_PLACEHOLDER = "0000-0000"
+UEFI_FILES = ("uefi-root.tar.xz", "uefi-layout.json")
+# What the bootstrap leaves for them beside the root filesystem tarball.
+UEFI_STAGED = ("uefi-root.tar", "uefi-layout.json")
+
+
+def boot_loader_script():
+    """Run inside a console root, argument bios or uefi: the installer's
+    grub-installer step (BOOT_LOADERS, each its own apt transaction). For UEFI
+    the ESP's mount point exists (partman mounted it before installing the
+    system), grub-installer's answer to install to the removable media path
+    too, and fstab names the ESP and the root's partition (sda2)."""
+    steps = {firmware: "\n".join(
+        "    apt-get -o APT::Get::AllowUnauthenticated=false -y install " + " ".join(step)
+        for step in loader) for firmware, loader in BOOT_LOADERS.items()}
+    return """#!/bin/sh
+set -eu
+export DEBIAN_FRONTEND=noninteractive
+case $1 in
+bios)
+""" + steps["bios"] + """
+    ;;
+uefi)
+    mkdir -p /boot/efi
+""" + steps["uefi"] + """
+    printf 'grub-efi-amd64 grub2/force_efi_extra_removable boolean true\\n' | debconf-set-selections
+    root=$(awk '$1 !~ /^#/ && $2 == "/" {print $1}' /etc/fstab)
+    { printf '%s' """ + shlex.quote(FSTAB_HEADER + f"# / was on {UEFI_ROOT_DEVICE} during installation\n") + """
+      printf """ + shlex.quote(FSTAB_ROOT.format(uuid="%s").replace("UUID=", "").replace("\n", "\\n")) + """ "$root"
+      printf '%s' """ + shlex.quote(UEFI_FSTAB_ESP.format(uuid=UEFI_ESP_PLACEHOLDER)) + """
+      printf '%s' """ + shlex.quote(FSTAB_CDROM) + """; } > /tmp/fstab
+    cat /tmp/fstab > /etc/fstab
+    rm -f /tmp/fstab
+    ;;
+*)
+    exit 2
+    ;;
+esac
+"""
+
+
+def finish_script():
+    """The console base's FINISH, run after its boot loader."""
+    return "#!/bin/sh\nset -eu\nmanager=none\n" + FINISH
 
 
 def customization_script():
@@ -553,29 +662,9 @@ dpkg-reconfigure -f noninteractive tzdata
 # The installer's hardware clock answer, and D-Bus's link to the machine ID.
 printf '0.0 0 0.0\\n0\\nUTC\\n' > /etc/adjtime
 ln -sf /etc/machine-id /var/lib/dbus/machine-id
-# Build-time apt and dpkg settings (recommends, proxy, left-out documentation)
-# are not part of the image.
-rm -f /etc/apt/apt.conf.d/99mmdebstrap /etc/dpkg/dpkg.cfg.d/99mmdebstrap
-audit=$(dpkg --audit)
-if [ -n "$audit" ]; then
-    printf '%s\\n' "$audit" >&2
-    exit 1
-fi
-apt-get -o APT::Get::AllowUnauthenticated=false -o Acquire::AllowInsecureRepositories=false check
-dpkg-query -W -f='${binary:Package}\\t${Version}\\t${Architecture}\\t${source:Package}\\t${source:Version}\\t${db:Status-Status}\\n' > /tmp/packages.tsv
-if [ "$manager" = none ] && [ -f /var/log/apt/history.log ]; then
-    awk """ + shlex.quote(HISTORY_AWK) + """ /var/log/apt/history.log /var/log/apt/history.log > /tmp/history.log
-    cat /tmp/history.log > /var/log/apt/history.log
-    rm -f /tmp/history.log
-fi
-if [ "$manager" = none ]; then
-    # The resolver the installer's DHCP lease named; dhcpcd rewrites it at boot.
-    printf 'nameserver 192.168.1.1\\n' > /etc/resolv.conf
-    find /var/cache/apt/archives -name '*.deb' -delete
-else
-    apt-get clean
-fi
-"""
+# The console base finishes after its boot loader is installed (FINISH).
+[ "$manager" != none ] || exit 0
+""" + FINISH + """"""
 
 
 # The console base's /boot, module tree and kernel packages are Debian's own:
@@ -748,6 +837,8 @@ def modules_archive(tree, target):
 # What the bootstrap writes into provenance/; a cached root filesystem keeps them.
 ROOTFS_PROVENANCE = ("packages.tsv", "os-release", "package-docs.tar.gz", "apt-lists.tar.gz",
                      "customize.sh", "mmdebstrap.json", "bootstrap.log")
+# The console base's own (absent for a desktop).
+CONSOLE_PROVENANCE = ("boot-loader.sh", "finish.sh", "uefi-packages.tsv")
 # A cached root filesystem older than this is bootstrapped again, so package
 # updates (security fixes) still arrive.
 ROOTFS_CACHE_DAYS = int(os.environ.get("ANTINOMIE_ROOTFS_CACHE_DAYS", "30"))
@@ -784,17 +875,22 @@ def load_rootfs_cache(cache, values, staging, provenance, log, kernel_hashes=())
                 print(f"cached root filesystem is older than {ROOTFS_CACHE_DAYS} days; "
                       "bootstrapping for current packages", flush=True)
                 return None
-            for name in ROOTFS_PROVENANCE:
+            names = set(archive.getnames())
+            for name in ROOTFS_PROVENANCE + CONSOLE_PROVENANCE:
+                if name not in ROOTFS_PROVENANCE and "provenance/" + name not in names:
+                    continue
                 member = archive.getmember("provenance/" + name)
                 with archive.extractfile(member) as source, (provenance / name).open("wb") as target:
                     shutil.copyfileobj(source, target)
-            for name in ("rootfs.tar", INODE_TIMES):
+            for name in ("rootfs.tar", INODE_TIMES) + UEFI_STAGED:
+                if name not in names and name in UEFI_STAGED:
+                    continue
                 with archive.extractfile(name) as source, \
                         (staging / name).open("wb") as target:
                     shutil.copyfileobj(source, target, 1 << 20)
     except (tarfile.TarError, KeyError, ValueError, OSError, TypeError) as error:
         print(f"cached root filesystem unusable ({error}); bootstrapping", flush=True)
-        for name in ("rootfs.tar", INODE_TIMES):
+        for name in ("rootfs.tar", INODE_TIMES) + UEFI_STAGED:
             (staging / name).unlink(missing_ok=True)
         return None
     print(f"using the root filesystem bootstrapped {manifest['built_at']}", flush=True)
@@ -812,10 +908,14 @@ def save_rootfs_cache(cache, tarball, provenance, root, values, kernel_hashes=()
         entry = tarfile.TarInfo("rootfs-cache.json")
         entry.size = len(manifest)
         archive.addfile(entry, io.BytesIO(manifest))
-        for name in ROOTFS_PROVENANCE:
-            archive.add(provenance / name, arcname="provenance/" + name)
+        for name in ROOTFS_PROVENANCE + CONSOLE_PROVENANCE:
+            if name in ROOTFS_PROVENANCE or (provenance / name).is_file():
+                archive.add(provenance / name, arcname="provenance/" + name)
         archive.add(tarball, arcname="rootfs.tar")
         archive.add(tarball.with_name(INODE_TIMES), arcname=INODE_TIMES)
+        for name in UEFI_STAGED:
+            if tarball.with_name(name).is_file():
+                archive.add(tarball.with_name(name), arcname=name)
     os.replace(partial, cache)
     print(f"root filesystem cached in {cache}", flush=True)
 
@@ -862,6 +962,42 @@ def bootstrap_mode():
     return "root" if os.geteuid() == 0 else "unshare"
 
 
+def boot_loader_hooks(scripts, provenance):
+    """The console base's last steps: a copy of the system goes to
+    /tmp/uefi-root, the BIOS boot loader into the system and the UEFI one into
+    the copy (with /dev, /proc and /sys bound in), FINISH in both; the copy's
+    difference from the system leaves as UEFI_FILES (debian-uefi-delta.py, run
+    with the build host's Python), then the copy is removed."""
+    q = shlex.quote
+    copy = '"$1/tmp/uefi-root"'
+    archive = "--numeric-owner --xattrs --xattrs-include='*' --acls"
+    hooks = [f"upload {q(str(scripts / name))} /tmp/{name}"
+             for name in ("boot-loader.sh", "finish.sh", "debian-uefi-delta.py")]
+    hooks += [
+        # Mount points stay empty (bound in below, as mmdebstrap binds them).
+        f"mkdir {copy} && tar -C \"$1\" --one-file-system {archive} --exclude=./tmp/uefi-root "
+        "--exclude='./dev/*' --exclude='./proc/*' --exclude='./sys/*' "
+        f"-cf - . | tar -C {copy} {archive} -xpf -",
+        'chroot "$1" sh /tmp/boot-loader.sh bios',
+        # The copy gets mmdebstrap's /dev (its nodes are bind mounts, so the
+        # whole tree is bound and later detached as one) and a /proc; no /sys.
+        f"mount --rbind \"$1/dev\" {copy}/dev && mount -t proc proc {copy}/proc && "
+        f"{{ chroot {copy} sh /tmp/boot-loader.sh uefi && chroot {copy} sh /tmp/finish.sh; }}; "
+        f"status=$?; umount -l {copy}/dev; umount -l {copy}/proc; exit $status",
+        f"mv {copy}/tmp/packages.tsv \"$1/tmp/uefi-packages.tsv\" && "
+        f"rm -f {copy}/tmp/boot-loader.sh {copy}/tmp/finish.sh {copy}/tmp/debian-uefi-delta.py",
+        'chroot "$1" sh /tmp/finish.sh',
+        f"python3 -I \"$1/tmp/debian-uefi-delta.py\" \"$1\" {copy} \"$1/tmp/uefi-root.tar\" "
+        "\"$1/tmp/uefi-layout.json\"",
+        f"rm -rf --one-file-system {copy} \"$1/tmp/boot-loader.sh\" \"$1/tmp/finish.sh\" "
+        "\"$1/tmp/debian-uefi-delta.py\"",
+    ]
+    for name in ("uefi-root.tar", "uefi-layout.json", "uefi-packages.tsv"):
+        target = scripts / name if name != "uefi-packages.tsv" else provenance / name
+        hooks += [f"download /tmp/{name} {q(str(target))}", f'rm -f "$1/tmp/{name}"']
+    return ["--customize-hook=" + hook for hook in hooks]
+
+
 def mmdebstrap_command(values, tarball, script, provenance, times=None, kernel_debs=(),
                        kernel_modules=None):
     """The mmdebstrap invocation; hooks run as (namespace) root with "$1" the new root.
@@ -872,6 +1008,7 @@ def mmdebstrap_command(values, tarball, script, provenance, times=None, kernel_d
     tar) beside theirs."""
     q = shlex.quote
     console = values["desktop"] == CONSOLE
+    scripts = script.parent
     times = times or tarball.with_name(INODE_TIMES)
     command = ["mmdebstrap", "--mode=" + bootstrap_mode(),
                "--variant=" + ("standard" if values["standard"] else "important"),
@@ -940,6 +1077,8 @@ def mmdebstrap_command(values, tarball, script, provenance, times=None, kernel_d
     command.append('--customize-hook=rm -f "$1/tmp/antinomie-customize.sh"')
     if kernel_debs and kernel_modules is not None:
         command.append(f'--customize-hook=chroot "$1" sh -c {q(initramfs_rebuild())}')
+    if console:
+        command += boot_loader_hooks(scripts, provenance)
     # The package inventory leaves the image with the build's provenance.
     for path in ("/tmp/packages.tsv", "/etc/os-release"):
         command.append(f'--customize-hook=download {path} {q(str(provenance / Path(path).name))}')
@@ -1235,6 +1374,12 @@ def root_image(values, raw, staging, provenance, log, modules=None, cache=None,
         script = staging / "customize.sh"
         script.write_text(customization_script())
         shutil.copy2(script, provenance / "customize.sh")
+        if values["desktop"] == CONSOLE:
+            for name, text in (("boot-loader.sh", boot_loader_script()),
+                               ("finish.sh", finish_script())):
+                (staging / name).write_text(text)
+                shutil.copy2(staging / name, provenance / name)
+            shutil.copy2(REPO / "scripts/debian-uefi-delta.py", staging / "debian-uefi-delta.py")
         kernel_debs = console_kernel["debs"]() if console_kernel else ()
         command = mmdebstrap_command(values, tarball, script, provenance, times, kernel_debs,
                                      console_kernel["modules"] if console_kernel else None)
@@ -1254,6 +1399,10 @@ def root_image(values, raw, staging, provenance, log, modules=None, cache=None,
             shutil.copy2(log.name, provenance / "bootstrap.log")
             save_rootfs_cache(cache, tarball, provenance, root, values, kernel_hashes)
     check_image_leaks(tarball, hostname=values["hostname"])
+    if values["desktop"] == CONSOLE:
+        if not all((staging / name).is_file() for name in UEFI_STAGED):
+            raise RuntimeError("the bootstrap left no UEFI layout for the console base")
+        check_image_leaks(staging / "uefi-root.tar", hostname=values["hostname"])
     if modules is not None:
         add_modules(tarball, modules)
     size = image_size(values["desktop"])
@@ -1284,6 +1433,36 @@ def root_image(values, raw, staging, provenance, log, modules=None, cache=None,
                           "access, change and birth times set with debugfs",
             "extended_attributes": xattrs, "timed_paths": timed,
             "kernel_modules": None if modules is None else f"/usr/lib/modules/{modules.name}"}
+
+
+def uefi_layout(staging, bundle):
+    """The console base's UEFI layout for the app (UEFI_FILES): the UEFI
+    system's differing paths (xz tar) and the layout record: the disk's
+    geometry, fstab's placeholder for the ESP, the BIOS paths the UEFI system
+    lacks and the delta paths' times (access, change, birth and modification,
+    each (seconds, nanoseconds), in the order apply_timeline sets them)."""
+    import lzma
+    record = json.loads((staging / "uefi-layout.json").read_text())
+    if record.get("format") != 1:
+        raise RuntimeError("unexpected UEFI layout record")
+    times = {}
+    for path, (atime, ctime, mtime) in record["times"].items():
+        seconds = [divmod(value, 10 ** 9) for value in (atime, ctime, mtime)]
+        atime, ctime, mtime = seconds
+        ctime = max(ctime, mtime)
+        times[path] = [list(max(atime, ctime)), list(ctime), list(ctime), list(mtime)]
+    layout = {"format": 1, "label": "gpt",
+              "esp": {"first_sector": UEFI_ESP_FIRST, "sectors": UEFI_ESP_SECTORS,
+                      "fstab_placeholder": UEFI_ESP_PLACEHOLDER},
+              "root": {"first_sector": UEFI_ROOT_FIRST, "sectors": CONSOLE_ROOT_SIZE // 512},
+              "removed": record["removed"], "times": times}
+    (bundle / UEFI_FILES[1]).write_text(json.dumps(layout, indent=1) + "\n")
+    with (staging / "uefi-root.tar").open("rb") as source, \
+            lzma.open(bundle / UEFI_FILES[0], "wb", preset=6) as target:
+        shutil.copyfileobj(source, target, 1 << 20)
+    for name in UEFI_STAGED:
+        (staging / name).unlink()
+    return {"paths": len(times), "removed": len(record["removed"])}
 
 
 def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=False,
@@ -1360,13 +1539,16 @@ def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=Fa
                         str(raw), str(bundle / "base.qcow2")], check=True)
         raw.unlink()
         make_initrd(bundle / "initrd.gz", staging, provenance)
-        hashes = {item: helpers.checksum(bundle / item)
-                  for item in ("kernel", "initrd.gz", "base.qcow2")}
+        items = ("kernel", "initrd.gz", "base.qcow2")
+        if values["desktop"] == CONSOLE:
+            root["uefi_layout"] = uefi_layout(staging, bundle)
+            items += UEFI_FILES
+        hashes = {item: helpers.checksum(bundle / item) for item in items}
         record = {"built_at": datetime.now(timezone.utc).isoformat(),
                   "options": values, "root": root,
                   "apt_authentication": "Debian signed indexes; insecure repositories disallowed",
                   "package_install_recommends": True,
-                  "requested_packages": list(packages(values["desktop"])),
+                  "requested_packages": list(requested_packages(values["desktop"])),
                   "package_inventory": "packages.tsv",
                   "kernel_sha256": hashes["kernel"], "kernel_release": release,
                   "kernel_banner": kernel_banner(kernel),
@@ -1382,6 +1564,9 @@ def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=Fa
                                                    root.get("root_uuid")),
                     "guest": profile(values["desktop"]),
                     "sha256": hashes}
+        if values["desktop"] == CONSOLE:
+            # The app lays a UEFI disk out from these once per base.
+            manifest["uefi_root"], manifest["uefi_layout"] = UEFI_FILES
         if symbols:
             shutil.copy2(symbols, bundle / "symbols.json.xz")
             manifest["symbols"] = "symbols.json.xz"

@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import shutil
 import struct
+import sys
 import tarfile
 import tempfile
 import subprocess
@@ -101,6 +102,186 @@ class InitrdResumeTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 initrd_resume.patch_image(str(path), "RESUME=none", 1950, (8, 1), rng)
             self.assertEqual(path.read_bytes(), early + b"\x1f\x8b" + packed)
+
+
+def gpt_disk(path, first=2048, last=1331199, unique=bytes(range(16))):
+    """A disk image whose GPT names an EFI system partition first."""
+    header = bytearray(512)
+    header[0:8] = b"EFI PART"
+    struct.pack_into("<Q", header, 72, 2)
+    entry = bytearray(512)
+    entry[0:16] = bytes.fromhex("28732ac11ff8d211ba4b00a0c93ec93b")
+    entry[16:32] = unique
+    struct.pack_into("<QQ", entry, 32, first, last)
+    path.write_bytes(bytes(512) + header + entry)
+
+
+class BootEntryTests(unittest.TestCase):
+    """The bootstrap initrd's "debian" UEFI boot entry, run with BusyBox
+    against a variable directory standing in for efivarfs."""
+
+    def run_entry(self, disk, variables):
+        with tempfile.TemporaryDirectory() as tree:
+            image.monitor_helpers().initrd_tree(Path(tree))
+            init = (Path(tree) / "init").read_text()
+        start = init.index("efi_hex() {")
+        functions = init[start:init.index("\npart=${root#/dev/}", start)]
+        functions = (functions.replace("vars=/sys/firmware/efi/efivars", f"vars={variables}")
+                     .replace("/efivar", f"{variables}/.staged"))
+        script = "chattr() { :; }\nmount() { return 1; }\n" + functions + f"\nefi_entry {disk}\n"
+        subprocess.run(["busybox", "sh", "-c", script], check=True)
+
+    @unittest.skipUnless(shutil.which("busybox") and shutil.which("chattr")
+                         and shutil.which("resize2fs"), "busybox, chattr and resize2fs are required")
+    def test_debian_entry_goes_first_and_points_at_the_esp(self):
+        guid = "8be4df61-93ca-11d2-aa0d-00e098032b8c"
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            disk, variables = root / "disk", root / "vars"
+            variables.mkdir()
+            gpt_disk(disk)
+            # The firmware's own entries and order.
+            (variables / f"Boot0000-{guid}").write_bytes(b"\x07\0\0\0firmware")
+            (variables / f"Boot0001-{guid}").write_bytes(b"\x07\0\0\0disk")
+            (variables / f"BootOrder-{guid}").write_bytes(b"\x07\0\0\0\x01\0\x00\0")
+            self.run_entry(disk, variables)
+            entry = (variables / f"Boot0002-{guid}").read_bytes()
+            option = entry[4:]
+            self.assertEqual(entry[:4], b"\x07\0\0\0")
+            self.assertEqual(struct.unpack_from("<IH", option), (1, 98))
+            self.assertEqual(option[6:20], "debian\0".encode("utf-16-le"))
+            path = option[20:]
+            self.assertEqual(len(path), 98)
+            self.assertEqual(path[:4], b"\x04\x01\x2a\x00")
+            self.assertEqual(struct.unpack_from("<IQQ", path, 4), (1, 2048, 1331200 - 2048))
+            self.assertEqual(path[24:40], bytes(range(16)))
+            self.assertEqual(path[40:42], b"\x02\x02")
+            self.assertEqual(path[42:46], b"\x04\x04\x34\x00")
+            self.assertEqual(path[46:94].decode("utf-16-le"), "\\EFI\\debian\\shimx64.efi\0")
+            self.assertEqual(path[94:], b"\x7f\xff\x04\x00")
+            self.assertEqual((variables / f"BootOrder-{guid}").read_bytes(),
+                             b"\x07\0\0\0\x02\0\x01\0\x00\0")
+            # A second boot changes nothing; a disk laid out again replaces
+            # the entry in place.
+            self.run_entry(disk, variables)
+            self.assertEqual(sorted(p.name[:8] for p in variables.iterdir()
+                                    if p.name.startswith("Boot0")),
+                             ["Boot0000", "Boot0001", "Boot0002"])
+            gpt_disk(disk, unique=bytes(range(16, 32)))
+            self.run_entry(disk, variables)
+            self.assertEqual((variables / f"Boot0002-{guid}").read_bytes()[4 + 20 + 24:4 + 20 + 40],
+                             bytes(range(16, 32)))
+            self.assertEqual((variables / f"BootOrder-{guid}").read_bytes(),
+                             b"\x07\0\0\0\x02\0\x01\0\x00\0")
+            self.assertFalse((variables / ".staged").exists())
+            # Not an ESP first (or no GPT): nothing is written.
+            (variables / f"Boot0002-{guid}").unlink()
+            disk.write_bytes(bytes(2048))
+            self.run_entry(disk, variables)
+            self.assertFalse((variables / f"Boot0002-{guid}").exists())
+
+
+class UefiLayoutTests(unittest.TestCase):
+    def test_boot_loaders_come_last_as_grub_installer_installs_them(self):
+        # Bootstrapped without a boot loader; the requested list keeps grub-pc.
+        self.assertNotIn("grub-pc", image.packages("none"))
+        self.assertNotIn("os-prober", image.packages("none"))
+        self.assertIn("grub-pc", image.requested_packages("none"))
+        script = image.boot_loader_script()
+        subprocess.run(["sh", "-n"], input=script, text=True, check=True)
+        bios, uefi = script.split("uefi)")
+        self.assertLess(bios.index("install os-prober"), bios.index("install grub-pc"))
+        self.assertLess(uefi.index("install os-prober"), uefi.index("install grub-efi-amd64"))
+        self.assertLess(uefi.index("install grub-efi-amd64"), uefi.index("install shim-signed"))
+        self.assertIn("mkdir -p /boot/efi", uefi)
+        self.assertIn("grub2/force_efi_extra_removable boolean true", uefi)
+        self.assertIn("# / was on /dev/sda2 during installation", uefi)
+        self.assertIn("/boot/efi       vfat    umask=0077      0       1", uefi)
+        # The root line, not fstab's "# / was on" comment, gives the UUID.
+        fstab = ("# / was on /dev/sda1 during installation\nUUID=abc / ext4 "
+                 "errors=remount-ro 0 1\n")
+        root = subprocess.run(["awk", "$1 !~ /^#/ && $2 == \"/\" {print $1}"], input=fstab,
+                              text=True, capture_output=True, check=True).stdout
+        self.assertEqual(root, "UUID=abc\n")
+        self.assertIn("$1 !~ /^#/ && $2 == \"/\"", uefi)
+        finish = image.finish_script()
+        subprocess.run(["sh", "-n"], input=finish, text=True, check=True)
+        self.assertIn("manager=none", finish)
+        self.assertIn("rm -f /etc/apt/apt.conf.d/99mmdebstrap", finish)
+        # The console customization stops where FINISH starts; a desktop's
+        # runs it inline.
+        self.assertIn('[ "$manager" != none ] || exit 0', image.customization_script())
+        with patch.object(image.os, "geteuid", return_value=1000):
+            command = image.mmdebstrap_command(image.options({"desktop": image.CONSOLE}),
+                                               Path("/w/r.tar"), Path("/w/c.sh"), Path("/w/p"))
+        hooks = [arg[len("--customize-hook="):] for arg in command
+                 if arg.startswith("--customize-hook=")]
+        order = [next(i for i, hook in enumerate(hooks) if marker in hook) for marker in (
+            "antinomie-customize.sh debian", 'mkdir "$1/tmp/uefi-root"',
+            "boot-loader.sh bios", "boot-loader.sh uefi", 'chroot "$1" sh /tmp/finish.sh',
+            "debian-uefi-delta.py\" \"$1\"", 'rm -rf --one-file-system "$1/tmp/uefi-root"',
+            "download /tmp/uefi-root.tar", "download /tmp/packages.tsv", "inode-times")]
+        self.assertEqual(order, sorted(order), hooks)
+        copy = next(hook for hook in hooks if 'mkdir "$1/tmp/uefi-root"' in hook)
+        self.assertIn("--exclude='./dev/*'", copy)
+        desktop = image.mmdebstrap_command(image.options({}), Path("/w/r.tar"), Path("/w/c.sh"),
+                                           Path("/w/p"))
+        self.assertFalse(any("uefi" in arg for arg in desktop))
+
+    def test_the_delta_holds_what_the_uefi_system_changes(self):
+        delta_spec = importlib.util.spec_from_file_location(
+            "uefi_delta", REPO / "scripts/debian-uefi-delta.py")
+        delta = importlib.util.module_from_spec(delta_spec)
+        delta_spec.loader.exec_module(delta)
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            bios, uefi = root / "bios", root / "uefi"
+            for system in (bios, uefi):
+                for path in ("usr/lib/grub", "etc", "tmp", "proc/1"):
+                    (system / path).mkdir(parents=True)
+                (system / "etc/hostname").write_text("debian\n")
+                os.utime(system / "etc/hostname", (100, 100))
+                (system / "tmp/scratch").write_text("x")
+            (bios / "usr/lib/grub/i386-pc").mkdir()
+            (bios / "usr/lib/grub/i386-pc/boot.img").write_bytes(b"mbr")
+            (uefi / "usr/lib/grub/x86_64-efi").mkdir()
+            (uefi / "usr/lib/grub/x86_64-efi/grub.efi").write_bytes(b"efi")
+            (uefi / "tmp/other").write_text("y")
+            for system in (bios, uefi):
+                for directory in ("usr/lib/grub", "usr/lib", "usr", "etc", "tmp", "proc"):
+                    os.utime(system / directory, (200, 200))
+            out = root / "delta.tar"
+            layout = root / "layout.json"
+            with patch.object(sys, "argv", ["x", str(bios), str(uefi), str(out), str(layout)]):
+                delta.main()
+            with tarfile.open(out) as archive:
+                names = archive.getnames()
+            self.assertEqual(names, ["usr/lib/grub/x86_64-efi", "usr/lib/grub/x86_64-efi/grub.efi"])
+            record = json.loads(layout.read_text())
+            self.assertEqual(record["removed"], ["usr/lib/grub/i386-pc/boot.img",
+                                                 "usr/lib/grub/i386-pc"])
+            self.assertEqual(set(record["times"]), set(names))
+            # The app's record: geometry, removals and times per path.
+            staging = root / "staging"
+            bundle = root / "bundle"
+            staging.mkdir()
+            bundle.mkdir()
+            shutil.copy2(out, staging / "uefi-root.tar")
+            shutil.copy2(layout, staging / "uefi-layout.json")
+            summary = image.uefi_layout(staging, bundle)
+            self.assertEqual(summary, {"paths": 2, "removed": 2})
+            written = json.loads((bundle / "uefi-layout.json").read_text())
+            self.assertEqual(written["label"], "gpt")
+            self.assertEqual(written["esp"]["first_sector"], 2048)
+            self.assertEqual(written["root"]["first_sector"], (650 << 20) // 512)
+            self.assertEqual(written["esp"]["first_sector"] + written["esp"]["sectors"],
+                             written["root"]["first_sector"])
+            times = written["times"]["usr/lib/grub/x86_64-efi/grub.efi"]
+            self.assertEqual(len(times), 4)
+            self.assertLessEqual(times[3], times[1])
+            with tarfile.open(bundle / "uefi-root.tar.xz") as archive:
+                self.assertEqual(archive.getnames(), names)
+            self.assertFalse((staging / "uefi-root.tar").exists())
 
 
 class DebianImageTests(unittest.TestCase):
@@ -287,7 +468,7 @@ class DebianImageTests(unittest.TestCase):
         manifest = (REPO / "src/antinomie/packaging/debian-minimal-trixie/packages.txt").read_text()
         requested = [line.split()[1] for line in manifest.splitlines()
                      if line.startswith("requested ")]
-        self.assertEqual(requested, list(image.packages("none")))
+        self.assertEqual(requested, list(image.requested_packages("none")))
         resolved = [line.split("\t") for line in manifest.splitlines()
                     if line.startswith("installed\t")]
         names = {fields[1].split(":")[0] for fields in resolved}

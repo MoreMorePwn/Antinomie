@@ -112,7 +112,13 @@ The **Base images** section in the left sidebar lists installed bases. Use
   kernel, so it builds in minutes once that kernel is cached. Its kernel must
   report Debian's own build string, compiler and linker versions included, so
   it builds natively only on a Debian 13 host (gcc-14 14.2.0-19, binutils
-  2.44); elsewhere Automatic picks the QEMU builder.
+  2.44); elsewhere Automatic picks the QEMU builder. A Debian Minimal VM whose
+  stealth profile boots UEFI gets a UEFI PC's disk (GPT, an EFI system
+  partition, GRUB for UEFI with the shim, a `debian` firmware boot entry): the
+  first such VM of a base lays that disk out once (a progress window shows the
+  steps; it needs about the base's size in free space), and later ones share
+  it. The firmware of an existing VM cannot be switched between BIOS and UEFI;
+  create a new VM instead.
 
 Bases are read-only templates. Right-click a base to make a **New VM from this
 base** or to **Delete base**. Deleting is refused while any VM still uses it.

@@ -653,7 +653,7 @@ pub(crate) fn preflight_restore(
         options,
         vm,
         &owned(&directory, &record.disk)?,
-        &bundle.base_disk,
+        bundle.vm_disk(),
     )?;
     if !boot_from_disk && record.checkpoint.mode == VmSnapshotMode::Full {
         let path = owned(
@@ -933,6 +933,7 @@ mod tests {
                 built_with: None,
                 min_app_version: None,
                 name: None,
+                uefi: Default::default(),
             }
             .install(&options)
             .unwrap();

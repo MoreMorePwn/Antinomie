@@ -169,6 +169,30 @@ impl MonitorApp {
             self.about_open = open;
         }
         crate::query::guide(ctx);
+        // A base's UEFI disk being laid out for its first UEFI VM (once).
+        if let Some(progress) = self.snapshot.base_layout.clone() {
+            crate::widgets::window("Preparing the UEFI disk")
+                .id(egui::Id::new("base_uefi_layout"))
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(format!(
+                            "Laying out the UEFI disk of base {}: {}",
+                            progress.base, progress.stage
+                        ));
+                    });
+                    ui.label(
+                        RichText::new(
+                            "Once per base: its UEFI VMs share this disk, laid out as the \
+                             Debian installer lays out a UEFI PC. BIOS VMs keep the base's disk.",
+                        )
+                        .color(theme::muted()),
+                    );
+                });
+        }
         if self.build_open {
             let mut open = true;
             let build = self.snapshot.build.clone();

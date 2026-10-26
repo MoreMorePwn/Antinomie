@@ -6,6 +6,14 @@ it runs.
 
 ## 0.8.0 — unreleased
 
+- **Debian Minimal VMs with a UEFI profile get a UEFI PC's disk.** GPT with
+  an EFI system partition, GRUB for UEFI and the shim installed as the Debian
+  installer installs them (no grub-pc), `/boot/efi` in fstab, and a `debian`
+  boot entry first in the VM's firmware. The app lays the disk out once per
+  base, beside it, for the base's first UEFI VM (progress window, refused
+  cleanly without the room); BIOS VMs are unchanged. Needs a base built by
+  this version.
+
 - **Debian Minimal disks carry GRUB's boot code.** Provisioning runs
   `grub-install` as the installer does, so the VM's MBR and `/boot/grub` hold
   GRUB (and debconf its install device) instead of an empty boot sector.

@@ -288,6 +288,7 @@ impl Machine {
             built_with: None,
             min_app_version: None,
             name: None,
+            uefi: Default::default(),
         }
         .install(&worker.options)
         .unwrap();

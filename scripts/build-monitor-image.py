@@ -300,9 +300,12 @@ def initrd_tree(root):
     for directory in ("bin", "dev", "proc", "sys", "newroot"):
         (root / directory).mkdir(parents=True, exist_ok=True)
     install_binary("/usr/bin/busybox", root, "/bin/busybox")
-    for applet in ("sh", "mount", "mkdir", "sleep", "switch_root", "echo", "cat", "findfs"):
+    for applet in ("sh", "mount", "mkdir", "sleep", "switch_root", "echo", "cat", "findfs",
+                   "dd", "od", "tr", "cut", "sed", "ls", "readlink", "basename", "rm"):
         (root / "bin" / applet).symlink_to("busybox")
     install_binary(shutil.which("resize2fs"), root, "/bin/resize2fs")
+    # efivarfs marks the boot variables immutable; BootOrder is rewritten.
+    install_binary(shutil.which("chattr"), root, "/bin/chattr")
     write_file(root, "/init", """#!/bin/sh
 export PATH=/bin
 mount -t devtmpfs devtmpfs /dev
@@ -349,6 +352,68 @@ if [ ! -e "/sys/class/block/${root#/dev/}/partition" ]; then
 fi
 if [ $mode = ro ]; then
     mount -o remount,ro /newroot
+fi
+# UEFI: the installer's grub-install leaves a "debian" boot entry, first in
+# the boot order, for the shim on the EFI system partition. This VM's own
+# variable store gets it at boot when its root disk is GPT with an ESP first
+# (Debian Minimal's UEFI disk), pointing at that partition, as efibootmgr
+# writes it: HD(1,GPT,<partition GUID>,<start>,<size>)/File(\\EFI\\debian\\shimx64.efi).
+efi_hex() { dd if=$1 bs=512 skip=$2 count=1 2>/dev/null | od -An -v -tx1 | tr -d ' \n'; }
+efi_le() {
+    v=$1 r=
+    while [ -n "$v" ]; do r=$(echo "$v" | cut -c1-2)$r; v=$(echo "$v" | cut -c3-); done
+    echo $((0x$r))
+}
+efi_u64() {
+    printf '%016x' $1 | sed 's/\\(..\\)\\(..\\)\\(..\\)\\(..\\)\\(..\\)\\(..\\)\\(..\\)\\(..\\)/\\8\\7\\6\\5\\4\\3\\2\\1/'
+}
+efi_write() {
+    printf "$(echo $2 | sed 's/../\\\\x&/g')" > /efivar
+    [ ! -e $1 ] || chattr -i $1
+    cat /efivar > $1
+}
+efi_entry() {
+    vars=/sys/firmware/efi/efivars guid=8be4df61-93ca-11d2-aa0d-00e098032b8c
+    mount -t efivarfs efivarfs $vars 2>/dev/null
+    header=$(efi_hex $1 1)
+    [ "$(echo $header | cut -c1-16)" = 4546492050415254 ] || return 0
+    entry=$(efi_hex $1 $(efi_le $(echo $header | cut -c145-160)) | cut -c1-96)
+    [ "$(echo $entry | cut -c1-32)" = 28732ac11ff8d211ba4b00a0c93ec93b ] || return 0
+    first=$(efi_le $(echo $entry | cut -c65-80))
+    size=$(($(efi_le $(echo $entry | cut -c81-96)) - first + 1))
+    option=010000006200640065006200690061006e000000
+    option=${option}04012a0001000000$(efi_u64 $first)$(efi_u64 $size)$(echo $entry | cut -c33-64)0202
+    option=${option}040434005c004500460049005c00640065006200690061006e005c007300680069006d007800360034002e0065006600690000007fff0400
+    number=
+    for var in $vars/Boot[0-9A-F][0-9A-F][0-9A-F][0-9A-F]-$guid; do
+        [ -e $var ] || continue
+        data=$(od -An -v -tx1 $var | tr -d ' \n' | cut -c9-)
+        [ "$data" = "$option" ] && return 0
+        # An older entry of its own (the disk was laid out again): replaced.
+        [ "$(echo $data | cut -c13-40)" = 640065006200690061006e000000 ] && number=${var#$vars/Boot}
+    done
+    number=${number%%-*}
+    if [ -z "$number" ]; then
+        n=0
+        while [ -e $vars/Boot$(printf %04X $n)-$guid ]; do n=$((n + 1)); done
+        number=$(printf %04X $n)
+    fi
+    efi_write $vars/Boot$number-$guid 07000000$option
+    own=$(echo $number | sed 's/\\(..\\)\\(..\\)/\\2\\1/')
+    order=$own
+    if [ -e $vars/BootOrder-$guid ]; then
+        rest=$(od -An -v -tx1 $vars/BootOrder-$guid | tr -d ' \n' | cut -c9-)
+        while [ -n "$rest" ]; do
+            item=$(echo $rest | cut -c1-4) rest=$(echo $rest | cut -c5-)
+            [ "$item" = $own ] || order=$order$item
+        done
+    fi
+    efi_write $vars/BootOrder-$guid 07000000$order
+    rm -f /efivar
+}
+part=${root#/dev/}
+if [ -d /sys/firmware/efi ] && [ -e /sys/class/block/$part/partition ]; then
+    efi_entry /dev/$(basename $(readlink -f /sys/class/block/$part/..)) || echo 'Boot entry not written'
 fi
 mount --move /dev /newroot/dev
 mount --move /proc /newroot/proc
