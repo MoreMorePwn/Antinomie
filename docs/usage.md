@@ -109,7 +109,10 @@ The **Base images** section in the left sidebar lists installed bases. Use
   is installed or inside a QEMU builder VM otherwise, and installs the result.
   Debian Minimal has no desktop: it boots to a console login (the program
   terminals stay in the app, as with BusyBox), keeps APT, and shares BusyBox's
-  kernel, so it builds in minutes once that kernel is cached.
+  kernel, so it builds in minutes once that kernel is cached. Its kernel must
+  report Debian's own build string, compiler and linker versions included, so
+  it builds natively only on a Debian 13 host (gcc-14 14.2.0-19, binutils
+  2.44); elsewhere Automatic picks the QEMU builder.
 
 Bases are read-only templates. Right-click a base to make a **New VM from this
 base** or to **Delete base**. Deleting is refused while any VM still uses it.

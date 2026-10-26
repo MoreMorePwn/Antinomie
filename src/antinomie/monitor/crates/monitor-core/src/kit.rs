@@ -221,6 +221,29 @@ pub(crate) fn orig_input() -> Result<OrigInput, String> {
     })
 }
 
+/// Debian's compiler and linker as its build of the pinned package recorded
+/// them in the kernel banner (the adapter's `KERNEL_BANNER`): the version
+/// lines Debian Minimal's kernel must be built with.
+pub(crate) fn debian_toolchain() -> Result<(String, String), String> {
+    let adapter = String::from_utf8_lossy(kit_file(ADAPTER)?).into_owned();
+    let banner = adapter
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("KERNEL_BANNER="))
+        .map(|value| value.trim_matches(|c| c == '"' || c == '\''))
+        .ok_or("adapter lacks KERNEL_BANNER")?;
+    toolchain_of(banner).ok_or_else(|| "adapter KERNEL_BANNER is not a kernel banner".into())
+}
+
+/// The compiler and linker lines of a banner such as `Linux version R (B)
+/// (CC, GNU ld ...) #1 ...`.
+fn toolchain_of(banner: &str) -> Option<(String, String)> {
+    let rest = banner.strip_prefix("Linux version ")?;
+    let (_, rest) = rest.split_once(") (")?;
+    let (tools, _) = rest.rsplit_once(") #")?;
+    let (cc, ld) = tools.rsplit_once(", GNU ld ")?;
+    Some((cc.to_owned(), format!("GNU ld {ld}")))
+}
+
 fn sha256_file(path: &Path) -> Result<String, String> {
     let mut file = fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut digest = Sha256::new();
@@ -338,6 +361,18 @@ mod tests {
         assert_eq!(input.size, 151_297_764);
         assert_eq!(input.sha256.len(), 64);
         assert_eq!(input.sha1.len(), 40);
+    }
+
+    #[test]
+    fn debian_minimal_toolchain_is_the_one_in_debians_banner() {
+        assert_eq!(
+            debian_toolchain().unwrap(),
+            (
+                "x86_64-linux-gnu-gcc-14 (Debian 14.2.0-19) 14.2.0".to_owned(),
+                "GNU ld (GNU Binutils for Debian) 2.44".to_owned()
+            )
+        );
+        assert_eq!(toolchain_of("Linux version 6.12.94 (a@b) #1 SMP"), None);
     }
 
     #[test]

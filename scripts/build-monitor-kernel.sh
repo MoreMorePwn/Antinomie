@@ -6,6 +6,9 @@
 #
 # Environment: ANTINOMIE_SOURCE_TREE, ANTINOMIE_BUILD_TREE, ANTINOMIE_DEBIAN_CONFIG
 # and ANTINOMIE_SERIES_DIR replace the repository work-tree defaults.
+# ANTINOMIE_PRINT_TOOLCHAIN=1 prints the compiler's and the linker's version
+# lines as the kernel records them in its banner ("cc: ...", "ld: ...") and
+# builds nothing.
 # ANTINOMIE_SOURCE_PREPARED=1 states that the caller (scripts/build-base.py)
 # created the source tree itself from the pinned inputs and ANTINOMIE_SERIES_DIR,
 # so the author-tree git check is skipped. ANTINOMIE_CCACHE_DIR compiles through
@@ -32,6 +35,18 @@ case "$profile" in
     debian) build_tree=${ANTINOMIE_BUILD_TREE:-"$repo/work/monitor-build-debian"} ;;
     *) echo "usage: $0 [minimal|debian]" >&2; exit 2 ;;
 esac
+# The minimal profile compiles with Debian 13's own compiler where the host has
+# it (Debian's kernel build names x86_64-linux-gnu-gcc-14, as /proc/version
+# then shows); the debian profile keeps the host's gcc. The banner records the
+# first line of each tool's --version (scripts/mkcompile_h, CC_VERSION_TEXT).
+cc=gcc
+if [[ $profile == minimal ]] && command -v x86_64-linux-gnu-gcc-14 >/dev/null; then
+    cc=x86_64-linux-gnu-gcc-14
+fi
+if [[ ${ANTINOMIE_PRINT_TOOLCHAIN:-0} == 1 ]]; then
+    printf 'cc: %s\nld: %s\n' "$("$cc" --version | head -n 1)" "$(ld --version | head -n 1)"
+    exit 0
+fi
 if [[ ! -f "$source_tree/kernel/antinomie/recorder.c" ]]; then
     echo "Guest recorder source missing from author tree" >&2
     exit 1
@@ -44,13 +59,6 @@ config="$source_tree/scripts/config"
 # A new patch series changes the source id in every object's configuration
 # header but not their preprocessed code: ccache's preprocessor mode still
 # hits, so only the files the series touched are compiled again.
-# The minimal profile compiles with Debian 13's own compiler where the host has
-# it (Debian's kernel build names x86_64-linux-gnu-gcc-14, as /proc/version
-# then shows); the debian profile keeps the host's gcc.
-cc=gcc
-if [[ $profile == minimal ]] && command -v x86_64-linux-gnu-gcc-14 >/dev/null; then
-    cc=x86_64-linux-gnu-gcc-14
-fi
 compiler=()
 [[ $cc == gcc ]] || compiler=(CC="$cc" HOSTCC="$cc")
 if [[ -n ${ANTINOMIE_CCACHE_DIR:-} ]] && command -v ccache >/dev/null; then
@@ -232,6 +240,19 @@ if [[ $profile == minimal ]]; then
     rm -rf "$build_tree/modules-install"
     make -C "$source_tree" O="$build_tree" "${compiler[@]}" LOCALVERSION= \
         INSTALL_MOD_PATH="$build_tree/modules-install" INSTALL_MOD_STRIP=1 modules_install >/dev/null
+    # The banner /proc/version shows. Debian Minimal's must be Debian's own
+    # (KERNEL_BANNER, which build-debian-image.py checks); only Debian 13's
+    # compiler and linker write it.
+    banner=$(strings -n 40 "$build_tree/vmlinux" | grep -m 1 '^Linux version .* #[0-9]' || true)
+    printf '%s\n' "$banner" > "$build_tree/kernel-banner"
+    echo "kernel banner: $banner" >&2
+    expected=$(adapter_value KERNEL_BANNER)
+    expected=${expected#\'}
+    expected=${expected%\'}
+    if [[ $banner != "$expected" ]]; then
+        echo "warning: the banner is not Debian's ($expected); Debian Minimal needs a kernel" \
+            "built with Debian 13's toolchain" >&2
+    fi
     echo "$build_tree/arch/x86/boot/bzImage"
     exit 0
 fi

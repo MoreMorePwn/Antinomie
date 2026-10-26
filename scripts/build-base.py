@@ -38,6 +38,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -76,6 +77,10 @@ def checksum(path):
     return digest.hexdigest()
 
 
+# Debian's banner: release, build user, compiler, linker and build string.
+BANNER = re.compile(r"Linux version (\S+) \((\S+)\) \((.+), (GNU ld [^,]+)\) (#\d+ .+)")
+
+
 def adapter():
     values = {}
     for line in ADAPTER.read_text().splitlines():
@@ -93,6 +98,36 @@ def series_hash():
         raise RuntimeError(f"no core patches in {SERIES}")
     listing = "".join(f"{checksum(patch)}  {patch.name}\n" for patch in patches)
     return hashlib.sha256(listing.encode()).hexdigest()
+
+
+def toolchain(kernel_profile):
+    """The compiler's and linker's version lines the kernel build script would
+    record in the kernel's banner, as {"cc": ..., "ld": ...}."""
+    output = subprocess.run(["bash", str(KIT / "scripts/build-monitor-kernel.sh"), kernel_profile],
+                            env=os.environ | {"ANTINOMIE_PRINT_TOOLCHAIN": "1"},
+                            capture_output=True, text=True, check=True).stdout
+    return dict(line.split(": ", 1) for line in output.splitlines() if ": " in line)
+
+
+def debian_toolchain():
+    """Debian's compiler and linker lines, from the pinned kernel banner."""
+    match = BANNER.fullmatch(adapter()["KERNEL_BANNER"])
+    if not match:
+        raise RuntimeError("adapter.conf KERNEL_BANNER is not a kernel banner")
+    return {"cc": match[3], "ld": match[4]}
+
+
+def require_debian_toolchain(kernel_profile):
+    """Debian Minimal's kernel must carry Debian's banner, which only Debian
+    13's compiler and linker write: refuse another toolchain before building."""
+    found, wanted = toolchain(kernel_profile), debian_toolchain()
+    for tool in ("cc", "ld"):
+        if found.get(tool) != wanted[tool]:
+            raise RuntimeError(
+                f"this host's kernel {'compiler' if tool == 'cc' else 'linker'} is "
+                f"{found.get(tool) or 'missing'!r}, not Debian 13's {wanted[tool]!r}: Debian "
+                "Minimal's kernel banner (/proc/version) must be Debian's own; build it in "
+                "the QEMU builder (Debian 13) or on a Debian 13 host")
 
 
 def load_job(path):
@@ -224,9 +259,12 @@ def keep_artifacts(build, work):
 
 
 def kernel_identity(kernel_profile):
+    """What a cached kernel must have been built from: the series, the
+    scripts, and the compiler and linker (their versions are in its banner)."""
     return {"format": 1, "profile": kernel_profile, "series": series_hash(),
             "kernel_script_sha256": checksum(KIT / "scripts/build-monitor-kernel.sh"),
-            "symbols_script_sha256": checksum(KIT / "scripts/make-kernel-symbols.py")}
+            "symbols_script_sha256": checksum(KIT / "scripts/make-kernel-symbols.py"),
+            "toolchain": toolchain(kernel_profile)}
 
 
 def load_cached_kernel(cache, kernel_profile, work):
@@ -339,6 +377,8 @@ def main():
             raise RuntimeError(f"{args.output} already exists")
         args.work.mkdir(parents=True, exist_ok=True)
         kernel_profile = PROFILES[profile][0]
+        if profile == "debian-minimal":
+            require_debian_toolchain(kernel_profile)
         kernel_space, image_space = PROFILES[profile][3]
         build = load_cached_kernel(args.kernel_cache, kernel_profile, args.work)
         if build is None:

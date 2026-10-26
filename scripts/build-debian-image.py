@@ -30,6 +30,7 @@ import uuid
 
 REPO = Path(__file__).resolve().parent.parent
 DEFAULT_OUT = REPO / "work/debian-xfce-base"
+ADAPTER = REPO / "src/antinomie/packaging/debian-6.12.94-1-trixie/adapter.conf"
 # The Debian installer's desktop choices: tasksel task, display manager,
 # default session (an xsessions or wayland-sessions entry), label, minimum RAM.
 DESKTOPS = {
@@ -234,6 +235,45 @@ def kernel_release(kernel):
     if not re.match(r"6\.12\.94(?:[-+ ]|$)", release):
         raise RuntimeError("kernel must retain pinned Linux 6.12.94")
     return release
+
+
+def kernel_banner(kernel):
+    """The kernel's banner (linux_banner: release, build user, compiler,
+    linker, build string), from its bzImage's compressed payload (gzip, xz or,
+    with the zstd tool, zstd)."""
+    import lzma
+    import zlib
+    data = kernel.read_bytes()
+    if len(data) < 0x250 or data[0x202:0x206] != b"HdrS":
+        raise RuntimeError("kernel must be an x86 Linux bzImage")
+    offset, length = struct.unpack_from("<II", data, 0x248)
+    begin = ((data[0x1f1] or 4) + 1) * 512 + offset
+    payload = data[begin:begin + length]
+    try:
+        if payload.startswith(b"\x1f\x8b"):
+            vmlinux = zlib.decompressobj(16 + zlib.MAX_WBITS).decompress(payload, 512 << 20)
+        elif payload.startswith(b"\xfd7zXZ"):
+            vmlinux = lzma.LZMADecompressor().decompress(payload, 512 << 20)
+        elif payload.startswith(b"\x28\xb5\x2f\xfd") and shutil.which("zstd"):
+            # Without the uncompressed size the kernel's build appends.
+            vmlinux = subprocess.run(["zstd", "-q", "-d", "-c"], input=payload[:-4], check=True,
+                                     capture_output=True).stdout
+        else:
+            raise RuntimeError("unsupported bzImage compression")
+    except (zlib.error, lzma.LZMAError, subprocess.CalledProcessError) as error:
+        raise RuntimeError(f"cannot unpack the kernel image: {error}") from error
+    match = re.search(rb"Linux version [ -~]+ #\d+ [ -~]+", vmlinux)
+    if not match:
+        raise RuntimeError("the kernel image has no banner")
+    return match[0].decode()
+
+
+def debian_banner():
+    """Debian's own banner for the pinned package (adapter.conf KERNEL_BANNER)."""
+    for line in ADAPTER.read_text().splitlines():
+        if line.startswith("KERNEL_BANNER="):
+            return line.split("=", 1)[1].strip("'\"")
+    raise RuntimeError("adapter.conf has no KERNEL_BANNER")
 
 
 def module_tree(modules, release):
@@ -1285,6 +1325,13 @@ def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=Fa
             if release.split()[0] != DEBIAN_KERNEL_PACKAGES[0][0].removeprefix("linux-image-"):
                 raise RuntimeError(f"kernel release {release.split()[0]} is not Debian's "
                                    f"{DEBIAN_KERNEL_PACKAGES[0][0]}")
+            # /proc/version beside Debian's /boot/vmlinuz: the same banner,
+            # down to the compiler and linker versions.
+            banner = kernel_banner(kernel)
+            if banner != debian_banner():
+                raise RuntimeError(f"the kernel's banner {banner!r} is not Debian's "
+                                   f"{debian_banner()!r}; build it with Debian 13's compiler "
+                                   "and linker (the QEMU builder)")
             packages_dir = staging / "kernel-packages"
             packages_dir.mkdir()
             packages_dir.chmod(0o755)
@@ -1322,6 +1369,7 @@ def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=Fa
                   "requested_packages": list(packages(values["desktop"])),
                   "package_inventory": "packages.tsv",
                   "kernel_sha256": hashes["kernel"], "kernel_release": release,
+                  "kernel_banner": kernel_banner(kernel),
                   "tools": {tool: subprocess.run([tool, "--version"], capture_output=True,
                                                  text=True).stdout.strip().splitlines()[0]
                             for tool in ("mmdebstrap", "qemu-img")}}

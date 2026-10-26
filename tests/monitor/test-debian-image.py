@@ -673,6 +673,56 @@ class DebianImageTests(unittest.TestCase):
                     with self.assertRaises(RuntimeError):
                         image.kernel_release(kernel)
 
+    def test_debian_minimal_kernel_carries_debians_banner(self):
+        import gzip
+
+        def bzimage(banner):
+            payload = gzip.compress(b"\0" * 64 + banner.encode() + b"\n\0" + b"\0" * 64)
+            data = bytearray(0x400)
+            data[0x1f1] = 1
+            data[0x202:0x206] = b"HdrS"
+            struct.pack_into("<II", data, 0x248, 0, len(payload))
+            return bytes(data) + payload
+
+        debian = image.debian_banner()
+        # Debian's build of the pinned package, from its /boot/vmlinuz.
+        self.assertEqual(debian, "Linux version 6.12.94+deb13-amd64 (debian-kernel@lists.debian.org) "
+                         "(x86_64-linux-gnu-gcc-14 (Debian 14.2.0-19) 14.2.0, GNU ld (GNU Binutils "
+                         "for Debian) 2.44) #1 SMP PREEMPT_DYNAMIC Debian 6.12.94-1 (2026-06-20)")
+        with tempfile.TemporaryDirectory() as name:
+            kernel = Path(name) / "kernel"
+            kernel.write_bytes(bzimage(debian))
+            self.assertEqual(image.kernel_banner(kernel), debian)
+            # The same kernel linked by a newer binutils is refused for the console base.
+            other = debian.replace("GNU ld (GNU Binutils for Debian) 2.44",
+                                   "GNU ld (GNU Binutils for Debian) 2.47")
+            kernel.write_bytes(bzimage(other))
+            self.assertEqual(image.kernel_banner(kernel), other)
+            helpers = unittest.mock.Mock()
+            helpers.fixed_display_config.return_value = False
+            with patch.object(image, "kernel_release", return_value="6.12.94+deb13-amd64"), \
+                    patch.object(image, "monitor_helpers", return_value=helpers), \
+                    self.assertRaisesRegex(RuntimeError, "2.47.*is not Debian's"):
+                image.build(kernel, Path(name) / "out", values={"desktop": image.CONSOLE},
+                            allow_unversioned=True)
+            self.assertFalse((Path(name) / "out").exists())
+            kernel.write_bytes(b"not a kernel")
+            with self.assertRaisesRegex(RuntimeError, "bzImage"):
+                image.kernel_banner(kernel)
+
+    @unittest.skipUnless(os.environ.get("ANTINOMIE_NETWORK_TESTS") and shutil.which("zstd"),
+                         "set ANTINOMIE_NETWORK_TESTS=1 (and install zstd) to read Debian's image")
+    def test_pinned_banner_is_the_one_in_debians_image(self):
+        with tempfile.TemporaryDirectory() as name:
+            work = Path(name)
+            deb = image.debian_kernel_debs(None, work)[0]
+            listing = subprocess.run(["dpkg-deb", "--fsys-tarfile", str(deb)], check=True,
+                                     capture_output=True).stdout
+            with tarfile.open(fileobj=io.BytesIO(listing)) as archive:
+                vmlinuz = archive.extractfile("./boot/vmlinuz-6.12.94+deb13-amd64").read()
+            (work / "vmlinuz").write_bytes(vmlinuz)
+            self.assertEqual(image.kernel_banner(work / "vmlinuz"), image.debian_banner())
+
     def test_console_disk_is_the_installers_partitioned_disk(self):
         if not shutil.which("sfdisk"):
             self.skipTest("needs sfdisk")

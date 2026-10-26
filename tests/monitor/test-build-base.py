@@ -27,6 +27,39 @@ class BuildBaseTests(unittest.TestCase):
         self.assertEqual(len(conf["INPUT_SHA_ORIG"]), 64)
         self.assertEqual(base.checksum(REPO / conf["INPUT_DEBTAR"]), conf["INPUT_SHA_DEBTAR"])
 
+    def test_debian_minimal_needs_the_toolchain_debians_banner_names(self):
+        # The kernel build script reports what it would compile and link with.
+        found = base.toolchain("minimal")
+        self.assertEqual(set(found), {"cc", "ld"})
+        self.assertTrue(found["ld"].startswith("GNU ld"))
+        self.assertEqual(base.debian_toolchain(),
+                         {"cc": "x86_64-linux-gnu-gcc-14 (Debian 14.2.0-19) 14.2.0",
+                          "ld": "GNU ld (GNU Binutils for Debian) 2.44"})
+        trixie = base.debian_toolchain()
+        with unittest.mock.patch.object(base, "toolchain", return_value=trixie):
+            base.require_debian_toolchain("minimal")
+        newer = dict(trixie, ld="GNU ld (GNU Binutils for Debian) 2.47")
+        with unittest.mock.patch.object(base, "toolchain", return_value=newer), \
+                self.assertRaisesRegex(RuntimeError, "2.47.*QEMU builder"):
+            base.require_debian_toolchain("minimal")
+        # The orchestrator refuses before preparing any source.
+        with tempfile.TemporaryDirectory() as name, \
+                unittest.mock.patch.object(base, "toolchain", return_value=newer):
+            job = Path(name) / "job.json"
+            job.write_text(json.dumps({"format": 1, "profile": "debian-minimal"}))
+            result = subprocess.run(
+                ["python3", "-c", "import sys,runpy; sys.argv=sys.argv[1:]; "
+                 "runpy.run_path(sys.argv[0], run_name='__main__')",
+                 str(REPO / "scripts/build-base.py"), "--job", str(job), "--inputs", name,
+                 "--work", str(Path(name) / "work"), "--output", str(Path(name) / "out")],
+                capture_output=True, text=True)
+            if base.toolchain("minimal") != trixie:
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("::error this host's kernel", result.stdout)
+                self.assertFalse((Path(name) / "work/source").exists())
+        # A cached kernel names the toolchain that built it.
+        self.assertEqual(base.kernel_identity("minimal")["toolchain"], found)
+
     def test_jobs_accept_only_the_options_a_profile_offers(self):
         with tempfile.TemporaryDirectory() as name:
             job = Path(name) / "job.json"

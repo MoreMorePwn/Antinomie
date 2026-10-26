@@ -6,6 +6,14 @@ it runs.
 
 ## 0.8.0 — unreleased
 
+- **Debian Minimal's kernel banner is Debian's.** `/proc/version` now matches
+  the banner of Debian's own `/boot/vmlinuz` exactly, down to the linker
+  version (a Kali or Debian testing host linked it with binutils 2.47, Debian
+  13 with 2.44). Debian Minimal therefore builds natively only on a Debian 13
+  host; elsewhere Automatic builds it in the QEMU builder, and the build fails
+  if the banner differs. `/boot/System.map` stays Debian's placeholder, as on
+  every Debian install.
+
 - **Debian Minimal's initramfs is an installed system's.** Each VM's
   `/boot/initrd.img-*` names its own resume device (`conf/conf.d/resume`,
   the swap partition's UUID or `none`), as the installer's initramfs does,

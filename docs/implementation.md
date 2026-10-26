@@ -3313,6 +3313,42 @@ Debian's (`6.12.94+deb13-amd64`), it is compiled with
 string `/proc/version` shows), and the few modular options are built and
 installed so the base has a module tree.
 
+Debian Minimal's banner is Debian's own, byte for byte. Its `/boot` holds
+Debian's genuine image, whose `linux_banner` a program can unpack and compare
+with `/proc/version`, so the Antinomie kernel must name the same release,
+build user, compiler, linker and build string: `Linux version
+6.12.94+deb13-amd64 (debian-kernel@lists.debian.org) (x86_64-linux-gnu-gcc-14
+(Debian 14.2.0-19) 14.2.0, GNU ld (GNU Binutils for Debian) 2.44) #1 SMP
+PREEMPT_DYNAMIC Debian 6.12.94-1 (2026-06-20)`, read from that package's
+`/boot/vmlinuz` and pinned as the adapter's `KERNEL_BANNER` (a network test
+reads it from the pinned package again). The release, user and build string
+come from the adapter (`SOURCE_MAINTAINER`, `SOURCE_DATE_EPOCH`); the
+compiler and linker versions only from Debian 13's tools: gcc-14 14.2.0-19
+and binutils 2.44 (a host with a newer binutils, such as Kali's 2.47, writes
+its own version). So: `build-base.py` refuses a debian-minimal job before
+building when the kernel build script's compiler or linker
+(`ANTINOMIE_PRINT_TOOLCHAIN=1` prints their version lines) differs from the
+banner's (`require_debian_toolchain`); the app's Automatic mode builds Debian
+Minimal in the QEMU builder (Debian 13) on such a host, and Native says why it
+cannot (`native_obstacle`: `toolchain_obstacle`, the host's lines read once);
+the cached kernel's identity names the toolchain, so a BusyBox kernel linked
+by another binutils is never reused for it; the kernel build script logs the
+banner (`kernel-banner` in the build tree) and warns when it is not Debian's;
+and the image recipe refuses a console kernel whose banner (`kernel_banner`,
+unpacked from the bzImage) differs from `KERNEL_BANNER`, recording the banner
+in `build.json`. BusyBox keeps building natively with any toolchain.
+
+`/boot/System.map-6.12.94+deb13-amd64` stays the file Debian ships: the
+image package carries only a placeholder ("The real System.map is in the
+linux-image-<version>-dbg package"), so no installed Debian system has a
+symbol map to compare with `/proc/kallsyms` either, and `dpkg --verify` stays
+clean. What remains different cannot be made equal by any file in the image:
+the running kernel is another binary than Debian's, so its symbols and their
+offsets (`/proc/kallsyms`, as root) and its GNU build ID (`/sys/kernel/notes`,
+any user) differ from Debian's `-dbg` package and `/boot/vmlinuz`. Loading
+Debian's modules (a module ABI of Debian's) does not change that; only
+running Debian's own image would.
+
 Its kernel is the **minimal** profile, the BusyBox kernel: it builds in every
 driver and systemd prerequisite the console base uses (`CONSOLE_BUILTIN` is
 checked when no modules are given), so the base carries no modules and a

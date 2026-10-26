@@ -647,11 +647,73 @@ pub fn missing(kind: Kind, mode: BuildMode) -> Vec<ToolStatus> {
         .collect()
 }
 
+/// The first line of `program --version`, if it runs.
+fn version_line(program: &str) -> Option<String> {
+    let output = Command::new(program)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    Some(text.lines().next()?.trim().to_owned()).filter(|line| !line.is_empty())
+}
+
+/// The compiler and linker version lines a minimal-profile kernel built on
+/// this host records in its banner (the kernel build script's choice:
+/// Debian's `x86_64-linux-gnu-gcc-14` where present, else `gcc`), read once.
+fn host_toolchain() -> &'static (Option<String>, Option<String>) {
+    static TOOLCHAIN: std::sync::OnceLock<(Option<String>, Option<String>)> =
+        std::sync::OnceLock::new();
+    TOOLCHAIN.get_or_init(|| {
+        let cc = if which("x86_64-linux-gnu-gcc-14").is_some() {
+            "x86_64-linux-gnu-gcc-14"
+        } else {
+            "gcc"
+        };
+        (version_line(cc), version_line("ld"))
+    })
+}
+
+/// Why this host's toolchain cannot build Debian Minimal's kernel: its banner
+/// (`/proc/version`) must be Debian's own, compiler and linker versions
+/// included, which only Debian 13's tools write.
+fn toolchain_obstacle(
+    host: &(Option<String>, Option<String>),
+    debian: &(String, String),
+) -> Option<String> {
+    let (cc, ld) = host;
+    let differs = |found: &Option<String>, wanted: &str| found.as_deref() != Some(wanted);
+    if differs(cc, &debian.0) || differs(ld, &debian.1) {
+        let found = |tool: &Option<String>| tool.clone().unwrap_or_else(|| "none".into());
+        return Some(format!(
+            "this host's kernel toolchain ({}; {}) is not Debian 13's ({}; {}), whose \
+             versions Debian Minimal's kernel banner names: build in the QEMU builder",
+            found(cc),
+            found(ld),
+            debian.0,
+            debian.1
+        ));
+    }
+    None
+}
+
 /// Why native Debian builds cannot run here besides missing tools: rootless
-/// mmdebstrap needs a subordinate UID range for this user.
+/// mmdebstrap needs a subordinate UID range for this user, and Debian
+/// Minimal's kernel needs Debian 13's compiler and linker.
 pub fn native_obstacle(kind: Kind) -> Option<String> {
     if !kind.is_debian() {
         return None;
+    }
+    if kind == Kind::DebianMinimal {
+        match crate::kit::debian_toolchain() {
+            Ok(debian) => {
+                if let Some(obstacle) = toolchain_obstacle(host_toolchain(), &debian) {
+                    return Some(obstacle);
+                }
+            }
+            Err(error) => return Some(error),
+        }
     }
     let user = std::env::var("USER").unwrap_or_default();
     let uid = {
@@ -792,6 +854,26 @@ mod tests {
         (log, move |line: &str| {
             sink.lock().unwrap().push(line.to_string());
         })
+    }
+
+    #[test]
+    fn debian_minimal_needs_debian_13s_compiler_and_linker_natively() {
+        let debian = (
+            "x86_64-linux-gnu-gcc-14 (Debian 14.2.0-19) 14.2.0".to_owned(),
+            "GNU ld (GNU Binutils for Debian) 2.44".to_owned(),
+        );
+        let trixie = (Some(debian.0.clone()), Some(debian.1.clone()));
+        assert_eq!(toolchain_obstacle(&trixie, &debian), None);
+        // A newer binutils (Kali, Debian testing) writes another linker version.
+        let kali = (
+            Some(debian.0.clone()),
+            Some("GNU ld (GNU Binutils for Debian) 2.47".to_owned()),
+        );
+        let obstacle = toolchain_obstacle(&kali, &debian).unwrap();
+        assert!(obstacle.contains("2.47") && obstacle.contains("QEMU builder"));
+        assert!(toolchain_obstacle(&(None, trixie.1.clone()), &debian).is_some());
+        // Only Debian Minimal carries Debian's /boot to compare the banner with.
+        assert_eq!(native_obstacle(Kind::BusyBox), None);
     }
 
     #[test]
