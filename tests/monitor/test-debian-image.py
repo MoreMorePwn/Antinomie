@@ -22,6 +22,87 @@ image = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(image)
 
 
+helper_spec = importlib.util.spec_from_file_location(
+    "initrd_resume",
+    REPO / "src/antinomie/monitor/crates/monitor-core/src/guest_account/initrd_resume.py")
+initrd_resume = importlib.util.module_from_spec(helper_spec)
+helper_spec.loader.exec_module(initrd_resume)
+
+
+def newc(members):
+    """A newc archive of (name, mode, ino, nlink, mtime, body) members."""
+    entries = [[[ino, mode, 0, 0, nlink, mtime, 0, 8, 48, 0, 0, 0, 0], name, body]
+               for name, mode, ino, nlink, mtime, body in members]
+    entries.append([[0] * 5 + [0, 0, 0, 0, 0, 0, 0, 0], b"TRAILER!!!", b""])
+    return initrd_resume.write_archive(entries)
+
+
+class InitrdResumeTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("zstd"), "zstd is required")
+    def test_resume_goes_into_the_initramfs_as_update_initramfs_copies_it(self):
+        early = newc([(b"kernel", 0o40755, 7, 2, 100, b""),
+                      (b"kernel/x86/microcode.bin", 0o100644, 8, 1, 100, b"ucode")])
+        main = newc([(b".", 0o40755, 500, 4, 200, b""),
+                     (b"conf", 0o40755, 501, 3, 200, b""),
+                     (b"conf/arch.conf", 0o100644, 520, 1, 200, b"DPKG_ARCH=amd64\n"),
+                     (b"conf/conf.d", 0o40755, 502, 2, 200, b""),
+                     (b"conf/conf.d/zz-resume-auto", 0o100644, 522, 1, 200, b"RESUME=/dev/sdb2\n"),
+                     (b"conf/initramfs.conf", 0o100644, 521, 1, 150, b"MODULES=most\n"),
+                     (b"init", 0o100755, 510, 1, 150, b"#!/bin/sh\n"),
+                     (b"usr/bin/sh", 0o100755, 530, 2, 150, b""),
+                     (b"usr/bin/busybox", 0o100755, 530, 2, 150, b"\x7fELF")])
+        packed = subprocess.run(["zstd", "-q", "-9", "-c"], input=main, check=True,
+                                capture_output=True).stdout
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name) / "initrd.img-6.12.94+deb13-amd64"
+            path.write_bytes(early + packed)
+            os.utime(path, (1000, 2000))
+            rng = __import__("random").Random(7)
+            initrd_resume.patch_image(str(path), "RESUME=UUID=abc", 1900, (8, 1), rng)
+            data = path.read_bytes()
+            # The uncompressed archives before the main one stay as they were.
+            self.assertTrue(data.startswith(early))
+            self.assertEqual(os.stat(path).st_mtime, 2000)
+            head, rest = initrd_resume.split_image(data)
+            self.assertEqual(head, early)
+            unpacked = subprocess.run(["zstd", "-q", "-d", "-c"], input=rest, check=True,
+                                      capture_output=True).stdout
+            self.assertEqual(len(unpacked) % 512, 0)
+            members, _ = initrd_resume.read_archive(unpacked, 0)
+            names = [name for _, name, _ in members]
+            # Sorted in among the rest, the automatic choice gone, links kept.
+            self.assertEqual(names, [b".", b"conf", b"conf/arch.conf", b"conf/conf.d",
+                                     b"conf/conf.d/resume", b"conf/initramfs.conf", b"init",
+                                     b"usr/bin/sh", b"usr/bin/busybox", b"TRAILER!!!"])
+            by_name = {name: (fields, body) for fields, name, body in members}
+            fields, body = by_name[b"conf/conf.d/resume"]
+            self.assertEqual(body, b"RESUME=UUID=abc\n")
+            self.assertEqual(fields[initrd_resume.MODE], 0o100644)
+            self.assertEqual(fields[initrd_resume.MTIME], 1900)
+            self.assertEqual(fields[initrd_resume.NLINK], 1)
+            inos = [f[initrd_resume.INO] for f, name, _ in members if name != b"TRAILER!!!"]
+            self.assertEqual(len(set(inos)), len(inos) - 1)
+            self.assertEqual(by_name[b"usr/bin/sh"][0][0], by_name[b"usr/bin/busybox"][0][0])
+            # The build machine's device and inode numbers become this disk's.
+            for f, name, _ in members[:-1]:
+                self.assertEqual((f[initrd_resume.DEVMAJOR], f[initrd_resume.DEVMINOR]), (8, 1))
+            self.assertEqual(by_name[b"conf/initramfs.conf"][0][0] - by_name[b"."][0][0], 21)
+            self.assertLess(max(inos), os.statvfs("/").f_files)
+            # Provisioning again replaces the answer rather than adding one.
+            initrd_resume.patch_image(str(path), "RESUME=none", 1950, (8, 1), rng)
+            _, rest = initrd_resume.split_image(path.read_bytes())
+            members, _ = initrd_resume.read_archive(
+                subprocess.run(["zstd", "-q", "-d", "-c"], input=rest, check=True,
+                               capture_output=True).stdout, 0)
+            resumes = [body for _, name, body in members if name == b"conf/conf.d/resume"]
+            self.assertEqual(resumes, [b"RESUME=none\n"])
+            # Anything but a zstd main archive is refused, the file untouched.
+            path.write_bytes(early + b"\x1f\x8b" + packed)
+            with self.assertRaises(ValueError):
+                initrd_resume.patch_image(str(path), "RESUME=none", 1950, (8, 1), rng)
+            self.assertEqual(path.read_bytes(), early + b"\x1f\x8b" + packed)
+
+
 class DebianImageTests(unittest.TestCase):
     def test_mmdebstrap_is_authenticated_and_carries_the_answers(self):
         values = image.options({"hostname": "lab", "locale": "de_DE.UTF-8",
@@ -694,6 +775,26 @@ class DebianImageTests(unittest.TestCase):
         self.assertLess(modules, depmod)
         self.assertLess(depmod, verify)
         self.assertLess(verify, hooks.index("upload /w/c.sh /tmp/antinomie-customize.sh"))
+        # After the customization (whose packages have update-initramfs run
+        # again), the initramfs is built once more from Debian's own module
+        # index, as on any install, and the index of ours is restored.
+        rebuild = hooks.index(f'chroot "$1" sh -c {image.shlex.quote(image.initramfs_rebuild())}')
+        self.assertLess(hooks.index('rm -f "$1/tmp/antinomie-customize.sh"'), rebuild)
+        self.assertLess(rebuild, next(i for i, hook in enumerate(hooks) if "inode-times" in hook))
+        steps = image.initramfs_rebuild()
+        self.assertLess(steps.index("search kernel\\nexclude updates"),
+                        steps.index("update-initramfs -u -k 6.12.94+deb13-amd64"))
+        self.assertLess(steps.index("update-initramfs"), steps.index("search updates\\nexclude kernel"))
+        self.assertIn("lsinitramfs /boot/initrd.img-6.12.94+deb13-amd64 | grep -q "
+                      "'^usr/lib/modules/6.12.94+deb13-amd64/kernel/'", steps)
+        self.assertTrue(steps.endswith("! grep -qv '^updates/' "
+                                       "/usr/lib/modules/6.12.94+deb13-amd64/modules.dep"))
+        # Without modules of ours Debian's index stays and nothing is rebuilt.
+        with patch.object(image.os, "geteuid", return_value=1000):
+            plain = image.mmdebstrap_command(image.options({"desktop": image.CONSOLE}),
+                                             Path("/w/r.tar"), Path("/w/c.sh"), Path("/w/p"),
+                                             kernel_debs=(Path("/w/k/a.deb"),))
+        self.assertFalse(any("update-initramfs" in arg for arg in plain))
         # The customization purges Debian's kernels, not the console base's own.
         self.assertIn('($1 ~ /^linux-image-/ && keep != "none")', image.customization_script())
         # The cache knows the kernel inputs by their hashes.

@@ -26,6 +26,13 @@ const PROVISION_TIMEOUT: Duration = Duration::from_secs(240);
 const LEGACY_INTERFACE: &str = "enp0s25";
 /// What the guest prints before the account's password hash.
 const HASH_MARKER: &str = "hash:";
+/// Puts the resume device into the disk's initramfs images as
+/// update-initramfs does; it runs in the guest with the guest's python3 and
+/// zstd (both in the Debian Minimal base).
+const INITRD_RESUME: &str = include_str!("guest_account/initrd_resume.py");
+/// The partition the installer installed to, as fstab's comment names it
+/// (`/dev/sda1`): the device the initramfs's files were made on.
+const INSTALL_DEVICE: &str = "8:1";
 
 #[cfg(test)]
 thread_local! {
@@ -503,6 +510,10 @@ impl GuestAccount {
         let plan = layout
             .root_last
             .map(|root_last| partition_plan(layout.size / 512, root_last, ram_mib, None));
+        // A partitioned disk's initramfs gets its resume device; the helper
+        // reaches the appliance as a file (guestfish upload), since the
+        // script on standard input has to stay small.
+        let helper = plan.is_some().then(HelperFile::new).transpose()?;
         let script = self.script(
             &layout,
             plan.as_ref(),
@@ -513,12 +524,15 @@ impl GuestAccount {
             },
             password,
             interface,
+            helper.as_ref().map(HelperFile::path).as_deref(),
         );
         let output = run_private(
             &mut guestfish(executable, disk, true),
             script.as_bytes(),
             true,
-        )?;
+        );
+        drop(helper);
+        let output = output?;
         let hash =
             printed_hash(&output).ok_or("the guest did not report the account's password hash")?;
         validate_hash(&hash)?;
@@ -586,6 +600,7 @@ impl GuestAccount {
         identity: &Identity,
         password: &Password,
         interface: Option<&str>,
+        initrd_helper: Option<&Path>,
     ) -> String {
         let Identity {
             uuid,
@@ -622,17 +637,16 @@ impl GuestAccount {
              passwd -l root >/dev/null\n{}",
             interface.map_or_else(String::new, |name| interface_commands(name, &staging))
         );
-        // A partitioned disk: its swap partition in fstab and as the resume
-        // device, as the installer leaves them, and GRUB's configuration for
-        // this disk's UUIDs.
+        // A partitioned disk: its swap partition in fstab, as the installer
+        // leaves it, and GRUB's configuration for this disk's UUIDs. The
+        // resume device (the swap partition, or none) goes into
+        // initramfs-tools' configuration and the initramfs below.
         let swap = plan.is_some_and(|plan| plan.swap.is_some());
         let guest = if plan.is_some() {
             let swap_lines = if swap {
                 format!(
                     "awk -v u={swap_uuid} '/^\\/dev\\/sr0/ {{print \"# swap was on /dev/sda5 during installation\"; printf \"UUID=%s none            swap    sw              0       0\\n\", u}} {{print}}' /etc/fstab > {staging}/fstab\n\
-                     cat {staging}/fstab > /etc/fstab\n\
-                     mkdir -p /etc/initramfs-tools/conf.d\n\
-                     printf 'RESUME=UUID=%s\\n' {swap_uuid} > /etc/initramfs-tools/conf.d/resume\n"
+                     cat {staging}/fstab > /etc/fstab\n"
                 )
             } else {
                 String::new()
@@ -664,6 +678,30 @@ impl GuestAccount {
             format!("chmod 0700 {staging}"),
             format!("write {staging}/provision.sh {}", fish_quote(&guest)),
             format!("sh {}", fish_quote(&format!("sh {staging}/provision.sh"))),
+        ]);
+        if let Some(helper) = initrd_helper {
+            // The installer's resume answer: the swap partition, or none.
+            let resume = if swap {
+                format!("RESUME=UUID={swap_uuid}")
+            } else {
+                "RESUME=none".to_owned()
+            };
+            // Beside the staging directory, which provision.sh removed.
+            let script = format!("{staging}.initrd.py");
+            commands.extend([
+                format!(
+                    "upload {} {script}",
+                    fish_quote(&helper.to_string_lossy())
+                ),
+                format!(
+                    "sh {}",
+                    fish_quote(&format!(
+                        "trap 'rm -f {script}' EXIT\nmkdir -p /etc/initramfs-tools/conf.d\npython3 -I {script} {resume} {INSTALL_DEVICE}\n"
+                    ))
+                ),
+            ]);
+        }
+        commands.extend([
             // The password, set and hashed by the guest itself; it prints
             // the hash it stored.
             format!("sh {}", fish_quote(&password_commands(username, password))),
@@ -688,6 +726,31 @@ impl GuestAccount {
         }
         commands.push(String::new());
         commands.join("\n")
+    }
+}
+
+/// [`INITRD_RESUME`] in a private host file for the appliance's upload,
+/// removed when dropped.
+struct HelperFile {
+    directory: std::path::PathBuf,
+}
+impl HelperFile {
+    fn new() -> Result<Self, String> {
+        let directory =
+            std::env::temp_dir().join(format!("antinomie-provision-{}", storage::unique_id()));
+        let helper = Self { directory };
+        storage::private_dir(&helper.directory)
+            .and_then(|()| fs::write(helper.path(), INITRD_RESUME))
+            .map_err(|_| "cannot stage the initramfs helper for provisioning")?;
+        Ok(helper)
+    }
+    fn path(&self) -> std::path::PathBuf {
+        self.directory.join("initrd.py")
+    }
+}
+impl Drop for HelperFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.directory);
     }
 }
 

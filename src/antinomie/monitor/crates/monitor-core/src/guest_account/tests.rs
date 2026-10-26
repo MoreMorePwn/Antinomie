@@ -409,8 +409,31 @@ fn partitions_follow_the_installer_and_the_vm() {
     // partition.
     assert!(position("umount-all\n") < position("sfdisk --disk-id /dev/sda 0x"));
     assert!(input.contains("# swap was on /dev/sda5 during installation"));
-    assert!(input.contains("/etc/initramfs-tools/conf.d/resume"));
     assert!(input.contains("update-grub"));
+    // The initramfs helper reaches the appliance as a file, runs after the
+    // account's files and before the disk is unmounted, names the swap
+    // partition's UUID and the installer's root partition, and is gone
+    // from the host afterwards.
+    let upload = input
+        .lines()
+        .find(|line| line.starts_with("upload "))
+        .expect("helper upload");
+    let host_helper = upload.split('"').nth(1).unwrap();
+    assert!(host_helper.ends_with("/initrd.py"), "{upload}");
+    assert!(!Path::new(host_helper).exists());
+    let swap_uuid = input
+        .split("mkswap /dev/sda5 uuid:")
+        .nth(1)
+        .unwrap()
+        .split('\n')
+        .next()
+        .unwrap();
+    assert!(
+        input.contains(&format!(" RESUME=UUID={swap_uuid} 8:1\\n")),
+        "{input}"
+    );
+    assert!(position("provision.sh\"\n") < position("upload "));
+    assert!(position("python3 -I /root/.provision-") < position("umount-all\n"));
     // Growing it later keeps the swap partition's UUID and size.
     let grown = "/dev/sda1: ext4\n/dev/sda5: swap\n10737418240\n[0] = {\n  part_num: 1\n  part_end: 5366611967\n}\n[1] = {\n  part_num: 5\n  part_end: 6441402367\n  part_size: 1073741824\n}\n0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d\n";
     grow_disk_with(&disk, &fake_tool(&root, false, &grown.replace('\n', "\\n"))).unwrap();
@@ -529,4 +552,53 @@ fn account_record_is_private_and_malformed_hashes_are_redacted() {
     .unwrap();
     assert!(!GuestAccount::load(&root).unwrap_err().contains("123456789"));
     fs::remove_dir_all(root).unwrap();
+}
+#[test]
+fn the_initramfs_takes_the_resume_answer_the_installer_gives() {
+    let layout = DiskLayout {
+        root: "/dev/sda1".into(),
+        size: 4 << 30,
+        root_last: Some(8_386_559),
+        swap: None,
+    };
+    let identity = Identity {
+        uuid: "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d",
+        swap_uuid: "1c2d3e4f-5061-4b7c-8d9e-0f1a2b3c4d5e",
+        machine_id: "00112233445566778899aabbccddeeff",
+    };
+    let hash = guest_hash();
+    let helper = Path::new("/host/initrd.py");
+    // No room for a swap partition: the installer answers "none".
+    let tight = PartitionPlan {
+        root_last: 8_386_559,
+        swap: None,
+    };
+    let script = account().script(
+        &layout,
+        Some(&tight),
+        &identity,
+        &Password::Hashed(&hash),
+        None,
+        Some(helper),
+    );
+    assert!(script.contains("upload \"/host/initrd.py\" /root/.provision-"));
+    assert!(script.contains(" RESUME=none 8:1\\n"), "{script}");
+    assert!(!script.contains("RESUME=UUID="));
+    // The helper's own text is never in the script on standard input.
+    assert!(!script.contains("TRAILER"));
+    // A whole-disk root (BusyBox, the desktops) has no swap and no helper.
+    let whole = DiskLayout {
+        root: "/dev/sda".into(),
+        root_last: None,
+        ..layout
+    };
+    let script = account().script(
+        &whole,
+        None,
+        &identity,
+        &Password::Hashed(&hash),
+        None,
+        None,
+    );
+    assert!(!script.contains("upload ") && !script.contains("RESUME="));
 }

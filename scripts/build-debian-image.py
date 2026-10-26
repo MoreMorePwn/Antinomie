@@ -798,6 +798,26 @@ def add_modules(tarball, modules):
         archive.add(modules, arcname=f"./usr/lib/modules/{modules.name}", filter=owned_by_root)
 
 
+def initramfs_rebuild():
+    """The console base's last initramfs from Debian's module index, then the
+    index of the Antinomie kernel's modules again.
+
+    The installation's later packages (console-setup, kmod, udev, ...) have
+    update-initramfs build the image again, by then from the index that names
+    only updates/: an image without any of Debian's modules, unlike every
+    Debian install's (MODULES=most). Its last build therefore runs with
+    Debian's own index (updates/ excluded, as on a system without them)."""
+    release = DEBIAN_KERNEL_PACKAGES[0][0].removeprefix("linux-image-")
+    return (f"printf 'search kernel\\nexclude {KERNEL_MODULES_DIR}\\n' > /tmp/debian-modules.conf && "
+            f"depmod -a -C /tmp/debian-modules.conf {release} && "
+            f"update-initramfs -u -k {release} && "
+            f"printf 'search {KERNEL_MODULES_DIR}\\nexclude kernel\\n' > /tmp/kernel-modules.conf && "
+            f"depmod -a -C /tmp/kernel-modules.conf {release} && "
+            "rm -f /tmp/debian-modules.conf /tmp/kernel-modules.conf && "
+            f"lsinitramfs /boot/initrd.img-{release} | grep -q '^usr/lib/modules/{release}/kernel/' && "
+            f"! grep -qv '^{KERNEL_MODULES_DIR}/' /usr/lib/modules/{release}/modules.dep")
+
+
 def bootstrap_mode():
     return "root" if os.geteuid() == 0 else "unshare"
 
@@ -878,6 +898,8 @@ def mmdebstrap_command(values, tarball, script, provenance, times=None, kernel_d
         arguments += " " + str(uuid.uuid4()) + " " + q(values["mirror"].rstrip("/"))
     command.append(f'--customize-hook=chroot "$1" sh /tmp/antinomie-customize.sh {arguments}')
     command.append('--customize-hook=rm -f "$1/tmp/antinomie-customize.sh"')
+    if kernel_debs and kernel_modules is not None:
+        command.append(f'--customize-hook=chroot "$1" sh -c {q(initramfs_rebuild())}')
     # The package inventory leaves the image with the build's provenance.
     for path in ("/tmp/packages.tsv", "/etc/os-release"):
         command.append(f'--customize-hook=download {path} {q(str(provenance / Path(path).name))}')

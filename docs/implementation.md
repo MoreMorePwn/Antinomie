@@ -3233,10 +3233,27 @@ disk). Provisioning lays the VM's disk out as partman does
 (`partition_plan`): the root grown to a MiB before the swap partition, `sda5`
 in an extended `sda2` starting two sectors before it, about the VM's RAM (256
 MiB at least, a quarter of the disk at most), the last MiB free; the swap gets
-a UUID, fstab its line and `initramfs-tools/conf.d/resume` its UUID, the MBR a
+a UUID, fstab its line, the MBR a
 disk identifier of the VM's own (set last, after unmounting: sfdisk makes
 the kernel read the table again and the partition nodes vanish for a moment), and `update-grub` writes `grub.cfg` for the
-VM's UUIDs. Growing the disk in the VM's settings grows the root the same way
+VM's UUIDs. The resume device is the installer's answer (base-installer writes
+`/etc/initramfs-tools/conf.d/resume` just before it installs the kernel):
+`RESUME=UUID=<swap uuid>`, or `RESUME=none` when the disk has no room for a
+swap partition. Because the installer writes it first, update-initramfs copies
+it into the initramfs (`conf/conf.d/resume`, no `zz-resume-auto`), so
+provisioning puts it into each `/boot/initrd.img-*` as well
+(`guest_account/initrd_resume.py`, uploaded with guestfish and run by the
+guest's own python3 and zstd): the main archive is unpacked, the entry
+inserted where mkinitramfs's sorted list puts it (`cp -p`: mode 0644, the
+file's time), and the archive packed again exactly as before otherwise (members,
+order, links, padding) and compressed as mkinitramfs does (`zstd -q -9 -T0`
+from a pipe); uncompressed archives in front of it stay byte for byte. The
+device and inode numbers the files had in mkinitramfs's directory on the
+build machine become the installed root's (8:1, `/dev/sda1` as fstab's
+comment says; inodes from near `/var/tmp`, relative order and hard links
+kept). The file and its directory take a time a little before the kernel
+image's change time (when the installer unpacked it); the image keeps its
+own times. A reset provisions again and replaces the entry. Growing the disk in the VM's settings grows the root the same way
 (`grow_disk`, keeping the swap's UUID and size); the bootstrap initrd grows only
 whole-disk roots (BusyBox, the desktops) now. The kernel packages are
 Debian's own (`debian_kernel_debs`): `linux-image-6.12.94+deb13-amd64` and
@@ -3267,9 +3284,15 @@ modules (their `struct module` differs; "Exec format error" and a kernel log
 error each), so an index of them would have udev, systemd and the kernel's
 own module requests try two dozen at every boot, and depmod would make ours
 depend on Debian's (`x_tables`). A Debian module is therefore "not found" for
-modprobe, as a module the kernel lacks was before. The initramfs Debian's
-postinst built from all of Debian's modules stays; an `update-initramfs` in
-the guest builds a smaller one from the index. apt may install the image from
+modprobe, as a module the kernel lacks was before. The initramfs is
+Debian's: packages the customization installs later (console-setup, kmod,
+udev) have update-initramfs build it again, by then from the index of ours
+alone, which left it without a single Debian module; so after the
+customization the recipe builds it once more from Debian's own index
+(`initramfs_rebuild`: depmod with `updates/` excluded, `update-initramfs -u`,
+then the index of ours again), and the build checks that it carries Debian's
+`kernel/` modules and that `modules.dep` names only `updates/`. An
+`update-initramfs` in the guest builds a smaller one from the index. apt may install the image from
 the trixie mirror rather than the verified copy when the mirror carries the
 same version: the archive serves one file per version (the same SHA-256).
 

@@ -4,6 +4,17 @@ All notable changes to Antinomie. Versions follow semantic versioning; see
 [CONTRIBUTING.md](CONTRIBUTING.md#12-versioning). Each version says which bases
 it runs.
 
+## 0.8.0 — unreleased
+
+- **Debian Minimal's initramfs is an installed system's.** Each VM's
+  `/boot/initrd.img-*` names its own resume device (`conf/conf.d/resume`,
+  the swap partition's UUID or `none`), as the installer's initramfs does,
+  with the installed disk's device and inode numbers instead of the build
+  machine's; and the base's initramfs carries Debian's modules again (later
+  packages had rebuilt it from the index of the Antinomie kernel's modules,
+  leaving none). New bases only for the module part; the resume device needs
+  this app's provisioning.
+
 ## 0.7.1 — 2026-10-26
 
 The first release since 0.6.2: 0.7.0 was not published separately, so this
