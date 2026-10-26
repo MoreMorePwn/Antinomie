@@ -4,11 +4,18 @@
 The kit is the repository layout the app carries: this script, the kernel
 build script, the image recipes, the core patch series and the pinned Debian
 source package (the large upstream tarball comes from --inputs). It runs
-natively on a Linux host or as root inside the QEMU builder VM and prints
-"::stage NAME" lines for the app.
+natively on a Linux host, as root inside the QEMU builder VM, or in a pinned
+Debian 13 container (--container) and prints "::stage NAME" lines for the app.
 
     build-base.py --job JOB.json --inputs DIR --work DIR --output DIR
                   [--kernel-cache FILE] [--image-cache FILE] [--ccache DIR]
+                  [--container auto|podman|docker]
+
+--container runs this same script in the container builder: the image built from
+src/antinomie/packaging/container/Dockerfile (Debian 13 pinned by digest, a
+package snapshot and exact versions), tagged antinomie-builder:<12 hex of that
+file's SHA-256>. auto takes rootless Podman first, then Docker (whose socket
+gives root-equivalent access). The container is removed when the build ends.
 
 The kernel depends only on the patch series, the kernel build script and the
 profile, never on the image answers. With --kernel-cache, a matching cached
@@ -39,6 +46,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -127,7 +135,117 @@ def require_debian_toolchain(kernel_profile):
                 f"this host's kernel {'compiler' if tool == 'cc' else 'linker'} is "
                 f"{found.get(tool) or 'missing'!r}, not Debian 13's {wanted[tool]!r}: Debian "
                 "Minimal's kernel banner (/proc/version) must be Debian's own; build it in "
-                "the QEMU builder (Debian 13) or on a Debian 13 host")
+                "a pinned Debian 13 container (--container), in the QEMU builder, or on a "
+                "Debian 13 host")
+
+
+CONTAINER_DOCKERFILE = KIT / "src/antinomie/packaging/container/Dockerfile"
+CONTAINER_LABEL = "org.antinomie.build=1"
+IMAGE_LABEL = "org.antinomie.builder=1"
+
+
+def container_tag():
+    """The builder image's tag: antinomie-builder:<12 hex of the Dockerfile>."""
+    return "antinomie-builder:" + checksum(CONTAINER_DOCKERFILE)[:12]
+
+
+def container_problem(engine):
+    """Why `engine` (podman or docker) cannot build here, or (None, rootless)."""
+    if shutil.which(engine) is None:
+        return f"{engine} is not installed", False
+    if engine == "podman":
+        answer = subprocess.run(["podman", "info", "--format", "{{.Host.Security.Rootless}}"],
+                                capture_output=True, text=True, timeout=30)
+        if answer.returncode:
+            lines = [line for line in answer.stderr.splitlines() if line.strip()]
+            return f"podman cannot run here: {lines[0] if lines else 'no message'}", False
+        return None, answer.stdout.strip() == "true"
+    answer = subprocess.run(["docker", "version", "--format", "{{.Server.Version}}"],
+                            capture_output=True, text=True, timeout=30)
+    if answer.returncode:
+        text = answer.stderr.lower()
+        if "permission denied" in text:
+            return ("no permission to use Docker (its socket needs the docker group, which gives "
+                    "root-equivalent access)"), False
+        if "cannot connect" in text or "is the docker daemon running" in text:
+            return "Docker's daemon is not reachable (is it running?)", False
+        lines = [line for line in answer.stderr.splitlines() if line.strip()]
+        return f"Docker cannot run here: {lines[0] if lines else 'no message'}", False
+    return None, False
+
+
+def pick_container_engine(choice):
+    """(engine, rootless) for --container: auto is rootless Podman, then Docker."""
+    problems = []
+    for engine in (["podman", "docker"] if choice == "auto" else [choice]):
+        problem, rootless = container_problem(engine)
+        if problem is None:
+            return engine, rootless
+        problems.append(problem)
+    raise RuntimeError("no container engine can build here (" + "; ".join(problems) + ")")
+
+
+def ensure_container_image(engine):
+    """Build the pinned image unless the engine has it; returns its tag."""
+    tag = container_tag()
+    have = subprocess.run([engine, "image", "inspect", "--format", "{{.Id}}", tag],
+                          capture_output=True).returncode == 0
+    if not have:
+        print(f"building the builder image {tag} (a pinned Debian 13; needs the network once)",
+              flush=True)
+        run(engine, "build", "--label", IMAGE_LABEL, "-t", tag, "-f", CONTAINER_DOCKERFILE,
+            CONTAINER_DOCKERFILE.parent)
+    return tag
+
+
+def run_in_container(args, choice):
+    """Run this script in the container builder; the container is always removed."""
+    engine, rootless = pick_container_engine(choice)
+    tag = ensure_container_image(engine)
+    stale = subprocess.run([engine, "ps", "-a", "-q", "--filter", f"label={CONTAINER_LABEL}"],
+                           capture_output=True, text=True).stdout.split()
+    if stale:
+        subprocess.run([engine, "rm", "-f", *stale], capture_output=True)
+    for folder in (args.work, args.inputs, args.output.parent):
+        folder.mkdir(parents=True, exist_ok=True)
+    mounts = [(KIT, "/kit", "ro"), (args.job.resolve(), "/job.json", "ro"),
+              (args.inputs.resolve(), "/inputs", "rw"), (args.work.resolve(), "/work", "rw"),
+              (args.output.resolve().parent, "/out", "rw")]
+    inner = ["nice", "-n", os.environ["ANTINOMIE_BUILD_NICE"]] \
+        if os.environ.get("ANTINOMIE_BUILD_NICE") else []
+    inner += ["python3", "/kit/scripts/build-base.py", "--job", "/job.json", "--inputs", "/inputs",
+             "--work", "/work", "--output", f"/out/{args.output.name}", "--jobs", str(args.jobs)]
+    if args.keep_kernel_build:
+        inner.append("--keep-kernel-build")
+    for option, inside, cache in (("--kernel-cache", "/cache/kernels", args.kernel_cache),
+                                  ("--image-cache", "/cache/images", args.image_cache)):
+        if cache is not None:
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            mounts.append((cache.resolve().parent, inside, "rw"))
+            inner += [option, f"{inside}/{cache.name}"]
+    if args.ccache is not None:
+        args.ccache.mkdir(parents=True, exist_ok=True)
+        mounts.append((args.ccache.resolve(), "/ccache", "rw"))
+        inner += ["--ccache", "/ccache"]
+    name = f"antinomie-build-{os.urandom(8).hex()}"
+    command = [engine, "run", "--rm", "--init", "--name", name, "--label", CONTAINER_LABEL,
+               "--cap-add=SYS_ADMIN", "--cap-add=MKNOD", "--security-opt", "apparmor=unconfined",
+               "-e", "ANTINOMIE_BUILDER=1", "-e", f"ANTINOMIE_BUILDER_IMAGE={tag}"]
+    for host, inside, mode in mounts:
+        command += ["-v", f"{host}:{inside}:{mode}"]
+    command.append(tag)
+    if rootless:
+        command += inner
+    else:
+        # A root-equivalent engine writes root-owned files: hand them back.
+        quoted = " ".join(shlex.quote(word) for word in inner)
+        command += ["sh", "-c", f"{quoted}; status=$?; chown -R {os.getuid()}:{os.getgid()} "
+                    "/work /out /inputs /cache /ccache 2>/dev/null; exit $status"]
+    print(f"building in a {engine} container from {tag}", flush=True)
+    try:
+        return subprocess.run([str(word) for word in command]).returncode
+    finally:
+        subprocess.run([engine, "rm", "-f", name], capture_output=True)
 
 
 def load_job(path):
@@ -277,7 +395,8 @@ def load_cached_kernel(cache, kernel_profile, work):
     try:
         with tarfile.open(cache) as archive:
             manifest = json.load(archive.extractfile("kernel-cache.json"))
-            if manifest != kernel_identity(kernel_profile):
+            if {key: value for key, value in manifest.items() if key != "builder"} \
+                    != kernel_identity(kernel_profile):
                 print("cached kernel is from another patch series or build script; rebuilding",
                       flush=True)
                 return None
@@ -300,7 +419,12 @@ def save_cached_kernel(cache, kept, kernel_profile):
     """Write the kernel artifacts to the cache file atomically."""
     partial = cache.with_name(cache.name + ".part")
     cache.parent.mkdir(parents=True, exist_ok=True)
-    manifest = json.dumps(kernel_identity(kernel_profile)).encode()
+    manifest = kernel_identity(kernel_profile)
+    # Which builder made it: informational, never compared, so a kernel built in
+    # the container builder serves a native build with the same toolchain.
+    if os.environ.get("ANTINOMIE_BUILDER_IMAGE"):
+        manifest["builder"] = {"image": os.environ["ANTINOMIE_BUILDER_IMAGE"]}
+    manifest = json.dumps(manifest).encode()
 
     def portable(info):
         # modules_install leaves build/source links into this build tree.
@@ -370,7 +494,15 @@ def main():
                         help="reuse this cached root filesystem if it matches, else write it")
     parser.add_argument("--ccache", type=Path,
                         help="compiler cache directory for the kernel build")
+    parser.add_argument("--container", choices=("auto", "podman", "docker"),
+                        help="run this build in the pinned Debian 13 container builder")
     args = parser.parse_args()
+    if args.container:
+        try:
+            sys.exit(run_in_container(args, args.container))
+        except (RuntimeError, OSError, subprocess.SubprocessError) as error:
+            print(f"::error {error}", flush=True)
+            sys.exit(1)
     try:
         profile, values, app_version = load_job(args.job)
         if args.output.exists():

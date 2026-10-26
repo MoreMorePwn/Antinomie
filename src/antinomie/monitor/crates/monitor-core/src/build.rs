@@ -1,10 +1,12 @@
-//! Base builds: installer-style options, native or QEMU builder.
+//! Base builds: installer-style options, built natively, in a container or in
+//! the QEMU builder.
 //!
 //! The app carries its build kit (see `kit`), so a build needs no repository
 //! checkout. Native mode runs the kit's orchestrator on this host and needs the
-//! tool suite below; QEMU mode runs the same orchestrator inside a Debian
-//! builder VM and needs only QEMU and curl. Missing tools are reported with an
-//! install hint and nothing is installed automatically.
+//! tool suite below; Podman and Docker modes run it in a pinned Debian 13
+//! container (see `container`) and need only the engine; QEMU mode runs it
+//! inside a Debian builder VM and needs only QEMU and curl. Missing tools are
+//! reported with an install hint and nothing is installed automatically.
 
 use serde::{Deserialize, Serialize};
 use std::{
@@ -69,13 +71,43 @@ pub fn profile(id: &str) -> Option<&'static BuildProfile> {
 /// Where a build runs.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BuildMode {
-    /// Native when every native tool is present, otherwise the QEMU builder.
+    /// The first that can run here: Native (only with Debian 13's toolchain
+    /// where the base needs it), then Podman, then Docker, then the QEMU
+    /// builder.
     #[default]
     Automatic,
     /// On this Linux host (faster; needs the tool suite).
     Native,
+    /// In a pinned Debian 13 container run by Podman (rootless preferred).
+    Podman,
+    /// In a pinned Debian 13 container run by Docker (root-equivalent access).
+    Docker,
     /// Inside a Debian builder VM (needs only QEMU and curl).
     Qemu,
+}
+
+impl BuildMode {
+    /// The manual choices, in dialog order.
+    pub const MANUAL: [BuildMode; 4] = [Self::Native, Self::Podman, Self::Docker, Self::Qemu];
+
+    /// The container engine of a container mode.
+    pub fn engine(self) -> Option<crate::container::Engine> {
+        match self {
+            Self::Podman => Some(crate::container::Engine::Podman),
+            Self::Docker => Some(crate::container::Engine::Docker),
+            _ => None,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Automatic => "Automatic",
+            Self::Native => "Native",
+            Self::Podman => "Podman",
+            Self::Docker => "Docker",
+            Self::Qemu => "QEMU builder",
+        }
+    }
 }
 
 /// A Debian installer desktop choice.
@@ -596,6 +628,8 @@ const QEMU_TOOLS: &[ToolSpec] = &[
 pub fn tools(kind: Kind, mode: BuildMode) -> Vec<ToolSpec> {
     match mode {
         BuildMode::Qemu => QEMU_TOOLS.to_vec(),
+        BuildMode::Podman => vec![tool("podman", "podman")],
+        BuildMode::Docker => vec![tool("docker", "docker.io")],
         _ => {
             let mut all = KERNEL_TOOLS.to_vec();
             all.extend_from_slice(match kind {
@@ -746,38 +780,82 @@ pub fn install_hint(missing: &[ToolStatus]) -> String {
     }
 }
 
-/// Choose where a build runs: the requested mode, or for `Automatic` native
-/// when it can run here and the QEMU builder otherwise.
-pub fn resolve_mode(kind: Kind, mode: BuildMode) -> Result<BuildMode, String> {
-    let ready = |mode: BuildMode| -> Result<(), String> {
-        let missing = missing(kind, mode);
-        if !missing.is_empty() {
-            return Err(format!(
-                "missing host tools: {} (install with: {})",
-                missing
-                    .iter()
-                    .map(|tool| tool.tool)
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                install_hint(&missing)
-            ));
-        }
-        if mode == BuildMode::Native
-            && let Some(obstacle) = native_obstacle(kind)
-        {
-            return Err(obstacle);
-        }
-        Ok(())
-    };
+/// Why `mode` cannot build `kind` here, or None when it can. Containers are
+/// asked only about the engine; the image is built when a build starts.
+pub fn mode_obstacle(kind: Kind, mode: BuildMode) -> Option<String> {
     match mode {
-        BuildMode::Automatic => match ready(BuildMode::Native) {
-            Ok(()) => Ok(BuildMode::Native),
-            Err(native) => ready(BuildMode::Qemu)
-                .map(|()| BuildMode::Qemu)
-                .map_err(|qemu| format!("cannot build natively ({native}) or in QEMU ({qemu})")),
-        },
-        mode => ready(mode).map(|()| mode),
+        BuildMode::Automatic => None,
+        BuildMode::Podman | BuildMode::Docker => {
+            let engine = mode.engine()?;
+            crate::container::cached_standing(engine).obstacle()
+        }
+        mode => {
+            let missing = missing(kind, mode);
+            if !missing.is_empty() {
+                return Some(format!(
+                    "missing host tools: {} (install with: {})",
+                    missing
+                        .iter()
+                        .map(|tool| tool.tool)
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    install_hint(&missing)
+                ));
+            }
+            if mode == BuildMode::Native {
+                return native_obstacle(kind);
+            }
+            None
+        }
     }
+}
+
+/// [`mode_obstacle`] for Automatic's walk: a container engine whose image
+/// could not be fetched a moment ago is skipped, with the reason.
+fn automatic_obstacle(kind: Kind, mode: BuildMode) -> Option<String> {
+    mode_obstacle(kind, mode).or_else(|| {
+        mode.engine()
+            .and(crate::container::recent_image_failure())
+            .map(|reason| format!("the builder image is not available: {reason}"))
+    })
+}
+
+/// Choose where a build runs: the requested mode, or for `Automatic` the first
+/// of Native, Podman, Docker and the QEMU builder that can run here.
+pub fn resolve_mode(kind: Kind, mode: BuildMode) -> Result<BuildMode, String> {
+    resolve_with(
+        mode,
+        |mode| match mode_obstacle(kind, mode) {
+            Some(obstacle) => Err(obstacle),
+            None => Ok(()),
+        },
+        |mode| automatic_obstacle(kind, mode),
+    )
+}
+
+/// The choice itself, over any way of asking whether a mode can run (`manual`
+/// for a requested mode, `walk` for each step of Automatic).
+fn resolve_with(
+    requested: BuildMode,
+    manual: impl Fn(BuildMode) -> Result<(), String>,
+    walk: impl Fn(BuildMode) -> Option<String>,
+) -> Result<BuildMode, String> {
+    if requested != BuildMode::Automatic {
+        return manual(requested).map(|()| requested);
+    }
+    let mut reasons = Vec::new();
+    for mode in [
+        BuildMode::Native,
+        BuildMode::Podman,
+        BuildMode::Docker,
+        BuildMode::Qemu,
+    ] {
+        match walk(mode) {
+            None => return Ok(mode),
+            Some(reason) => reasons.push(format!("{}: {reason}", mode.label())),
+        }
+    }
+    Err(format!("no way to build here ({})", reasons.join("; ")))
 }
 
 /// Run one program, streaming stdout and stderr lines to `on_line`, until it
@@ -854,6 +932,46 @@ mod tests {
         (log, move |line: &str| {
             sink.lock().unwrap().push(line.to_string());
         })
+    }
+
+    #[test]
+    fn automatic_takes_native_then_podman_then_docker_then_qemu() {
+        let only = |ready: &'static [BuildMode]| {
+            move |mode: BuildMode| (!ready.contains(&mode)).then(|| format!("{mode:?} is out"))
+        };
+        let pick = |ready: &'static [BuildMode]| {
+            resolve_with(BuildMode::Automatic, |_| Ok(()), only(ready))
+        };
+        use BuildMode::*;
+        assert_eq!(pick(&[Native, Podman, Docker, Qemu]), Ok(Native));
+        assert_eq!(pick(&[Podman, Docker, Qemu]), Ok(Podman));
+        assert_eq!(pick(&[Docker, Qemu]), Ok(Docker));
+        assert_eq!(pick(&[Qemu]), Ok(Qemu));
+        let none = pick(&[]).unwrap_err();
+        for name in ["Native", "Podman", "Docker", "QEMU builder"] {
+            assert!(none.contains(&format!("{name}:")), "{none}");
+        }
+        // A manual choice is that choice or its obstacle, never another mode.
+        let refused = |mode| resolve_with(mode, |_| Err("no daemon".into()), |_| None);
+        assert_eq!(refused(Docker), Err("no daemon".into()));
+        assert_eq!(
+            resolve_with(Podman, |_| Ok(()), |_| Some("walk".into())),
+            Ok(Podman)
+        );
+    }
+
+    #[test]
+    fn container_modes_need_only_their_engine() {
+        for (mode, tool) in [(BuildMode::Podman, "podman"), (BuildMode::Docker, "docker")] {
+            let names: Vec<_> = tools(Kind::DebianMinimal, mode)
+                .iter()
+                .map(|t| t.tool)
+                .collect();
+            assert_eq!(names, [tool]);
+            assert!(mode.engine().is_some());
+        }
+        assert_eq!(BuildMode::MANUAL.len(), 4);
+        assert!(BuildMode::Native.engine().is_none() && BuildMode::Qemu.engine().is_none());
     }
 
     #[test]

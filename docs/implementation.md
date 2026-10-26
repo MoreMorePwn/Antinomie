@@ -2466,6 +2466,43 @@ Debian 13's gcc 14; a host build shows the host's). The release stays
 `6.12.94`: Debian's is `6.12.94+deb13-amd64`, and changing it would move the
 Debian base's modules and the bundles' `kernel_version`.
 
+**Container builder (0.8.0).** `BuildMode` is Automatic, Native, Podman, Docker
+or Qemu. `container.rs` runs the same orchestrator (`scripts/build-base.py`) in a
+container: `src/antinomie/packaging/container/Dockerfile` (carried in the kit)
+starts from `debian:trixie@sha256:...`, points apt at a snapshot.debian.org
+timestamp for `debian` and `debian-security`, and installs every tool as
+`name=version` (gcc-14 14.2.0-19 and binutils 2.44-3 give Debian's kernel banner;
+a test ties these to the adapter's `KERNEL_BANNER`). The image is tagged
+`antinomie-builder:<12 hex of the Dockerfile's SHA-256>` and labelled
+`org.antinomie.builder=1`, so a changed pin is a new image and the old ones stay
+until removed (the Build base dialog lists them; `container::list_images`,
+`remove_image` touch only that label and tag prefix). Engine calls go through
+a `Runner` (a fake in tests). `probe` names the reason an engine cannot run: not
+on PATH, daemon not reachable, no permission (Docker's socket: the docker group
+is root-equivalent), or the engine's own error; answers are cached for 20 s
+because the dialog asks every frame. `resolve_mode` walks Native (the existing
+toolchain check), Podman (rootless preferred by being first), Docker and QEMU
+and reports every reason when none can run; a manual choice is that mode or its
+obstacle. A build mounts the kit, job, inputs, work, the output's parent, the
+kernel cache folder, the image cache folder and ccache, runs the orchestrator
+as the container's root with `SYS_ADMIN` and `MKNOD` and no AppArmor profile
+(mmdebstrap's root mode needs mount; checked on Docker, not on rootless Podman,
+which was not installed for this work), and, under Docker, chowns every mounted
+folder to the user when the build ends. Containers are named and labelled
+`org.antinomie.build=1`, run with `--rm`, removed with `rm -f` after every
+build including a cancel, and any left by a crash are removed before the next
+build starts. When Automatic chose a container and its image cannot be built or
+fetched (offline), `after_preparation` falls through to the QEMU builder and the
+log says why; a manual choice fails with the reason, and a cancel never falls
+through. The kernel cache is shared by all builders: its identity names the
+toolchain, and the image tag the container built it with is recorded beside it
+(`builder` in `kernel-cache.json`, not compared). `ANTINOMIE_BUILD_JOBS` and
+`ANTINOMIE_BUILD_NICE` set the build's `-j` and its priority inside the
+container (the engine client's own priority does not reach it).
+`scripts/build-base.py --container auto|podman|docker` is the script path (the
+same mounts and image logic in Python), and the `build-base` example takes
+`podman` and `docker` as modes.
+
 **Base defaults.** BusyBox and Debian bases default to the hostname `debian`
 (the Debian installer's default), the BusyBox base names uid 1000 `user`
 (home `/home/user/`), the Debian account form proposes `user`, and neither
@@ -3465,8 +3502,8 @@ its own version). So: `build-base.py` refuses a debian-minimal job before
 building when the kernel build script's compiler or linker
 (`ANTINOMIE_PRINT_TOOLCHAIN=1` prints their version lines) differs from the
 banner's (`require_debian_toolchain`); the app's Automatic mode builds Debian
-Minimal in the QEMU builder (Debian 13) on such a host, and Native says why it
-cannot (`native_obstacle`: `toolchain_obstacle`, the host's lines read once);
+Minimal in the container builder or the QEMU builder (both Debian 13) on such a
+host, and Native says why it cannot (`native_obstacle`: `toolchain_obstacle`, the host's lines read once);
 the cached kernel's identity names the toolchain, so a BusyBox kernel linked
 by another binutils is never reused for it; the kernel build script logs the
 banner (`kernel-banner` in the build tree) and warns when it is not Debian's;

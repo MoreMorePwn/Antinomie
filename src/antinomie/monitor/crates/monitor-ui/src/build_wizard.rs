@@ -76,7 +76,14 @@ pub struct BuildWizard {
     detected: build::HostLocale,
     /// The page whose list was last scrolled to its selection.
     scrolled: Option<Page>,
+    /// The builder images each ready engine held, and when that was looked up.
+    images: Option<(std::time::Instant, Vec<EngineImages>)>,
 }
+
+type EngineImages = (
+    antinomie_monitor_core::container::Engine,
+    Result<Vec<antinomie_monitor_core::container::ImageInfo>, String>,
+);
 impl Default for BuildWizard {
     fn default() -> Self {
         Self {
@@ -90,6 +97,7 @@ impl Default for BuildWizard {
             show_status: true,
             detected: build::HostLocale::detect(),
             scrolled: None,
+            images: None,
         }
     }
 }
@@ -231,23 +239,36 @@ impl BuildWizard {
             (
                 BuildMode::Automatic,
                 "Automatic",
-                "On this host when every tool is installed, otherwise in the QEMU builder VM",
+                "The first that can run here: on this host (when its toolchain is Debian 13's, as \
+                 Debian Minimal's kernel needs), then Podman, then Docker, then the QEMU builder VM",
             ),
             (
                 BuildMode::Native,
-                "On this Linux host",
+                "Native (on this Linux host)",
                 "Fastest; needs the kernel and image tool suite",
             ),
             (
+                BuildMode::Podman,
+                "Podman container",
+                "A pinned Debian 13 container; rootless Podman needs no root access",
+            ),
+            (
+                BuildMode::Docker,
+                "Docker container",
+                "A pinned Debian 13 container. Docker needs root-equivalent access (membership in \
+                 the docker group), which is why Podman comes first",
+            ),
+            (
                 BuildMode::Qemu,
-                "In a QEMU builder VM",
-                "Needs only QEMU and curl; downloads Debian's cloud image once",
+                "QEMU builder",
+                "A builder VM; needs only QEMU and curl, and downloads Debian's cloud image once",
             ),
         ] {
             ui.radio_value(&mut self.mode, mode, label);
             ui.small(format!("    {detail}"));
             if mode != BuildMode::Automatic {
-                let missing = build::missing(kind, mode);
+                let missing = build::missing(kind, mode).into_iter().filter(|_| mode.engine().is_none());
+                let missing: Vec<_> = missing.collect();
                 if !missing.is_empty() {
                     crate::activity::warning(
                         ui,
@@ -261,10 +282,23 @@ impl BuildWizard {
                         ),
                     );
                     ui.small(format!("    {}", build::install_hint(&missing)));
-                } else if let Some(obstacle) =
-                    build::native_obstacle(kind).filter(|_| mode == BuildMode::Native)
-                {
+                } else if let Some(obstacle) = build::mode_obstacle(kind, mode) {
                     crate::activity::warning(ui, format!("    {obstacle}"));
+                } else if let Some(engine) = mode.engine() {
+                    let standing = antinomie_monitor_core::container::cached_standing(engine);
+                    if let Ok(ready) = standing.ready.as_ref() {
+                        ui.small(format!(
+                            "    {} {} is ready{}; {}",
+                            engine.label(),
+                            ready.version,
+                            if ready.rootless { " (rootless)" } else { "" },
+                            if standing.image == Some(true) {
+                                "the builder image is present"
+                            } else {
+                                "the builder image is built on first use (needs the network once)"
+                            }
+                        ));
+                    }
                 }
             }
         }
@@ -272,6 +306,20 @@ impl BuildWizard {
         match build::resolve_mode(kind, self.mode) {
             Ok(BuildMode::Native) => {
                 ui.colored_label(theme::good(), "The build will run on this host.");
+                self.images(ui);
+                true
+            }
+            Ok(mode @ (BuildMode::Podman | BuildMode::Docker)) => {
+                ui.colored_label(
+                    theme::good(),
+                    format!("The build will run in a {} container.", mode.label()),
+                );
+                if self.mode == BuildMode::Automatic
+                    && build::resolve_mode(kind, BuildMode::Qemu).is_ok()
+                {
+                    ui.small("If the builder image cannot be had (offline), the QEMU builder VM is used instead and the log says why.");
+                }
+                self.images(ui);
                 true
             }
             Ok(_) => {
@@ -281,12 +329,87 @@ impl BuildWizard {
                         "No KVM: the builder VM runs without hardware acceleration and can take many hours.",
                     );
                 }
+                self.images(ui);
                 true
             }
             Err(error) => {
                 crate::activity::error(ui, error);
+                self.images(ui);
                 false
             }
+        }
+    }
+
+    /// The builder images the container engines hold, with a way to remove them.
+    fn images(&mut self, ui: &mut egui::Ui) {
+        use antinomie_monitor_core::container::{self, Engine, SystemRunner};
+        let ready: Vec<Engine> = Engine::ALL
+            .into_iter()
+            .filter(|engine| container::cached_standing(*engine).ready.is_ok())
+            .collect();
+        if ready.is_empty() {
+            return;
+        }
+        if self
+            .images
+            .as_ref()
+            .is_none_or(|(at, _)| at.elapsed() > std::time::Duration::from_secs(20))
+        {
+            let listed = ready
+                .iter()
+                .map(|engine| (*engine, container::list_images(*engine, &SystemRunner)))
+                .collect();
+            self.images = Some((std::time::Instant::now(), listed));
+        }
+        let mut removed = false;
+        egui::CollapsingHeader::new("Builder images")
+            .id_salt("build_builder_images")
+            .show(ui, |ui| {
+                ui.small(
+                    "The container builder keeps its Debian 13 image so later builds start fast. \
+                     Removing it only means the next container build makes it again.",
+                );
+                for (engine, listing) in self.images.iter().flat_map(|(_, listed)| listed) {
+                    match listing {
+                        Ok(images) if images.is_empty() => {
+                            ui.small(format!("{}: no builder image", engine.label()));
+                        }
+                        Ok(images) => {
+                            for image in images {
+                                ui.horizontal(|ui| {
+                                    ui.label(format!(
+                                        "{}: {} ({}){}",
+                                        engine.label(),
+                                        image.tag,
+                                        image.size,
+                                        if image.current { ", this app's" } else { "" }
+                                    ));
+                                    if ui.button("Remove").clicked() {
+                                        if let Err(error) = container::remove_image(
+                                            *engine,
+                                            &SystemRunner,
+                                            &image.tag,
+                                        ) {
+                                            crate::activity::report(
+                                                ui.ctx(),
+                                                crate::activity::Level::Warn,
+                                                format!("could not remove {}: {error}", image.tag),
+                                            );
+                                        }
+                                        removed = true;
+                                    }
+                                });
+                            }
+                        }
+                        Err(error) => {
+                            ui.small(format!("{}: cannot list images ({error})", engine.label()));
+                        }
+                    }
+                }
+            });
+        if removed {
+            container::forget_standing();
+            self.images = None;
         }
     }
 
@@ -462,6 +585,9 @@ impl BuildWizard {
         let options = self.options[self.profile].clone();
         let mode = match build::resolve_mode(kind, self.mode) {
             Ok(BuildMode::Native) => "on this host".to_string(),
+            Ok(mode @ (BuildMode::Podman | BuildMode::Docker)) => {
+                format!("in a {} container", mode.label())
+            }
             Ok(_) => "in the QEMU builder VM".to_string(),
             Err(error) => error,
         };
@@ -557,34 +683,44 @@ impl BuildWizard {
 
     fn progress(&mut self, ui: &mut egui::Ui, status: &BuildStatus) -> Option<Action> {
         let mut action = None;
-        let stages: &[(&str, &str)] = if status.mode == BuildMode::Qemu {
-            &[
-                ("prepare", "Kit and kernel source"),
-                ("builder", "Builder VM"),
-                ("source", "Patch kernel"),
-                ("kernel", "Compile kernel"),
-                ("symbols", "Memory analysis symbols"),
-                ("image", "Build image"),
-                ("install", "Install base"),
-            ]
-        } else {
-            &[
-                ("prepare", "Kit and kernel source"),
-                ("source", "Patch kernel"),
-                ("kernel", "Compile kernel"),
-                ("symbols", "Memory analysis symbols"),
-                ("image", "Build image"),
-                ("install", "Install base"),
-            ]
-        };
+        let stages: &[(&str, &str)] =
+            if status.mode == BuildMode::Qemu || status.mode.engine().is_some() {
+                &[
+                    ("prepare", "Kit and kernel source"),
+                    (
+                        "builder",
+                        if status.mode == BuildMode::Qemu {
+                            "Builder VM"
+                        } else {
+                            "Builder container"
+                        },
+                    ),
+                    ("source", "Patch kernel"),
+                    ("kernel", "Compile kernel"),
+                    ("symbols", "Memory analysis symbols"),
+                    ("image", "Build image"),
+                    ("install", "Install base"),
+                ]
+            } else {
+                &[
+                    ("prepare", "Kit and kernel source"),
+                    ("source", "Patch kernel"),
+                    ("kernel", "Compile kernel"),
+                    ("symbols", "Memory analysis symbols"),
+                    ("image", "Build image"),
+                    ("install", "Install base"),
+                ]
+            };
         ui.label(
             RichText::new(format!(
                 "{} — {}",
                 status.label,
-                if status.mode == BuildMode::Qemu {
-                    "QEMU builder VM"
-                } else {
-                    "this host"
+                match status.mode {
+                    BuildMode::Qemu => "QEMU builder VM".to_string(),
+                    BuildMode::Podman | BuildMode::Docker => {
+                        format!("{} container", status.mode.label())
+                    }
+                    _ => "this host".to_string(),
                 }
             ))
             .strong(),

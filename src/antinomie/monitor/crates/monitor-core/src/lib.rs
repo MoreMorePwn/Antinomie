@@ -12,6 +12,7 @@ pub mod byte_size;
 pub mod capture;
 pub mod capture_processes;
 pub mod clipboard;
+pub mod container;
 mod control;
 pub mod core_capture;
 pub mod core_dump;

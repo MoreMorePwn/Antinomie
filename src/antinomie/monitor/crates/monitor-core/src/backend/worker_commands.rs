@@ -304,6 +304,11 @@ impl Worker {
                 let spec = build::profile(&request.profile).ok_or("unknown build profile")?;
                 request.options.validate(spec.kind)?;
                 let mode = build::resolve_mode(spec.kind, request.mode)?;
+                // Automatic may fall through from a container to QEMU later,
+                // when the image cannot be had.
+                let fallback = request.mode == build::BuildMode::Automatic
+                    && mode.engine().is_some()
+                    && build::mode_obstacle(spec.kind, build::BuildMode::Qemu).is_none();
                 let label = match request.options.name.trim() {
                     "" => build::automatic_base_name(spec.kind, &request.options.desktop),
                     name => name.to_string(),
@@ -321,6 +326,7 @@ impl Worker {
                     kind: spec.kind,
                     profile: spec.id,
                     mode,
+                    fallback,
                     options: request.options,
                     data_dir: self.options.data_dir.clone(),
                     curl: self.options.curl.clone(),
@@ -368,6 +374,9 @@ impl Worker {
                 });
                 Ok(match mode {
                     build::BuildMode::Qemu => "base build started in the QEMU builder VM".into(),
+                    build::BuildMode::Podman | build::BuildMode::Docker => {
+                        format!("base build started in a {} container", mode.label())
+                    }
                     _ => "base build started on this host".into(),
                 })
             }

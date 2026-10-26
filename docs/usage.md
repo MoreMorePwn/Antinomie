@@ -105,14 +105,27 @@ The **Base images** section in the left sidebar lists installed bases. Use
 - **Build base…**: build one with the app's own build kit. Choose **BusyBox**,
   **Debian 13 (minimal, console)** or **Debian 13 (desktop)**. A short wizard asks
   installer-style questions (hostname; for Debian also language, keyboard, time
-  zone, software and mirror), then builds on this Linux host when the tool suite
-  is installed or inside a QEMU builder VM otherwise, and installs the result.
+  zone, software and mirror), then builds where you choose and installs the result.
+  **Where** is Automatic or one of Native (this Linux host, needs the tool suite),
+  Podman or Docker (a pinned Debian 13 container) or the QEMU builder (a builder
+  VM, needs only QEMU and curl). Automatic takes the first that can run: Native
+  (only when the host's toolchain is Debian 13's), then Podman (rootless
+  preferred), then Docker, then the QEMU builder. A choice that cannot run says
+  why (no Debian 13 toolchain, engine missing, daemon not reachable, no
+  permission, image not available). Docker needs root-equivalent access (the
+  `docker` group), which is why Podman comes first. The container image
+  (`antinomie-builder:<id>`, Debian 13 pinned by digest and package snapshot) is
+  built from the app's Dockerfile the first time and kept, so later builds start
+  at once; it needs the network once. If Automatic cannot get it (offline), it
+  falls through to the QEMU builder and the log says why. The dialog lists the
+  kept images with a **Remove** button. A build leaves no container behind.
   Debian Minimal has no desktop: it boots to a console login (the program
   terminals stay in the app, as with BusyBox), keeps APT, and shares BusyBox's
   kernel, so it builds in minutes once that kernel is cached. Its kernel must
   report Debian's own build string, compiler and linker versions included, so
   it builds natively only on a Debian 13 host (gcc-14 14.2.0-19, binutils
-  2.44); elsewhere Automatic picks the QEMU builder. A Debian Minimal VM whose
+  2.44); elsewhere Automatic picks Podman or Docker (the pinned container has
+  exactly that toolchain), then the QEMU builder. A Debian Minimal VM whose
   stealth profile boots UEFI gets a UEFI PC's disk (GPT, an EFI system
   partition, GRUB for UEFI with the shim, a `debian` firmware boot entry): the
   first such VM of a base lays that disk out once (a progress window shows the

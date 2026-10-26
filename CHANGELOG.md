@@ -14,6 +14,18 @@ it runs.
   cleanly without the room); BIOS VMs are unchanged. Needs a base built by
   this version.
 
+- **Container builder for bases.** **Build base…** now offers Automatic plus
+  Native, Podman, Docker and the QEMU builder. Podman and Docker build in a
+  pinned Debian 13 container (image fixed by digest, package snapshot and exact
+  versions), so Debian Minimal's kernel gets Debian's exact banner on any host.
+  Automatic takes Native (when the host toolchain is Debian 13's), then Podman
+  (rootless preferred), Docker, then the QEMU builder, and falls through to the
+  QEMU builder when the image cannot be fetched offline. Each unavailable choice
+  says why; Docker's help says it needs root-equivalent access (the `docker`
+  group). The image is kept and listed with a Remove button; a build leaves no
+  container behind. `scripts/build-base.py --container` does the same from the
+  shell.
+
 - **Debian Minimal disks carry GRUB's boot code.** Provisioning runs
   `grub-install` as the installer does, so the VM's MBR and `/boot/grub` hold
   GRUB (and debconf its install device) instead of an empty boot sector.

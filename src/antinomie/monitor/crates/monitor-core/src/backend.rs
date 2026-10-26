@@ -805,6 +805,9 @@ struct BuildRun {
     kind: build::Kind,
     profile: &'static str,
     mode: build::BuildMode,
+    /// Automatic chose a container engine and the QEMU builder is ready: an
+    /// image that cannot be had falls through to it, saying why.
+    fallback: bool,
     options: build::BuildOptions,
     data_dir: PathBuf,
     curl: PathBuf,
@@ -815,6 +818,42 @@ struct BuildRun {
     cancel: Arc<AtomicBool>,
 }
 impl BuildRun {
+    /// Gets the container engine and its builder image ready: the engine
+    /// answers, earlier builds' containers are gone, and the image exists
+    /// (built from the kit's Dockerfile when not).
+    fn prepare_container(
+        &self,
+        engine: crate::container::Engine,
+        kit: &std::path::Path,
+        line: &mut dyn FnMut(&str),
+    ) -> Result<crate::container::Ready, String> {
+        use crate::container as c;
+        let ready = c::probe(engine, &c::SystemRunner, &|program| {
+            build::which(program).is_some()
+        })?;
+        c::remove_stale_containers(engine, &c::SystemRunner);
+        let tag = c::image_tag()?;
+        if !c::image_present(engine, &c::SystemRunner).unwrap_or(false) {
+            line(&format!(
+                "building the builder image {tag} on {} (a pinned Debian 13; needs the network once)",
+                c::pinned_base()?
+            ));
+            c::build_image(engine, kit, &self.cancel, line).map_err(|error| {
+                let reason = format!("the builder image cannot be built: {error}");
+                c::note_image_failure(&reason);
+                reason
+            })?;
+        }
+        c::forget_standing();
+        let id = c::image_id(engine, &c::SystemRunner)?;
+        line(&format!(
+            "{} {} builds in {tag} ({id}) from {}",
+            engine.label(),
+            ready.version,
+            c::pinned_base()?
+        ));
+        Ok(ready)
+    }
     fn run(&self) -> Result<(), String> {
         let mut file = File::create(&self.log_path)
             .map_err(|e| format!("{}: {e}", self.log_path.display()))?;
@@ -879,8 +918,28 @@ impl BuildRun {
         if image_cache.as_ref().is_some_and(|cache| cache.is_file()) {
             line("a root filesystem for these answers is cached; it is reused if recent");
         }
-        match self.mode {
-            build::BuildMode::Qemu => {
+        let mut mode = self.mode;
+        let mut container = None;
+        if let Some(engine) = mode.engine() {
+            line("::stage builder");
+            let prepared = self.prepare_container(engine, &kit, &mut *line);
+            match crate::container::after_preparation(
+                prepared,
+                self.fallback,
+                self.cancel.load(Ordering::Relaxed),
+            )? {
+                Ok(ready) => container = Some((engine, ready.rootless)),
+                Err(reason) => {
+                    line(&format!(
+                        "{} cannot build here ({reason}); using the QEMU builder instead",
+                        engine.label()
+                    ));
+                    mode = build::BuildMode::Qemu;
+                }
+            }
+        }
+        match (mode, container) {
+            (build::BuildMode::Qemu, _) => {
                 line("::stage builder");
                 let output = &self.output;
                 fs::create_dir_all(output).map_err(|e| format!("{}: {e}", output.display()))?;
@@ -904,6 +963,65 @@ impl BuildRun {
                     cancel: &self.cancel,
                 }
                 .run(&mut *line)
+            }
+            (_, Some((engine, rootless))) => {
+                let job_path = root.join("job.json");
+                fs::write(
+                    &job_path,
+                    serde_json::to_vec_pretty(&job).map_err(|e| e.to_string())?,
+                )
+                .map_err(|e| e.to_string())?;
+                let ccache = crate::kit::ccache_dir(&root);
+                let work = root.join("work");
+                let inputs = root.join("inputs");
+                let mut folders: Vec<&std::path::Path> = vec![&ccache, &work, &inputs];
+                if let Some(parent) = kernel_cache.parent() {
+                    folders.push(parent);
+                }
+                if let Some(parent) = image_cache.as_deref().and_then(std::path::Path::parent) {
+                    folders.push(parent);
+                }
+                for folder in folders {
+                    fs::create_dir_all(folder).map_err(|e| format!("{}: {e}", folder.display()))?;
+                }
+                let name = crate::container::container_name();
+                let tag = crate::container::image_tag()?;
+                let (uid, gid) = {
+                    use std::os::unix::fs::MetadataExt;
+                    fs::metadata(&root)
+                        .map(|m| (m.uid(), m.gid()))
+                        .unwrap_or((0, 0))
+                };
+                let jobs = std::env::var("ANTINOMIE_BUILD_JOBS")
+                    .ok()
+                    .and_then(|value| value.parse().ok())
+                    .unwrap_or_else(|| {
+                        std::thread::available_parallelism().map_or(4, std::num::NonZero::get)
+                    });
+                crate::container::run_build(
+                    &crate::container::RunSpec {
+                        engine,
+                        rootless,
+                        name: &name,
+                        image: &tag,
+                        kit: &kit,
+                        job: &job_path,
+                        inputs: &inputs,
+                        work: &work,
+                        output: &self.output,
+                        kernel_cache: &kernel_cache,
+                        image_cache: image_cache.as_deref(),
+                        ccache: &ccache,
+                        jobs,
+                        nice: std::env::var("ANTINOMIE_BUILD_NICE")
+                            .ok()
+                            .and_then(|value| value.parse().ok()),
+                        uid,
+                        gid,
+                    },
+                    &self.cancel,
+                    &mut *line,
+                )
             }
             _ => {
                 let job_path = root.join("job.json");

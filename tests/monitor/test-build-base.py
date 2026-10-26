@@ -60,6 +60,113 @@ class BuildBaseTests(unittest.TestCase):
         # A cached kernel names the toolchain that built it.
         self.assertEqual(base.kernel_identity("minimal")["toolchain"], found)
 
+    def fake_engine(self, directory, name, version_exit=0, stderr="", rootless="false",
+                    have_image=True):
+        """A stand-in `podman` or `docker` on PATH that logs its calls."""
+        log = Path(directory) / f"{name}.log"
+        script = Path(directory) / name
+        script.write_text(f"""#!/bin/sh
+echo "$@" >> '{log}'
+case "$1" in
+  version) [ {version_exit} -eq 0 ] || {{ echo '{stderr}' >&2; exit {version_exit}; }}; echo 26.1.5 ;;
+  info) echo '{rootless}' ;;
+  image) {'exit 0' if have_image else 'exit 1'} ;;
+  ps) echo stale1 ;;
+esac
+exit 0
+""")
+        script.chmod(0o755)
+        return log
+
+    def test_the_container_builder_picks_rootless_podman_then_docker(self):
+        with tempfile.TemporaryDirectory() as name, \
+                unittest.mock.patch.dict("os.environ", {"PATH": name}):
+            self.fake_engine(name, "podman", rootless="true")
+            self.fake_engine(name, "docker")
+            self.assertEqual(base.pick_container_engine("auto"), ("podman", True))
+            self.assertEqual(base.pick_container_engine("docker"), ("docker", False))
+            Path(name, "podman").unlink()
+            self.assertEqual(base.pick_container_engine("auto"), ("docker", False))
+            with self.assertRaisesRegex(RuntimeError, "podman is not installed"):
+                base.pick_container_engine("podman")
+        with tempfile.TemporaryDirectory() as name, \
+                unittest.mock.patch.dict("os.environ", {"PATH": name}):
+            self.fake_engine(name, "docker", version_exit=1, stderr="permission denied")
+            with self.assertRaisesRegex(RuntimeError, "root-equivalent"):
+                base.pick_container_engine("auto")
+        with tempfile.TemporaryDirectory() as name, \
+                unittest.mock.patch.dict("os.environ", {"PATH": name}):
+            self.fake_engine(name, "docker", version_exit=1, stderr="Cannot connect to the "
+                             "Docker daemon at unix:///x. Is the docker daemon running?")
+            with self.assertRaisesRegex(RuntimeError, "daemon is not reachable"):
+                base.pick_container_engine("docker")
+
+    def test_the_image_tag_follows_the_dockerfile_and_pins_its_toolchain(self):
+        text = base.CONTAINER_DOCKERFILE.read_text()
+        self.assertEqual(base.container_tag(),
+                         "antinomie-builder:" + base.checksum(base.CONTAINER_DOCKERFILE)[:12])
+        self.assertRegex(text, r"(?m)^FROM debian:trixie@sha256:[0-9a-f]{64}$")
+        self.assertIn("snapshot.debian.org/archive/debian/%s/", text)
+        # Debian 13's compiler and linker, by exact version, write the banner.
+        self.assertIn("gcc-14=14.2.0-19", text)
+        self.assertIn("binutils=2.44-3", text)
+
+    def test_a_container_build_mounts_its_folders_and_always_removes_the_container(self):
+        for engine, rootless in (("podman", "true"), ("docker", "false")):
+            with tempfile.TemporaryDirectory() as name, \
+                    unittest.mock.patch.dict("os.environ", {"PATH": name,
+                                                            "ANTINOMIE_BUILD_NICE": "15"}):
+                log = self.fake_engine(name, engine, rootless=rootless, have_image=False)
+                root = Path(name)
+                job = root / "job.json"
+                job.write_text("{}")
+                args = unittest.mock.Mock(
+                    job=job, inputs=root / "inputs", work=root / "work", output=root / "o/out",
+                    jobs=3, keep_kernel_build=False, kernel_cache=root / "k/kernel.tar",
+                    image_cache=root / "i/rootfs.tar", ccache=root / "cc")
+                self.assertEqual(base.run_in_container(args, engine), 0)
+                calls = log.read_text().splitlines()
+                tag = base.container_tag()
+                # The missing image is built from the kit's Dockerfile first.
+                self.assertTrue(any(c.startswith(f"build --label org.antinomie.builder=1 -t {tag}")
+                                    for c in calls), calls)
+                (run,) = [c for c in calls if c.startswith("run ")]
+                for part in ("--rm", "--init", "--label org.antinomie.build=1",
+                             "--cap-add=SYS_ADMIN", f"-v {root}/o:/out:rw",
+                             f"-v {root}/k:/cache/kernels:rw", f"-v {root}/i:/cache/images:rw",
+                             f"-v {root}/cc:/ccache:rw", "-v " + str(base.KIT) + ":/kit:ro",
+                             f"ANTINOMIE_BUILDER_IMAGE={tag}", "--output /out/out",
+                             "--kernel-cache /cache/kernels/kernel.tar",
+                             "--image-cache /cache/images/rootfs.tar", "--jobs 3"):
+                    self.assertIn(part, run)
+                self.assertEqual("chown -R" in run, engine == "docker", run)
+                self.assertIn("nice -n 15", run.replace("'", ""))
+                # The container is removed, and stale ones of earlier builds too.
+                self.assertTrue(any(c.startswith("rm -f antinomie-build-") for c in calls))
+                self.assertIn("rm -f stale1", calls)
+
+    def test_a_kernel_cached_by_the_container_builder_serves_other_builders(self):
+        with tempfile.TemporaryDirectory() as name:
+            work = Path(name)
+            kept = work / "kept"
+            for file in ("arch/x86/boot/bzImage", ".config", "symbols.json.xz"):
+                (kept / file).parent.mkdir(parents=True, exist_ok=True)
+                (kept / file).write_text("x")
+            identity = {"format": 1, "profile": "minimal", "series": "s"}
+            cache = work / "kernel.tar"
+            with unittest.mock.patch.object(base, "kernel_identity", side_effect=lambda _: dict(identity)), \
+                    unittest.mock.patch.dict("os.environ",
+                                             {"ANTINOMIE_BUILDER_IMAGE": "antinomie-builder:abc"}):
+                base.save_cached_kernel(cache, kept, "minimal")
+                with base.tarfile.open(cache) as archive:
+                    manifest = json.load(archive.extractfile("kernel-cache.json"))
+                self.assertEqual(manifest["builder"], {"image": "antinomie-builder:abc"})
+            with unittest.mock.patch.object(base, "kernel_identity", side_effect=lambda _: dict(identity)):
+                self.assertIsNotNone(base.load_cached_kernel(cache, "minimal", work))
+                changed = dict(identity, series="other")
+            with unittest.mock.patch.object(base, "kernel_identity", side_effect=lambda _: dict(changed)):
+                self.assertIsNone(base.load_cached_kernel(cache, "minimal", work))
+
     def test_jobs_accept_only_the_options_a_profile_offers(self):
         with tempfile.TemporaryDirectory() as name:
             job = Path(name) / "job.json"

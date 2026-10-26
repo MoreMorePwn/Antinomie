@@ -22,7 +22,7 @@ include!(concat!(env!("OUT_DIR"), "/kit_files.rs"));
 const ADAPTER: &str = "src/antinomie/packaging/debian-6.12.94-1-trixie/adapter.conf";
 const COMPLETE: &str = ".antinomie-kit-complete";
 
-fn kit_file(path: &str) -> Result<&'static [u8], String> {
+pub(crate) fn kit_file(path: &str) -> Result<&'static [u8], String> {
     KIT_FILES
         .iter()
         .find(|(name, _)| *name == path)
