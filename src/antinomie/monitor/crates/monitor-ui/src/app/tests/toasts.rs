@@ -193,3 +193,18 @@ fn toasts_are_drawn_whatever_panes_are_open() {
     frames(&mut app, &ctx, 3);
     assert_eq!(toasts(&ctx).len(), 1, "shown whatever panes are open");
 }
+
+#[test]
+fn the_live_high_toast_is_off_by_default_and_old_saved_values_do_not_carry_over() {
+    assert!(!Settings::default().toast_high_findings);
+    // 0.7 stored its default (on) for everyone under the old key: not read.
+    let old: Settings = serde_json::from_str(r#"{"toast_high_findings": true}"#).unwrap();
+    assert!(!old.toast_high_findings);
+    let chosen: Settings = serde_json::from_str(r#"{"toast_high_live": true}"#).unwrap();
+    assert!(
+        chosen.toast_high_findings,
+        "a choice made from now on is kept"
+    );
+    let round: Settings = serde_json::from_str(&serde_json::to_string(&chosen).unwrap()).unwrap();
+    assert!(round.toast_high_findings);
+}

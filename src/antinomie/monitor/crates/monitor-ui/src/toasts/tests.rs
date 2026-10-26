@@ -497,3 +497,109 @@ fn push_and_take_failure_follow_the_same_rule() {
     take_failure(&ctx, &mut Some(("Failed: boom".to_owned(), true)));
     assert_eq!(counts(&ctx), [2]);
 }
+
+fn fraction_of(toasts: &Toasts, index: usize) -> Option<f32> {
+    toasts.items()[index].remaining()
+}
+
+#[test]
+fn the_countdown_fraction_runs_from_full_through_half_to_zero() {
+    for (level, secs) in [(Level::Info, INFO_SECS), (Level::Warn, WARN_SECS)] {
+        let mut toasts = Toasts::default();
+        toasts.add(level, "t", "", None, false);
+        assert_eq!(fraction_of(&toasts, 0), Some(1.0), "full at the start");
+        toasts.tick(secs / 2.0);
+        assert_eq!(fraction_of(&toasts, 0), Some(0.5), "half at the midpoint");
+        toasts.tick(secs / 2.0 - 0.001);
+        let near = fraction_of(&toasts, 0).unwrap();
+        assert!(near > 0.0 && near < 0.001, "{near}");
+        toasts.tick(0.002);
+        assert!(toasts.items().is_empty(), "closes where the bar reaches 0");
+    }
+}
+
+#[test]
+fn the_fraction_is_zero_at_expiry_and_never_leaves_zero_to_one() {
+    let mut toast = Toast {
+        id: 1,
+        level: Level::Info,
+        title: String::new(),
+        detail: String::new(),
+        action: None,
+        count: 1,
+        left: Some(0.0),
+        hovered: false,
+    };
+    assert_eq!(toast.remaining(), Some(0.0));
+    toast.left = Some(-0.2);
+    assert_eq!(toast.remaining(), Some(0.0));
+    toast.left = Some(99.0);
+    assert_eq!(toast.remaining(), Some(1.0));
+}
+
+#[test]
+fn the_fraction_holds_while_hovered_and_a_sticky_toast_has_none() {
+    let mut toasts = Toasts::default();
+    toasts.add(Level::Info, "i", "", None, false);
+    toasts.add(Level::Error, "e", "", None, false);
+    toasts.tick(1.5);
+    let before = fraction_of(&toasts, 0);
+    assert_eq!(before, Some(0.75));
+    toasts.items[0].hovered = true;
+    toasts.tick(3.0);
+    assert_eq!(fraction_of(&toasts, 0), before, "paused with the timer");
+    toasts.items[0].hovered = false;
+    toasts.tick(1.5);
+    assert_eq!(fraction_of(&toasts, 0), Some(0.5), "resumes from there");
+    assert_eq!(fraction_of(&toasts, 1), None, "sticky: no bar");
+}
+
+#[test]
+fn a_repeat_fills_the_bar_again() {
+    let mut toasts = Toasts::default();
+    toasts.add(Level::Warn, "w", "", None, false);
+    toasts.tick(9.0);
+    assert_eq!(fraction_of(&toasts, 0), Some(0.25));
+    toasts.add(Level::Warn, "w", "", None, false);
+    assert_eq!(fraction_of(&toasts, 0), Some(1.0));
+}
+
+#[test]
+fn the_bar_is_a_thin_line_inside_the_bottom_edge_and_shrinks_to_nothing() {
+    let outer = egui::Rect::from_min_size(egui::pos2(100.0, 200.0), egui::vec2(380.0, 60.0));
+    let full = bar_rect(outer, 1.0);
+    let half = bar_rect(outer, 0.5);
+    let none = bar_rect(outer, 0.0);
+    assert_eq!(full.height(), BAR);
+    assert!(full.bottom() < outer.bottom(), "inside the border");
+    assert!(full.left() >= outer.left() + f32::from(CORNER));
+    assert!(full.right() <= outer.right() - f32::from(CORNER));
+    assert!((half.width() * 2.0 - full.width()).abs() < 0.01);
+    assert_eq!(half.left(), full.left(), "shrinks toward the left edge");
+    assert_eq!(none.width(), 0.0);
+}
+
+#[test]
+fn only_a_running_timed_toast_asks_for_repaints() {
+    let ctx = context();
+    let repaint = |time: f64| {
+        let (output, _) = run(&ctx, time, Vec::new());
+        output
+            .viewport_output
+            .values()
+            .map(|viewport| viewport.repaint_delay)
+            .min()
+            .unwrap()
+    };
+    for frame in 0..3 {
+        repaint(f64::from(frame) * 0.1);
+    }
+    assert_eq!(repaint(1.0), Duration::MAX, "no toast, no repaint");
+    push(&ctx, Level::Error, "Failed", "sticky", None);
+    for frame in 0..3 {
+        repaint(2.0 + f64::from(frame) * 0.1);
+    }
+    assert_eq!(repaint(5.0), Duration::MAX, "a sticky toast needs none");
+    push(&ctx, Level::Info, "Saved", "report.html", None);
+    assert!(repaint(5.1) <= BAR_FRAME, "a running countdown does");
+}

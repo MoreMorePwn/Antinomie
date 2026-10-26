@@ -2,7 +2,8 @@
 //! Notification toasts (design section 6.12): a bottom-right stack with an
 //! icon, a title, a one-line detail, an optional action link and a close
 //! button. Info toasts leave after 6 s, warnings after 12 s and errors stay
-//! until dismissed; hovering a toast pauses its timer. A burst of the same
+//! until dismissed; hovering a toast pauses its timer. A timed toast shows
+//! its time left as a thin bar along its bottom edge. A burst of the same
 //! toast becomes one toast with a count. Every toast is also an Activity row.
 //!
 //! The stack lives in the egui context, so any code with a `Context` or a
@@ -20,6 +21,11 @@ pub(crate) const VISIBLE: usize = 5;
 /// Toasts kept in all; the oldest non-error one goes first.
 const STORED: usize = 40;
 const WIDTH: f32 = 380.0;
+/// Corner radius of a toast, and the thickness of its countdown bar.
+const CORNER: u8 = 8;
+const BAR: f32 = 3.0;
+/// Repaint step while a countdown bar is moving.
+const BAR_FRAME: Duration = Duration::from_millis(33);
 const MARGIN: f32 = 16.0;
 /// Height at the bottom of a window kept clear for its footer buttons.
 const FOOTER: f32 = 64.0;
@@ -54,6 +60,16 @@ pub(crate) struct Toast {
     /// Seconds left; `None` stays until dismissed.
     pub left: Option<f64>,
     pub hovered: bool,
+}
+
+impl Toast {
+    /// Share of the toast's time still left, 1.0 when it was just raised and
+    /// 0.0 when it expires; `None` for a toast that stays until dismissed.
+    /// A hovered toast keeps its time, so its fraction does not move.
+    pub(crate) fn remaining(&self) -> Option<f32> {
+        let total = lifetime(self.level)?;
+        Some((self.left? / total).clamp(0.0, 1.0) as f32)
+    }
 }
 
 /// The stack and its hand-offs to the rest of the app.
@@ -227,12 +243,13 @@ pub(crate) fn take_rows(ctx: &egui::Context) -> Vec<(Level, String)> {
     with(ctx, Toasts::take_rows)
 }
 
-/// Screenshot fixtures: give every toast its full time again.
+/// Screenshot fixtures: give every timed toast 60 % of its time again, so
+/// the countdown bar shows partly run.
 #[cfg(test)]
 pub(crate) fn keep_alive(ctx: &egui::Context) {
     with(ctx, |toasts| {
         for toast in &mut toasts.items {
-            toast.left = lifetime(toast.level);
+            toast.left = lifetime(toast.level).map(|secs| secs * 0.6);
         }
     });
 }
@@ -319,7 +336,7 @@ fn draw(ui: &mut egui::Ui, toast: &Toast, width: f32) -> Outcome {
     let frame = egui::Frame::new()
         .fill(palette.raised)
         .stroke(egui::Stroke::new(1.0_f32, stroke))
-        .corner_radius(8)
+        .corner_radius(CORNER)
         .inner_margin(egui::Margin::symmetric(10, 8))
         .shadow(egui::Shadow {
             offset: [0, 4],
@@ -397,7 +414,35 @@ fn draw(ui: &mut egui::Ui, toast: &Toast, width: f32) -> Outcome {
             });
         });
     outcome.hovered = frame.response.contains_pointer();
+    if let Some(fraction) = toast.remaining() {
+        countdown_bar(ui, frame.response.rect, fraction, color);
+    }
     outcome
+}
+
+/// The countdown bar: a thin line along the toast's bottom edge, inside its
+/// border and corner curve, shrinking from the left edge's full width to
+/// nothing as `fraction` goes from 1 to 0.
+fn countdown_bar(ui: &egui::Ui, outer: egui::Rect, fraction: f32, color: egui::Color32) {
+    let inset = CORNER as f32;
+    let track = outer.right() - outer.left() - 2.0 * inset;
+    let rect = bar_rect(outer, fraction);
+    if track > 0.0 && rect.width() > 0.0 {
+        ui.painter()
+            .rect_filled(rect, egui::CornerRadius::same(1), color);
+    }
+}
+
+/// Where the bar sits for a toast occupying `outer`.
+fn bar_rect(outer: egui::Rect, fraction: f32) -> egui::Rect {
+    let inset = CORNER as f32;
+    let track = (outer.width() - 2.0 * inset).max(0.0);
+    let left = outer.left() + inset;
+    let bottom = outer.bottom() - 1.0;
+    egui::Rect::from_min_max(
+        egui::pos2(left, bottom - BAR),
+        egui::pos2(left + track * fraction.clamp(0.0, 1.0), bottom),
+    )
 }
 
 /// Footer bands of the windows and dialogs on screen (not panels, the backdrop
@@ -515,10 +560,13 @@ pub(crate) fn show(ctx: &egui::Context) -> Vec<Panel> {
             }
         }
     });
-    if with(ctx, |toasts| {
-        toasts.items.iter().any(|toast| toast.left.is_some())
-    }) {
-        ctx.request_repaint_after(Duration::from_millis(100));
+    // Only a shown, running countdown needs frames; a hovered one is paused
+    // and a sticky one has no bar, and the pointer wakes the app on its own.
+    if items
+        .iter()
+        .any(|toast| toast.left.is_some() && !toast.hovered)
+    {
+        ctx.request_repaint_after(BAR_FRAME);
     }
     follow
 }

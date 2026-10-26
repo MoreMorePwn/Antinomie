@@ -456,7 +456,7 @@ The network capture is the guest's own view on every route.
   fill the whole width instead of sitting in a sliver of a long run; it follows
   the Graph's **Events** or **Time** choice. In both, a run with only a few
   findings has them near the left and right edges of the plot.
-- **Settings › Notifications › Toast for live HIGH findings** (on by default):
+- **Settings › Notifications › Toast for live HIGH findings** (off by default):
   the first HIGH finding of each rule in a run that is still going raises one
   toast; later matches of that rule add `×N` to it. It is raised when the run's
   index is read again, every 5 s while Triage is shown and every 15 s otherwise.

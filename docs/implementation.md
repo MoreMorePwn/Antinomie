@@ -1057,7 +1057,8 @@ Host only: `monitor-ui/src/triage/graph/`, nothing needs a guest change.
 * **Live toast.** `notify.rs`: each scan carries the HIGH rules that have a
   shown row. `HighWatch` raises one `toasts::push` per `(run, rule)` while the
   run is live and `toasts::bump` adds `×N` to the same toast afterwards (a toast
-  that was dismissed stays gone). The switch is `Settings::toast_high_findings`.
+  that was dismissed stays gone). The switch is `Settings::toast_high_findings` (off by default; stored as
+  `toast_high_live`, so the 0.7 value, which was the default for everyone, is not read).
   With it on, a live run whose pane is hidden is still re-read every 15 s.
 * **Tests.** `graph/tests.rs` (index, phases, lanes, filter text, hit testing,
   mouse and keyboard through egui, contrast of every theme, hover and the ruler's

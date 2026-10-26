@@ -54,6 +54,14 @@ it runs.
   what such machines have. Each run records the machine its guest looked like.
 - **Supermicro network card.** The X12STH-F and H12SSL-i profiles name their card
   `eno1` (firmware index), as their boards do; the X12STH-F has no I219.
+- **Toasts show their time left, and the live HIGH toast is off by default.**
+  Every toast that closes by itself (notices, warnings) draws a thin bar along
+  its bottom edge in its level colour; it shrinks to nothing as the timer runs
+  out, the toast closes when it does, hovering pauses both, and toasts that stay
+  until dismissed (errors) draw none. **Settings › Notifications › Toast for
+  live HIGH findings** is now off by default. The setting is stored under a new
+  key because 0.7 saved its default for everyone: a machine that has it on
+  turns it on again once.
 
 ## 0.7.1 — 2026-10-26
 

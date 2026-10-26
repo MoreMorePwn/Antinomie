@@ -129,6 +129,10 @@ struct Settings {
     /// Allow the explicit catalog check and rule-pack download buttons.
     outbound_catalog: bool,
     /// Toast for the first HIGH finding of each rule in a run that is still going.
+    /// Off by default since 0.8.0. The stored key is new: 0.7 saved the old
+    /// default (on) under `toast_high_findings` for everyone, so that value
+    /// cannot tell a choice from a default and is not read.
+    #[serde(rename = "toast_high_live")]
     toast_high_findings: bool,
     /// The size the activity graph's window opened at last, in points.
     graph_window: [f32; 2],
@@ -199,7 +203,7 @@ impl Default for Settings {
             address_lookup: crate::triage::AddressLookup::Tshark,
             automatic_detection: true,
             outbound_catalog: false,
-            toast_high_findings: true,
+            toast_high_findings: false,
             graph_window: crate::triage::GRAPH_WINDOW_SIZE,
             graph_spacing: Default::default(),
             show_fps: false,
