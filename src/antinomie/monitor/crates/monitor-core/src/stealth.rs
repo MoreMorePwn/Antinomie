@@ -13,11 +13,20 @@
 //! of its own) or the host (OVMF, two threads per core); `fitted()` turns an
 //! entry the base or host lacks back into the choice every one has.
 use crate::storage::unique_id;
+pub use catalog::{MACHINES, MachineProfile, Variant};
+use catalog::{SerialStyle, Subsystem};
+pub use cpu::{CpuGen, HostCpu, classify};
+use parts::{CLIENT_DISKS, DESKTOP_RAM, DiskModel, LAPTOP_RAM, SERVER_DISKS, SERVER_RAM};
+pub use record::MachineRecord;
 use serde::{Deserialize, Serialize};
 
+mod catalog;
+mod cpu;
 mod firmware;
 mod launch;
 mod nat;
+mod parts;
+mod record;
 mod smbios;
 #[cfg(test)]
 mod tests;
@@ -419,251 +428,6 @@ impl Default for StealthProfile {
     }
 }
 
-/// A real machine whose firmware strings a preset copies.
-pub struct MachineProfile {
-    pub id: &'static str,
-    pub label: &'static str,
-    pub kind: StealthPreset,
-    /// `GenuineIntel`, `AuthenticAMD`: presets pick a machine that matches
-    /// the host CPU, which passthrough shows to the guest.
-    pub cpu_vendor: &'static str,
-    bios: (&'static str, &'static str, &'static str),
-    system: (
-        &'static str,
-        &'static str,
-        &'static str,
-        &'static str,
-        &'static str,
-    ),
-    board: (&'static str, &'static str),
-    chassis_type: u8,
-    acpi: (&'static str, &'static str),
-    serial: SerialStyle,
-    oem_strings: &'static [&'static str],
-    /// The board's own network card: the maker's PCI subsystem IDs.
-    nic_subsystem: &'static str,
-    /// Where the chipset's integrated LAN sits.
-    nic_slot: NicSlot,
-    /// An optical drive in the chassis.
-    cdrom: bool,
-}
-
-#[derive(Clone, Copy)]
-enum SerialStyle {
-    /// Dell service tag: 7 characters.
-    Dell,
-    /// HP: country code and 7 more, 10 characters.
-    Hp,
-    /// Lenovo: 8 characters.
-    Lenovo,
-    /// Supermicro: a letter and 11 more.
-    Supermicro,
-}
-
-pub const MACHINES: &[MachineProfile] = &[
-    MachineProfile {
-        id: "dell-optiplex-7090",
-        label: "Dell OptiPlex 7090",
-        kind: StealthPreset::RealisticDesktop,
-        cpu_vendor: "GenuineIntel",
-        bios: ("Dell Inc.", "1.21.0", "08/14/2024"),
-        system: ("Dell Inc.", "OptiPlex 7090", "", "OptiPlex", "0A61"),
-        board: ("Dell Inc.", "0K0J0Y"),
-        chassis_type: 3,
-        acpi: ("DELL  ", "CBX3    "),
-        serial: SerialStyle::Dell,
-        oem_strings: &[
-            "Dell System",
-            "1[0A61]",
-            "3[1.0]",
-            "12[www.dell.com]",
-            "14[1]",
-            "15[0]",
-        ],
-        nic_subsystem: "1028:0a61",
-        // Q570: I219-LM.
-        nic_slot: NicSlot::Pch,
-        cdrom: true,
-    },
-    MachineProfile {
-        id: "hp-elitedesk-800-g6",
-        label: "HP EliteDesk 800 G6",
-        kind: StealthPreset::RealisticDesktop,
-        cpu_vendor: "GenuineIntel",
-        bios: ("HP", "S21 Ver. 02.15.00", "04/09/2024"),
-        system: (
-            "HP",
-            "HP EliteDesk 800 G6 Desktop Mini PC",
-            "",
-            "103C_53307F HP EliteDesk",
-            "1D2F0EA#ABA",
-        ),
-        board: ("HP", "8715"),
-        chassis_type: 35,
-        acpi: ("HPQOEM", "SLIC-BPC"),
-        serial: SerialStyle::Hp,
-        oem_strings: &[
-            "FBYTE#3X476J6S6b7B7H7M7R7W7maBapaqawbcbkbybzcbd8d9dUdpdqfPhKhkhwk8m9n4p8q3q4.vd",
-            "BUILDID#20WWLAAT601#SABA#DABA;",
-            "ABS 70/71 78 79 7A 7B",
-            "CSM v01.06",
-        ],
-        nic_subsystem: "103c:8715",
-        // Q470: I219-LM.
-        nic_slot: NicSlot::Pch,
-        cdrom: false,
-    },
-    MachineProfile {
-        id: "lenovo-m75q-gen2",
-        label: "Lenovo ThinkCentre M75q Gen 2",
-        kind: StealthPreset::RealisticDesktop,
-        cpu_vendor: "AuthenticAMD",
-        bios: ("LENOVO", "M3DKT3AA", "03/12/2024"),
-        system: (
-            "LENOVO",
-            "11JN0047US",
-            "ThinkCentre M75q Gen 2",
-            "ThinkCentre M75q Gen 2",
-            "LENOVO_MT_11JN_BU_Think_FM_ThinkCentre M75q Gen 2",
-        ),
-        board: ("LENOVO", "3179"),
-        chassis_type: 35,
-        acpi: ("LENOVO", "TC-M3D  "),
-        serial: SerialStyle::Lenovo,
-        oem_strings: &["Lenovo ThinkCentre M75q Gen 2", "TVT-Enablement"],
-        nic_subsystem: "17aa:3179",
-        // AMD: no integrated LAN on bus 0.
-        nic_slot: NicSlot::Ich,
-        cdrom: false,
-    },
-    MachineProfile {
-        id: "hp-elitedesk-805-g8",
-        label: "HP EliteDesk 805 G8",
-        kind: StealthPreset::RealisticDesktop,
-        cpu_vendor: "AuthenticAMD",
-        bios: ("HP", "T21 Ver. 02.12.00", "02/20/2024"),
-        system: (
-            "HP",
-            "HP EliteDesk 805 G8 Small Form Factor PC",
-            "",
-            "103C_53307F HP EliteDesk",
-            "4B4M5UT#ABA",
-        ),
-        board: ("HP", "8770"),
-        chassis_type: 3,
-        acpi: ("HPQOEM", "SLIC-BPC"),
-        serial: SerialStyle::Hp,
-        oem_strings: &[
-            "FBYTE#3X476J6S6b7B7H7M7R7W7maBapaqawbcbkbybzcbd8d9dUdpdqfPhKhkhwk8m9n4p8q3q4.vd",
-            "BUILDID#21WWLGAT601#SABA#DABA;",
-            "ABS 70/71 78 79 7A 7B",
-            "CSM v01.06",
-        ],
-        nic_subsystem: "103c:8770",
-        // AMD: no integrated LAN on bus 0.
-        nic_slot: NicSlot::Ich,
-        cdrom: true,
-    },
-    MachineProfile {
-        id: "dell-latitude-5420",
-        label: "Dell Latitude 5420",
-        kind: StealthPreset::RealisticLaptop,
-        cpu_vendor: "GenuineIntel",
-        bios: ("Dell Inc.", "1.36.0", "06/12/2024"),
-        system: ("Dell Inc.", "Latitude 5420", "", "Latitude", "0A20"),
-        board: ("Dell Inc.", "0K6G8R"),
-        chassis_type: 10,
-        acpi: ("DELL  ", "CBX3    "),
-        serial: SerialStyle::Dell,
-        oem_strings: &[
-            "Dell System",
-            "1[0A20]",
-            "3[1.0]",
-            "12[www.dell.com]",
-            "14[1]",
-            "15[3]",
-        ],
-        nic_subsystem: "1028:0a20",
-        // Tiger Lake PCH-LP: I219-LM.
-        nic_slot: NicSlot::Pch,
-        cdrom: false,
-    },
-    MachineProfile {
-        id: "lenovo-t14-gen3-amd",
-        label: "Lenovo ThinkPad T14 Gen 3 (AMD)",
-        kind: StealthPreset::RealisticLaptop,
-        cpu_vendor: "AuthenticAMD",
-        bios: ("LENOVO", "R23ET70W (1.40 )", "05/10/2024"),
-        system: (
-            "LENOVO",
-            "21CF000FUS",
-            "ThinkPad T14 Gen 3",
-            "ThinkPad T14 Gen 3",
-            "LENOVO_MT_21CF_BU_Think_FM_ThinkPad T14 Gen 3",
-        ),
-        board: ("LENOVO", "21CF000FUS"),
-        chassis_type: 10,
-        acpi: ("LENOVO", "TP-R23  "),
-        serial: SerialStyle::Lenovo,
-        oem_strings: &["IBM ThinkPad Embedded Controller -[R23HT32W]-"],
-        nic_subsystem: "17aa:22f5",
-        // AMD: no integrated LAN on bus 0.
-        nic_slot: NicSlot::Ich,
-        cdrom: false,
-    },
-    MachineProfile {
-        id: "supermicro-x12sth",
-        label: "Supermicro SYS-510T (X12STH-F)",
-        kind: StealthPreset::RealisticServer,
-        cpu_vendor: "GenuineIntel",
-        bios: (
-            "American Megatrends International, LLC.",
-            "2.1",
-            "02/21/2024",
-        ),
-        system: (
-            "Supermicro",
-            "SYS-510T-MR",
-            "0123456789",
-            "Default string",
-            "Default string",
-        ),
-        board: ("Supermicro", "X12STH-F"),
-        chassis_type: 23,
-        acpi: ("SUPERM", "SMCI--MB"),
-        serial: SerialStyle::Supermicro,
-        oem_strings: &["Default string"],
-        nic_subsystem: "15d9:1c48",
-        // Two Intel I210 (PCIe) and no I219: firmware names the ports eno1
-        // and eno2.
-        nic_slot: NicSlot::Eno1,
-        cdrom: false,
-    },
-    MachineProfile {
-        id: "supermicro-h12ssl",
-        label: "Supermicro AS-1014S (H12SSL-i)",
-        kind: StealthPreset::RealisticServer,
-        cpu_vendor: "AuthenticAMD",
-        bios: ("American Megatrends Inc.", "2.6", "01/16/2024"),
-        system: (
-            "Supermicro",
-            "AS -1014S-WTRT",
-            "0123456789",
-            "Default string",
-            "Default string",
-        ),
-        board: ("Supermicro", "H12SSL-i"),
-        chassis_type: 23,
-        acpi: ("SUPERM", "SMCI--MB"),
-        serial: SerialStyle::Supermicro,
-        oem_strings: &["Default string"],
-        nic_subsystem: "15d9:1c38",
-        // Onboard LAN controllers (not the chipset's): named by firmware index.
-        nic_slot: NicSlot::Eno1,
-        cdrom: false,
-    },
-];
-
 /// Random bytes from the same source as other identifiers.
 fn random_bytes(count: usize) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(count);
@@ -691,20 +455,41 @@ const DIGITS: &[u8] = b"0123456789";
 fn serial(style: SerialStyle) -> String {
     match style {
         SerialStyle::Dell => random_text(UPPER_DIGITS, 7),
-        SerialStyle::Hp => {
-            let countries = ["CZC", "MXL", "2UA", "8CG"];
-            let pick = random_bytes(1)[0] as usize % countries.len();
-            format!("{}{}", countries[pick], random_text(UPPER_DIGITS, 7))
-        }
+        SerialStyle::Hp => format!(
+            "{}{}",
+            pick(&["CZC", "MXL", "2UA", "8CG"]),
+            random_text(UPPER_DIGITS, 7)
+        ),
+        SerialStyle::HpLaptop => format!(
+            "{}{}",
+            pick(&["5CG", "CND", "CNU", "8CG"]),
+            random_text(UPPER_DIGITS, 7)
+        ),
         SerialStyle::Lenovo => format!(
             "{}{}",
             random_text(b"MPRS", 1),
             random_text(UPPER_DIGITS, 7)
         ),
+        SerialStyle::LenovoThinkPad => format!(
+            "{}{}",
+            pick(&["PF", "PG", "PC", "R9", "MP"]),
+            random_text(UPPER_DIGITS, 6)
+        ),
         SerialStyle::Supermicro => {
             format!("{}{}", random_text(b"ABCSZ", 1), random_text(DIGITS, 11))
         }
     }
+}
+
+/// A random number, for picking among alternatives.
+fn roll() -> u32 {
+    let bytes = random_bytes(4);
+    u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+}
+
+/// One of `items`, at random.
+fn pick<T>(items: &[T]) -> &T {
+    &items[roll() as usize % items.len()]
 }
 
 /// A random version 4 UUID.
@@ -735,10 +520,12 @@ pub fn random_mac(prefix: [u8; 3]) -> String {
 /// SMBIOS chassis types a profile offers, with their names.
 pub const CHASSIS: &[(u8, &str)] = &[
     (3, "Desktop"),
+    (4, "Low profile desktop"),
     (7, "Tower"),
     (35, "Mini PC"),
     (9, "Laptop"),
     (10, "Notebook"),
+    (17, "Main server chassis"),
     (23, "Rack mount chassis"),
 ];
 
@@ -763,42 +550,99 @@ fn host_cpuinfo(key: &str) -> Option<String> {
 }
 
 impl MachineIdentity {
-    /// The firmware strings of `machine`, with new random serials.
+    /// The firmware strings of `machine`: one real unit of the model, one of
+    /// the BIOS releases it shipped with, a disk and memory module of the kind
+    /// such machines have, and new random serials. Kept with the VM: nothing
+    /// is picked again at boot.
     pub fn from_machine(machine: &MachineProfile) -> Self {
+        let kind = machine.kind;
+        let disks = if kind == StealthPreset::RealisticServer {
+            SERVER_DISKS
+        } else {
+            CLIENT_DISKS
+        };
+        let ram = match kind {
+            StealthPreset::RealisticLaptop => LAPTOP_RAM,
+            StealthPreset::RealisticServer => SERVER_RAM,
+            _ => DESKTOP_RAM,
+        };
+        let (bios, unit) = (pick(machine.bios), pick(machine.variants));
+        Self::build(machine, bios, unit, pick(disks), pick(ram))
+    }
+
+    /// The same for the first BIOS release, unit, disk and memory module
+    /// listed: a fixed identity for tests and examples.
+    pub fn first_listed(machine: &MachineProfile) -> Self {
+        let disks = if machine.kind == StealthPreset::RealisticServer {
+            SERVER_DISKS
+        } else {
+            CLIENT_DISKS
+        };
+        let ram = match machine.kind {
+            StealthPreset::RealisticLaptop => LAPTOP_RAM,
+            StealthPreset::RealisticServer => SERVER_RAM,
+            _ => DESKTOP_RAM,
+        };
+        Self::build(
+            machine,
+            &machine.bios[0],
+            &machine.variants[0],
+            &disks[0],
+            &ram[0],
+        )
+    }
+
+    fn build(
+        machine: &MachineProfile,
+        bios: &(&'static str, &'static str),
+        unit: &Variant,
+        disk: &DiskModel,
+        ram: &parts::RamPart,
+    ) -> Self {
         let system_serial = serial(machine.serial);
+        let subsystem = match &machine.nic_subsystem {
+            Subsystem::None => String::new(),
+            Subsystem::Fixed(ids) => (*ids).into(),
+            Subsystem::DellSku => format!("1028:{}", unit.sku.to_ascii_lowercase()),
+            Subsystem::Board(vendor) => format!("{vendor}:{}", unit.board.to_ascii_lowercase()),
+        };
         Self {
             profile: machine.id.into(),
-            bios_vendor: machine.bios.0.into(),
-            bios_version: machine.bios.1.into(),
-            bios_date: machine.bios.2.into(),
-            system_manufacturer: machine.system.0.into(),
-            system_product: machine.system.1.into(),
-            system_version: machine.system.2.into(),
-            system_family: machine.system.3.into(),
-            system_sku: machine.system.4.into(),
-            board_manufacturer: machine.board.0.into(),
-            board_product: machine.board.1.into(),
+            bios_vendor: machine.bios_vendor.into(),
+            bios_version: bios.0.into(),
+            bios_date: bios.1.into(),
+            system_manufacturer: machine.manufacturer.into(),
+            system_product: unit.product.into(),
+            system_version: machine.version.into(),
+            system_family: machine.family.into(),
+            system_sku: unit.sku.into(),
+            board_manufacturer: machine.board_manufacturer.into(),
+            board_product: unit.board.into(),
             board_serial: format!("/{system_serial}/{}/", random_text(UPPER_DIGITS, 14)),
-            chassis_type: machine.chassis_type,
+            chassis_type: unit.chassis,
             chassis_serial: system_serial.clone(),
             system_serial,
             system_uuid: uuid(),
-            memory_manufacturer: "Samsung".into(),
-            memory_part: "M471A1K43DB1-CWE".into(),
+            memory_manufacturer: ram.manufacturer.into(),
+            memory_part: ram.part.into(),
             memory_serial: random_text(b"0123456789ABCDEF", 8),
             acpi_oem_id: machine.acpi.0.into(),
             acpi_table_id: machine.acpi.1.into(),
             cdrom_model: "HL-DT-ST DVD+-RW GU90N".into(),
-            disk_serial: format!("S6PXNF0T{}", random_text(UPPER_DIGITS, 6)),
-            disk_model: "Samsung SSD 870 EVO 500GB".into(),
-            disk_firmware: "SVT02B6Q".into(),
-            disk_wwn: disk_wwn(),
+            disk_serial: disk_serial(disk),
+            disk_model: disk.model.into(),
+            disk_firmware: disk.firmware.into(),
+            disk_wwn: disk_wwn(disk),
             oem_strings: machine
                 .oem_strings
                 .iter()
-                .map(|text| (*text).into())
+                .map(|text| text.replace("{sku}", unit.sku))
                 .collect(),
-            nic_subsystem: machine.nic_subsystem.into(),
+            nic_subsystem: if launch::pci_ids(&subsystem).is_some() {
+                subsystem
+            } else {
+                String::new()
+            },
         }
     }
 
@@ -813,18 +657,36 @@ impl MachineIdentity {
         self.board_serial = format!("/{}/{}/", self.system_serial, random_text(UPPER_DIGITS, 14));
         self.system_uuid = uuid();
         self.memory_serial = random_text(b"0123456789ABCDEF", 8);
-        self.disk_serial = format!("S6PXNF0T{}", random_text(UPPER_DIGITS, 6));
-        self.disk_wwn = disk_wwn();
+        match CLIENT_DISKS
+            .iter()
+            .chain(SERVER_DISKS)
+            .find(|disk| disk.model == self.disk_model)
+        {
+            Some(disk) => {
+                self.disk_serial = disk_serial(disk);
+                self.disk_wwn = disk_wwn(disk);
+            }
+            None => {
+                self.disk_serial = format!("S6PXNF0T{}", random_text(UPPER_DIGITS, 6));
+                self.disk_wwn = format!("5002538e{}", random_text(b"0123456789abcdef", 8));
+            }
+        }
     }
 }
 
-/// A world wide name in Samsung's NAA 5 range (OUI 002538), 16 hex digits.
-fn disk_wwn() -> String {
-    let tail: String = random_bytes(4)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
-    format!("5002538e{tail}")
+/// A serial number as `disk`'s maker numbers them.
+fn disk_serial(disk: &DiskModel) -> String {
+    format!(
+        "{}{}",
+        disk.serial_prefix,
+        random_text(disk.serial_alphabet, disk.serial_tail)
+    )
+}
+
+/// A world wide name in `disk`'s maker's NAA 5 range: 5, the maker's OUI and
+/// nine random hex digits, 16 hex digits.
+fn disk_wwn(disk: &DiskModel) -> String {
+    format!("5{}{}", disk.oui, random_text(b"0123456789abcdef", 9))
 }
 
 impl StealthProfile {
@@ -865,13 +727,18 @@ impl StealthProfile {
     }
 
     /// A realistic `kind` (desktop, laptop or server) for a host whose CPU
-    /// vendor is `cpu_vendor`, with new random serials and MAC address.
+    /// vendor is `cpu_vendor`, with new random serials and MAC address. Use
+    /// [`realistic_on`](Self::realistic_on) when the generation is known.
     pub fn realistic(kind: StealthPreset, cpu_vendor: &str) -> Self {
-        let machine = MACHINES
-            .iter()
-            .find(|machine| machine.kind == kind && machine.cpu_vendor == cpu_vendor)
-            .or_else(|| MACHINES.iter().find(|machine| machine.kind == kind))
-            .unwrap_or(&MACHINES[0]);
+        Self::realistic_on(kind, &HostCpu::vendor_only(cpu_vendor))
+    }
+
+    /// A realistic `kind` of machine, picked at random (the likelier the more
+    /// common the model) among those the host's CPU could be in, with new
+    /// random serials and MAC address. The pick is saved with the VM: a boot
+    /// never picks again.
+    pub fn realistic_on(kind: StealthPreset, host: &HostCpu) -> Self {
+        let (machine, _fits) = catalog::pick_machine(kind, host, roll());
         let nic = NicModel::E1000e;
         Self {
             preset: kind,
@@ -911,13 +778,18 @@ impl StealthProfile {
 
     /// The profile for `preset`; Custom keeps the current entries.
     pub fn for_preset(&self, preset: StealthPreset, cpu_vendor: &str) -> Self {
+        self.for_preset_on(preset, &HostCpu::vendor_only(cpu_vendor))
+    }
+
+    /// [`for_preset`](Self::for_preset) with the host's CPU generation known.
+    pub fn for_preset_on(&self, preset: StealthPreset, host: &HostCpu) -> Self {
         match preset {
             StealthPreset::Transparent => Self::transparent(),
             StealthPreset::Custom => Self {
                 preset,
                 ..self.clone()
             },
-            kind => Self::realistic(kind, cpu_vendor),
+            kind => Self::realistic_on(kind, host),
         }
     }
 
@@ -959,6 +831,26 @@ impl StealthProfile {
             "" => "a custom profile".into(),
             name => format!("{name} (edited)"),
         }
+    }
+
+    /// A warning when the host's CPU, which passthrough shows to the guest, did
+    /// not ship in the machine this profile looks like.
+    pub fn cpu_note(&self, host: &HostCpu) -> Option<String> {
+        if !self.identity_enabled || !self.cpu_passthrough {
+            return None;
+        }
+        let machine = MACHINES
+            .iter()
+            .find(|machine| machine.id == self.identity.profile)?;
+        if machine.fits(host)? {
+            return None;
+        }
+        Some(format!(
+            "This host's CPU ({}) is shown to the guest, but no {} shipped with one; \
+             pick another machine or name a CPU model.",
+            host.generation?.label(),
+            machine.label
+        ))
     }
 
     /// Whether `machine` comes with an optical drive (QEMU's names QEMU).

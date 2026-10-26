@@ -811,6 +811,10 @@ pub struct RunSummary {
     /// existed (the UI says "not recorded").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route: Option<crate::route::RouteRecord>,
+    /// The machine the guest looked like when the run started; absent in runs
+    /// saved before it was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<crate::stealth::MachineRecord>,
 }
 
 /// Maps one guest monotonic timeline to host wall time without changing the wire.

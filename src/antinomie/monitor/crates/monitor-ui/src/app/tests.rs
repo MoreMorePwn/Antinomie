@@ -305,6 +305,7 @@ pub(super) fn run(id: &str) -> RunSummary {
         terminal_eof: false,
         state: RunState::Running,
         notes: Vec::new(),
+        machine: None,
         route: None,
         recording_error: None,
         execution: None,

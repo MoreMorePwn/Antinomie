@@ -52,6 +52,7 @@ fn run(id: &str, vm_id: &str, root: u64, session: u64) -> RunSummary {
         execution: None,
         analysis: None,
         notes: Vec::new(),
+        machine: None,
         route: None,
     }
 }

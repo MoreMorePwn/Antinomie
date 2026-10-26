@@ -21,6 +21,7 @@ fn run(id: &str, boot: &str) -> RunSummary {
         state: RunState::Unknown,
         recording_error: None,
         notes: vec![],
+        machine: None,
         route: None,
         analysis: None,
         execution: Some(RunExecution {

@@ -798,7 +798,7 @@ mod tests {
 fn stealth_profile(
     vm_spec: &Value,
 ) -> Result<antinomie_monitor_core::stealth::StealthProfile, String> {
-    use antinomie_monitor_core::stealth::{StealthPreset, StealthProfile, host_cpu_vendor};
+    use antinomie_monitor_core::stealth::{HostCpu, StealthPreset, StealthProfile};
     Ok(match vm_spec.get("stealth") {
         None => StealthProfile::default(),
         Some(Value::String(kind)) => {
@@ -809,7 +809,7 @@ fn stealth_profile(
                 "transparent" => StealthPreset::Transparent,
                 other => return Err(format!("plan.vm.stealth: unknown preset {other}")),
             };
-            StealthProfile::default().for_preset(preset, &host_cpu_vendor())
+            StealthProfile::default().for_preset_on(preset, &HostCpu::detect())
         }
         Some(value) => {
             serde_json::from_value(value.clone()).map_err(|e| format!("plan.vm.stealth: {e}"))?

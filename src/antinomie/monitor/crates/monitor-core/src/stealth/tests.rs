@@ -5,15 +5,29 @@ use super::*;
 use crate::storage::unique_id;
 use std::process::Command;
 
+fn machine(id: &str) -> &'static MachineProfile {
+    MACHINES.iter().find(|machine| machine.id == id).unwrap()
+}
+
+/// A realistic profile of machine `id`'s first listed unit, so its strings are
+/// known; the host vendor does not matter to anything these tests look at.
+fn pinned(kind: StealthPreset, id: &str) -> StealthProfile {
+    let mut profile = StealthProfile::realistic(kind, "GenuineIntel");
+    profile.identity = MachineIdentity::first_listed(machine(id));
+    profile
+}
+
 #[test]
 fn presets_fill_a_realistic_identity_matching_the_host_cpu() {
     let amd = StealthProfile::realistic(StealthPreset::RealisticDesktop, "AuthenticAMD");
-    assert_eq!(amd.identity.profile, "lenovo-m75q-gen2");
+    assert_eq!(machine(&amd.identity.profile).cpu_vendor, "AuthenticAMD");
     let intel = StealthProfile::realistic(StealthPreset::RealisticLaptop, "GenuineIntel");
-    assert_eq!(intel.identity.profile, "dell-latitude-5420");
-    assert_eq!(intel.identity.chassis_type, 10);
+    let laptop = machine(&intel.identity.profile);
+    assert_eq!(laptop.cpu_vendor, "GenuineIntel");
+    assert_eq!(laptop.kind, StealthPreset::RealisticLaptop);
+    assert!([9, 10].contains(&intel.identity.chassis_type));
     let server = StealthProfile::realistic(StealthPreset::RealisticServer, "unknown");
-    assert_eq!(server.identity.chassis_type, 23);
+    assert!([17, 23].contains(&server.identity.chassis_type));
     for profile in [&amd, &intel, &server] {
         profile.validate().unwrap();
         assert!(profile.mac.starts_with("3c:fd:fe:"));
@@ -67,7 +81,7 @@ fn transparent_keeps_qemu_launch_options_and_rates_certain() {
 
 #[test]
 fn realistic_options_hide_the_hypervisor_and_carry_the_identity() {
-    let mut profile = StealthProfile::realistic(StealthPreset::RealisticDesktop, "GenuineIntel");
+    let mut profile = pinned(StealthPreset::RealisticDesktop, "dell-optiplex-7090");
     // Two threads per core add TOPOEXT on an AMD host.
     profile.smt = false;
     assert_eq!(
@@ -109,14 +123,14 @@ fn realistic_options_hide_the_hypervisor_and_carry_the_identity() {
     let chassis = std::fs::read(dir.join("smbios-chassis.bin")).unwrap();
     assert_eq!(&chassis[..6], &[3, 0x16, 0, 3, 1, 3]);
     assert!(chassis.ends_with(b"Default string\0\0"));
-    // The BIOS table: no VM bit, Dell's strings, release 1.21.
+    // The BIOS table: no VM bit, Dell's strings, release 1.4.
     let bios = std::fs::read(dir.join("smbios-bios.bin")).unwrap();
     assert_eq!(&bios[..6], &[0, 0x1a, 0, 0, 1, 2]);
     assert_eq!(bios[8], 3);
     assert_eq!(bios[0x13] & 0x10, 0, "the virtual machine bit is clear");
     assert_eq!(bios[0x0a] & 0x08, 0, "characteristics are listed");
-    assert_eq!(&bios[0x14..0x16], &[1, 21]);
-    assert_eq!(&bios[0x1a..], b"Dell Inc.\x001.21.0\x0008/14/2024\x00\x00");
+    assert_eq!(&bios[0x14..0x16], &[1, 4]);
+    assert_eq!(&bios[0x1a..], b"Dell Inc.\x001.4.3\x0001/07/2022\x00\x00");
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -183,9 +197,9 @@ fn launch_args(profile: &StealthProfile) -> Vec<String> {
 fn profiles_saved_before_these_entries_launch_as_before() {
     // A 0.6.2 Realistic profile: none of the firmware, disk, topology,
     // pointer, clock or NAT entries.
-    let mut saved = serde_json::to_value(StealthProfile::realistic(
+    let mut saved = serde_json::to_value(pinned(
         StealthPreset::RealisticDesktop,
-        "GenuineIntel",
+        "dell-optiplex-7090",
     ))
     .unwrap();
     for key in [
@@ -247,7 +261,7 @@ fn profiles_saved_before_these_entries_launch_as_before() {
 
 #[test]
 fn realistic_hardware_entries_become_launch_options() {
-    let mut profile = StealthProfile::realistic(StealthPreset::RealisticDesktop, "GenuineIntel");
+    let mut profile = pinned(StealthPreset::RealisticDesktop, "dell-optiplex-7090");
     assert_eq!(profile.firmware, Firmware::Uefi);
     assert_eq!(profile.nat, NatNetwork::home());
     assert_eq!(smp_option(&profile, 4), "4,sockets=1,cores=2,threads=2");
@@ -267,14 +281,14 @@ fn realistic_hardware_entries_become_launch_options() {
         sata[3]
     );
     assert_eq!(profile.identity.disk_wwn.len(), 16);
-    // Dell's onboard card carries Dell's subsystem IDs (1028:0a61).
-    assert!(nic_option(&profile).ends_with(",subsys_ven=4136,subsys=2657"));
+    // Dell's onboard card carries Dell's subsystem IDs (1028:0a52).
+    assert!(nic_option(&profile).ends_with(",subsys_ven=4136,subsys=2642"));
     assert_eq!(
         netdev_option("user,id=net0,restrict=on", &profile),
         "user,id=net0,restrict=on,net=192.168.1.0/24,host=192.168.1.1,dns=192.168.1.10,dhcpstart=192.168.1.100"
     );
     let args = launch_args(&profile);
-    assert!(args.iter().any(|arg| arg == "type=11,value=Dell System,value=1[0A61],value=3[1.0],value=12[www.dell.com],value=14[1],value=15[0]"));
+    assert!(args.iter().any(|arg| arg == "type=11,value=Dell System,value=1[0A52],value=3[1.0],value=12[www.dell.com],value=14[1],value=15[3]"));
     profile.disk_bus = DiskBus::Nvme;
     profile.disk_media = DiskMedia::Hdd;
     let nvme = disk_args(&profile, "/d.qcow2").join(" ");
@@ -626,9 +640,8 @@ fn a_vm_on_a_base_without_a_support_list_falls_back_and_one_with_it_does_not() {
 
 #[test]
 fn the_nic_slot_follows_the_chipset_of_the_machine_the_profile_copies() {
-    // Every machine says where its chipset's LAN is: Intel's 100 series and
-    // later at 00:1f.6, AMD's (no LAN on bus 0) at the ICH's 00:19.0.
-    let expected = [
+    // The machines that were in the catalog before, with the slot each had.
+    for (id, slot) in [
         ("dell-optiplex-7090", NicSlot::Pch),
         ("hp-elitedesk-800-g6", NicSlot::Pch),
         ("lenovo-m75q-gen2", NicSlot::Ich),
@@ -637,17 +650,24 @@ fn the_nic_slot_follows_the_chipset_of_the_machine_the_profile_copies() {
         ("lenovo-t14-gen3-amd", NicSlot::Ich),
         ("supermicro-x12sth", NicSlot::Eno1),
         ("supermicro-h12ssl", NicSlot::Eno1),
-    ];
-    assert_eq!(MACHINES.len(), expected.len());
-    for (id, slot) in expected {
-        let machine = MACHINES.iter().find(|machine| machine.id == id).unwrap();
+    ] {
+        assert_eq!(machine(id).nic_slot, slot, "{id}");
+    }
+    // The rule behind every machine: a chipset I219 sits at 00:1f.6 (Intel
+    // only), servers have their LAN controllers named by firmware index, and
+    // any other card (Realtek on a root port, AMD boards) takes the ICH's slot.
+    for machine in MACHINES {
+        let expected = if machine.kind == StealthPreset::RealisticServer {
+            NicSlot::Eno1
+        } else if machine.cpu_vendor == "GenuineIntel" && machine.nic_chip.contains("I219") {
+            NicSlot::Pch
+        } else {
+            NicSlot::Ich
+        };
+        assert_eq!(machine.nic_slot, expected, "{}", machine.id);
         let mut profile = StealthProfile::transparent();
         profile.use_machine(machine);
-        assert_eq!(profile.nic_slot(), slot, "{id}");
-        // The chipset's I219 only on Intel machines that have one.
-        if slot == NicSlot::Pch {
-            assert_eq!(machine.cpu_vendor, "GenuineIntel", "{id}");
-        }
+        assert_eq!(profile.nic_slot(), machine.nic_slot, "{}", machine.id);
         // The identity switched off, or edited away from a known machine:
         // the ICH's slot, as for Transparent.
         profile.identity_enabled = false;
@@ -656,33 +676,19 @@ fn the_nic_slot_follows_the_chipset_of_the_machine_the_profile_copies() {
         profile.identity.profile.clear();
         assert_eq!(profile.nic_slot(), NicSlot::Ich);
     }
-    // The presets: Intel hosts get the PCH's slot (a server: the board's
-    // LAN by index), AMD hosts the ICH's.
-    for (kind, vendor, slot) in [
-        (
-            StealthPreset::RealisticDesktop,
-            "GenuineIntel",
-            NicSlot::Pch,
-        ),
-        (StealthPreset::RealisticLaptop, "GenuineIntel", NicSlot::Pch),
-        (
-            StealthPreset::RealisticServer,
-            "GenuineIntel",
-            NicSlot::Eno1,
-        ),
-        (
-            StealthPreset::RealisticDesktop,
-            "AuthenticAMD",
-            NicSlot::Ich,
-        ),
-        (StealthPreset::RealisticLaptop, "AuthenticAMD", NicSlot::Ich),
-        (
-            StealthPreset::RealisticServer,
-            "AuthenticAMD",
-            NicSlot::Eno1,
-        ),
+    // The presets follow whichever machine they picked.
+    for kind in [
+        StealthPreset::RealisticDesktop,
+        StealthPreset::RealisticLaptop,
+        StealthPreset::RealisticServer,
     ] {
-        assert_eq!(StealthProfile::realistic(kind, vendor).nic_slot(), slot);
+        for vendor in ["GenuineIntel", "AuthenticAMD"] {
+            for _ in 0..8 {
+                let profile = StealthProfile::realistic(kind, vendor);
+                let picked = machine(&profile.identity.profile);
+                assert_eq!(profile.nic_slot(), picked.nic_slot);
+            }
+        }
     }
     assert_eq!(StealthProfile::transparent().nic_slot(), NicSlot::Ich);
     // The interface names udev gives each slot, and back.
@@ -695,4 +701,331 @@ fn the_nic_slot_follows_the_chipset_of_the_machine_the_profile_copies() {
         assert_eq!(NicSlot::from_interface(name), Some(slot));
     }
     assert_eq!(NicSlot::from_interface("eth0"), None);
+}
+
+#[test]
+fn the_catalog_is_a_set_of_distinct_real_looking_machines() {
+    assert!((25..=40).contains(&MACHINES.len()), "{}", MACHINES.len());
+    let mut ids: Vec<_> = MACHINES.iter().map(|machine| machine.id).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), MACHINES.len(), "ids are unique");
+    let valid_date = |date: &str| {
+        let parts: Vec<_> = date.split('/').collect();
+        parts.len() == 3
+            && parts[0]
+                .parse::<u32>()
+                .is_ok_and(|month| (1..=12).contains(&month))
+            && parts[1]
+                .parse::<u32>()
+                .is_ok_and(|day| (1..=31).contains(&day))
+            && parts[2].len() == 4
+            && parts[2]
+                .parse::<u32>()
+                .is_ok_and(|year| (2015..=2026).contains(&year))
+    };
+    for machine in MACHINES {
+        assert!(
+            machine.weight > 0 && !machine.cpus.is_empty(),
+            "{}",
+            machine.id
+        );
+        assert!(
+            ["GenuineIntel", "AuthenticAMD"].contains(&machine.cpu_vendor),
+            "{}",
+            machine.id
+        );
+        assert!(!machine.bios.is_empty() && !machine.variants.is_empty());
+        for (version, date) in machine.bios {
+            assert!(
+                !version.is_empty() && valid_date(date),
+                "{}: {date}",
+                machine.id
+            );
+        }
+        // CPU generations belong to the machine's vendor.
+        for generation in machine.cpus {
+            let intel = matches!(
+                generation,
+                CpuGen::Core6to9
+                    | CpuGen::Core10
+                    | CpuGen::Core11
+                    | CpuGen::Core12
+                    | CpuGen::Core13Plus
+            );
+            assert_eq!(
+                intel,
+                machine.cpu_vendor == "GenuineIntel",
+                "{}",
+                machine.id
+            );
+        }
+        for unit in machine.variants {
+            assert!(!unit.product.is_empty() && !unit.board.is_empty());
+            assert!(CHASSIS.iter().any(|(kind, _)| *kind == unit.chassis));
+        }
+        // Any identity it makes is one a profile accepts, and its serials,
+        // UUID and disk are the ones such a machine has.
+        for identity in [
+            MachineIdentity::first_listed(machine),
+            MachineIdentity::from_machine(machine),
+        ] {
+            let mut profile = StealthProfile::realistic(machine.kind, machine.cpu_vendor);
+            profile.identity = identity;
+            profile
+                .validate()
+                .unwrap_or_else(|error| panic!("{}: {error}", machine.id));
+            let identity = &profile.identity;
+            assert_eq!(identity.profile, machine.id);
+            assert_eq!(identity.disk_wwn.len(), 16);
+            assert!(identity.disk_wwn.starts_with('5'));
+            assert!(!identity.system_serial.is_empty() && !identity.memory_part.is_empty());
+        }
+    }
+    // The three kinds each have machines of both vendors' hosts to pick from.
+    for kind in [
+        StealthPreset::RealisticDesktop,
+        StealthPreset::RealisticLaptop,
+        StealthPreset::RealisticServer,
+    ] {
+        for vendor in ["GenuineIntel", "AuthenticAMD"] {
+            assert!(
+                MACHINES
+                    .iter()
+                    .any(|machine| machine.kind == kind && machine.cpu_vendor == vendor),
+                "{kind:?} {vendor}"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_pick_is_weighted_and_only_takes_machines_the_host_cpu_could_be_in() {
+    let host = |generation| HostCpu {
+        vendor: if matches!(
+            generation,
+            CpuGen::Zen2 | CpuGen::Zen3 | CpuGen::Zen4 | CpuGen::Zen5
+        ) {
+            "AuthenticAMD"
+        } else {
+            "GenuineIntel"
+        }
+        .into(),
+        generation: Some(generation),
+    };
+    for generation in [CpuGen::Core10, CpuGen::Core11, CpuGen::Core12, CpuGen::Zen3] {
+        let host = host(generation);
+        for kind in [
+            StealthPreset::RealisticDesktop,
+            StealthPreset::RealisticLaptop,
+        ] {
+            let pool: Vec<_> = MACHINES
+                .iter()
+                .filter(|machine| {
+                    machine.kind == kind
+                        && machine.cpu_vendor == host.vendor
+                        && machine.cpus.contains(&generation)
+                })
+                .collect();
+            assert!(pool.len() >= 2, "{generation:?} {kind:?}");
+            // Each machine is picked as often as its weight says.
+            let total: u32 = pool.iter().map(|machine| u32::from(machine.weight)).sum();
+            let mut picked = std::collections::BTreeMap::new();
+            for roll in 0..total {
+                let (machine, fits) = catalog::pick_machine(kind, &host, roll);
+                assert!(fits && machine.cpus.contains(&generation), "{}", machine.id);
+                *picked.entry(machine.id).or_insert(0_u32) += 1;
+            }
+            for machine in pool {
+                assert_eq!(
+                    picked[machine.id],
+                    u32::from(machine.weight),
+                    "{}",
+                    machine.id
+                );
+            }
+        }
+    }
+    // A CPU nothing was sold with: a machine of the vendor, and the flag says so.
+    let newest = HostCpu {
+        vendor: "GenuineIntel".into(),
+        generation: Some(CpuGen::Core13Plus),
+    };
+    let (machine, fits) = catalog::pick_machine(StealthPreset::RealisticDesktop, &newest, 0);
+    assert!(!fits && machine.cpu_vendor == "GenuineIntel");
+    let mut profile = StealthProfile::realistic_on(StealthPreset::RealisticDesktop, &newest);
+    let note = profile.cpu_note(&newest).unwrap();
+    assert!(note.contains("13th generation") && note.contains(machine_label(&profile)));
+    // Without passthrough the host CPU is not shown, so there is nothing to say.
+    profile.cpu_passthrough = false;
+    assert!(profile.cpu_note(&newest).is_none());
+    // A host of unknown generation rules nothing out and warns about nothing.
+    let unknown = HostCpu::vendor_only("GenuineIntel");
+    let profile = StealthProfile::realistic_on(StealthPreset::RealisticLaptop, &unknown);
+    assert!(profile.cpu_note(&unknown).is_none());
+    // The catalog gives varied machines, not one per kind.
+    let seen: std::collections::BTreeSet<_> = (0..200)
+        .map(|_| {
+            StealthProfile::realistic_on(StealthPreset::RealisticDesktop, &unknown)
+                .identity
+                .profile
+        })
+        .collect();
+    assert!(seen.len() >= 5, "{seen:?}");
+}
+
+fn machine_label(profile: &StealthProfile) -> &'static str {
+    machine(&profile.identity.profile).label
+}
+
+#[test]
+fn a_profile_keeps_its_picked_identity_and_units_vary_within_real_ranges() {
+    // The pick is saved: the profile survives saving and loading unchanged,
+    // and the launch options made from it are the same every time.
+    let profile = StealthProfile::realistic_on(
+        StealthPreset::RealisticDesktop,
+        &HostCpu::vendor_only("GenuineIntel"),
+    );
+    let loaded: StealthProfile =
+        serde_json::from_str(&serde_json::to_string(&profile).unwrap()).unwrap();
+    assert_eq!(loaded, profile);
+    // (The tables go to a fresh folder each time; only its name differs.)
+    let stable = |profile: &StealthProfile| -> Vec<String> {
+        launch_args(profile)
+            .into_iter()
+            .map(|arg| match arg.strip_prefix("file=") {
+                Some(path) => path.rsplit('/').next().unwrap_or(path).to_owned(),
+                None => arg,
+            })
+            .collect()
+    };
+    assert_eq!(stable(&loaded), stable(&profile));
+    // The same model comes with different BIOS releases, units, disks and memory.
+    let model = machine("dell-optiplex-7080");
+    let identities: Vec<_> = (0..60)
+        .map(|_| MachineIdentity::from_machine(model))
+        .collect();
+    let distinct = |pick: fn(&MachineIdentity) -> &String| {
+        identities
+            .iter()
+            .map(|identity| pick(identity).clone())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+    };
+    assert!(distinct(|identity| &identity.bios_version) >= 3);
+    assert!(distinct(|identity| &identity.board_product) >= 2);
+    assert!(distinct(|identity| &identity.disk_model) >= 3);
+    assert!(distinct(|identity| &identity.memory_part) >= 3);
+    for identity in &identities {
+        // A real BIOS release of the model, as a (version, date) pair.
+        assert!(model.bios.iter().any(
+            |(version, date)| *version == identity.bios_version && *date == identity.bios_date
+        ));
+        // The disk's serial, firmware and WWN belong to its model.
+        let disk = CLIENT_DISKS
+            .iter()
+            .find(|disk| disk.model == identity.disk_model)
+            .unwrap();
+        assert!(identity.disk_serial.starts_with(disk.serial_prefix));
+        assert_eq!(identity.disk_firmware, disk.firmware);
+        assert!(identity.disk_wwn[1..].starts_with(disk.oui));
+        // Dell's card carries Dell's subsystem ID for the unit.
+        assert_eq!(
+            identity.nic_subsystem,
+            format!("1028:{}", identity.system_sku.to_ascii_lowercase())
+        );
+    }
+    // Servers have server disks and ECC modules.
+    let server = MachineIdentity::from_machine(machine("dell-poweredge-r240"));
+    assert!(
+        SERVER_DISKS
+            .iter()
+            .any(|disk| disk.model == server.disk_model)
+    );
+    assert!(
+        SERVER_RAM
+            .iter()
+            .any(|part| part.part == server.memory_part)
+    );
+    // New serials keep the disk model and give the disk its maker's format.
+    let mut again = identities[0].clone();
+    let (model_name, firmware) = (again.disk_model.clone(), again.disk_firmware.clone());
+    again.rerandomize();
+    assert_eq!(
+        (again.disk_model, again.disk_firmware),
+        (model_name, firmware)
+    );
+    assert_ne!(again.disk_serial, identities[0].disk_serial);
+}
+
+#[test]
+fn the_host_cpu_generation_comes_from_its_family_and_model() {
+    for (vendor, family, model, generation) in [
+        ("GenuineIntel", 6, 0x9e, Some(CpuGen::Core6to9)),
+        ("GenuineIntel", 6, 0xa5, Some(CpuGen::Core10)),
+        ("GenuineIntel", 6, 0x8c, Some(CpuGen::Core11)),
+        ("GenuineIntel", 6, 0xa7, Some(CpuGen::Core11)),
+        ("GenuineIntel", 6, 0x97, Some(CpuGen::Core12)),
+        ("GenuineIntel", 6, 0xba, Some(CpuGen::Core13Plus)),
+        ("GenuineIntel", 6, 0x55, None),
+        ("AuthenticAMD", 0x17, 0x71, Some(CpuGen::Zen2)),
+        ("AuthenticAMD", 0x19, 0x50, Some(CpuGen::Zen3)),
+        ("AuthenticAMD", 0x19, 0x44, Some(CpuGen::Zen3)),
+        ("AuthenticAMD", 0x19, 0x01, Some(CpuGen::Zen3)),
+        ("AuthenticAMD", 0x19, 0x11, Some(CpuGen::Zen4)),
+        ("AuthenticAMD", 0x19, 0x61, Some(CpuGen::Zen4)),
+        ("AuthenticAMD", 0x1a, 0x44, Some(CpuGen::Zen5)),
+        ("HygonGenuine", 0x18, 0x00, None),
+    ] {
+        assert_eq!(
+            classify(vendor, family, model),
+            generation,
+            "{vendor} {family:x} {model:x}"
+        );
+    }
+}
+
+#[test]
+fn a_run_records_the_machine_its_guest_looked_like() {
+    let profile = pinned(StealthPreset::RealisticDesktop, "dell-optiplex-7090");
+    let host = HostCpu {
+        vendor: "GenuineIntel".into(),
+        generation: Some(CpuGen::Core13Plus),
+    };
+    let record = MachineRecord::of(&profile, &host);
+    assert_eq!(record.machine, "Dell OptiPlex 7090");
+    assert_eq!(record.profile, "dell-optiplex-7090");
+    assert_eq!(
+        (record.bios_version.as_str(), record.bios_date.as_str()),
+        ("1.4.3", "01/07/2022")
+    );
+    assert_eq!(record.system_sku, "0A52");
+    assert_eq!(record.nic_chip, "Intel I219-LM");
+    assert_eq!(record.host_cpu, CpuGen::Core13Plus.label());
+    assert!(
+        record
+            .cpu_note
+            .as_deref()
+            .unwrap()
+            .contains("OptiPlex 7090")
+    );
+    assert_eq!(
+        record.summary(),
+        "Dell OptiPlex 7090, BIOS 1.4.3 of 01/07/2022"
+    );
+    // No serial, UUID or MAC address is kept.
+    let json = serde_json::to_string(&record).unwrap();
+    assert!(!json.contains(&profile.identity.system_serial));
+    assert!(!json.contains(&profile.identity.system_uuid));
+    let again: MachineRecord = serde_json::from_str(&json).unwrap();
+    assert_eq!(again, record);
+    // A host that fits has no note; Transparent is named plainly, with no BIOS.
+    let fitting = HostCpu {
+        vendor: "GenuineIntel".into(),
+        generation: Some(CpuGen::Core11),
+    };
+    assert!(MachineRecord::of(&profile, &fitting).cpu_note.is_none());
+    let plain = MachineRecord::of(&StealthProfile::transparent(), &fitting);
+    assert_eq!(plain.summary(), "Transparent (QEMU's own identity)");
+    assert!(plain.profile.is_empty() && plain.nic_chip.is_empty());
 }

@@ -25,6 +25,7 @@ fn summary(directory: PathBuf) -> RunSummary {
         state: RunState::Running,
         recording_error: None,
         notes: Vec::new(),
+        machine: None,
         route: None,
         execution: None,
         analysis: None,

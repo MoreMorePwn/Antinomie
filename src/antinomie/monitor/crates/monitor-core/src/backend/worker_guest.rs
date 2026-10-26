@@ -273,6 +273,11 @@ impl Worker {
                     state: RunState::Unknown,
                     recording_error: Some("execution has not been acknowledged".into()),
                     notes: Vec::new(),
+                    // The identity the guest shows, for reading the result against it.
+                    machine: Some(crate::stealth::MachineRecord::of(
+                        &session.vm.stealth,
+                        &crate::stealth::HostCpu::detect(),
+                    )),
                     route: Some(route),
                     execution: None,
                     analysis: selected.then(|| {

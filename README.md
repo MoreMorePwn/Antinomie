@@ -363,3 +363,13 @@ Magika (Google), GEF (bata24), pwndbg, Tor, wireproxy, Wireshark/TShark and
 Suricata. Community rules come from their publishers, such as YARA Forge,
 Emerging Threats and abuse.ch, under the licenses each carries. Exact versions,
 hashes and terms are in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+
+## Trademarks
+
+Dell, OptiPlex, Latitude, PowerEdge, HP, EliteDesk, ProDesk, ProBook, Lenovo,
+ThinkCentre, ThinkPad, ThinkSystem, Supermicro, Intel, AMD, Realtek, Broadcom,
+Samsung and other names in the stealth machine catalog and the documentation
+belong to their owners. Antinomie uses them only as factual identifiers (the
+model, BIOS version and device names a real unit reports, so a guest looks like
+one). It contains no logos, firmware images, dumped ACPI tables or real serial
+numbers, and is not affiliated with, endorsed by or sponsored by any of them.

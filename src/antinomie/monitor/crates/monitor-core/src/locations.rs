@@ -437,6 +437,7 @@ mod tests {
                 notes,
                 execution: None,
                 analysis: None,
+                machine: None,
                 route: None,
             };
             storage::atomic_json(&directory.join("run.json"), &run).unwrap();

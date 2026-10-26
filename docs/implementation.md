@@ -2487,6 +2487,32 @@ default, so earlier VMs launch exactly as before.
 | NIC subsystem | `-device e1000e,subsys_ven=,subsys=` | Intel's | The machine maker's (Dell 1028:0a61, HP 103c:…, Lenovo 17aa:3179, Supermicro 15d9:…) |
 | NAT network | `-netdev user,net=,host=,dns=,dhcpstart=` | 10.0.2.0/24 | 192.168.1.0/24, gateway .1, DNS .10, DHCP from .100 |
 
+**Machine catalog (0.8.0).** `stealth/catalog.rs` and `catalog/*.rs` hold about
+40 `MachineProfile`s: popular business desktops and laptops (Dell, HP, Lenovo),
+common consumer or small-business laptops with a wired port, and small servers.
+Each has the strings its real units report: BIOS vendor and a list of real
+(version, date) releases, system manufacturer, version and family, and a list of
+real units (product, SKU, board product, SMBIOS chassis type); the CPU
+generations it shipped with (`CpuGen`, `stealth/cpu.rs`); the onboard LAN chip
+and where its QEMU card goes (`NicSlot`); and a `weight` for how common the model
+is. The facts come from public dmidecode reports (linuxhw/DMI) and the makers'
+published specifications, as listed in the task record ANT-T0144; only factual
+identifiers are kept: no logos, firmware images, dumped ACPI tables or real
+serial numbers (serials, UUID, MAC and disk serials are random per VM, in each
+maker's format). `StealthProfile::realistic_on(kind, &HostCpu)` picks one machine
+of the kind and host vendor whose `cpus` contain the host's generation
+(`HostCpu::detect` reads family and model from /proc/cpuinfo; `classify` maps them),
+weighted by `weight`, or any of the vendor when none fits, and
+`StealthProfile::cpu_note` then says the host's CPU could not be in it.
+`MachineIdentity::from_machine` also picks one BIOS release, one unit, a disk
+model (`parts.rs`: model, firmware, WWN OUI and serial format of real SATA SSDs)
+and a memory part; the result is stored in the VM's configuration, so a boot never
+picks again. Each run saves a `MachineRecord` (`RunSummary::machine`: machine,
+BIOS, SKU, board, disk, memory, NIC chip, host CPU generation, any CPU note;
+no serials) for reading its results against the identity it was seen under.
+Not done: random RAM size and disk size (they are the VM's own settings), guest
+hostname, user and locale, and importing a profile from a machine the user owns.
+
 **Fitting to the base and the host.** Some entries need the base or the host.
 A base says what it boots with in `bundle.json` `stealth_support` (advisory,
 not part of the identity), which the image builders compute:

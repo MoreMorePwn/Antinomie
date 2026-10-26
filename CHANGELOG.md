@@ -36,6 +36,16 @@ it runs.
   profile; restoring under a different one is refused with "taken as <machine>"
   and offers **Switch profile and restore**. Snapshots from before this have no
   recorded profile and restore with a note.
+- **More machines for the stealth profiles.** The realistic presets now pick at
+  random, per VM and for its life, among about 40 popular machines: Dell
+  OptiPlex, Latitude, Vostro and PowerEdge, HP EliteDesk, ProDesk, ProBook and
+  250, Lenovo ThinkCentre, ThinkPad and ThinkSystem, and the Supermicro servers,
+  the commoner models more often and only those the host CPU's generation could
+  have shipped in (or a warning when none can). Each machine has its real BIOS
+  releases and units, and its disk model, firmware and memory part vary within
+  what such machines have. Each run records the machine its guest looked like.
+- **Supermicro network card.** The X12STH-F and H12SSL-i profiles name their card
+  `eno1` (firmware index), as their boards do; the X12STH-F has no I219.
 
 ## 0.7.1 — 2026-10-26
 

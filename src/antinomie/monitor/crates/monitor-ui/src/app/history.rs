@@ -416,6 +416,16 @@ impl MonitorApp {
             ui,
             &crate::route_ui::describe(run.route.as_ref(), labels.and_then(|labels| labels.route)),
         );
+        if let Some(machine) = &run.machine {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new("Machine").color(theme::muted()));
+                ui.label(
+                    RichText::new(format!("looks like a {}", machine.summary()))
+                        .color(theme::text()),
+                )
+                .on_hover_text(machine_hover(machine));
+            });
+        }
         enabled_features(ui, &run, labels);
         launch_details(ui, &run);
     }
@@ -733,6 +743,7 @@ pub(super) fn listed(run: &RunSummary) -> RunSummary {
         terminal_eof: run.terminal_eof,
         state: run.state.clone(),
         notes: run.notes.clone(),
+        machine: run.machine.clone(),
         route: run.route.clone(),
         recording_error: run.recording_error.clone(),
         execution: run.execution.clone(),
@@ -1015,4 +1026,30 @@ fn launch_details(ui: &mut egui::Ui, run: &RunSummary) {
                         });
                 });
         });
+}
+
+/// What the run's guest showed besides the machine's name.
+fn machine_hover(machine: &antinomie_monitor_core::stealth::MachineRecord) -> String {
+    let mut lines = vec![
+        format!(
+            "Product {} (SKU {})",
+            machine.system_product, machine.system_sku
+        ),
+        format!("Board {}", machine.board_product),
+        format!("Disk {}", machine.disk_model),
+        format!("Memory {}", machine.memory_part),
+    ];
+    if !machine.nic_chip.is_empty() {
+        lines.push(format!(
+            "Network card of the real machine: {}",
+            machine.nic_chip
+        ));
+    }
+    if !machine.host_cpu.is_empty() {
+        lines.push(format!("Host CPU shown: {}", machine.host_cpu));
+    }
+    if let Some(note) = &machine.cpu_note {
+        lines.push(note.clone());
+    }
+    lines.join("\n")
 }

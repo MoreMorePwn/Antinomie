@@ -968,6 +968,7 @@ pub fn list_runs(data_root: &Path) -> Result<Vec<RunSummary>, RecordingError> {
                 terminal_eof: true,
                 state: RunState::Finalized,
                 notes: Vec::new(),
+                machine: None,
                 route: None,
                 recording_error: manifest
                     .get("persistence_error")
@@ -1185,6 +1186,7 @@ mod tests {
                 recording_error: None,
                 execution: None,
                 analysis: Some(report),
+                machine: None,
                 route: None,
             };
             settle_stale_analysis(&mut run);
@@ -1246,6 +1248,7 @@ mod tests {
             terminal_eof: true,
             state: RunState::Finalized,
             notes: Vec::new(),
+            machine: None,
             route: None,
             recording_error: None,
             execution: None,

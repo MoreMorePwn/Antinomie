@@ -27,8 +27,7 @@
 //!
 //! The data folder must be new and disposable.
 use antinomie_monitor_core::stealth::{
-    BaseSupport, DiskBus, Firmware, HostSupport, NatNetwork, StealthPreset, StealthProfile,
-    host_cpu_vendor,
+    BaseSupport, DiskBus, Firmware, HostCpu, HostSupport, NatNetwork, StealthPreset, StealthProfile,
 };
 use antinomie_monitor_core::*;
 use std::{
@@ -149,7 +148,7 @@ fn profile(args: &[&str]) -> Result<(StealthProfile, Option<u64>), String> {
         "transparent" => StealthPreset::Transparent,
         other => return Err(format!("unknown preset {other}")),
     };
-    let mut profile = StealthProfile::default().for_preset(kind, &host_cpu_vendor());
+    let mut profile = StealthProfile::default().for_preset_on(kind, &HostCpu::detect());
     let mut gpa = None;
     for entry in args.iter().skip(1) {
         let on = |value: &str| match value {
