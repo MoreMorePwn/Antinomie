@@ -44,10 +44,10 @@ with <b>synthetic data</b>, not a recorded malware run.</sub>
 > verdict that a file is or is not malicious.
 
 > [!NOTE]
-> This README describes **0.7.0, not yet released**, plus the 0.7.1 work on its
-> preview branch ([what 0.7.1 adds](#whats-in-071)). Features and base
-> compatibility can differ from the published builds in
-> [Releases](https://github.com/MoreMorePwn/Antinomie/releases).
+> This README describes **0.7.1**, the first release since 0.6.2 (0.7.0 was not
+> published separately). Download it from
+> [Releases](https://github.com/MoreMorePwn/Antinomie/releases); the
+> [changelog](CHANGELOG.md) lists every change.
 
 ## Highlights
 
@@ -176,7 +176,7 @@ package names have been checked; other distributions are not documented.
 Install the [host build prerequisites](src/antinomie/monitor/README.md#build-and-run), then:
 
 ```sh
-git clone --branch release-0.7.0 https://github.com/MoreMorePwn/Antinomie.git
+git clone --branch v0.7.1 https://github.com/MoreMorePwn/Antinomie.git
 cd Antinomie
 ./run.sh
 ```
@@ -259,8 +259,8 @@ terminal: `antinomie --check-dependencies`. The
 
 ## What's in 0.7.1
 
-0.7.1 is still unreleased and sits on the preview branch. Beyond what the
-[changelog](CHANGELOG.md) lists so far, the branch history adds, among other changes:
+Highlights of 0.7.1 on top of the 0.7.0 work; the [changelog](CHANGELOG.md) has
+the full list.
 
 <details>
 <summary><b>Show the 0.7.1 changes</b></summary>
@@ -268,7 +268,12 @@ terminal: `antinomie --check-dependencies`. The
 <br>
 
 * **Debian 13 Minimal base:** a console-only Debian beside BusyBox and the
-  desktop base, with rootless Debian image builds.
+  desktop base, with rootless Debian image builds, laid out and configured as
+  the Debian installer leaves it (per-VM identities, installer timestamps,
+  Debian's own kernel packages in `/boot`, natively hashed accounts) and
+  bootable on virtio, SATA and NVMe.
+* **Static analysis:** Strings and Regex matches as separate tabs.
+* **Kernel patch series** rewritten as fourteen documented topic patches.
 * **Network routes:** a route per run (drop, Internet, InetSim, Tor, WireGuard via
   wireproxy, SOCKS5) without root, with `tor` and `wireproxy` as managed tools.
 * **File activity:** a per-file history with the processes and writes, and an
