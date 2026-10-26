@@ -2,6 +2,13 @@
 //! Telemetry pumping, load shedding, control requests and terminal output.
 use super::*;
 
+/// Passes of the guest control worker after which a command it has not
+/// answered is late (each pass serves up to 16 commands).
+const GUEST_TURNS: u64 = 3;
+/// How long past its deadline a command waits for a guest whose control
+/// worker has not had those passes.
+const STALLED_GUEST_GRACE: Duration = Duration::from_secs(2);
+
 impl Session {
     pub(super) fn pump(
         &mut self,
@@ -690,6 +697,7 @@ impl Session {
         snapshot: &mut Snapshot,
         sender: &SyncSender<Notification>,
     ) -> Result<(), String> {
+        self.terminal_backlog.flush(sender);
         self.pump(snapshot, sender)?;
         while let Some((reply_id, status, payload)) = self.transport.reply()? {
             self.other_reply(reply_id, status, &payload, None, snapshot, sender);
@@ -704,7 +712,26 @@ impl Session {
         sender: &SyncSender<Notification>,
         timeout: Duration,
     ) -> Result<Vec<u8>, RequestError> {
+        self.wait_reply_in(id, opcode, snapshot, sender, timeout, true)
+    }
+    /// As [`Self::wait_reply`]; `guest_time` false keeps the wall-clock
+    /// deadline, for a caller that takes a late reply as it comes.
+    fn wait_reply_in(
+        &mut self,
+        id: u64,
+        opcode: u32,
+        snapshot: &mut Snapshot,
+        sender: &SyncSender<Notification>,
+        timeout: Duration,
+        guest_time: bool,
+    ) -> Result<Vec<u8>, RequestError> {
         let deadline = Instant::now() + timeout;
+        // The deadline is the guest's time: on a loaded host the guest's CPU
+        // can wait for the host longer than a command's deadline, and then the
+        // command was not late, the guest never got to it. The guest control
+        // worker counts its passes; until it has made GUEST_TURNS of them since
+        // the command went out, the wait goes on, up to STALLED_GUEST_GRACE.
+        let sent_turns = self.transport.guest_heartbeat().ok().filter(|_| guest_time);
         loop {
             self.pump(snapshot, sender).map_err(RequestError::Failed)?;
             while let Some((reply_id, status, payload)) =
@@ -745,12 +772,28 @@ impl Session {
             {
                 return Err(RequestError::Failed(VM_EXITED_WAITING_REPLY.into()));
             }
-            if Instant::now() >= deadline {
-                return Err(RequestError::TimedOut(format!(
-                    "guest command {id} timed out; outcome unknown"
-                )));
+            let now = Instant::now();
+            if now >= deadline {
+                // Without a count (or with `guest_time` off) the deadline is final.
+                let turns = sent_turns
+                    .zip(self.transport.guest_heartbeat().ok())
+                    .map_or(u64::MAX, |(sent, seen)| seen.saturating_sub(sent));
+                if turns >= GUEST_TURNS || now >= deadline + STALLED_GUEST_GRACE {
+                    return Err(RequestError::TimedOut(if turns >= GUEST_TURNS {
+                        format!("guest command {id} timed out; outcome unknown")
+                    } else {
+                        format!(
+                            "guest command {id} timed out: the guest's control worker made \
+                             {turns} passes in {} ms (its CPU starved or a command blocked it); \
+                             outcome unknown",
+                            (timeout + STALLED_GUEST_GRACE).as_millis()
+                        )
+                    }));
+                }
+                self.transport.poll(1).map_err(RequestError::Failed)?;
+                continue;
             }
-            let remaining = deadline.saturating_duration_since(Instant::now());
+            let remaining = deadline.saturating_duration_since(now);
             let poll_timeout = remaining.as_millis().min(10) as i32;
             self.transport
                 .poll(poll_timeout)
@@ -895,6 +938,7 @@ impl Session {
         sender: &SyncSender<Notification>,
         timeout: Duration,
     ) -> Result<(), String> {
+        self.terminal_backlog.flush(sender);
         drain_pass(timeout, |left| {
             self.read_terminal_once(run_id, snapshot, sender, left)
         })
@@ -944,7 +988,8 @@ impl Session {
         args.extend((TERMINAL_READ_SIZE as u32).to_le_bytes());
         args.extend(0u32.to_le_bytes());
         let id = self.transport.send(control::READ, &args)?;
-        match self.wait_reply(id, control::READ, snapshot, sender, remaining) {
+        // A late reply is applied when it comes (`late_reads`): no grace here.
+        match self.wait_reply_in(id, control::READ, snapshot, sender, remaining, false) {
             Ok(reply) => self.apply_terminal_reply(cookie, 0, &reply, snapshot, sender),
             Err(RequestError::TimedOut(_)) => {
                 // The guest may already have consumed output for this reply; keep
@@ -1010,17 +1055,18 @@ impl Session {
             }
             None => {}
         }
-        if (count > 0 || eof)
-            && sender
-                .try_send(Notification::Terminal {
+        if count > 0 || eof {
+            let dropped = self.terminal_backlog.send(
+                sender,
+                Notification::Terminal {
                     run_id,
                     sequence,
                     data: reply[8..].to_vec(),
                     eof,
-                })
-                .is_err()
-        {
-            snapshot.health.ui_dropped = snapshot.health.ui_dropped.saturating_add(1);
+                },
+                count,
+            );
+            snapshot.health.ui_dropped = snapshot.health.ui_dropped.saturating_add(dropped);
         }
         Ok(TerminalRead {
             len: count,

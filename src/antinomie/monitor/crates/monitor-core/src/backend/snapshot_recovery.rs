@@ -5,6 +5,49 @@ use crate::{capture_processes::CaptureProcess, snapshots};
 use serde::{Deserialize, Serialize};
 
 const RESUME_TIMEOUT_MS: i32 = 10_000;
+
+/// How long each step of a transport reconnect took, in order, for its
+/// receipt (`reconnect.json`) and result: where a slow reconnect spends its time.
+struct ReconnectPhases {
+    started: Instant,
+    last: Instant,
+    steps: Vec<(&'static str, u64)>,
+}
+
+impl ReconnectPhases {
+    fn new() -> Self {
+        let now = Instant::now();
+        Self {
+            started: now,
+            last: now,
+            steps: Vec::new(),
+        }
+    }
+    fn mark(&mut self, step: &'static str) {
+        let now = Instant::now();
+        self.steps
+            .push((step, now.duration_since(self.last).as_millis() as u64));
+        self.last = now;
+    }
+    fn total_ms(&self) -> u64 {
+        self.started.elapsed().as_millis() as u64
+    }
+    fn describe(&self) -> String {
+        let steps: Vec<_> = self
+            .steps
+            .iter()
+            .map(|(step, ms)| format!("{step} {ms}"))
+            .collect();
+        format!("{} ms: {}", self.total_ms(), steps.join(", "))
+    }
+    fn json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "total_ms": self.total_ms(),
+            "steps": self.steps.iter().map(|(step, ms)| serde_json::json!({"step": step, "ms": ms}))
+                .collect::<Vec<_>>(),
+        })
+    }
+}
 const RESUME_BOUNDARY: &str = "snapshot/reconnect boundary: parser and terminal presentation restarted; unresolved command outcomes and observation tails are incomplete";
 
 #[derive(Serialize, Deserialize)]
@@ -186,7 +229,20 @@ impl Session {
             .map_err(|error| error.to_string())?;
         assembler.set_event_table(vm.transport.event_table as usize);
         capture.queue_manifest(&vm, &bundle, &disk_bundle, "snapshot-resume-pending")?;
-        storage::atomic_json(
+        // A reconnect runs on the thread that drains telemetry while the old
+        // timeline's recordings are made durable in the background: on a busy
+        // disk each fsync here took seconds to a minute (40 and 85 s
+        // reconnects). Its boundary markers go through the status file queue,
+        // published within the disk's latency; a snapshot restore keeps them
+        // synchronous.
+        let publish = |path: &std::path::Path, value: &serde_json::Value| {
+            if reconnect {
+                storage::queue_json(path, value)
+            } else {
+                storage::atomic_json(path, value)
+            }
+        };
+        publish(
             &boot_dir.join("resume-boundary.json"),
             &serde_json::json!({
                 "format":1, "snapshot_id":snapshot_id, "source_boot_id":checkpoint.source_boot_id,
@@ -261,7 +317,7 @@ impl Session {
             run.execution_generation = execution_generation;
             run.assembler
                 .set_event_table(vm.transport.event_table as usize);
-            storage::atomic_json(
+            publish(
                 &run.summary.directory.join("resume-boundary.json"),
                 &serde_json::json!({"issue":RESUME_BOUNDARY}),
             )?;
@@ -364,6 +420,7 @@ impl Session {
             quota: crate::quota::QuotaState::default(),
             terminal_cursor: 0,
             late_reads: BTreeMap::new(),
+            terminal_backlog: Default::default(),
             run_status_poll: RunStatusPoll::default(),
             recorder_poll: recorder_health::RecorderPoll::default(),
             last_process_save: Instant::now(),
@@ -933,31 +990,38 @@ impl Worker {
                     .into(),
             );
         }
+        let mut phases = ReconnectPhases::new();
         if self.snapshot.network_capture.is_some() {
             self.stop_network_capture()?;
         }
+        phases.mark("vm_network_capture");
         let _transition = self.begin_guest_transition()?;
         let debug_pause = self.debug.pause();
+        phases.mark("debug_pause");
         let mut old = self.session.take().ok_or("VM is stopped")?;
         if let Err(error) = old.suspend_run_network(
             "transport reconnect seals the previous network interval; a fresh segment resumes afterwards",
         ) {
             return self.reconnect_failed(old, error);
         }
-        let report = match old.transport.reconnect(RESUME_TIMEOUT_MS) {
+        phases.mark("run_network_suspend");
+        let (report, wait) = match old.transport.reconnect_observed(RESUME_TIMEOUT_MS) {
             Ok(report) => report,
             Err(error) => {
                 return self.reconnect_failed(old, error);
             }
         };
+        phases.mark("guest_acknowledgement");
         // The old helper must not survive into the newly attached timeline.
         if let Err(error) = old.stop_guest_resources(&mut self.snapshot, &self.sender) {
             return self.reconnect_failed(old, error);
         }
+        phases.mark("guest_resources_stop");
         old.forget_unanswered();
         if let Err(error) = old.prepare_manual_reconnect(&mut self.snapshot, &self.sender) {
             return self.reconnect_failed(old, error);
         }
+        phases.mark("process_core_handover");
         let checkpoint = match old
             .host_checkpoint()
             .and_then(|value| serde_json::from_value(value).map_err(|error| error.to_string()))
@@ -969,9 +1033,10 @@ impl Worker {
         };
         // The old timeline's recordings are sealed here and made durable in
         // the background; the new timeline records into fresh directories.
+        phases.mark("checkpoint");
         let steps = old.seal("reconnect-boundary", &mut self.snapshot);
         self.submit_sealed_flush(old.boot_id.clone(), steps);
-        let id = old.vm.id.clone();
+        phases.mark("seal");
         let mut fresh = match Session::restored(
             &self.options,
             old.vm,
@@ -991,6 +1056,7 @@ impl Worker {
                 return Err(error);
             }
         };
+        phases.mark("new_timeline");
         if let Err(error) = fresh.resume_run_network(&self.options) {
             self.snapshot.last_error = Some(error.clone());
             self.emit(Notification::CommandResult {
@@ -999,12 +1065,15 @@ impl Worker {
                 message: error,
             });
         }
-        let receipt = storage::atomic_json(
+        phases.mark("run_network_resume");
+        // Queued, like the boundary markers (see `Session::restored`).
+        let receipt = storage::queue_json(
             &fresh.capture.directory.join("reconnect.json"),
             &serde_json::json!({
                 "attachment":report.attachment, "sequence_floor":report.sequence_floor,
                 "discarded_request_bytes":report.discarded_request_bytes,
-                "discarded_reply_bytes":report.discarded_reply_bytes, "issue":RESUME_BOUNDARY
+                "discarded_reply_bytes":report.discarded_reply_bytes, "issue":RESUME_BOUNDARY,
+                "guest_acknowledgement": wait, "phases": phases.json()
             }),
         );
         self.snapshot.health = Health::default();
@@ -1022,8 +1091,19 @@ impl Worker {
         drop(debug_pause);
         self.debug_guest_moved("the transport was reconnected", false);
         receipt?;
-        self.refresh_vm_snapshots(&id)?;
-        Ok("Transport reconnected in a new recording timeline; unresolved commands were not retried".into())
+        // The VM's snapshots and what can be taken of them are as they were
+        // (same disk chain, same transport ABI): no listing, which reads and
+        // fingerprints the base and took 16 to 26 s on a busy disk.
+        Ok(format!(
+            "Transport reconnected in a new recording timeline; unresolved commands were not \
+             retried (took {}; guest acknowledged after {} ms, its control worker made {} passes)",
+            phases.describe(),
+            wait.ack_ms,
+            wait.guest_passes.map_or_else(
+                || "an unknown number of".to_string(),
+                |passes| passes.to_string()
+            )
+        ))
     }
     fn reconnect_failed(&mut self, mut old: Session, error: String) -> Result<String, String> {
         let resume = old.resume_run_network(&self.options);

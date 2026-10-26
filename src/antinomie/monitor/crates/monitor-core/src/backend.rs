@@ -461,6 +461,8 @@ struct Session {
     /// keyed by request id. The guest answers commands in submission order and
     /// has already consumed the PTY bytes, so a late reply still belongs to its run.
     late_reads: BTreeMap<u64, u64>,
+    /// Terminal output the frontend's full notification lane could not take yet.
+    terminal_backlog: terminal_drain::TerminalBacklog,
     /// At most one timed-out read-only status poll; no uncertain effects are replayed.
     run_status_poll: RunStatusPoll,
     recorder_poll: recorder_health::RecorderPoll,

@@ -188,6 +188,15 @@ it runs.
   live HIGH findings** is now off by default. The setting is stored under a new
   key because 0.7 saved its default for everyone: a machine that has it on
   turns it on again once.
+- **Transport reconnects no longer wait for the disk.** A reconnect took up to
+  tens of seconds on a busy disk (its boundary files were fsynced and the VM's
+  snapshots listed on the thread that drains telemetry); it now takes well under
+  a second, and its receipt says how long each step and the guest took.
+- **Command timeouts count the guest's time.** On a loaded host a command no
+  longer times out ("outcome unknown") before the guest had a chance to see it.
+- **No terminal output lost on a busy screen.** Output the frontend could not
+  take at once waits and follows in order instead of being dropped.
+
 ### Guest
 
 - **Architecture-neutral guest patches.** The shared patches no longer assume

@@ -61,6 +61,13 @@ struct Limits {
     max_command_len: usize,
     max_result_len: usize,
 }
+/// How a reconnect's guest acknowledgement went (see `reconnect_observed`).
+#[derive(Clone, Copy, Debug, Default, serde::Serialize)]
+pub(crate) struct ResumeWait {
+    pub ack_ms: u64,
+    /// Passes of the guest control worker during the wait; `None` if unread.
+    pub guest_passes: Option<u64>,
+}
 /// New attachment identity and discarded command traffic; no automatic replay.
 #[derive(Default, Debug, Clone, Copy)]
 #[repr(C)]
@@ -122,6 +129,7 @@ unsafe extern "C" {
     fn ant_set_host_timeout(client: *mut c_void, timeout_ms: u32) -> c_int;
     fn ant_heartbeat(client: *mut c_void) -> c_int;
     fn ant_set_guest_paused(client: *mut c_void, paused: c_int) -> c_int;
+    fn ant_guest_heartbeat(client: *mut c_void, heartbeat: *mut u64) -> c_int;
 }
 
 thread_local! {
@@ -264,7 +272,20 @@ impl Transport {
         OWNED.with(|owned| owned.set(self.ptr.as_ptr()));
         Ok(report)
     }
-    pub fn reconnect(&mut self, timeout_ms: i32) -> Result<ResumeInfo, String> {
+    /// Reattach to the running guest, without replaying commands: an earlier
+    /// handshake that still owns its nonce (EINPROGRESS) is waited for, not
+    /// replaced. Also says how the guest got there: how long its
+    /// acknowledgement took and how many passes its control worker made
+    /// meanwhile. Passes without an acknowledgement mean the guest held it
+    /// back (a fence); none mean its worker did not run (a command handler
+    /// that sleeps, or a starved CPU).
+    pub fn reconnect_observed(
+        &mut self,
+        timeout_ms: i32,
+    ) -> Result<(ResumeInfo, ResumeWait), String> {
+        let started = std::time::Instant::now();
+        let deadline = started + std::time::Duration::from_millis(timeout_ms.max(0) as u64);
+        let first = self.guest_heartbeat().ok();
         // SAFETY: Sole owner holds the client. EINPROGRESS means an earlier
         // handshake still owns its nonce; continue that wait without replaying
         // commands or publishing another attachment request.
@@ -277,7 +298,34 @@ impl Transport {
                 owned.set(std::ptr::null_mut());
             }
         });
-        self.finish_resume(timeout_ms)
+        let timed_out = -rustix::io::Errno::TIMEDOUT.raw_os_error();
+        loop {
+            let slice = deadline
+                .saturating_duration_since(std::time::Instant::now())
+                .as_millis()
+                .clamp(1, 100) as i32;
+            let mut report = ResumeInfo::default();
+            // SAFETY: Sole owner holds the client; report is writable C layout.
+            // A timed-out finish leaves the handshake pending for the next one.
+            let code = unsafe { ant_resume_finish(self.ptr.as_ptr(), slice, &mut report) };
+            if code == timed_out && std::time::Instant::now() < deadline {
+                continue;
+            }
+            let wait = ResumeWait {
+                ack_ms: started.elapsed().as_millis() as u64,
+                guest_passes: first
+                    .zip(self.guest_heartbeat().ok())
+                    .map(|(first, last)| last.saturating_sub(first)),
+            };
+            check(code).map_err(|error| {
+                format!(
+                    "{error} after {} ms, guest control worker passes {:?}",
+                    wait.ack_ms, wait.guest_passes
+                )
+            })?;
+            OWNED.with(|owned| owned.set(self.ptr.as_ptr()));
+            return Ok((report, wait));
+        }
     }
     /// Disable both writer-wait heartbeats and ordinary transport RAM writes
     /// during shared-RAM serialization. Call resume even after QMP failure.
@@ -389,6 +437,16 @@ impl Transport {
     pub fn set_host_timeout(&mut self, timeout_ms: u32) -> Result<(), String> {
         // SAFETY: Client remains live and exclusively owned by this thread.
         check(unsafe { ant_set_host_timeout(self.ptr.as_ptr(), timeout_ms) }).map(|_| ())
+    }
+    /// The guest control worker's pass count: it moves while the worker runs
+    /// (every 10 ms), not while a command handler sleeps or the guest's CPU
+    /// is not scheduled. Readable while a resume is pending.
+    pub fn guest_heartbeat(&mut self) -> Result<u64, String> {
+        let mut heartbeat = 0u64;
+        // SAFETY: Client remains live and exclusively owned by this thread; the
+        // out pointer is a valid u64.
+        check(unsafe { ant_guest_heartbeat(self.ptr.as_ptr(), &mut heartbeat) })?;
+        Ok(heartbeat)
     }
     /// The guest is paused on purpose (a memory dump): its silence is not a
     /// dead guest. Resuming restarts the liveness window.

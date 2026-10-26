@@ -143,6 +143,7 @@ impl Worker {
                 quota: crate::quota::QuotaState::default(),
                 terminal_cursor: 0,
                 late_reads: BTreeMap::new(),
+                terminal_backlog: Default::default(),
                 run_status_poll: RunStatusPoll::default(),
                 recorder_poll: recorder_health::RecorderPoll::default(),
                 telemetry_busy: false,

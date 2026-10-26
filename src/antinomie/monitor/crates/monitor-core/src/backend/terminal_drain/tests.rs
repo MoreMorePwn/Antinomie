@@ -166,3 +166,62 @@ fn a_zero_timeout_still_reads_once_and_reports_the_deadline_error() {
     });
     assert!(result.is_err());
 }
+
+fn chunk(sequence: u64, size: usize) -> Notification {
+    Notification::Terminal {
+        run_id: "run".into(),
+        sequence,
+        data: vec![b'x'; size],
+        eof: false,
+    }
+}
+
+fn sequences(receiver: &std::sync::mpsc::Receiver<Notification>) -> Vec<u64> {
+    receiver
+        .try_iter()
+        .map(|notification| match notification {
+            Notification::Terminal { sequence, .. } => sequence,
+            _ => unreachable!(),
+        })
+        .collect()
+}
+
+#[test]
+fn output_that_finds_the_lane_full_waits_and_keeps_its_order() {
+    let (sender, receiver) = std::sync::mpsc::sync_channel(2);
+    let mut backlog = TerminalBacklog::default();
+    for sequence in 1..=5 {
+        assert_eq!(backlog.send(&sender, chunk(sequence, 10), 10), 0);
+    }
+    assert_eq!(backlog.waiting(), 3);
+    assert_eq!(sequences(&receiver), [1, 2]);
+    backlog.flush(&sender);
+    assert_eq!(sequences(&receiver), [3, 4]);
+    // A new chunk goes after the one still waiting, never before it.
+    assert_eq!(backlog.send(&sender, chunk(6, 10), 10), 0);
+    assert_eq!(sequences(&receiver), [5, 6]);
+    assert_eq!(backlog.waiting(), 0);
+}
+
+#[test]
+fn past_the_bound_the_oldest_output_is_dropped_and_counted() {
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    let mut backlog = TerminalBacklog::default();
+    let big = TERMINAL_BACKLOG_SIZE / 2;
+    assert_eq!(backlog.send(&sender, chunk(1, 1), 1), 0);
+    assert_eq!(backlog.send(&sender, chunk(2, big), big), 0);
+    assert_eq!(backlog.send(&sender, chunk(3, big), big), 0);
+    assert_eq!(backlog.send(&sender, chunk(4, big), big), 1);
+    assert_eq!(sequences(&receiver), [1]);
+    backlog.flush(&sender);
+    assert_eq!(sequences(&receiver), [3]);
+}
+
+#[test]
+fn a_gone_frontend_empties_the_backlog() {
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    drop(receiver);
+    let mut backlog = TerminalBacklog::default();
+    backlog.send(&sender, chunk(1, 10), 10);
+    assert_eq!(backlog.waiting(), 0);
+}

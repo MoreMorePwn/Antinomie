@@ -1854,6 +1854,60 @@ How "no behaviour change" was checked is in the task record and the release
 notes of the branch: the recorder's objects compared before and after, and the
 conformance and stress groups on bases built from both series.
 
+### Transport reconnect, command deadlines and terminal output under load (0.8.0)
+
+Three host fixes; the guest and the contract are unchanged.
+
+* **Slow reconnects** (the 4.3 to 49 s ones of 0.7.0, and 25 and 85 s measured
+  here). A reconnect now times each of its steps and the guest's acknowledgement
+  (`reconnect.json` `phases` and `guest_acknowledgement`, and the command's
+  result). On this host the guest acknowledged in 6 to 26 ms every time, with its
+  control worker running (`ant_guest_heartbeat`, a new read of the guest
+  worker's pass count, also while a resume is pending); the time went into two
+  host steps on the thread that drains telemetry, both waiting for a disk the
+  sealed timeline's background flush and other work kept saturated (iostat:
+  99 % busy, 3.3 s per flush): the new timeline's boundary markers and receipt
+  (`atomic_json`, an `fsync` each: 8.7 and 59 s) and the snapshot listing that
+  followed (16.6 and 25.9 s; it reads and fingerprints the base). The markers and
+  the receipt now go through the status file queue (published within the disk's
+  latency, as run and manifest files already were), and a reconnect no longer
+  lists snapshots: it changes neither the disk chain nor the transport ABI, so
+  the tree and what can be taken are as they were. A snapshot restore keeps its
+  markers synchronous. `tracer-check reconnects BUNDLE DATA FIXTURE [COUNT]`
+  reconnects COUNT times (default 10) in one run that writes every second,
+  prints each reconnect's steps, and fails if one takes more than 10 s, the run
+  is not running afterwards, or the segments do not add up. Under the same
+  added disk load (a 256 MiB fsynced rewrite loop): before, 101 to 562 ms
+  (median 273), the snapshot listing the largest step; after, 50 to 70 ms, the
+  new timeline 3 to 5 ms.
+* **Command deadlines in guest time.** On a loaded host the guest's CPU can wait
+  longer than a command's deadline (the run status poll's is 100 ms), and the
+  host reported "guest command N timed out; outcome unknown" for a command the
+  guest had not had the chance to see (8 times in 12 minutes at load 36; in the
+  full tier here for the stress-light status poll, debug-p2's and audit-core's
+  uploads). `wait_reply` now counts the guest control worker's passes since the
+  command went out: past the deadline it waits on until the worker has made 3
+  passes (each serves up to 16 commands), at most 2 s more, and a timeout says
+  how many passes there were. Terminal reads keep their wall-clock deadline (a
+  late reply is applied when it comes). `stall-check pauses BUNDLE DATA [COUNT]`
+  freezes QEMU (SIGSTOP) COUNT times for 700 ms, 500 ms apart, while a program
+  prints a line every 50 ms, and halfway stops reading the backend's
+  notifications for 10 s, as a busy frontend does; it fails on any command
+  timeout or missing line. With wall-clock deadlines: 21 timeouts in 20 freezes,
+  all the run status poll's "outcome unknown; run status polling paused"; with
+  guest-time deadlines none. (`stall-check` also finds QEMU by its
+  `-name guest=NAME` now, and waits up to 180 s for a slow boot.)
+* **Terminal output the frontend missed.** Terminal chunks go to the frontend on
+  the shared, bounded notification lane; a chunk that did not fit was dropped
+  (counted as a UI drop), and the frontend's screen resync brought the screen
+  back but not scrolled-off text, so a line read "evasion.debugger_check,evasiok,..."
+  with a chunk missing. The chunks now wait in order in a per-session backlog
+  (`TerminalBacklog`, up to 8 MiB) and go first at the next send; only past that
+  bound is the oldest dropped and counted. The recording always had every byte.
+  `stall-check pauses`: with chunks dropped when the lane was full, 110 of 680
+  lines never reached the frontend (lines 164 to 273, the 10 s it did not read);
+  with the backlog all 680 did.
+
 ### Accepted host UI performance (0.6.2)
 
 Remove render-time filesystem checks for host chooser availability; resolve

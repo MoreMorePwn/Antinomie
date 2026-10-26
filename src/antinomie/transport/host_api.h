@@ -97,6 +97,11 @@ int ant_set_guest_paused(struct ant_client *client, int paused);
 /* How long (0..10000000 us) a guest send may wait for room in a full ring
  * instead of dropping; 0 drops at once. ABI 7 guests: -EOPNOTSUPP unless 0. */
 int ant_set_send_wait(struct ant_client *client, uint32_t wait_us);
+/* The guest control worker's heartbeat: it counts the worker's passes (one
+ * every ANT_POLL_MS while it runs, none while a command handler sleeps or the
+ * guest's CPU is not scheduled). Read from shared memory as it is, also while a
+ * resume is pending, without the liveness check of the other calls. */
+int ant_guest_heartbeat(struct ant_client *client, uint64_t *heartbeat);
 /* Only this function may run concurrently with the owner; cancellation is sticky.
  * Join the owner before ant_close. No calls, including cancel, may race close.
  */

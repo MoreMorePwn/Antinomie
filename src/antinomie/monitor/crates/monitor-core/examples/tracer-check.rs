@@ -5,6 +5,7 @@
 //!
 //!   tracer-check record BUNDLE NEW_DATA_DIR FIXTURE
 //!   tracer-check legacy BUNDLE NEW_DATA_DIR FIXTURE
+//!   tracer-check reconnects BUNDLE NEW_DATA_DIR FIXTURE [COUNT]
 //!
 //! FIXTURE is the static `tests/monitor/tracer-fixture`. `record` boots one
 //! VM and makes four runs: `writes` as root (every written-file case), `slow`
@@ -15,8 +16,14 @@
 //! `RUN label=directory` line for each run; the ignored test
 //! `recorded_tracer_triage` of the app's triage module reads them. `legacy`
 //! is for a base from before the written-file hashes: the host must ask for
-//! nothing and the run must work as before, with no such record. The data
-//! folder must be new and disposable. Every result is a `RESULT` line.
+//! nothing and the run must work as before, with no such record.
+//! `reconnects` reconnects the transport COUNT times (default 10) during one
+//! run that writes a file every second, and prints what each reconnect took,
+//! step by step (`RECONNECT` lines). It fails if a reconnect takes longer
+//! than [`RECONNECT_BUDGET`], if the run does not keep its identity across
+//! them, or if a segment of it has no write: what a slow reconnect costs is
+//! measured, not inferred from a missing segment. The data folder must be new
+//! and disposable. Every result is a `RESULT` line.
 use antinomie_monitor_core::kernel_notes::{self, FileHash, HashKind, HashStatus};
 use antinomie_monitor_core::*;
 use sha2::{Digest, Sha256};
@@ -453,9 +460,11 @@ fn record(bundle: &str, data: &str, fixture: &str) -> Result<(), String> {
     let slow = d.launch_with(FIXTURE, &["slow", "30"], 0, true)?;
     thread::sleep(Duration::from_secs(4));
     let started = Instant::now();
-    d.command(Command::ReconnectTransport)?;
+    let reconnected = d.command(Command::ReconnectTransport)?;
+    // The command's own account of its steps, beside the time it took from
+    // here (which includes waiting for the backend to take the command).
     result(format!(
-        "reconnect took {} ms",
+        "reconnect took {} ms ({reconnected})",
         started.elapsed().as_millis()
     ));
     d.finished(&slow, 120)?;
@@ -569,6 +578,90 @@ fn legacy(bundle: &str, data: &str, fixture: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// The longest a reconnect may take in `reconnects`: about ten times the
+/// usual (0.2 to 1 s), far below the 41 and 49 s ones it is to catch.
+const RECONNECT_BUDGET: Duration = Duration::from_secs(10);
+
+fn reconnects(bundle: &str, data: &str, fixture: &str, count: usize) -> Result<(), String> {
+    let mut d = setup(bundle, data, "tracer reconnects")?;
+    d.command(Command::Upload {
+        source: PathBuf::from(fixture),
+        destination: FIXTURE.into(),
+        overwrite: true,
+        executable: true,
+    })?;
+    let seconds = (count * 8 + 20).to_string();
+    let run = d.launch(FIXTURE, &["slow", &seconds], 0)?;
+    let mut bad = Vec::new();
+    let mut took = Vec::new();
+    for index in 0..count {
+        thread::sleep(Duration::from_secs(5));
+        let started = Instant::now();
+        let message = d.command(Command::ReconnectTransport)?;
+        let elapsed = started.elapsed();
+        println!("RECONNECT {index} {} ms: {message}", elapsed.as_millis());
+        took.push(elapsed);
+        if elapsed > RECONNECT_BUDGET {
+            bad.push(format!(
+                "reconnect {index} took {} ms, over {} ms",
+                elapsed.as_millis(),
+                RECONNECT_BUDGET.as_millis()
+            ));
+        }
+        // The continued run's status is unknown until the guest answers a poll.
+        let id = run.clone();
+        if d.wait("the run's status after the reconnect", 30, move |s| {
+            s.runs
+                .iter()
+                .any(|r| r.id == id && r.state != RunState::Unknown)
+        })
+        .is_err()
+            || d.run(&run)
+                .is_none_or(|summary| summary.state != RunState::Running)
+        {
+            bad.push(format!(
+                "the run is {:?} after reconnect {index}",
+                d.run(&run).map(|summary| summary.state.clone())
+            ));
+            break;
+        }
+    }
+    d.finished(&run, (count * 8 + 120) as u64)?;
+    let summary = d.run(&run).ok_or("run missing")?.clone();
+    d.command(Command::Stop)?;
+    d.wait("VM stop", 90, |s| s.state == VmState::Stopped)?;
+    thread::sleep(Duration::from_secs(2));
+    let segments = recording::run_segments(&summary.directory, &summary.id, &summary.vm_id)
+        .map_err(|e| e.to_string())?;
+    result(format!(
+        "reconnects: {} segments of run {}",
+        segments.len(),
+        summary.id
+    ));
+    if segments.len() != took.len() + 1 {
+        bad.push(format!(
+            "{} reconnects but {} segments",
+            took.len(),
+            segments.len()
+        ));
+    }
+    took.sort();
+    if let (Some(fastest), Some(slowest)) = (took.first(), took.last()) {
+        result(format!(
+            "reconnect times: fastest {} ms, median {} ms, slowest {} ms",
+            fastest.as_millis(),
+            took[took.len() / 2].as_millis(),
+            slowest.as_millis()
+        ));
+    }
+    if bad.is_empty() {
+        println!("PASS reconnects");
+        Ok(())
+    } else {
+        Err(bad.join("; "))
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let outcome = match args
@@ -579,8 +672,15 @@ fn main() {
     {
         ["record", bundle, data, fixture] => record(bundle, data, fixture),
         ["legacy", bundle, data, fixture] => legacy(bundle, data, fixture),
+        ["reconnects", bundle, data, fixture] => reconnects(bundle, data, fixture, 10),
+        ["reconnects", bundle, data, fixture, count] => count
+            .parse()
+            .map_err(|_| format!("bad reconnect count {count}"))
+            .and_then(|count| reconnects(bundle, data, fixture, count)),
         _ => {
-            eprintln!("usage: tracer-check record|legacy BUNDLE NEW_DATA_DIR FIXTURE");
+            eprintln!(
+                "usage: tracer-check record|legacy|reconnects BUNDLE NEW_DATA_DIR FIXTURE [COUNT]"
+            );
             std::process::exit(2);
         }
     };

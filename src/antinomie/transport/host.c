@@ -663,6 +663,14 @@ int ant_get_stats(struct ant_client *c, struct ant_stats *stats)
 	return 0;
 }
 
+int ant_guest_heartbeat(struct ant_client *c, uint64_t *heartbeat)
+{
+	if (!c || !heartbeat) return -EINVAL;
+	if (__atomic_load_n(&c->cancelled, __ATOMIC_RELAXED)) return -ECANCELED;
+	*heartbeat = ANT_ACQ(&c->control->guest_heartbeat);
+	return 0;
+}
+
 void ant_cancel(struct ant_client *c)
 {
 	if (c) __atomic_store_n(&c->cancelled, 1, __ATOMIC_RELAXED);

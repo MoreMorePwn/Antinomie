@@ -6,6 +6,14 @@
 //! then run programs as before.
 //!
 //! usage: stall-check BUNDLE NEW_DATA_DIR [STALL_SECONDS]
+//!        stall-check pauses BUNDLE NEW_DATA_DIR [COUNT]
+//!
+//! `pauses` freezes QEMU COUNT times (default 20) for 700 ms, 500 ms apart,
+//! while a program prints a line every 50 ms: short stalls, as a loaded host
+//! gives a guest, shorter than any timeout of the transport. Halfway, the
+//! check itself stops reading the backend's notifications for 10 s, as a busy
+//! frontend does. No guest command may time out ("outcome unknown") and the
+//! terminal output received must have every line.
 use antinomie_monitor_core::{
     Backend, BackendOptions, Command, ExecRequest, Notification, Snapshot, VmConfig, VmState,
 };
@@ -93,22 +101,106 @@ fn signal(pid: u32, name: &str) -> Result<(), String> {
         .ok_or_else(|| format!("kill -{name} {pid} failed"))
 }
 
-/// The QEMU process of the VM named `name` (its command line holds `-name NAME`).
+/// The QEMU process of the VM named `name`.
 fn qemu_pid(name: &str) -> Option<u32> {
     fs::read_dir("/proc").ok()?.flatten().find_map(|entry| {
         let pid: u32 = entry.file_name().to_str()?.parse().ok()?;
         let cmdline = fs::read(entry.path().join("cmdline")).ok()?;
         let args: Vec<&[u8]> = cmdline.split(|&b| b == 0).collect();
         let qemu = args.first()?.ends_with(b"qemu-system-x86_64");
-        let named = args
-            .windows(2)
-            .any(|w| w[0] == b"-name" && w[1] == name.as_bytes());
+        // `-name guest=NAME[,...]` (older launches: `-name NAME`).
+        let guest = format!("guest={name}");
+        let named = args.windows(2).any(|w| {
+            w[0] == b"-name"
+                && (w[1] == name.as_bytes()
+                    || w[1] == guest.as_bytes()
+                    || w[1].starts_with(format!("{guest},").as_bytes()))
+        });
         (qemu && named).then_some(pid)
     })
 }
 
+/// Short freezes during a run: no command times out, no output is lost.
+fn pauses(test: &mut Harness, name: &str, count: usize) -> Result<(), String> {
+    let lines = (count as u64 * 1200 / 50 + 200).to_string();
+    test.command(Command::Execute(ExecRequest {
+        path: "/bin/sh".into(),
+        args: vec![
+            "-c".into(),
+            format!("i=0; while [ $i -lt {lines} ]; do echo tick-$i; i=$((i+1)); sleep 0.05; done; echo TICKS-DONE"),
+        ],
+        ..ExecRequest::default()
+    }))?;
+    test.wait("the program's first line", 30, |t| {
+        String::from_utf8_lossy(&t.output).contains("tick-0")
+    })?;
+    let pid = qemu_pid(name).ok_or("QEMU process not found")?;
+    let mut errors = Vec::new();
+    for index in 0..count {
+        if index == count / 2 {
+            // A frontend busy elsewhere: the notification lane fills up.
+            thread::sleep(Duration::from_secs(10));
+        }
+        signal(pid, "STOP")?;
+        let frozen = Instant::now();
+        while frozen.elapsed() < Duration::from_millis(700) {
+            test.receive();
+            thread::sleep(Duration::from_millis(20));
+        }
+        signal(pid, "CONT")?;
+        let running = Instant::now();
+        while running.elapsed() < Duration::from_millis(500) {
+            test.receive();
+            if let Some(error) = test.snapshot.last_error.take()
+                && error.contains("timed out")
+            {
+                errors.push(error);
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+    test.wait("the program's last line", 120, |t| {
+        String::from_utf8_lossy(&t.output).contains("TICKS-DONE")
+    })?;
+    errors.extend(
+        test.notices
+            .iter()
+            .filter(|notice| notice.contains("timed out"))
+            .cloned(),
+    );
+    let output = String::from_utf8_lossy(&test.output);
+    let lines: u64 = lines.parse().map_err(|_| "line count")?;
+    let missing: Vec<_> = (0..lines)
+        .filter(|i| {
+            !output.contains(&format!("tick-{i}\r\n")) && !output.contains(&format!("tick-{i}\n"))
+        })
+        .collect();
+    println!(
+        "{count} freezes of 700 ms: {} command timeouts, {} of {lines} lines missing",
+        errors.len(),
+        missing.len()
+    );
+    for error in &errors {
+        println!("timeout: {error}");
+    }
+    test.command(Command::Stop)?;
+    if errors.is_empty() && missing.is_empty() {
+        println!("PAUSES-CHECK-PASS");
+        Ok(())
+    } else {
+        Err(format!(
+            "{} command timeouts, lines missing: {missing:?}",
+            errors.len()
+        ))
+    }
+}
+
 fn run() -> Result<(), String> {
-    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    let mut args: Vec<_> = std::env::args_os().skip(1).collect();
+    let pause_mode = args.first().is_some_and(|first| first == "pauses");
+    if pause_mode {
+        args.remove(0);
+    }
     let (bundle, data) = match args.as_slice() {
         [bundle, data, ..] => (PathBuf::from(bundle), PathBuf::from(data)),
         _ => return Err("usage: stall-check BUNDLE NEW_DATA_DIR [STALL_SECONDS]".into()),
@@ -116,7 +208,7 @@ fn run() -> Result<(), String> {
     let stall: u64 = args
         .get(2)
         .and_then(|value| value.to_str()?.parse().ok())
-        .unwrap_or(40);
+        .unwrap_or(if pause_mode { 20 } else { 40 });
     if data.exists() {
         return Err("the data folder must not exist yet".into());
     }
@@ -143,7 +235,7 @@ fn run() -> Result<(), String> {
     test.receive();
     let vm_id = test.snapshot.vms.first().ok_or("VM missing")?.id.clone();
     test.command(Command::Start { vm_id })?;
-    test.wait("guest ready", 60, |t| {
+    test.wait("guest ready", 180, |t| {
         t.snapshot
             .serial_log
             .as_ref()
@@ -159,6 +251,9 @@ fn run() -> Result<(), String> {
     test.wait("output before the stall", 30, |t| {
         String::from_utf8_lossy(&t.output).contains("BEFORE-STALL")
     })?;
+    if pause_mode {
+        return pauses(&mut test, name, stall as usize);
+    }
     let pid = qemu_pid(name).ok_or("QEMU process not found")?;
     println!("freezing QEMU {pid} for {stall} s");
     signal(pid, "STOP")?;
