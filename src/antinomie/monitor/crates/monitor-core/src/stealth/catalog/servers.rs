@@ -9,7 +9,7 @@ pub(super) const SUPERMICRO_X12STH: MachineProfile = MachineProfile {
     kind: StealthPreset::RealisticServer,
     cpu_vendor: "GenuineIntel",
     weight: 3,
-    cpus: &[CpuGen::Core11],
+    cpus: &[CpuGen::Core10, CpuGen::Core11],
     bios_vendor: "American Megatrends International, LLC.",
     bios: &[("2.1", "02/21/2024")],
     manufacturer: "Supermicro",
