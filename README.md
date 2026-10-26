@@ -4,7 +4,7 @@
 
 # Antinomie
 
-**A local, kernel-level Linux malware sandbox.**
+**Watch Linux malware from below the kernel line.**
 
 Antinomie runs Linux samples in disposable QEMU virtual machines on your own
 computer and observes them from inside the guest kernel. No agent runs in the
