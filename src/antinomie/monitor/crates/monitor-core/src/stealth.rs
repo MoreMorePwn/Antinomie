@@ -121,16 +121,23 @@ pub enum NicSlot {
     /// 00:1f.6 (`enp0s31f6`): the integrated Intel LAN (I219) of the 100
     /// series and later chipsets, beside the LPC bridge at 00:1f.0.
     Pch,
+    /// 00:19.0 with ACPI index 1 (`eno1`): a board whose LAN is not the
+    /// chipset's I219 but a controller on the board, which firmware names
+    /// by index (the Supermicro servers' Intel I210 or Broadcom ports).
+    /// QEMU's `acpi-index` puts that index in the DSDT, and Debian's udev
+    /// names the interface from it instead of from the slot.
+    Eno1,
 }
 
 impl NicSlot {
-    pub const ALL: [Self; 2] = [Self::Ich, Self::Pch];
+    pub const ALL: [Self; 3] = [Self::Ich, Self::Pch, Self::Eno1];
 
     /// The PCI address, as a `-device` option.
     pub fn address(self) -> &'static str {
         match self {
             Self::Ich => "addr=0x19",
             Self::Pch => "addr=0x1f.0x6",
+            Self::Eno1 => "addr=0x19,acpi-index=1",
         }
     }
 
@@ -139,6 +146,7 @@ impl NicSlot {
         match self {
             Self::Ich => "enp0s25",
             Self::Pch => "enp0s31f6",
+            Self::Eno1 => "eno1",
         }
     }
 
@@ -151,6 +159,7 @@ impl NicSlot {
         match self {
             Self::Ich => "PCI 00:19.0 (enp0s25)",
             Self::Pch => "PCI 00:1f.6 (enp0s31f6)",
+            Self::Eno1 => "PCI 00:19.0, firmware index 1 (eno1)",
         }
     }
 }
@@ -625,8 +634,9 @@ pub const MACHINES: &[MachineProfile] = &[
         serial: SerialStyle::Supermicro,
         oem_strings: &["Default string"],
         nic_subsystem: "15d9:1c48",
-        // C252: I219-LM beside the I210.
-        nic_slot: NicSlot::Pch,
+        // Two Intel I210 (PCIe) and no I219: firmware names the ports eno1
+        // and eno2.
+        nic_slot: NicSlot::Eno1,
         cdrom: false,
     },
     MachineProfile {
@@ -648,8 +658,8 @@ pub const MACHINES: &[MachineProfile] = &[
         serial: SerialStyle::Supermicro,
         oem_strings: &["Default string"],
         nic_subsystem: "15d9:1c38",
-        // AMD: no integrated LAN on bus 0.
-        nic_slot: NicSlot::Ich,
+        // Onboard LAN controllers (not the chipset's): named by firmware index.
+        nic_slot: NicSlot::Eno1,
         cdrom: false,
     },
 ];

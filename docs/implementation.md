@@ -3126,9 +3126,14 @@ base's `/etc/network/interfaces` has only the loopback (`CONSOLE_INTERFACES`); i
 slot of the profile's machine and writes the installer's `allow-hotplug`
 stanza for the name udev gives it there. `StealthProfile::nic_slot` takes the
 slot from the machine the identity copies (`MachineProfile::nic_slot`): Intel
-100-series and later chipsets (OptiPlex 7090, EliteDesk 800 G6, Latitude 5420,
-X12STH-F) have their I219 at 00:1f.6, `enp0s31f6` (`NicSlot::Pch`; q35's LPC
-bridge at 00:1f.0 is multifunction, so function 6 is free); profiles without
+100-series and later chipsets (OptiPlex 7090, EliteDesk 800 G6, Latitude 5420)
+have their I219 at 00:1f.6, `enp0s31f6` (`NicSlot::Pch`; q35's LPC
+bridge at 00:1f.0 is multifunction, so function 6 is free). The Supermicro
+servers have no chipset LAN (the X12STH-F has two Intel I210, the H12SSL-i
+controllers on the board): firmware names such ports by index, so the NIC goes
+to 00:19.0 with QEMU's `acpi-index=1` and Debian's udev names it `eno1`
+(`NicSlot::Eno1`; checked on q35 with Debian 13: `e1000e 0000:00:19.0 eno1:
+renamed from eth0`, no extra device or ID). Profiles without
 an identity (Transparent), with an edited one, or copying an AMD machine (no
 integrated LAN on bus 0, and a root port would be QEMU's Red Hat one) keep
 00:19.0, `enp0s25`, the ICH9's place (`NicSlot::Ich`). `nic_option_for` adds

@@ -635,8 +635,8 @@ fn the_nic_slot_follows_the_chipset_of_the_machine_the_profile_copies() {
         ("hp-elitedesk-805-g8", NicSlot::Ich),
         ("dell-latitude-5420", NicSlot::Pch),
         ("lenovo-t14-gen3-amd", NicSlot::Ich),
-        ("supermicro-x12sth", NicSlot::Pch),
-        ("supermicro-h12ssl", NicSlot::Ich),
+        ("supermicro-x12sth", NicSlot::Eno1),
+        ("supermicro-h12ssl", NicSlot::Eno1),
     ];
     assert_eq!(MACHINES.len(), expected.len());
     for (id, slot) in expected {
@@ -644,11 +644,10 @@ fn the_nic_slot_follows_the_chipset_of_the_machine_the_profile_copies() {
         let mut profile = StealthProfile::transparent();
         profile.use_machine(machine);
         assert_eq!(profile.nic_slot(), slot, "{id}");
-        assert_eq!(
-            machine.cpu_vendor == "GenuineIntel",
-            slot == NicSlot::Pch,
-            "{id}"
-        );
+        // The chipset's I219 only on Intel machines that have one.
+        if slot == NicSlot::Pch {
+            assert_eq!(machine.cpu_vendor, "GenuineIntel", "{id}");
+        }
         // The identity switched off, or edited away from a known machine:
         // the ICH's slot, as for Transparent.
         profile.identity_enabled = false;
@@ -657,7 +656,8 @@ fn the_nic_slot_follows_the_chipset_of_the_machine_the_profile_copies() {
         profile.identity.profile.clear();
         assert_eq!(profile.nic_slot(), NicSlot::Ich);
     }
-    // The presets: Intel hosts get the PCH's slot, AMD hosts the ICH's.
+    // The presets: Intel hosts get the PCH's slot (a server: the board's
+    // LAN by index), AMD hosts the ICH's.
     for (kind, vendor, slot) in [
         (
             StealthPreset::RealisticDesktop,
@@ -665,14 +665,22 @@ fn the_nic_slot_follows_the_chipset_of_the_machine_the_profile_copies() {
             NicSlot::Pch,
         ),
         (StealthPreset::RealisticLaptop, "GenuineIntel", NicSlot::Pch),
-        (StealthPreset::RealisticServer, "GenuineIntel", NicSlot::Pch),
+        (
+            StealthPreset::RealisticServer,
+            "GenuineIntel",
+            NicSlot::Eno1,
+        ),
         (
             StealthPreset::RealisticDesktop,
             "AuthenticAMD",
             NicSlot::Ich,
         ),
         (StealthPreset::RealisticLaptop, "AuthenticAMD", NicSlot::Ich),
-        (StealthPreset::RealisticServer, "AuthenticAMD", NicSlot::Ich),
+        (
+            StealthPreset::RealisticServer,
+            "AuthenticAMD",
+            NicSlot::Eno1,
+        ),
     ] {
         assert_eq!(StealthProfile::realistic(kind, vendor).nic_slot(), slot);
     }
@@ -681,6 +689,7 @@ fn the_nic_slot_follows_the_chipset_of_the_machine_the_profile_copies() {
     for (slot, address, name) in [
         (NicSlot::Ich, "addr=0x19", "enp0s25"),
         (NicSlot::Pch, "addr=0x1f.0x6", "enp0s31f6"),
+        (NicSlot::Eno1, "addr=0x19,acpi-index=1", "eno1"),
     ] {
         assert_eq!((slot.address(), slot.interface()), (address, name));
         assert_eq!(NicSlot::from_interface(name), Some(slot));

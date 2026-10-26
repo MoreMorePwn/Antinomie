@@ -129,8 +129,10 @@ every run of that boot, shown under the run's header.
 
 On Debian Minimal the network card sits where the profile's machine has its
 built-in LAN, so the interface has that machine's name: `enp0s31f6` for the
-Intel desktops, laptop and server (their I219 at PCI 00:1f.6), `enp0s25`
-otherwise. Changing the profile to a machine with another slot moves the card
+Intel desktops and laptop (their I219 at PCI 00:1f.6), `eno1` for the
+Supermicro servers (a board LAN that firmware numbers; the card keeps PCI 00:19.0
+and gets ACPI index 1), `enp0s25` otherwise. A VM already on the old X12STH-F
+slot keeps `enp0s31f6` until its machine is changed. Changing the profile to a machine with another slot moves the card
 and rewrites the VM's network configuration when you save; a VM with snapshots
 keeps its slot (delete the snapshots, or pick a machine with the same chipset).
 
