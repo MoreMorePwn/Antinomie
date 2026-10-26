@@ -599,6 +599,8 @@ const DEBIAN_TOOLS: &[ToolSpec] = &[
     tool("tar", "tar"),
     tool("busybox", "busybox-static"),
     tool("dpkg-query", "dpkg"),
+    // The UEFI disk layout partitions with it.
+    tool("sfdisk", "fdisk"),
 ];
 
 /// The console Debian base: Debian's image tools, but the minimal kernel needs
@@ -615,6 +617,8 @@ const DEBIAN_MINIMAL_TOOLS: &[ToolSpec] = &[
     tool("tar", "tar"),
     tool("busybox", "busybox-static"),
     tool("dpkg-query", "dpkg"),
+    // The UEFI disk layout partitions with it.
+    tool("sfdisk", "fdisk"),
 ];
 
 /// The QEMU builder needs only the emulator, its image tool and curl.

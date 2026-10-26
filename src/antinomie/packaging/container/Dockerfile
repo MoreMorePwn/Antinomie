@@ -27,6 +27,7 @@ RUN set -eux; \
         dpkg-dev=1.22.22 \
         dwarves=1.30-1 \
         e2fsprogs=1.47.2-3+b12 \
+        fdisk=2.41.5-0+deb13u1 \
         flex=2.6.4-8.2+b4 \
         gcc=4:14.2.0-1 \
         gcc-14=14.2.0-19 \
