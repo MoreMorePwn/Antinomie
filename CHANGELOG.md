@@ -20,6 +20,10 @@ it runs.
   line erases, overwrites, concealed text, control strings including the OSC 52
   clipboard command, the alternate screen). Formatted now draws bold and italic.
   Saved runs open in either view.
+- **Snapshots keep their stealth profile.** Each snapshot records the VM's
+  profile; restoring under a different one is refused with "taken as <machine>"
+  and offers **Switch profile and restore**. Snapshots from before this have no
+  recorded profile and restore with a note.
 
 ## 0.7.1 — 2026-10-26
 

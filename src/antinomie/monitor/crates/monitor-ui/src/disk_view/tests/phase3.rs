@@ -30,6 +30,8 @@ fn checkpoint(id: &str, name: &str, created: u64, deleted: bool) -> VmCheckpoint
         compatible: true,
         compatibility_note: None,
         deleted,
+        stealth: None,
+        profile: Default::default(),
     }
 }
 

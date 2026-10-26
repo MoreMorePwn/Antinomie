@@ -397,6 +397,7 @@ fn run() -> Result<(), String> {
                     mode: VmSnapshotMode::Disk,
                 }),
                 confirmed: true,
+                switch_profile: false,
             })
             .is_err(),
         "invalid save-current snapshot unexpectedly succeeded",

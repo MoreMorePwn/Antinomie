@@ -208,6 +208,7 @@ fn restore(context: &mut Context, snapshot_id: String) -> Result<(), String> {
         boot_from_disk: false,
         save_current: None,
         confirmed: true,
+        switch_profile: false,
     })?;
     context.driver.wait("the restored guest", 120, |snapshot| {
         snapshot.state == antinomie_monitor_core::VmState::Running

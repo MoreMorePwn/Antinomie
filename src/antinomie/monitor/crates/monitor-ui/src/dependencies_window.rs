@@ -446,6 +446,7 @@ mod tests {
             boot_from_disk: true,
             save_current: None,
             confirmed: true,
+            switch_profile: false,
         };
         assert!(window.require(&create, &options, &snapshot).is_err());
         assert!(window.require(&restore, &options, &snapshot).is_err());

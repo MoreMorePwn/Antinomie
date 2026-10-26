@@ -161,6 +161,65 @@ impl Driver {
             .ok_or_else(|| "checkpoint missing".into())
     }
 }
+/// A snapshot is restored under the stealth profile it was taken with: take
+/// one, give the VM another profile, see the restore refused, switch back and
+/// restore. The VM is stopped.
+fn profile_phase(driver: &mut Driver, vm: &str) -> Result<(), String> {
+    use antinomie_monitor_core::stealth::{StealthPreset, StealthProfile, host_cpu_vendor};
+    let mut config = driver
+        .snapshot
+        .vms
+        .iter()
+        .find(|known| known.id == vm)
+        .cloned()
+        .ok_or("VM missing")?;
+    let original = config.stealth.clone();
+    let taken = driver.snapshot(vm, "Profile A", VmSnapshotMode::Disk)?;
+    config.stealth = StealthProfile::realistic(StealthPreset::RealisticDesktop, &host_cpu_vendor());
+    driver.command(Command::Save(config))?;
+    driver.command(Command::RefreshVmSnapshots { vm_id: vm.into() })?;
+    let node = |driver: &Driver| {
+        driver
+            .snapshot
+            .vm_snapshot_trees
+            .get(vm)
+            .and_then(|tree| tree.nodes.iter().find(|node| node.id == taken))
+            .map(|node| node.profile.clone())
+    };
+    if !matches!(node(driver), Some(SnapshotProfile::Other { .. })) {
+        return Err(format!("profile change not listed: {:?}", node(driver)));
+    }
+    let restore = |switch_profile| Command::RestoreVmSnapshot {
+        vm_id: vm.into(),
+        snapshot_id: taken.clone(),
+        boot_from_disk: true,
+        save_current: None,
+        confirmed: true,
+        switch_profile,
+    };
+    match driver.command(restore(false)) {
+        Err(error) if error.contains("switch the VM back to that profile") => {}
+        other => {
+            return Err(format!(
+                "restore under another profile not refused: {other:?}"
+            ));
+        }
+    }
+    driver.command(restore(true))?;
+    driver.guest_ready()?;
+    let now = driver
+        .snapshot
+        .vms
+        .iter()
+        .find(|known| known.id == vm)
+        .map(|known| known.stealth.clone());
+    if now.as_ref() != Some(&original) {
+        return Err("the VM did not get its profile back".into());
+    }
+    driver.command(Command::Stop)?;
+    eprintln!("profile phase passed");
+    Ok(())
+}
 fn run() -> Result<(), String> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     let debian = match args.get(2).and_then(|arg| arg.to_str()) {
@@ -253,6 +312,7 @@ fn run() -> Result<(), String> {
             boot_from_disk: false,
             save_current: None,
             confirmed: true,
+            switch_profile: false,
         })?;
         if driver.snapshot.boot_id == original_boot {
             return Err("full restore appended to old timeline".into());
@@ -287,6 +347,7 @@ fn run() -> Result<(), String> {
             boot_from_disk: true,
             save_current: None,
             confirmed: false,
+            switch_profile: false,
         })
         .is_ok()
     {
@@ -302,6 +363,7 @@ fn run() -> Result<(), String> {
             mode: VmSnapshotMode::Disk,
         }),
         confirmed: true,
+        switch_profile: false,
     })?;
     driver.guest_ready()?;
     let rebooted = driver.launch(ExecRequest {
@@ -317,6 +379,7 @@ fn run() -> Result<(), String> {
     })?;
     driver.marker(&rebooted, "A\r\nDISK_REBOOT_DONE")?;
     driver.command(Command::Stop)?;
+    profile_phase(&mut driver, &vm)?;
     driver.command(Command::DeleteVmSnapshot {
         vm_id: vm.clone(),
         snapshot_id: full.clone(),

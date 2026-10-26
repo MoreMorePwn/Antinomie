@@ -110,11 +110,18 @@ impl Worker {
                 boot_from_disk,
                 save_current,
                 confirmed,
+                switch_profile,
             } => {
                 if !confirmed {
                     return Err("restore requires confirmation".into());
                 }
-                self.restore_vm_snapshot(&vm_id, &snapshot_id, boot_from_disk, save_current)
+                self.restore_vm_snapshot(
+                    &vm_id,
+                    &snapshot_id,
+                    boot_from_disk,
+                    save_current,
+                    switch_profile,
+                )
             }
             Command::RenameVmSnapshot {
                 vm_id,

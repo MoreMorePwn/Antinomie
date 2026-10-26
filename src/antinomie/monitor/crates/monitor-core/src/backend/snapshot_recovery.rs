@@ -637,8 +637,17 @@ impl Worker {
         snapshot_id: &str,
         boot_from_disk: bool,
         save_current: Option<SnapshotRequest>,
+        switch_profile: bool,
     ) -> Result<String, String> {
-        let result = self.restore_vm_snapshot_inner(id, snapshot_id, boot_from_disk, save_current);
+        // A snapshot is restored under the stealth profile it was taken with:
+        // the guest's disk and memory hold what that machine looked like.
+        let (switch, note) = self.restore_profile(id, snapshot_id, switch_profile)?;
+        let result = self
+            .restore_vm_snapshot_inner(id, snapshot_id, boot_from_disk, save_current, switch)
+            .map(|message| match note {
+                Some(note) => format!("{message}; {note}"),
+                None => message,
+            });
         if let Some(session) = self.session.as_mut()
             && let Err(error) = session.resume_run_network(&self.options)
         {
@@ -655,19 +664,78 @@ impl Worker {
         }
         result
     }
+    /// Compares the snapshot's recorded profile with the VM's: the profile to
+    /// switch to (when asked to) and a note for the result, or the refusal.
+    pub(super) fn restore_profile(
+        &self,
+        id: &str,
+        snapshot_id: &str,
+        switch_profile: bool,
+    ) -> Result<(Option<crate::stealth::StealthProfile>, Option<String>), String> {
+        let vm = self.snapshot_vm(id)?;
+        let tree = snapshots::list(&self.options, &vm)?;
+        let node = tree
+            .nodes
+            .iter()
+            .find(|node| node.id == snapshot_id && !node.deleted)
+            .ok_or("unknown snapshot")?;
+        match &node.profile {
+            crate::api::SnapshotProfile::Same => Ok((None, None)),
+            crate::api::SnapshotProfile::Unknown => Ok((
+                None,
+                Some(
+                    "this snapshot has no recorded stealth profile (it was taken before \
+                     profiles were recorded), so whether it matches is unknown"
+                        .into(),
+                ),
+            )),
+            crate::api::SnapshotProfile::Other { machine } if switch_profile => {
+                let profile = node
+                    .stealth
+                    .clone()
+                    .ok_or("the snapshot's profile is not recorded")?;
+                Ok((
+                    Some(profile),
+                    Some(format!("the VM now uses the profile of {machine}")),
+                ))
+            }
+            crate::api::SnapshotProfile::Other { machine } => Err(format!(
+                "this snapshot was taken as {machine}; switch the VM back to that profile \
+                 to restore it"
+            )),
+        }
+    }
+
+    /// Saves `vm` as the VM's configuration, as a rename does.
+    fn use_vm_profile(&mut self, vm: &VmConfig) -> Result<(), String> {
+        storage::validate_vm(vm)?;
+        let directory = storage::vm_dir(&self.options, &vm.id)?;
+        storage::atomic_json(&directory.join("config.json"), vm)?;
+        if let Some(slot) = self.snapshot.vms.iter_mut().find(|known| known.id == vm.id) {
+            *slot = vm.clone();
+        }
+        Ok(())
+    }
+
     fn restore_vm_snapshot_inner(
         &mut self,
         id: &str,
         snapshot_id: &str,
         boot_from_disk: bool,
         save_current: Option<SnapshotRequest>,
+        switch: Option<crate::stealth::StealthProfile>,
     ) -> Result<String, String> {
         if self.deferred_flush.is_some() || !self.flusher.can_submit_retired() {
             return Err(
                 "recording flush queue is full; wait for saved recordings before restoring a snapshot".into(),
             );
         }
-        let vm = self.snapshot_vm(id)?;
+        let mut vm = self.snapshot_vm(id)?;
+        // Checked against the profile the snapshot asks for; the current one is
+        // what a "save current" snapshot records, and is replaced after it.
+        if let Some(profile) = &switch {
+            vm.stealth = profile.clone();
+        }
         if let Some(session) = self.session.as_ref() {
             session.manual_snapshot_guard()?;
         }
@@ -710,6 +778,9 @@ impl Worker {
             self.take_vm_snapshot(id, &request).map_err(|error| {
                 format!("current state was not saved: {error}; restore cancelled")
             })?;
+        }
+        if switch.is_some() {
+            self.use_vm_profile(&vm)?;
         }
         if self.snapshot.network_capture.is_some() {
             self.stop_network_capture()?;

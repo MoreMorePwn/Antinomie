@@ -337,6 +337,19 @@ pub(crate) fn recovery_required(options: &BackendOptions, vm: &VmConfig) -> Resu
         .try_exists()
         .map_err(|error| format!("snapshot operation journal: {error}"))
 }
+/// How a checkpoint's recorded profile compares with the VM's current one.
+pub(crate) fn profile_of(
+    recorded: Option<&crate::stealth::StealthProfile>,
+    current: &crate::stealth::StealthProfile,
+) -> crate::api::SnapshotProfile {
+    match recorded {
+        None => crate::api::SnapshotProfile::Unknown,
+        Some(recorded) if recorded == current => crate::api::SnapshotProfile::Same,
+        Some(recorded) => crate::api::SnapshotProfile::Other {
+            machine: recorded.machine_name(),
+        },
+    }
+}
 pub(crate) fn list(options: &BackendOptions, vm: &VmConfig) -> Result<VmSnapshotTree, String> {
     let directory = vm_dir(options, &vm.id)?;
     let manifest = load(&directory, vm)?;
@@ -352,6 +365,7 @@ pub(crate) fn list(options: &BackendOptions, vm: &VmConfig) -> Result<VmSnapshot
                     record.checkpoint.compatible = false;
                     record.checkpoint.compatibility_note = Some("Saved memory artifact is unavailable or changed; reboot from the disk checkpoint".into());
                 }
+                record.checkpoint.profile = profile_of(record.checkpoint.stealth.as_ref(), &vm.stealth);
                 record.checkpoint
             })
             .collect(),
@@ -455,6 +469,8 @@ pub(crate) fn prepare_take(
             compatible: true,
             compatibility_note: None,
             deleted: false,
+            stealth: Some(vm.stealth.clone()),
+            profile: crate::api::SnapshotProfile::Same,
         },
         disk: manifest.active_disk.clone(),
         memory: memory.clone(),
@@ -1023,6 +1039,59 @@ mod tests {
         validate_active(&fixture.options, &fixture.vm, &fixture.base).unwrap();
         rename(&fixture.options, &fixture.vm, &b.id, "Renamed B").unwrap();
         assert_eq!(list(&fixture.options, &fixture.vm).unwrap().nodes.len(), 3);
+    }
+    #[test]
+    fn a_snapshot_records_its_stealth_profile_and_lists_how_it_compares() {
+        use crate::api::SnapshotProfile;
+        use crate::stealth::{StealthPreset, StealthProfile};
+        let mut fixture = Fixture::new();
+        // Taken as a realistic desktop.
+        fixture.vm.stealth =
+            StealthProfile::realistic(StealthPreset::RealisticDesktop, "GenuineIntel");
+        let taken = fixture.take("As desktop");
+        assert_eq!(taken.stealth.as_ref(), Some(&fixture.vm.stealth));
+        let nodes = |fixture: &Fixture| list(&fixture.options, &fixture.vm).unwrap().nodes;
+        assert_eq!(nodes(&fixture)[0].profile, SnapshotProfile::Same);
+        // The same machine with other serials is another profile.
+        let mut other = fixture.vm.clone();
+        other.stealth.identity.rerandomize();
+        let machine = fixture.vm.stealth.machine_name();
+        assert_eq!(
+            list(&fixture.options, &other).unwrap().nodes[0].profile,
+            SnapshotProfile::Other {
+                machine: machine.clone()
+            }
+        );
+        // So is Transparent, which names itself plainly.
+        other.stealth = StealthProfile::transparent();
+        assert_eq!(
+            list(&fixture.options, &other).unwrap().nodes[0].profile,
+            SnapshotProfile::Other { machine }
+        );
+        fixture.vm.stealth = StealthProfile::transparent();
+        assert!(matches!(
+            nodes(&fixture)[0].profile,
+            SnapshotProfile::Other { .. }
+        ));
+        // A snapshot saved before profiles were recorded has none to compare.
+        let directory = vm_dir(&fixture.options, &fixture.vm.id).unwrap();
+        let mut manifest: Manifest = read_json(&directory.join(MANIFEST)).unwrap();
+        manifest.nodes[0].checkpoint.stealth = None;
+        atomic_json(&directory.join(MANIFEST), &manifest).unwrap();
+        assert_eq!(nodes(&fixture)[0].profile, SnapshotProfile::Unknown);
+        let text = fs::read_to_string(directory.join(MANIFEST)).unwrap();
+        // And the field itself is optional on disk.
+        let mut value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert!(
+            value["nodes"][0]["checkpoint"].get("profile").is_none(),
+            "the comparison is never saved"
+        );
+        value["nodes"][0]["checkpoint"]
+            .as_object_mut()
+            .unwrap()
+            .remove("stealth");
+        let old: Manifest = serde_json::from_value(value).unwrap();
+        assert!(old.nodes[0].checkpoint.stealth.is_none());
     }
     #[test]
     fn interrupted_take_before_or_after_pivot_preserves_all_disk_writes() {

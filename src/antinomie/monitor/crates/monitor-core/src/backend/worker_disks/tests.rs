@@ -26,6 +26,7 @@ fn vm_command(name: &str) -> Vec<Command> {
                 boot_from_disk: true,
                 save_current: None,
                 confirmed: true,
+                switch_profile: false,
             },
             Command::CreateVmSnapshot {
                 vm_id: vm_id(),
@@ -503,6 +504,7 @@ fn start_reset_restore_snapshot_delete_and_duplicate_wait_for_the_job() {
             boot_from_disk: true,
             save_current: None,
             confirmed: true,
+            switch_profile: false,
         },
         Command::CreateVmSnapshot {
             vm_id: "fixture".into(),
@@ -1746,4 +1748,62 @@ fn a_full_checkpoint_on_a_restored_branch_reads_its_own_layer() {
         dumps[0].source.active_parent_id.as_deref(),
         Some(a.id.as_str())
     );
+}
+
+#[test]
+fn restore_follows_the_stealth_profile_the_snapshot_was_taken_with() {
+    use crate::stealth::{StealthPreset, StealthProfile};
+    require_tools!();
+    let mut machine = Machine::new();
+    let taken = take_checkpoint(&mut machine, "as-is");
+    // The same profile: nothing to say.
+    let (switch, note) = machine
+        .worker
+        .restore_profile("fixture", &taken.id, false)
+        .unwrap();
+    assert!(switch.is_none() && note.is_none());
+    // The VM moved to another machine since.
+    let was = machine.vm.stealth.machine_name();
+    let other = StealthProfile::realistic(StealthPreset::RealisticDesktop, "GenuineIntel");
+    machine
+        .worker
+        .snapshot
+        .vms
+        .iter_mut()
+        .find(|vm| vm.id == "fixture")
+        .unwrap()
+        .stealth = other;
+    machine.worker.refresh_vm_snapshots("fixture").unwrap();
+    let error = machine
+        .worker
+        .restore_profile("fixture", &taken.id, false)
+        .unwrap_err();
+    assert_eq!(
+        error,
+        format!(
+            "this snapshot was taken as {was}; switch the VM back to that profile to restore it"
+        )
+    );
+    // Switching back hands over the recorded profile.
+    let (switch, note) = machine
+        .worker
+        .restore_profile("fixture", &taken.id, true)
+        .unwrap();
+    assert_eq!(switch.as_ref(), Some(&machine.vm.stealth));
+    assert!(note.unwrap().contains(&was));
+    // A snapshot from before profiles were recorded restores, with a note.
+    let directory = storage::vm_dir(&machine.worker.options, "fixture").unwrap();
+    let mut manifest: serde_json::Value =
+        storage::read_json(&directory.join("snapshots.json")).unwrap();
+    manifest["nodes"][0]["checkpoint"]
+        .as_object_mut()
+        .unwrap()
+        .remove("stealth");
+    storage::atomic_json(&directory.join("snapshots.json"), &manifest).unwrap();
+    let (switch, note) = machine
+        .worker
+        .restore_profile("fixture", &taken.id, false)
+        .unwrap();
+    assert!(switch.is_none());
+    assert!(note.unwrap().contains("no recorded stealth profile"));
 }

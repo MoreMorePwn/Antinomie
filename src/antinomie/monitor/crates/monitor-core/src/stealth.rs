@@ -940,6 +940,27 @@ impl StealthProfile {
             .map_or(NicSlot::Ich, |machine| machine.nic_slot)
     }
 
+    /// The machine this profile looks like, as a person would say it.
+    pub fn machine_name(&self) -> String {
+        if !self.identity_enabled {
+            return "Transparent (QEMU's own identity)".into();
+        }
+        if let Some(machine) = MACHINES
+            .iter()
+            .find(|machine| machine.id == self.identity.profile)
+        {
+            return machine.label.into();
+        }
+        let name = format!(
+            "{} {}",
+            self.identity.system_manufacturer, self.identity.system_product
+        );
+        match name.trim() {
+            "" => "a custom profile".into(),
+            name => format!("{name} (edited)"),
+        }
+    }
+
     /// Whether `machine` comes with an optical drive (QEMU's names QEMU).
     pub fn machine_has_cdrom(machine: &MachineProfile) -> bool {
         machine.cdrom

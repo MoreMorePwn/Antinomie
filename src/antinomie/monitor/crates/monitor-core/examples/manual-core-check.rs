@@ -504,6 +504,7 @@ fn check() -> Result<(), String> {
                 boot_from_disk: false,
                 save_current: None,
                 confirmed: true,
+                switch_profile: false,
             })?;
             driver.wait("manual immutable buffer adoption", 120, |snapshot| {
                 snapshot.boot_id != old_boot

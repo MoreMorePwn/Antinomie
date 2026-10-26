@@ -1446,6 +1446,9 @@ pub enum Command {
         boot_from_disk: bool,
         save_current: Option<SnapshotRequest>,
         confirmed: bool,
+        /// Give the VM the profile the snapshot was taken with first, when
+        /// it differs, instead of refusing.
+        switch_profile: bool,
     },
     RenameVmSnapshot {
         vm_id: String,
@@ -1847,6 +1850,26 @@ pub struct VmCheckpoint {
     pub compatibility_note: Option<String>,
     /// Hidden checkpoint whose files are retained for dependencies.
     pub deleted: bool,
+    /// The VM's stealth profile when the checkpoint was taken; absent in
+    /// checkpoints taken before profiles were recorded.
+    #[serde(default)]
+    pub stealth: Option<crate::stealth::StealthProfile>,
+    /// How that profile compares with the VM's current one. Worked out when
+    /// the tree is listed; never saved.
+    #[serde(default, skip_serializing)]
+    pub profile: SnapshotProfile,
+}
+/// Whether a checkpoint's stealth profile is the VM's current one.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SnapshotProfile {
+    /// Taken before profiles were recorded: nothing to compare.
+    #[default]
+    Unknown,
+    Same,
+    /// A different profile; `machine` names it as a person would.
+    Other {
+        machine: String,
+    },
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct VmSnapshotCapabilities {

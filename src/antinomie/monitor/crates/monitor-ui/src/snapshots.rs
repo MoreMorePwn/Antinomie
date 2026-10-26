@@ -3,7 +3,7 @@
 
 use crate::theme;
 use antinomie_monitor_core::{
-    Command, SnapshotRequest, VmCheckpoint, VmSnapshotConsistency, VmSnapshotMode,
+    Command, SnapshotProfile, SnapshotRequest, VmCheckpoint, VmSnapshotConsistency, VmSnapshotMode,
     VmSnapshotProgress, VmSnapshotTree,
 };
 use eframe::egui::{self, RichText};
@@ -568,6 +568,14 @@ impl SnapshotManager {
                         "Configuration",
                         format!("{} CPUs, {} MiB RAM", node.config.cpus, node.config.ram_mib),
                     ),
+                    (
+                        "Stealth profile",
+                        match &node.profile {
+                            SnapshotProfile::Same => "The VM's current profile".to_owned(),
+                            SnapshotProfile::Other { machine } => format!("{machine} (differs)"),
+                            SnapshotProfile::Unknown => "Not recorded".to_owned(),
+                        },
+                    ),
                 ] {
                     ui.label(RichText::new(label).color(theme::muted()));
                     ui.add(egui::Label::new(RichText::new(value).color(theme::text())).wrap());
@@ -674,6 +682,15 @@ impl SnapshotManager {
                             ui.label(format!("Restore {}?", node.map(|node| node.name.as_str()).unwrap_or("checkpoint")));
                             ui.label(if *boot_from_disk { "The VM will boot with the saved disk. Running programs are lost." } else { "The VM will resume saved disk, RAM and programs." });
                             ui.weak("Existing branches and recordings remain saved. A new observation timeline starts.");
+                            match node.map(|node| &node.profile) {
+                                Some(SnapshotProfile::Other { machine }) => {
+                                    crate::activity::warning(ui, format!("This snapshot was taken as {machine}. The VM's stealth profile is different, so restoring switches the VM back to that profile."));
+                                }
+                                Some(SnapshotProfile::Unknown) => {
+                                    ui.weak("This snapshot has no recorded stealth profile (taken before profiles were recorded), so it restores as it is.");
+                                }
+                                _ => {}
+                            }
                             ui.separator();
                             ui.radio_value(save, true, "Save current state first");
                             ui.radio_value(save, false, "Discard current unsaved state");
@@ -693,7 +710,8 @@ impl SnapshotManager {
                     Decision::Create(draft) => ("Save snapshot", enabled && valid_draft(draft, tree)),
                     Decision::Restore { id, boot_from_disk, save, draft } => {
                         let node = tree.nodes.iter().find(|node| &node.id == id);
-                        (if *save { "Save current and restore" } else { "Discard changes and restore" }, enabled && tree.capabilities.can_restore && node.is_some_and(|node| !node.deleted && (*boot_from_disk || node.compatible)) && (!*save || valid_draft(draft, tree)))
+                        let switch = node.is_some_and(|node| matches!(node.profile, SnapshotProfile::Other { .. }));
+                        (match (switch, *save) { (true, true) => "Save current, switch profile and restore", (true, false) => "Switch profile and restore", (false, true) => "Save current and restore", (false, false) => "Discard changes and restore" }, enabled && tree.capabilities.can_restore && node.is_some_and(|node| !node.deleted && (*boot_from_disk || node.compatible)) && (!*save || valid_draft(draft, tree)))
                     }
                     Decision::Rename { id, name } => ("Rename", enabled && !name.trim().is_empty() && tree.nodes.iter().any(|node| &node.id == id && !node.deleted)),
                     Decision::Delete { id } => (if is_referenced(tree, id) { "Hide checkpoint" } else { "Delete checkpoint" }, enabled && tree.nodes.iter().any(|node| &node.id == id && !node.deleted)),
@@ -702,7 +720,7 @@ impl SnapshotManager {
                     if ui.add_enabled(ready, primary(label)).clicked() {
                         command = Some(match &*decision {
                             Decision::Create(draft) => Command::CreateVmSnapshot { vm_id: vm_id.clone(), request: draft.request() },
-                            Decision::Restore { id, boot_from_disk, save, draft } => Command::RestoreVmSnapshot { vm_id: vm_id.clone(), snapshot_id: id.clone(), boot_from_disk: *boot_from_disk, save_current: save.then(|| draft.request()), confirmed: true },
+                            Decision::Restore { id, boot_from_disk, save, draft } => Command::RestoreVmSnapshot { vm_id: vm_id.clone(), snapshot_id: id.clone(), boot_from_disk: *boot_from_disk, save_current: save.then(|| draft.request()), confirmed: true, switch_profile: tree.nodes.iter().any(|node| &node.id == id && matches!(node.profile, SnapshotProfile::Other { .. })) },
                             Decision::Rename { id, name } => Command::RenameVmSnapshot { vm_id: vm_id.clone(), snapshot_id: id.clone(), name: name.trim().to_owned() },
                             Decision::Delete { id } => Command::DeleteVmSnapshot { vm_id: vm_id.clone(), snapshot_id: id.clone(), confirmed: true },
                         });
@@ -1007,6 +1025,8 @@ pub(crate) mod tests {
             compatible: true,
             compatibility_note: None,
             deleted: false,
+            stealth: None,
+            profile: SnapshotProfile::Same,
         };
         VmSnapshotTree {
             vm_id: "vm".into(),
@@ -1143,10 +1163,11 @@ pub(crate) mod tests {
                 boot_from_disk,
                 save_current,
                 confirmed,
+                switch_profile,
             } => {
                 assert_eq!(vm_id, "vm");
                 assert_eq!(snapshot_id, "sample");
-                assert!(!boot_from_disk && confirmed);
+                assert!(!boot_from_disk && confirmed && !switch_profile);
                 assert_eq!(save_current.unwrap().mode, VmSnapshotMode::Disk);
             }
             _ => panic!("expected restore command"),
@@ -1155,6 +1176,48 @@ pub(crate) mod tests {
         manager.restore_dialog(&tree.nodes[1], true);
         assert!(click(&ctx, &mut manager, &tree, "Cancel").is_none());
         assert!(!manager.decision_open());
+    }
+
+    #[test]
+    fn a_snapshot_of_another_profile_restores_only_by_switching_back() {
+        let ctx = context();
+        let mut tree = fixture();
+        tree.nodes[1].profile = SnapshotProfile::Other {
+            machine: "Dell OptiPlex 7090".into(),
+        };
+        let mut manager = SnapshotManager::default();
+        manager.bind("vm", "Analyst");
+        manager.restore_dialog(&tree.nodes[1], true);
+        frame(&ctx, &mut manager, &tree, Vec::new());
+        let (output, _) = frame(&ctx, &mut manager, &tree, Vec::new());
+        let text: String = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect();
+        assert!(text.contains("taken as Dell OptiPlex 7090"), "{text}");
+        let command = click(
+            &ctx,
+            &mut manager,
+            &tree,
+            "Save current, switch profile and restore",
+        )
+        .unwrap();
+        match command {
+            Command::RestoreVmSnapshot { switch_profile, .. } => assert!(switch_profile),
+            _ => panic!("expected restore command"),
+        }
+        // An unknown profile (an old snapshot) restores as it is.
+        tree.nodes[1].profile = SnapshotProfile::Unknown;
+        manager.restore_dialog(&tree.nodes[1], true);
+        let command = click(&ctx, &mut manager, &tree, "Save current and restore").unwrap();
+        match command {
+            Command::RestoreVmSnapshot { switch_profile, .. } => assert!(!switch_profile),
+            _ => panic!("expected restore command"),
+        }
     }
 
     #[test]
@@ -1171,6 +1234,7 @@ pub(crate) mod tests {
                 boot_from_disk: true,
                 save_current: None,
                 confirmed: true,
+                switch_profile: false,
                 ..
             })
         ));

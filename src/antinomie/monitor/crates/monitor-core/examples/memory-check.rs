@@ -396,6 +396,7 @@ fn run() -> Result<(), String> {
             boot_from_disk: false,
             save_current: None,
             confirmed: true,
+            switch_profile: false,
         })?;
         println!(
             "full snapshot saved and restored in {:.1} s",

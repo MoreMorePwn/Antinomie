@@ -136,6 +136,15 @@ slot keeps `enp0s31f6` until its machine is changed. Changing the profile to a m
 and rewrites the VM's network configuration when you save; a VM with snapshots
 keeps its slot (delete the snapshots, or pick a machine with the same chipset).
 
+Each snapshot records the stealth profile the VM had when it was taken (machine,
+serials, UUID and MAC address, network card, CPU, disk bus, firmware). A snapshot
+only restores under that same profile: if the VM's profile was changed since, the
+restore dialog says "This snapshot was taken as <machine>" and its button becomes
+**Switch profile and restore**, which gives the VM that profile and then restores.
+The current state is saved first when you ask for that, with the current profile.
+A snapshot taken before profiles were recorded has no profile to compare; it
+restores as it is, and the result says so.
+
 ## 2. Create a VM
 Choose **New VM**, pick the installed base, and set name, CPU count, RAM and
 disk size. Debian bases (desktop and Minimal) also ask for a username and

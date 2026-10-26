@@ -368,6 +368,7 @@ fn check() -> Result<(), String> {
             boot_from_disk: false,
             save_current: None,
             confirmed: true,
+            switch_profile: false,
         })?;
         driver.wait("fresh restored core owner", 10, |snapshot| {
             snapshot.boot_id != old_boot
