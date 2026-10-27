@@ -55,6 +55,7 @@ mod resources;
 pub mod route;
 pub mod ruleset;
 mod run;
+pub mod run_environment;
 pub mod samples;
 mod sandbox_process;
 mod sandbox_profile;

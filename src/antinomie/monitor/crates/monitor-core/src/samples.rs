@@ -21,6 +21,7 @@ mod custody;
 mod intake;
 mod library;
 mod migrate;
+mod summary;
 
 pub use archive::Verification;
 pub use custody::{CustodyEvent, CustodySink, NoCustody, PlainEvents};
@@ -29,6 +30,7 @@ pub use library::{
     Alias, CATEGORIES, EventRow, Library, NewOrigin, Origin, OriginKind, RunStats, SampleRecord,
     SeenRun, TAG_COLORS, Tag, TagKind, VERDICTS,
 };
+pub use summary::{StringRow, defang, interesting_strings, regex_matches};
 
 /// MalwareBazaar's API: every call is a POST with an `Auth-Key` header.
 pub const BAZAAR_API: &str = "https://mb-api.abuse.ch/api/v1/";

@@ -820,6 +820,10 @@ pub struct RunSummary {
     /// saved before it was recorded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machine: Option<crate::stealth::MachineRecord>,
+    /// What the run started in (VM, base image, kernel, rule packs, tools,
+    /// app); absent in runs saved before it was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<crate::run_environment::RunEnvironment>,
 }
 
 /// Maps one guest monotonic timeline to host wall time without changing the wire.

@@ -30,6 +30,7 @@ mod pending;
 mod rules_startup;
 mod run_kill;
 mod run_selection;
+mod samples_detail;
 mod samples_list;
 mod samples_shots;
 mod scanned_inputs;
@@ -295,6 +296,7 @@ pub(super) fn event(phase: u8, cpu: u32) -> antinomie_monitor_core::EventSummary
 
 pub(super) fn run(id: &str) -> RunSummary {
     RunSummary {
+        environment: None,
         started_ms: None,
         clock_anchor: None,
         id: id.into(),

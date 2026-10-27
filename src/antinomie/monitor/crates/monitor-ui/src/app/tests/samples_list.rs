@@ -8,7 +8,7 @@ use antinomie_monitor_core::samples::{
 
 const SIZE: egui::Vec2 = egui::vec2(1400.0, 820.0);
 
-fn temp(name: &str) -> PathBuf {
+pub(super) fn temp(name: &str) -> PathBuf {
     let root = std::env::temp_dir().join(format!(
         "ant-ui-samples-{name}-{}-{}",
         std::process::id(),

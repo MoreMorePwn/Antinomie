@@ -725,6 +725,18 @@ pub(super) fn process_tree(
     selected: Option<u32>,
     font_size: f32,
 ) -> Option<ProcessSelection> {
+    process_tree_tinted(ui, processes, selected, font_size, &|_| None)
+}
+
+/// [`process_tree`] with a row tint: `tint` may colour a process's row (and
+/// name), as the sample window marks the processes that run library samples.
+pub(super) fn process_tree_tinted(
+    ui: &mut egui::Ui,
+    processes: &[CaptureProcess],
+    selected: Option<u32>,
+    font_size: f32,
+    tint: &dyn Fn(&CaptureProcess) -> Option<egui::Color32>,
+) -> Option<ProcessSelection> {
     let mut action = None;
     // Built once per change of the list; a frame only checks the fingerprint.
     let cache_id = ui.id().with("process-tree-layout");
@@ -806,7 +818,20 @@ pub(super) fn process_tree(
                         let branch = layout.prefix(row.index());
                         let row_selected = selected == Some(process.pid);
                         row.set_selected(row_selected);
+                        let tinted = tint(process);
+                        let wash = |ui: &mut egui::Ui| {
+                            if let Some(color) = tinted {
+                                let spacing = ui.spacing().item_spacing;
+                                ui.painter().rect_filled(
+                                    ui.max_rect()
+                                        .expand2(egui::vec2(spacing.x / 2.0, spacing.y / 2.0)),
+                                    0.0,
+                                    color.gamma_multiply(0.18),
+                                );
+                            }
+                        };
                         row.col(|ui| {
+                            wash(ui);
                             crate::widgets::table::row_mark(
                                 ui,
                                 if row_selected {
@@ -824,7 +849,9 @@ pub(super) fn process_tree(
                             } else {
                                 process.name.as_str()
                             };
-                            let color = if process.packets == 0 {
+                            let color = if let Some(color) = tinted {
+                                color
+                            } else if process.packets == 0 {
                                 theme::muted()
                             } else {
                                 theme::value(theme::ValueKind::Name)
@@ -850,6 +877,7 @@ pub(super) fn process_tree(
                             }
                         });
                         row.col(|ui| {
+                            wash(ui);
                             ui.label(
                                 RichText::new(process.pid.to_string())
                                     .font(mono.clone())
@@ -857,6 +885,7 @@ pub(super) fn process_tree(
                             );
                         });
                         row.col(|ui| {
+                            wash(ui);
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
@@ -877,6 +906,7 @@ pub(super) fn process_tree(
                             );
                         });
                         row.col(|ui| {
+                            wash(ui);
                             ui.add_space(8.0);
                             let (text, color) = exit_status(process);
                             ui.label(RichText::new(text).font(mono.clone()).color(color));

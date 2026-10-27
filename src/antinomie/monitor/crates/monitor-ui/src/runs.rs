@@ -97,6 +97,7 @@ mod tests {
     #[test]
     fn closing_one_terminal_preserves_the_run_and_other_windows() {
         let run = RunSummary {
+            environment: None,
             started_ms: None,
             clock_anchor: None,
             id: "one".into(),
@@ -129,6 +130,7 @@ mod tests {
     #[test]
     fn sequence_gap_resync_replaces_state_and_discards_old_packets() {
         let run = RunSummary {
+            environment: None,
             started_ms: None,
             clock_anchor: None,
             id: "one".into(),
@@ -172,6 +174,7 @@ mod tests {
     fn a_recorded_run_reopens_in_either_view() {
         use crate::terminal::View;
         let run = RunSummary {
+            environment: None,
             started_ms: None,
             clock_anchor: None,
             id: "one".into(),

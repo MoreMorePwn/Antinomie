@@ -422,6 +422,7 @@ mod tests {
             let directory = directory.join("runs").join(id);
             storage::private_dir(&directory).unwrap();
             let run = RunSummary {
+                environment: None,
                 started_ms: None,
                 clock_anchor: None,
                 id: id.into(),

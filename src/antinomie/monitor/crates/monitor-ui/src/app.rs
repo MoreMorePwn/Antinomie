@@ -714,6 +714,7 @@ impl eframe::App for MonitorApp {
             .observe(&self.snapshot, self.selected.as_deref());
         self.flush_archive();
         self.drain_archive();
+        self.advance_run_open();
         self.resync_terminals();
         // Triage belongs to one explicit program run, including its saved prefix.
         // The run is borrowed field by field, not cloned with its analysis

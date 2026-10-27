@@ -760,6 +760,7 @@ pub(super) fn listed(run: &RunSummary) -> RunSummary {
         notes: run.notes.clone(),
         machine: run.machine.clone(),
         route: run.route.clone(),
+        environment: run.environment.clone(),
         recording_error: run.recording_error.clone(),
         execution: run.execution.clone(),
         analysis: run
@@ -979,7 +980,11 @@ pub(super) fn feature_tree(run: &RunSummary, labels: Option<run_labels::Labels>)
 }
 
 /// What the run was started with, in the order the launch dialog lists it.
-fn enabled_features(ui: &mut egui::Ui, run: &RunSummary, labels: Option<run_labels::Labels>) {
+pub(super) fn enabled_features(
+    ui: &mut egui::Ui,
+    run: &RunSummary,
+    labels: Option<run_labels::Labels>,
+) {
     let features = feature_tree(run, labels);
     ui.strong("Analysis enabled");
     if features.is_empty() {
@@ -1017,7 +1022,7 @@ fn enabled_features(ui: &mut egui::Ui, run: &RunSummary, labels: Option<run_labe
 }
 
 /// How the run was launched and where it is recorded, folded away by default.
-fn launch_details(ui: &mut egui::Ui, run: &RunSummary) {
+pub(super) fn launch_details(ui: &mut egui::Ui, run: &RunSummary) {
     egui::CollapsingHeader::new("Launch")
         .id_salt("run_launch_details")
         .default_open(false)
@@ -1052,7 +1057,7 @@ fn launch_details(ui: &mut egui::Ui, run: &RunSummary) {
 }
 
 /// What the run's guest showed besides the machine's name.
-fn machine_hover(machine: &antinomie_monitor_core::stealth::MachineRecord) -> String {
+pub(super) fn machine_hover(machine: &antinomie_monitor_core::stealth::MachineRecord) -> String {
     let mut lines = vec![
         format!(
             "Product {} (SKU {})",

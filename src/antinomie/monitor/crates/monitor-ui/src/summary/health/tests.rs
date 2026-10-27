@@ -4,6 +4,7 @@ use antinomie_monitor_core::{ExecRequest, RunExecution, RunState};
 
 fn run(id: &str, boot: &str) -> RunSummary {
     RunSummary {
+        environment: None,
         started_ms: None,
         clock_anchor: None,
         id: id.into(),

@@ -14,6 +14,7 @@ use std::{
 };
 
 mod add;
+mod detail;
 mod list;
 mod picker;
 
@@ -123,12 +124,29 @@ pub(super) struct SamplesPage {
     add: Option<add::AddDialog>,
     /// The sample whose tags are being edited, with the picker.
     editing: Option<(String, String, picker::TagPicker)>,
+    /// The open sample window; the list shows when there is none.
+    detail: Option<detail::Detail>,
+    /// A run the sample window asked to open in its own VM.
+    open_run: Option<OpenRun>,
+}
+
+/// A run to open in a panel of the VM it belongs to: the VM is selected and
+/// its history read first, so the panel finds the run.
+pub(super) struct OpenRun {
+    vm_id: String,
+    run_id: String,
+    panel: crate::workspace::Panel,
+    /// Scope Syscall Trace to this filter once the run is selected.
+    trace_filter: Option<String>,
+    started: std::time::Instant,
+    listed: bool,
 }
 
 impl SamplesPage {
     /// Read the library again at the next frame.
     pub(super) fn refresh(&mut self) {
         self.stale = true;
+        self.refresh_detail();
     }
 
     pub(super) fn count(&self) -> usize {
@@ -245,6 +263,64 @@ impl SamplesPage {
 }
 
 impl MonitorApp {
+    /// Open `run` in `panel` of its VM: select the VM and read its history if
+    /// it is not the selected one, then select the run. Syscall Trace takes
+    /// `trace_filter` as its filter.
+    pub(super) fn open_sample_run(
+        &mut self,
+        run: &RunSummary,
+        panel: crate::workspace::Panel,
+        trace_filter: Option<String>,
+    ) {
+        self.samples_page.open_run = Some(OpenRun {
+            vm_id: run.vm_id.clone(),
+            run_id: run.id.clone(),
+            panel,
+            trace_filter,
+            started: std::time::Instant::now(),
+            listed: false,
+        });
+    }
+
+    /// Carry out the run the sample window asked to open, a step per frame
+    /// until the VM's history has it (or the wait ends).
+    pub(super) fn advance_run_open(&mut self) {
+        let Some(open) = self.samples_page.open_run.as_ref() else {
+            return;
+        };
+        let (vm_id, run_id) = (open.vm_id.clone(), open.run_id.clone());
+        if self.selected.as_ref() != Some(&vm_id) {
+            self.selected = Some(vm_id);
+            self.clear_history();
+            self.select_run(None);
+            self.refresh_history();
+            if let Some(open) = &mut self.samples_page.open_run {
+                open.listed = true;
+            }
+            return;
+        }
+        if self.run(&run_id).is_some() {
+            let Some(open) = self.samples_page.open_run.take() else {
+                return;
+            };
+            self.select_run(Some(run_id));
+            self.focus_panel = Some(open.panel);
+            if let Some(filter) = open.trace_filter {
+                self.scope_trace(filter);
+            }
+            return;
+        }
+        if let Some(open) = &mut self.samples_page.open_run {
+            if !open.listed {
+                open.listed = true;
+                self.refresh_history();
+            } else if open.started.elapsed() > std::time::Duration::from_secs(20) {
+                self.samples_page.open_run = None;
+                self.report_error("The run could not be found in its VM's history".into());
+            }
+        }
+    }
+
     /// The sidebar count of the Samples row.
     pub(super) fn samples_count(&self) -> usize {
         self.samples_page.count()
@@ -260,7 +336,11 @@ impl MonitorApp {
             let vms = self.snapshot.vms.clone();
             self.samples_page.start_load(&ctx, &self.options, &vms);
         }
-        self.list_view(ui);
+        if self.samples_page.detail.is_some() {
+            self.detail_view(ui);
+        } else {
+            self.list_view(ui);
+        }
         self.samples_dialogs(&ctx);
     }
 

@@ -346,6 +346,31 @@ impl MonitorApp {
         Ok(())
     }
 
+    /// Open a tab of a static report the sample window read from a run of any
+    /// VM: the report is kept with its folder so the tab can read it.
+    pub(super) fn open_sample_report(
+        &mut self,
+        report: &antinomie_monitor_core::AnalysisReport,
+        analysis_directory: PathBuf,
+        kind: antinomie_monitor_core::AnalysisKind,
+    ) {
+        if !self.analysis_windows.contains_key(&report.id) && self.analysis_windows.len() >= 8 {
+            self.report_error(
+                "Eight analysis reports are open. Close a result window before opening another report."
+                    .into(),
+            );
+            return;
+        }
+        self.analysis_directories
+            .insert(report.id.clone(), analysis_directory);
+        self.analysis_windows
+            .entry(report.id.clone())
+            .or_insert_with(|| report.clone());
+        if let Err(reason) = self.open_analysis_section(report.id.clone(), kind) {
+            self.report_error(reason);
+        }
+    }
+
     pub(crate) fn take_analysis_sections(
         &mut self,
     ) -> Vec<(String, antinomie_monitor_core::AnalysisKind)> {

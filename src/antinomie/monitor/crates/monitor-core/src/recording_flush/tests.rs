@@ -200,6 +200,7 @@ fn inline_runs_report_every_failure() {
 
 fn run_summary(directory: &std::path::Path) -> RunSummary {
     RunSummary {
+        environment: None,
         started_ms: None,
         clock_anchor: None,
         id: "run".into(),

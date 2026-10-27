@@ -407,6 +407,7 @@ mod tests {
             ..ExecRequest::default()
         };
         RunSummary {
+            environment: None,
             started_ms: None,
             clock_anchor: None,
             id: id.into(),

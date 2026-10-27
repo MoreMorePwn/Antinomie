@@ -8,6 +8,7 @@ use crate::{storage::slow_disk::SlowDisk, writer::held::SlowWriter};
 
 fn summary(directory: PathBuf) -> RunSummary {
     RunSummary {
+        environment: None,
         started_ms: None,
         clock_anchor: None,
         id: "stalled-run".into(),

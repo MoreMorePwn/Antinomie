@@ -29,7 +29,7 @@ impl Row {
 }
 
 /// The latest run's start as the list writes it.
-fn started(ms: Option<u64>) -> String {
+pub(in crate::app::samples_page) fn started(ms: Option<u64>) -> String {
     ms.and_then(|ms| chrono::DateTime::<chrono::Utc>::from_timestamp_millis(ms as i64))
         .map(|time| {
             time.with_timezone(&chrono::Local)
@@ -41,6 +41,7 @@ fn started(ms: Option<u64>) -> String {
 
 enum Action {
     Select(String),
+    Open(String),
     CopyHash(String),
     CopyName(String),
     EditTags(String, String, Vec<Tag>),
@@ -400,10 +401,16 @@ impl MonitorApp {
                                 .on_hover_text(sha256);
                         });
                         let response = table_row.response();
-                        if response.clicked() || response.secondary_clicked() {
+                        if response.double_clicked() {
+                            action = Some(Action::Open(sha256.to_owned()));
+                        } else if response.clicked() || response.secondary_clicked() {
                             action = Some(Action::Select(sha256.to_owned()));
                         }
                         response.context_menu(|ui| {
+                            if ui.button("Open").clicked() {
+                                action = Some(Action::Open(sha256.to_owned()));
+                                ui.close_menu();
+                            }
                             if ui.button("Edit tags…").clicked() {
                                 action = Some(Action::EditTags(
                                     sha256.to_owned(),
@@ -431,6 +438,10 @@ impl MonitorApp {
             });
         match action {
             Some(Action::Select(sha256)) => self.samples_page.selected = Some(sha256),
+            Some(Action::Open(sha256)) => {
+                self.samples_page.selected = Some(sha256.clone());
+                self.samples_page.open_detail(&sha256);
+            }
             Some(Action::CopyHash(text) | Action::CopyName(text)) => ctx.copy_text(text),
             Some(Action::EditTags(sha256, name, tags)) => {
                 self.samples_page.editing = Some((sha256, name, TagPicker::with(&tags)));

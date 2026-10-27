@@ -11,6 +11,12 @@ impl SamplesView {
         }
     }
 
+    /// A push the sample window makes: when the upload succeeds the Run
+    /// program window opens with `run`.
+    pub(crate) fn await_run(&mut self, run: ExecRequest) {
+        self.awaiting = Some(Some(run));
+    }
+
     /// A request finished; returns the run to start after a successful push.
     pub(crate) fn complete(
         &mut self,

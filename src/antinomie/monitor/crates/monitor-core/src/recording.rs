@@ -947,6 +947,7 @@ pub fn list_runs(data_root: &Path) -> Result<Vec<RunSummary>, RecordingError> {
             let manifest: serde_json::Value = serde_json::from_reader(file)?;
             let id = format!("legacy-{}", entry.file_name().to_string_lossy());
             runs.push(RunSummary {
+                environment: None,
                 started_ms: None,
                 clock_anchor: None,
                 id,
@@ -1170,6 +1171,7 @@ mod tests {
             let mut report = crate::analysis::jobs::new_report("/tmp/sample", &selection);
             report.state = state;
             let mut run = RunSummary {
+                environment: None,
                 started_ms: None,
                 clock_anchor: None,
                 id: "run".into(),
@@ -1235,6 +1237,7 @@ mod tests {
         report.state = AnalysisState::Partial;
         report.reason = Some("worker cleanup pending".into());
         let mut run = RunSummary {
+            environment: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),

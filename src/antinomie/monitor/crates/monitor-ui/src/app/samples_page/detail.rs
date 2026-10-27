@@ -1,0 +1,696 @@
+// SPDX-License-Identifier: GPL-3.0-only
+//! The sample window: one library sample with its Summary, its Runs and its
+//! custody log. It replaces the list inside the Samples page (a back link
+//! returns), and reads everything about the sample on a worker thread: the
+//! library record, every VM's runs of it, and the regex scan of its static
+//! report.
+use super::*;
+use crate::{
+    sample_tags,
+    widgets::{self, Tone},
+};
+use antinomie_monitor_core::{
+    samples::{Alias, EventRow, Origin, StringRow},
+    AnalysisReport, RunArtifacts,
+};
+use std::{
+    path::PathBuf,
+    sync::{atomic::AtomicBool, Arc},
+};
+
+mod custody;
+mod parts;
+mod runs;
+mod summary;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Tab {
+    Summary,
+    Runs,
+    Custody,
+}
+
+/// One run of the sample, numbered in start order (run 1 is the oldest).
+pub(super) struct RunEntry {
+    pub(super) number: usize,
+    /// Without the static-analysis rows; the report is in [`Data::report`].
+    pub(super) run: RunSummary,
+    /// The run's folder is still on disk.
+    pub(super) folder: bool,
+    pub(super) artifacts: Option<RunArtifacts>,
+}
+
+/// The static report the Summary reads: the newest finished one.
+pub(super) struct ReportRef {
+    pub(super) vm_id: String,
+    pub(super) run_id: String,
+    pub(super) number: usize,
+    /// The run's `analysis` folder.
+    pub(super) directory: PathBuf,
+    pub(super) report: AnalysisReport,
+}
+
+/// A library sample sent into a VM, to tell which process runs one.
+pub(super) struct SentSample {
+    pub(super) vm_id: String,
+    pub(super) path: String,
+    pub(super) sha256: String,
+}
+
+/// Everything the window shows, read once and read again on a change.
+pub(super) struct Data {
+    pub(super) record: SampleRecord,
+    pub(super) tags: Vec<Tag>,
+    pub(super) origins: Vec<Origin>,
+    pub(super) aliases: Vec<Alias>,
+    pub(super) events: Vec<EventRow>,
+    pub(super) archive: std::path::PathBuf,
+    pub(super) archived: bool,
+    /// Newest first.
+    pub(super) runs: Vec<RunEntry>,
+    pub(super) report: Option<ReportRef>,
+    /// Where every library sample was sent, for the process tree's tint.
+    pub(super) sent: Vec<SentSample>,
+}
+
+/// The rows the Summary draws from the report's regex scan.
+pub(super) struct Strings {
+    pub(super) interesting: Vec<StringRow>,
+    pub(super) matches: Vec<StringRow>,
+    /// Matches of the scan, repeats included: the Regex matches tab's count.
+    pub(super) total: u64,
+}
+
+pub(super) enum Scanned {
+    /// No report to scan.
+    None,
+    Reading,
+    Done(Strings),
+    Failed(String),
+}
+
+type Loaded = Result<Data, String>;
+type ScanResult = Result<Strings, String>;
+
+pub(super) struct Detail {
+    pub(super) sha256: String,
+    pub(super) tab: Tab,
+    pub(super) data: Option<Arc<Data>>,
+    loading: Option<Receiver<Loaded>>,
+    /// Read the sample again at the next frame.
+    pub(super) stale: bool,
+    pub(super) error: Option<String>,
+    pub(super) scanned: Scanned,
+    scanning: Option<(Receiver<ScanResult>, Arc<AtomicBool>, String)>,
+    /// The report the scan above is of, to scan again when it changes.
+    scanned_report: Option<String>,
+    runs: runs::RunsTab,
+    /// The archive is being read back.
+    pub(super) verify:
+        Option<Receiver<Result<antinomie_monitor_core::samples::Verification, String>>>,
+    /// The last read-back: whether it matched, and why not.
+    pub(super) verified: Option<(bool, String)>,
+    /// Keep the Summary scrolled to this offset (set by the
+    /// screenshot fixture only).
+    pub(super) scroll_y: Option<f32>,
+}
+
+impl Drop for Detail {
+    fn drop(&mut self) {
+        if let Some((_, cancel, _)) = &self.scanning {
+            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+}
+
+impl Detail {
+    pub(super) fn new(sha256: &str) -> Self {
+        Self {
+            sha256: sha256.to_owned(),
+            tab: Tab::Summary,
+            data: None,
+            loading: None,
+            stale: true,
+            error: None,
+            scanned: Scanned::None,
+            scanning: None,
+            scanned_report: None,
+            runs: runs::RunsTab::default(),
+            verify: None,
+            verified: None,
+            scroll_y: None,
+        }
+    }
+}
+
+/// Read the sample and its runs on every VM.
+fn load(options: &BackendOptions, vms: &[(String, String)], sha256: &str) -> Loaded {
+    let mut library = Library::open(&options.data_dir)?;
+    let record = library
+        .get(sha256)?
+        .ok_or_else(|| "the sample is no longer in the library".to_owned())?;
+    let mut runs: Vec<RunSummary> = Vec::new();
+    let mut seen = Vec::new();
+    let mut sent = Vec::new();
+    for (vm_id, vm_name) in vms {
+        let Ok(listed) = antinomie_monitor_core::recording::list_vm_runs(options, vm_id) else {
+            continue;
+        };
+        for run in listed {
+            if run
+                .request
+                .sample
+                .as_ref()
+                .is_some_and(|sample| sample.sha256 == record.sha256)
+            {
+                seen.push(SeenRun {
+                    sha256: record.sha256.clone(),
+                    vm_id: run.vm_id.clone(),
+                    vm_name: vm_name.clone(),
+                    run_id: run.id.clone(),
+                    started_ms: run.started_ms,
+                    exit: super::exit_label(&run),
+                    directory: run.directory.display().to_string(),
+                });
+                runs.push(run);
+            }
+        }
+    }
+    library.index_runs(&seen)?;
+    for other in library.list()? {
+        for push in library.pushes(&other.sha256)? {
+            sent.push(SentSample {
+                vm_id: push.vm_id,
+                path: push.path,
+                sha256: other.sha256.clone(),
+            });
+        }
+    }
+    runs.sort_by(|a, b| {
+        a.started_ms
+            .cmp(&b.started_ms)
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    let mut report = None;
+    let mut entries = Vec::new();
+    for (index, run) in runs.into_iter().enumerate() {
+        let number = index + 1;
+        if let Some(found) = run.analysis.as_ref().filter(|found| finished(found)) {
+            // The newest finished report wins: runs are in start order.
+            report = Some(ReportRef {
+                vm_id: run.vm_id.clone(),
+                run_id: run.id.clone(),
+                number,
+                directory: run.directory.join("analysis"),
+                report: found.clone(),
+            });
+        }
+        let folder = run.directory.is_dir();
+        let artifacts = RunArtifacts::load(&run.directory).ok().flatten();
+        entries.push(RunEntry {
+            number,
+            run: super::super::history::listed(&run),
+            folder,
+            artifacts,
+        });
+    }
+    entries.reverse();
+    let archive = library.archive_path(&record.sha256)?;
+    Ok(Data {
+        tags: library.tags(&record.sha256)?,
+        origins: library.origins(&record.sha256)?,
+        aliases: library.aliases(&record.sha256)?,
+        events: library.events(&record.sha256)?,
+        archived: record.removed_ms.is_none() && archive.is_file(),
+        archive,
+        runs: entries,
+        report,
+        sent,
+        record,
+    })
+}
+
+/// A report whose strings can be read: the analysis ended with results.
+fn finished(report: &AnalysisReport) -> bool {
+    use antinomie_monitor_core::AnalysisState;
+    matches!(
+        report.state,
+        AnalysisState::Complete | AnalysisState::Partial
+    )
+}
+
+/// Scan the report's strings with the patterns as the rule manager has them.
+fn scan(data_dir: PathBuf, reference: &ReportRef, cancel: &AtomicBool) -> ScanResult {
+    use antinomie_monitor_core::strings_regex::{scan_report, Config, RuleSet};
+    let config = Config::load(&data_dir)?;
+    let rules = RuleSet::build(&config);
+    let scan = scan_report(&reference.directory, &reference.report.id, &rules, cancel)?;
+    Ok(Strings {
+        interesting: antinomie_monitor_core::samples::interesting_strings(&scan),
+        matches: antinomie_monitor_core::samples::regex_matches(&scan),
+        total: scan.total(),
+    })
+}
+
+impl SamplesPage {
+    /// Open the window of a sample.
+    pub(in crate::app) fn open_detail(&mut self, sha256: &str) {
+        self.detail = Some(Detail::new(sha256));
+    }
+
+    /// Read the sample again at the next frame.
+    pub(super) fn refresh_detail(&mut self) {
+        if let Some(detail) = &mut self.detail {
+            detail.stale = true;
+        }
+    }
+}
+
+impl Detail {
+    fn start_load(&mut self, ctx: &egui::Context, options: &BackendOptions, vms: &[VmConfig]) {
+        if self.loading.is_some() {
+            return;
+        }
+        self.stale = false;
+        let (sender, receiver) = mpsc::channel();
+        let options = options.clone();
+        let sha256 = self.sha256.clone();
+        let vms: Vec<(String, String)> = vms
+            .iter()
+            .map(|vm| (vm.id.clone(), vm.name.clone()))
+            .collect();
+        let wake = ctx.clone();
+        match std::thread::Builder::new()
+            .name("sample-detail".into())
+            .spawn(move || {
+                let _ = sender.send(load(&options, &vms, &sha256));
+                wake.request_repaint();
+            }) {
+            Ok(_) => self.loading = Some(receiver),
+            Err(error) => self.error = Some(error.to_string()),
+        }
+    }
+
+    fn start_scan(&mut self, ctx: &egui::Context, data_dir: &std::path::Path, data: &Data) {
+        let Some(reference) = &data.report else {
+            self.scanned = Scanned::None;
+            self.scanned_report = None;
+            return;
+        };
+        if self.scanned_report.as_deref() == Some(reference.report.id.as_str()) {
+            return;
+        }
+        if let Some((_, cancel, _)) = self.scanning.take() {
+            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        self.scanned_report = Some(reference.report.id.clone());
+        self.scanned = Scanned::Reading;
+        let (sender, receiver) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let worker = Arc::clone(&cancel);
+        let reference = ReportRef {
+            vm_id: reference.vm_id.clone(),
+            run_id: reference.run_id.clone(),
+            number: reference.number,
+            directory: reference.directory.clone(),
+            report: reference.report.clone(),
+        };
+        let data_dir = data_dir.to_path_buf();
+        let wake = ctx.clone();
+        let id = reference.report.id.clone();
+        match std::thread::Builder::new()
+            .name("sample-strings".into())
+            .spawn(move || {
+                let _ = sender.send(scan(data_dir, &reference, &worker));
+                wake.request_repaint();
+            }) {
+            Ok(_) => self.scanning = Some((receiver, cancel, id)),
+            Err(error) => self.scanned = Scanned::Failed(error.to_string()),
+        }
+    }
+
+    /// Read the archive back and compare its SHA-256.
+    pub(super) fn start_verify(&mut self, ctx: &egui::Context, data_dir: &std::path::Path) {
+        if self.verify.is_some() {
+            return;
+        }
+        let (sender, receiver) = mpsc::channel();
+        let data_dir = data_dir.to_path_buf();
+        let sha256 = self.sha256.clone();
+        let wake = ctx.clone();
+        match std::thread::Builder::new()
+            .name("sample-verify".into())
+            .spawn(move || {
+                let _ = sender.send(Library::open(&data_dir).and_then(|l| l.verify(&sha256)));
+                wake.request_repaint();
+            }) {
+            Ok(_) => self.verify = Some(receiver),
+            Err(error) => self.verified = Some((false, error.to_string())),
+        }
+    }
+
+    fn poll(&mut self) {
+        if let Some(receiver) = &self.loading {
+            if let Ok(result) = receiver.try_recv() {
+                self.loading = None;
+                match result {
+                    Ok(data) => {
+                        self.data = Some(Arc::new(data));
+                        self.error = None;
+                    }
+                    Err(error) => self.error = Some(error),
+                }
+            }
+        }
+        if let Some(receiver) = &self.verify {
+            if let Ok(result) = receiver.try_recv() {
+                use antinomie_monitor_core::samples::Verification;
+                self.verify = None;
+                self.verified = Some(match result {
+                    Ok(Verification::Matches) => (true, String::new()),
+                    Ok(Verification::Missing) => (false, "the archive is missing".into()),
+                    Ok(Verification::Mismatch(why)) => (false, why),
+                    Err(error) => (false, error),
+                });
+                self.stale = true;
+            }
+        }
+        if let Some((receiver, _, _)) = &self.scanning {
+            if let Ok(result) = receiver.try_recv() {
+                self.scanning = None;
+                self.scanned = match result {
+                    Ok(strings) => Scanned::Done(strings),
+                    Err(error) => Scanned::Failed(error),
+                };
+            }
+        }
+    }
+}
+
+enum Action {
+    Back,
+    EditTags,
+    RunInVm,
+}
+
+impl MonitorApp {
+    /// The window of the open sample: header, tabs and the tab's body.
+    pub(super) fn detail_view(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        let vms = self.snapshot.vms.clone();
+        let options = self.options.clone();
+        let Some(detail) = &mut self.samples_page.detail else {
+            return;
+        };
+        detail.poll();
+        if detail.stale || detail.data.is_none() && detail.loading.is_none() {
+            detail.start_load(&ctx, &options, &vms);
+        }
+        let data = detail.data.clone();
+        if let Some(data) = &data {
+            detail.start_scan(&ctx, &options.data_dir, data);
+        }
+        let mut action = None;
+        let Some(data) = data else {
+            ui.horizontal(|ui| {
+                if widgets::link(ui, "‹ All samples").clicked() {
+                    action = Some(Action::Back);
+                }
+                if let Some(error) = &detail.error {
+                    ui.colored_label(theme::error(), error);
+                } else {
+                    theme::spinner(ui);
+                }
+            });
+            if matches!(action, Some(Action::Back)) {
+                self.samples_page.detail = None;
+            }
+            return;
+        };
+        self.detail_header(ui, &data, &mut action);
+        let Some(detail) = &mut self.samples_page.detail else {
+            return;
+        };
+        widgets::tab_row(ui, |ui| {
+            for (tab, label, count) in [
+                (Tab::Summary, "Summary", None),
+                (Tab::Runs, "Runs", Some(data.runs.len())),
+                (Tab::Custody, "Custody log", Some(data.events.len())),
+            ] {
+                let mut item = widgets::TabItem::new(label);
+                if let Some(count) = count {
+                    item = item.badge(count.to_string(), Tone::Neutral);
+                }
+                if widgets::tab(ui, detail.tab == tab, &item).clicked() {
+                    detail.tab = tab;
+                }
+            }
+        });
+        ui.separator();
+        match detail.tab {
+            Tab::Summary => self.summary_tab(ui, &data),
+            Tab::Runs => self.runs_tab(ui, &data),
+            Tab::Custody => custody::show(ui, &data, self.settings.font_size),
+        }
+        match action {
+            Some(Action::Back) => self.samples_page.detail = None,
+            Some(Action::EditTags) => {
+                self.samples_page.editing = Some((
+                    data.record.sha256.clone(),
+                    data.record.name.clone(),
+                    picker::TagPicker::with(&data.tags),
+                ));
+            }
+            Some(Action::RunInVm) => self.run_sample_in_vm(&data.record),
+            None => {}
+        }
+    }
+
+    fn detail_header(&mut self, ui: &mut egui::Ui, data: &Data, action: &mut Option<Action>) {
+        let can_run = self.running() && self.samples_page.run_error(&data.record).is_none();
+        let why = self.samples_page.run_error(&data.record);
+        let mut back = false;
+        let mut chosen = None;
+        egui::Sides::new().show(
+            ui,
+            |ui| {
+                if widgets::link(ui, "‹ All samples").clicked() {
+                    back = true;
+                }
+                ui.label(
+                    RichText::new(&data.record.name)
+                        .strong()
+                        .size(ui.text_style_height(&egui::TextStyle::Heading))
+                        .color(theme::palette().heading),
+                );
+                for tag in data
+                    .tags
+                    .iter()
+                    .filter(|tag| tag.kind == antinomie_monitor_core::samples::TagKind::Verdict)
+                {
+                    sample_tags::tag(ui, tag);
+                }
+                if self.samples_page.loading_detail() {
+                    theme::spinner(ui);
+                }
+            },
+            |ui| {
+                ui.add_enabled(false, egui::Button::new("Export custody record…"))
+                    .on_disabled_hover_text("Comes with the custody log");
+                if ui
+                    .add_enabled(can_run, egui::Button::new("Run in VM…"))
+                    .on_hover_text(
+                        "Send the archive into the running VM (its SHA-256 is read back first) \
+                         and open Run program with it",
+                    )
+                    .on_disabled_hover_text(why.unwrap_or_else(|| "Start a VM first".into()))
+                    .clicked()
+                {
+                    chosen = Some(Action::RunInVm);
+                }
+                if ui.button("Edit tags…").clicked() {
+                    chosen = Some(Action::EditTags);
+                }
+            },
+        );
+        if back {
+            *action = Some(Action::Back);
+        } else if chosen.is_some() {
+            *action = chosen;
+        }
+        if !data.archived {
+            ui.colored_label(
+                theme::error(),
+                if data.record.removed_ms.is_some() {
+                    "The archive was removed. Adding the same file again restores it."
+                } else {
+                    "The archive is not in the library folder."
+                },
+            );
+        }
+    }
+}
+
+impl SamplesPage {
+    fn loading_detail(&self) -> bool {
+        self.detail
+            .as_ref()
+            .is_some_and(|detail| detail.loading.is_some())
+    }
+
+    /// Why the sample cannot be sent into a VM and run, when it cannot.
+    fn run_error(&self, record: &SampleRecord) -> Option<String> {
+        if record.removed_ms.is_some() {
+            return Some("The archive was removed".into());
+        }
+        let kind = record.file_type.to_ascii_lowercase();
+        let runs = matches!(kind.as_str(), "sh" | "bash")
+            || kind == "elf"
+                && (record.arch.is_empty()
+                    || antinomie_monitor_core::samples::arch_label(&record.arch) == "x86-64");
+        (!runs).then(|| "Only x86-64 Linux programs and shell scripts run in the guests".into())
+    }
+}
+
+/// The name a sample takes in the guest: safe characters only.
+fn guest_name(record: &SampleRecord) -> String {
+    let name: String = record
+        .name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || ".-_".contains(c) {
+                c
+            } else {
+                '_'
+            }
+        })
+        .take(48)
+        .collect();
+    format!(
+        "/tmp/{}-{}",
+        &record.sha256[..8],
+        if name.is_empty() { "sample" } else { &name }
+    )
+}
+
+impl MonitorApp {
+    /// Send the archive into the running VM (the worker reads it back and
+    /// compares its SHA-256 first), then open Run program with it.
+    fn run_sample_in_vm(&mut self, record: &SampleRecord) {
+        let destination = guest_name(record);
+        let script = matches!(
+            record.file_type.to_ascii_lowercase().as_str(),
+            "sh" | "bash"
+        );
+        let uid = 1000;
+        let run = ExecRequest {
+            path: if script {
+                "/bin/sh".into()
+            } else {
+                destination.clone()
+            },
+            args: if script {
+                vec![destination.clone()]
+            } else {
+                Vec::new()
+            },
+            uid,
+            gid: uid,
+            cwd: "/tmp".into(),
+            ..ExecRequest::default()
+        };
+        self.samples.await_run(run);
+        self.send(Command::UploadSample {
+            sha256: record.sha256.clone(),
+            destination,
+            executable: true,
+        });
+    }
+}
+
+/// Runs read, whether a report was found, and the scan's rows once done.
+#[cfg(test)]
+pub(in crate::app) type Probe = (usize, bool, Option<(usize, usize, u64)>);
+
+#[cfg(test)]
+impl SamplesPage {
+    /// Show the tab named `summary`, `runs` or `custody`.
+    pub(in crate::app) fn show_detail_tab(&mut self, name: &str) {
+        if let Some(detail) = &mut self.detail {
+            detail.tab = match name {
+                "runs" => Tab::Runs,
+                "custody" => Tab::Custody,
+                _ => Tab::Summary,
+            };
+        }
+    }
+
+    /// Scroll the Summary down by `y` points.
+    pub(in crate::app) fn scroll_detail(&mut self, y: f32) {
+        if let Some(detail) = &mut self.detail {
+            detail.scroll_y = Some(y);
+        }
+    }
+
+    pub(in crate::app) fn detail_open(&self) -> bool {
+        self.detail.is_some()
+    }
+
+    pub(in crate::app) fn close_detail(&mut self) {
+        self.detail = None;
+    }
+
+    /// Runs read, whether a static report was found, and the rows of the
+    /// scan (interesting strings, regex matches, match count) once done.
+    pub(in crate::app) fn detail_probe(&self) -> Option<Probe> {
+        let detail = self.detail.as_ref()?;
+        let data = detail.data.as_ref()?;
+        Some((
+            data.runs.len(),
+            data.report.is_some(),
+            match &detail.scanned {
+                Scanned::Done(strings) => Some((
+                    strings.interesting.len(),
+                    strings.matches.len(),
+                    strings.total,
+                )),
+                _ => None,
+            },
+        ))
+    }
+
+    /// The run ids in the order the Runs tab lists them (newest first).
+    pub(in crate::app) fn detail_run_ids(&self) -> Vec<String> {
+        self.detail
+            .as_ref()
+            .and_then(|detail| detail.data.as_ref())
+            .map(|data| data.runs.iter().map(|entry| entry.run.id.clone()).collect())
+            .unwrap_or_default()
+    }
+
+    /// A line for a failing test: what the window is waiting on.
+    pub(in crate::app) fn detail_state(&self) -> String {
+        let Some(detail) = &self.detail else {
+            return "no window".into();
+        };
+        format!(
+            "runs {:?}, report {}, error {:?}, scan {}",
+            detail.data.as_ref().map(|data| data.runs.len()),
+            detail
+                .data
+                .as_ref()
+                .is_some_and(|data| data.report.is_some()),
+            detail.error,
+            match &detail.scanned {
+                Scanned::None => "none".to_owned(),
+                Scanned::Reading => "reading".to_owned(),
+                Scanned::Done(_) => "done".to_owned(),
+                Scanned::Failed(why) => format!("failed: {why}"),
+            }
+        )
+    }
+
+    pub(in crate::app) fn open_run_pending(&self) -> bool {
+        self.open_run.is_some()
+    }
+}

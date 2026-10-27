@@ -27,6 +27,7 @@ impl Fixture {
     fn add_run(&mut self, cookie: u64, state: RunState, terminal_eof: bool) {
         let run = ProgramRun::new(
             RunSummary {
+                environment: None,
                 started_ms: None,
                 clock_anchor: None,
                 id: cookie.to_string(),

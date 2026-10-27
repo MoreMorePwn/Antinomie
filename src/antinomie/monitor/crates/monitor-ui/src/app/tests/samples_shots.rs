@@ -3,7 +3,7 @@
 //! an X11 display; exits by itself. The library lives in ANTINOMIE_QA_DATA
 //! (a throwaway folder; never the user's data).
 //!
-//! ANTINOMIE_QA_SCENE = list | tags | add | edit,
+//! ANTINOMIE_QA_SCENE = list | tags | add | edit | detail | detail2 | runs | custody,
 //! ANTINOMIE_QA_THEME = dark | light | blue, ANTINOMIE_QA_SIZE = 1400x820,
 //! ANTINOMIE_QA_SECONDS = 25.
 use super::*;
@@ -66,6 +66,36 @@ fn native_samples_fixture() {
             app.rules_ui.set_packs_for_test(Vec::new());
             app.layout = WorkspaceLayout::default();
             app.open_library(crate::workspace::LibraryPage::Samples);
+            if matches!(scene.as_str(), "detail" | "detail2" | "runs" | "custody") {
+                // Runs that exist on disk, one with a static report.
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as u64;
+                super::samples_detail::save_run(&data, &script, "install.sh", "r1", now, true);
+                super::samples_detail::save_run(
+                    &data,
+                    &script,
+                    "install.sh",
+                    "r2",
+                    now + 8_000,
+                    false,
+                );
+                app.snapshot.vms.push(VmConfig {
+                    id: "vm".into(),
+                    name: "Debian".into(),
+                    ..VmConfig::default()
+                });
+                app.samples_page.open_detail(&script);
+                app.samples_page.show_detail_tab(match scene.as_str() {
+                    "runs" => "runs",
+                    "custody" => "custody",
+                    _ => "summary",
+                });
+                if scene == "detail2" {
+                    app.samples_page.scroll_detail(800.0);
+                }
+            }
             match scene.as_str() {
                 "tags" => app.samples_page.show_tag_filter(true),
                 "add" => {

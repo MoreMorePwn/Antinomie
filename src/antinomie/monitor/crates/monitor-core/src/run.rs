@@ -439,6 +439,7 @@ mod tests {
         let directory =
             std::env::temp_dir().join(format!("ant-analysis-metadata-{}", storage::unique_id()));
         let summary = RunSummary {
+            environment: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),
@@ -499,6 +500,7 @@ mod tests {
             checks: vec![crate::analysis::AnalysisKind::Metadata],
         };
         let summary = RunSummary {
+            environment: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),
@@ -553,6 +555,7 @@ mod tests {
             total_task_count: 3,
         };
         let summary = RunSummary {
+            environment: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),
@@ -604,6 +607,7 @@ mod tests {
             total_task_count: 2,
         };
         let summary = RunSummary {
+            environment: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),
@@ -669,6 +673,7 @@ mod tests {
         let directory =
             std::env::temp_dir().join(format!("ant-terminal-reads-{}", storage::unique_id()));
         let summary = RunSummary {
+            environment: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),
@@ -710,6 +715,7 @@ mod tests {
     fn headless_terminal_reopens_journal_screen_and_quota_failure_preserves_prefix() {
         let directory = std::env::temp_dir().join(format!("ant-terminal-{}", storage::unique_id()));
         let summary = RunSummary {
+            environment: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),
@@ -773,6 +779,7 @@ mod tests {
     fn open_run(name: &str) -> (ProgramRun, std::path::PathBuf) {
         let directory = std::env::temp_dir().join(format!("{name}-{}", storage::unique_id()));
         let summary = RunSummary {
+            environment: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),

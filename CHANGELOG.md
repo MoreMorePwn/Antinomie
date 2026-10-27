@@ -21,6 +21,17 @@ it runs.
   `sample ==` filter. *Download…* opens the MalwareBazaar and MalShare search
   (Tools › Download malware samples).
 
+- **A sample has its own window.** Double-click a sample in Library › Samples:
+  a header with the name and verdict, and tabs Summary, Runs and Custody log.
+  The Summary shows the verdict and family, the latest five runs, the
+  interesting strings and the regex matches of the static report (six rows
+  each, longest first, addresses defanged), the static analysis lines, the
+  identity with every hash, the archive and the names the sample went by.
+  The Runs tab is Run History across every VM, limited to the sample, with the
+  environment each run started in (VM, base image, kernel, rule packs, tools,
+  app) saved with the run and the processes that run library samples tinted in
+  the process tree. A run opens in Triage of its own VM.
+
 - **Samples are kept in a library.** Downloads from MalwareBazaar and MalShare,
   and files added from this computer, now go into one library under
   `samples/`: one encrypted archive per sample (password `infected`) in a folder

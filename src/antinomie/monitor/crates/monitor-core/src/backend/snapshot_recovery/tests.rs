@@ -33,6 +33,7 @@ fn checkpoint(change: impl FnOnce(&mut serde_json::Value)) -> HostCheckpoint {
 
 fn run(id: &str, vm_id: &str, root: u64, session: u64) -> RunSummary {
     RunSummary {
+        environment: None,
         started_ms: None,
         clock_anchor: None,
         id: id.into(),
