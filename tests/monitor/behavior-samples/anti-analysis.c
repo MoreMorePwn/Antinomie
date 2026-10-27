@@ -75,7 +75,7 @@ SCENARIO(memfd_exec)
         close(self);
         return 1;
     }
-    int fd = memfd_create("antinomie-stage", MFD_CLOEXEC);
+    int fd = memfd_create("demo-stage", MFD_CLOEXEC);
     if (fd < 0) {
         sample_unavailable(name, "memfd_create: %s", strerror(errno));
         close(self);
@@ -126,7 +126,7 @@ SCENARIO(memfd_exec)
     char library_dir[600], library[700];
     if (sample_path(library_dir, sizeof library_dir, options->workdir, ".cache") == 0 &&
         sample_mkdir_p(library_dir) == 0 && sample_path(library, sizeof library, library_dir, "libdemo.so") == 0 &&
-        sample_write_text(library, "ANTINOMIE-DEMO placeholder, not a shared object\n") == 0) {
+        sample_write_text(library, "DEMO-DECOY placeholder, not a shared object\n") == 0) {
         int fd_library = open(library, O_RDONLY | O_CLOEXEC);
         if (fd_library >= 0) {
             void *view = mmap(NULL, 4096, PROT_READ | PROT_EXEC, MAP_PRIVATE, fd_library, 0);
@@ -162,7 +162,7 @@ SCENARIO(memfd_exec)
     if (child == 0) {
         close(pipefd[0]);
         setenv("SAMPLE_MEMFD_CHILD", "1", 1);
-        char *const argv[] = {(char *)"antinomie-stage", NULL};
+        char *const argv[] = {(char *)"demo-stage", NULL};
         fexecve(fd, argv, environ);
         int saved = errno;
         ssize_t ignored = write(pipefd[1], &saved, sizeof saved);
@@ -188,7 +188,7 @@ SCENARIO(memfd_exec)
         if (plain >= 0) {
             char via[64];
             snprintf(via, sizeof via, "/proc/self/fd/%d", plain);
-            char *const argv[] = {(char *)"antinomie-stage", NULL};
+            char *const argv[] = {(char *)"demo-stage", NULL};
             fileless = sample_spawn(via, argv, NULL, "exit", NULL);
             close(plain);
         }
@@ -210,7 +210,7 @@ SCENARIO(memfd_exec)
              refused == MAP_FAILED ? strerror(refused_errno) : "unexpectedly mapped");
     if (fileless != 0)
         sample_unavailable(name, "exec through /proc/self/fd/N ended with %d", fileless);
-    sample_pass(name, "%zu bytes into memfd \"antinomie-stage\", %s mapping (magic 0x%08x), "
+    sample_pass(name, "%zu bytes into memfd \"demo-stage\", %s mapping (magic 0x%08x), "
                    "fileless exec %s",
              size, mapped, magic, fileless == 0 ? "ok" : "not run");
     if (refused != MAP_FAILED)
@@ -369,8 +369,8 @@ SCENARIO(inject_sim)
     char library[600];
     sample_path(library, sizeof library, options->workdir, "libdemo.so");
     snprintf(preload, sizeof preload, "LD_PRELOAD=%s", library);
-    char *const env[] = {preload, (char *)"LD_LIBRARY_PATH=/tmp/.antinomie-demo", NULL};
-    char *const argv[] = {(char *)"antinomie-preload", NULL};
+    char *const env[] = {preload, (char *)"LD_LIBRARY_PATH=/tmp/.demo-sample", NULL};
+    char *const argv[] = {(char *)"demo-preload", NULL};
     steps++;
     if (sample_spawn("/proc/self/exe", argv, env, "exit", NULL) == 0)
         done++;
@@ -480,7 +480,7 @@ SCENARIO(evasion_misc)
     // Timestomp: explicit old times on a file of the run.
     char dated[600];
     sample_path(dated, sizeof dated, options->workdir, "dropper.dat");
-    STEP(sample_write_text(dated, "ANTINOMIE-DEMO\n") == 0);
+    STEP(sample_write_text(dated, "DEMO-DECOY\n") == 0);
     struct timespec old_times[2] = {{.tv_sec = 946684800}, {.tv_sec = 946684800}};
     STEP(utimensat(AT_FDCWD, dated, old_times, 0) == 0);
 
@@ -488,14 +488,14 @@ SCENARIO(evasion_misc)
     const char *const odd[] = {"...", " ", ".hidden-demo"};
     for (size_t i = 0; i < sizeof odd / sizeof odd[0]; i++) {
         sample_path(path, sizeof path, options->workdir, odd[i]);
-        STEP(sample_write_text(path, "ANTINOMIE-DEMO\n") == 0);
+        STEP(sample_write_text(path, "DEMO-DECOY\n") == 0);
     }
 
     // chattr +i as FS_IOC_SETFLAGS on an O_PATH descriptor: EBADF, nothing is
     // marked immutable. One decoy in a credentials-class path, one pipe.
     char guarded[600];
     sample_path(guarded, sizeof guarded, options->workdir, ".ssh/authorized_keys");
-    STEP(sample_write_text(guarded, "ssh-ed25519 AAAAANTINOMIEDEMO demo@antinomie.invalid\n") == 0);
+    STEP(sample_write_text(guarded, "ssh-ed25519 AAAADEMODECOY demo@example.invalid\n") == 0);
     int flagged = open(guarded, O_PATH | O_CLOEXEC);
     unsigned flags = 0x10; // FS_IMMUTABLE_FL
     STEP(flagged >= 0 && ioctl_setflags(flagged, &flags) == -1);
@@ -599,7 +599,7 @@ SCENARIO(privesc_sim)
     sample_path(directory, sizeof directory, options->workdir, "demo-bin");
     sample_mkdir_p(directory);
     sample_path(path, sizeof path, directory, "suid-demo");
-    STEP(sample_write_text(path, "ANTINOMIE-DEMO: inert text, not an executable\n") == 0);
+    STEP(sample_write_text(path, "DEMO-DECOY: inert text, not an executable\n") == 0);
     STEP(chmod(path, 04755) == 0);
     STEP(chmod(path, 02755) == 0);
     STEP(chmod(path, 0600) == 0);
@@ -651,7 +651,7 @@ SCENARIO(privesc_sim)
     sample_path(directory, sizeof directory, options->workdir, ".ssh");
     sample_mkdir_p(directory);
     sample_path(decoy, sizeof decoy, directory, "id_rsa_pipe");
-    if (sample_write_text(decoy, "ANTINOMIE-DEMO decoy key material, 0123456789\n") == 0) {
+    if (sample_write_text(decoy, "DEMO-DECOY decoy key material, 0123456789\n") == 0) {
         int file = open(decoy, O_RDONLY | O_CLOEXEC);
         int channel[2];
         if (file >= 0 && pipe2(channel, O_CLOEXEC) == 0) {

@@ -217,7 +217,7 @@ SCENARIO(persistence)
 {
     const char *name = "persistence";
     static const char *const directories[] = {".config/autostart", ".config/systemd/user",
-                                              ".config/antinomie-demo", ".local/bin", ".ssh",
+                                              ".config/demo-sample", ".local/bin", ".ssh",
                                               "lib/security"};
     char path[600], executable[600], desktop[600], service[600], crontab[600];
     for (size_t i = 0; i < sizeof directories / sizeof directories[0]; i++) {
@@ -227,11 +227,11 @@ SCENARIO(persistence)
             return 1;
         }
     }
-    sample_path(executable, sizeof executable, options->workdir, ".local/bin/antinomie-demo");
+    sample_path(executable, sizeof executable, options->workdir, ".local/bin/demo-sample");
     sample_path(desktop, sizeof desktop, options->workdir,
-             ".config/autostart/antinomie-demo.desktop");
+             ".config/autostart/demo-sample.desktop");
     sample_path(service, sizeof service, options->workdir,
-             ".config/systemd/user/antinomie-demo.service");
+             ".config/systemd/user/demo-sample.service");
     sample_path(crontab, sizeof crontab, options->workdir, "crontab.txt");
 
     char text[1024];
@@ -252,10 +252,10 @@ SCENARIO(persistence)
         const char *relative;
         const char *content;
     } lookalikes[] = {
-        {".bashrc", "# antinomie-demo\nexport PATH=\"$PATH:$HOME/.local/bin\"\n"},
-        {".ssh/authorized_keys", "ssh-ed25519 AAAAANTINOMIEDEMO demo@antinomie.invalid\n"},
-        {"lib/security/pam_antinomie.so", "ANTINOMIE-DEMO placeholder, not a shared object\n"},
-        {".config/antinomie-demo/settings.ini", "[demo]\nbeacon=on\n"},
+        {".bashrc", "# demo-sample\nexport PATH=\"$PATH:$HOME/.local/bin\"\n"},
+        {".ssh/authorized_keys", "ssh-ed25519 AAAADEMODECOY demo@example.invalid\n"},
+        {"lib/security/pam_demo.so", "DEMO-DECOY placeholder, not a shared object\n"},
+        {".config/demo-sample/settings.ini", "[demo]\nbeacon=on\n"},
     };
     for (size_t i = 0; i < sizeof lookalikes / sizeof lookalikes[0]; i++) {
         total++;
@@ -272,9 +272,9 @@ SCENARIO(persistence)
     // The commands that would make these permanent, as stand-ins only.
     char *const crontab_cmd[] = {"crontab", crontab, NULL};
     char *const at_cmd[] = {"at", "-f", crontab, "now", NULL};
-    char *const user_cmd[] = {"useradd", "-M", "-s", "/usr/sbin/nologin", "antinomie-demo", NULL};
-    char *const rc_cmd[] = {"update-rc.d", "antinomie-demo", "defaults", NULL};
-    char *const unit_cmd[] = {"systemctl", "--user", "enable", "antinomie-demo.service", NULL};
+    char *const user_cmd[] = {"useradd", "-M", "-s", "/usr/sbin/nologin", "demo-sample", NULL};
+    char *const rc_cmd[] = {"update-rc.d", "demo-sample", "defaults", NULL};
+    char *const unit_cmd[] = {"systemctl", "--user", "enable", "demo-sample.service", NULL};
     char *const *const stand_ins[] = {crontab_cmd, at_cmd, user_cmd, rc_cmd, unit_cmd};
     int ran = 0;
     for (size_t i = 0; i < sizeof stand_ins / sizeof stand_ins[0]; i++)

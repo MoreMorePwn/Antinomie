@@ -74,7 +74,7 @@ class Payloads(unittest.TestCase):
         script = "".join(pieces).encode().decode("unicode_escape").encode()
         self.assertEqual(script, sink_module.DOWNLOAD_SCRIPT)
         self.assertTrue(script.startswith(b"#!/bin/sh\n"))
-        self.assertIn(b"hello from antinomie download", script)
+        self.assertIn(b"hello from demo download", script)
 
     @unittest.skipUnless(platform.machine() == "x86_64" and platform.system() == "Linux", "x86-64 Linux only")
     def test_the_elf_runs_and_says_hello(self):
@@ -84,7 +84,7 @@ class Payloads(unittest.TestCase):
             path.chmod(path.stat().st_mode | stat.S_IXUSR)
             done = subprocess.run([str(path)], capture_output=True, timeout=10)
         self.assertEqual(done.returncode, 0)
-        self.assertEqual(done.stdout, b"hello from antinomie download elf\n")
+        self.assertEqual(done.stdout, b"hello from demo download elf\n")
 
     def test_the_elf_is_small_and_starts_with_the_magic(self):
         self.assertLess(len(sink_module.ELF_PAYLOAD), 512)
@@ -93,7 +93,7 @@ class Payloads(unittest.TestCase):
 
 class Parsers(unittest.TestCase):
     def test_sni(self):
-        self.assertEqual(sink_module.parse_sni(client_hello("update.antinomie.invalid")), "update.antinomie.invalid")
+        self.assertEqual(sink_module.parse_sni(client_hello("update.example-cdn.invalid")), "update.example-cdn.invalid")
         self.assertIsNone(sink_module.parse_sni(b"GET / HTTP/1.1\r\n"))
         self.assertIsNone(sink_module.parse_sni(client_hello("x")[:20]))
 
@@ -104,13 +104,13 @@ class Parsers(unittest.TestCase):
 
         self.assertEqual(rcode("yvoiiptwgtbdovnn.com")[0], 3)
         self.assertEqual(rcode("abcdefghijklmnop.onion")[0], 3)
-        self.assertEqual(rcode("update.antinomie.invalid")[0], 0)
+        self.assertEqual(rcode("update.example-cdn.invalid")[0], 0)
         self.assertEqual(rcode("pastebin.com")[0], 0)
         self.assertEqual(rcode("pastebin.com", "nxdomain")[0], 3)
         self.assertEqual(rcode("yvoiiptwgtbdovnn.com", "answer")[0], 0)
-        code, reply = rcode("c01.exfil.antinomie.invalid", qtype=16)
+        code, reply = rcode("c01.exfil.example-dns.invalid", qtype=16)
         self.assertEqual(code, 0)
-        self.assertIn(b"antinomie-sinkhole", reply)
+        self.assertIn(b"demo-sinkhole", reply)
         self.assertIsNone(sink_module.dns_reply(b"short", "auto", "127.0.0.1"))
 
     def test_scenario_classification(self):
@@ -121,8 +121,8 @@ class Parsers(unittest.TestCase):
         self.assertEqual(classify(False, "POST", "/gate.php", "10.0.2.2", b"x&scenario=http-beacon"), "http-beacon")
         self.assertEqual(classify(False, "GET", "/", "api.telegram.org", b""), "c2-misc")
         self.assertEqual(classify(True, "GET", "/gate.php?stage=alt", "10.0.2.2", b""), "c2-misc")
-        self.assertEqual(sink_module.classify_name("c01.exfil.antinomie.invalid"), "dns-tunnel")
-        self.assertEqual(sink_module.classify_name("update.antinomie.invalid"), "dga")
+        self.assertEqual(sink_module.classify_name("c01.exfil.example-dns.invalid"), "dns-tunnel")
+        self.assertEqual(sink_module.classify_name("update.example-cdn.invalid"), "dga")
 
 
 class Registry(unittest.TestCase):
@@ -172,23 +172,23 @@ class Running(unittest.TestCase):
 
     def test_tls_is_accepted_and_refused_with_an_alert(self):
         with socket.create_connection(("127.0.0.1", self.port("tls")), timeout=5) as client:
-            client.sendall(client_hello("update.antinomie.invalid"))
+            client.sendall(client_hello("update.example-cdn.invalid"))
             self.assertEqual(client.recv(16)[:1], b"\x15")
-        self.wait_for("SNI=update.antinomie.invalid")
+        self.wait_for("SNI=update.example-cdn.invalid")
 
     def test_udp_dns_and_banners(self):
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp:
             udp.settimeout(5)
             udp.sendto(b'{"scenario":"udp-beacon"}', ("127.0.0.1", self.port("udp")))
             self.assertIn(b"sinkhole", udp.recv(256))
-            udp.sendto(dns_query("update.antinomie.invalid"), ("127.0.0.1", self.port("dns")))
+            udp.sendto(dns_query("update.example-cdn.invalid"), ("127.0.0.1", self.port("dns")))
             self.assertEqual(udp.recv(512)[3] & 15, 0)
             udp.sendto(dns_query("yvoiiptwgtbdovnn.com"), ("127.0.0.1", self.port("dns")))
             self.assertEqual(udp.recv(512)[3] & 15, 3)
         with socket.create_connection(("127.0.0.1", self.port("ssh")), timeout=5) as client:
             self.assertTrue(client.recv(64).startswith(b"SSH-2.0-"))
         with socket.create_connection(("127.0.0.1", self.port("shell")), timeout=5) as client:
-            client.sendall(b"antinomie reverse-shell demo\n")
+            client.sendall(b"sample reverse-shell demo\n")
         self.wait_for("reverse-shell output")
 
     def wait_for(self, text):

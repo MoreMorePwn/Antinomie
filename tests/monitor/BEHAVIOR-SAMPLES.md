@@ -1,10 +1,10 @@
 # Behavior samples
 
-`ant-sample-*` are small static x86-64 ELFs that reproduce the *shape* of attacker
+`demo-*` are small static x86-64 ELFs that reproduce the *shape* of attacker
 behaviour for testing Antinomie end to end, above all the 0.7.1 Suspicious
 activity rules, the network triage and the activity graph. They are not stress
 tests: each scenario does a handful of things an analyst would triage, then
-exits. `ant-sample-all` runs every scenario in the order of the graph's phases
+exits. `demo-all` runs every scenario in the order of the graph's phases
 (recon, download, persistence, escalation, hide/inject, C2, spread, impact),
 so one run is a short intrusion storyline.
 
@@ -14,7 +14,7 @@ Everything harmful is replaced by a harmless destination or a harmless form:
   reaches a listener on the host and nowhere else; pass `--host 198.51.100.23`
   (RFC 5737 TEST-NET) or `--host 127.0.0.1 --port 9` for an offline baseline;
 - `--host` and `--resolver` take numeric IPv4 only; no name is ever resolved, so
-  names such as `remote.antinomie.invalid`, `api.telegram.org` or `x.onion` appear only
+  names such as `remote.example-host.invalid`, `api.telegram.org` or `x.onion` appear only
   inside payloads and DNS questions sent to the numeric listener address
   (10.0.2.2 is a private address, but it is the host of QEMU and VirtualBox NAT
   only: on a machine whose own network uses 10.0.2.0/24, pass `--host`
@@ -43,19 +43,19 @@ Everything harmful is replaced by a harmless destination or a harmless form:
   bounded, and every helper process is killed by pid if it overruns.
 
 Options accept both `--host 10.0.2.2` and `--host=10.0.2.2`. A bare
-`./ant-sample-all` runs every scenario; `--only a,b` selects a subset, `--list`
+`./demo-all` runs every scenario; `--only a,b` selects a subset, `--list`
 prints the registry and `--help` the options.
 
 ## Build
 
 ```sh
-tests/monitor/build-behavior-samples.sh /tmp/ant-sample-all
-tests/monitor/build-behavior-samples.sh /tmp/ant-sample-all --dynamic
+tests/monitor/build-behavior-samples.sh /tmp/demo-all
+tests/monitor/build-behavior-samples.sh /tmp/demo-all --dynamic
 ```
 
 Static is the default (glibc, no `PT_INTERP`), which runs on every guest base.
-The script builds `ant-sample-all` and one `ant-sample-<scenario>` per entry of
-`./ant-sample-all --list`, with `-Wall -Wextra` and no warnings.
+The script builds `demo-all` and one `demo-<scenario>` per entry of
+`./demo-all --list`, with `-Wall -Wextra` and no warnings.
 
 ## Quick start
 
@@ -63,10 +63,10 @@ On the host (from the repository root), then in the guest:
 
 ```sh
 python3 tests/monitor/sinkhole.py --nat       # QEMU NAT guest -> host listener
-./ant-sample-all --host 10.0.2.2 --rounds 1              # in the guest
+./demo-all --host 10.0.2.2 --rounds 1              # in the guest
 
 python3 tests/monitor/sinkhole.py                     # same machine
-./ant-sample-all --host 127.0.0.1 --rounds 1 --delay 0
+./demo-all --host 127.0.0.1 --rounds 1 --delay 0
 ```
 
 The sinkhole prints the exact `--host` (and `--dns-port` when port 53 is not
@@ -96,12 +96,12 @@ activity over a minute so the graph can separate the phases.
 --evade-sleep MS  the evading sleep (0-5000; default 3000-4500)
 --test-root DIR   tests only: the checks read their files below DIR (see Evasive variant)
 --list            registry: name, phase, requires, expected rule ids, summary (tab separated)
---all / --only a,b   select scenarios in ant-sample-all
+--all / --only a,b   select scenarios in demo-all
 ```
 
 Several rules look at the work directory's path: a hidden component (`.cache`,
 `.bin`, `.ssh`) or a `/tmp` workdir makes it a staging directory. The default
-workdir is `/tmp/antinomie-sample-XXXXXX`; with `--workdir` the scenarios still
+workdir is `/tmp/demo-sample-XXXXXX`; with `--workdir` the scenarios still
 use hidden subdirectories for everything that must look like a drop.
 
 ## Scorecard
@@ -112,8 +112,8 @@ Every line is `TAG scenario message`; the tags are stable:
 == download: GET a hello-world script, ... (phase download, rounds 1, work /tmp/...)
 EXPECT      download          execution.dropped_exec,execution.chmod_exec_temp,...
 DEPENDS     download          runs only when the SHA-256 matches; ...
-NOTE        download          sha256 743c0992324e1204... matches the pinned payload (87 bytes)
-PASS        download          verified 87 bytes, ran .../install.sh (exit 0) and through a pipe into sh ...
+NOTE        download          sha256 4267d61ee8379b7c... matches the pinned payload (82 bytes)
+PASS        download          verified 82 bytes, ran .../install.sh (exit 0) and through a pipe into sh ...
 UNAVAILABLE shell-sim         raw socket Operation not permitted, ...: c2.bpf_backdoor needs root
 SKIP        net-wide          not run: pass --wide to enable it (...)
 ...
@@ -148,35 +148,35 @@ exists there. A tier is the rule's own; failed or allow-listed matches are lower
 
 | Scenario | Graph phase | Rule ids it should fire | What to look at in Antinomie |
 |---|---|---|---|
-| `ant-sample-recon` | recon | `discovery.system_info`, `network.ip_literal` | Triage > Suspicious activity (discovery.system_info INFO); Network tab: POST /gate.php with Host as an IP literal; Files tab: `stage/recon.txt` with `--keep`. |
-| `ant-sample-discovery` | recon | `discovery.user_enum`, `discovery.system_info`, `discovery.network_config`, `discovery.process_enum`, `discovery.file_search`, `discovery.security_software`, `discovery.network_scan` | Suspicious activity, Discovery group: user/system/network reads, 16 `/proc/PID` probes, 232 directory listings in 60 s, stat probes of security-software paths; Process tab: eight stand-in programs named `ps`, `id`, `ip`, `find`, `nmap`. |
-| `ant-sample-sandbox-probe` | recon | `evasion.sandbox_probe`, `evasion.probe_then_exit`, `evasion.container_check`, `evasion.debugger_check`, `evasion.traceme`, `discovery.system_info`, `discovery.network_config` | Evasion rows `evasion.sandbox_probe` (open the row: each check with the answer the guest gave and whether it would show a VM), `evasion.container_check`, `evasion.debugger_check`; a `probe_then_exit` row for the child that checked and exited; compare a default guest with a Stealth-profile guest. |
-| `ant-sample-ptrace-antidebug` | recon | `evasion.debugger_check`, `evasion.traceme` | Evasion: `evasion.debugger_check` (TracerPid, maps) and `evasion.traceme` (the child's `PTRACE_TRACEME`, EPERM when something already traces it). |
-| `ant-sample-sleep-evasion` | recon | `evasion.long_sleep` | Evasion: six `evasion.long_sleep` rows, one per sleeper (nanosleep, clock_nanosleep, select, poll, alarm, timerfd_settime), MEDIUM with the text "before any network or file write". |
-| `ant-sample-cred-read` | - | `credential.history_read`, `credential.wallet`, `credential.kerberos_ccache`, `credential.cloud_tokens`, `credential.ssh_keys`, `credential.browser_store`, `network.ip_literal` | Credential group: the decoy paths in the Files tab (Credentials location), `credential.*` rows; the exfil POST in Network. With `--cred-home` the real-home rules fire as well. |
-| `ant-sample-download` | download | `execution.dropped_exec`, `execution.chmod_exec_temp`, `execution.temp_exec`, `execution.download_cradle`, `process.interpreter`, `process.exec`, `network.ip_literal` | Execution rows `execution.download_cradle`, `execution.dropped_exec`, `execution.chmod_exec_temp`, `execution.temp_exec`; the process tree shows `ant-sample-download -> install.sh` and `sh -c ... | sh`; Files: `.cache/install.sh`, `download-marker.txt` with `--keep`; Network: `GET /install.sh`. Graph phase: download. |
-| `ant-sample-download-elf` | download | `c2.elf_download`, `execution.dropped_exec`, `execution.chmod_exec_temp`, `execution.temp_exec`, `execution.compile_then_run`, `network.ip_literal` | `c2.elf_download` (HIGH): the socket read that starts with `\x7fELF` and the write that follows; `execution.dropped_exec` for `payload.elf` and for `.bin/cc`; `execution.compile_then_run` for `.bin/a.out`. Graph phase: download. |
-| `ant-sample-persistence` | persistence | `persistence.systemd`, `persistence.xdg_autostart`, `persistence.shell_profile`, `persistence.ssh_authorized_keys`, `persistence.pam`, `persistence.config_write`, `persistence.cron`, `persistence.at_job`, `persistence.account`, `persistence.rc_init`, `persistence.module`, `execution.chmod_exec_temp` | Persistence group in the Files tab (Persistence location) and Suspicious activity; process tree: `crontab`, `at`, `useradd`, `update-rc.d`, `systemctl` stand-ins. Graph phase: persistence. |
-| `ant-sample-privesc-sim` | escalation | `privilege.setid_bit`, `privilege.userns`, `privilege.container_escape`, `privilege.pwnkit`, `privilege.dirty_pipe`, `privilege.drop`, `execution.temp_exec` | Privilege group; `privilege.setid_bit` names the chmod 04755/02755 and the refused file capability; the process tree has a `pkexec` with an empty argument vector. Graph phase: escalation. |
-| `ant-sample-memfd-exec` | hide/inject | `process.memfd`, `execution.memfd_elf`, `process.memfd_exec`, `memory.rwx`, `memory.wx_transition`, `memory.rwx_attempt`, `execution.fileless_exec`, `execution.dropped_library` | Execution: `process.memfd`, `execution.memfd_elf`, `process.memfd_exec`, `memory.rwx` (and the refused zero-length `memory.rwx_attempt`), `memory.wx_transition`, `execution.fileless_exec` for `/proc/self/fd/N`, `execution.dropped_library` for `.cache/libdemo.so`. |
-| `ant-sample-inject-sim` | hide/inject | `injection.ptrace_attach`, `injection.ptrace_poke`, `process.ptrace`, `injection.vm_write`, `injection.proc_mem_write`, `credential.proc_mem_read`, `injection.ld_preload_env`, `evasion.traceme` | Injection group: attach, poke, `process_vm_writev`, `/proc/PID/mem` read and write, all against the sample's own child; `injection.ld_preload_env` on the stand-in started with `LD_PRELOAD=`. Graph phase: hide/inject. |
-| `ant-sample-evasion-misc` | hide/inject | `evasion.masquerade_kthread`, `evasion.masquerade_daemon`, `evasion.dumpable_off`, `bpf.seccomp_filter`, `evasion.hidden_artifact`, `evasion.history_clear`, `evasion.timestomp`, `evasion.immutable_attr`, `evasion.self_delete`, `evasion.log_clear`, `evasion.kill_list`, `evasion.proc_hide_mount`, `evasion.sysctl_security`, `evasion.firewall_modify`, `evasion.audit_disable`, `evasion.security_disable`, `bpf.program`, `evasion.io_uring_usage`, `execution.dropped_exec`, `execution.temp_exec`, `execution.chmod_exec_temp` | Evasion group: masquerade rows (a child named `kworker/0:1H` and `sshd`), dumpable, seccomp, bpf, history/log clearing, timestomp, `...` and ` ` entries, `evasion.self_delete` for `.cache/.svc`, immutable attribute on the decoy `authorized_keys`, stand-in firewall/audit/SELinux commands. |
-| `ant-sample-http-beacon` | C2 | `network.ip_literal` | Network tab: HTTP POSTs with a browser User-Agent; `network.ip_literal`; IOC window: URI `/gate.php`, User-Agent. |
-| `ant-sample-beacon-loop` | C2 | `network.beacon`, `network.ip_literal` | `network.beacon` after the eighth request: ten GETs 200 ms apart; the row shows the period. |
-| `ant-sample-dns-tunnel` | C2 | `network.dns_tunnel` | `network.dns_tunnel` twice (long labels, then the TXT burst); Network: the hex labels under `exfil.antinomie.invalid`; IOC window: DNS names. |
-| `ant-sample-dga` | C2 | `network.dga_nxdomain` | `network.dga_nxdomain` once fourteen random-looking names fail after one name was answered; Network: the NXDOMAIN replies. |
-| `ant-sample-tls-sni` | C2 | (none by design) | No finding on purpose. Network tab: TLS ClientHello, SNI `update.antinomie.invalid`; IOC window: the SNI. |
-| `ant-sample-udp-beacon` | C2 | (none by design) | No finding on purpose. Network tab: UDP datagrams to port 4444 with a JSON body; IOC window: the destination and port. |
-| `ant-sample-c2-misc` | C2 | `network.nonstandard_port`, `network.irc_c2`, `network.tor`, `network.web_service`, `credential.cloud_metadata`, `impact.miner`, `network.proxy_tunnel`, `network.ip_literal` | Network group: `network.nonstandard_port` (HTTP 9080, TLS 9443, SSH 2222), `network.irc_c2`, `network.tor`, `network.web_service`, `credential.cloud_metadata`, `impact.miner` (Stratum text), `network.proxy_tunnel` (stand-ins). |
-| `ant-sample-shell-sim` | C2 | `c2.reverse_shell`, `c2.bind_shell`, `network.listen_any`, `network.raw_socket`, `bpf.socket_filter`, `c2.bpf_backdoor`, `process.interpreter` | Command group: `c2.reverse_shell` and `c2.bind_shell` (the exec of `sh` with a socket as stdin/stdout), `network.listen_any`; as root also `network.raw_socket` and `c2.bpf_backdoor`. |
-| `ant-sample-exfil-sim` | C2 | `exfil.file_to_socket`, `collection.archive_staging`, `lateral.tool_transfer`, `network.ip_literal` | `exfil.file_to_socket` (sendfile of `.ssh/id_exfil`), `collection.archive_staging`, `lateral.tool_transfer` for the scp/curl -T/rsync stand-ins; Network: `PUT /upload/id_exfil`. |
-| `ant-sample-collection-sim` | - | `collection.clipboard`, `collection.screen_capture`, `collection.av_capture`, `collection.tty_inject`, `collection.local_sweep` | Collection group: clipboard, screen and audio stand-ins, `collection.tty_inject` (ioctl TIOCSTI on a file), and `collection.local_sweep` only with a work directory under /home or /root. |
-| `ant-sample-lateral-sim` | spread | `discovery.network_scan`, `lateral.bruteforce`, `lateral.ssh_spread` | `discovery.network_scan` (24 ports of the host), `lateral.bruteforce` (12 connects to ports 22 and 23), `lateral.ssh_spread` after the known_hosts read. Graph phase: spread. Loopback hosts are not counted: use the NAT host. |
-| `ant-sample-impact-sim` | impact | `impact.fork_bomb`, `impact.ransom_rewrite`, `impact.ransom_note`, `impact.inhibit_recovery`, `impact.service_stop`, `impact.reboot`, `impact.miner`, `impact.miner_tuning`, `impact.ddos_flood`, `impact.block_device_write` | Impact group: `impact.fork_bomb` (230 vforks), `impact.ransom_rewrite` and `impact.ransom_note`, miner/shutdown/lvremove stand-ins, `impact.ddos_flood` (1120 datagrams). Graph phase: impact. |
-| `ant-sample-rule-markers` | - | `discovery.system_info`, `discovery.user_enum` | Files tab / static analysis: YARA and Sigma tag strings in `rule-markers.txt`; Process tab: real `uname`, `id`, `crontab -l`, `cat` for Sigma process_creation rules. |
-| `ant-sample-evasive` (named with `--only evasive`, or its own binary) | - | see "Evasive variant": the check rows on both paths, the chain's rows only when it proceeds | Checks first; on a VM it prints `EVADE vm: ...` and exits 0 after 3-4.5 s; on a clean machine the whole chain runs. See below. |
-| `ant-sample-real-path-probes` (needs `--real-paths`) | - | `persistence.cron`, `persistence.at_job`, `persistence.systemd`, `persistence.rc_init`, `persistence.event_script`, `persistence.shell_profile`, `persistence.ssh_authorized_keys`, `persistence.xdg_autostart`, `persistence.udev`, `persistence.pam`, `persistence.module_autoload`, `persistence.apt_hook`, `persistence.web_shell`, `persistence.config_write`, `injection.ld_so_preload`, `injection.ld_so_conf`, `privilege.sudoers`, `evasion.audit_disable`, `evasion.log_clear`, `impact.block_device_write`, `impact.miner_tuning`, `credential.shadow_read`, `collection.keylog`, `collection.screen_capture`, `collection.av_capture` | Persistence/Injection/Privilege/Impact rows with the `failed` flag and one tier down; Files: the same system paths as failed opens. `credential.shadow_read` and the device rows appear only where the node exists and is readable (root). |
-| `ant-sample-net-wide` (needs `--wide`) | spread | `lateral.service_exploit`, `discovery.network_scan`, `exfil.large_upload` | `lateral.service_exploit` (6379 on three hosts), `discovery.network_scan` (port 8080 on twelve hosts), `exfil.large_upload` (1.12 MB of zeros over connected UDP); all toward 203.0.113.0/24. |
+| `demo-recon` | recon | `discovery.system_info`, `network.ip_literal` | Triage > Suspicious activity (discovery.system_info INFO); Network tab: POST /gate.php with Host as an IP literal; Files tab: `stage/recon.txt` with `--keep`. |
+| `demo-discovery` | recon | `discovery.user_enum`, `discovery.system_info`, `discovery.network_config`, `discovery.process_enum`, `discovery.file_search`, `discovery.security_software`, `discovery.network_scan` | Suspicious activity, Discovery group: user/system/network reads, 16 `/proc/PID` probes, 232 directory listings in 60 s, stat probes of security-software paths; Process tab: eight stand-in programs named `ps`, `id`, `ip`, `find`, `nmap`. |
+| `demo-sandbox-probe` | recon | `evasion.sandbox_probe`, `evasion.probe_then_exit`, `evasion.container_check`, `evasion.debugger_check`, `evasion.traceme`, `discovery.system_info`, `discovery.network_config` | Evasion rows `evasion.sandbox_probe` (open the row: each check with the answer the guest gave and whether it would show a VM), `evasion.container_check`, `evasion.debugger_check`; a `probe_then_exit` row for the child that checked and exited; compare a default guest with a Stealth-profile guest. |
+| `demo-ptrace-antidebug` | recon | `evasion.debugger_check`, `evasion.traceme` | Evasion: `evasion.debugger_check` (TracerPid, maps) and `evasion.traceme` (the child's `PTRACE_TRACEME`, EPERM when something already traces it). |
+| `demo-sleep-evasion` | recon | `evasion.long_sleep` | Evasion: six `evasion.long_sleep` rows, one per sleeper (nanosleep, clock_nanosleep, select, poll, alarm, timerfd_settime), MEDIUM with the text "before any network or file write". |
+| `demo-cred-read` | - | `credential.history_read`, `credential.wallet`, `credential.kerberos_ccache`, `credential.cloud_tokens`, `credential.ssh_keys`, `credential.browser_store`, `network.ip_literal` | Credential group: the decoy paths in the Files tab (Credentials location), `credential.*` rows; the exfil POST in Network. With `--cred-home` the real-home rules fire as well. |
+| `demo-download` | download | `execution.dropped_exec`, `execution.chmod_exec_temp`, `execution.temp_exec`, `execution.download_cradle`, `process.interpreter`, `process.exec`, `network.ip_literal` | Execution rows `execution.download_cradle`, `execution.dropped_exec`, `execution.chmod_exec_temp`, `execution.temp_exec`; the process tree shows `demo-download -> install.sh` and `sh -c ... | sh`; Files: `.cache/install.sh`, `download-marker.txt` with `--keep`; Network: `GET /install.sh`. Graph phase: download. |
+| `demo-download-elf` | download | `c2.elf_download`, `execution.dropped_exec`, `execution.chmod_exec_temp`, `execution.temp_exec`, `execution.compile_then_run`, `network.ip_literal` | `c2.elf_download` (HIGH): the socket read that starts with `\x7fELF` and the write that follows; `execution.dropped_exec` for `payload.elf` and for `.bin/cc`; `execution.compile_then_run` for `.bin/a.out`. Graph phase: download. |
+| `demo-persistence` | persistence | `persistence.systemd`, `persistence.xdg_autostart`, `persistence.shell_profile`, `persistence.ssh_authorized_keys`, `persistence.pam`, `persistence.config_write`, `persistence.cron`, `persistence.at_job`, `persistence.account`, `persistence.rc_init`, `persistence.module`, `execution.chmod_exec_temp` | Persistence group in the Files tab (Persistence location) and Suspicious activity; process tree: `crontab`, `at`, `useradd`, `update-rc.d`, `systemctl` stand-ins. Graph phase: persistence. |
+| `demo-privesc-sim` | escalation | `privilege.setid_bit`, `privilege.userns`, `privilege.container_escape`, `privilege.pwnkit`, `privilege.dirty_pipe`, `privilege.drop`, `execution.temp_exec` | Privilege group; `privilege.setid_bit` names the chmod 04755/02755 and the refused file capability; the process tree has a `pkexec` with an empty argument vector. Graph phase: escalation. |
+| `demo-memfd-exec` | hide/inject | `process.memfd`, `execution.memfd_elf`, `process.memfd_exec`, `memory.rwx`, `memory.wx_transition`, `memory.rwx_attempt`, `execution.fileless_exec`, `execution.dropped_library` | Execution: `process.memfd`, `execution.memfd_elf`, `process.memfd_exec`, `memory.rwx` (and the refused zero-length `memory.rwx_attempt`), `memory.wx_transition`, `execution.fileless_exec` for `/proc/self/fd/N`, `execution.dropped_library` for `.cache/libdemo.so`. |
+| `demo-inject-sim` | hide/inject | `injection.ptrace_attach`, `injection.ptrace_poke`, `process.ptrace`, `injection.vm_write`, `injection.proc_mem_write`, `credential.proc_mem_read`, `injection.ld_preload_env`, `evasion.traceme` | Injection group: attach, poke, `process_vm_writev`, `/proc/PID/mem` read and write, all against the sample's own child; `injection.ld_preload_env` on the stand-in started with `LD_PRELOAD=`. Graph phase: hide/inject. |
+| `demo-evasion-misc` | hide/inject | `evasion.masquerade_kthread`, `evasion.masquerade_daemon`, `evasion.dumpable_off`, `bpf.seccomp_filter`, `evasion.hidden_artifact`, `evasion.history_clear`, `evasion.timestomp`, `evasion.immutable_attr`, `evasion.self_delete`, `evasion.log_clear`, `evasion.kill_list`, `evasion.proc_hide_mount`, `evasion.sysctl_security`, `evasion.firewall_modify`, `evasion.audit_disable`, `evasion.security_disable`, `bpf.program`, `evasion.io_uring_usage`, `execution.dropped_exec`, `execution.temp_exec`, `execution.chmod_exec_temp` | Evasion group: masquerade rows (a child named `kworker/0:1H` and `sshd`), dumpable, seccomp, bpf, history/log clearing, timestomp, `...` and ` ` entries, `evasion.self_delete` for `.cache/.svc`, immutable attribute on the decoy `authorized_keys`, stand-in firewall/audit/SELinux commands. |
+| `demo-http-beacon` | C2 | `network.ip_literal` | Network tab: HTTP POSTs with a browser User-Agent; `network.ip_literal`; IOC window: URI `/gate.php`, User-Agent. |
+| `demo-beacon-loop` | C2 | `network.beacon`, `network.ip_literal` | `network.beacon` after the eighth request: ten GETs 200 ms apart; the row shows the period. |
+| `demo-dns-tunnel` | C2 | `network.dns_tunnel` | `network.dns_tunnel` twice (long labels, then the TXT burst); Network: the hex labels under `exfil.example-dns.invalid`; IOC window: DNS names. |
+| `demo-dga` | C2 | `network.dga_nxdomain` | `network.dga_nxdomain` once fourteen random-looking names fail after one name was answered; Network: the NXDOMAIN replies. |
+| `demo-tls-sni` | C2 | (none by design) | No finding on purpose. Network tab: TLS ClientHello, SNI `update.example-cdn.invalid`; IOC window: the SNI. |
+| `demo-udp-beacon` | C2 | (none by design) | No finding on purpose. Network tab: UDP datagrams to port 4444 with a JSON body; IOC window: the destination and port. |
+| `demo-c2-misc` | C2 | `network.nonstandard_port`, `network.irc_c2`, `network.tor`, `network.web_service`, `credential.cloud_metadata`, `impact.miner`, `network.proxy_tunnel`, `network.ip_literal` | Network group: `network.nonstandard_port` (HTTP 9080, TLS 9443, SSH 2222), `network.irc_c2`, `network.tor`, `network.web_service`, `credential.cloud_metadata`, `impact.miner` (Stratum text), `network.proxy_tunnel` (stand-ins). |
+| `demo-shell-sim` | C2 | `c2.reverse_shell`, `c2.bind_shell`, `network.listen_any`, `network.raw_socket`, `bpf.socket_filter`, `c2.bpf_backdoor`, `process.interpreter` | Command group: `c2.reverse_shell` and `c2.bind_shell` (the exec of `sh` with a socket as stdin/stdout), `network.listen_any`; as root also `network.raw_socket` and `c2.bpf_backdoor`. |
+| `demo-exfil-sim` | C2 | `exfil.file_to_socket`, `collection.archive_staging`, `lateral.tool_transfer`, `network.ip_literal` | `exfil.file_to_socket` (sendfile of `.ssh/id_exfil`), `collection.archive_staging`, `lateral.tool_transfer` for the scp/curl -T/rsync stand-ins; Network: `PUT /upload/id_exfil`. |
+| `demo-collection-sim` | - | `collection.clipboard`, `collection.screen_capture`, `collection.av_capture`, `collection.tty_inject`, `collection.local_sweep` | Collection group: clipboard, screen and audio stand-ins, `collection.tty_inject` (ioctl TIOCSTI on a file), and `collection.local_sweep` only with a work directory under /home or /root. |
+| `demo-lateral-sim` | spread | `discovery.network_scan`, `lateral.bruteforce`, `lateral.ssh_spread` | `discovery.network_scan` (24 ports of the host), `lateral.bruteforce` (12 connects to ports 22 and 23), `lateral.ssh_spread` after the known_hosts read. Graph phase: spread. Loopback hosts are not counted: use the NAT host. |
+| `demo-impact-sim` | impact | `impact.fork_bomb`, `impact.ransom_rewrite`, `impact.ransom_note`, `impact.inhibit_recovery`, `impact.service_stop`, `impact.reboot`, `impact.miner`, `impact.miner_tuning`, `impact.ddos_flood`, `impact.block_device_write` | Impact group: `impact.fork_bomb` (230 vforks), `impact.ransom_rewrite` and `impact.ransom_note`, miner/shutdown/lvremove stand-ins, `impact.ddos_flood` (1120 datagrams). Graph phase: impact. |
+| `demo-rule-markers` | - | `discovery.system_info`, `discovery.user_enum` | Files tab / static analysis: YARA and Sigma tag strings in `rule-markers.txt`; Process tab: real `uname`, `id`, `crontab -l`, `cat` for Sigma process_creation rules. |
+| `demo-evasive` (named with `--only evasive`, or its own binary) | - | see "Evasive variant": the check rows on both paths, the chain's rows only when it proceeds | Checks first; on a VM it prints `EVADE vm: ...` and exits 0 after 3-4.5 s; on a clean machine the whole chain runs. See below. |
+| `demo-real-path-probes` (needs `--real-paths`) | - | `persistence.cron`, `persistence.at_job`, `persistence.systemd`, `persistence.rc_init`, `persistence.event_script`, `persistence.shell_profile`, `persistence.ssh_authorized_keys`, `persistence.xdg_autostart`, `persistence.udev`, `persistence.pam`, `persistence.module_autoload`, `persistence.apt_hook`, `persistence.web_shell`, `persistence.config_write`, `injection.ld_so_preload`, `injection.ld_so_conf`, `privilege.sudoers`, `evasion.audit_disable`, `evasion.log_clear`, `impact.block_device_write`, `impact.miner_tuning`, `credential.shadow_read`, `collection.keylog`, `collection.screen_capture`, `collection.av_capture` | Persistence/Injection/Privilege/Impact rows with the `failed` flag and one tier down; Files: the same system paths as failed opens. `credential.shadow_read` and the device rows appear only where the node exists and is readable (root). |
+| `demo-net-wide` (needs `--wide`) | spread | `lateral.service_exploit`, `discovery.network_scan`, `exfil.large_upload` | `lateral.service_exploit` (6379 on three hosts), `discovery.network_scan` (port 8080 on twelve hosts), `exfil.large_upload` (1.12 MB of zeros over connected UDP); all toward 203.0.113.0/24. |
 
 Rows that come from the capture (`network.*` except the connect-based ones,
 `credential.cloud_metadata` from a Host header, `network.ip_literal`) need the
@@ -213,10 +213,10 @@ same address was seen, and otherwise marks it VM-wide (one tier lower).
 
 ## Evasive variant
 
-`ant-sample-evasive` behaves the way real evasive malware does: it asks the guest
+`demo-evasive` behaves the way real evasive malware does: it asks the guest
 whether it is being analysed *before* doing anything, and leaves quietly if the
 answer is yes. The same gate is available on any binary as `--evade`
-(`ant-sample-all --evade`); a bare `ant-sample-all` run does not use it and does not
+(`demo-all --evade`); a bare `demo-all` run does not use it and does not
 include the `evasive` scenario, so the coverage suite is unchanged.
 
 **If any category trips** it prints one line per category, on stdout and on
@@ -241,7 +241,7 @@ Stealth profile window (VM settings > Stealth profile) that changes the answer;
 
 | Category | Check | Trips when | Stealth entry |
 |---|---|---|---|
-| debugger | `TracerPid` in `/proc/self/status` | not 0 | none: Antinomie's debugger uses no ptrace |
+| debugger | `TracerPid` in `/proc/self/status` | not 0 | none: the analyser debugger uses no ptrace |
 | debugger | `ptrace(PTRACE_TRACEME)` in a child | refused (EPERM) | none |
 | debugger | `LD_PRELOAD`, `LD_AUDIT` | set | none |
 | debugger | `/proc/self/maps` | names frida, gdbserver, valgrind, libfaketime, ... | none |
@@ -283,7 +283,7 @@ categories (for example `--ignore sandbox` to ignore the size hints).
 
 1. Start the sinkhole on the host (`--nat`), VM on NAT, Stealth preset
    **Transparent** (the default). Wait a minute after boot, then run
-   `./ant-sample-evasive --host 10.0.2.2 --why`.
+   `./demo-evasive --host 10.0.2.2 --why`.
    It prints `EVADE vm: dmi sys_vendor=QEMU; cpuinfo hypervisor flag set; mac VM
    prefix (52:54:00:...)`, `hello`, and exits 0 after a few seconds. In Antinomie:
    Suspicious activity shows the Evasion rows above and a `probe_then_exit` row;
@@ -312,7 +312,7 @@ Leave the guest network isolated or point at a closed port. The sample records
 `socket`, `connect`, `sendto` and the failure reason:
 
 ```sh
-./ant-sample-http-beacon --host 127.0.0.1 --port 9 --rounds 1
+./demo-http-beacon --host 127.0.0.1 --port 9 --rounds 1
 ```
 
 Expect `Connection refused` and `0/1 check-ins`. Use this to verify the syscall
@@ -326,7 +326,7 @@ download scenarios print `UNAVAILABLE ... nothing was fetched` and run nothing.
 in the repository, needs only Python 3, and nothing leaves the machine.
 
 ```text
-Antinomie sinkhole           log: /tmp/antinomie-sinkhole-1000/sinkhole.log
+Demo sinkhole           log: /tmp/demo-sinkhole-1000/sinkhole.log
 
   listener  address                serves
   http      127.0.0.1:8080         GET /install.sh /payload.elf, POST /gate.php, PUT /upload
@@ -367,7 +367,7 @@ Antinomie sinkhole           log: /tmp/antinomie-sinkhole-1000/sinkhole.log
   events, bytes and protocols for each network scenario, and which scenarios
   sent nothing (`--summary-json PATH` writes the same as JSON).
 - The log is not written to the repository: the default is
-  `<temp dir>/antinomie-sinkhole-<uid>/sinkhole.log` (mode 0600); `--log PATH`
+  `<temp dir>/demo-sinkhole-<uid>/sinkhole.log` (mode 0600); `--log PATH`
   chooses another. `--pwned` prints a banner and a `PWNED` line per payload.
 
 Unit tests: `python3 tests/monitor/test-sinkhole.py` (the pinned hashes
@@ -400,16 +400,16 @@ connects can be *accepted* while returning no data; the samples then say
 
 ## Using them in Antinomie
 
-1. Build, then upload `ant-sample-all` (or one `ant-sample-*`) to a VM.
+1. Build, then upload `demo-all` (or one `demo-*`) to a VM.
 2. Set the VM to **NAT**, start the sinkhole with `--nat`, run
-   `./ant-sample-all --rounds 1` and read the scorecard.
+   `./demo-all --rounds 1` and read the scorecard.
 3. Open Triage > Suspicious activity and the activity graph; the phases in the
    table above should appear in order. Use `RULES` or a `SCENARIO` line's
    `expect=` to check each id.
 4. `--keep` leaves the work directory (`stage/recon.txt`, the lookalike
    persistence files, the decoys, `.cache/install.sh`) for the Files tab and
    YARA scans.
-5. Run `ant-sample-sandbox-probe` once with the default profile and once with a
+5. Run `demo-sandbox-probe` once with the default profile and once with a
    Stealth profile to see which answers change.
 
 `memfd-exec`, `inject-sim` and `ptrace-antidebug` are the scenarios to run when
@@ -430,7 +430,7 @@ Both are off by default and the scenarios say `SKIP` until asked.
 
 - `--real-paths` (`real-path-probes`): opens real system paths in ways that
   cannot change or read anything. The write probes name files that do not exist
-  (for example `/etc/cron.d/antinomie-demo`), use no `O_CREAT`, and are skipped if
+  (for example `/etc/cron.d/demo-sample`), use no `O_CREAT`, and are skipped if
   `lstat` finds the path; the read probes (`/etc/shadow`, input, framebuffer,
   video and audio nodes) call `open` and `close` and never `read`. Most fail with
   ENOENT or EACCES, and the rows are marked `failed`.

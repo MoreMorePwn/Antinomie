@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-only
-"""ant-sample-evasive: both paths of the gate, with fixture directories instead of a real guest.
+"""demo-evasive: both paths of the gate, with fixture directories instead of a real guest.
 
 --test-root DIR makes the checks read their /sys and /proc files below DIR, and DIR/overrides
 fakes the ones that are not files (CPU count, RAM, ...). Run from the repository root:
@@ -78,8 +78,8 @@ class Evasive(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.build = tempfile.TemporaryDirectory()
-        cls.evasive = Path(cls.build.name) / "ant-sample-evasive"
-        cls.suite = Path(cls.build.name) / "ant-sample-all"
+        cls.evasive = Path(cls.build.name) / "demo-evasive"
+        cls.suite = Path(cls.build.name) / "demo-all"
         common = ["gcc", "-O1", "-D_GNU_SOURCE", f"-I{HERE / 'behavior-samples'}"]
         subprocess.run(common + ['-DSINGLE_SCENARIO="evasive"'] + [str(s) for s in SOURCES]
                        + ["-o", str(cls.evasive), "-lm"], check=True, capture_output=True)

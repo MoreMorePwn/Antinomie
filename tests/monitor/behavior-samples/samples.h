@@ -37,10 +37,10 @@
 // NAT enabled. Outside QEMU use --host 198.51.100.23 (TEST-NET, unroutable) or
 // --host 127.0.0.1 --port 9 (refused) for the offline baseline.
 #define SAMPLE_REMOTE_ADDR "10.0.2.2"
-#define SAMPLE_REMOTE_HOST "remote.antinomie.invalid"
+#define SAMPLE_REMOTE_HOST "remote.example-host.invalid"
 #define SAMPLE_DNS_ADDR "10.0.2.2"
-#define SAMPLE_SNI "update.antinomie.invalid"
-#define SAMPLE_EXFIL_DOMAIN "exfil.antinomie.invalid"
+#define SAMPLE_SNI "update.example-cdn.invalid"
+#define SAMPLE_EXFIL_DOMAIN "exfil.example-dns.invalid"
 #define SAMPLE_UDP_PORT 4444
 #define SAMPLE_HTTP_PORT 8080
 #define SAMPLE_TLS_PORT 8443
@@ -59,12 +59,12 @@
 // file only when its SHA-256 equals one of these; tests/monitor/
 // test-sinkhole.py checks that the sinkhole serves exactly these bytes.
 #define SAMPLE_DOWNLOAD_PATH "/install.sh"
-#define SAMPLE_DOWNLOAD_SHA256 "743c0992324e1204d85f0b0f5a44e8b66e02fcbefd89cd5371c8c8f4b4030840"
+#define SAMPLE_DOWNLOAD_SHA256 "4267d61ee8379b7c3b24ede4bc43da16f92d3ef67d2b15459d7ddfca4c74cfd4"
 #define SAMPLE_ELF_PATH "/payload.elf"
-#define SAMPLE_ELF_SHA256 "c368d01519dc4890d9f6ae510aee00dfcb46c5f418bbfd2bf0d0719912e18a85"
+#define SAMPLE_ELF_SHA256 "1867e9277b4751faa6358579b7b47fc800fb15e1ca8b2fdf5178993638d25f94"
 #define SAMPLE_DOWNLOAD_TEXT                                                                       \
     "#!/bin/sh\n"                                                                                  \
-    "echo \"hello from antinomie download\"\n"                                                     \
+    "echo \"hello from demo download\"\n"                                                     \
     "echo download ran > download-marker.txt\n"
 // Documentation-only address block (RFC 5737 TEST-NET-3) used by --wide.
 #define SAMPLE_TESTNET_PREFIX "203.0.113."

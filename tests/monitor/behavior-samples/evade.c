@@ -205,7 +205,7 @@ static void check_debugger(void)
         return;
     static const char *const tools[] = {"frida", "gum-js", "gdbserver", "libfaketime", "valgrind",
                                         "xposed", "libasan", NULL};
-    const char *none = "none: Antinomie's debugger uses no ptrace, TracerPid stays 0";
+    const char *none = "none: the analyser debugger uses no ptrace, TracerPid stays 0";
     char text[8192];
     int tracer = 0;
     if (read_text("/proc/self/status", text, sizeof text) >= 0) {

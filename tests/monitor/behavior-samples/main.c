@@ -4,7 +4,7 @@
 // main.c — options, scenario registry, result lines and scorecard.
 //
 // Built with -DSINGLE_SCENARIO="name" the program is that one behavior
-// sample (ant-sample-<name>); without it, it is ant-sample-all and runs every
+// sample (demo-<name>); without it, it is demo-all and runs every
 // scenario in order.
 //
 // Output contract (one record per line, stable, easy to grep):
@@ -277,7 +277,7 @@ static void usage(const char *self, FILE *out)
            "  --real-paths      allow real-path-probes: opens that cannot create or read\n"
            "  --gap MS          pause between scenarios in a full run (0-%d, default 1000)\n"
            "  --evade           check for an analysis environment first and do nothing else if\n"
-           "                    one is found (ant-sample-evasive always does)\n"
+           "                    one is found (demo-evasive always does)\n"
            "  --why             print every environment check and its answer\n"
            "  --ignore LIST     skip check categories: debugger,vm,container,sandbox\n"
            "  --evade-sleep MS  the evading sleep (0-%d, default 3000-4500)\n"
@@ -348,7 +348,7 @@ static int run_module(const struct module *module, const struct options *base)
         current_name = NULL;
         return 0;
     }
-    char template[] = "/tmp/antinomie-sample-XXXXXX";
+    char template[] = "/tmp/demo-sample-XXXXXX";
     if (!base->workdir[0]) {
         if (!mkdtemp(template)) {
             sample_fail(module->name, "work directory: %s", strerror(errno));

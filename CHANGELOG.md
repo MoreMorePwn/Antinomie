@@ -92,6 +92,15 @@ it runs.
   the 4,096-rule budget, the 90 second deadline, a rule that failed while it was
   evaluated, matches that could not be reported) instead of "(+1 more)". The
   note is in the header's hover text. Results saved by 0.7.x show without it.
+- **Behaviour samples carry no product name.** The suite is now `demo-all` and
+  `demo-<scenario>` (was `ant-sample-*`). Domains are neutral names under
+  `.invalid` (`update.example-cdn.invalid`, `exfil.example-dns.invalid`,
+  `remote.example-host.invalid`, `pool.example-pool.invalid`), files, units and
+  configs are `demo-sample*`, decoy credentials and notes carry `DEMO-DECOY`,
+  and the sinkhole banner and temp dir are `demo-sinkhole`. The binaries are
+  built without source paths. Endpoints, work-directory-only writes and
+  counted-never-executed downloads are unchanged, and every scenario lists the
+  same rule ids.
 
 ## 0.7.1 — 2026-10-26
 

@@ -51,7 +51,7 @@ SCENARIO(lateral_sim)
     int read_known = 0;
     if (sample_path(directory, sizeof directory, options->workdir, ".ssh") == 0 &&
         sample_mkdir_p(directory) == 0 && sample_path(known, sizeof known, directory, "known_hosts") == 0 &&
-        sample_write_text(known, "10.0.2.2 ssh-ed25519 AAAAANTINOMIEDEMO\n") == 0) {
+        sample_write_text(known, "10.0.2.2 ssh-ed25519 AAAADEMODECOY\n") == 0) {
         char buffer[256];
         int fd = open(known, O_RDONLY | O_CLOEXEC);
         if (fd >= 0) {
@@ -127,7 +127,7 @@ SCENARIO(impact_sim)
             sample_path(path, sizeof path, directory, leaf);
             snprintf(leaf, sizeof leaf, "file%02d.txt.locked", i);
             sample_path(other, sizeof other, directory, leaf);
-            if (sample_write_text(path, "ANTINOMIE-DEMO contents\n") == 0 && rename(path, other) == 0)
+            if (sample_write_text(path, "DEMO-DECOY contents\n") == 0 && rename(path, other) == 0)
                 renamed++;
         }
         STEP(renamed == RANSOM_FILES);
@@ -139,7 +139,7 @@ SCENARIO(impact_sim)
         if (sample_path(directory, sizeof directory, options->workdir, leaf) == 0 &&
             sample_mkdir_p(directory) == 0 &&
             sample_path(path, sizeof path, directory, "HOW_TO_DECRYPT.txt") == 0 &&
-            sample_write_text(path, "ANTINOMIE-DEMO: this is a test note, nothing is encrypted\n") == 0)
+            sample_write_text(path, "DEMO-DECOY: this is a test note, nothing is encrypted\n") == 0)
             notes++;
     }
     STEP(notes == NOTE_DIRECTORIES);
@@ -147,12 +147,12 @@ SCENARIO(impact_sim)
     // A backup the run made, removed again.
     if (sample_path(directory, sizeof directory, options->workdir, "backups") == 0 &&
         sample_mkdir_p(directory) == 0 && sample_path(path, sizeof path, directory, "database.bak") == 0 &&
-        sample_write_text(path, "ANTINOMIE-DEMO backup\n") == 0)
+        sample_write_text(path, "DEMO-DECOY backup\n") == 0)
         STEP(unlink(path) == 0);
 
     // A discard ioctl (BLKDISCARD) on a regular file: ENOTTY, nothing is erased.
     if (sample_path(path, sizeof path, options->workdir, "disk.img") == 0 &&
-        sample_write_text(path, "ANTINOMIE-DEMO\n") == 0) {
+        sample_write_text(path, "DEMO-DECOY\n") == 0) {
         int fd = open(path, O_RDWR | O_CLOEXEC);
         if (fd >= 0) {
             unsigned long long range[2] = {0, 4096};
@@ -182,10 +182,10 @@ SCENARIO(impact_sim)
     }
 
     static const struct spoof tools[] = {
-        {"impact.miner", {"xmrig", "-o", "stratum+tcp://pool.antinomie.invalid:3333", "-u",
-                          "4ANTINOMIEDEMO", NULL}},
+        {"impact.miner", {"xmrig", "-o", "stratum+tcp://pool.example-pool.invalid:3333", "-u",
+                          "4DEMODECOY", NULL}},
         {"impact.miner_tuning", {"modprobe", "msr", NULL}},
-        {"impact.service_stop", {"systemctl", "stop", "antinomie-demo-db", NULL}},
+        {"impact.service_stop", {"systemctl", "stop", "demo-sample-db", NULL}},
         {"impact.reboot", {"shutdown", "-r", "now", NULL}},
         {"impact.reboot", {"systemctl", "reboot", NULL}},
         {"impact.inhibit_recovery", {"lvremove", "-f", "vg0/snapshot", NULL}},
@@ -222,27 +222,27 @@ struct probe {
 #define R (O_RDONLY | O_NONBLOCK | O_NOCTTY | O_CLOEXEC)
 
 static const struct probe probes[] = {
-    {"persistence.cron", "/etc/cron.d/antinomie-demo", W, 1},
-    {"persistence.at_job", "/var/spool/cron/atjobs/antinomie-demo", W, 1},
-    {"persistence.systemd", "/etc/systemd/system/antinomie-demo.service", W, 1},
-    {"persistence.rc_init", "/etc/init.d/antinomie-demo", W, 1},
-    {"persistence.event_script", "/etc/update-motd.d/99-antinomie-demo", W, 1},
-    {"persistence.shell_profile", "/etc/profile.d/antinomie-demo.sh", W, 1},
-    {"persistence.ssh_authorized_keys", "/etc/ssh/sshd_config.d/antinomie-demo.conf", W, 1},
-    {"persistence.xdg_autostart", "/etc/xdg/autostart/antinomie-demo.desktop", W, 1},
-    {"persistence.udev", "/etc/udev/rules.d/99-antinomie-demo.rules", W, 1},
-    {"persistence.pam", "/etc/pam.d/antinomie-demo", W, 1},
-    {"persistence.module_autoload", "/etc/modules-load.d/antinomie-demo.conf", W, 1},
-    {"persistence.apt_hook", "/etc/apt/apt.conf.d/99antinomie-demo", W, 1},
-    {"persistence.web_shell", "/var/www/antinomie-demo.php", W, 1},
-    {"persistence.config_write", "/etc/antinomie-demo.conf", W, 1},
+    {"persistence.cron", "/etc/cron.d/demo-sample", W, 1},
+    {"persistence.at_job", "/var/spool/cron/atjobs/demo-sample", W, 1},
+    {"persistence.systemd", "/etc/systemd/system/demo-sample.service", W, 1},
+    {"persistence.rc_init", "/etc/init.d/demo-sample", W, 1},
+    {"persistence.event_script", "/etc/update-motd.d/99-demo-sample", W, 1},
+    {"persistence.shell_profile", "/etc/profile.d/demo-sample.sh", W, 1},
+    {"persistence.ssh_authorized_keys", "/etc/ssh/sshd_config.d/demo-sample.conf", W, 1},
+    {"persistence.xdg_autostart", "/etc/xdg/autostart/demo-sample.desktop", W, 1},
+    {"persistence.udev", "/etc/udev/rules.d/99-demo-sample.rules", W, 1},
+    {"persistence.pam", "/etc/pam.d/demo-sample", W, 1},
+    {"persistence.module_autoload", "/etc/modules-load.d/demo-sample.conf", W, 1},
+    {"persistence.apt_hook", "/etc/apt/apt.conf.d/99demo-sample", W, 1},
+    {"persistence.web_shell", "/var/www/demo-sample.php", W, 1},
+    {"persistence.config_write", "/etc/demo-sample.conf", W, 1},
     {"injection.ld_so_preload", "/etc/ld.so.preload", W, 1},
-    {"injection.ld_so_conf", "/etc/ld.so.conf.d/antinomie-demo.conf", W, 1},
-    {"privilege.sudoers", "/etc/sudoers.d/antinomie-demo", W, 1},
-    {"evasion.audit_disable", "/etc/audit/rules.d/antinomie-demo.rules", W, 1},
-    {"evasion.log_clear", "/var/log/antinomie-demo.log", W | O_TRUNC, 1},
+    {"injection.ld_so_conf", "/etc/ld.so.conf.d/demo-sample.conf", W, 1},
+    {"privilege.sudoers", "/etc/sudoers.d/demo-sample", W, 1},
+    {"evasion.audit_disable", "/etc/audit/rules.d/demo-sample.rules", W, 1},
+    {"evasion.log_clear", "/var/log/demo-sample.log", W | O_TRUNC, 1},
     {"impact.block_device_write", "/dev/sdz9", W, 1},
-    {"impact.miner_tuning", "/sys/kernel/mm/hugepages/antinomie-demo", W, 1},
+    {"impact.miner_tuning", "/sys/kernel/mm/hugepages/demo-sample", W, 1},
     {"credential.shadow_read", "/etc/shadow", R, 0},
     {"collection.keylog", "/dev/input/event0", R, 0},
     {"collection.screen_capture", "/dev/fb0", R, 0},

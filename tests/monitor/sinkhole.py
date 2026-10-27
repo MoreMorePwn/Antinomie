@@ -8,8 +8,8 @@ Run it from the repository root, then point the samples at the address it prints
     python3 tests/monitor/sinkhole.py                      # listen on 127.0.0.1
     python3 tests/monitor/sinkhole.py --nat        # listen on 0.0.0.0 for a NAT guest
 
-    ./ant-sample-all --host 127.0.0.1                         # on the same machine
-    ./ant-sample-all --host 10.0.2.2                          # in a QEMU NAT guest (with --nat)
+    ./demo-all --host 127.0.0.1                         # on the same machine
+    ./demo-all --host 10.0.2.2                          # in a QEMU NAT guest (with --nat)
 
 It answers every protocol the samples speak, so each one goes down its whole
 path: HTTP (check-in, GET /install.sh and /payload.elf, upload), TLS (the
@@ -46,14 +46,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 DOWNLOAD_SCRIPT = (
     b"#!/bin/sh\n"
-    b'echo "hello from antinomie download"\n'
+    b'echo "hello from demo download"\n'
     b"echo download ran > download-marker.txt\n"
 )
 
 
 def elf_payload():
     """A 187-byte static x86-64 ELF that writes a line to stdout and exits 0."""
-    message = b"hello from antinomie download elf\n"
+    message = b"hello from demo download elf\n"
     base = 0x400000
     header_size, phdr_size = 64, 56
     code_at = header_size + phdr_size
@@ -88,7 +88,7 @@ NETWORK_SCENARIOS = (
 BODY_MAX = 64 * 1024
 STAGE_TO_SCENARIO = {"recon": "recon", "creds": "cred-read", "checkin": "http-beacon"}
 DGA_NAME = re.compile(r"^[a-z]{10,18}\.(com|net|org|info|biz)$")
-CONTROL_NAME = "update.antinomie.invalid"
+CONTROL_NAME = "update.example-cdn.invalid"
 
 
 def preview(data, limit=200):
@@ -165,7 +165,7 @@ def dns_reply(packet, mode, answer_ip):
         rdata = socket.inet_aton(answer_ip)
         answer = b"\xc0\x0c\x00\x01\x00\x01" + struct.pack(">IH", 60, len(rdata)) + rdata
     elif qtype == 16:
-        text = b"antinomie-sinkhole"
+        text = b"demo-sinkhole"
         rdata = bytes([len(text)]) + text
         answer = b"\xc0\x0c\x00\x10\x00\x01" + struct.pack(">IH", 60, len(rdata)) + rdata
     count = b"\x00\x01" if answer else b"\x00\x00"
@@ -174,7 +174,7 @@ def dns_reply(packet, mode, answer_ip):
 
 
 def classify_name(name):
-    if name.endswith(".exfil.antinomie.invalid"):
+    if name.endswith(".exfil.example-dns.invalid"):
         return "dns-tunnel"
     if name == CONTROL_NAME or DGA_NAME.match(name):
         return "dga"
@@ -390,7 +390,7 @@ class Sink:
         if path == "/payload.elf":
             return 200, "application/octet-stream", ELF_PAYLOAD
         if path == "/download.bin":
-            return 200, "application/octet-stream", b"ANTINOMIE-DEMO-NOT-AN-EXECUTABLE\n" * 4
+            return 200, "application/octet-stream", b"DEMO-DECOY-NOT-AN-EXECUTABLE\n" * 4
         if path == "/gate.php":
             return 200, "application/json", b'{"ok":true,"cmd":"sleep","interval":60}'
         return 200, "application/json", b'{"ok":true}'
@@ -420,7 +420,7 @@ class Sink:
             reply = b'{"id":1,"jsonrpc":"2.0","error":{"code":-1,"message":"sinkhole"}}\n'
             kind = "stratum login"
         else:
-            reply = b":sink.invalid 001 antinomie-demo :Welcome\r\nPING :sink.invalid\r\n"
+            reply = b":sink.invalid 001 demo-sample :Welcome\r\nPING :sink.invalid\r\n"
             kind = "irc"
         self.event("tcp", "c2-misc", peer, f"{kind} {quote(data, 80)}", len(data))
         client.sendall(reply)
@@ -543,7 +543,7 @@ class Sink:
             ("irc", "tcp", "IRC and Stratum text (c2-misc)"),
             ("shell", "tcp", "reverse-shell echo sink, read-only (shell-sim)"),
         ]
-        lines = ["", f"Antinomie sinkhole           log: {options.log}", ""]
+        lines = ["", f"Demo sinkhole           log: {options.log}", ""]
         lines.append(f"  {'listener':<9} {'address':<22} serves")
         for label, _, what in rows:
             lines.append(f"  {label:<9} {listen + ':' + str(self.bound[label]):<22} {what}")
@@ -553,8 +553,8 @@ class Sink:
         lines += [
             "",
             f"  Give the samples:  {flags}",
-            f"    ./ant-sample-all {flags}                 # every scenario, in phase order",
-            f"    ./ant-sample-download {flags}              # one scenario",
+            f"    ./demo-all {flags}                 # every scenario, in phase order",
+            f"    ./demo-download {flags}              # one scenario",
         ]
         if options.nat:
             lines.append("  NAT guest: QEMU user networking reaches this machine at 10.0.2.2 "
@@ -587,13 +587,13 @@ class Sink:
 
 
 def default_log_path():
-    directory = os.path.join(tempfile.gettempdir(), f"antinomie-sinkhole-{os.getuid()}")
+    directory = os.path.join(tempfile.gettempdir(), f"demo-sinkhole-{os.getuid()}")
     return os.path.join(directory, "sinkhole.log")
 
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
-        description="Local listener for the Antinomie behavior samples (see the module docstring).",
+        description="Local listener for the behavior samples (see the module docstring).",
         epilog="Stop with Ctrl-C. Run from the repository root: "
         "python3 tests/monitor/sinkhole.py",
     )

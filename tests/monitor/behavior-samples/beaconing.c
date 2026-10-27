@@ -360,20 +360,20 @@ SCENARIO(c2_misc)
     STEP(sample_http_as(host, SAMPLE_ALT_HTTP_PORT, host, "GET", "/gate.php?stage=alt", NULL,
                      &received) == 0);
     STEP(send_hello(host, SAMPLE_ALT_TLS_PORT, SAMPLE_SNI) >= 0);
-    STEP(chat(host, SAMPLE_SSH_PORT, "SSH-2.0-OpenSSH_9.6 antinomie-demo\r\n") >= 0);
+    STEP(chat(host, SAMPLE_SSH_PORT, "SSH-2.0-OpenSSH_9.6 demo-sample\r\n") >= 0);
 
     // An IRC channel join, and a Stratum login, both as text to the listener.
     STEP(chat(host, SAMPLE_IRC_PORT,
-              "NICK antinomie-demo\r\nUSER demo 0 * :antinomie demo\r\nJOIN #antinomie-demo\r\n") >= 0);
+              "NICK demo-sample\r\nUSER demo 0 * :demo sample\r\nJOIN #demo-sample\r\n") >= 0);
     STEP(chat(host, SAMPLE_IRC_PORT,
-              "{\"id\":1,\"method\":\"login\",\"params\":{\"login\":\"4ANTINOMIEDEMO\","
-              "\"pass\":\"x\",\"agent\":\"antinomie-demo/0.1\"}}\n") >= 0);
+              "{\"id\":1,\"method\":\"login\",\"params\":{\"login\":\"4DEMODECOY\","
+              "\"pass\":\"x\",\"agent\":\"demo-sample/0.1\"}}\n") >= 0);
 
     // Tor: the local SOCKS port (loopback, so nothing leaves the machine),
     // a hidden-service name in a DNS question and in a Host header.
     STEP(sample_touch_port("127.0.0.1", 9050) == 0);
-    STEP(sample_dns_ask(resolver, "antinomiedemo2345.onion", 1, 150) >= 0);
-    STEP(sample_http_as(host, http_port, "antinomiedemo2345.onion", "GET", "/", NULL, &received) == 0);
+    STEP(sample_dns_ask(resolver, "demodecoy2345.onion", 1, 150) >= 0);
+    STEP(sample_http_as(host, http_port, "demodecoy2345.onion", "GET", "/", NULL, &received) == 0);
 
     // Web services that malware uses as a channel: DNS, HTTP and TLS to the listener.
     STEP(sample_dns_ask(resolver, "pastebin.com", 1, 150) >= 0);
@@ -450,7 +450,7 @@ static int reverse_shell(const struct options *options)
                         strerror(errno));
         return -1;
     }
-    int status = shell_on(fd, "antinomie reverse-shell demo");
+    int status = shell_on(fd, "sample reverse-shell demo");
     close(fd);
     return status;
 }
@@ -487,7 +487,7 @@ static int bind_shell(void)
             if (accepted < 0)
                 break;
             if (peer.sin_addr.s_addr == htonl(INADDR_LOOPBACK))
-                status = shell_on(accepted, "antinomie bind-shell demo");
+                status = shell_on(accepted, "sample bind-shell demo");
             close(accepted);
         }
     }
