@@ -56,6 +56,11 @@ impl MonitorApp {
                 }),
             ),
             (LibraryPage::Tools, egui_phosphor::regular::FLASK, None),
+            (
+                LibraryPage::Samples,
+                egui_phosphor::regular::BIOHAZARD,
+                (self.samples_count() > 0).then(|| self.samples_count().to_string()),
+            ),
         ];
         for (page, icon, meta) in rows {
             if library_row(ui, icon, page.title(), meta.as_deref())
@@ -65,6 +70,9 @@ impl MonitorApp {
                         "YARA, IDS and Sigma rule packs and the IOC datasets: open the page"
                     }
                     LibraryPage::Tools => "Optional static-analysis tools: open the page",
+                    LibraryPage::Samples => {
+                        "Every sample across runs and VMs, with its origins and tags: open the page"
+                    }
                 })
                 .clicked()
             {
@@ -79,6 +87,7 @@ impl MonitorApp {
             LibraryPage::BaseImages => self.bases_page(ui),
             LibraryPage::Rules => self.rules_page(ui),
             LibraryPage::Tools => self.analysis_tools_page(ui),
+            LibraryPage::Samples => self.samples_page(ui),
         }
     }
 

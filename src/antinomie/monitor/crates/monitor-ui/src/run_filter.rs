@@ -212,6 +212,14 @@ pub(crate) fn fields() -> Vec<FieldSpec<'static>> {
         FieldSpec::text("boot.id", "Recorded boot identity"),
         FieldSpec::number("session.id", "Run session identity"),
         FieldSpec::text("process.exe", "Launched root executable"),
+        FieldSpec::text(
+            "sample",
+            "Library sample the run executed, by the name it had; missing for other programs",
+        ),
+        FieldSpec::text(
+            "sample.sha256",
+            "SHA-256 of the library sample the run executed",
+        ),
         FieldSpec::tags("process.argv", "Recorded launch arguments"),
         FieldSpec::text("process.cwd", "Launch working directory"),
         FieldSpec::number("process.pid", "Root process ID"),
@@ -326,6 +334,24 @@ pub(crate) fn row(
         (
             "process.cookie",
             RowValue::Number(run.root_task_cookie.into()),
+        ),
+        (
+            "sample",
+            run.request
+                .sample
+                .as_ref()
+                .map_or(RowValue::Missing, |sample| {
+                    RowValue::Text(sample.name.clone())
+                }),
+        ),
+        (
+            "sample.sha256",
+            run.request
+                .sample
+                .as_ref()
+                .map_or(RowValue::Missing, |sample| {
+                    RowValue::Text(sample.sha256.clone())
+                }),
         ),
         ("process.uid", RowValue::Number(run.request.uid.into())),
         ("process.gid", RowValue::Number(run.request.gid.into())),

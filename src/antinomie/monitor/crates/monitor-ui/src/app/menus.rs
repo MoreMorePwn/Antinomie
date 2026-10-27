@@ -311,7 +311,7 @@ impl MonitorApp {
                         }
                         if ui
                             .button(format!(
-                                "{} Malware samples…",
+                                "{} Download malware samples…",
                                 egui_phosphor::regular::BIOHAZARD
                             ))
                             .clicked()

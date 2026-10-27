@@ -589,16 +589,66 @@ impl Worker {
                     return Err("upload source must be a regular file".into());
                 }
                 let total = metadata.len();
-                upload_stream(
+                if total > crate::samples::MAX_SAMPLE {
+                    // Too large for the library, which keeps what is sent.
+                    return upload_stream(
+                        session,
+                        &mut self.snapshot,
+                        &self.sender,
+                        &self.stopping,
+                        timeout,
+                        &mut file,
+                        total,
+                        (&destination, overwrite, executable),
+                    );
+                }
+                // Everything the app sends into a guest is archived first,
+                // hashed on the host and never run or unpacked there: what is
+                // streamed is exactly what the library holds.
+                let mut bytes = Vec::with_capacity(total as usize);
+                std::io::Read::read_to_end(
+                    &mut std::io::Read::take(&mut file, crate::samples::MAX_SAMPLE + 1),
+                    &mut bytes,
+                )
+                .map_err(|e| format!("upload {}: {e}", source.display()))?;
+                let mut library = crate::samples::Library::open(&self.options.data_dir)?;
+                let sha256 = library
+                    .add_bytes(
+                        &bytes,
+                        crate::samples::NewSample {
+                            origin: crate::samples::NewOrigin {
+                                kind: crate::samples::OriginKind::Uploaded,
+                                source: "Upload".into(),
+                                path: source.display().to_string(),
+                                vm_id: session.vm.id.clone(),
+                                vm_name: session.vm.name.clone(),
+                                ..crate::samples::NewOrigin::default()
+                            },
+                            ..crate::samples::NewSample::default()
+                        },
+                    )?
+                    .sha256;
+                let message = upload_stream(
                     session,
                     &mut self.snapshot,
                     &self.sender,
                     &self.stopping,
                     timeout,
-                    &mut file,
-                    total,
+                    &mut bytes.as_slice(),
+                    bytes.len() as u64,
                     (&destination, overwrite, executable),
-                )
+                )?;
+                drop(bytes);
+                library.record_push(
+                    &sha256,
+                    crate::samples::Push {
+                        vm_id: session.vm.id.clone(),
+                        vm_name: session.vm.name.clone(),
+                        path: destination.clone(),
+                        at_ms: 0,
+                    },
+                )?;
+                Ok(message)
             }
             Command::UploadSample {
                 sha256,

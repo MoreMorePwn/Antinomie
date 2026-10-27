@@ -26,8 +26,8 @@ pub use archive::Verification;
 pub use custody::{CustodyEvent, CustodySink, NoCustody, PlainEvents};
 pub use intake::{Added, FileProbe, NewSample, detect_type};
 pub use library::{
-    Alias, CATEGORIES, EventRow, Library, NewOrigin, Origin, OriginKind, SampleRecord, TAG_COLORS,
-    Tag, TagKind, VERDICTS,
+    Alias, CATEGORIES, EventRow, Library, NewOrigin, Origin, OriginKind, RunStats, SampleRecord,
+    SeenRun, TAG_COLORS, Tag, TagKind, VERDICTS,
 };
 
 /// MalwareBazaar's API: every call is a POST with an `Auth-Key` header.

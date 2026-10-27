@@ -406,6 +406,8 @@ fn tags_are_checked_ordered_and_custom_ones_get_a_palette_colour() {
         Tag::new(TagKind::Category, "virus"),
         Tag::new(TagKind::Custom, ""),
         Tag::new(TagKind::Custom, "a\nb"),
+        Tag::new(TagKind::Technique, "cron"),
+        Tag::new(TagKind::Technique, "T10530 Cron"),
         Tag {
             kind: TagKind::Custom,
             value: "x".into(),
@@ -571,5 +573,124 @@ fn a_launch_of_a_sent_program_names_its_sample() {
     );
     library.remove(&hash).unwrap();
     assert!(library.identify_run("vm1", &path, &[]).unwrap().is_none());
+    fs::remove_dir_all(root).unwrap();
+}
+
+fn run(sha256: &str, id: &str, vm: &str, started: u64, exit: &str) -> SeenRun {
+    SeenRun {
+        sha256: sha256.into(),
+        vm_id: vm.into(),
+        vm_name: format!("VM {vm}"),
+        run_id: id.into(),
+        started_ms: Some(started),
+        exit: exit.into(),
+        directory: format!("/runs/{id}"),
+    }
+}
+
+#[test]
+fn runs_across_vms_are_counted_and_noted_once() {
+    let root = temp("runs");
+    let mut library = Library::open(&root).unwrap();
+    let one = library
+        .add_bytes(SCRIPT, added_from("/x/a.sh"))
+        .unwrap()
+        .sha256;
+    let two = library
+        .add_bytes(&elf(), added_from("/x/b"))
+        .unwrap()
+        .sha256;
+    let stranger = "e".repeat(64);
+    let runs = [
+        run(&one, "r1", "vmA", 100, "Running"),
+        run(&one, "r2", "vmB", 300, "Exit 0"),
+        run(&two, "r3", "vmA", 200, "killed by SIGKILL"),
+        // Not a library sample: skipped.
+        run(&stranger, "r4", "vmA", 400, "Exit 0"),
+    ];
+    assert_eq!(library.index_runs(&runs).unwrap(), 3);
+    // Seen again: the exit is refreshed, no new note.
+    let again = [run(&one, "r1", "vmA", 100, "Exit 1")];
+    assert_eq!(library.index_runs(&again).unwrap(), 0);
+    let stats = library.run_stats().unwrap();
+    assert_eq!(stats[&one].count, 2);
+    assert_eq!(stats[&one].latest.as_ref().unwrap().run_id, "r2");
+    assert_eq!(
+        stats[&two].latest.as_ref().unwrap().exit,
+        "killed by SIGKILL"
+    );
+    assert!(!stats.contains_key(&stranger));
+    let listed = library.runs_of(&one).unwrap();
+    assert_eq!(
+        listed
+            .iter()
+            .map(|r| (r.run_id.as_str(), r.exit.as_str()))
+            .collect::<Vec<_>>(),
+        [("r2", "Exit 0"), ("r1", "Exit 1")]
+    );
+    let seen = library
+        .events(&one)
+        .unwrap()
+        .into_iter()
+        .filter(|row| matches!(row.event, CustodyEvent::SeenInRun { .. }))
+        .count();
+    assert_eq!(seen, 2);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn parents_and_children_come_from_origins_that_name_a_parent() {
+    let root = temp("lineage");
+    let mut library = Library::open(&root).unwrap();
+    let parent = library
+        .add_bytes(SCRIPT, added_from("/x/install.sh"))
+        .unwrap()
+        .sha256;
+    let child_bytes = elf();
+    let child = library
+        .add_bytes(
+            &child_bytes,
+            NewSample {
+                origin: NewOrigin {
+                    kind: OriginKind::Dropped,
+                    parent: parent.clone(),
+                    run_id: "r1".into(),
+                    path: "/tmp/.x".into(),
+                    ..NewOrigin::default()
+                },
+                ..NewSample::default()
+            },
+        )
+        .unwrap()
+        .sha256;
+    // The same child dropped again in another run is still one parent.
+    library
+        .add_bytes(
+            &child_bytes,
+            NewSample {
+                origin: NewOrigin {
+                    kind: OriginKind::Dropped,
+                    parent: parent.clone(),
+                    run_id: "r2".into(),
+                    path: "/tmp/.y".into(),
+                    ..NewOrigin::default()
+                },
+                ..NewSample::default()
+            },
+        )
+        .unwrap();
+    let counts = library.lineage_counts().unwrap();
+    assert_eq!(counts[&child], (1, 0));
+    assert_eq!(counts[&parent], (0, 1));
+    // The child's aliases name both paths and runs.
+    let aliases = library.aliases(&child).unwrap();
+    assert_eq!(aliases.len(), 2);
+    assert_eq!(aliases[0].seen, "run r1");
+    let tags = library.all_tags().unwrap();
+    assert!(tags.is_empty());
+    library
+        .set_tags(&child, &[Tag::new(TagKind::Category, "dropper")])
+        .unwrap();
+    assert_eq!(library.all_tags().unwrap()[&child].len(), 1);
     fs::remove_dir_all(root).unwrap();
 }

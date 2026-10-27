@@ -273,6 +273,7 @@ impl MonitorApp {
                         self.draft.recording_root = Some(path)
                     }
                     FolderKind::UploadFile => self.accept_upload_file(target.generation, path),
+                    FolderKind::SampleFile => self.samples_page.chosen(&path),
                     FolderKind::ExplorerRoot
                         if target.generation == self.explorer_browser.generation =>
                     {

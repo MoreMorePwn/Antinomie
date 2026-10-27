@@ -30,6 +30,8 @@ mod pending;
 mod rules_startup;
 mod run_kill;
 mod run_selection;
+mod samples_list;
+mod samples_shots;
 mod scanned_inputs;
 mod settings_window;
 mod startup;
@@ -92,6 +94,7 @@ pub(crate) fn app() -> MonitorApp {
         rules_generation: 0,
         vm_snapshots: crate::snapshots::SnapshotManager::default(),
         samples: crate::samples_view::SamplesView::default(),
+        samples_page: samples_page::SamplesPage::default(),
         api_keys: Default::default(),
         dependencies: crate::dependencies_window::DependenciesWindow::ready_for_test(),
         getting_started: Default::default(),

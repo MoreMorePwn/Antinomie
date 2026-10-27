@@ -13,6 +13,7 @@ use super::{SampleInfo, archive};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashMap,
     fs,
     path::{Path, PathBuf},
     sync::Arc,
@@ -81,6 +82,16 @@ CREATE TABLE IF NOT EXISTS event(
     detail TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS event_sample ON event(sha256);
+CREATE TABLE IF NOT EXISTS seen_run(
+    sha256 TEXT NOT NULL REFERENCES sample(sha256) ON DELETE CASCADE,
+    vm_id TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    vm_name TEXT NOT NULL DEFAULT '',
+    started_ms INTEGER,
+    exit TEXT NOT NULL DEFAULT '',
+    directory TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY(sha256, vm_id, run_id)
+);
 ";
 
 /// How bytes reached the library.
@@ -138,7 +149,7 @@ impl OriginKind {
         match self {
             Self::Download => "Downloaded",
             Self::Added => "Added from this computer",
-            Self::Uploaded => "Uploaded, not run",
+            Self::Uploaded => "Uploaded to a VM",
             Self::Run => "Run program",
             Self::Dropped => "Dropped by a run",
             Self::Promoted => "Added from a run",
@@ -233,7 +244,7 @@ pub const CATEGORIES: [&str; 10] = [
 ];
 /// The nine theme colours a custom tag can take.
 pub const TAG_COLORS: [&str; 9] = [
-    "blue", "teal", "green", "yellow", "orange", "red", "pink", "purple", "gray",
+    "grey", "red", "orange", "yellow", "green", "cyan", "blue", "purple", "pink",
 ];
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -256,10 +267,10 @@ impl Tag {
     /// A tag value must be short, printable and free of line breaks.
     pub fn validate(&self) -> Result<(), String> {
         if self.value.trim().is_empty()
-            || self.value.len() > 64
+            || self.value.len() > 128
             || self.value.chars().any(char::is_control)
         {
-            return Err("a tag is 1 to 64 characters without control characters".into());
+            return Err("a tag is 1 to 128 characters without control characters".into());
         }
         match self.kind {
             TagKind::Verdict if !VERDICTS.contains(&self.value.as_str()) => {
@@ -267,6 +278,9 @@ impl Tag {
             }
             TagKind::Category if !CATEGORIES.contains(&self.value.as_str()) => {
                 Err(format!("{:?} is not a malware category", self.value))
+            }
+            TagKind::Technique if !technique_id(&self.value) => {
+                Err(format!("{:?} is not an ATT&CK technique", self.value))
             }
             TagKind::Custom
                 if !self.color.is_empty() && !TAG_COLORS.contains(&self.color.as_str()) =>
@@ -276,6 +290,18 @@ impl Tag {
             _ => Ok(()),
         }
     }
+}
+
+/// A technique tag starts with its ATT&CK id (`T1053` or `T1053.003`).
+fn technique_id(value: &str) -> bool {
+    let id = value.split_whitespace().next().unwrap_or_default();
+    let mut parts = id.splitn(2, '.');
+    let main = parts.next().unwrap_or_default();
+    let sub = parts.next();
+    main.len() == 5
+        && main.starts_with('T')
+        && main[1..].bytes().all(|b| b.is_ascii_digit())
+        && sub.is_none_or(|sub| sub.len() == 3 && sub.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// One library entry.
@@ -305,6 +331,27 @@ pub struct Alias {
     pub path: String,
     /// The run or source that used it.
     pub seen: String,
+}
+
+/// A run of a library sample, as recorded when its summary was read.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SeenRun {
+    pub sha256: String,
+    pub vm_id: String,
+    pub vm_name: String,
+    pub run_id: String,
+    pub started_ms: Option<u64>,
+    /// The root's exit as the run list words it ("Exit 0", "Running").
+    pub exit: String,
+    /// The run's folder; may no longer exist.
+    pub directory: String,
+}
+
+/// What the list shows of a sample's runs.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RunStats {
+    pub count: usize,
+    pub latest: Option<SeenRun>,
 }
 
 /// A custody event as listed.
@@ -365,8 +412,13 @@ impl Library {
             fs::set_permissions(&database, fs::Permissions::from_mode(0o600))
                 .map_err(|e| e.to_string())?;
         }
+        // One transaction: creating the tables one by one is a sync each.
         connection
-            .execute_batch(SCHEMA)
+            .execute_batch(&format!(
+                "BEGIN IMMEDIATE;{SCHEMA}\
+                 INSERT OR IGNORE INTO meta(key, value) VALUES('schema', '{SCHEMA_VERSION}');\
+                 COMMIT;"
+            ))
             .map_err(|e| e.to_string())?;
         let version: Option<i64> = connection
             .query_row("SELECT value FROM meta WHERE key='schema'", [], |row| {
@@ -376,14 +428,7 @@ impl Library {
             .map_err(|e| e.to_string())?
             .and_then(|text| text.parse().ok());
         match version {
-            None => {
-                connection
-                    .execute(
-                        "INSERT INTO meta(key, value) VALUES('schema', ?1)",
-                        [SCHEMA_VERSION.to_string()],
-                    )
-                    .map_err(|e| e.to_string())?;
-            }
+            None => {}
             Some(found) if found > SCHEMA_VERSION => {
                 return Err(format!(
                     "the sample library was made by a newer Antinomie (layout {found})"
@@ -681,6 +726,157 @@ impl Library {
         Ok(None)
     }
 
+    /// Remember runs that executed library samples. A run seen for the first
+    /// time adds a "Seen in a run" event; a run seen again only refreshes its
+    /// start and exit. Runs of samples not in the library are skipped.
+    /// Returns how many were new.
+    pub fn index_runs(&mut self, runs: &[SeenRun]) -> Result<usize, String> {
+        let mut added = Vec::new();
+        let transaction = self.connection.transaction().map_err(|e| e.to_string())?;
+        for run in runs {
+            let sha256 = run.sha256.to_ascii_lowercase();
+            let known: bool = transaction
+                .query_row(
+                    "SELECT 1 FROM sample WHERE sha256=?1",
+                    [&sha256],
+                    |_| Ok(()),
+                )
+                .optional()
+                .map_err(|e| e.to_string())?
+                .is_some();
+            if !known {
+                continue;
+            }
+            let seen: bool = transaction
+                .query_row(
+                    "SELECT 1 FROM seen_run WHERE sha256=?1 AND vm_id=?2 AND run_id=?3",
+                    params![sha256, run.vm_id, run.run_id],
+                    |_| Ok(()),
+                )
+                .optional()
+                .map_err(|e| e.to_string())?
+                .is_some();
+            transaction
+                .execute(
+                    "INSERT INTO seen_run(sha256, vm_id, run_id, vm_name, started_ms, exit, directory)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                     ON CONFLICT(sha256, vm_id, run_id) DO UPDATE SET
+                        vm_name=excluded.vm_name, started_ms=excluded.started_ms,
+                        exit=excluded.exit, directory=excluded.directory",
+                    params![
+                        sha256,
+                        run.vm_id,
+                        run.run_id,
+                        run.vm_name,
+                        run.started_ms.map(|ms| ms as i64),
+                        run.exit,
+                        run.directory
+                    ],
+                )
+                .map_err(|e| e.to_string())?;
+            if !seen {
+                added.push((sha256, run.vm_name.clone(), run.run_id.clone()));
+            }
+        }
+        transaction.commit().map_err(|e| e.to_string())?;
+        let count = added.len();
+        for (sha256, vm, run) in added {
+            self.note(&sha256, "app", CustodyEvent::SeenInRun { vm, run })?;
+        }
+        Ok(count)
+    }
+
+    /// The runs of one sample, newest first.
+    pub fn runs_of(&self, sha256: &str) -> Result<Vec<SeenRun>, String> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT sha256, vm_id, run_id, vm_name, started_ms, exit, directory FROM seen_run
+                 WHERE sha256=?1 ORDER BY started_ms DESC, run_id DESC",
+            )
+            .map_err(|e| e.to_string())?;
+        statement
+            .query_map([sha256.to_ascii_lowercase()], read_seen_run)
+            .map_err(|e| e.to_string())?
+            .collect::<Result<_, _>>()
+            .map_err(|e| e.to_string())
+    }
+
+    /// Run count and latest run of every sample that has run.
+    pub fn run_stats(&self) -> Result<HashMap<String, RunStats>, String> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT sha256, vm_id, run_id, vm_name, started_ms, exit, directory FROM seen_run
+                 ORDER BY started_ms ASC, run_id ASC",
+            )
+            .map_err(|e| e.to_string())?;
+        let mut stats: HashMap<String, RunStats> = HashMap::new();
+        for run in statement
+            .query_map([], read_seen_run)
+            .map_err(|e| e.to_string())?
+        {
+            let run = run.map_err(|e| e.to_string())?;
+            let entry = stats.entry(run.sha256.clone()).or_default();
+            entry.count += 1;
+            entry.latest = Some(run);
+        }
+        Ok(stats)
+    }
+
+    /// Every sample's tags in one read.
+    pub fn all_tags(&self) -> Result<HashMap<String, Vec<Tag>>, String> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT sha256, kind, value, color FROM tag")
+            .map_err(|e| e.to_string())?;
+        let mut all: HashMap<String, Vec<Tag>> = HashMap::new();
+        for row in statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    Tag {
+                        kind: TagKind::parse(&row.get::<_, String>(1)?),
+                        value: row.get(2)?,
+                        color: row.get(3)?,
+                    },
+                ))
+            })
+            .map_err(|e| e.to_string())?
+        {
+            let (sha256, tag) = row.map_err(|e| e.to_string())?;
+            all.entry(sha256).or_default().push(tag);
+        }
+        for tags in all.values_mut() {
+            tags.sort();
+        }
+        Ok(all)
+    }
+
+    /// Known parents and children of every sample, from the origins that
+    /// name a parent sample (dropped or promoted from its runs).
+    pub fn lineage_counts(&self) -> Result<HashMap<String, (usize, usize)>, String> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT DISTINCT sha256, parent FROM origin
+                 WHERE parent <> '' AND parent <> sha256",
+            )
+            .map_err(|e| e.to_string())?;
+        let mut counts: HashMap<String, (usize, usize)> = HashMap::new();
+        for pair in statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|e| e.to_string())?
+        {
+            let (child, parent) = pair.map_err(|e| e.to_string())?;
+            counts.entry(child).or_default().0 += 1;
+            counts.entry(parent).or_default().1 += 1;
+        }
+        Ok(counts)
+    }
+
     /// Note that a sample was sent into a VM.
     pub fn record_push(&mut self, sha256: &str, push: super::Push) -> Result<(), String> {
         let sha256 = sha256.to_ascii_lowercase();
@@ -702,6 +898,18 @@ impl Library {
             },
         )
     }
+}
+
+fn read_seen_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<SeenRun> {
+    Ok(SeenRun {
+        sha256: row.get(0)?,
+        vm_id: row.get(1)?,
+        run_id: row.get(2)?,
+        vm_name: row.get(3)?,
+        started_ms: row.get::<_, Option<i64>>(4)?.map(|ms| ms as u64),
+        exit: row.get(5)?,
+        directory: row.get(6)?,
+    })
 }
 
 const SELECT_SAMPLE: &str = "SELECT sha256, sha1, md5, tlsh, name, description, size, file_type,

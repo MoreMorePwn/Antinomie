@@ -29,6 +29,7 @@ mod rules_window;
 mod run_filter;
 mod run_recording;
 mod runs;
+mod sample_tags;
 mod samples_view;
 mod snapshots;
 mod summary;

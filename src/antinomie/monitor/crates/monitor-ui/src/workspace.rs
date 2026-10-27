@@ -44,6 +44,7 @@ pub(crate) enum LibraryPage {
     BaseImages,
     Rules,
     Tools,
+    Samples,
 }
 
 impl LibraryPage {
@@ -52,6 +53,7 @@ impl LibraryPage {
             Self::BaseImages => "Base images",
             Self::Rules => "Detection rules",
             Self::Tools => "Analysis tools",
+            Self::Samples => "Samples",
         }
     }
 }

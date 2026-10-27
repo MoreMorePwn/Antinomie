@@ -13,6 +13,8 @@ pub(crate) enum Kind {
     Recording,
     BaseImport,
     UploadFile,
+    /// A file to add to Samples.
+    SampleFile,
     ExplorerRoot,
 }
 
@@ -93,6 +95,8 @@ impl FolderPicker {
         }
         let arguments: &[&str] = if matches!(target.kind, Kind::UploadFile) {
             &["--file-selection", "--title=Choose file to upload"]
+        } else if matches!(target.kind, Kind::SampleFile) {
+            &["--file-selection", "--title=Choose file to add to Samples"]
         } else {
             &[
                 "--file-selection",

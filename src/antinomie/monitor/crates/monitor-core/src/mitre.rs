@@ -48,6 +48,26 @@ pub fn technique_label(id: &str) -> String {
     }
 }
 
+/// Techniques whose id or name contains `query` (ignoring case), as
+/// `technique_label` reads them, in id order, at most `limit`. An empty query
+/// matches nothing.
+pub fn search(query: &str, limit: usize) -> Vec<String> {
+    let query = query.trim().to_ascii_lowercase();
+    if query.is_empty() {
+        return Vec::new();
+    }
+    entries()
+        .iter()
+        .filter(|(id, _)| id.starts_with('T'))
+        .filter(|(id, _)| {
+            let label = technique_label(id).to_ascii_lowercase();
+            id.to_ascii_lowercase().contains(&query) || label.contains(&query)
+        })
+        .take(limit)
+        .map(|(id, _)| technique_label(id))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -71,5 +91,20 @@ mod tests {
         assert_eq!(technique_label("T9999"), "T9999");
         assert_eq!(technique_label("DET0508"), "DET0508");
         assert!(entries().len() > 600);
+    }
+
+    #[test]
+    fn techniques_are_found_by_id_or_name() {
+        assert!(
+            search("cron", 10)
+                .iter()
+                .any(|label| label == "T1053.003 Scheduled Task/Job: Cron")
+        );
+        assert_eq!(
+            search("t1059.004", 5)[0],
+            "T1059.004 Command and Scripting Interpreter: Unix Shell"
+        );
+        assert!(search("", 5).is_empty() && search("zzzzzz", 5).is_empty());
+        assert_eq!(search("process", 3).len(), 3);
     }
 }

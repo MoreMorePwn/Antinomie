@@ -168,6 +168,14 @@ pub(super) fn show(browser: &mut Browser, ui: &mut egui::Ui, view: View) -> Opti
                                             selected = Some(Action::SendRun(entry.path.clone()));
                                             ui.close_menu();
                                         }
+                                        if !entry.directory
+                                            && entry.regular
+                                            && ui.button("Add to Samples…").clicked()
+                                        {
+                                            selected =
+                                                Some(Action::AddToSamples(entry.path.clone()));
+                                            ui.close_menu();
+                                        }
                                         if ui.button("Open Directory").clicked() {
                                             let directory = if entry.directory {
                                                 Some(entry.path.as_path())

@@ -79,6 +79,7 @@ impl MonitorApp {
                     upload_browser::Action::Select(_) => {}
                     upload_browser::Action::OpenDirectory(path) => open_directory(&path),
                     upload_browser::Action::SendRun(path) => self.send_explorer_file(path),
+                    upload_browser::Action::AddToSamples(path) => self.add_explorer_file(path),
                 }
             }
         }
@@ -90,6 +91,14 @@ impl MonitorApp {
                 self.report_error(format!("Explorer folder: {error}"));
             }
         }
+    }
+
+    /// Add to Samples…: the Samples page opens with the Add file dialog on
+    /// the file. Nothing is read until the dialog is confirmed or its path
+    /// field is left.
+    pub(super) fn add_explorer_file(&mut self, path: PathBuf) {
+        self.open_library(LibraryPage::Samples);
+        self.samples_page.open_add(Some(&path));
     }
 
     pub(super) fn send_explorer_file(&mut self, path: PathBuf) {

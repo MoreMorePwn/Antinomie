@@ -176,13 +176,16 @@ impl MonitorApp {
                         .path
                         .to_lowercase()
                         .cmp(&b.request.path.to_lowercase()),
-                    2 => a
+                    2 => sample_name(a)
+                        .to_lowercase()
+                        .cmp(&sample_name(b).to_lowercase()),
+                    3 => a
                         .request
                         .args
                         .join(" ")
                         .to_lowercase()
                         .cmp(&b.request.args.join(" ").to_lowercase()),
-                    3 => run_status(a).cmp(run_status(b)),
+                    4 => run_status(a).cmp(run_status(b)),
                     _ => root_exit(a).cmp(&root_exit(b)),
                 }
             });
@@ -234,7 +237,8 @@ impl MonitorApp {
                     // remainder in the middle stopped following the pane. This one
                     // takes whatever the others leave, and the table spans the pane.
                     .column(Column::remainder().at_least(120.0).resizable(false))
-                    .column(Column::initial(180.0).range(90.0..=400.0))
+                    .column(Column::exact(110.0))
+                    .column(Column::initial(160.0).range(90.0..=400.0))
                     .column(Column::initial(190.0).range(90.0..=320.0))
                     .column(Column::initial(110.0).range(70.0..=220.0))
                     .column(Column::exact(72.0))
@@ -244,7 +248,7 @@ impl MonitorApp {
                     .min_scrolled_height(0.0);
                 if let Some(index) = navigation { table = table.scroll_to_row(index, Some(egui::Align::Center)); }
                 table.header(28.0, |mut header| {
-                        for (column, name) in ["Start time", "Executable", "Arguments", "Tree status", "Root exit"].into_iter().enumerate() {
+                        for (column, name) in ["Start time", "Executable", "Sample", "Arguments", "Tree status", "Root exit"].into_iter().enumerate() {
                             header.col(|ui| crate::table_sort::header(ui, "run_history", column, name));
                         }
                         header.col(|ui| crate::widgets::table::head(ui, ""));
@@ -262,6 +266,17 @@ impl MonitorApp {
                                         .truncate(),
                                 )
                                 .on_hover_text(&run.request.path);
+                            });
+                            row.col(|ui| {
+                                match &run.request.sample {
+                                    Some(sample) => {
+                                        ui.add(egui::Label::new(&sample.name).selectable(false).sense(egui::Sense::hover()).truncate())
+                                            .on_hover_text(format!("Library sample {}", sample.sha256));
+                                    }
+                                    None => {
+                                        ui.add(egui::Label::new(theme::hint_text("-")).selectable(false).sense(egui::Sense::hover()));
+                                    }
+                                }
                             });
                             row.col(|ui| {
                                 let args = run.request.args.join(" ");
@@ -762,6 +777,14 @@ pub(super) fn listed(run: &RunSummary) -> RunSummary {
                 specimen_source: None,
             }),
     }
+}
+
+/// The library sample a run executed, by the name it had; empty for none.
+pub(super) fn sample_name(run: &RunSummary) -> &str {
+    run.request
+        .sample
+        .as_ref()
+        .map_or("", |sample| sample.name.as_str())
 }
 
 pub(super) fn run_status(run: &RunSummary) -> &'static str {

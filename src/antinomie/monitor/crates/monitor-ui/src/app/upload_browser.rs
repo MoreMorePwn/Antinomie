@@ -24,6 +24,8 @@ pub(crate) const DEPTH_LIMIT: usize = 16;
 pub(crate) enum Action {
     Select(PathBuf),
     SendRun(PathBuf),
+    /// Archive the file in Samples (never run, never unpacked).
+    AddToSamples(PathBuf),
     OpenDirectory(PathBuf),
 }
 

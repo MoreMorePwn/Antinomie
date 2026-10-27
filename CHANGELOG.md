@@ -6,6 +6,21 @@ it runs.
 
 ## 0.8.0 — unreleased
 
+- **Library › Samples lists every sample across runs and VMs.** One flat list,
+  the sample with the latest run first: name, description, tags (verdict and
+  malware category; techniques and custom tags fold into `+N`), run count,
+  parents / children, latest run and short SHA-256. Search by name,
+  description, tag or SHA-256 prefix; filter by tags (every selected tag), or
+  keep only roots. *Add file…* (and *Add to Samples…* in the Explorer) reads and
+  hashes the file, never runs or unpacks it, says whether the hash is already
+  in Samples, and can delete the original after the archive was read back and
+  matched. Tags come in four groups (verdict, malware category, ATT&CK
+  technique searched by ID or name, and custom with a colour from nine theme
+  colours). *Verify all* reads every archive back. Everything uploaded into a
+  VM is archived first, and Run History gains a Sample column and a
+  `sample ==` filter. *Download…* opens the MalwareBazaar and MalShare search
+  (Tools › Download malware samples).
+
 - **Samples are kept in a library.** Downloads from MalwareBazaar and MalShare,
   and files added from this computer, now go into one library under
   `samples/`: one encrypted archive per sample (password `infected`) in a folder
