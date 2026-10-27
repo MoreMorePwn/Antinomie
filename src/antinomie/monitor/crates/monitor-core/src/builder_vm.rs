@@ -76,6 +76,8 @@ const OUTPUT_FILES: &[&str] = &[
     "kernel.tar",
     "rootfs.tar",
     "ccache.tar",
+    crate::uefi_disk::ROOT_FILE,
+    crate::uefi_disk::LAYOUT_FILE,
 ];
 const TOOLS_TIMEOUT: Duration = Duration::from_secs(90 * 60);
 const BUILD_TIMEOUT: Duration = Duration::from_secs(10 * 60 * 60);
@@ -582,7 +584,13 @@ fn kvm_usable() -> bool {
         .is_ok()
 }
 
-/// Half of this host's memory, between 2 and 8 GiB.
+/// Least guest memory the kernel link and the symbol pass survive. The final
+/// `vmlinux.o` link is killed by the guest's OOM killer at 2 and 3 GiB and
+/// passes at 3.5 GiB; a full build peaked at 3.9 GiB.
+const BUILDER_RAM_FLOOR_MIB: u64 = 4096;
+const BUILDER_RAM_CEIL_MIB: u64 = 8192;
+
+/// Half of this host's memory, between the floor and 8 GiB.
 fn builder_ram_mib() -> u64 {
     let total_kib = fs::read_to_string("/proc/meminfo")
         .ok()
@@ -591,8 +599,12 @@ fn builder_ram_mib() -> u64 {
                 .find_map(|line| line.strip_prefix("MemTotal:"))
                 .and_then(|rest| rest.split_whitespace().next()?.parse::<u64>().ok())
         })
-        .unwrap_or(4 << 20);
-    (total_kib / 2 / 1024).clamp(2048, 8192)
+        .unwrap_or(8 << 20);
+    ram_mib_for(total_kib)
+}
+
+fn ram_mib_for(total_kib: u64) -> u64 {
+    (total_kib / 2 / 1024).clamp(BUILDER_RAM_FLOOR_MIB, BUILDER_RAM_CEIL_MIB)
 }
 
 fn apt_proxy(proxy: &str) -> String {
@@ -887,6 +899,22 @@ mod tests {
         assert_eq!(server.status().as_deref(), Some("ok"));
         server.stop();
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_guest_may_upload_the_uefi_files_of_a_debian_bundle() {
+        // bundle.json lists them, so a build that drops them cannot be installed.
+        for name in [crate::uefi_disk::ROOT_FILE, crate::uefi_disk::LAYOUT_FILE] {
+            assert!(OUTPUT_FILES.contains(&name), "{name} is not uploaded");
+        }
+    }
+
+    #[test]
+    fn the_guest_never_gets_less_than_the_link_needs() {
+        assert_eq!(ram_mib_for(4 << 20), BUILDER_RAM_FLOOR_MIB);
+        assert_eq!(ram_mib_for(6 << 20), BUILDER_RAM_FLOOR_MIB);
+        assert_eq!(ram_mib_for(12 << 20), 6144);
+        assert_eq!(ram_mib_for(64 << 20), BUILDER_RAM_CEIL_MIB);
     }
 
     #[test]
