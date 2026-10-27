@@ -25,6 +25,13 @@ enum Go {
 impl MonitorApp {
     pub(super) fn summary_tab(&mut self, ui: &mut egui::Ui, data: &Arc<Data>) {
         let mut go = None;
+        let mut lineage_out = None;
+        let mut lineage = self
+            .samples_page
+            .detail
+            .as_mut()
+            .map(|detail| std::mem::take(&mut detail.lineage))
+            .unwrap_or_default();
         let scroll_y = self
             .samples_page
             .detail
@@ -61,9 +68,21 @@ impl MonitorApp {
             }
             static_analysis(ui, data, scanned, &mut go);
             identity(ui, data, verified, verifying, &mut go);
+            lineage_out = super::lineage::section(ui, &mut lineage, data);
             output_files(ui, data);
             ui.add_space(16.0);
         });
+        if let Some(detail) = &mut self.samples_page.detail {
+            detail.lineage = lineage;
+        }
+        match lineage_out {
+            Some(super::lineage::Out::OpenSample(sha)) => {
+                self.samples_page.open_detail(&sha);
+                return;
+            }
+            Some(super::lineage::Out::OpenRun(number)) => go = Some(Go::Run(number)),
+            None => {}
+        }
         let detail = &mut self.samples_page.detail;
         match go {
             Some(Go::Run(number)) => {

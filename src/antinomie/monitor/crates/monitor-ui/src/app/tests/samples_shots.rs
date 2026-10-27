@@ -3,7 +3,7 @@
 //! an X11 display; exits by itself. The library lives in ANTINOMIE_QA_DATA
 //! (a throwaway folder; never the user's data).
 //!
-//! ANTINOMIE_QA_SCENE = list | tags | add | edit | detail | detail2 | runs | custody,
+//! ANTINOMIE_QA_SCENE = list | tags | add | edit | detail | detail2 | lineage | lineage2 | runs | custody,
 //! ANTINOMIE_QA_THEME = dark | light | blue, ANTINOMIE_QA_SIZE = 1400x820,
 //! ANTINOMIE_QA_SECONDS = 25.
 use super::*;
@@ -66,7 +66,10 @@ fn native_samples_fixture() {
             app.rules_ui.set_packs_for_test(Vec::new());
             app.layout = WorkspaceLayout::default();
             app.open_library(crate::workspace::LibraryPage::Samples);
-            if matches!(scene.as_str(), "detail" | "detail2" | "runs" | "custody") {
+            if matches!(
+                scene.as_str(),
+                "detail" | "detail2" | "lineage" | "lineage2" | "runs" | "custody"
+            ) {
                 // Runs that exist on disk, one with a static report.
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -97,6 +100,12 @@ fn native_samples_fixture() {
                 });
                 if scene == "detail2" {
                     app.samples_page.scroll_detail(800.0);
+                }
+                if scene == "lineage2" {
+                    app.samples_page.set_lineage(2, 3, false);
+                }
+                if scene == "lineage" || scene == "lineage2" {
+                    app.samples_page.scroll_detail(1700.0);
                 }
             }
             match scene.as_str() {

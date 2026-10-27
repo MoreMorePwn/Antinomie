@@ -20,6 +20,7 @@ mod archive;
 mod custody;
 mod intake;
 mod library;
+mod lineage;
 mod migrate;
 mod rollup;
 mod summary;
@@ -30,6 +31,10 @@ pub use intake::{Added, FileProbe, NewSample, detect_type};
 pub use library::{
     Alias, CATEGORIES, EventRow, Library, NewOrigin, Origin, OriginKind, RunStats, SampleRecord,
     SeenRun, TAG_COLORS, Tag, TagKind, VERDICTS,
+};
+pub use lineage::{
+    Edge as LineageEdge, EdgeKind, Graph as LineageGraph, Known, Link, Node as LineageNode,
+    NodeKind, Options as LineageOptions, RunLineage, build as build_lineage, runs_label,
 };
 pub use rollup::{
     CheckRow, EvasionRow, IndicatorRow, Rollup, RuleRow, RunInput, TacticRow, TechniqueRow, rollup,

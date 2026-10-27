@@ -87,6 +87,41 @@ pub struct IndicatorEntry {
     pub matched: bool,
 }
 
+/// A file of the run that counts for lineage: an executable, a script, a
+/// shared object or a download. Written config files stay in the IOC list.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LineageFile {
+    pub path: String,
+    /// SHA-256 when the guest or a disk dump gave one; empty otherwise.
+    pub sha256: String,
+    /// `created`, `written at close`, `changed`, `deleted`, `sample`, `executed`.
+    pub roles: Vec<String>,
+    /// The image path of the process that wrote it; empty when not known.
+    pub writer: String,
+}
+
+/// A program one process started, from the image it ran before.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LineageExec {
+    /// The image path of the process that started it; empty when not known.
+    pub parent: String,
+    pub path: String,
+    pub sha256: String,
+    /// For a shell or interpreter started with `-c`: the command line it ran.
+    pub command: String,
+    pub count: u64,
+}
+
+/// What a run's files and programs say about where its files came from.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Lineage {
+    pub files: Vec<LineageFile>,
+    pub execs: Vec<LineageExec>,
+}
+
 /// Everything Triage knew about a run when it last read it. A part that was
 /// never computed is `None`, which is not the same as an empty list.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -98,6 +133,7 @@ pub struct RunDigest {
     pub behaviour: Option<Behaviour>,
     pub detections: Option<Vec<DetectionHit>>,
     pub indicators: Option<Vec<IndicatorEntry>>,
+    pub lineage: Option<Lineage>,
 }
 
 /// Serialises read-modify-write cycles: the UI updates a digest from short
@@ -154,6 +190,10 @@ impl RunDigest {
         }
         if let Some(indicators) = &mut self.indicators {
             indicators.truncate(MAX_ROWS);
+        }
+        if let Some(lineage) = &mut self.lineage {
+            lineage.files.truncate(MAX_ROWS);
+            lineage.execs.truncate(MAX_ROWS);
         }
     }
 }

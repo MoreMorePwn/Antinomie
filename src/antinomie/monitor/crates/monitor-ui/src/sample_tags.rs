@@ -9,7 +9,7 @@ use antinomie_monitor_core::samples::{Tag, TagKind};
 use eframe::egui::{self, Color32, RichText, Stroke};
 
 /// The colour of a verdict tag value.
-fn verdict_color(value: &str) -> Color32 {
+pub(crate) fn verdict_color(value: &str) -> Color32 {
     let palette = theme::palette();
     match value {
         "malicious" => palette.error,

@@ -19,6 +19,7 @@ use std::{
 };
 
 mod custody;
+mod lineage;
 mod parts;
 mod runs;
 mod summary;
@@ -73,6 +74,11 @@ pub(super) struct Data {
     pub(super) runs: Vec<RunEntry>,
     /// What the runs' Triage digests add up to.
     pub(super) rollup: antinomie_monitor_core::samples::Rollup,
+    /// Every library sample's name and verdict, by SHA-256, for the lineage
+    /// graph's marks.
+    pub(super) known: std::collections::BTreeMap<String, (String, String)>,
+    /// Edges between library samples from their origins.
+    pub(super) links: Vec<antinomie_monitor_core::samples::Link>,
     pub(super) report: Option<ReportRef>,
     /// Where every library sample was sent, for the process tree's tint.
     pub(super) sent: Vec<SentSample>,
@@ -115,6 +121,8 @@ pub(super) struct Detail {
         Option<Receiver<Result<antinomie_monitor_core::samples::Verification, String>>>,
     /// The last read-back: whether it matched, and why not.
     pub(super) verified: Option<(bool, String)>,
+    /// The Lineage section's options and view.
+    lineage: lineage::State,
     /// Keep the Summary scrolled to this offset (set by the
     /// screenshot fixture only).
     pub(super) scroll_y: Option<f32>,
@@ -143,6 +151,7 @@ impl Detail {
             runs: runs::RunsTab::default(),
             verify: None,
             verified: None,
+            lineage: lineage::State::default(),
             scroll_y: None,
         }
     }
@@ -230,6 +239,7 @@ fn load(options: &BackendOptions, vms: &[(String, String)], sha256: &str) -> Loa
             .collect::<Vec<_>>(),
     );
     entries.reverse();
+    let (known, links) = lineage_links(&library, &record.sha256, &entries)?;
     let archive = library.archive_path(&record.sha256)?;
     Ok(Data {
         tags: library.tags(&record.sha256)?,
@@ -240,6 +250,8 @@ fn load(options: &BackendOptions, vms: &[(String, String)], sha256: &str) -> Loa
         archive,
         runs: entries,
         rollup,
+        known,
+        links,
         report,
         sent,
         record,
@@ -689,6 +701,22 @@ impl SamplesPage {
         Some(self.detail.as_ref()?.data.as_ref()?.rollup.clone())
     }
 
+    /// The lineage graph the Summary draws, once built.
+    pub(in crate::app) fn detail_lineage(
+        &mut self,
+    ) -> Option<antinomie_monitor_core::samples::LineageGraph> {
+        let detail = self.detail.as_mut()?;
+        let data = detail.data.clone()?;
+        detail.lineage.graph_for_test(&data)
+    }
+
+    /// Set the lineage graph's levels and system-binary toggle (screenshots).
+    pub(in crate::app) fn set_lineage(&mut self, parents: usize, children: usize, hide: bool) {
+        if let Some(detail) = &mut self.detail {
+            detail.lineage.set_levels(parents, children, hide);
+        }
+    }
+
     /// A line for a failing test: what the window is waiting on.
     pub(in crate::app) fn detail_state(&self) -> String {
         let Some(detail) = &self.detail else {
@@ -714,4 +742,51 @@ impl SamplesPage {
     pub(in crate::app) fn open_run_pending(&self) -> bool {
         self.open_run.is_some()
     }
+}
+
+/// Names and verdicts by SHA-256, and the edges between samples.
+type LineageLinks = (
+    std::collections::BTreeMap<String, (String, String)>,
+    Vec<antinomie_monitor_core::samples::Link>,
+);
+
+/// The library's names and verdicts, and the edges its origins make between
+/// samples (a sample dropped or promoted from another).
+fn lineage_links(
+    library: &Library,
+    sha256: &str,
+    entries: &[RunEntry],
+) -> Result<LineageLinks, String> {
+    use antinomie_monitor_core::samples::{EdgeKind, Link, OriginKind, TagKind};
+    let numbers: std::collections::HashMap<&str, usize> = entries
+        .iter()
+        .map(|entry| (entry.run.id.as_str(), entry.number))
+        .collect();
+    let mut known = std::collections::BTreeMap::new();
+    let mut links = Vec::new();
+    for other in library.list()? {
+        let verdict = library
+            .tags(&other.sha256)?
+            .into_iter()
+            .find(|tag| tag.kind == TagKind::Verdict)
+            .map(|tag| tag.value)
+            .unwrap_or_default();
+        for origin in library.origins(&other.sha256)? {
+            if origin.parent.is_empty() || (other.sha256 != sha256 && origin.parent != sha256) {
+                continue;
+            }
+            links.push(Link {
+                parent: origin.parent.clone(),
+                child: other.sha256.clone(),
+                kind: if origin.kind == OriginKind::Download {
+                    EdgeKind::Downloaded
+                } else {
+                    EdgeKind::Dropped
+                },
+                run: numbers.get(origin.run_id.as_str()).copied(),
+            });
+        }
+        known.insert(other.sha256, (other.name, verdict));
+    }
+    Ok((known, links))
 }

@@ -43,6 +43,20 @@ it runs.
   table gains a Suspicion column. A run Triage never opened says "not
   triaged" instead of guessing.
 
+- **The sample window draws a lineage graph.** Under Identity, the Lineage
+  section shows where the sample came from and what it dropped or ran, merged
+  across its runs: parents on the left, the sample in the middle, children on
+  the right, one node per file by SHA-256 (a file with no hash is kept apart
+  per run and drawn dashed), command nodes for `sh -c` style launchers, and
+  edge labels that list the runs ("run 4, 7, 9" or "5 runs") with a shape per
+  kind (dropped, downloaded, executed, loaded). Clicking a label opens the
+  per-run table. *Hide system binaries* is on by default and shows how many
+  are left out; Parents and Children steppers add a level each; a node's
+  `+N` badge expands it; the run filter limits the graph to one run. Drag to
+  pan, wheel to zoom about the pointer (20 to 300 percent), Fit and 1:1, a
+  minimap, and arrow, `+`, `-` and `0` keys on the focused graph. Triage keeps
+  the run's lineage index in the run's digest.
+
 - **Samples are kept in a library.** Downloads from MalwareBazaar and MalShare,
   and files added from this computer, now go into one library under
   `samples/`: one encrypted archive per sample (password `infected`) in a folder

@@ -148,6 +148,7 @@ impl TriageView {
         }
         self.digested = Some(fingerprint);
         let behaviour = behaviour(&scan.findings);
+        let lineage = lineage_index::index(&scan.process, scan.ioc.as_deref());
         let indicators = scan.ioc.as_deref().map(indicators);
         let detections = detections(&self.detection.results);
         // Off the UI thread: the write is a synced file.
@@ -156,6 +157,7 @@ impl TriageView {
             .spawn(move || {
                 let _ = RunDigest::update(&directory, |digest| {
                     digest.behaviour = Some(behaviour);
+                    digest.lineage = Some(lineage);
                     if indicators.is_some() {
                         digest.indicators = indicators;
                     }

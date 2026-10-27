@@ -58,6 +58,7 @@ mod idle_tests;
 mod ioc_scan;
 mod ioc_view;
 mod kernel_records;
+mod lineage_index;
 mod net_tabs;
 mod network;
 mod network_index;
