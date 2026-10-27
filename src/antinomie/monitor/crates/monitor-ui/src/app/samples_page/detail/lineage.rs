@@ -10,6 +10,7 @@ use antinomie_monitor_core::samples::{
 use std::collections::BTreeSet;
 
 mod canvas;
+mod labels;
 
 /// What a click in the section asks of the window.
 pub(super) enum Out {
@@ -387,4 +388,16 @@ fn details(ui: &mut egui::Ui, state: &mut State, data: &Data, out: &mut Option<O
             _ => {}
         }
     });
+}
+
+#[cfg(test)]
+mod default_tests {
+    use super::*;
+
+    #[test]
+    fn system_binaries_are_hidden_until_the_box_is_unticked() {
+        // The spec's round 4 decision: the graph opens without them.
+        assert!(State::default().hide_system);
+        assert!(LineageOptions::default().hide_system);
+    }
 }

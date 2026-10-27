@@ -8,9 +8,11 @@ use antinomie_monitor_core::samples::{EdgeKind, LineageEdge, LineageGraph, Linea
 use eframe::egui::{Color32, Pos2, Rect, Shape, Stroke, Vec2};
 use std::collections::BTreeMap;
 
+use super::labels;
+
 pub(super) const HEIGHT: f32 = 380.0;
 const COLUMN: f32 = 310.0;
-const ROW: f32 = 58.0;
+const ROW: f32 = 64.0;
 const NODE_W: f32 = 170.0;
 const NODE_H: f32 = 32.0;
 const MIN_ZOOM: f32 = 0.2;
@@ -24,6 +26,9 @@ fn stroke(width: f32, color: Color32) -> Stroke {
 /// The positions of the nodes in graph space.
 pub(super) struct Layout {
     pub(super) at: BTreeMap<String, Rect>,
+    /// Each edge's route in graph space, by its index in the graph's edges
+    /// (none when an end is not drawn).
+    pub(super) routes: Vec<Option<[Pos2; 4]>>,
     pub(super) bounds: Rect,
 }
 
@@ -31,6 +36,7 @@ impl Default for Layout {
     fn default() -> Self {
         Self {
             at: BTreeMap::new(),
+            routes: Vec::new(),
             bounds: Rect::from_min_size(Pos2::ZERO, Vec2::splat(1.0)),
         }
     }
@@ -50,8 +56,21 @@ impl Layout {
             bounds = Some(bounds.map_or(rect, |bounds| bounds.union(rect)));
             at.insert(node.id.clone(), rect);
         }
+        let routes: Vec<Option<[Pos2; 4]>> = graph
+            .edges
+            .iter()
+            .map(|edge| {
+                let (from, to) = (at.get(&edge.from)?, at.get(&edge.to)?);
+                Some(labels::route(*from, *to, edge.from == edge.to))
+            })
+            .collect();
+        // Loops and bulges are part of the picture the view must fit.
+        for point in routes.iter().flatten().flatten() {
+            bounds = bounds.map(|bounds| bounds.union(Rect::from_min_max(*point, *point)));
+        }
         Self {
             at,
+            routes,
             bounds: bounds
                 .unwrap_or_else(|| Rect::from_min_size(Pos2::ZERO, Vec2::splat(1.0)))
                 .expand(40.0),
@@ -197,38 +216,6 @@ fn node_title(node: &LineageNode) -> String {
     }
 }
 
-/// An edge's route in screen space, from the parent's right side to the
-/// child's left side; a self-edge is a loop above the node.
-fn route(from: Rect, to: Rect, same: bool) -> [Pos2; 4] {
-    if same {
-        let top = from.center_top();
-        [
-            top + egui::vec2(-24.0, 0.0),
-            top + egui::vec2(-34.0, -34.0),
-            top + egui::vec2(34.0, -34.0),
-            top + egui::vec2(24.0, 0.0),
-        ]
-    } else {
-        let (a, b) = if to.center().x >= from.center().x {
-            (from.right_center(), to.left_center())
-        } else {
-            (from.left_center(), to.right_center())
-        };
-        let pull = ((b.x - a.x).abs() / 2.0).max(30.0) * (b.x - a.x).signum();
-        [a, a + egui::vec2(pull, 0.0), b - egui::vec2(pull, 0.0), b]
-    }
-}
-
-fn bezier(points: &[Pos2; 4], t: f32) -> Pos2 {
-    let u = 1.0 - t;
-    let weights = [u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t];
-    let mut at = Vec2::ZERO;
-    for (point, weight) in points.iter().zip(weights) {
-        at += point.to_vec2() * weight;
-    }
-    at.to_pos2()
-}
-
 fn dashed(painter: &egui::Painter, rect: Rect, stroke: Stroke) {
     let points = vec![
         rect.left_top(),
@@ -340,15 +327,21 @@ pub(super) fn show(
         .then(|| response.interact_pointer_pos())
         .flatten();
     let in_minimap = |at: Pos2| minimap.contains(at);
-    // Edges first, under the nodes; labels remembered for the click.
-    let mut labels: Vec<(Rect, &LineageEdge)> = Vec::new();
+    // Edges first, under the nodes; their labels are placed once all are
+    // known (so none covers a node or another label) and drawn over the nodes.
     let font = egui::FontId::proportional((11.0 * scale).clamp(8.0, 16.0));
-    for edge in &graph.edges {
-        let (Some(from), Some(to)) = (layout.at.get(&edge.from), layout.at.get(&edge.to)) else {
+    struct Pending<'a> {
+        edge: &'a LineageEdge,
+        galley: std::sync::Arc<egui::Galley>,
+        color: Color32,
+        route: [Pos2; 4],
+    }
+    let mut pending: Vec<Pending<'_>> = Vec::new();
+    for (index, edge) in graph.edges.iter().enumerate() {
+        let Some(Some(world_route)) = layout.routes.get(index) else {
             continue;
         };
-        let same = edge.from == edge.to;
-        let points = route(to_screen(*from), to_screen(*to), same);
+        let points = world_route.map(|point| view.screen_point(origin, point));
         let chosen = selected_edge.is_some_and(|(a, b)| *a == edge.from && *b == edge.to);
         let color = if chosen { palette.accent } else { palette.line };
         painter.add(Shape::CubicBezier(
@@ -373,36 +366,13 @@ pub(super) fn show(
             color,
             Stroke::NONE,
         ));
-        // The label: kind shapes then the runs, centred on the curve.
         let text = antinomie_monitor_core::samples::runs_label(&edge.runs);
-        let galley = painter.layout_no_wrap(text, font.clone(), palette.text);
-        let shapes = edge.kinds.len() as f32 * (font.size + 2.0);
-        let size = egui::vec2(galley.size().x + shapes + 12.0, galley.size().y + 4.0);
-        let centre = bezier(&points, 0.5);
-        let pill = Rect::from_center_size(centre, size);
-        painter.rect_filled(pill, size.y / 2.0, palette.panel);
-        painter.rect_stroke(
-            pill,
-            size.y / 2.0,
-            stroke(1.0, color),
-            egui::StrokeKind::Inside,
-        );
-        let mut x = pill.left() + 6.0 + font.size / 2.0;
-        for kind in edge.kinds.keys() {
-            kind_shape(
-                &painter,
-                *kind,
-                Pos2::new(x, pill.center().y),
-                font.size * 0.7,
-            );
-            x += font.size + 2.0;
-        }
-        painter.galley(
-            Pos2::new(x - font.size / 2.0, pill.center().y - galley.size().y / 2.0),
-            galley,
-            palette.text,
-        );
-        labels.push((pill, edge));
+        pending.push(Pending {
+            edge,
+            galley: painter.layout_no_wrap(text, font.clone(), palette.text),
+            color,
+            route: points,
+        });
     }
     let mut node_rects: Vec<(Rect, &LineageNode)> = Vec::new();
     for node in &graph.nodes {
@@ -526,6 +496,52 @@ pub(super) fn show(
             );
         }
         node_rects.push((box_, node));
+    }
+    // The labels: kind shapes then the runs, on the edge where nothing is in
+    // the way. Placement works on screen rectangles (the label's size follows
+    // the zoom), against the nodes drawn.
+    let obstacles: Vec<Rect> = node_rects.iter().map(|(box_, _)| *box_).collect();
+    let sized: Vec<([Pos2; 4], Vec2)> = pending
+        .iter()
+        .map(|item| {
+            let shapes = item.edge.kinds.len() as f32 * (font.size + 2.0);
+            let size = egui::vec2(
+                item.galley.size().x + shapes + 12.0,
+                item.galley.size().y + 4.0,
+            );
+            (item.route, size)
+        })
+        .collect();
+    let spots = labels::place(&sized, &obstacles);
+    let mut labels: Vec<(Rect, &LineageEdge)> = Vec::new();
+    for (item, pill) in pending.into_iter().zip(spots) {
+        let size = pill.size();
+        painter.rect_filled(pill, size.y / 2.0, palette.panel);
+        painter.rect_stroke(
+            pill,
+            size.y / 2.0,
+            stroke(1.0, item.color),
+            egui::StrokeKind::Inside,
+        );
+        let mut x = pill.left() + 6.0 + font.size / 2.0;
+        for kind in item.edge.kinds.keys() {
+            kind_shape(
+                &painter,
+                *kind,
+                Pos2::new(x, pill.center().y),
+                font.size * 0.7,
+            );
+            x += font.size + 2.0;
+        }
+        painter.galley(
+            Pos2::new(
+                x - font.size / 2.0,
+                pill.center().y - item.galley.size().y / 2.0,
+            ),
+            item.galley,
+            palette.text,
+        );
+        labels.push((pill, item.edge));
     }
     // Clicks: a badge wins, then a label, then a node.
     if hits.badge.is_none() {
