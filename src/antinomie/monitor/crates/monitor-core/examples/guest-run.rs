@@ -799,9 +799,7 @@ mod tests {
 fn stealth_profile(
     vm_spec: &Value,
 ) -> Result<antinomie_monitor_core::stealth::StealthProfile, String> {
-    use antinomie_monitor_core::stealth::{
-        HostCpu, MACHINES, MachineIdentity, StealthPreset, StealthProfile,
-    };
+    use antinomie_monitor_core::stealth::{HostCpu, MACHINES, StealthPreset, StealthProfile};
     Ok(match vm_spec.get("stealth") {
         None => StealthProfile::default(),
         Some(Value::String(spec)) => {
@@ -820,7 +818,7 @@ fn stealth_profile(
                     .iter()
                     .find(|known| known.id == machine)
                     .ok_or_else(|| format!("plan.vm.stealth: unknown machine {machine}"))?;
-                profile.identity = MachineIdentity::from_machine(machine);
+                profile.use_machine(machine);
             }
             profile
         }

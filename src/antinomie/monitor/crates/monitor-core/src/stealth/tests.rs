@@ -14,6 +14,7 @@ fn machine(id: &str) -> &'static MachineProfile {
 fn pinned(kind: StealthPreset, id: &str) -> StealthProfile {
     let mut profile = StealthProfile::realistic(kind, "GenuineIntel");
     profile.identity = MachineIdentity::first_listed(machine(id));
+    profile.disk_media = DiskMedia::of_rotation(profile.identity.disk_rotation);
     profile
 }
 
@@ -118,21 +119,21 @@ fn realistic_options_hide_the_hypervisor_and_carry_the_identity() {
     );
     assert!(
         args.iter()
-            .any(|arg| arg.starts_with("virtio-blk-pci.serial=S6PXNF0T"))
+            .any(|arg| arg.starts_with("virtio-blk-pci.serial=S"))
     );
     let chassis = std::fs::read(dir.join("smbios-chassis.bin")).unwrap();
     assert_eq!(&chassis[..6], &[3, 0x16, 0, 3, 1, 3]);
     // Version and asset tag are string 0; Dell's chassis SKU is the kind.
     assert_eq!((chassis[6], chassis[8], chassis[0x15]), (0, 0, 3));
     assert!(chassis.ends_with(b"Desktop\0\0"));
-    // The BIOS table: no VM bit, Dell's strings, release 1.4.
+    // The BIOS table: no VM bit, Dell's strings, release 1.13.
     let bios = std::fs::read(dir.join("smbios-bios.bin")).unwrap();
     assert_eq!(&bios[..6], &[0, 0x1a, 0, 0, 1, 2]);
     assert_eq!(bios[8], 3);
     assert_eq!(bios[0x13] & 0x10, 0, "the virtual machine bit is clear");
     assert_eq!(bios[0x0a] & 0x08, 0, "characteristics are listed");
-    assert_eq!(&bios[0x14..0x16], &[1, 4]);
-    assert_eq!(&bios[0x1a..], b"Dell Inc.\x001.4.3\x0001/07/2022\x00\x00");
+    assert_eq!(&bios[0x14..0x16], &[1, 13]);
+    assert_eq!(&bios[0x1a..], b"Dell Inc.\x001.13.0\x0010/06/2022\x00\x00");
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -336,8 +337,15 @@ fn no_profile_leaves_an_smbios_field_to_qemu() {
             let modules = if ram_mib > 32 * 1024 { 3 } else { 1 };
             for index in 0..modules {
                 let memory = &tables[&format!("smbios-memory-{index}.bin")];
-                assert_eq!((memory[0], memory[1], memory[0x12]), (17, 0x28, 0x1a));
-                assert_eq!(memory[0x0e], machine.fields.dimm_form);
+                let expected_type = match id.memory_type {
+                    0 => 0x1a,
+                    kind => kind,
+                };
+                assert_eq!(
+                    (memory[0], memory[1], memory[0x12]),
+                    (17, 0x28, expected_type)
+                );
+                assert_eq!(memory[0x0e], id.with_firmware_fields().memory_form);
                 let strings = table_strings(memory);
                 let slot =
                     machine.fields.dimm_slots[index.min(machine.fields.dimm_slots.len() - 1)];
@@ -434,8 +442,8 @@ fn memory_devices_follow_the_ram_size_in_the_machines_slots() {
     assert_eq!(tables.len(), 2);
     let size = |table: &Vec<u8>| u16::from_le_bytes([table[0x0c], table[0x0d]]);
     assert_eq!((size(&tables[0]), size(&tables[1])), (16 * 1024, 4 * 1024));
-    assert_eq!(table_strings(&tables[0])[..2], ["DIMM A", "BANK 0"]);
-    assert_eq!(table_strings(&tables[1])[..2], ["DIMM B", "BANK 0"]);
+    assert_eq!(table_strings(&tables[0])[..2], ["DIMM B", "BANK 0"]);
+    assert_eq!(table_strings(&tables[1])[..2], ["DIMM A", "BANK 0"]);
     // SO-DIMM, synchronous, 64 bits wide, handles after QEMU's array.
     assert_eq!(
         (tables[0][0x0e], tables[0][0x13], tables[0][0x08]),
@@ -443,7 +451,10 @@ fn memory_devices_follow_the_ram_size_in_the_machines_slots() {
     );
     assert_eq!((tables[1][2], tables[1][3]), (0x01, 0x11));
     // Three modules; a server's are ECC, 72 bits wide.
-    let server = smbios::memory_tables(&id, 16 * 1024 * 3, true);
+    let server_id = pinned(StealthPreset::RealisticServer, "dell-poweredge-r240")
+        .identity
+        .with_firmware_fields();
+    let server = smbios::memory_tables(&server_id, 16 * 1024 * 3, true);
     assert_eq!(server.len(), 3);
     assert_eq!(server[0][0x08], 72);
     // More modules than the machine has slots: named as such a board would.
@@ -516,7 +527,7 @@ fn profiles_saved_before_these_entries_launch_as_before() {
     );
     let machine = machine_options(&old);
     assert!(
-        machine.ends_with(",smbios-entry-point-type=64,x-oem-id=DELL  ,x-oem-table-id=CBX3    ")
+        machine.ends_with(",smbios-entry-point-type=64,x-oem-id=DELL  ,x-oem-table-id=Dell Inc")
     );
     assert!(!machine.contains("smm"));
     assert_eq!(netdev_option("user,id=net0", &old), "user,id=net0");
@@ -544,11 +555,12 @@ fn realistic_hardware_entries_become_launch_options() {
         "file=/d.qcow2,format=qcow2,if=none,id=osdisk,node-name=antinomie-disk"
     );
     let wwn = format!(",wwn=0x{},rotation_rate=1", profile.identity.disk_wwn);
-    assert!(sata[3].starts_with(
-        "ide-hd,drive=osdisk,bus=ide.0,model=Samsung SSD 870 EVO 500GB,serial=S6PXNF0T"
-    ));
     assert!(
-        sata[3].contains(",ver=SVT02B6Q") && sata[3].ends_with(&wwn),
+        sata[3]
+            .starts_with("ide-hd,drive=osdisk,bus=ide.0,model=Samsung SSD 860 EVO 250GB,serial=S")
+    );
+    assert!(
+        sata[3].contains(",ver=RVT02B6Q") && sata[3].ends_with(&wwn),
         "{}",
         sata[3]
     );
@@ -560,11 +572,11 @@ fn realistic_hardware_entries_become_launch_options() {
         "user,id=net0,restrict=on,net=192.168.1.0/24,host=192.168.1.1,dns=192.168.1.10,dhcpstart=192.168.1.100"
     );
     let args = launch_args(&profile);
-    assert!(args.iter().any(|arg| arg == "type=11,value=Dell System,value=1[0A52],value=3[1.0],value=12[www.dell.com],value=14[1],value=15[3]"));
+    assert!(args.iter().any(|arg| arg == "type=11,value=Dell System,value=1[0A52],value=3[1.0],value=12[www.dell.com],value=14[1],value=15[3],value=28[2]"));
     profile.disk_bus = DiskBus::Nvme;
     profile.disk_media = DiskMedia::Hdd;
     let nvme = disk_args(&profile, "/d.qcow2").join(" ");
-    assert!(nvme.contains("nvme,drive=osdisk,serial=S6PXNF0T"));
+    assert!(nvme.contains("nvme,drive=osdisk,serial=S"));
     assert!(nvme.ends_with(",use-intel-id=on"));
     profile.disk_bus = DiskBus::Sata;
     assert!(
@@ -920,7 +932,7 @@ fn the_nic_slot_follows_the_chipset_of_the_machine_the_profile_copies() {
         ("hp-elitedesk-805-g8", NicSlot::Ich),
         ("dell-latitude-5420", NicSlot::Pch),
         ("lenovo-t14-gen3-amd", NicSlot::Ich),
-        ("supermicro-x12sth", NicSlot::Eno1),
+        ("supermicro-x11scl", NicSlot::Eno1),
         ("supermicro-h12ssl", NicSlot::Eno1),
     ] {
         assert_eq!(machine(id).nic_slot, slot, "{id}");
@@ -973,6 +985,63 @@ fn the_nic_slot_follows_the_chipset_of_the_machine_the_profile_copies() {
         assert_eq!(NicSlot::from_interface(name), Some(slot));
     }
     assert_eq!(NicSlot::from_interface("eth0"), None);
+}
+
+#[test]
+fn every_catalog_value_is_listed_with_its_source() {
+    let sources = include_str!("catalog/SOURCES.md");
+    for machine in MACHINES {
+        let section = sources
+            .split("\n## ")
+            .find(|section| section.contains(&format!("(`{}`)", machine.id)))
+            .unwrap_or_else(|| panic!("{} has no section in SOURCES.md", machine.id));
+        let listed = |value: &str| section.contains(&format!("`{}`", value.replace('|', "\\|")));
+        for (version, date) in machine.bios {
+            assert!(
+                listed(&format!("{version} {date}")),
+                "{}: BIOS {version}",
+                machine.id
+            );
+        }
+        for unit in machine.variants {
+            assert!(
+                listed(&format!(
+                    "{} / {} / {} / chassis {}",
+                    unit.product, unit.sku, unit.board, unit.chassis
+                )),
+                "{}: unit {}",
+                machine.id,
+                unit.product
+            );
+        }
+        for text in machine.oem_strings {
+            assert!(listed(text), "{}: OEM string {text}", machine.id);
+        }
+        for disk in machine.disks {
+            assert!(
+                listed(&format!("{} {}", disk.model, disk.firmware)),
+                "{}: disk {}",
+                machine.id,
+                disk.model
+            );
+        }
+        for part in machine.memory {
+            assert!(
+                listed(&format!("{} {}", part.manufacturer, part.part.trim_end())),
+                "{}: memory {}",
+                machine.id,
+                part.part
+            );
+        }
+        assert!(listed(machine.nic_chip), "{}: NIC", machine.id);
+        assert!(!machine.disks.is_empty() && !machine.memory.is_empty());
+        assert_eq!(
+            machine.cdrom,
+            !machine.cdrom_model.is_empty(),
+            "{}",
+            machine.id
+        );
+    }
 }
 
 #[test]
@@ -1049,8 +1118,11 @@ fn the_catalog_is_a_set_of_distinct_real_looking_machines() {
                 .unwrap_or_else(|error| panic!("{}: {error}", machine.id));
             let identity = &profile.identity;
             assert_eq!(identity.profile, machine.id);
-            assert_eq!(identity.disk_wwn.len(), 16);
-            assert!(identity.disk_wwn.starts_with('5'));
+            // A disk whose dumps show no NAA 5 name has none.
+            assert!(
+                identity.disk_wwn.is_empty()
+                    || (identity.disk_wwn.len() == 16 && identity.disk_wwn.starts_with('5'))
+            );
             assert!(!identity.system_serial.is_empty() && !identity.memory_part.is_empty());
         }
     }
@@ -1186,7 +1258,7 @@ fn a_profile_keeps_its_picked_identity_and_units_vary_within_real_ranges() {
     };
     assert!(distinct(|identity| &identity.bios_version) >= 3);
     assert!(distinct(|identity| &identity.board_product) >= 2);
-    assert!(distinct(|identity| &identity.disk_model) >= 3);
+    assert_eq!(distinct(|identity| &identity.disk_model), model.disks.len());
     assert!(distinct(|identity| &identity.memory_part) >= 3);
     for identity in &identities {
         // A real BIOS release of the model, as a (version, date) pair.
@@ -1194,10 +1266,23 @@ fn a_profile_keeps_its_picked_identity_and_units_vary_within_real_ranges() {
             |(version, date)| *version == identity.bios_version && *date == identity.bios_date
         ));
         // The disk's serial, firmware and WWN belong to its model.
-        let disk = CLIENT_DISKS
+        let disk = model
+            .disks
             .iter()
             .find(|disk| disk.model == identity.disk_model)
             .unwrap();
+        assert_eq!(identity.disk_rotation, disk.rotation);
+        // The module is one of the model's, with its type and speed.
+        let part = model
+            .memory
+            .iter()
+            .find(|part| part.part == identity.memory_part)
+            .unwrap();
+        assert_eq!(identity.memory_manufacturer, part.manufacturer);
+        assert_eq!(
+            (identity.memory_type, identity.memory_speed),
+            (part.memory_type, part.speed)
+        );
         assert!(identity.disk_serial.starts_with(disk.serial_prefix));
         assert_eq!(identity.disk_firmware, disk.firmware);
         assert!(identity.disk_wwn[1..].starts_with(disk.oui));
@@ -1207,18 +1292,9 @@ fn a_profile_keeps_its_picked_identity_and_units_vary_within_real_ranges() {
             format!("1028:{}", identity.system_sku.to_ascii_lowercase())
         );
     }
-    // Servers have server disks and ECC modules.
+    // Servers have ECC modules, 72 bits wide.
     let server = MachineIdentity::from_machine(machine("dell-poweredge-r240"));
-    assert!(
-        SERVER_DISKS
-            .iter()
-            .any(|disk| disk.model == server.disk_model)
-    );
-    assert!(
-        SERVER_RAM
-            .iter()
-            .any(|part| part.part == server.memory_part)
-    );
+    assert_eq!(server.memory_width, 72);
     // New serials keep the disk model and give the disk its maker's format.
     let mut again = identities[0].clone();
     let (model_name, firmware) = (again.disk_model.clone(), again.disk_firmware.clone());
@@ -1228,6 +1304,15 @@ fn a_profile_keeps_its_picked_identity_and_units_vary_within_real_ranges() {
         (model_name, firmware)
     );
     assert_ne!(again.disk_serial, identities[0].disk_serial);
+    // A disk an older catalog listed keeps its serial's form and WWN maker.
+    let mut again = identities[0].clone();
+    again.disk_model = "CT500MX500SSD1".into();
+    again.disk_serial = "2135E5A1B2C3".into();
+    again.disk_wwn = "500a075123456789".into();
+    again.rerandomize();
+    assert_eq!(again.disk_serial.len(), 12);
+    assert!(again.disk_serial.starts_with("2135E5"));
+    assert!(again.disk_wwn.starts_with("500a075") && again.disk_wwn.len() == 16);
 }
 
 #[test]
@@ -1269,10 +1354,10 @@ fn a_run_records_the_machine_its_guest_looked_like() {
     assert_eq!(record.profile, "dell-optiplex-7090");
     assert_eq!(
         (record.bios_version.as_str(), record.bios_date.as_str()),
-        ("1.4.3", "01/07/2022")
+        ("1.13.0", "10/06/2022")
     );
     assert_eq!(record.system_sku, "0A52");
-    assert_eq!(record.nic_chip, "Intel I219-LM");
+    assert_eq!(record.nic_chip, "Intel Ethernet Connection (14) I219-LM");
     assert_eq!(record.host_cpu, CpuGen::Core13Plus.label());
     assert!(
         record
@@ -1283,7 +1368,7 @@ fn a_run_records_the_machine_its_guest_looked_like() {
     );
     assert_eq!(
         record.summary(),
-        "Dell OptiPlex 7090, BIOS 1.4.3 of 01/07/2022"
+        "Dell OptiPlex 7090, BIOS 1.13.0 of 10/06/2022"
     );
     // No serial, UUID or MAC address is kept.
     let json = serde_json::to_string(&record).unwrap();

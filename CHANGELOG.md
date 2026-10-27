@@ -6,6 +6,21 @@ it runs.
 
 ## 0.8.0 — unreleased
 
+- **Every machine profile value has a public source.** The catalog's strings
+  are now taken from public hardware reports of real units (hw-probe uploads in
+  the linuxhw DMI, Dmesg, HWInfo and SMART collections), cited one by one in
+  `stealth/catalog/SOURCES.md`. Disks and memory modules are per model, as seen
+  in its units (Dell writes the memory maker as a JEDEC code, firmware and WWN
+  from smartctl dumps; a spinning disk gets its own rotation rate); ACPI table
+  IDs come from the kernel's table list (OptiPlex 7090/5090/7000 and the
+  Latitudes say `Dell Inc`, not `CBX3`; ProBooks `SLIC-BPC`); CPU generations
+  are the ones seen in units (ThinkPad E15 Gen 3 AMD units carry Zen 2 Ryzen
+  5000U); the onboard LAN chip and subsystem ID come from hwinfo. Machines
+  whose old strings had no public unit behind them were replaced by sourced ones:
+  the ThinkCentre M75q Gen 2, EliteDesk 805 G8 (Desktop Mini) and ThinkPad T14
+  Gen 3 AMD units, the H12SSL-i as a Supermicro "Super Server", and the X12STH-F
+  by the X11SCL-F. Weights are the number of public reports of each model.
+
 - **No QEMU strings left in a stealth profile's SMBIOS.** Dell and HP
   profiles showed QEMU's machine type (`pc-q35-11.0`) as their product and
   board version, and every profile showed QEMU's `CPU 0` socket, 2000 MHz

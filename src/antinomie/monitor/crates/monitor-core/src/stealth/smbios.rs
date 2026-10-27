@@ -123,8 +123,8 @@ const MEMORY_DEVICE_HANDLE: u16 = 0x1100;
 /// SMBIOS type 17 (memory device) structures for `ram_mib` of memory, one
 /// per module of at most 16 GiB as QEMU counts them in its type 16 array,
 /// each in the next of the identity's slots: what a PC's firmware writes
-/// for an installed DDR4-3200 module, in place of QEMU's "RAM" of unknown
-/// width in "DIMM 0".
+/// for the identity's module (its type, speed, rank and width), in place of
+/// QEMU's "RAM" of unknown width in "DIMM 0".
 pub(super) fn memory_tables(id: &MachineIdentity, ram_mib: u64, ecc: bool) -> Vec<Vec<u8>> {
     const MODULE_MIB: u64 = 16 * 1024;
     let count = ram_mib.div_ceil(MODULE_MIB).max(1);
@@ -166,19 +166,46 @@ fn memory_table(id: &MachineIdentity, index: usize, size_mib: u64, ecc: bool) ->
         Ok(size) if size < 0x7fff => (size, 0u32),
         _ => (0x7fff, u32::try_from(size_mib).unwrap_or(u32::MAX)),
     };
-    let speed: u16 = 3200;
-    let voltage: u16 = 1200; // millivolts
+    // An identity saved before 0.8.0 recorded none of these: DDR4-3200,
+    // rank 1, 64 bits (72 with ECC).
+    let or = |value: u16, default: u16| if value == 0 { default } else { value };
+    let speed = or(id.memory_speed, 3200);
+    let total_width = or(id.memory_width, if ecc { 72 } else { 64 });
+    let data_width = if total_width == 72 { 64 } else { total_width };
+    // Millivolts: LPDDR5 runs at 0.5 V, DDR5 at 1.1 V, DDR4 at 1.2 V.
+    let voltage: u16 = match id.memory_type {
+        0x23 => 500,
+        0x22 => 1100,
+        _ => 1200,
+    };
+    let memory_type = if id.memory_type == 0 {
+        0x1a
+    } else {
+        id.memory_type
+    };
     let mut table = vec![17, 0x28];
     table.extend(handle.to_le_bytes());
     table.extend(0x1000u16.to_le_bytes()); // QEMU's type 16 array
     table.extend(0xfffeu16.to_le_bytes()); // no error information
-    table.extend(if ecc { 72u16 } else { 64u16 }.to_le_bytes()); // total width
-    table.extend(64u16.to_le_bytes()); // data width
+    table.extend(total_width.to_le_bytes());
+    table.extend(data_width.to_le_bytes());
     table.extend(size.to_le_bytes()); // MiB
-    table.extend([id.memory_form.max(1), 0, numbers[0], numbers[1], 0x1a]); // DDR4
+    table.extend([
+        id.memory_form.max(1),
+        0,
+        numbers[0],
+        numbers[1],
+        memory_type,
+    ]);
     table.extend(id.memory_detail.to_le_bytes());
     table.extend(speed.to_le_bytes());
-    table.extend([numbers[2], numbers[3], numbers[4], numbers[5], 1]); // rank 1
+    table.extend([
+        numbers[2],
+        numbers[3],
+        numbers[4],
+        numbers[5],
+        id.memory_rank.clamp(1, 15),
+    ]);
     table.extend(extended.to_le_bytes());
     table.extend(speed.to_le_bytes()); // configured speed
     for _ in 0..3 {

@@ -2567,31 +2567,43 @@ default, so earlier VMs launch exactly as before.
 | NIC subsystem | `-device e1000e,subsys_ven=,subsys=` | Intel's | The machine maker's (Dell 1028:0a61, HP 103c:…, Lenovo 17aa:3179, Supermicro 15d9:…) |
 | NAT network | `-netdev user,net=,host=,dns=,dhcpstart=` | 10.0.2.0/24 | 192.168.1.0/24, gateway .1, DNS .10, DHCP from .100 |
 
-**Machine catalog (0.8.0).** `stealth/catalog.rs` and `catalog/*.rs` hold about
-40 `MachineProfile`s: popular business desktops and laptops (Dell, HP, Lenovo),
+**Machine catalog (0.8.0).** `stealth/catalog.rs` and `catalog/*.rs` hold 39
+`MachineProfile`s: popular business desktops and laptops (Dell, HP, Lenovo),
 common consumer or small-business laptops with a wired port, and small servers.
 Each has the strings its real units report: BIOS vendor and a list of real
 (version, date) releases, system manufacturer, version and family, and a list of
-real units (product, SKU, board product, SMBIOS chassis type); the CPU
-generations it shipped with (`CpuGen`, `stealth/cpu.rs`); the onboard LAN chip
-and where its QEMU card goes (`NicSlot`); and a `weight` for how common the model
-is. The facts come from public dmidecode reports (linuxhw/DMI) and the makers'
-published specifications, as listed in the task record ANT-T0144; only factual
-identifiers are kept: no logos, firmware images, dumped ACPI tables or real
-serial numbers (serials, UUID, MAC and disk serials are random per VM, in each
-maker's format). `StealthProfile::realistic_on(kind, &HostCpu)` picks one machine
-of the kind and host vendor whose `cpus` contain the host's generation
-(`HostCpu::detect` reads family and model from /proc/cpuinfo; `classify` maps them),
-weighted by `weight`, or any of the vendor when none fits, and
-`StealthProfile::cpu_note` then says the host's CPU could not be in it.
-`MachineIdentity::from_machine` also picks one BIOS release, one unit, a disk
-model (`parts.rs`: model, firmware, WWN OUI and serial format of real SATA SSDs)
-and a memory part; the result is stored in the VM's configuration, so a boot never
-picks again. Each run saves a `MachineRecord` (`RunSummary::machine`: machine,
-BIOS, SKU, board, disk, memory, NIC chip, host CPU generation, any CPU note;
-no serials) for reading its results against the identity it was seen under.
-Not done: random RAM size and disk size (they are the VM's own settings), guest
-hostname, user and locale, and importing a profile from a machine the user owns.
+real units (product, SKU, board product, SMBIOS chassis type); OEM strings; the
+ACPI OEM and table IDs of its XSDT; the CPU generations seen in its units
+(`CpuGen`, `stealth/cpu.rs`, from the SMBIOS processor signature); the onboard
+LAN chip and its PCI subsystem ID, and where its QEMU card goes (`NicSlot`); the
+SATA disks (`parts.rs`: model, firmware, WWN OUI, rotation) and memory modules
+(maker and part as the firmware names them, type, speed, rank, form factor,
+width) seen in its units; its optical drive's model; and a `weight`.
+`catalog/SOURCES.md` cites a public report of a real unit for every value
+(linuxhw DMI, Dmesg, HWInfo and SMART, hw-probe uploads), with three classes:
+seen in a unit of the model; seen in a unit of a sibling model, with the reason
+(no such report of the model, or the model's reports hide it); and not possible
+or not verified. The weight is the number of public dmidecode reports of the
+model (a sample of Linux users' machines, not sales). Only factual identifiers
+are kept: no logos, firmware images, dumped ACPI tables or real serial numbers
+(serials, UUID, MAC, the disk WWN's tail and memory serials are random per VM;
+their formats are not from a source, as every public dump hides them).
+`StealthProfile::realistic_on(kind, &HostCpu)` picks one machine of the kind and
+host vendor whose `cpus` contain the host's generation (`HostCpu::detect` reads
+family and model from /proc/cpuinfo; `classify` maps them), weighted by `weight`,
+or any of the vendor when none fits, and `StealthProfile::cpu_note` then says the
+host's CPU could not be in it. `MachineIdentity::from_machine` also picks one BIOS
+release, one unit, one of the machine's disks (a spinning one sets the profile's
+disk media to HDD and its own rotation rate) and memory modules; the result is
+stored in the VM's configuration, so a boot never picks again. Each run saves a
+`MachineRecord` (`RunSummary::machine`: machine, BIOS, SKU, board, disk, memory,
+NIC chip, host CPU generation, any CPU note; no serials) for reading its results
+against the identity it was seen under. Limits: QEMU's card is an e1000e (Intel
+82574L) even where the machine's chip is Realtek or Broadcom; QEMU's NVMe
+controller names itself, so the disk is SATA even on laptops whose M.2 slots
+are NVMe-only (the ThinkPads: class C in the sources); the module's part number
+names a capacity the VM's RAM size may not match. Not done: guest hostname, user
+and locale, and importing a profile from a machine the user owns.
 
 **No SMBIOS field left to QEMU (0.8.0).** QEMU fills some SMBIOS fields with
 its own values when a launch leaves them out: type 1 and 2 manufacturer
@@ -3266,8 +3278,8 @@ slot from the machine the identity copies (`MachineProfile::nic_slot`): Intel
 100-series and later chipsets (OptiPlex 7090, EliteDesk 800 G6, Latitude 5420)
 have their I219 at 00:1f.6, `enp0s31f6` (`NicSlot::Pch`; q35's LPC
 bridge at 00:1f.0 is multifunction, so function 6 is free). The Supermicro
-servers have no chipset LAN (the X12STH-F has two Intel I210, the H12SSL-i
-controllers on the board): firmware names such ports by index, so the NIC goes
+servers have no chipset LAN (the X11SCL-F has two Intel I210, the H12SSL-i
+Broadcom BCM5720 on the board): firmware names such ports by index, so the NIC goes
 to 00:19.0 with QEMU's `acpi-index=1` and Debian's udev names it `eno1`
 (`NicSlot::Eno1`; checked on q35 with Debian 13: `e1000e 0000:00:19.0 eno1:
 renamed from eth0`, no extra device or ID). Profiles without

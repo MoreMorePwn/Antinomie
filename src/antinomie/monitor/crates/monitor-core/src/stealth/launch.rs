@@ -187,10 +187,14 @@ pub(crate) fn disk_args(profile: &StealthProfile, image: &str) -> Vec<String> {
             if profile.identity_enabled && !id.disk_wwn.is_empty() {
                 device.push_str(&format!(",wwn=0x{}", id.disk_wwn));
             }
-            device.push_str(match profile.disk_media {
-                DiskMedia::Ssd => ",rotation_rate=1",
-                DiskMedia::Hdd => ",rotation_rate=7200",
-            });
+            // The identity's disk's own rate when it matches the media (a
+            // 5,400 rpm laptop disk), else the media's.
+            let rotation = match (profile.disk_media, id.disk_rotation) {
+                (DiskMedia::Hdd, rpm) if profile.identity_enabled && rpm > 1 => rpm,
+                (DiskMedia::Hdd, _) => 7200,
+                (DiskMedia::Ssd, _) => 1,
+            };
+            device.push_str(&format!(",rotation_rate={rotation}"));
             vec!["-drive".into(), drive("none"), "-device".into(), device]
         }
         DiskBus::Nvme => {

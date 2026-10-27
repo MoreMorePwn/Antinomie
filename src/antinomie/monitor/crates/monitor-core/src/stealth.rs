@@ -16,7 +16,7 @@ use crate::storage::unique_id;
 pub use catalog::{MACHINES, MachineProfile, Variant};
 use catalog::{SerialStyle, SmbiosFields, Subsystem};
 pub use cpu::{CpuGen, HostCpu, classify};
-use parts::{CLIENT_DISKS, DESKTOP_RAM, DiskModel, LAPTOP_RAM, SERVER_DISKS, SERVER_RAM};
+use parts::{DiskModel, RamPart};
 pub use record::MachineRecord;
 use serde::{Deserialize, Serialize};
 
@@ -230,8 +230,16 @@ impl DiskBus {
 pub enum DiskMedia {
     #[default]
     Ssd,
-    /// A 7,200 rpm disk.
+    /// A spinning disk: 7,200 rpm, or the identity's disk's own speed.
     Hdd,
+}
+
+impl DiskMedia {
+    /// The media of a disk that rotates at `rotation` (1 for an SSD, 0 for
+    /// unknown).
+    pub fn of_rotation(rotation: u16) -> Self {
+        if rotation > 1 { Self::Hdd } else { Self::Ssd }
+    }
 }
 
 /// The pointing device beside the display (the VM window only).
@@ -364,10 +372,17 @@ pub struct MachineIdentity {
     pub memory_serial: String,
     /// The memory slots of the machine, the first one used first.
     pub memory_slots: Vec<MemorySlot>,
-    /// SMBIOS memory form factor (9 DIMM, 13 SO-DIMM) and type detail bits;
-    /// 0 when not recorded.
+    /// SMBIOS memory form factor (9 DIMM, 13 SO-DIMM, 1 soldered) and type
+    /// detail bits; 0 when not recorded.
     pub memory_form: u8,
     pub memory_detail: u16,
+    /// The module's SMBIOS memory type (0x1a DDR4, 0x22 DDR5, 0x23 LPDDR5),
+    /// speed in MT/s, rank and total width in bits (72 with ECC); 0 when not
+    /// recorded (an identity saved before 0.8.0: DDR4-3200, rank 1, 64 bits).
+    pub memory_type: u8,
+    pub memory_speed: u16,
+    pub memory_rank: u8,
+    pub memory_width: u16,
     /// ACPI table header OEM ID (6 bytes) and OEM table ID (8 bytes).
     pub acpi_oem_id: String,
     pub acpi_table_id: String,
@@ -378,6 +393,9 @@ pub struct MachineIdentity {
     pub disk_model: String,
     pub disk_firmware: String,
     pub disk_wwn: String,
+    /// The SATA disk's rotation rate: 1 for an SSD, else its spindle speed in
+    /// rpm; 0 follows the profile's disk media setting.
+    pub disk_rotation: u16,
     /// SMBIOS type 11 OEM strings.
     pub oem_strings: Vec<String>,
     /// PCI subsystem `vendor:device` of the network card (e1000e only), as a
@@ -576,44 +594,24 @@ fn host_cpuinfo(key: &str) -> Option<String> {
 
 impl MachineIdentity {
     /// The firmware strings of `machine`: one real unit of the model, one of
-    /// the BIOS releases it shipped with, a disk and memory module of the kind
-    /// such machines have, and new random serials. Kept with the VM: nothing
+    /// the BIOS releases it shipped with, one of the disks and memory modules
+    /// seen in its units, and new random serials. Kept with the VM: nothing
     /// is picked again at boot.
     pub fn from_machine(machine: &MachineProfile) -> Self {
-        let kind = machine.kind;
-        let disks = if kind == StealthPreset::RealisticServer {
-            SERVER_DISKS
-        } else {
-            CLIENT_DISKS
-        };
-        let ram = match kind {
-            StealthPreset::RealisticLaptop => LAPTOP_RAM,
-            StealthPreset::RealisticServer => SERVER_RAM,
-            _ => DESKTOP_RAM,
-        };
         let (bios, unit) = (pick(machine.bios), pick(machine.variants));
-        Self::build(machine, bios, unit, pick(disks), pick(ram))
+        let disk: &DiskModel = pick::<&DiskModel>(machine.disks);
+        Self::build(machine, bios, unit, disk, pick(machine.memory))
     }
 
     /// The same for the first BIOS release, unit, disk and memory module
     /// listed: a fixed identity for tests and examples.
     pub fn first_listed(machine: &MachineProfile) -> Self {
-        let disks = if machine.kind == StealthPreset::RealisticServer {
-            SERVER_DISKS
-        } else {
-            CLIENT_DISKS
-        };
-        let ram = match machine.kind {
-            StealthPreset::RealisticLaptop => LAPTOP_RAM,
-            StealthPreset::RealisticServer => SERVER_RAM,
-            _ => DESKTOP_RAM,
-        };
         Self::build(
             machine,
             &machine.bios[0],
             &machine.variants[0],
-            &disks[0],
-            &ram[0],
+            machine.disks[0],
+            &machine.memory[0],
         )
     }
 
@@ -622,7 +620,7 @@ impl MachineIdentity {
         bios: &(&'static str, &'static str),
         unit: &Variant,
         disk: &DiskModel,
-        ram: &parts::RamPart,
+        ram: &RamPart,
     ) -> Self {
         let system_serial = serial(machine.serial);
         let fields = &machine.fields;
@@ -654,8 +652,12 @@ impl MachineIdentity {
             cpu_socket: fields.cpu_socket.into(),
             cpu_part: fields.cpu_part.into(),
             memory_slots: memory_slots(fields),
-            memory_form: fields.dimm_form,
+            memory_form: ram.form,
             memory_detail: fields.dimm_detail,
+            memory_type: ram.memory_type,
+            memory_speed: ram.speed,
+            memory_rank: ram.rank,
+            memory_width: ram.width,
             system_serial,
             system_uuid: uuid(),
             memory_manufacturer: ram.manufacturer.into(),
@@ -663,11 +665,12 @@ impl MachineIdentity {
             memory_serial: random_text(b"0123456789ABCDEF", 8),
             acpi_oem_id: machine.acpi.0.into(),
             acpi_table_id: machine.acpi.1.into(),
-            cdrom_model: "HL-DT-ST DVD+-RW GU90N".into(),
+            cdrom_model: machine.cdrom_model.into(),
             disk_serial: disk_serial(disk),
             disk_model: disk.model.into(),
             disk_firmware: disk.firmware.into(),
             disk_wwn: disk_wwn(disk),
+            disk_rotation: disk.rotation,
             oem_strings: machine
                 .oem_strings
                 .iter()
@@ -734,7 +737,7 @@ impl MachineIdentity {
             identity.memory_slots = memory_slots(fields);
         }
         if identity.memory_form == 0 {
-            identity.memory_form = fields.dimm_form;
+            identity.memory_form = machine.memory[0].form;
         }
         if identity.memory_detail == 0 {
             identity.memory_detail = fields.dimm_detail;
@@ -763,18 +766,27 @@ impl MachineIdentity {
         self.board_serial = format!("/{}/{}/", self.system_serial, random_text(UPPER_DIGITS, 14));
         self.system_uuid = uuid();
         self.memory_serial = random_text(b"0123456789ABCDEF", 8);
-        match CLIENT_DISKS
+        let known = MACHINES
             .iter()
-            .chain(SERVER_DISKS)
-            .find(|disk| disk.model == self.disk_model)
-        {
+            .flat_map(|machine| machine.disks)
+            .filter(|disk| disk.model == self.disk_model)
+            .min_by_key(|disk| disk.firmware != self.disk_firmware);
+        match known {
             Some(disk) => {
                 self.disk_serial = disk_serial(disk);
                 self.disk_wwn = disk_wwn(disk);
             }
             None => {
-                self.disk_serial = format!("S6PXNF0T{}", random_text(UPPER_DIGITS, 6));
-                self.disk_wwn = format!("5002538e{}", random_text(b"0123456789abcdef", 8));
+                // A disk the catalog no longer lists: the same length and
+                // start, a new tail; the WWN keeps its maker's OUI.
+                let count = self.disk_serial.chars().count();
+                let head: String = self.disk_serial.chars().take(count / 2).collect();
+                self.disk_serial =
+                    format!("{head}{}", random_text(UPPER_DIGITS, count - count / 2));
+                if self.disk_wwn.len() == 16 && self.disk_wwn.is_ascii() {
+                    let oui = self.disk_wwn[..7].to_owned();
+                    self.disk_wwn = format!("{oui}{}", random_text(b"0123456789abcdef", 9));
+                }
             }
         }
     }
@@ -818,8 +830,11 @@ fn disk_serial(disk: &DiskModel) -> String {
 }
 
 /// A world wide name in `disk`'s maker's NAA 5 range: 5, the maker's OUI and
-/// nine random hex digits, 16 hex digits.
+/// nine random hex digits, 16 hex digits; none for a disk without one.
 fn disk_wwn(disk: &DiskModel) -> String {
+    if disk.oui.is_empty() {
+        return String::new();
+    }
     format!("5{}{}", disk.oui, random_text(b"0123456789abcdef", 9))
 }
 
@@ -874,10 +889,10 @@ impl StealthProfile {
     pub fn realistic_on(kind: StealthPreset, host: &HostCpu) -> Self {
         let (machine, _fits) = catalog::pick_machine(kind, host, roll());
         let nic = NicModel::E1000e;
+        let identity = MachineIdentity::from_machine(machine);
         Self {
             preset: kind,
             identity_enabled: true,
-            identity: MachineIdentity::from_machine(machine),
             cpu_passthrough: true,
             hide_hypervisor: true,
             hide_kvm: true,
@@ -892,7 +907,7 @@ impl StealthProfile {
             rtc_localtime: false,
             firmware: Firmware::Uefi,
             disk_bus: DiskBus::Sata,
-            disk_media: DiskMedia::Ssd,
+            disk_media: DiskMedia::of_rotation(identity.disk_rotation),
             smt: true,
             pointer: Pointer::VirtioTablet,
             smbios_entry: SmbiosEntry::Bits64,
@@ -907,6 +922,7 @@ impl StealthProfile {
             // only come with the machines that have one, and cost that.
             cdrom: false,
             nat: NatNetwork::home(),
+            identity,
         }
     }
 
@@ -931,6 +947,7 @@ impl StealthProfile {
     pub fn use_machine(&mut self, machine: &MachineProfile) {
         self.identity = MachineIdentity::from_machine(machine);
         self.identity_enabled = true;
+        self.disk_media = DiskMedia::of_rotation(self.identity.disk_rotation);
     }
 
     /// Where a base that names its NIC by slot gets the network card: the

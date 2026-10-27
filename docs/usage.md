@@ -155,9 +155,11 @@ The pick is weighted by how common the model is, and limited to machines the
 host CPU's generation was sold in; when the host CPU is newer or older than every
 machine of that kind, the stealth window says so under the machine. **Machine**
 lists them by kind; the line below it reads "Looks like a Dell OptiPlex 7090: BIOS
-1.4.3 of 01/07/2022". The BIOS release, the unit (product, SKU, board), the disk
+1.13.0 of 10/06/2022". The BIOS release, the unit (product, SKU, board), the disk
 model and the memory part come from what real units of that model report, so two
-VMs of the same model differ, as two such machines do. A run's details show the
+VMs of the same model differ, as two such machines do. The catalog's
+`SOURCES.md` names a public hardware report for every value, and the weight is how
+many public reports of the model exist. A run's details show the
 machine its guest looked like. RAM size and disk size stay the VM's own settings.
 The model catalog is in `src/antinomie/monitor/crates/monitor-core/src/stealth/catalog/`;
 the names belong to their owners (see the README).
@@ -167,7 +169,8 @@ built-in LAN, so the interface has that machine's name: `enp0s31f6` for the
 Intel desktops and laptop (their I219 at PCI 00:1f.6), `eno1` for the
 Supermicro servers (a board LAN that firmware numbers; the card keeps PCI 00:19.0
 and gets ACPI index 1), `enp0s25` otherwise. A VM already on the old X12STH-F
-slot keeps `enp0s31f6` until its machine is changed. Changing the profile to a machine with another slot moves the card
+slot keeps `enp0s31f6` until its machine is changed (0.8.0 replaces that profile
+with the X11SCL-F, which has public reports). Changing the profile to a machine with another slot moves the card
 and rewrites the VM's network configuration when you save; a VM with snapshots
 keeps its slot (delete the snapshots, or pick a machine with the same chipset).
 

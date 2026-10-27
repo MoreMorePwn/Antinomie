@@ -7,13 +7,17 @@
 //! Only factual identifiers, as any hardware inventory tool prints them: no
 //! logos, firmware images, dumped ACPI tables (SLIC, MSDM) or real serial
 //! numbers. The names belong to their owners; nothing here is endorsed by
-//! them. The values come from public dmidecode reports and the makers'
-//! published specifications, listed in the project's task records.
+//! them. Every value comes from public hardware reports of real units
+//! (linuxhw DMI, Dmesg, HWInfo and SMART), cited in `catalog/SOURCES.md`.
+use super::parts::{DiskModel, RamPart};
 use super::{CpuGen, HostCpu, NicSlot, StealthPreset};
 
+mod dell_desktops;
 mod dell_laptops;
-mod desktops;
-mod hp_lenovo_laptops;
+mod hp_desktops;
+mod hp_laptops;
+mod lenovo_desktops;
+mod lenovo_laptops;
 mod servers;
 
 /// One real unit of a model: the product name and SKU the firmware reports,
@@ -72,8 +76,6 @@ pub(super) struct SmbiosFields {
     /// Memory device (type 17) locator and bank locator of each slot of one
     /// real unit, the slot a single module sits in first.
     pub(super) dimm_slots: &'static [(&'static str, &'static str)],
-    /// SMBIOS memory form factor: 9 DIMM, 13 SO-DIMM.
-    pub(super) dimm_form: u8,
     /// SMBIOS memory type detail bits: 0x0080 synchronous, 0x4080 also
     /// unbuffered, 0x2080 registered.
     pub(super) dimm_detail: u16,
@@ -104,6 +106,14 @@ pub struct MachineProfile {
     /// SMBIOS type 11 strings; `{sku}` stands for the unit's SKU.
     pub(super) oem_strings: &'static [&'static str],
     pub(super) fields: SmbiosFields,
+    /// SATA disks seen in real units of the model (or, where they have none,
+    /// of a sibling; see `catalog/SOURCES.md`), the first the likeliest.
+    pub(super) disks: &'static [&'static DiskModel],
+    /// Memory modules seen in real units of the model, as their firmware
+    /// names them (Dell writes the JEDEC maker code, HP and Lenovo a name).
+    pub(super) memory: &'static [RamPart],
+    /// The optical drive's ATA model, for a machine that has one.
+    pub(super) cdrom_model: &'static str,
     /// The onboard network card's chip, as the maker's documentation says.
     pub nic_chip: &'static str,
     pub(super) nic_subsystem: Subsystem,
@@ -129,41 +139,41 @@ impl MachineProfile {
 }
 
 pub const MACHINES: &[MachineProfile] = &[
-    desktops::DELL_OPTIPLEX_7090,
-    desktops::HP_ELITEDESK_800_G6,
-    desktops::LENOVO_M75Q_GEN2,
-    desktops::HP_ELITEDESK_805_G8,
+    dell_desktops::DELL_OPTIPLEX_7090,
+    hp_desktops::HP_ELITEDESK_800_G6,
+    lenovo_desktops::LENOVO_M75Q_GEN2,
+    hp_desktops::HP_ELITEDESK_805_G8,
     dell_laptops::DELL_LATITUDE_5420,
-    hp_lenovo_laptops::LENOVO_T14_GEN3_AMD,
-    servers::SUPERMICRO_X12STH,
+    lenovo_laptops::LENOVO_T14_GEN3_AMD,
+    servers::SUPERMICRO_X11SCL,
     servers::SUPERMICRO_H12SSL,
-    desktops::DELL_OPTIPLEX_7080,
-    desktops::DELL_OPTIPLEX_5090,
-    desktops::DELL_OPTIPLEX_3080,
-    desktops::DELL_OPTIPLEX_7000,
-    desktops::HP_ELITEDESK_800_G8,
-    desktops::HP_PRODESK_400_G7,
-    desktops::HP_PRODESK_600_G6,
-    desktops::LENOVO_THINKCENTRE_M70S_GEN3,
-    desktops::LENOVO_THINKCENTRE_NEO_50S_GEN3,
-    desktops::LENOVO_THINKCENTRE_M920S,
-    desktops::HP_PRODESK_405_G6,
-    desktops::LENOVO_THINKCENTRE_M75S_GEN2,
+    dell_desktops::DELL_OPTIPLEX_7080,
+    dell_desktops::DELL_OPTIPLEX_5090,
+    dell_desktops::DELL_OPTIPLEX_3080,
+    dell_desktops::DELL_OPTIPLEX_7000,
+    hp_desktops::HP_ELITEDESK_800_G8,
+    hp_desktops::HP_PRODESK_400_G7,
+    hp_desktops::HP_PRODESK_600_G6,
+    lenovo_desktops::LENOVO_THINKCENTRE_M70S_GEN3,
+    lenovo_desktops::LENOVO_THINKCENTRE_NEO_50S_GEN3,
+    lenovo_desktops::LENOVO_THINKCENTRE_M920S,
+    hp_desktops::HP_PRODESK_405_G6,
+    lenovo_desktops::LENOVO_THINKCENTRE_M75S_GEN2,
     dell_laptops::DELL_LATITUDE_5430,
     dell_laptops::DELL_LATITUDE_5520,
     dell_laptops::DELL_LATITUDE_5530,
     dell_laptops::DELL_LATITUDE_3520,
     dell_laptops::DELL_VOSTRO_15_3510,
-    hp_lenovo_laptops::HP_250_G8,
-    hp_lenovo_laptops::HP_PROBOOK_450_G8,
-    hp_lenovo_laptops::HP_PROBOOK_440_G8,
-    hp_lenovo_laptops::LENOVO_THINKPAD_T14_GEN3,
-    hp_lenovo_laptops::LENOVO_THINKPAD_E14_GEN4,
-    hp_lenovo_laptops::LENOVO_THINKPAD_L14_GEN2,
-    hp_lenovo_laptops::HP_PROBOOK_455_G8,
-    hp_lenovo_laptops::LENOVO_THINKPAD_E15_GEN3_AMD,
-    hp_lenovo_laptops::LENOVO_THINKPAD_L14_GEN2_AMD,
-    hp_lenovo_laptops::LENOVO_THINKPAD_T14_GEN2_AMD,
+    hp_laptops::HP_250_G8,
+    hp_laptops::HP_PROBOOK_450_G8,
+    hp_laptops::HP_PROBOOK_440_G8,
+    lenovo_laptops::LENOVO_THINKPAD_T14_GEN3,
+    lenovo_laptops::LENOVO_THINKPAD_E14_GEN4,
+    lenovo_laptops::LENOVO_THINKPAD_L14_GEN2,
+    hp_laptops::HP_PROBOOK_455_G8,
+    lenovo_laptops::LENOVO_THINKPAD_E15_GEN3_AMD,
+    lenovo_laptops::LENOVO_THINKPAD_L14_GEN2_AMD,
+    lenovo_laptops::LENOVO_THINKPAD_T14_GEN2_AMD,
     servers::DELL_POWEREDGE_R240,
     servers::DELL_POWEREDGE_T140,
     servers::DELL_POWEREDGE_R350,
