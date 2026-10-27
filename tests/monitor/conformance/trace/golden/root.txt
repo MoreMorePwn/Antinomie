@@ -2,10 +2,10 @@ acct.file | acct(name="root-acct") = 0 | arg0.path:complete:"root-acct"
 acct.missing | acct(name="root-missing") = ENOENT | arg0.path:complete:"root-missing"
 acct.off | acct(name=NULL) = 0 | arg0.path:null pointer:uncaptured
 bpf.map_create_root | bpf(cmd=BPF_MAP_CREATE, attr=<bytes>, size=72) = 3 | arg1.attr:complete:<bytes>
-bpf.map_delete_array | bpf(cmd=BPF_MAP_DELETE_ELEM, attr=<bytes>, size=32) = EINVAL | arg1.attr:complete:<bytes> arg1.attr.key:complete:<bytes>
-bpf.map_get_next_key | bpf(cmd=BPF_MAP_GET_NEXT_KEY, attr=<bytes>, size=32) = 0 | arg1.attr:complete:<bytes> arg1.attr.key:complete:<bytes> arg1.attr.next_key:complete
-bpf.map_lookup | bpf(cmd=BPF_MAP_LOOKUP_ELEM, attr="ANTIMAP1", size=32) = 0 | arg1.attr:complete:<bytes> arg1.attr.key:complete:<bytes> arg1.attr.value:complete
-bpf.map_update | bpf(cmd=BPF_MAP_UPDATE_ELEM, attr=<bytes>, size=32) = 0 | arg1.attr:complete:<bytes> arg1.attr.key:complete:<bytes> arg1.attr.value:complete:"ANTIMAP1"
+bpf.map_delete_array | bpf(cmd=BPF_MAP_DELETE_ELEM, attr=<bytes>, size=32) = EINVAL | arg1.attr:complete:<bytes> arg1.attr.key:complete:"\x01\0\0\0"
+bpf.map_get_next_key | bpf(cmd=BPF_MAP_GET_NEXT_KEY, attr="\x02\0\0\0", size=32) = 0 | arg1.attr:complete:<bytes> arg1.attr.key:complete:"\x01\0\0\0" arg1.attr.next_key:complete
+bpf.map_lookup | bpf(cmd=BPF_MAP_LOOKUP_ELEM, attr="ANTIMAP1", size=32) = 0 | arg1.attr:complete:<bytes> arg1.attr.key:complete:"\x01\0\0\0" arg1.attr.value:complete
+bpf.map_update | bpf(cmd=BPF_MAP_UPDATE_ELEM, attr=<bytes>, size=32) = 0 | arg1.attr:complete:<bytes> arg1.attr.key:complete:"\x01\0\0\0" arg1.attr.value:complete:"ANTIMAP1"
 bpf.prog_load_rejected | bpf(cmd=BPF_PROG_LOAD, attr="0: R1=ctx() R10=fp0\n0: (95) exit\nR0 !read_ok\npro"..., size=40) = EACCES | arg1.attr:complete:<bytes> arg1.attr.insns:complete:<bytes> arg1.attr.license:complete:"GPL" arg1.attr.log_buf:complete
 bpf.prog_load_root | bpf(cmd=BPF_PROG_LOAD, attr="processed 2 insns (limit 1000000) max_states_per"..., size=40) = 4 | arg1.attr:complete:<bytes> arg1.attr.insns:complete:<bytes> arg1.attr.license:complete:"GPL" arg1.attr.log_buf:complete
 capset.bad_version | capset(header=<bytes>, data=<addr>) = EINVAL | arg0.version:complete:<bytes> arg0.required_version:complete
@@ -24,7 +24,7 @@ finit_module.not_a_module | finit_module(fd=3, uargs="", flags=0x0) = ENOEXEC | 
 fsconfig.create | fsconfig(fs_fd=3, cmd=FSCONFIG_CMD_CREATE, key=NULL, value=NULL, aux=0) = 0 |
 fsconfig.create_again | fsconfig(fs_fd=3, cmd=FSCONFIG_CMD_CREATE, key=NULL, value=NULL, aux=0) = EBUSY |
 fsconfig.reconfigure | fsconfig(fs_fd=5, cmd=FSCONFIG_CMD_RECONFIGURE, key=NULL, value=NULL, aux=0) = 0 |
-fsconfig.set_binary_rejected | fsconfig(fs_fd=3, cmd=FSCONFIG_SET_BINARY, key="size", value=<bytes>, aux=3) = EINVAL | arg2.key:complete:"size" arg3.value:complete:<bytes>
+fsconfig.set_binary_rejected | fsconfig(fs_fd=3, cmd=FSCONFIG_SET_BINARY, key="size", value="\x01\x02\x03", aux=3) = EINVAL | arg2.key:complete:"size" arg3.value:complete:"\x01\x02\x03"
 fsconfig.set_flag_unknown | fsconfig(fs_fd=3, cmd=FSCONFIG_SET_FLAG, key="ant_unknown", value=NULL, aux=0) = EINVAL | arg2.key:complete:"ant_unknown"
 fsconfig.set_string_size | fsconfig(fs_fd=3, cmd=FSCONFIG_SET_STRING, key="size", value="1m", aux=0) = 0 | arg2.key:complete:"size" arg3.value:complete:"1m"
 fsmount.bad_flags | fsmount(fs_fd=3, flags=0x80, ms_flags=0) = EINVAL |
@@ -47,7 +47,7 @@ memfd_secret.bad_flags | memfd_secret(flags=0x40) = EINVAL |
 memfd_secret.plain | memfd_secret(flags=0x0) = 3 |
 migrate_pages.huge_maxnode | migrate_pages(pid=0, maxnode=40000, from=<addr>, to=<addr>) = EINVAL | arg2.node_mask:invalid extent:uncaptured arg3.node_mask:invalid extent:uncaptured !4
 migrate_pages.missing_pid | migrate_pages(pid=<pid>, maxnode=65, from=<bytes>, to=<bytes>) = ESRCH | arg2.node_mask:complete:<bytes> arg3.node_mask:complete:<bytes>
-migrate_pages.offline_node | migrate_pages(pid=0, maxnode=65, from=<bytes>, to=" ") = EINVAL | arg2.node_mask:complete:<bytes> arg3.node_mask:complete:" "
+migrate_pages.offline_node | migrate_pages(pid=0, maxnode=65, from=<bytes>, to=<bytes>) = EINVAL | arg2.node_mask:complete:<bytes> arg3.node_mask:complete:<bytes>
 migrate_pages.self | migrate_pages(pid=0, maxnode=65, from=<bytes>, to=<bytes>) = 0 | arg2.node_mask:complete:<bytes> arg3.node_mask:complete:<bytes>
 mknod.char_device | mknod(filename="root-null", mode=0600, dev=259) = 0 | arg0.path:complete:"root-null"
 mknod.directory_type | mknod(filename="root-dir-node", mode=0700, dev=0) = EPERM | arg0.path:complete:"root-dir-node"
@@ -94,14 +94,14 @@ reboot.cad_off | reboot(magic1=LINUX_REBOOT_MAGIC1, magic2=LINUX_REBOOT_MAGIC2, 
 reboot.cad_restore | reboot(magic1=LINUX_REBOOT_MAGIC1, magic2=LINUX_REBOOT_MAGIC2, cmd=LINUX_REBOOT_CMD_CAD_OFF, arg=NULL) = 0 |
 reboot.unknown_cmd | reboot(magic1=LINUX_REBOOT_MAGIC1, magic2=LINUX_REBOOT_MAGIC2, cmd=Unknown command 0x7fff, arg=NULL) = EINVAL | reboot.unknown_selector:no decoder:uncaptured !3
 sched_setscheduler.back_to_other | sched_setscheduler(pid=0, policy=SCHED_OTHER, param=<bytes>) = 0 | arg2.data:complete:<bytes>
-sched_setscheduler.bad_priority | sched_setscheduler(pid=0, policy=SCHED_FIFO, param="d") = EINVAL | arg2.data:complete:"d"
+sched_setscheduler.bad_priority | sched_setscheduler(pid=0, policy=SCHED_FIFO, param=<bytes>) = EINVAL | arg2.data:complete:<bytes>
 sched_setscheduler.fifo | sched_setscheduler(pid=0, policy=SCHED_FIFO, param=<bytes>) = 0 | arg2.data:complete:<bytes>
 setdomainname.negative_len | setdomainname(name=<addr>, len=-1) = EINVAL | arg0.name:invalid extent:uncaptured !3
 setdomainname.private_uts | setdomainname(name="ant-domain", len=10) = 0 | arg0.name:complete:"ant-domain"
 setgid.regain_root | setgid(gid=0) = EPERM |
 setgid.user | setgid(gid=1000) = 0 |
 setgroups.empty | setgroups(gidsetsize=0, grouplist=NULL) = 0 | arg1.data:null pointer:uncaptured
-setgroups.one_group | setgroups(gidsetsize=1, grouplist=<bytes>) = 0 | arg1.data:complete:<bytes>
+setgroups.one_group | setgroups(gidsetsize=1, grouplist="\xe8\x03\0\0") = 0 | arg1.data:complete:"\xe8\x03\0\0"
 setgroups.too_many | setgroups(gidsetsize=65537, grouplist=<addr>) = EINVAL | arg1.data:invalid extent:uncaptured !3
 sethostname.private_uts | sethostname(name="ant-host", len=8) = 0 | arg0.name:complete:"ant-host"
 sethostname.too_long | sethostname(name=<addr>, len=65) = EINVAL | arg0.name:invalid extent:uncaptured !3

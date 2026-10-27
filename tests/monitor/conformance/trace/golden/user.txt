@@ -5,9 +5,9 @@ accept.nonblocking_empty | accept(fd=14, upeer_sockaddr=NULL, upeer_addrlen=NULL
 accept.not_listening | accept(fd=7, upeer_sockaddr=NULL, upeer_addrlen=NULL) = EINVAL |
 accept.notsock | accept(fd=3, upeer_sockaddr=NULL, upeer_addrlen=NULL) = ENOTSOCK |
 accept.null_address | accept(fd=5, upeer_sockaddr=NULL, upeer_addrlen=NULL) = 10 |
-accept.unix_address | accept(fd=5, upeer_sockaddr=unix:, upeer_addrlen=<bytes>) = 8 | address.capacity:complete:"n" address.length:complete address.data:complete
+accept.unix_address | accept(fd=5, upeer_sockaddr=unix:, upeer_addrlen=<bytes>) = 8 | address.capacity:complete:<bytes> address.length:complete address.data:complete
 accept4.bad_flags | accept4(fd=5, upeer_sockaddr=NULL, upeer_addrlen=NULL, flags=0x1) = EINVAL |
-accept4.flags_address | accept4(fd=5, upeer_sockaddr=unix:, upeer_addrlen=<bytes>, flags=SOCK_NONBLOCK|SOCK_CLOEXEC) = 12 | arg2.socklen.capacity:complete:"n" arg2.socklen.output:complete arg1.sockaddr:complete
+accept4.flags_address | accept4(fd=5, upeer_sockaddr=unix:, upeer_addrlen=<bytes>, flags=SOCK_NONBLOCK|SOCK_CLOEXEC) = 12 | arg2.socklen.capacity:complete:<bytes> arg2.socklen.output:complete arg1.sockaddr:complete
 accept4.inet_address | accept4(fd=5, upeer_sockaddr=<data>, upeer_addrlen=<data>, flags=SOCK_CLOEXEC) = <value> | arg2.socklen.capacity:complete arg2.socklen.output:complete arg1.sockaddr:complete
 accept4.length_fault | accept4(fd=5, upeer_sockaddr=<addr>, upeer_addrlen=0x1, flags=0x0) = EFAULT | arg2.socklen.capacity:copy fault:uncaptured !3
 access.bad_mode | access(filename="meta-file", mode=0200) = EINVAL | arg0.path:complete:"meta-file"
@@ -70,7 +70,7 @@ bpf.map_create_unprivileged | bpf(cmd=BPF_MAP_CREATE, attr=<bytes>, size=72) = E
 bpf.obj_get_missing | bpf(cmd=BPF_OBJ_GET, attr=<bytes>, size=16) = ENOENT | arg1.attr:complete:<bytes> arg1.attr.pathname:complete:"<work>/sys-bpf-missing"
 bpf.prog_load_unprivileged | bpf(cmd=BPF_PROG_LOAD, attr=<bytes>, size=40) = EPERM | arg1.attr:complete:<bytes> arg1.attr.insns:complete:<bytes> arg1.attr.license:complete:"GPL"
 bpf.size_too_big | bpf(cmd=BPF_MAP_CREATE, attr=<addr>, size=8192) = E2BIG | arg1.attr:invalid extent:uncaptured !3
-bpf.unknown | bpf(cmd=Unknown command 0x7fff, attr="ITNA", size=16) = EINVAL | arg1.attr:complete:"ITNA" bpf.unknown_selector:no decoder:uncaptured !3
+bpf.unknown | bpf(cmd=Unknown command 0x7fff, attr=<bytes>, size=16) = EINVAL | arg1.attr:complete:<bytes> bpf.unknown_selector:no decoder:uncaptured !3
 brk.below_start | brk(brk=0x1) = <value> |
 brk.grow | brk(brk=<addr>) = <value> |
 brk.query | brk(brk=NULL) = <value> |
@@ -88,7 +88,7 @@ capget.v3_null_data | capget(header=<bytes>, dataptr=NULL) = 0 | arg0.version:co
 capget.v3_self | capget(header=<bytes>, dataptr=<bytes>) = 0 | arg0.version:complete:<bytes> arg0.pid:complete:<bytes> arg1.capabilities:complete
 capget.version_query | capget(header=<bytes>, dataptr=NULL) = 0 | arg0.version:complete:<bytes> arg0.required_version:complete
 capset.other_pid | capset(header=<bytes>, data=<bytes>) = EPERM | arg0.version:complete:<bytes> arg0.pid:complete:<bytes> arg1.capabilities:complete:<bytes>
-capset.raise | capset(header=<bytes>, data="\0\0 \0\0\0 ") = EPERM | arg0.version:complete:<bytes> arg0.pid:complete:<bytes> arg1.capabilities:complete:"\0\0 \0\0\0 "
+capset.raise | capset(header=<bytes>, data=<bytes>) = EPERM | arg0.version:complete:<bytes> arg0.pid:complete:<bytes> arg1.capabilities:complete:<bytes>
 capset.unchanged | capset(header=<bytes>, data=<bytes>) = 0 | arg0.version:complete:<bytes> arg0.pid:complete:<bytes> arg1.capabilities:complete:<bytes>
 chdir.absolute | chdir(filename=<data>) = <value> | arg0.path:complete
 chdir.missing | chdir(filename="paths-none") = ENOENT | arg0.path:complete:"paths-none"
@@ -117,7 +117,7 @@ clock_getres.monotonic_raw | clock_getres(which_clock=CLOCK_MONOTONIC_RAW, tp=<b
 clock_getres.null_result | clock_getres(which_clock=CLOCK_MONOTONIC, tp=NULL) = 0 | arg1.data:null pointer
 clock_getres.process_cputime | clock_getres(which_clock=CLOCK_PROCESS_CPUTIME_ID, tp=<bytes>) = 0 | arg1.data:complete
 clock_getres.realtime | clock_getres(which_clock=CLOCK_REALTIME, tp=<bytes>) = 0 | arg1.data:complete
-clock_getres.realtime_coarse | clock_getres(which_clock=CLOCK_REALTIME_COARSE, tp="\0\0\0\0\0\0\0\0\0\t=") = 0 | arg1.data:complete
+clock_getres.realtime_coarse | clock_getres(which_clock=CLOCK_REALTIME_COARSE, tp=<bytes>) = 0 | arg1.data:complete
 clock_getres.tai | clock_getres(which_clock=CLOCK_TAI, tp=<bytes>) = 0 | arg1.data:complete
 clock_getres.thread_cputime | clock_getres(which_clock=CLOCK_THREAD_CPUTIME_ID, tp=<bytes>) = 0 | arg1.data:complete
 clock_gettime.bad_clock | clock_gettime(which_clock=Unknown clock 0x63, tp=<addr>) = EINVAL |
@@ -153,7 +153,7 @@ clone.sigchld | clone(clone_flags=exit_signal=17, newsp=NULL, parent_tidptr=NULL
 clone.sighand_without_vm | clone(clone_flags=CLONE_SIGHAND|exit_signal=17, newsp=NULL, parent_tidptr=NULL, child_tidptr=NULL, tls=NULL) = EINVAL |
 clone.vfork_flag | clone(clone_flags=CLONE_VFORK|exit_signal=17, newsp=NULL, parent_tidptr=NULL, child_tidptr=NULL, tls=NULL) = <value> |
 clone3.bad_exit_signal | clone3(uargs=<bytes>, size=64) = EINVAL | arg0.clone_args:complete:<bytes>
-clone3.nonzero_tail | clone3(uargs=<bytes>, size=96) = E2BIG | arg0.clone_args:complete:<bytes> arg0.clone_args.extension:complete:<bytes>
+clone3.nonzero_tail | clone3(uargs=<bytes>, size=96) = E2BIG | arg0.clone_args:complete:<bytes> arg0.clone_args.extension:complete:"\x01\0\0\0\0\0\0\0"
 clone3.set_tid_size_too_big | clone3(uargs=<bytes>, size=80) = EINVAL | arg0.clone_args:complete:<bytes> arg0.clone_args.set_tid:invalid extent:uncaptured !3
 clone3.set_tid_unprivileged | clone3(uargs=<bytes>, size=80) = EPERM | arg0.clone_args:complete:<bytes> arg0.clone_args.set_tid:complete:<bytes>
 clone3.size_too_large | clone3(uargs=<addr>, size=8192) = E2BIG | arg0.clone_args:invalid extent:uncaptured !3
@@ -209,7 +209,7 @@ connect.unix_dgram | connect(fd=6, uservaddr=unix:<work>/net-dgram, addrlen=40) 
 connect.unix_path | connect(fd=7, uservaddr=unix:net-stream, addrlen=13) = 0 | arg1.address:complete:unix:net-stream
 connect.wrong_type | connect(fd=8, uservaddr=unix:<work>/net-dgram, addrlen=40) = EPROTOTYPE | arg1.address:complete:unix:<work>/net-dgram
 copy_file_range.bad_flags | copy_file_range(fd_in=3, off_in=NULL, fd_out=4, off_out=NULL, len=8, flags=0x1) = EINVAL | arg1.data:null pointer:uncaptured arg3.data:null pointer:uncaptured
-copy_file_range.offsets | copy_file_range(fd_in=3, off_in=<bytes>, fd_out=4, off_out="l", len=8, flags=0x0) = 8 | arg1.data:complete:<bytes> arg3.data:complete:"d" arg1.data:complete arg3.data:complete
+copy_file_range.offsets | copy_file_range(fd_in=3, off_in=<bytes>, fd_out=4, off_out=<bytes>, len=8, flags=0x0) = 8 | arg1.data:complete:<bytes> arg3.data:complete:<bytes> arg1.data:complete arg3.data:complete
 creat.missing_dir | creat(pathname="no-such-dir/io-creat", mode=0600) = ENOENT | arg0.path:complete:"no-such-dir/io-creat"
 creat.new | creat(pathname="io-creat", mode=0600) = 4 | arg0.path:complete:"io-creat"
 create_module.not_implemented | create_module(first=0, second=0, third=0, fourth=0, fifth=0, sixth=0) = ENOSYS | schema.argument_metadata:no decoder:uncaptured !3
@@ -343,7 +343,7 @@ fgetxattr.badf | fgetxattr(fd=999, name="user.fset", value=<addr>, size=128) = E
 fgetxattr.fd | fgetxattr(fd=3, name="user.fset", value="VALUE-TWO-LONGER", size=128) = 16 | arg1.xattr_name:complete:"user.fset" arg2.xattr_data:complete
 finit_module.unprivileged | finit_module(fd=3, uargs="", flags=0x0) = EPERM | arg1.path:complete:""
 flistxattr.badf | flistxattr(fd=999, list=<addr>, size=512) = EBADF |
-flistxattr.fd | flistxattr(fd=3, list="user.ant\0user.empty\0user.fset\0user.lset", size=512) = 40 | arg1.xattr_data:complete
+flistxattr.fd | flistxattr(fd=3, list="user.ant\0user.empty\0user.fset\0user.lset\0", size=512) = 40 | arg1.xattr_data:complete
 flock.bad_operation | flock(fd=3, cmd=0x40) = EINVAL |
 flock.conflict_nonblock | flock(fd=4, cmd=LOCK_SH|LOCK_NB) = EAGAIN |
 flock.exclusive | flock(fd=3, cmd=LOCK_EX) = 0 |
@@ -355,7 +355,7 @@ fremovexattr.last | fremovexattr(fd=3, name="user.ant") = 0 | arg1.xattr_name:co
 fsconfig.create_badf | fsconfig(fs_fd=999, cmd=FSCONFIG_CMD_CREATE, key=NULL, value=NULL, aux=0) = EBADF |
 fsconfig.flag_with_value | fsconfig(fs_fd=999, cmd=FSCONFIG_SET_FLAG, key="ro", value=<addr>, aux=0) = EINVAL | arg2.key:complete:"ro"
 fsconfig.negative_fd | fsconfig(fs_fd=-1, cmd=FSCONFIG_CMD_CREATE, key=NULL, value=NULL, aux=0) = EINVAL |
-fsconfig.set_binary_badf | fsconfig(fs_fd=999, cmd=FSCONFIG_SET_BINARY, key="size", value=<bytes>, aux=3) = EBADF | arg2.key:complete:"size" arg3.value:complete:<bytes>
+fsconfig.set_binary_badf | fsconfig(fs_fd=999, cmd=FSCONFIG_SET_BINARY, key="size", value="\x01\x02\x03", aux=3) = EBADF | arg2.key:complete:"size" arg3.value:complete:"\x01\x02\x03"
 fsconfig.set_string_badf | fsconfig(fs_fd=999, cmd=FSCONFIG_SET_STRING, key="source", value="ant", aux=0) = EBADF | arg2.key:complete:"source" arg3.value:complete:"ant"
 fsconfig.unknown_cmd | fsconfig(fs_fd=999, cmd=Unknown command 0x63, key=NULL, value=NULL, aux=0) = EOPNOTSUPP | fsconfig.unknown_selector:no decoder:uncaptured !3
 fsetxattr.badf | fsetxattr(fd=999, name="user.fset", value="VALUE-TWO-LONGER", size=16, flags=0x0) = EBADF | arg1.xattr_name:complete:"user.fset" arg2.xattr_data:complete:"VALUE-TWO-LONGER"
@@ -469,11 +469,11 @@ getitimer.fault | getitimer(which=2, value=0x1) = EFAULT |
 getitimer.prof | getitimer(which=2, value=<bytes>) = 0 | arg1.data:complete
 getitimer.real | getitimer(which=0, value=<data>) = <value> | arg1.data:complete
 getitimer.virtual | getitimer(which=1, value=<bytes>) = 0 | arg1.data:complete
-getpeername.badf | getpeername(fd=999, usockaddr=<addr>, usockaddr_len="n") = EBADF | arg2.socklen.capacity:complete:"n"
+getpeername.badf | getpeername(fd=999, usockaddr=<addr>, usockaddr_len=<bytes>) = EBADF | arg2.socklen.capacity:complete:<bytes>
 getpeername.inet_tcp | getpeername(fd=7, usockaddr=<data>, usockaddr_len=<data>) = <value> | arg2.socklen.capacity:complete arg2.socklen.output:complete arg1.sockaddr:complete
-getpeername.not_connected | getpeername(fd=5, usockaddr=<addr>, usockaddr_len="n") = ENOTCONN | arg2.socklen.capacity:complete:"n"
-getpeername.unix_path | getpeername(fd=7, usockaddr=unix:net-stream, usockaddr_len="\r") = 0 | arg2.socklen.capacity:complete:"n" arg2.socklen.output:complete arg1.sockaddr:complete
-getpeername.unix_unnamed | getpeername(fd=8, usockaddr=unix:, usockaddr_len=<bytes>) = 0 | arg2.socklen.capacity:complete:"n" arg2.socklen.output:complete arg1.sockaddr:complete
+getpeername.not_connected | getpeername(fd=5, usockaddr=<addr>, usockaddr_len=<bytes>) = ENOTCONN | arg2.socklen.capacity:complete:<bytes>
+getpeername.unix_path | getpeername(fd=7, usockaddr=unix:net-stream, usockaddr_len=<bytes>) = 0 | arg2.socklen.capacity:complete:<bytes> arg2.socklen.output:complete arg1.sockaddr:complete
+getpeername.unix_unnamed | getpeername(fd=8, usockaddr=unix:, usockaddr_len=<bytes>) = 0 | arg2.socklen.capacity:complete:<bytes> arg2.socklen.output:complete arg1.sockaddr:complete
 getpgid.no_such_process | getpgid(pid=<pid>) = ESRCH |
 getpgid.own_child | getpgid(pid=<pid>) = <value> |
 getpgid.own_group | getpgid(pid=0) = <value> |
@@ -520,10 +520,10 @@ getsockname.inet_tcp | getsockname(fd=5, usockaddr=<data>, usockaddr_len=<data>)
 getsockname.inet_udp | getsockname(fd=9, usockaddr=<data>, usockaddr_len=<data>) = <value> | arg2.socklen.capacity:complete arg2.socklen.output:complete arg1.sockaddr:complete
 getsockname.length_fault | getsockname(fd=5, usockaddr=<addr>, usockaddr_len=0x1) = EFAULT | arg2.socklen.capacity:copy fault:uncaptured !3
 getsockname.negative_capacity | getsockname(fd=5, usockaddr=<addr>, usockaddr_len=<addr>) = EINVAL | arg2.socklen.capacity:invalid extent:uncaptured !3
-getsockname.notsock | getsockname(fd=3, usockaddr=<addr>, usockaddr_len="n") = ENOTSOCK | arg2.socklen.capacity:complete:"n"
+getsockname.notsock | getsockname(fd=3, usockaddr=<addr>, usockaddr_len=<bytes>) = ENOTSOCK | arg2.socklen.capacity:complete:<bytes>
 getsockname.null_address | getsockname(fd=5, usockaddr=NULL, usockaddr_len=<addr>) = EFAULT |
-getsockname.short_capacity | getsockname(fd=5, usockaddr=unix:ne, usockaddr_len="\r") = 0 | arg2.socklen.capacity:complete:<bytes> arg2.socklen.output:complete arg1.sockaddr:complete
-getsockname.unix_accepted | getsockname(fd=8, usockaddr=unix:net-stream, usockaddr_len="\r") = 0 | arg2.socklen.capacity:complete:"n" arg2.socklen.output:complete arg1.sockaddr:complete
+getsockname.short_capacity | getsockname(fd=5, usockaddr=unix:ne, usockaddr_len=<bytes>) = 0 | arg2.socklen.capacity:complete:<bytes> arg2.socklen.output:complete arg1.sockaddr:complete
+getsockname.unix_accepted | getsockname(fd=8, usockaddr=unix:net-stream, usockaddr_len=<bytes>) = 0 | arg2.socklen.capacity:complete:<bytes> arg2.socklen.output:complete arg1.sockaddr:complete
 getsockname.unix_autobind | getsockname(fd=7, usockaddr=<data>, usockaddr_len=<data>) = <value> | arg2.socklen.capacity:complete arg2.socklen.output:complete arg1.sockaddr:complete
 getsockopt.ipv6_v6only | getsockopt(fd=5, level=IPPROTO_IPV6, optname=IPV6_V6ONLY, optval=<bytes>, optlen=<bytes>) = 0 | arg4.optlen:complete:<bytes> arg4.optlen:complete arg3.optval:complete
 getsockopt.negative_optlen | getsockopt(fd=8, level=SOL_SOCKET, optname=SO_TYPE, optval=<addr>, optlen=<bytes>) = EINVAL | arg4.optlen:complete:<bytes>
@@ -692,12 +692,12 @@ kcmp.file_different | kcmp(pid1=<pid>, pid2=<pid>, type=KCMP_FILE, idx1=4, idx2=
 kcmp.file_same | kcmp(pid1=<pid>, pid2=<pid>, type=KCMP_FILE, idx1=12, idx2=4) = <value> |
 kcmp.missing_pid | kcmp(pid1=<pid>, pid2=<value>, type=KCMP_FILE, idx1=4, idx2=4) = ESRCH |
 kcmp.vm_self | kcmp(pid1=<pid>, pid2=<pid>, type=KCMP_VM, idx1=0, idx2=0) = <value> |
-kexec_file_load.unprivileged | kexec_file_load(kernel_fd=-1, initrd_fd=-1, cmdline_len=4, cmdline_ptr="ant", flags=0x0) = ENOSYS | arg3.data:complete:"ant"
+kexec_file_load.unprivileged | kexec_file_load(kernel_fd=-1, initrd_fd=-1, cmdline_len=4, cmdline_ptr="ant\0", flags=0x0) = ENOSYS | arg3.data:complete:"ant\0"
 kexec_load.too_many_segments | kexec_load(entry=0, nr_segments=17, segments=<addr>, flags=KEXEC_ARCH_DEFAULT) = EPERM | arg2.segments:invalid extent:uncaptured !3
 kexec_load.unload_unprivileged | kexec_load(entry=0, nr_segments=0, segments=NULL, flags=KEXEC_ARCH_DEFAULT) = EPERM | arg2.segments:complete:uncaptured
 kexec_load.unprivileged | kexec_load(entry=16777216, nr_segments=1, segments=<bytes>, flags=KEXEC_ARCH_DEFAULT) = EPERM | arg2.segments:complete:<bytes> arg2.segments[0].buf:complete:"ANTINOMIE-KEXEC"
 keyctl.assume_authority_negative | keyctl(cmd=KEYCTL_ASSUME_AUTHORITY, arg2=<handle>, arg3=0, arg4=0, arg5=0) = EINVAL |
-keyctl.capabilities | keyctl(cmd=KEYCTL_CAPABILITIES, arg2=<bytes>, arg3=16, arg4=0, arg5=0) = 2 | arg1.buffer:complete
+keyctl.capabilities | keyctl(cmd=KEYCTL_CAPABILITIES, arg2="\xed\x03", arg3=16, arg4=0, arg5=0) = 2 | arg1.buffer:complete
 keyctl.chown_noop | keyctl(cmd=KEYCTL_CHOWN, arg2=<value>, arg3=<handle>, arg4=<handle>, arg5=0) = <value> |
 keyctl.chown_to_root | keyctl(cmd=KEYCTL_CHOWN, arg2=<value>, arg3=0, arg4=<handle>, arg5=0) = EACCES |
 keyctl.clear | keyctl(cmd=KEYCTL_CLEAR, arg2=<value>, arg3=0, arg4=0, arg5=0) = <value> |
@@ -790,7 +790,7 @@ listen.unix | listen(fd=5, backlog=4) = 0 |
 listen.unix_abstract | listen(fd=14, backlog=1) = 0 |
 listmount.bad_flags | listmount(req=<bytes>, mnt_ids=<addr>, nr_mnt_ids=16, flags=0x80) = EINVAL | arg0.mount_request:complete:<bytes>
 listmount.root | listmount(req=<data>, mnt_ids=<data>, nr_mnt_ids=16, flags=0x0) = <value> | arg0.mount_request:complete arg1.mount_ids:complete
-listxattr.full | listxattr(path="xs-file", list="user.ant\0user.empty\0user.fset\0user.lset", size=512) = 40 | arg0.path:complete:"xs-file" arg1.xattr_data:complete
+listxattr.full | listxattr(path="xs-file", list="user.ant\0user.empty\0user.fset\0user.lset\0", size=512) = 40 | arg0.path:complete:"xs-file" arg1.xattr_data:complete
 listxattr.missing | listxattr(path="xs-missing", list=<addr>, size=512) = ENOENT | arg0.path:complete:"xs-missing"
 listxattr.size_query_null | listxattr(path="xs-file", list=NULL, size=0) = 40 | arg0.path:complete:"xs-file" arg1.xattr_data:null pointer
 listxattr.too_small | listxattr(path="xs-file", list=<addr>, size=2) = ERANGE | arg0.path:complete:"xs-file"
@@ -811,10 +811,10 @@ lsm_get_self_attr.bad_flags | lsm_get_self_attr(attr=100, ctx=<addr>, size=<byte
 lsm_get_self_attr.current | lsm_get_self_attr(attr=100, ctx=<data>, size=<data>, flags=0x0) = <value> | lsm.capacity:complete lsm.returned_size:complete lsm.output:complete
 lsm_get_self_attr.single_selinux | lsm_get_self_attr(attr=100, ctx=<data>, size=<data>, flags=LSM_FLAG_SINGLE) = EOPNOTSUPP | lsm.capacity:complete arg1.lsm_selector:complete
 lsm_get_self_attr.undefined_attr | lsm_get_self_attr(attr=0, ctx=<addr>, size=<bytes>, flags=0x0) = EINVAL | lsm.capacity:complete:<bytes>
-lsm_list_modules.all | lsm_list_modules(ids="d\0\0\0\0\0\0\0n\0\0\0\0\0\0\0l\0\0\0\0\0\0\0i\0\0\0\0\0\0\0h\0\0\0\0\0\0\0g"..., size="P", flags=0x0) = 10 | lsm.capacity:complete:<bytes> lsm.returned_size:complete lsm.output:complete
+lsm_list_modules.all | lsm_list_modules(ids=<bytes>, size=<bytes>, flags=0x0) = 10 | lsm.capacity:complete:<bytes> lsm.returned_size:complete lsm.output:complete
 lsm_list_modules.bad_flags | lsm_list_modules(ids=<addr>, size=<bytes>, flags=0x1) = EINVAL | lsm.capacity:complete:<bytes>
 lsm_list_modules.bad_size_pointer | lsm_list_modules(ids=<addr>, size=0x1, flags=0x0) = EFAULT | lsm.capacity:copy fault:uncaptured !3
-lsm_list_modules.too_small | lsm_list_modules(ids=<addr>, size="P", flags=0x0) = E2BIG | lsm.capacity:complete:<bytes> lsm.returned_size:complete
+lsm_list_modules.too_small | lsm_list_modules(ids=<addr>, size=<bytes>, flags=0x0) = E2BIG | lsm.capacity:complete:<bytes> lsm.returned_size:complete
 lsm_set_self_attr.bad_flags | lsm_set_self_attr(attr=100, ctx=<bytes>, size=32, flags=0x1) = EINVAL | arg1.context:complete:<bytes>
 lsm_set_self_attr.too_small | lsm_set_self_attr(attr=100, ctx=<addr>, size=8, flags=0x0) = EINVAL | arg1.context:invalid extent:uncaptured !3
 lsm_set_self_attr.unknown_module | lsm_set_self_attr(attr=100, ctx=<bytes>, size=32, flags=0x0) = EOPNOTSUPP | arg1.context:complete:<bytes>
@@ -875,12 +875,12 @@ memfd_create.long_name | memfd_create(uname_ptr=<addr>, flags=0x0) = EINVAL | ar
 memfd_create.sealing | memfd_create(uname_ptr="ant-memfd", flags=MFD_CLOEXEC|MFD_ALLOW_SEALING) = 5 | arg0.path:complete:"ant-memfd"
 memfd_secret.bad_flags | memfd_secret(flags=0x1) = EINVAL |
 memfd_secret.cloexec | memfd_secret(flags=O_CLOEXEC) = 3 |
-migrate_pages.foreign_node | migrate_pages(pid=0, maxnode=65, from=<bytes>, to=" ") = EPERM | arg2.node_mask:complete:<bytes> arg3.node_mask:complete:" "
+migrate_pages.foreign_node | migrate_pages(pid=0, maxnode=65, from=<bytes>, to=<bytes>) = EPERM | arg2.node_mask:complete:<bytes> arg3.node_mask:complete:<bytes>
 migrate_pages.no_such_pid | migrate_pages(pid=<pid>, maxnode=65, from=<bytes>, to=<bytes>) = ESRCH | arg2.node_mask:complete:<bytes> arg3.node_mask:complete:<bytes>
 migrate_pages.self | migrate_pages(pid=0, maxnode=65, from=<bytes>, to=<bytes>) = 0 | arg2.node_mask:complete:<bytes> arg3.node_mask:complete:<bytes>
 mincore.bad_vector | mincore(start=<addr>, len=4096, vec=0x1) = EFAULT |
 mincore.partly_resident | mincore(start=<addr>, len=12288, vec=<data>) = <value> | arg2.residency:complete
-mincore.recorder_left_it | mincore(start=<addr>, len=4096, vec="") = 0 | arg2.residency:complete
+mincore.recorder_left_it | mincore(start=<addr>, len=4096, vec="\0") = 0 | arg2.residency:complete
 mincore.unaligned | mincore(start=<addr>, len=4096, vec=<addr>) = EINVAL |
 mincore.unmapped | mincore(start=<addr>, len=4096, vec=<addr>) = ENOMEM |
 mkdir.exists | mkdir(pathname="paths-dir", mode=0700) = EEXIST | arg0.path:complete:"paths-dir"
@@ -931,12 +931,12 @@ mmap.shared_write_rdonly_fd | mmap(addr=NULL, len=4096, prot=PROT_READ|PROT_WRIT
 mmap.stack_growsdown | mmap(addr=NULL, len=8192, prot=PROT_READ|PROT_WRITE, flags=MAP_PRIVATE|MAP_ANONYMOUS|MAP_GROWSDOWN|MAP_STACK, fd=-1, offset=0) = <value> |
 mmap.unaligned_offset | mmap(addr=NULL, len=4096, prot=PROT_READ, flags=MAP_PRIVATE, fd=3, offset=100) = EINVAL |
 mmap.zero_length | mmap(addr=NULL, len=0, prot=PROT_READ, flags=MAP_PRIVATE|MAP_ANONYMOUS, fd=-1, offset=0) = EINVAL |
-modify_ldt.read_default | modify_ldt(func=2, ptr=<bytes>, bytecount=16) = 16 | arg1.ldt:complete
+modify_ldt.read_default | modify_ldt(func=2, ptr="\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0", bytecount=16) = 16 | arg1.ldt:complete
 modify_ldt.read_empty | modify_ldt(func=0, ptr=<addr>, bytecount=64) = 0 | arg1.ldt:complete
-modify_ldt.read_entries | modify_ldt(func=0, ptr=<bytes>, bytecount=16) = 16 | arg1.ldt:complete
+modify_ldt.read_entries | modify_ldt(func=0, ptr="\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0", bytecount=16) = 16 | arg1.ldt:complete
 modify_ldt.unknown_func | modify_ldt(func=5, ptr=<addr>, bytecount=16) = 4294967258 | modify_ldt.unknown_selector:no decoder:uncaptured !3
 modify_ldt.write_bad_size | modify_ldt(func=17, ptr=<addr>, bytecount=8) = 4294967274 | arg1.ldt_entry:invalid extent:uncaptured !3
-modify_ldt.write_empty_entry | modify_ldt(func=17, ptr="\0\0\0\0\0\0\0\0\0\0\0\0(", bytecount=16) = 0 | arg1.ldt_entry:complete:"\0\0\0\0\0\0\0\0\0\0\0\0("
+modify_ldt.write_empty_entry | modify_ldt(func=17, ptr=<bytes>, bytecount=16) = 0 | arg1.ldt_entry:complete:<bytes>
 modify_ldt.write_legacy_clear | modify_ldt(func=1, ptr=<bytes>, bytecount=16) = 0 | arg1.ldt_entry:complete:<bytes>
 mount.bind_unprivileged | mount(dev_name=".", dir_name="sys-mnt", type=NULL, flags=MS_BIND, data=NULL) = EPERM | arg0.dev_name:complete:"." arg1.dir_name:complete:"sys-mnt"
 mount.null_dir | mount(dev_name="none", dir_name=NULL, type="tmpfs", flags=0x0, data=NULL) = EFAULT | arg0.dev_name:complete:"none" arg1.dir_name:null pointer:uncaptured arg2.type:complete:"tmpfs"
@@ -964,7 +964,7 @@ mq_getsetattr.badf | mq_getsetattr(mqdes=999, mqstat=NULL, omqstat=<addr>) = EBA
 mq_getsetattr.get | mq_getsetattr(mqdes=3, mqstat=NULL, omqstat=<bytes>) = 0 | arg1.data:null pointer:uncaptured arg2.data:complete
 mq_getsetattr.set_nonblock | mq_getsetattr(mqdes=3, mqstat=<bytes>, omqstat=<bytes>) = 0 | arg1.data:complete:<bytes> arg2.data:complete
 mq_getsetattr.set_only | mq_getsetattr(mqdes=3, mqstat=<bytes>, omqstat=NULL) = 0 | arg1.data:complete:<bytes> arg2.data:null pointer
-mq_notify.bad_notify | mq_notify(mqdes=3, notification="\0\0\0\0\0\0\0\0\0\0\0\0c"...) = EINVAL | arg1.notification:complete:"\0\0\0\0\0\0\0\0\0\0\0\0c"...
+mq_notify.bad_notify | mq_notify(mqdes=3, notification=<bytes>) = EINVAL | arg1.notification:complete:<bytes>
 mq_notify.bad_signal | mq_notify(mqdes=3, notification=<bytes>) = EINVAL | arg1.notification:complete:<bytes>
 mq_notify.busy | mq_notify(mqdes=4, notification=<bytes>) = EBUSY | arg1.notification:complete:<bytes>
 mq_notify.not_a_queue | mq_notify(mqdes=5, notification=<bytes>) = EBADF | arg1.notification:complete:<bytes>
@@ -983,7 +983,7 @@ mq_timedreceive.drain_a | mq_timedreceive(mqdes=4, msg_ptr="first", msg_len=64, 
 mq_timedreceive.drain_b | mq_timedreceive(mqdes=4, msg_ptr="first-", msg_len=64, msg_prio=<bytes>, abs_timeout=NULL) = 6 | arg1.message:complete arg3.priority:complete
 mq_timedreceive.empty_nonblock | mq_timedreceive(mqdes=4, msg_ptr=<addr>, msg_len=64, msg_prio=<addr>, abs_timeout=NULL) = EAGAIN |
 mq_timedreceive.expired | mq_timedreceive(mqdes=3, msg_ptr=<addr>, msg_len=64, msg_prio=<addr>, abs_timeout=<bytes>) = ETIMEDOUT | arg4.timeout:complete:<bytes>
-mq_timedreceive.highest_priority | mq_timedreceive(mqdes=3, msg_ptr="second-message", msg_len=64, msg_prio="\t", abs_timeout=NULL) = 14 | arg1.message:complete arg3.priority:complete
+mq_timedreceive.highest_priority | mq_timedreceive(mqdes=3, msg_ptr="second-message", msg_len=64, msg_prio=<bytes>, abs_timeout=NULL) = 14 | arg1.message:complete arg3.priority:complete
 mq_timedreceive.small_buffer | mq_timedreceive(mqdes=3, msg_ptr=<addr>, msg_len=10, msg_prio=<addr>, abs_timeout=NULL) = EMSGSIZE |
 mq_timedreceive.with_timeout | mq_timedreceive(mqdes=3, msg_ptr=<data>, msg_len=64, msg_prio=NULL, abs_timeout=<data>) = <value> | arg4.timeout:complete arg1.message:complete
 mq_timedsend.bad_priority | mq_timedsend(mqdes=3, msg_ptr="firs", msg_len=4, msg_prio=40000, abs_timeout=NULL) = EINVAL | arg1.message:complete:"firs"
@@ -1046,7 +1046,7 @@ msgsnd.type2 | msgsnd(msqid=0, msgp=<bytes>, msgsz=10, msgflg=IPC_NOWAIT) = 0 | 
 msgsnd.type3 | msgsnd(msqid=0, msgp=<bytes>, msgsz=40, msgflg=0x0) = 0 | arg1.message:complete:<bytes>
 msgsnd.type5 | msgsnd(msqid=0, msgp=<bytes>, msgsz=8, msgflg=0x0) = 0 | arg1.message:complete:<bytes>
 msgsnd.type6 | msgsnd(msqid=0, msgp=<bytes>, msgsz=8, msgflg=0x0) = 0 | arg1.message:complete:<bytes>
-msgsnd.zero_type | msgsnd(msqid=0, msgp="\0\0\0\0\0\0\0\0ANTI", msgsz=4, msgflg=0x0) = EINVAL | arg1.message:complete:"\0\0\0\0\0\0\0\0ANTI"
+msgsnd.zero_type | msgsnd(msqid=0, msgp=<bytes>, msgsz=4, msgflg=0x0) = EINVAL | arg1.message:complete:<bytes>
 msync.async | msync(start=<addr>, len=4096, flags=MS_ASYNC) = <value> |
 msync.invalidate | msync(start=<addr>, len=4096, flags=MS_INVALIDATE) = <value> |
 msync.sync | msync(start=<addr>, len=8192, flags=MS_SYNC) = <value> |
@@ -1231,9 +1231,9 @@ process_vm_readv.self | process_vm_readv(pid=<pid>, lvec=<data>, liovcnt=2, rvec
 process_vm_writev.child | process_vm_writev(pid=<pid>, lvec=<data>, liovcnt=1, rvec=<data>, riovcnt=1, flags=0x0) = <value> | arg1.iov:complete arg1.iov[0].data:complete arg3.remote_iov:complete arg3.remote_iov[0].data:address only
 process_vm_writev.self | process_vm_writev(pid=<pid>, lvec=<data>, liovcnt=2, rvec=<data>, riovcnt=1, flags=0x0) = <value> | arg1.iov:complete arg1.iov[0].data:complete arg1.iov[1].data:complete arg3.remote_iov:complete arg3.remote_iov[0].data:address only
 process_vm_writev.too_many_local | process_vm_writev(pid=<pid>, lvec=<addr>, liovcnt=1025, rvec=<data>, riovcnt=1, flags=0x0) = EINVAL | arg1.iov:invalid extent arg3.remote_iov:complete arg3.remote_iov[0].data:address only !3
-pselect6.bad_sigsetsize | pselect6(n=7, inp="@", outp=NULL, exp=NULL, tsp=<bytes>, sig=<bytes>) = EINVAL | arg1.fdset:complete:"@" arg4.timeout:complete:<bytes> arg5.sigset_pack:complete:<bytes> signal.mask:invalid extent:uncaptured arg4.timeout.observed:complete !3
+pselect6.bad_sigsetsize | pselect6(n=7, inp=<bytes>, outp=NULL, exp=NULL, tsp=<bytes>, sig=<bytes>) = EINVAL | arg1.fdset:complete:<bytes> arg4.timeout:complete:<bytes> arg5.sigset_pack:complete:<bytes> signal.mask:invalid extent:uncaptured arg4.timeout.observed:complete !3
 pselect6.mask | pselect6(n=5, inp=<bytes>, outp=NULL, exp=NULL, tsp=<bytes>, sig=<bytes>) = 1 | arg1.fdset:complete:<bytes> arg4.timeout:complete:<bytes> arg5.sigset_pack:complete:<bytes> signal.mask:complete:<bytes> arg1.fdset:complete arg4.timeout.observed:complete
-pselect6.not_ready | pselect6(n=7, inp=<bytes>, outp=NULL, exp=NULL, tsp=<bytes>, sig=<bytes>) = 0 | arg1.fdset:complete:"@" arg4.timeout:complete:<bytes> arg5.sigset_pack:complete:<bytes> signal.mask:complete:<bytes> arg1.fdset:complete arg4.timeout.observed:complete
+pselect6.not_ready | pselect6(n=7, inp=<bytes>, outp=NULL, exp=NULL, tsp=<bytes>, sig=<bytes>) = 0 | arg1.fdset:complete:<bytes> arg4.timeout:complete:<bytes> arg5.sigset_pack:complete:<bytes> signal.mask:complete:<bytes> arg1.fdset:complete arg4.timeout.observed:complete
 pselect6.null_mask | pselect6(n=5, inp=<bytes>, outp=NULL, exp=NULL, tsp=<bytes>, sig=<bytes>) = 1 | arg1.fdset:complete:<bytes> arg4.timeout:complete:<bytes> arg5.sigset_pack:complete:<bytes> arg1.fdset:complete arg4.timeout.observed:complete
 pselect6.null_pack | pselect6(n=5, inp=<bytes>, outp=NULL, exp=NULL, tsp=NULL, sig=NULL) = 1 | arg1.fdset:complete:<bytes> arg1.fdset:complete
 ptrace.arch_prctl_get_fs | ptrace(request=PTRACE_ARCH_PRCTL, pid=<pid>, addr=<data>, data=4099) = <value> | arg2.value:complete
@@ -1250,7 +1250,7 @@ ptrace.getsiginfo | ptrace(request=PTRACE_GETSIGINFO, pid=<pid>, addr=NULL, data
 ptrace.getsigmask | ptrace(request=PTRACE_GETSIGMASK, pid=<pid>, addr=0x8, data=<bytes>) = 0 | arg3.sigmask:complete
 ptrace.getsigmask_bad_size | ptrace(request=PTRACE_GETSIGMASK, pid=<pid>, addr=0x4, data=<handle>) = EINVAL |
 ptrace.interrupt | ptrace(request=PTRACE_INTERRUPT, pid=<pid>, addr=NULL, data=0) = 0 |
-ptrace.peekdata | ptrace(request=PTRACE_PEEKDATA, pid=<pid>, addr=<addr>, data="IMONITNA") = 0 | arg2.tracee_address:address only:uncaptured arg3.word:complete
+ptrace.peekdata | ptrace(request=PTRACE_PEEKDATA, pid=<pid>, addr=<addr>, data=<bytes>) = 0 | arg2.tracee_address:address only:uncaptured arg3.word:complete
 ptrace.peekdata_not_traced | ptrace(request=PTRACE_PEEKDATA, pid=<pid>, addr=<addr>, data=<handle>) = ESRCH | arg2.tracee_address:address only:uncaptured
 ptrace.peekdata_unmapped | ptrace(request=PTRACE_PEEKDATA, pid=<pid>, addr=0x8, data=<handle>) = EIO | arg2.tracee_address:address only:uncaptured
 ptrace.peekuser | ptrace(request=PTRACE_PEEKUSR, pid=<pid>, addr=0x78, data=<data>) = <value> | arg3.word:complete
@@ -1315,8 +1315,8 @@ recvfrom.tcp_eof | recvfrom(fd=8, ubuf=<addr>, size=128, flags=0x0, addr=NULL, a
 recvfrom.tcp_peek | recvfrom(fd=8, ubuf="TCP-PAYLOAD", size=128, flags=MSG_PEEK, addr=NULL, addr_len=NULL) = 11 | arg1.data:complete
 recvfrom.udp_connected | recvfrom(fd=9, ubuf="UDP-DATAGRAM-", size=128, flags=0x0, addr=NULL, addr_len=NULL) = 13 | arg1.data:complete
 recvfrom.udp_msg_trunc | recvfrom(fd=9, ubuf=<data>, size=8, flags=MSG_TRUNC, addr=<data>, addr_len=<data>) = <value> | address.capacity:complete arg1.data:complete address.length:complete address.data:complete
-recvfrom.unix_dgram_address | recvfrom(fd=5, ubuf="DGRAM-ONE", size=128, flags=MSG_DONTWAIT, addr=unix:@antinomie-conformance-dgram, addr_len=<bytes>) = 9 | address.capacity:complete:"n" arg1.data:complete address.length:complete address.data:complete
-recvfrom.zero_length | recvfrom(fd=5, ubuf=<addr>, size=128, flags=MSG_DONTWAIT, addr=unix:@antinomie-conformance-dgram, addr_len=<bytes>) = 0 | address.capacity:complete:"n" address.length:complete address.data:complete
+recvfrom.unix_dgram_address | recvfrom(fd=5, ubuf="DGRAM-ONE", size=128, flags=MSG_DONTWAIT, addr=unix:@antinomie-conformance-dgram, addr_len=<bytes>) = 9 | address.capacity:complete:<bytes> arg1.data:complete address.length:complete address.data:complete
+recvfrom.zero_length | recvfrom(fd=5, ubuf=<addr>, size=128, flags=MSG_DONTWAIT, addr=unix:@antinomie-conformance-dgram, addr_len=<bytes>) = 0 | address.capacity:complete:<bytes> address.length:complete address.data:complete
 recvmmsg.badf | recvmmsg(fd=999, msg=2 captured objects, vlen=1, flags=0x0, timeout=NULL) = EBADF | arg1.mmsg.0.header:complete:<bytes> arg1.mmsg.0.iov:complete:<bytes>
 recvmmsg.empty_dontwait | recvmmsg(fd=6, msg=2 captured objects, vlen=1, flags=MSG_DONTWAIT, timeout=NULL) = EAGAIN | arg1.mmsg.0.header:complete:<bytes> arg1.mmsg.0.iov:complete:<bytes>
 recvmmsg.timeout | recvmmsg(fd=6, msg=<data>, vlen=1, flags=0x0, timeout=<data>) = <value> | arg1.mmsg.0.header:complete arg1.mmsg.0.iov:complete arg4.timeout:complete arg1.mmsg.0.header:complete arg1.mmsg.0.iov[0].data:complete arg1.mmsg.0.iov[1].data:complete arg4.timeout.observed:complete
@@ -1380,15 +1380,15 @@ rt_sigaction.restore_usr2 | rt_sigaction(sig=SIGUSR2, act=<bytes>, oact=NULL, si
 rt_sigaction.sigkill | rt_sigaction(sig=SIGKILL, act=<bytes>, oact=NULL, sigsetsize=8) = EINVAL | arg1.sigaction:complete:<bytes>
 rt_sigpending.bad_size | rt_sigpending(set=<addr>, sigsetsize=16) = EINVAL |
 rt_sigpending.empty | rt_sigpending(set=<bytes>, sigsetsize=8) = 0 | arg0.pending:complete
-rt_sigpending.short_size | rt_sigpending(set="\0\n", sigsetsize=4) = 0 | arg0.pending:complete
-rt_sigpending.two | rt_sigpending(set="\0\n", sigsetsize=8) = 0 | arg0.pending:complete
-rt_sigprocmask.bad_how | rt_sigprocmask(how=Unknown how 0x7, set="\0\n", oset=NULL, sigsetsize=8) = EINVAL | signal.mask:complete:"\0\n"
+rt_sigpending.short_size | rt_sigpending(set=<bytes>, sigsetsize=4) = 0 | arg0.pending:complete
+rt_sigpending.two | rt_sigpending(set=<bytes>, sigsetsize=8) = 0 | arg0.pending:complete
+rt_sigprocmask.bad_how | rt_sigprocmask(how=Unknown how 0x7, set=<bytes>, oset=NULL, sigsetsize=8) = EINVAL | signal.mask:complete:<bytes>
 rt_sigprocmask.bad_size | rt_sigprocmask(how=SIG_BLOCK, set=<addr>, oset=NULL, sigsetsize=4) = EINVAL | signal.mask:invalid extent:uncaptured !3
-rt_sigprocmask.block | rt_sigprocmask(how=SIG_BLOCK, set="\0\n", oset=<bytes>, sigsetsize=8) = 0 | signal.mask:complete:"\0\n" signal.mask:complete
+rt_sigprocmask.block | rt_sigprocmask(how=SIG_BLOCK, set=<bytes>, oset=<bytes>, sigsetsize=8) = 0 | signal.mask:complete:<bytes> signal.mask:complete
 rt_sigprocmask.cold_set | rt_sigprocmask(how=SIG_BLOCK, set=<bytes>, oset=<bytes>, sigsetsize=8) = 0 | signal.mask:complete@at exit:<bytes> signal.mask:complete
-rt_sigprocmask.query | rt_sigprocmask(how=SIG_BLOCK, set=NULL, oset="\0\n", sigsetsize=8) = 0 | signal.mask:complete
+rt_sigprocmask.query | rt_sigprocmask(how=SIG_BLOCK, set=NULL, oset=<bytes>, sigsetsize=8) = 0 | signal.mask:complete
 rt_sigprocmask.setmask_restore | rt_sigprocmask(how=SIG_SETMASK, set=<bytes>, oset=<bytes>, sigsetsize=8) = 0 | signal.mask:complete:<bytes> signal.mask:complete
-rt_sigprocmask.unblock | rt_sigprocmask(how=SIG_UNBLOCK, set=<bytes>, oset="\0\n", sigsetsize=8) = 0 | signal.mask:complete:<bytes> signal.mask:complete
+rt_sigprocmask.unblock | rt_sigprocmask(how=SIG_UNBLOCK, set=<bytes>, oset=<bytes>, sigsetsize=8) = 0 | signal.mask:complete:<bytes> signal.mask:complete
 rt_sigqueueinfo.bad_signal | rt_sigqueueinfo(pid=<pid>, sig=65, uinfo=<data>) = EINVAL | signal.siginfo:complete
 rt_sigqueueinfo.fault | rt_sigqueueinfo(pid=<pid>, sig=SIGUSR1, uinfo=0x1) = EFAULT | signal.siginfo:copy fault !3
 rt_sigqueueinfo.self_blocked | rt_sigqueueinfo(pid=<pid>, sig=SIGUSR1, uinfo=<data>) = <value> | signal.siginfo:complete
@@ -1433,20 +1433,20 @@ sched_setaffinity.empty | sched_setaffinity(pid=0, len=8, user_mask_ptr=<bytes>)
 sched_setaffinity.no_such_process | sched_setaffinity(pid=<pid>, len=8, user_mask_ptr=<bytes>) = ESRCH | arg2.cpu_mask:complete:<bytes>
 sched_setaffinity.one_cpu | sched_setaffinity(pid=0, len=8, user_mask_ptr=<bytes>) = 0 | arg2.cpu_mask:complete:<bytes>
 sched_setaffinity.same | sched_setaffinity(pid=0, len=8, user_mask_ptr=<bytes>) = 0 | arg2.cpu_mask:complete:<bytes>
-sched_setattr.bad_flags | sched_setattr(pid=0, attr="0", flags=0x1) = EINVAL | arg1.sched_attr:complete:"0"
+sched_setattr.bad_flags | sched_setattr(pid=0, attr=<bytes>, flags=0x1) = EINVAL | arg1.sched_attr:complete:<bytes>
 sched_setattr.batch_nice | sched_setattr(pid=0, attr=<bytes>, flags=0x0) = 0 | arg1.sched_attr:complete:<bytes>
 sched_setattr.fifo | sched_setattr(pid=0, attr=<bytes>, flags=0x0) = EPERM | arg1.sched_attr:complete:<bytes>
 sched_setattr.size_zero | sched_setattr(pid=0, attr=<bytes>, flags=0x0) = 0 | arg1.sched_attr:complete:<bytes>
-sched_setattr.too_small | sched_setattr(pid=0, attr="8", flags=0x0) = E2BIG | arg1.sched_attr:invalid extent:uncaptured arg1.sched_attr.required_size:complete !3
-sched_setattr.ver0_same | sched_setattr(pid=0, attr="0", flags=0x0) = 0 | arg1.sched_attr:complete:"0"
-sched_setattr.ver1_same | sched_setattr(pid=0, attr="8"..., flags=0x0) = 0 | arg1.sched_attr:complete:"8"...
-sched_setattr.zero_tail | sched_setattr(pid=0, attr="@"..., flags=0x0) = 0 | arg1.sched_attr:complete:"@"... arg1.sched_attr.extension:complete:<bytes>
+sched_setattr.too_small | sched_setattr(pid=0, attr=<bytes>, flags=0x0) = E2BIG | arg1.sched_attr:invalid extent:uncaptured arg1.sched_attr.required_size:complete !3
+sched_setattr.ver0_same | sched_setattr(pid=0, attr=<bytes>, flags=0x0) = 0 | arg1.sched_attr:complete:<bytes>
+sched_setattr.ver1_same | sched_setattr(pid=0, attr=<bytes>, flags=0x0) = 0 | arg1.sched_attr:complete:<bytes>
+sched_setattr.zero_tail | sched_setattr(pid=0, attr=<bytes>, flags=0x0) = 0 | arg1.sched_attr:complete:<bytes> arg1.sched_attr.extension:complete:"\0\0\0\0\0\0\0\0"
 sched_setparam.null | sched_setparam(pid=0, param=NULL) = EINVAL | arg1.data:null pointer:uncaptured
-sched_setparam.priority_for_normal | sched_setparam(pid=0, param="2") = EINVAL | arg1.data:complete:"2"
+sched_setparam.priority_for_normal | sched_setparam(pid=0, param=<bytes>) = EINVAL | arg1.data:complete:<bytes>
 sched_setparam.same | sched_setparam(pid=0, param=<bytes>) = 0 | arg1.data:complete:<bytes>
 sched_setscheduler.bad_policy | sched_setscheduler(pid=0, policy=Unknown policy 0x63, param=<bytes>) = EINVAL | arg2.data:complete:<bytes>
 sched_setscheduler.batch | sched_setscheduler(pid=0, policy=SCHED_BATCH, param=<bytes>) = 0 | arg2.data:complete:<bytes>
-sched_setscheduler.fifo_denied | sched_setscheduler(pid=0, policy=SCHED_FIFO, param="\n") = EPERM | arg2.data:complete:"\n"
+sched_setscheduler.fifo_denied | sched_setscheduler(pid=0, policy=SCHED_FIFO, param=<bytes>) = EPERM | arg2.data:complete:<bytes>
 sched_setscheduler.idle_reset_on_fork | sched_setscheduler(pid=0, policy=SCHED_IDLE|SCHED_RESET_ON_FORK, param=<bytes>) = 0 | arg2.data:complete:<bytes>
 sched_setscheduler.leave_idle | sched_setscheduler(pid=0, policy=SCHED_OTHER, param=<bytes>) = EPERM | arg2.data:complete:<bytes>
 sched_setscheduler.same | sched_setscheduler(pid=0, policy=SCHED_OTHER, param=<bytes>) = 0 | arg2.data:complete:<bytes>
@@ -1465,9 +1465,9 @@ security.not_implemented | security(first=0, second=0, third=0, fourth=0, fifth=
 select.badf | select(n=64, inp=<bytes>, outp=NULL, exp=NULL, tvp=<bytes>) = EBADF | arg1.fdset:complete:<bytes> arg4.timeout:complete:<bytes> arg4.timeout.observed:complete
 select.fault | select(n=5, inp=0x1, outp=NULL, exp=NULL, tvp=NULL) = EFAULT | arg1.fdset:copy fault:uncaptured !3
 select.negative_nfds | select(n=-1, inp=<addr>, outp=NULL, exp=NULL, tvp=<bytes>) = EINVAL | arg1.fdset:invalid extent:uncaptured arg4.timeout:complete:<bytes> arg4.timeout.observed:complete !3
-select.not_ready | select(n=7, inp=<bytes>, outp=NULL, exp=NULL, tvp=<bytes>) = 0 | arg1.fdset:complete:"@" arg4.timeout:complete:"\0\0\0\0\0\0\0\0 N" arg1.fdset:complete arg4.timeout.observed:complete
+select.not_ready | select(n=7, inp=<bytes>, outp=NULL, exp=NULL, tvp=<bytes>) = 0 | arg1.fdset:complete:<bytes> arg4.timeout:complete:<bytes> arg1.fdset:complete arg4.timeout.observed:complete
 select.null_timeout | select(n=5, inp=<bytes>, outp=NULL, exp=NULL, tvp=NULL) = 1 | arg1.fdset:complete:<bytes> arg1.fdset:complete
-select.ready | select(n=6, inp=<bytes>, outp=" ", exp=<bytes>, tvp=<bytes>) = 2 | arg1.fdset:complete:<bytes> arg2.fdset:complete:" " arg3.fdset:complete:<bytes> arg4.timeout:complete:<bytes> arg1.fdset:complete arg2.fdset:complete arg3.fdset:complete arg4.timeout.observed:complete
+select.ready | select(n=6, inp=<bytes>, outp=<bytes>, exp=<bytes>, tvp=<bytes>) = 2 | arg1.fdset:complete:<bytes> arg2.fdset:complete:<bytes> arg3.fdset:complete:<bytes> arg4.timeout:complete:<bytes> arg1.fdset:complete arg2.fdset:complete arg3.fdset:complete arg4.timeout.observed:complete
 select.sleep_only | select(n=0, inp=NULL, outp=NULL, exp=NULL, tvp=<bytes>) = 0 | arg4.timeout:complete:<bytes> arg4.timeout.observed:complete
 semctl.getall | semctl(semid=0, semnum=0, cmd=GETALL, arg=<bytes>) = 0 | arg3.array:complete
 semctl.getncnt | semctl(semid=0, semnum=0, cmd=GETNCNT, arg=0) = 0 |
@@ -1510,7 +1510,7 @@ semtimedop.removed_while_waiting | semtimedop(semid=0, sops=<data>, nsops=1, tim
 semtimedop.times_out | semtimedop(semid=0, sops=<bytes>, nsops=1, timeout=<bytes>) = EAGAIN | arg1.semops:complete:<bytes> arg3.timeout:complete:<bytes>
 sendfile.badf | sendfile(out_fd=999, in_fd=3, offset=NULL, count=4) = EBADF | arg2.data:null pointer:uncaptured
 sendfile.null_offset | sendfile(out_fd=4, in_fd=3, offset=NULL, count=4) = 0 | arg2.data:null pointer:uncaptured arg2.data:null pointer
-sendfile.offset | sendfile(out_fd=4, in_fd=3, offset="\n", count=8) = 8 | arg2.data:complete:<bytes> arg2.data:complete
+sendfile.offset | sendfile(out_fd=4, in_fd=3, offset=<bytes>, count=8) = 8 | arg2.data:complete:<bytes> arg2.data:complete
 sendmmsg.badf | sendmmsg(fd=999, msg=4 captured objects, vlen=1, flags=0x0) = EBADF | arg1.mmsg.0.header:complete:<bytes> arg1.mmsg.0.iov:complete:<bytes> arg1.mmsg.0.iov[0].data:complete:"MMSG-A0-" arg1.mmsg.0.iov[1].data:complete:"first"
 sendmmsg.fault | sendmmsg(fd=5, msg=0x1, vlen=1, flags=0x0) = EFAULT | arg1.mmsg.0.header:copy fault:uncaptured !3
 sendmmsg.udp_names | sendmmsg(fd=6, msg=<data>, vlen=2, flags=0x0) = <value> | arg1.mmsg.0.header:complete arg1.mmsg.0.iov:complete arg1.mmsg.0.iov[0].data:complete arg1.mmsg.0.name:complete arg1.mmsg.1.header:complete arg1.mmsg.1.iov:complete arg1.mmsg.1.iov[0].data:complete arg1.mmsg.1.name:complete arg1.mmsg.0.header:complete arg1.mmsg.1.header:complete
@@ -1577,7 +1577,7 @@ sethostname.unprivileged | sethostname(name="ant-host", len=8) = EPERM | arg0.na
 setitimer.bad_which | setitimer(which=5, value=<bytes>, ovalue=NULL) = EINVAL | arg1.data:complete:<bytes>
 setitimer.prof | setitimer(which=2, value=<bytes>, ovalue=<bytes>) = 0 | arg1.data:complete:<bytes> arg2.data:complete
 setitimer.prof_cancel | setitimer(which=2, value=<bytes>, ovalue=<bytes>) = 0 | arg1.data:complete:<bytes> arg2.data:complete
-setitimer.real | setitimer(which=0, value="\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\02", ovalue=<bytes>) = 0 | arg1.data:complete:"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\02" arg2.data:complete
+setitimer.real | setitimer(which=0, value=<bytes>, ovalue=<bytes>) = 0 | arg1.data:complete:<bytes> arg2.data:complete
 setitimer.real_restore | setitimer(which=0, value=<data>, ovalue=NULL) = <value> | arg1.data:complete arg2.data:null pointer
 setitimer.virtual | setitimer(which=1, value=<bytes>, ovalue=<bytes>) = 0 | arg1.data:complete:<bytes> arg2.data:complete
 setitimer.virtual_cancel | setitimer(which=1, value=<bytes>, ovalue=<bytes>) = 0 | arg1.data:complete:<bytes> arg2.data:complete
@@ -1730,7 +1730,7 @@ splice.negative_offset | splice(fd_in=7, off_in=<bytes>, fd_out=4, off_out=NULL,
 splice.no_pipe | splice(fd_in=7, off_in=NULL, fd_out=8, off_out=NULL, len=8, flags=0x0) = EINVAL | arg1.data:null pointer:uncaptured arg3.data:null pointer:uncaptured
 splice.offset_fault | splice(fd_in=7, off_in=0x1, fd_out=4, off_out=NULL, len=8, flags=0x0) = EFAULT | arg1.data:copy fault:uncaptured arg3.data:null pointer:uncaptured !3
 splice.offset_on_pipe | splice(fd_in=3, off_in=<bytes>, fd_out=7, off_out=NULL, len=8, flags=0x0) = ESPIPE | arg1.data:complete:<bytes> arg3.data:null pointer:uncaptured
-splice.pipe_to_file_offset | splice(fd_in=3, off_in=NULL, fd_out=7, off_out="t", len=16, flags=SPLICE_F_MORE) = 16 | arg1.data:null pointer:uncaptured arg3.data:complete:"d" arg1.data:null pointer arg3.data:complete
+splice.pipe_to_file_offset | splice(fd_in=3, off_in=NULL, fd_out=7, off_out=<bytes>, len=16, flags=SPLICE_F_MORE) = 16 | arg1.data:null pointer:uncaptured arg3.data:complete:<bytes> arg1.data:null pointer arg3.data:complete
 splice.pipe_to_pipe | splice(fd_in=3, off_in=NULL, fd_out=6, off_out=NULL, len=8, flags=SPLICE_F_NONBLOCK) = 8 | arg1.data:null pointer:uncaptured arg3.data:null pointer:uncaptured arg1.data:null pointer arg3.data:null pointer
 stat.bad_buffer | stat(filename="meta-file", statbuf=0x1) = EFAULT | arg0.path:complete:"meta-file"
 stat.file | stat(filename=<data>, statbuf=<data>) = <value> | arg0.path:complete arg1.stat:complete
@@ -1802,7 +1802,7 @@ tgkill.wrong_group | tgkill(tgid=<pid>, pid=<pid>, sig=0) = ESRCH |
 time.null | time(tloc=NULL) = <value> | arg0.data:null pointer
 time.pointer | time(tloc=<data>) = <value> | arg0.data:complete
 timer_create.bad_clock | timer_create(which_clock=Unknown clock 0x63, timer_event_spec=<bytes>, created_timer_id=<addr>) = EINVAL | arg1.data:complete:<bytes>
-timer_create.bad_notify | timer_create(which_clock=CLOCK_MONOTONIC, timer_event_spec="\0\0\0\0\0\0\0\0\0\0\0\0c"..., created_timer_id=<addr>) = EINVAL | arg1.data:complete:"\0\0\0\0\0\0\0\0\0\0\0\0c"...
+timer_create.bad_notify | timer_create(which_clock=CLOCK_MONOTONIC, timer_event_spec=<bytes>, created_timer_id=<addr>) = EINVAL | arg1.data:complete:<bytes>
 timer_create.null_sigevent | timer_create(which_clock=CLOCK_BOOTTIME, timer_event_spec=NULL, created_timer_id=<data>) = <value> | arg1.data:null pointer arg2.data:complete
 timer_create.sigev_none | timer_create(which_clock=CLOCK_MONOTONIC, timer_event_spec=<data>, created_timer_id=<data>) = <value> | arg1.data:complete arg2.data:complete
 timer_create.sigev_signal | timer_create(which_clock=CLOCK_MONOTONIC, timer_event_spec=<data>, created_timer_id=<data>) = <value> | arg1.data:complete arg2.data:complete
@@ -1835,14 +1835,14 @@ timerfd_gettime.badf | timerfd_gettime(ufd=999, otmr=<addr>) = EBADF |
 timerfd_gettime.disarmed | timerfd_gettime(ufd=9, otmr=<bytes>) = 0 | arg1.data:complete
 timerfd_gettime.fault | timerfd_gettime(ufd=9, otmr=0x1) = EFAULT |
 timerfd_settime.abstime_null_old | timerfd_settime(ufd=9, flags=TFD_TIMER_ABSTIME, utmr=<data>, otmr=NULL) = <value> | arg2.data:complete arg3.data:null pointer
-timerfd_settime.bad_flags | timerfd_settime(ufd=9, flags=0x80, utmr="\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0<", otmr=NULL) = EINVAL | arg2.data:complete:"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0<"
+timerfd_settime.bad_flags | timerfd_settime(ufd=9, flags=0x80, utmr=<bytes>, otmr=NULL) = EINVAL | arg2.data:complete:<bytes>
 timerfd_settime.bad_nsec | timerfd_settime(ufd=9, flags=0x0, utmr=<bytes>, otmr=NULL) = EINVAL | arg2.data:complete:<bytes>
 timerfd_settime.cancel_on_set | timerfd_settime(ufd=10, flags=TFD_TIMER_ABSTIME|TFD_TIMER_CANCEL_ON_SET, utmr=<data>, otmr=<data>) = <value> | arg2.data:complete arg3.data:complete
 timerfd_settime.disarm | timerfd_settime(ufd=9, flags=0x0, utmr=<data>, otmr=<data>) = <value> | arg2.data:complete arg3.data:complete
 timerfd_settime.fault | timerfd_settime(ufd=9, flags=0x0, utmr=0x1, otmr=NULL) = EFAULT | arg2.data:copy fault:uncaptured !3
-timerfd_settime.not_timerfd | timerfd_settime(ufd=4, flags=0x0, utmr="\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0<", otmr=NULL) = EINVAL | arg2.data:complete:"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0<"
+timerfd_settime.not_timerfd | timerfd_settime(ufd=4, flags=0x0, utmr=<bytes>, otmr=NULL) = EINVAL | arg2.data:complete:<bytes>
 timerfd_settime.rearm | timerfd_settime(ufd=9, flags=0x0, utmr=<data>, otmr=<data>) = <value> | arg2.data:complete arg3.data:complete
-timerfd_settime.relative | timerfd_settime(ufd=9, flags=0x0, utmr="\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0<", otmr=<bytes>) = 0 | arg2.data:complete:"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0<" arg3.data:complete
+timerfd_settime.relative | timerfd_settime(ufd=9, flags=0x0, utmr=<bytes>, otmr=<bytes>) = 0 | arg2.data:complete:<bytes> arg3.data:complete
 times.buffer | times(tbuf=<data>) = <value> | arg0.data:complete
 times.fault | times(tbuf=0x1) = EFAULT |
 times.null | times(tbuf=NULL) = <value> | arg0.data:null pointer
@@ -1937,7 +1937,7 @@ waitid.no_options | waitid(which=P_ALL, pid=0, infop=<addr>, options=0x0, ru=NUL
 waitid.p_pid | waitid(which=P_PID, pid=<pid>, infop=<data>, options=WEXITED, ru=<data>) = <value> | arg2.data:complete arg4.data:complete
 waitid.p_pidfd | waitid(which=P_PIDFD, pid=<pid>, infop=<data>, options=WEXITED, ru=NULL) = <value> | arg2.data:complete arg4.data:null pointer
 waitid.p_pidfd_killed | waitid(which=P_PIDFD, pid=<pid>, infop=<data>, options=WEXITED, ru=NULL) = <value> | arg2.data:complete arg4.data:null pointer
-waitid.wnohang_running | waitid(which=P_PID, pid=<pid>, infop=<bytes>, options=WNOHANG|WEXITED, ru="ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ"...) = 0 | arg2.data:complete arg4.data:complete
+waitid.wnohang_running | waitid(which=P_PID, pid=<pid>, infop=<bytes>, options=WNOHANG|WEXITED, ru=<bytes>) = 0 | arg2.data:complete arg4.data:complete
 waitid.wnowait | waitid(which=P_PID, pid=<pid>, infop=<data>, options=WEXITED|WNOWAIT, ru=NULL) = <value> | arg2.data:complete arg4.data:null pointer
 write.badf | write(fd=999, buf="ANTI", count=4) = EBADF | arg1.data:complete:"ANTI"
 write.fault | write(fd=3, buf=0x1, count=16) = EFAULT | arg1.data:copy fault:uncaptured !3

@@ -1481,6 +1481,15 @@ pub(super) mod tests {
             )),
             "\"ant-process\""
         );
+        assert_eq!(
+            preview(&typed(
+                "arg4.data",
+                "mount_options",
+                Some(FieldEncoding::Bytes),
+                b"size=1m\0\0\0"
+            )),
+            "\"size=1m\""
+        );
         // A string the program passed stays a string even when it is not
         // printable.
         assert_eq!(

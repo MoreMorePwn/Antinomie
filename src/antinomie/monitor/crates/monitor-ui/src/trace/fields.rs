@@ -601,8 +601,9 @@ pub(crate) fn rendering(field: &FieldSummary) -> Rendering {
     if layout == "sockaddr" {
         return Rendering::Address;
     }
-    // `char[16]` (a task name), `char[]` (an interface name).
-    if layout.starts_with("char[") {
+    // Characters by type: `char[16]` (a task name), `char[]` (an interface
+    // name), and mount's options (a filesystem's option string).
+    if layout.starts_with("char[") || layout == "mount_options" {
         return Rendering::Text;
     }
     if !layout.is_empty() {
