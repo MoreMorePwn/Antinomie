@@ -20,12 +20,15 @@ enum Go {
     Report(AnalysisKind),
     AllRuns,
     Verify,
+    /// Open the file viewer on the archived sample.
+    View,
 }
 
 impl MonitorApp {
     pub(super) fn summary_tab(&mut self, ui: &mut egui::Ui, data: &Arc<Data>) {
         let mut go = None;
         let mut lineage_out = None;
+        let mut output_act = None;
         let mut lineage = self
             .samples_page
             .detail
@@ -69,11 +72,20 @@ impl MonitorApp {
             static_analysis(ui, data, scanned, &mut go);
             identity(ui, data, verified, verifying, &mut go);
             lineage_out = super::lineage::section(ui, &mut lineage, data);
-            output_files(ui, data);
+            output_act = super::output_files::section(ui, data, self.settings.font_size);
             ui.add_space(16.0);
         });
         if let Some(detail) = &mut self.samples_page.detail {
             detail.lineage = lineage;
+        }
+        match output_act {
+            Some(super::output_files::Act::Open(number, kind)) => {
+                if let Some(entry) = data.runs.iter().find(|entry| entry.number == number) {
+                    self.open_sample_run(&entry.run, kind.target(), None);
+                }
+            }
+            Some(super::output_files::Act::GoToRun(number)) => go = Some(Go::Run(number)),
+            None => {}
         }
         match lineage_out {
             Some(super::lineage::Out::OpenSample(sha)) => {
@@ -81,6 +93,34 @@ impl MonitorApp {
                 return;
             }
             Some(super::lineage::Out::OpenRun(number)) => go = Some(Go::Run(number)),
+            Some(super::lineage::Out::Promote {
+                path,
+                sha256,
+                writer,
+                runs,
+            }) => {
+                let choices = data
+                    .runs
+                    .iter()
+                    .filter(|entry| runs.contains(&entry.number))
+                    .map(|entry| super::super::promote::RunChoice {
+                        number: entry.number,
+                        run_id: entry.run.id.clone(),
+                        vm_id: entry.run.vm_id.clone(),
+                        vm_name: vm_name(&entry.run),
+                        directory: entry.run.directory.clone(),
+                        dump: None,
+                    })
+                    .collect();
+                self.samples_page.promote = Some(super::super::promote::Promote::new(
+                    &self.options.data_dir,
+                    path,
+                    sha256,
+                    data.record.sha256.clone(),
+                    writer,
+                    choices,
+                ));
+            }
             None => {}
         }
         let detail = &mut self.samples_page.detail;
@@ -103,6 +143,17 @@ impl MonitorApp {
             Some(Go::Verify) => {
                 if let Some(detail) = detail {
                     detail.start_verify(ui.ctx(), &self.options.data_dir);
+                }
+            }
+            Some(Go::View) => {
+                if let Some(data) = self
+                    .samples_page
+                    .detail
+                    .as_ref()
+                    .and_then(|d| d.data.clone())
+                {
+                    self.samples_page
+                        .open_viewer(ui.ctx(), &data.record, data.archive.clone());
                 }
             }
             None => {}
@@ -685,6 +736,14 @@ fn identity(
                             {
                                 *go = Some(Go::Verify);
                             }
+                            if ui
+                                .add_enabled(data.archived, egui::Button::new("View content"))
+                                .on_hover_text("Open the archived file in the viewer")
+                                .on_disabled_hover_text("The archive was removed")
+                                .clicked()
+                            {
+                                *go = Some(Go::View);
+                            }
                         }
                     });
                 });
@@ -740,53 +799,4 @@ fn aliases(ui: &mut egui::Ui, data: &Data) {
                     }
                 });
         });
-}
-
-/// Counts of the files the runs saved, per kind.
-fn output_files(ui: &mut egui::Ui, data: &Data) {
-    use antinomie_monitor_core::RunArtifactState::{Complete, Partial};
-    let (mut memory, mut core, mut capture) = ([0usize; 2], [0usize; 2], [0usize; 2]);
-    for artifacts in data
-        .runs
-        .iter()
-        .filter_map(|entry| entry.artifacts.as_ref())
-    {
-        if artifacts.memory_dump.is_some() {
-            memory[usize::from(!matches!(artifacts.memory_state, Complete | Partial))] += 1;
-        }
-        if artifacts.core_dump.is_some() || artifacts.core_deleted {
-            core[usize::from(
-                artifacts.core_deleted || !matches!(artifacts.core_state, Complete | Partial),
-            )] += 1;
-        }
-        if !artifacts.network_captures.is_empty() || artifacts.network_deleted {
-            capture[usize::from(
-                artifacts.network_deleted || !matches!(artifacts.network_state, Complete | Partial),
-            )] += 1;
-        }
-    }
-    let present = memory[0] + core[0] + capture[0];
-    parts::section(ui, "Output files", Some(present), |ui| {
-        if memory == [0, 0] && core == [0, 0] && capture == [0, 0] {
-            parts::muted_line(ui, "None.");
-            return;
-        }
-        ui.horizontal_wrapped(|ui| {
-            for (counts, one, many) in [
-                (memory, "memory dump", "memory dumps"),
-                (core, "core dump", "core dumps"),
-                (capture, "network capture", "network captures"),
-            ] {
-                if counts == [0, 0] {
-                    continue;
-                }
-                ui.label(RichText::new(counts[0].to_string()).strong());
-                ui.label(if counts[0] == 1 { one } else { many });
-                if counts[1] > 0 {
-                    ui.label(theme::hint_text(format!("+{} gone", counts[1])));
-                }
-                ui.add_space(12.0);
-            }
-        });
-    });
 }

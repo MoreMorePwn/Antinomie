@@ -3,7 +3,7 @@
 //! an X11 display; exits by itself. The library lives in ANTINOMIE_QA_DATA
 //! (a throwaway folder; never the user's data).
 //!
-//! ANTINOMIE_QA_SCENE = list | tags | add | edit | detail | detail2 | lineage | lineage2 | runs | custody,
+//! ANTINOMIE_QA_SCENE = list | tags | add | edit | detail | detail2 | lineage | lineage2 | outputs | viewer | promote | runs | custody,
 //! ANTINOMIE_QA_THEME = dark | light | blue, ANTINOMIE_QA_SIZE = 1400x820,
 //! ANTINOMIE_QA_SECONDS = 25.
 use super::*;
@@ -17,11 +17,24 @@ fn native_samples_fixture() {
     struct QaApp {
         app: MonitorApp,
         deadline: Instant,
+        /// Open the file viewer once the window has read the sample.
+        open_viewer: bool,
+        /// Open Add to Samples… once the window has read the sample.
+        open_promote: Option<PathBuf>,
     }
     impl eframe::App for QaApp {
         fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
             if Instant::now() >= self.deadline {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            if self.open_viewer && self.app.samples_page.detail_probe().is_some() {
+                self.open_viewer = false;
+                self.app.samples_page.view_content(ctx);
+            }
+            if self.app.samples_page.detail_probe().is_some() {
+                if let Some(dir) = self.open_promote.take() {
+                    self.app.samples_page.open_promote_for_test(&dir);
+                }
             }
             eframe::App::update(&mut self.app, ctx, frame);
             ctx.request_repaint_after(Duration::from_millis(200));
@@ -68,7 +81,15 @@ fn native_samples_fixture() {
             app.open_library(crate::workspace::LibraryPage::Samples);
             if matches!(
                 scene.as_str(),
-                "detail" | "detail2" | "lineage" | "lineage2" | "runs" | "custody"
+                "detail"
+                    | "detail2"
+                    | "lineage"
+                    | "lineage2"
+                    | "outputs"
+                    | "viewer"
+                    | "promote"
+                    | "runs"
+                    | "custody"
             ) {
                 // Runs that exist on disk, one with a static report.
                 let now = std::time::SystemTime::now()
@@ -85,6 +106,7 @@ fn native_samples_fixture() {
                     now + 8_000,
                     false,
                 );
+                super::samples_detail::save_artifacts(&first);
                 super::samples_detail::save_digest(&first, "medium", false);
                 super::samples_detail::save_digest(&second, "high", true);
                 app.snapshot.vms.push(VmConfig {
@@ -100,6 +122,9 @@ fn native_samples_fixture() {
                 });
                 if scene == "detail2" {
                     app.samples_page.scroll_detail(800.0);
+                }
+                if scene == "outputs" {
+                    app.samples_page.scroll_detail(2150.0);
                 }
                 if scene == "lineage2" {
                     app.samples_page.set_lineage(2, 3, false);
@@ -127,6 +152,8 @@ fn native_samples_fixture() {
             }
             Ok(Box::new(QaApp {
                 app,
+                open_viewer: scene == "viewer",
+                open_promote: (scene == "promote").then(|| data.clone()),
                 deadline: Instant::now() + Duration::from_secs(seconds),
             }))
         }),

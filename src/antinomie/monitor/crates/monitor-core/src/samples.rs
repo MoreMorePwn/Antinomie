@@ -22,6 +22,7 @@ mod intake;
 mod library;
 mod lineage;
 mod migrate;
+pub mod promote;
 mod rollup;
 mod summary;
 

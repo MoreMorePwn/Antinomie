@@ -1,6 +1,6 @@
 //! Native retained-evidence workspace; all acquisition remains outside rendering.
 mod capa_matrix;
-mod content;
+pub(crate) mod content;
 mod tabs;
 mod unpacking;
 

@@ -215,6 +215,33 @@ pub(super) fn save_digest(run: &RunSummary, tier: &str, hit: bool) {
     .unwrap();
 }
 
+/// A run's saved artefacts: a memory dump folder, a core and a capture that
+/// is gone from disk.
+pub(super) fn save_artifacts(run: &RunSummary) {
+    let memory = run.directory.join("memory");
+    std::fs::create_dir_all(&memory).unwrap();
+    std::fs::write(memory.join("memory.elf"), vec![0u8; 3_000_000]).unwrap();
+    let core = run.directory.join("core.elf");
+    std::fs::write(&core, vec![0u8; 120_000]).unwrap();
+    let artifacts = antinomie_monitor_core::RunArtifacts {
+        run_id: run.id.clone(),
+        vm_id: run.vm_id.clone(),
+        boot_id: run.boot_id.clone(),
+        memory_dump: Some(memory),
+        memory_state: antinomie_monitor_core::RunArtifactState::Complete,
+        core_dump: Some(core),
+        core_state: antinomie_monitor_core::RunArtifactState::Partial,
+        network_captures: vec![run.directory.join("capture-gone.pcap")],
+        network_state: antinomie_monitor_core::RunArtifactState::Complete,
+        ..antinomie_monitor_core::RunArtifacts::default()
+    };
+    std::fs::write(
+        run.directory.join("artifacts.json"),
+        serde_json::to_vec(&artifacts).unwrap(),
+    )
+    .unwrap();
+}
+
 fn window(name: &str) -> (MonitorApp, egui::Context, String, PathBuf) {
     let root = super::samples_list::temp(name);
     let (script, _, _) = super::samples_list::fixture(&root);
@@ -353,5 +380,76 @@ fn a_run_opens_in_the_triage_of_its_own_vm() {
     assert_eq!(app.selected_run.as_deref(), Some("rx"));
     assert_eq!(app.focus_panel, Some(crate::workspace::Panel::Triage));
     let _ = Category::Network;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn the_viewer_reads_the_archive_and_escape_closes_it() {
+    let (mut app, ctx, _, root) = window("detail-viewer");
+    until(&mut app, &ctx, |app| {
+        app.samples_page.detail_probe().is_some()
+    });
+    app.samples_page.view_content(&ctx);
+    assert!(app.samples_page.viewer_open());
+    until(&mut app, &ctx, |app| app.samples_page.viewer_ready());
+    for _ in 0..3 {
+        render(&mut app, &ctx, SIZE);
+    }
+    // Escape closes the window.
+    let mut input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
+        ..Default::default()
+    };
+    input.events.push(egui::Event::Key {
+        key: egui::Key::Escape,
+        physical_key: Some(egui::Key::Escape),
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    draw_input(&mut app, &ctx, input);
+    assert!(!app.samples_page.viewer_open());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn output_files_list_each_artefact_with_its_size_and_whether_it_is_still_there() {
+    let root = super::samples_list::temp("detail-outputs");
+    let (script, _, _) = super::samples_list::fixture(&root);
+    let run = save_run(&root, &script, "install.sh", "r1", 1_000, false);
+    save_artifacts(&run);
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let mut app = app();
+    app.options.data_dir = root.clone();
+    app.snapshot.vms.push(VmConfig {
+        id: "vm".into(),
+        name: "Debian".into(),
+        ..VmConfig::default()
+    });
+    app.rules_ui.set_packs_for_test(Vec::new());
+    app.open_library(crate::workspace::LibraryPage::Samples);
+    until(&mut app, &ctx, |app| app.samples_page.is_loaded());
+    app.samples_page.open_detail(&script);
+    until(&mut app, &ctx, |app| {
+        !app.samples_page.detail_outputs().is_empty()
+    });
+    let outputs = app.samples_page.detail_outputs();
+    assert_eq!(outputs.len(), 3);
+    assert_eq!(
+        outputs[0],
+        ("Memory dump".into(), 1, "InRun".into(), Some(3_000_000))
+    );
+    assert_eq!(
+        outputs[1],
+        ("Core dump".into(), 1, "InRun".into(), Some(120_000))
+    );
+    assert_eq!(
+        outputs[2],
+        ("Network capture".into(), 1, "Missing".into(), None)
+    );
+    for _ in 0..3 {
+        render(&mut app, &ctx, SIZE);
+    }
     let _ = std::fs::remove_dir_all(root);
 }

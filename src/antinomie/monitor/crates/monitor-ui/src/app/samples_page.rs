@@ -17,6 +17,8 @@ mod add;
 mod detail;
 mod list;
 mod picker;
+mod promote;
+mod viewer;
 
 /// One list row: a library sample with what the list shows of its runs,
 /// tags and lineage.
@@ -128,6 +130,10 @@ pub(super) struct SamplesPage {
     detail: Option<detail::Detail>,
     /// A run the sample window asked to open in its own VM.
     open_run: Option<OpenRun>,
+    /// The file viewer window.
+    viewer: Option<viewer::Viewer>,
+    /// Add to Samples… for a file of a run.
+    promote: Option<promote::Promote>,
 }
 
 /// A run to open in a panel of the VM it belongs to: the VM is selected and
@@ -346,6 +352,23 @@ impl MonitorApp {
 
     /// The windows over the page: Add file, Edit tags, Remove.
     fn samples_dialogs(&mut self, ctx: &egui::Context) {
+        let mut refresh = false;
+        if let Some(dialog) = &mut self.samples_page.promote {
+            dialog.show(ctx);
+            refresh = std::mem::take(&mut dialog.added);
+            if !dialog.open {
+                self.samples_page.promote = None;
+            }
+        }
+        if refresh {
+            self.samples_page.refresh();
+        }
+        if let Some(viewer) = &mut self.samples_page.viewer {
+            viewer.show(ctx);
+            if !viewer.open {
+                self.samples_page.viewer = None;
+            }
+        }
         let known_custom = self.known_custom_tags();
         if let Some(dialog) = &mut self.samples_page.add {
             let can_choose = self.folder_picker.available();

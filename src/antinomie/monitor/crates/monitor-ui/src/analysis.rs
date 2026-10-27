@@ -10,7 +10,7 @@ mod meaning;
 mod records;
 mod row_menu;
 mod source;
-mod workspace;
+pub(crate) mod workspace;
 pub(crate) use listing_view::{export_ghidra_text, index_ghidra_markers};
 pub(crate) use listing_view::{listing_fields, listing_row_with};
 #[cfg(test)]

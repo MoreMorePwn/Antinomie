@@ -57,6 +57,22 @@ it runs.
   minimap, and arrow, `+`, `-` and `0` keys on the focused graph. Triage keeps
   the run's lineage index in the run's digest.
 
+- **The sample window has a file viewer, Output files and Add to Samples… for
+  files of a run.** *View content* in Identity opens the archived file in a
+  window over the page (Escape or the close button ends it): 4 KiB pages with
+  first, previous, next and last, *Go to offset*, the shown range, *Copy page*,
+  formats Text (opened for scripts), Hex dump, Strings (printable runs of five
+  or more over the whole file, with offsets), C array, Python bytes, Base64 and
+  Hex string, and text size 8 to 32 px by buttons or Ctrl+wheel. Output files
+  lists each memory dump, core dump and network capture the runs left, with why
+  it was saved, its size and whether it is still in the run's folder, deleted
+  or missing, and the actions Open in Memory, Core dumps or Network, Go to run
+  and Open folder. A grey or dashed node of the lineage graph has *Add to
+  Samples…*: the file is read from the run's saved disk dump (only bytes that
+  exist are read; none available says so), refused if its SHA-256 no longer
+  matches the one the run recorded, and added with the run, path, writing
+  program and parent sample.
+
 - **Samples are kept in a library.** Downloads from MalwareBazaar and MalShare,
   and files added from this computer, now go into one library under
   `samples/`: one encrypted archive per sample (password `infected`) in a folder

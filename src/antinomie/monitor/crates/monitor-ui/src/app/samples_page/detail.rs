@@ -20,6 +20,7 @@ use std::{
 
 mod custody;
 mod lineage;
+mod output_files;
 mod parts;
 mod runs;
 mod summary;
@@ -74,6 +75,8 @@ pub(super) struct Data {
     pub(super) runs: Vec<RunEntry>,
     /// What the runs' Triage digests add up to.
     pub(super) rollup: antinomie_monitor_core::samples::Rollup,
+    /// What the runs left behind, for Output files.
+    outputs: Vec<output_files::Output>,
     /// Every library sample's name and verdict, by SHA-256, for the lineage
     /// graph's marks.
     pub(super) known: std::collections::BTreeMap<String, (String, String)>,
@@ -239,6 +242,7 @@ fn load(options: &BackendOptions, vms: &[(String, String)], sha256: &str) -> Loa
             .collect::<Vec<_>>(),
     );
     entries.reverse();
+    let outputs = output_files::read(&entries);
     let (known, links) = lineage_links(&library, &record.sha256, &entries)?;
     let archive = library.archive_path(&record.sha256)?;
     Ok(Data {
@@ -250,6 +254,7 @@ fn load(options: &BackendOptions, vms: &[(String, String)], sha256: &str) -> Loa
         archive,
         runs: entries,
         rollup,
+        outputs,
         known,
         links,
         report,
@@ -284,6 +289,22 @@ impl SamplesPage {
     /// Open the window of a sample.
     pub(in crate::app) fn open_detail(&mut self, sha256: &str) {
         self.detail = Some(Detail::new(sha256));
+    }
+
+    /// Open the viewer on the archived sample.
+    pub(super) fn open_viewer(
+        &mut self,
+        ctx: &egui::Context,
+        record: &SampleRecord,
+        archive: PathBuf,
+    ) {
+        self.viewer = Some(super::viewer::Viewer::open(
+            ctx,
+            &record.sha256,
+            &record.name,
+            record.size,
+            archive,
+        ));
     }
 
     /// Read the sample again at the next frame.
@@ -715,6 +736,69 @@ impl SamplesPage {
         if let Some(detail) = &mut self.detail {
             detail.lineage.set_levels(parents, children, hide);
         }
+    }
+
+    /// Open Add to Samples… on a file of the first run (screenshots).
+    pub(in crate::app) fn open_promote_for_test(&mut self, data_dir: &std::path::Path) {
+        let Some(data) = self.detail.as_ref().and_then(|detail| detail.data.clone()) else {
+            return;
+        };
+        let runs = data
+            .runs
+            .iter()
+            .map(|entry| super::promote::RunChoice {
+                number: entry.number,
+                run_id: entry.run.id.clone(),
+                vm_id: entry.run.vm_id.clone(),
+                vm_name: "Debian".into(),
+                directory: entry.run.directory.clone(),
+                dump: None,
+            })
+            .collect();
+        self.promote = Some(super::promote::Promote::new(
+            data_dir,
+            "/tmp/.x".into(),
+            "b5".repeat(32),
+            data.record.sha256.clone(),
+            "/tmp/install.sh".into(),
+            runs,
+        ));
+    }
+
+    /// Open the viewer on the open sample's archive.
+    pub(in crate::app) fn view_content(&mut self, ctx: &egui::Context) {
+        if let Some(data) = self.detail.as_ref().and_then(|detail| detail.data.clone()) {
+            self.open_viewer(ctx, &data.record, data.archive.clone());
+        }
+    }
+
+    pub(in crate::app) fn viewer_ready(&self) -> bool {
+        self.viewer.as_ref().is_some_and(|viewer| viewer.is_ready())
+    }
+
+    pub(in crate::app) fn viewer_open(&self) -> bool {
+        self.viewer.is_some()
+    }
+
+    /// What Output files lists: kind, run, availability, size.
+    pub(in crate::app) fn detail_outputs(&self) -> Vec<(String, usize, String, Option<u64>)> {
+        self.detail
+            .as_ref()
+            .and_then(|detail| detail.data.as_ref())
+            .map(|data| {
+                data.outputs
+                    .iter()
+                    .map(|output| {
+                        (
+                            output.kind_label().to_owned(),
+                            output.number,
+                            format!("{:?}", output.availability),
+                            output.size,
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// A line for a failing test: what the window is waiting on.

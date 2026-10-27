@@ -17,6 +17,15 @@ pub(super) enum Out {
     OpenSample(String),
     /// Open a run in Triage.
     OpenRun(usize),
+    /// Promote a file of the runs into the library.
+    Promote {
+        path: String,
+        sha256: String,
+        /// The image that wrote it, when an edge says so.
+        writer: String,
+        /// The runs it was seen in, ascending.
+        runs: Vec<usize>,
+    },
 }
 
 /// The graph's options and view, kept while the window is open.
@@ -342,11 +351,38 @@ fn details(ui: &mut egui::Ui, state: &mut State, data: &Data, out: &mut Option<O
                     *out = Some(Out::OpenSample(node.id.clone()));
                 }
             }
-            NodeKind::Captured | NodeKind::Lost => {
-                ui.add_enabled(false, egui::Button::new("Add to Samples…"))
-                    .on_disabled_hover_text(
-                        "Needs a saved copy of the file; comes with the file viewer",
-                    );
+            NodeKind::Captured | NodeKind::Lost if !node.path.is_empty() => {
+                let ask = ui
+                    .button("Add to Samples…")
+                    .on_hover_text("Read the file from a run's saved disk and add it")
+                    .clicked();
+                if ask {
+                    let mut runs: Vec<usize> = cached
+                        .graph
+                        .edges
+                        .iter()
+                        .filter(|edge| edge.from == node.id || edge.to == node.id)
+                        .flat_map(|edge| edge.runs.iter().copied())
+                        .collect();
+                    runs.sort_unstable();
+                    runs.dedup();
+                    let writer = cached
+                        .graph
+                        .edges
+                        .iter()
+                        .filter(|edge| {
+                            edge.to == node.id && edge.kinds.contains_key(&EdgeKind::Dropped)
+                        })
+                        .find_map(|edge| cached.graph.nodes.iter().find(|n| n.id == edge.from))
+                        .map(|parent| parent.path.clone())
+                        .unwrap_or_default();
+                    *out = Some(Out::Promote {
+                        path: node.path.clone(),
+                        sha256: node.sha256.clone(),
+                        writer,
+                        runs,
+                    });
+                }
             }
             _ => {}
         }

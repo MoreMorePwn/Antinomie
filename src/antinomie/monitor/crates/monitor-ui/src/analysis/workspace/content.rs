@@ -8,7 +8,7 @@ use antinomie_monitor_core::ANALYSIS_PREVIEW_MAX_SIZE;
 use std::fmt::Write as _;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum Format {
+pub(crate) enum Format {
     #[default]
     Hex,
     Text,
@@ -19,7 +19,7 @@ enum Format {
 }
 
 impl Format {
-    const ALL: [Self; 6] = [
+    pub(crate) const ALL: [Self; 6] = [
         Self::Hex,
         Self::Text,
         Self::CArray,
@@ -28,7 +28,7 @@ impl Format {
         Self::HexString,
     ];
 
-    fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Hex => "Hex dump",
             Self::Text => "Text",
@@ -255,7 +255,7 @@ fn zoomed_text_px(ui: &mut egui::Ui, state: &mut ContentState) -> f32 {
 }
 
 /// A hexadecimal (`0x…`) or decimal offset.
-fn parse_offset(text: &str) -> Option<u64> {
+pub(crate) fn parse_offset(text: &str) -> Option<u64> {
     let text = text.trim().replace('_', "");
     match text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
         Some(hex) => u64::from_str_radix(hex, 16).ok(),
@@ -263,7 +263,7 @@ fn parse_offset(text: &str) -> Option<u64> {
     }
 }
 
-fn render(format: Format, offset: u64, data: &[u8]) -> String {
+pub(crate) fn render(format: Format, offset: u64, data: &[u8]) -> String {
     let mut out = String::new();
     match format {
         Format::Hex => {
