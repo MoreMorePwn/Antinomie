@@ -10,6 +10,7 @@ filesystems are used.
 # SPDX-License-Identifier: GPL-3.0-only
 # Copyright (c) 2026 MikiMiku (MoreMorePwn)
 import argparse
+import errno
 from datetime import datetime, timedelta, timezone
 import hashlib
 import importlib.util
@@ -1591,7 +1592,17 @@ def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=Fa
                 "kernel_config_sha256": manifest["kernel_config_sha256"]}
         (bundle / "bundle.json").write_text(json.dumps(manifest, indent=2) + "\n")
         # Publish only a completed bundle, never overwrite an existing base.
-        bundle.rename(output)
+        try:
+            bundle.rename(output)
+        except OSError as error:
+            if error.errno != errno.EXDEV:
+                raise
+            # The output folder is another mount (a container's /out): copy beside
+            # the target, then publish with one rename.
+            staged = output.with_name(output.name + ".partial")
+            shutil.rmtree(staged, ignore_errors=True)
+            shutil.copytree(bundle, staged, symlinks=True)
+            staged.rename(output)
 
 
 def main():
