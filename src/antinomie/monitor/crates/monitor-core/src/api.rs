@@ -502,6 +502,11 @@ pub struct ExecRequest {
     /// hash of the copy. Never saved with the run: it names a host path.
     #[serde(skip)]
     pub host_copy: Option<PathBuf>,
+    /// The library sample this run executes, when the program's bytes were
+    /// archived before launch. Runs saved before the library existed, and
+    /// runs of a program the library could not read, have none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample: Option<crate::samples::SampleRef>,
 }
 
 /// Persisted `artifacts.json` in a run directory links independently retained evidence.
@@ -1460,6 +1465,7 @@ impl Default for ExecRequest {
             debug_on_start: false,
             route: None,
             host_copy: None,
+            sample: None,
         }
     }
 }

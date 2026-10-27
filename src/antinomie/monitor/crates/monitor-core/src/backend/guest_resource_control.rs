@@ -75,6 +75,7 @@ impl Session {
             debug_on_start: false,
             route: None,
             host_copy: None,
+            sample: None,
         };
         let reply = match self.request_typed(
             control::EXEC,

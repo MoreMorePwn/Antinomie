@@ -14,7 +14,6 @@ use antinomie_monitor_core::{
 use std::{
     collections::BTreeMap,
     fs,
-    io::Write,
     path::{Path, PathBuf},
     thread,
     time::{Duration, Instant},
@@ -122,37 +121,17 @@ fn run() -> Result<(), String> {
     }
     let bytes = fs::read(program).map_err(|e| e.to_string())?;
     let hash = sha256(&bytes);
-    // As MalwareBazaar serves it.
-    fs::create_dir_all(samples::samples_dir(&data)).map_err(|e| e.to_string())?;
-    let archive = samples::archive_path(&data, &hash)?;
-    let mut writer = zip::ZipWriter::new(fs::File::create(&archive).map_err(|e| e.to_string())?);
-    writer
-        .start_file(
-            format!("{hash}.elf"),
-            zip::write::SimpleFileOptions::default()
-                .with_aes_encryption(zip::AesMode::Aes128, samples::ARCHIVE_PASSWORD),
-        )
-        .map_err(|e| e.to_string())?;
-    writer.write_all(&bytes).map_err(|e| e.to_string())?;
-    writer.finish().map_err(|e| e.to_string())?;
-    let record = samples::StoredSample {
-        info: samples::SampleInfo {
-            sha256_hash: hash.clone(),
-            file_name: "sample-check.elf".into(),
-            file_size: bytes.len() as u64,
-            file_type: "elf".into(),
-            file_arch: samples::elf_arch(&bytes).map(str::to_owned),
-            ..samples::SampleInfo::default()
-        },
-        source: "samples-check".into(),
-        downloaded_ms: 1,
-        pushes: Vec::new(),
+    // As a download is kept: an AES archive in the library, owner-only.
+    let info = samples::SampleInfo {
+        sha256_hash: hash.clone(),
+        file_name: "sample-check.elf".into(),
+        file_size: bytes.len() as u64,
+        file_type: "elf".into(),
+        file_arch: samples::elf_arch(&bytes).map(str::to_owned),
+        ..samples::SampleInfo::default()
     };
-    fs::write(
-        archive.with_extension("json"),
-        serde_json::to_vec(&record).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())?;
+    samples::store_bytes(&data, &info, &bytes, "samples-check")?;
+    let archive = samples::archive_path(&data, &hash)?;
     println!(
         "archive {} ({} bytes)",
         archive.display(),

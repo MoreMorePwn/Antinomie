@@ -16,6 +16,20 @@ use std::{
     process::Stdio,
 };
 
+mod archive;
+mod custody;
+mod intake;
+mod library;
+mod migrate;
+
+pub use archive::Verification;
+pub use custody::{CustodyEvent, CustodySink, NoCustody, PlainEvents};
+pub use intake::{Added, FileProbe, NewSample, detect_type};
+pub use library::{
+    Alias, CATEGORIES, EventRow, Library, NewOrigin, Origin, OriginKind, SampleRecord, TAG_COLORS,
+    Tag, TagKind, VERDICTS,
+};
+
 /// MalwareBazaar's API: every call is a POST with an `Auth-Key` header.
 pub const BAZAAR_API: &str = "https://mb-api.abuse.ch/api/v1/";
 /// Where a free API key is made.
@@ -384,8 +398,9 @@ pub fn arch_label(arch: &str) -> String {
     }
 }
 
-/// A downloaded sample: its MalwareBazaar record, where it came from and
-/// where it went.
+/// A sample as Tools › Malware samples lists it: its source's record, where
+/// it came from and where it went. Read from the [`Library`]; records of
+/// this shape made by earlier versions are migrated into it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct StoredSample {
@@ -406,6 +421,16 @@ pub struct Push {
     pub at_ms: u64,
 }
 
+/// The library sample a run executed, as the run record names it. The SHA-256
+/// is of the bytes the library archived before the program started.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SampleRef {
+    pub sha256: String,
+    /// The name the sample had when the run started.
+    pub name: String,
+}
+
 fn unix_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -416,16 +441,9 @@ fn is_sha256(text: &str) -> bool {
     text.len() == 64 && text.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-/// The archive of a downloaded sample.
+/// Where the archive of a sample is: `samples/ab/<sha256>.zip`.
 pub fn archive_path(data_dir: &Path, sha256: &str) -> Result<PathBuf, String> {
-    if !is_sha256(sha256) {
-        return Err(format!("not a SHA-256: {sha256:?}"));
-    }
-    Ok(samples_dir(data_dir).join(format!("{}.zip", sha256.to_ascii_lowercase())))
-}
-
-fn record_path(data_dir: &Path, sha256: &str) -> Result<PathBuf, String> {
-    Ok(archive_path(data_dir, sha256)?.with_extension("json"))
+    archive::shard_path(&samples_dir(data_dir), sha256)
 }
 
 /// The sample inside an archive, decrypted in memory and checked against its
@@ -491,136 +509,132 @@ pub fn elf_arch(bytes: &[u8]) -> Option<&'static str> {
     })
 }
 
-/// Download one sample's archive, check it and keep it with its record.
+/// Download one sample's archive, check it and add it to the library.
 pub fn download(
     curl: &Path,
     key: &str,
     data_dir: &Path,
     info: &SampleInfo,
 ) -> Result<StoredSample, String> {
-    let archive = archive_path(data_dir, &info.sha256_hash)?;
+    if !is_sha256(&info.sha256_hash) {
+        return Err(format!("not a SHA-256: {:?}", info.sha256_hash));
+    }
     let dir = samples_dir(data_dir);
     crate::storage::private_dir(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let partial = archive.with_extension("zip.part");
+    let partial = dir.join(format!(
+        "{}.zip.part",
+        info.sha256_hash.to_ascii_lowercase()
+    ));
     let form = [
         ("query", "get_file".to_owned()),
         ("sha256_hash", info.sha256_hash.to_ascii_lowercase()),
     ];
     let result = (|| {
         post(curl, key, &form, Some(&partial))?;
-        let head = fs::read(&partial)
-            .map(|bytes| bytes.into_iter().take(1).collect::<Vec<_>>())
-            .map_err(|e| e.to_string())?;
-        if head.first() == Some(&b'{') {
+        let body = fs::read(&partial).map_err(|e| e.to_string())?;
+        if body.first() == Some(&b'{') {
             // An error answered as JSON instead of the archive.
-            let body = fs::read(&partial).map_err(|e| e.to_string())?;
             return Err(parse_reply(&body)
                 .err()
                 .unwrap_or_else(|| "MalwareBazaar sent no archive".into()));
         }
+        drop(body);
         let bytes = open_sample(&partial, &info.sha256_hash)?;
-        let mut info = info.clone();
-        if let Some(arch) = elf_arch(&bytes) {
-            info.file_arch = Some(arch.into());
-        }
-        drop(bytes);
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&partial, fs::Permissions::from_mode(0o600))
-            .map_err(|e| e.to_string())?;
-        fs::rename(&partial, &archive).map_err(|e| e.to_string())?;
-        let stored = StoredSample {
-            info,
-            source: "MalwareBazaar".into(),
-            downloaded_ms: unix_ms(),
-            pushes: Vec::new(),
-        };
-        save(data_dir, &stored)?;
-        Ok(stored)
+        store_bytes(data_dir, info, &bytes, "MalwareBazaar")
     })();
-    if result.is_err() {
-        let _ = fs::remove_file(&partial);
-    }
+    let _ = fs::remove_file(&partial);
     result
 }
 
 /// Keep a sample held in memory (`bytes`, already checked against its
-/// SHA-256) as MalwareBazaar would: an AES archive with the password
-/// `infected`, owner-only, with its record. Nothing unencrypted is written.
-pub(crate) fn store_bytes(
+/// SHA-256) in the library as a download from `source`: an AES archive with
+/// the password `infected`, owner-only, with its record. Nothing unencrypted
+/// is written.
+pub fn store_bytes(
     data_dir: &Path,
     info: &SampleInfo,
     bytes: &[u8],
     source: &str,
 ) -> Result<StoredSample, String> {
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-    let archive = archive_path(data_dir, &info.sha256_hash)?;
-    let dir = samples_dir(data_dir);
-    crate::storage::private_dir(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let partial = archive.with_extension("zip.part");
-    let result = (|| {
-        let file = fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&partial)
-            .map_err(|e| format!("{}: {e}", partial.display()))?;
-        let mut writer = zip::ZipWriter::new(file);
-        writer
-            .start_file(
-                format!("{}.bin", info.sha256_hash.to_ascii_lowercase()),
-                zip::write::SimpleFileOptions::default()
-                    .with_aes_encryption(zip::AesMode::Aes256, ARCHIVE_PASSWORD),
-            )
-            .map_err(|e| format!("sample archive: {e}"))?;
-        writer
-            .write_all(bytes)
-            .map_err(|e| format!("sample archive: {e}"))?;
-        writer
-            .finish()
-            .map_err(|e| format!("sample archive: {e}"))?;
-        // Read back as every sample is: the archive must open and match.
-        open_sample(&partial, &info.sha256_hash)?;
-        fs::set_permissions(&partial, fs::Permissions::from_mode(0o600))
-            .map_err(|e| e.to_string())?;
-        fs::rename(&partial, &archive).map_err(|e| e.to_string())?;
-        let mut info = info.clone();
-        if let Some(arch) = elf_arch(bytes) {
-            info.file_arch = Some(arch.into());
-        }
-        if info.file_size == 0 {
-            info.file_size = bytes.len() as u64;
-        }
-        let stored = StoredSample {
-            info,
-            source: source.into(),
-            downloaded_ms: unix_ms(),
-            pushes: Vec::new(),
-        };
-        save(data_dir, &stored)?;
-        Ok(stored)
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&partial);
+    let mut library = Library::open(data_dir)?;
+    let mut info = info.clone();
+    if let Some(arch) = elf_arch(bytes) {
+        info.file_arch = Some(arch.into());
     }
-    result
+    if info.file_size == 0 {
+        info.file_size = bytes.len() as u64;
+    }
+    let added = library.add_bytes(
+        bytes,
+        NewSample {
+            name: info.file_name.clone(),
+            origin: NewOrigin {
+                kind: OriginKind::Download,
+                source: source.into(),
+                name: info.file_name.clone(),
+                ..NewOrigin::default()
+            },
+            info: Some(info),
+            ..NewSample::default()
+        },
+    )?;
+    library
+        .get(&added.sha256)?
+        .map(|record| stored_from(&library, record))
+        .ok_or_else(|| "the sample was not kept".into())
 }
 
-fn save(data_dir: &Path, stored: &StoredSample) -> Result<(), String> {
-    crate::storage::atomic_json(&record_path(data_dir, &stored.info.sha256_hash)?, stored)
+/// A library entry as the Tools window lists it.
+fn stored_from(library: &Library, record: SampleRecord) -> StoredSample {
+    let origins = library.origins(&record.sha256).unwrap_or_default();
+    let mut info = record.info.clone();
+    info.sha256_hash = record.sha256.clone();
+    info.sha1_hash.clone_from(&record.sha1);
+    info.md5_hash.clone_from(&record.md5);
+    info.file_name.clone_from(&record.name);
+    info.file_size = record.size;
+    if info.file_type.is_empty() {
+        info.file_type.clone_from(&record.file_type);
+    }
+    if info.file_arch.is_none() && !record.arch.is_empty() {
+        info.file_arch = Some(record.arch.clone());
+    }
+    if info.signature.is_none() && !record.family.is_empty() {
+        info.signature = Some(record.family.clone());
+    }
+    StoredSample {
+        source: origins
+            .first()
+            .map(|origin| {
+                if origin.source.is_empty() {
+                    origin.kind.label().to_owned()
+                } else {
+                    origin.source.clone()
+                }
+            })
+            .unwrap_or_default(),
+        downloaded_ms: record.added_ms,
+        pushes: library.pushes(&record.sha256).unwrap_or_default(),
+        info,
+    }
 }
 
-/// Downloaded samples, newest first.
+/// The samples in the library that have an archive, newest first.
 pub fn stored(data_dir: &Path) -> Vec<StoredSample> {
-    let mut found: Vec<StoredSample> = fs::read_dir(samples_dir(data_dir))
+    let Ok(library) = Library::open(data_dir) else {
+        return Vec::new();
+    };
+    let mut found: Vec<StoredSample> = library
+        .list()
+        .unwrap_or_default()
         .into_iter()
-        .flatten()
-        .flatten()
-        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
-        .filter_map(|entry| serde_json::from_slice(&fs::read(entry.path()).ok()?).ok())
-        .filter(|sample: &StoredSample| {
-            archive_path(data_dir, &sample.info.sha256_hash).is_ok_and(|path| path.is_file())
+        .filter(|record| {
+            record.removed_ms.is_none()
+                && library
+                    .archive_path(&record.sha256)
+                    .is_ok_and(|path| path.is_file())
         })
+        .map(|record| stored_from(&library, record))
         .collect();
     found.sort_by_key(|sample| std::cmp::Reverse(sample.downloaded_ms));
     found
@@ -628,28 +642,13 @@ pub fn stored(data_dir: &Path) -> Vec<StoredSample> {
 
 /// Note that a sample was sent into a VM.
 pub fn record_push(data_dir: &Path, sha256: &str, push: Push) -> Result<(), String> {
-    let path = record_path(data_dir, sha256)?;
-    let mut stored: StoredSample =
-        serde_json::from_slice(&fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?)
-            .map_err(|e| e.to_string())?;
-    stored.pushes.push(Push {
-        at_ms: unix_ms(),
-        ..push
-    });
-    save(data_dir, &stored)
+    Library::open(data_dir)?.record_push(sha256, push)
 }
 
-/// Delete a downloaded sample and its record.
+/// Remove a sample's archive. Its record, origins and events stay in the
+/// library (see [`Library::remove`]).
 pub fn delete(data_dir: &Path, sha256: &str) -> Result<(), String> {
-    let archive = archive_path(data_dir, sha256)?;
-    for path in [archive.clone(), archive.with_extension("json")] {
-        match fs::remove_file(&path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(format!("{}: {error}", path.display())),
-        }
-    }
-    Ok(())
+    Library::open(data_dir)?.remove(sha256)
 }
 
 /// Bumped when the warning shown before first use says something new, so it
@@ -729,6 +728,8 @@ pub const STARTERS: &[(&str, &str)] = &[
     ("CoinMiner", "XMRig-based miners"),
 ];
 
+#[cfg(test)]
+mod library_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -828,22 +829,11 @@ mod tests {
         let root = temp("stored");
         let bytes = b"sample";
         let hash = sha256(bytes);
-        let dir = samples_dir(&root);
-        fs::create_dir_all(&dir).unwrap();
-        archive(&archive_path(&root, &hash).unwrap(), "s", bytes);
-        save(
-            &root,
-            &StoredSample {
-                info: SampleInfo {
-                    sha256_hash: hash.clone(),
-                    ..SampleInfo::default()
-                },
-                source: "MalwareBazaar".into(),
-                downloaded_ms: 1,
-                pushes: Vec::new(),
-            },
-        )
-        .unwrap();
+        let info = SampleInfo {
+            sha256_hash: hash.clone(),
+            ..SampleInfo::default()
+        };
+        store_bytes(&root, &info, bytes, "MalwareBazaar").unwrap();
         record_push(
             &root,
             &hash,
@@ -857,6 +847,7 @@ mod tests {
         let found = stored(&root);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].pushes[0].path, "/tmp/s");
+        assert_eq!(found[0].source, "MalwareBazaar");
         assert!(archive_path(&root, "../x").is_err());
         delete(&root, &hash).unwrap();
         assert!(stored(&root).is_empty());
@@ -876,6 +867,10 @@ mod tests {
             ("MalShare", plain.len() as u64)
         );
         let archive = archive_path(&root, &info.sha256_hash).unwrap();
+        assert_eq!(
+            archive.parent().unwrap().file_name().unwrap().to_str(),
+            Some(&info.sha256_hash[..2])
+        );
         let on_disk = fs::read(&archive).unwrap();
         assert!(!on_disk.windows(plain.len()).any(|window| window == plain));
         assert_eq!(open_sample(&archive, &info.sha256_hash).unwrap(), plain);

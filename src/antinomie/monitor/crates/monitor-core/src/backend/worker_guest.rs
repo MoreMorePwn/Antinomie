@@ -155,7 +155,16 @@ impl Worker {
                 session.update_captures(&mut self.snapshot);
                 Ok("capture admission stopped; programs continue running and late observation tails remain recordable".into())
             }
-            Command::Execute(request) => {
+            Command::Execute(mut request) => {
+                // A program the library sent into this VM is the library's
+                // sample; the run record names it.
+                if request.sample.is_none() {
+                    request.sample = crate::samples::Library::open(&self.options.data_dir)
+                        .and_then(|library| {
+                            library.identify_run(&session.vm.id, &request.path, &request.args)
+                        })
+                        .unwrap_or(None);
+                }
                 if request.core_dump_on_exit
                     && !self
                         .snapshot
@@ -596,9 +605,12 @@ impl Worker {
                 destination,
                 executable,
             } => {
-                // Decrypted in memory only; the host keeps the archive.
-                let archive = crate::samples::archive_path(&self.options.data_dir, &sha256)?;
-                let bytes = crate::samples::open_sample(&archive, &sha256)?;
+                // Decrypted in memory only; the host keeps the archive. The
+                // library reads it back and compares its SHA-256 first: a
+                // sample that does not verify is never sent.
+                let library = crate::samples::Library::open(&self.options.data_dir)?;
+                let bytes = library.open_bytes(&sha256)?;
+                drop(library);
                 let message = upload_stream(
                     session,
                     &mut self.snapshot,

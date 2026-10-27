@@ -6,6 +6,19 @@ it runs.
 
 ## 0.8.0 — unreleased
 
+- **Samples are kept in a library.** Downloads from MalwareBazaar and MalShare,
+  and files added from this computer, now go into one library under
+  `samples/`: one encrypted archive per sample (password `infected`) in a folder
+  of its first two hex digits, with names, descriptions, tags, every route by
+  which the same bytes arrived (origins), what was sent into which VM, and a
+  plain event list in a SQLite database beside them. Identity is the SHA-256, so
+  the same file by two routes is one sample with two origins. Archives and
+  records of earlier versions move in on first start (the old JSON records are
+  kept in `samples/legacy/`) and are marked as recorded before the library. A
+  sample is read back and its SHA-256 checked each time it is sent into a VM,
+  and a mismatch is refused. A run of a program the library sent names that
+  sample in its run record.
+
 - **Every machine profile value has a public source.** The catalog's strings
   are now taken from public hardware reports of real units (hw-probe uploads in
   the linuxhw DMI, Dmesg, HWInfo and SMART collections), cited one by one in
