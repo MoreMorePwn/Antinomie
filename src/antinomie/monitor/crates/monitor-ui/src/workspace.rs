@@ -441,53 +441,72 @@ impl WorkspaceLayout {
             }
             _ => {}
         }
-        self.shrink_details_for_debugger();
+        self.fold_details_for_tab();
     }
 
-    /// How much of the main window the work area keeps while the Debugger
-    /// tab shows: Details and Activity follow other tabs, so they fold down
-    /// to their tab strip and the debugger gets the height.
-    const DEBUGGER_SPLIT: f32 = 0.93;
+    /// How much of the main window the work area keeps while a tab that has
+    /// no use for Details and Activity shows (the Debugger, the Samples page):
+    /// they follow other tabs, so they fold down to their tab strip and the
+    /// tab gets the height.
+    const FOLDED_SPLIT: f32 = 0.93;
 
-    /// The Debugger tab is the shown tab of the work area (the top part of
-    /// the main window).
-    fn debugger_shows(&self) -> bool {
-        use egui_dock::Node;
-        let Some((surface, node, tab)) = self.dock.find_tab(&Panel::Debugger) else {
-            return false;
-        };
-        if !surface.is_main() {
-            return false;
+    /// The Samples page leaves nothing of Details but its tab strip, also in
+    /// a tall window.
+    const SAMPLES_SPLIT: f32 = 0.97;
+
+    /// What share of the main window a tab that folds Details and Activity
+    /// away keeps while it is shown; none for any other tab.
+    fn folded_split(panel: &Panel) -> Option<f32> {
+        match panel {
+            Panel::Debugger => Some(Self::FOLDED_SPLIT),
+            Panel::Library(LibraryPage::Samples) => Some(Self::SAMPLES_SPLIT),
+            _ => None,
         }
-        let mut at = node;
-        let in_top = loop {
-            if at == NodeIndex::root().left() {
-                break true;
-            }
-            match at.parent() {
-                Some(parent) => at = parent,
-                None => break false,
-            }
-        };
-        in_top && matches!(&self.dock[surface][node], Node::Leaf { active, .. } if *active == tab)
     }
 
-    /// Fold Details and Activity down while the Debugger tab shows and put
-    /// the split back when it stops showing. A split the user drags in
-    /// between is theirs until the tab is left.
-    fn shrink_details_for_debugger(&mut self) {
+    /// A tab that folds Details away is the shown tab of the work area (the
+    /// top part of the main window).
+    fn folding_tab_shows(&self) -> Option<f32> {
         use egui_dock::Node;
-        let shows = self.debugger_shows();
+        self.dock
+            .iter_all_tabs()
+            .filter_map(|(_, panel)| Some((panel, Self::folded_split(panel)?)))
+            .find_map(|(panel, split)| {
+                let (surface, node, tab) = self.dock.find_tab(panel)?;
+                if !surface.is_main() {
+                    return None;
+                }
+                let mut at = node;
+                let in_top = loop {
+                    if at == NodeIndex::root().left() {
+                        break true;
+                    }
+                    match at.parent() {
+                        Some(parent) => at = parent,
+                        None => break false,
+                    }
+                };
+                let shown = matches!(&self.dock[surface][node], Node::Leaf { active, .. } if *active == tab);
+                (in_top && shown).then_some(split)
+            })
+    }
+
+    /// Fold Details and Activity down while such a tab shows and put the
+    /// split back when it stops showing. A split the user drags in between
+    /// is theirs until the tab is left.
+    fn fold_details_for_tab(&mut self) {
+        use egui_dock::Node;
+        let shows = self.folding_tab_shows();
         let Node::Vertical { fraction, .. } = &mut self.dock.main_surface_mut()[NodeIndex::root()]
         else {
             return;
         };
         match (shows, self.details_fraction) {
-            (true, None) => {
+            (Some(split), None) => {
                 self.details_fraction = Some(*fraction);
-                *fraction = Self::DEBUGGER_SPLIT.max(*fraction);
+                *fraction = split.max(*fraction);
             }
-            (false, Some(before)) => {
+            (None, Some(before)) => {
                 *fraction = before;
                 self.details_fraction = None;
             }
@@ -2533,19 +2552,42 @@ mod tests {
             "beside Static Analysis"
         );
         layout.focus(Panel::Trace);
-        layout.shrink_details_for_debugger();
+        layout.fold_details_for_tab();
         assert!(
             (split(&layout) - 0.72).abs() < 1e-6,
             "not showing: untouched"
         );
         layout.focus(Panel::Debugger);
-        layout.shrink_details_for_debugger();
+        layout.fold_details_for_tab();
         assert!(split(&layout) > 0.9, "Details and Activity fold down");
-        layout.shrink_details_for_debugger();
+        layout.fold_details_for_tab();
         assert!(split(&layout) > 0.9, "and stay that way while it shows");
         layout.focus(Panel::Trace);
-        layout.shrink_details_for_debugger();
+        layout.fold_details_for_tab();
         assert!((split(&layout) - 0.72).abs() < 1e-6, "the split came back");
+    }
+
+    #[test]
+    fn the_samples_page_folds_details_while_it_shows_and_other_pages_do_not() {
+        use egui_dock::Node;
+        let split = |layout: &WorkspaceLayout| match &layout.dock.main_surface()[NodeIndex::root()]
+        {
+            Node::Vertical { fraction, .. } => *fraction,
+            other => panic!("not split: {other:?}"),
+        };
+        let mut layout = WorkspaceLayout::default();
+        layout.open_library(LibraryPage::Rules);
+        layout.fold_details_for_tab();
+        assert!((split(&layout) - 0.72).abs() < 1e-6, "other pages keep it");
+        layout.open_library(LibraryPage::Samples);
+        layout.fold_details_for_tab();
+        assert!(split(&layout) > 0.9, "Samples folds Details and Activity");
+        layout.focus(Panel::Trace);
+        layout.fold_details_for_tab();
+        assert!((split(&layout) - 0.72).abs() < 1e-6, "the split came back");
+        layout.focus(Panel::Library(LibraryPage::Samples));
+        layout.fold_details_for_tab();
+        assert!(split(&layout) > 0.9, "and folds again on return");
     }
 
     #[test]

@@ -3,12 +3,16 @@
 //! an X11 display; exits by itself. The library lives in ANTINOMIE_QA_DATA
 //! (a throwaway folder; never the user's data).
 //!
-//! ANTINOMIE_QA_SCENE = list | tags | add | edit | detail | detail2 | lineage | lineage2 | outputs | viewer | promote | similar | runs | custody,
+//! ANTINOMIE_QA_SCENE = list | tags | add | edit | detail | detail2 | regex | lineage | lineage2 | outputs | viewer | promote | similar | runs | custody,
 //! ANTINOMIE_QA_THEME = dark | light | blue, ANTINOMIE_QA_SIZE = 1400x820,
 //! ANTINOMIE_QA_SECONDS = 25.
 use super::*;
 use crate::theme::Theme;
 use antinomie_monitor_core::samples::Library;
+
+fn archive_worker(ctx: &egui::Context) -> Option<crate::archive::ArchiveWorker> {
+    crate::archive::ArchiveWorker::new(Some(ctx.clone())).ok()
+}
 
 #[test]
 #[ignore = "requires X11 native rendering; exits after the given seconds"]
@@ -78,6 +82,12 @@ fn native_samples_fixture() {
             app.options.data_dir = data.clone();
             app.rules_ui.set_packs_for_test(Vec::new());
             app.layout = WorkspaceLayout::default();
+            // The archive worker the real app starts at launch; without it the
+            // pages that read runs show "Archive worker unavailable".
+            app.archive = archive_worker(&cc.egui_ctx);
+            if app.archive.is_some() {
+                app.refresh_history();
+            }
             if scene == "similar" {
                 // A text file and a near copy of it, so the Summary has a row.
                 let mut base = String::new();
@@ -118,6 +128,7 @@ fn native_samples_fixture() {
                 scene.as_str(),
                 "detail"
                     | "detail2"
+                    | "regex"
                     | "lineage"
                     | "lineage2"
                     | "outputs"
@@ -155,9 +166,13 @@ fn native_samples_fixture() {
                     "custody" => "custody",
                     _ => "summary",
                 });
-                if scene == "detail2" {
-                    app.samples_page.scroll_detail(800.0);
-                }
+                // The page keeps its scroll between runs of the fixture (the
+                // window state is saved), so every scene says where it is.
+                app.samples_page.scroll_detail(match scene.as_str() {
+                    "regex" => 720.0,
+                    "detail2" => 800.0,
+                    _ => 0.0,
+                });
                 if scene == "outputs" {
                     app.samples_page.scroll_detail(2150.0);
                 }
