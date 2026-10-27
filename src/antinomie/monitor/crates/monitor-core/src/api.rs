@@ -2140,6 +2140,42 @@ pub struct FieldSummary {
     /// for every other field and in recordings from guests before series 0053.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recapture: Option<Recapture>,
+    /// How the bytes are encoded, from the field descriptor: with `layout`,
+    /// the type the views render the field by. `None` for a field the host
+    /// made itself and in summaries saved before 0.8.0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encoding: Option<FieldEncoding>,
+}
+
+/// The encoding word of a field descriptor (FIELD_BEGIN offset 2).
+///
+/// | Variant | Wire | Bytes |
+/// | --- | --- | --- |
+/// | `Bytes` | 1 | Opaque bytes: a data buffer, or an object `layout` names |
+/// | `String` | 2 | A NUL-terminated byte string |
+/// | `Object` | 3 | A target-ABI object or array that `layout` names |
+/// | `Scalar` | 4 | A little-endian u64 |
+/// | `Array` | 5 | Little-endian u64s |
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FieldEncoding {
+    Bytes,
+    String,
+    Object,
+    Scalar,
+    Array,
+}
+impl FieldEncoding {
+    /// The encoding a descriptor's wire value names; `None` outside 1..=5.
+    pub fn from_wire(value: u16) -> Option<Self> {
+        match value {
+            1 => Some(Self::Bytes),
+            2 => Some(Self::String),
+            3 => Some(Self::Object),
+            4 => Some(Self::Scalar),
+            5 => Some(Self::Array),
+            _ => None,
+        }
+    }
 }
 
 /// How an input the call's Entry could not read was captured later.
@@ -2488,6 +2524,7 @@ mod tests {
                 raw_path: None,
                 ranges: vec![(0, 8)],
                 recapture: None,
+                encoding: None,
             }];
             event
         };
@@ -2666,6 +2703,7 @@ mod tests {
             raw_path: None,
             ranges: vec![(0, 8)],
             recapture: None,
+            encoding: None,
         });
         let mut events = vec![entry];
         for event_seq in 0..260 {

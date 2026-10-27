@@ -1823,6 +1823,7 @@ mod tests {
             raw_path: Some(external.join("secret.raw")),
             ranges: vec![(0, 6)],
             recapture: None,
+            encoding: None,
         };
         assert!(matches!(
             read_captured_range(&directory, &field, 0, 6),
@@ -1847,6 +1848,7 @@ mod tests {
             raw_path: None,
             ranges: vec![(0, 2), (8, 2)],
             recapture: None,
+            encoding: None,
         };
         assert!(matches!(
             read_captured_range(Path::new("/unused"), &field, 1, 8),

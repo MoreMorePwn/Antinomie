@@ -345,6 +345,9 @@ The network capture is the guest's own view on every route.
   captured data. Flags and options are decoded into names (for example
   `O_CREAT | O_CLOEXEC`, `SOL_SOCKET / SO_RCVBUF`, `PR_SET_NAME`), unknown bits
   are listed separately, and captured buffers can be inspected byte by byte.
+  Captured data reads by its type: strings quoted, structs, times, integers
+  and pointers in hex, socket addresses decoded, and data buffers quoted with
+  every byte (binary bytes escaped as `\x..`).
 - **Run History**: every run on the selected VM, including earlier boots, with
   its command line, user, status and exit code. Double-click a run to open its
   Triage view. Select a trace entry to inspect its recorded call details.

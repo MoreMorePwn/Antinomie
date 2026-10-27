@@ -5,7 +5,9 @@ use crate::{
     theme::{self, ValueKind},
     values,
 };
-use antinomie_monitor_core::{syscalls, FieldSummary, InvocationSummary, Recapture, WaitStatus};
+use antinomie_monitor_core::{
+    syscalls, FieldEncoding, FieldSummary, InvocationSummary, Recapture, WaitStatus,
+};
 use eframe::egui::{self, Color32, RichText};
 
 pub(crate) mod async_browse;
@@ -1145,6 +1147,7 @@ pub(super) mod tests {
             raw_path: None,
             ranges: vec![(0, 3), (8, 2)],
             recapture: None,
+            encoding: None,
         }
     }
 
@@ -1213,6 +1216,7 @@ pub(super) mod tests {
             raw_path: None,
             ranges: vec![(0, 12)],
             recapture: None,
+            encoding: None,
         });
         InvocationSummary {
             stream_id: 1,
@@ -1265,6 +1269,7 @@ pub(super) mod tests {
             raw_path: None,
             ranges: vec![(0, text.len() as u64)],
             recapture: None,
+            encoding: None,
         }
     }
 
@@ -1338,23 +1343,177 @@ pub(super) mod tests {
         assert_eq!(inspector.selection, Some(Selection::Return(3)));
     }
 
+    /// A complete captured field of `layout` (a type name gets the guest's
+    /// `linux-6.12.94/x86_64/` source, as the recorder sends it).
+    pub(super) fn typed(
+        key: &str,
+        layout: &str,
+        encoding: Option<FieldEncoding>,
+        bytes: &[u8],
+    ) -> FieldSummary {
+        let mut field = field();
+        field.key = key.into();
+        field.layout = if layout.is_empty() {
+            String::new()
+        } else {
+            format!("linux-6.12.94/x86_64/{layout}")
+        };
+        field.encoding = encoding;
+        field.preview = bytes.to_vec();
+        field.ranges = vec![(0, bytes.len() as u64)];
+        field.captured_len = bytes.len() as u64;
+        field.logical_len = Some(bytes.len() as u64);
+        field
+    }
+
     #[test]
     fn previews_show_text_without_terminators_and_zeros_as_bytes() {
-        let mut field = field();
-        field.preview = b"/etc\0".to_vec();
-        field.ranges = vec![(0, 5)];
-        field.captured_len = 5;
-        field.logical_len = Some(5);
-        assert_eq!(preview(&field), "\"/etc\"");
-        field.preview = vec![0; 4];
-        field.ranges = vec![(0, 4)];
-        field.captured_len = 4;
-        field.logical_len = Some(4);
-        assert_eq!(preview(&field), "00 00 00 00");
-        field.key = "address.data".into();
-        field.preview = vec![2, 0, 0, 53, 10, 0, 2, 3];
-        field.ranges = vec![(0, 8)];
-        assert_eq!(preview(&field), "10.0.2.3:53");
+        let string = Some(FieldEncoding::String);
+        let object = Some(FieldEncoding::Object);
+        assert_eq!(
+            preview(&typed("arg0.path", "", string, b"/etc\0")),
+            "\"/etc\""
+        );
+        assert_eq!(preview(&typed("arg0.path", "", string, b"\0")), "\"\"");
+        assert_eq!(
+            preview(&typed("arg0.data", "timespec", object, &[0; 4])),
+            "00 00 00 00"
+        );
+        let address = [2, 0, 0, 53, 10, 0, 2, 3];
+        assert_eq!(
+            preview(&typed("address.data", "sockaddr", object, &address)),
+            "10.0.2.3:53"
+        );
+        // A family the view cannot decode: the address's bytes.
+        assert_eq!(
+            preview(&typed("arg1.address", "sockaddr", object, &[0; 4])),
+            "00 00 00 00"
+        );
+    }
+
+    /// What decides how a field reads is its type, never whether its bytes
+    /// happen to be printable: these bytes all are.
+    #[test]
+    fn printable_looking_times_pointers_and_structs_stay_bytes() {
+        let object = Some(FieldEncoding::Object);
+        // futex_waitv's absolute CLOCK_MONOTONIC timeout: tv_sec 10 and a
+        // tv_nsec whose bytes are `([}\r`.
+        let timeout = [10, 0, 0, 0, 0, 0, 0, 0, b'(', b'[', b'}', b'\r', 0, 0, 0, 0];
+        assert_eq!(
+            preview(&typed("arg3.timeout", "timespec", object, &timeout)),
+            "0a 00 00 00 00 00 00 00 28 5b 7d 0d 00 00 00 00"
+        );
+        // clock_getres(CLOCK_REALTIME_COARSE): 4 ms reads `\t=`.
+        let resolution = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0x09, 0x3d, 0, 0, 0, 0, 0];
+        assert_eq!(
+            preview(&typed("arg1.data", "timespec", object, &resolution)),
+            "00 00 00 00 00 00 00 00 00 09 3d 00 00 00 00 00"
+        );
+        // seccomp(SET_MODE_FILTER) with an empty sock_fprog: len 0 and the
+        // fixture's filter pointer 0x4b2e40 (`@.K`).
+        let program = [0, 0, 0, 0, 0, 0, 0, 0, 0x40, 0x2e, 0x4b, 0, 0, 0, 0, 0];
+        assert_eq!(
+            preview(&typed("arg2.program", "sock_fprog", object, &program)),
+            "00 00 00 00 00 00 00 00 40 2e 4b 00 00 00 00 00"
+        );
+        // Pointer-sized and integer objects: a loff_t of 108 (`l`), a
+        // socklen_t of 110 (`n`), a pointer.
+        assert_eq!(
+            preview(&typed("arg3.data", "loff_t", object, b"l\0\0\0\0\0\0\0")),
+            "6c 00 00 00 00 00 00 00"
+        );
+        assert_eq!(
+            preview(&typed("address.capacity", "socklen_t", object, b"n\0\0\0")),
+            "6e 00 00 00"
+        );
+        assert_eq!(
+            preview(&typed(
+                "arg1.tid_address",
+                "address",
+                object,
+                b"@.K\0\0\0\0\0"
+            )),
+            "40 2e 4b 00 00 00 00 00"
+        );
+        // A pointer whose key names an address is not a socket address,
+        // even when its first bytes read as AF_INET.
+        let pointer = [2, 0, 0, 53, 10, 0, 2, 3];
+        assert_eq!(
+            preview(&typed(
+                "arg2.tracee_address",
+                "unsigned_long",
+                object,
+                &pointer
+            )),
+            "02 00 00 35 0a 00 02 03"
+        );
+        // Structs: capset's cap_data[] and a bpf_attr of a command the
+        // recorder has no layout for (encoding alone says it is an object).
+        assert_eq!(
+            preview(&typed(
+                "arg1.capabilities",
+                "cap_data[]",
+                object,
+                b"\0\0 \0\0\0 \0"
+            )),
+            "00 00 20 00 00 00 20 00"
+        );
+        assert_eq!(
+            preview(&typed("arg1.attr", "", object, b"ITNA")),
+            "49 54 4e 41"
+        );
+        // ...and so are bytes that are not printable.
+        assert_eq!(
+            preview(&typed("arg3.timeout", "timespec", object, &[1, 0x80])),
+            "01 80"
+        );
+    }
+
+    #[test]
+    fn strings_character_arrays_and_buffers_read_as_text_whatever_their_bytes() {
+        // A task name is a character array; its padding is not content.
+        assert_eq!(
+            preview(&typed(
+                "arg1.name",
+                "char[16]",
+                Some(FieldEncoding::Object),
+                b"ant-process\0\0\0\0\0"
+            )),
+            "\"ant-process\""
+        );
+        // A string the program passed stays a string even when it is not
+        // printable.
+        assert_eq!(
+            preview(&typed(
+                "arg0.path",
+                "",
+                Some(FieldEncoding::String),
+                b"\x01\xff\0"
+            )),
+            "\"\\x01\\xff\""
+        );
+        // A data buffer keeps every byte, zeros included, and binary bytes
+        // are escaped rather than switching the buffer to hex.
+        let bytes = Some(FieldEncoding::Bytes);
+        assert_eq!(preview(&typed("arg2.data", "", bytes, b"ANTI")), "\"ANTI\"");
+        assert_eq!(
+            preview(&typed("arg1.buf", "", bytes, &[0; 4])),
+            "\"\\0\\0\\0\\0\""
+        );
+        assert_eq!(
+            preview(&typed("arg1.buf", "", bytes, &[6, 0, 0xb6, b'A'])),
+            "\"\\x06\\0\\xb6A\""
+        );
+        // A field the host made, or one saved without its encoding: a
+        // layout-less field is a string.
+        assert_eq!(
+            preview(&typed("async.system", "", None, b"AIO\0")),
+            "\"AIO\""
+        );
+        assert_eq!(
+            preview(&typed("arg1.data", "timespec", None, b"\n\0")),
+            "0a 00"
+        );
     }
 
     #[test]

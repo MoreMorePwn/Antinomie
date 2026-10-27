@@ -128,6 +128,19 @@ it runs.
   counted-never-executed downloads are unchanged, and every scenario lists the
   same rule ids.
 
+- **Captured data reads by its type, not by its bytes.** The Syscall Trace
+  (Info column, argument rows, field rows, async operands) used to show any
+  captured object whose bytes looked printable as a quoted string, so a
+  timespec, a pointer or a struct could read as text in one run and hex in the
+  next. Now strings and character arrays (a task name) are always quoted;
+  structs, times, integers, pointers and arrays are always hex; socket
+  addresses are decoded only when the field is a `sockaddr` (a pointer whose
+  name mentions an address no longer reads as `a.b.c.d:port`); and data
+  buffers (what `write` sent, a key payload) are always quoted with every
+  byte, binary bytes escaped (`"\x06\0\xb6A"`) instead of switching to hex.
+  The conformance golden files no longer change with a run's clock or
+  addresses.
+
 ## 0.7.1 — 2026-10-26
 
 The first release since 0.6.2: 0.7.0 was not published separately, so this

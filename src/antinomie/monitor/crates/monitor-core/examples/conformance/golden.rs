@@ -331,6 +331,18 @@ mod tests {
         assert_eq!(super::data("127.0.0.1:80", &ids), "127.0.0.1:80");
         assert_eq!(super::data("[\"sh\", \"-c\"]", &ids), "[\"sh\", \"-c\"]");
         assert_eq!(super::data("uncaptured", &ids), "uncaptured");
+        // The view shows a time or a pointer-holding struct in hex whatever
+        // its bytes (futex_waitv's timeout, seccomp's empty sock_fprog), so
+        // the golden keeps only its presence; a data buffer stays text.
+        assert_eq!(
+            super::data("0a 00 00 00 00 00 00 00 28 5b 7d 0d 00 00 00 00", &ids),
+            "<bytes>"
+        );
+        assert_eq!(
+            super::data("00 00 00 00 00 00 00 00 40 2e 4b 00 00 00 00 00", &ids),
+            "<bytes>"
+        );
+        assert_eq!(super::data("\"\\x06\\0A\"", &ids), "\"\\x06\\0A\"");
     }
 
     #[test]

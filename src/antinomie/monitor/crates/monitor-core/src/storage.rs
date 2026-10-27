@@ -2255,6 +2255,7 @@ mod tests {
             raw_path: Some(source.join("captures/old-capture/objects/field.raw")),
             ranges: vec![(0, 5)],
             recapture: None,
+            encoding: None,
         };
         assert_eq!(
             crate::recording::read_captured_range(

@@ -115,6 +115,7 @@ mod tests {
             raw_path: None,
             ranges: Vec::new(),
             recapture: None,
+            encoding: None,
         }
     }
 

@@ -271,6 +271,7 @@ impl Field {
                 raw_path: None,
                 ranges: Vec::new(),
                 recapture: None,
+                encoding: None,
             },
             begin: None,
             end: None,
@@ -806,6 +807,8 @@ impl Assembler {
                             f.summary.key = String::from_utf8_lossy(&b[40..40 + n]).into_owned();
                             f.summary.layout = String::from_utf8_lossy(&b[40 + n..]).into_owned();
                             f.summary.recapture = crate::api::Recapture::from_flags(u32_at(b, 36)?);
+                            f.summary.encoding =
+                                crate::api::FieldEncoding::from_wire(u16_at(b, 2)?);
                             f.begin = Some(b.to_vec());
                         }
                     }

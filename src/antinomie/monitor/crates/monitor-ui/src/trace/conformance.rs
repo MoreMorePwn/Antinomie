@@ -317,6 +317,53 @@ mod view_tests {
         assert_eq!(shown.result.as_deref(), Some("ENOENT"));
     }
 
+    /// A call of `nr` with `args` and one captured entry field.
+    fn call_with(nr: u64, name: &str, args: [u64; 6], field: FieldSummary) -> InvocationSummary {
+        let mut call = super::super::tests::openat(-22);
+        for event in call.entry.iter_mut().chain(call.exit.iter_mut()) {
+            event.syscall_nr = nr;
+            event.syscall_name = name.into();
+        }
+        let entry = call.entry.as_mut().unwrap();
+        entry.args = Some(args);
+        entry.fields = vec![field];
+        call
+    }
+
+    /// The two golden failures: what the trace shows (and the golden file
+    /// keeps) for a time or a pointer-holding struct whose bytes happen to be
+    /// printable is their bytes.
+    #[test]
+    fn printable_looking_typed_data_renders_as_bytes() {
+        use super::super::tests::typed;
+        let object = Some(FieldEncoding::Object);
+        let timeout = [10, 0, 0, 0, 0, 0, 0, 0, b'(', b'[', b'}', b'\r', 0, 0, 0, 0];
+        let mut field = typed("arg3.timeout", "timespec", object, &timeout);
+        field.arg = Some(3);
+        let shown = view(&call_with(
+            449,
+            "futex_waitv",
+            [0x4c_1000, 1, 0, 0x7ffe_0010, 1, 0],
+            field,
+        ));
+        let expected = "0a 00 00 00 00 00 00 00 28 5b 7d 0d 00 00 00 00";
+        assert_eq!(shown.arguments[3].data.as_deref(), Some(expected));
+        assert_eq!(shown.fields[0]["preview"], expected);
+        let program = [0, 0, 0, 0, 0, 0, 0, 0, 0x40, 0x2e, 0x4b, 0, 0, 0, 0, 0];
+        let mut field = typed("arg2.program", "sock_fprog", object, &program);
+        field.arg = Some(2);
+        let shown = view(&call_with(
+            317,
+            "seccomp",
+            [1, 0, 0x4c_2000, 0, 0, 0],
+            field,
+        ));
+        let expected = "00 00 00 00 00 00 00 00 40 2e 4b 00 00 00 00 00";
+        assert_eq!(shown.arguments[2].data.as_deref(), Some(expected));
+        assert_eq!(shown.fields[0]["preview"], expected);
+        assert!(!shown.info.contains('"'), "{}", shown.info);
+    }
+
     #[test]
     fn captured_data_replaces_the_address() {
         let mut call = super::super::tests::openat(3);
@@ -334,6 +381,7 @@ mod view_tests {
             raw_path: None,
             ranges: vec![(0, 5)],
             recapture: None,
+            encoding: None,
         }];
         let shown = view(&call);
         assert!(shown.fallbacks.is_empty(), "{:?}", shown.fallbacks);

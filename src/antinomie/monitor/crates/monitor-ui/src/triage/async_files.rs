@@ -429,6 +429,7 @@ fn via_field(system: System) -> FieldSummary {
         raw_path: None,
         ranges: vec![(0, label.len() as u64)],
         recapture: None,
+        encoding: None,
     }
 }
 

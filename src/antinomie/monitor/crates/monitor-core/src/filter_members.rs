@@ -617,6 +617,7 @@ mod tests {
             raw_path: None,
             ranges: vec![(0, size as u64)],
             recapture: None,
+            encoding: None,
         }
     }
     #[test]

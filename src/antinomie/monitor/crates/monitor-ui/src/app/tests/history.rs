@@ -67,6 +67,7 @@ fn async_only_row_keeps_missing_phases_and_renders_observation_loss() {
         raw_path: None,
         ranges: vec![(0, 8)],
         recapture: None,
+        encoding: None,
     }];
     let mut row = InvocationSummary {
         stream_id: observed.stream_id,
@@ -151,6 +152,7 @@ fn a_call_the_task_ended_in_shows_how_it_ended_and_empty_reads_say_why() {
         raw_path: None,
         ranges: vec![(0, 8)],
         recapture: None,
+        encoding: None,
     }];
     let mut row = InvocationSummary {
         stream_id: 1,
@@ -212,6 +214,7 @@ fn details_values_copy_in_many_forms_and_captured_fields_open_data_windows() {
         raw_path: None,
         ranges: vec![(0, 4)],
         recapture: None,
+        encoding: None,
     }];
     let row = InvocationSummary {
         stream_id: 1,

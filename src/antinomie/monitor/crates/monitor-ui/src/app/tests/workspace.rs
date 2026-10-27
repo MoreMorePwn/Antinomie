@@ -168,6 +168,7 @@ fn native_workspace_fixture() {
         raw_path: None,
         ranges: vec![(0, 20)],
         recapture: None,
+        encoding: None,
     });
     let mut exit = entry.clone();
     exit.phase = 2;

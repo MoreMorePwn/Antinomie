@@ -1027,6 +1027,7 @@ fn history_event(sequence: u64, path: &str) -> EventSummary {
             raw_path: Some(path.into()),
             ranges: vec![(0, 1)],
             recapture: None,
+            encoding: None,
         }],
     }
 }

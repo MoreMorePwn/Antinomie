@@ -1353,6 +1353,7 @@ pub(super) fn captured(key: &str, layout: &str, data: &[u8]) -> FieldSummary {
         raw_path: None,
         ranges: vec![(0, len)],
         recapture: None,
+        encoding: None,
     }
 }
 

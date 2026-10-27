@@ -461,9 +461,15 @@ pub(crate) fn quoted(data: &[u8]) -> String {
         .iter()
         .rposition(|byte| *byte != 0)
         .map_or(0, |last| last + 1);
-    let mut text = String::with_capacity(end + 2);
+    quoted_bytes(&data[..end])
+}
+
+/// Every byte of a data buffer as a quoted string, zeros included:
+/// printable text as is, other bytes escaped.
+pub(crate) fn quoted_bytes(data: &[u8]) -> String {
+    let mut text = String::with_capacity(data.len() + 2);
     text.push('"');
-    for byte in &data[..end] {
+    for byte in data {
         match byte {
             0 => text.push_str("\\0"),
             b'\n' => text.push_str("\\n"),

@@ -575,33 +575,73 @@ pub(crate) fn next_range(field: &FieldSummary, offset: u64) -> Option<(u64, u64)
         .min_by_key(|(offset, _)| *offset)
 }
 
-/// A short form of a captured field: a socket address decoded, text quoted
-/// (without its NUL terminator), other bytes in hex; "..." when the field
+/// How a captured field is shown. The field's type decides it (its
+/// descriptor's encoding and layout), never whether its bytes look like text:
+/// a time or a pointer whose bytes happen to be printable is still bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Rendering {
+    /// A C string or a character array: quoted, NUL terminators dropped.
+    Text,
+    /// A data buffer (what `write` sent, a key payload): quoted with every
+    /// byte, zeros as `\0`.
+    Buffer,
+    /// A `struct sockaddr`: the address when its family is known, else hex.
+    Address,
+    /// A struct, scalar, pointer or array: hex bytes.
+    Binary,
+}
+
+/// The type name of a layout, without its `linux-6.12.94/x86_64/` source.
+fn layout_type(layout: &str) -> &str {
+    layout.rsplit('/').next().unwrap_or(layout)
+}
+
+pub(crate) fn rendering(field: &FieldSummary) -> Rendering {
+    let layout = layout_type(&field.layout);
+    if layout == "sockaddr" {
+        return Rendering::Address;
+    }
+    // `char[16]` (a task name), `char[]` (an interface name).
+    if layout.starts_with("char[") {
+        return Rendering::Text;
+    }
+    if !layout.is_empty() {
+        return Rendering::Binary;
+    }
+    match field.encoding {
+        Some(FieldEncoding::Bytes) => Rendering::Buffer,
+        Some(FieldEncoding::Object | FieldEncoding::Scalar | FieldEncoding::Array) => {
+            Rendering::Binary
+        }
+        // A field the host made itself (the async system's name) or saved
+        // before 0.8.0 without its encoding: a layout-less field is a string.
+        Some(FieldEncoding::String) | None => Rendering::Text,
+    }
+}
+
+/// A short form of a captured field by its [`rendering`]: a socket address
+/// decoded, text or a buffer quoted, other bytes in hex; "..." when the field
 /// holds more than shown.
 pub(crate) fn preview(field: &FieldSummary) -> String {
     let data = covered_preview(field);
     if data.is_empty() {
         return "uncaptured".into();
     }
-    if field.key.contains("addr") {
-        if let Some(address) = values::sockaddr(data) {
-            return address;
-        }
+    let rendering = rendering(field);
+    if rendering == Rendering::Address
+        && let Some(address) = values::sockaddr(data)
+    {
+        return address;
     }
     let shown = &data[..data.len().min(48)];
-    // All zeros is a cleared structure, not an empty string.
-    let printable = (shown.len() == 1 || shown.iter().any(|byte| *byte != 0))
-        && shown.iter().all(|byte| {
-            byte.is_ascii_graphic() || matches!(*byte, b' ' | b'\n' | b'\r' | b'\t' | 0)
-        });
-    let text = if printable {
-        values::quoted(shown)
-    } else {
-        shown
+    let text = match rendering {
+        Rendering::Text => values::quoted(shown),
+        Rendering::Buffer => values::quoted_bytes(shown),
+        Rendering::Address | Rendering::Binary => shown
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect::<Vec<_>>()
-            .join(" ")
+            .join(" "),
     };
     let more = field
         .logical_len

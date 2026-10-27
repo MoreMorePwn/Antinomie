@@ -822,6 +822,7 @@ mod tests {
             raw_path: None,
             ranges: vec![(0, data.len() as u64)],
             recapture: None,
+            encoding: None,
         }
     }
 

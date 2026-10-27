@@ -808,6 +808,7 @@ impl DataWindows {
             raw_path: None,
             ranges: vec![(0, len)],
             recapture: None,
+            encoding: None,
         };
         self.open(ctx, OpenData { key, title, field }, None);
     }
@@ -871,6 +872,7 @@ mod tests {
             raw_path: None,
             ranges: vec![(0, data.len() as u64)],
             recapture: None,
+            encoding: None,
         }
     }
 

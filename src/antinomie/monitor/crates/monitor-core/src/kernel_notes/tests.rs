@@ -34,6 +34,7 @@ fn note(key: &str, layout: &str, bytes: Vec<u8>) -> EventSummary {
             raw_path: None,
             ranges: Vec::new(),
             recapture: None,
+            encoding: None,
         }],
     }
 }

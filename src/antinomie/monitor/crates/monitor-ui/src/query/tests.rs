@@ -283,6 +283,7 @@ fn generated_captured_members_validate_complete_values_and_missing_ranges() {
             raw_path: None,
             ranges: vec![(0, 24)],
             recapture: None,
+            encoding: None,
         });
     assert!(matches("args.how.flags == 7 && args.how.mode == 448 && args.how.resolve == 4660 && args.how.complete == true", &invocation).unwrap());
     invocation.entry.as_mut().unwrap().fields[0].ranges = vec![(0, 8), (16, 8)];
@@ -331,6 +332,7 @@ fn process_provenance_requires_committed_exec_and_never_guesses_identity() {
                 raw_path: None,
                 ranges: vec![(0, value.len() as u64)],
                 recapture: None,
+                encoding: None,
             });
     }
     assert!(matches("missing(process.exe) && missing(process.argv)", &invocation).unwrap());
@@ -390,6 +392,7 @@ fn tag_does_not_match_path_text_stored_only_in_info() {
         raw_path: None,
         ranges: vec![(0, captured)],
         recapture: None,
+        encoding: None,
     });
     let info = trace::info(&row);
     assert!(info.contains("/tmp"), "{info}");
@@ -461,6 +464,7 @@ fn exists_set_mask_and_raw_slot() {
         raw_path: None,
         ranges: vec![(0, captured)],
         recapture: None,
+        encoding: None,
     });
     assert!(trace::info(&tagged).contains("/tmp"));
     assert!(!matches("exists tag", &tagged).unwrap());
