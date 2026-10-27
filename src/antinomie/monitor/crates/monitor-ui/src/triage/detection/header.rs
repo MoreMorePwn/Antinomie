@@ -409,6 +409,12 @@ impl View {
         if short.is_empty() {
             return;
         }
+        if self.selected == Engine::Sigma {
+            long.push(String::new());
+            long.push(
+                antinomie_monitor_core::analysis::detection::SIGMA_CATEGORY_CAVEAT.to_owned(),
+            );
+        }
         crate::activity::warning_details(ui, short.join(" · "), long.join("\n"));
     }
 }

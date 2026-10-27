@@ -288,6 +288,19 @@ pub struct Finding {
     pub rule_text: String,
 }
 
+/// The fixed caveat 0.7.x saved in every Sigma report's warnings. It is help
+/// text on the header now, so a saved report does not show it as a warning.
+pub const SIGMA_CATEGORY_CAVEAT: &str = "Category acceptance is not full compatibility. Syntax, backend conversion, logsource, and per-run evidence are counted separately.";
+
+fn without_sigma_caveat<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let mut warnings = Vec::<String>::deserialize(deserializer)?;
+    warnings.retain(|warning| warning != SIGMA_CATEGORY_CAVEAT);
+    Ok(warnings)
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Report {
     pub engine: Engine,
@@ -301,6 +314,7 @@ pub struct Report {
     pub skipped_rules: u64,
     pub skipped: Vec<String>,
     pub omitted_evidence: u64,
+    #[serde(deserialize_with = "without_sigma_caveat")]
     pub warnings: Vec<String>,
     pub source_digest: Option<String>,
     /// Digest of the enabled packs, groups and disabled rule ids.
@@ -591,6 +605,28 @@ pub fn mitre_references(text: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_saved_report_drops_only_the_known_sigma_caveat() {
+        #[derive(Deserialize)]
+        struct Saved {
+            #[serde(deserialize_with = "without_sigma_caveat")]
+            warnings: Vec<String>,
+        }
+        let json = serde_json::json!({"warnings": [
+            SIGMA_CATEGORY_CAVEAT,
+            "Rule evaluation reached the 4096-rule budget.",
+            "Category acceptance is not full compatibility.",
+        ]});
+        let saved: Saved = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            saved.warnings,
+            [
+                "Rule evaluation reached the 4096-rule budget.",
+                "Category acceptance is not full compatibility."
+            ]
+        );
+    }
 
     #[test]
     fn a_configured_python_wins_over_the_installed_sigma_tool() {

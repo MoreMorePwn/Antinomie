@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import sqlite3
 import tempfile
+from unittest import mock
 import unittest
 import uuid
 
@@ -189,7 +190,7 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(report["findings"][0]["events"], [1, 2])
         self.assertEqual(report["findings"][0]["mitre"], ["T1059.004"])
         self.assertTrue(report["sources"][0]["sha256"])
-        self.assertIn("not full compatibility", report["warnings"][0])
+        self.assertEqual(report["warnings"], [], "the fixed coverage caveat is not a warning")
 
     RULE = """title: {title}
 id: {ident}
@@ -262,7 +263,7 @@ level: low
         self.assertEqual(reasons, ["backend", "no_matching_events", "syntax", "unsupported_category"])
         self.assertIsNone(report["coverage"]["evidence_preview_limit"])
         self.assertEqual(report["format_version"], adapter.REPORT_FORMAT_VERSION)
-        self.assertIn("not full compatibility", report["warnings"][0], "the coverage warning stays")
+        self.assertEqual(report["warnings"], [], "the fixed coverage caveat is not a warning")
 
     @unittest.skipUnless(importlib.util.find_spec("sigma"), "optional local pySigma integration")
     def test_no_events_with_the_required_fields_is_not_a_conversion_failure(self):
@@ -285,14 +286,35 @@ level: low
     def test_real_incompleteness_is_still_partial(self):
         incomplete = self.scan([self.rule()], complete=False)
         self.assertEqual(incomplete["state"], "partial", "the journal is truncated or incomplete")
+        self.assertTrue(incomplete["warnings"][0].startswith("Partial: the captured events are incomplete"), incomplete["warnings"])
         budget = self.scan([self.rule("First"), self.rule("Second")], MAX_RULES=1)
         self.assertEqual(budget["state"], "partial", "the rule budget is exhausted")
         self.assertEqual(budget["scanned_rules"], 1)
+        self.assertEqual(budget["warnings"][0], "Partial: the 1-rule evaluation budget was reached; the remaining rules were not evaluated.")
         timed_out = self.scan([self.rule()], EVALUATION_SECONDS=-1)
         self.assertIn("stopped", " ".join(timed_out["warnings"]), "the time budget ends the evaluation")
+        self.assertEqual(timed_out["warnings"][0], "Partial: evaluation stopped at its -1 second budget after 0 rules; the remaining rules were not evaluated.")
         self.assertNotEqual(timed_out["state"], "complete")
         late = self.scan([self.rule("First"), self.rule("Second")], MAX_FINDINGS=1)
         self.assertEqual(late["state"], "partial", "a match that cannot be reported is incomplete")
+        self.assertTrue(late["warnings"][0].startswith("Partial: matches of rule 'Second' and later rules could not be reported"), late["warnings"])
+        self.assertEqual(len(late["warnings"]), 1, late["warnings"])
+
+    @unittest.skipUnless(importlib.util.find_spec("sigma"), "optional local pySigma integration")
+    def test_a_rule_that_fails_mid_evaluation_names_itself_once(self):
+        calls = {"n": 0}
+        real = adapter.matching_rows
+
+        def flaky(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] > 1:
+                raise RuntimeError("boom")
+            return real(*args, **kwargs)
+
+        with mock.patch.object(adapter, "matching_rows", flaky):
+            report = self.scan([self.rule("First"), self.rule("Second"), self.rule("Third")])
+        self.assertEqual(report["state"], "partial", report)
+        self.assertEqual(report["warnings"], ["Partial: rule 'Second' failed during evaluation (boom); failed rules are listed under skipped rules."])
 
     @unittest.skipUnless(os.environ.get("ANTINOMIE_SIGMA_RULES"), "community Sigma tree not selected")
     def test_community_candidates_reconcile_backend_conversion(self):

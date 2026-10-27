@@ -256,7 +256,7 @@ def rule_yaml(data, rule):
 
 
 def scan(request, events_path):
-    report = {"format_version": REPORT_FORMAT_VERSION, "coverage": new_coverage(), "engine": "sigma", "identity": request["identity"], "state": "complete", "sources": [], "findings": [], "scanned_rules": 0, "skipped_rules": 0, "skipped": [], "omitted_evidence": 0, "warnings": ["Category acceptance is not full compatibility. Syntax, backend conversion, logsource, and per-run evidence are counted separately."], "source_digest": request.get("source_digest"), "category_accepted": 0, "backend_rejected": 0, "missing_field_events": 0, "category_rejected": 0, "syntax_rejected": 0, "evidence_rejected": 0}
+    report = {"format_version": REPORT_FORMAT_VERSION, "coverage": new_coverage(), "engine": "sigma", "identity": request["identity"], "state": "complete", "sources": [], "findings": [], "scanned_rules": 0, "skipped_rules": 0, "skipped": [], "omitted_evidence": 0, "warnings": [], "source_digest": request.get("source_digest"), "category_accepted": 0, "backend_rejected": 0, "missing_field_events": 0, "category_rejected": 0, "syntax_rejected": 0, "evidence_rejected": 0}
     try:
         from sigma.collection import SigmaCollection
         from sigma.backends.sqlite import sqliteBackend
@@ -276,7 +276,7 @@ def scan(request, events_path):
         report["scanned_objects"], complete = load_events(connection, events_path, request["identity"])
         if not complete:
             report["state"] = "partial"
-            report["warnings"].append("Rules evaluate a retained prefix or incomplete captured evidence.")
+            report["warnings"].append("Partial: the captured events are incomplete or only a retained prefix, so rules ran on part of the evidence.")
         try:
             import re2
             connection.create_function("regexp", 2, lambda pattern, value: value is not None and re2.search(pattern, str(value)) is not None)
@@ -305,13 +305,15 @@ def scan(request, events_path):
             rule_total += len(rules)
             prepared.append((source, data, sha256, rules))
         seen = 0
+        partial_limit_noted = False
+        failure_noted = False
         for source, data, sha256, rules in prepared:
             for rule in rules:
                 seen += 1
                 note_sigma(events_path, seen, rule_total, getattr(rule, "title", "") or "")
                 if report["scanned_rules"] + report["skipped_rules"] >= MAX_RULES:
                     report["state"] = "partial"
-                    report["warnings"].append("Rule evaluation reached the " + str(MAX_RULES) + "-rule budget.")
+                    report["warnings"].append("Partial: the " + str(MAX_RULES) + "-rule evaluation budget was reached; the remaining rules were not evaluated.")
                     return report
                 if time.monotonic() > deadline:
                     raise TimeoutError("Sigma rule evaluation reached its 90 second budget")
@@ -380,9 +382,15 @@ def scan(request, events_path):
                     elif isinstance(error, PartialLimit):
                         # A match this scan found cannot be reported: that is incomplete.
                         report["state"] = "partial"
+                        if not partial_limit_noted:
+                            partial_limit_noted = True
+                            report["warnings"].append("Partial: matches of rule '" + title[:120] + "' and later rules could not be reported because the " + str(MAX_FINDINGS) + "-matched-rule limit was reached.")
                     else:
                         # Not a reason a rule may be set aside: the scan did not finish evaluating it.
                         report["state"] = "partial"
+                        if not failure_noted:
+                            failure_noted = True
+                            report["warnings"].append("Partial: rule '" + title[:120] + "' failed during evaluation (" + str(error)[:200] + "); failed rules are listed under skipped rules.")
                     if len(report["skipped"]) < 1000:
                         report["skipped"].append(title + ": " + str(error)[:400])
         if not report["scanned_rules"]:
@@ -390,6 +398,9 @@ def scan(request, events_path):
             report["warnings"].append("No compatible rule could evaluate captured fields.")
         if report["coverage"]["evidence_preview_limit"]:
             report["warnings"].append("Evidence preview limited to " + str(MAX_EVIDENCE) + " locations; match counts are complete.")
+    except TimeoutError:
+        report["state"] = "partial" if report["scanned_rules"] else "unavailable"
+        report["warnings"].append("Partial: evaluation stopped at its " + str(EVALUATION_SECONDS) + " second budget after " + str(report["scanned_rules"]) + " rules; the remaining rules were not evaluated.")
     except Exception as error:
         report["state"] = "partial" if report["scanned_rules"] else "unavailable"
         report["warnings"].append("Sigma evaluation stopped: " + str(error)[:512])

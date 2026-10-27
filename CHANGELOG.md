@@ -74,6 +74,12 @@ it runs.
   reply when it identifies the guest and decodes x86-64 guests only. No wire
   change; a new base is needed for the new series identity, and older bases
   keep working.
+- **A Partial Sigma scan says why.** The fixed note "Category acceptance is not
+  full compatibility..." no longer takes the first place among the scan's
+  warnings, so the header names the real reason (incomplete captured events,
+  the 4,096-rule budget, the 90 second deadline, a rule that failed while it was
+  evaluated, matches that could not be reported) instead of "(+1 more)". The
+  note is in the header's hover text. Results saved by 0.7.x show without it.
 
 ## 0.7.1 — 2026-10-26
 
