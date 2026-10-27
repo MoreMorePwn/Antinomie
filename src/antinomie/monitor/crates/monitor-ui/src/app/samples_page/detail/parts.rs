@@ -108,3 +108,51 @@ pub(super) fn mini_table<'a>(ui: &'a mut egui::Ui, id: &str) -> TableBuilder<'a>
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
         .vscroll(false)
 }
+
+/// A text column's width for its longest text: the text, the cell's padding
+/// and a little slack, within bounds so one long name cannot take the row.
+pub(super) fn fitted_width(text_width: f32, most: f32) -> f32 {
+    (text_width + 20.0).clamp(80.0, most.max(80.0))
+}
+
+/// The width a column needs for the longest of `texts` (and its header) drawn
+/// in `font`.
+pub(super) fn fitted(
+    ui: &egui::Ui,
+    font: &egui::FontId,
+    texts: impl IntoIterator<Item = String>,
+) -> f32 {
+    fitted_up_to(ui, font, texts, 260.0)
+}
+
+/// `fitted` with the widest the column may get.
+pub(super) fn fitted_up_to(
+    ui: &egui::Ui,
+    font: &egui::FontId,
+    texts: impl IntoIterator<Item = String>,
+    most: f32,
+) -> f32 {
+    let widest = texts
+        .into_iter()
+        .map(|text| {
+            ui.painter()
+                .layout_no_wrap(text, font.clone(), theme::text())
+                .size()
+                .x
+        })
+        .fold(0.0_f32, f32::max);
+    fitted_width(widest, most)
+}
+
+#[cfg(test)]
+mod fit_tests {
+    use super::fitted_width;
+
+    #[test]
+    fn a_text_column_fits_its_longest_name_within_bounds() {
+        assert_eq!(fitted_width(100.0, 260.0), 120.0);
+        assert_eq!(fitted_width(5.0, 260.0), 80.0);
+        assert_eq!(fitted_width(900.0, 260.0), 260.0);
+        assert_eq!(fitted_width(300.0, 400.0), 320.0);
+    }
+}

@@ -443,6 +443,20 @@ fn string_table(
     }
     let shown = &rows[..rows.len().min(CAP)];
     let wide = if titles.len() == 3 { 1 } else { 2 };
+    // Text columns are as wide as their longest name (header and shown rows),
+    // so "Linux behaviour" and "Persistence path" are not cut; the string
+    // column takes what is left.
+    let body = egui::TextStyle::Body.resolve(ui.style());
+    let ui_ref: &egui::Ui = ui;
+    let fitted = |index: usize| -> f32 {
+        parts::fitted(
+            ui_ref,
+            &body,
+            std::iter::once(titles[index].to_owned())
+                .chain(shown.iter().map(|row| cells(row).swap_remove(index))),
+        )
+    };
+    let widths: Vec<f32> = (0..titles.len()).map(fitted).collect();
     let mut builder = parts::mini_table(ui, id);
     for (index, title) in titles.iter().enumerate() {
         builder = builder.column(if index == wide {
@@ -452,7 +466,7 @@ fn string_table(
         } else if *title == "Found in" || *title == "Offset" {
             egui_extras::Column::exact(170.0)
         } else {
-            egui_extras::Column::exact(130.0)
+            egui_extras::Column::exact(widths[index])
         });
     }
     builder

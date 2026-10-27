@@ -63,6 +63,9 @@ pub(super) struct Output {
     pub(super) state: String,
 }
 
+/// The width the three action buttons of a row need on one line.
+const ACTIONS_WIDTH: f32 = 380.0;
+
 fn size_of(path: &std::path::Path) -> Option<u64> {
     let meta = std::fs::metadata(path).ok()?;
     if meta.is_file() {
@@ -216,13 +219,30 @@ pub(super) fn section(ui: &mut egui::Ui, data: &Data, font: f32) -> Option<Act> 
             }
         });
         ui.add_space(4.0);
+        let body = egui::TextStyle::Body.resolve(ui.style());
+        let widest = |title: &str, text: &dyn Fn(&Output) -> String| {
+            parts::fitted(
+                ui,
+                &body,
+                std::iter::once(title.to_owned()).chain(data.outputs.iter().map(text)),
+            )
+        };
+        let file = widest("File", &|output| output.kind.label().to_owned());
+        let because = widest("Saved because", &|output| output.saved_because.to_owned());
+        let size = widest("Size", &|output| {
+            output.size.map_or("–".to_owned(), crate::values::file_size)
+        });
+        // The three buttons need about this much; a narrower last column
+        // puts them on two lines, in taller rows, instead of cutting them.
+        let fixed = file + 70.0 + because + size + 140.0 + ui.spacing().item_spacing.x * 5.0;
+        let roomy = ui.available_width() - fixed >= ACTIONS_WIDTH;
         parts::mini_table(ui, "sample_summary_outputs")
-            .column(egui_extras::Column::exact(140.0))
+            .column(egui_extras::Column::exact(file))
             .column(egui_extras::Column::exact(70.0))
-            .column(egui_extras::Column::exact(190.0))
-            .column(egui_extras::Column::exact(110.0))
-            .column(egui_extras::Column::exact(150.0))
-            .column(egui_extras::Column::remainder().at_least(220.0))
+            .column(egui_extras::Column::exact(because))
+            .column(egui_extras::Column::exact(size))
+            .column(egui_extras::Column::exact(140.0))
+            .column(egui_extras::Column::remainder().at_least(60.0))
             .header(table::header_height(font), |mut header| {
                 for title in ["File", "Run", "Saved because", "Size", "Availability", ""] {
                     header.col(|ui| table::head(ui, title));
@@ -230,7 +250,7 @@ pub(super) fn section(ui: &mut egui::Ui, data: &Data, font: f32) -> Option<Act> 
             })
             .body(|body| {
                 body.rows(
-                    table::row_height(font) + 6.0,
+                    table::row_height(font) + if roomy { 6.0 } else { 34.0 },
                     data.outputs.len(),
                     |mut row| {
                         let output = &data.outputs[row.index()];
@@ -247,52 +267,56 @@ pub(super) fn section(ui: &mut egui::Ui, data: &Data, font: f32) -> Option<Act> 
                         row.col(|ui| {
                             ui.label(output.size.map_or("–".to_owned(), crate::values::file_size));
                         });
-                        row.col(|ui| match output.availability {
-                            Availability::InRun => {
-                                widgets::chip(
-                                    ui,
-                                    format!("In run {} folder", output.number),
-                                    if output.state == "Complete" {
-                                        Tone::Good
-                                    } else {
-                                        Tone::Warn
-                                    },
-                                )
-                                .on_hover_text(format!("State: {}", output.state));
-                            }
-                            Availability::Deleted => {
-                                widgets::chip(ui, "Deleted by you", Tone::Neutral);
-                            }
-                            Availability::Missing => {
-                                widgets::chip(ui, "Missing", Tone::Error)
-                                    .on_hover_text("Not deleted through the app");
-                            }
+                        row.col(|ui| {
+                            ui.horizontal(|ui| match output.availability {
+                                Availability::InRun => {
+                                    widgets::chip(
+                                        ui,
+                                        format!("In run {} folder", output.number),
+                                        if output.state == "Complete" {
+                                            Tone::Good
+                                        } else {
+                                            Tone::Warn
+                                        },
+                                    )
+                                    .on_hover_text(format!("State: {}", output.state));
+                                }
+                                Availability::Deleted => {
+                                    widgets::chip(ui, "Deleted by you", Tone::Neutral);
+                                }
+                                Availability::Missing => {
+                                    widgets::chip(ui, "Missing", Tone::Error)
+                                        .on_hover_text("Not deleted through the app");
+                                }
+                            });
                         });
                         row.col(|ui| {
-                            let why = match output.availability {
-                                Availability::Deleted => "The file was deleted",
-                                _ => "The file is missing",
-                            };
-                            if ui
-                                .add_enabled(
-                                    here,
-                                    egui::Button::new(output.kind.open_label()).small(),
-                                )
-                                .on_disabled_hover_text(why)
-                                .clicked()
-                            {
-                                act = Some(Act::Open(output.number, output.kind));
-                            }
-                            if ui.add(egui::Button::new("Go to run").small()).clicked() {
-                                act = Some(Act::GoToRun(output.number));
-                            }
-                            if ui
-                                .add_enabled(here, egui::Button::new("Open folder").small())
-                                .on_disabled_hover_text(why)
-                                .clicked()
-                            {
-                                crate::evidence::reveal(ui.ctx(), &output.path);
-                            }
+                            ui.horizontal_wrapped(|ui| {
+                                let why = match output.availability {
+                                    Availability::Deleted => "The file was deleted",
+                                    _ => "The file is missing",
+                                };
+                                if ui
+                                    .add_enabled(
+                                        here,
+                                        egui::Button::new(output.kind.open_label()).small(),
+                                    )
+                                    .on_disabled_hover_text(why)
+                                    .clicked()
+                                {
+                                    act = Some(Act::Open(output.number, output.kind));
+                                }
+                                if ui.add(egui::Button::new("Go to run").small()).clicked() {
+                                    act = Some(Act::GoToRun(output.number));
+                                }
+                                if ui
+                                    .add_enabled(here, egui::Button::new("Open folder").small())
+                                    .on_disabled_hover_text(why)
+                                    .clicked()
+                                {
+                                    crate::evidence::reveal(ui.ctx(), &output.path);
+                                }
+                            });
                         });
                     },
                 );

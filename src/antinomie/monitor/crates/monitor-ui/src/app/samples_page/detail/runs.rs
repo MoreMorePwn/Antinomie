@@ -276,6 +276,14 @@ impl MonitorApp {
                 }
             });
         let mut select = None;
+        let start_width = parts::fitted_up_to(
+            ui,
+            &egui::TextStyle::Body.resolve(ui.style()),
+            shown
+                .iter()
+                .map(|entry| crate::time_format::unix_ms(entry.run.started_ms)),
+            340.0,
+        );
         ui.allocate_ui_with_layout(
             egui::vec2(ui.available_width(), height + 28.0),
             egui::Layout::top_down(egui::Align::Min),
@@ -287,7 +295,7 @@ impl MonitorApp {
                     .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
                     .striped(true)
                     .resizable(true)
-                    .column(Column::initial(150.0).at_least(110.0))
+                    .column(Column::initial(start_width).at_least(110.0))
                     .column(Column::remainder().at_least(120.0).resizable(false))
                     .column(Column::initial(150.0).range(90.0..=320.0))
                     .column(Column::initial(110.0).range(70.0..=220.0))

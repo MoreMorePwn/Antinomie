@@ -110,7 +110,7 @@ impl MonitorApp {
             ui.add(
                 egui::TextEdit::singleline(&mut self.samples_page.query)
                     .hint_text(theme::hint_text("Name, description, tag or SHA-256 prefix"))
-                    .desired_width(300.0),
+                    .desired_width(380.0),
             );
             let count = self.samples_page.tag_filter.len();
             if ui

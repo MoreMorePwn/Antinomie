@@ -12,13 +12,19 @@ pub(super) fn show(ui: &mut egui::Ui, data: &Data, font: f32) {
         return;
     }
     let height = ui.available_height().max(80.0);
+    let mono = egui::TextStyle::Monospace.resolve(ui.style());
+    let time = parts::fitted(
+        ui,
+        &mono,
+        data.events.iter().map(|event| parts::second(event.at_ms)),
+    );
     table::begin(ui);
     TableBuilder::new(ui)
         .id_salt("sample_custody")
         .striped(true)
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
         .column(Column::exact(44.0))
-        .column(Column::exact(160.0))
+        .column(Column::exact(time))
         .column(Column::exact(130.0))
         .column(Column::exact(80.0))
         .column(Column::remainder().at_least(160.0).clip(true))
