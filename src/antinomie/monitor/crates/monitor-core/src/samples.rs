@@ -24,6 +24,7 @@ mod lineage;
 mod migrate;
 pub mod promote;
 mod rollup;
+mod similar;
 mod summary;
 
 pub use archive::Verification;
@@ -41,6 +42,7 @@ pub use rollup::{
     CheckRow, EvasionRow, IndicatorRow, Rollup, RuleRow, RunInput, TacticRow, TechniqueRow, rollup,
     tactic_of,
 };
+pub use similar::{Shared, Similar};
 pub use summary::{StringRow, defang, interesting_strings, regex_matches};
 
 /// MalwareBazaar's API: every call is a POST with an `Auth-Key` header.

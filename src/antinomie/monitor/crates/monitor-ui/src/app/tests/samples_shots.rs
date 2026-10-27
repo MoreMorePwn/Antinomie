@@ -3,7 +3,7 @@
 //! an X11 display; exits by itself. The library lives in ANTINOMIE_QA_DATA
 //! (a throwaway folder; never the user's data).
 //!
-//! ANTINOMIE_QA_SCENE = list | tags | add | edit | detail | detail2 | lineage | lineage2 | outputs | viewer | promote | runs | custody,
+//! ANTINOMIE_QA_SCENE = list | tags | add | edit | detail | detail2 | lineage | lineage2 | outputs | viewer | promote | similar | runs | custody,
 //! ANTINOMIE_QA_THEME = dark | light | blue, ANTINOMIE_QA_SIZE = 1400x820,
 //! ANTINOMIE_QA_SECONDS = 25.
 use super::*;
@@ -78,6 +78,41 @@ fn native_samples_fixture() {
             app.options.data_dir = data.clone();
             app.rules_ui.set_packs_for_test(Vec::new());
             app.layout = WorkspaceLayout::default();
+            if scene == "similar" {
+                // A text file and a near copy of it, so the Summary has a row.
+                let mut base = String::new();
+                for line in 0..400 {
+                    base.push_str(&format!(
+                        "line {line}: value {} /usr/lib/lib{}.so connect to host-{}.example.test\n",
+                        line * 7 % 9973,
+                        line % 17,
+                        line % 101
+                    ));
+                }
+                let mut library = Library::open(&data).unwrap();
+                let add = |library: &mut Library, text: &str, name: &str| {
+                    library
+                        .add_bytes(
+                            text.as_bytes(),
+                            antinomie_monitor_core::samples::NewSample {
+                                name: name.into(),
+                                ..Default::default()
+                            },
+                        )
+                        .unwrap()
+                        .sha256
+                };
+                let me = add(&mut library, &base, "loader.sh");
+                add(
+                    &mut library,
+                    &format!("{base}# only the variant\n"),
+                    "loader-2.sh",
+                );
+                app.options.data_dir = data.clone();
+                app.open_library(crate::workspace::LibraryPage::Samples);
+                app.samples_page.open_detail(&me);
+                app.samples_page.scroll_detail(900.0);
+            }
             app.open_library(crate::workspace::LibraryPage::Samples);
             if matches!(
                 scene.as_str(),

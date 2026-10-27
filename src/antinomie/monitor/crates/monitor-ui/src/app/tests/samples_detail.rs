@@ -453,3 +453,53 @@ fn output_files_list_each_artefact_with_its_size_and_whether_it_is_still_there()
     }
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[test]
+fn similar_samples_list_a_near_copy_with_what_it_shares() {
+    use antinomie_monitor_core::samples::{Library, NewSample};
+    let root = super::samples_list::temp("detail-similar");
+    let mut base = String::new();
+    for line in 0..400 {
+        base.push_str(&format!(
+            "line {line}: value {} /usr/lib/lib{}.so connect to host-{}.example.test\n",
+            line * 7 % 9973,
+            line % 17,
+            line % 101
+        ));
+    }
+    let variant = format!("{base}# only the variant\n");
+    let mut library = Library::open(&root).unwrap();
+    let add = |library: &mut Library, bytes: &[u8], name: &str| {
+        library
+            .add_bytes(
+                bytes,
+                NewSample {
+                    name: name.into(),
+                    ..NewSample::default()
+                },
+            )
+            .unwrap()
+            .sha256
+    };
+    let me = add(&mut library, base.as_bytes(), "loader.sh");
+    add(&mut library, variant.as_bytes(), "loader-2.sh");
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let mut app = app();
+    app.options.data_dir = root.clone();
+    app.rules_ui.set_packs_for_test(Vec::new());
+    app.open_library(crate::workspace::LibraryPage::Samples);
+    until(&mut app, &ctx, |app| app.samples_page.is_loaded());
+    app.samples_page.open_detail(&me);
+    until(&mut app, &ctx, |app| {
+        app.samples_page.detail_similar().is_some()
+    });
+    let rows = app.samples_page.detail_similar().unwrap();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].0, "loader-2.sh");
+    assert!(rows[0].2.ends_with("strings"), "{rows:?}");
+    for _ in 0..3 {
+        render(&mut app, &ctx, SIZE);
+    }
+    let _ = std::fs::remove_dir_all(root);
+}

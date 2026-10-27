@@ -29,6 +29,7 @@ impl MonitorApp {
         let mut go = None;
         let mut lineage_out = None;
         let mut output_act = None;
+        let mut similar_open = None;
         let mut lineage = self
             .samples_page
             .detail
@@ -40,13 +41,14 @@ impl MonitorApp {
             .detail
             .as_mut()
             .and_then(|detail| detail.scroll_y);
-        let (scanned, verified, verifying) = match self.samples_page.detail.as_ref() {
+        let (scanned, verified, verifying, similar) = match self.samples_page.detail.as_ref() {
             Some(detail) => (
                 Some(&detail.scanned),
                 detail.verified.as_ref(),
                 detail.verify.is_some(),
+                Some(&detail.similar),
             ),
-            None => (None, None, false),
+            None => (None, None, false, None),
         };
         let mut area = egui::ScrollArea::vertical()
             .id_salt("sample_summary")
@@ -73,10 +75,17 @@ impl MonitorApp {
             identity(ui, data, verified, verifying, &mut go);
             lineage_out = super::lineage::section(ui, &mut lineage, data);
             output_act = super::output_files::section(ui, data, self.settings.font_size);
+            if let Some(state) = similar {
+                similar_open = super::similar::section(ui, state, self.settings.font_size);
+            }
             ui.add_space(16.0);
         });
         if let Some(detail) = &mut self.samples_page.detail {
             detail.lineage = lineage;
+        }
+        if let Some(sha) = similar_open {
+            self.samples_page.open_detail(&sha);
+            return;
         }
         match output_act {
             Some(super::output_files::Act::Open(number, kind)) => {

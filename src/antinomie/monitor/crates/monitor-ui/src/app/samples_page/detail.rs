@@ -23,6 +23,7 @@ mod lineage;
 mod output_files;
 mod parts;
 mod runs;
+mod similar;
 mod summary;
 mod triage_parts;
 
@@ -126,6 +127,8 @@ pub(super) struct Detail {
     pub(super) verified: Option<(bool, String)>,
     /// The Lineage section's options and view.
     lineage: lineage::State,
+    /// The comparison with the rest of the library.
+    similar: similar::State,
     /// Keep the Summary scrolled to this offset (set by the
     /// screenshot fixture only).
     pub(super) scroll_y: Option<f32>,
@@ -155,6 +158,7 @@ impl Detail {
             verify: None,
             verified: None,
             lineage: lineage::State::default(),
+            similar: similar::State::default(),
             scroll_y: None,
         }
     }
@@ -399,6 +403,7 @@ impl Detail {
     }
 
     fn poll(&mut self) {
+        self.similar.poll();
         if let Some(receiver) = &self.loading {
             if let Ok(result) = receiver.try_recv() {
                 self.loading = None;
@@ -457,6 +462,7 @@ impl MonitorApp {
         }
         let data = detail.data.clone();
         if let Some(data) = &data {
+            detail.similar.start(&ctx, &options.data_dir, data);
             detail.start_scan(&ctx, &options.data_dir, data);
         }
         let mut action = None;
@@ -799,6 +805,17 @@ impl SamplesPage {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    /// The Similar samples rows (name, distance, shared) once compared.
+    pub(in crate::app) fn detail_similar(&self) -> Option<Vec<(String, i32, String)>> {
+        let found = self.detail.as_ref()?.similar.rows()?;
+        Some(
+            found
+                .iter()
+                .map(|row| (row.name.clone(), row.distance, row.shared.label()))
+                .collect(),
+        )
     }
 
     /// A line for a failing test: what the window is waiting on.

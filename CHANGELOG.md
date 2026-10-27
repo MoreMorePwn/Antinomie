@@ -73,6 +73,14 @@ it runs.
   matches the one the run recorded, and added with the run, path, writing
   program and parent sample.
 
+- **The sample window lists similar samples.** Below Output files, Similar
+  samples shows up to five other library samples by TLSH distance (150 or
+  less, nearest first), with what they share: the imported symbols when both
+  are ELF files, printable strings of eight or more characters otherwise. A row
+  opens the other sample. Its parents and children are left out, the lineage
+  graph shows them. The comparison reads archives of up to 16 MiB each, at most
+  300 of them, on a worker thread once per window.
+
 - **Samples are kept in a library.** Downloads from MalwareBazaar and MalShare,
   and files added from this computer, now go into one library under
   `samples/`: one encrypted archive per sample (password `infected`) in a folder
