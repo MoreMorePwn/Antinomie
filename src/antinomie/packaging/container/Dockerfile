@@ -32,6 +32,7 @@ RUN set -eux; \
         gcc=4:14.2.0-1 \
         gcc-14=14.2.0-19 \
         kmod=34.2-2 \
+        libarchive13t64=3.7.4-4+deb13u1 \
         libelf-dev=0.192-4 \
         libssl-dev=3.5.7-1~deb13u3 \
         make=4.4.1-2 \
