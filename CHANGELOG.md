@@ -209,6 +209,19 @@ it runs.
   reply when it identifies the guest and decodes x86-64 guests only. No wire
   change; a new base is needed for the new series identity, and older bases
   keep working.
+- **A waiting telemetry sender keeps its turn.** In never-drop mode a guest
+  sender that found its ring full could lose every race for the room the host
+  freed to the other senders on its CPU and drop records although the host kept
+  reading (stress-heavy lost 2 of 13.7 million). Senders that may sleep now wait
+  in turn per CPU and get freed room in that order, and a send wait ends only
+  when the host has taken nothing from the ring for the whole wait (or is gone),
+  not after a fixed time while it is still reading. Senders in atomic context
+  still never queue. Drops and partial events are reported as before. The full
+  VM tier gains a `stress-contended` group (heavy load on a 256 KiB never-drop
+  ring with a 100 ms send wait). Loss is reduced, not gone: a sender still drops
+  when the host reads nothing from its ring for the whole wait, and on a loaded
+  build machine that group measured 1 drop in 13.7 million records and 38 in
+  10.5 million (737 in 7.4 million before the change).
 - **A Partial Sigma scan says why.** The fixed note "Category acceptance is not
   full compatibility..." no longer takes the first place among the scan's
   warnings, so the header names the real reason (incomplete captured events,
