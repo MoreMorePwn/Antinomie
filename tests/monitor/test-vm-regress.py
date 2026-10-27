@@ -258,7 +258,8 @@ class DiskTests(unittest.TestCase):
 
     def test_stress_groups_are_separate_checks(self):
         names = [c.name for c in vm.plan("full", PlanTests().ctx()) if c.name.startswith("conf-stress")]
-        self.assertEqual(len(names), 4)
+        self.assertEqual(names, [f"conf-{group}" for group in vm.STRESS_GROUPS])
+        self.assertEqual(len(names), 5)
 
     def test_cleanup_removes_bulk_and_keeps_reports(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -466,8 +467,8 @@ class ReportTests(unittest.TestCase):
         return value
 
     def test_exit_code(self):
-        ok = {"a": self.result("a", "PASS"), "b": self.result("b", "FLAKY")}
-        self.assertEqual(vm.exit_code(ok, ["a", "b"]), 0)
+        ok = {"a": self.result("a", "PASS"), "b": self.result("b", "FLAKY"), "c": self.result("c", "MEASURED")}
+        self.assertEqual(vm.exit_code(ok, ["a", "b", "c"]), 0)
         for status in ("FAIL", "TIMEOUT", "ERROR", "SKIP"):
             self.assertEqual(vm.exit_code({"a": self.result("a", status)}, ["a"]), 1)
         self.assertEqual(vm.exit_code({}, ["a"]), 1)
@@ -480,6 +481,90 @@ class ReportTests(unittest.TestCase):
         self.assertIn("attempt 2: PASS", text)
         self.assertIn("not run", text)
         self.assertIn("FLAKY", text.splitlines()[-1])
+
+
+class MeasureTests(unittest.TestCase):
+    """stress-contended's transport drops are a measurement; anything else it finds still fails."""
+    NAME = "conf-stress-contended"
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.out = Path(tmp.name)
+        self.log = self.out / "logs" / f"{self.NAME}.log"
+        self.log.parent.mkdir(parents=True)
+
+    def write(self, problems, log_lines, dropped=38):
+        trace = self.out / "runs" / self.NAME / "trace"
+        trace.mkdir(parents=True, exist_ok=True)
+        report = {"passed": not problems, "problems": problems,
+                  "accounting": {"transport": {"dropped": dropped, "attempted": 10466625, "writer_held_ms": 0,
+                                               "writer_held_longest_ms": 0}},
+                  "throughput": {"calls_per_second": 18822.09}}
+        (trace / "stress-contended.json").write_text(vm.json.dumps(report))
+        self.log.write_text("\n".join(log_lines) + "\n")
+
+    def failed_log(self, *extra):
+        return ["conformance: checking stress-contended",
+                "FAIL group stress-contended (level heavy): 1849177 calls in 98 s (18822 calls/s, 23.3 MiB/s), "
+                "packet loss 0.000 %, 20 calls with loss, async loss 0",
+                "    transport drops: 38", *extra, "FAIL trace in 1006 s"]
+
+    def test_only_the_contended_group_is_measured(self):
+        self.assertEqual(vm.MEASURED_GROUPS, {"conf-stress-contended": "stress-contended"})
+        self.assertIn(self.NAME, [c.name for c in vm.plan("full", PlanTests().ctx())])
+
+    def test_drops_alone_are_measured_with_their_numbers(self):
+        self.write(["transport drops: 38"], self.failed_log())
+        found = vm.measure(self.NAME, self.out, self.log, 1)
+        self.assertEqual(found["status"], "MEASURED")
+        self.assertEqual(found["measurement"], {"dropped": 38, "attempted": 10466625, "writer_held_ms": 0,
+                                                "writer_held_longest_ms": 0, "calls_per_second": 18822})
+        for text in ("38 transport drops of 10,466,625", "writer held 0 ms", "18,822 calls/s"):
+            self.assertIn(text, found["detail"])
+
+    def test_other_problems_still_fail(self):
+        for problems in (["transport drops: 38", "bad commands: 1"], ["storage drops: 5"], []):
+            with self.subTest(problems=problems):
+                self.write(problems, self.failed_log())
+                found = vm.measure(self.NAME, self.out, self.log, 1)
+                self.assertNotIn("status", found)
+                self.assertIn("measured:", found["detail"])
+
+    def test_another_failure_in_the_log_still_fails(self):
+        for extra in ("FAIL render: stress-contended: view fallback hex ×3", "FAIL golden stress-contended: 2"):
+            with self.subTest(extra=extra):
+                self.write(["transport drops: 38"], self.failed_log(extra))
+                self.assertNotIn("status", vm.measure(self.NAME, self.out, self.log, 1))
+        self.write(["transport drops: 38"], self.failed_log())
+        self.assertNotIn("status", vm.measure(self.NAME, self.out, self.log, 2))
+
+    def test_a_pass_keeps_its_numbers(self):
+        self.write([], ["PASS group stress-contended (level heavy): ...", "PASS trace in 900 s"], dropped=0)
+        found = vm.measure(self.NAME, self.out, self.log, 0)
+        self.assertNotIn("status", found)
+        self.assertEqual(found["measurement"]["dropped"], 0)
+
+    def test_a_missing_report_is_not_measured(self):
+        self.log.write_text("conformance: boot failed\n")
+        found = vm.measure(self.NAME, self.out, self.log, 1)
+        self.assertNotIn("status", found)
+        self.assertIn("no measurement", found["detail"])
+
+    def test_measured_ends_the_retries_and_shows_in_the_report(self):
+        result = {"name": self.NAME, "group": "full", "attempt": 1, "log": str(self.log), "status": "MEASURED",
+                  "seconds": 900.0, "measurement": {"dropped": 1}, "detail": "measured: 1 transport drops"}
+        args = vm.parse(["full", "b", "--retries", "2"])
+        with unittest.mock.patch.object(vm, "run_check", return_value=result) as run, \
+                unittest.mock.patch("sys.stdout", io.StringIO()) as printed:
+            final = vm.run_with_retries(vm.Check(self.NAME, "full", [], "/", 1), {}, args)
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(final["status"], "MEASURED")
+        self.assertIn("measured: 1 transport drops", printed.getvalue())
+        text = vm.report({self.NAME: final}, [self.NAME], "head")
+        self.assertIn("measured: 1 transport drops", text)
+        self.assertIn("MEASURED", text.splitlines()[-1])
+        self.assertEqual(vm.exit_code({self.NAME: final}, [self.NAME]), 0)
 
 
 if __name__ == "__main__":

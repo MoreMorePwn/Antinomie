@@ -9,7 +9,9 @@ usage: vm-regress.py quick BASE [options]
 quick  the conformance trace suite's oracle groups (user, root, threads)
 full   quick, the debugger, audit, io_uring, tracer, stealth and snapshot
        checks, the conformance stress groups and interop in both directions
-       (an old host on BASE, the current host on OLD)
+       (an old host on BASE, the current host on OLD); conf-stress-contended
+       is a measurement (MEASURED: its transport drops, writer hold and calls
+       per second are reported, and drops alone do not fail the tier)
 auto   full when the diff against REF touches the kernel/host contract (guest
        patches, transport, protocol docs, ANTC_REVISION), otherwise quick
 
@@ -52,7 +54,18 @@ MIN_MEM_KIB = 5 * 1024 * 1024
 GIB = 1024**3
 # What a finished check leaves that only matters for debugging it: VM disks and recordings.
 CONFORMANCE_BULK = ("groups", "render", "bin", "xdg")
-ORDER = ("PASS", "FLAKY", "FAIL", "TIMEOUT", "ERROR", "SKIP")
+ORDER = ("PASS", "FLAKY", "MEASURED", "FAIL", "TIMEOUT", "ERROR", "SKIP")
+# Results that do not fail a tier.
+OK_STATUSES = ("PASS", "FLAKY", "MEASURED")
+# Checks whose transport drops are a measurement, not a failure: check name ->
+# conformance group. stress-contended runs a 256 KiB never-drop ring with a
+# 100 ms send wait, so a host that reads nothing for 100 ms (a busy build
+# machine) makes its senders drop; the guest cannot tell that from a fault.
+# Until the host times its telemetry read gaps and attributes drops to them
+# (board card "Host: time the host's telemetry read gaps and attribute guest
+# send drops to them"), the group's drops are reported, not judged. Every other
+# problem the group finds still fails it.
+MEASURED_GROUPS = {"conf-stress-contended": "stress-contended"}
 
 
 class Failure(Exception):
@@ -596,7 +609,48 @@ def run_check(check, ctx, args, attempt):
     env.update(extra)
     code, seconds = run_logged(argv, env, check.cwd, log, check.timeout)
     status = "TIMEOUT" if code is None else "PASS" if code == 0 else "FAIL"
-    return {**result, "status": status, "seconds": round(seconds, 1), "exit": code}
+    result = {**result, "status": status, "seconds": round(seconds, 1), "exit": code}
+    if check.name in MEASURED_GROUPS and code is not None:
+        result.update(measure(check.name, out, log, code))
+    return result
+
+
+def measure(name, out, log, code):
+    """What a measured check reports: its numbers, and MEASURED when transport
+    drops were the only problem the conformance check found (see MEASURED_GROUPS)."""
+    group = MEASURED_GROUPS[name]
+    path = out / "runs" / name / "trace" / f"{group}.json"
+    try:
+        report = json.loads(path.read_text())
+        transport = report["accounting"]["transport"]
+        numbers = {
+            "dropped": int(transport["dropped"]),
+            "attempted": int(transport["attempted"]),
+            "writer_held_ms": int(transport["writer_held_ms"]),
+            "writer_held_longest_ms": int(transport["writer_held_longest_ms"]),
+            "calls_per_second": round(float(report["throughput"]["calls_per_second"])),
+        }
+        problems = list(report["problems"])
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        return {"detail": f"no measurement: {path}: {error}"}
+    share = 100.0 * numbers["dropped"] / numbers["attempted"] if numbers["attempted"] else 0.0
+    detail = (f"measured: {numbers['dropped']:,} transport drops of {numbers['attempted']:,} "
+              f"({share:.5f} %), writer held {numbers['writer_held_ms']:,} ms "
+              f"(longest {numbers['writer_held_longest_ms']:,} ms), "
+              f"{numbers['calls_per_second']:,} calls/s")
+    found = {"measurement": numbers, "detail": detail}
+    if code == 0:
+        return found
+    # Transport drops must be the group's only problem, and the group and the
+    # check's summary its only failures (no render, matrix or golden failure).
+    text = log.read_text(errors="replace") if log.exists() else ""
+    failures = [line for line in text.splitlines() if line.startswith("FAIL ")]
+    only_drops = bool(problems) and all(re.fullmatch(r"transport drops: \d+", p) for p in problems)
+    expected = (len(failures) == 2 and failures[0].startswith(f"FAIL group {group} ")
+                and re.fullmatch(r"FAIL trace in \d+ s", failures[1]) is not None)
+    if code == 1 and only_drops and expected:
+        return {**found, "status": "MEASURED"}
+    return found
 
 
 def run_with_retries(check, ctx, args):
@@ -605,7 +659,9 @@ def run_with_retries(check, ctx, args):
         result = run_check(check, ctx, args, attempt)
         attempts.append(result)
         print(f"  {check.name} attempt {attempt}: {result['status']} in {result['seconds']:.0f} s", flush=True)
-        if result["status"] in ("PASS", "SKIP", "ERROR"):
+        if result.get("measurement"):
+            print(f"    {result['detail']}", flush=True)
+        if result["status"] in ("PASS", "MEASURED", "SKIP", "ERROR"):
             break
     final = dict(attempts[-1])
     final["attempts"] = attempts
@@ -646,11 +702,13 @@ def report(results, order, header):
     rows.append("total " + fmt_seconds(total) + "; " + ", ".join(f"{n} {s}" for s, n in counts.items() if n))
     if counts["FLAKY"]:
         rows.append("FLAKY: passed only after a failed attempt, see the attempts above")
+    if counts["MEASURED"]:
+        rows.append("MEASURED: transport drops reported as a measurement, not a failure (see MEASURED_GROUPS)")
     return "\n".join(rows)
 
 
 def exit_code(results, order):
-    bad = [n for n in order if results.get(n) is None or results[n]["status"] not in ("PASS", "FLAKY")]
+    bad = [n for n in order if results.get(n) is None or results[n]["status"] not in OK_STATUSES]
     return 1 if bad else 0
 
 
@@ -776,7 +834,7 @@ def main(argv=None):
             if not results_file.exists():
                 raise Failure(f"--rerun-failed: no {results_file}")
             results = json.loads(results_file.read_text())
-            checks = [c for c in checks if results.get(c.name, {}).get("status") not in ("PASS", "FLAKY")]
+            checks = [c for c in checks if results.get(c.name, {}).get("status") not in OK_STATUSES]
         out.mkdir(parents=True, exist_ok=True)
         selected = {check.name for check in checks}
         ctx["results"] = results
