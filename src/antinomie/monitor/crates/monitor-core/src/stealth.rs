@@ -14,7 +14,7 @@
 //! entry the base or host lacks back into the choice every one has.
 use crate::storage::unique_id;
 pub use catalog::{MACHINES, MachineProfile, Variant};
-use catalog::{SerialStyle, Subsystem};
+use catalog::{SerialStyle, SmbiosFields, Subsystem};
 pub use cpu::{CpuGen, HostCpu, classify};
 use parts::{CLIENT_DISKS, DESKTOP_RAM, DiskModel, LAPTOP_RAM, SERVER_DISKS, SERVER_RAM};
 pub use record::MachineRecord;
@@ -344,13 +344,30 @@ pub struct MachineIdentity {
     pub board_manufacturer: String,
     pub board_product: String,
     pub board_serial: String,
+    /// Base board version and location in chassis. These and the chassis,
+    /// processor and memory slot entries below came in 0.8.0; an identity
+    /// saved before has them empty and takes its machine's at launch
+    /// ([`MachineIdentity::with_firmware_fields`]).
+    pub board_version: String,
+    pub board_location: String,
     /// SMBIOS chassis type: 3 desktop, 7 tower, 35 mini PC, 9 laptop,
     /// 10 notebook, 23 rack mount chassis.
     pub chassis_type: u8,
     pub chassis_serial: String,
+    pub chassis_version: String,
+    pub chassis_sku: String,
+    /// Processor socket designation and part number.
+    pub cpu_socket: String,
+    pub cpu_part: String,
     pub memory_manufacturer: String,
     pub memory_part: String,
     pub memory_serial: String,
+    /// The memory slots of the machine, the first one used first.
+    pub memory_slots: Vec<MemorySlot>,
+    /// SMBIOS memory form factor (9 DIMM, 13 SO-DIMM) and type detail bits;
+    /// 0 when not recorded.
+    pub memory_form: u8,
+    pub memory_detail: u16,
     /// ACPI table header OEM ID (6 bytes) and OEM table ID (8 bytes).
     pub acpi_oem_id: String,
     pub acpi_table_id: String,
@@ -366,6 +383,14 @@ pub struct MachineIdentity {
     /// PCI subsystem `vendor:device` of the network card (e1000e only), as a
     /// board's own card has its maker's; empty keeps Intel's.
     pub nic_subsystem: String,
+}
+
+/// A memory slot as the firmware names it: device and bank locator.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MemorySlot {
+    pub locator: String,
+    pub bank: String,
 }
 
 /// The stealth profile of one VM.
@@ -600,6 +625,7 @@ impl MachineIdentity {
         ram: &parts::RamPart,
     ) -> Self {
         let system_serial = serial(machine.serial);
+        let fields = &machine.fields;
         let subsystem = match &machine.nic_subsystem {
             Subsystem::None => String::new(),
             Subsystem::Fixed(ids) => (*ids).into(),
@@ -619,8 +645,17 @@ impl MachineIdentity {
             board_manufacturer: machine.board_manufacturer.into(),
             board_product: unit.board.into(),
             board_serial: format!("/{system_serial}/{}/", random_text(UPPER_DIGITS, 14)),
+            board_version: with_digits(pick(fields.board_versions), &random_text(DIGITS, 16)),
+            board_location: fields.board_location.into(),
             chassis_type: unit.chassis,
             chassis_serial: system_serial.clone(),
+            chassis_version: fields.chassis_version.into(),
+            chassis_sku: fields.chassis_sku.into(),
+            cpu_socket: fields.cpu_socket.into(),
+            cpu_part: fields.cpu_part.into(),
+            memory_slots: memory_slots(fields),
+            memory_form: fields.dimm_form,
+            memory_detail: fields.dimm_detail,
             system_serial,
             system_uuid: uuid(),
             memory_manufacturer: ram.manufacturer.into(),
@@ -646,12 +681,83 @@ impl MachineIdentity {
         }
     }
 
+    /// This identity with the firmware fields an identity saved before 0.8.0
+    /// lacks (board version and location, chassis version and SKU, processor
+    /// socket and part, memory slots) taken from its machine, so a launch
+    /// never leaves them to QEMU. A per-unit number in the board version
+    /// follows from the system UUID, so it stays the same at every boot.
+    pub fn with_firmware_fields(&self) -> Self {
+        let mut identity = self.clone();
+        let Some(machine) = MACHINES
+            .iter()
+            .find(|machine| machine.id == identity.profile)
+        else {
+            if identity.memory_slots.is_empty() {
+                identity.memory_slots = vec![MemorySlot {
+                    locator: "DIMM1".into(),
+                    bank: String::new(),
+                }];
+            }
+            if identity.memory_form == 0 {
+                identity.memory_form = if matches!(identity.chassis_type, 8 | 9 | 10 | 14 | 31 | 32)
+                {
+                    13
+                } else {
+                    9
+                };
+            }
+            if identity.memory_detail == 0 {
+                identity.memory_detail = 0x0080;
+            }
+            return identity;
+        };
+        let fields = &machine.fields;
+        let fill = |value: &mut String, from: &str| {
+            if value.is_empty() {
+                *value = from.into();
+            }
+        };
+        let digits: String = identity
+            .system_uuid
+            .chars()
+            .filter_map(|c| c.to_digit(16))
+            .map(|value| char::from(b'0' + (value % 10) as u8))
+            .collect();
+        let board_version = with_digits(fields.board_versions[0], &digits);
+        fill(&mut identity.board_version, &board_version);
+        fill(&mut identity.board_location, fields.board_location);
+        fill(&mut identity.chassis_version, fields.chassis_version);
+        fill(&mut identity.chassis_sku, fields.chassis_sku);
+        fill(&mut identity.cpu_socket, fields.cpu_socket);
+        fill(&mut identity.cpu_part, fields.cpu_part);
+        if identity.memory_slots.is_empty() {
+            identity.memory_slots = memory_slots(fields);
+        }
+        if identity.memory_form == 0 {
+            identity.memory_form = fields.dimm_form;
+        }
+        if identity.memory_detail == 0 {
+            identity.memory_detail = fields.dimm_detail;
+        }
+        identity
+    }
+
     /// New random serials, UUID and disk serial; the strings stay.
     pub fn rerandomize(&mut self) {
-        let style = MACHINES
-            .iter()
-            .find(|machine| machine.id == self.profile)
-            .map_or(SerialStyle::Dell, |machine| machine.serial);
+        let machine = MACHINES.iter().find(|machine| machine.id == self.profile);
+        if let Some(machine) = machine
+            && machine
+                .fields
+                .board_versions
+                .iter()
+                .any(|version| version.contains('#'))
+        {
+            self.board_version = with_digits(
+                pick(machine.fields.board_versions),
+                &random_text(DIGITS, 16),
+            );
+        }
+        let style = machine.map_or(SerialStyle::Dell, |machine| machine.serial);
         self.system_serial = serial(style);
         self.chassis_serial = self.system_serial.clone();
         self.board_serial = format!("/{}/{}/", self.system_serial, random_text(UPPER_DIGITS, 14));
@@ -672,6 +778,34 @@ impl MachineIdentity {
             }
         }
     }
+}
+
+/// `template` with each `#` replaced by the next of `digits` (0 once they
+/// run out).
+fn with_digits(template: &str, digits: &str) -> String {
+    let mut digits = digits.chars();
+    template
+        .chars()
+        .map(|c| {
+            if c == '#' {
+                digits.next().unwrap_or('0')
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
+/// The memory slots of `fields` as an identity keeps them.
+fn memory_slots(fields: &SmbiosFields) -> Vec<MemorySlot> {
+    fields
+        .dimm_slots
+        .iter()
+        .map(|(locator, bank)| MemorySlot {
+            locator: (*locator).into(),
+            bank: (*bank).into(),
+        })
+        .collect()
 }
 
 /// A serial number as `disk`'s maker numbers them.
@@ -901,7 +1035,13 @@ impl StealthProfile {
                 &identity.board_manufacturer,
                 &identity.board_product,
                 &identity.board_serial,
+                &identity.board_version,
+                &identity.board_location,
                 &identity.chassis_serial,
+                &identity.chassis_version,
+                &identity.chassis_sku,
+                &identity.cpu_socket,
+                &identity.cpu_part,
                 &identity.memory_manufacturer,
                 &identity.memory_part,
                 &identity.memory_serial,
@@ -922,6 +1062,15 @@ impl StealthProfile {
                 })
             {
                 return Err("OEM strings: at most 16, each 1 to 128 characters".into());
+            }
+            if identity.memory_slots.len() > 8
+                || identity.memory_slots.iter().any(|slot| {
+                    [&slot.locator, &slot.bank]
+                        .iter()
+                        .any(|text| text.len() > 64 || text.chars().any(char::is_control))
+                })
+            {
+                return Err("Memory slots: at most 8, names up to 64 characters".into());
             }
             if !identity.disk_wwn.is_empty()
                 && (identity.disk_wwn.len() != 16

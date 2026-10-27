@@ -54,6 +54,31 @@ pub(super) enum SerialStyle {
     Supermicro,
 }
 
+/// The SMBIOS fields QEMU fills with its own values when a launch leaves them
+/// out, as the model's firmware writes them: the most common value in the
+/// model's public dmidecode reports. An empty string is SMBIOS string 0,
+/// which dmidecode prints as "Not Specified".
+pub(super) struct SmbiosFields {
+    /// Base board (type 2) versions; `#` stands for a digit of a per-unit
+    /// number, drawn at random.
+    pub(super) board_versions: &'static [&'static str],
+    pub(super) board_location: &'static str,
+    /// Chassis (type 3) version and SKU.
+    pub(super) chassis_version: &'static str,
+    pub(super) chassis_sku: &'static str,
+    /// Processor (type 4) socket designation and part number.
+    pub(super) cpu_socket: &'static str,
+    pub(super) cpu_part: &'static str,
+    /// Memory device (type 17) locator and bank locator of each slot of one
+    /// real unit, the slot a single module sits in first.
+    pub(super) dimm_slots: &'static [(&'static str, &'static str)],
+    /// SMBIOS memory form factor: 9 DIMM, 13 SO-DIMM.
+    pub(super) dimm_form: u8,
+    /// SMBIOS memory type detail bits: 0x0080 synchronous, 0x4080 also
+    /// unbuffered, 0x2080 registered.
+    pub(super) dimm_detail: u16,
+}
+
 /// A real machine whose firmware strings a preset copies.
 pub struct MachineProfile {
     pub id: &'static str,
@@ -78,6 +103,7 @@ pub struct MachineProfile {
     pub(super) serial: SerialStyle,
     /// SMBIOS type 11 strings; `{sku}` stands for the unit's SKU.
     pub(super) oem_strings: &'static [&'static str],
+    pub(super) fields: SmbiosFields,
     /// The onboard network card's chip, as the maker's documentation says.
     pub nic_chip: &'static str,
     pub(super) nic_subsystem: Subsystem,

@@ -2302,7 +2302,7 @@ VMs default to Realistic desktop.
 
 | Entry | QEMU option | Transparent | Realistic |
 | --- | --- | --- | --- |
-| Machine identity | `-smbios type=1,2,4,17`, `-smbios file=` (type 0 BIOS and type 3 chassis tables written to the runtime directory; the BIOS table lists real characteristics and not QEMU's "virtual machine" bit), `-machine smbios-entry-point-type=64` | QEMU strings, chassis Other | One of eight built-in vendor machines (Dell, HP, Lenovo, Supermicro; Intel and AMD) with random serials and UUID |
+| Machine identity | `-smbios type=1,2,4`, `-smbios file=` (type 0 BIOS, type 3 chassis and, from 0.8.0, type 17 memory device tables written to the runtime directory; the BIOS table lists real characteristics and not QEMU's "virtual machine" bit), `-machine smbios-entry-point-type=64` | QEMU strings, chassis Other | One of eight built-in vendor machines (Dell, HP, Lenovo, Supermicro; Intel and AMD) with random serials and UUID |
 | ACPI OEM IDs | `-machine x-oem-id=,x-oem-table-id=` | `BOCHS` / `BXPC` | The machine's vendor IDs |
 | CPU | `-cpu host,-hypervisor,kvm=off,pmu=on` (without KVM: `max,model-id=<host CPU name>,-hypervisor`); passthrough replaces the VM's CPU model setting | QEMU model, hypervisor bit, KVM signature | Passthrough, hidden hypervisor bit and KVM signature, performance counters |
 | CPU caches | `-cpu host,host-cache-info=on` (passthrough only) | QEMU's cache sizes | The host's cache sizes |
@@ -2592,6 +2592,37 @@ BIOS, SKU, board, disk, memory, NIC chip, host CPU generation, any CPU note;
 no serials) for reading its results against the identity it was seen under.
 Not done: random RAM size and disk size (they are the VM's own settings), guest
 hostname, user and locale, and importing a profile from a machine the user owns.
+
+**No SMBIOS field left to QEMU (0.8.0).** QEMU fills some SMBIOS fields with
+its own values when a launch leaves them out: type 1 and 2 manufacturer
+(`QEMU`), product (`Standard PC (Q35 + ICH9, 2009)`) and version (the machine
+type, `pc-q35-11.0`), type 3 manufacturer and version, type 4 socket (`CPU 0`),
+manufacturer, version, family (`Other`) and speed (2000 MHz), and type 17
+locator (`DIMM 0`), manufacturer and memory type (`RAM`). A machine profile
+therefore also carries `SmbiosFields` (`catalog.rs`): board versions (Dell
+`A00`, HP `KBC Version 09.94.00`, Lenovo `SDK0J40697 WIN 3305…` with a random
+per-unit number), board location, chassis version and SKU, processor socket and
+part number, the memory slots (locator and bank) of one real unit, the memory
+form factor and type detail, each the most common value in the model's public
+dmidecode reports. `MachineIdentity` keeps them (`board_version`,
+`board_location`, `chassis_version`, `chassis_sku`, `cpu_socket`, `cpu_part`,
+`memory_slots`, `memory_form`, `memory_detail`); an identity saved before
+takes its machine's at launch (`MachineIdentity::with_firmware_fields`).
+`launch::apply` always passes type 1 and 2 manufacturer, product and version
+and type 4 socket prefix, manufacturer and version, an empty one as string 0
+(dmidecode prints "Not Specified", `/sys/class/dmi/id` an empty line, as on a
+real unit whose firmware leaves the field unset; HP's single space is passed as
+such). Type 4 also gets the host CPU's maximum and base clock (cpufreq, else the
+brand string's "@ 2.90GHz", else `/proc/cpuinfo`) and its SMBIOS family from the
+brand (Core i3/i5/i7/i9, Xeon, Pentium, Celeron, Zen). The memory devices are
+written whole (`smbios::memory_tables`, one per 16 GiB module as QEMU's type 16
+array counts them, handles from 0x1100): DDR4-3200, rank 1, 1.2 V, 64 bits wide
+(72 for a server's ECC modules), in the machine's slots, form factor and type
+detail. The chassis table's version and SKU follow the machine, its asset tag
+is string 0. Limits: QEMU numbers the socket after the prefix (`U3E1 0`, a real
+unit prints `U3E1`), and type 4's voltage, external clock, upgrade and cache
+handles stay QEMU's (only a whole type 4 table, which must repeat the vCPU's
+CPUID signature, could set them).
 
 **Fitting to the base and the host.** Some entries need the base or the host.
 A base says what it boots with in `bundle.json` `stealth_support` (advisory,

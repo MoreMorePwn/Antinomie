@@ -3,7 +3,7 @@ use super::launch::*;
 use super::smbios::*;
 use super::*;
 use crate::storage::unique_id;
-use std::process::Command;
+use std::{collections::BTreeMap, process::Command};
 
 fn machine(id: &str) -> &'static MachineProfile {
     MACHINES.iter().find(|machine| machine.id == id).unwrap()
@@ -107,7 +107,7 @@ fn realistic_options_hide_the_hypervisor_and_carry_the_identity() {
     let dir = std::env::temp_dir().join(format!("ant-stealth-{}", unique_id()));
     std::fs::create_dir_all(&dir).unwrap();
     let mut command = Command::new("qemu");
-    apply(&mut command, &profile, &dir).unwrap();
+    apply(&mut command, &profile, &dir, 2048).unwrap();
     let args: Vec<_> = command
         .get_args()
         .map(|arg| arg.to_string_lossy().into_owned())
@@ -122,7 +122,9 @@ fn realistic_options_hide_the_hypervisor_and_carry_the_identity() {
     );
     let chassis = std::fs::read(dir.join("smbios-chassis.bin")).unwrap();
     assert_eq!(&chassis[..6], &[3, 0x16, 0, 3, 1, 3]);
-    assert!(chassis.ends_with(b"Default string\0\0"));
+    // Version and asset tag are string 0; Dell's chassis SKU is the kind.
+    assert_eq!((chassis[6], chassis[8], chassis[0x15]), (0, 0, 3));
+    assert!(chassis.ends_with(b"Desktop\0\0"));
     // The BIOS table: no VM bit, Dell's strings, release 1.4.
     let bios = std::fs::read(dir.join("smbios-bios.bin")).unwrap();
     assert_eq!(&bios[..6], &[0, 0x1a, 0, 0, 1, 2]);
@@ -155,7 +157,7 @@ fn commas_are_escaped_and_bad_addresses_are_refused() {
     let dir = std::env::temp_dir().join(format!("ant-stealth-{}", unique_id()));
     std::fs::create_dir_all(&dir).unwrap();
     let mut command = Command::new("qemu");
-    apply(&mut command, &profile, &dir).unwrap();
+    apply(&mut command, &profile, &dir, 2048).unwrap();
     let args: Vec<_> = command
         .get_args()
         .map(|arg| arg.to_string_lossy().into_owned())
@@ -181,11 +183,281 @@ fn commas_are_escaped_and_bad_addresses_are_refused() {
     assert!(profile.validate().is_err());
 }
 
+/// The launch arguments of `profile` with `ram_mib` of memory, and the
+/// SMBIOS tables it wrote, by file name.
+fn launch_tables(
+    profile: &StealthProfile,
+    ram_mib: u32,
+) -> (Vec<String>, BTreeMap<String, Vec<u8>>) {
+    let dir = std::env::temp_dir().join(format!("ant-stealth-{}", unique_id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut command = Command::new("qemu");
+    apply(&mut command, profile, &dir, ram_mib).unwrap();
+    let tables = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|entry| {
+            let entry = entry.unwrap();
+            let name = entry.file_name().to_string_lossy().into_owned();
+            (name, std::fs::read(entry.path()).unwrap())
+        })
+        .collect();
+    std::fs::remove_dir_all(dir).unwrap();
+    let args = command
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    (args, tables)
+}
+
+/// The fields of `-smbios type=N,...` option `arg` as (name, value).
+fn smbios_fields(arg: &str) -> Vec<(String, String)> {
+    let mut fields = Vec::new();
+    let mut rest = arg;
+    while !rest.is_empty() {
+        // Values double their commas.
+        let mut end = 0;
+        let bytes = rest.as_bytes();
+        while end < bytes.len() {
+            if bytes[end] == b',' {
+                if bytes.get(end + 1) == Some(&b',') {
+                    end += 2;
+                    continue;
+                }
+                break;
+            }
+            end += 1;
+        }
+        let (name, value) = rest[..end].split_once('=').unwrap();
+        fields.push((name.to_owned(), value.replace(",,", ",")));
+        rest = rest.get(end + 1..).unwrap_or("");
+    }
+    fields
+}
+
+/// The strings of SMBIOS structure `table`, string 1 first.
+fn table_strings(table: &[u8]) -> Vec<String> {
+    table[usize::from(table[1])..]
+        .split(|byte| *byte == 0)
+        .take_while(|text| !text.is_empty())
+        .map(|text| String::from_utf8_lossy(text).into_owned())
+        .collect()
+}
+
+#[test]
+fn no_profile_leaves_an_smbios_field_to_qemu() {
+    // The fields QEMU fills with its own values when a launch leaves them
+    // out: "QEMU", "Standard PC (Q35 + ICH9, 2009)", the machine type
+    // ("pc-q35-11.0") as a version, socket "CPU 0", 2000 MHz and, in type
+    // 17, "DIMM 0", "QEMU" and memory type "RAM". Types 0, 3 and 17 come
+    // from tables Antinomie writes, which QEMU then does not build.
+    let required: &[(&str, &[&str])] = &[
+        ("type=1", &["manufacturer", "product", "version"]),
+        ("type=2", &["manufacturer", "product", "version"]),
+        ("type=4", &["sock_pfx", "manufacturer", "version"]),
+    ];
+    let mut checked = 0;
+    for machine in MACHINES {
+        let first = pinned(machine.kind, machine.id);
+        let mut random = first.clone();
+        random.identity = MachineIdentity::from_machine(machine);
+        // An identity saved before these fields: they launch as the machine's.
+        let mut saved = first.clone();
+        for field in [
+            &mut saved.identity.board_version,
+            &mut saved.identity.board_location,
+            &mut saved.identity.chassis_version,
+            &mut saved.identity.chassis_sku,
+            &mut saved.identity.cpu_socket,
+            &mut saved.identity.cpu_part,
+        ] {
+            field.clear();
+        }
+        saved.identity.memory_slots.clear();
+        (saved.identity.memory_form, saved.identity.memory_detail) = (0, 0);
+        for (profile, ram_mib) in [(&first, 2048), (&random, 40 * 1024), (&saved, 4096)] {
+            let (args, tables) = launch_tables(profile, ram_mib);
+            let id = &profile.identity;
+            for (kind, names) in required {
+                let arg = args
+                    .iter()
+                    .find(|arg| arg.starts_with(&format!("{kind},")))
+                    .unwrap_or_else(|| panic!("{}: no {kind}", machine.id));
+                let fields = smbios_fields(arg);
+                for name in *names {
+                    assert!(
+                        fields.iter().any(|(field, _)| field == name),
+                        "{}: {kind} leaves {name} to QEMU: {arg}",
+                        machine.id
+                    );
+                }
+                if *kind == "type=4" {
+                    let socket = &fields
+                        .iter()
+                        .find(|(name, _)| name == "sock_pfx")
+                        .unwrap()
+                        .1;
+                    assert_eq!(socket, &machine.fields.cpu_socket, "{}", machine.id);
+                    if host_cpu_speeds().is_some() {
+                        assert!(arg.contains(",max-speed="), "{arg}");
+                        assert!(arg.contains(",current-speed="), "{arg}");
+                    }
+                }
+                if *kind == "type=2" {
+                    let version = &fields.iter().find(|(name, _)| name == "version").unwrap().1;
+                    let template = machine.fields.board_versions.iter().find(|template| {
+                        template.len() == version.len()
+                            && template
+                                .chars()
+                                .zip(version.chars())
+                                .all(|(t, v)| t == v || (t == '#' && v.is_ascii_digit()))
+                    });
+                    assert!(
+                        template.is_some(),
+                        "{}: board version {version}",
+                        machine.id
+                    );
+                }
+            }
+            for kind in ["type=0", "type=3", "type=17"] {
+                assert!(
+                    !args.iter().any(|arg| arg.starts_with(kind)),
+                    "{}: {kind} is a table of its own",
+                    machine.id
+                );
+            }
+            for name in [
+                "smbios-bios.bin",
+                "smbios-chassis.bin",
+                "smbios-memory-0.bin",
+            ] {
+                assert!(tables.contains_key(name), "{}: {name}", machine.id);
+            }
+            // 40 GiB is three modules of up to 16 GiB, as QEMU counts them.
+            let modules = if ram_mib > 32 * 1024 { 3 } else { 1 };
+            for index in 0..modules {
+                let memory = &tables[&format!("smbios-memory-{index}.bin")];
+                assert_eq!((memory[0], memory[1], memory[0x12]), (17, 0x28, 0x1a));
+                assert_eq!(memory[0x0e], machine.fields.dimm_form);
+                let strings = table_strings(memory);
+                let slot =
+                    machine.fields.dimm_slots[index.min(machine.fields.dimm_slots.len() - 1)];
+                if index < machine.fields.dimm_slots.len() {
+                    assert_eq!(strings[0], slot.0, "{}", machine.id);
+                }
+                assert!(strings.contains(&id.memory_part), "{}", machine.id);
+            }
+            assert!(!tables.contains_key(&format!("smbios-memory-{modules}.bin")));
+            let chassis = &tables["smbios-chassis.bin"];
+            let strings = table_strings(chassis);
+            let named = |index: u8| match index {
+                0 => String::new(),
+                index => strings[usize::from(index) - 1].clone(),
+            };
+            assert_eq!(
+                named(chassis[6]),
+                machine.fields.chassis_version,
+                "{}",
+                machine.id
+            );
+            assert_eq!(
+                named(chassis[0x15]),
+                machine.fields.chassis_sku,
+                "{}",
+                machine.id
+            );
+            let everything: Vec<u8> = args
+                .iter()
+                .flat_map(|arg| arg.bytes())
+                .chain(tables.values().flatten().copied())
+                .collect();
+            for tell in ["QEMU", "pc-q35", "pc-i440fx", "Standard PC", "Bochs"] {
+                assert!(
+                    !everything
+                        .windows(tell.len())
+                        .any(|part| part == tell.as_bytes()),
+                    "{}: {tell}",
+                    machine.id
+                );
+            }
+            checked += 1;
+        }
+    }
+    assert_eq!(checked, MACHINES.len() * 3);
+}
+
+#[test]
+fn processor_speeds_and_family_come_from_the_host_cpu() {
+    assert_eq!(
+        cpu_speeds(
+            Some(4_800_000),
+            None,
+            "Intel(R) Core(TM) i7-10700 CPU @ 2.90GHz",
+            Some(800.0)
+        ),
+        Some((4800, 2900))
+    );
+    assert_eq!(
+        cpu_speeds(Some(4_463_000), Some(1_900_000), "AMD Ryzen 5 5600U", None),
+        Some((4450, 1900))
+    );
+    // No cpufreq (WSL): the clock /proc/cpuinfo shows, for both.
+    assert_eq!(
+        cpu_speeds(
+            None,
+            None,
+            "AMD Ryzen 5 5600H with Radeon Graphics",
+            Some(3293.8)
+        ),
+        Some((3300, 3300))
+    );
+    assert_eq!(cpu_speeds(None, None, "", None), None);
+    assert_eq!(
+        processor_family("11th Gen Intel(R) Core(TM) i5-1145G7 @ 2.60GHz"),
+        Some(0xcd)
+    );
+    assert_eq!(
+        processor_family("AMD Ryzen 7 PRO 5850U with Radeon Graphics"),
+        Some(0x6b)
+    );
+    assert_eq!(
+        processor_family("Intel(R) Xeon(R) E-2314 CPU @ 2.80GHz"),
+        Some(0xb3)
+    );
+    assert_eq!(processor_family("QEMU Virtual CPU version 2.5+"), None);
+}
+
+#[test]
+fn memory_devices_follow_the_ram_size_in_the_machines_slots() {
+    let profile = pinned(StealthPreset::RealisticLaptop, "dell-latitude-5420");
+    let id = profile.identity.with_firmware_fields();
+    let tables = smbios::memory_tables(&id, 20 * 1024, false);
+    assert_eq!(tables.len(), 2);
+    let size = |table: &Vec<u8>| u16::from_le_bytes([table[0x0c], table[0x0d]]);
+    assert_eq!((size(&tables[0]), size(&tables[1])), (16 * 1024, 4 * 1024));
+    assert_eq!(table_strings(&tables[0])[..2], ["DIMM A", "BANK 0"]);
+    assert_eq!(table_strings(&tables[1])[..2], ["DIMM B", "BANK 0"]);
+    // SO-DIMM, synchronous, 64 bits wide, handles after QEMU's array.
+    assert_eq!(
+        (tables[0][0x0e], tables[0][0x13], tables[0][0x08]),
+        (13, 0x80, 64)
+    );
+    assert_eq!((tables[1][2], tables[1][3]), (0x01, 0x11));
+    // Three modules; a server's are ECC, 72 bits wide.
+    let server = smbios::memory_tables(&id, 16 * 1024 * 3, true);
+    assert_eq!(server.len(), 3);
+    assert_eq!(server[0][0x08], 72);
+    // More modules than the machine has slots: named as such a board would.
+    let mut one_slot = id.clone();
+    one_slot.memory_slots.truncate(1);
+    let tables = smbios::memory_tables(&one_slot, 20 * 1024, false);
+    assert_eq!(table_strings(&tables[1])[0], "DIMM2");
+}
+
 fn launch_args(profile: &StealthProfile) -> Vec<String> {
     let dir = std::env::temp_dir().join(format!("ant-stealth-{}", unique_id()));
     std::fs::create_dir_all(&dir).unwrap();
     let mut command = Command::new("qemu");
-    apply(&mut command, profile, &dir).unwrap();
+    apply(&mut command, profile, &dir, 2048).unwrap();
     std::fs::remove_dir_all(dir).unwrap();
     command
         .get_args()

@@ -22,7 +22,8 @@
 //! `"vm": {"isolated_network": true}` uses restricted networking without
 //! outbound forwarding and overrides NAT, as in the application.
 //! `"vm": {"stealth": "desktop"}` (or `"laptop"`, `"server"`, or a whole
-//! stealth profile object) launches the VM with a realistic hardware identity.
+//! stealth profile object) launches the VM with a realistic hardware identity;
+//! `"laptop:dell-latitude-5420"` copies that catalog machine.
 //! `"network_capture": true` (NAT VMs) starts a network capture before the
 //! runs and stops it after them; `"keep"` leaves it running for the VM stop
 //! to end. The report then lists the VM's network captures.
@@ -798,18 +799,30 @@ mod tests {
 fn stealth_profile(
     vm_spec: &Value,
 ) -> Result<antinomie_monitor_core::stealth::StealthProfile, String> {
-    use antinomie_monitor_core::stealth::{HostCpu, StealthPreset, StealthProfile};
+    use antinomie_monitor_core::stealth::{
+        HostCpu, MACHINES, MachineIdentity, StealthPreset, StealthProfile,
+    };
     Ok(match vm_spec.get("stealth") {
         None => StealthProfile::default(),
-        Some(Value::String(kind)) => {
-            let preset = match kind.as_str() {
+        Some(Value::String(spec)) => {
+            // "laptop:dell-latitude-5420" pins the machine the preset copies.
+            let (kind, machine) = spec.split_once(':').unwrap_or((spec, ""));
+            let preset = match kind {
                 "desktop" => StealthPreset::RealisticDesktop,
                 "laptop" => StealthPreset::RealisticLaptop,
                 "server" => StealthPreset::RealisticServer,
                 "transparent" => StealthPreset::Transparent,
                 other => return Err(format!("plan.vm.stealth: unknown preset {other}")),
             };
-            StealthProfile::default().for_preset_on(preset, &HostCpu::detect())
+            let mut profile = StealthProfile::default().for_preset_on(preset, &HostCpu::detect());
+            if !machine.is_empty() {
+                let machine = MACHINES
+                    .iter()
+                    .find(|known| known.id == machine)
+                    .ok_or_else(|| format!("plan.vm.stealth: unknown machine {machine}"))?;
+                profile.identity = MachineIdentity::from_machine(machine);
+            }
+            profile
         }
         Some(value) => {
             serde_json::from_value(value.clone()).map_err(|e| format!("plan.vm.stealth: {e}"))?

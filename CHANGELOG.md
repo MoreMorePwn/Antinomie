@@ -6,6 +6,17 @@ it runs.
 
 ## 0.8.0 — unreleased
 
+- **No QEMU strings left in a stealth profile's SMBIOS.** Dell and HP
+  profiles showed QEMU's machine type (`pc-q35-11.0`) as their product and
+  board version, and every profile showed QEMU's `CPU 0` socket, 2000 MHz
+  processor speed and a `DIMM 0` memory module of type `RAM`. Every field QEMU
+  would fill is now set to what real units of the model report: system version
+  (empty on Dell, a space on HP), board version (`A00`, `KBC Version …`,
+  `SDK0J40697 WIN …`), board location, chassis version and SKU, processor socket,
+  family and the host CPU's clocks, and DDR4 modules in the model's memory slots
+  with its form factor. Existing VMs take their machine's values at the next
+  boot.
+
 - **Debian Minimal VMs with a UEFI profile get a UEFI PC's disk.** GPT with
   an EFI system partition, GRUB for UEFI and the shim installed as the Debian
   installer installs them (no grub-pc), `/boot/efi` in fstab, and a `debian`

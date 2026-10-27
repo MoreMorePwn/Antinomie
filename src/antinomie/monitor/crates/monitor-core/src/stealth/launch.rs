@@ -2,7 +2,7 @@
 //! The stealth profile as QEMU launch options. Each one adds only what
 //! differs from QEMU's defaults, so a Transparent profile launches as before.
 use super::{
-    DiskBus, DiskMedia, Firmware, NicModel, NicSlot, Pointer, RtcClock, SmbiosEntry,
+    DiskBus, DiskMedia, Firmware, NicModel, NicSlot, Pointer, RtcClock, SmbiosEntry, StealthPreset,
     StealthProfile, firmware, host_cpu_vendor, host_cpuinfo, smbios,
 };
 use std::{path::Path, process::Command};
@@ -253,12 +253,76 @@ pub(crate) fn firmware_args(
     Ok(())
 }
 
-/// SMBIOS, device identity, CD-ROM and clock options; the BIOS and chassis
-/// tables are written into `runtime_dir`.
+/// The SMBIOS processor family of a CPU brand string (SMBIOS 3.x "processor
+/// family 2"), for the families real machines in the catalog report; None
+/// for any other.
+pub(super) fn processor_family(brand: &str) -> Option<u16> {
+    let families = [
+        ("Core(TM) i3", 0xce),
+        ("Core(TM) i5", 0xcd),
+        ("Core(TM) i7", 0xc6),
+        ("Core(TM) i9", 0xcf),
+        ("Xeon", 0xb3),
+        ("Pentium", 0x0b),
+        ("Celeron", 0x0f),
+        ("Ryzen", 0x6b),
+        ("EPYC", 0x6b),
+    ];
+    families
+        .iter()
+        .find(|(name, _)| brand.contains(name))
+        .map(|(_, family)| *family)
+}
+
+/// The processor's maximum and current speed in MHz, as firmware reports
+/// them: the highest clock (cpufreq's `cpuinfo_max_freq`, in kHz) and the
+/// base clock (cpufreq's `base_frequency`, the brand string's "@ 2.90GHz",
+/// else the clock /proc/cpuinfo shows), each to 50 MHz.
+pub(super) fn cpu_speeds(
+    max_khz: Option<u64>,
+    base_khz: Option<u64>,
+    brand: &str,
+    cpuinfo_mhz: Option<f64>,
+) -> Option<(u16, u16)> {
+    let branded = brand
+        .rsplit_once('@')
+        .and_then(|(_, clock)| clock.trim().strip_suffix("GHz"))
+        .and_then(|ghz| ghz.trim().parse::<f64>().ok())
+        .map(|ghz| ghz * 1000.0);
+    let base = base_khz
+        .map(|khz| khz as f64 / 1000.0)
+        .or(branded)
+        .or(cpuinfo_mhz)?;
+    let max = max_khz.map_or(base, |khz| khz as f64 / 1000.0).max(base);
+    let mhz = |value: f64| ((value / 50.0).round() * 50.0).clamp(50.0, 65000.0) as u16;
+    Some((mhz(max), mhz(base)))
+}
+
+/// [`cpu_speeds`] of the host's first CPU.
+pub(super) fn host_cpu_speeds() -> Option<(u16, u16)> {
+    let khz = |name: &str| {
+        std::fs::read_to_string(format!("/sys/devices/system/cpu/cpu0/cpufreq/{name}"))
+            .ok()
+            .and_then(|text| text.trim().parse::<u64>().ok())
+    };
+    cpu_speeds(
+        khz("cpuinfo_max_freq"),
+        khz("base_frequency"),
+        &host_cpuinfo("model name").unwrap_or_default(),
+        host_cpuinfo("cpu MHz").and_then(|text| text.parse().ok()),
+    )
+}
+
+/// SMBIOS, device identity, CD-ROM and clock options; the BIOS, chassis and
+/// memory device tables are written into `runtime_dir`. Every SMBIOS field
+/// QEMU fills with its own value when it is left out (its name, "Standard
+/// PC", the machine type as a version, "CPU 0", 2000 MHz, "DIMM 0") is given,
+/// an empty one as string 0, which reads "Not Specified".
 pub(crate) fn apply(
     command: &mut Command,
     profile: &StealthProfile,
     runtime_dir: &Path,
+    ram_mib: u32,
 ) -> Result<(), String> {
     profile.validate()?;
     let mut rtc = Vec::new();
@@ -281,7 +345,7 @@ pub(crate) fn apply(
     if !profile.identity_enabled {
         return Ok(());
     }
-    let id = &profile.identity;
+    let id = &profile.identity.with_firmware_fields();
     let field = |name: &str, value: &str| {
         if value.is_empty() {
             String::new()
@@ -289,29 +353,37 @@ pub(crate) fn apply(
             format!(",{name}={}", escape(value))
         }
     };
+    // A field QEMU would fill: given even when empty.
+    let given = |name: &str, value: &str| format!(",{name}={}", escape(value));
+    let write_table = |name: &str, table: Vec<u8>| -> Result<String, String> {
+        let path = runtime_dir.join(name);
+        std::fs::write(&path, table).map_err(|error| format!("SMBIOS {name}: {error}"))?;
+        Ok(format!("file={}", escape(&path.to_string_lossy())))
+    };
     // QEMU's type 0 sets the "virtual machine" BIOS characteristic, which
     // systemd-detect-virt reads, so the BIOS table is written whole too.
-    let bios = runtime_dir.join("smbios-bios.bin");
-    std::fs::write(&bios, smbios::bios_table(id, profile.firmware.is_uefi()))
-        .map_err(|error| format!("SMBIOS BIOS table: {error}"))?;
-    command
-        .arg("-smbios")
-        .arg(format!("file={}", escape(&bios.to_string_lossy())));
+    let bios = write_table(
+        "smbios-bios.bin",
+        smbios::bios_table(id, profile.firmware.is_uefi()),
+    )?;
+    command.arg("-smbios").arg(bios);
     command.arg("-smbios").arg(format!(
         "type=1{}{}{}{}{}{}{}",
-        field("manufacturer", &id.system_manufacturer),
-        field("product", &id.system_product),
-        field("version", &id.system_version),
+        given("manufacturer", &id.system_manufacturer),
+        given("product", &id.system_product),
+        given("version", &id.system_version),
         field("serial", &id.system_serial),
         field("uuid", &id.system_uuid),
         field("sku", &id.system_sku),
         field("family", &id.system_family)
     ));
     command.arg("-smbios").arg(format!(
-        "type=2{}{}{}",
-        field("manufacturer", &id.board_manufacturer),
-        field("product", &id.board_product),
-        field("serial", &id.board_serial)
+        "type=2{}{}{}{}{}",
+        given("manufacturer", &id.board_manufacturer),
+        given("product", &id.board_product),
+        given("version", &id.board_version),
+        field("serial", &id.board_serial),
+        field("location", &id.board_location)
     ));
     let (cpu_vendor, cpu_name) = (
         host_cpu_vendor(),
@@ -322,11 +394,26 @@ pub(crate) fn apply(
         "AuthenticAMD" => "Advanced Micro Devices, Inc.",
         _ => "",
     };
-    command.arg("-smbios").arg(format!(
-        "type=4{}{}",
-        field("manufacturer", cpu_maker),
-        field("version", &cpu_name)
-    ));
+    let socket = match (id.cpu_socket.as_str(), cpu_vendor.as_str()) {
+        ("", "AuthenticAMD") => "AM4",
+        ("", _) => "U3E1",
+        (socket, _) => socket,
+    };
+    // QEMU numbers the socket after this prefix ("U3E1 0").
+    let mut processor = format!(
+        "type=4{}{}{}{}",
+        given("sock_pfx", socket),
+        given("manufacturer", cpu_maker),
+        given("version", &cpu_name),
+        field("part", &id.cpu_part)
+    );
+    if let Some((max, current)) = host_cpu_speeds() {
+        processor.push_str(&format!(",max-speed={max},current-speed={current}"));
+    }
+    if let Some(family) = processor_family(&cpu_name) {
+        processor.push_str(&format!(",processor-family={family}"));
+    }
+    command.arg("-smbios").arg(processor);
     if !id.oem_strings.is_empty() {
         let values: String = id
             .oem_strings
@@ -335,20 +422,21 @@ pub(crate) fn apply(
             .collect();
         command.arg("-smbios").arg(format!("type=11{values}"));
     }
-    command.arg("-smbios").arg(format!(
-        "type=17{}{}{},speed=3200",
-        field("manufacturer", &id.memory_manufacturer),
-        field("part", &id.memory_part),
-        field("serial", &id.memory_serial)
-    ));
+    let ecc = id.memory_detail & 0x2000 != 0
+        || super::MACHINES.iter().any(|machine| {
+            machine.id == id.profile && machine.kind == StealthPreset::RealisticServer
+        });
+    for (index, table) in smbios::memory_tables(id, u64::from(ram_mib), ecc)
+        .into_iter()
+        .enumerate()
+    {
+        let file = write_table(&format!("smbios-memory-{index}.bin"), table)?;
+        command.arg("-smbios").arg(file);
+    }
     // QEMU's type 3 options cannot set the chassis type, so the table is
     // written whole and loaded in place of the generated one.
-    let chassis = runtime_dir.join("smbios-chassis.bin");
-    std::fs::write(&chassis, smbios::chassis_table(id))
-        .map_err(|error| format!("SMBIOS chassis table: {error}"))?;
-    command
-        .arg("-smbios")
-        .arg(format!("file={}", escape(&chassis.to_string_lossy())));
+    let chassis = write_table("smbios-chassis.bin", smbios::chassis_table(id))?;
+    command.arg("-smbios").arg(chassis);
     if !id.disk_serial.is_empty() {
         command
             .arg("-global")

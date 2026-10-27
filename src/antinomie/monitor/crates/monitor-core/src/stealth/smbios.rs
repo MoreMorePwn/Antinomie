@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! SMBIOS structures QEMU's own options cannot fill as a PC's firmware does:
-//! the BIOS information (type 0) and the chassis (type 3).
+//! the BIOS information (type 0), the chassis (type 3) and the memory
+//! devices (type 17).
 use super::MachineIdentity;
 
 /// The BIOS release from its version string, as QEMU's `release=` takes it:
@@ -67,35 +68,37 @@ pub(super) fn bios_table(id: &MachineIdentity, uefi: bool) -> Vec<u8> {
     table
 }
 
-/// An SMBIOS type 3 (chassis) structure with its strings.
+/// An SMBIOS type 3 (chassis) structure with its strings. The asset tag is
+/// string 0, as an untagged unit's.
 pub(super) fn chassis_table(id: &MachineIdentity) -> Vec<u8> {
-    let manufacturer = if id.system_manufacturer.is_empty() {
-        "Default string"
-    } else {
-        &id.system_manufacturer
+    let or_default = |text: &str| {
+        if text.is_empty() {
+            "Default string".to_owned()
+        } else {
+            text.to_owned()
+        }
     };
-    let serial = if id.chassis_serial.is_empty() {
-        "Default string"
-    } else {
-        &id.chassis_serial
-    };
-    let strings = [
-        manufacturer,
-        "Not Specified",
-        serial,
-        "Not Specified",
-        "Default string",
-    ];
+    let (manufacturer, serial) = (
+        or_default(&id.system_manufacturer),
+        or_default(&id.chassis_serial),
+    );
+    let (numbers, strings) = string_set(&[
+        &manufacturer,
+        &id.chassis_version,
+        &serial,
+        "",
+        &id.chassis_sku,
+    ]);
     let mut table = vec![
         3,    // type: system enclosure or chassis
         0x16, // length of the formatted area
         0x00,
         0x03, // handle
-        1,    // manufacturer: string 1
+        numbers[0],
         id.chassis_type.max(1),
-        2, // version
-        3, // serial number
-        4, // asset tag
+        numbers[1], // version
+        numbers[2], // serial number
+        numbers[3], // asset tag
         3,
         3,
         3, // boot-up, power supply and thermal state: safe
@@ -107,13 +110,80 @@ pub(super) fn chassis_table(id: &MachineIdentity) -> Vec<u8> {
         0, // height
         1, // power cords
         0,
-        0, // no contained elements
-        5, // SKU number
+        0,          // no contained elements
+        numbers[4], // SKU number
     ];
-    for text in strings {
-        table.extend(text.bytes().filter(|byte| *byte != 0));
-        table.push(0);
+    table.extend(strings);
+    table
+}
+
+/// The handle of the first memory device: QEMU's, after its type 16 array.
+const MEMORY_DEVICE_HANDLE: u16 = 0x1100;
+
+/// SMBIOS type 17 (memory device) structures for `ram_mib` of memory, one
+/// per module of at most 16 GiB as QEMU counts them in its type 16 array,
+/// each in the next of the identity's slots: what a PC's firmware writes
+/// for an installed DDR4-3200 module, in place of QEMU's "RAM" of unknown
+/// width in "DIMM 0".
+pub(super) fn memory_tables(id: &MachineIdentity, ram_mib: u64, ecc: bool) -> Vec<Vec<u8>> {
+    const MODULE_MIB: u64 = 16 * 1024;
+    let count = ram_mib.div_ceil(MODULE_MIB).max(1);
+    (0..count)
+        .map(|index| {
+            let size = if index + 1 < count {
+                MODULE_MIB
+            } else {
+                ram_mib - MODULE_MIB * (count - 1)
+            };
+            memory_table(id, index as usize, size, ecc)
+        })
+        .collect()
+}
+
+fn memory_table(id: &MachineIdentity, index: usize, size_mib: u64, ecc: bool) -> Vec<u8> {
+    let slot = id.memory_slots.get(index);
+    let (locator, bank) = slot.map_or((format!("DIMM{}", index + 1), String::new()), |slot| {
+        (slot.locator.clone(), slot.bank.clone())
+    });
+    // A second module has a serial of its own.
+    let serial: String = id
+        .memory_serial
+        .chars()
+        .cycle()
+        .skip(index)
+        .take(id.memory_serial.len())
+        .collect();
+    let (numbers, strings) = string_set(&[
+        &locator,
+        &bank,
+        &id.memory_manufacturer,
+        &serial,
+        "",
+        &id.memory_part,
+    ]);
+    let handle = MEMORY_DEVICE_HANDLE + index as u16;
+    let (size, extended) = match u16::try_from(size_mib) {
+        Ok(size) if size < 0x7fff => (size, 0u32),
+        _ => (0x7fff, u32::try_from(size_mib).unwrap_or(u32::MAX)),
+    };
+    let speed: u16 = 3200;
+    let voltage: u16 = 1200; // millivolts
+    let mut table = vec![17, 0x28];
+    table.extend(handle.to_le_bytes());
+    table.extend(0x1000u16.to_le_bytes()); // QEMU's type 16 array
+    table.extend(0xfffeu16.to_le_bytes()); // no error information
+    table.extend(if ecc { 72u16 } else { 64u16 }.to_le_bytes()); // total width
+    table.extend(64u16.to_le_bytes()); // data width
+    table.extend(size.to_le_bytes()); // MiB
+    table.extend([id.memory_form.max(1), 0, numbers[0], numbers[1], 0x1a]); // DDR4
+    table.extend(id.memory_detail.to_le_bytes());
+    table.extend(speed.to_le_bytes());
+    table.extend([numbers[2], numbers[3], numbers[4], numbers[5], 1]); // rank 1
+    table.extend(extended.to_le_bytes());
+    table.extend(speed.to_le_bytes()); // configured speed
+    for _ in 0..3 {
+        table.extend(voltage.to_le_bytes()); // minimum, maximum, configured
     }
-    table.push(0);
+    table.extend(strings);
     table
 }
