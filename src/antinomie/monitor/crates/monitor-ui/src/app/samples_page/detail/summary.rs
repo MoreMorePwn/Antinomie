@@ -47,7 +47,15 @@ impl MonitorApp {
         area.show(ui, |ui| {
             ui.set_width(ui.available_width());
             verdict(ui, data);
+            if let Some(number) =
+                super::triage_parts::rules_matched(ui, data, self.settings.font_size)
+            {
+                go = Some(Go::Run(number));
+            }
+            super::triage_parts::techniques(ui, data);
+            super::triage_parts::evasion(ui, data);
             recent_runs(ui, data, &mut go, self.settings.font_size);
+            super::triage_parts::indicators(ui, data);
             if let Some(scanned) = scanned {
                 strings(ui, data, scanned, &mut go, self.settings.font_size);
             }
@@ -109,11 +117,7 @@ fn verdict(ui: &mut egui::Ui, data: &Data) {
                     });
                     columns[0].label(theme::hint_text("Your verdict tag"));
                     field(&mut columns[1], "Highest suspicion", |ui| {
-                        ui.label(theme::hint_text(if data.runs.is_empty() {
-                            "Not run"
-                        } else {
-                            "Not triaged yet"
-                        }));
+                        super::triage_parts::highest(ui, data);
                     });
                     let family = data.record.family.trim();
                     field(&mut columns[2], "Family", |ui| {
@@ -167,9 +171,10 @@ fn recent_runs(ui: &mut egui::Ui, data: &Data, go: &mut Option<Go>, font: f32) {
             .column(egui_extras::Column::exact(120.0))
             .column(egui_extras::Column::exact(150.0))
             .column(egui_extras::Column::exact(140.0))
+            .column(egui_extras::Column::exact(100.0))
             .column(egui_extras::Column::remainder().at_least(100.0))
             .header(table::header_height(font), |mut header| {
-                for title in ["Run", "Start", "VM", "Outcome"] {
+                for title in ["Run", "Start", "VM", "Suspicion", "Outcome"] {
                     header.col(|ui| table::head(ui, title));
                 }
             })
@@ -202,6 +207,7 @@ fn recent_runs(ui: &mut egui::Ui, data: &Data, go: &mut Option<Go>, font: f32) {
                     row.col(|ui| {
                         table::cell_click(ui, table::Cell::Text, &vm_name(run));
                     });
+                    row.col(|ui| super::triage_parts::run_suspicion(ui, entry));
                     row.col(|ui| {
                         widgets::chip(ui, &exit, parts::exit_tone(&exit));
                     });

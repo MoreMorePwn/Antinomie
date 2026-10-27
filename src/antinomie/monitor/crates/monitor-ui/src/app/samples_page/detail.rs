@@ -22,6 +22,7 @@ mod custody;
 mod parts;
 mod runs;
 mod summary;
+mod triage_parts;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Tab {
@@ -38,6 +39,8 @@ pub(super) struct RunEntry {
     /// The run's folder is still on disk.
     pub(super) folder: bool,
     pub(super) artifacts: Option<RunArtifacts>,
+    /// What Triage found in the run, when it has read it.
+    pub(super) digest: Option<antinomie_monitor_core::run_digest::RunDigest>,
 }
 
 /// The static report the Summary reads: the newest finished one.
@@ -68,6 +71,8 @@ pub(super) struct Data {
     pub(super) archived: bool,
     /// Newest first.
     pub(super) runs: Vec<RunEntry>,
+    /// What the runs' Triage digests add up to.
+    pub(super) rollup: antinomie_monitor_core::samples::Rollup,
     pub(super) report: Option<ReportRef>,
     /// Where every library sample was sent, for the process tree's tint.
     pub(super) sent: Vec<SentSample>,
@@ -212,8 +217,18 @@ fn load(options: &BackendOptions, vms: &[(String, String)], sha256: &str) -> Loa
             run: super::super::history::listed(&run),
             folder,
             artifacts,
+            digest: antinomie_monitor_core::run_digest::RunDigest::read(&run.directory),
         });
     }
+    let rollup = antinomie_monitor_core::samples::rollup(
+        &entries
+            .iter()
+            .map(|entry| antinomie_monitor_core::samples::RunInput {
+                number: entry.number,
+                digest: entry.digest.as_ref(),
+            })
+            .collect::<Vec<_>>(),
+    );
     entries.reverse();
     let archive = library.archive_path(&record.sha256)?;
     Ok(Data {
@@ -224,6 +239,7 @@ fn load(options: &BackendOptions, vms: &[(String, String)], sha256: &str) -> Loa
         archived: record.removed_ms.is_none() && archive.is_file(),
         archive,
         runs: entries,
+        rollup,
         report,
         sent,
         record,
@@ -666,6 +682,11 @@ impl SamplesPage {
             .and_then(|detail| detail.data.as_ref())
             .map(|data| data.runs.iter().map(|entry| entry.run.id.clone()).collect())
             .unwrap_or_default()
+    }
+
+    /// What the runs' digests add up to, once the window has read them.
+    pub(in crate::app) fn detail_rollup(&self) -> Option<antinomie_monitor_core::samples::Rollup> {
+        Some(self.detail.as_ref()?.data.as_ref()?.rollup.clone())
     }
 
     /// A line for a failing test: what the window is waiting on.

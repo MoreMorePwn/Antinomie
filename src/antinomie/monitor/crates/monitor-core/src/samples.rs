@@ -21,6 +21,7 @@ mod custody;
 mod intake;
 mod library;
 mod migrate;
+mod rollup;
 mod summary;
 
 pub use archive::Verification;
@@ -29,6 +30,10 @@ pub use intake::{Added, FileProbe, NewSample, detect_type};
 pub use library::{
     Alias, CATEGORIES, EventRow, Library, NewOrigin, Origin, OriginKind, RunStats, SampleRecord,
     SeenRun, TAG_COLORS, Tag, TagKind, VERDICTS,
+};
+pub use rollup::{
+    CheckRow, EvasionRow, IndicatorRow, Rollup, RuleRow, RunInput, TacticRow, TechniqueRow, rollup,
+    tactic_of,
 };
 pub use summary::{StringRow, defang, interesting_strings, regex_matches};
 

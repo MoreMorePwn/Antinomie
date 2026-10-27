@@ -37,6 +37,7 @@ mod counts;
 mod descriptors;
 mod details;
 mod detection;
+mod digest;
 mod file_activity;
 mod file_category;
 #[cfg(test)]
@@ -202,6 +203,8 @@ pub(crate) struct TriageView {
     timer_refresh: bool,
     /// The last index began after the run ended.
     scan_began_finished: bool,
+    /// What the last written run digest was made from.
+    digested: Option<String>,
     /// Pass of the last frame that drew a pane using the index.
     shown_pass: Option<u64>,
     refresh_seconds: u64,
@@ -267,6 +270,7 @@ impl Default for TriageView {
             refresh_queued: false,
             timer_refresh: false,
             scan_began_finished: false,
+            digested: None,
             shown_pass: None,
             refresh_seconds: 5,
             bpf_export_status: String::new(),
@@ -470,6 +474,7 @@ impl TriageView {
             input.run_id,
         );
         self.poll_scan(ctx);
+        self.digest_tick();
         // A coalesced refresh starts in the same frame the previous scan ends.
         if self.refresh_requested {
             self.ensure_scan(

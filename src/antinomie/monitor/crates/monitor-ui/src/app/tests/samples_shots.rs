@@ -72,8 +72,9 @@ fn native_samples_fixture() {
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
                     .as_millis() as u64;
-                super::samples_detail::save_run(&data, &script, "install.sh", "r1", now, true);
-                super::samples_detail::save_run(
+                let first =
+                    super::samples_detail::save_run(&data, &script, "install.sh", "r1", now, true);
+                let second = super::samples_detail::save_run(
                     &data,
                     &script,
                     "install.sh",
@@ -81,6 +82,8 @@ fn native_samples_fixture() {
                     now + 8_000,
                     false,
                 );
+                super::samples_detail::save_digest(&first, "medium", false);
+                super::samples_detail::save_digest(&second, "high", true);
                 app.snapshot.vms.push(VmConfig {
                     id: "vm".into(),
                     name: "Debian".into(),

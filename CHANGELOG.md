@@ -32,6 +32,17 @@ it runs.
   app) saved with the run and the processes that run library samples tinted in
   the process tree. A run opens in Triage of its own VM.
 
+- **The sample window adds up Triage over the sample's runs.** When Triage
+  finishes reading a finished run it keeps a small digest beside the run (the
+  highest finding tier, the rules that matched, the ATT&CK techniques they map
+  to, the evasion checks, the detection engines' matches and the indicators).
+  The Summary shows Highest suspicion with the runs that reached it, Rules
+  matched (YARA, IDS and Sigma, with the runs and the latest hit), ATT&CK
+  techniques by tactic, Evasion attempts (virtual machine, debugger, sandbox
+  and timing checks, folded by check and run) and Indicators, and the Runs
+  table gains a Suspicion column. A run Triage never opened says "not
+  triaged" instead of guessing.
+
 - **Samples are kept in a library.** Downloads from MalwareBazaar and MalShare,
   and files added from this computer, now go into one library under
   `samples/`: one encrypted archive per sample (password `infected`) in a folder

@@ -105,6 +105,60 @@ pub(super) fn save_run(
     run
 }
 
+/// What Triage would have kept for `run` of the sample: a high finding with
+/// a technique and a VM check, a YARA hit and two indicators.
+pub(super) fn save_digest(run: &RunSummary, tier: &str, hit: bool) {
+    use antinomie_monitor_core::run_digest::{
+        Behaviour, BehaviourHit, DetectionHit, EvasionCheck, IndicatorEntry, RunDigest,
+    };
+    RunDigest::update(&run.directory, |digest| {
+        digest.behaviour = Some(Behaviour {
+            highest: tier.into(),
+            rules: vec![BehaviourHit {
+                rule: "persistence.cron".into(),
+                tier: tier.into(),
+                category: "persistence".into(),
+                attack: vec!["T1053.003".into()],
+                count: 1,
+                first_ns: 1,
+            }],
+            evasion: vec![EvasionCheck {
+                category: "Virtual machine".into(),
+                rule: "evasion.sandbox_probe".into(),
+                object: "/sys/class/dmi/id/product_name".into(),
+                summary: "read: Standard PC (Q35 + ICH9, 2009)".into(),
+                process: "/bin/sh".into(),
+                count: 1,
+            }],
+        });
+        digest.detections = Some(if hit {
+            vec![DetectionHit {
+                engine: "YARA".into(),
+                rule_id: "cron_dropper".into(),
+                title: "cron_dropper".into(),
+                severity: "high".into(),
+                mitre: vec!["T1053.003".into()],
+                count: 1,
+            }]
+        } else {
+            Vec::new()
+        });
+        digest.indicators = Some(vec![
+            IndicatorEntry {
+                ty: "endpoint".into(),
+                value: "198.51.100.7:80".into(),
+                matched: false,
+            },
+            IndicatorEntry {
+                ty: "domain".into(),
+                value: "update.example.test".into(),
+                matched: true,
+            },
+        ]);
+    })
+    .unwrap();
+}
+
 fn window(name: &str) -> (MonitorApp, egui::Context, String, PathBuf) {
     let root = super::samples_list::temp(name);
     let (script, _, _) = super::samples_list::fixture(&root);
@@ -143,6 +197,56 @@ fn the_window_reads_the_runs_and_scans_the_static_report() {
     assert!(total >= matches as u64);
     // Newest first.
     assert_eq!(app.samples_page.detail_run_ids(), ["r2", "r1"]);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn the_summary_adds_up_the_runs_triage_digests() {
+    let root = super::samples_list::temp("detail-digest");
+    let (script, _, _) = super::samples_list::fixture(&root);
+    let first = save_run(&root, &script, "install.sh", "r1", 1_000, false);
+    let second = save_run(&root, &script, "install.sh", "r2", 9_000, false);
+    // Run 3 was never opened in Triage.
+    save_run(&root, &script, "install.sh", "r3", 10_000, false);
+    save_digest(&first, "medium", false);
+    save_digest(&second, "high", true);
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let mut app = app();
+    app.options.data_dir = root.clone();
+    app.snapshot.vms.push(VmConfig {
+        id: "vm".into(),
+        name: "Debian".into(),
+        ..VmConfig::default()
+    });
+    app.rules_ui.set_packs_for_test(Vec::new());
+    app.open_library(crate::workspace::LibraryPage::Samples);
+    until(&mut app, &ctx, |app| app.samples_page.is_loaded());
+    app.samples_page.open_detail(&script);
+    until(&mut app, &ctx, |app| {
+        app.samples_page.detail_rollup().is_some()
+    });
+    let rollup = app.samples_page.detail_rollup().unwrap();
+    assert_eq!((rollup.runs, rollup.triaged, rollup.detected), (3, 2, 2));
+    assert_eq!(rollup.highest, Some(("high".into(), vec![2])));
+    assert_eq!(rollup.rules.len(), 1);
+    assert_eq!(rollup.rules[0].runs, [2]);
+    assert_eq!(rollup.tactics[0].tactic, "Persistence");
+    assert_eq!(rollup.tactics[0].techniques[0].runs, [1, 2]);
+    assert_eq!(rollup.evasion[0].checks[0].runs, [1, 2]);
+    let indicators = rollup.indicators.unwrap();
+    assert_eq!(
+        (
+            indicators.total,
+            indicators.in_every_run,
+            indicators.matched
+        ),
+        (2, 2, 1)
+    );
+    // The page draws with the sections present.
+    for _ in 0..3 {
+        render(&mut app, &ctx, SIZE);
+    }
     let _ = std::fs::remove_dir_all(root);
 }
 
