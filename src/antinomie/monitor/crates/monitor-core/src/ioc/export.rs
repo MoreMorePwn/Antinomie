@@ -52,7 +52,8 @@ fn utc_text(seconds: i64, nanos: u32) -> String {
     )
 }
 
-fn row(indicator: &Indicator, verdict: &Verdict) -> Vec<String> {
+/// The cells of one indicator's row, in [`COLUMNS`] order.
+pub fn row(indicator: &Indicator, verdict: &Verdict) -> Vec<String> {
     let primary = verdict
         .primary()
         .or_else(|| verdict.excused.as_ref().map(|(found, _)| found));

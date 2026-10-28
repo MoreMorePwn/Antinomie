@@ -57,6 +57,7 @@ pub mod read_gaps;
 mod recapture;
 pub mod recording;
 mod recording_flush;
+pub mod report;
 mod resources;
 pub mod route;
 pub mod ruleset;

@@ -42,7 +42,7 @@ fn list(values: &[(&'static str, RowValue)], key: &str) -> Vec<String> {
 }
 
 /// What the behaviour findings of the scan add up to.
-fn behaviour(findings: &[Finding]) -> Behaviour {
+pub(super) fn behaviour(findings: &[Finding]) -> Behaviour {
     let mut out = Behaviour::default();
     let mut best = usize::MAX;
     for finding in findings {

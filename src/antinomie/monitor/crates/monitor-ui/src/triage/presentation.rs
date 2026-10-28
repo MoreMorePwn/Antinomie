@@ -88,9 +88,19 @@ pub(super) fn navigation(view: &mut TriageView, ui: &mut egui::Ui, input: &Triag
         let room = ui.max_rect().right() - ui.cursor().min.x;
         // Tabs that wrapped leave the status no line of its own to share.
         let wrapped = ui.cursor().min.y - first_line > 1.0;
-        if trail && !wrapped && room >= 120.0 {
+        if !wrapped && room >= 110.0 {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                fits = view.refresh_trail(ui, input, Some(room));
+                if ui
+                    .add_enabled(input.archive.is_some(), egui::Button::new("Export report…"))
+                    .on_hover_text("Write this run's Triage as HTML, PDF, JSON, MISP or STIX")
+                    .on_disabled_hover_text("The run has no saved recording yet")
+                    .clicked()
+                {
+                    view.open_report(input);
+                }
+                if trail {
+                    fits = view.refresh_trail(ui, input, Some(room - 110.0));
+                }
             });
         } else {
             fits = !trail;

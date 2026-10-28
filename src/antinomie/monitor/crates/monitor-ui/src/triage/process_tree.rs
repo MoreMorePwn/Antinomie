@@ -23,13 +23,13 @@ pub(super) fn tally(counts: &mut Suspicious, values: &[(&'static str, RowValue)]
     }
 }
 
-pub(super) fn process_tree_nodes(
-    ui: &mut egui::Ui,
+/// The Process tree's rows: the cells and, in the first, the values a filter reads.
+pub(super) fn process_rows(
     nodes: &[ProcessNode],
     clock: Option<antinomie_monitor_core::HostClockAnchor>,
     suspicious: &Suspicious,
-) {
-    let rows = nodes
+) -> Vec<Vec<Cell>> {
+    nodes
         .iter()
         .map(|node| {
             let mut row = vec![
@@ -133,7 +133,16 @@ pub(super) fn process_tree_nodes(
             ];
             row
         })
-        .collect::<Vec<_>>();
+        .collect::<Vec<_>>()
+}
+
+pub(super) fn process_tree_nodes(
+    ui: &mut egui::Ui,
+    nodes: &[ProcessNode],
+    clock: Option<antinomie_monitor_core::HostClockAnchor>,
+    suspicious: &Suspicious,
+) {
+    let rows = process_rows(nodes, clock, suspicious);
     ui.ctx().data_mut(|data| {
         data.insert_temp(
             egui::Id::new(("triage-filter-target", "triage-process")),

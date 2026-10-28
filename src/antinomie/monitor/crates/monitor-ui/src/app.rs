@@ -147,6 +147,8 @@ struct Settings {
     graph_window: [f32; 2],
     /// How the activity graph spaces findings along its time axis.
     graph_spacing: crate::triage::GraphSpacing,
+    /// Triage > Export report: the sections, formats and options chosen last.
+    report_export: antinomie_monitor_core::report::Choices,
     /// Debug: draw the repaint rate in a corner of the window.
     show_fps: bool,
     /// Sidebar sections folded away.
@@ -238,6 +240,7 @@ impl Default for Settings {
             toast_high_findings: false,
             graph_window: crate::triage::GRAPH_WINDOW_SIZE,
             graph_spacing: Default::default(),
+            report_export: Default::default(),
             show_fps: false,
             vms_collapsed: false,
             library_collapsed: false,
@@ -800,6 +803,8 @@ impl eframe::App for MonitorApp {
         self.triage
             .set_graph_window_size(self.settings.graph_window);
         self.triage.set_graph_spacing(self.settings.graph_spacing);
+        self.triage
+            .set_report_choices(self.settings.report_export.clone());
         self.triage.tick(ctx, input);
         self.triage.show_finding_windows(ctx);
         if let Some(size) = self.triage.take_graph_window_size() {
@@ -807,6 +812,9 @@ impl eframe::App for MonitorApp {
         }
         if let Some(spacing) = self.triage.take_graph_spacing() {
             self.settings.graph_spacing = spacing;
+        }
+        if let Some(choices) = self.triage.take_report_choices() {
+            self.settings.report_export = choices;
         }
         let close = ctx.input(|input| input.viewport().close_requested())
             || self

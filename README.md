@@ -311,6 +311,7 @@ the full list.
 | Read | For |
 |---|---|
 | [User guide](docs/usage.md) | Bases, VMs, runs, routes and reading results. |
+| [Triage report](docs/triage-report.md) | Export formats, evidence bundle and the JSON schema. |
 | [Implementation contract](docs/implementation.md) | Supported behavior, wire contracts, measurements and limits. |
 | [Host build guide](src/antinomie/monitor/README.md) | Native monitor builds and development commands. |
 | [Contributing](CONTRIBUTING.md) | Kernel patch workflow, builds, checks and version branches. |

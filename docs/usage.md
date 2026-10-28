@@ -363,6 +363,10 @@ The network capture is the guest's own view on every route.
   that produced no result, or a capture that was deleted or failed, is greyed.
   Click a process in the run's recorded process tree to open **Syscall Trace**
   filtered to that process (`process.pid == N`; clear the filter to see all).
+- **Export report…** (right of the Triage tabs): writes the whole Triage as
+  HTML, PDF, JSON, MISP or STIX 2.1, with a checkbox per section, optional IoC
+  defanging and an optional evidence bundle. See
+  [the report guide](triage-report.md).
 - **Triage › Process › Process tree**: click a process to open Suspicious
   activity filtered to it. The number beside a process is its count of
   suspicious observations, coloured by the worst tier among them (HIGH red,

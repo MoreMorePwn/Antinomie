@@ -6,6 +6,21 @@ it runs.
 
 ## 0.8.0 — unreleased
 
+- **Export the whole Triage as a report.** Triage › Export report… writes the
+  run as HTML (one self-contained file), PDF (the same layout, written by the
+  app with no browser or network), JSON (versioned schema, documented in
+  `docs/triage-report.md`), a MISP event (attributes, `to_ids` only for dataset
+  matches, ATT&CK galaxy tags) and a STIX 2.1 bundle (indicators, malware,
+  attack patterns, relationships). A dialog has a checkbox per section
+  (summary, indicators, ATT&CK, processes, findings, every Files tab, file
+  activity and reconstruction, network, detection engines, evidence
+  references, custody head), remembered between exports. The report is of the
+  whole run: the screen's filters and pages do not apply. Optional evidence
+  bundle: the packet captures, the files the run dropped in an inner AES-256
+  zip (password `infected`), the sample's custody export and a SHA-256
+  manifest. Optional defanging (`hxxp://example[.]com`) applies to HTML and PDF
+  only; JSON, MISP and STIX keep raw values. Nothing in a report is a verdict.
+
 - **A custody log chains everything done to or by each sample.** Every entry
   (added, edited, sent to a run, seen in a run, exported, removed) stores the
   SHA-256 of the entry before it, and a library index chain records each log's

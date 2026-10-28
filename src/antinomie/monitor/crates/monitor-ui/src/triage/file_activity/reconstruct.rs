@@ -104,6 +104,16 @@ struct Hashed {
     result: Result<String, Incomplete>,
 }
 
+/// The file's bytes before the run: from the starting disk, empty for a file
+/// the run created, unknown otherwise.
+pub(in crate::triage) fn start_of(file: &FileActivity) -> Start {
+    match file.earlier.as_ref() {
+        Some(earlier) => Start::from_earlier(Some(&earlier.before), earlier.file.as_ref()),
+        None if file.created => Start::empty(),
+        None => Start::default(),
+    }
+}
+
 /// An open reconstruction of one file.
 pub(super) struct Open {
     /// The file: path and first call.
@@ -125,13 +135,7 @@ pub(super) struct Open {
 
 impl Open {
     pub(super) fn new(file: &FileActivity) -> Self {
-        let earlier = file.earlier.as_ref();
-        let start = match earlier {
-            Some(earlier) => Start::from_earlier(Some(&earlier.before), earlier.file.as_ref()),
-            None if file.created => Start::empty(),
-            None => Start::default(),
-        };
-        Self::with_start(file, start)
+        Self::with_start(file, start_of(file))
     }
 
     /// The reconstruction of `file` over a given starting state.

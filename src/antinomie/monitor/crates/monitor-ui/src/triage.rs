@@ -71,6 +71,7 @@ mod properties;
 mod refresh;
 #[cfg(test)]
 mod refresh_tests;
+mod report_export;
 mod rules;
 mod segments;
 mod sigma_events;
@@ -242,6 +243,8 @@ pub(crate) struct TriageView {
     changed_paths: Arc<std::collections::BTreeSet<String>>,
     /// The words for the selected run's network route.
     route: crate::route_ui::RouteText,
+    /// Export report: the dialog, its choices and the running export.
+    report: report_export::Dialog,
 }
 
 impl Default for TriageView {
@@ -294,6 +297,7 @@ impl Default for TriageView {
             details_directory: None,
             changed_paths: Arc::default(),
             route: crate::route_ui::RouteText::default(),
+            report: report_export::Dialog::default(),
         }
     }
 }
@@ -493,6 +497,7 @@ impl TriageView {
     pub(crate) fn show_finding_windows(&mut self, ctx: &egui::Context) {
         self.detection.show_windows(ctx);
         self.show_graph_window(ctx);
+        self.show_report_dialog(ctx);
     }
 
     /// `Some(call_id)` on the frame a Suspicious activity row is clicked.

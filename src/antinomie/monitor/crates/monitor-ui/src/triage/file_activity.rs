@@ -25,7 +25,9 @@ mod window;
 
 pub(super) use earlier::{copy_boot, resolve as resolve_earlier};
 
-pub(super) use reconstruct::{menu as reconstruct_menu, row_path, REQUEST as RECONSTRUCT_REQUEST};
+pub(super) use reconstruct::{
+    menu as reconstruct_menu, row_path, start_of, REQUEST as RECONSTRUCT_REQUEST,
+};
 pub(super) use window::{Window, CALLS_TABLE, FILE_TABLE};
 
 #[cfg(test)]

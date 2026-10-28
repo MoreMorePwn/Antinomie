@@ -1,0 +1,193 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:antinomie:triage-report:1",
+  "title": "Antinomie Triage report, schema version 1",
+  "description": "The JSON export of Triage > Export report. A part the person did not choose is null. See docs/triage-report.md.",
+  "type": "object",
+  "required": ["schema", "schema_version", "generated_ms", "app", "run", "notes"],
+  "properties": {
+    "schema": {"const": "antinomie-triage-report"},
+    "schema_version": {"const": 1},
+    "generated_ms": {"type": "integer", "minimum": 0},
+    "app": {"type": "string"},
+    "run": {"$ref": "#/$defs/run"},
+    "sample": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/sample"}]},
+    "summary": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/summary"}]},
+    "indicators": {"oneOf": [{"type": "null"}, {"type": "array", "items": {"$ref": "#/$defs/indicator"}}]},
+    "attack": {"oneOf": [{"type": "null"}, {"type": "array", "items": {"$ref": "#/$defs/technique"}}]},
+    "processes": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/table"}]},
+    "findings": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/table"}]},
+    "files": {"oneOf": [{"type": "null"}, {"type": "object", "required": ["tabs"], "properties": {"tabs": {"type": "array", "items": {"$ref": "#/$defs/named_table"}}}}]},
+    "file_activity": {"oneOf": [{"type": "null"}, {"type": "array", "items": {"$ref": "#/$defs/file_record"}}]},
+    "network": {"oneOf": [{"type": "null"}, {"type": "array", "items": {"$ref": "#/$defs/named_table"}}]},
+    "detections": {"oneOf": [{"type": "null"}, {"type": "array", "items": {"$ref": "#/$defs/detection"}}]},
+    "evidence": {"oneOf": [{"type": "null"}, {"type": "array", "items": {"$ref": "#/$defs/evidence"}}]},
+    "custody": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/custody"}]},
+    "notes": {"type": "array", "items": {"type": "string"}}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^([0-9a-f]{64})?$"},
+    "kind": {"enum": ["endpoint", "domain", "url", "tls", "file"]},
+    "run": {
+      "type": "object",
+      "required": ["vm_id", "boot_id", "run_id", "finished"],
+      "properties": {
+        "vm_id": {"type": "string"},
+        "boot_id": {"type": "string"},
+        "run_id": {"type": "string"},
+        "started_ms": {"type": ["integer", "null"], "minimum": 0},
+        "finished": {"type": "boolean"}
+      }
+    },
+    "sample": {
+      "type": "object",
+      "required": ["name", "sha256"],
+      "properties": {
+        "name": {"type": "string"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "size": {"type": ["integer", "null"], "minimum": 0}
+      }
+    },
+    "summary": {
+      "type": "object",
+      "required": ["assessment", "statement", "highest_tier", "families", "key_behaviours", "counts"],
+      "properties": {
+        "assessment": {"enum": ["matched_indicators", "suspicious_behaviour", "observed_only", "no_findings"]},
+        "statement": {"type": "string"},
+        "highest_tier": {"enum": ["high", "medium", "low", "info", "none"]},
+        "families": {"type": "array", "items": {"type": "string"}},
+        "key_behaviours": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["rule", "tier", "category", "count"],
+            "properties": {
+              "rule": {"type": "string"},
+              "tier": {"enum": ["high", "medium", "low", "info"]},
+              "category": {"type": "string"},
+              "count": {"type": "integer", "minimum": 0}
+            }
+          }
+        },
+        "counts": {
+          "type": "object",
+          "required": ["processes", "findings", "indicators", "indicators_matched", "techniques", "files_changed", "files_opened", "endpoints", "domains"],
+          "additionalProperties": {"type": "integer", "minimum": 0}
+        }
+      }
+    },
+    "indicator": {
+      "type": "object",
+      "required": ["kind", "value", "verdict", "matched"],
+      "properties": {
+        "kind": {"$ref": "#/$defs/kind"},
+        "value": {"type": "string"},
+        "path": {"type": "string"},
+        "detail": {"type": "string"},
+        "sources": {"type": "string"},
+        "process": {"type": "string"},
+        "first_seen": {"type": "string"},
+        "last_seen": {"type": "string"},
+        "count": {"type": "string"},
+        "verdict": {"type": "string"},
+        "matched": {"type": "boolean"},
+        "dataset": {"type": "string"},
+        "record_id": {"type": "string"},
+        "family": {"type": "string"},
+        "confidence": {"type": ["integer", "null"], "minimum": 0, "maximum": 100},
+        "reference": {"type": "string"},
+        "url": {"type": "string"},
+        "sni": {"type": "string"},
+        "ja3": {"type": "string"},
+        "ja4": {"type": "string"},
+        "cert_sha1": {"type": "string"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "md5": {"type": "string"},
+        "sha1": {"type": "string"}
+      }
+    },
+    "technique": {
+      "type": "object",
+      "required": ["id", "name", "rules", "count"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^T[0-9]{4}(\\.[0-9]{3})?$"},
+        "name": {"type": "string"},
+        "rules": {"type": "array", "items": {"type": "string"}},
+        "count": {"type": "integer", "minimum": 0}
+      }
+    },
+    "table": {
+      "type": "object",
+      "required": ["columns", "rows", "omitted", "indicator_columns"],
+      "properties": {
+        "columns": {"type": "array", "items": {"type": "string"}},
+        "rows": {"type": "array", "items": {"type": "array", "items": {"type": "string"}}},
+        "omitted": {"type": "integer", "minimum": 0},
+        "indicator_columns": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["column", "kind"],
+            "properties": {"column": {"type": "integer", "minimum": 0}, "kind": {"$ref": "#/$defs/kind"}}
+          }
+        }
+      }
+    },
+    "named_table": {
+      "type": "object",
+      "required": ["name", "table"],
+      "properties": {"name": {"type": "string"}, "table": {"$ref": "#/$defs/table"}}
+    },
+    "file_record": {
+      "type": "object",
+      "required": ["path", "created", "deleted", "changed", "reconstruction"],
+      "properties": {
+        "path": {"type": "string"},
+        "created": {"type": "boolean"},
+        "deleted": {"type": "boolean"},
+        "changed": {"type": "boolean"},
+        "final_size": {"type": ["integer", "null"], "minimum": 0},
+        "guest_sha256": {"$ref": "#/$defs/sha256"},
+        "reconstruction": {"enum": ["complete", "incomplete"]},
+        "bytes_written": {"type": "integer", "minimum": 0},
+        "bytes_not_captured": {"type": "integer", "minimum": 0},
+        "bytes_unknown": {"type": "integer", "minimum": 0},
+        "bundle_entry": {"type": "string"}
+      }
+    },
+    "detection": {
+      "type": "object",
+      "required": ["engine", "rule_id", "title", "severity", "mitre", "count"],
+      "properties": {
+        "engine": {"type": "string"},
+        "rule_id": {"type": "string"},
+        "title": {"type": "string"},
+        "severity": {"type": "string"},
+        "mitre": {"type": "array", "items": {"type": "string"}},
+        "count": {"type": "integer", "minimum": 0}
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "required": ["kind", "path", "size", "sha256"],
+      "properties": {
+        "kind": {"type": "string"},
+        "path": {"type": "string"},
+        "size": {"type": "integer", "minimum": 0},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "custody": {
+      "type": "object",
+      "required": ["sample_sha256", "entries", "head", "verified"],
+      "properties": {
+        "sample_sha256": {"$ref": "#/$defs/sha256"},
+        "entries": {"type": "integer", "minimum": 0},
+        "head": {"$ref": "#/$defs/sha256"},
+        "verified": {"type": "boolean"},
+        "library_head": {"$ref": "#/$defs/sha256"},
+        "problem": {"type": "string"}
+      }
+    }
+  }
+}

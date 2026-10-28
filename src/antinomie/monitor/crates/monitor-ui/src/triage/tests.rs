@@ -22,6 +22,7 @@ fn native_triage_fixture() {
     }
     impl eframe::App for Fixture {
         fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+            self.view.show_report_dialog(ctx);
             egui::SidePanel::right("shared-details-fixture")
                 .exact_width(self.details_width)
                 .show(ctx, |ui| {
@@ -227,6 +228,11 @@ fn native_triage_fixture() {
             view.section = Section::Files;
             view.files = FileTab::Changed;
             view.history_tab = true;
+        }
+        "report" => {
+            // The Export report dialog over the Summary.
+            view.section = Section::Summary;
+            view.report.open_for_screenshot(temp.directory.clone());
         }
         "http" => {
             view.section = Section::Network;
