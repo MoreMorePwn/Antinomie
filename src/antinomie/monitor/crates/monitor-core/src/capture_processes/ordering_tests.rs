@@ -118,6 +118,7 @@ fn delayed_exec_records_keep_the_latest_name_and_do_not_reopen_an_exited_task() 
     let entry = |time, path: &[u8]| {
         let mut entry = observed(200, 2, time, 1, &[("arg0.path", path.to_vec())]);
         entry.syscall_nr = 59;
+        entry.syscall_name = "execve".into();
         entry
     };
     let commit = |time| {
@@ -149,6 +150,7 @@ fn older_commit_does_not_consume_the_path_of_a_newer_pending_exec() {
     let mut tracker = ProcessTracker::default();
     let mut entry = observed(200, 2, 130, 1, &[("arg0.path", b"/bin/new\0".to_vec())]);
     entry.syscall_nr = 59;
+    entry.syscall_name = "execve".into();
     ingest(&mut tracker, &entry);
     for time in [111, 131] {
         ingest(
@@ -212,6 +214,7 @@ fn a_nonleader_exec_keeps_its_path_when_it_becomes_the_new_leader() {
     );
     entry.tid = 201;
     entry.syscall_nr = 59;
+    entry.syscall_name = "execve".into();
     ingest(&mut tracker, &entry);
     ingest(
         &mut tracker,
