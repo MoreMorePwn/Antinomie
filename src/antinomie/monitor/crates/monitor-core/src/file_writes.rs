@@ -79,7 +79,7 @@ pub enum Source {
 
 impl Source {
     /// The part of this source that starts `skip` bytes in.
-    fn tail(&self, skip: u64) -> Source {
+    pub(crate) fn tail(&self, skip: u64) -> Source {
         match self {
             Source::Inline(bytes) => {
                 Source::Inline(bytes[usize::try_from(skip).unwrap_or(usize::MAX)..].to_vec())
@@ -97,7 +97,7 @@ impl Source {
     }
 
     /// The first `len` bytes of this source.
-    fn head(&self, len: u64) -> Source {
+    pub(crate) fn head(&self, len: u64) -> Source {
         match self {
             Source::Inline(bytes) => {
                 Source::Inline(bytes[..usize::try_from(len).unwrap_or(usize::MAX)].to_vec())
@@ -107,7 +107,7 @@ impl Source {
     }
 
     /// `len` bytes from `skip` in, `len` at most [`READ_CHUNK`].
-    fn read(&self, skip: u64, len: u64) -> Result<Vec<u8>, ReadError> {
+    pub(crate) fn read(&self, skip: u64, len: u64) -> Result<Vec<u8>, ReadError> {
         match self {
             Source::Inline(bytes) => usize::try_from(skip)
                 .ok()
@@ -190,7 +190,7 @@ pub struct Extent {
 }
 
 impl Extent {
-    fn end(&self) -> u64 {
+    pub fn end(&self) -> u64 {
         self.offset + self.len
     }
 
@@ -317,7 +317,8 @@ impl Writes {
     /// [`Self::add`] for a write the guest numbered: a write that reaches the
     /// host after one the file system applied later (two writers raced) goes
     /// under it, before the first numbered extent with a higher number. An
-    /// unnumbered extent is never passed.
+    /// unnumbered extent is never passed. Returns the extents the call
+    /// added (none when it could not be placed or the list was full).
     pub fn add_ordered(
         &mut self,
         budget: &mut Budget,
@@ -325,12 +326,12 @@ impl Writes {
         len: u64,
         captured: Vec<Captured>,
         order: Option<u64>,
-    ) {
+    ) -> Vec<Extent> {
         let mut tally = Tally::default();
         let Some(offset) = offset.filter(|_| len > 0) else {
             tally.offset_unknown = len;
             self.finish(budget, &tally);
-            return;
+            return Vec::new();
         };
         let mut cursor = 0u64;
         let mut pieces: Vec<Extent> = Vec::new();
@@ -406,6 +407,7 @@ impl Writes {
             tally.kept = 0;
             tally.file_cap = 0;
             tally.run_cap = 0;
+            pieces.clear();
         } else {
             let mut at = self.extents.len();
             if let Some(order) = order {
@@ -414,11 +416,12 @@ impl Writes {
                 }
             }
             let count = pieces.len();
-            self.extents.splice(at..at, pieces);
+            self.extents.splice(at..at, pieces.iter().cloned());
             self.orders
                 .splice(at..at, std::iter::repeat_n(order, count));
         }
         self.finish(budget, &tally);
+        pieces
     }
 
     fn finish(&mut self, budget: &mut Budget, tally: &Tally) {

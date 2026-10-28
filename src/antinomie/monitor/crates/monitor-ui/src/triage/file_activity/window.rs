@@ -3,6 +3,7 @@
 //! the chosen one its history as a graph, the calls behind a chosen node and
 //! what is known of the bytes the run changed.
 use super::graph::{self, Layout};
+use super::reconstruct;
 use super::{Activity, ByteRun, Event, FileActivity};
 use crate::theme;
 use crate::triage::{details, Cell, RowValue};
@@ -42,6 +43,10 @@ pub(in crate::triage) struct Window {
     /// The chosen file: its path and first call, which survive a new index.
     selected: Option<(String, u64)>,
     node: Option<usize>,
+    /// The File Reconstruction window, when open.
+    reconstruction: Option<reconstruct::Open>,
+    /// Open it for the chosen file as soon as the index has it.
+    want_reconstruction: bool,
 }
 
 impl Default for Window {
@@ -54,6 +59,8 @@ impl Default for Window {
             order: Order::First,
             selected: None,
             node: None,
+            reconstruction: None,
+            want_reconstruction: false,
         }
     }
 }
@@ -64,6 +71,33 @@ impl Window {
         self.filter.clear();
         self.selected = Some((path.to_owned(), 0));
         self.node = None;
+    }
+
+    /// Show the file at `path` with its reconstruction open (the Files tabs'
+    /// row menu).
+    pub(in crate::triage) fn reconstruct(&mut self, path: &str) {
+        self.open_on(path);
+        self.want_reconstruction = true;
+    }
+
+    /// Show `file` with its reconstruction over `start`, for the screenshots.
+    #[cfg(test)]
+    pub(in crate::triage) fn preview(
+        &mut self,
+        file: &FileActivity,
+        start: antinomie_monitor_core::file_reconstruct::Start,
+        text_view: bool,
+    ) {
+        self.open_on(&file.path);
+        let mut open = reconstruct::Open::with_start(file, start);
+        open.prepare(text_view);
+        self.reconstruction = Some(open);
+    }
+
+    /// The reconstruction window, for the tests.
+    #[cfg(test)]
+    pub(super) fn reconstruction(&mut self) -> Option<&mut reconstruct::Open> {
+        self.reconstruction.as_mut()
     }
 
     /// The path of the chosen file and the chosen node, for the tests.
@@ -129,9 +163,13 @@ impl Window {
         ui: &mut egui::Ui,
         activity: Option<&Activity>,
         clock: Option<antinomie_monitor_core::HostClockAnchor>,
+        directory: Option<&std::path::Path>,
     ) {
         match activity {
-            Some(activity) => self.body(ui, activity, clock),
+            Some(activity) => {
+                self.body(ui, activity, clock);
+                self.reconstruction_window(ui.ctx(), activity, clock, directory);
+            }
             None => {
                 theme::loading_weak(ui, "Indexing this run’s files…");
             }
@@ -178,6 +216,36 @@ impl Window {
                 }
             };
         });
+    }
+
+    /// The File Reconstruction window of the chosen file.
+    fn reconstruction_window(
+        &mut self,
+        ctx: &egui::Context,
+        activity: &Activity,
+        clock: Option<antinomie_monitor_core::HostClockAnchor>,
+        directory: Option<&std::path::Path>,
+    ) {
+        if std::mem::take(&mut self.want_reconstruction) {
+            if let Some(open) = self.selected_file(activity).map(reconstruct::Open::new) {
+                self.reconstruction = Some(open);
+            }
+        }
+        let Some(open) = &mut self.reconstruction else {
+            return;
+        };
+        let (path, first) = open.key().clone();
+        let file = activity
+            .files
+            .iter()
+            .find(|file| file.path == path && file.first_ns == first);
+        let keep = match file {
+            Some(file) => open.show(ctx, activity, file, clock, directory),
+            None => false,
+        };
+        if !keep {
+            self.reconstruction = None;
+        }
     }
 
     fn list(
@@ -350,7 +418,25 @@ impl Window {
                 }
                 self.calls(ui, activity, file, &layout, clock);
                 contents(ui, file, clock);
+                self.reconstruct_entry(ui, file);
             });
+    }
+
+    /// The button under Content changes that opens the reconstruction.
+    fn reconstruct_entry(&mut self, ui: &mut egui::Ui, file: &FileActivity) {
+        ui.add_space(8.0);
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .button("Reconstruct contents…")
+                .on_hover_text("Replay this file's calls over what it held at the start of the run and see what each byte is")
+                .clicked()
+            {
+                self.reconstruction = Some(reconstruct::Open::new(file));
+            }
+            if file.timeline.is_empty() {
+                ui.weak("No call showed or changed this file's bytes.");
+            }
+        });
     }
 
     /// The calls behind the chosen node, or all of them.

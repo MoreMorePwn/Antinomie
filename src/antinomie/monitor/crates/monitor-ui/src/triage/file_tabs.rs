@@ -151,12 +151,24 @@ impl TriageView {
     }
 
     pub(super) fn files(&mut self, ui: &mut egui::Ui, input: &TriageInput<'_>) {
+        // A row menu of a Files tab asked for a file's reconstruction.
+        let asked = ui.ctx().data_mut(|data| {
+            data.remove_temp::<String>(egui::Id::new(file_activity::RECONSTRUCT_REQUEST))
+        });
+        if let Some(path) = asked {
+            self.file_history.reconstruct(&path);
+            self.history_tab = true;
+        }
         self.file_tabs(ui);
         if self.history_tab {
             let activity = self.scan.as_ref().map(|scan| scan.file_activity.clone());
             let clock = self.scan.as_ref().and_then(|scan| scan.clock_anchor);
-            self.file_history
-                .show(ui, activity.as_deref(), clock.or(input.clock_anchor));
+            self.file_history.show(
+                ui,
+                activity.as_deref(),
+                clock.or(input.clock_anchor),
+                self.details_directory.as_deref(),
+            );
             return;
         }
         let tab = self.files;

@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 mod copies;
 mod ioc;
 mod order;
+mod shape;
 mod view;
 
 pub(super) use ioc::IocFile;
@@ -462,7 +463,7 @@ impl FileIndex {
                     self.bind_description(opened, group);
                 }
             }
-            self.note_activity(files, call, event, hits, fd, None);
+            self.note_activity(files, call, event, hits, fd, None, None);
             return None;
         }
         let observed = displayed_path(call, event, files);
@@ -742,7 +743,7 @@ impl FileIndex {
                 stretches: if writing {
                     file_content::write_stretches(call, directory, size, &mut self.interned)
                 } else {
-                    Vec::new()
+                    file_content::read_stretches(call, directory, size, &mut self.interned)
                 },
                 content: bytes.head(file_activity::CONTENT_HEAD),
                 gap: bytes.len() as u64 != size,
@@ -752,7 +753,15 @@ impl FileIndex {
                 order: kernel_position.and_then(|position| position.order),
             }),
         };
-        self.note_activity(files, call, event, hits, fd, transfer);
+        let shape = shape::shape(
+            name,
+            args,
+            copy.as_ref(),
+            open_flags(call, event),
+            success,
+            changed,
+        );
+        self.note_activity(files, call, event, hits, fd, transfer, shape);
         if lifecycle_only && !self.changes.contains_key(&group) {
             return read_row;
         }
@@ -1049,6 +1058,7 @@ impl FileIndex {
         hits: &[Hit],
         fd: Option<u64>,
         transfer: Option<file_activity::Transfer>,
+        shape: Option<file_activity::Shape>,
     ) {
         if hits.is_empty() && transfer.is_none() {
             return;
@@ -1080,6 +1090,7 @@ impl FileIndex {
             hits,
             transfer,
             new_name,
+            shape,
         });
     }
     fn remember_alias(&mut self, group: &str, alias: Option<String>) {
@@ -2352,5 +2363,138 @@ mod tests {
             .gaps
             .iter()
             .any(|gap| gap.starts_with("Kernel-mediated transfer")));
+    }
+
+    /// The steps of a file's reconstruction, as (kind, offset, length).
+    fn steps_of(file: &FileActivity) -> Vec<(&'static str, u64, u64)> {
+        use antinomie_monitor_core::file_reconstruct::Action;
+        file.timeline
+            .steps()
+            .iter()
+            .map(|step| match &step.action {
+                Action::Read(extents) => ("read", extents[0].offset, extents[0].len),
+                Action::Write(extents) => ("write", extents[0].offset, extents[0].len),
+                Action::Resize(to) => ("resize", *to, 0),
+                Action::Zero { offset, len } => ("zero", *offset, *len),
+                Action::Changed { offset, len } => ("changed", *offset, *len),
+                Action::Mapping { offset, len } => ("mapping", *offset, *len),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_files_reads_writes_and_resizes_become_steps_that_rebuild_it() {
+        use antinomie_monitor_core::file_reconstruct::{Reconstruction, Start};
+        let calls = [
+            open(2),
+            operation(2, 0, "read", 5, [3, 0, 5, 0, 0, 0], b"ABCDE"),
+            operation(3, 18, "pwrite64", 2, [3, 0, 2, 1, 0, 0], b"zz"),
+            operation(4, 77, "ftruncate", 0, [3, 4, 0, 0, 0, 0], b""),
+            // Refused: no step.
+            operation(5, 18, "pwrite64", -9, [3, 0, 2, 0, 0, 0], b"no"),
+        ];
+        let activity = activity_of(&calls);
+        let file = file(&activity, "/tmp/file");
+        assert_eq!(
+            steps_of(file),
+            [("read", 0, 5), ("write", 1, 2), ("resize", 4, 0)]
+        );
+        let mut map = Reconstruction::new(Start::default(), &file.timeline);
+        map.goto(2);
+        assert_eq!(map.bytes(0, 5).unwrap(), b"AzzDE");
+        map.goto(3);
+        assert_eq!(map.bytes(0, 4).unwrap(), b"AzzD");
+        assert_eq!(map.size(), 4);
+    }
+
+    #[test]
+    fn an_open_with_o_trunc_is_a_resize_step() {
+        let calls = [
+            open(2 | 0x200),
+            operation(2, 1, "write", 3, [3, 0, 3, 0, 0, 0], b"new"),
+        ];
+        let activity = activity_of(&calls);
+        let file = file(&activity, "/tmp/file");
+        let steps = steps_of(file);
+        assert_eq!(steps[0], ("resize", 0, 0));
+        assert_eq!(steps[1], ("write", 0, 3));
+        assert_eq!(steps.len(), 2);
+    }
+
+    #[test]
+    fn a_recorded_run_rebuilds_a_modified_file_a_created_file_and_shows_the_gap_of_a_capped_one() {
+        use antinomie_monitor_core::file_reconstruct::{
+            sha256_hex, Incomplete, Reconstruction, Start,
+        };
+        use antinomie_monitor_core::file_writes::{Limits, ReadError, Source};
+        let root = scratch("reconstruct");
+        // The earlier bytes of the modified file, as the starting disk gives them.
+        let earlier = b"line one\nline two\nline three\n".to_vec();
+        let mut expected = earlier.clone();
+        expected[5..8].copy_from_slice(b"ONE");
+        std::fs::write(root.join("objects/m1.raw"), b"ONE").unwrap();
+        std::fs::write(root.join("objects/c1.raw"), b"#!/bin/sh\n").unwrap();
+        std::fs::write(root.join("objects/c2.raw"), b"id\n").unwrap();
+        std::fs::write(root.join("objects/g1.raw"), b"12345678").unwrap();
+        std::fs::write(root.join("objects/g2.raw"), b"abcdefgh").unwrap();
+        std::fs::write(root.join("objects/g3.raw"), b"WXYZ").unwrap();
+        let on = |path: &str, flags: u64, fd: i64| {
+            let mut call = path_call(1, 2, "open", fd, path);
+            call.entry.as_mut().unwrap().args = Some([0, flags, 0, 0, 0, 0]);
+            call
+        };
+        let write = |id: u64, fd: u64, offset: u64, size: u64, object: &str| {
+            let mut call = stored_write(id, offset, size, object, vec![(0, size)]);
+            call.entry.as_mut().unwrap().args = Some([fd, 0, size, offset, 0, 0]);
+            call
+        };
+        let calls = [
+            // Modified: opened for writing, three bytes replaced.
+            on("/etc/motd", 1, 3),
+            write(2, 3, 5, 3, "m1.raw"),
+            // Created: a script in two writes.
+            on("/tmp/dropped.sh", 0x41, 4),
+            write(3, 4, 0, 10, "c1.raw"),
+            write(4, 4, 10, 3, "c2.raw"),
+            // Over the cap: 16 bytes fit, the last 4 do not.
+            on("/tmp/big.bin", 0x41, 5),
+            write(5, 5, 0, 8, "g1.raw"),
+            write(6, 5, 8, 8, "g2.raw"),
+            write(7, 5, 16, 4, "g3.raw"),
+        ];
+        let limits = Limits {
+            per_file: 16,
+            per_run: 1 << 20,
+        };
+        // The cap applies to every file; the others stay under it except `big`.
+        let activity = activity_in(&calls, &root, limits);
+
+        let modified = file(&activity, "/etc/motd");
+        let start = Start {
+            size: Some(earlier.len() as u64),
+            source: Some(Source::Inline(earlier.clone())),
+        };
+        let mut map = Reconstruction::new(start, &modified.timeline);
+        assert_eq!(map.counts().before, earlier.len() as u64);
+        map.goto(modified.timeline.steps().len());
+        assert_eq!(map.bytes(0, expected.len() as u64).unwrap(), expected);
+        assert_eq!(map.sha256().unwrap(), sha256_hex(&expected));
+        assert_eq!(map.history(6).len(), 2, "start, then the write");
+
+        let created = file(&activity, "/tmp/dropped.sh");
+        let mut map = Reconstruction::new(Start::empty(), &created.timeline);
+        map.goto(created.timeline.steps().len());
+        assert_eq!(map.bytes(0, 13).unwrap(), b"#!/bin/sh\nid\n");
+        assert_eq!(map.sha256().unwrap(), sha256_hex(b"#!/bin/sh\nid\n"));
+
+        let capped = file(&activity, "/tmp/big.bin");
+        let mut map = Reconstruction::new(Start::empty(), &capped.timeline);
+        map.goto(capped.timeline.steps().len());
+        let counts = map.counts();
+        assert_eq!((counts.written, counts.not_captured), (16, 4));
+        assert_eq!(map.bytes(0, 20), Err(ReadError::NotCaptured(16)));
+        assert_eq!(map.sha256(), Err(Incomplete::Missing(4)));
+        assert_eq!(map.bytes(0, 16).unwrap(), b"12345678abcdefgh");
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

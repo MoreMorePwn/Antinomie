@@ -46,6 +46,7 @@ fn file(path: &str, first_ns: u64, events: Vec<Event>) -> FileActivity {
         contents: Contents::default(),
         hashes: Vec::new(),
         writes: Default::default(),
+        timeline: Default::default(),
         first_segment: 0,
         last_segment: 0,
         earlier: None,
@@ -296,7 +297,8 @@ impl Harness {
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| window.show(ui, Some(activity), None));
+                egui::CentralPanel::default()
+                    .show(ctx, |ui| window.show(ui, Some(activity), None, None));
             },
         );
         fn collect(shape: &egui::epaint::Shape, out: &mut Vec<(String, Rect)>) {
@@ -562,7 +564,7 @@ fn an_unindexed_run_says_so() {
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| window.show(ui, None, None));
+            egui::CentralPanel::default().show(ctx, |ui| window.show(ui, None, None, None));
         },
     );
     assert!(!output.shapes.is_empty());

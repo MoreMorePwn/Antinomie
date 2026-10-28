@@ -406,16 +406,17 @@ fn table_rows_with(
                             .unwrap_or_default(),
                     );
                 }
-                if let Some(filter_id) = filter_id {
+                let values = cells
+                    .first()
+                    .map(|cell| cell.values.as_slice())
+                    .unwrap_or_default();
+                let reconstructable = file_activity::row_path(id, values).is_some();
+                if filter_id.is_some() || reconstructable {
                     row.response().context_menu(|ui| {
-                        query::table_row_menu(
-                            ui,
-                            filter_id,
-                            cells
-                                .first()
-                                .map(|cell| cell.values.as_slice())
-                                .unwrap_or_default(),
-                        );
+                        file_activity::reconstruct_menu(ui, id, values);
+                        if let Some(filter_id) = filter_id {
+                            query::table_row_menu(ui, filter_id, values);
+                        }
                     });
                 }
             });

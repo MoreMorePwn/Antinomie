@@ -360,6 +360,22 @@ it runs.
   switching to hex. The conformance golden files no longer change with a
   run's clock or addresses.
 
+- **File Reconstruction: replay a file's calls and see what each byte is.** In
+  Triage › Files › Per-file history, *Reconstruct contents…* under Content
+  changes (and *Reconstruct contents…* in the right-click menu of a row in any
+  Files tab) opens a window that replays the file's reads, writes, resizes and
+  zeroed ranges in the order the file system applied them, over what the file
+  held when the run started. Each byte is shown as it is known: `??` never seen,
+  read, from the starting disk (before-image), written, `##` changed with the
+  new value not captured, `~~` under a shared writable mapping. Step with the
+  slider, the buttons or the arrow keys; click a byte for its history, with the
+  time each state was learned. *Hash this state* takes the SHA-256 of the
+  reconstruction when every byte is known and compares it with each hash the
+  guest took. *Save reconstruction* writes the file with unknown bytes as 00 and
+  a `.mask` file marking them (00 known, 01 unknown, 02 not captured, 03
+  mapping) to `reconstructed/` in the recording; *Text diff* shows the lines a
+  text file gained or lost.
+
 ## 0.7.1 — 2026-10-26
 
 The first release since 0.6.2: 0.7.0 was not published separately, so this

@@ -9,18 +9,23 @@
 use super::file_category::{Category, Hit};
 use super::files::result_label;
 use super::*;
-use antinomie_monitor_core::file_writes::{Budget, Captured, Limits, Tally, Writes};
+use antinomie_monitor_core::file_reconstruct::{Action, Step, Timeline};
+use antinomie_monitor_core::file_writes::{Budget, Captured, Extent, Limits, Piece, Tally, Writes};
 use antinomie_monitor_core::kernel_notes::{FileHash, FileId, FileKey};
 use std::collections::BTreeMap;
 
 mod earlier;
 mod graph;
+mod reconstruct;
 mod window;
 
 pub(super) use earlier::{copy_boot, resolve as resolve_earlier};
 
+pub(super) use reconstruct::{menu as reconstruct_menu, row_path, REQUEST as RECONSTRUCT_REQUEST};
 pub(super) use window::{Window, CALLS_TABLE, FILE_TABLE};
 
+#[cfg(test)]
+pub(super) mod reconstruct_tests;
 #[cfg(test)]
 pub(super) mod tests;
 
@@ -32,6 +37,8 @@ const EVENTS_PER_FILE: usize = 512;
 const EVENTS_MAX: usize = 100_000;
 /// Octets of a transfer kept as its content preview.
 pub(super) const CONTENT_HEAD: usize = 64;
+/// Steps kept for the whole run; the rest are counted.
+const STEPS_MAX: usize = 400_000;
 /// Names a file was seen under, besides its first.
 const NAMES_MAX: usize = 16;
 /// Names followed to the file they lead to.
@@ -182,6 +189,9 @@ pub(super) struct FileActivity {
     /// The ranges the run wrote, kept within the budget or marked not
     /// captured; unlike `events` they are not bounded by the event cap.
     pub writes: Writes,
+    /// What each call did to the file's bytes, in the order the file system
+    /// applied them: the input of the File Reconstruction window.
+    pub timeline: Timeline,
     /// The recording segments of the run the file was first and last used in.
     pub first_segment: usize,
     pub last_segment: usize,
@@ -277,6 +287,21 @@ pub(super) struct Record<'a> {
     pub transfer: Option<Transfer>,
     /// The new name of a rename or link.
     pub new_name: Option<String>,
+    /// What the call did to the file's size or bytes, besides a transfer.
+    pub shape: Option<Shape>,
+}
+
+/// A change to a file that is not a read or write of bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Shape {
+    /// The file was cut or extended to this size (truncate, `O_TRUNC`).
+    Resize(u64),
+    /// A range reads back as zeros (punch hole, zero range).
+    Zero { offset: u64, len: u64 },
+    /// A range or the whole file changed to bytes the run did not see.
+    Changed { offset: u64, len: u64 },
+    /// A shared writable mapping covers the range (`msync`).
+    Mapping { offset: u64, len: u64 },
 }
 
 /// A read or write, as far as the host can place it.
@@ -307,6 +332,8 @@ pub(super) struct Builder {
     omitted_files: u64,
     omitted_events: u64,
     budget: Budget,
+    /// Steps kept for the whole run.
+    steps: usize,
     /// The recording segment being read.
     segment: usize,
 }
@@ -402,6 +429,7 @@ impl Builder {
             hits,
             transfer,
             new_name,
+            shape,
             ..
         } = record;
         let links_left = identity.map(|id| if id.directory { 0 } else { id.nlink });
@@ -470,6 +498,7 @@ impl Builder {
                 contents: Contents::default(),
                 hashes: Vec::new(),
                 writes: Writes::default(),
+                timeline: Timeline::default(),
                 first_segment: self.segment,
                 last_segment: self.segment,
                 earlier: None,
@@ -500,18 +529,64 @@ impl Builder {
         }
         // Write content is kept per file whatever the event bounds say: a
         // file written in small blocks has more writes than events.
+        let at = (!capped).then_some(file.events.len() as u32);
+        let time = event.timestamp_ns;
+        let mut steps = Vec::new();
         let transfer = transfer.map(|mut t| {
-            if t.write && success != Some(false) {
-                file.writes.add_ordered(
+            if success == Some(false) {
+                return t;
+            }
+            if t.write {
+                let added = file.writes.add_ordered(
                     &mut self.budget,
                     t.offset,
                     t.len,
                     std::mem::take(&mut t.stretches),
                     t.order,
                 );
+                if !added.is_empty() {
+                    steps.push((t.order, Action::Write(added)));
+                }
+            } else if let Some(offset) = t.offset {
+                let seen: Vec<Extent> = std::mem::take(&mut t.stretches)
+                    .into_iter()
+                    .map(|stretch| Extent {
+                        offset: offset.saturating_add(stretch.rel),
+                        len: stretch.len,
+                        piece: Piece::Kept(stretch.source),
+                    })
+                    .collect();
+                if !seen.is_empty() {
+                    steps.push((None, Action::Read(seen)));
+                }
             }
             t
         });
+        if success != Some(false) {
+            steps.extend(shape.map(|shape| {
+                (
+                    None,
+                    match shape {
+                        Shape::Resize(size) => Action::Resize(size),
+                        Shape::Zero { offset, len } => Action::Zero { offset, len },
+                        Shape::Changed { offset, len } => Action::Changed { offset, len },
+                        Shape::Mapping { offset, len } => Action::Mapping { offset, len },
+                    },
+                )
+            }));
+        }
+        for (order, action) in steps {
+            if self.steps >= STEPS_MAX {
+                file.timeline.unlisted += 1;
+            } else if file.timeline.push(Step {
+                time_ns: time,
+                event: at,
+                order,
+                action,
+            }) {
+                self.steps += 1;
+            }
+        }
         if capped {
             file.omitted += 1;
             self.omitted_events += 1;

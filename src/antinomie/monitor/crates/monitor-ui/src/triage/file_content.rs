@@ -115,6 +115,16 @@ pub(super) fn write_stretches(
     stretches(call, false, directory, size, interned)
 }
 
+/// The stretches of a read's payload the kernel captured.
+pub(super) fn read_stretches(
+    call: &InvocationSummary,
+    directory: Option<&Path>,
+    size: u64,
+    interned: &mut Interned,
+) -> Vec<Captured> {
+    stretches(call, true, directory, size, interned)
+}
+
 /// The same for the bytes a splice from a pipe gave its
 /// file (`file.copy.data`, an Exit field).
 pub(super) fn copy_stretches(

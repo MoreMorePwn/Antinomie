@@ -207,6 +207,22 @@ fn native_triage_fixture() {
             view.file_history.open_on("/tmp/analysis-note.txt");
             view.history_tab = true;
         }
+        "reconstruct" | "reconstruct-gaps" | "reconstruct-text" => {
+            let (activity, start) =
+                file_activity::reconstruct_tests::scene(scene.trim_start_matches("reconstruct-"));
+            let file = activity
+                .files
+                .iter()
+                .find(|file| file.path == "/etc/crontab")
+                .unwrap()
+                .clone();
+            view.file_history
+                .preview(&file, start, scene == "reconstruct-text");
+            view.scan.as_mut().unwrap().file_activity = Arc::new(activity);
+            view.section = Section::Files;
+            view.files = FileTab::Changed;
+            view.history_tab = true;
+        }
         "http" => {
             view.section = Section::Network;
             view.new_tab = NewTab::Urls;

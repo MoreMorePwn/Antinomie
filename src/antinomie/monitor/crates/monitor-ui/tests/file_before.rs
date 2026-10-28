@@ -200,6 +200,31 @@ fn a_modified_files_earlier_bytes_match_the_base_image() {
     );
     assert_eq!(file.disk.read(&file.path, 0, 4096).unwrap(), PRELOAD);
 
+    // The File Reconstruction map over the real disk: the same bytes, the
+    // hash of the modified file, and the history of a byte under the write.
+    {
+        use antinomie_monitor_core::file_reconstruct::{
+            sha256_hex, Action, Event, Reconstruction, Start as Begin, State, Step, Timeline,
+        };
+        let mut timeline = Timeline::default();
+        timeline.push(Step {
+            time_ns: 5,
+            event: None,
+            order: None,
+            action: Action::Write(writes.extents().to_vec()),
+        });
+        let begin = Begin::from_earlier(Some(&before), Some(&file));
+        let mut map = Reconstruction::new(begin, &timeline);
+        assert_eq!(map.counts().before, PRELOAD.len() as u64);
+        map.goto(1);
+        assert_eq!(map.bytes(0, expect.len() as u64).unwrap(), expect);
+        assert_eq!(map.sha256().unwrap(), sha256_hex(&expect));
+        assert_eq!(map.row(12, 1)[0].state, State::Written);
+        assert_eq!(map.row(0, 1)[0].state, State::Before);
+        let history: Vec<Event> = map.history(12).iter().map(|h| h.event).collect();
+        assert_eq!(history, [Event::Start, Event::Written]);
+    }
+
     // Created by the run: starts empty. A path the disk does not hold (tmpfs).
     assert_eq!(
         resolver.resolve(&wanted("/etc/new", None, true)).0,
