@@ -467,7 +467,7 @@ class ReportTests(unittest.TestCase):
         return value
 
     def test_exit_code(self):
-        ok = {"a": self.result("a", "PASS"), "b": self.result("b", "FLAKY"), "c": self.result("c", "MEASURED")}
+        ok = {"a": self.result("a", "PASS"), "b": self.result("b", "FLAKY"), "c": self.result("c", "PASS")}
         self.assertEqual(vm.exit_code(ok, ["a", "b", "c"]), 0)
         for status in ("FAIL", "TIMEOUT", "ERROR", "SKIP"):
             self.assertEqual(vm.exit_code({"a": self.result("a", status)}, ["a"]), 1)
@@ -483,8 +483,88 @@ class ReportTests(unittest.TestCase):
         self.assertIn("FLAKY", text.splitlines()[-1])
 
 
+class AttributionTests(unittest.TestCase):
+    """stress-contended passes with drops only when each one is explained by a host read gap."""
+    NAME = "conf-stress-contended"
+    WAIT = 100_000  # send_wait_us
+
+    def gap(self, guest_ms, len_ms, ring=None):
+        return {"guest_ns": guest_ms * 1_000_000, "len_ns": len_ms * 1_000_000, "cause": "pump", "ring": ring}
+
+    def run_(self, first, last, before_ms, after_ms, end_ms=0, cpu=2):
+        return {"task": 1, "first": first, "last": last, "before_ns": before_ms * 1_000_000,
+                "after_ns": after_ms * 1_000_000, "end_ns": end_ms * 1_000_000,
+                "before_cpu": cpu, "after_cpu": cpu}
+
+    def accounting(self, runs, gaps, dropped=None):
+        total = sum(r["last"] - r["first"] + 1 for r in runs) if dropped is None else dropped
+        return {"transport": {"dropped": total, "attempted": 1000, "configured_send_wait_us": self.WAIT, "send_wait_us": 0},
+                "read_gaps": {"count": len(gaps), "longest_ns": max([g["len_ns"] for g in gaps], default=0),
+                              "gaps": gaps},
+                "dropped_packets": runs}
+
+    def test_a_drop_inside_a_long_gap_is_attributed(self):
+        acc = self.accounting([self.run_(5, 5, 1000, 1105)], [self.gap(1000, 130)])
+        attributed, unattributed, gaps = vm.attribute_drops(acc)
+        self.assertEqual((attributed, unattributed, len(gaps)), (1, 0, 1))
+
+    def test_a_run_of_drops_counts_every_packet(self):
+        acc = self.accounting([self.run_(5, 24, 5000, 7000)], [self.gap(5010, 1900)])
+        self.assertEqual(vm.attribute_drops(acc)[:2], (20, 0))
+
+    def test_a_gap_shorter_than_the_send_wait_attributes_nothing(self):
+        acc = self.accounting([self.run_(5, 5, 1000, 1105)], [self.gap(1000, 99)])
+        self.assertEqual(vm.attribute_drops(acc)[:2], (0, 1))
+
+    def test_a_gap_elsewhere_in_time_attributes_nothing(self):
+        acc = self.accounting([self.run_(5, 5, 1000, 1105)], [self.gap(5000, 300), self.gap(100, 400)])
+        self.assertEqual(vm.attribute_drops(acc)[:2], (0, 1))
+
+    def test_the_overlap_must_cover_the_send_wait(self):
+        # The gap covers only 40 ms of the 105 ms the sender spent between its packets.
+        acc = self.accounting([self.run_(5, 5, 1000, 1105)], [self.gap(1065, 300)])
+        self.assertEqual(vm.attribute_drops(acc)[:2], (0, 1))
+
+    def test_a_window_shorter_than_the_wait_inside_the_gap_is_attributed(self):
+        acc = self.accounting([self.run_(5, 5, 1100, 1175)], [self.gap(1000, 300)])
+        self.assertEqual(vm.attribute_drops(acc)[:2], (1, 0))
+        acc = self.accounting([self.run_(5, 5, 1100, 1175)], [self.gap(1150, 300)])
+        self.assertEqual(vm.attribute_drops(acc)[:2], (0, 1))
+
+    def test_timestamp_skew_within_the_tolerance_is_forgiven(self):
+        acc = self.accounting([self.run_(5, 5, 1000, 1105)], [self.gap(1015, 300)])
+        self.assertEqual(vm.attribute_drops(acc)[:2], (1, 0))
+
+    def test_fragments_of_one_event_use_the_next_event_as_the_upper_bound(self):
+        # Both neighbours carry the event's start; the drop came while it was being sent.
+        acc = self.accounting([self.run_(5, 5, 1000, 1000, end_ms=1400)], [self.gap(1100, 200)])
+        self.assertEqual(vm.attribute_drops(acc)[:2], (1, 0))
+        acc = self.accounting([self.run_(5, 5, 1000, 1000)], [self.gap(1100, 200)])
+        self.assertEqual(vm.attribute_drops(acc)[:2], (0, 1))
+
+    def test_timestamps_out_of_order_still_bound_the_drop(self):
+        acc = self.accounting([self.run_(5, 5, 1100, 1000, end_ms=1105)], [self.gap(1000, 130)])
+        self.assertEqual(vm.attribute_drops(acc)[:2], (1, 0))
+
+    def test_a_ring_gap_explains_only_drops_sent_on_that_ring(self):
+        gaps = [self.gap(1000, 130, ring=2)]
+        self.assertEqual(vm.attribute_drops(self.accounting([self.run_(5, 5, 1000, 1105, cpu=2)], gaps))[:2], (1, 0))
+        self.assertEqual(vm.attribute_drops(self.accounting([self.run_(5, 5, 1000, 1105, cpu=3)], gaps))[:2], (0, 1))
+
+    def test_drops_the_scan_did_not_locate_are_unattributed(self):
+        acc = self.accounting([self.run_(5, 5, 1000, 1105)], [self.gap(1000, 130)], dropped=4)
+        self.assertEqual(vm.attribute_drops(acc)[:2], (1, 3))
+
+    def test_a_run_without_neighbour_timestamps_is_unattributed(self):
+        acc = self.accounting([self.run_(5, 5, 0, 1105)], [self.gap(1000, 130)])
+        self.assertEqual(vm.attribute_drops(acc)[:2], (0, 1))
+
+    def test_no_gaps_recorded_means_no_attribution(self):
+        acc = self.accounting([self.run_(5, 5, 1000, 1105)], [])
+        self.assertEqual(vm.attribute_drops(acc)[:2], (0, 1))
+
+
 class MeasureTests(unittest.TestCase):
-    """stress-contended's transport drops are a measurement; anything else it finds still fails."""
     NAME = "conf-stress-contended"
 
     def setUp(self):
@@ -494,12 +574,20 @@ class MeasureTests(unittest.TestCase):
         self.log = self.out / "logs" / f"{self.NAME}.log"
         self.log.parent.mkdir(parents=True)
 
-    def write(self, problems, log_lines, dropped=38):
+    def write(self, problems, log_lines, dropped=2, explained=True, gaps=True):
         trace = self.out / "runs" / self.NAME / "trace"
         trace.mkdir(parents=True, exist_ok=True)
-        report = {"passed": not problems, "problems": problems,
-                  "accounting": {"transport": {"dropped": dropped, "attempted": 10466625, "writer_held_ms": 0,
-                                               "writer_held_longest_ms": 0}},
+        read_gaps = [{"guest_ns": 1_000_000_000, "len_ns": 130_000_000, "cause": "pump"}] if explained else []
+        accounting = {
+            "transport": {"dropped": dropped, "attempted": 10466625, "writer_held_ms": 0,
+                          "writer_held_longest_ms": 0, "configured_send_wait_us": 100000},
+            "dropped_packets": [{"task": 1, "first": 5, "last": 5 + dropped - 1,
+                                 "before_ns": 1_000_000_000, "after_ns": 1_105_000_000}] if dropped else [],
+            "read_gaps": {"count": len(read_gaps), "longest_ns": 130_000_000 if read_gaps else 0,
+                          "gaps": read_gaps}}
+        if not gaps:
+            del accounting["read_gaps"]
+        report = {"passed": not problems, "problems": problems, "accounting": accounting,
                   "throughput": {"calls_per_second": 18822.09}}
         (trace / "stress-contended.json").write_text(vm.json.dumps(report))
         self.log.write_text("\n".join(log_lines) + "\n")
@@ -508,63 +596,59 @@ class MeasureTests(unittest.TestCase):
         return ["conformance: checking stress-contended",
                 "FAIL group stress-contended (level heavy): 1849177 calls in 98 s (18822 calls/s, 23.3 MiB/s), "
                 "packet loss 0.000 %, 20 calls with loss, async loss 0",
-                "    transport drops: 38", *extra, "FAIL trace in 1006 s"]
+                "    transport drops: 2", *extra, "FAIL trace in 1006 s"]
 
-    def test_only_the_contended_group_is_measured(self):
-        self.assertEqual(vm.MEASURED_GROUPS, {"conf-stress-contended": "stress-contended"})
+    def test_only_the_contended_group_is_attributed(self):
+        self.assertEqual(vm.ATTRIBUTED_GROUPS, {"conf-stress-contended": "stress-contended"})
         self.assertIn(self.NAME, [c.name for c in vm.plan("full", PlanTests().ctx())])
 
-    def test_drops_alone_are_measured_with_their_numbers(self):
-        self.write(["transport drops: 38"], self.failed_log())
+    def test_attributed_drops_pass_and_are_reported(self):
+        self.write(["transport drops: 2"], self.failed_log())
         found = vm.measure(self.NAME, self.out, self.log, 1)
-        self.assertEqual(found["status"], "MEASURED")
-        self.assertEqual(found["measurement"], {"dropped": 38, "attempted": 10466625, "writer_held_ms": 0,
-                                                "writer_held_longest_ms": 0, "calls_per_second": 18822})
-        for text in ("38 transport drops of 10,466,625", "writer held 0 ms", "18,822 calls/s"):
+        self.assertEqual(found["status"], "PASS")
+        self.assertEqual((found["measurement"]["attributed"], found["measurement"]["unattributed"]), (2, 0))
+        for text in ("2 transport drops of 10,466,625", "2 drops attributed to a read gap, 0 unattributed",
+                     "1 read gaps (1 as long as the send wait, longest 130 ms)", "18,822 calls/s"):
             self.assertIn(text, found["detail"])
 
+    def test_an_unattributed_drop_fails(self):
+        self.write(["transport drops: 2"], self.failed_log(), explained=False)
+        found = vm.measure(self.NAME, self.out, self.log, 1)
+        self.assertNotIn("status", found)
+        self.assertEqual(found["measurement"]["unattributed"], 2)
+        self.assertIn("2 unattributed", found["detail"])
+
+    def test_a_report_without_read_gaps_cannot_attribute(self):
+        self.write(["transport drops: 2"], self.failed_log(), gaps=False)
+        found = vm.measure(self.NAME, self.out, self.log, 1)
+        self.assertNotIn("status", found)
+        self.assertIn("no measurement", found["detail"])
+
     def test_other_problems_still_fail(self):
-        for problems in (["transport drops: 38", "bad commands: 1"], ["storage drops: 5"], []):
+        for problems in (["transport drops: 2", "bad commands: 1"], ["storage drops: 5"], []):
             with self.subTest(problems=problems):
                 self.write(problems, self.failed_log())
-                found = vm.measure(self.NAME, self.out, self.log, 1)
-                self.assertNotIn("status", found)
-                self.assertIn("measured:", found["detail"])
+                self.assertNotIn("status", vm.measure(self.NAME, self.out, self.log, 1))
 
     def test_another_failure_in_the_log_still_fails(self):
-        for extra in ("FAIL render: stress-contended: view fallback hex ×3", "FAIL golden stress-contended: 2"):
+        for extra in ("FAIL render: stress-contended: view fallback hex x3", "FAIL golden stress-contended: 2"):
             with self.subTest(extra=extra):
-                self.write(["transport drops: 38"], self.failed_log(extra))
+                self.write(["transport drops: 2"], self.failed_log(extra))
                 self.assertNotIn("status", vm.measure(self.NAME, self.out, self.log, 1))
-        self.write(["transport drops: 38"], self.failed_log())
+        self.write(["transport drops: 2"], self.failed_log())
         self.assertNotIn("status", vm.measure(self.NAME, self.out, self.log, 2))
 
-    def test_a_pass_keeps_its_numbers(self):
+    def test_a_clean_pass_keeps_its_numbers(self):
         self.write([], ["PASS group stress-contended (level heavy): ...", "PASS trace in 900 s"], dropped=0)
         found = vm.measure(self.NAME, self.out, self.log, 0)
         self.assertNotIn("status", found)
         self.assertEqual(found["measurement"]["dropped"], 0)
 
-    def test_a_missing_report_is_not_measured(self):
+    def test_a_missing_report_is_not_attributed(self):
         self.log.write_text("conformance: boot failed\n")
         found = vm.measure(self.NAME, self.out, self.log, 1)
         self.assertNotIn("status", found)
         self.assertIn("no measurement", found["detail"])
-
-    def test_measured_ends_the_retries_and_shows_in_the_report(self):
-        result = {"name": self.NAME, "group": "full", "attempt": 1, "log": str(self.log), "status": "MEASURED",
-                  "seconds": 900.0, "measurement": {"dropped": 1}, "detail": "measured: 1 transport drops"}
-        args = vm.parse(["full", "b", "--retries", "2"])
-        with unittest.mock.patch.object(vm, "run_check", return_value=result) as run, \
-                unittest.mock.patch("sys.stdout", io.StringIO()) as printed:
-            final = vm.run_with_retries(vm.Check(self.NAME, "full", [], "/", 1), {}, args)
-        self.assertEqual(run.call_count, 1)
-        self.assertEqual(final["status"], "MEASURED")
-        self.assertIn("measured: 1 transport drops", printed.getvalue())
-        text = vm.report({self.NAME: final}, [self.NAME], "head")
-        self.assertIn("measured: 1 transport drops", text)
-        self.assertIn("MEASURED", text.splitlines()[-1])
-        self.assertEqual(vm.exit_code({self.NAME: final}, [self.NAME]), 0)
 
 
 if __name__ == "__main__":

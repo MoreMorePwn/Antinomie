@@ -227,3 +227,27 @@ fn the_writer_hold_time_is_shown_only_when_there_was_one() {
         Some("4 ms in all, 3 ms at the longest")
     );
 }
+
+#[test]
+fn read_gaps_are_shown_with_their_longest_and_causes() {
+    use antinomie_monitor_core::read_gaps::{GapCause, ReadGap};
+    let mut health = Health::default();
+    assert_eq!(gaps_text(&health), None);
+    let gap = |cause, len_ms: u64| ReadGap {
+        cause,
+        len_ns: len_ms * 1_000_000,
+        ..Default::default()
+    };
+    health.read_gaps.threshold_ns = 50_000_000;
+    health.read_gaps.count = 3;
+    health.read_gaps.longest_ns = 400_000_000;
+    health.read_gaps.gaps = vec![
+        gap(GapCause::Scheduler, 400),
+        gap(GapCause::Pump, 60),
+        gap(GapCause::Scheduler, 100),
+    ];
+    assert_eq!(
+        gaps_text(&health).as_deref(),
+        Some("3 over 50 ms, 400 ms at the longest: 2 x not scheduled (500 ms), 1 x drain pass work (60 ms)")
+    );
+}

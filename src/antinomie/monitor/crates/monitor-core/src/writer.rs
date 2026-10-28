@@ -201,7 +201,6 @@ thread_local! {
 }
 
 /// Total time this thread has waited for the writer (queue room, barriers).
-#[cfg(test)]
 pub(crate) fn blocked_on_this_thread() -> Duration {
     BLOCKED.with(std::cell::Cell::get)
 }

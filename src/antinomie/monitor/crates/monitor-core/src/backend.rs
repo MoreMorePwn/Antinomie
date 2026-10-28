@@ -473,6 +473,8 @@ struct Session {
     /// Since when the host has taken no telemetry because the recording
     /// writer is behind the disk.
     writer_held_since: Option<Instant>,
+    /// Times the pauses between telemetry reads.
+    read_gaps: crate::read_gaps::ReadGapTracker,
     /// Bytes of this boot's network captures (pcaps written by QEMU): the
     /// finished ones, and the running one as last measured. They count
     /// against the recording quota like every other recording.

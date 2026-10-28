@@ -176,6 +176,7 @@ impl Worker {
                 shed: Shed::default(),
                 last_process_save: Instant::now(),
                 writer_held_since: None,
+                read_gaps: Default::default(),
                 network_bytes_done: 0,
                 network_bytes: 0,
                 last_network_check: Instant::now(),

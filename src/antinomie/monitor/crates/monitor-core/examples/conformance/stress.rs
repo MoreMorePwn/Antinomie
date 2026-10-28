@@ -148,6 +148,15 @@ pub fn check(
     let bytes = std::fs::metadata(directory.join("telemetry.raw"))
         .map(|m| m.len())
         .unwrap_or(0);
+    // The wait the group configured; the health's `send_wait_us` is what the
+    // guest runs with when the run ends.
+    let mut accounting = trace::accounting(run, &scan, calls);
+    accounting["transport"]["configured_send_wait_us"] =
+        serde_json::json!(if group.plan.transport.lossless {
+            u64::from(group.plan.transport.max_wait_ms) * 1000
+        } else {
+            0
+        });
     Ok(StressReport {
         group: group.name.clone(),
         level: group.plan.args.get(1).cloned().unwrap_or_default(),
@@ -159,7 +168,7 @@ pub fn check(
         other_issues,
         calls_with_loss,
         scorecard,
-        accounting: trace::accounting(run, &scan, calls),
+        accounting,
         throughput: serde_json::json!({
             "seconds": run.run_seconds,
             "stop_seconds": run.stop_seconds,

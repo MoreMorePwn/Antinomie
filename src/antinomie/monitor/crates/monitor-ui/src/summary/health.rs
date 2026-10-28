@@ -145,11 +145,37 @@ pub(super) fn held_text(health: &Health) -> Option<String> {
     })
 }
 
+/// The telemetry read gaps of the boot: how many, the longest, and which
+/// cause took the most time. `None` while there were none.
+pub(super) fn gaps_text(health: &Health) -> Option<String> {
+    let gaps = &health.read_gaps;
+    (gaps.count > 0).then(|| {
+        let ms = |ns: u64| format!("{} ms", ns.div_ceil(1_000_000));
+        let causes: Vec<String> = gaps
+            .by_cause()
+            .into_iter()
+            .take(3)
+            .map(|(cause, count, total)| format!("{} x {} ({})", count, cause.label(), ms(total)))
+            .collect();
+        format!(
+            "{} over {}, {} at the longest: {}",
+            gaps.count,
+            ms(gaps.threshold_ns),
+            ms(gaps.longest_ns),
+            causes.join(", ")
+        )
+    })
+}
+
 pub(super) fn details(ui: &mut egui::Ui, health: &Health) {
     for (label, value) in [
         (
             "Telemetry held back for the writer",
             held_text(health).unwrap_or_else(|| "never".into()),
+        ),
+        (
+            "Telemetry read gaps",
+            gaps_text(health).unwrap_or_else(|| "none".into()),
         ),
         ("Packets persisted", health.persisted_packets.to_string()),
         ("Write backlog", super::size(health.write_backlog)),

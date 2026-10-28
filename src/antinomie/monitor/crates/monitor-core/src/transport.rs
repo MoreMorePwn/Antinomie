@@ -108,6 +108,7 @@ unsafe extern "C" {
         len: *mut usize,
         key_offset: usize,
     ) -> c_int;
+    fn ant_last_read(client: *mut c_void, cpu_id: *mut u32, wait_ns: *mut u64) -> c_int;
     fn ant_command_send(
         client: *mut c_void,
         opcode: u32,
@@ -377,6 +378,17 @@ impl Transport {
             .get(..len)
             .ok_or("transport message length out of bounds")?;
         Ok(Some(slice))
+    }
+    /// The ring (vCPU) the last `read` took its packet from, and how long that
+    /// packet had been waiting at the head of the ring when it was taken.
+    pub fn last_read(&self) -> (u32, u64) {
+        let (mut cpu, mut wait) = (0, 0);
+        // SAFETY: Both outputs are writable; the client is live and solely owned.
+        if unsafe { ant_last_read(self.ptr.as_ptr(), &mut cpu, &mut wait) } == 0 {
+            (cpu, wait)
+        } else {
+            (0, 0)
+        }
     }
     pub fn send(&mut self, opcode: u32, args: &[u8]) -> Result<u64, String> {
         if args.len() > self.command_limit {

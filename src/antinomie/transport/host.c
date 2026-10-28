@@ -20,6 +20,9 @@ struct reader {
 	__u64 tail, seen_head;
 	__u64 gpa;
 	__u32 cpu_id;
+	/* When ant_read_ordered first saw this ring's head message waiting (0:
+	 * the ring was empty at its last look). */
+	__u64 head_since;
 };
 struct backing {
 	int fd;
@@ -36,6 +39,9 @@ struct ant_client {
 	__u64 bootstrap_gpa;
 	struct reader *readers, replies;
 	unsigned count, next;
+	/* Ring (cpu id) and wait of the message the last ordered read took. */
+	__u32 last_cpu;
+	__u64 last_wait_ns;
 	enum ant_poll_mode poll_mode;
 	unsigned poll_sleep_us, poll_spin_us;
 	__u64 session, command_head, command_tail_seen, sequence;
@@ -428,6 +434,7 @@ int ant_resume_finish(struct ant_client *c, int timeout_ms, struct ant_resume_re
 			return failed(c, -EPROTO);
 		r->tail = tail;
 		r->seen_head = head;
+		r->head_since = 0;
 	}
 	c->sequence = c->boot->resume_sequence_ack;
 	c->guest_hb = ANT_ACQ(&c->control->guest_heartbeat);
@@ -521,7 +528,7 @@ int ant_poll(struct ant_client *c, int timeout_ms)
 
 /* Copy out and consume the head message of reader index, peeked as msg. */
 static int take_telemetry(struct ant_client *c, unsigned index, const struct ant_message *msg,
-		void *dst, size_t capacity, size_t *payload_len)
+		void *dst, size_t capacity, size_t *payload_len, __u64 now)
 {
 	struct reader *r = &c->readers[index];
 	*payload_len = msg->payload_len;
@@ -532,6 +539,9 @@ static int take_telemetry(struct ant_client *c, unsigned index, const struct ant
 	ant_copy_out(r->data, r->size, r->tail + sizeof(*msg), dst, msg->payload_len);
 	r->tail += ant_span(msg->payload_len);
 	ANT_REL(&r->q->tail, r->tail);
+	c->last_cpu = r->cpu_id;
+	c->last_wait_ns = now > r->head_since && r->head_since ? now - r->head_since : 0;
+	r->head_since = 0;
 	c->next = (index + 1) % c->count;
 	return 0;
 }
@@ -550,17 +560,20 @@ int ant_read(struct ant_client *c, void *dst, size_t capacity, size_t *payload_l
 		error = peek_telemetry(c, &c->readers[index], &msg);
 		if (error == -EAGAIN) continue;
 		if (error) return error;
-		return take_telemetry(c, index, &msg, dst, capacity, payload_len);
+		return take_telemetry(c, index, &msg, dst, capacity, payload_len, 0);
 	}
 	return -EAGAIN;
 }
 
+/* Longest a ring's head waits behind the timestamp order while others are read. */
+#define ANT_STARVED_NS 10000000ULL
+
 int ant_read_ordered(struct ant_client *c, void *dst, size_t capacity, size_t *payload_len,
 		size_t key_offset)
 {
-	struct ant_message best_msg;
-	unsigned i, best = UINT32_MAX;
-	__u64 best_key = 0;
+	struct ant_message best_msg, starved_msg;
+	unsigned i, best = UINT32_MAX, starved = UINT32_MAX;
+	__u64 best_key = 0, now = 0;
 	int error;
 	if (!payload_len || (!dst && capacity) || key_offset > ANT_MAX_MESSAGE_LEN - 8)
 		return -EINVAL;
@@ -568,7 +581,12 @@ int ant_read_ordered(struct ant_client *c, void *dst, size_t capacity, size_t *p
 	error = tick(c);
 	if (error) return error;
 	/* Each ring is in its producer's order; taking the smallest key among the
-	 * heads merges the rings in key order. Equal keys go round robin. */
+	 * heads merges the rings in key order. Equal keys go round robin. A key
+	 * is when an event began, so the fragments of one long event keep an old
+	 * key and would hold every other ring back for as long as it is sent: a
+	 * head that has waited ANT_STARVED_NS is taken first (the longest
+	 * waiting one), so no ring is kept from the host for longer than that
+	 * while another is read. */
 	for (i = 0; i < c->count; i++) {
 		unsigned index = (c->next + i) % c->count;
 		struct reader *r = &c->readers[index];
@@ -577,8 +595,20 @@ int ant_read_ordered(struct ant_client *c, void *dst, size_t capacity, size_t *p
 		__u64 key = 0;
 		int k;
 		error = peek_telemetry(c, r, &msg);
-		if (error == -EAGAIN) continue;
+		if (error == -EAGAIN) {
+			r->head_since = 0;
+			continue;
+		}
 		if (error) return error;
+		if (!now) now = now_ns();
+		if (!r->head_since) r->head_since = now;
+		if (now - r->head_since >= ANT_STARVED_NS) {
+			if (starved == UINT32_MAX || r->head_since < c->readers[starved].head_since) {
+				starved = index;
+				starved_msg = msg;
+			}
+			continue;
+		}
 		if (msg.payload_len >= key_offset + 8) {
 			ant_copy_out(r->data, r->size, r->tail + sizeof(msg) + key_offset, raw, 8);
 			for (k = 7; k >= 0; k--)
@@ -590,8 +620,20 @@ int ant_read_ordered(struct ant_client *c, void *dst, size_t capacity, size_t *p
 			best_msg = msg;
 		}
 	}
+	if (starved != UINT32_MAX) {
+		best = starved;
+		best_msg = starved_msg;
+	}
 	if (best == UINT32_MAX) return -EAGAIN;
-	return take_telemetry(c, best, &best_msg, dst, capacity, payload_len);
+	return take_telemetry(c, best, &best_msg, dst, capacity, payload_len, now);
+}
+
+int ant_last_read(struct ant_client *c, uint32_t *cpu_id, uint64_t *wait_ns)
+{
+	if (!c || !cpu_id || !wait_ns) return -EINVAL;
+	*cpu_id = c->last_cpu;
+	*wait_ns = c->last_wait_ns;
+	return 0;
 }
 
 int ant_command_send(struct ant_client *c, uint32_t opcode,

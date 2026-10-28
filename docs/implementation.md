@@ -648,10 +648,13 @@ private HOME and XDG folders; default `vm-regress-out`), `--only CHECK` and
 `--skip CHECK` (repeatable), `--rerun-failed` (the checks that did not pass, or
 never ran, in the last run in `--out`), `--retries N` (opt-in: every attempt is
 listed and a pass after a failure is shown as FLAKY), `--list`, `--no-build`.
-`conf-stress-contended` is a measurement: when transport drops are the only
-problem its conformance check finds, it is MEASURED (its drops, writer hold and
-calls per second are in the report and `results.json`) and does not fail the
-tier; any other problem fails it as before.
+`conf-stress-contended` is judged by attribution: the host times every pause
+in its telemetry reads (`Health.read_gaps`, see "Telemetry read gaps" below),
+and when transport drops are the only problem its conformance check finds, it
+passes if every drop falls in a read gap at least as long as the group's send
+wait. A drop no such gap explains fails it. The drops, attributed and
+unattributed, the gaps and the calls per second are in the report and
+`results.json`; any other problem fails the group as before.
 
 | Tier | Runs | Takes (this machine) |
 |---|---|---|
@@ -1887,13 +1890,68 @@ revision unchanged.
   100 ms send wait, where senders find their ring full all the time. It is a
   measurement, not a pass criterion: a sender still drops when the host reads
   nothing from its ring for the whole 100 ms, which a busy build machine causes
-  (the host's read gaps are not timed yet; `writer_held_ms` counts only waits for
-  the recording writer). Measured on 2026-10-28 with no writer hold: 38 drops in
+  (`writer_held_ms` counts only waits for the recording writer; the host's
+  read gaps are timed separately, see "Telemetry read gaps"). Measured on 2026-10-28 with no writer hold: 38 drops in
   10.5 million records at load ~10, 1 in 13.7 million at load 4.5-8; before the
   change 737 in 7.4 million. The drops were each followed by at least 105 ms in
   which no new guest event began on any CPU, so they were host read gaps, not
-  lost races. vm-regress reports the group as MEASURED when drops are its only
-  problem.
+  lost races. vm-regress attributes each drop to a host read gap and fails the
+  group only for a drop no gap explains.
+
+### Telemetry read gaps (0.8.0)
+
+Host only; the guest and the contract are unchanged (`transport/host.c` gained
+a diagnostic getter and a starvation guard, see below).
+
+* **What is timed.** `Health.read_gaps` (`read_gaps.rs`) records every pause
+  between two read attempts of the transport thread that lasts at least half
+  the guest's send wait (10 to 50 ms), and every ring whose head packet waited
+  that long while the host read other rings. Per pause: the guest time it
+  started at (the newest packet timestamp read, which compares with packet
+  timestamps without a clock mapping), the host wall time, the length, the ring
+  (ring pauses) and a cause. At most 256 pauses are kept (the shortest give
+  way); the count, total and longest cover all. Cost: one clock read and one
+  thread-local read per read attempt, two `pread`s of
+  `/proc/thread-self/schedstat` per drain pass, no allocation, lock or log per
+  read.
+* **Causes.** Writer backlog (the pass started held back for the recording
+  writer); writer wait (the thread waited in the writer's queue); drain pass
+  work (inside a pass, processing or flushing, not reading); not scheduled,
+  other host work, blocked (outside the pass, by the thread's run-queue delay
+  and CPU time); ring not served (the host read, but not this ring).
+* **Where it shows.** The run report (`accounting.read_gaps`,
+  `accounting.dropped_packets`, `transport.configured_send_wait_us`) and
+  Summary > Health > details ("Telemetry read gaps": count, longest, the
+  causes that took the most time).
+* **Attribution.** The conformance scan finds each task's missing packet
+  numbers with the timestamps of the packets on both sides and of the task's
+  next event. vm-regress ties a drop to a gap (or, for a ring pause, a pause
+  of the ring the task sent on) of at least the send wait that contains the
+  drop's time window or overlaps it by the wait (20 ms of timestamp skew
+  allowed). `conf-stress-contended` passes when every drop is attributed and
+  fails on one that is not; drops the scan cannot locate (the end of a task's
+  numbering) count as unattributed. Timestamps are when an event began, so a
+  fragment of a long event looks older than it was sent: windows are widened
+  to the task's next event.
+* **Causes found (2026-10-28, load 9-15 on a shared host).** (1) Ring
+  starvation: `ant_read_ordered` merges the rings by the smallest head
+  timestamp, and the fragments of one long event keep the event's start
+  timestamp, so a ring holding newer packets was not served while another
+  ring's fragments flowed: 53 pauses of 100 ms or more in one run, 762 drops
+  all attributed to them or to writer holds. (2) The recording writer behind
+  the disk (the E: drive under load): 33 s held in a 3 minute run, with pauses
+  of up to 14 s; a hold longer than the send wait drops by design.
+  (3) The transport thread not scheduled (run-queue delay of 60 to 300 ms
+  under load 10 to 15) or doing 100 to 150 ms of other host work in one loop
+  pass (several 30 to 50 ms steps: the 250 ms snapshot publish, resource
+  sampling, terminal reads). Guest sends only wait 100 ms in this group.
+* **Fix.** `ant_read_ordered` now takes a ring whose head has waited 10 ms
+  before the timestamp order applies (the longest waiting first), so no ring
+  is kept from the host for longer while another is read. Records of one ring
+  stay in order; across rings the merge can be up to 10 ms off for a starved
+  head. Not fixed (proposed): the other host work in the transport loop
+  (publish, resource sampling) should drain between steps or move to another
+  thread.
 
 ### File positions and in-kernel copy operands (0.8.0)
 

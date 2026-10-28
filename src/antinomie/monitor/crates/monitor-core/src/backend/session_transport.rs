@@ -15,6 +15,18 @@ impl Session {
         snapshot: &mut Snapshot,
         sender: &SyncSender<Notification>,
     ) -> Result<(), String> {
+        self.read_gaps
+            .enter(Instant::now(), crate::writer::backlogged());
+        let result = self.pump_pass(snapshot, sender);
+        self.read_gaps.exit(Instant::now());
+        result
+    }
+
+    fn pump_pass(
+        &mut self,
+        snapshot: &mut Snapshot,
+        sender: &SyncSender<Notification>,
+    ) -> Result<(), String> {
         self.transport.poll(0)?;
         // Drain until the guest's rings are empty: they hold only milliseconds
         // of busy telemetry. A time budget still returns control to command
@@ -27,6 +39,11 @@ impl Session {
         let held = crate::writer::backlogged();
         self.note_writer_hold(held, started, &mut snapshot.health);
         while started.elapsed() < PUMP_BUDGET && !crate::writer::backlogged() {
+            self.read_gaps.read(
+                Instant::now(),
+                crate::writer::blocked_on_this_thread(),
+                &mut snapshot.health.read_gaps,
+            );
             let Some(packet) = self.transport.read()?.map(<[u8]>::to_vec) else {
                 break;
             };
@@ -35,6 +52,12 @@ impl Session {
             let header = crate::parser::parse_packet(&packet)
                 .ok()
                 .map(|(header, _)| header);
+            if let Some(header) = &header {
+                self.read_gaps.packet(header.timestamp_ns);
+            }
+            let (ring, waited) = self.transport.last_read();
+            self.read_gaps
+                .ring_wait(ring, waited, &mut snapshot.health.read_gaps);
             let root = header.as_ref().map_or(0, |header| header.root_task_cookie);
             let capture_cookie = header.as_ref().map_or(0, |header| header.capture_cookie);
             let observer_id = self
@@ -211,6 +234,7 @@ impl Session {
         snapshot.health.transport_wait_ns = stats.wait_ns;
         snapshot.health.ring_size = stats.ring_size;
         snapshot.health.send_wait_us = stats.send_wait_us;
+        self.read_gaps.set_send_wait(stats.send_wait_us);
         snapshot.health.write_backlog = crate::writer::backlog() as u64;
         self.shed_load(stats.wait_ns, &mut snapshot.health)?;
         snapshot.health.persisted_packets = self.persisted_packets;

@@ -78,6 +78,10 @@ int ant_read(struct ant_client *client, void *dst, size_t capacity, size_t *payl
  * such as a timestamp, are read merged in key order. */
 int ant_read_ordered(struct ant_client *client, void *dst, size_t capacity,
 		size_t *payload_len, size_t key_offset);
+/* The ring (cpu id) the last ant_read_ordered took its message from, and how
+ * long that message had been the waiting head of its ring when it was taken
+ * (0: it was not seen waiting). Host-side diagnostics only. */
+int ant_last_read(struct ant_client *client, uint32_t *cpu_id, uint64_t *wait_ns);
 int ant_command_send(struct ant_client *client, uint32_t opcode,
 		const void *args, size_t payload_len, uint64_t *request_id);
 int ant_result_read(struct ant_client *client, uint64_t *request_id,

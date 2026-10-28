@@ -1859,6 +1859,9 @@ pub struct Health {
     /// guest would otherwise wait on every traced syscall.
     #[serde(default)]
     pub shedding: bool,
+    /// Pauses between telemetry reads (see [`crate::read_gaps`]).
+    #[serde(default)]
+    pub read_gaps: crate::read_gaps::ReadGapStats,
 }
 #[derive(Clone, Debug, PartialEq, Default)]
 pub enum VmState {

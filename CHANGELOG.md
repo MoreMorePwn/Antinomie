@@ -268,6 +268,21 @@ it runs.
 - **No terminal output lost on a busy screen.** Output the frontend could not
   take at once waits and follows in order instead of being dropped.
 
+- **The host times its telemetry read gaps and says which drops they caused.**
+  Every pause of 10 to 50 ms or more (half the guest's send wait) between the
+  host's telemetry reads is recorded with its start in guest time, its length
+  and a cause (recording writer behind the disk, writer wait, drain pass work,
+  thread not scheduled, other host work, blocked), as is every ring whose head
+  packet waited that long while the host read other rings. They are in the run
+  report and in Summary > Health > details ("Telemetry read gaps"). The VM
+  regression's `conf-stress-contended` ties each guest send drop to such a gap
+  and passes only if every drop has one. On a loaded machine the gaps were the
+  recording writer behind the disk, the transport thread not given a CPU, and
+  ring starvation: the host merged the vCPU rings by packet timestamp, and the
+  fragments of one long event kept the event's old timestamp, so another
+  ring's packets waited for as long as that event was sent. The host now takes
+  a ring head first once it has waited 10 ms.
+
 ### Guest
 
 - **Real file positions and in-kernel copy operands (contract revision 18).**
@@ -303,9 +318,9 @@ it runs.
   not after a fixed time while it is still reading. Senders in atomic context
   still never queue. Drops and partial events are reported as before. The full
   VM tier gains a `stress-contended` group (heavy load on a 256 KiB never-drop
-  ring with a 100 ms send wait), reported as a measurement: its transport drops,
-  writer hold and calls per second are listed (MEASURED) instead of failing the
-  tier, and any other problem still fails it. Loss is reduced, not gone: a
+  ring with a 100 ms send wait), judged by attribution (see the host entry on
+  read gaps): each drop must fall in a host read gap at least as long as the
+  send wait. Loss is reduced, not gone: a
   sender still drops when the host reads nothing from its ring for the whole
   wait, and on a loaded build machine that group measured 1 drop in 13.7
   million records and 38 in 10.5 million (737 in 7.4 million before the

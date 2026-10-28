@@ -10,8 +10,9 @@ quick  the conformance trace suite's oracle groups (user, root, threads)
 full   quick, the debugger, audit, io_uring, tracer, stealth and snapshot
        checks, the conformance stress groups and interop in both directions
        (an old host on BASE, the current host on OLD); conf-stress-contended
-       is a measurement (MEASURED: its transport drops, writer hold and calls
-       per second are reported, and drops alone do not fail the tier)
+       passes with transport drops only when each is attributed to a gap in
+       the host's telemetry reads at least as long as the group's send wait
+       (the drops, gaps and calls per second are reported)
 auto   full when the diff against REF touches the kernel/host contract (guest
        patches, transport, protocol docs, ANTC_REVISION), otherwise quick
 
@@ -54,18 +55,19 @@ MIN_MEM_KIB = 5 * 1024 * 1024
 GIB = 1024**3
 # What a finished check leaves that only matters for debugging it: VM disks and recordings.
 CONFORMANCE_BULK = ("groups", "render", "bin", "xdg")
-ORDER = ("PASS", "FLAKY", "MEASURED", "FAIL", "TIMEOUT", "ERROR", "SKIP")
+ORDER = ("PASS", "FLAKY", "FAIL", "TIMEOUT", "ERROR", "SKIP")
 # Results that do not fail a tier.
-OK_STATUSES = ("PASS", "FLAKY", "MEASURED")
-# Checks whose transport drops are a measurement, not a failure: check name ->
-# conformance group. stress-contended runs a 256 KiB never-drop ring with a
-# 100 ms send wait, so a host that reads nothing for 100 ms (a busy build
+OK_STATUSES = ("PASS", "FLAKY")
+# Checks whose transport drops are judged by attribution, not by count: check
+# name -> conformance group. stress-contended runs a 256 KiB never-drop ring
+# with a 100 ms send wait, so a host that reads nothing for 100 ms (a busy
 # machine) makes its senders drop; the guest cannot tell that from a fault.
-# Until the host times its telemetry read gaps and attributes drops to them
-# (board card "Host: time the host's telemetry read gaps and attribute guest
-# send drops to them"), the group's drops are reported, not judged. Every other
-# problem the group finds still fails it.
-MEASURED_GROUPS = {"conf-stress-contended": "stress-contended"}
+# The host times its telemetry read gaps (Health.read_gaps) and the group
+# passes when every drop falls in a gap at least as long as the send wait;
+# a drop no such gap explains fails it. Every other problem the group finds
+# still fails it.
+GAP_TOLERANCE_NS = 20_000_000
+ATTRIBUTED_GROUPS = {"conf-stress-contended": "stress-contended"}
 
 
 class Failure(Exception):
@@ -610,15 +612,68 @@ def run_check(check, ctx, args, attempt):
     code, seconds = run_logged(argv, env, check.cwd, log, check.timeout)
     status = "TIMEOUT" if code is None else "PASS" if code == 0 else "FAIL"
     result = {**result, "status": status, "seconds": round(seconds, 1), "exit": code}
-    if check.name in MEASURED_GROUPS and code is not None:
+    if check.name in ATTRIBUTED_GROUPS and code is not None:
         result.update(measure(check.name, out, log, code))
     return result
 
 
+def covers(gap, lo, hi, wait_ns):
+    """Whether a read gap explains a drop that happened between lo and hi (guest ns):
+    the window lies inside the gap, or the two overlap for the send wait. Windows
+    can be shorter than the wait because a timestamp is when an event began."""
+    start, end = int(gap["guest_ns"]), int(gap["guest_ns"]) + int(gap["len_ns"])
+    overlap = min(hi, end) - max(lo, start)
+    inside = start - GAP_TOLERANCE_NS <= lo and hi <= end + GAP_TOLERANCE_NS
+    return inside or overlap >= wait_ns - GAP_TOLERANCE_NS
+
+
+def attribute_drops(accounting):
+    """Tie the group's dropped packets to host read gaps.
+
+    A sender drops only after waiting its whole send wait for room, so a drop
+    needs a read gap of at least that wait. The gap [guest_ns, guest_ns +
+    len_ns] is in guest time (the newest packet timestamp read before it);
+    the drop lies between the timestamps of the dropped task's packets on
+    either side, up to the start of its next event. It is attributed when the
+    two overlap for the send wait
+    (less GAP_TOLERANCE_NS of timestamp skew). Drops the located runs do not
+    account for (numbering that ends in a loss, or no located run) count as
+    unattributed.
+    A gap of the whole transport explains any drop; a gap of one ring (the
+    host read other rings while that ring's head waited) only drops sent on
+    that ring.
+    Returns (attributed, unattributed, gaps), counts of packets and the gaps
+    that were long enough."""
+    transport = accounting["transport"]
+    wait_ns = int(transport.get("configured_send_wait_us", transport.get("send_wait_us", 0))) * 1000
+    gaps = [g for g in accounting.get("read_gaps", {}).get("gaps", []) if int(g["len_ns"]) >= wait_ns]
+    attributed = unattributed = located = 0
+    for run in accounting.get("dropped_packets", []):
+        count = int(run["last"]) - int(run["first"]) + 1
+        located += count
+        # A packet's timestamp is when its event began, not when it was sent:
+        # fragments share it and timestamps of threads interleave. The drop
+        # lies after the earlier neighbour began and before the task's next
+        # event (end_ns) began.
+        before, after, end = int(run["before_ns"]), int(run["after_ns"]), int(run.get("end_ns", 0))
+        lo, hi = min(before, after), max(before, after, end)
+        rings = {int(run.get("before_cpu", -1)), int(run.get("after_cpu", -1))}
+        explained = lo > 0 and any(
+            (g.get("ring") is None or int(g["ring"]) in rings) and covers(g, lo, hi, wait_ns)
+            for g in gaps)
+        if explained:
+            attributed += count
+        else:
+            unattributed += count
+    unattributed += max(int(transport["dropped"]) - located, 0)
+    return attributed, unattributed, gaps
+
+
 def measure(name, out, log, code):
-    """What a measured check reports: its numbers, and MEASURED when transport
-    drops were the only problem the conformance check found (see MEASURED_GROUPS)."""
-    group = MEASURED_GROUPS[name]
+    """What an attributed check reports: its numbers, and PASS when transport
+    drops were the only problem the conformance check found and every drop is
+    attributed to a read gap (see ATTRIBUTED_GROUPS), FAIL when one is not."""
+    group = ATTRIBUTED_GROUPS[name]
     path = out / "runs" / name / "trace" / f"{group}.json"
     try:
         report = json.loads(path.read_text())
@@ -630,16 +685,30 @@ def measure(name, out, log, code):
             "writer_held_longest_ms": int(transport["writer_held_longest_ms"]),
             "calls_per_second": round(float(report["throughput"]["calls_per_second"])),
         }
+        attributed, unattributed, gaps = attribute_drops(report["accounting"])
+        numbers.update({
+            "attributed": attributed,
+            "unattributed": unattributed,
+            "read_gaps": int(report["accounting"]["read_gaps"]["count"]),
+            "read_gaps_over_wait": len(gaps),
+            "read_gap_longest_ms": int(report["accounting"]["read_gaps"]["longest_ns"]) // 1_000_000,
+        })
         problems = list(report["problems"])
     except (OSError, ValueError, KeyError, TypeError) as error:
         return {"detail": f"no measurement: {path}: {error}"}
     share = 100.0 * numbers["dropped"] / numbers["attempted"] if numbers["attempted"] else 0.0
-    detail = (f"measured: {numbers['dropped']:,} transport drops of {numbers['attempted']:,} "
+    detail = (f"{numbers['dropped']:,} transport drops of {numbers['attempted']:,} "
               f"({share:.5f} %), writer held {numbers['writer_held_ms']:,} ms "
               f"(longest {numbers['writer_held_longest_ms']:,} ms), "
-              f"{numbers['calls_per_second']:,} calls/s")
+              f"{numbers['calls_per_second']:,} calls/s; {numbers['attributed']:,} drops attributed to a "
+              f"read gap, {numbers['unattributed']:,} unattributed; {numbers['read_gaps']:,} read gaps "
+              f"({numbers['read_gaps_over_wait']:,} as long as the send wait, longest "
+              f"{numbers['read_gap_longest_ms']:,} ms)")
     found = {"measurement": numbers, "detail": detail}
     if code == 0:
+        return found
+    # Attribution is the whole judgement of the drops: an unexplained one fails.
+    if numbers["unattributed"]:
         return found
     # Transport drops must be the group's only problem, and the group and the
     # check's summary its only failures (no render, matrix or golden failure).
@@ -649,7 +718,7 @@ def measure(name, out, log, code):
     expected = (len(failures) == 2 and failures[0].startswith(f"FAIL group {group} ")
                 and re.fullmatch(r"FAIL trace in \d+ s", failures[1]) is not None)
     if code == 1 and only_drops and expected:
-        return {**found, "status": "MEASURED"}
+        return {**found, "status": "PASS"}
     return found
 
 
@@ -661,7 +730,7 @@ def run_with_retries(check, ctx, args):
         print(f"  {check.name} attempt {attempt}: {result['status']} in {result['seconds']:.0f} s", flush=True)
         if result.get("measurement"):
             print(f"    {result['detail']}", flush=True)
-        if result["status"] in ("PASS", "MEASURED", "SKIP", "ERROR"):
+        if result["status"] in ("PASS", "SKIP", "ERROR"):
             break
     final = dict(attempts[-1])
     final["attempts"] = attempts
@@ -702,8 +771,6 @@ def report(results, order, header):
     rows.append("total " + fmt_seconds(total) + "; " + ", ".join(f"{n} {s}" for s, n in counts.items() if n))
     if counts["FLAKY"]:
         rows.append("FLAKY: passed only after a failed attempt, see the attempts above")
-    if counts["MEASURED"]:
-        rows.append("MEASURED: transport drops reported as a measurement, not a failure (see MEASURED_GROUPS)")
     return "\n".join(rows)
 
 

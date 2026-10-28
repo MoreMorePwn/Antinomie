@@ -426,6 +426,7 @@ impl Session {
             recorder_poll: recorder_health::RecorderPoll::default(),
             last_process_save: Instant::now(),
             writer_held_since: None,
+            read_gaps: Default::default(),
             network_bytes_done: 0,
             network_bytes: 0,
             last_network_check: Instant::now(),
@@ -1129,6 +1130,7 @@ impl Worker {
         ))
     }
     fn reconnect_failed(&mut self, mut old: Session, error: String) -> Result<String, String> {
+        old.read_gaps.reset();
         let resume = old.resume_run_network(&self.options);
         self.session = Some(old);
         match resume {
