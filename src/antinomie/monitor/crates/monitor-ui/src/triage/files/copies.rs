@@ -110,3 +110,20 @@ pub(super) fn copy_transfer(
         order: copy.order,
     })
 }
+
+/// Bookkeeping of the names and descriptors that lead to a file.
+impl FileIndex {
+    pub(super) fn remember_alias(&mut self, group: &str, alias: Option<String>) {
+        if let Some(alias) = alias {
+            let names = self.aliases.entry(group.to_owned()).or_default();
+            if names.len() < 16 && !names.contains(&alias) {
+                names.push(alias);
+            }
+        }
+    }
+    pub(super) fn bind_description(&mut self, description: u64, group: String) {
+        if self.description_group.len() < 65536 {
+            self.description_group.insert(description, group);
+        }
+    }
+}

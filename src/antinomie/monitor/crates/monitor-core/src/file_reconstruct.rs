@@ -398,10 +398,9 @@ impl Reconstruction {
         self.reach = 0;
         self.at = 0;
         if let Some(size) = self.start.size.filter(|size| *size > 0) {
-            match self.start.source.clone() {
-                Some(source) => self.put(0, size, State::Before, Fill::Bytes(source), START),
-                // The size is known but the bytes are not: nothing to show.
-                None => {}
+            // With a size and no source the bytes are not known: nothing to show.
+            if let Some(source) = self.start.source.clone() {
+                self.put(0, size, State::Before, Fill::Bytes(source), START);
             }
         }
     }
@@ -709,14 +708,14 @@ impl Reconstruction {
     /// except that a read of a known byte is not listed (it changes nothing).
     pub fn history(&self, offset: u64) -> Vec<History> {
         let mut out = Vec::new();
-        if let (Some(size), Some(source)) = (self.start.size, &self.start.source) {
-            if offset < size {
-                out.push(History {
-                    step: START,
-                    event: Event::Start,
-                    byte: source.read(offset, 1).ok().and_then(|b| b.first().copied()),
-                });
-            }
+        if let (Some(size), Some(source)) = (self.start.size, &self.start.source)
+            && offset < size
+        {
+            out.push(History {
+                step: START,
+                event: Event::Start,
+                byte: source.read(offset, 1).ok().and_then(|b| b.first().copied()),
+            });
         }
         let value = |extent: &Extent| match &extent.piece {
             Piece::Kept(source) | Piece::Before(source) => source

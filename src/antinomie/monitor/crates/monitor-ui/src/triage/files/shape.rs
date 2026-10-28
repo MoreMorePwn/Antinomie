@@ -12,10 +12,10 @@ const O_TRUNC: u64 = 0x200;
 /// (`changed`). `copy` is the guest's record of an in-kernel copy or
 /// allocation; `flags` are an open's flags. A transfer the guest placed is
 /// not described here: its bytes are the file's writes.
-pub(super) fn shape(
+pub(super) fn of(
     name: &str,
     args: Option<[u64; 6]>,
-    copy: Option<&FileCopy>,
+    copy: &Option<FileCopy>,
     flags: Option<u64>,
     success: bool,
     changed: bool,
@@ -35,7 +35,7 @@ pub(super) fn shape(
         offset: 0,
         len: u64::MAX,
     };
-    if let Some(copy) = copy {
+    if let Some(copy) = copy.as_ref() {
         let offset = copy.destination.offset?;
         let end = offset.saturating_add(copy.len);
         return match copy.kind {

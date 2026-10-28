@@ -463,7 +463,7 @@ impl FileIndex {
                     self.bind_description(opened, group);
                 }
             }
-            self.note_activity(files, call, event, hits, fd, None, None);
+            self.note_activity(files, call, event, hits, fd, (None, None));
             return None;
         }
         let observed = displayed_path(call, event, files);
@@ -753,15 +753,8 @@ impl FileIndex {
                 order: kernel_position.and_then(|position| position.order),
             }),
         };
-        let shape = shape::shape(
-            name,
-            args,
-            copy.as_ref(),
-            open_flags(call, event),
-            success,
-            changed,
-        );
-        self.note_activity(files, call, event, hits, fd, transfer, shape);
+        let shape = shape::of(name, args, &copy, open_flags(call, event), success, changed);
+        self.note_activity(files, call, event, hits, fd, (transfer, shape));
         if lifecycle_only && !self.changes.contains_key(&group) {
             return read_row;
         }
@@ -1057,8 +1050,10 @@ impl FileIndex {
         event: &EventSummary,
         hits: &[Hit],
         fd: Option<u64>,
-        transfer: Option<file_activity::Transfer>,
-        shape: Option<file_activity::Shape>,
+        (transfer, shape): (
+            Option<file_activity::Transfer>,
+            Option<file_activity::Shape>,
+        ),
     ) {
         if hits.is_empty() && transfer.is_none() {
             return;
@@ -1092,19 +1087,6 @@ impl FileIndex {
             new_name,
             shape,
         });
-    }
-    fn remember_alias(&mut self, group: &str, alias: Option<String>) {
-        if let Some(alias) = alias {
-            let names = self.aliases.entry(group.to_owned()).or_default();
-            if names.len() < 16 && !names.contains(&alias) {
-                names.push(alias);
-            }
-        }
-    }
-    fn bind_description(&mut self, description: u64, group: String) {
-        if self.description_group.len() < 65536 {
-            self.description_group.insert(description, group);
-        }
     }
     #[cfg(test)]
     pub fn finish(self) -> Vec<Change> {
