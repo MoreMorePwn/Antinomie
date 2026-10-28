@@ -52,6 +52,15 @@
 //!   splice), the bytes the destination got follow as the field
 //!   `file.copy.data`, up to 1 MiB per call.
 //!
+//! and a lifecycle record:
+//!
+//! * `lifecycle.file_mapped` (layout `antinomie.filemap/1`, 96 bytes per
+//!   range) is pages of a regular file written through a shared mapping,
+//!   which no call carries: the pages a call wrote back (msync, fsync) or
+//!   dropped dirty (munmap, exec, exit), with their content at that moment in
+//!   the field `lifecycle.file_mapped.data`, up to 4 MiB per call. Each page
+//!   is known as it was then; the stores in between are not seen.
+//!
 //! The byte layouts are in `protocol/control.h`.
 use crate::api::EventSummary;
 
@@ -68,6 +77,10 @@ pub const FILE_COPY_KEY: &str = "file.copy";
 /// The bytes a copy from a source that cannot be read again gave its
 /// destination (an Exit field, opaque bytes).
 pub const FILE_COPY_DATA_KEY: &str = "file.copy.data";
+/// Pages written through a shared mapping (a lifecycle record).
+pub const FILE_MAPPED_KEY: &str = "lifecycle.file_mapped";
+/// The bytes of the record before it (opaque bytes).
+pub const FILE_MAPPED_DATA_KEY: &str = "lifecycle.file_mapped.data";
 const CREDS_LAYOUT: &str = "antinomie.creds/2";
 const CREDS_LAYOUT_V1: &str = "antinomie.creds/1";
 const HASH_LAYOUT: &str = "antinomie.hash/1";
@@ -76,6 +89,8 @@ pub const FILE_ID_LAYOUT: &str = "antinomie.fileid/1";
 const EXEC_IMAGE_LAYOUT: &str = "antinomie.execimg/1";
 const FILE_POSITION_LAYOUT: &str = "antinomie.filepos/1";
 const FILE_COPY_LAYOUT: &str = "antinomie.filecopy/1";
+const FILE_MAPPED_LAYOUT: &str = "antinomie.filemap/1";
+const FILE_MAPPED_SIZE: usize = 96;
 const FILE_POSITION_SIZE: usize = 24;
 const FILE_COPY_SIZE: usize = 104;
 pub const FILE_ID_SIZE: usize = 32;
@@ -96,7 +111,7 @@ pub fn is_note(event: &EventSummary) -> bool {
         && event.fields.iter().any(|field| {
             matches!(
                 field.key.as_str(),
-                CREDS_KEY | HASH_KEY | FILE_ID_KEY | EXEC_IMAGE_KEY
+                CREDS_KEY | HASH_KEY | FILE_ID_KEY | EXEC_IMAGE_KEY | FILE_MAPPED_KEY
             )
         })
 }
@@ -680,6 +695,121 @@ pub fn file_copy(event: &EventSummary) -> Option<FileCopy> {
         data_cut: flags & 8 != 0,
         order: nonzero(u64_at(data, 96)),
     })
+}
+
+/// Why the kernel saw pages written through a mapping.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MappedCause {
+    /// The call wrote them back to the file (msync, fsync, sync).
+    Writeback,
+    /// The call removed a mapping that held them dirty (munmap, mremap,
+    /// exec, exit).
+    Unmap,
+    Unknown(u8),
+}
+
+/// Why bytes of a mapped range were not copied.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MappedCut {
+    /// The call had copied the guest's per-call budget already.
+    Budget,
+    /// The guest could not get memory for the copy.
+    Memory,
+    Unknown(u8),
+}
+
+/// A range of a regular file written through a shared mapping, as the kernel
+/// saw it at writeback or unmap: each page's state then, not every store.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FileMapped {
+    pub cause: MappedCause,
+    pub file: FileKey,
+    /// `i_mode` of the file.
+    pub mode: u32,
+    /// File offset of the range's first page.
+    pub offset: u64,
+    /// Bytes of the file in the range (whole pages, the last clipped to the
+    /// file size).
+    pub len: u64,
+    /// Bytes the guest copied, from `offset` on.
+    pub carried: u64,
+    /// Why `carried` is short of `len`.
+    pub cut: Option<MappedCut>,
+    pub page_size: u32,
+    /// The file's size when the first page was copied.
+    pub size: u64,
+    /// Guest monotonic time of the copy (the clock of event timestamps).
+    pub time_ns: u64,
+    /// The write order (as for [`FilePosition`]): the range holds every write
+    /// with a lower number and none with a higher one. `None` when a write was
+    /// in progress.
+    pub order: Option<u64>,
+    /// Pages the guest saw and could not list at all (first record only).
+    pub lost: u32,
+    /// Pages of the call past its listed records.
+    pub unlisted: u64,
+    /// The object id of the `lifecycle.file_mapped.data` field with the bytes.
+    pub data: Option<u32>,
+}
+
+/// The mapped-page records of a lifecycle `event`, in order.
+pub fn file_mapped(event: &EventSummary) -> Vec<FileMapped> {
+    if event.phase != 3 {
+        return Vec::new();
+    }
+    let mut fields: Vec<_> = event.fields.iter().collect();
+    fields.sort_by_key(|field| field.object_id);
+    let mut records = Vec::new();
+    for (index, field) in fields.iter().enumerate() {
+        if field.key != FILE_MAPPED_KEY
+            || field.layout != FILE_MAPPED_LAYOUT
+            || !field.complete
+            || field.preview.len() < FILE_MAPPED_SIZE
+        {
+            continue;
+        }
+        let data = &field.preview[..FILE_MAPPED_SIZE];
+        let carried = u64_at(data, 24);
+        // The bytes are the next field, when the guest sent any.
+        let bytes = fields
+            .get(index + 1)
+            .filter(|next| {
+                data[1] & 1 != 0
+                    && next.key == FILE_MAPPED_DATA_KEY
+                    && next.object_id == field.object_id.wrapping_add(1)
+            })
+            .map(|next| next.object_id);
+        records.push(FileMapped {
+            cause: match data[0] {
+                1 => MappedCause::Writeback,
+                2 => MappedCause::Unmap,
+                other => MappedCause::Unknown(other),
+            },
+            file: FileKey {
+                dev: u64_at(data, 32),
+                ino: u64_at(data, 40),
+                generation: u32_at(data, 48),
+            },
+            mode: u32_at(data, 52),
+            offset: u64_at(data, 8),
+            len: u64_at(data, 16),
+            carried: if bytes.is_some() { carried } else { 0 },
+            cut: match data[2] {
+                0 => None,
+                1 => Some(MappedCut::Budget),
+                2 => Some(MappedCut::Memory),
+                other => Some(MappedCut::Unknown(other)),
+            },
+            page_size: u32_at(data, 4),
+            size: u64_at(data, 56),
+            time_ns: u64_at(data, 64),
+            order: nonzero(u64_at(data, 72)),
+            lost: u32_at(data, 84),
+            unlisted: u64_at(data, 88),
+            data: bytes,
+        });
+    }
+    records
 }
 
 fn nonzero(value: u64) -> Option<u64> {

@@ -25,7 +25,9 @@
 //!
 //! The extent model is what the later file-reconstruction work builds on: a
 //! byte map assigns each file offset one of unknown (no extent), kept
-//! (written), or one of the [`Gap`] reasons (not captured).
+//! (written), mapping ([`Piece::Mapped`]: a page written through a shared
+//! mapping, as the guest saw it at writeback or unmap), or one of the [`Gap`]
+//! reasons (not captured).
 use crate::api::FieldSummary;
 use crate::recording;
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
@@ -159,6 +161,11 @@ pub enum Gap {
     FileCap,
     /// The run's cap was reached.
     RunCap,
+    /// Pages written through a mapping that the guest did not copy: the call
+    /// had copied its per-call budget already.
+    MappedBudget,
+    /// Pages written through a mapping that the guest had no memory to copy.
+    MappedMemory,
 }
 
 impl Gap {
@@ -167,6 +174,8 @@ impl Gap {
             Gap::NotRecorded => "not recorded by the kernel",
             Gap::FileCap => "past the per-file cap",
             Gap::RunCap => "past the per-run cap",
+            Gap::MappedBudget => "written through a mapping, past the guest's copy budget",
+            Gap::MappedMemory => "written through a mapping, the guest had no memory to copy it",
         }
     }
 }
@@ -175,6 +184,10 @@ impl Gap {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Piece {
     Kept(Source),
+    /// Pages written through a shared mapping, as they were when the guest
+    /// saw them written back or unmapped: the result of the stores, not each
+    /// store.
+    Mapped(Source),
     /// What the file held at the start of the run, read from the starting
     /// disk; the run's writes lie over it.
     Before(Source),
@@ -199,6 +212,7 @@ impl Extent {
         let (from, to) = (from.max(self.offset), to.min(self.end()));
         let piece = match &self.piece {
             Piece::Kept(source) => Piece::Kept(source.tail(from - self.offset).head(to - from)),
+            Piece::Mapped(source) => Piece::Mapped(source.tail(from - self.offset).head(to - from)),
             Piece::Before(source) => Piece::Before(source.tail(from - self.offset).head(to - from)),
             gap => gap.clone(),
         };
@@ -222,6 +236,8 @@ pub struct Tally {
     pub offset_unknown: u64,
     /// Written after the file's list of extents was full.
     pub unlisted: u64,
+    /// Of `kept`, the bytes of pages written through a mapping.
+    pub mapped: u64,
 }
 
 impl Tally {
@@ -237,6 +253,7 @@ impl Tally {
         self.not_recorded += other.not_recorded;
         self.offset_unknown += other.offset_unknown;
         self.unlisted += other.unlisted;
+        self.mapped += other.mapped;
     }
 }
 
@@ -327,6 +344,38 @@ impl Writes {
         captured: Vec<Captured>,
         order: Option<u64>,
     ) -> Vec<Extent> {
+        self.add_pieces(budget, offset, len, captured, order, None)
+    }
+
+    /// Pages written through a shared mapping, `len` bytes at `offset`, as the
+    /// guest copied them at writeback or unmap: `captured` are the stretches
+    /// it copied; the rest is [`Gap::MappedBudget`] or [`Gap::MappedMemory`]
+    /// (`missing`). The caps apply as to a write; `order` is the range's write
+    /// order. Returns the extents added, as [`Self::add_ordered`] does.
+    pub fn add_mapped(
+        &mut self,
+        budget: &mut Budget,
+        offset: u64,
+        len: u64,
+        captured: Vec<Captured>,
+        order: Option<u64>,
+        missing: Gap,
+    ) -> Vec<Extent> {
+        self.add_pieces(budget, Some(offset), len, captured, order, Some(missing))
+    }
+
+    /// A write (`mapped` is `None`) or a mapped range (`mapped` is the gap of
+    /// what the guest did not copy).
+    fn add_pieces(
+        &mut self,
+        budget: &mut Budget,
+        offset: Option<u64>,
+        len: u64,
+        captured: Vec<Captured>,
+        order: Option<u64>,
+        mapped: Option<Gap>,
+    ) -> Vec<Extent> {
+        let missing = mapped.unwrap_or(Gap::NotRecorded);
         let mut tally = Tally::default();
         let Some(offset) = offset.filter(|_| len > 0) else {
             tally.offset_unknown = len;
@@ -354,7 +403,7 @@ impl Writes {
             push(
                 cursor,
                 rel - cursor,
-                Piece::NotCaptured(Gap::NotRecorded),
+                Piece::NotCaptured(missing),
                 &mut pieces,
             );
             tally.not_recorded += rel - cursor;
@@ -369,13 +418,16 @@ impl Writes {
                 .saturating_sub(budget.run.kept + tally.kept);
             let keep = want.min(file_left).min(run_left);
             if keep > 0 {
-                push(
-                    rel,
-                    keep,
-                    Piece::Kept(stretch.source.tail(skip).head(keep)),
-                    &mut pieces,
-                );
+                let source = stretch.source.tail(skip).head(keep);
+                let piece = match mapped {
+                    Some(_) => Piece::Mapped(source),
+                    None => Piece::Kept(source),
+                };
+                push(rel, keep, piece, &mut pieces);
                 tally.kept += keep;
+                if mapped.is_some() {
+                    tally.mapped += keep;
+                }
             }
             if keep < want {
                 let (gap, counter) = if file_left <= run_left {
@@ -396,7 +448,7 @@ impl Writes {
         push(
             cursor,
             len - cursor,
-            Piece::NotCaptured(Gap::NotRecorded),
+            Piece::NotCaptured(missing),
             &mut pieces,
         );
         tally.not_recorded += len - cursor;
@@ -405,6 +457,7 @@ impl Writes {
             // not kept, so the totals stay true to what can be read back.
             tally.unlisted += tally.kept + tally.file_cap + tally.run_cap;
             tally.kept = 0;
+            tally.mapped = 0;
             tally.file_cap = 0;
             tally.run_cap = 0;
             pieces.clear();
@@ -495,7 +548,9 @@ impl Writes {
             if at >= end {
                 break;
             }
-            let (Piece::Kept(source) | Piece::Before(source)) = &extent.piece else {
+            let (Piece::Kept(source) | Piece::Mapped(source) | Piece::Before(source)) =
+                &extent.piece
+            else {
                 return Err(ReadError::NotCaptured(at));
             };
             let stop = extent.end().min(end);

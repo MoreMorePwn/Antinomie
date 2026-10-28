@@ -26,7 +26,7 @@ pub(super) enum LifecycleKind {
     Other = 0,
     /// The task ended in this call.
     TaskExit = 1,
-    /// Credentials or a file hash, read back with the call.
+    /// Credentials, a file hash, identity or mapped pages, read back with the call.
     KernelNote = 2,
 }
 
@@ -48,6 +48,7 @@ pub(super) fn lifecycle_field(header: &parser::Header, packet: &[u8]) -> Option<
         crate::kernel_notes::HASH_KEY,
         crate::kernel_notes::FILE_ID_KEY,
         crate::kernel_notes::EXEC_IMAGE_KEY,
+        crate::kernel_notes::FILE_MAPPED_KEY,
     ]
     .iter()
     .any(|key| name == key.as_bytes())

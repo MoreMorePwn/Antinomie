@@ -189,3 +189,51 @@ fn a_missing_object_is_unreadable_not_empty() {
     );
     assert_eq!(file.read(0, 4), Err(ReadError::Unreadable));
 }
+
+#[test]
+fn mapped_pages_lie_over_writes_as_mapping_and_the_rest_says_why_it_is_missing() {
+    let mut budget = Budget::new(Limits::default());
+    let mut file = Writes::default();
+    file.add_ordered(&mut budget, Some(0), 8, inline(b"wwwwwwww"), Some(1));
+    // A page written back by msync: the first 4 bytes copied, the rest past
+    // the guest's budget.
+    file.add_mapped(
+        &mut budget,
+        2,
+        8,
+        inline(b"MMMM"),
+        Some(2),
+        Gap::MappedBudget,
+    );
+    assert_eq!(file.read(0, 6).unwrap(), b"wwMMMM");
+    assert_eq!(file.read(0, 8), Err(ReadError::NotCaptured(6)));
+    let layout = file.layout();
+    assert!(matches!(layout[1].piece, Piece::Mapped(_)));
+    assert_eq!(
+        layout[2].piece,
+        Piece::NotCaptured(Gap::MappedBudget),
+        "the uncopied tail keeps the guest's reason"
+    );
+    assert_eq!((layout[2].offset, layout[2].len), (6, 4));
+    assert_eq!((file.tally.kept, file.tally.mapped), (12, 4));
+    assert_eq!(file.tally.not_recorded, 4);
+    // A write the file system applied before the copy (a lower number)
+    // reaching the host after it stays under it.
+    file.add_ordered(&mut budget, Some(2), 2, inline(b"ee"), Some(1));
+    assert_eq!(file.read(0, 6).unwrap(), b"wwMMMM");
+    // A page without bytes at all, for want of memory.
+    file.add_mapped(&mut budget, 20, 4, Vec::new(), None, Gap::MappedMemory);
+    assert_eq!(file.read(20, 1), Err(ReadError::NotCaptured(20)));
+    assert!(Gap::MappedMemory.label().contains("mapping"));
+}
+
+#[test]
+fn mapped_pages_count_against_the_caps_like_writes() {
+    let mut budget = small(6, 100);
+    let mut file = Writes::default();
+    file.add(&mut budget, Some(0), 4, inline(b"aaaa"));
+    file.add_mapped(&mut budget, 4, 4, inline(b"MMMM"), None, Gap::MappedBudget);
+    assert_eq!(file.read(0, 6).unwrap(), b"aaaaMM");
+    assert_eq!(file.read(6, 2), Err(ReadError::NotCaptured(6)));
+    assert_eq!((file.tally.file_cap, file.tally.mapped), (2, 2));
+}

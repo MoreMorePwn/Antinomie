@@ -286,6 +286,9 @@ pub enum Event {
     Start,
     Read,
     Written,
+    /// Written through a shared mapping: the page as the guest copied it at
+    /// writeback or unmap.
+    WrittenMapped,
     NotCaptured(Gap),
     Zeroed,
     Mapping,
@@ -301,6 +304,7 @@ impl Event {
             Event::Start => "held at the start of the run",
             Event::Read => "read",
             Event::Written => "written",
+            Event::WrittenMapped => "written through a shared mapping (as at writeback or unmap)",
             Event::NotCaptured(_) => "written, value not captured",
             Event::Zeroed => "zeroed",
             Event::Mapping => "under a shared writable mapping",
@@ -535,13 +539,14 @@ impl Reconstruction {
             Action::Write(extents) => {
                 for extent in extents {
                     match &extent.piece {
-                        Piece::Kept(source) | Piece::Before(source) => self.put(
-                            extent.offset,
-                            extent.len,
-                            State::Written,
-                            Fill::Bytes(source.clone()),
-                            index,
-                        ),
+                        Piece::Kept(source) | Piece::Mapped(source) | Piece::Before(source) => self
+                            .put(
+                                extent.offset,
+                                extent.len,
+                                State::Written,
+                                Fill::Bytes(source.clone()),
+                                index,
+                            ),
                         Piece::NotCaptured(gap) => self.put(
                             extent.offset,
                             extent.len,
@@ -718,7 +723,7 @@ impl Reconstruction {
             });
         }
         let value = |extent: &Extent| match &extent.piece {
-            Piece::Kept(source) | Piece::Before(source) => source
+            Piece::Kept(source) | Piece::Mapped(source) | Piece::Before(source) => source
                 .read(offset - extent.offset, 1)
                 .ok()
                 .and_then(|bytes| bytes.first().copied()),
@@ -742,6 +747,7 @@ impl Reconstruction {
                             step: index,
                             event: match extent.piece {
                                 Piece::NotCaptured(gap) => Event::NotCaptured(gap),
+                                Piece::Mapped(_) => Event::WrittenMapped,
                                 _ => Event::Written,
                             },
                             byte: value(extent),

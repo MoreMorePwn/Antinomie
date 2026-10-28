@@ -278,6 +278,14 @@ fn the_layouts_match_the_shared_control_header() {
         ("ANTC_FILECOPY_DATA", 4),
         ("ANTC_FILECOPY_DATA_CUT", 8),
         ("ANTC_FILECOPY_DATA_MAX", 1 << 20),
+        ("ANTC_FILEMAP_SIZE", FILE_MAPPED_SIZE),
+        ("ANTC_FILEMAP_WRITEBACK", 1),
+        ("ANTC_FILEMAP_UNMAP", 2),
+        ("ANTC_FILEMAP_DATA", 1),
+        ("ANTC_FILEMAP_CUT_BUDGET", 1),
+        ("ANTC_FILEMAP_CUT_MEMORY", 2),
+        ("ANTC_FILEMAP_DATA_MAX", 4 << 20),
+        ("ANTC_FILEMAP_RANGES", 64),
     ] {
         assert_eq!(define(name), value, "{name}");
     }
@@ -703,4 +711,126 @@ fn range_record() -> Vec<u8> {
         1,
         0,
     )
+}
+
+/// A `lifecycle.file_mapped` record: cause, flags, cut, (offset, len,
+/// carried), inode, size, time, write order, index, count, lost, unlisted.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn mapped_bytes(
+    cause: u8,
+    flags: u8,
+    cut: u8,
+    range: (u64, u64, u64),
+    ino: u64,
+    size: u64,
+    order: u64,
+    lost: u32,
+    unlisted: u64,
+) -> Vec<u8> {
+    let mut bytes = vec![cause, flags, cut, 0];
+    bytes.extend(4096u32.to_le_bytes());
+    bytes.extend(range.0.to_le_bytes());
+    bytes.extend(range.1.to_le_bytes());
+    bytes.extend(range.2.to_le_bytes());
+    bytes.extend(0xfe01u64.to_le_bytes());
+    bytes.extend(ino.to_le_bytes());
+    bytes.extend(3u32.to_le_bytes());
+    bytes.extend(0o100644u32.to_le_bytes());
+    bytes.extend(size.to_le_bytes());
+    bytes.extend(777u64.to_le_bytes());
+    bytes.extend(order.to_le_bytes());
+    bytes.extend(0u16.to_le_bytes());
+    bytes.extend(1u16.to_le_bytes());
+    bytes.extend(lost.to_le_bytes());
+    bytes.extend(unlisted.to_le_bytes());
+    bytes
+}
+
+fn data_field(object_id: u32, bytes: &[u8]) -> FieldSummary {
+    FieldSummary {
+        arg: None,
+        object_id,
+        key: FILE_MAPPED_DATA_KEY.into(),
+        layout: String::new(),
+        logical_len: Some(bytes.len() as u64),
+        captured_len: bytes.len() as u64,
+        status: Some(0),
+        capture_error: 0,
+        complete: true,
+        preview: bytes.to_vec(),
+        raw_path: None,
+        ranges: vec![(0, bytes.len() as u64)],
+        recapture: None,
+        encoding: None,
+    }
+}
+
+#[test]
+fn mapped_pages_name_the_file_the_range_the_copy_and_the_order() {
+    // Two pages written back by msync, both copied, then a range unmapped
+    // with no copy (past the budget) and no order (a write held the lock).
+    let first = mapped_bytes(1, 1, 0, (4096, 8192, 8192), 12, 10000, 41, 2, 0);
+    let second = mapped_bytes(2, 0, 1, (0, 4096, 0), 13, 4096, 0, 0, 5);
+    let mut event = note(FILE_MAPPED_KEY, FILE_MAPPED_LAYOUT, first);
+    event.fields.push(data_field(2, &[7; 16]));
+    let mut record = event.fields[0].clone();
+    record.object_id = 3;
+    record.preview = second;
+    event.fields.push(record);
+    assert!(is_note(&event));
+    let records = file_mapped(&event);
+    assert_eq!(records.len(), 2);
+    let msync = records[0];
+    assert_eq!(msync.cause, MappedCause::Writeback);
+    assert_eq!(
+        msync.file,
+        FileKey {
+            dev: 0xfe01,
+            ino: 12,
+            generation: 3
+        }
+    );
+    assert_eq!(
+        (msync.offset, msync.len, msync.carried, msync.cut),
+        (4096, 8192, 8192, None)
+    );
+    assert_eq!(
+        (msync.size, msync.time_ns, msync.order, msync.lost),
+        (10000, 777, Some(41), 2)
+    );
+    assert_eq!((msync.page_size, msync.data), (4096, Some(2)));
+    let unmap = records[1];
+    assert_eq!(unmap.cause, MappedCause::Unmap);
+    assert_eq!(
+        (
+            unmap.carried,
+            unmap.cut,
+            unmap.order,
+            unmap.unlisted,
+            unmap.data
+        ),
+        (0, Some(MappedCut::Budget), None, 5, None)
+    );
+}
+
+#[test]
+fn mapped_bytes_are_the_next_field_only_and_a_wrong_record_is_skipped() {
+    // DATA set but the next field is not the record's bytes: nothing carried.
+    let bytes = mapped_bytes(2, 1, 0, (0, 100, 100), 12, 100, 1, 0, 0);
+    let mut event = note(FILE_MAPPED_KEY, FILE_MAPPED_LAYOUT, bytes.clone());
+    event.fields.push(data_field(5, b"x"));
+    let records = file_mapped(&event);
+    assert_eq!((records[0].carried, records[0].data), (0, None));
+    // Short, of another layout, incomplete, or not a lifecycle record.
+    let mut short = note(FILE_MAPPED_KEY, FILE_MAPPED_LAYOUT, bytes[..95].to_vec());
+    assert!(file_mapped(&short).is_empty());
+    short.fields[0].preview = bytes.clone();
+    short.fields[0].layout = "antinomie.filemap/2".into();
+    assert!(file_mapped(&short).is_empty());
+    let mut partial = note(FILE_MAPPED_KEY, FILE_MAPPED_LAYOUT, bytes.clone());
+    partial.fields[0].complete = false;
+    assert!(file_mapped(&partial).is_empty());
+    let mut exit = note(FILE_MAPPED_KEY, FILE_MAPPED_LAYOUT, bytes);
+    exit.phase = 2;
+    assert!(file_mapped(&exit).is_empty());
 }

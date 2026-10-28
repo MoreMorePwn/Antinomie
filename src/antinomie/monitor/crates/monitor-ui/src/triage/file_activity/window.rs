@@ -696,13 +696,20 @@ fn file_written(ui: &mut egui::Ui, file: &FileActivity) {
         return;
     }
     ui.weak(format!("Written content: {}", tally_text(tally)));
+    if tally.mapped > 0 {
+        use antinomie_monitor_core::byte_size::file_size;
+        ui.weak(format!(
+            "of which {} through a shared mapping: each page as it was when written back or unmapped, not every store",
+            file_size(tally.mapped)
+        ));
+    }
     let gaps: Vec<_> = file
         .writes
         .layout()
         .into_iter()
         .filter_map(|extent| match extent.piece {
             Piece::NotCaptured(gap) => Some((extent.offset, extent.len, gap)),
-            Piece::Kept(_) | Piece::Before(_) => None,
+            Piece::Kept(_) | Piece::Mapped(_) | Piece::Before(_) => None,
         })
         .collect();
     for (offset, len, gap) in gaps.iter().take(8) {

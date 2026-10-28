@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Read only captured payload ranges; never concatenate across a capture hole.
 use super::*;
+use antinomie_monitor_core::api::FieldSummary;
 use antinomie_monitor_core::file_writes::{self, Captured, Source};
 use std::{path::PathBuf, sync::Arc};
 
@@ -155,44 +156,7 @@ fn stretches(
         if base >= size {
             break;
         }
-        let mut ranges: Vec<_> = field.ranges.iter().copied().take(4096).collect();
-        ranges.sort_unstable_by_key(|range| range.0);
-        let mut covered_end = 0;
-        for (start, length) in ranges {
-            let Some(end) = start.checked_add(length) else {
-                continue;
-            };
-            let start = start.max(covered_end);
-            if start >= end {
-                continue;
-            }
-            covered_end = end;
-            let Some(at) = base.checked_add(start).filter(|at| *at < size) else {
-                continue;
-            };
-            let count = (end - start).min(size - at);
-            match (directory, &field.raw_path) {
-                (Some(directory), Some(raw)) => stretches.push(Captured {
-                    rel: at,
-                    len: count,
-                    source: interned.source(directory, raw, start),
-                }),
-                _ => {
-                    let rest = usize::try_from(start)
-                        .ok()
-                        .and_then(|from| field.preview.get(from..))
-                        .unwrap_or_default();
-                    let kept = rest.len().min(usize::try_from(count).unwrap_or(usize::MAX));
-                    if kept > 0 {
-                        stretches.push(Captured {
-                            rel: at,
-                            len: kept as u64,
-                            source: Source::Inline(rest[..kept].to_vec()),
-                        });
-                    }
-                }
-            }
-        }
+        field_stretches_at(field, base, directory, size, interned, &mut stretches);
         if !vector {
             break;
         }
@@ -206,6 +170,92 @@ fn stretches(
     }
     stretches.sort_by_key(|stretch| stretch.rel);
     stretches
+}
+
+/// The captured stretches of one field whose bytes begin `base` bytes into
+/// a transfer of `size` bytes.
+fn field_stretches_at(
+    field: &FieldSummary,
+    base: u64,
+    directory: Option<&Path>,
+    size: u64,
+    interned: &mut Interned,
+    stretches: &mut Vec<Captured>,
+) {
+    for (start, end) in field_ranges(field) {
+        let Some(at) = base.checked_add(start).filter(|at| *at < size) else {
+            continue;
+        };
+        let count = (end - start).min(size - at);
+        match (directory, &field.raw_path) {
+            (Some(directory), Some(raw)) => stretches.push(Captured {
+                rel: at,
+                len: count,
+                source: interned.source(directory, raw, start),
+            }),
+            _ => {
+                let rest = usize::try_from(start)
+                    .ok()
+                    .and_then(|from| field.preview.get(from..))
+                    .unwrap_or_default();
+                let kept = rest.len().min(usize::try_from(count).unwrap_or(usize::MAX));
+                if kept > 0 {
+                    stretches.push(Captured {
+                        rel: at,
+                        len: kept as u64,
+                        source: Source::Inline(rest[..kept].to_vec()),
+                    });
+                }
+            }
+        }
+    }
+}
+
+/// A field's captured ranges, `(start, end)`, ascending and not overlapping.
+fn field_ranges(field: &FieldSummary) -> Vec<(u64, u64)> {
+    let mut ranges: Vec<_> = field.ranges.iter().copied().take(4096).collect();
+    ranges.sort_unstable_by_key(|range| range.0);
+    let mut covered_end = 0;
+    let mut out = Vec::new();
+    for (start, length) in ranges {
+        let Some(end) = start.checked_add(length) else {
+            continue;
+        };
+        let start = start.max(covered_end);
+        if start >= end {
+            continue;
+        }
+        covered_end = end;
+        out.push((start, end));
+    }
+    out
+}
+
+/// The stretches of the `size` bytes one field holds (the bytes of pages
+/// written through a mapping), as [`write_stretches`] gives a write's.
+pub(super) fn field_stretches(
+    field: &FieldSummary,
+    directory: Option<&Path>,
+    size: u64,
+    interned: &mut Interned,
+) -> Vec<Captured> {
+    let mut stretches = Vec::new();
+    field_stretches_at(field, 0, directory, size, interned, &mut stretches);
+    stretches
+}
+
+/// The bytes of one field, as [`capture`] reads a transfer's.
+pub(super) fn field_capture(
+    field: &FieldSummary,
+    directory: Option<&Path>,
+    size: u64,
+) -> CapturedPayload {
+    let mut result = CapturedPayload {
+        logical_size: size,
+        ..Default::default()
+    };
+    field_capture_at(field, 0, directory, size, &mut result);
+    result
 }
 
 /// Directory and object names shared by every extent of a field.
@@ -251,49 +301,7 @@ pub(super) fn capture(
         if base >= size {
             break;
         }
-        let mut ranges: Vec<_> = field.ranges.iter().copied().take(4096).collect();
-        ranges.sort_unstable_by_key(|range| range.0);
-        let mut covered_end = 0;
-        for (start, length) in ranges {
-            let Some(end) = start.checked_add(length) else {
-                continue;
-            };
-            let start = start.max(covered_end);
-            if start >= end {
-                continue;
-            }
-            covered_end = end;
-            let Some(at) = base.checked_add(start).filter(|at| *at < size) else {
-                continue;
-            };
-            let count = usize::try_from((end - start).min(size - at))
-                .unwrap_or(usize::MAX)
-                .min(65536usize.saturating_sub(result.captured_size));
-            if count == 0 || result.chunks.len() >= 1024 {
-                break;
-            }
-            let data = directory
-                .and_then(|directory| {
-                    antinomie_monitor_core::recording::read_captured_range(
-                        directory, field, start, count,
-                    )
-                    .ok()
-                })
-                .unwrap_or_else(|| {
-                    usize::try_from(start)
-                        .ok()
-                        .and_then(|start| field.preview.get(start..))
-                        .unwrap_or_default()
-                        .iter()
-                        .take(count)
-                        .copied()
-                        .collect()
-                });
-            if !data.is_empty() {
-                result.captured_size += data.len();
-                result.chunks.push((at, data));
-            }
-        }
+        field_capture_at(field, base, directory, size, &mut result);
         if !vector {
             break;
         }
@@ -306,4 +314,47 @@ pub(super) fn capture(
         base = next;
     }
     result
+}
+
+/// Read one field's captured bytes, placed `base` bytes into a transfer of
+/// `size` bytes, into `result` (at most 64 KiB and 1024 chunks in all).
+fn field_capture_at(
+    field: &FieldSummary,
+    base: u64,
+    directory: Option<&Path>,
+    size: u64,
+    result: &mut CapturedPayload,
+) {
+    for (start, end) in field_ranges(field) {
+        let Some(at) = base.checked_add(start).filter(|at| *at < size) else {
+            continue;
+        };
+        let count = usize::try_from((end - start).min(size - at))
+            .unwrap_or(usize::MAX)
+            .min(65536usize.saturating_sub(result.captured_size));
+        if count == 0 || result.chunks.len() >= 1024 {
+            break;
+        }
+        let data = directory
+            .and_then(|directory| {
+                antinomie_monitor_core::recording::read_captured_range(
+                    directory, field, start, count,
+                )
+                .ok()
+            })
+            .unwrap_or_else(|| {
+                usize::try_from(start)
+                    .ok()
+                    .and_then(|start| field.preview.get(start..))
+                    .unwrap_or_default()
+                    .iter()
+                    .take(count)
+                    .copied()
+                    .collect()
+            });
+        if !data.is_empty() {
+            result.captured_size += data.len();
+            result.chunks.push((at, data));
+        }
+    }
 }

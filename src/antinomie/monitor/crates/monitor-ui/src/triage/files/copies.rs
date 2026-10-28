@@ -74,7 +74,12 @@ impl Change {
 
     /// Put `bytes` (relative offset, value) at `offset`, within the retention
     /// limits.
-    fn place(&mut self, offset: u64, bytes: impl Iterator<Item = (u64, u8)>, retained: &mut usize) {
+    pub(super) fn place(
+        &mut self,
+        offset: u64,
+        bytes: impl Iterator<Item = (u64, u8)>,
+        retained: &mut usize,
+    ) {
         for (relative, byte) in bytes {
             let Some(at) = offset.checked_add(relative) else {
                 break;

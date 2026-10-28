@@ -7,6 +7,11 @@ use antinomie_monitor_core::kernel_notes::{CopyKind, FileCopy};
 
 /// The O_TRUNC bit of `open` flags.
 const O_TRUNC: u64 = 0x200;
+/// `mmap` protection and flag bits.
+const PROT_WRITE: u64 = 0x2;
+const MAP_TYPE: u64 = 0x3;
+const MAP_PRIVATE: u64 = 0x2;
+const MAP_ANONYMOUS: u64 = 0x20;
 
 /// The effect of call `name` that succeeded (`success`) and changed the file
 /// (`changed`). `copy` is the guest's record of an in-kernel copy or
@@ -27,6 +32,22 @@ pub(super) fn of(
         && flags.is_some_and(|flags| flags & O_TRUNC != 0)
     {
         return Some(Shape::Resize(0));
+    }
+    // A shared writable mapping of the file: its range may change with no
+    // further call. What a revision-18 guest saw written through it at
+    // writeback or unmap comes as writes of its own (files/mapped.rs).
+    if name == "mmap" {
+        return args
+            .filter(|args| {
+                args[2] & PROT_WRITE != 0
+                    && args[3] & MAP_TYPE != 0
+                    && args[3] & MAP_TYPE != MAP_PRIVATE
+                    && args[3] & MAP_ANONYMOUS == 0
+            })
+            .map(|args| Shape::Mapping {
+                offset: args[5],
+                len: args[1],
+            });
     }
     if !changed {
         return None;

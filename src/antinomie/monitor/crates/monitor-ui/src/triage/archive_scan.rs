@@ -336,6 +336,11 @@ pub(super) fn scan_archive_query(
             sigma_events::track(&mut files, invocation, event);
         }
         tabs.observe(request, &mut counts, &files, invocation, event, &hits)?;
+        // Pages the call wrote back or unmapped were copied before its own change.
+        if real {
+            let directory = Some(recording.directory.as_path());
+            file_index.observe_mapped(&files, invocation, event, directory, true);
+        }
         if let Some(row) =
             file_index.observe_with(&files, invocation, event, Some(&recording.directory), &hits)
         {
@@ -348,6 +353,8 @@ pub(super) fn scan_archive_query(
             }
         }
         if real {
+            let directory = Some(recording.directory.as_path());
+            file_index.observe_mapped(&files, invocation, event, directory, false);
             file_index.observe_hashes(&files, invocation, event);
         }
         Ok(())

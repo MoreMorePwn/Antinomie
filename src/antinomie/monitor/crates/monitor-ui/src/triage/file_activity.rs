@@ -10,8 +10,12 @@ use super::file_category::{Category, Hit};
 use super::files::result_label;
 use super::*;
 use antinomie_monitor_core::file_reconstruct::{Action, Step, Timeline};
-use antinomie_monitor_core::file_writes::{Budget, Captured, Extent, Limits, Piece, Tally, Writes};
-use antinomie_monitor_core::kernel_notes::{FileHash, FileId, FileKey};
+use antinomie_monitor_core::file_writes::{
+    Budget, Captured, Extent, Gap, Limits, Piece, Tally, Writes,
+};
+use antinomie_monitor_core::kernel_notes::{
+    FileHash, FileId, FileKey, FileMapped, MappedCause, MappedCut,
+};
 use std::collections::BTreeMap;
 
 mod earlier;
@@ -300,7 +304,7 @@ pub(super) enum Shape {
     Zero { offset: u64, len: u64 },
     /// A range or the whole file changed to bytes the run did not see.
     Changed { offset: u64, len: u64 },
-    /// A shared writable mapping covers the range (`msync`).
+    /// A shared writable mapping covers the range (`mmap`, `msync`).
     Mapping { offset: u64, len: u64 },
 }
 
@@ -317,6 +321,21 @@ pub(super) struct Transfer {
     /// The guest's write order (revision 18): racing writes to one file are
     /// laid in the order the file system applied them.
     pub order: Option<u64>,
+}
+
+/// Pages of a file written through a shared mapping, as the guest saw them
+/// at writeback or unmap (revision 18), for the file's history.
+pub(super) struct Mapped<'a> {
+    pub record: &'a FileMapped,
+    /// The name the file index knows the file by, if any.
+    pub path: Option<&'a str>,
+    /// The call the guest attached the pages to, and its event.
+    pub call: &'a InvocationSummary,
+    pub event: &'a EventSummary,
+    pub image: Option<&'a str>,
+    /// What the guest copied of the pages.
+    pub stretches: Vec<Captured>,
+    pub content: Vec<u8>,
 }
 
 /// Collects [`Record`]s into an [`Activity`]. A file is its identity where the
@@ -626,6 +645,112 @@ impl Builder {
                 self.current.insert(name, key);
             }
         }
+    }
+
+    /// Pages written through a mapping: a write of the file in its history,
+    /// placed as mapping ranges in its written content.
+    pub(super) fn mapped(&mut self, mapped: Mapped<'_>) {
+        let record = mapped.record;
+        let id = record.file;
+        let key = format!("id:{}:{}:{}", id.dev, id.ino, id.generation);
+        if !self.files.contains_key(&key) && self.files.len() >= FILES_MAX {
+            self.omitted_files += 1;
+            return;
+        }
+        let capped = self.events >= EVENTS_MAX
+            || self
+                .files
+                .get(&key)
+                .is_some_and(|file| file.events.len() >= EVENTS_PER_FILE);
+        let process = if capped {
+            0
+        } else {
+            self.process(mapped.event.pid, mapped.image)
+        };
+        let time = record.time_ns;
+        let file = self.files.entry(key).or_insert_with(|| FileActivity {
+            path: mapped.path.unwrap_or("path unknown").to_owned(),
+            path_known: mapped.path.is_some(),
+            names: Vec::new(),
+            identity: Some(id),
+            events: Vec::new(),
+            omitted: 0,
+            first_ns: time,
+            last_ns: time,
+            standard_io: false,
+            created: false,
+            deleted: false,
+            failed_only: false,
+            contents: Contents::default(),
+            hashes: Vec::new(),
+            writes: Writes::default(),
+            timeline: Timeline::default(),
+            first_segment: self.segment,
+            last_segment: self.segment,
+            earlier: None,
+        });
+        file.last_segment = file.last_segment.max(self.segment);
+        file.standard_io = false;
+        file.failed_only = false;
+        file.first_ns = file.first_ns.min(time);
+        file.last_ns = file.last_ns.max(time);
+        let missing = match record.cut {
+            Some(MappedCut::Memory) => Gap::MappedMemory,
+            _ => Gap::MappedBudget,
+        };
+        let added = file.writes.add_mapped(
+            &mut self.budget,
+            record.offset,
+            record.len,
+            mapped.stretches,
+            record.order,
+            missing,
+        );
+        // In the reconstruction the copied pages are the bytes written back
+        // or unmapped; the uncopied ones are not captured.
+        if !added.is_empty() {
+            if self.steps >= STEPS_MAX {
+                file.timeline.unlisted += 1;
+            } else if file.timeline.push(Step {
+                time_ns: time,
+                event: (!capped).then_some(file.events.len() as u32),
+                order: record.order,
+                action: Action::Write(added),
+            }) {
+                self.steps += 1;
+            }
+        }
+        if capped {
+            file.omitted += 1;
+            self.omitted_events += 1;
+            return;
+        }
+        self.events += 1;
+        let moment = match record.cause {
+            MappedCause::Writeback => "page state at writeback",
+            MappedCause::Unmap => "page state at unmap",
+            MappedCause::Unknown(_) => "page state when the guest saw it",
+        };
+        file.events.push(Event {
+            time,
+            key: trace::key(mapped.call),
+            process,
+            kind: Kind::Write,
+            operation: format!(
+                "{} · mapping",
+                file_events::operation_label(mapped.call, mapped.event)
+            ),
+            success: Some(true),
+            result: "through a shared mapping".into(),
+            offset: Some(record.offset),
+            len: Some(record.len),
+            content: mapped.content,
+            content_gap: record.carried < record.len,
+            extends: false,
+            via: None,
+            other_path: None,
+            note: format!("{moment}; stores in between not seen"),
+        });
     }
 
     /// A hash the guest took of the file `identity`, or else the one at `path`.

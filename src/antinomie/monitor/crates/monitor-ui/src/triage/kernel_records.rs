@@ -23,9 +23,10 @@
 //!   the interpreted `UID`, `AUID`, `GID` and the rest of that family follow,
 //!   as auditd's enriched format adds them (`unset`, `unknown(N)`).
 use super::*;
+use antinomie_monitor_core::api::FieldSummary;
 use antinomie_monitor_core::guest_names::GuestNames;
 use antinomie_monitor_core::kernel_notes::{
-    self, Credentials, ExecImage, FileCopy, FileHash, FileId, FilePosition, HashKind,
+    self, Credentials, ExecImage, FileCopy, FileHash, FileId, FileMapped, FilePosition, HashKind,
 };
 use std::collections::BTreeMap;
 
@@ -83,6 +84,31 @@ pub(super) fn file_position(call: &InvocationSummary) -> Option<FilePosition> {
 /// changed, when the guest recorded it (revision 18).
 pub(super) fn file_copy(call: &InvocationSummary) -> Option<FileCopy> {
     call.exit.as_ref().and_then(kernel_notes::file_copy)
+}
+
+/// The pages written through shared mappings this call's task wrote back or
+/// dropped dirty (revision 18), each with the field holding its bytes: those
+/// published before the call's exit (`before_exit`), or after it (the
+/// address space dropped when the task exited).
+pub(super) fn file_mapped(
+    call: &InvocationSummary,
+    before_exit: bool,
+) -> Vec<(FileMapped, Option<&FieldSummary>)> {
+    let exit_seq = call.exit.as_ref().map(|exit| exit.event_seq);
+    call.kernel_notes
+        .iter()
+        .filter(|note| exit_seq.is_some_and(|exit| note.event_seq < exit) == before_exit)
+        .flat_map(|note| {
+            kernel_notes::file_mapped(note)
+                .into_iter()
+                .map(move |record| {
+                    let data = record
+                        .data
+                        .and_then(|id| note.fields.iter().find(|field| field.object_id == id));
+                    (record, data)
+                })
+        })
+        .collect()
 }
 
 /// Sysmon `User` and `LogonId`.

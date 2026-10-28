@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod copies;
 mod ioc;
+mod mapped;
 mod order;
 mod shape;
 mod view;
@@ -349,6 +350,9 @@ impl FileIndex {
         hits: &[Hit],
     ) -> Option<Vec<Cell>> {
         let name = event.syscall_name.as_str();
+        if mapped::synced_named_pages(call, name) {
+            return None;
+        }
         let args = call_args(call);
         let ret = call.exit.as_ref().and_then(|event| event.result);
         let success = ret.is_some_and(|ret| ret >= 0);
@@ -2483,5 +2487,209 @@ mod tests {
         assert_eq!(map.sha256(), Err(Incomplete::Missing(4)));
         assert_eq!(map.bytes(0, 16).unwrap(), b"12345678abcdefgh");
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// A `lifecycle.file_mapped` record of inode `inode` (device 1,
+    /// generation 1, as `identified` names files), with its bytes.
+    fn with_mapped(
+        mut call: InvocationSummary,
+        before_exit: bool,
+        cause: u8,
+        (offset, len): (u64, u64),
+        data: &[u8],
+        inode: u64,
+        order: u64,
+    ) -> InvocationSummary {
+        let mut bytes = vec![0u8; 96];
+        bytes[0] = cause;
+        bytes[1] = u8::from(!data.is_empty());
+        bytes[2] = u8::from((data.len() as u64) < len);
+        bytes[4..8].copy_from_slice(&4096u32.to_le_bytes());
+        bytes[8..16].copy_from_slice(&offset.to_le_bytes());
+        bytes[16..24].copy_from_slice(&len.to_le_bytes());
+        bytes[24..32].copy_from_slice(&(data.len() as u64).to_le_bytes());
+        bytes[32..40].copy_from_slice(&1u64.to_le_bytes());
+        bytes[40..48].copy_from_slice(&inode.to_le_bytes());
+        bytes[48..52].copy_from_slice(&1u32.to_le_bytes());
+        bytes[52..56].copy_from_slice(&0o100644u32.to_le_bytes());
+        bytes[56..64].copy_from_slice(&(offset + len).to_le_bytes());
+        bytes[64..72].copy_from_slice(&900u64.to_le_bytes());
+        bytes[72..80].copy_from_slice(&order.to_le_bytes());
+        let mut note = call.exit.clone().unwrap();
+        note.phase = 3;
+        note.event_seq = if before_exit { 1 } else { 3 };
+        call.exit.as_mut().unwrap().event_seq = 2;
+        let mut record = captured("lifecycle.file_mapped", "antinomie.filemap/1", &bytes);
+        record.object_id = 1;
+        note.fields = vec![record];
+        if !data.is_empty() {
+            let mut bytes = captured("lifecycle.file_mapped.data", "", data);
+            bytes.object_id = 2;
+            note.fields.push(bytes);
+        }
+        call.kernel_notes.push(note);
+        call
+    }
+
+    fn index_with_mappings(calls: &[InvocationSummary]) -> FileIndex {
+        let mut index = FileIndex::default();
+        let mut files = FdState::default();
+        let cookies = task_cookies(calls);
+        for call in calls {
+            let event = trace::representative(call).unwrap();
+            remember_cwd(&mut files, call, event);
+            remember_open(&mut files, call, event);
+            apply_dup(&mut files, call, event);
+            forget_closed(&mut files, call, event);
+            inherit_open_fds(&mut files, call, event, &cookies);
+            index.observe_mapped(&files, call, event, None, true);
+            index.observe(&files, call, event, None);
+            index.observe_mapped(&files, call, event, None, false);
+            index.observe_hashes(&files, call, event);
+        }
+        index
+    }
+
+    #[test]
+    fn pages_written_through_a_mapping_change_the_file_and_join_its_history() {
+        let calls = [
+            create(2, "/tmp/mapped", 60, 1),
+            operation(3, 1, "write", 10, [3, 0, 10, 0, 0, 0], b"0123456789"),
+            operation(4, 9, "mmap", 0x7000, [0, 10, 3, 1, 3, 0], b""),
+            // msync wrote back the page; its record replaces the file's bytes.
+            with_mapped(
+                operation(5, 26, "msync", 0, [0x7000, 10, 4, 0, 0, 0], b""),
+                true,
+                1,
+                (0, 10),
+                b"MAPPEDDATA",
+                60,
+                7,
+            ),
+            // The process exits with the page dirty again: the record comes
+            // after the exit of its last call, with the hash of the last close.
+            with_write_hash(
+                with_mapped(
+                    operation(6, 231, "exit_group", 0, [0; 6], b""),
+                    false,
+                    2,
+                    (0, 10),
+                    b"FINALBYTES",
+                    60,
+                    8,
+                ),
+                60,
+                0,
+            ),
+        ];
+        let index = index_with_mappings(&calls);
+        let (changes, activity) = index.finish_all();
+        // The msync names no file: no entry for a descriptor it does not have.
+        assert_eq!(
+            changes.len(),
+            1,
+            "{:?}",
+            changes.iter().map(|c| &c.path).collect::<Vec<_>>()
+        );
+        let change = &changes[0];
+        assert_eq!(change.path, "/tmp/mapped");
+        let bytes: Vec<u8> = change.final_data.values().copied().collect();
+        assert_eq!(bytes, b"FINALBYTES");
+        assert_eq!(change.final_size, Some(10));
+        assert!(change
+            .gaps
+            .iter()
+            .any(|gap| gap.starts_with("Written through a shared mapping")));
+        let text = change.lifecycle_text();
+        assert!(text.contains("written back through a mapping"), "{text}");
+        assert!(
+            text.ends_with("closed after write · SHA-256 cdcdcdcdcdcd…"),
+            "{text}"
+        );
+        let file = file(&activity, "/tmp/mapped");
+        let mapped: Vec<_> = file
+            .events
+            .iter()
+            .filter(|event| event.operation.ends_with("· mapping"))
+            .map(|event| {
+                (
+                    event.operation.as_str(),
+                    event.offset,
+                    event.len,
+                    event.content.clone(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            mapped,
+            [
+                ("msync · mapping", Some(0), Some(10), b"MAPPEDDATA".to_vec()),
+                (
+                    "exit_group · mapping",
+                    Some(0),
+                    Some(10),
+                    b"FINALBYTES".to_vec()
+                ),
+            ]
+        );
+        assert_eq!(file.writes.read(0, 10).unwrap(), b"FINALBYTES");
+        assert_eq!(file.writes.tally.mapped, 20);
+        assert_eq!(file.hashes.len(), 1);
+        // The reconstruction: the mapping makes the range "may have changed"
+        // (~~) until the pages the guest copied are written over it.
+        use antinomie_monitor_core::file_reconstruct::{Event, Reconstruction, Start};
+        assert_eq!(
+            steps_of(file),
+            [
+                ("write", 0, 10),
+                ("mapping", 0, 10),
+                ("write", 0, 10),
+                ("write", 0, 10)
+            ]
+        );
+        let mut map = Reconstruction::new(Start::default(), &file.timeline);
+        map.goto(2);
+        assert_eq!(map.counts().mapping, 10);
+        map.goto(3);
+        assert_eq!(map.bytes(0, 10).unwrap(), b"MAPPEDDATA");
+        map.goto(4);
+        assert_eq!(map.bytes(0, 10).unwrap(), b"FINALBYTES");
+        assert_eq!(
+            map.history(0).last().map(|line| line.event),
+            Some(Event::WrittenMapped)
+        );
+    }
+
+    #[test]
+    fn mapped_pages_the_guest_did_not_copy_stay_unknown_and_say_why() {
+        let calls = [
+            create(2, "/tmp/big", 61, 1),
+            with_mapped(
+                operation(3, 11, "munmap", 0, [0x7000, 8192, 0, 0, 0, 0], b""),
+                true,
+                2,
+                (0, 8192),
+                b"head",
+                61,
+                0,
+            ),
+        ];
+        let (changes, activity) = index_with_mappings(&calls).finish_all();
+        let change = changes.iter().find(|c| c.path == "/tmp/big").unwrap();
+        assert!(change.gaps.iter().any(|gap| gap.contains("did not copy")));
+        assert_eq!(change.final_data.len(), 4);
+        let layout = file(&activity, "/tmp/big").writes.layout();
+        assert_eq!(
+            layout
+                .last()
+                .map(|extent| (extent.offset, extent.len, extent.piece.clone())),
+            Some((
+                4,
+                8188,
+                antinomie_monitor_core::file_writes::Piece::NotCaptured(
+                    antinomie_monitor_core::file_writes::Gap::MappedBudget
+                )
+            ))
+        );
     }
 }
