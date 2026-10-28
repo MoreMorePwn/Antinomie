@@ -76,6 +76,17 @@ impl Worker {
                 .recording_directory
                 .join("boots")
                 .join(&boot_id);
+            // The disk as the boot finds it, before QEMU opens it: what a run's
+            // earlier file bytes are read from later.
+            let disk_start = crate::snapshots::active_disk(&self.options, &vm)
+                .ok()
+                .map(|disk| {
+                    crate::disk_start::DiskStart::capture(
+                        &disk,
+                        &boot_id,
+                        crate::disk_start::Via::Start,
+                    )
+                });
             let process = VmProcess::launch(&self.options, &vm, &bundle)?;
             self.snapshot.serial_log = Some(process.runtime_dir.join("serial.log"));
             self.snapshot
@@ -85,6 +96,11 @@ impl Worker {
             let capture_dir = boot_dir.join("unassigned");
             let mut capture =
                 RawCapture::new(capture_dir.clone(), self.options.capture_quota_size)?;
+            if let Some(disk_start) = &disk_start {
+                // Best effort: without it the window says the starting disk
+                // was not recorded.
+                let _ = disk_start.save(&boot_dir);
+            }
             capture.queue_manifest(&vm, &bundle, &disk_bundle, "starting")?;
             self.snapshot.capture_dir = Some(capture_dir.clone());
             let mut assembler =

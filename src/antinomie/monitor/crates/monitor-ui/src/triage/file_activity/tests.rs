@@ -46,6 +46,9 @@ fn file(path: &str, first_ns: u64, events: Vec<Event>) -> FileActivity {
         contents: Contents::default(),
         hashes: Vec::new(),
         writes: Default::default(),
+        first_segment: 0,
+        last_segment: 0,
+        earlier: None,
     }
 }
 

@@ -603,6 +603,9 @@ fn written_summary(ui: &mut egui::Ui, activity: &Activity) {
 /// One file's written content: kept and skipped, and where the gaps are.
 fn file_written(ui: &mut egui::Ui, file: &FileActivity) {
     let tally = &file.writes.tally;
+    if let Some(earlier) = &file.earlier {
+        ui.weak(super::earlier::describe(earlier));
+    }
     if tally.kept == 0 && tally.skipped() == 0 {
         return;
     }
@@ -613,7 +616,7 @@ fn file_written(ui: &mut egui::Ui, file: &FileActivity) {
         .into_iter()
         .filter_map(|extent| match extent.piece {
             Piece::NotCaptured(gap) => Some((extent.offset, extent.len, gap)),
-            Piece::Kept(_) => None,
+            Piece::Kept(_) | Piece::Before(_) => None,
         })
         .collect();
     for (offset, len, gap) in gaps.iter().take(8) {

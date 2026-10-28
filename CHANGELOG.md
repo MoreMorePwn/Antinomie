@@ -16,6 +16,20 @@ it runs.
   and per file, and says why a range is missing (cap, not recorded by the
   kernel, unknown offset).
 
+- **File activity reads a changed file's earlier bytes from the disk the run
+  started from.** At every boot the app records which frozen layers (the
+  installed base and any checkpoint) sit under the VM's writable disk. For a file
+  the run changed that existed at the start, the window finds it on that disk
+  (by path, and by inode, generation, size, owner and time when the guest named
+  the inode, so a name another file took over is not mistaken for it) and reads
+  its bytes on demand with the sandboxed disk reader over the qcow2 chain; nothing
+  is copied into the recording or mounted. Files the run created start empty.
+  The window says when earlier bytes are not available: the file is on tmpfs or
+  another mount, it is over 1 GiB, the VM's disk already held changes from earlier
+  boots when the run started (start from a new VM or restore a checkpoint to keep
+  the starting state), a snapshot restore replaced the disk while the run used the
+  file, or the base or checkpoint was deleted or changed afterwards.
+
 - **Library › Samples lists every sample across runs and VMs.** One flat list,
   the sample with the latest run first: name, description, tags (verdict and
   malware category; techniques and custom tags fold into `+N`), run count,

@@ -49,16 +49,41 @@ pub(super) fn kind_of(kind: FileType) -> DiskEntryKind {
 
 /// The filesystem of a raw ext4 image or of a standalone qcow2 image (an
 /// installed base), read through the qcow2 tables without converting it.
-fn load(image: &Path) -> Result<Ext4, ReadError> {
-    let mut file = std::fs::File::open(image).map_err(|error| ReadError::Io(error.to_string()))?;
+fn load(image: &Path, lower: &[PathBuf]) -> Result<Ext4, ReadError> {
+    Ext4::load(raw_disk(image, lower)?).map_err(map_error)
+}
+
+/// The bytes of the disk `image` shows, with the layers `lower` below it (a
+/// qcow2 chain, top first after `image`) when there are any.
+pub(super) fn raw_disk(
+    image: &Path,
+    lower: &[PathBuf],
+) -> Result<Box<dyn ext4_view::Ext4Read>, ReadError> {
+    let io = |error: std::io::Error| ReadError::Io(error.to_string());
+    let mut file = std::fs::File::open(image).map_err(io)?;
     let mut magic = [0u8; 4];
     let qcow2 =
         std::io::Read::read_exact(&mut file, &mut magic).is_ok() && super::qcow2::is_qcow2(&magic);
     if !qcow2 {
-        return Ext4::load_from_path(image).map_err(map_error);
+        if !lower.is_empty() {
+            return Err(ReadError::Unsupported(
+                "a raw image has no layers below it".into(),
+            ));
+        }
+        return Ok(Box::new(file));
     }
-    let disk = super::qcow2::Qcow2::open(file).map_err(ReadError::Unsupported)?;
-    Ext4::load(Box::new(disk)).map_err(map_error)
+    if lower.is_empty() {
+        return super::qcow2::Qcow2::open(file)
+            .map(|disk| Box::new(disk) as Box<dyn ext4_view::Ext4Read>)
+            .map_err(ReadError::Unsupported);
+    }
+    let mut layers = vec![file];
+    for path in lower {
+        layers.push(std::fs::File::open(path).map_err(io)?);
+    }
+    super::qcow2::Qcow2::open_chain(layers)
+        .map(|disk| Box::new(disk) as Box<dyn ext4_view::Ext4Read>)
+        .map_err(ReadError::Unsupported)
 }
 
 /// An opened image: the filesystem, or why it cannot be read (every request
@@ -68,6 +93,8 @@ pub struct Image {
     /// The reference image of a diff (`/other`), when one is mounted.
     other: Option<Result<Ext4, ReadError>>,
     image: PathBuf,
+    /// The layers below `image` of a qcow2 chain (the run's starting disk).
+    lower: Vec<PathBuf>,
     out: PathBuf,
 }
 
@@ -79,9 +106,21 @@ impl Image {
     /// [`Self::open`] with a reference image to diff against.
     pub fn open_with(image: &Path, other: Option<&Path>, out: &Path) -> Self {
         Self {
-            fs: load(image),
-            other: other.map(load),
+            fs: load(image, &[]),
+            other: other.map(|other| load(other, &[])),
             image: image.to_path_buf(),
+            lower: Vec::new(),
+            out: out.to_path_buf(),
+        }
+    }
+
+    /// The disk a qcow2 chain shows: `image` on top, `lower` below it.
+    pub fn open_chain(image: &Path, lower: &[PathBuf], out: &Path) -> Self {
+        Self {
+            fs: load(image, lower),
+            other: None,
+            image: image.to_path_buf(),
+            lower: lower.to_vec(),
             out: out.to_path_buf(),
         }
     }
@@ -107,6 +146,17 @@ impl Image {
                     fs,
                     diff::Limits::default(),
                 )))
+            }
+            DiskRequest::Locate {
+                path,
+                ino,
+                generation,
+            } => self
+                .locate(fs, &path, ino, generation)
+                .map(DiskAnswer::Located),
+            DiskRequest::ReadRange { path, offset, len } => {
+                read_range(fs, &path, offset, len, &self.out.join(id.to_string()))
+                    .map(DiskAnswer::Ranged)
             }
             DiskRequest::Extract { path, max_len } => {
                 extract(fs, &path, max_len, &self.out.join(id.to_string()))
@@ -139,6 +189,56 @@ impl Image {
             self.fs.as_ref().map_err(Clone::clone)?,
             limits,
         ))
+    }
+
+    /// Whether the regular file at `path` is the inode `ino` of generation
+    /// `generation`, read raw from the disk (see [`super::inode`]).
+    fn locate(
+        &self,
+        fs: &Ext4,
+        path: &str,
+        ino: Option<u64>,
+        generation: Option<u32>,
+    ) -> Result<DiskLocation, ReadError> {
+        let path = checked_path(fs, path, Leaf::Any)?;
+        let metadata = fs.symlink_metadata(path.as_str()).map_err(map_error)?;
+        let located = |size, matched| DiskLocation {
+            path: path.clone(),
+            size,
+            matched,
+        };
+        let different = |why: &str| {
+            Ok(located(
+                metadata.len(),
+                LocationMatch::Different(why.to_owned()),
+            ))
+        };
+        if metadata.file_type() != FileType::Regular {
+            return different("the path is not a regular file on the starting disk");
+        }
+        let Some(ino) = ino else {
+            return Ok(located(metadata.len(), LocationMatch::PathOnly));
+        };
+        let mut disk = raw_disk(&self.image, &self.lower)?;
+        let raw = match super::inode::read_inode(disk.as_mut(), ino) {
+            Ok(raw) => raw,
+            Err(reason) => return different(&format!("the inode could not be read: {reason}")),
+        };
+        if raw.links == 0 || raw.mode & 0o170_000 != 0o100_000 {
+            return different("that inode is not a file in use on the starting disk");
+        }
+        if generation.is_some_and(|generation| generation != raw.generation) {
+            return different("that inode number held another file on the starting disk");
+        }
+        let same = raw.size == metadata.len()
+            && u32::from(raw.mode & 0o7777) == u32::from(metadata.mode())
+            && raw.uid == metadata.uid()
+            && raw.gid == metadata.gid()
+            && i64::from(raw.mtime) == metadata.modified().seconds() & 0xffff_ffff;
+        if !same {
+            return different("the path led to a different file on the starting disk");
+        }
+        Ok(located(metadata.len(), LocationMatch::Inode))
     }
 
     fn probe(&self, fs: &Ext4) -> Result<DiskImageInfo, ReadError> {
@@ -328,6 +428,56 @@ fn info(fs: &Ext4, path: &str, hash_cap: u64) -> Result<DiskFileInfo, ReadError>
     details.sha256 = Some(format!("{:x}", sha.finalize()));
     details.md5 = Some(format!("{:x}", md5.finalize()));
     Ok(details)
+}
+
+/// Write `len` bytes of the regular file at `path`, from `offset`, to `target`
+/// (created exclusively, mode 0600). Fewer are written at the end of the file.
+fn read_range(
+    fs: &Ext4,
+    path: &str,
+    offset: u64,
+    len: u64,
+    target: &Path,
+) -> Result<RangeReceipt, ReadError> {
+    if len > RANGE_LIMIT {
+        return Err(ReadError::Limit(format!(
+            "a range read gives at most {RANGE_LIMIT} bytes"
+        )));
+    }
+    let path = checked_path(fs, path, Leaf::Any)?;
+    let metadata = fs.symlink_metadata(path.as_str()).map_err(map_error)?;
+    if metadata.file_type() != FileType::Regular {
+        return Err(ReadError::Io("only regular files can be read".into()));
+    }
+    let io = |error: std::io::Error| ReadError::Io(error.to_string());
+    let mut file = fs.open(path.as_str()).map_err(map_error)?;
+    file.seek_to(offset.min(metadata.len()))
+        .map_err(map_error)?;
+    let want = usize::try_from(len.min(metadata.len().saturating_sub(offset))).unwrap_or(0);
+    let mut data = vec![0u8; want];
+    let mut filled = 0;
+    while filled < want {
+        let count = file.read_bytes(&mut data[filled..]).map_err(map_error)?;
+        if count == 0 {
+            break;
+        }
+        filled += count;
+    }
+    data.truncate(filled);
+    let mut output = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(target)
+        .map_err(io)?;
+    if let Err(error) = output.write_all(&data).and_then(|()| output.sync_all()) {
+        drop(output);
+        let _ = std::fs::remove_file(target);
+        return Err(io(error));
+    }
+    Ok(RangeReceipt {
+        len: data.len() as u64,
+    })
 }
 
 /// Write a regular file, or a link's target as text, to `target` (created

@@ -14,6 +14,7 @@ mod content;
 mod diff;
 mod glob;
 pub mod image;
+mod inode;
 pub mod protocol;
 pub mod qcow2;
 pub mod serve;
@@ -22,6 +23,8 @@ pub use client::Reader;
 pub use protocol::*;
 pub use serve::worker_main_if_requested;
 
+#[cfg(test)]
+mod before_tests;
 #[cfg(test)]
 mod content_diff_tests;
 #[cfg(test)]

@@ -36,6 +36,8 @@ pub const DIFF_RESULT_LIMIT: usize = 20_000;
 pub const DIFF_SCAN_LIMIT: u64 = 2_000_000;
 /// Diff: wall-clock budget, in seconds.
 pub const DIFF_SECONDS: u64 = 120;
+/// Range read: the most bytes one request returns.
+pub const RANGE_LIMIT: u64 = 4 * 1024 * 1024;
 /// Diff: the largest file whose bytes are compared.
 pub const DIFF_COMPARE_LIMIT: u64 = 64 * 1024 * 1024;
 
@@ -88,6 +90,16 @@ pub enum DiskRequest {
     /// Write a regular file (or a link's target) to `/out/<request id>`,
     /// at most `max_len` bytes.
     Extract { path: String, max_len: u64 },
+    /// Whether the file at `path` is the inode a run saw (`ino`, and its
+    /// `generation` when known); the file's size when it is.
+    Locate {
+        path: String,
+        ino: Option<u64>,
+        generation: Option<u32>,
+    },
+    /// Write at most `len` (and [`RANGE_LIMIT`]) bytes of a regular file from
+    /// `offset` to `/out/<request id>`.
+    ReadRange { path: String, offset: u64, len: u64 },
     /// Compare the image with the reference mounted at `/other` (the
     /// "before"): the added, deleted and changed entries.
     Diff,
@@ -298,8 +310,37 @@ pub struct ExtractReceipt {
     pub sha256: String,
 }
 
+/// How sure a located file is the one the run saw.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LocationMatch {
+    /// The inode number is in use here, with the same generation, and the
+    /// path leads to an inode with the same type, size, owner and time.
+    Inode,
+    /// The run named no inode; the path is all there is to go on.
+    PathOnly,
+    /// The path leads to another file (or none): the file the run saw was not
+    /// at this path on this disk. Says why.
+    Different(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiskLocation {
+    pub path: String,
+    pub size: u64,
+    pub matched: LocationMatch,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RangeReceipt {
+    /// Bytes written to `/out/<request id>`; fewer than asked at the end of
+    /// the file.
+    pub len: u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DiskAnswer {
+    Located(DiskLocation),
+    Ranged(RangeReceipt),
     Probed(DiskImageInfo),
     Listed(DiskListing),
     Info(DiskFileInfo),

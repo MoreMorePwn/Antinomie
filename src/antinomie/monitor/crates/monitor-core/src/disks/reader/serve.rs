@@ -6,7 +6,7 @@ use super::{
 };
 use std::{
     io::{self, BufRead, Read, Write},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 /// A request line is at most this long; a longer one ends the worker.
@@ -61,7 +61,16 @@ pub fn worker_main_if_requested() -> Option<i32> {
         let other = Path::new(OTHER_PATH)
             .is_file()
             .then(|| Path::new(OTHER_PATH));
-        let image = Image::open_with(Path::new(IMAGE_PATH), other, Path::new(OUT_PATH));
+        // Layers of a qcow2 chain below the image, when the parent mounted any.
+        let lower: Vec<_> = (1..)
+            .map(|index| PathBuf::from(format!("/layer{index}")))
+            .take_while(|path| path.is_file())
+            .collect();
+        let image = if lower.is_empty() {
+            Image::open_with(Path::new(IMAGE_PATH), other, Path::new(OUT_PATH))
+        } else {
+            Image::open_chain(Path::new(IMAGE_PATH), &lower, Path::new(OUT_PATH))
+        };
         serve(&image, io::stdin().lock(), io::stdout().lock()).map_err(|error| error.to_string())
     })();
     if let Err(error) = &result {

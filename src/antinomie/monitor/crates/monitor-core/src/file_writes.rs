@@ -60,6 +60,12 @@ impl Default for Limits {
 pub enum Source {
     /// A copy held with the extent (a short capture the recording kept inline).
     Inline(Vec<u8>),
+    /// A range of a file on the run's starting disk, read on demand.
+    Disk {
+        file: crate::file_before::DiskFile,
+        /// Where in the file the range starts.
+        at: u64,
+    },
     /// A range of a captured field in the run's object store.
     Object {
         /// The recording directory the field belongs to.
@@ -83,6 +89,10 @@ impl Source {
                 raw: raw.clone(),
                 at: at + skip,
             },
+            Source::Disk { file, at } => Source::Disk {
+                file: file.clone(),
+                at: at + skip,
+            },
         }
     }
 
@@ -103,6 +113,12 @@ impl Source {
                 .ok()
                 .and_then(|from| bytes.get(from..from.checked_add(usize::try_from(len).ok()?)?))
                 .map(<[u8]>::to_vec)
+                .ok_or(ReadError::Unreadable),
+            Source::Disk { file, at } => file
+                .disk
+                .read(&file.path, at + skip, len)
+                .ok()
+                .filter(|bytes| bytes.len() as u64 == len)
                 .ok_or(ReadError::Unreadable),
             Source::Object { recording, raw, at } => {
                 let start = at + skip;
@@ -159,6 +175,9 @@ impl Gap {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Piece {
     Kept(Source),
+    /// What the file held at the start of the run, read from the starting
+    /// disk; the run's writes lie over it.
+    Before(Source),
     NotCaptured(Gap),
 }
 
@@ -180,6 +199,7 @@ impl Extent {
         let (from, to) = (from.max(self.offset), to.min(self.end()));
         let piece = match &self.piece {
             Piece::Kept(source) => Piece::Kept(source.tail(from - self.offset).head(to - from)),
+            Piece::Before(source) => Piece::Before(source.tail(from - self.offset).head(to - from)),
             gap => gap.clone(),
         };
         Extent {
@@ -235,6 +255,13 @@ impl Budget {
             run: Tally::default(),
         }
     }
+}
+
+/// What a file held when the run started: `size` bytes readable from `source`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Before {
+    pub size: u64,
+    pub source: Source,
 }
 
 /// Why a range could not be read back.
@@ -374,8 +401,22 @@ impl Writes {
     /// The extents with later writes laid over earlier ones: ascending,
     /// not overlapping. Offsets no extent covers are unknown.
     pub fn layout(&self) -> Vec<Extent> {
+        self.layout_over(None)
+    }
+
+    /// [`Self::layout`] over what the file held when the run started: the
+    /// bytes no write covers are the earlier ones ([`Piece::Before`]), up to
+    /// its size.
+    pub fn layout_over(&self, before: Option<&Before>) -> Vec<Extent> {
         let mut laid: BTreeMap<u64, Extent> = BTreeMap::new();
-        for extent in &self.extents {
+        let earlier = before
+            .filter(|before| before.size > 0)
+            .map(|before| Extent {
+                offset: 0,
+                len: before.size,
+                piece: Piece::Before(before.source.clone()),
+            });
+        for extent in earlier.iter().chain(&self.extents) {
             let (from, to) = (extent.offset, extent.end());
             let touching: Vec<u64> = laid
                 .range(..to)
@@ -400,10 +441,20 @@ impl Writes {
     /// The bytes `[offset, offset + len)` as the run wrote them, or the first
     /// reason they cannot be given. Never fills a gap.
     pub fn read(&self, offset: u64, len: u64) -> Result<Vec<u8>, ReadError> {
+        self.read_over(None, offset, len)
+    }
+
+    /// [`Self::read`] with the file's earlier bytes under the writes.
+    pub fn read_over(
+        &self,
+        before: Option<&Before>,
+        offset: u64,
+        len: u64,
+    ) -> Result<Vec<u8>, ReadError> {
         let end = offset.checked_add(len).ok_or(ReadError::Unknown(offset))?;
         let mut out = Vec::with_capacity(usize::try_from(len).unwrap_or(0).min(1 << 26));
         let mut at = offset;
-        for extent in self.layout() {
+        for extent in self.layout_over(before) {
             if extent.end() <= at {
                 continue;
             }
@@ -413,7 +464,7 @@ impl Writes {
             if at >= end {
                 break;
             }
-            let Piece::Kept(source) = &extent.piece else {
+            let (Piece::Kept(source) | Piece::Before(source)) = &extent.piece else {
                 return Err(ReadError::NotCaptured(at));
             };
             let stop = extent.end().min(end);

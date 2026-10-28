@@ -22,6 +22,7 @@ fn sandbox_available() -> bool {
         Path::new("/usr/bin/true"),
         &image,
         None,
+        &[],
         &out,
         account.passwd(),
     );
@@ -44,6 +45,7 @@ fn the_command_line_uses_the_shared_profile_with_the_reader_binds() {
         Path::new("/opt/antinomie-monitor"),
         Path::new("/data/root.ext4"),
         Some(Path::new("/data/before.ext4")),
+        &[],
         Path::new("/data/out"),
         Path::new("/run/account/passwd"),
     )
@@ -127,6 +129,7 @@ echo "limits:$(/usr/bin/grep -E '^(Max address space|Max open files|Max core fil
         Path::new("/usr/bin/true"),
         &image,
         None,
+        &[],
         &out,
         account.passwd(),
     );

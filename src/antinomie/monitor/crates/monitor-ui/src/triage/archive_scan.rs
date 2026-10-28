@@ -384,7 +384,15 @@ pub(super) fn scan_archive_query(
         ..TriageInput::empty()
     });
     let omitted_files = file_index.omitted_files;
-    let (all_changes, activity) = file_index.finish_all();
+    let (all_changes, mut activity) = file_index.finish_all();
+    super::file_activity::resolve_earlier(
+        &mut activity,
+        &segments
+            .iter()
+            .map(|segment| (segment.directory.clone(), segment.boot_id.clone()))
+            .collect::<Vec<_>>(),
+        None,
+    );
     let ioc_files: Vec<files::IocFile> = all_changes
         .iter()
         .filter_map(files::Change::ioc_file)

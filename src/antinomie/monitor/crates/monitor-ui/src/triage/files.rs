@@ -287,6 +287,7 @@ impl FileIndex {
     /// from 0), after a transport reconnect.
     pub fn begin_segment(&mut self, segment: usize) {
         self.segment = segment;
+        self.activity.set_segment(segment);
     }
 
     /// The hashes the guest took of files of this run: at the last close of a

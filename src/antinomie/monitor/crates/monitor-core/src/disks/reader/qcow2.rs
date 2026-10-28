@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! A read-only view of a standalone qcow2 image as the raw disk it holds, for
-//! `ext4-view`.
+//! A read-only view of a qcow2 image (or of a chain of them) as the raw disk
+//! it holds, for `ext4-view`.
 //!
 //! An installed base is a qcow2 file of a whole-disk ext4 filesystem. Reading
 //! a few files from it (the guest's `/etc/passwd` and `/etc/group`) must not
@@ -8,7 +8,13 @@
 //! follows the image's own tables instead. Only what a base uses is read:
 //! qcow2 version 2 or 3, no encryption, no backing file, no external data
 //! file, no extended L2 entries, and zlib (deflate) compressed clusters.
-//! Anything else is refused, never guessed at. Every offset and length comes
+//! Anything else is refused, never guessed at.
+//!
+//! A backing file is followed only when the caller hands over the whole chain
+//! ([`Qcow2::open_chain`], top layer first): the worker never resolves a
+//! backing name itself, so the only files it can read are the ones the parent
+//! mounted. A cluster a layer does not hold reads from the layer below, and
+//! past the end of a smaller layer below as zeros, as qemu does. Every offset and length comes
 //! from the file and is checked before use; the tables a read needs are kept
 //! (bounded), one decompressed cluster at a time.
 use std::{
@@ -44,6 +50,9 @@ pub struct Qcow2 {
     l2: BTreeMap<u64, Vec<u64>>,
     /// The last decompressed cluster: its host entry and bytes.
     compressed: Option<(u64, Vec<u8>)>,
+    /// The layer below, when the header names a backing file and the caller
+    /// handed the chain over.
+    backing: Option<Box<Qcow2>>,
 }
 
 /// Whether `header` starts like a qcow2 image.
@@ -59,7 +68,38 @@ fn be64(data: &[u8], at: usize) -> u64 {
 }
 
 impl Qcow2 {
-    pub fn open(mut file: File) -> Result<Self, String> {
+    /// A standalone image: a header that names a backing file is refused.
+    pub fn open(file: File) -> Result<Self, String> {
+        let (layer, has_backing) = Self::open_layer(file)?;
+        if has_backing {
+            return Err("a qcow2 image with a backing file is not read on its own".into());
+        }
+        Ok(layer)
+    }
+
+    /// The disk a chain of layers shows, `layers` from the top (the image
+    /// the guest wrote last) down to the base. Every layer but the last must
+    /// name a backing file and the last must not.
+    pub fn open_chain(layers: Vec<File>) -> Result<Self, String> {
+        let mut below: Option<Qcow2> = None;
+        let count = layers.len();
+        for (index, file) in layers.into_iter().enumerate().rev() {
+            let (mut layer, has_backing) = Self::open_layer(file)?;
+            if has_backing != (index + 1 < count) {
+                return Err(if has_backing {
+                    "the qcow2 chain ends in an image that still names a backing file".into()
+                } else {
+                    "a qcow2 layer of the chain names no backing file".into()
+                });
+            }
+            layer.backing = below.take().map(Box::new);
+            below = Some(layer);
+        }
+        below.ok_or_else(|| "no qcow2 image given".to_owned())
+    }
+
+    /// One layer, and whether its header names a backing file.
+    fn open_layer(mut file: File) -> Result<(Self, bool), String> {
         let file_size = file.seek(SeekFrom::End(0)).map_err(|e| e.to_string())?;
         let mut header = [0u8; 112];
         let length = header.len().min(usize::try_from(file_size).unwrap_or(0));
@@ -77,9 +117,6 @@ impl Qcow2 {
         let l1_offset = be64(&header, 40);
         if !(2..=3).contains(&version) {
             return Err(format!("qcow2 version {version} is not supported"));
-        }
-        if backing_offset != 0 {
-            return Err("a qcow2 image with a backing file is not read on its own".into());
         }
         if crypt != 0 {
             return Err("encrypted qcow2 images are not supported".into());
@@ -126,15 +163,19 @@ impl Qcow2 {
             .iter()
             .map(|entry| u64::from_be_bytes(*entry))
             .collect();
-        Ok(Self {
-            file,
-            file_size,
-            cluster_bits,
-            virtual_size,
-            l1,
-            l2: BTreeMap::new(),
-            compressed: None,
-        })
+        Ok((
+            Self {
+                file,
+                file_size,
+                cluster_bits,
+                virtual_size,
+                l1,
+                l2: BTreeMap::new(),
+                compressed: None,
+                backing: None,
+            },
+            backing_offset != 0,
+        ))
     }
 
     pub fn virtual_size(&self) -> u64 {
@@ -219,6 +260,21 @@ impl Qcow2 {
         Ok(&self.compressed.as_ref().expect("filled above").1)
     }
 
+    /// [`Self::read_at`] for a layer below another: bytes past its end read
+    /// as zeros.
+    fn read_clamped(&mut self, start: u64, dst: &mut [u8]) -> Result<(), String> {
+        let inside = self
+            .virtual_size
+            .saturating_sub(start)
+            .min(dst.len() as u64) as usize;
+        let (head, tail) = dst.split_at_mut(inside);
+        if !head.is_empty() {
+            self.read_at(start, head)?;
+        }
+        tail.fill(0);
+        Ok(())
+    }
+
     /// Fill `dst` with the guest bytes from `start`.
     pub fn read_at(&mut self, start: u64, dst: &mut [u8]) -> Result<(), String> {
         let end = start
@@ -237,8 +293,15 @@ impl Qcow2 {
                 out.copy_from_slice(&cluster[within as usize..][..count]);
             } else {
                 let host = entry & OFFSET_MASK;
-                if host == 0 || entry & ZERO != 0 {
+                if entry & ZERO != 0 {
                     out.fill(0);
+                } else if host == 0 {
+                    // Not in this layer: the layer below holds it, or nothing
+                    // does and it reads as zeros.
+                    match self.backing.as_deref_mut() {
+                        Some(below) => below.read_clamped(at, out)?,
+                        None => out.fill(0),
+                    }
                 } else if !host.is_multiple_of(cluster_size)
                     || host
                         .checked_add(cluster_size)
@@ -342,6 +405,70 @@ mod tests {
             std::fs::read(out.join("7")).unwrap(),
             b"root:x:0:0:root:/root:/bin/sh\n"
         );
+    }
+
+    /// A chain reads each cluster from the topmost layer that holds it, a
+    /// smaller layer below reads as zeros past its end, and a layer that
+    /// names no backing (or a base that still does) is refused.
+    #[test]
+    fn a_chain_reads_through_to_the_layer_that_holds_each_cluster() {
+        require_tools!();
+        let fixture = Fixture::new();
+        let raw = fixture.path("base.raw");
+        let base_bytes: Vec<u8> = (0..(1 << 20)).map(|i: usize| (i % 251) as u8).collect();
+        File::create(&raw).unwrap().write_all(&base_bytes).unwrap();
+        let base = fixture.path("base.qcow2");
+        convert(&raw, &base, false);
+        let top = fixture.path("top.qcow2");
+        let status = Command::new("qemu-img")
+            .args(["create", "-q", "-f", "qcow2", "-b"])
+            .arg(&base)
+            .args(["-F", "qcow2"])
+            .arg(&top)
+            .arg("2M")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let status = Command::new("qemu-io")
+            .args([
+                "-f",
+                "qcow2",
+                "-c",
+                "write -P 0xab 70000 5000",
+                "-c",
+                "write -P 0xcd 1500000 10",
+            ])
+            .arg(&top)
+            .output()
+            .unwrap()
+            .status;
+        assert!(status.success());
+        let mut want = base_bytes.clone();
+        want.resize(2 << 20, 0);
+        want[70000..75000].fill(0xab);
+        want[1_500_000..1_500_010].fill(0xcd);
+        let open = || {
+            Qcow2::open_chain(vec![File::open(&top).unwrap(), File::open(&base).unwrap()]).unwrap()
+        };
+        let mut chain = open();
+        assert_eq!(chain.virtual_size(), 2 << 20);
+        for (start, length) in [
+            (0, 4096),
+            (69_990, 5_100),
+            (1 << 20, 100),
+            (1_499_990, 30),
+            (1_048_000, 2_000),
+        ] {
+            let mut out = vec![0x11; length];
+            chain.read_at(start, &mut out).unwrap();
+            assert_eq!(out, want[start as usize..][..length], "{start}");
+        }
+        assert!(Qcow2::open_chain(vec![File::open(&top).unwrap()]).is_err());
+        assert!(
+            Qcow2::open_chain(vec![File::open(&base).unwrap(), File::open(&base).unwrap()])
+                .is_err()
+        );
+        assert!(Qcow2::open(File::open(&top).unwrap()).is_err());
     }
 
     #[test]

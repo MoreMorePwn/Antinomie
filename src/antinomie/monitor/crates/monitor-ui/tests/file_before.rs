@@ -1,0 +1,267 @@
+// SPDX-License-Identifier: GPL-3.0-only
+//! A file's earlier bytes from a run's starting disk, with the real
+//! `--disk-reader` worker of the `antinomie-monitor` binary: a small ext4
+//! base built with `mkfs.ext4 -d` (holding /etc/crontab and
+//! /etc/ld.so.preload), converted to qcow2, with the VM's overlay and a
+//! checkpoint layer on top as the app lays them out. Skipped without
+//! bubblewrap, qemu-img or e2fsprogs.
+use antinomie_monitor_core::{
+    disk_start::{DiskStart, Start, Via},
+    file_before::{Before, Resolver, Wanted},
+    file_writes::{Before as Under, Writes},
+    kernel_notes::FileKey,
+};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
+
+const CRONTAB: &[u8] = b"# /etc/crontab: system-wide crontab\nSHELL=/bin/sh\n17 * * * * root cd / && run-parts --report /etc/cron.hourly\n";
+const PRELOAD: &[u8] = b"/usr/lib/libgood.so\n";
+
+fn tool(name: &str) -> Option<PathBuf> {
+    ["/sbin", "/usr/sbin", "/usr/bin", "/bin"]
+        .iter()
+        .map(|dir| Path::new(dir).join(name))
+        .find(|path| path.is_file())
+}
+
+fn qemu_img(args: &[&std::ffi::OsStr]) {
+    let status = Command::new("qemu-img").args(args).output().unwrap().status;
+    assert!(status.success(), "{args:?}");
+}
+
+fn stat(debugfs: &Path, image: &Path, path: &str) -> FileKey {
+    let output = Command::new(debugfs)
+        .arg("-R")
+        .arg(format!("stat {path}"))
+        .arg(image)
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&output.stdout).into_owned();
+    let field = |name: &str| -> u64 {
+        let at = text.find(name).unwrap();
+        text[at + name.len()..]
+            .trim_start()
+            .split(|c: char| !c.is_ascii_digit())
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap()
+    };
+    FileKey {
+        dev: 0x801,
+        ino: field("Inode:"),
+        generation: field("Generation:") as u32,
+    }
+}
+
+#[test]
+fn a_modified_files_earlier_bytes_match_the_base_image() {
+    let (Some(mkfs), Some(debugfs)) = (tool("mkfs.ext4"), tool("debugfs")) else {
+        eprintln!("skipped: e2fsprogs is needed");
+        return;
+    };
+    if !Path::new("/usr/bin/bwrap").is_file()
+        || !Path::new("/usr/bin/prlimit").is_file()
+        || Command::new("qemu-img").arg("--version").output().is_err()
+    {
+        eprintln!("skipped: bubblewrap, prlimit and qemu-img are needed");
+        return;
+    }
+    let root = std::env::temp_dir().join(format!("ant-file-before-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let tree = root.join("tree");
+    fs::create_dir_all(tree.join("etc")).unwrap();
+    fs::create_dir_all(tree.join("dev/shm")).unwrap();
+    fs::write(tree.join("etc/crontab"), CRONTAB).unwrap();
+    fs::write(tree.join("etc/ld.so.preload"), PRELOAD).unwrap();
+    let raw = root.join("base.raw");
+    fs::File::create(&raw).unwrap().set_len(16 << 20).unwrap();
+    assert!(Command::new(mkfs)
+        .args(["-q", "-F", "-b", "4096", "-d"])
+        .arg(&tree)
+        .arg(&raw)
+        .status()
+        .unwrap()
+        .success());
+    let crontab = stat(&debugfs, &raw, "/etc/crontab");
+    let preload = stat(&debugfs, &raw, "/etc/ld.so.preload");
+    let base = root.join("base.qcow2");
+    qemu_img(&[
+        "convert".as_ref(),
+        "-f".as_ref(),
+        "raw".as_ref(),
+        "-O".as_ref(),
+        "qcow2".as_ref(),
+        raw.as_os_str(),
+        base.as_os_str(),
+    ]);
+    fs::remove_file(&raw).unwrap();
+    // The VM's writable overlay, empty at the boot's start.
+    let active = root.join("disk.qcow2");
+    qemu_img(&[
+        "create".as_ref(),
+        "-q".as_ref(),
+        "-f".as_ref(),
+        "qcow2".as_ref(),
+        "-b".as_ref(),
+        base.as_os_str(),
+        "-F".as_ref(),
+        "qcow2".as_ref(),
+        active.as_os_str(),
+    ]);
+
+    // The boot records its starting disk; the run's folder is inside it.
+    let boot = root.join("rec/boots/b1");
+    let run = boot.join("runs/r1");
+    fs::create_dir_all(&run).unwrap();
+    let start = DiskStart::capture(&active, "b1", Via::Start);
+    assert!(matches!(start.start, Start::Frozen(_)), "{start:?}");
+    start.save(&boot).unwrap();
+
+    // Then the run changes the files: the overlay fills up. The starting
+    // disk is untouched, so the earlier bytes still read.
+    let status = Command::new("qemu-io")
+        .args(["-f", "qcow2", "-c", "write -P 0x41 0 4096"])
+        .arg(&active)
+        .output()
+        .unwrap()
+        .status;
+    assert!(status.success());
+
+    let app = Path::new(env!("CARGO_BIN_EXE_antinomie-monitor")).to_path_buf();
+    let mut resolver = Resolver::new(&[(run.clone(), "b1".into())], Some(app.clone()));
+    let wanted = |path: &'static str, key: Option<FileKey>, created: bool| Wanted {
+        path,
+        names: &[],
+        key,
+        created,
+        first_segment: 0,
+        last_segment: 0,
+    };
+    let (before, file) = resolver.resolve(&wanted("/etc/crontab", Some(crontab), false));
+    if let Before::Unavailable(why) = &before {
+        if why.contains("namespace") || why.contains("sandbox") || why.contains("isolation") {
+            eprintln!("skipped: {why}");
+            let _ = fs::remove_dir_all(&root);
+            return;
+        }
+    }
+    assert_eq!(
+        before,
+        Before::OnDisk {
+            size: CRONTAB.len() as u64,
+            exact: true
+        }
+    );
+    let file = file.unwrap();
+    assert_eq!(file.disk.read(&file.path, 0, 4096).unwrap(), CRONTAB);
+
+    // The run wrote 8 bytes at offset 10; laid over the earlier bytes, the
+    // file reads as before except there, and the bytes under it still read.
+    let (before, file) = resolver.resolve(&wanted("/etc/ld.so.preload", Some(preload), false));
+    assert_eq!(
+        before,
+        Before::OnDisk {
+            size: PRELOAD.len() as u64,
+            exact: true
+        }
+    );
+    let file = file.unwrap();
+    let mut writes = Writes::default();
+    let mut budget = antinomie_monitor_core::file_writes::Budget::default();
+    writes.add(
+        &mut budget,
+        Some(10),
+        8,
+        vec![antinomie_monitor_core::file_writes::Captured {
+            rel: 0,
+            len: 8,
+            source: antinomie_monitor_core::file_writes::Source::Inline(b"EVIL.so\n".to_vec()),
+        }],
+    );
+    let under = Under {
+        size: PRELOAD.len() as u64,
+        source: antinomie_monitor_core::file_writes::Source::Disk {
+            file: file.clone(),
+            at: 0,
+        },
+    };
+    let mut expect = PRELOAD.to_vec();
+    expect[10..18].copy_from_slice(b"EVIL.so\n");
+    assert_eq!(
+        writes
+            .read_over(Some(&under), 0, PRELOAD.len() as u64)
+            .unwrap(),
+        expect
+    );
+    assert_eq!(file.disk.read(&file.path, 0, 4096).unwrap(), PRELOAD);
+
+    // Created by the run: starts empty. A path the disk does not hold (tmpfs).
+    assert_eq!(
+        resolver.resolve(&wanted("/etc/new", None, true)).0,
+        Before::Created
+    );
+    assert!(matches!(
+        resolver.resolve(&wanted("/dev/shm/x", None, false)).0,
+        Before::Elsewhere(_)
+    ));
+    // Another file's inode at the crontab's path: not the file the run saw.
+    assert!(matches!(
+        resolver
+            .resolve(&wanted("/etc/crontab", Some(preload), false))
+            .0,
+        Before::Elsewhere(_)
+    ));
+    // The guest recorded no inode: the path alone matches.
+    assert_eq!(
+        resolver.resolve(&wanted("/etc/crontab", None, false)).0,
+        Before::OnDisk {
+            size: CRONTAB.len() as u64,
+            exact: false
+        }
+    );
+    // Used both before and after a restore: no single starting disk.
+    let later = root.join("rec/boots/b2/runs/r1");
+    fs::create_dir_all(&later).unwrap();
+    DiskStart {
+        boot_id: "b2".into(),
+        via: Via::Restore,
+        ..start.clone()
+    }
+    .save(later.parent().unwrap().parent().unwrap())
+    .unwrap();
+    let mut two = Resolver::new(
+        &[(run.clone(), "b1".into()), (later, "b2".into())],
+        Some(app.clone()),
+    );
+    let spans = Wanted {
+        last_segment: 1,
+        ..wanted("/etc/crontab", Some(crontab), false)
+    };
+    assert!(matches!(two.resolve(&spans).0, Before::Unavailable(why) if why.contains("restore")));
+    let after = Wanted {
+        first_segment: 1,
+        last_segment: 1,
+        ..wanted("/etc/crontab", Some(crontab), false)
+    };
+    assert!(matches!(two.resolve(&after).0, Before::OnDisk { .. }));
+
+    // A boot with no record, and a base that is gone.
+    let bare = root.join("bare/runs/r1");
+    fs::create_dir_all(&bare).unwrap();
+    let mut none = Resolver::new(&[(bare, "b0".into())], Some(app.clone()));
+    assert!(matches!(
+        none.resolve(&wanted("/etc/crontab", None, false)).0,
+        Before::Unavailable(why) if why.contains("not recorded")
+    ));
+    fs::remove_file(&base).unwrap();
+    let mut gone = Resolver::new(&[(run, "b1".into())], Some(app));
+    assert!(matches!(
+        gone.resolve(&wanted("/etc/crontab", None, false)).0,
+        Before::Unavailable(why) if why.contains("gone")
+    ));
+    let _ = fs::remove_dir_all(&root);
+}

@@ -876,6 +876,13 @@ impl Worker {
             }
             let checkpoint = checkpoint.ok_or("snapshot has no host context")?;
             let effective = vm.clone();
+            // The restored timeline's disk, before the guest runs again: a new
+            // empty overlay on the checkpoint's frozen layers.
+            let disk_start = crate::disk_start::DiskStart::capture(
+                &prepared.active_disk,
+                "",
+                crate::disk_start::Via::Restore,
+            );
             let process = VmProcess::launch_incoming(
                 &self.options,
                 &effective,
@@ -924,6 +931,13 @@ impl Worker {
                     success: false,
                     message: error,
                 });
+            }
+            if let Some(boot_dir) = session.capture.directory.parent() {
+                let _ = crate::disk_start::DiskStart {
+                    boot_id: session.boot_id.clone(),
+                    ..disk_start
+                }
+                .save(boot_dir);
             }
             session.capture.queue_manifest(
                 &session.vm,

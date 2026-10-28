@@ -58,6 +58,9 @@ pub struct Reader {
     image: PathBuf,
     /// The reference image of a diff, mounted at `/other`.
     other: Option<PathBuf>,
+    /// The layers below `image` of a qcow2 chain, mounted at `/layer1`,
+    /// `/layer2`, and so on.
+    lower: Vec<PathBuf>,
     out: PathBuf,
     account: Account,
     live: Option<Live>,
@@ -71,10 +74,11 @@ pub(crate) fn sandbox_command(
     executable: &Path,
     image: &Path,
     other: Option<&Path>,
+    lower: &[PathBuf],
     out: &Path,
     account: &Path,
 ) -> Command {
-    let mut command = sandbox_base(executable, image, other, out, account);
+    let mut command = sandbox_base(executable, image, other, lower, out, account);
     command.args(["/worker", "--disk-reader"]);
     command
 }
@@ -87,6 +91,7 @@ pub(crate) fn sandbox_base(
     executable: &Path,
     image: &Path,
     other: Option<&Path>,
+    lower: &[PathBuf],
     out: &Path,
     account: &Path,
 ) -> Command {
@@ -101,6 +106,12 @@ pub(crate) fn sandbox_base(
         .arg("/image");
     if let Some(other) = other {
         command.arg("--ro-bind").arg(other).arg("/other");
+    }
+    for (index, layer) in lower.iter().enumerate() {
+        command
+            .arg("--ro-bind")
+            .arg(layer)
+            .arg(format!("/layer{}", index + 1));
     }
     command
         .arg("--bind")
@@ -153,6 +164,30 @@ impl Reader {
         )
     }
 
+    /// A reader of the disk a qcow2 chain shows: `layers` from the top down
+    /// to the base (at least one). The worker reads them in this order and
+    /// never resolves a backing name itself.
+    pub fn open_chain(layers: &[PathBuf], out: &Path) -> Result<Self, String> {
+        Self::with_executable_and_chain(crate::analysis::jobs::worker_executable()?, layers, out)
+    }
+
+    /// [`Self::open_chain`] with an explicit worker program (tests).
+    pub fn with_executable_and_chain(
+        executable: PathBuf,
+        layers: &[PathBuf],
+        out: &Path,
+    ) -> Result<Self, String> {
+        let (top, lower) = layers.split_first().ok_or("no disk image given")?;
+        let mut reader = Self::with_executable_and_other(executable, top, None, out)?;
+        for path in lower {
+            if !path.is_file() {
+                return Err(format!("{} is not a disk image", path.display()));
+            }
+        }
+        reader.lower = lower.to_vec();
+        Ok(reader)
+    }
+
     pub fn with_executable_and_other(
         executable: PathBuf,
         image: &Path,
@@ -171,6 +206,7 @@ impl Reader {
             executable,
             image: image.to_path_buf(),
             other: other.map(Path::to_path_buf),
+            lower: Vec::new(),
             out: out.to_path_buf(),
             account: Account::new()?,
             live: None,
@@ -207,6 +243,7 @@ impl Reader {
             &self.executable,
             &self.image,
             self.other.as_deref(),
+            &self.lower,
             &self.out,
             self.account.passwd(),
         );

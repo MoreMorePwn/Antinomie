@@ -13,8 +13,11 @@ use antinomie_monitor_core::file_writes::{Budget, Captured, Limits, Tally, Write
 use antinomie_monitor_core::kernel_notes::{FileHash, FileId, FileKey};
 use std::collections::BTreeMap;
 
+mod earlier;
 mod graph;
 mod window;
+
+pub(super) use earlier::resolve as resolve_earlier;
 
 pub(super) use window::{Window, CALLS_TABLE, FILE_TABLE};
 
@@ -179,6 +182,22 @@ pub(super) struct FileActivity {
     /// The ranges the run wrote, kept within the budget or marked not
     /// captured; unlike `events` they are not bounded by the event cap.
     pub writes: Writes,
+    /// The recording segments of the run the file was first and last used in.
+    pub first_segment: usize,
+    pub last_segment: usize,
+    /// What the run's starting disk says of the file's earlier bytes; `None`
+    /// until looked up (only files the run changed are).
+    pub earlier: Option<Earlier>,
+}
+
+/// A file's bytes at the start of the run, and where to read them.
+#[derive(Clone, Debug)]
+pub(super) struct Earlier {
+    pub before: antinomie_monitor_core::file_before::Before,
+    /// Where the bytes are read from; the File Reconstruction byte map
+    /// (a later card) is its reader.
+    #[allow(dead_code)]
+    pub file: Option<antinomie_monitor_core::file_before::DiskFile>,
 }
 
 impl FileActivity {
@@ -285,6 +304,8 @@ pub(super) struct Builder {
     omitted_files: u64,
     omitted_events: u64,
     budget: Budget,
+    /// The recording segment being read.
+    segment: usize,
 }
 
 fn kind_of(hits: &[Hit], name: &str, transfer: Option<&Transfer>) -> Kind {
@@ -321,6 +342,11 @@ fn kind_of(hits: &[Hit], name: &str, transfer: Option<&Transfer>) -> Kind {
 }
 
 impl Builder {
+    /// The calls that follow come from recording segment `segment`.
+    pub(super) fn set_segment(&mut self, segment: usize) {
+        self.segment = segment;
+    }
+
     /// The caps on the write content kept (set before the first call).
     pub(super) fn set_limits(&mut self, limits: Limits) {
         self.budget = Budget::new(limits);
@@ -441,7 +467,11 @@ impl Builder {
                 contents: Contents::default(),
                 hashes: Vec::new(),
                 writes: Writes::default(),
+                first_segment: self.segment,
+                last_segment: self.segment,
+                earlier: None,
             });
+        file.last_segment = file.last_segment.max(self.segment);
         if !file.path_known && path_known {
             file.path = path.clone();
             file.path_known = true;
