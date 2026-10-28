@@ -357,6 +357,10 @@ impl<'a> Judge<'a> {
             };
             result.file_ok = Some(ok);
         }
+        if expect.pos.is_some() || expect.nopos || expect.copy.is_some() {
+            let ok = check_file_ops(expect, call, &mut result.problems);
+            result.file_ok = Some(result.file_ok.unwrap_or(true) && ok);
+        }
         if !expect.requests.is_empty() {
             let ok = self.check_async(expect, index, &mut result);
             result.async_ok = Some(ok);
@@ -803,6 +807,110 @@ fn check_recaptures(expect: &Expect, call: &InvocationSummary, result: &mut Case
     }
 }
 
+/// Writes that raced on one range (`before`): the file's bytes showed the
+/// program which the file system applied last, and the guest's write order
+/// must say the same, whatever order the exits were recorded in.
+pub fn check_write_order(
+    expects: &[Expect],
+    cases: &mut [CaseResult],
+    calls: &[InvocationSummary],
+) {
+    let by_key: HashMap<Key, &InvocationSummary> = calls.iter().map(|c| (key(c), c)).collect();
+    let order = |case: &CaseResult| {
+        let call = by_key.get(&case.matched?)?;
+        kernel_notes::file_position(call.exit.as_ref()?)?.order
+    };
+    let labels: HashMap<&str, usize> = cases
+        .iter()
+        .enumerate()
+        .map(|(index, case)| (case.label.as_str(), index))
+        .collect();
+    let mut problems = Vec::new();
+    for (index, expect) in expects.iter().enumerate() {
+        let Some(later) = &expect.before else {
+            continue;
+        };
+        let first = cases.get(index).and_then(order);
+        let then = labels.get(later.as_str()).and_then(|&at| order(&cases[at]));
+        if !matches!((first, then), (Some(first), Some(then)) if first < then) {
+            problems.push((
+                index,
+                format!("write order {first:?}, {later} (applied after it) has {then:?}"),
+            ));
+        }
+    }
+    for (index, problem) in problems {
+        cases[index].problems.push(problem);
+        cases[index].file_ok = Some(false);
+    }
+}
+
+/// The kernel's file.position and file.copy records of a call against what
+/// the program knows it did (contract revision 18).
+fn check_file_ops(expect: &Expect, call: &InvocationSummary, problems: &mut Vec<String>) -> bool {
+    let exit = call.exit.as_ref();
+    let mut ok = true;
+    let position = exit.and_then(kernel_notes::file_position);
+    if let Some(want) = &expect.pos {
+        let got = position.map(|p| (p.offset, p.len));
+        if got != Some((want.offset, want.len)) {
+            problems.push(format!(
+                "file.position {got:?}, the program read or wrote {} bytes at {}",
+                want.len, want.offset
+            ));
+            ok = false;
+        }
+    }
+    if expect.nopos && position.is_some() {
+        problems.push(format!(
+            "file.position {position:?} on a file with no position"
+        ));
+        ok = false;
+    }
+    if let Some(want) = &expect.copy {
+        let Some(got) = exit.and_then(kernel_notes::file_copy) else {
+            problems.push(format!("no file.copy record ({})", want.kind));
+            return false;
+        };
+        let kind = match got.kind {
+            kernel_notes::CopyKind::Sendfile => "SENDFILE".to_owned(),
+            kernel_notes::CopyKind::Splice => "SPLICE".to_owned(),
+            kernel_notes::CopyKind::CopyRange => "COPY_RANGE".to_owned(),
+            kernel_notes::CopyKind::Clone => "CLONE".to_owned(),
+            kernel_notes::CopyKind::Fallocate => "FALLOCATE".to_owned(),
+            kernel_notes::CopyKind::Unknown(code) => format!("unknown {code}"),
+        };
+        let end = |end: Option<kernel_notes::CopyEnd>,
+                   want: Option<&crate::oracle::CopyEndItem>| match (end, want) {
+            (None, None) => true,
+            (Some(end), Some(want)) => {
+                end.key.dev == want.dev()
+                    && end.key.ino == want.ino
+                    && end.mode == want.mode
+                    && end.offset == u64::try_from(want.offset).ok()
+            }
+            _ => false,
+        };
+        // Only a destination with positions has a size in the record.
+        let size_ok = want.dst.offset < 0 || got.destination_size == want.dst.size;
+        let matches = kind == want.kind
+            && got.len == want.len
+            && got.mode == want.mode
+            && got.data_len == want.data
+            && end(got.source, want.src.as_ref())
+            && end(Some(got.destination), Some(&want.dst))
+            && size_ok;
+        if !matches {
+            problems.push(format!(
+                "file.copy {got:?}, the program did {} of {} bytes ({:?} -> {:?}, mode {}, {} carried)",
+                want.kind, want.len, want.src, want.dst, want.mode, want.data
+            ));
+            ok = false;
+        }
+    }
+    ok
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -869,6 +977,41 @@ mod tests {
              \"0x1000\",\"0\",\"0\",\"0\",\"0\"],\"ret\":3,\"ok\":true{extra}}}"
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn the_write_a_race_lost_must_have_the_lower_write_order() {
+        // Two writes of one range; the second call's exit was recorded first.
+        let write = |id: u64, order: u64| {
+            let mut call = call(Vec::new(), 3);
+            call.call_id = id;
+            let mut record = field("file.position", None, 0, &[]);
+            record.layout = "antinomie.filepos/1".into();
+            record.preview = [0u64, 16, order]
+                .iter()
+                .flat_map(|value| value.to_le_bytes())
+                .collect();
+            call.exit.as_mut().unwrap().fields.push(record);
+            call
+        };
+        let judged = |first: u64, second: u64| {
+            let calls = [write(3, first), write(4, second)];
+            let mut expects = vec![expect(",\"before\":\"openat.won\""), expect("")];
+            expects[1].label = "openat.won".into();
+            let mut cases: Vec<CaseResult> = expects
+                .iter()
+                .enumerate()
+                .map(|(index, expect)| CaseResult {
+                    matched: Some((1, 2, 3 + index as u64)),
+                    ..Judge::new(Path::new("."), &calls).judge(expect)
+                })
+                .collect();
+            check_write_order(&expects, &mut cases, &calls);
+            cases[0].problems.clone()
+        };
+        assert!(judged(5, 9).is_empty());
+        assert_eq!(judged(9, 5).len(), 1, "applied after the write it lost to");
+        assert_eq!(judged(0, 5).len(), 1, "a write the guest did not number");
     }
 
     #[test]

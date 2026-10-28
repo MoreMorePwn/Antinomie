@@ -389,6 +389,58 @@ void file_path(const char *kind, const char *path)
         ora_fail("file_path lstat");
 }
 
+void file_pos(uint64_t offset, uint64_t len)
+{
+    if (pending.active)
+        append(pending.extra, sizeof pending.extra, &pending.extra_len,
+               ",\"pos\":{\"offset\":%llu,\"len\":%llu}", (unsigned long long)offset,
+               (unsigned long long)len);
+}
+
+void file_pos_none(void)
+{
+    if (pending.active)
+        append(pending.extra, sizeof pending.extra, &pending.extra_len, ",\"nopos\":true");
+}
+
+void file_written_before(const char *label)
+{
+    if (pending.active)
+        append(pending.extra, sizeof pending.extra, &pending.extra_len, ",\"before\":\"%s\"",
+               label);
+}
+
+static void copy_end(const char *name, int fd, long long offset, int size)
+{
+    struct stat st;
+    if (fstat(fd, &st) != 0) {
+        ora_fail("file_copy fstat");
+        return;
+    }
+    append(pending.extra, sizeof pending.extra, &pending.extra_len,
+           ",\"%s\":{\"major\":%u,\"minor\":%u,\"ino\":%llu,\"mode\":%u,\"offset\":%lld", name,
+           major(st.st_dev), minor(st.st_dev), (unsigned long long)st.st_ino, (unsigned)st.st_mode,
+           offset);
+    if (size)
+        append(pending.extra, sizeof pending.extra, &pending.extra_len, ",\"size\":%lld",
+               (long long)st.st_size);
+    append(pending.extra, sizeof pending.extra, &pending.extra_len, "}");
+}
+
+void file_copy(const char *kind, int src_fd, long long src_off, int dst_fd, long long dst_off,
+               uint64_t len, unsigned mode, uint64_t data_len)
+{
+    if (!pending.active)
+        return;
+    append(pending.extra, sizeof pending.extra, &pending.extra_len,
+           ",\"copy\":{\"kind\":\"%s\",\"len\":%llu,\"mode\":%u,\"data\":%llu", kind,
+           (unsigned long long)len, mode, (unsigned long long)data_len);
+    if (src_fd >= 0)
+        copy_end("src", src_fd, src_off, 0);
+    copy_end("dst", dst_fd, dst_off, 1);
+    append(pending.extra, sizeof pending.extra, &pending.extra_len, "}");
+}
+
 void async_req(uint64_t user_data, int opcode, long result)
 {
     if (!pending.active)

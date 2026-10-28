@@ -292,11 +292,12 @@ fn judge_group(
     let transcript = oracle::parse(&text);
     problems.extend(judge::transcript_problems(&transcript));
     let mut judge = Judge::new(&directory, &calls);
-    let cases: Vec<CaseResult> = transcript
+    let mut cases: Vec<CaseResult> = transcript
         .expects
         .iter()
         .map(|expect| judge.judge(expect))
         .collect();
+    judge::check_write_order(&transcript.expects, &mut cases, &calls);
     for case in &cases {
         for problem in &case.problems {
             problems.push(format!("{}: {problem}", case.label));

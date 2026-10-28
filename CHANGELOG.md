@@ -45,6 +45,16 @@ it runs.
   the starting state), a snapshot restore replaced the disk while the run used the
   file, or the base or checkpoint was deleted or changed afterwards.
 
+- **File activity places writes where the kernel put them.** With a
+  revision-18 guest, each read and write of a file carries the position the
+  file system used, so an `O_APPEND` write and a write through a descriptor
+  shared with another process (fork, dup) land at their real offset instead of
+  being counted as at an unknown offset, and two processes writing the same
+  range at once leave the bytes of the write applied last. A sendfile, splice, copy_file_range,
+  reflink clone or fallocate now changes only its own range of the
+  destination, with the file's size after it; the bytes a splice from a pipe
+  put into a file are shown as written content.
+
 - **Library › Samples lists every sample across runs and VMs.** One flat list,
   the sample with the latest run first: name, description, tags (verdict and
   malware category; techniques and custom tags fold into `+N`), run count,
@@ -243,6 +253,20 @@ it runs.
 
 ### Guest
 
+- **Real file positions and in-kernel copy operands (contract revision 18).**
+  A read or write family call on a regular file or block device records where
+  it began in the file and how much it moved (`file.position`, 24 bytes), from
+  the position the file system used, and for a write the order in which the
+  file system applied it (a number taken under the file's inode lock), so
+  writes that raced on one range are replayed in the order they really
+  happened, not the order their calls returned. sendfile, splice, copy_file_range,
+  FICLONE/FICLONERANGE and fallocate record their operands (`file.copy`: both
+  files, both offsets, the length, the destination's size after the call, the
+  fallocate mode); when the source is the pipe of a splice, whose bytes cannot
+  be read again, the bytes the destination got come along (`file.copy.data`,
+  up to 1 MiB per call). Both are fields of the call's Exit,
+  no extra event. New patch 16 (shared by every architecture); bases need
+  rebuilding for it, and older bases keep working without the records.
 - **Architecture-neutral guest patches.** The shared patches no longer assume
   x86-64: system calls are keyed by their `__NR_` names, registers are read
   through the kernel's portable helpers, and what only x86 has (its system call

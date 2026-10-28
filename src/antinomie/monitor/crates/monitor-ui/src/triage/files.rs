@@ -2214,4 +2214,143 @@ mod tests {
         let file = file(&activity, "/tmp/file");
         assert_eq!(file.writes.read(8, 3).unwrap(), b"xyz");
     }
+
+    fn position(offset: u64, len: u64) -> antinomie_monitor_core::api::FieldSummary {
+        ordered_position(offset, len, 0)
+    }
+
+    fn ordered_position(
+        offset: u64,
+        len: u64,
+        order: u64,
+    ) -> antinomie_monitor_core::api::FieldSummary {
+        let bytes = [offset.to_le_bytes(), len.to_le_bytes(), order.to_le_bytes()].concat();
+        captured("file.position", "antinomie.filepos/1", &bytes)
+    }
+
+    /// A file.copy record into /tmp/file (fd 3, ino 30) at `offset`.
+    fn copy_record(
+        kind: u8,
+        flags: u8,
+        len: u64,
+        offset: u64,
+        source_mode: u32,
+        size: u64,
+        data: u32,
+    ) -> antinomie_monitor_core::api::FieldSummary {
+        let mut bytes = vec![kind, flags, 0, 0, 0, 0, 0, 0];
+        bytes.extend(len.to_le_bytes());
+        bytes.extend(0u64.to_le_bytes());
+        bytes.extend(offset.to_le_bytes());
+        for (ino, mode) in [(20u64, source_mode), (30, 0o100644)] {
+            bytes.extend(0xfe00u64.to_le_bytes());
+            bytes.extend(ino.to_le_bytes());
+            bytes.extend(0u32.to_le_bytes());
+            bytes.extend(mode.to_le_bytes());
+        }
+        bytes.extend(size.to_le_bytes());
+        bytes.extend(data.to_le_bytes());
+        bytes.extend([0; 4]);
+        bytes.extend(0u64.to_le_bytes());
+        captured("file.copy", "antinomie.filecopy/1", &bytes)
+    }
+
+    #[test]
+    fn racing_writes_are_replayed_in_the_order_the_file_system_applied_them() {
+        // Applied as 1, 2, 3 under the inode lock; write 2's exit came last.
+        let write = |id: u64, data: &[u8], offset: u64, order: u64| {
+            let len = data.len() as u64;
+            let mut call = operation(
+                id,
+                18,
+                "pwrite64",
+                len as i64,
+                [3, 0, len, offset, 0, 0],
+                data,
+            );
+            call.exit
+                .as_mut()
+                .unwrap()
+                .fields
+                .push(ordered_position(offset, len, order));
+            call
+        };
+        let calls = [
+            open(2),
+            write(2, b"AAAA", 0, 1),
+            write(3, b"CCCC", 0, 3),
+            write(4, b"BBBB", 2, 2),
+        ];
+        let (index, _) = build(&calls);
+        let change = &index.finish()[0];
+        let bytes: Vec<u8> = (0..6)
+            .filter_map(|at| change.final_data.get(&at).copied())
+            .collect();
+        assert_eq!(bytes, b"CCCCBB", "trace order would give CCBBBB");
+        let activity = activity_of(&calls);
+        assert_eq!(
+            file(&activity, "/tmp/file").writes.read(0, 6).unwrap(),
+            b"CCCCBB"
+        );
+    }
+
+    #[test]
+    fn the_position_the_guest_recorded_places_an_append_and_a_shared_descriptor() {
+        // O_APPEND: the host alone cannot know where the bytes landed.
+        let mut append = operation(2, 1, "write", 2, [3, 0, 2, 0, 0, 0], b"ab");
+        append.exit.as_mut().unwrap().fields.push(position(7, 2));
+        // The next write through the same descriptor follows the real position.
+        let next = operation(3, 1, "write", 1, [3, 0, 1, 0, 0, 0], b"c");
+        let activity = activity_of(&[open(0x401), append, next]);
+        let file = file(&activity, "/tmp/file");
+        assert_eq!(
+            (file.events[1].offset, file.events[1].len),
+            (Some(7), Some(2))
+        );
+        assert_eq!(file.writes.read(7, 2).unwrap(), b"ab");
+        assert_eq!(
+            activity.written.offset_unknown, 1,
+            "no record: an append stays unplaced"
+        );
+    }
+
+    #[test]
+    fn a_copy_from_a_socket_puts_the_carried_bytes_at_the_recorded_offset() {
+        let mut sendfile = operation(2, 40, "sendfile", 3, [3, 5, 0, 3, 0, 0], b"");
+        let exit = sendfile.exit.as_mut().unwrap();
+        exit.fields
+            .push(copy_record(1, 2 | 4, 3, 4, 0o140777, 7, 3));
+        exit.fields.push(captured("file.copy.data", "", b"xyz"));
+        let activity = activity_of(&[open(0x1), sendfile]);
+        let file = file(&activity, "/tmp/file");
+        let event = file.events.iter().find(|e| e.kind == Kind::Write).unwrap();
+        assert_eq!((event.offset, event.len), (Some(4), Some(3)));
+        assert_eq!(event.content, b"xyz");
+        assert_eq!(file.writes.read(4, 3).unwrap(), b"xyz");
+    }
+
+    #[test]
+    fn a_copy_from_another_file_changes_only_its_range_and_says_where_the_bytes_came_from() {
+        let mut write = operation(2, 18, "pwrite64", 8, [3, 0, 8, 0, 0, 0], b"abcdefgh");
+        write.exit.as_mut().unwrap().fields.push(position(0, 8));
+        let mut copy = operation(3, 326, "copy_file_range", 2, [5, 0, 3, 0, 2, 0], b"");
+        copy.exit
+            .as_mut()
+            .unwrap()
+            .fields
+            .push(copy_record(3, 1 | 2, 2, 2, 0o100644, 8, 0));
+        let (index, _) = build(&[open(0x2), write, copy]);
+        let change = index.changes.get("/tmp/file").unwrap();
+        let known: Vec<u64> = change.final_data.keys().copied().collect();
+        assert_eq!(known, [0, 1, 4, 5, 6, 7]);
+        assert_eq!(change.final_size, Some(8));
+        assert!(change
+            .gaps
+            .iter()
+            .any(|gap| gap.starts_with("In-kernel copy from another file")));
+        assert!(!change
+            .gaps
+            .iter()
+            .any(|gap| gap.starts_with("Kernel-mediated transfer")));
+    }
 }

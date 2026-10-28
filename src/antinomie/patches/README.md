@@ -1,7 +1,7 @@
 # The Antinomie guest kernel patch series
 
 The guest kernel is Debian's `linux` 6.12.94-1 (trixie) with Antinomie's own
-patch series on top. The series is fifteen topic patches; each one adds one
+patch series on top. The series is sixteen topic patches; each one adds one
 part of the design and says, in its description, what it adds, why, which
 existing kernel files it hooks and why there, and which contract revision it
 belongs to.
@@ -50,6 +50,7 @@ changes. Line counts are added/removed lines of the patch.
 | 13 | launch programs as a terminal shell would have run them | +74 -4 | none (`control.c`, `control_wire.h`) | none |
 | 14 | hide the recorder from programs in the guest | +223 -23 | `kernel/antinomie/{stealth.c,sections.h,section_begin.c,section_end.c}`, `include/linux/antinomie_stealth.h` | `kernel/kallsyms.c`, `fs/proc/base.c`, `drivers/acpi/scan.c` |
 | 15 | hook the x86-64 architecture | +94 | none | `arch/x86/entry/common.c`, `arch/x86/kernel/setup.c`, `arch/x86/boot/compressed/kaslr.c`, `drivers/firmware/efi/libstub/x86-stub.c` (the x86 EFI stub) |
+| 16 | record where reads and writes of files happened, and what in-kernel copies moved | +419 -2 | `kernel/antinomie/{fileops.c,fileops.h}` | `fs/read_write.c`, `fs/splice.c`, `fs/ioctl.c`, `fs/open.c` |
 
 Every topic also adds its part of the files shared by all of them:
 `control.c` (dispatch), `control_wire.h` (the wire contract), `antinomie_monitor.h`
@@ -83,6 +84,9 @@ architecture code. A port to another architecture adds those two headers, its
 `*_<arch>.c` files and a patch like 15, and guards the legacy system calls its
 table lacks (`open`, `stat`, `fork` and others on arm64 and RISC-V). Without its
 hook patch the series builds but records nothing and has no transport.
+Patch 16 came after 15 (0.8.0) and is shared like 1-14: it touches no
+architecture code, and every system call it names exists on every 64-bit
+architecture's table.
 
 The guest names its architecture (the ELF machine of its native ABI) in the
 debug engine's CAPS reply, which the host asks for when it identifies a

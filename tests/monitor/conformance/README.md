@@ -72,7 +72,7 @@ throughput), the matrix, `render/`, and on a golden mismatch
 
 | Group | Program | User | What it covers |
 |---|---|---|---|
-| `user` | `trace-fixture user` | 1000 | Every user area: files, paths, xattr/splice, events, network (loopback, AF_UNIX), memory, process, identity, signals, time, futex, SysV/POSIX IPC, keys, AIO, io_uring and the refused administrative calls |
+| `user` | `trace-fixture user` | 1000 | Every user area: files, file positions and in-kernel copies, paths, xattr/splice, events, network (loopback, AF_UNIX), memory, process, identity, signals, time, futex, SysV/POSIX IPC, keys, AIO, io_uring and the refused administrative calls |
 | `root` | `trace-fixture root` | 0 | The privileged success variants, each made harmless (private namespaces, children, values set to what they were) |
 | `threads` | `trace-fixture threads` | 1000 | 8 pinned threads × 200 calls and 32 short-lived processes: identity and ordering under concurrency |
 | `ring-private`, `ring-shared`, `ring-sqpoll` | `trace-fixture ring-…` | 1000 | Who wrote an io_uring entry, one run each (`trace/fixture/attribution.c`): a ring one process maps is complete (ASYNC_COMPLETE, every request `async.flags` bit 3, no note); a ring a forked child still maps and an SQPOLL ring are OBSERVATION_INCOMPLETE (bit 1) with the attribution note, never loss |
@@ -106,6 +106,9 @@ ANT_EXPECT {"seq":12,"label":"openat.cwd","nr":257,"name":"openat","pid":116,"ti
 | `status` | Capture statuses the case triggers on purpose (COPY_FAULT, NOT_RESIDENT, INVALID_EXTENT, …); the recording must have exactly these |
 | `recapture` | Inputs the recorder could not read at entry and captured later (contract section 22): key (a trailing `*` covers every key it starts with) and mark, `at exit` or `kernel copy`; the recording must have exactly these |
 | `file` | The file identity (`lifecycle.file_id`) an open, rename, link or unlink must publish |
+| `pos`, `nopos` | Where a read or write of a seekable file began and its length (`file.position`, revision 18), or that the call has no position (a pipe) |
+| `before` | The label of a write the file system applied after this one (two processes wrote the same range at once and the file's bytes show which was last): this write's `file.position` write order must be the lower |
+| `copy` | What an in-kernel copy or allocation moved (`file.copy`): kind, length, fallocate mode, the bytes carried, and each end's device, inode, mode and offset (and the destination's size) as the program saw them with fstat |
 | `async` | io_uring/AIO requests the call submitted: their records, result and payload bytes |
 | `volatile` | Values that differ between runs; golden files mask them |
 | `implicit`, `noreturn` | Calls the program did not make itself (rt_sigreturn, restart_syscall) or that end the task (exit, a fatal signal) |

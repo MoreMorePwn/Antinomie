@@ -167,6 +167,7 @@ close.absolute | close(fd=4) = 0 |
 close.aio_direct | close(fd=3) = 0 |
 close.aio_pipe_read | close(fd=4) = 0 |
 close.aio_pipe_write | close(fd=5) = 0 |
+close.append_race | close(fd=3) = 0 |
 close.badf | close(fd=999) = EBADF |
 close.copy_target | close(fd=4) = 0 |
 close.cqsize_ring | close(fd=3) = 0 |
@@ -179,6 +180,9 @@ close.memfd | close(fd=5) = 0 |
 close.open | close(fd=3) = 0 |
 close.openat | close(fd=3) = 0 |
 close.openat2 | close(fd=4) = 0 |
+close.overlap_race | close(fd=3) = 0 |
+close.pos_dup | close(fd=4) = 0 |
+close.pos_shared | close(fd=3) = 0 |
 close.relative | close(fd=4) = 0 |
 close.ring | close(fd=3) = 0 |
 close.rw | close(fd=3) = 0 |
@@ -209,13 +213,15 @@ connect.unix_dgram | connect(fd=6, uservaddr=unix:<work>/net-dgram, addrlen=40) 
 connect.unix_path | connect(fd=7, uservaddr=unix:net-stream, addrlen=13) = 0 | arg1.address:complete:unix:net-stream
 connect.wrong_type | connect(fd=8, uservaddr=unix:<work>/net-dgram, addrlen=40) = EPROTOTYPE | arg1.address:complete:unix:<work>/net-dgram
 copy_file_range.bad_flags | copy_file_range(fd_in=3, off_in=NULL, fd_out=4, off_out=NULL, len=8, flags=0x1) = EINVAL | arg1.data:null pointer:uncaptured arg3.data:null pointer:uncaptured
-copy_file_range.offsets | copy_file_range(fd_in=3, off_in=<bytes>, fd_out=4, off_out=<bytes>, len=8, flags=0x0) = 8 | arg1.data:complete:<bytes> arg3.data:complete:<bytes> arg1.data:complete arg3.data:complete
+copy_file_range.file_to_file | copy_file_range(fd_in=3, off_in=<bytes>, fd_out=4, off_out=<bytes>, len=10, flags=0x0) = 10 | arg1.data:complete:<bytes> arg3.data:complete:<bytes> arg1.data:complete arg3.data:complete file.copy:complete
+copy_file_range.offsets | copy_file_range(fd_in=3, off_in=<bytes>, fd_out=4, off_out=<bytes>, len=8, flags=0x0) = 8 | arg1.data:complete:<bytes> arg3.data:complete:<bytes> arg1.data:complete arg3.data:complete file.copy:complete
 creat.missing_dir | creat(pathname="no-such-dir/io-creat", mode=0600) = ENOENT | arg0.path:complete:"no-such-dir/io-creat"
 creat.new | creat(pathname="io-creat", mode=0600) = 4 | arg0.path:complete:"io-creat"
 create_module.not_implemented | create_module(first=0, second=0, third=0, fourth=0, fifth=0, sixth=0) = ENOSYS | schema.argument_metadata:no decoder:uncaptured !3
 delete_module.unprivileged | delete_module(name_user="ant_missing", flags=O_NONBLOCK) = EPERM | arg0.path:complete:"ant_missing"
 dup.badf | dup(fildes=999) = EBADF |
 dup.plain | dup(fildes=3) = 4 |
+dup.pos_shared | dup(fildes=3) = 4 |
 dup2.badf | dup2(oldfd=999, newfd=41) = EBADF |
 dup2.onto | dup2(oldfd=3, newfd=40) = 40 |
 dup2.same | dup2(oldfd=3, newfd=3) = 3 |
@@ -284,7 +290,9 @@ faccessat2.null_path | faccessat2(dfd=AT_FDCWD, filename=NULL, mode=04, flags=0x
 fadvise64.bad_advice | fadvise64(fd=3, offset=0, len=0, advice=Unknown advice 0x63) = EINVAL |
 fadvise64.sequential | fadvise64(fd=3, offset=0, len=0, advice=POSIX_FADV_SEQUENTIAL) = 0 |
 fallocate.bad_mode | fallocate(fd=3, mode=0x80, offset=0, len=4096) = EOPNOTSUPP |
-fallocate.extend | fallocate(fd=3, mode=0x0, offset=0, len=8192) = 0 |
+fallocate.extend | fallocate(fd=3, mode=0x0, offset=0, len=8192) = 0 | file.copy:complete
+fallocate.pos_extend | fallocate(fd=4, mode=0x0, offset=100, len=50) = 0 | file.copy:complete
+fallocate.pos_punch | fallocate(fd=4, mode=FALLOC_FL_KEEP_SIZE|FALLOC_FL_PUNCH_HOLE, offset=2, len=3) = 0 | file.copy:complete
 fanotify_init.bad_flags | fanotify_init(flags=FAN_CLASS_NOTIF|FAN_REPORT_FID|0x80000000, event_f_flags=O_RDONLY) = EINVAL |
 fanotify_init.no_fid | fanotify_init(flags=FAN_CLASS_NOTIF, event_f_flags=O_RDONLY) = EPERM |
 fanotify_init.unlimited_queue | fanotify_init(flags=FAN_CLASS_NOTIF|FAN_UNLIMITED_QUEUE|FAN_REPORT_FID, event_f_flags=O_RDONLY) = EPERM |
@@ -653,6 +661,7 @@ io_uring_setup.default | io_uring_setup(entries=16, p=<bytes>) = 3 | arg1.params
 io_uring_setup.fault | io_uring_setup(entries=4, p=0x1) = EFAULT | arg1.params:copy fault:uncaptured !3
 io_uring_setup.zero_entries | io_uring_setup(entries=0, p=<bytes>) = EINVAL | arg1.params:complete:<bytes>
 ioctl.badf | ioctl(fd=999, cmd=FIONREAD, arg=<handle>) = EBADF | arg2.ioctl:no decoder:uncaptured !3
+ioctl.ficlone_unsupported | ioctl(fd=9, cmd=FICLONE, arg=3) = EOPNOTSUPP | arg2.ioctl:no decoder:uncaptured !3
 ioctl.fioasync_off | ioctl(fd=4, cmd=FIOASYNC, arg=<handle>) = 0 | arg2.ioctl:no decoder:uncaptured !3
 ioctl.fioasync_on | ioctl(fd=4, cmd=FIOASYNC, arg=<handle>) = 0 | arg2.ioctl:no decoder:uncaptured !3
 ioctl.fioclex | ioctl(fd=4, cmd=FIOCLEX, arg=0) = 0 | arg2.ioctl:no decoder:uncaptured !3
@@ -1098,6 +1107,7 @@ open_tree.plain | open_tree(dfd=AT_FDCWD, path=".", flags=OPEN_TREE_CLOEXEC) = 3
 open_tree.recursive_without_clone | open_tree(dfd=AT_FDCWD, path=".", flags=0x8000) = EINVAL | arg1.path:complete:"."
 openat.absolute | openat(dfd=AT_FDCWD, filename="<work>/io-at", flags=O_RDONLY|O_CLOEXEC, mode=0) = 4 | arg1.path:complete:"<work>/io-at"
 openat.aio_direct | openat(dfd=AT_FDCWD, filename="aio-direct", flags=O_RDWR|O_CREAT|O_TRUNC|O_DIRECT|O_CLOEXEC, mode=0600) = 3 | arg1.path:complete:"aio-direct"
+openat.append_race | openat(dfd=AT_FDCWD, filename="pos-append", flags=O_WRONLY|O_CREAT|O_TRUNC|O_APPEND, mode=0600) = 3 | arg1.path:complete:"pos-append"
 openat.bad_dirfd | openat(dfd=999, filename="io-at", flags=O_RDONLY, mode=0) = EBADF | arg1.path:complete:"io-at"
 openat.cold_literal | openat(dfd=AT_FDCWD, filename="recapture-file", flags=O_RDONLY, mode=0) = 3 | arg1.path:complete@at exit:"recapture-file"
 openat.copy_target | openat(dfd=AT_FDCWD, filename="io-copy", flags=O_RDWR|O_CREAT|O_TRUNC, mode=0600) = 4 | arg1.path:complete:"io-copy"
@@ -1106,6 +1116,8 @@ openat.directory | openat(dfd=AT_FDCWD, filename=".", flags=O_RDONLY|O_DIRECTORY
 openat.dup_source | openat(dfd=AT_FDCWD, filename="io-dup", flags=O_RDWR|O_CREAT|O_TRUNC, mode=0600) = 3 | arg1.path:complete:"io-dup"
 openat.exists_excl | openat(dfd=AT_FDCWD, filename="io-at", flags=O_RDWR|O_CREAT|O_EXCL, mode=0600) = EEXIST | arg1.path:complete:"io-at"
 openat.lock | openat(dfd=AT_FDCWD, filename="io-rw", flags=O_RDONLY, mode=0) = 4 | arg1.path:complete:"io-rw"
+openat.overlap_race | openat(dfd=AT_FDCWD, filename="pos-overlap", flags=O_RDWR|O_CREAT|O_TRUNC, mode=0600) = 3 | arg1.path:complete:"pos-overlap"
+openat.pos_shared | openat(dfd=AT_FDCWD, filename="pos-shared", flags=O_RDWR|O_CREAT|O_TRUNC, mode=0600) = 3 | arg1.path:complete:"pos-shared"
 openat.relative_dirfd | openat(dfd=3, filename="io-at", flags=O_RDONLY|O_NOFOLLOW, mode=0) = 4 | arg1.path:complete:"io-at"
 openat.rw | openat(dfd=AT_FDCWD, filename="io-rw", flags=O_RDWR|O_CREAT|O_TRUNC, mode=0600) = 3 | arg1.path:complete:"io-rw"
 openat.tmpfile | openat(dfd=AT_FDCWD, filename=".", flags=O_TMPFILE|O_RDWR, mode=0600) = 4 | arg1.path:complete:"."
@@ -1193,17 +1205,18 @@ prctl.set_dumpable_bad | prctl(option=PR_SET_DUMPABLE, arg2=2, arg3=0, arg4=0, a
 prctl.set_dumpable_off | prctl(option=PR_SET_DUMPABLE, arg2=0, arg3=0, arg4=0, arg5=0) = 0 |
 prctl.set_dumpable_same | prctl(option=PR_SET_DUMPABLE, arg2=1, arg3=0, arg4=0, arg5=0) = 0 |
 prctl.set_name | prctl(option=PR_SET_NAME, arg2="ant-process", arg3=0, arg4=0, arg5=0) = 0 | arg1.name:complete:"ant-process"
-prctl.set_name_long | prctl(option=PR_SET_NAME, arg2=5279695, arg3=0, arg4=0, arg5=0) = 0 | arg1.name:invalid extent:uncaptured !3
+prctl.set_name_long | prctl(option=PR_SET_NAME, arg2=5280645, arg3=0, arg4=0, arg5=0) = 0 | arg1.name:invalid extent:uncaptured !3
 prctl.set_no_new_privs | prctl(option=PR_SET_NO_NEW_PRIVS, arg2=1, arg3=0, arg4=0, arg5=0) = 0 |
 prctl.set_no_new_privs_bad_args | prctl(option=PR_SET_NO_NEW_PRIVS, arg2=1, arg3=1, arg4=0, arg5=0) = EINVAL |
 prctl.set_seccomp_filter | prctl(option=PR_SET_SECCOMP, arg2=2, arg3=<bytes>, arg4=0, arg5=0) = 0 | arg2.program:complete:<bytes> arg2.program.filter:complete:<bytes>
 prctl.set_timerslack | prctl(option=PR_SET_TIMERSLACK, arg2=100000, arg3=0, arg4=0, arg5=0) = 0 |
 prctl.unknown_option | prctl(option=Unknown option 0x7fffffff, arg2=0, arg3=0, arg4=0, arg5=0) = EINVAL | prctl.unknown_selector:no decoder:uncaptured !3
 pread64.negative | pread64(fd=3, buf=<addr>, count=6, pos=-1) = EINVAL |
-pread64.offset | pread64(fd=3, buf="PWRITE", count=6, pos=100) = 6 | arg1.data:complete
-preadv.offset | preadv(fd=3, vec=<bytes>, vlen=2, pos_l=8, pos_h=0) = 6 | arg1.iov:complete:<bytes> arg1.iov[0].data:complete arg1.iov[1].data:complete
+pread64.offset | pread64(fd=3, buf="PWRITE", count=6, pos=100) = 6 | arg1.data:complete file.position:complete
+pread64.pos_explicit | pread64(fd=3, buf="TINO", count=4, pos=2) = 4 | arg1.data:complete file.position:complete
+preadv.offset | preadv(fd=3, vec=<bytes>, vlen=2, pos_l=8, pos_h=0) = 6 | arg1.iov:complete:<bytes> arg1.iov[0].data:complete arg1.iov[1].data:complete file.position:complete
 preadv2.bad_flags | preadv2(fd=3, vec=<bytes>, vlen=2, pos_l=0, pos_h=0, flags=<addr>) = EOPNOTSUPP | arg1.iov:complete:<bytes>
-preadv2.hipri | preadv2(fd=3, vec=<bytes>, vlen=2, pos_l=0, pos_h=0, flags=RWF_HIPRI) = 6 | arg1.iov:complete:<bytes> arg1.iov[0].data:complete arg1.iov[1].data:complete
+preadv2.hipri | preadv2(fd=3, vec=<bytes>, vlen=2, pos_l=0, pos_h=0, flags=RWF_HIPRI) = 6 | arg1.iov:complete:<bytes> arg1.iov[0].data:complete arg1.iov[1].data:complete file.position:complete
 prlimit64.bad_resource | prlimit64(pid=0, resource=Unknown resource 0x63, new_rlim=NULL, old_rlim=<addr>) = EINVAL | arg2.data:null pointer:uncaptured
 prlimit64.lower_soft | prlimit64(pid=0, resource=RLIMIT_NOFILE, new_rlim=<data>, old_rlim=<data>) = <value> | arg2.data:complete arg3.data:complete
 prlimit64.no_such_process | prlimit64(pid=<pid>, resource=RLIMIT_NOFILE, new_rlim=NULL, old_rlim=<addr>) = ESRCH | arg2.data:null pointer:uncaptured
@@ -1262,10 +1275,42 @@ ptrace.traceme | ptrace(request=PTRACE_TRACEME, pid=0, addr=NULL, data=0) = 0 |
 ptrace.unknown_request | ptrace(request=Unknown request 0x7fff, pid=<pid>, addr=NULL, data=0) = EIO | ptrace.unknown_selector:no decoder:uncaptured !3
 putpmsg.not_implemented | putpmsg(first=0, second=0, third=0, fourth=0, fifth=0, sixth=0) = ENOSYS | schema.argument_metadata:no decoder:uncaptured !3
 pwrite64.badf | pwrite64(fd=999, buf="x", count=1, pos=0) = EBADF | arg1.data:complete:"x"
-pwrite64.offset | pwrite64(fd=3, buf="PWRITE", count=6, pos=100) = 6 | arg1.data:complete:"PWRITE"
-pwritev.offset | pwritev(fd=3, vec=<bytes>, vlen=1, pos_l=200, pos_h=0) = 3 | arg1.iov:complete:<bytes> arg1.iov[0].data:complete:"PWV"
-pwritev2.append_at_offset | pwritev2(fd=3, vec=<bytes>, vlen=1, pos_l=<handle>, pos_h=<handle>, flags=RWF_APPEND) = 3 | arg1.iov:complete:<bytes> arg1.iov[0].data:complete:"PWV"
-pwritev2.dsync | pwritev2(fd=3, vec=<bytes>, vlen=1, pos_l=210, pos_h=0, flags=RWF_DSYNC) = 3 | arg1.iov:complete:<bytes> arg1.iov[0].data:complete:"PWV"
+pwrite64.offset | pwrite64(fd=3, buf="PWRITE", count=6, pos=100) = 6 | arg1.data:complete:"PWRITE" file.position:complete
+pwrite64.overlap_race.00.0 | pwrite64(fd=3, buf=<data>, count=16, pos=0) = <value> | arg1.data:complete file.position:complete
+pwrite64.overlap_race.00.1 | pwrite64(fd=3, buf=<data>, count=16, pos=0) = <value> | arg1.data:complete file.position:complete
+pwrite64.overlap_race.01.0 | pwrite64(fd=3, buf=<data>, count=16, pos=16) = <value> | arg1.data:complete file.position:complete
+pwrite64.overlap_race.01.1 | pwrite64(fd=3, buf=<data>, count=16, pos=16) = <value> | arg1.data:complete file.position:complete
+pwrite64.overlap_race.02.0 | pwrite64(fd=3, buf=<data>, count=16, pos=32) = <value> | arg1.data:complete file.position:complete
+pwrite64.overlap_race.02.1 | pwrite64(fd=3, buf=<data>, count=16, pos=32) = <value> | arg1.data:complete file.position:complete
+pwrite64.overlap_race.03.0 | pwrite64(fd=3, buf=<data>, count=16, pos=48) = <value> | arg1.data:complete file.position:complete
+pwrite64.overlap_race.03.1 | pwrite64(fd=3, buf=<data>, count=16, pos=48) = <value> | arg1.data:complete file.position:complete
+pwrite64.overlap_race.04.0 | pwrite64(fd=3, buf=<data>, count=16, pos=64) = <value> | arg1.data:complete file.position:complete
+pwrite64.overlap_race.04.1 | pwrite64(fd=3, buf=<data>, count=16, pos=64) = <value> | arg1.data:complete file.position:complete
+pwrite64.overlap_race.05.0 | pwrite64(fd=3, buf=<data>, count=16, pos=80) = <value> | arg1.data:complete file.position:complete
+pwrite64.overlap_race.05.1 | pwrite64(fd=3, buf=<data>, count=16, pos=80) = <value> | arg1.data:complete file.position:complete
+pwrite64.overlap_race.06.0 | pwrite64(fd=3, buf=<data>, count=16, pos=96) = <value> | arg1.data:complete file.position:complete
+pwrite64.overlap_race.06.1 | pwrite64(fd=3, buf=<data>, count=16, pos=96) = <value> | arg1.data:complete file.position:complete
+pwrite64.overlap_race.07.0 | pwrite64(fd=3, buf=<data>, count=16, pos=112) = <value> | arg1.data:complete file.position:complete
+pwrite64.overlap_race.07.1 | pwrite64(fd=3, buf=<data>, count=16, pos=112) = <value> | arg1.data:complete file.position:complete
+pwrite64.overlap_race.08.0 | pwrite64(fd=3, buf=<data>, count=16, pos=128) = <value> | arg1.data:complete file.position:complete
+pwrite64.overlap_race.08.1 | pwrite64(fd=3, buf=<data>, count=16, pos=128) = <value> | arg1.data:complete file.position:complete
+pwrite64.overlap_race.09.0 | pwrite64(fd=3, buf=<data>, count=16, pos=144) = <value> | arg1.data:complete file.position:complete
+pwrite64.overlap_race.09.1 | pwrite64(fd=3, buf=<data>, count=16, pos=144) = <value> | arg1.data:complete file.position:complete
+pwrite64.overlap_race.10.0 | pwrite64(fd=3, buf=<data>, count=16, pos=160) = <value> | arg1.data:complete file.position:complete
+pwrite64.overlap_race.10.1 | pwrite64(fd=3, buf=<data>, count=16, pos=160) = <value> | arg1.data:complete file.position:complete
+pwrite64.overlap_race.11.0 | pwrite64(fd=3, buf=<data>, count=16, pos=176) = <value> | arg1.data:complete file.position:complete
+pwrite64.overlap_race.11.1 | pwrite64(fd=3, buf=<data>, count=16, pos=176) = <value> | arg1.data:complete file.position:complete
+pwrite64.overlap_race.12.0 | pwrite64(fd=3, buf=<data>, count=16, pos=192) = <value> | arg1.data:complete file.position:complete
+pwrite64.overlap_race.12.1 | pwrite64(fd=3, buf=<data>, count=16, pos=192) = <value> | arg1.data:complete file.position:complete
+pwrite64.overlap_race.13.0 | pwrite64(fd=3, buf=<data>, count=16, pos=208) = <value> | arg1.data:complete file.position:complete
+pwrite64.overlap_race.13.1 | pwrite64(fd=3, buf=<data>, count=16, pos=208) = <value> | arg1.data:complete file.position:complete
+pwrite64.overlap_race.14.0 | pwrite64(fd=3, buf=<data>, count=16, pos=224) = <value> | arg1.data:complete file.position:complete
+pwrite64.overlap_race.14.1 | pwrite64(fd=3, buf=<data>, count=16, pos=224) = <value> | arg1.data:complete file.position:complete
+pwrite64.overlap_race.15.0 | pwrite64(fd=3, buf=<data>, count=16, pos=240) = <value> | arg1.data:complete file.position:complete
+pwrite64.overlap_race.15.1 | pwrite64(fd=3, buf=<data>, count=16, pos=240) = <value> | arg1.data:complete file.position:complete
+pwritev.offset | pwritev(fd=3, vec=<bytes>, vlen=1, pos_l=200, pos_h=0) = 3 | arg1.iov:complete:<bytes> arg1.iov[0].data:complete:"PWV" file.position:complete
+pwritev2.append_at_offset | pwritev2(fd=3, vec=<bytes>, vlen=1, pos_l=<handle>, pos_h=<handle>, flags=RWF_APPEND) = 3 | arg1.iov:complete:<bytes> arg1.iov[0].data:complete:"PWV" file.position:complete
+pwritev2.dsync | pwritev2(fd=3, vec=<bytes>, vlen=1, pos_l=210, pos_h=0, flags=RWF_DSYNC) = 3 | arg1.iov:complete:<bytes> arg1.iov[0].data:complete:"PWV" file.position:complete
 query_module.not_implemented | query_module(first=0, second=0, third=0, fourth=0, fifth=0, sixth=0) = ENOSYS | schema.argument_metadata:no decoder:uncaptured !3
 quotactl.bad_type | quotactl(cmd=Q_GETFMT / Unknown type 7, special="/dev/ant-missing", id=0, addr=<addr>) = EINVAL | arg1.special:complete:"/dev/ant-missing"
 quotactl.getfmt_missing_device | quotactl(cmd=Q_GETFMT / USRQUOTA, special="/dev/ant-missing", id=0, addr=<addr>) = ENOENT | arg1.special:complete:"/dev/ant-missing"
@@ -1281,10 +1326,11 @@ quotactl_fd.badf | quotactl_fd(fd=999, cmd=Q_GETFMT / USRQUOTA, id=0, addr=<addr
 quotactl_fd.getfmt_no_quota | quotactl_fd(fd=3, cmd=Q_GETFMT / USRQUOTA, id=0, addr=<addr>) = ESRCH |
 quotactl_fd.setquota_unprivileged | quotactl_fd(fd=3, cmd=Q_SETQUOTA / USRQUOTA, id=1000, addr=<bytes>) = EPERM | arg3.dqblk:complete:<bytes>
 read.badf | read(fd=999, buf=<addr>, count=8) = EBADF |
-read.end_of_file | read(fd=3, buf=<addr>, count=256) = 0 |
-read.fault_at_eof | read(fd=3, buf=0x1, count=8) = 0 |
+read.end_of_file | read(fd=3, buf=<addr>, count=256) = 0 | file.position:complete
+read.fault_at_eof | read(fd=3, buf=0x1, count=8) = 0 | file.position:complete
 read.fault_data | read(fd=3, buf=0x1, count=8) = EFAULT |
-read.text | read(fd=3, buf="ANTINOMIE-CONFORMANCE-FILE-IO-0123456789", count=256) = 40 | arg1.data:complete
+read.pipe_no_position | read(fd=5, buf="NOMIE-", count=6) = 6 | arg1.data:complete
+read.text | read(fd=3, buf="ANTINOMIE-CONFORMANCE-FILE-IO-0123456789", count=256) = 40 | arg1.data:complete file.position:complete
 readahead.badf | readahead(fd=999, offset=0, count=4096) = EBADF |
 readahead.file | readahead(fd=3, offset=0, count=4096) = 0 |
 readlink.full | readlink(path="paths-sym", buf="paths-file", bufsiz=256) = 10 | arg0.path:complete:"paths-sym" arg1.data:complete
@@ -1296,7 +1342,8 @@ readlinkat.dirfd | readlinkat(dfd=3, path="paths-dangling", buf="paths-nowhere",
 readlinkat.empty_path | readlinkat(dfd=4, path="", buf="paths-file", bufsiz=256) = 10 | arg1.path:complete:"" arg2.data:complete
 readlinkat.static_startup | readlinkat(dfd=AT_FDCWD, path=<data>, buf=<data>, bufsiz=4096) = <value> | arg1.path:complete@at exit arg2.data:complete
 readlinkat.zero_size | readlinkat(dfd=AT_FDCWD, path="paths-sym", buf=<addr>, bufsiz=0) = EINVAL | arg1.path:complete:"paths-sym"
-readv.two | readv(fd=3, vec=<bytes>, vlen=2) = 36 | arg1.iov:complete:<bytes> arg1.iov[0].data:complete arg1.iov[1].data:complete
+readv.pos_at_end | readv(fd=3, vec=<bytes>, vlen=1) = 0 | arg1.iov:complete:<bytes> file.position:complete
+readv.two | readv(fd=3, vec=<bytes>, vlen=2) = 36 | arg1.iov:complete:<bytes> arg1.iov[0].data:complete arg1.iov[1].data:complete file.position:complete
 reboot.bad_magic_unprivileged | reboot(magic1=Unknown magic 0x1234, magic2=Unknown magic 0x5678, cmd=LINUX_REBOOT_CMD_CAD_OFF, arg=NULL) = EPERM |
 reboot.cad_off_unprivileged | reboot(magic1=LINUX_REBOOT_MAGIC1, magic2=LINUX_REBOOT_MAGIC2, cmd=LINUX_REBOOT_CMD_CAD_OFF, arg=NULL) = EPERM |
 reboot.restart2_unprivileged | reboot(magic1=LINUX_REBOOT_MAGIC1, magic2=LINUX_REBOOT_MAGIC2, cmd=LINUX_REBOOT_CMD_RESTART2, arg="ant-restart") = EPERM | arg3.restart_command:complete:"ant-restart"
@@ -1509,8 +1556,10 @@ semtimedop.null_timeout | semtimedop(semid=0, sops=<bytes>, nsops=1, timeout=NUL
 semtimedop.removed_while_waiting | semtimedop(semid=0, sops=<data>, nsops=1, timeout=<data>) = EIDRM | arg1.semops:complete arg3.timeout:complete
 semtimedop.times_out | semtimedop(semid=0, sops=<bytes>, nsops=1, timeout=<bytes>) = EAGAIN | arg1.semops:complete:<bytes> arg3.timeout:complete:<bytes>
 sendfile.badf | sendfile(out_fd=999, in_fd=3, offset=NULL, count=4) = EBADF | arg2.data:null pointer:uncaptured
+sendfile.file_to_file | sendfile(out_fd=4, in_fd=3, offset=<bytes>, count=8) = 8 | arg2.data:complete:<bytes> arg2.data:complete file.copy:complete
 sendfile.null_offset | sendfile(out_fd=4, in_fd=3, offset=NULL, count=4) = 0 | arg2.data:null pointer:uncaptured arg2.data:null pointer
-sendfile.offset | sendfile(out_fd=4, in_fd=3, offset=<bytes>, count=8) = 8 | arg2.data:complete:<bytes> arg2.data:complete
+sendfile.offset | sendfile(out_fd=4, in_fd=3, offset=<bytes>, count=8) = 8 | arg2.data:complete:<bytes> arg2.data:complete file.copy:complete
+sendfile.socket_refused | sendfile(out_fd=4, in_fd=7, offset=NULL, count=6) = EINVAL | arg2.data:null pointer:uncaptured
 sendmmsg.badf | sendmmsg(fd=999, msg=4 captured objects, vlen=1, flags=0x0) = EBADF | arg1.mmsg.0.header:complete:<bytes> arg1.mmsg.0.iov:complete:<bytes> arg1.mmsg.0.iov[0].data:complete:"MMSG-A0-" arg1.mmsg.0.iov[1].data:complete:"first"
 sendmmsg.fault | sendmmsg(fd=5, msg=0x1, vlen=1, flags=0x0) = EFAULT | arg1.mmsg.0.header:copy fault:uncaptured !3
 sendmmsg.udp_names | sendmmsg(fd=6, msg=<data>, vlen=2, flags=0x0) = <value> | arg1.mmsg.0.header:complete arg1.mmsg.0.iov:complete arg1.mmsg.0.iov[0].data:complete arg1.mmsg.0.name:complete arg1.mmsg.1.header:complete arg1.mmsg.1.iov:complete arg1.mmsg.1.iov[0].data:complete arg1.mmsg.1.name:complete arg1.mmsg.0.header:complete arg1.mmsg.1.header:complete
@@ -1724,14 +1773,18 @@ socketpair.uring | socketpair(family=AF_UNIX, type=SOCK_STREAM|SOCK_CLOEXEC, pro
 splice.bad_flags | splice(fd_in=7, off_in=NULL, fd_out=4, off_out=NULL, len=8, flags=0x80) = EINVAL | arg1.data:null pointer:uncaptured arg3.data:null pointer:uncaptured
 splice.badf | splice(fd_in=999, off_in=NULL, fd_out=4, off_out=NULL, len=8, flags=0x0) = EBADF | arg1.data:null pointer:uncaptured arg3.data:null pointer:uncaptured
 splice.empty_nonblock | splice(fd_in=3, off_in=NULL, fd_out=6, off_out=NULL, len=8, flags=SPLICE_F_NONBLOCK) = EAGAIN | arg1.data:null pointer:uncaptured arg3.data:null pointer:uncaptured
-splice.file_position | splice(fd_in=7, off_in=NULL, fd_out=4, off_out=NULL, len=8, flags=SPLICE_F_MOVE) = 8 | arg1.data:null pointer:uncaptured arg3.data:null pointer:uncaptured arg1.data:null pointer arg3.data:null pointer
-splice.file_to_pipe_offset | splice(fd_in=7, off_in=<bytes>, fd_out=4, off_out=NULL, len=16, flags=0x0) = 16 | arg1.data:complete:<bytes> arg3.data:null pointer:uncaptured arg1.data:complete arg3.data:null pointer
+splice.file_position | splice(fd_in=7, off_in=NULL, fd_out=4, off_out=NULL, len=8, flags=SPLICE_F_MOVE) = 8 | arg1.data:null pointer:uncaptured arg3.data:null pointer:uncaptured arg1.data:null pointer arg3.data:null pointer file.copy:complete
+splice.file_to_pipe | splice(fd_in=3, off_in=<bytes>, fd_out=6, off_out=NULL, len=6, flags=0x0) = 6 | arg1.data:complete:<bytes> arg3.data:null pointer:uncaptured arg1.data:complete arg3.data:null pointer file.copy:complete
+splice.file_to_pipe_offset | splice(fd_in=7, off_in=<bytes>, fd_out=4, off_out=NULL, len=16, flags=0x0) = 16 | arg1.data:complete:<bytes> arg3.data:null pointer:uncaptured arg1.data:complete arg3.data:null pointer file.copy:complete
 splice.negative_offset | splice(fd_in=7, off_in=<bytes>, fd_out=4, off_out=NULL, len=8, flags=0x0) = EINVAL | arg1.data:complete:<bytes> arg3.data:null pointer:uncaptured
 splice.no_pipe | splice(fd_in=7, off_in=NULL, fd_out=8, off_out=NULL, len=8, flags=0x0) = EINVAL | arg1.data:null pointer:uncaptured arg3.data:null pointer:uncaptured
 splice.offset_fault | splice(fd_in=7, off_in=0x1, fd_out=4, off_out=NULL, len=8, flags=0x0) = EFAULT | arg1.data:copy fault:uncaptured arg3.data:null pointer:uncaptured !3
 splice.offset_on_pipe | splice(fd_in=3, off_in=<bytes>, fd_out=7, off_out=NULL, len=8, flags=0x0) = ESPIPE | arg1.data:complete:<bytes> arg3.data:null pointer:uncaptured
-splice.pipe_to_file_offset | splice(fd_in=3, off_in=NULL, fd_out=7, off_out=<bytes>, len=16, flags=SPLICE_F_MORE) = 16 | arg1.data:null pointer:uncaptured arg3.data:complete:<bytes> arg1.data:null pointer arg3.data:complete
+splice.pipe_to_file | splice(fd_in=5, off_in=NULL, fd_out=4, off_out=<bytes>, len=8, flags=0x0) = 8 | arg1.data:null pointer:uncaptured arg3.data:complete:<bytes> arg1.data:null pointer arg3.data:complete file.copy:complete file.copy.data:complete
+splice.pipe_to_file_offset | splice(fd_in=3, off_in=NULL, fd_out=7, off_out=<bytes>, len=16, flags=SPLICE_F_MORE) = 16 | arg1.data:null pointer:uncaptured arg3.data:complete:<bytes> arg1.data:null pointer arg3.data:complete file.copy:complete file.copy.data:complete
 splice.pipe_to_pipe | splice(fd_in=3, off_in=NULL, fd_out=6, off_out=NULL, len=8, flags=SPLICE_F_NONBLOCK) = 8 | arg1.data:null pointer:uncaptured arg3.data:null pointer:uncaptured arg1.data:null pointer arg3.data:null pointer
+splice.socket_pipe_to_file | splice(fd_in=5, off_in=NULL, fd_out=4, off_out=NULL, len=6, flags=0x0) = 6 | arg1.data:null pointer:uncaptured arg3.data:null pointer:uncaptured arg1.data:null pointer arg3.data:null pointer file.copy:complete file.copy.data:complete
+splice.socket_to_pipe | splice(fd_in=7, off_in=NULL, fd_out=6, off_out=NULL, len=6, flags=0x0) = 6 | arg1.data:null pointer:uncaptured arg3.data:null pointer:uncaptured arg1.data:null pointer arg3.data:null pointer
 stat.bad_buffer | stat(filename="meta-file", statbuf=0x1) = EFAULT | arg0.path:complete:"meta-file"
 stat.file | stat(filename=<data>, statbuf=<data>) = <value> | arg0.path:complete arg1.stat:complete
 stat.follows_symlink | stat(filename=<data>, statbuf=<data>) = <value> | arg0.path:complete arg1.stat:complete
@@ -1939,13 +1992,81 @@ waitid.p_pidfd | waitid(which=P_PIDFD, pid=<pid>, infop=<data>, options=WEXITED,
 waitid.p_pidfd_killed | waitid(which=P_PIDFD, pid=<pid>, infop=<data>, options=WEXITED, ru=NULL) = <value> | arg2.data:complete arg4.data:null pointer
 waitid.wnohang_running | waitid(which=P_PID, pid=<pid>, infop=<bytes>, options=WNOHANG|WEXITED, ru=<bytes>) = 0 | arg2.data:complete arg4.data:complete
 waitid.wnowait | waitid(which=P_PID, pid=<pid>, infop=<data>, options=WEXITED|WNOWAIT, ru=NULL) = <value> | arg2.data:complete arg4.data:null pointer
+write.after_child | write(fd=3, buf="ANTIN", count=5) = 5 | arg1.data:complete:"ANTIN" file.position:complete
+write.append_race.0.00 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.0.01 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.0.02 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.0.03 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.0.04 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.0.05 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.0.06 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.0.07 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.0.08 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.0.09 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.0.10 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.0.11 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.0.12 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.0.13 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.0.14 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.0.15 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.1.00 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.1.01 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.1.02 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.1.03 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.1.04 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.1.05 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.1.06 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.1.07 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.1.08 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.1.09 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.1.10 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.1.11 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.1.12 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.1.13 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.1.14 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.1.15 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.2.00 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.2.01 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.2.02 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.2.03 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.2.04 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.2.05 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.2.06 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.2.07 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.2.08 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.2.09 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.2.10 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.2.11 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.2.12 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.2.13 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.2.14 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.2.15 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.3.00 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.3.01 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.3.02 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.3.03 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.3.04 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.3.05 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.3.06 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.3.07 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.3.08 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.3.09 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.3.10 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.3.11 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.3.12 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.3.13 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.3.14 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
+write.append_race.3.15 | write(fd=3, buf=<data>, count=16) = <value> | arg1.data:complete file.position:complete
 write.badf | write(fd=999, buf="ANTI", count=4) = EBADF | arg1.data:complete:"ANTI"
 write.fault | write(fd=3, buf=0x1, count=16) = EFAULT | arg1.data:copy fault:uncaptured !3
+write.forked_child | write(fd=3, buf="ANTINOM", count=7) = 7 | arg1.data:complete:"ANTINOM" file.position:complete
 write.never_read | write(fd=3, buf=<addr>, count=4096) = 4096 | arg1.data:not resident:uncaptured !3
+write.pos_first | write(fd=3, buf="ANTINOMIE-", count=10) = 10 | arg1.data:complete:"ANTINOMIE-" file.position:complete
 write.rewritten_during_call | write(fd=4, buf="XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"..., count=8192) = 8192 | arg1.data:complete@at exit:"XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"...
-write.text | write(fd=3, buf="ANTINOMIE-CONFORMANCE-FILE-IO-0123456789", count=40) = 40 | arg1.data:complete:"ANTINOMIE-CONFORMANCE-FILE-IO-0123456789"
-write.untouched_mapping | write(fd=4, buf="ANTINOMIE-CONFORMANCE-ubipwdkryfmtahovcjqxelszgn"..., count=8192) = 8192 | arg1.data:complete@at exit:"ANTINOMIE-CONFORMANCE-ubipwdkryfmtahovcjqxelszgn"...
+write.text | write(fd=3, buf="ANTINOMIE-CONFORMANCE-FILE-IO-0123456789", count=40) = 40 | arg1.data:complete:"ANTINOMIE-CONFORMANCE-FILE-IO-0123456789" file.position:complete
+write.through_dup | write(fd=4, buf="ANT", count=3) = 3 | arg1.data:complete:"ANT" file.position:complete
+write.untouched_mapping | write(fd=4, buf="ANTINOMIE-CONFORMANCE-ubipwdkryfmtahovcjqxelszgn"..., count=8192) = 8192 | arg1.data:complete@at exit:"ANTINOMIE-CONFORMANCE-ubipwdkryfmtahovcjqxelszgn"... file.position:complete
 write.uring_poll_pipe | write(fd=6, buf="P", count=1) = 1 | arg1.data:complete:"P"
-write.zero_length | write(fd=3, buf=<addr>, count=0) = 0 | arg1.data:complete:uncaptured
-writev.three | writev(fd=3, vec=<bytes>, vlen=3) = 15 | arg1.iov:complete:<bytes> arg1.iov[0].data:complete:"VEC-ONE-" arg1.iov[1].data:complete:uncaptured arg1.iov[2].data:complete:"VEC-TWO"
+write.zero_length | write(fd=3, buf=<addr>, count=0) = 0 | arg1.data:complete:uncaptured file.position:complete
+writev.three | writev(fd=3, vec=<bytes>, vlen=3) = 15 | arg1.iov:complete:<bytes> arg1.iov[0].data:complete:"VEC-ONE-" arg1.iov[1].data:complete:uncaptured arg1.iov[2].data:complete:"VEC-TWO" file.position:complete
 writev.too_many | writev(fd=3, vec=<addr>, vlen=1025) = EINVAL | arg1.iov:invalid extent:uncaptured !3

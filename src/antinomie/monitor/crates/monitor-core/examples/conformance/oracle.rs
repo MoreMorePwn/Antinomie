@@ -71,6 +71,46 @@ impl FileItem {
     }
 }
 
+/// Where a read or write began and how much it moved (`file.position`).
+#[derive(Clone, Debug, Deserialize)]
+pub struct PosItem {
+    pub offset: u64,
+    pub len: u64,
+}
+
+/// One end of a copy as the program saw it with fstat.
+#[derive(Clone, Debug, Deserialize)]
+pub struct CopyEndItem {
+    pub major: u32,
+    pub minor: u32,
+    pub ino: u64,
+    pub mode: u32,
+    /// Negative for an end without a position.
+    pub offset: i64,
+    /// The destination's size after the call.
+    pub size: Option<u64>,
+}
+
+impl CopyEndItem {
+    pub fn dev(&self) -> u64 {
+        u64::from(self.minor & 0xff)
+            | (u64::from(self.major) << 8)
+            | (u64::from(self.minor & !0xff) << 12)
+    }
+}
+
+/// What an in-kernel copy or allocation moved (`file.copy`).
+#[derive(Clone, Debug, Deserialize)]
+pub struct CopyItem {
+    pub kind: String,
+    pub len: u64,
+    pub mode: u32,
+    /// Bytes carried as `file.copy.data`.
+    pub data: u64,
+    pub src: Option<CopyEndItem>,
+    pub dst: CopyEndItem,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct AsyncItem {
     pub user_data: String,
@@ -115,6 +155,13 @@ pub struct Expect {
     #[serde(default, rename = "async")]
     pub requests: Vec<AsyncItem>,
     pub file: Option<FileItem>,
+    pub pos: Option<PosItem>,
+    #[serde(default)]
+    pub nopos: bool,
+    /// The label of a write the file system applied after this one: its
+    /// `file.position` write order must be higher.
+    pub before: Option<String>,
+    pub copy: Option<CopyItem>,
     pub allow: Option<Allow>,
     pub why: Option<String>,
     #[serde(default)]

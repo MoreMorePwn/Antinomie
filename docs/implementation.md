@@ -1895,6 +1895,76 @@ revision unchanged.
   lost races. vm-regress reports the group as MEASURED when drops are its only
   problem.
 
+### File positions and in-kernel copy operands (0.8.0)
+
+Contract revision 18 (guest patch 16, `kernel/antinomie/fileops.c`; layouts in
+`protocol/control.h`). Two kernel-imported fields of a call's Exit, only for
+native calls that succeeded on seekable files (regular files and block devices):
+
+* **`file.position`** (`antinomie.filepos/1`, 24 bytes: u64 offset, u64
+  length, u64 write order) on read, write, pread64, pwrite64, readv, writev, preadv, pwritev,
+  preadv2 and pwritev2. `vfs_read()`, `vfs_write()`, `vfs_readv()` and
+  `vfs_writev()` report where the transfer left the position, and the record
+  holds where it began (that position less the result). It is the open file's
+  real position: a descriptor shared after fork, dup or SCM_RIGHTS moves for
+  every task that uses it, and an `O_APPEND` write (or `RWF_APPEND`, or a
+  pwrite on an `O_APPEND` file) lands at the end of the file as the write found
+  it under the inode lock, which the host could not infer.
+* **Write order** (in `file.position` at 16 and `file.copy` at 96): a number
+  from one guest-wide counter, taken in `generic_write_checks_count()`, which
+  ext4, tmpfs, btrfs and xfs run while holding the file's inode lock, just
+  before the write is applied. The position hooks run after the file system
+  dropped that lock, and the Exit event is stamped later still, at the end of
+  the call, so two processes writing one range at once can have their exits
+  recorded in the opposite order to the one the file system applied them in;
+  the write order is the applied order. A call that writes in pieces (a splice
+  into a file) keeps its first piece's number. Zero when there is none: a read,
+  a block device (no inode lock), a clone or an allocation.
+* **`file.copy`** (`antinomie.filecopy/1`, 104 bytes) on sendfile, splice (the
+  file side; a splice between a pipe and a socket has none), copy_file_range,
+  ioctl `FICLONE`/`FICLONERANGE` and fallocate (and the preallocation ioctls):
+  the kind, the source and destination (device, inode, generation, mode),
+  where the range began in each end that has positions, its length, the
+  destination's size after the call and, for fallocate, the `FALLOC_FL_*`
+  mode. When the destination is seekable and the source is not (the pipe of
+  a splice; sendfile and copy_file_range refuse a source that is not seekable,
+  so a socket reaches a file through a pipe), nothing can read the bytes again
+  later, so the bytes the destination got follow as **`file.copy.data`** (opaque bytes, from
+  `iter_file_splice_write()` while the pipe still holds them), at most 1 MiB per
+  call; past it the record's `DATA_CUT` flag says more went in. A seekable
+  source is not carried: the host rebuilds the bytes from what it knows of that
+  file. `FIDEDUPERANGE` (no content change) and io_uring's splice and fallocate
+  requests are not recorded.
+
+The hooks fill the task's recorder context during the call and the Exit
+publishes the fields, so a call gets no extra event; a position costs one field
+(three packets, about 550 bytes with the ANTT headers) on the Exit of each read
+or write of a file. The hooked functions are shared with io_uring and exec, so
+each hook checks the call number. The patch is shared by every architecture
+(only `__NR_` names of calls every 64-bit table has).
+
+Host: `kernel_notes::{file_position, file_copy}`. Triage's per-file history
+takes a read's or write's offset from the record when it has one (so File
+activity places `O_APPEND` and shared-descriptor writes instead of counting
+them as at an unknown offset), and applies a copy to the destination's known
+bytes exactly: only the copied range is dropped, carried bytes are placed (and
+listed as the destination's written content, read from the object store),
+punched or zeroed ranges read as zeros, a collapsed or inserted range drops the
+bytes after it, and the file's size is the record's. A recording from an
+earlier guest has no records and is read as before. Overlapping writes are
+replayed by write order: in File activity's write store
+(`file_writes::Writes::add_ordered`, a numbered write goes under any later
+numbered one that reached the host first, never past an unnumbered one) and in
+the per-file change bytes (`triage/files/order.rs`, the last 64 numbered writes
+of a file are remembered and a write keeps out of the bytes a later-applied one
+holds). The conformance suite's
+`file_pos` area checks the records (`pos`, `nopos`, `copy` oracle members): a
+forked child's write through the parent's descriptor, a dup, racing `O_APPEND`
+writers whose offsets the parent reads back from the file, two processes
+writing the same range at once (16 rounds; the parent reads which write each
+round's bytes are, and the judge requires the other one's write order to be
+lower, the `before` member), and each copy call.
+
 ### Transport reconnect, command deadlines and terminal output under load (0.8.0)
 
 Three host fixes; the guest and the contract are unchanged.

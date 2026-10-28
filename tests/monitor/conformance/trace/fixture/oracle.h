@@ -108,6 +108,21 @@ void file_path(const char *kind, const char *path);
 // The same from a stat taken before the call (UNLINK: the name is gone after).
 struct stat;
 void file_stat(const char *kind, const struct stat *st);
+// Where a read or write of a seekable file began and how much it moved, as
+// the kernel's file.position record must say (contract revision 18).
+void file_pos(uint64_t offset, uint64_t len);
+// The call must carry no file.position record (a pipe).
+void file_pos_none(void);
+// The write's file.position write order must be lower than that of the case
+// `label`: the file system applied this write first (its bytes show it).
+void file_written_before(const char *label);
+// What an in-kernel copy or allocation moved, as its file.copy record must
+// say: kind is SENDFILE, SPLICE, COPY_RANGE, CLONE or FALLOCATE; src_fd < 0
+// for an allocation; an offset < 0 for an end without one (a pipe, a
+// socket); data_len is the bytes carried as file.copy.data. Both ends are
+// identified with fstat, the destination's size after the call included.
+void file_copy(const char *kind, int src_fd, long long src_off, int dst_fd, long long dst_off,
+               uint64_t len, unsigned mode, uint64_t data_len);
 // One io_uring or AIO request this call submitted (or reaped), with the
 // result its completion reported.
 void async_req(uint64_t user_data, int opcode, long result);
