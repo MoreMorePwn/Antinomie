@@ -27,6 +27,7 @@ use crate::disk_start::{DiskStart, Frozen, Start, Via};
 use crate::disks::reader::{
     DiskAnswer, DiskRequest, LocationMatch, RANGE_LIMIT, ReadError, Reader,
 };
+use crate::file_before_store::Store;
 use crate::kernel_notes::FileKey;
 use std::{
     path::{Path, PathBuf},
@@ -50,6 +51,16 @@ pub enum Before {
     Elsewhere(String),
     /// On the disk, but larger than [`SIZE_CAP`].
     TooLarge(u64),
+    /// The run's recording holds a copy of the earlier content
+    /// ([`crate::file_before_store`]); it reads without the disk.
+    Recorded { size: u64, exact: bool },
+    /// The earlier content was not copied into the recording (over a cap):
+    /// its size, and its SHA-256 where it was taken, only.
+    NotCopied {
+        size: u64,
+        sha256: Option<String>,
+        why: String,
+    },
     /// The starting disk cannot be read; says why.
     Unavailable(String),
 }
@@ -57,6 +68,8 @@ pub enum Before {
 /// An open starting disk. The reader worker starts with the first request
 /// and ends when this is dropped.
 pub struct StartDisk {
+    /// Set for the recording's own copy: nothing else is read.
+    recorded: Option<Store>,
     layers: Vec<PathBuf>,
     executable: Option<PathBuf>,
     reader: Mutex<Option<(Reader, PathBuf)>>,
@@ -89,10 +102,26 @@ impl StartDisk {
         };
         frozen.verify()?;
         Ok(Arc::new(Self {
+            recorded: None,
             layers: frozen.paths(),
             executable,
             reader: Mutex::new(None),
         }))
+    }
+
+    /// The copy the boot's recording holds, if it has one.
+    pub fn recorded(boot_dir: &Path) -> Option<Arc<Self>> {
+        Some(Arc::new(Self {
+            recorded: Some(Store::open(boot_dir)?),
+            layers: Vec::new(),
+            executable: None,
+            reader: Mutex::new(None),
+        }))
+    }
+
+    /// What the recording's copy says of `path`, if it has an entry.
+    pub fn recorded_find(&self, path: &str, key: Option<FileKey>) -> Option<Before> {
+        self.recorded.as_ref()?.find(path, key)
     }
 
     fn with_reader<T>(
@@ -122,6 +151,9 @@ impl StartDisk {
     /// Whether `path` (with the inode the trace named, if it did) is on the
     /// starting disk.
     pub fn find(&self, path: &str, key: Option<FileKey>) -> Before {
+        if let Some(found) = self.recorded_find(path, key) {
+            return found;
+        }
         let located = self.with_reader(|reader, _| {
             reader.request(DiskRequest::Locate {
                 path: path.to_owned(),
@@ -153,6 +185,9 @@ impl StartDisk {
     /// Fewer come back at the end of the file.
     pub fn read(&self, path: &str, offset: u64, len: u64) -> Result<Vec<u8>, String> {
         let len = len.min(RANGE_LIMIT);
+        if let Some(store) = &self.recorded {
+            return store.read(path, offset, len);
+        }
         self.with_reader(|reader, scratch| {
             let answer = reader.request(DiskRequest::ReadRange {
                 path: path.to_owned(),
@@ -210,6 +245,11 @@ pub struct Resolver {
     effective: Vec<Option<usize>>,
     executable: Option<PathBuf>,
     disks: std::collections::BTreeMap<usize, Result<Arc<StartDisk>, String>>,
+    /// Each segment's run folder and boot, to find the boot's recorded copy.
+    segments: Vec<(PathBuf, String)>,
+    /// Read the recording's copy first (`false` while the copy is made).
+    use_recorded: bool,
+    recorded: std::collections::BTreeMap<usize, Option<Arc<StartDisk>>>,
 }
 
 impl Resolver {
@@ -233,12 +273,25 @@ impl Resolver {
             effective,
             executable,
             disks: Default::default(),
+            segments: segments.to_vec(),
+            use_recorded: true,
+            recorded: Default::default(),
         }
+    }
+
+    /// Read only the starting disk, never the recording's copy: for making
+    /// the copy.
+    pub fn disk_only(mut self) -> Self {
+        self.use_recorded = false;
+        self
     }
 
     /// The earlier bytes of one file and where to read them from.
     pub fn resolve(&mut self, wanted: &Wanted<'_>) -> (Before, Option<DiskFile>) {
-        if wanted.created {
+        // A create the trace only inferred (the path was not seen earlier, but
+        // the open had O_CREAT) may be a file that was there: when the guest
+        // named the inode, the disk decides. Without one, it is a creation.
+        if wanted.created && wanted.key.is_none() {
             return (Before::Created, None);
         }
         let last = wanted.last_segment.min(self.own.len().saturating_sub(1));
@@ -270,6 +323,29 @@ impl Resolver {
                 None,
             );
         };
+        if self.use_recorded {
+            let recorded = self.recorded.entry(source).or_insert_with(|| {
+                let (dir, boot) = &self.segments[source];
+                DiskStart::boot_dir(dir, boot).and_then(|boot| StartDisk::recorded(&boot))
+            });
+            if let Some(store) = recorded {
+                for path in
+                    std::iter::once(wanted.path).chain(wanted.names.iter().map(String::as_str))
+                {
+                    match store.recorded_find(path, wanted.key) {
+                        None => {}
+                        Some(found @ Before::Recorded { .. }) => {
+                            let file = DiskFile {
+                                disk: Arc::clone(store),
+                                path: path.into(),
+                            };
+                            return (found, Some(file));
+                        }
+                        Some(other) => return (other, None),
+                    }
+                }
+            }
+        }
         let executable = self.executable.clone();
         let own = &self.own;
         let disk = self.disks.entry(source).or_insert_with(|| {
@@ -295,6 +371,9 @@ impl Resolver {
                 return (found, Some(file));
             }
             first_answer.get_or_insert(found);
+        }
+        if wanted.created && !matches!(first_answer, Some(Before::Unavailable(_))) {
+            return (Before::Created, None);
         }
         (
             first_answer.unwrap_or_else(|| {

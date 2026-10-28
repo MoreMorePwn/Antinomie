@@ -76,6 +76,15 @@ impl Worker {
                 .recording_directory
                 .join("boots")
                 .join(&boot_id);
+            // Seal the disk as the boot finds it under a fresh empty layer, so the
+            // boot cannot overwrite what its runs' earlier file bytes are read
+            // from; the bytes are copied into the recording when it ends.
+            match crate::snapshots::run_layer::begin(&self.options, &vm, &boot_dir, &boot_id) {
+                Ok(()) => {}
+                // A chain at its limit still boots, with the older, weaker record.
+                Err(error) if error.contains("chain limit") => {}
+                Err(error) => return Err(error),
+            }
             // The disk as the boot finds it, before QEMU opens it: what a run's
             // earlier file bytes are read from later.
             let disk_start = crate::snapshots::active_disk(&self.options, &vm)
@@ -187,6 +196,9 @@ impl Worker {
                 Ok("VM running; transport attached".into())
             }
             Err(e) => {
+                // Nothing ran: give the automatic layer back at once.
+                crate::snapshots::run_layer::ended(id);
+                crate::snapshots::run_layer::mark_due(id);
                 self.snapshot.active_vm = None;
                 self.snapshot.state = VmState::Failed;
                 Err(e)
@@ -393,6 +405,10 @@ impl Worker {
             issues.push(e);
         }
         abandon_memory_dump(&mut self.snapshot);
+        // QEMU is gone: the automatic layer is finished once the recording is
+        // saved (see `poll_flush`).
+        crate::snapshots::run_layer::ended(&session.vm.id);
+        crate::snapshots::run_layer::mark_due(&session.vm.id);
         self.snapshot.active_vm = None;
         self.snapshot.state = VmState::Stopped;
         self.stopping.store(false, Ordering::Relaxed);

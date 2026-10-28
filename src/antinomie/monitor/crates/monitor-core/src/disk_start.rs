@@ -234,11 +234,11 @@ impl DiskStart {
             .filter(|s: &Self| s.format == 1)
     }
 
-    /// The record of the boot `boot_id` that recorded the run segment in
+    /// The folder of the boot `boot_id` that recorded the run segment in
     /// `directory`: `<rec>/boots/<boot_id>/`, where `<rec>` holds the run's
     /// folder (`<rec>/runs/<id>` or `<rec>/boots/<boot>/runs/<id>`). Falls
     /// back to the nearest ancestor of `directory` that holds a record.
-    pub fn of_segment(directory: &Path, boot_id: &str) -> Option<Self> {
+    pub fn boot_dir(directory: &Path, boot_id: &str) -> Option<PathBuf> {
         let runs = directory.parent().filter(|runs| runs.ends_with("runs"));
         let above = runs.and_then(Path::parent);
         let root = above.and_then(|above| match above.parent() {
@@ -247,7 +247,22 @@ impl DiskStart {
         });
         let safe = !boot_id.is_empty() && !boot_id.contains(['/', '\\']) && boot_id != "..";
         root.filter(|_| safe)
-            .and_then(|root| Self::load(&root.join("boots").join(boot_id)))
+            .map(|root| root.join("boots").join(boot_id))
+            .filter(|boot| boot.is_dir())
+            .or_else(|| {
+                directory
+                    .ancestors()
+                    .take(5)
+                    .find(|dir| dir.join(FILE).is_file())
+                    .map(Path::to_path_buf)
+            })
+    }
+
+    /// The record of the boot `boot_id` that recorded the run segment in
+    /// `directory` (see [`Self::boot_dir`]).
+    pub fn of_segment(directory: &Path, boot_id: &str) -> Option<Self> {
+        Self::boot_dir(directory, boot_id)
+            .and_then(|boot| Self::load(&boot))
             .or_else(|| Self::find(directory))
     }
 

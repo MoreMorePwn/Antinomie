@@ -8,7 +8,8 @@
 use antinomie_monitor_core::{
     disk_start::{DiskStart, Start, Via},
     file_before::{Before, Resolver, Wanted},
-    file_writes::{Before as Under, Writes},
+    file_before_store::Writer,
+    file_writes::{Before as Under, Limits, Writes},
     kernel_notes::FileKey,
 };
 use std::{
@@ -204,6 +205,32 @@ fn a_modified_files_earlier_bytes_match_the_base_image() {
         resolver.resolve(&wanted("/etc/new", None, true)).0,
         Before::Created
     );
+    // An open with O_CREAT the trace took for a creation, on a file that was
+    // there (the inode matches the disk's): not a creation. A name the disk
+    // does not hold, or holds as another inode, is.
+    assert_eq!(
+        resolver
+            .resolve(&wanted("/etc/crontab", Some(crontab), true))
+            .0,
+        Before::OnDisk {
+            size: CRONTAB.len() as u64,
+            exact: true
+        }
+    );
+    let nowhere = FileKey {
+        ino: 99_999,
+        ..crontab
+    };
+    assert_eq!(
+        resolver.resolve(&wanted("/etc/new", Some(nowhere), true)).0,
+        Before::Created
+    );
+    assert_eq!(
+        resolver
+            .resolve(&wanted("/etc/crontab", Some(preload), true))
+            .0,
+        Before::Created
+    );
     assert!(matches!(
         resolver.resolve(&wanted("/dev/shm/x", None, false)).0,
         Before::Elsewhere(_)
@@ -257,10 +284,107 @@ fn a_modified_files_earlier_bytes_match_the_base_image() {
         none.resolve(&wanted("/etc/crontab", None, false)).0,
         Before::Unavailable(why) if why.contains("not recorded")
     ));
+
+    // The boot is over: the earlier bytes of the changed files are copied
+    // into its recording, from the starting disk only. The preload fits the
+    // caps; the crontab (109 bytes) is over the per-file cap of 100.
+    let limits = Limits {
+        per_file: 100,
+        per_run: 1 << 20,
+    };
+    let mut writer = Writer::open(&boot, "b1", limits);
+    let mut disk = Resolver::new(&[(run.clone(), "b1".into())], Some(app.clone())).disk_only();
+    for (path, key) in [("/etc/crontab", crontab), ("/etc/ld.so.preload", preload)] {
+        let (found, source) = disk.resolve(&wanted(path, Some(key), false));
+        writer.record(path, &[], Some(key), &found, source.as_ref());
+    }
+    let (found, source) = disk.resolve(&wanted("/dev/shm/x", None, false));
+    writer.record("/dev/shm/x", &[], None, &found, source.as_ref());
+    writer.finish(true, None).unwrap();
+    // A second boot with roomy caps keeps both.
+    let boot2 = root.join("rec/boots/b3");
+    let run2 = boot2.join("runs/r1");
+    fs::create_dir_all(&run2).unwrap();
+    DiskStart {
+        boot_id: "b3".into(),
+        ..start.clone()
+    }
+    .save(&boot2)
+    .unwrap();
+    let mut roomy = Writer::open(&boot2, "b3", Limits::default());
+    let mut disk2 = Resolver::new(&[(run2.clone(), "b3".into())], Some(app.clone())).disk_only();
+    for (path, key) in [("/etc/crontab", crontab), ("/etc/ld.so.preload", preload)] {
+        let (found, source) = disk2.resolve(&wanted(path, Some(key), false));
+        roomy.record(path, &[], Some(key), &found, source.as_ref());
+    }
+    roomy.finish(true, None).unwrap();
+
+    // The base goes away; the recording reads on its own, byte for byte.
     fs::remove_file(&base).unwrap();
-    let mut gone = Resolver::new(&[(run, "b1".into())], Some(app));
+    let mut gone = Resolver::new(&[(run.clone(), "b1".into())], Some(app.clone()));
+    let (found, file) = gone.resolve(&wanted("/etc/ld.so.preload", Some(preload), false));
+    assert_eq!(
+        found,
+        Before::Recorded {
+            size: PRELOAD.len() as u64,
+            exact: true
+        }
+    );
+    let file = file.unwrap();
+    assert_eq!(file.disk.read(&file.path, 0, 4096).unwrap(), PRELOAD);
+    let under = Under {
+        size: PRELOAD.len() as u64,
+        source: antinomie_monitor_core::file_writes::Source::Disk {
+            file: file.clone(),
+            at: 0,
+        },
+    };
+    let mut writes = Writes::default();
+    let mut budget = antinomie_monitor_core::file_writes::Budget::default();
+    writes.add(
+        &mut budget,
+        Some(10),
+        8,
+        vec![antinomie_monitor_core::file_writes::Captured {
+            rel: 0,
+            len: 8,
+            source: antinomie_monitor_core::file_writes::Source::Inline(b"EVIL.so\n".to_vec()),
+        }],
+    );
+    assert_eq!(
+        writes
+            .read_over(Some(&under), 0, PRELOAD.len() as u64)
+            .unwrap(),
+        expect
+    );
+    // Over the cap: size and hash only.
+    match gone
+        .resolve(&wanted("/etc/crontab", Some(crontab), false))
+        .0
+    {
+        Before::NotCopied { size, sha256, why } => {
+            assert_eq!(size, CRONTAB.len() as u64);
+            assert_eq!(
+                sha256.as_deref(),
+                Some(antinomie_monitor_core::storage::sha256_hex(CRONTAB).as_str())
+            );
+            assert!(why.contains("per-file cap"), "{why}");
+        }
+        other => panic!("{other:?}"),
+    }
     assert!(matches!(
-        gone.resolve(&wanted("/etc/crontab", None, false)).0,
+        gone.resolve(&wanted("/dev/shm/x", None, false)).0,
+        Before::Elsewhere(_)
+    ));
+    let mut roomy = Resolver::new(&[(run2, "b3".into())], Some(app.clone()));
+    let (found, file) = roomy.resolve(&wanted("/etc/crontab", Some(crontab), false));
+    assert!(matches!(found, Before::Recorded { .. }));
+    let file = file.unwrap();
+    assert_eq!(file.disk.read(&file.path, 0, 4096).unwrap(), CRONTAB);
+    // A file the recording was not asked about falls back to the disk, which is gone.
+    let mut other = Resolver::new(&[(run.clone(), "b1".into())], Some(app.clone()));
+    assert!(matches!(
+        other.resolve(&wanted("/etc/hosts", None, false)).0,
         Before::Unavailable(why) if why.contains("gone")
     ));
     let _ = fs::remove_dir_all(&root);

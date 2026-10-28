@@ -27,6 +27,7 @@ pub mod distribution;
 pub mod evidence_delete;
 mod execution;
 pub mod file_before;
+pub mod file_before_store;
 pub mod file_writes;
 pub mod filter_members;
 mod guest_account;

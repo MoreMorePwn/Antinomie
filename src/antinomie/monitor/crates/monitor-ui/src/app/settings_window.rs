@@ -512,6 +512,29 @@ impl MonitorApp {
                 );
             });
             ui.end_row();
+            ui.label("File activity: earlier bytes kept");
+            ui.vertical(|ui| {
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut self.settings.file_before_file_mib)
+                            .range(1..=65_536)
+                            .suffix(" MiB per file"),
+                    );
+                    ui.add(
+                        egui::DragValue::new(&mut self.settings.file_before_run_mib)
+                            .range(1..=1_048_576)
+                            .suffix(" MiB per run"),
+                    );
+                });
+                hint(
+                    ui,
+                    "When a run ends, the earlier bytes (before the run changed them) of the \
+                     files it changed are copied into its recording, so they stay readable \
+                     after the base is gone. A file over a cap keeps its size and SHA-256 and is \
+                     listed as not captured. This copy is not counted in the Recording quota.",
+                );
+            });
+            ui.end_row();
         });
     }
 }

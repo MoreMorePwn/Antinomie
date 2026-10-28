@@ -106,6 +106,10 @@ struct Settings {
     file_write_file_mib: u32,
     /// File activity: most MiB of written content kept for a whole run.
     file_write_run_mib: u32,
+    /// File activity: most MiB of a file's earlier bytes copied into the recording.
+    file_before_file_mib: u32,
+    /// File activity: most MiB of earlier bytes copied for a whole run.
+    file_before_run_mib: u32,
     timeout: u64,
     font_size: f32,
     /// Tint syscall trace rows by syscall group.
@@ -190,6 +194,14 @@ impl Settings {
         }
     }
 
+    /// The caps on the earlier file bytes copied into a recording.
+    fn before_limits(&self) -> antinomie_monitor_core::file_writes::Limits {
+        antinomie_monitor_core::file_writes::Limits {
+            per_file: u64::from(self.file_before_file_mib) << 20,
+            per_run: u64::from(self.file_before_run_mib) << 20,
+        }
+    }
+
     fn set_theme(&mut self, theme: theme::Theme) {
         self.theme = Some(theme);
         self.light_theme = theme.is_light();
@@ -206,6 +218,10 @@ impl Default for Settings {
             file_write_file_mib: (antinomie_monitor_core::file_writes::DEFAULT_PER_FILE >> 20)
                 as u32,
             file_write_run_mib: (antinomie_monitor_core::file_writes::DEFAULT_PER_RUN >> 20) as u32,
+            file_before_file_mib: (antinomie_monitor_core::file_writes::DEFAULT_PER_FILE >> 20)
+                as u32,
+            file_before_run_mib: (antinomie_monitor_core::file_writes::DEFAULT_PER_RUN >> 20)
+                as u32,
             timeout: 10,
             font_size: 16.0,
             trace_colors: true,
@@ -525,6 +541,8 @@ impl MonitorApp {
         options.bundle_dir = crate::folders::user_path(&settings.bundle);
         options.capture_quota_size = u64::from(settings.quota_gib) * 1024 * 1024 * 1024;
         options.shutdown_timeout = Duration::from_secs(settings.timeout);
+        // Before the backend starts: it finishes layers an earlier process left.
+        antinomie_monitor_core::file_before_store::set_limits(settings.before_limits());
         let (backend, status) = match Backend::new_with_wake(options.clone(), {
             let ctx = cc.egui_ctx.clone();
             std::sync::Arc::new(move || ctx.request_repaint_of(egui::ViewportId::ROOT))
@@ -776,6 +794,7 @@ impl eframe::App for MonitorApp {
             .unwrap_or_else(crate::triage::TriageInput::empty);
         self.triage.set_data_dir(&self.options.data_dir);
         self.triage.set_write_limits(self.settings.write_limits());
+        antinomie_monitor_core::file_before_store::set_limits(self.settings.before_limits());
         self.triage
             .set_toast_high(self.settings.toast_high_findings);
         self.triage

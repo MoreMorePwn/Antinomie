@@ -120,6 +120,10 @@ impl Worker {
         }
         let errors = self.flusher.collect();
         let status = self.flusher.status();
+        if self.session.is_none() && !self.flusher.is_busy() && self.deferred_flush.is_none() {
+            let vms: Vec<String> = self.snapshot.vms.iter().map(|vm| vm.id.clone()).collect();
+            crate::snapshots::run_layer::finalize_due(&self.options, &vms);
+        }
         if !errors.is_empty() {
             self.snapshot.last_error = Some(format!("saving recordings: {}", errors.join("; ")));
         }
@@ -135,6 +139,13 @@ impl Worker {
             thread::sleep(Duration::from_millis(50));
         }
         self.poll_flush();
+        // The automatic disk layer of a boot that just ended is finished too
+        // (a limit: what is left goes on at the next start of the app).
+        let deadline = Instant::now() + Duration::from_secs(300);
+        while crate::snapshots::run_layer::working() && Instant::now() < deadline {
+            self.poll_flush();
+            thread::sleep(Duration::from_millis(100));
+        }
     }
 
     /// Submit finalizers for a sealed boot. The session-start admission check
@@ -609,6 +620,8 @@ impl Worker {
                 if let Some(mut session) = self.session.take() {
                     let steps = session.seal("unexpected-exit", &mut self.snapshot);
                     self.submit_sealed_flush(session.boot_id.clone(), steps);
+                    crate::snapshots::run_layer::ended(&session.vm.id);
+                    crate::snapshots::run_layer::mark_due(&session.vm.id);
                 }
                 if let Err(e) = end_network_capture(&mut self.snapshot) {
                     self.snapshot.last_error = Some(e);

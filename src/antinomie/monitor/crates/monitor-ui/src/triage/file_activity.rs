@@ -17,7 +17,7 @@ mod earlier;
 mod graph;
 mod window;
 
-pub(super) use earlier::resolve as resolve_earlier;
+pub(super) use earlier::{copy_boot, resolve as resolve_earlier};
 
 pub(super) use window::{Window, CALLS_TABLE, FILE_TABLE};
 

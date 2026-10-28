@@ -55,6 +55,23 @@ it runs.
   destination, with the file's size after it; the bytes a splice from a pipe
   put into a file are shown as written content.
 
+- **A boot's earlier file bytes now live in its recording.** When a VM starts, the
+  disk it was left in is sealed under a fresh empty layer (instant, nothing is
+  copied), so the boot cannot overwrite it, and a plain restart of a used VM has a
+  readable starting state like a new one. When the boot is over and its recording
+  is saved, the earlier bytes of only the files the runs changed are copied into
+  the recording from the sealed layer, and the layer is merged back down at once:
+  at most one extra layer, and only while the VM runs. The earlier bytes then read
+  without the base or any checkpoint, even after they are deleted. Two caps, 64 MiB
+  per file and 1 GiB per run (Settings › Advanced), keep the copy small; a file over
+  one keeps its size and SHA-256 and is listed as not captured. The layer is not a
+  snapshot and is never shown in Snapshots; your snapshots are never merged or
+  changed (if you take or restore one during the boot, the layer stays in the chain
+  as the snapshot's own). If the app or the machine dies mid-run the VM still boots,
+  and the next start or launch of the app finishes the copy and the merge. The copy
+  is not counted in the Recording quota. Several runs in one boot share the boot's
+  starting state; a boot started by a snapshot restore still reads its checkpoint.
+
 - **Library › Samples lists every sample across runs and VMs.** One flat list,
   the sample with the latest run first: name, description, tags (verdict and
   malware category; techniques and custom tags fold into `+N`), run count,

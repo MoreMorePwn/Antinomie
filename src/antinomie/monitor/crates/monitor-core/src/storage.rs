@@ -1405,6 +1405,7 @@ pub(crate) fn delete_vm(options: &BackendOptions, id: &str) -> Result<(), String
     if config.id != id {
         return Err("VM configuration identity mismatch".into());
     }
+    crate::snapshots::run_layer::ensure_idle(options, id)?;
     let bundle: Bundle = read_json(&dir.join("bundle.json"))?;
     bundle.verify_installed()?;
     crate::snapshots::validate_active(options, &config, bundle.vm_disk())?;

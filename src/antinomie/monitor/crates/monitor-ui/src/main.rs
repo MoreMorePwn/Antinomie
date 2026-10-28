@@ -132,6 +132,11 @@ fn main() -> eframe::Result<()> {
     if let Some(code) = antinomie_monitor_core::disks::reader::worker_main_if_requested() {
         std::process::exit(code);
     }
+    if let Some(code) = antinomie_monitor_core::file_before_store::worker_main_if_requested(
+        triage::copy_earlier_bytes,
+    ) {
+        std::process::exit(code);
+    }
     let args = Arguments::parse();
     // Before eframe or background workers start; changes only this process.
     if args.graphics_driver == GraphicsDriver::D3d12 {

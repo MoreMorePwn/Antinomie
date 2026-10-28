@@ -528,6 +528,7 @@ impl Worker {
                             "disk resizing is blocked while snapshots retain disk geometry".into(),
                         );
                     }
+                    crate::snapshots::run_layer::ensure_idle(&self.options, &current.id)?;
                     let disk = crate::snapshots::active_disk(&self.options, current)?;
                     let output = std::process::Command::new(&self.options.qemu_img)
                         .arg("resize")

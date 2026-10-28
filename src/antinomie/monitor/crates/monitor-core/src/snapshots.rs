@@ -18,6 +18,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+pub(crate) mod run_layer;
+
 const MAX_NODES: usize = 256;
 const MAX_CHAIN: usize = 64;
 const MAX_METADATA_SIZE: u64 = 4 * 1024 * 1024;
@@ -890,15 +892,15 @@ pub(crate) fn validate_disk(
 #[cfg(test)]
 mod tests {
     use super::*;
-    struct Fixture {
-        root: PathBuf,
-        options: BackendOptions,
-        vm: VmConfig,
-        directory: PathBuf,
-        base: PathBuf,
+    pub(super) struct Fixture {
+        pub(super) root: PathBuf,
+        pub(super) options: BackendOptions,
+        pub(super) vm: VmConfig,
+        pub(super) directory: PathBuf,
+        pub(super) base: PathBuf,
     }
     impl Fixture {
-        fn new() -> Self {
+        pub(super) fn new() -> Self {
             let root = std::env::temp_dir().join(format!("ant-snapshot-{}", unique_id()));
             let options = BackendOptions {
                 data_dir: root.clone(),
@@ -960,7 +962,7 @@ mod tests {
                 base,
             }
         }
-        fn command(program: &str, args: &[&str], path: &Path, trailing: Option<&str>) {
+        pub(super) fn command(program: &str, args: &[&str], path: &Path, trailing: Option<&str>) {
             let mut command = Command::new(program);
             command.args(args).arg(path);
             if let Some(value) = trailing {
@@ -973,7 +975,7 @@ mod tests {
                 String::from_utf8_lossy(&output.stderr)
             );
         }
-        fn write(&self, value: u8) {
+        pub(super) fn write(&self, value: u8) {
             let path = active_disk(&self.options, &self.vm).unwrap();
             Self::command(
                 "qemu-io",
@@ -982,7 +984,7 @@ mod tests {
                 None,
             );
         }
-        fn read(&self, disk: &Path, value: u8) {
+        pub(super) fn read(&self, disk: &Path, value: u8) {
             Self::command(
                 "qemu-io",
                 &[
@@ -996,7 +998,7 @@ mod tests {
                 None,
             );
         }
-        fn take(&self, name: &str) -> VmCheckpoint {
+        pub(super) fn take(&self, name: &str) -> VmCheckpoint {
             let request = SnapshotRequest {
                 name: name.into(),
                 description: String::new(),

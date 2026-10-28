@@ -392,6 +392,7 @@ pub(super) fn scan_archive_query(
             .map(|segment| (segment.directory.clone(), segment.boot_id.clone()))
             .collect::<Vec<_>>(),
         None,
+        request.before_copy.as_deref(),
     );
     let ioc_files: Vec<files::IocFile> = all_changes
         .iter()

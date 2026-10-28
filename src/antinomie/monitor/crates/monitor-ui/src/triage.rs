@@ -1069,6 +1069,17 @@ struct ScanRequest {
     report: Option<Arc<antinomie_monitor_core::AnalysisReport>>,
     /// Caps on the file write content kept (Settings).
     write_limits: antinomie_monitor_core::file_writes::Limits,
+    /// Set while the earlier bytes of a finished boot are copied into its
+    /// recording: each changed file asked about is added to it.
+    before_copy: Option<Arc<std::sync::Mutex<antinomie_monitor_core::file_before_store::Writer>>>,
+}
+
+/// The copy of a finished boot's earlier file bytes into its recording, run
+/// by `--copy-earlier-bytes` (see `antinomie_monitor_core::file_before_store`).
+pub(crate) fn copy_earlier_bytes(
+    job: &antinomie_monitor_core::file_before_store::Job,
+) -> Result<(), String> {
+    file_activity::copy_boot(job)
 }
 
 const STORED_ROWS: usize = 2000;
