@@ -376,6 +376,9 @@ impl Worker {
                 run.summary.root_task_cookie = cookie;
                 run.summary.pid = pid;
                 run.summary.state = RunState::Running;
+                if let Some(sample) = request.sample.as_ref() {
+                    session.custody_start(&self.options.data_dir, sample, &mut run);
+                }
                 if request.core_dump_on_exit {
                     let core_offset = 24 + usize::from(inline_acquisition) * 24;
                     match process_core::Transfer::armed(&reply[core_offset..], &run.summary) {
@@ -730,6 +733,13 @@ impl Worker {
                         return Err(format!("terminal accepted only {written} input bytes"));
                     }
                 }
+                if let Some(log) = session
+                    .runs
+                    .get_mut(&cookie)
+                    .and_then(|run| run.custody.as_mut())
+                {
+                    log.typed(&data);
+                }
                 Ok(format!("terminal input accepted {written} bytes"))
             }
             Command::TerminalRead { run_id } => {
@@ -797,6 +807,16 @@ impl Worker {
                     &self.sender,
                     timeout,
                 )?;
+                if let Some(log) = session
+                    .runs
+                    .get_mut(&cookie)
+                    .and_then(|run| run.custody.as_mut())
+                {
+                    log.action(
+                        crate::samples::ActionKind::Kill,
+                        &format!("signal {signal} sent to process group {current_pid}"),
+                    );
+                }
                 Ok(format!(
                     "signal {signal} sent to process group {current_pid}"
                 ))
@@ -839,6 +859,12 @@ impl Worker {
                 }
                 let run = session.runs.get_mut(&cookie).ok_or("unknown run")?;
                 run.summary.state = RunState::StopRequested;
+                if let Some(log) = run.custody.as_mut() {
+                    log.action(
+                        crate::samples::ActionKind::Kill,
+                        "Stop: SIGTERM issued to the run",
+                    );
+                }
                 run.persist_summary()?;
                 Ok(if escalates {
                     format!(

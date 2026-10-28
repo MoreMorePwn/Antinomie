@@ -463,6 +463,17 @@ impl Library {
             .map_err(|e| format!("saved, but its custody event was not recorded: {e}"))
     }
 
+    /// [`Self::record_event`] at a given time, for what the library reads from a run.
+    pub(super) fn record_at(
+        &self,
+        sha256: &str,
+        by: &str,
+        at_ms: u64,
+        event: &CustodyEvent,
+    ) -> Result<(), String> {
+        self.custody.record(sha256, by, at_ms, event)
+    }
+
     /// Add an entry to a sample's custody log for something that happened
     /// outside the library (a run, an analyst action). The event's own type
     /// decides what it can hold; see [`CustodyEvent`].
@@ -781,6 +792,12 @@ impl Library {
         let count = added.len();
         for (sha256, vm, run) in added {
             self.note(&sha256, "app", CustodyEvent::SeenInRun { vm, run })?;
+        }
+        // What the sample did in each run, from the digest Triage left.
+        for run in runs {
+            if self.contains(&run.sha256)? {
+                self.note_run_activity(run)?;
+            }
         }
         Ok(count)
     }

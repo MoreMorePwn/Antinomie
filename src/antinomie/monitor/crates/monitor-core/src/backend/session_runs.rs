@@ -5,6 +5,29 @@ use super::*;
 const MAX_RETIRED_FLUSH_STEPS: usize = 64;
 
 impl Session {
+    /// A run of a library sample starts its custody log entry: where it runs
+    /// and under what, taken from the environment saved with the run.
+    pub(super) fn custody_start(
+        &self,
+        data_dir: &std::path::Path,
+        sample: &crate::samples::SampleRef,
+        run: &mut ProgramRun,
+    ) {
+        let log = crate::samples::RunLog::new(data_dir, sample, &run.summary.id, &self.vm.name);
+        let environment = run.summary.environment.clone().unwrap_or_default();
+        log.started(format!(
+            "base {}, stealth profile {}, network {}, {}",
+            environment.base_name,
+            environment.stealth,
+            environment.network,
+            self.restored_from.as_ref().map_or_else(
+                || "booted from the disk".to_owned(),
+                |snapshot| format!("restored from snapshot {snapshot}")
+            )
+        ));
+        run.custody = Some(log);
+    }
+
     pub(super) fn run_cookie(&self, id: &str) -> Result<u64, String> {
         self.runs
             .iter()

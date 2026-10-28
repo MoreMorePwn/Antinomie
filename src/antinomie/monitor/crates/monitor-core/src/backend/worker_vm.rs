@@ -158,6 +158,7 @@ impl Worker {
                 pre_ack: crate::pre_ack::PreAckBuffer::new(self.options.pre_ack),
                 quota: crate::quota::QuotaState::default(),
                 terminal_cursor: 0,
+                restored_from: None,
                 late_reads: BTreeMap::new(),
                 terminal_backlog: Default::default(),
                 run_status_poll: RunStatusPoll::default(),

@@ -419,6 +419,7 @@ impl Session {
             pre_ack: crate::pre_ack::PreAckBuffer::new(options.pre_ack),
             quota: crate::quota::QuotaState::default(),
             terminal_cursor: 0,
+            restored_from: snapshot_id.map(str::to_owned),
             late_reads: BTreeMap::new(),
             terminal_backlog: Default::default(),
             run_status_poll: RunStatusPoll::default(),
@@ -855,6 +856,14 @@ impl Worker {
         let _transition = self.begin_guest_transition()?;
         self.snapshot_stage(id, "Preparing snapshot recovery");
         if let Some(mut old) = self.session.take() {
+            for run in old.runs.values_mut() {
+                if let Some(log) = run.custody.as_mut() {
+                    log.action(
+                        crate::samples::ActionKind::SnapshotRestore,
+                        &format!("snapshot {snapshot_id} restored; this run ends here"),
+                    );
+                }
+            }
             let boot_id = old.boot_id.clone();
             let steps = old.seal("snapshot-branch-sealed", &mut self.snapshot);
             let stop = old.process.force_stop();

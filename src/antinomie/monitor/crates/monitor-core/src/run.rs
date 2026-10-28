@@ -37,6 +37,8 @@ pub(crate) struct ProgramRun {
     pending_screen: Option<Result<Vec<u8>, String>>,
     started_ms: u64,
     ended_ms: Option<u64>,
+    /// The library sample this run runs, whose custody log the run writes to.
+    pub custody: Option<crate::samples::RunLog>,
 }
 
 impl ProgramRun {
@@ -74,6 +76,7 @@ impl ProgramRun {
             pending_screen: None,
             started_ms,
             ended_ms: None,
+            custody: None,
         };
         run.refresh_analysis_metadata()?;
         run.persist_summary()?;
@@ -408,12 +411,31 @@ impl ProgramRun {
         }
         self.capture.final_health = Some(health.clone());
         storage::atomic_json(&self.summary.directory.join("run.json"), &self.summary)?;
+        self.note_end(health);
         let (rows, cols) = self.terminal.screen().size();
         storage::atomic_json(
             &self.summary.directory.join("manifest.json"),
             &serde_json::json!({"format":"ANTT run raw LE32","run":self.summary,"packets":self.capture.packets,"bytes":self.stored_len(),"persistence_error":self.summary.recording_error,"final_state":state,"health":health,"terminal_rows":rows,"terminal_cols":cols,"terminal_complete":self.terminal_complete(),"terminal_issue":self.terminal_issue(),"quota_scope":"VM boot shared raw, fields, transcript, journal and screen","boot_bundle_identity":self.boot_bundle_identity,"disk_base_identity":self.disk_base_identity,"tracer_hashing":self.tracer_hashing,"started_ms":self.started_ms,"ended_ms":self.ended_ms}),
         )?;
         result
+    }
+    /// The run's end in its sample's custody log: how many records the
+    /// recording holds, what was lost, and the SHA-256 of the raw recording.
+    fn note_end(&mut self, health: &Health) {
+        let Some(log) = self.custody.as_mut() else {
+            return;
+        };
+        let lost = self
+            .summary
+            .execution
+            .as_ref()
+            .map_or(0, |execution| execution.async_loss_count);
+        let trace = crate::samples::file_sha256(&self.summary.directory.join("telemetry.raw"))
+            .unwrap_or_else(|| "unreadable".into());
+        log.ended(format!(
+            "{} records saved, {} async observations lost, {} dropped by the recorder; recording SHA-256 {}",
+            self.capture.packets, lost, health.storage_dropped_packets, trace
+        ));
     }
     #[cfg(test)]
     pub fn finalize(&mut self, available: u64, state: &str, health: &Health) -> Result<(), String> {
@@ -957,6 +979,35 @@ mod tests {
         drop(run);
         crate::storage::settle_json_under(&directory);
         std::fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
+    fn a_finalized_run_of_a_library_sample_writes_its_end_to_the_custody_log() {
+        let _disk = storage::slow_disk::SlowDisk::install();
+        let (mut run, directory) = open_run("ant-run-custody");
+        let data = std::env::temp_dir().join(format!("ant-run-lib-{}", storage::unique_id()));
+        std::fs::create_dir_all(&data).unwrap();
+        let mut library = crate::samples::Library::open(&data).unwrap();
+        let sha = library
+            .add_bytes(b"echo\n", crate::samples::NewSample::default())
+            .unwrap()
+            .sha256;
+        let sample = crate::samples::SampleRef {
+            sha256: sha.clone(),
+            name: "echo".into(),
+        };
+        run.custody = Some(crate::samples::RunLog::new(&data, &sample, "r1", "vm"));
+        run.finalize(65536, "clean", &Health::default()).unwrap();
+        let entries = library.custody_entries(&sha).unwrap();
+        let end = entries.last().unwrap();
+        assert_eq!(end.kind, "run_ended");
+        let expected = crate::samples::file_sha256(&directory.join("telemetry.raw")).unwrap();
+        assert!(end.detail.contains(&expected), "{}", end.detail);
+        assert!(end.detail.contains("records saved"));
+        assert!(library.custody_check(&sha).unwrap().ok());
+        drop(run);
+        crate::storage::settle_json_under(&directory);
+        std::fs::remove_dir_all(directory).unwrap();
+        let _ = std::fs::remove_dir_all(data);
     }
     #[test]
     fn only_an_ended_run_with_a_closed_terminal_is_complete() {

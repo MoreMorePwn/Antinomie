@@ -457,6 +457,8 @@ struct Session {
     /// Set once the recording quota is reached; see `crate::quota`.
     quota: crate::quota::QuotaState,
     terminal_cursor: usize,
+    /// The snapshot this boot was restored from, when it was.
+    restored_from: Option<String>,
     /// Terminal READ requests whose deadline passed before their reply arrived,
     /// keyed by request id. The guest answers commands in submission order and
     /// has already consumed the PTY bytes, so a late reply still belongs to its run.

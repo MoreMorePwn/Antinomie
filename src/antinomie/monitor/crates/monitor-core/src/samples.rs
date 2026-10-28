@@ -16,6 +16,7 @@ use std::{
     process::Stdio,
 };
 
+mod activity;
 mod archive;
 mod chain;
 mod chain_check;
@@ -27,6 +28,7 @@ mod lineage;
 mod migrate;
 pub mod promote;
 mod rollup;
+mod runlog;
 mod similar;
 mod summary;
 
@@ -53,6 +55,7 @@ pub use rollup::{
     CheckRow, EvasionRow, IndicatorRow, Rollup, RuleRow, RunInput, TacticRow, TechniqueRow, rollup,
     tactic_of,
 };
+pub use runlog::{RunLog, file_sha256};
 pub use similar::{Shared, Similar};
 pub use summary::{StringRow, defang, interesting_strings, regex_matches};
 
@@ -758,6 +761,8 @@ pub const STARTERS: &[(&str, &str)] = &[
 mod chain_tests;
 #[cfg(test)]
 mod library_tests;
+#[cfg(test)]
+mod runlog_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
