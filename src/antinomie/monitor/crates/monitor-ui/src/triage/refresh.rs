@@ -15,7 +15,7 @@ const NETWORK_TIME_NOTE: &str = "Packet timestamps use QEMU's capture clock, dis
 /// what their rows and counts mean. It is part of the source stamp, so an
 /// index made by an older format is never mistaken for current and is
 /// rebuilt from the recording.
-pub(super) const FILE_INDEX_VERSION: u32 = 2;
+pub(super) const FILE_INDEX_VERSION: u32 = 3;
 
 /// What an index of the recording depends on, as a string: size and
 /// modification time of the files it reads, and the request facts that
@@ -42,13 +42,15 @@ pub(super) fn source_stamp(
         )
     };
     let mut stamp = format!(
-        "files-v{FILE_INDEX_VERSION}|{pcap_open}|{}|{:?}|{}|{:?}",
+        "files-v{FILE_INDEX_VERSION}|{pcap_open}|{}|{:?}|{}|{:?}|{}/{}",
         request.run_finished,
         request.started_ms,
         request.root_cookie,
         request
             .clock_anchor
             .map(|clock| (clock.guest_ns, clock.host_us)),
+        request.write_limits.per_file,
+        request.write_limits.per_run,
     );
     for name in [
         "telemetry.raw",

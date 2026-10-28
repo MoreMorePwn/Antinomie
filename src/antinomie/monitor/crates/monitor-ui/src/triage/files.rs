@@ -4,7 +4,7 @@
 //! recorded the identity of a file (device and inode) one file is followed
 //! across its names, and where it did not, two names are two files.
 use super::file_category::{self, Access, Category, Hit};
-use super::file_content::{capture as captured_data, CapturedPayload};
+use super::file_content::{self, capture as captured_data, CapturedPayload};
 use super::file_location::{self, Location};
 use super::*;
 use antinomie_monitor_core::kernel_notes::{FileHash, FileId, FileIdKind, FileKey, HashKind};
@@ -261,9 +261,16 @@ pub(super) struct FileIndex {
     /// What each call did to each file the run touched, for the File activity
     /// window.
     activity: file_activity::Builder,
+    /// Directory and object names shared by the extents of a field.
+    interned: file_content::Interned,
 }
 
 impl FileIndex {
+    /// The caps on the write content kept per file and per run.
+    pub fn set_write_limits(&mut self, limits: antinomie_monitor_core::file_writes::Limits) {
+        self.activity.set_limits(limits);
+    }
+
     #[cfg(test)]
     pub fn observe(
         &mut self,
@@ -707,6 +714,11 @@ impl FileIndex {
                 write: writing,
                 offset,
                 len: size,
+                stretches: if writing {
+                    file_content::write_stretches(call, directory, size, &mut self.interned)
+                } else {
+                    Vec::new()
+                },
                 content: bytes.head(file_activity::CONTENT_HEAD),
                 gap: bytes.len() as u64 != size,
                 extends: offset
@@ -1153,6 +1165,7 @@ fn number_signed(values: &[(&str, RowValue)], key: &str) -> Option<i128> {
 mod tests {
     use super::*;
     use crate::triage::tests::{call, captured, path_call};
+    use std::path::PathBuf;
 
     fn operation(
         id: u64,
@@ -2018,5 +2031,154 @@ mod tests {
             .events
             .iter()
             .all(|e| e.via.is_none()));
+    }
+
+    /// A write whose payload sits in a recording's object store: the field
+    /// names a file under `objects/` and the range says how much of it exists.
+    fn stored_write(
+        id: u64,
+        offset: u64,
+        size: u64,
+        object: &str,
+        ranges: Vec<(u64, u64)>,
+    ) -> InvocationSummary {
+        let mut call = operation(
+            id,
+            18,
+            "pwrite64",
+            size as i64,
+            [3, 0, size, offset, 0, 0],
+            b"",
+        );
+        let mut field = captured("arg1.data", "", b"");
+        field.raw_path = Some(PathBuf::from(format!("objects/{object}")));
+        field.logical_len = Some(size);
+        field.ranges = ranges;
+        call.entry.as_mut().unwrap().fields.push(field);
+        call
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("ant-write-content-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("objects")).unwrap();
+        root
+    }
+
+    fn activity_in(
+        calls: &[InvocationSummary],
+        directory: &Path,
+        limits: antinomie_monitor_core::file_writes::Limits,
+    ) -> Activity {
+        let mut index = FileIndex::default();
+        index.set_write_limits(limits);
+        let mut files = FdState::default();
+        let cookies = task_cookies(calls);
+        for call in calls {
+            let event = trace::representative(call).unwrap();
+            remember_cwd(&mut files, call, event);
+            remember_open(&mut files, call, event);
+            apply_dup(&mut files, call, event);
+            forget_closed(&mut files, call, event);
+            inherit_open_fds(&mut files, call, event, &cookies);
+            index.observe(&files, call, event, Some(directory));
+        }
+        index.finish_all().1
+    }
+
+    #[test]
+    fn a_file_written_in_many_small_blocks_comes_back_byte_for_byte_beyond_the_event_bound() {
+        let root = scratch("blocks");
+        let mut expected: Vec<u8> = Vec::new();
+        let mut calls = vec![open(0x41)];
+        // 700 blocks of 4 bytes: more writes than the 512 events a file lists.
+        for index in 0..700u64 {
+            let block: Vec<u8> = (0..4).map(|n| (index * 7 + n) as u8).collect();
+            std::fs::write(root.join(format!("objects/b{index}.raw")), &block).unwrap();
+            expected.extend(&block);
+            calls.push(stored_write(
+                index + 2,
+                index * 4,
+                4,
+                &format!("b{index}.raw"),
+                vec![(0, 4)],
+            ));
+        }
+        let activity = activity_in(&calls, &root, Default::default());
+        let file = file(&activity, "/tmp/file");
+        assert_eq!(
+            file.events.iter().filter(|e| e.kind == Kind::Write).count(),
+            511
+        );
+        assert_eq!(file.writes.read(0, 2800).unwrap(), expected);
+        assert_eq!(file.writes.tally.kept, 2800);
+        assert_eq!(activity.written.kept, 2800);
+        assert_eq!(activity.written.skipped(), 0);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn past_the_cap_the_first_writes_are_kept_and_the_rest_is_shown_as_not_captured() {
+        let root = scratch("cap");
+        let mut calls = vec![open(0x41)];
+        for index in 0..4u64 {
+            std::fs::write(
+                root.join(format!("objects/c{index}.raw")),
+                [b'a' + index as u8; 10],
+            )
+            .unwrap();
+            calls.push(stored_write(
+                index + 2,
+                index * 10,
+                10,
+                &format!("c{index}.raw"),
+                vec![(0, 10)],
+            ));
+        }
+        let limits = antinomie_monitor_core::file_writes::Limits {
+            per_file: 25,
+            per_run: 1 << 30,
+        };
+        let activity = activity_in(&calls, &root, limits);
+        let file = file(&activity, "/tmp/file");
+        let kept = file.writes.read(0, 25).unwrap();
+        assert_eq!(&kept[..10], [b'a'; 10]);
+        assert_eq!(&kept[20..], [b'c'; 5]);
+        assert_eq!(
+            file.writes.read(0, 26),
+            Err(antinomie_monitor_core::file_writes::ReadError::NotCaptured(
+                25
+            ))
+        );
+        assert_eq!((activity.written.kept, activity.written.file_cap), (25, 15));
+        assert_eq!(activity.limits, limits);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn bytes_the_kernel_did_not_capture_stay_gaps_in_the_written_content() {
+        let root = scratch("gap");
+        std::fs::write(root.join("objects/g.raw"), b"\0\0abc").unwrap();
+        // 10 bytes written; the object holds bytes 2..5 only.
+        let calls = [open(0x41), stored_write(2, 100, 10, "g.raw", vec![(2, 3)])];
+        let activity = activity_in(&calls, &root, Default::default());
+        let file = file(&activity, "/tmp/file");
+        assert_eq!(file.writes.read(102, 3).unwrap(), b"abc");
+        assert!(file.writes.read(100, 10).is_err());
+        assert_eq!(activity.written.not_recorded, 7);
+        assert!(file.events.iter().any(|e| e.content_gap));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_recording_without_object_files_keeps_the_inline_preview() {
+        let calls = [
+            open(0x41),
+            operation(2, 18, "pwrite64", 3, [3, 0, 3, 8, 0, 0], b"xyz"),
+        ];
+        let activity = activity_of(&calls);
+        let file = file(&activity, "/tmp/file");
+        assert_eq!(file.writes.read(8, 3).unwrap(), b"xyz");
     }
 }

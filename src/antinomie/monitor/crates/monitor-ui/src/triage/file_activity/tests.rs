@@ -45,6 +45,7 @@ fn file(path: &str, first_ns: u64, events: Vec<Event>) -> FileActivity {
         failed_only: false,
         contents: Contents::default(),
         hashes: Vec::new(),
+        writes: Default::default(),
     }
 }
 
@@ -102,6 +103,8 @@ pub(in crate::triage) fn activity() -> Activity {
         ],
         omitted_files: 0,
         omitted_events: 0,
+        written: Default::default(),
+        limits: Default::default(),
     }
 }
 

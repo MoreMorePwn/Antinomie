@@ -6,6 +6,16 @@ it runs.
 
 ## 0.8.0 — unreleased
 
+- **File activity keeps what a run wrote, within a budget.** Every write
+  the kernel captured is indexed per file as a byte range (offset, length) that
+  reads back exactly from the run's object store, however many writes the file
+  took (the call list is still bounded; the written content is not). Two caps,
+  64 MiB per file and 1 GiB per run, can be changed in Settings › Advanced;
+  past a cap the first writes are kept and the later ranges are listed as *not
+  captured*, never dropped. The window shows the bytes kept and skipped per run
+  and per file, and says why a range is missing (cap, not recorded by the
+  kernel, unknown offset).
+
 - **Library › Samples lists every sample across runs and VMs.** One flat list,
   the sample with the latest run first: name, description, tags (verdict and
   malware category; techniques and custom tags fold into `+N`), run count,

@@ -9,6 +9,7 @@
 use super::file_category::{Category, Hit};
 use super::files::result_label;
 use super::*;
+use antinomie_monitor_core::file_writes::{Budget, Captured, Limits, Tally, Writes};
 use antinomie_monitor_core::kernel_notes::{FileHash, FileId, FileKey};
 use std::collections::BTreeMap;
 
@@ -175,6 +176,9 @@ pub(super) struct FileActivity {
     /// Every hash the guest took of the file, in order: the run's evidence
     /// that its bytes changed even where no write payload exists.
     pub hashes: Vec<HashNote>,
+    /// The ranges the run wrote, kept within the budget or marked not
+    /// captured; unlike `events` they are not bounded by the event cap.
+    pub writes: Writes,
 }
 
 impl FileActivity {
@@ -222,6 +226,9 @@ pub(super) struct Activity {
     pub processes: Vec<(u32, Option<String>)>,
     pub omitted_files: u64,
     pub omitted_events: u64,
+    /// Written bytes kept and skipped by the whole run, and the caps.
+    pub written: Tally,
+    pub limits: Limits,
 }
 
 impl Activity {
@@ -261,6 +268,8 @@ pub(super) struct Transfer {
     pub content: Vec<u8>,
     pub gap: bool,
     pub extends: bool,
+    /// The stretches of a write's payload the kernel captured.
+    pub stretches: Vec<Captured>,
 }
 
 /// Collects [`Record`]s into an [`Activity`]. A file is its identity where the
@@ -275,6 +284,7 @@ pub(super) struct Builder {
     events: usize,
     omitted_files: u64,
     omitted_events: u64,
+    budget: Budget,
 }
 
 fn kind_of(hits: &[Hit], name: &str, transfer: Option<&Transfer>) -> Kind {
@@ -311,6 +321,11 @@ fn kind_of(hits: &[Hit], name: &str, transfer: Option<&Transfer>) -> Kind {
 }
 
 impl Builder {
+    /// The caps on the write content kept (set before the first call).
+    pub(super) fn set_limits(&mut self, limits: Limits) {
+        self.budget = Budget::new(limits);
+    }
+
     fn process(&mut self, pid: u32, image: Option<&str>) -> u32 {
         let key = (pid, image.map(str::to_owned));
         if let Some(index) = self.processes.iter().position(|known| *known == key) {
@@ -425,6 +440,7 @@ impl Builder {
                 failed_only: true,
                 contents: Contents::default(),
                 hashes: Vec::new(),
+                writes: Writes::default(),
             });
         if !file.path_known && path_known {
             file.path = path.clone();
@@ -449,6 +465,19 @@ impl Builder {
                 file.deleted = false;
             }
         }
+        // Write content is kept per file whatever the event bounds say: a
+        // file written in small blocks has more writes than events.
+        let transfer = transfer.map(|mut t| {
+            if t.write && success != Some(false) {
+                file.writes.add(
+                    &mut self.budget,
+                    t.offset,
+                    t.len,
+                    std::mem::take(&mut t.stretches),
+                );
+            }
+            t
+        });
         if capped {
             file.omitted += 1;
             self.omitted_events += 1;
@@ -540,6 +569,8 @@ impl Builder {
             processes: self.processes,
             omitted_files: self.omitted_files,
             omitted_events: self.omitted_events,
+            written: self.budget.run,
+            limits: self.budget.limits,
         }
     }
 }

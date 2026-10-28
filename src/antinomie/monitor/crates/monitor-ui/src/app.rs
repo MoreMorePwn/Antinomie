@@ -102,6 +102,10 @@ struct Settings {
     quota_gib: u32,
     /// Default stored-byte budget of a process core, MiB (clamped to what each guest accepts).
     core_budget_mib: u32,
+    /// File activity: most MiB of written content kept for one file.
+    file_write_file_mib: u32,
+    /// File activity: most MiB of written content kept for a whole run.
+    file_write_run_mib: u32,
     timeout: u64,
     font_size: f32,
     /// Tint syscall trace rows by syscall group.
@@ -178,6 +182,14 @@ impl Settings {
         })
     }
 
+    /// The caps on the file write content File activity keeps.
+    fn write_limits(&self) -> antinomie_monitor_core::file_writes::Limits {
+        antinomie_monitor_core::file_writes::Limits {
+            per_file: u64::from(self.file_write_file_mib) << 20,
+            per_run: u64::from(self.file_write_run_mib) << 20,
+        }
+    }
+
     fn set_theme(&mut self, theme: theme::Theme) {
         self.theme = Some(theme);
         self.light_theme = theme.is_light();
@@ -191,6 +203,9 @@ impl Default for Settings {
             bundle: String::new(),
             quota_gib: 4,
             core_budget_mib: crate::core_budget::default_mib(),
+            file_write_file_mib: (antinomie_monitor_core::file_writes::DEFAULT_PER_FILE >> 20)
+                as u32,
+            file_write_run_mib: (antinomie_monitor_core::file_writes::DEFAULT_PER_RUN >> 20) as u32,
             timeout: 10,
             font_size: 16.0,
             trace_colors: true,
@@ -760,6 +775,7 @@ impl eframe::App for MonitorApp {
             })
             .unwrap_or_else(crate::triage::TriageInput::empty);
         self.triage.set_data_dir(&self.options.data_dir);
+        self.triage.set_write_limits(self.settings.write_limits());
         self.triage
             .set_toast_high(self.settings.toast_high_findings);
         self.triage

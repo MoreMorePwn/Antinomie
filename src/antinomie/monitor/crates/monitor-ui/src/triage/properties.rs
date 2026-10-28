@@ -140,6 +140,11 @@ impl TriageView {
         self.ioc.set_data_dir(dir);
     }
 
+    /// The caps on the write content File activity keeps.
+    pub(crate) fn set_write_limits(&mut self, limits: antinomie_monitor_core::file_writes::Limits) {
+        self.scan_request.write_limits = limits;
+    }
+
     pub(crate) fn set_tools_dir(&mut self, dir: &std::path::Path) {
         if self.properties.tools_dir.as_deref() != Some(dir) {
             self.properties.tools_dir = Some(dir.to_owned());

@@ -7,6 +7,7 @@ use super::{Activity, ByteRun, Event, FileActivity};
 use crate::theme;
 use crate::triage::{details, Cell, RowValue};
 use crate::widgets::{self, Tone};
+use antinomie_monitor_core::file_writes::{Piece, Tally};
 use eframe::egui;
 
 /// How the list of files is ordered.
@@ -155,6 +156,7 @@ impl Window {
                 ),
             );
         }
+        written_summary(ui, activity);
         let shown = self.shown(activity);
         // Beside each other when there is room, else the list above the history.
         if ui.available_width() >= STACK_BELOW {
@@ -331,6 +333,7 @@ impl Window {
                 for name in &file.names {
                     ui.weak(format!("also seen as {name}"));
                 }
+                file_written(ui, file);
                 let layout = graph::layout(file);
                 ui.add_space(6.0);
                 if let Some(clicked) = graph::show(ui, activity, file, &layout, self.node) {
@@ -557,6 +560,70 @@ fn printable(byte: u8) -> String {
         b'\t' => "\\t".into(),
         32..=126 => char::from(byte).to_string(),
         _ => format!("\\x{byte:02x}"),
+    }
+}
+
+/// Bytes of written content a tally holds, in words.
+pub(super) fn tally_text(tally: &Tally) -> String {
+    use antinomie_monitor_core::byte_size::file_size;
+    let mut text = format!("{} kept", file_size(tally.kept));
+    let mut skipped = |count: u64, why: &str| {
+        if count > 0 {
+            text.push_str(&format!(", {} {why}", file_size(count)));
+        }
+    };
+    skipped(tally.file_cap, "past the per-file cap");
+    skipped(tally.run_cap, "past the per-run cap");
+    skipped(tally.not_recorded, "not recorded by the kernel");
+    skipped(tally.offset_unknown, "at an unknown offset");
+    skipped(tally.unlisted, "beyond the listed ranges");
+    text
+}
+
+/// The run's written content: bytes kept and skipped, with the caps.
+fn written_summary(ui: &mut egui::Ui, activity: &Activity) {
+    let tally = &activity.written;
+    if tally.kept == 0 && tally.skipped() == 0 {
+        return;
+    }
+    use antinomie_monitor_core::byte_size::file_size;
+    let text = format!(
+        "Written content: {} (caps {} per file, {} per run; change in Settings › Advanced)",
+        tally_text(tally),
+        file_size(activity.limits.per_file),
+        file_size(activity.limits.per_run)
+    );
+    if tally.skipped() > 0 {
+        crate::activity::warning(ui, text);
+    } else {
+        ui.weak(text);
+    }
+}
+
+/// One file's written content: kept and skipped, and where the gaps are.
+fn file_written(ui: &mut egui::Ui, file: &FileActivity) {
+    let tally = &file.writes.tally;
+    if tally.kept == 0 && tally.skipped() == 0 {
+        return;
+    }
+    ui.weak(format!("Written content: {}", tally_text(tally)));
+    let gaps: Vec<_> = file
+        .writes
+        .layout()
+        .into_iter()
+        .filter_map(|extent| match extent.piece {
+            Piece::NotCaptured(gap) => Some((extent.offset, extent.len, gap)),
+            Piece::Kept(_) => None,
+        })
+        .collect();
+    for (offset, len, gap) in gaps.iter().take(8) {
+        ui.weak(format!(
+            "not captured: {len} B at offset {offset} ({})",
+            gap.label()
+        ));
+    }
+    if gaps.len() > 8 {
+        ui.weak(format!("… and {} more ranges not captured", gaps.len() - 8));
     }
 }
 

@@ -1067,6 +1067,8 @@ struct ScanRequest {
     ioc_cache: Option<ioc_scan::Cache>,
     /// The run's static analysis report: the sample's hashes and strings.
     report: Option<Arc<antinomie_monitor_core::AnalysisReport>>,
+    /// Caps on the file write content kept (Settings).
+    write_limits: antinomie_monitor_core::file_writes::Limits,
 }
 
 const STORED_ROWS: usize = 2000;

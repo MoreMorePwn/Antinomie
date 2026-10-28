@@ -490,6 +490,28 @@ impl MonitorApp {
                     );
             });
             ui.end_row();
+            ui.label("File activity: written content kept");
+            ui.vertical(|ui| {
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut self.settings.file_write_file_mib)
+                            .range(1..=65_536)
+                            .suffix(" MiB per file"),
+                    );
+                    ui.add(
+                        egui::DragValue::new(&mut self.settings.file_write_run_mib)
+                            .range(1..=1_048_576)
+                            .suffix(" MiB per run"),
+                    );
+                });
+                hint(
+                    ui,
+                    "Bytes the run wrote that File activity can give back exactly. When a cap is \
+                     reached the first writes are kept; later ranges are listed as not captured. \
+                     The recording itself is limited by the Recording quota.",
+                );
+            });
+            ui.end_row();
         });
     }
 }
