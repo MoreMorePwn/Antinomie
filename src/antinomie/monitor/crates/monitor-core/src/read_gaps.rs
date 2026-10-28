@@ -22,6 +22,9 @@ pub const MAX_RECORDED_GAPS: usize = 256;
 /// Longest threshold, and the shortest: half the guest's send wait in between.
 const MAX_THRESHOLD: Duration = Duration::from_millis(50);
 const MIN_THRESHOLD: Duration = Duration::from_millis(10);
+/// A ring at or above this fill (per mille) counts as full: a send needs room
+/// for its record and finds the rest taken by the others.
+const FULL_PERMILLE: u64 = 900;
 
 /// What the transport thread was doing while it read nothing.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,6 +74,9 @@ pub struct ReadGap {
     /// pause can have started a little later). For a ring pause, the newest
     /// timestamp read minus the wait.
     pub guest_ns: u64,
+    /// Host clock minus guest clock for that newest packet (it includes the
+    /// time the packet waited in its ring); see `ReadGapStats::clock_skew_min_ns`.
+    pub skew_ns: i64,
     /// Host wall clock at the start of the pause.
     pub start_unix_ms: u64,
     pub len_ns: u64,
@@ -85,6 +91,39 @@ pub struct ReadGap {
     pub sched_delay_ns: u64,
 }
 
+/// A ring's fill of a telemetry ring, as the host sees it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RingState {
+    pub cpu: u32,
+    pub size: u32,
+    /// Bytes ever written by the guest and read by the host.
+    pub head: u64,
+    pub tail: u64,
+}
+
+/// A spell in which a ring stayed full (at least 90 %) at every read attempt
+/// while the host kept reading: the host drained slower than the guest sent,
+/// so a sender waited its whole send wait for room without any pause in the
+/// reads. Another cause of drops beside [`ReadGap`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FullSpell {
+    /// Guest time and clock skew as for [`ReadGap`], at the start of the spell.
+    pub guest_ns: u64,
+    pub skew_ns: i64,
+    pub start_unix_ms: u64,
+    pub len_ns: u64,
+    /// The vCPU ring.
+    pub ring: u32,
+    /// What the host read from the ring and what the guest wrote to it during
+    /// the spell. Writes cannot outrun reads by more than the ring holds, so
+    /// the two agree in a saturated ring: the guest's offered load shows in its
+    /// send waits and drops, not here.
+    pub drained_bytes: u64,
+    pub produced_bytes: u64,
+    pub min_fill_permille: u32,
+}
+
 /// The pauses of one boot's transport.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -97,6 +136,40 @@ pub struct ReadGapStats {
     /// Pauses counted but not kept because the buffer held longer ones.
     pub unrecorded: u64,
     pub gaps: Vec<ReadGap>,
+    /// The smallest host-minus-guest clock difference seen over all packets:
+    /// the clocks' offset when a packet was read as soon as it was written. A
+    /// gap's `skew_ns` minus this is how far the guest clock had run ahead of
+    /// the newest packet the host had read when the pause began.
+    pub clock_skew_min_ns: i64,
+    /// Spells of a full ring of at least `threshold_ns`, counted and kept as
+    /// the pauses are.
+    pub full_spell_count: u64,
+    pub full_spell_total_ns: u64,
+    pub full_spell_longest_ns: u64,
+    pub full_spells_unrecorded: u64,
+    pub full_spells: Vec<FullSpell>,
+}
+
+/// Keep `item` in `list` (at most MAX_RECORDED_GAPS): the shortest give way.
+/// Returns whether something was left out.
+fn keep_longest<T>(list: &mut Vec<T>, item: T, len: impl Fn(&T) -> u64) -> bool {
+    if list.capacity() == 0 {
+        list.reserve_exact(MAX_RECORDED_GAPS);
+    }
+    if list.len() < MAX_RECORDED_GAPS {
+        list.push(item);
+        return false;
+    }
+    let shortest = list
+        .iter()
+        .enumerate()
+        .min_by_key(|(_, kept)| len(kept))
+        .map(|(index, _)| index)
+        .unwrap_or_default();
+    if len(&list[shortest]) < len(&item) {
+        list[shortest] = item;
+    }
+    true
 }
 
 impl ReadGapStats {
@@ -104,24 +177,18 @@ impl ReadGapStats {
         self.count = self.count.saturating_add(1);
         self.total_ns = self.total_ns.saturating_add(gap.len_ns);
         self.longest_ns = self.longest_ns.max(gap.len_ns);
-        if self.gaps.capacity() == 0 {
-            self.gaps.reserve_exact(MAX_RECORDED_GAPS);
+        if keep_longest(&mut self.gaps, gap, |gap| gap.len_ns) {
+            self.unrecorded = self.unrecorded.saturating_add(1);
         }
-        if self.gaps.len() < MAX_RECORDED_GAPS {
-            self.gaps.push(gap);
-            return;
+    }
+
+    fn record_spell(&mut self, spell: FullSpell) {
+        self.full_spell_count = self.full_spell_count.saturating_add(1);
+        self.full_spell_total_ns = self.full_spell_total_ns.saturating_add(spell.len_ns);
+        self.full_spell_longest_ns = self.full_spell_longest_ns.max(spell.len_ns);
+        if keep_longest(&mut self.full_spells, spell, |spell| spell.len_ns) {
+            self.full_spells_unrecorded = self.full_spells_unrecorded.saturating_add(1);
         }
-        let shortest = self
-            .gaps
-            .iter()
-            .enumerate()
-            .min_by_key(|(_, kept)| kept.len_ns)
-            .map(|(index, _)| index)
-            .unwrap_or_default();
-        if self.gaps[shortest].len_ns < gap.len_ns {
-            self.gaps[shortest] = gap;
-        }
-        self.unrecorded = self.unrecorded.saturating_add(1);
     }
 
     /// Pauses by cause: (cause, count, total ns), most time first.
@@ -201,6 +268,23 @@ pub(crate) struct ReadGapTracker {
     exit_sample: Option<Sched>,
     outside: Sched,
     threshold: Duration,
+    /// Clock for the skew between host and guest time; set by the first packet.
+    epoch: Option<Instant>,
+    newest_skew_ns: i64,
+    skew_min_ns: Option<i64>,
+    watches: Vec<RingWatch>,
+}
+
+/// One ring's current full spell, if any.
+#[derive(Clone, Copy, Default)]
+struct RingWatch {
+    since: Option<Instant>,
+    guest_ns: u64,
+    skew_ns: i64,
+    unix_ms: u64,
+    head: u64,
+    tail: u64,
+    min_permille: u32,
 }
 
 impl ReadGapTracker {
@@ -233,6 +317,7 @@ impl ReadGapTracker {
 
     /// The transport is new (a reconnect): nothing before it is a pause.
     pub(crate) fn reset(&mut self) {
+        self.watches.clear();
         self.last_read = None;
         self.held = false;
         self.exit_sample = None;
@@ -240,8 +325,69 @@ impl ReadGapTracker {
     }
 
     /// The timestamp of the packet just read.
-    pub(crate) fn packet(&mut self, guest_ns: u64) {
-        self.newest_guest_ns = self.newest_guest_ns.max(guest_ns);
+    pub(crate) fn packet(&mut self, now: Instant, guest_ns: u64) {
+        let epoch = *self.epoch.get_or_insert(now);
+        let host_ns = now.saturating_duration_since(epoch).as_nanos() as i64;
+        let skew = host_ns.saturating_sub(i64::try_from(guest_ns).unwrap_or(i64::MAX));
+        self.skew_min_ns = Some(self.skew_min_ns.map_or(skew, |min| min.min(skew)));
+        if guest_ns >= self.newest_guest_ns {
+            self.newest_guest_ns = guest_ns;
+            self.newest_skew_ns = skew;
+        }
+    }
+
+    /// The rings' fill at a read attempt. A ring that stays at 90 % or more
+    /// from one attempt to the next is full while the host reads: a spell of
+    /// at least the threshold is recorded when it ends, with what was read
+    /// and written meanwhile. No allocation after the first call.
+    pub(crate) fn rings(&mut self, now: Instant, rings: &[RingState], stats: &mut ReadGapStats) {
+        if self.watches.len() != rings.len() {
+            self.watches.clear();
+            self.watches.resize(rings.len(), RingWatch::default());
+        }
+        let threshold = if self.threshold.is_zero() {
+            MAX_THRESHOLD
+        } else {
+            self.threshold
+        };
+        for (watch, ring) in self.watches.iter_mut().zip(rings) {
+            let fill = ring.head.saturating_sub(ring.tail);
+            let permille = if ring.size == 0 {
+                0
+            } else {
+                fill.saturating_mul(1000) / u64::from(ring.size)
+            };
+            if permille >= FULL_PERMILLE {
+                match watch.since {
+                    Some(_) => watch.min_permille = watch.min_permille.min(permille as u32),
+                    None => {
+                        *watch = RingWatch {
+                            since: Some(now),
+                            guest_ns: self.newest_guest_ns,
+                            skew_ns: self.newest_skew_ns,
+                            unix_ms: unix_ms(),
+                            head: ring.head,
+                            tail: ring.tail,
+                            min_permille: permille as u32,
+                        };
+                    }
+                }
+            } else if let Some(since) = watch.since.take() {
+                let length = now.saturating_duration_since(since);
+                if length >= threshold {
+                    stats.record_spell(FullSpell {
+                        guest_ns: watch.guest_ns,
+                        skew_ns: watch.skew_ns,
+                        start_unix_ms: watch.unix_ms,
+                        len_ns: length.as_nanos() as u64,
+                        ring: ring.cpu,
+                        drained_bytes: ring.tail.saturating_sub(watch.tail),
+                        produced_bytes: ring.head.saturating_sub(watch.head),
+                        min_fill_permille: watch.min_permille,
+                    });
+                }
+            }
+        }
     }
 
     /// The packet just read had waited `wait_ns` at the head of ring `ring`
@@ -252,6 +398,7 @@ impl ReadGapTracker {
         }
         stats.record(ReadGap {
             guest_ns: self.newest_guest_ns.saturating_sub(wait_ns),
+            skew_ns: self.newest_skew_ns,
             start_unix_ms: unix_ms().saturating_sub(wait_ns / 1_000_000),
             len_ns: wait_ns,
             cause: GapCause::RingStarved,
@@ -269,6 +416,7 @@ impl ReadGapTracker {
             self.threshold
         };
         stats.threshold_ns = threshold.as_nanos() as u64;
+        stats.clock_skew_min_ns = self.skew_min_ns.unwrap_or_default();
         let pump = self.pump_clock
             + self
                 .pass_start
@@ -306,6 +454,7 @@ impl ReadGapTracker {
         };
         ReadGap {
             guest_ns: self.newest_guest_ns,
+            skew_ns: self.newest_skew_ns,
             start_unix_ms: unix_ms().saturating_sub(length.as_millis() as u64),
             len_ns,
             cause,

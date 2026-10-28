@@ -4,6 +4,8 @@ use super::*;
 
 /// Passes of the guest control worker after which a command it has not
 /// answered is late (each pass serves up to 16 commands).
+/// Rings whose fill the read-gap tracker watches (more are not).
+const MAX_WATCHED_RINGS: usize = 64;
 const GUEST_TURNS: u64 = 3;
 /// How long past its deadline a command waits for a guest whose control
 /// worker has not had those passes.
@@ -38,12 +40,24 @@ impl Session {
         let mut drained = 0usize;
         let held = crate::writer::backlogged();
         self.note_writer_hold(held, started, &mut snapshot.health);
+        let mut rings = [crate::read_gaps::RingState::default(); MAX_WATCHED_RINGS];
         while started.elapsed() < PUMP_BUDGET && !crate::writer::backlogged() {
+            let now = Instant::now();
             self.read_gaps.read(
-                Instant::now(),
+                now,
                 crate::writer::blocked_on_this_thread(),
                 &mut snapshot.health.read_gaps,
             );
+            let mut watched = 0;
+            while watched < rings.len() {
+                let Some(ring) = self.transport.ring_state(watched as u32) else {
+                    break;
+                };
+                rings[watched] = ring;
+                watched += 1;
+            }
+            self.read_gaps
+                .rings(now, &rings[..watched], &mut snapshot.health.read_gaps);
             let Some(packet) = self.transport.read()?.map(<[u8]>::to_vec) else {
                 break;
             };
@@ -53,7 +67,7 @@ impl Session {
                 .ok()
                 .map(|(header, _)| header);
             if let Some(header) = &header {
-                self.read_gaps.packet(header.timestamp_ns);
+                self.read_gaps.packet(Instant::now(), header.timestamp_ns);
             }
             let (ring, waited) = self.transport.last_read();
             self.read_gaps

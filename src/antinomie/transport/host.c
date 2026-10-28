@@ -636,6 +636,20 @@ int ant_last_read(struct ant_client *c, uint32_t *cpu_id, uint64_t *wait_ns)
 	return 0;
 }
 
+int ant_ring_state(struct ant_client *c, unsigned index, uint32_t *cpu_id, uint32_t *size,
+		uint64_t *head, uint64_t *tail)
+{
+	struct reader *r;
+	if (!c || !cpu_id || !size || !head || !tail) return -EINVAL;
+	if (index >= c->count) return -ERANGE;
+	r = &c->readers[index];
+	*cpu_id = r->cpu_id;
+	*size = r->size;
+	*head = ANT_ACQ(&r->q->head);
+	*tail = r->tail;
+	return 0;
+}
+
 int ant_command_send(struct ant_client *c, uint32_t opcode,
 		const void *args, size_t payload_len, uint64_t *request_id)
 {

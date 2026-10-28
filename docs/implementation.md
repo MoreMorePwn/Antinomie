@@ -1945,6 +1945,23 @@ a diagnostic getter and a starvation guard, see below).
   under load 10 to 15) or doing 100 to 150 ms of other host work in one loop
   pass (several 30 to 50 ms steps: the 250 ms snapshot publish, resource
   sampling, terminal reads). Guest sends only wait 100 ms in this group.
+* **Full-ring spells and clock lag (second cause).** A host that keeps reading
+  but drains slower than the guest sends keeps a ring full for the whole send
+  wait without any pause. `ant_ring_state` (host.c, two loads per ring) lets
+  the tracker look at each ring's fill at every read attempt; a ring at 90 % or
+  more at each attempt is a spell, recorded when it ends if it lasted half the
+  send wait (`FullSpell`: start in guest time, length, ring, bytes read and
+  written meanwhile, lowest fill; same 256 slots as the pauses). A gap or spell
+  is placed in guest time by the newest packet read, but that packet waited in
+  its ring: `skew_ns` (host clock minus the packet's timestamp) minus
+  `clock_skew_min_ns` (the smallest over the run, the clocks' offset) is how far
+  the guest clock was ahead, and vm-regress also tries each gap and spell moved
+  later by that lag. A drop is reported as: in a read gap, in a read gap only
+  after the lag, in a full-ring spell, or neither (a failure). In the 2026-10-28
+  contended run at load 9-15, 60 of 289 gap-explained drops matched only after
+  the lag and none needed a spell (the drops were the writer's holds); the
+  15 of 19 unexplained drops of an earlier run were not kept, so they were
+  not classified.
 * **Fix.** `ant_read_ordered` now takes a ring whose head has waited 10 ms
   before the timestamp order applies (the longest waiting first), so no ring
   is kept from the host for longer while another is read. Records of one ring

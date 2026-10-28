@@ -281,7 +281,13 @@ it runs.
   ring starvation: the host merged the vCPU rings by packet timestamp, and the
   fragments of one long event kept the event's old timestamp, so another
   ring's packets waited for as long as that event was sent. The host now takes
-  a ring head first once it has waited 10 ms.
+  a ring head first once it has waited 10 ms. The host also records the spells
+  in which a ring stayed 90 % full at every read (the host kept reading but
+  drained slower than the guest sent) with what it read and what the guest
+  wrote meanwhile, and the clock offset between packet and host time, so a
+  pause placed in guest time by an old packet is moved to where the guest was.
+  `conf-stress-contended` passes when every drop has a read gap or such a spell
+  and fails on a drop with neither; the run reports the drops by cause.
 
 ### Guest
 
@@ -319,8 +325,8 @@ it runs.
   still never queue. Drops and partial events are reported as before. The full
   VM tier gains a `stress-contended` group (heavy load on a 256 KiB never-drop
   ring with a 100 ms send wait), judged by attribution (see the host entry on
-  read gaps): each drop must fall in a host read gap at least as long as the
-  send wait. Loss is reduced, not gone: a
+  read gaps): each drop must fall in a host read gap or a full-ring spell at
+  least as long as the send wait. Loss is reduced, not gone: a
   sender still drops when the host reads nothing from its ring for the whole
   wait, and on a loaded build machine that group measured 1 drop in 13.7
   million records and 38 in 10.5 million (737 in 7.4 million before the

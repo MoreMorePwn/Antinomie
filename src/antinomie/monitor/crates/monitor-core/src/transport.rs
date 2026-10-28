@@ -1,6 +1,6 @@
 use std::os::unix::ffi::OsStrExt;
 use std::{
-    ffi::{CString, c_char, c_int, c_void},
+    ffi::{CString, c_char, c_int, c_uint, c_void},
     marker::PhantomData,
     path::Path,
     ptr::NonNull,
@@ -109,6 +109,14 @@ unsafe extern "C" {
         key_offset: usize,
     ) -> c_int;
     fn ant_last_read(client: *mut c_void, cpu_id: *mut u32, wait_ns: *mut u64) -> c_int;
+    fn ant_ring_state(
+        client: *mut c_void,
+        index: c_uint,
+        cpu_id: *mut u32,
+        size: *mut u32,
+        head: *mut u64,
+        tail: *mut u64,
+    ) -> c_int;
     fn ant_command_send(
         client: *mut c_void,
         opcode: u32,
@@ -389,6 +397,28 @@ impl Transport {
         } else {
             (0, 0)
         }
+    }
+    /// Telemetry ring `index` (None past the last): its fill and running byte
+    /// counts, for [`crate::read_gaps`]. Two loads on the host side.
+    pub fn ring_state(&self, index: u32) -> Option<crate::read_gaps::RingState> {
+        let (mut cpu, mut size, mut head, mut tail) = (0, 0, 0, 0);
+        // SAFETY: The outputs are writable; the client is live and solely owned.
+        let status = unsafe {
+            ant_ring_state(
+                self.ptr.as_ptr(),
+                index,
+                &mut cpu,
+                &mut size,
+                &mut head,
+                &mut tail,
+            )
+        };
+        (status == 0).then_some(crate::read_gaps::RingState {
+            cpu,
+            size,
+            head,
+            tail,
+        })
     }
     pub fn send(&mut self, opcode: u32, args: &[u8]) -> Result<u64, String> {
         if args.len() > self.command_limit {

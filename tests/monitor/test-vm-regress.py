@@ -508,6 +508,46 @@ class AttributionTests(unittest.TestCase):
         attributed, unattributed, gaps = vm.attribute_drops(acc)
         self.assertEqual((attributed, unattributed, len(gaps)), (1, 0, 1))
 
+    def spell(self, guest_ms, len_ms, ring=2, skew_ms=0):
+        return {"guest_ns": guest_ms * 1_000_000, "len_ns": len_ms * 1_000_000, "ring": ring,
+                "skew_ns": skew_ms * 1_000_000, "drained_bytes": 1 << 20, "produced_bytes": 1 << 20}
+
+    def with_spells(self, acc, spells, skew_min_ms=0):
+        acc["read_gaps"]["full_spells"] = spells
+        acc["read_gaps"]["clock_skew_min_ns"] = skew_min_ms * 1_000_000
+        return acc
+
+    def test_a_drop_in_a_full_ring_spell_without_a_gap_is_a_slow_drain(self):
+        acc = self.with_spells(self.accounting([self.run_(5, 5, 1000, 1105)], []), [self.spell(1000, 130)])
+        counts, _, spells = vm.classify_drops(acc)
+        self.assertEqual(counts, {"gap": 0, "gap_lagged": 0, "drain": 1, "neither": 0})
+        self.assertEqual(len(spells), 1)
+        self.assertEqual(vm.attribute_drops(acc)[:2], (1, 0))
+
+    def test_a_spell_of_another_ring_or_too_short_or_elsewhere_explains_nothing(self):
+        run = [self.run_(5, 5, 1000, 1105, cpu=2)]
+        for spell in (self.spell(1000, 130, ring=3), self.spell(1000, 60), self.spell(9000, 130)):
+            with self.subTest(spell=spell):
+                acc = self.with_spells(self.accounting(run, []), [spell])
+                self.assertEqual(vm.classify_drops(acc)[0]["neither"], 1)
+
+    def test_a_drop_with_neither_cause_is_unattributed(self):
+        acc = self.with_spells(self.accounting([self.run_(5, 5, 1000, 1105)], [self.gap(5000, 130)]),
+                               [self.spell(7000, 130)])
+        self.assertEqual(vm.attribute_drops(acc)[:2], (0, 1))
+
+    def test_a_gap_placed_too_early_by_the_ring_backlog_matches_after_the_clock_lag(self):
+        # The pause began after the newest packet read, 150 ms younger than that
+        # packet's age at the minimum skew: the drop is 150 ms later than the gap's stamp.
+        gap = self.gap(1000, 130)
+        gap["skew_ns"] = 250 * 1_000_000
+        acc = self.with_spells(self.accounting([self.run_(5, 5, 1150, 1255)], [gap]), [], skew_min_ms=100)
+        counts = vm.classify_drops(acc)[0]
+        self.assertEqual((counts["gap"], counts["gap_lagged"], counts["neither"]), (0, 1, 0))
+        # Without skew fields in the report the lag is 0 and the drop is unexplained.
+        del gap["skew_ns"]
+        self.assertEqual(vm.classify_drops(acc)[0]["neither"], 1)
+
     def test_a_run_of_drops_counts_every_packet(self):
         acc = self.accounting([self.run_(5, 24, 5000, 7000)], [self.gap(5010, 1900)])
         self.assertEqual(vm.attribute_drops(acc)[:2], (20, 0))
@@ -574,7 +614,7 @@ class MeasureTests(unittest.TestCase):
         self.log = self.out / "logs" / f"{self.NAME}.log"
         self.log.parent.mkdir(parents=True)
 
-    def write(self, problems, log_lines, dropped=2, explained=True, gaps=True):
+    def write(self, problems, log_lines, dropped=2, explained=True, gaps=True, spells=False):
         trace = self.out / "runs" / self.NAME / "trace"
         trace.mkdir(parents=True, exist_ok=True)
         read_gaps = [{"guest_ns": 1_000_000_000, "len_ns": 130_000_000, "cause": "pump"}] if explained else []
@@ -582,9 +622,13 @@ class MeasureTests(unittest.TestCase):
             "transport": {"dropped": dropped, "attempted": 10466625, "writer_held_ms": 0,
                           "writer_held_longest_ms": 0, "configured_send_wait_us": 100000},
             "dropped_packets": [{"task": 1, "first": 5, "last": 5 + dropped - 1,
-                                 "before_ns": 1_000_000_000, "after_ns": 1_105_000_000}] if dropped else [],
+                                 "before_ns": 1_000_000_000, "after_ns": 1_105_000_000,
+                                 "before_cpu": 2, "after_cpu": 2}] if dropped else [],
             "read_gaps": {"count": len(read_gaps), "longest_ns": 130_000_000 if read_gaps else 0,
                           "gaps": read_gaps}}
+        if spells:
+            accounting["read_gaps"]["full_spells"] = [
+                {"guest_ns": 1_000_000_000, "len_ns": 130_000_000, "ring": 2, "drained_bytes": 1_000_000}]
         if not gaps:
             del accounting["read_gaps"]
         report = {"passed": not problems, "problems": problems, "accounting": accounting,
@@ -607,16 +651,24 @@ class MeasureTests(unittest.TestCase):
         found = vm.measure(self.NAME, self.out, self.log, 1)
         self.assertEqual(found["status"], "PASS")
         self.assertEqual((found["measurement"]["attributed"], found["measurement"]["unattributed"]), (2, 0))
-        for text in ("2 transport drops of 10,466,625", "2 drops attributed to a read gap, 0 unattributed",
+        for text in ("2 transport drops of 10,466,625", "drops: 2 in a host read gap (0 only after the clock lag), 0 with a full ring the host kept draining too slowly, 0 with neither cause",
                      "1 read gaps (1 as long as the send wait, longest 130 ms)", "18,822 calls/s"):
             self.assertIn(text, found["detail"])
+
+    def test_a_slow_drain_passes_and_is_reported(self):
+        self.write(["transport drops: 2"], self.failed_log(), explained=False, spells=True)
+        found = vm.measure(self.NAME, self.out, self.log, 1)
+        self.assertEqual(found["status"], "PASS")
+        self.assertEqual((found["measurement"]["by_read_gap"], found["measurement"]["by_slow_drain"]), (0, 2))
+        self.assertIn("2 with a full ring the host kept draining too slowly", found["detail"])
+        self.assertIn("1 full-ring spells (longest 130 ms, drained 7.3 MiB/s)", found["detail"])
 
     def test_an_unattributed_drop_fails(self):
         self.write(["transport drops: 2"], self.failed_log(), explained=False)
         found = vm.measure(self.NAME, self.out, self.log, 1)
         self.assertNotIn("status", found)
         self.assertEqual(found["measurement"]["unattributed"], 2)
-        self.assertIn("2 unattributed", found["detail"])
+        self.assertIn("2 with neither cause", found["detail"])
 
     def test_a_report_without_read_gaps_cannot_attribute(self):
         self.write(["transport drops: 2"], self.failed_log(), gaps=False)

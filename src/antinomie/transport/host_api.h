@@ -82,6 +82,12 @@ int ant_read_ordered(struct ant_client *client, void *dst, size_t capacity,
  * long that message had been the waiting head of its ring when it was taken
  * (0: it was not seen waiting). Host-side diagnostics only. */
 int ant_last_read(struct ant_client *client, uint32_t *cpu_id, uint64_t *wait_ns);
+/* Telemetry ring index (0 to queue_count - 1): its cpu id, size in bytes and
+ * the producer head and host tail positions (bytes ever written and read, so
+ * head - tail is the fill and tail is a running drain count). Host-side
+ * diagnostics only; two loads, no side effect. */
+int ant_ring_state(struct ant_client *client, unsigned index, uint32_t *cpu_id,
+		uint32_t *size, uint64_t *head, uint64_t *tail);
 int ant_command_send(struct ant_client *client, uint32_t opcode,
 		const void *args, size_t payload_len, uint64_t *request_id);
 int ant_result_read(struct ant_client *client, uint64_t *request_id,

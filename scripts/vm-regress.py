@@ -11,8 +11,9 @@ full   quick, the debugger, audit, io_uring, tracer, stealth and snapshot
        checks, the conformance stress groups and interop in both directions
        (an old host on BASE, the current host on OLD); conf-stress-contended
        passes with transport drops only when each is attributed to a gap in
-       the host's telemetry reads at least as long as the group's send wait
-       (the drops, gaps and calls per second are reported)
+       the host's telemetry reads, or to a ring the host kept full while it
+       read, at least as long as the group's send wait (the drops by cause,
+       gaps, full-ring spells and calls per second are reported)
 auto   full when the diff against REF touches the kernel/host contract (guest
        patches, transport, protocol docs, ANTC_REVISION), otherwise quick
 
@@ -62,9 +63,10 @@ OK_STATUSES = ("PASS", "FLAKY")
 # name -> conformance group. stress-contended runs a 256 KiB never-drop ring
 # with a 100 ms send wait, so a host that reads nothing for 100 ms (a busy
 # machine) makes its senders drop; the guest cannot tell that from a fault.
-# The host times its telemetry read gaps (Health.read_gaps) and the group
-# passes when every drop falls in a gap at least as long as the send wait;
-# a drop no such gap explains fails it. Every other problem the group finds
+# The host times its telemetry read gaps and the spells in which a ring stayed
+# full while it kept reading (Health.read_gaps) and the group passes when every
+# drop falls in a gap or a spell at least as long as the send wait; a drop with
+# neither cause fails it. Every other problem the group finds
 # still fails it.
 GAP_TOLERANCE_NS = 20_000_000
 ATTRIBUTED_GROUPS = {"conf-stress-contended": "stress-contended"}
@@ -617,37 +619,63 @@ def run_check(check, ctx, args, attempt):
     return result
 
 
-def covers(gap, lo, hi, wait_ns):
-    """Whether a read gap explains a drop that happened between lo and hi (guest ns):
-    the window lies inside the gap, or the two overlap for the send wait. Windows
-    can be shorter than the wait because a timestamp is when an event began."""
-    start, end = int(gap["guest_ns"]), int(gap["guest_ns"]) + int(gap["len_ns"])
+def covers(gap, lo, hi, wait_ns, shift=0):
+    """Whether a read gap (or full-ring spell) explains a drop that happened between
+    lo and hi (guest ns): the window lies inside the gap, or the two overlap for the
+    send wait. Windows can be shorter than the wait because a timestamp is when an
+    event began. shift moves the gap later in guest time (see clock_lag)."""
+    start = int(gap["guest_ns"]) + shift
+    end = start + int(gap["len_ns"])
     overlap = min(hi, end) - max(lo, start)
     inside = start - GAP_TOLERANCE_NS <= lo and hi <= end + GAP_TOLERANCE_NS
     return inside or overlap >= wait_ns - GAP_TOLERANCE_NS
 
 
-def attribute_drops(accounting):
-    """Tie the group's dropped packets to host read gaps.
+def clock_lag(item, read_gaps):
+    """How far the guest clock had run ahead of the newest packet the host had read
+    when a gap or spell began. A pause is timed on the host, but placed in guest time
+    by the timestamp of the newest packet read, and a packet waits in its ring
+    (a full 256 KiB ring holds a good part of a send wait of events), so the pause
+    is placed that much too early. skew_ns is host time minus guest time for that
+    packet; the smallest over the run is the clocks' offset. Reports without the
+    fields lag by 0."""
+    if "skew_ns" not in item or "clock_skew_min_ns" not in read_gaps:
+        return 0
+    return max(int(item["skew_ns"]) - int(read_gaps["clock_skew_min_ns"]), 0)
+
+
+def classify_drops(accounting):
+    """Tie the group's dropped packets to their causes.
 
     A sender drops only after waiting its whole send wait for room, so a drop
-    needs a read gap of at least that wait. The gap [guest_ns, guest_ns +
-    len_ns] is in guest time (the newest packet timestamp read before it);
-    the drop lies between the timestamps of the dropped task's packets on
-    either side, up to the start of its next event. It is attributed when the
-    two overlap for the send wait
-    (less GAP_TOLERANCE_NS of timestamp skew). Drops the located runs do not
-    account for (numbering that ends in a loss, or no located run) count as
-    unattributed.
-    A gap of the whole transport explains any drop; a gap of one ring (the
-    host read other rings while that ring's head waited) only drops sent on
-    that ring.
-    Returns (attributed, unattributed, gaps), counts of packets and the gaps
-    that were long enough."""
+    needs either a host read gap of at least that wait (the host read nothing)
+    or a ring that stayed at 90 % or more at every read for that wait (the host
+    read but drained slower than the guest sent; a full spell). The gap [guest_ns,
+    guest_ns + len_ns] is in guest time (the newest packet timestamp read before
+    it); the drop lies between the timestamps of the dropped task's packets on
+    either side, up to the start of its next event. It is explained when the two
+    overlap for the send wait (less GAP_TOLERANCE_NS of timestamp skew), as placed
+    by the packets' timestamps or moved later by the clock lag (clock_lag).
+    A gap of the whole transport explains any drop; a gap or spell of one ring
+    only drops sent on that ring. Drops the located runs do not account for
+    (numbering that ends in a loss, or no located run) have neither cause.
+    Returns counts of packets: gap, gap_lagged (only the lag-corrected
+    placement matches), drain, neither; and the gaps and spells that were long
+    enough."""
     transport = accounting["transport"]
     wait_ns = int(transport.get("configured_send_wait_us", transport.get("send_wait_us", 0))) * 1000
-    gaps = [g for g in accounting.get("read_gaps", {}).get("gaps", []) if int(g["len_ns"]) >= wait_ns]
-    attributed = unattributed = located = 0
+    read_gaps = accounting.get("read_gaps", {})
+    gaps = [g for g in read_gaps.get("gaps", []) if int(g["len_ns"]) >= wait_ns]
+    spells = [x for x in read_gaps.get("full_spells", []) if int(x["len_ns"]) >= wait_ns - GAP_TOLERANCE_NS]
+    counts = {"gap": 0, "gap_lagged": 0, "drain": 0, "neither": 0}
+    located = 0
+
+    def explains(items, lo, hi, rings, lagged):
+        return any(
+            (item.get("ring") is None or int(item["ring"]) in rings)
+            and covers(item, lo, hi, wait_ns, clock_lag(item, read_gaps) if lagged else 0)
+            for item in items)
+
     for run in accounting.get("dropped_packets", []):
         count = int(run["last"]) - int(run["first"]) + 1
         located += count
@@ -658,21 +686,30 @@ def attribute_drops(accounting):
         before, after, end = int(run["before_ns"]), int(run["after_ns"]), int(run.get("end_ns", 0))
         lo, hi = min(before, after), max(before, after, end)
         rings = {int(run.get("before_cpu", -1)), int(run.get("after_cpu", -1))}
-        explained = lo > 0 and any(
-            (g.get("ring") is None or int(g["ring"]) in rings) and covers(g, lo, hi, wait_ns)
-            for g in gaps)
-        if explained:
-            attributed += count
+        if lo <= 0:
+            counts["neither"] += count
+        elif explains(gaps, lo, hi, rings, False):
+            counts["gap"] += count
+        elif explains(gaps, lo, hi, rings, True):
+            counts["gap_lagged"] += count
+        elif explains(spells, lo, hi, rings, False) or explains(spells, lo, hi, rings, True):
+            counts["drain"] += count
         else:
-            unattributed += count
-    unattributed += max(int(transport["dropped"]) - located, 0)
-    return attributed, unattributed, gaps
+            counts["neither"] += count
+    counts["neither"] += max(int(transport["dropped"]) - located, 0)
+    return counts, gaps, spells
+
+
+def attribute_drops(accounting):
+    """(drops with a cause, drops with neither, the gaps long enough); see classify_drops."""
+    counts, gaps, _ = classify_drops(accounting)
+    return counts["gap"] + counts["gap_lagged"] + counts["drain"], counts["neither"], gaps
 
 
 def measure(name, out, log, code):
     """What an attributed check reports: its numbers, and PASS when transport
     drops were the only problem the conformance check found and every drop is
-    attributed to a read gap (see ATTRIBUTED_GROUPS), FAIL when one is not."""
+    attributed to a read gap or a slow drain (see ATTRIBUTED_GROUPS), FAIL when one is not."""
     group = ATTRIBUTED_GROUPS[name]
     path = out / "runs" / name / "trace" / f"{group}.json"
     try:
@@ -685,10 +722,21 @@ def measure(name, out, log, code):
             "writer_held_longest_ms": int(transport["writer_held_longest_ms"]),
             "calls_per_second": round(float(report["throughput"]["calls_per_second"])),
         }
-        attributed, unattributed, gaps = attribute_drops(report["accounting"])
+        counts, gaps, spells = classify_drops(report["accounting"])
+        attributed = counts["gap"] + counts["gap_lagged"] + counts["drain"]
+        unattributed = counts["neither"]
+        spell_ns = sum(int(x["len_ns"]) for x in spells)
+        drained = sum(int(x.get("drained_bytes", 0)) for x in spells)
         numbers.update({
             "attributed": attributed,
             "unattributed": unattributed,
+            "by_read_gap": counts["gap"] + counts["gap_lagged"],
+            "by_read_gap_after_clock_lag": counts["gap_lagged"],
+            "by_slow_drain": counts["drain"],
+            "full_ring_spells": len(spells),
+            "full_ring_spell_longest_ms": max([int(x["len_ns"]) for x in spells], default=0) // 1_000_000,
+            "full_ring_drain_mib_per_s": round(drained / (spell_ns / 1e9) / 2**20, 1) if spell_ns else 0.0,
+            "clock_skew_min_ms": int(report["accounting"]["read_gaps"].get("clock_skew_min_ns", 0)) // 1_000_000,
             "read_gaps": int(report["accounting"]["read_gaps"]["count"]),
             "read_gaps_over_wait": len(gaps),
             "read_gap_longest_ms": int(report["accounting"]["read_gaps"]["longest_ns"]) // 1_000_000,
@@ -700,10 +748,14 @@ def measure(name, out, log, code):
     detail = (f"{numbers['dropped']:,} transport drops of {numbers['attempted']:,} "
               f"({share:.5f} %), writer held {numbers['writer_held_ms']:,} ms "
               f"(longest {numbers['writer_held_longest_ms']:,} ms), "
-              f"{numbers['calls_per_second']:,} calls/s; {numbers['attributed']:,} drops attributed to a "
-              f"read gap, {numbers['unattributed']:,} unattributed; {numbers['read_gaps']:,} read gaps "
+              f"{numbers['calls_per_second']:,} calls/s; drops: {numbers['by_read_gap']:,} in a host read gap "
+              f"({numbers['by_read_gap_after_clock_lag']:,} only after the clock lag), "
+              f"{numbers['by_slow_drain']:,} with a full ring the host kept draining too slowly, "
+              f"{numbers['unattributed']:,} with neither cause; {numbers['read_gaps']:,} read gaps "
               f"({numbers['read_gaps_over_wait']:,} as long as the send wait, longest "
-              f"{numbers['read_gap_longest_ms']:,} ms)")
+              f"{numbers['read_gap_longest_ms']:,} ms); {numbers['full_ring_spells']:,} full-ring spells "
+              f"(longest {numbers['full_ring_spell_longest_ms']:,} ms, drained "
+              f"{numbers['full_ring_drain_mib_per_s']} MiB/s)")
     found = {"measurement": numbers, "detail": detail}
     if code == 0:
         return found
