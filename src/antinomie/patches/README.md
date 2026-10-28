@@ -53,6 +53,7 @@ changes. Line counts are added/removed lines of the patch.
 | 16 | record where reads and writes of files happened, and what in-kernel copies moved | +419 -2 | `kernel/antinomie/{fileops.c,fileops.h}` | `fs/read_write.c`, `fs/splice.c`, `fs/ioctl.c`, `fs/open.c` |
 | 17 | record pages written through shared file mappings | +506 -4 | `kernel/antinomie/{filemap.c,filemap.h}` | `mm/memory.c`, `mm/page-writeback.c` |
 | 18 | name the native layouts of group lists, directory entries and LDT reads | +20 -7 | none (`native_capture.c`, `capture_x86.c`) | none |
+| 19 | keep the recorder out of the kernel's BTF | +532 | `scripts/antinomie_btf.py` (the BTF filter, run at build time) | `scripts/link-vmlinux.sh`, `scripts/Makefile.modfinal` (and `kernel/antinomie/Makefile`: no debug information) |
 
 Every topic also adds its part of the files shared by all of them:
 `control.c` (dispatch), `control_wire.h` (the wire contract), `antinomie_monitor.h`

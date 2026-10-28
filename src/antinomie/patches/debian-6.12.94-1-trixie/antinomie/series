@@ -38,3 +38,6 @@
 0016-antinomie-record-where-reads-and-writes-of-files-happened-and-what-in-kernel-copies-moved.patch
 0017-antinomie-record-pages-written-through-shared-file-mappings.patch
 0018-antinomie-name-the-native-layouts-of-group-lists-directory-entries-and-ldt-reads.patch
+
+# Stealth added in 0.8.0 (shared by every architecture): the recorder kept out of the kernel's BTF
+0019-antinomie-keep-the-recorder-out-of-the-kernel-s-btf.patch

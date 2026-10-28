@@ -1,0 +1,595 @@
+Description: antinomie: keep the recorder out of the kernel's BTF
+ A guest reads the kernel's BTF (/sys/kernel/btf/vmlinux and one file per
+ loaded module); Debian's kernel has it, and systemd's bpf-restrict-fs needs
+ it. pahole builds it from the kernel's debug information, which would name
+ the recorder's functions, types and the fields it adds to stock structures.
+ .
+ The recorder's objects are built without debug information, so pahole
+ describes nothing of kernel/antinomie. What its headers bring into stock
+ objects (task_struct's ant_* fields, io_kiocb's, the structures behind them,
+ inline helpers) is removed by scripts/antinomie_btf.py right after pahole:
+ every type, member, enumerator, function and variable with the recorder's
+ name, what refers only to them, and their strings. A structure keeps its size
+ and the offsets of its other members; the removed member is a hole.
+ .
+ Modules are encoded against the unfiltered vmlinux BTF, so they share the
+ types the filter changed rather than carry copies of them, and are filtered
+ onto the filtered one with the renumbering the vmlinux pass recorded.
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-10-28
+
+---
+diff --git a/kernel/antinomie/Makefile b/kernel/antinomie/Makefile
+index 3ee011d..9f3944a 100644
+--- a/kernel/antinomie/Makefile
++++ b/kernel/antinomie/Makefile
+@@ -1,3 +1,9 @@
++# No debug information for the recorder's objects: pahole builds the kernel's
++# BTF (/sys/kernel/btf/vmlinux, readable in the guest) from it, so none of the
++# recorder's functions, variables or types are described there. What its
++# headers bring into stock objects is filtered out (scripts/antinomie_btf.py).
++ccflags-remove-y += $(DEBUG_CFLAGS)
++
+ # section_begin.o first and section_end.o last: they bracket this directory's
+ # symbols in vmlinux (sections.h).
+ obj-y += section_begin.o
+diff --git a/scripts/Makefile.modfinal b/scripts/Makefile.modfinal
+index 475ee59..ee76eab 100644
+--- a/scripts/Makefile.modfinal
++++ b/scripts/Makefile.modfinal
+@@ -41,10 +41,23 @@ quiet_cmd_ld_ko_o = LD [M]  $@
+ 		$(KBUILD_LDFLAGS_MODULE) $(LDFLAGS_MODULE)		\
+ 		-T $(ARCH_MODULE_LDS) -o $@ $(filter %.o, $^)
+ 
++# The recorder's names stay out of module BTF too. The module is encoded
++# against vmlinux's unfiltered BTF (scripts/link-vmlinux.sh), so that it
++# shares the types the filter changed instead of copying them, then filtered
++# onto vmlinux's filtered BTF.
++cmd_btf_ko_antinomie =							\
++	LLVM_OBJCOPY="$(OBJCOPY)" $(PAHOLE) -J $(PAHOLE_FLAGS) $(MODULE_PAHOLE_FLAGS) --btf_base .btf.vmlinux.full $@; \
++	$(PYTHON3) $(srctree)/scripts/antinomie_btf.py module $@ .btf.vmlinux.full .btf.vmlinux.map $@.btf; \
++	$(OBJCOPY) --update-section .BTF=$@.btf $@;			\
++	rm -f $@.btf;
++
+ quiet_cmd_btf_ko = BTF [M] $@
+       cmd_btf_ko = 							\
+ 	if [ ! -f vmlinux ]; then					\
+ 		printf "Skipping BTF generation for %s due to unavailability of vmlinux\n" $@ 1>&2; \
++	elif [ -n "$(CONFIG_ANTINOMIE)" ] && [ -f .btf.vmlinux.full ]; then \
++		$(cmd_btf_ko_antinomie)					\
++		$(RESOLVE_BTFIDS) -b vmlinux $@; 			\
+ 	else								\
+ 		LLVM_OBJCOPY="$(OBJCOPY)" $(PAHOLE) -J $(PAHOLE_FLAGS) $(MODULE_PAHOLE_FLAGS) --btf_base vmlinux $@; \
+ 		$(RESOLVE_BTFIDS) -b vmlinux $@; 			\
+diff --git a/scripts/antinomie_btf.py b/scripts/antinomie_btf.py
+new file mode 100755
+index 0000000..511c714
+--- /dev/null
++++ b/scripts/antinomie_btf.py
+@@ -0,0 +1,502 @@
++#!/usr/bin/env python3
++# SPDX-License-Identifier: GPL-2.0-only
++"""Keep the recorder's names out of the kernel's BTF.
++
++The recorder's own objects (kernel/antinomie) are built without debug
++information, so pahole describes none of their functions, variables or types.
++What remains comes from its headers in stock objects: the fields it adds to
++stock structures (task_struct, io_kiocb, ...), its structures behind those
++fields, and its inline helpers. This filter removes every type, member,
++enumerator, function and variable whose name is the recorder's, then what only
++they referred to, and rebuilds the string table from what is left.
++
++    antinomie_btf.py vmlinux ELF FULL MAP OUT
++        The .BTF pahole wrote into ELF: saved unchanged as FULL (the base the
++        modules are encoded against), filtered into OUT (raw BTF), with the
++        type and string renumbering in MAP.
++    antinomie_btf.py module KO FULL MAP OUT
++        A module's split BTF (encoded against FULL), filtered into OUT on top
++        of the filtered vmlinux BTF that MAP describes.
++"""
++import array
++import bisect
++import re
++import struct
++import sys
++
++# The recorder's names in vmlinux: ant_*, antc_*, __ant_*, ANT_* and anything
++# with antinomie, in any case. Stock vmlinux BTF has none (Debian's, and this
++# kernel's built-in drivers), but stock modules do (wireless drivers' ant_gain,
++# ...): in modules only the names removed from vmlinux count, plus antinomie.
++FORBIDDEN = re.compile(rb"^_*antc?_|antinomie", re.IGNORECASE)
++
++MAGIC = 0xEB9F
++REMOVED = 0xFFFFFFFF
++MAP_MAGIC = b"ABTFMAP1"
++
++(INT, PTR, ARRAY, STRUCT, UNION, ENUM, FWD, TYPEDEF, VOLATILE, CONST, RESTRICT,
++ FUNC, FUNC_PROTO, VAR, DATASEC, FLOAT, DECL_TAG, TYPE_TAG, ENUM64) = range(1, 20)
++# Kinds whose single reference is the third word of the type.
++REF_KINDS = {PTR, TYPEDEF, VOLATILE, CONST, RESTRICT, FUNC, VAR, DECL_TAG, TYPE_TAG}
++# Anonymous types of these kinds exist only for their referrers.
++DERIVED = {PTR, ARRAY, CONST, VOLATILE, RESTRICT, TYPE_TAG, FUNC_PROTO, STRUCT, UNION,
++           ENUM, ENUM64}
++
++
++def fail(message):
++    sys.exit(f"antinomie_btf: {message}")
++
++
++def elf_section(data, wanted):
++    """The bytes of section `wanted` of an ELF file (32/64-bit, either byte order)."""
++    if data[:4] != b"\x7fELF":
++        fail("not an ELF file")
++    wide = data[4] == 2
++    order = "<" if data[5] == 1 else ">"
++    if wide:
++        shoff, = struct.unpack_from(order + "Q", data, 0x28)
++        shentsize, shnum, shstrndx = struct.unpack_from(order + "HHH", data, 0x3A)
++    else:
++        shoff, = struct.unpack_from(order + "I", data, 0x20)
++        shentsize, shnum, shstrndx = struct.unpack_from(order + "HHH", data, 0x2E)
++
++    def header(index):
++        at = shoff + index * shentsize
++        if wide:
++            name, _, _, _, offset, size, link = struct.unpack_from(order + "IIQQQQI", data, at)
++        else:
++            name, _, _, _, offset, size, link = struct.unpack_from(order + "IIIIIII", data, at)
++        return name, offset, size, link
++
++    if shnum == 0:
++        shnum = header(0)[2]
++    if shstrndx == 0xFFFF:
++        shstrndx = header(0)[3]
++    _, names_at, names_size, _ = header(shstrndx)
++    names = data[names_at:names_at + names_size]
++    for index in range(shnum):
++        name, offset, size, _ = header(index)
++        if names[name:names.index(b"\0", name)] == wanted:
++            return data[offset:offset + size]
++    fail(f"no {wanted.decode()} section")
++
++
++class Btf:
++    """Parsed raw BTF: header fields, types as mutable lists, string bytes."""
++
++    def __init__(self, raw):
++        magic, = struct.unpack_from("<H", raw, 0)
++        if magic == MAGIC:
++            self.order = "<"
++        elif struct.unpack_from(">H", raw, 0)[0] == MAGIC:
++            self.order = ">"
++        else:
++            fail("bad BTF magic")
++        o = self.order
++        _, self.version, self.flags, hdr_len, type_off, type_len, str_off, str_len = \
++            struct.unpack_from(o + "HBBIIIII", raw, 0)
++        self.strings = raw[hdr_len + str_off:hdr_len + str_off + str_len]
++        self.types = []
++        at, end = hdr_len + type_off, hdr_len + type_off + type_len
++        while at < end:
++            name, info, word = struct.unpack_from(o + "III", raw, at)
++            at += 12
++            kind, vlen = (info >> 24) & 0x1F, info & 0xFFFF
++            if kind in (STRUCT, UNION, DATASEC, ENUM64):
++                extra = [list(struct.unpack_from(o + "III", raw, at + 12 * i)) for i in range(vlen)]
++                at += 12 * vlen
++            elif kind == ENUM:
++                extra = [list(struct.unpack_from(o + "Ii", raw, at + 8 * i)) for i in range(vlen)]
++                at += 8 * vlen
++            elif kind == FUNC_PROTO:
++                extra = [list(struct.unpack_from(o + "II", raw, at + 8 * i)) for i in range(vlen)]
++                at += 8 * vlen
++            elif kind == ARRAY:
++                extra = list(struct.unpack_from(o + "III", raw, at))
++                at += 12
++            elif kind in (INT, VAR):
++                extra = struct.unpack_from(o + "I", raw, at)[0]
++                at += 4
++            elif kind == DECL_TAG:
++                extra = struct.unpack_from(o + "i", raw, at)[0]
++                at += 4
++            elif kind in (PTR, FWD, TYPEDEF, VOLATILE, CONST, RESTRICT, FUNC, FLOAT, TYPE_TAG):
++                extra = None
++            else:
++                fail(f"unknown BTF kind {kind}")
++            self.types.append([name, info, word, extra])
++
++    def serialize(self, types, strings):
++        o = self.order
++        body = bytearray()
++        for name, info, word, extra in types:
++            kind = (info >> 24) & 0x1F
++            body += struct.pack(o + "III", name, info, word)
++            if kind in (STRUCT, UNION, DATASEC, ENUM64):
++                for entry in extra:
++                    body += struct.pack(o + "III", *entry)
++            elif kind == ENUM:
++                for entry in extra:
++                    body += struct.pack(o + "Ii", *entry)
++            elif kind == FUNC_PROTO:
++                for entry in extra:
++                    body += struct.pack(o + "II", *entry)
++            elif kind == ARRAY:
++                body += struct.pack(o + "III", *extra)
++            elif kind in (INT, VAR):
++                body += struct.pack(o + "I", extra)
++            elif kind == DECL_TAG:
++                body += struct.pack(o + "i", extra)
++        header = struct.pack(o + "HBBIIIII", MAGIC, self.version, self.flags, 24,
++                             0, len(body), len(body), len(strings))
++        return header + bytes(body) + strings
++
++
++def kind_of(t):
++    return (t[1] >> 24) & 0x1F
++
++
++def refs(t):
++    """Type ids `t` refers to, as (slot, id); slot says where, for rewriting."""
++    kind = kind_of(t)
++    if kind in REF_KINDS:
++        yield ("word", None), t[2]
++    elif kind == ARRAY:
++        yield ("array", 0), t[3][0]
++        yield ("array", 1), t[3][1]
++    elif kind in (STRUCT, UNION):
++        for index, member in enumerate(t[3]):
++            yield ("member", index), member[1]
++    elif kind == FUNC_PROTO:
++        yield ("word", None), t[2]
++        for index, param in enumerate(t[3]):
++            yield ("param", index), param[1]
++    elif kind == DATASEC:
++        for index, entry in enumerate(t[3]):
++            yield ("entry", index), entry[0]
++
++
++def set_ref(t, slot, value):
++    where, index = slot
++    if where == "word":
++        t[2] = value
++    elif where == "array":
++        t[3][index] = value
++    elif where in ("member", "param"):
++        t[3][index][1] = value
++    else:
++        t[3][index][0] = value
++
++
++def string_refs(t):
++    """String offsets `t` holds, as (slot, offset)."""
++    yield ("name", None), t[0]
++    kind = kind_of(t)
++    if kind in (STRUCT, UNION, ENUM, ENUM64, FUNC_PROTO):
++        for index, entry in enumerate(t[3]):
++            yield ("entry", index), entry[0]
++
++
++def set_string(t, slot, value):
++    if slot[0] == "name":
++        t[0] = value
++    else:
++        t[3][slot[1]][0] = value
++
++
++def with_vlen(t, entries):
++    t[3] = entries
++    t[1] = (t[1] & ~0xFFFF) | len(entries)
++
++
++class Filter:
++    """Filter the types of one BTF (vmlinux, or a module's split BTF on top of
++    a base whose removed ids are `base_removed`)."""
++
++    def __init__(self, btf, text, first_id, forbidden, base_removed=lambda i: False):
++        self.btf, self.text, self.first = btf, text, first_id
++        self.forbidden, self.base_removed = forbidden, base_removed
++        self.names = set()
++        self.count = len(btf.types)
++        self.removed = bytearray(self.count)
++        self.notes = []
++
++    def own(self, type_id):
++        return type_id >= self.first
++
++    def gone(self, type_id):
++        if type_id == 0:
++            return False
++        if self.own(type_id):
++            return bool(self.removed[type_id - self.first])
++        return self.base_removed(type_id)
++
++    def bad(self, offset):
++        name = self.text(offset)
++        if name and self.forbidden(name):
++            self.names.add(name)
++            return True
++        return False
++
++    def describe(self, t):
++        return self.text(t[0]).decode(errors="replace") or f"anonymous kind {kind_of(t)}"
++
++    def run(self):
++        types = self.btf.types
++        # Original referrers of each own type, for the orphan rule below.
++        referred = bytearray(self.count)
++        for t in types:
++            for _, target in refs(t):
++                if target and self.own(target):
++                    referred[target - self.first] = 1
++        # 1. The recorder's names.
++        for index, t in enumerate(types):
++            kind = kind_of(t)
++            if self.bad(t[0]):
++                self.removed[index] = 1
++                continue
++            if kind in (STRUCT, UNION):
++                kept = [m for m in t[3] if not self.bad(m[0])]
++                if len(kept) != len(t[3]):
++                    self.drop_members(index + self.first, t, kept)
++            elif kind in (ENUM, ENUM64):
++                kept = [e for e in t[3] if not self.bad(e[0])]
++                if len(kept) != len(t[3]):
++                    if kept or not t[0]:
++                        with_vlen(t, kept)
++                    if not kept:
++                        self.removed[index] = 1
++            elif kind == FUNC_PROTO and any(self.bad(p[0]) for p in t[3]):
++                self.removed[index] = 1
++        # 2. What refers to a removed type goes too, except that a structure
++        # loses only that member and a data section only that variable.
++        changed = True
++        while changed:
++            changed = False
++            for index, t in enumerate(types):
++                if self.removed[index]:
++                    continue
++                kind = kind_of(t)
++                if kind in (STRUCT, UNION):
++                    kept = [m for m in t[3] if not self.gone(m[1])]
++                    if len(kept) != len(t[3]):
++                        self.notes.append(f"{self.describe(t)}: member of a removed type dropped")
++                        self.drop_members(index + self.first, t, kept)
++                        changed = True
++                elif kind == DATASEC:
++                    kept = [e for e in t[3] if not self.gone(e[0])]
++                    if len(kept) != len(t[3]):
++                        with_vlen(t, kept)
++                        if not kept:
++                            self.removed[index] = 1
++                        changed = True
++                elif any(self.gone(target) for _, target in refs(t)):
++                    if kind not in (DECL_TAG, FUNC_PROTO) and t[0]:
++                        self.notes.append(f"{self.describe(t)}: refers to a removed type")
++                    self.removed[index] = 1
++                    changed = True
++        # 3. Anonymous types whose every referrer went.
++        changed = True
++        while changed:
++            changed = False
++            live = bytearray(self.count)
++            for index, t in enumerate(types):
++                if self.removed[index]:
++                    continue
++                for _, target in refs(t):
++                    if target and self.own(target):
++                        live[target - self.first] = 1
++            for index, t in enumerate(types):
++                if (not self.removed[index] and referred[index] and not live[index]
++                        and kind_of(t) in DERIVED and not self.text(t[0])):
++                    self.removed[index] = 1
++                    changed = True
++        return self.removed
++
++    def drop_members(self, type_id, t, kept):
++        """Drop members of struct/union `t`; renumber decl tags on its members."""
++        old = t[3]
++        position = {}
++        for new_index, member in enumerate(kept):
++            position[id(member)] = new_index
++        renumber = [position.get(id(member), -1) for member in old]
++        with_vlen(t, kept)
++        for index, tag in enumerate(self.btf.types):
++            if kind_of(tag) == DECL_TAG and tag[2] == type_id and tag[3] >= 0:
++                if renumber[tag[3]] < 0:
++                    self.removed[index] = 1
++                else:
++                    tag[3] = renumber[tag[3]]
++
++
++def compact(btf, removed, first_old, first_new, base_map, own_start, own_new, base_string):
++    """Renumber the kept types and rebuild the string table.
++
++    Ids from first_old are this BTF's own and become ids from first_new;
++    base_map(id) maps a base id below first_old. String offsets from own_start
++    are own strings and are laid out again from own_new, in their original
++    order; base_string(off) gives a base string's new offset, or None and its
++    bytes when the filtered base no longer has it (it moves to the own table)."""
++    new_id = array.array("I", [REMOVED]) * len(btf.types)
++    next_id = first_new
++    for index in range(len(btf.types)):
++        if not removed[index]:
++            new_id[index] = next_id
++            next_id += 1
++    kept = [t for index, t in enumerate(btf.types) if not removed[index]]
++    for t in kept:
++        for slot, target in list(refs(t)):
++            if target == 0:
++                continue
++            value = new_id[target - first_old] if target >= first_old else base_map(target)
++            if value == REMOVED:
++                fail(f"kept type refers to removed type {target}")
++            set_ref(t, slot, value)
++    table = bytearray(b"\0" if own_start == 0 else b"")
++    placed = {0: 0}
++    for off in sorted({off for t in kept for _, off in string_refs(t) if off >= own_start}):
++        if off not in placed:
++            local = off - own_start
++            placed[off] = own_new + len(table)
++            table += btf.strings[local:btf.strings.index(b"\0", local)] + b"\0"
++    moved = {}
++    for t in kept:
++        for slot, off in list(string_refs(t)):
++            if off in placed:
++                set_string(t, slot, placed[off])
++                continue
++            value, text = base_string(off)
++            if value is None:
++                if text not in moved:
++                    moved[text] = own_new + len(table)
++                    table += text + b"\0"
++                value = moved[text]
++            set_string(t, slot, value)
++    return kept, new_id, bytes(table)
++
++
++def text_at(strings, start=0):
++    def text(off):
++        local = off - start
++        if local < 0:
++            return b""
++        return strings[local:strings.index(b"\0", local)]
++    return text
++
++
++def filter_vmlinux(elf, full, map_path, out):
++    with open(elf, "rb") as f:
++        raw = elf_section(f.read(), b".BTF")
++    with open(full, "wb") as f:
++        f.write(raw)
++    btf = Btf(raw)
++    flt = Filter(btf, text_at(btf.strings), 1, lambda name: FORBIDDEN.search(name) is not None)
++    removed = flt.run()
++    kept, new_id, table = compact(btf, removed, 1, 1, None, 0, 0, None)
++    finished = btf.serialize(kept, table)
++    with open(out, "wb") as f:
++        f.write(finished)
++    # The string map: old offset -> new offset of every kept string.
++    old_offsets, new_offsets = array.array("I"), array.array("I")
++    seen = {}
++    pos = 0
++    strings = btf.strings
++    while pos < len(strings):
++        end = strings.index(b"\0", pos)
++        seen.setdefault(strings[pos:end], pos)
++        pos = end + 1
++    new_pos, new_table = 0, table
++    while new_pos < len(new_table):
++        end = new_table.index(b"\0", new_pos)
++        old = seen.get(new_table[new_pos:end])
++        if old is not None:
++            old_offsets.append(old)
++            new_offsets.append(new_pos)
++        new_pos = end + 1
++    with open(map_path, "wb") as f:
++        f.write(MAP_MAGIC)
++        f.write(struct.pack("<IIIII", len(btf.types), len(kept), len(btf.strings),
++                            len(table), len(old_offsets)))
++        type_map = array.array("I", [0]) + new_id
++        if sys.byteorder != "little":
++            type_map.byteswap()
++            old_offsets.byteswap()
++            new_offsets.byteswap()
++        f.write(type_map.tobytes())
++        f.write(old_offsets.tobytes())
++        f.write(new_offsets.tobytes())
++        # The names removed, which are the only ones removed from modules.
++        f.write(b"\0".join(sorted(flt.names)))
++    report(flt, len(btf.types) - len(kept))
++
++
++def load_map(map_path):
++    with open(map_path, "rb") as f:
++        data = f.read()
++    if data[:8] != MAP_MAGIC:
++        fail(f"{map_path}: not a BTF map")
++    old_count, new_count, old_str, new_str, pairs = struct.unpack_from("<IIIII", data, 8)
++    at = 28
++    type_map = array.array("I")
++    type_map.frombytes(data[at:at + 4 * (old_count + 1)])
++    at += 4 * (old_count + 1)
++    old_offsets, new_offsets = array.array("I"), array.array("I")
++    old_offsets.frombytes(data[at:at + 4 * pairs])
++    new_offsets.frombytes(data[at + 4 * pairs:at + 8 * pairs])
++    if sys.byteorder != "little":
++        for a in (type_map, old_offsets, new_offsets):
++            a.byteswap()
++    names = set(data[at + 8 * pairs:].split(b"\0")) - {b""}
++    return old_count, new_count, old_str, new_str, type_map, old_offsets, new_offsets, names
++
++
++def filter_module(ko, full, map_path, out):
++    (old_count, new_count, old_str, new_str, type_map, old_offsets, new_offsets,
++     names) = load_map(map_path)
++    with open(full, "rb") as f:
++        base = Btf(f.read())
++    if len(base.types) != old_count or len(base.strings) != old_str:
++        fail(f"{full} does not match {map_path}")
++    with open(ko, "rb") as f:
++        btf = Btf(elf_section(f.read(), b".BTF"))
++    base_text = text_at(base.strings)
++    own_text = text_at(btf.strings, old_str)
++
++    def text(off):
++        return base_text(off) if off < old_str else own_text(off)
++
++    flt = Filter(btf, text, old_count + 1,
++                 lambda name: name in names or b"antinomie" in name.lower(),
++                 lambda i: type_map[i] == REMOVED)
++    removed = flt.run()
++
++    def base_string(off):
++        at = bisect.bisect_left(old_offsets, off)
++        if at < len(old_offsets) and old_offsets[at] == off:
++            return new_offsets[at], None
++        return None, base_text(off)
++
++    kept, _, table = compact(btf, removed, old_count + 1, new_count + 1,
++                             lambda i: type_map[i], old_str, new_str, base_string)
++    finished = btf.serialize(kept, table)
++    with open(out, "wb") as f:
++        f.write(finished)
++    report(flt, len(btf.types) - len(kept), ko)
++
++
++def report(flt, count, what="vmlinux"):
++    for note in sorted(set(flt.notes)):
++        print(f"antinomie_btf: {what}: {note}", file=sys.stderr)
++
++
++def main(argv):
++    if len(argv) == 6 and argv[1] == "vmlinux":
++        filter_vmlinux(*argv[2:])
++    elif len(argv) == 6 and argv[1] == "module":
++        filter_module(*argv[2:])
++    else:
++        sys.exit(__doc__)
++
++
++if __name__ == "__main__":
++    main(sys.argv)
+diff --git a/scripts/link-vmlinux.sh b/scripts/link-vmlinux.sh
+index a9b3f34..b02ab92 100755
+--- a/scripts/link-vmlinux.sh
++++ b/scripts/link-vmlinux.sh
+@@ -112,6 +112,17 @@ gen_btf()
+ 	info BTF "${btf_data}"
+ 	LLVM_OBJCOPY="${OBJCOPY}" ${PAHOLE} -J ${PAHOLE_FLAGS} ${1}
+ 
++	# The recorder's names stay out of the BTF the guest reads. pahole's
++	# unfiltered output is kept as the base the modules are encoded against
++	# (scripts/Makefile.modfinal), with the renumbering that maps them onto
++	# the filtered one.
++	if is_enabled CONFIG_ANTINOMIE; then
++		info BTF "${1} (recorder names removed)"
++		${PYTHON3} ${srctree}/scripts/antinomie_btf.py vmlinux ${1} \
++			.btf.vmlinux.full .btf.vmlinux.map .btf.vmlinux.filtered
++		${OBJCOPY} --update-section .BTF=.btf.vmlinux.filtered ${1}
++	fi
++
+ 	# Create ${btf_data} which contains just .BTF section but no symbols. Add
+ 	# SHF_ALLOC because .BTF will be part of the vmlinux image. --strip-all
+ 	# deletes all symbols including __start_BTF and __stop_BTF, which will
