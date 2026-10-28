@@ -1,0 +1,745 @@
+From 9a21cb8b3f6bad800f4722f8fedcf29affa32995 Mon Sep 17 00:00:00 2001
+From: MikiMiku <jonathanirvinjo@gmail.com>
+Date: Wed, 28 Oct 2026 18:46:17 +0700
+Subject: [PATCH] antinomie: record pages written through shared file mappings
+
+A store into a writable shared mapping of a file changes the file
+without a system call, so the host's history of the file, rebuilt from
+the calls that wrote it, misses it entirely. The kernel takes note of
+such stores only through the page table entry's dirty bit, which it
+consumes in two places: when the page is written back, and when the
+mapping goes away. Both are where the pages are recorded, with their
+content at that moment.
+
+A lifecycle record of the call, lifecycle.file_mapped
+(antinomie.filemap/1, 96 bytes per range), says which pages of which
+file, why (WRITEBACK: the call wrote them back, as msync, fsync or sync
+do; UNMAP: the call removed a mapping that held them dirty, as munmap,
+mremap, exec or exit do), the file size and time, and a write order;
+the bytes follow as lifecycle.file_mapped.data. A call's records are one
+event published just before its exit. The address space a task drops
+when it exits has no exit of a call to go with: its pages go out just
+before lifecycle.task_exit, under the task's last call.
+
+The copies are made where the kernel sees the page, under the page
+table lock or the folio lock, so they never sleep: one page each from a
+nonblocking allocation, at most 4 MiB per call, at most 64 ranges per
+call. A range past the budget, or without memory, is still recorded,
+with the reason its bytes are missing; pages past the ranges are
+counted.
+
+Each range takes its write order from the counter writes use, while
+holding the file's inode lock shared with a trylock, and every page of
+the range is copied while holding it: every write with a lower number
+is complete in the copy and none with a higher number has begun. When
+a write holds the lock, the range has no number.
+
+Only the result of the stores is seen, not each store. A page the
+background writeback wrote while the mapping stayed, and that was not
+stored to again, is clean when the mapping goes and is not recorded.
+Mappings of the kernel's internal files (shared anonymous memory,
+System V shared memory, memfd, AIO rings) are not followed.
+
+Hooked kernel files:
+- mm/memory.c: zap_present_folio_ptes(), where a dirty entry of a file
+  page moves its dirty bit to the folio as the mapping is removed.
+- mm/page-writeback.c: folio_clear_dirty_for_io(), where the mappings
+  of a folio about to be written back are cleaned and found dirty.
+
+Contract: revision 18.
+---
+ include/linux/antinomie_monitor.h |   9 +
+ kernel/antinomie/Makefile         |   1 +
+ kernel/antinomie/control_wire.h   |  56 +++++-
+ kernel/antinomie/filemap.c        | 318 ++++++++++++++++++++++++++++++
+ kernel/antinomie/filemap.h        |  29 +++
+ kernel/antinomie/fileops.c        |  10 +-
+ kernel/antinomie/fileops.h        |   2 +
+ kernel/antinomie/recorder.c       |  79 ++++++++
+ mm/memory.c                       |   1 +
+ mm/page-writeback.c               |   5 +-
+ 10 files changed, 506 insertions(+), 4 deletions(-)
+ create mode 100644 kernel/antinomie/filemap.c
+ create mode 100644 kernel/antinomie/filemap.h
+
+diff --git a/include/linux/antinomie_monitor.h b/include/linux/antinomie_monitor.h
+index b8053b4..c9752cd 100644
+--- a/include/linux/antinomie_monitor.h
++++ b/include/linux/antinomie_monitor.h
+@@ -20,6 +20,9 @@ struct mm_struct;
+ struct kernel_siginfo;
+ struct linux_binprm;
+ struct bio_vec;
++struct folio;
++struct page;
++struct vm_area_struct;
+ #define ANT_ASYNC_IO_URING 1
+ #define ANT_ASYNC_AIO 2
+ #define ANT_ASYNC_PAYLOAD_GAP BIT(0)
+@@ -186,6 +189,9 @@ void ant_monitor_copy_begin(u8 kind, struct file *in, struct file *out, size_t c
+ void ant_monitor_copy_data(const struct bio_vec *bvec, unsigned int segs, size_t len);
+ void ant_monitor_file_copy(u8 kind, struct file *in, loff_t in_pos, struct file *out,
+ 			   loff_t out_pos, u64 len, u32 mode);
++void ant_monitor_mapped_writeback(struct folio *folio);
++void ant_monitor_mapped_unmap(struct vm_area_struct *vma, struct folio *folio,
++			      struct page *page, unsigned int nr);
+ #else
+ static inline void ant_monitor_shadow_read(struct mm_struct *mm, unsigned long addr,
+ 					   void *buf, int len) {}
+@@ -305,5 +311,8 @@ static inline void ant_monitor_copy_data(const struct bio_vec *bvec, unsigned in
+ 					 size_t len) {}
+ static inline void ant_monitor_file_copy(u8 kind, struct file *in, loff_t in_pos,
+ 					 struct file *out, loff_t out_pos, u64 len, u32 mode) {}
++static inline void ant_monitor_mapped_writeback(struct folio *folio) {}
++static inline void ant_monitor_mapped_unmap(struct vm_area_struct *vma, struct folio *folio,
++					    struct page *page, unsigned int nr) {}
+ #endif
+ #endif
+diff --git a/kernel/antinomie/Makefile b/kernel/antinomie/Makefile
+index 8aa3041..3ee011d 100644
+--- a/kernel/antinomie/Makefile
++++ b/kernel/antinomie/Makefile
+@@ -16,5 +16,6 @@ obj-y += debug.o
+ obj-$(CONFIG_X86_64) += debug_x86.o
+ obj-y += fileid.o
+ obj-y += fileops.o
++obj-y += filemap.o
+ obj-y += stealth.o
+ obj-y += section_end.o
+diff --git a/kernel/antinomie/control_wire.h b/kernel/antinomie/control_wire.h
+index 56aa302..3a0c794 100644
+--- a/kernel/antinomie/control_wire.h
++++ b/kernel/antinomie/control_wire.h
+@@ -14,8 +14,9 @@
+ /* Revision 15: opt-in root-process ELF core acquisition at exit; ABI 9. */
+ /* Revision 17: kernel-native guest resource sample (RESOURCES), and the
+  * credential and file-hash lifecycle records described below. */
+-/* Revision 18: where reads and writes of seekable files happened, and the
+- * operands of in-kernel copies and allocations (file.position, file.copy). */
++/* Revision 18: where reads and writes of seekable files happened, the
++ * operands of in-kernel copies and allocations (file.position, file.copy), and
++ * pages written through shared file mappings (lifecycle.file_mapped). */
+ #define ANTC_REVISION 18
+ #define ANTC_HEADER_SIZE 8
+ #define ANTC_UPLOAD_BEGIN 0x1001
+@@ -389,6 +390,57 @@
+ #define ANTC_FILECOPY_DATA 4
+ #define ANTC_FILECOPY_DATA_CUT 8
+ #define ANTC_FILECOPY_DATA_MAX 1048576
++/* lifecycle.file_mapped, layout "antinomie.filemap/1", 96 bytes (revision 18,
++ * additive): pages of a regular file written through a shared mapping, which
++ * no system call carries, with their content when the kernel took note of the
++ * stores. Each record is one range of one file, followed by the field
++ * lifecycle.file_mapped.data (encoding 1, declared extent = the range's
++ * length) when the guest copied bytes of it. The records of one call are one
++ * lifecycle event (phase 3) of that call, published just before its exit;
++ * for an address space dropped when the task exits, just before
++ * lifecycle.task_exit, under the task's last call.
++ * u8 cause at 0: WRITEBACK, the call wrote the pages back to the file (msync,
++ * fsync, fdatasync, sync_file_range, sync, syncfs, an O_DIRECT transfer or
++ * fadvise that flushed them first), and a mapping's page table entry for them
++ * was dirty or writable; UNMAP, the call removed a mapping whose entry was
++ * dirty (munmap, mremap, a MAP_FIXED mapping over it, madvise, a hole punch
++ * of the file, exec, or exit). The bytes are the page at that moment: every
++ * store in between is not seen, only the result. A host applies a call's
++ * records before the call's own change to the file: a copy already holds what
++ * the call wrote to the page before it was copied (an O_SYNC write), and a
++ * change made after the copy (the zeros of a hole punch) is the call's own.
++ * u8 flags at 1 (DATA: the data field follows this record), u8 cut at 2
++ * (why bytes of the range are missing from the data field: BUDGET, the call
++ * had copied ANTC_FILEMAP_DATA_MAX bytes already; MEMORY, the guest could not
++ * get a page for the copy; zero: none missing), zero at 3, u32 page size at 4,
++ * u64 offset at 8 (file offset of the range's first page), u64 length at 16
++ * (bytes of the file in the range: whole pages, the last clipped to the file
++ * size; a page past the end of the file is not recorded), u64 carried at 24
++ * (bytes of the data field, from the offset on; less than length when cut),
++ * the file at 32 (u64 dev, u64 ino, u32 generation, u32 mode, as in
++ * file.copy), u64 file size at 56 (i_size when the first page was copied),
++ * u64 time at 64 (ktime_get_ns() when the first page was copied), u64 write
++ * order at 72 (as for file.position: taken while no write to the file was in
++ * progress, so the range holds every write with a lower number and no part
++ * of one with a higher number; zero when a write was in progress), u16 index
++ * at 80 and u16 count at 82 (this record's place among the call's records),
++ * u32 lost at 84 (pages the guest saw since the previous record and could not
++ * list at all: no memory for the list), u64 unlisted at 88 (pages of this
++ * call past its ANTC_FILEMAP_RANGES records: counted, not listed).
++ * Only tasks the recorder follows are seen, and only pages they saw: a page the
++ * kernel's background writeback wrote while the mapping stayed is clean when
++ * the mapping goes, and is not recorded unless stored to again. Mappings of
++ * kernel-internal files (shared anonymous memory, System V shared memory,
++ * memfd) and of hugetlbfs files are not recorded.
++ */
++#define ANTC_FILEMAP_SIZE 96
++#define ANTC_FILEMAP_WRITEBACK 1
++#define ANTC_FILEMAP_UNMAP 2
++#define ANTC_FILEMAP_DATA 1
++#define ANTC_FILEMAP_CUT_BUDGET 1
++#define ANTC_FILEMAP_CUT_MEMORY 2
++#define ANTC_FILEMAP_DATA_MAX 4194304
++#define ANTC_FILEMAP_RANGES 64
+ #define ANTC_UPLOAD_OVERWRITE 1
+ #define ANTC_UPLOAD_EXECUTABLE 2
+ 
+diff --git a/kernel/antinomie/filemap.c b/kernel/antinomie/filemap.c
+new file mode 100644
+index 0000000..0aaf4df
+--- /dev/null
++++ b/kernel/antinomie/filemap.c
+@@ -0,0 +1,318 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* Pages of a regular file written through a shared mapping.
++ *
++ * A store into a writable shared mapping of a file makes no system call: the
++ * page in the page cache changes, its page table entry turns dirty, and the
++ * file system writes the page back some time later. What the host can be
++ * given is each page's state at the moments the kernel itself takes note of
++ * the stores, which are the moments the page table entry's dirty bit is
++ * consumed:
++ *
++ * - writeback (ANTC_FILEMAP_WRITEBACK): a traced call writes the page back
++ *   to the file (msync, fsync, sync, an O_DIRECT transfer that flushes the
++ *   cache first). folio_clear_dirty_for_io() write-protects and cleans the
++ *   mappings' entries, and folio_mkclean() says whether one of them was
++ *   dirty or writable: the page was written through a mapping since its last
++ *   writeback. The folio is locked and no mapping can write it, so the copy
++ *   is what goes to the file.
++ * - unmap (ANTC_FILEMAP_UNMAP): a traced task removes a mapping whose entry
++ *   is dirty (munmap, mremap, a MAP_FIXED mapping over it, madvise, a hole
++ *   punch, exec or exit dropping the address space). The dirty bit moves to
++ *   the page, which the file system writes back later; the copy is the page
++ *   as the mapping left it.
++ *
++ * Every architecture keeps that dirty bit (in hardware, or by a write fault),
++ * and every file system has it, tmpfs included, which has no page_mkwrite and
++ * is never written back; so the same code serves them all. A page_mkwrite
++ * hook would see the first store after each writeback, before it lands, and
++ * nothing on tmpfs. Every store in between is not seen: two stores to one
++ * page before its writeback leave only the second.
++ *
++ * Not seen: a page the kernel's background writeback (the flusher, by
++ * default some 30 s after the store) wrote back while the mapping stayed,
++ * and that the program did not store to again before it removed the mapping:
++ * that writeback runs outside the program's calls and cleans the entry, so
++ * the unmap finds it clean. A page stored to by a process that is not
++ * followed is seen only when a traced call writes it back. Mappings of
++ * kernel-internal files (shared anonymous memory, System V shared memory,
++ * memfd, AIO rings) are not files of the run; mappings of hugetlbfs files
++ * are removed by other code and are not seen.
++ *
++ * Copies are made where the kernel sees the page, without sleeping (under the
++ * page table lock for an unmap, the folio lock for a writeback): each page goes
++ * to a page of its own from a nonblocking allocation, at most
++ * ANTC_FILEMAP_DATA_MAX bytes per call. Past it, or when no page can be had,
++ * the range is still recorded, with the reason its bytes are missing. At most
++ * ANTC_FILEMAP_RANGES ranges are recorded per call; pages past them are
++ * counted.
++ *
++ * Write order: each range takes a number from the counter writes take theirs
++ * from (fileops.c), and every page of the range is copied while holding the
++ * file's inode lock shared, taken with a trylock. A write takes its number and
++ * applies its bytes under that lock held exclusively, so a write with a lower
++ * number is complete in the copy, and a write with a higher number either
++ * came after the copy or is replayed over bytes the copy already holds. When
++ * the trylock fails a write is in progress: the page goes to a range without
++ * a number.
++ */
++#include <linux/antinomie_monitor.h>
++#include <linux/atomic.h>
++#include <linux/bvec.h>
++#include <linux/fs.h>
++#include <linux/highmem.h>
++#include <linux/kdev_t.h>
++#include <linux/ktime.h>
++#include <linux/list.h>
++#include <linux/minmax.h>
++#include <linux/mm.h>
++#include <linux/pagemap.h>
++#include <linux/rwsem.h>
++#include <linux/sched.h>
++#include <linux/slab.h>
++#include <linux/string.h>
++#include <linux/uio.h>
++#include <linux/unaligned.h>
++
++#include "control_wire.h"
++#include "fileops.h"
++#include "filemap.h"
++
++/* One record: a run of contiguous pages of one file, seen for one cause. */
++struct ant_filemap_range {
++	u64 dev, ino, offset, len, carried, size, time_ns, order;
++	u32 generation, mode;
++	u8 cause, cut;
++};
++
++/* What a task saw during one call (or its exit). Owned by the task's
++ * recorder context; filled only by the task itself.
++ */
++struct ant_filemap {
++	struct ant_filemap_range range[ANTC_FILEMAP_RANGES];
++	/* The copies, in range order, chained by page->lru; page_private() is
++	 * the bytes of the page that belong to the file.
++	 */
++	struct list_head pages;
++	u64 carried, unlisted;
++	unsigned int count;
++};
++
++/* Pages seen with no memory for a list to put them in. */
++static atomic_t lost = ATOMIC_INIT(0);
++
++/* A file a run can leave behind: not one of the kernel's internal mounts. */
++static bool followed(const struct inode *inode)
++{
++	return S_ISREG(inode->i_mode) && !(inode->i_sb->s_flags & SB_KERNMOUNT);
++}
++
++/* Whether the page at @pos can join @r: the same file and cause, right after
++ * it (and after a whole page), numbered alike, and with its copied bytes
++ * still a prefix of the range.
++ */
++static bool extends(const struct ant_filemap_range *r, const struct inode *inode,
++		    u64 pos, u8 cause, bool ordered, u8 cut)
++{
++	return r->ino == inode->i_ino && r->dev == new_encode_dev(inode->i_sb->s_dev) &&
++	       r->generation == inode->i_generation && r->cause == cause &&
++	       r->offset + r->len == pos && !(r->len & ~PAGE_MASK) &&
++	       !!r->order == ordered && (r->carried == r->len || cut == r->cut);
++}
++
++static void add_page(struct ant_filemap *map, struct inode *inode, struct page *page,
++		     u64 pos, u64 len, u64 size, u8 cause, bool ordered)
++{
++	struct ant_filemap_range *r = map->count ? &map->range[map->count - 1] : NULL;
++	struct page *copy = NULL;
++	u8 cut = 0;
++
++	if (map->carried + len > ANTC_FILEMAP_DATA_MAX) {
++		cut = ANTC_FILEMAP_CUT_BUDGET;
++	} else {
++		copy = alloc_page(GFP_NOWAIT | __GFP_NOWARN);
++		if (!copy)
++			cut = ANTC_FILEMAP_CUT_MEMORY;
++	}
++	if (!r || !extends(r, inode, pos, cause, ordered, cut)) {
++		if (map->count >= ANTC_FILEMAP_RANGES) {
++			map->unlisted++;
++			if (copy)
++				__free_page(copy);
++			return;
++		}
++		r = &map->range[map->count++];
++		memset(r, 0, sizeof(*r));
++		r->dev = new_encode_dev(inode->i_sb->s_dev);
++		r->ino = inode->i_ino;
++		r->generation = inode->i_generation;
++		r->mode = inode->i_mode;
++		r->offset = pos;
++		r->size = size;
++		r->time_ns = ktime_get_ns();
++		r->order = ordered ? ant_fileops_next_order() : 0;
++		r->cause = cause;
++	}
++	if (cut)
++		r->cut = cut;
++	r->len += len;
++	if (!copy)
++		return;
++	memcpy_from_page(page_address(copy), page, 0, len);
++	set_page_private(copy, len);
++	list_add_tail(&copy->lru, &map->pages);
++	r->carried += len;
++	map->carried += len;
++}
++
++/* Copy @nr pages of @folio from its page @first, seen for @cause. Called under
++ * the page table lock (an unmap) or with the folio locked (a writeback):
++ * nothing here sleeps.
++ */
++static void capture(struct ant_filemap **slot, struct folio *folio, unsigned long first,
++		    unsigned int nr, u8 cause)
++{
++	struct address_space *mapping = folio_mapping(folio);
++	struct ant_filemap *map = *slot;
++	struct inode *inode;
++	unsigned long i;
++	bool ordered;
++	u64 size;
++
++	if (!mapping || folio_test_anon(folio) || !mapping->host)
++		return;
++	inode = mapping->host;
++	if (!followed(inode))
++		return;
++	if (!map) {
++		map = kzalloc(sizeof(*map), GFP_NOWAIT | __GFP_NOWARN);
++		if (!map) {
++			atomic_add(nr, &lost);
++			return;
++		}
++		INIT_LIST_HEAD(&map->pages);
++		*slot = map;
++	}
++	ordered = down_read_trylock(&inode->i_rwsem);
++	size = i_size_read(inode);
++	for (i = first; i < first + nr; i++) {
++		u64 pos = (u64)(folio->index + i) << PAGE_SHIFT;
++
++		/* Past the end of the file a page holds nothing of it. */
++		if (pos >= size)
++			break;
++		add_page(map, inode, folio_page(folio, i), pos,
++			 min_t(u64, PAGE_SIZE, size - pos), size, cause, ordered);
++	}
++	if (ordered)
++		up_read(&inode->i_rwsem);
++}
++
++/* folio_clear_dirty_for_io(), with @folio locked: folio_mkclean() found a
++ * mapping's entry for it dirty or writable, and the folio is about to be
++ * written back. Recorded when a traced call does the writeback.
++ */
++void ant_monitor_mapped_writeback(struct folio *folio)
++{
++	struct ant_filemap **slot;
++
++	if (!current->ant_monitor)
++		return;
++	slot = ant_monitor_filemap(true);
++	if (slot)
++		capture(slot, folio, 0, folio_nr_pages(folio), ANTC_FILEMAP_WRITEBACK);
++}
++
++/* zap_present_folio_ptes(), under the page table lock: @nr entries of @vma
++ * mapping @folio from @page on were dirty and are gone.
++ */
++void ant_monitor_mapped_unmap(struct vm_area_struct *vma, struct folio *folio,
++			      struct page *page, unsigned int nr)
++{
++	struct ant_filemap **slot;
++
++	if (!current->ant_monitor || !(vma->vm_flags & VM_SHARED))
++		return;
++	slot = ant_monitor_filemap(false);
++	if (slot)
++		capture(slot, folio, folio_page_idx(folio, page), nr, ANTC_FILEMAP_UNMAP);
++}
++
++static void pack(const struct ant_filemap *map, const struct ant_filemap_range *r,
++		 unsigned int index, u64 carried, u8 cut, u32 dropped, u8 *rec)
++{
++	memset(rec, 0, ANTC_FILEMAP_SIZE);
++	rec[0] = r->cause;
++	rec[1] = carried ? ANTC_FILEMAP_DATA : 0;
++	rec[2] = carried < r->len ? cut : 0;
++	put_unaligned_le32(PAGE_SIZE, rec + 4);
++	put_unaligned_le64(r->offset, rec + 8);
++	put_unaligned_le64(r->len, rec + 16);
++	put_unaligned_le64(carried, rec + 24);
++	put_unaligned_le64(r->dev, rec + 32);
++	put_unaligned_le64(r->ino, rec + 40);
++	put_unaligned_le32(r->generation, rec + 48);
++	put_unaligned_le32(r->mode, rec + 52);
++	put_unaligned_le64(r->size, rec + 56);
++	put_unaligned_le64(r->time_ns, rec + 64);
++	put_unaligned_le64(r->order, rec + 72);
++	put_unaligned_le16(index, rec + 80);
++	put_unaligned_le16(map->count, rec + 82);
++	put_unaligned_le32(dropped, rec + 84);
++	put_unaligned_le64(map->unlisted, rec + 88);
++}
++
++/* In the task's own context, where it may sleep: the copies of each range are
++ * handed over as one iterator.
++ */
++void ant_filemap_emit(struct ant_filemap *map, ant_filemap_emit_fn emit, void *arg)
++{
++	struct page *page = list_first_entry_or_null(&map->pages, struct page, lru);
++	u32 dropped = map->count ? atomic_xchg(&lost, 0) : 0;
++	u8 rec[ANTC_FILEMAP_SIZE];
++	unsigned int i, j, n;
++
++	for (i = 0; i < map->count; i++) {
++		const struct ant_filemap_range *r = &map->range[i];
++		struct bio_vec *bvec = NULL;
++		struct iov_iter iter;
++		u64 carried = r->carried;
++		u8 cut = r->cut;
++
++		/* Every page of a range is whole but its last. */
++		n = DIV_ROUND_UP(carried, PAGE_SIZE);
++		if (n)
++			bvec = kvmalloc_array(n, sizeof(*bvec), GFP_KERNEL | __GFP_NOWARN);
++		for (j = 0; j < n && page; j++) {
++			if (bvec)
++				bvec_set_page(&bvec[j], page, page_private(page), 0);
++			page = list_is_last(&page->lru, &map->pages) ? NULL :
++				list_next_entry(page, lru);
++		}
++		if (n && !bvec) {
++			carried = 0;
++			cut = ANTC_FILEMAP_CUT_MEMORY;
++		}
++		pack(map, r, i, carried, cut, i ? 0 : dropped, rec);
++		if (carried) {
++			iov_iter_bvec(&iter, ITER_SOURCE, bvec, n, carried);
++			emit(arg, rec, &iter, carried, r->len);
++		} else {
++			emit(arg, rec, NULL, 0, r->len);
++		}
++		kvfree(bvec);
++	}
++}
++
++void ant_filemap_free(struct ant_filemap *map)
++{
++	struct page *page, *next;
++
++	if (!map)
++		return;
++	list_for_each_entry_safe(page, next, &map->pages, lru) {
++		list_del(&page->lru);
++		set_page_private(page, 0);
++		__free_page(page);
++	}
++	kfree(map);
++}
+diff --git a/kernel/antinomie/filemap.h b/kernel/antinomie/filemap.h
+new file mode 100644
+index 0000000..1e0790e
+--- /dev/null
++++ b/kernel/antinomie/filemap.h
+@@ -0,0 +1,29 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef _ANTINOMIE_FILEMAP_H
++#define _ANTINOMIE_FILEMAP_H
++
++#include <linux/types.h>
++
++struct ant_filemap;
++struct iov_iter;
++
++#define ANT_FILEMAP_KEY "lifecycle.file_mapped"
++#define ANT_FILEMAP_LAYOUT "antinomie.filemap/1"
++#define ANT_FILEMAP_DATA_KEY "lifecycle.file_mapped.data"
++
++/* The calling task's pending records (recorder.c): NULL when the task is not
++ * followed, or, with @in_call, not inside a traced call. Never sleeps.
++ */
++struct ant_filemap **ant_monitor_filemap(bool in_call);
++
++/* Called once per record of @map, in order: @rec is the packed record
++ * (ANTC_FILEMAP_SIZE bytes); @data, when not NULL, iterates the @carried
++ * bytes copied of its @len bytes.
++ */
++typedef void (*ant_filemap_emit_fn)(void *arg, const u8 *rec, struct iov_iter *data,
++				    u64 carried, u64 len);
++void ant_filemap_emit(struct ant_filemap *map, ant_filemap_emit_fn emit, void *arg);
++/* Free @map and its copies (NULL is allowed). */
++void ant_filemap_free(struct ant_filemap *map);
++
++#endif
+diff --git a/kernel/antinomie/fileops.c b/kernel/antinomie/fileops.c
+index e59d1be..2797a93 100644
+--- a/kernel/antinomie/fileops.c
++++ b/kernel/antinomie/fileops.c
+@@ -132,7 +132,15 @@ void ant_monitor_write_order(void)
+ 	if (!rw_call(nr) && !copy_call(ANT_FILE_COPY_SENDFILE, nr) &&
+ 	    !copy_call(ANT_FILE_COPY_SPLICE, nr) && !copy_call(ANT_FILE_COPY_RANGE, nr))
+ 		return;
+-	ops->order = atomic64_inc_return(&write_order);
++	ops->order = ant_fileops_next_order();
++}
++
++/* The next write order, also for a copy of pages written through a mapping
++ * (filemap.c).
++ */
++u64 ant_fileops_next_order(void)
++{
++	return atomic64_inc_return(&write_order);
+ }
+ 
+ /* Before a copy of up to @count bytes from @in to @out: a destination file
+diff --git a/kernel/antinomie/fileops.h b/kernel/antinomie/fileops.h
+index 6860579..9508f6b 100644
+--- a/kernel/antinomie/fileops.h
++++ b/kernel/antinomie/fileops.h
+@@ -33,5 +33,7 @@ struct ant_fileops {
+ struct ant_fileops *ant_monitor_fileops(u64 *nr);
+ /* Forget the records (and free the carried bytes). */
+ void ant_fileops_reset(struct ant_fileops *ops);
++/* Take the next number of the guest-wide write order. */
++u64 ant_fileops_next_order(void);
+ 
+ #endif
+diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
+index a448e9d..da72b6d 100644
+--- a/kernel/antinomie/recorder.c
++++ b/kernel/antinomie/recorder.c
+@@ -37,6 +37,7 @@
+ #include "hash.h"
+ #include "notes.h"
+ #include "fileops.h"
++#include "filemap.h"
+ 
+ /* Scratch bounds packet size, never the logical capture extent. A task owns
+  * its context across migration; failure to allocate does not lose lineage.
+@@ -98,6 +99,10 @@ struct ant_task {
+ 	bool operand_set;
+ 	/* Where the call read or wrote a file, what a copy moved (fileops.c). */
+ 	struct ant_fileops fileops;
++	/* Pages written through shared mappings seen since the last record
++	 * (filemap.c); NULL when none.
++	 */
++	struct ant_filemap *filemap;
+ 	/* Contract 22: inputs to read again at exit, without allocating. */
+ 	struct ant_recapture recapture[ANT_RECAPTURE_MAX];
+ 	struct ant_exec_resume exec_resume[2];
+@@ -1092,6 +1097,73 @@ static void fileops_emit(struct ant_task *ctx)
+ 	ant_fileops_reset(ops);
+ }
+ 
++struct ant_filemap **ant_monitor_filemap(bool in_call)
++{
++	struct ant_task *ctx = current->ant_monitor;
++
++	if (!ctx || ctx->busy)
++		return NULL;
++	if (!ctx->active && (in_call || (!READ_ONCE(current->ant_root_cookie) &&
++					 !ctx->capture_cookie)))
++		return NULL;
++	return &ctx->filemap;
++}
++
++static void filemap_field(void *arg, const u8 *rec, struct iov_iter *data, u64 carried,
++			  u64 len)
++{
++	struct ant_task *ctx = arg;
++	struct iov_iter *saved = ctx->iter_source;
++
++	field(ctx, 255, ANT_FILEMAP_KEY, ANT_FILEMAP_LAYOUT, 3, 0, rec, ANTC_FILEMAP_SIZE,
++	      ANTC_FILEMAP_SIZE, ANT_COMPLETE);
++	if (!data)
++		return;
++	ctx->iter_source = data;
++	field(ctx, 255, ANT_FILEMAP_DATA_KEY, "", 1, 0, NULL, carried, len, ANT_COMPLETE);
++	ctx->iter_source = saved;
++}
++
++/* The pages written through mappings the task saw (control_wire.h,
++ * lifecycle.file_mapped): one lifecycle record of the call in progress, or of
++ * the task's last call. The caller holds the context busy.
++ */
++static void filemap_emit(struct ant_task *ctx)
++{
++	struct ant_filemap *map = ctx->filemap;
++
++	if (!map)
++		return;
++	ctx->filemap = NULL;
++	event_begin(ctx, 3, 0);
++	ctx->kernel_imported = true;
++	ant_filemap_emit(map, filemap_field, ctx);
++	ctx->kernel_imported = false;
++	event_end(ctx);
++	ant_filemap_free(map);
++}
++
++/* Pages seen outside a call (the address space dropped at exit). */
++static void filemap_note(struct ant_task *ctx)
++{
++	u64 capture_cookie;
++
++	if (!ctx || !ctx->filemap || ctx->busy)
++		return;
++	if (!ctx->active) {
++		capture_cookie = ant_observer_admit(current);
++		if (!READ_ONCE(current->ant_root_cookie) && !capture_cookie) {
++			ant_filemap_free(ctx->filemap);
++			ctx->filemap = NULL;
++			return;
++		}
++		ctx->capture_cookie = capture_cookie;
++	}
++	ctx->busy = true;
++	filemap_emit(ctx);
++	ctx->busy = false;
++}
++
+ /* Credential records (control_wire.h, lifecycle.creds). Every change of a
+  * traced task's credentials goes through commit_creds(): setuid and friends,
+  * capset, and exec of a setuid, setgid or file-capability image. The record is
+@@ -1319,6 +1391,8 @@ void ant_monitor_enter(struct pt_regs *regs, long nr)
+ 	}
+ 	if (ctx->busy)
+ 		return;
++	/* Pages from outside any call: not this call's. */
++	filemap_note(ctx);
+ 	if (!current->ant_counted) {
+ 		current->ant_counted = true;
+ 		atomic64_inc(&tasks_created);
+@@ -1371,6 +1445,8 @@ void ant_monitor_exit(struct pt_regs *regs)
+ 		return;
+ 	ctx->busy = true;
+ 	result = syscall_get_return_value(current, regs);
++	/* Pages the call wrote back or unmapped, before its exit. */
++	filemap_emit(ctx);
+ 	event_begin(ctx, 2, result);
+ 	operand_emit(ctx);
+ 	capture_exit(ctx, result);
+@@ -1752,6 +1828,8 @@ void ant_monitor_exec(struct file *file, bool interpreter)
+ 
+ void ant_monitor_task_exit(bool group_dead)
+ {
++	/* Pages the address space held dirty when exit_mm() dropped it. */
++	filemap_note(current->ant_monitor);
+ 	ant_run_exit(current, group_dead);
+ 	lifecycle(current->ant_monitor, "lifecycle.task_exit", current->exit_code);
+ 	if (current->ant_counted) {
+@@ -1768,6 +1846,7 @@ void ant_monitor_release(struct task_struct *task)
+ 		ant_capture_set_state(ctx, NULL, NULL);
+ 		operand_clear(ctx);
+ 		ant_fileops_reset(&ctx->fileops);
++		ant_filemap_free(ctx->filemap);
+ 		kfree(ctx->iov);
+ 		kfree(ctx->exec_name);
+ 		kfree(ctx);
+diff --git a/mm/memory.c b/mm/memory.c
+index 1930f98..c99dd3f 100644
+--- a/mm/memory.c
++++ b/mm/memory.c
+@@ -1495,6 +1495,7 @@ static __always_inline void zap_present_folio_ptes(struct mmu_gather *tlb,
+ 		ptent = get_and_clear_full_ptes(mm, addr, pte, nr, tlb->fullmm);
+ 		if (pte_dirty(ptent)) {
+ 			folio_mark_dirty(folio);
++			ant_monitor_mapped_unmap(vma, folio, page, nr);
+ 			if (tlb_delay_rmap(tlb)) {
+ 				delay_rmap = true;
+ 				*force_flush = true;
+diff --git a/mm/page-writeback.c b/mm/page-writeback.c
+index bfb3f90..da04bef 100644
+--- a/mm/page-writeback.c
++++ b/mm/page-writeback.c
+@@ -38,6 +38,7 @@
+ #include <linux/sched/rt.h>
+ #include <linux/sched/signal.h>
+ #include <linux/mm_inline.h>
++#include <linux/antinomie_monitor.h>
+ #include <trace/events/writeback.h>
+ 
+ #include "internal.h"
+@@ -3021,8 +3022,10 @@ bool folio_clear_dirty_for_io(struct folio *folio)
+ 		 * as a serialization point for all the different
+ 		 * threads doing their things.
+ 		 */
+-		if (folio_mkclean(folio))
++		if (folio_mkclean(folio)) {
+ 			folio_mark_dirty(folio);
++			ant_monitor_mapped_writeback(folio);
++		}
+ 		/*
+ 		 * We carefully synchronise fault handlers against
+ 		 * installing a dirty pte and marking the folio dirty
+-- 
+2.53.0
+

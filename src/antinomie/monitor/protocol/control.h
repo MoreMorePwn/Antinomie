@@ -14,8 +14,9 @@
 /* Revision 15: opt-in root-process ELF core acquisition at exit; ABI 9. */
 /* Revision 17: kernel-native guest resource sample (RESOURCES), and the
  * credential and file-hash lifecycle records described below. */
-/* Revision 18: where reads and writes of seekable files happened, and the
- * operands of in-kernel copies and allocations (file.position, file.copy). */
+/* Revision 18: where reads and writes of seekable files happened, the
+ * operands of in-kernel copies and allocations (file.position, file.copy), and
+ * pages written through shared file mappings (lifecycle.file_mapped). */
 #define ANTC_REVISION 18
 #define ANTC_HEADER_SIZE 8
 #define ANTC_UPLOAD_BEGIN 0x1001
@@ -389,6 +390,57 @@
 #define ANTC_FILECOPY_DATA 4
 #define ANTC_FILECOPY_DATA_CUT 8
 #define ANTC_FILECOPY_DATA_MAX 1048576
+/* lifecycle.file_mapped, layout "antinomie.filemap/1", 96 bytes (revision 18,
+ * additive): pages of a regular file written through a shared mapping, which
+ * no system call carries, with their content when the kernel took note of the
+ * stores. Each record is one range of one file, followed by the field
+ * lifecycle.file_mapped.data (encoding 1, declared extent = the range's
+ * length) when the guest copied bytes of it. The records of one call are one
+ * lifecycle event (phase 3) of that call, published just before its exit;
+ * for an address space dropped when the task exits, just before
+ * lifecycle.task_exit, under the task's last call.
+ * u8 cause at 0: WRITEBACK, the call wrote the pages back to the file (msync,
+ * fsync, fdatasync, sync_file_range, sync, syncfs, an O_DIRECT transfer or
+ * fadvise that flushed them first), and a mapping's page table entry for them
+ * was dirty or writable; UNMAP, the call removed a mapping whose entry was
+ * dirty (munmap, mremap, a MAP_FIXED mapping over it, madvise, a hole punch
+ * of the file, exec, or exit). The bytes are the page at that moment: every
+ * store in between is not seen, only the result. A host applies a call's
+ * records before the call's own change to the file: a copy already holds what
+ * the call wrote to the page before it was copied (an O_SYNC write), and a
+ * change made after the copy (the zeros of a hole punch) is the call's own.
+ * u8 flags at 1 (DATA: the data field follows this record), u8 cut at 2
+ * (why bytes of the range are missing from the data field: BUDGET, the call
+ * had copied ANTC_FILEMAP_DATA_MAX bytes already; MEMORY, the guest could not
+ * get a page for the copy; zero: none missing), zero at 3, u32 page size at 4,
+ * u64 offset at 8 (file offset of the range's first page), u64 length at 16
+ * (bytes of the file in the range: whole pages, the last clipped to the file
+ * size; a page past the end of the file is not recorded), u64 carried at 24
+ * (bytes of the data field, from the offset on; less than length when cut),
+ * the file at 32 (u64 dev, u64 ino, u32 generation, u32 mode, as in
+ * file.copy), u64 file size at 56 (i_size when the first page was copied),
+ * u64 time at 64 (ktime_get_ns() when the first page was copied), u64 write
+ * order at 72 (as for file.position: taken while no write to the file was in
+ * progress, so the range holds every write with a lower number and no part
+ * of one with a higher number; zero when a write was in progress), u16 index
+ * at 80 and u16 count at 82 (this record's place among the call's records),
+ * u32 lost at 84 (pages the guest saw since the previous record and could not
+ * list at all: no memory for the list), u64 unlisted at 88 (pages of this
+ * call past its ANTC_FILEMAP_RANGES records: counted, not listed).
+ * Only tasks the recorder follows are seen, and only pages they saw: a page the
+ * kernel's background writeback wrote while the mapping stayed is clean when
+ * the mapping goes, and is not recorded unless stored to again. Mappings of
+ * kernel-internal files (shared anonymous memory, System V shared memory,
+ * memfd) and of hugetlbfs files are not recorded.
+ */
+#define ANTC_FILEMAP_SIZE 96
+#define ANTC_FILEMAP_WRITEBACK 1
+#define ANTC_FILEMAP_UNMAP 2
+#define ANTC_FILEMAP_DATA 1
+#define ANTC_FILEMAP_CUT_BUDGET 1
+#define ANTC_FILEMAP_CUT_MEMORY 2
+#define ANTC_FILEMAP_DATA_MAX 4194304
+#define ANTC_FILEMAP_RANGES 64
 #define ANTC_UPLOAD_OVERWRITE 1
 #define ANTC_UPLOAD_EXECUTABLE 2
 
