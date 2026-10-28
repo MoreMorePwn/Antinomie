@@ -1,0 +1,109 @@
+From bceb29fe884be615bdd767adee71bb6866a9ca7f Mon Sep 17 00:00:00 2001
+From: MikiMiku <jonathanirvinjo@gmail.com>
+Date: Thu, 29 Oct 2026 01:44:26 +0700
+Subject: [PATCH] antinomie: name the native layouts of group lists, directory
+ entries and LDT reads
+
+The host shows a captured field by the type its descriptor names. Four
+kinds of field were sent as plain bytes although the kernel copies a
+fixed native layout, so the host could only show them as text:
+
+- getgroups and setgroups: an array of gid_t (gid_t[]);
+- getdents and getdents64: the records the call filled (linux_dirent[],
+  linux_dirent64[]), each carrying its own length;
+- modify_ldt reads (func 0 and 2): the 8-byte descriptors read_ldt()
+  copies, or the zeros read_default_ldt() writes (desc_struct[]; the
+  user_desc of a write is a different layout and keeps its name).
+
+They now carry their layout and the target-ABI object encoding. The
+bytes and extents are unchanged.
+
+The netfilter set options also named every option ipt_replace, but only
+IPT_SO_SET_REPLACE (and IP6T_SO_SET_REPLACE, whose header is the same)
+passes one; *_SO_SET_ADD_COUNTERS passes xt_counters_info, and the
+other numbers in the range are not set options.
+
+Contract revision 18 is extended; a host that does not know
+a layout shows the bytes as before.
+---
+ kernel/antinomie/capture_x86.c    |  5 ++++-
+ kernel/antinomie/native_capture.c | 22 ++++++++++++++++------
+ 2 files changed, 20 insertions(+), 7 deletions(-)
+
+diff --git a/kernel/antinomie/capture_x86.c b/kernel/antinomie/capture_x86.c
+index 3393fb2..38536e4 100644
+--- a/kernel/antinomie/capture_x86.c
++++ b/kernel/antinomie/capture_x86.c
+@@ -67,7 +67,10 @@ static void capture_modify_ldt(struct ant_task *ctx, const u64 args[6],
+ 				  args[2] == sizeof(struct user_desc) ?
+ 				  ANT_COMPLETE : ANT_INVALID_EXTENT);
+ 	else if (!input && (args[0] == 0 || args[0] == 2) && output && (s32)result >= 0)
+-		ant_capture_field(ctx, 1, "arg1.ldt", "", 1, args[1], NULL,
++		/* read_ldt() copies the 8-byte descriptors themselves (LDT_ENTRY_SIZE),
++		 * read_default_ldt() zeros: an array of struct desc_struct, not user_desc.
++		 */
++		ant_capture_field(ctx, 1, "arg1.ldt", LAYOUT("desc_struct[]"), 3, args[1], NULL,
+ 				  min_t(u64, (u32)result, args[2]), args[2], ANT_COMPLETE);
+ 	else if (!input && args[0] != 0 && args[0] != 2 && !output)
+ 		ant_capture_field(ctx, 1, "modify_ldt.unknown_selector", "", 1,
+diff --git a/kernel/antinomie/native_capture.c b/kernel/antinomie/native_capture.c
+index f750037..bcb90f3 100644
+--- a/kernel/antinomie/native_capture.c
++++ b/kernel/antinomie/native_capture.c
+@@ -91,6 +91,8 @@ struct ant_field_rule {
+ #define INPUT_FIELD(n, a, t, l) FIXED_FIELD(n, a, ANT_INPUT, t, l)
+ #define OUTPUT_FIELD(n, a, t, l) FIXED_FIELD(n, a, ANT_OUTPUT_ZERO, t, l)
+ #define BUFFER_FIELD(n, a, p, k, len, ceiling) { n, a, p, k, len, ceiling, "" }
++/* A buffer of native records the call fills or reads: its layout names them. */
++#define RECORDS_FIELD(n, a, p, k, len, ceiling, l) { n, a, p, k, len, ceiling, LAYOUT(l) }
+ 
+ /* Extents are native Linux layouts or syscall-defined lengths. Output-only
+  * buffers never follow a pointer from an exit-time descriptor.
+@@ -202,14 +204,17 @@ static const struct ant_field_rule field_rules[] = {
+ 	STRING_FIELD(__NR_init_module, 2, SSIZE_MAX),
+ 	BUFFER_FIELD(__NR_pread64, 1, ANT_OUTPUT_NONNEGATIVE, ANT_BUFFER_OUTPUT, 2, MAX_RW_COUNT),
+ 	BUFFER_FIELD(__NR_pwrite64, 1, ANT_INPUT, ANT_BUFFER_INPUT, 2, MAX_RW_COUNT),
+-	BUFFER_FIELD(__NR_getdents, 1, ANT_OUTPUT_NONNEGATIVE, ANT_BUFFER_OUTPUT, 2, U32_MAX),
++	RECORDS_FIELD(__NR_getdents, 1, ANT_OUTPUT_NONNEGATIVE, ANT_BUFFER_OUTPUT, 2, U32_MAX,
++		      "linux_dirent[]"),
+ 	BUFFER_FIELD(__NR_getcwd, 0, ANT_OUTPUT_NONNEGATIVE, ANT_BUFFER_OUTPUT, 1, U64_MAX),
+ 	BUFFER_FIELD(__NR_readlink, 1, ANT_OUTPUT_NONNEGATIVE, ANT_BUFFER_OUTPUT, 2, INT_MAX),
+-	BUFFER_FIELD(__NR_getdents64, 1, ANT_OUTPUT_NONNEGATIVE, ANT_BUFFER_OUTPUT, 2, U32_MAX),
++	RECORDS_FIELD(__NR_getdents64, 1, ANT_OUTPUT_NONNEGATIVE, ANT_BUFFER_OUTPUT, 2, U32_MAX,
++		      "linux_dirent64[]"),
+ 	BUFFER_FIELD(__NR_readlinkat, 2, ANT_OUTPUT_NONNEGATIVE, ANT_BUFFER_OUTPUT, 3, INT_MAX),
+ 	BUFFER_FIELD(__NR_getrandom, 0, ANT_OUTPUT_NONNEGATIVE, ANT_BUFFER_OUTPUT, 1, MAX_RW_COUNT),
+-	BUFFER_FIELD(__NR_getgroups, 1, ANT_OUTPUT_NONNEGATIVE, ANT_GROUP_OUTPUT, 0, NGROUPS_MAX),
+-	BUFFER_FIELD(__NR_setgroups, 1, ANT_INPUT, ANT_GROUP_INPUT, 0, NGROUPS_MAX),
++	RECORDS_FIELD(__NR_getgroups, 1, ANT_OUTPUT_NONNEGATIVE, ANT_GROUP_OUTPUT, 0, NGROUPS_MAX,
++		      "gid_t[]"),
++	RECORDS_FIELD(__NR_setgroups, 1, ANT_INPUT, ANT_GROUP_INPUT, 0, NGROUPS_MAX, "gid_t[]"),
+ };
+ 
+ static bool phase_matches(u8 phase, bool output, long result)
+@@ -266,7 +271,7 @@ static void capture_rule(struct ant_task *ctx, const struct ant_field_rule *rule
+ 		}
+ 	}
+ 	ant_capture_field(ctx, rule->arg_index, key, rule->layout,
+-			  rule->length == ANT_FIXED ? 3 : 1,
++			  rule->length == ANT_FIXED || rule->layout[0] ? 3 : 1,
+ 			  args[rule->arg_index], NULL, size, declared, status);
+ }
+ 
+@@ -3139,7 +3144,12 @@ static void capture_setsockopt(struct ant_task *ctx, const u64 args[6])
+ 	if (length < 0)
+ 		return;
+ 	if (sockopt_netfilter(rule, args[1], args[2])) {
+-		sockopt_raw(ctx, "arg3.optval", LAYOUT("ipt_replace"), address, length,
++		/* IPT_SO_SET_REPLACE and IP6T_SO_SET_REPLACE share the header; the
++		 * other set option, *_SO_SET_ADD_COUNTERS, passes xt_counters_info.
++		 */
++		sockopt_raw(ctx, "arg3.optval", (s32)args[2] == ANT_IPT_SO_BASE ?
++			    LAYOUT("ipt_replace") : (s32)args[2] == ANT_IPT_SO_BASE + 1 ?
++			    LAYOUT("xt_counters_info") : "", address, length,
+ 			    ANT_SOCKOPT_CEILING);
+ 		capture_gap(ctx, "sockopt.unsupported_nested", ANT_NO_DECODER);
+ 		return;
+-- 
+2.53.0
+
