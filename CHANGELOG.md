@@ -450,6 +450,26 @@ it runs.
   mapping) to `reconstructed/` in the recording; *Text diff* shows the lines a
   text file gained or lost.
 
+- **Guest kernels have BTF, without the recorder in it.** The BusyBox and
+  Debian Minimal kernel now builds `/sys/kernel/btf/vmlinux` and module BTF
+  like Debian's 6.12.94-1, so systemd's bpf-restrict-fs no longer fails at
+  every Debian boot and the missing file no longer gives the VM away to eBPF
+  tooling. The recorder's own code is built without debug information, and a
+  filter run after pahole (series patch 0019) removes every type, field,
+  enumerator, function and variable the recorder's headers leave in stock
+  objects; module BTF is encoded against the unfiltered vmlinux BTF and
+  remapped, so modules share the filtered types. This also covers the Debian
+  desktop kernel, whose BTF (Debian's configuration) named every recorder
+  function until now. Every kernel build checks vmlinux and module BTF for
+  recorder names (`scripts/check-kernel-btf.py`), and the stealth probe reads
+  `/sys/kernel/btf` in the guest. Stock structures the recorder extends
+  (`task_struct`, `io_kiocb`, `aio_kiocb`, `io_ring_ctx`, `coredump_params`,
+  `io_async_msghdr`) keep their real size and offsets in BTF, with a hole
+  where its fields are: names are gone, the layout still differs from
+  Debian's, as does the minimal profile's configuration (see
+  docs/implementation.md). Building the minimal kernel now needs `pahole`
+  (dwarves).
+
 ## 0.7.1 — 2026-10-26
 
 The first release since 0.6.2: 0.7.0 was not published separately, so this

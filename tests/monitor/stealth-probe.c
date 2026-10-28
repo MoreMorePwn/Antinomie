@@ -826,6 +826,96 @@ static void check_dmesg(void)
 	reportf(vm ? "fail" : "pass", "dmesg.vm", "%d line(s) naming a VM or virtio: %s", vm, found);
 }
 
+/* A recorder name in BTF: antinomie anywhere, or a name starting with ant_ or
+ * antc_ after any underscores (ant_task, __ant_x, ANT_X), in any case. Stock
+ * vmlinux BTF has none; stock wireless modules have ant_* fields, but no
+ * wireless driver loads in these VMs. */
+static int btf_recorder_name(const char *name)
+{
+	const char *p = name + strspn(name, "_");
+
+	return contains_ci(name, "antinomie") || !strncasecmp(p, "ant_", 4) ||
+	       !strncasecmp(p, "antc_", 5);
+}
+
+/* Scan one BTF file's string table (the names its types use) for recorder
+ * names; -1 when unreadable or not BTF, else the number of hits. */
+static long btf_scan(const char *path, char *buf, size_t size, unsigned long *strings,
+		     char *sample, size_t sample_size)
+{
+	ssize_t len = read_all(path, buf, size);
+	uint32_t hdr_len, str_off, str_len;
+	uint16_t magic;
+	long hits = 0;
+	size_t at, end;
+
+	if (len < 24)
+		return -1;
+	memcpy(&magic, buf, 2);
+	memcpy(&hdr_len, buf + 4, 4);
+	memcpy(&str_off, buf + 16, 4);
+	memcpy(&str_len, buf + 20, 4);
+	if (magic != 0xeb9f || (size_t)hdr_len + str_off + str_len > (size_t)len)
+		return -1;
+	at = (size_t)hdr_len + str_off;
+	end = at + str_len;
+	buf[end - (end > at)] = 0;
+	while (at < end) {
+		const char *name = buf + at;
+
+		(*strings)++;
+		if (*name && btf_recorder_name(name)) {
+			hits++;
+			if (hits <= 40)
+				printf("STEALTH-DETAIL btf %s %s\n", path, name);
+			if (strlen(sample) + strlen(name) + 2 < sample_size)
+				snprintf(sample + strlen(sample), sample_size - strlen(sample), "%s%s",
+					 *sample ? " " : "", name);
+		}
+		at += strlen(name) + 1;
+	}
+	return hits;
+}
+
+/* The kernel's BTF: Debian's kernel has it (systemd's bpf-restrict-fs and
+ * eBPF tools need it), so missing is a giveaway, and so is any recorder name
+ * in it or in a module's. */
+static void check_btf(void)
+{
+	static char buf[32 << 20];
+	char sample[256] = "", path[300];
+	unsigned long strings = 0, modules = 0;
+	long hits, module_hits = 0, found;
+	struct dirent *entry;
+	DIR *dir;
+
+	hits = btf_scan("/sys/kernel/btf/vmlinux", buf, sizeof(buf), &strings, sample, sizeof(sample));
+	if (hits < 0)
+		report("fail", "kernel.btf", "no /sys/kernel/btf/vmlinux (Debian's kernel has it)");
+	else
+		reportf(hits ? "fail" : "pass", "kernel.btf", "present, %lu names, %ld of the recorder%s%s",
+			strings, hits, hits ? ": " : "", sample);
+	dir = opendir("/sys/kernel/btf");
+	if (!dir)
+		return;
+	*sample = 0;
+	while ((entry = readdir(dir))) {
+		unsigned long ignored = 0;
+
+		if (entry->d_name[0] == '.' || !strcmp(entry->d_name, "vmlinux"))
+			continue;
+		snprintf(path, sizeof(path), "/sys/kernel/btf/%s", entry->d_name);
+		found = btf_scan(path, buf, sizeof(buf), &ignored, sample, sizeof(sample));
+		modules++;
+		if (found > 0)
+			module_hits += found;
+	}
+	closedir(dir);
+	reportf(module_hits ? "fail" : "pass", "kernel.btf.modules",
+		"%lu loaded module(s) with BTF, %ld recorder name(s)%s%s", modules, module_hits,
+		module_hits ? ": " : "", sample);
+}
+
 /* Tracing interfaces a root sample can mount. */
 static void check_tracing(void)
 {
@@ -834,8 +924,6 @@ static void check_tracing(void)
 	struct stat st;
 	int mounted = 0;
 
-	report(stat("/sys/kernel/btf/vmlinux", &st) ? "pass" : "fail", "kernel.btf",
-	       stat("/sys/kernel/btf/vmlinux", &st) ? "absent" : "present (names every function)");
 	if (stat("/sys/kernel/tracing/available_events", &st)) {
 		if (!mkdtemp(dir)) {
 			report("skip", "tracing.functions", strerror(errno));
@@ -1268,6 +1356,7 @@ int main(int argc, char **argv)
 	check_kallsyms();
 	check_modules();
 	check_dmesg();
+	check_btf();
 	check_tracing();
 	check_iomem();
 	check_processes();

@@ -208,15 +208,20 @@ if [[ $profile == minimal ]]; then
     # a git checkout (no -g<commit>, no extra "+").
     "$config" --file "$build_tree/.config" --set-str LOCALVERSION "$DEBIAN_LOCALVERSION"
     "$config" --file "$build_tree/.config" --disable LOCALVERSION_AUTO
-    # DWARF in vmlinux, for the base's Volatility symbol table (as Debian).
+    # DWARF in vmlinux, for the base's Volatility symbol table (as Debian),
+    # and BTF from it (/sys/kernel/btf, as Debian: systemd's bpf-restrict-fs
+    # needs it), which takes pahole; the series keeps the recorder out of it.
     "$config" --file "$build_tree/.config" --disable DEBUG_INFO_NONE \
-        --enable DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT
+        --enable DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT --enable DEBUG_INFO_BTF \
+        --enable DEBUG_INFO_BTF_MODULES
     "$config" --file "$build_tree/.config" --set-str INITRAMFS_SOURCE ""
     "$config" --file "$build_tree/.config" --set-str ANTINOMIE_SOURCE_ID "$source_id"
     make -C "$source_tree" O="$build_tree" "${compiler[@]}" olddefconfig
     # shellcheck disable=SC2086
     require_symbols ANTINOMIE IKCONFIG DEBUG_INFO $DISK_BUSES $DEBIAN_PARITY $MINIMAL_EXTRA \
         $DEBIAN_SHAPE
+    require_symbols DEBUG_INFO_BTF DEBUG_INFO_BTF_MODULES ||
+        { echo "DEBUG_INFO_BTF takes pahole 1.21 or newer (package dwarves)" >&2; exit 1; }
     grep -qx 'CONFIG_HZ=250' "$build_tree/.config" && grep -qx 'CONFIG_NR_CPUS=8192' "$build_tree/.config" &&
         grep -qxF "CONFIG_LSM=\"$DEBIAN_LSM\"" "$build_tree/.config" ||
         { echo "Debian's HZ, NR_CPUS or LSM order did not survive olddefconfig" >&2; exit 1; }
@@ -240,6 +245,9 @@ if [[ $profile == minimal ]]; then
     rm -rf "$build_tree/modules-install"
     make -C "$source_tree" O="$build_tree" "${compiler[@]}" LOCALVERSION= \
         INSTALL_MOD_PATH="$build_tree/modules-install" INSTALL_MOD_STRIP=1 modules_install >/dev/null
+    # The guest reads this BTF: nothing of the recorder may be in it.
+    python3 "$repo/scripts/check-kernel-btf.py" --vmlinux "$build_tree/vmlinux" \
+        --system-map "$build_tree/System.map" --modules "$build_tree/modules-install"
     # The banner /proc/version shows. Debian Minimal's must be Debian's own
     # (KERNEL_BANNER, which build-debian-image.py checks); only Debian 13's
     # compiler and linker write it.
@@ -294,4 +302,6 @@ make -C "$source_tree" O="$build_tree" "${compiler[@]}" LOCALVERSION= -j"$jobs" 
 rm -rf "$build_tree/modules-install"
 make -C "$source_tree" O="$build_tree" LOCALVERSION= INSTALL_MOD_PATH="$build_tree/modules-install" \
     INSTALL_MOD_STRIP=1 modules_install >/dev/null
+python3 "$repo/scripts/check-kernel-btf.py" --vmlinux "$build_tree/vmlinux" \
+    --system-map "$build_tree/System.map" --modules "$build_tree/modules-install"
 echo "$build_tree/arch/x86/boot/bzImage"

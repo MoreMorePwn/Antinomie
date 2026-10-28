@@ -558,10 +558,12 @@ const fn file(tool: &'static str, package: &'static str, path: &'static str) -> 
     }
 }
 
-/// Native kernel source preparation and build, shared by every profile.
+/// Native kernel source preparation and build, shared by every profile
+/// (`pahole` encodes the kernel's BTF, which both kernel profiles build).
 const KERNEL_TOOLS: &[ToolSpec] = &[
     tool("bash", "bash"),
     tool("python3", "python3"),
+    tool("pahole", "dwarves"),
     tool("dpkg-source", "dpkg-dev"),
     tool("patch", "patch"),
     tool("make", "make"),
@@ -587,7 +589,6 @@ const BUSYBOX_TOOLS: &[ToolSpec] = &[
 ];
 
 const DEBIAN_TOOLS: &[ToolSpec] = &[
-    tool("pahole", "dwarves"),
     tool("mmdebstrap", "mmdebstrap"),
     tool("newuidmap", "uidmap"),
     tool("qemu-img", "qemu-utils"),
@@ -603,8 +604,7 @@ const DEBIAN_TOOLS: &[ToolSpec] = &[
     tool("sfdisk", "fdisk"),
 ];
 
-/// The console Debian base: Debian's image tools, but the minimal kernel needs
-/// no `pahole`.
+/// The console Debian base: Debian's image tools, on the minimal kernel.
 const DEBIAN_MINIMAL_TOOLS: &[ToolSpec] = &[
     tool("mmdebstrap", "mmdebstrap"),
     tool("newuidmap", "uidmap"),
@@ -1088,7 +1088,7 @@ mod tests {
             automatic_base_name(Kind::DebianMinimal, "xfce"),
             "Debian 13 (Minimal)"
         );
-        // It shares BusyBox's kernel, so its tools need no pahole.
+        // It shares BusyBox's kernel; every kernel build encodes BTF with pahole.
         assert_eq!(kernel_profile(Kind::DebianMinimal), "minimal");
         assert_eq!(kernel_profile(Kind::DebianXfce), "debian");
         let native: Vec<_> = tools(Kind::DebianMinimal, BuildMode::Native)
@@ -1096,7 +1096,12 @@ mod tests {
             .map(|tool| tool.tool)
             .collect();
         assert!(native.contains(&"mmdebstrap") && native.contains(&"newuidmap"));
-        assert!(!native.contains(&"pahole"));
+        assert!(native.contains(&"pahole"));
+        assert!(
+            tools(Kind::BusyBox, BuildMode::Native)
+                .iter()
+                .any(|tool| tool.tool == "pahole")
+        );
         assert!(Kind::DebianMinimal.is_debian() && !Kind::BusyBox.is_debian());
     }
 

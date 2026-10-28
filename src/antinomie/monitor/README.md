@@ -151,8 +151,9 @@ only **Run in: App terminal**.
 ## Debian desktop base
 
 **Build base…** builds this base without a repository checkout.
-Natively it needs the kernel tool suite plus `mmdebstrap`, `uidmap` (and a
-subordinate UID range), `dwarves`, e2fsprogs 1.47.1 or newer and `qemu-utils`;
+Natively it needs the kernel tool suite (which includes `dwarves` for the
+kernel's BTF) plus `mmdebstrap`, `uidmap` (and a subordinate UID range),
+e2fsprogs 1.47.1 or newer and `qemu-utils`;
 the QEMU builder needs only QEMU and curl and downloads Debian's cloud image
 once. Either way the root filesystem is bootstrapped with `mmdebstrap` from
 authenticated Debian repositories (trixie, trixie-updates, trixie-security),
