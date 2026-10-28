@@ -10,7 +10,9 @@ use super::*;
 use antinomie_monitor_core::kernel_notes::{FileHash, FileId, FileIdKind, FileKey, HashKind};
 use std::collections::{BTreeMap, BTreeSet};
 
+mod copies;
 mod ioc;
+mod order;
 mod view;
 
 pub(super) use ioc::IocFile;
@@ -75,6 +77,8 @@ pub(super) struct Change {
     /// Recording segment of the file's latest operation; a later one after a
     /// transport reconnect puts the boundary in its story.
     segment: usize,
+    /// Recent numbered writes, `(start, end, write order)` (files/order.rs).
+    applied: Vec<(u64, u64, u64)>,
 }
 
 const PATH_GAP: &str =
@@ -553,6 +557,17 @@ impl FileIndex {
             }
             offset = None;
         }
+        // The guest's record of the position (revision 18) is exact where the
+        // inference above is not: a shared descriptor, an append.
+        let kernel_position = kernel_records::file_position(call).filter(|_| reading || writing);
+        if let Some(position) = kernel_position {
+            offset = Some(position.offset);
+        }
+        let copy = kernel_records::file_copy(call).filter(|_| success && changed);
+        let copied = copy
+            .filter(|copy| copy.data_len > 0)
+            .map(|copy| captured_data(call, true, directory, copy.data_len))
+            .unwrap_or_default();
         let bytes = if success && (reading || writing) {
             captured_data(call, reading, directory, size)
         } else {
@@ -706,12 +721,21 @@ impl FileIndex {
                 }
             })
         };
-        let transfer = (success && (reading || writing)).then(|| {
-            let known_size = self
-                .changes
-                .get(&group)
-                .and_then(|change| change.final_size);
-            file_activity::Transfer {
+        let known_size = self
+            .changes
+            .get(&group)
+            .and_then(|change| change.final_size);
+        let transfer = match copy {
+            Some(copy) => {
+                let stretches = file_content::copy_stretches(
+                    call,
+                    directory,
+                    copy.data_len,
+                    &mut self.interned,
+                );
+                copies::copy_transfer(&copy, &copied, known_size, stretches)
+            }
+            None => (success && (reading || writing)).then(|| file_activity::Transfer {
                 write: writing,
                 offset,
                 len: size,
@@ -725,8 +749,9 @@ impl FileIndex {
                 extends: offset
                     .zip(known_size)
                     .is_some_and(|(offset, known)| offset.saturating_add(size) > known),
-            }
-        });
+                order: kernel_position.and_then(|position| position.order),
+            }),
+        };
         self.note_activity(files, call, event, hits, fd, transfer);
         if lifecycle_only && !self.changes.contains_key(&group) {
             return read_row;
@@ -828,17 +853,18 @@ impl FileIndex {
         }
         if success && (reading || writing) {
             if let Some(offset) = offset {
+                let newer = change.newer(kernel_position, offset, size);
                 if writing {
                     change
                         .final_data
-                        .retain(|at, _| *at < offset || *at >= offset.saturating_add(size));
+                        .retain(|at, _| !order::replaced(&newer, offset, size, *at));
                     change.modified = true;
                     change.final_size = change.final_size.and_then(|size_before| {
                         offset.checked_add(size).map(|end| size_before.max(end))
                     });
                 }
                 let was_modified = change.modified;
-                for (relative, byte) in bytes.iter() {
+                for (relative, byte) in order::outside(&newer, offset, bytes.iter()) {
                     let Some(at) = offset.checked_add(relative) else {
                         break;
                     };
@@ -856,6 +882,7 @@ impl FileIndex {
                         self.retained_octets += 1;
                     }
                 }
+                change.note_applied(kernel_position, offset, size);
             } else if size > 0 {
                 change.gaps.insert("File offset unavailable (inherited/shared descriptor, append or missing seek); transferred bytes cannot be placed safely.");
                 if writing {
@@ -870,7 +897,10 @@ impl FileIndex {
                 if let Some((position, _)) =
                     description.and_then(|id| self.descriptions.get_mut(&id))
                 {
-                    *position = position.and_then(|offset| offset.checked_add(size));
+                    *position = match kernel_position {
+                        Some(known) => known.offset.checked_add(known.len),
+                        None => position.and_then(|offset| offset.checked_add(size)),
+                    };
                 }
             }
             if reading && size == 0 {
@@ -882,6 +912,8 @@ impl FileIndex {
                     }
                 }
             }
+        } else if let Some(copy) = copy {
+            change.kernel_copy(&copy, &copied, &mut self.retained_octets);
         } else if success && changed {
             match name {
                 "truncate" | "ftruncate" => {

@@ -289,6 +289,9 @@ pub(super) struct Transfer {
     pub extends: bool,
     /// The stretches of a write's payload the kernel captured.
     pub stretches: Vec<Captured>,
+    /// The guest's write order (revision 18): racing writes to one file are
+    /// laid in the order the file system applied them.
+    pub order: Option<u64>,
 }
 
 /// Collects [`Record`]s into an [`Activity`]. A file is its identity where the
@@ -499,11 +502,12 @@ impl Builder {
         // file written in small blocks has more writes than events.
         let transfer = transfer.map(|mut t| {
             if t.write && success != Some(false) {
-                file.writes.add(
+                file.writes.add_ordered(
                     &mut self.budget,
                     t.offset,
                     t.len,
                     std::mem::take(&mut t.stretches),
+                    t.order,
                 );
             }
             t

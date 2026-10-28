@@ -18,7 +18,7 @@
 //! | --- | --- |
 //! | [`Limits`] | Per-file and per-run byte caps (Settings) |
 //! | [`Budget`] | The run's running account against the caps |
-//! | [`Writes`] | One file's write extents in call order, and its tally |
+//! | [`Writes`] | One file's write extents in the order applied, and its tally |
 //! | [`Extent`] | A range of the file with its [`Piece`]: kept bytes or a [`Gap`] |
 //! | [`Writes::layout`] | The extents with later writes laid over earlier ones |
 //! | [`Writes::read`] | The exact bytes of a fully kept range |
@@ -283,10 +283,14 @@ pub struct Captured {
     pub source: Source,
 }
 
-/// One file's write extents, in the order the run wrote them.
+/// One file's write extents, in the order the run wrote them: the order the
+/// file system applied them when the guest numbered the writes (revision 18's
+/// write order), otherwise the order of the calls.
 #[derive(Clone, Debug, Default)]
 pub struct Writes {
     extents: Vec<Extent>,
+    /// The write order of each extent's call, alongside `extents`.
+    orders: Vec<Option<u64>>,
     pub tally: Tally,
 }
 
@@ -306,6 +310,21 @@ impl Writes {
         offset: Option<u64>,
         len: u64,
         captured: Vec<Captured>,
+    ) {
+        self.add_ordered(budget, offset, len, captured, None);
+    }
+
+    /// [`Self::add`] for a write the guest numbered: a write that reaches the
+    /// host after one the file system applied later (two writers raced) goes
+    /// under it, before the first numbered extent with a higher number. An
+    /// unnumbered extent is never passed.
+    pub fn add_ordered(
+        &mut self,
+        budget: &mut Budget,
+        offset: Option<u64>,
+        len: u64,
+        captured: Vec<Captured>,
+        order: Option<u64>,
     ) {
         let mut tally = Tally::default();
         let Some(offset) = offset.filter(|_| len > 0) else {
@@ -388,7 +407,16 @@ impl Writes {
             tally.file_cap = 0;
             tally.run_cap = 0;
         } else {
-            self.extents.extend(pieces);
+            let mut at = self.extents.len();
+            if let Some(order) = order {
+                while at > 0 && self.orders[at - 1].is_some_and(|later| later > order) {
+                    at -= 1;
+                }
+            }
+            let count = pieces.len();
+            self.extents.splice(at..at, pieces);
+            self.orders
+                .splice(at..at, std::iter::repeat_n(order, count));
         }
         self.finish(budget, &tally);
     }

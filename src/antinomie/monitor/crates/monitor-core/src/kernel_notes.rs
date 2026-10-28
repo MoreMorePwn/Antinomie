@@ -34,6 +34,24 @@
 //!   exec: the image that was loaded and, for a script, the interpreter its
 //!   `#!` line named.
 //!
+//! Revision 18 adds two kernel-imported fields of a call's Exit, for seekable
+//! files (regular files and block devices) and calls that succeeded:
+//!
+//! * `file.position` (layout `antinomie.filepos/1`, 24 bytes) is where a read
+//!   or write family call began in the file and how many bytes it moved: the
+//!   position the file system used, which a host cannot infer for a
+//!   descriptor shared after fork or dup, or for an `O_APPEND` write. A write
+//!   also carries its write order: a guest-wide number taken while the file
+//!   system held the file's inode lock, so writes that raced on one file can be
+//!   replayed in the order they were applied, which the order of their exits
+//!   does not give.
+//! * `file.copy` (layout `antinomie.filecopy/1`, 104 bytes) is what sendfile,
+//!   splice, copy_file_range or a reflink clone moved, or the range fallocate
+//!   changed: both files, both offsets, the length and the destination's size
+//!   after the call. When the source cannot be read again (the pipe of a
+//!   splice), the bytes the destination got follow as the field
+//!   `file.copy.data`, up to 1 MiB per call.
+//!
 //! The byte layouts are in `protocol/control.h`.
 use crate::api::EventSummary;
 
@@ -43,12 +61,23 @@ pub const FILE_ID_KEY: &str = "lifecycle.file_id";
 /// The operand an io_uring or AIO request carries instead.
 pub const FILE_ID_OPERAND: &str = "async.operand.file_id";
 pub const EXEC_IMAGE_KEY: &str = "lifecycle.exec_image";
+/// Where a read or write began and how much it moved (an Exit field).
+pub const FILE_POSITION_KEY: &str = "file.position";
+/// The operands of an in-kernel copy or an allocation (an Exit field).
+pub const FILE_COPY_KEY: &str = "file.copy";
+/// The bytes a copy from a source that cannot be read again gave its
+/// destination (an Exit field, opaque bytes).
+pub const FILE_COPY_DATA_KEY: &str = "file.copy.data";
 const CREDS_LAYOUT: &str = "antinomie.creds/2";
 const CREDS_LAYOUT_V1: &str = "antinomie.creds/1";
 const HASH_LAYOUT: &str = "antinomie.hash/1";
 const HASH_WRITE_LAYOUT: &str = "antinomie.hash/2";
 pub const FILE_ID_LAYOUT: &str = "antinomie.fileid/1";
 const EXEC_IMAGE_LAYOUT: &str = "antinomie.execimg/1";
+const FILE_POSITION_LAYOUT: &str = "antinomie.filepos/1";
+const FILE_COPY_LAYOUT: &str = "antinomie.filecopy/1";
+const FILE_POSITION_SIZE: usize = 24;
+const FILE_COPY_SIZE: usize = 104;
 pub const FILE_ID_SIZE: usize = 32;
 const EXEC_IMAGE_HEADER: usize = 40;
 pub(crate) const CREDS_SIZE: usize = 96;
@@ -504,6 +533,157 @@ pub fn exec_image(event: &EventSummary) -> Option<ExecImage> {
         nlink: u32_at(data, 12),
         mode: u32_at(data, 36),
     })
+}
+
+/// The complete fixed-size Exit field `key` of `event`.
+fn exit_field<'a>(
+    event: &'a EventSummary,
+    key: &str,
+    layout: &str,
+    size: usize,
+) -> Option<&'a [u8]> {
+    if event.phase != 2 {
+        return None;
+    }
+    let field = event.fields.iter().find(|field| field.key == key)?;
+    (field.complete && field.layout == layout && field.preview.len() >= size)
+        .then(|| &field.preview[..size])
+}
+
+/// Where a read or write of a seekable file took place, as the kernel saw it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FilePosition {
+    /// File offset where the transfer began: for an `O_APPEND` write, the end
+    /// of the file it was appended at.
+    pub offset: u64,
+    /// Bytes the call moved (its result).
+    pub len: u64,
+    /// The write order (see the module notes); `None` for a read, or a write
+    /// the file system did not number (a block device).
+    pub order: Option<u64>,
+}
+
+/// The file position record of an Exit `event`, when it carries one.
+pub fn file_position(event: &EventSummary) -> Option<FilePosition> {
+    let data = exit_field(
+        event,
+        FILE_POSITION_KEY,
+        FILE_POSITION_LAYOUT,
+        FILE_POSITION_SIZE,
+    )?;
+    Some(FilePosition {
+        offset: u64_at(data, 0),
+        len: u64_at(data, 8),
+        order: nonzero(u64_at(data, 16)),
+    })
+}
+
+/// The call that moved bytes inside the kernel, or changed a range.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CopyKind {
+    Sendfile,
+    Splice,
+    /// `copy_file_range`.
+    CopyRange,
+    /// ioctl `FICLONE` or `FICLONERANGE`: a reflink, shared extents.
+    Clone,
+    /// `fallocate` or a preallocation ioctl: a range allocated, punched,
+    /// zeroed, collapsed or inserted.
+    Fallocate,
+    Unknown(u8),
+}
+
+/// One end of a copy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CopyEnd {
+    pub key: FileKey,
+    /// `i_mode`: a regular file, a pipe, a socket, a device.
+    pub mode: u32,
+    /// Where the range began in the file; `None` for an end that has no
+    /// position (a pipe, a socket).
+    pub offset: Option<u64>,
+}
+
+impl CopyEnd {
+    /// A regular file.
+    pub fn regular(&self) -> bool {
+        self.mode & 0o170000 == 0o100000
+    }
+}
+
+/// What an in-kernel copy moved, or the range an allocation changed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FileCopy {
+    pub kind: CopyKind,
+    /// Bytes moved or cloned; for an allocation, the range's length.
+    pub len: u64,
+    /// `None` for an allocation, which has no source.
+    pub source: Option<CopyEnd>,
+    pub destination: CopyEnd,
+    /// The destination's size after the call, when it has positions.
+    pub destination_size: Option<u64>,
+    /// `fallocate` mode (`FALLOC_FL_*`); zero for a copy.
+    pub mode: u32,
+    /// Bytes the guest carried in `file.copy.data` (from the destination
+    /// offset on), because the source cannot be read again.
+    pub data_len: u64,
+    /// The destination got more than the guest carried.
+    pub data_cut: bool,
+    /// The write order of the write into the destination; `None` for a clone,
+    /// an allocation or a destination without positions.
+    pub order: Option<u64>,
+}
+
+impl FileCopy {
+    pub const PUNCH_HOLE: u32 = 0x02;
+    pub const COLLAPSE_RANGE: u32 = 0x08;
+    pub const ZERO_RANGE: u32 = 0x10;
+    pub const INSERT_RANGE: u32 = 0x20;
+}
+
+/// The copy record of an Exit `event`, when it carries one.
+pub fn file_copy(event: &EventSummary) -> Option<FileCopy> {
+    let data = exit_field(event, FILE_COPY_KEY, FILE_COPY_LAYOUT, FILE_COPY_SIZE)?;
+    let flags = data[1];
+    let end = |at: usize, offset: Option<u64>| CopyEnd {
+        key: FileKey {
+            dev: u64_at(data, at),
+            ino: u64_at(data, at + 8),
+            generation: u32_at(data, at + 16),
+        },
+        mode: u32_at(data, at + 20),
+        offset,
+    };
+    let kind = match data[0] {
+        1 => CopyKind::Sendfile,
+        2 => CopyKind::Splice,
+        3 => CopyKind::CopyRange,
+        4 => CopyKind::Clone,
+        5 => CopyKind::Fallocate,
+        other => CopyKind::Unknown(other),
+    };
+    let source = end(32, (flags & 1 != 0).then(|| u64_at(data, 16)));
+    let destination = end(56, (flags & 2 != 0).then(|| u64_at(data, 24)));
+    let seekable = |mode: u32| matches!(mode & 0o170000, 0o100000 | 0o060000);
+    Some(FileCopy {
+        kind,
+        len: u64_at(data, 8),
+        source: (source.mode != 0).then_some(source),
+        destination,
+        destination_size: seekable(destination.mode).then(|| u64_at(data, 80)),
+        mode: u32_at(data, 4),
+        data_len: if flags & 4 != 0 {
+            u64::from(u32_at(data, 88))
+        } else {
+            0
+        },
+        data_cut: flags & 8 != 0,
+        order: nonzero(u64_at(data, 96)),
+    })
+}
+
+fn nonzero(value: u64) -> Option<u64> {
+    (value != 0).then_some(value)
 }
 
 #[cfg(test)]

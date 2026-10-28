@@ -84,7 +84,12 @@ fn payload_fields(
         .iter()
         .filter_map(|field| {
             let key = field.key.as_str();
-            if key == "buf" || key == "arg1.data" || key == "arg1.buf" {
+            // file.copy.data: what a splice from a pipe gave the file.
+            if key == "buf"
+                || key == "arg1.data"
+                || key == "arg1.buf"
+                || key == antinomie_monitor_core::kernel_notes::FILE_COPY_DATA_KEY
+            {
                 Some((0, false, field))
             } else {
                 key.strip_prefix("arg1.iov[")
@@ -107,7 +112,28 @@ pub(super) fn write_stretches(
     size: u64,
     interned: &mut Interned,
 ) -> Vec<Captured> {
-    let Some(fields) = payload_fields(call, false) else {
+    stretches(call, false, directory, size, interned)
+}
+
+/// The same for the bytes a splice from a pipe gave its
+/// file (`file.copy.data`, an Exit field).
+pub(super) fn copy_stretches(
+    call: &InvocationSummary,
+    directory: Option<&Path>,
+    size: u64,
+    interned: &mut Interned,
+) -> Vec<Captured> {
+    stretches(call, true, directory, size, interned)
+}
+
+fn stretches(
+    call: &InvocationSummary,
+    exit: bool,
+    directory: Option<&Path>,
+    size: u64,
+    interned: &mut Interned,
+) -> Vec<Captured> {
+    let Some(fields) = payload_fields(call, exit) else {
         return Vec::new();
     };
     let mut stretches = Vec::new();

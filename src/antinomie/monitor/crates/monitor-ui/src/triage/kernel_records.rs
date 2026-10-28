@@ -25,7 +25,7 @@
 use super::*;
 use antinomie_monitor_core::guest_names::GuestNames;
 use antinomie_monitor_core::kernel_notes::{
-    self, Credentials, ExecImage, FileHash, FileId, HashKind,
+    self, Credentials, ExecImage, FileCopy, FileHash, FileId, FilePosition, HashKind,
 };
 use std::collections::BTreeMap;
 
@@ -71,6 +71,18 @@ pub(super) fn file_id(call: &InvocationSummary) -> Option<FileId> {
 /// The image an exec of this call loaded and the interpreter it named.
 pub(super) fn exec_image(call: &InvocationSummary) -> Option<ExecImage> {
     call.kernel_notes.iter().find_map(kernel_notes::exec_image)
+}
+
+/// Where this read or write began in its file and what it moved, when the
+/// guest recorded it (revision 18): exact for a shared descriptor or an append.
+pub(super) fn file_position(call: &InvocationSummary) -> Option<FilePosition> {
+    call.exit.as_ref().and_then(kernel_notes::file_position)
+}
+
+/// What this sendfile, splice, copy_file_range, clone or fallocate moved or
+/// changed, when the guest recorded it (revision 18).
+pub(super) fn file_copy(call: &InvocationSummary) -> Option<FileCopy> {
+    call.exit.as_ref().and_then(kernel_notes::file_copy)
 }
 
 /// Sysmon `User` and `LogonId`.

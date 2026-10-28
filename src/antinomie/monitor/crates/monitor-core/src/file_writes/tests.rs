@@ -45,6 +45,24 @@ fn a_later_write_covers_an_earlier_one_and_splits_it() {
 }
 
 #[test]
+fn racing_writes_lie_in_the_order_the_file_system_applied_them() {
+    let mut budget = Budget::new(Limits::default());
+    let mut file = Writes::default();
+    // Applied as 1, 2, 3; the exit of 2 reached the host last.
+    file.add_ordered(&mut budget, Some(0), 4, inline(b"AAAA"), Some(1));
+    file.add_ordered(&mut budget, Some(0), 4, inline(b"CCCC"), Some(3));
+    file.add_ordered(&mut budget, Some(2), 4, inline(b"BBBB"), Some(2));
+    // In trace order it would read CCBBBB.
+    assert_eq!(file.read(0, 6).unwrap(), b"CCCCBB");
+    // An unnumbered write is never passed: it stays where the trace put it.
+    let mut file = Writes::default();
+    file.add_ordered(&mut budget, Some(0), 2, inline(b"aa"), Some(5));
+    file.add(&mut budget, Some(0), 2, inline(b"bb"));
+    file.add_ordered(&mut budget, Some(0), 2, inline(b"cc"), Some(4));
+    assert_eq!(file.read(0, 2).unwrap(), b"cc");
+}
+
+#[test]
 fn over_the_file_cap_the_first_bytes_are_kept_and_the_rest_is_a_gap() {
     let mut budget = small(6, 100);
     let mut file = Writes::default();

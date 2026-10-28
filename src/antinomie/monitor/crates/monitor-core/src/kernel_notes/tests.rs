@@ -266,6 +266,18 @@ fn the_layouts_match_the_shared_control_header() {
         ("ANTC_HASH_CACHED", 4),
         ("ANTC_HASH_QUEUE", 16),
         ("ANTC_HASH_PENDING_MAX", 64 << 20),
+        ("ANTC_FILEPOS_SIZE", FILE_POSITION_SIZE),
+        ("ANTC_FILECOPY_SIZE", FILE_COPY_SIZE),
+        ("ANTC_FILECOPY_SENDFILE", 1),
+        ("ANTC_FILECOPY_SPLICE", 2),
+        ("ANTC_FILECOPY_RANGE", 3),
+        ("ANTC_FILECOPY_CLONE", 4),
+        ("ANTC_FILECOPY_FALLOCATE", 5),
+        ("ANTC_FILECOPY_SOURCE_OFFSET", 1),
+        ("ANTC_FILECOPY_DEST_OFFSET", 2),
+        ("ANTC_FILECOPY_DATA", 4),
+        ("ANTC_FILECOPY_DATA_CUT", 8),
+        ("ANTC_FILECOPY_DATA_MAX", 1 << 20),
     ] {
         assert_eq!(define(name), value, "{name}");
     }
@@ -453,4 +465,242 @@ fn a_name_the_guest_cut_short_or_left_unterminated_is_never_shown_as_a_path() {
         None
     );
     assert!(exec_image(&note(EXEC_IMAGE_KEY, EXEC_IMAGE_LAYOUT, vec![0; 39])).is_none());
+}
+
+/// An Exit event of `name` carrying `fields` (key, layout, bytes).
+pub(crate) fn exit_with(name: &str, fields: Vec<(&str, &str, Vec<u8>)>) -> EventSummary {
+    let mut event = note("", "", Vec::new());
+    event.phase = 2;
+    event.syscall_name = name.into();
+    event.fields = fields
+        .into_iter()
+        .map(|(key, layout, bytes)| {
+            let mut field = note(key, layout, bytes).fields.remove(0);
+            field.key = key.into();
+            field
+        })
+        .collect();
+    event
+}
+
+pub(crate) fn position_bytes(offset: u64, len: u64, order: u64) -> Vec<u8> {
+    [offset.to_le_bytes(), len.to_le_bytes(), order.to_le_bytes()].concat()
+}
+
+/// A file.copy record: kind, flags, mode, length, offsets, the two ends'
+/// (dev, ino, generation, mode), the destination size and the carried length.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn copy_bytes(
+    kind: u8,
+    flags: u8,
+    mode: u32,
+    len: u64,
+    offsets: (u64, u64),
+    source: (u64, u64, u32, u32),
+    destination: (u64, u64, u32, u32),
+    size: u64,
+    data_len: u32,
+) -> Vec<u8> {
+    let mut bytes = vec![kind, flags, 0, 0];
+    bytes.extend(mode.to_le_bytes());
+    bytes.extend(len.to_le_bytes());
+    bytes.extend(offsets.0.to_le_bytes());
+    bytes.extend(offsets.1.to_le_bytes());
+    for end in [source, destination] {
+        bytes.extend(end.0.to_le_bytes());
+        bytes.extend(end.1.to_le_bytes());
+        bytes.extend(end.2.to_le_bytes());
+        bytes.extend(end.3.to_le_bytes());
+    }
+    bytes.extend(size.to_le_bytes());
+    bytes.extend(data_len.to_le_bytes());
+    bytes.extend([0; 4]);
+    // The write order: none in these records.
+    bytes.extend(0u64.to_le_bytes());
+    bytes
+}
+
+#[test]
+fn a_position_record_says_where_the_transfer_began_and_its_length() {
+    let exit = exit_with(
+        "write",
+        vec![(
+            FILE_POSITION_KEY,
+            FILE_POSITION_LAYOUT,
+            position_bytes(4096, 12, 41),
+        )],
+    );
+    assert_eq!(
+        file_position(&exit),
+        Some(FilePosition {
+            offset: 4096,
+            len: 12,
+            order: Some(41),
+        })
+    );
+    // A read, or a write the file system did not number: no order.
+    let read = exit_with(
+        "read",
+        vec![(
+            FILE_POSITION_KEY,
+            FILE_POSITION_LAYOUT,
+            position_bytes(4096, 12, 0),
+        )],
+    );
+    assert_eq!(file_position(&read).unwrap().order, None);
+    // Only an Exit carries it, complete and in its own layout and length.
+    let mut entry = exit.clone();
+    entry.phase = 1;
+    assert_eq!(file_position(&entry), None);
+    let mut short = exit.clone();
+    short.fields[0].preview.truncate(23);
+    assert_eq!(file_position(&short), None);
+    let mut foreign = exit.clone();
+    foreign.fields[0].layout = "antinomie.filepos/2".into();
+    assert_eq!(file_position(&foreign), None);
+    let mut partial = exit;
+    partial.fields[0].complete = false;
+    assert_eq!(file_position(&partial), None);
+}
+
+#[test]
+fn a_copy_record_names_both_ends_their_offsets_and_the_bytes_carried() {
+    const REGULAR: u32 = 0o100644;
+    const FIFO: u32 = 0o010600;
+    // A file to file copy_file_range: both offsets, nothing carried.
+    let range = copy_bytes(
+        3,
+        3,
+        0,
+        100,
+        (10, 20),
+        (0xfe00, 12, 7, REGULAR),
+        (0xfe00, 13, 8, REGULAR),
+        120,
+        0,
+    );
+    let copy = file_copy(&exit_with(
+        "copy_file_range",
+        vec![(FILE_COPY_KEY, FILE_COPY_LAYOUT, range)],
+    ))
+    .unwrap();
+    assert_eq!(copy.kind, CopyKind::CopyRange);
+    assert_eq!(copy.len, 100);
+    let source = copy.source.unwrap();
+    assert_eq!(
+        (source.key.ino, source.key.generation, source.offset),
+        (12, 7, Some(10))
+    );
+    assert!(source.regular());
+    assert_eq!(
+        (copy.destination.key.ino, copy.destination.offset),
+        (13, Some(20))
+    );
+    assert_eq!(copy.destination_size, Some(120));
+    assert_eq!((copy.data_len, copy.data_cut), (0, false));
+    assert_eq!(copy.order, None);
+    // The write into the destination is numbered at 96.
+    let mut ordered = range_record();
+    ordered[96..104].copy_from_slice(&7u64.to_le_bytes());
+    let copy = file_copy(&exit_with(
+        "copy_file_range",
+        vec![(FILE_COPY_KEY, FILE_COPY_LAYOUT, ordered)],
+    ))
+    .unwrap();
+    assert_eq!(copy.order, Some(7));
+    // A splice from a pipe: no source offset, the bytes carried, cut.
+    let splice = copy_bytes(
+        2,
+        2 | 4 | 8,
+        0,
+        70000,
+        (0, 5),
+        (0xd, 99, 0, FIFO),
+        (0xfe00, 13, 8, REGULAR),
+        70005,
+        65536,
+    );
+    let copy = file_copy(&exit_with(
+        "splice",
+        vec![(FILE_COPY_KEY, FILE_COPY_LAYOUT, splice)],
+    ))
+    .unwrap();
+    assert_eq!(copy.kind, CopyKind::Splice);
+    assert_eq!(copy.source.unwrap().offset, None);
+    assert!(!copy.source.unwrap().regular());
+    assert_eq!((copy.data_len, copy.data_cut), (65536, true));
+    // An allocation has no source, and its mode says what it did.
+    let punch = copy_bytes(
+        5,
+        2,
+        FileCopy::PUNCH_HOLE | 1,
+        4096,
+        (0, 8192),
+        (0, 0, 0, 0),
+        (0xfe00, 13, 8, REGULAR),
+        65536,
+        0,
+    );
+    let copy = file_copy(&exit_with(
+        "fallocate",
+        vec![(FILE_COPY_KEY, FILE_COPY_LAYOUT, punch)],
+    ))
+    .unwrap();
+    assert_eq!(
+        (copy.kind, copy.source, copy.mode),
+        (CopyKind::Fallocate, None, 3)
+    );
+    assert_eq!(copy.destination.offset, Some(8192));
+    // A destination with no positions has no size.
+    let to_pipe = copy_bytes(
+        1,
+        1,
+        0,
+        9,
+        (3, 0),
+        (0xfe00, 12, 7, REGULAR),
+        (0xd, 98, 0, FIFO),
+        0,
+        0,
+    );
+    let copy = file_copy(&exit_with(
+        "sendfile",
+        vec![(FILE_COPY_KEY, FILE_COPY_LAYOUT, to_pipe)],
+    ))
+    .unwrap();
+    assert_eq!(
+        (copy.destination.offset, copy.destination_size),
+        (None, None)
+    );
+    // The wrong length or layout is never guessed at.
+    let mut short = range_record();
+    short.truncate(103);
+    assert!(
+        file_copy(&exit_with(
+            "splice",
+            vec![(FILE_COPY_KEY, FILE_COPY_LAYOUT, short)]
+        ))
+        .is_none()
+    );
+    assert!(
+        file_copy(&exit_with(
+            "splice",
+            vec![(FILE_COPY_KEY, "antinomie.filecopy/2", range_record())]
+        ))
+        .is_none()
+    );
+}
+
+fn range_record() -> Vec<u8> {
+    copy_bytes(
+        3,
+        3,
+        0,
+        1,
+        (0, 0),
+        (1, 2, 3, 0o100644),
+        (1, 4, 5, 0o100644),
+        1,
+        0,
+    )
 }
