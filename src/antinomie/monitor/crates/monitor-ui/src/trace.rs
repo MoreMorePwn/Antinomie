@@ -353,7 +353,7 @@ impl Inspector {
                             .copied()
                             .filter(|(_, field)| field_argument(nr, field) == Some(index))
                             .collect();
-                        let note = argument_preview(&owned)
+                        let note = argument_preview(field_call(nr, Some(args)).as_ref(), &owned)
                             .map(|(_, text)| (text, theme::value(ValueKind::Text)))
                             .or_else(|| shown.raw.clone().map(|raw| (raw, theme::muted())))
                             .or_else(|| {
@@ -925,6 +925,14 @@ impl Inspector {
             ));
         }
         ui.add(egui::Label::new(RichText::new(facts.join(" · ")).color(theme::muted())).wrap());
+        let call = representative(invocation)
+            .and_then(|event| field_call(event.syscall_nr, call_args(invocation)));
+        if let Some(decoded) = decoded(call.as_ref(), field) {
+            ui.add_space(2.0);
+            for line in decoded.lines() {
+                ui.add(egui::Label::new(RichText::new(line).monospace()).wrap());
+            }
+        }
         if let Some(mark) = field.recapture {
             ui.add(egui::Label::new(recapture_explanation(mark)).wrap());
         }
@@ -1304,7 +1312,7 @@ pub(super) mod tests {
         ];
         let owned: Vec<_> = fields.iter().map(|field| (1, field)).collect();
         assert_eq!(
-            argument_preview(&owned),
+            argument_preview(None, &owned),
             Some((None, "[\"sh\", \"-c\"]".to_owned()))
         );
         let nested = [
@@ -1313,13 +1321,16 @@ pub(super) mod tests {
         ];
         let owned: Vec<_> = nested.iter().map(|field| (1, field)).collect();
         assert_eq!(
-            argument_preview(&owned),
+            argument_preview(None, &owned),
             Some((None, "2 captured objects".to_owned()))
         );
         // A lone object of the argument is its data whatever its key.
         let lone = [string_field("arg2.socklen.capacity", 1, &[16, 0, 0, 0])];
         let owned: Vec<_> = lone.iter().map(|field| (1, field)).collect();
-        assert_eq!(argument_preview(&owned).map(|(id, _)| id), Some(Some(1)));
+        assert_eq!(
+            argument_preview(None, &owned).map(|(id, _)| id),
+            Some(Some(1))
+        );
     }
 
     #[test]
@@ -1523,6 +1534,34 @@ pub(super) mod tests {
             preview(&typed("arg1.data", "timespec", None, b"\n\0")),
             "0a 00"
         );
+    }
+
+    #[test]
+    fn known_layouts_are_shown_decoded_and_the_rest_by_their_bytes() {
+        let object = Some(FieldEncoding::Object);
+        let mask = typed(
+            "signal.mask",
+            "sigset_t",
+            object,
+            &(1u64 << 14).to_le_bytes(),
+        );
+        assert_eq!(preview_in(None, &mask), "[SIGTERM]");
+        // A bpf attr needs its command; without the call it stays bytes.
+        let attr = typed("arg1.attr", "bpf_attr", object, &[1, 0, 0, 0]);
+        assert_eq!(preview_in(None, &attr), "01 00 00 00");
+        let nr = antinomie_monitor_core::syscalls::number("bpf").unwrap();
+        let call = field_call(nr, Some([0, 0, 4, 0, 0, 0]));
+        assert_eq!(
+            preview_in(call.as_ref(), &attr),
+            "{map_type=BPF_MAP_TYPE_HASH}"
+        );
+        assert_eq!(
+            argument_preview(call.as_ref(), &[(1, &attr)]).map(|(_, text)| text),
+            Some("{map_type=BPF_MAP_TYPE_HASH}".to_owned())
+        );
+        // A timespec is not decoded here: its bytes, as before.
+        let time = typed("arg0.data", "timespec", object, &[0; 16]);
+        assert_eq!(preview_in(None, &time), preview(&time));
     }
 
     #[test]

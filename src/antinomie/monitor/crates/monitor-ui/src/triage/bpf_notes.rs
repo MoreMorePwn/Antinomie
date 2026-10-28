@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! BPF program loads and attachments seen in the trace.
 use super::*;
+use antinomie_monitor_core::typed_fields;
 
 pub(super) fn bpf_notes(input: &TriageInput<'_>) -> Vec<BpfNote> {
     let mut notes = Vec::new();
@@ -46,14 +47,12 @@ pub(super) fn bpf_notes(input: &TriageInput<'_>) -> Vec<BpfNote> {
                     "eBPF program"
                 }
                 .into(),
-                declared_instruction_count: captured_integer(
-                    invocation,
-                    if classic_image(command) {
-                        "len"
-                    } else {
-                        "insn_cnt"
-                    },
-                ),
+                declared_instruction_count: if classic_image(command) {
+                    captured_integer(invocation, "len")
+                } else {
+                    attr_integer(invocation, recorded_args, "insn_cnt")
+                        .or_else(|| captured_integer(invocation, "insn_cnt"))
+                },
                 fd: if command == "BPF_PROG_LOAD" {
                     invocation
                         .exit
@@ -63,8 +62,7 @@ pub(super) fn bpf_notes(input: &TriageInput<'_>) -> Vec<BpfNote> {
                 } else if command == "SO_ATTACH_FILTER" {
                     recorded_args.and_then(|args| i64::try_from(args[0]).ok())
                 } else {
-                    captured_integer(invocation, "attach_bpf_fd")
-                        .and_then(|fd| i64::try_from(fd).ok())
+                    attach_fd(invocation, recorded_args)
                 },
                 capture_issues: invocation
                     .entry
@@ -129,6 +127,7 @@ pub(super) fn bpf_notes(input: &TriageInput<'_>) -> Vec<BpfNote> {
             };
             (None, None, None, None, identity)
         };
+        let attributes = attributes(invocation, event, recorded_args);
         let result = invocation.exit.as_ref().and_then(|exit| exit.result);
         let attached = bpf_attach::command_of(event, args)
             .map(|command| bpf_attach::attach(invocation, command, args, &fds));
@@ -137,13 +136,15 @@ pub(super) fn bpf_notes(input: &TriageInput<'_>) -> Vec<BpfNote> {
         } else if command == bpf_attach::PERF_OPEN {
             Some(bpf_attach::perf_open_text(invocation, result))
         } else {
-            attach_of_loaded(command, invocation, &fds).or_else(|| bpf_lifecycle(command, result))
+            attach_of_loaded(command, invocation, recorded_args, &fds)
+                .or_else(|| bpf_lifecycle(command, result))
         };
         notes.push(BpfNote {
             summary: summary(event, command, &outcome(invocation), lifecycle.as_deref()),
             heading: format!("{}  tid {}  {command}", event.syscall_name, event.tid),
             outcome: outcome(invocation),
             lifecycle,
+            attributes,
             loaded_by: attached.as_ref().and_then(|attached| attached.loaded_by),
             translation,
             dump,
@@ -187,13 +188,63 @@ fn captured_integer(invocation: &InvocationSummary, member: &str) -> Option<u64>
         })
 }
 
+/// bpf's `union bpf_attr` as the call passed it (its first captured copy).
+fn attr_field(invocation: &InvocationSummary) -> Option<&antinomie_monitor_core::FieldSummary> {
+    invocation
+        .entry
+        .iter()
+        .chain(invocation.exit.iter())
+        .flat_map(|event| &event.fields)
+        .find(|field| field.key == "arg1.attr" && layout_is(&field.layout, "bpf_attr"))
+}
+
+/// A member of bpf's attr, read by the branch the call's command selects
+/// (`insn_cnt` of BPF_PROG_LOAD, `attach_bpf_fd` of BPF_PROG_ATTACH).
+fn attr_integer(
+    invocation: &InvocationSummary,
+    args: Option<[u64; 6]>,
+    member: &str,
+) -> Option<u64> {
+    let field = attr_field(invocation)?;
+    typed_fields::bpf_attr_member(args?[0], trace::covered_preview(field), member)
+}
+
+/// The program descriptor an attach names.
+fn attach_fd(invocation: &InvocationSummary, args: Option<[u64; 6]>) -> Option<i64> {
+    let fd = attr_integer(invocation, args, "attach_bpf_fd")
+        .or_else(|| captured_integer(invocation, "attach_bpf_fd"))?;
+    // A `__u32` holding an int descriptor.
+    Some(i64::from(u32::try_from(fd).ok()? as i32))
+}
+
+/// The attr members of a bpf call, one per line, by its command.
+fn attributes(
+    invocation: &InvocationSummary,
+    event: &EventSummary,
+    args: Option<[u64; 6]>,
+) -> Vec<String> {
+    if event.syscall_name != "bpf" {
+        return Vec::new();
+    }
+    let call = typed_fields::Call { name: "bpf", args };
+    attr_field(invocation)
+        .and_then(|field| typed_fields::decode(Some(&call), field))
+        .map(|decoded| decoded.lines())
+        .unwrap_or_default()
+}
+
 /// `attach requested of fd N` when a recorded argument is a program fd from
 /// an earlier successful load in this slice. No fd is guessed from a pointer.
-fn attach_of_loaded(command: &str, invocation: &InvocationSummary, fds: &BpfFds) -> Option<String> {
+fn attach_of_loaded(
+    command: &str,
+    invocation: &InvocationSummary,
+    args: Option<[u64; 6]>,
+    fds: &BpfFds,
+) -> Option<String> {
     if command != "BPF_PROG_ATTACH" {
         return None;
     }
-    let fd = i64::try_from(captured_integer(invocation, "attach_bpf_fd")?).ok()?;
+    let fd = attach_fd(invocation, args)?;
     fds.program(invocation.task_cookie, fd).is_some().then(|| {
         format!(
             "{} of observed loaded fd {fd}",
@@ -287,7 +338,7 @@ fn instruction_image(invocation: &InvocationSummary, command: &str) -> Option<Ve
 }
 
 fn layout_is(layout: &str, name: &str) -> bool {
-    layout == name || layout.ends_with(&format!("/{name}"))
+    typed_fields::layout_type(layout) == name
 }
 
 fn isolated_instructions(field: &antinomie_monitor_core::FieldSummary) -> Option<Vec<u8>> {
@@ -394,6 +445,12 @@ pub(super) fn bpf_detail(
         ui.label(format!(
             "Program loaded in call {call}; this is its attach."
         ));
+    }
+    if !note.attributes.is_empty() {
+        ui.label(RichText::new("Attributes").strong());
+        for line in &note.attributes {
+            ui.add(egui::Label::new(RichText::new(line).monospace()).wrap());
+        }
     }
     if note.translation.is_none() && note.dump.is_none() {
         ui.weak("The instruction image was not isolated.");

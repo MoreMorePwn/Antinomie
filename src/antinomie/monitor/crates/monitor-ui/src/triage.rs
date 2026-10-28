@@ -1257,6 +1257,8 @@ struct BpfNote {
     identity: bpf::BpfIdentity,
     /// For an attach: the call that loaded the program, when this slice saw it.
     loaded_by: Option<u64>,
+    /// bpf's attr decoded by the call's command, one member per line.
+    attributes: Vec<String>,
 }
 
 #[cfg(test)]

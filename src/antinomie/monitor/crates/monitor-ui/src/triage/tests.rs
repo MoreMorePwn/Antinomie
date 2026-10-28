@@ -2065,6 +2065,60 @@ fn every_filter_slot_draws_its_filter_bar() {
 }
 
 #[test]
+fn bpf_attr_members_come_from_the_branch_of_the_command() {
+    // The guest captures `union bpf_attr` whole as `arg1.attr`: the load's
+    // instruction count and the attach's program descriptor are its members.
+    let mut attr = [0u8; 64];
+    attr[..4].copy_from_slice(&2u32.to_le_bytes());
+    attr[4..8].copy_from_slice(&30u32.to_le_bytes());
+    attr[48..53].copy_from_slice(b"probe");
+    let mut load = call(1, 321, "bpf", 6);
+    let entry = load.entry.as_mut().unwrap();
+    entry.args = Some([5, 0x1000, 64, 0, 0, 0]);
+    entry.fields.push(captured(
+        "arg1.attr",
+        "linux-6.12.94/x86_64/bpf_attr",
+        &attr,
+    ));
+    // Two instructions (mov r0, 0; exit) of the 30 the attr declares.
+    let mut image = [0u8; 16];
+    image[0] = 0xb7;
+    image[8] = 0x95;
+    entry.fields.push(captured(
+        "arg1.attr.insns",
+        "linux-6.12.94/x86_64/bpf_insn[]",
+        &image,
+    ));
+    let mut attach_attr = [0u8; 16];
+    attach_attr[..4].copy_from_slice(&9u32.to_le_bytes());
+    attach_attr[4..8].copy_from_slice(&6u32.to_le_bytes());
+    attach_attr[8..12].copy_from_slice(&2u32.to_le_bytes());
+    let mut attach = call(1, 321, "bpf", 0);
+    let entry = attach.entry.as_mut().unwrap();
+    entry.args = Some([8, 0x2000, 16, 0, 0, 0]);
+    entry.fields.push(captured(
+        "arg1.attr",
+        "linux-6.12.94/x86_64/bpf_attr",
+        &attach_attr,
+    ));
+    let notes = page_notes(&[load, attach]);
+    assert_eq!(notes[0].identity.declared_instruction_count, Some(30));
+    assert_eq!(notes[0].attributes[0], "prog_type = BPF_PROG_TYPE_KPROBE");
+    assert_eq!(notes[0].attributes[1], "insn_cnt = 30");
+    assert!(notes[0].attributes.contains(&"log_buf = NULL".to_owned()));
+    assert!(notes[0]
+        .attributes
+        .contains(&"prog_name = \"probe\"".to_owned()));
+    assert_eq!(
+        notes[1].lifecycle.as_deref(),
+        Some("attached of observed loaded fd 6")
+    );
+    assert!(notes[1]
+        .attributes
+        .contains(&"attach_type = BPF_CGROUP_INET_SOCK_CREATE".to_owned()));
+}
+
+#[test]
 fn bpf_rows_without_an_image_each_have_their_own_key() {
     let calls: Vec<InvocationSummary> = (1..=4)
         .map(|id| {

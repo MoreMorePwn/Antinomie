@@ -73,6 +73,7 @@ pub mod strings_regex;
 pub mod syscall_groups;
 pub mod syscalls;
 mod transport;
+pub mod typed_fields;
 mod uefi_disk;
 mod vm;
 pub mod writer;

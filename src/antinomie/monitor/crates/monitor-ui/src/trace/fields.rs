@@ -2,6 +2,7 @@
 //! Captured-field presentation for the trace inspector: the field tree, value
 //! lines, capture sizes and flags, and the trace line parts of a call.
 use super::*;
+use antinomie_monitor_core::typed_fields::{self, Call, Decoded};
 
 #[derive(Default)]
 pub(super) struct FieldNode<'a> {
@@ -72,10 +73,11 @@ pub(super) fn field_tree(
         parent: &Prefix,
     ) {
         let (invocation, nr, phase) = owner;
+        let call = field_call(nr, call_args(invocation));
         for (position, (label, child)) in node.children.iter().enumerate() {
             let branch = parent.child(position + 1 == node.children.len());
             let size = child.field.map(capture_size);
-            let shown = child.field.map(preview);
+            let shown = child.field.map(|field| preview_in(call.as_ref(), field));
             let (response, open) = tree_row(
                 ui,
                 Row {
@@ -215,9 +217,12 @@ pub(super) fn argument_data<'a>(
 /// several captured objects and none is its own, how many there are (they are
 /// listed under the argument in the decoded tree). The object id is the one
 /// shown, when a single object is.
-pub(crate) fn argument_preview(fields: &[(u8, &FieldSummary)]) -> Option<(Option<u32>, String)> {
+pub(crate) fn argument_preview(
+    call: Option<&Call<'_>>,
+    fields: &[(u8, &FieldSummary)],
+) -> Option<(Option<u32>, String)> {
     if let Some((_, field)) = argument_data(fields) {
-        return Some((Some(field.object_id), preview(field)));
+        return Some((Some(field.object_id), preview_in(call, field)));
     }
     let mut strings: Vec<(usize, &FieldSummary)> = fields
         .iter()
@@ -571,13 +576,8 @@ pub(crate) enum Rendering {
     Binary,
 }
 
-/// The type name of a layout, without its `linux-6.12.94/x86_64/` source.
-fn layout_type(layout: &str) -> &str {
-    layout.rsplit('/').next().unwrap_or(layout)
-}
-
 pub(crate) fn rendering(field: &FieldSummary) -> Rendering {
-    let layout = layout_type(&field.layout);
+    let layout = typed_fields::layout_type(&field.layout);
     if layout == "sockaddr" {
         return Rendering::Address;
     }
@@ -635,6 +635,37 @@ pub(crate) fn preview(field: &FieldSummary) -> String {
     }
 }
 
+/// The call a captured field belongs to, for the decoders that read another
+/// of its arguments (bpf's command) or depend on the syscall (capget's header).
+pub(crate) fn field_call(nr: u64, args: Option<[u64; 6]>) -> Option<Call<'static>> {
+    syscalls::syscall(nr).map(|info| Call {
+        name: info.name.as_str(),
+        args,
+    })
+}
+
+/// The register arguments of a call: the Entry's, else the Exit's.
+pub(crate) fn call_args(invocation: &InvocationSummary) -> Option<[u64; 6]> {
+    invocation
+        .entry
+        .as_ref()
+        .and_then(|event| event.args)
+        .or_else(|| invocation.exit.as_ref().and_then(|event| event.args))
+}
+
+/// A captured field decoded by its native layout (a signal set by name, a
+/// siginfo by its branch, bpf's attr by its command), when it is one the
+/// decoders know; see `typed_fields::decode`.
+pub(crate) fn decoded(call: Option<&Call<'_>>, field: &FieldSummary) -> Option<Decoded> {
+    typed_fields::decode(call, field)
+}
+
+/// A captured field's short form: decoded by its layout when it can be,
+/// else by its [`rendering`] ([`preview`]).
+pub(crate) fn preview_in(call: Option<&Call<'_>>, field: &FieldSummary) -> String {
+    decoded(call, field).map_or_else(|| preview(field), |decoded| decoded.line())
+}
+
 /// How a piece of a trace line is colored.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Tone {
@@ -674,6 +705,7 @@ pub(crate) fn info_parts(invocation: &InvocationSummary) -> Vec<(String, Tone)> 
         .chain(invocation.exit.iter())
         .flat_map(|event| event.fields.iter().map(|field| (event.phase, field)))
         .collect();
+    let call = field_call(nr, args);
     let mut parts = Vec::new();
     let mut shown_fields = Vec::new();
     let space = |parts: &mut Vec<(String, Tone)>| {
@@ -690,7 +722,7 @@ pub(crate) fn info_parts(invocation: &InvocationSummary) -> Vec<(String, Tone)> 
                 .copied()
                 .filter(|(_, field)| field_argument(nr, field) == Some(index))
                 .collect();
-            match argument_preview(&owned) {
+            match argument_preview(call.as_ref(), &owned) {
                 Some((id, text)) => {
                     shown_fields.extend(id);
                     parts.push((text, Tone::Value(ValueKind::Text)));
@@ -716,7 +748,10 @@ pub(crate) fn info_parts(invocation: &InvocationSummary) -> Vec<(String, Tone)> 
     {
         space(&mut parts);
         parts.push((format!("{}=", field.key), Tone::Label));
-        parts.push((preview(field), Tone::Value(ValueKind::Text)));
+        parts.push((
+            preview_in(call.as_ref(), field),
+            Tone::Value(ValueKind::Text),
+        ));
     }
     let mut notes = Vec::new();
     if invocation.entry.is_none() {
