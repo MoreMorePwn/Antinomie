@@ -563,6 +563,43 @@ mod tests {
         );
     }
     #[test]
+    fn every_bpf_attr_branch_is_qualified_by_its_command() {
+        let mut attr = field("bpf_attr", 152);
+        attr.key = "arg1.attr".into();
+        attr.preview[..4].copy_from_slice(&7u32.to_le_bytes());
+        attr.preview[4..8].copy_from_slice(&9u32.to_le_bytes());
+        attr.preview[8..12].copy_from_slice(&2u32.to_le_bytes());
+        attr.preview[16..24].copy_from_slice(&0x5000u64.to_le_bytes());
+        // BPF_PROG_ATTACH: attach_type is the third word, not the second.
+        let row = invocation(321, [8, 0, 152, 0, 0, 0], attr.clone());
+        assert_eq!(
+            decode(&row, "args.attr.attach_type"),
+            MemberValue::Integer(2)
+        );
+        assert_eq!(
+            decode(&row, "args.attr.attach_bpf_fd"),
+            MemberValue::Integer(9)
+        );
+        // BPF_PROG_QUERY's attach_type is the second word, under its branch.
+        let row = invocation(321, [16, 0, 152, 0, 0, 0], attr.clone());
+        assert_eq!(
+            decode(&row, "args.attr.query.attach_type"),
+            MemberValue::Integer(9)
+        );
+        assert_eq!(decode(&row, "args.attr.attach_type"), MemberValue::Missing);
+        // BPF_MAP_UPDATE_ELEM: the element branch, before unqualified.
+        let row = invocation(321, [2, 0, 152, 0, 0, 0], attr.clone());
+        assert_eq!(decode(&row, "args.attr.map_fd"), MemberValue::Integer(7));
+        assert_eq!(
+            decode(&row, "args.attr.value"),
+            MemberValue::Integer(0x5000)
+        );
+        // BPF_LINK_CREATE's tail is selected by the attach type: not offered.
+        assert!(descriptor("args.attr.link_create.attach_type").is_some());
+        assert!(descriptor("args.attr.link_create.kprobe_multi.cnt").is_none());
+    }
+
+    #[test]
     fn packed_epoll_and_bitfield_layouts_use_compiler_offsets() {
         let mut event = field("epoll_event", 12);
         event.key = "arg3.event".into();

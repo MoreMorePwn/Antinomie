@@ -102,6 +102,8 @@ TYPES = {
     "sigaction": ("struct sigaction", "asm/signal.h"),
     "sigevent": ("struct sigevent", "linux/signal.h"),
     "siginfo_t": ("siginfo_t", "asm/siginfo.h"),
+    "io_uring_params": ("struct io_uring_params", "linux/io_uring.h"),
+    "xt_counters_info": ("struct xt_counters_info", "linux/netfilter/x_tables.h"),
 }
 SCALARS = {
     "int": ("int", True), "wait_status": ("int", True), "timer_t": ("int", True),
@@ -112,27 +114,77 @@ SCALARS = {
     "unsigned_long": ("unsigned long", False), "address": ("unsigned long", False),
     "robust_list_head_pointer": ("unsigned long", False),
 }
-# Union branches are meaningful only for these captured native bpf commands.
+# union bpf_attr's branches and the commands (enum bpf_cmd) that read each: a
+# named branch by its field name, an anonymous one by its first member. Every
+# member of a branch is qualified by bpf's first argument being one of these.
 BPF_BRANCHES = {
-    "map_type": [0], "key_size": [0], "value_size": [0], "max_entries": [0],
-    "map_flags": [0], "inner_map_fd": [0], "numa_node": [0], "map_name": [0],
-    "map_ifindex": [0], "btf_fd": [0], "btf_key_type_id": [0], "btf_value_type_id": [0],
-    "btf_vmlinux_value_type_id": [0], "map_extra": [0], "value_type_btf_obj_fd": [0], "map_token_fd": [0],
-    "prog_type": [5], "insn_cnt": [5], "insns": [5], "license": [5], "log_level": [5],
-    "log_size": [5], "log_buf": [5], "kern_version": [5], "prog_flags": [5], "prog_name": [5],
-    "prog_ifindex": [5], "expected_attach_type": [5], "prog_btf_fd": [5],
-    "func_info_rec_size": [5], "func_info": [5], "func_info_cnt": [5],
-    "line_info_rec_size": [5], "line_info": [5], "line_info_cnt": [5],
-    "attach_btf_id": [5], "core_relo_cnt": [5], "fd_array": [5], "core_relos": [5],
-    "log_true_size": [5], "prog_token_fd": [5],
-    "target_fd": [8, 9], "attach_bpf_fd": [8, 9], "attach_type": [8, 9],
-    "attach_flags": [8, 9], "replace_bpf_fd": [8],
-    "pathname": [6, 7], "bpf_fd": [6, 7], "file_flags": [6, 7], "path_fd": [6, 7],
-    "info.bpf_fd": [15], "info.info_len": [15], "info.info": [15],
-    "test.prog_fd": [10], "test.retval": [10], "test.data_size_in": [10],
-    "test.data_size_out": [10], "test.data_in": [10], "test.data_out": [10],
-    "test.repeat": [10], "test.duration": [10],
+    "map_type": [0],                                # BPF_MAP_CREATE
+    "map_fd": [1, 2, 3, 4, 21, 22],                 # BPF_MAP_*_ELEM, GET_NEXT_KEY, FREEZE
+    "batch": [24, 25, 26, 27],                      # BPF_MAP_*_BATCH
+    "prog_type": [5],                               # BPF_PROG_LOAD
+    "pathname": [6, 7],                             # BPF_OBJ_PIN, BPF_OBJ_GET
+    "target_fd": [8, 9],                            # BPF_PROG_ATTACH, BPF_PROG_DETACH
+    "test": [10],                                   # BPF_PROG_TEST_RUN
+    "start_id": [11, 12, 13, 14, 19, 23, 30, 31],   # BPF_*_GET_NEXT_ID, BPF_*_GET_FD_BY_ID
+    "info": [15],                                   # BPF_OBJ_GET_INFO_BY_FD
+    "query": [16],                                  # BPF_PROG_QUERY
+    "raw_tracepoint": [17],                         # BPF_RAW_TRACEPOINT_OPEN
+    "btf": [18],                                    # BPF_BTF_LOAD
+    "task_fd_query": [20],                          # BPF_TASK_FD_QUERY
+    "link_create": [28],                            # BPF_LINK_CREATE
+    "link_update": [29],                            # BPF_LINK_UPDATE
+    "link_detach": [34],                            # BPF_LINK_DETACH
+    "enable_stats": [32],                           # BPF_ENABLE_STATS
+    "iter_create": [33],                            # BPF_ITER_CREATE
+    "prog_bind_map": [35],                          # BPF_PROG_BIND_MAP
+    "token_create": [36],                           # BPF_TOKEN_CREATE
 }
+# BPF_LINK_CREATE's members from this bit offset on are a union the attach
+# type selects (a member of the attr, not an argument): not qualified.
+BPF_LINK_CREATE_ATTACH_UNION = 128
+
+def first_member(declaration):
+    for child in declaration.get_children():
+        if child.kind == cindex.CursorKind.FIELD_DECL:
+            if child.spelling:
+                return child.spelling
+            return first_member(child.type.get_canonical().get_declaration())
+        if child.kind in (cindex.CursorKind.STRUCT_DECL, cindex.CursorKind.UNION_DECL):
+            name = first_member(child)
+            if name:
+                return name
+    return None
+
+def bpf_attr_members(root_type):
+    """Each branch of union bpf_attr walked with the commands that read it."""
+    declaration = root_type.get_canonical().get_declaration()
+    children = list(declaration.get_children())
+    field_types = {child.type.get_canonical().get_declaration().hash
+                   for child in children if child.kind == cindex.CursorKind.FIELD_DECL}
+    output, unsupported = [], []
+    for child in children:
+        if child.kind == cindex.CursorKind.FIELD_DECL:
+            key, prefix = child.spelling, child.spelling + "."
+        elif child.kind in (cindex.CursorKind.STRUCT_DECL, cindex.CursorKind.UNION_DECL) and child.hash not in field_types:
+            key, prefix = first_member(child), ""
+        else:
+            continue
+        commands = BPF_BRANCHES.get(key)
+        if commands is None:
+            unsupported.append(f"{key}: BPF branch without a command mapping")
+            continue
+        members, missing = walk_members(child.type, prefix, 0, commands, (declaration.hash,))
+        if key == "link_create":
+            for member in members:
+                if member["bit_offset"] >= BPF_LINK_CREATE_ATTACH_UNION:
+                    missing.append(member["member"] + ": BPF_LINK_CREATE member selected by attach_type, not qualified")
+            members = [member for member in members if member["bit_offset"] < BPF_LINK_CREATE_ATTACH_UNION]
+        output.extend(members); unsupported.extend(missing)
+    unique = {}
+    for member in output:
+        unique[(member["member"], member["bit_offset"], tuple(member["selector"]["values"]))] = member
+    return sorted(unique.values(), key=lambda m: (m["member"], m["bit_offset"])), sorted(set(unsupported))
+
 # Dynamic/selector capture families not fully represented by C prototypes.
 EXTRA_BINDINGS = {
     "sock_fprog": [(54, 3), (157, 2), (317, 2)],
@@ -165,6 +217,7 @@ EXTRA_BINDINGS = {
     "u32[]": [(321, 1)], "u64[]": [(321, 1), (458, 1)],
     "user_regs_struct": [(101, 3)], "user_i387_struct": [(101, 3)],
     "tcp_ao_getsockopt": [(55, 3)], "tcp_zerocopy_receive": [(55, 3)],
+    "xt_counters_info": [(54, 3)],
 }
 META = [
     {"member": "complete", "kind": "boolean", "detail": "Whole captured argument field complete"},
@@ -189,21 +242,42 @@ def extract_record(source, name):
         end += 1
     return source[match.start():end] + ";\n"
 
-def walk_members(record_type, prefix="", offset=0, bpf=False, ancestors=(), common_union_members=None):
+def walk_members(record_type, prefix="", offset=0, bpf=None, ancestors=(), common_union_members=None):
     canonical = record_type.get_canonical()
     declaration = canonical.get_declaration()
     if declaration.hash in ancestors:
         return [], ["recursive record"]
     output, unsupported = [], []
-    for field in declaration.get_children():
+    children = list(declaration.get_children())
+    # A named member of an unnamed record type is reached through its field;
+    # in a bpf branch the record's own declaration is not walked again.
+    named_types = {child.type.get_canonical().get_declaration().hash
+                   for child in children if child.kind == cindex.CursorKind.FIELD_DECL and child.spelling}
+    for field in children:
         if field.kind != cindex.CursorKind.FIELD_DECL:
+            if bpf and field.hash in named_types:
+                continue
             # Anonymous BPF structs are exposed by Clang as record declarations.
             if (bpf or common_union_members) and field.kind in (cindex.CursorKind.STRUCT_DECL, cindex.CursorKind.UNION_DECL):
-                members, missing = walk_members(field.type, prefix, offset, bpf, ancestors + (declaration.hash,), common_union_members)
+                base = offset
+                if bpf:
+                    # Its members' offsets are relative to the anonymous record:
+                    # place it by its first member's offset in this record.
+                    first = first_member(field)
+                    inner = canonical.get_offset(first) if first else -1
+                    if inner < 0:
+                        unsupported.append(prefix + (first or "?") + ": unavailable anonymous record offset")
+                        continue
+                    base = offset + inner
+                members, missing = walk_members(field.type, prefix, base, bpf, ancestors + (declaration.hash,), common_union_members)
                 output.extend(members); unsupported.extend(missing)
             continue
         name = prefix + field.spelling
-        if field.spelling in ("pad", "__pad", "__padding", "_pad") or field.spelling.startswith(("__unused", "__reserved")):
+        if not field.spelling and field.is_bitfield():
+            unsupported.append(name + "(unnamed bit field): padding, not a semantic value")
+            continue
+        if field.spelling in ("pad", "__pad", "__padding", "_pad") or field.spelling.startswith(("__unused", "__reserved")) \
+                or re.fullmatch(r"resv\d*", field.spelling):
             unsupported.append(name + ": reserved/padding, not a semantic value")
             continue
         bits = field.get_field_offsetof()
@@ -249,10 +323,7 @@ def walk_members(record_type, prefix="", offset=0, bpf=False, ancestors=(), comm
         elif size not in (1, 2, 4, 8):
             unsupported.append(name + ": unsupported scalar width"); continue
         if bpf:
-            commands = BPF_BRANCHES.get(name)
-            if commands is None:
-                unsupported.append(name + ": BPF branch/selector not qualified"); continue
-            item["selector"] = {"argument_index": 0, "values": commands, "syscall_numbers": [321]}
+            item["selector"] = {"argument_index": 0, "values": list(bpf), "syscall_numbers": [321]}
         if common_union_members and name not in common_union_members:
             unsupported.append(name + ": signal union member requires si_code selector qualification")
             continue
@@ -269,15 +340,19 @@ def generate(kernel):
     schema_path = MONITOR / "protocol/native-syscalls.json"
     schema = json.loads(schema_path.read_text())
     by_number = {row["number"]: row for row in schema["syscalls"]}
-    capture_paths = sorted((kernel / "kernel/antinomie").glob("*capture.c"))
+    capture_paths = sorted(set((kernel / "kernel/antinomie").glob("*capture.c"))
+                           | set((kernel / "kernel/antinomie").glob("capture_*.c")))
     capture_source = "\n".join(path.read_text() for path in capture_paths)
     captured = set(re.findall(r'LAYOUT\("([^"]+)"\)', capture_source))
-    for _, _, _, _, layout in re.findall(r"(INPUT_FIELD|OUTPUT_FIELD)\((\d+),\s*(\d+),\s*([^,]+),\s*\"([^\"]+)\"\)", capture_source):
-        captured.add(layout)
-    # Explicit macro rows, including the additional phase argument.
+    # Explicit macro rows (the syscall by its __NR_ name), including the
+    # additional phase argument.
+    by_name = {row["name"]: row["number"] for row in schema["syscalls"]}
     direct = []
-    for macro, nr, arg, rest, layout in re.findall(r'(INPUT_FIELD|OUTPUT_FIELD|FIXED_FIELD)\((\d+),\s*(\d+),\s*(.*?),\s*"([^"]+)"\)', capture_source):
-        direct.append((layout, int(nr), int(arg))); captured.add(layout)
+    for macro, nr, arg, rest, layout in re.findall(r'(INPUT_FIELD|OUTPUT_FIELD|FIXED_FIELD|RECORDS_FIELD)\((\w+),\s*(\d+),\s*(.*?),\s*"([^"]+)"\)', capture_source):
+        captured.add(layout)
+        number = int(nr) if nr.isdigit() else by_name.get(nr.removeprefix("__NR_"))
+        if number is not None:
+            direct.append((layout, number, int(arg)))
     sources = {str(path.relative_to(kernel)): sha(path) for path in capture_paths}
     sources["Makefile"] = sha(kernel / "Makefile")
     sources["scripts/headers_install.sh"] = sha(kernel / "scripts/headers_install.sh")
@@ -288,11 +363,13 @@ def generate(kernel):
         (overlay / "linux").mkdir()
         # Same removal as pinned scripts/headers_install.sh: compiler-only
         # declarations are not part of installed userspace ABI headers.
-        for header in (kernel / "include/uapi/linux").glob("*.h"):
+        for header in (kernel / "include/uapi/linux").rglob("*.h"):
             text = header.read_text()
             cleaned = re.sub(r"^#include <linux/compiler(?:_types)?\.h>[^\n]*$", "", text, flags=re.M)
             if cleaned != text:
-                (overlay / "linux" / header.name).write_text(cleaned)
+                target = overlay / "linux" / header.relative_to(kernel / "include/uapi/linux")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(cleaned)
                 sources[str(header.relative_to(kernel))] = sha(header)
         for directory in (kernel / "arch/x86/include/uapi/asm", kernel / "include/uapi/asm-generic"):
             for header in directory.glob("*.h"):
@@ -375,8 +452,11 @@ def generate(kernel):
                     "kind": "integer", "signed": SCALARS[base][1], "pointer": base in ("address", "robust_list_head_pointer"), "byte_order": "little"}]
                 unsupported = []
             else:
-                members, unsupported = walk_members(root_type, bpf=base == "bpf_attr",
-                    common_union_members={"si_signo", "si_errno", "si_code"} if base == "siginfo_t" else None)
+                if base == "bpf_attr":
+                    members, unsupported = bpf_attr_members(root_type)
+                else:
+                    members, unsupported = walk_members(root_type,
+                        common_union_members={"si_signo", "si_errno", "si_code"} if base == "siginfo_t" else None)
             layout_sources = {}
             for include in unit.get_includes():
                 path = Path(include.include.name)

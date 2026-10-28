@@ -29,7 +29,7 @@
       "arch/x86/include/uapi/asm/statfs.h": "c4e7415dc58cd4e35581fcf3874ae0f50b0f9dbbbb2f7ea3044ce2e1bca741a6",
       "arch/x86/include/uapi/asm/swab.h": "88df04139500a43e68fe9c469af5f6c672e50531951bba2a5952ee2d833b80b2",
       "arch/x86/include/uapi/asm/unistd.h": "a5dbdb6f1396798ef9ec26ccc9e465ffc85680060ec19849f2f8c265f33908fe",
-      "include/linux/sched.h": "0811e5502d49440c53662e39d67e1c2a45ae3426c04dcff49512b5ea8451077c",
+      "include/linux/sched.h": "c6df0a82064646450ae62475ffa6f7313d3770f8a146b42a832e2a6b2a5f5d67",
       "include/linux/socket.h": "5b1ccd2da913fc10771555e048d13c39eb80b6a78cba0b470758eea83d66c9dd",
       "include/linux/types.h": "f3687a08c45a9d0e1ca3b3e5f131097e2d753b4a24745d599657eeeceeb419e9",
       "include/uapi/asm-generic/bitsperlong.h": "fa25db88dc972820b72f8baf9cea6f39ca7f5bd0cf39182089409f6676fa90b6",
@@ -57,14 +57,18 @@
       "include/uapi/linux/capability.h": "ee832adca0d6db0866ddbf1dd3426c5a0df63901bf255bde77e4d8305cf5b5e0",
       "include/uapi/linux/const.h": "0828c9a43d421b39c97c72ca7c14cf6f8b02572b006367fb833d2763aa816af0",
       "include/uapi/linux/dqblk_xfs.h": "5fd24b79fce2c9a0de957c8611143555c4d769148a32e77bf14d763e8eb4c3c7",
+      "include/uapi/linux/dvb/osd.h": "56ce035b74d082b38e544931d3c3f231d7de845db5e262572a2732d049060b0e",
       "include/uapi/linux/eventpoll.h": "5550fcd320468d703a56172a35ab6f46dd6b1ca858bf5832df74af693ebd78fd",
       "include/uapi/linux/fcntl.h": "7986f796768373c01ae19564fa4c1c7fec1dc239eff53d42577384d6a2ea0016",
       "include/uapi/linux/fd.h": "20ef925ca1fea6f1e2b1ad4c4e9b5a953bf5839e553062c5d5d7b43152ecab6c",
       "include/uapi/linux/filter.h": "8b07bc3c8bcaa4b43318c43e588e36258bdc6a80848efce51158a274b664be7b",
+      "include/uapi/linux/fs.h": "1323921d98f3085cb09951ad63229538203a690f2515bf99a833da6291a9ea85",
+      "include/uapi/linux/fscrypt.h": "3ed3413d151eb9c07017240d0472e5a6183d7d5a9e349640e89db1a7bd03a1dc",
       "include/uapi/linux/futex.h": "8482b5e9522268e617e155fd85e1fad3137eb4c0e6672ebb34c07c4c322d5438",
       "include/uapi/linux/hpet.h": "d17a5092115ca177f810fc3971297fd003e85dab4090b105872d1a0d3300c4df",
       "include/uapi/linux/i2c-dev.h": "5779095287ae32d17f3524a7a7a2d3a1ddfe6ad1345929ec6f2f4a442ff41312",
       "include/uapi/linux/if.h": "7fb6b621b61c3e9794dfe0a3295df700c04ddaf2d2aaab4753a2426646a7b307",
+      "include/uapi/linux/io_uring.h": "1374b0b51961bad1eccb49765bb0721c7a93f7fa5f76dec5c518e1b8dbe7d469",
       "include/uapi/linux/ioctl.h": "ba73b5892de6605e6c40b151820e367dfcb98cbdb3f8f468c5ef2bd8437df873",
       "include/uapi/linux/ipc.h": "1ec1a9091e5fb18d759d469552b21413adaf353aec4cfc3f5982f67e3c63d392",
       "include/uapi/linux/ipmi.h": "6b2049e867f6dba455eb11b8b59a7dfefa0ff30a2adbee6f9cc54cbfefeabceb",
@@ -75,12 +79,17 @@
       "include/uapi/linux/keyctl.h": "cfa0df838eca565fb130ec8cc2e120f3a1d556df2fff4d61bba9805127f57cfa",
       "include/uapi/linux/kvm.h": "937c4b481877b0c41cbdf59ce9559417ef82eb6bd6ee2f7af6cae92c806a9e75",
       "include/uapi/linux/landlock.h": "a7fe4ba107aae27fe992e0aebbcef04f81c6fb1a8aa8aaf3482c34490f315daa",
+      "include/uapi/linux/limits.h": "5c047eb319a61e211442af30493b420eb9e721a1eceee552258dce0d5a26dede",
       "include/uapi/linux/lsm.h": "a19a8afbe91fbc57d8245a23c6e37ebd11b3cfc068771288beace8b24f3c09bb",
       "include/uapi/linux/mman.h": "52171ae3d85576f1f1bbc9cb1c7b77888fd8e4e44b71ab23a95e11bec4e460c8",
       "include/uapi/linux/mount.h": "416c49d3078d6a0a964aaefe2628cdb4ac8856d4a492f5ada631df76b53002db",
       "include/uapi/linux/mqueue.h": "60187352813e3ed08ddb03748dca2288d3f3fbc1c95e584507eeff24aacc58ba",
       "include/uapi/linux/msg.h": "61b1e455a586bbc52e900e2f2f6eed9966aa282601b331f7d7abc8dc77535030",
       "include/uapi/linux/netfilter.h": "8ea412bca540baad9acd5f5ef831cebd57394be513bb7e9dcb4a9e11dbd6a4fc",
+      "include/uapi/linux/netfilter/x_tables.h": "97f086c1dca65b9e3d2ad311b36fb3dd84f577d497af3a29182521181164f477",
+      "include/uapi/linux/netfilter_arp/arp_tables.h": "4cd2b06a6a60bea2cdbaef99f30c40e3b1d50f602236a48f9df9a1c85151e628",
+      "include/uapi/linux/netfilter_ipv4/ip_tables.h": "a12a9a0582dfdc16de05757e64ade492e8556879e9c473809a328826979b03e1",
+      "include/uapi/linux/netfilter_ipv6/ip6_tables.h": "fb267f259665b17a4ce9c40ce4dfa9eebb880b4214ba1c2c80c41ebcc74b896c",
       "include/uapi/linux/openat2.h": "1c694c33d2d60cb8767c34bf52e536dc9e30dc78b90cbeaf73ac9c6b2271a23c",
       "include/uapi/linux/perf_event.h": "b614027d4138f4751ba8e98b93eae50e2eb0c681fcf3f1c5d7abe8ea928f34fe",
       "include/uapi/linux/poll.h": "87ba188970e3cae1a7d6376c739a18e98d3cea1f7dba1bebdc046310f1671dc6",
@@ -115,12 +124,13 @@
       "include/uapi/linux/utsname.h": "e6a7aeffebf22a2d74b5e671ab5ff8bb99b0655cefb544bfca0acc22aa396c2a",
       "include/uapi/linux/vhost_types.h": "9cc4024747c7c779af3de4b50808bf4217657e4ceec3369d982916800caf35fb",
       "include/uapi/linux/videodev2.h": "8161dd789a5ac4cd622285ff56dc3f497bdad689e32ac609d5dc8c481e44227c",
-      "kernel/antinomie/async_capture.c": "63f727f425b3cfea6c644c3f07350f555352d2f550030a25cf48485f55f513cb",
-      "kernel/antinomie/native_capture.c": "1a9a3c79c43be495bb062688498a2db5c33a61492b8f33d6ca8d17d2bff315b1",
+      "kernel/antinomie/async_capture.c": "6fab01b9ab4b55390ad6af9ea22b5045e3f7ab4c8345541839f8e869e12b4a31",
+      "kernel/antinomie/capture_x86.c": "f69bdaabb879d0d2a28a6a21e7a95afaff26b8487a7a8557220b9925f1dcb2ca",
+      "kernel/antinomie/native_capture.c": "9c18dcbf1fd4f0fc8c5f3e51f7b30272814e6ac0f844abb43a084266f4aba5b9",
       "scripts/headers_install.sh": "67588ef43a09b582cda5105db6c8072da12b14fca3d6334093b0726542ac65e4"
     },
     "generator": "scripts/generate-filter-layouts.py",
-    "compiler_library_sha256": "a8612b1c9a7125701277f63e5616f1d1eb9c91410c4bf195878067868c927f94",
+    "compiler_library_sha256": "3baf4fb913bca3affbaec52869524bc79805cce4b0340a5996c6d78b5496f955",
     "method": "libclang target ABI over pinned UAPI and extracted pinned kernel-only user ABI records; no host libc"
   },
   "phase_policy": "Latest phase uniquely supplying an applicable member; conflicting captures in one phase are Missing",
@@ -490,6 +500,12 @@
   ],
   "layouts": [
     {
+      "layout": "linux-6.12.94/x86_64/__aio_sigset",
+      "supported": false,
+      "reason": "no qualified pinned declaration/selector mapping",
+      "arguments": []
+    },
+    {
       "layout": "linux-6.12.94/x86_64/address",
       "supported": true,
       "c_type": "unsigned long",
@@ -632,6 +648,12 @@
       ]
     },
     {
+      "layout": "linux-6.12.94/x86_64/aio_context_t",
+      "supported": false,
+      "reason": "no qualified pinned declaration/selector mapping",
+      "arguments": []
+    },
+    {
       "layout": "linux-6.12.94/x86_64/bpf_attr",
       "supported": true,
       "c_type": "union bpf_attr",
@@ -679,6 +701,25 @@
           }
         },
         {
+          "member": "attach_btf_obj_fd",
+          "bit_offset": 896,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              5
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
           "member": "attach_flags",
           "bit_offset": 96,
           "bit_size": 32,
@@ -699,8 +740,8 @@
           }
         },
         {
-          "member": "attach_type",
-          "bit_offset": 32,
+          "member": "attach_prog_fd",
+          "bit_offset": 896,
           "bit_size": 32,
           "size": 4,
           "kind": "integer",
@@ -710,8 +751,7 @@
           "selector": {
             "argument_index": 0,
             "values": [
-              8,
-              9
+              5
             ],
             "syscall_numbers": [
               321
@@ -739,8 +779,118 @@
           }
         },
         {
-          "member": "bpf_fd",
+          "member": "batch.count",
+          "bit_offset": 256,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              24,
+              25,
+              26,
+              27
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "batch.elem_flags",
+          "bit_offset": 320,
+          "bit_size": 64,
+          "size": 8,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              24,
+              25,
+              26,
+              27
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "batch.flags",
+          "bit_offset": 384,
+          "bit_size": 64,
+          "size": 8,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              24,
+              25,
+              26,
+              27
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "batch.in_batch",
           "bit_offset": 0,
+          "bit_size": 64,
+          "size": 8,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              24,
+              25,
+              26,
+              27
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "batch.keys",
+          "bit_offset": 128,
+          "bit_size": 64,
+          "size": 8,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              24,
+              25,
+              26,
+              27
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "batch.map_fd",
+          "bit_offset": 288,
           "bit_size": 32,
           "size": 4,
           "kind": "integer",
@@ -750,8 +900,54 @@
           "selector": {
             "argument_index": 0,
             "values": [
-              6,
-              7
+              24,
+              25,
+              26,
+              27
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "batch.out_batch",
+          "bit_offset": 64,
+          "bit_size": 64,
+          "size": 8,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              24,
+              25,
+              26,
+              27
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "batch.values",
+          "bit_offset": 192,
+          "bit_size": 64,
+          "size": 8,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              24,
+              25,
+              26,
+              27
             ],
             "syscall_numbers": [
               321
@@ -772,6 +968,25 @@
             "values": [
               6,
               7
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "btf",
+          "bit_offset": 0,
+          "bit_size": 64,
+          "size": 8,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              18
             ],
             "syscall_numbers": [
               321
@@ -798,6 +1013,51 @@
           }
         },
         {
+          "member": "btf_flags",
+          "bit_offset": 256,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              18
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "btf_id",
+          "bit_offset": 0,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              11,
+              12,
+              13,
+              14,
+              19,
+              23,
+              30,
+              31
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
           "member": "btf_key_type_id",
           "bit_offset": 416,
           "bit_size": 32,
@@ -810,6 +1070,120 @@
             "argument_index": 0,
             "values": [
               0
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "btf_log_buf",
+          "bit_offset": 64,
+          "bit_size": 64,
+          "size": 8,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              18
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "btf_log_level",
+          "bit_offset": 192,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              18
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "btf_log_size",
+          "bit_offset": 160,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              18
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "btf_log_true_size",
+          "bit_offset": 224,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              18
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "btf_size",
+          "bit_offset": 128,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              18
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "btf_token_fd",
+          "bit_offset": 288,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": true,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              18
             ],
             "syscall_numbers": [
               321
@@ -874,6 +1248,25 @@
           }
         },
         {
+          "member": "core_relo_rec_size",
+          "bit_offset": 1088,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              5
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
           "member": "core_relos",
           "bit_offset": 1024,
           "bit_size": 64,
@@ -893,6 +1286,25 @@
           }
         },
         {
+          "member": "enable_stats.type",
+          "bit_offset": 0,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              32
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
           "member": "expected_attach_type",
           "bit_offset": 544,
           "bit_size": 32,
@@ -905,6 +1317,26 @@
             "argument_index": 0,
             "values": [
               5
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "expected_revision",
+          "bit_offset": 192,
+          "bit_size": 64,
+          "size": 8,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              8,
+              9
             ],
             "syscall_numbers": [
               321
@@ -944,6 +1376,30 @@
             "values": [
               6,
               7
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "flags",
+          "bit_offset": 192,
+          "bit_size": 64,
+          "size": 8,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              1,
+              2,
+              3,
+              4,
+              21,
+              22
             ],
             "syscall_numbers": [
               321
@@ -1122,6 +1578,44 @@
           }
         },
         {
+          "member": "iter_create.flags",
+          "bit_offset": 32,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              33
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "iter_create.link_fd",
+          "bit_offset": 0,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              33
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
           "member": "kern_version",
           "bit_offset": 320,
           "bit_size": 32,
@@ -1134,6 +1628,30 @@
             "argument_index": 0,
             "values": [
               5
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "key",
+          "bit_offset": 64,
+          "bit_size": 64,
+          "size": 8,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              1,
+              2,
+              3,
+              4,
+              21,
+              22
             ],
             "syscall_numbers": [
               321
@@ -1236,6 +1754,279 @@
           }
         },
         {
+          "member": "link_create.attach_type",
+          "bit_offset": 64,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              28
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "link_create.flags",
+          "bit_offset": 96,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              28
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "link_create.map_fd",
+          "bit_offset": 0,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              28
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "link_create.prog_fd",
+          "bit_offset": 0,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              28
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "link_create.target_fd",
+          "bit_offset": 32,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              28
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "link_create.target_ifindex",
+          "bit_offset": 32,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              28
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "link_detach.link_fd",
+          "bit_offset": 0,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              34
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "link_id",
+          "bit_offset": 0,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              11,
+              12,
+              13,
+              14,
+              19,
+              23,
+              30,
+              31
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "link_update.flags",
+          "bit_offset": 64,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              29
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "link_update.link_fd",
+          "bit_offset": 0,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              29
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "link_update.new_map_fd",
+          "bit_offset": 32,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              29
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "link_update.new_prog_fd",
+          "bit_offset": 32,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              29
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "link_update.old_map_fd",
+          "bit_offset": 96,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              29
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "link_update.old_prog_fd",
+          "bit_offset": 96,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              29
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
           "member": "log_buf",
           "bit_offset": 256,
           "bit_size": 64,
@@ -1331,6 +2122,30 @@
           }
         },
         {
+          "member": "map_fd",
+          "bit_offset": 0,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              1,
+              2,
+              3,
+              4,
+              21,
+              22
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
           "member": "map_flags",
           "bit_offset": 128,
           "bit_size": 32,
@@ -1343,6 +2158,32 @@
             "argument_index": 0,
             "values": [
               0
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "map_id",
+          "bit_offset": 0,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              11,
+              12,
+              13,
+              14,
+              19,
+              23,
+              30,
+              31
             ],
             "syscall_numbers": [
               321
@@ -1445,6 +2286,56 @@
           }
         },
         {
+          "member": "next_id",
+          "bit_offset": 32,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              11,
+              12,
+              13,
+              14,
+              19,
+              23,
+              30,
+              31
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "next_key",
+          "bit_offset": 128,
+          "bit_size": 64,
+          "size": 8,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              1,
+              2,
+              3,
+              4,
+              21,
+              22
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
           "member": "numa_node",
           "bit_offset": 192,
           "bit_size": 32,
@@ -1457,6 +2348,32 @@
             "argument_index": 0,
             "values": [
               0
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "open_flags",
+          "bit_offset": 64,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              11,
+              12,
+              13,
+              14,
+              19,
+              23,
+              30,
+              31
             ],
             "syscall_numbers": [
               321
@@ -1504,6 +2421,63 @@
           }
         },
         {
+          "member": "prog_bind_map.flags",
+          "bit_offset": 64,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              35
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "prog_bind_map.map_fd",
+          "bit_offset": 32,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              35
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "prog_bind_map.prog_fd",
+          "bit_offset": 0,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              35
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
           "member": "prog_btf_fd",
           "bit_offset": 576,
           "bit_size": 32,
@@ -1535,6 +2509,32 @@
             "argument_index": 0,
             "values": [
               5
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "prog_id",
+          "bit_offset": 0,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              11,
+              12,
+              13,
+              14,
+              19,
+              23,
+              30,
+              31
             ],
             "syscall_numbers": [
               321
@@ -1618,6 +2618,331 @@
           }
         },
         {
+          "member": "query.attach_flags",
+          "bit_offset": 96,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              16
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "query.attach_type",
+          "bit_offset": 32,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              16
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "query.count",
+          "bit_offset": 192,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              16
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "query.link_attach_flags",
+          "bit_offset": 384,
+          "bit_size": 64,
+          "size": 8,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              16
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "query.link_ids",
+          "bit_offset": 320,
+          "bit_size": 64,
+          "size": 8,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              16
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "query.prog_attach_flags",
+          "bit_offset": 256,
+          "bit_size": 64,
+          "size": 8,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              16
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "query.prog_cnt",
+          "bit_offset": 192,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              16
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "query.prog_ids",
+          "bit_offset": 128,
+          "bit_size": 64,
+          "size": 8,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              16
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "query.query_flags",
+          "bit_offset": 64,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              16
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "query.revision",
+          "bit_offset": 448,
+          "bit_size": 64,
+          "size": 8,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              16
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "query.target_fd",
+          "bit_offset": 0,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              16
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "query.target_ifindex",
+          "bit_offset": 0,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              16
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "raw_tracepoint.cookie",
+          "bit_offset": 128,
+          "bit_size": 64,
+          "size": 8,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              17
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "raw_tracepoint.name",
+          "bit_offset": 0,
+          "bit_size": 64,
+          "size": 8,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              17
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "raw_tracepoint.prog_fd",
+          "bit_offset": 64,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              17
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "relative_fd",
+          "bit_offset": 160,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              8,
+              9
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "relative_id",
+          "bit_offset": 160,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              8,
+              9
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
           "member": "replace_bpf_fd",
           "bit_offset": 128,
           "bit_size": 32,
@@ -1629,7 +2954,34 @@
           "selector": {
             "argument_index": 0,
             "values": [
-              8
+              8,
+              9
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "start_id",
+          "bit_offset": 0,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              11,
+              12,
+              13,
+              14,
+              19,
+              23,
+              30,
+              31
             ],
             "syscall_numbers": [
               321
@@ -1650,6 +3002,311 @@
             "values": [
               8,
               9
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "target_ifindex",
+          "bit_offset": 0,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              8,
+              9
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "task_fd_query.buf",
+          "bit_offset": 128,
+          "bit_size": 64,
+          "size": 8,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              20
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "task_fd_query.buf_len",
+          "bit_offset": 96,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              20
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "task_fd_query.fd",
+          "bit_offset": 32,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              20
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "task_fd_query.fd_type",
+          "bit_offset": 224,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              20
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "task_fd_query.flags",
+          "bit_offset": 64,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              20
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "task_fd_query.pid",
+          "bit_offset": 0,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              20
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "task_fd_query.probe_addr",
+          "bit_offset": 320,
+          "bit_size": 64,
+          "size": 8,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              20
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "task_fd_query.probe_offset",
+          "bit_offset": 256,
+          "bit_size": 64,
+          "size": 8,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              20
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "task_fd_query.prog_id",
+          "bit_offset": 192,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              20
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "test.batch_size",
+          "bit_offset": 576,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              10
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "test.cpu",
+          "bit_offset": 544,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              10
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "test.ctx_in",
+          "bit_offset": 384,
+          "bit_size": 64,
+          "size": 8,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              10
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "test.ctx_out",
+          "bit_offset": 448,
+          "bit_size": 64,
+          "size": 8,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              10
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "test.ctx_size_in",
+          "bit_offset": 320,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              10
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "test.ctx_size_out",
+          "bit_offset": 352,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              10
             ],
             "syscall_numbers": [
               321
@@ -1752,6 +3409,25 @@
           }
         },
         {
+          "member": "test.flags",
+          "bit_offset": 512,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              10
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
           "member": "test.prog_fd",
           "bit_offset": 0,
           "bit_size": 32,
@@ -1809,6 +3485,68 @@
           }
         },
         {
+          "member": "token_create.bpffs_fd",
+          "bit_offset": 32,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              36
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "token_create.flags",
+          "bit_offset": 0,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              36
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
+          "member": "value",
+          "bit_offset": 128,
+          "bit_size": 64,
+          "size": 8,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little",
+          "selector": {
+            "argument_index": 0,
+            "values": [
+              1,
+              2,
+              3,
+              4,
+              21,
+              22
+            ],
+            "syscall_numbers": [
+              321
+            ]
+          }
+        },
+        {
           "member": "value_size",
           "bit_offset": 64,
           "bit_size": 32,
@@ -1848,224 +3586,36 @@
         }
       ],
       "unsupported_members": [
-        ": BPF branch/selector not qualified",
-        "addrs: BPF branch/selector not qualified",
-        "attach_btf_obj_fd: BPF branch/selector not qualified",
-        "attach_prog_fd: BPF branch/selector not qualified",
-        "batch.count: BPF branch/selector not qualified",
-        "batch.elem_flags: BPF branch/selector not qualified",
-        "batch.flags: BPF branch/selector not qualified",
-        "batch.in_batch: BPF branch/selector not qualified",
-        "batch.keys: BPF branch/selector not qualified",
-        "batch.map_fd: BPF branch/selector not qualified",
-        "batch.out_batch: BPF branch/selector not qualified",
-        "batch.values: BPF branch/selector not qualified",
-        "batch_size: BPF branch/selector not qualified",
-        "bpf_cookie: BPF branch/selector not qualified",
-        "bpffs_fd: BPF branch/selector not qualified",
-        "btf: BPF branch/selector not qualified",
-        "btf_flags: BPF branch/selector not qualified",
-        "btf_id: BPF branch/selector not qualified",
-        "btf_log_buf: BPF branch/selector not qualified",
-        "btf_log_level: BPF branch/selector not qualified",
-        "btf_log_size: BPF branch/selector not qualified",
-        "btf_log_true_size: BPF branch/selector not qualified",
-        "btf_size: BPF branch/selector not qualified",
-        "btf_token_fd: BPF branch/selector not qualified",
-        "buf: BPF branch/selector not qualified",
-        "buf_len: BPF branch/selector not qualified",
-        "cnt: BPF branch/selector not qualified",
-        "cookie: BPF branch/selector not qualified",
-        "cookies: BPF branch/selector not qualified",
-        "core_relo_rec_size: BPF branch/selector not qualified",
-        "count: BPF branch/selector not qualified",
-        "cpu: BPF branch/selector not qualified",
-        "ctx_in: BPF branch/selector not qualified",
-        "ctx_out: BPF branch/selector not qualified",
-        "ctx_size_in: BPF branch/selector not qualified",
-        "ctx_size_out: BPF branch/selector not qualified",
-        "data_in: BPF branch/selector not qualified",
-        "data_out: BPF branch/selector not qualified",
-        "data_size_in: BPF branch/selector not qualified",
-        "data_size_out: BPF branch/selector not qualified",
-        "duration: BPF branch/selector not qualified",
-        "elem_flags: BPF branch/selector not qualified",
-        "enable_stats.type: BPF branch/selector not qualified",
-        "expected_revision: BPF branch/selector not qualified",
-        "fd: BPF branch/selector not qualified",
-        "fd_type: BPF branch/selector not qualified",
-        "flags: BPF branch/selector not qualified",
-        "hooknum: BPF branch/selector not qualified",
-        "in_batch: BPF branch/selector not qualified",
-        "info: BPF branch/selector not qualified",
-        "info_len: BPF branch/selector not qualified",
-        "iter_create.flags: BPF branch/selector not qualified",
-        "iter_create.link_fd: BPF branch/selector not qualified",
-        "iter_info: BPF branch/selector not qualified",
-        "iter_info_len: BPF branch/selector not qualified",
-        "key: BPF branch/selector not qualified",
-        "keys: BPF branch/selector not qualified",
-        "kprobe_multi.addrs: BPF branch/selector not qualified",
-        "kprobe_multi.cnt: BPF branch/selector not qualified",
-        "kprobe_multi.cookies: BPF branch/selector not qualified",
-        "kprobe_multi.flags: BPF branch/selector not qualified",
-        "kprobe_multi.syms: BPF branch/selector not qualified",
-        "link_attach_flags: BPF branch/selector not qualified",
-        "link_create.addrs: BPF branch/selector not qualified",
-        "link_create.attach_type: BPF branch/selector not qualified",
-        "link_create.bpf_cookie: BPF branch/selector not qualified",
-        "link_create.cnt: BPF branch/selector not qualified",
-        "link_create.cookie: BPF branch/selector not qualified",
-        "link_create.cookies: BPF branch/selector not qualified",
-        "link_create.expected_revision: BPF branch/selector not qualified",
-        "link_create.flags: BPF branch/selector not qualified",
-        "link_create.hooknum: BPF branch/selector not qualified",
-        "link_create.iter_info: BPF branch/selector not qualified",
-        "link_create.iter_info_len: BPF branch/selector not qualified",
-        "link_create.kprobe_multi.addrs: BPF branch/selector not qualified",
-        "link_create.kprobe_multi.cnt: BPF branch/selector not qualified",
-        "link_create.kprobe_multi.cookies: BPF branch/selector not qualified",
-        "link_create.kprobe_multi.flags: BPF branch/selector not qualified",
-        "link_create.kprobe_multi.syms: BPF branch/selector not qualified",
-        "link_create.map_fd: BPF branch/selector not qualified",
-        "link_create.netfilter.flags: BPF branch/selector not qualified",
-        "link_create.netfilter.hooknum: BPF branch/selector not qualified",
-        "link_create.netfilter.pf: BPF branch/selector not qualified",
-        "link_create.netfilter.priority: BPF branch/selector not qualified",
-        "link_create.netkit.expected_revision: BPF branch/selector not qualified",
-        "link_create.netkit.relative_fd: BPF branch/selector not qualified",
-        "link_create.netkit.relative_id: BPF branch/selector not qualified",
-        "link_create.offsets: BPF branch/selector not qualified",
-        "link_create.path: BPF branch/selector not qualified",
-        "link_create.perf_event.bpf_cookie: BPF branch/selector not qualified",
-        "link_create.pf: BPF branch/selector not qualified",
-        "link_create.pid: BPF branch/selector not qualified",
-        "link_create.priority: BPF branch/selector not qualified",
-        "link_create.prog_fd: BPF branch/selector not qualified",
-        "link_create.ref_ctr_offsets: BPF branch/selector not qualified",
-        "link_create.relative_fd: BPF branch/selector not qualified",
-        "link_create.relative_id: BPF branch/selector not qualified",
-        "link_create.syms: BPF branch/selector not qualified",
-        "link_create.target_btf_id: BPF branch/selector not qualified",
-        "link_create.target_fd: BPF branch/selector not qualified",
-        "link_create.target_ifindex: BPF branch/selector not qualified",
-        "link_create.tcx.expected_revision: BPF branch/selector not qualified",
-        "link_create.tcx.relative_fd: BPF branch/selector not qualified",
-        "link_create.tcx.relative_id: BPF branch/selector not qualified",
-        "link_create.tracing.cookie: BPF branch/selector not qualified",
-        "link_create.tracing.target_btf_id: BPF branch/selector not qualified",
-        "link_create.uprobe_multi.cnt: BPF branch/selector not qualified",
-        "link_create.uprobe_multi.cookies: BPF branch/selector not qualified",
-        "link_create.uprobe_multi.flags: BPF branch/selector not qualified",
-        "link_create.uprobe_multi.offsets: BPF branch/selector not qualified",
-        "link_create.uprobe_multi.path: BPF branch/selector not qualified",
-        "link_create.uprobe_multi.pid: BPF branch/selector not qualified",
-        "link_create.uprobe_multi.ref_ctr_offsets: BPF branch/selector not qualified",
-        "link_detach.link_fd: BPF branch/selector not qualified",
-        "link_fd: BPF branch/selector not qualified",
-        "link_id: BPF branch/selector not qualified",
-        "link_ids: BPF branch/selector not qualified",
-        "link_update.flags: BPF branch/selector not qualified",
-        "link_update.link_fd: BPF branch/selector not qualified",
-        "link_update.new_map_fd: BPF branch/selector not qualified",
-        "link_update.new_prog_fd: BPF branch/selector not qualified",
-        "link_update.old_map_fd: BPF branch/selector not qualified",
-        "link_update.old_prog_fd: BPF branch/selector not qualified",
-        "map_fd: BPF branch/selector not qualified",
-        "map_id: BPF branch/selector not qualified",
-        "name: BPF branch/selector not qualified",
-        "netfilter.flags: BPF branch/selector not qualified",
-        "netfilter.hooknum: BPF branch/selector not qualified",
-        "netfilter.pf: BPF branch/selector not qualified",
-        "netfilter.priority: BPF branch/selector not qualified",
-        "netkit.expected_revision: BPF branch/selector not qualified",
-        "netkit.relative_fd: BPF branch/selector not qualified",
-        "netkit.relative_id: BPF branch/selector not qualified",
-        "new_map_fd: BPF branch/selector not qualified",
-        "new_prog_fd: BPF branch/selector not qualified",
-        "next_id: BPF branch/selector not qualified",
-        "next_key: BPF branch/selector not qualified",
-        "offsets: BPF branch/selector not qualified",
-        "old_map_fd: BPF branch/selector not qualified",
-        "old_prog_fd: BPF branch/selector not qualified",
-        "open_flags: BPF branch/selector not qualified",
-        "out_batch: BPF branch/selector not qualified",
-        "path: BPF branch/selector not qualified",
-        "perf_event.bpf_cookie: BPF branch/selector not qualified",
-        "pf: BPF branch/selector not qualified",
-        "pid: BPF branch/selector not qualified",
-        "priority: BPF branch/selector not qualified",
-        "probe_addr: BPF branch/selector not qualified",
-        "probe_offset: BPF branch/selector not qualified",
-        "prog_attach_flags: BPF branch/selector not qualified",
-        "prog_bind_map.flags: BPF branch/selector not qualified",
-        "prog_bind_map.map_fd: BPF branch/selector not qualified",
-        "prog_bind_map.prog_fd: BPF branch/selector not qualified",
-        "prog_cnt: BPF branch/selector not qualified",
-        "prog_fd: BPF branch/selector not qualified",
-        "prog_id: BPF branch/selector not qualified",
-        "prog_ids: BPF branch/selector not qualified",
-        "query.: BPF branch/selector not qualified",
-        "query.attach_flags: BPF branch/selector not qualified",
-        "query.attach_type: BPF branch/selector not qualified",
-        "query.count: BPF branch/selector not qualified",
-        "query.link_attach_flags: BPF branch/selector not qualified",
-        "query.link_ids: BPF branch/selector not qualified",
-        "query.prog_attach_flags: BPF branch/selector not qualified",
-        "query.prog_cnt: BPF branch/selector not qualified",
-        "query.prog_ids: BPF branch/selector not qualified",
-        "query.query_flags: BPF branch/selector not qualified",
-        "query.revision: BPF branch/selector not qualified",
-        "query.target_fd: BPF branch/selector not qualified",
-        "query.target_ifindex: BPF branch/selector not qualified",
-        "query_flags: BPF branch/selector not qualified",
-        "raw_tracepoint.: BPF branch/selector not qualified",
-        "raw_tracepoint.cookie: BPF branch/selector not qualified",
-        "raw_tracepoint.name: BPF branch/selector not qualified",
-        "raw_tracepoint.prog_fd: BPF branch/selector not qualified",
-        "ref_ctr_offsets: BPF branch/selector not qualified",
-        "relative_fd: BPF branch/selector not qualified",
-        "relative_id: BPF branch/selector not qualified",
-        "repeat: BPF branch/selector not qualified",
-        "retval: BPF branch/selector not qualified",
-        "revision: BPF branch/selector not qualified",
-        "start_id: BPF branch/selector not qualified",
-        "syms: BPF branch/selector not qualified",
-        "target_btf_id: BPF branch/selector not qualified",
-        "target_ifindex: BPF branch/selector not qualified",
-        "task_fd_query.buf: BPF branch/selector not qualified",
-        "task_fd_query.buf_len: BPF branch/selector not qualified",
-        "task_fd_query.fd: BPF branch/selector not qualified",
-        "task_fd_query.fd_type: BPF branch/selector not qualified",
-        "task_fd_query.flags: BPF branch/selector not qualified",
-        "task_fd_query.pid: BPF branch/selector not qualified",
-        "task_fd_query.probe_addr: BPF branch/selector not qualified",
-        "task_fd_query.probe_offset: BPF branch/selector not qualified",
-        "task_fd_query.prog_id: BPF branch/selector not qualified",
-        "tcx.expected_revision: BPF branch/selector not qualified",
-        "tcx.relative_fd: BPF branch/selector not qualified",
-        "tcx.relative_id: BPF branch/selector not qualified",
-        "test.batch_size: BPF branch/selector not qualified",
-        "test.cpu: BPF branch/selector not qualified",
-        "test.ctx_in: BPF branch/selector not qualified",
-        "test.ctx_out: BPF branch/selector not qualified",
-        "test.ctx_size_in: BPF branch/selector not qualified",
-        "test.ctx_size_out: BPF branch/selector not qualified",
-        "test.flags: BPF branch/selector not qualified",
-        "token_create.bpffs_fd: BPF branch/selector not qualified",
-        "token_create.flags: BPF branch/selector not qualified",
-        "tracing.cookie: BPF branch/selector not qualified",
-        "tracing.target_btf_id: BPF branch/selector not qualified",
-        "type: BPF branch/selector not qualified",
-        "uprobe_multi.cnt: BPF branch/selector not qualified",
-        "uprobe_multi.cookies: BPF branch/selector not qualified",
-        "uprobe_multi.flags: BPF branch/selector not qualified",
-        "uprobe_multi.offsets: BPF branch/selector not qualified",
-        "uprobe_multi.path: BPF branch/selector not qualified",
-        "uprobe_multi.pid: BPF branch/selector not qualified",
-        "uprobe_multi.ref_ctr_offsets: BPF branch/selector not qualified",
-        "value: BPF branch/selector not qualified",
-        "values: BPF branch/selector not qualified"
+        "link_create.iter_info: BPF_LINK_CREATE member selected by attach_type, not qualified",
+        "link_create.iter_info_len: BPF_LINK_CREATE member selected by attach_type, not qualified",
+        "link_create.kprobe_multi.addrs: BPF_LINK_CREATE member selected by attach_type, not qualified",
+        "link_create.kprobe_multi.cnt: BPF_LINK_CREATE member selected by attach_type, not qualified",
+        "link_create.kprobe_multi.cookies: BPF_LINK_CREATE member selected by attach_type, not qualified",
+        "link_create.kprobe_multi.flags: BPF_LINK_CREATE member selected by attach_type, not qualified",
+        "link_create.kprobe_multi.syms: BPF_LINK_CREATE member selected by attach_type, not qualified",
+        "link_create.netfilter.flags: BPF_LINK_CREATE member selected by attach_type, not qualified",
+        "link_create.netfilter.hooknum: BPF_LINK_CREATE member selected by attach_type, not qualified",
+        "link_create.netfilter.pf: BPF_LINK_CREATE member selected by attach_type, not qualified",
+        "link_create.netfilter.priority: BPF_LINK_CREATE member selected by attach_type, not qualified",
+        "link_create.netkit.expected_revision: BPF_LINK_CREATE member selected by attach_type, not qualified",
+        "link_create.netkit.relative_fd: BPF_LINK_CREATE member selected by attach_type, not qualified",
+        "link_create.netkit.relative_id: BPF_LINK_CREATE member selected by attach_type, not qualified",
+        "link_create.perf_event.bpf_cookie: BPF_LINK_CREATE member selected by attach_type, not qualified",
+        "link_create.target_btf_id: BPF_LINK_CREATE member selected by attach_type, not qualified",
+        "link_create.tcx.expected_revision: BPF_LINK_CREATE member selected by attach_type, not qualified",
+        "link_create.tcx.relative_fd: BPF_LINK_CREATE member selected by attach_type, not qualified",
+        "link_create.tcx.relative_id: BPF_LINK_CREATE member selected by attach_type, not qualified",
+        "link_create.tracing.cookie: BPF_LINK_CREATE member selected by attach_type, not qualified",
+        "link_create.tracing.target_btf_id: BPF_LINK_CREATE member selected by attach_type, not qualified",
+        "link_create.uprobe_multi.cnt: BPF_LINK_CREATE member selected by attach_type, not qualified",
+        "link_create.uprobe_multi.cookies: BPF_LINK_CREATE member selected by attach_type, not qualified",
+        "link_create.uprobe_multi.flags: BPF_LINK_CREATE member selected by attach_type, not qualified",
+        "link_create.uprobe_multi.offsets: BPF_LINK_CREATE member selected by attach_type, not qualified",
+        "link_create.uprobe_multi.path: BPF_LINK_CREATE member selected by attach_type, not qualified",
+        "link_create.uprobe_multi.pid: BPF_LINK_CREATE member selected by attach_type, not qualified",
+        "link_create.uprobe_multi.ref_ctr_offsets: BPF_LINK_CREATE member selected by attach_type, not qualified",
+        "query.(unnamed bit field): padding, not a semantic value",
+        "raw_tracepoint.(unnamed bit field): padding, not a semantic value"
       ],
       "sources": [
         "arch/x86/include/uapi/asm/bitsperlong.h",
@@ -3068,6 +4618,18 @@
           "name": "msg"
         }
       ]
+    },
+    {
+      "layout": "linux-6.12.94/x86_64/cpumask",
+      "supported": false,
+      "reason": "no qualified pinned declaration/selector mapping",
+      "arguments": []
+    },
+    {
+      "layout": "linux-6.12.94/x86_64/desc_struct[]",
+      "supported": false,
+      "reason": "no qualified pinned declaration/selector mapping",
+      "arguments": []
     },
     {
       "layout": "linux-6.12.94/x86_64/epoll_event",
@@ -4289,6 +5851,52 @@
       ]
     },
     {
+      "layout": "linux-6.12.94/x86_64/gid_t[]",
+      "supported": true,
+      "c_type": "__u32",
+      "stride": 4,
+      "array": true,
+      "array_count": null,
+      "members": [
+        {
+          "member": "value",
+          "bit_offset": 0,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        }
+      ],
+      "unsupported_members": [],
+      "sources": [
+        "arch/x86/include/uapi/asm/bitsperlong.h",
+        "arch/x86/include/uapi/asm/posix_types.h",
+        "arch/x86/include/uapi/asm/posix_types_64.h",
+        "include/uapi/asm-generic/bitsperlong.h",
+        "include/uapi/asm-generic/int-ll64.h",
+        "include/uapi/asm-generic/posix_types.h",
+        "include/uapi/asm-generic/types.h",
+        "include/uapi/linux/posix_types.h",
+        "include/uapi/linux/stddef.h",
+        "include/uapi/linux/time_types.h",
+        "include/uapi/linux/types.h"
+      ],
+      "arguments": [
+        {
+          "syscall_number": 115,
+          "argument_index": 1,
+          "name": "grouplist"
+        },
+        {
+          "syscall_number": 116,
+          "argument_index": 1,
+          "name": "grouplist"
+        }
+      ]
+    },
+    {
       "layout": "linux-6.12.94/x86_64/if_dqblk",
       "supported": true,
       "c_type": "struct if_dqblk",
@@ -5018,6 +6626,326 @@
           "name": "node"
         }
       ]
+    },
+    {
+      "layout": "linux-6.12.94/x86_64/io_event",
+      "supported": false,
+      "reason": "no qualified pinned declaration/selector mapping",
+      "arguments": []
+    },
+    {
+      "layout": "linux-6.12.94/x86_64/io_event[]",
+      "supported": false,
+      "reason": "no qualified pinned declaration/selector mapping",
+      "arguments": []
+    },
+    {
+      "layout": "linux-6.12.94/x86_64/io_rings",
+      "supported": false,
+      "reason": "no qualified pinned declaration/selector mapping",
+      "arguments": []
+    },
+    {
+      "layout": "linux-6.12.94/x86_64/io_uring_buf[]",
+      "supported": false,
+      "reason": "no qualified pinned declaration/selector mapping",
+      "arguments": []
+    },
+    {
+      "layout": "linux-6.12.94/x86_64/io_uring_getevents_arg",
+      "supported": false,
+      "reason": "no qualified pinned declaration/selector mapping",
+      "arguments": []
+    },
+    {
+      "layout": "linux-6.12.94/x86_64/io_uring_params",
+      "supported": true,
+      "c_type": "struct io_uring_params",
+      "stride": 120,
+      "array": false,
+      "array_count": null,
+      "members": [
+        {
+          "member": "cq_entries",
+          "bit_offset": 32,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "cq_off.cqes",
+          "bit_offset": 800,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "cq_off.flags",
+          "bit_offset": 832,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "cq_off.head",
+          "bit_offset": 640,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "cq_off.overflow",
+          "bit_offset": 768,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "cq_off.ring_entries",
+          "bit_offset": 736,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "cq_off.ring_mask",
+          "bit_offset": 704,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "cq_off.tail",
+          "bit_offset": 672,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "cq_off.user_addr",
+          "bit_offset": 896,
+          "bit_size": 64,
+          "size": 8,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "features",
+          "bit_offset": 160,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "flags",
+          "bit_offset": 64,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "sq_entries",
+          "bit_offset": 0,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "sq_off.array",
+          "bit_offset": 512,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "sq_off.dropped",
+          "bit_offset": 480,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "sq_off.flags",
+          "bit_offset": 448,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "sq_off.head",
+          "bit_offset": 320,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "sq_off.ring_entries",
+          "bit_offset": 416,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "sq_off.ring_mask",
+          "bit_offset": 384,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "sq_off.tail",
+          "bit_offset": 352,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "sq_off.user_addr",
+          "bit_offset": 576,
+          "bit_size": 64,
+          "size": 8,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "sq_thread_cpu",
+          "bit_offset": 96,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "sq_thread_idle",
+          "bit_offset": 128,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "wq_fd",
+          "bit_offset": 192,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        }
+      ],
+      "unsupported_members": [
+        "cq_off.resv1: reserved/padding, not a semantic value",
+        "resv: reserved/padding, not a semantic value",
+        "sq_off.resv1: reserved/padding, not a semantic value"
+      ],
+      "sources": [
+        "arch/x86/include/uapi/asm/bitsperlong.h",
+        "arch/x86/include/uapi/asm/posix_types.h",
+        "arch/x86/include/uapi/asm/posix_types_64.h",
+        "include/uapi/asm-generic/bitsperlong.h",
+        "include/uapi/asm-generic/int-ll64.h",
+        "include/uapi/asm-generic/ioctl.h",
+        "include/uapi/asm-generic/posix_types.h",
+        "include/uapi/asm-generic/types.h",
+        "include/uapi/linux/fs.h",
+        "include/uapi/linux/fscrypt.h",
+        "include/uapi/linux/io_uring.h",
+        "include/uapi/linux/ioctl.h",
+        "include/uapi/linux/limits.h",
+        "include/uapi/linux/mount.h",
+        "include/uapi/linux/posix_types.h",
+        "include/uapi/linux/stddef.h",
+        "include/uapi/linux/time_types.h",
+        "include/uapi/linux/types.h"
+      ],
+      "arguments": [
+        {
+          "syscall_number": 425,
+          "argument_index": 1,
+          "name": "p"
+        }
+      ]
+    },
+    {
+      "layout": "linux-6.12.94/x86_64/io_uring_probe",
+      "supported": false,
+      "reason": "no qualified pinned declaration/selector mapping",
+      "arguments": []
+    },
+    {
+      "layout": "linux-6.12.94/x86_64/io_uring_sqe[]",
+      "supported": false,
+      "reason": "no qualified pinned declaration/selector mapping",
+      "arguments": []
+    },
+    {
+      "layout": "linux-6.12.94/x86_64/iocb",
+      "supported": false,
+      "reason": "no qualified pinned declaration/selector mapping",
+      "arguments": []
     },
     {
       "layout": "linux-6.12.94/x86_64/iovec",
@@ -6211,6 +8139,30 @@
           "syscall_number": 55,
           "argument_index": 3,
           "name": "optval"
+        }
+      ]
+    },
+    {
+      "layout": "linux-6.12.94/x86_64/linux_dirent64[]",
+      "supported": false,
+      "reason": "no qualified pinned declaration/selector mapping",
+      "arguments": [
+        {
+          "syscall_number": 217,
+          "argument_index": 1,
+          "name": "dirent"
+        }
+      ]
+    },
+    {
+      "layout": "linux-6.12.94/x86_64/linux_dirent[]",
+      "supported": false,
+      "reason": "no qualified pinned declaration/selector mapping",
+      "arguments": [
+        {
+          "syscall_number": 78,
+          "argument_index": 1,
+          "name": "dirent"
         }
       ]
     },
@@ -8233,6 +10185,18 @@
           "name": "node"
         }
       ]
+    },
+    {
+      "layout": "linux-6.12.94/x86_64/pointer",
+      "supported": false,
+      "reason": "no qualified pinned declaration/selector mapping",
+      "arguments": []
+    },
+    {
+      "layout": "linux-6.12.94/x86_64/pointer[]",
+      "supported": false,
+      "reason": "no qualified pinned declaration/selector mapping",
+      "arguments": []
     },
     {
       "layout": "linux-6.12.94/x86_64/pollfd[]",
@@ -14686,146 +16650,6 @@
       "array_count": null,
       "members": [
         {
-          "member": "",
-          "bit_offset": 32,
-          "bit_size": 32,
-          "size": 4,
-          "kind": "integer",
-          "signed": true,
-          "pointer": false,
-          "byte_order": "little"
-        },
-        {
-          "member": "",
-          "bit_offset": 352,
-          "bit_size": 32,
-          "size": 4,
-          "kind": "integer",
-          "signed": true,
-          "pointer": false,
-          "byte_order": "little"
-        },
-        {
-          "member": "",
-          "bit_offset": 928,
-          "bit_size": 32,
-          "size": 4,
-          "kind": "integer",
-          "signed": true,
-          "pointer": false,
-          "byte_order": "little"
-        },
-        {
-          "member": "",
-          "bit_offset": 1312,
-          "bit_size": 32,
-          "size": 4,
-          "kind": "integer",
-          "signed": true,
-          "pointer": false,
-          "byte_order": "little"
-        },
-        {
-          "member": "",
-          "bit_offset": 1344,
-          "bit_size": 32,
-          "size": 4,
-          "kind": "integer",
-          "signed": true,
-          "pointer": false,
-          "byte_order": "little"
-        },
-        {
-          "member": "",
-          "bit_offset": 1376,
-          "bit_size": 32,
-          "size": 4,
-          "kind": "integer",
-          "signed": true,
-          "pointer": false,
-          "byte_order": "little"
-        },
-        {
-          "member": "",
-          "bit_offset": 1408,
-          "bit_size": 32,
-          "size": 4,
-          "kind": "integer",
-          "signed": true,
-          "pointer": false,
-          "byte_order": "little"
-        },
-        {
-          "member": "",
-          "bit_offset": 1440,
-          "bit_size": 32,
-          "size": 4,
-          "kind": "integer",
-          "signed": true,
-          "pointer": false,
-          "byte_order": "little"
-        },
-        {
-          "member": "",
-          "bit_offset": 1472,
-          "bit_size": 32,
-          "size": 4,
-          "kind": "integer",
-          "signed": true,
-          "pointer": false,
-          "byte_order": "little"
-        },
-        {
-          "member": "",
-          "bit_offset": 1504,
-          "bit_size": 32,
-          "size": 4,
-          "kind": "integer",
-          "signed": true,
-          "pointer": false,
-          "byte_order": "little"
-        },
-        {
-          "member": "",
-          "bit_offset": 1536,
-          "bit_size": 32,
-          "size": 4,
-          "kind": "integer",
-          "signed": true,
-          "pointer": false,
-          "byte_order": "little"
-        },
-        {
-          "member": "",
-          "bit_offset": 1568,
-          "bit_size": 32,
-          "size": 4,
-          "kind": "integer",
-          "signed": true,
-          "pointer": false,
-          "byte_order": "little"
-        },
-        {
-          "member": "",
-          "bit_offset": 1600,
-          "bit_size": 32,
-          "size": 4,
-          "kind": "integer",
-          "signed": true,
-          "pointer": false,
-          "byte_order": "little"
-        },
-        {
-          "member": "",
-          "bit_offset": 1632,
-          "bit_size": 32,
-          "size": 4,
-          "kind": "integer",
-          "signed": true,
-          "pointer": false,
-          "byte_order": "little"
-        },
-        {
           "member": "calcnt",
           "bit_offset": 1088,
           "bit_size": 64,
@@ -15036,7 +16860,9 @@
           "byte_order": "little"
         }
       ],
-      "unsupported_members": [],
+      "unsupported_members": [
+        "(unnamed bit field): padding, not a semantic value"
+      ],
       "sources": [
         "arch/x86/include/uapi/asm/bitsperlong.h",
         "arch/x86/include/uapi/asm/posix_types.h",
@@ -17848,6 +19674,60 @@
       "supported": false,
       "reason": "no qualified pinned declaration/selector mapping",
       "arguments": []
+    },
+    {
+      "layout": "linux-6.12.94/x86_64/xt_counters_info",
+      "supported": true,
+      "c_type": "struct xt_counters_info",
+      "stride": 40,
+      "array": false,
+      "array_count": null,
+      "members": [
+        {
+          "member": "name",
+          "bit_offset": 0,
+          "bit_size": 256,
+          "size": 32,
+          "kind": "text",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "num_counters",
+          "bit_offset": 256,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        }
+      ],
+      "unsupported_members": [
+        "counters: incomplete or nonaddressable field"
+      ],
+      "sources": [
+        "arch/x86/include/uapi/asm/bitsperlong.h",
+        "arch/x86/include/uapi/asm/posix_types.h",
+        "arch/x86/include/uapi/asm/posix_types_64.h",
+        "include/uapi/asm-generic/bitsperlong.h",
+        "include/uapi/asm-generic/int-ll64.h",
+        "include/uapi/asm-generic/posix_types.h",
+        "include/uapi/asm-generic/types.h",
+        "include/uapi/linux/const.h",
+        "include/uapi/linux/netfilter/x_tables.h",
+        "include/uapi/linux/posix_types.h",
+        "include/uapi/linux/stddef.h",
+        "include/uapi/linux/types.h"
+      ],
+      "arguments": [
+        {
+          "syscall_number": 54,
+          "argument_index": 3,
+          "name": "optval"
+        }
+      ]
     }
   ]
 }
