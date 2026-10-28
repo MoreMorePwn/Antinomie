@@ -35,6 +35,7 @@ static const struct area areas[] = {
     {"file_io", "user", area_file_io},
     {"file_meta", "user", area_file_meta},
     {"file_pos", "user", area_file_pos},
+    {"file_mmap", "user", area_file_mmap},
     {"paths", "user", area_paths},
     {"xattr_splice", "user", area_xattr_splice},
     {"events", "user", area_events},

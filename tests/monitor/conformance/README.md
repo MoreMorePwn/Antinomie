@@ -72,7 +72,7 @@ throughput), the matrix, `render/`, and on a golden mismatch
 
 | Group | Program | User | What it covers |
 |---|---|---|---|
-| `user` | `trace-fixture user` | 1000 | Every user area: files, file positions and in-kernel copies, paths, xattr/splice, events, network (loopback, AF_UNIX), memory, process, identity, signals, time, futex, SysV/POSIX IPC, keys, AIO, io_uring and the refused administrative calls |
+| `user` | `trace-fixture user` | 1000 | Every user area: files, file positions and in-kernel copies, writes through shared file mappings, paths, xattr/splice, events, network (loopback, AF_UNIX), memory, process, identity, signals, time, futex, SysV/POSIX IPC, keys, AIO, io_uring and the refused administrative calls |
 | `root` | `trace-fixture root` | 0 | The privileged success variants, each made harmless (private namespaces, children, values set to what they were) |
 | `threads` | `trace-fixture threads` | 1000 | 8 pinned threads × 200 calls and 32 short-lived processes: identity and ordering under concurrency |
 | `ring-private`, `ring-shared`, `ring-sqpoll` | `trace-fixture ring-…` | 1000 | Who wrote an io_uring entry, one run each (`trace/fixture/attribution.c`): a ring one process maps is complete (ASYNC_COMPLETE, every request `async.flags` bit 3, no note); a ring a forked child still maps and an SQPOLL ring are OBSERVATION_INCOMPLETE (bit 1) with the attribution note, never loss |
@@ -109,6 +109,8 @@ ANT_EXPECT {"seq":12,"label":"openat.cwd","nr":257,"name":"openat","pid":116,"ti
 | `pos`, `nopos` | Where a read or write of a seekable file began and its length (`file.position`, revision 18), or that the call has no position (a pipe) |
 | `before` | The label of a write the file system applied after this one (two processes wrote the same range at once and the file's bytes show which was last): this write's `file.position` write order must be the lower |
 | `copy` | What an in-kernel copy or allocation moved (`file.copy`): kind, length, fallocate mode, the bytes carried, and each end's device, inode, mode and offset (and the destination's size) as the program saw them with fstat |
+| `mapped` | Pages of a file written through a shared mapping that the call wrote back or dropped dirty (`lifecycle.file_mapped`): cause (`WRITEBACK`, `UNMAP`), the file's device and inode, offset, length, bytes copied, why the rest is missing (`BUDGET`) and an FNV-1a hash of the copied bytes; the call must carry exactly these records, each with a write order |
+| `hash` | The guest's hash of a written file at its last close, which the call carries: it must be the SHA-256 of the bytes another case (`content`, its output buffer) read back from the file |
 | `async` | io_uring/AIO requests the call submitted: their records, result and payload bytes |
 | `volatile` | Values that differ between runs; golden files mask them |
 | `implicit`, `noreturn` | Calls the program did not make itself (rt_sigreturn, restart_syscall) or that end the task (exit, a fatal signal) |

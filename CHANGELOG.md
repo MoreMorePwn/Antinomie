@@ -72,6 +72,19 @@ it runs.
   is not counted in the Recording quota. Several runs in one boot share the boot's
   starting state; a boot started by a snapshot restore still reads its checkpoint.
 
+- **File activity shows writes through shared file mappings.** With a
+  revision-18 guest, the pages a program stored into a `MAP_SHARED` mapping of
+  a file appear in the file's history and its written content as "through a
+  shared mapping", with their bytes, when msync (or fsync, sync) wrote them
+  back or munmap, exec or the program's exit dropped them dirty. Each page is
+  known as it was at that moment, not every store before it; pages past the
+  guest's 4 MiB copy budget per call are listed as not captured, with the
+  reason. The guest's hash at the file's last close covers the final content
+  (the munmap or the exit is that close when the mapping held the file). In
+  the File Reconstruction window a shared writable `mmap` marks its range
+  `~~` (may have changed), and the pages the guest copied replace it with
+  their bytes; a page it never saw written stays `~~`.
+
 - **Library › Samples lists every sample across runs and VMs.** One flat list,
   the sample with the latest run first: name, description, tags (verdict and
   malware category; techniques and custom tags fold into `+N`), run count,
@@ -305,6 +318,21 @@ it runs.
   up to 1 MiB per call). Both are fields of the call's Exit,
   no extra event. New patch 16 (shared by every architecture); bases need
   rebuilding for it, and older bases keep working without the records.
+- **Writes through shared file mappings (contract revision 18).** A store into
+  a shared file mapping makes no system call; the guest now records the pages
+  where the kernel consumes the page table entry's dirty bit, in the context of
+  a traced task: when a call writes them back (msync, fsync, sync: cause
+  WRITEBACK) and when a call removes a mapping that held them dirty (munmap,
+  mremap, a MAP_FIXED mapping over it, madvise, exec, exit: cause UNMAP).
+  `lifecycle.file_mapped` (96 bytes per range: the file, the range, the size,
+  the time, a write order, why bytes are missing) with the page contents as
+  `lifecycle.file_mapped.data`, up to 4 MiB and 64 ranges per call; one
+  lifecycle event before the call's exit, or before `lifecycle.task_exit` for
+  the address space a task drops when it exits. Each page is its state at that
+  moment, not every store. Not seen: a page the kernel's background writeback
+  cleaned while the mapping stayed and that was not stored to again, and
+  mappings of the kernel's internal files (shared anonymous memory, System V
+  shared memory, memfd). New patch 17 (shared by every architecture).
 - **Architecture-neutral guest patches.** The shared patches no longer assume
   x86-64: system calls are keyed by their `__NR_` names, registers are read
   through the kernel's portable helpers, and what only x86 has (its system call

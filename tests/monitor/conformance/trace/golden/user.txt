@@ -279,6 +279,7 @@ execveat.empty_path_without_flag | execveat(dfd=5, filename="", argv=["/tmp/trac
 exit.child | exit(error_code=5) = - |
 exit.vfork_child | exit(error_code=6) = - |
 exit_group.child | exit_group(error_code=9) = - |
+exit_group.mmap_child | exit_group(error_code=0) = - |
 faccessat.bad_dirfd | faccessat(dfd=999, filename="meta-file", mode=04) = EBADF | arg1.path:complete:"meta-file"
 faccessat.cwd | faccessat(dfd=AT_FDCWD, filename="meta-file", mode=06) = 0 | arg1.path:complete:"meta-file"
 faccessat.denied | faccessat(dfd=AT_FDCWD, filename="meta-ro", mode=01) = EACCES | arg1.path:complete:"meta-ro"
@@ -1058,6 +1059,7 @@ msgsnd.type6 | msgsnd(msqid=0, msgp=<bytes>, msgsz=8, msgflg=0x0) = 0 | arg1.mes
 msgsnd.zero_type | msgsnd(msqid=0, msgp=<bytes>, msgsz=4, msgflg=0x0) = EINVAL | arg1.message:complete:<bytes>
 msync.async | msync(start=<addr>, len=4096, flags=MS_ASYNC) = <value> |
 msync.invalidate | msync(start=<addr>, len=4096, flags=MS_INVALIDATE) = <value> |
+msync.mmap_writeback | msync(start=<addr>, len=12388, flags=MS_SYNC) = 0 |
 msync.sync | msync(start=<addr>, len=8192, flags=MS_SYNC) = <value> |
 msync.sync_and_async | msync(start=<addr>, len=4096, flags=MS_ASYNC|MS_SYNC) = EINVAL |
 msync.unaligned | msync(start=<addr>, len=4096, flags=MS_SYNC) = EINVAL |
@@ -1069,6 +1071,8 @@ munlockall.after_current | munlockall() = 0 |
 munlockall.after_future | munlockall() = 0 |
 munmap.anon_private | munmap(addr=<addr>, len=8192) = <value> |
 munmap.anon_shared | munmap(addr=<addr>, len=4096) = <value> |
+munmap.mmap_budget | munmap(addr=<addr>, len=4202496) = 0 |
+munmap.mmap_dirty | munmap(addr=<addr>, len=12388) = 0 |
 munmap.sealed | munmap(addr=<addr>, len=4096) = EPERM |
 munmap.three_pages | munmap(addr=<addr>, len=12288) = <value> |
 munmap.unaligned | munmap(addr=<addr>, len=4096) = EINVAL |
@@ -1116,6 +1120,7 @@ openat.directory | openat(dfd=AT_FDCWD, filename=".", flags=O_RDONLY|O_DIRECTORY
 openat.dup_source | openat(dfd=AT_FDCWD, filename="io-dup", flags=O_RDWR|O_CREAT|O_TRUNC, mode=0600) = 3 | arg1.path:complete:"io-dup"
 openat.exists_excl | openat(dfd=AT_FDCWD, filename="io-at", flags=O_RDWR|O_CREAT|O_EXCL, mode=0600) = EEXIST | arg1.path:complete:"io-at"
 openat.lock | openat(dfd=AT_FDCWD, filename="io-rw", flags=O_RDONLY, mode=0) = 4 | arg1.path:complete:"io-rw"
+openat.mmap_edit | openat(dfd=AT_FDCWD, filename="mmap-edit", flags=O_RDWR|O_CREAT|O_TRUNC, mode=0600) = 3 | arg1.path:complete:"mmap-edit"
 openat.overlap_race | openat(dfd=AT_FDCWD, filename="pos-overlap", flags=O_RDWR|O_CREAT|O_TRUNC, mode=0600) = 3 | arg1.path:complete:"pos-overlap"
 openat.pos_shared | openat(dfd=AT_FDCWD, filename="pos-shared", flags=O_RDWR|O_CREAT|O_TRUNC, mode=0600) = 3 | arg1.path:complete:"pos-shared"
 openat.relative_dirfd | openat(dfd=3, filename="io-at", flags=O_RDONLY|O_NOFOLLOW, mode=0) = 4 | arg1.path:complete:"io-at"
@@ -1205,12 +1210,14 @@ prctl.set_dumpable_bad | prctl(option=PR_SET_DUMPABLE, arg2=2, arg3=0, arg4=0, a
 prctl.set_dumpable_off | prctl(option=PR_SET_DUMPABLE, arg2=0, arg3=0, arg4=0, arg5=0) = 0 |
 prctl.set_dumpable_same | prctl(option=PR_SET_DUMPABLE, arg2=1, arg3=0, arg4=0, arg5=0) = 0 |
 prctl.set_name | prctl(option=PR_SET_NAME, arg2="ant-process", arg3=0, arg4=0, arg5=0) = 0 | arg1.name:complete:"ant-process"
-prctl.set_name_long | prctl(option=PR_SET_NAME, arg2=5280645, arg3=0, arg4=0, arg5=0) = 0 | arg1.name:invalid extent:uncaptured !3
+prctl.set_name_long | prctl(option=PR_SET_NAME, arg2=5281003, arg3=0, arg4=0, arg5=0) = 0 | arg1.name:invalid extent:uncaptured !3
 prctl.set_no_new_privs | prctl(option=PR_SET_NO_NEW_PRIVS, arg2=1, arg3=0, arg4=0, arg5=0) = 0 |
 prctl.set_no_new_privs_bad_args | prctl(option=PR_SET_NO_NEW_PRIVS, arg2=1, arg3=1, arg4=0, arg5=0) = EINVAL |
 prctl.set_seccomp_filter | prctl(option=PR_SET_SECCOMP, arg2=2, arg3=<bytes>, arg4=0, arg5=0) = 0 | arg2.program:complete:<bytes> arg2.program.filter:complete:<bytes>
 prctl.set_timerslack | prctl(option=PR_SET_TIMERSLACK, arg2=100000, arg3=0, arg4=0, arg5=0) = 0 |
 prctl.unknown_option | prctl(option=Unknown option 0x7fffffff, arg2=0, arg3=0, arg4=0, arg5=0) = EINVAL | prctl.unknown_selector:no decoder:uncaptured !3
+pread64.mmap_edit_final | pread64(fd=3, buf="ANTINOMIE-CONFORMANCE-kryfmtahovcjqxelszgnubipwd"..., count=12388, pos=0) = 12388 | arg1.data:complete file.position:complete
+pread64.mmap_exit_final | pread64(fd=3, buf="ANTINOMIANTINOMIMANCE-ovcjqxelszgnubipwdkryfmtah"..., count=4106, pos=0) = 4106 | arg1.data:complete file.position:complete
 pread64.negative | pread64(fd=3, buf=<addr>, count=6, pos=-1) = EINVAL |
 pread64.offset | pread64(fd=3, buf="PWRITE", count=6, pos=100) = 6 | arg1.data:complete file.position:complete
 pread64.pos_explicit | pread64(fd=3, buf="TINO", count=4, pos=2) = 4 | arg1.data:complete file.position:complete

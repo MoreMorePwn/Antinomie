@@ -301,6 +301,7 @@ fn judge_group(
         .map(|expect| judge.judge(expect))
         .collect();
     judge::check_write_order(&transcript.expects, &mut cases, &calls);
+    judge::check_final_hashes(&transcript.expects, &mut cases, &calls);
     for case in &cases {
         for problem in &case.problems {
             problems.push(format!("{}: {problem}", case.label));

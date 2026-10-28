@@ -111,6 +111,52 @@ pub struct CopyItem {
     pub dst: CopyEndItem,
 }
 
+/// Pages of a file written through a shared mapping that the call wrote back
+/// or dropped dirty (`lifecycle.file_mapped`).
+#[derive(Clone, Debug, Deserialize)]
+pub struct MappedItem {
+    /// "WRITEBACK" or "UNMAP".
+    pub cause: String,
+    pub major: u32,
+    pub minor: u32,
+    pub ino: u64,
+    pub offset: u64,
+    pub len: u64,
+    /// Bytes the guest copies, from `offset` on.
+    pub carried: u64,
+    /// Why the rest is missing ("BUDGET"), when it is.
+    pub cut: Option<String>,
+    /// FNV-1a 64 of the carried bytes, "0x…".
+    pub fnv: String,
+}
+
+impl MappedItem {
+    pub fn dev(&self) -> u64 {
+        u64::from(self.minor & 0xff)
+            | (u64::from(self.major) << 8)
+            | (u64::from(self.minor & !0xff) << 12)
+    }
+}
+
+/// The hash the guest took of a written file at its last close, which the
+/// call (the closing task's last) carries: SHA-256 of the bytes the case
+/// `content` read back from the file (its exit data of argument 1).
+#[derive(Clone, Debug, Deserialize)]
+pub struct HashItem {
+    pub major: u32,
+    pub minor: u32,
+    pub ino: u64,
+    pub content: String,
+}
+
+impl HashItem {
+    pub fn dev(&self) -> u64 {
+        u64::from(self.minor & 0xff)
+            | (u64::from(self.major) << 8)
+            | (u64::from(self.minor & !0xff) << 12)
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct AsyncItem {
     pub user_data: String,
@@ -162,6 +208,9 @@ pub struct Expect {
     /// `file.position` write order must be higher.
     pub before: Option<String>,
     pub copy: Option<CopyItem>,
+    #[serde(default)]
+    pub mapped: Vec<MappedItem>,
+    pub hash: Option<HashItem>,
     pub allow: Option<Allow>,
     pub why: Option<String>,
     #[serde(default)]

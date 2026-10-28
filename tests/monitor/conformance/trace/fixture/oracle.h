@@ -123,6 +123,18 @@ void file_written_before(const char *label);
 // identified with fstat, the destination's size after the call included.
 void file_copy(const char *kind, int src_fd, long long src_off, int dst_fd, long long dst_off,
                uint64_t len, unsigned mode, uint64_t data_len);
+// Pages of the file `st` written through a shared mapping that this call wrote
+// back ("WRITEBACK": msync) or dropped dirty ("UNMAP": munmap, exit), as its
+// lifecycle.file_mapped record must say (contract revision 18): `len` bytes at
+// `offset`, of which the guest copies the first `carried` (`data`, compared by
+// hash); `cut` is why the rest is missing ("BUDGET"), or NULL. The call must
+// carry exactly the records its cases list.
+void file_mapped(const char *cause, const struct stat *st, uint64_t offset, uint64_t len,
+                 uint64_t carried, const char *cut, const void *data);
+// The guest's hash of the written file `st` at its last close, which this
+// call (the closing task's last) carries, must be the SHA-256 of what the
+// case `content_label` read back from it (its output buffer, argument 1).
+void file_hash_of(const struct stat *st, const char *content_label);
 // One io_uring or AIO request this call submitted (or reaped), with the
 // result its completion reported.
 void async_req(uint64_t user_data, int opcode, long result);

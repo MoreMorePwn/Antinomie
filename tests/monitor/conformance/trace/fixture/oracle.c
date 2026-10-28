@@ -30,8 +30,9 @@ struct pending {
     int is_volatile;
     long pid, tid;
     int noreturn, wait_status;
-    size_t data_len, status_len, extra_len, async_len, recapture_len;
+    size_t data_len, status_len, extra_len, async_len, recapture_len, mapped_len;
     char data[96 * 1024], status[4096], extra[4096], async[48 * 1024], recapture[2048];
+    char mapped[2048];
 };
 
 static __thread struct pending pending;
@@ -441,6 +442,41 @@ void file_copy(const char *kind, int src_fd, long long src_off, int dst_fd, long
     append(pending.extra, sizeof pending.extra, &pending.extra_len, "}");
 }
 
+static uint64_t fnv1a(const void *data, size_t len)
+{
+    const unsigned char *bytes = data;
+    uint64_t hash = 0xcbf29ce484222325ULL;
+    for (size_t i = 0; i < len; i++)
+        hash = (hash ^ bytes[i]) * 0x100000001b3ULL;
+    return hash;
+}
+
+void file_mapped(const char *cause, const struct stat *st, uint64_t offset, uint64_t len,
+                 uint64_t carried, const char *cut, const void *data)
+{
+    if (!pending.active)
+        return;
+    append(pending.mapped, sizeof pending.mapped, &pending.mapped_len,
+           "%s{\"cause\":\"%s\",\"major\":%u,\"minor\":%u,\"ino\":%llu,\"offset\":%llu,"
+           "\"len\":%llu,\"carried\":%llu,\"fnv\":\"0x%llx\"",
+           pending.mapped_len ? "," : "", cause, major(st->st_dev), minor(st->st_dev),
+           (unsigned long long)st->st_ino, (unsigned long long)offset, (unsigned long long)len,
+           (unsigned long long)carried, (unsigned long long)fnv1a(data, carried));
+    if (cut)
+        append(pending.mapped, sizeof pending.mapped, &pending.mapped_len, ",\"cut\":\"%s\"",
+               cut);
+    append(pending.mapped, sizeof pending.mapped, &pending.mapped_len, "}");
+}
+
+void file_hash_of(const struct stat *st, const char *content_label)
+{
+    if (pending.active)
+        append(pending.extra, sizeof pending.extra, &pending.extra_len,
+               ",\"hash\":{\"major\":%u,\"minor\":%u,\"ino\":%llu,\"content\":\"%s\"}",
+               major(st->st_dev), minor(st->st_dev), (unsigned long long)st->st_ino,
+               content_label);
+}
+
 void async_req(uint64_t user_data, int opcode, long result)
 {
     if (!pending.active)
@@ -508,6 +544,9 @@ long ora_done(void)
     if (pending.recapture_len)
         append(pending.extra, sizeof pending.extra, &pending.extra_len, ",\"recapture\":[%s]",
                pending.recapture);
+    if (pending.mapped_len)
+        append(pending.extra, sizeof pending.extra, &pending.extra_len, ",\"mapped\":[%s]",
+               pending.mapped);
     lined("ANT_EXPECT {\"seq\":%u,\"label\":\"%s\",\"nr\":%ld,\"name\":\"%s\",\"pid\":%ld,"
           "\"tid\":%ld,\"t0\":%llu,\"t1\":%llu,\"argc\":%d,\"args\":[\"%#lx\",\"%#lx\","
           "\"%#lx\",\"%#lx\",\"%#lx\",\"%#lx\"],\"unchecked\":%u,\"ret\":%ld,\"want\":%ld,"

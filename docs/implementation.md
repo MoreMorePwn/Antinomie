@@ -2040,6 +2040,109 @@ writing the same range at once (16 rounds; the parent reads which write each
 round's bytes are, and the judge requires the other one's write order to be
 lower, the `before` member), and each copy call.
 
+### Writes through shared file mappings (0.8.0)
+
+Contract revision 18, extended before its release (guest patch 17,
+`kernel/antinomie/filemap.c`; layout in `protocol/control.h`). A store into a
+writable `MAP_SHARED` mapping of a file changes the page cache with no system
+call. The kernel takes note of such stores only through the page table entry's
+dirty bit, and consumes it in two places, which are where the pages are
+recorded, in the context of a traced task:
+
+* **Writeback** (cause `WRITEBACK`): `folio_clear_dirty_for_io()`, when
+  `folio_mkclean()` found a mapping's entry for the folio dirty or writable,
+  inside a traced call (msync with `MS_SYNC`, fsync, fdatasync,
+  sync_file_range, sync, syncfs, an `O_DIRECT` transfer or fadvise that
+  flushes the cache first). The folio is locked and its mappings are
+  write-protected, so the copy is what goes to the file. On tmpfs msync writes
+  nothing back and records nothing; the pages come with the unmap.
+* **Unmap** (cause `UNMAP`): `zap_present_folio_ptes()`, for a dirty entry of
+  a file page of a `VM_SHARED` mapping, when a traced task removes it (munmap,
+  mremap, a `MAP_FIXED` mapping over it, madvise, a hole punch, exec dropping
+  the old address space, exit dropping the last). The dirty bit moves to the
+  page, which the file system writes back later; the copy is the page as the
+  mapping left it.
+
+Every architecture keeps that dirty bit and every file system has it (tmpfs
+has no `page_mkwrite` and is never written back), so the patch hooks only
+generic memory-management code. A `page_mkwrite` hook was not used: it sees the
+first store after each writeback, before the store lands, and nothing on tmpfs.
+
+**`lifecycle.file_mapped`** (`antinomie.filemap/1`, 96 bytes per range): the
+cause, the file (device, inode, generation, mode), the range (offset of its
+first page, length: whole pages, the last clipped to the file size; pages past
+the end of the file are not recorded), the bytes copied and why the rest is
+missing (`BUDGET`, `MEMORY`), the page size, the file size and the time
+(`ktime_get_ns()`) when the first page was copied, a write order, the record's
+index and count, and loss counters. The copied bytes follow as
+**`lifecycle.file_mapped.data`** (opaque, the declared extent is the range's
+length). A call's records are one lifecycle event (phase 3, so the recording
+index keeps them with their call) published just before its exit; the address
+space a task drops in `exit_mm()` has no exit to go before, so its records are
+published just before `lifecycle.task_exit`, under the task's last call.
+
+Copies are made where the kernel sees the page, without sleeping (under the
+page table lock for an unmap, the folio lock for a writeback): one page each
+from a `GFP_NOWAIT` allocation, at most `ANTC_FILEMAP_DATA_MAX` (4 MiB) per
+call and `ANTC_FILEMAP_RANGES` (64) ranges per call; contiguous pages of one
+file coalesce. Past the budget, or with no page to be had, the range is still
+listed with the reason; pages past the ranges are counted (`unlisted`), and
+pages for which not even the list could be allocated are counted (`lost`) and
+reported in the next record.
+
+**Write order.** Each range takes a number from the counter writes use
+(`fileops.c`, File activity 3), and every page of the range is copied while
+holding the file's inode lock shared with `down_read_trylock()` (never waits,
+safe under the page table lock). A write takes its number and applies its bytes
+under that lock held exclusively, so every write with a lower number is
+complete in the copy and none with a higher number has begun; replaying the
+higher ones over the copy gives the bytes they left. When the trylock fails a
+write is in progress: the page goes to a range without a number, and the host
+places it in call order.
+
+**What is not seen.** Only the result of the stores at writeback or unmap,
+never each store: two stores to one page before its writeback leave the second.
+A page the kernel's background writeback (the flusher, by default some 30 s
+after the store) wrote back while the mapping stayed, and that was not stored
+to again, is clean when the mapping goes, so it has no record; that writeback
+runs outside the program's calls. A page stored to by a process that is not
+traced is seen only when a traced call writes it back. Mappings of the kernel's
+internal mounts (`SB_KERNMOUNT`: shared anonymous memory, System V shared
+memory, memfd, AIO rings) are not files of the run and are skipped; hugetlbfs
+mappings are removed by other code and are not seen.
+
+**Hash.** A shared writable mapping holds its open file (opened for writing),
+so the file's last close, which the guest hashes for a run that asks for it
+(`lifecycle.file_hash`, `antinomie.hash/2`), is the munmap or the exit that
+drops the mapping, and the hash covers the content the stores left (the worker
+reads the page cache). No change was needed there; the conformance suite checks
+it.
+
+Host: `kernel_notes::file_mapped` decodes the records (with the object id of
+their data field). Triage applies the records of a call before the call's own
+change (a hole punch's zeros, an `O_SYNC` write) and the exit-time records
+after the last call: the per-file history (`triage/files/mapped.rs`) lays the
+copied pages over the file's known bytes by write order, takes the file size
+from the record and says what is unknown; File activity lists each range as a
+write of the file (`<call> · mapping`, "page state at writeback/unmap; stores
+in between not seen") and places it in the written content as
+`file_writes::Piece::Mapped` (the byte map's `~~ mapping` state), with the
+uncopied part `NotCaptured(MappedBudget | MappedMemory)`; the per-file and
+per-run caps apply as to writes. In the File Reconstruction timeline
+(`file_reconstruct`), an `mmap` with `PROT_WRITE` and `MAP_SHARED` of the file
+is an `Action::Mapping` over its range (`~~`, may have changed with no further
+call), and each record is an `Action::Write` of its extents at its write order:
+copied pages become written bytes (their history says "written through a shared
+mapping"), uncopied ones not captured, and pages of the mapping the guest never
+saw dirty stay `~~`, which is the honest state for a page the background
+writeback may have cleaned. An msync that carries records no longer adds
+the old "mapped writes are unavailable" entry. The conformance suite's
+`file_mmap` area checks the records (`mapped` oracle member: exactly the pages
+stored to, with their bytes and a write order) for an msync, a later munmap, a
+child that exits with the mapping in place (its shared anonymous page must not
+be reported) and a mapping past the copy budget, and the last-close hash
+against the bytes read back (`hash`).
+
 ### Transport reconnect, command deadlines and terminal output under load (0.8.0)
 
 Three host fixes; the guest and the contract are unchanged.

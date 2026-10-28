@@ -361,6 +361,10 @@ impl<'a> Judge<'a> {
             let ok = check_file_ops(expect, call, &mut result.problems);
             result.file_ok = Some(result.file_ok.unwrap_or(true) && ok);
         }
+        if !expect.mapped.is_empty() {
+            let ok = check_mapped(self.run, expect, call, &mut result.problems);
+            result.file_ok = Some(result.file_ok.unwrap_or(true) && ok);
+        }
         if !expect.requests.is_empty() {
             let ok = self.check_async(expect, index, &mut result);
             result.async_ok = Some(ok);
@@ -840,6 +844,161 @@ pub fn check_write_order(
             problems.push((
                 index,
                 format!("write order {first:?}, {later} (applied after it) has {then:?}"),
+            ));
+        }
+    }
+    for (index, problem) in problems {
+        cases[index].problems.push(problem);
+        cases[index].file_ok = Some(false);
+    }
+}
+
+/// FNV-1a, 64 bits: what the fixture reports of the bytes it expects.
+fn fnv1a(data: &[u8]) -> u64 {
+    data.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3)
+    })
+}
+
+/// The pages a call wrote back or dropped dirty from shared file mappings
+/// (`lifecycle.file_mapped`) against what the program stored: exactly the
+/// expected ranges, each numbered (nothing else wrote the file then), with
+/// the bytes the program left in the pages.
+fn check_mapped(
+    run: &Path,
+    expect: &Expect,
+    call: &InvocationSummary,
+    problems: &mut Vec<String>,
+) -> bool {
+    let mut records: Vec<(kernel_notes::FileMapped, Option<&FieldSummary>)> = call
+        .kernel_notes
+        .iter()
+        .flat_map(|note| {
+            kernel_notes::file_mapped(note)
+                .into_iter()
+                .map(move |record| {
+                    let data = record
+                        .data
+                        .and_then(|id| note.fields.iter().find(|field| field.object_id == id));
+                    (record, data)
+                })
+        })
+        .collect();
+    let mut ok = true;
+    for want in &expect.mapped {
+        let cause = |record: &kernel_notes::FileMapped| match record.cause {
+            kernel_notes::MappedCause::Writeback => "WRITEBACK",
+            kernel_notes::MappedCause::Unmap => "UNMAP",
+            kernel_notes::MappedCause::Unknown(_) => "UNKNOWN",
+        };
+        let Some(at) = records.iter().position(|(record, _)| {
+            cause(record) == want.cause
+                && record.file.dev == want.dev()
+                && record.file.ino == want.ino
+                && record.offset == want.offset
+                && record.len == want.len
+        }) else {
+            problems.push(format!(
+                "no lifecycle.file_mapped {} of {} bytes at {} (ino {})",
+                want.cause, want.len, want.offset, want.ino
+            ));
+            ok = false;
+            continue;
+        };
+        let (record, data) = records.remove(at);
+        let cut = match record.cut {
+            None => None,
+            Some(kernel_notes::MappedCut::Budget) => Some("BUDGET".to_owned()),
+            Some(kernel_notes::MappedCut::Memory) => Some("MEMORY".to_owned()),
+            Some(kernel_notes::MappedCut::Unknown(code)) => Some(format!("unknown {code}")),
+        };
+        let bytes = match data.map(|field| field_bytes(run, field)) {
+            Some(Ok(bytes)) => bytes,
+            Some(Err(error)) => {
+                problems.push(format!("lifecycle.file_mapped.data: {error}"));
+                Vec::new()
+            }
+            None => Vec::new(),
+        };
+        let fnv = format!("{:#x}", fnv1a(&bytes));
+        let fits = record.carried == want.carried
+            && bytes.len() as u64 == want.carried
+            && cut == want.cut
+            && record.order.is_some()
+            && crate::oracle::parse_hex_u64(&want.fnv).ok() == Some(fnv1a(&bytes));
+        if !fits {
+            problems.push(format!(
+                "lifecycle.file_mapped {record:?} with {} bytes (fnv {fnv}), the program left {} of {} bytes copied (fnv {}, cut {:?})",
+                bytes.len(),
+                want.carried,
+                want.len,
+                want.fnv,
+                want.cut
+            ));
+            ok = false;
+        }
+    }
+    for (record, _) in records {
+        problems.push(format!("unexpected lifecycle.file_mapped {record:?}"));
+        ok = false;
+    }
+    ok
+}
+
+/// The guest's hash of a file at its last close (`hash`) against the bytes
+/// another case read back from the file, after the run is judged.
+pub fn check_final_hashes(
+    expects: &[Expect],
+    cases: &mut [CaseResult],
+    calls: &[InvocationSummary],
+) {
+    use sha2::Digest;
+    let by_key: HashMap<Key, &InvocationSummary> = calls.iter().map(|c| (key(c), c)).collect();
+    let mut problems = Vec::new();
+    for (index, expect) in expects.iter().enumerate() {
+        let Some(want) = &expect.hash else {
+            continue;
+        };
+        let content = expects
+            .iter()
+            .find(|other| other.label == want.content)
+            .and_then(|other| {
+                other
+                    .data
+                    .iter()
+                    .find(|item| item.p == "out" && item.arg == Some(1))
+            })
+            .and_then(|item| item.bytes().ok());
+        let Some(content) = content else {
+            problems.push((index, format!("no content read back by {}", want.content)));
+            continue;
+        };
+        let expected: String = sha2::Sha256::digest(&content)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        let found = cases
+            .get(index)
+            .and_then(|case| by_key.get(&case.matched?))
+            .and_then(|call| {
+                call.kernel_notes
+                    .iter()
+                    .filter_map(kernel_notes::file_hash)
+                    .find(|hash| {
+                        hash.kind == kernel_notes::HashKind::Write
+                            && hash.file.is_some_and(|file| {
+                                file.key.dev == want.dev() && file.key.ino == want.ino
+                            })
+                    })
+            });
+        let got = found.as_ref().and_then(|hash| hash.sha256_hex());
+        if got.as_deref() != Some(expected.as_str()) {
+            problems.push((
+                index,
+                format!(
+                    "last-close hash {got:?}, the file holds {} bytes with SHA-256 {expected}",
+                    content.len()
+                ),
             ));
         }
     }

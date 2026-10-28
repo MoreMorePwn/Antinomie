@@ -19,6 +19,7 @@
 void area_file_io(void);
 void area_file_meta(void);
 void area_file_pos(void);
+void area_file_mmap(void);
 void area_paths(void);
 void area_xattr_splice(void);
 void area_events(void);
