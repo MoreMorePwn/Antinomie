@@ -93,9 +93,14 @@ pub fn hash_paths(
     Ok(done)
 }
 
-/// The newest saved dump in a run's recording folder that can be read.
-pub fn newest_dump(recording_dir: &Path) -> Option<DiskDump> {
-    dump::list(&[recording_dir.to_path_buf()])
+/// The newest saved dump of a run's recording that can be read. `dir` is the
+/// run's own folder (`<rec>/runs/<id>`, or a boot's `<rec>/boots/<boot>/runs/<id>`)
+/// or the recording folder itself: dumps are saved in the recording folder's
+/// `disks/`, beside `runs/`, not inside a run.
+pub fn newest_dump(dir: &Path) -> Option<DiskDump> {
+    let mut places = vec![dir.to_path_buf()];
+    places.extend(crate::recording::recording_root(dir));
+    dump::list(&places)
         .into_iter()
         .find(|dump| dump.browsable())
 }

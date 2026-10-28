@@ -72,6 +72,7 @@ use issues::push_issue;
 mod launch;
 pub use launch::LaunchRecord;
 mod segments;
+pub(crate) use segments::recording_root;
 pub use segments::{RunSegment, run_segments};
 mod facts;
 pub use facts::{RunFilterFacts, run_filter_facts};

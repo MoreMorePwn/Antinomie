@@ -47,7 +47,7 @@ fn continued_boot(root: &Path, boot_id: &str) -> Option<String> {
 }
 
 /// The recording folder `<rec>` a run segment directory belongs to.
-fn recording_root(directory: &Path) -> Option<PathBuf> {
+pub(crate) fn recording_root(directory: &Path) -> Option<PathBuf> {
     let runs = directory.parent()?;
     if runs.file_name()? != "runs" {
         return None;

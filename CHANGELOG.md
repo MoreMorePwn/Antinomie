@@ -73,6 +73,11 @@ it runs.
   matches the one the run recorded, and added with the run, path, writing
   program and parent sample.
 
+- **Add to Samples… finds the run's saved disk dump.** The dump is saved in the
+  VM's recording beside `runs/`, but the dialog and the Indicators scan looked
+  inside the run's own folder and always said "no disk dump". Both now look in
+  the recording the run belongs to (checked against a real test VM run).
+
 - **The sample window lists similar samples.** Below Output files, Similar
   samples shows up to five other library samples by TLSH distance (150 or
   less, nearest first), with what they share: the imported symbols when both

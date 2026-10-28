@@ -17,13 +17,28 @@ pub fn dump_label(run_directory: &Path) -> Option<String> {
 }
 
 /// The file at `guest_path` in the newest readable disk dump of the run.
+/// `run_directory` is the run's folder; the dump is found in its recording.
 pub fn extract_from_dump(run_directory: &Path, guest_path: &str) -> Result<Vec<u8>, String> {
+    extract_with(
+        &crate::analysis::jobs::worker_executable()?,
+        run_directory,
+        guest_path,
+    )
+}
+
+/// [`extract_from_dump`] with an explicit disk-reader program (the app's own
+/// binary; tests that are not the app name it).
+pub fn extract_with(
+    executable: &Path,
+    run_directory: &Path,
+    guest_path: &str,
+) -> Result<Vec<u8>, String> {
     use crate::disks::reader::{DiskAnswer, DiskRequest, ReadError, Reader};
     let dump = crate::ioc::disk::newest_dump(run_directory)
         .ok_or_else(|| "this run has no disk dump that can be read".to_owned())?;
     let scratch = crate::ioc::disk::scratch(run_directory)?;
     let result = (|| {
-        let mut reader = Reader::open(&dump.path(), &scratch)?;
+        let mut reader = Reader::with_executable(executable.to_path_buf(), &dump.path(), &scratch)?;
         match reader.request(DiskRequest::Extract {
             path: guest_path.to_owned(),
             max_len: MAX_SAMPLE,
