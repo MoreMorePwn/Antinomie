@@ -31,7 +31,7 @@ pub(crate) const SHUTDOWN: u32 = 0x1030;
 pub(crate) const RESOURCES: u32 = 0x1070;
 pub(crate) const RESOURCES_SIZE: usize = 96;
 /// Guest contract revision this host implements (`ANTC_REVISION`).
-pub const REVISION: u32 = 17;
+pub const REVISION: u32 = 18;
 pub(crate) const PROCESS_LIST: u32 = 0x1050;
 pub(crate) const CAPTURE_ATTACH: u32 = 0x1051;
 pub(crate) const CAPTURE_ALL: u32 = 0x1052;

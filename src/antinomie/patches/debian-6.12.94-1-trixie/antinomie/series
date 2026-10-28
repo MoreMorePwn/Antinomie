@@ -33,3 +33,6 @@
 
 # The x86-64 architecture's hooks (the rest of the series is the same on every architecture)
 0015-antinomie-hook-the-x86-64-architecture.patch
+
+# Evidence added in 0.8.0 (shared by every architecture): file positions and in-kernel copies
+0016-antinomie-record-where-reads-and-writes-of-files-happened-and-what-in-kernel-copies-moved.patch

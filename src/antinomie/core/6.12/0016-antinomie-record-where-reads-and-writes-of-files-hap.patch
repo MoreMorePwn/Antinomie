@@ -1,0 +1,746 @@
+From be7d7869eda69e6f0e08f216ceeef81a9cb09273 Mon Sep 17 00:00:00 2001
+From: MikiMiku <jonathanirvinjo@gmail.com>
+Date: Wed, 28 Oct 2026 10:51:13 +0700
+Subject: [PATCH] antinomie: record where reads and writes of files happened,
+ and what in-kernel copies moved
+
+The host rebuilds a file from the calls that wrote it, and so far it
+placed each write at the offset it inferred from opens, lseek and
+O_APPEND. That inference breaks where the kernel alone knows the
+position: a descriptor shared after fork, dup or SCM_RIGHTS moves for
+every task that uses it, and an O_APPEND write lands at the end of the
+file as it is when the write takes the inode lock. In-kernel copies
+(sendfile, splice, copy_file_range, reflink clones) and fallocate
+change a file with no bytes in any argument at all.
+
+Two kernel-imported fields of a call's exit say what happened, for
+seekable files (regular files and block devices) and calls that
+succeeded:
+
+- file.position (antinomie.filepos/1, 24 bytes): where a read, write,
+  pread64, pwrite64, readv, writev, preadv, pwritev, preadv2 or
+  pwritev2 began in the file and how many bytes it moved, from the
+  position the file system left behind, and the write order.
+- file.copy (antinomie.filecopy/1, 104 bytes): the kind of copy, the
+  source and destination files (device, inode, generation, mode), where
+  the range began in each, its length, the destination's size after the
+  call, and for fallocate its mode. When the destination is seekable
+  and the source is not (the pipe of a splice: sendfile and
+  copy_file_range need a seekable source), the bytes cannot be read
+  again later, so the bytes the destination got follow as
+  file.copy.data, at most 1 MiB per call; the record says when more
+  went in. A seekable source is not carried: the host
+  rebuilds the bytes from what it knows of that file.
+
+Two processes that write one range at the same time are applied one
+after the other under the inode lock, but their exits can be recorded
+in the other order: the position hooks run after the lock is dropped,
+and the exit is stamped later still. Each write therefore takes a
+number from one guest-wide counter in generic_write_checks_count(),
+which the file systems run holding the inode lock (the write order, in
+both records), so the host replays overlapping writes in the order the
+file system applied them.
+
+The hooks record into the task's recorder context during the call and
+the exit publishes the fields, so a call costs no extra event. Only the
+system call itself is recorded; the hooked functions are shared with
+io_uring and exec, which the call number tells apart.
+
+Hooked kernel files:
+- fs/read_write.c: vfs_read(), vfs_write(), vfs_readv() and
+  vfs_writev(), where every read and write system call ends with the
+  position its transfer left; do_sendfile() and copy_file_range(),
+  which hold both files and both positions.
+- fs/splice.c: do_splice(), the file side of a splice;
+  iter_file_splice_write(), where the bytes from a pipe reach the
+  destination file while the pipe still holds them.
+- fs/ioctl.c: ioctl_file_clone(), shared by FICLONE and FICLONERANGE.
+- fs/open.c: vfs_fallocate(), shared by fallocate and the
+  preallocation ioctls.
+
+Contract: revision 18.
+---
+ fs/ioctl.c                        |   4 +
+ fs/open.c                         |   5 +-
+ fs/read_write.c                   |  10 ++
+ fs/splice.c                       |   9 ++
+ include/linux/antinomie_monitor.h |  21 +++
+ kernel/antinomie/Makefile         |   1 +
+ kernel/antinomie/control_wire.h   |  64 ++++++++-
+ kernel/antinomie/fileops.c        | 232 ++++++++++++++++++++++++++++++
+ kernel/antinomie/fileops.h        |  37 +++++
+ kernel/antinomie/recorder.c       |  38 +++++
+ 10 files changed, 419 insertions(+), 2 deletions(-)
+ create mode 100644 kernel/antinomie/fileops.c
+ create mode 100644 kernel/antinomie/fileops.h
+
+diff --git a/fs/ioctl.c b/fs/ioctl.c
+index 638a36b..0d7b9e1 100644
+--- a/fs/ioctl.c
++++ b/fs/ioctl.c
+@@ -23,6 +23,7 @@
+ #include <linux/fscrypt.h>
+ #include <linux/fileattr.h>
+ 
++#include <linux/antinomie_monitor.h>
+ #include "internal.h"
+ 
+ #include <asm/ioctls.h>
+@@ -245,6 +246,9 @@ static long ioctl_file_clone(struct file *dst_file, unsigned long srcfd,
+ 		ret = -EINVAL;
+ 	else
+ 		ret = 0;
++	if (!ret)
++		ant_monitor_file_copy(ANT_FILE_COPY_CLONE, fd_file(src_file), off, dst_file,
++				      destoff, cloned, 0);
+ 	return ret;
+ }
+ 
+diff --git a/fs/open.c b/fs/open.c
+index 36bb216..181c15b 100644
+--- a/fs/open.c
++++ b/fs/open.c
+@@ -340,8 +340,11 @@ int vfs_fallocate(struct file *file, int mode, loff_t offset, loff_t len)
+ 	 * This implies that events are even created if the file size remains
+ 	 * unchanged, e.g. when using flag FALLOC_FL_KEEP_SIZE.
+ 	 */
+-	if (ret == 0)
++	if (ret == 0) {
+ 		fsnotify_modify(file);
++		ant_monitor_file_copy(ANT_FILE_COPY_FALLOCATE, NULL, -1, file, offset, len,
++				      mode);
++	}
+ 
+ 	file_end_write(file);
+ 	return ret;
+diff --git a/fs/read_write.c b/fs/read_write.c
+index 430c069..b82220c 100644
+--- a/fs/read_write.c
++++ b/fs/read_write.c
+@@ -20,6 +20,7 @@
+ #include <linux/compat.h>
+ #include <linux/mount.h>
+ #include <linux/fs.h>
++#include <linux/antinomie_monitor.h>
+ #include "internal.h"
+ 
+ #include <linux/uaccess.h>
+@@ -574,6 +575,7 @@ ssize_t vfs_read(struct file *file, char __user *buf, size_t count, loff_t *pos)
+ 		add_rchar(current, ret);
+ 	}
+ 	inc_syscr(current);
++	ant_monitor_file_pos(file, pos, ret);
+ 	return ret;
+ }
+ 
+@@ -689,6 +691,7 @@ ssize_t vfs_write(struct file *file, const char __user *buf, size_t count, loff_
+ 	}
+ 	inc_syscw(current);
+ 	file_end_write(file);
++	ant_monitor_file_pos(file, pos, ret);
+ 	return ret;
+ }
+ 
+@@ -1029,6 +1032,7 @@ static ssize_t vfs_readv(struct file *file, const struct iovec __user *vec,
+ 	if (ret >= 0)
+ 		fsnotify_access(file);
+ 	kfree(iov);
++	ant_monitor_file_pos(file, pos, ret);
+ 	return ret;
+ }
+ 
+@@ -1069,6 +1073,7 @@ static ssize_t vfs_writev(struct file *file, const struct iovec __user *vec,
+ 	file_end_write(file);
+ out:
+ 	kfree(iov);
++	ant_monitor_file_pos(file, pos, ret);
+ 	return ret;
+ }
+ 
+@@ -1404,6 +1409,8 @@ static ssize_t do_sendfile(int out_fd, int in_fd, loff_t *ppos,
+ 			*ppos = pos;
+ 		else
+ 			fd_file(in)->f_pos = pos;
++		ant_monitor_file_copy(ANT_FILE_COPY_SENDFILE, fd_file(in), pos - retval,
++				      fd_file(out), opipe ? -1 : out_pos - retval, retval, 0);
+ 	}
+ 
+ 	inc_syscr(current);
+@@ -1705,6 +1712,8 @@ SYSCALL_DEFINE6(copy_file_range, int, fd_in, loff_t __user *, off_in,
+ 	ret = vfs_copy_file_range(fd_file(f_in), pos_in, fd_file(f_out), pos_out, len,
+ 				  flags);
+ 	if (ret > 0) {
++		ant_monitor_file_copy(ANT_FILE_COPY_RANGE, fd_file(f_in), pos_in,
++				      fd_file(f_out), pos_out, ret, 0);
+ 		pos_in += ret;
+ 		pos_out += ret;
+ 
+@@ -1770,6 +1779,7 @@ int generic_write_checks_count(struct kiocb *iocb, loff_t *count)
+ 
+ 	if (iocb->ki_flags & IOCB_APPEND)
+ 		iocb->ki_pos = i_size_read(inode);
++	ant_monitor_write_order();
+ 
+ 	if ((iocb->ki_flags & IOCB_NOWAIT) &&
+ 	    !((iocb->ki_flags & IOCB_DIRECT) ||
+diff --git a/fs/splice.c b/fs/splice.c
+index ed8177f..66ec692 100644
+--- a/fs/splice.c
++++ b/fs/splice.c
+@@ -36,6 +36,7 @@
+ #include <linux/net.h>
+ #include <linux/socket.h>
+ #include <linux/sched/signal.h>
++#include <linux/antinomie_monitor.h>
+ 
+ #include "internal.h"
+ 
+@@ -744,6 +745,7 @@ iter_file_splice_write(struct pipe_inode_info *pipe, struct file *out,
+ 		sd.pos = kiocb.ki_pos;
+ 		if (ret <= 0)
+ 			break;
++		ant_monitor_copy_data(array, n, ret);
+ 		WARN_ONCE(ret > sd.total_len - left,
+ 			  "Splice Exceeded! ret=%zd tot=%zu left=%zu\n",
+ 			  ret, sd.total_len, left);
+@@ -1353,6 +1355,7 @@ ssize_t do_splice(struct file *in, loff_t *off_in, struct file *out,
+ 		if (in->f_flags & O_NONBLOCK)
+ 			flags |= SPLICE_F_NONBLOCK;
+ 
++		ant_monitor_copy_begin(ANT_FILE_COPY_SPLICE, in, out, len);
+ 		file_start_write(out);
+ 		ret = do_splice_from(ipipe, out, &offset, len, flags);
+ 		file_end_write(out);
+@@ -1361,6 +1364,9 @@ ssize_t do_splice(struct file *in, loff_t *off_in, struct file *out,
+ 			out->f_pos = offset;
+ 		else
+ 			*off_out = offset;
++		if (ret > 0)
++			ant_monitor_file_copy(ANT_FILE_COPY_SPLICE, in, -1, out,
++					      offset - ret, ret, 0);
+ 	} else if (opipe) {
+ 		if (off_out)
+ 			return -ESPIPE;
+@@ -1385,6 +1391,9 @@ ssize_t do_splice(struct file *in, loff_t *off_in, struct file *out,
+ 			in->f_pos = offset;
+ 		else
+ 			*off_in = offset;
++		if (ret > 0)
++			ant_monitor_file_copy(ANT_FILE_COPY_SPLICE, in, offset - ret, out,
++					      -1, ret, 0);
+ 	} else {
+ 		ret = -EINVAL;
+ 	}
+diff --git a/include/linux/antinomie_monitor.h b/include/linux/antinomie_monitor.h
+index b8024ac..b8053b4 100644
+--- a/include/linux/antinomie_monitor.h
++++ b/include/linux/antinomie_monitor.h
+@@ -19,6 +19,7 @@ struct iov_iter;
+ struct mm_struct;
+ struct kernel_siginfo;
+ struct linux_binprm;
++struct bio_vec;
+ #define ANT_ASYNC_IO_URING 1
+ #define ANT_ASYNC_AIO 2
+ #define ANT_ASYNC_PAYLOAD_GAP BIT(0)
+@@ -32,6 +33,12 @@ struct linux_binprm;
+ #define ANT_FILE_ID_LINK 3
+ #define ANT_FILE_ID_UNLINK 4
+ #define ANT_FILE_ID_ISSUE 5
++/* Kinds of in-kernel copy record (ANTC_FILECOPY_* in control_wire.h). */
++#define ANT_FILE_COPY_SENDFILE 1
++#define ANT_FILE_COPY_SPLICE 2
++#define ANT_FILE_COPY_RANGE 3
++#define ANT_FILE_COPY_CLONE 4
++#define ANT_FILE_COPY_FALLOCATE 5
+ /* The abi field of a record: a system call of an ABI the recorder has no table
+  * for, or of the native one (<asm/antinomie_syscalls.h>).
+  */
+@@ -173,6 +180,12 @@ void ant_monitor_aio_exit(struct mm_struct *mm);
+ void ant_monitor_aio_ctx_free(const void *ioctx);
+ void ant_monitor_operand(u8 arg, const char *key, const char *layout, const void *data,
+ 			 size_t size);
++void ant_monitor_file_pos(struct file *file, const loff_t *pos, ssize_t ret);
++void ant_monitor_write_order(void);
++void ant_monitor_copy_begin(u8 kind, struct file *in, struct file *out, size_t count);
++void ant_monitor_copy_data(const struct bio_vec *bvec, unsigned int segs, size_t len);
++void ant_monitor_file_copy(u8 kind, struct file *in, loff_t in_pos, struct file *out,
++			   loff_t out_pos, u64 len, u32 mode);
+ #else
+ static inline void ant_monitor_shadow_read(struct mm_struct *mm, unsigned long addr,
+ 					   void *buf, int len) {}
+@@ -284,5 +297,13 @@ static inline void ant_monitor_aio_ctx_free(const void *ioctx) {}
+ static inline void ant_monitor_aio_exit(struct mm_struct *mm) {}
+ static inline void ant_monitor_operand(u8 arg, const char *key, const char *layout,
+ 				       const void *data, size_t size) {}
++static inline void ant_monitor_file_pos(struct file *file, const loff_t *pos, ssize_t ret) {}
++static inline void ant_monitor_write_order(void) {}
++static inline void ant_monitor_copy_begin(u8 kind, struct file *in, struct file *out,
++					  size_t count) {}
++static inline void ant_monitor_copy_data(const struct bio_vec *bvec, unsigned int segs,
++					 size_t len) {}
++static inline void ant_monitor_file_copy(u8 kind, struct file *in, loff_t in_pos,
++					 struct file *out, loff_t out_pos, u64 len, u32 mode) {}
+ #endif
+ #endif
+diff --git a/kernel/antinomie/Makefile b/kernel/antinomie/Makefile
+index 0aab119..8aa3041 100644
+--- a/kernel/antinomie/Makefile
++++ b/kernel/antinomie/Makefile
+@@ -15,5 +15,6 @@ obj-y += hash.o
+ obj-y += debug.o
+ obj-$(CONFIG_X86_64) += debug_x86.o
+ obj-y += fileid.o
++obj-y += fileops.o
+ obj-y += stealth.o
+ obj-y += section_end.o
+diff --git a/kernel/antinomie/control_wire.h b/kernel/antinomie/control_wire.h
+index 103ac5d..56aa302 100644
+--- a/kernel/antinomie/control_wire.h
++++ b/kernel/antinomie/control_wire.h
+@@ -14,7 +14,9 @@
+ /* Revision 15: opt-in root-process ELF core acquisition at exit; ABI 9. */
+ /* Revision 17: kernel-native guest resource sample (RESOURCES), and the
+  * credential and file-hash lifecycle records described below. */
+-#define ANTC_REVISION 17
++/* Revision 18: where reads and writes of seekable files happened, and the
++ * operands of in-kernel copies and allocations (file.position, file.copy). */
++#define ANTC_REVISION 18
+ #define ANTC_HEADER_SIZE 8
+ #define ANTC_UPLOAD_BEGIN 0x1001
+ #define ANTC_UPLOAD_CHUNK 0x1002
+@@ -327,6 +329,66 @@
+ #define ANTC_HASH_FILE_MAX 16777216
+ #define ANTC_HASH_PENDING_MAX 67108864
+ #define ANTC_HASH_QUEUE 16
++/* Kernel-imported fields of a call's exit (arg_index 255, provenance
++ * KERNEL_IMPORTED; revision 18, additive: a host that does not know them shows
++ * an unknown field). Only native calls that succeeded carry them, and only for
++ * seekable files: regular files and block devices.
++ * file.position, layout "antinomie.filepos/1", 24 bytes: u64 offset at 0, the
++ * file offset where the transfer began, u64 length at 8, the bytes it moved
++ * (the result), and u64 write order at 16 (below). Published by read, write,
++ * pread64, pwrite64, readv, writev, preadv, pwritev, preadv2 and pwritev2. It
++ * is the position the file system used, not the one the program could have
++ * predicted: a descriptor shared with another task (fork, dup, SCM_RIGHTS)
++ * moves for all of them, and an O_APPEND write (or RWF_APPEND, or a pwrite on
++ * an O_APPEND file) starts at the end of the file as it was when the write
++ * took the inode lock.
++ * Write order: a number from one counter for the whole guest, taken in the
++ * file system's write checks (generic_write_checks), which it runs holding the
++ * file's inode lock. Two writes to one file that the lock serialized have
++ * numbers in the order the file system applied them, whatever order their
++ * exits reach the host in; a host replays overlapping writes by it. Zero when
++ * not known: a read, a block device, a file system that does not use the
++ * generic checks. A call that writes in several pieces (a splice) has the
++ * number of its first piece.
++ * file.copy, layout "antinomie.filecopy/1", 104 bytes: what an in-kernel copy
++ * moved, or the range an allocation changed. u8 kind at 0 (SENDFILE, SPLICE,
++ * COPY_RANGE: copy_file_range, CLONE: ioctl FICLONE or FICLONERANGE,
++ * FALLOCATE: fallocate or a preallocation ioctl), u8 flags at 1
++ * (SOURCE_OFFSET: the source offset is a file offset; DEST_OFFSET: the same
++ * for the destination; DATA: the bytes follow as field file.copy.data;
++ * DATA_CUT: the destination got more than file.copy.data holds), zero at 2,
++ * u32 mode at 4 (FALLOCATE: the FALLOC_FL_* flags; zero otherwise), u64
++ * length at 8 (bytes moved or cloned; FALLOCATE: the range's length), u64
++ * source offset at 16, u64 destination offset at 24 (where the range began;
++ * zero without its flag), then the source at 32 and the destination at 56,
++ * each u64 dev (new_encode_dev of the superblock), u64 ino, u32 generation,
++ * u32 mode (i_mode; all zero for FALLOCATE's absent source; a pipe or socket
++ * has its own inode), u64 destination size at 80 (i_size after the call, for
++ * a seekable destination), u32 data length at 88 (bytes in file.copy.data),
++ * zero at 92, u64 write order at 96 (as for file.position, of the write into
++ * the destination; zero for a clone or an allocation). A copy is recorded when either end is seekable: a splice
++ * between a pipe and a socket is not. When the destination is seekable and
++ * the source is not (a splice from a pipe; sendfile and copy_file_range need
++ * a seekable source), the source cannot be read again, so the bytes the
++ * destination got at the destination offset are carried as file.copy.data
++ * (encoding 1, declared extent = length), at most ANTC_FILECOPY_DATA_MAX per
++ * call; the rest is DATA_CUT. A seekable source is not carried: the host
++ * rebuilds the bytes from what it knows of that file. ioctl FIDEDUPERANGE is
++ * not recorded (it changes no content), and neither are io_uring's splice and
++ * fallocate requests.
++ */
++#define ANTC_FILEPOS_SIZE 24
++#define ANTC_FILECOPY_SIZE 104
++#define ANTC_FILECOPY_SENDFILE 1
++#define ANTC_FILECOPY_SPLICE 2
++#define ANTC_FILECOPY_RANGE 3
++#define ANTC_FILECOPY_CLONE 4
++#define ANTC_FILECOPY_FALLOCATE 5
++#define ANTC_FILECOPY_SOURCE_OFFSET 1
++#define ANTC_FILECOPY_DEST_OFFSET 2
++#define ANTC_FILECOPY_DATA 4
++#define ANTC_FILECOPY_DATA_CUT 8
++#define ANTC_FILECOPY_DATA_MAX 1048576
+ #define ANTC_UPLOAD_OVERWRITE 1
+ #define ANTC_UPLOAD_EXECUTABLE 2
+ 
+diff --git a/kernel/antinomie/fileops.c b/kernel/antinomie/fileops.c
+new file mode 100644
+index 0000000..e59d1be
+--- /dev/null
++++ b/kernel/antinomie/fileops.c
+@@ -0,0 +1,232 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* Where a traced call read or wrote a file, and what an in-kernel copy moved.
++ *
++ * A read or write through a descriptor uses the open file's position, which
++ * the host cannot follow: a descriptor shared after fork or dup moves for
++ * every task that uses it, and an O_APPEND write lands at the end of the file
++ * as it is when the write takes the inode lock, whatever the position was.
++ * The file system leaves the position where the transfer ended, so the record
++ * carries where it began and its length (file.position).
++ *
++ * An in-kernel copy (sendfile, splice, copy_file_range, a reflink clone)
++ * moves bytes the program never holds, and fallocate changes a range without
++ * writing it. The record names both files and both ranges (file.copy), so the
++ * host can rebuild the bytes from the source it knows. The pipe a splice
++ * reads cannot be read again (sendfile and copy_file_range need a seekable
++ * source), so the bytes the destination got are carried with it
++ * (file.copy.data), up to a budget per call.
++ *
++ * Writes to one file that race finish in an order the exits do not show: the
++ * file system applies them one at a time under the inode lock, and the task
++ * that took the lock first can reach its exit last. Each write takes a number
++ * from one counter while the lock is held (the write order), so the host can
++ * replay overlapping writes in the order the file system applied them.
++ *
++ * Only seekable files have positions: regular files and block devices. All
++ * records go out with the call's exit; a call that failed has none.
++ */
++#include <linux/antinomie_monitor.h>
++#include <linux/atomic.h>
++#include <linux/bvec.h>
++#include <linux/fs.h>
++#include <linux/kdev_t.h>
++#include <linux/minmax.h>
++#include <linux/mm.h>
++#include <linux/sched.h>
++#include <linux/slab.h>
++#include <linux/string.h>
++#include <linux/uio.h>
++#include <linux/unaligned.h>
++#include <asm/unistd.h>
++
++#include "control_wire.h"
++#include "fileops.h"
++
++static_assert(ANT_FILE_COPY_SENDFILE == ANTC_FILECOPY_SENDFILE &&
++	      ANT_FILE_COPY_SPLICE == ANTC_FILECOPY_SPLICE &&
++	      ANT_FILE_COPY_RANGE == ANTC_FILECOPY_RANGE &&
++	      ANT_FILE_COPY_CLONE == ANTC_FILECOPY_CLONE &&
++	      ANT_FILE_COPY_FALLOCATE == ANTC_FILECOPY_FALLOCATE);
++
++static bool seekable(const struct inode *inode)
++{
++	return S_ISREG(inode->i_mode) || S_ISBLK(inode->i_mode);
++}
++
++static bool rw_call(u64 nr)
++{
++	switch (nr) {
++	case __NR_read: case __NR_write: case __NR_pread64: case __NR_pwrite64:
++	case __NR_readv: case __NR_writev: case __NR_preadv: case __NR_pwritev:
++	case __NR_preadv2: case __NR_pwritev2:
++		return true;
++	}
++	return false;
++}
++
++/* The system call that makes a record of @kind. The hooks sit in functions
++ * that other paths share (io_uring's splice and fallocate, an exec reading its
++ * image): only the call itself is recorded.
++ */
++static bool copy_call(u8 kind, u64 nr)
++{
++	switch (kind) {
++	case ANT_FILE_COPY_SENDFILE:
++		return nr == __NR_sendfile;
++	case ANT_FILE_COPY_SPLICE:
++		return nr == __NR_splice;
++	case ANT_FILE_COPY_RANGE:
++		return nr == __NR_copy_file_range;
++	case ANT_FILE_COPY_CLONE:
++		return nr == __NR_ioctl;
++	case ANT_FILE_COPY_FALLOCATE:
++		/* fallocate, and the preallocation ioctls that call it. */
++		return nr == __NR_fallocate || nr == __NR_ioctl;
++	}
++	return false;
++}
++
++void ant_fileops_reset(struct ant_fileops *ops)
++{
++	if (!ops->position_set && !ops->copy_set && !ops->data_wanted && !ops->order)
++		return;
++	kvfree(ops->data);
++	memset(ops, 0, sizeof(*ops));
++}
++
++/* vfs_read(), vfs_write(), vfs_readv(), vfs_writev(): @pos is where the
++ * transfer of @ret bytes left the position (NULL for a stream).
++ */
++void ant_monitor_file_pos(struct file *file, const loff_t *pos, ssize_t ret)
++{
++	struct ant_fileops *ops;
++	u64 nr;
++
++	if (!current->ant_monitor || ret < 0 || !pos || !seekable(file_inode(file)))
++		return;
++	ops = ant_monitor_fileops(&nr);
++	if (!ops || !rw_call(nr))
++		return;
++	put_unaligned_le64(*pos - ret, ops->position);
++	put_unaligned_le64(ret, ops->position + 8);
++	put_unaligned_le64(ops->order, ops->position + 16);
++	ops->position_set = true;
++}
++
++static atomic64_t write_order = ATOMIC64_INIT(0);
++
++/* generic_write_checks_count(), which the file system runs holding the
++ * file's inode lock: the write is about to be applied. A call that writes in
++ * pieces keeps the number of its first.
++ */
++void ant_monitor_write_order(void)
++{
++	struct ant_fileops *ops;
++	u64 nr;
++
++	if (!current->ant_monitor)
++		return;
++	ops = ant_monitor_fileops(&nr);
++	if (!ops || ops->order)
++		return;
++	if (!rw_call(nr) && !copy_call(ANT_FILE_COPY_SENDFILE, nr) &&
++	    !copy_call(ANT_FILE_COPY_SPLICE, nr) && !copy_call(ANT_FILE_COPY_RANGE, nr))
++		return;
++	ops->order = atomic64_inc_return(&write_order);
++}
++
++/* Before a copy of up to @count bytes from @in to @out: a destination file
++ * fed from something that cannot be read again keeps the bytes it gets.
++ */
++void ant_monitor_copy_begin(u8 kind, struct file *in, struct file *out, size_t count)
++{
++	struct ant_fileops *ops;
++	size_t size;
++	u64 nr;
++
++	if (!current->ant_monitor || seekable(file_inode(in)) || !seekable(file_inode(out)))
++		return;
++	ops = ant_monitor_fileops(&nr);
++	if (!ops || !copy_call(kind, nr) || ops->data_wanted)
++		return;
++	ops->data_wanted = true;
++	size = min_t(size_t, count, ANTC_FILECOPY_DATA_MAX);
++	ops->data = size ? kvmalloc(size, GFP_KERNEL | __GFP_NOWARN) : NULL;
++	ops->data_size = ops->data ? size : 0;
++}
++
++/* iter_file_splice_write(): @len bytes of @bvec went into the destination. */
++void ant_monitor_copy_data(const struct bio_vec *bvec, unsigned int segs, size_t len)
++{
++	struct ant_fileops *ops;
++	struct iov_iter from;
++	size_t take;
++	u64 nr;
++
++	if (!current->ant_monitor)
++		return;
++	ops = ant_monitor_fileops(&nr);
++	if (!ops || !ops->data_wanted)
++		return;
++	take = min_t(size_t, len, ops->data_size - ops->data_len);
++	if (take) {
++		iov_iter_bvec(&from, ITER_SOURCE, bvec, segs, take);
++		take = copy_from_iter(ops->data + ops->data_len, take, &from);
++		ops->data_len += take;
++	}
++	if (take < len)
++		ops->data_cut = true;
++}
++
++static void pack_file(u8 *at, const struct inode *inode)
++{
++	put_unaligned_le64(new_encode_dev(inode->i_sb->s_dev), at);
++	put_unaligned_le64(inode->i_ino, at + 8);
++	put_unaligned_le32(inode->i_generation, at + 16);
++	put_unaligned_le32(inode->i_mode, at + 20);
++}
++
++/* After a copy, clone or allocation that succeeded: @len bytes from @in at
++ * @in_pos to @out at @out_pos (a negative position: none). @in is NULL for an
++ * allocation, whose @mode is the FALLOC_FL_* flags.
++ */
++void ant_monitor_file_copy(u8 kind, struct file *in, loff_t in_pos, struct file *out,
++			   loff_t out_pos, u64 len, u32 mode)
++{
++	struct inode *source = in ? file_inode(in) : NULL, *target = file_inode(out);
++	struct ant_fileops *ops;
++	u8 *rec, flags = 0;
++	u64 nr;
++
++	if (!current->ant_monitor || !(seekable(target) || (source && seekable(source))))
++		return;
++	ops = ant_monitor_fileops(&nr);
++	if (!ops || !copy_call(kind, nr))
++		return;
++	rec = ops->copy;
++	memset(rec, 0, ANTC_FILECOPY_SIZE);
++	rec[0] = kind;
++	if (source && seekable(source) && in_pos >= 0) {
++		flags |= ANTC_FILECOPY_SOURCE_OFFSET;
++		put_unaligned_le64(in_pos, rec + 16);
++	}
++	if (seekable(target) && out_pos >= 0) {
++		flags |= ANTC_FILECOPY_DEST_OFFSET;
++		put_unaligned_le64(out_pos, rec + 24);
++	}
++	if (ops->data_len)
++		flags |= ANTC_FILECOPY_DATA;
++	if (ops->data_cut || (ops->data_wanted && ops->data_len < len))
++		flags |= ANTC_FILECOPY_DATA_CUT;
++	rec[1] = flags;
++	put_unaligned_le32(mode, rec + 4);
++	put_unaligned_le64(len, rec + 8);
++	if (source)
++		pack_file(rec + 32, source);
++	pack_file(rec + 56, target);
++	if (seekable(target))
++		put_unaligned_le64(i_size_read(target), rec + 80);
++	put_unaligned_le32(ops->data_len, rec + 88);
++	put_unaligned_le64(ops->order, rec + 96);
++	ops->copy_set = true;
++}
+diff --git a/kernel/antinomie/fileops.h b/kernel/antinomie/fileops.h
+new file mode 100644
+index 0000000..6860579
+--- /dev/null
++++ b/kernel/antinomie/fileops.h
+@@ -0,0 +1,37 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef _ANTINOMIE_FILEOPS_H
++#define _ANTINOMIE_FILEOPS_H
++
++#include <linux/types.h>
++
++#include "control_wire.h"
++
++#define ANT_FILEPOS_KEY "file.position"
++#define ANT_FILEPOS_LAYOUT "antinomie.filepos/1"
++#define ANT_FILECOPY_KEY "file.copy"
++#define ANT_FILECOPY_LAYOUT "antinomie.filecopy/1"
++#define ANT_FILECOPY_DATA_KEY "file.copy.data"
++
++/* What the file hooks found during the current traced call, published as
++ * kernel-imported fields of its exit (control_wire.h, file.position and
++ * file.copy). Owned by the task's recorder context; reset at each entry.
++ */
++struct ant_fileops {
++	u8 position[ANTC_FILEPOS_SIZE];
++	u8 copy[ANTC_FILECOPY_SIZE];
++	/* Bytes a copy from a source that cannot be read again gave the destination. */
++	u8 *data;
++	u32 data_len, data_size;
++	/* Write order of the call's first write (control_wire.h); zero: none. */
++	u64 order;
++	bool position_set, copy_set, data_wanted, data_cut;
++};
++
++/* The records of the calling task's traced native call in progress, and its
++ * system call number; NULL when the task is not inside one.
++ */
++struct ant_fileops *ant_monitor_fileops(u64 *nr);
++/* Forget the records (and free the carried bytes). */
++void ant_fileops_reset(struct ant_fileops *ops);
++
++#endif
+diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
+index d4d0879..a448e9d 100644
+--- a/kernel/antinomie/recorder.c
++++ b/kernel/antinomie/recorder.c
+@@ -36,6 +36,7 @@
+ #include "control_wire.h"
+ #include "hash.h"
+ #include "notes.h"
++#include "fileops.h"
+ 
+ /* Scratch bounds packet size, never the logical capture extent. A task owns
+  * its context across migration; failure to allocate does not lose lineage.
+@@ -95,6 +96,8 @@ struct ant_task {
+ 	u64 operand_size;
+ 	u8 operand_arg;
+ 	bool operand_set;
++	/* Where the call read or wrote a file, what a copy moved (fileops.c). */
++	struct ant_fileops fileops;
+ 	/* Contract 22: inputs to read again at exit, without allocating. */
+ 	struct ant_recapture recapture[ANT_RECAPTURE_MAX];
+ 	struct ant_exec_resume exec_resume[2];
+@@ -1057,6 +1060,38 @@ static void operand_emit(struct ant_task *ctx)
+ 	operand_clear(ctx);
+ }
+ 
++struct ant_fileops *ant_monitor_fileops(u64 *nr)
++{
++	struct ant_task *ctx = current->ant_monitor;
++
++	if (!ctx || !ctx->active || ctx->busy || ctx->abi != ANT_ABI_NATIVE)
++		return NULL;
++	*nr = ctx->nr;
++	return &ctx->fileops;
++}
++
++/* The file records of the call (control_wire.h, file.position and file.copy),
++ * kernel-imported fields of its exit.
++ */
++static void fileops_emit(struct ant_task *ctx)
++{
++	struct ant_fileops *ops = &ctx->fileops;
++
++	ctx->kernel_imported = true;
++	if (ops->position_set)
++		field(ctx, 255, ANT_FILEPOS_KEY, ANT_FILEPOS_LAYOUT, 3, 0, ops->position,
++		      ANTC_FILEPOS_SIZE, ANTC_FILEPOS_SIZE, ANT_COMPLETE);
++	if (ops->copy_set) {
++		field(ctx, 255, ANT_FILECOPY_KEY, ANT_FILECOPY_LAYOUT, 3, 0, ops->copy,
++		      ANTC_FILECOPY_SIZE, ANTC_FILECOPY_SIZE, ANT_COMPLETE);
++		if (ops->data_len)
++			field(ctx, 255, ANT_FILECOPY_DATA_KEY, "", 1, 0, ops->data,
++			      ops->data_len, get_unaligned_le64(ops->copy + 8), ANT_COMPLETE);
++	}
++	ctx->kernel_imported = false;
++	ant_fileops_reset(ops);
++}
++
+ /* Credential records (control_wire.h, lifecycle.creds). Every change of a
+  * traced task's credentials goes through commit_creds(): setuid and friends,
+  * capset, and exec of a setuid, setgid or file-capability image. The record is
+@@ -1293,6 +1328,7 @@ void ant_monitor_enter(struct pt_regs *regs, long nr)
+ 	ctx->busy = true;
+ 	ant_capture_set_state(ctx, NULL, NULL);
+ 	operand_clear(ctx);
++	ant_fileops_reset(&ctx->fileops);
+ 	kfree(ctx->iov);
+ 	ctx->iov = NULL;
+ 	ctx->iov_count = 0;
+@@ -1338,6 +1374,7 @@ void ant_monitor_exit(struct pt_regs *regs)
+ 	event_begin(ctx, 2, result);
+ 	operand_emit(ctx);
+ 	capture_exit(ctx, result);
++	fileops_emit(ctx);
+ 	recapture(ctx);
+ 	event_end(ctx);
+ 	recapture_reset(ctx);
+@@ -1730,6 +1767,7 @@ void ant_monitor_release(struct task_struct *task)
+ 	if (ctx) {
+ 		ant_capture_set_state(ctx, NULL, NULL);
+ 		operand_clear(ctx);
++		ant_fileops_reset(&ctx->fileops);
+ 		kfree(ctx->iov);
+ 		kfree(ctx->exec_name);
+ 		kfree(ctx);
+-- 
+2.53.0
+

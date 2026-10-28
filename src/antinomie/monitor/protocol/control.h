@@ -14,7 +14,9 @@
 /* Revision 15: opt-in root-process ELF core acquisition at exit; ABI 9. */
 /* Revision 17: kernel-native guest resource sample (RESOURCES), and the
  * credential and file-hash lifecycle records described below. */
-#define ANTC_REVISION 17
+/* Revision 18: where reads and writes of seekable files happened, and the
+ * operands of in-kernel copies and allocations (file.position, file.copy). */
+#define ANTC_REVISION 18
 #define ANTC_HEADER_SIZE 8
 #define ANTC_UPLOAD_BEGIN 0x1001
 #define ANTC_UPLOAD_CHUNK 0x1002
@@ -327,6 +329,66 @@
 #define ANTC_HASH_FILE_MAX 16777216
 #define ANTC_HASH_PENDING_MAX 67108864
 #define ANTC_HASH_QUEUE 16
+/* Kernel-imported fields of a call's exit (arg_index 255, provenance
+ * KERNEL_IMPORTED; revision 18, additive: a host that does not know them shows
+ * an unknown field). Only native calls that succeeded carry them, and only for
+ * seekable files: regular files and block devices.
+ * file.position, layout "antinomie.filepos/1", 24 bytes: u64 offset at 0, the
+ * file offset where the transfer began, u64 length at 8, the bytes it moved
+ * (the result), and u64 write order at 16 (below). Published by read, write,
+ * pread64, pwrite64, readv, writev, preadv, pwritev, preadv2 and pwritev2. It
+ * is the position the file system used, not the one the program could have
+ * predicted: a descriptor shared with another task (fork, dup, SCM_RIGHTS)
+ * moves for all of them, and an O_APPEND write (or RWF_APPEND, or a pwrite on
+ * an O_APPEND file) starts at the end of the file as it was when the write
+ * took the inode lock.
+ * Write order: a number from one counter for the whole guest, taken in the
+ * file system's write checks (generic_write_checks), which it runs holding the
+ * file's inode lock. Two writes to one file that the lock serialized have
+ * numbers in the order the file system applied them, whatever order their
+ * exits reach the host in; a host replays overlapping writes by it. Zero when
+ * not known: a read, a block device, a file system that does not use the
+ * generic checks. A call that writes in several pieces (a splice) has the
+ * number of its first piece.
+ * file.copy, layout "antinomie.filecopy/1", 104 bytes: what an in-kernel copy
+ * moved, or the range an allocation changed. u8 kind at 0 (SENDFILE, SPLICE,
+ * COPY_RANGE: copy_file_range, CLONE: ioctl FICLONE or FICLONERANGE,
+ * FALLOCATE: fallocate or a preallocation ioctl), u8 flags at 1
+ * (SOURCE_OFFSET: the source offset is a file offset; DEST_OFFSET: the same
+ * for the destination; DATA: the bytes follow as field file.copy.data;
+ * DATA_CUT: the destination got more than file.copy.data holds), zero at 2,
+ * u32 mode at 4 (FALLOCATE: the FALLOC_FL_* flags; zero otherwise), u64
+ * length at 8 (bytes moved or cloned; FALLOCATE: the range's length), u64
+ * source offset at 16, u64 destination offset at 24 (where the range began;
+ * zero without its flag), then the source at 32 and the destination at 56,
+ * each u64 dev (new_encode_dev of the superblock), u64 ino, u32 generation,
+ * u32 mode (i_mode; all zero for FALLOCATE's absent source; a pipe or socket
+ * has its own inode), u64 destination size at 80 (i_size after the call, for
+ * a seekable destination), u32 data length at 88 (bytes in file.copy.data),
+ * zero at 92, u64 write order at 96 (as for file.position, of the write into
+ * the destination; zero for a clone or an allocation). A copy is recorded when either end is seekable: a splice
+ * between a pipe and a socket is not. When the destination is seekable and
+ * the source is not (a splice from a pipe; sendfile and copy_file_range need
+ * a seekable source), the source cannot be read again, so the bytes the
+ * destination got at the destination offset are carried as file.copy.data
+ * (encoding 1, declared extent = length), at most ANTC_FILECOPY_DATA_MAX per
+ * call; the rest is DATA_CUT. A seekable source is not carried: the host
+ * rebuilds the bytes from what it knows of that file. ioctl FIDEDUPERANGE is
+ * not recorded (it changes no content), and neither are io_uring's splice and
+ * fallocate requests.
+ */
+#define ANTC_FILEPOS_SIZE 24
+#define ANTC_FILECOPY_SIZE 104
+#define ANTC_FILECOPY_SENDFILE 1
+#define ANTC_FILECOPY_SPLICE 2
+#define ANTC_FILECOPY_RANGE 3
+#define ANTC_FILECOPY_CLONE 4
+#define ANTC_FILECOPY_FALLOCATE 5
+#define ANTC_FILECOPY_SOURCE_OFFSET 1
+#define ANTC_FILECOPY_DEST_OFFSET 2
+#define ANTC_FILECOPY_DATA 4
+#define ANTC_FILECOPY_DATA_CUT 8
+#define ANTC_FILECOPY_DATA_MAX 1048576
 #define ANTC_UPLOAD_OVERWRITE 1
 #define ANTC_UPLOAD_EXECUTABLE 2
 
