@@ -10,7 +10,7 @@ use crate::{
     widgets::{self, Tone},
 };
 use antinomie_monitor_core::{
-    samples::{Alias, EventRow, Origin, StringRow},
+    samples::{Alias, ChainCheck, EventRow, Origin, StringRow},
     AnalysisReport, RunArtifacts,
 };
 use std::{
@@ -26,6 +26,11 @@ mod runs;
 mod similar;
 mod summary;
 mod triage_parts;
+
+/// A time as the event rows show it.
+pub(super) fn second(ms: u64) -> String {
+    parts::second(ms)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Tab {
@@ -70,6 +75,8 @@ pub(super) struct Data {
     pub(super) origins: Vec<Origin>,
     pub(super) aliases: Vec<Alias>,
     pub(super) events: Vec<EventRow>,
+    /// The custody log checked against the library index.
+    pub(super) chain: ChainCheck,
     pub(super) archive: std::path::PathBuf,
     pub(super) archived: bool,
     /// Newest first.
@@ -254,6 +261,7 @@ fn load(options: &BackendOptions, vms: &[(String, String)], sha256: &str) -> Loa
         origins: library.origins(&record.sha256)?,
         aliases: library.aliases(&record.sha256)?,
         events: library.events(&record.sha256)?,
+        chain: library.custody_check(&record.sha256)?,
         archived: record.removed_ms.is_none() && archive.is_file(),
         archive,
         runs: entries,
@@ -293,6 +301,13 @@ impl SamplesPage {
     /// Open the window of a sample.
     pub(in crate::app) fn open_detail(&mut self, sha256: &str) {
         self.detail = Some(Detail::new(sha256));
+    }
+
+    /// Open the window of a sample on its Custody log tab.
+    pub(super) fn open_custody(&mut self, sha256: &str) {
+        let mut detail = Detail::new(sha256);
+        detail.tab = Tab::Custody;
+        self.detail = Some(detail);
     }
 
     /// Open the viewer on the archived sample.
@@ -445,6 +460,7 @@ enum Action {
     Back,
     EditTags,
     RunInVm,
+    Export,
 }
 
 impl MonitorApp {
@@ -505,7 +521,14 @@ impl MonitorApp {
         match detail.tab {
             Tab::Summary => self.summary_tab(ui, &data),
             Tab::Runs => self.runs_tab(ui, &data),
-            Tab::Custody => custody::show(ui, &data, self.settings.font_size),
+            Tab::Custody => {
+                let verifying = detail.loading.is_some();
+                if let custody::Outcome::Verify =
+                    custody::show(ui, &data, self.settings.font_size, verifying)
+                {
+                    detail.stale = true;
+                }
+            }
         }
         match action {
             Some(Action::Back) => self.samples_page.detail = None,
@@ -517,6 +540,12 @@ impl MonitorApp {
                 ));
             }
             Some(Action::RunInVm) => self.run_sample_in_vm(&data.record),
+            Some(Action::Export) => {
+                self.samples_page.export = Some(super::export::ExportDialog::new(
+                    &data.record,
+                    data.chain.clone(),
+                ));
+            }
             None => {}
         }
     }
@@ -550,8 +579,15 @@ impl MonitorApp {
                 }
             },
             |ui| {
-                ui.add_enabled(false, egui::Button::new("Export custody record…"))
-                    .on_disabled_hover_text("Comes with the custody log");
+                if ui
+                    .button("Export custody record…")
+                    .on_hover_text(
+                        "JSON with a verifier, or HTML; optionally signed with your own key",
+                    )
+                    .clicked()
+                {
+                    chosen = Some(Action::Export);
+                }
                 if ui
                     .add_enabled(can_run, egui::Button::new("Run in VM…"))
                     .on_hover_text(
@@ -712,6 +748,27 @@ impl SamplesPage {
                 _ => None,
             },
         ))
+    }
+
+    /// The custody log as the window read it: entries listed, whether the
+    /// chain verified, and the entry the first problem is at.
+    pub(in crate::app) fn detail_custody(&self) -> Option<(usize, bool, Option<u64>)> {
+        let data = self.detail.as_ref()?.data.as_ref()?;
+        Some((
+            data.events.len(),
+            data.chain.ok(),
+            data.chain.problem.as_ref().map(|problem| problem.at),
+        ))
+    }
+
+    /// Open Export custody record… for the open sample.
+    pub(in crate::app) fn open_export_for_test(&mut self) {
+        if let Some(data) = self.detail.as_ref().and_then(|detail| detail.data.clone()) {
+            self.export = Some(super::export::ExportDialog::new(
+                &data.record,
+                data.chain.clone(),
+            ));
+        }
     }
 
     /// The run ids in the order the Runs tab lists them (newest first).

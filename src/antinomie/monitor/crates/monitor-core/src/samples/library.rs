@@ -5,10 +5,11 @@
 //! Identity is the SHA-256 of the bytes. The same bytes reaching the library
 //! by two routes are one sample with two origins. Archives are AES zips with
 //! the password `infected` (see [`super::archive`]); the database holds
-//! names, descriptions, tags, origins, sends and plain custody events. The
+//! names, descriptions, tags, origins, sends and custody events. The
 //! database is the record of what the analyst did; the archives are the
 //! bytes. A missing archive shows as missing, never as silently absent.
-use super::custody::{CustodyEvent, CustodySink, PlainEvents};
+use super::chain::ChainedEvents;
+use super::custody::{CustodyEvent, CustodySink};
 use super::{SampleInfo, archive};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -357,9 +358,17 @@ pub struct RunStats {
 /// A custody event as listed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EventRow {
+    /// The entry's number in the sample's chain, from 1.
+    pub seq: u64,
     pub at_ms: u64,
     pub by: String,
     pub event: CustodyEvent,
+    /// Recorded before the custody log existed and brought in with it.
+    pub before_chain: bool,
+    /// The hash of the entry before this one (zeros for the first).
+    pub prev: String,
+    /// This entry's own hash.
+    pub hash: String,
 }
 
 /// Open the database, creating and checking its layout.
@@ -393,11 +402,11 @@ impl std::fmt::Debug for Library {
 
 impl Library {
     /// Open (and on first use create) the library of `data_dir`, bringing in
-    /// records made by earlier versions. Events go to the plain event table.
+    /// records made by earlier versions. Events go to the custody chains.
     pub fn open(data_dir: &Path) -> Result<Self, String> {
         let root = super::samples_dir(data_dir);
         let database = root.join(DATABASE);
-        Self::open_with(data_dir, Arc::new(PlainEvents::new(&database)))
+        Self::open_with(data_dir, Arc::new(ChainedEvents::new(&database)))
     }
 
     /// [`Library::open`] with another custody sink.
@@ -416,8 +425,9 @@ impl Library {
         connection
             .execute_batch(&format!(
                 "BEGIN IMMEDIATE;{SCHEMA}\
-                 INSERT OR IGNORE INTO meta(key, value) VALUES('schema', '{SCHEMA_VERSION}');\
-                 COMMIT;"
+                 {}INSERT OR IGNORE INTO meta(key, value) VALUES('schema', '{SCHEMA_VERSION}');\
+                 COMMIT;",
+                super::chain::SCHEMA
             ))
             .map_err(|e| e.to_string())?;
         let version: Option<i64> = connection
@@ -436,6 +446,7 @@ impl Library {
             }
             Some(_) => {}
         }
+        custody.prepare()?;
         let mut library = Self {
             root,
             connection,
@@ -450,6 +461,13 @@ impl Library {
         self.custody
             .record(sha256, by, now_ms(), &event)
             .map_err(|e| format!("saved, but its custody event was not recorded: {e}"))
+    }
+
+    /// Add an entry to a sample's custody log for something that happened
+    /// outside the library (a run, an analyst action). The event's own type
+    /// decides what it can hold; see [`CustodyEvent`].
+    pub fn record_event(&self, sha256: &str, by: &str, event: CustodyEvent) -> Result<(), String> {
+        self.note(sha256, by, event)
     }
 
     pub fn contains(&self, sha256: &str) -> Result<bool, String> {
@@ -600,30 +618,11 @@ impl Library {
 
     /// The events of one sample, oldest first.
     pub fn events(&self, sha256: &str) -> Result<Vec<EventRow>, String> {
-        let mut statement = self
-            .connection
-            .prepare("SELECT at_ms, by, detail FROM event WHERE sha256=?1 ORDER BY id")
-            .map_err(|e| e.to_string())?;
-        statement
-            .query_map([sha256.to_ascii_lowercase()], |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            })
-            .map_err(|e| e.to_string())?
-            .filter_map(|row| match row {
-                Ok((at, by, detail)) => serde_json::from_str(&detail).ok().map(|event| {
-                    Ok(EventRow {
-                        at_ms: at as u64,
-                        by,
-                        event,
-                    })
-                }),
-                Err(error) => Some(Err(error.to_string())),
-            })
-            .collect()
+        Ok(self
+            .custody_entries(sha256)?
+            .iter()
+            .filter_map(super::chain::row_of)
+            .collect())
     }
 
     /// Replace a sample's tags. Every tag must be valid and a custom tag

@@ -17,6 +17,9 @@ use std::{
 };
 
 mod archive;
+mod chain;
+mod chain_check;
+mod chain_export;
 mod custody;
 mod intake;
 mod library;
@@ -28,7 +31,15 @@ mod similar;
 mod summary;
 
 pub use archive::Verification;
-pub use custody::{CustodyEvent, CustodySink, NoCustody, PlainEvents};
+pub use chain::{ChainedEvents, CustodyQuery, GlobalRow, LibraryCheck};
+pub use chain_check::{
+    ChainCheck, Entry as CustodyEntry, EntryState, IndexCheck, IndexRecord, Problem, short,
+};
+pub use chain_export::{
+    Exported, Format as ExportFormat, RecordCheck, SSH_NAMESPACE, SignWith, Signer, VERIFIER,
+    VERIFIER_NAME, sign_file, verify_record,
+};
+pub use custody::{ActionKind, CustodyEvent, CustodySink, KINDS, NoCustody};
 pub use intake::{Added, FileProbe, NewSample, detect_type};
 pub use library::{
     Alias, CATEGORIES, EventRow, Library, NewOrigin, Origin, OriginKind, RunStats, SampleRecord,
@@ -743,6 +754,8 @@ pub const STARTERS: &[(&str, &str)] = &[
     ("CoinMiner", "XMRig-based miners"),
 ];
 
+#[cfg(test)]
+mod chain_tests;
 #[cfg(test)]
 mod library_tests;
 #[cfg(test)]

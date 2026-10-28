@@ -30,6 +30,7 @@ mod pending;
 mod rules_startup;
 mod run_kill;
 mod run_selection;
+mod samples_custody;
 mod samples_detail;
 mod samples_list;
 mod samples_shots;

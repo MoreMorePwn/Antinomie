@@ -3,7 +3,7 @@
 //! an X11 display; exits by itself. The library lives in ANTINOMIE_QA_DATA
 //! (a throwaway folder; never the user's data).
 //!
-//! ANTINOMIE_QA_SCENE = list | tags | add | edit | detail | detail2 | regex | lineage | lineage2 | outputs | viewer | promote | similar | runs | custody,
+//! ANTINOMIE_QA_SCENE = list | tags | add | edit | detail | detail2 | regex | lineage | lineage2 | outputs | viewer | promote | similar | runs | custody | custody_broken | custody_all | custody_all_broken | export,
 //! ANTINOMIE_QA_THEME = dark | light | blue, ANTINOMIE_QA_SIZE = 1400x820,
 //! ANTINOMIE_QA_SECONDS = 25.
 use super::*;
@@ -25,6 +25,8 @@ fn native_samples_fixture() {
         open_viewer: bool,
         /// Open Add to Samples… once the window has read the sample.
         open_promote: Option<PathBuf>,
+        /// Open Export custody record… once the window has read the sample.
+        open_export: bool,
     }
     impl eframe::App for QaApp {
         fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
@@ -39,6 +41,10 @@ fn native_samples_fixture() {
                 if let Some(dir) = self.open_promote.take() {
                     self.app.samples_page.open_promote_for_test(&dir);
                 }
+            }
+            if self.open_export && self.app.samples_page.detail_custody().is_some() {
+                self.open_export = false;
+                self.app.samples_page.open_export_for_test();
             }
             eframe::App::update(&mut self.app, ctx, frame);
             ctx.request_repaint_after(Duration::from_millis(200));
@@ -136,6 +142,10 @@ fn native_samples_fixture() {
                     | "promote"
                     | "runs"
                     | "custody"
+                    | "custody_broken"
+                    | "custody_all"
+                    | "custody_all_broken"
+                    | "export"
             ) {
                 // Runs that exist on disk, one with a static report.
                 let now = std::time::SystemTime::now()
@@ -161,11 +171,28 @@ fn native_samples_fixture() {
                     ..VmConfig::default()
                 });
                 app.samples_page.open_detail(&script);
+                if scene.ends_with("broken") {
+                    // The second entry was edited, and a later one removed
+                    // from the sample that was dropped by it.
+                    let connection =
+                        rusqlite::Connection::open(data.join("samples/library.sqlite")).unwrap();
+                    connection
+                        .execute(
+                            "UPDATE custody_entry SET detail=replace(detail,'tags','tags, verdict') \
+                             WHERE seq=2 AND sha256=?1",
+                            [&script],
+                        )
+                        .unwrap();
+                }
                 app.samples_page.show_detail_tab(match scene.as_str() {
                     "runs" => "runs",
-                    "custody" => "custody",
+                    "custody" | "custody_broken" | "export" => "custody",
                     _ => "summary",
                 });
+                if scene.starts_with("custody_all") {
+                    app.samples_page.close_detail();
+                    app.samples_page.open_custody_all();
+                }
                 // The page keeps its scroll between runs of the fixture (the
                 // window state is saved), so every scene says where it is.
                 app.samples_page.scroll_detail(match scene.as_str() {
@@ -204,6 +231,7 @@ fn native_samples_fixture() {
                 app,
                 open_viewer: scene == "viewer",
                 open_promote: (scene == "promote").then(|| data.clone()),
+                open_export: scene == "export",
                 deadline: Instant::now() + Duration::from_secs(seconds),
             }))
         }),

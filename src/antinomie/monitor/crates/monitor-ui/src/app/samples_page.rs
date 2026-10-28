@@ -6,7 +6,7 @@
 //! parents and children.
 use super::*;
 use antinomie_monitor_core::samples::{
-    Library, RunStats, SampleRecord, SeenRun, Tag, Verification,
+    Library, LibraryCheck, RunStats, SampleRecord, SeenRun, Tag, Verification,
 };
 use std::{
     collections::BTreeMap,
@@ -14,7 +14,10 @@ use std::{
 };
 
 mod add;
+mod custody_all;
+mod custody_parts;
 mod detail;
+mod export;
 mod list;
 mod picker;
 mod promote;
@@ -33,7 +36,7 @@ pub(super) struct Row {
 }
 
 type Loaded = Result<Vec<Row>, String>;
-type Verified = Result<Vec<(String, Verification)>, String>;
+type Verified = Result<(Vec<(String, Verification)>, LibraryCheck), String>;
 
 /// How a run's root ended, as the run list says it.
 fn exit_label(run: &RunSummary) -> String {
@@ -134,6 +137,10 @@ pub(super) struct SamplesPage {
     viewer: Option<viewer::Viewer>,
     /// Add to Samples… for a file of a run.
     promote: Option<promote::Promote>,
+    /// Export custody record… for the open sample.
+    export: Option<export::ExportDialog>,
+    /// The custody log across every sample; shows instead of the list.
+    custody_all: Option<custody_all::CustodyAll>,
 }
 
 /// A run to open in a panel of the VM it belongs to: the VM is selected and
@@ -213,7 +220,7 @@ impl SamplesPage {
             if let Ok(result) = receiver.try_recv() {
                 self.verifying = None;
                 self.notice = Some(match result {
-                    Ok(results) => {
+                    Ok((results, custody)) => {
                         self.problems = results
                             .iter()
                             .filter_map(|(sha256, result)| match result {
@@ -228,18 +235,17 @@ impl SamplesPage {
                             .collect();
                         let bad = self.problems.len();
                         (
-                            if bad == 0 {
-                                format!(
-                                    "Read back {} archives: every SHA-256 matches",
-                                    results.len()
-                                )
-                            } else {
-                                format!(
-                                    "Read back {} archives: {bad} did not verify",
-                                    results.len()
-                                )
-                            },
-                            bad > 0,
+                            format!(
+                                "Read back {} archives: {}; {}",
+                                results.len(),
+                                if bad == 0 {
+                                    "every SHA-256 matches".to_owned()
+                                } else {
+                                    format!("{bad} did not verify")
+                                },
+                                custody.summary()
+                            ),
+                            bad > 0 || !custody.ok(),
                         )
                     }
                     Err(error) => (format!("Verify all: {error}"), true),
@@ -259,7 +265,10 @@ impl SamplesPage {
         match std::thread::Builder::new()
             .name("samples-verify".into())
             .spawn(move || {
-                let _ = sender.send(Library::open(&data_dir).and_then(|mut l| l.verify_all()));
+                let _ = sender.send(Library::open(&data_dir).and_then(|mut l| {
+                    let archives = l.verify_all()?;
+                    Ok((archives, l.custody_check_all()?))
+                }));
                 wake.request_repaint();
             }) {
             Ok(_) => self.verifying = Some(receiver),
@@ -344,15 +353,42 @@ impl MonitorApp {
         }
         if self.samples_page.detail.is_some() {
             self.detail_view(ui);
+        } else if self.samples_page.custody_all.is_some() {
+            self.custody_all_view(ui);
         } else {
             self.list_view(ui);
         }
         self.samples_dialogs(&ctx);
     }
 
+    /// The custody log across every sample.
+    fn custody_all_view(&mut self, ui: &mut egui::Ui) {
+        let font = self.settings.font_size;
+        let data_dir = self.options.data_dir.clone();
+        let Some(view) = &mut self.samples_page.custody_all else {
+            return;
+        };
+        match view.show(ui, &data_dir, font) {
+            custody_all::Outcome::None => {}
+            custody_all::Outcome::Back => self.samples_page.custody_all = None,
+            custody_all::Outcome::Open(sha256) => {
+                self.samples_page.custody_all = None;
+                self.samples_page.selected = Some(sha256.clone());
+                self.samples_page.open_custody(&sha256);
+            }
+        }
+    }
+
     /// The windows over the page: Add file, Edit tags, Remove.
     fn samples_dialogs(&mut self, ctx: &egui::Context) {
         let mut refresh = false;
+        if let Some(dialog) = &mut self.samples_page.export {
+            dialog.show(ctx, &self.options.data_dir);
+            refresh = std::mem::take(&mut dialog.wrote);
+            if !dialog.open {
+                self.samples_page.export = None;
+            }
+        }
         if let Some(dialog) = &mut self.samples_page.promote {
             dialog.show(ctx);
             refresh = std::mem::take(&mut dialog.added);
@@ -362,6 +398,9 @@ impl MonitorApp {
         }
         if refresh {
             self.samples_page.refresh();
+            if let Some(view) = &mut self.samples_page.custody_all {
+                view.refresh();
+            }
         }
         if let Some(viewer) = &mut self.samples_page.viewer {
             viewer.show(ctx);
@@ -540,6 +579,21 @@ impl SamplesPage {
         if let Some(dialog) = &mut self.add {
             dialog.tick_delete_original();
         }
+    }
+    pub(in crate::app) fn open_custody_all(&mut self) {
+        self.custody_all = Some(custody_all::CustodyAll::new());
+    }
+    pub(in crate::app) fn custody_all_mut(&mut self) -> Option<&mut custody_all::CustodyAll> {
+        self.custody_all.as_mut()
+    }
+    pub(in crate::app) fn custody_all_ref(&self) -> Option<&custody_all::CustodyAll> {
+        self.custody_all.as_ref()
+    }
+    pub(in crate::app) fn export_ref(&self) -> Option<&export::ExportDialog> {
+        self.export.as_ref()
+    }
+    pub(in crate::app) fn export_mut(&mut self) -> Option<&mut export::ExportDialog> {
+        self.export.as_mut()
     }
     pub(super) fn notice_text(&self) -> Option<&str> {
         self.notice.as_ref().map(|(text, _)| text.as_str())

@@ -55,6 +55,7 @@ impl MonitorApp {
         let mut add = false;
         let mut verify = false;
         let mut download = false;
+        let mut custody = false;
         let mut refresh = false;
         egui::Sides::new().show(
             ui,
@@ -74,6 +75,10 @@ impl MonitorApp {
                     .button("Download…")
                     .on_hover_text("Search MalwareBazaar and MalShare; downloads land here")
                     .clicked();
+                custody = ui
+                    .button("Custody log")
+                    .on_hover_text("What happened to every sample, with the hash chain checked")
+                    .clicked();
                 verify = ui
                     .add_enabled(
                         self.samples_page.verifying.is_none(),
@@ -92,6 +97,9 @@ impl MonitorApp {
         }
         if download {
             self.samples.open = true;
+        }
+        if custody {
+            self.samples_page.custody_all = Some(super::custody_all::CustodyAll::new());
         }
         if verify {
             self.samples_page.start_verify(&ctx, &self.options.data_dir);

@@ -6,6 +6,21 @@ it runs.
 
 ## 0.8.0 — unreleased
 
+- **A custody log chains everything done to or by each sample.** Every entry
+  (added, edited, sent to a run, seen in a run, exported, removed) stores the
+  SHA-256 of the entry before it, and a library index chain records each log's
+  head, so an edited, removed or reordered entry, or a removed sample log, is
+  found. Verify names the first entry that changed. The Custody log tab shows
+  a check per entry and a copyable head hash; Samples has a global view with
+  event-kind filters. Export custody record writes JSON with a stdlib Python
+  verifier, or HTML, optionally signed with your own minisign or SSH key (never
+  an app key). Terminal input is recorded by size only. Plain events from earlier
+  versions are migrated once and marked "recorded before the custody log".
+  Remove keeps the log with a Removed entry; a full purge is separate and
+  recorded in the index chain. The log is tamper-evident, not tamper-proof:
+  someone who rewrites the whole library can rewrite both chains, so keep the
+  head hash somewhere else.
+
 - **File activity keeps what a run wrote, within a budget.** Every write
   the kernel captured is indexed per file as a byte range (offset, length) that
   reads back exactly from the run's object store, however many writes the file
