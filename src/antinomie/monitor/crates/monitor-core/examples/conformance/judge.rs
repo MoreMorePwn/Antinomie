@@ -418,7 +418,11 @@ impl<'a> Judge<'a> {
         let Some(ended) = call.exit.as_ref().map(|exit| exit.timestamp_ns) else {
             return false;
         };
-        let nr = if code == -516 { 219 } else { expect.nr };
+        // ERESTART_RESTARTBLOCK: the call resumes as restart_syscall.
+        let nr = match (code == -516).then(|| syscalls::number("restart_syscall")) {
+            Some(Some(restart)) => restart,
+            _ => expect.nr,
+        };
         self.by_thread
             .get(&(expect.tid, nr))
             .into_iter()

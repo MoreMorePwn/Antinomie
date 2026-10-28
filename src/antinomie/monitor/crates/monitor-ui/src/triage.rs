@@ -12,7 +12,7 @@ use crate::{
     query::{self, FieldSpec, RowValue},
     theme, trace,
 };
-use antinomie_monitor_core::{EventSummary, InvocationSummary};
+use antinomie_monitor_core::{syscalls, EventSummary, InvocationSummary};
 use eframe::egui::{self, RichText};
 /// Where a row of Detection > Scanned inputs opens.
 #[derive(Clone, Debug, PartialEq)]
@@ -910,13 +910,15 @@ const PROCESS_FIELDS: &[FieldSpec<'static>] = &[
     FieldSpec::number("process.last_ns", "Last observed monotonic ns"),
 ];
 
-/// x86-64: clone, fork, vfork, clone3. `CLONE_THREAD` stays inside the parent.
-/// `clone` reads that bit from `args[0]`. `clone3`'s `args[0]` is a pointer, so
-/// its flags come only from a captured `clone_args` flags field.
-const CLONE: u64 = 56;
-const FORK: u64 = 57;
-const VFORK: u64 = 58;
-const CLONE3: u64 = 435;
+/// Clone, fork, vfork, clone3. `CLONE_THREAD` stays inside the parent. `clone`
+/// reads that bit from its `clone_flags` argument, found by name in the table
+/// (`clone_flags`). `clone3`'s first argument is a pointer, so its flags come
+/// only from a captured `clone_args` flags field.
+fn clone_flags(args: &[u64; 6]) -> u64 {
+    syscalls::native()
+        .argument("clone", "clone_flags")
+        .map_or(0, |index| args[index])
+}
 const CLONE_THREAD: u64 = 0x0001_0000;
 const CLONE_FS: u64 = 0x0000_0200;
 const CLONE_FILES: u64 = 0x0000_0400;

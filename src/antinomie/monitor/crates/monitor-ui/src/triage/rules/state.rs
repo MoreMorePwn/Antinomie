@@ -78,7 +78,8 @@ impl<T: Ord + Clone> Window<T> {
 /// One task's counters. A flag that ends in `_done` means the rule already fired.
 #[derive(Default)]
 pub(super) struct Task {
-    pub first_nr: Option<u64>,
+    /// Whether the first call seen from the task was an exec.
+    pub first_exec: Option<bool>,
     pub first_ns: u64,
     pub last_ns: u64,
     pub ssh_hosts_read: bool,
@@ -201,7 +202,7 @@ impl State {
     pub(super) fn track(&mut self, cx: &Ctx) {
         self.bpf.observe(cx.call);
         let time = cx.time();
-        let (nr, root) = (cx.nr, cx.event.root_task_cookie);
+        let root = cx.event.root_task_cookie;
         let cookie = cx.call.task_cookie;
         if self.sample.is_none() && root != 0 && root == cookie {
             self.sample = cx
@@ -217,15 +218,15 @@ impl State {
             }
         }
         let task = self.task(cx);
-        if matches!(nr, 41 | 42 | 44 | 46) {
+        if matches!(cx.name, "socket" | "connect" | "sendto" | "sendmsg") {
             task.active = true;
         }
-        task.first_nr.get_or_insert(nr);
+        task.first_exec.get_or_insert(cx.is_exec());
         if task.first_ns == 0 {
             task.first_ns = time;
         }
         task.last_ns = task.last_ns.max(time);
-        if cx.call.task_exit.is_some() || matches!(nr, 60 | 231) {
+        if cx.call.task_exit.is_some() || matches!(cx.name, "exit" | "exit_group") {
             task.ended = true;
         }
         if cx.is_exec() && cx.ok && !cx.via_async {
@@ -515,7 +516,7 @@ impl State {
 }
 
 fn task_ended(cx: &Ctx) -> bool {
-    cx.call.task_exit.is_some() || matches!(cx.nr, 60 | 231)
+    cx.call.task_exit.is_some() || matches!(cx.name, "exit" | "exit_group")
 }
 
 fn is_compiler(name: &str) -> bool {

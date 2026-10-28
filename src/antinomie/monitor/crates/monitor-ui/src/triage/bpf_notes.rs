@@ -239,7 +239,7 @@ pub(super) fn bpf_command(event: &EventSummary, args: [u64; 6]) -> Option<&'stat
     if let Some(command) = bpf_attach::command_of(event, args) {
         return Some(command);
     }
-    if event.syscall_nr == 298 {
+    if event.syscall_name == "perf_event_open" {
         return Some(bpf_attach::PERF_OPEN);
     }
     if let Some(command) = bpf::command_name(event) {
@@ -248,14 +248,14 @@ pub(super) fn bpf_command(event: &EventSummary, args: [u64; 6]) -> Option<&'stat
     if classic_socket_filter(event, args) {
         return Some("SO_ATTACH_FILTER");
     }
-    if event.syscall_name == "seccomp" || event.syscall_nr == 317 {
+    if event.syscall_name == "seccomp" {
         return match args[0] {
             0 => Some("SECCOMP_SET_MODE_STRICT"),
             1 => Some("SECCOMP_SET_MODE_FILTER"),
             _ => None,
         };
     }
-    if (event.syscall_name == "prctl" || event.syscall_nr == 157) && args[0] == 22 {
+    if event.syscall_name == "prctl" && args[0] == 22 {
         return Some(match args[1] {
             1 => "SECCOMP_MODE_STRICT",
             2 => "SECCOMP_MODE_FILTER",

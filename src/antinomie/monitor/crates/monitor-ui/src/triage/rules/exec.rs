@@ -4,7 +4,7 @@
 //! A shell started with `-c` is read command by command, so `sh -c 'iptables
 //! -F; crontab -'` is judged as the two programs it runs.
 use super::super::*;
-use super::ctx::{base, nr, Ctx};
+use super::ctx::{base, Ctx};
 use super::state::State;
 use super::tools::{self, Command};
 use super::Hit;
@@ -16,7 +16,7 @@ pub(super) fn rules(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
     // An execveat on a descriptor names no path.
     let Some(path) = cx
         .exec_path()
-        .or_else(|| (cx.nr == nr::EXECVEAT).then(|| format!("descriptor {}", cx.args[0])))
+        .or_else(|| (cx.name == "execveat").then(|| format!("descriptor {}", cx.arg("dfd"))))
     else {
         return;
     };
@@ -67,7 +67,9 @@ fn short(text: &str) -> String {
 
 /// `argc == 0`: the first pointer of the vector is NULL.
 fn empty_argv(cx: &Ctx) -> bool {
-    let argument = if cx.nr == nr::EXECVE { 1 } else { 2 };
+    let Some(argument) = cx.argument("argv") else {
+        return false;
+    };
     let key = format!("arg{argument}.ptr[0]");
     cx.call
         .entry
@@ -139,10 +141,10 @@ fn descriptor_path(path: &str, own: u32) -> Option<(u64, Option<u32>)> {
 fn in_memory(cx: &Ctx, path: &str, out: &mut Vec<Hit>) {
     let owner = table_owner(cx.files, cx.call.task_cookie, cx.event.tid);
     let named = descriptor_path(path, cx.event.pid);
-    let by_fd = if cx.nr == nr::EXECVEAT && cx.args[4] & 0x1000 != 0 {
+    let by_fd = if cx.name == "execveat" && cx.arg("flags") & 0x1000 != 0 {
         cx.files
             .opened
-            .get(&(owner.0, owner.1, cx.args[0]))
+            .get(&(owner.0, owner.1, cx.arg("dfd")))
             .cloned()
     } else {
         named.and_then(|(fd, other)| match other {

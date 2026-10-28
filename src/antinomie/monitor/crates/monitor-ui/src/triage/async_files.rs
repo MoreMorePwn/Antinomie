@@ -29,10 +29,7 @@ use super::*;
 use antinomie_monitor_core::{kernel_notes, FieldSummary};
 
 /// `io_uring_enter` and `io_submit` on x86-64: the calls that carry requests.
-const IO_URING_ENTER: u64 = 426;
-const IO_SUBMIT: u64 = 209;
 /// `io_uring_setup`: the call that makes a ring.
-const IO_URING_SETUP: u64 = 425;
 /// Most requests turned into calls per scan: the scan must stay bounded.
 pub(super) const REQUEST_LIMIT: usize = 100_000;
 /// Observations read per archive page.
@@ -214,7 +211,10 @@ struct Equivalent {
 }
 
 impl Equivalent {
-    fn new(nr: u64, name: &'static str, args: [u64; 6]) -> Self {
+    fn new(name: &'static str, args: [u64; 6]) -> Self {
+        Self::numbered(syscalls::number(name).unwrap_or(u64::MAX), name, args)
+    }
+    fn numbered(nr: u64, name: &'static str, args: [u64; 6]) -> Self {
         Self {
             nr,
             name,
@@ -232,34 +232,6 @@ impl Equivalent {
     }
 }
 
-const READ: u64 = 0;
-const WRITE: u64 = 1;
-const CLOSE: u64 = 3;
-const PREAD64: u64 = 17;
-const PWRITE64: u64 = 18;
-const READV: u64 = 19;
-const WRITEV: u64 = 20;
-const FSYNC: u64 = 74;
-const FDATASYNC: u64 = 75;
-const FTRUNCATE: u64 = 77;
-const SETXATTR: u64 = 188;
-const FSETXATTR: u64 = 190;
-const GETXATTR: u64 = 191;
-const FGETXATTR: u64 = 193;
-const SPLICE: u64 = 275;
-const SYNC_FILE_RANGE: u64 = 277;
-const FALLOCATE: u64 = 285;
-const OPENAT: u64 = 257;
-const MKDIRAT: u64 = 258;
-const UNLINKAT: u64 = 263;
-const LINKAT: u64 = 265;
-const SYMLINKAT: u64 = 266;
-const PREADV: u64 = 295;
-const PWRITEV: u64 = 296;
-const RENAMEAT2: u64 = 316;
-const STATX: u64 = 332;
-const OPENAT2: u64 = 437;
-
 /// `IORING_FSYNC_DATASYNC`: the request is an `fdatasync`.
 const FSYNC_DATASYNC: u64 = 1;
 /// `SPLICE_F_FD_IN_FIXED`: the input of a splice is a registered descriptor.
@@ -275,21 +247,21 @@ fn transfer(sqe: &[u8], write: bool, vector: bool, offset: u64) -> Equivalent {
     let buffer = le::<8>(sqe, 16);
     let length = le::<4>(sqe, 24);
     let positioned = offset != CURRENT_POSITION;
-    let (nr, name) = match (write, vector, positioned) {
-        (false, false, false) => (READ, "read"),
-        (false, false, true) => (PREAD64, "pread64"),
-        (false, true, false) => (READV, "readv"),
-        (false, true, true) => (PREADV, "preadv"),
-        (true, false, false) => (WRITE, "write"),
-        (true, false, true) => (PWRITE64, "pwrite64"),
-        (true, true, false) => (WRITEV, "writev"),
-        (true, true, true) => (PWRITEV, "pwritev"),
+    let name = match (write, vector, positioned) {
+        (false, false, false) => "read",
+        (false, false, true) => "pread64",
+        (false, true, false) => "readv",
+        (false, true, true) => "preadv",
+        (true, false, false) => "write",
+        (true, false, true) => "pwrite64",
+        (true, true, false) => "writev",
+        (true, true, true) => "pwritev",
     };
     let mut args = [fd, buffer, length, 0, 0, 0];
     if positioned {
         args[3] = offset;
     }
-    let mut call = Equivalent::new(nr, name, args);
+    let mut call = Equivalent::new(name, args);
     call.writes = write;
     call.reads = !write;
     call
@@ -315,36 +287,26 @@ fn uring(request: &Request) -> Option<Equivalent> {
         4 | 22 | 49 => transfer(sqe, false, false, off),
         2 => transfer(sqe, true, true, off),
         5 | 23 => transfer(sqe, true, false, off),
-        18 => Equivalent::new(OPENAT, "openat", [fd, addr, flags, len, 0, 0]).path(1, "path"),
-        28 => Equivalent::new(OPENAT2, "openat2", [fd, addr, off, len, 0, 0]).path(1, "path"),
-        19 if le::<4>(sqe, 44) == 0 => Equivalent::new(CLOSE, "close", [fd, 0, 0, 0, 0, 0]),
-        55 => Equivalent::new(FTRUNCATE, "ftruncate", [fd, off, 0, 0, 0, 0]),
-        17 => Equivalent::new(FALLOCATE, "fallocate", [fd, len, off, addr, 0, 0]),
-        35 => Equivalent::new(
-            RENAMEAT2,
-            "renameat2",
-            [fd, addr, descriptor(len), off, flags, 0],
-        )
-        .path(1, "oldpath")
-        .path(3, "newpath"),
-        36 => Equivalent::new(UNLINKAT, "unlinkat", [fd, addr, flags, 0, 0, 0]).path(1, "path"),
-        37 => Equivalent::new(MKDIRAT, "mkdirat", [fd, addr, len, 0, 0, 0]).path(1, "path"),
-        38 => Equivalent::new(SYMLINKAT, "symlinkat", [addr, fd, off, 0, 0, 0])
-            .path(0, "oldpath")
-            .path(2, "newpath"),
-        39 => Equivalent::new(LINKAT, "linkat", [fd, addr, descriptor(len), off, flags, 0])
+        18 => Equivalent::new("openat", [fd, addr, flags, len, 0, 0]).path(1, "path"),
+        28 => Equivalent::new("openat2", [fd, addr, off, len, 0, 0]).path(1, "path"),
+        19 if le::<4>(sqe, 44) == 0 => Equivalent::new("close", [fd, 0, 0, 0, 0, 0]),
+        55 => Equivalent::new("ftruncate", [fd, off, 0, 0, 0, 0]),
+        17 => Equivalent::new("fallocate", [fd, len, off, addr, 0, 0]),
+        35 => Equivalent::new("renameat2", [fd, addr, descriptor(len), off, flags, 0])
             .path(1, "oldpath")
             .path(3, "newpath"),
-        21 => Equivalent::new(STATX, "statx", [fd, addr, flags, len, off, 0]).path(1, "path"),
-        3 if flags & FSYNC_DATASYNC != 0 => {
-            Equivalent::new(FDATASYNC, "fdatasync", [fd, 0, 0, 0, 0, 0])
-        }
-        3 => Equivalent::new(FSYNC, "fsync", [fd, 0, 0, 0, 0, 0]),
-        8 => Equivalent::new(
-            SYNC_FILE_RANGE,
-            "sync_file_range",
-            [fd, off, len, flags, 0, 0],
-        ),
+        36 => Equivalent::new("unlinkat", [fd, addr, flags, 0, 0, 0]).path(1, "path"),
+        37 => Equivalent::new("mkdirat", [fd, addr, len, 0, 0, 0]).path(1, "path"),
+        38 => Equivalent::new("symlinkat", [addr, fd, off, 0, 0, 0])
+            .path(0, "oldpath")
+            .path(2, "newpath"),
+        39 => Equivalent::new("linkat", [fd, addr, descriptor(len), off, flags, 0])
+            .path(1, "oldpath")
+            .path(3, "newpath"),
+        21 => Equivalent::new("statx", [fd, addr, flags, len, off, 0]).path(1, "path"),
+        3 if flags & FSYNC_DATASYNC != 0 => Equivalent::new("fdatasync", [fd, 0, 0, 0, 0, 0]),
+        3 => Equivalent::new("fsync", [fd, 0, 0, 0, 0, 0]),
+        8 => Equivalent::new("sync_file_range", [fd, off, len, flags, 0, 0]),
         // The offsets of a request are values (-1: the file position), not
         // pointers to them as for the system call: the call carries none.
         30 => {
@@ -353,26 +315,16 @@ fn uring(request: &Request) -> Option<Equivalent> {
             } else {
                 descriptor(le::<4>(sqe, 44))
             };
-            Equivalent::new(SPLICE, "splice", [input, 0, fd, 0, len, flags])
+            Equivalent::new("splice", [input, 0, fd, 0, len, flags])
         }
-        41 => Equivalent::new(FSETXATTR, "fsetxattr", [fd, addr, off, len, flags, 0])
+        41 => Equivalent::new("fsetxattr", [fd, addr, off, len, flags, 0]).path(1, "xattr_name"),
+        42 => Equivalent::new("setxattr", [le::<8>(sqe, 48), addr, off, len, flags, 0])
+            .path(0, "path")
             .path(1, "xattr_name"),
-        42 => Equivalent::new(
-            SETXATTR,
-            "setxattr",
-            [le::<8>(sqe, 48), addr, off, len, flags, 0],
-        )
-        .path(0, "path")
-        .path(1, "xattr_name"),
-        43 => Equivalent::new(FGETXATTR, "fgetxattr", [fd, addr, off, len, 0, 0])
+        43 => Equivalent::new("fgetxattr", [fd, addr, off, len, 0, 0]).path(1, "xattr_name"),
+        44 => Equivalent::new("getxattr", [le::<8>(sqe, 48), addr, off, len, 0, 0])
+            .path(0, "path")
             .path(1, "xattr_name"),
-        44 => Equivalent::new(
-            GETXATTR,
-            "getxattr",
-            [le::<8>(sqe, 48), addr, off, len, 0, 0],
-        )
-        .path(0, "path")
-        .path(1, "xattr_name"),
         _ => return None,
     };
     // The value an attribute is set to is the data the request wrote.
@@ -393,10 +345,10 @@ fn aio(request: &Request) -> Option<Equivalent> {
     let offset = le::<8>(sqe, 40);
     // IOCB_CMD_PREAD, PWRITE, PREADV, PWRITEV.
     let mut call = match request.opcode {
-        0 => Equivalent::new(PREAD64, "pread64", [fd, buffer, length, offset, 0, 0]),
-        1 => Equivalent::new(PWRITE64, "pwrite64", [fd, buffer, length, offset, 0, 0]),
-        7 => Equivalent::new(PREADV, "preadv", [fd, buffer, length, offset, 0, 0]),
-        8 => Equivalent::new(PWRITEV, "pwritev", [fd, buffer, length, offset, 0, 0]),
+        0 => Equivalent::new("pread64", [fd, buffer, length, offset, 0, 0]),
+        1 => Equivalent::new("pwrite64", [fd, buffer, length, offset, 0, 0]),
+        7 => Equivalent::new("preadv", [fd, buffer, length, offset, 0, 0]),
+        8 => Equivalent::new("pwritev", [fd, buffer, length, offset, 0, 0]),
         _ => return None,
     };
     call.reads = matches!(request.opcode, 0 | 7);
@@ -512,7 +464,7 @@ fn identity_note(parent: &EventSummary, request: &Request) -> Option<EventSummar
     let mut note = event_for(
         parent,
         request,
-        &Equivalent::new(parent.syscall_nr, "", [0; 6]),
+        &Equivalent::numbered(parent.syscall_nr, "", [0; 6]),
         3,
     );
     note.syscall_name = parent.syscall_name.clone();
@@ -555,7 +507,7 @@ fn call_for(parent: &InvocationSummary, request: &Request) -> Option<InvocationS
                 .push(captured(format!("arg{index}.{name}"), "", path));
         }
     }
-    if equivalent.nr == OPENAT2 {
+    if equivalent.name == "openat2" {
         // The flags are the first word of the `open_how` the request pointed to.
         if let Some(how) = request
             .operands
@@ -600,7 +552,7 @@ fn call_for(parent: &InvocationSummary, request: &Request) -> Option<InvocationS
 /// Whether the call is one that carries requests.
 fn submits(call: &InvocationSummary) -> bool {
     trace::representative(call)
-        .is_some_and(|event| matches!(event.syscall_nr, IO_URING_ENTER | IO_SUBMIT))
+        .is_some_and(|event| matches!(event.syscall_name.as_str(), "io_uring_enter" | "io_submit"))
 }
 
 /// The calls the requests of `events` stand for, with the submitting call's
@@ -642,7 +594,7 @@ impl Attributed {
         cancel: &AtomicBool,
     ) {
         let made = trace::representative(setup).is_some_and(|event| {
-            event.syscall_nr == IO_URING_SETUP
+            event.syscall_name == "io_uring_setup"
                 && setup
                     .exit
                     .as_ref()

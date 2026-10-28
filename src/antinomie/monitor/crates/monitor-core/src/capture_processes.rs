@@ -59,6 +59,16 @@ struct ExecPath {
     path: String,
 }
 
+/// The key of an exec's program path: its `filename` argument by position in
+/// the run's table, named `path` in captured fields.
+fn exec_path_key(event: &EventSummary) -> Option<String> {
+    if !matches!(event.syscall_name.as_str(), "execve" | "execveat") {
+        return None;
+    }
+    let index = crate::syscalls::native().argument(&event.syscall_name, "filename")?;
+    Some(format!("arg{index}.path"))
+}
+
 fn field_u64(event: &EventSummary, key: &str) -> Option<u64> {
     let field = event.fields.iter().find(|field| field.key == key)?;
     Some(u64::from_le_bytes(field.preview.get(..8)?.try_into().ok()?))
@@ -257,7 +267,7 @@ impl ProcessTracker {
         ) {
             return;
         }
-        // execve (59) names its program in arg0, execveat (322) in arg1.
+        // An exec names its program in the argument the table calls `filename`.
         if event.phase == 1 {
             if event.timestamp_ns != 0
                 && self
@@ -267,11 +277,10 @@ impl ProcessTracker {
             {
                 return;
             }
-            let key = match event.syscall_nr {
-                59 => "arg0.path",
-                322 => "arg1.path",
-                _ => return,
+            let Some(key) = exec_path_key(event) else {
+                return;
             };
+            let key = key.as_str();
             if let Some(path) = field_text(event, key)
                 && self
                     .exec_paths
@@ -292,11 +301,10 @@ impl ProcessTracker {
         // An exec whose Entry could not read the path publishes it at its
         // Exit (contract 22): the exec's own copy, after the commit record.
         if event.phase == 2 {
-            let key = match event.syscall_nr {
-                59 => "arg0.path",
-                322 => "arg1.path",
-                _ => return,
+            let Some(key) = exec_path_key(event) else {
+                return;
             };
+            let key = key.as_str();
             let recaptured = event
                 .fields
                 .iter()
@@ -454,7 +462,7 @@ mod tests {
             event_seq: 1,
             phase,
             syscall_nr: nr,
-            syscall_name: String::new(),
+            syscall_name: crate::syscalls::name(nr),
             pid,
             tid: pid,
             cpu: 0,

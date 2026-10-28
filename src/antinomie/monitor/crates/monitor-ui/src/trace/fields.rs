@@ -408,33 +408,7 @@ pub(crate) fn argument_name(nr: u64, index: usize) -> &'static str {
         return &argument.name;
     }
     const GENERIC: [&str; 6] = ["first", "second", "third", "fourth", "fifth", "sixth"];
-    let names: &[&str] = match nr {
-        0 | 1 => &["fd", "buf", "count"],
-        2 => &["path", "flags", "mode"],
-        3 => &["fd"],
-        4 => &["path", "stat"],
-        5 => &["fd", "stat"],
-        9 => &["address", "length", "protection", "flags", "fd", "offset"],
-        10 => &["address", "length", "protection"],
-        11 => &["address", "length"],
-        16 => &["fd", "request", "argument"],
-        19 | 20 => &["fd", "iov", "iov_count"],
-        41 => &["domain", "type", "protocol"],
-        42 | 49 => &["fd", "address", "address_len"],
-        43 => &["fd", "address", "address_len"],
-        44 | 45 => &["fd", "buf", "length", "flags", "address", "address_len"],
-        50 => &["fd", "backlog"],
-        56 => &["flags", "stack", "parent_tid", "child_tid", "tls"],
-        59 => &["path", "argv", "envp"],
-        60 | 231 => &["status"],
-        62 => &["pid", "signal"],
-        82 => &["old_path", "new_path"],
-        87 => &["path"],
-        257 => &["dirfd", "path", "flags", "mode"],
-        322 => &["dirfd", "path", "argv", "envp", "flags"],
-        _ => &[],
-    };
-    names.get(index).copied().unwrap_or(GENERIC[index.min(5)])
+    GENERIC[index.min(5)]
 }
 
 pub(super) fn show_flags(
@@ -497,13 +471,20 @@ pub(super) fn async_stage(event: &antinomie_monitor_core::EventSummary) -> Strin
 /// else the one its key names (summaries saved before 0.7.0, fields the app
 /// derives itself).
 pub(crate) fn field_argument(nr: u64, field: &FieldSummary) -> Option<usize> {
+    field_argument_of(syscalls::known_name(nr).unwrap_or(""), field)
+}
+
+/// `field_argument` for a call known by its name.
+pub(crate) fn field_argument_of(name: &str, field: &FieldSummary) -> Option<usize> {
     match field.arg {
         Some(arg) => Some(usize::from(arg)),
-        None => key_argument(nr, &field.key),
+        None => key_argument(name, &field.key),
     }
 }
 
-pub(crate) fn key_argument(nr: u64, key: &str) -> Option<usize> {
+/// The argument a captured field's key names for the call `name`, where
+/// the argument's role is read from the table by argument name.
+pub(crate) fn key_argument(name: &str, key: &str) -> Option<usize> {
     if let Some(rest) = key.strip_prefix("arg") {
         let index = rest.as_bytes().first().copied()?;
         if (b'0'..=b'5').contains(&index)
@@ -515,38 +496,37 @@ pub(crate) fn key_argument(nr: u64, key: &str) -> Option<usize> {
             return Some(usize::from(index - b'0'));
         }
     }
+    let table = syscalls::native();
+    let role = |argument: &str| table.argument(name, argument);
     let head = key.split(['.', '[']).next()?;
-    match head {
-        "buf" | "data" if matches!(nr, 0 | 1 | 44 | 45) => Some(1),
-        "iov" if matches!(nr, 19 | 20) => Some(1),
-        "path" | "filename" => match nr {
-            2 | 4 | 59 | 82 | 87 => Some(0),
-            257 | 322 => Some(1),
-            _ => None,
-        },
-        "argv" => match nr {
-            59 => Some(1),
-            322 => Some(2),
-            _ => None,
-        },
-        "envp" => match nr {
-            59 => Some(2),
-            322 => Some(3),
-            _ => None,
-        },
-        "address" | "sockaddr" => match nr {
-            42 | 43 | 49 => Some(if key.ends_with("length") || key.ends_with("capacity") {
-                2
+    let length = key.ends_with("length") || key.ends_with("capacity");
+    match (head, name) {
+        ("buf" | "data", "read" | "write" | "sendto" | "recvfrom") => role("buf")
+            .or_else(|| role("buff"))
+            .or_else(|| role("ubuf")),
+        ("iov", "readv" | "writev") => role("vec"),
+        ("path" | "filename", "open" | "stat" | "execve" | "rename" | "unlink") => role("filename")
+            .or_else(|| role("oldname"))
+            .or_else(|| role("pathname")),
+        ("path" | "filename", "openat" | "execveat") => role("filename"),
+        ("argv", "execve" | "execveat") => role("argv"),
+        ("envp", "execve" | "execveat") => role("envp"),
+        ("address" | "sockaddr", "connect" | "accept" | "bind") => {
+            if length {
+                role("addrlen").or_else(|| role("upeer_addrlen"))
             } else {
-                1
-            }),
-            44 | 45 => Some(if key.ends_with("length") || key.ends_with("capacity") {
-                5
+                role("uservaddr")
+                    .or_else(|| role("upeer_sockaddr"))
+                    .or_else(|| role("umyaddr"))
+            }
+        }
+        ("address" | "sockaddr", "sendto" | "recvfrom") => {
+            if length {
+                role("addr_len")
             } else {
-                4
-            }),
-            _ => None,
-        },
+                role("addr")
+            }
+        }
         _ => None,
     }
 }

@@ -1045,7 +1045,7 @@ fn helper(id: i32) -> String {
 
 /// BPF_PROG_LOAD and neighbouring bpf(2) commands, for the triage list.
 pub(crate) fn command_name(event: &EventSummary) -> Option<&'static str> {
-    if event.syscall_name != "bpf" && event.syscall_nr != 321 {
+    if event.syscall_name != "bpf" {
         return None;
     }
     Some(match event.args.map(|args| args[0]) {

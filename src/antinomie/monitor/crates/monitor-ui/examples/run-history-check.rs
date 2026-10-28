@@ -105,7 +105,7 @@ impl Harness {
             if self.snapshot.events.iter().any(|event| {
                 event.root_task_cookie == root
                     && event.phase == 1
-                    && event.syscall_nr == 1
+                    && event.syscall_name == "write"
                     && event.fields.iter().any(|field| {
                         field
                             .preview

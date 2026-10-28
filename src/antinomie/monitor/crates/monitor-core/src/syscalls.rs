@@ -6,6 +6,7 @@
 //! architecture). A session decodes records only from a guest whose INFO
 //! reports x86-64 (`GuestArch`); it launches and traces nothing on another.
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::sync::OnceLock;
 
 #[derive(Debug, Deserialize)]
@@ -38,31 +39,124 @@ pub struct FlagValue {
     pub unknown_bits: u64,
 }
 
-fn inventory() -> &'static [SyscallInfo] {
-    static INVENTORY: OnceLock<Inventory> = OnceLock::new();
-    &INVENTORY
-        .get_or_init(|| {
+/// A system call ABI this host ships a table for. Records name their calls
+/// through the table of the run's ABI; today only x86-64 has one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Abi {
+    X86_64,
+}
+
+impl Abi {
+    /// The ABI a guest architecture's native calls use, if its table is shipped.
+    pub fn of(arch: crate::api::GuestArch) -> Option<Self> {
+        match arch {
+            crate::api::GuestArch::X86_64 => Some(Self::X86_64),
+            crate::api::GuestArch::Unsupported(_) => None,
+        }
+    }
+}
+
+/// One ABI's calls, by number and by name. Rules and decoders key on the name
+/// (`"execve"`) and read argument roles by argument name; the number is only
+/// what the wire carries.
+pub struct Table {
+    pub abi: Abi,
+    entries: &'static [SyscallInfo],
+    by_name: HashMap<&'static str, usize>,
+}
+
+impl Table {
+    fn load(abi: Abi) -> Self {
+        let json = match abi {
             // This is a generated, compiled-in constant verified by the inventory tests.
-            serde_json::from_str(include_str!("../../../protocol/native-syscalls.json"))
-                .expect("invalid compiled native syscall inventory")
-        })
-        .syscalls
+            Abi::X86_64 => include_str!("../../../protocol/native-syscalls.json"),
+        };
+        let inventory: Inventory =
+            serde_json::from_str(json).expect("invalid compiled native syscall inventory");
+        // The table lives for the whole process, so its names can be 'static.
+        let entries: &'static [SyscallInfo] = Vec::leak(inventory.syscalls);
+        let mut by_name = HashMap::new();
+        for (index, entry) in entries.iter().enumerate() {
+            by_name.entry(entry.name.as_str()).or_insert(index);
+        }
+        Self {
+            abi,
+            entries,
+            by_name,
+        }
+    }
+
+    pub fn all(&self) -> &'static [SyscallInfo] {
+        self.entries
+    }
+
+    pub fn by_number(&self, number: u64) -> Option<&'static SyscallInfo> {
+        self.entries
+            .binary_search_by_key(&number, |entry| entry.number)
+            .ok()
+            .map(|index| &self.entries[index])
+    }
+
+    pub fn by_name(&self, name: &str) -> Option<&'static SyscallInfo> {
+        self.by_name.get(name).map(|&index| &self.entries[index])
+    }
+
+    /// The number of a call on this ABI, if the ABI has it (legacy names are
+    /// absent on asm-generic architectures).
+    pub fn number(&self, name: &str) -> Option<u64> {
+        self.by_name(name).map(|entry| entry.number)
+    }
+
+    /// The table's name for a number.
+    pub fn name_of(&self, number: u64) -> Option<&'static str> {
+        self.by_number(number).map(|entry| entry.name.as_str())
+    }
+
+    /// The index of a call's argument by its name in the table (`flags` of
+    /// `clone`, `argv` of `execve`), so a role does not depend on the
+    /// architecture's argument order.
+    pub fn argument(&self, call: &str, argument: &str) -> Option<usize> {
+        self.by_name(call)?
+            .arguments
+            .iter()
+            .position(|info| info.name == argument)
+    }
+}
+
+/// The table of an ABI.
+pub fn table(abi: Abi) -> &'static Table {
+    static X86_64: OnceLock<Table> = OnceLock::new();
+    match abi {
+        Abi::X86_64 => X86_64.get_or_init(|| Table::load(Abi::X86_64)),
+    }
+}
+
+/// The table of the ABI every run uses until a second one is shipped: the one
+/// place that names it, so adding an ABI means threading the run's ABI to here.
+pub fn native() -> &'static Table {
+    table(Abi::X86_64)
 }
 
 pub fn all() -> &'static [SyscallInfo] {
-    inventory()
+    native().all()
 }
 
 pub fn syscall(number: u64) -> Option<&'static SyscallInfo> {
-    let table = inventory();
-    table
-        .binary_search_by_key(&number, |entry| entry.number)
-        .ok()
-        .map(|index| &table[index])
+    native().by_number(number)
+}
+
+/// The number a name has on the run's ABI.
+pub fn number(name: &str) -> Option<u64> {
+    native().number(name)
+}
+
+/// The table's name for a number, without a copy.
+pub fn known_name(number: u64) -> Option<&'static str> {
+    native().name_of(number)
 }
 
 pub fn name(number: u64) -> String {
-    syscall(number).map_or_else(|| format!("syscall_{number}"), |entry| entry.name.clone())
+    known_name(number).map_or_else(|| format!("syscall_{number}"), str::to_owned)
 }
 
 type FlagRule = (&'static str, u64, u64);
@@ -969,8 +1063,8 @@ mod tests {
 
     #[test]
     fn inventory_covers_pinned_native_slots_and_excludes_gaps() {
-        assert_eq!(inventory().len(), 375);
-        for pair in inventory().windows(2) {
+        assert_eq!(all().len(), 375);
+        for pair in all().windows(2) {
             assert!(pair[0].number < pair[1].number);
         }
         assert_eq!(syscall(462).unwrap().name, "mseal");

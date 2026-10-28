@@ -218,10 +218,10 @@ pub(super) fn apply_dup(files: &mut FdState, invocation: &InvocationSummary, eve
             }
         }
     }
-    let kind = match (event.syscall_nr, event.syscall_name.as_str()) {
-        (32, _) | (_, "dup") => DupKind::Return,
-        (33, _) | (_, "dup2") | (292, _) | (_, "dup3") => DupKind::Argument,
-        (_, "fcntl") if call_args(invocation).is_some_and(|args| matches!(args[1], 0 | 1030)) => {
+    let kind = match event.syscall_name.as_str() {
+        "dup" => DupKind::Return,
+        "dup2" | "dup3" => DupKind::Argument,
+        "fcntl" if call_args(invocation).is_some_and(|args| matches!(args[1], 0 | 1030)) => {
             DupKind::Return
         }
         _ => return,
@@ -333,7 +333,7 @@ pub(super) fn forget_closed(
         }
         return;
     }
-    if event.syscall_name != "close" && event.syscall_nr != 3 {
+    if event.syscall_name != "close" {
         return;
     }
     if invocation
@@ -398,8 +398,9 @@ pub(super) fn inherit_open_fds(
     event: &EventSummary,
     cookies: &std::collections::BTreeMap<u32, u64>,
 ) {
-    if !matches!(event.syscall_nr, FORK | VFORK | CLONE | CLONE3)
-        || (event.syscall_nr == CLONE3 && clone3_flags(invocation).is_none())
+    let name = event.syscall_name.as_str();
+    if !matches!(name, "fork" | "vfork" | "clone" | "clone3")
+        || (name == "clone3" && clone3_flags(invocation).is_none())
     {
         return;
     }
@@ -442,9 +443,9 @@ fn shares_fs(invocation: &InvocationSummary, event: &EventSummary) -> bool {
 }
 
 fn clone_flag(invocation: &InvocationSummary, event: &EventSummary, flag: u64) -> bool {
-    match event.syscall_nr {
-        CLONE => call_args(invocation).is_some_and(|args| args[0] & flag != 0),
-        CLONE3 => clone3_flags(invocation).is_some_and(|flags| flags & flag != 0),
+    match event.syscall_name.as_str() {
+        "clone" => call_args(invocation).is_some_and(|args| clone_flags(&args) & flag != 0),
+        "clone3" => clone3_flags(invocation).is_some_and(|flags| flags & flag != 0),
         _ => false,
     }
 }

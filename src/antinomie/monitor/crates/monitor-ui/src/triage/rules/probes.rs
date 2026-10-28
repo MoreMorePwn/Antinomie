@@ -7,7 +7,7 @@
 //! `CPUID` and `RDTSC` run in the program itself and leave no trace here.
 use super::super::file_category::Category as Op;
 use super::super::*;
-use super::ctx::{base, nr, proc_self, Ctx, Touch};
+use super::ctx::{base, proc_self, Ctx, Touch};
 use super::noise::{Agg, Gaps};
 use super::state::{State, Window};
 use super::{Hit, Tier};
@@ -482,8 +482,8 @@ pub(super) fn path(cx: &Ctx, st: &mut State, touch: &Touch, _out: &mut Vec<Hit>)
 
 /// Calls that are checks without naming a file.
 pub(super) fn call(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
-    match cx.nr {
-        nr::PTRACE if cx.args[0] == 0 => {
+    match cx.name {
+        "ptrace" if cx.args[0] == 0 => {
             // PTRACE_TRACEME: -EPERM means something already traces this task.
             let traced = cx.ret == Some(-1);
             let answer = if cx.ok {
@@ -513,7 +513,7 @@ pub(super) fn call(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
                 }),
             );
         }
-        nr::PRCTL if cx.args[0] == 3 => {
+        "prctl" if cx.args[0] == 3 => {
             let answer = cx
                 .ret
                 .map(|ret| format!("dumpable {ret}"))
@@ -525,7 +525,7 @@ pub(super) fn call(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
                 Some((answer, None)),
             ));
         }
-        13 if cx.args[0] == 5 && cx.args[1] != 0 => {
+        "rt_sigaction" if cx.args[0] == 5 && cx.args[1] != 0 => {
             // A SIGTRAP handler: a breakpoint would be caught by the program.
             let handler = cx.word(1, "", 0).unwrap_or(2);
             if handler > 1 {
@@ -537,7 +537,7 @@ pub(super) fn call(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
                 ));
             }
         }
-        nr::SYSINFO if cx.ok => {
+        "sysinfo" if cx.ok => {
             let seconds = cx.word(0, "", 0).unwrap_or(u64::MAX);
             if seconds != u64::MAX {
                 let answer = (format!("up {seconds} s"), Some(seconds < 1800));
@@ -545,7 +545,7 @@ pub(super) fn call(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
             }
         }
         // SIOCGIFHWADDR
-        nr::IOCTL if cx.args[1] == 0x8927 => {
+        "ioctl" if cx.args[1] == 0x8927 => {
             let mac = cx
                 .bytes(2, "")
                 .and_then(|bytes| bytes.get(18..24))
@@ -562,7 +562,7 @@ pub(super) fn call(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
             task(st, cx).record(new_probe(cx, Class::Mac, "ioctl SIOCGIFHWADDR", answer));
         }
         // clock_gettime, gettimeofday, time, times
-        228 | 96 | 201 | 100 => {
+        "clock_gettime" | "gettimeofday" | "time" | "times" => {
             let time = cx.time();
             let tp = task(st, cx);
             tp.reads.push(time, NS, time);
@@ -609,17 +609,15 @@ pub(super) fn note_write(cx: &Ctx, st: &mut State) {
 /// Behaviour around the checks: network use, writes, new processes, sleeps and exit.
 pub(super) fn behaviour(cx: &Ctx, st: &mut State) {
     let time = cx.time();
-    let event = match cx.nr {
-        nr::SOCKET
-        | nr::CONNECT
-        | nr::SENDTO
-        | nr::SENDMSG
-        | nr::BIND
-        | nr::LISTEN
-        | nr::ACCEPT => Some(Event::Network),
-        nr::CLONE | 57 | 58 | nr::CLONE3 | nr::EXECVE | nr::EXECVEAT if cx.ok => Some(Event::Spawn),
-        nr::NANOSLEEP | nr::CLOCK_NANOSLEEP => sleep_ns(cx).map(Event::Sleep),
-        60 | 231 => Some(Event::Exit),
+    let event = match cx.name {
+        "socket" | "connect" | "sendto" | "sendmsg" | "bind" | "listen" | "accept" => {
+            Some(Event::Network)
+        }
+        "clone" | "fork" | "vfork" | "clone3" | "execve" | "execveat" if cx.ok => {
+            Some(Event::Spawn)
+        }
+        "nanosleep" | "clock_nanosleep" => sleep_ns(cx).map(Event::Sleep),
+        "exit" | "exit_group" => Some(Event::Exit),
         _ if cx.call.task_exit.is_some() => Some(Event::Exit),
         _ => None,
     };
@@ -646,11 +644,11 @@ pub(super) fn behaviour(cx: &Ctx, st: &mut State) {
 
 /// The requested sleep, in nanoseconds, of `nanosleep` and `clock_nanosleep`.
 pub(super) fn sleep_ns(cx: &Ctx) -> Option<u64> {
-    let argument = if cx.nr == nr::NANOSLEEP { 0 } else { 2 };
+    let argument = cx.argument("rqtp")?;
     let seconds = cx.word(argument, "", 0)?;
     let nanos = cx.word(argument, "", 8).unwrap_or(0);
     // An absolute sleep (TIMER_ABSTIME) is a time of day, not a length.
-    if cx.nr == nr::CLOCK_NANOSLEEP && cx.args[1] & 1 != 0 {
+    if cx.name == "clock_nanosleep" && cx.arg("flags") & 1 != 0 {
         return None;
     }
     seconds.checked_mul(NS)?.checked_add(nanos)

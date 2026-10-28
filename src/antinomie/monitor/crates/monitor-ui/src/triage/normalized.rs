@@ -38,9 +38,8 @@ pub(super) struct Argv {
 }
 
 pub(super) fn argument_vector(call: &InvocationSummary, event: &EventSummary) -> Option<Argv> {
-    let argument = match event.syscall_nr {
-        59 => 1,
-        322 => 2,
+    let argument = match event.syscall_name.as_str() {
+        name @ ("execve" | "execveat") => syscalls::native().argument(name, "argv")?,
         _ => return None,
     };
     let fields: Vec<_> = call
@@ -477,14 +476,15 @@ fn build(
     // an accept() one it received. Only an address that was captured whole is
     // reported. There is no user or local address in the recording, so none
     // is invented, and the hostname is added later from DNS answers.
-    let connected = event.syscall_nr == 42 && ret.is_some_and(|ret| ret == 0 || ret == EINPROGRESS);
-    let accepted = matches!(event.syscall_nr, 43 | 288) && ret.is_some_and(|ret| ret >= 0);
-    let sent = event.syscall_nr == 44 && ret.is_some_and(|ret| ret >= 0);
+    let name = event.syscall_name.as_str();
+    let connected = name == "connect" && ret.is_some_and(|ret| ret == 0 || ret == EINPROGRESS);
+    let accepted = matches!(name, "accept" | "accept4") && ret.is_some_and(|ret| ret >= 0);
+    let sent = name == "sendto" && ret.is_some_and(|ret| ret >= 0);
     if connected || accepted || sent {
-        let argument = sigma_events::address_argument(event.syscall_nr).unwrap_or(1);
+        let argument = sigma_events::address_argument(name).unwrap_or(1);
         let kind = sigma_events::socket_kind(files, call, event);
         let udp = kind == Some(sigma_events::SocketKind::Datagram);
-        if let Some(address) = sigma_events::address(call, event.syscall_nr, argument) {
+        if let Some(address) = sigma_events::address(call, name, argument) {
             let mut fields = fields.clone();
             // A datagram socket has no connection: report each peer once.
             let report = !sent

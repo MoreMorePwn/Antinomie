@@ -623,7 +623,13 @@ impl Recording {
             tracker.packet(&header);
             // Only exec names (at entry, or recaptured at exit) and lifecycle
             // records need object assembly.
-            if header.phase == 3 || (header.phase != 0 && matches!(header.syscall_nr, 59 | 322)) {
+            if header.phase == 3
+                || (header.phase != 0
+                    && matches!(
+                        crate::syscalls::known_name(header.syscall_nr),
+                        Some("execve" | "execveat")
+                    ))
+            {
                 match assembler.ingest(&packet) {
                     Ok(Some(event)) => tracker.event(&event),
                     Ok(None) => {}

@@ -8,9 +8,6 @@ use super::*;
 
 /// `_IOW('$', 8, __u32)`.
 pub(super) const PERF_EVENT_IOC_SET_BPF: u64 = 0x4004_2408;
-const BPF: u64 = 321;
-const PERF_EVENT_OPEN: u64 = 298;
-const CLOSE: u64 = 3;
 const HELD: usize = 4096;
 const NAMES_SHOWN: usize = 4;
 
@@ -80,14 +77,14 @@ impl BpfFds {
             .as_ref()
             .and_then(|exit| exit.result)
             .filter(|fd| *fd >= 0);
-        match (event.syscall_nr, args) {
-            (CLOSE, Some(args)) if succeeded(invocation) => {
+        match (event.syscall_name.as_str(), args) {
+            ("close", Some(args)) if succeeded(invocation) => {
                 if let Ok(fd) = i64::try_from(args[0]) {
                     self.programs.retain(|key| (key.0, key.1) != (cookie, fd));
                     self.perf.retain(|key| (key.0, key.1) != (cookie, fd));
                 }
             }
-            (BPF, Some(args)) if args[0] == 5 => {
+            ("bpf", Some(args)) if args[0] == 5 => {
                 if let Some(fd) = fd {
                     self.programs.retain(|key| (key.0, key.1) != (cookie, fd));
                     if self.programs.len() < HELD {
@@ -95,7 +92,7 @@ impl BpfFds {
                     }
                 }
             }
-            (PERF_EVENT_OPEN, _) => {
+            ("perf_event_open", _) => {
                 if let Some(fd) = fd {
                     let attr = attr_bytes(invocation, "arg0.perf_event_attr");
                     let attr = attr.as_deref();
@@ -167,13 +164,13 @@ impl Attach {
 
 /// Which attach command a call is, if any.
 pub(super) fn command_of(event: &EventSummary, args: [u64; 6]) -> Option<&'static str> {
-    match event.syscall_nr {
-        BPF => match args[0] {
+    match event.syscall_name.as_str() {
+        "bpf" => match args[0] {
             17 => Some(RAW_TRACEPOINT_OPEN),
             28 => Some(LINK_CREATE),
             _ => None,
         },
-        16 if args[1] == PERF_EVENT_IOC_SET_BPF => Some(SET_BPF),
+        "ioctl" if args[1] == PERF_EVENT_IOC_SET_BPF => Some(SET_BPF),
         _ => None,
     }
 }

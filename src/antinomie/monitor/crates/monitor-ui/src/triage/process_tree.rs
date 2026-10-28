@@ -275,7 +275,7 @@ pub(super) fn observe_processes(
             .and_then(|event| event.args)
             .or(exit.and_then(|event| event.args));
         if !matches!(
-            spawn_kind(invocation, event.syscall_nr, args),
+            spawn_kind(invocation, &event.syscall_name, args),
             Some(Spawn::Process)
         ) {
             continue;
@@ -469,15 +469,17 @@ fn link_child(
     }
 }
 
-fn spawn_kind(invocation: &InvocationSummary, nr: u64, args: Option<[u64; 6]>) -> Option<Spawn> {
-    match nr {
-        FORK | VFORK => Some(Spawn::Process),
-        CLONE => Some(if args.is_some_and(|args| args[0] & CLONE_THREAD != 0) {
-            Spawn::Skip
-        } else {
-            Spawn::Process
-        }),
-        CLONE3 => Some(match clone3_is_thread(invocation) {
+fn spawn_kind(invocation: &InvocationSummary, name: &str, args: Option<[u64; 6]>) -> Option<Spawn> {
+    match name {
+        "fork" | "vfork" => Some(Spawn::Process),
+        "clone" => Some(
+            if args.is_some_and(|args| clone_flags(&args) & CLONE_THREAD != 0) {
+                Spawn::Skip
+            } else {
+                Spawn::Process
+            },
+        ),
+        "clone3" => Some(match clone3_is_thread(invocation) {
             Some(true) => Spawn::Skip,
             Some(false) => Spawn::Process,
             None => Spawn::Skip,
@@ -533,7 +535,7 @@ pub(super) fn committed_exec(invocation: &InvocationSummary) -> bool {
             })
         })
         || trace::representative(invocation)
-            .is_some_and(|event| matches!(event.syscall_nr, 59 | 322))
+            .is_some_and(|event| matches!(event.syscall_name.as_str(), "execve" | "execveat"))
             && succeeded(invocation)
 }
 

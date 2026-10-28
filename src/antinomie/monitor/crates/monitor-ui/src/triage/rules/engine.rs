@@ -442,7 +442,7 @@ fn scope(aggs: &mut [Agg], state: &State, files: &FdState) {
         let started_by_exec = state
             .tasks()
             .get(&agg.cookie)
-            .is_some_and(|task| matches!(task.first_nr, Some(59 | 322)));
+            .is_some_and(|task| task.first_exec == Some(true));
         let caused = agg
             .image
             .as_deref()

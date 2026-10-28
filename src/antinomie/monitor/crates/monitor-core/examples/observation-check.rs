@@ -383,7 +383,7 @@ fn exercise(test: &mut Harness, options: &BackendOptions, probe: PathBuf) -> Res
             .is_some_and(|events| {
                 events.iter().any(|event| {
                     event.phase == 1
-                        && event.syscall_nr == 0
+                        && event.syscall_name == "read"
                         && event.tid == block_tid
                         && event.args.is_some_and(|args| args[0] == gate_fd)
                 })
@@ -396,7 +396,7 @@ fn exercise(test: &mut Harness, options: &BackendOptions, probe: PathBuf) -> Res
         .and_then(|events| {
             events.iter().find(|event| {
                 event.phase == 1
-                    && event.syscall_nr == 0
+                    && event.syscall_name == "read"
                     && event.tid == block_tid
                     && event.args.is_some_and(|args| args[0] == gate_fd)
             })

@@ -5,7 +5,7 @@
 //! capture row only when exactly one of them made a matching call.
 use super::Tier;
 use super::{
-    ctx::{nr, Ctx},
+    ctx::Ctx,
     engine::Engine,
     noise::{flag, Agg, Gaps},
     spec, Hit,
@@ -76,8 +76,8 @@ fn address(cx: &Ctx, argument: usize) -> Option<(IpAddr, u16)> {
 }
 
 pub(super) fn observe(cx: &Ctx, log: &mut Log) {
-    match cx.nr {
-        nr::CONNECT => {
+    match cx.name {
+        "connect" => {
             let Some((ip, port)) = address(cx, 1) else {
                 return;
             };
@@ -96,7 +96,7 @@ pub(super) fn observe(cx: &Ctx, log: &mut Log) {
                 },
             );
         }
-        nr::SENDTO | nr::SENDMSG | 307 => {
+        "sendto" | "sendmsg" | "sendmmsg" => {
             let Some(socket) = cx.socket(cx.args[0]) else {
                 return;
             };
@@ -115,7 +115,7 @@ pub(super) fn observe(cx: &Ctx, log: &mut Log) {
                     udp: true,
                     ok: cx.ok,
                     who: who(cx),
-                    name: if cx.nr == nr::SENDTO {
+                    name: if cx.name == "sendto" {
                         "sendto"
                     } else {
                         "sendmsg"
@@ -123,7 +123,7 @@ pub(super) fn observe(cx: &Ctx, log: &mut Log) {
                 },
             );
         }
-        nr::EXECVE | nr::EXECVEAT if cx.ok => {
+        "execve" | "execveat" if cx.ok => {
             let Some(path) = cx.exec_path().filter(|path| path.starts_with('/')) else {
                 return;
             };

@@ -520,7 +520,7 @@ fn run() -> Result<(), String> {
     let recording = open_recording(&content.directory).map_err(|e| e.to_string())?;
     let payload = b"DEBIAN-PERSISTENT\n";
     if !recording.events.iter().any(|event| {
-        event.syscall_nr == 1
+        event.syscall_name == "write"
             && event.phase == 1
             && event.fields.iter().any(|field| {
                 field

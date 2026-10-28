@@ -2,7 +2,7 @@
 //! Rules for sockets: who the program talks to, what it offers, and what it sends.
 use super::super::sigma_events::Socket;
 use super::super::*;
-use super::ctx::{base, nr, Ctx};
+use super::ctx::{base, Ctx};
 use super::state::{Contact, State};
 use super::tools;
 use super::{Hit, Tier};
@@ -25,15 +25,14 @@ const HOUSEKEEPING_PORTS: &[u16] = &[67, 68, 123, 5353, 5355];
 
 pub(super) fn rules(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
     shell_on_socket(cx, out);
-    match cx.nr {
-        nr::SOCKET => raw_socket(cx, out),
-        nr::CONNECT => connect(cx, st, out),
-        nr::BIND => bind(cx, out),
-        nr::LISTEN => listen(cx, out),
-        nr::SETSOCKOPT => filter(cx, out),
-        nr::SENDTO | nr::SENDMSG | 307 | nr::WRITE | 20 | 45 | 47 | nr::READ | 19 | 299 => {
-            traffic(cx, st, out)
-        }
+    match cx.name {
+        "socket" => raw_socket(cx, out),
+        "connect" => connect(cx, st, out),
+        "bind" => bind(cx, out),
+        "listen" => listen(cx, out),
+        "setsockopt" => filter(cx, out),
+        "sendto" | "sendmsg" | "sendmmsg" | "write" | "writev" | "recvfrom" | "recvmsg"
+        | "read" | "readv" | "recvmmsg" => traffic(cx, st, out),
         _ => {}
     }
 }
@@ -280,7 +279,10 @@ fn traffic(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
         elf_to_file(cx, st, out);
         return;
     };
-    let sending = matches!(cx.nr, nr::SENDTO | nr::SENDMSG | 307 | nr::WRITE | 20);
+    let sending = matches!(
+        cx.name,
+        "sendto" | "sendmsg" | "sendmmsg" | "write" | "writev"
+    );
     let size = cx.ret.filter(|ret| *ret > 0).map_or(0, |ret| ret as u64);
     let remote = socket.peer.is_some_and(|(ip, _)| !private(ip));
     let time = cx.time();
@@ -386,7 +388,7 @@ fn content(bytes: &[u8], socket: &Socket, out: &mut Vec<Hit>) {
 
 /// An ELF image that came off a socket and is now written to a file.
 fn elf_to_file(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
-    if cx.nr != nr::WRITE || !cx.ok || !st.task(cx).net_elf {
+    if cx.name != "write" || !cx.ok || !st.task(cx).net_elf {
         return;
     }
     let Some(path) = cx.fd_path(cx.args[0]).filter(|path| path.starts_with('/')) else {

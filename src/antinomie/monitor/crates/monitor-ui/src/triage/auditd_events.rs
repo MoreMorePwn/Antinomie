@@ -99,11 +99,11 @@ pub(super) fn records(
     if AUDITED.contains(&name) {
         found.push(syscall(files, call, event, image, ret));
     }
-    if matches!(event.syscall_nr, 59 | 322) {
+    if matches!(name, "execve" | "execveat") {
         found.extend(execve(call, event));
     }
-    if let Some(address) = sigma_events::address_argument(event.syscall_nr)
-        .and_then(|argument| sigma_events::address(call, event.syscall_nr, argument))
+    if let Some(address) = sigma_events::address_argument(name)
+        .and_then(|argument| sigma_events::address(call, name, argument))
     {
         let mut sockaddr = record("SOCKADDR");
         let hex: String = address
@@ -144,7 +144,7 @@ fn cwd(files: &FdState, call: &InvocationSummary, event: &EventSummary) -> Optio
 /// Without a complete argument vector there is no record: a partial one would
 /// be a different title.
 fn proctitle(files: &FdState, call: &InvocationSummary, event: &EventSummary) -> Option<Record> {
-    let arguments = if matches!(event.syscall_nr, 59 | 322) {
+    let arguments = if matches!(event.syscall_name.as_str(), "execve" | "execveat") {
         normalized::complete_argv(call, event)?
     } else {
         files

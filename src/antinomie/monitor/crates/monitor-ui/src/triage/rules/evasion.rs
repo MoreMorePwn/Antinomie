@@ -2,7 +2,7 @@
 //! Rules for evasion that is not a file or a program name: long sleeps, names
 //! taken from kernel threads and daemons, and the anti-analysis checks of
 //! [`probes`](super::probes).
-use super::ctx::{base, nr, Ctx};
+use super::ctx::{base, Ctx};
 use super::state::State;
 use super::{probes, process, Hit, Tier};
 
@@ -81,17 +81,17 @@ fn exec_name(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
 
 /// A wait of a minute or more, before the program has done anything else.
 fn sleep(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
-    let length = match cx.nr {
-        nr::NANOSLEEP | nr::CLOCK_NANOSLEEP => probes::sleep_ns(cx),
+    let length = match cx.name {
+        "nanosleep" | "clock_nanosleep" => probes::sleep_ns(cx),
         // select(0, NULL, NULL, NULL, timeval)
-        23 if cx.args[0] == 0 => cx
+        "select" if cx.args[0] == 0 => cx
             .word(4, "", 0)
             .map(|seconds| seconds.saturating_mul(1_000_000_000)),
         // poll(NULL, 0, timeout in milliseconds)
-        7 if cx.args[1] == 0 => Some((cx.args[2] as i32).max(0) as u64 * 1_000_000),
-        nr::ALARM => Some(cx.args[0].saturating_mul(1_000_000_000)),
+        "poll" if cx.args[1] == 0 => Some((cx.args[2] as i32).max(0) as u64 * 1_000_000),
+        "alarm" => Some(cx.args[0].saturating_mul(1_000_000_000)),
         // timerfd_settime: it_value is the second timespec of the structure
-        nr::TIMERFD_SETTIME => cx
+        "timerfd_settime" => cx
             .word(2, "", 16)
             .map(|seconds| seconds.saturating_mul(1_000_000_000)),
         _ => None,

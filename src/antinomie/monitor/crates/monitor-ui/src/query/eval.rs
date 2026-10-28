@@ -409,7 +409,7 @@ pub(super) fn field(invocation: &InvocationSummary, name: &str) -> Result<Resolv
                     && field.complete
                     && crate::trace::covered_preview(field).len() >= 8
             })
-        }) || matches!(event.syscall_nr, 59 | 322)
+        }) || matches!(event.syscall_name.as_str(), "execve" | "execveat")
             && invocation
                 .exit
                 .as_ref()

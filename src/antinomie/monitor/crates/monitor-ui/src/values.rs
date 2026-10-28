@@ -244,8 +244,10 @@ pub(crate) fn is_error(result: i64) -> bool {
 
 /// Syscalls whose successful return is an address.
 fn returns_address(nr: u64) -> bool {
-    // mmap, brk, mremap, shmat
-    matches!(nr, 9 | 12 | 25 | 30)
+    matches!(
+        syscalls::known_name(nr),
+        Some("mmap" | "brk" | "mremap" | "shmat")
+    )
 }
 
 /// A syscall return value by meaning: an error by name, an address in hex,
@@ -347,7 +349,10 @@ enum Meaning {
 }
 
 fn meaning(nr: u64, index: usize) -> Meaning {
-    let Some(argument) = syscalls::syscall(nr).and_then(|info| info.arguments.get(index)) else {
+    let Some(info) = syscalls::syscall(nr) else {
+        return Meaning::Unsigned;
+    };
+    let Some(argument) = info.arguments.get(index) else {
         return Meaning::Unsigned;
     };
     let name = argument.name.as_str();
@@ -368,7 +373,7 @@ fn meaning(nr: u64, index: usize) -> Meaning {
         return Meaning::Signal;
     }
     // ioctl requests encode direction, size and type in their bits.
-    if nr == 16 && index == 1 {
+    if info.name == "ioctl" && name == "cmd" {
         return Meaning::Hex;
     }
     // An address, not its length (addrlen, addr_len).

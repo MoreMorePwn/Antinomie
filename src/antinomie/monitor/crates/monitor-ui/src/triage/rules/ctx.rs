@@ -4,56 +4,8 @@
 use super::super::file_category::{self, Category as Op};
 use super::super::sigma_events::{self, Role};
 use super::super::*;
+use antinomie_monitor_core::syscalls;
 use std::cell::OnceCell;
-
-/// x86-64 system call numbers the rules use.
-pub(super) mod nr {
-    pub const READ: u64 = 0;
-    pub const WRITE: u64 = 1;
-    pub const MMAP: u64 = 9;
-    pub const MPROTECT: u64 = 10;
-    pub const IOCTL: u64 = 16;
-    pub const NANOSLEEP: u64 = 35;
-    pub const SOCKET: u64 = 41;
-    pub const CONNECT: u64 = 42;
-    pub const ACCEPT: u64 = 43;
-    pub const SENDTO: u64 = 44;
-    pub const SENDMSG: u64 = 46;
-    pub const BIND: u64 = 49;
-    pub const LISTEN: u64 = 50;
-    pub const SETSOCKOPT: u64 = 54;
-    pub const EXECVE: u64 = 59;
-    pub const KILL: u64 = 62;
-    pub const SYSINFO: u64 = 99;
-    pub const PTRACE: u64 = 101;
-    pub const SYSLOG: u64 = 103;
-    pub const PERSONALITY: u64 = 135;
-    pub const MOUNT: u64 = 165;
-    pub const REBOOT: u64 = 169;
-    pub const INIT_MODULE: u64 = 175;
-    pub const PRCTL: u64 = 157;
-    pub const CLOCK_NANOSLEEP: u64 = 230;
-    pub const TKILL: u64 = 200;
-    pub const TGKILL: u64 = 234;
-    pub const KEXEC_LOAD: u64 = 246;
-    pub const ALARM: u64 = 37;
-    pub const UNSHARE: u64 = 272;
-    pub const SETNS: u64 = 308;
-    pub const PROCESS_VM_READV: u64 = 310;
-    pub const PROCESS_VM_WRITEV: u64 = 311;
-    pub const FINIT_MODULE: u64 = 313;
-    pub const KEXEC_FILE_LOAD: u64 = 320;
-    pub const MEMFD_CREATE: u64 = 319;
-    pub const SECCOMP: u64 = 317;
-    pub const EXECVEAT: u64 = 322;
-    pub const PKEY_MPROTECT: u64 = 329;
-    pub const PIDFD_SEND_SIGNAL: u64 = 424;
-    pub const IO_URING_SETUP: u64 = 425;
-    pub const IO_URING_ENTER: u64 = 426;
-    pub const TIMERFD_SETTIME: u64 = 286;
-    pub const CLONE3: u64 = 435;
-    pub const CLONE: u64 = 56;
-}
 
 /// A file a call acted on, by what it did to it.
 pub(super) struct Touch {
@@ -68,7 +20,7 @@ pub(super) struct Ctx<'a> {
     pub files: &'a FdState,
     /// The recording the call came from, for captured bytes past the preview.
     pub dir: Option<&'a Path>,
-    pub nr: u64,
+    /// The call's name in the run's table: what rules match on.
     pub name: &'a str,
     pub args: [u64; 6],
     pub ret: Option<i64>,
@@ -98,7 +50,6 @@ impl<'a> Ctx<'a> {
             event,
             files,
             dir,
-            nr: event.syscall_nr,
             name: event.syscall_name.as_str(),
             args: event.args.or(call_args(call)).unwrap_or([0; 6]),
             ret,
@@ -118,7 +69,18 @@ impl<'a> Ctx<'a> {
     }
 
     pub(super) fn is_exec(&self) -> bool {
-        matches!(self.nr, nr::EXECVE | nr::EXECVEAT)
+        matches!(self.name, "execve" | "execveat")
+    }
+
+    /// Where the table puts a named argument of this call (`envp` of an exec,
+    /// `clone_flags` of a clone), so a rule reads roles, not positions.
+    pub(super) fn argument(&self, argument: &str) -> Option<usize> {
+        syscalls::native().argument(self.name, argument)
+    }
+
+    /// The value of a named argument, zero when the call has no such argument.
+    pub(super) fn arg(&self, argument: &str) -> u64 {
+        self.argument(argument).map_or(0, |index| self.args[index])
     }
 
     /// The path a descriptor argument refers to, if the run opened it.
@@ -239,12 +201,13 @@ impl<'a> Ctx<'a> {
     /// The environment strings of an exec that were captured whole.
     pub(super) fn envp(&self) -> &[String] {
         self.envp.get_or_init(|| {
-            let argument = match self.nr {
-                nr::EXECVE => 2,
-                nr::EXECVEAT => 3,
-                _ => return Vec::new(),
-            };
-            string_vector(self.call, argument)
+            if !self.is_exec() {
+                return Vec::new();
+            }
+            match self.argument("envp") {
+                Some(argument) => string_vector(self.call, argument),
+                None => Vec::new(),
+            }
         })
     }
 
@@ -260,7 +223,7 @@ impl<'a> Ctx<'a> {
             .chain(self.call.exit.iter())
             .flat_map(|event| &event.fields)
             .find(|field| {
-                trace::field_argument(self.nr, field) == Some(argument)
+                trace::field_argument_of(self.name, field) == Some(argument)
                     && (field.key.ends_with(suffix) || suffix.is_empty())
             })
     }
@@ -293,7 +256,7 @@ impl<'a> Ctx<'a> {
 
     /// The socket address the call was given or got back.
     pub(super) fn address(&self, argument: usize) -> Option<sigma_events::Address> {
-        sigma_events::address(self.call, self.nr, argument)
+        sigma_events::address(self.call, self.name, argument)
     }
 
     /// The bytes a read returned or a write sent, as far as they were captured.

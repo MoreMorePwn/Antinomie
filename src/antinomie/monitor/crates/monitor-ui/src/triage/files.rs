@@ -394,7 +394,12 @@ impl FileIndex {
                 }
             }
         }
-        if success && matches!(event.syscall_nr, CLONE | CLONE3 | FORK | VFORK) {
+        if success
+            && matches!(
+                event.syscall_name.as_str(),
+                "clone" | "clone3" | "fork" | "vfork"
+            )
+        {
             if let Some(child) = ret
                 .and_then(|ret| u32::try_from(ret).ok())
                 .filter(|pid| *pid != 0)
@@ -1464,7 +1469,7 @@ mod tests {
         let (index, _) = build(&[
             open(2),
             operation(2, 0, "read", 2, [3, 0, 2, 0, 0, 0], b"AB"),
-            operation(3, FORK, "fork", 2, [0; 6], b""),
+            operation(3, 57, "fork", 2, [0; 6], b""),
             child,
             operation(5, 1, "write", 1, [3, 0, 1, 0, 0, 0], b"D"),
         ]);

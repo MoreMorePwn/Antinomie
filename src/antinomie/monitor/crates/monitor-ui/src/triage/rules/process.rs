@@ -2,7 +2,7 @@
 //! Rules for process, memory, credential and kernel-facing system calls.
 use super::super::bpf_attach as attach;
 use super::super::*;
-use super::ctx::{base, nr, Ctx};
+use super::ctx::{base, Ctx};
 use super::state::State;
 use super::{Hit, Tier};
 use antinomie_monitor_core::kernel_notes::{self, CredentialChange, Credentials};
@@ -20,11 +20,11 @@ const EAGAIN: i64 = -11;
 const DANGEROUS_CAPS: u64 = (1 << 16) | (1 << 21);
 
 pub(super) fn rules(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
-    match cx.nr {
-        nr::MMAP | nr::MPROTECT | nr::PKEY_MPROTECT => memory(cx, st, out),
-        nr::PTRACE => ptrace(cx, out),
-        nr::PROCESS_VM_WRITEV | nr::PROCESS_VM_READV => vm(cx, out),
-        nr::MEMFD_CREATE => {
+    match cx.name {
+        "mmap" | "mprotect" | "pkey_mprotect" => memory(cx, st, out),
+        "ptrace" => ptrace(cx, out),
+        "process_vm_writev" | "process_vm_readv" => vm(cx, out),
+        "memfd_create" => {
             let name = cx.text(0).unwrap_or_default();
             out.push(Hit::new(
                 "process.memfd",
@@ -32,8 +32,8 @@ pub(super) fn rules(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
                 format!("memfd_create \"{name}\""),
             ));
         }
-        nr::INIT_MODULE | nr::FINIT_MODULE => {
-            let image = if cx.nr == nr::FINIT_MODULE {
+        "init_module" | "finit_module" => {
+            let image = if cx.name == "finit_module" {
                 cx.fd_path(cx.args[0]).unwrap_or("a descriptor").to_owned()
             } else {
                 "an image in memory".into()
@@ -44,10 +44,10 @@ pub(super) fn rules(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
                 format!("{} loads a kernel module from {image}", cx.name),
             ));
         }
-        nr::SECCOMP if cx.args[0] == 1 => seccomp(cx, out),
-        nr::PRCTL => prctl(cx, out),
-        nr::UNSHARE if cx.args[0] & CLONE_NEWUSER != 0 => user_namespace(cx, st, out),
-        nr::SETNS => {
+        "seccomp" if cx.args[0] == 1 => seccomp(cx, out),
+        "prctl" => prctl(cx, out),
+        "unshare" if cx.args[0] & CLONE_NEWUSER != 0 => user_namespace(cx, st, out),
+        "setns" => {
             if cx
                 .fd_path(cx.args[0])
                 .is_some_and(|path| path.starts_with("/proc/1/ns/"))
@@ -59,40 +59,40 @@ pub(super) fn rules(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
                 ));
             }
         }
-        nr::REBOOT => reboot(cx, out),
-        nr::KEXEC_LOAD | nr::KEXEC_FILE_LOAD => {
+        "reboot" => reboot(cx, out),
+        "kexec_load" | "kexec_file_load" => {
             out.push(Hit::new(
                 "impact.reboot",
                 "kexec",
                 format!("{} stages a replacement kernel", cx.name),
             ));
         }
-        nr::SYSLOG if matches!(cx.args[0], 4 | 5) => {
+        "syslog" if matches!(cx.args[0], 4 | 5) => {
             out.push(Hit::new(
                 "evasion.log_clear",
                 "kernel ring buffer",
                 "syslog clears the kernel ring buffer".into(),
             ));
         }
-        nr::KILL | nr::TKILL | nr::TGKILL | nr::PIDFD_SEND_SIGNAL => kill(cx, st, out),
-        nr::PERSONALITY if cx.args[0] & 0x0004_0000 != 0 => {
+        "kill" | "tkill" | "tgkill" | "pidfd_send_signal" => kill(cx, st, out),
+        "personality" if cx.args[0] & 0x0004_0000 != 0 => {
             out.push(Hit::new(
                 "evasion.sysctl_security",
                 "ADDR_NO_RANDOMIZE",
                 "personality(ADDR_NO_RANDOMIZE) turns off address randomisation".into(),
             ));
         }
-        nr::IO_URING_SETUP | nr::IO_URING_ENTER => {
+        "io_uring_setup" | "io_uring_enter" => {
             out.push(Hit::new(
                 "evasion.io_uring_usage",
                 "io_uring",
                 format!("{}: work through a ring makes few system calls", cx.name),
             ));
         }
-        321 | nr::IOCTL => bpf_program(cx, st, out),
-        nr::CLONE | 57 | 58 | nr::CLONE3 => forks(cx, st, out),
-        nr::WRITE => dirty_pipe(cx, st, out),
-        275 => splice(cx, st),
+        "bpf" | "ioctl" => bpf_program(cx, st, out),
+        "clone" | "fork" | "vfork" | "clone3" => forks(cx, st, out),
+        "write" => dirty_pipe(cx, st, out),
+        "splice" => splice(cx, st),
         _ => {}
     }
     credentials(cx, st, out);
@@ -145,8 +145,8 @@ fn memory(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
     if !cx.ok {
         return;
     }
-    let anonymous = cx.nr != nr::MMAP || cx.args[3] & 0x20 != 0;
-    let range = if cx.nr == nr::MMAP {
+    let anonymous = cx.name != "mmap" || cx.args[3] & 0x20 != 0;
+    let range = if cx.name == "mmap" {
         (cx.ret.unwrap_or(0) as u64, cx.args[1])
     } else {
         (cx.args[0], cx.args[1])
@@ -156,7 +156,7 @@ fn memory(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
         if task.writable.len() < 4096 {
             task.writable.push(range);
         }
-    } else if cx.nr == nr::MPROTECT && prot & PROT_EXEC != 0 {
+    } else if cx.name == "mprotect" && prot & PROT_EXEC != 0 {
         let (start, length) = range;
         let end = start.saturating_add(length);
         if task
@@ -214,7 +214,7 @@ fn vm(cx: &Ctx, out: &mut Vec<Hit>) {
     if pid == u64::from(cx.event.pid) || pid == u64::from(cx.event.tid) {
         return;
     }
-    let rule = if cx.nr == nr::PROCESS_VM_WRITEV {
+    let rule = if cx.name == "process_vm_writev" {
         "injection.vm_write"
     } else {
         "credential.proc_mem_read"
@@ -339,11 +339,13 @@ fn reboot(cx: &Ctx, out: &mut Vec<Hit>) {
 
 /// Many signals to processes that are not the run's own.
 fn kill(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
-    let (target, signal) = match cx.nr {
-        nr::KILL | nr::TKILL => (cx.args[0], cx.args[1]),
-        nr::TGKILL => (cx.args[0], cx.args[2]),
-        _ => (cx.args[0], cx.args[1]),
+    // The process, thread group or descriptor the signal goes to, by role.
+    let target = match cx.name {
+        "tgkill" => cx.arg("tgid"),
+        "pidfd_send_signal" => cx.arg("pidfd"),
+        _ => cx.arg("pid"),
     };
+    let signal = cx.arg("sig");
     if !matches!(signal, 9 | 15) || target == 0 || (target as i64) < 0 {
         return;
     }
@@ -370,7 +372,7 @@ fn kill(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
 
 /// Process creation rate, and fork failures.
 fn forks(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
-    if cx.nr == nr::CLONE && cx.args[0] & 0x0001_0000 != 0 {
+    if cx.name == "clone" && cx.arg("clone_flags") & 0x0001_0000 != 0 {
         return;
     }
     let time = cx.time();

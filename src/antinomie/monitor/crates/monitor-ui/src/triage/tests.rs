@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 use super::*;
 
+// x86-64 numbers of the calls the process-tree fixtures build by number.
+const CLONE: u64 = 56;
+const FORK: u64 = 57;
+const CLONE3: u64 = 435;
+
 mod async_files;
 mod async_previews;
 mod layout;

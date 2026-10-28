@@ -1163,12 +1163,12 @@ pub(super) mod tests {
 
     #[test]
     fn actual_capture_keys_associate_with_semantic_arguments() {
-        assert_eq!(key_argument(0, "buf"), Some(1));
-        assert_eq!(key_argument(257, "path"), Some(1));
-        assert_eq!(key_argument(19, "arg1.iov[2].data"), Some(1));
-        assert_eq!(key_argument(43, "address.length"), Some(2));
-        assert_eq!(key_argument(45, "address.data"), Some(4));
-        assert_eq!(key_argument(59, "context.exec.argv[0]"), None);
+        assert_eq!(key_argument("read", "buf"), Some(1));
+        assert_eq!(key_argument("openat", "path"), Some(1));
+        assert_eq!(key_argument("readv", "arg1.iov[2].data"), Some(1));
+        assert_eq!(key_argument("accept", "address.length"), Some(2));
+        assert_eq!(key_argument("recvfrom", "address.data"), Some(4));
+        assert_eq!(key_argument("execve", "context.exec.argv[0]"), None);
     }
 
     #[test]

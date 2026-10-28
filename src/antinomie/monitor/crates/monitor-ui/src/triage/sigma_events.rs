@@ -15,14 +15,6 @@ const KNOWN_PATHS: usize = 262_144;
 /// Bound on every other per-run table kept here.
 const TABLE_LIMIT: usize = 262_144;
 
-const SOCKET: u64 = 41;
-const CONNECT: u64 = 42;
-const ACCEPT: u64 = 43;
-const SENDTO: u64 = 44;
-const BIND: u64 = 49;
-const LISTEN: u64 = 50;
-const SETSOCKOPT: u64 = 54;
-const ACCEPT4: u64 = 288;
 pub(super) const O_CREAT: u64 = 0o100;
 pub(super) const O_EXCL: u64 = 0o200;
 pub(super) const O_TRUNC: u64 = 0o1000;
@@ -442,32 +434,33 @@ fn track_sockets(files: &mut FdState, call: &InvocationSummary, event: &EventSum
     let owner = table_owner(files, call.task_cookie, event.tid);
     let key = |fd: u64| (owner.0, owner.1, fd);
     let sockets = &mut files.journal.sockets;
-    let endpoint =
-        |nr: u64| address(call, nr, 1).and_then(|found| Some((found.ip.parse().ok()?, found.port)));
-    match event.syscall_nr {
+    let endpoint = |name: &str| {
+        address(call, name, 1).and_then(|found| Some((found.ip.parse().ok()?, found.port)))
+    };
+    match event.syscall_name.as_str() {
         // A non-blocking connect that is still going has already named its peer.
-        CONNECT if result >= 0 || result == EINPROGRESS => {
+        "connect" if result >= 0 || result == EINPROGRESS => {
             if let Some(socket) = sockets.get_mut(&key(args[0])) {
-                socket.peer = endpoint(CONNECT);
+                socket.peer = endpoint("connect");
             }
         }
         _ if result < 0 => {}
-        BIND => {
+        "bind" => {
             if let Some(socket) = sockets.get_mut(&key(args[0])) {
-                socket.bound = endpoint(BIND);
+                socket.bound = endpoint("bind");
             }
         }
-        LISTEN => {
+        "listen" => {
             if let Some(socket) = sockets.get_mut(&key(args[0])) {
                 socket.listening = true;
             }
         }
-        SETSOCKOPT if args[1] == 1 && args[2] == 26 => {
+        "setsockopt" if args[1] == 1 && args[2] == 26 => {
             if let Some(socket) = sockets.get_mut(&key(args[0])) {
                 socket.filtered = true;
             }
         }
-        SOCKET => {
+        "socket" => {
             let kind = match (args[0], args[1] & 0xf) {
                 (2 | 10, 1) => SocketKind::Stream,
                 (2 | 10, 2) => SocketKind::Datagram,
@@ -479,25 +472,25 @@ fn track_sockets(files: &mut FdState, call: &InvocationSummary, event: &EventSum
                 sockets.insert(key(result as u64), Socket::new(kind, cloexec, args[0], raw));
             }
         }
-        ACCEPT | ACCEPT4 => {
-            let cloexec = event.syscall_nr == ACCEPT4 && args[3] & SOCK_CLOEXEC != 0;
+        name @ ("accept" | "accept4") => {
+            let cloexec = name == "accept4" && args[3] & SOCK_CLOEXEC != 0;
             if sockets.len() < TABLE_LIMIT {
                 let kind = SocketKind::Stream;
                 let domain = sockets.get(&key(args[0])).map_or(2, |socket| socket.domain);
                 let mut accepted = Socket::new(kind, cloexec, domain, false);
                 accepted.accepted = true;
-                accepted.peer = endpoint(event.syscall_nr);
+                accepted.peer = endpoint(name);
                 sockets.insert(key(result as u64), accepted);
             }
         }
-        3 => {
+        "close" => {
             sockets.remove(&key(args[0]));
         }
-        32 | 33 | 292 | 72 => {
-            let new = match (event.syscall_nr, args[1]) {
-                (32, _) | (72, 0 | 1030) => result as u64,
-                (33 | 292, _) => args[1],
-                (72, 2) => {
+        name @ ("dup" | "dup2" | "dup3" | "fcntl") => {
+            let new = match (name, args[1]) {
+                ("dup", _) | ("fcntl", 0 | 1030) => result as u64,
+                ("dup2" | "dup3", _) => args[1],
+                ("fcntl", 2) => {
                     if let Some(socket) = sockets.get_mut(&key(args[0])) {
                         socket.cloexec = args[2] & 1 != 0;
                     }
@@ -507,8 +500,8 @@ fn track_sockets(files: &mut FdState, call: &InvocationSummary, event: &EventSum
             };
             match sockets.get(&key(args[0])).copied() {
                 Some(mut socket) => {
-                    socket.cloexec = (event.syscall_nr == 292 && args[2] & 0x80000 != 0)
-                        || (event.syscall_nr == 72 && args[1] == 1030);
+                    socket.cloexec = (name == "dup3" && args[2] & 0x80000 != 0)
+                        || (name == "fcntl" && args[1] == 1030);
                     sockets.insert(key(new), socket);
                 }
                 None => {
@@ -516,7 +509,7 @@ fn track_sockets(files: &mut FdState, call: &InvocationSummary, event: &EventSum
                 }
             }
         }
-        436 => {
+        "close_range" => {
             // A cloexec range keeps the descriptors until the next exec.
             let cloexec = args[2] & 4 != 0;
             let range: Vec<_> = sockets
@@ -533,7 +526,7 @@ fn track_sockets(files: &mut FdState, call: &InvocationSummary, event: &EventSum
                 }
             }
         }
-        59 | 322 => {
+        "execve" | "execveat" => {
             sockets.retain(|(cookie, pid, _), socket| (*cookie, *pid) != owner || !socket.cloexec)
         }
         _ => {}
@@ -586,9 +579,9 @@ pub(super) struct Address {
 /// The IP address and port in the `struct sockaddr` a call was given or
 /// filled in. Only a complete AF_INET or AF_INET6 address is decoded; Unix
 /// sockets and short captures give nothing.
-pub(super) fn address(call: &InvocationSummary, nr: u64, argument: usize) -> Option<Address> {
+pub(super) fn address(call: &InvocationSummary, name: &str, argument: usize) -> Option<Address> {
     // accept4 takes the same address argument as accept.
-    let nr = if nr == ACCEPT4 { ACCEPT } else { nr };
+    let name = if name == "accept4" { "accept" } else { name };
     let field = call
         .entry
         .iter()
@@ -598,7 +591,7 @@ pub(super) fn address(call: &InvocationSummary, nr: u64, argument: usize) -> Opt
             field.key.contains("addr")
                 && !field.key.contains("len")
                 && !field.key.contains("capacity")
-                && trace::field_argument(nr, field) == Some(argument)
+                && trace::field_argument_of(name, field) == Some(argument)
         })?;
     if !field.complete {
         return None;
@@ -625,10 +618,13 @@ pub(super) fn address(call: &InvocationSummary, nr: u64, argument: usize) -> Opt
 }
 
 /// Index of the address argument of an address-taking syscall.
-pub(super) fn address_argument(nr: u64) -> Option<usize> {
-    match nr {
-        CONNECT | ACCEPT | ACCEPT4 | BIND => Some(1),
-        SENDTO => Some(4),
-        _ => None,
-    }
+pub(super) fn address_argument(name: &str) -> Option<usize> {
+    let argument = match name {
+        "connect" => "uservaddr",
+        "accept" | "accept4" => "upeer_sockaddr",
+        "bind" => "umyaddr",
+        "sendto" => "addr",
+        _ => return None,
+    };
+    syscalls::native().argument(name, argument)
 }

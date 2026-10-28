@@ -3,7 +3,7 @@
 //! changed, read, removed or only looked at.
 use super::super::file_category::Category as Op;
 use super::super::*;
-use super::ctx::{base, home_relative, nr, proc_self, under, Ctx, Touch};
+use super::ctx::{base, home_relative, proc_self, under, Ctx, Touch};
 use super::state::State;
 use super::Hit;
 
@@ -399,10 +399,10 @@ pub(super) fn rules(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
 
 /// Calls that name no file but still act on one through a descriptor.
 fn other_calls(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
-    match cx.nr {
+    match cx.name {
         // sendfile(out, in), copy_file_range(in, _, out, ...), splice(in, _, out, ...)
-        40 | 326 | 275 => {
-            let (from, to) = if cx.nr == 40 {
+        "sendfile" | "copy_file_range" | "splice" => {
+            let (from, to) = if cx.name == "sendfile" {
                 (cx.args[1], cx.args[0])
             } else {
                 (cx.args[0], cx.args[2])
@@ -425,7 +425,7 @@ fn other_calls(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
                 }
             }
         }
-        nr::IOCTL => {
+        "ioctl" => {
             match cx.args[1] {
                 // TIOCSTI
                 0x5412 => out.push(Hit::new(
@@ -450,7 +450,7 @@ fn other_calls(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
                 _ => {}
             }
         }
-        nr::MOUNT => mount(cx, out),
+        "mount" => mount(cx, out),
         _ => {}
     }
     let _ = st;
@@ -853,11 +853,11 @@ fn permissions(cx: &Ctx, touch: &Touch, out: &mut Vec<Hit>) {
 
 /// Times set on purpose, not to "now".
 fn timestamps(cx: &Ctx, st: &mut State, touch: &Touch, out: &mut Vec<Hit>) {
-    let explicit = match cx.nr {
+    let explicit = match cx.name {
         // utime(path, times), utimes(path, times)
-        132 | 235 => cx.args[1] != 0,
+        "utime" | "utimes" => cx.args[1] != 0,
         // utimensat(dirfd, path, times, flags), futimesat(dirfd, path, times)
-        280 | 261 => cx.args[2] != 0,
+        "utimensat" | "futimesat" => cx.args[2] != 0,
         _ => false,
     };
     // UTIME_NOW and UTIME_OMIT in both nanosecond fields are not a chosen time.
@@ -893,7 +893,7 @@ fn xattr(cx: &Ctx, touch: &Touch, out: &mut Vec<Hit>) {
 
 /// An executable mapping of a file the run wrote.
 fn mapped(cx: &Ctx, st: &State, touch: &Touch, out: &mut Vec<Hit>) {
-    if cx.args[2] & 4 != 0 && cx.nr == nr::MMAP && st.written.contains(&touch.path) {
+    if cx.args[2] & 4 != 0 && cx.name == "mmap" && st.written.contains(&touch.path) {
         out.push(Hit::new(
             "execution.dropped_library",
             &touch.path,

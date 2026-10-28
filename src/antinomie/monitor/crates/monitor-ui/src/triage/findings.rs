@@ -28,7 +28,7 @@ pub(super) fn outcome(invocation: &InvocationSummary) -> String {
 
 /// `setsockopt(fd, SOL_SOCKET, SO_ATTACH_FILTER)`. Another level with optname 26 is not a match.
 pub(super) fn classic_socket_filter(event: &EventSummary, args: [u64; 6]) -> bool {
-    (event.syscall_name == "setsockopt" || event.syscall_nr == 54) && args[1] == 1 && args[2] == 26
+    event.syscall_name == "setsockopt" && args[1] == 1 && args[2] == 26
 }
 
 pub(super) fn filter_findings(rows: Vec<Finding>, filter: &str) -> Vec<Finding> {
