@@ -85,6 +85,29 @@ it runs.
   `~~` (may have changed), and the pages the guest copied replace it with
   their bytes; a page it never saw written stays `~~`.
 
+- **The Syscall Trace decodes more captured structures by their type.** Signal
+  sets read as signal names (`[SIGINT SIGUSR1]`, `~[SIGKILL SIGSTOP]` for all
+  but those), a `siginfo_t` as its common members and the branch its signal and
+  `si_code` select (`si_pid`/`si_status` of a child, `si_addr` of a fault,
+  `si_value` of a queued signal, `si_syscall`/`si_arch` of seccomp), a
+  `sigevent` by `sigev_notify`, an alternate stack (`stack_t`) by its members,
+  bpf's `union bpf_attr` by the command that passed it (map, program, attach,
+  link, BTF, query members and their type names; members past the size the
+  program passed are left out), capget/capset's header (the version by name)
+  and capability sets by name, getdents' directory entries (inode, offset,
+  type, name), group lists and the ids getres*id wrote, `file_handle` headers,
+  `io_uring_params` (flags and features by name, ring offsets), System V
+  messages (`mtype`, `mtext`), iptables table headers (`ipt_replace`,
+  `xt_counters_info`) and x86 LDT entries (`user_desc`, the descriptors
+  modify_ldt reads). The trace line shows the decoded form; selecting the field
+  lists each member. Triage's BPF view lists the attr members of each bpf call,
+  and takes a load's instruction count and an attach's program descriptor from
+  them, so an attach of a program the run loaded says so. Filter keywords now
+  cover every bpf command's attr members (`args.attr.map_fd`,
+  `args.attr.query.attach_type`, ...); `args.attr.attach_type` of a
+  BPF_PROG_ATTACH and `args.attr.bpf_fd` of a BPF_OBJ_PIN read the wrong word
+  before. `io_uring_params` and group lists have keywords too.
+
 - **Library › Samples lists every sample across runs and VMs.** One flat list,
   the sample with the latest run first: name, description, tags (verdict and
   malware category; techniques and custom tags fold into `+N`), run count,
@@ -333,6 +356,14 @@ it runs.
   cleaned while the mapping stayed and that was not stored to again, and
   mappings of the kernel's internal files (shared anonymous memory, System V
   shared memory, memfd). New patch 17 (shared by every architecture).
+- **Typed layouts for group lists, directory entries and LDT reads (contract
+  revision 18).** getgroups and setgroups name their array `gid_t[]`, getdents
+  and getdents64 their records `linux_dirent[]` and `linux_dirent64[]`, and
+  modify_ldt's reads the descriptors they copy (`desc_struct[]`, x86-64 only);
+  these were plain bytes before. The netfilter set option
+  `IPT_SO_SET_ADD_COUNTERS` (and its IPv6 twin) is now labelled
+  `xt_counters_info` instead of `ipt_replace`. The bytes are unchanged. New
+  patch 18; a host that does not know a layout shows the bytes.
 - **Architecture-neutral guest patches.** The shared patches no longer assume
   x86-64: system calls are keyed by their `__NR_` names, registers are read
   through the kernel's portable helpers, and what only x86 has (its system call

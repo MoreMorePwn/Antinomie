@@ -363,6 +363,23 @@ static void ldt_child(void *unused)
     why("ENOSYS comes back zero-extended (0xffffffda)");
     DONE();
     ldt_expect(raw, ENOSYS);
+    struct user_desc data;
+    memset(&data, 0, sizeof data);
+    data.entry_number = 2;
+    data.base_addr = 0x1000;
+    data.limit = 0xfff;
+    data.seg_32bit = 1;
+    data.useable = 1;
+    CALL("modify_ldt.write_data_entry", modify_ldt, WANT_OK, 0x11, &data, sizeof data);
+    in_buf(1, &data, sizeof data);
+    why("a 32-bit data segment in entry 2 of this child's own LDT");
+    DONE();
+    memset(buffer, 0x5a, sizeof buffer);
+    got = CALL("modify_ldt.read_data_entry", modify_ldt, WANT_OK, 0, buffer, 24);
+    out_key("arg1.ldt", buffer, got > 0 ? (size_t)got : 0);
+    why("entries 0 and 1 cleared, entry 2 as fill_ldt() made it: type 3 (data, writable, "
+        "accessed), s 1, dpl 3, present, avl and d set");
+    DONE();
 }
 
 static void syslog_cases(void)

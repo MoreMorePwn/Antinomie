@@ -16,6 +16,9 @@ pub struct ArgumentView {
     pub text: String,
     pub raw: Option<String>,
     pub data: Option<String>,
+    /// `data` is a field decoded by its layout (absent in views from before).
+    #[serde(default)]
+    pub decoded: bool,
     pub kind: String,
     pub value: String,
 }

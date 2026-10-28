@@ -13,7 +13,7 @@
 // open_by_handle_at setns open_tree fsopen fsconfig fsmount move_mount fspick
 // mount_setattr statmount listmount bpf perf_event_open syslog quotactl
 // vhangup mlockall process_mrelease userfaultfd memfd_secret migrate_pages
-// move_pages.
+// move_pages, setsockopt (netfilter table headers).
 #include "areas.h"
 
 #include <fcntl.h>
@@ -32,11 +32,14 @@
 #include <sys/mount.h>
 #include <sys/quota.h>
 #include <sys/resource.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
 #include <sys/time.h>
 #include <sys/wait.h>
 #include <time.h>
+#include <netinet/in.h>
+#include <stddef.h>
 
 #ifndef SYSLOG_ACTION_READ_ALL
 #define SYSLOG_ACTION_READ_ALL 3
@@ -968,6 +971,61 @@ static void bpf_cases(void)
         close((int)map);
 }
 
+// The headers iptables passes to IPT_SO_SET_REPLACE (struct ipt_replace, its
+// rules after it) and IPT_SO_SET_ADD_COUNTERS (struct xt_counters_info, the
+// counters after it), laid out here to keep the kernel's netfilter headers
+// out of the fixture.
+#define IPT_SET_REPLACE 64
+#define IPT_SET_ADD_COUNTERS 65
+struct table_header {
+    char name[32];
+    uint32_t valid_hooks, num_entries, size, hook_entry[5], underflow[5], num_counters;
+    uint64_t counters;
+};
+_Static_assert(sizeof(struct table_header) == 96, "x86-64 ipt_replace header");
+struct counters_header {
+    char name[32];
+    uint32_t num_counters;
+    uint64_t counters[2][2];
+};
+_Static_assert(offsetof(struct counters_header, counters) == 40, "xt_counters_info");
+
+static void netfilter_cases(void)
+{
+    // Any IPv4 socket reaches the netfilter options; the kernel checks
+    // CAP_NET_ADMIN, then the header. Neither call changes a table.
+    int fd = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+    if (fd < 0) {
+        ora_fail("netfilter: socket");
+        return;
+    }
+    struct table_header replace;
+    memset(&replace, 0, sizeof replace);
+    strcpy(replace.name, "ant-none");
+    replace.valid_hooks = (1u << 1) | (1u << 2) | (1u << 3);
+    replace.num_entries = 4;
+    replace.hook_entry[2] = 152;
+    replace.hook_entry[3] = 304;
+    CALL("setsockopt.ipt_replace_no_counters", setsockopt, EINVAL, fd, IPPROTO_IP,
+         IPT_SET_REPLACE, &replace, sizeof replace);
+    in_buf(3, &replace, sizeof replace);
+    want_key_status("sockopt.unsupported_nested", "NO_DECODER");
+    why("a table header with no counters is refused before any table is looked up; the rules "
+        "after a header are not decoded");
+    DONE();
+    struct counters_header counters;
+    memset(&counters, 0, sizeof counters);
+    strcpy(counters.name, "ant-none");
+    counters.num_counters = 2;
+    CALL("setsockopt.ipt_add_counters_no_table", setsockopt, ENOENT, fd, IPPROTO_IP,
+         IPT_SET_ADD_COUNTERS, &counters, sizeof counters);
+    in_buf(3, &counters, sizeof counters);
+    want_key_status("sockopt.unsupported_nested", "NO_DECODER");
+    why("two counters for a table that does not exist; the counters are not decoded");
+    DONE();
+    close(fd);
+}
+
 static void memory_cases(void)
 {
     long fd = CALL("userfaultfd.plain", userfaultfd, WANT_ANY, O_CLOEXEC);
@@ -1065,6 +1123,7 @@ void area_root(void)
     mrelease_cases();
     query_cases();
     bpf_cases();
+    netfilter_cases();
     memory_cases();
 
     unlink("root-file");

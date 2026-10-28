@@ -2143,6 +2143,78 @@ child that exits with the mapping in place (its shared anonymous page must not
 be reported) and a mapping past the copy budget, and the last-close hash
 against the bytes read back (`hash`).
 
+### Captured fields decoded by their type (0.8.0)
+
+Contract revision 18, extended before its release (guest patch 18). The trace
+renders a captured field by its descriptor's encoding and layout, never by
+whether its bytes look like text (0.8.0, ANT-T0149). Four kinds of field still
+had no layout although the kernel copies a fixed native one; patch 18 names
+them, with the object encoding (3), and leaves the bytes and extents as they
+were: `gid_t[]` (getgroups, setgroups), `linux_dirent[]` and
+`linux_dirent64[]` (getdents, getdents64: the records the call filled, each
+with its own `d_reclen`), and `desc_struct[]` for modify_ldt's reads (x86-64,
+`capture_x86.c`: `read_ldt()` copies the 8-byte descriptors themselves and
+`read_default_ldt()` zeros; a write's `user_desc` is a different layout). The
+netfilter set options were all labelled `ipt_replace`; only
+`IPT_SO_SET_REPLACE` (and `IP6T_SO_SET_REPLACE`, the same header) passes one,
+`*_SO_SET_ADD_COUNTERS` passes `xt_counters_info`.
+
+Host: `monitor-core/src/typed_fields.rs` decodes a field's preview (its first
+256 captured bytes, the range covered from offset 0) at explicit little-endian
+offsets of the pinned 64-bit UAPI layouts. It never follows a pointer (a
+pointer member is the address the program passed), never trusts a length or
+count inside the data past the bytes present, leaves out members past the
+capture and marks a field that holds more than it decoded; reserved and padding
+members are not shown.
+
+| Layout | Decoded as |
+|---|---|
+| `sigset_t` | signal names; more than half set reads as the complement, `~[...]` |
+| `sigset_argpack` | pselect6's `{ss, ss_len}` |
+| `siginfo_t`, `siginfo_t[]` | `si_signo`, `si_errno` when set, `si_code` by name, then the union branch the kernel's `siginfo_layout()` picks from the signal and code (kill, timer, rt, child, fault with its MCE/BND/PKU/perf variants, poll, sys) |
+| `sigevent` | `sigev_notify`, then what that branch uses (`sigev_signo`, `sigev_value`, `sigev_notify_thread_id`; for SIGEV_THREAD, mq_notify's netlink form, the descriptor and cookie) |
+| `stack_t` | `ss_sp`, `ss_flags` by name, `ss_size` |
+| `bpf_attr` | the members of the branch bpf's command selects (every command of 6.12.94; BPF_LINK_CREATE's tail by attach type), map, program and attach types by name |
+| `cap_data[]`; capget/capset `arg0.version`, `arg0.required_version`, `arg0.pid` | effective, permitted and inheritable sets by capability name; the header version by name |
+| `uid_t`, `gid_t`, `gid_t[]`, `uid_t[2]` | numbers |
+| `linux_dirent[]`, `linux_dirent64[]` | `d_ino`, `d_off`, `d_reclen`, `d_type` by name, `d_name` per record |
+| `file_handle` | `handle_bytes`, `handle_type` by name (the handle bytes are a separate opaque field) |
+| `io_uring_params` | entries, setup flags and features by name, both rings' offsets |
+| `msgbuf` | `mtype`, `mtext` (every byte, quoted) |
+| `ipt_replace`, `xt_counters_info` | table name, hooks by name, entry count and size, hook entries and underflows, counter count (the rules are not decoded) |
+| `user_desc`, `desc_struct[]` | LDT entry fields; an unused descriptor reads `empty` |
+
+The trace (`trace::fields::preview_in`) shows the decoded line (cut past 240
+characters) in the Info column, the argument rows and the field tree, and the
+selected field's pane lists every member; any other field keeps its byte
+rendering. Triage's BPF view lists each bpf call's attr members and reads a
+load's `insn_cnt` and an attach's `attach_bpf_fd` from them (before, it looked
+for fields of those names, which the guest never sends), so an attach of a
+program loaded earlier in the run is named. The conformance render marks a
+decoded field (`decoded`), and the golden files keep it, normalising only the
+addresses, kernel handles and the IDs of members named for a process or thread.
+
+Filter keywords (`captured-layout-members.json`, `scripts/generate-filter-layouts.py`):
+every branch of `union bpf_attr` is now qualified by the commands that read it
+(`args.attr.map_fd` for the element commands, `args.attr.query.attach_type`,
+`args.attr.batch.count`, ...), walking each anonymous record at its own offset;
+before, only some members were qualified, by name alone, so `attach_type` and
+`bpf_fd` also carried the offset of a same-named member of another branch
+(PROG_QUERY's, OBJ_GET_INFO_BY_FD's). BPF_LINK_CREATE's tail, which its attach
+type selects, stays unqualified. `io_uring_params`, `gid_t[]` and
+`xt_counters_info` gain keywords; unnamed bit-field padding (in `timex`, which
+had an empty-named keyword) and `resv` words are left out. The generator reads
+the capture sources' `__NR_` names (it had read only numbers since the syscall
+rows were named, so a regeneration dropped every macro-row layout) and the x86
+capture file, and cleans `linux/compiler.h` from every UAPI header it includes.
+`ipt_replace` stays unsupported there (its header pulls libc's `sys/socket.h`),
+as do the siginfo/sigevent union members (their selector is a member, not an
+argument) and `sigset_t` (captured under `signal.mask`, not an argument key).
+
+Not decoded: get_thread_area/set_thread_area (ENOSYS on x86-64 guests), the
+iptables rules after the table header, the opaque handle bytes, `sigaction`
+and the other structures not listed.
+
 ### Transport reconnect, command deadlines and terminal output under load (0.8.0)
 
 Three host fixes; the guest and the contract are unchanged.

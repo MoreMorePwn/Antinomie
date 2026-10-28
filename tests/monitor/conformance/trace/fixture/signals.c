@@ -367,6 +367,11 @@ static void sigreturn_and_queue_cases(void)
     in_buf(2, &info, sizeof info);
     volatile_case();
     DONE();
+    CALL("rt_sigqueueinfo.no_such_process", rt_sigqueueinfo, ESRCH, 0x3ffffff0, SIGUSR1, &info);
+    in_buf(2, &info, sizeof info);
+    why("the siginfo is read and checked before the target is looked up; its sender pid is "
+        "the caller's, which the golden file keeps as <pid>");
+    DONE();
     CALL("rt_sigqueueinfo.fault", rt_sigqueueinfo, EFAULT, getpid(), SIGUSR1, 1);
     want_status(2, "in", "COPY_FAULT");
     volatile_case();

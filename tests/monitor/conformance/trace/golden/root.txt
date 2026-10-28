@@ -1,15 +1,15 @@
 acct.file | acct(name="root-acct") = 0 | arg0.path:complete:"root-acct"
 acct.missing | acct(name="root-missing") = ENOENT | arg0.path:complete:"root-missing"
 acct.off | acct(name=NULL) = 0 | arg0.path:null pointer:uncaptured
-bpf.map_create_root | bpf(cmd=BPF_MAP_CREATE, attr=<bytes>, size=72) = 3 | arg1.attr:complete:<bytes>
-bpf.map_delete_array | bpf(cmd=BPF_MAP_DELETE_ELEM, attr=<bytes>, size=32) = EINVAL | arg1.attr:complete:<bytes> arg1.attr.key:complete:"\x01\0\0\0"
-bpf.map_get_next_key | bpf(cmd=BPF_MAP_GET_NEXT_KEY, attr="\x02\0\0\0", size=32) = 0 | arg1.attr:complete:<bytes> arg1.attr.key:complete:"\x01\0\0\0" arg1.attr.next_key:complete
-bpf.map_lookup | bpf(cmd=BPF_MAP_LOOKUP_ELEM, attr="ANTIMAP1", size=32) = 0 | arg1.attr:complete:<bytes> arg1.attr.key:complete:"\x01\0\0\0" arg1.attr.value:complete
-bpf.map_update | bpf(cmd=BPF_MAP_UPDATE_ELEM, attr=<bytes>, size=32) = 0 | arg1.attr:complete:<bytes> arg1.attr.key:complete:"\x01\0\0\0" arg1.attr.value:complete:"ANTIMAP1"
-bpf.prog_load_rejected | bpf(cmd=BPF_PROG_LOAD, attr="0: R1=ctx() R10=fp0\n0: (95) exit\nR0 !read_ok\npro"..., size=40) = EACCES | arg1.attr:complete:<bytes> arg1.attr.insns:complete:<bytes> arg1.attr.license:complete:"GPL" arg1.attr.log_buf:complete
-bpf.prog_load_root | bpf(cmd=BPF_PROG_LOAD, attr="processed 2 insns (limit 1000000) max_states_per"..., size=40) = 4 | arg1.attr:complete:<bytes> arg1.attr.insns:complete:<bytes> arg1.attr.license:complete:"GPL" arg1.attr.log_buf:complete
-capset.bad_version | capset(header=<bytes>, data=<addr>) = EINVAL | arg0.version:complete:<bytes> arg0.required_version:complete
-capset.drop_sys_boot | capset(header=<bytes>, data=<bytes>) = 0 | arg0.version:complete:<bytes> arg0.pid:complete:<bytes> arg1.capabilities:complete:<bytes>
+bpf.map_create_root | bpf(cmd=BPF_MAP_CREATE, attr={map_type=BPF_MAP_TYPE_ARRAY, key_size=4, value_size=8, max_entries=4, map_flags=0x0, inner_map_fd=0, numa_node=0, map_name="ant_array", map_ifindex=0, btf_fd=0, btf_key_type_id=0, btf_value_type_id=0, btf_vmlinux_value_type_id=0, map_extra..., size=72) = 3 | arg1.attr:complete:{map_type=BPF_MAP_TYPE_ARRAY, key_size=4, value_size=8, max_entries=4, map_flags=0x0, inner_map_fd=0, numa_node=0, map_name="ant_array", map_ifindex=0, btf_fd=0, btf_key_type_id=0, btf_value_type_id=0, btf_vmlinux_value_type_id=0, map_extra...
+bpf.map_delete_array | bpf(cmd=BPF_MAP_DELETE_ELEM, attr={map_fd=3, key=<addr>, flags=0x0}, size=32) = EINVAL | arg1.attr:complete:{map_fd=3, key=<addr>, flags=0x0} arg1.attr.key:complete:"\x01\0\0\0"
+bpf.map_get_next_key | bpf(cmd=BPF_MAP_GET_NEXT_KEY, attr="\x02\0\0\0", size=32) = 0 | arg1.attr:complete:{map_fd=3, key=<addr>, next_key=<addr>} arg1.attr.key:complete:"\x01\0\0\0" arg1.attr.next_key:complete
+bpf.map_lookup | bpf(cmd=BPF_MAP_LOOKUP_ELEM, attr="ANTIMAP1", size=32) = 0 | arg1.attr:complete:{map_fd=3, key=<addr>, value=<addr>, flags=0x0} arg1.attr.key:complete:"\x01\0\0\0" arg1.attr.value:complete
+bpf.map_update | bpf(cmd=BPF_MAP_UPDATE_ELEM, attr={map_fd=3, key=<addr>, value=<addr>, flags=0x0}, size=32) = 0 | arg1.attr:complete:{map_fd=3, key=<addr>, value=<addr>, flags=0x0} arg1.attr.key:complete:"\x01\0\0\0" arg1.attr.value:complete:"ANTIMAP1"
+bpf.prog_load_rejected | bpf(cmd=BPF_PROG_LOAD, attr="0: R1=ctx() R10=fp0\n0: (95) exit\nR0 !read_ok\npro"..., size=40) = EACCES | arg1.attr:complete:{prog_type=BPF_PROG_TYPE_SOCKET_FILTER, insn_cnt=1, insns=<addr>, license=<addr>, log_level=1, log_size=4096, log_buf=<addr>} arg1.attr.insns:complete:<bytes> arg1.attr.license:complete:"GPL" arg1.attr.log_buf:complete
+bpf.prog_load_root | bpf(cmd=BPF_PROG_LOAD, attr="processed 2 insns (limit 1000000) max_states_per"..., size=40) = 4 | arg1.attr:complete:{prog_type=BPF_PROG_TYPE_SOCKET_FILTER, insn_cnt=2, insns=<addr>, license=<addr>, log_level=1, log_size=4096, log_buf=<addr>} arg1.attr.insns:complete:<bytes> arg1.attr.license:complete:"GPL" arg1.attr.log_buf:complete
+capset.bad_version | capset(header=_LINUX_CAPABILITY_VERSION_3, data=<addr>) = EINVAL | arg0.version:complete:<addr> arg0.required_version:complete
+capset.drop_sys_boot | capset(header=_LINUX_CAPABILITY_VERSION_3, data={effective=all but CAP_SYS_BOOT, permitted=all but CAP_SYS_BOOT, inheritable=0}) = 0 | arg0.version:complete:_LINUX_CAPABILITY_VERSION_3 arg0.pid:complete:0 arg1.capabilities:complete:{effective=all but CAP_SYS_BOOT, permitted=all but CAP_SYS_BOOT, inheritable=0}
 chroot.missing_root | chroot(filename="root-missing") = ENOENT | arg0.path:complete:"root-missing"
 chroot.not_directory | chroot(filename="root-file") = ENOTDIR | arg0.path:complete:"root-file"
 chroot.work_dir | chroot(filename=".") = 0 | arg0.path:complete:"."
@@ -70,9 +70,9 @@ move_pages.bad_flags | move_pages(pid=0, nr_pages=1, pages=<bytes>, nodes=NULL, 
 move_pages.offline_node | move_pages(pid=0, nr_pages=1, pages=<bytes>, nodes=<bytes>, status=<addr>, flags=0x0) = ENODEV | move_pages.array:complete:<bytes> move_pages.array:complete:<bytes>
 move_pages.query | move_pages(pid=0, nr_pages=1, pages=<bytes>, nodes=NULL, status=<bytes>, flags=0x0) = 0 | move_pages.array:complete:<bytes> move_pages.array:complete
 move_pages.to_node0 | move_pages(pid=0, nr_pages=1, pages=<bytes>, nodes=<bytes>, status=<bytes>, flags=0x0) = 0 | move_pages.array:complete:<bytes> move_pages.array:complete:<bytes> move_pages.array:complete
-name_to_handle_at.bad_flags | name_to_handle_at(dfd=AT_FDCWD, name="root-handle", handle=<bytes>, mnt_id=<addr>, flag=<addr>) = EINVAL | arg1.path:complete:"root-handle" handle.header:complete:<bytes>
+name_to_handle_at.bad_flags | name_to_handle_at(dfd=AT_FDCWD, name="root-handle", handle={handle_bytes=8, handle_type=FILEID_INVALID}, mnt_id=<addr>, flag=<addr>) = EINVAL | arg1.path:complete:"root-handle" handle.header:complete:{handle_bytes=8, handle_type=FILEID_INVALID}
 name_to_handle_at.file | name_to_handle_at(dfd=AT_FDCWD, name=<data>, handle=<data>, mnt_id=<data>, flag=0x0) = <value> | arg1.path:complete handle.header:complete handle.header:complete arg3.mount_id:complete handle.bytes:complete
-name_to_handle_at.missing | name_to_handle_at(dfd=AT_FDCWD, name="root-missing", handle=<bytes>, mnt_id=<addr>, flag=0x0) = ENOENT | arg1.path:complete:"root-missing" handle.header:complete:<bytes>
+name_to_handle_at.missing | name_to_handle_at(dfd=AT_FDCWD, name="root-missing", handle={handle_bytes=8, handle_type=FILEID_INVALID}, mnt_id=<addr>, flag=0x0) = ENOENT | arg1.path:complete:"root-missing" handle.header:complete:{handle_bytes=8, handle_type=FILEID_INVALID}
 name_to_handle_at.too_small | name_to_handle_at(dfd=AT_FDCWD, name=<data>, handle=<data>, mnt_id=<data>, flag=0x0) = EOVERFLOW | arg1.path:complete handle.header:complete handle.header:complete arg3.mount_id:complete
 name_to_handle_at.unique_mount_id | name_to_handle_at(dfd=AT_FDCWD, name=<data>, handle=<data>, mnt_id=<data>, flag=AT_HANDLE_MNT_ID_UNIQUE) = <value> | arg1.path:complete handle.header:complete handle.header:complete arg3.mount_id:complete handle.bytes:complete
 open_by_handle_at.badf | open_by_handle_at(mountdirfd=999, handle=<data>, flags=O_RDONLY) = EBADF | handle.header:complete handle.bytes:complete
@@ -101,7 +101,7 @@ setdomainname.private_uts | setdomainname(name="ant-domain", len=10) = 0 | arg0.
 setgid.regain_root | setgid(gid=0) = EPERM |
 setgid.user | setgid(gid=1000) = 0 |
 setgroups.empty | setgroups(gidsetsize=0, grouplist=NULL) = 0 | arg1.data:null pointer:uncaptured
-setgroups.one_group | setgroups(gidsetsize=1, grouplist="\xe8\x03\0\0") = 0 | arg1.data:complete:"\xe8\x03\0\0"
+setgroups.one_group | setgroups(gidsetsize=1, grouplist=[1000]) = 0 | arg1.data:complete:[1000]
 setgroups.too_many | setgroups(gidsetsize=65537, grouplist=<addr>) = EINVAL | arg1.data:invalid extent:uncaptured !3
 sethostname.private_uts | sethostname(name="ant-host", len=8) = 0 | arg0.name:complete:"ant-host"
 sethostname.too_long | sethostname(name=<addr>, len=65) = EINVAL | arg0.name:invalid extent:uncaptured !3
@@ -113,6 +113,8 @@ setns.uts_fd | setns(fd=4, nstype=67108864) = 0 |
 setns.wrong_type | setns(fd=4, nstype=1073741824) = EINVAL |
 setpriority.bad_which | setpriority(which=Unknown which 0x63, who=0, niceval=0) = EINVAL |
 setpriority.negative_nice | setpriority(which=PRIO_PROCESS, who=0, niceval=-5) = 0 |
+setsockopt.ipt_add_counters_no_table | setsockopt(fd=3, level=IPPROTO_IP, optname=IPT_SO_SET_ADD_COUNTERS, optval={name="ant-none", num_counters=2, ...}, optlen=72) = ENOENT | arg3.optval:complete:{name="ant-none", num_counters=2, ...} sockopt.unsupported_nested:no decoder:uncaptured !3
+setsockopt.ipt_replace_no_counters | setsockopt(fd=3, level=IPPROTO_IP, optname=IPT_SO_SET_REPLACE, optval={name="ant-none", valid_hooks=INPUT|FORWARD|OUTPUT, num_entries=4, size=0, hook_entry=[0, 0, 152, 304, 0], underflow=[0, 0, 0, 0, 0], num_counters=0, counters=NULL}, optlen=96) = EINVAL | arg3.optval:complete:{name="ant-none", valid_hooks=INPUT|FORWARD|OUTPUT, num_entries=4, size=0, hook_entry=[0, 0, 152, 304, 0], underflow=[0, 0, 0, 0, 0], num_counters=0, counters=NULL} sockopt.unsupported_nested:no decoder:uncaptured !3
 settimeofday.bad_usec | settimeofday(tv=<data>, tz=NULL) = EINVAL | arg0.data:complete arg1.data:null pointer
 settimeofday.same_time | settimeofday(tv=<data>, tz=NULL) = <value> | arg0.data:complete arg1.data:null pointer
 setuid.regain_root | setuid(uid=0) = EPERM |

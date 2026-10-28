@@ -112,6 +112,61 @@ fn data(preview: &str, volatile: &Volatile) -> String {
     }
 }
 
+/// A field the view decoded by its layout (`{si_signo=SIGCHLD, si_pid=120}`,
+/// `[SIGINT SIGTERM]`, a version name) is kept, with the values in it that a
+/// rerun changes normalised one at a time: addresses, kernel handles, and the
+/// process and thread IDs of members named for one (`si_pid`, `pid`,
+/// `sigev_notify_thread_id`) or of a whole value that is one (`pidish`).
+/// Quoted text inside (a name) is kept, the work directory replaced.
+fn decoded(text: &str, volatile: &Volatile, pidish: bool) -> String {
+    let names_process =
+        |name: &str| name.ends_with("pid") || name.ends_with("tid") || name.ends_with("thread_id");
+    let mut out = String::with_capacity(text.len());
+    let mut token = String::new();
+    let mut member = String::new();
+    let mut quoted = false;
+    let mut escaped = false;
+    for c in text.chars().chain(std::iter::once('\0')) {
+        if quoted {
+            token.push(c);
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                quoted = false;
+                out.push_str(&normal(&token, volatile, false));
+                token.clear();
+            }
+            continue;
+        }
+        if c == '"' && token.is_empty() {
+            quoted = true;
+            token.push(c);
+            continue;
+        }
+        if c.is_ascii_alphanumeric() || c == '_' || (c == '-' && token.is_empty()) {
+            token.push(c);
+            continue;
+        }
+        if !token.is_empty() {
+            if c == '=' {
+                out.push_str(&token);
+                member = std::mem::take(&mut token);
+            } else {
+                let whole = out.is_empty() && c == '\0';
+                let pid = names_process(&member) || (whole && pidish);
+                out.push_str(&normal(&token, volatile, pid));
+                token.clear();
+            }
+        }
+        if c != '\0' {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// Syscalls whose result is a process or thread ID.
 const RETURNS_ID: [&str; 12] = [
     "getpid",
@@ -140,6 +195,7 @@ fn line(
         .map(|argument| {
             let shown = match &argument.data {
                 Some(_) if volatile => "<data>".to_owned(),
+                Some(preview) if argument.decoded => decoded(preview, ids, false),
                 Some(preview) => data(preview, ids),
                 // In a case the fixture marks volatile, large numbers are
                 // kernel-chosen (key serials, timer ids).
@@ -184,11 +240,14 @@ fn line(
                 status = format!("{status}@{mark}");
             }
             if field["phase"].as_u64() == Some(1) && !volatile {
+                let typed = field["decoded"].as_bool() == Some(true);
                 format!(
                     "{key}:{status}:{}",
-                    field["preview"]
-                        .as_str()
-                        .map_or("?".into(), |p| data(p, ids))
+                    field["preview"].as_str().map_or("?".into(), |p| if typed {
+                        decoded(p, ids, key.ends_with("pid"))
+                    } else {
+                        data(p, ids)
+                    })
                 )
             } else {
                 format!("{key}:{status}")
@@ -343,6 +402,46 @@ mod tests {
             "<bytes>"
         );
         assert_eq!(super::data("\"\\x06\\0A\"", &ids), "\"\\x06\\0A\"");
+    }
+
+    #[test]
+    fn decoded_fields_keep_their_members_and_lose_what_a_rerun_changes() {
+        let ids = super::Volatile {
+            ids: ["1234".to_owned()].into_iter().collect(),
+            work_dir: Some("/tmp/ant-conformance-AbC123".into()),
+            root_device: None,
+            work_device: None,
+        };
+        assert_eq!(
+            super::decoded(
+                "{si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=1234, si_uid=0, si_status=-1}",
+                &ids,
+                false
+            ),
+            "{si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=<pid>, si_uid=0, si_status=-1}"
+        );
+        assert_eq!(
+            super::decoded(
+                "{ss_sp=0x7ffe00001000, ss_flags=SS_ONSTACK, ss_size=8192}",
+                &ids,
+                false
+            ),
+            "{ss_sp=<addr>, ss_flags=SS_ONSTACK, ss_size=8192}"
+        );
+        assert_eq!(
+            super::decoded("[SIGINT SIGUSR1]", &ids, false),
+            "[SIGINT SIGUSR1]"
+        );
+        assert_eq!(super::decoded("1234", &ids, true), "<pid>");
+        assert_eq!(super::decoded("1234", &ids, false), "1234");
+        assert_eq!(
+            super::decoded(
+                "[{d_ino=12, d_name=\"/tmp/ant-conformance-AbC123/x 1234=\\\"\"}]",
+                &ids,
+                false
+            ),
+            "[{d_ino=12, d_name=\"<work>/x 1234=\\\"\"}]"
+        );
     }
 
     #[test]

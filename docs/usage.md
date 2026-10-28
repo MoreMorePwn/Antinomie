@@ -345,9 +345,16 @@ The network capture is the guest's own view on every route.
   captured data. Flags and options are decoded into names (for example
   `O_CREAT | O_CLOEXEC`, `SOL_SOCKET / SO_RCVBUF`, `PR_SET_NAME`), unknown bits
   are listed separately, and captured buffers can be inspected byte by byte.
-  Captured data reads by its type: strings quoted, structs, times, integers
-  and pointers in hex, socket addresses decoded, and data buffers quoted with
-  every byte (binary bytes escaped as `\x..`).
+  Captured data reads by its type: strings quoted, socket addresses decoded,
+  data buffers quoted with every byte (binary bytes escaped as `\x..`), and
+  these structures by their members: signal sets as signal names
+  (`[SIGINT SIGTERM]`), `siginfo_t` by the branch its `si_code` selects,
+  `sigevent` by `sigev_notify`, `stack_t`, bpf's `union bpf_attr` by the
+  command that passed it, capget/capset headers and capability sets by name,
+  directory entries (getdents), group lists and the ids getres*id wrote,
+  `file_handle` headers, `io_uring_params`, System V messages (`mtype`,
+  `mtext`), iptables table headers and LDT entries. Selecting such a field
+  lists every member. Other structs, times, integers and pointers show in hex.
 - **Run History**: every run on the selected VM, including earlier boots, with
   its command line, user, status and exit code. Double-click a run to open its
   Triage view. Select a trace entry to inspect its recorded call details.

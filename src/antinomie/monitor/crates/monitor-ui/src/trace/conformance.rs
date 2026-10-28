@@ -31,6 +31,8 @@ pub(crate) struct ArgumentView {
     raw: Option<String>,
     /// The captured data shown for the argument instead of its address.
     data: Option<String>,
+    /// `data` is a field decoded by its native layout, not its bytes.
+    decoded: bool,
     kind: &'static str,
     value: String,
 }
@@ -116,7 +118,11 @@ pub(crate) fn view(invocation: &InvocationSummary) -> CallView {
                 .copied()
                 .filter(|(_, field)| field_argument(nr, field) == Some(index))
                 .collect();
-            let data = argument_preview(&owned).map(|(_, text)| text);
+            let call = field_call(nr, Some(args));
+            let data = argument_preview(call.as_ref(), &owned).map(|(_, text)| text);
+            // The argument's data is a field decoded by its layout.
+            let decoded = argument_data(&owned)
+                .is_some_and(|(_, field)| super::decoded(call.as_ref(), field).is_some());
             let kind = kind(nr, index, &args);
             let name = argument_name(nr, index);
             if syscalls::syscall(nr)
@@ -145,14 +151,19 @@ pub(crate) fn view(invocation: &InvocationSummary) -> CallView {
                 text: shown.text,
                 raw: shown.raw,
                 data,
+                decoded,
                 kind,
                 value: format!("{:#x}", args[index]),
             });
         }
     }
+    let call = field_call(nr, args);
     let mut views = Vec::new();
     for (phase, field) in &fields {
-        let shown = preview(field);
+        let decoded = super::decoded(call.as_ref(), field);
+        let shown = decoded
+            .as_ref()
+            .map_or_else(|| preview(field), |decoded| decoded.line());
         if shown == "uncaptured" && field.status == Some(0) && field.captured_len > 0 {
             fallbacks.push(format!("uncaptured:{}", field.key));
         }
@@ -162,6 +173,7 @@ pub(crate) fn view(invocation: &InvocationSummary) -> CallView {
             "arg": field.arg,
             "size": capture_size(field),
             "preview": shown,
+            "decoded": decoded.is_some(),
             "status": field.status.map(status_name),
             "complete": field.complete,
             "recapture": field.recapture.map(|mark| mark.label()),
