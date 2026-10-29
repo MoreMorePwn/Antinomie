@@ -434,18 +434,22 @@ section and the checksum. Before tagging, also update the README's version
 note and "What's in" section, the version line of `docs/usage.md` and any
 screenshot whose UI changed.
 
-The README screenshots are 1280×820 captures of an X display.
+The README screenshots are captures of an X display.
 `assets/screenshots/getting-started.png` is the release build on an empty data
 directory (`antinomie --data-dir` pointing at a new folder) while the base
-catalog loads. `assets/screenshots/activity-graph.png` is the graph's
-synthetic fixture, which opens its own window:
+catalog loads, at 1280×820. `assets/screenshots/run-history.png` is the
+1500×1050 window of the UI polish fixture, which opens the whole app with
+synthetic runs:
 
 ```bash
 cd src/antinomie/monitor
-ANTINOMIE_QA_SCENE=mid ANTINOMIE_QA_THEME=dark \
+ANTINOMIE_QA_SCENE=history ANTINOMIE_QA_THEME=dark ANTINOMIE_QA_SIZE=1500x1050 \
   cargo test --release --locked -p antinomie-monitor-ui --bin antinomie-monitor \
-  native_graph_fixture -- --ignored
+  native_ui_polish_fixture -- --ignored
 ```
+
+Run it with `HOME` and the XDG directories pointing at an empty throwaway home,
+so no path of your own appears in the frame.
 
 Other `native_*_fixture` tests (Stealth, Static Analysis, Run History, the
 debugger and more) take the `ANTINOMIE_QA_*` variables listed at the top of
