@@ -60,8 +60,10 @@ pub(super) fn bios_table(id: &MachineIdentity, uefi: bool) -> Vec<u8> {
     table.extend([numbers[2], 0xff]);
     table.extend(characteristics.to_le_bytes());
     // Extension byte 1: ACPI, USB legacy. Byte 2: BIOS boot specification,
-    // network boot, targeted content distribution (no VM bit), UEFI.
-    table.extend([0x03, if uefi { 0x0f } else { 0x07 }]);
+    // network boot, targeted content distribution, UEFI, and the VM bit
+    // (bit 4) only for a cloud's firmware, which sets it.
+    let machine = if id.virtual_machine { 0x10 } else { 0 };
+    table.extend([0x03, machine | if uefi { 0x0f } else { 0x07 }]);
     // BIOS release; no embedded controller firmware.
     table.extend([major, minor, 0xff, 0xff]);
     table.extend(32u16.to_le_bytes()); // extended ROM size: 32 MiB
@@ -80,7 +82,11 @@ pub(super) fn chassis_table(id: &MachineIdentity) -> Vec<u8> {
         }
     };
     let (manufacturer, serial) = (
-        or_default(&id.system_manufacturer),
+        or_default(if id.chassis_manufacturer.is_empty() {
+            &id.system_manufacturer
+        } else {
+            &id.chassis_manufacturer
+        }),
         or_default(&id.chassis_serial),
     );
     let (numbers, strings) = string_set(&[

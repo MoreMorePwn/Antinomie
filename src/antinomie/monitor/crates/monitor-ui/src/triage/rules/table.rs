@@ -726,6 +726,20 @@ pub(in crate::triage) const SPECS: &[Spec] = &[
         C::Credential,
         &["T1552.005", "DET0001"],
     ),
+    rule(
+        "credential.cloud_credentials",
+        1,
+        T::High,
+        C::Credential,
+        &["T1552.005", "DET0001"],
+    ),
+    rule(
+        "credential.canary_used",
+        1,
+        T::High,
+        C::Credential,
+        &["T1552.005", "DET0001"],
+    ),
     // Discovery
     rule(
         "discovery.process_enum",

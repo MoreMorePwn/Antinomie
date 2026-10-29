@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+use super::super::{Engine, Options};
 use super::support::*;
 
 fn read_file(path: &str) -> Calls {
@@ -138,7 +139,12 @@ fn a_private_key_found_by_its_first_bytes_is_a_credential_read() {
 
 #[test]
 fn the_instance_metadata_service_is_high_even_when_nothing_answers() {
-    for ip in [[169, 254, 169, 254], [169, 254, 170, 2]] {
+    for ip in [
+        [169, 254, 169, 254],
+        [169, 254, 170, 2],
+        [169, 254, 0, 23],
+        [100, 100, 100, 200],
+    ] {
         let out = run(vec![socket(1, 2, 1, 3), connect(1, 3, ip, 80)]);
         assert_eq!(
             tier(&out, "credential.cloud_metadata").as_deref(),
@@ -167,6 +173,86 @@ fn the_instance_metadata_service_is_high_even_when_nothing_answers() {
         ]),
         "credential.cloud_metadata"
     ));
+}
+
+fn cloud_report() -> antinomie_monitor_core::route::MetadataReport {
+    use antinomie_monitor_core::route::MetadataReport;
+    let event = |kind: &str, detail: &str, endpoint: &str, ms| {
+        serde_json::from_value(serde_json::json!({
+            "ms": ms, "kind": kind, "detail": detail, "endpoint": endpoint
+        }))
+        .unwrap()
+    };
+    MetadataReport {
+        version: 1,
+        provider: "cloud-tencent-cvm".into(),
+        address: "169.254.0.23".into(),
+        events: vec![
+            event(
+                "request",
+                "GET /latest/meta-data/instance-id",
+                "169.254.0.23:80",
+                1_000,
+            ),
+            event(
+                "request",
+                "GET /latest/meta-data/cam/security-credentials/CVMRole",
+                "169.254.0.23:80",
+                2_000,
+            ),
+            event(
+                "credentials",
+                "GET /latest/meta-data/cam/security-credentials/CVMRole",
+                "169.254.0.23:80",
+                2_000,
+            ),
+            event(
+                "canary-use",
+                "Authorization: Bearer AKIDANTCANARYabc",
+                "203.0.113.9:80",
+                3_000,
+            ),
+        ],
+        ..MetadataReport::default()
+    }
+}
+
+#[test]
+fn a_cloud_profiles_metadata_report_becomes_findings_and_an_endpoint() {
+    let mut engine = Engine::new(Options::default());
+    engine.cloud_report(&cloud_report(), None);
+    let log = engine.take_ioc();
+    let out = engine.finish(&Default::default());
+    // One row for the requests, with the request lines as facts.
+    let requests = rows(&out, "credential.cloud_metadata");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(count(requests[0]), 2);
+    assert!(list(requests[0], "finding.detail")
+        .iter()
+        .any(|line| line.contains("security-credentials/CVMRole")));
+    assert_eq!(
+        list(requests[0], "finding.technique"),
+        ["T1552.005", "DET0001"]
+    );
+    for rule in ["credential.cloud_credentials", "credential.canary_used"] {
+        assert_eq!(tier(&out, rule).as_deref(), Some("high"), "{rule}");
+        assert_eq!(
+            list(rows(&out, rule)[0], "finding.technique"),
+            ["T1552.005", "DET0001"]
+        );
+    }
+    assert_eq!(
+        text(rows(&out, "credential.canary_used")[0], "finding.object"),
+        "203.0.113.9:80"
+    );
+    // The place the canary went to is an endpoint indicator.
+    assert_eq!(log.connections.len(), 1);
+    assert_eq!(log.connections[0].port, 80);
+    assert_eq!(log.connections[0].ip.to_string(), "203.0.113.9");
+    // No report, no rows.
+    let mut empty = Engine::new(Options::default());
+    empty.cloud_report(&Default::default(), None);
+    assert!(empty.finish(&Default::default()).rows.is_empty());
 }
 
 #[test]

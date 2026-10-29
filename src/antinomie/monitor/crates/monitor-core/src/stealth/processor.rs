@@ -172,11 +172,23 @@ impl Processor {
             (socket, _) => socket,
         };
         let flags = host_cpuinfo("flags").unwrap_or_default();
+        let smbios_family = launch::processor_family(&brand).unwrap_or(0x01);
+        // A cloud's QEMU names its maker and the machine type instead.
+        let maker = if id.cpu_manufacturer.is_empty() {
+            maker
+        } else {
+            &id.cpu_manufacturer
+        };
+        let brand = if id.cpu_version.is_empty() {
+            brand
+        } else {
+            id.cpu_version.clone()
+        };
         Some(Self {
             socket: socket.into(),
             manufacturer: maker.into(),
             part: id.cpu_part.clone(),
-            family: launch::processor_family(&brand).unwrap_or(0x01),
+            family: smbios_family,
             brand,
             signature: (signature_eax(family, model, stepping), edx),
             max_mhz,

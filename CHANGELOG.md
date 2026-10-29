@@ -6,6 +6,23 @@ it runs.
 
 ## 0.8.0 — unreleased
 
+- **Stealth: cloud VPS profiles with a fake metadata service.** A new "Cloud
+  VPS" preset makes the VM an instance of a KVM cloud (Tencent Cloud CVM,
+  Alibaba Cloud ECS, DigitalOcean Droplet, Vultr VC2) instead of a PC: the
+  provider's DMI strings, SeaBIOS, i440FX or q35 chipset (new machine type
+  setting), virtio devices, MAC prefix and DHCP network, with the CPUID
+  hypervisor flag and kvm-clock left visible as on the provider's machines.
+  The first start writes a lived-in instance into the VM's disk: cloud-init
+  data and logs, the provider's agent directories as inert stubs, the default
+  user's shell history and login records, an aged host name. In a Routed
+  network the gateway answers the provider's metadata address (169.254.169.254,
+  169.254.0.23, 100.100.100.200) on every route, with the instance id, region,
+  user data and canary credentials that are new for each run. Triage lists the
+  requests, the credentials handed out and any use of the canary in what the
+  guest sends out (ATT&CK T1552.005), and the destination as an endpoint
+  indicator. Sources and gaps are in `stealth/catalog/SOURCES-cloud.md`; Hetzner
+  and Linode have no public dump to copy.
+
 - **Stealth: whole processor table, RAM-sized DIMMs, network chip listed.** The
   processor is written as one firmware table (socket `U3E1`, not `U3E1 0`;
   CPUID signature, voltage, upgrade, clock, core and thread counts, and L1, L2

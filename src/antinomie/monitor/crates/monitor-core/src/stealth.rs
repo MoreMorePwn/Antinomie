@@ -15,12 +15,16 @@
 use crate::storage::unique_id;
 pub use catalog::{MACHINES, MachineProfile, NicFit, Variant};
 use catalog::{SerialStyle, SmbiosFields, Subsystem};
+pub use cloud::{CLOUDS, CloudProvider, MachineType, MetadataStyle, Owner, Plan, StateFile};
 pub use cpu::{CpuGen, HostCpu, classify};
 use parts::{DiskModel, RamPart};
 pub use record::MachineRecord;
 use serde::{Deserialize, Serialize};
 
 mod catalog;
+mod cloud;
+#[cfg(test)]
+mod cloud_tests;
 mod cpu;
 mod firmware;
 mod launch;
@@ -46,6 +50,9 @@ pub enum StealthPreset {
     RealisticDesktop,
     RealisticLaptop,
     RealisticServer,
+    /// An instance of a KVM cloud (Tencent, Alibaba, DigitalOcean, Vultr):
+    /// the hypervisor stays visible, as on the provider's machines.
+    CloudVps,
     /// The launch Antinomie used before profiles: QEMU's own identity.
     #[default]
     Transparent,
@@ -57,6 +64,7 @@ impl StealthPreset {
         Self::RealisticDesktop,
         Self::RealisticLaptop,
         Self::RealisticServer,
+        Self::CloudVps,
         Self::Transparent,
         Self::Custom,
     ];
@@ -66,6 +74,7 @@ impl StealthPreset {
             Self::RealisticDesktop => "Realistic desktop",
             Self::RealisticLaptop => "Realistic laptop",
             Self::RealisticServer => "Realistic server",
+            Self::CloudVps => "Cloud VPS",
             Self::Transparent => "Transparent QEMU (as before)",
             Self::Custom => "Custom",
         }
@@ -138,10 +147,14 @@ pub enum NicSlot {
     /// QEMU's `acpi-index` puts that index in the DSDT, and Debian's udev
     /// names the interface from it instead of from the slot.
     Eno1,
+    /// 00:03.0 (`ens3`): the first free slot of an i440FX machine, after
+    /// the host bridge, PIIX3 and the display, where a cloud's virtio card
+    /// sits.
+    Pc,
 }
 
 impl NicSlot {
-    pub const ALL: [Self; 3] = [Self::Ich, Self::Pch, Self::Eno1];
+    pub const ALL: [Self; 4] = [Self::Ich, Self::Pch, Self::Eno1, Self::Pc];
 
     /// The PCI address, as a `-device` option.
     pub fn address(self) -> &'static str {
@@ -149,6 +162,7 @@ impl NicSlot {
             Self::Ich => "addr=0x19",
             Self::Pch => "addr=0x1f.0x6",
             Self::Eno1 => "addr=0x19,acpi-index=1",
+            Self::Pc => "addr=0x3",
         }
     }
 
@@ -158,6 +172,7 @@ impl NicSlot {
             Self::Ich => "enp0s25",
             Self::Pch => "enp0s31f6",
             Self::Eno1 => "eno1",
+            Self::Pc => "ens3",
         }
     }
 
@@ -171,6 +186,7 @@ impl NicSlot {
             Self::Ich => "PCI 00:19.0 (enp0s25)",
             Self::Pch => "PCI 00:1f.6 (enp0s31f6)",
             Self::Eno1 => "PCI 00:19.0, firmware index 1 (eno1)",
+            Self::Pc => "PCI 00:03.0 (ens3)",
         }
     }
 }
@@ -344,6 +360,9 @@ pub struct MachineIdentity {
     pub bios_vendor: String,
     pub bios_version: String,
     pub bios_date: String,
+    /// SMBIOS type 0 "system is a virtual machine" bit: set by cloud
+    /// firmware, never by a PC's.
+    pub virtual_machine: bool,
     pub system_manufacturer: String,
     pub system_product: String,
     pub system_version: String,
@@ -364,6 +383,12 @@ pub struct MachineIdentity {
     /// 10 notebook, 23 rack mount chassis.
     pub chassis_type: u8,
     pub chassis_serial: String,
+    /// Chassis and processor maker and the processor's version string when
+    /// the machine's are not the system maker's and the host CPU's (a cloud's
+    /// QEMU); empty: derived.
+    pub chassis_manufacturer: String,
+    pub cpu_manufacturer: String,
+    pub cpu_version: String,
     pub chassis_version: String,
     pub chassis_sku: String,
     /// Processor socket designation and part number.
@@ -469,6 +494,11 @@ pub struct StealthProfile {
     pub cdrom: bool,
     /// The NAT's addresses; empty: QEMU's 10.0.2.0/24.
     pub nat: NatNetwork,
+    /// The QEMU machine type (chipset).
+    pub machine: MachineType,
+    /// The cloud provider this profile is an instance of (a [`CLOUDS`] id),
+    /// or empty.
+    pub cloud: String,
 }
 
 impl Default for StealthProfile {
@@ -491,7 +521,7 @@ fn random_bytes(count: usize) -> Vec<u8> {
     bytes
 }
 
-fn random_text(alphabet: &[u8], len: usize) -> String {
+pub(crate) fn random_text(alphabet: &[u8], len: usize) -> String {
     random_bytes(len)
         .into_iter()
         .map(|byte| alphabet[byte as usize % alphabet.len()] as char)
@@ -553,7 +583,7 @@ fn pick<T>(items: &[T]) -> &T {
 }
 
 /// A random version 4 UUID.
-fn uuid() -> String {
+pub(crate) fn uuid() -> String {
     let mut bytes = random_bytes(16);
     bytes[6] = (bytes[6] & 0x0f) | 0x40;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
@@ -652,6 +682,10 @@ impl MachineIdentity {
             bios_vendor: machine.bios_vendor.into(),
             bios_version: bios.0.into(),
             bios_date: bios.1.into(),
+            virtual_machine: false,
+            chassis_manufacturer: String::new(),
+            cpu_manufacturer: String::new(),
+            cpu_version: String::new(),
             system_manufacturer: machine.manufacturer.into(),
             system_product: unit.product.into(),
             system_version: machine.version.into(),
@@ -769,6 +803,14 @@ impl MachineIdentity {
 
     /// New random serials, UUID and disk serial; the strings stay.
     pub fn rerandomize(&mut self) {
+        if let Some(provider) = CloudProvider::find(&self.profile) {
+            let fresh = provider.identity();
+            self.system_serial = fresh.system_serial;
+            self.chassis_serial = fresh.chassis_serial;
+            self.board_serial = fresh.board_serial;
+            self.system_uuid = fresh.system_uuid;
+            return;
+        }
         let machine = MACHINES.iter().find(|machine| machine.id == self.profile);
         if let Some(machine) = machine
             && machine
@@ -894,6 +936,8 @@ impl StealthProfile {
             rtc_driftfix: false,
             cdrom: false,
             nat: NatNetwork::default(),
+            machine: MachineType::Q35,
+            cloud: String::new(),
         }
     }
 
@@ -909,6 +953,9 @@ impl StealthProfile {
     /// random serials and MAC address. The pick is saved with the VM: a boot
     /// never picks again.
     pub fn realistic_on(kind: StealthPreset, host: &HostCpu) -> Self {
+        if kind == StealthPreset::CloudVps {
+            return Self::cloud_vps(&CLOUDS[0]);
+        }
         let (machine, _fits) = catalog::pick_machine(kind, host, roll());
         let nic = NicModel::E1000e;
         let identity = MachineIdentity::from_machine(machine);
@@ -945,7 +992,44 @@ impl StealthProfile {
             cdrom: false,
             nat: NatNetwork::home(),
             identity,
+            machine: MachineType::Q35,
+            cloud: String::new(),
         }
+    }
+
+    /// A new instance of `provider`: its firmware strings, chipset, MAC
+    /// prefix and DHCP network, with the hypervisor left visible (a hidden
+    /// flag on a cloud's DMI strings would itself be odd).
+    pub fn cloud_vps(provider: &CloudProvider) -> Self {
+        let identity = provider.identity();
+        let mut profile = Self {
+            preset: StealthPreset::CloudVps,
+            identity_enabled: true,
+            cpu_passthrough: true,
+            realistic_topology: true,
+            smbios_entry: SmbiosEntry::Bits32,
+            vmport: provider.vmport,
+            cdrom: provider.cdrom,
+            nat: provider.nat(),
+            machine: provider.machine,
+            cloud: provider.id.into(),
+            identity,
+            ..Self::transparent()
+        };
+        profile.preset = StealthPreset::CloudVps;
+        profile.mac = match provider.mac_prefix {
+            Some(prefix) => random_mac(prefix),
+            None => {
+                profile.new_local_mac();
+                profile.mac.clone()
+            }
+        };
+        profile
+    }
+
+    /// The cloud provider of this profile.
+    pub fn cloud_provider(&self) -> Option<&'static CloudProvider> {
+        CloudProvider::find(&self.cloud)
     }
 
     /// The profile for `preset`; Custom keeps the current entries.
@@ -961,6 +1045,7 @@ impl StealthProfile {
                 preset,
                 ..self.clone()
             },
+            StealthPreset::CloudVps => Self::cloud_vps(&CLOUDS[0]),
             kind => Self::realistic_on(kind, host),
         }
     }
@@ -968,6 +1053,8 @@ impl StealthProfile {
     /// Switch to `machine`'s firmware strings with new serials.
     pub fn use_machine(&mut self, machine: &MachineProfile) {
         self.identity = MachineIdentity::from_machine(machine);
+        self.cloud.clear();
+        self.machine = MachineType::Q35;
         self.identity_enabled = true;
         self.disk_media = DiskMedia::of_rotation(self.identity.disk_rotation);
     }
@@ -976,6 +1063,9 @@ impl StealthProfile {
     /// integrated LAN's place on the chipset of the machine the identity
     /// copies; 00:19.0 without one (Transparent, an edited identity).
     pub fn nic_slot(&self) -> NicSlot {
+        if self.machine == MachineType::Pc {
+            return NicSlot::Pc;
+        }
         if !self.identity_enabled {
             return NicSlot::Ich;
         }
@@ -1033,7 +1123,11 @@ impl StealthProfile {
 
     /// A new random MAC address with the network card's vendor prefix.
     pub fn new_mac(&mut self) {
-        self.mac = random_mac(self.nic.mac_prefix());
+        match self.cloud_provider() {
+            Some(provider) if provider.mac_prefix.is_none() => self.new_local_mac(),
+            Some(provider) => self.mac = random_mac(provider.mac_prefix.unwrap_or([0x52, 0x54, 0])),
+            None => self.mac = random_mac(self.nic.mac_prefix()),
+        }
     }
 
     /// A new random locally administered MAC address (no vendor prefix).
@@ -1077,6 +1171,9 @@ impl StealthProfile {
                 &identity.board_version,
                 &identity.board_location,
                 &identity.chassis_serial,
+                &identity.chassis_manufacturer,
+                &identity.cpu_manufacturer,
+                &identity.cpu_version,
                 &identity.chassis_version,
                 &identity.chassis_sku,
                 &identity.cpu_socket,
@@ -1146,12 +1243,18 @@ impl StealthProfile {
         {
             return Err(format!("{:?} is not a QEMU CPU model name", self.cpu_model));
         }
+        if !self.cloud.is_empty() && self.cloud_provider().is_none() {
+            return Err(format!("{:?} is not a known cloud provider", self.cloud));
+        }
         self.nat.validate()?;
         Ok(())
     }
 
     /// What still tells a VM apart, most telling first.
     pub fn giveaways(&self) -> Vec<&'static str> {
+        if self.cloud_provider().is_some() {
+            return self.cloud_giveaways();
+        }
         let mut found = Vec::new();
         if !self.hide_hypervisor {
             found.push("CPUID hypervisor flag");
@@ -1225,6 +1328,24 @@ impl StealthProfile {
             "the emulated display (Bochs or virtio-gpu)",
             "q35 chipset layout, Red Hat PCI subsystem IDs on the chipset's devices",
             "QEMU's ACPI tables to root (BXPC creator ID, fw_cfg in the DSDT)",
+            "a fresh boot: minutes of uptime",
+        ]);
+        found
+    }
+
+    /// What still tells a cloud profile from an instance of the provider.
+    fn cloud_giveaways(&self) -> Vec<&'static str> {
+        let mut found =
+            vec!["the QEMU/KVM hypervisor, visible by design as on the provider's machines"];
+        if self.nat.network.is_empty() {
+            found.push("QEMU user-network addresses (10.0.2.x) on NAT");
+        }
+        found.extend([
+            "the metadata service answers only on a Routed network",
+            "the emulated display (Bochs or virtio-gpu), not the provider's Cirrus, QXL or Bochs",
+            "PCI subsystem IDs and the provider's own PCI bridges and balloon device",
+            "DNS servers inside the DHCP network, not the provider's",
+            "no provider agent process runs (files and stubs only)",
             "a fresh boot: minutes of uptime",
         ]);
         found
@@ -1327,6 +1448,11 @@ impl StealthProfile {
     /// How common checks (systemd-detect-virt, DMI strings, the CPUID
     /// hypervisor bit, MAC prefixes) would rate this VM.
     pub fn rating(&self) -> &'static str {
+        if self.cloud_provider().is_some() {
+            // A cloud instance is a KVM guest by design: the checks that
+            // call this a VM call every machine of the provider one.
+            return "unlikely";
+        }
         if !self.hide_hypervisor || !self.hide_kvm || !self.identity_enabled {
             "certain"
         } else if self.mac.is_empty() || !self.cpu_passthrough || self.nic == NicModel::VirtioNet {

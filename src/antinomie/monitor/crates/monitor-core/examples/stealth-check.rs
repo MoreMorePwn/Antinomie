@@ -5,6 +5,7 @@
 //!
 //!   stealth-check measure BUNDLE NEW_DATA_DIR PROBE [PRESET [ENTRY=VALUE...]]
 //!   stealth-check boots BUNDLE NEW_DATA_DIR COUNT [PRESET [ENTRY=VALUE...]]
+//!   stealth-check cloud BUNDLE NEW_DATA_DIR CLOUD_PROBE [PROVIDER...]
 //!
 //! PROBE is the static `tests/monitor/stealth-probe` program; PRESET is
 //! `desktop` (default), `laptop`, `server` or `transparent`; entries change
@@ -26,8 +27,10 @@
 //! A boot whose transport does not come up within two minutes fails.
 //!
 //! The data folder must be new and disposable.
+use antinomie_monitor_core::route::RouteKind;
 use antinomie_monitor_core::stealth::{
-    BaseSupport, DiskBus, Firmware, HostCpu, HostSupport, NatNetwork, StealthPreset, StealthProfile,
+    BaseSupport, CLOUDS, DiskBus, Firmware, HostCpu, HostSupport, NatNetwork, StealthPreset,
+    StealthProfile,
 };
 use antinomie_monitor_core::*;
 use std::{
@@ -106,11 +109,22 @@ impl Driver {
     }
     /// Run `program` as `uid` until it ends; returns its run id.
     fn run_to_end(&mut self, program: &str, uid: u32) -> Result<String, String> {
+        self.run_routed(program, uid, None)
+    }
+
+    /// [`run_to_end`](Self::run_to_end) on `route` (a Routed VM).
+    fn run_routed(
+        &mut self,
+        program: &str,
+        uid: u32,
+        route: Option<RouteKind>,
+    ) -> Result<String, String> {
         let known: Vec<String> = self.snapshot.runs.iter().map(|r| r.id.clone()).collect();
         self.command(Command::Execute(ExecRequest {
             path: program.into(),
             uid,
             gid: uid,
+            route,
             ..Default::default()
         }))?;
         self.wait("run publication", 15, |s| {
@@ -190,6 +204,18 @@ fn driver(
     profile: StealthProfile,
     gpa: Option<u64>,
 ) -> Result<(Driver, String), String> {
+    driver_on(bundle, data, profile, gpa, false)
+}
+
+/// [`driver`] with the VM's network Routed when `routed`: the gateway of the
+/// per-run route, which a cloud profile's metadata service lives in.
+fn driver_on(
+    bundle: &str,
+    data: &Path,
+    profile: StealthProfile,
+    gpa: Option<u64>,
+    routed: bool,
+) -> Result<(Driver, String), String> {
     if data.exists() {
         return Err("the measurement needs a new disposable data folder".into());
     }
@@ -221,7 +247,8 @@ fn driver(
         ram_mib: 2048,
         disk_gib: 8,
         nat: true,
-        isolated_network: true,
+        isolated_network: !routed,
+        routed,
         stealth: profile,
         ..Default::default()
     }))?;
@@ -465,6 +492,185 @@ fn boots(bundle: &str, data: &str, count: &str, args: &[&str]) -> Result<(), Str
     Ok(())
 }
 
+/// The value of `CLOUD key ...` lines, by key, in output order.
+fn cloud_lines(text: &str) -> Vec<(String, String)> {
+    text.lines()
+        .filter_map(|line| {
+            let rest = line.trim_end_matches('\r').strip_prefix("CLOUD ")?;
+            let (key, value) = rest.split_once(' ')?;
+            Some((key.to_owned(), value.to_owned()))
+        })
+        .collect()
+}
+
+/// Boots each cloud profile (a Routed VM), runs the cloud probe on the
+/// InetSim route and checks what the guest read of its machine and of the
+/// provider's metadata service against the provider's profile, then that the
+/// gateway wrote the run's metadata report with the requests, the
+/// credentials handed out and the canary's use.
+fn cloud(bundle: &str, data: &str, probe: &str, only: &[&str]) -> Result<(), String> {
+    let data = PathBuf::from(data);
+    fs::create_dir_all(&data).map_err(|e| e.to_string())?;
+    let mut failures = Vec::new();
+    for provider in CLOUDS
+        .iter()
+        .filter(|p| only.is_empty() || only.contains(&p.id))
+    {
+        let folder = data.join(provider.id);
+        let profile = StealthProfile::cloud_vps(provider);
+        let mac_prefix = profile.mac[..8].to_owned();
+        let (mut d, vm_id) = driver_on(bundle, &folder, profile, None, true)?;
+        d.boot(&vm_id)?;
+        thread::sleep(Duration::from_secs(3));
+        let program = "/tmp/cloud-probe";
+        d.command(Command::Upload {
+            source: PathBuf::from(probe),
+            destination: program.into(),
+            overwrite: true,
+            executable: true,
+        })?;
+        let run = d.run_routed(program, 0, Some(RouteKind::InetSim))?;
+        let text = d.output(&run).to_owned();
+        let directory = d
+            .snapshot
+            .runs
+            .iter()
+            .find(|r| r.id == run)
+            .map(|r| r.directory.clone())
+            .ok_or("run missing")?;
+        // The report is written when the run's process tree has ended.
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let mut report = None;
+        while report.is_none() && Instant::now() < deadline {
+            d.receive();
+            report = antinomie_monitor_core::route::read_metadata_report(&directory);
+            thread::sleep(Duration::from_millis(200));
+        }
+        d.stop()?;
+        fs::write(folder.join("cloud-probe.txt"), &text).map_err(|e| e.to_string())?;
+        let lines = cloud_lines(&text);
+        let get = |key: &str| lines.iter().find(|l| l.0 == key).map(|l| l.1.clone());
+        let mut check = |name: &str, ok: bool, got: String| {
+            println!(
+                "{} {} {name}: {got}",
+                if ok { "PASS" } else { "FAIL" },
+                provider.id
+            );
+            if !ok {
+                failures.push(format!("{} {name}", provider.id));
+            }
+        };
+        let value = |key: &str| get(key).unwrap_or_else(|| "(missing)".into());
+        check(
+            "dmi.sys_vendor",
+            value("dmi.sys_vendor") == provider.system.0,
+            value("dmi.sys_vendor"),
+        );
+        check(
+            "dmi.product_name",
+            value("dmi.product_name") == provider.system.1,
+            value("dmi.product_name"),
+        );
+        check(
+            "dmi.bios_vendor",
+            value("dmi.bios_vendor") == provider.bios.0 || provider.bios.0.is_empty(),
+            value("dmi.bios_vendor"),
+        );
+        check(
+            "dmi.chassis_type",
+            value("dmi.chassis_type") == provider.chassis_type.to_string(),
+            value("dmi.chassis_type"),
+        );
+        check(
+            "net.mac",
+            value("net.mac").starts_with(&mac_prefix),
+            value("net.mac"),
+        );
+        check(
+            "net.gateway",
+            value("net.gateway") == provider.nat.1,
+            value("net.gateway"),
+        );
+        check(
+            "net.resolv",
+            lines
+                .iter()
+                .any(|l| l.0 == "net.resolv" && l.1.contains(provider.nat.2)),
+            provider.nat.2.to_owned(),
+        );
+        let chipset = match provider.machine.qemu() {
+            "pc" => "8086:1237",
+            _ => "8086:29c0",
+        };
+        check(
+            "pci chipset",
+            lines.iter().any(|l| l.0 == "pci" && l.1.contains(chipset)),
+            chipset.to_owned(),
+        );
+        let prefix = format!("meta.{}", provider.metadata_ip);
+        let answered: Vec<_> = lines
+            .iter()
+            .filter(|l| l.0.starts_with(&prefix) && l.1.starts_with("[200"))
+            .collect();
+        check(
+            "metadata answers",
+            !answered.is_empty(),
+            format!("{} paths answered", answered.len()),
+        );
+        let others = lines
+            .iter()
+            .filter(|l| l.0.starts_with("meta.") && !l.0.starts_with(&prefix))
+            .count();
+        check(
+            "other providers' addresses stay silent",
+            others == 0,
+            format!("{others} answers"),
+        );
+        if !provider.metadata_name.is_empty() {
+            check(
+                "metadata name resolves",
+                value(&format!("dns.{}", provider.metadata_name)) == provider.metadata_ip,
+                value(&format!("dns.{}", provider.metadata_name)),
+            );
+        }
+        let kinds: Vec<_> = report
+            .iter()
+            .flat_map(|r| r.events.iter().map(|e| e.kind.as_str()))
+            .collect();
+        check(
+            "report: requests",
+            kinds.contains(&"request"),
+            format!("{} events", kinds.len()),
+        );
+        check(
+            "report: credentials",
+            kinds.contains(&"credentials"),
+            format!("{kinds:?}").chars().take(60).collect(),
+        );
+        check(
+            "report: canary use",
+            report.iter().any(|r| {
+                r.events
+                    .iter()
+                    .any(|e| e.kind == "canary-use" && e.endpoint == "203.0.113.9:80")
+            }),
+            "203.0.113.9:80".into(),
+        );
+        println!(
+            "INFO {} cpu.hypervisor={} clocksource={}",
+            provider.id,
+            value("cpu.hypervisor"),
+            value("clocksource")
+        );
+        fs::remove_file(folder.join("vms").join(&vm_id).join("disk.qcow2")).ok();
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("failed: {}", failures.join(", ")))
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let outcome = match args
@@ -475,10 +681,12 @@ fn main() {
     {
         ["measure", bundle, data, probe, rest @ ..] => measure(bundle, data, probe, rest),
         ["boots", bundle, data, count, rest @ ..] => boots(bundle, data, count, rest),
+        ["cloud", bundle, data, probe, rest @ ..] => cloud(bundle, data, probe, rest),
         _ => {
             eprintln!(
                 "usage: stealth-check measure BUNDLE NEW_DATA_DIR PROBE [PRESET [ENTRY=VALUE...]]\n       \
-                 stealth-check boots BUNDLE NEW_DATA_DIR COUNT [PRESET [ENTRY=VALUE...]]"
+                 stealth-check boots BUNDLE NEW_DATA_DIR COUNT [PRESET [ENTRY=VALUE...]]\n       \
+                 stealth-check cloud BUNDLE NEW_DATA_DIR CLOUD_PROBE [PROVIDER...]"
             );
             std::process::exit(2);
         }

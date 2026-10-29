@@ -12,6 +12,7 @@ use super::{
     dns,
     frame::{self, BROADCAST, ETHERTYPE_ARP, ETHERTYPE_IPV4, Mac, TcpOut},
     managed::{self, Managed},
+    metadata::Service as Metadata,
     names::FakeIps,
     probe,
     tcp::{Conn, Seg},
@@ -138,6 +139,7 @@ pub struct Claimed {
 
 pub struct Gateway {
     shared: Arc<Shared>,
+    metadata: Option<Arc<Metadata>>,
     thread: Option<JoinHandle<()>>,
     socket: PathBuf,
     work_dir: PathBuf,
@@ -147,6 +149,16 @@ impl Gateway {
     /// Listens on `<dir>/net.sock` for QEMU and starts the gateway thread on
     /// the Drop route. `dir` is also where helper programs write their logs.
     pub fn start(dir: &Path, net: GatewayNet) -> Result<Gateway, String> {
+        Self::start_with(dir, net, None)
+    }
+
+    /// [`start`](Self::start) with a cloud metadata service, which answers
+    /// its provider's address on every route.
+    pub fn start_with(
+        dir: &Path,
+        net: GatewayNet,
+        metadata: Option<Arc<Metadata>>,
+    ) -> Result<Gateway, String> {
         let socket = dir.join("net.sock");
         if socket.as_os_str().len() > 100 {
             return Err("the network socket path is too long".into());
@@ -172,13 +184,21 @@ impl Gateway {
             waker: Waker(wake_tx),
         });
         let (events_tx, events) = channel();
-        let state = Loop::new(shared.clone(), net, events, events_tx, wake_rx);
+        let state = Loop::new(
+            shared.clone(),
+            net,
+            events,
+            events_tx,
+            wake_rx,
+            metadata.clone(),
+        );
         let thread = thread::Builder::new()
             .name("route-gateway".into())
             .spawn(move || state.run(listener))
             .map_err(|e| format!("network gateway: {e}"))?;
         Ok(Gateway {
             shared,
+            metadata,
             thread: Some(thread),
             socket,
             work_dir: dir.to_path_buf(),
@@ -257,6 +277,9 @@ impl Gateway {
         )?;
         // On failure `managed` is dropped here, which stops wireproxy or tor.
         probe::check(&spec)?;
+        if let Some(metadata) = &self.metadata {
+            metadata.begin_run(run);
+        }
         let checked_ms = unix_ms();
         self.shared.install(Active {
             spec,
@@ -265,6 +288,14 @@ impl Gateway {
         claims.runs.push(run.to_owned());
         claims.checked_ms = checked_ms;
         Ok(Claimed { checked_ms })
+    }
+
+    /// Writes what the cloud metadata service saw during the run into the
+    /// run's folder; false when there is no service or it saw nothing.
+    pub fn write_metadata_report(&self, directory: &Path) -> Result<bool, String> {
+        self.metadata
+            .as_ref()
+            .map_or(Ok(false), |metadata| metadata.write_report(directory))
     }
 
     /// Run `run` no longer needs its route; the last one out puts the
@@ -363,6 +394,7 @@ struct Loop {
     fake: FakeIps,
     dns_in_flight: Arc<AtomicUsize>,
     seed: std::collections::hash_map::RandomState,
+    metadata: Option<Arc<Metadata>>,
 }
 
 impl Loop {
@@ -372,6 +404,7 @@ impl Loop {
         events: Receiver<Event>,
         events_tx: Sender<Event>,
         wake_rx: UnixStream,
+        metadata: Option<Arc<Metadata>>,
     ) -> Self {
         Loop {
             shared,
@@ -394,6 +427,7 @@ impl Loop {
             fake: FakeIps::default(),
             dns_in_flight: Arc::new(AtomicUsize::new(0)),
             seed: Default::default(),
+            metadata,
         }
     }
 
@@ -691,7 +725,16 @@ impl Loop {
             Counters::add(&counters.dns_unanswered, 1);
             return;
         };
+        // The provider's metadata name resolves to its link-local address
+        // on every route, as it does on the provider's own network.
+        let metadata_name = self
+            .metadata
+            .as_ref()
+            .filter(|metadata| !metadata.name().is_empty() && metadata.name() == query.name);
         let answer = match &route.spec.egress {
+            _ if metadata_name.is_some() && query.qtype == dns::TYPE_A => {
+                metadata_name.map(|metadata| dns::answer_a(&query, &[metadata.ip()], DNS_TTL))
+            }
             Egress::Drop => None,
             Egress::Sink(sink) if query.qtype == dns::TYPE_A => {
                 Some(dns::answer_a(&query, &[sink.address], DNS_TTL))
@@ -775,6 +818,12 @@ impl Loop {
         };
         let now = Instant::now();
         if let Some((_, conn)) = self.conns.get_mut(&flow) {
+            if !tcp.payload.is_empty()
+                && let Some(metadata) = &self.metadata
+                && flow.dst_ip != metadata.ip()
+            {
+                metadata.scan_outbound(&format!("{}:{}", flow.dst_ip, flow.dst_port), tcp.payload);
+            }
             let mut out = Vec::new();
             conn.segment(tcp, now, &mut out);
             self.after(flow, out);
@@ -830,7 +879,24 @@ impl Loop {
         let generation = self.sync_generation();
         let route = self.shared.current();
         let egress = route.spec.egress.clone();
-        if matches!(egress, Egress::Drop) {
+        // The cloud metadata service is the provider's own, not a route's
+        // destination: it answers whatever the route is.
+        let metadata = self
+            .metadata
+            .clone()
+            .filter(|metadata| metadata.ip() == flow.dst_ip && flow.dst_port == 80);
+        // Another provider's metadata address has no host on this network:
+        // the connection goes unanswered, as it would on the provider's own.
+        if let Some(ours) = &self.metadata
+            && ours.ip() != flow.dst_ip
+            && crate::stealth::CLOUDS
+                .iter()
+                .any(|provider| provider.metadata_ip.parse() == Ok(flow.dst_ip))
+        {
+            Counters::add(&self.shared.counters.tcp_blocked, 1);
+            return;
+        }
+        if matches!(egress, Egress::Drop) && metadata.is_none() {
             // Dropped without an answer, like a firewall: the SYN is in the
             // capture and the sample keeps retrying.
             Counters::add(&self.shared.counters.tcp_blocked, 1);
@@ -840,7 +906,7 @@ impl Loop {
             Counters::add(&self.shared.counters.tcp_blocked, 1);
             return;
         }
-        let sink = matches!(egress, Egress::Sink(_));
+        let sink = matches!(egress, Egress::Sink(_)) || metadata.is_some();
         // The router's own addresses and the guest's network are never
         // connected to (QEMU's NAT would reach the host's loopback there).
         if !sink && (self.net.is_local(flow.dst_ip) || self.net.contains(flow.dst_ip)) {
@@ -860,6 +926,7 @@ impl Loop {
             return;
         }
         if let Dest::Ip(ip, _) = &dest
+            && metadata.is_none()
             && upstream::destination_refusal(&egress, *ip).is_some()
         {
             self.refuse(flow, syn);
@@ -881,8 +948,11 @@ impl Loop {
         let spawned = thread::Builder::new()
             .name("route-dial".into())
             .spawn(move || {
-                let result = upstream::dial(&egress, &dest)
-                    .and_then(|stream| upstream::start_pipes(stream, notify));
+                let dialed = match &metadata {
+                    Some(metadata) => metadata.connect().map(upstream::Stream::Unix),
+                    None => upstream::dial(&egress, &dest),
+                };
+                let result = dialed.and_then(|stream| upstream::start_pipes(stream, notify));
                 let _ = tx.send(Event::Dialed(id, result));
                 shared.waker.wake();
             });

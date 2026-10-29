@@ -87,6 +87,9 @@ const ROWS_HELD: usize = 200_000;
 pub(in crate::triage) struct Engine {
     options: Options,
     pub(super) aggs: Vec<Agg>,
+    /// Rows for what the host saw (the cloud metadata service), which are
+    /// not a task's and so are not scoped to the run's tree.
+    pub(super) host_aggs: Vec<Agg>,
     pub(super) index: HashMap<(&'static str, u64, String), usize>,
     pub(super) state: State,
     /// INFO matches that were counted without building a row.
@@ -102,6 +105,7 @@ impl Engine {
         Self {
             options,
             aggs: Vec::new(),
+            host_aggs: Vec::new(),
             index: HashMap::new(),
             state,
             info_matches: 0,
@@ -337,6 +341,7 @@ impl Engine {
     /// Settle every row: scope, siblings, tiers, caps.
     pub(in crate::triage) fn finish(mut self, files: &FdState) -> Output {
         let traced = self.state.probes.traced_exec.clone();
+        let host_aggs = std::mem::take(&mut self.host_aggs);
         if let Some((hit, number, capture, time)) = self.state.frames.nxdomain_hit.take() {
             if self.state.frames.resolver_answers {
                 let resolver = self.state.dns_task.clone();
@@ -361,6 +366,7 @@ impl Engine {
         if self.options.capture_all {
             scope(&mut aggs, &self.state, files);
         }
+        aggs.extend(host_aggs);
         noise::fold_siblings(&mut aggs, files);
         for agg in &mut aggs {
             noise::settle(agg);

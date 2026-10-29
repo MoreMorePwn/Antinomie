@@ -262,7 +262,10 @@ pub(super) fn rules(st: &mut super::state::State, frame: &Frame) -> Vec<Hit> {
                     format!("lookup of the hidden service {name}"),
                 ));
             }
-            if name == "metadata.google.internal" {
+            if matches!(
+                name.as_str(),
+                "metadata.google.internal" | "metadata.tencentyun.com"
+            ) {
                 hits.push(Hit::new(
                     "credential.cloud_metadata",
                     &name,
@@ -289,7 +292,10 @@ pub(super) fn rules(st: &mut super::state::State, frame: &Frame) -> Vec<Hit> {
                 return hits;
             }
             if name.parse::<IpAddr>().is_ok() {
-                if matches!(name.as_str(), "169.254.169.254" | "169.254.170.2") {
+                if matches!(
+                    name.as_str(),
+                    "169.254.169.254" | "169.254.170.2" | "169.254.0.23" | "100.100.100.200"
+                ) {
                     hits.push(Hit::new(
                         "credential.cloud_metadata",
                         &name,
@@ -299,7 +305,10 @@ pub(super) fn rules(st: &mut super::state::State, frame: &Frame) -> Vec<Hit> {
                     hits.push(Hit::new("network.ip_literal", &name, format!("HTTP request to the address {name}, which no lookup in the run produced")));
                 }
             }
-            if name == "metadata.google.internal" {
+            if matches!(
+                name.as_str(),
+                "metadata.google.internal" | "metadata.tencentyun.com"
+            ) {
                 hits.push(Hit::new(
                     "credential.cloud_metadata",
                     &name,

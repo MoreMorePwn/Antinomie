@@ -15,6 +15,25 @@ use std::{
     time::Duration,
 };
 
+/// The i440FX machine type lays guest RAM out like q35 only below 0xb0000000
+/// bytes, which is all the transport's address translation knows
+/// ([`RamLayout`]); a larger VM keeps q35. Returns the start log line when
+/// the profile's machine type was changed.
+fn effective_machine(
+    stealth: &mut crate::stealth::StealthProfile,
+    ram_size: u64,
+) -> Option<String> {
+    if stealth.machine == crate::stealth::MachineType::Pc && ram_size >= 0xb000_0000 {
+        stealth.machine = crate::stealth::MachineType::Q35;
+        return Some(
+            "Stealth setting not applied: i440FX machine type; i440FX places guest RAM differently \
+             from q35 above 2.75 GiB, which the guest transport does not map; q35 used"
+                .into(),
+        );
+    }
+    None
+}
+
 /// The QEMU user-mode network of a VM. A Routed VM has none: its card is
 /// wired to the route gateway instead.
 fn user_network_backend(vm: &VmConfig) -> Option<&'static str> {
@@ -495,10 +514,17 @@ impl VmProcess {
         let (ram_path, ram_memory) = guest_ram(ram_path, ram_size)?;
         // The profile as this base and host can boot it.
         let base_support = crate::stealth::BaseSupport::from_list(&bundle.stealth_support);
-        let (stealth, fallbacks) = vm.stealth.fitted_with(
+        let (mut stealth, fallbacks) = vm.stealth.fitted_with(
             &base_support,
             &crate::stealth::HostSupport::detect(&options.qemu),
         );
+        let mut fallbacks: Vec<String> = fallbacks
+            .iter()
+            .map(crate::stealth::Fallback::log_line)
+            .collect();
+        if let Some(note) = effective_machine(&mut stealth, ram_size) {
+            fallbacks.push(note);
+        }
         let mut qmp_path = runtime_dir.join("qmp.sock");
         let mut socket_cleanup = None;
         if qmp_path.as_os_str().len() > 100 {
@@ -528,7 +554,34 @@ impl VmProcess {
                 net_dir = Some(dir.clone());
             }
             let net = crate::route::GatewayNet::from_nat(&stealth.nat)?;
-            gateway = Some(crate::route::Gateway::start(&dir, net)?);
+            // A cloud profile's gateway also answers the provider's metadata
+            // address.
+            let metadata = stealth.cloud_provider().map(|provider| {
+                let id = provider.instance_id(&stealth.identity.system_uuid);
+                crate::route::MetadataService::new(provider, &id, &provider.hostname(&id))
+            });
+            gateway = Some(crate::route::Gateway::start_with(&dir, net, metadata)?);
+        }
+        if stealth.cloud_provider().is_some() && vm.network() != VmNetwork::Routed {
+            fallbacks.push(
+                "Stealth setting not applied: cloud metadata service; only a Routed network \
+                 has the gateway that answers the provider's metadata address"
+                    .into(),
+            );
+        }
+        // A cloud profile's lived-in state goes into the VM's disk once; a
+        // failure leaves the VM plain and is said in the start log.
+        if let Some(provider) = stealth.cloud_provider()
+            && let Err(error) = crate::guest_account::ensure_cloud_state(
+                disk,
+                &vm_dir(options, &vm.id)?,
+                provider,
+                &stealth.identity.system_uuid,
+            )
+        {
+            fallbacks.push(format!(
+                "Stealth setting not applied: cloud instance state; {error}"
+            ));
         }
         let serial = File::create(runtime_dir.join("serial.log")).map_err(|e| e.to_string())?;
         let stderr = File::create(runtime_dir.join("qemu.log")).map_err(|e| e.to_string())?;
@@ -537,7 +590,8 @@ impl VmProcess {
             .arg(name_option(&vm.name))
             .arg("-machine")
             .arg(format!(
-                "q35,memory-backend=shared,max-ram-below-4g=4G{}",
+                "{},memory-backend=shared,max-ram-below-4g=4G{}",
+                stealth.machine.qemu(),
                 crate::stealth::machine_options(&stealth)
             ))
             .arg("-object")
@@ -636,10 +690,7 @@ impl VmProcess {
             qmp_path,
             gateway,
             net_dir,
-            stealth_fallbacks: fallbacks
-                .iter()
-                .map(crate::stealth::Fallback::log_line)
-                .collect(),
+            stealth_fallbacks: fallbacks,
         };
         if let Some((sizing, (width, height))) = initial_size {
             process.set_initial_window_size(sizing, width, height)?;
@@ -837,7 +888,7 @@ impl VmProcess {
         } else {
             None
         };
-        let mut value = serde_json::json!({"launch_policy":2,"host_identity":host_identity,"qemu":String::from_utf8_lossy(&output.stdout),"machine":"q35,max-ram-below-4g=4G","cpus":vm.cpus,"ram_mib":vm.ram_mib,"nat":vm.nat,"launch":vm.launch,"transport":vm.transport,"acceleration":acceleration,"force_tcg":options.force_tcg,"headless":options.headless,"bootstrap_gpa":options.bootstrap_gpa,"bundle_identity":bundle.base_identity,"kernel_append":bundle.kernel_append,"kernel_version":bundle.kernel_version});
+        let mut value = serde_json::json!({"launch_policy":2,"host_identity":host_identity,"qemu":String::from_utf8_lossy(&output.stdout),"machine":format!("{},max-ram-below-4g=4G", vm.stealth.machine.qemu()),"cpus":vm.cpus,"ram_mib":vm.ram_mib,"nat":vm.nat,"launch":vm.launch,"transport":vm.transport,"acceleration":acceleration,"force_tcg":options.force_tcg,"headless":options.headless,"bootstrap_gpa":options.bootstrap_gpa,"bundle_identity":bundle.base_identity,"kernel_append":bundle.kernel_append,"kernel_version":bundle.kernel_version});
         // Keep pre-isolation checkpoints compatible for unchanged network setups.
         if let Some(key) = network_identity_key(vm) {
             value[key] = serde_json::Value::Bool(true);
@@ -1522,6 +1573,21 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn an_i440fx_profile_keeps_q35_where_the_ram_layouts_differ() {
+        use crate::stealth::{CLOUDS, MachineType, StealthProfile};
+        const MIB: u64 = 1024 * 1024;
+        let mut profile = StealthProfile::cloud_vps(&CLOUDS[0]);
+        assert_eq!(profile.machine, MachineType::Pc);
+        assert!(effective_machine(&mut profile, 2816 * MIB - 1).is_none());
+        assert_eq!(profile.machine, MachineType::Pc);
+        let note = effective_machine(&mut profile, 2816 * MIB).unwrap();
+        assert!(note.contains("q35 used"));
+        assert_eq!(profile.machine, MachineType::Q35);
+        // A q35 profile is never touched.
+        assert!(effective_machine(&mut profile, 8192 * MIB).is_none());
     }
 
     #[test]

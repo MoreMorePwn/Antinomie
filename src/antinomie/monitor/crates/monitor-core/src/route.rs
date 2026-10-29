@@ -24,6 +24,7 @@ mod frame;
 mod gateway;
 mod inetsim;
 mod managed;
+mod metadata;
 mod names;
 mod probe;
 mod qemu;
@@ -39,6 +40,10 @@ pub use self::{
         VpnConfig, load_config, save_config, tool_on_path,
     },
     gateway::{Claimed, Gateway, GatewayNet},
+    metadata::{
+        REPORT as METADATA_REPORT, Report as MetadataReport, Service as MetadataService,
+        read_report as read_metadata_report,
+    },
     qemu::require_qemu_support,
     run::{RouteClaim, claim_for_run, release_for_run, test_route},
 };

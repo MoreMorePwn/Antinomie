@@ -184,6 +184,164 @@ impl Engine {
         std::mem::take(&mut self.state.ioc)
     }
 
+    /// The findings of a cloud profile's fake metadata service, from the report
+    /// the gateway wrote into the run's folder: the requests (one row, with
+    /// the request lines as facts), the credentials handed out, and every use
+    /// of the run's canary values the gateway saw in what the guest sent
+    /// out. The host saw them, not a task, so the rows are VM-wide. A use
+    /// also lists the address it went to as an endpoint indicator.
+    pub(in crate::triage) fn cloud_report(
+        &mut self,
+        report: &antinomie_monitor_core::route::MetadataReport,
+        clock: Option<antinomie_monitor_core::HostClockAnchor>,
+    ) {
+        let time_of = |ms: u64| {
+            clock
+                .and_then(|clock| {
+                    let delta = (i128::from(ms) * 1000 - i128::from(clock.host_us)) * 1000;
+                    u64::try_from(i128::from(clock.guest_ns) + delta).ok()
+                })
+                .unwrap_or(0)
+        };
+        let requests: Vec<_> = report
+            .events
+            .iter()
+            .filter(|event| event.kind == "request")
+            .collect();
+        if let Some(first) = requests.first() {
+            let detail = requests
+                .iter()
+                .take(32)
+                .map(|event| event.detail.clone())
+                .collect();
+            self.host_row(
+                "credential.cloud_metadata",
+                first.endpoint.clone(),
+                format!(
+                    "{} requests to the instance metadata service {}",
+                    requests.len(),
+                    first.endpoint
+                ),
+                time_of(first.ms),
+                (
+                    requests.len() as u64,
+                    time_of(requests[requests.len() - 1].ms),
+                ),
+                detail,
+            );
+        }
+        for event in &report.events {
+            let (rule, summary) = match event.kind.as_str() {
+                "credentials" => (
+                    "credential.cloud_credentials",
+                    format!(
+                        "the instance role's credentials were read from the metadata service ({})",
+                        event.detail
+                    ),
+                ),
+                "canary-use" => (
+                    "credential.canary_used",
+                    format!(
+                        "the run's canary cloud credential was sent to {}",
+                        event.endpoint
+                    ),
+                ),
+                _ => continue,
+            };
+            let ms = time_of(event.ms);
+            self.host_row(
+                rule,
+                event.endpoint.clone(),
+                summary,
+                ms,
+                (1, ms),
+                vec![event.detail.clone()],
+            );
+            if event.kind == "canary-use"
+                && let Some((ip, port)) = event.endpoint.rsplit_once(':')
+                && let (Ok(ip), Ok(port)) = (ip.parse::<IpAddr>(), port.parse::<u16>())
+            {
+                self.state.ioc.connections.push(Connection {
+                    ip,
+                    port,
+                    udp: false,
+                    ok: true,
+                    who: Who {
+                        time_ns: ms,
+                        ..Who::default()
+                    },
+                    name: "cloud canary",
+                });
+            }
+        }
+    }
+
+    /// One row for something the host saw, not a task: VM-wide, from the
+    /// gateway's report.
+    fn host_row(
+        &mut self,
+        rule: &'static str,
+        object: String,
+        summary: String,
+        first_ns: u64,
+        (count, last_ns): (u64, u64),
+        detail: Vec<String>,
+    ) {
+        let Some(spec) = spec(rule) else {
+            debug_assert!(false, "unclassified rule {rule}");
+            return;
+        };
+        if let Some(known) = self
+            .host_aggs
+            .iter_mut()
+            .find(|agg| agg.rule == spec.id && agg.object == object)
+        {
+            known.count += count;
+            known.first_ns = known.first_ns.min(first_ns);
+            known.last_ns = known.last_ns.max(last_ns);
+            for line in detail {
+                if known.detail.len() < 32 && !known.detail.contains(&line) {
+                    known.detail.push(line);
+                }
+            }
+            return;
+        }
+        let mut gaps = Gaps::default();
+        gaps.add(first_ns);
+        let agg = Agg {
+            rule: spec.id,
+            cookie: 0,
+            pid: 0,
+            tid: 0,
+            process: "VM-wide (seen by the host's cloud metadata service)".to_owned(),
+            flags: 0,
+            image: None,
+            object,
+            summary,
+            attack: spec.attack,
+            base: spec.tier,
+            count,
+            failed: 0,
+            allowed: 0,
+            first_ns,
+            last_ns,
+            stream: 0,
+            call_id: 0,
+            ret: None,
+            high_confidence: true,
+            outcome: "seen by the host".into(),
+            evidence: "cloud-metadata.json in the run's folder".into(),
+            gaps,
+            detail,
+            siblings: 0,
+            samples: Vec::new(),
+            packet: None,
+            tier: spec.tier,
+            why: Vec::new(),
+        };
+        self.host_aggs.push(agg);
+    }
+
     /// List a dataset match as a `c2.ioc_match` finding, so it appears with the
     /// run's other detections.
     pub(in crate::triage) fn ioc_match(&mut self, found: IocHit) {

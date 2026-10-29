@@ -7,6 +7,8 @@ Collected on 2026-10-27 from the hw-probe uploads published in the linuxhw repos
 hw-probe hides serial numbers, UUIDs, asset tags and some part numbers in these reports; nothing hidden was guessed.
 The collection scripts are kept with the project private evidence of task ANT-T0150.
 
+The cloud VPS profiles are in [SOURCES-cloud.md](SOURCES-cloud.md).
+
 ## How to read it
 
 | Class | Meaning |

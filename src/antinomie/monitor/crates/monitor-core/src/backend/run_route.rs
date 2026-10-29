@@ -47,6 +47,13 @@ impl Session {
         let Some(claim) = owner.route_claim.take() else {
             return false;
         };
+        // A cloud profile's metadata log goes into the run's folder before
+        // the next run's claim starts a new one.
+        if let Some(gateway) = self.process.gateway.as_ref() {
+            // Best effort: a run without the report only lacks the extra
+            // findings; the capture and the calls still show the requests.
+            let _ = gateway.write_metadata_report(&owner.directory);
+        }
         crate::route::release_for_run(
             self.process.gateway.as_ref(),
             &owner.summary.run_id,

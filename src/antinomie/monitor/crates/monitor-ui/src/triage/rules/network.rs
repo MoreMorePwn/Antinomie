@@ -19,7 +19,14 @@ const EXPLOIT_PORTS: &[u16] = &[
 const FLOOD_PER_SECOND: usize = 1000;
 const UPLOAD_BYTES: u64 = 10 * 1024 * 1024;
 const UPLOAD_FLOOR: u64 = 1024 * 1024;
-const METADATA: &[&str] = &["169.254.169.254", "169.254.170.2", "fd00:ec2::254"];
+const METADATA: &[&str] = &[
+    "169.254.169.254",
+    "169.254.170.2",
+    "fd00:ec2::254",
+    // Tencent Cloud and Alibaba Cloud.
+    "169.254.0.23",
+    "100.100.100.200",
+];
 /// VM housekeeping that listens or answers by itself: DHCP, NTP, mDNS and LLMNR.
 const HOUSEKEEPING_PORTS: &[u16] = &[67, 68, 123, 5353, 5355];
 

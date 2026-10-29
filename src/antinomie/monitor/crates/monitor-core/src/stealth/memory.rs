@@ -187,7 +187,7 @@ fn legacy_plan(id: &MachineIdentity, ram_mib: u64) -> Vec<Module> {
         } else {
             id.memory_type
         },
-        if id.memory_speed == 0 {
+        if id.memory_speed == 0 && id.memory_type == 0 {
             3200
         } else {
             id.memory_speed

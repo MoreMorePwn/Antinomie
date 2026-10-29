@@ -659,7 +659,7 @@ unattributed, the gaps and the calls per second are in the report and
 | Tier | Runs | Takes (this machine) |
 |---|---|---|
 | quick | the conformance trace suite's oracle groups `user`, `root`, `threads` (`conf-quick`) | about 1 min with the examples built, 5 to 7 min when the render test has to build too |
-| full | quick; `conf-stress-light`, `conf-stress-heavy`, `conf-stress-extreme`, `conf-stress-lossy`, `conf-stress-contended` (0.8.0) (one check and one conformance run each, cleaned up in between); `debug-p2`, `debug-p3`, `audit-stop`, `audit-core`, `uring-status`, `uring-boots`, `tracer-record`, `tracer-qa`, `debugger-live`, `stealth`, `snapshot`; `uring-legacy` and `tracer-legacy` on the old base; interop in both directions (`io-old-new-*`: the old host with BASE; this host with the old base: `io-new-old-audit` and the two legacy checks, since an old guest lacks what the other checks need) | about 2 h 10 min plus, the first time, about 15 min to build the old host; the five stress groups take 80 to 95 min of it (light 5-7, heavy 10-24, extreme 35-56, lossy 4-13, contended 14-17) |
+| full | quick; `conf-stress-light`, `conf-stress-heavy`, `conf-stress-extreme`, `conf-stress-lossy`, `conf-stress-contended` (0.8.0) (one check and one conformance run each, cleaned up in between); `debug-p2`, `debug-p3`, `audit-stop`, `audit-core`, `uring-status`, `uring-boots`, `tracer-record`, `tracer-qa`, `debugger-live`, `stealth`, `cloud`, `snapshot`; `uring-legacy` and `tracer-legacy` on the old base; interop in both directions (`io-old-new-*`: the old host with BASE; this host with the old base: `io-new-old-audit` and the two legacy checks, since an old guest lacks what the other checks need) | about 2 h 10 min plus, the first time, about 15 min to build the old host; the five stress groups take 80 to 95 min of it (light 5-7, heavy 10-24, extreme 35-56, lossy 4-13, contended 14-17) |
 
 Quick is the default for every change. Full is required when a change touches the
 kernel/host contract, and for a release check:
@@ -3024,6 +3024,66 @@ without a cost to observation or a separate design):
   `PATH` and `TERM`), not a login shell's `HOME`, `USER`, `SHELL`, `PWD`.
 * *Older bases* keep their command line, build string, symbols, worker names
   and `QEMU0002` until rebuilt, and are launched with kthreadd as parent.
+
+
+## Cloud VPS profiles (0.8.0)
+
+`StealthPreset::CloudVps` (`monitor-core/src/stealth/cloud.rs`) makes a VM an
+instance of a KVM cloud. `StealthProfile.cloud` names the provider
+(`CLOUDS`: Tencent CVM, Alibaba ECS, DigitalOcean Droplet, Vultr VC2) and
+`StealthProfile.machine` the QEMU machine type (`pc` for i440FX, `q35`); both
+default to nothing and q35 in profiles saved before 0.8.0. A cloud profile
+keeps the CPUID hypervisor flag, the KVM signature and kvm-clock visible (a
+hidden flag on a cloud's DMI strings would itself be odd), writes the
+provider's type 0 (with the "system is a virtual machine" bit, which a PC's
+firmware never sets), 1, 2, 3, processor and one RAM-sized DIMM, and takes the
+provider's MAC prefix and DHCP network. `giveaways()` lists what remains
+(the base's display, Red Hat PCI subsystem IDs, DNS servers inside the DHCP
+network, no agent processes). `catalog/SOURCES-cloud.md` cites the values.
+
+**i440FX.** `vm.rs` passes the profile's machine type. The guest transport maps
+guest RAM through `RamLayout::q35`, which equals i440FX's layout only below
+0xb0000000 bytes, so a pc profile on a VM of 2.75 GiB or more starts as q35 and
+says so in the start log. A base that names its NIC by slot (`onboardnic`)
+gets it at 00:03.0 (`ens3`, `NicSlot::Pc`); not exercised on a Debian base.
+
+**Lived-in state (per VM, not per base).** The first start with a provider
+writes `CloudProvider::state_files` into the VM's disk through an offline
+libguestfs run (`guest_account/cloud_state.rs`, the same tool as provisioning,
+on BusyBox and Debian Minimal alike): `/var/lib/cloud` data and instance
+folder, cloud-init logs, the host name (`/etc/hostname`), the default user
+(added to `/etc/passwd` when the base lacks it), its shell history, `auth.log`,
+a `wtmp` with past logins, and the provider's agent directories as one-line
+stubs (no provider binary), all with ages of hours to twelve days. `cloud-state.json`
+in the VM's folder records the provider and instance id so a later start leaves
+the disk alone; a failure only adds a "not applied" line to the start log. The
+bases stay one reproducible image for every profile.
+
+**Metadata service** (`route/metadata.rs`). In a Routed VM the gateway answers the
+provider's metadata address on TCP port 80 on every route, even Drop, from a
+thread over an in-process socket pair (nothing listens on the host, nothing
+leaves it); the provider's metadata name resolves to it in the gateway's DNS; the
+other providers' metadata addresses go unanswered. The instance id (from the
+system UUID), host name and region are the VM's; the credentials (Tencent CAM
+role, Alibaba RAM role, or a token in DigitalOcean's and Vultr's user data) are
+canaries that carry `ANTCANARY` and are new for each run (`Gateway::claim`).
+The gateway also looks for the run's canary values in the bytes the guest sends to
+any other TCP address; TLS hides them. At the end of the run
+`cloud-metadata.json` (requests, credentials handed out, canary uses) lands in the
+run's folder.
+
+**Triage.** `credential.cloud_metadata` also covers 169.254.0.23, 100.100.100.200
+and `metadata.tencentyun.com` (syscalls, capture hosts and names); the report adds
+a VM-wide row for the requests, `credential.cloud_credentials` and
+`credential.canary_used` (all High, T1552.005), and an endpoint indicator for the
+place the canary went to (`Engine::cloud_report`).
+
+**The check.** `stealth-check cloud BUNDLE NEW_DATA_DIR tests/monitor/cloud-probe
+[PROVIDER...]` boots each profile as a Routed VM, runs the static
+`cloud-probe.c` on the InetSim route (DMI, PCI, MAC, gateway, DNS, the metadata
+paths of every provider, then the canary sent to 203.0.113.9) and checks the
+answers against the profile and the run's report. It is the `cloud` check of the
+full tier of `scripts/vm-regress.py`.
 
 ## Stealth profile, part 2 (0.7.0)
 

@@ -49,6 +49,9 @@ pub(crate) fn fail_next_provision() {
     FAIL_PROVISION.with(|fail| fail.set(true));
 }
 
+mod cloud_state;
+pub(crate) use cloud_state::ensure as ensure_cloud_state;
+
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct GuestAccount {
     username: String,

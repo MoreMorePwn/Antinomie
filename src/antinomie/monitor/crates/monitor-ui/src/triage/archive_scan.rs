@@ -532,6 +532,11 @@ pub(super) fn scan_archive_query(
         network.network_warning =
             Some("Network end time is estimated from this run’s last retained syscall.".into());
     }
+    // A cloud profile's metadata service wrote what it saw into the run's folder.
+    if let Some(report) = antinomie_monitor_core::route::read_metadata_report(&recording.directory)
+    {
+        engine.cloud_report(&report, clock_anchor);
+    }
     // The IOC list: the capture's indicators, the calls', the sample's and the
     // files'; matched against the datasets, and the matches listed as findings.
     let capture_state = match (pcap, network.counts) {

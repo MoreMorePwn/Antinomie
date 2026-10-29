@@ -7,7 +7,7 @@ usage: vm-regress.py quick BASE [options]
        vm-regress.py auto  BASE [--against REF] [--old-base OLD] [...]
 
 quick  the conformance trace suite's oracle groups (user, root, threads)
-full   quick, the debugger, audit, io_uring, tracer, stealth and snapshot
+full   quick, the debugger, audit, io_uring, tracer, stealth, cloud profiles and snapshot
        checks, the conformance stress groups and interop in both directions
        (an old host on BASE, the current host on OLD); conf-stress-contended
        passes with transport drops only when each is attributed to a gap in
@@ -388,6 +388,7 @@ def plan(tier, ctx):
         Check("tracer-qa", "full", None, mon, 2400, vm=False, cargo=True),
         Check("debugger-live", "full", None, mon, 2400, cargo=True, needs=("base", "tools")),
         vm_check("stealth", "full", "stealth-check", ["measure", fix / "stealth-probe"]),
+        vm_check("cloud", "full", "stealth-check", ["cloud", fix / "cloud-probe"], timeout=3000),
         Check("snapshot", "full", example("snapshot-check", base, runs / "snapshot"), str(ROOT), 2400,
               needs=("base",)),
     ]
@@ -437,6 +438,7 @@ def build_fixtures(out):
         (["-static", "-O2", "-pthread", *strict], "uring-fixture.c", fix / "uring-fixture"),
         (["-static", "-O2", *strict], "tracer-fixture.c", fix / "tracer-fixture"),
         (["-static", "-O2", *strict], "stealth-probe.c", fix / "stealth-probe"),
+        (["-static", "-O2", *strict], "cloud-probe.c", fix / "cloud-probe"),
         (["-O1", "-static", "-no-pie", "-pthread"], "debug-p2-fixture.c", fix / "debug/p2fix"),
         (["-O1", "-static-pie", "-pthread"], "debug-p2-fixture.c", fix / "debug/p2pie"),
         (["-O1", "-static", "-no-pie", "-pthread"], "debug-p3-fixture.c", fix / "debug/p3fix"),

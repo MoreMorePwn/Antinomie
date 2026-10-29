@@ -6,7 +6,7 @@ use antinomie_monitor_core::stealth::{
     base_supporting, chassis_label, disk_bus_unavailable, firmware_unavailable, host_cpu_vendor,
     BaseSupport, DiskBus, DiskMedia, Fallback, FallbackSetting, Firmware, HostSupport,
     MachineIdentity, NatNetwork, NicModel, Pointer, RtcClock, SmbiosEntry, StealthPreset,
-    StealthProfile, CHASSIS, CPU_MODELS, MACHINES,
+    StealthProfile, CHASSIS, CLOUDS, CPU_MODELS, MACHINES,
 };
 
 /// What the host offers (OVMF, clean SMT), read once.
@@ -168,6 +168,22 @@ fn preset_combo(ui: &mut egui::Ui, profile: &mut StealthProfile, id: &str) {
     if preset != profile.preset {
         *profile = profile.for_preset(preset, &host_cpu_vendor());
     }
+    if profile.preset == StealthPreset::CloudVps
+        && let Some(current) = profile.cloud_provider()
+    {
+        let mut picked = current;
+        egui::ComboBox::from_id_salt(format!("{id}_cloud"))
+            .selected_text(current.label)
+            .width(260.0)
+            .show_ui(ui, |ui| {
+                for provider in CLOUDS {
+                    ui.selectable_value(&mut picked, provider, provider.label);
+                }
+            });
+        if picked.id != current.id {
+            *profile = StealthProfile::cloud_vps(picked);
+        }
+    }
 }
 
 /// The row in the VM dialog: the preset and the window.
@@ -277,7 +293,9 @@ fn hardware(ui: &mut egui::Ui, profile: &mut StealthProfile) {
                 MACHINES
                     .iter()
                     .find(|machine| machine.id == profile.identity.profile)
-                    .map_or("Custom fields", |machine| machine.label)
+                    .map(|machine| machine.label)
+                    .or_else(|| profile.cloud_provider().map(|provider| provider.label))
+                    .unwrap_or("Custom fields")
             } else {
                 "QEMU default"
             };
