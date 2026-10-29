@@ -37,6 +37,9 @@
 //! `"allow_incomplete": true` keeps diagnostic results after a run completion
 //! deadline. The report records the error; it never treats that run as complete.
 //!
+//! With `ANTINOMIE_FORCE_TCG` set in the environment the VM runs without
+//! KVM (slow, but enough for a small recorded run on a host without it).
+//!
 //! The report carries the Summary resource feed's last guest reading
 //! (`guest_resources`: memory and root filesystem) taken before the VM stops.
 //!
@@ -274,6 +277,7 @@ fn run() -> Result<Value, String> {
             .get("headless")
             .and_then(Value::as_bool)
             .unwrap_or(true),
+        force_tcg: std::env::var_os("ANTINOMIE_FORCE_TCG").is_some(),
         ..BackendOptions::default()
     };
     if let Some(data_dir) = text(&plan, "data_dir") {
