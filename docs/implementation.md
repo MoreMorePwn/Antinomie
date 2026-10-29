@@ -4342,6 +4342,14 @@ before reading the snapshot manifest. A running VM keeps its automatic layer;
 user-owned checkpoint layers are never merged. This is host-only and does not
 change the guest contract.
 
+**Immediate restart (0.8.0).** Starting a VM with a pending automatic run
+layer is refused while active or deferred recording writes remain. The error
+asks the user to retry after saving finishes; no disk or boot state is changed.
+The worker remains free to poll saving and process commands. Once writes finish,
+the layer lock serializes a retry with any background finalizer before the
+next boot seals its starting disk. The existing bounded flush-queue admission
+check also applies when starting a different VM.
+
 The authorized snapshot manager supports disk checkpoints (cold boot recovery)
 and full CPU/RAM/device checkpoints (resume recovery), with a branching native
 graph. External qcow2 layers are frozen; each branch owns a separate writable

@@ -2,13 +2,25 @@
 //! Starting and stopping the VM, and host resource checks.
 use super::*;
 
+#[cfg(test)]
+mod restart_tests;
+
 impl Worker {
     pub(super) fn start(&mut self, id: &str) -> Result<String, String> {
         if self.session.is_some() {
             return Err("only one VM may run at a time".into());
         }
-        // Reconnection state belongs to one boot; a new start begins clean.
-        self.reconnect = (0, None);
+        // begin() settles the predecessor's automatic layer. Its earlier-file
+        // copier must see the completed recording before that merge changes
+        // the sealed disk. Refuse promptly so the worker can keep polling saves;
+        // begin's layer lock still serializes a retry with the finalizer.
+        if crate::snapshots::run_layer::pending_record(&self.options, id).is_some()
+            && (self.flusher.is_busy() || self.deferred_flush.is_some())
+        {
+            return Err(
+                "the previous boot's recordings are still being saved; retry starting this VM after saving finishes; disk layers retained".into(),
+            );
+        }
         if self.deferred_flush.is_some() || !self.flusher.can_submit_retired() {
             return Err(
                 "recording flush queue is full; wait for saved recordings before starting a VM"
@@ -23,6 +35,8 @@ impl Worker {
             .ok_or("unknown VM")?
             .clone();
         storage::validate_vm(&vm)?;
+        // Reconnection state belongs to one boot; a new start begins clean.
+        self.reconnect = (0, None);
         vm.launch.validate_for(&self.options)?;
         let bundle = crate::locations::boot_bundle(&self.options, vm.base_identity.as_deref())?;
         storage::validate_boot_display(&vm, &bundle)?;

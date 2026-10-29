@@ -6,6 +6,10 @@ it runs.
 
 ## 0.8.0 — unreleased
 
+- **Immediate restart preserves earlier-file evidence.** Starting a VM whose
+  previous automatic disk layer is pending now asks you to wait for recording
+  saves to finish, preventing a disk merge from overtaking those saves.
+
 - **Stopped-VM snapshots wait for saved recordings and disk finalization.**
   Snapshot changes finish the previous boot's automatic disk layer before using
   it, so a background merge cannot remove a layer selected for a checkpoint.
