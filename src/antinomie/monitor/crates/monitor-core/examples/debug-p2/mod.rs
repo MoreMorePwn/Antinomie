@@ -18,6 +18,8 @@ struct Prog {
     launched: Launched,
     sym: Symbols,
     dbg: KernelDebugBackend,
+    /// The sample waits at its gate until [`Prog::stop`] has stopped it and opened it.
+    gated: bool,
 }
 
 pub struct Context {
@@ -50,17 +52,43 @@ impl Context {
         rounds: u32,
         workers: u32,
     ) -> Result<Prog, String> {
+        self.start_with(binary, mode, rounds, workers, false)
+    }
+    /// Like [`Self::start`], but the sample waits before its first round until
+    /// the first [`Prog::stop`]: how many rounds a test sees then does not depend
+    /// on how long the attach took (a slow host or a busy guest).
+    fn start_gated(
+        &mut self,
+        binary: &str,
+        mode: &str,
+        rounds: u32,
+        workers: u32,
+    ) -> Result<Prog, String> {
+        self.start_with(binary, mode, rounds, workers, true)
+    }
+    fn start_with(
+        &mut self,
+        binary: &str,
+        mode: &str,
+        rounds: u32,
+        workers: u32,
+        gated: bool,
+    ) -> Result<Prog, String> {
         let path = format!("/tmp/{binary}");
-        let launched = launch_program(
-            &mut self.driver,
-            &path,
-            vec![mode.into(), rounds.to_string(), workers.to_string()],
-            false,
-        )?;
+        let mut args = vec![mode.into(), rounds.to_string(), workers.to_string()];
+        if gated {
+            args.push("gate".into());
+        }
+        let launched = launch_program(&mut self.driver, &path, args, false)?;
         let sym = parse_symbols(&launched.symbols);
         let seed = self.next_seed();
         let dbg = attach_backend(&mut self.driver, &launched, seed)?;
-        Ok(Prog { launched, sym, dbg })
+        Ok(Prog {
+            launched,
+            sym,
+            dbg,
+            gated,
+        })
     }
     /// End the session and the run.
     fn finish(&mut self, mut prog: Prog) -> Result<(), String> {
@@ -87,7 +115,15 @@ impl Prog {
     }
     fn stop(&mut self) -> Result<antinomie_monitor_core::debug::StopEvent, String> {
         self.dbg.interrupt().map_err(|e| e.to_string())?;
-        wait_state(&mut self.dbg, 10)
+        let event = wait_state(&mut self.dbg, 10)?;
+        if std::mem::take(&mut self.gated) {
+            // Stopped at the gate, before round 0: open it for the next resume.
+            let go = self.sym("go")?;
+            self.dbg
+                .write_memory(go, &1u64.to_le_bytes())
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(event)
     }
     /// Continue to a software breakpoint at `addr` and remove it again.
     fn run_to(&mut self, addr: u64) -> Result<antinomie_monitor_core::debug::StopEvent, String> {

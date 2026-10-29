@@ -152,7 +152,7 @@ fn tick_value(output: &str, round: u32, field: &str) -> Option<u32> {
 
 /// A signal stops the group before delivery; the debugger passes or drops it.
 pub fn signals(context: &mut Context) -> Result<String, String> {
-    let mut prog = context.start("p2fix", "signal", 300, 0)?;
+    let mut prog = context.start_gated("p2fix", "signal", 300, 0)?;
     prog.stop()?;
     let round_now = prog.sym("round_now")?;
     let round_of = |prog: &mut Prog| -> Result<u64, String> {
@@ -878,7 +878,7 @@ pub fn smc(context: &mut Context) -> Result<String, String> {
 /// What the program can see of the debugger: nothing it checks for, and the
 /// direct read of its own code shows a software breakpoint but not a hardware one.
 pub fn anti(context: &mut Context) -> Result<String, String> {
-    let mut prog = context.start("p2fix", "anti", 120, 0)?;
+    let mut prog = context.start_gated("p2fix", "anti", 200, 0)?;
     prog.stop()?;
     let probe = prog.sym("step_syscall")?;
     let watched = prog.sym("watched")?;

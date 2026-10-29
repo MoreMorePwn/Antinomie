@@ -7,7 +7,10 @@
  *   gcc -O1 -pthread -Wl,--dynamic-linker=/tmp/dbgroot/ld.so -Wl,-rpath,/tmp/dbgroot \
  *       -o debug-p2-dyn debug-p2-fixture.c        (the host's ld.so and libc beside it)
  *
- * usage: debug-p2-fixture MODE [ROUNDS [WORKERS]]
+ * usage: debug-p2-fixture MODE [ROUNDS [WORKERS [gate]]]
+ * With "gate" the sample waits after the symbols line, before round 0, until a
+ * debugger stores a nonzero value in `go`: a test that counts rounds starts from
+ * round 0 however long its attach took.
  * Every mode prints "symbols name=0xaddr ..." first (runtime addresses, so a
  * position independent build is visible), then "start" and then "tick" lines
  * about every 50 ms, and "done" before it exits 0.
@@ -42,6 +45,7 @@
 volatile unsigned long counters[MAX_WORKERS];
 volatile long watched, round_now;
 volatile long watched_other;
+volatile long go;
 volatile int got_usr1, got_segv, sigtrap_count, tf_in_frame;
 static pthread_t main_thread;
 char srcbuf[4096], dstbuf[4096];
@@ -223,7 +227,7 @@ int main(int argc, char **argv)
     printf("symbols step_syscall=0x%lx step_syscall_insn=0x%lx step_after_syscall=0x%lx "
            "step_rep=0x%lx step_rep_insn=0x%lx step_after_rep=0x%lx hw_code=0x%lx "
            "hw_after_write=0x%lx hw_after_read=0x%lx watched=0x%lx watched_other=0x%lx "
-           "counters=0x%lx smc=0x%lx tf_probe=0x%lx worker=0x%lx main=0x%lx on_usr1=0x%lx round_now=0x%lx pid=%d\n",
+           "counters=0x%lx smc=0x%lx tf_probe=0x%lx worker=0x%lx main=0x%lx on_usr1=0x%lx round_now=0x%lx go=0x%lx pid=%d\n",
            (unsigned long)step_syscall, (unsigned long)step_syscall_insn,
            (unsigned long)step_after_syscall, (unsigned long)step_rep,
            (unsigned long)step_rep_insn, (unsigned long)step_after_rep,
@@ -231,7 +235,9 @@ int main(int argc, char **argv)
            (unsigned long)hw_after_read, (unsigned long)&watched,
            (unsigned long)&watched_other, (unsigned long)counters, (unsigned long)smc,
            (unsigned long)tf_probe, (unsigned long)worker, (unsigned long)main,
-           (unsigned long)on_usr1, (unsigned long)&round_now, getpid());
+           (unsigned long)on_usr1, (unsigned long)&round_now, (unsigned long)&go, getpid());
+    if (argc > 4 && !strcmp(argv[4], "gate"))
+        while (!go) usleep(1000);
     main_thread = pthread_self();
     if (!strcmp(mode, "threads"))
         for (long i = 0; i < workers; i++) pthread_create(&threads[i], NULL, worker, (void *)i);
