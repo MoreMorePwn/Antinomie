@@ -108,7 +108,7 @@ fn realistic_options_hide_the_hypervisor_and_carry_the_identity() {
     let dir = std::env::temp_dir().join(format!("ant-stealth-{}", unique_id()));
     std::fs::create_dir_all(&dir).unwrap();
     let mut command = Command::new("qemu");
-    apply(&mut command, &profile, &dir, 2048).unwrap();
+    apply(&mut command, &profile, &dir, 2048, 2).unwrap();
     let args: Vec<_> = command
         .get_args()
         .map(|arg| arg.to_string_lossy().into_owned())
@@ -158,7 +158,7 @@ fn commas_are_escaped_and_bad_addresses_are_refused() {
     let dir = std::env::temp_dir().join(format!("ant-stealth-{}", unique_id()));
     std::fs::create_dir_all(&dir).unwrap();
     let mut command = Command::new("qemu");
-    apply(&mut command, &profile, &dir, 2048).unwrap();
+    apply(&mut command, &profile, &dir, 2048, 2).unwrap();
     let args: Vec<_> = command
         .get_args()
         .map(|arg| arg.to_string_lossy().into_owned())
@@ -193,7 +193,7 @@ fn launch_tables(
     let dir = std::env::temp_dir().join(format!("ant-stealth-{}", unique_id()));
     std::fs::create_dir_all(&dir).unwrap();
     let mut command = Command::new("qemu");
-    apply(&mut command, profile, &dir, ram_mib).unwrap();
+    apply(&mut command, profile, &dir, ram_mib, 2).unwrap();
     let tables = std::fs::read_dir(&dir)
         .unwrap()
         .map(|entry| {
@@ -254,7 +254,6 @@ fn no_profile_leaves_an_smbios_field_to_qemu() {
     let required: &[(&str, &[&str])] = &[
         ("type=1", &["manufacturer", "product", "version"]),
         ("type=2", &["manufacturer", "product", "version"]),
-        ("type=4", &["sock_pfx", "manufacturer", "version"]),
     ];
     let mut checked = 0;
     for machine in MACHINES {
@@ -291,18 +290,6 @@ fn no_profile_leaves_an_smbios_field_to_qemu() {
                         machine.id
                     );
                 }
-                if *kind == "type=4" {
-                    let socket = &fields
-                        .iter()
-                        .find(|(name, _)| name == "sock_pfx")
-                        .unwrap()
-                        .1;
-                    assert_eq!(socket, &machine.fields.cpu_socket, "{}", machine.id);
-                    if host_cpu_speeds().is_some() {
-                        assert!(arg.contains(",max-speed="), "{arg}");
-                        assert!(arg.contains(",current-speed="), "{arg}");
-                    }
-                }
                 if *kind == "type=2" {
                     let version = &fields.iter().find(|(name, _)| name == "version").unwrap().1;
                     let template = machine.fields.board_versions.iter().find(|template| {
@@ -319,7 +306,7 @@ fn no_profile_leaves_an_smbios_field_to_qemu() {
                     );
                 }
             }
-            for kind in ["type=0", "type=3", "type=17"] {
+            for kind in ["type=0", "type=3", "type=4", "type=16", "type=17"] {
                 assert!(
                     !args.iter().any(|arg| arg.starts_with(kind)),
                     "{}: {kind} is a table of its own",
@@ -333,11 +320,19 @@ fn no_profile_leaves_an_smbios_field_to_qemu() {
             ] {
                 assert!(tables.contains_key(name), "{}: {name}", machine.id);
             }
-            // 40 GiB is three modules of up to 16 GiB, as QEMU counts them.
-            let modules = if ram_mib > 32 * 1024 { 3 } else { 1 };
-            for index in 0..modules {
+            // The modules add up to the RAM, each a part of the machine's
+            // (or the identity's own) in the machine's next slot; slots the
+            // modules leave are empty devices.
+            let plan = memory::module_plan(&id.with_firmware_fields(), u64::from(ram_mib));
+            assert_eq!(
+                plan.iter().map(|module| module.size_mib).sum::<u64>(),
+                u64::from(ram_mib),
+                "{}",
+                machine.id
+            );
+            for (index, module) in plan.iter().enumerate() {
                 let memory = &tables[&format!("smbios-memory-{index}.bin")];
-                let expected_type = match id.memory_type {
+                let expected_type = match module.memory_type {
                     0 => 0x1a,
                     kind => kind,
                 };
@@ -345,16 +340,22 @@ fn no_profile_leaves_an_smbios_field_to_qemu() {
                     (memory[0], memory[1], memory[0x12]),
                     (17, 0x28, expected_type)
                 );
-                assert_eq!(memory[0x0e], id.with_firmware_fields().memory_form);
+                assert_eq!(memory[0x0e], module.form.max(1));
                 let strings = table_strings(memory);
                 let slot =
                     machine.fields.dimm_slots[index.min(machine.fields.dimm_slots.len() - 1)];
                 if index < machine.fields.dimm_slots.len() {
                     assert_eq!(strings[0], slot.0, "{}", machine.id);
                 }
-                assert!(strings.contains(&id.memory_part), "{}", machine.id);
+                assert!(strings.contains(&module.part), "{}", machine.id);
             }
-            assert!(!tables.contains_key(&format!("smbios-memory-{modules}.bin")));
+            let slots = id.with_firmware_fields().memory_slots.len().min(4);
+            for index in plan.len()..slots {
+                let memory = &tables[&format!("smbios-memory-{index}.bin")];
+                assert_eq!(u16::from_le_bytes([memory[0x0c], memory[0x0d]]), 0);
+            }
+            assert!(tables.contains_key("smbios-memory-array.bin"));
+            assert!(tables.contains_key("smbios-processor-0.bin"));
             let chassis = &tables["smbios-chassis.bin"];
             let strings = table_strings(chassis);
             let named = |index: u8| match index {
@@ -438,7 +439,8 @@ fn processor_speeds_and_family_come_from_the_host_cpu() {
 fn memory_devices_follow_the_ram_size_in_the_machines_slots() {
     let profile = pinned(StealthPreset::RealisticLaptop, "dell-latitude-5420");
     let id = profile.identity.with_firmware_fields();
-    let tables = smbios::memory_tables(&id, 20 * 1024, false);
+    let tables = memory::memory_tables(&id, 20 * 1024, false);
+    // 20 GiB is a 16 and a 4 GiB module, the machine's two slots.
     assert_eq!(tables.len(), 2);
     let size = |table: &Vec<u8>| u16::from_le_bytes([table[0x0c], table[0x0d]]);
     assert_eq!((size(&tables[0]), size(&tables[1])), (16 * 1024, 4 * 1024));
@@ -450,25 +452,184 @@ fn memory_devices_follow_the_ram_size_in_the_machines_slots() {
         (13, 0x80, 64)
     );
     assert_eq!((tables[1][2], tables[1][3]), (0x01, 0x11));
-    // Three modules; a server's are ECC, 72 bits wide.
+    // A server with 48 GiB: three 16 GiB ECC modules, 72 bits wide, and an
+    // empty fourth slot.
     let server_id = pinned(StealthPreset::RealisticServer, "dell-poweredge-r240")
         .identity
         .with_firmware_fields();
-    let server = smbios::memory_tables(&server_id, 16 * 1024 * 3, true);
-    assert_eq!(server.len(), 3);
+    let server = memory::memory_tables(&server_id, 16 * 1024 * 3, true);
+    assert_eq!(server.len(), server_id.memory_slots.len().min(4));
     assert_eq!(server[0][0x08], 72);
-    // More modules than the machine has slots: named as such a board would.
+    assert_eq!(size(&server[2]), 16 * 1024);
+    assert_eq!(size(&server[3]), 0);
+    // More modules than the machine has slots (an edited identity with no
+    // catalog part): named as such a board would.
     let mut one_slot = id.clone();
     one_slot.memory_slots.truncate(1);
-    let tables = smbios::memory_tables(&one_slot, 20 * 1024, false);
+    one_slot.memory_part = "EDITED".into();
+    let tables = memory::memory_tables(&one_slot, 20 * 1024, false);
     assert_eq!(table_strings(&tables[1])[0], "DIMM2");
+}
+
+#[test]
+fn modules_are_parts_of_the_size_the_vm_has() {
+    for machine in MACHINES {
+        let first = MachineIdentity::first_listed(machine);
+        for gib in [2u64, 3, 4, 6, 8, 12, 16, 20, 24, 32, 48, 64] {
+            let ram = gib * 1024;
+            let plan = memory::module_plan(&first, ram);
+            assert_eq!(
+                plan.iter().map(|module| module.size_mib).sum::<u64>(),
+                ram,
+                "{}: {gib} GiB",
+                machine.id
+            );
+            assert!(plan.len() <= 4.max(ram.div_ceil(16 * 1024) as usize));
+            // Every module is a catalog part of its size; only the last of
+            // a total no mix of parts adds up to takes the exact remainder.
+            let mut odd = 0;
+            for module in &plan {
+                let part = machine.memory.iter().find(|part| {
+                    part.part == module.part && part.manufacturer == module.manufacturer
+                });
+                let part = part.unwrap_or_else(|| panic!("{}: {}", machine.id, module.part));
+                odd += usize::from(u64::from(part.size_mib) != module.size_mib);
+            }
+            // More than the slots can hold of the catalog's largest part is
+            // named after the identity's own part (QEMU's 16 GiB count).
+            let biggest = machine
+                .memory
+                .iter()
+                .map(|part| u64::from(part.size_mib))
+                .max();
+            if ram <= biggest.unwrap_or(0) * first.memory_slots.len().clamp(1, 4) as u64 {
+                assert!(odd <= 1, "{}: {gib} GiB", machine.id);
+            }
+        }
+        // The common sizes are one or two equal modules of a real part.
+        for gib in [8u64, 16] {
+            let plan = memory::module_plan(&first, gib * 1024);
+            assert!(plan.len() <= 2, "{}: {gib} GiB", machine.id);
+            assert!(
+                plan.iter().all(|module| {
+                    machine.memory.iter().any(|part| {
+                        part.part == module.part && u64::from(part.size_mib) == module.size_mib
+                    })
+                }),
+                "{}: {gib} GiB",
+                machine.id
+            );
+        }
+    }
+}
+
+#[test]
+fn memory_array_holds_the_modules_and_empty_slots() {
+    let id = pinned(StealthPreset::RealisticLaptop, "dell-latitude-5420")
+        .identity
+        .with_firmware_fields();
+    let array = memory::array_table(&id, 16 * 1024, false);
+    assert_eq!(
+        (array[0], array[1], array[2], array[3]),
+        (16, 0x17, 0x00, 0x10)
+    );
+    // System board, system memory, no ECC.
+    assert_eq!(array[4..7], [3, 3, 3]);
+    let kib = u32::from_le_bytes([array[7], array[8], array[9], array[10]]);
+    assert!(u64::from(kib) >= 16 * 1024 * 1024);
+    assert_eq!(u16::from_le_bytes([array[13], array[14]]), 2);
+}
+
+#[test]
+fn processor_is_one_whole_table_with_its_caches() {
+    let id = pinned(StealthPreset::RealisticLaptop, "dell-latitude-5420")
+        .identity
+        .with_firmware_fields();
+    let Some(processor) = processor::Processor::of_host(&id, 2, 4) else {
+        return;
+    };
+    let tables = processor.tables();
+    let table = tables.last().unwrap();
+    assert_eq!(
+        (table[0], table[1], table[2], table[3]),
+        (4, 0x30, 0x00, 0x04)
+    );
+    // The socket designation is the catalog's, with no number after it.
+    let strings = table_strings(table);
+    assert_eq!(strings[0], id.cpu_socket);
+    assert!(!strings.iter().any(|s| s.contains("QEMU")));
+    // Cores 2, enabled 2, threads 4.
+    assert_eq!(table[0x23..0x26], [2, 2, 4]);
+    // Voltage and upgrade from the catalog; external clock 100 MHz.
+    assert_eq!(table[0x11], 0x80 | id.cpu_voltage);
+    assert_eq!(table[0x19], id.cpu_upgrade);
+    assert_eq!(u16::from_le_bytes([table[0x12], table[0x13]]), 100);
+    // Cache handles point at type 7 tables written with it.
+    for (index, handle) in [(0x1a, 0x0700u16), (0x1c, 0x0701), (0x1e, 0x0702)] {
+        let given = u16::from_le_bytes([table[index], table[index + 1]]);
+        if given != 0xffff {
+            assert_eq!(given, handle);
+            assert!(
+                tables
+                    .iter()
+                    .any(|t| t[0] == 7 && t[2..4] == handle.to_le_bytes())
+            );
+        }
+    }
+}
+
+#[test]
+fn processor_signature_follows_family_model_and_stepping() {
+    // Intel family 6 model 0x8c stepping 1 (Tiger Lake): 806C1.
+    assert_eq!(processor::signature_eax(6, 0x8c, 1), 0x0008_06c1);
+    // AMD family 0x19 model 0x50 stepping 0 (Cezanne): A50F00.
+    assert_eq!(processor::signature_eax(0x19, 0x50, 0), 0x00a5_0f00);
+    assert_eq!(processor::cache_kib("32K"), Some(32));
+    assert_eq!(processor::cache_kib("1M"), Some(1024));
+}
+
+#[test]
+fn network_chip_fit_is_listed_for_every_machine() {
+    for machine in MACHINES {
+        let fit = machine.nic_fit();
+        let chip = machine.nic_chip;
+        match fit {
+            NicFit::Same => assert!(chip.contains("I219"), "{}: {chip}", machine.id),
+            NicFit::OtherIntel => assert!(chip.starts_with("Intel"), "{}", machine.id),
+            NicFit::OtherMaker => assert!(
+                chip.contains("Realtek") || chip.contains("Broadcom"),
+                "{}: {chip}",
+                machine.id
+            ),
+        }
+        let mut profile = pinned(machine.kind, machine.id);
+        profile.nic = NicModel::E1000e;
+        assert_eq!(
+            profile
+                .giveaways()
+                .iter()
+                .any(|text| text.starts_with("network chip is Intel 82574L")),
+            fit != NicFit::Same,
+            "{}",
+            machine.id
+        );
+    }
+}
+
+#[test]
+fn dell_board_serials_carry_a_cn_number() {
+    let dell = pinned(StealthPreset::RealisticLaptop, "dell-latitude-5420").identity;
+    let parts: Vec<&str> = dell.board_serial.split('/').collect();
+    assert_eq!(parts.len(), 4);
+    assert_eq!(parts[1], dell.system_serial);
+    assert!(parts[2].starts_with("CN") && parts[2].len() == 14);
 }
 
 fn launch_args(profile: &StealthProfile) -> Vec<String> {
     let dir = std::env::temp_dir().join(format!("ant-stealth-{}", unique_id()));
     std::fs::create_dir_all(&dir).unwrap();
     let mut command = Command::new("qemu");
-    apply(&mut command, profile, &dir, 2048).unwrap();
+    apply(&mut command, profile, &dir, 2048, 2).unwrap();
     std::fs::remove_dir_all(dir).unwrap();
     command
         .get_args()
@@ -1027,7 +1188,12 @@ fn every_catalog_value_is_listed_with_its_source() {
         }
         for part in machine.memory {
             assert!(
-                listed(&format!("{} {}", part.manufacturer, part.part.trim_end())),
+                listed(&format!(
+                    "{} {} ({} GiB)",
+                    part.manufacturer,
+                    part.part.trim_end(),
+                    part.size_mib / 1024
+                )),
                 "{}: memory {}",
                 machine.id,
                 part.part
@@ -1349,7 +1515,7 @@ fn a_run_records_the_machine_its_guest_looked_like() {
         vendor: "GenuineIntel".into(),
         generation: Some(CpuGen::Core13Plus),
     };
-    let record = MachineRecord::of(&profile, &host);
+    let record = MachineRecord::of(&profile, &host, 2048);
     assert_eq!(record.machine, "Dell OptiPlex 7090");
     assert_eq!(record.profile, "dell-optiplex-7090");
     assert_eq!(
@@ -1381,8 +1547,12 @@ fn a_run_records_the_machine_its_guest_looked_like() {
         vendor: "GenuineIntel".into(),
         generation: Some(CpuGen::Core11),
     };
-    assert!(MachineRecord::of(&profile, &fitting).cpu_note.is_none());
-    let plain = MachineRecord::of(&StealthProfile::transparent(), &fitting);
+    assert!(
+        MachineRecord::of(&profile, &fitting, 2048)
+            .cpu_note
+            .is_none()
+    );
+    let plain = MachineRecord::of(&StealthProfile::transparent(), &fitting, 2048);
     assert_eq!(plain.summary(), "Transparent (QEMU's own identity)");
     assert!(plain.profile.is_empty() && plain.nic_chip.is_empty());
 }

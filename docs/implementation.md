@@ -3082,10 +3082,10 @@ stored in the VM's configuration, so a boot never picks again. Each run saves a
 `MachineRecord` (`RunSummary::machine`: machine, BIOS, SKU, board, disk, memory,
 NIC chip, host CPU generation, any CPU note; no serials) for reading its results
 against the identity it was seen under. Limits: QEMU's card is an e1000e (Intel
-82574L) even where the machine's chip is Realtek or Broadcom; QEMU's NVMe
-controller names itself, so the disk is SATA even on laptops whose M.2 slots
-are NVMe-only (the ThinkPads: class C in the sources); the module's part number
-names a capacity the VM's RAM size may not match. Not done: guest hostname, user
+82574L) even where the machine's chip is Realtek or Broadcom (a listed giveaway);
+QEMU's NVMe controller names itself, so the disk is SATA even on laptops whose M.2
+slots are NVMe-only (the ThinkPads: class C in the sources; a 0.9.0 card);
+a RAM size no module combination makes names a larger part. Not done: guest hostname, user
 and locale, and importing a profile from a machine the user owns.
 
 **No SMBIOS field left to QEMU (0.8.0).** QEMU fills some SMBIOS fields with
@@ -3110,14 +3110,50 @@ real unit whose firmware leaves the field unset; HP's single space is passed as
 such). Type 4 also gets the host CPU's maximum and base clock (cpufreq, else the
 brand string's "@ 2.90GHz", else `/proc/cpuinfo`) and its SMBIOS family from the
 brand (Core i3/i5/i7/i9, Xeon, Pentium, Celeron, Zen). The memory devices are
-written whole (`smbios::memory_tables`, one per 16 GiB module as QEMU's type 16
-array counts them, handles from 0x1100): DDR4-3200, rank 1, 1.2 V, 64 bits wide
-(72 for a server's ECC modules), in the machine's slots, form factor and type
-detail. The chassis table's version and SKU follow the machine, its asset tag
-is string 0. Limits: QEMU numbers the socket after the prefix (`U3E1 0`, a real
-unit prints `U3E1`), and type 4's voltage, external clock, upgrade and cache
-handles stay QEMU's (only a whole type 4 table, which must repeat the vCPU's
-CPUID signature, could set them).
+written whole (see below). The chassis table's version and SKU follow the
+machine, its asset tag is string 0.
+
+**Whole processor, memory and cache tables (0.8.0).** `processor.rs` writes the
+processor as a PC's firmware does, in place of QEMU's `-smbios type=4` (which
+numbers the socket after the designation, `U3E1 0`, and keeps a made-up voltage,
+upgrade and unset cache handles): type 4 (handle 0x0400, 0x30 bytes) with the
+socket from the catalog, the host CPU's CPUID leaf 1 as the ID (EAX from
+/proc/cpuinfo family, model and stepping, EDX the common 0xBFEBFBFF or
+0x178BFBFF), voltage and upgrade code from the machine's `SmbiosFields`
+(`cpu_voltage`, `cpu_upgrade`: the most common value in its reports), external
+clock 100 MHz (every report), core, enabled-core and thread counts from the VM's
+topology, characteristics from the host's flags, and type 7 tables (0x0700 to
+0x0702) for the L1 (instruction and data summed, times cores), L2 and L3 of the
+host's cpu0 cache directory, which the type 4 points at. A VM with a socket per
+vCPU (topology setting off) keeps QEMU's option. `memory.rs` writes the memory
+array (type 16, 0x1000) with the number of slots and the capacity of the slots
+at the largest module the machine's catalog lists (not from a source), and the
+devices (type 17, from 0x1100): `module_plan` picks catalog parts whose sizes
+add up to the VM's RAM, in the identity's part's family (type, form factor,
+width): one module up to 8 GiB, two equal modules above, then one to four
+modules of different sizes, then the largest parts that fit with the rest in a
+last module of the smallest part (a total no real module combination makes,
+such as 2 GiB, whose module then names a larger part); an edited identity (its
+part not in the catalog) keeps its own part in modules of up to 16 GiB. Slots
+the modules leave are empty devices ("No Module Installed"). Every machine lists
+parts of 4, 8, 16 and 32 GiB (8 to 64 for servers; LPDDR5 soldered parts only
+those of its reports); a size missing from a model's own reports is taken from
+another machine's (class B in the sources). `MachineRecord::of` takes the VM's
+RAM size and records the part the plan picks. `apply` takes the vCPU count.
+
+**Network chip.** QEMU 11 emulates Intel (82574L e1000e, 82540EM, 82576 igb, i82550
+to i82559, 82801), Realtek RTL8139, AMD pcnet, tulip, ne2k, vmxnet3, virtio, not
+the PCIe Realtek RTL8168/8111 or Broadcom NetXtreme (tg3) the catalog's
+Realtek and Broadcom machines have. The profile keeps the 82574L, which is
+the e1000e driver's chip (also the I219's driver) and exists on real boards;
+the RTL8139 is a 1997 100 Mbit PCI chip (10ec:8139) on none of the catalog's
+machines and shows only in VMs, and has no subsystem ID to set. `MachineProfile::nic_fit`
+says per machine whether the chip is the same driver (`Same`: I219), another Intel
+chip (`OtherIntel`: I210, an igb part; QEMU's igb would be closer but the guest
+kernel has no CONFIG_IGB) or another maker (`OtherMaker`), and `giveaways()`
+lists the last two. Dell's board serial is `/<tag>/CN<12>/` (a public dmidecode
+listing); no public source shows the other makers' board, chassis or disk serial
+formats (reports hide them), so those keep their current formats.
 
 **Fitting to the base and the host.** Some entries need the base or the host.
 A base says what it boots with in `bundle.json` `stealth_support` (advisory,

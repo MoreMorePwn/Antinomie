@@ -3,7 +3,7 @@
 //! differs from QEMU's defaults, so a Transparent profile launches as before.
 use super::{
     DiskBus, DiskMedia, Firmware, NicModel, NicSlot, Pointer, RtcClock, SmbiosEntry, StealthPreset,
-    StealthProfile, firmware, host_cpu_vendor, host_cpuinfo, smbios,
+    StealthProfile, firmware, host_cpu_vendor, host_cpuinfo, memory, processor, smbios,
 };
 use std::{path::Path, process::Command};
 
@@ -317,6 +317,42 @@ pub(super) fn host_cpu_speeds() -> Option<(u16, u16)> {
     )
 }
 
+/// QEMU's own type 4 option, for a VM with a socket per vCPU.
+fn processor_option(id: &super::MachineIdentity) -> String {
+    let (cpu_vendor, cpu_name) = (
+        host_cpu_vendor(),
+        host_cpuinfo("model name").unwrap_or_default(),
+    );
+    let cpu_maker = match cpu_vendor.as_str() {
+        "GenuineIntel" => "Intel(R) Corporation",
+        "AuthenticAMD" => "Advanced Micro Devices, Inc.",
+        _ => "",
+    };
+    let socket = match (id.cpu_socket.as_str(), cpu_vendor.as_str()) {
+        ("", "AuthenticAMD") => "AM4",
+        ("", _) => "U3E1",
+        (socket, _) => socket,
+    };
+    let part = if id.cpu_part.is_empty() {
+        String::new()
+    } else {
+        format!(",part={}", escape(&id.cpu_part))
+    };
+    let mut processor = format!(
+        "type=4,sock_pfx={},manufacturer={},version={}{part}",
+        escape(socket),
+        escape(cpu_maker),
+        escape(&cpu_name)
+    );
+    if let Some((max, current)) = host_cpu_speeds() {
+        processor.push_str(&format!(",max-speed={max},current-speed={current}"));
+    }
+    if let Some(family) = processor_family(&cpu_name) {
+        processor.push_str(&format!(",processor-family={family}"));
+    }
+    processor
+}
+
 /// SMBIOS, device identity, CD-ROM and clock options; the BIOS, chassis and
 /// memory device tables are written into `runtime_dir`. Every SMBIOS field
 /// QEMU fills with its own value when it is left out (its name, "Standard
@@ -327,6 +363,7 @@ pub(crate) fn apply(
     profile: &StealthProfile,
     runtime_dir: &Path,
     ram_mib: u32,
+    cpus: u16,
 ) -> Result<(), String> {
     profile.validate()?;
     let mut rtc = Vec::new();
@@ -389,35 +426,22 @@ pub(crate) fn apply(
         field("serial", &id.board_serial),
         field("location", &id.board_location)
     ));
-    let (cpu_vendor, cpu_name) = (
-        host_cpu_vendor(),
-        host_cpuinfo("model name").unwrap_or_default(),
-    );
-    let cpu_maker = match cpu_vendor.as_str() {
-        "GenuineIntel" => "Intel(R) Corporation",
-        "AuthenticAMD" => "Advanced Micro Devices, Inc.",
-        _ => "",
-    };
-    let socket = match (id.cpu_socket.as_str(), cpu_vendor.as_str()) {
-        ("", "AuthenticAMD") => "AM4",
-        ("", _) => "U3E1",
-        (socket, _) => socket,
-    };
-    // QEMU numbers the socket after this prefix ("U3E1 0").
-    let mut processor = format!(
-        "type=4{}{}{}{}",
-        given("sock_pfx", socket),
-        given("manufacturer", cpu_maker),
-        given("version", &cpu_name),
-        field("part", &id.cpu_part)
-    );
-    if let Some((max, current)) = host_cpu_speeds() {
-        processor.push_str(&format!(",max-speed={max},current-speed={current}"));
+    // One physical processor, whole, when the VM has one socket; QEMU's own
+    // option (a socket per vCPU, each numbered after the designation) when
+    // the topology is not the realistic one.
+    let per_core = if smt(profile, cpus) { 2 } else { 1 };
+    let processor = profile
+        .realistic_topology
+        .then(|| processor::Processor::of_host(id, cpus.div_ceil(per_core).max(1), cpus.max(1)))
+        .flatten();
+    if let Some(processor) = processor {
+        for (index, table) in processor.tables().into_iter().enumerate() {
+            let file = write_table(&format!("smbios-processor-{index}.bin"), table)?;
+            command.arg("-smbios").arg(file);
+        }
+    } else {
+        command.arg("-smbios").arg(processor_option(id));
     }
-    if let Some(family) = processor_family(&cpu_name) {
-        processor.push_str(&format!(",processor-family={family}"));
-    }
-    command.arg("-smbios").arg(processor);
     if !id.oem_strings.is_empty() {
         let values: String = id
             .oem_strings
@@ -430,7 +454,12 @@ pub(crate) fn apply(
         || super::MACHINES.iter().any(|machine| {
             machine.id == id.profile && machine.kind == StealthPreset::RealisticServer
         });
-    for (index, table) in smbios::memory_tables(id, u64::from(ram_mib), ecc)
+    let array = write_table(
+        "smbios-memory-array.bin",
+        memory::array_table(id, u64::from(ram_mib), ecc),
+    )?;
+    command.arg("-smbios").arg(array);
+    for (index, table) in memory::memory_tables(id, u64::from(ram_mib), ecc)
         .into_iter()
         .enumerate()
     {

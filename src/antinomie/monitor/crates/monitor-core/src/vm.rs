@@ -598,7 +598,7 @@ impl VmProcess {
         apply_launch_settings(
             &mut cmd, options, &vm.launch, &stealth, vm.cpus, &boot, bootstrap,
         )?;
-        crate::stealth::apply(&mut cmd, &stealth, &runtime_dir, vm.ram_mib)?;
+        crate::stealth::apply(&mut cmd, &stealth, &runtime_dir, vm.ram_mib, vm.cpus)?;
         crate::stealth::firmware_args(
             &mut cmd,
             &stealth,

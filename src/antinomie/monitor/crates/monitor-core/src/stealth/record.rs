@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The machine a run's guest looked like, saved with the run so a result can
 //! be read against the identity it was seen under.
-use super::{HostCpu, MACHINES, StealthProfile};
+use super::{HostCpu, MACHINES, StealthProfile, memory};
 use serde::{Deserialize, Serialize};
 
 /// The identity a VM showed when a run started. Serial numbers, the UUID and
@@ -32,7 +32,9 @@ pub struct MachineRecord {
 }
 
 impl MachineRecord {
-    pub fn of(profile: &StealthProfile, host: &HostCpu) -> Self {
+    /// The record of `profile` for a VM with `ram_mib` of memory, whose
+    /// modules follow from it.
+    pub fn of(profile: &StealthProfile, host: &HostCpu, ram_mib: u32) -> Self {
         let identity = &profile.identity;
         let known = MACHINES
             .iter()
@@ -52,7 +54,10 @@ impl MachineRecord {
             board_product: identity.board_product.clone(),
             chassis_type: identity.chassis_type,
             disk_model: identity.disk_model.clone(),
-            memory_part: identity.memory_part.clone(),
+            memory_part: memory::module_plan(&identity.with_firmware_fields(), u64::from(ram_mib))
+                .into_iter()
+                .next()
+                .map_or_else(|| identity.memory_part.clone(), |module| module.part),
             nic_chip: known
                 .map(|machine| machine.nic_chip.to_owned())
                 .unwrap_or_default(),

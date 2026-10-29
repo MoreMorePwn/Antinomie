@@ -73,6 +73,11 @@ pub(super) struct SmbiosFields {
     /// Processor (type 4) socket designation and part number.
     pub(super) cpu_socket: &'static str,
     pub(super) cpu_part: &'static str,
+    /// Processor upgrade (socket) code of SMBIOS type 4: 0x01 other, 0x06
+    /// none, 0x31 AM4, 0x32 LGA1151, 0x37 SP3, 0x3e LGA1200; and the voltage
+    /// in tenths of a volt the units report (it differs by CPU).
+    pub(super) cpu_upgrade: u8,
+    pub(super) cpu_voltage: u8,
     /// Memory device (type 17) locator and bank locator of each slot of one
     /// real unit, the slot a single module sits in first.
     pub(super) dimm_slots: &'static [(&'static str, &'static str)],
@@ -124,7 +129,48 @@ pub struct MachineProfile {
     pub(super) cdrom: bool,
 }
 
+/// How the emulated card (QEMU's Intel 82574L, driver e1000e) compares with
+/// the chip the machine has. QEMU 11 emulates no Realtek PCIe or Broadcom
+/// chip; its RTL8139 (10ec:8139, 100 Mbit PCI) is on no catalog machine and
+/// shows only in VMs, so it would be the stronger giveaway.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NicFit {
+    /// The machine's chip uses the e1000e driver (I219, 82574L).
+    Same,
+    /// Another Intel chip (I210, driver igb): the guest kernel has no igb,
+    /// which is QEMU's other real Intel card.
+    OtherIntel,
+    /// A Realtek or Broadcom chip.
+    OtherMaker,
+}
+
+impl NicFit {
+    /// The giveaway this leaves, if any.
+    pub fn giveaway(self) -> Option<&'static str> {
+        match self {
+            Self::Same => None,
+            Self::OtherIntel => {
+                Some("network chip is Intel 82574L, the machine's is another Intel chip")
+            }
+            Self::OtherMaker => {
+                Some("network chip is Intel 82574L, the machine's is a Realtek or Broadcom chip")
+            }
+        }
+    }
+}
+
 impl MachineProfile {
+    /// How the VM's card compares with this machine's network chip.
+    pub fn nic_fit(&self) -> NicFit {
+        if self.nic_chip.contains("I219") || self.nic_chip.contains("82574") {
+            NicFit::Same
+        } else if self.nic_chip.starts_with("Intel") {
+            NicFit::OtherIntel
+        } else {
+            NicFit::OtherMaker
+        }
+    }
+
     /// Whether a CPU of the host's generation shipped in this machine; None
     /// when the host's generation is not known.
     pub fn fits(&self, host: &HostCpu) -> Option<bool> {

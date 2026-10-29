@@ -15,13 +15,18 @@ The collection scripts are kept with the project private evidence of task ANT-T0
 | B | seen in a real unit of another model (reason given) |
 | C | not possible as a real combination, or not verified (decision needed) |
 
-Counts: 1533 values of class A, 31 of class B, 13 of class C.
+Counts: 1643 values of class A, 72 of class B, 13 of class C.
 
 **Weights.** A machine's `weight` is the number of public dmidecode reports of the model in linuxhw/DMI on 2026-10-27 (all variants of the model counted). That is how often Linux users who ran hw-probe uploaded one, not a sales figure; it only orders models against each other within a preset.
 
 **Not sourced, generated per VM.** Serial numbers (system, board, chassis, disk, memory), the system UUID, the MAC address and the disk WWN's last nine digits are random per VM. Their formats (`SerialStyle` in `catalog.rs`, the board serial's `/serial/…/` form, the disk serial prefixes in `parts.rs`) are not from a source: every public dump hides them. They are class C as a group.
 
-**Network card.** The VM's card is QEMU's e1000e (Intel 82574L) with the maker's PCI subsystem ID; on machines whose own chip is Realtek or Broadcom the chip itself differs (QEMU emulates neither).
+**Network card.** The VM's card is QEMU's e1000e (Intel 82574L) with the maker's PCI subsystem ID. QEMU 11.0.3 (`-device help`) offers Intel e1000, e1000e, igb (82576), i82550 to i82559, i82562, i82801, Realtek RTL8139, AMD pcnet, tulip, ne2k, vmxnet3 and virtio; no Realtek RTL8168/8111 (r8169) and no Broadcom (tg3). Decision (2026-10-29): keep the 82574L on Realtek and Broadcom machines as a listed giveaway (`MachineProfile::nic_fit`), because the RTL8139 (10ec:8139) is a 100 Mbit PCI chip of 1997 that no catalog machine has and that real PCs of this age almost never show, and it takes no subsystem ID. The I210 machine (igb driver) would fit QEMU's igb better, but the guest kernel has no CONFIG_IGB (proposal for a guest card).
+
+**Processor (SMBIOS type 4) and caches.** Voltage and upgrade code are per machine, the most common value in its reports (class A below); the external clock is 100 MHz in every report. The ID is the host CPU's CPUID leaf 1; the characteristics, core and thread counts and the caches come from the VM's topology and the host's cache directory (nothing hidden or invented).
+
+**Memory.** Every machine lists modules of 4, 8, 16 and 32 GiB (servers 8 to 64): its own reports' parts first (class A); for a size they do not show, a part of the same maker from another machine's report, else a part of the same type, form factor, width and speed or lower (class B, the report and machine named). The memory array's slot count is the machine's listed slots (up to four) and its capacity is the slots times the largest listed module: derived, not in a source (class C as a group, like the serial formats). Dell board serials are `/<service tag>/CN<12 characters>/` as in the public listing at https://www.unixtutorial.org/great-things-you-can-confirm-with-dmidecode/ ; no public source shows the HP, Lenovo or Supermicro board, chassis or disk serial formats, so those keep their current form.
+
 
 ## Dell OptiPlex 7090 (`dell-optiplex-7090`)
 
@@ -62,13 +67,18 @@ Counts: 1533 values of class A, 31 of class B, 13 of class C.
 | chassis_sku | `Desktop` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207090/0EE8CCE625A1) |  |
 | cpu_socket | `U3E1` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207090/0EE8CCE625A1) |  |
 | cpu_part | ` ` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207090/0EE8CCE625A1) |  |
+| cpu_upgrade | `0x3e` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207090/114DD2D67E67) | SMBIOS upgrade code |
+| cpu_voltage | `1.2 V` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207090/114DD2D67E67) | the most common reading; it differs by CPU |
 | board version | `A00` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207090/0EE8CCE625A1) |  |
 | board version | `A01` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207090/23543D1DA7E1) |  |
 | memory slots | `DIMM1/; DIMM3/ ; DIMM4/ ; DIMM2/` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207090/114DD2D67E67) |  |
-| memory | `01980000802C K9CXF2-MIE` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207090/93D3CA40FE69) |  |
-| memory | `802C0000802C 8ATF1G64AZ-2G3E1` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207090/A73F0F85C4E4) |  |
-| memory | `802C0000802C 8ATF2G64AZ-3G2E1` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207090/23543D1DA7E1) |  |
-| memory | `80AD000080AD HMAA1GU6CJR6N-XN` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207090/2890AA67531C) |  |
+| memory | `01980000802C K9CXF2-MIE (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207090/93D3CA40FE69) |  |
+| memory | `802C0000802C 8ATF1G64AZ-2G3E1 (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207090/A73F0F85C4E4) |  |
+| memory | `802C0000802C 8ATF2G64AZ-3G2E1 (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207090/23543D1DA7E1) |  |
+| memory | `80CE000080CE M378A2G43MX3-CWE (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207090/114DD2D67E67) |  |
+| memory | `01980000802C K36FTX-MIR (4 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207090/E93970759FED) |  |
+| memory | `802C0000802C 4ATF51264AZ-3G2J1 (4 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207090/E93970759FED) |  |
+| memory | `80CE000080CE M378A4G43AB2-CWE (32 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207080/3AEFC11BB8D1) | no 32 GiB module with a part number in the reports of this model; the same maker's part in the reports of dell-optiplex-7080 |
 | disk | `Samsung SSD 860 EVO 250GB RVT02B6Q` | A | [report](https://github.com/linuxhw/Dmesg/blob/main/Desktop/Dell/OptiPlex/OptiPlex%207090/A73F0F85C4E4/OL-8.6/4.18.0-372.16.1.0.2.EL8_6.X86_64/X86_64/3BED97B23E) |  |
 | cdrom | `HL-DT-ST DVD+/-RW GU90N` | A | [report](https://github.com/linuxhw/Dmesg/blob/main/Desktop/Dell/OptiPlex/OptiPlex%207090/0EE8CCE625A1/DEBIAN-11/5.10.0-12-AMD64/X86_64/E167C05DD2) |  |
 
@@ -111,13 +121,18 @@ Counts: 1533 values of class A, 31 of class B, 13 of class C.
 | chassis_sku | `Desktop` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207080/0F7D6344353A) |  |
 | cpu_socket | `U3E1` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207080/0F7D6344353A) |  |
 | cpu_part | `` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207080/0F7D6344353A) |  |
+| cpu_upgrade | `0x01` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207080/0F7D6344353A) | SMBIOS upgrade code |
+| cpu_voltage | `0.8 V` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207080/0F7D6344353A) | the most common reading; it differs by CPU |
 | board version | `A01` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207080/0F7D6344353A) |  |
 | board version | `A00` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207080/182FBFE28FB8) |  |
 | memory slots | `DIMM1/; DIMM2/; DIMM3/; DIMM4/` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207080/0F7D6344353A) |  |
-| memory | `80AD000080AD HMA82GU6DJR8N-XN` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207080/6868666F3561) |  |
-| memory | `01980000802C 99U5734-056.A00G` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207080/4BD0B92B1363) |  |
-| memory | `80AD000080AD HMA81GU6DJR8N-XN` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207080/0F7D6344353A) |  |
-| memory | `80CE000080CE M378A4G43AB2-CWE` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207080/3AEFC11BB8D1) |  |
+| memory | `01980000802C 99U5734-056.A00G (32 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207080/4BD0B92B1363) |  |
+| memory | `80CE000080CE M378A4G43AB2-CWE (32 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207080/3AEFC11BB8D1) |  |
+| memory | `80AD000080AD HMA82GU6DJR8N-XN (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207080/6868666F3561) |  |
+| memory | `019400000194 SF4642G8CK8I8HLSBG (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207080/182FBFE28FB8) |  |
+| memory | `80AD000080AD HMA81GU6DJR8N-XN (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207080/0F7D6344353A) |  |
+| memory | `01980000830B 9905702-121.A00G (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207080/C351C78D0E87) |  |
+| memory | `01980000802C K36FTX-MIR (4 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207090/E93970759FED) | no 4 GiB module with a part number in the reports of this model; the same maker's part in the reports of dell-optiplex-7090 |
 | disk | `TOSHIBA-TR200 SBFA15.2` | A | [report](https://github.com/linuxhw/Dmesg/blob/main/Desktop/Dell/OptiPlex/OptiPlex%207080/E81F7BFF0FDF/GENTOO-2.8/5.16.11-GENTOO-X86_64/X86_64/76F13AA200) |  |
 | disk | `KINGSTON SA400S37240G SBFK71E0` | A | [report](https://github.com/linuxhw/Dmesg/blob/main/Desktop/Dell/OptiPlex/OptiPlex%207080/C00E5FD4B78E/FEDORA-36/5.19.11-200.FC36.X86_64/X86_64/73E69DEBD9) |  |
 
@@ -161,12 +176,16 @@ Counts: 1533 values of class A, 31 of class B, 13 of class C.
 | chassis_sku | `Desktop` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%205090/14C80413B16B) |  |
 | cpu_socket | `U3E1` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%205090/14C80413B16B) |  |
 | cpu_part | ` ` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%205090/14C80413B16B) |  |
+| cpu_upgrade | `0x3e` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%205090/377766EBD567) | SMBIOS upgrade code |
+| cpu_voltage | `0.8 V` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%205090/14C80413B16B) | the most common reading; it differs by CPU |
 | board version | `A00` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%205090/14C80413B16B) |  |
 | memory slots | `DIMM1/; DIMM3/ ; DIMM4/ ; DIMM2/` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%205090/377766EBD567) |  |
-| memory | `80CE000080CE M378A2G43AB3-CWE` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%205090/9F0B2A1BDB54) |  |
-| memory | `802C0000802C 16ATF2G64AZ-3G2E1` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%205090/FB31ED9F19B3) |  |
-| memory | `802C0000802C 8ATF2G64HZ-3G2E2` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%205090/E985DD9AAFE5) |  |
-| memory | `80AD000080AD HMAA1GU6CJR6N-XN` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%205090/769D0F6F7C54) |  |
+| memory | `80CE000080CE M378A2G43AB3-CWE (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%205090/9F0B2A1BDB54) |  |
+| memory | `802C0000802C 16ATF2G64AZ-3G2E1 (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%205090/FB31ED9F19B3) |  |
+| memory | `80AD000080AD HMAA1GU6CJR6N-XN (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%205090/769D0F6F7C54) |  |
+| memory | `0198000080AD 9905713-044.A00G (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%205090/8BCCC1D4B69B) |  |
+| memory | `01980000802C KCDT82-MIE (4 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%205090/14C80413B16B) |  |
+| memory | `80CE000080CE M378A4G43AB2-CWE (32 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207080/3AEFC11BB8D1) | no 32 GiB module with a part number in the reports of this model; the same maker's part in the reports of dell-optiplex-7080 |
 | disk | `Samsung SSD 860 EVO 250GB RVT02B6Q` | A | [report](https://github.com/linuxhw/Dmesg/blob/main/Desktop/Dell/OptiPlex/OptiPlex%207090/A73F0F85C4E4/OL-8.6/4.18.0-372.16.1.0.2.EL8_6.X86_64/X86_64/3BED97B23E) |  |
 
 ## Dell OptiPlex 3080 (`dell-optiplex-3080`)
@@ -211,13 +230,18 @@ Counts: 1533 values of class A, 31 of class B, 13 of class C.
 | chassis_sku | `Desktop` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%203080/0B33085DFA99) |  |
 | cpu_socket | `U3E1` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%203080/0B33085DFA99) |  |
 | cpu_part | `` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%203080/0B33085DFA99) |  |
+| cpu_upgrade | `0x01` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%203080/0B33085DFA99) | SMBIOS upgrade code |
+| cpu_voltage | `0.7 V` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%203080/107D164939BB) | the most common reading; it differs by CPU |
 | board version | `A00` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%203080/10E9173DF5CD) |  |
 | board version | `A01` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%203080/0B33085DFA99) |  |
 | memory slots | `DIMM1/; DIMM2/` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%203080/0B33085DFA99) |  |
-| memory | `80CE000080CE M471A1K43DB1-CTD` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%203080/8DB53B37F1CD) |  |
-| memory | `019400000194 SMS4WEC8C1K0446FCG` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%203080/0B33085DFA99) |  |
-| memory | `04CB000080AD AD4U3200J4G22-B` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%203080/60F90251CFDE) |  |
-| memory | `802C0000802C 4ATF1G64HZ-3G2B2` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%203080/10E9173DF5CD) |  |
+| memory | `80CE000080CE M471A1K43DB1-CTD (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%203080/8DB53B37F1CD) |  |
+| memory | `019400000194 SMS4WEC8C1K0446FCG (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%203080/0B33085DFA99) |  |
+| memory | `80AD000080AD HMAA2GS6CJR8N-XN (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%203080/A0C3EAB49CC2) |  |
+| memory | `01980000802C K1CXP8-MIE (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%203080/7C16E3FA9F59) |  |
+| memory | `04CB000080AD AD4U3200J4G22-B (4 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%203080/60F90251CFDE) |  |
+| memory | `019400000194 SMS4WEC3C0K0446SCG (4 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%203080/DC3824BFEF00) |  |
+| memory | `80CE000080CE M471A4G43AB1-CWE (32 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205520/516D58BED016) | no 32 GiB module with a part number in the reports of this model; the same maker's part in the reports of dell-latitude-5520 |
 | disk | `Samsung SSD 870 EVO 500GB SVT01B6Q` | A | [report](https://github.com/linuxhw/Dmesg/blob/main/Desktop/Dell/OptiPlex/OptiPlex%203080/2EF782A45D9E/UBUNTU-20.04/5.11.0-41-GENERIC/X86_64/2E0D1C92B2) |  |
 | disk | `PNY CS900 240GB SSD CS900J13` | A | [report](https://github.com/linuxhw/Dmesg/blob/main/Desktop/Dell/OptiPlex/OptiPlex%203080/2EF782A45D9E/UBUNTU-20.04/5.11.0-41-GENERIC/X86_64/88AA9F2F67) |  |
 
@@ -264,16 +288,21 @@ Counts: 1533 values of class A, 31 of class B, 13 of class C.
 | chassis_sku | `Desktop` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207000/089EBFAFFD4C) |  |
 | cpu_socket | `U3E1` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207000/089EBFAFFD4C) |  |
 | cpu_part | ` ` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207000/089EBFAFFD4C) |  |
+| cpu_upgrade | `0x01` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207000/089EBFAFFD4C) | SMBIOS upgrade code |
+| cpu_voltage | `1.0 V` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207000/1A5D011DEE79) | the most common reading; it differs by CPU |
 | board version | `A01` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207000/1A5D011DEE79) |  |
 | board version | `A00` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207000/21052D054375) |  |
 | board version | `A02` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207000/7F292C163AA9) |  |
 | board version | `A03` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207000/B0BBA76EBFAC) |  |
 | board version | `X02` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207000/089EBFAFFD4C) |  |
 | memory slots | `DIMM1/; DIMM2/` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207000/089EBFAFFD4C) |  |
-| memory | `01980000802C K1CXP8-MIF` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207000/1A5D011DEE79) |  |
-| memory | `0198000080AD K1CXP8-HYC` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207000/4916EEDAFF9A) |  |
-| memory | `802C0000802C 8ATF2G64AZ-3G2F1` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207000/DBE8AB2D3BE5) |  |
-| memory | `80CE000080CE M378A2G43BB3-CWE` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207000/8C25D9B2B397) |  |
+| memory | `01980000802C K1CXP8-MIF (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207000/1A5D011DEE79) |  |
+| memory | `0198000080AD K1CXP8-HYC (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207000/4916EEDAFF9A) |  |
+| memory | `802C0000802C 4ATF1G64HZ-3G2F1 (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207000/B0BBA76EBFAC) |  |
+| memory | `802C0000802C 8ATF1G64HZ-3G2J1 (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207000/7E2C5030F69D) |  |
+| memory | `859B0000802C CT32G4SFD832A.M16FF (32 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207000/63830CD3C14A) |  |
+| memory | `01980000802C 9905744-066.A00G (32 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207000/21052D054375) |  |
+| memory | `01980000802C KCDT82-MIE (4 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%205090/14C80413B16B) | no 4 GiB module with a part number in the reports of this model; the same maker's part in the reports of dell-optiplex-5090 |
 | disk | `ST1000DM010-2EP102 1001` | A | [report](https://github.com/linuxhw/Dmesg/blob/main/Desktop/Dell/OptiPlex/OptiPlex%207000/7F292C163AA9/UBUNTU-22.04/5.19.0-38-GENERIC/X86_64/D1CF6FA11E) |  |
 | disk | `WDC WD10EZEX-75WN4A1 13057113` | A | [report](https://github.com/linuxhw/Dmesg/blob/main/Desktop/Dell/OptiPlex/OptiPlex%207000/8C25D9B2B397/ARCH-ROLLING/6.0.11-ARCH1-1/X86_64/B955357CCC) |  |
 
@@ -308,11 +337,14 @@ Counts: 1533 values of class A, 31 of class B, 13 of class C.
 | chassis_sku | `` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/EliteDesk/EliteDesk%20800%20G6%20Small%20Form%20Factor%20PC/1D540E5DD479) |  |
 | cpu_socket | `U3E1` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/EliteDesk/EliteDesk%20800%20G6%20Small%20Form%20Factor%20PC/1D540E5DD479) |  |
 | cpu_part | `To Be Filled By O.E.M.` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/EliteDesk/EliteDesk%20800%20G6%20Small%20Form%20Factor%20PC/1D540E5DD479) |  |
+| cpu_upgrade | `0x01` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/EliteDesk/EliteDesk%20800%20G6%20Small%20Form%20Factor%20PC/1D540E5DD479) | SMBIOS upgrade code |
+| cpu_voltage | `0.9 V` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/EliteDesk/EliteDesk%20800%20G6%20Small%20Form%20Factor%20PC/1D540E5DD479) | the most common reading; it differs by CPU |
 | board version | `KBC Version 09.94.00` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/EliteDesk/EliteDesk%20800%20G6%20Small%20Form%20Factor%20PC/1D540E5DD479) |  |
 | board version | `KBC Version 09.97.00` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/EliteDesk/EliteDesk%20800%20G6%20Small%20Form%20Factor%20PC/B736692F455E) |  |
 | memory slots | `DIMM1/ChannelB; DIMM2/ChannelB; DIMM3/ChannelA; DIMM4/ChannelA` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/EliteDesk/EliteDesk%20800%20G6%20Small%20Form%20Factor%20PC/1D540E5DD479) |  |
-| memory | `Hynix/Hyundai HMA81GU6DJR8N-XN` | B | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20neo%2050s%20Gen%203%2011SX002VUK/5B1DD71AD29F) | Hynix/Hyundai as this model reports it (e.g. https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/EliteDesk/EliteDesk%20800%20G6%20Small%20Form%20Factor%20PC/1D540E5DD479); the part number is hidden in every public report of it, so one seen with that maker on a DIMM DDR4-3200 module in another machine |
-| memory | `Samsung M378A2G43BB3-CWE` | B | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M70s%20Gen%203%2011T8000LIX/F5F427BCD6A9) | Samsung as this model reports it (e.g. https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/EliteDesk/EliteDesk%20800%20G6%20Small%20Form%20Factor%20PC/1D540E5DD479); the part number is hidden in every public report of it, so one seen with that maker on a DIMM DDR4-3200 module in another machine |
+| memory | `Samsung M378A2G43BB3-CWE (16 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M70s%20Gen%203%2011T8000LIX/F5F427BCD6A9) | no 16 GiB module with a part number in the reports of this model; the same maker's part in the reports of lenovo-thinkcentre-m70s-gen3 |
+| memory | `Unknown - [0x9B85] CT8G4DFS824A.M8FD (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/EliteDesk/EliteDesk%20800%20G6%20Small%20Form%20Factor%20PC/BC2D16F1081A) |  |
+| memory | `Samsung M378A5244CB0-CWE (4 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20neo%2050s%20Gen%203%2011T0003QFR/F0B2A55FD054) | no 4 GiB module with a part number in the reports of this model; the same maker's part in the reports of lenovo-thinkcentre-neo-50s-gen3 |
 | disk | `X160EB SN07656` | A | [report](https://github.com/linuxhw/Dmesg/blob/main/Desktop/Hewlett-Packard/EliteDesk/EliteDesk%20800%20G6%20Small%20Form%20Factor%20PC/B736692F455E/UBUNTU-22.04/5.15.0-40-GENERIC/X86_64/17993CF668) |  |
 
 ## HP EliteDesk 805 G8 (`hp-elitedesk-805-g8`)
@@ -341,9 +373,14 @@ Counts: 1533 values of class A, 31 of class B, 13 of class C.
 | chassis_sku | `` | A | [report](https://github.com/linuxhw/DMI/blob/master/Mini%20Pc/Hewlett-Packard/EliteDesk/EliteDesk%20805%20G8%20Desktop%20Mini%20PC/C85E0CDAD14F) |  |
 | cpu_socket | `AM4` | A | [report](https://github.com/linuxhw/DMI/blob/master/Mini%20Pc/Hewlett-Packard/EliteDesk/EliteDesk%20805%20G8%20Desktop%20Mini%20PC/C85E0CDAD14F) |  |
 | cpu_part | `Unknown` | A | [report](https://github.com/linuxhw/DMI/blob/master/Mini%20Pc/Hewlett-Packard/EliteDesk/EliteDesk%20805%20G8%20Desktop%20Mini%20PC/C85E0CDAD14F) |  |
+| cpu_upgrade | `0x31` | A | [report](https://github.com/linuxhw/DMI/blob/master/Mini%20Pc/Hewlett-Packard/EliteDesk/EliteDesk%20805%20G8%20Desktop%20Mini%20PC/C85E0CDAD14F) | SMBIOS upgrade code |
+| cpu_voltage | `1.4 V` | A | [report](https://github.com/linuxhw/DMI/blob/master/Mini%20Pc/Hewlett-Packard/EliteDesk/EliteDesk%20805%20G8%20Desktop%20Mini%20PC/C85E0CDAD14F) | the most common reading; it differs by CPU |
 | board version | `KBC Version 10.52.00` | A | [report](https://github.com/linuxhw/DMI/blob/master/Mini%20Pc/Hewlett-Packard/EliteDesk/EliteDesk%20805%20G8%20Desktop%20Mini%20PC/C85E0CDAD14F) |  |
 | memory slots | `DIMM1/ChannelA DIMM0; DIMM3/ChannelB DIMM0` | A | [report](https://github.com/linuxhw/DMI/blob/master/Mini%20Pc/Hewlett-Packard/EliteDesk/EliteDesk%20805%20G8%20Desktop%20Mini%20PC/C85E0CDAD14F) |  |
-| memory | `Hynix/Hyundai HMAB2GS6CMR6N-XN` | B | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021AH0082PB/E8B4DDEF6312) | Hynix/Hyundai as this model reports it (e.g. https://github.com/linuxhw/DMI/blob/master/Mini%20Pc/Hewlett-Packard/EliteDesk/EliteDesk%20805%20G8%20Desktop%20Mini%20PC/C85E0CDAD14F); the part number is hidden in every public report of it, so one seen with that maker on a SO-DIMM DDR4-3200 module in another machine |
+| memory | `Hynix HMAA1GS6CJR6N-XN (8 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20E15%20Gen%203%2020YG001NJP/F275C0730825) | no 8 GiB module with a part number in the reports of this model; the same maker's part in the reports of lenovo-thinkpad-e15-gen3-amd |
+| memory | `SK Hynix HMA851S6CJR6N-XN (4 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/250/250%20G8%20Notebook%20PC/E89A74834DB6) | no 4 GiB module with a part number in the reports of this model; the same maker's part in the reports of hp-250-g8 |
+| memory | `SK Hynix HMAB2GS6CMR6N-XN (16 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021AH0082PB/E8B4DDEF6312) | no 16 GiB module with a part number in the reports of this model; the same maker's part in the reports of lenovo-thinkpad-t14-gen3 |
+| memory | `SK Hynix HMAA4GS6CJR8N-XN (32 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021AHCTO1WW/24CCFE3AAA29) | no 32 GiB module with a part number in the reports of this model; the same maker's part in the reports of lenovo-thinkpad-t14-gen3 |
 | disk | `X160EB SN07656` | B | [report](https://github.com/linuxhw/Dmesg/blob/main/Desktop/Hewlett-Packard/EliteDesk/EliteDesk%20800%20G6%20Small%20Form%20Factor%20PC/B736692F455E/UBUNTU-22.04/5.15.0-40-GENERIC/X86_64/17993CF668) | no SATA disk in its report; EliteDesk 800 G6 (an SSD: the Desktop Mini takes no 3.5-inch disk) |
 
 ## HP EliteDesk 800 G8 (`hp-elitedesk-800-g8`)
@@ -373,9 +410,13 @@ Counts: 1533 values of class A, 31 of class B, 13 of class C.
 | chassis_sku | `` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/EliteDesk/EliteDesk%20800%20G8%20Tower%20PC/37F624CF3727) |  |
 | cpu_socket | `U3E1` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/EliteDesk/EliteDesk%20800%20G8%20Tower%20PC/37F624CF3727) |  |
 | cpu_part | `To Be Filled By O.E.M.` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/EliteDesk/EliteDesk%20800%20G8%20Tower%20PC/37F624CF3727) |  |
+| cpu_upgrade | `0x3e` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/EliteDesk/EliteDesk%20800%20G8%20Tower%20PC/37F624CF3727) | SMBIOS upgrade code |
+| cpu_voltage | `1.2 V` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/EliteDesk/EliteDesk%20800%20G8%20Tower%20PC/37F624CF3727) | the most common reading; it differs by CPU |
 | board version | `KBC Version 10.57.00` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/EliteDesk/EliteDesk%20800%20G8%20Tower%20PC/37F624CF3727) |  |
 | memory slots | `DIMM1/ChannelB; DIMM2/ChannelB; DIMM3/ChannelA; DIMM4/ChannelA` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/EliteDesk/EliteDesk%20800%20G8%20Tower%20PC/37F624CF3727) |  |
-| memory | `Samsung M378A2G43BB3-CWE` | B | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M70s%20Gen%203%2011T8000LIX/F5F427BCD6A9) | Samsung as this model reports it (e.g. https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/EliteDesk/EliteDesk%20800%20G8%20Tower%20PC/37F624CF3727); the part number is hidden in every public report of it, so one seen with that maker on a DIMM DDR4-3200 module in another machine |
+| memory | `Samsung M378A1K43EB2-CWE (8 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M75s%20Gen%202%2011JAS1J200/CBCE8C6DE4A0) | no 8 GiB module with a part number in the reports of this model; the same maker's part in the reports of lenovo-thinkcentre-m75s-gen2 |
+| memory | `Samsung M378A5244CB0-CWE (4 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20neo%2050s%20Gen%203%2011T0003QFR/F0B2A55FD054) | no 4 GiB module with a part number in the reports of this model; the same maker's part in the reports of lenovo-thinkcentre-neo-50s-gen3 |
+| memory | `Samsung M378A2G43BB3-CWE (16 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M70s%20Gen%203%2011T8000LIX/F5F427BCD6A9) | no 16 GiB module with a part number in the reports of this model; the same maker's part in the reports of lenovo-thinkcentre-m70s-gen3 |
 | disk | `X160EB SN07656` | B | [report](https://github.com/linuxhw/Dmesg/blob/main/Desktop/Hewlett-Packard/EliteDesk/EliteDesk%20800%20G6%20Small%20Form%20Factor%20PC/B736692F455E/UBUNTU-22.04/5.15.0-40-GENERIC/X86_64/17993CF668) | no Dmesg/HWInfo report; EliteDesk 800 G6 (the HP business desktop SSD in the set) |
 
 ## HP ProDesk 400 G7 (`hp-prodesk-400-g7`)
@@ -407,13 +448,15 @@ Counts: 1533 values of class A, 31 of class B, 13 of class C.
 | chassis_sku | `` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/ProDesk/ProDesk%20400%20G7%20Small%20Form%20Factor%20PC/0541877294C2) |  |
 | cpu_socket | `U3E1` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/ProDesk/ProDesk%20400%20G7%20Small%20Form%20Factor%20PC/0541877294C2) |  |
 | cpu_part | `To Be Filled By O.E.M.` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/ProDesk/ProDesk%20400%20G7%20Small%20Form%20Factor%20PC/0541877294C2) |  |
+| cpu_upgrade | `0x01` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/ProDesk/ProDesk%20400%20G7%20Small%20Form%20Factor%20PC/0541877294C2) | SMBIOS upgrade code |
+| cpu_voltage | `0.8 V` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/ProDesk/ProDesk%20400%20G7%20Small%20Form%20Factor%20PC/7DBCB845F40C) | the most common reading; it differs by CPU |
 | board version | `KBC Version 09.08.23` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/ProDesk/ProDesk%20400%20G7%20Small%20Form%20Factor%20PC/7DBCB845F40C) |  |
 | board version | `KBC Version 09.94.00` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/ProDesk/ProDesk%20400%20G7%20Small%20Form%20Factor%20PC/D4C2EB91D56B) |  |
 | board version | `KBC Version 09.97.00` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/ProDesk/ProDesk%20400%20G7%20Small%20Form%20Factor%20PC/0541877294C2) |  |
 | memory slots | `DIMM1/ChannelB; DIMM3/ChannelA` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/ProDesk/ProDesk%20400%20G7%20Small%20Form%20Factor%20PC/0541877294C2) |  |
-| memory | `Hynix/Hyundai HMA81GU6DJR8N-XN` | B | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20neo%2050s%20Gen%203%2011SX002VUK/5B1DD71AD29F) | Hynix/Hyundai as this model reports it (e.g. https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/ProDesk/ProDesk%20400%20G7%20Small%20Form%20Factor%20PC/7DBCB845F40C); the part number is hidden in every public report of it, so one seen with that maker on a DIMM DDR4-3200 module in another machine |
-| memory | `Kingston LV32D4U2S8SD-8` | B | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M70s%20Gen%203%2011T7S4E400/7721AEEAA00F) | Kingston as this model reports it (e.g. https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/ProDesk/ProDesk%20400%20G7%20Small%20Form%20Factor%20PC/0541877294C2); the part number is hidden in every public report of it, so one seen with that maker on a DIMM DDR4-3200 module in another machine |
-| memory | `Samsung M378A2G43BB3-CWE` | B | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M70s%20Gen%203%2011T8000LIX/F5F427BCD6A9) | Samsung as this model reports it (e.g. https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/ProDesk/ProDesk%20400%20G7%20Small%20Form%20Factor%20PC/D4C2EB91D56B); the part number is hidden in every public report of it, so one seen with that maker on a DIMM DDR4-3200 module in another machine |
+| memory | `Kingston LV32D4U2S8SD-8 (8 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M70s%20Gen%203%2011T7S4E400/7721AEEAA00F) | no 8 GiB module with a part number in the reports of this model; the same maker's part in the reports of lenovo-thinkcentre-m70s-gen3 |
+| memory | `Samsung M378A5244CB0-CWE (4 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20neo%2050s%20Gen%203%2011T0003QFR/F0B2A55FD054) | no 4 GiB module with a part number in the reports of this model; the same maker's part in the reports of lenovo-thinkcentre-neo-50s-gen3 |
+| memory | `Samsung M378A2G43BB3-CWE (16 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M70s%20Gen%203%2011T8000LIX/F5F427BCD6A9) | no 16 GiB module with a part number in the reports of this model; the same maker's part in the reports of lenovo-thinkcentre-m70s-gen3 |
 | disk | `ST2000LM015-2E8174 0001` | A | [report](https://github.com/linuxhw/Dmesg/blob/main/Desktop/Hewlett-Packard/ProDesk/ProDesk%20400%20G7%20Small%20Form%20Factor%20PC/7DBCB845F40C/OPENMANDRIVA-4.3/5.16.7-DESKTOP-1OMV4003/X86_64/7E0AE3D91F) |  |
 
 ## HP ProDesk 600 G6 (`hp-prodesk-600-g6`)
@@ -446,11 +489,14 @@ Counts: 1533 values of class A, 31 of class B, 13 of class C.
 | chassis_sku | `` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/ProDesk/ProDesk%20600%20G6%20Small%20Form%20Factor%20PC/2632124B31C0) |  |
 | cpu_socket | `U3E1` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/ProDesk/ProDesk%20600%20G6%20Small%20Form%20Factor%20PC/2632124B31C0) |  |
 | cpu_part | `To Be Filled By O.E.M.` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/ProDesk/ProDesk%20600%20G6%20Small%20Form%20Factor%20PC/2632124B31C0) |  |
+| cpu_upgrade | `0x01` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/ProDesk/ProDesk%20600%20G6%20Small%20Form%20Factor%20PC/2632124B31C0) | SMBIOS upgrade code |
+| cpu_voltage | `0.9 V` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/ProDesk/ProDesk%20600%20G6%20Small%20Form%20Factor%20PC/2632124B31C0) | the most common reading; it differs by CPU |
 | board version | `KBC Version 09.08.23` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/ProDesk/ProDesk%20600%20G6%20Small%20Form%20Factor%20PC/5352A4CAF93B) |  |
 | board version | `KBC Version 09.94.00` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/ProDesk/ProDesk%20600%20G6%20Small%20Form%20Factor%20PC/2632124B31C0) |  |
 | memory slots | `DIMM1/ChannelB; DIMM2/ChannelB; DIMM3/ChannelA; DIMM4/ChannelA` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/ProDesk/ProDesk%20600%20G6%20Small%20Form%20Factor%20PC/2632124B31C0) |  |
-| memory | `Samsung M378A2G43BB3-CWE` | B | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M70s%20Gen%203%2011T8000LIX/F5F427BCD6A9) | Samsung as this model reports it (e.g. https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/ProDesk/ProDesk%20600%20G6%20Small%20Form%20Factor%20PC/2632124B31C0); the part number is hidden in every public report of it, so one seen with that maker on a DIMM DDR4-3200 module in another machine |
-| memory | `Kingston LV32D4U2S8SD-8` | B | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M70s%20Gen%203%2011T7S4E400/7721AEEAA00F) | Kingston as this model reports it (e.g. https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/ProDesk/ProDesk%20600%20G6%20Small%20Form%20Factor%20PC/5352A4CAF93B); the part number is hidden in every public report of it, so one seen with that maker on a DIMM DDR4-3200 module in another machine |
+| memory | `Kingston LV32D4U2S8SD-8 (8 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M70s%20Gen%203%2011T7S4E400/7721AEEAA00F) | no 8 GiB module with a part number in the reports of this model; the same maker's part in the reports of lenovo-thinkcentre-m70s-gen3 |
+| memory | `Samsung M378A2G43BB3-CWE (16 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M70s%20Gen%203%2011T8000LIX/F5F427BCD6A9) | no 16 GiB module with a part number in the reports of this model; the same maker's part in the reports of lenovo-thinkcentre-m70s-gen3 |
+| memory | `Samsung M378A5244CB0-CWE (4 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20neo%2050s%20Gen%203%2011T0003QFR/F0B2A55FD054) | no 4 GiB module with a part number in the reports of this model; the same maker's part in the reports of lenovo-thinkcentre-neo-50s-gen3 |
 | disk | `TOSHIBA DT01ACA050 MS1OA8L0` | A | [report](https://github.com/linuxhw/Dmesg/blob/main/Desktop/Hewlett-Packard/ProDesk/ProDesk%20600%20G6%20Small%20Form%20Factor%20PC/2632124B31C0/KDE-NEON-20.04/5.13.0-44-GENERIC/X86_64/F2959A67AE) |  |
 
 ## HP ProDesk 405 G6 (`hp-prodesk-405-g6`)
@@ -481,11 +527,14 @@ Counts: 1533 values of class A, 31 of class B, 13 of class C.
 | chassis_sku | `` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/ProDesk/ProDesk%20405%20G6%20Small%20Form%20Factor%20PC/B15F90C079B8) |  |
 | cpu_socket | `AM4` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/ProDesk/ProDesk%20405%20G6%20Small%20Form%20Factor%20PC/B15F90C079B8) |  |
 | cpu_part | `Unknown` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/ProDesk/ProDesk%20405%20G6%20Small%20Form%20Factor%20PC/B15F90C079B8) |  |
+| cpu_upgrade | `0x31` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/ProDesk/ProDesk%20405%20G6%20Small%20Form%20Factor%20PC/B15F90C079B8) | SMBIOS upgrade code |
+| cpu_voltage | `1.2 V` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/ProDesk/ProDesk%20405%20G6%20Small%20Form%20Factor%20PC/B15F90C079B8) | the most common reading; it differs by CPU |
 | board version | `KBC Version 09.97.00` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/ProDesk/ProDesk%20405%20G6%20Small%20Form%20Factor%20PC/B15F90C079B8) |  |
 | board version | `KBC Version 09.99.00` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/ProDesk/ProDesk%20405%20G6%20Small%20Form%20Factor%20PC/C715FF433724) |  |
 | memory slots | `DIMM1/ChannelB DIMM0; DIMM3/ChannelA DIMM0` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/ProDesk/ProDesk%20405%20G6%20Small%20Form%20Factor%20PC/B15F90C079B8) |  |
-| memory | `Hynix/Hyundai HMA81GU6DJR8N-XN` | B | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20neo%2050s%20Gen%203%2011SX002VUK/5B1DD71AD29F) | Hynix/Hyundai as this model reports it (e.g. https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/ProDesk/ProDesk%20405%20G6%20Small%20Form%20Factor%20PC/B15F90C079B8); the part number is hidden in every public report of it, so one seen with that maker on a DIMM DDR4-3200 module in another machine |
-| memory | `Samsung M378A2G43BB3-CWE` | B | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M70s%20Gen%203%2011T8000LIX/F5F427BCD6A9) | Samsung as this model reports it (e.g. https://github.com/linuxhw/DMI/blob/master/Desktop/Hewlett-Packard/ProDesk/ProDesk%20405%20G6%20Small%20Form%20Factor%20PC/C715FF433724); the part number is hidden in every public report of it, so one seen with that maker on a DIMM DDR4-3200 module in another machine |
+| memory | `SK Hynix HMA81GU6DJR8N-XN (8 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20neo%2050s%20Gen%203%2011SX002VUK/5B1DD71AD29F) | no 8 GiB module with a part number in the reports of this model; the same maker's part in the reports of lenovo-thinkcentre-neo-50s-gen3 |
+| memory | `Samsung M378A5244CB0-CWE (4 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20neo%2050s%20Gen%203%2011T0003QFR/F0B2A55FD054) | no 4 GiB module with a part number in the reports of this model; the same maker's part in the reports of lenovo-thinkcentre-neo-50s-gen3 |
+| memory | `Samsung M378A2G43BB3-CWE (16 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M70s%20Gen%203%2011T8000LIX/F5F427BCD6A9) | no 16 GiB module with a part number in the reports of this model; the same maker's part in the reports of lenovo-thinkcentre-m70s-gen3 |
 | disk | `X160EB SN07656` | B | [report](https://github.com/linuxhw/Dmesg/blob/main/Desktop/Hewlett-Packard/EliteDesk/EliteDesk%20800%20G6%20Small%20Form%20Factor%20PC/B736692F455E/UBUNTU-22.04/5.15.0-40-GENERIC/X86_64/17993CF668) | no SATA disk in its reports; EliteDesk 800 G6 (the HP business desktop SSD in the set) |
 
 ## Lenovo ThinkCentre M75q Gen 2 (`lenovo-m75q-gen2`)
@@ -539,15 +588,19 @@ Counts: 1533 values of class A, 31 of class B, 13 of class C.
 | chassis_sku | `Default string` | A | [report](https://github.com/linuxhw/DMI/blob/master/Mini%20Pc/Lenovo/ThinkCentre/ThinkCentre%20M75q%20Gen%202%2011JJ0008CK/1402FBE4AAA6) |  |
 | cpu_socket | `AM4` | A | [report](https://github.com/linuxhw/DMI/blob/master/Mini%20Pc/Lenovo/ThinkCentre/ThinkCentre%20M75q%20Gen%202%2011JJ0008CK/1402FBE4AAA6) |  |
 | cpu_part | `Unknown` | A | [report](https://github.com/linuxhw/DMI/blob/master/Mini%20Pc/Lenovo/ThinkCentre/ThinkCentre%20M75q%20Gen%202%2011JJ0008CK/1402FBE4AAA6) |  |
+| cpu_upgrade | `0x31` | A | [report](https://github.com/linuxhw/DMI/blob/master/Mini%20Pc/Lenovo/ThinkCentre/ThinkCentre%20M75q%20Gen%202%2011JJ0008CK/1402FBE4AAA6) | SMBIOS upgrade code |
+| cpu_voltage | `1.2 V` | A | [report](https://github.com/linuxhw/DMI/blob/master/Mini%20Pc/Lenovo/ThinkCentre/ThinkCentre%20M75q%20Gen%202%2011JJ0008CK/1402FBE4AAA6) | the most common reading; it differs by CPU |
 | board version | `SDK0J40697 WIN 3305#########` | A | [report](https://github.com/linuxhw/DMI/blob/master/Mini%20Pc/Lenovo/ThinkCentre/ThinkCentre%20M75q%20Gen%202%2011JJ0008CK/1402FBE4AAA6) | per-unit digits drawn at random (#) |
 | board version | `NOK` | A | [report](https://github.com/linuxhw/DMI/blob/master/Mini%20Pc/Lenovo/ThinkCentre/ThinkCentre%20M75q%20Gen%202%2011JJ001RRU/B114BBC992FE) |  |
 | board version | `SDK0T76530 WIN 3556#########` | A | [report](https://github.com/linuxhw/DMI/blob/master/Mini%20Pc/Lenovo/ThinkCentre/ThinkCentre%20M75q%20Gen%202%2011JJCTO1WW/F4477DE67F5C) | per-unit digits drawn at random (#) |
 | board version | `SDK0T76538 WIN 3556#########` | A | [report](https://github.com/linuxhw/DMI/blob/master/Mini%20Pc/Lenovo/ThinkCentre/ThinkCentre%20M75q%20Gen%202%2011JN000GCK/6DE593E9B18A) | per-unit digits drawn at random (#) |
 | memory slots | `DIMM 0/P0 CHANNEL A; DIMM 0/P0 CHANNEL B` | A | [report](https://github.com/linuxhw/DMI/blob/master/Mini%20Pc/Lenovo/ThinkCentre/ThinkCentre%20M75q%20Gen%202%2011JJ0008CK/1402FBE4AAA6) |  |
-| memory | `Ramaxel Technology RMSA3320MR78HAF-3200` | A | [report](https://github.com/linuxhw/DMI/blob/master/Mini%20Pc/Lenovo/ThinkCentre/ThinkCentre%20M75q%20Gen%202%2011JN000GCK/6DE593E9B18A) |  |
-| memory | `Hynix HMA81GS6DJR8N-XN` | A | [report](https://github.com/linuxhw/DMI/blob/master/Mini%20Pc/Lenovo/ThinkCentre/ThinkCentre%20M75q%20Gen%202%2011JNCTO1WW/0631703E328F) |  |
-| memory | `Kingston KHX2666C15S4/8G` | A | [report](https://github.com/linuxhw/DMI/blob/master/Mini%20Pc/Lenovo/ThinkCentre/ThinkCentre%20M75q%20Gen%202%2011JJ001RRU/B114BBC992FE) |  |
-| memory | `Micron Technology 8ATF1G64HZ-3G2J1` | A | [report](https://github.com/linuxhw/DMI/blob/master/Mini%20Pc/Lenovo/ThinkCentre/ThinkCentre%20M75q%20Gen%202%2011JJ0008CK/1402FBE4AAA6) |  |
+| memory | `Ramaxel Technology RMSA3320MR78HAF-3200 (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Mini%20Pc/Lenovo/ThinkCentre/ThinkCentre%20M75q%20Gen%202%2011JN000GCK/6DE593E9B18A) |  |
+| memory | `Hynix HMA81GS6DJR8N-XN (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Mini%20Pc/Lenovo/ThinkCentre/ThinkCentre%20M75q%20Gen%202%2011JNCTO1WW/0631703E328F) |  |
+| memory | `Samsung M471A2K43DB1-CWE (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Mini%20Pc/Lenovo/ThinkCentre/ThinkCentre%20M75q%20Gen%202%2011JJS00000/67A5CBCEF039) |  |
+| memory | `Unknown CT16G4SFRA32A.C8FF (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Mini%20Pc/Lenovo/ThinkCentre/ThinkCentre%20M75q%20Gen%202%2011JN000EGE/52C68CA99B3E) |  |
+| memory | `Unknown CT32G4SFD832A.M16FF (32 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Mini%20Pc/Lenovo/ThinkCentre/ThinkCentre%20M75q%20Gen%202%2011JJ000CMT/522D7077AD79) |  |
+| memory | `Kingston HP32D4S2S1ME-4 (4 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/250/250%20G8%20Notebook%20PC/45EFB5F04EDF) | no 4 GiB module with a part number in the reports of this model; the same maker's part in the reports of hp-250-g8 |
 | disk | `HGST HTS541010A9E680 JA0OA560` | A | [report](https://github.com/linuxhw/Dmesg/blob/main/Mini%20Pc/Lenovo/ThinkCentre/ThinkCentre%20M75q%20Gen%202%2011JJ001RRU/B114BBC992FE/ROSA-12.2/5.10.74-GENERIC-2ROSA2021.1-X86_64/X86_64/5F6F023F22) |  |
 
 ## Lenovo ThinkCentre M70s Gen 3 (`lenovo-thinkcentre-m70s-gen3`)
@@ -590,11 +643,14 @@ Counts: 1533 values of class A, 31 of class B, 13 of class C.
 | chassis_sku | `Default string` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M70s%20Gen%203%2011T7S4E400/7721AEEAA00F) |  |
 | cpu_socket | `U3E1` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M70s%20Gen%203%2011T7S4E400/7721AEEAA00F) |  |
 | cpu_part | `To Be Filled By O.E.M.` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M70s%20Gen%203%2011T7S4E400/7721AEEAA00F) |  |
+| cpu_upgrade | `0x01` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M70s%20Gen%203%2011T7S4E400/7721AEEAA00F) | SMBIOS upgrade code |
+| cpu_voltage | `1.1 V` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M70s%20Gen%203%2011T7S4E400/7721AEEAA00F) | the most common reading; it differs by CPU |
 | board version | `SDK0T76530 WIN 3556#########` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M70s%20Gen%203%2011T7S4E400/7721AEEAA00F) | per-unit digits drawn at random (#) |
 | board version | `SDK0T76549 WIN 3792#########` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M70s%20Gen%203%2011TBS1M500/A7D70D1AAA74) | per-unit digits drawn at random (#) |
 | memory slots | `Controller0-ChannelA-DIMM1/BANK 0; Controller0-ChannelA-DIMM0/BANK 0; Controller1-ChannelB-DIMM0/BANK 1; Controller1-ChannelB-DIMM1/BANK 1` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M70s%20Gen%203%2011T7S4E400/7721AEEAA00F) |  |
-| memory | `Kingston LV32D4U2S8SD-8` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M70s%20Gen%203%2011T7S4E400/7721AEEAA00F) |  |
-| memory | `Samsung M378A2G43BB3-CWE` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M70s%20Gen%203%2011T8000LIX/F5F427BCD6A9) |  |
+| memory | `Kingston LV32D4U2S8SD-8 (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M70s%20Gen%203%2011T7S4E400/7721AEEAA00F) |  |
+| memory | `Samsung M378A2G43BB3-CWE (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M70s%20Gen%203%2011T8000LIX/F5F427BCD6A9) |  |
+| memory | `Samsung M378A5244CB0-CWE (4 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20neo%2050s%20Gen%203%2011T0003QFR/F0B2A55FD054) | no 4 GiB module with a part number in the reports of this model; the same maker's part in the reports of lenovo-thinkcentre-neo-50s-gen3 |
 | disk | `WDC WD10EZEX-08WN4A1 03.01A03` | B | [report](https://github.com/linuxhw/Dmesg/blob/main/Desktop/Lenovo/ThinkCentre/ThinkCentre%20neo%2050s%20Gen%203%2011T0003QFR/F0B2A55FD054/FEDORA-37/6.1.18-200.FC37.X86_64/X86_64/69CB363858) | no Dmesg/HWInfo report; ThinkCentre neo 50s Gen 3 (same platform) |
 
 ## Lenovo ThinkCentre neo 50s Gen 3 (`lenovo-thinkcentre-neo-50s-gen3`)
@@ -638,13 +694,16 @@ Counts: 1533 values of class A, 31 of class B, 13 of class C.
 | chassis_sku | `Default string` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20neo%2050s%20Gen%203%2011SWS2AL00/09A101F055D4) |  |
 | cpu_socket | `U3E1` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20neo%2050s%20Gen%203%2011SWS2AL00/09A101F055D4) |  |
 | cpu_part | `To Be Filled By O.E.M.` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20neo%2050s%20Gen%203%2011SWS2AL00/09A101F055D4) |  |
+| cpu_upgrade | `0x01` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20neo%2050s%20Gen%203%2011SWS2AL00/09A101F055D4) | SMBIOS upgrade code |
+| cpu_voltage | `1.0 V` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20neo%2050s%20Gen%203%2011SX002VUK/5B1DD71AD29F) | the most common reading; it differs by CPU |
 | board version | `NOK` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20neo%2050s%20Gen%203%2011SX002VUK/5B1DD71AD29F) |  |
 | board version | `SDK0T76530 WIN 3556#########` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20neo%2050s%20Gen%203%2011SWS2AL00/09A101F055D4) | per-unit digits drawn at random (#) |
 | memory slots | `DIMM1/BANK 0; DIMM2/BANK 0` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20neo%2050s%20Gen%203%2011SWS2AL00/09A101F055D4) |  |
-| memory | `0x0C97 TXU16G2M3200C16X` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20neo%2050s%20Gen%203%2011T0003QFR/F0B2A55FD054) |  |
-| memory | `Golden Empire CL22-22-22 D4-3200` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20neo%2050s%20Gen%203%2011SWS2AL00/09A101F055D4) |  |
-| memory | `Ramaxel Technology RMUA5190MR86H9F-3200` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20neo%2050s%20Gen%203%2011T0008DFM/E093943EDF71) |  |
-| memory | `SK Hynix HMA81GU6DJR8N-XN` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20neo%2050s%20Gen%203%2011SX002VUK/5B1DD71AD29F) |  |
+| memory | `0x0C97 TXU16G2M3200C16X (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20neo%2050s%20Gen%203%2011T0003QFR/F0B2A55FD054) |  |
+| memory | `Golden Empire CL22-22-22 D4-3200 (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20neo%2050s%20Gen%203%2011SWS2AL00/09A101F055D4) |  |
+| memory | `Ramaxel Technology RMUA5190MR86H9F-3200 (4 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20neo%2050s%20Gen%203%2011T0008DFM/E093943EDF71) |  |
+| memory | `Samsung M378A5244CB0-CWE (4 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20neo%2050s%20Gen%203%2011T0003QFR/F0B2A55FD054) |  |
+| memory | `SK Hynix HMA81GU6DJR8N-XN (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20neo%2050s%20Gen%203%2011SX002VUK/5B1DD71AD29F) |  |
 | disk | `WDC WD10EZEX-08WN4A1 03.01A03` | A | [report](https://github.com/linuxhw/Dmesg/blob/main/Desktop/Lenovo/ThinkCentre/ThinkCentre%20neo%2050s%20Gen%203%2011T0003QFR/F0B2A55FD054/FEDORA-37/6.1.18-200.FC37.X86_64/X86_64/69CB363858) |  |
 
 ## Lenovo ThinkCentre M920s (`lenovo-thinkcentre-m920s`)
@@ -694,12 +753,15 @@ Counts: 1533 values of class A, 31 of class B, 13 of class C.
 | chassis_sku | `Default string` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M920s%2010SJ001JPB/6AB2A35AC691) |  |
 | cpu_socket | `U3E1` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M920s%2010SJ001JPB/6AB2A35AC691) |  |
 | cpu_part | `To Be Filled By O.E.M.` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M920s%2010SJ001JPB/6AB2A35AC691) |  |
+| cpu_upgrade | `0x32` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M920s%2010SJ001JPB/6AB2A35AC691) | SMBIOS upgrade code |
+| cpu_voltage | `1.0 V` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M920s%2010SJ001JPB/6AB2A35AC691) | the most common reading; it differs by CPU |
 | board version | `SDK0J40697 WIN 3305#########` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M920s%2010SJ001JPB/6AB2A35AC691) | per-unit digits drawn at random (#) |
 | memory slots | `ChannelA-DIMM1/BANK 1; ChannelA-DIMM0/BANK 0; ChannelB-DIMM0/BANK 2; ChannelB-DIMM1/BANK 3` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M920s%2010SJ001JPB/6AB2A35AC691) |  |
-| memory | `Samsung M378A1K43CB2-CTD` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M920s%2010SJ001JPB/6AB2A35AC691) |  |
-| memory | `Samsung M378A2K43CB1-CTD` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M920s%2010SKS0C100/8F8D78D61360) |  |
-| memory | `SK Hynix HMA451U6AFR8N-TF` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M920s%2010SKS3J100/77E89EB4ED36) |  |
-| memory | `Samsung M378A2K43DB1-CTD` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M920s%2010SKS44L00/EF6E185CAE11) |  |
+| memory | `Samsung M378A1K43CB2-CTD (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M920s%2010SJ001JPB/6AB2A35AC691) |  |
+| memory | `0194 SF4641G8CK8I8HLSBG (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M920s%2010SKS2SK00/C7C3BCAF5A32) |  |
+| memory | `Samsung M378A2K43CB1-CTD (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M920s%2010SKS0C100/8F8D78D61360) |  |
+| memory | `Samsung M378A2K43DB1-CTD (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M920s%2010SKS44L00/EF6E185CAE11) |  |
+| memory | `SK Hynix HMA451U6AFR8N-TF (4 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M920s%2010SKS3J100/77E89EB4ED36) |  |
 | disk | `SanDisk SDSSDHII120G X31200RL` | A | [report](https://github.com/linuxhw/Dmesg/blob/main/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M920s%2010SKS44L00/EF6E185CAE11/ROSA-12.2/5.10.74-GENERIC-2ROSA2021.1-X86_64/X86_64/C26BB7D11C) |  |
 
 ## Lenovo ThinkCentre M75s Gen 2 (`lenovo-thinkcentre-m75s-gen2`)
@@ -747,14 +809,17 @@ Counts: 1533 values of class A, 31 of class B, 13 of class C.
 | chassis_sku | `Default string` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M75s%20Gen%202%2011JAS0CJ00/C5ED616588A2) |  |
 | cpu_socket | `AM4` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M75s%20Gen%202%2011JAS0CJ00/C5ED616588A2) |  |
 | cpu_part | `Unknown` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M75s%20Gen%202%2011JAS0CJ00/C5ED616588A2) |  |
+| cpu_upgrade | `0x31` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M75s%20Gen%202%2011JAS0CJ00/C5ED616588A2) | SMBIOS upgrade code |
+| cpu_voltage | `1.4 V` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M75s%20Gen%202%2011R9S02K00/546F0B9C7736) | the most common reading; it differs by CPU |
 | board version | `SDK0J40697 WIN 3305#########` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M75s%20Gen%202%2011JB002GPB/A1A4A3F49260) | per-unit digits drawn at random (#) |
 | board version | `NOK` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M75s%20Gen%202%2011JAS0CJ00/C5ED616588A2) |  |
 | board version | `SDK0L22692 WIN 3792#########` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M75s%20Gen%202%2011JAS1J200/CBCE8C6DE4A0) | per-unit digits drawn at random (#) |
 | memory slots | `DIMM 1/P0 CHANNEL A; DIMM 0/P0 CHANNEL A; DIMM 0/P0 CHANNEL B; DIMM 1/P0 CHANNEL B` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M75s%20Gen%202%2011JAS0CJ00/C5ED616588A2) |  |
-| memory | `Unknown SMU4WEC8C1K0464FCG` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M75s%20Gen%202%2011R9S02K00/546F0B9C7736) |  |
-| memory | `Ramaxel Technology RMUA5200ME78HAF-3200` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M75s%20Gen%202%2011JAS0CJ00/C5ED616588A2) |  |
-| memory | `Unknown HEMA81GU6DJR8N-XN` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M75s%20Gen%202%2011R9S08900/6DFF0F133796) |  |
-| memory | `Micron Technology 8ATF2G64AZ-3G2E1` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M75s%20Gen%202%2011JB002GPB/A1A4A3F49260) |  |
+| memory | `Unknown SMU4WEC8C1K0464FCG (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M75s%20Gen%202%2011R9S02K00/546F0B9C7736) |  |
+| memory | `Ramaxel Technology RMUA5200ME78HAF-3200 (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M75s%20Gen%202%2011JAS0CJ00/C5ED616588A2) |  |
+| memory | `Micron Technology 8ATF2G64AZ-3G2E1 (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M75s%20Gen%202%2011JB002GPB/A1A4A3F49260) |  |
+| memory | `Unknown CT16G4DFRA32A.C8FE (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M75s%20Gen%202%2011JB002GPB/A1A4A3F49260) |  |
+| memory | `Samsung M378A5244CB0-CWE (4 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Lenovo/ThinkCentre/ThinkCentre%20neo%2050s%20Gen%203%2011T0003QFR/F0B2A55FD054) | no 4 GiB module with a part number in the reports of this model; the same maker's part in the reports of lenovo-thinkcentre-neo-50s-gen3 |
 | disk | `KINGSTON SUV400S37240G 0C3G37R5` | A | [report](https://github.com/linuxhw/Dmesg/blob/main/Desktop/Lenovo/ThinkCentre/ThinkCentre%20M75s%20Gen%202%2011JB002GPB/A1A4A3F49260/FEDORA-34/5.13.19-200.FC34.X86_64/X86_64/68F4FF7431) |  |
 
 ## Dell Latitude 5420 (`dell-latitude-5420`)
@@ -798,13 +863,17 @@ Counts: 1533 values of class A, 31 of class B, 13 of class C.
 | chassis_sku | `Notebook` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205420/09496B76F37E) |  |
 | cpu_socket | `U3E1` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205420/09496B76F37E) |  |
 | cpu_part | ` ` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205420/09496B76F37E) |  |
+| cpu_upgrade | `0x01` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205420/09496B76F37E) | SMBIOS upgrade code |
+| cpu_voltage | `0.7 V` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205420/09496B76F37E) | the most common reading; it differs by CPU |
 | board version | `A00` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205420/09496B76F37E) |  |
 | board version | `A01` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205420/2AC7C70C6075) |  |
 | memory slots | `DIMM B/BANK 0; DIMM A/BANK 0` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205420/09496B76F37E) |  |
-| memory | `80AD000080AD HMAA2GS6CJR8N-XN` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205420/09496B76F37E) |  |
-| memory | `80AD000080AD HMAA1GS6CJR6N-XN` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205420/09A938626C31) |  |
-| memory | `80AD000080AD HMAA2GS6AJR8N-XN` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205420/09FFAAE0F15B) |  |
-| memory | `019400000194 SMS4WEC8C1K0446FCG` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205420/0BB211F0B91C) |  |
+| memory | `80AD000080AD HMAA2GS6CJR8N-XN (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205420/09496B76F37E) |  |
+| memory | `80AD000080AD HMAA2GS6AJR8N-XN (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205420/09FFAAE0F15B) |  |
+| memory | `80AD000080AD HMAA1GS6CJR6N-XN (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205420/09A938626C31) |  |
+| memory | `019400000194 SMS4WEC8C1K0446FCG (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205420/0BB211F0B91C) |  |
+| memory | `01BA000080AD M4S32S682QMMM52-12 (32 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205420/1A53DBCA11B1) |  |
+| memory | `80CE000080CE M471A5244CB0-CTD (4 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205420/42162C257567) |  |
 | disk | `MTFDDAV256TBN-1AR15ABHA HPC0T12` | B | [report](https://github.com/linuxhw/HWInfo/blob/master/Notebook/Dell/Latitude/Latitude%205520/1DC6794B86BA/UBUNTU-20.04/5.11.0-46-GENERIC/X86_64/95721C3566) | its one SATA disk (INTEL SSDSCKKF25…, firmware tail D16N) matches no SMART dump; Latitude 5520 (same platform) |
 
 ## Dell Latitude 5430 (`dell-latitude-5430`)
@@ -848,13 +917,17 @@ Counts: 1533 values of class A, 31 of class B, 13 of class C.
 | chassis_sku | `Notebook` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205430/01791CD61E0F) |  |
 | cpu_socket | `U3E1` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205430/01791CD61E0F) |  |
 | cpu_part | ` ` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205430/01791CD61E0F) |  |
+| cpu_upgrade | `0x01` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205430/01791CD61E0F) | SMBIOS upgrade code |
+| cpu_voltage | `1.2 V` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205430/189796D817B0) | the most common reading; it differs by CPU |
 | board version | `A00` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205430/01791CD61E0F) |  |
 | board version | `A01` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205430/4F42BA288B25) |  |
 | memory slots | `DIMM A/; DIMM B/` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205430/0674E61967FE) |  |
-| memory | `80CE000080CE M471A1G44BB0-CWE` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205430/0674E61967FE) |  |
-| memory | `80AD000080AD HMAA1GS6CJR6N-XN` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205430/3952B6BA3834) |  |
-| memory | `01980000802C KKRVFX-MIB` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205430/189796D817B0) |  |
-| memory | `019400000194 SMS4WEC8C2J2446SAG` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205430/4F42BA288B25) |  |
+| memory | `80CE000080CE M471A1G44BB0-CWE (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205430/0674E61967FE) |  |
+| memory | `80AD000080AD HMAA1GS6CJR6N-XN (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205430/3952B6BA3834) |  |
+| memory | `019400000194 SMS4WEC8C2J2446SAG (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205430/4F42BA288B25) |  |
+| memory | `01980000802C K1CXP8-MIB (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205430/2DE74FEFCA3B) |  |
+| memory | `859B0000802C CT32G4SFD832A.M16FF (32 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205430/D44371F64C47) |  |
+| memory | `01980000802C KCDT82-MIE (4 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%205090/14C80413B16B) | no 4 GiB module with a part number in the reports of this model; the same maker's part in the reports of dell-optiplex-5090 |
 | disk | `MTFDDAV256TBN-1AR15ABHA HPC0T12` | B | [report](https://github.com/linuxhw/HWInfo/blob/master/Notebook/Dell/Latitude/Latitude%205520/1DC6794B86BA/UBUNTU-20.04/5.11.0-46-GENERIC/X86_64/95721C3566) | no SATA disk in its reports; Latitude 5520 (same M.2 slot family) |
 
 ## Dell Latitude 5520 (`dell-latitude-5520`)
@@ -898,12 +971,17 @@ Counts: 1533 values of class A, 31 of class B, 13 of class C.
 | chassis_sku | `Notebook` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205520/06DA8F88AC13) |  |
 | cpu_socket | `U3E1` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205520/06DA8F88AC13) |  |
 | cpu_part | ` ` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205520/06DA8F88AC13) |  |
+| cpu_upgrade | `0x01` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205520/06DA8F88AC13) | SMBIOS upgrade code |
+| cpu_voltage | `0.7 V` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205520/06DA8F88AC13) | the most common reading; it differs by CPU |
 | board version | `A00` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205520/06DA8F88AC13) |  |
 | memory slots | `DIMM 1/BANK 0; DIMM 2/BANK 0` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205520/06DA8F88AC13) |  |
-| memory | `80AD000080AD HMAA2GS6CJR8N-XN` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205520/06DA8F88AC13) |  |
-| memory | `802C0000802C 8ATF2G64HZ-3G2E2` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205520/089F750864FB) |  |
-| memory | `80AD000080AD HMAA1GS6CJR6N-XN` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205520/0BDDCBB7E495) |  |
-| memory | `80AD000080AD HMAA2GS6AJR8N-XN` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205520/23594705D07D) |  |
+| memory | `80AD000080AD HMAA2GS6CJR8N-XN (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205520/06DA8F88AC13) |  |
+| memory | `802C0000802C 8ATF2G64HZ-3G2E2 (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205520/089F750864FB) |  |
+| memory | `80AD000080AD HMAA1GS6CJR6N-XN (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205520/0BDDCBB7E495) |  |
+| memory | `80CE000080CE M471A1G44BB0-CWE (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205520/20F9B8A81F8A) |  |
+| memory | `80CE000080CE M471A4G43AB1-CWE (32 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205520/516D58BED016) |  |
+| memory | `04CD000080AD F4-3200C22-32GRS (32 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205520/5F4FBBD5E58E) |  |
+| memory | `01980000802C KCDT82-MIE (4 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%205090/14C80413B16B) | no 4 GiB module with a part number in the reports of this model; the same maker's part in the reports of dell-optiplex-5090 |
 | disk | `MTFDDAV256TBN-1AR15ABHA HPC0T12` | A | [report](https://github.com/linuxhw/HWInfo/blob/master/Notebook/Dell/Latitude/Latitude%205520/1DC6794B86BA/UBUNTU-20.04/5.11.0-46-GENERIC/X86_64/95721C3566) |  |
 
 ## Dell Latitude 5530 (`dell-latitude-5530`)
@@ -948,12 +1026,16 @@ Counts: 1533 values of class A, 31 of class B, 13 of class C.
 | chassis_sku | `Notebook` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205530/0995023215C8) |  |
 | cpu_socket | `U3E1` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205530/0995023215C8) |  |
 | cpu_part | ` ` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205530/0995023215C8) |  |
+| cpu_upgrade | `0x01` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205530/0995023215C8) | SMBIOS upgrade code |
+| cpu_voltage | `1.2 V` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205530/0F6024C05650) | the most common reading; it differs by CPU |
 | board version | `A00` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205530/0995023215C8) |  |
 | memory slots | `DIMM 1/BANK 0; DIMM 2/BANK 0` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205530/0995023215C8) |  |
-| memory | `80CE000080CE M471A1G44BB0-CWE` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205530/0995023215C8) |  |
-| memory | `80AD000080AD HMAA1GS6CJR6N-XN` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205530/1AFAE3AEA1E4) |  |
-| memory | `80AD000080AD HMAA2GS6CJR8N-XN` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205530/0F6024C05650) |  |
-| memory | `80CE000080CE M471A2G43BB2-CWE` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205530/0F6024C05650) |  |
+| memory | `80CE000080CE M471A1G44BB0-CWE (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205530/0995023215C8) |  |
+| memory | `80AD000080AD HMAA1GS6CJR6N-XN (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205530/1AFAE3AEA1E4) |  |
+| memory | `80AD000080AD HMAA2GS6CJR8N-XN (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205530/0F6024C05650) |  |
+| memory | `80CE000080CE M471A2G43BB2-CWE (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%205530/0F6024C05650) |  |
+| memory | `01980000802C KCDT82-MIE (4 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%205090/14C80413B16B) | no 4 GiB module with a part number in the reports of this model; the same maker's part in the reports of dell-optiplex-5090 |
+| memory | `859B0000802C CT32G4SFD832A.M16FF (32 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207000/63830CD3C14A) | no 32 GiB module with a part number in the reports of this model; the same maker's part in the reports of dell-optiplex-7000 |
 | disk | `MTFDDAV256TBN-1AR15ABHA HPC0T12` | B | [report](https://github.com/linuxhw/HWInfo/blob/master/Notebook/Dell/Latitude/Latitude%205520/1DC6794B86BA/UBUNTU-20.04/5.11.0-46-GENERIC/X86_64/95721C3566) | no SATA disk in its reports; Latitude 5520 (same M.2 slot family) |
 
 ## Dell Latitude 3520 (`dell-latitude-3520`)
@@ -997,12 +1079,16 @@ Counts: 1533 values of class A, 31 of class B, 13 of class C.
 | chassis_sku | `Notebook` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%203520/136EC1A40F06) |  |
 | cpu_socket | `U3E1` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%203520/136EC1A40F06) |  |
 | cpu_part | ` ` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%203520/136EC1A40F06) |  |
+| cpu_upgrade | `0x01` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%203520/136EC1A40F06) | SMBIOS upgrade code |
+| cpu_voltage | `0.7 V` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%203520/136EC1A40F06) | the most common reading; it differs by CPU |
 | board version | `A00` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%203520/136EC1A40F06) |  |
 | memory slots | `DIMM 1/BANK 0; DIMM 2/BANK 0` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%203520/136EC1A40F06) |  |
-| memory | `80AD000080AD HMAA2GS6CJR8N-XN` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%203520/1405D592A133) |  |
-| memory | `80AD000080AD HMAA1GS6CJR6N-XN` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%203520/785177094905) |  |
-| memory | `075D00000000 GR3200S464L22/16G` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%203520/233E4E7069F9) |  |
-| memory | `80CE000080CE M471A2G43AB2-CWE` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%203520/3899B0D81E4C) |  |
+| memory | `80AD000080AD HMAA2GS6CJR8N-XN (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%203520/1405D592A133) |  |
+| memory | `075D00000000 GR3200S464L22/16G (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%203520/233E4E7069F9) |  |
+| memory | `80AD000080AD HMAA1GS6CJR6N-XN (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%203520/785177094905) |  |
+| memory | `01980000802C 9905700-086.A00G (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%203520/3E61F1A338E0) |  |
+| memory | `80AD000080AD HMA851S6DJR6N-XN (4 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Latitude/Latitude%203520/64EF016761BD) |  |
+| memory | `859B0000802C CT32G4SFD832A.M16FF (32 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207000/63830CD3C14A) | no 32 GiB module with a part number in the reports of this model; the same maker's part in the reports of dell-optiplex-7000 |
 | disk | `TOSHIBA MQ04ABF100 100001` | A | [report](https://github.com/linuxhw/Dmesg/blob/main/Notebook/Dell/Latitude/Latitude%203520/BEEE0CBAF2F8/UBUNTU-20.04/5.10.0-1045-OEM/X86_64/B28801BF6C) |  |
 | disk | `TOSHIBA MQ04ABF100 100002` | A | [report](https://github.com/linuxhw/Dmesg/blob/main/Notebook/Dell/Latitude/Latitude%203520/13DBE0B08ADA/UBUNTU-18.04/5.4.0-97-GENERIC/X86_64/7F6955E406) |  |
 
@@ -1048,12 +1134,16 @@ Counts: 1533 values of class A, 31 of class B, 13 of class C.
 | chassis_sku | `Notebook` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Vostro/Vostro%2015%203510/3453024970F9) |  |
 | cpu_socket | `CPU 1` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Vostro/Vostro%2015%203510/3453024970F9) |  |
 | cpu_part | ` ` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Vostro/Vostro%2015%203510/3453024970F9) |  |
+| cpu_upgrade | `0x01` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Vostro/Vostro%2015%203510/3453024970F9) | SMBIOS upgrade code |
+| cpu_voltage | `0.8 V` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Vostro/Vostro%2015%203510/354B1FD744F6) | the most common reading; it differs by CPU |
 | board version | `A00` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Vostro/Vostro%2015%203510/3453024970F9) |  |
 | memory slots | `DIMM A/; DIMM B/` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Vostro/Vostro%2015%203510/3453024970F9) |  |
-| memory | `80AD000080AD HMAA1GS6CJR6N-XN` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Vostro/Vostro%2015%203510/354B1FD744F6) |  |
-| memory | `019400000000 SMS4WEC8C1K0446FCG` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Vostro/Vostro%2015%203510/3453024970F9) |  |
-| memory | `019400000194 SMS4WEC3C1J0446SAG` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Vostro/Vostro%2015%203510/7208D2A1AAFD) |  |
-| memory | `80CE000080CE M471A1G44BB0-CWE` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Vostro/Vostro%2015%203510/72E3ED3BC0D2) |  |
+| memory | `80AD000080AD HMAA1GS6CJR6N-XN (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Vostro/Vostro%2015%203510/354B1FD744F6) |  |
+| memory | `019400000000 SMS4WEC8C1K0446FCG (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Vostro/Vostro%2015%203510/3453024970F9) |  |
+| memory | `04CB000080AD AD4S3200J4G22-B (4 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Vostro/Vostro%2015%203510/BCCAAC10EEB7) |  |
+| memory | `04CB000080AD AL1P32NC4U1-B89S (4 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Vostro/Vostro%2015%203510/9CF0A42E9C33) |  |
+| memory | `075D00000000 GR3200S464L22S/16G (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Dell/Vostro/Vostro%2015%203510/495777EA28D7) |  |
+| memory | `859B0000802C CT32G4SFD832A.M16FF (32 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Desktop/Dell/OptiPlex/OptiPlex%207000/63830CD3C14A) | no 32 GiB module with a part number in the reports of this model; the same maker's part in the reports of dell-optiplex-7000 |
 | disk | `ST1000LM049-2GH172 SDM1` | A | [report](https://github.com/linuxhw/Dmesg/blob/main/Desktop/Dell/OptiPlex/OptiPlex%203080/720698D0737E/UBUNTU-22.04/5.15.0-43-GENERIC/X86_64/B1011AE242) |  |
 
 ## HP 250 G8 (`hp-250-g8`)
@@ -1103,6 +1193,8 @@ Counts: 1533 values of class A, 31 of class B, 13 of class C.
 | chassis_sku | `SKU Number` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/250/250%20G8%20Notebook%20PC/0C75DE10669C) |  |
 | cpu_socket | `U3E1` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/250/250%20G8%20Notebook%20PC/0C75DE10669C) |  |
 | cpu_part | `To Be Filled By O.E.M.` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/250/250%20G8%20Notebook%20PC/0C75DE10669C) |  |
+| cpu_upgrade | `0x01` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/250/250%20G8%20Notebook%20PC/0C75DE10669C) | SMBIOS upgrade code |
+| cpu_voltage | `0.7 V` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/250/250%20G8%20Notebook%20PC/0FB594E96E36) | the most common reading; it differs by CPU |
 | board version | `50.27` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/250/250%20G8%20Notebook%20PC/0C75DE10669C) |  |
 | board version | `50.24` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/250/250%20G8%20Notebook%20PC/146CB534D161) |  |
 | board version | `50.34` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/250/250%20G8%20Notebook%20PC/0CDD126C1852) |  |
@@ -1110,10 +1202,13 @@ Counts: 1533 values of class A, 31 of class B, 13 of class C.
 | board version | `39.43` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/250/250%20G8%20Notebook%20PC/1F277278F495) |  |
 | board version | `40.34` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/250/250%20G8%20Notebook%20PC/9CF3900C24A8) |  |
 | memory slots | `Bottom - Slot 1 (left)/BANK 0; Bottom - Slot 2 (right)/BANK 0` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/250/250%20G8%20Notebook%20PC/0C75DE10669C) |  |
-| memory | `Nanya Technology NT8GA64D88CX3S-JR` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/250/250%20G8%20Notebook%20PC/0FB594E96E36) |  |
-| memory | `Micron Technology 8ATF1G64HZ-3G2R1` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/250/250%20G8%20Notebook%20PC/0C75DE10669C) |  |
-| memory | `Samsung M471A1K43DB1-CWE` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/250/250%20G8%20Notebook%20PC/5C1D4AB5A76F) |  |
-| memory | `SK Hynix HMA81GS6DJR8N-XN` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/250/250%20G8%20Notebook%20PC/6645D499C7B9) |  |
+| memory | `Nanya Technology NT8GA64D88CX3S-JR (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/250/250%20G8%20Notebook%20PC/0FB594E96E36) |  |
+| memory | `Micron Technology 8ATF1G64HZ-3G2R1 (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/250/250%20G8%20Notebook%20PC/0C75DE10669C) |  |
+| memory | `G Skill Intl F4-2666C19-16GRS (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/250/250%20G8%20Notebook%20PC/8A760A7C7500) |  |
+| memory | `Micron Technology 8ATF2G64HZ-3G2F1 (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/250/250%20G8%20Notebook%20PC/9ACD22A738D9) |  |
+| memory | `Kingston HP32D4S2S1ME-4 (4 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/250/250%20G8%20Notebook%20PC/45EFB5F04EDF) |  |
+| memory | `SK Hynix HMA851S6CJR6N-XN (4 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/250/250%20G8%20Notebook%20PC/E89A74834DB6) |  |
+| memory | `Kingston 9905744-111.A00G (32 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021AH00BNUS/020A277D9883) | no 32 GiB module with a part number in the reports of this model; the same maker's part in the reports of lenovo-thinkpad-t14-gen3 |
 | disk | `MTFDDAV256TDL-1AW1ZABHA HPC0032` | A | [report](https://github.com/linuxhw/HWInfo/blob/master/Notebook/Hewlett-Packard/250/250%20G8%20Notebook%20PC/1F277278F495/DEBIAN-11/5.10.0-9-AMD64/X86_64/C0A39342C3) |  |
 
 ## HP ProBook 450 G8 (`hp-probook-450-g8`)
@@ -1157,6 +1252,8 @@ Counts: 1533 values of class A, 31 of class B, 13 of class C.
 | chassis_sku | `` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20450%20G8%20Notebook%20PC/04C7D6437DD8) |  |
 | cpu_socket | `U3E1` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20450%20G8%20Notebook%20PC/04C7D6437DD8) |  |
 | cpu_part | `To Be Filled By O.E.M.` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20450%20G8%20Notebook%20PC/04C7D6437DD8) |  |
+| cpu_upgrade | `0x01` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20450%20G8%20Notebook%20PC/04C7D6437DD8) | SMBIOS upgrade code |
+| cpu_voltage | `0.8 V` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20450%20G8%20Notebook%20PC/04C7D6437DD8) | the most common reading; it differs by CPU |
 | board version | `KBC Version 33.08.00` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20450%20G8%20Notebook%20PC/122666C6340C) |  |
 | board version | `KBC Version 33.0C.00` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20450%20G8%20Notebook%20PC/1FF0BC1E80CD) |  |
 | board version | `KBC Version 33.19.00` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20450%20G8%20Notebook%20PC/426343574F2F) |  |
@@ -1164,10 +1261,12 @@ Counts: 1533 values of class A, 31 of class B, 13 of class C.
 | board version | `KBC Version 33.14.00` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20450%20G8%20Notebook%20PC/127F26C4D075) |  |
 | board version | `KBC Version 33.15.00` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20450%20G8%20Notebook%20PC/04C7D6437DD8) |  |
 | memory slots | `Bottom-Slot 1(left)/Controller0ChannelADimm0; Bottom-Slot 2(right)/Controller1ChannelADimm0` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20450%20G8%20Notebook%20PC/04C7D6437DD8) |  |
-| memory | `Unknown - [0x9B85] CT16G4SFRA32A.C8FE` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20450%20G8%20Notebook%20PC/B0498E403A6B) |  |
-| memory | `Kingston 9905624-059.A00G` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20450%20G8%20Notebook%20PC/657E21304C05) |  |
-| memory | `Kingston 9905700-122.A00G` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20450%20G8%20Notebook%20PC/85484292398E) |  |
-| memory | `Kingston 9905744-113.A01G` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20450%20G8%20Notebook%20PC/ABF724DD4F89) |  |
+| memory | `Kingston 9905624-059.A00G (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20450%20G8%20Notebook%20PC/657E21304C05) |  |
+| memory | `Unknown - [0x7A01] D22.27562S.001 (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20450%20G8%20Notebook%20PC/1FF0BC1E80CD) |  |
+| memory | `Unknown - [0x9B85] CT16G4SFRA32A.C8FE (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20450%20G8%20Notebook%20PC/B0498E403A6B) |  |
+| memory | `Kingston 9905700-122.A00G (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20450%20G8%20Notebook%20PC/85484292398E) |  |
+| memory | `Kingston HP32D4S2S1ME-4 (4 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/250/250%20G8%20Notebook%20PC/45EFB5F04EDF) | no 4 GiB module with a part number in the reports of this model; the same maker's part in the reports of hp-250-g8 |
+| memory | `Kingston 9905744-111.A00G (32 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021AH00BNUS/020A277D9883) | no 32 GiB module with a part number in the reports of this model; the same maker's part in the reports of lenovo-thinkpad-t14-gen3 |
 | disk | `Samsung SSD 860 EVO M.2 500GB RVT24B6Q` | A | [report](https://github.com/linuxhw/Dmesg/blob/main/Notebook/Hewlett-Packard/ProBook/ProBook%20450%20G8%20Notebook%20PC/657E21304C05/POP%21_OS-22.04/6.0.2-76060002-GENERIC/X86_64/E7DB99BE75) |  |
 
 ## HP ProBook 440 G8 (`hp-probook-440-g8`)
@@ -1211,6 +1310,8 @@ Counts: 1533 values of class A, 31 of class B, 13 of class C.
 | chassis_sku | `` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20440%20G8%20Notebook%20PC/00CF868D7516) |  |
 | cpu_socket | `U3E1` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20440%20G8%20Notebook%20PC/00CF868D7516) |  |
 | cpu_part | `To Be Filled By O.E.M.` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20440%20G8%20Notebook%20PC/00CF868D7516) |  |
+| cpu_upgrade | `0x01` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20440%20G8%20Notebook%20PC/00CF868D7516) | SMBIOS upgrade code |
+| cpu_voltage | `0.7 V` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20440%20G8%20Notebook%20PC/03D0CB789537) | the most common reading; it differs by CPU |
 | board version | `KBC Version 33.24.00` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20440%20G8%20Notebook%20PC/50F6DE4DA732) |  |
 | board version | `KBC Version 33.08.00` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20440%20G8%20Notebook%20PC/03D0CB789537) |  |
 | board version | `KBC Version 54.07.00` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20440%20G8%20Notebook%20PC/6A80E6C48EFD) |  |
@@ -1218,10 +1319,12 @@ Counts: 1533 values of class A, 31 of class B, 13 of class C.
 | board version | `KBC Version 33.14.00` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20440%20G8%20Notebook%20PC/6F9DA93DCBAE) |  |
 | board version | `KBC Version 33.19.00` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20440%20G8%20Notebook%20PC/D5F68F218006) |  |
 | memory slots | `Bottom-Slot 1(left)/Controller0ChannelADimm0; Bottom-Slot 2(right)/Controller1ChannelADimm0` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20440%20G8%20Notebook%20PC/00CF868D7516) |  |
-| memory | `Unknown - [0x9B85] CT16G4SFRA32A.C8FF` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20440%20G8%20Notebook%20PC/D914BFDB2BB0) |  |
-| memory | `Unknown - [0x7A01] D22.2756BS.001` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20440%20G8%20Notebook%20PC/981783CA5E16) |  |
-| memory | `Unknown - [0x9B85] CT16G4SFD832A.C16FJ` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20440%20G8%20Notebook%20PC/39DAE73B2DFC) |  |
-| memory | `Unknown - [0x9B85] CT32G4SFD832A.C16FF` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20440%20G8%20Notebook%20PC/50F6DE4DA732) |  |
+| memory | `Unknown - [0x7A01] D22.2756BS.001 (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20440%20G8%20Notebook%20PC/981783CA5E16) |  |
+| memory | `Unknown - [0x9B85] CT8G4SFRA32A.C8FP (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20440%20G8%20Notebook%20PC/374C2B2C887F) |  |
+| memory | `Unknown - [0x9B85] CT16G4SFRA32A.C8FF (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20440%20G8%20Notebook%20PC/D914BFDB2BB0) |  |
+| memory | `Unknown - [0x9B85] CT16G4SFD832A.C16FJ (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20440%20G8%20Notebook%20PC/39DAE73B2DFC) |  |
+| memory | `Kingston HP32D4S2S1ME-4 (4 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/250/250%20G8%20Notebook%20PC/45EFB5F04EDF) | no 4 GiB module with a part number in the reports of this model; the same maker's part in the reports of hp-250-g8 |
+| memory | `Unknown - [0x9B85] CT32G4SFD832A.C16FF (32 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20440%20G8%20Notebook%20PC/50F6DE4DA732) |  |
 | disk | `Samsung SSD 860 EVO M.2 500GB RVT24B6Q` | B | [report](https://github.com/linuxhw/Dmesg/blob/main/Notebook/Hewlett-Packard/ProBook/ProBook%20450%20G8%20Notebook%20PC/657E21304C05/POP%21_OS-22.04/6.0.2-76060002-GENERIC/X86_64/E7DB99BE75) | no SATA disk in its reports; ProBook 450 G8 (same chassis family) |
 
 ## HP ProBook 455 G8 (`hp-probook-455-g8`)
@@ -1263,6 +1366,8 @@ Counts: 1533 values of class A, 31 of class B, 13 of class C.
 | chassis_sku | `` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20455%20G8%20Notebook%20PC/18D11FD497F6) |  |
 | cpu_socket | `FP6` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20455%20G8%20Notebook%20PC/18D11FD497F6) |  |
 | cpu_part | `Unknown` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20455%20G8%20Notebook%20PC/18D11FD497F6) |  |
+| cpu_upgrade | `0x06` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20455%20G8%20Notebook%20PC/18D11FD497F6) | SMBIOS upgrade code |
+| cpu_voltage | `1.2 V` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20455%20G8%20Notebook%20PC/18D11FD497F6) | the most common reading; it differs by CPU |
 | board version | `KBC Version 41.23.00` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20455%20G8%20Notebook%20PC/18D11FD497F6) |  |
 | board version | `KBC Version 41.28.00` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20455%20G8%20Notebook%20PC/495BFD3F00D2) |  |
 | board version | `KBC Version 41.1B.00` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20455%20G8%20Notebook%20PC/40D0537D4DB2) |  |
@@ -1270,8 +1375,11 @@ Counts: 1533 values of class A, 31 of class B, 13 of class C.
 | board version | `KBC Version 41.25.00` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20455%20G8%20Notebook%20PC/46769EF55033) |  |
 | board version | `KBC Version 41.31.00` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20455%20G8%20Notebook%20PC/A291DCFFFD91) |  |
 | memory slots | `Bottom-Slot 1(left)/ChannelA0; Bottom-Slot 2(right)/ChannelB0` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20455%20G8%20Notebook%20PC/18D11FD497F6) |  |
-| memory | `Kingston 9905700-072.A01G` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20455%20G8%20Notebook%20PC/18D11FD497F6) |  |
-| memory | `Unknown - [0x9B85] CT16G4SFRA32A.C8FF` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20455%20G8%20Notebook%20PC/A291DCFFFD91) |  |
+| memory | `Kingston 9905700-072.A01G (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20455%20G8%20Notebook%20PC/18D11FD497F6) |  |
+| memory | `Unknown - [0x9B85] CT16G4SFRA32A.C8FF (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/ProBook/ProBook%20455%20G8%20Notebook%20PC/A291DCFFFD91) |  |
+| memory | `Samsung M471A1G44BB0-CWE (8 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021AH0019US/9625EE3D8D94) | no 8 GiB module with a part number in the reports of this model; the same maker's part in the reports of lenovo-thinkpad-t14-gen3 |
+| memory | `Kingston 9905744-111.A00G (32 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021AH00BNUS/020A277D9883) | no 32 GiB module with a part number in the reports of this model; the same maker's part in the reports of lenovo-thinkpad-t14-gen3 |
+| memory | `Kingston HP32D4S2S1ME-4 (4 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/250/250%20G8%20Notebook%20PC/45EFB5F04EDF) | no 4 GiB module with a part number in the reports of this model; the same maker's part in the reports of hp-250-g8 |
 | disk | `Samsung SSD 860 EVO M.2 500GB RVT24B6Q` | B | [report](https://github.com/linuxhw/Dmesg/blob/main/Notebook/Hewlett-Packard/ProBook/ProBook%20450%20G8%20Notebook%20PC/657E21304C05/POP%21_OS-22.04/6.0.2-76060002-GENERIC/X86_64/E7DB99BE75) | no SATA disk in its reports; ProBook 450 G8 (same chassis family) |
 
 ## Lenovo ThinkPad T14 Gen 3 (AMD) (`lenovo-t14-gen3-amd`)
@@ -1309,16 +1417,18 @@ Counts: 1533 values of class A, 31 of class B, 13 of class C.
 | chassis_sku | `` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021CF000CUS/0151DA67ED76) |  |
 | cpu_socket | `FP7` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021CF000CUS/0151DA67ED76) |  |
 | cpu_part | `None` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021CF000CUS/0151DA67ED76) |  |
+| cpu_upgrade | `0x06` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021CF000CUS/0151DA67ED76) | SMBIOS upgrade code |
+| cpu_voltage | `1.2 V` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021CF000CUS/0151DA67ED76) | the most common reading; it differs by CPU |
 | board version | `ThinkPad` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021CF001PHH/1F8EAD10FEED) |  |
 | board version | `SDK0T76538 WIN` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021CF000CUS/0151DA67ED76) |  |
 | board version | `SDK0T76530 WIN` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021CF003TUS/73C9FF1BD839) |  |
 | board version | `SDK0K17763 WIN` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021CF002UMZ/0B5AB7D98010) |  |
 | board version | `SDK0T76461 WIN` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021CFCTO1WW/AF50416A84FF) |  |
 | memory slots | `DIMM 0/P0 CHANNEL A; DIMM 0/P0 CHANNEL B; DIMM 0/P0 CHANNEL C; DIMM 0/P0 CHANNEL D` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021CF000CUS/0151DA67ED76) |  |
-| memory | `Micron Technology MT62F1G32D4DR-031 WT` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021CF000CUS/0151DA67ED76) |  |
-| memory | `Micron Technology MT62F2G32D8DR-031 WT` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021CF004PGE/696E48381F84) |  |
-| memory | `Hynix H9JCNNNCP3MLYR-N6E` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021CF002GMX/0E1CFF24E847) |  |
-| memory | `Hynix H9JCNNNFA5MLYR-N6E` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021CFS08M00/8805D2B2F753) |  |
+| memory | `Micron Technology MT62F1G32D4DR-031 WT (4 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021CF000CUS/0151DA67ED76) |  |
+| memory | `Micron Technology MT62F2G32D8DR-031 WT (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021CF004PGE/696E48381F84) |  |
+| memory | `Hynix H9JCNNNCP3MLYR-N6E (4 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021CF002GMX/0E1CFF24E847) |  |
+| memory | `Hynix H9JCNNNFA5MLYR-N6E (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021CFS08M00/8805D2B2F753) |  |
 | disk | `MTFDDAV256TBN-1AR15ABHA HPC0T12` | C | [report](https://github.com/linuxhw/HWInfo/blob/master/Notebook/Dell/Latitude/Latitude%205520/1DC6794B86BA/UBUNTU-20.04/5.11.0-46-GENERIC/X86_64/95721C3566) | no SATA disk in any of the ThinkPad Dmesg/HWInfo reports; the PSREF of the T14 Gen 2 AMD (https://psref.lenovo.com/syspool/Sys/PDF/ThinkPad/ThinkPad_T14_Gen_2_AMD/ThinkPad_T14_Gen_2_AMD_Spec.html) lists one PCIe NVMe M.2 slot only: a SATA disk is a stand-in from a Latitude 5520 (decision needed) |
 
 ## Lenovo ThinkPad T14 Gen 3 (Intel) (`lenovo-thinkpad-t14-gen3`)
@@ -1356,16 +1466,21 @@ Counts: 1533 values of class A, 31 of class B, 13 of class C.
 | chassis_sku | `` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021AH0019US/9625EE3D8D94) |  |
 | cpu_socket | `U3E1` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021AH0019US/9625EE3D8D94) |  |
 | cpu_part | `None` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021AH0019US/9625EE3D8D94) |  |
+| cpu_upgrade | `0x01` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021AH0019US/9625EE3D8D94) | SMBIOS upgrade code |
+| cpu_voltage | `1.1 V` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021AH0019US/9625EE3D8D94) | the most common reading; it differs by CPU |
 | board version | `SDK0T76530 WIN` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021AH0019US/9625EE3D8D94) |  |
 | board version | `SDK0T76538 WIN` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021AH00BNUS/020A277D9883) |  |
 | board version | `Not Defined` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021AH1SIT01/643CFB64FDD5) |  |
 | board version | `SDK0K17763 WIN` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021AJS1AW01/72D46F3A461B) |  |
 | board version | `SDK0T76479 WIN` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021AHA015CD/3A1D9D23C611) |  |
 | memory slots | `Controller0-ChannelA/BANK 0; Controller0-ChannelB-DIMM0/BANK 1; Controller0-ChannelC-DIMM0/BANK 2; Controller0-ChannelD-DIMM0/BANK 3` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021AH0019US/9625EE3D8D94) |  |
-| memory | `SK Hynix HMAB2GS6CMR6N-XN` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021AH0082PB/E8B4DDEF6312) |  |
-| memory | `Samsung M471A2G43BB2-CWE` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021AH008LRI/20E450F73DE1) |  |
-| memory | `Micron Technology 4ATS2G64HZ-3G2B1` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021AH008LRI/20E450F73DE1) |  |
-| memory | `Samsung M471A1G44BB0-CWE` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021AH0019US/9625EE3D8D94) |  |
+| memory | `SK Hynix HMAB2GS6CMR6N-XN (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021AH0082PB/E8B4DDEF6312) |  |
+| memory | `Samsung M471A2G43BB2-CWE (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021AH008LRI/20E450F73DE1) |  |
+| memory | `Samsung M471A1G44BB0-CWE (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021AH0019US/9625EE3D8D94) |  |
+| memory | `SK Hynix HMAA1GS6CJR6N-XN (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021AH0019US/9625EE3D8D94) |  |
+| memory | `Kingston 9905744-111.A00G (32 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021AH00BNUS/020A277D9883) |  |
+| memory | `Foxline FL3200D4S22-32G (32 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021AH00BRUS/F61010F3DC8E) |  |
+| memory | `Kingston HP32D4S2S1ME-4 (4 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/250/250%20G8%20Notebook%20PC/45EFB5F04EDF) | no 4 GiB module with a part number in the reports of this model; the same maker's part in the reports of hp-250-g8 |
 | disk | `MTFDDAV256TBN-1AR15ABHA HPC0T12` | C | [report](https://github.com/linuxhw/HWInfo/blob/master/Notebook/Dell/Latitude/Latitude%205520/1DC6794B86BA/UBUNTU-20.04/5.11.0-46-GENERIC/X86_64/95721C3566) | no SATA disk in any of the ThinkPad Dmesg/HWInfo reports; the PSREF of the T14 Gen 2 AMD (https://psref.lenovo.com/syspool/Sys/PDF/ThinkPad/ThinkPad_T14_Gen_2_AMD/ThinkPad_T14_Gen_2_AMD_Spec.html) lists one PCIe NVMe M.2 slot only: a SATA disk is a stand-in from a Latitude 5520 (decision needed) |
 
 ## Lenovo ThinkPad E14 Gen 4 (Intel) (`lenovo-thinkpad-e14-gen4`)
@@ -1403,15 +1518,20 @@ Counts: 1533 values of class A, 31 of class B, 13 of class C.
 | chassis_sku | `` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20E14%20Gen%204%2021E3000LAU/58F4508E0105) |  |
 | cpu_socket | `U3E1` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20E14%20Gen%204%2021E3000LAU/58F4508E0105) |  |
 | cpu_part | `None` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20E14%20Gen%204%2021E3000LAU/58F4508E0105) |  |
+| cpu_upgrade | `0x01` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20E14%20Gen%204%2021E3000LAU/58F4508E0105) | SMBIOS upgrade code |
+| cpu_voltage | `1.1 V` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20E14%20Gen%204%2021E3000LAU/58F4508E0105) | the most common reading; it differs by CPU |
 | board version | `Not Defined` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20E14%20Gen%204%2021E30087TX/415E8CC4B431) |  |
 | board version | `SDK0T76530 WIN` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20E14%20Gen%204%2021E3005DGE/5A2C70D347A2) |  |
 | board version | `SDK0T76485 WIN` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20E14%20Gen%204%2021E3S05B00/E1F414934528) |  |
 | board version | `SDK0T76538 WIN` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20E14%20Gen%204%2021E3000LAU/58F4508E0105) |  |
 | memory slots | `Controller0-ChannelA-DIMM0/BANK 0; Controller0-ChannelB-DIMM0/BANK 1; Controller0-ChannelC-DIMM0/BANK 2; Controller0-ChannelD-DIMM0/BANK 3` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20E14%20Gen%204%2021E3000LAU/58F4508E0105) |  |
-| memory | `Samsung M471A1G44BB0-CWE` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20E14%20Gen%204%2021E3000LAU/58F4508E0105) |  |
-| memory | `SK Hynix HMAA1GS6CJR6N-XN` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20E14%20Gen%204%2021E3000LAU/58F4508E0105) |  |
-| memory | `Micron Technology MT40A1G16RC-062E:B` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20E14%20Gen%204%2021E3005DGE/5A2C70D347A2) |  |
-| memory | `Corsair CMSX8GX4M1A3200C22` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20E14%20Gen%204%2021E300DQVA/16C538529377) |  |
+| memory | `Samsung M471A1G44BB0-CWE (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20E14%20Gen%204%2021E3000LAU/58F4508E0105) |  |
+| memory | `SK Hynix HMAA1GS6CJR6N-XN (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20E14%20Gen%204%2021E3000LAU/58F4508E0105) |  |
+| memory | `Crucial Technology CT32G4SFD832A.M16FF (32 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20E14%20Gen%204%2021E300ESPB/E69E18C34452) |  |
+| memory | `Kingston 9905744-111.A00G (32 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20E14%20Gen%204%2021E30066SP/E84030EC0D8E) |  |
+| memory | `Kingston KF3200C20S4/16G (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20E14%20Gen%204%2021E3CTO1WW/791D1E9C4104) |  |
+| memory | `Samsung M471A2G43BB2-CWE (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20E14%20Gen%204%2021E3CTO1WW/C2D511629375) |  |
+| memory | `Kingston HP32D4S2S1ME-4 (4 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/250/250%20G8%20Notebook%20PC/45EFB5F04EDF) | no 4 GiB module with a part number in the reports of this model; the same maker's part in the reports of hp-250-g8 |
 | disk | `MTFDDAV256TBN-1AR15ABHA HPC0T12` | C | [report](https://github.com/linuxhw/HWInfo/blob/master/Notebook/Dell/Latitude/Latitude%205520/1DC6794B86BA/UBUNTU-20.04/5.11.0-46-GENERIC/X86_64/95721C3566) | no SATA disk in any of the ThinkPad Dmesg/HWInfo reports; the PSREF of the T14 Gen 2 AMD (https://psref.lenovo.com/syspool/Sys/PDF/ThinkPad/ThinkPad_T14_Gen_2_AMD/ThinkPad_T14_Gen_2_AMD_Spec.html) lists one PCIe NVMe M.2 slot only: a SATA disk is a stand-in from a Latitude 5520 (decision needed) |
 
 ## Lenovo ThinkPad L14 Gen 2 (Intel) (`lenovo-thinkpad-l14-gen2`)
@@ -1447,15 +1567,19 @@ Counts: 1533 values of class A, 31 of class B, 13 of class C.
 | chassis_sku | `` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20L14%20Gen%202%2020X1003WGE/07C04D306272) |  |
 | cpu_socket | `U3E1` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20L14%20Gen%202%2020X1003WGE/07C04D306272) |  |
 | cpu_part | `None` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20L14%20Gen%202%2020X1003WGE/07C04D306272) |  |
+| cpu_upgrade | `0x01` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20L14%20Gen%202%2020X1003WGE/07C04D306272) | SMBIOS upgrade code |
+| cpu_voltage | `0.7 V` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20L14%20Gen%202%2020X1003WGE/07C04D306272) | the most common reading; it differs by CPU |
 | board version | `SDK0J40697 WIN` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20L14%20Gen%202%2020X1003WGE/07C04D306272) |  |
 | board version | `Not Defined` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20L14%20Gen%202%2020X2006PBO/56B8743C99A4) |  |
 | board version | `SDK0K09938 WIN` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20L14%20Gen%202%2020X2A00KCD/8956482774FB) |  |
 | board version | `SDK0T76530 WIN` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20L14%20Gen%202%2020X1S12N00/A6DEF9DACA36) |  |
 | memory slots | `Controller0-ChannelA-DIMM0/BANK 0; Controller1-ChannelA-DIMM0/BANK 0` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20L14%20Gen%202%2020X1003WGE/07C04D306272) |  |
-| memory | `Samsung M471A1G44AB0-CWE` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20L14%20Gen%202%2020X1003WGE/07C04D306272) |  |
-| memory | `Samsung M471A2G43AB2-CWE` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20L14%20Gen%202%2020X2S06Y00/5CBD9662220D) |  |
-| memory | `0x0B2C HKED4162CAB1G4HB1` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20L14%20Gen%202%2020X2006PBO/56B8743C99A4) |  |
-| memory | `Apacer Technology D22.27553S.001` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20L14%20Gen%202%2020X1S12N00/A6DEF9DACA36) |  |
+| memory | `Samsung M471A2G43AB2-CWE (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20L14%20Gen%202%2020X2S06Y00/5CBD9662220D) |  |
+| memory | `0x0B2C HKED4162CAB1G4HB1 (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20L14%20Gen%202%2020X2006PBO/56B8743C99A4) |  |
+| memory | `Samsung M471A1G44AB0-CWE (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20L14%20Gen%202%2020X1003WGE/07C04D306272) |  |
+| memory | `Crucial Technology CT8G4SFRA32A.C8FE (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20L14%20Gen%202%2020X1S07900/9CE2CF269013) |  |
+| memory | `Kingston HP32D4S2S1ME-4 (4 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/250/250%20G8%20Notebook%20PC/45EFB5F04EDF) | no 4 GiB module with a part number in the reports of this model; the same maker's part in the reports of hp-250-g8 |
+| memory | `Kingston 9905744-111.A00G (32 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%203%2021AH00BNUS/020A277D9883) | no 32 GiB module with a part number in the reports of this model; the same maker's part in the reports of lenovo-thinkpad-t14-gen3 |
 | disk | `MTFDDAV256TBN-1AR15ABHA HPC0T12` | C | [report](https://github.com/linuxhw/HWInfo/blob/master/Notebook/Dell/Latitude/Latitude%205520/1DC6794B86BA/UBUNTU-20.04/5.11.0-46-GENERIC/X86_64/95721C3566) | no SATA disk in any of the ThinkPad Dmesg/HWInfo reports; the PSREF of the T14 Gen 2 AMD (https://psref.lenovo.com/syspool/Sys/PDF/ThinkPad/ThinkPad_T14_Gen_2_AMD/ThinkPad_T14_Gen_2_AMD_Spec.html) lists one PCIe NVMe M.2 slot only: a SATA disk is a stand-in from a Latitude 5520 (decision needed) |
 
 ## Lenovo ThinkPad E15 Gen 3 (AMD) (`lenovo-thinkpad-e15-gen3-amd`)
@@ -1493,12 +1617,17 @@ Counts: 1533 values of class A, 31 of class B, 13 of class C.
 | chassis_sku | `` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20E15%20Gen%203%2020YG001NJP/F275C0730825) |  |
 | cpu_socket | `FP6` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20E15%20Gen%203%2020YG001NJP/F275C0730825) |  |
 | cpu_part | `None` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20E15%20Gen%203%2020YG001NJP/F275C0730825) |  |
+| cpu_upgrade | `0x06` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20E15%20Gen%203%2020YG001NJP/F275C0730825) | SMBIOS upgrade code |
+| cpu_voltage | `1.2 V` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20E15%20Gen%203%2020YG001NJP/F275C0730825) | the most common reading; it differs by CPU |
 | board version | `Not Defined` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20E15%20Gen%203%2020YG001NJP/F275C0730825) |  |
 | memory slots | `DIMM 0/P0 CHANNEL A; DIMM 0/P0 CHANNEL B` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20E15%20Gen%203%2020YG001NJP/F275C0730825) |  |
-| memory | `Hynix HMAA1GS6CJR6N-XN` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20E15%20Gen%203%2020YG001NJP/F275C0730825) |  |
-| memory | `Micron Technology 4ATF1G64HZ-3G2E1` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20E15%20Gen%203%2020YG003UGE/B8CD886D750F) |  |
-| memory | `Samsung M471A1G44AB0-CWE` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20E15%20Gen%203%2020YG003UGE/B8CD886D750F) |  |
-| memory | `Samsung M471A1G44BB0-CWE` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20E15%20Gen%203%2020YG003VGE/4C167913C80C) |  |
+| memory | `Hynix HMAA1GS6CJR6N-XN (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20E15%20Gen%203%2020YG001NJP/F275C0730825) |  |
+| memory | `Micron Technology 4ATF1G64HZ-3G2E1 (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20E15%20Gen%203%2020YG003UGE/B8CD886D750F) |  |
+| memory | `Hynix HMAA2GS6CJR8N-XN (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20E15%20Gen%203%2020YG003YMH/074CDDD5387F) |  |
+| memory | `Kingston 9905700-095.A00G (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20E15%20Gen%203%2020YG003VRT/EE0D966A46F2) |  |
+| memory | `Unknown CT32G4SFD832A.C16FF (32 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20E15%20Gen%203%2020YG003XGE/20FB5F309405) |  |
+| memory | `Unknown CT32G4SFD832A.C16FF (32 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20E15%20Gen%203%2020YG006BMX/440B37DEE09E) |  |
+| memory | `Kingston HP32D4S2S1ME-4 (4 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/250/250%20G8%20Notebook%20PC/45EFB5F04EDF) | no 4 GiB module with a part number in the reports of this model; the same maker's part in the reports of hp-250-g8 |
 | disk | `MTFDDAV256TBN-1AR15ABHA HPC0T12` | C | [report](https://github.com/linuxhw/HWInfo/blob/master/Notebook/Dell/Latitude/Latitude%205520/1DC6794B86BA/UBUNTU-20.04/5.11.0-46-GENERIC/X86_64/95721C3566) | no SATA disk in any of the ThinkPad Dmesg/HWInfo reports; the PSREF of the T14 Gen 2 AMD (https://psref.lenovo.com/syspool/Sys/PDF/ThinkPad/ThinkPad_T14_Gen_2_AMD/ThinkPad_T14_Gen_2_AMD_Spec.html) lists one PCIe NVMe M.2 slot only: a SATA disk is a stand-in from a Latitude 5520 (decision needed) |
 
 ## Lenovo ThinkPad L14 Gen 2 (AMD) (`lenovo-thinkpad-l14-gen2-amd`)
@@ -1534,12 +1663,17 @@ Counts: 1533 values of class A, 31 of class B, 13 of class C.
 | chassis_sku | `` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20L14%20Gen%202a%2020X50009GE/1DFDA90A8389) |  |
 | cpu_socket | `FP6` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20L14%20Gen%202a%2020X50009GE/1DFDA90A8389) |  |
 | cpu_part | `None` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20L14%20Gen%202a%2020X50009GE/1DFDA90A8389) |  |
+| cpu_upgrade | `0x06` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20L14%20Gen%202a%2020X50009GE/1DFDA90A8389) | SMBIOS upgrade code |
+| cpu_voltage | `1.2 V` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20L14%20Gen%202a%2020X50009GE/1DFDA90A8389) | the most common reading; it differs by CPU |
 | board version | `Not Defined` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20L14%20Gen%202a%2020X50009GE/1DFDA90A8389) |  |
 | memory slots | `DIMM 0/P0 CHANNEL A; DIMM 0/P0 CHANNEL B` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20L14%20Gen%202a%2020X50009GE/1DFDA90A8389) |  |
-| memory | `Hynix HMAA2GS6CJR8N-XN` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20L14%20Gen%202a%2020X50049GE/08B34FA434DF) |  |
-| memory | `Hynix HMAA1GS6CJR6N-XN` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20L14%20Gen%202a%2020X6S15A00/B12E4B54E373) |  |
-| memory | `Kingston 9905744-062.A00G` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20L14%20Gen%202a%2020X50049GE/A175E82A68C1) |  |
-| memory | `Kingston KHX3200C20S4/32GX` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20L14%20Gen%202a%2020X50009GE/B89503C66E9B) |  |
+| memory | `Hynix HMAA2GS6CJR8N-XN (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20L14%20Gen%202a%2020X50049GE/08B34FA434DF) |  |
+| memory | `Ramaxel Technology RMSA3320ME88HBF-3200 (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20L14%20Gen%202a%2020X50009GE/1DFDA90A8389) |  |
+| memory | `Kingston 9905744-062.A00G (32 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20L14%20Gen%202a%2020X50049GE/A175E82A68C1) |  |
+| memory | `Kingston KHX3200C20S4/32GX (32 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20L14%20Gen%202a%2020X50009GE/B89503C66E9B) |  |
+| memory | `Hynix HMAA1GS6CJR6N-XN (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20L14%20Gen%202a%2020X6S15A00/B12E4B54E373) |  |
+| memory | `Samsung M471A1G44AB0-CWE (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20L14%20Gen%202a%2020X6S15C00/DFE10C8659DC) |  |
+| memory | `Kingston HP32D4S2S1ME-4 (4 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/250/250%20G8%20Notebook%20PC/45EFB5F04EDF) | no 4 GiB module with a part number in the reports of this model; the same maker's part in the reports of hp-250-g8 |
 | disk | `MTFDDAV256TBN-1AR15ABHA HPC0T12` | C | [report](https://github.com/linuxhw/HWInfo/blob/master/Notebook/Dell/Latitude/Latitude%205520/1DC6794B86BA/UBUNTU-20.04/5.11.0-46-GENERIC/X86_64/95721C3566) | no SATA disk in any of the ThinkPad Dmesg/HWInfo reports; the PSREF of the T14 Gen 2 AMD (https://psref.lenovo.com/syspool/Sys/PDF/ThinkPad/ThinkPad_T14_Gen_2_AMD/ThinkPad_T14_Gen_2_AMD_Spec.html) lists one PCIe NVMe M.2 slot only: a SATA disk is a stand-in from a Latitude 5520 (decision needed) |
 
 ## Lenovo ThinkPad T14 Gen 2 (AMD) (`lenovo-thinkpad-t14-gen2-amd`)
@@ -1577,6 +1711,8 @@ Counts: 1533 values of class A, 31 of class B, 13 of class C.
 | chassis_sku | `` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%202a%2020XK000YHV/66597B3DC7B7) |  |
 | cpu_socket | `FP6` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%202a%2020XK000YHV/66597B3DC7B7) |  |
 | cpu_part | `None` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%202a%2020XK000YHV/66597B3DC7B7) |  |
+| cpu_upgrade | `0x06` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%202a%2020XK000YHV/66597B3DC7B7) | SMBIOS upgrade code |
+| cpu_voltage | `1.2 V` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%202a%2020XK000YHV/66597B3DC7B7) | the most common reading; it differs by CPU |
 | board version | `SDK0J40697 WIN` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%202a%2020XK000YHV/66597B3DC7B7) |  |
 | board version | `Not Defined` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%202a%2020XK0015US/930AF8D5AE2E) |  |
 | board version | `SDK0J40709 WIN` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%202a%2020XKCTO1WW/189B8026E614) |  |
@@ -1584,10 +1720,13 @@ Counts: 1533 values of class A, 31 of class B, 13 of class C.
 | board version | `SDK0T76479 WIN` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%202a%2020XKA004CD/B4E865620787) |  |
 | board version | `SDK0T76530 WIN` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%202a%2020XLS30800/E69C29467E18) |  |
 | memory slots | `DIMM 0/P0 CHANNEL A; DIMM 0/P0 CHANNEL B` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%202a%2020XK000YHV/66597B3DC7B7) |  |
-| memory | `Micron Technology 4ATS2G64HZ-3G2B1` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%202a%2020XK000YRI/F364B0DFC1FC) |  |
-| memory | `Samsung M471A2G44AM0-CWE` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%202a%2020XK001BUS/8117C57A14BD) |  |
-| memory | `Hynix HMAB2GS6CMR6N-XN` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%202a%2020XK000YSP/D6A8B91E81B7) |  |
-| memory | `Ramaxel Technology RMSA3320ME88HBF-3200` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%202a%2020XK002UCK/5DD9F5A72DDD) |  |
+| memory | `Micron Technology 4ATS2G64HZ-3G2B1 (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%202a%2020XK000YRI/F364B0DFC1FC) |  |
+| memory | `Samsung M471A2G44AM0-CWE (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%202a%2020XK001BUS/8117C57A14BD) |  |
+| memory | `Samsung M471A1G44AB0-CWE (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%202a%2020XK001AUS/EED3AE1F8D69) |  |
+| memory | `Hynix HMAA1GS6CJR6N-XN (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%202a%2020XK001AUS/3886FD98D53B) |  |
+| memory | `Samsung M471A4G43AB1-CWE (32 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%202a%2020XK000YSP/D6A8B91E81B7) |  |
+| memory | `Unknown LD4AS032G-H3200GST (32 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Lenovo/ThinkPad/ThinkPad%20T14%20Gen%202a%2020XK007DMH/99A08BC54C0D) |  |
+| memory | `Kingston HP32D4S2S1ME-4 (4 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Notebook/Hewlett-Packard/250/250%20G8%20Notebook%20PC/45EFB5F04EDF) | no 4 GiB module with a part number in the reports of this model; the same maker's part in the reports of hp-250-g8 |
 | disk | `MTFDDAV256TBN-1AR15ABHA HPC0T12` | C | [report](https://github.com/linuxhw/HWInfo/blob/master/Notebook/Dell/Latitude/Latitude%205520/1DC6794B86BA/UBUNTU-20.04/5.11.0-46-GENERIC/X86_64/95721C3566) | no SATA disk in any of the ThinkPad Dmesg/HWInfo reports; the PSREF of the T14 Gen 2 AMD (https://psref.lenovo.com/syspool/Sys/PDF/ThinkPad/ThinkPad_T14_Gen_2_AMD/ThinkPad_T14_Gen_2_AMD_Spec.html) lists one PCIe NVMe M.2 slot only: a SATA disk is a stand-in from a Latitude 5520 (decision needed) |
 
 ## Supermicro X11SCL-F (Super Server) (`supermicro-x11scl`)
@@ -1617,12 +1756,14 @@ Counts: 1533 values of class A, 31 of class B, 13 of class C.
 | chassis_sku | `To be filled by O.E.M.` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Supermicro/Super/Super%20Server/069184BFB536) |  |
 | cpu_socket | `CPU` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Supermicro/Super/Super%20Server/069184BFB536) |  |
 | cpu_part | `To Be Filled By O.E.M.` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Supermicro/Super/Super%20Server/069184BFB536) |  |
+| cpu_upgrade | `0x32` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Supermicro/Super/Super%20Server/069184BFB536) | SMBIOS upgrade code |
+| cpu_voltage | `1.0 V` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Supermicro/Super/Super%20Server/069184BFB536) | the most common reading; it differs by CPU |
 | board version | `1.01` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Supermicro/Super/Super%20Server/069184BFB536) |  |
 | memory slots | `DIMMA2/P0_Node0_Channel0_Dimm1; DIMMA1/P0_Node0_Channel0_Dimm0; DIMMB1/P0_Node0_Channel1_Dimm0; DIMMB2/P0_Node0_Channel1_Dimm1` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Supermicro/Super/Super%20Server/069184BFB536) |  |
-| memory | `Kingston 9965684-013.A00G` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Supermicro/Super/Super%20Server/069184BFB536) |  |
-| memory | `Kingston 9965745-002.A00G` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Supermicro/Super/Super%20Server/A1AAA9CEAEE9) |  |
-| memory | `Samsung M391A1K43BB2-CTD` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Supermicro/Super/Super%20Server/BAD6EC448C66) |  |
-| memory | `Samsung M391A4G43MB1-CTD` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Supermicro/Super/Super%20Server/617C605D5B8B) |  |
+| memory | `Kingston 9965684-013.A00G (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Supermicro/Super/Super%20Server/069184BFB536) |  |
+| memory | `Samsung M391A1K43BB2-CTD (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Supermicro/Super/Super%20Server/BAD6EC448C66) |  |
+| memory | `Kingston 9965745-002.A00G (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Supermicro/Super/Super%20Server/A1AAA9CEAEE9) |  |
+| memory | `Samsung M391A4G43MB1-CTD (32 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Supermicro/Super/Super%20Server/617C605D5B8B) |  |
 | disk | `INTEL SSDSC2KB480G7 SCV10150` | A | [report](https://github.com/linuxhw/Dmesg/blob/main/Server/Supermicro/Super/Super%20Server/069184BFB536/UBUNTU-18.04/5.3.0-41-GENERIC/X86_64/18D32F5FF4) |  |
 
 ## Supermicro H12SSL-i (Super Server) (`supermicro-h12ssl`)
@@ -1652,13 +1793,16 @@ Counts: 1533 values of class A, 31 of class B, 13 of class C.
 | chassis_sku | `To be filled by O.E.M.` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Supermicro/Super/Super%20Server/04875F94AAC5) |  |
 | cpu_socket | `CPU` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Supermicro/Super/Super%20Server/04875F94AAC5) |  |
 | cpu_part | `Unknown` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Supermicro/Super/Super%20Server/04875F94AAC5) |  |
+| cpu_upgrade | `0x37` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Supermicro/Super/Super%20Server/04875F94AAC5) | SMBIOS upgrade code |
+| cpu_voltage | `1.1 V` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Supermicro/Super/Super%20Server/04875F94AAC5) | the most common reading; it differs by CPU |
 | board version | `1.01` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Supermicro/Super/Super%20Server/04875F94AAC5) |  |
 | board version | `1.10` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Supermicro/Super/Super%20Server/B5CC5EAAF621) |  |
 | memory slots | `DIMMA1/P0_Node0_Channel0_Dimm0; DIMMB1/P0_Node0_Channel1_Dimm0; DIMMC1/P0_Node0_Channel2_Dimm0; DIMMD1/P0_Node0_Channel3_Dimm0` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Supermicro/Super/Super%20Server/04875F94AAC5) |  |
-| memory | `Micron Technology 18ASF2G72PZ-3G2R1` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Supermicro/Super/Super%20Server/1B06E0E943D0) |  |
-| memory | `Samsung M393A8G40AB2-CWE` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Supermicro/Super/Super%20Server/B5CC5EAAF621) |  |
-| memory | `Kingston 9965640-033.C00G` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Supermicro/Super/Super%20Server/35951405EF49) |  |
-| memory | `Micron Technology 36ASF4G72PZ-3G2R1` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Supermicro/Super/Super%20Server/04875F94AAC5) |  |
+| memory | `Micron Technology 18ASF2G72PZ-3G2R1 (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Supermicro/Super/Super%20Server/1B06E0E943D0) |  |
+| memory | `Kingston 9965640-033.C00G (32 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Supermicro/Super/Super%20Server/35951405EF49) |  |
+| memory | `Micron Technology 36ASF4G72PZ-3G2R1 (32 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Supermicro/Super/Super%20Server/04875F94AAC5) |  |
+| memory | `Samsung M393A8G40AB2-CWE (64 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Supermicro/Super/Super%20Server/B5CC5EAAF621) |  |
+| memory | `Kingston 9965684-013.A00G (8 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Server/Supermicro/Super/Super%20Server/069184BFB536) | no 8 GiB module with a part number in the reports of this model; the same maker's part in the reports of supermicro-x11scl |
 | disk | `Samsung SSD 870 EVO 500GB SVT02B6Q` | A | [report](https://github.com/linuxhw/Dmesg/blob/main/Server/Supermicro/Super/Super%20Server/EAF1AC2ED184/GENTOO-2.8/5.15.41-GENTOO-HARDENED1/X86_64/6492614879) |  |
 
 ## Dell PowerEdge R240 (`dell-poweredge-r240`)
@@ -1692,14 +1836,15 @@ Counts: 1533 values of class A, 31 of class B, 13 of class C.
 | chassis_sku | `` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Dell/PowerEdge/PowerEdge%20R240/3378DCFA2CDA) |  |
 | cpu_socket | `CPU1` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Dell/PowerEdge/PowerEdge%20R240/3378DCFA2CDA) |  |
 | cpu_part | `` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Dell/PowerEdge/PowerEdge%20R240/3378DCFA2CDA) |  |
+| cpu_upgrade | `0x32` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Dell/PowerEdge/PowerEdge%20R240/3378DCFA2CDA) | SMBIOS upgrade code |
+| cpu_voltage | `1.5 V` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Dell/PowerEdge/PowerEdge%20R240/3378DCFA2CDA) | the most common reading; it differs by CPU |
 | board version | `A01` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Dell/PowerEdge/PowerEdge%20R240/7ED18DB7AC28) |  |
 | board version | `A04` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Dell/PowerEdge/PowerEdge%20R240/83EA7CA85F81) |  |
 | board version | `A08` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Dell/PowerEdge/PowerEdge%20R240/3378DCFA2CDA) |  |
 | memory slots | `A1/; A2/; A3/; A4/` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Dell/PowerEdge/PowerEdge%20R240/3378DCFA2CDA) |  |
-| memory | `00CE00000A02 M391A2K43BB1-CTD` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Dell/PowerEdge/PowerEdge%20R240/83EA7CA85F81) |  |
-| memory | `00CE00000A06 M391A1K43BB2-CTD` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Dell/PowerEdge/PowerEdge%20R240/7ED18DB7AC28) |  |
-| memory | `00CE00000A07 M391A2K43BB1-CTD` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Dell/PowerEdge/PowerEdge%20R240/83EA7CA85F81) |  |
-| memory | `00CE00000C07 M391A2G43BB2-CWE` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Dell/PowerEdge/PowerEdge%20R240/3378DCFA2CDA) |  |
+| memory | `00CE00000A02 M391A2K43BB1-CTD (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Dell/PowerEdge/PowerEdge%20R240/83EA7CA85F81) |  |
+| memory | `00CE00000A07 M391A2K43BB1-CTD (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Dell/PowerEdge/PowerEdge%20R240/83EA7CA85F81) |  |
+| memory | `00CE00000A06 M391A1K43BB2-CTD (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Dell/PowerEdge/PowerEdge%20R240/7ED18DB7AC28) |  |
 | disk | `TOSHIBA MG03ACA300 FL1A` | A | [report](https://github.com/linuxhw/Dmesg/blob/main/Server/Dell/PowerEdge/PowerEdge%20R240/7ED18DB7AC28/UBUNTU-20.04/5.15.0-48-GENERIC/X86_64/029040A622) |  |
 
 ## Dell PowerEdge T140 (`dell-poweredge-t140`)
@@ -1730,9 +1875,12 @@ Counts: 1533 values of class A, 31 of class B, 13 of class C.
 | chassis_sku | `` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Dell/PowerEdge/PowerEdge%20T140/58DAE2F02032) |  |
 | cpu_socket | `CPU1` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Dell/PowerEdge/PowerEdge%20T140/58DAE2F02032) |  |
 | cpu_part | `` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Dell/PowerEdge/PowerEdge%20T140/58DAE2F02032) |  |
+| cpu_upgrade | `0x32` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Dell/PowerEdge/PowerEdge%20T140/58DAE2F02032) | SMBIOS upgrade code |
+| cpu_voltage | `1.5 V` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Dell/PowerEdge/PowerEdge%20T140/58DAE2F02032) | the most common reading; it differs by CPU |
 | board version | `A02` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Dell/PowerEdge/PowerEdge%20T140/58DAE2F02032) |  |
 | memory slots | `A1/; A2/; A3/; A4/` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Dell/PowerEdge/PowerEdge%20T140/58DAE2F02032) |  |
-| memory | `019400000A00 SF4721G8CK8M8HLSBG` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Dell/PowerEdge/PowerEdge%20T140/58DAE2F02032) |  |
+| memory | `019400000A00 SF4721G8CK8M8HLSBG (8 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Dell/PowerEdge/PowerEdge%20T140/58DAE2F02032) |  |
+| memory | `00CE00000A07 M391A2K43BB1-CTD (16 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Server/Dell/PowerEdge/PowerEdge%20R240/83EA7CA85F81) | no 16 GiB module with a part number in the reports of this model; a 16 GiB DDR4-2666 part in the reports of dell-poweredge-r240 |
 | disk | `TOSHIBA MG03ACA300 FL1A` | B | [report](https://github.com/linuxhw/Dmesg/blob/main/Server/Dell/PowerEdge/PowerEdge%20R240/7ED18DB7AC28/UBUNTU-20.04/5.15.0-48-GENERIC/X86_64/029040A622) | no SATA disk in its report; PowerEdge R240 (same platform) |
 
 ## Dell PowerEdge R350 (`dell-poweredge-r350`)
@@ -1763,9 +1911,12 @@ Counts: 1533 values of class A, 31 of class B, 13 of class C.
 | chassis_sku | `` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Dell/PowerEdge/PowerEdge%20R350/95232CC6FD85) |  |
 | cpu_socket | `CPU1` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Dell/PowerEdge/PowerEdge%20R350/95232CC6FD85) |  |
 | cpu_part | `` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Dell/PowerEdge/PowerEdge%20R350/95232CC6FD85) |  |
+| cpu_upgrade | `0x32` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Dell/PowerEdge/PowerEdge%20R350/95232CC6FD85) | SMBIOS upgrade code |
+| cpu_voltage | `1.5 V` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Dell/PowerEdge/PowerEdge%20R350/95232CC6FD85) | the most common reading; it differs by CPU |
 | board version | `A03` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Dell/PowerEdge/PowerEdge%20R350/95232CC6FD85) |  |
 | memory slots | `A1/; A2/; A3/; A4/` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Dell/PowerEdge/PowerEdge%20R350/95232CC6FD85) |  |
-| memory | `002C00000C01 9ASF2G72AZ-3G2F1` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Dell/PowerEdge/PowerEdge%20R350/95232CC6FD85) |  |
+| memory | `002C00000C01 9ASF2G72AZ-3G2F1 (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Dell/PowerEdge/PowerEdge%20R350/95232CC6FD85) |  |
+| memory | `00CE00000A06 M391A1K43BB2-CTD (8 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Server/Dell/PowerEdge/PowerEdge%20R240/7ED18DB7AC28) | no 8 GiB module with a part number in the reports of this model; a 8 GiB DDR4-2666 part in the reports of dell-poweredge-r240 |
 | disk | `TOSHIBA MG03ACA300 FL1A` | B | [report](https://github.com/linuxhw/Dmesg/blob/main/Server/Dell/PowerEdge/PowerEdge%20R240/7ED18DB7AC28/UBUNTU-20.04/5.15.0-48-GENERIC/X86_64/029040A622) | no Dmesg report; PowerEdge R240 |
 
 ## Lenovo ThinkSystem SR250 V2 (`lenovo-thinksystem-sr250-v2`)
@@ -1790,9 +1941,14 @@ Counts: 1533 values of class A, 31 of class B, 13 of class C.
 | chassis_sku | `7D7QCTO1WW` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Lenovo/ThinkSystem/ThinkSystem%20SR250%20V2/DCE46F160939) |  |
 | cpu_socket | `CPU 1` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Lenovo/ThinkSystem/ThinkSystem%20SR250%20V2/DCE46F160939) |  |
 | cpu_part | `none` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Lenovo/ThinkSystem/ThinkSystem%20SR250%20V2/DCE46F160939) |  |
+| cpu_upgrade | `0x3e` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Lenovo/ThinkSystem/ThinkSystem%20SR250%20V2/DCE46F160939) | SMBIOS upgrade code |
+| cpu_voltage | `1.3 V` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Lenovo/ThinkSystem/ThinkSystem%20SR250%20V2/DCE46F160939) | the most common reading; it differs by CPU |
 | board version | `03` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Lenovo/ThinkSystem/ThinkSystem%20SR250%20V2/DCE46F160939) |  |
 | memory slots | `DIMM 4/CPU 1; DIMM 3/CPU 1; DIMM 2/CPU 1; DIMM 1/CPU 1` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Lenovo/ThinkSystem/ThinkSystem%20SR250%20V2/DCE46F160939) |  |
-| memory | `Samsung M391A2K43DB1-CWE` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Lenovo/ThinkSystem/ThinkSystem%20SR250%20V2/DCE46F160939) |  |
+| memory | `Samsung M391A2K43DB1-CWE (16 GiB)` | A | [report](https://github.com/linuxhw/DMI/blob/master/Server/Lenovo/ThinkSystem/ThinkSystem%20SR250%20V2/DCE46F160939) |  |
+| memory | `Samsung M391A1K43BB2-CTD (8 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Server/Supermicro/Super/Super%20Server/BAD6EC448C66) | no 8 GiB module with a part number in the reports of this model; the same maker's part in the reports of supermicro-x11scl |
+| memory | `Samsung M391A4G43MB1-CTD (32 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Server/Supermicro/Super/Super%20Server/617C605D5B8B) | no 32 GiB module with a part number in the reports of this model; the same maker's part in the reports of supermicro-x11scl |
+| memory | `Samsung M393A8G40AB2-CWE (64 GiB)` | B | [report](https://github.com/linuxhw/DMI/blob/master/Server/Supermicro/Super/Super%20Server/B5CC5EAAF621) | no 64 GiB module with a part number in the reports of this model; the same maker's part in the reports of supermicro-h12ssl |
 | disk | `TOSHIBA MG03ACA300 FL1A` | B | [report](https://github.com/linuxhw/Dmesg/blob/main/Server/Dell/PowerEdge/PowerEdge%20R240/7ED18DB7AC28/UBUNTU-20.04/5.15.0-48-GENERIC/X86_64/029040A622) | no Dmesg report and no Lenovo server with one; PowerEdge R240 |
 
 ## Disks

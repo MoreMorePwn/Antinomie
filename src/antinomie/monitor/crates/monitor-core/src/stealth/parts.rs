@@ -32,6 +32,8 @@ pub(super) struct RamPart {
     pub form: u8,
     /// Total width in bits: 64, 72 with ECC, 32 for LPDDR5.
     pub width: u16,
+    /// The module's size in MiB, as its part number names it.
+    pub size_mib: u32,
 }
 
 const UPPER: &[u8] = b"0123456789ABCDEFGHJKLMNPQRSTUVWXYZ";

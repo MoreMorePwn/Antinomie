@@ -291,6 +291,7 @@ impl Worker {
                     machine: Some(crate::stealth::MachineRecord::of(
                         &session.vm.stealth,
                         &crate::stealth::HostCpu::detect(),
+                        session.vm.ram_mib,
                     )),
                     route: Some(route),
                     environment: Some(crate::run_environment::RunEnvironment::capture(

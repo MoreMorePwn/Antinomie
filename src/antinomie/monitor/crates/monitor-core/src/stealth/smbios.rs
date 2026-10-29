@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! SMBIOS structures QEMU's own options cannot fill as a PC's firmware does:
-//! the BIOS information (type 0), the chassis (type 3) and the memory
-//! devices (type 17).
+//! the BIOS information (type 0) and the chassis (type 3); the processor
+//! (types 4 and 7) and memory (types 16 and 17) are in `processor` and
+//! `memory`.
 use super::MachineIdentity;
 
 /// The BIOS release from its version string, as QEMU's `release=` takes it:
@@ -113,104 +114,6 @@ pub(super) fn chassis_table(id: &MachineIdentity) -> Vec<u8> {
         0,          // no contained elements
         numbers[4], // SKU number
     ];
-    table.extend(strings);
-    table
-}
-
-/// The handle of the first memory device: QEMU's, after its type 16 array.
-const MEMORY_DEVICE_HANDLE: u16 = 0x1100;
-
-/// SMBIOS type 17 (memory device) structures for `ram_mib` of memory, one
-/// per module of at most 16 GiB as QEMU counts them in its type 16 array,
-/// each in the next of the identity's slots: what a PC's firmware writes
-/// for the identity's module (its type, speed, rank and width), in place of
-/// QEMU's "RAM" of unknown width in "DIMM 0".
-pub(super) fn memory_tables(id: &MachineIdentity, ram_mib: u64, ecc: bool) -> Vec<Vec<u8>> {
-    const MODULE_MIB: u64 = 16 * 1024;
-    let count = ram_mib.div_ceil(MODULE_MIB).max(1);
-    (0..count)
-        .map(|index| {
-            let size = if index + 1 < count {
-                MODULE_MIB
-            } else {
-                ram_mib - MODULE_MIB * (count - 1)
-            };
-            memory_table(id, index as usize, size, ecc)
-        })
-        .collect()
-}
-
-fn memory_table(id: &MachineIdentity, index: usize, size_mib: u64, ecc: bool) -> Vec<u8> {
-    let slot = id.memory_slots.get(index);
-    let (locator, bank) = slot.map_or((format!("DIMM{}", index + 1), String::new()), |slot| {
-        (slot.locator.clone(), slot.bank.clone())
-    });
-    // A second module has a serial of its own.
-    let serial: String = id
-        .memory_serial
-        .chars()
-        .cycle()
-        .skip(index)
-        .take(id.memory_serial.len())
-        .collect();
-    let (numbers, strings) = string_set(&[
-        &locator,
-        &bank,
-        &id.memory_manufacturer,
-        &serial,
-        "",
-        &id.memory_part,
-    ]);
-    let handle = MEMORY_DEVICE_HANDLE + index as u16;
-    let (size, extended) = match u16::try_from(size_mib) {
-        Ok(size) if size < 0x7fff => (size, 0u32),
-        _ => (0x7fff, u32::try_from(size_mib).unwrap_or(u32::MAX)),
-    };
-    // An identity saved before 0.8.0 recorded none of these: DDR4-3200,
-    // rank 1, 64 bits (72 with ECC).
-    let or = |value: u16, default: u16| if value == 0 { default } else { value };
-    let speed = or(id.memory_speed, 3200);
-    let total_width = or(id.memory_width, if ecc { 72 } else { 64 });
-    let data_width = if total_width == 72 { 64 } else { total_width };
-    // Millivolts: LPDDR5 runs at 0.5 V, DDR5 at 1.1 V, DDR4 at 1.2 V.
-    let voltage: u16 = match id.memory_type {
-        0x23 => 500,
-        0x22 => 1100,
-        _ => 1200,
-    };
-    let memory_type = if id.memory_type == 0 {
-        0x1a
-    } else {
-        id.memory_type
-    };
-    let mut table = vec![17, 0x28];
-    table.extend(handle.to_le_bytes());
-    table.extend(0x1000u16.to_le_bytes()); // QEMU's type 16 array
-    table.extend(0xfffeu16.to_le_bytes()); // no error information
-    table.extend(total_width.to_le_bytes());
-    table.extend(data_width.to_le_bytes());
-    table.extend(size.to_le_bytes()); // MiB
-    table.extend([
-        id.memory_form.max(1),
-        0,
-        numbers[0],
-        numbers[1],
-        memory_type,
-    ]);
-    table.extend(id.memory_detail.to_le_bytes());
-    table.extend(speed.to_le_bytes());
-    table.extend([
-        numbers[2],
-        numbers[3],
-        numbers[4],
-        numbers[5],
-        id.memory_rank.clamp(1, 15),
-    ]);
-    table.extend(extended.to_le_bytes());
-    table.extend(speed.to_le_bytes()); // configured speed
-    for _ in 0..3 {
-        table.extend(voltage.to_le_bytes()); // minimum, maximum, configured
-    }
     table.extend(strings);
     table
 }

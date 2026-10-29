@@ -6,6 +6,17 @@ it runs.
 
 ## 0.8.0 — unreleased
 
+- **Stealth: whole processor table, RAM-sized DIMMs, network chip listed.** The
+  processor is written as one firmware table (socket `U3E1`, not `U3E1 0`;
+  CPUID signature, voltage, upgrade, clock, core and thread counts, and L1, L2
+  and L3 cache tables the processor points at). The memory modules are real parts
+  of the machine whose sizes add up to the VM's RAM (one module up to 8 GiB, two
+  above), with the machine's other slots empty, and the memory array lists the
+  slot count and capacity. Realtek and Broadcom machines still show Intel's
+  82574L (QEMU emulates neither; the RTL8139 would be the bigger giveaway), now
+  listed as a giveaway. Dell board serials carry a `CN` number. NVMe-only laptop
+  profiles keep their SATA stand-in.
+
 - **Export the whole Triage as a report.** Triage › Export report… writes the
   run as HTML (one self-contained file), PDF (the same layout, written by the
   app with no browser or network), JSON (versioned schema, documented in

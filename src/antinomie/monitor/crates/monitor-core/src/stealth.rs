@@ -13,7 +13,7 @@
 //! of its own) or the host (OVMF, two threads per core); `fitted()` turns an
 //! entry the base or host lacks back into the choice every one has.
 use crate::storage::unique_id;
-pub use catalog::{MACHINES, MachineProfile, Variant};
+pub use catalog::{MACHINES, MachineProfile, NicFit, Variant};
 use catalog::{SerialStyle, SmbiosFields, Subsystem};
 pub use cpu::{CpuGen, HostCpu, classify};
 use parts::{DiskModel, RamPart};
@@ -24,8 +24,10 @@ mod catalog;
 mod cpu;
 mod firmware;
 mod launch;
+mod memory;
 mod nat;
 mod parts;
+mod processor;
 mod record;
 mod smbios;
 #[cfg(test)]
@@ -367,6 +369,10 @@ pub struct MachineIdentity {
     /// Processor socket designation and part number.
     pub cpu_socket: String,
     pub cpu_part: String,
+    /// Processor upgrade code and voltage in tenths of a volt (type 4); 0
+    /// when not recorded.
+    pub cpu_upgrade: u8,
+    pub cpu_voltage: u8,
     pub memory_manufacturer: String,
     pub memory_part: String,
     pub memory_serial: String,
@@ -494,6 +500,17 @@ fn random_text(alphabet: &[u8], len: usize) -> String {
 
 const UPPER_DIGITS: &[u8] = b"0123456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 const DIGITS: &[u8] = b"0123456789";
+
+/// The base board serial: Dell's is the service tag and a "CN" number between
+/// slashes (14 characters, as in public dmidecode listings); no public source
+/// shows the other makers' board serials, so they keep the same slashed form.
+fn board_serial(style: SerialStyle, system_serial: &str) -> String {
+    let number = match style {
+        SerialStyle::Dell => format!("CN{}", random_text(UPPER_DIGITS, 12)),
+        _ => random_text(UPPER_DIGITS, 14),
+    };
+    format!("/{system_serial}/{number}/")
+}
 
 fn serial(style: SerialStyle) -> String {
     match style {
@@ -642,7 +659,7 @@ impl MachineIdentity {
             system_sku: unit.sku.into(),
             board_manufacturer: machine.board_manufacturer.into(),
             board_product: unit.board.into(),
-            board_serial: format!("/{system_serial}/{}/", random_text(UPPER_DIGITS, 14)),
+            board_serial: board_serial(machine.serial, &system_serial),
             board_version: with_digits(pick(fields.board_versions), &random_text(DIGITS, 16)),
             board_location: fields.board_location.into(),
             chassis_type: unit.chassis,
@@ -651,6 +668,8 @@ impl MachineIdentity {
             chassis_sku: fields.chassis_sku.into(),
             cpu_socket: fields.cpu_socket.into(),
             cpu_part: fields.cpu_part.into(),
+            cpu_upgrade: fields.cpu_upgrade,
+            cpu_voltage: fields.cpu_voltage,
             memory_slots: memory_slots(fields),
             memory_form: ram.form,
             memory_detail: fields.dimm_detail,
@@ -733,6 +752,9 @@ impl MachineIdentity {
         fill(&mut identity.chassis_sku, fields.chassis_sku);
         fill(&mut identity.cpu_socket, fields.cpu_socket);
         fill(&mut identity.cpu_part, fields.cpu_part);
+        if identity.cpu_upgrade == 0 {
+            (identity.cpu_upgrade, identity.cpu_voltage) = (fields.cpu_upgrade, fields.cpu_voltage);
+        }
         if identity.memory_slots.is_empty() {
             identity.memory_slots = memory_slots(fields);
         }
@@ -763,7 +785,7 @@ impl MachineIdentity {
         let style = machine.map_or(SerialStyle::Dell, |machine| machine.serial);
         self.system_serial = serial(style);
         self.chassis_serial = self.system_serial.clone();
-        self.board_serial = format!("/{}/{}/", self.system_serial, random_text(UPPER_DIGITS, 14));
+        self.board_serial = board_serial(style, &self.system_serial);
         self.system_uuid = uuid();
         self.memory_serial = random_text(b"0123456789ABCDEF", 8);
         let known = MACHINES
@@ -1156,6 +1178,12 @@ impl StealthProfile {
         }
         if self.nic == NicModel::VirtioNet {
             found.push("virtio network card (Red Hat vendor ID)");
+        } else if self.identity_enabled
+            && let Some(machine) = MACHINES
+                .iter()
+                .find(|machine| machine.id == self.identity.profile)
+        {
+            found.extend(machine.nic_fit().giveaway());
         }
         match self.disk_bus {
             DiskBus::Virtio => found.push("virtio disk vda (Red Hat vendor ID)"),
