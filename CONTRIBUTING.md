@@ -432,7 +432,24 @@ the archive's build provenance and publishes the GitHub release. Its notes are
 the opening paragraph of the version's changelog section, a link to the full
 section and the checksum. Before tagging, also update the README's version
 note and "What's in" section, the version line of `docs/usage.md` and any
-screenshot whose UI changed. Bases are built and uploaded
+screenshot whose UI changed.
+
+The README screenshots are 1280×820 captures of an X display.
+`assets/screenshots/getting-started.png` is the release build on an empty data
+directory (`antinomie --data-dir` pointing at a new folder) while the base
+catalog loads. `assets/screenshots/activity-graph.png` is the graph's
+synthetic fixture, which opens its own window:
+
+```bash
+cd src/antinomie/monitor
+ANTINOMIE_QA_SCENE=mid ANTINOMIE_QA_THEME=dark \
+  cargo test --release --locked -p antinomie-monitor-ui --bin antinomie-monitor \
+  native_graph_fixture -- --ignored
+```
+
+Other `native_*_fixture` tests (Stealth, Static Analysis, Run History, the
+debugger and more) take the `ANTINOMIE_QA_*` variables listed at the top of
+their files. Label fixture screenshots as synthetic data where they are shown. Bases are built and uploaded
 separately (see the base distribution notes).
 
 Releases never carry the **full pack** (every managed tool, pre-downloaded):
