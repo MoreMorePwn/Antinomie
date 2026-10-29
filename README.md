@@ -31,10 +31,10 @@ the debugger works on the running VM.
 
 <br>
 
-<img src="assets/screenshots/activity-graph.png" alt="The Antinomie activity graph: findings by category and severity along a timeline, one lane per process, with an overview ruler" width="860">
+<img src="assets/screenshots/run-history.png" alt="The Antinomie window: the VM list and library on the left, Run History listing three recorded runs, and the selected run's process tree in the Details panel below" width="860">
 
-<sub>The activity graph in Triage. This frame is the graph's own test fixture
-with <b>synthetic data</b>, not a recorded malware run.</sub>
+<sub>Run History in the Antinomie window. This frame is a UI test fixture with
+<b>synthetic data</b>, not a recorded malware run.</sub>
 
 </div>
 
