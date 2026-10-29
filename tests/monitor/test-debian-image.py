@@ -881,8 +881,11 @@ class DebianImageTests(unittest.TestCase):
             self.assertEqual(image.kernel_banner(kernel), other)
             helpers = unittest.mock.Mock()
             helpers.fixed_display_config.return_value = False
+            # The host's e2fsprogs is not what this checks: a runner older than
+            # 1.47.1 would stop the build before the banner is read.
             with patch.object(image, "kernel_release", return_value="6.12.94+deb13-amd64"), \
                     patch.object(image, "monitor_helpers", return_value=helpers), \
+                    patch.object(image, "e2fsprogs_version", return_value=image.MIN_E2FSPROGS), \
                     self.assertRaisesRegex(RuntimeError, "2.47.*is not Debian's"):
                 image.build(kernel, Path(name) / "out", values={"desktop": image.CONSOLE},
                             allow_unversioned=True)
