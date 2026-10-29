@@ -1,0 +1,69 @@
+name: Bug report
+description: Something in Antinomie does not work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not attach live malware, real credentials or private recordings.**
+        Give a sample's SHA-256 instead, or a harmless reproducer.
+        Report security vulnerabilities privately; see SECURITY.md.
+  - type: input
+    id: version
+    attributes:
+      label: Antinomie version
+      description: Output of `antinomie --version`.
+      placeholder: antinomie 0.7.1
+    validations:
+      required: true
+  - type: input
+    id: base
+    attributes:
+      label: Base and revision
+      description: The VM's base as shown in Base images, e.g. BusyBox revision 16.
+    validations:
+      required: true
+  - type: input
+    id: host
+    attributes:
+      label: Host
+      description: Distribution and version, and whether it is WSL2.
+      placeholder: Debian 13
+    validations:
+      required: true
+  - type: dropdown
+    id: acceleration
+    attributes:
+      label: Acceleration
+      options:
+        - KVM
+        - TCG
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Create a VM from ...
+        2. Run ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What happened, and what you expected
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependency check
+      description: Output of `antinomie --check-dependencies`. Remove anything private.
+      render: text
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Start log lines or error messages. Remove credentials and personal data.

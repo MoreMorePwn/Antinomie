@@ -1,0 +1,13 @@
+# Weekly update proposals for the pinned GitHub Actions and the locked Cargo
+# dependencies of the host app. Each update still has to pass CI.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: cargo
+    directory: /src/antinomie/monitor
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
