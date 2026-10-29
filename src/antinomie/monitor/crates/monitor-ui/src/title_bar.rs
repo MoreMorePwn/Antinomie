@@ -76,20 +76,29 @@ pub(crate) fn show(ctx: &egui::Context, title: &str) {
                 Sense::click_and_drag() - Sense::FOCUSABLE,
             );
             let mut preserve_focus = drag.is_pointer_button_down_on() || drag.clicked();
+            crate::branding::paint_symbol(
+                ui,
+                Rect::from_center_size(
+                    egui::pos2(title_rect.left() + 11.0, title_rect.center().y),
+                    egui::vec2(22.0, 22.0),
+                ),
+            );
+            let text_rect =
+                Rect::from_min_max(title_rect.min + egui::vec2(30.0, 0.0), title_rect.max);
             let mut job = egui::text::LayoutJob::simple_singleline(
                 title.to_owned(),
                 egui::TextStyle::Body.resolve(ui.style()),
                 theme::text(),
             );
-            job.wrap.max_width = title_rect.width();
+            job.wrap.max_width = text_rect.width();
             job.wrap.max_rows = 1;
             job.wrap.break_anywhere = true;
             let galley = ui.fonts(|fonts| fonts.layout_job(job));
             let position = egui::pos2(
-                title_rect.left(),
-                title_rect.center().y - galley.size().y / 2.0,
+                text_rect.left(),
+                text_rect.center().y - galley.size().y / 2.0,
             );
-            ui.painter_at(title_rect)
+            ui.painter_at(text_rect)
                 .galley(position, galley, theme::text());
             if drag.double_clicked() {
                 ctx.send_viewport_cmd(ViewportCommand::Maximized(!maximized));

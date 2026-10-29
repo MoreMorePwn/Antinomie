@@ -49,6 +49,7 @@ done
 cp "$REPO/install.sh" "$REPO/CHANGELOG.md" "$REPO/LICENSE" "$REPO/LICENSING.md" \
    "$REPO/THIRD-PARTY-NOTICES.md" "$package/"
 cp "$MONITOR/assets/antinomie.desktop" "$MONITOR/assets/antinomie.svg" "$package/"
+cp -r "$REPO/assets/branding" "$package/branding"
 cp -r "$REPO/LICENSES" "$package/"
 python3 "$REPO/scripts/check-licenses.py" --output "$package/LICENSES/cargo-dependencies"
 # Preserve notices from the toolchain/libc actually used by this build.

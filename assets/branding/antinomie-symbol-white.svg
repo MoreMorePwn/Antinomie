@@ -1,0 +1,20 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<svg xmlns="http://www.w3.org/2000/svg" width="855" height="975" viewBox="200 140 855 975" role="img" aria-labelledby="title description">
+  <title id="title">Antinomie — white symbol</title>
+  <desc id="description">A single-color penguin and hexagon with transparent negative space.</desc>
+  <defs><mask id="penguin-cutouts" maskUnits="userSpaceOnUse" x="0" y="0" width="1254" height="1254" style="mask-type:luminance"><rect width="1254" height="1254" fill="#ffffff" /><path fill="#000000" d="       M 425,585       C 453,586 474,606 486,631       C 495,649 494,669 511,684       C 534,705 574,698 598,690       C 628,680 652,660 681,644       C 717,624 750,620 776,626       C 818,635 838,678 830,744       C 801,755 781,776 755,799       C 729,823 701,838 669,842       C 610,850 566,822 532,786       C 499,750 480,726 438,717       C 416,713 400,709 389,691       C 379,675 374,654 376,631       C 378,603 397,582 425,585 Z" />
+
+    <circle cx="432" cy="622" r="17" fill="#ffffff" />
+  </mask></defs><g id="ice-hexagon" stroke="#ffffff" stroke-width="44" stroke-linecap="round" stroke-linejoin="round">
+    <path id="hexagon-outline" fill="none" d="       M 646,177       L 1004,355       Q 1024,365 1024,387       L 1024,855       Q 1024,877 1005,890       L 646,1077       Q 627,1087 608,1077       L 251,890       Q 231,880 231,857       L 231,387       Q 231,365 251,355       L 608,177       Q 627,167 646,177 Z" />
+
+  </g>
+
+  <g id="floating-penguin" fill="#ffffff" mask="url(#penguin-cutouts)">
+    <path id="raised-left-flipper" transform="rotate(22 542 650)" d="       M 507,613       C 502,583 507,552 520,526       C 531,504 544,485 557,479       C 568,474 578,479 576,492       C 571,519 573,548 584,574       C 591,594 603,611 618,626       C 607,651 579,674 548,682       C 526,674 509,644 507,613 Z" />
+
+    <path id="penguin-silhouette" d="       M 416,559       L 460,526       C 465,522 468,522 468,530       L 470,580       C 482,591 491,604 499,616       C 512,643 534,658 559,653       C 628,633 718,600 790,616       C 789,593 789,562 799,541       C 805,527 819,526 826,540       L 830,547       C 835,532 847,523 857,528       C 868,532 869,545 867,559       C 879,550 890,551 894,560       C 901,581 879,609 860,637       L 850,668       C 860,686 864,709 864,732       C 872,715 876,686 893,662       C 904,646 917,640 926,646       C 934,651 934,661 931,673       C 943,664 953,664 958,672       C 963,680 956,692 950,700       C 963,697 972,702 968,714       C 956,742 917,774 883,787       C 856,857 803,899 741,910       C 665,925 599,902 540,853       C 543,884 551,912 562,936       C 570,953 560,960 546,954       C 474,930 433,864 417,784       C 400,770 385,766 370,754       C 337,730 317,698 317,664       C 315,613 349,565 397,561       C 404,560 410,559 416,559 Z" />
+
+    <circle id="eye" cx="432" cy="622" r="17" />
+  </g>
+</svg>
