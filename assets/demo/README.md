@@ -24,5 +24,6 @@ performance benchmark, complete syscall-coverage claim or containment guarantee.
 It does not demonstrate unreleased feature-branch functionality.
 
 Original recording and explanatory text: copyright (c) 2026 MikiMiku
-(MoreMorePwn), under the repository's MIT license. Displayed application fonts
+(MoreMorePwn), under the MIT terms of the release it was published with
+([Antinomie-MIT.txt](../../LICENSES/Antinomie-MIT.txt)). Displayed application fonts
 and icons retain the terms listed in the root third-party notices.
