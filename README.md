@@ -1,6 +1,9 @@
 <div align="center">
 
-<img src="assets/branding/antinomie-logo-color.svg" alt="Antinomie" width="440">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/branding/antinomie-logo-dark.svg">
+  <img src="assets/branding/antinomie-logo-color.svg" alt="Antinomie" width="440">
+</picture>
 
 # Antinomie
 
