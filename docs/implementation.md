@@ -1,4 +1,12 @@
-# Antinomie initial monitoring release
+# Antinomie implementation record
+
+This is the implementation contract: a chronological record of the behaviour,
+wire contracts, limits and measurements implemented in each Antinomie release.
+Every section names the release it belongs to, and sections headed "Accepted"
+record the requirements as implemented for that release. Where a newer section
+conflicts with an older one, the newer section supersedes it; older sections are
+kept for the releases they describe. User-facing documentation lives in
+[`README.md`](../README.md) and [`docs/usage.md`](usage.md).
 
 ## Current licensing boundary (0.7.0)
 
@@ -11,8 +19,7 @@ original license scopes. `scripts/check-licenses.py` validates the boundary and
 locked dependency license expressions, and records notice-document gaps without
 claiming full legal clearance. Release packaging includes that inventory.
 
-This brief is the shared implementation contract. User authorized implementation
-on 2026-10-01.
+Work on the initial release started on 2026-10-01.
 The accepted 0.5.0 snapshot/reconnect extension below supersedes the historical
 V7-only restriction; older requirements remain recorded for their releases.
 
@@ -495,7 +502,7 @@ additions.
   1000 and 65534; `legacy`: an older base), then the ignored test
   `recorded_tracer_triage` (`triage/tracer_qa.rs`); `debugger_console_live`;
   unit tests of the qcow2 reader, the names, the segments, the launch record,
-  the probe and the Triage events. Evidence and numbers are in the task report.
+  the probe and the Triage events.
 * **Limits.** A file written through an io_uring worker or closed by a process
   outside the run is not hashed; the launched program of a desktop run is the
   shell wrapper. A file opened for writing and not written is hashed at its last
@@ -504,7 +511,7 @@ additions.
 
 ### Accepted exit re-capture of non-resident inputs (0.7.0)
 
-Approved by the user on 2026-10-22. Guest series 0053, contract section 22;
+Added on 2026-10-22. Guest series 0053, contract section 22;
 the contract revision stays 17 (the encoding is additive and 0.7.0 is not
 released). The recorder still never faults a page in (15.1: no sleeping, no
 userfaultfd or FUSE stall, no residency change a sample could see with
@@ -709,11 +716,10 @@ publication. An interrupted copy previously left a directory that a resumed run
 treated as installed; pwndbg then failed to load `libpython3.13.so.1.0`. Resuming
 now replaces an unmarked copy, with tests for failed copy, recovery and reuse.
 
-On 2026-10-23 the user scheduled the stress-heavy telemetry drops and
-intermittent slow transport reconnect for 0.7.1. They are known 0.7.0 limitations,
-not passing zero-loss or reconnect-latency guarantees. Preserve historical
-failures, retries and explicit release-qualification exclusions. The remaining
-debugger fixes and release work continue independently.
+As of 2026-10-23, the stress-heavy telemetry drops and intermittent slow
+transport reconnect are deferred to 0.7.1. They are known 0.7.0 limitations,
+not passing zero-loss or reconnect-latency guarantees. Historical failures,
+retries and explicit release-qualification exclusions are preserved.
 
 Full-tier checks that failed now and then on this shared host, and why.
 
@@ -1857,9 +1863,9 @@ series is fifteen patches (`src/antinomie/patches/README.md`, "Architectures"):
   decodes x86-64 guests only, and on another architecture says why and refuses
   launches.
 
-How "no behaviour change" was checked is in the task record and the release
-notes of the branch: the recorder's objects compared before and after, and the
-conformance and stress groups on bases built from both series.
+"No behaviour change" was checked by comparing the recorder's objects before
+and after, and by running the conformance and stress groups on bases built from
+both series.
 
 ### Fair, progress-sensitive send waits (0.8.0)
 
@@ -1939,7 +1945,7 @@ a diagnostic getter and a starvation guard, see below).
   timestamp, so a ring holding newer packets was not served while another
   ring's fragments flowed: 53 pauses of 100 ms or more in one run, 762 drops
   all attributed to them or to writer holds. (2) The recording writer behind
-  the disk (the E: drive under load): 33 s held in a 3 minute run, with pauses
+  the disk (the data drive, itself under load): 33 s held in a 3 minute run, with pauses
   of up to 14 s; a hold longer than the send wait drops by design.
   (3) The transport thread not scheduled (run-queue delay of 60 to 300 ms
   under load 10 to 15) or doing 100 to 150 ms of other host work in one loop
@@ -2147,7 +2153,7 @@ against the bytes read back (`hash`).
 
 Contract revision 18, extended before its release (guest patch 18). The trace
 renders a captured field by its descriptor's encoding and layout, never by
-whether its bytes look like text (0.8.0, ANT-T0149). Four kinds of field still
+whether its bytes look like text. Four kinds of field still
 had no layout although the kernel copies a fixed native one; patch 18 names
 them, with the object encoding (3), and leaves the bytes and extents as they
 were: `gid_t[]` (getgroups, setgroups), `linux_dirent[]` and
@@ -2302,8 +2308,8 @@ No guest, image, shared-memory ABI, dependency or release-tag change is needed.
 - Host file upload to guest path: overwrite confirmation, separate executable
   option. Never execute automatically after upload.
 - Kernel implements control, upload, execution, tracing, and terminal I/O;
-  no auxiliary guest control helper, except the explicitly approved temporary
-  resource-only collector described below, which only revision 11 to 16
+  no auxiliary guest control helper, except the temporary resource-only
+  collector described below (an explicit exception), which only revision 11 to 16
   kernels still use (revision 17 samples resources in the kernel). Ordinary init, shell and target programs
   remain userspace processes.
 - Launch path, argument list, cwd, environment, UID/GID. Default unprivileged.
@@ -2870,7 +2876,7 @@ launched program's parent, session, process group, terminal and environment.
 | `acpi.tables` (root) | fail: BXPC creator ID, `QEMU0002`/`FWCF` in the DSDT | unchanged | limit |
 | `fwcfg.ioport` (root) | fail: signature `QEMU` at port 0x511 | unchanged | limit |
 | `pci.vendors` | fail: subsystem vendor 1af4 on every q35 device, Bochs display 1234:1111 | unchanged | limit, launch options |
-| `virtio.devices`, `block.devices`, `base.root-device` | fail: virtio disk `vda` | unchanged | follow-up card (SATA/NVMe) |
+| `virtio.devices`, `block.devices`, `base.root-device` | fail: virtio disk `vda` | unchanged | Stealth profile, part 2 (SATA/NVMe) |
 | `display.fb` | fail: `bochs-drmdrmfb` (or virtio-gpu) | unchanged | limit |
 | `net.addresses` | fail: gateway 10.0.2.2, DNS 10.0.2.3 | unchanged | limit, launch options |
 | `timing.rdtsc-cpuid` | fail: median about 16,000 cycles | unchanged | limit |
@@ -2879,8 +2885,7 @@ launched program's parent, session, process group, terminal and environment.
 
 Totals with the Realistic desktop preset: 27 of 72 checks gave the VM or
 Antinomie away before, 14 after; with this app and the new base the user's
-view has no Antinomie name left. The tables, probe outputs and logs of both
-measurements are kept with the task report.
+view has no Antinomie name left.
 
 **Command line (0046).** `setup_arch()` hands `boot_command_line` to
 `ant_cmdline_take()` (`kernel/antinomie/stealth.c`) before it first prints it:
@@ -2969,7 +2974,7 @@ obstacle. A build mounts the kit, job, inputs, work, the output's parent, the
 kernel cache folder, the image cache folder and ccache, runs the orchestrator
 as the container's root with `SYS_ADMIN` and `MKNOD` and no AppArmor profile
 (mmdebstrap's root mode needs mount; checked on Docker, not on rootless Podman,
-which was not installed for this work), and, under Docker, chowns every mounted
+which was not available on the test host), and, under Docker, chowns every mounted
 folder to the user when the build ends. Containers are named and labelled
 `org.antinomie.build=1`, run with `--rm`, removed with `rm -f` after every
 build including a cancel, and any left by a crash are removed before the next
@@ -3144,7 +3149,7 @@ NIC chip, host CPU generation, any CPU note; no serials) for reading its results
 against the identity it was seen under. Limits: QEMU's card is an e1000e (Intel
 82574L) even where the machine's chip is Realtek or Broadcom (a listed giveaway);
 QEMU's NVMe controller names itself, so the disk is SATA even on laptops whose M.2
-slots are NVMe-only (the ThinkPads: class C in the sources; a 0.9.0 card);
+slots are NVMe-only (the ThinkPads: class C in the sources; deferred to 0.9.0);
 a RAM size no module combination makes names a larger part. Not done: guest hostname, user
 and locale, and importing a profile from a machine the user owns.
 
@@ -3533,8 +3538,7 @@ Shared captures retain the existing time-window restriction; packet timestamps
 are labeled as capture-clock values. A dedicated capture takes priority over a
 simultaneous manual capture from the same boot.
 
-The user authorized all 20 triage/history issues from the Notion 0.6.2 list.
-Keep this host-only work on release-0.6.2. Triage requires one explicit program
+This 0.6.2 triage and history work is host-only. Triage requires one explicit program
 run; capture/all-traces selections must not populate it. Index the selected run's
 retained prefix off the UI thread and keep process descendants scoped to that
 root. History rows select the same run and open triage; both histories sort by
@@ -3563,7 +3567,7 @@ version; live captures append. Without TShark only raw frames and bytes show.
 Known limits: PDML byte ranges for reassembled or decrypted data are relative to
 that data and can highlight the wrong frame bytes (only ranges outside the frame
 are dropped), and single-pass details omit "reassembled in" links.
-Network has IPs, Hosts, HTTP, DNS and Sessions tables with the requested compact columns.
+Network has IPs, Hosts, HTTP, DNS and Sessions tables with compact columns.
 Use recorded packet frame links and TShark's existing decoder. Local GeoIP/ASN
 data may enrich destination rows; do not contact an external lookup service.
 PCAPs record VM traffic, so time-window correlation does not prove process
@@ -3571,7 +3575,7 @@ ownership. Host-time anchors are receipt estimates with transport latency;
 historical start-anchored estimates and unavailable timestamps must be labeled.
 New summary timestamps are optional serde fields, preserving older archives.
 
-Remove the requested index/count/coverage essays. Show actionable missing-feature
+Index/count/coverage explanations are removed. Show actionable missing-feature
 and incomplete-evidence warnings near the run selector. Preserve the current
 native palette, proportional navigation and monospace evidence values; use
 resizable columns, horizontal table scrolling and bounded lower detail panes.
@@ -3586,8 +3590,8 @@ panel rules. Changing run/VM clears selection and pending evidence jumps.
 
 ## Accepted aligned VM status cards (0.6.1)
 
-The visual clarification requires equal-height VM Status resource
-cards within each responsive row. Render the contents once, measure that row's
+VM Status resource cards have equal height within each responsive
+row. Render the contents once, measure that row's
 tallest card and extend all of its frame backgrounds to the shared height in
 the same frame. Apply this to guest pairs and host pairs/triples; single-column
 cards retain natural height. Width/data/font changes must not depend on a stale
@@ -3595,8 +3599,8 @@ height cache or clip wrapped notes. Measurements and monitoring stay unchanged.
 
 ## Accepted upload/picker and collector follow-up (0.6.1)
 
-The latest user clarification supersedes the dialog-tree and immediate-send
-portions of the earlier upload browser: keep the sidebar Explorer tree, fill its pane width,
+This follow-up supersedes the dialog-tree and immediate-send portions of
+the earlier upload browser (below): keep the sidebar Explorer tree, fill its pane width,
 and align folder/Refresh left using proportional text. Upload has a native file
 chooser button and manual path fields, with no second tree. Sidebar Send and Run
 only prefills Upload; it does not submit. Opening Upload hides Run program.
@@ -3611,21 +3615,20 @@ Upload Begin and Exec ENOENT rejections at two-second intervals within one
 The UMH_WAIT_EXEC rejection proves the helper did not exec. Preserve a committed
 upload and token across Exec readiness attempts; never upload it again. Unknown
 outcomes, other rejections and transfer failures are never retried. Existing guest images,
-kernel and protocol stay unchanged; the producer backlog remains 0.7.0.
+kernel and protocol stay unchanged; kernel-native resource production is deferred to 0.7.0.
 
 ## Historical accepted upload browser and Run handoff (0.6.1)
 
-User authorized a new release-0.6.1 branch and an Upload file workflow that
-chooses a host folder through the filesystem explorer, displays its expandable
-filesystem tree and selects a file to upload. Keep manual path entry and plain
-Upload. Upload and Run makes the uploaded file executable and, only after the
+0.6.1 adds an Upload file workflow that chooses a host folder through the
+filesystem explorer, displays its expandable filesystem tree and selects a
+file to upload. Keep manual path entry and plain Upload. Upload and Run makes the uploaded file executable and, only after the
 matching successful upload in the same VM session, opens the editable Run program
 window with its guest path. It never executes without the user's Run action.
 Overwrite confirmation retains the chosen action; closing cancels the handoff
 without claiming to cancel a guest write already submitted. Reuse the existing
 single-file guest protocol and 0.6.0 bases; no guest/image/transport changes.
 
-The accepted clarification adds a persistent Explorer section below
+A follow-up adds a persistent Explorer section below
 Base images. Choose its host root independently of the Upload dialog; double-click
 a regular file or use right-click Send and Run to submit the existing upload and
 success-only Run dialog handoff. Right-click Open Directory opens the containing
@@ -3634,14 +3637,14 @@ VMs and pending uploads cannot admit another send. Folded bases never hide Explo
 
 ## Accepted resource observations and UI repairs (0.6.1)
 
-The user's follow-up requests explicit disconnected-network capture warnings,
-loss-counter definitions on hover and repair of growing subwindows, while keeping
-the folder Upload and Run workflow. Fix the reproduced Import Base row feedback;
+This update adds explicit disconnected-network capture warnings, loss-counter
+definitions on hover and a repair of growing subwindows, and keeps the folder
+Upload and Run workflow. Fix the reproduced Import Base row feedback;
 validate floating/detached views at normal and large text sizes. Extend the
 existing host resource producer with checked MemAvailable and statvfs used/free
 values. Label their host scope and preserve session/retention identity.
 
-The user selected a temporary guest resource collector for 0.6.1, an explicit
+0.6.1 uses a temporary guest resource collector, an explicit
 resource-only exception to the kernel-only producer contract. Build/embed a
 static x86-64 musl executable and use existing Upload/Exec/Input/Read/Signal
 controls, without guest packages, shell interpolation or image/kernel changes.
@@ -3655,8 +3658,8 @@ not a stealth guarantee. Kernel-native production is deferred to 0.7.0.
 
 ## Accepted tab dragging and docking feedback (0.6.1)
 
-The user reports unclear/nonworking tab movement and requests the expected
-drag shadow. Preserve the native dock tree and saved arrangements. Drag tab
+Tab movement was unclear or did not work; this adds the expected drag
+shadow. Preserve the native dock tree and saved arrangements. Drag tab
 labels directly, show a bounded shadowed title and explicit docking action,
 and use one resolver for the highlighted destination and the committed drop.
 Pane edges split, centers join, and visible tab headers allow insertion/reorder
@@ -3667,8 +3670,8 @@ tab cannot promise a split into an empty source group. No guest/backend changes.
 
 ## Accepted manual cores and performance Summary (0.6.0)
 
-User authorized a real Dump core action beside Dump memory and inside Core dumps,
-choosing pause/capture/resume of a selected live process. Use validated guest
+A real Dump core action beside Dump memory and inside Core dumps pauses,
+captures and resumes a selected live process. Use validated guest
 boot/task/start/TGID identity, a nonfatal bounded guest rendezvous and native ELF
 notes, with truthful unavailable memory and independent repeated host captures.
 Do not use the exit-core rendezvous, kill the target, replay uncertain acquisition
@@ -3683,9 +3686,9 @@ release/base publication remain separate.
 
 ## Accepted process core and VM Summary update (0.6.0)
 
-User authorized the planned 0.6.0 guest process-core-on-exit backlog and a native
+0.6.0 adds guest process-core-on-exit acquisition and a native
 Summary tab immediately before Run History, showing VM status, health and
-resources. Unscheduled candidates and a live debugger remain outside this task.
+resources. A live debugger and other unscheduled features are outside this update.
 Opt-in core acquisition targets the launched root thread group on native x86-64,
 before normal/fatal exit releases its address space. Reuse Linux ELF core notes
 and its memory filtering; bound retained guest buffers and host transfers, expose
@@ -3698,15 +3701,15 @@ vCPU/RAM/disk capacities are separate from QEMU host CPU/resident memory and
 available data-volume space. Missing measurements remain unavailable. Existing
 layouts gain Summary before Run History without losing custom windows.
 
-The accepted UI follow-up aligns Core dumps with Memory: a resizable capture
+A UI follow-up aligns Core dumps with Memory: a resizable capture
 list on the left, selected evidence and analysis tabs on the right, and a separate
 import dialog. Waiting/unfinished entries, names/tags and lazy inspection remain
 available. This changes presentation only; core acquisition/recovery is unchanged.
 
 ## Accepted host evidence update (0.5.0)
 
-User authorized inspection, completion and release of current 0.5.0, with guest
-acquisition work deferred to 0.6.0. Static-analysis priority is result readability.
+0.5.0 completes the host evidence work; guest acquisition work is deferred to
+0.6.0. The static-analysis priority is result readability.
 This extends the existing revision-14 / ABI9 snapshot baseline without changing
 the guest contract. Host launch controls optionally own a separate network filter
 from before execution through whole-tree exit and queue one post-exit VM RAM dump.
@@ -3722,16 +3725,16 @@ disassembly; missing pages remain explicit. They are separate from physical RAM.
 
 Isolated networking uses QEMU user networking with restrict=on, no forwarding,
 TFTP or SMB. Exact process core capture before exit, all-thread register freezing
-and pre-free memory capture require new guest support and remain 0.6.0 backlog.
+and pre-free memory capture require new guest support and are deferred to 0.6.0.
 No guest rebuild is necessary for these host additions; already-built current
 0.5.0 bases are reused.
 
-## Ownership
+## Host, guest base and workspace updates
 
 ### Accepted 0.3.0 update
 
-User authorized local Antinomie 0.3.0 on 2026-10-09 and the usability follow-up
-on 2026-10-10. Capture All retains a per-process tree; revision-13 bases use
+Antinomie 0.3.0 dates from 2026-10-09 and its usability follow-up from
+2026-10-10. Capture All retains a per-process tree; revision-13 bases use
 transport ABI 8 with tunable rings and bounded never-drop waits. Legacy ABI 7
 bases remain supported with their original dropping behavior. This supersedes
 the initial drop-only/V7 requirement for new bases; no snapshot or reconnect.
@@ -3742,24 +3745,21 @@ bounded scrollback. Details offer numeric copy formats and bounded captured-data
 windows; analysis displays ongoing progress. Optional guest-desktop launches
 join an already logged-in graphical session using the run's kernel-controlled
 process tree. No persistent guest helper or automatic login is introduced.
-Product commits and binaries stay local until the user's testing;
-documentation publication is independent of that product-release decision.
 
 ### Accepted static-analysis results update
 
-User authorized the native static-analysis workspace redesign on 2026-10-08.
+The native static-analysis workspace redesign dates from 2026-10-08.
 One workspace is the default; selecting a category updates local results and
 separate dockable section panes open only on explicit request. Typed available
 evidence drives searchable/sortable tables, selected details and bounded read-only
 specimen previews. Legacy generic reports remain readable. Acquisition, launch
 scope, engine availability, guest controls and V7 remain unchanged. No new analyzer
 dependency or guest image build is needed. The revision-1 result contract is
-this update. Development
-and the rebuilt executable stay in feature/static-analysis pending integration.
+this update.
 
 ### Accepted static-analysis launch update
 
-User authorized complete static-analysis acquisition/backend and launch setup
+Static-analysis acquisition/backend and launch setup were completed
 on 2026-10-08. Run Program opens launch fields left, opt-in analysis checkboxes
 right and a final Run button. Initial executable only; no descendant/later exec
 static acquisition. Triage plus optional deep analysis, local/no network default,
@@ -3769,17 +3769,15 @@ Application control revision
 10 adds optional specimen controls; V7 remains unchanged, revision-9 guests
 still launch with explicit analysis unavailable. Resource/isolation/compatibility
 limits and engine gaps must be recorded, not presented as complete clean scans.
-Development is isolated in feature/static-analysis; preserve concurrent dirty
-image-builder work and do not replace the normal executable before integration.
 
 ### Accepted display settings update
 
-User authorized saved per-VM guest/window resolution, fullscreen, fit-to-window,
+Adds saved per-VM guest/window resolution, fullscreen, fit-to-window,
 KVM/TCG acceleration and bounded CPU-model choices in New VM/settings. Typed
 serde-default launch configuration preserves legacy defaults. Settings apply on
 next boot only; global force-TCG/headless overrides retain precedence. Host CPU
-requires effective KVM. User approved retaining fixed guest pixels while scaling
-the QEMU window. Presets use standard VGA static EDID, built-in Linux Bochs DRM
+requires effective KVM. Fixed guest pixels are retained while scaling the QEMU
+window. Presets use standard VGA static EDID, built-in Linux Bochs DRM
 and video=Virtual-1 mode selection. Fixed/fitted/windowed GTK launches use a
 bounded owned-window X11/XWayland initial-size operation; fullscreen/headless
 paths need none. Existing x11rb/rustix packages provide safe display operations.
@@ -3789,11 +3787,11 @@ arguments. Revision 3 of the contract is this update.
 
 ### Accepted Debian Xfce fidelity update
 
-User found the Debian Xfce guest did not resemble a VM installed from the Debian
-ISO; analysis showed a `virt-builder debian-13` cloud template plus a curated
+The Debian Xfce guest did not resemble a VM installed from the Debian ISO: it
+was a `virt-builder debian-13` cloud template plus a curated
 `--no-install-recommends` package list missing the desktop meta-package and its
-recommends. User chose the closest-to-ISO completeness level and to keep guest
-integration purged. Install `task-xfce-desktop` with recommendations, move
+recommends. The base now targets the closest-to-ISO completeness level and
+keeps guest integration purged. Install `task-xfce-desktop` with recommendations, move
 networking to NetworkManager (dropping the custom `ifupdown`/`dhcpcd` setup),
 and grow the immutable base to a 16 GiB whole-disk layout with 16 GiB guest
 minimum. `openssh-server`, `qemu-guest-agent`, `spice-vdagent`, `cloud-init`,
@@ -3804,11 +3802,11 @@ bundles, VM disks and recordings are untouched.
 
 ### Accepted guest cursor update
 
-User reported that after the absolute-pointer fix the guest showed two cursors
+After the absolute-pointer fix the guest showed two cursors
 (the guest's software cursor plus the host pointer). The fixed-resolution path
 used standard VGA (`-device VGA,edid=...`), which has no hardware cursor, so the
-guest X server painted its cursor into the framebuffer. User approved switching
-the fixed path to a hardware-cursor GPU. Use
+guest X server painted its cursor into the framebuffer. The fixed path switches
+to a hardware-cursor GPU. Use
 `-vga none -device virtio-gpu-pci,edid=on,xres=W,yres=H`. The connector is a
 `DRM_MODE_CONNECTOR_VIRTUAL` named `Virtual-1`, so `video=Virtual-1:WxH` is
 retained. This matches the Auto path's virtio-gpu device and gives a single,
@@ -3820,10 +3818,10 @@ change.
 
 ### Accepted guest pointer update
 
-User reported the guest mouse pointer stuck at the display center: clicks reached
+The guest mouse pointer was stuck at the display center: clicks reached
 the guest but motion did not move the cursor. Cause is the QEMU GTK relative
-pointer grab; the launch attached only the emulated PS/2 mouse. User approved
-attaching an absolute pointing device to all non-headless launches. Use
+pointer grab; the launch attached only the emulated PS/2 mouse. All non-headless
+launches now attach an absolute pointing device. Use
 `-device virtio-tablet-pci` (a self-contained PCI device requiring no USB
 controller) so the host pointer is tracked directly and never grabbed. The
 existing guest kernel already binds `CONFIG_VIRTIO_INPUT`, so this is a
@@ -4165,8 +4163,8 @@ QEMU builder (`--mode=root`).
 
 ### Accepted Debian Xfce VM base update
 
-The user authorized full Debian userspace on 2026-10-06, selected Xfce and
-requested per-VM credential creation with password-protected sudo. Add Debian13
+Full Debian userspace with Xfce (2026-10-06) adds per-VM credential creation
+with password-protected sudo. Add Debian13
 trixie amd64 alongside BusyBox; retain patched Linux6.12.94, V7, kernel-only
 monitoring controls, disconnected default and existing disk/archive identities.
 
@@ -4191,7 +4189,7 @@ does not complete the remaining syscall/async semantics of the native syscalls u
 
 ### Accepted full native syscalls and dockable workspace update
 
-The user approved these changes on 2026-10-06. Earlier 30-syscall requirements remain historical,
+These changes date from 2026-10-06. Earlier 30-syscall requirements remain historical,
 not the completion target for this update.
 
 - Cover all 375 named native `common`/`64` syscall slots in Linux 6.12.94.
@@ -4225,14 +4223,14 @@ not the completion target for this update.
   resources, bounded children/timeouts/cleanup, explicit PASS/FAIL/SKIP and
   incomplete-capture outcomes. Do not execute irreversible guest/host changes.
 
-Implementation is split into checked contracts and family slices, with bounded
-kernel/core/UI ownership and an independent review gate. Do not claim the whole
-task delivered while native content/async cases remain unimplemented. Existing
+The work is split into checked contracts and per-family slices across kernel,
+core and UI. Native content/async cases that remain unimplemented are recorded
+as such, not as delivered. Existing
 archives and per-VM disks are compatibility inputs, not disposable fixtures.
 
 ### Accepted native terminal windows update
 
-The user approved these changes on 2026-10-05:
+These changes date from 2026-10-05:
 
 - Each launched program opens a native terminal-only window. Concurrent runs
   are supported within the single running VM. Closing that window leaves the
@@ -4245,7 +4243,7 @@ The user approved these changes on 2026-10-05:
 - Default retained data root is `~/antinomie`; VM directories are sanitized
   names plus random identifiers. Existing user VM data/archives are migrated
   by validated publication, never by moving an active VM's backing files.
-  User also approved booting migrated VMs with the newly patched kernel;
+  Migrated VMs boot with the newly patched kernel;
   existing disk overlays/backing bases and explicit reset-to-base behavior
   remain intact. Record boot bundle and disk base identities separately.
 - Each launch retains separate telemetry, launch metadata, terminal output,
@@ -4272,10 +4270,11 @@ Core and UI freeze public run-addressed types before dependent rendering.
 Core owns archive validation/paging and headless terminal persistence; UI uses
 owned API values and performs offline disk reads outside the rendering thread.
 Existing `vt100 0.15` may be used by core without adding a new external package.
-`rusqlite 0.40.2` is approved for bounded disk-backed archive indexing; SQLite
+`rusqlite 0.40.2` is used for bounded disk-backed archive indexing; SQLite
 is linked from the system and required upstream notices are retained.
 Run/session maps, previews, pages and queues remain bounded; new recording
 payloads count against the recording quota and preserve explicit failures.
+Areas changed:
 
 - Guest: kernel patch series under src/antinomie/core, new guest
   protocol header src/antinomie/monitor/protocol/control.h, guest source manifest.
@@ -4287,8 +4286,8 @@ payloads count against the recording quota and preserve explicit failures.
 
 ## Telemetry protocol
 
-Use existing Syscall Telemetry Plan application protocol 1 (ANTT, 128-byte
-little-endian envelope) from the docs vault, carried as opaque V7 messages.
+Use telemetry application protocol 1 (ANTT, 128-byte little-endian
+envelope), carried as opaque V7 messages.
 Implement EVENT_BEGIN (120), FIELD_BEGIN (40 + key/layout), FIELD_DATA,
 FIELD_END (32), EVENT_END (32); emit lifecycle/health where implemented. Parse
 explicit offsets, never native Rust struct casts. Missing begin/end/chunks,
@@ -4309,8 +4308,8 @@ Lifecycle hooks must follow descendants regardless of selected syscall number.
 
 ## Host/control contract
 
-The guest side establishes protocol/control.h promptly and tells the host side
-when ready. Opcodes: 0x1001 upload begin, 0x1002 upload chunk, 0x1003 commit,
+The guest control contract is `protocol/control.h`. Opcodes: 0x1001 upload
+begin, 0x1002 upload chunk, 0x1003 commit,
 0x1004 abort, 0x1010 exec, 0x1011 terminal input, 0x1012 terminal read,
 0x1013 terminal resize, 0x1014 signal, 0x1020 recorder stats,
 0x1030 shutdown. Explicit little-endian fields, versioned, checked lengths;
@@ -4320,7 +4319,7 @@ Persistent health/loss counters queryable even after telemetry loss.
 Rust backend runs blocking ant_init/poll/read on one owner thread. It exposes
 owned commands and bounded UI snapshots, handles reply matching and telemetry,
 and keeps collection/persistence independent of frontend frame rate. Shared
-public API types should be established early by the host side for the UI.
+public API types are defined by the host side for the UI.
 
 ## Verification
 
@@ -4354,7 +4353,7 @@ start, using the same five-minute, shutdown-cancellable save wait. If that wait
 fails after the disk restore committed, the error explicitly says the disk was
 restored and the guest was not started; the user can retry start once saving ends.
 
-The authorized snapshot manager supports disk checkpoints (cold boot recovery)
+The snapshot manager supports disk checkpoints (cold boot recovery)
 and full CPU/RAM/device checkpoints (resume recovery), with a branching native
 graph. External qcow2 layers are frozen; each branch owns a separate writable
 child. A durable manifest and pending-operation journal own active disk selection.
