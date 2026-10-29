@@ -6,6 +6,11 @@ ignore = [
     # rsa: timing side channel in private-key decryption and signing; yara-x
     # only verifies Authenticode signatures with public keys.
     "RUSTSEC-2023-0071",
+    # crypto-bigint 0.5 (via elliptic-curve 0.13, p256/p384): timing variability
+    # in operations on secret integers; fixed only in 0.7.6. yara-x uses p256 and
+    # p384 VerifyingKeys to check signatures of scanned files, which handles no
+    # secrets.
+    "RUSTSEC-2026-0387",
     # wasmtime: component-model async lifting, hostcall fuel for record
     # lifting, type indices across engines and WASI filesystem paths. yara-x
     # runs core modules it compiles from the bundled rules, with one engine,
