@@ -1,5 +1,8 @@
 <div align="center">
-  <img src="assets/branding/antinomie-logo-color.svg" alt="Antinomie" width="440">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/branding/antinomie-logo-dark.svg">
+    <img src="assets/branding/antinomie-logo-color.svg" alt="Antinomie" width="440">
+  </picture>
   <p><strong>Follow a program from syscall to evidence.</strong></p>
   <p>A native Linux desktop for malware analysis and reverse engineering,<br>powered by telemetry from the guest kernel.</p>
   <p>

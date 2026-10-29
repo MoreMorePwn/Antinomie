@@ -7,6 +7,7 @@ color lockup. Greek lettering remains an optional secondary study.
 | Asset | Use |
 |---|---|
 | `antinomie-logo-color.svg` | Primary horizontal logo on a light surface |
+| `antinomie-logo-dark.svg` / `.png` | Color penguin with white lettering for GitHub dark mode |
 | `antinomie-logo-black.svg` / `antinomie-logo-white.svg` | Single-color horizontal logos for light/dark surfaces |
 | `antinomie-stacked-{color,black,white}.svg` | Symbol above the name |
 | `antinomie-wordmark-{color,black,white}.svg` | Name without the symbol |
@@ -19,6 +20,9 @@ Black and white artwork has transparent cutouts, with no background rectangle.
 All SVG lettering is outlined, so the logo does not depend on installed fonts.
 Use the white logo on dark surfaces; use color or black on light surfaces.
 Keep the existing proportions and leave the surrounding clear space intact.
+GitHub READMEs select the color logo in light mode and the color penguin with
+white lettering in dark mode. Documentation website dark mode keeps the
+single-color white logo. Both dark-background versions have transparent canvases.
 
 The desktop installer and release script consume the canonical icon at
 `src/antinomie/monitor/assets/antinomie.svg`. The native app embeds the PNG
