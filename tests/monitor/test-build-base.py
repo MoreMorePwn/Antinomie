@@ -206,8 +206,8 @@ exit 0
         app = (REPO / "src/antinomie/monitor/crates/monitor-core/src/build.rs").read_text()
         self.assertIn('hostname: "debian".into()', app)
 
-    def test_debian_minimal_is_the_console_recipe_on_the_minimal_kernel(self):
-        self.assertEqual(base.PROFILES["debian-minimal"][:2], ("minimal", "build-debian-image.py"))
+    def test_debian_minimal_is_the_console_recipe_on_the_stock_kernel(self):
+        self.assertEqual(base.PROFILES["debian-minimal"][:2], ("stock", "build-debian-image.py"))
         self.assertEqual(base.PROFILES["busybox"][0], "minimal")
         commands = []
         with tempfile.TemporaryDirectory() as name, \
@@ -218,7 +218,7 @@ exit 0
             base.build_image("debian-minimal", {"hostname": "lab"}, kernel, work, Path("/o"))
             answers = json.loads((work / "options.json").read_text())
             self.assertEqual(answers, {"hostname": "lab", "desktop": "none"})
-            # A minimal kernel without modules: none are passed.
+            # The stock kernel builds no modules (Debian's load): none are passed.
             self.assertNotIn("--modules", commands[0])
             self.assertNotIn("--debian-config", commands[0])
             # Debian's kernel packages are kept with the other Debian inputs.
@@ -230,6 +230,33 @@ exit 0
             base.build_image("debian-xfce", {"desktop": "gnome"}, kernel, work, Path("/o"))
             self.assertIn("--modules", commands[1])
             self.assertEqual(json.loads((work / "options.json").read_text()), {"desktop": "gnome"})
+
+    def test_the_stock_kernel_is_compared_with_debians_image(self):
+        calls = []
+        with tempfile.TemporaryDirectory() as name, \
+                unittest.mock.patch.object(base, "run", lambda *args, **kw: calls.append((args, kw))):
+            work = Path(name)
+            base.build_kernel("stock", work / "tree", work, 2, debian_image=Path("/in/linux.deb"))
+            base.build_kernel("minimal", work / "tree", work, 2)
+        self.assertEqual(calls[0][0][2], "stock")
+        self.assertEqual(calls[0][1]["env"]["ANTINOMIE_DEBIAN_IMAGE"], "/in/linux.deb")
+        self.assertNotIn("ANTINOMIE_DEBIAN_IMAGE", calls[1][1]["env"])
+        # The package comes from the inputs through the image recipe's verified fetch.
+        fetched = []
+
+        class Recipe:
+            @staticmethod
+            def debian_kernel_debs(cache, work, proxy=""):
+                fetched.append((cache, proxy))
+                return [cache / "linux-image.deb", cache / "meta.deb"]
+
+        with tempfile.TemporaryDirectory() as name, \
+                unittest.mock.patch.object(base.importlib.util, "module_from_spec",
+                                           return_value=Recipe), \
+                unittest.mock.patch.object(base.importlib.util, "spec_from_file_location"):
+            self.assertEqual(base.debian_image(Path("/in"), Path(name), "http://proxy"),
+                             Path("/in/linux-image.deb"))
+        self.assertEqual(fetched, [(Path("/in"), "http://proxy")])
 
     def test_missing_or_wrong_tarball_is_refused_before_unpacking(self):
         with tempfile.TemporaryDirectory() as name:

@@ -196,6 +196,27 @@ it runs.
   listed as a giveaway. Dell board serials carry a `CN` number. NVMe-only laptop
   profiles keep their SATA stand-in.
 
+- **Debian Minimal runs Debian's own kernel modules.** Its kernel is now
+  built with Debian's own configuration (the new `stock` kernel profile:
+  nothing changed but the recorder and the embedded configuration the image
+  builders read), and the recorder keeps none of its state in a stock kernel
+  structure (series patch 0020: per-task state in the LSM task blob,
+  io_uring/AIO requests and rings in side tables, process-core state with the
+  writing task), so structure layouts, exports and modversions CRCs are
+  Debian's, and its BTF is byte for byte that of Debian's own image (patch
+  0022), so Debian's module BTF is valid too. The kernel trusts Debian's
+  module-signing certificate (the public certificate of Debian's build, read
+  from Debian's kernel package), so Debian's signed modules load untainted:
+  `lsmod`, `modprobe`, udev and the module index are Debian's own, and
+  Debian-built out-of-tree modules load too. The bootstrap initrd loads
+  Debian's own root-disk and ext4 modules, as Debian's initramfs would. The
+  function tracer is on as in Debian (BPF LSM and fentry programs attach;
+  systemd's bpf-restrict-fs works), with the recorder kept out of it (patch
+  0021: nothing of it in tracefs). Every stock kernel build compares its
+  exports, BTF and traceable functions with Debian's kernel
+  (`scripts/check-kernel-abi.py`). New Debian Minimal bases only; the kernel
+  build now needs `zstd`.
+
 - **Export the whole Triage as a report.** Triage › Export report… writes the
   run as HTML (one self-contained file), PDF (the same layout, written by the
   app with no browser or network), JSON (versioned schema, documented in
@@ -658,11 +679,9 @@ it runs.
   desktop kernel, whose BTF (Debian's configuration) named every recorder
   function until now. Every kernel build checks vmlinux and module BTF for
   recorder names (`scripts/check-kernel-btf.py`), and the stealth probe reads
-  `/sys/kernel/btf` in the guest. Stock structures the recorder extends
-  (`task_struct`, `io_kiocb`, `aio_kiocb`, `io_ring_ctx`, `coredump_params`,
-  `io_async_msghdr`) keep their real size and offsets in BTF, with a hole
-  where its fields are: names are gone, the layout still differs from
-  Debian's, as does the minimal profile's configuration (see
+  `/sys/kernel/btf` in the guest. No stock structure carries a recorder
+  field any more (next entry), so every structure has Debian's layout; the
+  minimal profile's configuration still differs from Debian's (see
   docs/implementation.md). Building the minimal kernel now needs `pahole`
   (dwarves).
 

@@ -514,11 +514,12 @@ pub fn series_short() -> String {
 }
 
 /// The kernel build profile a base kind uses (`build-monitor-kernel.sh`). The
-/// console-only Debian base shares BusyBox's kernel: everything it needs is
-/// built in, so it carries no modules and reuses that cached kernel.
+/// console-only Debian base runs Debian's own configuration (the stock
+/// profile), so Debian's own modules load into its kernel.
 pub(crate) fn kernel_profile(kind: Kind) -> &'static str {
     match kind {
-        Kind::BusyBox | Kind::DebianMinimal => "minimal",
+        Kind::BusyBox => "minimal",
+        Kind::DebianMinimal => "stock",
         Kind::DebianXfce => "debian",
     }
 }
@@ -612,8 +613,11 @@ const DEBIAN_TOOLS: &[ToolSpec] = &[
     tool("sfdisk", "fdisk"),
 ];
 
-/// The console Debian base: Debian's image tools, on the minimal kernel.
+/// The console Debian base: Debian's image tools, on the stock kernel (Debian's
+/// configuration), whose build compares itself with Debian's kernel image
+/// (zstd-compressed).
 const DEBIAN_MINIMAL_TOOLS: &[ToolSpec] = &[
+    tool("zstd", "zstd"),
     tool("mmdebstrap", "mmdebstrap"),
     tool("newuidmap", "uidmap"),
     tool("qemu-img", "qemu-utils"),
@@ -1079,8 +1083,8 @@ mod tests {
             automatic_base_name(Kind::DebianMinimal, "xfce"),
             "Debian 13 (Minimal)"
         );
-        // It shares BusyBox's kernel; every kernel build encodes BTF with pahole.
-        assert_eq!(kernel_profile(Kind::DebianMinimal), "minimal");
+        // Debian's configuration; every kernel build encodes BTF with pahole.
+        assert_eq!(kernel_profile(Kind::DebianMinimal), "stock");
         assert_eq!(kernel_profile(Kind::DebianXfce), "debian");
         let native: Vec<_> = tools(Kind::DebianMinimal, BuildMode::Native)
             .iter()
@@ -1093,6 +1097,7 @@ mod tests {
             native.contains(&"pahole"),
             crate::toolchain::for_kind(Kind::DebianMinimal) == crate::toolchain::Toolchain::Host
         );
+        assert!(native.contains(&"zstd"));
         assert!(
             tools(Kind::BusyBox, BuildMode::Native)
                 .iter()
@@ -1102,14 +1107,14 @@ mod tests {
     }
 
     #[test]
-    fn recipes_build_the_console_base_on_the_minimal_kernel() {
+    fn recipes_build_the_console_base_on_the_stock_kernel() {
         let recipe = include_str!("../../../../../../scripts/build-debian-image.py");
         assert!(recipe.contains(
             r#"CONSOLE_PROFILE = {"id": "debian-minimal", "label": "Debian 13 (Minimal)","#
         ));
         assert!(recipe.contains(r#""requires_credentials": True, "graphical": False}"#));
         let orchestrator = include_str!("../../../../../../scripts/build-base.py");
-        assert!(orchestrator.contains(r#""debian-minimal": ("minimal", "build-debian-image.py""#));
+        assert!(orchestrator.contains(r#""debian-minimal": ("stock", "build-debian-image.py""#));
     }
 
     #[test]

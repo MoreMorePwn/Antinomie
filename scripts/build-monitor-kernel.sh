@@ -3,7 +3,7 @@
 #
 # build-monitor-kernel.sh — build the patched guest kernel for one profile.
 #
-#   usage: scripts/build-monitor-kernel.sh [minimal|debian]
+#   usage: scripts/build-monitor-kernel.sh [minimal|debian|stock]
 #
 # Environment: ANTINOMIE_SOURCE_TREE, ANTINOMIE_BUILD_TREE, ANTINOMIE_DEBIAN_CONFIG
 # and ANTINOMIE_SERIES_DIR replace the repository work-tree defaults.
@@ -21,7 +21,16 @@
 # debian: the pinned Debian amd64 configuration (debian/config/config, then
 #   kernelarch-x86/config, then amd64/config) with only the deviations listed
 #   in DEBIAN_BUILTIN and below; output in work/monitor-build-debian, with
-#   stripped modules installed under modules-install/. Used by the Debian base.
+#   stripped modules installed under modules-install/. Used by the desktop
+#   Debian bases.
+# stock: the pinned Debian amd64 configuration with nothing changed but the
+#   recorder (and the embedded configuration the image builders read): Debian's
+#   module ABI, BTF, function tracer and module-signing certificate (the public
+#   certificate of Debian's own build, module-signing.pem in the adapter), so
+#   Debian's own signed modules load. Only the kernel image is built; output in
+#   work/monitor-build-stock. Used by Debian Minimal, which installs Debian's
+#   kernel packages. ANTINOMIE_DEBIAN_IMAGE names Debian's linux-image package
+#   to compare the kernel's exports, BTF and traceable functions with.
 #
 set -euo pipefail
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -34,14 +43,15 @@ jobs=${JOBS:-8}
 case "$profile" in
     minimal) build_tree=${ANTINOMIE_BUILD_TREE:-"$repo/work/monitor-build"} ;;
     debian) build_tree=${ANTINOMIE_BUILD_TREE:-"$repo/work/monitor-build-debian"} ;;
-    *) echo "usage: $0 [minimal|debian]" >&2; exit 2 ;;
+    stock) build_tree=${ANTINOMIE_BUILD_TREE:-"$repo/work/monitor-build-stock"} ;;
+    *) echo "usage: $0 [minimal|debian|stock]" >&2; exit 2 ;;
 esac
-# The minimal profile compiles with Debian 13's own compiler where the host has
-# it (Debian's kernel build names x86_64-linux-gnu-gcc-14, as /proc/version
-# then shows); the debian profile keeps the host's gcc. The banner records the
+# The minimal and stock profiles compile with Debian 13's own compiler where the
+# host has it (Debian's kernel build names x86_64-linux-gnu-gcc-14, as
+# /proc/version then shows); the debian profile keeps the host's gcc. The banner records the
 # first line of each tool's --version (scripts/mkcompile_h, CC_VERSION_TEXT).
 cc=gcc
-if [[ $profile == minimal ]] && command -v x86_64-linux-gnu-gcc-14 >/dev/null; then
+if [[ $profile != debian ]] && command -v x86_64-linux-gnu-gcc-14 >/dev/null; then
     cc=x86_64-linux-gnu-gcc-14
 fi
 if [[ ${ANTINOMIE_PRINT_TOOLCHAIN:-0} == 1 ]]; then
@@ -183,6 +193,23 @@ require_source_id() {
     fi
 }
 
+# The banner check of the minimal and stock profiles: Debian Minimal's must be
+# Debian's own (KERNEL_BANNER, which build-debian-image.py checks); only Debian
+# 13's compiler and linker write it.
+check_banner() {
+    local banner expected
+    banner=$(strings -n 40 "$build_tree/vmlinux" | grep -m 1 '^Linux version .* #[0-9]' || true)
+    printf '%s\n' "$banner" > "$build_tree/kernel-banner"
+    echo "kernel banner: $banner" >&2
+    expected=$(adapter_value KERNEL_BANNER)
+    expected=${expected#\'}
+    expected=${expected%\'}
+    if [[ $banner != "$expected" ]]; then
+        echo "warning: the banner is not Debian's ($expected); Debian Minimal needs a kernel" \
+            "built with Debian 13's toolchain" >&2
+    fi
+}
+
 if [[ $profile == minimal ]]; then
     if [[ ! -f "$build_tree/.config" ]]; then
         make -C "$source_tree" O="$build_tree" x86_64_defconfig
@@ -249,19 +276,73 @@ if [[ $profile == minimal ]]; then
     # The guest reads this BTF: nothing of the recorder may be in it.
     python3 "$repo/scripts/check-kernel-btf.py" --vmlinux "$build_tree/vmlinux" \
         --system-map "$build_tree/System.map" --modules "$build_tree/modules-install"
-    # The banner /proc/version shows. Debian Minimal's must be Debian's own
-    # (KERNEL_BANNER, which build-debian-image.py checks); only Debian 13's
-    # compiler and linker write it.
-    banner=$(strings -n 40 "$build_tree/vmlinux" | grep -m 1 '^Linux version .* #[0-9]' || true)
-    printf '%s\n' "$banner" > "$build_tree/kernel-banner"
-    echo "kernel banner: $banner" >&2
-    expected=$(adapter_value KERNEL_BANNER)
-    expected=${expected#\'}
-    expected=${expected%\'}
-    if [[ $banner != "$expected" ]]; then
-        echo "warning: the banner is not Debian's ($expected); Debian Minimal needs a kernel" \
-            "built with Debian 13's toolchain" >&2
+    # The banner /proc/version shows.
+    check_banner
+    echo "$build_tree/arch/x86/boot/bzImage"
+    exit 0
+fi
+
+if [[ $profile == stock ]]; then
+    fragments=("$debian_config/config" "$debian_config/kernelarch-x86/config"
+               "$debian_config/amd64/config")
+    for fragment in "${fragments[@]}"; do
+        [[ -f $fragment ]] || { echo "missing Debian config fragment $fragment; run scripts/bootstrap.sh" >&2; exit 1; }
+    done
+    reference="$build_tree/debian-reference"
+    rm -rf "$reference"
+    mkdir -p "$reference"
+    cat "${fragments[@]}" > "$reference/.config"
+    make -C "$source_tree" O="$reference" "${compiler[@]}" olddefconfig >/dev/null
+    cp "$reference/.config" "$build_tree/.config"
+    cp "$reference/.config" "$build_tree/debian-config"
+    rm -rf "$reference"
+    # Debian's build signs its modules with a key it makes for that build
+    # alone and builds that key's certificate in (debian/rules.real, as
+    # output/signing_key.pem of the build tree); the certificate, read from
+    # Debian's kernel, takes the same place here, so the kernel trusts exactly
+    # Debian's modules. No key is generated and no module is signed.
+    mkdir -p "$build_tree/output"
+    cp "$repo/src/antinomie/packaging/debian-6.12.94-1-trixie/module-signing.pem" \
+        "$build_tree/output/signing_key.pem"
+    "$config" --file "$build_tree/.config" --set-str MODULE_SIG_KEY "output/signing_key.pem"
+    "$config" --file "$build_tree/.config" --set-str SYSTEM_TRUSTED_KEYS ""
+    # The image builders read the embedded configuration from a gzip bzImage;
+    # nothing in the guest reads it (no /proc/config.gz).
+    "$config" --file "$build_tree/.config" --enable ANTINOMIE --enable IKCONFIG \
+        --disable IKCONFIG_PROC --disable KERNEL_ZSTD --enable KERNEL_GZIP
+    "$config" --file "$build_tree/.config" --set-str LOCALVERSION "$DEBIAN_LOCALVERSION"
+    # Debian's build salts the build ID note (/sys/kernel/notes) with the
+    # release (debian/bin/gencontrol.py: BUILD_SALT).
+    "$config" --file "$build_tree/.config" --set-str BUILD_SALT "6.12.94$DEBIAN_LOCALVERSION"
+    "$config" --file "$build_tree/.config" --set-str ANTINOMIE_SOURCE_ID "$source_id"
+    make -C "$source_tree" O="$build_tree" "${compiler[@]}" olddefconfig
+    require_symbols ANTINOMIE IKCONFIG KERNEL_GZIP MODVERSIONS MODULE_SIG DEBUG_INFO_BTF \
+        FUNCTION_TRACER DYNAMIC_FTRACE BPF_LSM
+    require_source_id
+    # Nothing else of Debian's configuration may change: no symbol the
+    # recorder selects, no driver built in.
+    "$source_tree/scripts/diffconfig" "$build_tree/debian-config" "$build_tree/.config" \
+        > "$build_tree/antinomie-config-deviations.txt"
+    allowed="ANTINOMIE|ANTINOMIE_SOURCE_ID|IKCONFIG|IKCONFIG_PROC|KERNEL_GZIP|KERNEL_ZSTD|LOCALVERSION|MODULE_SIG_KEY|BUILD_SALT"
+    unexpected=$(grep -vE "^[-+ ]($allowed) " \
+        "$build_tree/antinomie-config-deviations.txt" || true)
+    if [[ -n $unexpected ]]; then
+        echo "the stock profile changes Debian's configuration beyond the recorder:" >&2
+        echo "$unexpected" >&2
+        exit 1
     fi
+    make -C "$source_tree" O="$build_tree" "${compiler[@]}" LOCALVERSION= -j"$jobs" bzImage
+    [[ ${ANTINOMIE_CCACHE_DIR:-} == "" ]] || ! command -v ccache >/dev/null || ccache --show-stats >&2
+    python3 "$repo/scripts/check-kernel-btf.py" --vmlinux "$build_tree/vmlinux" \
+        --system-map "$build_tree/System.map"
+    # Debian's exports, structure layouts and traceable functions.
+    abi_check=("$repo/scripts/check-kernel-abi.py" --vmlinux "$build_tree/vmlinux"
+               --system-map "$build_tree/System.map" --symvers "$build_tree/vmlinux.symvers")
+    if [[ -n ${ANTINOMIE_DEBIAN_IMAGE:-} ]]; then
+        abi_check+=(--debian-image "$ANTINOMIE_DEBIAN_IMAGE")
+    fi
+    python3 "${abi_check[@]}"
+    check_banner
     echo "$build_tree/arch/x86/boot/bzImage"
     exit 0
 fi

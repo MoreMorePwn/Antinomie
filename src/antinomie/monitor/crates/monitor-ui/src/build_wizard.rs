@@ -217,7 +217,7 @@ impl BuildWizard {
                 Kind::BusyBox => "Small console guest, fast to build",
                 Kind::DebianMinimal => {
                     "Debian 13 without a desktop: console login, APT and standard tools; \
-                     shares BusyBox's kernel"
+                     Debian's kernel configuration and its own modules"
                 }
                 Kind::DebianXfce => "Debian 13 with the desktop you choose, as from the installer",
             };

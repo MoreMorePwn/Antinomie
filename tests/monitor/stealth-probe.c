@@ -775,8 +775,9 @@ static void check_modules(void)
 	if (len >= 0)
 		for (i = 0; i < len; i++)
 			lines += text[i] == '\n';
-	report(len >= 0 && antinomie_word(text) ? "fail" : "info", "modules.loaded",
-	       len < 0 ? "no /proc/modules" : lines ? "some loaded" : "none loaded (all built in)");
+	reportf(len >= 0 && antinomie_word(text) ? "fail" : "info", "modules.loaded",
+		len < 0 ? "no /proc/modules" : lines ? "%d loaded" : "none loaded (all built in)",
+		lines);
 	dir = opendir("/sys/module");
 	if (dir) {
 		while ((entry = readdir(dir)))
@@ -940,14 +941,34 @@ static void check_tracing(void)
 		char path[96];
 		ssize_t len;
 
+		FILE *file;
+
 		snprintf(path, sizeof(path), "%s/available_filter_functions",
 			 mounted ? dir : "/sys/kernel/tracing");
-		len = read_all(path, text, sizeof(text));
-		if (len < 0)
+		file = fopen(path, "r");
+		if (!file) {
 			report("pass", "tracing.functions", "no function tracer");
-		else
-			report(strstr(text, "ant_") ? "fail" : "pass", "tracing.functions",
-			       strstr(text, "ant_") ? "ant_ functions listed" : "no ant_ functions");
+		} else {
+			/* One "name" or "name [module]" per line; a module's
+			 * functions may share the recorder's prefixes (wireless
+			 * antenna code), the kernel's own may not.
+			 */
+			char *line = NULL, sample[128] = "";
+			size_t cap = 0;
+			unsigned long total = 0, hits = 0;
+
+			while (getline(&line, &cap, file) > 0) {
+				line[strcspn(line, " \n")] = 0;
+				total++;
+				if (strchr(line + strlen(line) + 1, '[') == NULL &&
+				    btf_recorder_name(line) && hits++ == 0)
+					snprintf(sample, sizeof(sample), ": %s", line);
+			}
+			free(line);
+			fclose(file);
+			reportf(hits ? "fail" : "pass", "tracing.functions",
+				"%lu traceable functions, %lu of the recorder%s", total, hits, sample);
+		}
 		snprintf(path, sizeof(path), "%s/available_events", mounted ? dir : "/sys/kernel/tracing");
 		len = read_all(path, text, sizeof(text));
 		report(len >= 0 && antinomie_word(text) ? "fail" : "pass", "tracing.events",

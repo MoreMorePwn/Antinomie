@@ -159,8 +159,10 @@ def stamp_revision(manifest, kernel, allow_unversioned, app_version=None):
         manifest["built_with"] = built_with
 
 
-def fixed_display_config(config, kernel=None):
-    """Validate the matching build configuration supplied by the image builder."""
+def fixed_display_config(config, kernel=None, modules_ok=False):
+    """Validate the matching build configuration supplied by the image builder.
+    modules_ok: the base has the distribution's modules (Debian Minimal), so
+    virtio-gpu's DRM may be modules that udev loads, as on the distribution."""
     if config is None:
         return False
     if kernel is None or config.read_bytes() != embedded_config(kernel):
@@ -168,7 +170,8 @@ def fixed_display_config(config, kernel=None):
     values = dict(line.split("=", 1) for line in config.read_text().splitlines()
                   if line.startswith("CONFIG_") and "=" in line)
     for name in ("DRM", "DRM_VIRTIO_GPU", "DRM_VIRTIO_GPU_KMS", "DRM_FBDEV_EMULATION", "FRAMEBUFFER_CONSOLE"):
-        if values.get("CONFIG_" + name) != "y":
+        if values.get("CONFIG_" + name) != "y" and not (
+                modules_ok and values.get("CONFIG_" + name) == "m"):
             raise RuntimeError(f"fixed display requires CONFIG_{name}=y in matching kernel config")
     return True
 
@@ -179,12 +182,13 @@ def fixed_display_config(config, kernel=None):
 UEFI_BOOT_PAGE_MARK = b"Bootstrap page 0x%llx is not free"
 
 
-def stealth_support(config, kernel, root_buses=True, dhcp=True):
+def stealth_support(config, kernel, root_buses=True, dhcp=True, module_buses=False):
     """Stealth profile entries the base can boot with, for bundle.json.
 
     uefi: the kernel boots through its EFI stub without landing on the bootstrap
     page; sata, nvme: the initrd finds the root disk on that bus and the kernel
-    has the controller built in; dhcp: the guest takes its address from the
+    has the controller built in, or the initrd loads its modules (module_buses:
+    Debian Minimal's initrd loads Debian's); dhcp: the guest takes its address from the
     NAT's DHCP server, so any NAT network works. A base without the field boots
     from virtio under SeaBIOS on 10.0.2.0/24 only."""
     support = []
@@ -193,11 +197,13 @@ def stealth_support(config, kernel, root_buses=True, dhcp=True):
         values = dict(line.split("=", 1) for line in Path(config).read_text().splitlines()
                       if line.startswith("CONFIG_") and "=" in line)
     built_in = lambda *names: all(values.get("CONFIG_" + name) == "y" for name in names)
+    available = lambda *names: all(values.get("CONFIG_" + name) == "y" or (
+        module_buses and values.get("CONFIG_" + name) == "m") for name in names)
     if built_in("EFI", "EFI_STUB") and UEFI_BOOT_PAGE_MARK in Path(kernel).read_bytes():
         support.append("uefi")
-    if root_buses and built_in("ATA", "SATA_AHCI", "SCSI", "BLK_DEV_SD"):
+    if root_buses and available("ATA", "SATA_AHCI", "SCSI", "BLK_DEV_SD"):
         support.append("sata")
-    if root_buses and built_in("BLK_DEV_NVME"):
+    if root_buses and available("BLK_DEV_NVME"):
         support.append("nvme")
     if dhcp:
         support.append("dhcp")
@@ -342,12 +348,39 @@ echo 'BusyBox guest ready'
 """, 0o755)
 
 
-def initrd_tree(root):
+def module_loading(modules):
+    """The /init lines that load a distribution's own modules from the initrd:
+    modules = {"files": {name: ELF bytes}, "groups": [(shell test, [names])]},
+    each group loaded in order when its test holds (a controller the VM has),
+    each module once, as its own initramfs would; a module that does not
+    load (no such CPU feature) is left out, as udev leaves it."""
+    if not modules:
+        return ""
+    lines = ["# The distribution's own modules for the root disk and its filesystem,",
+             "# loaded as its initramfs loads them: for the controllers this VM has.",
+             'load() { for m; do insmod /lib/modules/$m.ko 2>/dev/null; done; }']
+    for test, names in modules["groups"]:
+        lines.append(f"if {test}; then load {' '.join(names)}; fi" if test else
+                     f"load {' '.join(names)}")
+    return "\n".join(lines) + "\n"
+
+
+def initrd_tree(root, modules=None):
+    """The bootstrap initrd: mounts the root (by UUID, on virtio, SATA or NVMe),
+    writes the UEFI boot entry and switches to it. modules (module_loading())
+    adds a distribution's own modules for kernels that build those drivers as
+    modules."""
     for directory in ("bin", "dev", "proc", "sys", "newroot"):
         (root / directory).mkdir(parents=True, exist_ok=True)
     install_binary("/usr/bin/busybox", root, "/bin/busybox")
-    for applet in ("sh", "mount", "mkdir", "sleep", "switch_root", "echo", "cat", "findfs",
-                   "dd", "od", "tr", "cut", "sed", "ls", "readlink", "basename", "rm"):
+    applets = ["sh", "mount", "mkdir", "sleep", "switch_root", "echo", "cat", "findfs",
+               "dd", "od", "tr", "cut", "sed", "ls", "readlink", "basename", "rm"]
+    if modules:
+        applets += ["insmod", "grep"]
+        (root / "lib/modules").mkdir(parents=True)
+        for name, data in modules["files"].items():
+            (root / "lib/modules" / f"{name}.ko").write_bytes(data)
+    for applet in applets:
         (root / "bin" / applet).symlink_to("busybox")
     install_binary(shutil.which("resize2fs"), root, "/bin/resize2fs")
     # efivarfs marks the boot variables immutable; BootOrder is rewritten.
@@ -358,7 +391,7 @@ mount -t devtmpfs devtmpfs /dev
 exec </dev/console >/dev/console 2>&1
 mount -t proc proc /proc
 mount -t sysfs sysfs /sys
-# A Debian-shaped command line names the root by filesystem UUID and asks for
+""" + module_loading(modules) + """# A Debian-shaped command line names the root by filesystem UUID and asks for
 # it read-only (the boot's fsck, then fstab's remount); without one the root
 # is the VM's only disk. Either is on the bus the stealth profile chose:
 # virtio, SATA or NVMe.

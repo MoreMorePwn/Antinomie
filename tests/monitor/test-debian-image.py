@@ -6,6 +6,7 @@ import importlib.util
 import os
 import io
 import json
+import lzma
 from pathlib import Path
 import re
 import shutil
@@ -36,6 +37,39 @@ def newc(members):
                for name, mode, ino, nlink, mtime, body in members]
     entries.append([[0] * 5 + [0, 0, 0, 0, 0, 0, 0, 0], b"TRAILER!!!", b""])
     return initrd_resume.write_archive(entries)
+
+
+def fake_deb(path, files):
+    """A .deb (ar archive) whose data.tar.xz holds files {path: bytes}."""
+    data = io.BytesIO()
+    with tarfile.open(fileobj=data, mode="w:xz") as archive:
+        for name, content in files.items():
+            entry = tarfile.TarInfo(name)
+            entry.size = len(content)
+            archive.addfile(entry, io.BytesIO(content))
+    members = [("debian-binary", b"2.0\n"), ("control.tar.xz", b""), ("data.tar.xz", data.getvalue())]
+    out = b"!<arch>\n"
+    for name, content in members:
+        out += f"{name + '/':<16}{0:<12}{0:<6}{0:<6}{'100644':<8}{len(content):<10}`\n".encode()
+        out += content + (b"\n" if len(content) & 1 else b"")
+    path.write_bytes(out)
+    return path
+
+
+def fake_module(release, depends, signed=True):
+    """A minimal ELF64 relocatable with a .modinfo section, as a module."""
+    modinfo = (f"vermagic={release} SMP preempt mod_unload modversions\0"
+               f"depends={depends}\0").encode()
+    names = b"\0.modinfo\0.shstrtab\0"
+    body = modinfo + names
+    shoff = 64 + len(body)
+    header = b"\x7fELF\x02\x01\x01" + bytes(9) + struct.pack(
+        "<HHIQQQIHHHHHH", 1, 62, 1, 0, 0, shoff, 0, 64, 0, 0, 64, 3, 2)
+    sections = bytes(64)
+    sections += struct.pack("<IIQQQQIIQQ", 1, 1, 0, 0, 64, len(modinfo), 0, 0, 1, 0)
+    sections += struct.pack("<IIQQQQIIQQ", 10, 3, 0, 0, 64 + len(modinfo), len(names), 0, 0, 1, 0)
+    data = header + body + sections
+    return data + (b"sig~Module signature appended~\n" if signed else b"")
 
 
 class InitrdResumeTests(unittest.TestCase):
@@ -449,7 +483,7 @@ class DebianImageTests(unittest.TestCase):
                 subprocess.run(["mkfs.ext4", "-q", "-F", "-U", root, str(raw)], check=True)
                 self.assertEqual(image.filesystem_uuid(raw), root)
 
-    def test_only_the_console_base_claims_sata_and_nvme_and_only_when_built_in(self):
+    def test_only_the_console_base_claims_sata_and_nvme(self):
         with tempfile.TemporaryDirectory() as name:
             config, kernel = Path(name) / "config", Path(name) / "kernel"
             kernel.write_bytes(b"no EFI stub page claim")
@@ -459,10 +493,19 @@ class DebianImageTests(unittest.TestCase):
             self.assertEqual(image.stealth_support("none", config, kernel),
                              ["sata", "nvme", "dhcp", "onboardnic"])
             self.assertEqual(image.stealth_support("xfce", config, kernel), ["dhcp"])
-            # Debian's own configuration builds the controllers as modules.
-            config.write_text(buses.replace("SATA_AHCI=y", "SATA_AHCI=m")
-                              .replace("BLK_DEV_NVME=y", "BLK_DEV_NVME=m"))
-            self.assertEqual(image.stealth_support("none", config, kernel), ["dhcp", "onboardnic"])
+            # Debian's own configuration builds the controllers as modules,
+            # which the console base's initrd loads (Debian's own).
+            modular = buses.replace("SATA_AHCI=y", "SATA_AHCI=m").replace(
+                "BLK_DEV_NVME=y", "BLK_DEV_NVME=m")
+            config.write_text(modular)
+            self.assertEqual(image.stealth_support("none", config, kernel),
+                             ["sata", "nvme", "dhcp", "onboardnic"])
+            # The helper alone (BusyBox, desktops) claims built-in buses only.
+            helpers = image.monitor_helpers()
+            self.assertEqual(helpers.stealth_support(config, kernel), ["dhcp"])
+            config.write_text(modular.replace("BLK_DEV_NVME=m", "BLK_DEV_NVME=n"))
+            self.assertEqual(image.stealth_support("none", config, kernel),
+                             ["sata", "dhcp", "onboardnic"])
 
     def test_console_manifest_lists_the_requested_packages(self):
         manifest = (REPO / "src/antinomie/packaging/debian-minimal-trixie/packages.txt").read_text()
@@ -699,23 +742,87 @@ class DebianImageTests(unittest.TestCase):
             if not hook.startswith(("upload ", "download ")):
                 self.assertNotIn("/w/", hook)
 
-    def test_console_base_needs_no_modules_when_the_kernel_builds_them_in(self):
+    def test_console_base_takes_debians_modules_not_its_kernels(self):
         with tempfile.TemporaryDirectory() as name:
             config = Path(name) / "config"
-            config.write_text("".join(f"CONFIG_{symbol}=y\n" for symbol in image.CONSOLE_BUILTIN)
-                              + "CONFIG_EFIVAR_FS=m\n")
+            config.write_text("CONFIG_EXT4_FS=m\nCONFIG_VIRTIO_BLK=m\n")
             self.assertTrue(image.kernel_uses_modules(config))
-            self.assertTrue(image.built_in(config, image.CONSOLE_BUILTIN))
-            config.write_text("CONFIG_EXT4_FS=y\nCONFIG_VIRTIO_NET=m\n")
-            self.assertFalse(image.built_in(config, image.CONSOLE_BUILTIN))
-            self.assertFalse(image.built_in(None, image.CONSOLE_BUILTIN))
             kernel = Path(name) / "kernel"
             kernel.write_bytes(b"kernel")
-            for desktop in ("xfce", "none"):
-                with self.subTest(desktop=desktop), \
-                        patch.object(image, "kernel_release", return_value="6.12.94"), \
-                        self.assertRaisesRegex(RuntimeError, "--modules"):
-                    image.build(kernel, Path(name) / "out", config, values={"desktop": desktop})
+            modules = Path(name) / "modules"
+            # A desktop needs the kernel's own modules; the console base
+            # refuses them (Debian's are its kernel's).
+            with patch.object(image, "kernel_release", return_value="6.12.94"), \
+                    self.assertRaisesRegex(RuntimeError, "--modules"):
+                image.build(kernel, Path(name) / "out", config, values={"desktop": "xfce"})
+            with patch.object(image, "kernel_release", return_value="6.12.94+deb13-amd64"), \
+                    self.assertRaisesRegex(RuntimeError, "Debian's own modules"):
+                image.build(kernel, Path(name) / "out", config, modules,
+                            values={"desktop": "none"})
+
+    def test_console_kernel_must_have_debians_configuration(self):
+        release = image.DEBIAN_KERNEL_PACKAGES[0][0].removeprefix("linux-image-")
+        debian = ("CONFIG_EXT4_FS=m\n# CONFIG_ANTINOMIE is not set\nCONFIG_KERNEL_ZSTD=y\n"
+                  "CONFIG_CC_VERSION_TEXT=\"gcc-14\"\nCONFIG_LOCALVERSION=\"\"\n")
+        with tempfile.TemporaryDirectory() as name:
+            deb = fake_deb(Path(name) / "linux.deb", {f"./boot/config-{release}": debian.encode()})
+            config = Path(name) / "config"
+            # The recorder, the embedded configuration, the release suffix,
+            # the signing key and the toolchain's values may differ.
+            config.write_text("CONFIG_EXT4_FS=m\nCONFIG_ANTINOMIE=y\nCONFIG_ANTINOMIE_SOURCE_ID=\"1:a\"\n"
+                              "CONFIG_KERNEL_GZIP=y\nCONFIG_IKCONFIG=y\n# CONFIG_IKCONFIG_PROC is not set\n"
+                              "CONFIG_CC_VERSION_TEXT=\"gcc-15\"\nCONFIG_LOCALVERSION=\"+deb13-amd64\"\n"
+                              "CONFIG_MODULE_SIG_KEY=\"output/signing_key.pem\"\n")
+            image.stock_config(config, deb)
+            # Anything else, such as a driver built in, is refused.
+            config.write_text(config.read_text().replace("EXT4_FS=m", "EXT4_FS=y"))
+            with self.assertRaisesRegex(RuntimeError, "CONFIG_EXT4_FS"):
+                image.stock_config(config, deb)
+            with self.assertRaisesRegex(RuntimeError, "--kernel-config"):
+                image.stock_config(None, deb)
+
+    def test_console_initrd_loads_debians_root_modules(self):
+        release = image.DEBIAN_KERNEL_PACKAGES[0][0].removeprefix("linux-image-")
+        names = [name for _, group in image.ROOT_MODULE_GROUPS for name in group]
+        # Each module's dependencies come before it in its own group.
+        depends = {"ahci": "libata,libahci", "libahci": "libata", "libata": "scsi_mod,scsi_common",
+                   "scsi_mod": "scsi_common", "sd_mod": "scsi_mod,scsi_common",
+                   "nvme": "nvme-core", "nvme-core": "nvme-auth", "ext4": "jbd2,crc16,mbcache"}
+        files = {f"./usr/lib/modules/{release}/kernel/x/{name}.ko.xz":
+                 lzma.compress(fake_module(release, depends.get(name, "")))
+                 for name in names}
+        with tempfile.TemporaryDirectory() as name:
+            deb = fake_deb(Path(name) / "linux.deb", files)
+            modules = image.root_modules(deb)
+            self.assertEqual(set(modules["files"]), set(names))
+            self.assertEqual(modules["package"], "linux.deb")
+            script = image.monitor_helpers().module_loading(modules)
+            self.assertIn("if grep -qsx 0x0002 /sys/bus/virtio/devices/*/device; then "
+                          "load virtio_blk; fi", script)
+            self.assertIn("load crc32c_generic crc32c-intel crc16 mbcache jbd2 ext4\n", script)
+            self.assertLess(script.index("efivarfs"), script.index("ext4"))
+            tree = Path(name) / "initrd"
+            tree.mkdir()
+            image.monitor_helpers().initrd_tree(tree, modules)
+            init = (tree / "init").read_text()
+            self.assertLess(init.index("mount -t sysfs"), init.index("load virtio_blk"))
+            self.assertLess(init.index("load virtio_blk"), init.index("findfs"))
+            self.assertTrue((tree / "bin/insmod").is_symlink())
+            self.assertEqual((tree / "lib/modules/ext4.ko").read_bytes(),
+                             fake_module(release, depends["ext4"]))
+            # A module out of order, unsigned or of another release is refused.
+            for broken in ({**depends, "ext4": "jbd2,crc16,mbcache,zstd"},):
+                files[f"./usr/lib/modules/{release}/kernel/x/ext4.ko.xz"] = lzma.compress(
+                    fake_module(release, broken["ext4"]))
+                with self.assertRaisesRegex(RuntimeError, "ext4 needs zstd"):
+                    image.root_modules(fake_deb(Path(name) / "b.deb", files))
+            files[f"./usr/lib/modules/{release}/kernel/x/ext4.ko.xz"] = lzma.compress(
+                fake_module(release, "jbd2,crc16,mbcache", signed=False))
+            with self.assertRaisesRegex(RuntimeError, "not a signed module"):
+                image.root_modules(fake_deb(Path(name) / "c.deb", files))
+            del files[f"./usr/lib/modules/{release}/kernel/x/ext4.ko.xz"]
+            with self.assertRaisesRegex(RuntimeError, "lacks the modules ext4"):
+                image.root_modules(fake_deb(Path(name) / "d.deb", files))
 
     def test_options_are_validated(self):
         self.assertEqual(image.options({})["hostname"], "debian")
@@ -973,62 +1080,24 @@ class DebianImageTests(unittest.TestCase):
                     image.debian_kernel_debs(cache, root / "work")
             self.assertEqual(fetched, [image.DEBIAN_KERNEL_ARCHIVE
                                        + "/dists/trixie-security/InRelease"])
-            # The Antinomie kernel's modules: its .ko files, owned by root.
-            tree = root / "lib/modules/6.12.94+deb13-amd64"
-            (tree / "kernel/net/netfilter").mkdir(parents=True)
-            (tree / "kernel/net/netfilter/xt_mark.ko").write_bytes(b"ko")
-            (tree / "modules.order").write_text("")
-            archive = image.modules_archive(tree, root / "modules.tar")
-            with tarfile.open(archive) as members:
-                self.assertEqual([(m.name, m.uid, m.uname) for m in members],
-                                 [("net/netfilter/xt_mark.ko", 0, "root")])
         # They go in before the rest of the customization: Debian's packages,
-        # then the modules under updates/ with depmod, then dpkg --verify.
+        # then dpkg --verify. Their module index is Debian's own: nothing is
+        # added to the module tree and the initramfs is Debian's postinst's.
         with patch.object(image.os, "geteuid", return_value=1000):
             command = image.mmdebstrap_command(image.options({"desktop": image.CONSOLE}),
                                                Path("/w/r.tar"), Path("/w/c.sh"), Path("/w/p"),
-                                               kernel_debs=(Path("/w/k/a.deb"), Path("/w/k/b.deb")),
-                                               kernel_modules=Path("/w/k/m.tar"))
+                                               kernel_debs=(Path("/w/k/a.deb"), Path("/w/k/b.deb")))
         hooks = [arg[len("--customize-hook="):] for arg in command
                  if arg.startswith("--customize-hook=")]
         install = hooks.index('chroot "$1" apt-get -o APT::Get::AllowUnauthenticated=false -y '
                               'install /tmp/a.deb /tmp/b.deb')
-        modules = hooks.index("upload /w/k/m.tar /tmp/kernel-modules.tar")
-        updates = "/usr/lib/modules/6.12.94+deb13-amd64/updates"
-        # The module index names only them (the search order for this run).
-        depmod = hooks.index(f"chroot \"$1\" sh -c 'mkdir -p {updates} && tar -x --no-same-owner "
-                             f"-C {updates} -f /tmp/kernel-modules.tar && printf '\"'\"'search "
-                             "updates\\nexclude kernel\\n'\"'\"' > /tmp/kernel-modules.conf && "
-                             "depmod -a -C /tmp/kernel-modules.conf 6.12.94+deb13-amd64 && ! grep "
-                             "-qv '\"'\"'^updates/'\"'\"' /usr/lib/modules/6.12.94+deb13-amd64/"
-                             "modules.dep'")
         verify = hooks.index('chroot "$1" sh -c \'test -z "$(dpkg --verify '
                              'linux-image-6.12.94+deb13-amd64 linux-image-amd64)"\'')
         self.assertLess(hooks.index("upload /w/k/a.deb /tmp/a.deb"), install)
-        self.assertLess(install, modules)
-        self.assertLess(modules, depmod)
-        self.assertLess(depmod, verify)
+        self.assertLess(install, verify)
         self.assertLess(verify, hooks.index("upload /w/c.sh /tmp/antinomie-customize.sh"))
-        # After the customization (whose packages have update-initramfs run
-        # again), the initramfs is built once more from Debian's own module
-        # index, as on any install, and the index of ours is restored.
-        rebuild = hooks.index(f'chroot "$1" sh -c {image.shlex.quote(image.initramfs_rebuild())}')
-        self.assertLess(hooks.index('rm -f "$1/tmp/antinomie-customize.sh"'), rebuild)
-        self.assertLess(rebuild, next(i for i, hook in enumerate(hooks) if "inode-times" in hook))
-        steps = image.initramfs_rebuild()
-        self.assertLess(steps.index("search kernel\\nexclude updates"),
-                        steps.index("update-initramfs -u -k 6.12.94+deb13-amd64"))
-        self.assertLess(steps.index("update-initramfs"), steps.index("search updates\\nexclude kernel"))
-        self.assertIn("lsinitramfs /boot/initrd.img-6.12.94+deb13-amd64 | grep -q "
-                      "'^usr/lib/modules/6.12.94+deb13-amd64/kernel/'", steps)
-        self.assertTrue(steps.endswith("! grep -qv '^updates/' "
-                                       "/usr/lib/modules/6.12.94+deb13-amd64/modules.dep"))
-        # Without modules of ours Debian's index stays and nothing is rebuilt.
-        with patch.object(image.os, "geteuid", return_value=1000):
-            plain = image.mmdebstrap_command(image.options({"desktop": image.CONSOLE}),
-                                             Path("/w/r.tar"), Path("/w/c.sh"), Path("/w/p"),
-                                             kernel_debs=(Path("/w/k/a.deb"),))
-        self.assertFalse(any("update-initramfs" in arg for arg in plain))
+        self.assertFalse(any("depmod" in hook or "update-initramfs" in hook or "updates" in hook
+                             for hook in hooks))
         # The customization purges Debian's kernels, not the console base's own.
         self.assertIn('($1 ~ /^linux-image-/ && keep != "none")', image.customization_script())
         # The cache knows the kernel inputs by their hashes.

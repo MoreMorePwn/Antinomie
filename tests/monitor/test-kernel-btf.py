@@ -289,6 +289,19 @@ class FilterTests(unittest.TestCase):
         self.assertNotIn("cookie", names)
         self.assertEqual(len(btf.btf.types), 11)
 
+    def test_vmlinux_keeps_the_strings_pahole_left_unused(self):
+        # pahole's table keeps strings no type uses (Debian's BTF has them);
+        # the filter keeps them in place, but not the removed types' and
+        # members' names, nor an unused recorder name.
+        w, _ = vmlinux_btf()
+        w.name("orphan_param")
+        w.name("ant_orphan")
+        names = Parsed(self.filt, self.run_vmlinux(w)).btf.strings.split(b"\0")
+        self.assertIn(b"orphan_param", names)
+        for gone in (b"ant_orphan", b"monitor", b"cookie", b"ant_task"):
+            self.assertNotIn(gone, names)
+        self.assertLess(names.index(b"task_struct"), names.index(b"orphan_param"))
+
     def test_module_btf_is_remapped_onto_the_filtered_vmlinux(self):
         w, ids = vmlinux_btf()
         out = self.run_vmlinux(w)
@@ -347,7 +360,7 @@ class SeriesTests(unittest.TestCase):
         self.assertRegex(script, r"--enable DEBUG_INFO_BTF\b")
         self.assertIn("require_symbols DEBUG_INFO_BTF DEBUG_INFO_BTF_MODULES", script)
         checks = re.findall(r'check-kernel-btf\.py" --vmlinux "\$build_tree/vmlinux"', script)
-        self.assertEqual(len(checks), 2, "both profiles run the BTF check")
+        self.assertEqual(len(checks), 3, "every profile runs the BTF check")
 
 
 if __name__ == "__main__":

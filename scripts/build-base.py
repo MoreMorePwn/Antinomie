@@ -40,9 +40,10 @@ JOB.json: {"format": 1, "profile": "busybox" | "debian-xfce" | "debian-minimal",
            (app_version optional: recorded as built_with)
 
 debian-xfce is Debian 13 with the desktop its options choose; debian-minimal is
-the console-only Debian 13 base (no desktop). debian-minimal shares the minimal
-kernel profile with BusyBox (everything built in, no modules), so the kernel
-cached for a BusyBox build serves it too.
+the console-only Debian 13 base (no desktop). debian-minimal's kernel is the
+stock profile: Debian's own configuration with the recorder, which loads
+Debian's own modules (from Debian's kernel packages, kept in --inputs and
+compared with the kernel as it is built).
 """
 # Copyright (c) 2026 MikiMiku (MoreMorePwn)
 import argparse
@@ -71,7 +72,7 @@ DEBIAN_ANSWERS = {"name", "hostname", "locale", "keyboard_layout", "keyboard_var
 PROFILES = {
     "busybox": ("minimal", "build-monitor-image.py", {"hostname", "name"}, (5, 2)),
     "debian-xfce": ("debian", "build-debian-image.py", DEBIAN_ANSWERS | {"desktop"}, (30, 20)),
-    "debian-minimal": ("minimal", "build-debian-image.py", DEBIAN_ANSWERS, (5, 6)),
+    "debian-minimal": ("stock", "build-debian-image.py", DEBIAN_ANSWERS, (8, 6)),
 }
 # The image recipe's answer that selects the console-only Debian base.
 CONSOLE_DESKTOP = "none"
@@ -380,14 +381,30 @@ def prepare_source(inputs, work):
     return tree
 
 
-def build_kernel(kernel_profile, tree, work, jobs, ccache=None):
+def build_kernel(kernel_profile, tree, work, jobs, ccache=None, debian_image=None):
+    """Build the kernel; debian_image (Debian's linux-image package) is what the
+    stock profile's exports, BTF and traceable functions are compared with."""
     build = work / f"kernel-{kernel_profile}"
-    env = ({"ANTINOMIE_CCACHE_DIR": str(ccache)} if ccache else {}) | {"ANTINOMIE_SOURCE_TREE": str(tree), "ANTINOMIE_BUILD_TREE": str(build),
-                        "ANTINOMIE_DEBIAN_CONFIG": str(tree / "debian/config"),
-                        "ANTINOMIE_SERIES_DIR": str(SERIES), "ANTINOMIE_SOURCE_PREPARED": "1",
-                        "JOBS": str(jobs)}
+    env = ({"ANTINOMIE_CCACHE_DIR": str(ccache)} if ccache else {}) | (
+        {"ANTINOMIE_DEBIAN_IMAGE": str(debian_image)} if debian_image else {}) | {
+        "ANTINOMIE_SOURCE_TREE": str(tree), "ANTINOMIE_BUILD_TREE": str(build),
+        "ANTINOMIE_DEBIAN_CONFIG": str(tree / "debian/config"),
+        "ANTINOMIE_SERIES_DIR": str(SERIES), "ANTINOMIE_SOURCE_PREPARED": "1",
+        "JOBS": str(jobs)}
     run_tool("bash", KIT / "scripts/build-monitor-kernel.sh", kernel_profile, env=env)
     return build
+
+
+def debian_image(inputs, work, proxy=""):
+    """Debian's linux-image package of the pinned release, in inputs (where the
+    Debian Minimal image takes it from too), downloaded through the archive's
+    signed index when missing."""
+    spec = importlib.util.spec_from_file_location(
+        "debian_image", KIT / "scripts/build-debian-image.py")
+    recipe = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(recipe)
+    work.mkdir(parents=True, exist_ok=True)
+    return recipe.debian_kernel_debs(inputs, work, proxy)[0]
 
 
 def memory_kib():
@@ -598,7 +615,9 @@ def main():
             stage("source")
             tree = prepare_source(args.inputs, args.work)
             stage("kernel")
-            build = build_kernel(kernel_profile, tree, args.work, args.jobs, args.ccache)
+            build = build_kernel(kernel_profile, tree, args.work, args.jobs, args.ccache,
+                                 debian_image(args.inputs, args.work, values.get("proxy", ""))
+                                 if kernel_profile == "stock" else None)
             stage("symbols")
             make_symbols(build, args.work)
             if not args.keep_kernel_build:

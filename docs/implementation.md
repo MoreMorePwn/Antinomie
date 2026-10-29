@@ -2854,49 +2854,66 @@ structures and the fields it adds to stock structures.
 | Mechanism | What it covers |
 | --- | --- |
 | `kernel/antinomie/Makefile`: `ccflags-remove-y += $(DEBUG_CFLAGS)` | The recorder's own objects have no DWARF, so pahole describes none of their functions (static helpers with stock-looking names too), variables or local types. The recorder is absent from the Volatility symbol table too (the host's memory tools use stock types only); developers lose its source-level debug information in vmlinux. |
-| `scripts/antinomie_btf.py` after pahole (`scripts/link-vmlinux.sh`) | What its headers bring into stock objects: every type, member, enumerator, function, variable or parameter whose name starts with `ant_`/`antc_` after any underscores, in any case, or contains `antinomie` (stock Debian vmlinux BTF has no such name; this kernel's built-in drivers neither), then what refers to a removed type (a structure loses only that member, a data section only that variable), then anonymous types whose every referrer went. The string table is rebuilt from what is left, in the original order. A structure keeps its size and its other members' offsets: the removed member becomes a hole. |
+| `scripts/antinomie_btf.py` after pahole (`scripts/link-vmlinux.sh`) | What its headers bring into stock objects: every type, member, enumerator, function, variable or parameter whose name starts with `ant_`/`antc_` after any underscores, in any case, or contains `antinomie` (stock Debian vmlinux BTF has no such name; this kernel's built-in drivers neither), then what refers to a removed type (a structure loses only that member, a data section only that variable), then anonymous types whose every referrer went. The string table keeps pahole's order and the strings pahole left unused (Debian's BTF has them too), without those of what was removed. A structure keeps its size and its other members' offsets: the removed member becomes a hole (none is left since 0.8.0's patch 0020: no stock structure carries a recorder field). |
 | `scripts/Makefile.modfinal` | Each module is encoded against pahole's unfiltered vmlinux BTF (`.btf.vmlinux.full`), so it shares the types the filter changed rather than carrying its own copies of `task_struct` and all that reaches it, then filtered onto the filtered vmlinux BTF with the renumbering the vmlinux pass recorded (`.btf.vmlinux.map`). In modules only the names the vmlinux pass removed count, plus `antinomie`: stock wireless drivers have `ant_*` fields of their own (Debian's ath9k, b43, iwlwifi, ...). A module build without those files (an external module) is encoded as before. |
 | `scripts/check-kernel-btf.py`, after every build of either profile | An independent reader fails the build when a vmlinux BTF string is a recorder name, a module's has one of the names pahole's unfiltered vmlinux BTF had (or `antinomie`), or a vmlinux BTF function is one of the recorder's own (System.map `ant_text_begin`..`ant_text_end`) with no stock namesake. On the stock 6.12.94-1 kernel and its 4,225 modules it finds nothing. `tests/monitor/test-kernel-btf.py` tests it, the filter (taken from the series patch) on vmlinux and module BTF, and the wiring. |
 | `tests/monitor/stealth-probe.c` | In the guest, `kernel.btf` fails when `/sys/kernel/btf/vmlinux` is missing or names the recorder, `kernel.btf.modules` reads every module's file. |
 
-The filter removes, with the current series, 20 types (the forward
-declarations of `ant_task`, `ant_run`, `ant_async`, `ant_hash_job`, the
-structure `ant_coredump_live`, the functions `ant_coredump_*` and
-`ant_uring_rw_capture` with their prototypes, and pointers only they used) and
-the members `task_struct.ant_*` (ten), `io_kiocb.ant_async`,
-`aio_kiocb.ant_async`, `io_ring_ctx`'s `ant_tgid`, `ant_creator`,
-`ant_root_cookie`, `ant_task_cookie`, `coredump_params.antinomie_deadline` and
-`antinomie_live`, `io_async_msghdr`'s `ant_name_size`, `ant_control_size` and
-`ant_control_address`. `resolve_btfids` runs on the filtered BTF as before (no
-stock BTF id names the recorder), and the output is reproducible.
+With patch 0019 alone the filter removed 20 types (the forward declarations
+of `ant_task`, `ant_run`, `ant_async`, `ant_hash_job`, the structure
+`ant_coredump_live`, the functions `ant_coredump_*` and `ant_uring_rw_capture`
+with their prototypes, and pointers only they used) and the recorder's
+members of `task_struct`, `io_kiocb`, `aio_kiocb`, `io_ring_ctx`,
+`coredump_params` and `io_async_msghdr`. Since patches 0020-0022 no stock
+structure has such a member, and what is left to remove is the declarations
+stock objects see: `ant_hash_job` and `ant_coredump_live` (forward), and the
+functions `ant_uring_rw_capture` and `ant_coredump_sort_vma`.
+`resolve_btfids` runs on the filtered BTF as before (no stock BTF id names the
+recorder), and the output is reproducible.
 
 **What a sample can still see.** No recorder name, in vmlinux or module BTF.
-The layout of the structures the recorder extends still differs from
-Debian's: in BTF they keep their real size and offsets (anything else would
-mislead the BPF verifier and CO-RE relocations), with a hole where the fields
-are. `task_struct` has a 72-byte hole after `saved_state` (every later member
-is 72 bytes further than in Debian's build), `io_ring_ctx` 64 bytes more in
-its first (cache-line aligned, anonymous) block, `io_kiocb` 8 and
-`coredump_params` 16 bytes more at the end, `aio_kiocb` 8 bytes before its
-first member, `io_async_msghdr` 24 at the end. A program that compares sizes or offsets against Debian's BTF (an
-archive such as BTFHub, or its own copy) sees the difference; one that only
-reads this kernel's BTF sees holes no alignment explains. Beyond the
-recorder, the minimal profile is not Debian's configuration: it builds in what
-Debian builds as modules, so its vmlinux BTF has about 147,700 types to
-Debian's 113,500 and 234 structures shared with Debian's differ in size or
-members (`task_struct` has `SCHED_CORE`'s fields and lacks Debian's
-`PREEMPT_NOTIFIERS`, PSI and livepatch ones, for example), and its module set
-is twelve modules. Functions of the recorder are not in BTF, so fentry/fexit
-cannot attach to them; root can still place a kprobe on one by name (see the
-limits below).
+Since patches 0020-0022 (below) no stock structure has a recorder field, so
+`task_struct`, `io_ring_ctx`, `io_kiocb`, `aio_kiocb`, `io_async_msghdr` and
+`coredump_params` have Debian's sizes and offsets in every profile. Debian
+Minimal's kernel (the stock profile, Debian's configuration) has BTF byte for
+byte identical to Debian's own 6.12.94-1 image. The minimal profile (BusyBox)
+is not Debian's configuration: it builds in what Debian builds as modules, so
+its vmlinux BTF has about 147,700 types to Debian's 113,500 and 234 structures
+shared with Debian's differ by configuration (`task_struct` has `SCHED_CORE`'s
+fields and lacks Debian's `PREEMPT_NOTIFIERS`, PSI and livepatch ones, for
+example), and it has no function tracer. Functions of the recorder are not in
+BTF, so fentry/fexit cannot attach to them; root can still place a kprobe on
+one by name (see the limits below).
 
-How close it can get: moving the recorder's fields to the end of each
-structure would keep every stock member's offset (in `task_struct`, before
-`thread`, which Debian pads by 32 bytes; 74 bytes of fields do not fit there,
-so `thread` and the size would still move by 64); replacing them with one
-pointer to a side allocation would fit in that padding and leave
-`task_struct`'s BTF as Debian's. Both change the recorder's hot path and are
-proposals, not part of this change.
+## Debian's module ABI (0.8.0)
+
+Guest series 0020-0022, the `stock` kernel profile and Debian Minimal's image;
+contract revision unchanged (the host sees no difference). Debian Minimal
+installs Debian's own kernel packages, so its module tree is Debian's ~4,200
+signed modules; until 0.8.0 the Antinomie kernel refused them (another
+`struct module`, other CRCs) and the base hid them from modprobe, which left
+`lsmod` empty and a Debian-built module (a rootkit's, a driver's) unloadable.
+Now the kernel loads them as Debian's kernel does:
+
+| Part | What it does |
+| --- | --- |
+| Patch 0020, side tables | No recorder field in a stock structure. Per task (cookies, monitor and run contexts, the event and packet sequence counters, the io_uring request a worker runs, the process core in writing): `struct ant_task_state` in the task's LSM security blob, at an offset `security.c`'s `ordered_lsm_init()` reserves after every LSM's part (`ant_task_state_reserve()`), read as `task->security + offset`. No LSM is registered: a registered one is printed by `report_lsm_order()` at boot, listed in `/sys/kernel/security/lsm` and by `lsm_list_modules()`, and would exceed `MAX_LSM_COUNT` (Debian's order names every LSM it builds). The blob is allocated zeroed in `security_task_alloc()`, after `dup_task_struct()` copied the parent, and freed in `security_task_free()` after `ant_monitor_release()`; `ANTINOMIE` depends on `SECURITY`. io_uring and AIO requests: the request record is found by its `io_kiocb`/`aio_kiocb` in a hashtable under the lock that already guarded every slot access; with no request alive no lock is taken, and a resubmitted object first abandons what it left. Rings: the creator (tgid, task, cookies) of each `io_ring_ctx` in an RCU hashtable, freed with the ring by `call_rcu`. A recvmsg's `msghdr` sizes live in the request record. A recorder process core's deadline and live state are the writing task's; `<linux/coredump.h>` declares only opaque accessors. The recorder's six `EXPORT_SYMBOL_GPL`s are gone (nothing modular used them), so the export table is Debian's. |
+| Patch 0021, function tracer | The recorder's objects are built without `CC_FLAGS_FTRACE`; its eleven functions in stock files are `notrace`. With Debian's `FUNCTION_TRACER`/`DYNAMIC_FTRACE`, tracefs's `available_filter_functions` lists 45,775 call sites, none of the recorder's. |
+| Patch 0022, BTF numbering | Debian's module BTF refers to vmlinux types by number, so it is valid only if each type has Debian's number. `kernel/configs.o` (IKCONFIG, which the image builders read) has no debug information; the recorder's exit and live core writer moved to `kernel/antinomie/core_writer.c` with its own copies of `fs/coredump.c`'s static helpers (a second caller had made `coredump_wait()`, `dump_vma_snapshot()` and others out-of-line functions, each a BTF and traceable function Debian's build lacks; forcing them inline only cascaded to their callees); `io_xattr_finish()`, `__io_setxattr_prep()` and `io_waitid_finish()`, grown by hooks, are `__always_inline`; recorder functions named like stock ones are renamed; the transport's per-CPU state is `alloc_percpu()`ed (a static per-CPU variable shifted Debian's `.data..percpu` offsets). |
+| `stock` profile (`build-monitor-kernel.sh stock`) | Debian's resolved configuration with only `ANTINOMIE` (+ source id), `IKCONFIG` (no `IKCONFIG_PROC`), gzip compression (the image builders read the configuration from the bzImage), `LOCALVERSION`, `BUILD_SALT` = the release (as Debian's `gencontrol.py` sets it; the build-salt note in `/sys/kernel/notes`) and `MODULE_SIG_KEY` changed; anything else fails the build. Debian signs its modules with a key its build makes and discards, and builds that key's certificate in as the only builtin key (`debian/rules.real`, `output/signing_key.pem`); the certificate, read from Debian's vmlinuz (serial 2C0CF174..., the signer Debian's modules name), is `src/antinomie/packaging/debian-6.12.94-1-trixie/module-signing.pem` and goes to the same path, so `.builtin_trusted_keys` is Debian's and nothing is signed here. Only `bzImage` is built (about 42 minutes at two jobs from scratch). |
+| `scripts/check-kernel-abi.py` | After every stock build, against Debian's image (`ANTINOMIE_DEBIAN_IMAGE`; `build-base.py` fetches it into the inputs through the signed index, as the image recipe does): exported symbols, licence and modversions CRC from both kernels' `__ksymtab`/`__kcrctab` and the build's `vmlinux.symvers` (11,212, all equal); BTF byte identity, else every named structure or union whose size or members differ; traceable functions (`__mcount_loc`) of the recorder; a recorder function with a stock name. `tests/monitor/test-kernel-abi.py` tests it and the profile. |
+| Debian Minimal image | No `updates/` tree, no index of our own, no initramfs rebuild: Debian's postinst made both. The bootstrap initrd loads Debian's root-disk and ext4 modules (see "Debian Minimal base"). |
+
+Measured (stock kernel, native gcc-14 14.2.0-19, binutils 2.47; the
+container builder's binutils 2.44 changes only the banner): exports and CRCs
+equal to Debian's `Module.symvers` (vmlinux part) and to its vmlinuz; vmlinux
+`.BTF` (4,959,816 bytes, 113,482 types) identical to Debian's; no recorder
+call site among 45,775. What still differs from Debian's kernel: the code
+(another binary: symbol addresses in `/proc/kallsyms` for root, the GNU build
+ID in `/sys/kernel/notes`), the embedded configuration (not readable in the
+guest), the banner's linker version unless built with Debian 13's binutils
+(the build refuses Debian Minimal otherwise), and the recorder's own memory
+and behaviour (see "Guest stealth").
 
 ## Guest stealth (0.7.0)
 
@@ -3318,7 +3335,7 @@ not part of the identity), which the image builders compute:
 | Value | Written when |
 | --- | --- |
 | `uefi` | The kernel has `EFI` and `EFI_STUB` and its bzImage holds the EFI stub's bootstrap page claim (0052, found by its warning text) |
-| `sata`, `nvme` | The initrd searches that bus for the root disk and the kernel has `ATA SATA_AHCI SCSI BLK_DEV_SD`, or `BLK_DEV_NVME`, built in (BusyBox and Debian Minimal bases; the minimal kernel profile now builds NVMe in) |
+| `sata`, `nvme` | The initrd searches that bus for the root disk and the kernel has `ATA SATA_AHCI SCSI BLK_DEV_SD`, or `BLK_DEV_NVME`, built in (BusyBox; the minimal kernel profile now builds NVMe in), or the initrd loads their modules (Debian Minimal, Debian's own, since 0.8.0) |
 | `dhcp` | The guest takes its address from DHCP (BusyBox bases now; Debian desktop bases through NetworkManager, Debian Minimal through ifupdown and dhcpcd) |
 
 The host offers OVMF when QEMU's firmware descriptors (the user's and
@@ -4163,39 +4180,22 @@ building `/boot/initrd.img-*` from Debian's modules); GRUB (`grub-pc`,
 Debian's signed image (0644), configuration and `System.map`, and
 `/usr/lib/modules/6.12.94+deb13-amd64` Debian's module tree; the build fails
 unless `dpkg --verify` reports nothing for both packages. QEMU boots the
-Antinomie kernel directly (`-kernel`), so the guest never holds it. The
-Antinomie kernel reports the same release, and its own few modules
-(`modules_archive`) go to that tree's `updates/`. depmod then runs once more
-with Debian's `kernel/` excluded (`-C` with `search updates` and `exclude
-kernel`, so no depmod.d file stays in the image), and the build checks that
-`modules.dep` names only `updates/`: the Antinomie kernel refuses Debian's
-modules (their `struct module` differs; "Exec format error" and a kernel log
-error each), so an index of them would have udev, systemd and the kernel's
-own module requests try two dozen at every boot, and depmod would make ours
-depend on Debian's (`x_tables`). A Debian module is therefore "not found" for
-modprobe, as a module the kernel lacks was before. The initramfs is
-Debian's: packages the customization installs later (console-setup, kmod,
-udev) have update-initramfs build it again, by then from the index of ours
-alone, which left it without a single Debian module; so after the
-customization the recipe builds it once more from Debian's own index
-(`initramfs_rebuild`: depmod with `updates/` excluded, `update-initramfs -u`,
-then the index of ours again), and the build checks that it carries Debian's
-`kernel/` modules and that `modules.dep` names only `updates/`. An
-`update-initramfs` in the guest builds a smaller one from the index. apt may install the image from
+Antinomie kernel directly (`-kernel`), so the guest never holds it. That
+kernel (0.8.0, stock profile, below) has Debian's configuration, structure
+layouts, export table and module-signing certificate, so Debian's modules are
+its own: nothing is added to the module tree, the index is the one Debian's
+postinst made, and the initramfs Debian's postinst built (from all of Debian's
+modules) stays; `modprobe`, udev and `lsmod` behave as on a Debian install.
+(Before 0.8.0 the kernel refused Debian's modules, its own went to `updates/`
+under an index that named only them, and the initramfs was rebuilt from
+Debian's index after the customization.) apt may install the image from
 the trixie mirror rather than the verified copy when the mirror carries the
 same version: the archive serves one file per version (the same SHA-256).
 
-The minimal kernel profile, shared with BusyBox, takes Debian 13's
-configuration where a program sees it (`DEBIAN_SHAPE`): Debian's LSM order with
-AppArmor the active major LSM, lockdown (none), landlock, TOMOYO, BPF, IPE, IMA
-and EVM; the memory controller and cgroup BPF; HZ 250; 8192 CPUs (MAXSMP);
-perf_event_paranoid 3 (Debian's patch); efivarfs, FUSE, nftables and fq_codel
-built in; scheduler autogroup and Debian's hardening defaults; no 9p, no
-netconsole, no cgroup debug controller, no legacy TIOCSTI. The release is
-Debian's (`6.12.94+deb13-amd64`), it is compiled with
-`x86_64-linux-gnu-gcc-14` where the host has it (Debian's compiler and the
-string `/proc/version` shows), and the few modular options are built and
-installed so the base has a module tree.
+Its kernel is the **stock** profile (0.8.0; before, it shared BusyBox's
+minimal profile): Debian 13's resolved configuration, unchanged but for the
+recorder (see "Debian's module ABI" below). The release is Debian's
+(`6.12.94+deb13-amd64`) and it is compiled with `x86_64-linux-gnu-gcc-14`.
 
 Debian Minimal's banner is Debian's own, byte for byte. Its `/boot` holds
 Debian's genuine image, whose `linux_banner` a program can unpack and compare
@@ -4233,16 +4233,24 @@ any user) differ from Debian's `-dbg` package and `/boot/vmlinuz`. Loading
 Debian's modules (a module ABI of Debian's) does not change that; only
 running Debian's own image would.
 
-Its kernel is the **minimal** profile, the BusyBox kernel: it builds in every
-driver and systemd prerequisite the console base uses (`CONSOLE_BUILTIN` is
-checked when no modules are given), so the base carries no modules and a
-cached BusyBox kernel serves it (`kit::kernel_cache(.., "minimal")`). The
-recipe accepts a modular kernel without `--modules` only for this base and
-only when `CONSOLE_BUILTIN` is built in. `stealth_support` is decided by the
-kernel as for BusyBox (`root_buses` only for this base): the minimal kernel
-builds `ATA SATA_AHCI SCSI BLK_DEV_SD` and `BLK_DEV_NVME` in, so the base
-offers `uefi, sata, nvme, dhcp`; the desktops, whose controllers are Debian
-modules, stay `uefi, dhcp`. The root filesystem cache
+Debian builds the root disk's controllers and ext4 as modules, which the
+bootstrap initrd cannot leave to udev: the recipe takes them from Debian's
+image package (`root_modules`: virtio_blk; scsi_common, scsi_mod, libata,
+libahci, ahci and sd_mod; nvme-auth, nvme-core and nvme; crc32c_generic,
+crc32c-intel, crc16, mbcache, jbd2 and ext4; efivarfs for the UEFI boot entry),
+decompressed (the signature Debian appended before compressing stays), with
+each one's `depends` checked against the order, and the initrd's `/init` loads
+each group when the VM has the controller (a virtio block device, a PCI class
+0x010601 AHCI or 0x010802 NVMe controller), as Debian's initramfs would, with
+BusyBox's `insmod` (`module_loading` in `build-monitor-image.py`; their hashes
+and package are in the initrd's provenance). They stay loaded after
+`switch_root`; udev loads the rest. So `stealth_support` still offers `uefi,
+sata, nvme, dhcp` (`module_buses`), and the fixed display takes Debian's
+virtio-gpu module (`fixed_display_config(modules_ok)`). The recipe refuses
+`--modules` for this base and a kernel whose configuration is not Debian's
+`/boot/config` (`stock_config`: only the recorder, the embedded configuration,
+the release suffix, the signing-key path, what Debian's config file omits and
+the toolchain's own values may differ). The root filesystem cache
 is `images/rootfs-debian-minimal.tar`.
 
 Rootless builds: mmdebstrap's hooks run as the user namespace's root, a
