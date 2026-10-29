@@ -7,8 +7,8 @@ application and base versions; existing VMs keep their pinned base.
 
 ## Dependencies and analysis tools
 
-- Linux x86-64 host (WSL2 works with an X11 display)
-- QEMU (`qemu-system-x86_64`, `qemu-img`) with its GTK display backend;
+- Linux x86-64 host with glibc 2.39 or newer (WSL2 works with an X11 display)
+- QEMU 6.0 or newer (`qemu-system-x86_64`, `qemu-img`) with its GTK display backend;
   on Debian/Ubuntu install `qemu-system-x86 qemu-utils qemu-system-gui`.
   KVM (`/dev/kvm`) strongly recommended; TCG works without it
 - `guestfish` (libguestfs) for VMs of the Debian bases: creating, resetting
@@ -20,10 +20,11 @@ application and base versions; existing VMs keep their pinned base.
   [CONTRIBUTING.md](../CONTRIBUTING.md). Host source builds also need
   `musl-tools` for the compatibility collector used by older guest bases;
   prebuilt installs do not need that build tool.
-- **No internet on the analysis computer?** The **full pack** (a second release
-  asset) carries every tool listed below, pre-downloaded and checked. After
-  installing the application, extract it and run `./install-full-pack.sh`; the
-  tools then show as installed in **Tools > Analysis tools**. See
+- **No internet on the analysis computer?** Build a **full pack** on a connected
+  computer with `scripts/build-full-pack.py`: it carries every tool listed below,
+  pre-downloaded and checked. Antinomie does not publish a pack. After installing
+  the application, extract the pack and run `./install-full-pack.sh`; the tools
+  then show as installed in **Tools > Analysis tools**. See
   [the full pack](full-pack.md).
 - Memory analysis runs Volatility 3, which **Tools > Analysis tools** (or the
   Memory tab) installs for Antinomie; it needs Python 3 (`python3`). MemNixFS 1.2
