@@ -2,8 +2,9 @@
 
 [← Back to the overview](../README.md)
 
-This page describes 0.7.1: what Antinomie isolates, what it does not, and how
-to run it safely. To report a vulnerability in Antinomie itself, see
+This page describes the 0.8.0 development branch (0.7.1 plus what 0.8.0 adds
+so far): what Antinomie isolates, what it does not, and how to run it safely.
+To report a vulnerability in Antinomie itself, see
 [SECURITY.md](../SECURITY.md).
 
 ## What it is for
@@ -24,11 +25,15 @@ to investigate, not a verdict.
 ## What runs where
 
 Antinomie needs no root. Everything below runs as your user unless it says
-otherwise.
+otherwise. Building a base in Docker (**Build base…** with Docker chosen, or
+Automatic when neither Native nor Podman can run) needs the `docker` group,
+which is root-equivalent; Automatic tries Podman first. Podman and Docker
+builds run as the container's root with `SYS_ADMIN` and `MKNOD` and no AppArmor
+profile, because mmdebstrap needs mount. They run the build kit, not samples.
 
 | Component | Where it runs | Handles hostile data |
 |---|---|---|
-| Host app: UI, recorder, transport client, route gateway | Your user, no sandbox | Telemetry from the guest kernel; on Routed VMs, the guest's network frames |
+| Host app: UI, recorder, transport client, route gateway | Your user, no sandbox | Telemetry from the guest kernel; on Routed VMs, the guest's network frames and, with a Cloud VPS profile, its requests to the metadata service |
 | QEMU (`qemu-system-x86_64`) | Your user, no extra sandbox | Everything the guest does |
 | Patched guest kernel (Debian Linux 6.12.94) with the recorder | Inside the VM | The sample, on the same machine |
 | Static analysis worker: built-in ELF/PE/Mach-O parsing and strings, capa, FLOSS, UPX, Detect It Easy, Ghidra | bubblewrap | The specimen |
@@ -122,6 +127,26 @@ any route. A route that cannot start stops the run; Antinomie never falls back
 to another route. Details are in the
 [user guide](usage.md#network-routes).
 
+**Cloud VPS profiles** add a fake cloud metadata service to a Routed VM. With a
+Cloud VPS stealth profile (Tencent CVM, Alibaba ECS, DigitalOcean Droplet,
+Vultr VC2) the gateway answers the provider's metadata address on TCP port 80
+(169.254.169.254; Tencent's 169.254.0.23, Alibaba's 100.100.100.200) on every
+route, **None (drop)** included, and resolves the provider's metadata name to
+it. A thread in the host app answers over an in-process socket pair: nothing
+listens on the host, nothing leaves it, and no real metadata service is asked.
+The other providers' metadata addresses go unanswered. The credentials it hands
+out (a Tencent CAM or Alibaba RAM role, or a token in DigitalOcean's and Vultr's
+user data) are canaries: random values the gateway makes anew for each run. No
+real cloud credentials are involved, and each value contains `ANTCANARY`, so
+whoever receives one can tell what it is. The gateway looks for the run's
+canary values in plain-text TCP the guest sends to any other address (TLS hides
+them). At the end of the run, `cloud-metadata.json` in the run's folder records
+the requests, the values handed out and any use, and Triage lists them as
+findings. To the gateway a canary is only bytes: on **Internet**, **Tor**,
+**VPN** or **SOCKS5**, a sample that sends one reaches the endpoint it chose;
+on **InetSim** it reaches the fake services. Other network modes get no
+metadata service, and the app lists it as a setting not applied.
+
 Traffic a sample sends over Internet, Tor, VPN, SOCKS5 or NAT leaves under
 your connection, your Tor exit or your provider's, and may reach third parties:
 command-and-control servers, scan targets, spam recipients. You are responsible
@@ -141,7 +166,9 @@ Downloads use `curl` with HTTPS only (also across redirects) and ignore your
   (an imported dump, for example), Volatility looks one up on GitHub
   (`Abyss-W4tcher/volatility3-symbols`). This is on by default; the Memory tab
   has the switch.
-* **Only when you ask:** base downloads and Debian base builds; analysis tools,
+* **Only when you ask:** base downloads and Debian base builds (the container
+  builder fetches its pinned Debian image through Podman or Docker and packages
+  from snapshot.debian.org when it builds its image); analysis tools,
   Tor and wireproxy (**Install** buttons); the rule catalog and rule packs
   (also off until **Allow outbound catalog and rule downloads** is set);
   abuse.ch IOC datasets; MalwareBazaar and MalShare searches and downloads;
@@ -159,6 +186,10 @@ Downloads use `curl` with HTTPS only (also across redirects) and ignore your
   check installs nothing. Sigma's Python wheels are installed with
   `--require-hashes`. A copy already installed on the system takes precedence
   and is trusted as installed.
+* **Container builder image**: the Debian base image is pinned by digest and
+  each package by exact version at a snapshot.debian.org timestamp. apt checks
+  the packages against Debian's archive keyring; the snapshot itself is fetched
+  over plain HTTP.
 * **Offline computers**: build a [full pack](full-pack.md) yourself from the
   same pins; its installer checks every file against `SHA256SUMS`.
 * **The app**: verify release archives with `SHA256SUMS` (see the
@@ -171,16 +202,39 @@ confidential material.
 
 * **Recordings are full-content.** System-call buffers and terminal transcripts
   are saved, so a password typed into a monitored program, and any key or token
-  the sample reads or sends, can end up in the recording. Do not type real
+  the sample reads or sends, can end up in the recording. A boot's recording
+  also keeps the earlier content of the guest files its runs changed
+  (`file-before/`, within the caps in **Settings › Advanced**). Do not type real
   credentials into a guest.
 * **Malware on disk.** Static analysis keeps the complete specimen, unencrypted,
   in the recording's `analysis/` folder. Unpacked layers, disk dumps, memory
   dumps, process cores and packet captures hold the sample, its files or its
-  memory. Exports (reports, IOC CSV/JSON, cores, disk images, Ghidra projects)
-  are plain files wherever you save them.
-* **Downloaded samples** from MalwareBazaar and MalShare are kept in
-  `<data>/samples` as AES zip archives with the password `infected`. They are
-  decrypted only in memory, to check the hash and stream into a guest.
+  memory. Exports (Triage reports, IOC CSV/JSON, cores, disk images, Ghidra
+  projects) are plain files wherever you save them, and so are saved File
+  Reconstructions (`reconstructed/` in the recording).
+* **Triage reports** are owner-only (0600) and go to `<recording>/report/`
+  unless you choose a folder. JSON, MISP and STIX keep indicators raw;
+  defanging applies only to HTML and PDF, and only when you tick it. The
+  [evidence bundle](triage-report.md#evidence-bundle)'s outer `.zip` is not
+  encrypted: its packet captures and the sample's custody record can be read by
+  anyone who has the file. The files the run dropped are in an inner AES-256
+  archive with the well-known password `infected`, which stops accidental
+  opening and scanning, not reading.
+* **The sample library** (`<data>/samples`) keeps every sample you download
+  from MalwareBazaar or MalShare, add with **Add file…**, or upload into a VM:
+  every upload up to 256 MiB is archived first (larger ones are sent without
+  an archive), so a file uploaded by mistake stays there until you remove it.
+  Each sample is an owner-only AES zip with the password `infected`, decrypted
+  only in memory. `library.sqlite` beside them holds names, tags, origins
+  (including the host path an upload came from), what was sent into which VM,
+  and the custody log.
+* **The custody log** chains each sample's entries by SHA-256. Terminal input to
+  a run is logged by size only (the recording still keeps its content). The
+  log is tamper-evident, not tamper-proof: someone who can rewrite the library
+  can rewrite its chains, so keep the head hash elsewhere. **Export custody
+  record** can be signed with your own `minisign` or `ssh-keygen -Y sign` key;
+  Antinomie has no key of its own, never reads the key file and never asks for
+  a passphrase (a key that needs one must be loaded in an agent).
 * **Secrets Antinomie keeps**, each readable by you only: API keys
   (`api-keys.json`), the SOCKS5 password, Tor's data folder (`network/tor`) and,
   per Debian VM, `guest-account.json` with the guest account's salted password
@@ -195,9 +249,10 @@ from an old layout, the previous `~/.local/share/antinomie` stays as a backup.
 
 The app deletes network captures, cores, disk and memory dumps, snapshots,
 VMs and bases. **Delete VM** removes the configuration, disk and snapshots but
-keeps the run recordings and terminal history. To remove everything, quit
-Antinomie, then delete the data directory, any disk or recording folders you
-chose, the cache and any old backup.
+keeps the run recordings and terminal history. Removing a sample from the
+library deletes its archive but keeps its record and custody log. To remove
+everything, quit Antinomie, then delete the data directory, any disk or
+recording folders you chose, the cache and any old backup.
 
 ## Stealth limits
 
@@ -208,8 +263,10 @@ undetectable. The **Still visible** list in the Stealth profile window names
 what remains for that profile and base: timing, the display, the chipset and
 QEMU's firmware tables among them. `CPUID` and `RDTSC` checks leave no system
 call and are not recorded. Software breakpoints are `0xCC` bytes a sample can
-read. A setting a base cannot support falls back, and the app says so. Assume a
-sample can tell it is being analyzed.
+read. A setting a base cannot support falls back, and the app says so. A Cloud
+VPS profile leaves the hypervisor flag, the KVM signature and kvm-clock visible
+on purpose, as on the provider's machines, and its canary credentials name
+themselves (`ANTCANARY`). Assume a sample can tell it is being analyzed.
 
 ## Checklist before running a sample
 
@@ -226,4 +283,4 @@ sample can tell it is being analyzed.
   after a sample gains root as unreliable.
 * Do not type real credentials into the guest; recordings keep them.
 * Afterwards, reset the VM's disk to its base or restore a snapshot, and
-  handle exports as malware.
+  handle exports and evidence bundles as malware.
