@@ -7,19 +7,21 @@
 
 # Antinomie
 
-**Watch Linux malware from below the kernel line.**
+**A local, kernel-level Linux malware sandbox.**
 
-Antinomie runs Linux samples in disposable QEMU virtual machines on your own
-computer and observes them from inside the guest kernel. No agent runs in the
-guest and nothing uses `ptrace`, so a sample has little to find. Process, file,
-network, memory, disk and core evidence, static analysis, a debugger and Triage
-all work from one saved recording.
+Antinomie runs Linux samples in QEMU virtual machines on your own computer,
+which you can reset or roll back to a snapshot, and observes them from inside
+the guest kernel. On current bases no agent runs in the guest and nothing uses
+`ptrace`, so a sample has little to find. Process, file, network, memory, disk
+and core evidence, static analysis and Triage all work from one saved recording;
+the debugger works on the running VM.
 
 [**Quick start**](#quick-start) ·
 [User guide](docs/usage.md) ·
 [Releases](https://github.com/MoreMorePwn/Antinomie/releases) ·
 [Changelog](CHANGELOG.md) ·
-[Roadmap](#roadmap) ·
+[Security model](docs/security.md) ·
+[Reporting vulnerabilities](SECURITY.md) ·
 [Contributing](CONTRIBUTING.md)
 
 [![CI](https://github.com/MoreMorePwn/Antinomie/actions/workflows/ci.yml/badge.svg)](https://github.com/MoreMorePwn/Antinomie/actions/workflows/ci.yml)
@@ -42,15 +44,17 @@ with <b>synthetic data</b>, not a recorded malware run.</sub>
 > escapes are rare but possible, and a sample you give network access can reach
 > whatever that route reaches. Use a dedicated machine, or at least a user
 > account with nothing valuable, keep VM networking disconnected unless you need
-> it, and prefer the **None (drop)** or **InetSim** routes. Run unknown files
-> only on a computer you can rebuild. Detections are leads to investigate, not a
-> verdict that a file is or is not malicious.
+> it, and prefer the **None (drop)** or **InetSim** routes. **NAT** lets the guest
+> reach the host's own network services and your LAN. Run unknown files only on a
+> computer you can rebuild. Detections are leads to investigate, not a verdict
+> that a file is or is not malicious. The [security model](docs/security.md)
+> explains the boundaries and what a sample can still do.
 
 > [!NOTE]
-> This README describes **0.7.1**, the first release since 0.6.2 (0.7.0 was not
-> published separately). Download it from
-> [Releases](https://github.com/MoreMorePwn/Antinomie/releases); the
-> [changelog](CHANGELOG.md) lists every change.
+> This is the **0.8.0 development branch**. The latest release is **0.7.1**:
+> download it from [Releases](https://github.com/MoreMorePwn/Antinomie/releases)
+> and read its README on the `main` branch. Sections below that describe 0.7.1
+> say so; the [changelog](CHANGELOG.md) lists what 0.8.0 adds so far.
 
 ## Highlights
 
@@ -60,8 +64,8 @@ with <b>synthetic data</b>, not a recorded malware run.</sub>
 
 **A sandbox at kernel level**
 
-Samples run in disposable QEMU VMs on your own machine. A patched Linux 6.12.94
-guest kernel does the observing, so no agent runs in the guest.
+Samples run in QEMU VMs on your own machine. A patched Linux 6.12.94 guest
+kernel does the observing, so no agent runs in the guest on current bases.
 
 </td>
 <td width="33%" valign="top">
@@ -86,8 +90,8 @@ Losses are counted, never hidden.
 
 **One workspace**
 
-Trace, Triage, network, memory, static analysis and a debugger share one saved
-recording. No exporting between tools.
+Trace, Triage, network, memory and static analysis share one saved recording,
+and the debugger sits beside them on the live VM. No exporting between tools.
 
 </td>
 <td valign="top">
@@ -102,7 +106,8 @@ Runs are saved. Open them from **Run History** long after the VM is gone.
 **Native and local**
 
 A Rust and egui desktop app on your own machine. Analysis tools run in a
-bubblewrap sandbox, and nothing downloads until you ask.
+bubblewrap sandbox. Tools and bases download only when you ask; the Getting
+started window reads the base catalog index on first launch.
 
 </td>
 </tr>
@@ -143,33 +148,43 @@ captured data can change while observed, so unreadable bytes and gaps stay
 visible. Transport buffering is configurable: **Never drop** waits for host
 capacity up to a deadline, **Drop new telemetry** keeps the guest running and
 counts what is lost. Details are in the
-[implementation notes](docs/implementation.md).
+[implementation record](docs/implementation.md).
 
 ## Quick start
 
 ### Install a published build
 
 You need Linux x86-64 with glibc 2.39 or newer (Debian 13, Ubuntu 24.04 or
-later). On Debian or Ubuntu, install the host programs:
+later). On Debian or Ubuntu, install the host programs (`libguestfs-tools` is
+only needed for VMs of the Debian bases):
 
 ```sh
-sudo apt install qemu-system-x86 qemu-utils qemu-system-gui bubblewrap tshark util-linux
+sudo apt install qemu-system-x86 qemu-utils qemu-system-gui curl bubblewrap tshark util-linux libguestfs-tools
 ```
 
-Download the Linux archive and `SHA256SUMS` from
-[Releases](https://github.com/MoreMorePwn/Antinomie/releases), then verify,
-extract and install for your user (no root):
+Download `antinomie-0.7.1-linux-x86_64.tar.gz` and `SHA256SUMS` from
+[Releases](https://github.com/MoreMorePwn/Antinomie/releases) into one folder,
+then verify, extract and install for your user (no root):
 
 ```sh
 sha256sum --check SHA256SUMS
-./install.sh      # run inside the extracted folder
+tar -xzf antinomie-0.7.1-linux-x86_64.tar.gz
+cd antinomie-0.7.1
+./install.sh
+antinomie --check-dependencies
 antinomie
 ```
 
+Releases after 0.7.1 also carry a build provenance attestation; with the
+GitHub CLI, `gh attestation verify antinomie-X.Y.Z-linux-x86_64.tar.gz --repo
+MoreMorePwn/Antinomie` confirms the archive was built by this repository's
+release workflow from the tagged commit.
+
 Prebuilt installs do not need Rust. Running `./install.sh` from a newer release
 updates the executable and keeps your data; `./install.sh --uninstall` removes
-the three installed files and keeps your data too. Only Debian and Ubuntu
-package names have been checked; other distributions are not documented.
+the three installed files and keeps your data too. On other distributions,
+**Tools → App dependencies** names the packages for apt, dnf, pacman and
+zypper; only Debian and Ubuntu installs are tested.
 
 <details>
 <summary><b>Run from source</b></summary>
@@ -236,10 +251,11 @@ controls, transport settings, desktop execution and layouts.
 
 | Need | Details |
 |---|---|
-| **Host** | Linux x86-64 with a graphical session. WSL2 needs a working graphical display, and KVM access depends on its virtualization setup. |
-| **Virtualization** | QEMU (`qemu-system-x86_64`, `qemu-img`) with the GTK display backend. KVM is strongly recommended; TCG works without it but is not performance-qualified. |
+| **Host** | Linux x86-64, glibc 2.39 or newer, with a graphical session. Tested on Debian 13 and Ubuntu 24.04. WSL2 works with an X11 display; KVM access depends on its virtualization setup. |
+| **Virtualization** | QEMU 6.0 or newer (`qemu-system-x86_64`, `qemu-img`) with the GTK display backend. KVM is strongly recommended; TCG works without it but is not performance-qualified. |
+| **Downloads** | `curl` for bases, rules and analysis tools. |
 | **Analysis** | bubblewrap for isolation; TShark and `prlimit` for packet decoding and filters. Other tools depend on the analysis you choose. |
-| **Debian VMs** | `virt-customize` (`libguestfs-tools`) to create one. |
+| **Debian VMs** | `guestfish` (`libguestfs-tools`) to create and reset them. |
 
 The app checks dependencies at startup (**Tools → App dependencies**). From a
 terminal: `antinomie --check-dependencies`. The
@@ -297,14 +313,16 @@ the full list.
 
 ## Roadmap
 
-**Planned, not built, and undated.** Nothing below is in 0.7.0 or 0.7.1.
+**Planned, not built, and undated.** Whole-Triage report export and file
+write-content capture, earlier candidates, are already on this branch (see the
+[changelog](CHANGELOG.md)).
 
-**0.8.0 candidates**
+**Candidates**
 
 | Area | Idea |
 |---|---|
-| Automation | **Rule-triggered actions**: syscall "what if" triggers; **auto mode**: ELF in, report out; whole-Triage report export; a headless, API and web mode |
-| Capture | **TLS decryption**; **file write-content capture**; **per-packet process attribution** |
+| Automation | **Rule-triggered actions**: syscall "what if" triggers; **auto mode**: ELF in, report out; a headless, API and web mode |
+| Capture | **TLS decryption**; **per-packet process attribution** |
 | Depth | **MMU-level unpacking** and fileless capture; **root-level activity** (rootkits, LKMs, eBPF) |
 | Reach | **arm64 and RISC-V guests** |
 | Quality | **Telemetry robustness** (drops under heavy load, reconnect speed) |
@@ -315,9 +333,11 @@ the full list.
 |---|---|
 | [User guide](docs/usage.md) | Bases, VMs, runs, routes and reading results. |
 | [Triage report](docs/triage-report.md) | Export formats, evidence bundle and the JSON schema. |
-| [Implementation contract](docs/implementation.md) | Supported behavior, wire contracts, measurements and limits. |
+| [Security model](docs/security.md) | Trust boundaries, network modes, sensitive data and safe use. |
+| [Security policy](SECURITY.md) | Supported versions and how to report a vulnerability privately. |
+| [Implementation record](docs/implementation.md) | Implemented behavior, wire contracts, measurements and limits, by release. |
 | [Host build guide](src/antinomie/monitor/README.md) | Native monitor builds and development commands. |
-| [Contributing](CONTRIBUTING.md) | Kernel patch workflow, builds, checks and version branches. |
+| [Contributing](CONTRIBUTING.md) | Host builds, checks, pull requests, the kernel patch workflow and version branches. |
 | [Conformance suite](tests/monitor/conformance/README.md) | Disposable-VM checks and the recording oracle. |
 | [Project layout](docs/project-layout.md) | Durable source, build outputs and artifact retention. |
 | [Full pack](docs/full-pack.md) | Build your own offline bundle of every managed tool. |
@@ -342,9 +362,18 @@ loss accounting and trace rendering. Build the samples with
 
 Contributions to the host application, tooling and documentation are welcome and
 accepted under GPL-3.0-only. Read [CONTRIBUTING.md](CONTRIBUTING.md) first: it
-covers the kernel patch workflow, the checks and the `release-X.Y.Z` branch rule.
-Run `python3 scripts/check-module-size.py` and `scripts/check-privacy.sh` before
-sending changes.
+covers host builds, the checks to run, pull requests, the kernel patch workflow
+and the `release-X.Y.Z` branch rule. Report bugs with the issue forms; report
+security problems privately as described in [SECURITY.md](SECURITY.md). Never
+attach live malware or real credentials to a public issue.
+
+## Responsible use
+
+Antinomie is for analyzing software you are permitted to handle, on systems you
+control. You are responsible for what your samples do, including any traffic
+they send through a route you enable (Internet, Tor, WireGuard or SOCKS5) and
+any data they reach. Stealth profiles present hardware identities of real
+vendors only to the guest; they imply no affiliation with those vendors.
 
 ## License
 

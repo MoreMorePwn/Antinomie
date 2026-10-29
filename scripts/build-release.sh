@@ -94,13 +94,15 @@ Or run it in place:
 
 Requirements: glibc 2.39 or newer (Debian 13, Ubuntu 24.04 or later), QEMU
 (qemu-system-x86_64, qemu-img, GTK display backend) and access to /dev/kvm
-for hardware acceleration (or select TCG). On Debian/Ubuntu install
-qemu-system-x86 qemu-utils qemu-system-gui. Tools > App dependencies checks
+for hardware acceleration (or select TCG), and curl for downloads. On
+Debian/Ubuntu install qemu-system-x86 qemu-utils qemu-system-gui curl.
+Tools > App dependencies checks
 runtime requirements at startup; install missing packages and Check again.
 Missing requirements block their affected actions; saved recordings stay available.
 Bases: Add base >
 Download base (prebuilt, from the MoreMorePwn/antinomie-bases bucket) or
-Build base. Creating a Debian VM also needs virt-customize (libguestfs-tools).
+Build base. Creating or resetting a Debian VM also needs guestfish
+(libguestfs-tools).
 
 Static analysis runs in a bubblewrap sandbox (bwrap). Disassembly, rules
 (YARA-X) and identification are built in. Decompilation (Ghidra),

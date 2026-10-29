@@ -1,9 +1,11 @@
 # Native Antinomie monitor
 
-Initial native Rust/egui application, C V7 transport and kernel-only guest
-controls. The guest is Linux 6.12.94 with the project's Debian source baseline
-and Antinomie patch. Installed bases can contain either the minimal BusyBox
-root filesystem or Debian 13 amd64 with Xfce.
+The native Rust/egui host application, its C V7 transport client and the
+kernel-only guest controls. The guest is Linux 6.12.94 with the project's
+Debian source baseline and Antinomie patch series. Installed bases contain the
+minimal BusyBox root filesystem, Debian 13 Minimal (console) or Debian 13
+(desktop). Using a published build needs none of this: see the
+[quick start](../../../README.md#quick-start).
 
 ## License
 
@@ -15,45 +17,62 @@ releases remain MIT. See the root [licensing scope](../../../LICENSING.md) and
 
 ## Build and run
 
-Use an ext4 workspace. Required tools include Rust/Cargo, a C compiler, the
-kernel build dependencies listed in CONTRIBUTING.md, QEMU with its GTK display
-backend, qemu-img, BusyBox, cpio, gzip, e2fsprogs, and Python 3.10 or later.
-Native GUI development also needs the host's X11/Wayland/OpenGL libraries.
-The archive browser needs SQLite 3.34.1 or later at runtime and its development
-headers/pkg-config when building; the release executable links system SQLite.
-KVM requires access to `/dev/kvm`; WSLg or an X11 server provides the desktop.
-TCG is available with `--tcg`, but has not been performance-qualified.
+Building the host application does not build a guest kernel or a base image;
+download, import or build a base from the app afterwards.
 
-From `~/src/antinomie`:
+| Need | Debian/Ubuntu packages | Why |
+|---|---|---|
+| Rust | install with [rustup](https://rustup.rs) | CI builds with Rust 1.98.1; the crates use the 2024 edition. |
+| C toolchain | `build-essential pkg-config` | The V7 transport client and native dependencies. |
+| Libraries | `libsqlite3-dev libxkbcommon-dev libwayland-dev` | SQLite 3.34.1 or later for the archive browser, and the window system. |
+| musl | `musl-tools` | `build.rs` compiles the compatibility collector for bases built before 0.7.0 with `musl-gcc`. |
+| Runtime | the packages in the [quick start](../../../README.md#quick-start) | QEMU, curl, bubblewrap, TShark and the other runtime tools. |
+
+```bash
+sudo apt install build-essential pkg-config libsqlite3-dev libxkbcommon-dev libwayland-dev musl-tools
+git clone https://github.com/MoreMorePwn/Antinomie.git
+cd Antinomie
+./run.sh
+```
+
+`run.sh` runs `scripts/build-monitor-host.sh`, which builds the locked release
+application into `work/monitor-host/antinomie-monitor`, then starts it with
+`scripts/run-monitor.sh`. `run-monitor.sh` executes that binary directly and
+forwards all application arguments unchanged; it does not invoke Cargo or
+silently build a missing executable. `./install.sh` in the checkout builds and
+installs it for your user. Use an ext4 workspace. KVM requires access to
+`/dev/kvm`; WSLg or an X11 server provides the desktop. TCG is available with
+`--tcg`, but has not been performance-qualified.
+
+The ELF can also run directly from any directory, without Rust/Cargo installed:
+
+```bash
+work/monitor-host/antinomie-monitor --data-dir ~/antinomie
+```
+
+This is a native dynamically linked Linux executable, not a static all-in-one
+image. Runtime still needs compatible system libraries, X11/Wayland/OpenGL,
+`qemu-system-x86_64`, `qemu-img`, and an installed base. Generated executables
+are ignored build products, not tracked source or a public distribution.
+Redistribution must retain required notices and undergo the dependency/license
+review described in the root licensing documents.
+
+### Building a guest kernel and base from source
+
+Contributors changing the guest also need the kernel build dependencies listed
+in [CONTRIBUTING.md](../../../CONTRIBUTING.md), BusyBox, cpio, gzip, e2fsprogs
+and Python 3.10 or later. From the repository root:
 
 ```bash
 scripts/bootstrap.sh
 scripts/build-monitor-kernel.sh
 scripts/build-monitor-image.py --kernel work/monitor-build/arch/x86/boot/bzImage
 scripts/build-monitor-host.sh
-scripts/run-monitor.sh
+scripts/run-monitor.sh --bundle work/debian-6.12.94-1-trixie/images/monitor-base
 ```
 
-`build-monitor-host.sh` builds the locked release application and publishes it
-at `work/monitor-host/antinomie-monitor`. Rebuild after changing host source.
-`run-monitor.sh` executes that binary directly; it does not invoke Cargo or
-silently build a missing executable. The launcher sets the repository's default
-guest bundle path and forwards all application arguments unchanged.
-
-The ELF can also run directly from any directory, without Rust/Cargo installed:
-
-```bash
-~/src/antinomie/work/monitor-host/antinomie-monitor \
-  --bundle ~/src/antinomie/work/debian-6.12.94-1-trixie/images/monitor-base
-```
-
-This is a native dynamically linked Linux executable, not a static all-in-one
-image. Runtime still needs compatible system libraries, X11/Wayland/OpenGL,
-`qemu-system-x86_64`, `qemu-img`, and guest base artifacts. Without `--bundle`,
-the existing saved setting or `ANTINOMIE_BUNDLE`/`images` default applies.
-Generated executables are ignored build products, not tracked source or a
-public distribution. Redistribution must retain required notices and undergo
-the dependency/license review described in the root licensing documents.
+Without `--bundle`, the existing saved setting or `ANTINOMIE_BUNDLE`/`images`
+default applies.
 
 The initial VM list is empty. Retained data defaults to `~/antinomie`.
 Each VM lives in `<sanitized-name>_<random-identifier>/`, with its configuration,
@@ -92,9 +111,11 @@ Install `bubblewrap`, `file`, and `binutils` for the available external adapters
 Built-in parsing handles ELF, PE and Mach-O metadata/structures, strings and
 entropy; unknown formats retain generic triage. `readelf` and `objdump` provide
 supported ELF hardening checks and optional disassembly. File identification is
-partial evidence, not a definitive compiler/packer verdict. Rule matches,
-capabilities and decompilation currently report **Unavailable**: selecting their
-checkboxes does not install tools or imply an adapter exists.
+partial evidence, not a definitive compiler/packer verdict. Rule matches
+(YARA-X) are built in. Capabilities (capa), decompilation (Ghidra) and the other
+optional engines use the system's copy or one installed from **Tools > Analysis
+tools**; a check whose tool is missing reports **Unavailable** rather than
+installing anything.
 
 The dockable **Static Analysis** tab shows a compact selected-run or standalone
 section/status list. **Open** displays that section in its own native result
@@ -361,8 +382,9 @@ worker. Terminal output sequence gaps trigger a core-owned screen snapshot.
 The guest patch adds syscall entry/exit and task lifecycle hooks, streaming
 recording, and sleepable upload/exec/PTY/stats/shutdown handlers. Only programs
 launched through control and their descendants are traced. There is no resident
-guest control helper. Initial execution supports static x86-64 binaries and
-BusyBox scripts; uploading does not supply interpreters or shared libraries.
+guest control helper. BusyBox bases run static x86-64 binaries and BusyBox
+scripts; Debian bases also provide their shared libraries and interpreters.
+Uploading a program supplies neither.
 Network is disconnected unless explicitly enabled. Guest credentials default
 to UID/GID 1000. Closing the application requests synchronized guest shutdown,
 then forces power-off after the configured timeout.
@@ -403,7 +425,9 @@ snapshots. Supported fields stream in 4096-byte chunks to argument/kernel
 limits, with faults and losses explicit. Unknown ioctls and compat ABIs are
 marked unsupported; the profile lists all limitations. Coverage is the selected
 30 native syscall families, not the full syscall catalog or a measured malware
-frequency ranking. No snapshot restoration/reconnection is supported.
+frequency ranking. Snapshots, restore and transport reconnection are described
+in the [user guide](../../../docs/usage.md) and the
+[implementation record](../../../docs/implementation.md).
 
 ANTT 1.1 extends the application header to 136 bytes with an inherited launch
 root task cookie at offset 128. V7 is unchanged. Legacy 1.0 packets remain
