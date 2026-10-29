@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/MoreMorePwn/Antinomie/security/advisories/new
+    about: Report vulnerabilities privately, never in a public issue. See SECURITY.md.
+  - name: User guide
+    url: https://github.com/MoreMorePwn/Antinomie/blob/main/docs/usage.md
+    about: Bases, VMs, runs, routes and reading results.
