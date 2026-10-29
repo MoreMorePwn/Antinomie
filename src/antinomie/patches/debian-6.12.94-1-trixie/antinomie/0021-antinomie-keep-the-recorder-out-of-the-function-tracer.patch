@@ -1,0 +1,140 @@
+Description: antinomie: keep the recorder out of the function tracer
+ Debian builds its kernel with the function tracer (FUNCTION_TRACER,
+ DYNAMIC_FTRACE with direct calls): BPF trampolines need it, so systemd's
+ bpf-restrict-fs and fentry programs attach. With it, every function
+ compiled with an fentry call is listed in tracefs
+ (available_filter_functions) and can be traced or attached to by name.
+ .
+ The recorder's objects are built without the tracer's flags, and the
+ functions the series adds to stock files (io_uring's request helpers, the
+ process-core writer's entry points) are notrace. Stock functions the
+ series hooks stay traceable, as in Debian.
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-10-29
+
+---
+diff --git a/fs/coredump.c b/fs/coredump.c
+index d20ad9f..8a3c39f 100644
+--- a/fs/coredump.c
++++ b/fs/coredump.c
+@@ -579,7 +579,7 @@ static int umh_coredump_setup(struct subprocess_info *info, struct cred *new)
+ /* Nonfatal acquisition (kernel/antinomie/manual_core.c): this path never calls
+  * coredump_wait/finish or installs signal->core_state.
+  */
+-int ant_coredump_live_to_file(struct file *file, unsigned long limit,
++notrace int ant_coredump_live_to_file(struct file *file, unsigned long limit,
+ 			     struct core_vma_metadata *vmas, unsigned int vma_count,
+ 			     struct ant_coredump_live *live)
+ {
+@@ -615,7 +615,7 @@ int ant_coredump_live_to_file(struct file *file, unsigned long limit,
+  * synthesizes a core bit in the parent-visible wait status. No guest path or
+  * helper is used. The caller owns the bounded anonymous sink for this call.
+  */
+-int ant_coredump_to_file(struct file *file, unsigned long limit, int wait_status,
++notrace int ant_coredump_to_file(struct file *file, unsigned long limit, int wait_status,
+ 			 const kernel_siginfo_t *siginfo, unsigned long deadline)
+ {
+ 	struct mm_struct *mm = current->mm;
+@@ -1329,7 +1329,7 @@ static unsigned long vma_dump_size(struct vm_area_struct *vma,
+ }
+ 
+ #ifdef CONFIG_ANTINOMIE
+-unsigned long ant_coredump_vma_size(struct vm_area_struct *vma, unsigned long flags)
++notrace unsigned long ant_coredump_vma_size(struct vm_area_struct *vma, unsigned long flags)
+ {
+ 	unsigned long size = vma_dump_size(vma, flags);
+ 
+diff --git a/io_uring/io_uring.c b/io_uring/io_uring.c
+index b78cb82..ed881ea 100644
+--- a/io_uring/io_uring.c
++++ b/io_uring/io_uring.c
+@@ -1717,7 +1717,7 @@ static bool io_assign_file(struct io_kiocb *req, const struct io_issue_def *def,
+  * recorded so a descriptor in a registered table or one the run never saw
+  * opened can still be tied to a file.
+  */
+-static bool ant_uring_file_opcode(u8 opcode)
++static notrace bool ant_uring_file_opcode(u8 opcode)
+ {
+ 	switch (opcode) {
+ 	case IORING_OP_READV:
+@@ -2187,7 +2187,7 @@ static __cold int io_submit_fail_init(const struct io_uring_sqe *sqe,
+ }
+ 
+ #ifdef CONFIG_ANTINOMIE
+-static u32 ant_uring_payload_flags(u8 opcode)
++static notrace u32 ant_uring_payload_flags(u8 opcode)
+ {
+ 	switch (opcode) {
+ 	case IORING_OP_NOP:
+@@ -2218,7 +2218,8 @@ static u32 ant_uring_payload_flags(u8 opcode)
+ /* User page tables that map the ring page at @offset of @pages: the per-page
+  * count, which this kernel keeps for every page of a large folio too.
+  */
+-static int ant_uring_mappings(struct page **pages, unsigned int npages, unsigned long offset)
++static notrace int ant_uring_mappings(struct page **pages, unsigned int npages,
++				      unsigned long offset)
+ {
+ 	unsigned long index = offset >> PAGE_SHIFT;
+ 
+@@ -2235,7 +2236,7 @@ static int ant_uring_mappings(struct page **pages, unsigned int npages, unsigned
+  * the ring's descriptor, a MAP_SHARED buffer of a NO_MMAP ring or a second
+  * mapping of the same process each map them more than once.
+  */
+-static bool ant_uring_shared(struct io_ring_ctx *ctx, const struct io_uring_sqe *sqe)
++static notrace bool ant_uring_shared(struct io_ring_ctx *ctx, const struct io_uring_sqe *sqe)
+ {
+ 	return ant_uring_mappings(ctx->sqe_pages, ctx->n_sqe_pages,
+ 				  (unsigned long)sqe - (unsigned long)ctx->sq_sqes) > 1 ||
+@@ -2247,7 +2248,7 @@ static bool ant_uring_shared(struct io_ring_ctx *ctx, const struct io_uring_sqe
+  * process maps, leave the entry's writer unknown. Otherwise the entry was
+  * written by a thread of the submitting process, which one is not known.
+  */
+-static void ant_uring_begin(struct io_kiocb *req, struct io_ring_ctx *ctx,
++static notrace void ant_uring_begin(struct io_kiocb *req, struct io_ring_ctx *ctx,
+ 			    const struct io_uring_sqe *sqe)
+ {
+ 	u8 opcode = READ_ONCE(sqe->opcode);
+diff --git a/io_uring/rw.c b/io_uring/rw.c
+index 48dd02d..848cc40 100644
+--- a/io_uring/rw.c
++++ b/io_uring/rw.c
+@@ -31,7 +31,7 @@ struct io_rw {
+ 	rwf_t				flags;
+ };
+ 
+-static void ant_uring_rw_capture(struct io_kiocb *req, bool output, ssize_t result)
++static notrace void ant_uring_rw_capture(struct io_kiocb *req, bool output, ssize_t result)
+ {
+ #ifdef CONFIG_ANTINOMIE
+ 	struct io_async_rw *rw = req->async_data;
+diff --git a/io_uring/uring_cmd.c b/io_uring/uring_cmd.c
+index 6a8e4c4..7d5bcff 100644
+--- a/io_uring/uring_cmd.c
++++ b/io_uring/uring_cmd.c
+@@ -315,7 +315,7 @@ void io_uring_cmd_issue_blocking(struct io_uring_cmd *ioucmd)
+ /* Raw by optlen, as slice 2A records options without a decoder; above the
+  * ceiling only the declared size is recorded.
+  */
+-static void ant_uring_optval(struct io_kiocb *req, void __user *optval, int optlen,
++static notrace void ant_uring_optval(struct io_kiocb *req, void __user *optval, int optlen,
+ 			     bool output)
+ {
+ 	if (optlen > ANT_URING_OPTVAL_MAX)
+diff --git a/kernel/antinomie/Makefile b/kernel/antinomie/Makefile
+index 214ccb2..3578ee2 100644
+--- a/kernel/antinomie/Makefile
++++ b/kernel/antinomie/Makefile
+@@ -3,6 +3,11 @@
+ # recorder's functions, variables or types are described there. What its
+ # headers bring into stock objects is filtered out (scripts/antinomie_btf.py).
+ ccflags-remove-y += $(DEBUG_CFLAGS)
++# No function tracer entry either: with FUNCTION_TRACER (Debian's kernels),
++# tracefs (available_filter_functions) would list every recorder function,
++# and fentry programs could attach to them. The recorder's few functions in
++# stock files are marked notrace.
++ccflags-remove-y += $(CC_FLAGS_FTRACE)
+ 
+ # section_begin.o first and section_end.o last: they bracket this directory's
+ # symbols in vmlinux (sections.h).

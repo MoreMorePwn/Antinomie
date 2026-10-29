@@ -53,7 +53,10 @@ changes. Line counts are added/removed lines of the patch.
 | 16 | record where reads and writes of files happened, and what in-kernel copies moved | +419 -2 | `kernel/antinomie/{fileops.c,fileops.h}` | `fs/read_write.c`, `fs/splice.c`, `fs/ioctl.c`, `fs/open.c` |
 | 17 | record pages written through shared file mappings | +506 -4 | `kernel/antinomie/{filemap.c,filemap.h}` | `mm/memory.c`, `mm/page-writeback.c` |
 | 18 | name the native layouts of group lists, directory entries and LDT reads | +20 -7 | none (`native_capture.c`, `capture_x86.c`) | none |
-| 19 | keep the recorder out of the kernel's BTF | +532 | `scripts/antinomie_btf.py` (the BTF filter, run at build time) | `scripts/link-vmlinux.sh`, `scripts/Makefile.modfinal` (and `kernel/antinomie/Makefile`: no debug information) |
+| 19 | keep the recorder out of the kernel's BTF | +551 | `scripts/antinomie_btf.py` (the BTF filter, run at build time) | `scripts/link-vmlinux.sh`, `scripts/Makefile.modfinal` (and `kernel/antinomie/Makefile`: no debug information) |
+| 20 | keep stock structure layouts: recorder state in side tables | +792 -429 | `kernel/antinomie/{state.c,state.h}` | `security/security.c` (the recorder's per-task state in the LSM task blob); `include/linux/sched.h`, `include/linux/io_uring_types.h`, `io_uring/net.h`, `fs/aio.c`, `kernel/fork.c` lose the fields and resets earlier patches added; `io_uring/`, `fs/aio.c`, `fs/coredump.c`, `fs/binfmt_elf.c`, `include/linux/coredump.h` use the side tables |
+| 21 | keep the recorder out of the function tracer | +16 -10 | none | `fs/coredump.c`, `io_uring/{io_uring.c,rw.c,uring_cmd.c}` (notrace), `kernel/antinomie/Makefile` (no `CC_FLAGS_FTRACE`) |
+| 22 | keep the kernel's BTF type for type Debian's | +472 -159 | `kernel/antinomie/core_writer.c` (the recorder's copy of the core writer's sequence) | `kernel/Makefile` (configs.o without debug information), `io_uring/{xattr.c,waitid.c}` (inline attributes); `fs/coredump.c` loses code; `kernel/antinomie/guest.c` allocates its per-CPU state |
 
 Every topic also adds its part of the files shared by all of them:
 `control.c` (dispatch), `control_wire.h` (the wire contract), `antinomie_monitor.h`

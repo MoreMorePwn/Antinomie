@@ -41,3 +41,10 @@
 
 # Stealth added in 0.8.0 (shared by every architecture): the recorder kept out of the kernel's BTF
 0019-antinomie-keep-the-recorder-out-of-the-kernel-s-btf.patch
+
+# Debian's module ABI and function tracer added in 0.8.0 (shared by every architecture):
+# stock structure layouts (recorder state in side tables), the recorder kept out of ftrace,
+# BTF numbered as Debian's
+0020-antinomie-keep-stock-structure-layouts-recorder-state-in-side-tables.patch
+0021-antinomie-keep-the-recorder-out-of-the-function-tracer.patch
+0022-antinomie-keep-the-kernel-s-btf-type-for-type-debian-s.patch

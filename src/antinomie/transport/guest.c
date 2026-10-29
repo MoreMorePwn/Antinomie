@@ -2,7 +2,6 @@
 #include <linux/antinomie.h>
 #include <linux/cpu.h>
 #include <linux/delay.h>
-#include <linux/export.h>
 #include <linux/init.h>
 #include <linux/io.h>
 #include <linux/jiffies.h>
@@ -31,13 +30,16 @@ struct ant_cpu {
 };
 /* One per CPU, used with preemption off. A sender that must wait for room
  * takes a turn (next_ticket) and stays on its CPU until serving reaches it.
+ * Allocated at setup (alloc_percpu), not in the static per-CPU section: a
+ * static one would move every later per-CPU variable of the kernel (their
+ * offsets are in its BTF).
  */
 struct ant_producer {
 	u64 head, cached_tail, attempted, dropped, waits, wait_ns;
 	u32 index, next_ticket, serving;
 	bool fault;
 };
-static DEFINE_PER_CPU(struct ant_producer, producers);
+static struct ant_producer __percpu *producers;
 static struct ant_cpu *cpus;
 static struct ant_control *control;
 static struct ant_queue *directory;
@@ -147,7 +149,6 @@ u32 ant_ring_size(void)
 {
 	return ring_size;
 }
-EXPORT_SYMBOL_GPL(ant_ring_size);
 
 int ant_send(const void *data, size_t payload_len)
 {
@@ -164,7 +165,7 @@ int ant_send(const void *data, size_t payload_len)
 	if (!data && payload_len) return -EINVAL;
 	if (!smp_load_acquire(&ready)) return -ENOTCONN;
 	preempt_disable();
-	p = this_cpu_ptr(&producers);
+	p = this_cpu_ptr(producers);
 	q = &directory[p->index];
 	p->attempted++;
 	if (p->fault) {
@@ -261,7 +262,6 @@ out:
 		migrate_enable();
 	return error;
 }
-EXPORT_SYMBOL_GPL(ant_send);
 
 u32 ant_send_room(void)
 {
@@ -274,7 +274,7 @@ u32 ant_send_room(void)
 	if (!smp_load_acquire(&ready))
 		return room;
 	preempt_disable();
-	p = this_cpu_ptr(&producers);
+	p = this_cpu_ptr(producers);
 	q = &directory[p->index];
 	tail = ANT_ACQ(&q->tail);
 	if (!p->fault && tail <= p->head && p->head - tail <= ring_size)
@@ -282,7 +282,6 @@ u32 ant_send_room(void)
 	preempt_enable();
 	return room;
 }
-EXPORT_SYMBOL_GPL(ant_send_room);
 
 bool ant_send_waits(void)
 {
@@ -290,7 +289,6 @@ bool ant_send_waits(void)
 	return smp_load_acquire(&ready) && READ_ONCE(control->send_wait_us) &&
 		READ_ONCE(control->live);
 }
-EXPORT_SYMBOL_GPL(ant_send_waits);
 
 int ant_register_command(u32 opcode, ant_command_handler fn, void *context)
 {
@@ -313,7 +311,6 @@ out:
 	up_write(&handler_lock);
 	return error;
 }
-EXPORT_SYMBOL_GPL(ant_register_command);
 
 int ant_unregister_command(u32 opcode)
 {
@@ -330,7 +327,6 @@ int ant_unregister_command(u32 opcode)
 	up_write(&handler_lock);
 	return error;
 }
-EXPORT_SYMBOL_GPL(ant_unregister_command);
 
 static int dispatch(const struct ant_message *req, size_t *payload_len)
 {
@@ -471,8 +467,10 @@ static int __init ant_guest_init(void)
 	region = page_address(pages);
 	control = &region->control;
 	directory = region->directory;
+	producers = alloc_percpu(struct ant_producer);
+	if (!producers) goto free_control;
 	cpus = kcalloc(queue_count, sizeof(*cpus), GFP_KERNEL);
-	if (!cpus) goto free_control;
+	if (!cpus) goto free_producers;
 	/* Every ring has the same size; when memory is short, try a smaller one. */
 retry:
 	index = 0;
@@ -493,7 +491,7 @@ retry:
 		directory[index].data_gpa = page_to_phys(cpus[index].pages);
 		directory[index].data_size = ring_size;
 		directory[index].cpu_id = cpu;
-		per_cpu(producers, cpu).index = index++;
+		per_cpu_ptr(producers, cpu)->index = index++;
 	}
 	/*
 	 * This worker only polls host commands. It is not a reclaim path,
@@ -533,6 +531,9 @@ free_rings:
 	for (index = 0; index < queue_count; index++)
 		if (cpus[index].pages) __free_pages(cpus[index].pages, get_order(ring_size));
 	kfree(cpus);
+free_producers:
+	free_percpu(producers);
+	producers = NULL;
 free_control:
 	__free_pages(pages, get_order(ANT_CONTROL_SIZE));
 	return error;

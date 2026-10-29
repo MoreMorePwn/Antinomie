@@ -1,0 +1,979 @@
+Description: antinomie: keep the kernel's BTF type for type Debian's
+ Built with Debian's configuration, the kernel's BTF has Debian's types,
+ but pahole numbers them in the order it meets them and gives a function
+ an entry whenever an ELF symbol of that name exists. Debian's modules
+ carry BTF that refers to vmlinux's types by number, so they are valid on
+ this kernel only if every type has the number Debian's build gave it.
+ What moved types or added some:
+ .
+ - The embedded configuration (IKCONFIG, which the image builders read and
+   Debian does not build) brought its module strings' array types in early.
+   kernel/configs.o is built without debug information.
+ - The recorder's process cores called fs/coredump.c's static helpers
+   (coredump_wait(), dump_vma_snapshot(), vma_dump_size() and what they
+   call) from a second place, so the compiler emitted them out of line, each
+   a BTF function (and a traceable one) Debian's build does not have. The
+   recorder now runs its own copies of them (kernel/antinomie/core_writer.c,
+   from Linux 6.12.94); fs/coredump.c keeps its hooks and a reader of
+   kernel.core_sort_vma, and declares only opaque accessors.
+ - The transport's per-CPU producer state was a static per-CPU variable,
+   which moved every later per-CPU variable of the kernel (their offsets
+   are in BTF's .data..percpu section): it is allocated at setup
+   (alloc_percpu()), in the contract copy of guest.c too.
+ - io_xattr_finish(), __io_setxattr_prep() and io_waitid_finish() grew with
+   the recorder's hooks and were no longer inlined: they are
+   __always_inline, as Debian's build inlines them.
+ - Recorder functions named like stock ones (put_event, remove_one,
+   event_release) gave pahole a symbol for a stock function Debian inlines,
+   or two symbols for one name. They are renamed, and so are the copies in
+   core_writer.c.
+ .
+ With Debian's configuration the kernel's BTF is then byte for byte the BTF
+ of Debian's own 6.12.94-1 image (the BTF filter keeps the strings pahole
+ leaves unused, as Debian's has them).
+ .
+ Hooked kernel files: kernel/Makefile; io_uring/xattr.c and
+ io_uring/waitid.c (inline attributes); fs/coredump.c loses code.
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-10-29
+
+---
+diff --git a/fs/coredump.c b/fs/coredump.c
+index 8a3c39f..93246c3 100644
+--- a/fs/coredump.c
++++ b/fs/coredump.c
+@@ -575,104 +575,6 @@ static int umh_coredump_setup(struct subprocess_info *info, struct cred *new)
+ 	return 0;
+ }
+ 
+-#ifdef CONFIG_ANTINOMIE
+-/* Nonfatal acquisition (kernel/antinomie/manual_core.c): this path never calls
+- * coredump_wait/finish or installs signal->core_state.
+- */
+-notrace int ant_coredump_live_to_file(struct file *file, unsigned long limit,
+-			     struct core_vma_metadata *vmas, unsigned int vma_count,
+-			     struct ant_coredump_live *live)
+-{
+-	kernel_siginfo_t info = { .si_code = SI_KERNEL };
+-	struct coredump_params cprm = {
+-		.siginfo = &info, .file = file, .limit = limit,
+-		.mm_flags = READ_ONCE(current->mm->flags),
+-		.cpu = raw_smp_processor_id(), .vma_meta = vmas,
+-		.vma_count = vma_count,
+-	};
+-	unsigned int i;
+-	int error;
+-
+-	if (!current->mm->binfmt || !current->mm->binfmt->core_dump ||
+-	    ant_arch_compat_task())
+-		return -EOPNOTSUPP;
+-	for (i = 0; i < vma_count; i++)
+-		cprm.vma_data_size += vmas[i].dump_size;
+-	ant_coredump_attach(live, ant_coredump_live_deadline(live));
+-	error = current->mm->binfmt->core_dump(&cprm) ? 0 : -EIO;
+-	if (cprm.to_skip) {
+-		cprm.to_skip--;
+-		if (!dump_emit(&cprm, "", 1) && !error)
+-			error = -EIO;
+-	}
+-	ant_coredump_attach(NULL, 0);
+-	if (ant_coredump_live_aborted(live) || dump_interrupted())
+-		return -EINTR;
+-	return error ?: (ant_coredump_live_complete(live) ? 0 : -ENODATA);
+-}
+-
+-/* Opt-in host acquisition shares the native ELF writer/rendezvous, but never
+- * synthesizes a core bit in the parent-visible wait status. No guest path or
+- * helper is used. The caller owns the bounded anonymous sink for this call.
+- */
+-notrace int ant_coredump_to_file(struct file *file, unsigned long limit, int wait_status,
+-			 const kernel_siginfo_t *siginfo, unsigned long deadline)
+-{
+-	struct mm_struct *mm = current->mm;
+-	struct core_state core_state;
+-	kernel_siginfo_t normal_info = {
+-		.si_signo = wait_status & 0x7f, .si_code = SI_KERNEL,
+-	};
+-	struct coredump_params cprm = {
+-		.siginfo = siginfo ? siginfo : &normal_info,
+-		.file = file,
+-		.limit = limit,
+-		.cpu = raw_smp_processor_id(),
+-	};
+-	int error;
+-
+-	if (!mm || !mm->binfmt || !mm->binfmt->core_dump || ant_arch_compat_task())
+-		return -EOPNOTSUPP;
+-	/* Bound metadata before the Linux writer allocates its snapshots. */
+-	if (get_nr_threads(current) > 256)
+-		return -E2BIG;
+-	cprm.mm_flags = READ_ONCE(mm->flags);
+-	error = coredump_wait(wait_status, &core_state);
+-	if (error < 0)
+-		return error;
+-	if (get_nr_threads(current) > 256) {
+-		error = -E2BIG;
+-		goto finish;
+-	}
+-	mmap_read_lock(mm);
+-	error = mm->map_count > 4096 ? -E2BIG : 0;
+-	mmap_read_unlock(mm);
+-	if (error)
+-		goto finish;
+-	if (!dump_vma_snapshot(&cprm)) {
+-		error = -ENOMEM;
+-		goto finish;
+-	}
+-	/* Linux returns 'has_dumped' even after a short write. The sink and
+-	 * ELF program-header extents provide the actual completion decision.
+-	 */
+-	ant_coredump_attach(NULL, deadline);
+-	error = mm->binfmt->core_dump(&cprm) ? 0 : -EIO;
+-	if (cprm.to_skip) {
+-		cprm.to_skip--;
+-		if (!dump_emit(&cprm, "", 1) && !error)
+-			error = -EIO;
+-	}
+-	ant_coredump_attach(NULL, 0);
+-	free_vma_snapshot(&cprm);
+-	if (dump_interrupted())
+-		error = -EINTR;
+-finish:
+-	coredump_finish(false);
+-	return error;
+-}
+-#endif
+-
+ void do_coredump(const kernel_siginfo_t *siginfo)
+ {
+ 	struct core_state core_state;
+@@ -1329,11 +1231,10 @@ static unsigned long vma_dump_size(struct vm_area_struct *vma,
+ }
+ 
+ #ifdef CONFIG_ANTINOMIE
+-notrace unsigned long ant_coredump_vma_size(struct vm_area_struct *vma, unsigned long flags)
++/* kernel.core_sort_vma, for the recorder's own copy of dump_vma_snapshot(). */
++notrace unsigned int ant_coredump_sort_vma(void)
+ {
+-	unsigned long size = vma_dump_size(vma, flags);
+-
+-	return size;
++	return core_sort_vma;
+ }
+ #endif
+ 
+diff --git a/include/linux/coredump.h b/include/linux/coredump.h
+index 6b36311..3717685 100644
+--- a/include/linux/coredump.h
++++ b/include/linux/coredump.h
+@@ -51,28 +51,19 @@ extern void do_coredump(const kernel_siginfo_t *siginfo);
+  * signal->core_state is installed for it.
+  */
+ struct ant_coredump_live;
+-/* The core this task is writing: live (NULL: an exit core) and deadline
+- * (jiffies, 0: none); ant_coredump_attach(NULL, 0) ends it.
++/* The core this task is writing (NULL: an exit core, or none) and its
++ * deadline (jiffies, 0: none).
+  */
+-void ant_coredump_attach(struct ant_coredump_live *live, unsigned long deadline);
+ struct ant_coredump_live *ant_coredump_live(void);
+ unsigned long ant_coredump_deadline(void);
+ void *ant_coredump_live_alloc(struct ant_coredump_live *live, size_t size);
+ void ant_coredump_live_incomplete(struct ant_coredump_live *live);
+-bool ant_coredump_live_complete(struct ant_coredump_live *live);
+-bool ant_coredump_live_aborted(struct ant_coredump_live *live);
+-unsigned long ant_coredump_live_deadline(struct ant_coredump_live *live);
+ struct core_vma_metadata *ant_coredump_live_vmas(struct ant_coredump_live *live,
+ 						 unsigned int *count);
+ struct task_struct *ant_coredump_live_task(struct ant_coredump_live *live, unsigned int index);
+ int ant_coredump_live_pages(struct coredump_params *cprm, struct ant_coredump_live *live,
+ 			    unsigned long len);
+-int ant_coredump_live_to_file(struct file *file, unsigned long limit,
+-			     struct core_vma_metadata *vmas, unsigned int vma_count,
+-			     struct ant_coredump_live *live);
+-unsigned long ant_coredump_vma_size(struct vm_area_struct *vma, unsigned long flags);
+-int ant_coredump_to_file(struct file *file, unsigned long limit, int wait_status,
+-			 const kernel_siginfo_t *siginfo, unsigned long deadline);
++unsigned int ant_coredump_sort_vma(void);
+ #endif
+ 
+ /*
+@@ -94,14 +85,6 @@ int ant_coredump_to_file(struct file *file, unsigned long limit, int wait_status
+ 
+ #else
+ static inline void do_coredump(const kernel_siginfo_t *siginfo) {}
+-#ifdef CONFIG_ANTINOMIE
+-static inline int ant_coredump_to_file(struct file *file, unsigned long limit,
+-				     int wait_status, const kernel_siginfo_t *siginfo,
+-				     unsigned long deadline)
+-{
+-	return -EOPNOTSUPP;
+-}
+-#endif
+ 
+ #define coredump_report(...)
+ #define coredump_report_failure(...)
+diff --git a/io_uring/waitid.c b/io_uring/waitid.c
+index e00e3be..a394853 100644
+--- a/io_uring/waitid.c
++++ b/io_uring/waitid.c
+@@ -100,7 +100,8 @@ static bool io_waitid_copy_si(struct io_kiocb *req, int signo)
+ 	goto done;
+ }
+ 
+-static int io_waitid_finish(struct io_kiocb *req, int ret)
++/* Inlined, as in Debian's build (the recorder's hooks make it larger). */
++static __always_inline int io_waitid_finish(struct io_kiocb *req, int ret)
+ {
+ 	int signo = 0;
+ 
+diff --git a/io_uring/xattr.c b/io_uring/xattr.c
+index 3cba03b..a047366 100644
+--- a/io_uring/xattr.c
++++ b/io_uring/xattr.c
+@@ -33,7 +33,8 @@ void io_xattr_cleanup(struct io_kiocb *req)
+ 	kvfree(ix->ctx.kvalue);
+ }
+ 
+-static void io_xattr_finish(struct io_kiocb *req, int ret)
++/* Inlined, as in Debian's build (the recorder's hooks make it larger). */
++static __always_inline void io_xattr_finish(struct io_kiocb *req, int ret)
+ {
+ 	struct io_xattr *ix = io_kiocb_to_cmd(req, struct io_xattr);
+ 
+@@ -157,7 +158,7 @@ int io_getxattr(struct io_kiocb *req, unsigned int issue_flags)
+ 	return IOU_OK;
+ }
+ 
+-static int __io_setxattr_prep(struct io_kiocb *req,
++static __always_inline int __io_setxattr_prep(struct io_kiocb *req,
+ 			const struct io_uring_sqe *sqe)
+ {
+ 	struct io_xattr *ix = io_kiocb_to_cmd(req, struct io_xattr);
+diff --git a/kernel/Makefile b/kernel/Makefile
+index c20e08d..8d6ffee 100644
+--- a/kernel/Makefile
++++ b/kernel/Makefile
+@@ -84,6 +84,11 @@ obj-$(CONFIG_UTS_NS) += utsname.o
+ obj-$(CONFIG_USER_NS) += user_namespace.o
+ obj-$(CONFIG_PID_NS) += pid_namespace.o
+ obj-$(CONFIG_IKCONFIG) += configs.o
++# Antinomie builds the configuration in for the image builders, which Debian
++# does not: its module strings would add types to the kernel's BTF.
++ifdef CONFIG_ANTINOMIE
++CFLAGS_REMOVE_configs.o += $(DEBUG_CFLAGS)
++endif
+ obj-$(CONFIG_IKHEADERS) += kheaders.o
+ obj-$(CONFIG_SMP) += stop_machine.o
+ obj-$(CONFIG_AUDIT) += audit.o auditfilter.o
+diff --git a/kernel/antinomie/Makefile b/kernel/antinomie/Makefile
+index 3578ee2..d3fd00e 100644
+--- a/kernel/antinomie/Makefile
++++ b/kernel/antinomie/Makefile
+@@ -21,6 +21,7 @@ obj-y += specimen.o
+ obj-y += observer.o
+ obj-y += process_core.o
+ obj-y += manual_core.o
++obj-$(CONFIG_COREDUMP) += core_writer.o
+ obj-y += resources.o
+ obj-y += hash.o
+ obj-y += debug.o
+diff --git a/kernel/antinomie/async.c b/kernel/antinomie/async.c
+index cefb059..2a0be5a 100644
+--- a/kernel/antinomie/async.c
++++ b/kernel/antinomie/async.c
+@@ -105,14 +105,14 @@ static atomic_t reap_used = ATOMIC_INIT(0);
+  */
+ static DEFINE_SPINLOCK(reap_lock);
+ 
+-static void event_hold(const struct ant_async_event *event)
++static void async_event_hold(const struct ant_async_event *event)
+ {
+ 	get_task_struct(event->origin);
+ 	if (event->owner)
+ 		get_task_struct(event->owner);
+ }
+ 
+-static void event_release(const struct ant_async_event *event)
++static void async_event_release(const struct ant_async_event *event)
+ {
+ 	if (event->owner)
+ 		put_task_struct(event->owner);
+@@ -179,7 +179,7 @@ static void stage_record(struct ant_async *request, u32 stage, s64 result,
+ 	event->cpu = raw_smp_processor_id();
+ 	if (stage != 1)
+ 		event->descriptor_len = 0;
+-	event_hold(event);
++	async_event_hold(event);
+ 	record_tail = (record_tail + 1) % ANT_ASYNC_RECORD_COUNT;
+ 	record_count++;
+ 	spin_unlock_irqrestore(&record_lock, irqflags);
+@@ -234,7 +234,7 @@ static void publish_records(struct work_struct *work)
+ 		}
+ 		if (error)
+ 			ant_run_async_loss(record.event.root_cookie);
+-		event_release(&record.event);
++		async_event_release(&record.event);
+ 		cond_resched();
+ 	}
+ }
+@@ -255,7 +255,7 @@ int ant_async_stage_packet(const struct ant_async_event *event,
+ 	record->event = *event;
+ 	record->packet_len = packet_len;
+ 	memcpy(record->packet, packet, packet_len);
+-	event_hold(event);
++	async_event_hold(event);
+ 	record_tail = (record_tail + 1) % ANT_ASYNC_RECORD_COUNT;
+ 	record_count++;
+ 	spin_unlock_irqrestore(&record_lock, irqflags);
+@@ -534,7 +534,7 @@ static void put_request(struct ant_async *request)
+ {
+ 	if (!refcount_dec_and_test(&request->refs))
+ 		return;
+-	event_release(&request->event);
++	async_event_release(&request->event);
+ 	ant_monitor_async_capture_free(request->capture);
+ 	kfree(request);
+ 	atomic_dec(&request_count);
+@@ -918,7 +918,7 @@ u64 ant_monitor_aio_defer(const void *slot, const void *ioctx,
+ 		entry->event = request->event;
+ 		request->payload_deferred = true;
+ 		spin_unlock_irqrestore(&request_lock, irqflags);
+-		event_hold(&entry->event);
++		async_event_hold(&entry->event);
+ 		entry->mm = current->mm;
+ 		entry->ioctx = ioctx;
+ 		entry->buf = buf;
+@@ -942,7 +942,7 @@ u64 ant_monitor_aio_defer(const void *slot, const void *ioctx,
+ static void reap_release(struct ant_aio_reap *entry)
+ {
+ 	kfree(entry->iov);
+-	event_release(&entry->event);
++	async_event_release(&entry->event);
+ }
+ 
+ /* Removes the entry for request_id; the caller releases its event. */
+diff --git a/kernel/antinomie/core_writer.c b/kernel/antinomie/core_writer.c
+new file mode 100644
+index 0000000..1645059
+--- /dev/null
++++ b/kernel/antinomie/core_writer.c
+@@ -0,0 +1,403 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* The process cores the recorder writes with Linux's own ELF writer.
++ *
++ * An exit core runs fs/coredump.c's sequence (stop the other threads, take
++ * the VMA snapshot, write, release the threads), a live core only the
++ * writer. The stock helpers are static to fs/coredump.c, and calling them
++ * from a second place would make the compiler emit inlined helpers out of
++ * line, each a function of their own in the kernel's BTF and function tracer
++ * that Debian's build does not have; so the recorder carries its own copies
++ * of them (Linux 6.12.94's zap_process(), zap_threads(), coredump_wait(),
++ * coredump_finish(), dump_interrupted(), always_dump_vma(), vma_dump_size(),
++ * coredump_next_vma(), free_vma_snapshot(), cmp_vma_size() and
++ * dump_vma_snapshot()), named writer_* so that no symbol of the recorder has
++ * a stock function's name.
++ */
++#include <linux/antinomie_monitor.h>
++#include <linux/binfmts.h>
++#include <linux/coredump.h>
++#include <linux/elf.h>
++#include <linux/file.h>
++#include <linux/freezer.h>
++#include <linux/hugetlb.h>
++#include <linux/mm.h>
++#include <linux/sched/coredump.h>
++#include <linux/sched/signal.h>
++#include <linux/sched/task.h>
++#include <linux/slab.h>
++#include <linux/sort.h>
++#include <linux/uaccess.h>
++
++#include "process_core.h"
++
++static int writer_zap_process(struct signal_struct *signal, int exit_code)
++{
++	struct task_struct *t;
++	int nr = 0;
++
++	signal->flags = SIGNAL_GROUP_EXIT;
++	signal->group_exit_code = exit_code;
++	signal->group_stop_count = 0;
++
++	__for_each_thread(signal, t) {
++		task_clear_jobctl_pending(t, JOBCTL_PENDING_MASK);
++		if (t != current && !(t->flags & PF_POSTCOREDUMP)) {
++			sigaddset(&t->pending.signal, SIGKILL);
++			signal_wake_up(t, 1);
++			nr++;
++		}
++	}
++
++	return nr;
++}
++
++static int writer_zap_threads(struct task_struct *tsk, struct core_state *core_state,
++			      int exit_code)
++{
++	struct signal_struct *signal = tsk->signal;
++	int nr = -EAGAIN;
++
++	spin_lock_irq(&tsk->sighand->siglock);
++	if (!(signal->flags & SIGNAL_GROUP_EXIT) && !signal->group_exec_task) {
++		/* Allow SIGKILL, see prepare_signal() */
++		signal->core_state = core_state;
++		nr = writer_zap_process(signal, exit_code);
++		clear_tsk_thread_flag(tsk, TIF_SIGPENDING);
++		tsk->flags |= PF_DUMPCORE;
++		atomic_set(&core_state->nr_threads, nr);
++	}
++	spin_unlock_irq(&tsk->sighand->siglock);
++	return nr;
++}
++
++static int writer_wait(int exit_code, struct core_state *core_state)
++{
++	struct task_struct *tsk = current;
++	int core_waiters = -EBUSY;
++
++	init_completion(&core_state->startup);
++	core_state->dumper.task = tsk;
++	core_state->dumper.next = NULL;
++
++	core_waiters = writer_zap_threads(tsk, core_state, exit_code);
++	if (core_waiters > 0) {
++		struct core_thread *ptr;
++
++		wait_for_completion_state(&core_state->startup,
++					  TASK_UNINTERRUPTIBLE | TASK_FREEZABLE);
++		/* The thread context (extended register state) reaches memory. */
++		ptr = core_state->dumper.next;
++		while (ptr) {
++			wait_task_inactive(ptr->task, TASK_ANY);
++			ptr = ptr->next;
++		}
++	}
++
++	return core_waiters;
++}
++
++static void writer_finish(bool core_dumped)
++{
++	struct core_thread *curr, *next;
++	struct task_struct *task;
++
++	spin_lock_irq(&current->sighand->siglock);
++	if (core_dumped && !__fatal_signal_pending(current))
++		current->signal->group_exit_code |= 0x80;
++	next = current->signal->core_state->dumper.next;
++	current->signal->core_state = NULL;
++	spin_unlock_irq(&current->sighand->siglock);
++
++	while ((curr = next) != NULL) {
++		next = curr->next;
++		task = curr->task;
++		/* See coredump_task_exit(): curr->task must not see ->task == NULL
++		 * before we read ->next.
++		 */
++		smp_mb();
++		curr->task = NULL;
++		wake_up_process(task);
++	}
++}
++
++/* SIGKILL or freezing() interrupt the coredumping. */
++static bool writer_interrupted(void)
++{
++	return fatal_signal_pending(current) || freezing(current);
++}
++
++/* Special kernel mappings (vDSO, vsyscall) are in every core. */
++static bool writer_always_dump_vma(struct vm_area_struct *vma)
++{
++	if (vma == get_gate_vma(vma->vm_mm))
++		return true;
++	if (vma->vm_ops && vma->vm_ops->name && vma->vm_ops->name(vma))
++		return true;
++	if (arch_vma_name(vma))
++		return true;
++	return false;
++}
++
++#define DUMP_SIZE_MAYBE_ELFHDR_PLACEHOLDER 1
++
++/* How much of @vma's contents goes into a core (fs/coredump.c). */
++static unsigned long writer_vma_size(struct vm_area_struct *vma, unsigned long mm_flags)
++{
++#define FILTER(type)	(mm_flags & (1UL << MMF_DUMP_##type))
++
++	if (writer_always_dump_vma(vma))
++		goto whole;
++
++	if (vma->vm_flags & VM_DONTDUMP)
++		return 0;
++
++	if (vma_is_dax(vma)) {
++		if ((vma->vm_flags & VM_SHARED) && FILTER(DAX_SHARED))
++			goto whole;
++		if (!(vma->vm_flags & VM_SHARED) && FILTER(DAX_PRIVATE))
++			goto whole;
++		return 0;
++	}
++
++	if (is_vm_hugetlb_page(vma)) {
++		if ((vma->vm_flags & VM_SHARED) && FILTER(HUGETLB_SHARED))
++			goto whole;
++		if (!(vma->vm_flags & VM_SHARED) && FILTER(HUGETLB_PRIVATE))
++			goto whole;
++		return 0;
++	}
++
++	if (vma->vm_flags & VM_IO)
++		return 0;
++
++	if (vma->vm_flags & VM_SHARED) {
++		if (file_inode(vma->vm_file)->i_nlink == 0 ?
++		    FILTER(ANON_SHARED) : FILTER(MAPPED_SHARED))
++			goto whole;
++		return 0;
++	}
++
++	if ((!IS_ENABLED(CONFIG_MMU) || vma->anon_vma) && FILTER(ANON_PRIVATE))
++		goto whole;
++	if (!vma->vm_file)
++		return 0;
++
++	if (FILTER(MAPPED_PRIVATE))
++		goto whole;
++
++	/* The first page of an executable file mapping; of a library (not
++	 * always executable) only when it starts with the ELF magic, checked
++	 * after the mmap lock is dropped (writer_vma_snapshot()).
++	 */
++	if (FILTER(ELF_HEADERS) && vma->vm_pgoff == 0 && (vma->vm_flags & VM_READ)) {
++		if ((READ_ONCE(file_inode(vma->vm_file)->i_mode) & 0111) != 0)
++			return PAGE_SIZE;
++		return DUMP_SIZE_MAYBE_ELFHDR_PLACEHOLDER;
++	}
++
++#undef	FILTER
++
++	return 0;
++
++whole:
++	return vma->vm_end - vma->vm_start;
++}
++
++unsigned long ant_coredump_vma_size(struct vm_area_struct *vma, unsigned long flags)
++{
++	return writer_vma_size(vma, flags);
++}
++
++/* The VMAs in order, then the gate VMA. */
++static struct vm_area_struct *writer_next_vma(struct vma_iterator *vmi,
++					      struct vm_area_struct *vma,
++					      struct vm_area_struct *gate_vma)
++{
++	if (gate_vma && vma == gate_vma)
++		return NULL;
++
++	vma = vma_next(vmi);
++	if (vma)
++		return vma;
++	return gate_vma;
++}
++
++static void writer_free_vmas(struct coredump_params *cprm)
++{
++	int i;
++
++	if (!cprm->vma_meta)
++		return;
++	for (i = 0; i < cprm->vma_count; i++)
++		if (cprm->vma_meta[i].file)
++			fput(cprm->vma_meta[i].file);
++	kvfree(cprm->vma_meta);
++	cprm->vma_meta = NULL;
++}
++
++static int writer_cmp_vma_size(const void *lhs_ptr, const void *rhs_ptr)
++{
++	const struct core_vma_metadata *lhs = lhs_ptr, *rhs = rhs_ptr;
++
++	if (lhs->dump_size < rhs->dump_size)
++		return -1;
++	if (lhs->dump_size > rhs->dump_size)
++		return 1;
++	return 0;
++}
++
++/* Under the mmap lock, a snapshot of the task's VMAs (fs/coredump.c). */
++static bool writer_vma_snapshot(struct coredump_params *cprm)
++{
++	struct vm_area_struct *gate_vma, *vma = NULL;
++	struct mm_struct *mm = current->mm;
++	VMA_ITERATOR(vmi, mm, 0);
++	int i = 0;
++
++	if (mmap_write_lock_killable(mm))
++		return false;
++
++	cprm->vma_data_size = 0;
++	gate_vma = get_gate_vma(mm);
++	cprm->vma_count = mm->map_count + (gate_vma ? 1 : 0);
++
++	cprm->vma_meta = kvmalloc_array(cprm->vma_count, sizeof(*cprm->vma_meta), GFP_KERNEL);
++	if (!cprm->vma_meta) {
++		mmap_write_unlock(mm);
++		return false;
++	}
++
++	while ((vma = writer_next_vma(&vmi, vma, gate_vma)) != NULL) {
++		struct core_vma_metadata *m = cprm->vma_meta + i;
++
++		m->start = vma->vm_start;
++		m->end = vma->vm_end;
++		m->flags = vma->vm_flags;
++		m->dump_size = writer_vma_size(vma, cprm->mm_flags);
++		m->pgoff = vma->vm_pgoff;
++		m->file = vma->vm_file;
++		if (m->file)
++			get_file(m->file);
++		i++;
++	}
++
++	mmap_write_unlock(mm);
++
++	for (i = 0; i < cprm->vma_count; i++) {
++		struct core_vma_metadata *m = cprm->vma_meta + i;
++
++		if (m->dump_size == DUMP_SIZE_MAYBE_ELFHDR_PLACEHOLDER) {
++			char elfmag[SELFMAG];
++
++			if (copy_from_user(elfmag, (void __user *)m->start, SELFMAG) ||
++			    memcmp(elfmag, ELFMAG, SELFMAG) != 0)
++				m->dump_size = 0;
++			else
++				m->dump_size = PAGE_SIZE;
++		}
++
++		cprm->vma_data_size += m->dump_size;
++	}
++
++	if (ant_coredump_sort_vma())
++		sort(cprm->vma_meta, cprm->vma_count, sizeof(*cprm->vma_meta),
++		     writer_cmp_vma_size, NULL);
++
++	return true;
++}
++
++/* Nonfatal acquisition (manual_core.c): this path never calls
++ * coredump_wait/finish or installs signal->core_state.
++ */
++int ant_coredump_live_to_file(struct file *file, unsigned long limit,
++			      struct core_vma_metadata *vmas, unsigned int vma_count,
++			      struct ant_coredump_live *live)
++{
++	kernel_siginfo_t info = { .si_code = SI_KERNEL };
++	struct coredump_params cprm = {
++		.siginfo = &info, .file = file, .limit = limit,
++		.mm_flags = READ_ONCE(current->mm->flags),
++		.cpu = raw_smp_processor_id(), .vma_meta = vmas,
++		.vma_count = vma_count,
++	};
++	unsigned int i;
++	int error;
++
++	if (!current->mm->binfmt || !current->mm->binfmt->core_dump ||
++	    ant_arch_compat_task())
++		return -EOPNOTSUPP;
++	for (i = 0; i < vma_count; i++)
++		cprm.vma_data_size += vmas[i].dump_size;
++	ant_coredump_attach(live, live->deadline);
++	error = current->mm->binfmt->core_dump(&cprm) ? 0 : -EIO;
++	if (cprm.to_skip) {
++		cprm.to_skip--;
++		if (!dump_emit(&cprm, "", 1) && !error)
++			error = -EIO;
++	}
++	ant_coredump_attach(NULL, 0);
++	if (live->aborted(live->context) || writer_interrupted())
++		return -EINTR;
++	return error ?: (live->incomplete ? -ENODATA : 0);
++}
++
++/* Opt-in host acquisition shares the native ELF writer/rendezvous, but never
++ * synthesizes a core bit in the parent-visible wait status. No guest path or
++ * helper is used. The caller owns the bounded anonymous sink for this call.
++ */
++int ant_coredump_to_file(struct file *file, unsigned long limit, int wait_status,
++			 const kernel_siginfo_t *siginfo, unsigned long deadline)
++{
++	struct mm_struct *mm = current->mm;
++	struct core_state core_state;
++	kernel_siginfo_t normal_info = {
++		.si_signo = wait_status & 0x7f, .si_code = SI_KERNEL,
++	};
++	struct coredump_params cprm = {
++		.siginfo = siginfo ? siginfo : &normal_info,
++		.file = file,
++		.limit = limit,
++		.cpu = raw_smp_processor_id(),
++	};
++	int error;
++
++	if (!mm || !mm->binfmt || !mm->binfmt->core_dump || ant_arch_compat_task())
++		return -EOPNOTSUPP;
++	/* Bound metadata before the Linux writer allocates its snapshots. */
++	if (get_nr_threads(current) > 256)
++		return -E2BIG;
++	cprm.mm_flags = READ_ONCE(mm->flags);
++	error = writer_wait(wait_status, &core_state);
++	if (error < 0)
++		return error;
++	if (get_nr_threads(current) > 256) {
++		error = -E2BIG;
++		goto finish;
++	}
++	mmap_read_lock(mm);
++	error = mm->map_count > 4096 ? -E2BIG : 0;
++	mmap_read_unlock(mm);
++	if (error)
++		goto finish;
++	if (!writer_vma_snapshot(&cprm)) {
++		error = -ENOMEM;
++		goto finish;
++	}
++	/* Linux returns 'has_dumped' even after a short write. The sink and
++	 * ELF program-header extents provide the actual completion decision.
++	 */
++	ant_coredump_attach(NULL, deadline);
++	error = mm->binfmt->core_dump(&cprm) ? 0 : -EIO;
++	if (cprm.to_skip) {
++		cprm.to_skip--;
++		if (!dump_emit(&cprm, "", 1) && !error)
++			error = -EIO;
++	}
++	ant_coredump_attach(NULL, 0);
++	writer_free_vmas(&cprm);
++	if (writer_interrupted())
++		error = -EINTR;
++finish:
++	writer_finish(false);
++	return error;
++}
+diff --git a/kernel/antinomie/debug.c b/kernel/antinomie/debug.c
+index 02e4ae2..579eeb5 100644
+--- a/kernel/antinomie/debug.c
++++ b/kernel/antinomie/debug.c
+@@ -801,7 +801,7 @@ static void restore_byte(struct mm_struct *target, u64 addr, const u8 *orig, uns
+ 		mem_access(target, addr, (void *)orig, len, true);
+ }
+ 
+-static void remove_one(struct ant_dbg_as *as, unsigned int i)
++static void dbg_remove_bp(struct ant_dbg_as *as, unsigned int i)
+ {
+ 	struct ant_dbg_bp bp, *slot = &as->bps[i];
+ 
+@@ -820,7 +820,7 @@ static void remove_breakpoints(struct ant_dbg_as *as)
+ 	unsigned int i;
+ 
+ 	for (i = 0; i < as->bp_count; i++)
+-		remove_one(as, i);
++		dbg_remove_bp(as, i);
+ }
+ 
+ static bool bp_at(struct ant_dbg_as *as, u64 addr)
+@@ -3232,7 +3232,7 @@ static int cmd_breakpoint(u32 opcode, struct ant_dbg *s, const u8 *args, size_t
+ 		if (i < as->bp_count) {
+ 			/* Non-stop keeps the bytes in: this one goes out with the entry. */
+ 			if (nonstop(s))
+-				remove_one(as, i);
++				dbg_remove_bp(as, i);
+ 			spin_lock_irq(&as->lock);
+ 			as->bps[i] = as->bps[--as->bp_count];
+ 			memset(&as->bps[as->bp_count], 0, sizeof(as->bps[0]));
+@@ -3427,7 +3427,7 @@ static int cmd_config(struct ant_dbg *s, const u8 *args, size_t args_len, u8 *re
+ 	return 0;
+ }
+ 
+-static void put_event(u8 *entry, const struct ant_dbg_event *ev)
++static void put_debug_event(u8 *entry, const struct ant_dbg_event *ev)
+ {
+ 	memset(entry, 0, ANTC_DEBUG_EVENT_ENTRY_SIZE);
+ 	put_unaligned_le32(ev->seq, entry);
+@@ -3465,13 +3465,13 @@ static int cmd_events(struct ant_dbg *s, const u8 *args, size_t args_len, u8 *re
+ 	spin_lock_irq(&s->lock);
+ 	if (mode & ANTC_DEBUG_EVENTS_CURRENT) {
+ 		if (s->cur.kind) {
+-			put_event(reply + 16, &s->cur);
++			put_debug_event(reply + 16, &s->cur);
+ 			count = 1;
+ 		}
+ 	} else {
+ 		ev_ack(s, ack);
+ 		for (i = 0; i < s->qcount && count < max; i++)
+-			put_event(reply + 16 + count++ * ANTC_DEBUG_EVENT_ENTRY_SIZE,
++			put_debug_event(reply + 16 + count++ * ANTC_DEBUG_EVENT_ENTRY_SIZE,
+ 				  &s->queue[(s->qhead + i) % EVENT_QUEUE]);
+ 		put_unaligned_le32(s->qdropped, reply + 4);
+ 	}
+diff --git a/kernel/antinomie/guest.c b/kernel/antinomie/guest.c
+index 6ab8a8d..b76576d 100644
+--- a/kernel/antinomie/guest.c
++++ b/kernel/antinomie/guest.c
+@@ -30,13 +30,16 @@ struct ant_cpu {
+ };
+ /* One per CPU, used with preemption off. A sender that must wait for room
+  * takes a turn (next_ticket) and stays on its CPU until serving reaches it.
++ * Allocated at setup (alloc_percpu), not in the static per-CPU section: a
++ * static one would move every later per-CPU variable of the kernel (their
++ * offsets are in its BTF).
+  */
+ struct ant_producer {
+ 	u64 head, cached_tail, attempted, dropped, waits, wait_ns;
+ 	u32 index, next_ticket, serving;
+ 	bool fault;
+ };
+-static DEFINE_PER_CPU(struct ant_producer, producers);
++static struct ant_producer __percpu *producers;
+ static struct ant_cpu *cpus;
+ static struct ant_control *control;
+ static struct ant_queue *directory;
+@@ -162,7 +165,7 @@ int ant_send(const void *data, size_t payload_len)
+ 	if (!data && payload_len) return -EINVAL;
+ 	if (!smp_load_acquire(&ready)) return -ENOTCONN;
+ 	preempt_disable();
+-	p = this_cpu_ptr(&producers);
++	p = this_cpu_ptr(producers);
+ 	q = &directory[p->index];
+ 	p->attempted++;
+ 	if (p->fault) {
+@@ -271,7 +274,7 @@ u32 ant_send_room(void)
+ 	if (!smp_load_acquire(&ready))
+ 		return room;
+ 	preempt_disable();
+-	p = this_cpu_ptr(&producers);
++	p = this_cpu_ptr(producers);
+ 	q = &directory[p->index];
+ 	tail = ANT_ACQ(&q->tail);
+ 	if (!p->fault && tail <= p->head && p->head - tail <= ring_size)
+@@ -464,8 +467,10 @@ static int __init ant_guest_init(void)
+ 	region = page_address(pages);
+ 	control = &region->control;
+ 	directory = region->directory;
++	producers = alloc_percpu(struct ant_producer);
++	if (!producers) goto free_control;
+ 	cpus = kcalloc(queue_count, sizeof(*cpus), GFP_KERNEL);
+-	if (!cpus) goto free_control;
++	if (!cpus) goto free_producers;
+ 	/* Every ring has the same size; when memory is short, try a smaller one. */
+ retry:
+ 	index = 0;
+@@ -486,7 +491,7 @@ static int __init ant_guest_init(void)
+ 		directory[index].data_gpa = page_to_phys(cpus[index].pages);
+ 		directory[index].data_size = ring_size;
+ 		directory[index].cpu_id = cpu;
+-		per_cpu(producers, cpu).index = index++;
++		per_cpu_ptr(producers, cpu)->index = index++;
+ 	}
+ 	/*
+ 	 * This worker only polls host commands. It is not a reclaim path,
+@@ -526,6 +531,9 @@ static int __init ant_guest_init(void)
+ 	for (index = 0; index < queue_count; index++)
+ 		if (cpus[index].pages) __free_pages(cpus[index].pages, get_order(ring_size));
+ 	kfree(cpus);
++free_producers:
++	free_percpu(producers);
++	producers = NULL;
+ free_control:
+ 	__free_pages(pages, get_order(ANT_CONTROL_SIZE));
+ 	return error;
+diff --git a/kernel/antinomie/manual_core.c b/kernel/antinomie/manual_core.c
+index 704d70e..d9dda3e 100644
+--- a/kernel/antinomie/manual_core.c
++++ b/kernel/antinomie/manual_core.c
+@@ -157,21 +157,6 @@ void ant_coredump_live_incomplete(struct ant_coredump_live *live)
+ 	live->incomplete = true;
+ }
+ 
+-bool ant_coredump_live_complete(struct ant_coredump_live *live)
+-{
+-	return !live->incomplete;
+-}
+-
+-bool ant_coredump_live_aborted(struct ant_coredump_live *live)
+-{
+-	return live->aborted(live->context);
+-}
+-
+-unsigned long ant_coredump_live_deadline(struct ant_coredump_live *live)
+-{
+-	return live->deadline;
+-}
+-
+ struct core_vma_metadata *ant_coredump_live_vmas(struct ant_coredump_live *live,
+ 						 unsigned int *count)
+ {
+diff --git a/kernel/antinomie/process_core.h b/kernel/antinomie/process_core.h
+index 98a1fbf..6682a47 100644
+--- a/kernel/antinomie/process_core.h
++++ b/kernel/antinomie/process_core.h
+@@ -2,12 +2,15 @@
+ #ifndef ANT_PROCESS_CORE_H
+ #define ANT_PROCESS_CORE_H
+ 
++#include <linux/errno.h>
++#include <linux/signal_types.h>
+ #include <linux/types.h>
+ 
+ struct file;
+ struct page;
+ struct task_struct;
+ struct core_vma_metadata;
++struct vm_area_struct;
+ struct ant_core;
+ 
+ /* A live process core in writing (manual_core.c): owned by the manual
+@@ -34,6 +37,27 @@ struct ant_core_identity {
+ 	u64 cookie, start_ns, nonce_lo, nonce_hi;
+ 	u32 tgid, max_size, timeout_ms, policy;
+ };
++/* The core this task is writing: live (NULL: an exit core) and deadline
++ * (jiffies, 0: none); ant_coredump_attach(NULL, 0) ends it (state.c).
++ */
++void ant_coredump_attach(struct ant_coredump_live *live, unsigned long deadline);
++/* core_writer.c: Linux's ELF writer run for the recorder. */
++#ifdef CONFIG_COREDUMP
++int ant_coredump_to_file(struct file *file, unsigned long limit, int wait_status,
++			 const kernel_siginfo_t *siginfo, unsigned long deadline);
++int ant_coredump_live_to_file(struct file *file, unsigned long limit,
++			      struct core_vma_metadata *vmas, unsigned int vma_count,
++			      struct ant_coredump_live *live);
++unsigned long ant_coredump_vma_size(struct vm_area_struct *vma, unsigned long flags);
++#else
++static inline int ant_coredump_to_file(struct file *file, unsigned long limit,
++				       int wait_status, const kernel_siginfo_t *siginfo,
++				       unsigned long deadline)
++{
++	return -EOPNOTSUPP;
++}
++#endif
++
+ struct ant_core *ant_core_live_create(const struct ant_core_identity *identity);
+ int ant_core_live_lookup(const struct ant_core_identity *identity, bool admission,
+ 			 struct ant_core **result);
+diff --git a/kernel/antinomie/state.c b/kernel/antinomie/state.c
+index ffd81c2..4c9f5ef 100644
+--- a/kernel/antinomie/state.c
++++ b/kernel/antinomie/state.c
+@@ -5,6 +5,7 @@
+ #include <linux/init.h>
+ #include <linux/kernel.h>
+ 
++#include "process_core.h"
+ #include "state.h"
+ 
+ int ant_task_state_offset __ro_after_init;

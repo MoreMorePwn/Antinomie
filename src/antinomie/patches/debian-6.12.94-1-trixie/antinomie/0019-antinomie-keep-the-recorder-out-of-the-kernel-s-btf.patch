@@ -65,10 +65,10 @@ index 475ee59..ee76eab 100644
  		$(RESOLVE_BTFIDS) -b vmlinux $@; 			\
 diff --git a/scripts/antinomie_btf.py b/scripts/antinomie_btf.py
 new file mode 100755
-index 0000000..511c714
+index 0000000..a14fa44
 --- /dev/null
 +++ b/scripts/antinomie_btf.py
-@@ -0,0 +1,502 @@
+@@ -0,0 +1,521 @@
 +#!/usr/bin/env python3
 +# SPDX-License-Identifier: GPL-2.0-only
 +"""Keep the recorder's names out of the kernel's BTF.
@@ -400,8 +400,15 @@ index 0000000..511c714
 +                    tag[3] = renumber[tag[3]]
 +
 +
-+def compact(btf, removed, first_old, first_new, base_map, own_start, own_new, base_string):
++def compact(btf, removed, first_old, first_new, base_map, own_start, own_new, base_string,
++            unused=None):
 +    """Renumber the kept types and rebuild the string table.
++
++    unused(off, text) (vmlinux only): whether a string no kept type refers to
++    stays. pahole leaves strings that no type uses (names of what dedup merged
++    away), and Debian's BTF has them, so vmlinux keeps them in place, but not
++    those of what the filter removed; a module's table holds only what its
++    types use.
 +
 +    Ids from first_old are this BTF's own and become ids from first_new;
 +    base_map(id) maps a base id below first_old. String offsets from own_start
@@ -425,7 +432,15 @@ index 0000000..511c714
 +            set_ref(t, slot, value)
 +    table = bytearray(b"\0" if own_start == 0 else b"")
 +    placed = {0: 0}
-+    for off in sorted({off for t in kept for _, off in string_refs(t) if off >= own_start}):
++    used = {off for t in kept for _, off in string_refs(t) if off >= own_start}
++    if unused is not None:
++        pos = 1
++        while pos < len(btf.strings):
++            end = btf.strings.index(b"\0", pos)
++            if pos not in used and unused(pos, btf.strings[pos:end]):
++                used.add(pos)
++            pos = end + 1
++    for off in sorted(used):
 +        if off not in placed:
 +            local = off - own_start
 +            placed[off] = own_new + len(table)
@@ -462,8 +477,12 @@ index 0000000..511c714
 +        f.write(raw)
 +    btf = Btf(raw)
 +    flt = Filter(btf, text_at(btf.strings), 1, lambda name: FORBIDDEN.search(name) is not None)
++    # What any type or member used before filtering; the rest pahole left.
++    referenced = {off for t in btf.types for _, off in string_refs(t)}
 +    removed = flt.run()
-+    kept, new_id, table = compact(btf, removed, 1, 1, None, 0, 0, None)
++    kept, new_id, table = compact(btf, removed, 1, 1, None, 0, 0, None,
++                                  lambda off, text: off not in referenced and
++                                  FORBIDDEN.search(text) is None)
 +    finished = btf.serialize(kept, table)
 +    with open(out, "wb") as f:
 +        f.write(finished)

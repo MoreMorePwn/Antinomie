@@ -1,0 +1,2834 @@
+Description: antinomie: keep stock structure layouts: recorder state in side tables
+ A Debian guest ships Debian's own kernel modules. They load only into a
+ kernel whose structures have Debian's layout: modversions compares a CRC
+ of every structure an exported symbol reaches, and the kernel's BTF, which
+ the guest reads, describes the same layouts. The recorder added fields to
+ task_struct, io_ring_ctx, io_kiocb, aio_kiocb, io_async_msghdr and
+ coredump_params; it now keeps none in a stock structure.
+ .
+ - Per task (cookies, the monitor and run contexts, sequence counters, the
+   io_uring request a worker runs, the process core being written): a
+   struct in the task's security blob, at an offset reserved after every
+   LSM's own part when the LSMs are set up (security.c). No LSM is
+   registered, so the LSM list, lsm_list_modules() and the boot log stay
+   Debian's. The blob is allocated zeroed with the task, after
+   dup_task_struct() copied the parent, and freed after the recorder's
+   release, so fork no longer clears copied fields. ANTINOMIE now depends
+   on SECURITY.
+ - io_uring and AIO requests: the asynchronous request record is found by
+   the io_kiocb or aio_kiocb it belongs to, in a table under the lock that
+   already guarded the slot; while no record is alive no lock is taken. A
+   request submitted again replaces whatever its object left (abandoned).
+   The msghdr sizes of a recvmsg live in that record.
+ - io_uring rings: the creator (tgid, task, cookies) of every ring, by ring,
+   under RCU, freed with the ring.
+ - Process cores: the deadline and live-acquisition state of a core the
+   recorder writes are the writing task's, not coredump_params'; the ELF
+   writer's helpers keep their stock prototypes.
+ .
+ The recorder no longer exports symbols: nothing modular uses them, and the
+ export table is Debian's.
+ .
+ Hooked kernel files: security/security.c (the blob reservation); the
+ others lose code.
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-10-29
+
+---
+diff --git a/fs/aio.c b/fs/aio.c
+index 46d6d4d..cdee952 100644
+--- a/fs/aio.c
++++ b/fs/aio.c
+@@ -196,9 +196,6 @@ struct poll_iocb {
+  * or directly as just 'ki_filp' in this struct.
+  */
+ struct aio_kiocb {
+-#ifdef CONFIG_ANTINOMIE
+-	struct ant_async		*ant_async;
+-#endif
+ 	union {
+ 		struct file		*ki_filp;
+ 		struct kiocb		rw;
+@@ -1071,9 +1068,6 @@ static inline struct aio_kiocb *aio_get_req(struct kioctx *ctx)
+ 	}
+ 
+ 	percpu_ref_get(&ctx->reqs);
+-#ifdef CONFIG_ANTINOMIE
+-	req->ant_async = NULL;
+-#endif
+ 	req->ki_ctx = ctx;
+ 	INIT_LIST_HEAD(&req->ki_list);
+ 	refcount_set(&req->ki_refcnt, 2);
+@@ -1112,7 +1106,7 @@ static struct kioctx *lookup_ioctx(unsigned long ctx_id)
+ static inline void iocb_destroy(struct aio_kiocb *iocb)
+ {
+ #ifdef CONFIG_ANTINOMIE
+-	ant_monitor_async_abandon(&iocb->ant_async);
++	ant_monitor_async_abandon(iocb);
+ #endif
+ 	if (iocb->ki_eventfd)
+ 		eventfd_ctx_put(iocb->ki_eventfd);
+@@ -1138,9 +1132,9 @@ static void aio_complete(struct aio_kiocb *iocb)
+ 	unsigned tail, pos, head, avail;
+ 	unsigned long	flags;
+ #ifdef CONFIG_ANTINOMIE
+-	u64 ant_request = ant_monitor_async_id(&iocb->ant_async);
++	u64 ant_request = ant_monitor_async_id(iocb);
+ 
+-	ant_monitor_async_complete(&iocb->ant_async, iocb->ki_res.res, 0, true);
++	ant_monitor_async_complete(iocb, iocb->ki_res.res, 0, true);
+ #endif
+ 	/*
+ 	 * Add a completion event to the ring buffer. Must be done holding
+@@ -1631,17 +1625,17 @@ static int aio_read(struct kiocb *req, const struct iocb *iocb,
+ 		/* A queued read may complete in interrupt context, where its
+ 		 * buffers cannot be read; io_getevents() reads them instead.
+ 		 */
+-		deferred = ant_monitor_aio_defer(&tracked->ant_async, tracked->ki_ctx,
++		deferred = ant_monitor_aio_defer(tracked, tracked->ki_ctx,
+ 						 &iter);
+ 		observed = iter;
+ 		result = file->f_op->read_iter(req, &iter);
+ 		if (result != -EIOCBQUEUED)
+-			ant_monitor_aio_undefer(&tracked->ant_async, deferred);
++			ant_monitor_aio_undefer(tracked, deferred);
+ 		/* A failed read wrote no output, so there is no payload to miss. */
+ 		if (result < 0 && result != -EIOCBQUEUED)
+-			ant_monitor_async_scalar(&tracked->ant_async);
++			ant_monitor_async_scalar(tracked);
+ 		if (result >= 0)
+-			ant_monitor_async_iter(&tracked->ant_async, &observed, result, 0, true);
++			ant_monitor_async_iter(tracked, &observed, result, 0, true);
+ 		aio_rw_done(req, result);
+ #else
+ 		aio_rw_done(req, file->f_op->read_iter(req, &iter));
+@@ -1677,7 +1671,7 @@ static int aio_write(struct kiocb *req, const struct iocb *iocb,
+ #ifdef CONFIG_ANTINOMIE
+ 		struct aio_kiocb *tracked = container_of(req, struct aio_kiocb, rw);
+ 
+-		ant_monitor_async_iter(&tracked->ant_async, &iter, iov_iter_count(&iter), 0, false);
++		ant_monitor_async_iter(tracked, &iter, iov_iter_count(&iter), 0, false);
+ #endif
+ 		if (S_ISREG(file_inode(file)->i_mode))
+ 			kiocb_start_write(req);
+@@ -2026,7 +2020,7 @@ static int __io_submit_one(struct kioctx *ctx, const struct iocb *iocb,
+ 		return -EBADF;
+ #ifdef CONFIG_ANTINOMIE
+ 	if (S_ISREG(file_inode(req->ki_filp)->i_mode))
+-		ant_monitor_async_file_id(&req->ant_async, ANT_FILE_ID_ISSUE,
++		ant_monitor_async_file_id(req, ANT_FILE_ID_ISSUE,
+ 					  file_inode(req->ki_filp), 0);
+ #endif
+ 
+@@ -2107,17 +2101,16 @@ static int io_submit_one(struct kioctx *ctx, struct iocb __user *user_iocb,
+ 		return -EAGAIN;
+ 
+ #ifdef CONFIG_ANTINOMIE
+-	req->ant_async = ant_monitor_async_begin(ANT_ASYNC_AIO,
+-						 iocb.aio_lio_opcode, iocb.aio_data,
+-						 compat || iocb.aio_lio_opcode == IOCB_CMD_PREAD ||
+-						 iocb.aio_lio_opcode == IOCB_CMD_PWRITE ||
+-						 iocb.aio_lio_opcode == IOCB_CMD_PREADV ||
+-						 iocb.aio_lio_opcode == IOCB_CMD_PWRITEV ?
+-						 ANT_ASYNC_PAYLOAD_GAP : 0, &iocb, sizeof(iocb));
++	ant_monitor_async_begin(req, ANT_ASYNC_AIO, iocb.aio_lio_opcode, iocb.aio_data,
++				compat || iocb.aio_lio_opcode == IOCB_CMD_PREAD ||
++				iocb.aio_lio_opcode == IOCB_CMD_PWRITE ||
++				iocb.aio_lio_opcode == IOCB_CMD_PREADV ||
++				iocb.aio_lio_opcode == IOCB_CMD_PWRITEV ?
++				ANT_ASYNC_PAYLOAD_GAP : 0, &iocb, sizeof(iocb));
+ #endif
+ 	err = __io_submit_one(ctx, &iocb, user_iocb, req, compat);
+ #ifdef CONFIG_ANTINOMIE
+-	ant_monitor_async_accepted(&req->ant_async, err);
++	ant_monitor_async_accepted(req, err);
+ #endif
+ 
+ 	/* Done with the synchronous reference */
+diff --git a/fs/binfmt_elf.c b/fs/binfmt_elf.c
+index 9005620..7256e15 100644
+--- a/fs/binfmt_elf.c
++++ b/fs/binfmt_elf.c
+@@ -1568,26 +1568,27 @@ static void fill_prstatus(struct elf_prstatus_common *prstatus,
+ 	prstatus->pr_cstime = ns_to_kernel_old_timeval(p->signal->cstime);
+ }
+ 
+-static bool live_core(struct coredump_params *cprm)
++/* A process core the recorder writes of a live process (manual_core.c). */
++static inline bool live_core(void)
+ {
+ #ifdef CONFIG_ANTINOMIE
+-	return cprm->antinomie_live != NULL;
++	return ant_coredump_live() != NULL;
+ #else
+ 	return false;
+ #endif
+ }
+ 
+-static void *core_note_alloc(struct coredump_params *cprm, size_t size)
++static inline void *core_note_alloc(size_t size)
+ {
+ #ifdef CONFIG_ANTINOMIE
+-	if (live_core(cprm))
+-		return size ? ant_coredump_live_alloc(cprm, size) : NULL;
++	if (live_core())
++		return size ? ant_coredump_live_alloc(ant_coredump_live(), size) : NULL;
+ #endif
+ 	return kzalloc(size, GFP_KERNEL);
+ }
+ 
+ static int fill_psinfo(struct elf_prpsinfo *psinfo, struct task_struct *p,
+-		       struct mm_struct *mm, struct coredump_params *cprm)
++		       struct mm_struct *mm)
+ {
+ 	const struct cred *cred;
+ 	unsigned int i, len;
+@@ -1600,15 +1601,15 @@ static int fill_psinfo(struct elf_prpsinfo *psinfo, struct task_struct *p,
+ 	if (len >= ELF_PRARGSZ)
+ 		len = ELF_PRARGSZ-1;
+ #ifdef CONFIG_ANTINOMIE
+-	if (live_core(cprm)) {
++	if (live_core()) {
+ 		if (copy_from_user_nofault(psinfo->pr_psargs,
+ 					 (const void __user *)mm->arg_start, len)) {
+ 			memset(psinfo->pr_psargs, 0, sizeof(psinfo->pr_psargs));
+-			cprm->antinomie_live->incomplete = true;
++			ant_coredump_live_incomplete(ant_coredump_live());
+ 		}
+ 	}
+ #endif
+-	if (!live_core(cprm) && copy_from_user(&psinfo->pr_psargs,
++	if (!live_core() && copy_from_user(&psinfo->pr_psargs,
+ 					     (const char __user *)mm->arg_start, len))
+ 		return -EFAULT;
+ 	for(i = 0; i < len; i++)
+@@ -1679,10 +1680,8 @@ static int fill_files_note(struct memelfnote *note, struct coredump_params *cprm
+ 	struct core_vma_metadata *vmas = cprm->vma_meta;
+ 
+ #ifdef CONFIG_ANTINOMIE
+-	if (live_core(cprm)) {
+-		vma_count = cprm->antinomie_live->file_vma_count;
+-		vmas = cprm->antinomie_live->file_vmas;
+-	}
++	if (live_core())
++		vmas = ant_coredump_live_vmas(ant_coredump_live(), &vma_count);
+ #endif
+ 	/* *Estimated* file count and total data size needed */
+ 	count = vma_count;
+@@ -1703,7 +1702,7 @@ static int fill_files_note(struct memelfnote *note, struct coredump_params *cprm
+ 	 * "size" can be 0 here legitimately.
+ 	 * Let it ENOMEM and omit NT_FILE section which will be empty anyway.
+ 	 */
+-	data = live_core(cprm) ? core_note_alloc(cprm, size) :
++	data = live_core() ? core_note_alloc(size) :
+ 		kvmalloc(size, GFP_KERNEL);
+ 	if (ZERO_OR_NULL_PTR(data))
+ 		return -ENOMEM;
+@@ -1723,7 +1722,7 @@ static int fill_files_note(struct memelfnote *note, struct coredump_params *cprm
+ 		filename = file_path(file, name_curpos, remaining);
+ 		if (IS_ERR(filename)) {
+ 			if (PTR_ERR(filename) == -ENAMETOOLONG) {
+-				if (!live_core(cprm))
++				if (!live_core())
+ 					kvfree(data);
+ 				size = size * 5 / 4;
+ 				goto alloc;
+@@ -1807,8 +1806,7 @@ static void do_thread_regset_writeback(struct task_struct *task,
+ 
+ static int fill_thread_core_info(struct elf_thread_core_info *t,
+ 				 const struct user_regset_view *view,
+-				 long signr, struct elf_note_info *info,
+-				 struct coredump_params *cprm)
++				 long signr, struct elf_note_info *info)
+ {
+ 	unsigned int note_iter, view_iter;
+ 
+@@ -1820,12 +1818,12 @@ static int fill_thread_core_info(struct elf_thread_core_info *t,
+ 	 */
+ 	fill_prstatus(&t->prstatus.common, t->task, signr);
+ #ifdef CONFIG_ANTINOMIE
+-	if (live_core(cprm)) {
++	if (live_core()) {
+ 		int ret = regset_get(t->task, &view->regsets[0],
+ 				     sizeof(t->prstatus.pr_reg), &t->prstatus.pr_reg);
+ 
+ 		if (ret != sizeof(t->prstatus.pr_reg)) {
+-			cprm->antinomie_live->incomplete = true;
++			ant_coredump_live_incomplete(ant_coredump_live());
+ 			return 0;
+ 		}
+ 	} else {
+@@ -1861,13 +1859,13 @@ static int fill_thread_core_info(struct elf_thread_core_info *t,
+ 			continue;
+ 
+ #ifdef CONFIG_ANTINOMIE
+-		if (live_core(cprm)) {
++		if (live_core()) {
+ 			size_t size = (size_t)regset->n * regset->size;
+ 
+-			data = core_note_alloc(cprm, size);
++			data = core_note_alloc(size);
+ 			ret = data ? regset_get(t->task, regset, size, data) : -ENOMEM;
+ 			if (ret < 0 || ret != size)
+-				cprm->antinomie_live->incomplete = true;
++				ant_coredump_live_incomplete(ant_coredump_live());
+ 		} else {
+ #endif
+ 			ret = regset_get_alloc(t->task, regset, ~0U, &data);
+@@ -1895,8 +1893,7 @@ static int fill_thread_core_info(struct elf_thread_core_info *t,
+ #else
+ static int fill_thread_core_info(struct elf_thread_core_info *t,
+ 				 const struct user_regset_view *view,
+-				 long signr, struct elf_note_info *info,
+-				 struct coredump_params *cprm)
++				 long signr, struct elf_note_info *info)
+ {
+ 	struct task_struct *p = t->task;
+ 	elf_fpregset_t *fpu;
+@@ -1932,7 +1929,7 @@ static int fill_note_info(struct elfhdr *elf, int phdrs,
+ 	struct elf_prpsinfo *psinfo;
+ 	struct core_thread *ct;
+ 
+-	psinfo = core_note_alloc(cprm, sizeof(*psinfo));
++	psinfo = core_note_alloc(sizeof(*psinfo));
+ 	if (!psinfo)
+ 		return 0;
+ 	fill_note(&info->psinfo, "CORE", NT_PRPSINFO, sizeof(*psinfo), psinfo);
+@@ -1972,22 +1969,22 @@ static int fill_note_info(struct elfhdr *elf, int phdrs,
+ 	/*
+ 	 * Allocate a structure for each thread.
+ 	 */
+-	info->thread = core_note_alloc(cprm, offsetof(struct elf_thread_core_info,
++	info->thread = core_note_alloc(offsetof(struct elf_thread_core_info,
+ 						 notes[info->thread_notes]));
+ 	if (unlikely(!info->thread))
+ 		return 0;
+ 
+ 	info->thread->task = dump_task;
+ #ifdef CONFIG_ANTINOMIE
+-	if (live_core(cprm)) {
++	if (live_core()) {
++		struct task_struct *task;
+ 		unsigned int i;
+ 
+-		for (i = 0; i < cprm->antinomie_live->task_count; i++) {
+-			struct task_struct *task = cprm->antinomie_live->tasks[i];
++		for (i = 0; (task = ant_coredump_live_task(ant_coredump_live(), i)); i++) {
+ 
+ 			if (task == dump_task)
+ 				continue;
+-			t = core_note_alloc(cprm, offsetof(struct elf_thread_core_info,
++			t = core_note_alloc(offsetof(struct elf_thread_core_info,
+ 							 notes[info->thread_notes]));
+ 			if (!t)
+ 				return 0;
+@@ -1997,9 +1994,9 @@ static int fill_note_info(struct elfhdr *elf, int phdrs,
+ 		}
+ 	}
+ #endif
+-	if (!live_core(cprm))
++	if (!live_core())
+ 		for (ct = dump_task->signal->core_state->dumper.next; ct; ct = ct->next) {
+-			t = core_note_alloc(cprm, offsetof(struct elf_thread_core_info,
++			t = core_note_alloc(offsetof(struct elf_thread_core_info,
+ 							 notes[info->thread_notes]));
+ 			if (unlikely(!t))
+ 				return 0;
+@@ -2013,13 +2010,13 @@ static int fill_note_info(struct elfhdr *elf, int phdrs,
+ 	 * Now fill in each thread's information.
+ 	 */
+ 	for (t = info->thread; t != NULL; t = t->next)
+-		if (!fill_thread_core_info(t, view, cprm->siginfo->si_signo, info, cprm))
++		if (!fill_thread_core_info(t, view, cprm->siginfo->si_signo, info))
+ 			return 0;
+ 
+ 	/*
+ 	 * Fill in the two process-wide notes.
+ 	 */
+-	fill_psinfo(psinfo, dump_task->group_leader, dump_task->mm, cprm);
++	fill_psinfo(psinfo, dump_task->group_leader, dump_task->mm);
+ 	info->size += notesize(&info->psinfo);
+ 
+ 	fill_siginfo_note(&info->signote, &info->csigdata, cprm->siginfo);
+@@ -2031,8 +2028,8 @@ static int fill_note_info(struct elfhdr *elf, int phdrs,
+ 	if (fill_files_note(&info->files, cprm) == 0)
+ 		info->size += notesize(&info->files);
+ #ifdef CONFIG_ANTINOMIE
+-	else if (live_core(cprm))
+-		cprm->antinomie_live->incomplete = true;
++	else if (live_core())
++		ant_coredump_live_incomplete(ant_coredump_live());
+ #endif
+ 
+ 	return 1;
+@@ -2076,11 +2073,11 @@ static int write_note_info(struct elf_note_info *info,
+ 	return 1;
+ }
+ 
+-static void free_note_info(struct elf_note_info *info, struct coredump_params *cprm)
++static void free_note_info(struct elf_note_info *info)
+ {
+ 	struct elf_thread_core_info *threads = info->thread;
+ 
+-	if (live_core(cprm))
++	if (live_core())
+ 		return;
+ 	while (threads) {
+ 		unsigned int i;
+@@ -2163,7 +2160,7 @@ static int elf_core_dump(struct coredump_params *cprm)
+ 		/* For cell spufs and x86 xstate */
+ 		sz += elf_coredump_extra_notes_size();
+ 
+-		phdr4note = core_note_alloc(cprm, sizeof(*phdr4note));
++		phdr4note = core_note_alloc(sizeof(*phdr4note));
+ 		if (!phdr4note)
+ 			goto end_coredump;
+ 
+@@ -2178,7 +2175,7 @@ static int elf_core_dump(struct coredump_params *cprm)
+ 	e_shoff = offset;
+ 
+ 	if (e_phnum == PN_XNUM) {
+-		shdr4extnum = core_note_alloc(cprm, sizeof(*shdr4extnum));
++		shdr4extnum = core_note_alloc(sizeof(*shdr4extnum));
+ 		if (!shdr4extnum)
+ 			goto end_coredump;
+ 		fill_extnum_info(&elf, shdr4extnum, e_shoff, segs);
+@@ -2247,8 +2244,8 @@ static int elf_core_dump(struct coredump_params *cprm)
+ 	}
+ 
+ end_coredump:
+-	free_note_info(&info, cprm);
+-	if (!live_core(cprm)) {
++	free_note_info(&info);
++	if (!live_core()) {
+ 		kfree(shdr4extnum);
+ 		kfree(phdr4note);
+ 	}
+diff --git a/fs/coredump.c b/fs/coredump.c
+index 00bfd7a..d20ad9f 100644
+--- a/fs/coredump.c
++++ b/fs/coredump.c
+@@ -576,26 +576,9 @@ static int umh_coredump_setup(struct subprocess_info *info, struct cred *new)
+ }
+ 
+ #ifdef CONFIG_ANTINOMIE
+-/* Nonfatal acquisition owns its own thread list, page refs and metadata.
+- * This path never calls coredump_wait/finish or installs signal->core_state.
++/* Nonfatal acquisition (kernel/antinomie/manual_core.c): this path never calls
++ * coredump_wait/finish or installs signal->core_state.
+  */
+-void *ant_coredump_live_alloc(struct coredump_params *cprm, size_t size)
+-{
+-	struct ant_coredump_live *live = cprm->antinomie_live;
+-	size_t offset = ALIGN(live->arena_used, __alignof__(unsigned long));
+-	void *data;
+-
+-	if (live->aborted(live->context) || offset > live->arena_size ||
+-	    size > live->arena_size - offset) {
+-		live->incomplete = true;
+-		return NULL;
+-	}
+-	data = live->arena + offset;
+-	live->arena_used = offset + size;
+-	memset(data, 0, size);
+-	return data;
+-}
+-
+ int ant_coredump_live_to_file(struct file *file, unsigned long limit,
+ 			     struct core_vma_metadata *vmas, unsigned int vma_count,
+ 			     struct ant_coredump_live *live)
+@@ -605,8 +588,7 @@ int ant_coredump_live_to_file(struct file *file, unsigned long limit,
+ 		.siginfo = &info, .file = file, .limit = limit,
+ 		.mm_flags = READ_ONCE(current->mm->flags),
+ 		.cpu = raw_smp_processor_id(), .vma_meta = vmas,
+-		.vma_count = vma_count, .antinomie_live = live,
+-		.antinomie_deadline = live->deadline,
++		.vma_count = vma_count,
+ 	};
+ 	unsigned int i;
+ 	int error;
+@@ -616,15 +598,17 @@ int ant_coredump_live_to_file(struct file *file, unsigned long limit,
+ 		return -EOPNOTSUPP;
+ 	for (i = 0; i < vma_count; i++)
+ 		cprm.vma_data_size += vmas[i].dump_size;
++	ant_coredump_attach(live, ant_coredump_live_deadline(live));
+ 	error = current->mm->binfmt->core_dump(&cprm) ? 0 : -EIO;
+ 	if (cprm.to_skip) {
+ 		cprm.to_skip--;
+ 		if (!dump_emit(&cprm, "", 1) && !error)
+ 			error = -EIO;
+ 	}
+-	if (live->aborted(live->context) || dump_interrupted())
++	ant_coredump_attach(NULL, 0);
++	if (ant_coredump_live_aborted(live) || dump_interrupted())
+ 		return -EINTR;
+-	return error ?: (live->incomplete ? -ENODATA : 0);
++	return error ?: (ant_coredump_live_complete(live) ? 0 : -ENODATA);
+ }
+ 
+ /* Opt-in host acquisition shares the native ELF writer/rendezvous, but never
+@@ -643,7 +627,6 @@ int ant_coredump_to_file(struct file *file, unsigned long limit, int wait_status
+ 		.siginfo = siginfo ? siginfo : &normal_info,
+ 		.file = file,
+ 		.limit = limit,
+-		.antinomie_deadline = deadline,
+ 		.cpu = raw_smp_processor_id(),
+ 	};
+ 	int error;
+@@ -673,12 +656,14 @@ int ant_coredump_to_file(struct file *file, unsigned long limit, int wait_status
+ 	/* Linux returns 'has_dumped' even after a short write. The sink and
+ 	 * ELF program-header extents provide the actual completion decision.
+ 	 */
++	ant_coredump_attach(NULL, deadline);
+ 	error = mm->binfmt->core_dump(&cprm) ? 0 : -EIO;
+ 	if (cprm.to_skip) {
+ 		cprm.to_skip--;
+ 		if (!dump_emit(&cprm, "", 1) && !error)
+ 			error = -EIO;
+ 	}
++	ant_coredump_attach(NULL, 0);
+ 	free_vma_snapshot(&cprm);
+ 	if (dump_interrupted())
+ 		error = -EINTR;
+@@ -1097,27 +1082,11 @@ int dump_user_range(struct coredump_params *cprm, unsigned long start,
+ 	struct page *dump_page;
+ 
+ #ifdef CONFIG_ANTINOMIE
+-	if (cprm->antinomie_live) {
+-		struct ant_coredump_live *live = cprm->antinomie_live;
+-		unsigned long size;
++	struct ant_coredump_live *live = ant_coredump_live();
++	unsigned long deadline = ant_coredump_deadline();
+ 
+-		if (live->page_cursor > live->page_count || len % PAGE_SIZE ||
+-		    len / PAGE_SIZE > live->page_count - live->page_cursor)
+-			return 0;
+-		for (size = 0; size < len; size += PAGE_SIZE) {
+-			void *data;
+-			bool failed;
+-
+-			if (live->aborted(live->context))
+-				return 0;
+-			data = kmap_local_page(live->pages[live->page_cursor++]);
+-			failed = copy_mc_to_kernel(live->scratch, data, PAGE_SIZE);
+-			kunmap_local(data);
+-			if (failed || !dump_emit(cprm, live->scratch, PAGE_SIZE))
+-				return 0;
+-		}
+-		return 1;
+-	}
++	if (live)
++		return ant_coredump_live_pages(cprm, live, len);
+ #endif
+ 	dump_page = dump_page_alloc();
+ 	if (!dump_page)
+@@ -1127,8 +1096,7 @@ int dump_user_range(struct coredump_params *cprm, unsigned long start,
+ 		struct page *page;
+ 
+ #ifdef CONFIG_ANTINOMIE
+-		if (cprm->antinomie_deadline &&
+-		    time_after_eq(jiffies, cprm->antinomie_deadline)) {
++		if (deadline && time_after_eq(jiffies, deadline)) {
+ 			dump_page_free(dump_page);
+ 			return 0;
+ 		}
+diff --git a/include/linux/antinomie_monitor.h b/include/linux/antinomie_monitor.h
+index c9752cd..06bb59a 100644
+--- a/include/linux/antinomie_monitor.h
++++ b/include/linux/antinomie_monitor.h
+@@ -8,7 +8,6 @@ struct task_struct;
+ struct pt_regs;
+ struct ant_task;
+ struct ant_run;
+-struct ant_async;
+ struct file;
+ struct cred;
+ struct path;
+@@ -117,6 +116,7 @@ static inline void ant_monitor_signal_delivered(void)
+ 	if (static_branch_unlikely(&ant_dbg_shadow_key))
+ 		ant_dbg_signal_delivered();
+ }
++void ant_task_state_reserve(int *task_blob_size);
+ void ant_monitor_enter(struct pt_regs *regs, long nr);
+ void ant_monitor_exit(struct pt_regs *regs);
+ void ant_monitor_fork(struct task_struct *child);
+@@ -127,7 +127,7 @@ void ant_monitor_exec(struct file *file, bool interpreter);
+ void ant_monitor_exec_image(struct file *file, const char *interp);
+ void ant_monitor_exec_names(const struct linux_binprm *bprm);
+ void ant_monitor_file_id(u8 kind, struct inode *inode);
+-void ant_monitor_async_file_id(struct ant_async **slot, u8 kind, struct inode *inode,
++void ant_monitor_async_file_id(const void *slot, u8 kind, struct inode *inode,
+ 			       int nlink_delta);
+ void ant_monitor_creds(const struct cred *old, const struct cred *new);
+ void ant_monitor_loginuid(void);
+@@ -146,36 +146,49 @@ int ant_monitor_launch(const char *path, char **argv, char **envp);
+ void ant_monitor_stats(void *out);
+ int ant_monitor_run_status(u64 root_cookie, void *out);
+ void ant_monitor_run_stopped(u64 root_cookie);
+-struct ant_async *ant_monitor_async_begin(u8 system, u32 opcode, u64 user_data,
+-					  u32 flags, const void *descriptor, size_t descriptor_len);
+-struct ant_async *ant_monitor_async_begin_attributed(struct task_struct *owner,
+-						     u64 root_cookie, u64 task_cookie,
+-						     u8 system, u32 opcode, u64 user_data,
+-						     u32 flags, const void *descriptor,
+-						     size_t descriptor_len);
+-void ant_monitor_async_accepted(struct ant_async **slot, int result);
+-void ant_monitor_async_complete(struct ant_async **slot, s64 result,
++/* Asynchronous requests are kept by the subsystem object they belong to (an
++ * io_kiocb, an aio_kiocb: the slot), never in it. ant_monitor_async_begin()
++ * puts a traced request in the slot; its final completion or abandonment
++ * takes it out.
++ */
++void ant_monitor_async_begin(const void *slot, u8 system, u32 opcode, u64 user_data,
++			     u32 flags, const void *descriptor, size_t descriptor_len);
++/* An io_uring ring and who created it (contract 14.3), kept by the ring. */
++void ant_monitor_ring_create(const void *ring);
++void ant_monitor_ring_free(const void *ring);
++bool ant_monitor_ring_foreign(const void *ring);
++void ant_monitor_async_begin_ring(const void *slot, const void *ring, u8 system, u32 opcode,
++				  u64 user_data, u32 flags, const void *descriptor,
++				  size_t descriptor_len);
++bool ant_monitor_async_tracked(const void *slot);
++void ant_monitor_async_target(const void *slot);
++void ant_monitor_async_msghdr_save(const void *slot, u32 name_size, u64 control_size,
++				   u64 control_address);
++bool ant_monitor_async_msghdr(const void *slot, u32 *name_size, u64 *control_size,
++			      u64 *control_address);
++void ant_monitor_async_accepted(const void *slot, int result);
++void ant_monitor_async_complete(const void *slot, s64 result,
+ 				u32 flags, bool final);
+-void ant_monitor_async_abandon(struct ant_async **slot);
+-void ant_monitor_async_link_completion(struct ant_async **source,
+-				       struct ant_async **target, s64 result, u32 flags);
++void ant_monitor_async_abandon(const void *slot);
++void ant_monitor_async_link_completion(const void *source,
++				       const void *target, s64 result, u32 flags);
+ void ant_monitor_async_unavailable(void);
+-void ant_monitor_async_iter(struct ant_async **slot,
++void ant_monitor_async_iter(const void *slot,
+ 			    const struct iov_iter *iter, size_t size,
+ 			    u64 result_offset, bool output);
+-void ant_monitor_async_memory(struct ant_async **slot, const char *key,
++void ant_monitor_async_memory(const void *slot, const char *key,
+ 			      const char *layout, u16 encoding, u64 address,
+ 			      const void *snapshot, u64 size, bool output, bool complete);
+-void ant_monitor_async_scalar(struct ant_async **slot);
+-void ant_monitor_async_address(struct ant_async **slot, const char *key,
++void ant_monitor_async_scalar(const void *slot);
++void ant_monitor_async_address(const void *slot, const char *key,
+ 			       const char *layout, u64 address, u64 size);
+-void ant_monitor_async_gap(struct ant_async **slot, const char *key, u64 address);
+-void ant_monitor_async_extent(struct ant_async **slot, const char *key, const char *layout,
++void ant_monitor_async_gap(const void *slot, const char *key, u64 address);
++void ant_monitor_async_extent(const void *slot, const char *key, const char *layout,
+ 			      u64 address, u64 size);
+-u64 ant_monitor_aio_defer(struct ant_async **slot, const void *ioctx,
++u64 ant_monitor_aio_defer(const void *slot, const void *ioctx,
+ 			  const struct iov_iter *iter);
+-void ant_monitor_aio_undefer(struct ant_async **slot, u64 request_id);
+-u64 ant_monitor_async_id(struct ant_async **slot);
++void ant_monitor_aio_undefer(const void *slot, u64 request_id);
++u64 ant_monitor_async_id(const void *slot);
+ void ant_monitor_aio_completed(u64 request_id, const void *ioctx, unsigned int ring_slot,
+ 			       s64 res);
+ void ant_monitor_aio_consumed(const void *ioctx, unsigned int first, unsigned int count);
+@@ -205,6 +218,7 @@ static inline void ant_monitor_signal_delivered(void) {}
+ static inline bool ant_monitor_syscall_step(struct pt_regs *regs) { return false; }
+ static inline void ant_monitor_debug_fork(struct task_struct *child, u64 clone_flags) {}
+ static inline void ant_monitor_debug_exec(void) {}
++static inline void ant_task_state_reserve(int *task_blob_size) {}
+ static inline void ant_monitor_enter(struct pt_regs *regs, long nr) {}
+ static inline void ant_monitor_exit(struct pt_regs *regs) {}
+ static inline void ant_monitor_fork(struct task_struct *child) {}
+@@ -213,7 +227,7 @@ static inline void ant_monitor_exec(struct file *file, bool interpreter) {}
+ static inline void ant_monitor_exec_image(struct file *file, const char *interp) {}
+ static inline void ant_monitor_exec_names(const struct linux_binprm *bprm) {}
+ static inline void ant_monitor_file_id(u8 kind, struct inode *inode) {}
+-static inline void ant_monitor_async_file_id(struct ant_async **slot, u8 kind,
++static inline void ant_monitor_async_file_id(const void *slot, u8 kind,
+ 					     struct inode *inode, int nlink_delta) {}
+ static inline void ant_monitor_creds(const struct cred *old, const struct cred *new) {}
+ static inline void ant_monitor_loginuid(void) {}
+@@ -242,55 +256,63 @@ static inline bool ant_monitor_core_exit(int wait_status,
+ static inline void ant_monitor_core_unavailable(int wait_status) {}
+ static inline void ant_monitor_task_exit(bool group_dead) {}
+ static inline void ant_monitor_release(struct task_struct *task) {}
+-static inline struct ant_async *ant_monitor_async_begin(u8 system, u32 opcode,
+-							u64 user_data, u32 flags,
+-							const void *descriptor,
+-							size_t descriptor_len)
++static inline void ant_monitor_async_begin(const void *slot, u8 system, u32 opcode,
++					   u64 user_data, u32 flags, const void *descriptor,
++					   size_t descriptor_len) {}
++static inline void ant_monitor_ring_create(const void *ring) {}
++static inline void ant_monitor_ring_free(const void *ring) {}
++static inline bool ant_monitor_ring_foreign(const void *ring)
+ {
+-	return NULL;
++	return false;
+ }
+ 
+-static inline struct ant_async *ant_monitor_async_begin_attributed(struct task_struct *owner,
+-								   u64 root_cookie,
+-								   u64 task_cookie, u8 system,
+-								   u32 opcode, u64 user_data,
+-								   u32 flags,
+-								   const void *descriptor,
+-								   size_t descriptor_len)
++static inline void ant_monitor_async_begin_ring(const void *slot, const void *ring, u8 system,
++						u32 opcode, u64 user_data, u32 flags,
++						const void *descriptor, size_t descriptor_len) {}
++static inline bool ant_monitor_async_tracked(const void *slot)
+ {
+-	return NULL;
++	return false;
++}
++
++static inline void ant_monitor_async_target(const void *slot) {}
++static inline void ant_monitor_async_msghdr_save(const void *slot, u32 name_size,
++						 u64 control_size, u64 control_address) {}
++static inline bool ant_monitor_async_msghdr(const void *slot, u32 *name_size,
++					    u64 *control_size, u64 *control_address)
++{
++	return false;
+ }
+ 
+-static inline void ant_monitor_async_accepted(struct ant_async **slot, int result) {}
+-static inline void ant_monitor_async_complete(struct ant_async **slot, s64 result,
++static inline void ant_monitor_async_accepted(const void *slot, int result) {}
++static inline void ant_monitor_async_complete(const void *slot, s64 result,
+ 					      u32 flags, bool final) {}
+-static inline void ant_monitor_async_abandon(struct ant_async **slot) {}
+-static inline void ant_monitor_async_link_completion(struct ant_async **source,
+-						     struct ant_async **target,
++static inline void ant_monitor_async_abandon(const void *slot) {}
++static inline void ant_monitor_async_link_completion(const void *source,
++						     const void *target,
+ 						     s64 result, u32 flags) {}
+ static inline void ant_monitor_async_unavailable(void) {}
+-static inline void ant_monitor_async_iter(struct ant_async **slot,
++static inline void ant_monitor_async_iter(const void *slot,
+ 					  const struct iov_iter *iter, size_t size,
+ 					  u64 result_offset, bool output) {}
+-static inline void ant_monitor_async_memory(struct ant_async **slot, const char *key,
++static inline void ant_monitor_async_memory(const void *slot, const char *key,
+ 					    const char *layout, u16 encoding, u64 address,
+ 					    const void *snapshot, u64 size,
+ 					    bool output, bool complete) {}
+-static inline void ant_monitor_async_scalar(struct ant_async **slot) {}
+-static inline void ant_monitor_async_address(struct ant_async **slot, const char *key,
++static inline void ant_monitor_async_scalar(const void *slot) {}
++static inline void ant_monitor_async_address(const void *slot, const char *key,
+ 					     const char *layout, u64 address, u64 size) {}
+-static inline void ant_monitor_async_gap(struct ant_async **slot, const char *key,
++static inline void ant_monitor_async_gap(const void *slot, const char *key,
+ 					 u64 address) {}
+-static inline void ant_monitor_async_extent(struct ant_async **slot, const char *key,
++static inline void ant_monitor_async_extent(const void *slot, const char *key,
+ 					    const char *layout, u64 address, u64 size) {}
+-static inline u64 ant_monitor_aio_defer(struct ant_async **slot, const void *ioctx,
++static inline u64 ant_monitor_aio_defer(const void *slot, const void *ioctx,
+ 					const struct iov_iter *iter)
+ {
+ 	return 0;
+ }
+ 
+-static inline void ant_monitor_aio_undefer(struct ant_async **slot, u64 request_id) {}
+-static inline u64 ant_monitor_async_id(struct ant_async **slot)
++static inline void ant_monitor_aio_undefer(const void *slot, u64 request_id) {}
++static inline u64 ant_monitor_async_id(const void *slot)
+ {
+ 	return 0;
+ }
+diff --git a/include/linux/coredump.h b/include/linux/coredump.h
+index 593d637..6b36311 100644
+--- a/include/linux/coredump.h
++++ b/include/linux/coredump.h
+@@ -16,26 +16,6 @@ struct core_vma_metadata {
+ 	struct file   *file;
+ };
+ 
+-#ifdef CONFIG_ANTINOMIE
+-/* Owned by the manual acquisition session; no signal->core_state is installed.
+- * Metadata and regsets share a preallocated bounded arena while tasks park.
+- */
+-struct ant_coredump_live {
+-	struct task_struct **tasks;
+-	unsigned int task_count;
+-	struct core_vma_metadata *file_vmas;
+-	unsigned int file_vma_count;
+-	struct page **pages;
+-	unsigned int page_count, page_cursor;
+-	void *arena, *scratch;
+-	size_t arena_size, arena_used;
+-	unsigned long deadline;
+-	bool incomplete;
+-	bool (*aborted)(void *context);
+-	void *context;
+-};
+-#endif
+-
+ struct coredump_params {
+ 	const kernel_siginfo_t *siginfo;
+ 	struct file *file;
+@@ -49,10 +29,6 @@ struct coredump_params {
+ 	size_t vma_data_size;
+ 	struct core_vma_metadata *vma_meta;
+ 	struct pid *pid;
+-#ifdef CONFIG_ANTINOMIE
+-	unsigned long antinomie_deadline;
+-	struct ant_coredump_live *antinomie_live;
+-#endif
+ };
+ 
+ extern unsigned int core_file_note_size_limit;
+@@ -69,7 +45,28 @@ int dump_user_range(struct coredump_params *cprm, unsigned long start,
+ 		    unsigned long len);
+ extern void do_coredump(const kernel_siginfo_t *siginfo);
+ #ifdef CONFIG_ANTINOMIE
+-void *ant_coredump_live_alloc(struct coredump_params *cprm, size_t size);
++/* A process core the recorder writes (its state is the recorder's own, opaque
++ * here: no recorder type in a stock structure or translation unit). A live
++ * acquisition owns its thread list, page references and metadata, and no
++ * signal->core_state is installed for it.
++ */
++struct ant_coredump_live;
++/* The core this task is writing: live (NULL: an exit core) and deadline
++ * (jiffies, 0: none); ant_coredump_attach(NULL, 0) ends it.
++ */
++void ant_coredump_attach(struct ant_coredump_live *live, unsigned long deadline);
++struct ant_coredump_live *ant_coredump_live(void);
++unsigned long ant_coredump_deadline(void);
++void *ant_coredump_live_alloc(struct ant_coredump_live *live, size_t size);
++void ant_coredump_live_incomplete(struct ant_coredump_live *live);
++bool ant_coredump_live_complete(struct ant_coredump_live *live);
++bool ant_coredump_live_aborted(struct ant_coredump_live *live);
++unsigned long ant_coredump_live_deadline(struct ant_coredump_live *live);
++struct core_vma_metadata *ant_coredump_live_vmas(struct ant_coredump_live *live,
++						 unsigned int *count);
++struct task_struct *ant_coredump_live_task(struct ant_coredump_live *live, unsigned int index);
++int ant_coredump_live_pages(struct coredump_params *cprm, struct ant_coredump_live *live,
++			    unsigned long len);
+ int ant_coredump_live_to_file(struct file *file, unsigned long limit,
+ 			     struct core_vma_metadata *vmas, unsigned int vma_count,
+ 			     struct ant_coredump_live *live);
+diff --git a/include/linux/io_uring_types.h b/include/linux/io_uring_types.h
+index 21d484d..6d47d0d 100644
+--- a/include/linux/io_uring_types.h
++++ b/include/linux/io_uring_types.h
+@@ -237,13 +237,6 @@ struct io_ring_ctx {
+ 		unsigned int		iowq_limits_set : 1;
+ 
+ 		struct task_struct	*submitter_task;
+-#ifdef CONFIG_ANTINOMIE
+-		/* Ring creator: SQPOLL and foreign submissions are attributed here. */
+-		struct pid		*ant_tgid;
+-		struct task_struct	*ant_creator;
+-		u64			ant_root_cookie;
+-		u64			ant_task_cookie;
+-#endif
+ 		struct io_rings		*rings;
+ 		struct percpu_ref	refs;
+ 
+@@ -670,10 +663,6 @@ struct io_kiocb {
+ 		u64			extra1;
+ 		u64			extra2;
+ 	} big_cqe;
+-#ifdef CONFIG_ANTINOMIE
+-	/* Never first: cmd_to_io_kiocb() relies on ->cmd at offset 0. */
+-	struct ant_async		*ant_async;
+-#endif
+ };
+ 
+ struct io_overflow_cqe {
+diff --git a/include/linux/sched.h b/include/linux/sched.h
+index b220f8f..f9ffe42 100644
+--- a/include/linux/sched.h
++++ b/include/linux/sched.h
+@@ -800,22 +800,6 @@ struct task_struct {
+ 	 */
+ 	randomized_struct_fields_start
+ 
+-#ifdef CONFIG_ANTINOMIE
+-	u64 ant_cookie;
+-	u64 ant_root_cookie;
+-	u64 ant_observer_cookie;
+-	struct ant_task *ant_monitor;
+-	struct ant_run *ant_run;
+-	/* The io_uring request whose operation this worker is running: the
+-	 * file identity the operation publishes is that request's operand.
+-	 */
+-	struct ant_async **ant_async_target;
+-	atomic64_t ant_event_seq;
+-	atomic64_t ant_packet_seq;
+-	bool ant_root_process;
+-	bool ant_counted;
+-#endif
+-
+ 	void				*stack;
+ 	refcount_t			usage;
+ 	/* Per task flags (PF_*), defined further below: */
+diff --git a/io_uring/fs.c b/io_uring/fs.c
+index 0d3fdbf..a50dc6e 100644
+--- a/io_uring/fs.c
++++ b/io_uring/fs.c
+@@ -55,9 +55,7 @@ struct io_link {
+  */
+ static inline void ant_uring_target(struct io_kiocb *req, bool on)
+ {
+-#ifdef CONFIG_ANTINOMIE
+-	current->ant_async_target = on ? &req->ant_async : NULL;
+-#endif
++	ant_monitor_async_target(on ? req : NULL);
+ }
+ 
+ int io_renameat_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
+diff --git a/io_uring/io_uring.c b/io_uring/io_uring.c
+index 8ff6d76..b78cb82 100644
+--- a/io_uring/io_uring.c
++++ b/io_uring/io_uring.c
+@@ -935,9 +935,6 @@ void io_req_defer_failed(struct io_kiocb *req, s32 res)
+  */
+ static void io_preinit_req(struct io_kiocb *req, struct io_ring_ctx *ctx)
+ {
+-#ifdef CONFIG_ANTINOMIE
+-	req->ant_async = NULL;
+-#endif
+ 	req->ctx = ctx;
+ 	req->link = NULL;
+ 	req->async_data = NULL;
+@@ -2250,22 +2247,22 @@ static bool ant_uring_shared(struct io_ring_ctx *ctx, const struct io_uring_sqe
+  * process maps, leave the entry's writer unknown. Otherwise the entry was
+  * written by a thread of the submitting process, which one is not known.
+  */
+-static struct ant_async *ant_uring_begin(struct io_ring_ctx *ctx,
+-					 const struct io_uring_sqe *sqe)
++static void ant_uring_begin(struct io_kiocb *req, struct io_ring_ctx *ctx,
++			    const struct io_uring_sqe *sqe)
+ {
+ 	u8 opcode = READ_ONCE(sqe->opcode);
+ 	u64 user_data = READ_ONCE(sqe->user_data);
+ 	u32 flags = ant_uring_payload_flags(opcode);
+ 	size_t len = ctx->flags & IORING_SETUP_SQE128 ? 128 : sizeof(*sqe);
+ 
+-	if ((current->flags & PF_IO_WORKER) ||
+-	    task_tgid(current) != ctx->ant_tgid)
+-		return ant_monitor_async_begin_attributed(ctx->ant_creator, ctx->ant_root_cookie,
+-							  ctx->ant_task_cookie, ANT_ASYNC_IO_URING,
+-							  opcode, user_data, flags, sqe, len);
++	if ((current->flags & PF_IO_WORKER) || ant_monitor_ring_foreign(ctx)) {
++		ant_monitor_async_begin_ring(req, ctx, ANT_ASYNC_IO_URING, opcode, user_data,
++					     flags, sqe, len);
++		return;
++	}
+ 	flags |= ant_uring_shared(ctx, sqe) ? ANT_ASYNC_PRODUCER_UNKNOWN :
+ 		ANT_ASYNC_PRODUCER_PROCESS;
+-	return ant_monitor_async_begin(ANT_ASYNC_IO_URING, opcode, user_data, flags, sqe, len);
++	ant_monitor_async_begin(req, ANT_ASYNC_IO_URING, opcode, user_data, flags, sqe, len);
+ }
+ #endif
+ 
+@@ -2280,12 +2277,10 @@ static inline int io_submit_sqe(struct io_ring_ctx *ctx, struct io_kiocb *req,
+ 	/* The entering task is the submission observer. An mmap SQE does not
+ 	 * establish which process wrote it.
+ 	 */
+-	req->ant_async = ant_uring_begin(ctx, sqe);
++	ant_uring_begin(req, ctx, sqe);
+ #endif
+ 	ret = io_init_req(ctx, req, sqe);
+-#ifdef CONFIG_ANTINOMIE
+-	ant_monitor_async_accepted(&req->ant_async, ret);
+-#endif
++	ant_monitor_async_accepted(req, ret);
+ 	if (unlikely(ret))
+ 		return io_submit_fail_init(sqe, req, ret);
+ 
+@@ -2871,11 +2866,7 @@ static __cold void io_ring_ctx_free(struct io_ring_ctx *ctx)
+ 		put_cred(ctx->sq_creds);
+ 	if (ctx->submitter_task)
+ 		put_task_struct(ctx->submitter_task);
+-#ifdef CONFIG_ANTINOMIE
+-	put_pid(ctx->ant_tgid);
+-	if (ctx->ant_creator)
+-		put_task_struct(ctx->ant_creator);
+-#endif
++	ant_monitor_ring_free(ctx);
+ 
+ 	/* there are no registered resources left, nobody uses it */
+ 	if (ctx->rsrc_node)
+@@ -3684,12 +3675,8 @@ static __cold int io_uring_create(unsigned entries, struct io_uring_params *p,
+ 	ctx = io_ring_ctx_alloc(p);
+ 	if (!ctx)
+ 		return -ENOMEM;
+-#ifdef CONFIG_ANTINOMIE
+-	ctx->ant_tgid = get_pid(task_tgid(current));
+-	ctx->ant_creator = get_task_struct(current);
+-	ctx->ant_root_cookie = current->ant_root_cookie;
+-	ctx->ant_task_cookie = current->ant_cookie;
+-#endif
++	/* The ring's creator: SQPOLL and foreign submissions are attributed to it. */
++	ant_monitor_ring_create(ctx);
+ 
+ 	ctx->clockid = CLOCK_MONOTONIC;
+ 	ctx->clock_offset = 0;
+@@ -3982,8 +3969,6 @@ static int __init io_uring_init(void)
+ 	BUILD_BUG_ON((SQE_VALID_FLAGS | SQE_COMMON_FLAGS) != SQE_VALID_FLAGS);
+ 
+ 	BUILD_BUG_ON(__REQ_F_LAST_BIT > 8 * sizeof_field(struct io_kiocb, flags));
+-	/* cmd_to_io_kiocb() casts the command back to its request. */
+-	BUILD_BUG_ON(offsetof(struct io_kiocb, cmd) != 0);
+ 
+ 	BUILD_BUG_ON(sizeof(atomic_t) != sizeof(u32));
+ 
+diff --git a/io_uring/io_uring.h b/io_uring/io_uring.h
+index 7fa52e5..0f147e7 100644
+--- a/io_uring/io_uring.h
++++ b/io_uring/io_uring.h
+@@ -40,14 +40,14 @@ static inline void ant_uring_complete(struct io_kiocb *req, s32 result,
+ 				      u32 flags, bool final)
+ {
+ #ifdef CONFIG_ANTINOMIE
+-	ant_monitor_async_complete(&req->ant_async, result, flags, final);
++	ant_monitor_async_complete(req, result, flags, final);
+ #endif
+ }
+ 
+ static inline void ant_uring_abandon(struct io_kiocb *req)
+ {
+ #ifdef CONFIG_ANTINOMIE
+-	ant_monitor_async_abandon(&req->ant_async);
++	ant_monitor_async_abandon(req);
+ #endif
+ }
+ 
+@@ -55,7 +55,7 @@ static inline void ant_uring_iter(struct io_kiocb *req, const struct iov_iter *i
+ 				  size_t size, u64 offset, bool output)
+ {
+ #ifdef CONFIG_ANTINOMIE
+-	ant_monitor_async_iter(&req->ant_async, iter, size, offset, output);
++	ant_monitor_async_iter(req, iter, size, offset, output);
+ #endif
+ }
+ 
+@@ -63,7 +63,7 @@ static inline void ant_uring_link_completion(struct io_kiocb *req,
+ 					     struct io_kiocb *notif, s32 result)
+ {
+ #ifdef CONFIG_ANTINOMIE
+-	ant_monitor_async_link_completion(&req->ant_async, &notif->ant_async,
++	ant_monitor_async_link_completion(req, notif,
+ 					  result, IORING_CQE_F_MORE);
+ #endif
+ }
+@@ -73,7 +73,7 @@ static inline void ant_uring_memory(struct io_kiocb *req, const char *key,
+ 				    const void *snapshot, u64 size, bool output, bool complete)
+ {
+ #ifdef CONFIG_ANTINOMIE
+-	ant_monitor_async_memory(&req->ant_async, key, layout, encoding, address,
++	ant_monitor_async_memory(req, key, layout, encoding, address,
+ 				 snapshot, size, output, complete);
+ #endif
+ }
+@@ -82,14 +82,14 @@ static inline void ant_uring_file_id(struct io_kiocb *req, u8 kind, struct inode
+ 				     int nlink_delta)
+ {
+ #ifdef CONFIG_ANTINOMIE
+-	ant_monitor_async_file_id(&req->ant_async, kind, inode, nlink_delta);
++	ant_monitor_async_file_id(req, kind, inode, nlink_delta);
+ #endif
+ }
+ 
+ static inline void ant_uring_scalar(struct io_kiocb *req)
+ {
+ #ifdef CONFIG_ANTINOMIE
+-	ant_monitor_async_scalar(&req->ant_async);
++	ant_monitor_async_scalar(req);
+ #endif
+ }
+ 
+@@ -97,7 +97,7 @@ static inline void ant_uring_address(struct io_kiocb *req, const char *key,
+ 				     const char *layout, u64 address, u64 size)
+ {
+ #ifdef CONFIG_ANTINOMIE
+-	ant_monitor_async_address(&req->ant_async, key, layout, address, size);
++	ant_monitor_async_address(req, key, layout, address, size);
+ #endif
+ }
+ 
+@@ -105,14 +105,14 @@ static inline void ant_uring_extent(struct io_kiocb *req, const char *key,
+ 				    const char *layout, u64 address, u64 size)
+ {
+ #ifdef CONFIG_ANTINOMIE
+-	ant_monitor_async_extent(&req->ant_async, key, layout, address, size);
++	ant_monitor_async_extent(req, key, layout, address, size);
+ #endif
+ }
+ 
+ static inline void ant_uring_gap(struct io_kiocb *req, const char *key, u64 address)
+ {
+ #ifdef CONFIG_ANTINOMIE
+-	ant_monitor_async_gap(&req->ant_async, key, address);
++	ant_monitor_async_gap(req, key, address);
+ #endif
+ }
+ 
+diff --git a/io_uring/net.c b/io_uring/net.c
+index 92b1710..857b0c2 100644
+--- a/io_uring/net.c
++++ b/io_uring/net.c
+@@ -782,9 +782,8 @@ static int io_recvmsg_copy_hdr(struct io_kiocb *req,
+ 	if (unlikely(ret))
+ 		return ret;
+ #ifdef CONFIG_ANTINOMIE
+-	iomsg->ant_name_size = max(msg.msg_namelen, 0);
+-	iomsg->ant_control_size = msg.msg_controllen;
+-	iomsg->ant_control_address = (unsigned long)msg.msg_control;
++	ant_monitor_async_msghdr_save(req, max(msg.msg_namelen, 0), msg.msg_controllen,
++				      (unsigned long)msg.msg_control);
+ 	ant_uring_memory(req, "async.operand.msghdr", ANT_LAYOUT("user_msghdr"), 3,
+ 			 (unsigned long)io_kiocb_to_cmd(req, struct io_sr_msg)->umsg,
+ 			 &msg, sizeof(msg), false, false);
+@@ -1121,10 +1120,16 @@ int io_recvmsg(struct io_kiocb *req, unsigned int issue_flags)
+ 			ant_uring_iter(req, &observed, min_t(size_t, ret, observed.count),
+ 				       sr->done_io, true);
+ #ifdef CONFIG_ANTINOMIE
+-		if (ret >= 0 && !req->ctx->compat) {
++		{
++		u32 saved_name_size;
++		u64 saved_control_size, saved_control_address;
++
++		if (ret >= 0 && !req->ctx->compat &&
++		    ant_monitor_async_msghdr(req, &saved_name_size, &saved_control_size,
++					     &saved_control_address)) {
+ 			u64 control_size = (unsigned long)kmsg->msg.msg_control_user -
+-				kmsg->ant_control_address;
+-			u64 name_size = min_t(u32, kmsg->ant_name_size,
++				saved_control_address;
++			u64 name_size = min_t(u32, saved_name_size,
+ 					      max(kmsg->msg.msg_namelen, 0));
+ 
+ 			if (kmsg->uaddr && name_size)
+@@ -1135,14 +1140,15 @@ int io_recvmsg(struct io_kiocb *req, unsigned int issue_flags)
+ 			if (control_size)
+ 				ant_uring_memory(req, "async.operand.control",
+ 						 ANT_LAYOUT("cmsghdr[]"), 3,
+-						 kmsg->ant_control_address, NULL,
+-						 min_t(u64, control_size, kmsg->ant_control_size),
++						 saved_control_address, NULL,
++						 min_t(u64, control_size, saved_control_size),
+ 						 true, false);
+ 			ant_uring_memory(req, "async.operand.msghdr",
+ 					 ANT_LAYOUT("user_msghdr"), 3,
+ 					 (unsigned long)sr->umsg, NULL, sizeof(struct user_msghdr),
+ 					 true, true);
+ 		}
++		}
+ #endif
+ 	}
+ 
+diff --git a/io_uring/net.h b/io_uring/net.h
+index 67fddfd..52bfee0 100644
+--- a/io_uring/net.h
++++ b/io_uring/net.h
+@@ -15,11 +15,6 @@ struct io_async_msghdr {
+ 	struct sockaddr __user		*uaddr;
+ 	struct msghdr			msg;
+ 	struct sockaddr_storage		addr;
+-#ifdef CONFIG_ANTINOMIE
+-	u32				ant_name_size;
+-	size_t				ant_control_size;
+-	u64				ant_control_address;
+-#endif
+ #endif
+ };
+ 
+diff --git a/io_uring/rw.c b/io_uring/rw.c
+index 25e2755..48dd02d 100644
+--- a/io_uring/rw.c
++++ b/io_uring/rw.c
+@@ -38,12 +38,12 @@ static void ant_uring_rw_capture(struct io_kiocb *req, bool output, ssize_t resu
+ 	struct io_rw *cmd = io_kiocb_to_cmd(req, struct io_rw);
+ 	struct iov_iter iter;
+ 
+-	if (!req->ant_async || !rw ||
++	if (!rw || !ant_monitor_async_tracked(req) ||
+ 	    (output && (result < 0 || (cmd->kiocb.ki_flags & IOCB_WRITE))))
+ 		return;
+ 	iter = rw->iter;
+ 	iov_iter_restore(&iter, &rw->iter_state);
+-	ant_monitor_async_iter(&req->ant_async, &iter,
++	ant_monitor_async_iter(req, &iter,
+ 			       output ? result : iov_iter_count(&iter), rw->bytes_done, output);
+ #endif
+ }
+diff --git a/kernel/antinomie/Kconfig b/kernel/antinomie/Kconfig
+index 669a14f..638e1d3 100644
+--- a/kernel/antinomie/Kconfig
++++ b/kernel/antinomie/Kconfig
+@@ -1,6 +1,6 @@
+ config ANTINOMIE
+ 	bool "Antinomie host control and syscall recorder"
+-	depends on X86_64 && UNIX98_PTYS
++	depends on X86_64 && UNIX98_PTYS && SECURITY
+ 	select CRYPTO_LIB_SHA256
+ 	help
+ 	  Host control, PTY sessions and observational syscall telemetry over
+diff --git a/kernel/antinomie/Makefile b/kernel/antinomie/Makefile
+index 9f3944a..214ccb2 100644
+--- a/kernel/antinomie/Makefile
++++ b/kernel/antinomie/Makefile
+@@ -7,7 +7,7 @@ ccflags-remove-y += $(DEBUG_CFLAGS)
+ # section_begin.o first and section_end.o last: they bracket this directory's
+ # symbols in vmlinux (sections.h).
+ obj-y += section_begin.o
+-obj-y += bootstrap.o guest.o recorder.o control.o run.o async.o native_capture.o
++obj-y += bootstrap.o guest.o state.o recorder.o control.o run.o async.o native_capture.o
+ # Per-architecture files: <name>_<arch>.c, built here so that the section
+ # labels bracket them too.
+ obj-$(CONFIG_X86_64) += capture_x86.o
+diff --git a/kernel/antinomie/async.c b/kernel/antinomie/async.c
+index efb999e..cefb059 100644
+--- a/kernel/antinomie/async.c
++++ b/kernel/antinomie/async.c
+@@ -5,6 +5,7 @@
+ #include <linux/cred.h>
+ #include <linux/delay.h>
+ #include <linux/errno.h>
++#include <linux/hashtable.h>
+ #include <linux/jiffies.h>
+ #include <linux/ktime.h>
+ #include <linux/overflow.h>
+@@ -25,6 +26,7 @@
+ #include "fileid.h"
+ #include "run.h"
+ #include "observer.h"
++#include "state.h"
+ 
+ #define ANT_ASYNC_REQUEST_COUNT 256
+ #define ANT_ASYNC_RECORD_COUNT 1024
+@@ -32,6 +34,11 @@
+ 
+ struct ant_async {
+ 	struct ant_async_event event;
++	/* The subsystem object (io_kiocb, aio_kiocb) the request is attached
++	 * to, while it is in the slot table (slots, under request_lock).
++	 */
++	const void *slot;
++	struct hlist_node node;
+ 	struct ant_task *capture;
+ 	refcount_t refs;
+ 	atomic_t capture_busy;
+@@ -41,6 +48,12 @@ struct ant_async {
+ 	bool payload_deferred;
+ 	/* The identity of the file the request used was published (once). */
+ 	bool file_id_issued;
++	/* A recvmsg's msghdr as prepared: the sizes and control buffer the
++	 * process gave (ant_monitor_async_msghdr_save()).
++	 */
++	bool msghdr_saved;
++	u32 msg_name_size;
++	u64 msg_control_size, msg_control_address;
+ };
+ 
+ /* An AIO read whose completion could not read user memory. Its output is
+@@ -77,6 +90,12 @@ static DEFINE_SPINLOCK(record_lock);
+  * Never acquire request_lock while holding record_lock.
+  */
+ static DEFINE_SPINLOCK(request_lock);
++/* Requests by the subsystem object they belong to, under request_lock: the
++ * recorder keeps no field in io_uring's or AIO's structures. A request is in
++ * the table from its submission (ant_monitor_async_begin()) to its final
++ * completion or abandonment; while request_count is zero the table is empty.
++ */
++static DEFINE_HASHTABLE(slots, 8);
+ static void publish_records(struct work_struct *work);
+ static DECLARE_WORK(publish_work, publish_records);
+ static struct ant_aio_reap reaps[ANT_AIO_REAP_COUNT];
+@@ -309,44 +328,201 @@ static struct ant_async *begin(struct task_struct *owner, u64 root_cookie, u64 t
+ 	return request;
+ }
+ 
+-struct ant_async *ant_monitor_async_begin(u8 system, u32 opcode, u64 user_data,
+-					  u32 flags, const void *descriptor, size_t descriptor_len)
++/* The request in the slot of a subsystem object, under request_lock. */
++static struct ant_async *slot_find(const void *slot)
++{
++	struct ant_async *request;
++
++	hash_for_each_possible(slots, request, node, (unsigned long)slot)
++		if (request->slot == slot)
++			return request;
++	return NULL;
++}
++
++static void abandon(struct ant_async *request);
++
++/* Take a request out of the slot of an object submitted again (a recycled
++ * io_kiocb, a new aio_kiocb at a freed one's address), and put @request
++ * (NULL: none) in it. A request still there was never finished: abandoned.
++ */
++static void attach(const void *slot, struct ant_async *request)
++{
++	struct ant_async *stale = NULL;
++	unsigned long irqflags;
++
++	if (!request && !atomic_read(&request_count))
++		return;
++	spin_lock_irqsave(&request_lock, irqflags);
++	stale = slot_find(slot);
++	if (stale)
++		hash_del(&stale->node);
++	if (request) {
++		request->slot = slot;
++		hash_add(slots, &request->node, (unsigned long)slot);
++	}
++	spin_unlock_irqrestore(&request_lock, irqflags);
++	if (stale)
++		abandon(stale);
++}
++
++void ant_monitor_async_begin(const void *slot, u8 system, u32 opcode, u64 user_data,
++			     u32 flags, const void *descriptor, size_t descriptor_len)
+ {
+ 	u64 capture_cookie = ant_observer_admit(current);
+ 
+-	if (!READ_ONCE(current->ant_root_cookie) && !capture_cookie)
+-		return NULL;
+-	return begin(NULL, READ_ONCE(current->ant_root_cookie), ant_monitor_cookie(current),
+-		     capture_cookie, system, opcode,
+-		     user_data, flags, descriptor, descriptor_len);
++	if (!READ_ONCE(ant_state(current)->root_cookie) && !capture_cookie) {
++		attach(slot, NULL);
++		return;
++	}
++	attach(slot, begin(NULL, READ_ONCE(ant_state(current)->root_cookie),
++			   ant_monitor_cookie(current), capture_cookie, system, opcode,
++			   user_data, flags, descriptor, descriptor_len));
+ }
+ 
+ /* Contract 14.3: the submitting task is not the ring's producer of record. */
+-struct ant_async *ant_monitor_async_begin_attributed(struct task_struct *owner,
+-						     u64 root_cookie, u64 task_cookie,
+-						     u8 system, u32 opcode, u64 user_data,
+-						     u32 flags, const void *descriptor,
+-						     size_t descriptor_len)
++static void begin_attributed(const void *slot, struct task_struct *owner, u64 root_cookie,
++			     u64 task_cookie, u8 system, u32 opcode, u64 user_data, u32 flags,
++			     const void *descriptor, size_t descriptor_len)
+ {
+ 	u64 capture_cookie = ant_observer_admit(owner);
+ 
+-	if (!root_cookie && !capture_cookie)
+-		return NULL;
+-	return begin(owner, root_cookie, task_cookie ?: ant_monitor_cookie(owner),
+-		     capture_cookie, system, opcode, user_data,
+-		     flags | ANT_ASYNC_PRODUCER_UNKNOWN, descriptor, descriptor_len);
++	if (!root_cookie && !capture_cookie) {
++		attach(slot, NULL);
++		return;
++	}
++	attach(slot, begin(owner, root_cookie, task_cookie ?: ant_monitor_cookie(owner),
++			   capture_cookie, system, opcode, user_data,
++			   flags | ANT_ASYNC_PRODUCER_UNKNOWN, descriptor, descriptor_len));
++}
++
++/* An io_uring ring's creator (contract 14.3), by ring: the SQPOLL thread
++ * and tasks outside the creator's thread group submit on its behalf. Written
++ * under ring_lock, read under RCU on every submission.
++ */
++struct ant_ring {
++	const void *ring;
++	struct pid *tgid;
++	struct task_struct *creator;
++	u64 root_cookie, task_cookie;
++	struct hlist_node node;
++	struct rcu_head rcu;
++};
++
++static DEFINE_HASHTABLE(rings, 6);
++static DEFINE_SPINLOCK(ring_lock);
++
++void ant_monitor_ring_create(const void *ring)
++{
++	struct ant_ring *entry = kzalloc(sizeof(*entry), GFP_KERNEL);
++
++	/* Without it, the ring's foreign submissions are not attributed. */
++	if (!entry) {
++		ant_monitor_async_unavailable();
++		return;
++	}
++	entry->ring = ring;
++	entry->tgid = get_pid(task_tgid(current));
++	entry->creator = get_task_struct(current);
++	entry->root_cookie = READ_ONCE(ant_state(current)->root_cookie);
++	entry->task_cookie = READ_ONCE(ant_state(current)->cookie);
++	spin_lock(&ring_lock);
++	hash_add_rcu(rings, &entry->node, (unsigned long)ring);
++	spin_unlock(&ring_lock);
++}
++
++static void ring_free_rcu(struct rcu_head *head)
++{
++	struct ant_ring *entry = container_of(head, struct ant_ring, rcu);
++
++	put_pid(entry->tgid);
++	put_task_struct(entry->creator);
++	kfree(entry);
++}
++
++void ant_monitor_ring_free(const void *ring)
++{
++	struct ant_ring *entry, *found = NULL;
++
++	spin_lock(&ring_lock);
++	hash_for_each_possible(rings, entry, node, (unsigned long)ring) {
++		if (entry->ring == ring) {
++			found = entry;
++			hash_del_rcu(&entry->node);
++			break;
++		}
++	}
++	spin_unlock(&ring_lock);
++	if (found)
++		call_rcu(&found->rcu, ring_free_rcu);
++}
++
++/* Under rcu_read_lock(). */
++static struct ant_ring *ring_find(const void *ring)
++{
++	struct ant_ring *entry;
++
++	hash_for_each_possible_rcu(rings, entry, node, (unsigned long)ring)
++		if (entry->ring == ring)
++			return entry;
++	return NULL;
+ }
+ 
+-static struct ant_async *get_request(struct ant_async **slot, bool final)
++/* The submitting task is outside the ring creator's thread group. */
++bool ant_monitor_ring_foreign(const void *ring)
++{
++	struct ant_ring *entry;
++	bool foreign;
++
++	rcu_read_lock();
++	entry = ring_find(ring);
++	foreign = entry && task_tgid(current) != entry->tgid;
++	rcu_read_unlock();
++	return foreign;
++}
++
++/* Contract 14.3: the submitting task is not the ring's producer of record; the
++ * request belongs to the ring creator's run.
++ */
++void ant_monitor_async_begin_ring(const void *slot, const void *ring, u8 system, u32 opcode,
++				  u64 user_data, u32 flags, const void *descriptor,
++				  size_t descriptor_len)
++{
++	struct task_struct *owner = NULL;
++	struct ant_ring *entry;
++	u64 root_cookie = 0, task_cookie = 0;
++
++	rcu_read_lock();
++	entry = ring_find(ring);
++	if (entry) {
++		owner = get_task_struct(entry->creator);
++		root_cookie = entry->root_cookie;
++		task_cookie = entry->task_cookie;
++	}
++	rcu_read_unlock();
++	if (!owner) {
++		attach(slot, NULL);
++		return;
++	}
++	begin_attributed(slot, owner, root_cookie, task_cookie, system, opcode, user_data,
++			 flags, descriptor, descriptor_len);
++	put_task_struct(owner);
++}
++
++/* The request in @slot with a reference, or taken out of the slot (final).
++ * Without any request alive the table is empty: no lock is taken.
++ */
++static struct ant_async *get_request(const void *slot, bool final)
+ {
+ 	struct ant_async *request;
+ 	unsigned long irqflags;
+ 
++	if (!atomic_read(&request_count))
++		return NULL;
+ 	spin_lock_irqsave(&request_lock, irqflags);
+-	request = *slot;
++	request = slot_find(slot);
+ 	if (request) {
+ 		if (final)
+-			*slot = NULL;
++			hash_del(&request->node);
+ 		else
+ 			refcount_inc(&request->refs);
+ 	}
+@@ -409,7 +585,7 @@ static bool rw_output(const struct ant_async_event *event)
+ 		event->opcode == IORING_OP_READ_FIXED;
+ }
+ 
+-void ant_monitor_async_iter(struct ant_async **slot,
++void ant_monitor_async_iter(const void *slot,
+ 			    const struct iov_iter *iter, size_t size,
+ 			    u64 result_offset, bool output)
+ {
+@@ -458,7 +634,7 @@ void ant_monitor_async_iter(struct ant_async **slot,
+ 	put_request(request);
+ }
+ 
+-void ant_monitor_async_memory(struct ant_async **slot, const char *key,
++void ant_monitor_async_memory(const void *slot, const char *key,
+ 			      const char *layout, u16 encoding, u64 address,
+ 			      const void *snapshot, u64 size, bool output, bool complete)
+ {
+@@ -510,7 +686,7 @@ static void failed_without_payload(struct ant_async *request, s64 result)
+ 	spin_unlock_irqrestore(&request_lock, irqflags);
+ }
+ 
+-void ant_monitor_async_accepted(struct ant_async **slot, int result)
++void ant_monitor_async_accepted(const void *slot, int result)
+ {
+ 	struct ant_async *request = get_request(slot, result < 0);
+ 
+@@ -526,7 +702,7 @@ void ant_monitor_async_accepted(struct ant_async **slot, int result)
+ 	}
+ }
+ 
+-void ant_monitor_async_complete(struct ant_async **slot, s64 result,
++void ant_monitor_async_complete(const void *slot, s64 result,
+ 				u32 flags, bool final)
+ {
+ 	struct ant_async *request = get_request(slot, final);
+@@ -543,19 +719,23 @@ void ant_monitor_async_complete(struct ant_async **slot, s64 result,
+ 		put_request(request);
+ }
+ 
+-void ant_monitor_async_abandon(struct ant_async **slot)
++static void abandon(struct ant_async *request)
+ {
+-	struct ant_async *request = get_request(slot, true);
+-
+-	if (!request)
+-		return;
+ 	ant_run_async_incomplete(request->event.root_cookie);
+ 	stage_record(request, 6, -ENODATA, ANT_ASYNC_ABANDONED, true);
+ 	finish_request(request);
+ }
+ 
+-void ant_monitor_async_link_completion(struct ant_async **source,
+-				       struct ant_async **target, s64 result, u32 flags)
++void ant_monitor_async_abandon(const void *slot)
++{
++	struct ant_async *request = get_request(slot, true);
++
++	if (request)
++		abandon(request);
++}
++
++void ant_monitor_async_link_completion(const void *source, const void *target,
++				       s64 result, u32 flags)
+ {
+ 	struct ant_async *request = get_request(source, false);
+ 	unsigned long irqflags;
+@@ -569,9 +749,10 @@ void ant_monitor_async_link_completion(struct ant_async **source,
+ 	 * reference, not the origin identity or an additional pending request.
+ 	 */
+ 	spin_lock_irqsave(&request_lock, irqflags);
+-	if (*source == request && !*target) {
+-		*target = request;
+-		*source = NULL;
++	if (!hlist_unhashed(&request->node) && request->slot == source && !slot_find(target)) {
++		hash_del(&request->node);
++		request->slot = target;
++		hash_add(slots, &request->node, (unsigned long)target);
+ 		transferred = true;
+ 	}
+ 	spin_unlock_irqrestore(&request_lock, irqflags);
+@@ -582,8 +763,8 @@ void ant_monitor_async_link_completion(struct ant_async **source,
+ 
+ void ant_monitor_async_unavailable(void)
+ {
+-	if (READ_ONCE(current->ant_root_cookie))
+-		ant_run_async_incomplete(current->ant_root_cookie);
++	if (READ_ONCE(ant_state(current)->root_cookie))
++		ant_run_async_incomplete(ant_state(current)->root_cookie);
+ }
+ 
+ /* The identity of a file the request acted on, as an operand of the request
+@@ -591,7 +772,7 @@ void ant_monitor_async_unavailable(void)
+  * one file publishes it once, at its first issue, whatever the number of
+  * retries. It never changes the payload-gap state: it is additional evidence.
+  */
+-void ant_monitor_async_file_id(struct ant_async **slot, u8 kind, struct inode *inode,
++void ant_monitor_async_file_id(const void *slot, u8 kind, struct inode *inode,
+ 			       int nlink_delta)
+ {
+ 	struct ant_async *request;
+@@ -619,7 +800,7 @@ void ant_monitor_async_file_id(struct ant_async **slot, u8 kind, struct inode *i
+ }
+ 
+ /* The request has no payload beyond its scalar submission (contract 14.4). */
+-void ant_monitor_async_scalar(struct ant_async **slot)
++void ant_monitor_async_scalar(const void *slot)
+ {
+ 	struct ant_async *request = get_request(slot, false);
+ 	unsigned long irqflags;
+@@ -633,7 +814,7 @@ void ant_monitor_async_scalar(struct ant_async **slot)
+ 	put_request(request);
+ }
+ 
+-static void status_field(struct ant_async **slot, const char *key, const char *layout,
++static void status_field(const void *slot, const char *key, const char *layout,
+ 			 u64 address, u64 size, bool output, int status, bool complete)
+ {
+ 	struct ant_async *request = get_request(slot, false);
+@@ -670,7 +851,7 @@ static void status_field(struct ant_async **slot, const char *key, const char *l
+ /* Memory the kernel compares, wakes or hands out later: its address and
+  * extent are the operand, its bytes are not.
+  */
+-void ant_monitor_async_address(struct ant_async **slot, const char *key,
++void ant_monitor_async_address(const void *slot, const char *key,
+ 			       const char *layout, u64 address, u64 size)
+ {
+ 	status_field(slot, key, layout, address, size, false, ANT_ADDRESS_ONLY, true);
+@@ -679,14 +860,14 @@ void ant_monitor_async_address(struct ant_async **slot, const char *key,
+ /* An operand whose extent is beyond the recorder's ceiling: its declared size
+  * is recorded with no bytes, and the payload gap stays set.
+  */
+-void ant_monitor_async_extent(struct ant_async **slot, const char *key, const char *layout,
++void ant_monitor_async_extent(const void *slot, const char *key, const char *layout,
+ 			      u64 address, u64 size)
+ {
+ 	status_field(slot, key, layout, address, size, false, ANT_INVALID_EXTENT, false);
+ }
+ 
+ /* An operand without a decoder. The request's payload gap stays set. */
+-void ant_monitor_async_gap(struct ant_async **slot, const char *key, u64 address)
++void ant_monitor_async_gap(const void *slot, const char *key, u64 address)
+ {
+ 	status_field(slot, key, "", address, U64_MAX, false, ANT_NO_DECODER, false);
+ }
+@@ -694,7 +875,7 @@ void ant_monitor_async_gap(struct ant_async **slot, const char *key, u64 address
+ /* Register an AIO read before it is started, so an interrupt completion that
+  * races with read_iter() cannot count the missing output before it is owned.
+  */
+-u64 ant_monitor_aio_defer(struct ant_async **slot, const void *ioctx,
++u64 ant_monitor_aio_defer(const void *slot, const void *ioctx,
+ 			  const struct iov_iter *iter)
+ {
+ 	struct ant_async *request;
+@@ -786,7 +967,7 @@ static bool reap_take(struct ant_aio_reap *out, u64 request_id)
+ }
+ 
+ /* read_iter() did not queue the request: its result is observed inline. */
+-void ant_monitor_aio_undefer(struct ant_async **slot, u64 request_id)
++void ant_monitor_aio_undefer(const void *slot, u64 request_id)
+ {
+ 	struct ant_async *request;
+ 	struct ant_aio_reap entry;
+@@ -804,20 +985,64 @@ void ant_monitor_aio_undefer(struct ant_async **slot, u64 request_id)
+ 	put_request(request);
+ }
+ 
+-u64 ant_monitor_async_id(struct ant_async **slot)
++u64 ant_monitor_async_id(const void *slot)
+ {
+ 	struct ant_async *request;
+ 	unsigned long irqflags;
+ 	u64 id = 0;
+ 
++	if (!atomic_read(&request_count))
++		return 0;
+ 	spin_lock_irqsave(&request_lock, irqflags);
+-	request = *slot;
++	request = slot_find(slot);
+ 	if (request)
+ 		id = request->event.request_id;
+ 	spin_unlock_irqrestore(&request_lock, irqflags);
+ 	return id;
+ }
+ 
++bool ant_monitor_async_tracked(const void *slot)
++{
++	return ant_monitor_async_id(slot) != 0;
++}
++
++/* A recvmsg request's msghdr as prepared, read back when it completes. */
++void ant_monitor_async_msghdr_save(const void *slot, u32 name_size, u64 control_size,
++				   u64 control_address)
++{
++	struct ant_async *request = get_request(slot, false);
++	unsigned long irqflags;
++
++	if (!request)
++		return;
++	spin_lock_irqsave(&request_lock, irqflags);
++	request->msg_name_size = name_size;
++	request->msg_control_size = control_size;
++	request->msg_control_address = control_address;
++	request->msghdr_saved = true;
++	spin_unlock_irqrestore(&request_lock, irqflags);
++	put_request(request);
++}
++
++bool ant_monitor_async_msghdr(const void *slot, u32 *name_size, u64 *control_size,
++			      u64 *control_address)
++{
++	struct ant_async *request = get_request(slot, false);
++	unsigned long irqflags;
++	bool saved;
++
++	if (!request)
++		return false;
++	spin_lock_irqsave(&request_lock, irqflags);
++	saved = request->msghdr_saved;
++	*name_size = request->msg_name_size;
++	*control_size = request->msg_control_size;
++	*control_address = request->msg_control_address;
++	spin_unlock_irqrestore(&request_lock, irqflags);
++	put_request(request);
++	return saved;
++}
++
+ /* Called under the AIO completion_lock as the event is written to ring_slot.
+  * A read without output has nothing to observe: its entry is dropped.
+  */
+diff --git a/kernel/antinomie/control.c b/kernel/antinomie/control.c
+index c07ebf1..4867477 100644
+--- a/kernel/antinomie/control.c
++++ b/kernel/antinomie/control.c
+@@ -30,6 +30,7 @@
+ #include "process_core.h"
+ #include "run.h"
+ #include "debug.h"
++#include "state.h"
+ 
+ #define ANT_SESSION_MAX 64
+ 
+@@ -289,7 +290,7 @@ static int launch_init(struct subprocess_info *info, struct cred *cred)
+ 	if (error)
+ 		return error;
+ 	session->pid = task_pid_nr(current);
+-	session->task_cookie = current->ant_cookie;
++	session->task_cookie = ant_state(current)->cookie;
+ 	session->start_ns = current->start_boottime;
+ 	session->pgrp = get_task_pid(current, PIDTYPE_PGID);
+ 	ant_specimen_arm(launch->specimen);
+diff --git a/kernel/antinomie/debug.c b/kernel/antinomie/debug.c
+index a71441c..02e4ae2 100644
+--- a/kernel/antinomie/debug.c
++++ b/kernel/antinomie/debug.c
+@@ -49,6 +49,7 @@
+ #include <linux/workqueue.h>
+ #include "control_wire.h"
+ #include "debug.h"
++#include "state.h"
+ 
+ #define MAX_RECORDS 1024U
+ #define MAX_LIVE_THREADS 256U
+@@ -911,13 +912,14 @@ static void repair_work(struct callback_head *work)
+ 
+ static bool repair_foreign(struct ant_dbg *s, struct ant_dbg_as *as, struct pt_regs *regs, u64 addr)
+ {
++	u64 root_cookie = READ_ONCE(ant_state(current)->root_cookie);
+ 	struct ant_dbg_repair *r;
+ 	unsigned long flags;
+ 	unsigned int i;
+ 	bool found = false;
+ 
+-	if (!as->mm || READ_ONCE(current->mm) == as->mm || !READ_ONCE(current->ant_root_cookie) ||
+-	    READ_ONCE(current->ant_root_cookie) != READ_ONCE(s->leader->ant_root_cookie))
++	if (!as->mm || READ_ONCE(current->mm) == as->mm || !root_cookie ||
++	    root_cookie != READ_ONCE(ant_state(s->leader)->root_cookie))
+ 		return false;
+ 	r = kmalloc(sizeof(*r), GFP_ATOMIC | __GFP_NOWARN);
+ 	if (!r)
+@@ -2102,7 +2104,7 @@ void ant_debug_run_stop(u64 root_cookie)
+ 
+ 	mutex_lock(&dbg_lock);
+ 	list_for_each_entry(s, &sessions, node) {
+-		if (READ_ONCE(s->leader->ant_root_cookie) != root_cookie)
++		if (READ_ONCE(ant_state(s->leader)->root_cookie) != root_cookie)
+ 			continue;
+ 		/* From now on no new stop starts; the worker ends the ones in place. */
+ 		WRITE_ONCE(s->run_stop_req, true);
+@@ -2318,7 +2320,8 @@ static struct ant_dbg *create_session(const u8 *args, int *error)
+ 	rcu_read_lock();
+ 	leader = find_task_by_pid_ns(s->tgid, &init_pid_ns);
+ 	*error = -ESRCH;
+-	if (leader && thread_group_leader(leader) && READ_ONCE(leader->ant_cookie) == s->cookie &&
++	if (leader && thread_group_leader(leader) &&
++	    READ_ONCE(ant_state(leader)->cookie) == s->cookie &&
+ 	    leader->start_boottime == s->start_ns) {
+ 		*error = eligible_group(leader);
+ 		if (!*error) {
+@@ -2385,7 +2388,7 @@ int ant_debug_launch(void)
+ 	s = session_alloc();
+ 	if (!s)
+ 		return -ENOMEM;
+-	s->cookie = READ_ONCE(current->ant_cookie);
++	s->cookie = READ_ONCE(ant_state(current)->cookie);
+ 	s->start_ns = current->start_boottime;
+ 	s->tgid = task_tgid_nr(current);
+ 	get_task_struct(current);
+diff --git a/kernel/antinomie/fileid.c b/kernel/antinomie/fileid.c
+index 8be3f03..0d378b8 100644
+--- a/kernel/antinomie/fileid.c
++++ b/kernel/antinomie/fileid.c
+@@ -22,6 +22,7 @@
+ #include "control_wire.h"
+ #include "fileid.h"
+ #include "notes.h"
++#include "state.h"
+ 
+ static_assert(ANT_FILE_ID_OPEN == ANTC_FILEID_OPEN && ANT_FILE_ID_RENAME == ANTC_FILEID_RENAME &&
+ 	      ANT_FILE_ID_LINK == ANTC_FILEID_LINK && ANT_FILE_ID_UNLINK == ANTC_FILEID_UNLINK &&
+@@ -53,8 +54,8 @@ void ant_monitor_file_id(u8 kind, struct inode *inode)
+ 
+ 	if (!inode)
+ 		return;
+-	if (current->ant_async_target) {
+-		ant_monitor_async_file_id(current->ant_async_target, kind, inode, 0);
++	if (ant_state(current)->async_target) {
++		ant_monitor_async_file_id(ant_state(current)->async_target, kind, inode, 0);
+ 		return;
+ 	}
+ 	ant_fileid_pack(rec, kind, inode, 0);
+@@ -72,7 +73,7 @@ void ant_monitor_exec_image(struct file *file, const char *interp)
+ 	size_t interp_len = 0, path_len = 0;
+ 	u32 flags = 0;
+ 
+-	if (!current->ant_monitor)
++	if (!ant_state(current)->monitor)
+ 		return;
+ 	rec = kzalloc(ANTC_EXECIMG_HEADER + 2 * ANTC_EXECIMG_PATH_MAX, GFP_KERNEL);
+ 	path = kmalloc(ANTC_EXECIMG_PATH_MAX, GFP_KERNEL);
+diff --git a/kernel/antinomie/filemap.c b/kernel/antinomie/filemap.c
+index 0aaf4df..acc1542 100644
+--- a/kernel/antinomie/filemap.c
++++ b/kernel/antinomie/filemap.c
+@@ -76,6 +76,7 @@
+ #include "control_wire.h"
+ #include "fileops.h"
+ #include "filemap.h"
++#include "state.h"
+ 
+ /* One record: a run of contiguous pages of one file, seen for one cause. */
+ struct ant_filemap_range {
+@@ -215,7 +216,7 @@ void ant_monitor_mapped_writeback(struct folio *folio)
+ {
+ 	struct ant_filemap **slot;
+ 
+-	if (!current->ant_monitor)
++	if (!ant_state(current)->monitor)
+ 		return;
+ 	slot = ant_monitor_filemap(true);
+ 	if (slot)
+@@ -230,7 +231,7 @@ void ant_monitor_mapped_unmap(struct vm_area_struct *vma, struct folio *folio,
+ {
+ 	struct ant_filemap **slot;
+ 
+-	if (!current->ant_monitor || !(vma->vm_flags & VM_SHARED))
++	if (!ant_state(current)->monitor || !(vma->vm_flags & VM_SHARED))
+ 		return;
+ 	slot = ant_monitor_filemap(false);
+ 	if (slot)
+diff --git a/kernel/antinomie/fileops.c b/kernel/antinomie/fileops.c
+index 2797a93..988d8bf 100644
+--- a/kernel/antinomie/fileops.c
++++ b/kernel/antinomie/fileops.c
+@@ -41,6 +41,7 @@
+ 
+ #include "control_wire.h"
+ #include "fileops.h"
++#include "state.h"
+ 
+ static_assert(ANT_FILE_COPY_SENDFILE == ANTC_FILECOPY_SENDFILE &&
+ 	      ANT_FILE_COPY_SPLICE == ANTC_FILECOPY_SPLICE &&
+@@ -102,7 +103,7 @@ void ant_monitor_file_pos(struct file *file, const loff_t *pos, ssize_t ret)
+ 	struct ant_fileops *ops;
+ 	u64 nr;
+ 
+-	if (!current->ant_monitor || ret < 0 || !pos || !seekable(file_inode(file)))
++	if (!ant_state(current)->monitor || ret < 0 || !pos || !seekable(file_inode(file)))
+ 		return;
+ 	ops = ant_monitor_fileops(&nr);
+ 	if (!ops || !rw_call(nr))
+@@ -124,7 +125,7 @@ void ant_monitor_write_order(void)
+ 	struct ant_fileops *ops;
+ 	u64 nr;
+ 
+-	if (!current->ant_monitor)
++	if (!ant_state(current)->monitor)
+ 		return;
+ 	ops = ant_monitor_fileops(&nr);
+ 	if (!ops || ops->order)
+@@ -152,7 +153,7 @@ void ant_monitor_copy_begin(u8 kind, struct file *in, struct file *out, size_t c
+ 	size_t size;
+ 	u64 nr;
+ 
+-	if (!current->ant_monitor || seekable(file_inode(in)) || !seekable(file_inode(out)))
++	if (!ant_state(current)->monitor || seekable(file_inode(in)) || !seekable(file_inode(out)))
+ 		return;
+ 	ops = ant_monitor_fileops(&nr);
+ 	if (!ops || !copy_call(kind, nr) || ops->data_wanted)
+@@ -171,7 +172,7 @@ void ant_monitor_copy_data(const struct bio_vec *bvec, unsigned int segs, size_t
+ 	size_t take;
+ 	u64 nr;
+ 
+-	if (!current->ant_monitor)
++	if (!ant_state(current)->monitor)
+ 		return;
+ 	ops = ant_monitor_fileops(&nr);
+ 	if (!ops || !ops->data_wanted)
+@@ -206,7 +207,7 @@ void ant_monitor_file_copy(u8 kind, struct file *in, loff_t in_pos, struct file
+ 	u8 *rec, flags = 0;
+ 	u64 nr;
+ 
+-	if (!current->ant_monitor || !(seekable(target) || (source && seekable(source))))
++	if (!ant_state(current)->monitor || !(seekable(target) || (source && seekable(source))))
+ 		return;
+ 	ops = ant_monitor_fileops(&nr);
+ 	if (!ops || !copy_call(kind, nr))
+diff --git a/kernel/antinomie/guest.c b/kernel/antinomie/guest.c
+index 69f9b4d..6ab8a8d 100644
+--- a/kernel/antinomie/guest.c
++++ b/kernel/antinomie/guest.c
+@@ -2,7 +2,6 @@
+ #include <linux/antinomie.h>
+ #include <linux/cpu.h>
+ #include <linux/delay.h>
+-#include <linux/export.h>
+ #include <linux/init.h>
+ #include <linux/io.h>
+ #include <linux/jiffies.h>
+@@ -147,7 +146,6 @@ u32 ant_ring_size(void)
+ {
+ 	return ring_size;
+ }
+-EXPORT_SYMBOL_GPL(ant_ring_size);
+ 
+ int ant_send(const void *data, size_t payload_len)
+ {
+@@ -261,7 +259,6 @@ int ant_send(const void *data, size_t payload_len)
+ 		migrate_enable();
+ 	return error;
+ }
+-EXPORT_SYMBOL_GPL(ant_send);
+ 
+ u32 ant_send_room(void)
+ {
+@@ -282,7 +279,6 @@ u32 ant_send_room(void)
+ 	preempt_enable();
+ 	return room;
+ }
+-EXPORT_SYMBOL_GPL(ant_send_room);
+ 
+ bool ant_send_waits(void)
+ {
+@@ -290,7 +286,6 @@ bool ant_send_waits(void)
+ 	return smp_load_acquire(&ready) && READ_ONCE(control->send_wait_us) &&
+ 		READ_ONCE(control->live);
+ }
+-EXPORT_SYMBOL_GPL(ant_send_waits);
+ 
+ int ant_register_command(u32 opcode, ant_command_handler fn, void *context)
+ {
+@@ -313,7 +308,6 @@ int ant_register_command(u32 opcode, ant_command_handler fn, void *context)
+ 	up_write(&handler_lock);
+ 	return error;
+ }
+-EXPORT_SYMBOL_GPL(ant_register_command);
+ 
+ int ant_unregister_command(u32 opcode)
+ {
+@@ -330,7 +324,6 @@ int ant_unregister_command(u32 opcode)
+ 	up_write(&handler_lock);
+ 	return error;
+ }
+-EXPORT_SYMBOL_GPL(ant_unregister_command);
+ 
+ static int dispatch(const struct ant_message *req, size_t *payload_len)
+ {
+diff --git a/kernel/antinomie/hash.c b/kernel/antinomie/hash.c
+index a5d0117..01d3a76 100644
+--- a/kernel/antinomie/hash.c
++++ b/kernel/antinomie/hash.c
+@@ -65,6 +65,7 @@
+ #include "control_wire.h"
+ #include "hash.h"
+ #include "notes.h"
++#include "state.h"
+ 
+ #define ANT_HASH_CHUNK (64U * 1024)
+ #define ANT_HASH_CACHE 32
+@@ -144,7 +145,7 @@ static struct ant_hash_job *job_new(u8 kind, bool last)
+ 	struct ant_hash_job *job;
+ 	bool known;
+ 
+-	if (!current->ant_monitor)
++	if (!ant_state(current)->monitor)
+ 		return NULL;
+ 	job = kzalloc(sizeof(*job), GFP_NOWAIT | __GFP_NOWARN);
+ 	if (!job) {
+diff --git a/kernel/antinomie/manual_core.c b/kernel/antinomie/manual_core.c
+index cfbe73e..704d70e 100644
+--- a/kernel/antinomie/manual_core.c
++++ b/kernel/antinomie/manual_core.c
+@@ -17,6 +17,7 @@
+ #include <linux/sched/coredump.h>
+ #include <linux/slab.h>
+ #include <linux/task_work.h>
++#include <linux/uaccess.h>
+ #include <linux/unaligned.h>
+ #include <linux/vmalloc.h>
+ #include <linux/wait.h>
+@@ -24,6 +25,7 @@
+ #include "control_wire.h"
+ #include "process_core.h"
+ #include "debug.h"
++#include "state.h"
+ 
+ #ifdef CONFIG_COREDUMP
+ #define LIVE_THREADS 256U
+@@ -133,11 +135,85 @@ static bool live_aborted(void *context)
+ 	return abort_reason(context) != 0;
+ }
+ 
+-static void *manual_alloc(struct ant_manual *session, size_t size)
++/* The live core's accessors for the stock writer (<linux/coredump.h>). */
++void *ant_coredump_live_alloc(struct ant_coredump_live *live, size_t size)
++{
++	size_t offset = ALIGN(live->arena_used, __alignof__(unsigned long));
++	void *data;
++
++	if (live->aborted(live->context) || offset > live->arena_size ||
++	    size > live->arena_size - offset) {
++		live->incomplete = true;
++		return NULL;
++	}
++	data = live->arena + offset;
++	live->arena_used = offset + size;
++	memset(data, 0, size);
++	return data;
++}
++
++void ant_coredump_live_incomplete(struct ant_coredump_live *live)
++{
++	live->incomplete = true;
++}
++
++bool ant_coredump_live_complete(struct ant_coredump_live *live)
++{
++	return !live->incomplete;
++}
++
++bool ant_coredump_live_aborted(struct ant_coredump_live *live)
++{
++	return live->aborted(live->context);
++}
++
++unsigned long ant_coredump_live_deadline(struct ant_coredump_live *live)
++{
++	return live->deadline;
++}
++
++struct core_vma_metadata *ant_coredump_live_vmas(struct ant_coredump_live *live,
++						 unsigned int *count)
+ {
+-	struct coredump_params cprm = { .antinomie_live = &session->live };
++	*count = live->file_vma_count;
++	return live->file_vmas;
++}
++
++/* The task at @index of the core's thread list, NULL past its end. */
++struct task_struct *ant_coredump_live_task(struct ant_coredump_live *live, unsigned int index)
++{
++	return index < live->task_count ? live->tasks[index] : NULL;
++}
+ 
+-	return ant_coredump_live_alloc(&cprm, size);
++/* dump_user_range() of a live core: the pages pinned before the tasks went
++ * on, in order. 1 when all of @len was written, 0 otherwise.
++ */
++int ant_coredump_live_pages(struct coredump_params *cprm, struct ant_coredump_live *live,
++			    unsigned long len)
++{
++	unsigned long size;
++
++	if (live->page_cursor > live->page_count || len % PAGE_SIZE ||
++	    len / PAGE_SIZE > live->page_count - live->page_cursor)
++		return 0;
++	for (size = 0; size < len; size += PAGE_SIZE) {
++		void *data;
++		bool failed;
++
++		if (live->aborted(live->context))
++			return 0;
++		data = kmap_local_page(live->pages[live->page_cursor++]);
++		failed = copy_mc_to_kernel(live->scratch, data, PAGE_SIZE);
++		kunmap_local(data);
++		if (failed || !dump_emit(cprm, live->scratch, PAGE_SIZE))
++			return 0;
++	}
++	return 1;
++}
++
++static void *manual_alloc(struct ant_manual *session, size_t size)
++{
++	return ant_coredump_live_alloc(&session->live, size);
+ }
+ 
+ static bool eligible(struct task_struct *task)
+@@ -158,7 +234,7 @@ static int resolve_group(struct ant_manual *session)
+ 	for_each_process(leader) {
+ 		if (task_tgid_nr(leader) != session->identity.tgid)
+ 			continue;
+-		if (READ_ONCE(leader->ant_cookie) != session->identity.cookie ||
++		if (READ_ONCE(ant_state(leader)->cookie) != session->identity.cookie ||
+ 		    leader->start_boottime != session->identity.start_ns)
+ 			break;
+ 		error = -EOPNOTSUPP;
+@@ -203,7 +279,7 @@ static int frozen_identity(struct ant_manual *session)
+ 	unsigned int i, count = 0;
+ 	int error = 0;
+ 
+-	if (current->mm != session->mm || current->ant_cookie != session->identity.cookie ||
++	if (current->mm != session->mm || ant_state(current)->cookie != session->identity.cookie ||
+ 	    current->start_boottime != session->identity.start_ns ||
+ 	    task_tgid_nr(current) != session->identity.tgid ||
+ 	    !current->mm->binfmt || !current->mm->binfmt->core_dump ||
+diff --git a/kernel/antinomie/observer.c b/kernel/antinomie/observer.c
+index acf19c9..e172970 100644
+--- a/kernel/antinomie/observer.c
++++ b/kernel/antinomie/observer.c
+@@ -9,6 +9,7 @@
+ 
+ #include "control_wire.h"
+ #include "observer.h"
++#include "state.h"
+ 
+ struct ant_observer {
+ 	u64 cookie;
+@@ -41,7 +42,7 @@ u64 ant_observer_admit(struct task_struct *task)
+ 	observer = rcu_dereference(active_observer);
+ 	if (observer && !(READ_ONCE(task->flags) & (PF_KTHREAD | PF_USER_WORKER)) &&
+ 	    (observer->mode == ANTC_CAPTURE_USERSPACE ||
+-	     READ_ONCE(task->ant_observer_cookie) == observer->cookie))
++	     READ_ONCE(ant_state(task)->observer_cookie) == observer->cookie))
+ 		cookie = observer->cookie;
+ 	rcu_read_unlock();
+ 	return cookie;
+@@ -167,7 +168,7 @@ static int start(u32 opcode, const u8 *args, size_t args_len, u8 *reply,
+ 			}
+ 		if (!leader || leader->flags & (PF_KTHREAD | PF_USER_WORKER) ||
+ 		    !atomic_read(&leader->signal->live) ||
+-		    READ_ONCE(leader->ant_cookie) != cookie ||
++		    READ_ONCE(ant_state(leader)->cookie) != cookie ||
+ 		    leader->start_boottime != start_ns) {
+ 			write_unlock_irq(&tasklist_lock);
+ 			return -ESRCH;
+@@ -179,9 +180,9 @@ static int start(u32 opcode, const u8 *args, size_t args_len, u8 *reply,
+ 		ANTC_CAPTURE_PROCESS : ANTC_CAPTURE_USERSPACE;
+ 	observer->start_ns = ktime_get_ns();
+ 	if (leader) {
+-		WRITE_ONCE(leader->ant_observer_cookie, observer->cookie);
++		WRITE_ONCE(ant_state(leader)->observer_cookie, observer->cookie);
+ 		for_each_thread(leader, task)
+-			WRITE_ONCE(task->ant_observer_cookie, observer->cookie);
++			WRITE_ONCE(ant_state(task)->observer_cookie, observer->cookie);
+ 	}
+ 	rcu_assign_pointer(active_observer, observer);
+ 	write_unlock_irq(&tasklist_lock);
+diff --git a/kernel/antinomie/process_core.c b/kernel/antinomie/process_core.c
+index 109f347..ed1206d 100644
+--- a/kernel/antinomie/process_core.c
++++ b/kernel/antinomie/process_core.c
+@@ -22,6 +22,7 @@
+ #include "control_wire.h"
+ #include "process_core.h"
+ #include "run.h"
++#include "state.h"
+ 
+ /* The budget a handle may ask for follows the guest's memory (see
+  * ant_core_max_bytes); the floor is the ceiling every earlier kernel had and is
+@@ -741,12 +742,12 @@ bool ant_monitor_core_exit(int wait_status, const kernel_siginfo_t *siginfo)
+ 	if ((siginfo && siginfo->si_signo == SIGKILL) ||
+ 	    (!siginfo && (wait_status & 0x7f) == SIGKILL))
+ 		return false;
+-	if (!current->ant_root_process || !current->mm ||
++	if (!ant_state(current)->root_process || !current->mm ||
+ 	    (current->flags & PF_USER_WORKER))
+ 		return false;
+ 	mutex_lock(&core_lock);
+ 	list_for_each_entry(core, &cores, node)
+-		if (core->root_cookie == current->ant_root_cookie &&
++		if (core->root_cookie == ant_state(current)->root_cookie &&
+ 		    core->state == ANTC_CORE_ARMED && !(core->flags & ANTC_CORE_MANUAL) &&
+ 		    !core->canceled) {
+ 			selected = core;
+diff --git a/kernel/antinomie/process_core.h b/kernel/antinomie/process_core.h
+index 005c0f2..98a1fbf 100644
+--- a/kernel/antinomie/process_core.h
++++ b/kernel/antinomie/process_core.h
+@@ -2,8 +2,34 @@
+ #ifndef ANT_PROCESS_CORE_H
+ #define ANT_PROCESS_CORE_H
+ 
++#include <linux/types.h>
++
+ struct file;
++struct page;
++struct task_struct;
++struct core_vma_metadata;
+ struct ant_core;
++
++/* A live process core in writing (manual_core.c): owned by the manual
++ * acquisition session; no signal->core_state is installed. Metadata and
++ * regsets share a preallocated bounded arena while tasks park. The stock
++ * coredump code sees it only through <linux/coredump.h>'s accessors.
++ */
++struct ant_coredump_live {
++	struct task_struct **tasks;
++	unsigned int task_count;
++	struct core_vma_metadata *file_vmas;
++	unsigned int file_vma_count;
++	struct page **pages;
++	unsigned int page_count, page_cursor;
++	void *arena, *scratch;
++	size_t arena_size, arena_used;
++	unsigned long deadline;
++	bool incomplete;
++	bool (*aborted)(void *context);
++	void *context;
++};
++
+ struct ant_core_identity {
+ 	u64 cookie, start_ns, nonce_lo, nonce_hi;
+ 	u32 tgid, max_size, timeout_ms, policy;
+diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
+index da72b6d..c7f323a 100644
+--- a/kernel/antinomie/recorder.c
++++ b/kernel/antinomie/recorder.c
+@@ -38,6 +38,7 @@
+ #include "notes.h"
+ #include "fileops.h"
+ #include "filemap.h"
++#include "state.h"
+ 
+ /* Scratch bounds packet size, never the logical capture extent. A task owns
+  * its context across migration; failure to allocate does not lose lineage.
+@@ -146,10 +147,10 @@ static int publish(struct ant_task *ctx, u8 kind, u32 object_id,
+ 	put_unaligned_le32(ctx->flags, p + 16);
+ 	put_unaligned_le32(ANT_SCHEMA, p + 20);
+ 	put_unaligned_le64(stream_id, p + 24);
+-	put_unaligned_le64(async ? async->task_cookie : current->ant_cookie, p + 32);
++	put_unaligned_le64(async ? async->task_cookie : ant_state(current)->cookie, p + 32);
+ 	put_unaligned_le64(ctx->call_id, p + 40);
+ 	put_unaligned_le64(ctx->event_seq, p + 48);
+-	ctx->packet_seq = atomic64_inc_return(&origin->ant_packet_seq);
++	ctx->packet_seq = atomic64_inc_return(&ant_state(origin)->packet_seq);
+ 	put_unaligned_le64(ctx->packet_seq, p + 56);
+ 	put_unaligned_le64(ctx->timestamp_ns, p + 64);
+ 	put_unaligned_le32(async ? async->pid : task_tgid_nr(current), p + 72);
+@@ -164,7 +165,7 @@ static int publish(struct ant_task *ctx, u8 kind, u32 object_id,
+ 	put_unaligned_le64(object_offset, p + 104);
+ 	put_unaligned_le64(object_size, p + 112);
+ 	put_unaligned_le32(body_len, p + 120);
+-	put_unaligned_le64(async ? async->root_cookie : current->ant_root_cookie, p + 128);
++	put_unaligned_le64(async ? async->root_cookie : ant_state(current)->root_cookie, p + 128);
+ 	put_unaligned_le64(async ? async->capture_cookie : ctx->capture_cookie, p + 136);
+ 	ctx->packet_count++;
+ 	atomic64_inc(&packets_attempted);
+@@ -191,7 +192,7 @@ static void event_begin(struct ant_task *ctx, u8 phase, long result)
+ 
+ 	ctx->phase = phase;
+ 	ctx->timestamp_ns = async ? async->timestamp_ns : ktime_get_ns();
+-	ctx->event_seq = atomic64_inc_return(&origin->ant_event_seq);
++	ctx->event_seq = atomic64_inc_return(&ant_state(origin)->event_seq);
+ 	ctx->object_count = ctx->packet_count = ctx->failed_count = ctx->state = 0;
+ 	ctx->object_id = 0;
+ 	ctx->flags = 0;
+@@ -988,7 +989,7 @@ static void recapture_reset(struct ant_task *ctx)
+  */
+ void ant_monitor_exec_names(const struct linux_binprm *bprm)
+ {
+-	struct ant_task *ctx = current->ant_monitor;
++	struct ant_task *ctx = ant_state(current)->monitor;
+ 	const char *name = bprm->filename;
+ 	char prefix[24];
+ 	int i, n;
+@@ -1035,7 +1036,7 @@ static void operand_clear(struct ant_task *ctx)
+ void ant_monitor_operand(u8 arg, const char *key, const char *layout, const void *data,
+ 			 size_t size)
+ {
+-	struct ant_task *ctx = current->ant_monitor;
++	struct ant_task *ctx = ant_state(current)->monitor;
+ 
+ 	if (!ctx || !ctx->active)
+ 		return;
+@@ -1067,7 +1068,7 @@ static void operand_emit(struct ant_task *ctx)
+ 
+ struct ant_fileops *ant_monitor_fileops(u64 *nr)
+ {
+-	struct ant_task *ctx = current->ant_monitor;
++	struct ant_task *ctx = ant_state(current)->monitor;
+ 
+ 	if (!ctx || !ctx->active || ctx->busy || ctx->abi != ANT_ABI_NATIVE)
+ 		return NULL;
+@@ -1099,11 +1100,11 @@ static void fileops_emit(struct ant_task *ctx)
+ 
+ struct ant_filemap **ant_monitor_filemap(bool in_call)
+ {
+-	struct ant_task *ctx = current->ant_monitor;
++	struct ant_task *ctx = ant_state(current)->monitor;
+ 
+ 	if (!ctx || ctx->busy)
+ 		return NULL;
+-	if (!ctx->active && (in_call || (!READ_ONCE(current->ant_root_cookie) &&
++	if (!ctx->active && (in_call || (!READ_ONCE(ant_state(current)->root_cookie) &&
+ 					 !ctx->capture_cookie)))
+ 		return NULL;
+ 	return &ctx->filemap;
+@@ -1152,7 +1153,7 @@ static void filemap_note(struct ant_task *ctx)
+ 		return;
+ 	if (!ctx->active) {
+ 		capture_cookie = ant_observer_admit(current);
+-		if (!READ_ONCE(current->ant_root_cookie) && !capture_cookie) {
++		if (!READ_ONCE(ant_state(current)->root_cookie) && !capture_cookie) {
+ 			ant_filemap_free(ctx->filemap);
+ 			ctx->filemap = NULL;
+ 			return;
+@@ -1214,7 +1215,7 @@ static void creds_note(struct ant_task *ctx, u32 reason, const struct cred *cred
+ 		return;
+ 	if (!ctx->active) {
+ 		capture_cookie = ant_observer_admit(current);
+-		if (!READ_ONCE(current->ant_root_cookie) && !capture_cookie)
++		if (!READ_ONCE(ant_state(current)->root_cookie) && !capture_cookie)
+ 			return;
+ 		ctx->capture_cookie = capture_cookie;
+ 	}
+@@ -1257,7 +1258,7 @@ static u32 creds_reason(const struct ant_task *ctx, const struct cred *old,
+ 
+ void ant_monitor_creds(const struct cred *old, const struct cred *new)
+ {
+-	struct ant_task *ctx = current->ant_monitor;
++	struct ant_task *ctx = ant_state(current)->monitor;
+ 
+ 	if (!ctx || ctx->busy || !ctx->creds_seen)
+ 		return;
+@@ -1277,7 +1278,7 @@ void ant_monitor_creds(const struct cred *old, const struct cred *new)
+ 
+ void ant_monitor_loginuid(void)
+ {
+-	struct ant_task *ctx = current->ant_monitor;
++	struct ant_task *ctx = ant_state(current)->monitor;
+ 
+ 	if (ctx)
+ 		creds_note(ctx, ANTC_CRED_LOGINUID, current_cred());
+@@ -1289,7 +1290,7 @@ void ant_monitor_loginuid(void)
+  */
+ bool ant_monitor_note(const char *key, const char *layout, const void *data, size_t len)
+ {
+-	struct ant_task *ctx = current->ant_monitor;
++	struct ant_task *ctx = ant_state(current)->monitor;
+ 	bool sent;
+ 
+ 	if (!ctx || !ctx->active || ctx->busy)
+@@ -1310,8 +1311,8 @@ static void identity_fill(struct ant_task *ctx, struct ant_async_event *ev, u64
+ 	const struct cred *cred = current_cred();
+ 
+ 	ev->origin = current;
+-	ev->task_cookie = current->ant_cookie;
+-	ev->root_cookie = READ_ONCE(current->ant_root_cookie);
++	ev->task_cookie = ant_state(current)->cookie;
++	ev->root_cookie = READ_ONCE(ant_state(current)->root_cookie);
+ 	ev->capture_cookie = ctx->capture_cookie;
+ 	ev->start_boot_ns = current->start_boottime;
+ 	ev->parent_call_id = ctx->call_id;
+@@ -1329,7 +1330,7 @@ static void identity_fill(struct ant_task *ctx, struct ant_async_event *ev, u64
+ 
+ bool ant_monitor_identity(struct ant_async_event *ev, u64 *nr)
+ {
+-	struct ant_task *ctx = current->ant_monitor;
++	struct ant_task *ctx = ant_state(current)->monitor;
+ 
+ 	if (!ctx || !ctx->active || ctx->busy)
+ 		return false;
+@@ -1339,9 +1340,9 @@ bool ant_monitor_identity(struct ant_async_event *ev, u64 *nr)
+ 
+ bool ant_monitor_identity_last(struct ant_async_event *ev, u64 *nr)
+ {
+-	struct ant_task *ctx = current->ant_monitor;
++	struct ant_task *ctx = ant_state(current)->monitor;
+ 
+-	if (!ctx || ctx->busy || !READ_ONCE(current->ant_root_cookie))
++	if (!ctx || ctx->busy || !READ_ONCE(ant_state(current)->root_cookie))
+ 		return false;
+ 	identity_fill(ctx, ev, nr);
+ 	return true;
+@@ -1377,24 +1378,24 @@ void ant_monitor_enter(struct pt_regs *regs, long nr)
+ 	if (!selected(nr))
+ 		return;
+ 	capture_cookie = ant_observer_admit(current);
+-	if (!READ_ONCE(current->ant_root_cookie) && !capture_cookie)
++	if (!READ_ONCE(ant_state(current)->root_cookie) && !capture_cookie)
+ 		return;
+ 	ant_monitor_cookie(current);
+-	ctx = current->ant_monitor;
++	ctx = ant_state(current)->monitor;
+ 	if (!ctx) {
+ 		ctx = kzalloc(sizeof(*ctx), GFP_NOWAIT);
+ 		if (!ctx) {
+ 			atomic64_inc(&context_failures);
+ 			return;
+ 		}
+-		current->ant_monitor = ctx;
++		ant_state(current)->monitor = ctx;
+ 	}
+ 	if (ctx->busy)
+ 		return;
+ 	/* Pages from outside any call: not this call's. */
+ 	filemap_note(ctx);
+-	if (!current->ant_counted) {
+-		current->ant_counted = true;
++	if (!ant_state(current)->counted) {
++		ant_state(current)->counted = true;
+ 		atomic64_inc(&tasks_created);
+ 		atomic64_inc(&tasks_live);
+ 	}
+@@ -1438,7 +1439,7 @@ void ant_monitor_enter(struct pt_regs *regs, long nr)
+ 
+ void ant_monitor_exit(struct pt_regs *regs)
+ {
+-	struct ant_task *ctx = current->ant_monitor;
++	struct ant_task *ctx = ant_state(current)->monitor;
+ 	long result;
+ 
+ 	if (!ctx || !ctx->active || ctx->busy)
+@@ -1471,7 +1472,7 @@ static void lifecycle(struct ant_task *ctx, const char *key, u64 value)
+ 		return;
+ 	if (!ctx->active) {
+ 		capture_cookie = ant_observer_admit(current);
+-		if (!READ_ONCE(current->ant_root_cookie) && !capture_cookie)
++		if (!READ_ONCE(ant_state(current)->root_cookie) && !capture_cookie)
+ 			return;
+ 		ctx->capture_cookie = capture_cookie;
+ 	}
+@@ -1485,7 +1486,7 @@ static void lifecycle(struct ant_task *ctx, const char *key, u64 value)
+ 
+ u64 ant_monitor_parent_call_id(void)
+ {
+-	struct ant_task *ctx = current->ant_monitor;
++	struct ant_task *ctx = ant_state(current)->monitor;
+ 
+ 	return ctx && ctx->active ? ctx->call_id : 0;
+ }
+@@ -1699,15 +1700,15 @@ int ant_monitor_launch(const char *path, char **argv, char **envp)
+ 	if (!ctx)
+ 		return -ENOMEM;
+ 	ant_monitor_cookie(current);
+-	error = ant_run_launch(current, current->ant_cookie);
++	error = ant_run_launch(current, ant_state(current)->cookie);
+ 	if (error) {
+ 		kfree(ctx);
+ 		return error;
+ 	}
+-	WRITE_ONCE(current->ant_root_cookie, current->ant_cookie);
+-	current->ant_monitor = ctx;
+-	if (!current->ant_counted) {
+-		current->ant_counted = true;
++	WRITE_ONCE(ant_state(current)->root_cookie, ant_state(current)->cookie);
++	ant_state(current)->monitor = ctx;
++	if (!ant_state(current)->counted) {
++		ant_state(current)->counted = true;
+ 		atomic64_inc(&tasks_created);
+ 		atomic64_inc(&tasks_live);
+ 	}
+@@ -1717,7 +1718,7 @@ int ant_monitor_launch(const char *path, char **argv, char **envp)
+ 	ctx->launch_exec = true;
+ 	ctx->busy = true;
+ 	event_begin(ctx, 3, 0);
+-	put_unaligned_le64(current->ant_cookie, cookie);
++	put_unaligned_le64(ant_state(current)->cookie, cookie);
+ 	field(ctx, 255, "lifecycle.launch", "", 4, 0, cookie, sizeof(cookie), sizeof(cookie), ANT_COMPLETE);
+ 	ctx->kernel_imported = true;
+ 	field(ctx, 255, "context.exec.path", "", 2, 0, path, strlen(path) + 1,
+@@ -1740,12 +1741,12 @@ int ant_monitor_launch(const char *path, char **argv, char **envp)
+ 
+ u64 ant_monitor_cookie(struct task_struct *task)
+ {
+-	u64 cookie = READ_ONCE(task->ant_cookie), previous;
++	u64 cookie = READ_ONCE(ant_state(task)->cookie), previous;
+ 
+ 	if (cookie)
+ 		return cookie;
+ 	cookie = atomic64_inc_return(&cookies);
+-	previous = cmpxchg(&task->ant_cookie, 0, cookie);
++	previous = cmpxchg(&ant_state(task)->cookie, 0, cookie);
+ 	return previous ?: cookie;
+ }
+ 
+@@ -1759,8 +1760,10 @@ u64 ant_monitor_stream_id(void)
+  */
+ void ant_monitor_fork_prepare(struct task_struct *child)
+ {
+-	WRITE_ONCE(child->ant_observer_cookie, READ_ONCE(current->ant_observer_cookie));
+-	if (!current->ant_run)
++	struct ant_task_state *state = ant_state(current);
++
++	WRITE_ONCE(ant_state(child)->observer_cookie, READ_ONCE(state->observer_cookie));
++	if (!state->run)
+ 		return;
+ 	/* An io_uring worker is a thread of the creating process, but not a
+ 	 * task the program started: it is invisible to the observer and carries
+@@ -1773,16 +1776,16 @@ void ant_monitor_fork_prepare(struct task_struct *child)
+ 		return;
+ 	}
+ 	ant_monitor_cookie(child);
+-	WRITE_ONCE(child->ant_root_cookie, READ_ONCE(current->ant_root_cookie));
++	WRITE_ONCE(ant_state(child)->root_cookie, READ_ONCE(state->root_cookie));
+ 	ant_run_fork(current, child);
+-	child->ant_counted = true;
++	ant_state(child)->counted = true;
+ 	atomic64_inc(&tasks_created);
+ 	atomic64_inc(&tasks_live);
+ }
+ 
+ void ant_monitor_fork(struct task_struct *child)
+ {
+-	struct ant_task *ctx = current->ant_monitor;
++	struct ant_task *ctx = ant_state(current)->monitor;
+ 	u8 scalar[8];
+ 	u64 values[4];
+ 	static const char * const keys[] = { "lifecycle.child_cookie", "lifecycle.child_pid",
+@@ -1790,14 +1793,14 @@ void ant_monitor_fork(struct task_struct *child)
+ 	int i;
+ 
+ 	if (!ctx || ctx->busy || (!ctx->active &&
+-	    !current->ant_root_cookie && !ant_observer_admit(current)))
++	    !ant_state(current)->root_cookie && !ant_observer_admit(current)))
+ 		return;
+ 	ant_monitor_cookie(child);
+ 	if (!ctx->active)
+ 		ctx->capture_cookie = ant_observer_admit(current);
+ 	ctx->busy = true;
+ 	event_begin(ctx, 3, 0);
+-	values[0] = child->ant_cookie;
++	values[0] = ant_state(child)->cookie;
+ 	values[1] = task_pid_nr(child);
+ 	values[2] = task_tgid_nr(child);
+ 	values[3] = child->start_boottime;
+@@ -1811,7 +1814,7 @@ void ant_monitor_fork(struct task_struct *child)
+ 
+ void ant_monitor_exec(struct file *file, bool interpreter)
+ {
+-	struct ant_task *ctx = current->ant_monitor;
++	struct ant_task *ctx = ant_state(current)->monitor;
+ 	bool launch = ctx && ctx->launch_exec && !ctx->active;
+ 
+ 	lifecycle(ctx, "lifecycle.exec_commit", task_pid_nr(current));
+@@ -1829,18 +1832,18 @@ void ant_monitor_exec(struct file *file, bool interpreter)
+ void ant_monitor_task_exit(bool group_dead)
+ {
+ 	/* Pages the address space held dirty when exit_mm() dropped it. */
+-	filemap_note(current->ant_monitor);
++	filemap_note(ant_state(current)->monitor);
+ 	ant_run_exit(current, group_dead);
+-	lifecycle(current->ant_monitor, "lifecycle.task_exit", current->exit_code);
+-	if (current->ant_counted) {
+-		current->ant_counted = false;
++	lifecycle(ant_state(current)->monitor, "lifecycle.task_exit", current->exit_code);
++	if (ant_state(current)->counted) {
++		ant_state(current)->counted = false;
+ 		atomic64_dec(&tasks_live);
+ 	}
+ }
+ 
+ void ant_monitor_release(struct task_struct *task)
+ {
+-	struct ant_task *ctx = task->ant_monitor;
++	struct ant_task *ctx = ant_state(task)->monitor;
+ 
+ 	if (ctx) {
+ 		ant_capture_set_state(ctx, NULL, NULL);
+diff --git a/kernel/antinomie/run.c b/kernel/antinomie/run.c
+index 7994369..2464d6d 100644
+--- a/kernel/antinomie/run.c
++++ b/kernel/antinomie/run.c
+@@ -11,6 +11,7 @@
+ #include "control_wire.h"
+ #include "process_core.h"
+ #include "run.h"
++#include "state.h"
+ 
+ #define ANT_RUN_COUNT 64
+ 
+@@ -72,9 +73,9 @@ static struct ant_run *find_run(u64 cookie)
+  */
+ bool ant_monitor_core_pending(struct task_struct *task)
+ {
+-	struct ant_run *run = READ_ONCE(task->ant_run);
++	struct ant_run *run = READ_ONCE(ant_state(task)->run);
+ 
+-	return READ_ONCE(task->ant_root_process) && run && READ_ONCE(run->core_armed);
++	return READ_ONCE(ant_state(task)->root_process) && run && READ_ONCE(run->core_armed);
+ }
+ 
+ /* An io_uring worker belongs to the launched process, but a signal aimed at
+@@ -89,7 +90,7 @@ bool ant_monitor_core_armed(struct task_struct *task)
+ /* The launch cookie of the run @task belongs to, or 0. */
+ u64 ant_run_root_cookie(struct task_struct *task)
+ {
+-	struct ant_run *run = READ_ONCE(task->ant_run);
++	struct ant_run *run = READ_ONCE(ant_state(task)->run);
+ 
+ 	return run ? run->root_cookie : 0;
+ }
+@@ -121,8 +122,8 @@ int ant_run_launch(struct task_struct *task, u64 cookie)
+ 	run->generation = 1;
+ 	run->live_count = 1;
+ 	run->task_count = 1;
+-	task->ant_run = run;
+-	task->ant_root_process = true;
++	ant_state(task)->run = run;
++	ant_state(task)->root_process = true;
+ 	spin_unlock_irqrestore(&run_lock, irqflags);
+ 	return 0;
+ }
+@@ -130,7 +131,7 @@ int ant_run_launch(struct task_struct *task, u64 cookie)
+ /* The hashing the host asked for at launch, set before the program's exec. */
+ void ant_run_hash_flags(struct task_struct *task, u32 flags)
+ {
+-	struct ant_run *run = task->ant_run;
++	struct ant_run *run = ant_state(task)->run;
+ 
+ 	if (run)
+ 		WRITE_ONCE(run->hash_flags, flags);
+@@ -141,8 +142,8 @@ void ant_run_hash_flags(struct task_struct *task, u32 flags)
+  */
+ bool ant_run_hashes(struct task_struct *task, u32 flag)
+ {
+-	struct ant_run *run = READ_ONCE(task->ant_run);
+-	u64 cookie = READ_ONCE(task->ant_root_cookie);
++	struct ant_run *run = READ_ONCE(ant_state(task)->run);
++	u64 cookie = READ_ONCE(ant_state(task)->root_cookie);
+ 	unsigned long irqflags;
+ 	bool hashes;
+ 
+@@ -159,14 +160,14 @@ bool ant_run_hashes(struct task_struct *task, u32 flag)
+ 
+ void ant_run_fork(struct task_struct *parent, struct task_struct *child)
+ {
+-	struct ant_run *run = parent->ant_run;
++	struct ant_run *run = ant_state(parent)->run;
+ 	unsigned long irqflags;
+ 
+ 	if (!run)
+ 		return;
+ 	spin_lock_irqsave(&run_lock, irqflags);
+-	child->ant_run = run;
+-	child->ant_root_process = parent->ant_root_process &&
++	ant_state(child)->run = run;
++	ant_state(child)->root_process = ant_state(parent)->root_process &&
+ 		same_thread_group(parent, child);
+ 	run->live_count++;
+ 	run->task_count++;
+@@ -182,19 +183,19 @@ void ant_run_fork(struct task_struct *parent, struct task_struct *child)
+  */
+ bool ant_run_exit(struct task_struct *task, bool group_dead)
+ {
+-	struct ant_run *run = task->ant_run;
++	struct ant_run *run = ant_state(task)->run;
+ 	unsigned long irqflags;
+ 
+ 	if (!run)
+ 		return false;
+ 	spin_lock_irqsave(&run_lock, irqflags);
+ 	/* Detachment also makes a repeated exit observation harmless. */
+-	task->ant_run = NULL;
++	ant_state(task)->run = NULL;
+ 	/* Root status follows the launched process, including nonleader exec.
+ 	 * Match wait_task_zombie(): an internal de_thread leader death and a
+ 	 * leader-only pthread_exit are not root-process completion.
+ 	 */
+-	if (task->ant_root_process && group_dead) {
++	if (ant_state(task)->root_process && group_dead) {
+ 		run->root_status = task->signal->flags & SIGNAL_GROUP_EXIT ?
+ 			task->signal->group_exit_code : task->group_leader->exit_code;
+ 		run->flags |= ANTC_RUN_ROOT_EXITED;
+@@ -308,8 +309,8 @@ int ant_run_signal(u64 root_cookie, int sig, bool *issued)
+ 	*issued = false;
+ 	rcu_read_lock();
+ 	for_each_process_thread(process, task) {
+-		if (!READ_ONCE(task->ant_cookie) ||
+-		    READ_ONCE(task->ant_root_cookie) != root_cookie)
++		if (!READ_ONCE(ant_state(task)->cookie) ||
++		    READ_ONCE(ant_state(task)->root_cookie) != root_cookie)
+ 			continue;
+ 		get_task_struct(task);
+ 		error = send_sig(sig, task, 1);
+diff --git a/kernel/antinomie/state.c b/kernel/antinomie/state.c
+new file mode 100644
+index 0000000..ffd81c2
+--- /dev/null
++++ b/kernel/antinomie/state.c
+@@ -0,0 +1,53 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* The recorder's per-task state, outside struct task_struct (state.h). */
++#include <linux/antinomie_monitor.h>
++#include <linux/coredump.h>
++#include <linux/init.h>
++#include <linux/kernel.h>
++
++#include "state.h"
++
++int ant_task_state_offset __ro_after_init;
++
++/* Called once with the task blob size the LSMs need (security.c's
++ * blob_sizes.lbs_task, after every LSM took its part): the recorder's state
++ * goes after them, aligned as lsm_set_blob_size() aligns theirs. Nothing
++ * registers an LSM, so /sys/kernel/security/lsm, lsm_list_modules() and the
++ * boot log list Debian's set and order.
++ */
++void __init ant_task_state_reserve(int *task_blob_size)
++{
++	ant_task_state_offset = ALIGN(*task_blob_size, sizeof(void *));
++	*task_blob_size = ant_task_state_offset + sizeof(struct ant_task_state);
++}
++
++/* The file identity an io_uring worker's operation publishes belongs to this
++ * request (NULL: none). io_uring/fs.c brackets the operation with it.
++ */
++void ant_monitor_async_target(const void *request)
++{
++	ant_state(current)->async_target = request;
++}
++
++/* A process core the recorder asks for is written by the calling task, in one
++ * call of the ELF writer (fs/coredump.c): while it runs, the writer finds the
++ * recorder's part of it as the task's dump. A core Linux writes for a signal
++ * has none.
++ */
++void ant_coredump_attach(struct ant_coredump_live *live, unsigned long deadline)
++{
++	struct ant_task_state *state = ant_state(current);
++
++	state->coredump_live = live;
++	state->coredump_deadline = deadline;
++}
++
++struct ant_coredump_live *ant_coredump_live(void)
++{
++	return ant_state(current)->coredump_live;
++}
++
++unsigned long ant_coredump_deadline(void)
++{
++	return ant_state(current)->coredump_deadline;
++}
+diff --git a/kernel/antinomie/state.h b/kernel/antinomie/state.h
+new file mode 100644
+index 0000000..375b0d8
+--- /dev/null
++++ b/kernel/antinomie/state.h
+@@ -0,0 +1,51 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef _ANTINOMIE_STATE_H
++#define _ANTINOMIE_STATE_H
++
++#include <linux/atomic.h>
++#include <linux/sched.h>
++#include <linux/types.h>
++
++struct ant_task;
++struct ant_run;
++struct ant_coredump_live;
++
++/* What the recorder keeps per task. It lives in the task's security blob
++ * (task->security), at an offset reserved after every LSM's own part when the
++ * LSMs are set up (ant_task_state_reserve()), never in struct task_struct, so
++ * that structure keeps Debian's layout and module ABI. The blob is allocated
++ * zeroed with the task (security_task_alloc(), after dup_task_struct() copied
++ * the parent) and freed after ant_monitor_release() (security_task_free()), so
++ * a task never sees its parent's state, and a pointer to a task that is still
++ * referenced reaches valid state.
++ */
++struct ant_task_state {
++	u64 cookie;
++	u64 root_cookie;
++	u64 observer_cookie;
++	struct ant_task *monitor;
++	struct ant_run *run;
++	/* The io_uring request whose operation this worker is running: the
++	 * file identity the operation publishes is that request's operand.
++	 */
++	const void *async_target;
++	/* The process core this task is writing (ant_coredump_attach()). */
++	struct ant_coredump_live *coredump_live;
++	unsigned long coredump_deadline;
++	atomic64_t event_seq;
++	atomic64_t packet_seq;
++	bool root_process;
++	bool counted;
++};
++
++extern int ant_task_state_offset;
++
++/* The recorder's state of a task between security_task_alloc() and
++ * security_task_free(): every task the recorder can see.
++ */
++static __always_inline struct ant_task_state *ant_state(const struct task_struct *task)
++{
++	return (struct ant_task_state *)((char *)task->security + ant_task_state_offset);
++}
++
++#endif
+diff --git a/kernel/fork.c b/kernel/fork.c
+index 2cb277b..4bb1652 100644
+--- a/kernel/fork.c
++++ b/kernel/fork.c
+@@ -1138,18 +1138,6 @@ static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
+ 	err = arch_dup_task_struct(tsk, orig);
+ 	if (err)
+ 		goto free_tsk;
+-#ifdef CONFIG_ANTINOMIE
+-	tsk->ant_cookie = 0;
+-	tsk->ant_root_cookie = 0;
+-	tsk->ant_observer_cookie = 0;
+-	tsk->ant_monitor = NULL;
+-	tsk->ant_run = NULL;
+-	tsk->ant_async_target = NULL;
+-	atomic64_set(&tsk->ant_event_seq, 0);
+-	atomic64_set(&tsk->ant_packet_seq, 0);
+-	tsk->ant_root_process = false;
+-	tsk->ant_counted = false;
+-#endif
+ 
+ 	err = alloc_thread_stack_node(tsk, node);
+ 	if (err)
+diff --git a/security/security.c b/security/security.c
+index 1a85b67..804d005 100644
+--- a/security/security.c
++++ b/security/security.c
+@@ -11,6 +11,7 @@
+ 
+ #define pr_fmt(fmt) "LSM: " fmt
+ 
++#include <linux/antinomie_monitor.h>
+ #include <linux/bpf.h>
+ #include <linux/capability.h>
+ #include <linux/dcache.h>
+@@ -463,6 +464,8 @@ static void __init ordered_lsm_init(void)
+ 
+ 	for (lsm = ordered_lsms; *lsm; lsm++)
+ 		prepare_lsm(*lsm);
++	/* The recorder's per-task state, after every LSM's part. */
++	ant_task_state_reserve(&blob_sizes.lbs_task);
+ 
+ 	report_lsm_order();
+ 
