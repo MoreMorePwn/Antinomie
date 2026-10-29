@@ -8,6 +8,37 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+
+/// Kernel output may interrupt the userspace banner mid-write. As in the
+/// conformance harness, remove timestamped kernel lines before retrying the
+/// exact banner match; a complete raw banner still follows the existing rule.
+fn serial_ready(log: &[u8], marker: &[u8]) -> bool {
+    let contains = |bytes: &[u8]| bytes.windows(marker.len()).any(|part| part == marker);
+    if contains(log) {
+        return true;
+    }
+    let mut console = Vec::with_capacity(log.len());
+    let mut index = 0;
+    while index < log.len() {
+        if log[index] == b'[' {
+            let rest = &log[index + 1..];
+            let digits = rest
+                .iter()
+                .take_while(|byte| byte.is_ascii_digit() || **byte == b' ' || **byte == b'.')
+                .count();
+            if digits > 0 && rest[..digits].contains(&b'.') && rest.get(digits) == Some(&b']') {
+                index = rest
+                    .iter()
+                    .position(|byte| *byte == b'\n')
+                    .map_or(log.len(), |end| index + end + 2);
+                continue;
+            }
+        }
+        console.push(log[index]);
+        index += 1;
+    }
+    contains(&console)
+}
 struct Driver {
     backend: Backend,
     snapshot: Snapshot,
@@ -89,10 +120,7 @@ impl Driver {
         loop {
             self.pump();
             if self.snapshot.serial_log.as_ref().is_some_and(|path| {
-                std::fs::read(path).is_ok_and(|text| {
-                    text.windows(self.ready.len())
-                        .any(|part| part == self.ready.as_bytes())
-                })
+                std::fs::read(path).is_ok_and(|text| serial_ready(&text, self.ready.as_bytes()))
             }) {
                 return Ok(());
             }
@@ -409,5 +437,40 @@ fn main() {
     if let Err(error) = run() {
         eprintln!("{error}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::serial_ready;
+
+    #[test]
+    fn a_kernel_message_cannot_hide_the_completed_busybox_banner() {
+        let log = b"BusyBox guest re[    2.897214] rcS (120) used greatest stack depth\nady\n";
+        assert!(serial_ready(log, b"BusyBox guest ready"));
+        assert!(serial_ready(
+            b"BusyBox guest ready\n",
+            b"BusyBox guest ready"
+        ));
+        assert!(serial_ready(
+            b"[    2.0] systemd[1]: booting\n",
+            b"systemd["
+        ));
+    }
+
+    #[test]
+    fn partial_or_unrelated_console_output_is_not_ready() {
+        assert!(!serial_ready(
+            b"BusyBox guest re[    2.89] rcS\n",
+            b"BusyBox guest ready"
+        ));
+        assert!(!serial_ready(
+            b"BusyBox guest re[x] user text\nady\n",
+            b"BusyBox guest ready"
+        ));
+        assert!(!serial_ready(
+            b"[    2.89] BusyBox guest ready\n",
+            b" login: "
+        ));
     }
 }
