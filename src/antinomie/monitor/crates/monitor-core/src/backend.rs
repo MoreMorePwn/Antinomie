@@ -17,6 +17,7 @@ mod saving;
 mod session_runs;
 mod session_transport;
 mod snapshot_recovery;
+mod snapshot_saving;
 mod terminal_drain;
 mod uploads;
 mod worker_artifacts;

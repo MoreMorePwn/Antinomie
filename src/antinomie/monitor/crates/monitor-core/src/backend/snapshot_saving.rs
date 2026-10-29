@@ -1,0 +1,66 @@
+// SPDX-License-Identifier: GPL-3.0-only
+//! A stopped boot's evidence must be saved before its disk layer can be merged.
+use super::*;
+
+impl Worker {
+    pub(super) fn wait_snapshot_recordings(&mut self, command: &Command) -> Result<(), String> {
+        if self.session.is_some() {
+            return Ok(());
+        }
+        let vm_id = match command {
+            Command::CreateVmSnapshot { vm_id, .. }
+            | Command::RenameVmSnapshot { vm_id, .. }
+            | Command::RestoreVmSnapshot {
+                vm_id,
+                confirmed: true,
+                ..
+            }
+            | Command::DeleteVmSnapshot {
+                vm_id,
+                confirmed: true,
+                ..
+            } => vm_id,
+            _ => return Ok(()),
+        };
+        if crate::snapshots::run_layer::pending_record(&self.options, vm_id).is_none() {
+            return Ok(());
+        }
+        self.wait_snapshot_flush_until(vm_id, Instant::now() + Duration::from_secs(300))
+    }
+
+    fn wait_snapshot_flush_until(&mut self, vm_id: &str, deadline: Instant) -> Result<(), String> {
+        if !self.flusher.is_busy() && self.deferred_flush.is_none() {
+            return Ok(());
+        }
+        self.snapshot.vm_snapshot_progress = Some(VmSnapshotProgress {
+            vm_id: vm_id.into(),
+            stage: "Waiting for saved recordings".into(),
+        });
+        self.publish();
+        let result = (|| {
+            while self.flusher.is_busy() || self.deferred_flush.is_some() {
+                if self.closing.load(Ordering::Acquire) {
+                    return Err(
+                        "snapshot cancelled while recordings are being saved; disk layers retained"
+                            .into(),
+                    );
+                }
+                if Instant::now() >= deadline {
+                    return Err("recordings are still being saved; retry the snapshot operation after saving finishes; disk layers retained".into());
+                }
+                // The flusher owns the files, so only collect its status. Once
+                // it finishes, poll_flush may start the ordinary layer finalizer;
+                // settle_stopped serializes the subsequent snapshot with that job.
+                self.poll_flush();
+                thread::sleep(Duration::from_millis(50));
+            }
+            Ok(())
+        })();
+        self.snapshot.vm_snapshot_progress = None;
+        self.publish();
+        result
+    }
+}
+
+#[cfg(test)]
+mod tests;

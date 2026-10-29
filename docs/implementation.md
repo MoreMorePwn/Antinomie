@@ -4332,6 +4332,16 @@ variants if feasible. Use actual measured results and record unavailable tests.
 
 ## Accepted snapshot and reconnect extension (0.5.0)
 
+**Stopped-boot ordering (0.8.0).** Before a stopped VM's snapshot is created,
+restored, renamed or hidden, pending recording flushes finish before its automatic
+run layer can be finalized. The backend publishes "Waiting for saved recordings"
+while collecting active or deferred flush jobs. The wait times out after five
+minutes or cancels on application shutdown, retaining the disk layers. The store
+then settles the stopped run layer, waiting for a background finalizer's lock,
+before reading the snapshot manifest. A running VM keeps its automatic layer;
+user-owned checkpoint layers are never merged. This is host-only and does not
+change the guest contract.
+
 The authorized snapshot manager supports disk checkpoints (cold boot recovery)
 and full CPU/RAM/device checkpoints (resume recovery), with a branching native
 graph. External qcow2 layers are frozen; each branch owns a separate writable

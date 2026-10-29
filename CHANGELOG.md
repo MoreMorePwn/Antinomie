@@ -6,6 +6,13 @@ it runs.
 
 ## 0.8.0 — unreleased
 
+- **Stopped-VM snapshots wait for saved recordings and disk finalization.**
+  Snapshot changes finish the previous boot's automatic disk layer before using
+  it, so a background merge cannot remove a layer selected for a checkpoint.
+  Pending recording writes finish first, preserving the evidence needed to copy
+  earlier file contents. The snapshot window reports the recording wait; a
+  timeout or shutdown cancels the operation with the disk layers retained.
+
 - **Stealth: cloud VPS profiles with a fake metadata service.** A new "Cloud
   VPS" preset makes the VM an instance of a KVM cloud (Tencent Cloud CVM,
   Alibaba Cloud ECS, DigitalOcean Droplet, Vultr VC2) instead of a PC: the

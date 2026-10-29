@@ -33,6 +33,7 @@ impl Worker {
     /// closed once it succeeded.
     pub(super) fn command(&mut self, command: Command) -> Result<String, String> {
         self.disk_lease_gate(&command)?;
+        self.wait_snapshot_recordings(&command)?;
         let after = super::worker_disks::effect(&command)
             .is_some()
             .then(|| command.clone());

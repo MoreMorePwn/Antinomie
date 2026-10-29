@@ -635,7 +635,8 @@ pub(crate) fn prepare_restore(
         compatibility: record.compatibility.clone(),
     })
 }
-/// Read-only preflight used before saving/replacing the current working state.
+/// Finish the stopped boot's automatic layer, then validate the restore target
+/// before saving or replacing the current working state.
 pub(crate) fn preflight_restore(
     options: &BackendOptions,
     vm: &VmConfig,
