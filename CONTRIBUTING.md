@@ -1,14 +1,61 @@
-# Contributing to the Antinomie kernel packaging
+# Contributing to Antinomie
 
-Original host/tooling contributions for 0.7.0 and later use GPL-3.0-only.
-Shared kernel headers remain MIT; kernel-derived and imported files keep their
-existing licenses. Contributions must be available under the destination
-license. See LICENSING.md; earlier releases retain their original terms.
+Thank you for helping. Original host/tooling contributions for 0.7.0 and later
+use GPL-3.0-only. Shared kernel headers remain MIT; kernel-derived and imported
+files keep their existing licenses. You must own or have permission to license
+what you contribute under the destination file's license. See
+[LICENSING.md](LICENSING.md); earlier releases retain their original terms.
 
-This document is the operational guide for adding and maintaining Antinomie
-patches. It assumes you have read the design documents in the project vault
-(`Documentation/Antinomie/`), in particular *Debian Kernel and Image
-Development Guide*.
+## Ways to contribute
+
+- **Report a bug** with the bug report form on GitHub Issues. Include the app
+  version, the base name and revision, your host distribution, KVM or TCG, the
+  steps, and the output of `antinomie --check-dependencies`.
+- **Never attach live malware, real credentials or private recordings** to a
+  public issue. Describe the sample by its hash, or share a harmless reproducer.
+- **Report a security problem privately**, as described in
+  [SECURITY.md](SECURITY.md), not in a public issue.
+- **Improve the documentation**: the [README](README.md), the
+  [user guide](docs/usage.md) and the [security model](docs/security.md).
+- **Change the host application, tooling or guest kernel** with a pull request.
+
+## Build and check the host application
+
+The host application is Rust under `src/antinomie/monitor/`. The
+[host build guide](src/antinomie/monitor/README.md#build-and-run) lists the
+packages; `./run.sh` builds and starts it. Before opening a pull request, run
+the checks CI runs (see `.github/workflows/ci.yml`):
+
+```bash
+scripts/check-privacy.sh
+python3 -I scripts/check-module-size.py
+cd src/antinomie/monitor
+cargo fmt --all -- --check
+cargo clippy --release --locked --all-targets -- -D warnings
+cargo test --release --locked --no-fail-fast
+```
+
+Build-script changes also need the matching `tests/monitor/test-*.py` and
+`scripts/test-*.py` tests, and shell changes `shellcheck --severity=error`.
+Guest and transport changes need a VM: see `scripts/vm-regress.py --help` and
+the [conformance suite](tests/monitor/conformance/README.md).
+
+## Pull requests
+
+- Target the current `release-X.Y.Z` branch for new work; `main` carries the
+  latest published release (see [Versioning](#12-versioning)).
+- Keep one topic per pull request, with tests for changed behaviour and the
+  documentation updated in the same change.
+- Use project-focused commit messages that say what changed and why.
+- Follow the code conventions in [AGENTS.md](AGENTS.md) and
+  [host code layout](#101-host-code-layout).
+- Describe the checks you ran and their results; never report an unrun check
+  as passing.
+
+## Kernel packaging guide
+
+The rest of this document is the operational guide for adding and maintaining
+the Antinomie guest kernel patches on top of Debian's kernel packaging.
 
 ---
 
@@ -80,8 +127,8 @@ Debian main series. The Antinomie block is applied **last** in
 ## 4. First-time setup
 
 ```bash
-git clone <url> ~/src/antinomie
-cd ~/src/antinomie
+git clone https://github.com/MoreMorePwn/Antinomie.git
+cd Antinomie
 scripts/bootstrap.sh                 # default adapter: debian-6.12.94-1-trixie
 ```
 
@@ -277,7 +324,7 @@ Adding an adapter must not modify `src/antinomie/core/`.
 - Never maintain two copies of the same patch.
 - Never fix a rebase with `--fuzz`.
 - Keep upstream, Debian, and Antinomie commits distinguishable.
-- Every commit maps to a backlog item.
+- Every commit covers one change, described in its message.
 
 ### 10.1 Host code layout
 
@@ -377,10 +424,15 @@ minimum versions never decrease. After a feature version is released, a new
 guest revision belongs to the next minor or major version.
 
 For a release: update `CHANGELOG.md`, raise the version, commit, and tag the
-commit `vX.Y.Z`. Pushing the tag runs `.github/workflows/release.yml`: it
-checks that the tag matches the version, runs the tests, builds the archive
-with `scripts/build-release.sh` and publishes the GitHub release with the
-version's changelog section as notes. Bases are built and uploaded
+commit `vX.Y.Z`. Pushing the tag runs `.github/workflows/release.yml`: with
+read-only access it checks that the tag matches the version, runs CI's checks
+(privacy, module size, fmt, Clippy, tests, `cargo audit`) and builds the
+archive with `scripts/build-release.sh`; a separate publish job then attests
+the archive's build provenance and publishes the GitHub release. Its notes are
+the opening paragraph of the version's changelog section, a link to the full
+section and the checksum. Before tagging, also update the README's version
+note and "What's in" section, the version line of `docs/usage.md` and any
+screenshot whose UI changed. Bases are built and uploaded
 separately (see the base distribution notes).
 
 Releases never carry the **full pack** (every managed tool, pre-downloaded):
@@ -390,9 +442,10 @@ publishing it would redistribute every tool. `scripts/build-full-pack.py`
 
 Upload only `antinomie-X.Y.Z-linux-x86_64.tar.gz` and `SHA256SUMS` to an
 application release. Required notices remain inside the application archive.
-Publish separate guest sources/notices and supporting provenance in the
-documentation repository's support downloads, with a verified link from the
-affected release notes. The HF bucket remains image/catalog only. Preserve
+The corresponding guest kernel source of the published bases is this
+repository's `src/debian/` inputs and `src/antinomie/` patch series at the
+release tag; link it from the release notes, together with any separate guest
+notices and supporting provenance. The HF bucket remains image/catalog only. Preserve
 supporting downloads before removing old release attachments; retain their
 original hashes and never replace application archives or immutable tags as
 part of release housekeeping.
