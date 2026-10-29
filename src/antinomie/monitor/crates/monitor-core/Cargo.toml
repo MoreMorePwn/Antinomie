@@ -15,7 +15,7 @@ sha1 = "0.10.7"
 fuzzyhash = "0.2.2"
 tlsh2 = "1.1.0"
 vt100 = "0.16"
-rusqlite = "0.40.2"
+rusqlite = "0.41.0"
 x11rb = "0.13.2"
 rustix = { version = "1", features = ["event", "fs", "net", "process", "param"] }
 object = { version = "0.40", default-features = false, features = ["read", "std"] }
