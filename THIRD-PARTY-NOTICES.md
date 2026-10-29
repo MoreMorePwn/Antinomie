@@ -77,6 +77,15 @@ redistributed.
 
 ## Embedded UI assets
 
+The official logo uses outlined Comfortaa 700 lettering. The source typeface is
+Copyright 2011 The Comfortaa Project Authors (https://github.com/alexeiva/comfortaa),
+with Reserved Font Name "Comfortaa", under SIL OFL 1.1, retained in
+[Comfortaa-OFL.txt](LICENSES/third-party/fonts/Comfortaa-OFL.txt). No Comfortaa
+font binary is embedded in the application: SVG outlines are the masters and
+PNG derivatives are embedded for native rendering. The penguin is the user's
+supplied artwork, manually recreated and edited as vector geometry. The selected
+identity, palette and asset roles are recorded in [the brand asset guide](assets/branding/README.md).
+
 The UI uses the DejaVu fonts (text and data), egui default fonts as fallbacks and the regular egui-phosphor icon font.
 Notices below are retained for these bundled assets, not promotional credits.
 

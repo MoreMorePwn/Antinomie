@@ -133,8 +133,9 @@ impl MonitorApp {
                 .collapsible(false)
                 .resizable(false)
                 .show(ctx, |ui| {
+                    crate::branding::show_wordmark(ui, 300.0);
                     ui.label(
-                        RichText::new(format!("Antinomie {APP_VERSION}"))
+                        RichText::new(format!("Version {APP_VERSION}"))
                             .size(ui.text_style_height(&egui::TextStyle::Heading))
                             .color(theme::heading()),
                     );
