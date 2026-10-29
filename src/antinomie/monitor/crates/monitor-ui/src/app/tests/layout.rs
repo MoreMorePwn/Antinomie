@@ -130,6 +130,10 @@ fn tool_dialogs_do_not_keep_growing_after_their_initial_layout() {
             let ctx = egui::Context::default();
             theme::install(&ctx);
             theme::text_size(&ctx, font_size);
+            // A window grows to its content over its first few frames (a tall
+            // one, such as Stealth with its fallback notice, takes three); from
+            // then on its size must hold.
+            const SETTLED_FRAME: usize = 10;
             let mut settled = None;
             for frame in 0..90 {
                 let _ = ctx.run(
@@ -143,10 +147,10 @@ fn tool_dialogs_do_not_keep_growing_after_their_initial_layout() {
                 let rect = ctx
                     .memory(|memory| memory.area_rect(dialog.window_id()))
                     .unwrap_or_else(|| panic!("missing {dialog:?}"));
-                if frame == 2 {
+                if frame == SETTLED_FRAME {
                     settled = Some(rect.size());
                 }
-                if frame > 2 {
+                if frame > SETTLED_FRAME {
                     let first = settled.unwrap();
                     assert!((rect.width()-first.x).abs() <= 1.0 && (rect.height()-first.y).abs() <= 1.0,
                         "{dialog:?} grows at {size:?}/{font_size}, frame {frame}: {first:?} -> {:?}", rect.size());
