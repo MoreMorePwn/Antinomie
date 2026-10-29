@@ -34,6 +34,6 @@ the desktop icon and the required notices.
 Source typeface: [Comfortaa in Google Fonts](https://github.com/google/fonts/tree/main/ofl/comfortaa),
 static weight 700. Copyright 2011 The Comfortaa Project Authors; SIL OFL 1.1.
 The notice is retained in `LICENSES/third-party/fonts/Comfortaa-OFL.txt`.
-The penguin comes from the user's supplied artwork and the SVG reconstruction
-and edits selected during the design session. This selection replaces the
+The penguin symbol is artwork supplied by the project owner, MikiMiku
+(MoreMorePwn), redrawn and edited as SVG. This selection replaces the
 earlier letter-A brand for current assets; historical release artifacts remain snapshots.

@@ -7,6 +7,7 @@ const KIT_FILES: &[&str] = &[
     "LICENSING.md",
     "THIRD-PARTY-NOTICES.md",
     "LICENSES/Antinomie-MIT.txt",
+    "LICENSES/GPL-2.0-only.txt",
     "scripts/build-base.py",
     "scripts/build-monitor-kernel.sh",
     "scripts/build-monitor-image.py",

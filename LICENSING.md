@@ -15,27 +15,29 @@ third-party assets. Preserve their applicable notices and terms.
 | Material | License / treatment |
 |---|---|
 | Original Rust monitor, scripts, tests, packaging glue and documentation | GPL-3.0-only from 0.7.0, except explicitly marked or imported material |
+| `scripts/build-base.py` | MIT, as marked; the base build orchestrator that the executable embeds in its base build kit next to the kernel material |
 | `src/antinomie/transport/host.c`, `host_api.h` | GPL-3.0-only; independently built host transport |
 | Original shared `abi.h`, `queue.h`, `bootstrap_layout.h`, monitor `protocol/control.h` | MIT; kernel copies retain this file-specific license |
-| Kernel-only `transport/guest.c`, `bootstrap.c`, `guest_api.h` | GPL-2.0-only, as marked; excluded from root GPLv3 scope |
+| Kernel-only `transport/guest.c`, `bootstrap.c`, `guest_api.h` | GPL-2.0-only, as marked ([GPL-2.0-only.txt](LICENSES/GPL-2.0-only.txt)); excluded from root GPLv3 scope |
 | Kernel changes and upstream context in `src/antinomie/core/` and `src/antinomie/patches/` | Kernel GPL/file-specific terms, unchanged. The separate licensing patch (0002) changes only original shared headers to MIT |
 | Imported `src/debian/`, source archives, packaging references and patches | Existing upstream/file-specific terms; excluded from root GPLv3 scope |
 | Community YARA rules (`crates/monitor-core/assets/rules/yara-forge-core.yar`) and capa-rules (`capa-rules-v9.4.0.tar.gz`) | Per-rule licenses (CC BY-SA 4.0, DRL 1.1, BSD-2-Clause, Apache-2.0, CC BY 4.0, MIT) and Apache-2.0; excluded from root GPLv3 scope. The YARA file is the prepared-pack source. Production scans do not load it; the rule manager (catalog schema 2) downloads each collection from its publisher instead of redistributing an archive. The published archive includes `LICENSES/third-party/rules/`. This is not complete legal clearance. See [third-party notices](THIRD-PARTY-NOTICES.md) |
 | `LICENSES/third-party/`, dependencies and embedded fonts/icons | Their own licenses/notices; excluded from root GPLv3 scope; see [third-party notices](THIRD-PARTY-NOTICES.md) |
 | Built kernel, BusyBox rootfs, VM images and bundled host dependencies | Composite distributions; comply with each component's terms |
-| The `antinomie-monitor` executable | GPLv3 host application with linked dependencies under their own notices, and a separate embedded base build kit carrying the kernel patch series (`src/antinomie/core/`, GPL/file-specific terms) and Debian `linux` source inputs (`src/debian/`, upstream terms) unchanged. Community rule packs are installed separately. Release archives include `LICENSE`, this file, `THIRD-PARTY-NOTICES.md` and `LICENSES/` |
+| The `antinomie-monitor` executable | GPLv3 host application with linked dependencies under their own notices, and a separate embedded base build kit carrying the kernel patch series (`src/antinomie/core/`, GPL/file-specific terms) and Debian `linux` source inputs (`src/debian/`, upstream terms) unchanged, with the GPL-2.0 text. Community rule packs are installed separately. Release archives include `LICENSE`, this file, `THIRD-PARTY-NOTICES.md` and `LICENSES/` |
 
 The 0.7.0 host relicense does not change the Linux kernel's license.
 The patch that introduces the shared headers keeps their original kernel
 notice; the separate licensing patch after it establishes the current
 shared-header licensing.
-Historical source walkthroughs in the separate documentation repository remain
-snapshots, not updated copies or authority for current source licensing.
+Historical source walkthroughs published elsewhere remain snapshots, not
+updated copies or authority for current source licensing.
 
 Earlier releases remain under their original MIT terms; this change does not
 withdraw rights already granted. `LICENSES/Antinomie-MIT.txt` retains the MIT
-notice for shared headers and earlier original code. The separate website and
-historical documentation repository keep their own license scopes.
+notice for shared headers and earlier original code, and
+`LICENSES/GPL-2.0-only.txt` the license of the kernel-derived code. The separate
+website keeps its own license scope.
 
 ## Contributions and distribution
 
@@ -49,8 +51,9 @@ review before import.
 
 Redistribution of GPLv3 application binaries requires the applicable notices and
 equivalent access to corresponding source, including the build/install scripts.
-Keep a release's source access instructions next to its binary downloads; private
-repository access must be available to every binary recipient. MIT portions retain
+Keep a release's source access instructions next to its binary downloads; for an
+official release, the matching `vX.Y.Z` tag of this public repository is the
+corresponding source. MIT portions retain
 their copyright and permission notices. Dependencies and guest components have separate obligations;
 release packaging must include applicable notices and source/source-offer
 arrangements where required. This source licensing change is not a complete
@@ -65,7 +68,6 @@ sources and separate notices elsewhere, with verified access links in the
 release documentation. Keeping the image catalog separate does not remove
 component-specific source distribution obligations.
 
-The documentation guide's `Agents/Licensing and Provenance.md` governs clean
-product commits and required exceptions. Unnecessary reference mockups, copied
-branding and research artifacts stay out of the product repository; required
+Unnecessary reference mockups, copied branding and research artifacts stay out
+of the product repository; required
 notices and accurate technical dependency/provenance records stay in it.

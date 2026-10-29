@@ -18,8 +18,8 @@
     "white": "#ffffff"
   },
   "provenance": {
-    "symbol": "User-supplied penguin artwork, manually recreated and edited as SVG during the working session.",
-    "typography": "Outlined from the Comfortaa 700 static instance/subset in the identity studio; original source https://github.com/google/fonts/tree/main/ofl/comfortaa; SIL OFL 1.1."
+    "symbol": "Penguin artwork supplied by the project owner, MikiMiku (MoreMorePwn), redrawn and edited as SVG.",
+    "typography": "Outlined from the Comfortaa 700 static instance/subset; original source https://github.com/google/fonts/tree/main/ofl/comfortaa; SIL OFL 1.1."
   },
   "github_light": "antinomie-logo-color.svg",
   "github_dark": "antinomie-logo-dark.svg"
