@@ -4,6 +4,7 @@ mod api_keys_window;
 mod app;
 mod archive;
 mod bpf;
+mod branding;
 mod build_wizard;
 mod code_listing;
 mod core_budget;
@@ -180,16 +181,20 @@ fn main() -> eframe::Result<()> {
 
 /// Window options for the app and its detached windows.
 fn native_options() -> eframe::NativeOptions {
+    // The embedded icon also works when the application is run from source.
+    let mut viewport = title_bar::builder(eframe::egui::ViewportBuilder::default())
+        .with_app_id("antinomie")
+        .with_title(format!("Antinomie {}", antinomie_monitor_core::APP_VERSION))
+        .with_inner_size([1280.0, 820.0])
+        .with_min_inner_size([800.0, 600.0])
+        .with_drag_and_drop(true);
+    if let Some(icon) = branding::window_icon() {
+        viewport = viewport.with_icon(icon);
+    }
     eframe::NativeOptions {
         // Matches the desktop entry (assets/antinomie.desktop) so the menu
         // icon applies to the running window.
-        viewport: title_bar::builder(eframe::egui::ViewportBuilder::default())
-            .with_app_id("antinomie")
-            .with_title(format!("Antinomie {}", antinomie_monitor_core::APP_VERSION))
-            .with_inner_size([1280.0, 820.0])
-            .with_min_inner_size([800.0, 600.0])
-            // Dropping a host file on this window opens Upload with it.
-            .with_drag_and_drop(true),
+        viewport,
         // Detached windows are drawn from the main window's update on the one
         // UI thread. With vsync every buffer swap waits for the compositor's
         // next frame callback, and a compositor sends none to a window it is
