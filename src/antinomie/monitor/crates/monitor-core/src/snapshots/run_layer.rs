@@ -232,6 +232,35 @@ pub(crate) fn finalize_due(options: &BackendOptions, vms: &[String]) {
     }
 }
 
+/// Finish the automatic layer a stopped VM still has pending, waiting for a
+/// finalize already at work, before a snapshot operation reads or changes the
+/// manifest: the finalize switches the active disk back and deletes the layer,
+/// and an operation that had loaded the manifest before would freeze or restore
+/// a file that is gone a moment later. Does nothing while a boot of the VM runs
+/// (a snapshot taken during the boot is the user's and keeps the layer) or when
+/// nothing is pending.
+pub(crate) fn settle_stopped(options: &BackendOptions, vm_id: &str) -> Result<(), String> {
+    let deadline = std::time::Instant::now() + SETTLE_WAIT;
+    loop {
+        if pending_record(options, vm_id).is_none() || live(vm_id) {
+            return Ok(());
+        }
+        match finalize(options, vm_id) {
+            Ok(_) => return Ok(()),
+            Err(why) if why.contains("still being finished") => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(why);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(why) => return Err(why),
+        }
+    }
+}
+
+/// How long a snapshot operation waits for the previous run's layer.
+const SETTLE_WAIT: std::time::Duration = std::time::Duration::from_secs(300);
+
 /// Copy the earlier bytes (when a program is set up for it) and merge the layer
 /// down. Does nothing when no record is pending. Refuses while a boot of the
 /// VM runs in this process or another finalize is at work.

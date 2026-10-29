@@ -259,3 +259,70 @@ fn resize_and_delete_wait_for_a_pending_layer() {
     finalize(&fixture.options, &fixture.vm.id).unwrap();
     ensure_idle(&fixture.options, &fixture.vm.id).unwrap();
 }
+
+#[test]
+fn a_snapshot_after_the_boot_settles_the_pending_layer_first() {
+    let _serial = serial();
+    if !have_qemu() {
+        return;
+    }
+    let fixture = Fixture::new();
+    fixture.write(1);
+    let disk = fixture.directory.join("disk.qcow2");
+    begin(
+        &fixture.options,
+        &fixture.vm,
+        &boot_dir(&fixture, "b1"),
+        "b1",
+    )
+    .unwrap();
+    let top = active(&fixture);
+    fixture.write(8);
+    // The boot is over but its layer is still pending (the background
+    // finalize has not run): the snapshot of the stopped VM finishes it first,
+    // so it freezes the merged disk and not a layer that is deleted a moment later.
+    ended(&fixture.vm.id);
+    let checkpoint = fixture.take("After the boot");
+    assert!(pending_record(&fixture.options, &fixture.vm.id).is_none());
+    assert!(!top.exists(), "the automatic layer is merged and removed");
+    fixture.read(&disk, 8);
+    let tree = list(&fixture.options, &fixture.vm).unwrap();
+    assert_eq!(tree.nodes.len(), 1);
+    assert_eq!(tree.nodes[0].id, checkpoint.id);
+    crate::snapshots::validate_active(&fixture.options, &fixture.vm, &fixture.base).unwrap();
+}
+
+#[test]
+fn a_snapshot_waits_for_a_finalize_at_work() {
+    let _serial = serial();
+    if !have_qemu() {
+        return;
+    }
+    let fixture = Fixture::new();
+    begin(
+        &fixture.options,
+        &fixture.vm,
+        &boot_dir(&fixture, "b1"),
+        "b1",
+    )
+    .unwrap();
+    fixture.write(5);
+    ended(&fixture.vm.id);
+    // Another finalize holds the folder's lock: the snapshot must neither load
+    // the manifest under it nor fail; it takes the layer over once it is free.
+    let held = lock(&fixture.directory).unwrap();
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        drop(held);
+    });
+    let started = std::time::Instant::now();
+    let checkpoint = fixture.take("Waited");
+    assert!(started.elapsed() >= std::time::Duration::from_millis(300));
+    release.join().unwrap();
+    assert!(pending_record(&fixture.options, &fixture.vm.id).is_none());
+    fixture.read(&fixture.directory.join("disk.qcow2"), 5);
+    assert_eq!(
+        list(&fixture.options, &fixture.vm).unwrap().nodes[0].id,
+        checkpoint.id
+    );
+}

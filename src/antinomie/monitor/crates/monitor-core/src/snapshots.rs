@@ -438,6 +438,7 @@ pub(crate) fn prepare_take(
         return Err("full snapshots require paused guest state".into());
     }
     let directory = vm_dir(options, &vm.id)?;
+    run_layer::settle_stopped(options, &vm.id)?;
     pending(&directory)?;
     let manifest = load(&directory, vm)?;
     if manifest.nodes.len() == MAX_NODES {
@@ -642,6 +643,7 @@ pub(crate) fn preflight_restore(
     boot_from_disk: bool,
 ) -> Result<(), String> {
     let directory = vm_dir(options, &vm.id)?;
+    run_layer::settle_stopped(options, &vm.id)?;
     pending(&directory)?;
     let manifest = load(&directory, vm)?;
     let record = manifest
@@ -729,6 +731,7 @@ pub(crate) fn rename(
 ) -> Result<(), String> {
     label(name)?;
     let directory = vm_dir(options, &vm.id)?;
+    run_layer::settle_stopped(options, &vm.id)?;
     pending(&directory)?;
     let mut manifest = load(&directory, vm)?;
     manifest
@@ -746,6 +749,7 @@ pub(crate) fn logical_delete(
     id: &str,
 ) -> Result<(), String> {
     let directory = vm_dir(options, &vm.id)?;
+    run_layer::settle_stopped(options, &vm.id)?;
     pending(&directory)?;
     let mut manifest = load(&directory, vm)?;
     manifest
@@ -772,6 +776,7 @@ pub(crate) fn deletion_paths(
     if !managed(&directory) {
         return Ok(Vec::new());
     }
+    run_layer::settle_stopped(options, &vm.id)?;
     pending(&directory)?;
     load(&directory, vm)?;
     validate_active(options, vm, base)?;
