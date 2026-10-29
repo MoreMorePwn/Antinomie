@@ -6,7 +6,7 @@ use super::phases::Phase;
 use super::view::{Frame, MIN_BUCKET_PX};
 use super::*;
 use crate::theme::Palette;
-use eframe::egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Shape, Stroke, Vec2};
+use eframe::egui::{Align2, Color32, FontId, Mesh, Painter, Pos2, Rect, Shape, Stroke, Vec2};
 
 /// Every color the graph draws with, read from one palette.
 #[derive(Clone, Copy, Debug)]
@@ -368,7 +368,7 @@ pub(super) fn severity_curve(
     }
     let painter = painter.with_clip_rect(frame.curve);
     let scale = (frame.curve.height() - 3.0) / tallest as f32;
-    let mut shapes = Vec::with_capacity(range.len() * 3);
+    let mut bars = Mesh::default();
     for at in range {
         let bin = &bins[at];
         if bin.weight() == 0 {
@@ -384,15 +384,11 @@ pub(super) fn severity_curve(
                 continue;
             }
             let rect = Rect::from_min_max(Pos2::new(from, base - height), Pos2::new(to, base));
-            shapes.push(Shape::rect_filled(
-                rect,
-                0.0,
-                colors.tier[tier].gamma_multiply(0.6),
-            ));
+            bars.add_colored_rect(rect, colors.tier[tier].gamma_multiply(0.6));
             base -= height;
         }
     }
-    painter.extend(shapes);
+    painter.add(bars);
     tallest
 }
 
@@ -417,7 +413,7 @@ pub(super) fn heat_strip(
         .max(1);
     let scale = (1.0 + tallest as f32).ln();
     let painter = painter.with_clip_rect(frame.heat);
-    let mut shapes = Vec::new();
+    let mut cells = Mesh::default();
     for (row, category) in categories.iter().enumerate() {
         let top = frame.heat.top() + row as f32 * frame.m.heat_h;
         painter.rect_filled(
@@ -437,17 +433,16 @@ pub(super) fn heat_strip(
             let to = edge(at + 1).max(from + 1.0);
             let tier = usize::from(bins[at].top[*category]).min(3);
             let alpha = ((1.0 + count as f32).ln() / scale).clamp(0.2, 1.0);
-            shapes.push(Shape::rect_filled(
+            cells.add_colored_rect(
                 Rect::from_min_max(
                     Pos2::new(from, top + 1.0),
                     Pos2::new(to, top + frame.m.heat_h - 1.0),
                 ),
-                0.0,
                 colors.tier[tier].gamma_multiply(alpha),
-            ));
+            );
         }
     }
-    painter.extend(shapes);
+    painter.add(cells);
 }
 
 /// The time axis: ticks at round times, labelled in host time when the run

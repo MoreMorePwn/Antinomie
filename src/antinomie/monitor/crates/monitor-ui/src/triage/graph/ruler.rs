@@ -8,7 +8,7 @@ use super::axis::Axis;
 use super::index::GraphIndex;
 use super::paint::Colors;
 use super::view::{self, Ruler, State};
-use eframe::egui::{Painter, Pos2, Rect, Shape, Stroke};
+use eframe::egui::{Mesh, Painter, Pos2, Rect, Stroke};
 
 /// How close to an edge of the window, in pixels, still takes the edge.
 pub(super) const GRAB: f32 = 8.0;
@@ -186,7 +186,7 @@ pub(super) fn paint(painter: &Painter, drawing: Drawing<'_>, colors: &Colors) {
     if let Some(marks) = marks.filter(|marks| marks.most > 0) {
         let scale = (1.0 + marks.most as f32).ln();
         let width = rect.width() / marks.columns.len() as f32;
-        let mut shapes = Vec::new();
+        let mut columns = Mesh::default();
         for (at, (count, top)) in marks.columns.iter().enumerate() {
             if *count == 0 {
                 continue;
@@ -194,16 +194,15 @@ pub(super) fn paint(painter: &Painter, drawing: Drawing<'_>, colors: &Colors) {
             let height =
                 ((1.0 + *count as f32).ln() / scale).clamp(0.12, 1.0) * (rect.height() - 6.0);
             let x = rect.left() + at as f32 * width;
-            shapes.push(Shape::rect_filled(
+            columns.add_colored_rect(
                 Rect::from_min_max(
                     Pos2::new(x, rect.bottom() - 2.0 - height),
                     Pos2::new(x + width.max(1.0), rect.bottom() - 2.0),
                 ),
-                0.0,
                 colors.tier[usize::from(*top).min(3)],
-            ));
+            );
         }
-        painter.extend(shapes);
+        painter.add(columns);
     }
     if let Some((from, to)) = brush {
         let (a, b) = (x_of(rect, range, from), x_of(rect, range, to));
