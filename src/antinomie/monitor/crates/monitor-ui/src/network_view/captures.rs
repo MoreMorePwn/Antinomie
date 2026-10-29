@@ -38,7 +38,7 @@ impl NetworkView {
             let why = if !cx.running {
                 Some("Start the VM to capture its network traffic")
             } else if !cx.nat {
-                Some("Choose Isolated or NAT network in the VM settings and restart it")
+                Some("Choose an Isolated, NAT or Routed network in the VM settings and restart it")
             } else {
                 None
             };

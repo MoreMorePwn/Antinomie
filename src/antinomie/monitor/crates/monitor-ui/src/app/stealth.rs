@@ -583,7 +583,7 @@ fn network(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
         });
     ui.colored_label(
         theme::muted(),
-        "A network card exists only when the VM's network is Isolated or NAT.",
+        "A network card exists only when the VM's network is Isolated, NAT or Routed.",
     );
     egui::Grid::new("vm_stealth_nat")
         .num_columns(2)

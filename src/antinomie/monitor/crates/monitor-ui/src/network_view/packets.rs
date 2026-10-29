@@ -71,7 +71,7 @@ impl NetworkView {
             empty_state(
                 ui,
                 if !cx.nat {
-                    "The VM is disconnected. With Isolated or NAT network, a capture \
+                    "The VM is disconnected. With an Isolated, NAT or Routed network, a capture \
                      records every packet of its network interface, outside the guest."
                 } else if self.captures.is_empty() && cx.active.is_none() {
                     "No network captures yet. Start a capture to record every packet of \

@@ -133,7 +133,7 @@ impl MonitorApp {
         if self.snapshot.network_capture.is_some() {
             "Stop network capture"
         } else if self.running() && !self.running_nat() {
-            "Capture network (choose Isolated or NAT network in VM settings)"
+            "Capture network (choose an Isolated, NAT or Routed network in VM settings)"
         } else {
             "Capture network"
         }
