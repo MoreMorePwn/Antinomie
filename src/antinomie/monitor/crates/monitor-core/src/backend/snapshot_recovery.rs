@@ -990,7 +990,7 @@ impl Worker {
                 // A rebooted guest has no debug sessions.
                 self.end_debug();
                 drop(debug_pause);
-                self.start(id)?;
+                self.start_restored_disk(id)?;
                 Ok("Snapshot disk restored; guest booted in a new timeline".into())
             }
             Err(error) => {

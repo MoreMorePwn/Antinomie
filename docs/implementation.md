@@ -4349,6 +4349,10 @@ The worker remains free to poll saving and process commands. Once writes finish,
 the layer lock serializes a retry with any background finalizer before the
 next boot seals its starting disk. The existing bounded flush-queue admission
 check also applies when starting a different VM.
+Cold snapshot restore waits for its newly sealed recording before invoking
+start, using the same five-minute, shutdown-cancellable save wait. If that wait
+fails after the disk restore committed, the error explicitly says the disk was
+restored and the guest was not started; the user can retry start once saving ends.
 
 The authorized snapshot manager supports disk checkpoints (cold boot recovery)
 and full CPU/RAM/device checkpoints (resume recovery), with a branching native

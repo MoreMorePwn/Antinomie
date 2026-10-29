@@ -168,6 +168,52 @@ fn a_full_flush_queue_still_prevents_starting_an_unrelated_vm() {
 }
 
 #[test]
+fn cold_restore_waits_for_its_sealed_recording_before_starting() {
+    let mut fixture = Fixture::new();
+    let release = fixture.block_flush();
+    let latest = Arc::clone(&fixture.worker.latest_snapshot);
+    let displayed = Arc::new(AtomicBool::new(false));
+    let seen = Arc::clone(&displayed);
+    fixture.worker.wake = Some(Arc::new(move || {
+        if latest.lock().unwrap().as_ref().is_some_and(|snapshot| {
+            snapshot
+                .vm_snapshot_progress
+                .as_ref()
+                .is_some_and(|progress| progress.stage == "Waiting for saved recordings")
+        }) {
+            seen.store(true, Ordering::Release);
+            let _ = release.try_send(());
+        }
+    }));
+    assert_eq!(
+        fixture.worker.start_restored_disk("vm").unwrap_err(),
+        "unknown VM"
+    );
+    assert!(displayed.load(Ordering::Acquire));
+    assert!(!fixture.worker.flusher.is_busy());
+    assert!(fixture.worker.snapshot.vm_snapshot_progress.is_none());
+}
+
+#[test]
+fn cancelled_cold_restore_reports_that_the_disk_was_already_restored() {
+    let mut fixture = Fixture::new();
+    let release = fixture.block_flush();
+    let layer = fixture.root.join("vm/run-layer.json");
+    let before = fs::read(&layer).unwrap();
+    fixture.worker.closing.store(true, Ordering::Release);
+    let error = fixture.worker.start_restored_disk("vm").unwrap_err();
+    assert!(
+        error.contains("snapshot disk restored, but guest was not started"),
+        "{error}"
+    );
+    assert!(error.contains("cancelled"));
+    assert_eq!(fs::read(layer).unwrap(), before);
+    assert!(fixture.worker.snapshot.vm_snapshot_progress.is_none());
+    release.send(()).unwrap();
+    fixture.drain();
+}
+
+#[test]
 fn failed_save_is_reported_and_does_not_leave_restart_permanently_blocked() {
     let mut fixture = Fixture::new();
     fixture
