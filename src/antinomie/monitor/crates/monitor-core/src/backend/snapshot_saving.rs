@@ -4,9 +4,6 @@ use super::*;
 
 impl Worker {
     pub(super) fn wait_snapshot_recordings(&mut self, command: &Command) -> Result<(), String> {
-        if self.session.is_some() {
-            return Ok(());
-        }
         let vm_id = match command {
             Command::CreateVmSnapshot { vm_id, .. }
             | Command::RenameVmSnapshot { vm_id, .. }
@@ -22,8 +19,17 @@ impl Worker {
             } => vm_id,
             _ => return Ok(()),
         };
-        if crate::snapshots::run_layer::pending_record(&self.options, vm_id).is_none() {
+        if self.snapshot.active_vm.as_deref() == Some(vm_id)
+            || crate::snapshots::run_layer::pending_record(&self.options, vm_id).is_none()
+        {
             return Ok(());
+        }
+        // Waiting here while another VM runs would also stop draining its
+        // telemetry. Its presence must not bypass the stopped target's flush.
+        if self.snapshot.active_vm.is_some() {
+            return Err(
+                "stop the other VM before changing this VM's pending snapshot layer".into(),
+            );
         }
         self.wait_snapshot_flush_until(vm_id, Instant::now() + Duration::from_secs(300))
     }

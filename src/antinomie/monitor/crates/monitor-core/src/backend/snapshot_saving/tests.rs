@@ -176,3 +176,19 @@ fn unconfirmed_deletion_does_not_start_or_wait_for_a_deferred_recording() {
     assert!(!saved.load(Ordering::Acquire));
     assert!(worker.snapshot.vm_snapshot_progress.is_none());
 }
+
+#[test]
+fn another_running_vm_cannot_bypass_the_stopped_targets_pending_layer() {
+    let root = Directory::new();
+    let mut worker = root.worker();
+    let before = fs::read(root.0.join("vm/run-layer.json")).unwrap();
+    worker.snapshot.active_vm = Some("other".into());
+    let error = worker.wait_snapshot_recordings(&command()).unwrap_err();
+    assert!(error.contains("stop the other VM"));
+    assert_eq!(fs::read(root.0.join("vm/run-layer.json")).unwrap(), before);
+    assert!(worker.snapshot.vm_snapshot_progress.is_none());
+    // A snapshot of the live target keeps its layer and does not finalize it.
+    worker.snapshot.active_vm = Some("vm".into());
+    worker.wait_snapshot_recordings(&command()).unwrap();
+    assert_eq!(fs::read(root.0.join("vm/run-layer.json")).unwrap(), before);
+}
