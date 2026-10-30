@@ -5,8 +5,9 @@
 //!
 //! ANTINOMIE_QA_SCENE = list | tags | add | edit | detail | detail2 | regex | identity | lineage | lineage2 | outputs | viewer | promote | similar | runs | runs_details | custody | custody_broken | custody_all | custody_all_broken | export,
 //! ANTINOMIE_QA_THEME = dark | light | blue, ANTINOMIE_QA_SIZE = 1400x820,
-//! ANTINOMIE_QA_SECONDS = 25.
+//! ANTINOMIE_QA_SECONDS = 25, ANTINOMIE_QA_FONT = 16 (the font size setting).
 use super::*;
+use crate::app::samples_page::SamplesPage;
 use crate::theme::Theme;
 use antinomie_monitor_core::samples::Library;
 
@@ -31,11 +32,21 @@ fn native_samples_fixture() {
         select_run: bool,
         /// A scene that needs the sample read first (see `samples_features`).
         later: Option<String>,
+        /// The Summary section the scene shows, asked for again every frame
+        /// for a while: the rows above it arrive as the page reads them.
+        section: Option<(&'static str, Instant)>,
     }
     impl eframe::App for QaApp {
         fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
             if Instant::now() >= self.deadline {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            if let Some((title, until)) = self.section {
+                if Instant::now() < until {
+                    SamplesPage::scroll_detail_to(ctx, title);
+                } else {
+                    self.section = None;
+                }
             }
             if self.open_viewer && self.app.samples_page.detail_probe().is_some() {
                 self.open_viewer = false;
@@ -101,6 +112,10 @@ fn native_samples_fixture() {
             app.options.data_dir = data.clone();
             app.rules_ui.set_packs_for_test(Vec::new());
             app.layout = WorkspaceLayout::default();
+            if let Ok(size) = var("ANTINOMIE_QA_FONT").parse::<f32>() {
+                app.settings.font_size = size;
+                theme::text_size(&cc.egui_ctx, size);
+            }
             // The archive worker the real app starts at launch; without it the
             // pages that read runs show "Archive worker unavailable".
             app.archive = archive_worker(&cc.egui_ctx);
@@ -140,7 +155,6 @@ fn native_samples_fixture() {
                 app.options.data_dir = data.clone();
                 app.open_library(crate::workspace::LibraryPage::Samples);
                 app.samples_page.open_detail(&me);
-                app.samples_page.scroll_detail(900.0);
             }
             app.open_library(crate::workspace::LibraryPage::Samples);
             if matches!(
@@ -214,22 +228,8 @@ fn native_samples_fixture() {
                     app.samples_page.close_detail();
                     app.samples_page.open_custody_all();
                 }
-                // The page keeps its scroll between runs of the fixture (the
-                // window state is saved), so every scene says where it is.
-                app.samples_page.scroll_detail(match scene.as_str() {
-                    "regex" => 720.0,
-                    "detail2" => 800.0,
-                    "identity" => 1330.0,
-                    _ => 0.0,
-                });
-                if scene == "outputs" || scene == "kinds" {
-                    app.samples_page.scroll_detail(2150.0);
-                }
                 if scene == "lineage2" {
                     app.samples_page.set_lineage(2, 3, false);
-                }
-                if scene == "lineage" || scene == "lineage2" {
-                    app.samples_page.scroll_detail(1700.0);
                 }
             }
             match scene.as_str() {
@@ -249,7 +249,19 @@ fn native_samples_fixture() {
                 }
                 _ => {}
             }
+            // Every scene says where it is: the section it shows.
+            let section = match scene.as_str() {
+                "regex" => Some("Regex matches"),
+                "detail2" => Some("Indicators"),
+                "identity" => Some("Identity"),
+                "outputs" | "kinds" => Some("Artifacts"),
+                "lineage" | "lineage2" => Some("Lineage"),
+                "similar" => Some("Similar samples"),
+                _ => None,
+            }
+            .map(|title| (title, Instant::now() + Duration::from_secs(12)));
             Ok(Box::new(QaApp {
+                section,
                 app,
                 open_viewer: scene == "viewer",
                 open_promote: (scene == "promote").then(|| data.clone()),

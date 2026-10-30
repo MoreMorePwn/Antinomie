@@ -90,39 +90,41 @@ pub(super) fn section(ui: &mut egui::Ui, state: &State, font: f32) -> Option<Str
             parts::muted_line(ui, "No other sample in the library is close to this one.");
         }
         State::Done(found) => {
-            parts::mini_table(ui, "sample_summary_similar")
-                .column(egui_extras::Column::remainder().at_least(200.0).clip(true))
-                .column(egui_extras::Column::exact(90.0))
-                .column(egui_extras::Column::exact(180.0))
-                .header(table::header_height(font), |mut header| {
-                    for title in ["Sample", "Distance", "Shared"] {
-                        header.col(|ui| table::head(ui, title));
-                    }
-                })
-                .body(|body| {
-                    body.rows(table::row_height(font) + 4.0, found.len(), |mut row| {
-                        let similar = &found[row.index()];
-                        row.col(|ui| {
-                            if widgets::link(ui, &similar.name)
-                                .on_hover_text(&similar.sha256)
-                                .clicked()
-                            {
-                                open = Some(similar.sha256.clone());
-                            }
-                        });
-                        row.col(|ui| {
-                            ui.label(similar.distance.to_string()).on_hover_text(
+            parts::on_surface(ui, |ui| {
+                parts::mini_table(ui, "sample_summary_similar")
+                    .column(egui_extras::Column::remainder().at_least(200.0).clip(true))
+                    .column(egui_extras::Column::exact(90.0))
+                    .column(egui_extras::Column::exact(180.0))
+                    .header(table::header_height(font), |mut header| {
+                        for title in ["Sample", "Distance", "Shared"] {
+                            header.col(|ui| table::head(ui, title));
+                        }
+                    })
+                    .body(|body| {
+                        body.rows(table::row_height(font) + 4.0, found.len(), |mut row| {
+                            let similar = &found[row.index()];
+                            row.col(|ui| {
+                                if widgets::link(ui, &similar.name)
+                                    .on_hover_text(&similar.sha256)
+                                    .clicked()
+                                {
+                                    open = Some(similar.sha256.clone());
+                                }
+                            });
+                            row.col(|ui| {
+                                ui.label(similar.distance.to_string()).on_hover_text(
                                 "TLSH distance: 0 is identical, under about 100 a close variant",
                             );
-                        });
-                        row.col(|ui| {
-                            let response = ui.label(similar.shared.label());
-                            if !similar.shared.examples().is_empty() {
-                                response.on_hover_text(similar.shared.examples().join("\n"));
-                            }
+                            });
+                            row.col(|ui| {
+                                let response = ui.label(similar.shared.label());
+                                if !similar.shared.examples().is_empty() {
+                                    response.on_hover_text(similar.shared.examples().join("\n"));
+                                }
+                            });
                         });
                     });
-                });
+            });
         }
     });
     open

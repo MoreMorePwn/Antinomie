@@ -3,7 +3,8 @@
 //! explains them: a verdict is an outlined pill with a coloured dot, a
 //! malware category a filled orange pill, a technique a purple box with its
 //! ID in monospace, a custom tag a dashed outline in its own colour with a
-//! `#` before the name.
+//! `#` before the name. The colour is in the shape (fill, outline, dot); the
+//! text is the theme's own text colour, so it reads in every theme.
 use crate::theme;
 use antinomie_monitor_core::samples::{Tag, TagKind};
 use eframe::egui::{self, Color32, RichText, Stroke};
@@ -46,8 +47,38 @@ fn technique_parts(value: &str) -> (&str, &str) {
     value.split_once(' ').unwrap_or((value, ""))
 }
 
-/// Draw one tag.
+/// The width a tag takes: its text, the chip's margins and the gap inside.
+fn width_of(ui: &egui::Ui, tag: &Tag) -> f32 {
+    let text = |text: &str, font: egui::FontId| {
+        ui.painter()
+            .layout_no_wrap(text.to_owned(), font, Color32::PLACEHOLDER)
+            .size()
+            .x
+    };
+    let small = egui::TextStyle::Small.resolve(ui.style());
+    let mono = egui::FontId::monospace(small.size);
+    16.0 + 8.0
+        + match tag.kind {
+            TagKind::Technique => {
+                let (id, name) = technique_parts(&tag.value);
+                text(id, mono) + text(name, small)
+            }
+            TagKind::Custom => text(&format!("#{}", tag.value), small),
+            _ => text(&tag.value, small) + 12.0,
+        }
+}
+
+/// Draw one tag. In a wrapping row a tag that does not fit what is left of
+/// the line starts the next one, whole.
 pub(crate) fn tag(ui: &mut egui::Ui, tag: &Tag) -> egui::Response {
+    let layout = *ui.layout();
+    if layout.is_horizontal()
+        && layout.main_wrap()
+        && ui.cursor().min.x > ui.min_rect().left() + 1.0
+        && width_of(ui, tag) > ui.available_width()
+    {
+        ui.end_row();
+    }
     let palette = theme::palette();
     // A chip is never wrapped inside: it moves to the next line whole.
     ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
@@ -70,9 +101,10 @@ pub(crate) fn tag(ui: &mut egui::Ui, tag: &Tag) -> egui::Response {
         TagKind::Category => {
             frame
                 .fill(wash(palette.string))
+                .stroke(Stroke::new(1.0_f32, palette.string))
                 .corner_radius(11)
                 .show(ui, |ui| {
-                    ui.label(RichText::new(&tag.value).small().color(palette.string));
+                    ui.label(RichText::new(&tag.value).small().color(theme::text()));
                 })
                 .response
         }
@@ -80,6 +112,7 @@ pub(crate) fn tag(ui: &mut egui::Ui, tag: &Tag) -> egui::Response {
             let (id, name) = technique_parts(&tag.value);
             frame
                 .fill(wash(palette.pointer))
+                .stroke(Stroke::new(1.0_f32, palette.pointer))
                 .corner_radius(4)
                 .show(ui, |ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
@@ -89,10 +122,10 @@ pub(crate) fn tag(ui: &mut egui::Ui, tag: &Tag) -> egui::Response {
                                 .small()
                                 .strong()
                                 .monospace()
-                                .color(palette.pointer),
+                                .color(theme::text()),
                         );
                         if !name.is_empty() {
-                            ui.label(RichText::new(name).small().color(palette.pointer));
+                            ui.label(RichText::new(name).small().color(theme::text()));
                         }
                     });
                 })
@@ -106,7 +139,7 @@ pub(crate) fn tag(ui: &mut egui::Ui, tag: &Tag) -> egui::Response {
                     ui.label(
                         RichText::new(format!("#{}", tag.value))
                             .small()
-                            .color(color),
+                            .color(theme::text()),
                     );
                 })
                 .response;

@@ -112,59 +112,91 @@ pub(super) fn rules_matched(
             parts::muted_line(ui, "No rule matched.");
             return;
         }
-        parts::mini_table(ui, "sample_summary_rules")
-            .column(egui_extras::Column::remainder().at_least(200.0).clip(true))
-            .column(egui_extras::Column::exact(80.0))
-            .column(egui_extras::Column::exact(120.0))
-            .column(egui_extras::Column::exact(210.0).clip(true))
-            .header(table::header_height(font), |mut header| {
-                for title in ["Rule", "Kind", "Runs", "Latest hit"] {
-                    header.col(|ui| table::head(ui, title));
-                }
-            })
-            .body(|body| {
-                body.rows(
-                    table::row_height(font) + 4.0,
-                    rollup.rules.len(),
-                    |mut row| {
-                        let rule = &rollup.rules[row.index()];
-                        row.col(|ui| {
-                            if widgets::link(ui, &rule.rule)
-                                .on_hover_text(format!(
-                                    "Open {} in Triage on this rule",
-                                    parts::run_name(rule.latest)
-                                ))
-                                .clicked()
-                            {
-                                open =
-                                    Some((rule.latest, rule.engine.clone(), rule.rule_id.clone()));
-                            }
-                        });
-                        row.col(|ui| {
-                            widgets::chip(ui, &rule.engine, Tone::Neutral);
-                        });
-                        row.col(|ui| {
-                            ui.label(of_runs(rule.runs.len(), rollup.runs))
-                                .on_hover_text(run_list(&rule.runs));
-                        });
-                        row.col(|ui| {
-                            // The run and when it started.
-                            let started = data
-                                .runs
-                                .iter()
-                                .find(|entry| entry.number == rule.latest)
-                                .map(|entry| parts::minute(entry.run.started_ms));
-                            let text = match started {
-                                Some(started) => {
-                                    format!("{} · {started}", parts::run_name(rule.latest))
+        // The run and when it started: the Latest hit column fits it whole.
+        let latest = |rule: &antinomie_monitor_core::samples::RuleRow| match data
+            .runs
+            .iter()
+            .find(|entry| entry.number == rule.latest)
+            .map(|entry| parts::minute(entry.run.started_ms))
+        {
+            Some(started) => format!("{} · {started}", parts::run_name(rule.latest)),
+            None => parts::run_name(rule.latest),
+        };
+        let body_font = egui::TextStyle::Body.resolve(ui.style());
+        let kind_width = parts::fitted_up_to(
+            ui,
+            &body_font,
+            std::iter::once("Kind".to_owned()).chain(
+                rollup
+                    .rules
+                    .iter()
+                    .map(|rule| format!("{}   ", rule.engine)),
+            ),
+            140.0,
+        );
+        let runs_width = parts::fitted_up_to(
+            ui,
+            &body_font,
+            std::iter::once("Runs".to_owned()).chain(
+                rollup
+                    .rules
+                    .iter()
+                    .map(|rule| of_runs(rule.runs.len(), rollup.runs)),
+            ),
+            180.0,
+        );
+        let latest_width = parts::fitted_up_to(
+            ui,
+            &body_font,
+            std::iter::once("Latest hit".to_owned()).chain(rollup.rules.iter().map(latest)),
+            360.0,
+        );
+        parts::on_surface(ui, |ui| {
+            parts::mini_table(ui, "sample_summary_rules")
+                .column(egui_extras::Column::remainder().at_least(120.0).clip(true))
+                .column(egui_extras::Column::exact(kind_width))
+                .column(egui_extras::Column::exact(runs_width))
+                .column(egui_extras::Column::exact(latest_width).clip(true))
+                .header(table::header_height(font), |mut header| {
+                    for title in ["Rule", "Kind", "Runs", "Latest hit"] {
+                        header.col(|ui| table::head(ui, title));
+                    }
+                })
+                .body(|body| {
+                    body.rows(
+                        table::row_height(font) + 4.0,
+                        rollup.rules.len(),
+                        |mut row| {
+                            let rule = &rollup.rules[row.index()];
+                            row.col(|ui| {
+                                if widgets::link(ui, &rule.rule)
+                                    .on_hover_text(format!(
+                                        "Open {} in Triage on this rule",
+                                        parts::run_name(rule.latest)
+                                    ))
+                                    .clicked()
+                                {
+                                    open = Some((
+                                        rule.latest,
+                                        rule.engine.clone(),
+                                        rule.rule_id.clone(),
+                                    ));
                                 }
-                                None => parts::run_name(rule.latest),
-                            };
-                            ui.add(egui::Label::new(text).truncate());
-                        });
-                    },
-                );
-            });
+                            });
+                            row.col(|ui| {
+                                widgets::chip(ui, &rule.engine, Tone::Neutral);
+                            });
+                            row.col(|ui| {
+                                ui.label(of_runs(rule.runs.len(), rollup.runs))
+                                    .on_hover_text(run_list(&rule.runs));
+                            });
+                            row.col(|ui| {
+                                ui.add(egui::Label::new(latest(rule)).truncate());
+                            });
+                        },
+                    );
+                });
+        });
     });
     open
 }
@@ -230,9 +262,47 @@ pub(super) fn techniques(ui: &mut egui::Ui, data: &Data) {
     });
 }
 
+/// "Run 3" or "Runs 2, 3": where a check tripped.
+fn tripped_in(runs: &[usize]) -> String {
+    format!(
+        "tripped in {}",
+        if runs.len() == 1 {
+            parts::run_name(runs[0])
+        } else {
+            format!(
+                "Runs {}",
+                runs.iter()
+                    .map(usize::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        }
+    )
+}
+
+/// A disclosure whose header holds chips as well as text; its open state
+/// survives re-rendering (it is kept under `id`).
+fn disclosure(
+    ui: &mut egui::Ui,
+    id: impl std::hash::Hash,
+    header: impl FnOnce(&mut egui::Ui),
+    body: impl FnOnce(&mut egui::Ui),
+) -> egui::Response {
+    let id = ui.make_persistent_id(id);
+    let state =
+        egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false);
+    let (toggle, ..) = state
+        .show_header(ui, |ui| {
+            ui.horizontal_wrapped(header);
+        })
+        .body(body);
+    toggle
+}
+
 /// Evasion attempts: category > check > one line per run, folded to the
-/// categories. Whether a check changed what the sample did is not known to
-/// Triage, so a line says what the sample saw and nothing more.
+/// categories. A check is *tripped* in a run when the sample quit right after
+/// it (the one answer Triage has); every other check says what the sample saw
+/// and is never marked.
 pub(super) fn evasion(ui: &mut egui::Ui, data: &Data) {
     let rollup = &data.rollup;
     let total: usize = rollup.evasion.iter().map(|row| row.checks.len()).sum();
@@ -253,7 +323,7 @@ pub(super) fn evasion(ui: &mut egui::Ui, data: &Data) {
                 });
                 continue;
             }
-            // The runs this category was seen in, any of its checks.
+            // The runs this category was seen in, and those it tripped in.
             let mut seen: Vec<usize> = category
                 .checks
                 .iter()
@@ -261,54 +331,85 @@ pub(super) fn evasion(ui: &mut egui::Ui, data: &Data) {
                 .collect();
             seen.sort_unstable();
             seen.dedup();
-            egui::CollapsingHeader::new(format!(
-                "{} · {} · seen in {}",
-                category.category,
-                if category.checks.len() == 1 {
-                    "1 check".to_owned()
-                } else {
-                    format!("{} checks", category.checks.len())
-                },
-                of_runs(seen.len(), rollup.triaged)
-            ))
-            .id_salt(("sample_evasion", &category.category))
-            .default_open(false)
-            .show(ui, |ui| {
-                for check in &category.checks {
-                    egui::CollapsingHeader::new(format!(
-                        "{}  ·  {}",
-                        if check.object.is_empty() {
-                            &check.rule
+            let mut tripped: Vec<usize> = category
+                .checks
+                .iter()
+                .flat_map(|check| check.tripped.iter().copied())
+                .collect();
+            tripped.sort_unstable();
+            tripped.dedup();
+            let header = disclosure(
+                ui,
+                ("sample_evasion", &category.category),
+                |ui| {
+                    ui.label(RichText::new(&category.category).color(theme::text()));
+                    ui.label(
+                        RichText::new(if category.checks.len() == 1 {
+                            "1 check".to_owned()
                         } else {
-                            &check.object
-                        },
-                        of_runs(check.runs.len(), rollup.triaged)
-                    ))
-                    .id_salt((
-                        "sample_evasion_check",
-                        &category.category,
-                        &check.rule,
-                        &check.object,
-                    ))
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        for (number, line) in &check.lines {
-                            ui.horizontal_wrapped(|ui| {
-                                ui.label(
-                                    RichText::new(parts::run_name(*number)).color(theme::text()),
-                                );
-                                ui.label(line);
-                            });
-                        }
-                    })
-                    .header_response
-                    .on_hover_text(&check.rule);
-                }
-            })
-            .header_response
-            .on_hover_text(run_list(&seen));
+                            format!("{} checks", category.checks.len())
+                        })
+                        .color(theme::muted()),
+                    );
+                    ui.label(
+                        RichText::new(format!("seen in {}", of_runs(seen.len(), rollup.triaged)))
+                            .color(theme::muted()),
+                    );
+                    if tripped.is_empty() {
+                        ui.label(theme::hint_text("never tripped"));
+                    } else {
+                        widgets::chip(ui, tripped_in(&tripped), Tone::Error);
+                    }
+                },
+                |ui| {
+                    for check in &category.checks {
+                        check_rows(ui, &category.category, check, rollup.triaged);
+                    }
+                },
+            );
+            header.on_hover_text(run_list(&seen));
         }
     });
+}
+
+/// One check of a category: its header and one line per run.
+fn check_rows(
+    ui: &mut egui::Ui,
+    category: &str,
+    check: &antinomie_monitor_core::samples::CheckRow,
+    triaged: usize,
+) {
+    let name = if check.object.is_empty() {
+        &check.rule
+    } else {
+        &check.object
+    };
+    disclosure(
+        ui,
+        ("sample_evasion_check", category, &check.rule, &check.object),
+        |ui| {
+            ui.label(RichText::new(name).color(theme::text()));
+            ui.label(RichText::new(of_runs(check.runs.len(), triaged)).color(theme::muted()));
+            if !check.tripped.is_empty() {
+                widgets::chip(ui, tripped_in(&check.tripped), Tone::Error);
+            }
+        },
+        |ui| {
+            for (number, line) in &check.lines {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new(parts::run_name(*number)).color(theme::text()));
+                    ui.label(line);
+                    if check.tripped.contains(number) {
+                        widgets::chip(ui, "tripped", Tone::Error)
+                            .on_hover_text("The sample quit right after this check");
+                    } else {
+                        ui.label(theme::hint_text("no change seen"));
+                    }
+                });
+            }
+        },
+    )
+    .on_hover_text(&check.rule);
 }
 
 /// Indicators: how many, of what kind, how many every run had and how many a

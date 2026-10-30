@@ -99,13 +99,17 @@ impl RunsTab {
         let spawned = std::thread::Builder::new()
             .name("sample-run-tree".into())
             .spawn(move || {
-                let result = Ok(antinomie_monitor_core::recording::Recording {
-                    directory,
-                    manifest: serde_json::Value::Null,
-                    events: Vec::new(),
-                })
-                .and_then(|recording| recording.process_tree_cancellable(pid, &path, &worker))
-                .map_err(|error| error.to_string());
+                // A deleted run's record keeps the tree it had.
+                let result = match antinomie_monitor_core::samples::saved_process_tree(&directory) {
+                    Some(tree) => Ok(tree),
+                    None => Ok(antinomie_monitor_core::recording::Recording {
+                        directory,
+                        manifest: serde_json::Value::Null,
+                        events: Vec::new(),
+                    })
+                    .and_then(|recording| recording.process_tree_cancellable(pid, &path, &worker))
+                    .map_err(|error| error.to_string()),
+                };
                 let _ = sender.send(result);
                 wake.request_repaint();
             });
@@ -344,7 +348,7 @@ impl MonitorApp {
             shown
                 .iter()
                 .map(|entry| crate::time_format::unix_ms(entry.run.started_ms)),
-            340.0,
+            460.0,
         );
         ui.allocate_ui_with_layout(
             egui::vec2(ui.available_width(), height + 28.0),
@@ -358,11 +362,11 @@ impl MonitorApp {
                     .striped(true)
                     .resizable(true)
                     .column(Column::initial(start_width).at_least(110.0))
-                    .column(Column::remainder().at_least(120.0).resizable(false))
-                    .column(Column::initial(150.0).range(90.0..=320.0))
-                    .column(Column::initial(110.0).range(70.0..=220.0))
-                    .column(Column::initial(90.0).range(60.0..=160.0))
-                    .column(Column::initial(100.0).range(60.0..=200.0))
+                    .column(Column::remainder().at_least(150.0).resizable(false))
+                    .column(Column::initial(110.0).range(70.0..=320.0))
+                    .column(Column::initial(100.0).range(70.0..=220.0))
+                    .column(Column::initial(85.0).range(60.0..=160.0))
+                    .column(Column::initial(80.0).range(60.0..=200.0))
                     .column(Column::exact(72.0))
                     .max_scroll_height(height)
                     .min_scrolled_height(0.0)
@@ -397,20 +401,9 @@ impl MonitorApp {
                                 );
                             });
                             row.col(|ui| {
-                                ui.add(
-                                    egui::Label::new(format!(
-                                        "{} {}",
-                                        crate::evidence::title(
-                                            ui,
-                                            &run.directory,
-                                            &run.request.path
-                                        ),
-                                        crate::app::history::short_run_id(run)
-                                    ))
-                                    .selectable(false)
-                                    .truncate(),
-                                )
-                                .on_hover_text(&run.request.path);
+                                let title =
+                                    crate::evidence::title(ui, &run.directory, &run.request.path);
+                                crate::app::history_columns::executable_cell(ui, title, run);
                             });
                             row.col(|ui| {
                                 let args = run.request.args.join(" ");
@@ -538,7 +531,12 @@ impl MonitorApp {
                 ui.label(RichText::new(label).small().color(theme::muted()));
             }
         });
-        if entry.folder {
+        let kept_tree = !entry.folder
+            && run
+                .directory
+                .join(antinomie_monitor_core::samples::PROCESS_TREE_FILE)
+                .is_file();
+        if entry.folder || kept_tree {
             state.read_tree(ui.ctx(), run);
         }
         let font = self.settings.font_size;
@@ -580,7 +578,7 @@ impl MonitorApp {
             }
             None => {
                 if !entry.folder {
-                    parts::muted_line(ui, "The run's folder was deleted.");
+                    parts::muted_line(ui, "The run's folder was deleted and no tree was kept.");
                 }
             }
         }

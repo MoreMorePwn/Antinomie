@@ -42,11 +42,24 @@ impl MonitorApp {
             .as_mut()
             .map(|detail| std::mem::take(&mut detail.lineage))
             .unwrap_or_default();
-        let scroll_y = self
+        // A note's chip named something on this tab: go to it.
+        if let Some(reference) = self
             .samples_page
             .detail
             .as_mut()
-            .and_then(|detail| detail.scroll_y);
+            .and_then(|detail| detail.focus.take())
+        {
+            use antinomie_monitor_core::samples::RefKind;
+            match reference.kind {
+                RefKind::Lineage => {
+                    lineage.focus_node(&reference.target);
+                    parts::scroll_to_section(ui.ctx(), "Lineage");
+                }
+                RefKind::Artifact => parts::scroll_to_section(ui.ctx(), "Artifacts"),
+                RefKind::Indicator => parts::scroll_to_section(ui.ctx(), "Indicators"),
+                _ => {}
+            }
+        }
         let (scanned, verified, verifying, similar) = match self.samples_page.detail.as_ref() {
             Some(detail) => (
                 Some(&detail.scanned),
@@ -56,47 +69,44 @@ impl MonitorApp {
             ),
             None => (None, None, false, None),
         };
-        let mut area = egui::ScrollArea::vertical()
+        egui::ScrollArea::vertical()
             .id_salt("sample_summary")
-            .auto_shrink([false, false]);
-        if let Some(y) = scroll_y {
-            area = area.vertical_scroll_offset(y);
-        }
-        area.show(ui, |ui| {
-            // Room for the scroll bar, so no table or box runs under it.
-            ui.set_width((ui.available_width() - parts::SCROLL_GUTTER).max(320.0));
-            verdict(ui, data);
-            if super::notes_tab::latest(ui, data) {
-                go = Some(Go::Notes);
-            }
-            if let Some((number, engine, rule)) =
-                super::triage_parts::rules_matched(ui, data, self.settings.font_size)
-            {
-                go = Some(Go::Rule(number, engine, rule));
-            }
-            super::triage_parts::techniques(ui, data);
-            super::triage_parts::evasion(ui, data);
-            recent_runs(ui, data, &mut go, self.settings.font_size);
-            super::triage_parts::indicators(ui, data);
-            if let Some(scanned) = scanned {
-                strings(ui, data, scanned, &mut go, self.settings.font_size);
-            }
-            static_analysis(ui, data, scanned, &mut go);
-            identity(
-                ui,
-                data,
-                verified,
-                verifying,
-                &mut go,
-                self.settings.font_size,
-            );
-            lineage_out = super::lineage::section(ui, &mut lineage, data);
-            output_act = super::output_files::section(ui, data, self.settings.font_size);
-            if let Some(state) = similar {
-                similar_open = super::similar::section(ui, state, self.settings.font_size);
-            }
-            ui.add_space(16.0);
-        });
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                // Room for the scroll bar, so no table or box runs under it.
+                ui.set_width((ui.available_width() - parts::SCROLL_GUTTER).max(320.0));
+                verdict(ui, data);
+                if super::notes_tab::latest(ui, data) {
+                    go = Some(Go::Notes);
+                }
+                if let Some((number, engine, rule)) =
+                    super::triage_parts::rules_matched(ui, data, self.settings.font_size)
+                {
+                    go = Some(Go::Rule(number, engine, rule));
+                }
+                super::triage_parts::techniques(ui, data);
+                super::triage_parts::evasion(ui, data);
+                recent_runs(ui, data, &mut go, self.settings.font_size);
+                super::triage_parts::indicators(ui, data);
+                if let Some(scanned) = scanned {
+                    strings(ui, data, scanned, &mut go, self.settings.font_size);
+                }
+                static_analysis(ui, data, scanned, &mut go);
+                identity(
+                    ui,
+                    data,
+                    verified,
+                    verifying,
+                    &mut go,
+                    self.settings.font_size,
+                );
+                lineage_out = super::lineage::section(ui, &mut lineage, data);
+                output_act = super::output_files::section(ui, data, self.settings.font_size);
+                if let Some(state) = similar {
+                    similar_open = super::similar::section(ui, state, self.settings.font_size);
+                }
+                ui.add_space(16.0);
+            });
         if let Some(detail) = &mut self.samples_page.detail {
             detail.lineage = lineage;
         }
@@ -243,7 +253,7 @@ fn yara_family(data: &Data) -> Option<&antinomie_monitor_core::samples::RuleRow>
 }
 
 /// The Family field: the family name (the download source's signature, else a
-/// YARA rule's), else the sample's malware-category tags, else "No tag".
+/// YARA rule's), else the sample's malware-category tags, else "Unknown".
 fn family(ui: &mut egui::Ui, data: &Data) {
     let named = data.record.family.trim();
     if !named.is_empty() {
@@ -260,7 +270,7 @@ fn family(ui: &mut egui::Ui, data: &Data) {
         .filter(|tag| tag.kind == TagKind::Category)
         .collect();
     if categories.is_empty() {
-        ui.label(theme::hint_text("No tag"));
+        ui.label(theme::hint_text("Unknown"));
     }
     for tag in categories {
         sample_tags::tag(ui, tag);
@@ -300,80 +310,86 @@ fn recent_runs(ui: &mut egui::Ui, data: &Data, go: &mut Option<Go>, font: f32) {
         }
         let shown = &data.runs[..data.runs.len().min(5)];
         let mut menu = None;
-        parts::mini_table(ui, "sample_summary_runs")
-            .sense(egui::Sense::click())
-            .column(egui_extras::Column::exact(120.0))
-            .column(egui_extras::Column::exact(150.0))
-            .column(egui_extras::Column::exact(140.0))
-            .column(egui_extras::Column::exact(100.0))
-            .column(egui_extras::Column::remainder().at_least(100.0))
-            .header(table::header_height(font), |mut header| {
-                for title in ["Run", "Start", "VM", "Suspicion", "Outcome"] {
-                    header.col(|ui| table::head(ui, title));
-                }
-            })
-            .body(|body| {
-                body.rows(table::row_height(font) + 4.0, shown.len(), |mut row| {
-                    let entry = &shown[row.index()];
-                    let run = &entry.run;
-                    let exit = super::super::exit_label(run);
-                    row.col(|ui| {
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(parts::run_name(entry.number)).strong().color(
-                                    if entry.folder {
-                                        theme::text()
-                                    } else {
-                                        theme::muted()
-                                    },
-                                ),
-                            )
-                            .selectable(false),
-                        );
-                        if !entry.folder {
-                            widgets::chip(ui, "folder deleted", Tone::Neutral)
-                                .on_hover_text("The run's folder is no longer on disk");
-                        }
-                    });
-                    row.col(|ui| {
-                        table::cell_click(ui, table::Cell::Mono, &parts::minute(run.started_ms));
-                    });
-                    row.col(|ui| {
-                        table::cell_click(ui, table::Cell::Text, &vm_name(run));
-                    });
-                    row.col(|ui| super::triage_parts::run_suspicion(ui, entry));
-                    row.col(|ui| {
-                        // One line; the whole outcome is the tooltip.
-                        let detail = execution_detail(run);
-                        ui.add(
-                            egui::Label::new(RichText::new(&exit).color(theme::text()))
-                                .truncate()
-                                .selectable(false),
-                        )
-                        .on_hover_text(if detail.is_empty() { &exit } else { &detail });
-                    });
-                    let response = row.response().on_hover_text(if entry.folder {
-                        format!("Open Triage for {}", parts::run_name(entry.number))
-                    } else {
-                        "The run's folder was deleted".into()
-                    });
-                    if response.clicked() && entry.folder {
-                        *go = Some(Go::Run(entry.number));
+        parts::on_surface(ui, |ui| {
+            parts::mini_table(ui, "sample_summary_runs")
+                .sense(egui::Sense::click())
+                .column(egui_extras::Column::exact(120.0))
+                .column(egui_extras::Column::exact(150.0))
+                .column(egui_extras::Column::exact(140.0))
+                .column(egui_extras::Column::exact(100.0))
+                .column(egui_extras::Column::remainder().at_least(100.0))
+                .header(table::header_height(font), |mut header| {
+                    for title in ["Run", "Start", "VM", "Suspicion", "Outcome"] {
+                        header.col(|ui| table::head(ui, title));
                     }
-                    response.context_menu(|ui| {
-                        if ui
-                            .add_enabled(entry.folder, egui::Button::new("Open Triage"))
-                            .clicked()
-                        {
-                            menu = Some(entry.number);
-                            ui.close_menu();
+                })
+                .body(|body| {
+                    body.rows(table::row_height(font) + 4.0, shown.len(), |mut row| {
+                        let entry = &shown[row.index()];
+                        let run = &entry.run;
+                        let exit = super::super::exit_label(run);
+                        row.col(|ui| {
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(parts::run_name(entry.number)).strong().color(
+                                        if entry.folder {
+                                            theme::text()
+                                        } else {
+                                            theme::muted()
+                                        },
+                                    ),
+                                )
+                                .selectable(false),
+                            );
+                            if !entry.folder {
+                                widgets::chip(ui, "folder deleted", Tone::Neutral)
+                                    .on_hover_text("The run's folder is no longer on disk");
+                            }
+                        });
+                        row.col(|ui| {
+                            table::cell_click(
+                                ui,
+                                table::Cell::Mono,
+                                &parts::minute(run.started_ms),
+                            );
+                        });
+                        row.col(|ui| {
+                            table::cell_click(ui, table::Cell::Text, &vm_name(run));
+                        });
+                        row.col(|ui| super::triage_parts::run_suspicion(ui, entry));
+                        row.col(|ui| {
+                            // One line; the whole outcome is the tooltip.
+                            let detail = execution_detail(run);
+                            ui.add(
+                                egui::Label::new(RichText::new(&exit).color(theme::text()))
+                                    .truncate()
+                                    .selectable(false),
+                            )
+                            .on_hover_text(if detail.is_empty() { &exit } else { &detail });
+                        });
+                        let response = row.response().on_hover_text(if entry.folder {
+                            format!("Open Triage for {}", parts::run_name(entry.number))
+                        } else {
+                            "The run's folder was deleted".into()
+                        });
+                        if response.clicked() && entry.folder {
+                            *go = Some(Go::Run(entry.number));
                         }
-                        if entry.folder {
-                            crate::evidence::menu(ui, &run.directory);
-                        }
+                        response.context_menu(|ui| {
+                            if ui
+                                .add_enabled(entry.folder, egui::Button::new("Open Triage"))
+                                .clicked()
+                            {
+                                menu = Some(entry.number);
+                                ui.close_menu();
+                            }
+                            if entry.folder {
+                                crate::evidence::menu(ui, &run.directory);
+                            }
+                        });
                     });
                 });
-            });
+        });
         if let Some(number) = menu {
             *go = Some(Go::Run(number));
         }
@@ -544,50 +560,52 @@ fn string_table(
             *width = (*width * scale).max(48.0);
         }
     }
-    let mut builder = parts::mini_table(ui, id);
-    for (index, _) in titles.iter().enumerate() {
-        builder = builder.column(if index == wide {
-            egui_extras::Column::remainder().at_least(keep).clip(true)
-        } else {
-            egui_extras::Column::exact(widths[index]).clip(true)
-        });
-    }
-    builder
-        .header(table::header_height(font), |mut header| {
-            for title in titles {
-                header.col(|ui| {
-                    table::head_aligned(ui, title, table::numeric_align(*title == "Seen"))
-                });
-            }
-        })
-        .body(|body| {
-            body.rows(table::row_height(font), shown.len(), |mut row| {
-                let values = cells(&shown[row.index()]);
-                for (index, value) in values.iter().enumerate() {
-                    row.col(|ui| {
-                        let kind = if index == wide {
-                            table::Cell::Mono
-                        } else if titles[index] == "Seen" {
-                            table::Cell::Number
-                        } else if titles[index] == "Found in" || titles[index] == "Offset" {
-                            table::Cell::Mono
-                        } else {
-                            table::Cell::Text
-                        };
-                        let shown = table::cell_rich(
-                            ui,
-                            kind,
-                            RichText::new(value).color(if index == wide {
-                                theme::text()
-                            } else {
-                                theme::muted()
-                            }),
-                        );
-                        shown.on_hover_text(value);
+    parts::on_surface(ui, |ui| {
+        let mut builder = parts::mini_table(ui, id);
+        for (index, _) in titles.iter().enumerate() {
+            builder = builder.column(if index == wide {
+                egui_extras::Column::remainder().at_least(keep).clip(true)
+            } else {
+                egui_extras::Column::exact(widths[index]).clip(true)
+            });
+        }
+        builder
+            .header(table::header_height(font), |mut header| {
+                for title in titles {
+                    header.col(|ui| {
+                        table::head_aligned(ui, title, table::numeric_align(*title == "Seen"))
                     });
                 }
+            })
+            .body(|body| {
+                body.rows(table::row_height(font), shown.len(), |mut row| {
+                    let values = cells(&shown[row.index()]);
+                    for (index, value) in values.iter().enumerate() {
+                        row.col(|ui| {
+                            let kind = if index == wide {
+                                table::Cell::Mono
+                            } else if titles[index] == "Seen" {
+                                table::Cell::Number
+                            } else if titles[index] == "Found in" || titles[index] == "Offset" {
+                                table::Cell::Mono
+                            } else {
+                                table::Cell::Text
+                            };
+                            let shown = table::cell_rich(
+                                ui,
+                                kind,
+                                RichText::new(value).color(if index == wide {
+                                    theme::text()
+                                } else {
+                                    theme::muted()
+                                }),
+                            );
+                            shown.on_hover_text(value);
+                        });
+                    }
+                });
             });
-        });
+    });
 }
 
 /// What the static report has, one line per Static Analysis tab, each
@@ -749,146 +767,145 @@ fn identity(
 ) {
     parts::section(ui, "Identity", None, |ui| {
         let record = &data.record;
+        // A gap between the two boxes, and boxes of one height.
+        let spacing = ui.spacing().item_spacing.x;
+        ui.spacing_mut().item_spacing.x = 16.0;
         ui.columns(2, |columns| {
-            let left = &mut columns[0];
-            parts::panel_frame().show(left, |ui| {
-                ui.set_width(ui.available_width());
-                if record.description.is_empty() {
-                    ui.label(theme::hint_text("No description"));
-                } else {
-                    ui.add(egui::Label::new(&record.description).wrap());
-                }
-                ui.add_space(6.0);
-                ui.horizontal_wrapped(|ui| {
-                    for tag in &data.tags {
-                        sample_tags::tag(ui, tag);
+            parts::equal_boxes(
+                columns,
+                |ui| {
+                    if record.description.is_empty() {
+                        ui.label(theme::hint_text("No description"));
+                    } else {
+                        ui.add(egui::Label::new(&record.description).wrap());
                     }
-                    if data.tags.is_empty() {
-                        ui.label(theme::hint_text("No tags"));
-                    }
-                });
-                ui.add_space(8.0);
-                let value_width =
-                    parts::value_width(ui, &["Type", "Added", "Also added", "Source"], 0.0);
-                egui::Grid::new("sample_identity_left")
-                    .num_columns(2)
-                    .spacing([12.0, parts::ROW_GAP])
-                    .show(ui, |ui| {
-                        let kind = if record.file_type.is_empty() {
-                            "unknown".to_owned()
-                        } else {
-                            record.file_type.clone()
-                        };
-                        let arch = if record.arch.is_empty() {
-                            String::new()
-                        } else {
-                            format!(
-                                " · {}",
-                                antinomie_monitor_core::samples::arch_label(&record.arch)
-                            )
-                        };
-                        parts::row_in(
-                            ui,
-                            "Type",
-                            format!("{kind}{arch} · {}", crate::values::file_size(record.size)),
-                            value_width,
-                        );
-                        for (index, origin) in data.origins.iter().enumerate() {
-                            let when = parts::second(origin.at_ms);
+                    ui.add_space(6.0);
+                    ui.horizontal_wrapped(|ui| {
+                        for tag in &data.tags {
+                            sample_tags::tag(ui, tag);
+                        }
+                        if data.tags.is_empty() {
+                            ui.label(theme::hint_text("No tags"));
+                        }
+                    });
+                    ui.add_space(8.0);
+                    let value_width =
+                        parts::value_width(ui, &["Type", "Added", "Also added", "Source"], 0.0);
+                    egui::Grid::new("sample_identity_left")
+                        .num_columns(2)
+                        .spacing([12.0, parts::ROW_GAP])
+                        .show(ui, |ui| {
+                            let kind = if record.file_type.is_empty() {
+                                "unknown".to_owned()
+                            } else {
+                                record.file_type.clone()
+                            };
+                            let arch = if record.arch.is_empty() {
+                                String::new()
+                            } else {
+                                format!(
+                                    " · {}",
+                                    antinomie_monitor_core::samples::arch_label(&record.arch)
+                                )
+                            };
                             parts::row_in(
                                 ui,
-                                if index == 0 { "Added" } else { "Also added" },
-                                format!(
-                                    "{} · {when}{}",
-                                    origin.kind.label(),
-                                    if origin.before_custody {
-                                        " · recorded before the custody log"
-                                    } else {
-                                        ""
-                                    }
-                                ),
+                                "Type",
+                                format!("{kind}{arch} · {}", crate::values::file_size(record.size)),
                                 value_width,
                             );
-                            let source = [&origin.source, &origin.path, &origin.detail]
-                                .into_iter()
-                                .filter(|part| !part.is_empty())
-                                .cloned()
-                                .collect::<Vec<_>>()
-                                .join(" · ");
-                            if !source.is_empty() {
-                                parts::row_in(ui, "Source", source, value_width);
+                            for (index, origin) in data.origins.iter().enumerate() {
+                                let when = parts::second(origin.at_ms);
+                                parts::row_in(
+                                    ui,
+                                    if index == 0 { "Added" } else { "Also added" },
+                                    format!(
+                                        "{} · {when}{}",
+                                        origin.kind.label(),
+                                        if origin.before_custody {
+                                            " · recorded before the custody log"
+                                        } else {
+                                            ""
+                                        }
+                                    ),
+                                    value_width,
+                                );
+                                let source = [&origin.source, &origin.path, &origin.detail]
+                                    .into_iter()
+                                    .filter(|part| !part.is_empty())
+                                    .cloned()
+                                    .collect::<Vec<_>>()
+                                    .join(" · ");
+                                if !source.is_empty() {
+                                    parts::row_in(ui, "Source", source, value_width);
+                                }
                             }
-                        }
-                    });
-            });
-            let right = &mut columns[1];
-            parts::panel_frame().show(right, |ui| {
-                ui.set_width(ui.available_width());
-                let value_width =
-                    parts::value_width(ui, &["SHA-256", "SHA-1", "MD5", "TLSH"], COPY_WIDTH);
-                egui::Grid::new("sample_identity_hashes")
-                    .num_columns(2)
-                    .spacing([12.0, parts::ROW_GAP])
-                    .show(ui, |ui| {
-                        parts::copyable_in(ui, "SHA-256", &record.sha256, value_width);
-                        parts::copyable_in(ui, "SHA-1", &record.sha1, value_width);
-                        parts::copyable_in(ui, "MD5", &record.md5, value_width);
-                        parts::copyable_in(ui, "TLSH", &record.tlsh, value_width);
-                    });
-                ui.add_space(parts::ROW_GAP);
-                // Not in the grid: a long path must wrap in the box, not
-                // widen its column.
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new("Archive").color(theme::muted()));
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(data.archive.display().to_string()).monospace(),
-                        )
-                        .selectable(true),
+                        });
+                },
+                |ui| {
+                    parts::hash_rows(
+                        ui,
+                        &[
+                            ("SHA-256", record.sha256.as_str()),
+                            ("SHA-1", record.sha1.as_str()),
+                            ("MD5", record.md5.as_str()),
+                            ("TLSH", record.tlsh.as_str()),
+                        ],
                     );
-                    if data.archived {
-                        widgets::chip(ui, "archive present", Tone::Good)
-                            .on_hover_text("AES zip, password infected");
-                    } else {
-                        widgets::chip(ui, "✗ missing", Tone::Error);
-                    }
-                    if verifying {
-                        theme::spinner(ui);
-                    }
-                    match verified {
-                        Some((true, _)) => {
-                            widgets::chip(ui, "✓ SHA-256 matches", Tone::Good);
+                    ui.add_space(parts::ROW_GAP);
+                    // Not in the grid: a long path must wrap in the box, not
+                    // widen its column.
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(RichText::new("Archive").color(theme::muted()));
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(data.archive.display().to_string()).monospace(),
+                            )
+                            .selectable(true),
+                        );
+                        if data.archived {
+                            widgets::chip(ui, "archive present", Tone::Good)
+                                .on_hover_text("AES zip, password infected");
+                        } else {
+                            widgets::chip(ui, "✗ missing", Tone::Error);
                         }
-                        Some((false, why)) => {
-                            widgets::chip(ui, "✗ did not verify", Tone::Error).on_hover_text(why);
+                        if verifying {
+                            theme::spinner(ui);
                         }
-                        None => {}
-                    }
-                    if ui
-                        .add_enabled(data.archived && !verifying, egui::Button::new("Verify"))
-                        .on_hover_text("Read the archive back and compare its SHA-256")
-                        .clicked()
-                    {
-                        *go = Some(Go::Verify);
-                    }
-                    if ui
-                        .add_enabled(data.archived, egui::Button::new("View content"))
-                        .on_hover_text("Open the archived file in the viewer")
-                        .on_disabled_hover_text("The archive was removed")
-                        .clicked()
-                    {
-                        *go = Some(Go::View);
-                    }
-                });
-            });
+                        match verified {
+                            Some((true, _)) => {
+                                widgets::chip(ui, "✓ SHA-256 matches", Tone::Good);
+                            }
+                            Some((false, why)) => {
+                                widgets::chip(ui, "✗ did not verify", Tone::Error)
+                                    .on_hover_text(why);
+                            }
+                            None => {}
+                        }
+                        if ui
+                            .add_enabled(data.archived && !verifying, egui::Button::new("Verify"))
+                            .on_hover_text("Read the archive back and compare its SHA-256")
+                            .clicked()
+                        {
+                            *go = Some(Go::Verify);
+                        }
+                        if ui
+                            .add_enabled(data.archived, egui::Button::new("View content"))
+                            .on_hover_text("Open the archived file in the viewer")
+                            .on_disabled_hover_text("The archive was removed")
+                            .clicked()
+                        {
+                            *go = Some(Go::View);
+                        }
+                    });
+                },
+            );
         });
+        ui.spacing_mut().item_spacing.x = spacing;
         ui.add_space(8.0);
         aliases(ui, data, font);
     });
 }
-
-/// The width the copy button of a hash row takes, with its gap.
-const COPY_WIDTH: f32 = 30.0;
 
 /// Every file name the sample went by.
 fn aliases(ui: &mut egui::Ui, data: &Data, font: f32) {
@@ -927,7 +944,7 @@ fn aliases(ui: &mut egui::Ui, data: &Data, font: f32) {
             ui,
             &body,
             std::iter::once("Where".to_owned()).chain(data.aliases.iter().map(|a| a.seen.clone())),
-            200.0,
+            320.0,
         );
         // The path takes what is left and is cut; the tooltip has all of it.
         let narrow = ui.available_width() < name + seen + 200.0;
@@ -936,46 +953,48 @@ fn aliases(ui: &mut egui::Ui, data: &Data, font: f32) {
         } else {
             (name, seen)
         };
-        parts::mini_table(ui, "sample_aliases")
-            .column(egui_extras::Column::exact(name).clip(true))
-            .column(egui_extras::Column::remainder().at_least(120.0).clip(true))
-            .column(egui_extras::Column::exact(seen).clip(true))
-            .header(table::header_height(font), |mut header| {
-                for title in ["Name", "Path or source", "Where"] {
-                    header.col(|ui| table::head(ui, title));
-                }
-            })
-            .body(|body| {
-                body.rows(
-                    table::row_height(font) + 6.0,
-                    data.aliases.len(),
-                    |mut row| {
-                        let alias = &data.aliases[row.index()];
-                        row.col(|ui| {
-                            let shown = table::cell_rich(
-                                ui,
-                                table::Cell::Mono,
-                                RichText::new(&alias.name).strong(),
-                            );
-                            shown.on_hover_text(&alias.name);
-                        });
-                        row.col(|ui| {
-                            let shown = table::cell_rich(
-                                ui,
-                                table::Cell::Mono,
-                                RichText::new(&alias.path).color(theme::text()),
-                            );
-                            shown.on_hover_text(&alias.path);
-                        });
-                        row.col(|ui| {
-                            table::cell_rich(
-                                ui,
-                                table::Cell::Text,
-                                RichText::new(&alias.seen).color(theme::text()),
-                            );
-                        });
-                    },
-                );
-            });
+        parts::on_surface(ui, |ui| {
+            parts::mini_table(ui, "sample_aliases")
+                .column(egui_extras::Column::exact(name).clip(true))
+                .column(egui_extras::Column::remainder().at_least(120.0).clip(true))
+                .column(egui_extras::Column::exact(seen).clip(true))
+                .header(table::header_height(font), |mut header| {
+                    for title in ["Name", "Path or source", "Where"] {
+                        header.col(|ui| table::head(ui, title));
+                    }
+                })
+                .body(|body| {
+                    body.rows(
+                        table::row_height(font) + 6.0,
+                        data.aliases.len(),
+                        |mut row| {
+                            let alias = &data.aliases[row.index()];
+                            row.col(|ui| {
+                                let shown = table::cell_rich(
+                                    ui,
+                                    table::Cell::Mono,
+                                    RichText::new(&alias.name).strong(),
+                                );
+                                shown.on_hover_text(&alias.name);
+                            });
+                            row.col(|ui| {
+                                let shown = table::cell_rich(
+                                    ui,
+                                    table::Cell::Mono,
+                                    RichText::new(&alias.path).color(theme::text()),
+                                );
+                                shown.on_hover_text(&alias.path);
+                            });
+                            row.col(|ui| {
+                                table::cell_rich(
+                                    ui,
+                                    table::Cell::Text,
+                                    RichText::new(&alias.seen).color(theme::text()),
+                                );
+                            });
+                        },
+                    );
+                });
+        });
     });
 }

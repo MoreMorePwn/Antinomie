@@ -191,6 +191,8 @@ impl MonitorApp {
         };
         if let (Some(tab), Some(detail)) = (tab, self.samples_page.detail.as_mut()) {
             detail.tab = tab;
+            // The tab centres on what the chip names.
+            detail.focus = Some(reference.clone());
         }
     }
 }

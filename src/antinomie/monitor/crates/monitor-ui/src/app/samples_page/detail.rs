@@ -100,6 +100,9 @@ pub(super) struct Data {
     pub(super) report: Option<ReportRef>,
     /// Where every library sample was sent, for the process tree's tint.
     pub(super) sent: Vec<SentSample>,
+    /// SHA-256 of the base-image programs the runs used, for the lineage
+    /// graph's Hide system binaries.
+    pub(super) system: Arc<std::collections::BTreeSet<String>>,
 }
 
 /// The rows the Summary draws from the report's regex scan.
@@ -119,6 +122,9 @@ pub(super) enum Scanned {
 }
 
 type Loaded = Result<Data, String>;
+
+/// How long a failed read waits before it is tried again.
+const RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(1);
 type ScanResult = Result<Strings, String>;
 
 pub(super) struct Detail {
@@ -129,6 +135,11 @@ pub(super) struct Detail {
     /// Read the sample again at the next frame.
     pub(super) stale: bool,
     pub(super) error: Option<String>,
+    /// When a failed read is tried again: a busy library is not the end of
+    /// the window.
+    retry: Option<std::time::Instant>,
+    /// What a note's chip named, until the tab it is on has centred on it.
+    pub(super) focus: Option<antinomie_monitor_core::samples::NoteRef>,
     pub(super) scanned: Scanned,
     scanning: Option<(Receiver<ScanResult>, Arc<AtomicBool>, String)>,
     /// The report the scan above is of, to scan again when it changes.
@@ -143,9 +154,6 @@ pub(super) struct Detail {
     lineage: lineage::State,
     /// The comparison with the rest of the library.
     similar: similar::State,
-    /// Keep the Summary scrolled to this offset (set by the
-    /// screenshot fixture only).
-    pub(super) scroll_y: Option<f32>,
 }
 
 impl Drop for Detail {
@@ -165,6 +173,8 @@ impl Detail {
             loading: None,
             stale: true,
             error: None,
+            retry: None,
+            focus: None,
             scanned: Scanned::None,
             scanning: None,
             scanned_report: None,
@@ -173,7 +183,6 @@ impl Detail {
             verified: None,
             lineage: lineage::State::default(),
             similar: similar::State::default(),
-            scroll_y: None,
         }
     }
 }
@@ -267,6 +276,7 @@ fn load(options: &BackendOptions, vms: &[(String, String)], sha256: &str) -> Loa
             digest: antinomie_monitor_core::run_digest::RunDigest::read(&run.directory),
         });
     }
+    let system = system_programs(options, &entries);
     let rollup = antinomie_monitor_core::samples::rollup(
         &entries
             .iter()
@@ -298,8 +308,56 @@ fn load(options: &BackendOptions, vms: &[(String, String)], sha256: &str) -> Loa
         links,
         report,
         sent,
+        system,
         record,
     })
+}
+
+/// The hashes of the base-image programs the runs used: those of the system
+/// paths in each VM's first run with lineage that its base image has too.
+fn system_programs(
+    options: &BackendOptions,
+    entries: &[RunEntry],
+) -> Arc<std::collections::BTreeSet<String>> {
+    let mut by_vm: std::collections::BTreeMap<
+        &str,
+        (&RunEntry, std::collections::BTreeSet<String>),
+    > = std::collections::BTreeMap::new();
+    for entry in entries.iter().filter(|entry| entry.folder) {
+        let Some(lineage) = entry
+            .digest
+            .as_ref()
+            .and_then(|digest| digest.lineage.as_ref())
+        else {
+            continue;
+        };
+        let paths = lineage
+            .files
+            .iter()
+            .map(|file| (&file.path, &file.sha256))
+            .chain(lineage.execs.iter().map(|exec| (&exec.path, &exec.sha256)))
+            .filter(|(path, sha)| {
+                !sha.is_empty() && antinomie_monitor_core::samples::system_path(path)
+            })
+            .map(|(path, _)| path.clone());
+        by_vm
+            .entry(entry.run.vm_id.as_str())
+            .or_insert_with(|| (entry, Default::default()))
+            .1
+            .extend(paths);
+    }
+    let mut system = std::collections::BTreeSet::new();
+    for (entry, paths) in by_vm.values() {
+        let paths: Vec<String> = paths.iter().cloned().collect();
+        if let Ok(found) = antinomie_monitor_core::base_manifest::hashes_of(
+            &options.data_dir,
+            &entry.run.directory,
+            &paths,
+        ) {
+            system.extend(found);
+        }
+    }
+    Arc::new(system)
 }
 
 /// A report whose strings can be read: the analysis ended with results.
@@ -453,8 +511,12 @@ impl Detail {
                     Ok(data) => {
                         self.data = Some(Arc::new(data));
                         self.error = None;
+                        self.retry = None;
                     }
-                    Err(error) => self.error = Some(error),
+                    Err(error) => {
+                        self.error = Some(error);
+                        self.retry = Some(std::time::Instant::now() + RETRY_AFTER);
+                    }
                 }
             }
         }
@@ -500,6 +562,15 @@ impl MonitorApp {
             return;
         };
         detail.poll();
+        if let Some(at) = detail.retry {
+            let now = std::time::Instant::now();
+            if now >= at {
+                detail.retry = None;
+                detail.stale = true;
+            } else {
+                ctx.request_repaint_after(at - now);
+            }
+        }
         if detail.stale || detail.data.is_none() && detail.loading.is_none() {
             detail.start_load(&ctx, &options, &vms);
         }
@@ -551,8 +622,15 @@ impl MonitorApp {
             Tab::Runs => self.runs_tab(ui, &data),
             Tab::Custody => {
                 let verifying = detail.loading.is_some();
+                // A note's chip named an entry: bring it to the middle.
+                let entry = detail
+                    .focus
+                    .take_if(|reference| {
+                        reference.kind == antinomie_monitor_core::samples::RefKind::Custody
+                    })
+                    .and_then(|reference| reference.target.parse::<u64>().ok());
                 if let custody::Outcome::Verify =
-                    custody::show(ui, &data, self.settings.font_size, verifying)
+                    custody::show(ui, &data, self.settings.font_size, verifying, entry)
                 {
                     detail.stale = true;
                 }
@@ -779,11 +857,9 @@ impl SamplesPage {
         }
     }
 
-    /// Scroll the Summary down by `y` points.
-    pub(in crate::app) fn scroll_detail(&mut self, y: f32) {
-        if let Some(detail) = &mut self.detail {
-            detail.scroll_y = Some(y);
-        }
+    /// Scroll the Summary to the section titled `title`, once it is drawn.
+    pub(in crate::app) fn scroll_detail_to(ctx: &egui::Context, title: &str) {
+        parts::scroll_to_section(ctx, title);
     }
 
     /// Select the run at `index` of the Runs tab's list (screenshots).

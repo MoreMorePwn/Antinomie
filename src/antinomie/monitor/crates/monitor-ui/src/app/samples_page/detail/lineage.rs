@@ -5,7 +5,8 @@
 //! selected node and the per-run table behind a clicked edge label.
 use super::{parts, *};
 use antinomie_monitor_core::samples::{
-    build_lineage, EdgeKind, Known, LineageGraph, LineageOptions, NodeKind, RunLineage,
+    build_lineage, EdgeKind, Known, LineageGraph, LineageOptions, NodeKind, NoteRef, RefKind,
+    RunLineage,
 };
 use std::collections::BTreeSet;
 
@@ -45,6 +46,9 @@ pub(super) struct State {
     /// The node that keeps its place on screen when the layout changes: the
     /// one just expanded or collapsed, else the sample.
     anchor: Option<String>,
+    /// A node a note's chip asked for: shown, selected and centred at the
+    /// next draw.
+    centre: Option<String>,
     /// Where each node's centre was in the viewport at the last draw.
     screen: std::collections::BTreeMap<String, egui::Vec2>,
 }
@@ -71,14 +75,51 @@ impl Default for State {
             cached: None,
             context: None,
             anchor: None,
+            centre: None,
             screen: std::collections::BTreeMap::new(),
         }
     }
 }
 
 impl State {
-    fn options(&self) -> LineageOptions {
+    /// Show, select and centre the node `id` at the next draw.
+    pub(super) fn focus_node(&mut self, id: &str) {
+        self.selected = Some(id.to_owned());
+        self.centre = Some(id.to_owned());
+    }
+
+    /// Bring the node asked for by `focus_node` into the graph (more levels,
+    /// system binaries shown) and centre the view on it.
+    fn apply_focus(&mut self, data: &Data, viewport: egui::Vec2) {
+        let Some(id) = self.centre.take() else {
+            return;
+        };
+        let mut more = 0;
+        while !self
+            .cached
+            .as_ref()
+            .is_some_and(|cached| cached.layout.at.contains_key(&id))
+            && more < 6
+        {
+            self.parents += 1;
+            self.children += 1;
+            self.hide_system = false;
+            self.refresh(data);
+            more += 1;
+        }
+        if let Some(at) = self
+            .cached
+            .as_ref()
+            .and_then(|cached| cached.layout.at.get(&id))
+        {
+            self.view.offset = viewport * 0.5 - at.center().to_vec2() * self.view.zoom;
+            self.view.fitted = true;
+        }
+    }
+
+    fn options(&self, data: &Data) -> LineageOptions {
         LineageOptions {
+            system: Arc::clone(&data.system),
             hide_system: self.hide_system,
             parents: self.parents,
             children: self.children,
@@ -89,7 +130,7 @@ impl State {
 
     /// The graph for the current options and read of the sample.
     fn refresh(&mut self, data: &Data) {
-        let options = self.options();
+        let options = self.options(data);
         let stale = self
             .cached
             .as_ref()
@@ -245,7 +286,11 @@ fn node_menu(
         *act = Some(Act::Toggle(node.id.clone()));
         ui.close_menu();
     }
-    parts::add_note_menu_item(ui);
+    if node.id != data.record.sha256 {
+        super::notes::menu_item(ui, || {
+            NoteRef::new(RefKind::Lineage, node.id.clone(), node.label.clone())
+        });
+    }
 }
 
 /// "dropped ×4 · executed ×4 · 4 runs": what an edge label stands for.
@@ -347,6 +392,7 @@ pub(super) fn section(ui: &mut egui::Ui, state: &mut State, data: &Data) -> Opti
         let sample = data.record.sha256.clone();
         // Read the graph again when an option changed this frame.
         state.refresh(data);
+        state.apply_focus(data, rect.size());
         let mut act = None;
         let (hit, screen) = {
             let State {

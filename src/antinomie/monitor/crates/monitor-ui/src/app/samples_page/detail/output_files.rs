@@ -306,212 +306,224 @@ pub(in crate::app::samples_page) fn section(
         // puts them on two lines, in taller rows, instead of cutting them.
         let fixed = file + hash + 70.0 + because + size + 140.0 + ui.spacing().item_spacing.x * 6.0;
         let roomy = ui.available_width() - fixed >= ACTIONS_WIDTH;
-        parts::mini_table(ui, "sample_summary_outputs")
-            .sense(egui::Sense::click())
-            .column(egui_extras::Column::exact(file))
-            .column(egui_extras::Column::exact(hash))
-            .column(egui_extras::Column::exact(70.0))
-            .column(egui_extras::Column::exact(because))
-            .column(egui_extras::Column::exact(size))
-            .column(egui_extras::Column::exact(140.0))
-            .column(egui_extras::Column::remainder().at_least(60.0))
-            .header(table::header_height(font), |mut header| {
-                for title in [
-                    "File",
-                    "SHA-256",
-                    "Run",
-                    "Saved because",
-                    "Size",
-                    "Availability",
-                    "",
-                ] {
-                    header.col(|ui| table::head(ui, title));
-                }
-            })
-            .body(|body| {
-                body.rows(
-                    table::row_height(font) + if roomy { 6.0 } else { 34.0 },
-                    data.outputs.len(),
-                    |mut row| {
-                        let output = &data.outputs[row.index()];
-                        let here = output.availability == Availability::InRun;
-                        let run_there = data
-                            .runs
-                            .iter()
-                            .any(|entry| entry.number == output.number && entry.folder);
-                        row.col(|ui| {
-                            ui.label(output.kind.label());
-                        });
-                        row.col(|ui| {
-                            table::cell(ui, table::Cell::Mono, &output.short()).on_hover_text(
-                                if output.hash.is_empty() {
-                                    "SHA-256 of the file"
+        parts::on_surface(ui, |ui| {
+            parts::mini_table(ui, "sample_summary_outputs")
+                .sense(egui::Sense::click())
+                .column(egui_extras::Column::exact(file))
+                .column(egui_extras::Column::exact(hash))
+                .column(egui_extras::Column::exact(70.0))
+                .column(egui_extras::Column::exact(because))
+                .column(egui_extras::Column::exact(size))
+                .column(egui_extras::Column::exact(140.0))
+                .column(egui_extras::Column::remainder().at_least(60.0))
+                .header(table::header_height(font), |mut header| {
+                    for title in [
+                        "File",
+                        "SHA-256",
+                        "Run",
+                        "Saved because",
+                        "Size",
+                        "Availability",
+                        "",
+                    ] {
+                        header.col(|ui| table::head(ui, title));
+                    }
+                })
+                .body(|body| {
+                    body.rows(
+                        table::row_height(font) + if roomy { 6.0 } else { 34.0 },
+                        data.outputs.len(),
+                        |mut row| {
+                            let output = &data.outputs[row.index()];
+                            let here = output.availability == Availability::InRun;
+                            let run_there = data
+                                .runs
+                                .iter()
+                                .any(|entry| entry.number == output.number && entry.folder);
+                            row.col(|ui| {
+                                ui.label(output.kind.label());
+                            });
+                            row.col(|ui| {
+                                table::cell(ui, table::Cell::Mono, &output.short()).on_hover_text(
+                                    if output.hash.is_empty() {
+                                        "SHA-256 of the file"
+                                    } else {
+                                        output.hash.as_str()
+                                    },
+                                );
+                            });
+                            row.col(|ui| {
+                                ui.label(if output.number == 0 {
+                                    "–".to_owned()
                                 } else {
-                                    output.hash.as_str()
-                                },
-                            );
-                        });
-                        row.col(|ui| {
-                            ui.label(if output.number == 0 {
-                                "–".to_owned()
-                            } else {
-                                parts::run_name(output.number)
+                                    parts::run_name(output.number)
+                                });
                             });
-                        });
-                        row.col(|ui| {
-                            ui.label(&output.saved_because);
-                        });
-                        row.col(|ui| {
-                            ui.label(output.size.map_or("–".to_owned(), crate::values::file_size));
-                        });
-                        row.col(|ui| {
-                            ui.horizontal(|ui| match &output.availability {
-                                Availability::InRun => {
-                                    widgets::chip(
-                                        ui,
-                                        format!("In run {} folder", output.number),
-                                        if output.state == "Complete" {
-                                            Tone::Good
-                                        } else {
-                                            Tone::Warn
-                                        },
-                                    )
-                                    .on_hover_text(format!("State: {}", output.state));
-                                }
-                                Availability::Deleted => {
-                                    widgets::chip(
-                                        ui,
-                                        match output.deleted_ms {
-                                            Some(ms) => {
-                                                format!("Deleted by you · {}", super::second(ms))
-                                            }
-                                            None => "Deleted by you".to_owned(),
-                                        },
-                                        Tone::Neutral,
-                                    );
-                                }
-                                Availability::Kept(stored, ms) => {
-                                    widgets::chip(ui, "Kept in Samples", Tone::Good).on_hover_text(
-                                        format!(
-                                            "Moved when run {} was deleted, {}: {}",
-                                            output.number,
-                                            super::second(*ms),
-                                            stored.display()
-                                        ),
-                                    );
-                                }
-                                Availability::WithVm => {
-                                    widgets::chip(ui, "With the VM", Tone::Info).on_hover_text(
-                                        if output.kind == Kind::Snapshot {
-                                            "A VM snapshot stays in the VM's snapshot tree"
-                                        } else {
-                                            "Left in the VM's recording"
-                                        },
-                                    );
-                                }
-                                Availability::InRecord => {
-                                    widgets::chip(ui, "In the sample record", Tone::Info)
-                                        .on_hover_text("Copied with the run's record");
-                                }
-                                Availability::Missing => {
-                                    widgets::chip(ui, "Missing", Tone::Error)
-                                        .on_hover_text("Not deleted through the app");
-                                }
+                            row.col(|ui| {
+                                ui.label(&output.saved_because);
                             });
-                        });
-                        row.col(|ui| {
-                            ui.horizontal_wrapped(|ui| {
+                            row.col(|ui| {
+                                ui.label(
+                                    output.size.map_or("–".to_owned(), crate::values::file_size),
+                                );
+                            });
+                            row.col(|ui| {
+                                ui.horizontal(|ui| match &output.availability {
+                                    Availability::InRun => {
+                                        widgets::chip(
+                                            ui,
+                                            format!("In run {} folder", output.number),
+                                            if output.state == "Complete" {
+                                                Tone::Good
+                                            } else {
+                                                Tone::Warn
+                                            },
+                                        )
+                                        .on_hover_text(format!("State: {}", output.state));
+                                    }
+                                    Availability::Deleted => {
+                                        widgets::chip(
+                                            ui,
+                                            match output.deleted_ms {
+                                                Some(ms) => {
+                                                    format!(
+                                                        "Deleted by you · {}",
+                                                        super::second(ms)
+                                                    )
+                                                }
+                                                None => "Deleted by you".to_owned(),
+                                            },
+                                            Tone::Neutral,
+                                        );
+                                    }
+                                    Availability::Kept(stored, ms) => {
+                                        widgets::chip(ui, "Kept in Samples", Tone::Good)
+                                            .on_hover_text(format!(
+                                                "Moved when run {} was deleted, {}: {}",
+                                                output.number,
+                                                super::second(*ms),
+                                                stored.display()
+                                            ));
+                                    }
+                                    Availability::WithVm => {
+                                        widgets::chip(ui, "With the VM", Tone::Info).on_hover_text(
+                                            if output.kind == Kind::Snapshot {
+                                                "A VM snapshot stays in the VM's snapshot tree"
+                                            } else {
+                                                "Left in the VM's recording"
+                                            },
+                                        );
+                                    }
+                                    Availability::InRecord => {
+                                        widgets::chip(ui, "In the sample record", Tone::Info)
+                                            .on_hover_text("Copied with the run's record");
+                                    }
+                                    Availability::Missing => {
+                                        widgets::chip(ui, "Missing", Tone::Error)
+                                            .on_hover_text("Not deleted through the app");
+                                    }
+                                });
+                            });
+                            row.col(|ui| {
+                                ui.horizontal_wrapped(|ui| {
+                                    let why = match output.availability {
+                                        Availability::Deleted => "The file was deleted",
+                                        Availability::Kept(..) => {
+                                            "The file was moved into Samples; use Open folder"
+                                        }
+                                        Availability::InRecord => "Open it from the Summary",
+                                        _ => "The file is missing",
+                                    };
+                                    let can_open = (here
+                                        || output.availability == Availability::WithVm
+                                            && output.kind == Kind::Snapshot)
+                                        && run_there;
+                                    let reason = output.kind.open_unavailable().unwrap_or(why);
+                                    if ui
+                                        .add_enabled(
+                                            can_open && output.kind.open_unavailable().is_none(),
+                                            egui::Button::new(output.kind.open_label()).small(),
+                                        )
+                                        .on_disabled_hover_text(if run_there {
+                                            reason
+                                        } else {
+                                            "The run's folder was deleted"
+                                        })
+                                        .clicked()
+                                    {
+                                        act = Some(Act::Open(output.number, output.kind));
+                                    }
+                                    if ui
+                                        .add_enabled(
+                                            run_there,
+                                            egui::Button::new("Go to run").small(),
+                                        )
+                                        .on_disabled_hover_text("The run's folder was deleted")
+                                        .clicked()
+                                    {
+                                        act = Some(Act::GoToRun(output.number));
+                                    }
+                                    let folder = matches!(
+                                        output.availability,
+                                        Availability::InRun | Availability::Kept(..)
+                                    ) && !output.path.as_os_str().is_empty();
+                                    if ui
+                                        .add_enabled(
+                                            folder,
+                                            egui::Button::new("Open folder").small(),
+                                        )
+                                        .on_disabled_hover_text(why)
+                                        .clicked()
+                                    {
+                                        crate::evidence::reveal(ui.ctx(), &output.path);
+                                    }
+                                });
+                            });
+                            row.response().context_menu(|ui| {
                                 let why = match output.availability {
                                     Availability::Deleted => "The file was deleted",
-                                    Availability::Kept(..) => {
-                                        "The file was moved into Samples; use Open folder"
-                                    }
-                                    Availability::InRecord => "Open it from the Summary",
                                     _ => "The file is missing",
                                 };
-                                let can_open = (here
-                                    || output.availability == Availability::WithVm
-                                        && output.kind == Kind::Snapshot)
-                                    && run_there;
-                                let reason = output.kind.open_unavailable().unwrap_or(why);
                                 if ui
-                                    .add_enabled(
-                                        can_open && output.kind.open_unavailable().is_none(),
-                                        egui::Button::new(output.kind.open_label()).small(),
-                                    )
-                                    .on_disabled_hover_text(if run_there {
-                                        reason
-                                    } else {
-                                        "The run's folder was deleted"
-                                    })
+                                    .add_enabled(here, egui::Button::new(output.kind.open_label()))
+                                    .on_disabled_hover_text(why)
                                     .clicked()
                                 {
                                     act = Some(Act::Open(output.number, output.kind));
+                                    ui.close_menu();
                                 }
-                                if ui
-                                    .add_enabled(run_there, egui::Button::new("Go to run").small())
-                                    .on_disabled_hover_text("The run's folder was deleted")
-                                    .clicked()
-                                {
+                                if ui.button("Go to run").clicked() {
                                     act = Some(Act::GoToRun(output.number));
+                                    ui.close_menu();
                                 }
-                                let folder = matches!(
-                                    output.availability,
-                                    Availability::InRun | Availability::Kept(..)
-                                ) && !output.path.as_os_str().is_empty();
                                 if ui
-                                    .add_enabled(folder, egui::Button::new("Open folder").small())
+                                    .add_enabled(here, egui::Button::new("Open folder"))
                                     .on_disabled_hover_text(why)
                                     .clicked()
                                 {
                                     crate::evidence::reveal(ui.ctx(), &output.path);
+                                    ui.close_menu();
                                 }
+                                ui.separator();
+                                let is_file = here && output.path.is_file();
+                                if ui
+                                    .add_enabled(is_file, egui::Button::new("Copy SHA-256"))
+                                    .on_disabled_hover_text(if here {
+                                        "A memory dump is a folder of files"
+                                    } else {
+                                        why
+                                    })
+                                    .clicked()
+                                {
+                                    copy_sha256(ui.ctx(), output.path.clone());
+                                    ui.close_menu();
+                                }
+                                super::super::notes::menu_item(ui, || output.reference());
                             });
-                        });
-                        row.response().context_menu(|ui| {
-                            let why = match output.availability {
-                                Availability::Deleted => "The file was deleted",
-                                _ => "The file is missing",
-                            };
-                            if ui
-                                .add_enabled(here, egui::Button::new(output.kind.open_label()))
-                                .on_disabled_hover_text(why)
-                                .clicked()
-                            {
-                                act = Some(Act::Open(output.number, output.kind));
-                                ui.close_menu();
-                            }
-                            if ui.button("Go to run").clicked() {
-                                act = Some(Act::GoToRun(output.number));
-                                ui.close_menu();
-                            }
-                            if ui
-                                .add_enabled(here, egui::Button::new("Open folder"))
-                                .on_disabled_hover_text(why)
-                                .clicked()
-                            {
-                                crate::evidence::reveal(ui.ctx(), &output.path);
-                                ui.close_menu();
-                            }
-                            ui.separator();
-                            let is_file = here && output.path.is_file();
-                            if ui
-                                .add_enabled(is_file, egui::Button::new("Copy SHA-256"))
-                                .on_disabled_hover_text(if here {
-                                    "A memory dump is a folder of files"
-                                } else {
-                                    why
-                                })
-                                .clicked()
-                            {
-                                copy_sha256(ui.ctx(), output.path.clone());
-                                ui.close_menu();
-                            }
-                            super::super::notes::menu_item(ui, || output.reference());
-                        });
-                    },
-                );
-            });
+                        },
+                    );
+                });
+        });
     });
     act
 }

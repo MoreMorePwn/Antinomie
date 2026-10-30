@@ -13,7 +13,14 @@ pub(super) enum Outcome {
     Verify,
 }
 
-pub(super) fn show(ui: &mut egui::Ui, data: &Data, font: f32, verifying: bool) -> Outcome {
+/// `scroll_to`: the number of the entry to bring to the middle of the table.
+pub(super) fn show(
+    ui: &mut egui::Ui,
+    data: &Data,
+    font: f32,
+    verifying: bool,
+    scroll_to: Option<u64>,
+) -> Outcome {
     let verify = custody_parts::banner(ui, &data.chain, verifying);
     ui.add_space(4.0);
     if data.events.is_empty() {
@@ -32,7 +39,7 @@ pub(super) fn show(ui: &mut egui::Ui, data: &Data, font: f32, verifying: bool) -
         data.events.iter().map(|event| parts::second(event.at_ms)),
     );
     table::begin(ui);
-    TableBuilder::new(ui)
+    let mut builder = TableBuilder::new(ui)
         .id_salt("sample_custody")
         .striped(true)
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
@@ -43,7 +50,11 @@ pub(super) fn show(ui: &mut egui::Ui, data: &Data, font: f32, verifying: bool) -
         .column(Column::remainder().at_least(160.0).clip(true))
         .column(Column::exact(86.0))
         .max_scroll_height(height)
-        .min_scrolled_height(0.0)
+        .min_scrolled_height(0.0);
+    if let Some(at) = scroll_to.and_then(|seq| data.events.iter().position(|e| e.seq == seq)) {
+        builder = builder.scroll_to_row(at, Some(egui::Align::Center));
+    }
+    builder
         .header(table::header_height(font), |mut header| {
             for title in ["#", "Time", "Event", "By", "Detail", "Check"] {
                 header.col(|ui| table::head(ui, title));

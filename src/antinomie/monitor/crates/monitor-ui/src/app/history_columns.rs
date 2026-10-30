@@ -105,7 +105,7 @@ pub(crate) fn short_run_id(run: &RunSummary) -> String {
 
 /// The executable's name with the run's short id beside it. The name gives way
 /// when the column is narrow; the id stays.
-pub(super) fn executable_cell(ui: &mut egui::Ui, title: String, run: &RunSummary) {
+pub(in crate::app) fn executable_cell(ui: &mut egui::Ui, title: String, run: &RunSummary) {
     let id = short_run_id(run);
     let font = egui::TextStyle::Monospace.resolve(ui.style());
     let id_width = ui.fonts(|fonts| {
