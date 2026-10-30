@@ -437,7 +437,7 @@ impl MonitorApp {
         let data_dir = self.options.data_dir.clone();
         let busy = self.rules_ui.is_busy();
         if !self.settings.outbound_catalog {
-            crate::activity::warning(ui, "Downloads are off.");
+            ui.label(RichText::new("Downloads are off.").color(theme::muted()));
             if ui.button("Allow downloads").clicked() {
                 self.settings.outbound_catalog = true;
             }

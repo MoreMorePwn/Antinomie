@@ -109,7 +109,7 @@ impl UpdateWindow {
                     theme::loading(ui, "Asking GitHub for the latest release…");
                 } else if !*outbound && self.answer.is_none() {
                     ui.horizontal_wrapped(|ui| {
-                        crate::activity::warning(ui, "Downloads are off.");
+                        ui.label(egui::RichText::new("Downloads are off.").color(theme::muted()));
                         if ui
                             .button("Allow downloads")
                             .on_hover_text(
