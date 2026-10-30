@@ -70,7 +70,9 @@ impl Model {
             }
         });
         let busy = self.job.is_some();
-        if !self.live.note.is_empty() {
+        if let Some(error) = &self.status_error {
+            ui.add(egui::Label::new(RichText::new(error).color(theme::error())).wrap());
+        } else if !self.live.note.is_empty() {
             ui.add(egui::Label::new(RichText::new(&self.live.note).color(theme::text())).wrap());
         }
         ui.horizontal_wrapped(|ui| {
@@ -271,7 +273,7 @@ impl Model {
         install: bool,
     ) {
         if !outbound {
-            self.status = "Allow downloads first. These packs come from abuse.ch hosts.".into();
+            self.block_download("Allow downloads first. These packs come from abuse.ch hosts.");
             return;
         }
         let dir = data_dir.to_path_buf();
@@ -297,6 +299,7 @@ impl Model {
             let now = now_unix();
             let mut lines = Vec::new();
             let mut installed_any = false;
+            let mut failed = false;
             for pack in LIVE_PACKS
                 .iter()
                 .filter(|pack| only.is_none_or(|id| id == pack.id))
@@ -320,7 +323,10 @@ impl Model {
                                 format!("{} installed with {} rules", pack.name, done.rules)
                             });
                         }
-                        Err(error) => lines.push(error),
+                        Err(error) => {
+                            failed = true;
+                            lines.push(error);
+                        }
                     }
                 } else {
                     match ruleset::check_live(&dir, pack, &key, fetcher, now, &cancel, &mut show) {
@@ -338,14 +344,22 @@ impl Model {
                             pack.name,
                             now.saturating_sub(checked.at_unix)
                         )),
-                        Err(error) => lines.push(error),
+                        Err(error) => {
+                            failed = true;
+                            lines.push(error);
+                        }
                     }
                 }
             }
             if pack_uses_key(only, key_present) {
                 api_keys::record_use(&dir, ApiKey::Abusech);
             }
-            Ok(Done::Live(lines.join(" · "), installed_any))
+            let text = lines.join(" · ");
+            // A run where nothing worked is a failure: it is raised as one.
+            if failed && !installed_any && lines.len() == 1 {
+                return Err(text);
+            }
+            Ok(Done::Live(text, installed_any))
         });
     }
 }
