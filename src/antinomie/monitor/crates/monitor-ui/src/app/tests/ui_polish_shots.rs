@@ -5,7 +5,9 @@
 //! ANTINOMIE_QA_SCENE = history | static | details | terminal | empty (an app with no runs,
 //! cores, dumps or captures, showing the panel named by ANTINOMIE_QA_PANEL =
 //! core | memory | disks | network | trace | static | history | summary | activity)
-//! ANTINOMIE_QA_OPEN = strings | regex (static scene) | routes | rules | about | started,
+//! ANTINOMIE_QA_OPEN = strings | regex (static scene) | routes | rules | about | started | perf |
+//! settings_analysis | settings_appearance, ANTINOMIE_QA_REPORT = limits (static scene: every kind of
+//! limit, a Timeout and a Partial check), ANTINOMIE_QA_FONT = text size,
 //! ANTINOMIE_QA_THEME = dark | light | blue, ANTINOMIE_QA_SIZE = 1280x820,
 //! ANTINOMIE_QA_SECONDS = 25.
 use super::*;
@@ -75,6 +77,66 @@ pub(super) fn history_fixture() -> MonitorApp {
         )),
     ));
     app
+}
+
+/// The static scene's report with a bound of every kind and a check that timed out.
+fn limits_report(app: &mut MonitorApp) {
+    use antinomie_monitor_core::{
+        AnalysisKind, AnalysisLimit, AnalysisLimitKind, AnalysisSection, AnalysisSectionState,
+    };
+    let Some(report) = app.history[0].analysis.as_mut() else {
+        return;
+    };
+    let section =
+        |kind, state, summary: &str, limits: Vec<(AnalysisLimitKind, &str, Option<u64>)>| {
+            AnalysisSection {
+                kind,
+                state,
+                summary: summary.into(),
+                tools: vec!["Built-in analysis (object 0.40)".into()],
+                listing: None,
+                entries: Vec::new(),
+                limits: limits
+                    .into_iter()
+                    .map(|(kind, text, seconds)| AnalysisLimit {
+                        kind,
+                        text: text.into(),
+                        seconds,
+                    })
+                    .collect(),
+            }
+        };
+    report.time_limit_seconds = Some(240);
+    report.sections = vec![
+        section(AnalysisKind::Metadata, AnalysisSectionState::Complete, "File hashes, size and object header.", Vec::new()),
+        section(
+            AnalysisKind::Structures,
+            AnalysisSectionState::Partial,
+            "9,120 rows of entry point, sections, segments, symbols, imports and exports.",
+            vec![
+                (AnalysisLimitKind::Rows, "The report keeps the first 2,048 rows; 7,072 more were left out.", None),
+                (AnalysisLimitKind::Input, "Some of the file could not be read as the format describes it.", None),
+            ],
+        ),
+        section(
+            AnalysisKind::Strings,
+            AnalysisSectionState::Partial,
+            "Strings found in the file.",
+            vec![(AnalysisLimitKind::Size, "The listing reached its 64 MiB limit after 410,000 rows; the rest of the rows are not listed.", None)],
+        ),
+        section(
+            AnalysisKind::Capabilities,
+            AnalysisSectionState::Timeout,
+            "capa was stopped before it finished; what it had printed by then is shown.",
+            vec![(AnalysisLimitKind::Time, "capa ran out of time: its limit was 4 minutes.", Some(240))],
+        ),
+        section(
+            AnalysisKind::Regex,
+            AnalysisSectionState::Unavailable,
+            "The regex scan could not read the file.",
+            Vec::new(),
+        ),
+    ];
 }
 
 #[test]
@@ -177,6 +239,9 @@ fn native_ui_polish_fixture() {
             theme::apply_theme(&cc.egui_ctx, theme_choice);
             if scene == "static" {
                 app.selected_analysis = Some("report-1".into());
+                if var("ANTINOMIE_QA_REPORT") == "limits" {
+                    limits_report(&mut app);
+                }
             }
             // ANTINOMIE_QA_OPEN = strings | regex | routes | rules | about | started
             match var("ANTINOMIE_QA_OPEN").as_str() {
@@ -198,6 +263,12 @@ fn native_ui_polish_fixture() {
                 }
                 "rules" => app.open_library(crate::workspace::LibraryPage::Rules),
                 "about" => app.about_open = true,
+                "perf" => app.performance.open = true,
+                "settings_analysis" => {
+                    app.settings_open = true;
+                    app.settings_page = super::super::settings_window::SettingsPage::AnalysisTools;
+                }
+                "settings_appearance" => app.settings_open = true,
                 "started" => app.open_getting_started(),
                 _ => {}
             }

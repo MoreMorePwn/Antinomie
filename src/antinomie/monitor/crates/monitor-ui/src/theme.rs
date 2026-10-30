@@ -417,12 +417,16 @@ pub fn install(ctx: &egui::Context) {
     text_size(ctx, DEFAULT_TEXT_SIZE);
     // Screenshot fixtures: ANTINOMIE_QA_FONT picks the text size to render at.
     #[cfg(test)]
-    if let Some(size) = std::env::var("ANTINOMIE_QA_FONT")
+    text_size(ctx, qa_text_size(DEFAULT_TEXT_SIZE));
+}
+
+/// The text size a screenshot fixture renders at: `ANTINOMIE_QA_FONT`, else `default`.
+#[cfg(test)]
+pub(crate) fn qa_text_size(default: f32) -> f32 {
+    std::env::var("ANTINOMIE_QA_FONT")
         .ok()
         .and_then(|size| size.parse::<f32>().ok())
-    {
-        text_size(ctx, size);
-    }
+        .unwrap_or(default)
 }
 
 /// The text size a new installation starts with (Settings > Appearance).

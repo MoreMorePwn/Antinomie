@@ -29,6 +29,35 @@ it runs.
   no longer a warning. Written-content, Sigma coverage, Guest network (formerly
   NAT network) and cloud metadata messages say what happened and what to do.
 
+- **Larger text.** The default text size is 18 (it was 16); a saved size of
+  16 moves to 18 once, any other size stays. Sub-header titles are two points
+  bigger and headings six, the graph, refresh and strip labels follow the text
+  size, and the Run History buttons, the Settings page list and the Static
+  analysis overview make room for it instead of being cut off.
+
+- **Windows say "name value" the same way.** UI performance lists its facts in
+  one aligned table with a subtitle under each title, and the lines that said
+  "x: y" in Summary and Triage use the same muted name and plain value.
+
+- **Every limit says where to change it.** A static analysis check that met a
+  bound (rows, size, text or unreadable parts) shows its warning with a button to
+  Settings, which now lists the bounds that no setting changes; Disks limits and
+  Triage route problems have their buttons too. A refresh that found part of a
+  run missing says what is missing instead of "partial evidence". A process
+  picker action that is not available says why.
+
+- **Cloud notes.** A VM on NAT running on a cloud instance gets a note that the
+  sample can reach the provider's real metadata service; the Run program window
+  says when the simulated metadata service answers beside the route.
+
+- **Error toasts time out.** An error toast now shows a countdown bar and leaves
+  after 30 seconds like the others; hovering it still pauses the timer, and the
+  error stays in Activity.
+
+- **abuse.ch downloads without a key.** abuse.ch now requires an Auth-Key for the
+  URLhaus and ThreatFox packs; a refused download says so plainly (HTTP 401),
+  points to Tools > API keys and offers a button for it.
+
 - **Stealth profiles are now device profiles.** The feature keeps its settings
   and saved data under a new name throughout the app. A question-mark icon next
   to the VM configuration's Device profile row explains what it is for, and the

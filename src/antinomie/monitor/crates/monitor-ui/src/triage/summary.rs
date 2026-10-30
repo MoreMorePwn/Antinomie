@@ -469,7 +469,13 @@ mod tests {
                 Ok(Box::new(Fixture {
                     view,
                     analysis,
-                    deadline: Instant::now() + Duration::from_secs(4),
+                    deadline: Instant::now()
+                        + Duration::from_secs(
+                            std::env::var("ANTINOMIE_QA_SECONDS")
+                                .ok()
+                                .and_then(|seconds| seconds.parse().ok())
+                                .unwrap_or(4),
+                        ),
                     detection,
                     _files: files,
                 }))
