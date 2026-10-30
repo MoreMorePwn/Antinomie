@@ -24,9 +24,9 @@ the guest kernel, and investigate everything it did in one desktop app.
 [Contributing](CONTRIBUTING.md)
 
 [![CI](https://github.com/MoreMorePwn/Antinomie/actions/workflows/ci.yml/badge.svg)](https://github.com/MoreMorePwn/Antinomie/actions/workflows/ci.yml)
-[![Platform: Linux x86-64](assets/badges/platform.svg)](#requirements)
-[![Guest kernel: Linux 6.12.94](assets/badges/kernel.svg)](docs/implementation.md)
+[![Latest release](https://img.shields.io/github/v/release/MoreMorePwn/Antinomie?label=release&color=2f6fb3)](https://github.com/MoreMorePwn/Antinomie/releases/latest)
 [![Original host license: GPL-3.0-only](assets/badges/license.svg)](LICENSING.md)
+[![Documentation](assets/badges/docs.svg)](https://antinomie.moremorepwn.blog/docs/)
 
 <br>
 
@@ -69,28 +69,11 @@ the guest kernel, and investigate everything it did in one desktop app.
 **A sandbox at kernel level**
 
 Samples run in QEMU VMs on your own machine. A patched Linux 6.12.94 guest
-kernel does the observing, so no agent runs in the guest on current bases.
+kernel observes and controls them, so nothing runs beside the sample for it
+to find.
 
 </td>
 <td width="33%" valign="top">
-
-**No `ptrace` in the guest**
-
-The kernel debugger uses no `ptrace` either: `TracerPid` stays 0 and the
-sample's own `PTRACE_TRACEME` succeeds.
-
-</td>
-<td width="33%" valign="top">
-
-**Evidence stays honest**
-
-Unreadable bytes, unsupported information and recording gaps stay visible.
-Losses are counted, never hidden.
-
-</td>
-</tr>
-<tr>
-<td valign="top">
 
 **One workspace**
 
@@ -98,20 +81,39 @@ Trace, Triage, network, memory and static analysis share one saved recording,
 and the debugger sits beside them on the live VM. No exporting between tools.
 
 </td>
-<td valign="top">
-
-**Reopen any run**
-
-Runs are saved. Open them from **Run History** long after the VM is gone.
-
-</td>
-<td valign="top">
+<td width="33%" valign="top">
 
 **Native and local**
 
 A Rust and egui desktop app on your own machine. Analysis tools run in a
-bubblewrap sandbox. Tools and bases download only when you ask; the Getting
-started window reads the base catalog index on first launch.
+bubblewrap sandbox. Tools and bases download only when you ask.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+**Triage and detections**
+
+Process tree, files, network and suspicious activity on an activity graph,
+mapped to ATT&CK and matched against YARA, Sigma, Suricata and abuse.ch
+indicators.
+
+</td>
+<td valign="top">
+
+**Report export** <sub>(coming in 0.8.0)</sub>
+
+Save a run as HTML, PDF, JSON, MISP or STIX 2.1, with an optional evidence
+bundle of its captures and dropped files.
+
+</td>
+<td valign="top">
+
+**Every system call**
+
+Decoded arguments, flags, return values and captured buffers, searchable with
+a filter language and linked to the evidence they produced.
 
 </td>
 </tr>
