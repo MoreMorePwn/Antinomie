@@ -39,11 +39,11 @@ fn kinds(library: &Library, sha: &str) -> Vec<(String, String, String)> {
 #[test]
 fn a_run_start_names_the_vm_and_its_setup() {
     let (root, library, sha, log) = setup("start");
-    log.started("base Debian, stealth profile Fair, network Isolated, booted from the disk".into());
+    log.started("base Debian, device profile Fair, network Isolated, booted from the disk".into());
     let entries = kinds(&library, &sha);
     let (kind, by, detail) = entries.last().unwrap();
     assert_eq!((kind.as_str(), by.as_str()), ("run_started", "app"));
-    assert!(detail.contains("vm-one") && detail.contains("stealth profile Fair"));
+    assert!(detail.contains("vm-one") && detail.contains("device profile Fair"));
     assert!(library.custody_check(&sha).unwrap().ok());
     let _ = fs::remove_dir_all(root);
 }

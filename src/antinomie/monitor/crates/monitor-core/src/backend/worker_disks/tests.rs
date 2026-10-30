@@ -1806,5 +1806,5 @@ fn restore_follows_the_stealth_profile_the_snapshot_was_taken_with() {
         .restore_profile("fixture", &taken.id, false)
         .unwrap();
     assert!(switch.is_none());
-    assert!(note.unwrap().contains("no recorded stealth profile"));
+    assert!(note.unwrap().contains("no recorded device profile"));
 }

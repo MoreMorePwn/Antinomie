@@ -818,7 +818,7 @@ fn the_details_of_an_evasion_row_list_each_check_the_answer_and_why_it_has_its_t
     assert!(any("Checks and what the guest answered"), "{shown:?}");
     assert!(any("\"QEMU\""), "the answer the guest gave");
     assert!(any("would show it"));
-    assert!(any("Stealth profile › Machine identity"));
+    assert!(any("Device profile › Machine identity"));
     assert!(
         any("CPUID"),
         "instruction-level checks are said to be invisible: {shown:?}"

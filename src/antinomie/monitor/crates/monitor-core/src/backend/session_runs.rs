@@ -16,7 +16,7 @@ impl Session {
         let log = crate::samples::RunLog::new(data_dir, sample, &run.summary.id, &self.vm.name);
         let environment = run.summary.environment.clone().unwrap_or_default();
         log.started(format!(
-            "base {}, stealth profile {}, network {}, {}",
+            "base {}, device profile {}, network {}, {}",
             environment.base_name,
             environment.stealth,
             environment.network,

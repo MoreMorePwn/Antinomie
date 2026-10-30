@@ -1003,7 +1003,7 @@ pub struct BaseSummary {
     pub min_app_version: Option<String>,
     /// Antinomie version that built the base, when recorded.
     pub built_with: Option<String>,
-    /// Stealth profile entries the base boots with (`stealth::BaseSupport`).
+    /// Device profile entries the base boots with (`stealth::BaseSupport`).
     pub stealth_support: Vec<String>,
 }
 
@@ -1909,7 +1909,7 @@ pub struct VmCheckpoint {
     pub compatibility_note: Option<String>,
     /// Hidden checkpoint whose files are retained for dependencies.
     pub deleted: bool,
-    /// The VM's stealth profile when the checkpoint was taken; absent in
+    /// The VM's device profile when the checkpoint was taken; absent in
     /// checkpoints taken before profiles were recorded.
     #[serde(default)]
     pub stealth: Option<crate::stealth::StealthProfile>,
@@ -1918,7 +1918,7 @@ pub struct VmCheckpoint {
     #[serde(default, skip_serializing)]
     pub profile: SnapshotProfile,
 }
-/// Whether a checkpoint's stealth profile is the VM's current one.
+/// Whether a checkpoint's device profile is the VM's current one.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SnapshotProfile {
     /// Taken before profiles were recorded: nothing to compare.
@@ -2044,7 +2044,7 @@ pub struct Snapshot {
     pub process_page: Option<crate::observation::GuestProcessPage>,
     pub capture_dir: Option<PathBuf>,
     pub serial_log: Option<PathBuf>,
-    /// What the running VM's stealth profile asked for and the base or host
+    /// What the running VM's device profile asked for and the base or host
     /// could not give, one line each; empty when it started as configured.
     pub stealth_fallbacks: Vec<String>,
     /// The running guest kernel, once it has answered the INFO probe.

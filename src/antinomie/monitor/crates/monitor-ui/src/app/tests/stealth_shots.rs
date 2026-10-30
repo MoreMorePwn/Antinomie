@@ -3,12 +3,16 @@
 //! screenshots in each theme. Needs an X11 display; exits by itself.
 //!
 //! ANTINOMIE_QA_SCENE = window (the Stealth window beside the VM dialog) |
-//! summary (the VM's Summary header and the sidebar badge),
+//! summary (the VM's Summary header and the sidebar badge) |
+//! config (the VM configuration; ANTINOMIE_QA_PRESET = desktop | laptop |
+//! server | cloud | transparent, ANTINOMIE_QA_NETWORK = nat | disconnected),
 //! ANTINOMIE_QA_THEME = dark | light | blue, ANTINOMIE_QA_SIZE = 1280x900,
 //! ANTINOMIE_QA_SECONDS = 25.
 use super::*;
 use crate::theme::Theme;
-use antinomie_monitor_core::stealth::{DiskBus, Firmware, NatNetwork};
+use antinomie_monitor_core::stealth::{
+    DiskBus, Firmware, NatNetwork, StealthPreset, StealthProfile,
+};
 
 #[test]
 #[ignore = "requires X11 native rendering; exits after the given seconds"]
@@ -73,7 +77,27 @@ fn native_stealth_fixture() {
             vm.stealth.nat = NatNetwork::default();
             app.snapshot.vms.push(vm.clone());
             app.selected = Some("vm".into());
-            if scene == "window" {
+            if scene == "config" {
+                let host = antinomie_monitor_core::stealth::host_cpu_vendor();
+                let preset = match var("ANTINOMIE_QA_PRESET").as_str() {
+                    "desktop" => Some(StealthPreset::RealisticDesktop),
+                    "laptop" => Some(StealthPreset::RealisticLaptop),
+                    "server" => Some(StealthPreset::RealisticServer),
+                    "transparent" => Some(StealthPreset::Transparent),
+                    _ => None,
+                };
+                vm.stealth = match (var("ANTINOMIE_QA_PRESET").as_str(), preset) {
+                    ("cloud", _) => {
+                        StealthProfile::cloud_vps(&antinomie_monitor_core::stealth::CLOUDS[0])
+                    }
+                    (_, Some(preset)) => StealthProfile::realistic(preset, &host),
+                    _ => vm.stealth,
+                };
+                vm.nat = var("ANTINOMIE_QA_NETWORK") == "nat";
+                vm.isolated_network = false;
+                app.draft = vm;
+                app.config_open = true;
+            } else if scene == "window" {
                 app.draft = vm;
                 app.config_open = true;
                 app.stealth_open = true;

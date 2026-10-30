@@ -79,10 +79,10 @@ fn details_list_each_check_with_the_answer_and_what_decides_it() {
     assert!(lines.contains("52:54:00:12:34:56"), "{lines}");
     assert!(lines.contains("up 32 s"), "a fresh boot is a tell: {lines}");
     assert!(
-        lines.contains("Stealth profile › Machine identity"),
+        lines.contains("Device profile › Machine identity"),
         "{lines}"
     );
-    assert!(lines.contains("Stealth profile › Network card"), "{lines}");
+    assert!(lines.contains("Device profile › Network card"), "{lines}");
     assert!(lines.contains("Still visible"), "{lines}");
     assert!(
         lines.contains("CPUID"),
@@ -162,7 +162,7 @@ fn disk_models_and_vendor_strings_are_checks_too() {
     ));
     let lines = detail(rows(&out, "evasion.sandbox_probe")[0]).join("\n");
     assert!(
-        lines.contains("would show it") && lines.contains("Stealth profile › Devices"),
+        lines.contains("would show it") && lines.contains("Device profile › Devices"),
         "{lines}"
     );
     let scsi = run(probe(

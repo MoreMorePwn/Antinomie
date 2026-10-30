@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Configured capacities, launch preferences and the stealth profile of the
+//! Configured capacities, launch preferences and the device profile of the
 //! selected VM, as cards.
 use super::*;
 use antinomie_monitor_core::stealth::{
@@ -219,7 +219,7 @@ fn firmware_kind(firmware: Firmware) -> &'static str {
 fn stealth(ui: &mut egui::Ui, profile: &StealthProfile, narrow: bool, fallbacks: &[Fallback]) {
     ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new(icon::SHIELD).size(18.0).color(theme::blue()));
-        ui.strong("Stealth profile");
+        ui.strong("Device profile");
         let preset = pill(ui, profile.preset.label(), theme::blue());
         if profile.preset == StealthPreset::Transparent {
             preset.on_hover_text(
@@ -227,7 +227,7 @@ fn stealth(ui: &mut egui::Ui, profile: &StealthProfile, narrow: bool, fallbacks:
             );
         }
         if !fallbacks.is_empty() {
-            pill(ui, "Stealth fallback", theme::warn()).on_hover_text(
+            pill(ui, "Device profile fallback", theme::warn()).on_hover_text(
                 fallbacks
                     .iter()
                     .map(|fallback| fallback.summary.as_str())
@@ -453,7 +453,7 @@ mod tests {
             "Compute",
             "Storage and display",
             "Network and transport",
-            "Stealth profile",
+            "Device profile",
             "Realistic desktop",
             profile.identity.system_serial.as_str(),
         ] {
@@ -566,7 +566,7 @@ mod tests {
             .map(|(text, _)| text)
             .collect();
         assert!(
-            texts.iter().any(|text| text == "Stealth fallback"),
+            texts.iter().any(|text| text == "Device profile fallback"),
             "the badge: {texts:?}"
         );
         assert!(

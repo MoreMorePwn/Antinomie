@@ -603,7 +603,7 @@ fn environment(ui: &mut egui::Ui, run: &RunSummary) {
                                 ),
                             );
                             parts::row(ui, "Network", environment.network.clone());
-                            parts::row(ui, "Stealth profile", environment.stealth.clone());
+                            parts::row(ui, "Device profile", environment.stealth.clone());
                             parts::row(
                                 ui,
                                 "Base image",

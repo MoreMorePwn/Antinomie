@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! VM configuration > Stealth profile.
+//! VM configuration > Device profile.
 use super::*;
 use antinomie_monitor_core::stealth::{StealthPreset, StealthProfile, MACHINES};
 
@@ -126,7 +126,7 @@ fn new_vms_look_like_a_desktop_and_saved_vms_keep_qemu_defaults() {
     assert!(stealth.identity_enabled && stealth.hide_hypervisor && stealth.hide_kvm);
     assert_ne!(stealth.rating(), "certain");
     assert!(app.create_validation_error(false).is_none());
-    // A configuration saved before stealth profiles reads as Transparent.
+    // A configuration saved before device profiles reads as Transparent.
     let mut saved = serde_json::to_value(VmConfig::default()).unwrap();
     saved.as_object_mut().unwrap().remove("stealth");
     let legacy: VmConfig = serde_json::from_value(saved).unwrap();
@@ -190,7 +190,7 @@ fn dialog_shows_the_preset_and_the_window_its_sections() {
     app.stealth_open = true;
     let texts = shown(&mut app, size);
     for section in [
-        "Stealth profile",
+        "Device profile",
         "Hardware identity",
         "Firmware and ACPI",
         "CPU",
@@ -363,7 +363,9 @@ fn the_vm_dialog_row_and_the_sidebar_carry_a_warning_badge() {
     let output = render(&mut app, &ctx, size);
     let lines: Vec<String> = texts(&output).into_iter().map(|(text, _)| text).collect();
     assert!(
-        lines.iter().any(|text| text.contains("Stealth fallback")),
+        lines
+            .iter()
+            .any(|text| text.contains("Device profile fallback")),
         "the sidebar row: {lines:?}"
     );
 }
@@ -387,7 +389,7 @@ fn a_base_that_supports_every_setting_shows_no_warning_anywhere() {
     let lines: Vec<String> = texts(&output).into_iter().map(|(text, _)| text).collect();
     assert!(
         !lines.iter().any(|text| text.contains("will not be applied")
-            || text.contains("Stealth fallback")
+            || text.contains("Device profile fallback")
             || text.contains("fall back")
             || text.contains("falls back")
             || text.contains("not supported by")),
@@ -449,7 +451,7 @@ fn without_a_supporting_base_installed_no_switch_is_offered() {
 #[test]
 fn the_run_header_lists_what_the_vm_started_without() {
     let mut sample = run("run-1");
-    let line = "Stealth setting not applied: SATA (AHCI) not supported by this base: virtio will be used; the base boots from virtio only";
+    let line = "Device profile setting not applied: SATA (AHCI) not supported by this base: virtio will be used; the base boots from virtio only";
     sample.notes.push(line.into());
     let ctx = egui::Context::default();
     theme::install(&ctx);
@@ -471,4 +473,38 @@ fn the_run_header_lists_what_the_vm_started_without() {
         "{lines:?}"
     );
     assert!(crate::run_recording::tooltip(&sample).contains("SATA (AHCI) not supported"));
+}
+
+#[test]
+fn the_vm_dialog_keeps_its_width_for_every_device_profile() {
+    use antinomie_monitor_core::stealth::CLOUDS;
+    let size = egui::vec2(1600.0, 1000.0);
+    let mut width = None;
+    let profiles = StealthPreset::ALL
+        .iter()
+        .map(|&preset| StealthProfile::realistic(preset, "GenuineIntel"))
+        .chain(CLOUDS.iter().map(StealthProfile::cloud_vps));
+    for profile in profiles {
+        for network in [(false, false), (true, false), (false, true)] {
+            let ctx = egui::Context::default();
+            theme::install(&ctx);
+            let mut app = app();
+            app.new_image();
+            app.draft.stealth = profile.clone();
+            (app.draft.nat, app.draft.routed) = network;
+            for _ in 0..4 {
+                render(&mut app, &ctx, size);
+            }
+            let rect = ctx
+                .memory(|memory| memory.area_rect(Dialog::Vm.window_id()))
+                .expect("the VM dialog is open");
+            let expected = *width.get_or_insert(rect.width());
+            assert!(
+                (rect.width() - expected).abs() < 1.0,
+                "{:?} on {network:?}: {} wide, others {expected}",
+                profile.preset,
+                rect.width()
+            );
+        }
+    }
 }

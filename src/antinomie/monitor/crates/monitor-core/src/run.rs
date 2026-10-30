@@ -850,8 +850,8 @@ mod tests {
     fn stealth_fallbacks_are_notes_of_the_run_and_never_stop_saving() {
         let (mut run, directory) = open_run("ant-run-stealth-notes");
         let lines = vec![
-            "Stealth setting not applied: SATA (AHCI) not supported by this base: virtio will be used; the base boots from virtio only".to_owned(),
-            "Stealth setting not applied: UEFI not supported by this host: BIOS will be used; no OVMF".to_owned(),
+            "Device profile setting not applied: SATA (AHCI) not supported by this base: virtio will be used; the base boots from virtio only".to_owned(),
+            "Device profile setting not applied: UEFI not supported by this host: BIOS will be used; no OVMF".to_owned(),
         ];
         run.add_stealth_fallbacks(&lines);
         run.add_stealth_fallbacks(&lines);

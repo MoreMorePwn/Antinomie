@@ -63,7 +63,7 @@ pub(crate) struct GuestAccount {
     root_uuid: Option<String>,
     /// The wired interface the disk's /etc/network/interfaces brings up (on
     /// a base that names its NIC by PCI slot): written at provisioning and
-    /// when the stealth profile moves the NIC. None: [`LEGACY_INTERFACE`]
+    /// when the device profile moves the NIC. None: [`LEGACY_INTERFACE`]
     /// on such a base, nothing on others.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     interface: Option<String>,
@@ -624,7 +624,7 @@ impl GuestAccount {
         Ok(())
     }
     /// Point the disk's network configuration at `interface` (the VM off):
-    /// the stealth profile moved the NIC to another PCI slot.
+    /// the device profile moved the NIC to another PCI slot.
     pub(crate) fn set_interface(&mut self, disk: &Path, interface: &str) -> Result<(), String> {
         let executable = Self::provision_tool()?;
         self.set_interface_with(disk, &executable, interface)

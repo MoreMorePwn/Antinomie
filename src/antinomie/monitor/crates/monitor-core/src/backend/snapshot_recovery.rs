@@ -698,7 +698,7 @@ impl Worker {
         save_current: Option<SnapshotRequest>,
         switch_profile: bool,
     ) -> Result<String, String> {
-        // A snapshot is restored under the stealth profile it was taken with:
+        // A snapshot is restored under the device profile it was taken with:
         // the guest's disk and memory hold what that machine looked like.
         let (switch, note) = self.restore_profile(id, snapshot_id, switch_profile)?;
         let result = self
@@ -743,7 +743,7 @@ impl Worker {
             crate::api::SnapshotProfile::Unknown => Ok((
                 None,
                 Some(
-                    "this snapshot has no recorded stealth profile (it was taken before \
+                    "this snapshot has no recorded device profile (it was taken before \
                      profiles were recorded), so whether it matches is unknown"
                         .into(),
                 ),
