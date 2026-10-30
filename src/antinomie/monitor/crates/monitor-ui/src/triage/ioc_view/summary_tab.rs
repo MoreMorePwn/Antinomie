@@ -117,7 +117,7 @@ impl View {
                 ui.add_space(10.0);
                 presentation::frame().show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    ui.label(RichText::new("Where the indicators came from").strong().color(theme::heading()));
+                    ui.label(theme::section_title(ui, "Where the indicators came from"));
                     let line = |ui: &mut egui::Ui, source: Source, text: String| {
                         ui.horizontal_wrapped(|ui| {
                             widgets::chip(ui, source.label(), source_tone(source));
@@ -159,7 +159,7 @@ impl View {
                     }
                 }
                 ui.add_space(6.0);
-                ui.label(RichText::new("Families").strong().color(theme::heading()));
+                ui.label(theme::section_title(ui, "Families"));
                 if families.is_empty() {
                     ui.colored_label(theme::muted(), "No family to show.");
                 } else {

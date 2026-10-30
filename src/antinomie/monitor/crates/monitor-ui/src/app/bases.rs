@@ -40,7 +40,7 @@ impl MonitorApp {
             .open(open)
             .collapsible(false)
             .resizable(true)
-            .default_size([760.0, 520.0])
+            .default_size([760.0, 640.0])
             .min_width(520.0)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {

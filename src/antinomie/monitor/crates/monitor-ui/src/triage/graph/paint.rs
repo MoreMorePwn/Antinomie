@@ -202,7 +202,7 @@ pub(super) fn phase_band(painter: &Painter, frame: &Frame, index: &GraphIndex, c
             Stroke::new(1.0_f32, tint.gamma_multiply(0.8)),
             eframe::egui::StrokeKind::Inside,
         );
-        let font = FontId::proportional(11.0 * frame.m.text);
+        let font = FontId::proportional(theme::graph_text(painter.ctx()) * frame.m.text);
         let text = painter.layout_no_wrap(span.phase.label().to_owned(), font, colors.text);
         // The label only when it fits inside the span.
         if text.size().x + 6.0 <= rect.width() {
@@ -481,7 +481,7 @@ pub(super) fn axis(
             Pos2::new(x + 3.0, frame.axis.top() + 6.0),
             Align2::LEFT_TOP,
             axis_label(ns.max(0.0) as u64, step_ns, origin, clock),
-            FontId::proportional(11.0 * frame.m.text),
+            FontId::proportional(theme::graph_text(painter.ctx()) * frame.m.text),
             colors.muted,
         );
     }
@@ -569,7 +569,7 @@ pub(super) fn breaks(painter: &Painter, frame: &Frame, colors: &Colors, right: f
                 Pos2::new(x + 7.0, middle - 9.0),
                 Align2::LEFT_CENTER,
                 gap_text(*gap),
-                FontId::proportional(10.0 * frame.m.text),
+                FontId::proportional((theme::graph_text(painter.ctx()) - 1.0) * frame.m.text),
                 colour,
             );
         }

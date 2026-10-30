@@ -385,7 +385,7 @@ pub(super) fn content(
             RichText::new("Run overview")
                 .strong()
                 .color(theme::heading())
-                .size(18.0),
+                .size(ui.text_style_height(&egui::TextStyle::Heading)),
         );
         if view
             .scan

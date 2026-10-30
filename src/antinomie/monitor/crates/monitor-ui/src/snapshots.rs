@@ -1070,7 +1070,7 @@ pub(crate) mod tests {
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
-                    egui::vec2(1000.0, 800.0),
+                    egui::vec2(1000.0, 1100.0),
                 )),
                 events,
                 ..Default::default()
@@ -1115,7 +1115,10 @@ pub(crate) mod tests {
         tree: &VmSnapshotTree,
         label: &str,
     ) -> Option<Command> {
-        let _ = frame(ctx, manager, tree, Vec::new());
+        // The window settles over a few frames at a big text size.
+        for _ in 0..4 {
+            let _ = frame(ctx, manager, tree, Vec::new());
+        }
         let (output, command) = frame(ctx, manager, tree, Vec::new());
         assert!(command.is_none());
         let pos = text_rect(&output, label).center();

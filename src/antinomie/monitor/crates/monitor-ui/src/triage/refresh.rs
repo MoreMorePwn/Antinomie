@@ -231,7 +231,7 @@ impl TriageView {
                 fonts
                     .layout_no_wrap(
                         rich.text().to_owned(),
-                        egui::FontId::proportional(11.0),
+                        egui::TextStyle::Small.resolve(ui.style()),
                         theme::muted(),
                     )
                     .size()

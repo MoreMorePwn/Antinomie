@@ -33,7 +33,7 @@ impl CoreView {
                 });
             match title {
                 Some(title) => {
-                    ui.label(RichText::new(title).strong().color(crate::theme::heading()));
+                    ui.label(crate::theme::section_title(ui, title));
                 }
                 None => {
                     ui.colored_label(crate::theme::muted(), "No core open");

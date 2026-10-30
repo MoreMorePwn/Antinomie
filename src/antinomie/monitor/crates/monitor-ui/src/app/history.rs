@@ -1122,7 +1122,14 @@ impl HistoryColumns {
 
     fn fit(ui: &egui::Ui) -> Self {
         let spacing = ui.spacing();
-        let actions = 2.0 * spacing.interact_size.y + 3.0 * spacing.item_spacing.x;
+        // Each icon button is as wide as its glyph and padding, or the minimum
+        // height, whichever is more (a bigger text size widens the glyph).
+        let body = ui.text_style_height(&egui::TextStyle::Body);
+        let icon = spacing
+            .interact_size
+            .y
+            .max(body + 2.0 * spacing.button_padding.x);
+        let actions = 2.0 * icon + 3.0 * spacing.item_spacing.x;
         let gaps = 7.0 * spacing.item_spacing.x;
         let pane = (ui.available_width() / 100.0).floor().max(6.0) * 100.0;
         // What each column wants, and the least it keeps.

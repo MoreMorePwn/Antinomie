@@ -874,7 +874,7 @@ fn markers(
                     Pos2::new(x + 7.0, y),
                     Align2::LEFT_CENTER,
                     format!("×{}", record.count),
-                    eframe::egui::FontId::proportional(11.0),
+                    eframe::egui::FontId::proportional(theme::graph_text(painter.ctx())),
                     colors.text,
                 );
             }

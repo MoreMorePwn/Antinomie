@@ -249,7 +249,7 @@ fn the_details_dock_follows_the_disks_tab() {
     open_view(&mut app);
     let ctx = egui::Context::default();
     theme::install(&ctx);
-    let size = egui::vec2(1600.0, 900.0);
+    let size = egui::vec2(1600.0, 1300.0);
     let shown = shown_texts(&mut app, &ctx, size);
     // Details are the view's own: where it came from and its filesystem state
     // (the dock is short, so the rows further down are scrolled out).

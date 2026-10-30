@@ -101,7 +101,7 @@ impl View {
         });
         presentation::frame().show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.label(RichText::new("Sources").strong().color(theme::heading()));
+            ui.label(theme::section_title(ui, "Sources"));
             for (source, line) in &indicator.details {
                 ui.horizontal_wrapped(|ui| {
                     widgets::chip(ui, source.label(), source_tone(*source));
@@ -112,7 +112,7 @@ impl View {
         presentation::frame().show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new("Match").strong().color(theme::heading()));
+                ui.label(theme::section_title(ui, "Match"));
                 if let Some(date) = &verdict.date {
                     ui.colored_label(theme::muted(), format!("dataset {date}"));
                 }

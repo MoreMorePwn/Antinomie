@@ -22,6 +22,31 @@ fn has(shown: &[(String, egui::Rect)], label: &str) -> bool {
 }
 
 #[test]
+fn the_text_size_default_is_18_and_old_settings_still_at_16_move_once() {
+    assert_eq!(Settings::default().font_size, 18.0);
+    // Saved before settings had a version: no version field, size 16.
+    let mut old: Settings = serde_json::from_str(r#"{"font_size":16.0}"#).unwrap();
+    assert_eq!(old.settings_version, 0);
+    old.migrate();
+    assert_eq!((old.font_size, old.settings_version), (18.0, 1));
+    // The person picks 16 again afterwards: it stays.
+    old.font_size = 16.0;
+    old.migrate();
+    assert_eq!(old.font_size, 16.0);
+    // A size the person chose before the migration stays too.
+    let mut chosen: Settings = serde_json::from_str(r#"{"font_size":14.0}"#).unwrap();
+    chosen.migrate();
+    assert_eq!(chosen.font_size, 14.0);
+    // Settings saved by this version carry the version.
+    let saved = serde_json::to_string(&Settings::default()).unwrap();
+    let mut current: Settings = serde_json::from_str(&saved).unwrap();
+    assert_eq!(current.settings_version, 1);
+    current.font_size = 16.0;
+    current.migrate();
+    assert_eq!(current.font_size, 16.0);
+}
+
+#[test]
 fn address_lookup_defaults_to_tshark_geoip_only_and_is_kept() {
     use crate::triage::AddressLookup;
     assert_eq!(

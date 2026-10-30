@@ -4,7 +4,7 @@
 use super::*;
 use crate::app::tests::texts;
 
-const SIZE: egui::Vec2 = egui::vec2(1280.0, 820.0);
+const SIZE: egui::Vec2 = egui::vec2(1500.0, 820.0);
 
 fn scan() -> (PacketSpool, ArchiveScan) {
     let temp = PacketSpool::new().unwrap();

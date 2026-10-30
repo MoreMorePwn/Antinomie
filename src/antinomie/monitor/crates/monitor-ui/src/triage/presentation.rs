@@ -28,10 +28,7 @@ pub(super) fn heading(ui: &mut egui::Ui, title: &str, subtitle: &str) {
 /// `heading` with a spinner left of the title while `busy`.
 pub(super) fn heading_busy(ui: &mut egui::Ui, title: &str, subtitle: &str, busy: bool) {
     // `.strong()` alone uses the active-widget color, which is white in both palettes.
-    let title = RichText::new(title)
-        .strong()
-        .color(theme::heading())
-        .size(ui.text_style_height(&egui::TextStyle::Body) + 1.0);
+    let title = theme::section_title(ui, title);
     if busy {
         ui.horizontal(|ui| {
             theme::spinner(ui);

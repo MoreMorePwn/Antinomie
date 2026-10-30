@@ -6,7 +6,7 @@ use antinomie_monitor_core::samples::{
     self, Library, NewOrigin, NewSample, OriginKind, SeenRun, Tag, TagKind,
 };
 
-const SIZE: egui::Vec2 = egui::vec2(1400.0, 820.0);
+const SIZE: egui::Vec2 = egui::vec2(1700.0, 820.0);
 
 pub(super) fn temp(name: &str) -> PathBuf {
     let root = std::env::temp_dir().join(format!(

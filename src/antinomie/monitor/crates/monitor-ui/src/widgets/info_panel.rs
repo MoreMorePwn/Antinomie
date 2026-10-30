@@ -27,7 +27,7 @@ pub fn info_panel(ui: &mut egui::Ui, panel: &InfoPanel<'_>) {
     ui.vertical_centered(|ui| {
         ui.set_max_width(WIDTH);
         ui.label(RichText::new(panel.icon).size(32.0).color(theme::muted()));
-        ui.label(RichText::new(panel.title).strong().color(theme::heading()));
+        ui.label(theme::section_title(ui, panel.title));
         ui.add_space(4.0);
         ui.add(egui::Label::new(RichText::new(panel.about).color(theme::muted())).wrap());
     });

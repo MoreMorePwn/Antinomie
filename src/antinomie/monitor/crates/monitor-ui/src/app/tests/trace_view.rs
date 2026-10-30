@@ -278,7 +278,7 @@ fn run_history_details_show_the_process_tree_then_the_enabled_analysis_only() {
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
-                    egui::vec2(900.0, 700.0),
+                    egui::vec2(900.0, 1000.0),
                 )),
                 events,
                 time: Some(time),

@@ -496,7 +496,7 @@ fn finding_body(
             }
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Rule").strong().color(theme::heading()));
+                ui.label(theme::section_title(ui, "Rule"));
                 if !finding.rule_text.is_empty() && ui.button("Copy rule").clicked() {
                     ui.ctx().copy_text(finding.rule_text.clone());
                 }
@@ -532,7 +532,7 @@ fn finding_body(
 
 fn section(ui: &mut egui::Ui, title: &str) {
     ui.add_space(8.0);
-    ui.label(RichText::new(title).strong().color(theme::heading()));
+    ui.label(theme::section_title(ui, title));
 }
 
 fn rows_grid(ui: &mut egui::Ui, id: &str, rows: &[(&str, &str, bool)]) {

@@ -43,7 +43,7 @@ fn row(ui: &mut egui::Ui, text: &str) {
 
 fn heading(ui: &mut egui::Ui, text: &str) {
     ui.add_space(4.0);
-    ui.label(RichText::new(text).strong().color(theme::heading()));
+    ui.label(theme::section_title(ui, text));
 }
 
 pub(in crate::triage) fn body(ui: &mut egui::Ui) {

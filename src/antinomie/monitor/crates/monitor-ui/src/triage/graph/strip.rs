@@ -203,7 +203,7 @@ impl Strip {
                 rect.left_center(),
                 Align2::LEFT_CENTER,
                 "Nothing to chart for this run.",
-                egui::FontId::proportional(12.0),
+                egui::TextStyle::Small.resolve(ui.style()),
                 theme::muted(),
             );
             return outcome;

@@ -171,7 +171,7 @@ fn density(style: &mut egui::Style) {
     let body = style
         .text_styles
         .get(&TextStyle::Body)
-        .map_or(16.0, |font| font.size);
+        .map_or(DEFAULT_TEXT_SIZE, |font| font.size);
     if roomy {
         style.spacing.item_spacing = egui::vec2(10.0, 9.0);
         style.spacing.button_padding = egui::vec2(12.0, 7.0);
@@ -201,7 +201,7 @@ pub fn dock_style(style: &egui::Style) -> egui_dock::Style {
     let body = style
         .text_styles
         .get(&TextStyle::Body)
-        .map_or(16.0, |font| font.size);
+        .map_or(DEFAULT_TEXT_SIZE, |font| font.size);
     dock.tab_bar.height = body + if is_compact() { 12.0 } else { 18.0 };
     dock
 }
@@ -244,7 +244,22 @@ pub fn section(ui: &mut egui::Ui, title: &str) -> egui::Response {
     if !ui.layout().main_dir().is_horizontal() && ui.min_rect().height() > 1.0 {
         ui.add_space(if is_compact() { 4.0 } else { 8.0 });
     }
-    ui.label(egui::RichText::new(title).strong().color(heading()))
+    ui.label(section_title(ui, title))
+}
+
+/// A sub-header title (a section of a page, a card, a group in a dialog): bold,
+/// in the heading color and two points above the body text, so it stands out
+/// from the rows below it.
+pub fn section_title(ui: &egui::Ui, title: impl Into<String>) -> egui::RichText {
+    let body = ui
+        .style()
+        .text_styles
+        .get(&TextStyle::Body)
+        .map_or(DEFAULT_TEXT_SIZE, |font| font.size);
+    egui::RichText::new(title)
+        .strong()
+        .color(heading())
+        .size(body + 2.0)
 }
 
 /// What a list, table or tab says when it has nothing in it: one muted line a
@@ -399,8 +414,19 @@ pub fn bold(ui: &egui::Ui, text: impl Into<String>) -> egui::RichText {
 pub fn install(ctx: &egui::Context) {
     ctx.set_fonts(fonts());
     apply(ctx, false);
-    text_size(ctx, 16.0);
+    text_size(ctx, DEFAULT_TEXT_SIZE);
+    // Screenshot fixtures: ANTINOMIE_QA_FONT picks the text size to render at.
+    #[cfg(test)]
+    if let Some(size) = std::env::var("ANTINOMIE_QA_FONT")
+        .ok()
+        .and_then(|size| size.parse::<f32>().ok())
+    {
+        text_size(ctx, size);
+    }
 }
+
+/// The text size a new installation starts with (Settings > Appearance).
+pub const DEFAULT_TEXT_SIZE: f32 = 18.0;
 
 /// Switch between the dark and light themes (see `apply_theme`).
 pub fn apply(ctx: &egui::Context, light: bool) {
@@ -475,7 +501,7 @@ pub fn apply_theme(ctx: &egui::Context, theme: Theme) {
     let size = style
         .text_styles
         .get(&TextStyle::Body)
-        .map_or(16.0, |font| font.size);
+        .map_or(DEFAULT_TEXT_SIZE, |font| font.size);
     ctx.set_style(style);
     text_size(ctx, size);
 }
@@ -494,12 +520,23 @@ pub(crate) fn text_size(ctx: &egui::Context, size: f32) {
         );
         style
             .text_styles
-            .insert(TextStyle::Heading, FontId::proportional(size + 4.0));
+            .insert(TextStyle::Heading, FontId::proportional(size + 6.0));
         style
             .text_styles
             .insert(TextStyle::Monospace, FontId::monospace(size - 1.0));
         density(style);
     });
+}
+
+/// Size of the labels drawn inside the process graph (phase names, time axis,
+/// repeat counts): five points under the body text, never below 11, so they
+/// stay readable at every text size.
+pub fn graph_text(ctx: &egui::Context) -> f32 {
+    ctx.style()
+        .text_styles
+        .get(&TextStyle::Body)
+        .map_or(DEFAULT_TEXT_SIZE, |font| font.size - 5.0)
+        .max(11.0)
 }
 
 /// Row tint of a syscall group in the trace (Wireshark-style coloring): dark
@@ -886,11 +923,11 @@ mod tests {
         assert_eq!(style.visuals.override_text_color, Some(text()));
         assert_eq!(style.visuals.selection.stroke.color, blue());
         for (text_style, size) in [
-            (TextStyle::Body, 16.0),
-            (TextStyle::Button, 16.0),
-            (TextStyle::Monospace, 15.0),
-            (TextStyle::Small, 14.0),
-            (TextStyle::Heading, 20.0),
+            (TextStyle::Body, 18.0),
+            (TextStyle::Button, 18.0),
+            (TextStyle::Monospace, 17.0),
+            (TextStyle::Small, 16.0),
+            (TextStyle::Heading, 24.0),
         ] {
             assert_eq!(style.text_styles[&text_style].size, size);
         }

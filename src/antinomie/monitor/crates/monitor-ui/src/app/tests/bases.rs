@@ -14,7 +14,7 @@ fn download_catalog_prioritizes_current_bases_and_hides_older_ones() {
     ];
     let ctx = egui::Context::default();
     theme::install(&ctx);
-    let size = egui::vec2(1280.0, 900.0);
+    let size = egui::vec2(1280.0, 1300.0);
     for _ in 0..3 {
         render(&mut app, &ctx, size);
     }

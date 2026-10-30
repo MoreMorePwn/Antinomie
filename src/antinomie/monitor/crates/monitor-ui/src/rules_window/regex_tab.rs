@@ -107,6 +107,8 @@ impl RegexState {
 
 /// The name field, the Add button and the least the expression is given, in points.
 const NAME_WIDTH: f32 = 240.0;
+/// What the empty name field says.
+const NAME_HINT: &str = "Name, e.g. Campaign marker";
 const ADD_WIDTH: f32 = 48.0;
 const MIN_PATTERN_WIDTH: f32 = 160.0;
 
@@ -155,11 +157,24 @@ impl Model {
         // One row: the name, its category, the expression, which takes
         // everything the others leave, and Add.
         ui.horizontal(|ui| {
+            // Room for the whole hint at any text size.
+            let hint_width = ui.fonts(|fonts| {
+                fonts
+                    .layout_no_wrap(
+                        NAME_HINT.to_owned(),
+                        egui::TextStyle::Body.resolve(ui.style()),
+                        egui::Color32::PLACEHOLDER,
+                    )
+                    .size()
+                    .x
+            });
+            let name_width =
+                NAME_WIDTH.max(hint_width + 2.0 * f32::from(theme::TEXT_EDIT_MARGIN.left));
             ui.add(
                 egui::TextEdit::singleline(&mut self.regex.name)
-                    .hint_text(theme::hint_text("Name, e.g. Campaign marker"))
+                    .hint_text(theme::hint_text(NAME_HINT))
                     .char_limit(80)
-                    .desired_width(NAME_WIDTH),
+                    .desired_width(name_width),
             );
             egui::ComboBox::from_id_salt("regex-new-category")
                 .selected_text(self.regex.category.label())

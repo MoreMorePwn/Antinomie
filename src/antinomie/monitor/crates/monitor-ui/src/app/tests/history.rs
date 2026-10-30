@@ -115,7 +115,7 @@ fn a_call_the_task_ended_in_shows_how_it_ended_and_empty_reads_say_why() {
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
-                    egui::vec2(1400.0, 900.0),
+                    egui::vec2(2400.0, 1500.0),
                 )),
                 ..Default::default()
             },
@@ -125,10 +125,19 @@ fn a_call_the_task_ended_in_shows_how_it_ended_and_empty_reads_say_why() {
                 });
             },
         );
-        texts(&output)
-            .into_iter()
-            .map(|(text, _)| text)
-            .collect::<Vec<_>>()
+        // Every drawn text, clipped or not: a long note runs past the tree's edge.
+        fn all(shape: &egui::Shape, out: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Text(text) => out.push(text.galley.text().trim().to_owned()),
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| all(shape, out)),
+                _ => {}
+            }
+        }
+        let mut shown = Vec::new();
+        for clipped in &output.shapes {
+            all(&clipped.shape, &mut shown);
+        }
+        shown
     };
     let mut entry = event(1, 0);
     entry.syscall_nr = 231;
@@ -191,9 +200,13 @@ fn a_call_the_task_ended_in_shows_how_it_ended_and_empty_reads_say_why() {
         task_exit: None,
         kernel_notes: Vec::new(),
     };
-    assert!(render(&read)
-        .iter()
-        .any(|text| text == "nothing to capture: the call returned 0 bytes"));
+    let shown = render(&read);
+    assert!(
+        shown
+            .iter()
+            .any(|text| text == "nothing to capture: the call returned 0 bytes"),
+        "{shown:?}"
+    );
 }
 
 #[test]

@@ -94,6 +94,13 @@ struct PendingLaunch {
     preview_run: Option<String>,
 }
 
+/// The current layout of the saved settings (1: the default text size went from 16 to 18).
+const SETTINGS_VERSION: u32 = 1;
+
+fn no_settings_version() -> u32 {
+    0
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(default)]
 struct Settings {
@@ -114,6 +121,10 @@ struct Settings {
     file_before_run_mib: u32,
     timeout: u64,
     font_size: f32,
+    /// Version of the saved settings; a missing field (settings saved before
+    /// versions) reads as 0 so `migrate` can upgrade old defaults once.
+    #[serde(default = "no_settings_version")]
+    settings_version: u32,
     /// Tint syscall trace rows by syscall group.
     trace_colors: bool,
     /// Maximum calls in a saved syscall page; constrained to the archive API.
@@ -212,6 +223,18 @@ impl Settings {
     }
 }
 
+impl Settings {
+    /// Upgrade settings saved by an older version, once: a text size still at
+    /// the old default of 16 moves to the new default; a size the user chose
+    /// stays.
+    fn migrate(&mut self) {
+        if self.settings_version < 1 && self.font_size == 16.0 {
+            self.font_size = theme::DEFAULT_TEXT_SIZE;
+        }
+        self.settings_version = SETTINGS_VERSION;
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -228,7 +251,8 @@ impl Default for Settings {
             file_before_run_mib: (antinomie_monitor_core::file_writes::DEFAULT_PER_RUN >> 20)
                 as u32,
             timeout: 10,
-            font_size: 16.0,
+            font_size: theme::DEFAULT_TEXT_SIZE,
+            settings_version: SETTINGS_VERSION,
             trace_colors: true,
             trace_page_size: 100,
             hidden_trace_categories: Vec::new(),
@@ -537,6 +561,7 @@ impl MonitorApp {
         if settings.bundle.is_empty() || !restore_bundle {
             settings.bundle = options.bundle_dir.to_string_lossy().into_owned();
         }
+        settings.migrate();
         settings.font_size = settings.font_size.clamp(12.0, 24.0);
         theme::apply_theme(&cc.egui_ctx, settings.active_theme());
         theme::set_compact(&cc.egui_ctx, settings.compact);

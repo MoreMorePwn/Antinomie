@@ -71,7 +71,7 @@ fn network_panel_lists_captures_toggles_capture_and_filters_by_clicked_values() 
     app.focus_panel = Some(Panel::Network);
     let ctx = egui::Context::default();
     theme::install(&ctx);
-    let size = egui::vec2(1400.0, 900.0);
+    let size = egui::vec2(1900.0, 1000.0);
     let shown = render_until(&mut app, &ctx, size, |shown| {
         shown
             .iter()

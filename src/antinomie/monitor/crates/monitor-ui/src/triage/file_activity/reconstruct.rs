@@ -812,7 +812,7 @@ impl Open {
 
 fn heading(ui: &mut egui::Ui, text: &str) {
     ui.add_space(8.0);
-    ui.label(RichText::new(text).strong().color(theme::heading()));
+    ui.label(theme::section_title(ui, text));
 }
 
 fn short(state: State) -> &'static str {

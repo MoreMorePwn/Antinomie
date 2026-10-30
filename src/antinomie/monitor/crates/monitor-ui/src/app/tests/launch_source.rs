@@ -216,7 +216,7 @@ fn the_run_window_fits_a_short_screen_and_keeps_its_footer() {
 
 #[test]
 fn the_user_row_keeps_uid_and_gid_on_one_line_and_choose_sits_under_the_host_file() {
-    for size in [egui::vec2(1280.0, 820.0), egui::vec2(1000.0, 700.0)] {
+    for size in [egui::vec2(1280.0, 1000.0), egui::vec2(1000.0, 900.0)] {
         let ctx = context();
         let mut app = analysis_setup_fixture();
         let shown = texts(&settle(&mut app, &ctx, size));
@@ -248,8 +248,15 @@ fn the_user_row_keeps_uid_and_gid_on_one_line_and_choose_sits_under_the_host_fil
         app.launch_source = LaunchSource::Upload;
         app.source.clear();
         let shown = texts(&settle(&mut app, &ctx, size));
-        let rect = |needle: &str| shown.iter().find(|(text, _)| text == needle).unwrap().1;
-        let (hint, choose) = (rect("Choose a file or enter its path"), rect("Choose…"));
+        let rect = |needle: &str| {
+            shown
+                .iter()
+                .find(|(text, _)| text == needle)
+                .unwrap_or_else(|| panic!("{needle:?} missing at {size:?} from {shown:?}"))
+                .1
+        };
+        // The field's own hint may be cut by a narrow field; its label is not.
+        let (hint, choose) = (rect("Host file"), rect("Choose…"));
         assert!(choose.top() > hint.bottom(), "{choose:?} {hint:?}");
         let window = ctx
             .memory(|memory| memory.area_rect(Dialog::Launch.window_id()))

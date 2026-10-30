@@ -323,7 +323,7 @@ impl TriageView {
                         let mut edited = false;
                         ui.add_enabled_ui(!running, |ui| {
                             ui.horizontal(|ui| {
-                                ui.label(RichText::new("Sections").strong().color(theme::heading()));
+                                ui.label(theme::section_title(ui, "Sections"));
                                 if ui.small_button("All").clicked() {
                                     choices.parts = Part::ALL.to_vec();
                                     edited = true;
@@ -341,7 +341,7 @@ impl TriageView {
                                 }
                             }
                             ui.add_space(6.0);
-                            ui.label(RichText::new("Formats").strong().color(theme::heading()));
+                            ui.label(theme::section_title(ui, "Formats"));
                             ui.horizontal_wrapped(|ui| {
                                 for format in Format::ALL {
                                     let mut on = choices.writes(format);
@@ -352,7 +352,7 @@ impl TriageView {
                                 }
                             });
                             ui.add_space(6.0);
-                            ui.label(RichText::new("Options").strong().color(theme::heading()));
+                            ui.label(theme::section_title(ui, "Options"));
                             edited |= ui
                                 .checkbox(&mut choices.bundle, "Evidence bundle (.zip next to the report)")
                                 .on_hover_text(
@@ -368,7 +368,7 @@ impl TriageView {
                                 )
                                 .changed();
                             ui.add_space(6.0);
-                            ui.label(RichText::new("Folder").strong().color(theme::heading()));
+                            ui.label(theme::section_title(ui, "Folder"));
                             edited |= ui
                                 .add(
                                     egui::TextEdit::singleline(&mut choices.folder)
@@ -410,7 +410,7 @@ impl TriageView {
                 );
                 match &self.report.state {
                     State::Done(written) => {
-                        ui.label(RichText::new("Written").strong().color(theme::heading()));
+                        ui.label(theme::section_title(ui, "Written"));
                         for (label, path) in &written.files {
                             ui.horizontal_wrapped(|ui| {
                                 ui.label(format!("{label}:"));

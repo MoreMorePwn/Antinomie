@@ -343,12 +343,7 @@ impl View {
                                 .is_none_or(|field| !field.available)
                         });
                         ui.horizontal_wrapped(|ui| {
-                            ui.label(
-                                RichText::new(title)
-                                    .strong()
-                                    .color(theme::heading())
-                                    .size(ui.text_style_height(&egui::TextStyle::Body) + 1.0),
-                            );
+                            ui.label(theme::section_title(ui, title));
                             if unavailable {
                                 if self.rx.is_some() {
                                     crate::theme::spinner(ui);

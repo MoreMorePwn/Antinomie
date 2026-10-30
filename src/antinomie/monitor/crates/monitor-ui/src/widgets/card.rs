@@ -23,7 +23,7 @@ pub fn card<R>(
             egui::Sides::new().show(
                 ui,
                 |ui| {
-                    ui.label(RichText::new(title).strong().color(palette.heading));
+                    ui.label(theme::section_title(ui, title));
                 },
                 header,
             );

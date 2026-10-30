@@ -304,7 +304,7 @@ impl MonitorApp {
             ui.end_row();
         });
         ui.separator();
-        ui.label(RichText::new("Tor").strong().color(theme::heading()));
+        ui.label(theme::section_title(ui, "Tor"));
         form_grid("settings_routes_tor", ui).show(ui, |ui| {
             ui.label("Tor");
             ui.vertical(|ui| {

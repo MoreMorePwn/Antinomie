@@ -229,7 +229,7 @@ impl Change {
                 shown += 1;
             }
             if shown == 0 { ui.weak("No differing byte pairs available in captured ranges."); }
-            ui.label(RichText::new("Operation timeline").strong().color(theme::heading()));
+            ui.label(theme::section_title(ui, "Operation timeline"));
             let rows: Vec<_> = self.operations.iter().map(|op| {
                 // A reconnect marker has no call of its own.
                 let marker = op.call == 0;

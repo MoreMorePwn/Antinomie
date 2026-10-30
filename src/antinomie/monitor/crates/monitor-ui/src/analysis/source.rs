@@ -98,7 +98,7 @@ pub(crate) fn rows(
             if ui
                 .add_enabled(
                     !upload.busy,
-                    text(upload.host_file, "Choose a file or enter its path")
+                    text(upload.host_file, "Choose or enter a file path")
                         .desired_width(f32::INFINITY),
                 )
                 .labelled_by(label.id)
