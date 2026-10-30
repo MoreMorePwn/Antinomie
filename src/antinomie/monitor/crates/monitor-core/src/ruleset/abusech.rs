@@ -366,6 +366,23 @@ fn take_member(reader: &mut impl Read, name: &str, total: &mut u64) -> Result<Ve
     Ok(data)
 }
 
+/// The text of a gzip file that is not a tar archive, when it holds rules.
+fn plain_gzip(download: &Path) -> Result<Vec<u8>, String> {
+    let file = fs::File::open(download).map_err(|error| error.to_string())?;
+    let mut data = Vec::new();
+    flate2::read::GzDecoder::new(file)
+        .take(MAX_RULES_BYTES + 1)
+        .read_to_end(&mut data)
+        .map_err(|error| format!("the download cannot be unpacked: {error}"))?;
+    if data.len() as u64 > MAX_RULES_BYTES {
+        return Err("the download is larger than the limit".into());
+    }
+    if rule_count(&String::from_utf8_lossy(&data)) == 0 {
+        return Err("the download holds no rules".into());
+    }
+    Ok(data)
+}
+
 /// The rules text of a download: the file itself, or every `.rules` member of
 /// a `.tar.gz` or `.zip` archive joined in name order. Members that are not
 /// plain files, that are not `.rules`, or whose path leaves the archive are
@@ -378,36 +395,50 @@ fn rules_text(download: &Path) -> Result<Vec<u8>, String> {
     let magic = &magic[..read];
     let mut members: Vec<(String, Vec<u8>)> = Vec::new();
     let mut total = 0u64;
+    let mut names: Vec<String> = Vec::new();
     if magic.starts_with(&[0x1f, 0x8b]) {
         let file = fs::File::open(download).map_err(|error| error.to_string())?;
         let decoder = flate2::read::GzDecoder::new(file).take(4 * MAX_RULES_BYTES);
         let mut archive = tar::Archive::new(decoder);
         archive.set_preserve_permissions(false);
-        let entries = archive
-            .entries()
-            .map_err(|error| format!("the archive cannot be read: {error}"))?;
-        for (seen, entry) in entries.enumerate() {
-            if seen >= MAX_ARCHIVE_ENTRIES {
-                return Err("the archive holds too many entries".into());
+        let tarred = (|| {
+            let entries = archive
+                .entries()
+                .map_err(|error| format!("the archive cannot be read: {error}"))?;
+            for (seen, entry) in entries.enumerate() {
+                if seen >= MAX_ARCHIVE_ENTRIES {
+                    return Err("the archive holds too many entries".to_owned());
+                }
+                let mut entry =
+                    entry.map_err(|error| format!("the archive cannot be read: {error}"))?;
+                if entry.header().entry_type() != tar::EntryType::Regular {
+                    continue;
+                }
+                let name = entry
+                    .path()
+                    .map_err(|e| e.to_string())?
+                    .to_string_lossy()
+                    .into_owned();
+                if names.len() < 8 {
+                    names.push(name.clone());
+                }
+                if !safe_member(&name) || !name.ends_with(".rules") {
+                    continue;
+                }
+                if members.len() >= MAX_RULES_FILES {
+                    return Err("the archive holds too many rules files".to_owned());
+                }
+                let data = take_member(&mut entry, &name, &mut total)?;
+                members.push((name, data));
             }
-            let mut entry =
-                entry.map_err(|error| format!("the archive cannot be read: {error}"))?;
-            if entry.header().entry_type() != tar::EntryType::Regular {
-                continue;
-            }
-            let name = entry
-                .path()
-                .map_err(|e| e.to_string())?
-                .to_string_lossy()
-                .into_owned();
-            if !safe_member(&name) || !name.ends_with(".rules") {
-                continue;
-            }
-            if members.len() >= MAX_RULES_FILES {
-                return Err("the archive holds too many rules files".into());
-            }
-            let data = take_member(&mut entry, &name, &mut total)?;
-            members.push((name, data));
+            Ok(())
+        })();
+        if let Err(error) = tarred {
+            // A gzip of the rules text itself is not a tar: use it as it is.
+            return plain_gzip(download).map_err(|_| error);
+        }
+        if members.is_empty() && names.is_empty() {
+            return plain_gzip(download).map_err(|_| "the archive holds no files".to_owned());
         }
     } else if magic.starts_with(b"PK") {
         let file = fs::File::open(download).map_err(|error| error.to_string())?;
@@ -445,7 +476,14 @@ fn rules_text(download: &Path) -> Result<Vec<u8>, String> {
         return Ok(data);
     }
     if members.is_empty() {
-        return Err("the archive holds no .rules file".into());
+        return Err(if names.is_empty() {
+            "the archive holds no .rules file".to_owned()
+        } else {
+            format!(
+                "the archive holds no .rules file (it holds {})",
+                names.join(", ")
+            )
+        });
     }
     members.sort_by(|a, b| a.0.cmp(&b.0));
     let mut joined = Vec::with_capacity(total as usize + members.len());
@@ -600,7 +638,8 @@ pub fn install_live(
         now_unix,
         cancel,
         &mut *progress,
-    )?;
+    )
+    .map_err(|error| not_installed(pack, &error))?;
     if pack.retired_if_empty && checked.rules == 0 {
         return Err(format!(
             "{} is retired upstream: abuse.ch now serves an empty rules file, so there is nothing to install",
@@ -624,7 +663,43 @@ pub fn install_live(
         cancel,
         progress,
     )
-    .map_err(|error| format!("{} was not installed: {error}", pack.name))
+    .map_err(|error| not_installed(pack, &error))
+}
+
+/// A failed install in words: what went wrong, and what can be done. The
+/// installed version, if any, stays selected.
+fn not_installed(pack: &LivePack, error: &str) -> String {
+    let reason = error
+        .strip_prefix(&format!("{}: ", pack.name))
+        .unwrap_or(error);
+    if reason == "cancelled" || error.ends_with(": cancelled") {
+        return error.to_owned();
+    }
+    let reason = reason
+        .strip_prefix(&format!("{} was not installed: ", pack.name))
+        .unwrap_or(reason)
+        .trim_end_matches('.');
+    let advice = if reason.contains("Auth-Key") {
+        ""
+    } else if reason.contains("no rules")
+        || reason.contains("no .rules")
+        || reason.contains("cannot be read")
+        || reason.contains("cannot be unpacked")
+    {
+        "abuse.ch sent a file with no usable rules. Try again later; if it keeps failing, update Antinomie."
+    } else if reason.contains("download failed") || reason.contains("timed out") {
+        "Check the network connection and try again."
+    } else if reason.contains("scratch space") || reason.contains("No space") {
+        "Free some disk space and try again."
+    } else {
+        "Try again later."
+    };
+    let kept = "The installed version was not changed.";
+    if advice.is_empty() {
+        format!("{} was not installed: {reason}. {kept}", pack.name)
+    } else {
+        format!("{} was not installed: {reason}. {advice} {kept}", pack.name)
+    }
 }
 
 #[cfg(test)]
@@ -1081,6 +1156,53 @@ alert tls $HOME_NET any -> [198.51.100.23] 8443 (msg:\"ABUSE.ch Botnet C2 (QakBo
             "name order, rules only"
         );
         assert!(!text.contains("not rules"));
+    }
+
+    #[test]
+    fn a_gzip_of_the_rules_text_is_read_and_an_archive_without_rules_says_what_it_holds() {
+        use std::io::Write;
+        let dir = dir("plaingz");
+        let path = dir.join("download");
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        gz.write_all(format!("{}{}", rule(1), rule(2)).as_bytes())
+            .unwrap();
+        fs::write(&path, gz.finish().unwrap()).unwrap();
+        let text = String::from_utf8(rules_text(&path).unwrap()).unwrap();
+        assert_eq!(text, format!("{}{}", rule(1), rule(2)));
+        let archive = entries(&[file("urlhaus.csv", "a,b\n"), file("README", "hi")]);
+        fs::write(&path, archive).unwrap();
+        let error = rules_text(&path).unwrap_err();
+        assert!(
+            error.contains("no .rules file") && error.contains("urlhaus.csv"),
+            "{error}"
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_failed_install_says_what_went_wrong_and_what_to_do() {
+        let dir = dir("explain");
+        let pack = live_pack("abuse-ch-urlhaus").unwrap();
+        let server = Server::bytes(entries(&[file("notes.txt", "nothing here")]));
+        let cancel = AtomicBool::new(false);
+        let error =
+            install_live(&dir, pack, &key(), &server, 1_000, &cancel, &mut quiet).unwrap_err();
+        assert!(
+            error.starts_with("abuse.ch URLhaus was not installed: "),
+            "{error}"
+        );
+        assert!(error.contains("notes.txt"), "{error}");
+        assert!(error.contains("Try again later"), "{error}");
+        assert!(
+            error.ends_with("The installed version was not changed."),
+            "{error}"
+        );
+        assert!(!error.contains(".."), "{error}");
+        server.say(Err("download failed: Could not resolve host".into()));
+        let error =
+            install_live(&dir, pack, &key(), &server, 2_000, &cancel, &mut quiet).unwrap_err();
+        assert!(error.contains("Check the network connection"), "{error}");
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]

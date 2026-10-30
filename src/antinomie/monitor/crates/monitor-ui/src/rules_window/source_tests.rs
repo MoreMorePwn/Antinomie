@@ -185,10 +185,7 @@ fn the_manager_shows_source_license_hosts_and_the_off_by_default_option() {
     let shown = render(&ctx, &mut model, &dir, wide, Vec::new(), &mut outbound);
     let text = joined(&shown);
     // The catalog entry: name, pin, source, license and the hosts.
-    assert!(
-        text.contains("Forge Core · release 1 · about 2 rules"),
-        "{text}"
-    );
+    assert!(text.contains("Forge Core · release 1 · 2 rules"), "{text}");
     assert!(text.contains("Source: github.com/example/forge"), "{text}");
     assert!(text.contains("License: Each rule's own license"), "{text}");
     assert!(text.contains("from github.com"), "{text}");
@@ -230,6 +227,13 @@ fn the_manager_shows_source_license_hosts_and_the_off_by_default_option() {
         model.status
     );
     assert!(model.status.contains("github.com"), "{}", model.status);
+    // A blocked download is shown in red beside the buttons and is not an error.
+    assert_eq!(model.blocked.as_deref(), Some(model.status.as_str()));
+    assert!(model.status_error.is_none());
+    let shown = render(&ctx, &mut model, &dir, wide, Vec::new(), &mut outbound);
+    assert!(joined(&shown).contains("Allow downloads first"));
+    assert!(joined(&shown).contains("Downloads are off"));
+    assert!(!joined(&shown).contains("about 2 rules"));
 
     // Ticking the option shows its warning.
     let shown = render(&ctx, &mut model, &dir, wide, Vec::new(), &mut outbound);

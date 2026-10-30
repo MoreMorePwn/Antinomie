@@ -432,9 +432,10 @@ impl Model {
         only: Option<&'static Feed>,
     ) {
         if !outbound {
-            self.status = "Allow downloads first. Datasets come from threatfox.abuse.ch, \
-                           urlhaus.abuse.ch, feodotracker.abuse.ch and sslbl.abuse.ch."
-                .into();
+            self.block_download(
+                "Allow downloads first. Datasets come from threatfox.abuse.ch, \
+                 urlhaus.abuse.ch, feodotracker.abuse.ch and sslbl.abuse.ch.",
+            );
             return;
         }
         let dir = data_dir.to_path_buf();

@@ -48,7 +48,15 @@ fn note(ui: &mut egui::Ui, text: impl Into<String>, color: egui::Color32) {
     } else if color == theme::error() {
         crate::activity::error(ui, text);
     } else {
-        ui.add(egui::Label::new(RichText::new(text).small().color(color)).wrap());
+        // Long unbroken text (a URL, a hash) wraps inside the window too.
+        let mut job = egui::text::LayoutJob::simple(
+            text,
+            egui::TextStyle::Small.resolve(ui.style()),
+            color,
+            ui.available_width(),
+        );
+        job.wrap.break_anywhere = true;
+        ui.add(egui::Label::new(job).wrap());
     }
 }
 
@@ -94,7 +102,7 @@ impl Model {
         ui.add(
             egui::Label::new(
                 RichText::new(format!(
-                    "{} · {} {} · about {} rules",
+                    "{} · {} {} · {} rules",
                     pack.name,
                     pack.revision_kind,
                     short_revision(&pack.revision_kind, &pack.revision),
@@ -208,7 +216,7 @@ impl Model {
             });
     }
 
-    /// Where an installed pack came from, and its remove and update controls.
+    /// Where an installed pack came from, and its update control.
     pub(super) fn installed_source(
         &mut self,
         ui: &mut egui::Ui,
@@ -217,7 +225,6 @@ impl Model {
         pack: &InstalledPack,
     ) {
         let Some(source) = &pack.source else {
-            self.remove_button(ui, data_dir, &pack.id);
             return;
         };
         note(ui, source.line(), theme::muted());
@@ -300,10 +307,9 @@ impl Model {
                 }
             });
         }
-        self.remove_button(ui, data_dir, &pack.id);
     }
 
-    fn remove_button(&mut self, ui: &mut egui::Ui, data_dir: &Path, id: &str) {
+    pub(super) fn remove_button(&mut self, ui: &mut egui::Ui, data_dir: &Path, id: &str) {
         if ui
             .button("Remove")
             .on_hover_text("Deletes this pack and its retained versions from this computer.")
@@ -321,11 +327,11 @@ impl Model {
         options: BTreeSet<String>,
     ) {
         if !outbound {
-            self.status = format!(
+            self.block_download(format!(
                 "Allow downloads first. {} downloads from {}.",
                 pack.name,
                 pack.hosts().join(", ")
-            );
+            ));
             return;
         }
         let dir = data_dir.to_path_buf();

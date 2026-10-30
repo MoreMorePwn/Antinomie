@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The Catalog tab of the Detection rules page: the packs on offer for the
 //! engine and the details of the selected one. Nothing here fetches a rule.
-use super::{theme, Model};
+use super::{
+    page::{CELL_PAD, ROW_PAD},
+    theme, Model,
+};
 use crate::widgets::{self, table, Tone};
 use antinomie_monitor_core::ruleset;
 use eframe::egui::{self, RichText};
@@ -40,10 +43,12 @@ impl Model {
                 }
             });
         let mut picked = None;
-        let height = table::row_height(font) * (offers.len().min(6) as f32 + 1.5) + 8.0;
+        let row_height = table::row_height(font) + ROW_PAD;
+        let height = row_height * (offers.len().min(6) as f32 + 1.5) + 8.0;
         egui::ScrollArea::horizontal()
             .id_salt("rules_catalog_scroll")
             .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.x += CELL_PAD;
                 ui.set_min_width(640.0);
                 table::begin(ui);
                 TableBuilder::new(ui)
@@ -87,7 +92,7 @@ impl Model {
                         }
                     })
                     .body(|body| {
-                        body.rows(table::row_height(font), offers.len(), |mut row| {
+                        body.rows(row_height, offers.len(), |mut row| {
                             let offer = &offers[order[row.index()]];
                             let selected = self.catalog_pick == offer.id;
                             row.set_selected(selected);
@@ -109,7 +114,7 @@ impl Model {
                                 table::cell_click(
                                     ui,
                                     table::Cell::Number,
-                                    &format!("about {}", offer.rules),
+                                    &offer.rules.to_string(),
                                 );
                             });
                             row.col(|ui| {

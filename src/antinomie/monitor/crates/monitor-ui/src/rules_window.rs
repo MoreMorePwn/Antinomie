@@ -75,6 +75,9 @@ pub(crate) struct Model {
     group_id: String,
     status: String,
     status_error: Option<String>,
+    /// The status text of a download that was asked for while downloads are
+    /// off. It shows in red where it happened and is not an error.
+    blocked: Option<String>,
     detail: Option<usize>,
     tab: Tab,
     /// The catalog pack whose details show, by id.
@@ -256,6 +259,7 @@ impl Model {
                 Ok(Done::Status(text)) => self.status = text,
                 Ok(Done::Ioc(text)) => self.ioc_done(text),
                 Ok(Done::Live(text, installed)) => {
+                    self.status_error = None;
                     // The registry is read again after an install and writes its
                     // own status line, so the tab keeps what happened.
                     self.live.note.clone_from(&text);
@@ -474,9 +478,17 @@ impl Model {
             .is_some_and(|ids| ids.contains(&rule.id))
     }
 
+    /// A download was asked for while downloads are off: say so in red next to
+    /// the buttons, without raising an error.
+    fn block_download(&mut self, text: impl Into<String>) {
+        let text = text.into();
+        self.blocked = Some(text.clone());
+        self.status = text;
+    }
+
     fn refresh_catalog(&mut self, data_dir: &Path, outbound: bool) {
         if !outbound {
-            self.status = "Enable outbound catalog access in Settings, then check again.".into();
+            self.block_download("Downloads are off. Allow downloads, then check again.");
             return;
         }
         let dir = data_dir.to_path_buf();
@@ -494,8 +506,7 @@ impl Model {
 
     fn install(&mut self, data_dir: &Path, outbound: bool, entry: ruleset::PackEntry) {
         if !outbound {
-            self.status =
-                "Enable outbound catalog access in Settings before downloading a pack.".into();
+            self.block_download("Downloads are off. Allow downloads before installing a pack.");
             return;
         }
         let dir = data_dir.to_path_buf();
