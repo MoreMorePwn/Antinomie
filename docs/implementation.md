@@ -771,11 +771,13 @@ Full-tier checks that failed now and then on this shared host, and why.
   avoiding a late attach to the replacement image. Its assertion still requires
   `Replaced`, and the fork case still verifies child identity, breakpoint bytes
   and exit status. No guest change is needed for these fixture corrections.
-  A separate guest lifecycle gap remains: after a non-followed replacement image
-  exits, a delayed status query can report `Exited` instead of retaining the
-  session's replacement reason. This reproduces on revision 17 and the current
-  revision 18 BusyBox image. Guest repair and a delayed-query regression are
-  required before declaring the complete legacy-exec behavior qualified.
+  A non-followed exec is recorded when the new image is installed, and that
+  replacement remains the session's cause after the new image exits. Asking
+  for status only once the replacement has finished must report `Replaced`.
+  On the previous guest this reported `Exited` for both revision 17 and the
+  revision 18 BusyBox image. The launch's own exec is still its entry stop,
+  and a followed exec still stops inside the new image. The wire values are
+  unchanged.
 * **The pty test `closing_asks_the_program_to_quit_first`.** It closed the program
   after a fixed 300 ms; in the full test run the shell had sometimes not yet set
   its INT trap, so the Ctrl-C ended it. It now waits for the shell to say it is

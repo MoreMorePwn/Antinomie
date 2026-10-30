@@ -1,6 +1,6 @@
-From 6e6b74d8a3b9d59528efff216c4a63ced69aaf66 Mon Sep 17 00:00:00 2001
+From 9c6e9550bf2f7d03b841da60ad2c91d20265af7c Mon Sep 17 00:00:00 2001
 From: MikiMiku <jonathanirvinjo@gmail.com>
-Date: Mon, 26 Oct 2026 19:53:01 +0700
+Date: Fri, 30 Oct 2026 11:40:55 +0700
 Subject: [PATCH] antinomie: add a ptrace-free debug engine
 
 Let the host debug a program in the guest (gdb through the host's
@@ -56,13 +56,19 @@ Hooked kernel files:
 Contract: the debug opcodes (0x1080 to 0x1092), DEBUG and the second
 capability word are additive within revision 17; an earlier guest
 answers them with -EOPNOTSUPP and an earlier host never asks for them.
+
+A session that does not follow exec records a successful exec as its
+terminal cause while the old and new images both still exist, including
+clearing breakpoints that belonged to the old image. The replacement
+exiting afterwards leaves that cause in place. The launch's own exec is
+still the entry stop. The wire values are unchanged.
 ---
  fs/exec.c                         |    1 +
  include/linux/antinomie_monitor.h |   74 +
  kernel/antinomie/Makefile         |    2 +
  kernel/antinomie/control.c        |   43 +-
  kernel/antinomie/control_wire.h   |  274 +++
- kernel/antinomie/debug.c          | 3717 +++++++++++++++++++++++++++++
+ kernel/antinomie/debug.c          | 3790 +++++++++++++++++++++++++++++
  kernel/antinomie/debug.h          |  107 +
  kernel/antinomie/debug_x86.c      |  245 ++
  kernel/antinomie/guest.c          |   14 +-
@@ -71,7 +77,7 @@ answers them with -EOPNOTSUPP and an earlier host never asks for them.
  kernel/fork.c                     |    1 +
  kernel/signal.c                   |   11 +-
  mm/memory.c                       |    2 +
- 14 files changed, 4488 insertions(+), 13 deletions(-)
+ 14 files changed, 4561 insertions(+), 13 deletions(-)
  create mode 100644 kernel/antinomie/debug.c
  create mode 100644 kernel/antinomie/debug.h
  create mode 100644 kernel/antinomie/debug_x86.c
@@ -648,10 +654,10 @@ index 879528e..f4578c0 100644
  #endif
 diff --git a/kernel/antinomie/debug.c b/kernel/antinomie/debug.c
 new file mode 100644
-index 0000000..6ed67ca
+index 0000000..9c03f27
 --- /dev/null
 +++ b/kernel/antinomie/debug.c
-@@ -0,0 +1,3717 @@
+@@ -0,0 +1,3790 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/* Ptrace-free process debug engine: sessions over thread groups.
 + *
@@ -2242,7 +2248,8 @@ index 0000000..6ed67ca
 +}
 +
 +/* The group's life, from its threads: exited, or (for a session that does not
-+ * follow exec) replaced by an exec.
++ * follow exec) replaced by an exec. A recorded replacement stays the cause
++ * after the new image exits.
 + */
 +static bool group_over(struct ant_dbg *s)
 +{
@@ -2251,8 +2258,17 @@ index 0000000..6ed67ca
 +	struct task_struct *p;
 +	bool exec = false;
 +
++	/* Recorded at exec, while both images still exist. A later death of the
++	 * replacement must not turn that into a plain exit.
++	 */
++	if (READ_ONCE(s->state) == ANTC_DEBUG_EXEC)
++		return true;
 +	if (atomic_read(&s->leader->signal->live) == 0) {
 +		spin_lock_irq(&s->lock);
++		if (s->state == ANTC_DEBUG_EXEC) {
++			spin_unlock_irq(&s->lock);
++			return true;
++		}
 +		if (s->state != ANTC_DEBUG_EXITED) {
 +			s->wait_status = READ_ONCE(s->leader->signal->flags) & SIGNAL_GROUP_EXIT ?
 +				READ_ONCE(s->leader->signal->group_exit_code) :
@@ -3341,8 +3357,67 @@ index 0000000..6ed67ca
 +	session_put(s);
 +}
 +
++/* Successful exec of a session that does not follow it. The old image is
++ * gone; remember that as the session's terminal cause before the replacement
++ * can exit. A launch's own exec still belongs to its entry stop.
++ *
++ * de_thread() may already have released a non-leader's previous leader. The
++ * session keeps that task reference: de_thread points it at the survivor, so
++ * same_thread_group still matches, and the reference keeps the shared
++ * signal_struct alive. The leader pointer is not swapped here; session_of()
++ * reads it under RCU, and a terminal exec does not need the survivor's exit
++ * code.
++ */
++static void mark_unfollowed_exec(struct ant_dbg *s)
++{
++	struct ant_dbg_as *as;
++	struct ant_dbg_thread *t;
++	struct mm_struct *mm;
++
++	rcu_read_lock();
++	t = find_thread(s, current);
++	rcu_read_unlock();
++	/* The launching task's exec is the entry stop, not a replacement. */
++	if (t && READ_ONCE(t->pending) == ANTC_DEBUG_EVENT_ENTRY)
++		return;
++	as = as_get(s);
++	if (!as)
++		return;
++	mm = READ_ONCE(current->mm);
++	/* No previous image, or this exec did not install a different one. */
++	if (!as->mm || !mm || mm == as->mm) {
++		as_put(as);
++		return;
++	}
++	spin_lock_irq(&s->lock);
++	if (s->state != ANTC_DEBUG_EXEC && s->state != ANTC_DEBUG_EXITED) {
++		unsigned int i;
++
++		/* A vfork child shares its parent's table until exec. */
++		if (!s->shared_as) {
++			spin_lock(&as->lock);
++			for (i = 0; i < as->bp_count; i++)
++				as->bps[i].inserted = false;
++			as->bp_count = 0;
++			spin_unlock(&as->lock);
++		}
++		s->state = ANTC_DEBUG_EXEC;
++		memset(&s->cur, 0, sizeof(s->cur));
++		s->cur.kind = ANTC_DEBUG_EVENT_EXEC;
++		s->cur.seq = ++s->ev_seq;
++		s->generation++;
++	}
++	spin_unlock_irq(&s->lock);
++	as_put(as);
++	hw_clear_all(s);
++	for_each_record(t, s)
++		WRITE_ONCE(t->go, true);
++	wake_up_all(&s->wait);
++}
++
 +/* The program executed a new image (end of exec_binprm): with the EXEC option the
-+ * session continues in it and the thread stops, reporting the path.
++ * session continues in it and the thread stops, reporting the path. Without
++ * that option the exec is terminal and stays so after the new image exits.
 + */
 +void ant_dbg_exec(void)
 +{
@@ -3355,8 +3430,12 @@ index 0000000..6ed67ca
 +	s = hook_session();
 +	if (!s)
 +		return;
-+	if (!(READ_ONCE(s->opts) & ANTC_DEBUG_OPT_EXEC) || !same_thread_group(current, s->leader))
++	if (!same_thread_group(current, s->leader))
 +		goto out;
++	if (!(READ_ONCE(s->opts) & ANTC_DEBUG_OPT_EXEC)) {
++		mark_unfollowed_exec(s);
++		goto out;
++	}
 +	rcu_read_lock();
 +	t = find_thread(s, current);
 +	rcu_read_unlock();
@@ -4860,7 +4939,7 @@ index 108ba1a..cc8aee8 100644
  			/*
  			 * Start a group exit and wake everybody up.
  			 * This way we don't have other threads
-@@ -2808,6 +2809,13 @@ relock:
+@@ -2808,6 +2809,13 @@ bool get_signal(struct ksignal *ksig)
  		if (!signr)
  			break; /* will return 0 */
  

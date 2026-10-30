@@ -203,6 +203,7 @@ pub fn run(bundle: &str, data: &str, dir: &str, only: &[String]) -> Result<(), S
         ("vfork-follow", engine::vfork_follow),
         ("exec-event", engine::exec_event),
         ("exec-legacy", engine::exec_legacy),
+        ("exec-legacy-late", engine::exec_legacy_late),
         ("nonstop", engine::nonstop),
         ("hwthreads", engine::hw_new_threads),
         ("sigchld", engine::sigchld),

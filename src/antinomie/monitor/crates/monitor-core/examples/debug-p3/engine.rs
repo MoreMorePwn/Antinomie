@@ -384,6 +384,28 @@ pub fn exec_legacy(context: &mut Context) -> Result<String, String> {
     Ok("without the exec option the session still ends with the address-space change".into())
 }
 
+/// The replacement is allowed to finish before the first status query.
+pub fn exec_legacy_late(context: &mut Context) -> Result<String, String> {
+    let mut prog = context.start("exec-gated", 3, 0, None)?;
+    if prog.dbg.state().map_err(text)? != TargetState::Running {
+        return Err("the pre-exec fixture was not running at attach".into());
+    }
+    let run = prog.launched.run.id.clone();
+    context.driver.command(Command::TerminalInput {
+        run_id: run.clone(),
+        data: b"g\n".to_vec(),
+    })?;
+    // The host's run record, not a debugger status poll, says the replacement exited.
+    crate::run_ended(&mut context.driver, &run, 20)?;
+    match prog.dbg.state().map_err(text)? {
+        TargetState::Replaced => {
+            Ok("after the replacement exited the session still reports replaced".into())
+        }
+        TargetState::Exited { .. } => Err("exited".into()),
+        other => Err(format!("state after the replacement exited is {other:?}")),
+    }
+}
+
 /// Non-stop: one thread stops and the others run.
 pub fn nonstop(context: &mut Context) -> Result<String, String> {
     let mut prog = context.start(
