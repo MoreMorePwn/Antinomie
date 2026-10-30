@@ -6,6 +6,47 @@ it runs.
 
 ## 0.8.0 — unreleased
 
+- **Stealth profiles are now device profiles.** The feature keeps its settings
+  and saved data under a new name throughout the app. A question-mark icon next
+  to the VM configuration's Device profile row explains what it is for, and the
+  note about what bases built by 0.7.0 hide is gone from the profile window.
+
+- **VM configuration.** The Machine, Display, Storage and Network sections have
+  more room between them. Disconnected and NAT no longer raise warnings: NAT
+  applies at once like Isolated and keeps a yellow note saying the guest can
+  reach the host network and the Internet. Choosing Cloud VPS no longer widens
+  the window.
+
+- **Check for updates.** Help › Check for updates asks GitHub for the latest
+  release only when you choose it, says whether a newer version exists and links
+  to its release page. It downloads nothing and follows the outbound download
+  setting. Help also links to the online documentation.
+
+- **Window frame and menus.** The title bar shows "Antinomie" without the
+  version, the FPS counter sits beside the window buttons, floating windows have
+  bold titles, every Tools menu entry has an icon, and About shows the tagline
+  "A local, kernel-level Linux malware analysis sandbox and workspace."
+
+- **One guidance panel for windows with nothing selected.** Static analysis
+  and its sections, Triage, Core dump and Details show the same panel when no
+  run or core is selected.
+
+- **Tools windows.** Tools Antinomie installed show where they were saved. App
+  dependencies lists Tor and wireproxy with install controls and a button to the
+  Network routes settings, and their install buttons show only the rounded size.
+  The base images table has balanced columns, API keys show what uses each key
+  as a tree, and hints that point at a settings page name it as
+  Tools › Settings › page.
+
+- **Detection rules.** The rules, packs and catalogue tables have more room and
+  fit their pane; the selection mark sits at the row edge and Remove lines up
+  with Export manifest. About this pack wraps inside the window, rule counts are
+  exact, and the filter guide has a maximum width with aligned columns.
+  "Downloads are off" is a plain note rather than a warning, and a download
+  asked for while they are off shows a red message instead of an error. A failed
+  abuse.ch pack install says what went wrong and what to do, keeps the installed
+  version, and accepts a plain gzip of the rules.
+
 - **Cloud profile launch advice.** VM configuration offers Routed networking
   for the local simulated metadata service without silently changing saved
   policies, and shows the i440FX-to-q35 RAM fallback before launch. Provider
@@ -33,7 +74,7 @@ it runs.
   earlier file contents. The snapshot window reports the recording wait; a
   timeout or shutdown cancels the operation with the disk layers retained.
 
-- **Stealth: cloud VPS profiles with a fake metadata service.** A new "Cloud
+- **Device profiles: cloud VPS profiles with a fake metadata service.** A new "Cloud
   VPS" preset makes the VM an instance of a KVM cloud (Tencent Cloud CVM,
   Alibaba Cloud ECS, DigitalOcean Droplet, Vultr VC2) instead of a PC: the
   provider's DMI strings, SeaBIOS, i440FX or q35 chipset (new machine type
@@ -52,7 +93,7 @@ it runs.
   indicator. Sources and gaps are in `stealth/catalog/SOURCES-cloud.md`; Hetzner
   and Linode have no public dump to copy.
 
-- **Stealth: whole processor table, RAM-sized DIMMs, network chip listed.** The
+- **Device profiles: whole processor table, RAM-sized DIMMs, network chip listed.** The
   processor is written as one firmware table (socket `U3E1`, not `U3E1 0`;
   CPUID signature, voltage, upgrade, clock, core and thread counts, and L1, L2
   and L3 cache tables the processor points at). The memory modules are real parts
@@ -288,7 +329,7 @@ it runs.
   Gen 3 AMD units, the H12SSL-i as a Supermicro "Super Server", and the X12STH-F
   by the X11SCL-F. Weights are the number of public reports of each model.
 
-- **No QEMU strings left in a stealth profile's SMBIOS.** Dell and HP
+- **No QEMU strings left in a device profile's SMBIOS.** Dell and HP
   profiles showed QEMU's machine type (`pc-q35-11.0`) as their product and
   board version, and every profile showed QEMU's `CPU 0` socket, 2000 MHz
   processor speed and a `DIMM 0` memory module of type `RAM`. Every field QEMU
@@ -345,11 +386,11 @@ it runs.
   line erases, overwrites, concealed text, control strings including the OSC 52
   clipboard command, the alternate screen). Formatted now draws bold and italic.
   Saved runs open in either view.
-- **Snapshots keep their stealth profile.** Each snapshot records the VM's
+- **Snapshots keep their device profile.** Each snapshot records the VM's
   profile; restoring under a different one is refused with "taken as <machine>"
   and offers **Switch profile and restore**. Snapshots from before this have no
   recorded profile and restore with a note.
-- **More machines for the stealth profiles.** The realistic presets now pick at
+- **More machines for the device profiles.** The realistic presets now pick at
   random, per VM and for its life, among about 40 popular machines: Dell
   OptiPlex, Latitude, Vostro and PowerEdge, HP EliteDesk, ProDesk, ProBook and
   250, Lenovo ThinkCentre, ThinkPad and ThinkSystem, and the Supermicro servers,
