@@ -54,6 +54,7 @@ impl MonitorApp {
                     self.explorer_browser.invalidate();
                 }
             } else {
+                ui.add_space(8.0);
                 choose |= ui
                     .add_enabled(
                         self.folder_picker.available(),
