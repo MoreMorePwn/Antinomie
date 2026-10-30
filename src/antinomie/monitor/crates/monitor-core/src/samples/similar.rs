@@ -8,8 +8,8 @@ use super::Library;
 use std::collections::{BTreeSet, HashSet};
 
 /// Closer than this is "similar": TLSH reads 0 as identical and anything up
-/// to about 100 as a close variant; 150 keeps loose relatives too.
-pub const MAX_DISTANCE: i32 = 150;
+/// to about 100 as a close variant. The sample window lists nothing looser.
+pub const MAX_DISTANCE: i32 = 100;
 /// Rows the Summary lists.
 pub const MAX_ROWS: usize = 5;
 /// Archives larger than this are not compared.

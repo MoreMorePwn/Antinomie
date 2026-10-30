@@ -52,6 +52,10 @@ pub struct CheckRow {
     pub runs: Vec<usize>,
     /// What the sample saw, per run.
     pub lines: Vec<(usize, String)>,
+    /// The runs in which the check changed what the sample did: it quit
+    /// right after probing (`evasion.probe_then_exit`). Triage knows no other
+    /// answer, so no other check is ever marked.
+    pub tripped: Vec<usize>,
 }
 
 /// One evasion category, empty when nothing of it was seen.
@@ -191,10 +195,14 @@ pub fn rollup(runs: &[RunInput<'_>]) -> Rollup {
                         object: check.object.clone(),
                         runs: Vec::new(),
                         lines: Vec::new(),
+                        tripped: Vec::new(),
                     });
                 if !row.runs.contains(&run.number) {
                     row.runs.push(run.number);
                     row.lines.push((run.number, check.summary.clone()));
+                    if check.rule == run_digest::TRIPPING_CHECK {
+                        row.tripped.push(run.number);
+                    }
                 }
             }
         }
@@ -271,6 +279,7 @@ pub fn rollup(runs: &[RunInput<'_>]) -> Rollup {
         for row in &mut rows {
             row.runs.sort_unstable();
             row.lines.sort_by_key(|(number, _)| *number);
+            row.tripped.sort_unstable();
         }
         out.evasion.push(EvasionRow {
             category: category.to_owned(),
@@ -516,6 +525,30 @@ mod tests {
         assert_eq!(rolled.evasion[0].checks.len(), 1);
         assert_eq!(rolled.evasion[0].checks[0].runs, [1, 2]);
         assert!(rolled.evasion[1].checks.is_empty());
+    }
+
+    #[test]
+    fn a_probe_then_exit_check_is_tripped_and_the_others_are_not() {
+        let a = behaviour(
+            "high",
+            vec![],
+            vec![
+                check(
+                    "evasion.probe_then_exit",
+                    "/proc/cpuinfo",
+                    "read, then exit",
+                ),
+                check("evasion.long_sleep", "nanosleep", "slept 600 s"),
+            ],
+        );
+        let rolled = rollup(&[RunInput {
+            number: 3,
+            digest: Some(&a),
+        }]);
+        let sandbox = &rolled.evasion[2];
+        assert_eq!(sandbox.category, "Sandbox");
+        assert_eq!(sandbox.checks[0].tripped, [3]);
+        assert!(rolled.evasion[3].checks[0].tripped.is_empty());
     }
 
     #[test]

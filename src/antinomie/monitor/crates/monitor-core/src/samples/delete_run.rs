@@ -494,7 +494,45 @@ fn retain_record(library: &Library, plan: &RunPlan) -> Result<PathBuf, String> {
             }
         }
     }
+    if let Some((_, run_directory)) = plan.folders.first() {
+        save_process_tree(&record, run_directory);
+    }
     Ok(record)
+}
+
+/// The record's copy of the run's process tree, so the Runs tab still shows
+/// what the run did after its recording is deleted.
+pub const PROCESS_TREE_FILE: &str = "process-tree.json";
+
+/// The tree and its issues, as [`save_process_tree`] left them in a record.
+pub type SavedTree = (Vec<crate::capture_processes::CaptureProcess>, Vec<String>);
+
+/// Read the process tree a record kept.
+pub fn saved_process_tree(record: &Path) -> Option<SavedTree> {
+    let path = record.join(PROCESS_TREE_FILE);
+    let meta = fs::symlink_metadata(&path).ok()?;
+    if !meta.file_type().is_file() || meta.len() > RECORD_FILE_LIMIT {
+        return None;
+    }
+    serde_json::from_slice(&fs::read(&path).ok()?).ok()
+}
+
+/// Write the tree of the run whose record was just copied into `record` from
+/// the run's own folder (best effort: a recording that cannot be read has no
+/// tree to keep).
+fn save_process_tree(record: &Path, run_directory: &Path) {
+    let Ok(run) = read_summary(record) else {
+        return;
+    };
+    let source = crate::recording::Recording {
+        directory: run_directory.to_path_buf(),
+        manifest: serde_json::Value::Null,
+        events: Vec::new(),
+    };
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    if let Ok(tree) = source.process_tree_cancellable(run.pid, &run.request.path, &cancel) {
+        let _ = crate::storage::atomic_json(&record.join(PROCESS_TREE_FILE), &tree);
+    }
 }
 
 fn copy_reports(from: &Path, to: &Path, budget: &mut u64) -> Result<(), String> {

@@ -134,6 +134,11 @@ pub struct Options {
     pub run: Option<usize>,
     /// Nodes whose hidden neighbours are shown too.
     pub expanded: BTreeSet<String>,
+    /// SHA-256 of the base-image programs the runs used (the base image's
+    /// manifest, read for them). A program at a system path counts as a
+    /// system binary only when its hash is here: a file with an unknown hash
+    /// is never hidden.
+    pub system: std::sync::Arc<BTreeSet<String>>,
 }
 
 impl Default for Options {
@@ -144,6 +149,7 @@ impl Default for Options {
             children: 1,
             run: None,
             expanded: BTreeSet::new(),
+            system: Default::default(),
         }
     }
 }
@@ -173,7 +179,7 @@ const SYSTEM_DIRS: [&str; 6] = [
     "/usr/lib/",
 ];
 
-fn system_path(path: &str) -> bool {
+pub fn system_path(path: &str) -> bool {
     SYSTEM_DIRS.iter().any(|dir| path.starts_with(dir))
 }
 
@@ -181,8 +187,18 @@ fn file_name(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
+/// A command line as its node keys it: whitespace collapsed (the digest keeps
+/// the `-c` text without the interpreter's path), so `curl  -s x` and
+/// `curl -s x` in two runs are one command.
+pub fn normalise_command(command: &str) -> String {
+    command.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 fn command_id(command: &str) -> String {
-    format!("cmd:{}", crate::storage::sha256_hex(command.as_bytes()))
+    format!(
+        "cmd:{}",
+        crate::storage::sha256_hex(normalise_command(command).as_bytes())
+    )
 }
 
 #[derive(Default)]
@@ -229,7 +245,7 @@ pub fn build(
                 name: found.name,
                 verdict: found.verdict,
             }
-        } else if system_path(path) && !written.contains(path) {
+        } else if system_path(path) && !written.contains(path) && options.system.contains(sha) {
             NodeKind::System
         } else {
             NodeKind::Captured
@@ -632,6 +648,32 @@ mod tests {
         }
     }
 
+    /// The default options, with curl's hash in the base image's manifest.
+    fn manifest() -> Options {
+        Options {
+            system: std::sync::Arc::new([sha(9)].into_iter().collect()),
+            ..Options::default()
+        }
+    }
+
+    #[test]
+    fn a_program_at_a_system_path_is_hidden_only_when_its_hash_is_in_the_manifest() {
+        let me = sha(1);
+        let l = lineage();
+        let unknown = build(
+            &me,
+            &[run(1, &me, &l)],
+            &[],
+            &nobody,
+            &Options {
+                children: 3,
+                ..Options::default()
+            },
+        );
+        assert_eq!(unknown.hidden_system, 0);
+        assert!(unknown.nodes.iter().any(|n| n.label == "curl"));
+    }
+
     fn nobody(_: &str) -> Option<Known> {
         None
     }
@@ -679,6 +721,16 @@ mod tests {
     }
 
     #[test]
+    fn a_command_is_keyed_by_its_line_with_the_whitespace_collapsed() {
+        assert_eq!(
+            normalise_command("  curl   -s\thttp://x  "),
+            "curl -s http://x"
+        );
+        assert_eq!(command_id("curl  -s x"), command_id("curl -s x"));
+        assert_ne!(command_id("curl -s x"), command_id("curl -s y"));
+    }
+
+    #[test]
     fn a_node_per_file_with_a_self_edge_and_command_nodes() {
         let me = sha(1);
         let l = lineage();
@@ -689,7 +741,7 @@ mod tests {
             &nobody,
             &Options {
                 children: 3,
-                ..Options::default()
+                ..manifest()
             },
         );
         let labels: Vec<&str> = graph.nodes.iter().map(|n| n.label.as_str()).collect();
@@ -719,7 +771,7 @@ mod tests {
             &nobody,
             &Options {
                 children: 3,
-                ..Options::default()
+                ..manifest()
             },
         );
         assert_eq!(hidden.hidden_system, 1);
@@ -732,7 +784,7 @@ mod tests {
             &Options {
                 children: 3,
                 hide_system: false,
-                ..Options::default()
+                ..manifest()
             },
         );
         assert!(
@@ -747,14 +799,14 @@ mod tests {
     fn levels_limit_the_graph_and_the_badge_counts_what_is_left_out() {
         let me = sha(1);
         let l = lineage();
-        let one = build(&me, &[run(1, &me, &l)], &[], &nobody, &Options::default());
+        let one = build(&me, &[run(1, &me, &l)], &[], &nobody, &manifest());
         let ids: Vec<&str> = one.nodes.iter().map(|n| n.label.as_str()).collect();
         assert!(ids.contains(&".x") && !ids.contains(&"libhide.so"));
         let x = one.nodes.iter().find(|n| n.label == ".x").unwrap();
         assert_eq!(x.hidden_children, 1);
         assert_eq!(x.level, 1);
         // Expanding .x shows its child without changing the levels.
-        let mut options = Options::default();
+        let mut options = manifest();
         options.expanded.insert(sha(2));
         let expanded = build(&me, &[run(1, &me, &l)], &[], &nobody, &options);
         assert!(
@@ -782,7 +834,7 @@ mod tests {
             kind: EdgeKind::Dropped,
             run: Some(13),
         }];
-        let graph = build(&me, &[run(1, &me, &l)], &links, &known, &Options::default());
+        let graph = build(&me, &[run(1, &me, &l)], &links, &known, &manifest());
         let found = graph.nodes.iter().find(|n| n.id == parent).unwrap();
         assert_eq!(found.level, -1);
         assert!(matches!(&found.kind, NodeKind::Library { name, .. } if name == "kworkerd"));
@@ -793,7 +845,7 @@ mod tests {
             &known,
             &Options {
                 run: Some(1),
-                ..Options::default()
+                ..manifest()
             },
         );
         assert!(filtered.nodes.iter().all(|n| n.id != parent));
@@ -811,7 +863,7 @@ mod tests {
             &[run(1, &me, &l), run(2, &me, &l)],
             &[],
             &nobody,
-            &Options::default(),
+            &manifest(),
         );
         let lost: Vec<&Node> = graph
             .nodes

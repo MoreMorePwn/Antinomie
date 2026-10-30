@@ -46,8 +46,8 @@ pub use chain_export::{
 };
 pub use custody::{ActionKind, CustodyEvent, CustodySink, KINDS, NoCustody};
 pub use delete_run::{
-    Deleted as DeletedRun, Place as ArtifactPlace, PlanItem as RunPlanItem, RunPlan,
-    delete as delete_run, plan as plan_run_deletion,
+    Deleted as DeletedRun, PROCESS_TREE_FILE, Place as ArtifactPlace, PlanItem as RunPlanItem,
+    RunPlan, SavedTree, delete as delete_run, plan as plan_run_deletion, saved_process_tree,
 };
 pub use intake::{Added, FileProbe, NewSample, detect_type};
 pub use kept::{
@@ -61,6 +61,7 @@ pub use library::{
 pub use lineage::{
     Edge as LineageEdge, EdgeKind, Graph as LineageGraph, Known, Link, Node as LineageNode,
     NodeKind, Options as LineageOptions, RunLineage, build as build_lineage, runs_label,
+    system_path,
 };
 pub use notes::{
     MAX_NOTE, MAX_REFS, Note, NoteRef, RefKind, artifact_target, text_hash as note_text_hash,

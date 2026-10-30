@@ -214,6 +214,10 @@ pub fn evasion_category(rule: &str) -> Option<&'static str> {
     }
 }
 
+/// The check after which the sample quit: the one answer Triage has to
+/// whether a check changed what the sample did ("tripped").
+pub const TRIPPING_CHECK: &str = "evasion.probe_then_exit";
+
 /// The evasion categories in the order the Summary lists them.
 pub const EVASION_CATEGORIES: [&str; 4] = ["Virtual machine", "Debugger", "Sandbox", "Timing"];
 

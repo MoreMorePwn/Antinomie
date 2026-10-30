@@ -630,3 +630,26 @@ fn a_kept_file_already_in_the_library_is_not_overwritten() {
     assert!(rows.iter().all(|row| row.fate == ArtifactFate::Kept));
     fs::remove_dir_all(&rec.root).unwrap();
 }
+
+#[test]
+fn a_record_keeps_the_process_tree_for_the_runs_tab() {
+    let dir = std::env::temp_dir().join(format!(
+        "antinomie-saved-tree-{}",
+        crate::storage::unique_id()
+    ));
+    fs::create_dir_all(&dir).unwrap();
+    assert!(saved_process_tree(&dir).is_none());
+    let tree: SavedTree = (
+        vec![crate::capture_processes::CaptureProcess {
+            pid: 7,
+            name: "sh".into(),
+            ..Default::default()
+        }],
+        vec!["lifecycle records were lost".to_owned()],
+    );
+    crate::storage::atomic_json(&dir.join(PROCESS_TREE_FILE), &tree).unwrap();
+    let (processes, issues) = saved_process_tree(&dir).expect("read back");
+    assert_eq!((processes[0].pid, processes[0].name.as_str()), (7, "sh"));
+    assert_eq!(issues, ["lifecycle records were lost"]);
+    fs::remove_dir_all(&dir).unwrap();
+}
