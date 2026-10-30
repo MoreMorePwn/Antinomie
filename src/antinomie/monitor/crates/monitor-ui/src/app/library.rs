@@ -226,11 +226,23 @@ impl MonitorApp {
             .sense(egui::Sense::click())
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
             .striped(true)
-            .column(Column::remainder().at_least(220.0))
-            .column(Column::initial(240.0).at_least(110.0).resizable(true))
-            .column(Column::exact(88.0))
-            .column(Column::exact(56.0))
-            .column(Column::initial(120.0).at_least(80.0).resizable(true))
+            // The name and the status take what they need; the guest column
+            // takes the rest, so no column is squeezed by a long base name.
+            .column(
+                Column::initial(360.0)
+                    .at_least(200.0)
+                    .resizable(true)
+                    .clip(true),
+            )
+            .column(
+                Column::initial(310.0)
+                    .at_least(110.0)
+                    .resizable(true)
+                    .clip(true),
+            )
+            .column(Column::exact(104.0))
+            .column(Column::exact(72.0))
+            .column(Column::remainder().at_least(140.0).clip(true))
             .max_scroll_height(height)
             .min_scrolled_height(0.0)
             .header(table::header_height(font), |mut header| {

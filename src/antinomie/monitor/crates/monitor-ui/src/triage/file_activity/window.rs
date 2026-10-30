@@ -674,7 +674,7 @@ fn written_summary(ui: &mut egui::Ui, activity: &Activity) {
     }
     use antinomie_monitor_core::byte_size::file_size;
     let text = format!(
-        "Written content: {} (caps {} per file, {} per run; change in Settings › Advanced)",
+        "Written content: {} (caps {} per file, {} per run; change in Tools > Settings > Advanced)",
         tally_text(tally),
         file_size(activity.limits.per_file),
         file_size(activity.limits.per_run)

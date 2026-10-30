@@ -76,6 +76,7 @@ pub mod syscalls;
 mod transport;
 pub mod typed_fields;
 mod uefi_disk;
+pub mod update_check;
 mod vm;
 pub mod writer;
 pub use analysis::*;

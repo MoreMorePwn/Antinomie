@@ -229,7 +229,7 @@ impl Model {
                 if ui
                     .button("Allow downloads")
                     .on_hover_text(format!(
-                        "Antinomie contacts no server unless you allow it. This turns on Settings > Allow outbound catalog and rule downloads. \
+                        "Antinomie contacts no server unless you allow it. This turns on Tools > Settings > Detection > Allow outbound catalog and rule downloads. \
                          Only Check for updates and installing or updating a pack use the network, \
                          and only the hosts listed here; scans stay offline.\n{}",
                         self.hosts_line()

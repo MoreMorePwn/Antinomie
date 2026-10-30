@@ -17,9 +17,31 @@ impl MonitorApp {
         }
         self.shortcuts(ctx);
         self.accept_dropped_file(ctx);
-        if self.dependencies.show(ctx, &self.options) {
+        let route_tools = ["tor", "wireproxy"]
+            .into_iter()
+            .filter_map(|id| self.route_tool(id))
+            .collect();
+        let install = self.snapshot.tool_install.clone();
+        let outcome = self.dependencies.show(
+            ctx,
+            &self.options,
+            &crate::dependencies_window::RoutePrograms {
+                tools: route_tools,
+                install: install.as_ref(),
+                enabled: !self.closing,
+            },
+        );
+        if outcome.recheck {
             self.folder_picker.refresh(ctx);
         }
+        if let Some(command) = outcome.command {
+            self.send(command);
+        }
+        if outcome.open_routes {
+            self.open_routes_settings();
+        }
+        self.updates
+            .show(ctx, &self.options.curl, &mut self.settings.outbound_catalog);
         self.menus(ctx);
         self.toolbar(ctx);
         self.dump_pause_banner(ctx);

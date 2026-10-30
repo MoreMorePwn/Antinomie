@@ -228,6 +228,7 @@ fn the_routes_page_shows_install_version_and_status_of_tor_and_wireproxy() {
         size: 4_000_000,
         system: None,
         installed: installed.map(str::to_owned),
+        installed_path: installed.map(|_| "/home/analyst/tools/tool".to_owned()),
     };
     app.snapshot.analysis_tools = vec![
         tool("tor", "Tor", "0.4.9.14 (Expert Bundle 15.0.26)", None),
@@ -251,7 +252,7 @@ fn the_routes_page_shows_install_version_and_status_of_tor_and_wireproxy() {
     assert!(
         visible
             .iter()
-            .any(|(text, _)| text.starts_with("Install 0.4.9.14 (Expert Bundle 15.0.26)")),
+            .any(|(text, _)| text == "Install 0.4.9.14 · 3.8 MB"),
         "{visible:?}"
     );
     assert!(has(&visible, "Not installed"), "{visible:?}");
@@ -260,6 +261,12 @@ fn the_routes_page_shows_install_version_and_status_of_tor_and_wireproxy() {
         "{visible:?}"
     );
     assert!(has(&visible, "Remove"), "{visible:?}");
+    // Where Antinomie's copy is saved, and no exact byte count on the button.
+    assert!(has(&visible, "/home/analyst/tools/tool"), "{visible:?}");
+    assert!(
+        !visible.iter().any(|(text, _)| text.contains(" bytes")),
+        "{visible:?}"
+    );
     assert!(
         visible
             .iter()

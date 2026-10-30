@@ -203,9 +203,18 @@ impl ApiKeysWindow {
                 key.keys_url(),
             );
         });
-        ui.label(RichText::new("Used by").color(theme::muted()));
-        for feature in key.features() {
-            ui.label(RichText::new(format!("  {feature}")).color(theme::text()));
+        // The key is the root; what uses it hangs below.
+        let mono = egui::TextStyle::Monospace.resolve(ui.style());
+        let char_width = crate::tree_lines::char_width(ui, &mono);
+        let depths = vec![1; key.features().len()];
+        for (feature, prefix) in key
+            .features()
+            .iter()
+            .zip(crate::tree_lines::prefixes(&depths))
+        {
+            crate::tree_lines::row(ui, &prefix, char_width, |ui| {
+                ui.label(RichText::new(*feature).color(theme::text()));
+            });
         }
         ui.label(
             RichText::new(match state.last_used_ms {

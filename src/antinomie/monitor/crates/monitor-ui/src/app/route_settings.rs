@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Settings > Network routes: the default route and the configuration of
+//! Tools > Settings > Network routes: the default route and the configuration of
 //! each route (Tor, VPN through wireproxy, a SOCKS5 proxy, InetSim). They
 //! are saved in the data folder, owner-only because they can hold a proxy
 //! password, and read by the backend when a run starts. Nothing here is
@@ -182,9 +182,16 @@ impl MonitorApp {
         self.routes.detect();
     }
 
+    /// Show Tools > Settings > Network routes.
+    pub(super) fn open_routes_settings(&mut self) {
+        self.settings_open = true;
+        self.settings_page = super::settings_window::SettingsPage::NetworkRoutes;
+        self.open_routes_page();
+    }
+
     /// The managed tool `id` as the page shows it: a copy found on `PATH`
     /// counts as the system's, as it does when a route starts.
-    fn route_tool(&self, id: &str) -> Option<ToolStatus> {
+    pub(super) fn route_tool(&self, id: &str) -> Option<ToolStatus> {
         let mut tool = self
             .snapshot
             .analysis_tools

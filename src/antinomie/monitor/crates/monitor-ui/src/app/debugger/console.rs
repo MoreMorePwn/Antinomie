@@ -271,7 +271,7 @@ pub(super) fn unavailable_text(reason: Unavailable) -> (String, String) {
         Unavailable::NoGdb => (
             "gdb was not found in PATH.".to_owned(),
             "GEF runs on this system's gdb: install your distribution's gdb package (with \
-             Python support), or choose pwndbg in Settings, which brings its own gdb."
+             Python support), or choose pwndbg in Tools > Settings > Analysis tools, which brings its own gdb."
                 .to_owned(),
         ),
         Unavailable::NoFlavour(flavour) => (
@@ -410,7 +410,7 @@ fn header(
             }
         }
         if widgets::link(ui, "Settings…")
-            .on_hover_text("Choose GEF or pwndbg (Settings, Analysis tools)")
+            .on_hover_text("Choose GEF or pwndbg (Tools > Settings > Analysis tools)")
             .clicked()
         {
             actions.push(PanelAction::OpenSettings);

@@ -461,6 +461,9 @@ pub struct ToolStatus {
     pub system: Option<String>,
     /// Version installed by Antinomie under `<data>/tools`.
     pub installed: Option<String>,
+    /// Where Antinomie's copy of the program is, when it is installed.
+    #[serde(default)]
+    pub installed_path: Option<String>,
 }
 
 impl ToolStatus {
@@ -523,6 +526,8 @@ pub fn statuses(data_dir: &Path) -> Vec<ToolStatus> {
                 .find(|path| Path::new(path).is_file())
                 .map(|path| (*path).to_owned()),
             installed: installed_version(data_dir, package),
+            installed_path: managed_entry(data_dir, package.id)
+                .map(|path| path.display().to_string()),
         })
         .collect()
 }

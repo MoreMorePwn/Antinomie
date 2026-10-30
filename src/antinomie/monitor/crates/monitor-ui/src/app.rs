@@ -392,6 +392,7 @@ pub struct MonitorApp {
     samples_page: samples_page::SamplesPage,
     api_keys: crate::api_keys_window::ApiKeysWindow,
     dependencies: crate::dependencies_window::DependenciesWindow,
+    updates: crate::update_window::UpdateWindow,
     getting_started: crate::getting_started::GettingStarted,
     /// Download base: also list bases for earlier Antinomie versions.
     show_older_bases: bool,
@@ -594,6 +595,7 @@ impl MonitorApp {
             samples_page: samples_page::SamplesPage::default(),
             api_keys: Default::default(),
             dependencies,
+            updates: Default::default(),
             getting_started: Default::default(),
             show_older_bases: false,
             build_wizard: build_wizard::BuildWizard::default(),

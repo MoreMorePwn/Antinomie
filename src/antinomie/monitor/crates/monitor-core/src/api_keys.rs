@@ -65,8 +65,8 @@ impl ApiKey {
         match self {
             ApiKey::Abusech => &[
                 "Malware samples (MalwareBazaar)",
-                "IOC datasets: ThreatFox, URLhaus (Rule manager > IOC)",
-                "abuse.ch Suricata rule packs (Rule manager > IDS)",
+                "IOC datasets: ThreatFox, URLhaus (Tools > Detection rules > IOC)",
+                "abuse.ch Suricata rule packs (Tools > Detection rules > IDS)",
                 "IOC online check (Triage > IOC)",
             ],
             ApiKey::MalShare => &["Malware samples (MalShare)"],

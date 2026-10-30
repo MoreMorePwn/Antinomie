@@ -488,7 +488,9 @@ impl Model {
 
     fn refresh_catalog(&mut self, data_dir: &Path, outbound: bool) {
         if !outbound {
-            self.block_download("Downloads are off. Allow downloads, then check again.");
+            self.block_download(
+                "Downloads are off. Allow downloads in Tools > Settings > Detection, then check again.",
+            );
             return;
         }
         let dir = data_dir.to_path_buf();
@@ -506,7 +508,9 @@ impl Model {
 
     fn install(&mut self, data_dir: &Path, outbound: bool, entry: ruleset::PackEntry) {
         if !outbound {
-            self.block_download("Downloads are off. Allow downloads before installing a pack.");
+            self.block_download(
+                "Downloads are off. Allow downloads in Tools > Settings > Detection before installing a pack.",
+            );
             return;
         }
         let dir = data_dir.to_path_buf();

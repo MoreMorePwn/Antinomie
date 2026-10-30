@@ -2,6 +2,7 @@
 //! with the user, and a recheck updates which feature actions are available.
 use crate::theme;
 use antinomie_monitor_core::{
+    analysis_tools::{ToolInstall, ToolStatus},
     dependencies::{self, Dependency, Report},
     BackendOptions, Command, Snapshot,
 };
@@ -26,6 +27,24 @@ pub(crate) struct DependenciesWindow {
     /// The running check was asked for by another window (Getting started):
     /// its result must not open this one.
     quiet: bool,
+}
+
+/// The network-route programs the window lists after the system checks: their
+/// state as the routes page sees it, and the install under way.
+pub(crate) struct RoutePrograms<'a> {
+    pub tools: Vec<ToolStatus>,
+    pub install: Option<&'a ToolInstall>,
+    pub enabled: bool,
+}
+
+/// What the window asks the app to do.
+#[derive(Default)]
+pub(crate) struct Outcome {
+    pub recheck: bool,
+    /// An install, cancel or remove of a route program.
+    pub command: Option<Command>,
+    /// Open Tools > Settings > Network routes.
+    pub open_routes: bool,
 }
 
 impl DependenciesWindow {
@@ -131,9 +150,15 @@ impl DependenciesWindow {
             .require(required)
     }
 
-    pub fn show(&mut self, ctx: &egui::Context, options: &BackendOptions) -> bool {
+    pub(crate) fn show(
+        &mut self,
+        ctx: &egui::Context,
+        options: &BackendOptions,
+        routes: &RoutePrograms<'_>,
+    ) -> Outcome {
+        let mut outcome = Outcome::default();
         if !self.open {
-            return false;
+            return outcome;
         }
         let mut recheck = false;
         crate::widgets::window("App dependencies")
@@ -196,6 +221,7 @@ impl DependenciesWindow {
                 if let Some(report) = &self.report {
                     install_section(ui, report);
                 }
+                route_programs(ui, routes, &mut outcome);
                 ui.separator();
                 recheck = ui
                     .add_enabled(
@@ -211,7 +237,31 @@ impl DependenciesWindow {
         if recheck {
             self.recheck(options);
         }
-        recheck
+        outcome.recheck = recheck;
+        outcome
+    }
+}
+
+/// Tor and wireproxy, which the network routes start: whether the system or
+/// Antinomie has them, with the install button, and a way to the routes page.
+fn route_programs(ui: &mut egui::Ui, routes: &RoutePrograms<'_>, outcome: &mut Outcome) {
+    ui.separator();
+    theme::section(ui, "Network route programs (optional)");
+    ui.weak("Used by the Tor and VPN routes. Each is installed here or from the routes page.");
+    for tool in &routes.tools {
+        ui.separator();
+        if let Some(command) = crate::tools_page::tool_row(ui, tool, routes.install, routes.enabled)
+        {
+            outcome.command = Some(command);
+        }
+    }
+    ui.add_space(4.0);
+    if ui
+        .button("Open Network routes settings")
+        .on_hover_text("Tools > Settings > Network routes")
+        .clicked()
+    {
+        outcome.open_routes = true;
     }
 }
 

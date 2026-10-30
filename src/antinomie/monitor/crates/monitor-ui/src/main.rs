@@ -45,6 +45,7 @@ mod trace;
 mod tree_lines;
 mod triage;
 mod ui_performance;
+mod update_window;
 mod values;
 mod widgets;
 mod workspace;
