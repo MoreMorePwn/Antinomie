@@ -16,7 +16,7 @@ Dumps: [openbenchmarking.org](https://openbenchmarking.org) publishes the `dmide
 
 ## Tencent Cloud CVM (`cloud-tencent-cvm`, i440FX)
 
-Source: the project's own probe of a real Tencent Cloud CVM (Ubuntu, kernel 7.0, KVM) on 2026-10-29, from the card of this work; no public URL.
+Source: the project's own probe of a real Tencent Cloud CVM (Ubuntu, kernel 7.0, KVM) on 2026-10-29 (`dmidecode`, `dmesg` and the instance's files on the project's own instance); no public URL, and no identifier of that instance is used.
 
 | Field | Value | Class | Note |
 | --- | --- | --- | --- |

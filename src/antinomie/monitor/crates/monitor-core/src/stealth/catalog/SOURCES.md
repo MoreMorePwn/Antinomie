@@ -5,7 +5,6 @@ Collected on 2026-10-27 from the hw-probe uploads published in the linuxhw repos
 [DMI](https://github.com/linuxhw/DMI) (dmidecode), [Dmesg](https://github.com/linuxhw/Dmesg) (kernel log),
 [HWInfo](https://github.com/linuxhw/HWInfo) (hwinfo) and [SMART](https://github.com/linuxhw/SMART) (smartctl).
 hw-probe hides serial numbers, UUIDs, asset tags and some part numbers in these reports; nothing hidden was guessed.
-The collection scripts are kept with the project private evidence of task ANT-T0150.
 
 The cloud VPS profiles are in [SOURCES-cloud.md](SOURCES-cloud.md).
 

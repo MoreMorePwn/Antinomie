@@ -401,8 +401,12 @@ hashes and terms are in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
 Dell, OptiPlex, Latitude, PowerEdge, HP, EliteDesk, ProDesk, ProBook, Lenovo,
 ThinkCentre, ThinkPad, ThinkSystem, Supermicro, Intel, AMD, Realtek, Broadcom,
-Samsung and other names in the stealth machine catalog and the documentation
-belong to their owners. Antinomie uses them only as factual identifiers (the
-model, BIOS version and device names a real unit reports, so a guest looks like
-one). It contains no logos, firmware images, dumped ACPI tables or real serial
-numbers, and is not affiliated with, endorsed by or sponsored by any of them.
+Samsung, Tencent Cloud, Alibaba Cloud, DigitalOcean, Vultr and other names in
+the stealth machine catalog, the cloud VPS profiles and the documentation belong
+to their owners. Antinomie uses them only as factual identifiers (the model,
+BIOS version and device names a real unit or instance reports, so a guest looks
+like one). It contains no logos, firmware images, dumped ACPI tables, real
+serial numbers or provider software: a cloud profile's agent files are empty
+stubs, its metadata service answers only inside the VM's own network, and the
+credentials it hands out are canaries no provider accepts. Antinomie is not
+affiliated with, endorsed by or sponsored by any of these companies.
