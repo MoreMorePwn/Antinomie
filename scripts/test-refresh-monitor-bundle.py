@@ -159,6 +159,37 @@ class RefreshTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "does not match"):
             self.run_refresh()
 
+    def test_console_refresh_preserves_modular_display_and_root_bus_support(self):
+        self.config.write_text(self.config.read_text().replace(
+            "CONFIG_DRM=y", "CONFIG_DRM=m").replace(
+            "CONFIG_DRM_VIRTIO_GPU=y", "CONFIG_DRM_VIRTIO_GPU=m") +
+            "\nCONFIG_ATA=m\nCONFIG_SATA_AHCI=m\nCONFIG_SCSI=m\n"
+            "CONFIG_BLK_DEV_SD=m\nCONFIG_BLK_DEV_NVME=m\n")
+        self.write_kernel()
+        self.manifest["guest"] = {
+            "id": "debian-minimal", "label": "Debian 13 (console)",
+            "min_ram_mib": 1024, "min_disk_gib": 8,
+            "requires_credentials": True, "graphical": False,
+        }
+        self.manifest["stealth_support"] = ["sata", "nvme", "dhcp", "onboardnic"]
+        self.save_manifest()
+        self.run_refresh()
+        result = json.loads((self.output / "bundle.json").read_text())
+        self.assertTrue(result["fixed_display"])
+        self.assertTrue({"sata", "nvme", "dhcp", "onboardnic"} <= set(result["stealth_support"]))
+        self.assertEqual((self.output / "provenance/kernel.config").read_bytes(),
+                         self.config.read_bytes())
+
+    def test_other_bases_still_reject_a_modular_display(self):
+        self.config.write_text(self.config.read_text().replace("CONFIG_DRM=y", "CONFIG_DRM=m"))
+        self.write_kernel()
+        for guest in [None, {"id": "debian-xfce"}, {"id": "custom"}]:
+            self.manifest["guest"] = guest
+            self.save_manifest()
+            with self.assertRaisesRegex(RuntimeError, "CONFIG_DRM=y"):
+                self.run_refresh()
+        self.assertFalse(self.output.exists())
+
     def test_rejects_corrupt_installed_parent(self):
         self.manifest["base_identity"] = "a" * 64
         self.save_manifest()

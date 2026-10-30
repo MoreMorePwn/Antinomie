@@ -50,13 +50,15 @@ def refresh(source, kernel, config, output, allow_unversioned=False):
         raise RuntimeError("output already exists; choose a new unpublished bundle path")
     helper = helpers()
     image = helper.monitor_helpers()
-    image.fixed_display_config(config, kernel)
-    image.stamp_revision({}, kernel, allow_unversioned)
-    helper.kernel_release(kernel)
     manifest_path = source / "bundle.json"
     manifest = json.loads(manifest_path.read_text())
     if manifest.get("kernel_version") != "6.12.94" or manifest.get("schema_id") != 1:
         raise RuntimeError("source bundle must use pinned Linux 6.12.94 and schema 1")
+    guest = manifest.get("guest")
+    console = isinstance(guest, dict) and guest.get("id") == "debian-minimal"
+    image.fixed_display_config(config, kernel, modules_ok=console)
+    image.stamp_revision({}, kernel, allow_unversioned)
+    helper.kernel_release(kernel)
     artifacts = {key: artifact(source, manifest[key])
                  for key in ("kernel", "base_disk")}
     if manifest.get("initrd") is not None:
@@ -96,7 +98,8 @@ def refresh(source, kernel, config, output, allow_unversioned=False):
         provenance = publish / "provenance"
         provenance.mkdir()
         shutil.copy2(config, provenance / "kernel.config")
-        image.fixed_display_config(provenance / "kernel.config", publish / "kernel")
+        image.fixed_display_config(provenance / "kernel.config", publish / "kernel",
+                                   modules_ok=console)
         build_provenance = {"parent_identity": parent_identity,
             "kernel_sha256": hashes["kernel"], "base_disk_sha256": hashes["base.qcow2"],
             "initrd_sha256": hashes.get("initrd"),
@@ -121,7 +124,10 @@ def refresh(source, kernel, config, output, allow_unversioned=False):
         kept = manifest.get("stealth_support") or []
         support = image.stealth_support(config, publish / "kernel",
                                         root_buses="sata" in kept or "nvme" in kept,
-                                        dhcp="dhcp" in kept)
+                                        dhcp="dhcp" in kept, module_buses=console)
+        # Interface naming is a property of the preserved root filesystem.
+        if "onboardnic" in kept:
+            support.append("onboardnic")
         if support:
             updated["stealth_support"] = support
         image.stamp_revision(updated, publish / "kernel", allow_unversioned)

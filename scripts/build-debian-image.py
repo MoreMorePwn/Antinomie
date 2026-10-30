@@ -1646,10 +1646,11 @@ def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=Fa
         # its root by UUID, so its kernel decides (built-in controllers only).
         manifest["stealth_support"] = stealth_support(values["desktop"], kernel_config,
                                                       bundle / "kernel")
-        if helpers.fixed_display_config(kernel_config, bundle / "kernel"):
+        if helpers.fixed_display_config(kernel_config, bundle / "kernel", modules_ok=console):
             manifest["fixed_display"] = True
             shutil.copy2(kernel_config, provenance / "kernel.config")
-            helpers.fixed_display_config(provenance / "kernel.config", bundle / "kernel")
+            helpers.fixed_display_config(provenance / "kernel.config", bundle / "kernel",
+                                         modules_ok=console)
             manifest["kernel_config_sha256"] = helpers.checksum(provenance / "kernel.config")
             manifest["build_provenance"] = {"parent_identity": None,
                 "kernel_sha256": hashes["kernel"], "base_disk_sha256": hashes["base.qcow2"],
