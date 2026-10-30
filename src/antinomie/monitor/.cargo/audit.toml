@@ -28,6 +28,9 @@ ignore = [
     # component-model nor async is enabled in this Wasmtime dependency.
     "RUSTSEC-2026-0362",
     "RUSTSEC-2026-0363",
+    # Borrowed resources transferred between components: a component-model
+    # path, and the component model is not enabled.
+    "RUSTSEC-2026-0424",
     # zip's extract()/stream-extract helpers are not called. Our two archive
     # readers iterate entries; rule imports reject symlinks and the tool
     # extractor validates links and masks mode bits before setting them.
