@@ -387,6 +387,7 @@ fn install_all_missing_queues_only_missing_tools_and_one_runs_at_a_time() {
         size: 1024,
         system: None,
         installed: installed.then(|| "1".into()),
+        installed_path: None,
     };
     // The first-launch rule has been applied; it would recheck the host.
     app.getting_started.decided = true;

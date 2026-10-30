@@ -737,7 +737,7 @@ impl MonitorApp {
                                 ui.colored_label(theme::muted(), "Isolated: no host or Internet access.");
                             }
                             if app.draft.routed && !app.draft.isolated_network {
-                                ui.colored_label(theme::muted(), "Routed: each run picks a route (Settings > Network routes).");
+                                ui.colored_label(theme::muted(), "Routed: each run picks a route (Tools > Settings > Network routes).");
                             }
                             if !app.draft.has_network() {
                                 crate::activity::warning(ui, "Disconnected: no network capture. Choose Isolated, Routed or NAT.");

@@ -19,9 +19,34 @@ pub fn file_size(bytes: u64) -> String {
     format!("{bytes} bytes ({value:.1} {})", UNITS[unit])
 }
 
+/// Only the rounded figure of [`file_size`], for a small control: `15.7 KB`,
+/// and `512 bytes` below 1024.
+pub fn short_size(bytes: u64) -> String {
+    let full = file_size(bytes);
+    match full.split_once('(') {
+        Some((_, rounded)) => rounded.trim_end_matches(')').to_owned(),
+        None => full,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn short_sizes_keep_only_the_rounded_figure() {
+        for (bytes, text) in [
+            (0, "0 bytes"),
+            (1, "1 byte"),
+            (1023, "1023 bytes"),
+            (4096, "4.0 KB"),
+            (4_123_755, "3.9 MB"),
+            (32_448_097, "30.9 MB"),
+            (5 * 1024 * 1024 * 1024, "5.0 GB"),
+        ] {
+            assert_eq!(short_size(bytes), text);
+        }
+    }
 
     #[test]
     fn file_sizes_show_the_byte_count_and_a_rounded_unit() {

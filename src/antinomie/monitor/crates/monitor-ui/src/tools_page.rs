@@ -9,7 +9,7 @@ use eframe::egui::{self, RichText};
 
 /// A program a network route can use, run as a separate process of the
 /// analyst's: whether it was found on `PATH` the last time this was looked
-/// up (at startup and when Settings > Network routes opens).
+/// up (at startup and when Tools > Settings > Network routes opens).
 #[derive(Clone, Debug)]
 pub(crate) struct RouteProgram {
     pub name: &'static str,
@@ -20,6 +20,11 @@ pub(crate) struct RouteProgram {
 
 fn size(bytes: u64) -> String {
     crate::values::file_size(bytes)
+}
+
+/// The rounded size alone, for a button.
+fn short_size(bytes: u64) -> String {
+    antinomie_monitor_core::byte_size::short_size(bytes)
 }
 
 /// Draw the page; returns a command to send.
@@ -57,7 +62,7 @@ pub(crate) fn show(
             ui.add(
                 egui::Label::new(
                     "Network routes run these programs as separate processes. Tor and wireproxy \
-                     are installed from Settings > Network routes when the system has none; \
+                     are installed from Tools > Settings > Network routes when the system has none; \
                      INetSim you install from your distribution.",
                 )
                 .wrap(),
@@ -110,7 +115,7 @@ pub(crate) fn show(
 /// One managed tool: its name, whether the system has it, the version
 /// Antinomie installed, and the Install, Remove or Cancel button with the
 /// progress of an installation under way. Library > Analysis tools and
-/// Settings > Network routes draw the same row.
+/// Tools > Settings > Network routes draw the same row.
 pub(crate) fn tool_row(
     ui: &mut egui::Ui,
     tool: &ToolStatus,
@@ -167,13 +172,18 @@ pub(crate) fn tool_row(
                         egui::Button::new(
                             RichText::new(format!(
                                 "Install {} · {}",
-                                tool.version,
-                                size(tool.size)
+                                tool.version.split(' ').next().unwrap_or(&tool.version),
+                                short_size(tool.size)
                             ))
                             .color(theme::palette().primary_text),
                         )
                         .fill(theme::primary()),
                     )
+                    .on_hover_text(format!(
+                        "{} · download size {}",
+                        tool.version,
+                        size(tool.size)
+                    ))
                     .clicked()
             {
                 command = Some(Command::InstallTool {
@@ -182,6 +192,12 @@ pub(crate) fn tool_row(
             }
         });
     });
+    // Where Antinomie's own copy is saved, on a line of its own: the path is
+    // long and the row's buttons stay at its right.
+    if let (None, Some(_), Some(path)) = (&tool.system, &tool.installed, &tool.installed_path) {
+        ui.add(egui::Label::new(RichText::new(path).monospace().color(theme::muted())).wrap())
+            .on_hover_text(path);
+    }
     if let Some(install) = install.filter(|install| install.id == tool.id) {
         if install.finished {
             if let Some(error) = &install.error {
@@ -197,8 +213,8 @@ pub(crate) fn tool_row(
                 egui::ProgressBar::new(fraction).text(match install.stage.as_str() {
                     "download" => format!(
                         "Downloading {} of {}",
-                        size(install.received),
-                        size(install.total)
+                        short_size(install.received),
+                        short_size(install.total)
                     ),
                     "verify" => "Checking SHA-256".into(),
                     "unpack" => "Unpacking".into(),

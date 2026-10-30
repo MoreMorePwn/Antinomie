@@ -91,7 +91,7 @@ pub(crate) fn line(ui: &mut egui::Ui, text: &RouteText) {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct RouteChoice {
     pub network: VmNetwork,
-    /// The default route of Settings > Network routes.
+    /// The default route of Tools > Settings > Network routes.
     pub default: RouteKind,
     /// A missing setting, per route in [`RouteKind::ALL`] order.
     pub problems: [Option<&'static str>; 6],

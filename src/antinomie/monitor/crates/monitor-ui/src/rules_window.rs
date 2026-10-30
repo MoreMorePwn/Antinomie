@@ -476,7 +476,8 @@ impl Model {
 
     fn refresh_catalog(&mut self, data_dir: &Path, outbound: bool) {
         if !outbound {
-            self.status = "Enable outbound catalog access in Settings, then check again.".into();
+            self.status =
+                "Allow downloads in Tools > Settings > Detection, then check again.".into();
             return;
         }
         let dir = data_dir.to_path_buf();
@@ -495,7 +496,7 @@ impl Model {
     fn install(&mut self, data_dir: &Path, outbound: bool, entry: ruleset::PackEntry) {
         if !outbound {
             self.status =
-                "Enable outbound catalog access in Settings before downloading a pack.".into();
+                "Allow downloads in Tools > Settings > Detection before downloading a pack.".into();
             return;
         }
         let dir = data_dir.to_path_buf();
