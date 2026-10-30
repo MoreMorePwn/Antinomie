@@ -47,6 +47,18 @@ pub(crate) fn duration_text(seconds: u64) -> String {
     }
 }
 
+/// The bounds of a check that no setting changes, said for Settings > Analysis
+/// and for the warning that names one of them.
+pub fn fixed_limits_text() -> String {
+    format!(
+        "Fixed bounds: a check keeps its first {} rows in the report (the whole list stays in its listing, up to {}); a local tool's output is read up to {}; one value is kept up to {}.",
+        super::detection::group_digits(super::worker::ENTRY_MAX_COUNT as u64),
+        crate::byte_size::short_size(super::listing::LISTING_MAX_SIZE),
+        crate::byte_size::short_size(super::worker::TOOL_OUTPUT_MAX_SIZE as u64),
+        crate::byte_size::short_size(super::bounds::VALUE_MAX_SIZE as u64),
+    )
+}
+
 /// Note a bound `section` met. The same sentence is kept once.
 pub(super) fn add(
     section: &mut AnalysisSection,

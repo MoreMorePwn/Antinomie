@@ -549,6 +549,7 @@ impl DiskView {
                 ui,
                 "The comparison reached its time or entry limit; later paths were not compared.",
             );
+            crate::settings_link::button(ui, "Disks");
         }
         if unreadable > 0 {
             crate::activity::warning(

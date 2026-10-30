@@ -31,6 +31,8 @@ pub(super) struct ProcessPicker {
     pub core_budget: u32,
     pub core_timeout_ms: u32,
     pub core_picked: Option<u32>,
+    /// Why the action is not available, said in the window; set each frame.
+    pub unavailable: Option<&'static str>,
 }
 
 /// What the Dump core dialog needs to know about the guest.
@@ -286,7 +288,16 @@ impl ProcessPicker {
                     .on_hover_text(format!("Boot {}", identity.boot_id));
                 }
                 if !enabled {
-                    crate::activity::warning(ui, if core { "Core capture unavailable" } else if debug { "Debugger unavailable" } else { "Process attachment unavailable" });
+                    crate::activity::warning(
+                        ui,
+                        self.unavailable.unwrap_or(if core {
+                            "Core capture is not available now."
+                        } else if debug {
+                            "The debugger is not available now."
+                        } else {
+                            "Process attachment is not available now."
+                        }),
+                    );
                 }
                 ui.horizontal_wrapped(|ui| {
                     if ui

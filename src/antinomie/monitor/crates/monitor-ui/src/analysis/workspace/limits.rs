@@ -43,6 +43,16 @@ pub(super) fn notes(
     for limit in &section.limits {
         crate::activity::warning(ui, &limit.text);
         if limit.kind != AnalysisLimitKind::Time {
+            // Rows, size, text and input bounds are fixed; Settings lists them.
+            if ui
+                .small_button("Analysis settings…")
+                .on_hover_text(
+                    "Open Settings > Analysis, which lists the fixed bounds of a check and the time each tool may run",
+                )
+                .clicked()
+            {
+                action = Some(ReportAction::OpenAnalysisSettings);
+            }
             continue;
         }
         ui.horizontal_wrapped(|ui| {

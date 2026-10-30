@@ -44,10 +44,15 @@ pub(super) fn mount_cache(cmd: &mut std::process::Command, tools: Option<&Path>)
 /// writes into it while it reads an untrusted file, so its size is bounded
 /// and a damaged entry is rebuilt on the next run.
 pub(super) fn trim_cache(tools: Option<&Path>) {
+    trim_cache_over(tools, CACHE_MAX_SIZE);
+}
+
+/// [`trim_cache`] with the size limit given.
+fn trim_cache_over(tools: Option<&Path>, limit: u64) {
     let Some(folder) = cache_dir(tools) else {
         return;
     };
-    if super::jobs::directory_len(&folder).is_ok_and(|len| len > CACHE_MAX_SIZE) {
+    if super::jobs::directory_len(&folder).is_ok_and(|len| len > limit) {
         let _ = fs::remove_dir_all(&folder);
     }
 }
@@ -242,5 +247,67 @@ pub(super) fn capabilities(section: &mut AnalysisSection) {
         );
     } else {
         section.state = AnalysisSectionState::Complete;
+    }
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+
+    fn tools_dir(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("ant-capa-cache-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("tools")).unwrap();
+        dir.join("tools")
+    }
+
+    #[test]
+    fn the_cache_folder_is_private_beside_the_tools_and_named_for_the_rules_release() {
+        let tools = tools_dir("folder");
+        let folder = cache_dir(Some(&tools)).expect("a cache folder");
+        assert_eq!(
+            folder,
+            tools.parent().unwrap().join("cache/capa/capa-rules-v9.4.0")
+        );
+        assert!(folder.is_dir());
+        // The same folder every time, so compiled rules carry from run to run.
+        assert_eq!(cache_dir(Some(&tools)), Some(folder.clone()));
+        // No tools folder, no cache.
+        assert_eq!(cache_dir(None), None);
+        let _ = fs::remove_dir_all(tools.parent().unwrap());
+    }
+
+    #[test]
+    fn the_sandbox_gets_the_cache_writable_where_capa_looks_for_it() {
+        let tools = tools_dir("mount");
+        let mut command = std::process::Command::new("bwrap");
+        mount_cache(&mut command, Some(&tools));
+        let args: Vec<_> = command.get_args().map(|arg| arg.to_owned()).collect();
+        assert_eq!(args.len(), 3, "{args:?}");
+        assert_eq!(args[0], "--bind");
+        assert!(Path::new(&args[1]).ends_with("capa-rules-v9.4.0"));
+        assert_eq!(args[2], CACHE_MOUNT);
+        let mut bare = std::process::Command::new("bwrap");
+        mount_cache(&mut bare, None);
+        assert_eq!(bare.get_args().count(), 0);
+        let _ = fs::remove_dir_all(tools.parent().unwrap());
+    }
+
+    #[test]
+    fn a_cache_past_its_limit_is_emptied_and_a_small_one_is_kept() {
+        let tools = tools_dir("trim");
+        let folder = cache_dir(Some(&tools)).unwrap();
+        fs::write(folder.join("rules.cache"), vec![0u8; 100]).unwrap();
+        trim_cache_over(Some(&tools), 1000);
+        assert!(
+            folder.join("rules.cache").is_file(),
+            "under the limit stays"
+        );
+        trim_cache_over(Some(&tools), 50);
+        assert!(!folder.join("rules.cache").exists(), "over the limit goes");
+        // The folder is made again for the next run.
+        assert!(cache_dir(Some(&tools)).unwrap().is_dir());
+        let _ = fs::remove_dir_all(tools.parent().unwrap());
     }
 }

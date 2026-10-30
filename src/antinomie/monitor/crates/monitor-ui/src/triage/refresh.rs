@@ -177,7 +177,10 @@ impl TriageView {
             if self.scan_rx.is_some() {
                 theme::spinner(ui);
             }
-            ui.colored_label(theme::muted(), self.refresh_status(input));
+            let status = ui.colored_label(theme::muted(), self.refresh_status(input));
+            if let Some(why) = self.incomplete_why() {
+                status.on_hover_text(why);
+            }
         });
     }
 
@@ -261,6 +264,11 @@ impl TriageView {
                     ui.label("Every");
                     self.interval_edit(ui);
                 });
+                if let Some(why) = self.incomplete_why() {
+                    ui.add(
+                        egui::Label::new(RichText::new(why).small().color(theme::warn())).wrap(),
+                    );
+                }
                 ui.weak(if self.section == Section::Network {
                     NETWORK_TIME_NOTE
                 } else {
@@ -272,6 +280,17 @@ impl TriageView {
             }
         });
         true
+    }
+
+    /// Why the index is incomplete, one sentence for a tooltip; `None` when it
+    /// is whole.
+    pub(super) fn incomplete_why(&self) -> Option<String> {
+        let scan = self.scan.as_ref().filter(|scan| scan.partial)?;
+        Some(if scan.partial_reasons.is_empty() {
+            "Part of this run's evidence is not in the index.".to_owned()
+        } else {
+            format!("Incomplete because {}.", scan.partial_reasons.join("; "))
+        })
     }
 
     pub(super) fn refresh_status(&self, input: &TriageInput<'_>) -> String {
@@ -294,7 +313,7 @@ impl TriageView {
                 "Refreshed {} s ago{}",
                 self.clock.now().saturating_duration_since(when).as_secs(),
                 if self.scan.as_ref().is_some_and(|scan| scan.partial) {
-                    "; partial evidence"
+                    "; incomplete"
                 } else {
                     ""
                 }

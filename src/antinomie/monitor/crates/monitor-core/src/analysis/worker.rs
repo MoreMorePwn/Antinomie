@@ -15,8 +15,8 @@ use std::{
 pub(crate) const REPORT_MAX_SIZE: usize = 128 * 1024;
 /// Rows of a category the report itself keeps; a category with a listing holds
 /// all of its rows there and the report only previews the first ones.
-const ENTRY_MAX_COUNT: usize = 2048;
-const TOOL_OUTPUT_MAX_SIZE: usize = 1024 * 1024;
+pub(super) const ENTRY_MAX_COUNT: usize = 2048;
+pub(super) const TOOL_OUTPUT_MAX_SIZE: usize = 1024 * 1024;
 thread_local! {
     /// Rows the section was given, kept or not. A row's id is its number here.
     static ROWS_SEEN: Cell<u64> = const { Cell::new(0) };
@@ -1443,6 +1443,32 @@ mod tests {
         let mut real = section(AnalysisKind::Structures);
         analyze_section(&mut real, &specimen, &listings());
         assert!(!real.listing.unwrap().truncated);
+    }
+    /// Measurement on a real large ELF:
+    /// `ANTINOMIE_STRUCTURES_FILE=/path cargo test --release -p antinomie-monitor-core
+    /// measure_structures_of_a_large_file -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "measures the file named by ANTINOMIE_STRUCTURES_FILE"]
+    fn measure_structures_of_a_large_file() {
+        let path = std::env::var("ANTINOMIE_STRUCTURES_FILE").expect("ANTINOMIE_STRUCTURES_FILE");
+        let specimen = fs::read(&path).unwrap();
+        let mut result = section(AnalysisKind::Structures);
+        let started = std::time::Instant::now();
+        analyze_section(&mut result, &specimen, &listings());
+        let listing = result.listing.as_ref().expect("a listing");
+        eprintln!(
+            "{path}: {} bytes, {} rows, listing {} bytes (truncated {}), report preview {} rows, \
+             {:?}, state {:?}, limits {:?}",
+            specimen.len(),
+            listing.rows,
+            listing.bytes,
+            listing.truncated,
+            result.entries.len(),
+            started.elapsed(),
+            result.state,
+            result.limits
+        );
+        assert!(!listing.truncated);
     }
     #[test]
     fn a_cut_value_says_how_many_were_cut() {

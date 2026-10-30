@@ -438,7 +438,7 @@ pub(crate) fn time_limit_drag(minutes: &mut u32) -> egui::DragValue<'_> {
 /// What the time limit does, for the field's tooltip and Settings.
 pub(crate) const TIME_LIMIT_HELP: &str = "How long each analysis tool may run before it is stopped and its check is marked Timeout. \
 Each tool's own limit is 4 minutes for capa, 8 for FLOSS, 3 for binwalk and 14 for the decompiler. \
-The same value is in Settings. A check that timed out can be run again with twice the time from its tab.";
+The same value is in Run program and in Tools > Settings > Analysis tools. A check that timed out can be run again with twice the time from its tab.";
 
 /// Under a selected category whose tool is missing: what it needs and a way
 /// to install it.

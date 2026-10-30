@@ -492,6 +492,7 @@ impl DiskView {
                         format_size(self.settings.extract_cap())
                     ),
                 );
+                crate::settings_link::button(ui, "Disks");
                 if ui.button("Extract anyway").clicked() {
                     self.extraction.allow_large.insert(path.clone());
                     self.extraction.large = None;

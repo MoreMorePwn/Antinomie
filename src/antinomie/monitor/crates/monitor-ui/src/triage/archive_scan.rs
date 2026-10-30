@@ -658,25 +658,25 @@ pub(super) fn scan_archive_query(
     }
     let stable_source =
         source_key == normalized::source_key(&recording.directory, pcap, pcap_open, request);
+    let mut reasons = incomplete_reasons(&Source {
+        scan_complete: complete,
+        stable: stable_source,
+        issues: issues.len(),
+        facts: facts.as_ref(),
+        run_finished: request.run_finished,
+        capture_open: pcap_open,
+        network_warning: network.network_warning.as_deref(),
+    });
     let event_journal = event_journal
-        .and_then(|journal| {
-            let reasons = incomplete_reasons(&Source {
-                scan_complete: complete,
-                stable: stable_source,
-                issues: issues.len(),
-                facts: facts.as_ref(),
-                run_finished: request.run_finished,
-                capture_open: pcap_open,
-                network_warning: network.network_warning.as_deref(),
-            });
-            match journal.finish_because(reasons.is_empty(), &reasons) {
+        .and_then(
+            |journal| match journal.finish_because(reasons.is_empty(), &reasons) {
                 Ok(summary) => Some(summary),
                 Err(error) => {
                     event_error = Some(error);
                     None
                 }
-            }
-        })
+            },
+        )
         .or(cached_events);
     let event_cache = if stable_source {
         normalized::cache(source_key, event_journal.as_ref(), &recording.directory)
@@ -701,6 +701,14 @@ pub(super) fn scan_archive_query(
             .collect(),
         read,
         read_omitted,
+        partial_reasons: {
+            if omitted_files > 0 {
+                reasons.push(format!(
+                    "{omitted_files} files are left out of the file list"
+                ));
+            }
+            reasons.clone()
+        },
         partial: !complete
             || omitted_files > 0
             || !issues.is_empty()

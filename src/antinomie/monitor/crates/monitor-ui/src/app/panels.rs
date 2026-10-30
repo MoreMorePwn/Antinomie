@@ -63,9 +63,15 @@ impl MonitorApp {
             self.focus_panel = Some(panel);
             ctx.request_repaint();
         }
+        self.process_picker.unavailable = match self.process_picker.purpose {
+            captures::ProcessPurpose::Core => self.manual_core_unavailable(),
+            captures::ProcessPurpose::Debug => self.debugger_unavailable(),
+            captures::ProcessPurpose::Attach => None,
+        };
         let enabled = match self.process_picker.purpose {
-            captures::ProcessPurpose::Core => self.manual_core_unavailable().is_none(),
-            captures::ProcessPurpose::Debug => self.debugger_unavailable().is_none(),
+            captures::ProcessPurpose::Core | captures::ProcessPurpose::Debug => {
+                self.process_picker.unavailable.is_none()
+            }
             captures::ProcessPurpose::Attach => self.observer_start_enabled(),
         };
         self.debugger_session();
