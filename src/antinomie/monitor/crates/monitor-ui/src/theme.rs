@@ -105,6 +105,20 @@ pub fn bright_blue() -> Color32 {
 pub fn blue() -> Color32 {
     palette().accent
 }
+/// The bold proportional family (DejaVu Sans Bold).
+pub fn bold_family() -> FontFamily {
+    FontFamily::Name("bold".into())
+}
+/// `text` in the bold family at the body size, for titles. A context without
+/// the app's fonts (a bare test context) gets the regular face.
+pub fn bold(ctx: &egui::Context, text: impl Into<String>) -> egui::RichText {
+    let text = egui::RichText::new(text).text_style(TextStyle::Body);
+    if ctx.fonts(|fonts| fonts.families().contains(&bold_family())) {
+        text.family(bold_family())
+    } else {
+        text
+    }
+}
 pub fn heading() -> Color32 {
     palette().heading
 }
@@ -350,11 +364,27 @@ fn fonts() -> egui::FontDefinitions {
         "dejavu-sans-mono".into(),
         FontData::from_static(include_bytes!("../assets/fonts/DejaVuSansMono.ttf")).into(),
     );
+    fonts.font_data.insert(
+        "dejavu-sans-bold".into(),
+        FontData::from_static(include_bytes!("../assets/fonts/DejaVuSans-Bold.ttf")).into(),
+    );
     fonts
         .families
         .entry(FontFamily::Proportional)
         .or_default()
         .insert(0, "dejavu-sans".into());
+    // Bold weight (egui's `strong()` only recolours): the fallbacks follow so
+    // symbols and icons still resolve.
+    let mut bold = vec!["dejavu-sans-bold".to_owned()];
+    bold.extend(
+        fonts
+            .families
+            .get(&FontFamily::Proportional)
+            .into_iter()
+            .flatten()
+            .cloned(),
+    );
+    fonts.families.insert(bold_family(), bold);
     fonts
         .families
         .entry(FontFamily::Monospace)
@@ -582,6 +612,31 @@ mod tests {
     fn contrast(a: Color32, b: Color32) -> f32 {
         let (a, b) = (luminance(a), luminance(b));
         (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    /// Bold titles use a real bold face, wider than the regular one, and every
+    /// glyph of it still resolves (the bold family keeps the fallbacks).
+    #[test]
+    fn bold_text_is_a_wider_face_than_regular() {
+        let ctx = egui::Context::default();
+        install(&ctx);
+        let width = |family: FontFamily| {
+            let mut width = 0.0;
+            let _ = ctx.run(Default::default(), |ctx| {
+                width = ctx.fonts(|fonts| {
+                    fonts
+                        .layout_no_wrap(
+                            "Getting started".into(),
+                            FontId::new(16.0, family.clone()),
+                            Color32::WHITE,
+                        )
+                        .size()
+                        .x
+                });
+            });
+            width
+        };
+        assert!(width(bold_family()) > width(FontFamily::Proportional) + 4.0);
     }
 
     /// `RichText::strong()` and `Ui::strong` take the pressed text color; it
