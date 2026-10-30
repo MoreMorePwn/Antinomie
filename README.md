@@ -130,6 +130,9 @@ a filter language and linked to the evidence they produced.
 | **Debugger** | Debug on start or attach: threads, registers, memory, breakpoints, stepping, and GDB with GEF or pwndbg. |
 | **Syscall trace** | Kernel-recorded system calls with arguments, return values, decoded flags and captured buffers, with filters and links to evidence. |
 | **Detection rules** | Community and custom YARA, Suricata and Sigma collections, plus abuse.ch indicator datasets. |
+| **Sample library** | Every sample with its hashes, tags, notes, runs and artifacts, and a tamper-evident custody log of everything done to or by it. |
+| **File reconstruction** | Replay a file's reads, writes and resizes from the recording to see what each byte is, with the earlier bytes a write replaced and a diff for text files. |
+| **Cloud and device identities** | Guests that look like a real desktop, laptop, server or cloud VPS (Tencent, Alibaba, DigitalOcean, Vultr), with a local metadata service that hands out canary credentials. |
 
 Optional engines are installed from **Tools → Analysis tools** or provided by
 the host. See the [tool requirements](docs/usage.md#dependencies-and-analysis-tools).
@@ -327,7 +330,7 @@ Import the output folder with **Add base → Import base…**.
 | Need | Details |
 |---|---|
 | **Host** | Linux x86-64, glibc 2.39 or newer, with a graphical session. Tested on Debian 13 and Ubuntu 24.04. WSL2 works with an X11 display; KVM access depends on its virtualization setup. |
-| **Virtualization** | QEMU 6.0 or newer (`qemu-system-x86_64`, `qemu-img`) with the GTK display backend. KVM is strongly recommended; TCG works without it but is not performance-qualified. |
+| **Virtualization** | QEMU 6.0 or newer (`qemu-system-x86_64`, `qemu-img`) with the GTK display backend; Routed networks (cloud profiles' metadata service) need QEMU 7.2. KVM is strongly recommended; TCG works without it but is not performance-qualified. |
 | **Downloads** | `curl` for bases, rules and analysis tools. |
 | **Analysis** | bubblewrap for isolation; TShark and `prlimit` for packet decoding and filters. Other tools depend on the analysis you choose. |
 | **Debian VMs** | `guestfish` (`libguestfs-tools`) to create and reset them. |
