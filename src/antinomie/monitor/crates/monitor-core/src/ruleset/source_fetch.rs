@@ -88,9 +88,8 @@ fn status_text(host: &str, code: u32, url: &str) -> Option<String> {
         return None;
     }
     Some(match code {
-        401 | 403 => format!(
-            "abuse.ch rejected the Auth-Key (HTTP {code}); check it in Tools > API keys, or get a free one at auth.abuse.ch"
-        ),
+        401 => "abuse.ch now requires an Auth-Key for this download (HTTP 401): the request was refused because the Auth-Key is missing or was rejected. Set a free key (auth.abuse.ch) in Tools > API keys, then try again".to_owned(),
+        403 => "abuse.ch rejected the Auth-Key (HTTP 403); check it in Tools > API keys, or get a free one at auth.abuse.ch".to_owned(),
         404 => format!(
             "abuse.ch has no file at {} (HTTP 404); the export may have moved or been renamed, so update Antinomie",
             redact_url(url)

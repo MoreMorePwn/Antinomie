@@ -72,6 +72,10 @@ impl Model {
         let busy = self.job.is_some();
         if let Some(error) = &self.status_error {
             ui.add(egui::Label::new(RichText::new(error).color(theme::error())).wrap());
+            // A refused or missing key is set in Tools > API keys.
+            if error.contains("Auth-Key") && ui.button("Open API keys…").clicked() {
+                self.requested = Some(super::RulesAction::ApiKeys);
+            }
         } else if !self.live.note.is_empty() {
             ui.add(egui::Label::new(RichText::new(&self.live.note).color(theme::text())).wrap());
         }

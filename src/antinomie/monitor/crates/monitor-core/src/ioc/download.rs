@@ -672,7 +672,7 @@ mod tests {
     #[test]
     fn an_unaccepted_key_and_a_retired_endpoint_are_named_without_the_key() {
         for (code, words) in [
-            (401, "abuse.ch rejected the Auth-Key"),
+            (401, "abuse.ch now requires an Auth-Key"),
             (410, "abuse.ch has retired this endpoint"),
         ] {
             let dir = data_dir("status");

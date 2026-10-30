@@ -286,7 +286,7 @@ fn the_key_is_never_on_the_command_line_and_never_in_an_error() {
         b"payload"
     );
     for (path, words) in [
-        ("status-401", "rejected the Auth-Key"),
+        ("status-401", "now requires an Auth-Key"),
         ("status-403", "rejected the Auth-Key"),
         ("status-410", "retired this endpoint"),
     ] {
