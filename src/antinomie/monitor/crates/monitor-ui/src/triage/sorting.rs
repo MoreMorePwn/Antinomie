@@ -248,7 +248,7 @@ struct Spool {
 impl Spool {
     fn new(cancel: Arc<AtomicBool>) -> Result<Self, String> {
         let directory = PacketSpool::new()?;
-        let connection = rusqlite::Connection::open(directory.directory.join("sort.sqlite"))
+        let mut connection = rusqlite::Connection::open(directory.directory.join("sort.sqlite"))
             .map_err(|error| error.to_string())?;
         connection.execute_batch("PRAGMA trusted_schema=OFF; PRAGMA page_size=4096; PRAGMA max_page_count=65536; PRAGMA cache_size=-2048; PRAGMA temp_store=FILE; PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF; CREATE TABLE rows(seq INTEGER PRIMARY KEY, missing INTEGER NOT NULL, k TEXT NOT NULL, payload BLOB NOT NULL); BEGIN;").map_err(|error| error.to_string())?;
         connection
