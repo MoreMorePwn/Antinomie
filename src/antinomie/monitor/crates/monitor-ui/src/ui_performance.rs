@@ -188,10 +188,12 @@ impl Performance {
         }
         crate::widgets::window("UI performance").id(egui::Id::new("ui-performance"))
             .open(&mut self.open).default_width(530.0).resizable(true).show(ctx, |ui| {
-                ui.strong("Graphics");
-                ui.add(egui::Label::new(format!("Renderer: {}", if self.renderer.is_empty() { "Unavailable" } else { &self.renderer })).wrap());
-                ui.add(egui::Label::new(format!("Vendor: {}", self.vendor)).wrap());
-                ui.add(egui::Label::new(format!("OpenGL: {}", self.version)).wrap());
+                crate::widgets::titled(ui, "Graphics", "The renderer drawing this window.");
+                crate::widgets::facts(ui, "ui-performance-graphics", &[
+                    ("Renderer", if self.renderer.is_empty() { "Unavailable".to_owned() } else { self.renderer.clone() }),
+                    ("Vendor", self.vendor.clone()),
+                    ("OpenGL", self.version.clone()),
+                ]);
                 if software_renderer(&self.renderer) {
                     crate::activity::warning(ui, "Software rendering uses the CPU and can slow the whole window.");
                 }
@@ -212,15 +214,27 @@ impl Performance {
                 }
                 if let Some(error) = &self.error { crate::activity::error_toast(ui, error); }
                 ui.separator();
-                ui.strong("UI update CPU time").on_hover_text("App update/layout work, excluding GPU rendering and presentation. Idle intervals are intentional; they are not frame latency.");
+                crate::widgets::titled(
+                    ui,
+                    "UI update CPU time",
+                    "App update and layout work, excluding GPU rendering and presentation. Idle intervals are intentional; they are not frame latency.",
+                );
                 let mut sorted: Vec<_> = self.samples.iter().copied().collect();
                 sorted.sort_by(f64::total_cmp);
+                let mut timings = Vec::new();
                 if !sorted.is_empty() {
                     let median = sorted[sorted.len() / 2];
                     let p95 = sorted[(sorted.len() * 95).div_ceil(100).saturating_sub(1)];
-                    ui.label(format!("Median {median:.2} ms · p95 {p95:.2} ms · {} samples", sorted.len()));
+                    timings.push(("Median", format!("{median:.2} ms")));
+                    timings.push(("95th percentile", format!("{p95:.2} ms")));
+                    timings.push(("Samples", sorted.len().to_string()));
                 }
-                if let Some(interval) = self.interval_ms { ui.label(format!("Last update interval: {interval:.1} ms")); }
+                if let Some(interval) = self.interval_ms { timings.push(("Last update interval", format!("{interval:.1} ms"))); }
+                if timings.is_empty() {
+                    ui.add(egui::Label::new(egui::RichText::new("No updates measured yet.").color(crate::theme::muted())));
+                } else {
+                    crate::widgets::facts(ui, "ui-performance-timings", &timings);
+                }
                 if ui.button("Reset timings").clicked() { self.samples.clear(); self.last_frame = None; }
             });
         if self.open {

@@ -465,10 +465,7 @@ pub(crate) fn show(
                     }
                 });
                 if let Some(held) = health::held_text(&snapshot.health) {
-                    ui.colored_label(
-                        theme::muted(),
-                        format!("Telemetry held back for the writer: {held}"),
-                    )
+                    crate::widgets::fact_line(ui, "Telemetry held back for the writer", &held)
                     .on_hover_text(
                         "The recording writer was behind the disk, so the host took no telemetry and the guest's sends waited. Nothing was dropped by this.",
                     );
@@ -695,7 +692,7 @@ fn volume_meter(ui: &mut egui::Ui, sample: &VmResources, vm: &VmConfig) {
         );
     }
     if let Some(used) = sample.data_disk_used_size {
-        ui.add(egui::Label::new(RichText::new(format!("Data volume used: {:.2} GiB", used as f64 / 1_073_741_824.0)).small().color(theme::muted())).wrap())
+        crate::widgets::fact_line(ui, "Data volume used", &format!("{:.2} GiB", used as f64 / 1_073_741_824.0))
             .on_hover_text("Host statvfs: (f_blocks - f_bfree) × f_frsize. Reserved free blocks are not counted as used; this is not guest filesystem usage.");
     }
 }
@@ -1545,7 +1542,7 @@ mod tests {
             .map(|(text, _)| text)
             .collect();
         assert!(text.contains("Host RAM available: 8.00 GiB"));
-        assert!(text.contains("Data volume used: 492.00 GiB"));
+        assert!(text.contains("Data volume used") && text.contains("492.00 GiB"));
         assert!(text.contains("Guest RAM utilization unavailable"));
     }
 

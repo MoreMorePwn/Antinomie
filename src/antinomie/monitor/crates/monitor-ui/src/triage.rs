@@ -556,7 +556,7 @@ impl TriageView {
                 None
             }
             Section::Network => {
-                ui.weak(format!("Route: {}", self.route.headline));
+                crate::widgets::fact_line(ui, "Route", &self.route.headline);
                 self.new_network(ui, &input);
                 None
             }
@@ -1192,6 +1192,8 @@ struct ArchiveScan {
     read: Vec<Vec<Cell>>,
     read_omitted: u64,
     partial: bool,
+    /// Why the index is partial, one reason each; empty when it is whole.
+    partial_reasons: Vec<String>,
     process: Vec<ProcessNode>,
     /// Suspicious observations per task, before the findings filter and page.
     suspicious: Suspicious,
