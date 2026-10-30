@@ -2,6 +2,9 @@
 //! The filter guide window and its examples.
 use super::*;
 
+/// The widest the guide grows, so it stays a readable panel on a wide screen.
+const GUIDE_MAX_WIDTH: f32 = 760.0;
+
 /// Short recommended filters. Opened from Help → Filter guide.
 pub(crate) fn guide(ctx: &egui::Context) {
     let id = egui::Id::new("filter-guide-open");
@@ -12,7 +15,8 @@ pub(crate) fn guide(ctx: &egui::Context) {
     crate::widgets::window("Filter guide")
         .open(&mut open)
         .resizable(true)
-        .default_size([760.0, 540.0])
+        .default_size([640.0, 540.0])
+        .max_width(GUIDE_MAX_WIDTH)
         .show(ctx, |ui| {
             ui.label("Bare words search the row; text compares are case-sensitive, lower(field) ignores case.");
             let query_id = egui::Id::new("filter-guide-query");
@@ -32,7 +36,7 @@ pub(crate) fn guide(ctx: &egui::Context) {
             let rows = contextual.as_deref().map(Vec::as_slice).unwrap_or(&fallback);
             let examples = guide_examples(rows, packet);
             for line in &examples {
-                ui.monospace(line);
+                ui.add(egui::Label::new(egui::RichText::new(line).monospace()).wrap());
             }
             ui.add_space(4.0);
             let rows: Vec<_> = rows.iter().filter(|(field, kind, meaning)| {
@@ -53,13 +57,35 @@ pub(crate) fn guide(ctx: &egui::Context) {
             .collect();
             use egui_extras::{Column, TableBuilder};
             crate::widgets::table::begin(ui);
+            // The field column fits the longest name shown; the type column
+            // fits its longest kind. Anything longer is cut with a tooltip.
+            let mono = egui::TextStyle::Monospace.resolve(ui.style());
+            let body = egui::TextStyle::Body.resolve(ui.style());
+            let widest = |font: &egui::FontId, texts: Vec<&str>| {
+                ui.fonts(|fonts| {
+                    texts
+                        .into_iter()
+                        .map(|text| {
+                            text.chars()
+                                .map(|c| fonts.glyph_width(font, c))
+                                .sum::<f32>()
+                        })
+                        .fold(0.0_f32, f32::max)
+                })
+            };
+            let field_width = (widest(&mono, rows.iter().map(|row| row.0.as_str()).collect())
+                + 24.0)
+                .clamp(120.0, 300.0);
+            let kind_width = (widest(&body, rows.iter().map(|row| row.1.as_str()).collect())
+                + 24.0)
+                .clamp(70.0, 140.0);
             TableBuilder::new(ui)
                 .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
                 .id_salt("filter-keywords")
                 .striped(true)
-                .column(Column::initial(160.0))
-                .column(Column::initial(120.0))
-                .column(Column::remainder())
+                .column(Column::exact(field_width).clip(true))
+                .column(Column::exact(kind_width).clip(true))
+                .column(Column::remainder().at_least(160.0).clip(true))
                 .header(22.0, |mut header| {
                     for (column, title) in ["Field", "Type", "Meaning"].into_iter().enumerate() {
                         header.col(|ui| crate::table_sort::header(ui, "filter-keywords", column, title));
@@ -69,10 +95,14 @@ pub(crate) fn guide(ctx: &egui::Context) {
                     body.rows(22.0, rows.len(), |mut row| {
                             let (field, kind, meaning) = rows[row.index()];
                             row.col(|ui| {
-                                ui.monospace(field);
+                                ui.add(
+                                    egui::Label::new(egui::RichText::new(field).monospace())
+                                        .truncate(),
+                                )
+                                .on_hover_text(field);
                             });
                             row.col(|ui| {
-                                ui.label(kind);
+                                ui.add(egui::Label::new(kind).truncate());
                             });
                             row.col(|ui| {
                                 ui.add(egui::Label::new(meaning).truncate())
@@ -198,4 +228,34 @@ fn guide_rows() -> &'static [(String, String, String)] {
 #[cfg(test)]
 pub(super) fn guide_has(needle: &str) -> bool {
     guide_rows().iter().any(|(field, _, _)| field == needle)
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+
+    /// A guide opened on a very wide screen stays a panel of readable width.
+    #[test]
+    fn the_guide_keeps_a_maximum_width() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        open_guide(&ctx);
+        for _ in 0..3 {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(2400.0, 1200.0),
+                    )),
+                    ..Default::default()
+                },
+                guide,
+            );
+        }
+        let area = ctx
+            .memory(|memory| memory.area_rect(egui::Id::new("Filter guide")))
+            .expect("the guide window");
+        assert!(area.width() <= GUIDE_MAX_WIDTH + 24.0, "{area:?}");
+        assert!(area.width() > 300.0, "{area:?}");
+    }
 }
