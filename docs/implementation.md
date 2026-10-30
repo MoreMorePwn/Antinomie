@@ -2836,9 +2836,14 @@ guest-run without loss (3,456 packets, none dropped).
 Guest series 0019; contract revision unchanged. Debian's 6.12.94-1 kernel has
 BTF (`DEBUG_INFO_BTF`, `DEBUG_INFO_BTF_MODULES`, pahole 1.30): a world-readable
 `/sys/kernel/btf/vmlinux` and one `/sys/kernel/btf/<module>` per loaded
-module. systemd's bpf-restrict-fs (a BPF LSM program) needs it and failed at
-every Debian Minimal boot without it, and eBPF-aware programs (CO-RE loaders,
-`bpftool`) treat its absence as unusual. The minimal kernel profile now
+module. systemd's bpf-restrict-fs (a BPF LSM program) needs it, and
+eBPF-aware programs (CO-RE loaders, `bpftool`) treat its absence as unusual.
+BTF is not enough for systemd's program to attach: a BPF LSM program attaches
+through a BPF trampoline, which needs the function tracer. Without it systemd
+loaded the program, failed to attach it and logged that BPF LSM was not
+available at every boot (a giveaway too). Debian Minimal's stock profile
+(below) has Debian's function tracer, and its qualification requires both a
+working `RestrictFileSystems=` denial and no such boot message. The minimal kernel profile now
 enables both options (`scripts/build-monitor-kernel.sh`; its DWARF was
 already on, so the cost is pahole: about 7 s and 0.9 GB of memory, plus 2 s
 for the filter below, in a build of about an hour; `.BTF` adds 6.6 MB to the
@@ -3168,6 +3173,20 @@ stubs (no provider binary), all with ages of hours to twelve days. `cloud-state.
 in the VM's folder records the provider and instance id so a later start leaves
 the disk alone; a failure only adds a "not applied" line to the start log. The
 bases stay one reproducible image for every profile.
+
+Checked on Debian Minimal (stock-ABI candidate, all four providers, `stealth-check
+cloud`): the files are written and aged (instance id, `cloud-init.log` and the
+provider configuration 12 days, `wtmp` an hour), the host name is the
+provider's, the default user exists, the NIC has its slot's name (`ens3` on
+the pc machine of Tencent, Alibaba and DigitalOcean, `enp0s25` on Vultr's q35)
+with its DHCP address, and `systemd-detect-virt` says `kvm`. What a Debian 13 guest does not take from
+them: it has no cloud-init (the cloud-init records are inert files, and
+`cloud-init status` does not exist), and its `last` reads wtmpdb
+(`/var/lib/wtmpdb/wtmp.db`), not `/var/log/wtmp`, so the past logins the file
+holds do not show there: `last` lists only the VM's own boots. Tencent's and
+DigitalOcean's host names follow their Ubuntu images (`VM-0-15-ubuntu`,
+`ubuntu-s-1vcpu-1gb-nyc3-01`) also on the Debian base, and Tencent's `ubuntu`
+user gets `/bin/sh`. Nothing beyond these checks is verified on Debian.
 
 **Metadata service** (`route/metadata.rs`). In a Routed VM the gateway answers the
 provider's metadata address on TCP port 80 on every route, even Drop, from a

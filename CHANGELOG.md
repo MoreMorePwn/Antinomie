@@ -674,9 +674,11 @@ it runs.
   change).
 - **Guest kernels have BTF, without the recorder in it.** The BusyBox and
   Debian Minimal kernel now builds `/sys/kernel/btf/vmlinux` and module BTF
-  like Debian's 6.12.94-1, so systemd's bpf-restrict-fs no longer fails at
-  every Debian boot and the missing file no longer gives the VM away to eBPF
-  tooling. The recorder's own code is built without debug information, and a
+  like Debian's 6.12.94-1, so the missing file no longer gives the VM away
+  to eBPF tooling. BTF alone did not let systemd's bpf-restrict-fs attach
+  (it logged that BPF LSM was not available, which also gave the kernel
+  away): that also needs the function tracer, which Debian Minimal's stock
+  kernel profile now has (see the Debian module entry above). The recorder's own code is built without debug information, and a
   filter run after pahole (series patch 0019) removes every type, field,
   enumerator, function and variable the recorder's headers leave in stock
   objects; module BTF is encoded against the unfiltered vmlinux BTF and
