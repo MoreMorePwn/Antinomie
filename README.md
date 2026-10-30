@@ -68,9 +68,8 @@ the guest kernel, and investigate everything it did in one desktop app.
 
 **A sandbox at kernel level**
 
-Samples run in QEMU VMs on your own machine. A patched Linux 6.12.94 guest
-kernel observes and controls them, so nothing runs beside the sample for it
-to find.
+Samples run in QEMU VMs on your own machine. A patched guest kernel observes
+and controls them, so nothing runs beside the sample for it to find.
 
 </td>
 <td width="33%" valign="top">
@@ -140,7 +139,7 @@ the host. See the [tool requirements](docs/usage.md#dependencies-and-analysis-to
 ```text
 Program and descendants in the guest
                 ↓
-      Patched Linux guest kernel
+  Patched Linux 6.12.94 guest kernel
                 ↓
        Shared-memory transport
                 ↓
