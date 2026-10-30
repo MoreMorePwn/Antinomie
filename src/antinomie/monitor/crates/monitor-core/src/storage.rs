@@ -1252,7 +1252,12 @@ pub(crate) fn reset_vm_disk(
         let account = account
             .map(|mut account| {
                 account
-                    .provision(&disk, vm.ram_mib, interface)
+                    .provision(
+                        &disk,
+                        vm.ram_mib,
+                        interface,
+                        crate::guest_account::boot_disk(&vm.stealth),
+                    )
                     .map(|()| account)
             })
             .transpose()?;

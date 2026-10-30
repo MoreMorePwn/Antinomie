@@ -481,6 +481,11 @@ it runs.
 - **Debian Minimal disks carry GRUB's boot code.** Provisioning runs
   `grub-install` as the installer does, so the VM's MBR and `/boot/grub` hold
   GRUB (and debconf its install device) instead of an empty boot sector.
+  The debconf answer names the VM's own disk on its bus (`/dev/vda` on
+  virtio, `/dev/sda` on SATA, `/dev/nvme0n1` on NVMe), not the provisioning
+  tool's `/dev/sda`, and follows a device profile that moves the disk to
+  another bus, so a grub-pc upgrade in the guest installs to a disk that
+  exists.
 
 - **Debian Minimal's kernel banner is Debian's.** `/proc/version` now matches
   the banner of Debian's own `/boot/vmlinuz` exactly, down to the linker

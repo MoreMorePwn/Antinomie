@@ -108,6 +108,7 @@ fn account() -> GuestAccount {
         password_hash: guest_hash(),
         root_uuid: None,
         interface: None,
+        boot_disk: None,
     }
 }
 /// A guestfish stand-in: the read-only probe lists `filesystems`, the
@@ -385,6 +386,7 @@ fn partitions_follow_the_installer_and_the_vm() {
     let disk = root.join("disk.qcow2");
     fs::write(&disk, b"disk").unwrap();
     let mut account = account();
+    account.boot_disk = Some("/dev/vda".into());
     account
         .provision_with(
             &disk,
@@ -414,8 +416,12 @@ fn partitions_follow_the_installer_and_the_vm() {
     // disk's root UUID) before grub.cfg is written, as grub-installer does:
     // the helper runs for the BIOS disk.
     assert!(BOOT_LOADER.find("grub-install --force /dev/sda") < BOOT_LOADER.find("update-grub"));
-    assert!(BOOT_LOADER.contains("grub-pc grub-pc/install_devices multiselect /dev/sda"));
-    assert!(input.contains(".grub.sh bios\\n"), "{input}");
+    // The appliance installs to its /dev/sda; debconf names the VM's own disk
+    // (virtio's vda here), which grub-pc's upgrades in the VM install to.
+    assert!(BOOT_LOADER.contains("grub-pc grub-pc/install_devices multiselect %s"));
+    assert!(BOOT_LOADER.contains("' \"$2\" | debconf-set-selections"));
+    assert!(!BOOT_LOADER.contains("multiselect /dev/sda"));
+    assert!(input.contains(".grub.sh bios /dev/vda\\n"), "{input}");
     // The whole provisioning still fits the tool's standard input.
     assert!(input.len() < 4096, "{}", input.len());
     // The initramfs helper reaches the appliance as a file, runs after the
@@ -669,7 +675,7 @@ fn a_uefi_disk_is_laid_out_and_set_up_as_the_installer_does() {
     // The ESP is formatted for this VM and mounted for grub-install.
     assert!(position("mkfs vfat /dev/sda1\n") < position("mount /dev/sda2 /\n"));
     assert!(position("mount /dev/sda2 /\n") < position("mount /dev/sda1 /boot/efi\n"));
-    assert!(position("mount /dev/sda1 /boot/efi\n") < position(".grub.sh uefi\\n"));
+    assert!(position("mount /dev/sda1 /boot/efi\n") < position(".grub.sh uefi /dev/sda\\n"));
     assert!(script.contains("# swap was on /dev/sda3 during installation"));
     assert!(script.contains(" RESUME=UUID=1c2d3e4f-5061-4b7c-8d9e-0f1a2b3c4d5e 8:2\\n"));
     // The disk's and its partitions' GUIDs of its own, after unmounting.
@@ -707,4 +713,66 @@ fn a_uefi_disk_is_laid_out_and_set_up_as_the_installer_does() {
         commands[..2],
         ["part-expand-gpt /dev/sda", "part-del /dev/sda 3"]
     );
+}
+
+/// grub-pc's debconf answer names the VM's disk on its bus, at provisioning
+/// and when the profile moves the disk; the record keeps it, and a disk
+/// provisioned before keeps the appliance's /dev/sda until then.
+#[test]
+fn the_boot_disk_answer_follows_the_vm_disk_bus() {
+    use crate::stealth::{DiskBus, StealthProfile};
+    let on = |bus| {
+        boot_disk(&StealthProfile {
+            disk_bus: bus,
+            ..StealthProfile::default()
+        })
+    };
+    assert_eq!(on(DiskBus::Virtio), "/dev/vda");
+    assert_eq!(on(DiskBus::Sata), "/dev/sda");
+    assert_eq!(on(DiskBus::Nvme), "/dev/nvme0n1");
+    let root = std::env::temp_dir().join(format!("ant-account-boot-{}", storage::unique_id()));
+    storage::private_dir(&root).unwrap();
+    let disk = root.join("disk.qcow2");
+    fs::write(&disk, b"disk").unwrap();
+    // One stand-in for every run: writing an executable while another test
+    // thread forks can leave it busy for an exec.
+    let tool = fake_tool(&root, false, PARTITIONED);
+    let mut account = account();
+    assert_eq!(account.boot_disk(), "/dev/sda");
+    // The script the guest runs over a scratch debconf stand-in: the answer
+    // names the device, only where GRUB for BIOS is installed.
+    let commands = boot_disk_commands("/dev/vda");
+    assert!(commands.starts_with("if [ -d /usr/lib/grub/i386-pc ]; then"));
+    assert!(commands.contains("multiselect /dev/vda\\n' | debconf-set-selections"));
+    for device in ["/dev/vda", "/dev/sda", "/dev/nvme0n1"] {
+        account.set_boot_disk_with(&disk, &tool, device).unwrap();
+        assert_eq!(account.boot_disk(), device);
+        let input = input_of(&root);
+        assert!(input.starts_with("run\nmount /dev/sda1 /\nmkdir /root/.provision-"));
+        assert!(
+            input.contains(&format!("install_devices multiselect {device}\\\\n")),
+            "{input}"
+        );
+        for absent in ["chpasswd", "set-uuid", "part-", "machine-id", "interfaces"] {
+            assert!(!input.contains(absent), "{absent}");
+        }
+        account.save(&root).unwrap();
+        assert_eq!(GuestAccount::load(&root).unwrap().boot_disk(), device);
+    }
+    for bad in ["", "/dev/vdb", "/dev/sda; reboot", "vda"] {
+        let mut record = self::account();
+        record.boot_disk = Some(bad.into());
+        assert!(record.validate().is_err(), "{bad}");
+        assert!(
+            record
+                .provision_with(&disk, &tool, 1024, &Password::Hashed(&guest_hash()), None,)
+                .is_err()
+        );
+        assert!(
+            self::account()
+                .set_boot_disk_with(&disk, &tool, bad)
+                .is_err()
+        );
+    }
+    fs::remove_dir_all(root).unwrap();
 }

@@ -1,6 +1,7 @@
 #!/bin/sh
 # GRUB as the installer's grub-installer sets it up on this VM's disk, run in
-# the guest by provisioning. usage: boot_loader.sh bios|uefi
+# the guest by provisioning. usage: boot_loader.sh bios|uefi DISK
+# DISK is the VM's disk as the guest names it (/dev/vda on virtio).
 # SPDX-License-Identifier: GPL-3.0-only
 # Copyright (c) 2026 MikiMiku (MoreMorePwn)
 set -eu
@@ -9,11 +10,11 @@ bios)
     # grub-install --force writes the boot code into the MBR and the gap
     # before the first partition, with /boot/grub/i386-pc beside it (core.img
     # finds this disk's root by its UUID, so every VM gets its own). The
-    # device goes into debconf for grub-pc's upgrades (the plain name: the
-    # appliance's by-id links name its own disk).
+    # appliance names the disk /dev/sda; debconf gets the VM's own name for
+    # it, which grub-pc's upgrades install to, as grub-installer leaves it.
     if [ -d /usr/lib/grub/i386-pc ]; then
         grub-install --force /dev/sda >/dev/null 2>&1
-        printf 'grub-pc grub-pc/install_devices multiselect /dev/sda\ngrub-pc grub-pc/install_devices_empty boolean false\ngrub-pc grub-pc/install_devices_empty seen false\n' | debconf-set-selections
+        printf 'grub-pc grub-pc/install_devices multiselect %s\ngrub-pc grub-pc/install_devices_empty boolean false\ngrub-pc grub-pc/install_devices_empty seen false\n' "$2" | debconf-set-selections
     fi
     ;;
 uefi)

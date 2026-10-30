@@ -26,6 +26,9 @@ const PROVISION_TIMEOUT: Duration = Duration::from_secs(600);
 /// The interface name a disk provisioned before 0.7.1 configures: the base
 /// wrote the stanza for the NIC at PCI 00:19.0 when it was built.
 const LEGACY_INTERFACE: &str = "enp0s25";
+/// The disk grub-pc's debconf names on a BIOS disk provisioned before 0.8.0:
+/// the appliance's name for it, whatever the VM's bus.
+const LEGACY_BOOT_DISK: &str = "/dev/sda";
 /// What the guest prints before the account's password hash.
 const HASH_MARKER: &str = "hash:";
 /// GRUB as the installer's grub-installer sets it up, for a BIOS (MBR) or
@@ -67,6 +70,12 @@ pub(crate) struct GuestAccount {
     /// on such a base, nothing on others.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     interface: Option<String>,
+    /// The VM's disk as the guest names it (`boot_disk`), which grub-pc's
+    /// debconf answer names on a BIOS disk, as grub-installer leaves it:
+    /// written at provisioning and when the device profile moves the disk to
+    /// another bus. None: [`LEGACY_BOOT_DISK`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    boot_disk: Option<String>,
 }
 impl std::fmt::Debug for GuestAccount {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -75,6 +84,7 @@ impl std::fmt::Debug for GuestAccount {
             .field("password_hash", &"[REDACTED]")
             .field("root_uuid", &self.root_uuid)
             .field("interface", &self.interface)
+            .field("boot_disk", &self.boot_disk)
             .finish()
     }
 }
@@ -182,6 +192,66 @@ fn valid_interface(name: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
 }
 
+/// The VM's disk as its guest names it on the profile's bus (no by-id link:
+/// QEMU's virtio disk has no serial, so grub-installer would name `/dev/vda`
+/// too; the plain name also holds for the other buses).
+pub(crate) fn boot_disk(profile: &crate::stealth::StealthProfile) -> &'static str {
+    match profile.disk_bus {
+        crate::stealth::DiskBus::Virtio => "/dev/vda",
+        crate::stealth::DiskBus::Sata => "/dev/sda",
+        crate::stealth::DiskBus::Nvme => "/dev/nvme0n1",
+    }
+}
+
+/// Whether `device` is one of the names [`boot_disk`] gives.
+fn valid_boot_disk(device: &str) -> bool {
+    ["/dev/vda", "/dev/sda", "/dev/nvme0n1"].contains(&device)
+}
+
+/// The guest commands that point grub-pc's debconf answer at `device` on a
+/// BIOS installation (nothing where GRUB for BIOS is not installed).
+fn boot_disk_commands(device: &str) -> String {
+    format!(
+        "if [ -d /usr/lib/grub/i386-pc ]; then printf 'grub-pc grub-pc/install_devices multiselect {device}\\n' | debconf-set-selections; fi\n"
+    )
+}
+
+/// Run `commands(staging)` as a shell script in the guest's root of `disk`
+/// (the VM off), with a private staging directory removed afterwards, then
+/// sync the disk.
+fn edit_offline(
+    disk: &Path,
+    executable: &Path,
+    commands: impl FnOnce(&str) -> String,
+) -> Result<(), String> {
+    let probe = run_private(&mut guestfish(executable, disk, false), PROBE, true)?;
+    let layout = parse_probe(&String::from_utf8_lossy(&probe))?;
+    let staging = format!("/root/.provision-{}", storage::unique_id());
+    let guest = format!(
+        "set -eu\ntrap 'rm -rf {staging}' EXIT\n{}",
+        commands(&staging)
+    );
+    let script = [
+        "run".to_owned(),
+        format!("mount {} /", layout.root),
+        format!("mkdir {staging}"),
+        format!("chmod 0700 {staging}"),
+        format!("write {staging}/edit.sh {}", fish_quote(&guest)),
+        format!("sh {}", fish_quote(&format!("sh {staging}/edit.sh"))),
+        "umount-all".to_owned(),
+        String::new(),
+    ]
+    .join("\n");
+    run_private(
+        &mut guestfish(executable, disk, true),
+        script.as_bytes(),
+        false,
+    )?;
+    File::open(disk)
+        .and_then(|file| file.sync_all())
+        .map_err(|_| "cannot sync the VM disk".to_owned())
+}
+
 /// The guest commands that set the password (from `password`) and print the
 /// hash the guest stored, after [`HASH_MARKER`].
 fn password_commands(username: &str, password: &Password) -> String {
@@ -283,6 +353,7 @@ pub(crate) fn fixture(username: &str) -> GuestAccount {
         password_hash: format!("$y$j9T${}${}", "s".repeat(22), "h".repeat(43)),
         root_uuid: None,
         interface: None,
+        boot_disk: None,
     }
 }
 
@@ -452,8 +523,10 @@ impl GuestAccount {
         disk: &Path,
         ram_mib: u32,
         interface: Option<&str>,
+        boot_disk: &str,
     ) -> Result<Self, String> {
         let mut account = Self::unprovisioned(credentials.username)?;
+        account.boot_disk = Some(boot_disk.to_owned());
         let executable = Self::provision_tool()?;
         account.provision_with(
             disk,
@@ -471,6 +544,7 @@ impl GuestAccount {
             password_hash: String::new(),
             root_uuid: None,
             interface: None,
+            boot_disk: None,
         })
     }
     fn provision_tool() -> Result<std::path::PathBuf, String> {
@@ -497,6 +571,13 @@ impl GuestAccount {
         {
             return Err("invalid provisioned network interface name".into());
         }
+        if self
+            .boot_disk
+            .as_deref()
+            .is_some_and(|device| !valid_boot_disk(device))
+        {
+            return Err("invalid provisioned boot disk name".into());
+        }
         Ok(())
     }
     /// The account's name (uid and gid 1000 in the guest).
@@ -512,6 +593,12 @@ impl GuestAccount {
     /// provisioned before 0.7.1.
     pub(crate) fn interface(&self) -> &str {
         self.interface.as_deref().unwrap_or(LEGACY_INTERFACE)
+    }
+    /// The VM's disk as grub-pc's debconf answer names it on a BIOS disk:
+    /// the one provisioning wrote, or the appliance's name for a disk
+    /// provisioned before 0.8.0.
+    pub(crate) fn boot_disk(&self) -> &str {
+        self.boot_disk.as_deref().unwrap_or(LEGACY_BOOT_DISK)
     }
     pub(crate) fn save(&self, directory: &Path) -> Result<(), String> {
         self.validate()?;
@@ -548,8 +635,10 @@ impl GuestAccount {
         disk: &Path,
         ram_mib: u32,
         interface: Option<&str>,
+        boot_disk: &str,
     ) -> Result<(), String> {
         let executable = Self::provision_tool()?;
+        self.boot_disk = Some(boot_disk.to_owned());
         let hash = self.password_hash.clone();
         self.provision_with(
             disk,
@@ -573,6 +662,9 @@ impl GuestAccount {
         }
         if interface.is_some_and(|name| !valid_interface(name)) {
             return Err("invalid network interface name".into());
+        }
+        if !valid_boot_disk(self.boot_disk()) {
+            return Err("invalid boot disk name".into());
         }
         let probe = run_private(&mut guestfish(executable, disk, false), PROBE, true)?;
         let layout = parse_probe(&String::from_utf8_lossy(&probe))?;
@@ -638,33 +730,29 @@ impl GuestAccount {
         if !valid_interface(interface) {
             return Err("invalid network interface name".into());
         }
-        let probe = run_private(&mut guestfish(executable, disk, false), PROBE, true)?;
-        let layout = parse_probe(&String::from_utf8_lossy(&probe))?;
-        let staging = format!("/root/.provision-{}", storage::unique_id());
-        let guest = format!(
-            "set -eu\ntrap 'rm -rf {staging}' EXIT\n{}",
-            interface_commands(interface, &staging)
-        );
-        let script = [
-            "run".to_owned(),
-            format!("mount {} /", layout.root),
-            format!("mkdir {staging}"),
-            format!("chmod 0700 {staging}"),
-            format!("write {staging}/interface.sh {}", fish_quote(&guest)),
-            format!("sh {}", fish_quote(&format!("sh {staging}/interface.sh"))),
-            "umount-all".to_owned(),
-            String::new(),
-        ]
-        .join("\n");
-        run_private(
-            &mut guestfish(executable, disk, true),
-            script.as_bytes(),
-            false,
-        )?;
-        File::open(disk)
-            .and_then(|file| file.sync_all())
-            .map_err(|_| "cannot sync the VM disk".to_owned())?;
+        edit_offline(disk, executable, |staging| {
+            interface_commands(interface, staging)
+        })?;
         self.interface = Some(interface.to_owned());
+        Ok(())
+    }
+    /// Point grub-pc's debconf answer at `device` (the VM off): the device
+    /// profile moved the disk to another bus. A UEFI disk has no such answer.
+    pub(crate) fn set_boot_disk(&mut self, disk: &Path, device: &str) -> Result<(), String> {
+        let executable = Self::provision_tool()?;
+        self.set_boot_disk_with(disk, &executable, device)
+    }
+    fn set_boot_disk_with(
+        &mut self,
+        disk: &Path,
+        executable: &Path,
+        device: &str,
+    ) -> Result<(), String> {
+        if !valid_boot_disk(device) {
+            return Err("invalid boot disk name".into());
+        }
+        edit_offline(disk, executable, |_| boot_disk_commands(device))?;
+        self.boot_disk = Some(device.to_owned());
         Ok(())
     }
     /// The guestfish commands. The password reaches the guest's chpasswd as
@@ -773,6 +861,8 @@ impl GuestAccount {
             // for the disk's firmware, then the initramfs's resume device.
             let (initrd, loader) = (format!("{staging}.initrd.py"), format!("{staging}.grub.sh"));
             let firmware = if layout.gpt { "uefi" } else { "bios" };
+            // grub-pc's debconf answer: the VM's disk as its guest names it.
+            let boot_disk = self.boot_disk();
             let device = format!("{INSTALL_MAJOR}:{}", layout.root_number());
             commands.extend([
                 format!(
@@ -786,7 +876,7 @@ impl GuestAccount {
                 format!(
                     "sh {}",
                     fish_quote(&format!(
-                        "set -eu\ntrap 'rm -f {initrd} {loader}' EXIT\nsh {loader} {firmware}\nmkdir -p /etc/initramfs-tools/conf.d\npython3 -I {initrd} {resume} {device}\n"
+                        "set -eu\ntrap 'rm -f {initrd} {loader}' EXIT\nsh {loader} {firmware} {boot_disk}\nmkdir -p /etc/initramfs-tools/conf.d\npython3 -I {initrd} {resume} {device}\n"
                     ))
                 ),
             ]);

@@ -4078,12 +4078,20 @@ the kernel read the table again and the partition nodes vanish for a moment), an
 installer's grub-installer does it (`BOOT_LOADER`): `grub-install --force
 /dev/sda` writes the boot code into the MBR and the gap before the root
 partition and `/boot/grub/i386-pc` (core.img finds the root by this VM's UUID,
-so each VM runs it), debconf gets `grub-pc/install_devices` (`/dev/sda`: the
-appliance's by-id links name its own disk, not the VM's) with
+so each VM runs it), debconf gets `grub-pc/install_devices` naming the VM's
+disk as its guest sees it on the profile's bus (`guest_account::boot_disk`:
+`/dev/vda` on virtio, `/dev/sda` on SATA, `/dev/nvme0n1` on NVMe; QEMU's
+virtio disk has no serial, so grub-installer would have no by-id name for it
+either, and the appliance's own by-id links name its disk, not the VM's) with
 `install_devices_empty false`, and `update-grub` writes `grub.cfg` for the
 VM's UUIDs. A sample reading the disk's first sectors finds GRUB, as on an
 installed PC. QEMU still boots the Antinomie kernel directly (the GRUB steps
-run from the uploaded `guest_account/boot_loader.sh`, `bios` or `uefi`).
+run from the uploaded `guest_account/boot_loader.sh`, `bios` or `uefi`, and
+the disk name). A later device profile that moves the disk to another bus
+rewrites that answer on the VM's active disk (`set_boot_disk`, as a moved NIC
+rewrites its stanza); a snapshot's disk keeps its own answer, which only a
+grub-pc upgrade inside a restored snapshot would read. Disks provisioned
+before 0.8.0 named `/dev/sda` on every bus and keep it until such a change.
 
 A VM whose stealth profile boots UEFI (OVMF, with or without Secure Boot)
 gets a UEFI PC's disk instead (`uefi_disk.rs`). The Debian installer lays a

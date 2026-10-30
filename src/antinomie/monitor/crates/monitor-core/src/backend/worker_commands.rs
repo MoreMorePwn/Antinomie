@@ -613,6 +613,25 @@ impl Worker {
                         account.save(&dir)?;
                     }
                 }
+                // A new disk bus renames the disk in the guest: grub-pc's
+                // debconf answer on a BIOS disk follows, as it does for the
+                // active disk only (a snapshot's disk keeps its own answer,
+                // which matters only to a grub-pc upgrade there).
+                let boot_disk = crate::guest_account::boot_disk(&vm.stealth);
+                if disk_bundle
+                    .guest
+                    .as_ref()
+                    .is_some_and(|guest| guest.requires_credentials)
+                    && disk_bundle.uefi.uefi_disk.is_none()
+                    && boot_disk != crate::guest_account::boot_disk(&current.stealth)
+                {
+                    let mut account = crate::guest_account::GuestAccount::load(&dir)?;
+                    if account.boot_disk() != boot_disk {
+                        let disk = crate::snapshots::active_disk(&self.options, current)?;
+                        account.set_boot_disk(&disk, boot_disk)?;
+                        account.save(&dir)?;
+                    }
+                }
                 let previous = current.clone();
                 let publication =
                     storage::save_vm_config(&self.options, &dir, &previous, &vm, &location);
@@ -893,6 +912,7 @@ impl Worker {
                         &bundle.stealth_support,
                         &vm.stealth,
                     ),
+                    crate::guest_account::boot_disk(&vm.stealth),
                 )?;
                 account.save(dir)?;
             }
