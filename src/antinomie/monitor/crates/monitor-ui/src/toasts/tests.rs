@@ -101,14 +101,14 @@ fn the_stack_sits_above_the_status_bar() {
 }
 
 #[test]
-fn timers_follow_the_level_and_errors_stay() {
+fn timers_follow_the_level_and_errors_leave_after_thirty_seconds() {
     let mut toasts = Toasts::default();
     toasts.add(Level::Info, "i", "", None, false);
     toasts.add(Level::Warn, "w", "", None, false);
     toasts.add(Level::Error, "e", "", None, false);
     assert_eq!(toasts.items()[0].left, Some(6.0));
     assert_eq!(toasts.items()[1].left, Some(12.0));
-    assert_eq!(toasts.items()[2].left, None);
+    assert_eq!(toasts.items()[2].left, Some(30.0));
     toasts.tick(5.9);
     assert_eq!(toasts.items().len(), 3);
     toasts.tick(0.2);
@@ -127,11 +127,14 @@ fn timers_follow_the_level_and_errors_stay() {
         .map(|toast| toast.title.as_str())
         .collect();
     assert_eq!(titles, ["e"], "warning left after 12 s");
-    toasts.tick(3600.0);
-    assert_eq!(toasts.items().len(), 1, "an error stays until dismissed");
+    toasts.tick(17.7);
+    assert_eq!(toasts.items().len(), 1, "an error stays just under 30 s");
+    toasts.tick(0.2);
+    assert!(toasts.items().is_empty(), "error left after 30 s");
+    toasts.add(Level::Error, "e", "", None, false);
     let id = toasts.items()[0].id;
     toasts.dismiss(id);
-    assert!(toasts.items().is_empty());
+    assert!(toasts.items().is_empty(), "and can be dismissed before");
 }
 
 #[test]
@@ -538,7 +541,7 @@ fn the_fraction_is_zero_at_expiry_and_never_leaves_zero_to_one() {
 }
 
 #[test]
-fn the_fraction_holds_while_hovered_and_a_sticky_toast_has_none() {
+fn the_fraction_holds_while_hovered_and_an_error_has_its_own_bar() {
     let mut toasts = Toasts::default();
     toasts.add(Level::Info, "i", "", None, false);
     toasts.add(Level::Error, "e", "", None, false);
@@ -551,7 +554,11 @@ fn the_fraction_holds_while_hovered_and_a_sticky_toast_has_none() {
     toasts.items[0].hovered = false;
     toasts.tick(1.5);
     assert_eq!(fraction_of(&toasts, 0), Some(0.5), "resumes from there");
-    assert_eq!(fraction_of(&toasts, 1), None, "sticky: no bar");
+    assert_eq!(
+        fraction_of(&toasts, 1),
+        Some(0.8),
+        "an error counts down 30 s"
+    );
 }
 
 #[test]
@@ -580,7 +587,7 @@ fn the_bar_is_a_thin_line_inside_the_bottom_edge_and_shrinks_to_nothing() {
 }
 
 #[test]
-fn only_a_running_timed_toast_asks_for_repaints() {
+fn only_a_running_toast_asks_for_repaints() {
     let ctx = context();
     let repaint = |time: f64| {
         let (output, _) = run(&ctx, time, Vec::new());
@@ -595,11 +602,9 @@ fn only_a_running_timed_toast_asks_for_repaints() {
         repaint(f64::from(frame) * 0.1);
     }
     assert_eq!(repaint(1.0), Duration::MAX, "no toast, no repaint");
-    push(&ctx, Level::Error, "Failed", "sticky", None);
-    for frame in 0..3 {
-        repaint(2.0 + f64::from(frame) * 0.1);
-    }
-    assert_eq!(repaint(5.0), Duration::MAX, "a sticky toast needs none");
     push(&ctx, Level::Info, "Saved", "report.html", None);
-    assert!(repaint(5.1) <= BAR_FRAME, "a running countdown does");
+    for frame in 0..3 {
+        repaint(5.0 + f64::from(frame) * 0.1);
+    }
+    assert!(repaint(5.4) <= BAR_FRAME, "a running countdown does");
 }

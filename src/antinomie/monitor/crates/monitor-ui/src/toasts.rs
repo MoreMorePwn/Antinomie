@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Notification toasts (design section 6.12): a bottom-right stack with an
 //! icon, a title, a one-line detail, an optional action link and a close
-//! button. Info toasts leave after 6 s, warnings after 12 s and errors stay
-//! until dismissed; hovering a toast pauses its timer. A timed toast shows
-//! its time left as a thin bar along its bottom edge. A burst of the same
+//! button. Info toasts leave after 6 s, warnings after 12 s and errors after
+//! 30 s; hovering a toast pauses its timer. Every toast shows its time left
+//! as a thin bar along its bottom edge. A burst of the same
 //! toast becomes one toast with a count. Every toast is also an Activity row.
 //!
 //! The stack lives in the egui context, so any code with a `Context` or a
@@ -13,9 +13,11 @@ use crate::{activity::Level, theme, workspace::Panel};
 use eframe::egui::{self, RichText};
 use std::time::Duration;
 
-/// Seconds an info toast stays; warnings stay twice as long.
+/// Seconds an info toast stays; warnings stay twice as long and errors five
+/// times as long, so a failure is read before it goes (it stays in Activity).
 pub(crate) const INFO_SECS: f64 = 6.0;
 pub(crate) const WARN_SECS: f64 = 12.0;
+pub(crate) const ERROR_SECS: f64 = 30.0;
 /// Toasts shown at once; the rest wait, with their timers stopped.
 pub(crate) const VISIBLE: usize = 5;
 /// Toasts kept in all; the oldest non-error one goes first.
@@ -87,7 +89,7 @@ fn lifetime(level: Level) -> Option<f64> {
     match level {
         Level::Info => Some(INFO_SECS),
         Level::Warn => Some(WARN_SECS),
-        Level::Error => None,
+        Level::Error => Some(ERROR_SECS),
     }
 }
 
