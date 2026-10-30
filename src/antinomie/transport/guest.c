@@ -468,9 +468,11 @@ static int __init ant_guest_init(void)
 	control = &region->control;
 	directory = region->directory;
 	producers = alloc_percpu(struct ant_producer);
-	if (!producers) goto free_control;
+	if (!producers)
+		goto free_control;
 	cpus = kcalloc(queue_count, sizeof(*cpus), GFP_KERNEL);
-	if (!cpus) goto free_producers;
+	if (!cpus)
+		goto free_producers;
 	/* Every ring has the same size; when memory is short, try a smaller one. */
 retry:
 	index = 0;

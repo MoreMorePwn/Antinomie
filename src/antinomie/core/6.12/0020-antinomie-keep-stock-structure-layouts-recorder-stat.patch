@@ -1,4 +1,4 @@
-From 4954a36bf3bcd74a6148d7aad48a578fe47401cb Mon Sep 17 00:00:00 2001
+From 1a1d072f3369a6b0a76a86aef134963a8f40949f Mon Sep 17 00:00:00 2001
 From: MikiMiku <jonathanirvinjo@gmail.com>
 Date: Thu, 29 Oct 2026 09:59:56 +0700
 Subject: [PATCH] antinomie: keep stock structure layouts: recorder state in
@@ -75,7 +75,7 @@ others lose code.
  create mode 100644 kernel/antinomie/state.h
 
 diff --git a/fs/aio.c b/fs/aio.c
-index 46d6d4d..cdee952 100644
+index 46d6d4d84..cdee952b5 100644
 --- a/fs/aio.c
 +++ b/fs/aio.c
 @@ -196,9 +196,6 @@ struct poll_iocb {
@@ -185,7 +185,7 @@ index 46d6d4d..cdee952 100644
  
  	/* Done with the synchronous reference */
 diff --git a/fs/binfmt_elf.c b/fs/binfmt_elf.c
-index 9005620..7256e15 100644
+index 900562050..7256e15e1 100644
 --- a/fs/binfmt_elf.c
 +++ b/fs/binfmt_elf.c
 @@ -1568,26 +1568,27 @@ static void fill_prstatus(struct elf_prstatus_common *prstatus,
@@ -444,7 +444,7 @@ index 9005620..7256e15 100644
  		kfree(phdr4note);
  	}
 diff --git a/fs/coredump.c b/fs/coredump.c
-index 00bfd7a..d20ad9f 100644
+index 00bfd7aee..d20ad9fd3 100644
 --- a/fs/coredump.c
 +++ b/fs/coredump.c
 @@ -576,26 +576,9 @@ static int umh_coredump_setup(struct subprocess_info *info, struct cred *new)
@@ -572,7 +572,7 @@ index 00bfd7a..d20ad9f 100644
  			return 0;
  		}
 diff --git a/include/linux/antinomie_monitor.h b/include/linux/antinomie_monitor.h
-index c9752cd..06bb59a 100644
+index c9752cdd8..06bb59a29 100644
 --- a/include/linux/antinomie_monitor.h
 +++ b/include/linux/antinomie_monitor.h
 @@ -8,7 +8,6 @@ struct task_struct;
@@ -780,7 +780,7 @@ index c9752cd..06bb59a 100644
  	return 0;
  }
 diff --git a/include/linux/coredump.h b/include/linux/coredump.h
-index 593d637..6b36311 100644
+index 593d6371f..6b3631189 100644
 --- a/include/linux/coredump.h
 +++ b/include/linux/coredump.h
 @@ -16,26 +16,6 @@ struct core_vma_metadata {
@@ -852,7 +852,7 @@ index 593d637..6b36311 100644
  			     struct core_vma_metadata *vmas, unsigned int vma_count,
  			     struct ant_coredump_live *live);
 diff --git a/include/linux/io_uring_types.h b/include/linux/io_uring_types.h
-index 21d484d..6d47d0d 100644
+index 21d484d70..6d47d0d3f 100644
 --- a/include/linux/io_uring_types.h
 +++ b/include/linux/io_uring_types.h
 @@ -237,13 +237,6 @@ struct io_ring_ctx {
@@ -881,7 +881,7 @@ index 21d484d..6d47d0d 100644
  
  struct io_overflow_cqe {
 diff --git a/include/linux/sched.h b/include/linux/sched.h
-index b220f8f..f9ffe42 100644
+index b220f8f0f..f9ffe42ca 100644
 --- a/include/linux/sched.h
 +++ b/include/linux/sched.h
 @@ -800,22 +800,6 @@ struct task_struct {
@@ -908,7 +908,7 @@ index b220f8f..f9ffe42 100644
  	refcount_t			usage;
  	/* Per task flags (PF_*), defined further below: */
 diff --git a/io_uring/fs.c b/io_uring/fs.c
-index 0d3fdbf..a50dc6e 100644
+index 0d3fdbf16..a50dc6e80 100644
 --- a/io_uring/fs.c
 +++ b/io_uring/fs.c
 @@ -55,9 +55,7 @@ struct io_link {
@@ -923,7 +923,7 @@ index 0d3fdbf..a50dc6e 100644
  
  int io_renameat_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 diff --git a/io_uring/io_uring.c b/io_uring/io_uring.c
-index 8ff6d76..b78cb82 100644
+index 8ff6d762b..b78cb82f5 100644
 --- a/io_uring/io_uring.c
 +++ b/io_uring/io_uring.c
 @@ -935,9 +935,6 @@ void io_req_defer_failed(struct io_kiocb *req, s32 res)
@@ -1020,7 +1020,7 @@ index 8ff6d76..b78cb82 100644
  	BUILD_BUG_ON(sizeof(atomic_t) != sizeof(u32));
  
 diff --git a/io_uring/io_uring.h b/io_uring/io_uring.h
-index 7fa52e5..0f147e7 100644
+index 7fa52e58f..0f147e7ab 100644
 --- a/io_uring/io_uring.h
 +++ b/io_uring/io_uring.h
 @@ -40,14 +40,14 @@ static inline void ant_uring_complete(struct io_kiocb *req, s32 result,
@@ -1111,7 +1111,7 @@ index 7fa52e5..0f147e7 100644
  }
  
 diff --git a/io_uring/net.c b/io_uring/net.c
-index 92b1710..857b0c2 100644
+index 92b1710a7..857b0c2f1 100644
 --- a/io_uring/net.c
 +++ b/io_uring/net.c
 @@ -782,9 +782,8 @@ static int io_recvmsg_copy_hdr(struct io_kiocb *req,
@@ -1165,7 +1165,7 @@ index 92b1710..857b0c2 100644
  	}
  
 diff --git a/io_uring/net.h b/io_uring/net.h
-index 67fddfd..52bfee0 100644
+index 67fddfdb5..52bfee05f 100644
 --- a/io_uring/net.h
 +++ b/io_uring/net.h
 @@ -15,11 +15,6 @@ struct io_async_msghdr {
@@ -1181,7 +1181,7 @@ index 67fddfd..52bfee0 100644
  };
  
 diff --git a/io_uring/rw.c b/io_uring/rw.c
-index 25e2755..48dd02d 100644
+index 25e2755c1..48dd02d9e 100644
 --- a/io_uring/rw.c
 +++ b/io_uring/rw.c
 @@ -38,12 +38,12 @@ static void ant_uring_rw_capture(struct io_kiocb *req, bool output, ssize_t resu
@@ -1200,7 +1200,7 @@ index 25e2755..48dd02d 100644
  #endif
  }
 diff --git a/kernel/antinomie/Kconfig b/kernel/antinomie/Kconfig
-index 669a14f..638e1d3 100644
+index 669a14f5a..638e1d392 100644
 --- a/kernel/antinomie/Kconfig
 +++ b/kernel/antinomie/Kconfig
 @@ -1,6 +1,6 @@
@@ -1212,7 +1212,7 @@ index 669a14f..638e1d3 100644
  	help
  	  Host control, PTY sessions and observational syscall telemetry over
 diff --git a/kernel/antinomie/Makefile b/kernel/antinomie/Makefile
-index 9f3944a..214ccb2 100644
+index 9f3944aaf..214ccb279 100644
 --- a/kernel/antinomie/Makefile
 +++ b/kernel/antinomie/Makefile
 @@ -7,7 +7,7 @@ ccflags-remove-y += $(DEBUG_CFLAGS)
@@ -1225,7 +1225,7 @@ index 9f3944a..214ccb2 100644
  # labels bracket them too.
  obj-$(CONFIG_X86_64) += capture_x86.o
 diff --git a/kernel/antinomie/async.c b/kernel/antinomie/async.c
-index efb999e..cefb059 100644
+index efb999e5a..cefb05909 100644
 --- a/kernel/antinomie/async.c
 +++ b/kernel/antinomie/async.c
 @@ -5,6 +5,7 @@
@@ -1735,7 +1735,7 @@ index efb999e..cefb059 100644
   * A read without output has nothing to observe: its entry is dropped.
   */
 diff --git a/kernel/antinomie/control.c b/kernel/antinomie/control.c
-index c07ebf1..4867477 100644
+index c07ebf1ca..48674770a 100644
 --- a/kernel/antinomie/control.c
 +++ b/kernel/antinomie/control.c
 @@ -30,6 +30,7 @@
@@ -1756,7 +1756,7 @@ index c07ebf1..4867477 100644
  	session->pgrp = get_task_pid(current, PIDTYPE_PGID);
  	ant_specimen_arm(launch->specimen);
 diff --git a/kernel/antinomie/debug.c b/kernel/antinomie/debug.c
-index a71441c..02e4ae2 100644
+index fb573ae4e..d13675cd0 100644
 --- a/kernel/antinomie/debug.c
 +++ b/kernel/antinomie/debug.c
 @@ -49,6 +49,7 @@
@@ -1784,7 +1784,7 @@ index a71441c..02e4ae2 100644
  		return false;
  	r = kmalloc(sizeof(*r), GFP_ATOMIC | __GFP_NOWARN);
  	if (!r)
-@@ -2102,7 +2104,7 @@ void ant_debug_run_stop(u64 root_cookie)
+@@ -2112,7 +2114,7 @@ void ant_debug_run_stop(u64 root_cookie)
  
  	mutex_lock(&dbg_lock);
  	list_for_each_entry(s, &sessions, node) {
@@ -1793,7 +1793,7 @@ index a71441c..02e4ae2 100644
  			continue;
  		/* From now on no new stop starts; the worker ends the ones in place. */
  		WRITE_ONCE(s->run_stop_req, true);
-@@ -2318,7 +2320,8 @@ static struct ant_dbg *create_session(const u8 *args, int *error)
+@@ -2328,7 +2330,8 @@ static struct ant_dbg *create_session(const u8 *args, int *error)
  	rcu_read_lock();
  	leader = find_task_by_pid_ns(s->tgid, &init_pid_ns);
  	*error = -ESRCH;
@@ -1803,7 +1803,7 @@ index a71441c..02e4ae2 100644
  	    leader->start_boottime == s->start_ns) {
  		*error = eligible_group(leader);
  		if (!*error) {
-@@ -2385,7 +2388,7 @@ int ant_debug_launch(void)
+@@ -2395,7 +2398,7 @@ int ant_debug_launch(void)
  	s = session_alloc();
  	if (!s)
  		return -ENOMEM;
@@ -1813,7 +1813,7 @@ index a71441c..02e4ae2 100644
  	s->tgid = task_tgid_nr(current);
  	get_task_struct(current);
 diff --git a/kernel/antinomie/fileid.c b/kernel/antinomie/fileid.c
-index 8be3f03..0d378b8 100644
+index 8be3f03d2..0d378b84c 100644
 --- a/kernel/antinomie/fileid.c
 +++ b/kernel/antinomie/fileid.c
 @@ -22,6 +22,7 @@
@@ -1845,7 +1845,7 @@ index 8be3f03..0d378b8 100644
  	rec = kzalloc(ANTC_EXECIMG_HEADER + 2 * ANTC_EXECIMG_PATH_MAX, GFP_KERNEL);
  	path = kmalloc(ANTC_EXECIMG_PATH_MAX, GFP_KERNEL);
 diff --git a/kernel/antinomie/filemap.c b/kernel/antinomie/filemap.c
-index 0aaf4df..acc1542 100644
+index 0aaf4dfea..acc1542d6 100644
 --- a/kernel/antinomie/filemap.c
 +++ b/kernel/antinomie/filemap.c
 @@ -76,6 +76,7 @@
@@ -1875,7 +1875,7 @@ index 0aaf4df..acc1542 100644
  	slot = ant_monitor_filemap(false);
  	if (slot)
 diff --git a/kernel/antinomie/fileops.c b/kernel/antinomie/fileops.c
-index 2797a93..988d8bf 100644
+index 2797a93f2..988d8bff9 100644
 --- a/kernel/antinomie/fileops.c
 +++ b/kernel/antinomie/fileops.c
 @@ -41,6 +41,7 @@
@@ -1932,7 +1932,7 @@ index 2797a93..988d8bf 100644
  	ops = ant_monitor_fileops(&nr);
  	if (!ops || !copy_call(kind, nr))
 diff --git a/kernel/antinomie/guest.c b/kernel/antinomie/guest.c
-index 69f9b4d..6ab8a8d 100644
+index 69f9b4df1..6ab8a8de7 100644
 --- a/kernel/antinomie/guest.c
 +++ b/kernel/antinomie/guest.c
 @@ -2,7 +2,6 @@
@@ -1992,7 +1992,7 @@ index 69f9b4d..6ab8a8d 100644
  static int dispatch(const struct ant_message *req, size_t *payload_len)
  {
 diff --git a/kernel/antinomie/hash.c b/kernel/antinomie/hash.c
-index a5d0117..01d3a76 100644
+index a5d0117e8..01d3a768d 100644
 --- a/kernel/antinomie/hash.c
 +++ b/kernel/antinomie/hash.c
 @@ -65,6 +65,7 @@
@@ -2013,7 +2013,7 @@ index a5d0117..01d3a76 100644
  	job = kzalloc(sizeof(*job), GFP_NOWAIT | __GFP_NOWARN);
  	if (!job) {
 diff --git a/kernel/antinomie/manual_core.c b/kernel/antinomie/manual_core.c
-index cfbe73e..704d70e 100644
+index cfbe73ec1..704d70e56 100644
 --- a/kernel/antinomie/manual_core.c
 +++ b/kernel/antinomie/manual_core.c
 @@ -17,6 +17,7 @@
@@ -2140,7 +2140,7 @@ index cfbe73e..704d70e 100644
  	    task_tgid_nr(current) != session->identity.tgid ||
  	    !current->mm->binfmt || !current->mm->binfmt->core_dump ||
 diff --git a/kernel/antinomie/observer.c b/kernel/antinomie/observer.c
-index acf19c9..e172970 100644
+index acf19c99d..e17297019 100644
 --- a/kernel/antinomie/observer.c
 +++ b/kernel/antinomie/observer.c
 @@ -9,6 +9,7 @@
@@ -2182,7 +2182,7 @@ index acf19c9..e172970 100644
  	rcu_assign_pointer(active_observer, observer);
  	write_unlock_irq(&tasklist_lock);
 diff --git a/kernel/antinomie/process_core.c b/kernel/antinomie/process_core.c
-index 109f347..ed1206d 100644
+index 109f34707..ed1206dff 100644
 --- a/kernel/antinomie/process_core.c
 +++ b/kernel/antinomie/process_core.c
 @@ -22,6 +22,7 @@
@@ -2209,7 +2209,7 @@ index 109f347..ed1206d 100644
  		    !core->canceled) {
  			selected = core;
 diff --git a/kernel/antinomie/process_core.h b/kernel/antinomie/process_core.h
-index 005c0f2..98a1fbf 100644
+index 005c0f2c7..98a1fbf64 100644
 --- a/kernel/antinomie/process_core.h
 +++ b/kernel/antinomie/process_core.h
 @@ -2,8 +2,34 @@
@@ -2248,7 +2248,7 @@ index 005c0f2..98a1fbf 100644
  	u64 cookie, start_ns, nonce_lo, nonce_hi;
  	u32 tgid, max_size, timeout_ms, policy;
 diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
-index da72b6d..c7f323a 100644
+index da72b6d2b..c7f323ab8 100644
 --- a/kernel/antinomie/recorder.c
 +++ b/kernel/antinomie/recorder.c
 @@ -38,6 +38,7 @@
@@ -2594,7 +2594,7 @@ index da72b6d..c7f323a 100644
  	if (ctx) {
  		ant_capture_set_state(ctx, NULL, NULL);
 diff --git a/kernel/antinomie/run.c b/kernel/antinomie/run.c
-index 7994369..2464d6d 100644
+index 799436905..2464d6d02 100644
 --- a/kernel/antinomie/run.c
 +++ b/kernel/antinomie/run.c
 @@ -11,6 +11,7 @@
@@ -2711,7 +2711,7 @@ index 7994369..2464d6d 100644
  		error = send_sig(sig, task, 1);
 diff --git a/kernel/antinomie/state.c b/kernel/antinomie/state.c
 new file mode 100644
-index 0000000..ffd81c2
+index 000000000..ffd81c243
 --- /dev/null
 +++ b/kernel/antinomie/state.c
 @@ -0,0 +1,53 @@
@@ -2770,7 +2770,7 @@ index 0000000..ffd81c2
 +}
 diff --git a/kernel/antinomie/state.h b/kernel/antinomie/state.h
 new file mode 100644
-index 0000000..375b0d8
+index 000000000..375b0d87b
 --- /dev/null
 +++ b/kernel/antinomie/state.h
 @@ -0,0 +1,51 @@
@@ -2826,7 +2826,7 @@ index 0000000..375b0d8
 +
 +#endif
 diff --git a/kernel/fork.c b/kernel/fork.c
-index 2cb277b..4bb1652 100644
+index 2cb277bfc..4bb16528f 100644
 --- a/kernel/fork.c
 +++ b/kernel/fork.c
 @@ -1138,18 +1138,6 @@ static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
@@ -2849,7 +2849,7 @@ index 2cb277b..4bb1652 100644
  	err = alloc_thread_stack_node(tsk, node);
  	if (err)
 diff --git a/security/security.c b/security/security.c
-index 1a85b67..804d005 100644
+index 1a85b6794..804d00560 100644
 --- a/security/security.c
 +++ b/security/security.c
 @@ -11,6 +11,7 @@

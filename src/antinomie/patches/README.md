@@ -1,7 +1,7 @@
 # The Antinomie guest kernel patch series
 
 The guest kernel is Debian's `linux` 6.12.94-1 (trixie) with Antinomie's own
-patch series on top. The series is nineteen topic patches; each one adds one
+patch series on top. The series is twenty-two topic patches; each one adds one
 part of the design and says, in its description, what it adds, why, which
 existing kernel files it hooks and why there, and which contract revision it
 belongs to.
@@ -35,17 +35,17 @@ changes. Line counts are added/removed lines of the patch.
 
 | # | Patch | Lines | Own new files | Hooked kernel files |
 |---|---|---|---|---|
-| 1 | add the host control channel and its shared-memory transport | +1422 | `kernel/antinomie/{abi.h,queue.h,bootstrap_layout.h,bootstrap.c,guest.c,control.c,control_wire.h,Kconfig,Makefile}`, `include/linux/antinomie.h`, `include/linux/antinomie_boot.h` | `init/Kconfig`, `kernel/Makefile` |
+| 1 | add the host control channel and its shared-memory transport | +1417 | `kernel/antinomie/{abi.h,queue.h,bootstrap_layout.h,bootstrap.c,guest.c,control.c,control_wire.h,Kconfig,Makefile}`, `include/linux/antinomie.h`, `include/linux/antinomie_boot.h` | `init/Kconfig`, `kernel/Makefile` |
 | 2 | license the shared transport headers under MIT | +8 -4 | none (`abi.h`, `bootstrap_layout.h`, `queue.h`, `control_wire.h` change licence) | none |
-| 3 | add the x86-64 definitions and system call table | +4430 | `arch/x86/include/asm/antinomie.h`, `arch/x86/include/asm/antinomie_syscalls.h` (generated) | none |
-| 4 | record the system calls of launched and attached processes | +1551 -3 | `kernel/antinomie/{recorder.c,observer.c,observer.h}`, `include/linux/antinomie_monitor.h` | `kernel/fork.c`, `kernel/exit.c`, `fs/exec.c`, `include/linux/sched.h` |
-| 5 | decode system call arguments by syscall family | +4007 -13 | `kernel/antinomie/{native_capture.c,native_capture.h,capture_api.h,capture_x86.c}` | `ipc/sem.c` |
+| 3 | add the x86-64 definitions and system call table | +4424 | `arch/x86/include/asm/antinomie.h`, `arch/x86/include/asm/antinomie_syscalls.h` (generated) | none |
+| 4 | record the system calls of launched and attached processes | +1541 -3 | `kernel/antinomie/{recorder.c,observer.c,observer.h}`, `include/linux/antinomie_monitor.h` | `kernel/fork.c`, `kernel/exit.c`, `fs/exec.c`, `include/linux/sched.h` |
+| 5 | decode system call arguments by syscall family | +3938 -13 | `kernel/antinomie/{native_capture.c,native_capture.h,capture_api.h,capture_x86.c}` | `ipc/sem.c` |
 | 6 | track each launched run and stop its whole process tree | +403 -8 | `kernel/antinomie/{run.c,run.h}` | `include/linux/sched.h`, `kernel/fork.c`, `kernel/exit.c` |
 | 7 | observe io_uring and AIO requests | +2363 -27 | `kernel/antinomie/{async.c,async.h,async_capture.c,async_capture.h}` | `io_uring/{io_uring.c,io_uring.h,epoll.c,fs.c,futex.c,kbuf.c,net.c,net.h,openclose.c,rsrc.c,rw.c,statx.c,timeout.c,uring_cmd.c,waitid.c,xattr.c}`, `include/linux/io_uring_types.h`, `fs/aio.c`, `include/linux/sched.h`, `kernel/fork.c` |
-| 8 | capture the launched program's executable image | +575 -5 | `kernel/antinomie/{specimen.c,specimen.h}` | `fs/exec.c` |
+| 8 | capture the launched program's executable image | +574 -5 | `kernel/antinomie/{specimen.c,specimen.h}` | `fs/exec.c` |
 | 9 | publish credentials, file identities and file hashes | +1468 -7 | `kernel/antinomie/{fileid.c,fileid.h,hash.c,hash.h,notes.h}` | `kernel/cred.c`, `kernel/audit.c`, `fs/open.c`, `fs/namei.c`, `fs/exec.c`, `fs/file_table.c`, `fs/aio.c`, `io_uring/{io_uring.c,io_uring.h,fs.c,openclose.c,splice.c}`, `include/linux/sched.h`, `kernel/fork.c` |
-| 10 | capture process cores at exit and on request | +2320 -57 | `kernel/antinomie/{process_core.c,process_core.h,manual_core.c}` | `fs/coredump.c`, `fs/binfmt_elf.c`, `include/linux/coredump.h`, `kernel/exit.c`, `kernel/signal.c` |
-| 11 | add a ptrace-free debug engine | +4561 -13 | `kernel/antinomie/{debug.c,debug.h,debug_x86.c}` | `kernel/signal.c`, `kernel/entry/common.c`, `kernel/fork.c`, `fs/exec.c`, `mm/memory.c` |
+| 10 | capture process cores at exit and on request | +2321 -57 | `kernel/antinomie/{process_core.c,process_core.h,manual_core.c}` | `fs/coredump.c`, `fs/binfmt_elf.c`, `include/linux/coredump.h`, `kernel/exit.c`, `kernel/signal.c` |
+| 11 | add a ptrace-free debug engine | +4488 -13 | `kernel/antinomie/{debug.c,debug.h,debug_x86.c}` | `kernel/signal.c`, `kernel/entry/common.c`, `kernel/fork.c`, `fs/exec.c`, `mm/memory.c` |
 | 12 | sample guest memory and root filesystem usage | +234 | `kernel/antinomie/{resources.c,resources.h}` | none |
 | 13 | launch programs as a terminal shell would have run them | +74 -4 | none (`control.c`, `control_wire.h`) | none |
 | 14 | hide the recorder from programs in the guest | +223 -23 | `kernel/antinomie/{stealth.c,sections.h,section_begin.c,section_end.c}`, `include/linux/antinomie_stealth.h` | `kernel/kallsyms.c`, `fs/proc/base.c`, `drivers/acpi/scan.c` |

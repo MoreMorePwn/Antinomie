@@ -1,4 +1,4 @@
-From 2657d74b55c4091585ec60877bdb278ca2c9d7a8 Mon Sep 17 00:00:00 2001
+From 93ba5f7666f6459f856e7a0a6ff04342005d3502 Mon Sep 17 00:00:00 2001
 From: MikiMiku <jonathanirvinjo@gmail.com>
 Date: Thu, 29 Oct 2026 10:57:19 +0700
 Subject: [PATCH] antinomie: keep the kernel's BTF type for type Debian's
@@ -46,17 +46,17 @@ io_uring/waitid.c (inline attributes); fs/coredump.c loses code.
  kernel/Makefile                 |   5 +
  kernel/antinomie/Makefile       |   1 +
  kernel/antinomie/async.c        |  16 +-
- kernel/antinomie/core_writer.c  | 403 ++++++++++++++++++++++++++++++++
+ kernel/antinomie/core_writer.c  | 404 ++++++++++++++++++++++++++++++++
  kernel/antinomie/debug.c        |  12 +-
- kernel/antinomie/guest.c        |  18 +-
+ kernel/antinomie/guest.c        |  20 +-
  kernel/antinomie/manual_core.c  |  15 --
  kernel/antinomie/process_core.h |  24 ++
  kernel/antinomie/state.c        |   1 +
- 13 files changed, 472 insertions(+), 159 deletions(-)
+ 13 files changed, 475 insertions(+), 159 deletions(-)
  create mode 100644 kernel/antinomie/core_writer.c
 
 diff --git a/fs/coredump.c b/fs/coredump.c
-index 8a3c39f..93246c3 100644
+index 8a3c39f52..93246c3ec 100644
 --- a/fs/coredump.c
 +++ b/fs/coredump.c
 @@ -575,104 +575,6 @@ static int umh_coredump_setup(struct subprocess_info *info, struct cred *new)
@@ -180,7 +180,7 @@ index 8a3c39f..93246c3 100644
  #endif
  
 diff --git a/include/linux/coredump.h b/include/linux/coredump.h
-index 6b36311..3717685 100644
+index 6b3631189..3717685a0 100644
 --- a/include/linux/coredump.h
 +++ b/include/linux/coredump.h
 @@ -51,28 +51,19 @@ extern void do_coredump(const kernel_siginfo_t *siginfo);
@@ -231,7 +231,7 @@ index 6b36311..3717685 100644
  #define coredump_report(...)
  #define coredump_report_failure(...)
 diff --git a/io_uring/waitid.c b/io_uring/waitid.c
-index e00e3be..a394853 100644
+index e00e3bebb..a3948533d 100644
 --- a/io_uring/waitid.c
 +++ b/io_uring/waitid.c
 @@ -100,7 +100,8 @@ static bool io_waitid_copy_si(struct io_kiocb *req, int signo)
@@ -245,7 +245,7 @@ index e00e3be..a394853 100644
  	int signo = 0;
  
 diff --git a/io_uring/xattr.c b/io_uring/xattr.c
-index 3cba03b..a047366 100644
+index 3cba03b9d..a0473668f 100644
 --- a/io_uring/xattr.c
 +++ b/io_uring/xattr.c
 @@ -33,7 +33,8 @@ void io_xattr_cleanup(struct io_kiocb *req)
@@ -268,7 +268,7 @@ index 3cba03b..a047366 100644
  {
  	struct io_xattr *ix = io_kiocb_to_cmd(req, struct io_xattr);
 diff --git a/kernel/Makefile b/kernel/Makefile
-index c20e08d..8d6ffee 100644
+index c20e08d03..8d6ffeec3 100644
 --- a/kernel/Makefile
 +++ b/kernel/Makefile
 @@ -84,6 +84,11 @@ obj-$(CONFIG_UTS_NS) += utsname.o
@@ -284,7 +284,7 @@ index c20e08d..8d6ffee 100644
  obj-$(CONFIG_SMP) += stop_machine.o
  obj-$(CONFIG_AUDIT) += audit.o auditfilter.o
 diff --git a/kernel/antinomie/Makefile b/kernel/antinomie/Makefile
-index 3578ee2..d3fd00e 100644
+index 3578ee277..d3fd00ef0 100644
 --- a/kernel/antinomie/Makefile
 +++ b/kernel/antinomie/Makefile
 @@ -21,6 +21,7 @@ obj-y += specimen.o
@@ -296,7 +296,7 @@ index 3578ee2..d3fd00e 100644
  obj-y += hash.o
  obj-y += debug.o
 diff --git a/kernel/antinomie/async.c b/kernel/antinomie/async.c
-index cefb059..2a0be5a 100644
+index cefb05909..2a0be5acc 100644
 --- a/kernel/antinomie/async.c
 +++ b/kernel/antinomie/async.c
 @@ -105,14 +105,14 @@ static atomic_t reap_used = ATOMIC_INIT(0);
@@ -372,10 +372,10 @@ index cefb059..2a0be5a 100644
  /* Removes the entry for request_id; the caller releases its event. */
 diff --git a/kernel/antinomie/core_writer.c b/kernel/antinomie/core_writer.c
 new file mode 100644
-index 0000000..1645059
+index 000000000..d49d28193
 --- /dev/null
 +++ b/kernel/antinomie/core_writer.c
-@@ -0,0 +1,403 @@
+@@ -0,0 +1,404 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/* The process cores the recorder writes with Linux's own ELF writer.
 + *
@@ -629,6 +629,7 @@ index 0000000..1645059
 +{
 +	struct vm_area_struct *gate_vma, *vma = NULL;
 +	struct mm_struct *mm = current->mm;
++
 +	VMA_ITERATOR(vmi, mm, 0);
 +	int i = 0;
 +
@@ -780,7 +781,7 @@ index 0000000..1645059
 +	return error;
 +}
 diff --git a/kernel/antinomie/debug.c b/kernel/antinomie/debug.c
-index 02e4ae2..579eeb5 100644
+index d13675cd0..d54759cf3 100644
 --- a/kernel/antinomie/debug.c
 +++ b/kernel/antinomie/debug.c
 @@ -801,7 +801,7 @@ static void restore_byte(struct mm_struct *target, u64 addr, const u8 *orig, uns
@@ -801,7 +802,7 @@ index 02e4ae2..579eeb5 100644
  }
  
  static bool bp_at(struct ant_dbg_as *as, u64 addr)
-@@ -3232,7 +3232,7 @@ static int cmd_breakpoint(u32 opcode, struct ant_dbg *s, const u8 *args, size_t
+@@ -3305,7 +3305,7 @@ static int cmd_breakpoint(u32 opcode, struct ant_dbg *s, const u8 *args, size_t
  		if (i < as->bp_count) {
  			/* Non-stop keeps the bytes in: this one goes out with the entry. */
  			if (nonstop(s))
@@ -810,7 +811,7 @@ index 02e4ae2..579eeb5 100644
  			spin_lock_irq(&as->lock);
  			as->bps[i] = as->bps[--as->bp_count];
  			memset(&as->bps[as->bp_count], 0, sizeof(as->bps[0]));
-@@ -3427,7 +3427,7 @@ static int cmd_config(struct ant_dbg *s, const u8 *args, size_t args_len, u8 *re
+@@ -3500,7 +3500,7 @@ static int cmd_config(struct ant_dbg *s, const u8 *args, size_t args_len, u8 *re
  	return 0;
  }
  
@@ -819,7 +820,7 @@ index 02e4ae2..579eeb5 100644
  {
  	memset(entry, 0, ANTC_DEBUG_EVENT_ENTRY_SIZE);
  	put_unaligned_le32(ev->seq, entry);
-@@ -3465,13 +3465,13 @@ static int cmd_events(struct ant_dbg *s, const u8 *args, size_t args_len, u8 *re
+@@ -3538,13 +3538,13 @@ static int cmd_events(struct ant_dbg *s, const u8 *args, size_t args_len, u8 *re
  	spin_lock_irq(&s->lock);
  	if (mode & ANTC_DEBUG_EVENTS_CURRENT) {
  		if (s->cur.kind) {
@@ -836,7 +837,7 @@ index 02e4ae2..579eeb5 100644
  		put_unaligned_le32(s->qdropped, reply + 4);
  	}
 diff --git a/kernel/antinomie/guest.c b/kernel/antinomie/guest.c
-index 6ab8a8d..b76576d 100644
+index 6ab8a8de7..c86907c4b 100644
 --- a/kernel/antinomie/guest.c
 +++ b/kernel/antinomie/guest.c
 @@ -30,13 +30,16 @@ struct ant_cpu {
@@ -875,19 +876,21 @@ index 6ab8a8d..b76576d 100644
  	q = &directory[p->index];
  	tail = ANT_ACQ(&q->tail);
  	if (!p->fault && tail <= p->head && p->head - tail <= ring_size)
-@@ -464,8 +467,10 @@ static int __init ant_guest_init(void)
+@@ -464,8 +467,12 @@ static int __init ant_guest_init(void)
  	region = page_address(pages);
  	control = &region->control;
  	directory = region->directory;
 +	producers = alloc_percpu(struct ant_producer);
-+	if (!producers) goto free_control;
++	if (!producers)
++		goto free_control;
  	cpus = kcalloc(queue_count, sizeof(*cpus), GFP_KERNEL);
 -	if (!cpus) goto free_control;
-+	if (!cpus) goto free_producers;
++	if (!cpus)
++		goto free_producers;
  	/* Every ring has the same size; when memory is short, try a smaller one. */
  retry:
  	index = 0;
-@@ -486,7 +491,7 @@ static int __init ant_guest_init(void)
+@@ -486,7 +493,7 @@ static int __init ant_guest_init(void)
  		directory[index].data_gpa = page_to_phys(cpus[index].pages);
  		directory[index].data_size = ring_size;
  		directory[index].cpu_id = cpu;
@@ -896,7 +899,7 @@ index 6ab8a8d..b76576d 100644
  	}
  	/*
  	 * This worker only polls host commands. It is not a reclaim path,
-@@ -526,6 +531,9 @@ static int __init ant_guest_init(void)
+@@ -526,6 +533,9 @@ static int __init ant_guest_init(void)
  	for (index = 0; index < queue_count; index++)
  		if (cpus[index].pages) __free_pages(cpus[index].pages, get_order(ring_size));
  	kfree(cpus);
@@ -907,7 +910,7 @@ index 6ab8a8d..b76576d 100644
  	__free_pages(pages, get_order(ANT_CONTROL_SIZE));
  	return error;
 diff --git a/kernel/antinomie/manual_core.c b/kernel/antinomie/manual_core.c
-index 704d70e..d9dda3e 100644
+index 704d70e56..d9dda3ed9 100644
 --- a/kernel/antinomie/manual_core.c
 +++ b/kernel/antinomie/manual_core.c
 @@ -157,21 +157,6 @@ void ant_coredump_live_incomplete(struct ant_coredump_live *live)
@@ -933,7 +936,7 @@ index 704d70e..d9dda3e 100644
  						 unsigned int *count)
  {
 diff --git a/kernel/antinomie/process_core.h b/kernel/antinomie/process_core.h
-index 98a1fbf..6682a47 100644
+index 98a1fbf64..6682a4765 100644
 --- a/kernel/antinomie/process_core.h
 +++ b/kernel/antinomie/process_core.h
 @@ -2,12 +2,15 @@
@@ -981,7 +984,7 @@ index 98a1fbf..6682a47 100644
  int ant_core_live_lookup(const struct ant_core_identity *identity, bool admission,
  			 struct ant_core **result);
 diff --git a/kernel/antinomie/state.c b/kernel/antinomie/state.c
-index ffd81c2..4c9f5ef 100644
+index ffd81c243..4c9f5efe8 100644
 --- a/kernel/antinomie/state.c
 +++ b/kernel/antinomie/state.c
 @@ -5,6 +5,7 @@
