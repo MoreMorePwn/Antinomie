@@ -18,4 +18,6 @@ apt-get install -y -q make gcc bpftrace \
     /dev/shm/linux-kbuild-6.12.94+deb13_6.12.94-1_amd64.deb >> /tmp/module-abi-apt.log 2>&1
 make -C "/lib/modules/$(uname -r)/build" M=/tmp -j2 modules
 modinfo /tmp/module_fixture.ko
+# Kept on disk for the next boot, whose recording holds only the module run.
+install -m 0644 /tmp/module_fixture.ko /root/module_fixture.ko
 printf 'OOT-BUILD-PASS\nSTEALTH-END\n'

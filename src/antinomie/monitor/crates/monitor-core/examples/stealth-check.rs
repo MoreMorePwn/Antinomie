@@ -6,7 +6,7 @@
 //!   stealth-check measure BUNDLE NEW_DATA_DIR PROBE [PRESET [ENTRY=VALUE...]]
 //!   stealth-check boots BUNDLE NEW_DATA_DIR COUNT [PRESET [ENTRY=VALUE...]]
 //!   stealth-check cloud BUNDLE NEW_DATA_DIR CLOUD_PROBE [PROVIDER...]
-//!   stealth-check abi BUNDLE NEW_DATA_DIR FIXTURES HEADER_DEBS
+//!   stealth-check abi BUNDLE NEW_DATA_DIR FIXTURES HEADER_DEBS|- [PRESET [ENTRY=VALUE...]]
 //!
 //! PROBE is the static `tests/monitor/stealth-probe` program; PRESET is
 //! `desktop` (default), `laptop`, `server` or `transparent`; entries change
@@ -31,6 +31,9 @@
 //! signed modules, a real filesystem restriction, an out-of-tree module built
 //! against Debian headers, fentry, and the retained module/BPF syscalls. NAT
 //! is used only by this disposable benign-test VM to install build tools.
+//! With `-` for HEADER_DEBS only the first phase runs (signed modules, the
+//! restriction, the boot journal and grub-pc's disk), for example on another
+//! disk bus (`transparent disk=sata`). The profile defaults to transparent.
 //!
 //! The data folder must be new and disposable.
 use antinomie_monitor_core::route::RouteKind;
@@ -248,6 +251,7 @@ fn driver_on(
             VmNetwork::Isolated
         },
         2,
+        1024 * 1024 * 1024,
     )
 }
 
@@ -258,6 +262,7 @@ fn driver_network(
     gpa: Option<u64>,
     network: VmNetwork,
     cpus: u16,
+    capture_quota_size: u64,
 ) -> Result<(Driver, String), String> {
     if data.exists() {
         return Err("the measurement needs a new disposable data folder".into());
@@ -276,7 +281,7 @@ fn driver_network(
         data_dir: data.to_path_buf(),
         headless: true,
         serial_console: true,
-        capture_quota_size: 1024 * 1024 * 1024,
+        capture_quota_size,
         bootstrap_gpa: gpa,
         ..Default::default()
     };
@@ -581,6 +586,11 @@ fn cloud_lines(text: &str) -> Vec<(String, String)> {
 fn cloud(bundle: &str, data: &str, probe: &str, only: &[&str]) -> Result<(), String> {
     let data = PathBuf::from(data);
     fs::create_dir_all(&data).map_err(|e| e.to_string())?;
+    let base = antinomie_monitor_core::storage::Bundle::load(Path::new(bundle))?;
+    // A Debian base also shows its interface, virtualization, cloud-init and
+    // the lived-in state the first start wrote.
+    let debian = base.guest.is_some();
+    let onboard_nic = BaseSupport::from_list(&base.stealth_support).onboard_nic;
     let mut failures = Vec::new();
     for provider in CLOUDS
         .iter()
@@ -601,6 +611,20 @@ fn cloud(bundle: &str, data: &str, probe: &str, only: &[&str]) -> Result<(), Str
         })?;
         let run = d.run_routed(program, 0, Some(RouteKind::InetSim))?;
         let text = d.output(&run).to_owned();
+        let state = if debian {
+            let script = folder.join("debian-cloud-state.sh");
+            fs::write(&script, DEBIAN_CLOUD_STATE).map_err(|e| e.to_string())?;
+            d.command(Command::Upload {
+                source: script,
+                destination: "/tmp/debian-cloud-state".into(),
+                overwrite: true,
+                executable: true,
+            })?;
+            let run = d.run_to_end("/tmp/debian-cloud-state", 0)?;
+            Some(d.output(&run).to_owned())
+        } else {
+            None
+        };
         let directory = d
             .snapshot
             .runs
@@ -618,6 +642,9 @@ fn cloud(bundle: &str, data: &str, probe: &str, only: &[&str]) -> Result<(), Str
         }
         d.stop()?;
         fs::write(folder.join("cloud-probe.txt"), &text).map_err(|e| e.to_string())?;
+        if let Some(state) = &state {
+            fs::write(folder.join("debian-cloud-state.txt"), state).map_err(|e| e.to_string())?;
+        }
         let lines = cloud_lines(&text);
         let get = |key: &str| lines.iter().find(|l| l.0 == key).map(|l| l.1.clone());
         let mut check = |name: &str, ok: bool, got: String| {
@@ -726,6 +753,90 @@ fn cloud(bundle: &str, data: &str, probe: &str, only: &[&str]) -> Result<(), Str
             }),
             "203.0.113.9:80".into(),
         );
+        if let Some(state) = &state {
+            let line = |key: &str| {
+                state
+                    .lines()
+                    .find_map(|l| l.strip_prefix(key)?.strip_prefix(' '))
+                    .unwrap_or("(missing)")
+                    .trim()
+                    .to_owned()
+            };
+            let lines = |key: &str| -> Vec<String> {
+                state
+                    .lines()
+                    .filter_map(|l| l.strip_prefix(key)?.strip_prefix(' '))
+                    .map(str::to_owned)
+                    .collect()
+            };
+            let interfaces = lines("iface");
+            let wanted = onboard_nic.then(|| profile_interface(provider));
+            check(
+                "debian: wired interface named for the slot, with an address",
+                interfaces.len() == 1
+                    && wanted.is_none_or(|name| interfaces[0].starts_with(&format!("{name} ")))
+                    && !interfaces[0].ends_with("ipv4="),
+                format!("{interfaces:?} (wanted {wanted:?})"),
+            );
+            check(
+                "debian: systemd-detect-virt",
+                line("virt") == "kvm",
+                line("virt"),
+            );
+            let hostname = line("hostname");
+            check(
+                "debian: host name from the first start",
+                hostname
+                    .split_once(" etc=")
+                    .is_some_and(|(live, file)| live == file && live != "debian"),
+                hostname,
+            );
+            let files = lines("state");
+            // Instance records are days old; the login record an hour.
+            let aged = |path: &str, days: u64| {
+                files.iter().any(|f| {
+                    f.starts_with(&format!("{path} "))
+                        && !f.contains(" size=0 ")
+                        && f.rsplit("age_days=")
+                            .next()
+                            .and_then(|d| d.parse::<u64>().ok())
+                            .is_some_and(|d| d >= days)
+                })
+            };
+            for (path, days) in [
+                ("/var/lib/cloud/data/instance-id", 1),
+                ("/var/log/cloud-init.log", 1),
+                ("/etc/cloud/cloud.cfg.d/90_provider.cfg", 1),
+                ("/var/log/wtmp", 0),
+            ] {
+                check(
+                    &format!("debian: lived-in {path}"),
+                    aged(path, days),
+                    files
+                        .iter()
+                        .find(|f| f.starts_with(path))
+                        .cloned()
+                        .unwrap_or("(missing)".into()),
+                );
+            }
+            let user = provider.state.default_user;
+            check(
+                "debian: default user",
+                user == "root"
+                    || lines("user")
+                        .iter()
+                        .any(|u| u.starts_with(&format!("{user} "))),
+                format!("{user}: {:?}", lines("user")),
+            );
+            // Reported, not required: Debian Minimal does not install
+            // cloud-init, so the lived-in files stand in for its records.
+            println!(
+                "INFO {} cloud-init={} last={}",
+                provider.id,
+                line("cloud-init"),
+                line("last")
+            );
+        }
         println!(
             "INFO {} cpu.hypervisor={} clocksource={}",
             provider.id,
@@ -741,17 +852,42 @@ fn cloud(bundle: &str, data: &str, probe: &str, only: &[&str]) -> Result<(), Str
     }
 }
 
+/// What a cloud profile's Debian VM shows of its instance (run as root).
+const DEBIAN_CLOUD_STATE: &str =
+    include_str!("../../../../../../tests/monitor/debian-cloud-state.sh");
+
+/// The interface a base that names its NIC by slot gets under `provider`.
+fn profile_interface(provider: &antinomie_monitor_core::stealth::CloudProvider) -> &'static str {
+    StealthProfile::cloud_vps(provider).nic_slot().interface()
+}
+
 /// A Debian VM verifies signed modules, an actual LSM restriction, a module
 /// built against Debian's headers in the guest, fentry and retained calls.
-fn abi(bundle: &str, data: &str, fixtures: &str, headers: &str) -> Result<(), String> {
+fn abi(
+    bundle: &str,
+    data: &str,
+    fixtures: &str,
+    headers: &str,
+    args: &[&str],
+) -> Result<(), String> {
     let folder = Path::new(data);
+    let (profile, gpa) = if args.is_empty() {
+        (StealthProfile::transparent(), None)
+    } else {
+        profile(args)?
+    };
+    let first_only = headers == "-";
+    // Installing the build tools and building the module record every byte
+    // dpkg and the compiler write (over 4 GB): that boot may reach its quota.
+    // The module run gets a boot (and quota) of its own.
     let (mut driver, vm) = driver_network(
         bundle,
         folder,
-        StealthProfile::transparent(),
-        None,
+        profile,
+        gpa,
         VmNetwork::Nat,
         4,
+        2 * 1024 * 1024 * 1024,
     )?;
     let mut module_directory = None;
     let result = (|| {
@@ -774,7 +910,10 @@ fn abi(bundle: &str, data: &str, fixtures: &str, headers: &str) -> Result<(), St
             ("debian-abi-check", 180, "ABI-CHECK-PASS"),
             ("debian-oot-build", 1200, "OOT-BUILD-PASS"),
             ("debian-oot-run", 180, "OOT-RUN-PASS"),
-        ] {
+        ]
+        .into_iter()
+        .take(if first_only { 1 } else { 3 })
+        {
             if name == "debian-oot-build" {
                 // Stage the small pinned header packages in guest RAM. This
                 // keeps disk flush latency out of the fixture transfer; the
@@ -792,6 +931,34 @@ fn abi(bundle: &str, data: &str, fixtures: &str, headers: &str) -> Result<(), St
                         executable: false,
                     })?;
                 }
+            }
+            if name == "debian-oot-run" {
+                // A new boot: its recording starts empty; the module and
+                // the build tools stay on the disk.
+                driver.stop()?;
+                // The app starts no boot while the last one's recordings
+                // (gigabytes here) are being saved or its disk layer is
+                // being finished; it says to try again.
+                driver.wait("build boot saved", 1800, |s| s.recording_flush.is_none())?;
+                let deadline = Instant::now() + Duration::from_secs(1800);
+                loop {
+                    match driver.boot(&vm) {
+                        Err(why)
+                            if (why.contains("still being finished")
+                                || why.contains("still being saved"))
+                                && Instant::now() < deadline =>
+                        {
+                            thread::sleep(Duration::from_secs(5));
+                        }
+                        result => break result?,
+                    }
+                }
+                driver.command(Command::Upload {
+                    source: Path::new(fixtures).join("debian-oot-run.sh"),
+                    destination: "/tmp/debian-oot-run".into(),
+                    overwrite: true,
+                    executable: true,
+                })?;
             }
             println!("Running {name}");
             let run = driver.run_for(&format!("/tmp/{name}"), 0, None, seconds)?;
@@ -819,6 +986,9 @@ fn abi(bundle: &str, data: &str, fixtures: &str, headers: &str) -> Result<(), St
     let stopped = driver.stop();
     result.and(stopped)?;
     driver.wait("recordings saved", 120, |s| s.recording_flush.is_none())?;
+    if first_only {
+        return Ok(());
+    }
     let directory = module_directory.ok_or("module run missing")?;
     let recording = recording::Recording {
         directory,
@@ -877,13 +1047,15 @@ fn main() {
         ["measure", bundle, data, probe, rest @ ..] => measure(bundle, data, probe, rest),
         ["boots", bundle, data, count, rest @ ..] => boots(bundle, data, count, rest),
         ["cloud", bundle, data, probe, rest @ ..] => cloud(bundle, data, probe, rest),
-        ["abi", bundle, data, fixtures, headers] => abi(bundle, data, fixtures, headers),
+        ["abi", bundle, data, fixtures, headers, rest @ ..] => {
+            abi(bundle, data, fixtures, headers, rest)
+        }
         _ => {
             eprintln!(
                 "usage: stealth-check measure BUNDLE NEW_DATA_DIR PROBE [PRESET [ENTRY=VALUE...]]\n       \
                  stealth-check boots BUNDLE NEW_DATA_DIR COUNT [PRESET [ENTRY=VALUE...]]\n       \
                  stealth-check cloud BUNDLE NEW_DATA_DIR CLOUD_PROBE [PROVIDER...]\n       \
-                 stealth-check abi BUNDLE NEW_DATA_DIR FIXTURES HEADER_DEBS"
+                 stealth-check abi BUNDLE NEW_DATA_DIR FIXTURES HEADER_DEBS|- [PRESET [ENTRY=VALUE...]]"
             );
             std::process::exit(2);
         }

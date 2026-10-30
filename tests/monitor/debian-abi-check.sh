@@ -5,7 +5,7 @@ set -eu
 export LC_ALL=C PATH=/usr/sbin:/usr/bin:/sbin:/bin
 uname -a
 cat /proc/version
-cat /sys/kernel/security/lsm
+cat /sys/kernel/security/lsm; echo
 lsmod
 before=$(cat /proc/sys/kernel/tainted)
 test "$before" -eq 0
@@ -39,4 +39,23 @@ grep -Eq '^cat: /run/module-abi-probe: (Permission denied|Operation not permitte
     /tmp/module-abi-restrict.log
 systemctl reset-failed module-abi-restrict.service
 rm /run/module-abi-probe
-printf 'PASS systemd filesystem restriction enforced\nABI-CHECK-PASS\nSTEALTH-END\n'
+printf 'PASS systemd filesystem restriction enforced\n'
+# systemd attached bpf-restrict-fs at boot: no "BPF LSM is not available"
+# (or other failure) line, which would also give the kernel away.
+journalctl -b -o cat --no-pager | grep -v module-abi | \
+    grep -Ei 'bpf.?lsm|bpf-restrict-fs|restrict.?file.?system' \
+    > /tmp/module-abi-bpf-lsm.log || true
+cat /tmp/module-abi-bpf-lsm.log
+if grep -Eqi 'not available|not supported|fail|error' /tmp/module-abi-bpf-lsm.log; then
+    printf 'FAIL systemd reported a BPF LSM problem at boot\n'
+    exit 1
+fi
+printf 'PASS no BPF LSM failure in the boot journal\n'
+# grub-pc's debconf answer names this VM's own disk (BIOS installations).
+if test -d /usr/lib/grub/i386-pc; then
+    device=$(debconf-show grub-pc | sed -n 's/^[* ]*grub-pc\/install_devices: //p')
+    printf 'grub-pc install device: %s\n' "$device"
+    test -b "$device"
+    printf 'PASS grub-pc names an existing disk\n'
+fi
+printf 'ABI-CHECK-PASS\nSTEALTH-END\n'
