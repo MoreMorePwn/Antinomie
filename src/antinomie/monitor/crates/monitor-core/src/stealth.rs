@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Stealth profile: QEMU launch options that make a VM look like ordinary
+//! Device profile: QEMU launch options that make a VM look like ordinary
 //! hardware to software that checks whether it runs in a VM.
 //!
 //! The profile is stored per VM. A preset fills every entry; serials, the
@@ -442,7 +442,7 @@ pub struct MemorySlot {
     pub bank: String,
 }
 
-/// The stealth profile of one VM.
+/// The device profile of one VM.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct StealthProfile {
@@ -1495,7 +1495,7 @@ impl Fallback {
     /// The line a start log and a run's notes carry.
     pub fn log_line(&self) -> String {
         format!(
-            "Stealth setting not applied: {}; {}",
+            "Device profile setting not applied: {}; {}",
             self.summary, self.reason
         )
     }

@@ -53,14 +53,14 @@ impl Class {
         }
     }
 
-    /// What decides the answer, in the words of the Stealth profile window.
+    /// What decides the answer, in the words of the Device profile window.
     fn decided_by(self) -> &'static str {
         match self {
-            Self::Dmi => "Stealth profile › Machine identity (BIOS, system, board and chassis strings, serials, UUID).",
-            Self::Cpu => "Stealth profile › CPU (hypervisor flag, KVM signature, model and brand).",
-            Self::Storage => "Stealth profile › Devices (disk bus, model and serial).",
-            Self::Hypervisor => "Stealth profile › Devices and CPU (VMware port, KVM signature, PCI devices). The root disk, SeaBIOS and the q35 layout stay visible (Still visible).",
-            Self::Mac => "Stealth profile › Network card (model and MAC address).",
+            Self::Dmi => "Device profile › Machine identity (BIOS, system, board and chassis strings, serials, UUID).",
+            Self::Cpu => "Device profile › CPU (hypervisor flag, KVM signature, model and brand).",
+            Self::Storage => "Device profile › Devices (disk bus, model and serial).",
+            Self::Hypervisor => "Device profile › Devices and CPU (VMware port, KVM signature, PCI devices). The root disk, SeaBIOS and the q35 layout stay visible (Still visible).",
+            Self::Mac => "Device profile › Network card (model and MAC address).",
             Self::Uptime => "Not set by the profile: a freshly started guest shows minutes of uptime (Still visible).",
             Self::Timing => "Not set by the profile: VM-exit timing and the cost of traced calls are in Still visible.",
             Self::Container => "The guest is not a container, so a container check finds nothing.",
@@ -703,7 +703,7 @@ pub(super) fn rows(st: &State, files: &FdState) -> Vec<Agg> {
             agg.detail = vec![
                 format!("The answer that would show a VM: {} → {}", first.what, first.answer.as_deref().unwrap_or("?")),
                 follow.describe(),
-                "Heuristic: this reads only the calls recorded after the checks. It cannot know why the program stopped; a different Stealth profile may make it go on.".into(),
+                "Heuristic: this reads only the calls recorded after the checks. It cannot know why the program stopped; a different Device profile may make it go on.".into(),
             ];
             rows.push(agg);
         }

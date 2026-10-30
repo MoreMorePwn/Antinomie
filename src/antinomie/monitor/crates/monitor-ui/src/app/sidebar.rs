@@ -94,7 +94,10 @@ impl MonitorApp {
                 } else {
                     // Its own line: the base's label can fill the first.
                     let badge = vec![(
-                        format!("{} Stealth fallback", egui_phosphor::regular::WARNING),
+                        format!(
+                            "{} Device profile fallback",
+                            egui_phosphor::regular::WARNING
+                        ),
                         theme::warn(),
                     )];
                     vec![machine, badge, last]

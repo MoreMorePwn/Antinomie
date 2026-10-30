@@ -569,7 +569,7 @@ impl SnapshotManager {
                         format!("{} CPUs, {} MiB RAM", node.config.cpus, node.config.ram_mib),
                     ),
                     (
-                        "Stealth profile",
+                        "Device profile",
                         match &node.profile {
                             SnapshotProfile::Same => "The VM's current profile".to_owned(),
                             SnapshotProfile::Other { machine } => format!("{machine} (differs)"),
@@ -684,10 +684,10 @@ impl SnapshotManager {
                             ui.weak("Existing branches and recordings remain saved. A new observation timeline starts.");
                             match node.map(|node| &node.profile) {
                                 Some(SnapshotProfile::Other { machine }) => {
-                                    crate::activity::warning(ui, format!("This snapshot was taken as {machine}. The VM's stealth profile is different, so restoring switches the VM back to that profile."));
+                                    crate::activity::warning(ui, format!("This snapshot was taken as {machine}. The VM's device profile is different, so restoring switches the VM back to that profile."));
                                 }
                                 Some(SnapshotProfile::Unknown) => {
-                                    ui.weak("This snapshot has no recorded stealth profile (taken before profiles were recorded), so it restores as it is.");
+                                    ui.weak("This snapshot has no recorded device profile (taken before profiles were recorded), so it restores as it is.");
                                 }
                                 _ => {}
                             }

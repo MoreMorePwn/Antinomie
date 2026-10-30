@@ -410,7 +410,7 @@ pub struct Bundle {
     /// analysis; bases before 0.4.0 have none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub symbols: Option<PathBuf>,
-    /// Stealth profile entries the base boots with besides virtio, SeaBIOS
+    /// Device profile entries the base boots with besides virtio, SeaBIOS
     /// and 10.0.2.0/24: `uefi`, `sata`, `nvme`, `dhcp` (written by the image
     /// builders). Advisory: an entry a base lacks falls back at launch; not
     /// part of the identity.

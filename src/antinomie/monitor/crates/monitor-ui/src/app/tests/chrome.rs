@@ -40,10 +40,7 @@ fn escape_closes_the_topmost_dialog_first() {
     // A confirmation is modal: Escape cancels it and leaves its dialog.
     app.snapshot.active_vm = None;
     app.new_image();
-    app.confirm = Some(Confirm::Nat {
-        vm: Box::new(app.draft.clone()),
-        creating: true,
-    });
+    app.confirm = Some(Confirm::Reset(app.draft.id.clone()));
     for _ in 0..3 {
         render(&mut app, &ctx, size);
     }

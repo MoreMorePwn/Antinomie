@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! VM configuration > Stealth profile: the hardware identity a VM shows its
+//! VM configuration > Device profile: the hardware identity a VM shows its
 //! guest. A preset fills every entry; editing one makes the profile Custom.
 use super::*;
 mod cloud;
@@ -45,7 +45,7 @@ fn choice<T: Copy + PartialEq>(
 }
 
 impl MonitorApp {
-    /// What a VM's stealth profile asks for that its base or this host cannot
+    /// What a VM's device profile asks for that its base or this host cannot
     /// give: the settings that fall back when it starts.
     pub(crate) fn stealth_fallbacks_of(&self, vm: &VmConfig) -> Vec<Fallback> {
         antinomie_monitor_core::stealth::vm_fallbacks(vm, &self.snapshot.bases, host_support())
@@ -156,8 +156,13 @@ impl<'a> Fit<'a> {
     }
 }
 
-/// Picks a preset, applying it to every entry.
+/// Picks a preset, applying it to every entry, and a cloud's provider beside it.
 fn preset_combo(ui: &mut egui::Ui, profile: &mut StealthProfile, id: &str) {
+    preset_list(ui, profile, id);
+    provider_list(ui, profile, id);
+}
+
+fn preset_list(ui: &mut egui::Ui, profile: &mut StealthProfile, id: &str) {
     let mut preset = profile.preset;
     egui::ComboBox::from_id_salt(id)
         .selected_text(preset.label())
@@ -170,6 +175,10 @@ fn preset_combo(ui: &mut egui::Ui, profile: &mut StealthProfile, id: &str) {
     if preset != profile.preset {
         *profile = profile.for_preset(preset, &host_cpu_vendor());
     }
+}
+
+/// The provider of a Cloud VPS profile; nothing for any other.
+fn provider_list(ui: &mut egui::Ui, profile: &mut StealthProfile, id: &str) {
     if profile.preset == StealthPreset::CloudVps
         && let Some(current) = profile.cloud_provider()
     {
@@ -195,9 +204,22 @@ pub(super) fn preset_row(
     open: &mut bool,
     fallbacks: &[Fallback],
 ) {
-    ui.label("Stealth");
+    // The provider's list has a row of its own, so the form keeps the width
+    // of one list whichever profile is chosen.
     ui.horizontal_wrapped(|ui| {
-        preset_combo(ui, profile, "vm_stealth_preset");
+        ui.label("Device profile");
+        ui.label(RichText::new(egui_phosphor::regular::QUESTION).color(theme::muted()))
+            .on_hover_text("Could be helpful for handling anti-VM or anti-sandbox checks.");
+    });
+    preset_list(ui, profile, "vm_stealth_preset");
+    ui.end_row();
+    if profile.preset == StealthPreset::CloudVps {
+        ui.label("");
+        provider_list(ui, profile, "vm_stealth_preset");
+        ui.end_row();
+    }
+    ui.label("");
+    ui.horizontal_wrapped(|ui| {
         if ui
             .button("Edit…")
             .on_hover_text("Machine identity, CPU, network card and devices")
@@ -747,7 +769,7 @@ pub(super) fn settle_preset(before: &StealthProfile, profile: &mut StealthProfil
     }
 }
 
-/// The Stealth profile window beside the VM dialog.
+/// The Device profile window beside the VM dialog.
 pub(super) fn window(
     ctx: &egui::Context,
     open: &mut bool,
@@ -758,7 +780,7 @@ pub(super) fn window(
     creating: bool,
 ) {
     let mut closed = false;
-    crate::widgets::window("Stealth profile")
+    crate::widgets::window("Device profile")
         .id(egui::Id::new("vm_stealth"))
         .pivot(egui::Align2::CENTER_TOP)
         .default_pos(egui::pos2(ctx.screen_rect().center().x, 60.0))
@@ -805,18 +827,6 @@ pub(super) fn window(
                             for hint in size_hints {
                                 ui.colored_label(theme::warn(), format!("• The VM's size: {hint}"));
                             }
-                            ui.colored_label(
-                                theme::muted(),
-                                "Bases built by Antinomie 0.7.0 keep the guest kernel's options, \
-                                 build string, symbols and worker names and QEMU's ACPI devices \
-                                 out of the guest, start programs as a shell's job (parent \
-                                 init), and boot under UEFI with their address from DHCP. \
-                                 BusyBox bases also boot from SATA or NVMe; Debian bases boot \
-                                 from virtio only. Older bases still show the rest and fall \
-                                 back to BIOS, virtio and 10.0.2.x. Timing, the display, the \
-                                 chipset and QEMU's firmware tables are beyond what a launch \
-                                 option or the guest kernel can change.",
-                            );
                         });
                     });
             });

@@ -207,7 +207,7 @@ impl MonitorApp {
             )
             .on_hover_text(format!("At least {min_disk} GiB for this base"));
             ui.end_row();
-            ui.label("Stealth profile");
+            ui.label("Device profile");
             let mut stealth =
                 draft.stealth.preset != antinomie_monitor_core::stealth::StealthPreset::Transparent;
             if ui

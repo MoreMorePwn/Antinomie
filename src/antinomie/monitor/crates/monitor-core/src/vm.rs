@@ -25,7 +25,7 @@ fn effective_machine(
 ) -> Option<String> {
     let (machine, note) = stealth.machine.for_ram(ram_size);
     stealth.machine = machine;
-    note.map(|note| format!("Stealth setting not applied: {note}"))
+    note.map(|note| format!("Device profile setting not applied: {note}"))
 }
 
 /// The QEMU user-mode network of a VM. A Routed VM has none: its card is
@@ -312,7 +312,7 @@ pub(crate) struct VmProcess {
     /// Folder holding the gateway's socket when it is not in `runtime_dir`
     /// (the path would be too long for a socket); removed on drop.
     net_dir: Option<PathBuf>,
-    /// What the stealth profile asked for and the base or host could not give,
+    /// What the device profile asked for and the base or host could not give,
     /// one line each, for the start log and the run notes.
     pub stealth_fallbacks: Vec<String>,
 }
@@ -558,7 +558,7 @@ impl VmProcess {
         }
         if stealth.cloud_provider().is_some() && vm.network() != VmNetwork::Routed {
             fallbacks.push(
-                "Stealth setting not applied: cloud metadata service; only a Routed network \
+                "Device profile setting not applied: cloud metadata service; only a Routed network \
                  has the gateway that answers the provider's metadata address"
                     .into(),
             );
@@ -574,7 +574,7 @@ impl VmProcess {
             )
         {
             fallbacks.push(format!(
-                "Stealth setting not applied: cloud instance state; {error}"
+                "Device profile setting not applied: cloud instance state; {error}"
             ));
         }
         let serial = File::create(runtime_dir.join("serial.log")).map_err(|e| e.to_string())?;

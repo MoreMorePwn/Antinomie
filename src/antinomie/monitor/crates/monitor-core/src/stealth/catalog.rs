@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! The real machines a stealth profile can look like: business desktops and
+//! The real machines a device profile can look like: business desktops and
 //! laptops, common consumer laptops and small servers, each with the strings
 //! such a unit reports (vendor, model, BIOS version and date, chassis type,
 //! board), the CPU generations it shipped with and its onboard network card.

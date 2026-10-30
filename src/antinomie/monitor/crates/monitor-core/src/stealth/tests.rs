@@ -1020,7 +1020,11 @@ fn every_setting_fitted_can_change_is_listed_with_a_line_for_the_setting() {
     assert!(!fitted.smt);
     // What the start log and the run's notes carry names the setting and why.
     let log = fallbacks[1].log_line();
-    assert!(log.starts_with("Stealth setting not applied: SATA (AHCI) not supported by this base"));
+    assert!(
+        log.starts_with(
+            "Device profile setting not applied: SATA (AHCI) not supported by this base"
+        )
+    );
     assert!(log.contains("rebuild a BusyBox base"));
 }
 

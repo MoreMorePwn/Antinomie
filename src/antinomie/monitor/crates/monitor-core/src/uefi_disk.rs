@@ -6,7 +6,7 @@
 //! partition first, then the root and swap, and installs grub-efi-amd64 and
 //! the shim instead of grub-pc. The base's disk is the BIOS installation (an
 //! MBR with the root at 1 MiB), and an ext4 filesystem cannot move. So the
-//! first VM of the base whose stealth profile boots UEFI has the app derive
+//! first VM of the base whose device profile boots UEFI has the app derive
 //! a second base disk beside it (`base-uefi.qcow2`): the same root filesystem
 //! copied after an ESP, with the paths the UEFI installation differs in (the
 //! base's `uefi-root.tar.xz`, built by `scripts/debian-uefi-delta.py`) put in
