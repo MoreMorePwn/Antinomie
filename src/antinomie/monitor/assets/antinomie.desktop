@@ -2,7 +2,7 @@
 Type=Application
 Name=Antinomie
 GenericName=Program behaviour monitor
-Comment=Run programs in a QEMU VM and record every system call they make
+Comment=A local, kernel-level Linux malware analysis sandbox and workspace
 Exec=@BIN@
 Icon=antinomie
 Terminal=false

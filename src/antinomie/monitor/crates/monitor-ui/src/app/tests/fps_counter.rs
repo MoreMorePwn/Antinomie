@@ -72,7 +72,10 @@ fn the_counter_shows_the_repaint_rate_then_idle() {
         .find(|(shown, _)| *shown == text)
         .unwrap()
         .1;
-    assert!(corner.max.x > SIZE.x - 20.0 && corner.min.y < 20.0);
+    // In the title bar, just left of the three window buttons.
+    let buttons_left = SIZE.x - 3.0 * crate::title_bar::BUTTON_WIDTH;
+    assert!(corner.max.x > buttons_left - 20.0 && corner.max.x < buttons_left);
+    assert!(corner.min.y < 20.0);
     // Without new frames the reading ages out and says so, keeping the last value.
     app.performance = Default::default();
     app.performance.record_at(

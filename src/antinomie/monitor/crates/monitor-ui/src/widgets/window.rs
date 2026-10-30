@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Window and dialog chrome in the mockup's style.
 use crate::theme;
-use eframe::egui::{self, RichText};
+use eframe::egui;
 
 /// A spawned window in the mockup's style, built like `egui::Window` (the
 /// same chain: `.id`, `.open`, `.default_width`, `.default_size`,
@@ -9,7 +9,7 @@ use eframe::egui::{self, RichText};
 ///
 /// The frame (raised fill, 1 px line, 8 px corners, soft shadow) comes from
 /// the theme's visuals. The title bar is the mockup's: the title left in
-/// semibold, a close button at the right and a soft rule below. There is no
+/// bold, a close button at the right and a soft rule below. There is no
 /// dim behind the window and its position stays free (drag it by any empty
 /// part). With `.open(&mut flag)` the close button clears `flag`.
 pub fn window<'open>(title: impl Into<String>) -> Dialog<'open> {
@@ -87,15 +87,8 @@ impl<'open> Dialog<'open> {
                     .horizontal(|ui| {
                         // Not selectable: dragging the title moves the window.
                         ui.add(
-                            egui::Label::new(
-                                RichText::new(&title)
-                                    .strong()
-                                    // Strong text is the primary button's
-                                    // white in the light theme: color it.
-                                    .color(theme::text())
-                                    .text_style(egui::TextStyle::Body),
-                            )
-                            .selectable(false),
+                            egui::Label::new(theme::bold(ui.ctx(), &title).color(theme::text()))
+                                .selectable(false),
                         );
                         // Room for the close button, which is placed at the
                         // window's right edge once the width is known.

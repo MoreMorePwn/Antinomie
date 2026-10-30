@@ -314,9 +314,9 @@ fn render(
 ) -> Option<ReportAction> {
     let Some(report) = report else {
         if forced.is_some() {
-            ui.label("No retained static analysis report.");
+            super::no_report(ui, "No retained static analysis report");
         } else {
-            super::no_report(ui, true);
+            super::no_report(ui, "No static analysis report for this run");
         }
         return None;
     };

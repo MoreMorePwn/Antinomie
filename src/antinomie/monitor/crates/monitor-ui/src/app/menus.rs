@@ -2,6 +2,12 @@
 //! Menu bar, toolbar and keyboard shortcuts.
 use super::*;
 
+/// The web documentation, opened in the system browser from the Help menu.
+const DOCUMENTATION_URL: &str = "https://antinomie.moremorepwn.blog/docs/";
+
+/// What the Tools menu is wider than the others: icons before the labels.
+const TOOLS_MENU_EXTRA_WIDTH: f32 = 90.0;
+
 impl MonitorApp {
     /// Menu shortcuts; they wait while a text field or terminal has the
     /// keyboard.
@@ -295,17 +301,24 @@ impl MonitorApp {
                         }
                     });
                     ui.menu_button("Tools", |ui| {
-                        // Room between an item and its shortcut.
-                        ui.set_min_width(ui.spacing().menu_width);
-                        if ui.add(item("Settings…", Some(keys::SETTINGS))).clicked() {
+                        // Room for the longest label with its icon, and between
+                        // an item and its shortcut.
+                        ui.set_min_width(ui.spacing().menu_width + TOOLS_MENU_EXTRA_WIDTH);
+                        if ui
+                            .add(item(
+                                &format!("{} Settings…", egui_phosphor::regular::GEAR),
+                                Some(keys::SETTINGS),
+                            ))
+                            .clicked()
+                        {
                             self.settings_open = true;
                             ui.close_menu();
                         }
-                        if ui.button("Analysis tools").clicked() {
+                        if ui.button(format!("{} Analysis tools", egui_phosphor::regular::WRENCH)).clicked() {
                             self.open_library(LibraryPage::Tools);
                             ui.close_menu();
                         }
-                        if ui.button("Detection rules").clicked() {
+                        if ui.button(format!("{} Detection rules", egui_phosphor::regular::SHIELD_CHECK)).clicked() {
                             self.open_library(LibraryPage::Rules);
                             ui.close_menu();
                         }
@@ -326,18 +339,24 @@ impl MonitorApp {
                             self.api_keys.open = true;
                             ui.close_menu();
                         }
-                        if ui.button("App dependencies…").clicked() {
+                        if ui.button(format!("{} App dependencies…", egui_phosphor::regular::PACKAGE)).clicked() {
                             self.folder_picker.refresh(ctx);
                             self.dependencies.open = true;
                             ui.close_menu();
                         }
-                        if ui.button("UI performance…").clicked() {
+                        if ui.button(format!("{} UI performance…", egui_phosphor::regular::GAUGE)).clicked() {
                             self.performance.open = true;
                             ui.close_menu();
                         }
                         ui.separator();
                         if ui
-                            .add_enabled(self.running(), item("Refresh recorder statistics", None))
+                            .add_enabled(self.running(), item(
+                                &format!(
+                                    "{} Refresh recorder statistics",
+                                    egui_phosphor::regular::ARROWS_CLOCKWISE
+                                ),
+                                None,
+                            ))
                             .clicked()
                         {
                             self.send(Command::RecorderStats);
@@ -357,6 +376,11 @@ impl MonitorApp {
                         }
                         if ui.button("Filter guide").clicked() {
                             crate::query::open_guide(ui.ctx());
+                            ui.close_menu();
+                        }
+                        if ui.button("Online documentation").clicked() {
+                            ui.ctx()
+                                .open_url(egui::OpenUrl::new_tab(DOCUMENTATION_URL));
                             ui.close_menu();
                         }
                     });

@@ -419,7 +419,17 @@ impl MonitorApp {
             .find(|run| self.selected_run.as_ref() == Some(&run.id) && run.vm_id == vm_id)
             .cloned();
         let Some(run) = run else {
-            ui.colored_label(theme::muted(), "Select a run in Run History.");
+            crate::widgets::info_panel(
+                ui,
+                &crate::widgets::InfoPanel {
+                    icon: egui_phosphor::regular::LIST_MAGNIFYING_GLASS,
+                    title: "Select a run to view its details",
+                    about: "Details show a run's recorded process tree, analysis checklist, \
+                            route and recording status.",
+                    steps_title: "To see a run",
+                    steps: &["Select a run in Run History."],
+                },
+            );
             return;
         };
         // A warning or note about the recording shows only when there is one.

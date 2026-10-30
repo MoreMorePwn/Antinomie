@@ -141,7 +141,8 @@ impl Performance {
         }
     }
 
-    /// Draws the FPS counter in the top-right corner, beside the menu bar. It never requests a
+    /// Draws the FPS counter in the title bar, just left of the window buttons
+    /// (the top-right corner in fullscreen). It never requests a
     /// repaint: the number is the real repaint rate, and an idle window shows
     /// "idle" on the app's own slow cadence.
     pub(crate) fn show_fps(&mut self, ctx: &egui::Context) {
@@ -157,10 +158,20 @@ impl Performance {
         let galley =
             painter.layout_no_wrap(label, egui::FontId::monospace(font.size * 0.85), color);
         let padding = egui::vec2(6.0, 2.0);
-        let rect = egui::Align2::RIGHT_TOP.align_size_within_rect(
-            galley.size() + padding * 2.0,
-            ctx.screen_rect().shrink2(egui::vec2(8.0, 4.0)),
-        );
+        let (caption, buttons_left) = crate::title_bar::caption_slot(ctx);
+        let size = galley.size() + padding * 2.0;
+        let rect = if caption > 0.0 {
+            egui::Rect::from_min_size(
+                egui::pos2(
+                    buttons_left - 8.0 - size.x,
+                    ctx.screen_rect().top() + (caption - size.y) / 2.0,
+                ),
+                size,
+            )
+        } else {
+            egui::Align2::RIGHT_TOP
+                .align_size_within_rect(size, ctx.screen_rect().shrink2(egui::vec2(8.0, 4.0)))
+        };
         painter.rect_filled(rect, 4.0, theme::raised());
         painter.rect_stroke(
             rect,
