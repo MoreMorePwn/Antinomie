@@ -438,3 +438,97 @@ fn native_regex_tab_fixture() {
     )
     .unwrap();
 }
+
+/// The Detection rules page in a real window with an installed pack of
+/// long rule names and the catalogue, for screenshots.
+/// ANTINOMIE_QA_TAB = installed | catalog (default installed), ANTINOMIE_QA_ONLINE = 1
+/// allows downloads, ANTINOMIE_QA_THEME and ANTINOMIE_QA_SIZE as above.
+#[test]
+#[ignore = "requires X11 native rendering; exits after 12 seconds"]
+fn native_rules_pack_fixture() {
+    use winit::platform::x11::EventLoopBuilderExtX11;
+    struct App {
+        model: Model,
+        dir: std::path::PathBuf,
+        outbound: bool,
+        deadline: std::time::Instant,
+        /// Removes the data directory when the window closes.
+        _fixture: Fixture,
+    }
+    impl eframe::App for App {
+        fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let mut detection =
+                    antinomie_monitor_core::analysis::detection::Settings::default();
+                let tools = ruleset::ToolConfig::default();
+                let _ = self
+                    .model
+                    .page(ui, &self.dir, &mut self.outbound, &tools, &mut detection);
+            });
+            if std::time::Instant::now() > self.deadline {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            ctx.request_repaint_after(Duration::from_millis(200));
+        }
+    }
+    let var = |name: &str| std::env::var(name).unwrap_or_default();
+    let theme_choice = match var("ANTINOMIE_QA_THEME").as_str() {
+        "light" => crate::theme::Theme::Light,
+        "blue" => crate::theme::Theme::Blue,
+        _ => crate::theme::Theme::Dark,
+    };
+    let (width, height) = var("ANTINOMIE_QA_SIZE")
+        .split_once('x')
+        .and_then(|(w, h)| Some((w.parse::<f32>().ok()?, h.parse::<f32>().ok()?)))
+        .unwrap_or((1100.0, 700.0));
+    let fixture = Fixture::new("native");
+    let rules: String = [
+        "Windows_Trojan_Generic_Credential_Stealer_Browser_Profiles",
+        "Linux_Cryptominer_Xmrig_Miner_Configuration_Strings",
+        "MAL_Ransomware_Linux_Encrypts_Home_Directory_Files",
+    ]
+    .iter()
+    .map(|name| {
+        format!("rule {name}\n{{\n  meta:\n    description = \"{name}\"\n  strings:\n    $a = \"{name}\"\n  condition:\n    $a\n}}\n\n")
+    })
+    .collect();
+    fixture.pack("signature-base", "yara", "rules.yar", &rules);
+    let (catalog, _) = catalog_value();
+    ruleset::store_catalog(&fixture.dir, &ruleset::validate_catalog(&catalog).unwrap()).unwrap();
+    let model = Model {
+        engine: "yara".into(),
+        tab: if var("ANTINOMIE_QA_TAB") == "catalog" {
+            Tab::Catalog
+        } else {
+            Tab::Installed
+        },
+        catalog_pick: "forge-core".into(),
+        catalog: ruleset::load_catalog(&fixture.dir).unwrap(),
+        ..Model::default()
+    };
+    let dir = fixture.dir.clone();
+    let outbound = var("ANTINOMIE_QA_ONLINE") == "1";
+    eframe::run_native(
+        "Antinomie Rules QA",
+        eframe::NativeOptions {
+            viewport: egui::ViewportBuilder::default().with_inner_size([width, height]),
+            persist_window: false,
+            event_loop_builder: Some(Box::new(|builder| {
+                builder.with_x11().with_any_thread(true);
+            })),
+            ..Default::default()
+        },
+        Box::new(move |cc| {
+            crate::theme::install(&cc.egui_ctx);
+            crate::theme::apply_theme(&cc.egui_ctx, theme_choice);
+            Ok(Box::new(App {
+                model,
+                dir,
+                outbound,
+                deadline: std::time::Instant::now() + Duration::from_secs(12),
+                _fixture: fixture,
+            }))
+        }),
+    )
+    .unwrap();
+}

@@ -38,6 +38,13 @@ struct SetRow {
     update: bool,
 }
 
+/// Room above and below the status lines under the toolbar.
+const NOTICE_GAP: f32 = 6.0;
+/// Extra row height and column spacing of the pack and rule tables, so the
+/// text has room around it.
+pub(super) const ROW_PAD: f32 = 8.0;
+pub(super) const CELL_PAD: f32 = 8.0;
+
 fn severity_rank(severity: &str) -> u8 {
     match severity {
         "informational" | "info" => 1,
@@ -205,10 +212,20 @@ impl Model {
         });
     }
 
+    /// The status lines under the buttons: downloads off, the last result, a
+    /// running job. They sit on the content's left edge with room above and
+    /// below, between the buttons and the table.
     pub(super) fn notices(&mut self, ui: &mut egui::Ui, outbound: &mut bool) {
+        // A failure was raised as a toast when it arrived.
+        let status =
+            self.status_error.as_deref() != Some(self.status.as_str()) && !self.status.is_empty();
+        if *outbound && !status && self.job.is_none() {
+            return;
+        }
+        ui.add_space(NOTICE_GAP);
         if !*outbound {
             ui.horizontal_wrapped(|ui| {
-                crate::activity::warning(ui, "Downloads are off.");
+                ui.label(RichText::new("Downloads are off.").color(theme::muted()));
                 if ui
                     .button("Allow downloads")
                     .on_hover_text(format!(
@@ -220,13 +237,18 @@ impl Model {
                     .clicked()
                 {
                     *outbound = true;
+                    self.blocked = None;
                     self.status = "Downloads allowed. Check for updates reads the catalog.".into();
                 }
             });
         }
-        // A failure was raised as a toast when it arrived.
-        if self.status_error.as_deref() != Some(self.status.as_str()) && !self.status.is_empty() {
-            ui.label(RichText::new(&self.status).color(theme::text()));
+        if status {
+            let color = if self.blocked.as_deref() == Some(self.status.as_str()) {
+                theme::error()
+            } else {
+                theme::text()
+            };
+            ui.add(egui::Label::new(RichText::new(&self.status).color(color)).wrap());
         }
         if self.job.is_some() {
             let progress = self.progress_line();
@@ -239,6 +261,7 @@ impl Model {
                 },
             );
         }
+        ui.add_space(NOTICE_GAP);
     }
 
     // ---- Installed ----
@@ -354,6 +377,7 @@ impl Model {
 
     fn sets_table(&mut self, ui: &mut egui::Ui, data_dir: &Path, rows: &[SetRow]) {
         let font = ui.text_style_height(&egui::TextStyle::Body);
+        let row_height = table::row_height(font) + ROW_PAD;
         let order = crate::table_sort::order(ui.ctx(), "rules_sets", rows.len(), |column, a, b| {
             let (a, b) = (&rows[a], &rows[b]);
             match column {
@@ -370,10 +394,11 @@ impl Model {
         } else {
             self.group_id.clone()
         };
-        let height = table::row_height(font) * (rows.len().min(5) as f32 + 1.5) + 8.0;
+        let height = row_height * (rows.len().min(5) as f32 + 1.5) + 8.0;
         egui::ScrollArea::horizontal()
             .id_salt("rules_sets_scroll")
             .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.x += CELL_PAD;
                 ui.set_min_width(520.0);
                 table::begin(ui);
                 TableBuilder::new(ui)
@@ -399,16 +424,10 @@ impl Model {
                         }
                     })
                     .body(|body| {
-                        body.rows(table::row_height(font), rows.len(), |mut row| {
+                        body.rows(row_height, rows.len(), |mut row| {
                             let set = &rows[order[row.index()]];
                             let is_selected = selected == set.id;
                             row.set_selected(is_selected);
-                            row.col(|ui| {
-                                let mut on = set.enabled;
-                                if ui.checkbox(&mut on, "").changed() {
-                                    toggle = Some((set.id.clone(), set.group, on));
-                                }
-                            });
                             row.col(|ui| {
                                 table::row_mark(
                                     ui,
@@ -418,6 +437,12 @@ impl Model {
                                         table::Mark::None
                                     },
                                 );
+                                let mut on = set.enabled;
+                                if ui.checkbox(&mut on, "").changed() {
+                                    toggle = Some((set.id.clone(), set.group, on));
+                                }
+                            });
+                            row.col(|ui| {
                                 table::cell_click(ui, table::Cell::Text, &set.name);
                             });
                             row.col(|ui| {
@@ -505,6 +530,7 @@ impl Model {
             if ui.button("Export manifest").clicked() {
                 self.export_manifest(data_dir, &pack);
             }
+            self.remove_button(ui, data_dir, &pack.id);
         });
         self.installed_source(ui, data_dir, outbound, &pack);
         // A hosted-archive pack (schema 1) updates from its own catalog entry.
@@ -783,10 +809,11 @@ impl Model {
         toggle: &mut Option<(String, bool)>,
     ) {
         let font = ui.text_style_height(&egui::TextStyle::Body);
+        let row_height = table::row_height(font) + ROW_PAD;
         egui::ScrollArea::horizontal()
             .id_salt("rules_list_scroll")
             .show(ui, |ui| {
-                ui.set_min_width(480.0);
+                ui.spacing_mut().item_spacing.x += CELL_PAD;
                 table::begin(ui);
                 TableBuilder::new(ui)
                     .id_salt("rules_list")
@@ -794,12 +821,12 @@ impl Model {
                     .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
                     .striped(true)
                     .column(Column::exact(34.0))
-                    .column(Column::remainder().at_least(160.0).clip(true))
-                    .column(Column::exact(96.0))
-                    .column(Column::exact(104.0))
+                    .column(Column::remainder().at_least(120.0).clip(true))
+                    .column(Column::exact(84.0))
+                    .column(Column::exact(84.0))
                     .column(
-                        Column::initial(130.0)
-                            .at_least(60.0)
+                        Column::initial(100.0)
+                            .at_least(40.0)
                             .resizable(true)
                             .clip(true),
                     )
@@ -817,21 +844,12 @@ impl Model {
                         }
                     })
                     .body(|body| {
-                        body.rows(table::row_height(font), self.sorted.len(), |mut row| {
+                        body.rows(row_height, self.sorted.len(), |mut row| {
                             let index = self.sorted[row.index()];
                             let rule = &self.rows[index];
                             let state = self.rule_state(rule);
                             let selected = self.detail == Some(index);
                             row.set_selected(selected);
-                            row.col(|ui| {
-                                let mut on = state == "enabled";
-                                if ui
-                                    .add_enabled(rule.compatible, egui::Checkbox::new(&mut on, ""))
-                                    .changed()
-                                {
-                                    *toggle = Some((rule.id.clone(), on));
-                                }
-                            });
                             row.col(|ui| {
                                 table::row_mark(
                                     ui,
@@ -841,6 +859,15 @@ impl Model {
                                         table::Mark::None
                                     },
                                 );
+                                let mut on = state == "enabled";
+                                if ui
+                                    .add_enabled(rule.compatible, egui::Checkbox::new(&mut on, ""))
+                                    .changed()
+                                {
+                                    *toggle = Some((rule.id.clone(), on));
+                                }
+                            });
+                            row.col(|ui| {
                                 table::cell_click(ui, table::Cell::Mono, &rule.name);
                             });
                             row.col(|ui| {
