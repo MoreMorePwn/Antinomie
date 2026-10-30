@@ -5,7 +5,7 @@
 //! ANTINOMIE_QA_SCENE = history | static | details | terminal | empty (an app with no runs,
 //! cores, dumps or captures, showing the panel named by ANTINOMIE_QA_PANEL =
 //! core | memory | disks | network | trace | static | history | summary | activity)
-//! ANTINOMIE_QA_OPEN = strings | regex (static scene) | routes | rules,
+//! ANTINOMIE_QA_OPEN = strings | regex (static scene) | routes | rules | about | started,
 //! ANTINOMIE_QA_THEME = dark | light | blue, ANTINOMIE_QA_SIZE = 1280x820,
 //! ANTINOMIE_QA_SECONDS = 25.
 use super::*;
@@ -173,11 +173,12 @@ fn native_ui_polish_fixture() {
                 app.terminals.insert("term-shot".into(), terminal);
             }
             app.settings.set_theme(theme_choice);
+            app.settings.show_fps = var("ANTINOMIE_QA_FPS") == "1";
             theme::apply_theme(&cc.egui_ctx, theme_choice);
             if scene == "static" {
                 app.selected_analysis = Some("report-1".into());
             }
-            // ANTINOMIE_QA_OPEN = strings | regex | routes | rules
+            // ANTINOMIE_QA_OPEN = strings | regex | routes | rules | about | started
             match var("ANTINOMIE_QA_OPEN").as_str() {
                 kind @ ("strings" | "regex") => {
                     let kind = if kind == "regex" {
@@ -196,6 +197,8 @@ fn native_ui_polish_fixture() {
                     app.settings_page = super::super::settings_window::SettingsPage::NetworkRoutes;
                 }
                 "rules" => app.open_library(crate::workspace::LibraryPage::Rules),
+                "about" => app.about_open = true,
+                "started" => app.open_getting_started(),
                 _ => {}
             }
             Ok(Box::new(QaApp {

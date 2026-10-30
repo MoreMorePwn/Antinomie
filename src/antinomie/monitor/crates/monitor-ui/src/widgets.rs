@@ -20,6 +20,7 @@
 //!   [`table::row_height`] and the header from [`table::header_height`].
 //!   Zebra, hover and selection fills come from the active theme's visuals.
 //! - Grouped facts on a page: [`card`]; a jump to another view: [`link`].
+//! - A run-based window with nothing to show: [`info_panel`].
 //! - Status words: [`chip`] with a [`Tone`]; filter-bar switches: [`toggle_chip`].
 //!
 //! Nothing here holds a literal color; add new ones to `theme::Palette`.
@@ -28,12 +29,14 @@
 #![allow(dead_code, unused_imports)]
 
 mod card;
+mod info_panel;
 pub mod table;
 mod tabs;
 mod tone;
 mod window;
 
 pub use card::{card, link};
+pub use info_panel::{info_panel, InfoPanel};
 pub use tabs::{segmented, tab, tab_row, tabs, TabItem};
 pub use tone::{chip, toggle_chip, toggle_chip_with, Tone};
 pub use window::{footer, footer_split, window, Dialog};

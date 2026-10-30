@@ -93,8 +93,23 @@ impl CoreView {
             } else if self.job.is_some() {
                 crate::theme::loading(ui, "Opening core…");
             } else {
-                crate::theme::section(ui, "Process core");
-                ui.add(egui::Label::new("Select a core.").wrap());
+                crate::widgets::info_panel(
+                    ui,
+                    &crate::widgets::InfoPanel {
+                        icon: egui_phosphor::regular::FILE,
+                        title: "Select a core to inspect it",
+                        about: "A core dump holds a process's memory and thread context: \
+                                registers, memory mappings, disassembly, strings and recovered \
+                                notes.",
+                        steps_title: "To get a core",
+                        steps: &[
+                            "Tick Core dump on exit when you run a program, or use Dump core \
+                             on a running process.",
+                            "Or import a Linux x86-64 core made elsewhere.",
+                            "Select the core in the list.",
+                        ],
+                    },
+                );
             }
             return;
         };

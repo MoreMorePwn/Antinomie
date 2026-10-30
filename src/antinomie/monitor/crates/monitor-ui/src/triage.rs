@@ -508,7 +508,7 @@ impl TriageView {
     ) -> Option<trace::InvocationKey> {
         if input.run_id.is_none() {
             self.tick(ui.ctx(), TriageInput::empty());
-            ui.weak("Select a run.");
+            no_run(ui);
             return None;
         }
         self.mark_shown(ui.ctx());
@@ -851,6 +851,25 @@ impl TriageView {
             self.request_query_refresh();
         }
     }
+}
+
+/// Triage without a run selected: what it shows and how to get a run.
+pub(crate) fn no_run(ui: &mut egui::Ui) {
+    crate::widgets::info_panel(
+        ui,
+        &crate::widgets::InfoPanel {
+            icon: egui_phosphor::regular::SHIELD_WARNING,
+            title: "Select a run to view its triage",
+            about: "Triage reads what a run recorded: the process tree, suspicious activity, \
+                    files, network, eBPF, rule matches and file properties.",
+            steps_title: "To triage a run",
+            steps: &[
+                "Start the VM.",
+                "Open Run → Launch program.",
+                "Select the run in the list above or in Run History.",
+            ],
+        },
+    );
 }
 
 impl Drop for TriageView {

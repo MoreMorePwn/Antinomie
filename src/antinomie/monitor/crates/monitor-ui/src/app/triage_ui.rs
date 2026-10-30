@@ -17,7 +17,7 @@ impl MonitorApp {
         let Some(run) = self.selected_triage_run() else {
             self.triage
                 .tick(ui.ctx(), crate::triage::TriageInput::empty());
-            ui.weak("Select a run.");
+            crate::triage::no_run(ui);
             return;
         };
         let owned_pcap = self.owned_triage_pcap();
