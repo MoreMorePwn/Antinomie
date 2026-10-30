@@ -10,10 +10,10 @@
 Run a Linux sample in a disposable VM on your own computer, watch it from inside
 the guest kernel, and investigate everything it did in one desktop app.
 
-**Local**: samples, recordings and analysis stay on your machine; nothing is uploaded.<br>
-**Kernel-level**: the guest kernel records every system call, file write and packet; no agent or `ptrace` to find.<br>
-**Sandbox**: QEMU VMs you can reset or roll back, realistic device profiles and a network route per run.<br>
-**Workspace**: trace, Triage, network, memory, disks, static analysis and a debugger, all on one saved recording.
+**Local**: samples, recordings and analysis stay on your machine; nothing is uploaded without your approval.<br>
+**Kernel-level**: the guest kernel records every system call, file activity and packet; no agent to find.<br>
+**Sandbox**: QEMU VMs you control down to the hardware: CPU, memory, disks and their bus, real device and cloud identities, branching snapshots you can reset or roll back to, and a network route per run.<br>
+**Workspace**: trace, Triage, network, memory, disks, static analysis, a debugger and all the tools you need in one space.
 
 [**Quick start**](#quick-start) ·
 [User guide](docs/usage.md) ·
@@ -136,17 +136,10 @@ the host. See the [tool requirements](docs/usage.md#dependencies-and-analysis-to
 
 ## How it works
 
-```text
-Program and descendants in the guest
-                ↓
-  Patched Linux 6.12.94 guest kernel
-                ↓
-       Shared-memory transport
-                ↓
-   Native host app → saved recordings
-                ↓
-  Trace · Triage · Network · Analysis
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/diagrams/how-it-works-dark.svg">
+  <img src="assets/diagrams/how-it-works-light.svg" alt="A sample runs in a QEMU guest whose patched Linux 6.12.94 kernel records its system calls, file activity and packets. The records cross a shared-memory transport to the Antinomie host app, which saves one recording that the Trace, Triage, Network, Memory, Disks, Static, Debugger and Reports views read." width="860">
+</picture>
 
 - The host manages the VM, keeps the records and presents the evidence.
 - Memory and captured data can change while observed, so unreadable bytes and
@@ -162,8 +155,9 @@ Details are in the [implementation record](docs/implementation.md).
 ### Install a published build
 
 You need Linux x86-64 with glibc 2.39 or newer (Debian 13, Ubuntu 24.04 or
-later). On Debian or Ubuntu, install the host programs (`libguestfs-tools` is
-only needed for VMs of the Debian bases):
+later). On Debian or Ubuntu, install the host programs. `libguestfs-tools`
+gives Antinomie `guestfish`, which writes each Debian VM's account, disk layout
+and network card into its disk without root; BusyBox VMs do not need it:
 
 ```sh
 sudo apt install qemu-system-x86 qemu-utils qemu-system-gui curl bubblewrap tshark util-linux libguestfs-tools
@@ -249,7 +243,7 @@ download anything, **you build a full pack** yourself:
 | Base | Best for | Notes |
 |---|---|---|
 | **BusyBox** | Command-line samples | Small and fast to boot. |
-| **Debian 13 Minimal (console)** | Samples that need a real Debian userspace without a desktop | APT and the standard command-line tools, no desktop. Needs at least 1024 MiB RAM and 4 GiB disk. New in 0.7.1. |
+| **Debian 13 Minimal (console)** | Samples that need a real Debian userspace without a desktop | APT and the standard command-line tools, no desktop. Needs at least 1024 MiB RAM and 4 GiB disk. |
 | **Debian 13 (desktop)** | Samples that need a graphical session | Adds the desktop; programs can run in the guest desktop. |
 
 - Choose a base compatible with the application. Installing a newer app does not
@@ -257,6 +251,76 @@ download anything, **you build a full pack** yourself:
 - Your data (bases, VM disks, recordings) lives in `~/antinomie` by default.
 - The [user guide](docs/usage.md) covers controls, transport settings, desktop
   execution and layouts.
+
+<details>
+<summary><b>Build your own base</b></summary>
+
+<br>
+
+**Base images → Add base → Build base…** builds BusyBox, Debian 13 Minimal or
+Debian 13 desktop from the build kit the app carries. A short wizard asks the
+installer questions (hostname; for Debian also language, keyboard, time zone,
+software and mirror). **Where** picks how it builds; **Automatic** takes the
+first method that can run, in this order:
+
+<details>
+<summary>Native (this Linux host)</summary>
+
+<br>
+
+Fastest, but only on a Debian 13 host with Debian's exact kernel toolchain
+(gcc-14 14.2.0-19, binutils 2.44), because a Debian base's kernel must report
+Debian's own build string. Install the tool suite the wizard lists, then choose
+**Native**.
+
+</details>
+
+<details>
+<summary>Podman or Docker (pinned container)</summary>
+
+<br>
+
+Works on any distribution. The first build makes the `antinomie-builder` image
+(Debian 13 pinned by digest and package snapshot, the exact toolchain) and
+needs the network once; later builds start at once and leave no container
+behind. Rootless Podman is preferred: Docker's group gives root-equivalent
+access. Kept images are listed in the dialog with a **Remove** button.
+
+</details>
+
+<details>
+<summary>QEMU builder (a builder VM)</summary>
+
+<br>
+
+Needs only QEMU and `curl`. The build runs inside a throwaway builder VM, so it
+is the slowest but needs nothing else on the host. Automatic falls back to it
+when no container image can be fetched.
+
+</details>
+
+<details>
+<summary>From the command line</summary>
+
+<br>
+
+`scripts/build-base.py` is the same kit without the app. Write a job file
+(`{"format": 1, "profile": "busybox"}`; profiles are `busybox`,
+`debian-minimal` and `debian-xfce`), then:
+
+```sh
+scripts/build-base.py --job job.json --inputs INPUTS --work WORK --output OUT \
+  --kernel-cache kernel.cache --image-cache image.cache --ccache ccache/ \
+  --container auto
+```
+
+`--kernel-cache`, `--image-cache` and `--ccache` reuse an earlier kernel, root
+filesystem and compiler output, so a rebuild after a small change takes minutes.
+Import the output folder with **Add base → Import base…**.
+
+</details>
+
+</details>
 
 ## Requirements
 
@@ -271,21 +335,6 @@ download anything, **you build a full pack** yourself:
 The app checks dependencies at startup (**Tools → App dependencies**). From a
 terminal: `antinomie --check-dependencies`. The
 [full dependency list](docs/usage.md#dependencies-and-analysis-tools) names every tool.
-
-## Limits
-
-* **Device profiles are bounded.** A device profile changes what a guest can read of its
-  hardware identity, and the kernel hides its own traces, but some things stay
-  visible (the app lists them under "Still visible"). `CPUID` and `RDTSC` checks
-  leave no system call and are not seen. A sample that reads its own code can
-  find the debugger's `0xCC` breakpoint bytes; hardware breakpoints avoid that.
-  Do not assume a sample cannot tell it is being analyzed.
-* **Telemetry can be lost.** Very heavy load can drop telemetry, and reconnects can
-  be slow. Loss and partial-recording indicators stay on, and
-  [telemetry robustness](#roadmap) is planned.
-* **Linux x86-64 only.** Guests and the host are x86-64 Linux today.
-* **Tools are optional and pinned.** Engines run only if installed; downloads are
-  checked against SHA-256 values recorded in the source.
 
 ## What's in 0.7.1
 
@@ -324,19 +373,16 @@ the full list.
 
 ## Roadmap
 
-**Planned, not built, and undated.** Whole-Triage report export and file
-write-content capture, earlier candidates, are already on this branch (see the
-[changelog](CHANGELOG.md)).
+Planned and undated:
 
-**Candidates**
-
-| Area | Idea |
-|---|---|
-| Automation | **Rule-triggered actions**: syscall "what if" triggers; **auto mode**: ELF in, report out; a headless, API and web mode |
-| Capture | **TLS decryption**; **per-packet process attribution** |
-| Depth | **MMU-level unpacking** and fileless capture; **root-level activity** (rootkits, LKMs, eBPF) |
-| Reach | **arm64 and RISC-V guests** |
-| Quality | **Telemetry robustness** (drops under heavy load, reconnect speed) |
+- **Headless mode**
+- **Docker-based web interface and API**
+- **Auto mode**: a sample in, a report out
+- **arm64** and **RISC-V** guests
+- **TLS decryption**
+- **In-memory unpacking detection**: catch and save code a sample decrypts or
+  unpacks in memory
+- **OpenWrt** and **Ubuntu** bases
 
 ## Documentation
 

@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="470" viewBox="0 0 960 470" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" role="img" aria-labelledby="title">
+<title id="title">How Antinomie works: a sample runs in a QEMU guest whose patched kernel records its system calls, file activity and packets; the records cross a shared-memory transport to the host app, which saves one recording that every workspace view reads.</title>
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#acdefc"/></marker></defs>
+<rect width="960" height="470" rx="14" fill="#0d1117"/>
+<rect x="24" y="24" width="380" height="422" rx="14" fill="#161d27" stroke="#3a4b5e" stroke-width="1.5"/>
+<text x="42" y="54" font-size="17" font-weight="700" fill="#e6edf3" text-anchor="start">Guest VM</text>
+<text x="42" y="74" font-size="13" font-weight="400" fill="#9aa7b4" text-anchor="start">QEMU/KVM on your computer</text>
+<rect x="54" y="96" width="320" height="76" rx="10" fill="#0d1117" stroke="#3a4b5e" stroke-width="1.5"/>
+<text x="214.0" y="128" font-size="15" font-weight="600" fill="#e6edf3" text-anchor="middle">Sample and its descendants</text>
+<text x="214.0" y="150" font-size="13" font-weight="400" fill="#9aa7b4" text-anchor="middle">no agent beside it to find</text>
+<line x1="214.0" y1="174" x2="214.0" y2="206" stroke="#acdefc" stroke-width="2.2" marker-end="url(#arr)"/>
+<text x="224.0" y="196" font-size="12" font-weight="400" fill="#9aa7b4" text-anchor="start">system calls</text>
+<rect x="54" y="210" width="320" height="96" rx="10" fill="#acdefc" stroke="#acdefc" stroke-width="1.5"/>
+<text x="214.0" y="240" font-size="15" font-weight="700" fill="#00203f" text-anchor="middle">Patched Linux 6.12.94 kernel</text>
+<text x="214.0" y="264" font-size="13" font-weight="400" fill="#00203f" text-anchor="middle">records every system call,</text>
+<text x="214.0" y="282" font-size="13" font-weight="400" fill="#00203f" text-anchor="middle">file activity and packet</text>
+<text x="42" y="342" font-size="13" font-weight="600" fill="#9aa7b4" text-anchor="start">You shape the guest</text>
+<rect x="42" y="354" width="80" height="52" rx="8" fill="#0d1117" stroke="#3a4b5e" stroke-width="1.5" stroke-dasharray="6 5"/>
+<text x="82.0" y="376" font-size="11" font-weight="400" fill="#e6edf3" text-anchor="middle">Device and</text>
+<text x="82.0" y="392" font-size="11" font-weight="400" fill="#e6edf3" text-anchor="middle">cloud profiles</text>
+<rect x="129" y="354" width="80" height="52" rx="8" fill="#0d1117" stroke="#3a4b5e" stroke-width="1.5" stroke-dasharray="6 5"/>
+<text x="169.0" y="376" font-size="11" font-weight="400" fill="#e6edf3" text-anchor="middle">CPU, RAM,</text>
+<text x="169.0" y="392" font-size="11" font-weight="400" fill="#e6edf3" text-anchor="middle">disks, bus</text>
+<rect x="216" y="354" width="80" height="52" rx="8" fill="#0d1117" stroke="#3a4b5e" stroke-width="1.5" stroke-dasharray="6 5"/>
+<text x="256.0" y="376" font-size="11" font-weight="400" fill="#e6edf3" text-anchor="middle">Snapshots,</text>
+<text x="256.0" y="392" font-size="11" font-weight="400" fill="#e6edf3" text-anchor="middle">rollback</text>
+<rect x="303" y="354" width="80" height="52" rx="8" fill="#0d1117" stroke="#3a4b5e" stroke-width="1.5" stroke-dasharray="6 5"/>
+<text x="343.0" y="376" font-size="11" font-weight="400" fill="#e6edf3" text-anchor="middle">Network</text>
+<text x="343.0" y="392" font-size="11" font-weight="400" fill="#e6edf3" text-anchor="middle">route per run</text>
+<text x="214.0" y="430" font-size="11.5" font-weight="400" fill="#9aa7b4" text-anchor="middle">drop · InetSim · Internet · Tor · WireGuard · SOCKS5</text>
+<line x1="408" y1="258" x2="552" y2="258" stroke="#acdefc" stroke-width="2.2" marker-end="url(#arr)"/>
+<text x="480.0" y="228" font-size="14" font-weight="700" fill="#acdefc" text-anchor="middle">Shared-memory</text>
+<text x="480.0" y="246" font-size="14" font-weight="700" fill="#acdefc" text-anchor="middle">transport</text>
+<text x="480.0" y="282" font-size="12" font-weight="400" fill="#9aa7b4" text-anchor="middle">gaps and losses</text>
+<text x="480.0" y="298" font-size="12" font-weight="400" fill="#9aa7b4" text-anchor="middle">stay visible</text>
+<rect x="556" y="24" width="380" height="422" rx="14" fill="#161d27" stroke="#3a4b5e" stroke-width="1.5"/>
+<text x="574" y="54" font-size="17" font-weight="700" fill="#e6edf3" text-anchor="start">Antinomie</text>
+<text x="574" y="74" font-size="13" font-weight="400" fill="#9aa7b4" text-anchor="start">native host app (Rust, egui)</text>
+<rect x="586" y="210" width="320" height="96" rx="10" fill="#13263a" stroke="#acdefc" stroke-width="1.5"/>
+<text x="746.0" y="246" font-size="15" font-weight="700" fill="#e6edf3" text-anchor="middle">One saved recording</text>
+<text x="746.0" y="268" font-size="13" font-weight="400" fill="#9aa7b4" text-anchor="middle">trace, packets, files, memory and cores</text>
+<text x="746.0" y="286" font-size="13" font-weight="400" fill="#9aa7b4" text-anchor="middle">stay on your machine</text>
+<rect x="586.0" y="96" width="74" height="34" rx="8" fill="#0d1117" stroke="#3a4b5e" stroke-width="1.5"/>
+<text x="623.0" y="118" font-size="13" font-weight="600" fill="#e6edf3" text-anchor="middle">Trace</text>
+<rect x="668.6" y="96" width="74" height="34" rx="8" fill="#0d1117" stroke="#3a4b5e" stroke-width="1.5"/>
+<text x="705.6" y="118" font-size="13" font-weight="600" fill="#e6edf3" text-anchor="middle">Triage</text>
+<rect x="751.2" y="96" width="74" height="34" rx="8" fill="#0d1117" stroke="#3a4b5e" stroke-width="1.5"/>
+<text x="788.2" y="118" font-size="13" font-weight="600" fill="#e6edf3" text-anchor="middle">Network</text>
+<rect x="833.8" y="96" width="74" height="34" rx="8" fill="#0d1117" stroke="#3a4b5e" stroke-width="1.5"/>
+<text x="870.8" y="118" font-size="13" font-weight="600" fill="#e6edf3" text-anchor="middle">Memory</text>
+<rect x="586.0" y="138" width="74" height="34" rx="8" fill="#0d1117" stroke="#3a4b5e" stroke-width="1.5"/>
+<text x="623.0" y="160" font-size="13" font-weight="600" fill="#e6edf3" text-anchor="middle">Disks</text>
+<rect x="668.6" y="138" width="74" height="34" rx="8" fill="#0d1117" stroke="#3a4b5e" stroke-width="1.5"/>
+<text x="705.6" y="160" font-size="13" font-weight="600" fill="#e6edf3" text-anchor="middle">Static</text>
+<rect x="751.2" y="138" width="74" height="34" rx="8" fill="#0d1117" stroke="#3a4b5e" stroke-width="1.5"/>
+<text x="788.2" y="160" font-size="13" font-weight="600" fill="#e6edf3" text-anchor="middle">Debugger</text>
+<rect x="833.8" y="138" width="74" height="34" rx="8" fill="#0d1117" stroke="#3a4b5e" stroke-width="1.5"/>
+<text x="870.8" y="160" font-size="13" font-weight="600" fill="#e6edf3" text-anchor="middle">Reports</text>
+<line x1="746.0" y1="208" x2="746.0" y2="184" stroke="#acdefc" stroke-width="2.2" marker-end="url(#arr)"/>
+<text x="574" y="342" font-size="13" font-weight="600" fill="#9aa7b4" text-anchor="start">Around it</text>
+<rect x="574" y="354" width="344" height="52" rx="8" fill="#0d1117" stroke="#3a4b5e" stroke-width="1.5" stroke-dasharray="6 5"/>
+<text x="746.0" y="376" font-size="12.5" font-weight="400" fill="#e6edf3" text-anchor="middle">Analysis tools in a bubblewrap sandbox</text>
+<text x="746.0" y="394" font-size="11.5" font-weight="400" fill="#9aa7b4" text-anchor="middle">YARA · Sigma · Suricata · capa · Ghidra · Volatility 3</text>
+<text x="746.0" y="430" font-size="11.5" font-weight="400" fill="#9aa7b4" text-anchor="middle">Nothing is uploaded without your approval</text>
+</svg>
