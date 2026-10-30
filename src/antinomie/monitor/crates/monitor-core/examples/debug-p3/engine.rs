@@ -121,8 +121,11 @@ pub fn fork_follow(context: &mut Context) -> Result<String, String> {
     prog.dbg.set_breakpoint(parent_site, 1).map_err(text)?;
     let mut forks = 0;
     let mut parent_hits = 0;
+    let mut action = ResumeAction::Continue;
     for _ in 0..40 {
-        let event = prog.go(20)?;
+        prog.dbg.resume(action).map_err(text)?;
+        let event = wait_for(&mut prog.dbg, 20)?;
+        action = ResumeAction::Continue;
         match event.kind {
             StopKind::Fork { child } => {
                 let mut kid = adopt_kid(&mut prog, &child)?;
@@ -130,6 +133,14 @@ pub fn fork_follow(context: &mut Context) -> Result<String, String> {
                 forks += 1;
             }
             StopKind::Breakpoint { addr } if addr == parent_site => parent_hits += 1,
+            // A detached child's exit can deliver SIGCHLD between forks.
+            // Preserve that delivery, as the standalone signal test does.
+            StopKind::Signal { signal: 17 } => {
+                action = ResumeAction::ContinueSignal {
+                    tid: event.tid,
+                    signal: 17,
+                };
+            }
             other => return Err(format!("the parent stopped as {other:?}")),
         }
         if forks == 2 {
@@ -348,8 +359,16 @@ pub fn exec_event(context: &mut Context) -> Result<String, String> {
 
 /// Without the option an exec still ends the session, as in phase 2.
 pub fn exec_legacy(context: &mut Context) -> Result<String, String> {
-    let mut prog = context.start("exec", 3, 0, None)?;
-    prog.dbg.resume(ResumeAction::Continue).ok();
+    // Attach to the old image before releasing its exec. A short running
+    // fixture can otherwise reach the replacement image before attach finishes.
+    let mut prog = context.start("exec-gated", 3, 0, None)?;
+    if prog.dbg.state().map_err(text)? != TargetState::Running {
+        return Err("the pre-exec fixture was not running at attach".into());
+    }
+    context.driver.command(Command::TerminalInput {
+        run_id: prog.launched.run.id.clone(),
+        data: b"g\n".to_vec(),
+    })?;
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
         match prog.dbg.state().map_err(text)? {

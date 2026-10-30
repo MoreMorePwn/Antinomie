@@ -36,6 +36,8 @@
  *   killtimer arms a timer that sends the process SIGKILL after ROUNDS ms and
  *            calls parent_site() every 50 ms until then (a group killed while
  *            the debugger holds it stopped)
+ *   exec-gated waits for a 'g' line on stdin after printing its identity,
+ *            then runs exec mode (attach to the old image before releasing it)
  *   exitstep a second thread reaches exit_syscall, a SYS_exit system call
  *            instruction of its own, after LEAD_MS (6000 by default); the main
  *            thread ticks
@@ -156,6 +158,8 @@ static int leaf(void)
 int main(int argc, char **argv)
 {
     const char *mode = argc > 1 ? argv[1] : "fork";
+    int exec_gate = !strcmp(mode, "exec-gated");
+    if (exec_gate) mode = "exec";
     long rounds = argc > 2 ? strtol(argv[2], NULL, 10) : 60;
     long workers = argc > 3 ? strtol(argv[3], NULL, 10) : 0;
     pthread_t threads[MAX_WORKERS];
@@ -178,6 +182,15 @@ int main(int argc, char **argv)
         lead = 0;
     }
     if (lead > 0) usleep((useconds_t)lead * 1000);
+    if (exec_gate) {
+        /* The debugger must attach to the old image before the exec. */
+        char gate = 0;
+        ssize_t count;
+        do {
+            count = read(STDIN_FILENO, &gate, 1);
+        } while (count < 0 && errno == EINTR);
+        if (count != 1 || gate != 'g') return 98;
+    }
     if (!strcmp(mode, "killtimer")) {
         struct sigevent event = { .sigev_notify = SIGEV_SIGNAL, .sigev_signo = SIGKILL };
         struct itimerspec when = { .it_value = { rounds / 1000, (rounds % 1000) * 1000000 } };

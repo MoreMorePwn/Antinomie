@@ -6,6 +6,11 @@ it runs.
 
 ## 0.8.0 — unreleased
 
+- **Responsive non-stop debugger input.** Buffered debugger packets are read in
+  bounded bursts between guest event polls, avoiding a guest round trip for each
+  packet byte. Debugger qualification forwards child-exit signals and waits for
+  attachment before allowing its legacy-exec fixture to execute a new image.
+
 - **Immediate restart preserves earlier-file evidence.** Starting a VM whose
   previous automatic disk layer is pending now asks you to wait for recording
   saves to finish, preventing a disk merge from overtaking those saves.

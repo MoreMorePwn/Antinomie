@@ -33,12 +33,17 @@ struct Proc {
 struct World {
     procs: BTreeMap<u32, Proc>,
     log: Vec<String>,
+    /// Count guest polling until a memory command is dispatched.
+    event_polls: usize,
+    memory_polls: Option<usize>,
 }
 impl World {
     fn new() -> Arc<Mutex<Self>> {
         let mut world = Self {
             procs: BTreeMap::new(),
             log: Vec::new(),
+            event_polls: 0,
+            memory_polls: None,
         };
         world.spawn(10, &[10, 11], 0x1111);
         Arc::new(Mutex::new(world))
@@ -229,10 +234,16 @@ impl DebugBackend for Fake {
         Ok(())
     }
     fn read_memory(&mut self, _addr: u64, len: usize) -> Result<Vec<u8>, DebugError> {
-        Ok(vec![0x90; len])
+        self.with(|world, _| {
+            world.memory_polls = Some(world.event_polls);
+            Ok(vec![0x90; len])
+        })
     }
     fn write_memory(&mut self, _addr: u64, _data: &[u8]) -> Result<(), DebugError> {
-        Ok(())
+        self.with(|world, _| {
+            world.memory_polls = Some(world.event_polls);
+            Ok(())
+        })
     }
     fn set_breakpoint(&mut self, addr: u64, _len: u32) -> Result<(), DebugError> {
         self.with(|world, pid| {
@@ -283,6 +294,7 @@ impl DebugBackend for Fake {
     }
     fn events(&mut self, acknowledged: u32) -> Result<EventBatch, DebugError> {
         self.with(|world, pid| {
+            world.event_polls += 1;
             let proc = world.procs.get_mut(&pid).unwrap();
             proc.queue.retain(|event| event.sequence > acknowledged);
             Ok(EventBatch {
@@ -551,6 +563,24 @@ fn a_session_without_follow_support_offers_neither_events_nor_non_stop() {
     let reply = client.send("qSupported:multiprocess+;swbreak+");
     assert!(!reply.contains("fork-events"), "{reply}");
     assert_eq!(client.send("D"), "OK");
+}
+
+#[test]
+fn non_stop_input_does_not_poll_the_guest_for_every_packet_byte() {
+    let fixture = Fixture::start();
+    let mut client = fixture.client();
+    client.handshake("");
+    assert_eq!(client.send("QNonStop:1"), "OK");
+    // A valid 2 KiB memory write crosses input budgets. Queue the whole request
+    // before counting, excluding idle polls and counting at backend dispatch.
+    fixture.with_world(|world| {
+        client.write(&format!("M4000,800:{}", "90".repeat(2048)));
+        world.event_polls = 0;
+        world.memory_polls = None;
+    });
+    assert_eq!(client.packet(), "OK");
+    let polls = fixture.with_world(|world| world.memory_polls.unwrap());
+    assert!(polls < 128, "{polls} guest polls for one buffered request");
 }
 
 #[test]

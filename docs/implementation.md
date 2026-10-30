@@ -756,6 +756,21 @@ Full-tier checks that failed now and then on this shared host, and why.
   tests set none, so gdb kept 2 s and a slow reply desynchronised it as above;
   which command group then never finished varied by run. The waits were right; the
   timeout never applied. Both now set `remotetimeout 30`.
+* **Non-stop debugger input polling.** `debug/rsp_client.rs` previously polled
+  guest events before reading every packet byte, including bytes already buffered
+  by the socket. Long feature queries and repeated ELF-header reads could exhaust
+  a command-group deadline. Each turn now drains up to 256 input bytes within a
+  2 ms time slice, ending at a complete packet or control byte. Guest events,
+  panel requests and shutdown are serviced between turns. The existing initial
+  stop deferral supports GDB 16/17's startup ordering. A real-socket regression
+  counts guest polls for a buffered 2 KiB write, without a wall-clock assertion;
+  command deadlines and debugger signal/exec semantics are unchanged.
+* **Phase-three fork and legacy exec fixtures.** The parent-follow case delivers
+  a queued SIGCHLD before continuing to its next fork. The `exec-gated` fixture
+  waits for stdin until the host confirms attachment to the original image,
+  avoiding a late attach to the replacement image. Its assertion still requires
+  `Replaced`, and the fork case still verifies child identity, breakpoint bytes
+  and exit status. No guest change is needed for these fixture corrections.
 * **The pty test `closing_asks_the_program_to_quit_first`.** It closed the program
   after a fixed 300 ms; in the full test run the shell had sometimes not yet set
   its INT trap, so the Ctrl-C ended it. It now waits for the shell to say it is

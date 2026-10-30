@@ -29,6 +29,9 @@ pub(super) const PACKET_BUFFER: usize = 0x4000;
 const INTERRUPT_DEADLINE: Duration = Duration::from_secs(5);
 const IDLE_POLL: Duration = Duration::from_millis(50);
 const RUNNING_POLL: Duration = Duration::from_millis(2);
+/// Drain buffered input without one guest status round trip per packet byte.
+/// Both a byte budget and a time slice keep target events and shutdown live.
+const INPUT_BUDGET: usize = 256;
 /// GDB's number for a signal it has no name for.
 const GDB_SIGNAL_UNKNOWN: u8 = 143;
 
@@ -415,34 +418,42 @@ impl<W: Wire> Session<'_, W> {
         }
         let busy = self.client.waiting || self.client.nonstop;
         let timeout = if busy { RUNNING_POLL } else { IDLE_POLL };
-        let byte = match self.wire.read_byte(timeout) {
-            Ok(Some(byte)) => byte,
-            Ok(None) => return Ok(None),
-            Err(error) => return Ok(Some(Outcome::ClientGone(error.to_string()))),
-        };
-        match self.client.framer.feed(byte) {
-            None => Ok(None),
-            Some(Incoming::Ack) => {
-                self.client.client_acked = true;
-                Ok(None)
+        let deadline = Instant::now() + RUNNING_POLL;
+        for _ in 0..INPUT_BUDGET {
+            let byte = match self.wire.read_byte(timeout) {
+                Ok(Some(byte)) => byte,
+                Ok(None) => return Ok(None),
+                Err(error) => return Ok(Some(Outcome::ClientGone(error.to_string()))),
+            };
+            if let Some(incoming) = self.client.framer.feed(byte) {
+                return match incoming {
+                    Incoming::Ack => {
+                        self.client.client_acked = true;
+                        Ok(None)
+                    }
+                    Incoming::Nack => {
+                        let again = self.client.last_reply.clone();
+                        self.write(&again)?;
+                        Ok(None)
+                    }
+                    Incoming::BadPacket => Ok(Some(Outcome::ClientGone("bad packet".into()))),
+                    Incoming::Interrupt => self.interrupted(),
+                    Incoming::Packet(payload) => {
+                        if self.retransmitted(&payload) {
+                            return Ok(None);
+                        }
+                        if !self.client.no_ack {
+                            self.write(b"+")?;
+                        }
+                        self.dispatch(&payload)
+                    }
+                };
             }
-            Some(Incoming::Nack) => {
-                let again = self.client.last_reply.clone();
-                self.write(&again)?;
-                Ok(None)
-            }
-            Some(Incoming::BadPacket) => Ok(Some(Outcome::ClientGone("bad packet".into()))),
-            Some(Incoming::Interrupt) => self.interrupted(),
-            Some(Incoming::Packet(payload)) => {
-                if self.retransmitted(&payload) {
-                    return Ok(None);
-                }
-                if !self.client.no_ack {
-                    self.write(b"+")?;
-                }
-                self.dispatch(&payload)
+            if Instant::now() >= deadline {
+                break;
             }
         }
+        Ok(None)
     }
 
     /// Whether `payload` is a copy of the last packet that the client sent
