@@ -265,10 +265,6 @@ enum Confirm {
         intent: clipboard::Intent,
         text: antinomie_monitor_core::clipboard::Text,
     },
-    Nat {
-        vm: Box<VmConfig>,
-        creating: bool,
-    },
     /// Detach the debugger and kill the debugged process.
     DebugKill,
 }
@@ -418,7 +414,7 @@ pub struct MonitorApp {
     selected_process: Option<u32>,
     /// The VM dialog's Telemetry transport window is open.
     transport_open: bool,
-    /// VM configuration > Stealth profile window.
+    /// VM configuration > Device profile window.
     stealth_open: bool,
     network_view: crate::network_view::NetworkView,
     memory_view: crate::memory_view::MemoryView,

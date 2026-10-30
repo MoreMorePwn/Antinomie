@@ -486,7 +486,6 @@ impl MonitorApp {
         let mut cancel = false;
         let mut reset = false;
         let mut delete = false;
-        let mut nat = false;
         let mut credentials_required = false;
         let label_width = form_label_width(ctx);
         let column = label_width + 340.0;
@@ -604,7 +603,7 @@ impl MonitorApp {
                                 }
                                 ui.end_row();
                             });
-                            dialog_section(ui, "Display and emulation");
+                            vm_section(ui, "Display and emulation");
                             form_grid("vm_display", ui).show(ui, |ui| {
                                 launch_options(ui, &mut app.draft.launch);
                                 let fallbacks = app.draft_stealth_fallbacks();
@@ -612,8 +611,8 @@ impl MonitorApp {
                             });
                             super::stealth::launch_advice(ui, &mut app.draft);
                         };
-                        let storage = |app: &mut Self, ui: &mut egui::Ui, credentials_required: bool, nat: &mut bool| {
-                            dialog_section(ui, "Storage");
+                        let storage = |app: &mut Self, ui: &mut egui::Ui, credentials_required: bool| {
+                            vm_section(ui, "Storage");
                             form_grid("vm_storage", ui).show(ui, |ui| {
                                 ui.label("Disk parent");
                                 ui.add_enabled_ui(creating, |ui| {
@@ -683,7 +682,7 @@ impl MonitorApp {
                                 );
                             }
                             if credentials_required {
-                                dialog_section(ui, "Guest account");
+                                vm_section(ui, "Guest account");
                                 form_grid("vm_account", ui).show(ui, |ui| {
                                     ui.label("Username");
                                     ui.add(
@@ -704,7 +703,7 @@ impl MonitorApp {
                                     ui.end_row();
                                 });
                             }
-                            dialog_section(ui, "Network and telemetry");
+                            vm_section(ui, "Network and telemetry");
                             form_grid("vm_network", ui).show(ui, |ui| {
                                 ui.label("Network");
                                 const MODES: [&str; 4] = ["Disconnected", "Isolated", "NAT (Internet)", "Routed (route per run)"];
@@ -715,10 +714,9 @@ impl MonitorApp {
                                         ui.selectable_value(&mut mode, value, *label);
                                     } });
                                 if mode != previous {
-                                    app.draft.nat = false;
+                                    app.draft.nat = mode == 2;
                                     app.draft.isolated_network = mode == 1;
                                     app.draft.routed = mode == 3;
-                                    if mode == 2 { *nat = true; }
                                 }
                                 ui.end_row();
                                 ui.label("Transport");
@@ -740,22 +738,23 @@ impl MonitorApp {
                                 ui.colored_label(theme::muted(), "Routed: each run picks a route (Settings > Network routes).");
                             }
                             if !app.draft.has_network() {
-                                crate::activity::warning(ui, "Disconnected: no network capture. Choose Isolated, Routed or NAT.");
+                                ui.colored_label(theme::muted(), "Disconnected: no network capture. Choose Isolated, Routed or NAT.");
                             }
                             if app.draft.nat {
-                                crate::activity::warning(ui,
-                                    "NAT permits guest access to the host network and Internet.",
+                                ui.colored_label(
+                                    theme::warn(),
+                                    "NAT: the guest can reach the host network and Internet.",
                                 );
                             }
                         };
                         if wide {
                             ui.columns(2, |columns| {
                                 machine(self, &mut columns[0], &mut credentials_required);
-                                storage(self, &mut columns[1], credentials_required, &mut nat);
+                                storage(self, &mut columns[1], credentials_required);
                             });
                         } else {
                             machine(self, ui, &mut credentials_required);
-                            storage(self, ui, credentials_required, &mut nat);
+                            storage(self, ui, credentials_required);
                         }
                     });
                 });
@@ -856,12 +855,6 @@ impl MonitorApp {
         if !open {
             self.credentials.reset();
         }
-        if nat {
-            self.confirm = Some(Confirm::Nat {
-                vm: Box::new(self.draft.clone()),
-                creating,
-            });
-        }
         if reset {
             self.confirm = Some(Confirm::Reset(self.draft.id.clone()));
         }
@@ -882,6 +875,17 @@ impl MonitorApp {
             self.config_open = false;
         }
     }
+}
+
+/// Extra room above a VM dialog section that follows another one.
+const VM_SECTION_GAP: f32 = 12.0;
+
+/// A section heading of the VM dialog, set apart from the fields above it.
+fn vm_section(ui: &mut egui::Ui, title: &str) {
+    if ui.min_rect().height() > 1.0 {
+        ui.add_space(VM_SECTION_GAP);
+    }
+    dialog_section(ui, title);
 }
 
 fn launch_options(ui: &mut egui::Ui, launch: &mut VmLaunchOptions) {

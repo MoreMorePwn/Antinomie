@@ -376,12 +376,6 @@ impl MonitorApp {
                     "Detach and kill",
                     true,
                 ),
-                Confirm::Nat { .. } => (
-                    "Enable NAT",
-                    "Enable NAT? The guest can connect to the host network and Internet.",
-                    "Enable NAT",
-                    false,
-                ),
             };
             let mut yes = false;
             let mut cancel = false;
@@ -442,13 +436,6 @@ impl MonitorApp {
                                 .debug
                                 .as_ref()
                                 .is_some_and(|session| session.ended.is_none()),
-                            Confirm::Nat { vm, creating } => {
-                                if *creating {
-                                    self.snapshot.active_vm.is_none()
-                                } else {
-                                    self.snapshot.active_vm.as_ref() != Some(&vm.id)
-                                }
-                            }
                         };
                     dialog_footer(ui, |ui| {
                         yes = ui
@@ -487,19 +474,6 @@ impl MonitorApp {
                         Confirm::Upload(intent) => self.submit_upload(intent, true),
                         Confirm::Clipboard { intent, text } => self.submit_clipboard(intent, text),
                         Confirm::DebugKill => self.send(Command::DebugDetach { kill: true }),
-                        Confirm::Nat { mut vm, creating } => {
-                            vm.nat = true;
-                            vm.isolated_network = false;
-                            if self.draft.id == vm.id {
-                                self.draft.nat = true;
-                                self.draft.isolated_network = false;
-                            }
-                            if !creating {
-                                if let Err(error) = self.save_vm(*vm) {
-                                    self.report_error(error);
-                                }
-                            }
-                        }
                     }
                 }
             }
