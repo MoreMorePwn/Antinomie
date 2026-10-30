@@ -5,7 +5,7 @@
 use crate::theme;
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, Vec2, ViewportCommand};
 
-const BUTTON_WIDTH: f32 = 44.0;
+pub(crate) const BUTTON_WIDTH: f32 = 44.0;
 const EDGE: f32 = 5.0;
 const CORNER: f32 = 12.0;
 
@@ -131,6 +131,19 @@ pub(crate) fn show(ctx: &egui::Context, title: &str) {
                 Stroke::new(1.0_f32, theme::line()),
             );
         });
+}
+
+/// The caption's height and the x of the left edge of its window buttons, for
+/// something that sits just left of them (the FPS counter). The height is 0 in
+/// fullscreen, where there is no caption.
+pub(crate) fn caption_slot(ctx: &egui::Context) -> (f32, f32) {
+    let key = egui::Id::new(("native-caption-height", ctx.viewport_id()));
+    let height = ctx.data(|data| data.get_temp::<f32>(key)).unwrap_or(0.0);
+    let right = ctx.screen_rect().right();
+    (
+        height,
+        right - 3.0 * BUTTON_WIDTH.min(ctx.screen_rect().width() / 4.0),
+    )
 }
 
 /// Floating panes stay below the caption, just as with an OS-owned title bar.

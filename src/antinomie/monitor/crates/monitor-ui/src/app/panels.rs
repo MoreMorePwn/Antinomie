@@ -4,10 +4,7 @@ use super::*;
 
 impl MonitorApp {
     pub(super) fn draw(&mut self, ctx: &egui::Context) {
-        crate::title_bar::show(
-            ctx,
-            &format!("Antinomie {}", antinomie_monitor_core::APP_VERSION),
-        );
+        crate::title_bar::show(ctx, "Antinomie");
         if self.activity_notices_due {
             self.collect_notices(ctx);
             self.activity_notices_due = false;

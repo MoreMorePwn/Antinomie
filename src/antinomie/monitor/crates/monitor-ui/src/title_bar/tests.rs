@@ -288,3 +288,18 @@ fn native_custom_title_bar_controls() {
     );
     assert!(e.borderless && e.moved && e.resized && e.maximized && e.restored);
 }
+
+#[test]
+fn fps_counter_slot_sits_left_of_the_window_buttons() {
+    let ctx = egui::Context::default();
+    let _ = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0))),
+            ..Default::default()
+        },
+        |ctx| show(ctx, "Antinomie"),
+    );
+    let (height, left) = caption_slot(&ctx);
+    assert!(height > 0.0);
+    assert_eq!(left, 800.0 - 3.0 * BUTTON_WIDTH);
+}
