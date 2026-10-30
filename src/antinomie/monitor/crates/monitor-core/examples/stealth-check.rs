@@ -6,6 +6,7 @@
 //!   stealth-check measure BUNDLE NEW_DATA_DIR PROBE [PRESET [ENTRY=VALUE...]]
 //!   stealth-check boots BUNDLE NEW_DATA_DIR COUNT [PRESET [ENTRY=VALUE...]]
 //!   stealth-check cloud BUNDLE NEW_DATA_DIR CLOUD_PROBE [PROVIDER...]
+//!   stealth-check abi BUNDLE NEW_DATA_DIR FIXTURES HEADER_DEBS
 //!
 //! PROBE is the static `tests/monitor/stealth-probe` program; PRESET is
 //! `desktop` (default), `laptop`, `server` or `transparent`; entries change
@@ -25,6 +26,11 @@
 //! transport up and run a shell that reports the firmware type and where the
 //! kernel was placed (KASLR), and the firmware type must be the profile's.
 //! A boot whose transport does not come up within two minutes fails.
+//!
+//! abi: Debian Minimal with four vCPUs and 2 GiB verifies the distribution's
+//! signed modules, a real filesystem restriction, an out-of-tree module built
+//! against Debian headers, fentry, and the retained module/BPF syscalls. NAT
+//! is used only by this disposable benign-test VM to install build tools.
 //!
 //! The data folder must be new and disposable.
 use antinomie_monitor_core::route::RouteKind;
@@ -124,6 +130,16 @@ impl Driver {
         uid: u32,
         route: Option<RouteKind>,
     ) -> Result<String, String> {
+        self.run_for(program, uid, route, 120)
+    }
+
+    fn run_for(
+        &mut self,
+        program: &str,
+        uid: u32,
+        route: Option<RouteKind>,
+        seconds: u64,
+    ) -> Result<String, String> {
         let known: Vec<String> = self.snapshot.runs.iter().map(|r| r.id.clone()).collect();
         self.command(Command::Execute(ExecRequest {
             path: program.into(),
@@ -144,7 +160,7 @@ impl Driver {
             .id
             .clone();
         let wanted = id.clone();
-        self.wait("run end", 120, move |s| {
+        self.wait("run end", seconds, move |s| {
             s.runs.iter().any(|r| {
                 r.id == wanted && matches!(r.state, RunState::Finished | RunState::Stopped)
             })
@@ -221,6 +237,28 @@ fn driver_on(
     gpa: Option<u64>,
     routed: bool,
 ) -> Result<(Driver, String), String> {
+    driver_network(
+        bundle,
+        data,
+        profile,
+        gpa,
+        if routed {
+            VmNetwork::Routed
+        } else {
+            VmNetwork::Isolated
+        },
+        2,
+    )
+}
+
+fn driver_network(
+    bundle: &str,
+    data: &Path,
+    profile: StealthProfile,
+    gpa: Option<u64>,
+    network: VmNetwork,
+    cpus: u16,
+) -> Result<(Driver, String), String> {
     if data.exists() {
         return Err("the measurement needs a new disposable data folder".into());
     }
@@ -255,12 +293,12 @@ fn driver_on(
     };
     let vm = VmConfig {
         name: "stealth check".into(),
-        cpus: 2,
+        cpus,
         ram_mib: 2048.max(guest.map_or(0, |guest| guest.min_ram_mib)),
         disk_gib: 8.max(guest.map_or(0, |guest| guest.min_disk_gib)),
-        nat: false,
-        isolated_network: !routed,
-        routed,
+        nat: network == VmNetwork::Nat,
+        isolated_network: network == VmNetwork::Isolated,
+        routed: network == VmNetwork::Routed,
         stealth: profile,
         ..Default::default()
     };
@@ -703,6 +741,131 @@ fn cloud(bundle: &str, data: &str, probe: &str, only: &[&str]) -> Result<(), Str
     }
 }
 
+/// A Debian VM verifies signed modules, an actual LSM restriction, a module
+/// built against Debian's headers in the guest, fentry and retained calls.
+fn abi(bundle: &str, data: &str, fixtures: &str, headers: &str) -> Result<(), String> {
+    let folder = Path::new(data);
+    let (mut driver, vm) = driver_network(
+        bundle,
+        folder,
+        StealthProfile::transparent(),
+        None,
+        VmNetwork::Nat,
+        4,
+    )?;
+    let mut module_directory = None;
+    let result = (|| {
+        driver.boot(&vm)?;
+        for (source, destination) in [
+            ("debian-abi-check.sh", "/tmp/debian-abi-check"),
+            ("debian-oot-build.sh", "/tmp/debian-oot-build"),
+            ("debian-oot-run.sh", "/tmp/debian-oot-run"),
+            ("debian-module/Makefile", "/tmp/Makefile"),
+            ("debian-module/module_fixture.c", "/tmp/module_fixture.c"),
+        ] {
+            driver.command(Command::Upload {
+                source: Path::new(fixtures).join(source),
+                destination: destination.into(),
+                overwrite: true,
+                executable: source.ends_with(".sh"),
+            })?;
+        }
+        for (name, seconds, marker) in [
+            ("debian-abi-check", 180, "ABI-CHECK-PASS"),
+            ("debian-oot-build", 1200, "OOT-BUILD-PASS"),
+            ("debian-oot-run", 180, "OOT-RUN-PASS"),
+        ] {
+            if name == "debian-oot-build" {
+                // Stage the small pinned header packages in guest RAM. This
+                // keeps disk flush latency out of the fixture transfer; the
+                // actual package install and module build still use its disk.
+                for package in [
+                    "linux-headers-6.12.94+deb13-amd64_6.12.94-1_amd64.deb",
+                    "linux-headers-6.12.94+deb13-common_6.12.94-1_all.deb",
+                    "linux-kbuild-6.12.94+deb13_6.12.94-1_amd64.deb",
+                ] {
+                    println!("Staging {package} in guest RAM");
+                    driver.command(Command::Upload {
+                        source: Path::new(headers).join(package),
+                        destination: format!("/dev/shm/{package}"),
+                        overwrite: true,
+                        executable: false,
+                    })?;
+                }
+            }
+            println!("Running {name}");
+            let run = driver.run_for(&format!("/tmp/{name}"), 0, None, seconds)?;
+            let output = driver.output(&run).to_owned();
+            fs::write(folder.join(format!("{name}.txt")), &output).map_err(|e| e.to_string())?;
+            print!("{output}");
+            if !output.lines().any(|line| line.trim() == marker) {
+                return Err(format!("{name} did not finish its checks"));
+            }
+            if name == "debian-oot-run" {
+                let recorded = driver
+                    .snapshot
+                    .runs
+                    .iter()
+                    .find(|r| r.id == run)
+                    .ok_or("module run missing")?;
+                if let Some(error) = &recorded.recording_error {
+                    return Err(format!("module recording: {error}"));
+                }
+                module_directory = Some(recorded.directory.clone());
+            }
+        }
+        Ok(())
+    })();
+    let stopped = driver.stop();
+    result.and(stopped)?;
+    driver.wait("recordings saved", 120, |s| s.recording_flush.is_none())?;
+    let directory = module_directory.ok_or("module run missing")?;
+    let recording = recording::Recording {
+        directory,
+        manifest: serde_json::Value::Null,
+        events: Vec::new(),
+    };
+    let mut load = false;
+    let mut unload = false;
+    let mut bpf = false;
+    let mut calls = 0;
+    let mut offset = 0;
+    let cancel = AtomicBool::new(false);
+    loop {
+        let page = recording
+            .invocation_page_cancellable(offset, 256, &cancel)
+            .map_err(|e| e.to_string())?;
+        if !page.issues.is_empty() {
+            return Err(format!("module recording issues: {:?}", page.issues));
+        }
+        calls += page.invocations.len();
+        for call in page.invocations {
+            if let Some(event) = call
+                .exit
+                .filter(|event| event.result.is_some_and(|value| value >= 0))
+            {
+                match event.syscall_name.as_str() {
+                    "init_module" | "finit_module" => load = true,
+                    "delete_module" => unload = true,
+                    "bpf" => bpf = true,
+                    _ => (),
+                }
+            }
+        }
+        match page.next_offset {
+            Some(next) => offset = next,
+            None => break,
+        }
+    }
+    if !(load && unload && bpf) {
+        return Err(format!(
+            "missing successful retained calls: load={load} unload={unload} bpf={bpf}"
+        ));
+    }
+    println!("PASS retained module load/unload and BPF calls among {calls} calls");
+    Ok(())
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let outcome = match args
@@ -714,11 +877,13 @@ fn main() {
         ["measure", bundle, data, probe, rest @ ..] => measure(bundle, data, probe, rest),
         ["boots", bundle, data, count, rest @ ..] => boots(bundle, data, count, rest),
         ["cloud", bundle, data, probe, rest @ ..] => cloud(bundle, data, probe, rest),
+        ["abi", bundle, data, fixtures, headers] => abi(bundle, data, fixtures, headers),
         _ => {
             eprintln!(
                 "usage: stealth-check measure BUNDLE NEW_DATA_DIR PROBE [PRESET [ENTRY=VALUE...]]\n       \
                  stealth-check boots BUNDLE NEW_DATA_DIR COUNT [PRESET [ENTRY=VALUE...]]\n       \
-                 stealth-check cloud BUNDLE NEW_DATA_DIR CLOUD_PROBE [PROVIDER...]"
+                 stealth-check cloud BUNDLE NEW_DATA_DIR CLOUD_PROBE [PROVIDER...]\n       \
+                 stealth-check abi BUNDLE NEW_DATA_DIR FIXTURES HEADER_DEBS"
             );
             std::process::exit(2);
         }
