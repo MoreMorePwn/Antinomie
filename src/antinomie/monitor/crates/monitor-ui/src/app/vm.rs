@@ -255,15 +255,21 @@ impl MonitorApp {
 
     /// What the Run form offers for the running VM's network.
     fn route_choice(&self) -> crate::route_ui::RouteChoice {
-        let network = self
+        let vm = self
             .snapshot
             .vms
             .iter()
-            .find(|vm| Some(&vm.id) == self.snapshot.active_vm.as_ref())
-            .map_or(antinomie_monitor_core::VmNetwork::Disconnected, |vm| {
-                vm.network()
-            });
-        crate::route_ui::RouteChoice::new(network, &self.routes.config)
+            .find(|vm| Some(&vm.id) == self.snapshot.active_vm.as_ref());
+        let network = vm.map_or(antinomie_monitor_core::VmNetwork::Disconnected, |vm| {
+            vm.network()
+        });
+        let mut choice = crate::route_ui::RouteChoice::new(network, &self.routes.config);
+        // Only a Routed VM has the simulated metadata service.
+        choice.cloud = vm
+            .filter(|_| network == antinomie_monitor_core::VmNetwork::Routed)
+            .and_then(|vm| vm.stealth.cloud_provider())
+            .map(|provider| provider.label);
+        choice
     }
 
     pub(super) fn launch_form(&mut self, ui: &mut egui::Ui) {

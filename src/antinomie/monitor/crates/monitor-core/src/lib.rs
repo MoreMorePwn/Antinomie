@@ -35,6 +35,7 @@ mod guest_account;
 mod guest_desktop;
 pub mod guest_names;
 mod guest_resources;
+pub mod host_cloud;
 mod http_fetch;
 pub mod ioc;
 pub mod kernel_notes;

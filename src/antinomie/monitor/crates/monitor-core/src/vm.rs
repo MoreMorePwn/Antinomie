@@ -563,6 +563,13 @@ impl VmProcess {
                     .into(),
             );
         }
+        // On a cloud instance a NAT guest reaches the provider's real metadata
+        // service; a plain note, not a failure.
+        if vm.network() == VmNetwork::Nat
+            && let Some(provider) = crate::host_cloud::host_cloud_provider()
+        {
+            fallbacks.push(crate::host_cloud::nat_note(provider));
+        }
         // A cloud profile's lived-in state goes into the VM's disk once; a
         // failure leaves the VM plain and is said in the start log.
         if let Some(provider) = stealth.cloud_provider()

@@ -105,6 +105,9 @@ pub(crate) struct RouteChoice {
     pub default: RouteKind,
     /// A missing setting, per route in [`RouteKind::ALL`] order.
     pub problems: [Option<&'static str>; 6],
+    /// The cloud provider the VM's device profile imitates; its metadata
+    /// service answers on a Routed network whatever the route.
+    pub cloud: Option<&'static str>,
 }
 
 impl RouteChoice {
@@ -117,6 +120,7 @@ impl RouteChoice {
             network,
             default: config.default_route,
             problems,
+            cloud: None,
         }
     }
 
@@ -127,6 +131,7 @@ impl RouteChoice {
             network,
             default: RouteKind::Drop,
             problems: [None; 6],
+            cloud: None,
         }
     }
 
@@ -179,6 +184,17 @@ pub(crate) fn selector(ui: &mut egui::Ui, request: &mut ExecRequest, choice: &Ro
         crate::activity::warning(
             ui,
             format!("{} The run will not start until it is set.", problem),
+        );
+        // The route's own settings are in Tools > Settings > Network routes.
+        crate::settings_link::button(ui, "Network routes");
+    }
+    if let Some(provider) = choice.cloud {
+        crate::widgets::fact_line(
+            ui,
+            "Cloud metadata",
+            &format!(
+                "answered by the simulated {provider} service at 169.254.169.254; it never uses the route"
+            ),
         );
     }
     if selected == RouteKind::Internet {
@@ -308,6 +324,37 @@ mod tests {
         assert!(note.contains("restart the VM"), "{note}");
         let tor = record(RouteKind::Tor, RouteVia::Gateway, "Tor");
         assert_eq!(describe(Some(&tor), None).note, None);
+    }
+
+    #[test]
+    fn a_route_with_a_missing_setting_offers_its_settings_page_and_a_cloud_vm_says_who_answers_metadata(
+    ) {
+        let ctx = egui::Context::default();
+        let mut request = ExecRequest {
+            route: Some(RouteKind::Vpn),
+            ..ExecRequest::default()
+        };
+        let mut choice = RouteChoice::new(VmNetwork::Routed, &RouteConfig::default());
+        choice.cloud = Some("Hetzner Cloud");
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| selector(ui, &mut request, &choice));
+        });
+        let shown = crate::app::tests::texts(&output);
+        assert!(
+            shown
+                .iter()
+                .any(|(text, _)| text == "Open Network routes settings"),
+            "{shown:?}"
+        );
+        let all: String = shown.iter().map(|(text, _)| text.as_str()).collect();
+        assert!(all.contains("Cloud metadata"), "{all}");
+        assert!(all.contains("simulated Hetzner Cloud service"), "{all}");
+        // The button asks the app to open that page.
+        assert_eq!(
+            crate::settings_link::take(&ctx),
+            None,
+            "nothing pressed yet"
+        );
     }
 
     #[test]
