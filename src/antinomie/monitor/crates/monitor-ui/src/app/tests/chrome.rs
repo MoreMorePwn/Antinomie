@@ -203,6 +203,7 @@ fn toolbar_keeps_the_main_actions_and_menus_reach_the_rest() {
                 "Analysis tools",
                 "Detection rules",
                 "App dependencies…",
+                "UI performance…",
             ],
         ),
     ] {
@@ -211,13 +212,22 @@ fn toolbar_keeps_the_main_actions_and_menus_reach_the_rest() {
         let shown = texts(&output);
         for item in items {
             assert!(
-                shown.iter().any(|(text, _)| text == item),
+                shown
+                    .iter()
+                    .any(|(text, _)| text == item || (menu == "Tools" && icon_label(text, item))),
                 "{menu} menu lacks {item}: {shown:?}"
             );
         }
         click_label(&mut app, &ctx, size, menu);
     }
     assert!(app.submitted.is_empty());
+
+    // Every Tools entry starts with an icon glyph, then a space and its label.
+    fn icon_label(text: &str, label: &str) -> bool {
+        text.strip_suffix(label)
+            .and_then(|icon| icon.strip_suffix(' '))
+            .is_some_and(|icon| icon.chars().count() == 1)
+    }
 
     // Shortcuts open the dialogs and stop the VM.
     let ctx = egui::Context::default();

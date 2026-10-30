@@ -147,7 +147,7 @@ impl MonitorApp {
                             .size(ui.text_style_height(&egui::TextStyle::Heading))
                             .color(theme::heading()),
                     );
-                    ui.label("Run programs in a QEMU VM and record every system call they make.");
+                    ui.label("A local, kernel-level Linux malware analysis sandbox and workspace.");
                     ui.label("Copyright (c) 2026 MikiMiku (MoreMorePwn)");
                     ui.label("Original application code: GPL-3.0-only. No warranty.");
                     ui.hyperlink_to(
