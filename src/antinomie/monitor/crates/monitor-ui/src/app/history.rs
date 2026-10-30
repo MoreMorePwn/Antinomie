@@ -894,6 +894,8 @@ pub(super) struct Feature {
     /// False when the run cannot show it: a check the tools could not make,
     /// or evidence that was deleted or failed.
     pub(super) available: bool,
+    /// The check ran out of time: shown as a warning, not as missing.
+    pub(super) timed_out: bool,
     hover: Option<String>,
 }
 
@@ -903,6 +905,7 @@ impl Feature {
             depth,
             text: text.into(),
             available: true,
+            timed_out: false,
             hover: None,
         }
     }
@@ -944,6 +947,7 @@ pub(super) fn feature_tree(run: &RunSummary, labels: Option<run_labels::Labels>)
                     ) =>
                 {
                     feature.available = false;
+                    feature.timed_out = section.state == AnalysisSectionState::Timeout;
                     feature.hover = Some(section.summary.clone());
                 }
                 None if finished => {
@@ -1015,11 +1019,15 @@ pub(super) fn enabled_features(
         let mut job = prefix.job(&mono);
         let (mark, color) = if feature.available {
             (egui_phosphor::regular::CHECK, theme::text())
+        } else if feature.timed_out {
+            (egui_phosphor::regular::WARNING, theme::warn())
         } else {
             (egui_phosphor::regular::MINUS, theme::muted())
         };
         let suffix = if feature.available {
             ""
+        } else if feature.timed_out {
+            " · timed out"
         } else {
             " · unavailable"
         };

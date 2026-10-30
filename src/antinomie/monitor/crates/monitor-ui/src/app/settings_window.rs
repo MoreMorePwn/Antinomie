@@ -49,7 +49,30 @@ impl SettingsPage {
     }
 }
 
+/// The least the page list is wide; it grows with the text size so no page
+/// name is cut.
 const NAV_WIDTH: f32 = 150.0;
+
+/// Width of the page list: the longest page name and the room round it.
+fn nav_width(ui: &egui::Ui) -> f32 {
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let widest = ui.fonts(|fonts| {
+        SettingsPage::ALL
+            .iter()
+            .map(|page| {
+                fonts
+                    .layout_no_wrap(
+                        page.label().to_owned(),
+                        font.clone(),
+                        egui::Color32::PLACEHOLDER,
+                    )
+                    .size()
+                    .x
+            })
+            .fold(0.0_f32, f32::max)
+    });
+    NAV_WIDTH.max(widest + 24.0)
+}
 
 /// One entry of the page list.
 fn nav_item(ui: &mut egui::Ui, label: &str, active: bool) -> egui::Response {
@@ -125,13 +148,14 @@ impl MonitorApp {
                 ui.set_width(width - 20.0);
                 let gap = ui.spacing().item_spacing.x;
                 let line = 1.0;
-                let content = (ui.available_width() - NAV_WIDTH - line - 2.0 * gap).max(120.0);
+                let nav = nav_width(ui);
+                let content = (ui.available_width() - nav - line - 2.0 * gap).max(120.0);
                 ui.horizontal_top(|ui| {
                     ui.allocate_ui_with_layout(
-                        egui::vec2(NAV_WIDTH, height),
+                        egui::vec2(nav, height),
                         egui::Layout::top_down(egui::Align::Min),
                         |ui| {
-                            ui.set_width(NAV_WIDTH);
+                            ui.set_width(nav);
                             ui.spacing_mut().item_spacing.y = 2.0;
                             for page in SettingsPage::ALL {
                                 if nav_item(ui, page.label(), self.settings_page == page).clicked()
@@ -439,6 +463,7 @@ impl MonitorApp {
             });
             ui.end_row();
         });
+        hint(ui, &antinomie_monitor_core::fixed_limits_text());
         ui.add_space(6.0);
         ui.separator();
         form_grid("settings_debugger_console", ui).show(ui, |ui| {

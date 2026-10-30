@@ -260,10 +260,12 @@ impl Journal {
             return;
         }
         crate::widgets::table::begin(ui);
+        // The time and level columns grow with the text size (84 and 60 at 16).
+        let scale = ui.text_style_height(&egui::TextStyle::Body) / 16.0;
         TableBuilder::new(ui)
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-            .column(Column::exact(84.0))
-            .column(Column::exact(60.0))
+            .column(Column::exact(84.0 * scale))
+            .column(Column::exact(60.0 * scale))
             .column(Column::remainder())
             .min_scrolled_height(0.0)
             .auto_shrink([false, false])

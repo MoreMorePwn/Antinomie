@@ -755,6 +755,29 @@ fn the_run_list_keeps_the_analysis_report_without_copying_its_rows() {
 }
 
 #[test]
+fn a_check_that_timed_out_is_a_warning_in_the_tree_not_a_missing_check() {
+    use antinomie_monitor_core::{AnalysisKind, AnalysisSectionState};
+    let mut run = run("r1");
+    run.request.analysis.enabled = true;
+    run.request.analysis.checks = vec![AnalysisKind::Metadata, AnalysisKind::Strings];
+    let mut report = section_report("r1", "sample");
+    // The fixture's Strings check ran out of time.
+    report.sections[2].state = AnalysisSectionState::Timeout;
+    run.analysis = Some(report);
+    let tree = super::super::history::feature_tree(&run, None);
+    let strings = tree
+        .iter()
+        .find(|feature| feature.text.contains("Strings"))
+        .expect("the Strings check");
+    assert!(strings.timed_out && !strings.available);
+    let metadata = tree
+        .iter()
+        .find(|feature| feature.text.contains("Metadata") || feature.text.contains("metadata"))
+        .expect("the Metadata check");
+    assert!(!metadata.timed_out && metadata.available);
+}
+
+#[test]
 fn enabled_analysis_is_a_tree_with_unavailable_checks_greyed() {
     use antinomie_monitor_core::AnalysisKind;
     let mut run = run("r1");

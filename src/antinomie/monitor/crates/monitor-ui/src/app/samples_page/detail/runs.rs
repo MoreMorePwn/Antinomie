@@ -399,17 +399,13 @@ impl MonitorApp {
                             row.col(|ui| {
                                 ui.add(
                                     egui::Label::new(format!(
-                                        "{}{}",
+                                        "{} {}",
                                         crate::evidence::title(
                                             ui,
                                             &run.directory,
                                             &run.request.path
                                         ),
-                                        if run.analysis.is_some() {
-                                            "  [static analysis]"
-                                        } else {
-                                            ""
-                                        }
+                                        crate::app::history::short_run_id(run)
                                     ))
                                     .selectable(false)
                                     .truncate(),

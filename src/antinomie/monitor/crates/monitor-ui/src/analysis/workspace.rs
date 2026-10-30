@@ -565,7 +565,10 @@ fn overview(
     state: &mut WorkspaceState,
 ) -> Option<ReportAction> {
     let mut action = None;
-    if ui.available_width() >= 700.0 {
+    // Two columns need room for the categories card (name, state tag, row count
+    // and button), which grows with the text size.
+    let room = 50.0 * ui.text_style_height(&egui::TextStyle::Body);
+    if ui.available_width() >= room {
         ui.columns(2, |columns| {
             egui::ScrollArea::vertical()
                 .id_salt("analysis-overview-identity")

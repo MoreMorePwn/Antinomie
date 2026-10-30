@@ -998,7 +998,10 @@ fn native_analysis_workspace_fixture() {
         Box::new(move |cc| {
             crate::theme::install(&cc.egui_ctx);
             crate::theme::apply_theme(&cc.egui_ctx, theme_choice);
-            crate::theme::text_size(&cc.egui_ctx, if small { 24.0 } else { 16.0 });
+            crate::theme::text_size(
+                &cc.egui_ctx,
+                crate::theme::qa_text_size(if small { 24.0 } else { 16.0 }),
+            );
             // A retained analysis directory (report.json, specimen and
             // listings) replaces the synthetic fixture; the tab is chosen by
             // its position in the strip.
@@ -2623,7 +2626,7 @@ fn state_tags_line_up_in_one_column_and_a_timeout_is_its_own_tag() {
     let ctx = egui::Context::default();
     crate::theme::install(&ctx);
     let mut state = WorkspaceState::default();
-    let size = egui::vec2(900.0, 900.0);
+    let size = egui::vec2(1100.0, 900.0);
     let mut output = egui::FullOutput::default();
     for _ in 0..3 {
         output = frame(
