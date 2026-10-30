@@ -5,16 +5,15 @@
   <img src="assets/branding/antinomie-logo-color.svg" alt="Antinomie" width="440">
 </picture>
 
-# Antinomie
+### A local, kernel-level Linux malware analysis sandbox and workspace.
 
-**A local, kernel-level Linux malware sandbox.**
+Run a Linux sample in a disposable VM on your own computer, watch it from inside
+the guest kernel, and investigate everything it did in one desktop app.
 
-Antinomie runs Linux samples in QEMU virtual machines on your own computer,
-which you can reset or roll back to a snapshot, and observes them from inside
-the guest kernel. On current bases no agent runs in the guest and nothing uses
-`ptrace`, so a sample has little to find. Process, file, network, memory, disk
-and core evidence, static analysis and Triage all work from one saved recording;
-the debugger works on the running VM.
+**Local**: samples, recordings and analysis stay on your machine; nothing is uploaded.<br>
+**Kernel-level**: the guest kernel records every system call, file write and packet; no agent or `ptrace` to find.<br>
+**Sandbox**: QEMU VMs you can reset or roll back, realistic device profiles and a network route per run.<br>
+**Workspace**: trace, Triage, network, memory, disks, static analysis and a debugger, all on one saved recording.
 
 [**Quick start**](#quick-start) ·
 [User guide](docs/usage.md) ·
@@ -41,14 +40,19 @@ the debugger works on the running VM.
 > [!WARNING]
 > **Antinomie runs real malware when you ask it to.** The sample executes inside
 > a QEMU guest. A VM is a strong boundary, not an absolute one: guest-to-host
-> escapes are rare but possible, and a sample you give network access can reach
-> whatever that route reaches. Use a dedicated machine, or at least a user
-> account with nothing valuable, keep VM networking disconnected unless you need
-> it, and prefer the **None (drop)** or **InetSim** routes. **NAT** lets the guest
-> reach the host's own network services and your LAN. Run unknown files only on a
-> computer you can rebuild. Detections are leads to investigate, not a verdict
-> that a file is or is not malicious. The [security model](docs/security.md)
-> explains the boundaries and what a sample can still do.
+> escapes are rare but possible.
+>
+> - Use a dedicated machine, or at least a user account with nothing valuable.
+>   Run unknown files only on a computer you can rebuild.
+> - Keep VM networking disconnected unless you need it, and prefer the
+>   **None (drop)** or **InetSim** routes. A sample you give network access can
+>   reach whatever that route reaches; **NAT** reaches the host's own network
+>   services and your LAN.
+> - Detections are leads to investigate, not a verdict that a file is or is not
+>   malicious.
+>
+> The [security model](docs/security.md) explains the boundaries and what a
+> sample can still do.
 
 > [!NOTE]
 > This README describes **0.7.1**, the first release since 0.6.2 (0.7.0 was not
@@ -117,9 +121,9 @@ started window reads the base catalog index on first launch.
 
 | Workspace | What it gives you |
 |---|---|
-| **VM management** | Read-only bases, per-VM disks, branching snapshots, resource monitoring, stealth profiles and a stopped-VM disk browser. |
+| **VM management** | Read-only bases, per-VM disks, branching snapshots, resource monitoring, device profiles and a stopped-VM disk browser. |
 | **Triage** | Process trees, per-file history, suspicious activity with an activity graph, HTTP/DNS/TLS metadata and detection results. |
-| **Network** | Saved PCAPs, TShark decoding with Wireshark display filters, and per-run routes: drop, Internet, InetSim, Tor, WireGuard or SOCKS5, without root. |
+| **Network** | Saved PCAPs, TShark decoding with Wireshark display filters, and per-run routes: drop, Internet, InetSim, Tor, WireGuard or SOCKS5. |
 | **Memory and cores** | Capture memory and process cores, browse mappings, and analyze dumps with Volatility 3 or MemNixFS. |
 | **Static analysis** | Hashes, strings (FLOSS), UPX unpacking, capa, disassembly and Ghidra decompilation. |
 | **Debugger** | Debug on start or attach: threads, registers, memory, breakpoints, stepping, and GDB with GEF or pwndbg. |
@@ -143,12 +147,14 @@ Program and descendants in the guest
   Trace · Triage · Network · Analysis
 ```
 
-The host manages the VM, keeps the records and presents the evidence. Memory and
-captured data can change while observed, so unreadable bytes and gaps stay
-visible. Transport buffering is configurable: **Never drop** waits for host
-capacity up to a deadline, **Drop new telemetry** keeps the guest running and
-counts what is lost. Details are in the
-[implementation record](docs/implementation.md).
+- The host manages the VM, keeps the records and presents the evidence.
+- Memory and captured data can change while observed, so unreadable bytes and
+  gaps stay visible.
+- Transport buffering is configurable. **Never drop** waits for host capacity up
+  to a deadline; **Drop new telemetry** keeps the guest running and counts what
+  is lost.
+
+Details are in the [implementation record](docs/implementation.md).
 
 ## Quick start
 
@@ -175,16 +181,17 @@ antinomie --check-dependencies
 antinomie
 ```
 
-Releases after 0.7.1 also carry a build provenance attestation; with the
-GitHub CLI, `gh attestation verify antinomie-X.Y.Z-linux-x86_64.tar.gz --repo
-MoreMorePwn/Antinomie` confirms the archive was built by this repository's
-release workflow from the tagged commit.
-
-Prebuilt installs do not need Rust. Running `./install.sh` from a newer release
-updates the executable and keeps your data; `./install.sh --uninstall` removes
-the three installed files and keeps your data too. On other distributions,
-**Tools → App dependencies** names the packages for apt, dnf, pacman and
-zypper; only Debian and Ubuntu installs are tested.
+- **No Rust needed.** Prebuilt installs run as they are.
+- **Updating:** run `./install.sh` from a newer release. It replaces the
+  executable and keeps your data.
+- **Uninstalling:** `./install.sh --uninstall` removes the three installed files
+  and keeps your data too.
+- **Other distributions:** **Tools → App dependencies** names the packages for
+  apt, dnf, pacman and zypper. Only Debian and Ubuntu installs are tested.
+- **Provenance:** releases after 0.7.1 carry a build attestation. With the GitHub
+  CLI, `gh attestation verify antinomie-X.Y.Z-linux-x86_64.tar.gz --repo
+  MoreMorePwn/Antinomie` confirms the archive was built by this repository's
+  release workflow from the tagged commit.
 
 <details>
 <summary><b>Run from source</b></summary>
@@ -212,11 +219,13 @@ not build a guest kernel or base image.
 
 Optional tools (Ghidra, capa, FLOSS, Volatility 3, MemNixFS, Tor and others) are
 normally downloaded the first time you ask. For a computer that must not
-download anything, **you build a full pack** on a connected machine with
-`scripts/build-full-pack.py`. It fetches the same pinned, SHA-256-verified tools
-from their upstream hosts. Copy it over, extract it and run
-`./install-full-pack.sh`. **Antinomie does not publish a pack.** See
-[docs/full-pack.md](docs/full-pack.md).
+download anything, **you build a full pack** yourself:
+
+1. On a connected machine, run `scripts/build-full-pack.py`. It fetches the same
+   pinned, SHA-256-verified tools from their upstream hosts.
+2. Copy the pack over, extract it and run `./install-full-pack.sh`.
+
+**Antinomie does not publish a pack.** See [docs/full-pack.md](docs/full-pack.md).
 
 </details>
 
@@ -242,10 +251,11 @@ from their upstream hosts. Copy it over, extract it and run
 | **Debian 13 Minimal (console)** | Samples that need a real Debian userspace without a desktop | APT and the standard command-line tools, no desktop. Needs at least 1024 MiB RAM and 4 GiB disk. New in 0.7.1. |
 | **Debian 13 (desktop)** | Samples that need a graphical session | Adds the desktop; programs can run in the guest desktop. |
 
-Choose a base compatible with the application. Installing a newer app does not
-replace an existing VM's pinned base. Your data (bases, VM disks, recordings)
-lives in `~/antinomie` by default. The [user guide](docs/usage.md) covers
-controls, transport settings, desktop execution and layouts.
+- Choose a base compatible with the application. Installing a newer app does not
+  replace an existing VM's pinned base.
+- Your data (bases, VM disks, recordings) lives in `~/antinomie` by default.
+- The [user guide](docs/usage.md) covers controls, transport settings, desktop
+  execution and layouts.
 
 ## Requirements
 
@@ -263,7 +273,7 @@ terminal: `antinomie --check-dependencies`. The
 
 ## Limits
 
-* **Stealth is bounded.** A stealth profile changes what a guest can read of its
+* **Device profiles are bounded.** A device profile changes what a guest can read of its
   hardware identity, and the kernel hides its own traces, but some things stay
   visible (the app lists them under "Still visible"). `CPUID` and `RDTSC` checks
   leave no system call and are not seen. A sample that reads its own code can
@@ -304,7 +314,7 @@ the full list.
   export endpoints.
 * **eBPF findings** for programs attached through `BPF_LINK_CREATE`, raw
   tracepoints and perf events.
-* **Stealth fallback warnings** when a profile asks for more than a base offers.
+* **Device profile fallback warnings** when a profile asks for more than a base offers.
 * **Full-pack builder** to make your own offline bundle of the managed tools.
 * **Reliability:** bounded waits for report writes and host file copies, pending
   analyses that settle on their own, and many test-timing fixes.
@@ -344,33 +354,39 @@ the full list.
 
 <br>
 
-The **workload test samples** are controlled generators of system-call load,
-process trees, file activity, network traffic, async I/O, unusual arguments,
-crash handling and detection markers. `ant-workload` combines the modules;
-individual `ant-*` programs isolate one feature at several load levels.
-A sample's `PASS` means its action ran. The separate **conformance suite**
-checks what Antinomie recorded: arguments, results, captured bytes, identities,
-loss accounting and trace rendering. Build the samples with
-[`build-workload.sh`](tests/monitor/build-workload.sh).
+- The **workload test samples** are controlled generators of system-call load,
+  process trees, file activity, network traffic, async I/O, unusual arguments,
+  crash handling and detection markers. `ant-workload` combines the modules;
+  individual `ant-*` programs isolate one feature at several load levels. A
+  sample's `PASS` means its action ran.
+- The separate **conformance suite** checks what Antinomie recorded: arguments,
+  results, captured bytes, identities, loss accounting and trace rendering.
+
+Build the samples with [`build-workload.sh`](tests/monitor/build-workload.sh).
 
 </details>
 
 ## Contributing
 
 Contributions to the host application, tooling and documentation are welcome and
-accepted under GPL-3.0-only. Read [CONTRIBUTING.md](CONTRIBUTING.md) first: it
-covers host builds, the checks to run, pull requests, the kernel patch workflow
-and the `release-X.Y.Z` branch rule. Report bugs with the issue forms; report
-security problems privately as described in [SECURITY.md](SECURITY.md). Never
-attach live malware or real credentials to a public issue.
+accepted under GPL-3.0-only.
+
+- Read [CONTRIBUTING.md](CONTRIBUTING.md) first: host builds, the checks to run,
+  pull requests, the kernel patch workflow and the `release-X.Y.Z` branch rule.
+- Report bugs with the issue forms.
+- Report security problems privately as described in [SECURITY.md](SECURITY.md).
+- Never attach live malware or real credentials to a public issue.
 
 ## Responsible use
 
 Antinomie is for analyzing software you are permitted to handle, on systems you
-control. You are responsible for what your samples do, including any traffic
-they send through a route you enable (Internet, Tor, WireGuard or SOCKS5) and
-any data they reach. Stealth profiles present hardware identities of real
-vendors only to the guest; they imply no affiliation with those vendors.
+control.
+
+- You are responsible for what your samples do, including any traffic they send
+  through a route you enable (Internet, Tor, WireGuard or SOCKS5) and any data
+  they reach.
+- Device profiles present hardware identities of real vendors only to the guest;
+  they imply no affiliation with those vendors.
 
 ## License
 
@@ -385,11 +401,16 @@ redistribution requirements.
 
 ## Acknowledgements
 
-Antinomie builds on the Linux kernel and Debian's kernel sources, QEMU, and the
-Rust ecosystem (egui, YARA-X and many crates, listed with their licenses in the
-notices). The tools it can run or install belong to their authors: Ghidra, capa
-and FLOSS (Mandiant), Detect It Easy, UPX, Volatility 3, MemNixFS, pySigma,
-Magika (Google), GEF (bata24), pwndbg, Tor, wireproxy, Wireshark/TShark and
-Suricata. Community rules come from their publishers, such as YARA Forge,
-Emerging Threats and abuse.ch, under the licenses each carries. Exact versions,
-hashes and terms are in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+Antinomie builds on the work of others. The tools it can run or install belong
+to their authors.
+
+| Area | Projects |
+|---|---|
+| Guest and VM | The Linux kernel and Debian's kernel sources, QEMU |
+| Desktop app | The Rust ecosystem: egui, YARA-X and many crates, listed with their licenses in the notices |
+| Analysis | Ghidra, capa and FLOSS (Mandiant), Detect It Easy, UPX, Volatility 3, MemNixFS, pySigma, Magika (Google) |
+| Debugging | GEF (bata24), pwndbg |
+| Network | Tor, wireproxy, Wireshark/TShark, Suricata |
+| Rules | Community rules from their publishers, such as YARA Forge, Emerging Threats and abuse.ch, under the licenses each carries |
+
+Exact versions, hashes and terms are in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
