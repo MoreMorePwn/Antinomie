@@ -8,6 +8,20 @@ fn provider(id: &str) -> &'static CloudProvider {
     CloudProvider::find(id).unwrap()
 }
 
+#[test]
+fn chipset_advice_matches_the_transport_boundary_without_changing_the_profile() {
+    let pc = MachineType::Pc;
+    for ram in [256u64 << 20, 2816u64 << 20, 8192u64 << 20] {
+        let (effective, note) = pc.for_ram(ram);
+        let falls_back = ram >= 2816 << 20;
+        assert_eq!(effective == MachineType::Q35, falls_back);
+        assert_eq!(note.is_some(), falls_back);
+        assert_eq!(MachineType::Q35.for_ram(ram), (MachineType::Q35, None));
+    }
+    assert_eq!(pc.for_ram((2816 << 20) - 1), (pc, None));
+    assert_eq!(pc, MachineType::Pc);
+}
+
 fn args_of(profile: &StealthProfile, ram_mib: u32) -> (Vec<String>, std::path::PathBuf) {
     let dir = std::env::temp_dir().join(format!("ant-cloud-{}", unique_id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -200,7 +214,7 @@ fn instance_state_is_per_vm_and_stable() {
 }
 
 #[test]
-fn plans_are_sold_sizes() {
+fn stored_plan_hints_match_only_their_recorded_sizes() {
     let digitalocean = provider("cloud-digitalocean-droplet");
     assert_eq!(digitalocean.plan_for(1, 1024).unwrap().name, "s-1vcpu-1gb");
     assert!(digitalocean.plan_for(3, 1000).is_none());

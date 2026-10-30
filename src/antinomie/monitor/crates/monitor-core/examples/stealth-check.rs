@@ -47,6 +47,7 @@ struct Driver {
     snapshot: Snapshot,
     replies: BTreeMap<u64, Result<String, String>>,
     output: BTreeMap<String, String>,
+    ready: &'static [u8],
 }
 
 impl Driver {
@@ -73,8 +74,12 @@ impl Driver {
         }
     }
     fn command(&mut self, command: Command) -> Result<String, String> {
+        self.command_for(command, 120)
+    }
+
+    fn command_for(&mut self, command: Command, seconds: u64) -> Result<String, String> {
         let id = self.backend.send(command)?;
-        let deadline = Instant::now() + Duration::from_secs(120);
+        let deadline = Instant::now() + Duration::from_secs(seconds);
         loop {
             self.receive();
             if let Some(reply) = self.replies.remove(&id) {
@@ -220,6 +225,7 @@ fn driver_on(
         return Err("the measurement needs a new disposable data folder".into());
     }
     let base = antinomie_monitor_core::storage::Bundle::load(Path::new(bundle))?;
+    let guest = base.guest.as_ref();
     let (_, notes) = profile.fitted(
         &BaseSupport::from_list(&base.stealth_support),
         &HostSupport::detect(Path::new("qemu-system-x86_64")),
@@ -231,6 +237,7 @@ fn driver_on(
         bundle_dir: PathBuf::from(bundle),
         data_dir: data.to_path_buf(),
         headless: true,
+        serial_console: true,
         capture_quota_size: 1024 * 1024 * 1024,
         bootstrap_gpa: gpa,
         ..Default::default()
@@ -240,18 +247,39 @@ fn driver_on(
         snapshot: Snapshot::default(),
         replies: BTreeMap::new(),
         output: BTreeMap::new(),
+        ready: if guest.is_some() {
+            b" login: "
+        } else {
+            b"BusyBox guest ready"
+        },
     };
-    d.command(Command::Create(VmConfig {
+    let vm = VmConfig {
         name: "stealth check".into(),
         cpus: 2,
-        ram_mib: 2048,
-        disk_gib: 8,
-        nat: true,
+        ram_mib: 2048.max(guest.map_or(0, |guest| guest.min_ram_mib)),
+        disk_gib: 8.max(guest.map_or(0, |guest| guest.min_disk_gib)),
+        nat: false,
         isolated_network: !routed,
         routed,
         stealth: profile,
         ..Default::default()
-    }))?;
+    };
+    // The same offline provisioning and private credentials as conformance.
+    let create = if guest.is_some_and(|guest| guest.requires_credentials) {
+        let mut random = [0u8; 16];
+        use std::io::Read;
+        fs::File::open("/dev/urandom")
+            .and_then(|mut source| source.read_exact(&mut random))
+            .map_err(|error| error.to_string())?;
+        let password = random.iter().map(|byte| format!("{byte:02x}")).collect();
+        Command::CreateWithCredentials {
+            vm,
+            credentials: GuestCredentials::new("cloudqa".into(), password)?,
+        }
+    } else {
+        Command::Create(vm)
+    };
+    d.command_for(create, 600)?;
     d.wait("VM publication", 10, |s| !s.vms.is_empty())?;
     let vm_id = d.snapshot.vms[0].id.clone();
     Ok((d, vm_id))
@@ -260,15 +288,19 @@ fn driver_on(
 impl Driver {
     /// Start the VM and wait for the guest transport and the base's init.
     fn boot(&mut self, vm_id: &str) -> Result<(), String> {
-        self.command(Command::Start {
-            vm_id: vm_id.to_owned(),
-        })?;
-        self.wait("guest", 120, |s| {
+        self.command_for(
+            Command::Start {
+                vm_id: vm_id.to_owned(),
+            },
+            900,
+        )?;
+        let ready = self.ready;
+        self.wait("guest", 240, |s| {
             s.guest_kernel.as_ref().and_then(|k| k.revision).is_some()
                 && s.serial_log
                     .as_ref()
                     .and_then(|p| fs::read(p).ok())
-                    .is_some_and(|log| log.windows(19).any(|part| part == b"BusyBox guest ready"))
+                    .is_some_and(|log| log.windows(ready.len()).any(|part| part == ready))
         })
     }
 

@@ -23,15 +23,9 @@ fn effective_machine(
     stealth: &mut crate::stealth::StealthProfile,
     ram_size: u64,
 ) -> Option<String> {
-    if stealth.machine == crate::stealth::MachineType::Pc && ram_size >= 0xb000_0000 {
-        stealth.machine = crate::stealth::MachineType::Q35;
-        return Some(
-            "Stealth setting not applied: i440FX machine type; i440FX places guest RAM differently \
-             from q35 above 2.75 GiB, which the guest transport does not map; q35 used"
-                .into(),
-        );
-    }
-    None
+    let (machine, note) = stealth.machine.for_ram(ram_size);
+    stealth.machine = machine;
+    note.map(|note| format!("Stealth setting not applied: {note}"))
 }
 
 /// The QEMU user-mode network of a VM. A Routed VM has none: its card is
@@ -1584,7 +1578,7 @@ mod tests {
         assert!(effective_machine(&mut profile, 2816 * MIB - 1).is_none());
         assert_eq!(profile.machine, MachineType::Pc);
         let note = effective_machine(&mut profile, 2816 * MIB).unwrap();
-        assert!(note.contains("q35 used"));
+        assert!(note.contains("q35 will be used"));
         assert_eq!(profile.machine, MachineType::Q35);
         // A q35 profile is never touched.
         assert!(effective_machine(&mut profile, 8192 * MIB).is_none());

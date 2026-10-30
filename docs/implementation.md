@@ -3071,8 +3071,29 @@ network, no agent processes). `catalog/SOURCES-cloud.md` cites the values.
 **i440FX.** `vm.rs` passes the profile's machine type. The guest transport maps
 guest RAM through `RamLayout::q35`, which equals i440FX's layout only below
 0xb0000000 bytes, so a pc profile on a VM of 2.75 GiB or more starts as q35 and
-says so in the start log. A base that names its NIC by slot (`onboardnic`)
+says so in the start log. `MachineType::for_ram` owns that boundary for both
+the backend and the pre-launch VM dialog, which shows the fallback before
+saving. Merely showing the advice never changes the stored chipset. A base that names its NIC by slot (`onboardnic`)
 gets it at 00:03.0 (`ens3`, `NicSlot::Pc`); not exercised on a Debian base.
+
+**Network choice.** The VM dialog identifies the independent simulation and
+offers "Use Routed for cloud metadata" on cloud profiles whose selected network
+cannot host the local service. Only clicking it changes the three network flags;
+opening or repainting a saved VM keeps its policy. Routed still uses a route
+per run. Its Drop route serves the simulated provider metadata locally while
+blocking external connections; InetSim also serves metadata locally. NAT,
+Isolated and Disconnected do not attach this service. The gateway rejects the
+other providers' metadata addresses instead of sending them upstream.
+
+**Metadata scope.** The source inventory records the provider documentation
+checked for Tencent/Alibaba/DigitalOcean paths, Alibaba's MAC example and
+Vultr's published JSON client. Vultr JSON includes canary user-data; additional
+user-data aliases are compatibility extensions. These are partial simulated
+services, without Alibaba token-hardening mode or functioning provider agents.
+Unverified MAC prefixes, DHCP choices and size hints remain labeled as such;
+they are not current provider inventory. The cloud qualification example now
+uses Debian's login marker, minima and offline account provisioning on Debian
+bases, rather than waiting for a BusyBox banner.
 
 **Lived-in state (per VM, not per base).** The first start with a provider
 writes `CloudProvider::state_files` into the VM's disk through an offline

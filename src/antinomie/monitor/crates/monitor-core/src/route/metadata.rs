@@ -338,7 +338,7 @@ impl Service {
             },
         };
         match (version, rest) {
-            ("", "") => text("1.0\n2017-03-12\nlatest\n".into()),
+            ("", "") => text("1.0\n9/19/2017\nlatest\nmeta-data\n".into()),
             ("latest", "") => text("meta-data\nuser-data\n".into()),
             ("latest", "/meta-data") => text(
                 "app-id\ninstance-id\ninstance-name\nlocal-ipv4\nmac\nplacement/\nuuid\ncam/\n"
@@ -436,26 +436,28 @@ impl Service {
 
     fn vultr(&self, path: &str, canary: &Canary) -> Option<(&'static str, String)> {
         let text = |body: String| Some(("text/plain", body));
+        let user_data = format!(
+            "#cloud-config\nwrite_files:\n  - path: /root/.vultr\n    content: VULTR_API_KEY={}\n",
+            canary.id
+        );
         let path = path.trim_end_matches('/');
         match path {
             "/v1.json" => Some((
                 "application/json",
                 format!(
-                    "{{\"hostname\":\"{}\",\"instanceid\":\"{}\",\"instance-v2-id\":\"{}\",\"region\":{{\"regioncode\":\"{}\"}},\"public-keys\":[]}}",
+                    "{{\"hostname\":\"{}\",\"instanceid\":\"{}\",\"instance-v2-id\":\"{}\",\"region\":{{\"regioncode\":\"{}\"}},\"public-keys\":[],\"user-data\":{},\"vendor-data\":\"#cloud-config\\n\",\"interfaces\":[]}}",
                     self.hostname,
                     self.instance_id,
                     self.instance_id,
-                    self.region()
+                    self.region(),
+                    serde_json::Value::String(user_data)
                 ),
             )),
             "/v1" | "" => text("hostname\ninstanceid\ninstance-v2-id\nregion/\n".into()),
             "/v1/hostname" => text(self.hostname.clone()),
             "/v1/instanceid" | "/v1/instance-v2-id" => text(self.instance_id.clone()),
             "/v1/region/regioncode" => text(self.region().into()),
-            "/latest/user-data" | "/user-data" => text(format!(
-                "#cloud-config\nwrite_files:\n  - path: /root/.vultr\n    content: VULTR_API_KEY={}\n",
-                canary.id
-            )),
+            "/latest/user-data" | "/user-data" => text(user_data),
             _ => None,
         }
     }
@@ -635,6 +637,30 @@ mod tests {
             assert!(reply.starts_with("HTTP/1.1 200 OK"), "{id} {path}: {reply}");
             assert!(reply.contains(expect), "{id} {path}: {reply}");
         }
+    }
+
+    #[test]
+    fn vultr_json_includes_user_data_and_a_canary_credential_event() {
+        let service = service("cloud-vultr-vc2");
+        let reply = get(&service, "/v1.json");
+        let (_, body) = reply.split_once("\r\n\r\n").unwrap();
+        let value: serde_json::Value = serde_json::from_str(body).unwrap();
+        assert_eq!(value["instance-v2-id"], value["instanceid"]);
+        let report = service.report();
+        assert!(
+            value["user-data"]
+                .as_str()
+                .unwrap()
+                .contains(&report.canary.id)
+        );
+        assert!(value["vendor-data"].is_string());
+        assert!(value["interfaces"].is_array());
+        assert!(
+            report
+                .events
+                .iter()
+                .any(|event| event.kind == "credentials")
+        );
     }
 
     #[test]

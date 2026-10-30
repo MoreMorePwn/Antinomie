@@ -6,6 +6,12 @@ it runs.
 
 ## 0.8.0 — unreleased
 
+- **Cloud profile launch advice.** VM configuration offers Routed networking
+  for the local simulated metadata service without silently changing saved
+  policies, and shows the i440FX-to-q35 RAM fallback before launch. Provider
+  metadata references distinguish documented paths from simulated values;
+  Vultr's JSON response includes its canary user-data.
+
 - **A replaced debug target stays replaced after it exits.** When the debugger
   is not following exec, the guest keeps that replacement as the reason the
   session ended, including when the new program has already exited before the

@@ -610,6 +610,7 @@ impl MonitorApp {
                                 let fallbacks = app.draft_stealth_fallbacks();
                                 super::stealth::preset_row(ui, &mut app.draft.stealth, &mut app.stealth_open, &fallbacks);
                             });
+                            super::stealth::launch_advice(ui, &mut app.draft);
                         };
                         let storage = |app: &mut Self, ui: &mut egui::Ui, credentials_required: bool, nat: &mut bool| {
                             dialog_section(ui, "Storage");

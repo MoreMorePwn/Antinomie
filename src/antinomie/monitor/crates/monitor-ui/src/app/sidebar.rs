@@ -41,6 +41,10 @@ impl MonitorApp {
             (vm.ram_mib.to_string(), number),
             (" MiB".into(), theme::muted()),
         ]);
+        let (_, machine_note) = vm.stealth.machine.for_ram(u64::from(vm.ram_mib) << 20);
+        if machine_note.is_some() {
+            machine.push((" · q35 fallback".into(), theme::warn()));
+        }
         if vm.isolated_network {
             machine.push((" · Isolated network".into(), theme::good()));
         } else if vm.network() == antinomie_monitor_core::VmNetwork::Routed {
@@ -114,6 +118,9 @@ impl MonitorApp {
             ));
             for fallback in &fallbacks {
                 ui.colored_label(theme::warn(), fallback.summary.as_str());
+            }
+            if let Some(note) = machine_note {
+                ui.colored_label(theme::warn(), note);
             }
             if let Some(last) = self.settings.last_runs.get(&vm.id) {
                 ui.label(format!("Latest run: {}", last.program));

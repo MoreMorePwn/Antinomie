@@ -3,6 +3,110 @@
 use super::*;
 use antinomie_monitor_core::stealth::{StealthPreset, StealthProfile, MACHINES};
 
+fn cloud_advice_frame(
+    ctx: &egui::Context,
+    vm: &mut VmConfig,
+    events: Vec<egui::Event>,
+) -> egui::FullOutput {
+    ctx.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(640.0, 480.0),
+            )),
+            events,
+            ..Default::default()
+        },
+        |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                crate::app::stealth::launch_advice(ui, vm);
+            });
+        },
+    )
+}
+
+#[test]
+fn cloud_advice_preserves_saved_policies_until_the_routed_button_is_clicked() {
+    use antinomie_monitor_core::{stealth::CLOUDS, VmNetwork};
+    for (nat, isolated_network, routed) in [
+        (false, false, false),
+        (true, false, false),
+        (false, true, false),
+        (false, false, true),
+    ] {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let mut vm = VmConfig {
+            id: "saved-cloud".into(),
+            nat,
+            isolated_network,
+            routed,
+            stealth: StealthProfile::cloud_vps(&CLOUDS[0]),
+            ..Default::default()
+        };
+        let before = serde_json::to_value(&vm).unwrap();
+        let mut output = cloud_advice_frame(&ctx, &mut vm, vec![]);
+        for _ in 0..3 {
+            output = cloud_advice_frame(&ctx, &mut vm, vec![]);
+        }
+        assert_eq!(serde_json::to_value(&vm).unwrap(), before);
+        let labels = texts(&output);
+        let button = labels
+            .iter()
+            .find(|(text, _)| text == "Use Routed for cloud metadata");
+        if routed {
+            assert!(button.is_none());
+        } else {
+            let pos = button.expect("Routed must be offered").1.center();
+            for pressed in [true, false] {
+                cloud_advice_frame(
+                    &ctx,
+                    &mut vm,
+                    vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                );
+            }
+            assert_eq!(vm.network(), VmNetwork::Routed);
+            let mut expected = before;
+            expected["nat"] = false.into();
+            expected["isolated_network"] = false.into();
+            expected["routed"] = true.into();
+            assert_eq!(serde_json::to_value(&vm).unwrap(), expected);
+        }
+    }
+}
+
+#[test]
+fn chipset_fallback_is_visible_before_launch_at_the_ram_boundary() {
+    use antinomie_monitor_core::stealth::CLOUDS;
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let mut vm = VmConfig {
+        ram_mib: 2816,
+        stealth: StealthProfile::cloud_vps(&CLOUDS[0]),
+        ..Default::default()
+    };
+    for _ in 0..3 {
+        cloud_advice_frame(&ctx, &mut vm, vec![]);
+    }
+    let output = cloud_advice_frame(&ctx, &mut vm, vec![]);
+    assert!(texts(&output)
+        .iter()
+        .any(|(text, _)| text.contains("q35 will be used")));
+    vm.ram_mib = 2815;
+    let output = cloud_advice_frame(&ctx, &mut vm, vec![]);
+    assert!(!texts(&output)
+        .iter()
+        .any(|(text, _)| text.contains("q35 will be used")));
+}
+
 fn shown(app: &mut MonitorApp, size: egui::Vec2) -> Vec<String> {
     let ctx = egui::Context::default();
     theme::install(&ctx);

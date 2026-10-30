@@ -2,12 +2,14 @@
 //! VM configuration > Stealth profile: the hardware identity a VM shows its
 //! guest. A preset fills every entry; editing one makes the profile Custom.
 use super::*;
+mod cloud;
 use antinomie_monitor_core::stealth::{
     base_supporting, chassis_label, disk_bus_unavailable, firmware_unavailable, host_cpu_vendor,
     BaseSupport, DiskBus, DiskMedia, Fallback, FallbackSetting, Firmware, HostSupport,
     MachineIdentity, NatNetwork, NicModel, Pointer, RtcClock, SmbiosEntry, StealthPreset,
     StealthProfile, CHASSIS, CLOUDS, CPU_MODELS, MACHINES,
 };
+pub(super) use cloud::launch_advice;
 
 /// What the host offers (OVMF, clean SMT), read once.
 pub(super) fn host_support() -> &'static HostSupport {

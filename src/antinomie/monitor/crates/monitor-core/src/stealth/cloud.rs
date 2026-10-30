@@ -29,6 +29,22 @@ pub enum MachineType {
 }
 
 impl MachineType {
+    /// The supported chipset and an optional fallback explanation for guest
+    /// RAM in bytes. The transport's high-memory mapping currently needs q35.
+    pub fn for_ram(self, ram_size: u64) -> (Self, Option<&'static str>) {
+        if self == Self::Pc && ram_size >= 0xb000_0000 {
+            (
+                Self::Q35,
+                Some(
+                    "i440FX is unavailable with 2.75 GiB RAM or more: q35 will be used because \
+                     the telemetry transport does not support i440FX's high-memory layout.",
+                ),
+            )
+        } else {
+            (self, None)
+        }
+    }
+
     /// The `-machine` type name.
     pub fn qemu(self) -> &'static str {
         match self {
@@ -58,7 +74,8 @@ pub enum MetadataStyle {
     Vultr,
 }
 
-/// One purchasable size of a provider: vCPUs, RAM in MiB and disk in GiB.
+/// A representative size hint: vCPUs, RAM in MiB and disk in GiB.
+/// Availability and configurable disk sizes are not live provider inventory.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Plan {
     pub name: &'static str,
@@ -407,7 +424,7 @@ impl CloudProvider {
         }
     }
 
-    /// The plan whose size is the VM's, if the provider sells one.
+    /// A stored size hint matching the VM, without claiming current availability.
     pub fn plan_for(&self, cpus: u16, ram_mib: u32) -> Option<&Plan> {
         self.plans
             .iter()
