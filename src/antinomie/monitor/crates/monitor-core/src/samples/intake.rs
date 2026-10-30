@@ -234,7 +234,10 @@ impl Library {
             .or(info.file_arch.clone())
             .unwrap_or_default();
         let at = now_ms() as i64;
-        let transaction = self.connection.transaction().map_err(|e| e.to_string())?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|e| e.to_string())?;
         if existing.is_none() {
             transaction
                 .execute(

@@ -295,7 +295,10 @@ impl Library {
         if !self.contains(&sha256)? {
             return Err("no such sample".into());
         }
-        let transaction = self.connection.transaction().map_err(|e| e.to_string())?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|e| e.to_string())?;
         transaction
             .execute(
                 "INSERT INTO note(sha256, body, by, created_ms) VALUES (?1, ?2, 'analyst', ?3)",
@@ -327,7 +330,10 @@ impl Library {
                 row.get(0)
             })
             .map_err(|_| "no such note".to_owned())?;
-        let transaction = self.connection.transaction().map_err(|e| e.to_string())?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|e| e.to_string())?;
         transaction
             .execute(
                 "UPDATE note SET body=?2, edited_ms=?3 WHERE id=?1",

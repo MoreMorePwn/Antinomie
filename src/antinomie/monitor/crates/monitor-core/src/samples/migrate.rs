@@ -93,7 +93,10 @@ impl Library {
         } else {
             record.downloaded_ms
         } as i64;
-        let transaction = self.connection.transaction().map_err(|e| e.to_string())?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|e| e.to_string())?;
         let inserted = transaction
             .execute(
                 "INSERT OR IGNORE INTO sample(sha256, sha1, md5, name, size, file_type, arch,

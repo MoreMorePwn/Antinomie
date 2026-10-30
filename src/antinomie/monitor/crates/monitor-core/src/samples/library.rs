@@ -651,7 +651,10 @@ impl Library {
         if !self.contains(&sha256)? {
             return Err("no such sample".into());
         }
-        let transaction = self.connection.transaction().map_err(|e| e.to_string())?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|e| e.to_string())?;
         transaction
             .execute("DELETE FROM tag WHERE sha256=?1", [&sha256])
             .map_err(|e| e.to_string())?;
@@ -747,7 +750,10 @@ impl Library {
     /// Returns how many were new.
     pub fn index_runs(&mut self, runs: &[SeenRun]) -> Result<usize, String> {
         let mut added = Vec::new();
-        let transaction = self.connection.transaction().map_err(|e| e.to_string())?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|e| e.to_string())?;
         for run in runs {
             let sha256 = run.sha256.to_ascii_lowercase();
             let known: bool = transaction
