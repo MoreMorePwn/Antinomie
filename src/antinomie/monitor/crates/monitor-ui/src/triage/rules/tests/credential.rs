@@ -208,7 +208,7 @@ fn cloud_report() -> antinomie_monitor_core::route::MetadataReport {
             ),
             event(
                 "canary-use",
-                "Authorization: Bearer AKIDANTCANARYabc",
+                "Authorization: Bearer AKIDexamplefixture",
                 "203.0.113.9:80",
                 3_000,
             ),

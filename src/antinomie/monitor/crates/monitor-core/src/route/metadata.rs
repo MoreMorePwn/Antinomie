@@ -33,6 +33,9 @@ const MAX_LINE: u64 = 8 * 1024;
 const MAX_REQUESTS: usize = 64;
 const MAX_EVENTS: usize = 2_000;
 const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+const BASE64: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+/// Temporary credentials last six hours, as the providers' role credentials do.
+const LIFETIME_S: u64 = 21_600;
 
 /// The fake credentials of one run.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,29 +48,27 @@ pub struct Canary {
 impl Canary {
     fn of(style: MetadataStyle) -> Self {
         let text = |len| random_text(ALPHABET, len);
-        // Every id carries `ANTCANARY` so an analyst reading a capture sees
-        // at once that it was never a credential.
+        // The provider's own form, length and alphabet, and nothing else: a
+        // marker in the value would tell a sample it is in a sandbox. The
+        // run's report keeps the values, which is how Triage knows them.
         match style {
             MetadataStyle::Tencent => Self {
-                id: format!("AKIDANTCANARY{}", text(24)),
+                id: format!("AKID{}", text(32)),
                 secret: text(32),
                 token: text(160),
             },
             MetadataStyle::Alibaba => Self {
-                id: format!("STS.ANTCANARY{}", text(16)),
+                id: format!("STS.N{}", text(24)),
                 secret: text(44),
-                token: text(180),
+                token: format!("CAIS{}", random_text(BASE64, 476)),
             },
             MetadataStyle::DigitalOcean => Self {
-                id: format!("dop_v1_antcanary{}", random_text(b"0123456789abcdef", 48)),
+                id: format!("dop_v1_{}", random_text(b"0123456789abcdef", 64)),
                 secret: String::new(),
                 token: String::new(),
             },
             MetadataStyle::Vultr => Self {
-                id: format!(
-                    "ANTCANARY{}",
-                    random_text(b"ABCDEFGHJKLMNPQRSTUVWXYZ234567", 27)
-                ),
+                id: random_text(b"ABCDEFGHJKLMNPQRSTUVWXYZ234567", 36),
                 secret: String::new(),
                 token: String::new(),
             },
@@ -130,6 +131,18 @@ fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_millis() as u64)
+}
+
+/// `YYYY-MM-DDTHH:MM:SSZ` for Unix seconds.
+fn utc(unix: u64) -> String {
+    let day = unix % 86_400;
+    format!(
+        "{}T{:02}:{:02}:{:02}Z",
+        crate::ioc::feeds::date_text(unix),
+        day / 3600,
+        day % 3600 / 60,
+        day % 60
+    )
 }
 
 impl Service {
@@ -344,8 +357,8 @@ impl Service {
                     "{{\n  \"TmpSecretId\": \"{}\",\n  \"TmpSecretKey\": \"{}\",\n  \"ExpiredTime\": {},\n  \"Expiration\": \"{}\",\n  \"Token\": \"{}\",\n  \"Code\": \"Success\"\n}}",
                     canary.id,
                     canary.secret,
-                    now_ms() / 1000 + 21_600,
-                    "2099-01-01T00:00:00Z",
+                    now_ms() / 1000 + LIFETIME_S,
+                    utc(now_ms() / 1000 + LIFETIME_S),
                     canary.token
                 ),
             )),
@@ -374,8 +387,12 @@ impl Service {
             "/meta-data/ram/security-credentials/EcsRamRole" => Some((
                 "application/json",
                 format!(
-                    "{{\n  \"AccessKeyId\" : \"{}\",\n  \"AccessKeySecret\" : \"{}\",\n  \"Expiration\" : \"2099-01-01T00:00:00Z\",\n  \"SecurityToken\" : \"{}\",\n  \"LastUpdated\" : \"2026-01-01T00:00:00Z\",\n  \"Code\" : \"Success\"\n}}",
-                    canary.id, canary.secret, canary.token
+                    "{{\n  \"AccessKeyId\" : \"{}\",\n  \"AccessKeySecret\" : \"{}\",\n  \"Expiration\" : \"{}\",\n  \"SecurityToken\" : \"{}\",\n  \"LastUpdated\" : \"{}\",\n  \"Code\" : \"Success\"\n}}",
+                    canary.id,
+                    canary.secret,
+                    utc(now_ms() / 1000 + LIFETIME_S),
+                    canary.token,
+                    utc(now_ms() / 1000)
                 ),
             )),
             "/user-data" => text("#!/bin/sh\n# first boot\n".into()),
@@ -573,7 +590,8 @@ mod tests {
         );
         let canary = service.report().canary;
         assert!(creds.contains(&canary.id) && creds.contains(&canary.secret));
-        assert!(canary.id.starts_with("AKIDANTCANARY"));
+        assert!(canary.id.starts_with("AKID") && canary.id.len() == 36);
+        assert!(!creds.contains("2099"));
         let kinds: Vec<_> = service
             .report()
             .events
@@ -596,7 +614,7 @@ mod tests {
             (
                 "cloud-alibaba-ecs",
                 "/latest/meta-data/ram/security-credentials/EcsRamRole",
-                "STS.ANTCANARY",
+                "\"AccessKeyId\" : \"STS.N",
             ),
             ("cloud-digitalocean-droplet", "/metadata/v1/region", "nyc3"),
             (
@@ -607,20 +625,50 @@ mod tests {
             (
                 "cloud-digitalocean-droplet",
                 "/metadata/v1/user-data",
-                "dop_v1_antcanary",
+                "DIGITALOCEAN_ACCESS_TOKEN=dop_v1_",
             ),
             ("cloud-vultr-vc2", "/v1.json", "regioncode"),
-            (
-                "cloud-vultr-vc2",
-                "/latest/user-data",
-                "VULTR_API_KEY=ANTCANARY",
-            ),
+            ("cloud-vultr-vc2", "/latest/user-data", "VULTR_API_KEY="),
         ] {
             let service = service(id);
             let reply = get(&service, path);
             assert!(reply.starts_with("HTTP/1.1 200 OK"), "{id} {path}: {reply}");
             assert!(reply.contains(expect), "{id} {path}: {reply}");
         }
+    }
+
+    #[test]
+    fn canaries_have_the_providers_form_and_nothing_that_names_a_sandbox() {
+        let alnum = |text: &str| text.bytes().all(|b| b.is_ascii_alphanumeric());
+        for _ in 0..50 {
+            let tencent = Canary::of(MetadataStyle::Tencent);
+            assert!(tencent.id.starts_with("AKID") && tencent.id.len() == 36 && alnum(&tencent.id));
+            assert!(tencent.secret.len() == 32 && alnum(&tencent.secret));
+            let alibaba = Canary::of(MetadataStyle::Alibaba);
+            assert!(alibaba.id.starts_with("STS.N") && alnum(&alibaba.id[4..]));
+            assert!(alibaba.secret.len() == 44 && alibaba.token.starts_with("CAIS"));
+            let ocean = Canary::of(MetadataStyle::DigitalOcean);
+            let hex = ocean.id.strip_prefix("dop_v1_").unwrap();
+            assert!(
+                hex.len() == 64
+                    && hex
+                        .bytes()
+                        .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+            );
+            let vultr = Canary::of(MetadataStyle::Vultr);
+            assert!(
+                vultr.id.len() == 36 && alnum(&vultr.id) && vultr.id == vultr.id.to_uppercase()
+            );
+            for canary in [&tencent, &alibaba, &ocean, &vultr] {
+                for value in canary.values() {
+                    let lower = value.to_lowercase();
+                    // Random text could spell a word by chance only rarely; the
+                    // fixed marker it replaces was in every value.
+                    assert!(!lower.contains("antcanary"), "{value}");
+                }
+            }
+        }
+        assert!(utc(0) == "1970-01-01T00:00:00Z" && utc(1_793_394_000) == "2026-10-30T21:00:00Z");
     }
 
     #[test]

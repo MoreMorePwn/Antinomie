@@ -3071,7 +3071,10 @@ leaves it); the provider's metadata name resolves to it in the gateway's DNS; th
 other providers' metadata addresses go unanswered. The instance id (from the
 system UUID), host name and region are the VM's; the credentials (Tencent CAM
 role, Alibaba RAM role, or a token in DigitalOcean's and Vultr's user data) are
-canaries that carry `ANTCANARY` and are new for each run (`Gateway::claim`).
+canaries in the provider's own form (`AKID` and 32 characters, `STS.`,
+`dop_v1_` and 64 hex digits, Vultr's 36 characters) with no marker in them, new
+for each run (`Gateway::claim`); the expiry times are the request's time plus six
+hours, as with real role credentials.
 The gateway also looks for the run's canary values in the bytes the guest sends to
 any other TCP address; TLS hides them. At the end of the run
 `cloud-metadata.json` (requests, credentials handed out, canary uses) lands in the

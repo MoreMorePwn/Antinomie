@@ -28,7 +28,9 @@ it runs.
   user's shell history and login records, an aged host name. In a Routed
   network the gateway answers the provider's metadata address (169.254.169.254,
   169.254.0.23, 100.100.100.200) on every route, with the instance id, region,
-  user data and canary credentials that are new for each run. Triage lists the
+  user data and canary credentials that are new for each run (in the provider's
+  own form and length, with no marker a sample could look for, and expiry times
+  that follow the request). Triage lists the
   requests, the credentials handed out and any use of the canary in what the
   guest sends out (ATT&CK T1552.005), and the destination as an endpoint
   indicator. Sources and gaps are in `stealth/catalog/SOURCES-cloud.md`; Hetzner

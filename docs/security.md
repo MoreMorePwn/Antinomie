@@ -137,8 +137,10 @@ listens on the host, nothing leaves it, and no real metadata service is asked.
 The other providers' metadata addresses go unanswered. The credentials it hands
 out (a Tencent CAM or Alibaba RAM role, or a token in DigitalOcean's and Vultr's
 user data) are canaries: random values the gateway makes anew for each run. No
-real cloud credentials are involved, and each value contains `ANTCANARY`, so
-whoever receives one can tell what it is. The gateway looks for the run's
+real cloud credentials are involved. The values have the provider's own form
+and length and no marker, so a sample cannot tell them from real ones by
+looking; they are listed in the run's report, and no provider accepts them.
+The gateway looks for the run's
 canary values in plain-text TCP the guest sends to any other address (TLS hides
 them). At the end of the run, `cloud-metadata.json` in the run's folder records
 the requests, the values handed out and any use, and Triage lists them as
@@ -265,8 +267,8 @@ QEMU's firmware tables among them. `CPUID` and `RDTSC` checks leave no system
 call and are not recorded. Software breakpoints are `0xCC` bytes a sample can
 read. A setting a base cannot support falls back, and the app says so. A Cloud
 VPS profile leaves the hypervisor flag, the KVM signature and kvm-clock visible
-on purpose, as on the provider's machines, and its canary credentials name
-themselves (`ANTCANARY`). Assume a sample can tell it is being analyzed.
+on purpose, as on the provider's machines. Assume a sample can tell it is
+being analyzed.
 
 ## Checklist before running a sample
 
