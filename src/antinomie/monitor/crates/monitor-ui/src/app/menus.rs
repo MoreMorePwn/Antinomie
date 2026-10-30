@@ -359,6 +359,11 @@ impl MonitorApp {
                             crate::query::open_guide(ui.ctx());
                             ui.close_menu();
                         }
+                        if ui.button("Check for updates…").clicked() {
+                            let outbound = self.settings.outbound_catalog;
+                            self.updates.request(ctx, &self.options.curl, outbound);
+                            ui.close_menu();
+                        }
                     });
                     if self.snapshot.bases.is_empty() && !self.snapshot.bases_checking {
                         ui.separator();

@@ -43,6 +43,8 @@ impl MonitorApp {
         if outcome.open_routes {
             self.open_routes_settings();
         }
+        self.updates
+            .show(ctx, &self.options.curl, &mut self.settings.outbound_catalog);
         self.menus(ctx);
         self.toolbar(ctx);
         self.dump_pause_banner(ctx);

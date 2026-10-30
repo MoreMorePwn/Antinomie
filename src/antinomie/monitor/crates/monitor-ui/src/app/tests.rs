@@ -44,6 +44,7 @@ mod terminals;
 mod theme_setting;
 mod toast_shots;
 mod toasts;
+mod tools_shots;
 mod trace_filters;
 mod trace_paging;
 mod trace_run_selector;
@@ -99,6 +100,7 @@ pub(crate) fn app() -> MonitorApp {
         samples_page: samples_page::SamplesPage::default(),
         api_keys: Default::default(),
         dependencies: crate::dependencies_window::DependenciesWindow::ready_for_test(),
+        updates: Default::default(),
         getting_started: Default::default(),
         show_older_bases: false,
         build_wizard: build_wizard::BuildWizard::default(),
