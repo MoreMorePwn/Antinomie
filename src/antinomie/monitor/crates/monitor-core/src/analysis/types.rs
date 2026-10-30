@@ -66,6 +66,18 @@ impl AnalysisKind {
 pub struct AnalysisSelection {
     pub enabled: bool,
     pub checks: Vec<AnalysisKind>,
+    /// Minutes each analysis tool may run; 0 leaves each tool its own limit
+    /// (capa 4, FLOSS 8, binwalk 3, the decompiler 14).
+    pub time_limit_minutes: u32,
+}
+
+/// Longest time limit a run may ask for, in minutes.
+pub const TIME_LIMIT_MAX_MINUTES: u32 = 480;
+
+/// The seconds a time limit setting asks each analysis tool for; none when
+/// the setting is 0 and every tool keeps its own limit.
+pub fn time_limit_seconds(minutes: u32) -> Option<u64> {
+    (minutes > 0).then(|| u64::from(minutes.min(TIME_LIMIT_MAX_MINUTES)) * 60)
 }
 
 /// How a selection is stored. `regex_split` marks a selection written after
@@ -78,6 +90,7 @@ struct SelectionWire {
     enabled: bool,
     checks: Vec<AnalysisKind>,
     regex_split: bool,
+    time_limit_minutes: u32,
 }
 
 impl Default for SelectionWire {
@@ -86,6 +99,7 @@ impl Default for SelectionWire {
             enabled: false,
             checks: AnalysisKind::TRIAGE.to_vec(),
             regex_split: false,
+            time_limit_minutes: 0,
         }
     }
 }
@@ -102,6 +116,7 @@ impl From<SelectionWire> for AnalysisSelection {
         Self {
             enabled: wire.enabled,
             checks,
+            time_limit_minutes: wire.time_limit_minutes,
         }
     }
 }
@@ -112,6 +127,7 @@ impl From<AnalysisSelection> for SelectionWire {
             enabled: selection.enabled,
             checks: selection.checks,
             regex_split: true,
+            time_limit_minutes: selection.time_limit_minutes,
         }
     }
 }
@@ -121,6 +137,7 @@ impl Default for AnalysisSelection {
         Self {
             enabled: false,
             checks: AnalysisKind::TRIAGE.to_vec(),
+            time_limit_minutes: 0,
         }
     }
 }
@@ -134,6 +151,11 @@ impl AnalysisSelection {
             if self.checks[..index].contains(kind) {
                 return Err("duplicate analysis selection".into());
             }
+        }
+        if self.time_limit_minutes > TIME_LIMIT_MAX_MINUTES {
+            return Err(format!(
+                "the analysis time limit is at most {TIME_LIMIT_MAX_MINUTES} minutes"
+            ));
         }
         if self.enabled && self.checks.is_empty() {
             return Err("select at least one static analysis".into());
@@ -170,6 +192,43 @@ pub enum AnalysisSectionState {
     Complete,
     Partial,
     Unavailable,
+    /// The tool ran out of its time limit and was stopped. Whatever it had
+    /// found by then is kept. Reports from before this state existed record
+    /// the same case as `Unavailable`.
+    Timeout,
+}
+
+impl AnalysisSectionState {
+    /// The section may hold rows: it finished, in whole or in part.
+    pub fn has_result(self) -> bool {
+        matches!(self, Self::Complete | Self::Partial | Self::Timeout)
+    }
+}
+
+/// Which bound cut a category's result short, and so where it is changed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnalysisLimitKind {
+    /// A tool was stopped at its time limit (Settings > Analysis).
+    Time,
+    /// More rows than the report or a listing keeps.
+    Rows,
+    /// A file, a tool's output or a listing was bigger than the analysis reads.
+    Size,
+    /// Text of a row or a list inside it was cut to its bound.
+    Text,
+    /// The file itself is inconsistent (a range past its end, unreadable tables).
+    Input,
+}
+
+/// One bound a category met, said plainly for the person reading the report.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnalysisLimit {
+    pub kind: AnalysisLimitKind,
+    pub text: String,
+    /// For a time limit, the seconds the tool was given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seconds: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -432,6 +491,9 @@ pub struct AnalysisSection {
     /// The complete result when it is kept beside the report.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub listing: Option<AnalysisListing>,
+    /// The bounds this category met; empty for a result nothing cut short.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub limits: Vec<AnalysisLimit>,
 }
 
 impl AnalysisSection {
@@ -443,6 +505,7 @@ impl AnalysisSection {
             entries: Vec::new(),
             tools: Vec::new(),
             listing: None,
+            limits: Vec::new(),
         }
     }
 }
@@ -498,6 +561,10 @@ pub struct AnalysisReport {
     /// from before this was recorded and for a host file with no guest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub specimen_source: Option<SpecimenSource>,
+    /// Seconds each tool of the checks still pending may run, when the run
+    /// asked for a limit of its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_limit_seconds: Option<u64>,
 }
 
 #[cfg(test)]
@@ -539,5 +606,27 @@ mod selection_tests {
         let saved = serde_json::to_string(&chosen).unwrap();
         assert_eq!(read(&saved).checks, [AnalysisKind::Strings]);
         assert_eq!(read(&serde_json::to_string(&read(&saved)).unwrap()), chosen);
+    }
+
+    #[test]
+    fn the_time_limit_is_saved_with_a_selection_and_is_optional_in_old_ones() {
+        assert_eq!(
+            read(r#"{"enabled":true,"checks":["strings"]}"#).time_limit_minutes,
+            0
+        );
+        let mut chosen = read("{}");
+        chosen.time_limit_minutes = 12;
+        let saved = serde_json::to_string(&chosen).unwrap();
+        assert_eq!(read(&saved).time_limit_minutes, 12);
+        assert_eq!(time_limit_seconds(12), Some(720));
+        assert_eq!(time_limit_seconds(0), None);
+        assert_eq!(
+            time_limit_seconds(u32::MAX),
+            Some(u64::from(TIME_LIMIT_MAX_MINUTES) * 60)
+        );
+        chosen.time_limit_minutes = TIME_LIMIT_MAX_MINUTES + 1;
+        assert!(chosen.validate().is_err());
+        chosen.time_limit_minutes = TIME_LIMIT_MAX_MINUTES;
+        assert!(chosen.validate().is_ok());
     }
 }

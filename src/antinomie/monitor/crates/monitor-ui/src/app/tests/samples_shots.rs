@@ -3,7 +3,7 @@
 //! an X11 display; exits by itself. The library lives in ANTINOMIE_QA_DATA
 //! (a throwaway folder; never the user's data).
 //!
-//! ANTINOMIE_QA_SCENE = list | tags | add | edit | detail | detail2 | regex | lineage | lineage2 | outputs | viewer | promote | similar | runs | custody | custody_broken | custody_all | custody_all_broken | export,
+//! ANTINOMIE_QA_SCENE = list | tags | add | edit | detail | detail2 | regex | identity | lineage | lineage2 | outputs | viewer | promote | similar | runs | runs_details | custody | custody_broken | custody_all | custody_all_broken | export,
 //! ANTINOMIE_QA_THEME = dark | light | blue, ANTINOMIE_QA_SIZE = 1400x820,
 //! ANTINOMIE_QA_SECONDS = 25.
 use super::*;
@@ -27,6 +27,10 @@ fn native_samples_fixture() {
         open_promote: Option<PathBuf>,
         /// Open Export custody record… once the window has read the sample.
         open_export: bool,
+        /// Select the newest run on the Runs tab once the window has read it.
+        select_run: bool,
+        /// A scene that needs the sample read first (see `samples_features`).
+        later: Option<String>,
     }
     impl eframe::App for QaApp {
         fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
@@ -40,6 +44,15 @@ fn native_samples_fixture() {
             if self.app.samples_page.detail_probe().is_some() {
                 if let Some(dir) = self.open_promote.take() {
                     self.app.samples_page.open_promote_for_test(&dir);
+                }
+            }
+            if self.select_run && self.app.samples_page.detail_probe().is_some() {
+                self.select_run = false;
+                self.app.samples_page.select_detail_run(0);
+            }
+            if self.later.is_some() && self.app.samples_page.detail_probe().is_some() {
+                if let Some(scene) = self.later.take() {
+                    super::samples_features::qa_after(&mut self.app, ctx, &scene);
                 }
             }
             if self.open_export && self.app.samples_page.detail_custody().is_some() {
@@ -135,17 +148,23 @@ fn native_samples_fixture() {
                 "detail"
                     | "detail2"
                     | "regex"
+                    | "identity"
                     | "lineage"
                     | "lineage2"
                     | "outputs"
                     | "viewer"
                     | "promote"
                     | "runs"
+                    | "runs_details"
                     | "custody"
                     | "custody_broken"
                     | "custody_all"
                     | "custody_all_broken"
                     | "export"
+                    | "notes"
+                    | "note_editor"
+                    | "delete_run"
+                    | "kinds"
             ) {
                 // Runs that exist on disk, one with a static report.
                 let now = std::time::SystemTime::now()
@@ -170,6 +189,7 @@ fn native_samples_fixture() {
                     name: "Debian".into(),
                     ..VmConfig::default()
                 });
+                super::samples_features::qa_data(&data, &script, &scene, &first);
                 app.samples_page.open_detail(&script);
                 if scene.ends_with("broken") {
                     // The second entry was edited, and a later one removed
@@ -185,7 +205,8 @@ fn native_samples_fixture() {
                         .unwrap();
                 }
                 app.samples_page.show_detail_tab(match scene.as_str() {
-                    "runs" => "runs",
+                    "runs" | "runs_details" => "runs",
+                    "notes" | "note_editor" => "notes",
                     "custody" | "custody_broken" | "export" => "custody",
                     _ => "summary",
                 });
@@ -198,9 +219,10 @@ fn native_samples_fixture() {
                 app.samples_page.scroll_detail(match scene.as_str() {
                     "regex" => 720.0,
                     "detail2" => 800.0,
+                    "identity" => 1330.0,
                     _ => 0.0,
                 });
-                if scene == "outputs" {
+                if scene == "outputs" || scene == "kinds" {
                     app.samples_page.scroll_detail(2150.0);
                 }
                 if scene == "lineage2" {
@@ -232,6 +254,9 @@ fn native_samples_fixture() {
                 open_viewer: scene == "viewer",
                 open_promote: (scene == "promote").then(|| data.clone()),
                 open_export: scene == "export",
+                select_run: scene == "runs_details",
+                later: matches!(scene.as_str(), "note_editor" | "delete_run")
+                    .then(|| scene.clone()),
                 deadline: Instant::now() + Duration::from_secs(seconds),
             }))
         }),

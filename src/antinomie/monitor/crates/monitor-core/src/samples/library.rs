@@ -20,8 +20,10 @@ use std::{
     sync::Arc,
 };
 
-/// Layout version stored in `meta`; a newer database is refused.
-const SCHEMA_VERSION: i64 = 1;
+/// Layout version stored in `meta`; a newer database is refused. Layout 2
+/// adds notes and the kept-artefact tables; a layout 1 database gets them
+/// the first time it is opened, its other tables unchanged.
+const SCHEMA_VERSION: i64 = 2;
 /// The database file inside `<data>/samples`.
 pub const DATABASE: &str = "library.sqlite";
 
@@ -425,9 +427,12 @@ impl Library {
         connection
             .execute_batch(&format!(
                 "BEGIN IMMEDIATE;{SCHEMA}\
-                 {}INSERT OR IGNORE INTO meta(key, value) VALUES('schema', '{SCHEMA_VERSION}');\
+                 {}{}{}INSERT OR IGNORE INTO meta(key, value) VALUES('schema', '{SCHEMA_VERSION}');\
+                 UPDATE meta SET value='{SCHEMA_VERSION}' WHERE key='schema' AND CAST(value AS INTEGER) < {SCHEMA_VERSION};\
                  COMMIT;",
-                super::chain::SCHEMA
+                super::chain::SCHEMA,
+                super::notes::SCHEMA,
+                super::kept::SCHEMA
             ))
             .map_err(|e| e.to_string())?;
         let version: Option<i64> = connection

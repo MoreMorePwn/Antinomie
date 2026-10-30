@@ -330,7 +330,7 @@ fn stealth(ui: &mut egui::Ui, profile: &StealthProfile, narrow: bool, fallbacks:
             ),
         ),
         (
-            "NAT",
+            "Guest network",
             if profile.nat.network.is_empty() {
                 "10.0.2.0/24 (QEMU)".to_owned()
             } else {

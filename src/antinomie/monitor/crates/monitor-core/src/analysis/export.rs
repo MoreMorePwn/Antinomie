@@ -518,6 +518,7 @@ mod tests {
             sections: vec![section],
             layer: None,
             specimen_source: None,
+            time_limit_seconds: None,
         };
         fs::write(
             root.join("report.json"),

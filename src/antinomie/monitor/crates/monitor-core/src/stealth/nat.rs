@@ -36,24 +36,24 @@ impl NatNetwork {
         let (address, prefix) = self
             .network
             .split_once('/')
-            .ok_or_else(|| format!("NAT network {:?} is not address/prefix", self.network))?;
+            .ok_or_else(|| format!("Guest network {:?} is not address/prefix", self.network))?;
         let address: Ipv4Addr = address
             .parse()
-            .map_err(|_| format!("NAT network {address:?} is not an IPv4 address"))?;
+            .map_err(|_| format!("Guest network {address:?} is not an IPv4 address"))?;
         let prefix: u8 = prefix
             .parse()
             .ok()
             .filter(|prefix| (8..=30).contains(prefix))
-            .ok_or("NAT network prefix is 8 to 30 bits")?;
+            .ok_or("Guest network prefix is 8 to 30 bits")?;
         let mask = u32::MAX << (32 - prefix);
         let network = u32::from(address);
         if network & !mask != 0 {
-            return Err(format!("NAT network {} has host bits set", self.network));
+            return Err(format!("Guest network {} has host bits set", self.network));
         }
         // Private only: the guest's network must not hide public hosts, and
         // the capture and triage treat it as the local network.
         if !Ipv4Addr::from(network).is_private() || !Ipv4Addr::from(network | !mask).is_private() {
-            return Err("NAT network must be private (10/8, 172.16/12 or 192.168/16)".into());
+            return Err("Guest network must be private (10/8, 172.16/12 or 192.168/16)".into());
         }
         Ok((network, prefix))
     }
@@ -73,15 +73,15 @@ impl NatNetwork {
             let address = text
                 .parse::<Ipv4Addr>()
                 .map(u32::from)
-                .map_err(|_| format!("NAT {name} {text:?} is not an IPv4 address"))?;
+                .map_err(|_| format!("Guest network {name} {text:?} is not an IPv4 address"))?;
             if address & mask != network || address == network || address == network | !mask {
                 return Err(format!(
-                    "NAT {name} {text} is not a host of {}",
+                    "Guest network {name} {text} is not a host of {}",
                     self.network
                 ));
             }
             if seen.contains(&address) {
-                return Err("NAT gateway, DNS server and DHCP start must differ".into());
+                return Err("Guest network gateway, DNS server and DHCP start must differ".into());
             }
             seen.push(address);
         }

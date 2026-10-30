@@ -228,20 +228,23 @@ impl MonitorApp {
             egui::Layout::top_down(egui::Align::Min),
             |ui| {
                 crate::widgets::table::begin(ui);
+                let widths = HistoryColumns::fit(ui);
                 let mut table = TableBuilder::new(ui)
-                    .id_salt("run_history")
-                    .column(Column::initial(225.0).at_least(150.0))
+                    // A pane of another width starts its columns afresh, so the
+                    // row and the icons at its end always fit the pane.
+                    .id_salt(("run_history", widths.pane as i32))
+                    .column(Column::initial(widths.start).range(widths.start_least..=400.0))
                     .sense(egui::Sense::click())
                     .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
                     // Not resizable: a resizable column keeps the width it had, so a
                     // remainder in the middle stopped following the pane. This one
                     // takes whatever the others leave, and the table spans the pane.
-                    .column(Column::remainder().at_least(120.0).resizable(false))
-                    .column(Column::exact(110.0))
-                    .column(Column::initial(160.0).range(90.0..=400.0))
-                    .column(Column::initial(190.0).range(90.0..=320.0))
-                    .column(Column::initial(110.0).range(70.0..=220.0))
-                    .column(Column::exact(72.0))
+                    .column(Column::remainder().at_least(HistoryColumns::EXECUTABLE_LEAST).resizable(false))
+                    .column(Column::initial(widths.sample).range(HistoryColumns::SAMPLE_LEAST..=400.0))
+                    .column(Column::initial(widths.arguments).range(HistoryColumns::ARGUMENTS_LEAST..=400.0))
+                    .column(Column::initial(widths.status).range(HistoryColumns::STATUS_LEAST..=320.0))
+                    .column(Column::initial(widths.exit).range(HistoryColumns::EXIT_LEAST..=220.0))
+                    .column(Column::exact(widths.actions))
                     .resizable(true)
                     .striped(true)
                     .max_scroll_height(height)
@@ -259,13 +262,8 @@ impl MonitorApp {
                             row.set_selected(self.selected_run.as_ref() == Some(&run.id));
                             row.col(|ui| { ui.add(egui::Label::new(crate::time_format::unix_ms(run.started_ms)).truncate().selectable(false).sense(egui::Sense::hover())); });
                             row.col(|ui| {
-                                ui.add(
-                                    egui::Label::new(format!("{}{}", crate::evidence::title(ui, &run.directory, &run.request.path), if run.analysis.is_some() { "  [static analysis]" } else { "" }))
-                                        .selectable(false)
-                                        .sense(egui::Sense::hover())
-                                        .truncate(),
-                                )
-                                .on_hover_text(&run.request.path);
+                                let title = crate::evidence::title(ui, &run.directory, &run.request.path);
+                                executable_cell(ui, title, run);
                             });
                             row.col(|ui| {
                                 match &run.request.sample {
@@ -752,7 +750,7 @@ impl MonitorApp {
 }
 
 /// `run` for listing: everything but the static-analysis rows. Whether a
-/// report exists stays visible to the row, filter and `[static analysis]` mark.
+/// report exists stays visible to the row and the filter.
 pub(super) fn listed(run: &RunSummary) -> RunSummary {
     RunSummary {
         started_ms: run.started_ms,
@@ -786,6 +784,7 @@ pub(super) fn listed(run: &RunSummary) -> RunSummary {
                 sections: Vec::new(),
                 layer: None,
                 specimen_source: None,
+                time_limit_seconds: None,
             }),
     }
 }
@@ -938,7 +937,12 @@ pub(super) fn feature_tree(run: &RunSummary, labels: Option<run_labels::Labels>)
                 .and_then(|report| report.sections.iter().find(|section| section.kind == *kind));
             let mut feature = Feature::new(1, kind.label());
             match section {
-                Some(section) if section.state == AnalysisSectionState::Unavailable => {
+                Some(section)
+                    if matches!(
+                        section.state,
+                        AnalysisSectionState::Unavailable | AnalysisSectionState::Timeout
+                    ) =>
+                {
                     feature.available = false;
                     feature.hover = Some(section.summary.clone());
                 }
@@ -1090,4 +1094,93 @@ pub(super) fn machine_hover(machine: &antinomie_monitor_core::stealth::MachineRe
         lines.push(note.clone());
     }
     lines.join("\n")
+}
+
+/// The widths of Run History's columns for a pane: each column's wish, and
+/// the least it keeps, shrunk together so the whole row fits the pane.
+struct HistoryColumns {
+    /// The pane's width in whole hundreds, so a table is rebuilt only when the
+    /// pane is a hundred points narrower, never while it is dragged.
+    pane: f32,
+    start: f32,
+    start_least: f32,
+    sample: f32,
+    arguments: f32,
+    status: f32,
+    exit: f32,
+    /// The Open terminal and Stop icons.
+    actions: f32,
+}
+
+impl HistoryColumns {
+    const EXECUTABLE_LEAST: f32 = 150.0;
+    const SAMPLE_LEAST: f32 = 70.0;
+    const ARGUMENTS_LEAST: f32 = 70.0;
+    const STATUS_LEAST: f32 = 90.0;
+    const EXIT_LEAST: f32 = 60.0;
+    const START_LEAST: f32 = 120.0;
+
+    fn fit(ui: &egui::Ui) -> Self {
+        let spacing = ui.spacing();
+        let actions = 2.0 * spacing.interact_size.y + 3.0 * spacing.item_spacing.x;
+        let gaps = 7.0 * spacing.item_spacing.x;
+        let pane = (ui.available_width() / 100.0).floor().max(6.0) * 100.0;
+        // What each column wants, and the least it keeps.
+        let wanted = [190.0, 120.0, 170.0, 190.0, 110.0];
+        let least = [
+            Self::START_LEAST,
+            Self::SAMPLE_LEAST,
+            Self::ARGUMENTS_LEAST,
+            Self::STATUS_LEAST,
+            Self::EXIT_LEAST,
+        ];
+        let room = (pane - actions - gaps - Self::EXECUTABLE_LEAST).max(least.iter().sum());
+        let scale = (room / wanted.iter().sum::<f32>()).min(1.0);
+        let at = |index: usize| (wanted[index] * scale).max(least[index]);
+        Self {
+            pane,
+            start: at(0),
+            start_least: Self::START_LEAST,
+            sample: at(1),
+            arguments: at(2),
+            status: at(3),
+            exit: at(4),
+            actions,
+        }
+    }
+}
+
+/// The run's short id, as in `[a1b2c3d4]`: the first eight characters of its id.
+pub(crate) fn short_run_id(run: &RunSummary) -> String {
+    format!("[{}]", run.id.chars().take(8).collect::<String>())
+}
+
+/// The executable's name with the run's short id beside it. The name gives way
+/// when the column is narrow; the id stays.
+fn executable_cell(ui: &mut egui::Ui, title: String, run: &RunSummary) {
+    let id = short_run_id(run);
+    let font = egui::TextStyle::Monospace.resolve(ui.style());
+    let id_width = ui.fonts(|fonts| {
+        fonts
+            .layout_no_wrap(id.clone(), font, egui::Color32::PLACEHOLDER)
+            .size()
+            .x
+    });
+    let room = (ui.available_width() - id_width - ui.spacing().item_spacing.x).max(20.0);
+    ui.scope(|ui| {
+        ui.set_max_width(room);
+        ui.add(
+            egui::Label::new(title)
+                .selectable(false)
+                .sense(egui::Sense::hover())
+                .truncate(),
+        )
+        .on_hover_text(&run.request.path);
+    });
+    ui.add(
+        egui::Label::new(egui::RichText::new(id).monospace().color(theme::muted()))
+            .selectable(false)
+            .sense(egui::Sense::hover()),
+    )
+    .on_hover_text(format!("Run {}", run.id));
 }

@@ -9,7 +9,11 @@ use antinomie_monitor_core::{
 
 const SIZE: egui::Vec2 = egui::vec2(1400.0, 820.0);
 
-fn until(app: &mut MonitorApp, ctx: &egui::Context, ready: impl Fn(&MonitorApp) -> bool) {
+pub(super) fn until(
+    app: &mut MonitorApp,
+    ctx: &egui::Context,
+    ready: impl Fn(&MonitorApp) -> bool,
+) {
     let deadline = Instant::now() + Duration::from_secs(60);
     while Instant::now() < deadline {
         render(app, ctx, SIZE);
@@ -88,6 +92,7 @@ pub(super) fn save_run(
             sections: vec![strings_section()],
             layer: None,
             specimen_source: None,
+            time_limit_seconds: None,
         };
         std::fs::create_dir_all(directory.join("analysis")).unwrap();
         std::fs::write(
@@ -141,6 +146,7 @@ pub(super) fn save_digest(run: &RunSummary, tier: &str, hit: bool) {
                 severity: "high".into(),
                 mitre: vec!["T1053.003".into()],
                 count: 1,
+                family: "CronDropper".into(),
             }]
         } else {
             Vec::new()
@@ -242,7 +248,7 @@ pub(super) fn save_artifacts(run: &RunSummary) {
     .unwrap();
 }
 
-fn window(name: &str) -> (MonitorApp, egui::Context, String, PathBuf) {
+pub(super) fn window(name: &str) -> (MonitorApp, egui::Context, String, PathBuf) {
     let root = super::samples_list::temp(name);
     let (script, _, _) = super::samples_list::fixture(&root);
     // Replace the fixture's invented runs by runs that exist on disk.
@@ -314,6 +320,10 @@ fn the_summary_adds_up_the_runs_triage_digests() {
     assert_eq!(rollup.highest, Some(("high".into(), vec![2])));
     assert_eq!(rollup.rules.len(), 1);
     assert_eq!(rollup.rules[0].runs, [2]);
+    assert_eq!(rollup.rules[0].rule_id, "cron_dropper");
+    assert_eq!(rollup.rules[0].family, "CronDropper");
+    // Triage's technique is not offered again: the sample carries that tag.
+    assert!(app.samples_page.detail_suggestions().is_empty());
     assert_eq!(rollup.tactics[0].tactic, "Persistence");
     assert_eq!(rollup.tactics[0].techniques[0].runs, [1, 2]);
     assert_eq!(rollup.evasion[0].checks[0].runs, [1, 2]);
@@ -501,5 +511,43 @@ fn similar_samples_list_a_near_copy_with_what_it_shares() {
     for _ in 0..3 {
         render(&mut app, &ctx, SIZE);
     }
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn selecting_a_run_opens_the_details_panel_and_a_broken_custody_log_is_marked_in_the_list() {
+    let (mut app, ctx, script, root) = window("detail-select");
+    until(&mut app, &ctx, |app| {
+        app.samples_page.detail_probe().is_some()
+    });
+    assert!(!app.samples_page.wants_details());
+    app.samples_page.show_detail_tab("runs");
+    for _ in 0..2 {
+        render(&mut app, &ctx, SIZE);
+    }
+    // Nothing is selected: the Details panel stays folded.
+    assert!(!app.samples_page.wants_details());
+    app.samples_page.select_detail_run(0);
+    assert!(app.samples_page.wants_details());
+    for _ in 0..3 {
+        render(&mut app, &ctx, SIZE);
+    }
+    // The run's details draw in the Details panel below the page.
+    // The list marks a sample whose custody log was edited.
+    app.samples_page.close_detail();
+    let connection = rusqlite::Connection::open(root.join("samples/library.sqlite")).unwrap();
+    connection
+        .execute(
+            "UPDATE custody_entry SET detail=detail || ' edited' WHERE seq=1 AND sha256=?1",
+            [&script],
+        )
+        .unwrap();
+    app.samples_page.refresh();
+    until(&mut app, &ctx, |app| {
+        app.samples_page
+            .list_custody_ok()
+            .iter()
+            .any(|(sha, ok)| *sha == script && !*ok)
+    });
     let _ = std::fs::remove_dir_all(root);
 }

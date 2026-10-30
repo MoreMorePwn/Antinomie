@@ -514,7 +514,7 @@ pub(super) fn scan_archive_query(
             counts: None,
             coverage: "no pcap is recorded for this run; the loaded packet preview was not used"
                 .into(),
-            network_warning: Some("No network capture is available for this run.".into()),
+            network_warning: Some("No network capture was saved for this run.".into()),
             ..PacketIndex::default()
         },
     };
@@ -660,17 +660,16 @@ pub(super) fn scan_archive_query(
         source_key == normalized::source_key(&recording.directory, pcap, pcap_open, request);
     let event_journal = event_journal
         .and_then(|journal| {
-            match journal.finish(
-                complete
-                    && stable_source
-                    && issues.is_empty()
-                    && facts
-                        .as_ref()
-                        .is_some_and(|facts| facts.complete == Some(true))
-                    && request.run_finished
-                    && !pcap_open
-                    && network.network_warning.is_none(),
-            ) {
+            let reasons = incomplete_reasons(&Source {
+                scan_complete: complete,
+                stable: stable_source,
+                issues: issues.len(),
+                facts: facts.as_ref(),
+                run_finished: request.run_finished,
+                capture_open: pcap_open,
+                network_warning: network.network_warning.as_deref(),
+            });
+            match journal.finish_because(reasons.is_empty(), &reasons) {
                 Ok(summary) => Some(summary),
                 Err(error) => {
                     event_error = Some(error);
@@ -730,4 +729,130 @@ pub(super) fn scan_archive_query(
         ioc: Some(Arc::new(ioc)),
         network_warning: network.network_warning,
     })
+}
+
+/// What the event index was built from, for saying why it may be partial.
+struct Source<'a> {
+    scan_complete: bool,
+    stable: bool,
+    issues: usize,
+    facts: Option<&'a antinomie_monitor_core::recording::RunFilterFacts>,
+    run_finished: bool,
+    capture_open: bool,
+    network_warning: Option<&'a str>,
+}
+
+/// Why the run's events may be only part of what happened, in plain words;
+/// empty when the index is complete. The Sigma scan repeats these.
+fn incomplete_reasons(source: &Source<'_>) -> Vec<String> {
+    let mut reasons = Vec::new();
+    if !source.run_finished {
+        reasons.push("the run was still recording".to_owned());
+    }
+    if !source.scan_complete {
+        reasons.push("the saved telemetry could not be read to its end".to_owned());
+    }
+    if source.issues > 0 {
+        reasons.push(format!(
+            "{} saved pages of telemetry could not be read",
+            source.issues
+        ));
+    }
+    if !source.stable {
+        reasons.push("the recording changed while it was being read".to_owned());
+    }
+    match source.facts {
+        None => reasons.push("the run's saved details could not be read".to_owned()),
+        Some(facts) if facts.complete != Some(true) => {
+            if let Some(lost) = facts.transport_loss.filter(|lost| *lost > 0) {
+                reasons.push(format!(
+                    "telemetry was lost before it reached the host ({lost} dropped)"
+                ));
+            }
+            if let Some(lost) = facts.storage_loss.filter(|lost| *lost > 0) {
+                reasons.push(format!("saving dropped {lost} packets of telemetry"));
+            }
+            if facts.transport_loss.unwrap_or(0) == 0 && facts.storage_loss.unwrap_or(0) == 0 {
+                reasons.push(
+                    "the recording is marked incomplete (saving stopped or the recording quota \
+                     was reached, so only a retained prefix was kept)"
+                        .to_owned(),
+                );
+            }
+        }
+        Some(_) => {}
+    }
+    if source.capture_open {
+        reasons.push("the network capture was still open".to_owned());
+    }
+    if let Some(warning) = source.network_warning {
+        reasons.push(format!(
+            "network warning: {}",
+            warning.trim_end_matches('.')
+        ));
+    }
+    reasons
+}
+
+#[cfg(test)]
+mod reason_tests {
+    use super::*;
+
+    fn source() -> Source<'static> {
+        Source {
+            scan_complete: true,
+            stable: true,
+            issues: 0,
+            facts: None,
+            run_finished: true,
+            capture_open: false,
+            network_warning: None,
+        }
+    }
+
+    #[test]
+    fn a_complete_source_has_no_reason_and_each_cause_names_itself() {
+        let complete = antinomie_monitor_core::recording::RunFilterFacts {
+            complete: Some(true),
+            ..Default::default()
+        };
+        let whole = Source {
+            facts: Some(&complete),
+            ..source()
+        };
+        assert!(incomplete_reasons(&whole).is_empty());
+        let lossy = antinomie_monitor_core::recording::RunFilterFacts {
+            complete: Some(false),
+            transport_loss: Some(7),
+            storage_loss: Some(0),
+            ..Default::default()
+        };
+        let reasons = incomplete_reasons(&Source {
+            facts: Some(&lossy),
+            run_finished: false,
+            capture_open: true,
+            network_warning: Some("capture failed."),
+            ..source()
+        });
+        assert_eq!(
+            reasons,
+            [
+                "the run was still recording",
+                "telemetry was lost before it reached the host (7 dropped)",
+                "the network capture was still open",
+                "network warning: capture failed",
+            ]
+        );
+        let quota = antinomie_monitor_core::recording::RunFilterFacts {
+            complete: Some(false),
+            transport_loss: Some(0),
+            storage_loss: Some(0),
+            ..Default::default()
+        };
+        let reasons = incomplete_reasons(&Source {
+            facts: Some(&quota),
+            ..source()
+        });
+        assert!(reasons[0].contains("retained prefix"), "{reasons:?}");
+    }
 }

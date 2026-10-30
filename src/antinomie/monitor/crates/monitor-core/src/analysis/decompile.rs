@@ -87,7 +87,7 @@ pub(super) fn decompile(section: &mut AnalysisSection, specimen: &[u8], listings
     if object::File::parse(specimen).is_err() {
         section.state = AnalysisSectionState::Unavailable;
         section.summary =
-            "decompilation needs a recognized object format (ELF, PE or Mach-O)".into();
+            "The file is not an ELF, PE or Mach-O file the parser can read, so there is nothing to decompile".into();
         return;
     }
     let result = if let Some(ghidra) =
@@ -120,9 +120,9 @@ fn ghidra_run(
     }
     fs::write("/tmp/ghidra-scripts/AntinomieExport.java", GHIDRA_SCRIPT)
         .map_err(|e| format!("decompiler script: {e}"))?;
-    let budget = super::worker::DECOMPILER_SECONDS;
+    let budget = super::worker::decompiler_seconds();
     let analysis = (budget / 2).to_string();
-    let export = (budget / 2 - 60).to_string();
+    let export = (budget / 2).saturating_sub(60).max(30).to_string();
     let run = tools::run_with(
         ghidra,
         &[
@@ -162,25 +162,40 @@ fn ghidra_run(
             eprintln!("  {line}");
         }
     }
-    let text = fs::read("/tmp/decompiled.txt").map_err(|_| {
+    let Ok(text) = fs::read("/tmp/decompiled.txt") else {
         if run.timed_out {
-            "Ghidra ran out of time before exporting any function".to_string()
-        } else {
-            format!(
-                "Ghidra produced no decompilation ({}); see its output in worker.log",
-                if run.success {
-                    "export missing"
-                } else {
-                    "analysis failed"
-                }
-            )
+            super::limits::time_out(
+                section,
+                "Ghidra",
+                budget,
+                "Ghidra was stopped before it exported any function; large or statically linked programs take it much longer.",
+            );
+            return Ok(());
         }
-    })?;
+        return Err(run
+            .failure_text("Ghidra", Duration::from_secs(budget))
+            .map_or_else(
+                || {
+                    "Ghidra finished but exported no decompilation; see its output in worker.log"
+                        .to_string()
+                },
+                |failure| format!("{failure}; see its output in worker.log"),
+            ));
+    };
     let text = String::from_utf8_lossy(&text[..text.len().min(LISTING_MAX_SIZE as usize)]);
     let version = ghidra_version(ghidra);
-    let (functions, lines, listing) =
-        write_source(listings, &text, object_base(specimen), run.timed_out)?;
-    finish(section, listing, version, functions, lines, "Ghidra");
+    let cut = if run.timed_out { Cut::Time } else { Cut::Whole };
+    let (functions, lines, listing, ended) =
+        write_source(listings, &text, object_base(specimen), cut)?;
+    finish(
+        section,
+        listing,
+        version,
+        (functions, lines),
+        "Ghidra",
+        ended,
+        budget,
+    );
     // Keep the actual project database, not merely the decompiled preview.
     // Analysis still writes into bounded tmpfs; only a checked bundle crosses
     // into retained output after Ghidra has closed its database.
@@ -193,7 +208,9 @@ fn ghidra_run(
         Err("Ghidra did not finish cleanly; native project is unavailable".into())
     };
     if let Err(error) = retained {
-        section.state = AnalysisSectionState::Partial;
+        if section.state == AnalysisSectionState::Complete {
+            section.state = AnalysisSectionState::Partial;
+        }
         section
             .summary
             .push_str(&format!("; native project not retained: {error}"));
@@ -220,7 +237,8 @@ fn ghidra_version(analyze_headless: &str) -> String {
 }
 
 fn radare2_run(section: &mut AnalysisSection, listings: &Path, r2: &str) -> Result<(), String> {
-    let budget = Duration::from_secs(super::worker::DECOMPILER_SECONDS / 2);
+    let budget_seconds = super::worker::decompiler_seconds() / 2;
+    let budget = Duration::from_secs(budget_seconds);
     let list = tools::run(
         r2,
         &[
@@ -237,6 +255,15 @@ fn radare2_run(section: &mut AnalysisSection, listings: &Path, r2: &str) -> Resu
         budget,
         16 * 1024 * 1024,
     )?;
+    if list.timed_out {
+        super::limits::time_out(
+            section,
+            "radare2",
+            budget_seconds,
+            "radare2 was stopped while it listed the functions, so nothing was decompiled.",
+        );
+        return Ok(());
+    }
     let functions: Vec<serde_json::Value> = list
         .stdout
         .lines()
@@ -291,17 +318,35 @@ fn radare2_run(section: &mut AnalysisSection, listings: &Path, r2: &str) -> Resu
         }
     }
     let version = tools::version(r2, &["-v"]);
-    let (functions, lines, listing) =
-        write_source(listings, &text, 0, run.timed_out || run.truncated)?;
+    let cut = if run.timed_out {
+        Cut::Time
+    } else if run.truncated {
+        Cut::Size
+    } else {
+        Cut::Whole
+    };
+    let (functions, lines, listing, ended) = write_source(listings, &text, 0, cut)?;
     finish(
         section,
         listing,
         format!("{version} (pdc pseudo-code)"),
-        functions,
-        lines,
+        (functions, lines),
         "radare2",
+        ended,
+        budget_seconds,
     );
     Ok(())
+}
+
+/// What stopped a decompiler's output.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Cut {
+    /// Nothing: every function was written.
+    Whole,
+    /// The decompiler ran out of time.
+    Time,
+    /// The output or the listing reached its size bound.
+    Size,
 }
 
 /// Turn marked decompiler text into listing rows.
@@ -309,8 +354,8 @@ fn write_source(
     listings: &Path,
     text: &str,
     object_base: u64,
-    cut_short: bool,
-) -> Result<(u64, u64, AnalysisListing), String> {
+    cut: Cut,
+) -> Result<(u64, u64, AnalysisListing, Cut), String> {
     let mut writer =
         ListingWriter::create(listings, AnalysisKind::Decompilation, LISTING_MAX_SIZE)?;
     let mut base = None;
@@ -318,14 +363,14 @@ fn write_source(
     let mut line_number = 0u32;
     let (mut functions, mut lines) = (0u64, 0u64);
     let mut full = false;
-    let mut timed_out = cut_short;
+    let mut ended = cut;
     for line in text.lines() {
         if let Some(value) = line.strip_prefix(MARK_BASE) {
             base = value.trim().parse::<u64>().ok();
             continue;
         }
         if line.starts_with(MARK_TIMEOUT) {
-            timed_out = true;
+            ended = Cut::Time;
             continue;
         }
         if let Some(rest) = line.strip_prefix(MARK_FUNCTION) {
@@ -388,39 +433,64 @@ fn write_source(
             break;
         }
     }
-    let listing = writer.finish(full || timed_out)?;
-    Ok((functions, lines, listing))
+    if full && ended == Cut::Whole {
+        ended = Cut::Size;
+    }
+    let listing = writer.finish(ended != Cut::Whole)?;
+    Ok((functions, lines, listing, ended))
 }
 
 fn finish(
     section: &mut AnalysisSection,
     listing: AnalysisListing,
     tool: String,
-    functions: u64,
-    lines: u64,
+    (functions, lines): (u64, u64),
     name: &str,
+    ended: Cut,
+    seconds: u64,
 ) {
+    section.tools.push(tool);
     if functions == 0 {
-        section.state = AnalysisSectionState::Unavailable;
-        section.summary = format!("{name} found no functions to decompile");
-        section.tools.push(tool);
+        if ended == Cut::Time {
+            super::limits::time_out(
+                section,
+                name,
+                seconds,
+                format!("{name} was stopped before it exported any function."),
+            );
+        } else {
+            section.state = AnalysisSectionState::Unavailable;
+            section.summary = format!("{name} found no functions to decompile");
+        }
         return;
     }
-    section.state = if listing.truncated {
-        AnalysisSectionState::Partial
-    } else {
+    section.state = if ended == Cut::Whole {
         AnalysisSectionState::Complete
+    } else {
+        AnalysisSectionState::Partial
     };
     section.summary = format!(
-        "{functions} functions, {lines} lines of {name} output; decompiled code is a reconstruction, not the original source{}",
-        if listing.truncated {
-            "; time or size budget reached, later functions omitted"
-        } else {
-            ""
-        }
+        "{functions} functions, {lines} lines of {name} output; decompiled code is a reconstruction, not the original source"
     );
+    match ended {
+        Cut::Whole => {}
+        Cut::Time => {
+            let summary = format!(
+                "{functions} functions, {lines} lines of {name} output were exported before it was stopped; the other functions are not listed. Decompiled code is a reconstruction, not the original source"
+            );
+            super::limits::time_out(section, name, seconds, summary);
+        }
+        Cut::Size => super::limits::add(
+            section,
+            AnalysisLimitKind::Size,
+            format!(
+                "The decompilation reached its {} size limit after {functions} functions; later functions are not listed.",
+                crate::byte_size::short_size(LISTING_MAX_SIZE)
+            ),
+            None,
+        ),
+    }
     section.listing = Some(listing);
-    section.tools.push(tool);
 }
 
 /// One PT_LOAD extent from an ELF core. `filesz` bytes at `file_offset` are

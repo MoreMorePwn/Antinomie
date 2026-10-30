@@ -74,6 +74,9 @@ pub struct DetectionHit {
     pub severity: String,
     pub mitre: Vec<String>,
     pub count: u64,
+    /// The malware family a YARA rule names in its metadata; empty when the
+    /// rule names none (and for the other engines).
+    pub family: String,
 }
 
 /// One indicator of compromise of the run.

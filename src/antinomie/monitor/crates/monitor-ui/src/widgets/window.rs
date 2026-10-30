@@ -87,7 +87,7 @@ impl<'open> Dialog<'open> {
                     .horizontal(|ui| {
                         // Not selectable: dragging the title moves the window.
                         ui.add(
-                            egui::Label::new(theme::bold(ui.ctx(), &title).color(theme::text()))
+                            egui::Label::new(theme::bold(ui, &title).color(theme::text()))
                                 .selectable(false),
                         );
                         // Room for the close button, which is placed at the

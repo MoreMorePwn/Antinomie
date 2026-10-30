@@ -8,6 +8,7 @@ fn fixture() -> (PathBuf, AnalysisReport) {
         &AnalysisSelection {
             enabled: true,
             checks: vec![AnalysisKind::Identification],
+            time_limit_minutes: 0,
         },
     );
     report.state = AnalysisState::Running;

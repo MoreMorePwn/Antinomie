@@ -25,6 +25,9 @@ pub(crate) fn validate_report(report: &AnalysisReport) -> Result<(), String> {
             .specimen_sha256
             .as_ref()
             .is_some_and(|hash| hash.len() != 64 || !hash.bytes().all(|c| c.is_ascii_hexdigit()))
+        || report
+            .time_limit_seconds
+            .is_some_and(|seconds| seconds > u64::from(TIME_LIMIT_MAX_MINUTES) * 60)
         || report.sections.iter().any(|s| {
             s.entries.len() > 2048
                 || s.tools.len() > 16
@@ -33,6 +36,8 @@ pub(crate) fn validate_report(report: &AnalysisReport) -> Result<(), String> {
                     .as_ref()
                     .is_some_and(|l| l.bytes > super::listing::LISTING_MAX_SIZE)
                 || s.summary.len() > 4096
+                || s.limits.len() > 8
+                || s.limits.iter().any(|l| l.text.len() > 1024)
                 || s.entries
                     .iter()
                     .any(|e| e.label.len() > 4096 || e.value.len() > 4096)

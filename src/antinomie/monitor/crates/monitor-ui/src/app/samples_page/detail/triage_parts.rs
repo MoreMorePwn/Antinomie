@@ -88,8 +88,12 @@ fn not_triaged(ui: &mut egui::Ui, rollup: &Rollup) -> bool {
 }
 
 /// Rules matched: the YARA, IDS and Sigma rules that hit in any run. The rule
-/// name opens the latest run it hit in.
-pub(super) fn rules_matched(ui: &mut egui::Ui, data: &Data, font: f32) -> Option<usize> {
+/// name opens the latest run it hit in, in Triage's Detection on that rule.
+pub(super) fn rules_matched(
+    ui: &mut egui::Ui,
+    data: &Data,
+    font: f32,
+) -> Option<(usize, String, String)> {
     let rollup = &data.rollup;
     let mut open = None;
     parts::section(ui, "Rules matched", Some(rollup.rules.len()), |ui| {
@@ -112,7 +116,7 @@ pub(super) fn rules_matched(ui: &mut egui::Ui, data: &Data, font: f32) -> Option
             .column(egui_extras::Column::remainder().at_least(200.0).clip(true))
             .column(egui_extras::Column::exact(80.0))
             .column(egui_extras::Column::exact(120.0))
-            .column(egui_extras::Column::exact(120.0))
+            .column(egui_extras::Column::exact(210.0).clip(true))
             .header(table::header_height(font), |mut header| {
                 for title in ["Rule", "Kind", "Runs", "Latest hit"] {
                     header.col(|ui| table::head(ui, title));
@@ -127,12 +131,13 @@ pub(super) fn rules_matched(ui: &mut egui::Ui, data: &Data, font: f32) -> Option
                         row.col(|ui| {
                             if widgets::link(ui, &rule.rule)
                                 .on_hover_text(format!(
-                                    "Open {} in Triage",
+                                    "Open {} in Triage on this rule",
                                     parts::run_name(rule.latest)
                                 ))
                                 .clicked()
                             {
-                                open = Some(rule.latest);
+                                open =
+                                    Some((rule.latest, rule.engine.clone(), rule.rule_id.clone()));
                             }
                         });
                         row.col(|ui| {
@@ -143,7 +148,19 @@ pub(super) fn rules_matched(ui: &mut egui::Ui, data: &Data, font: f32) -> Option
                                 .on_hover_text(run_list(&rule.runs));
                         });
                         row.col(|ui| {
-                            ui.label(parts::run_name(rule.latest));
+                            // The run and when it started.
+                            let started = data
+                                .runs
+                                .iter()
+                                .find(|entry| entry.number == rule.latest)
+                                .map(|entry| parts::minute(entry.run.started_ms));
+                            let text = match started {
+                                Some(started) => {
+                                    format!("{} · {started}", parts::run_name(rule.latest))
+                                }
+                                None => parts::run_name(rule.latest),
+                            };
+                            ui.add(egui::Label::new(text).truncate());
                         });
                     },
                 );
@@ -152,9 +169,10 @@ pub(super) fn rules_matched(ui: &mut egui::Ui, data: &Data, font: f32) -> Option
     open
 }
 
-/// ATT&CK techniques: one line per tactic, a chip per technique with the
-/// runs it was mapped in.
+/// ATT&CK techniques: one line per tactic, a technique tag per technique
+/// (the tag look of the sample's own tags) with the runs it was mapped in.
 pub(super) fn techniques(ui: &mut egui::Ui, data: &Data) {
+    use antinomie_monitor_core::samples::{Tag, TagKind};
     let rollup = &data.rollup;
     parts::section(ui, "ATT&CK techniques", None, |ui| {
         if not_triaged(ui, rollup) {
@@ -164,25 +182,49 @@ pub(super) fn techniques(ui: &mut egui::Ui, data: &Data) {
             parts::muted_line(ui, "No technique mapped.");
             return;
         }
+        let body = egui::TextStyle::Body.resolve(ui.style());
+        let column = parts::fitted_up_to(
+            ui,
+            &body,
+            rollup.tactics.iter().map(|tactic| tactic.tactic.clone()),
+            220.0,
+        );
         for tactic in &rollup.tactics {
-            ui.horizontal_wrapped(|ui| {
-                ui.add_sized(
-                    [150.0, 18.0],
-                    egui::Label::new(RichText::new(&tactic.tactic).color(theme::muted())),
+            ui.horizontal_top(|ui| {
+                // The tactic, left-aligned in a column of its own.
+                ui.allocate_ui_with_layout(
+                    egui::vec2(column, ui.spacing().interact_size.y),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        ui.add(
+                            egui::Label::new(RichText::new(&tactic.tactic).color(theme::text()))
+                                .truncate(),
+                        );
+                    },
                 );
-                for technique in &tactic.techniques {
-                    widgets::chip(
-                        ui,
-                        format!(
-                            "{} {}/{}",
-                            antinomie_monitor_core::mitre::technique_label(&technique.id),
-                            technique.runs.len(),
-                            rollup.triaged
-                        ),
-                        Tone::Neutral,
-                    )
-                    .on_hover_text(run_list(&technique.runs));
-                }
+                ui.vertical(|ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing = egui::vec2(10.0, 6.0);
+                        for technique in &tactic.techniques {
+                            let label =
+                                antinomie_monitor_core::mitre::technique_label(&technique.id);
+                            // The tag and its run count stay together.
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 5.0;
+                                crate::sample_tags::tag(ui, &Tag::new(TagKind::Technique, label));
+                                ui.label(
+                                    RichText::new(format!(
+                                        "{}/{}",
+                                        technique.runs.len(),
+                                        rollup.triaged
+                                    ))
+                                    .color(theme::text()),
+                                )
+                                .on_hover_text(run_list(&technique.runs));
+                            });
+                        }
+                    });
+                });
             });
         }
     });
@@ -211,14 +253,23 @@ pub(super) fn evasion(ui: &mut egui::Ui, data: &Data) {
                 });
                 continue;
             }
+            // The runs this category was seen in, any of its checks.
+            let mut seen: Vec<usize> = category
+                .checks
+                .iter()
+                .flat_map(|check| check.runs.iter().copied())
+                .collect();
+            seen.sort_unstable();
+            seen.dedup();
             egui::CollapsingHeader::new(format!(
-                "{} · {}",
+                "{} · {} · seen in {}",
                 category.category,
                 if category.checks.len() == 1 {
                     "1 check".to_owned()
                 } else {
                     format!("{} checks", category.checks.len())
-                }
+                },
+                of_runs(seen.len(), rollup.triaged)
             ))
             .id_salt(("sample_evasion", &category.category))
             .default_open(false)
@@ -244,7 +295,7 @@ pub(super) fn evasion(ui: &mut egui::Ui, data: &Data) {
                         for (number, line) in &check.lines {
                             ui.horizontal_wrapped(|ui| {
                                 ui.label(
-                                    RichText::new(parts::run_name(*number)).color(theme::muted()),
+                                    RichText::new(parts::run_name(*number)).color(theme::text()),
                                 );
                                 ui.label(line);
                             });
@@ -253,7 +304,9 @@ pub(super) fn evasion(ui: &mut egui::Ui, data: &Data) {
                     .header_response
                     .on_hover_text(&check.rule);
                 }
-            });
+            })
+            .header_response
+            .on_hover_text(run_list(&seen));
         }
     });
 }

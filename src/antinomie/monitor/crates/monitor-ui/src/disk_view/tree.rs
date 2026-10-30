@@ -76,8 +76,48 @@ pub(super) struct Tree {
     reveal: Option<String>,
     scroll_to: Option<usize>,
     pub hide_dotfiles: bool,
+    /// Digits of the widest uid and gid listed, so `uid:gid` lines up.
+    id_digits: (usize, usize),
     #[cfg(test)]
     pub drawn_rows: usize,
+}
+
+/// Longest `size`, mode and `:` field widths of the metadata columns, in
+/// characters; the ids add their digits.
+const SIZE_CHARS: usize = 10;
+const MODE_CHARS: usize = 10;
+/// Least width the name column keeps before the tree scrolls sideways.
+const MIN_NAME_WIDTH: f32 = 160.0;
+
+/// How a row is drawn: the tree's options and where its columns are.
+#[derive(Clone, Copy)]
+struct Look<'a> {
+    options: &'a Options<'a>,
+    columns: Columns,
+}
+
+/// Where the metadata columns start in a row, and how wide the ids are.
+#[derive(Clone, Copy)]
+struct Columns {
+    meta_x: f32,
+    meta_width: f32,
+    id_digits: (usize, usize),
+}
+
+impl Columns {
+    /// Size, mode and `uid:gid` as fixed-width fields, so every row's text is
+    /// as wide as the next and the columns line up under each other.
+    fn text(&self, size: &str, modes: &str, entry: &DiskEntry) -> String {
+        let (uid, gid) = self.id_digits;
+        format!(
+            "{size:>SIZE_CHARS$}  {modes:<MODE_CHARS$}  {:>uid$}:{:<gid$}",
+            entry.uid, entry.gid
+        )
+    }
+
+    fn chars(id_digits: (usize, usize)) -> usize {
+        SIZE_CHARS + 2 + MODE_CHARS + 2 + id_digits.0 + 1 + id_digits.1
+    }
 }
 
 pub(super) fn join(parent: &str, name: &str) -> String {
@@ -143,6 +183,13 @@ impl Tree {
         self.branches = crate::tree_lines::prefixes(
             &rows.iter().map(|row| row.depth() + 1).collect::<Vec<_>>(),
         );
+        self.id_digits = rows.iter().fold((1, 1), |(uid, gid), row| match row {
+            Row::Entry { entry, .. } => (
+                uid.max(entry.uid.to_string().len()),
+                gid.max(entry.gid.to_string().len()),
+            ),
+            _ => (uid, gid),
+        });
         self.rows = rows;
         self.dirty = false;
     }
@@ -319,6 +366,13 @@ impl Tree {
             .max(ui.text_style_height(&egui::TextStyle::Body));
         let mono = egui::TextStyle::Monospace.resolve(ui.style());
         let char_width = crate::tree_lines::char_width(ui, &mono);
+        // The metadata sits at the right edge of the viewport, in the same
+        // place for every row; names get what is left and are cut short there.
+        let meta_width = Columns::chars(self.id_digits) as f32 * char_width;
+        let viewport = ui.available_width() - ui.spacing().scroll.allocated_width();
+        let name_width =
+            (viewport - meta_width - 3.0 * ui.spacing().item_spacing.x).max(MIN_NAME_WIDTH);
+        let id_digits = self.id_digits;
         let mut area = egui::ScrollArea::both()
             .id_salt("disk_tree")
             .auto_shrink([false, false])
@@ -331,6 +385,11 @@ impl Tree {
         let mut drawn = 0;
         area.show_rows(ui, row_height, self.rows.len(), |ui, range| {
             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+            let columns = Columns {
+                meta_x: ui.max_rect().left() + name_width + ui.spacing().item_spacing.x,
+                meta_width,
+                id_digits,
+            };
             #[cfg(test)]
             {
                 drawn += range.len();
@@ -350,7 +409,7 @@ impl Tree {
                                 ui,
                                 path,
                                 entry,
-                                options,
+                                &Look { options, columns },
                                 &self.expanded,
                                 &mut events,
                                 &mut toggle,
@@ -425,11 +484,12 @@ fn entry_row(
     ui: &mut egui::Ui,
     path: &str,
     entry: &DiskEntry,
-    options: &Options<'_>,
+    look: &Look<'_>,
     expanded: &BTreeSet<String>,
     events: &mut Vec<Event>,
     toggle: &mut Option<String>,
 ) {
+    let Look { options, columns } = *look;
     let directory = entry.kind == DiskEntryKind::Dir;
     let open = directory && expanded.contains(path);
     let mut text = format!("{} {}", glyph(entry.kind, open), display_name(&entry.name));
@@ -441,7 +501,23 @@ fn entry_row(
     }
     let selected = options.selected == Some(path);
     let enabled = entry.addressable;
-    let response = ui.add_enabled(enabled, egui::SelectableLabel::new(selected, text));
+    // The name column ends where the metadata starts: a long name is cut with
+    // an ellipsis there and shown whole on hover.
+    let name_width = (columns.meta_x - ui.cursor().left() - ui.spacing().item_spacing.x).max(40.0);
+    let height = ui.spacing().interact_size.y;
+    let mut response = ui
+        .allocate_ui_with_layout(
+            egui::vec2(name_width, height),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                ui.add_enabled(enabled, egui::SelectableLabel::new(selected, text.as_str()))
+            },
+        )
+        .inner;
+    if enabled && response.rect.width() + 1.0 >= name_width {
+        response = response.on_hover_text(&text);
+    }
     if enabled && response.clicked() {
         if directory {
             *toggle = Some(path.to_owned());
@@ -458,10 +534,26 @@ fn entry_row(
         DiskEntryKind::Dir => String::new(),
         _ => "—".into(),
     };
-    ui.label(
-        egui::RichText::new(format!("{size:>9}  {modes}  {}:{}", entry.uid, entry.gid))
-            .monospace()
-            .color(theme::muted()),
+    // Placed by its own position: a name that ran a little over its column
+    // does not move the columns of its row.
+    let meta = egui::Rect::from_min_size(
+        egui::pos2(columns.meta_x, ui.cursor().top()),
+        egui::vec2(columns.meta_width, height),
+    );
+    ui.allocate_new_ui(
+        egui::UiBuilder::new()
+            .max_rect(meta)
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        |ui| {
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(columns.text(&size, &modes, entry))
+                        .monospace()
+                        .color(theme::muted()),
+                )
+                .extend(),
+            );
+        },
     );
     if !enabled {
         response.on_disabled_hover_text(

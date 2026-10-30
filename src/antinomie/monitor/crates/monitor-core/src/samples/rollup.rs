@@ -18,7 +18,11 @@ pub struct RunInput<'a> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RuleRow {
     pub engine: String,
+    /// The rule's own id, as Triage lists it.
+    pub rule_id: String,
     pub rule: String,
+    /// The family a YARA rule names; empty when it names none.
+    pub family: String,
     pub severity: String,
     /// Run numbers, ascending.
     pub runs: Vec<usize>,
@@ -202,6 +206,8 @@ pub fn rollup(runs: &[RunInput<'_>]) -> Rollup {
                 .entry((hit.engine.clone(), hit.rule_id.clone()))
                 .or_insert_with(|| RuleRow {
                     engine: hit.engine.clone(),
+                    rule_id: hit.rule_id.clone(),
+                    family: hit.family.clone(),
                     rule: if hit.title.is_empty() {
                         hit.rule_id.clone()
                     } else {
@@ -440,6 +446,11 @@ mod tests {
             severity: "high".into(),
             mitre: vec!["T1496".into()],
             count: 1,
+            family: if id == "xmrig" {
+                "XMRig".into()
+            } else {
+                String::new()
+            },
         };
         let a = RunDigest {
             detections: Some(vec![hit("xmrig")]),
@@ -462,6 +473,9 @@ mod tests {
         assert_eq!(rolled.rules[0].rule, "title xmrig");
         assert_eq!(rolled.rules[0].runs, [1, 3]);
         assert_eq!(rolled.rules[0].latest, 3);
+        assert_eq!(rolled.rules[0].rule_id, "xmrig");
+        assert_eq!(rolled.rules[0].family, "XMRig");
+        assert_eq!(rolled.rules[1].family, "");
         assert_eq!(rolled.rules[1].runs, [3]);
         // Rule-supplied techniques have no tactic of their own.
         assert_eq!(rolled.tactics[0].tactic, "Detection rules");

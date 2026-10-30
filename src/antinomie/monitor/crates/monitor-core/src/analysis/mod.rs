@@ -7,18 +7,21 @@ pub use export::{
 };
 pub use types::*;
 mod binwalk;
+mod bounds;
 mod capa;
 mod decompile;
 pub mod detection;
 mod disasm;
 mod floss;
 mod ident;
+mod limits;
 mod listing;
 mod progress;
 pub mod properties;
 mod rules;
 mod segments;
 mod specimen;
+mod strings;
 pub(crate) mod tools;
 mod unpack;
 mod worker;
@@ -28,8 +31,8 @@ pub use listing::{
     LISTING_PAGE_MAX_ROWS, read_listing_page, read_listing_page_sorted, read_listing_page_with,
 };
 pub use specimen::read_specimen_range;
+pub(crate) use strings::find_strings;
 pub use unpack::{PackerVerdict, UnpackLayer, packer_verdict, unpack_layers};
-pub(crate) use worker::find_strings;
 pub use worker::worker_main_if_requested;
 pub(crate) mod jobs;
 pub(crate) mod validation;

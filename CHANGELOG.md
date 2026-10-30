@@ -6,6 +6,29 @@ it runs.
 
 ## 0.8.0 — unreleased
 
+- **Sample notes and Delete run.** Notes with links to runs, processes,
+  artifacts and custody entries, a Notes tab, Latest note and Add note… menus;
+  every note change is in the custody log. Delete run asks which of the run's
+  files to keep (kept files move into Samples) and refuses a live run. The
+  library's database layout moves to version 2; older versions refuse it.
+
+- **Sample page layout.** The name and its actions sit under All samples;
+  Family comes from the download signature, a YARA family or the category
+  tags; Output files is Artifacts with a short SHA-256 and right-click menus;
+  the lineage graph has node menus and edge tooltips; the Runs tab shows the
+  selected run in Details; a broken custody log is marked in the list.
+
+- **Analysis timeouts and limits.** A section that runs out of time says
+  Timeout, as a warning, with Run again with 2× time; the time limit is set in
+  Run program and Settings. Structures lists every row in its listing. Status
+  lines say which limit was hit; capa failures show capa's error; capa keeps its
+  compiled rules between runs. Run History shows each run's short id.
+
+- **Triage notes and clearer warnings.** Run and device-profile notes sit in a
+  Notes section at the bottom of the Triage summary; the Internet route note is
+  no longer a warning. Written-content, Sigma coverage, Guest network (formerly
+  NAT network) and cloud metadata messages say what happened and what to do.
+
 - **Stealth profiles are now device profiles.** The feature keeps its settings
   and saved data under a new name throughout the app. A question-mark icon next
   to the VM configuration's Device profile row explains what it is for, and the
@@ -46,6 +69,17 @@ it runs.
   asked for while they are off shows a red message instead of an error. A failed
   abuse.ch pack install says what went wrong and what to do, keeps the installed
   version, and accepts a plain gzip of the rules.
+
+- **Disks and the file viewer.** The listing lines up size, permissions and
+  uid:gid as columns, and long names end in an ellipsis with the full name on
+  hover. The free-space line is gone, Extracted files shows whole names, and the
+  extraction message names the file in bold and can be dismissed. The file
+  viewer shows the file name in bold and its text in a framed area.
+
+- **Malware samples window.** Its tables fit the window at common sizes: columns
+  follow the window width, line up with their headers and cut long text with a
+  hover, so the buttons are no longer pushed off screen. The window is at least
+  900 px wide.
 
 - **Cloud profile launch advice.** VM configuration offers Routed networking
   for the local simulated metadata service without silently changing saved

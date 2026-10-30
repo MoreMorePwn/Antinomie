@@ -1168,6 +1168,7 @@ mod tests {
         let selection = AnalysisSelection {
             enabled: true,
             checks: vec![crate::analysis::AnalysisKind::Metadata],
+            time_limit_minutes: 0,
         };
         for (state, expected) in [
             (AnalysisState::Acquiring, AnalysisState::Unavailable),

@@ -7,6 +7,8 @@ use std::time::Duration;
 const SYSTEM: &[&str] = &["/usr/bin/binwalk", "/usr/local/bin/binwalk"];
 /// Signatures kept in the report; binwalk can report thousands on firmware.
 const SIGNATURE_MAX_COUNT: usize = 2048;
+/// binwalk's own time limit, in seconds.
+pub(super) const TIMEOUT_SECONDS: u64 = 180;
 
 pub(super) fn embedded(section: &mut AnalysisSection, specimen_len: u64) {
     let Some(binwalk) = tools::find(SYSTEM) else {
@@ -16,12 +18,14 @@ pub(super) fn embedded(section: &mut AnalysisSection, specimen_len: u64) {
     };
     // binwalk keeps its configuration under $HOME and prints nothing
     // when that directory cannot be created.
-    let run = match tools::run(
+    let timeout = Duration::from_secs(super::limits::seconds(TIMEOUT_SECONDS));
+    let run = match tools::run_with(
         binwalk,
         &["/input/specimen"],
         &[("HOME", "/tmp")],
-        Duration::from_secs(180),
+        timeout,
         4 * 1024 * 1024,
+        true,
     ) {
         Ok(run) => run,
         Err(error) => {
@@ -33,7 +37,9 @@ pub(super) fn embedded(section: &mut AnalysisSection, specimen_len: u64) {
     section.tools = vec![version(binwalk)];
     if !run.success && !run.truncated && !run.timed_out {
         section.state = AnalysisSectionState::Unavailable;
-        section.summary = "binwalk failed; its signature scan reported no result".into();
+        section.summary = run
+            .failure_text("binwalk", timeout)
+            .unwrap_or_else(|| "binwalk failed and reported no result".into());
         return;
     }
     let signatures = parse(&run.stdout, specimen_len);
@@ -54,24 +60,46 @@ pub(super) fn embedded(section: &mut AnalysisSection, specimen_len: u64) {
             },
         );
     }
-    section.state = if run.truncated || run.timed_out || found > SIGNATURE_MAX_COUNT {
-        AnalysisSectionState::Partial
-    } else {
-        AnalysisSectionState::Complete
-    };
     section.summary = format!(
-        "{found} {} from binwalk's signature scan; nothing was extracted{}",
+        "{found} {} from binwalk's signature scan; nothing was extracted",
         if found == 1 {
             "signature"
         } else {
             "signatures"
-        },
-        if run.timed_out {
-            "; binwalk ran out of time (3 minutes)"
-        } else {
-            ""
         }
     );
+    section.state = AnalysisSectionState::Complete;
+    if found > SIGNATURE_MAX_COUNT {
+        section.state = AnalysisSectionState::Partial;
+        super::limits::add(
+            section,
+            AnalysisLimitKind::Rows,
+            format!(
+                "binwalk found {} signatures; the report lists the first {}.",
+                super::detection::group_digits(found as u64),
+                super::detection::group_digits(SIGNATURE_MAX_COUNT as u64)
+            ),
+            None,
+        );
+    }
+    if run.timed_out {
+        super::limits::time_out(
+            section,
+            "binwalk",
+            timeout.as_secs(),
+            format!(
+                "{found} signatures from binwalk's scan were found before it was stopped; nothing was extracted"
+            ),
+        );
+    } else if run.truncated {
+        section.state = AnalysisSectionState::Partial;
+        super::limits::add(
+            section,
+            AnalysisLimitKind::Size,
+            "binwalk printed more than the 4 MiB the analysis reads; the rest was ignored.",
+            None,
+        );
+    }
 }
 
 /// "Binwalk v2.4.3", the first line binwalk prints for `--help`; it needs

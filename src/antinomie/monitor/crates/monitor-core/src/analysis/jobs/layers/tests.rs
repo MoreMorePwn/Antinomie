@@ -55,6 +55,7 @@ fn finished(name: &str) -> (Job, PathBuf) {
         sections: vec![strings, unpacking],
         layer: None,
         specimen_source: None,
+        time_limit_seconds: None,
     };
     let job = Job {
         run_id: Some("run-1".into()),

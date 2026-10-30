@@ -76,6 +76,7 @@ fn main() {
             analysis: AnalysisSelection {
                 enabled: true,
                 checks,
+                time_limit_minutes: 0,
             },
         })?;
         let deadline = Instant::now() + Duration::from_secs(180);

@@ -268,6 +268,7 @@ mod tests {
         let selection = AnalysisSelection {
             enabled: true,
             checks: vec![AnalysisKind::Metadata],
+            time_limit_minutes: 0,
         };
         jobs.submit(
             Some(RUN.into()),

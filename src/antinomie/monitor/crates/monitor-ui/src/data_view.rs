@@ -643,7 +643,7 @@ impl DataWindow {
 
     fn contents(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
-            ui.strong(&self.field.key);
+            ui.label(theme::bold(ui, &self.field.key));
             ui.label(trace::capture_summary(&self.field));
             if !self.field.layout.is_empty() {
                 ui.label(RichText::new(&self.field.layout).color(theme::muted()));
@@ -742,15 +742,24 @@ impl DataWindow {
         let font = egui::TextStyle::Monospace.resolve(ui.style());
         let row_height = ui.text_style_height(&egui::TextStyle::Monospace);
         let rendered = self.rendered();
-        egui::ScrollArea::both()
-            .id_salt("data-window-text")
-            .auto_shrink([false, false])
-            .show_rows(ui, row_height, rendered.rows.len(), |ui, range| {
-                for row in &rendered.rows[range] {
-                    ui.add(
-                        egui::Label::new(display_row(&rendered.text[row.clone()], &font)).extend(),
-                    );
-                }
+        // The bytes sit in their own framed area, a shade off the window.
+        egui::Frame::new()
+            .fill(theme::terminal())
+            .stroke(egui::Stroke::new(1.0_f32, theme::line()))
+            .corner_radius(4)
+            .inner_margin(egui::Margin::same(6))
+            .show(ui, |ui| {
+                egui::ScrollArea::both()
+                    .id_salt("data-window-text")
+                    .auto_shrink([false, false])
+                    .show_rows(ui, row_height, rendered.rows.len(), |ui, range| {
+                        for row in &rendered.rows[range] {
+                            ui.add(
+                                egui::Label::new(display_row(&rendered.text[row.clone()], &font))
+                                    .extend(),
+                            );
+                        }
+                    });
             });
     }
 }

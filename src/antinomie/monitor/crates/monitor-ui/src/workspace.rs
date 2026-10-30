@@ -100,7 +100,7 @@ impl Panel {
 pub(crate) struct DetailsFollow {
     followed: usize,
     /// Pass of the main window in which each followed panel was last drawn.
-    drawn: [Option<u64>; 8],
+    drawn: [Option<u64>; 9],
 }
 
 /// What the Details panel shows.
@@ -114,10 +114,12 @@ pub(crate) enum DetailsOf {
     DiskEntry,
     Core,
     Static,
+    /// A run of the open sample, selected on the sample window's Runs tab.
+    Sample,
 }
 
 impl DetailsFollow {
-    const SIDES: [DetailsOf; 8] = [
+    const SIDES: [DetailsOf; 9] = [
         DetailsOf::Syscall,
         DetailsOf::Packet,
         DetailsOf::MemoryRow,
@@ -126,6 +128,7 @@ impl DetailsFollow {
         DetailsOf::DiskEntry,
         DetailsOf::Core,
         DetailsOf::Static,
+        DetailsOf::Sample,
     ];
 
     fn side(panel: &Panel) -> Option<usize> {
@@ -138,6 +141,7 @@ impl DetailsFollow {
             Panel::Disks => Some(5),
             Panel::CoreDump => Some(6),
             Panel::StaticAnalysis | Panel::AnalysisSection { .. } => Some(7),
+            Panel::Library(LibraryPage::Samples) => Some(8),
             _ => None,
         }
     }
@@ -223,6 +227,9 @@ pub(crate) struct WorkspaceLayout {
     /// Debugger tab shrank the lower part.
     #[serde(skip)]
     details_fraction: Option<f32>,
+    /// The Samples page has a run to show in Details, so it keeps them open.
+    #[serde(skip)]
+    samples_details: bool,
 }
 
 impl Default for WorkspaceLayout {
@@ -250,6 +257,7 @@ impl Default for WorkspaceLayout {
             dock_back: None,
             cancel_drag: false,
             details_fraction: None,
+            samples_details: false,
         }
     }
 }
@@ -456,10 +464,13 @@ impl WorkspaceLayout {
 
     /// What share of the main window a tab that folds Details and Activity
     /// away keeps while it is shown; none for any other tab.
-    fn folded_split(panel: &Panel) -> Option<f32> {
+    fn folded_split(&self, panel: &Panel) -> Option<f32> {
         match panel {
             Panel::Debugger => Some(Self::FOLDED_SPLIT),
-            Panel::Library(LibraryPage::Samples) => Some(Self::SAMPLES_SPLIT),
+            // Unless a run of the open sample is selected: Details show it.
+            Panel::Library(LibraryPage::Samples) if !self.samples_details => {
+                Some(Self::SAMPLES_SPLIT)
+            }
             _ => None,
         }
     }
@@ -470,7 +481,7 @@ impl WorkspaceLayout {
         use egui_dock::Node;
         self.dock
             .iter_all_tabs()
-            .filter_map(|(_, panel)| Some((panel, Self::folded_split(panel)?)))
+            .filter_map(|(_, panel)| Some((panel, self.folded_split(panel)?)))
             .find_map(|(panel, split)| {
                 let (surface, node, tab) = self.dock.find_tab(panel)?;
                 if !surface.is_main() {
@@ -511,6 +522,15 @@ impl WorkspaceLayout {
                 self.details_fraction = None;
             }
             _ => {}
+        }
+    }
+
+    /// Whether the Samples page has a selected run to show in Details: they
+    /// open while it does and fold away again when it stops.
+    pub(crate) fn set_samples_details(&mut self, wanted: bool) {
+        if self.samples_details != wanted {
+            self.samples_details = wanted;
+            self.fold_details_for_tab();
         }
     }
 
@@ -2588,6 +2608,24 @@ mod tests {
         layout.focus(Panel::Library(LibraryPage::Samples));
         layout.fold_details_for_tab();
         assert!(split(&layout) > 0.9, "and folds again on return");
+    }
+
+    #[test]
+    fn the_samples_page_keeps_details_open_while_it_has_a_run_to_show() {
+        use egui_dock::Node;
+        let split = |layout: &WorkspaceLayout| match &layout.dock.main_surface()[NodeIndex::root()]
+        {
+            Node::Vertical { fraction, .. } => *fraction,
+            other => panic!("not split: {other:?}"),
+        };
+        let mut layout = WorkspaceLayout::default();
+        layout.open_library(LibraryPage::Samples);
+        layout.fold_details_for_tab();
+        assert!(split(&layout) > 0.9, "folded without a run");
+        layout.set_samples_details(true);
+        assert!((split(&layout) - 0.72).abs() < 1e-6, "open with a run");
+        layout.set_samples_details(false);
+        assert!(split(&layout) > 0.9, "folds again");
     }
 
     #[test]

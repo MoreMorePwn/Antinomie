@@ -76,9 +76,9 @@ impl ListingWriter {
         let mut label = label.into();
         let mut value = value.into();
         // Row text is bounded like report rows; the row itself stays.
-        super::worker::clip(&mut label);
-        super::worker::clip(&mut value);
-        super::worker::bound_data(&mut data);
+        super::bounds::clip(&mut label);
+        super::bounds::clip(&mut value);
+        super::bounds::bound_data(&mut data);
         if let AnalysisData::String { retained_len, .. } = &mut data {
             *retained_len = value.len() as u64;
         }
@@ -504,6 +504,7 @@ mod tests {
             sections: vec![section],
             layer: None,
             specimen_source: None,
+            time_limit_seconds: None,
         };
         std::fs::write(
             root.join("report.json"),
@@ -616,6 +617,7 @@ mod tests {
             sections: vec![section],
             layer: None,
             specimen_source: None,
+            time_limit_seconds: None,
         };
         std::fs::write(
             root.join("report.json"),
@@ -670,6 +672,7 @@ mod tests {
             sections: vec![section],
             layer: None,
             specimen_source: None,
+            time_limit_seconds: None,
         };
         std::fs::write(
             root.join("report.json"),
@@ -719,6 +722,7 @@ mod tests {
             sections: vec![section],
             layer: None,
             specimen_source: None,
+            time_limit_seconds: None,
         };
         std::fs::write(
             root.join("report.json"),

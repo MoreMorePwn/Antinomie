@@ -127,6 +127,7 @@ impl Jobs {
         let selection = AnalysisSelection {
             enabled: true,
             checks: checks.to_vec(),
+            time_limit_minutes: 0,
         };
         let mut report = new_report(&job.report.source_path, &selection);
         report.id = layer_report_id(&job.report.id, layer.index);

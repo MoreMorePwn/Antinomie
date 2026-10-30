@@ -251,6 +251,9 @@ pub(crate) struct DiskView {
     extraction: extraction::State,
     /// One line about the last extraction or save, and whether it failed.
     status: Option<(String, bool)>,
+    /// The file name inside `status` to show in bold, and the status line's
+    /// close button resets.
+    status_name: Option<String>,
     /// Why the view went away, until the user opens another.
     notice: Option<String>,
     /// A request sent to the backend that has no answer yet.

@@ -790,6 +790,7 @@ mod tests {
             sections: vec![metadata, found],
             layer: None,
             specimen_source: None,
+            time_limit_seconds: None,
         }
     }
 

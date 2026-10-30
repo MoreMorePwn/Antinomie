@@ -88,10 +88,36 @@ pub enum CustodyEvent {
         signed: String,
         head: String,
     },
+    /// A note was added to the sample: its number, the SHA-256 of its text
+    /// and the references it names (their labels, joined).
+    NoteAdded {
+        note: u64,
+        hash: String,
+        refs: String,
+    },
+    /// A note's text or references changed; `hash` is of the new text.
+    NoteEdited {
+        note: u64,
+        hash: String,
+        refs: String,
+    },
+    /// A note was deleted; `hash` is of the text it had.
+    NoteDeleted {
+        note: u64,
+        hash: String,
+        refs: String,
+    },
+    /// The analyst deleted a run of the sample: what became of each of its
+    /// artefacts (kind and short hash, kept or deleted).
+    RunDeleted {
+        vm: String,
+        run: String,
+        detail: String,
+    },
 }
 
 /// Every kind with its list name, for the filters and the export.
-pub const KINDS: [(&str, &str); 16] = [
+pub const KINDS: [(&str, &str); 20] = [
     ("added", "Added"),
     ("origin_added", "Origin added"),
     ("verified", "Verified"),
@@ -108,6 +134,10 @@ pub const KINDS: [(&str, &str); 16] = [
     ("action", "Your action"),
     ("activity", "Sample activity"),
     ("exported", "Exported"),
+    ("note_added", "Note added"),
+    ("note_edited", "Note edited"),
+    ("note_deleted", "Note deleted"),
+    ("run_deleted", "Run deleted"),
 ];
 
 impl CustodyEvent {
@@ -139,6 +169,10 @@ impl CustodyEvent {
             Self::Action { .. } => "action",
             Self::Activity { .. } => "activity",
             Self::Exported { .. } => "exported",
+            Self::NoteAdded { .. } => "note_added",
+            Self::NoteEdited { .. } => "note_edited",
+            Self::NoteDeleted { .. } => "note_deleted",
+            Self::RunDeleted { .. } => "run_deleted",
         }
     }
 
@@ -179,6 +213,12 @@ impl CustodyEvent {
                 signed,
                 head,
             } => format!("{format}, {signed}; head {}", head.get(..8).unwrap_or(head)),
+            Self::NoteAdded { note, hash, refs } => note_detail(*note, "added", hash, refs),
+            Self::NoteEdited { note, hash, refs } => note_detail(*note, "edited", hash, refs),
+            Self::NoteDeleted { note, hash, refs } => note_detail(*note, "deleted", hash, refs),
+            Self::RunDeleted { vm, run, detail } => {
+                format!("Run {run} on {vm} deleted: {detail}")
+            }
         }
     }
 
@@ -188,6 +228,15 @@ impl CustodyEvent {
         let mut value = serde_json::to_value(self).map_err(|e| e.to_string())?;
         clean(&mut value);
         serde_json::to_string(&value).map_err(|e| e.to_string())
+    }
+}
+
+fn note_detail(note: u64, what: &str, hash: &str, refs: &str) -> String {
+    let short = hash.get(..8).unwrap_or(hash);
+    if refs.is_empty() {
+        format!("Note {note} {what} (text {short})")
+    } else {
+        format!("Note {note} {what} (text {short}), refers to {refs}")
     }
 }
 

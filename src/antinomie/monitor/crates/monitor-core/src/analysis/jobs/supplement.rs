@@ -56,6 +56,7 @@ impl Jobs {
         run_id: Option<String>,
         base: &Path,
         kinds: &[AnalysisKind],
+        time_limit_seconds: Option<u64>,
         available: u64,
     ) -> Result<AnalysisReport, String> {
         let saved = open_report(base)?;
@@ -83,10 +84,18 @@ impl Jobs {
                 tools: Vec::new(),
                 listing: None,
                 entries: Vec::new(),
+                limits: Vec::new(),
             };
             match report.sections.iter_mut().find(|s| s.kind == *kind) {
-                // A check that could not run may be tried again.
-                Some(old) if old.state == AnalysisSectionState::Unavailable => *old = section,
+                // A check that could not run, or ran out of time, may be tried again.
+                Some(old)
+                    if matches!(
+                        old.state,
+                        AnalysisSectionState::Unavailable | AnalysisSectionState::Timeout
+                    ) =>
+                {
+                    *old = section
+                }
                 Some(_) => return Err(format!("{} is already in the analysis", kind.label())),
                 None => report.sections.push(section),
             }
@@ -94,6 +103,7 @@ impl Jobs {
         let selection = AnalysisSelection {
             enabled: true,
             checks: report.sections.iter().map(|s| s.kind).collect(),
+            time_limit_minutes: 0,
         };
         selection.validate()?;
         let carried: Vec<_> = saved
@@ -109,6 +119,7 @@ impl Jobs {
             return Err("the retained specimen is not the size the report says".into());
         }
         report.state = AnalysisState::Acquiring;
+        report.time_limit_seconds = time_limit_seconds;
         report.reason = None;
         report.specimen_sha256 = None;
         let base_len = directory_len(base).map_err(|e| e.to_string())?;
@@ -216,6 +227,7 @@ mod tests {
         let selection = AnalysisSelection {
             enabled: true,
             checks: sections.to_vec(),
+            time_limit_minutes: 0,
         };
         let mut report = new_report("/tmp/sample", &selection);
         report.state = AnalysisState::Complete;
@@ -260,7 +272,13 @@ mod tests {
         fs::write(base.join("listings/metadata.jsonl"), b"old").unwrap();
         let mut jobs = Jobs::default();
         let report = jobs
-            .analyze_more(Some(RUN.into()), &base, &[AnalysisKind::Strings], u64::MAX)
+            .analyze_more(
+                Some(RUN.into()),
+                &base,
+                &[AnalysisKind::Strings],
+                None,
+                u64::MAX,
+            )
             .unwrap();
         // It is the same analysis, with the new check waiting.
         assert_eq!(report.id, saved.id);
@@ -310,7 +328,7 @@ mod tests {
         assert_eq!(update, merged);
         assert!(jobs.retained_len > 0);
         assert!(
-            jobs.analyze_more(None, &base, &[AnalysisKind::Strings], u64::MAX)
+            jobs.analyze_more(None, &base, &[AnalysisKind::Strings], None, u64::MAX)
                 .is_err()
         );
         drop(jobs);
@@ -324,7 +342,7 @@ mod tests {
         let (base, saved) = finished(&root, &[AnalysisKind::Metadata]);
         let mut jobs = Jobs::default();
         let before = jobs.retained_len;
-        jobs.analyze_more(None, &base, &[AnalysisKind::Capabilities], u64::MAX)
+        jobs.analyze_more(None, &base, &[AnalysisKind::Capabilities], None, u64::MAX)
             .unwrap();
         let mut job = queued(&mut jobs);
         fail(
@@ -343,9 +361,42 @@ mod tests {
         assert!(jobs.retained_len >= before);
         // A check that could not run may be asked for again; one that did run may not.
         assert!(
-            jobs.analyze_more(None, &base, &[AnalysisKind::Capabilities], u64::MAX)
+            jobs.analyze_more(None, &base, &[AnalysisKind::Capabilities], None, u64::MAX)
                 .is_ok()
         );
+        drop(jobs);
+        storage::settle_json_under(&root);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_check_that_timed_out_is_asked_for_again_with_a_longer_limit() {
+        let root = scratch("timeout");
+        let (base, mut saved) =
+            finished(&root, &[AnalysisKind::Metadata, AnalysisKind::Capabilities]);
+        saved.state = AnalysisState::Partial;
+        saved.sections[1].state = AnalysisSectionState::Timeout;
+        saved.sections[1].limits.push(AnalysisLimit {
+            kind: AnalysisLimitKind::Time,
+            text: "capa ran out of time: its limit was 4 minutes.".into(),
+            seconds: Some(240),
+        });
+        persist_report(&base, &saved).unwrap();
+        let mut jobs = Jobs::default();
+        let report = jobs
+            .analyze_more(
+                None,
+                &base,
+                &[AnalysisKind::Capabilities],
+                Some(480),
+                u64::MAX,
+            )
+            .unwrap();
+        assert_eq!(report.time_limit_seconds, Some(480));
+        assert_eq!(report.sections[1].state, AnalysisSectionState::Pending);
+        // The old limit does not outlive the section it was about.
+        assert!(report.sections[1].limits.is_empty());
+        assert_eq!(report.sections[0], saved.sections[0]);
         drop(jobs);
         storage::settle_json_under(&root);
         fs::remove_dir_all(root).unwrap();
@@ -357,7 +408,9 @@ mod tests {
         let (base, mut saved) = finished(&root, &[AnalysisKind::Metadata]);
         let mut jobs = Jobs::default();
         let refuse = |jobs: &mut Jobs, kinds: &[AnalysisKind], word: &str| {
-            let error = jobs.analyze_more(None, &base, kinds, u64::MAX).unwrap_err();
+            let error = jobs
+                .analyze_more(None, &base, kinds, None, u64::MAX)
+                .unwrap_err();
             assert!(error.contains(word), "{error}");
         };
         refuse(&mut jobs, &[], "no check");
@@ -374,7 +427,7 @@ mod tests {
         saved.state = AnalysisState::Complete;
         persist_report(&base, &saved).unwrap();
         // Nor while another run of checks is waiting.
-        jobs.analyze_more(None, &base, &[AnalysisKind::Strings], u64::MAX)
+        jobs.analyze_more(None, &base, &[AnalysisKind::Strings], None, u64::MAX)
             .unwrap();
         refuse(&mut jobs, &[AnalysisKind::Entropy], "already running");
         // Nor over a specimen that is not the one the report is of.
@@ -384,7 +437,7 @@ mod tests {
         // Nor without room.
         fs::write(base.join("specimen"), b"abc").unwrap();
         let error = jobs
-            .analyze_more(None, &base, &[AnalysisKind::Entropy], 1000)
+            .analyze_more(None, &base, &[AnalysisKind::Entropy], None, 1000)
             .unwrap_err();
         assert!(error.contains("quota"), "{error}");
         drop(jobs);

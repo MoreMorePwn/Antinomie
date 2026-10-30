@@ -13,6 +13,23 @@ fn row(ui: &mut egui::Ui, label: &str, value: impl Into<String>) {
     ui.end_row();
 }
 
+/// A cell of `width`: what `add` puts in it is cut at the edge.
+fn cell(
+    ui: &mut egui::Ui,
+    width: f32,
+    height: f32,
+    add: impl FnOnce(&mut egui::Ui) -> egui::Response,
+) {
+    ui.allocate_ui_with_layout(
+        egui::vec2(width, height),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            ui.set_width(width);
+            add(ui)
+        },
+    );
+}
+
 fn time(value: i64) -> String {
     u64::try_from(value)
         .ok()
@@ -501,10 +518,7 @@ impl DiskView {
                 }
             });
         }
-        crate::toasts::take_failure(ui.ctx(), &mut self.status);
-        if let Some((message, _)) = &self.status {
-            ui.colored_label(theme::good(), message);
-        }
+        self.status_line(ui);
     }
 
     fn extracted_files(&mut self, ui: &mut egui::Ui, extract_dir: &Path) {
@@ -516,18 +530,44 @@ impl DiskView {
             .id_salt("disk_extracted")
             .default_open(true)
             .show(ui, |ui| {
-                egui::Grid::new("disk_extracted_files")
-                    .num_columns(3)
-                    .spacing([12.0, 4.0])
-                    .show(ui, |ui| {
-                        for file in &self.extracted {
-                            ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(display_name(&file.guest_path)).monospace(),
+                // The names get the width they need, up to 60 % of the pane, the
+                // host paths the rest; a cell cuts only what does not fit.
+                let gap = ui.spacing().item_spacing.x;
+                let size_width = 70.0;
+                let rest = (ui.available_width() - size_width - 2.0 * gap).max(120.0);
+                let mono = egui::TextStyle::Monospace.resolve(ui.style());
+                let longest = self
+                    .extracted
+                    .iter()
+                    .map(|file| {
+                        ui.fonts(|fonts| {
+                            fonts
+                                .layout_no_wrap(
+                                    display_name(&file.guest_path),
+                                    mono.clone(),
+                                    theme::text(),
                                 )
-                                .truncate(),
-                            );
-                            ui.colored_label(theme::muted(), format_size(file.size));
+                                .size()
+                                .x
+                        })
+                    })
+                    .fold(0.0_f32, f32::max);
+                let name_width = longest.clamp(rest * 0.3, rest * 0.6).floor();
+                let path_width = rest - name_width;
+                let height = ui.spacing().interact_size.y;
+                for file in &self.extracted {
+                    ui.horizontal(|ui| {
+                        let name = display_name(&file.guest_path);
+                        cell(ui, name_width, height, |ui| {
+                            ui.add(
+                                egui::Label::new(egui::RichText::new(&name).monospace()).truncate(),
+                            )
+                            .on_hover_text(&file.guest_path)
+                        });
+                        cell(ui, size_width, height, |ui| {
+                            ui.colored_label(theme::muted(), format_size(file.size))
+                        });
+                        cell(ui, path_width, height, |ui| {
                             ui.add(
                                 egui::Label::new(
                                     egui::RichText::new(file.host_path.display().to_string())
@@ -536,10 +576,14 @@ impl DiskView {
                                 )
                                 .truncate(),
                             )
-                            .on_hover_text(format!("SHA-256 {}", file.sha256));
-                            ui.end_row();
-                        }
+                            .on_hover_text(format!(
+                                "{}\nSHA-256 {}",
+                                file.host_path.display(),
+                                file.sha256
+                            ))
+                        });
                     });
+                }
                 if ui.button("Open directory").clicked() {
                     self.action = Some(DiskAction::OpenWith(extract_dir.to_path_buf()));
                 }

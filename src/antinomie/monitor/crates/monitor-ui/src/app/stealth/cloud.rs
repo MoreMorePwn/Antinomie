@@ -22,7 +22,7 @@ pub(in crate::app) fn launch_advice(ui: &mut egui::Ui, vm: &mut VmConfig) {
     if vm.network() != VmNetwork::Routed {
         crate::activity::warning(
             ui,
-            "Cloud metadata is unavailable on this network. Use Routed to enable the local simulated metadata service.",
+            "Cloud metadata service is off: it needs a Routed network. Set Network to Routed to turn it on.",
         );
         if ui.button("Use Routed for cloud metadata").clicked() {
             // Only an explicit click changes the policy, including on saved VMs.

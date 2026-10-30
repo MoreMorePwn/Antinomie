@@ -124,7 +124,9 @@ def load_events(connection, path, expected):
     if footer is None or footer.get("events") != count:
         raise ValueError("normalized event index is unfinished or inconsistent")
     connection.commit()
-    return count, bool(footer.get("complete")) and footer.get("omitted", 0) == 0
+    reasons = footer.get("reasons")
+    reasons = [reason for reason in reasons if isinstance(reason, str)][:16] if isinstance(reasons, list) else []
+    return count, bool(footer.get("complete")) and footer.get("omitted", 0) == 0, reasons
 
 
 def supplied_authors(rule):
@@ -273,10 +275,13 @@ def scan(request, events_path):
     connection.set_progress_handler(lambda: time.monotonic() > deadline, 10000)
     evidence_count = 0
     try:
-        report["scanned_objects"], complete = load_events(connection, events_path, request["identity"])
+        report["scanned_objects"], complete, reasons = load_events(connection, events_path, request["identity"])
         if not complete:
             report["state"] = "partial"
-            report["warnings"].append("Partial: the captured events are incomplete or only a retained prefix, so rules ran on part of the evidence.")
+            if reasons:
+                report["warnings"].append("Partial: the rules ran on part of the evidence: " + "; ".join(reasons) + ".")
+            else:
+                report["warnings"].append("Partial: the saved events are incomplete, so the rules ran on part of the evidence.")
         try:
             import re2
             connection.create_function("regexp", 2, lambda pattern, value: value is not None and re2.search(pattern, str(value)) is not None)

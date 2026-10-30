@@ -1,20 +1,43 @@
 // SPDX-License-Identifier: GPL-3.0-only
+use super::bounds::{VALUE_MAX_SIZE, bound_data, clip};
+use super::listing::ListingWriter;
 use super::*;
 use object::{Object, ObjectSection, ObjectSymbol};
 use sha2::{Digest, Sha256};
-use std::{cell::Cell, fs, io::Write, path::Path};
+use std::{
+    cell::{Cell, RefCell},
+    fs,
+    io::Write,
+    path::Path,
+    time::Duration,
+};
 
 pub(crate) const REPORT_MAX_SIZE: usize = 128 * 1024;
+/// Rows of a category the report itself keeps; a category with a listing holds
+/// all of its rows there and the report only previews the first ones.
 const ENTRY_MAX_COUNT: usize = 2048;
-const VALUE_MAX_SIZE: usize = 4096;
 const TOOL_OUTPUT_MAX_SIZE: usize = 1024 * 1024;
 thread_local! {
-    /// Set when `entry` dropped a row at the report's row bound; the section's
-    /// full listing is then marked truncated. Cleared when a section starts.
-    static ROWS_DROPPED: Cell<bool> = const { Cell::new(false) };
+    /// Rows the section was given, kept or not. A row's id is its number here.
+    static ROWS_SEEN: Cell<u64> = const { Cell::new(0) };
+    /// Rows left out of the report with no listing to hold them.
+    static ROWS_DROPPED: Cell<u64> = const { Cell::new(0) };
+    /// Rows with a text cut to `VALUE_MAX_SIZE`.
+    static VALUES_CUT: Cell<u64> = const { Cell::new(0) };
+    /// The listing every row of the section is also written to as it is made.
+    static LISTING: RefCell<Option<RowSink>> = const { RefCell::new(None) };
+}
+/// A section's full listing while its rows are made.
+struct RowSink {
+    writer: ListingWriter,
+    full: bool,
 }
 /// Wall-clock budget of a decompiler run (analysis plus export).
 pub(super) const DECOMPILER_SECONDS: u64 = 840;
+/// The decompiler's budget for this run.
+pub(super) fn decompiler_seconds() -> u64 {
+    super::limits::seconds(DECOMPILER_SECONDS)
+}
 
 /// Dispatch the monitor's private, sandbox-only analysis entry point before CLI parsing.
 /// Returns None for ordinary invocations, or the worker process exit code.
@@ -54,6 +77,7 @@ fn worker_main() -> Result<(), String> {
     };
     // A decompiler runs a JVM with many threads, a large address space
     // reservation, hundreds of open jars and a project database in /tmp.
+    super::limits::set_time_limit(report.time_limit_seconds);
     let (cpu, address_space, file_size, files) = if has(AnalysisKind::Decompilation) {
         (6 * DECOMPILER_SECONDS, None, Some(512 * 1024 * 1024), 8192)
     } else if has(AnalysisKind::Capabilities) || has(AnalysisKind::Floss) {
@@ -71,6 +95,15 @@ fn worker_main() -> Result<(), String> {
             256,
         )
     };
+    // A longer time limit than the tools' own needs the CPU budget to follow.
+    let cpu = cpu.max(
+        report.time_limit_seconds.unwrap_or(0)
+            * if has(AnalysisKind::Decompilation) {
+                6
+            } else {
+                2
+            },
+    );
     for (resource, size) in [
         (Resource::Cpu, Some(cpu)),
         (Resource::As, address_space),
@@ -158,246 +191,157 @@ fn entry(
     value: impl Into<String>,
     offset: Option<u64>,
 ) {
-    if section.entries.len() >= ENTRY_MAX_COUNT {
-        section.state = AnalysisSectionState::Partial;
-        ROWS_DROPPED.set(true);
-        return;
-    }
-    let mut value = value.into();
-    let mut label = label.into();
-    for text in [&mut label, &mut value] {
-        if text.len() > VALUE_MAX_SIZE {
-            let mut end = VALUE_MAX_SIZE;
-            while !text.is_char_boundary(end) {
-                end -= 1;
-            }
-            text.truncate(end);
-            section.state = AnalysisSectionState::Partial;
-        }
-    }
-    section.entries.push(AnalysisEntry {
-        label,
-        value,
-        offset,
-        record: None,
-    });
-    let id = section.entries.len() as u64;
-    if let Some(row) = section.entries.last_mut()
-        && (section.kind != AnalysisKind::Disassembly || row.label != "Disassembly")
-    {
-        let data = if section.kind == AnalysisKind::Hardening {
-            AnalysisData::Property {
-                scope: "Static file metadata".into(),
-                observed: row.value.clone(),
-                evidence: row.label.clone(),
-            }
-        } else {
-            AnalysisData::Field {
-                group: section.kind.label().into(),
-            }
-        };
-        row.record = Some(AnalysisRecord {
-            revision: 1,
-            id,
-            location: None,
-            data,
-        });
-    }
+    push_row(section, label.into(), value.into(), offset, None);
 }
 pub(super) fn structured_entry(
     section: &mut AnalysisSection,
     label: impl Into<String>,
     value: impl Into<String>,
     location: Option<AnalysisLocation>,
-    mut data: AnalysisData,
+    data: AnalysisData,
 ) {
-    let before = section.entries.len();
-    entry(
+    let offset = location
+        .as_ref()
+        .and_then(|l| l.file_range.map(|r| r.offset));
+    push_row(
         section,
-        label,
-        value,
-        location
-            .as_ref()
-            .and_then(|l| l.file_range.map(|r| r.offset)),
+        label.into(),
+        value.into(),
+        offset,
+        Some((location, data)),
     );
-    if section.entries.len() == before {
-        return;
+}
+/// Make one row. It goes to the section's full listing when there is one, and
+/// to the report while the report's preview has room.
+fn push_row(
+    section: &mut AnalysisSection,
+    mut label: String,
+    mut value: String,
+    offset: Option<u64>,
+    typed: Option<(Option<AnalysisLocation>, AnalysisData)>,
+) {
+    let id = ROWS_SEEN.get() + 1;
+    ROWS_SEEN.set(id);
+    let mut cut = clip(&mut label);
+    cut |= clip(&mut value);
+    let (location, mut data) = typed.unwrap_or_else(|| {
+        let data = if section.kind == AnalysisKind::Hardening {
+            AnalysisData::Property {
+                scope: "Static file metadata".into(),
+                observed: value.clone(),
+                evidence: label.clone(),
+            }
+        } else {
+            AnalysisData::Field {
+                group: section.kind.label().into(),
+            }
+        };
+        (None, data)
+    });
+    cut |= bound_data(&mut data);
+    if let AnalysisData::String { retained_len, .. } = &mut data {
+        *retained_len = value.len() as u64;
     }
-    if bound_data(&mut data) {
+    if cut {
+        VALUES_CUT.set(VALUES_CUT.get() + 1);
         section.state = AnalysisSectionState::Partial;
     }
-    if let Some(row) = section.entries.last_mut() {
-        if let AnalysisData::String { retained_len, .. } = &mut data {
-            *retained_len = row.value.len() as u64;
+    let listed = LISTING.with(|sink| {
+        let mut sink = sink.borrow_mut();
+        let Some(sink) = sink.as_mut() else {
+            return false;
+        };
+        if !sink.full {
+            sink.full =
+                !sink
+                    .writer
+                    .push(label.clone(), value.clone(), location.clone(), data.clone());
         }
-        row.record = Some(AnalysisRecord {
+        true
+    });
+    if section.entries.len() >= ENTRY_MAX_COUNT {
+        if !listed {
+            section.state = AnalysisSectionState::Partial;
+            ROWS_DROPPED.set(ROWS_DROPPED.get() + 1);
+        }
+        return;
+    }
+    section.entries.push(AnalysisEntry {
+        label,
+        value,
+        offset,
+        record: Some(AnalysisRecord {
             revision: 1,
-            id: before as u64 + 1,
+            id,
             location,
             data,
-        });
-    }
-}
-pub(super) fn clip(text: &mut String) -> bool {
-    if text.len() <= VALUE_MAX_SIZE {
-        return false;
-    }
-    let mut end = VALUE_MAX_SIZE;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    text.truncate(end);
-    true
-}
-pub(super) fn bound_data(data: &mut AnalysisData) -> bool {
-    let mut truncated = false;
-    let mut bound = |text: &mut String| {
-        truncated |= clip(text);
-    };
-    match data {
-        AnalysisData::Field { group } => bound(group),
-        AnalysisData::Section {
-            name,
-            raw_flags,
-            flags,
-            ..
-        } => {
-            bound(name);
-            bound(raw_flags);
-            for flag in flags.iter_mut() {
-                bound(flag);
-            }
-            if flags.len() > 64 {
-                flags.truncate(64);
-                truncated = true;
-            }
-        }
-        AnalysisData::Symbol {
-            name, kind, scope, ..
-        } => {
-            bound(name);
-            bound(kind);
-            bound(scope);
-        }
-        AnalysisData::Import { name, library, .. } => {
-            if let Some(name) = name {
-                bound(name);
-            }
-            if let Some(library) = library {
-                bound(library);
-            }
-        }
-        AnalysisData::Export { name, .. } => {
-            if let Some(name) = name {
-                bound(name);
-            }
-        }
-        AnalysisData::String { encoding, .. } => bound(encoding),
-        AnalysisData::Entropy { .. } => {}
-        AnalysisData::Signature { description, .. } => bound(description),
-        AnalysisData::FlossString {
-            origin, encoding, ..
-        } => {
-            bound(origin);
-            bound(encoding);
-        }
-        AnalysisData::Layer {
-            method,
-            sha256,
-            packer,
-            file,
-            report_id,
-            note,
-            ..
-        } => {
-            bound(method);
-            bound(sha256);
-            bound(note);
-            for text in [packer, file, report_id].into_iter().flatten() {
-                bound(text);
-            }
-        }
-        AnalysisData::Property {
-            scope,
-            observed,
-            evidence,
-        } => {
-            bound(scope);
-            bound(observed);
-            bound(evidence);
-        }
-        AnalysisData::Instruction {
-            bytes,
-            mnemonic,
-            operands,
-            function,
-            ..
-        } => {
-            bound(bytes);
-            bound(mnemonic);
-            bound(operands);
-            if let Some(function) = function {
-                bound(function);
-            }
-        }
-        AnalysisData::Function { name, .. } => bound(name),
-        AnalysisData::SourceLine { function, .. } => bound(function),
-        AnalysisData::RuleMatch {
-            rule,
-            namespace,
-            tags,
-            ruleset,
-        } => {
-            bound(rule);
-            bound(namespace);
-            bound(ruleset);
-            truncated |= bound_list(tags);
-        }
-        AnalysisData::Capability {
-            name,
-            namespace,
-            attack,
-            mbc,
-        } => {
-            bound(name);
-            bound(namespace);
-            truncated |= bound_list(attack);
-            truncated |= bound_list(mbc);
-        }
-        AnalysisData::Identification {
-            category,
-            name,
-            version,
-        } => {
-            bound(category);
-            bound(name);
-            if let Some(version) = version {
-                bound(version);
-            }
-        }
-    }
-    truncated
-}
-/// Keep at most 64 list items of bounded text.
-fn bound_list(items: &mut Vec<String>) -> bool {
-    let mut truncated = items.len() > 64;
-    items.truncate(64);
-    for item in items.iter_mut() {
-        truncated |= clip(item);
-    }
-    truncated
+        }),
+    });
 }
 fn unavailable(section: &mut AnalysisSection, reason: impl Into<String>) {
     section.state = AnalysisSectionState::Unavailable;
     section.summary = reason.into();
 }
-/// The built-in triage engine, named once per category instead of as a row.
-const TRIAGE_ENGINE: &str = "Antinomie byte triage 2 (object 0.40)";
+/// The built-in analysis (byte triage, revision 2) with the version of the
+/// object-file parser it reads formats with, named once per category instead
+/// of as a row. Reports from before the rename call it "Antinomie byte triage 2".
+const TRIAGE_ENGINE: &str = "Built-in analysis (object 0.40)";
+
+/// Forget what the previous section counted.
+fn begin_section() {
+    ROWS_SEEN.set(0);
+    ROWS_DROPPED.set(0);
+    VALUES_CUT.set(0);
+    LISTING.with(|sink| sink.borrow_mut().take());
+}
+
+/// What a category with no summary of its own found.
+fn default_summary(kind: AnalysisKind) -> &'static str {
+    match kind {
+        AnalysisKind::Metadata => "File hashes, size and object header.",
+        AnalysisKind::Structures => {
+            "Entry point, sections, segments, symbols, imports and exports."
+        }
+        _ => "",
+    }
+}
+
+/// The counts the section's rows were made with, said as the bounds they hit.
+fn note_row_limits(section: &mut AnalysisSection) {
+    use super::limits::add;
+    let dropped = ROWS_DROPPED.get();
+    if dropped > 0 {
+        add(
+            section,
+            AnalysisLimitKind::Rows,
+            format!(
+                "The report keeps the first {} rows; {} more were left out.",
+                super::detection::group_digits(ENTRY_MAX_COUNT as u64),
+                super::detection::group_digits(dropped)
+            ),
+            None,
+        );
+    }
+    let cut = VALUES_CUT.get();
+    if cut > 0 {
+        add(
+            section,
+            AnalysisLimitKind::Text,
+            format!(
+                "{} {} longer than {} bytes; only the start is kept.",
+                super::detection::group_digits(cut),
+                if cut == 1 { "value was" } else { "values were" },
+                super::detection::group_digits(VALUE_MAX_SIZE as u64)
+            ),
+            None,
+        );
+    }
+}
 
 fn analyze_section(section: &mut AnalysisSection, specimen: &[u8], listings: &Path) {
-    ROWS_DROPPED.set(false);
+    begin_section();
     section.state = AnalysisSectionState::Complete;
-    section.summary = "completed bounded static byte analysis".into();
+    section.summary = default_summary(section.kind).into();
     if matches!(
         section.kind,
         AnalysisKind::Metadata
@@ -407,6 +351,9 @@ fn analyze_section(section: &mut AnalysisSection, specimen: &[u8], listings: &Pa
             | AnalysisKind::Hardening
     ) {
         section.tools.push(TRIAGE_ENGINE.into());
+    }
+    if section.kind == AnalysisKind::Structures {
+        begin_listing(section.kind, listings);
     }
     match section.kind {
         AnalysisKind::Metadata => {
@@ -460,7 +407,7 @@ fn analyze_section(section: &mut AnalysisSection, specimen: &[u8], listings: &Pa
                 Err(_) => entry(
                     section,
                     "Object",
-                    "unknown or malformed format; generic byte triage available",
+                    "not an ELF, PE or Mach-O file the parser can read; only the hashes and size apply",
                     None,
                 ),
             }
@@ -479,7 +426,7 @@ fn analyze_section(section: &mut AnalysisSection, specimen: &[u8], listings: &Pa
             section.summary =
                 "whole-file and up to 64 measured regions; entropy is not a packing verdict".into();
         }
-        AnalysisKind::Strings => strings(section, specimen, listings),
+        AnalysisKind::Strings => super::strings::strings(section, specimen, listings),
         // The patterns are those of the Rule manager as they are when the
         // matches are read, so none are fixed in the report: this check says
         // the run asked for them, and the Regex matches tab lists them.
@@ -508,6 +455,15 @@ fn analyze_section(section: &mut AnalysisSection, specimen: &[u8], listings: &Pa
                         let file_range = checked_range(s.file_range(), specimen.len() as u64);
                         if s.file_range().is_some() && file_range.is_none() {
                             section.state = AnalysisSectionState::Partial;
+                            super::limits::add(
+                                section,
+                                AnalysisLimitKind::Input,
+                                format!(
+                                    "Section {} points past the end of the file; its bytes are not shown.",
+                                    s.name().unwrap_or("<invalid name>")
+                                ),
+                                None,
+                            );
                         }
                         let (raw_flags, flags) = section_flags(s.flags());
                         structured_entry(
@@ -538,6 +494,15 @@ fn analyze_section(section: &mut AnalysisSection, specimen: &[u8], listings: &Pa
                         let file_range = checked_range(segment.file_range, specimen.len() as u64);
                         if segment.file_range.is_some() && file_range.is_none() {
                             section.state = AnalysisSectionState::Partial;
+                            super::limits::add(
+                                section,
+                                AnalysisLimitKind::Input,
+                                format!(
+                                    "Segment {} points past the end of the file; its bytes are not shown.",
+                                    segment.name
+                                ),
+                                None,
+                            );
                         }
                         structured_entry(
                             section,
@@ -638,6 +603,14 @@ fn analyze_section(section: &mut AnalysisSection, specimen: &[u8], listings: &Pa
                                     }
                                     Err(error) => {
                                         section.state = AnalysisSectionState::Partial;
+                                        super::limits::add(
+                                            section,
+                                            AnalysisLimitKind::Input,
+                                            format!(
+                                                "Part of the import table cannot be read: {error}."
+                                            ),
+                                            None,
+                                        );
                                         entry(
                                             section,
                                             "Import parse error",
@@ -650,6 +623,12 @@ fn analyze_section(section: &mut AnalysisSection, specimen: &[u8], listings: &Pa
                         }
                         Err(error) => {
                             section.state = AnalysisSectionState::Partial;
+                            super::limits::add(
+                                section,
+                                AnalysisLimitKind::Input,
+                                format!("The import table cannot be read: {error}."),
+                                None,
+                            );
                             entry(section, "Imports parse error", error.to_string(), None);
                         }
                     }
@@ -683,6 +662,14 @@ fn analyze_section(section: &mut AnalysisSection, specimen: &[u8], listings: &Pa
                                     }
                                     Err(error) => {
                                         section.state = AnalysisSectionState::Partial;
+                                        super::limits::add(
+                                            section,
+                                            AnalysisLimitKind::Input,
+                                            format!(
+                                                "Part of the export table cannot be read: {error}."
+                                            ),
+                                            None,
+                                        );
                                         entry(
                                             section,
                                             "Export parse error",
@@ -695,6 +682,12 @@ fn analyze_section(section: &mut AnalysisSection, specimen: &[u8], listings: &Pa
                         }
                         Err(error) => {
                             section.state = AnalysisSectionState::Partial;
+                            super::limits::add(
+                                section,
+                                AnalysisLimitKind::Input,
+                                format!("The export table cannot be read: {error}."),
+                                None,
+                            );
                             entry(section, "Exports parse error", error.to_string(), None);
                         }
                     }
@@ -734,7 +727,7 @@ fn analyze_section(section: &mut AnalysisSection, specimen: &[u8], listings: &Pa
                                     "/input/specimen",
                                 ],
                             ) {
-                                Ok((version, output, truncated)) => {
+                                Ok((version, output, end)) => {
                                     section.tools.push(version);
                                     for line in output.lines().filter(|l| {
                                         l.contains("GNU_STACK")
@@ -744,9 +737,7 @@ fn analyze_section(section: &mut AnalysisSection, specimen: &[u8], listings: &Pa
                                     }) {
                                         entry(section, "ELF hardening metadata", line, None);
                                     }
-                                    if truncated {
-                                        section.state = AnalysisSectionState::Partial;
-                                    }
+                                    cut_tool_short(section, "readelf", end);
                                 }
                                 Err(error) => unavailable(section, error),
                             }
@@ -794,7 +785,10 @@ fn analyze_section(section: &mut AnalysisSection, specimen: &[u8], listings: &Pa
                                 }
                                 section.summary="PE declared optional-header flags; runtime enforcement not observed".into();
                             } else {
-                                unavailable(section, "PE optional-header flags unavailable");
+                                unavailable(
+                                    section,
+                                    "This PE file has no optional header, so there are no hardening flags to read",
+                                );
                             }
                         }
                         object::BinaryFormat::MachO => {
@@ -821,19 +815,29 @@ fn analyze_section(section: &mut AnalysisSection, specimen: &[u8], listings: &Pa
                                 );
                                 section.summary="Mach-O declared header flags; runtime enforcement not observed".into();
                             } else {
-                                unavailable(section, "Mach-O header flags unavailable");
+                                unavailable(
+                                    section,
+                                    "This Mach-O file has no header flags to read",
+                                );
                             }
                         }
                         _ => unavailable(
                             section,
-                            "hardening adapter unsupported for this object format",
+                            "Hardening flags are only read from ELF, PE and Mach-O files",
                         ),
                     }
                 }
             }
             Err(error) => unavailable(
                 section,
-                format!("structures unsupported for unknown or malformed format: {error}"),
+                format!(
+                    "The file is not an executable format Antinomie can read ({error}), so there are no {} to show.",
+                    if section.kind == AnalysisKind::Structures {
+                        "headers, sections or symbols"
+                    } else {
+                        "hardening flags"
+                    }
+                ),
             ),
         },
         AnalysisKind::Disassembly => super::disasm::disassemble(section, specimen, listings),
@@ -849,69 +853,127 @@ fn analyze_section(section: &mut AnalysisSection, specimen: &[u8], listings: &Pa
         AnalysisKind::Decompilation => super::decompile::decompile(section, specimen, listings),
     }
     // Headers, sections, segments, symbols, imports and exports of an
-    // ordinary binary outgrow the report; the report keeps a preview.
+    // ordinary binary outgrow the report; the report keeps a preview and the
+    // listing every row.
     if section.kind == AnalysisKind::Structures {
-        keep_listing(section, listings);
+        finish_listing(section);
     }
-    if section.state == AnalysisSectionState::Partial {
-        section.summary.push_str("; partial/bounded evidence");
+    note_row_limits(section);
+    if section.state == AnalysisSectionState::Partial && section.limits.is_empty() {
+        super::limits::add(
+            section,
+            AnalysisLimitKind::Input,
+            "Some of the file could not be read as the format describes it.",
+            None,
+        );
     }
 }
 
-/// Write a category's structured rows to its full listing beside the report.
-fn keep_listing(section: &mut AnalysisSection, listings: &Path) {
-    let Ok(mut writer) = super::listing::ListingWriter::create(
-        listings,
-        section.kind,
-        super::listing::LISTING_MAX_SIZE,
-    ) else {
+/// Start writing the section's rows to its listing as they are made.
+fn begin_listing(kind: AnalysisKind, listings: &Path) {
+    let writer = ListingWriter::create(listings, kind, super::listing::LISTING_MAX_SIZE);
+    LISTING.with(|sink| {
+        *sink.borrow_mut() = writer.ok().map(|writer| RowSink {
+            writer,
+            full: false,
+        });
+    });
+}
+
+/// Close the listing [`begin_listing`] started and say what the report holds
+/// of it.
+fn finish_listing(section: &mut AnalysisSection) {
+    let Some(sink) = LISTING.with(|sink| sink.borrow_mut().take()) else {
+        // No listing could be made: the report's preview is all there is.
         return;
     };
-    let mut full = false;
-    for entry in &section.entries {
-        let Some(record) = &entry.record else {
-            continue;
-        };
-        if !writer.push(
-            entry.label.clone(),
-            entry.value.clone(),
-            record.location.clone(),
-            record.data.clone(),
-        ) {
-            full = true;
-            break;
-        }
+    let Ok(listing) = sink.writer.finish(sink.full) else {
+        return;
+    };
+    let rows = listing.rows;
+    if listing.truncated {
+        section.state = AnalysisSectionState::Partial;
+        super::limits::add(
+            section,
+            AnalysisLimitKind::Size,
+            format!(
+                "The listing reached its {} limit after {} rows; the rest of the rows are not listed.",
+                crate::byte_size::short_size(super::listing::LISTING_MAX_SIZE),
+                super::detection::group_digits(rows)
+            ),
+            None,
+        );
     }
-    if let Ok(listing) = writer.finish(full || ROWS_DROPPED.get()) {
-        if listing.truncated {
+    if section.state != AnalysisSectionState::Unavailable {
+        let kept = section.entries.len() as u64;
+        let what = "entry point, sections, segments, symbols, imports and exports";
+        section.summary = if rows > kept {
+            format!(
+                "{} rows of {what}. The report shows the first {}; the full list is in the listing.",
+                super::detection::group_digits(rows),
+                super::detection::group_digits(kept)
+            )
+        } else {
+            format!("{} rows of {what}.", super::detection::group_digits(rows))
+        };
+    }
+    section.listing = Some(listing);
+}
+
+/// What ended a local tool before its output was whole.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum ToolEnd {
+    Finished,
+    /// It printed more than the analysis reads.
+    Output,
+    /// It was stopped after this many seconds.
+    Time(u64),
+}
+
+/// Say on `section` that `tool` was cut short, when it was.
+pub(super) fn cut_tool_short(section: &mut AnalysisSection, tool: &str, end: ToolEnd) {
+    match end {
+        ToolEnd::Finished => {}
+        ToolEnd::Output => {
             section.state = AnalysisSectionState::Partial;
+            super::limits::add(
+                section,
+                AnalysisLimitKind::Size,
+                format!(
+                    "{tool} printed more than {} of output; the rest was ignored.",
+                    crate::byte_size::short_size(TOOL_OUTPUT_MAX_SIZE as u64)
+                ),
+                None,
+            );
         }
-        section.listing = Some(listing);
+        ToolEnd::Time(seconds) => super::limits::time_out(
+            section,
+            tool,
+            seconds,
+            format!("{tool} was stopped before it finished; what it had printed by then is shown."),
+        ),
     }
 }
 
-pub(super) fn tool(path: &str, arguments: &[&str]) -> Result<(String, String, bool), String> {
+pub(super) fn tool(path: &str, arguments: &[&str]) -> Result<(String, String, ToolEnd), String> {
     if !Path::new(path).is_file() {
         return Err(format!("local tool unavailable: {path}"));
     }
-    let run = super::tools::run(
-        path,
-        arguments,
-        &[],
-        std::time::Duration::from_secs(120),
-        TOOL_OUTPUT_MAX_SIZE,
-    )?;
-    if !run.success && !run.truncated {
-        return Err(format!(
-            "local tool failed: {path}{}",
-            if run.timed_out { " (timed out)" } else { "" }
-        ));
+    let limit = Duration::from_secs(super::limits::seconds(120));
+    let run = super::tools::run_with(path, arguments, &[], limit, TOOL_OUTPUT_MAX_SIZE, true)?;
+    if !run.success && !run.truncated && !run.timed_out {
+        return Err(run
+            .failure_text(path, limit)
+            .unwrap_or_else(|| format!("{path} failed")));
     }
-    Ok((
-        super::tools::version(path, &["--version"]),
-        run.stdout,
-        run.truncated || run.timed_out,
-    ))
+    let end = if run.timed_out {
+        ToolEnd::Time(limit.as_secs())
+    } else if run.truncated {
+        ToolEnd::Output
+    } else {
+        ToolEnd::Finished
+    };
+    Ok((super::tools::version(path, &["--version"]), run.stdout, end))
 }
 fn object_name(name: object::NameOrOrdinal<&[u8]>) -> String {
     match name {
@@ -954,112 +1016,6 @@ fn symbol_range<'data, S: ObjectSection<'data>>(
         total_len,
     )
 }
-/// Strings kept in the report itself; the listing holds all of them.
-const REPORT_STRINGS: usize = 256;
-
-/// Printable ASCII (four or more octets) and UTF-16LE strings, in file order.
-pub(crate) fn find_strings(specimen: &[u8]) -> Vec<(usize, usize, &'static str, String)> {
-    let mut found = Vec::new();
-    let mut start = 0;
-    for index in 0..=specimen.len() {
-        if index < specimen.len() && (specimen[index].is_ascii_graphic() || specimen[index] == b' ')
-        {
-            continue;
-        }
-        if index - start >= 4 {
-            let retained = &specimen[start..index.min(start + VALUE_MAX_SIZE)];
-            found.push((
-                start,
-                index - start,
-                "ASCII",
-                String::from_utf8_lossy(retained).into_owned(),
-            ));
-        }
-        start = index + 1;
-    }
-    // UTF-16LE: printable ASCII code units, each followed by a zero octet.
-    let mut index = 0;
-    while index + 1 < specimen.len() {
-        let begin = index;
-        let mut text = String::new();
-        while index + 1 < specimen.len()
-            && specimen[index + 1] == 0
-            && (specimen[index].is_ascii_graphic() || specimen[index] == b' ')
-        {
-            if text.len() < VALUE_MAX_SIZE {
-                text.push(specimen[index] as char);
-            }
-            index += 2;
-        }
-        if index - begin >= 8 {
-            found.push((begin, index - begin, "UTF-16LE", text));
-        } else {
-            index = begin + 1;
-        }
-    }
-    found.sort_by_key(|(offset, ..)| *offset);
-    found
-}
-
-fn strings(section: &mut AnalysisSection, specimen: &[u8], listings: &Path) {
-    let found = find_strings(specimen);
-    let mut writer = super::listing::ListingWriter::create(
-        listings,
-        AnalysisKind::Strings,
-        super::listing::LISTING_MAX_SIZE,
-    )
-    .ok();
-    let mut full = false;
-    for (index, (offset, len, encoding, text)) in found.iter().enumerate() {
-        let range = AnalysisRange {
-            offset: *offset as u64,
-            len: *len as u64,
-        };
-        let location = || {
-            Some(AnalysisLocation {
-                kind: AnalysisAddressKind::FileOffset,
-                value: range.offset,
-                file_range: Some(range),
-            })
-        };
-        let data = || AnalysisData::String {
-            encoding: (*encoding).into(),
-            byte_len: range.len,
-            retained_len: text.len() as u64,
-        };
-        if index < REPORT_STRINGS {
-            structured_entry(section, *encoding, text.clone(), location(), data());
-        }
-        if let Some(writer) = writer.as_mut()
-            && !full
-            && !writer.push(*encoding, text.clone(), location(), data())
-        {
-            full = true;
-        }
-    }
-    // A string longer than the row bound keeps only its start.
-    section.state = if found.iter().any(|(_, len, encoding, text)| {
-        let units = if *encoding == "ASCII" { *len } else { len / 2 };
-        text.len() < units
-    }) {
-        AnalysisSectionState::Partial
-    } else {
-        AnalysisSectionState::Complete
-    };
-    if let Some(listing) = writer.and_then(|w| w.finish(full).ok()) {
-        if listing.truncated {
-            section.state = AnalysisSectionState::Partial;
-        }
-        section.listing = Some(listing);
-    } else if found.len() > REPORT_STRINGS {
-        section.state = AnalysisSectionState::Partial;
-    }
-    section.summary = format!(
-        "{} strings (printable ASCII of four or more bytes, UTF-16LE of four or more characters); offsets are file offsets",
-        found.len()
-    );
-}
-
 fn entropy_entry(section: &mut AnalysisSection, label: &str, specimen: &[u8], offset: u64) {
     let mut counts = [0u64; 256];
     for &byte in specimen {
@@ -1240,6 +1196,7 @@ mod tests {
                 &AnalysisSelection {
                     enabled: true,
                     checks: vec![kind],
+                    time_limit_minutes: 0,
                 },
             );
             report.specimen_len = Some(specimen.len() as u64);
@@ -1289,8 +1246,11 @@ mod tests {
             &AnalysisSelection {
                 enabled: true,
                 checks: vec![AnalysisKind::Metadata],
+                time_limit_minutes: 0,
             },
         );
+        // Row ids count per analysed section, as analyze_section starts them.
+        ROWS_SEEN.set(0);
         for _ in 0..200 {
             entry(&mut report.sections[0], "row", "x".repeat(4096), None);
         }
@@ -1313,6 +1273,7 @@ mod tests {
             tools: Vec::new(),
             listing: None,
             entries: Vec::new(),
+            limits: Vec::new(),
         }
     }
     #[test]
@@ -1351,7 +1312,7 @@ mod tests {
         let mut missing = section(AnalysisKind::Rules);
         super::super::rules::scan_at(&mut missing, specimen, &directory);
         assert_eq!(missing.state, AnalysisSectionState::Unavailable);
-        assert_eq!(missing.summary, "No rules enabled");
+        assert!(missing.summary.starts_with("No rules are turned on"));
         assert!(missing.entries.is_empty());
         for kind in [
             AnalysisKind::Structures,
@@ -1389,6 +1350,7 @@ mod tests {
     }
     #[test]
     fn entry_bound_preserves_utf8_and_reports_truncation() {
+        begin_section();
         let mut result = section(AnalysisKind::Strings);
         result.state = AnalysisSectionState::Complete;
         entry(&mut result, "long", "a\u{1f600}".repeat(2000), Some(3));
@@ -1399,10 +1361,13 @@ mod tests {
         }
         assert_eq!(result.entries.len(), 2048);
     }
-    fn structures_rows(count: usize) -> AnalysisSection {
-        ROWS_DROPPED.set(false);
+    fn structures_rows(count: usize, with_listing: bool) -> AnalysisSection {
+        begin_section();
         let mut result = section(AnalysisKind::Structures);
         result.state = AnalysisSectionState::Complete;
+        if with_listing {
+            begin_listing(AnalysisKind::Structures, &listings());
+        }
         for index in 0..count {
             structured_entry(
                 &mut result,
@@ -1417,28 +1382,80 @@ mod tests {
         result
     }
     #[test]
-    fn listing_is_truncated_when_the_row_bound_dropped_rows() {
-        let mut result = structures_rows(ENTRY_MAX_COUNT + 5);
+    fn the_listing_holds_every_row_while_the_report_keeps_a_preview() {
+        let mut result = structures_rows(ENTRY_MAX_COUNT + 5, true);
         assert_eq!(result.entries.len(), ENTRY_MAX_COUNT);
-        keep_listing(&mut result, &listings());
+        finish_listing(&mut result);
+        note_row_limits(&mut result);
         let listing = result.listing.unwrap();
-        assert_eq!(listing.rows, ENTRY_MAX_COUNT as u64);
-        assert!(listing.truncated);
-        assert_eq!(result.state, AnalysisSectionState::Partial);
-    }
-    #[test]
-    fn listing_is_complete_when_every_row_fits() {
-        let mut result = structures_rows(ENTRY_MAX_COUNT);
-        keep_listing(&mut result, &listings());
-        let listing = result.listing.unwrap();
-        assert_eq!(listing.rows, ENTRY_MAX_COUNT as u64);
+        assert_eq!(listing.rows, ENTRY_MAX_COUNT as u64 + 5);
         assert!(!listing.truncated);
         assert_eq!(result.state, AnalysisSectionState::Complete);
-        // A later section on the same thread does not inherit the flag.
-        structures_rows(ENTRY_MAX_COUNT + 1);
+        assert!(result.limits.is_empty());
+        assert!(
+            result.summary.contains("2,053 rows") && result.summary.contains("first 2,048"),
+            "{}",
+            result.summary
+        );
+    }
+    #[test]
+    fn a_large_binary_lists_completely_beside_a_bounded_report() {
+        let mut result = structures_rows(40_000, true);
+        finish_listing(&mut result);
+        assert_eq!(result.listing.as_ref().unwrap().rows, 40_000);
+        assert_eq!(result.entries.len(), ENTRY_MAX_COUNT);
+        let mut report = AnalysisReport {
+            id: "x".into(),
+            state: AnalysisState::Complete,
+            source_path: "/x".into(),
+            specimen_sha256: None,
+            specimen_len: None,
+            reason: None,
+            sections: vec![result],
+            layer: None,
+            specimen_source: None,
+            time_limit_seconds: None,
+        };
+        let encoded = bounded_report(&mut report).unwrap();
+        assert!(encoded.len() <= REPORT_MAX_SIZE);
+        assert_eq!(report.state, AnalysisState::Complete);
+        assert_eq!(report.sections[0].listing.as_ref().unwrap().rows, 40_000);
+    }
+    #[test]
+    fn rows_over_the_preview_without_a_listing_are_counted_and_said() {
+        let mut result = structures_rows(ENTRY_MAX_COUNT + 5, false);
+        note_row_limits(&mut result);
+        assert_eq!(result.entries.len(), ENTRY_MAX_COUNT);
+        assert_eq!(result.state, AnalysisSectionState::Partial);
+        assert_eq!(result.limits.len(), 1);
+        assert_eq!(result.limits[0].kind, AnalysisLimitKind::Rows);
+        assert!(result.limits[0].text.contains("first 2,048 rows; 5 more"));
+    }
+    #[test]
+    fn a_row_that_fits_the_preview_leaves_no_note() {
+        let mut result = structures_rows(ENTRY_MAX_COUNT, true);
+        finish_listing(&mut result);
+        note_row_limits(&mut result);
+        assert!(!result.listing.unwrap().truncated);
+        assert_eq!(result.state, AnalysisSectionState::Complete);
+        assert!(result.limits.is_empty());
         let specimen = fs::read("/usr/bin/true").unwrap();
         let mut real = section(AnalysisKind::Structures);
         analyze_section(&mut real, &specimen, &listings());
         assert!(!real.listing.unwrap().truncated);
+    }
+    #[test]
+    fn a_cut_value_says_how_many_were_cut() {
+        begin_section();
+        let mut result = section(AnalysisKind::Strings);
+        entry(&mut result, "long", "x".repeat(VALUE_MAX_SIZE + 1), None);
+        note_row_limits(&mut result);
+        assert_eq!(result.state, AnalysisSectionState::Partial);
+        assert_eq!(result.limits[0].kind, AnalysisLimitKind::Text);
+        assert!(
+            result.limits[0]
+                .text
+                .starts_with("1 value was longer than 4,096 bytes")
+        );
     }
 }

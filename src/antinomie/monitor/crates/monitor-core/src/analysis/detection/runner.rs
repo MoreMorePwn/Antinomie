@@ -1013,7 +1013,7 @@ fn sigma(staged: &Staged, work: &Path) -> Result<Report, String> {
             report.state = State::Partial;
             report
                 .warnings
-                .push("Partial: this scan used an incomplete event prefix.".into());
+                .push("Partial: the event index was not ready, so the scan used only the part of the evidence saved so far.".into());
         }
         return Ok(report);
     };

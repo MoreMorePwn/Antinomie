@@ -314,41 +314,57 @@ pub(super) fn identify(section: &mut AnalysisSection, specimen: &[u8]) {
         );
     }
     let mut sources = vec!["built-in signatures"];
-    if let Some(file) = tools::find(&["/usr/bin/file"])
-        && let Ok(run) = tools::run(
+    // The tool that was stopped, and the seconds it had.
+    let mut out_of_time: Option<(&str, u64)> = None;
+    if let Some(file) = tools::find(&["/usr/bin/file"]) {
+        let limit = Duration::from_secs(super::limits::seconds(30));
+        if let Ok(run) = tools::run(
             file,
             &["--brief", "--no-sandbox", "/input/specimen"],
             &[],
-            Duration::from_secs(30),
+            limit,
             4096,
-        )
-        && run.success
-    {
-        super::worker::structured_entry(
-            section,
-            "format: file magic",
-            run.stdout.trim(),
-            None,
-            AnalysisData::Identification {
-                category: "format".into(),
-                name: "file magic".into(),
-                version: None,
-            },
-        );
-        section.tools.push(tools::version(file, &["--version"]));
-        sources.push("file magic");
+        ) {
+            if run.timed_out {
+                out_of_time = Some(("file", limit.as_secs()));
+            } else if run.success {
+                super::worker::structured_entry(
+                    section,
+                    "format: file magic",
+                    run.stdout.trim(),
+                    None,
+                    AnalysisData::Identification {
+                        category: "format".into(),
+                        name: "file magic".into(),
+                        version: None,
+                    },
+                );
+                section.tools.push(tools::version(file, &["--version"]));
+                sources.push("file magic");
+            }
+        }
     }
     let die = tools::find_tool(crate::analysis_tools::DIE_SYSTEM, DIE_MANAGED);
-    if let Some(die) = die
-        && let Ok(run) = tools::run_with(
+    let die_limit = Duration::from_secs(super::limits::seconds(120));
+    let die_run = die.and_then(|die| {
+        tools::run_with(
             die,
             &["--json", "/input/specimen"],
             &[("HOME", "/tmp")],
-            Duration::from_secs(120),
+            die_limit,
             1024 * 1024,
             true,
         )
+        .ok()
+    });
+    if die_run.as_ref().is_some_and(|run| run.timed_out) {
+        out_of_time = Some(("Detect It Easy", die_limit.as_secs()));
+    }
+    let mut die_failure = None;
+    if let Some(die) = die
+        && let Some(run) = die_run.as_ref().filter(|run| !run.timed_out)
         && let Ok(json) = serde_json::from_str::<serde_json::Value>(&run.stdout).inspect_err(|_| {
+            die_failure = run.failure_text("Detect It Easy", die_limit);
             eprintln!(
                 "Detect It Easy output did not parse ({} octets, success {}): {}",
                 run.stdout.len(),
@@ -403,13 +419,21 @@ pub(super) fn identify(section: &mut AnalysisSection, specimen: &[u8]) {
     }
     section.state = AnalysisSectionState::Complete;
     section.summary = format!(
-        "{} identifications from {}{}",
+        "{} identifications from {}{}{}",
         section.entries.len(),
         sources.join(", "),
         if die.is_none() {
             "; install Detect It Easy from Tools > Analysis tools for its signature database"
         } else {
             ""
-        }
+        },
+        die_failure.map_or(String::new(), |failure| format!("; {failure}"))
     );
+    if let Some((tool, seconds)) = out_of_time {
+        let summary = format!(
+            "{}; {tool} was stopped, so its findings are missing",
+            section.summary
+        );
+        super::limits::time_out(section, tool, seconds, summary);
+    }
 }

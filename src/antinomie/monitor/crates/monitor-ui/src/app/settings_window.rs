@@ -84,6 +84,21 @@ fn hint(ui: &mut egui::Ui, text: &str) -> egui::Response {
 }
 
 impl MonitorApp {
+    /// Shows the settings page whose list label is `label`.
+    pub(super) fn open_settings_page(&mut self, label: &str) {
+        let Some(page) = SettingsPage::ALL
+            .into_iter()
+            .find(|page| page.label() == label)
+        else {
+            return;
+        };
+        self.settings_open = true;
+        self.settings_page = page;
+        if page == SettingsPage::NetworkRoutes {
+            self.open_routes_page();
+        }
+    }
+
     /// Settings: the page list, the page and a footer that stays in view.
     pub(super) fn settings_window(&mut self, ctx: &egui::Context) {
         let mut open = true;
@@ -413,6 +428,18 @@ impl MonitorApp {
             self.open_library(crate::workspace::LibraryPage::Tools);
         }
         ui.add_space(10.0);
+        ui.separator();
+        form_grid("settings_analysis_limits", ui).show(ui, |ui| {
+            ui.label("Time limit per tool");
+            ui.vertical(|ui| {
+                ui.add(crate::analysis::time_limit_drag(
+                    &mut self.settings.analysis_time_limit_minutes,
+                ));
+                hint(ui, crate::analysis::TIME_LIMIT_HELP);
+            });
+            ui.end_row();
+        });
+        ui.add_space(6.0);
         ui.separator();
         form_grid("settings_debugger_console", ui).show(ui, |ui| {
             ui.label("Debugger console");

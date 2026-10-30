@@ -129,7 +129,7 @@ supplied by the project owner, MikiMiku (MoreMorePwn), redrawn and edited as
 vector geometry. The selected
 identity, palette and asset roles are recorded in [the brand asset guide](assets/branding/README.md).
 
-The UI uses the DejaVu fonts (text and data), egui default fonts as fallbacks and the regular egui-phosphor icon font.
+The UI uses the DejaVu fonts (text, bold text and data), egui default fonts as fallbacks and the regular egui-phosphor icon font.
 Notices below are retained for these bundled assets, not promotional credits.
 
 | Locked component / material | Terms / retained notice |

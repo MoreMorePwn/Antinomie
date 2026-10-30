@@ -114,10 +114,12 @@ pub(crate) fn new_report(path: &str, selection: &AnalysisSelection) -> AnalysisR
                 tools: Vec::new(),
                 listing: None,
                 entries: Vec::new(),
+                limits: Vec::new(),
             })
             .collect(),
         layer: None,
         specimen_source: None,
+        time_limit_seconds: time_limit_seconds(selection.time_limit_minutes),
     }
 }
 pub(crate) fn fail(report: &mut AnalysisReport, state: AnalysisState, reason: impl Into<String>) {
@@ -341,6 +343,7 @@ impl Jobs {
             }
         }
         job.merge_supplement();
+        super::capa::trim_cache(self.tools_dir.as_deref());
         self.queue_layers(&mut job);
         if let Err(error) = persist_report(&job.directory, &job.report) {
             fail(
@@ -389,6 +392,8 @@ impl Jobs {
         }
         if job.child.is_some() && Instant::now() >= job.deadline {
             job.keep_finished_sections();
+            let overall = worker_deadline(&job.report);
+            super::limits::stop_running(&mut job.report, overall);
             fail(
                 &mut job.report,
                 AnalysisState::Partial,
@@ -725,7 +730,7 @@ fn persist_report(directory: &Path, report: &AnalysisReport) -> Result<(), Strin
     }
     storage::atomic_bytes(&directory.join("report.json"), &encoded)
 }
-fn directory_len(path: &Path) -> Result<u64, String> {
+pub(super) fn directory_len(path: &Path) -> Result<u64, String> {
     let mut total = 0u64;
     for entry in fs::read_dir(path).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
@@ -930,6 +935,9 @@ fn spawn_worker_binary(
         cmd.arg("--ro-bind")
             .arg(tools)
             .arg(crate::analysis_tools::SANDBOX_DIR);
+    }
+    if has(AnalysisKind::Capabilities) {
+        super::capa::mount_cache(&mut cmd, tools);
     }
     if std::env::var("ANTINOMIE_ANALYSIS_TOOLS").as_deref() == Ok("managed") {
         cmd.args(["--setenv", "ANTINOMIE_ANALYSIS_TOOLS", "managed"]);
@@ -1220,6 +1228,7 @@ mod tests {
         let selection = AnalysisSelection {
             enabled: true,
             checks: vec![AnalysisKind::Metadata],
+            time_limit_minutes: 0,
         };
         let mut jobs = Jobs::default();
         let first = new_report("/tmp/first", &selection);
@@ -1585,6 +1594,7 @@ time.sleep(30)
                 .chain(AnalysisKind::DEEP)
                 .copied()
                 .collect(),
+            time_limit_minutes: 0,
         };
         let mut report = new_report(&source, &selection);
         report.state = AnalysisState::Queued;
@@ -1728,6 +1738,7 @@ time.sleep(30)
                 AnalysisKind::Strings,
                 AnalysisKind::Entropy,
             ],
+            time_limit_minutes: 0,
         };
         let mut report = new_report("/usr/bin/true", &selection);
         report.state = AnalysisState::Queued;
@@ -1812,6 +1823,7 @@ time.sleep(30)
             &AnalysisSelection {
                 enabled: true,
                 checks: vec![AnalysisKind::Strings],
+                time_limit_minutes: 0,
             },
         );
         report.specimen_len = Some(16);
@@ -1968,6 +1980,7 @@ time.sleep(30)
         let selection = AnalysisSelection {
             enabled: true,
             checks: vec![AnalysisKind::Metadata],
+            time_limit_minutes: 0,
         };
         let mut jobs = Jobs::default();
         jobs.submit(
@@ -2008,6 +2021,7 @@ time.sleep(30)
         let selection = AnalysisSelection {
             enabled: true,
             checks: vec![AnalysisKind::Metadata],
+            time_limit_minutes: 0,
         };
         let mut jobs = Jobs::default();
         let report = new_report("/tmp/sample", &selection);
@@ -2047,6 +2061,7 @@ time.sleep(30)
         let selection = AnalysisSelection {
             enabled: true,
             checks: vec![AnalysisKind::Metadata],
+            time_limit_minutes: 0,
         };
         let mut jobs = Jobs::default();
         jobs.submit(

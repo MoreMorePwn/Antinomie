@@ -170,6 +170,11 @@ pub(super) fn show(
                 item = item.disabled(super::NOT_REQUESTED);
             } else if let Some(rows) = section.and_then(|section| counted(tab, section)) {
                 item = item.badge(rows.to_string(), crate::widgets::Tone::Neutral);
+            } else if tab == Tab::Regex
+                && let Some(total) = state.regex.total()
+            {
+                // The matches are scanned, not listed: the count is the scan's.
+                item = item.badge(total.to_string(), crate::widgets::Tone::Neutral);
             }
             if crate::widgets::tab(ui, state.tab == tab, &item).clicked() {
                 state.tab = tab;
@@ -426,11 +431,7 @@ fn counted(tab: Tab, section: &AnalysisSection) -> Option<u64> {
 fn regex_ready(report: &AnalysisReport) -> bool {
     report.sections.iter().any(|section| {
         matches!(section.kind, AnalysisKind::Strings | AnalysisKind::Floss)
-            && matches!(
-                section.state,
-                antinomie_monitor_core::AnalysisSectionState::Complete
-                    | antinomie_monitor_core::AnalysisSectionState::Partial
-            )
+            && section.state.has_result()
     })
 }
 

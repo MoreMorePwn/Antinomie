@@ -361,8 +361,9 @@ pub(crate) fn selection(
                 ("Triage", AnalysisKind::TRIAGE),
                 ("Deep analysis", AnalysisKind::DEEP),
             ];
-            for (index, (label, kinds)) in groups.into_iter().enumerate() {
-                let branch = root.child(index + 1 == groups.len());
+            for (label, kinds) in groups {
+                // The time limit row below is the last branch.
+                let branch = root.child(false);
                 let mut group = egui::collapsing_header::CollapsingState::load_with_default_open(
                     ui.ctx(),
                     ui.make_persistent_id(("analysis-branch", label)),
@@ -393,6 +394,9 @@ pub(crate) fn selection(
                     needs_tool(ui, &leaf, char_width, selection, kind, tools, install);
                 }
             }
+            tree_lines::row(ui, &root.child(true), char_width, |ui| {
+                time_limit_field(ui, &mut selection.time_limit_minutes);
+            });
         });
     }
     if let Err(reason) = selection.validate() {
@@ -400,6 +404,41 @@ pub(crate) fn selection(
     }
     master.inner
 }
+
+/// The time each analysis tool may run, in minutes: the field of the Run
+/// program window and of Settings, which hold the same value.
+pub(crate) fn time_limit_field(ui: &mut egui::Ui, minutes: &mut u32) -> egui::Response {
+    ui.horizontal(|ui| {
+        ui.label("Time limit per tool");
+        ui.add(time_limit_drag(minutes))
+            .on_hover_text(TIME_LIMIT_HELP);
+    })
+    .response
+}
+
+/// The editor of the time limit; 0 reads "each tool's own".
+pub(crate) fn time_limit_drag(minutes: &mut u32) -> egui::DragValue<'_> {
+    egui::DragValue::new(minutes)
+        .range(0..=antinomie_monitor_core::TIME_LIMIT_MAX_MINUTES)
+        .custom_formatter(|value, _| {
+            if value < 0.5 {
+                "each tool's own".to_owned()
+            } else {
+                format!("{value:.0} min")
+            }
+        })
+        .custom_parser(|text| {
+            let text = text.trim().trim_end_matches("min").trim();
+            text.parse::<f64>()
+                .ok()
+                .or_else(|| text.starts_with("each").then_some(0.0))
+        })
+}
+
+/// What the time limit does, for the field's tooltip and Settings.
+pub(crate) const TIME_LIMIT_HELP: &str = "How long each analysis tool may run before it is stopped and its check is marked Timeout. \
+Each tool's own limit is 4 minutes for capa, 8 for FLOSS, 3 for binwalk and 14 for the decompiler. \
+The same value is in Settings. A check that timed out can be run again with twice the time from its tab.";
 
 /// Under a selected category whose tool is missing: what it needs and a way
 /// to install it.
@@ -499,6 +538,15 @@ pub(crate) enum ReportAction {
         report_id: String,
         kind: AnalysisKind,
     },
+    /// Run a check again, alone, with `seconds` as the time each of its tools
+    /// may run: the way out of a check that ran out of time.
+    RunCheckLonger {
+        report_id: String,
+        kind: AnalysisKind,
+        seconds: u64,
+    },
+    /// Open Settings where the time limit of the analysis tools is set.
+    OpenAnalysisSettings,
     /// Make this report the one the Static Analysis panel shows.
     ShowReport {
         report_id: String,
@@ -576,6 +624,11 @@ pub(crate) fn progress_text(report: &AnalysisReport) -> Option<String> {
             )
         })
         .count();
+    let timed_out = report
+        .sections
+        .iter()
+        .filter(|s| s.state == AnalysisSectionState::Timeout)
+        .count();
     let unavailable = report
         .sections
         .iter()
@@ -596,7 +649,7 @@ pub(crate) fn progress_text(report: &AnalysisReport) -> Option<String> {
             .map(|s| format!("{}: {}", section_title(s.kind), s.summary))
             .unwrap_or_else(|| {
                 // Between two checks, or before the first one starts.
-                if done + unavailable == 0 {
+                if done + unavailable + timed_out == 0 {
                     "Starting analysis worker"
                 } else if waiting == 0 {
                     "Writing the report"
@@ -606,8 +659,12 @@ pub(crate) fn progress_text(report: &AnalysisReport) -> Option<String> {
                 .to_owned()
             }),
     };
+    let timed_out = match timed_out {
+        0 => String::new(),
+        count => format!(" · {count} timed out"),
+    };
     Some(format!(
-        "{done}/{} checks completed · {unavailable} unavailable · {waiting} waiting\n{status}",
+        "{done}/{} checks completed · {unavailable} unavailable{timed_out} · {waiting} waiting\n{status}",
         report.sections.len()
     ))
 }
@@ -773,6 +830,7 @@ mod tests {
                 .collect(),
             layer: None,
             specimen_source: None,
+            time_limit_seconds: None,
         }
     }
 
@@ -879,6 +937,46 @@ mod tests {
                 },
             );
         }
+    }
+
+    #[test]
+    fn the_time_limit_is_a_row_of_the_analysis_tree_that_reads_zero_as_each_tools_own() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut choices = AnalysisSelection {
+            enabled: true,
+            ..Default::default()
+        };
+        let shown = |choices: &mut AnalysisSelection| {
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(900.0, 800.0),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        selection(ui, choices, &[], &mut false);
+                    });
+                },
+            );
+            let mut text = Vec::new();
+            for shape in &output.shapes {
+                if let egui::epaint::Shape::Text(shape) = &shape.shape {
+                    text.push(shape.galley.text().to_owned());
+                }
+            }
+            text
+        };
+        shown(&mut choices);
+        let text = shown(&mut choices);
+        assert!(text.iter().any(|t| t == "Time limit per tool"), "{text:?}");
+        assert!(text.iter().any(|t| t == "each tool's own"), "{text:?}");
+        choices.time_limit_minutes = 12;
+        let text = shown(&mut choices);
+        assert!(text.iter().any(|t| t == "12 min"), "{text:?}");
     }
 
     #[test]

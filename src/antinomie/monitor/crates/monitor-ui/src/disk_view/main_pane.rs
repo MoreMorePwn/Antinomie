@@ -251,14 +251,6 @@ impl DiskView {
                             format!("source {}", measure.source.active_layer),
                         );
                     }
-                    ui.colored_label(
-                        theme::muted(),
-                        format!(
-                            "{} free in {}",
-                            format_size(measure.free_space),
-                            measure.directory.display()
-                        ),
-                    );
                     if !measure.sparse_supported {
                         crate::activity::warning(
                             ui,
@@ -443,10 +435,7 @@ impl DiskView {
         if let Some(Err(error)) = &self.probe {
             crate::activity::error(ui, error);
         }
-        crate::toasts::take_failure(ui.ctx(), &mut self.status);
-        if let Some((message, _)) = &self.status {
-            ui.colored_label(theme::good(), message);
-        }
+        self.status_line(ui);
         if self.diff.is_some() {
             self.diff_pane(ui, cx);
             return;

@@ -109,6 +109,7 @@ fn report_of(section: AnalysisSection) -> AnalysisReport {
         sections: vec![section],
         layer: None,
         specimen_source: None,
+        time_limit_seconds: None,
     }
 }
 

@@ -121,6 +121,7 @@ mod tests {
         AnalysisSelection {
             enabled: true,
             checks: AnalysisKind::TRIAGE.to_vec(),
+            time_limit_minutes: 0,
         }
     }
 

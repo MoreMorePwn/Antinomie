@@ -232,6 +232,60 @@ mod tests {
     }
 
     #[test]
+    fn run_notes_are_listed_in_a_notes_section_at_the_bottom_of_the_summary() {
+        let files = PacketSpool::new().unwrap();
+        let mut raw = std::fs::File::create(files.directory.join("telemetry.raw")).unwrap();
+        super::super::tests::write_rwx_calls(&mut raw, 0..1);
+        raw.sync_all().unwrap();
+        let scan = scan_archive(&files.directory, None, false, &AtomicBool::new(false)).unwrap();
+        let mut view = TriageView::default();
+        view.scan = Some(scan);
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let draw = |view: &mut TriageView| {
+            let mut texts = Vec::new();
+            for time in [0.0, 0.01] {
+                let output = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1100.0, 1600.0),
+                        )),
+                        time: Some(time),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            show(view, ui, &TriageInput::empty());
+                        });
+                    },
+                );
+                texts = crate::app::tests::texts(&output);
+            }
+            texts
+        };
+        let bare = draw(&mut view);
+        assert!(
+            !bare.iter().any(|(t, _)| t == "Notes"),
+            "no notes, no section"
+        );
+        let note = "Cloud metadata service is off: it needs a Routed network. Set Network to Routed to turn it on.";
+        view.set_notes(vec![note.to_owned()]);
+        let shown = draw(&mut view);
+        let y = |wanted: &str| {
+            shown
+                .iter()
+                .find(|(t, _)| t == wanted)
+                .unwrap_or_else(|| panic!("{wanted} not shown: {shown:?}"))
+                .1
+                .min
+                .y
+        };
+        assert!(y("Notes") > y("Open suspicious activity"));
+        assert!(y(note) > y("Notes"));
+    }
+
+    #[test]
     #[ignore = "requires owned isolated X11; synthetic Summary / Detection fixture"]
     fn native_summary_and_detection_fixture() {
         use winit::platform::x11::EventLoopBuilderExtX11;
@@ -263,6 +317,11 @@ mod tests {
                 ctx.request_repaint_after(Duration::from_millis(100));
             }
         }
+        let height = std::env::var("ANTINOMIE_PROPERTIES_QA_HEIGHT")
+            .ok()
+            .and_then(|value| value.parse::<f32>().ok())
+            .unwrap_or(880.0)
+            .clamp(420.0, 1600.0);
         let width = std::env::var("ANTINOMIE_PROPERTIES_QA_WIDTH")
             .ok()
             .and_then(|value| value.parse::<f32>().ok())
@@ -281,6 +340,12 @@ mod tests {
         scan.counts.dns = 8;
         let mut view = TriageView::default();
         view.scan = Some(scan);
+        view.set_notes(vec![
+            "Cloud metadata service is off: it needs a Routed network. Set Network to Routed to turn it on."
+                .into(),
+            "Device profile setting not applied: Guest network 192.168.1.0/24 needs a base with DHCP (built by 0.7.0 or later); 10.0.2.0/24 is used instead; this base sets 10.0.2.15 itself"
+                .into(),
+        ]);
         view.section = if detection {
             Section::Detection
         } else {
@@ -296,6 +361,7 @@ mod tests {
             sections: vec![],
             layer: None,
             specimen_source: None,
+            time_limit_seconds: None,
         };
         use antinomie_monitor_core::analysis::detection::{Evidence, Finding, Identity, Report};
         let identity = Identity {
@@ -384,7 +450,7 @@ mod tests {
             "Antinomie triage QA",
             eframe::NativeOptions {
                 viewport: egui::ViewportBuilder::default()
-                    .with_inner_size([width, 880.0])
+                    .with_inner_size([width, height])
                     .with_position([16.0, 16.0]),
                 persist_window: false,
                 event_loop_builder: Some(Box::new(|builder| {

@@ -51,6 +51,7 @@ impl MonitorApp {
         if let Some(panel) = self.focus_panel.take() {
             layout.focus(panel);
         }
+        layout.set_samples_details(self.samples_page.wants_details());
         layout.show(self, ctx);
         self.layout = layout;
         self.dialogs(ctx);
@@ -549,6 +550,7 @@ impl MonitorApp {
                 crate::workspace::DetailsOf::Syscall => self.details(ui),
                 crate::workspace::DetailsOf::Core => self.core_view.details(ui),
                 crate::workspace::DetailsOf::Static => crate::analysis::details(ui),
+                crate::workspace::DetailsOf::Sample => self.sample_run_details(ui),
             },
             Panel::Activity => self.activity(ui),
             Panel::Terminal(id) => {

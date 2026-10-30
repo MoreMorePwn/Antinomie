@@ -814,6 +814,7 @@ fn host_files_are_analyzed_through_the_ordinary_job_queue() {
     let selection = crate::analysis::AnalysisSelection {
         enabled: true,
         checks: crate::analysis::AnalysisKind::TRIAGE.to_vec(),
+        time_limit_minutes: 0,
     };
     // Disabled analysis, a directory and a link are refused.
     let disabled = crate::analysis::AnalysisSelection::default();
@@ -849,6 +850,7 @@ fn checks_are_added_to_a_finished_analysis_without_a_vm_and_only_by_plain_paths(
     let selection = crate::analysis::AnalysisSelection {
         enabled: true,
         checks: vec![AnalysisKind::Metadata],
+        time_limit_minutes: 0,
     };
     let mut report = crate::analysis::jobs::new_report("/tmp/sample", &selection);
     report.state = AnalysisState::Complete;
@@ -864,28 +866,28 @@ fn checks_are_added_to_a_finished_analysis_without_a_vm_and_only_by_plain_paths(
     let checks = [AnalysisKind::Strings];
     assert!(
         worker
-            .analyze_more(&PathBuf::from("data/analysis"), None, &checks)
+            .analyze_more(&PathBuf::from("data/analysis"), None, &checks, None)
             .is_err()
     );
     assert!(
         worker
-            .analyze_more(&folder.join("../analysis"), None, &checks)
+            .analyze_more(&folder.join("../analysis"), None, &checks, None)
             .is_err()
     );
     assert!(
         worker
-            .analyze_more(&folder, None, &[AnalysisKind::Metadata])
+            .analyze_more(&folder, None, &[AnalysisKind::Metadata], None)
             .is_err()
     );
     // A run's analysis is the run's, not a standalone report.
     worker
-        .analyze_more(&folder, Some("run".into()), &checks)
+        .analyze_more(&folder, Some("run".into()), &checks, None)
         .unwrap();
     assert!(worker.snapshot.analysis_reports.is_empty());
     assert!(worker.host_analysis.cancel(&report.id).is_ok());
     worker.host_analysis_tick();
     // A standalone one is listed beside the others, as its own id.
-    worker.analyze_more(&folder, None, &checks).unwrap();
+    worker.analyze_more(&folder, None, &checks, None).unwrap();
     let listed = &worker.snapshot.analysis_reports;
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].id, report.id);

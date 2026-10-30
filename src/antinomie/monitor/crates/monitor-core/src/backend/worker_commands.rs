@@ -789,7 +789,8 @@ impl Worker {
                 directory,
                 run_id,
                 checks,
-            } => self.analyze_more(&directory, run_id, &checks),
+                time_limit_seconds,
+            } => self.analyze_more(&directory, run_id, &checks, time_limit_seconds),
             Command::CancelAnalysis { analysis_id }
                 if self.host_analysis.cancel(&analysis_id).is_ok() =>
             {

@@ -74,8 +74,9 @@ pub(crate) fn function_list<'a>(
 ) -> Option<usize> {
     let name_font = TextStyle::Body.resolve(ui.style());
     let detail_font = TextStyle::Monospace.resolve(ui.style());
-    let height =
-        ui.fonts(|fonts| fonts.row_height(&name_font) + fonts.row_height(&detail_font)) + 10.0;
+    let height = ui.fonts(|fonts| fonts.row_height(&name_font) + fonts.row_height(&detail_font))
+        + NAME_DETAIL_GAP
+        + 10.0;
     let mut clicked = None;
     egui::ScrollArea::vertical()
         .id_salt(("function-list", id))
@@ -103,7 +104,7 @@ pub(crate) fn function_list<'a>(
                     clip.layout_no_wrap(detail_text(&function), detail_font.clone(), palette.muted);
                 let top = rect.top() + 5.0;
                 let left = rect.left() + 10.0;
-                let below = top + name.size().y;
+                let below = top + name.size().y + NAME_DETAIL_GAP;
                 clip.galley(egui::pos2(left, top), name, Color32::PLACEHOLDER);
                 clip.galley(egui::pos2(left, below), detail, Color32::PLACEHOLDER);
                 response.context_menu(|ui| menu(ui, position));
@@ -114,6 +115,9 @@ pub(crate) fn function_list<'a>(
         });
     clicked
 }
+
+/// Room between a function's name and its address line.
+const NAME_DETAIL_GAP: f32 = 4.0;
 
 /// Mnemonic color: calls blue, jumps and returns warn, undecodable bytes error.
 pub(crate) fn mnemonic_color(mnemonic: &str) -> Color32 {

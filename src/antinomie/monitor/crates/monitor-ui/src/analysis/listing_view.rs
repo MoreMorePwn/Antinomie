@@ -258,14 +258,16 @@ pub(super) fn show(
                 "Bytes",
                 Column::initial(mono.size * 9.0).at_least(40.0).clip(true),
             ),
+            // The last column takes what the others leave, so the listing
+            // spans its pane at any width.
             (
                 "Instruction",
-                Column::initial(800.0).at_least(350.0).clip(true),
+                Column::remainder().at_least(350.0).clip(true),
             ),
         ],
         AnalysisKind::Decompilation => &[
             ("Line", Column::exact(mono.size * 4.0)),
-            ("Code", Column::initial(1000.0).at_least(600.0).clip(true)),
+            ("Code", Column::remainder().at_least(400.0).clip(true)),
         ],
         AnalysisKind::Strings => &[
             ("Offset", Column::exact(mono.size * 8.0)),
@@ -731,6 +733,17 @@ fn ordered_head(ui: &mut egui::Ui, title: &str, kind: AnalysisKind) {
     });
 }
 
+/// Room between the parts of a function's header row.
+const FUNCTION_PART_GAP: f32 = 24.0;
+
+fn code_format(font: &FontId, color: Color32) -> egui::text::TextFormat {
+    egui::text::TextFormat {
+        font_id: font.clone(),
+        color,
+        ..Default::default()
+    }
+}
+
 fn mono_text(text: impl Into<String>, font: &FontId, color: Color32) -> RichText {
     RichText::new(text).font(font.clone()).color(color)
 }
@@ -773,15 +786,28 @@ fn cells(
                 ui.label(mono_text(first, mono, theme::blue()).strong());
             });
             let count = lines.get(&function_identity(*address, name)).copied();
-            let title = format!(
-                "{name}  ·  0x{address:x}, {}",
-                crate::code_listing::lines_text(count)
-            );
             if kind == AnalysisKind::Disassembly {
                 row.col(|_| {});
             }
             row.col(|ui| {
-                ui.add(egui::Label::new(mono_text(title, mono, theme::blue()).strong()).truncate());
+                // Name, address and size are separate parts with room between
+                // them (the address is also in the first column of a
+                // disassembly, so only the decompilation repeats it here).
+                let mut job = egui::text::LayoutJob::default();
+                job.append(name, 0.0, code_format(&theme::bold_font(ui), theme::blue()));
+                if kind == AnalysisKind::Decompilation {
+                    job.append(
+                        &format!("0x{address:x}"),
+                        FUNCTION_PART_GAP,
+                        code_format(mono, theme::muted()),
+                    );
+                }
+                job.append(
+                    &crate::code_listing::lines_text(count),
+                    FUNCTION_PART_GAP,
+                    code_format(mono, theme::muted()),
+                );
+                ui.add(egui::Label::new(job).truncate());
             });
         }
         (

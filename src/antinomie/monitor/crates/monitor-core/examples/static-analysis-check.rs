@@ -149,6 +149,7 @@ fn selection(enabled: bool) -> AnalysisSelection {
             AnalysisKind::Hardening,
             AnalysisKind::Disassembly,
         ],
+        time_limit_minutes: 0,
     }
 }
 
@@ -273,6 +274,7 @@ fn exercise(
                 AnalysisKind::Strings,
                 AnalysisKind::Entropy,
             ],
+            time_limit_minutes: 0,
         },
     })?;
     test.wait(60, |test| {

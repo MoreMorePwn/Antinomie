@@ -22,6 +22,9 @@ pub(crate) struct RouteText {
     pub detail: String,
     /// The route is one that can let traffic leave this computer.
     pub leaves: bool,
+    /// A fact about the run's network that is no warning, for the Notes of
+    /// Triage: the run used the VM's own network and no route.
+    pub note: Option<String>,
 }
 
 impl Default for RouteText {
@@ -37,12 +40,14 @@ pub(crate) fn describe(route: Option<&RouteRecord>, stats: Option<RouteStats>) -
             headline: NOT_RECORDED.into(),
             detail: "This run was saved before network routes were recorded.".into(),
             leaves: false,
+            note: None,
         };
     };
     let mut detail = match route.via {
         RouteVia::Gateway => route.kind.explain().to_owned(),
         RouteVia::VmNat => "The VM's NAT (QEMU user networking) was in use: the sample could \
-                            reach the host's network and the Internet."
+                            reach the host's network and the Internet. A route is chosen per run \
+                            only on a Routed VM."
             .to_owned(),
         RouteVia::VmIsolated => {
             "The VM's isolated network was in use: nothing left the VM.".to_owned()
@@ -64,6 +69,11 @@ pub(crate) fn describe(route: Option<&RouteRecord>, stats: Option<RouteStats>) -
     }
     RouteText {
         headline: route.label.clone(),
+        note: (route.via == RouteVia::VmNat).then(|| {
+            "This run used the VM's NAT, so no route was chosen. To choose a route per run, \
+             set the VM's network to Routed and restart the VM to apply the new network."
+                .to_owned()
+        }),
         detail,
         leaves: matches!(
             route.kind,
@@ -140,8 +150,8 @@ pub(crate) fn selector(ui: &mut egui::Ui, request: &mut ExecRequest, choice: &Ro
         })
         .response
         .on_hover_text(
-            "This VM's network is fixed. Set its network to Routed to choose Tor, a VPN, \
-             InetSim or none for each run.",
+            "This VM's network is fixed while it runs. Stop it, set its network to Routed and \
+             start it again to choose Tor, a VPN, InetSim or none for each run.",
         );
         return;
     }
@@ -172,9 +182,15 @@ pub(crate) fn selector(ui: &mut egui::Ui, request: &mut ExecRequest, choice: &Ro
         );
     }
     if selected == RouteKind::Internet {
-        crate::activity::warning(
-            ui,
-            "Internet: the sample can reach the real Internet from this computer.",
+        // A choice the user made, not a fault: a plain note, like "Downloads are off".
+        ui.add(
+            egui::Label::new(
+                RichText::new(
+                    "Internet: the sample can reach the real Internet from this computer.",
+                )
+                .color(theme::muted()),
+            )
+            .wrap(),
         );
     }
 }
@@ -263,6 +279,35 @@ mod tests {
         routed.route = Some(RouteKind::Drop);
         draw(&mut routed, RouteChoice::new(VmNetwork::Routed, &config));
         assert_eq!(routed.route, Some(RouteKind::Drop));
+    }
+
+    #[test]
+    fn the_internet_route_is_a_plain_note_not_a_warning() {
+        let ctx = egui::Context::default();
+        let mut request = ExecRequest {
+            route: Some(RouteKind::Internet),
+            ..ExecRequest::default()
+        };
+        let choice = RouteChoice::new(VmNetwork::Routed, &RouteConfig::default());
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| selector(ui, &mut request, &choice));
+        });
+        let shown = crate::app::tests::texts(&output);
+        assert!(shown
+            .iter()
+            .any(|(text, _)| text.starts_with("Internet: the sample can reach")));
+        let mut log = crate::activity::Journal::default();
+        log.ingest(&ctx);
+        assert_eq!(log.counts(), (0, 0), "{:?}", log.messages());
+    }
+
+    #[test]
+    fn a_run_on_the_vms_nat_notes_that_no_route_was_chosen_and_how_to_get_one() {
+        let nat = RouteRecord::for_network(VmNetwork::Nat);
+        let note = describe(Some(&nat), None).note.unwrap();
+        assert!(note.contains("restart the VM"), "{note}");
+        let tor = record(RouteKind::Tor, RouteVia::Gateway, "Tor");
+        assert_eq!(describe(Some(&tor), None).note, None);
     }
 
     #[test]

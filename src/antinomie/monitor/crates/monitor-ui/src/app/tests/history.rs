@@ -700,7 +700,7 @@ fn all_live_windows_keep_independent_run_identity_when_one_closes() {
 }
 
 #[test]
-fn the_run_list_keeps_the_analysis_mark_without_copying_report_rows() {
+fn the_run_list_keeps_the_analysis_report_without_copying_its_rows() {
     let mut analyzed = run("analyzed");
     analyzed.state = RunState::Finalized;
     analyzed.request.path = "/bin/analyzed".into();
@@ -729,8 +729,10 @@ fn the_run_list_keeps_the_analysis_mark_without_copying_report_rows() {
         .into_iter()
         .map(|(text, _)| text)
         .collect();
+    // The executable is followed by the run's short id, never by a mark.
+    assert!(shown.iter().any(|text| text == "[analyzed]"), "{shown:?}");
     assert!(
-        shown.iter().any(|text| text.ends_with("[static analysis]")),
+        shown.iter().all(|text| !text.contains("[static analysis]")),
         "{shown:?}"
     );
     assert_eq!(

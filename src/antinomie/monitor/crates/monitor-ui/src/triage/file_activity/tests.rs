@@ -2,7 +2,7 @@
 //! The File activity graph and window: how a file's calls become nodes on
 //! lanes, the list's filters, and the tab through a real egui pass.
 use super::graph::{self, NODES_MAX};
-use super::window::{content_text, run_text, Order, Window};
+use super::window::{content_text, run_text, written_text, Order, Window};
 use super::*;
 use eframe::egui::{self, Pos2, Rect};
 
@@ -590,4 +590,25 @@ fn a_narrow_pane_stacks_the_file_list_above_the_history() {
         .expect("the calls")
         .1;
     assert!(history.top() > list.bottom(), "{history:?} under {list:?}");
+}
+
+#[test]
+fn written_content_names_why_bytes_have_no_place_and_the_caps_only_when_hit() {
+    let mut run = Activity::default();
+    assert_eq!(written_text(&run), None);
+    run.written.offset_unknown = 933;
+    let text = written_text(&run).unwrap();
+    assert!(text.contains("0 bytes kept"), "{text}");
+    assert!(
+        text.contains("933 bytes written where the recording could not place them"),
+        "{text}"
+    );
+    assert!(text.contains("descriptors opened before the run"), "{text}");
+    assert!(text.contains("kernel revision 18"), "{text}");
+    assert!(!text.contains("cap"), "no cap was reached: {text}");
+    run.written.run_cap = 4096;
+    let text = written_text(&run).unwrap();
+    assert!(text.contains("The write cap was reached"), "{text}");
+    assert!(text.contains("per run"), "{text}");
+    assert!(!text.contains("per file)"), "{text}");
 }

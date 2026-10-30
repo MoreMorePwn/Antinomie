@@ -112,6 +112,7 @@ mod tests {
                 }),
             })
             .collect(),
+            limits: Vec::new(),
         };
         assert_eq!(regions(&section, Some(100)), [(1, 0, 10, 8000)]);
         assert!(regions(&section, None).is_empty());

@@ -497,7 +497,10 @@ fn a_stopped_vm_asks_for_a_measurement_once_and_shows_the_card() {
         "{texts:?}"
     );
     assert!(has(&texts, "source snapshots/ab12.qcow2"));
-    assert!(has(&texts, "41.0 GiB free in /home/user/rec/disks"));
+    assert!(
+        !texts.iter().any(|text| text.contains("free in")),
+        "{texts:?}"
+    );
     assert!(has(&texts, "not opened · ≈ 1.9 GiB"));
     assert_eq!(
         scene.click(&mut view, &ctx, "Open"),
@@ -628,6 +631,58 @@ fn an_open_view_shows_its_header_and_tree_rows() {
         scene.click(&mut view, &ctx, "Close"),
         Some(DiskAction::Close)
     );
+}
+
+#[test]
+fn size_mode_and_ids_are_fixed_width_fields_so_the_rows_line_up() {
+    let ctx = context();
+    let mut scene = Scene::stopped();
+    let mut entries = root_entries();
+    let mut owned = entry("build", DiskEntryKind::Dir, 0, 0o777);
+    owned.uid = 1000;
+    owned.gid = 100;
+    entries.push(owned);
+    let mut view = opened(&mut scene, entries.clone());
+    load_root(&mut view, entries);
+    let texts = scene.settle(&mut view, &ctx);
+    // The ids are padded to the widest uid: the colons line up. (The test
+    // text drops the padding at either end of a label.)
+    assert!(has(&texts, "64 B  -rwxr-xr-x     0:0"), "{texts:?}");
+    assert!(has(&texts, "drwxrwxrwx  1000:100"), "{texts:?}");
+}
+
+#[test]
+fn the_extraction_message_bolds_the_name_and_can_be_closed() {
+    let ctx = context();
+    let mut scene = Scene::stopped();
+    let mut view = opened(&mut scene, root_entries());
+    load_root(&mut view, root_entries());
+    view.select("/busybox".into());
+    answer_info(
+        &mut view,
+        "/busybox",
+        entry("busybox", DiskEntryKind::File, 64, 0o755),
+        true,
+    );
+    let (host, receipt) = extracted_file(b"bytes");
+    view.extraction_done(
+        "/busybox".into(),
+        Intent::Analyze,
+        Ok(receipt),
+        Some(Ok(host.clone())),
+    );
+    assert_eq!(view.status_name.as_deref(), Some("/busybox"));
+    let (texts, _) = scene.details(&mut view, &ctx);
+    assert!(
+        texts
+            .iter()
+            .any(|text| text.starts_with("Extracted /busybox")),
+        "{texts:?}"
+    );
+    // The close button clears the message.
+    scene.click_details(&mut view, &ctx, egui_phosphor::regular::X);
+    assert!(view.status.is_none() && view.status_name.is_none());
+    let _ = std::fs::remove_dir_all(host.parent().unwrap());
 }
 
 #[test]
@@ -2175,3 +2230,185 @@ fn importing_an_image_selects_it_and_a_bad_file_is_refused_in_the_dialog() {
 }
 
 mod phase3;
+
+/// Native fixture for the Disks tab, for screenshots. Needs an X11 display;
+/// exits by itself. Made-up listing and files, nothing is read from a disk.
+///
+/// ANTINOMIE_QA_SCENE = list | viewer | measure, ANTINOMIE_QA_THEME = dark | light |
+/// blue, ANTINOMIE_QA_SIZE = 1500x1050, ANTINOMIE_QA_SECONDS = 25.
+#[test]
+#[ignore = "requires X11 native rendering; exits after the given seconds"]
+fn native_disks_fixture() {
+    use winit::platform::x11::EventLoopBuilderExtX11;
+    struct QaApp {
+        scene: Scene,
+        view: DiskView,
+        data: crate::data_view::DataWindows,
+        deadline: Instant,
+    }
+    impl eframe::App for QaApp {
+        fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+            if Instant::now() >= self.deadline {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            let mut action = None;
+            egui::SidePanel::right("qa_details")
+                .default_width(420.0)
+                .show(ctx, |ui| action = self.view.details(ui));
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let scene = &mut self.scene;
+                let next = self.view.show(
+                    ui,
+                    DiskContext {
+                        vm: scene.vm.as_ref(),
+                        recordings: None,
+                        recording_roots: &[],
+                        qemu_img: Path::new("qemu-img"),
+                        vm_off: true,
+                        can_stop_vm: false,
+                        current_disk: scene.view.as_ref(),
+                        measure: scene.measure.as_ref(),
+                        job: None,
+                        reference: None,
+                        checkpoints: &[],
+                        triage_paths: &scene.triage_paths,
+                        other_job: false,
+                        font_size: 16.0,
+                        settings: &mut scene.settings,
+                    },
+                );
+                action = action.take().or(next);
+            });
+            if let Some(DiskAction::ViewBytes { key, title, bytes }) = action {
+                self.data.open_bytes(ctx, key, title, bytes);
+            }
+            self.data.show(ctx);
+            ctx.request_repaint_after(Duration::from_millis(200));
+        }
+    }
+    let var = |name: &str| std::env::var(name).unwrap_or_default();
+    let theme_choice = match var("ANTINOMIE_QA_THEME").as_str() {
+        "light" => theme::Theme::Light,
+        "blue" => theme::Theme::Blue,
+        _ => theme::Theme::Dark,
+    };
+    let (width, height) = var("ANTINOMIE_QA_SIZE")
+        .split_once('x')
+        .and_then(|(w, h)| Some((w.parse::<f32>().ok()?, h.parse::<f32>().ok()?)))
+        .unwrap_or((1500.0, 1050.0));
+    let seconds = var("ANTINOMIE_QA_SECONDS").parse::<u64>().unwrap_or(25);
+    let scene_name = var("ANTINOMIE_QA_SCENE");
+    eframe::run_native(
+        "Antinomie Disks QA",
+        eframe::NativeOptions {
+            viewport: egui::ViewportBuilder::default().with_inner_size([width, height]),
+            persist_window: false,
+            event_loop_builder: Some(Box::new(|builder| {
+                builder.with_x11();
+                builder.with_any_thread(true);
+            })),
+            ..Default::default()
+        },
+        Box::new(move |cc| {
+            theme::install(&cc.egui_ctx);
+            theme::apply_theme(&cc.egui_ctx, theme_choice);
+            let mut scene = Scene::stopped();
+            let mut view;
+            if scene_name == "measure" {
+                scene.measure = Some(measure());
+                view = DiskView {
+                    measured_for: Some(("vm".into(), true, Pick::default())),
+                    ..DiskView::default()
+                };
+            } else {
+                let mut owned = entry("build-cache", DiskEntryKind::Dir, 0, 0o777);
+                owned.uid = 1000;
+                owned.gid = 1000;
+                let mut service = entry("run.pid", DiskEntryKind::File, 6, 0o644);
+                service.uid = 65534;
+                service.gid = 4294967294;
+                let mut long = entry(
+                    "an-unusually-long-file-name-that-does-not-fit-in-the-name-column-at-all.tar.gz",
+                    DiskEntryKind::File,
+                    3 * 1024 * 1024 * 1024,
+                    0o640,
+                );
+                long.uid = 1000;
+                long.gid = 100;
+                let mut entries = root_entries();
+                entries.extend([owned, service, long]);
+                view = opened(&mut scene, entries.clone());
+                load_root(&mut view, entries);
+                view.tree.listings.insert(
+                    "/etc".into(),
+                    Listing {
+                        offset: 0,
+                        result: Some(Ok(listing(
+                            "/etc",
+                            vec![
+                                entry("passwd", DiskEntryKind::File, 74, 0o644),
+                                entry("shadow", DiskEntryKind::File, 1_100, 0o640),
+                                entry("ssh", DiskEntryKind::Dir, 0, 0o755),
+                            ],
+                            false,
+                        ))),
+                        requested: true,
+                    },
+                );
+                view.tree.expanded.insert("/etc".into());
+                view.tree.dirty = true;
+                view.select("/etc/passwd".into());
+                let dir = std::env::temp_dir().join(format!("ant-disk-shot-{}", std::process::id()));
+                std::fs::create_dir_all(&dir).unwrap();
+                for (guest, content) in [
+                    (
+                        "/etc/passwd",
+                        "root:x:0:0:root:/root:/bin/bash\ndaemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\nuser:x:1000:1000::/home/user:/bin/bash\n",
+                    ),
+                    (
+                        "/var/lib/some-service/releases/current/an-unusually-long-file-name.conf",
+                        "listen = 8080\n",
+                    ),
+                ] {
+                    let host = dir.join(format!("1-{}", guest.rsplit('/').next().unwrap()));
+                    std::fs::write(&host, content).unwrap();
+                    view.extraction_done(
+                        guest.into(),
+                        Intent::View,
+                        Ok(ExtractReceipt {
+                            path: guest.into(),
+                            size: content.len() as u64,
+                            sha256: "ab".repeat(32),
+                        }),
+                        Some(Ok(host)),
+                    );
+                }
+                // The second extraction's message is the one on show; the
+                // viewer opens on the first.
+                view.extraction_done(
+                    "/etc/passwd".into(),
+                    Intent::View,
+                    Ok(ExtractReceipt {
+                        path: "/etc/passwd".into(),
+                        size: 74,
+                        sha256: "ab".repeat(32),
+                    }),
+                    Some(Ok(dir.join("1-passwd"))),
+                );
+            }
+            let mut data = crate::data_view::DataWindows::default();
+            if let Some(DiskAction::ViewBytes { key, title, bytes }) = view.action.take() {
+                if scene_name == "viewer" {
+                    data.open_bytes(&cc.egui_ctx, key, title, bytes);
+                }
+            }
+            Ok(Box::new(QaApp {
+                scene,
+                view,
+                data,
+                deadline: Instant::now() + Duration::from_secs(seconds),
+            }))
+        }),
+    )
+    .unwrap();
+}

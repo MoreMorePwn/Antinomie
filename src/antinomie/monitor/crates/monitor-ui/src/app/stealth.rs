@@ -607,7 +607,7 @@ fn network(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
         });
     ui.colored_label(
         theme::muted(),
-        "A network card exists only when the VM's network is Isolated, NAT or Routed.",
+        "A network card exists only when the VM's network is Isolated, NAT or Routed. The guest network applies to NAT and Routed.",
     );
     egui::Grid::new("vm_stealth_nat")
         .num_columns(2)
@@ -623,7 +623,7 @@ fn network(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
                 .on_hover_text("A board's own card carries its maker's PCI subsystem IDs");
                 ui.end_row();
             }
-            ui.label("NAT network");
+            ui.label("Guest network");
             ui.horizontal(|ui| {
                 ui.add(
                     egui::TextEdit::singleline(&mut profile.nat.network)

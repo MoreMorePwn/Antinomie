@@ -306,6 +306,9 @@ impl MonitorApp {
                 .max_height((ui.available_height() - footer).max(80.0))
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
+                    // The time limit is one value, here and in Settings.
+                    self.exec.analysis.time_limit_minutes =
+                        self.settings.analysis_time_limit_minutes;
                     let outcome = crate::analysis::launch_fields(
                         ui,
                         &mut self.exec,
@@ -333,6 +336,8 @@ impl MonitorApp {
                             },
                         },
                     );
+                    self.settings.analysis_time_limit_minutes =
+                        self.exec.analysis.time_limit_minutes;
                     if outcome.install {
                         self.open_library(crate::workspace::LibraryPage::Tools);
                     }
@@ -447,6 +452,8 @@ impl MonitorApp {
             } else {
                 match crate::analysis::snapshot(&self.exec, &self.args, &self.env, graphical) {
                     Ok(mut request) => {
+                        request.analysis.time_limit_minutes =
+                            self.settings.analysis_time_limit_minutes;
                         request.host_copy = self.uploaded_host_file(&request.path);
                         self.send(Command::Execute(request))
                     }
@@ -462,7 +469,10 @@ impl MonitorApp {
                 path: self.exec.path.clone(),
                 uid: self.exec.uid,
                 gid: self.exec.gid,
-                analysis: self.exec.analysis.clone(),
+                analysis: antinomie_monitor_core::AnalysisSelection {
+                    time_limit_minutes: self.settings.analysis_time_limit_minutes,
+                    ..self.exec.analysis.clone()
+                },
             });
             self.focus_panel = Some(Panel::StaticAnalysis);
         }
@@ -745,6 +755,9 @@ impl MonitorApp {
                                     theme::warn(),
                                     "NAT: the guest can reach the host network and Internet.",
                                 );
+                            }
+                            if let Some(note) = running_network_note(&app.snapshot, &app.draft) {
+                                ui.colored_label(note.1, note.0);
                             }
                         };
                         if wide {
@@ -1061,5 +1074,60 @@ pub(super) fn vm_state_word(state: &VmState) -> (&'static str, egui::Color32) {
         VmState::Stopping => ("Stopping", theme::warn()),
         VmState::Failed => ("Failed", theme::error()),
         VmState::Stopped => ("Stopped", theme::muted()),
+    }
+}
+
+/// What the Network row says about a running VM, which keeps the network it
+/// started with: a changed choice needs a restart, an unchanged one says how
+/// to change it. Nothing for a VM that is not running.
+fn running_network_note(
+    snapshot: &Snapshot,
+    draft: &VmConfig,
+) -> Option<(&'static str, egui::Color32)> {
+    if snapshot.active_vm.as_ref() != Some(&draft.id) {
+        return None;
+    }
+    let running = snapshot.vms.iter().find(|vm| vm.id == draft.id)?.network();
+    Some(if running == draft.network() {
+        (
+            "The VM is running: stop it to change its network.",
+            theme::muted(),
+        )
+    } else {
+        ("Restart the VM to apply the new network.", theme::warn())
+    })
+}
+
+#[cfg(test)]
+mod running_network_tests {
+    use super::*;
+
+    #[test]
+    fn a_running_vm_says_restart_for_a_changed_network_and_a_stopped_one_says_nothing() {
+        let mut snapshot = Snapshot::default();
+        let vm = VmConfig {
+            id: "vm-1".into(),
+            ..VmConfig::default()
+        };
+        snapshot.vms.push(vm.clone());
+        let mut draft = vm.clone();
+        assert!(
+            running_network_note(&snapshot, &draft).is_none(),
+            "not running"
+        );
+        snapshot.active_vm = Some("vm-1".into());
+        let same = running_network_note(&snapshot, &draft).unwrap();
+        assert!(
+            same.0.contains("stop it to change its network"),
+            "{}",
+            same.0
+        );
+        draft.routed = true;
+        draft.nat = false;
+        draft.isolated_network = false;
+        assert_eq!(
+            running_network_note(&snapshot, &draft).unwrap().0,
+            "Restart the VM to apply the new network."
+        );
     }
 }

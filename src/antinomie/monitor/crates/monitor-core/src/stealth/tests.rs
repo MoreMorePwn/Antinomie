@@ -1008,7 +1008,10 @@ fn every_setting_fitted_can_change_is_listed_with_a_line_for_the_setting() {
         "SATA (AHCI) not supported by this base: virtio will be used"
     );
     assert!(line(FallbackSetting::Firmware).ends_with("BIOS will be used"));
-    assert!(line(FallbackSetting::Nat).contains("10.0.2.0/24 will be used"));
+    assert_eq!(
+        line(FallbackSetting::Nat),
+        "Guest network 192.168.1.0/24 needs a base with DHCP (built by 0.7.0 or later); 10.0.2.0/24 is used instead."
+    );
     assert!(line(FallbackSetting::Smt).contains("this host"));
     assert!(line(FallbackSetting::Pointer).contains("virtio tablet will be used"));
     // The same entries `fitted` changes, and its notes are these.

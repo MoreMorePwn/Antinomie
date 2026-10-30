@@ -132,6 +132,10 @@ pub struct JournalSummary {
     pub events: u64,
     pub omitted: u64,
     pub complete: bool,
+    /// Why the index is not complete, in plain words; empty when it is, and
+    /// for an index saved before reasons were kept.
+    #[serde(default)]
+    pub reasons: Vec<String>,
 }
 
 /// A bounded derived event index, independent of table filters and pagination.
@@ -213,9 +217,34 @@ impl EventJournal {
         Ok(())
     }
     /// Publish only a complete index operation; `complete` describes source coverage.
-    pub fn finish(mut self, complete: bool) -> Result<JournalSummary, String> {
+    pub fn finish(self, complete: bool) -> Result<JournalSummary, String> {
+        self.finish_because(complete, &[])
+    }
+    /// [`finish`](Self::finish) with the reasons the source is incomplete,
+    /// kept in the index so a scan can say why it saw only part of the run.
+    pub fn finish_because(
+        mut self,
+        complete: bool,
+        reasons: &[String],
+    ) -> Result<JournalSummary, String> {
         let complete = complete && self.omitted == 0;
-        self.line(&serde_json::json!({"kind":"end", "complete":complete, "events":self.count, "omitted":self.omitted}))?;
+        let mut reasons = if complete {
+            Vec::new()
+        } else {
+            reasons.to_vec()
+        };
+        if self.omitted > 0 {
+            reasons.push(format!(
+                "{} events were left out of the index (too large, or past its size limit)",
+                self.omitted
+            ));
+        }
+        reasons.truncate(16);
+        let mut end = serde_json::json!({"kind":"end", "complete":complete, "events":self.count, "omitted":self.omitted});
+        if !reasons.is_empty() {
+            end["reasons"] = serde_json::json!(reasons);
+        }
+        self.line(&end)?;
         self.file.sync_all().map_err(|error| error.to_string())?;
         fs::rename(&self.temporary, &self.destination).map_err(|error| error.to_string())?;
         File::open(
@@ -230,6 +259,7 @@ impl EventJournal {
             events: self.count,
             omitted: self.omitted,
             complete,
+            reasons,
         })
     }
 }
@@ -705,12 +735,22 @@ mod tests {
                 inferred: Vec::new(),
             })
             .unwrap();
-        let result = journal.finish(true).unwrap();
+        let result = journal
+            .finish_because(false, &["the run was still recording".into()])
+            .unwrap();
         assert_eq!(
             (result.events, result.omitted, result.complete),
             (1, 1, false)
         );
+        assert_eq!(result.reasons.len(), 2, "{:?}", result.reasons);
+        assert_eq!(result.reasons[0], "the run was still recording");
+        assert!(result.reasons[1].contains("1 events were left out"));
         let content = fs::read(directory.join(JOURNAL_FILE)).unwrap();
+        let end = String::from_utf8_lossy(&content);
+        assert!(
+            end.contains(r#""reasons":["the run was still recording""#),
+            "{end}"
+        );
         assert_eq!(result.sha256, crate::storage::sha256_hex(&content));
         assert!(
             String::from_utf8(content)

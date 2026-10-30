@@ -61,6 +61,92 @@ pub(super) fn copyable(ui: &mut egui::Ui, label: &str, value: &str) {
     ui.end_row();
 }
 
+/// What a page that scrolls keeps free at its right edge for the scroll bar.
+pub(super) const SCROLL_GUTTER: f32 = 14.0;
+
+/// The space between the rows of a key/value grid in a panel.
+pub(super) const ROW_GAP: f32 = 8.0;
+
+/// The panel a Summary block sits in: one fill, one border, one inner margin,
+/// so no table or grid in it reaches the border.
+pub(super) fn panel_frame() -> egui::Frame {
+    egui::Frame::new()
+        .fill(theme::palette().panel)
+        .stroke(egui::Stroke::new(1.0_f32, theme::palette().line_soft))
+        .corner_radius(6)
+        .inner_margin(14)
+}
+
+/// The width a grid's value column may take in `ui`: what is left after the
+/// widest of `labels`, the gap between the columns and `extra` (a button
+/// beside the value). Values wrap at it instead of widening the grid.
+pub(super) fn value_width(ui: &egui::Ui, labels: &[&str], extra: f32) -> f32 {
+    let body = egui::TextStyle::Body.resolve(ui.style());
+    let widest = labels
+        .iter()
+        .map(|label| {
+            ui.painter()
+                .layout_no_wrap((*label).to_owned(), body.clone(), theme::text())
+                .size()
+                .x
+        })
+        .fold(0.0_f32, f32::max);
+    (ui.available_width() - widest - 12.0 - extra).max(80.0)
+}
+
+/// `copyable` for a grid whose value column is `max_width` wide at most: the
+/// value wraps inside it and the copy button stays beside it.
+pub(super) fn copyable_in(ui: &mut egui::Ui, label: &str, value: &str, max_width: f32) {
+    ui.label(RichText::new(label).color(theme::muted()));
+    if value.is_empty() {
+        ui.label(theme::hint_text("Not computed"));
+        ui.end_row();
+        return;
+    }
+    ui.horizontal(|ui| {
+        ui.scope(|ui| {
+            ui.set_max_width(max_width);
+            ui.add(
+                egui::Label::new(RichText::new(value).monospace().small())
+                    .wrap()
+                    .selectable(true),
+            );
+        });
+        if ui
+            .small_button(egui_phosphor::regular::COPY)
+            .on_hover_text(format!("Copy {label}"))
+            .clicked()
+        {
+            ui.ctx().copy_text(value.to_owned());
+        }
+    });
+    ui.end_row();
+}
+
+/// A key/value grid row whose value wraps within `max_width`.
+pub(super) fn row_in(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: impl Into<egui::WidgetText>,
+    max_width: f32,
+) {
+    ui.label(RichText::new(label).color(theme::muted()));
+    ui.scope(|ui| {
+        ui.set_max_width(max_width);
+        ui.add(egui::Label::new(value).wrap().selectable(true));
+    });
+    ui.end_row();
+}
+
+/// The spot in a right-click menu where the notes feature adds its
+/// "Add note…" item (artifact rows, lineage nodes). Nothing is drawn yet.
+pub(super) fn add_note_menu_item(_ui: &mut egui::Ui) {}
+
+/// The accent link beside a label on one line (no gap above it).
+pub(super) fn more_inline(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    widgets::link(ui, text)
+}
+
 /// A key/value grid row with a plain value.
 pub(super) fn row(ui: &mut egui::Ui, label: &str, value: impl Into<egui::WidgetText>) {
     ui.label(RichText::new(label).color(theme::muted()));
@@ -87,15 +173,6 @@ pub(super) fn second(ms: u64) -> String {
                 .to_string()
         })
         .unwrap_or_else(|| "Unavailable".into())
-}
-
-/// The tone a root-exit label takes in a run row.
-pub(super) fn exit_tone(exit: &str) -> Tone {
-    match exit {
-        "Exit 0" => Tone::Good,
-        "Running" => Tone::Live,
-        _ => Tone::Warn,
-    }
 }
 
 /// A table of fixed height inside a scrolling page: the body never scrolls

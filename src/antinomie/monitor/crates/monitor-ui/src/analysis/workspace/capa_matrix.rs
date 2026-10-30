@@ -299,7 +299,7 @@ mod tests {
                 capability("create process on Linux", &["Execution::Command and Scripting Interpreter::Unix Shell [T1059.004]"], &[]),
                 capability("check for debugger", &["Defense Evasion::Debugger Evasion [T1622]"], &[]),
                 capability("xor again", &["Defense Evasion::Obfuscated Files or Information [T1027]"], &[]),
-            ],
+            ], limits: Vec::new(),
         };
         let columns = matrix(&section, false);
         let tactics: Vec<_> = columns.iter().map(|(tactic, _)| tactic.as_str()).collect();

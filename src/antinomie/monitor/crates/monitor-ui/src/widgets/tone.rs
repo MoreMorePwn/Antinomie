@@ -72,6 +72,44 @@ pub fn chip(ui: &mut egui::Ui, text: impl Into<String>, tone: Tone) -> egui::Res
         .response
 }
 
+/// [`chip`] with its text centred in a pill `width` wide (see [`chip_width`]),
+/// so a column of chips lines up.
+pub fn chip_wide(
+    ui: &mut egui::Ui,
+    text: impl Into<String>,
+    tone: Tone,
+    width: f32,
+) -> egui::Response {
+    egui::Frame::new()
+        .fill(tone.bg())
+        .corner_radius(10)
+        .inner_margin(egui::Margin::symmetric(8, 1))
+        .show(ui, |ui| {
+            ui.set_width((width - 16.0).max(0.0));
+            ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                ui.label(RichText::new(text).small().color(tone.fg()));
+            });
+        })
+        .response
+}
+
+/// The width of a [`chip_wide`] that fits the longest of `words`.
+pub fn chip_width(ui: &egui::Ui, words: &[&str]) -> f32 {
+    let font = egui::TextStyle::Small.resolve(ui.style());
+    let widest = words
+        .iter()
+        .map(|word| {
+            ui.fonts(|fonts| {
+                fonts
+                    .layout_no_wrap((*word).to_owned(), font.clone(), Color32::PLACEHOLDER)
+                    .size()
+                    .x
+            })
+        })
+        .fold(0.0, f32::max);
+    widest + 16.0
+}
+
 /// A filter-bar toggle: a pill that is on (check mark) or off (dimmed, struck
 /// through), with an optional muted count. Returns the click; the caller flips
 /// the flag.

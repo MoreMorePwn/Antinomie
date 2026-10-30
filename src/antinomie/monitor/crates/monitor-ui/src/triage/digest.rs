@@ -92,6 +92,22 @@ fn indicators(ioc: &ioc_scan::IocScan) -> Vec<IndicatorEntry> {
         .collect()
 }
 
+/// The family a YARA rule names in its `meta` (`family`, `malware_family` or
+/// `malware`); empty for the other engines and for a rule that names none.
+fn yara_family(engine: antinomie_monitor_core::analysis::detection::Engine, rule: &str) -> String {
+    if engine != antinomie_monitor_core::analysis::detection::Engine::Yara {
+        return String::new();
+    }
+    rule.lines()
+        .filter_map(|line| {
+            let (key, value) = line.split_once('=')?;
+            matches!(key.trim(), "family" | "malware_family" | "malware")
+                .then(|| value.trim().trim_matches('"').trim().to_owned())
+        })
+        .find(|family| !family.is_empty())
+        .unwrap_or_default()
+}
+
 /// The matches of the engines whose reports are complete.
 fn detections(
     results: &[Option<Result<antinomie_monitor_core::analysis::detection::Report, String>>; 3],
@@ -112,6 +128,7 @@ fn detections(
                 severity: finding.severity.clone(),
                 mitre: finding.mitre.clone(),
                 count: finding.count,
+                family: yara_family(report.engine, &finding.rule_text),
             });
         }
     }
@@ -230,5 +247,14 @@ mod tests {
         assert_eq!(digest.evasion[0].category, "Virtual machine");
         assert_eq!(digest.evasion[0].object, "/sys/class/dmi/id/product_name");
         assert_eq!(behaviour(&[]).highest, "");
+    }
+
+    #[test]
+    fn a_yara_rule_names_its_family_in_its_meta() {
+        use antinomie_monitor_core::analysis::detection::Engine;
+        let rule = "rule miner {\n  meta:\n    description = \"x\"\n    family = \"XMRig\"\n  strings:\n    $a = \"x\"\n  condition: $a\n}";
+        assert_eq!(yara_family(Engine::Yara, rule), "XMRig");
+        assert_eq!(yara_family(Engine::Ids, rule), "");
+        assert_eq!(yara_family(Engine::Yara, "rule a { condition: true }"), "");
     }
 }

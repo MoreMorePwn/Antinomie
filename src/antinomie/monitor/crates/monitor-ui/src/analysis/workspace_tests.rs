@@ -16,6 +16,7 @@ fn fixture() -> AnalysisReport {
         sections: Vec::new(),
         layer: None,
         specimen_source: None,
+        time_limit_seconds: None,
     };
     let mut structures = vec![AnalysisEntry {
         label: "Format".into(),
@@ -77,6 +78,7 @@ fn fixture() -> AnalysisReport {
         tools: Vec::new(),
         listing: None,
         entries: structures,
+        limits: Vec::new(),
     });
     report.sections.push(AnalysisSection {
         kind: AnalysisKind::Strings,
@@ -108,6 +110,7 @@ fn fixture() -> AnalysisReport {
                 }),
             })
             .collect(),
+        limits: Vec::new(),
     });
     report.sections.push(AnalysisSection {
         kind: AnalysisKind::Rules,
@@ -116,6 +119,7 @@ fn fixture() -> AnalysisReport {
         tools: Vec::new(),
         listing: None,
         entries: Vec::new(),
+        limits: Vec::new(),
     });
     report
 }
@@ -674,6 +678,7 @@ fn disassembly_functions_panel_has_no_module_note_and_rows_have_no_pane() {
                 },
             ),
         ],
+        limits: Vec::new(),
     });
     let report = with_listing(report, AnalysisKind::Disassembly, 2);
     let page = listing_page(&report, AnalysisKind::Disassembly);
@@ -1006,6 +1011,8 @@ fn native_analysis_workspace_fixture() {
                 (report, page)
             } else if view_name == "unpack" {
                 (unpacked_report(), None)
+            } else if view_name == "limits" || view_name == "timeout" {
+                (limits_report(), None)
             } else {
                 qa_report()
             };
@@ -1031,7 +1038,7 @@ fn native_analysis_workspace_fixture() {
                 state.file_info = FileInfo::Summary;
             }
             match view_name.as_str() {
-                "summary" => state.file_info = FileInfo::Summary,
+                "summary" | "limits" => state.file_info = FileInfo::Summary,
                 "disasm" => {
                     state.tab = Tab::Disassembly;
                 }
@@ -1043,6 +1050,7 @@ fn native_analysis_workspace_fixture() {
                 state.tab = match view_name.as_str() {
                     "disasm" => Tab::Disassembly,
                     "strings" => Tab::Strings,
+                    "timeout" => Tab::Capa,
                     _ => Tab::FileInfo,
                 };
             }
@@ -1225,6 +1233,7 @@ fn meaning_report() -> AnalysisReport {
         sections: Vec::new(),
         layer: None,
         specimen_source: None,
+        time_limit_seconds: None,
     };
     report.sections.push(AnalysisSection {
         kind: AnalysisKind::Strings,
@@ -1260,6 +1269,7 @@ fn meaning_report() -> AnalysisReport {
                 )),
             },
         ],
+        limits: Vec::new(),
     });
     report.sections.push(AnalysisSection {
         kind: AnalysisKind::Rules,
@@ -1297,6 +1307,7 @@ fn meaning_report() -> AnalysisReport {
                 )),
             },
         ],
+        limits: Vec::new(),
     });
     report.sections.push(AnalysisSection {
         kind: AnalysisKind::Hardening,
@@ -1332,6 +1343,7 @@ fn meaning_report() -> AnalysisReport {
                 )),
             },
         ],
+        limits: Vec::new(),
     });
     report.sections.push(AnalysisSection {
         kind: AnalysisKind::Structures,
@@ -1397,6 +1409,7 @@ fn meaning_report() -> AnalysisReport {
                 )),
             },
         ],
+        limits: Vec::new(),
     });
     report.sections.push(AnalysisSection {
         kind: AnalysisKind::Entropy,
@@ -1416,6 +1429,7 @@ fn meaning_report() -> AnalysisReport {
                 },
             )),
         }],
+        limits: Vec::new(),
     });
     report
 }
@@ -1530,6 +1544,7 @@ fn code_report(kind: AnalysisKind, functions: &[(&str, u64, u32)]) -> (AnalysisR
         tools: Vec::new(),
         listing: None,
         entries,
+        limits: Vec::new(),
     });
     let report = with_listing(report, kind, rows);
     let mut page = listing_page(&report, kind).unwrap();
@@ -1567,8 +1582,9 @@ fn a_function_has_its_instructions_in_disassembly_and_its_source_lines_in_decomp
     crate::theme::install(&ctx);
     let functions = [("_start", 0x1000, 7), ("main", 0x2000, 1)];
     for (kind, header) in [
-        (AnalysisKind::Disassembly, "_start  ·  0x1000, 7 lines"),
-        (AnalysisKind::Decompilation, "_start  ·  0x1000, 7 lines"),
+        // The parts of a header are spaced apart, not joined by a mark.
+        (AnalysisKind::Disassembly, "_start7 lines"),
+        (AnalysisKind::Decompilation, "_start0x10007 lines"),
     ] {
         let (report, page) = code_report(kind, &functions);
         let shown = shown_in(&ctx, &report, kind, &page);
@@ -2209,6 +2225,7 @@ fn unpacked_report() -> AnalysisReport {
         sections: vec![section],
         layer: None,
         specimen_source: None,
+        time_limit_seconds: None,
     }
 }
 
@@ -2475,16 +2492,19 @@ fn regex_matches_are_their_own_check_and_a_report_without_it_offers_to_run_it() 
     let alone = AnalysisSelection {
         enabled: true,
         checks: vec![AnalysisKind::Regex],
+        time_limit_minutes: 0,
     };
     assert!(alone.validate().unwrap_err().contains("Strings or FLOSS"));
     let with_strings = AnalysisSelection {
         enabled: true,
         checks: vec![AnalysisKind::Strings, AnalysisKind::Regex],
+        time_limit_minutes: 0,
     };
     assert!(with_strings.validate().is_ok());
     let strings_only = AnalysisSelection {
         enabled: true,
         checks: vec![AnalysisKind::Strings],
+        time_limit_minutes: 0,
     };
     assert!(strings_only.validate().is_ok());
 }
@@ -2549,5 +2569,192 @@ fn a_linked_run_is_a_header_button_not_a_link_above_the_file_name() {
         Some(ReportAction::OpenRun {
             run_id: "run-9".into()
         })
+    );
+}
+
+/// A report whose categories are in every state a tag can name, one of them a
+/// check that ran out of time.
+fn limits_report() -> AnalysisReport {
+    use antinomie_monitor_core::{AnalysisLimit, AnalysisLimitKind};
+    let mut report = fixture();
+    report.sections.clear();
+    let mut section = |kind, state, summary: &str| {
+        let mut section = AnalysisSection::new(kind);
+        section.state = state;
+        section.summary = summary.into();
+        report.sections.push(section);
+    };
+    section(
+        AnalysisKind::Metadata,
+        AnalysisSectionState::Complete,
+        "hashes",
+    );
+    section(
+        AnalysisKind::Strings,
+        AnalysisSectionState::Partial,
+        "strings",
+    );
+    section(
+        AnalysisKind::Embedded,
+        AnalysisSectionState::Unavailable,
+        "binwalk is not installed on this system",
+    );
+    section(
+        AnalysisKind::Capabilities,
+        AnalysisSectionState::Timeout,
+        "capa found nothing before it was stopped.",
+    );
+    report.sections[3].limits.push(AnalysisLimit {
+        kind: AnalysisLimitKind::Time,
+        text: "capa ran out of time: its limit was 4 minutes.".into(),
+        seconds: Some(240),
+    });
+    report.sections[1].limits.push(AnalysisLimit {
+        kind: AnalysisLimitKind::Size,
+        text: "The listing reached its 64.0 MB limit after 2,000 of 9,000 strings; later strings are not listed.".into(),
+        seconds: None,
+    });
+    report
+}
+
+#[test]
+fn state_tags_line_up_in_one_column_and_a_timeout_is_its_own_tag() {
+    let report = limits_report();
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let mut state = WorkspaceState::default();
+    let size = egui::vec2(900.0, 900.0);
+    let mut output = egui::FullOutput::default();
+    for _ in 0..3 {
+        output = frame(
+            &ctx,
+            &report,
+            &mut state,
+            None,
+            size,
+            Vec::new(),
+            (None, None),
+        )
+        .0;
+    }
+    let shown = texts(&output);
+    // Only the tags of the Categories card, not the words of the identity.
+    let tag = |word: &str| {
+        shown
+            .iter()
+            .find(|(text, rect)| text == word && rect.min.x > 400.0)
+            .unwrap_or_else(|| panic!("{word:?} not shown in {shown:?}"))
+            .1
+    };
+    let tags = [
+        "Complete",
+        "Partial",
+        "Unavailable",
+        "Timeout",
+        "Not requested",
+    ]
+    .map(tag);
+    // Every tag sits in a pill of one width at one place, so they share a
+    // column however long the word is.
+    for rect in &tags[1..] {
+        assert!((rect.min.x - tags[0].min.x).abs() < 0.6, "{tags:?}");
+    }
+    assert!(shown.iter().any(|(text, _)| text == "Unavailable"));
+}
+
+#[test]
+fn a_timed_out_check_warns_with_its_limit_and_offers_twice_the_time_and_the_setting() {
+    let report = limits_report();
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let mut state = WorkspaceState::default();
+    let size = egui::vec2(1100.0, 800.0);
+    let kind = Some(AnalysisKind::Capabilities);
+    let mut output = egui::FullOutput::default();
+    for _ in 0..3 {
+        output = frame(
+            &ctx,
+            &report,
+            &mut state,
+            kind,
+            size,
+            Vec::new(),
+            (None, None),
+        )
+        .0;
+    }
+    let shown: Vec<String> = texts(&output).into_iter().map(|(text, _)| text).collect();
+    assert!(
+        shown
+            .iter()
+            .any(|text| text.contains("capa ran out of time: its limit was 4 minutes.")),
+        "{shown:?}"
+    );
+    assert!(shown.iter().any(|text| text == "Timeout"), "{shown:?}");
+    let longer = center_of(&output, "Run again with 2× time (8 minutes)");
+    let mut press = |at| {
+        press(
+            &ctx,
+            &report,
+            &mut state,
+            kind,
+            size,
+            (egui::PointerButton::Primary, at),
+            (None, None),
+        )
+        .action
+    };
+    assert_eq!(
+        press(longer),
+        Some(ReportAction::RunCheckLonger {
+            report_id: report.id.clone(),
+            kind: AnalysisKind::Capabilities,
+            seconds: 480,
+        })
+    );
+    let settings = center_of(&output, "Time limit settings…");
+    assert_eq!(press(settings), Some(ReportAction::OpenAnalysisSettings));
+}
+
+#[test]
+fn a_size_limit_is_warned_about_without_a_button_it_has_no_setting_for() {
+    let report = limits_report();
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let mut state = WorkspaceState::default();
+    let size = egui::vec2(1100.0, 800.0);
+    let mut output = egui::FullOutput::default();
+    for _ in 0..3 {
+        output = frame(
+            &ctx,
+            &report,
+            &mut state,
+            Some(AnalysisKind::Strings),
+            size,
+            Vec::new(),
+            (None, None),
+        )
+        .0;
+    }
+    let shown: Vec<String> = texts(&output).into_iter().map(|(text, _)| text).collect();
+    assert!(
+        shown
+            .iter()
+            .any(|text| text.contains("reached its 64.0 MB limit")),
+        "{shown:?}"
+    );
+    assert!(shown.iter().all(|text| !text.contains("Run again with 2×")));
+}
+
+#[test]
+fn the_built_in_analysis_keeps_its_name_in_reports_saved_before_the_rename() {
+    let mut section = AnalysisSection::new(AnalysisKind::Metadata);
+    section.tools = vec![
+        "Antinomie byte triage 2 (object 0.40)".into(),
+        "capa v9.4.0".into(),
+    ];
+    assert_eq!(
+        tools(&section),
+        ["Built-in analysis (object 0.40)", "capa v9.4.0"]
     );
 }

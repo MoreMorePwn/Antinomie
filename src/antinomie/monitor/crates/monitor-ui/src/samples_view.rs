@@ -674,7 +674,7 @@ impl SamplesView {
                 screen.center() - egui::vec2(0.0, 42.0),
                 largest,
             ))
-            .min_size(egui::vec2(720.0, 480.0).min(largest))
+            .min_size(egui::vec2(900.0, 480.0).min(largest))
             .max_size(largest)
             .open(&mut open)
             .show(ctx, |ui| {
@@ -1172,6 +1172,47 @@ mod tests {
     }
 
     #[test]
+    fn table_columns_fit_the_window_at_common_widths() {
+        use tables::{fit_widths, RESULT_LAST, RESULT_WIDTHS, STORED_LAST, STORED_WIDTHS};
+        for width in [860.0_f32, 1000.0, 1184.0, 1240.0, 1700.0] {
+            let ctx = egui::Context::default();
+            let mut checked = 0;
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, 600.0),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default()
+                        .frame(egui::Frame::NONE)
+                        .show(ctx, |ui| {
+                            for (columns, last) in [
+                                (&RESULT_WIDTHS[..], RESULT_LAST),
+                                (&STORED_WIDTHS[..], STORED_LAST),
+                            ] {
+                                let widths = fit_widths(ui, columns, last);
+                                let used = widths.iter().sum::<f32>()
+                                    + last
+                                    + ui.spacing().item_spacing.x * widths.len() as f32
+                                    + ui.spacing().scroll.allocated_width();
+                                assert!(used <= width + 0.5, "{used} wide in {width}");
+                                assert!(widths
+                                    .iter()
+                                    .zip(columns)
+                                    .all(|(wide, (_, least))| wide >= &(least - 1.0)));
+                                checked += 1;
+                            }
+                        });
+                },
+            );
+            assert_eq!(checked, 2);
+        }
+    }
+
+    #[test]
     fn the_catalog_waits_for_the_warning_to_be_accepted() {
         let data = std::env::temp_dir().join(format!(
             "ant-samples-view-{}-{}",
@@ -1244,5 +1285,162 @@ mod tests {
         view.awaiting = Some(Some(ExecRequest::default()));
         view.sent(8);
         assert!(view.complete(8, false, "no room").is_none());
+    }
+
+    /// Native fixture for the Malware samples window, for screenshots. Needs an
+    /// X11 display; exits by itself. Made-up samples, nothing is downloaded.
+    ///
+    /// ANTINOMIE_QA_SCENE = list | empty | filtered, ANTINOMIE_QA_THEME =
+    /// dark | light | blue, ANTINOMIE_QA_SIZE = 1500x1050, ANTINOMIE_QA_SECONDS.
+    #[test]
+    #[ignore = "requires X11 native rendering; exits after the given seconds"]
+    fn native_malware_samples_fixture() {
+        use winit::platform::x11::EventLoopBuilderExtX11;
+        struct QaApp {
+            view: SamplesView,
+            data: PathBuf,
+            deadline: std::time::Instant,
+        }
+        impl eframe::App for QaApp {
+            fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+                if std::time::Instant::now() >= self.deadline {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                let cx = SamplesContext {
+                    data_dir: &self.data,
+                    curl: Path::new("curl"),
+                    running: true,
+                    vm_name: Some("Debian QA"),
+                    nat: false,
+                    font_size: 16.0,
+                };
+                egui::CentralPanel::default().show(ctx, |_| {});
+                self.view.show(ctx, &cx);
+                ctx.request_repaint_after(Duration::from_millis(200));
+            }
+        }
+        let var = |name: &str| std::env::var(name).unwrap_or_default();
+        let theme_choice = match var("ANTINOMIE_QA_THEME").as_str() {
+            "light" => theme::Theme::Light,
+            "blue" => theme::Theme::Blue,
+            _ => theme::Theme::Dark,
+        };
+        let (width, height) = var("ANTINOMIE_QA_SIZE")
+            .split_once('x')
+            .and_then(|(w, h)| Some((w.parse::<f32>().ok()?, h.parse::<f32>().ok()?)))
+            .unwrap_or((1500.0, 1050.0));
+        let seconds = var("ANTINOMIE_QA_SECONDS").parse::<u64>().unwrap_or(25);
+        let scene = var("ANTINOMIE_QA_SCENE");
+        let data = PathBuf::from(var("ANTINOMIE_QA_DATA"));
+        assert!(
+            !data.as_os_str().is_empty(),
+            "set ANTINOMIE_QA_DATA to a throwaway folder"
+        );
+        std::fs::create_dir_all(&data).unwrap();
+        let made = |name: &str,
+                    kind: &str,
+                    arch: Option<&str>,
+                    family: Option<&str>,
+                    tags: &[&str],
+                    size| {
+            SampleInfo {
+                sha256_hash: format!("{:0>64x}", name.len() as u64 * 0x9e37_79b9_7f4a_7c15),
+                file_name: name.into(),
+                file_type: kind.into(),
+                file_arch: arch.map(str::to_owned),
+                signature: family.map(str::to_owned),
+                tags: tags.iter().map(|tag| tag.to_string()).collect(),
+                file_size: size,
+                first_seen: "2026-10-29 21:14:07".into(),
+                ..SampleInfo::default()
+            }
+        };
+        let results = vec![
+            made(
+                "mirai.x86_64",
+                "elf",
+                Some("X86_64"),
+                Some("Mirai"),
+                &["elf", "mirai", "botnet"],
+                98_304,
+            ),
+            made(
+                "sora.arm7",
+                "elf",
+                Some("ARM"),
+                Some("Mirai"),
+                &["elf", "arm", "ddos"],
+                77_824,
+            ),
+            made("install.sh", "sh", None, None, &["sh", "dropper"], 1_432),
+            made(
+                "a-very-long-original-file-name-from-a-phishing-attachment-2026-10-29-final-v2.elf",
+                "elf",
+                Some("X86_64"),
+                Some("GafgytLongFamilyName"),
+                &["elf", "gafgyt", "bashlite", "upx", "packed", "mips", "ddos"],
+                1_572_864,
+            ),
+            made(
+                "loader.exe",
+                "exe",
+                Some("I386"),
+                Some("AgentTesla"),
+                &["exe"],
+                412_160,
+            ),
+            made("payload.bin", "", None, None, &[], 0),
+        ];
+        let stored = vec![
+            StoredSample {
+                info: results[0].clone(),
+                source: "MalwareBazaar".into(),
+                downloaded_ms: 1,
+                pushes: Vec::new(),
+            },
+            StoredSample {
+                info: results[2].clone(),
+                source: "MalwareBazaar".into(),
+                downloaded_ms: 2,
+                pushes: Vec::new(),
+            },
+        ];
+        eframe::run_native(
+            "Antinomie Malware samples QA",
+            eframe::NativeOptions {
+                viewport: egui::ViewportBuilder::default().with_inner_size([width, height]),
+                persist_window: false,
+                event_loop_builder: Some(Box::new(|builder| {
+                    builder.with_x11();
+                    builder.with_any_thread(true);
+                })),
+                ..Default::default()
+            },
+            Box::new(move |cc| {
+                theme::install(&cc.egui_ctx);
+                theme::apply_theme(&cc.egui_ctx, theme_choice);
+                let mut view = SamplesView::default();
+                view.open = true;
+                view.key = "fixture".into();
+                view.key_saved = true;
+                view.key_loaded = true;
+                view.acknowledged = true;
+                view.listed = true;
+                view.listing = "Newest Linux uploads".into();
+                view.stored = Some(stored);
+                if scene != "empty" {
+                    view.results = results;
+                }
+                if scene == "filtered" {
+                    view.filters.family = Some("Nothing".into());
+                }
+                Ok(Box::new(QaApp {
+                    view,
+                    data,
+                    deadline: std::time::Instant::now() + Duration::from_secs(seconds),
+                }))
+            }),
+        )
+        .unwrap();
     }
 }

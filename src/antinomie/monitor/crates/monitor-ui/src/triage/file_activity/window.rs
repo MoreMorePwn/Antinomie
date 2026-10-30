@@ -660,29 +660,64 @@ pub(super) fn tally_text(tally: &Tally) -> String {
     };
     skipped(tally.file_cap, "past the per-file cap");
     skipped(tally.run_cap, "past the per-run cap");
-    skipped(tally.not_recorded, "not recorded by the kernel");
-    skipped(tally.offset_unknown, "at an unknown offset");
+    skipped(tally.not_recorded, "not recorded by the guest kernel");
+    skipped(
+        tally.offset_unknown,
+        "written where the recording could not place them",
+    );
     skipped(tally.unlisted, "beyond the listed ranges");
     text
 }
 
-/// The run's written content: bytes kept and skipped, with the caps.
-fn written_summary(ui: &mut egui::Ui, activity: &Activity) {
+/// Why some written bytes have no place in the file.
+const UNPLACED_WHY: &str = "Appends and descriptors opened before the run have no recorded \
+     position, and bases before kernel revision 18 do not record positions at all.";
+
+/// The run's written content: bytes kept and skipped. The reasons are named
+/// only for what happened; the caps only when one was reached.
+pub(super) fn written_text(activity: &Activity) -> Option<String> {
+    use antinomie_monitor_core::byte_size::file_size;
     let tally = &activity.written;
     if tally.kept == 0 && tally.skipped() == 0 {
-        return;
+        return None;
     }
-    use antinomie_monitor_core::byte_size::file_size;
-    let text = format!(
-        "Written content: {} (caps {} per file, {} per run; change in Tools > Settings > Advanced)",
-        tally_text(tally),
-        file_size(activity.limits.per_file),
-        file_size(activity.limits.per_run)
-    );
-    if tally.skipped() > 0 {
+    let mut text = format!("Written content: {}.", tally_text(tally));
+    if tally.offset_unknown > 0 {
+        text.push(' ');
+        text.push_str(UNPLACED_WHY);
+    }
+    let mut caps = Vec::new();
+    if tally.file_cap > 0 {
+        caps.push(format!("{} per file", file_size(activity.limits.per_file)));
+    }
+    if tally.run_cap > 0 {
+        caps.push(format!("{} per run", file_size(activity.limits.per_run)));
+    }
+    if !caps.is_empty() {
+        text.push_str(&format!(
+            " The write cap was reached ({}).",
+            caps.join(", ")
+        ));
+    }
+    Some(text)
+}
+
+/// Whether a write cap was reached, so the warning offers the settings.
+fn cap_reached(activity: &Activity) -> bool {
+    activity.written.file_cap > 0 || activity.written.run_cap > 0
+}
+
+fn written_summary(ui: &mut egui::Ui, activity: &Activity) {
+    let Some(text) = written_text(activity) else {
+        return;
+    };
+    if activity.written.skipped() > 0 {
         crate::activity::warning(ui, text);
     } else {
         ui.weak(text);
+    }
+    if cap_reached(activity) {
+        crate::settings_link::button(ui, "Advanced");
     }
 }
 

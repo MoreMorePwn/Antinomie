@@ -120,6 +120,7 @@ mod tests {
         let selection = AnalysisSelection {
             enabled: true,
             checks: vec![AnalysisKind::Metadata],
+            time_limit_minutes: 0,
         };
         jobs.submit(
             None,
@@ -318,6 +319,7 @@ mod tests {
         let selection = AnalysisSelection {
             enabled: true,
             checks: vec![AnalysisKind::Metadata],
+            time_limit_minutes: 0,
         };
         let mut report = new_report("/tmp/sample", &selection);
         assert!(abandon(&mut report, "the run did not start: boom"));

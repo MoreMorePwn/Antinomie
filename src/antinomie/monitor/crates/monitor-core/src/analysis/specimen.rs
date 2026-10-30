@@ -219,9 +219,11 @@ mod tests {
                     tools: Vec::new(),
                     listing: None,
                     entries: Vec::new(),
+                    limits: Vec::new(),
                 }],
                 layer: None,
                 specimen_source: None,
+                time_limit_seconds: None,
             };
             let fixture = Self { directory, report };
             fixture.save();

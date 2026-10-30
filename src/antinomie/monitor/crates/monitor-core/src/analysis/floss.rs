@@ -50,11 +50,20 @@ fn run(section: &mut AnalysisSection, floss: &str, specimen_len: u64, listings: 
             SPECIMEN_MAX_SIZE >> 20,
             specimen_len.div_ceil(1 << 20)
         );
+        super::limits::add(
+            section,
+            AnalysisLimitKind::Size,
+            format!(
+                "The file is larger than the {} MiB FLOSS is given.",
+                SPECIMEN_MAX_SIZE >> 20
+            ),
+            None,
+        );
         return;
     }
     // The plain strings are the Strings category's job; `--` ends the list of
     // string types, which would otherwise take the file name.
-    let timeout = Duration::from_secs(TIMEOUT_SECONDS);
+    let timeout = Duration::from_secs(super::limits::seconds(TIMEOUT_SECONDS));
     let run = match tools::run_with(
         floss,
         &[
@@ -82,16 +91,29 @@ fn run(section: &mut AnalysisSection, floss: &str, specimen_len: u64, listings: 
     let found = match parse(&run.stdout) {
         Ok(found) if !run.truncated => found,
         _ => {
+            if run.timed_out && !run.truncated {
+                super::limits::time_out(
+                    section,
+                    "FLOSS",
+                    timeout.as_secs(),
+                    "FLOSS found nothing before it was stopped; programs with many routines, statically linked ones especially, take it much longer",
+                );
+                return;
+            }
             section.state = AnalysisSectionState::Unavailable;
             section.summary = if run.truncated {
+                super::limits::add(
+                    section,
+                    AnalysisLimitKind::Size,
+                    format!(
+                        "FLOSS printed more than the {} MiB the analysis reads.",
+                        OUTPUT_MAX_SIZE >> 20
+                    ),
+                    None,
+                );
                 format!(
                     "FLOSS printed more than {} MiB; its result was not read",
                     OUTPUT_MAX_SIZE >> 20
-                )
-            } else if run.timed_out {
-                format!(
-                    "FLOSS ran out of time ({} minutes) and was stopped; programs with many routines, statically linked ones especially, take it much longer",
-                    TIMEOUT_SECONDS / 60
                 )
             } else {
                 run.failure_text("FLOSS", timeout).unwrap_or_else(|| {
@@ -132,18 +154,46 @@ fn run(section: &mut AnalysisSection, floss: &str, specimen_len: u64, listings: 
         }
     }
     let capped = found.len() > STRING_MAX_COUNT;
-    section.state = if run.timed_out || capped || full {
-        AnalysisSectionState::Partial
-    } else {
-        AnalysisSectionState::Complete
-    };
+    section.state = AnalysisSectionState::Complete;
+    if capped {
+        section.state = AnalysisSectionState::Partial;
+        super::limits::add(
+            section,
+            AnalysisLimitKind::Rows,
+            format!(
+                "FLOSS found {} strings; the listing keeps the first {}.",
+                super::detection::group_digits(found.len() as u64),
+                super::detection::group_digits(STRING_MAX_COUNT as u64)
+            ),
+            None,
+        );
+    }
     if let Some(listing) = writer.and_then(|writer| writer.finish(full || capped).ok()) {
-        if listing.truncated {
+        if full {
             section.state = AnalysisSectionState::Partial;
+            super::limits::add(
+                section,
+                AnalysisLimitKind::Size,
+                format!(
+                    "The listing reached its {} limit after {} strings; later strings are not listed.",
+                    crate::byte_size::short_size(super::listing::LISTING_MAX_SIZE),
+                    super::detection::group_digits(listing.rows)
+                ),
+                None,
+            );
         }
         section.listing = Some(listing);
     } else if found.len() > REPORT_ROWS {
         section.state = AnalysisSectionState::Partial;
+        super::limits::add(
+            section,
+            AnalysisLimitKind::Rows,
+            format!(
+                "The listing could not be written, so the report keeps only the first {REPORT_ROWS} of {} strings.",
+                super::detection::group_digits(found.len() as u64)
+            ),
+            None,
+        );
     }
     let [decoded, stack, tight, language] = counts;
     section.summary = format!(

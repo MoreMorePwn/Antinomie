@@ -354,6 +354,25 @@ fn observations(ui: &mut egui::Ui, scan: &ArchiveScan) -> bool {
         .inner
 }
 
+/// What the run recorded about itself: facts about its recording and its
+/// device profile that are no warning, at the bottom of the Summary.
+fn notes(ui: &mut egui::Ui, notes: &[String]) {
+    if notes.is_empty() {
+        return;
+    }
+    presentation::frame().show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        presentation::heading(ui, "Notes", "");
+        for note in notes {
+            ui.add(egui::Label::new(RichText::new(note).color(theme::muted())).wrap());
+        }
+        // A reached quota is changed in the Recording settings.
+        if notes.iter().any(|note| note.contains("recording quota")) {
+            crate::settings_link::button(ui, "Recording");
+        }
+    });
+}
+
 pub(super) fn content(
     view: &mut TriageView,
     ui: &mut egui::Ui,
@@ -481,6 +500,8 @@ pub(super) fn content(
             if observations(ui, scan) {
                 destination = Some(Destination::Findings);
             }
+            ui.add_space(14.0);
+            notes(ui, &view.notes);
         });
     if pop_out {
         view.clear_finding_filters(ui.ctx());

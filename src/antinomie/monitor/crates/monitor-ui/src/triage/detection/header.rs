@@ -24,7 +24,7 @@ pub(super) const SKIPPED_NOTE: &str = "Network capture was turned off for this r
 pub(super) fn limitation_line(state: &State) -> Option<&'static str> {
     match state {
         State::Complete => None,
-        State::Partial => Some("Limited: coverage is incomplete."),
+        State::Partial => Some("Limited: only part of the evidence was scanned."),
         State::Unavailable => Some("Limited: this scan could not evaluate the evidence."),
         State::NoRules => Some("Limited: no rules are enabled."),
         State::Missing => Some("Limited: the evidence for this engine is missing."),
@@ -373,11 +373,13 @@ impl View {
             long.push(full);
         };
         if let Some(Ok(report)) = self.results[index].as_ref() {
-            if let Some(line) = limitation_line(&report.state) {
+            // A Partial result says why in the engine's words; the general
+            // line is only for one that did not.
+            let says_why = report.state == State::Partial && !report.warnings.is_empty();
+            if let Some(line) = limitation_line(&report.state).filter(|_| !says_why) {
                 note(line.to_owned(), line.to_owned());
             }
-            // What made it Partial, in the engine's words.
-            if report.state == State::Partial {
+            if says_why {
                 if let Some(first) = report.warnings.first() {
                     let more = report.warnings.len() - 1;
                     note(
@@ -660,7 +662,7 @@ mod tests {
         assert_eq!(limitation_line(&State::Complete), None);
         assert_eq!(
             limitation_line(&State::Partial),
-            Some("Limited: coverage is incomplete.")
+            Some("Limited: only part of the evidence was scanned.")
         );
         assert!(limitation_line(&State::Missing)
             .unwrap()

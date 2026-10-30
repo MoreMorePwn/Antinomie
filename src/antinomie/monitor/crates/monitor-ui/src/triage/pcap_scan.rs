@@ -752,7 +752,7 @@ pub(super) fn scan_pcap_query_observed(
     index.http_omitted = http_omitted;
     if inventory.omitted > 0 {
         let retention =
-            "Network inventory retention limit reached; packet evidence remains available.";
+            "The network lists are full, so some destinations are not listed. Every packet is still in the capture.";
         index.network_warning = Some(match index.network_warning.take() {
             Some(existing) => format!("{retention} {existing}"),
             None => retention.into(),

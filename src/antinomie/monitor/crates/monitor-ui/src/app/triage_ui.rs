@@ -24,13 +24,12 @@ impl MonitorApp {
         if !run.request.capture_network {
             crate::activity::warning(
                 ui,
-                "Capture network was disabled for this run; network evidence may be unavailable.",
+                "Network capture was off for this run, so it has no network evidence.",
             );
+        } else if owned_pcap.is_none() {
+            crate::activity::warning(ui, "No network capture was saved for this run.");
         }
-        if owned_pcap.is_none() {
-            crate::activity::warning(ui, "No network capture is available for this run.");
-        }
-        crate::run_recording::show(ui, &run);
+        crate::run_recording::show_warning(ui, &run);
         let route = crate::route_ui::describe(
             run.route.as_ref(),
             self.run_labels
@@ -38,6 +37,9 @@ impl MonitorApp {
                 .and_then(|labels| labels.route),
         );
         crate::route_ui::line(ui, &route);
+        let mut notes = crate::run_recording::note_lines(&run);
+        notes.extend(route.note.clone());
+        self.triage.set_notes(notes);
         self.triage.set_route_text(route);
         if let Some(error) = &self.archive_error {
             crate::activity::warning(ui, error);

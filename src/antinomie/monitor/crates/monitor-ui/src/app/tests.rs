@@ -32,6 +32,7 @@ mod run_kill;
 mod run_selection;
 mod samples_custody;
 mod samples_detail;
+mod samples_features;
 mod samples_list;
 mod samples_shots;
 mod scanned_inputs;
@@ -585,6 +586,7 @@ pub(super) fn section_report(id: &str, marker: &str) -> antinomie_monitor_core::
                     offset: None,
                     record: None,
                 }],
+                limits: Vec::new(),
             },
             AnalysisSection {
                 kind: AnalysisKind::Structures,
@@ -593,6 +595,7 @@ pub(super) fn section_report(id: &str, marker: &str) -> antinomie_monitor_core::
                 tools: Vec::new(),
                 listing: None,
                 entries: Vec::new(),
+                limits: Vec::new(),
             },
             AnalysisSection {
                 kind: AnalysisKind::Strings,
@@ -608,10 +611,12 @@ pub(super) fn section_report(id: &str, marker: &str) -> antinomie_monitor_core::
                         record: None,
                     })
                     .collect(),
+                limits: Vec::new(),
             },
         ],
         layer: None,
         specimen_source: None,
+        time_limit_seconds: None,
     }
 }
 

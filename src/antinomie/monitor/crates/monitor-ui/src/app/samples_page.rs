@@ -16,9 +16,11 @@ use std::{
 mod add;
 mod custody_all;
 mod custody_parts;
+mod delete_run;
 mod detail;
 mod export;
 mod list;
+mod notes;
 mod picker;
 mod promote;
 mod viewer;
@@ -33,6 +35,8 @@ pub(super) struct Row {
     pub(super) children: usize,
     /// The archive is on disk (Verify all reads it back).
     pub(super) archived: bool,
+    /// The sample's custody log verifies against the library index.
+    pub(super) custody_ok: bool,
 }
 
 type Loaded = Result<Vec<Row>, String>;
@@ -81,6 +85,10 @@ fn load(options: BackendOptions, vms: Vec<(String, String)>) -> Loaded {
         .map(|record| {
             let (parents, children) = lineage.get(&record.sha256).copied().unwrap_or_default();
             Row {
+                // A log that cannot be read is not a broken chain.
+                custody_ok: !library
+                    .custody_check(&record.sha256)
+                    .is_ok_and(|check| !check.ok()),
                 archived: record.removed_ms.is_none()
                     && library
                         .archive_path(&record.sha256)
@@ -141,6 +149,12 @@ pub(super) struct SamplesPage {
     export: Option<export::ExportDialog>,
     /// The custody log across every sample; shows instead of the list.
     custody_all: Option<custody_all::CustodyAll>,
+    /// Analyze ›: the archived copy being written for static analysis.
+    analyzing: Option<(Receiver<Result<PathBuf, String>>, String)>,
+    /// The Add note / Edit note window.
+    note_editor: Option<notes::Editor>,
+    /// The Delete run… dialog.
+    delete_run: Option<delete_run::DeleteRun>,
 }
 
 /// A run to open in a panel of the VM it belongs to: the VM is selected and
@@ -151,6 +165,10 @@ pub(super) struct OpenRun {
     panel: crate::workspace::Panel,
     /// Scope Syscall Trace to this filter once the run is selected.
     trace_filter: Option<String>,
+    /// Show Triage's Detection on this engine's rule (engine, rule id).
+    rule: Option<(String, String)>,
+    /// Open the VM's Snapshots window once the run is selected.
+    then_snapshots: bool,
     started: std::time::Instant,
     listed: bool,
 }
@@ -292,9 +310,19 @@ impl MonitorApp {
             run_id: run.id.clone(),
             panel,
             trace_filter,
+            rule: None,
+            then_snapshots: false,
             started: std::time::Instant::now(),
             listed: false,
         });
+    }
+
+    /// Open `run` in Triage on the hit of one detection rule.
+    pub(super) fn open_sample_rule(&mut self, run: &RunSummary, engine: &str, rule_id: &str) {
+        self.open_sample_run(run, crate::workspace::Panel::Triage, None);
+        if let Some(open) = &mut self.samples_page.open_run {
+            open.rule = Some((engine.to_owned(), rule_id.to_owned()));
+        }
     }
 
     /// Carry out the run the sample window asked to open, a step per frame
@@ -320,8 +348,14 @@ impl MonitorApp {
             };
             self.select_run(Some(run_id));
             self.focus_panel = Some(open.panel);
+            if open.then_snapshots {
+                self.open_snapshots();
+            }
             if let Some(filter) = open.trace_filter {
                 self.scope_trace(filter);
+            }
+            if let Some((engine, rule)) = open.rule {
+                self.triage.show_rule(&engine, &rule);
             }
             return;
         }
@@ -336,14 +370,91 @@ impl MonitorApp {
         }
     }
 
+    /// Open the Snapshots window of the VM `run` belongs to.
+    pub(super) fn open_run_snapshots(&mut self, run: &RunSummary) {
+        self.open_sample_run(run, crate::workspace::Panel::Summary, None);
+        if let Some(open) = &mut self.samples_page.open_run {
+            open.then_snapshots = true;
+        }
+    }
+
     /// The sidebar count of the Samples row.
     pub(super) fn samples_count(&self) -> usize {
         self.samples_page.count()
     }
 
+    /// Run static analysis on a library sample: its archived copy is written
+    /// to a file of the library folder, then analysed like a file of a disk.
+    pub(super) fn analyze_sample(
+        &mut self,
+        ctx: &egui::Context,
+        record: &SampleRecord,
+        archive: PathBuf,
+    ) {
+        if self.samples_page.analyzing.is_some() {
+            return;
+        }
+        let Some(vm_id) = self.selected.clone() else {
+            self.report_error("Select a VM first: the analysis uses its tools.".into());
+            return;
+        };
+        let (sender, receiver) = mpsc::channel();
+        let folder = self.options.data_dir.join("samples").join("analysis-input");
+        let (sha256, wake) = (record.sha256.clone(), ctx.clone());
+        let file = folder.join(detail::guest_name(record).trim_start_matches("/tmp/"));
+        let started = std::thread::Builder::new()
+            .name("sample-analyze".into())
+            .spawn(move || {
+                let result = antinomie_monitor_core::samples::open_sample(&archive, &sha256)
+                    .and_then(|bytes| {
+                        std::fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
+                        std::fs::write(&file, bytes).map_err(|error| error.to_string())?;
+                        Ok(file)
+                    });
+                let _ = sender.send(result);
+                wake.request_repaint();
+            });
+        match started {
+            Ok(_) => self.samples_page.analyzing = Some((receiver, vm_id)),
+            Err(error) => self.report_error(error.to_string()),
+        }
+    }
+
+    /// Send the analysis once the archived copy is written.
+    fn poll_analyze(&mut self) {
+        let Some((receiver, _)) = &self.samples_page.analyzing else {
+            return;
+        };
+        let Ok(result) = receiver.try_recv() else {
+            return;
+        };
+        let Some((_, vm_id)) = self.samples_page.analyzing.take() else {
+            return;
+        };
+        match result {
+            Ok(path) => {
+                // The launch form's selection when it enables analysis, else
+                // the default triage set.
+                let mut analysis = self.exec.analysis.clone();
+                analysis.enabled = true;
+                if analysis.checks.is_empty() {
+                    analysis.checks = antinomie_monitor_core::AnalysisKind::TRIAGE.to_vec();
+                }
+                self.send(Command::AnalyzeHostFile {
+                    vm_id,
+                    path,
+                    analysis,
+                });
+                self.focus_panel = Some(crate::workspace::Panel::StaticAnalysis);
+            }
+            Err(error) => self.report_error(format!("The sample could not be read: {error}")),
+        }
+    }
+
     /// The Samples page body.
     pub(super) fn samples_page(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
+        self.poll_analyze();
         self.samples_page.poll();
         if !self.samples_page.loaded && self.samples_page.loading.is_none()
             || self.samples_page.stale
@@ -446,6 +557,8 @@ impl MonitorApp {
         }
         self.edit_tags_window(ctx, &known_custom);
         self.remove_window(ctx);
+        self.note_windows(ctx);
+        self.delete_run_window(ctx);
     }
 
     /// The custom tags in the library, for the picker to offer again.
@@ -465,6 +578,16 @@ impl MonitorApp {
         let Some((sha256, name, picker)) = &mut self.samples_page.editing else {
             return;
         };
+        // The techniques Triage mapped in the sample's runs, when its window
+        // is open: offered, never added on their own.
+        let suggested: Vec<String> = self
+            .samples_page
+            .detail
+            .as_ref()
+            .filter(|detail| detail.sha256 == *sha256)
+            .and_then(|detail| detail.data.as_ref())
+            .map(|data| detail::suggested_techniques(data))
+            .unwrap_or_default();
         let mut open = true;
         let mut save = false;
         let mut cancel = false;
@@ -474,7 +597,7 @@ impl MonitorApp {
             .default_width(480.0)
             .resizable(false)
             .show(ctx, |ui| {
-                picker.show(ui, &[], known_custom);
+                picker.show(ui, &suggested, known_custom);
                 crate::widgets::footer(ui, |ui| {
                     save = ui.button("Save").clicked();
                     cancel = ui.button("Cancel").clicked();

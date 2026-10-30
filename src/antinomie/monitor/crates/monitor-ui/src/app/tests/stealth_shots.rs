@@ -77,22 +77,22 @@ fn native_stealth_fixture() {
             vm.stealth.nat = NatNetwork::default();
             app.snapshot.vms.push(vm.clone());
             app.selected = Some("vm".into());
+            let host = antinomie_monitor_core::stealth::host_cpu_vendor();
+            let preset = match var("ANTINOMIE_QA_PRESET").as_str() {
+                "desktop" => Some(StealthPreset::RealisticDesktop),
+                "laptop" => Some(StealthPreset::RealisticLaptop),
+                "server" => Some(StealthPreset::RealisticServer),
+                "transparent" => Some(StealthPreset::Transparent),
+                _ => None,
+            };
+            vm.stealth = match (var("ANTINOMIE_QA_PRESET").as_str(), preset) {
+                ("cloud", _) => {
+                    StealthProfile::cloud_vps(&antinomie_monitor_core::stealth::CLOUDS[0])
+                }
+                (_, Some(preset)) => StealthProfile::realistic(preset, &host),
+                _ => vm.stealth,
+            };
             if scene == "config" {
-                let host = antinomie_monitor_core::stealth::host_cpu_vendor();
-                let preset = match var("ANTINOMIE_QA_PRESET").as_str() {
-                    "desktop" => Some(StealthPreset::RealisticDesktop),
-                    "laptop" => Some(StealthPreset::RealisticLaptop),
-                    "server" => Some(StealthPreset::RealisticServer),
-                    "transparent" => Some(StealthPreset::Transparent),
-                    _ => None,
-                };
-                vm.stealth = match (var("ANTINOMIE_QA_PRESET").as_str(), preset) {
-                    ("cloud", _) => {
-                        StealthProfile::cloud_vps(&antinomie_monitor_core::stealth::CLOUDS[0])
-                    }
-                    (_, Some(preset)) => StealthProfile::realistic(preset, &host),
-                    _ => vm.stealth,
-                };
                 vm.nat = var("ANTINOMIE_QA_NETWORK") == "nat";
                 vm.isolated_network = false;
                 app.draft = vm;

@@ -243,6 +243,8 @@ pub(crate) struct TriageView {
     changed_paths: Arc<std::collections::BTreeSet<String>>,
     /// The words for the selected run's network route.
     route: crate::route_ui::RouteText,
+    /// The selected run's notes, shown at the bottom of the Summary.
+    notes: Vec<String>,
     /// Export report: the dialog, its choices and the running export.
     report: report_export::Dialog,
 }
@@ -297,6 +299,7 @@ impl Default for TriageView {
             details_directory: None,
             changed_paths: Arc::default(),
             route: crate::route_ui::RouteText::default(),
+            notes: Vec::new(),
             report: report_export::Dialog::default(),
         }
     }
@@ -393,6 +396,12 @@ impl TriageView {
         self.route = route;
     }
 
+    /// The selected run's notes: the Summary lists them in its Notes section
+    /// instead of between the pane's other warnings.
+    pub(crate) fn set_notes(&mut self, notes: Vec<String>) {
+        self.notes = notes;
+    }
+
     /// Settings › Notifications: raise a toast for a HIGH finding of a live run.
     pub(crate) fn set_toast_high(&mut self, on: bool) {
         self.toast_high = on;
@@ -407,6 +416,12 @@ impl TriageView {
     /// Show the Properties section.
     pub(crate) fn show_properties(&mut self) {
         self.section = Section::Properties;
+    }
+
+    /// Show Detection on `engine`'s tab, filtered to the rule `rule_id`.
+    pub(crate) fn show_rule(&mut self, engine: &str, rule_id: &str) {
+        self.section = Section::Detection;
+        self.detection.focus_rule(engine, rule_id);
     }
 
     /// Show one path in Files › Changed files: the table is filtered to it.

@@ -97,36 +97,44 @@ fn summary_is_compact_with_thousands_of_rows_and_section_renders_only_its_kind()
         theme::install(&ctx);
         theme::text_size(&ctx, font);
         let report = section_report("summary", "METADATA MARKER");
-        let output = ctx.run(
-            egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(800.0, 600.0),
-                )),
-                ..Default::default()
-            },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    assert!(crate::analysis::workspace(
-                        ui,
-                        Some(&report),
-                        &mut crate::analysis::WorkspaceState::default(),
-                        None,
-                        None
-                    )
-                    .is_none());
-                });
-            },
-        );
+        // A grid lays itself out on its first frame and paints on the next.
+        let frame = || {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1400.0, 1200.0),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        assert!(crate::analysis::workspace(
+                            ui,
+                            Some(&report),
+                            &mut crate::analysis::WorkspaceState::default(),
+                            None,
+                            None
+                        )
+                        .is_none());
+                    });
+                },
+            )
+        };
+        frame();
+        let output = frame();
         let shown = texts(&output);
-        for text in ["Partial", "2048 rows"] {
-            assert!(shown.iter().any(|(shown, _)| shown == text), "{text}");
+        for text in ["Partial", "2,048 rows"] {
+            assert!(
+                shown.iter().any(|(shown, _)| shown == text),
+                "{text}: {shown:?}"
+            );
         }
         assert!(!texts(&output)
             .iter()
             .any(|(text, _)| text.starts_with("Row ")));
         assert!(
-            output.shapes.len() < 150,
+            output.shapes.len() < 250,
             "summary size must not depend on evidence row count"
         );
         let output = ctx.run(egui::RawInput::default(), |ctx| {

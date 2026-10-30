@@ -228,6 +228,7 @@ fn static_analysis_uses_selected_archive_report_without_submitting_work() {
         sections: Vec::new(),
         layer: None,
         specimen_source: None,
+        time_limit_seconds: None,
     };
     live.analysis = Some(report("live-report"));
     app.snapshot.runs.push(live.clone());
@@ -456,6 +457,7 @@ fn analyze_only_and_cancel_do_not_launch_or_stop_a_program() {
             sections: Vec::new(),
             layer: None,
             specimen_source: None,
+            time_limit_seconds: None,
         });
     app.selected_analysis = Some("standalone-job".into());
     let output = ctx.run(egui::RawInput::default(), |ctx| {
@@ -567,6 +569,7 @@ fn an_unpacked_layers_analysis_is_found_in_its_packed_files_folder_and_can_be_sh
                 parent_sha256: "0".repeat(64),
             }),
             specimen_source: None,
+            time_limit_seconds: None,
         });
     assert_eq!(
         app.analysis_directory("packed-report-L2"),
@@ -605,11 +608,51 @@ fn running_a_missing_check_asks_the_backend_to_add_it_to_the_runs_analysis() {
     );
     assert!(matches!(
         app.submitted.last(),
-        Some(Command::AnalyzeMore { directory, run_id, checks })
+        Some(Command::AnalyzeMore { directory, run_id, checks, time_limit_seconds: None })
             if directory == &PathBuf::from("/saved/run/analysis")
                 && run_id.as_deref() == Some("packed-run")
                 && checks == &[antinomie_monitor_core::AnalysisKind::Floss]
     ));
+    // The time limit of Settings goes with a check run later, and "2× time"
+    // asks for the doubled limit whatever Settings say.
+    app.settings.analysis_time_limit_minutes = 6;
+    app.analysis_action(
+        "workspace",
+        Some(crate::analysis::ReportAction::RunCheck {
+            report_id: "packed-report".into(),
+            kind: antinomie_monitor_core::AnalysisKind::Floss,
+        }),
+    );
+    assert!(matches!(
+        app.submitted.last(),
+        Some(Command::AnalyzeMore {
+            time_limit_seconds: Some(360),
+            ..
+        })
+    ));
+    app.analysis_action(
+        "workspace",
+        Some(crate::analysis::ReportAction::RunCheckLonger {
+            report_id: "packed-report".into(),
+            kind: antinomie_monitor_core::AnalysisKind::Floss,
+            seconds: 960,
+        }),
+    );
+    assert!(matches!(
+        app.submitted.last(),
+        Some(Command::AnalyzeMore { time_limit_seconds: Some(960), checks, .. })
+            if checks == &[antinomie_monitor_core::AnalysisKind::Floss]
+    ));
+    app.settings.analysis_time_limit_minutes = 0;
+    app.analysis_action(
+        "workspace",
+        Some(crate::analysis::ReportAction::OpenAnalysisSettings),
+    );
+    assert!(app.settings_open);
+    assert_eq!(
+        app.settings_page,
+        crate::app::settings_window::SettingsPage::AnalysisTools
+    );
     // A report with no retained folder cannot be added to.
     let sent = app.submitted.len();
     app.analysis_action(

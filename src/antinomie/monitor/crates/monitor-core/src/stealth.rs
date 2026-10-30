@@ -9,7 +9,7 @@
 //! (its boot options, build string, symbols, worker names and QEMU's ACPI
 //! devices); what neither can change is listed by `giveaways()`.
 //!
-//! Some entries need the base (UEFI, a SATA or NVMe root disk, a NAT network
+//! Some entries need the base (UEFI, a SATA or NVMe root disk, a guest network
 //! of its own) or the host (OVMF, two threads per core); `fitted()` turns an
 //! entry the base or host lacks back into the choice every one has.
 use crate::storage::unique_id;
@@ -1413,11 +1413,12 @@ impl StealthProfile {
             found.push(Fallback {
                 setting: FallbackSetting::Nat,
                 summary: format!(
-                    "NAT network {} not supported by this base: 10.0.2.0/24 will be used",
+                    "Guest network {} needs a base with DHCP (built by 0.7.0 or later); \
+                     10.0.2.0/24 is used instead.",
                     self.nat.network
                 ),
                 note: format!(
-                    "NAT network {}: {NAT_STATIC}; 10.0.2.0/24 used",
+                    "Guest network {}: {NAT_STATIC}; 10.0.2.0/24 used instead",
                     self.nat.network
                 ),
                 reason: NAT_STATIC.into(),
@@ -1496,7 +1497,8 @@ impl Fallback {
     pub fn log_line(&self) -> String {
         format!(
             "Device profile setting not applied: {}; {}",
-            self.summary, self.reason
+            self.summary.trim_end_matches('.'),
+            self.reason
         )
     }
 }
@@ -1551,8 +1553,8 @@ pub fn base_supporting<'a>(
         })
 }
 
-/// Why an older base keeps QEMU's NAT network.
-const NAT_STATIC: &str = "the base sets 10.0.2.15 itself (rebuild it for DHCP)";
+/// Why an older base keeps QEMU's 10.0.2.0/24 network.
+const NAT_STATIC: &str = "this base sets 10.0.2.15 itself";
 
 /// What a base boots with besides virtio, SeaBIOS and 10.0.2.0/24, from its
 /// `bundle.json` (`stealth_support`, written by the image builders).
@@ -1681,7 +1683,7 @@ pub fn disk_bus_unavailable(bus: DiskBus, base: &BaseSupport) -> Option<&'static
     }
 }
 
-/// Why the base cannot use a NAT network of its own.
+/// Why the base cannot use a guest network of its own.
 pub fn nat_unavailable(base: &BaseSupport) -> Option<&'static str> {
     (!base.dhcp).then_some(NAT_STATIC)
 }

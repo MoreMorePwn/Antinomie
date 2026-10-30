@@ -4,6 +4,7 @@
 //! Nothing is ever executed; the viewer, Save to host, Open with and Static
 //! Analysis all work on the extracted copy.
 use super::*;
+use crate::theme;
 use antinomie_monitor_core::disks::reader::{DiskEntry, ExtractReceipt};
 use std::{
     collections::BTreeSet,
@@ -174,6 +175,7 @@ impl DiskView {
             ),
             false,
         ));
+        self.status_name = Some(display_name(&path));
         match intent {
             Intent::View => match read_for_view(&host) {
                 Ok(bytes) => {
@@ -188,6 +190,49 @@ impl DiskView {
             Intent::Save => self.start_save(&path, &host),
             Intent::OpenWith => self.extraction.confirm_open = Some(host),
             Intent::Analyze => self.action = Some(DiskAction::Analyze(host)),
+        }
+    }
+
+    /// The last extraction or save as a line: a file name in it in bold, and
+    /// a button that clears it. Failures go to the toasts instead.
+    pub(super) fn status_line(&mut self, ui: &mut egui::Ui) {
+        crate::toasts::take_failure(ui.ctx(), &mut self.status);
+        let Some((message, _)) = &self.status else {
+            return;
+        };
+        let font = egui::TextStyle::Body.resolve(ui.style());
+        let color = theme::good();
+        let mut job = egui::text::LayoutJob::default();
+        let name = self
+            .status_name
+            .as_deref()
+            .filter(|name| !name.is_empty())
+            .and_then(|name| message.find(name).map(|at| (at, name.len())));
+        let plain = |font: &egui::FontId| egui::text::TextFormat::simple(font.clone(), color);
+        match name {
+            Some((at, len)) => {
+                job.append(&message[..at], 0.0, plain(&font));
+                job.append(&message[at..at + len], 0.0, plain(&theme::bold_font(ui)));
+                job.append(&message[at + len..], 0.0, plain(&font));
+            }
+            None => job.append(message, 0.0, plain(&font)),
+        }
+        let mut close = false;
+        ui.horizontal_top(|ui| {
+            close = ui
+                .add(
+                    egui::Button::new(
+                        egui::RichText::new(egui_phosphor::regular::X).color(theme::muted()),
+                    )
+                    .frame(false),
+                )
+                .on_hover_text("Dismiss")
+                .clicked();
+            ui.add(egui::Label::new(job).wrap());
+        });
+        if close {
+            self.status = None;
+            self.status_name = None;
         }
     }
 

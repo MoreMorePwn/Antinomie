@@ -522,6 +522,30 @@ mod tests {
             let executable = dir.join("qemu");
             fs::write(&executable, format!("#!/bin/sh\n{script}\n")).unwrap();
             fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+            // Another test thread's child can hold the new file open for
+            // writing for a moment after a fork (ETXTBSY); start the script
+            // (and stop it at once: some fixtures never exit) until the
+            // kernel lets it execute, so the probes under test never see that.
+            let deadline = std::time::Instant::now() + Duration::from_secs(60);
+            loop {
+                match Command::new(&executable)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                {
+                    Ok(mut child) => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        break;
+                    }
+                    Err(error) => assert!(
+                        error.raw_os_error() == Some(26) && std::time::Instant::now() < deadline,
+                        "{error}"
+                    ),
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
             Self(dir)
         }
         fn executable(&self) -> PathBuf {

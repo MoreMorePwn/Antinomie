@@ -80,6 +80,15 @@ pub(super) fn show(ui: &mut egui::Ui, data: &Data, font: f32, verifying: bool) -
                 row.col(|ui| {
                     custody_parts::check_mark(ui, state, &event.prev, &event.hash);
                 });
+                row.response().context_menu(|ui| {
+                    crate::app::samples_page::notes::menu_item(ui, || {
+                        antinomie_monitor_core::samples::NoteRef::new(
+                            antinomie_monitor_core::samples::RefKind::Custody,
+                            event.seq.to_string(),
+                            format!("Custody entry {} · {}", event.seq, event.event.label()),
+                        )
+                    });
+                });
             });
         });
     if verify {

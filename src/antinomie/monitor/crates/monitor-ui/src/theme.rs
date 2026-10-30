@@ -105,20 +105,6 @@ pub fn bright_blue() -> Color32 {
 pub fn blue() -> Color32 {
     palette().accent
 }
-/// The bold proportional family (DejaVu Sans Bold).
-pub fn bold_family() -> FontFamily {
-    FontFamily::Name("bold".into())
-}
-/// `text` in the bold family at the body size, for titles. A context without
-/// the app's fonts (a bare test context) gets the regular face.
-pub fn bold(ctx: &egui::Context, text: impl Into<String>) -> egui::RichText {
-    let text = egui::RichText::new(text).text_style(TextStyle::Body);
-    if ctx.fonts(|fonts| fonts.families().contains(&bold_family())) {
-        text.family(bold_family())
-    } else {
-        text
-    }
-}
 pub fn heading() -> Color32 {
     palette().heading
 }
@@ -364,34 +350,50 @@ fn fonts() -> egui::FontDefinitions {
         "dejavu-sans-mono".into(),
         FontData::from_static(include_bytes!("../assets/fonts/DejaVuSansMono.ttf")).into(),
     );
-    fonts.font_data.insert(
-        "dejavu-sans-bold".into(),
-        FontData::from_static(include_bytes!("../assets/fonts/DejaVuSans-Bold.ttf")).into(),
-    );
     fonts
         .families
         .entry(FontFamily::Proportional)
         .or_default()
         .insert(0, "dejavu-sans".into());
-    // Bold weight (egui's `strong()` only recolours): the fallbacks follow so
-    // symbols and icons still resolve.
-    let mut bold = vec!["dejavu-sans-bold".to_owned()];
-    bold.extend(
-        fonts
-            .families
-            .get(&FontFamily::Proportional)
-            .into_iter()
-            .flatten()
-            .cloned(),
-    );
-    fonts.families.insert(bold_family(), bold);
     fonts
         .families
         .entry(FontFamily::Monospace)
         .or_default()
         .insert(0, "dejavu-sans-mono".into());
+    fonts.font_data.insert(
+        "dejavu-sans-bold".into(),
+        FontData::from_static(include_bytes!("../assets/fonts/DejaVuSans-Bold.ttf")).into(),
+    );
     egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+    // The bold face leads the proportional list, so icons and symbols it lacks
+    // still come from the same fallbacks.
+    let mut bold = fonts
+        .families
+        .get(&FontFamily::Proportional)
+        .cloned()
+        .unwrap_or_default();
+    bold.insert(0, "dejavu-sans-bold".into());
+    fonts.families.insert(bold_family(), bold);
     fonts
+}
+
+fn bold_family() -> FontFamily {
+    FontFamily::Name("bold".into())
+}
+
+/// The body font in bold. Where the bold face is not installed (a bare test
+/// context), the regular one.
+pub fn bold_font(ui: &egui::Ui) -> FontId {
+    let mut font = TextStyle::Body.resolve(ui.style());
+    if ui.fonts(|fonts| fonts.families().contains(&bold_family())) {
+        font.family = bold_family();
+    }
+    font
+}
+
+/// `text` in bold, for a name inside a sentence or a title of a pane.
+pub fn bold(ui: &egui::Ui, text: impl Into<String>) -> egui::RichText {
+    egui::RichText::new(text).font(bold_font(ui))
 }
 
 pub fn install(ctx: &egui::Context) {

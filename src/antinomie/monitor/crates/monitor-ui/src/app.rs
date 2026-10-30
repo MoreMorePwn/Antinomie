@@ -102,6 +102,8 @@ struct Settings {
     quota_gib: u32,
     /// Default stored-byte budget of a process core, MiB (clamped to what each guest accepts).
     core_budget_mib: u32,
+    /// Static analysis: minutes each analysis tool may run; 0 leaves each its own limit.
+    analysis_time_limit_minutes: u32,
     /// File activity: most MiB of written content kept for one file.
     file_write_file_mib: u32,
     /// File activity: most MiB of written content kept for a whole run.
@@ -217,6 +219,7 @@ impl Default for Settings {
             bundle: String::new(),
             quota_gib: 4,
             core_budget_mib: crate::core_budget::default_mib(),
+            analysis_time_limit_minutes: 0,
             file_write_file_mib: (antinomie_monitor_core::file_writes::DEFAULT_PER_FILE >> 20)
                 as u32,
             file_write_run_mib: (antinomie_monitor_core::file_writes::DEFAULT_PER_RUN >> 20) as u32,

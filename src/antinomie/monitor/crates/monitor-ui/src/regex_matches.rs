@@ -93,6 +93,12 @@ impl RegexWindow {
         self.start();
     }
 
+    /// Every match of the last finished scan, repeats included: the count the
+    /// All tab shows. None until a scan has finished.
+    pub(crate) fn total(&self) -> Option<u64> {
+        self.scan.as_ref().map(|scan| scan.total())
+    }
+
     #[cfg(test)]
     pub(crate) fn is_open(&self) -> bool {
         self.open

@@ -239,6 +239,8 @@ pub(super) fn show(
     selected_edge: Option<&(String, String)>,
     expanded: &std::collections::BTreeSet<String>,
     sample: &str,
+    context: &mut Option<String>,
+    menu: &mut dyn FnMut(&mut egui::Ui, &LineageNode),
 ) -> Hit {
     let palette = theme::palette();
     let response = ui.allocate_rect(rect, egui::Sense::click_and_drag());
@@ -543,6 +545,46 @@ pub(super) fn show(
         );
         labels.push((pill, item.edge));
     }
+    // What an edge label stands for, as a tooltip: the counts per kind.
+    if response.hovered() {
+        if let Some(at) = ui
+            .input(|input| input.pointer.hover_pos())
+            .filter(|at| !in_minimap(*at))
+        {
+            if let Some((_, edge)) = labels.iter().rev().find(|(pill, _)| pill.contains(at)) {
+                egui::show_tooltip_at_pointer(
+                    ui.ctx(),
+                    ui.layer_id(),
+                    egui::Id::new(("lineage_edge", &edge.from, &edge.to)),
+                    |ui| {
+                        ui.label(super::edge_summary(edge));
+                    },
+                );
+            }
+        }
+    }
+    // Right-click: the node under the pointer gets its menu.
+    if response.secondary_clicked() {
+        *context = response
+            .interact_pointer_pos()
+            .filter(|at| !in_minimap(*at))
+            .and_then(|at| {
+                node_rects
+                    .iter()
+                    .rev()
+                    .find(|(box_, _)| box_.contains(at))
+                    .map(|(_, node)| node.id.clone())
+            });
+    }
+    response.context_menu(|ui| {
+        match context
+            .as_ref()
+            .and_then(|id| graph.nodes.iter().find(|node| node.id == *id))
+        {
+            Some(node) => menu(ui, node),
+            None => ui.close_menu(),
+        }
+    });
     // Clicks: a badge wins, then a label, then a node.
     if hits.badge.is_none() {
         if let Some(at) = click.filter(|at| !in_minimap(*at)) {
@@ -552,6 +594,10 @@ pub(super) fn show(
                 node_rects.iter().rev().find(|(box_, _)| box_.contains(at))
             {
                 hits.node = Some(node.id.clone());
+                // Another library sample opens with one click.
+                if matches!(node.kind, NodeKind::Library { .. }) && node.id != sample {
+                    hits.open = Some(node.id.clone());
+                }
             } else {
                 hits.background = true;
             }

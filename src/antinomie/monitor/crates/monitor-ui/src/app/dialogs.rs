@@ -319,6 +319,9 @@ impl MonitorApp {
                 self.close_upload();
             }
         }
+        if let Some(page) = crate::settings_link::take(ctx) {
+            self.open_settings_page(page);
+        }
         if self.settings_open {
             self.settings_window(ctx);
         }

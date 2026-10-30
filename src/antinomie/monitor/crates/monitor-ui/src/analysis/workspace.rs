@@ -1,6 +1,7 @@
 //! Native retained-evidence workspace; all acquisition remains outside rendering.
 mod capa_matrix;
 pub(crate) mod content;
+mod limits;
 mod tabs;
 mod unpacking;
 
@@ -430,7 +431,11 @@ fn results(
             .listing
             .as_ref()
             .map_or(section.entries.len() as u64, |listing| listing.rows);
-        ui.label(format!("{} · {rows} rows", state_word(report, section)));
+        crate::widgets::chip(ui, state_word(report, section), state_tone(section));
+        ui.label(format!(
+            "{} rows",
+            antinomie_monitor_core::analysis::detection::group_digits(rows)
+        ));
         let tools = tools(section);
         if !tools.is_empty() {
             ui.weak(tools.join(", "));
@@ -452,6 +457,9 @@ fn results(
         }
     });
     ui.add(egui::Label::new(egui::RichText::new(&section.summary).weak()).wrap());
+    if let Some(next) = limits::notes(ui, report, section) {
+        action = Some(next);
+    }
     if section.summary.contains("Tools > Analysis tools")
         && section.state != antinomie_monitor_core::AnalysisSectionState::Complete
         && ui.button("Install analysis tools…").clicked()
@@ -685,49 +693,112 @@ fn categories(
     report: &AnalysisReport,
     state: &mut WorkspaceState,
 ) -> Option<ReportAction> {
-    use crate::widgets::{chip, Tone};
+    use crate::widgets::Tone;
     let mut action = None;
     // Checks can be added to an analysis that is not being made.
     let finished = matches!(
         report.state,
         AnalysisState::Complete | AnalysisState::Partial
     );
+    // One column of state tags, as wide as the longest word, so the tags line
+    // up from one category to the next; the counts and buttons line up too.
+    let tag_width = crate::widgets::chip_width(ui, TAG_WORDS);
+    let regex_total = state.regex.total();
+    // As wide as the longest count shown, so a narrow pane keeps it in view.
+    let rows_width = {
+        let font = egui::TextStyle::Monospace.resolve(ui.style());
+        let widest = report
+            .sections
+            .iter()
+            .map(|section| {
+                section
+                    .listing
+                    .as_ref()
+                    .map_or(section.entries.len() as u64, |listing| listing.rows)
+            })
+            .chain(regex_total)
+            .max()
+            .unwrap_or(0);
+        let text = format!(
+            "{} rows",
+            antinomie_monitor_core::analysis::detection::group_digits(widest)
+        );
+        ui.fonts(|fonts| {
+            fonts
+                .layout_no_wrap(text, font, egui::Color32::PLACEHOLDER)
+                .size()
+                .x
+        })
+    };
     crate::widgets::card(
         ui,
         "Categories",
         |_| {},
         |ui| {
-            for kind in ALL_KINDS {
-                let Some(section) = report.sections.iter().find(|section| section.kind == kind)
-                else {
-                    ui.horizontal(|ui| {
-                        ui.add_enabled(false, egui::Label::new(section_title(kind)))
-                            .on_disabled_hover_text(NOT_REQUESTED);
-                        chip(ui, "Not requested", Tone::Neutral);
-                        if run_button(
-                            ui,
-                            finished,
-                            "Run this check now; the rest of the analysis is not repeated",
-                        ) {
-                            action = Some(ReportAction::RunCheck {
-                                report_id: report.id.clone(),
-                                kind,
-                            });
-                        }
-                    });
-                    continue;
-                };
-                egui::Sides::new().show(
-                    ui,
-                    |ui| {
+            egui::Grid::new("analysis-categories")
+                .num_columns(4)
+                .spacing([12.0, 6.0])
+                .show(ui, |ui| {
+                    for kind in ALL_KINDS {
+                        let Some(section) =
+                            report.sections.iter().find(|section| section.kind == kind)
+                        else {
+                            ui.add_enabled(false, egui::Label::new(section_title(kind)))
+                                .on_disabled_hover_text(NOT_REQUESTED);
+                            crate::widgets::chip_wide(ui, "Not requested", Tone::Neutral, tag_width);
+                            ui.label("");
+                            if run_button(
+                                ui,
+                                finished,
+                                "Run this check now; the rest of the analysis is not repeated",
+                            ) {
+                                action = Some(ReportAction::RunCheck {
+                                    report_id: report.id.clone(),
+                                    kind,
+                                });
+                            }
+                            ui.end_row();
+                            continue;
+                        };
                         if crate::widgets::link(ui, section_title(kind))
                             .on_hover_text(&section.summary)
                             .clicked()
                         {
                             state.show(kind);
                         }
-                    },
-                    |ui| {
+                        crate::widgets::chip_wide(
+                            ui,
+                            state_word(report, section),
+                            state_tone(section),
+                            tag_width,
+                        );
+                        // The regex matches are read from the strings: they
+                        // have a count once the matches have been scanned.
+                        let rows = if kind == AnalysisKind::Regex {
+                            regex_total
+                        } else {
+                            Some(
+                                section
+                                    .listing
+                                    .as_ref()
+                                    .map_or(section.entries.len() as u64, |listing| listing.rows),
+                            )
+                        };
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(rows_width, ui.spacing().interact_size.y),
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| {
+                                if let Some(rows) = rows {
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "{} rows",
+                                            antinomie_monitor_core::analysis::detection::group_digits(rows)
+                                        ))
+                                        .monospace(),
+                                    );
+                                }
+                            },
+                        );
                         if ui
                             .button(egui_phosphor::regular::ARROW_SQUARE_OUT)
                             .on_hover_text("Open category in a separate pane")
@@ -738,23 +809,26 @@ fn categories(
                                 kind,
                             });
                         }
-                        // The regex matches are read from the strings: no
-                        // listing of their own to count.
-                        if kind != AnalysisKind::Regex {
-                            let rows = section
-                                .listing
-                                .as_ref()
-                                .map_or(section.entries.len() as u64, |listing| listing.rows);
-                            ui.label(egui::RichText::new(format!("{rows} rows")).monospace());
-                        }
-                        chip(ui, state_word(report, section), state_tone(section));
-                    },
-                );
-            }
+                        ui.end_row();
+                    }
+                });
         },
     );
     action
 }
+
+/// Every word a category's state tag can say, to size the tag column.
+const TAG_WORDS: &[&str] = &[
+    "Complete",
+    "Partial",
+    "Unavailable",
+    "Timeout",
+    "Pending",
+    "Running…",
+    "Queued…",
+    "Waiting…",
+    "Not requested",
+];
 
 /// The small Run button of a category; true when it was pressed.
 fn run_button(ui: &mut egui::Ui, enabled: bool, hover: &str) -> bool {
@@ -790,7 +864,7 @@ fn state_tone(section: &AnalysisSection) -> crate::widgets::Tone {
     use antinomie_monitor_core::AnalysisSectionState as S;
     match section.state {
         S::Complete => Tone::Good,
-        S::Partial => Tone::Warn,
+        S::Partial | S::Timeout => Tone::Warn,
         S::Unavailable => Tone::Error,
         S::Pending | S::Running => Tone::Neutral,
     }
@@ -859,7 +933,17 @@ fn is_provenance(entry: &AnalysisEntry) -> bool {
 
 /// The category's tools, including those older reports kept as rows.
 fn tools(section: &AnalysisSection) -> Vec<String> {
-    let mut tools = section.tools.clone();
+    // Reports from before the rename credit the built-in analysis by its old name.
+    let mut tools: Vec<String> = section
+        .tools
+        .iter()
+        .map(
+            |tool| match tool.strip_prefix("Antinomie byte triage 2 (") {
+                Some(version) => format!("Built-in analysis ({version}"),
+                None => tool.clone(),
+            },
+        )
+        .collect();
     for entry in section.entries.iter().filter(|entry| is_provenance(entry)) {
         if !tools.contains(&entry.value) {
             tools.push(entry.value.clone());
@@ -880,6 +964,7 @@ fn state_word(report: &AnalysisReport, section: &AnalysisSection) -> &'static st
         antinomie_monitor_core::AnalysisSectionState::Complete => "Complete",
         antinomie_monitor_core::AnalysisSectionState::Partial => "Partial",
         antinomie_monitor_core::AnalysisSectionState::Unavailable => "Unavailable",
+        antinomie_monitor_core::AnalysisSectionState::Timeout => "Timeout",
     }
 }
 
@@ -1025,6 +1110,7 @@ mod tests {
                     }),
                 })
                 .collect(),
+            limits: Vec::new(),
         }
     }
     #[test]
@@ -1055,6 +1141,7 @@ mod tests {
             ],
             layer: None,
             specimen_source: None,
+            time_limit_seconds: None,
         };
         report.sections[1].state = AnalysisSectionState::Running;
         let words: Vec<_> = report

@@ -35,6 +35,7 @@ fn production_sandbox_publishes_light_results_while_heavy_tool_runs() {
                 AnalysisKind::Metadata,
                 AnalysisKind::Strings,
             ],
+            time_limit_minutes: 0,
         },
     );
     report.specimen_len = Some(specimen.len() as u64);
@@ -127,6 +128,7 @@ fn three_checks() -> AnalysisReport {
                 AnalysisKind::Capabilities,
                 AnalysisKind::Strings,
             ],
+            time_limit_minutes: 0,
         },
     );
     report.state = AnalysisState::Running;

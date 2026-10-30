@@ -87,6 +87,26 @@ impl MonitorApp {
             })
     }
 
+    /// The run a report was made for, when it is a run's.
+    fn run_of_report(&self, report_id: &str) -> Option<String> {
+        self.snapshot
+            .runs
+            .iter()
+            .chain(&self.history)
+            .find(|run| {
+                run.analysis
+                    .as_ref()
+                    .is_some_and(|report| report.id == report_id)
+            })
+            .map(|run| run.id.clone())
+    }
+
+    /// The seconds each analysis tool may run when the Run program window and
+    /// Settings ask for a limit of their own; none leaves each tool its own.
+    pub(super) fn analysis_time_limit_seconds(&self) -> Option<u64> {
+        antinomie_monitor_core::time_limit_seconds(self.settings.analysis_time_limit_minutes)
+    }
+
     pub(super) fn analysis_directory(&self, report_id: &str) -> Option<PathBuf> {
         if let Some(run) = self.snapshot.runs.iter().chain(&self.history).find(|run| {
             run.analysis
@@ -181,22 +201,34 @@ impl MonitorApp {
                     self.report_error("Retained result directory is unavailable".into());
                     return;
                 };
-                let run_id = self
-                    .snapshot
-                    .runs
-                    .iter()
-                    .chain(&self.history)
-                    .find(|run| {
-                        run.analysis
-                            .as_ref()
-                            .is_some_and(|report| report.id == report_id)
-                    })
-                    .map(|run| run.id.clone());
+                let run_id = self.run_of_report(&report_id);
                 self.send(Command::AnalyzeMore {
                     directory,
                     run_id,
                     checks: vec![kind],
+                    time_limit_seconds: self.analysis_time_limit_seconds(),
                 });
+            }
+            Some(crate::analysis::ReportAction::RunCheckLonger {
+                report_id,
+                kind,
+                seconds,
+            }) => {
+                let Some(directory) = self.analysis_directory(&report_id) else {
+                    self.report_error("Retained result directory is unavailable".into());
+                    return;
+                };
+                let run_id = self.run_of_report(&report_id);
+                self.send(Command::AnalyzeMore {
+                    directory,
+                    run_id,
+                    checks: vec![kind],
+                    time_limit_seconds: Some(seconds),
+                });
+            }
+            Some(crate::analysis::ReportAction::OpenAnalysisSettings) => {
+                self.settings_open = true;
+                self.settings_page = settings_window::SettingsPage::AnalysisTools;
             }
             Some(crate::analysis::ReportAction::ShowReport { report_id }) => {
                 if self.analysis_report(&report_id).is_some() {

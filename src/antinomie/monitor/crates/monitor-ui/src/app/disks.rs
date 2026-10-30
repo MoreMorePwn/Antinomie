@@ -151,6 +151,7 @@ impl MonitorApp {
                 // the default triage set.
                 let mut analysis = self.exec.analysis.clone();
                 analysis.enabled = true;
+                analysis.time_limit_minutes = self.settings.analysis_time_limit_minutes;
                 if analysis.checks.is_empty() {
                     analysis.checks = antinomie_monitor_core::AnalysisKind::TRIAGE.to_vec();
                 }

@@ -82,11 +82,16 @@ fn optional_tool(
         Ok(output) => unavailable(
             label,
             if output.timed_out {
-                "Local tool timed out"
+                format!(
+                    "{label} ran out of time: it was stopped after {} seconds",
+                    timeout.as_secs()
+                )
             } else if output.truncated {
-                "Local tool output exceeded its bound"
+                format!("{label} printed more than the 24 KiB the analysis reads")
             } else {
-                "Local tool failed or has no usable local definitions/model"
+                output.failure_text(label, timeout).unwrap_or_else(|| {
+                    format!("{label} failed or has no usable local definitions or model")
+                })
             },
         ),
         Err(error) => unavailable(label, error),
@@ -516,6 +521,7 @@ mod tests {
             sections: vec![],
             layer: None,
             specimen_source: None,
+            time_limit_seconds: None,
         }
     }
 

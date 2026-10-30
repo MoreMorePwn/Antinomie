@@ -197,7 +197,7 @@ pub(super) fn disassemble(section: &mut AnalysisSection, specimen: &[u8], listin
     let Ok(file) = object::File::parse(specimen) else {
         unavailable(
             section,
-            "disassembly needs a recognized object format (ELF, PE or Mach-O)",
+            "The file is not an ELF, PE or Mach-O file the parser can read, so there is nothing to disassemble",
         );
         return;
     };
@@ -216,7 +216,12 @@ pub(super) fn disassemble(section: &mut AnalysisSection, specimen: &[u8], listin
     let mut writer =
         match ListingWriter::create(listings, AnalysisKind::Disassembly, LISTING_MAX_SIZE) {
             Ok(writer) => writer,
-            Err(error) => return unavailable(section, error),
+            Err(error) => {
+                return unavailable(
+                    section,
+                    format!("The disassembly listing could not be written: {error}"),
+                );
+            }
         };
     let mut formatter =
         IntelFormatter::with_options(Some(Box::new(Names(functions.clone()))), None);
@@ -312,24 +317,28 @@ pub(super) fn disassemble(section: &mut AnalysisSection, specimen: &[u8], listin
     }
     match writer.finish(full) {
         Ok(listing) => {
-            section.state = if listing.truncated {
-                AnalysisSectionState::Partial
-            } else {
-                AnalysisSectionState::Complete
-            };
+            section.state = AnalysisSectionState::Complete;
             section.summary = format!(
-                "{instructions} instructions in {sections} executable sections; {symbols} function symbols and {discovered} call targets named sub_<address>; addresses are object addresses{}{}",
+                "{instructions} instructions in {sections} executable sections; {symbols} function symbols and {discovered} call targets named sub_<address>; addresses are object addresses{}",
                 if invalid > 0 {
                     format!("; {invalid} undecodable byte runs shown as (bad)")
                 } else {
                     String::new()
                 },
-                if listing.truncated {
-                    "; listing bound reached, later code omitted"
-                } else {
-                    ""
-                }
             );
+            if listing.truncated {
+                section.state = AnalysisSectionState::Partial;
+                super::limits::add(
+                    section,
+                    AnalysisLimitKind::Size,
+                    format!(
+                        "The listing reached its {} limit after {} instructions; later code is not listed.",
+                        crate::byte_size::short_size(super::listing::LISTING_MAX_SIZE),
+                        super::detection::group_digits(instructions)
+                    ),
+                    None,
+                );
+            }
             section.listing = Some(listing);
             section.tools.push(ICED_VERSION.into());
         }
@@ -339,7 +348,7 @@ pub(super) fn disassemble(section: &mut AnalysisSection, specimen: &[u8], listin
 
 /// Other architectures: objdump's text, parsed into the same rows.
 fn objdump(section: &mut AnalysisSection, listings: &Path) {
-    let (version, output, truncated) = match super::worker::tool(
+    let (version, output, end) = match super::worker::tool(
         "/usr/bin/objdump",
         &[
             "--disassemble",
@@ -361,7 +370,12 @@ fn objdump(section: &mut AnalysisSection, listings: &Path) {
     let mut writer =
         match ListingWriter::create(listings, AnalysisKind::Disassembly, LISTING_MAX_SIZE) {
             Ok(writer) => writer,
-            Err(error) => return unavailable(section, error),
+            Err(error) => {
+                return unavailable(
+                    section,
+                    format!("The disassembly listing could not be written: {error}"),
+                );
+            }
         };
     let mut function: Option<String> = None;
     let mut full = false;
@@ -419,18 +433,28 @@ fn objdump(section: &mut AnalysisSection, listings: &Path) {
         }
         instructions += 1;
     }
-    match writer.finish(full || truncated) {
+    match writer.finish(full || end != super::worker::ToolEnd::Finished) {
         Ok(listing) => {
-            section.state = if listing.truncated {
-                AnalysisSectionState::Partial
-            } else {
-                AnalysisSectionState::Complete
-            };
+            section.state = AnalysisSectionState::Complete;
             section.summary = format!(
                 "{instructions} instructions from objdump (no built-in decoder for this architecture); addresses are object addresses"
             );
+            if listing.truncated && full {
+                section.state = AnalysisSectionState::Partial;
+                super::limits::add(
+                    section,
+                    AnalysisLimitKind::Size,
+                    format!(
+                        "The listing reached its {} limit after {} instructions; later code is not listed.",
+                        crate::byte_size::short_size(super::listing::LISTING_MAX_SIZE),
+                        super::detection::group_digits(instructions)
+                    ),
+                    None,
+                );
+            }
             section.listing = Some(listing);
             section.tools.push(version);
+            super::worker::cut_tool_short(section, "objdump", end);
         }
         Err(error) => unavailable(section, error),
     }

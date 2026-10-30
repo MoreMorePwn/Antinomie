@@ -581,6 +581,7 @@ impl Worker {
         directory: &Path,
         run_id: Option<String>,
         checks: &[crate::analysis::AnalysisKind],
+        time_limit_seconds: Option<u64>,
     ) -> Result<String, String> {
         if directory
             .components()
@@ -593,6 +594,7 @@ impl Worker {
             run_id,
             directory,
             checks,
+            time_limit_seconds,
             self.options.capture_quota_size,
         )?;
         self.host_analysis_updates();

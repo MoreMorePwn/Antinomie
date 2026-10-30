@@ -18,8 +18,10 @@ use std::{
     sync::{atomic::AtomicBool, Arc},
 };
 
+mod artifact_rows;
 mod custody;
 mod lineage;
+mod notes_tab;
 mod output_files;
 mod parts;
 mod runs;
@@ -37,6 +39,7 @@ pub(super) enum Tab {
     Summary,
     Runs,
     Custody,
+    Notes,
 }
 
 /// One run of the sample, numbered in start order (run 1 is the oldest).
@@ -84,7 +87,11 @@ pub(super) struct Data {
     /// What the runs' Triage digests add up to.
     pub(super) rollup: antinomie_monitor_core::samples::Rollup,
     /// What the runs left behind, for Output files.
-    outputs: Vec<output_files::Output>,
+    pub(super) outputs: Vec<output_files::Output>,
+    /// The notes of the sample, newest first.
+    pub(super) notes: Vec<antinomie_monitor_core::samples::Note>,
+    /// The data folder, for what the window reads later (file hashes).
+    data_dir: std::path::PathBuf,
     /// Every library sample's name and verdict, by SHA-256, for the lineage
     /// graph's marks.
     pub(super) known: std::collections::BTreeMap<String, (String, String)>,
@@ -214,6 +221,18 @@ fn load(options: &BackendOptions, vms: &[(String, String)], sha256: &str) -> Loa
             });
         }
     }
+    // Runs deleted through the app stay listed from their records, so the
+    // numbers of the other runs do not move.
+    let mut retained = std::collections::HashSet::new();
+    for run in library.retained_runs(&record.sha256)? {
+        if !runs
+            .iter()
+            .any(|live| live.id == run.id && live.vm_id == run.vm_id)
+        {
+            retained.insert(run.id.clone());
+            runs.push(run);
+        }
+    }
     runs.sort_by(|a, b| {
         a.started_ms
             .cmp(&b.started_ms)
@@ -233,8 +252,13 @@ fn load(options: &BackendOptions, vms: &[(String, String)], sha256: &str) -> Loa
                 report: found.clone(),
             });
         }
-        let folder = run.directory.is_dir();
-        let artifacts = RunArtifacts::load(&run.directory).ok().flatten();
+        let deleted = retained.contains(&run.id);
+        let folder = !deleted && run.directory.is_dir();
+        let artifacts = if deleted {
+            None
+        } else {
+            RunArtifacts::load(&run.directory).ok().flatten()
+        };
         entries.push(RunEntry {
             number,
             run: super::super::history::listed(&run),
@@ -253,7 +277,8 @@ fn load(options: &BackendOptions, vms: &[(String, String)], sha256: &str) -> Loa
             .collect::<Vec<_>>(),
     );
     entries.reverse();
-    let outputs = output_files::read(&entries);
+    let kept = library.artifacts(&record.sha256)?;
+    let outputs = output_files::read(&entries, &kept);
     let (known, links) = lineage_links(&library, &record.sha256, &entries)?;
     let archive = library.archive_path(&record.sha256)?;
     Ok(Data {
@@ -267,6 +292,8 @@ fn load(options: &BackendOptions, vms: &[(String, String)], sha256: &str) -> Loa
         runs: entries,
         rollup,
         outputs,
+        notes: library.notes(&record.sha256)?,
+        data_dir: options.data_dir.clone(),
         known,
         links,
         report,
@@ -507,6 +534,7 @@ impl MonitorApp {
                 (Tab::Summary, "Summary", None),
                 (Tab::Runs, "Runs", Some(data.runs.len())),
                 (Tab::Custody, "Custody log", Some(data.events.len())),
+                (Tab::Notes, "Notes", Some(data.notes.len())),
             ] {
                 let mut item = widgets::TabItem::new(label);
                 if let Some(count) = count {
@@ -529,6 +557,7 @@ impl MonitorApp {
                     detail.stale = true;
                 }
             }
+            Tab::Notes => self.notes_tab(ui, &data),
         }
         match action {
             Some(Action::Back) => self.samples_page.detail = None,
@@ -555,12 +584,15 @@ impl MonitorApp {
         let why = self.samples_page.run_error(&data.record);
         let mut back = false;
         let mut chosen = None;
+        // The back link has a line of its own; the title bar with the
+        // sample's actions sits under it.
+        if widgets::link(ui, "‹ All samples").clicked() {
+            back = true;
+        }
+        ui.add_space(2.0);
         egui::Sides::new().show(
             ui,
             |ui| {
-                if widgets::link(ui, "‹ All samples").clicked() {
-                    back = true;
-                }
                 ui.label(
                     RichText::new(&data.record.name)
                         .strong()
@@ -623,6 +655,13 @@ impl MonitorApp {
 }
 
 impl SamplesPage {
+    /// A run is selected on the open sample's Runs tab: Details show it.
+    pub(in crate::app) fn wants_details(&self) -> bool {
+        self.detail
+            .as_ref()
+            .is_some_and(|detail| detail.tab == Tab::Runs && detail.runs.has_selection())
+    }
+
     fn loading_detail(&self) -> bool {
         self.detail
             .as_ref()
@@ -643,8 +682,31 @@ impl SamplesPage {
     }
 }
 
+/// The ATT&CK techniques Triage mapped in the sample's runs, as tag labels,
+/// leaving out those the sample already carries: the picker's From Triage.
+pub(super) fn suggested_techniques(data: &Data) -> Vec<String> {
+    use antinomie_monitor_core::samples::TagKind;
+    let mut labels: Vec<String> = Vec::new();
+    for technique in data
+        .rollup
+        .tactics
+        .iter()
+        .flat_map(|tactic| &tactic.techniques)
+    {
+        let label = antinomie_monitor_core::mitre::technique_label(&technique.id);
+        let carried = data
+            .tags
+            .iter()
+            .any(|tag| tag.kind == TagKind::Technique && tag.value == label);
+        if !carried && !labels.contains(&label) {
+            labels.push(label);
+        }
+    }
+    labels
+}
+
 /// The name a sample takes in the guest: safe characters only.
-fn guest_name(record: &SampleRecord) -> String {
+pub(super) fn guest_name(record: &SampleRecord) -> String {
     let name: String = record
         .name
         .chars()
@@ -711,6 +773,7 @@ impl SamplesPage {
             detail.tab = match name {
                 "runs" => Tab::Runs,
                 "custody" => Tab::Custody,
+                "notes" => Tab::Notes,
                 _ => Tab::Summary,
             };
         }
@@ -721,6 +784,33 @@ impl SamplesPage {
         if let Some(detail) = &mut self.detail {
             detail.scroll_y = Some(y);
         }
+    }
+
+    /// Select the run at `index` of the Runs tab's list (screenshots).
+    pub(in crate::app) fn select_detail_run(&mut self, index: usize) {
+        if let Some(detail) = &mut self.detail {
+            if let Some(entry) = detail.data.as_ref().and_then(|data| data.runs.get(index)) {
+                let id = entry.run.id.clone();
+                detail.runs.select_for_test(id);
+            }
+        }
+    }
+
+    /// Whether each list row's custody log verified, by SHA-256.
+    pub(in crate::app) fn list_custody_ok(&self) -> Vec<(String, bool)> {
+        self.rows
+            .iter()
+            .map(|row| (row.record.sha256.clone(), row.custody_ok))
+            .collect()
+    }
+
+    /// What the tag picker offers under From Triage for the open sample.
+    pub(in crate::app) fn detail_suggestions(&self) -> Vec<String> {
+        self.detail
+            .as_ref()
+            .and_then(|detail| detail.data.as_ref())
+            .map(|data| suggested_techniques(data))
+            .unwrap_or_default()
     }
 
     pub(in crate::app) fn detail_open(&self) -> bool {

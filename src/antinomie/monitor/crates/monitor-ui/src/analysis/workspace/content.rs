@@ -415,6 +415,7 @@ mod tests {
             sections: Vec::new(),
             layer: None,
             specimen_source: None,
+            time_limit_seconds: None,
         };
         let ctx = egui::Context::default();
         let mut state = ContentState::default();
@@ -461,6 +462,7 @@ mod tests {
             sections: Vec::new(),
             layer: None,
             specimen_source: None,
+            time_limit_seconds: None,
         };
         let preview = Ok(AnalysisSpecimenPage {
             report_id: report.id.clone(),

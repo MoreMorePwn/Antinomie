@@ -40,6 +40,13 @@ pub(super) struct State {
     edge: Option<(String, String)>,
     view: canvas::View,
     cached: Option<Cached>,
+    /// The node the right-click menu is open on.
+    context: Option<String>,
+    /// The node that keeps its place on screen when the layout changes: the
+    /// one just expanded or collapsed, else the sample.
+    anchor: Option<String>,
+    /// Where each node's centre was in the viewport at the last draw.
+    screen: std::collections::BTreeMap<String, egui::Vec2>,
 }
 
 struct Cached {
@@ -62,6 +69,9 @@ impl Default for State {
             edge: None,
             view: canvas::View::default(),
             cached: None,
+            context: None,
+            anchor: None,
+            screen: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -111,6 +121,21 @@ impl State {
             };
             let graph = build_lineage(&data.record.sha256, &runs, &data.links, &known, &options);
             let layout = canvas::Layout::of(&graph);
+            // A level or node was added or removed: the anchor stays where it
+            // was on screen, the rest of the graph moves around it.
+            let toggled = self
+                .cached
+                .as_ref()
+                .is_some_and(|cached| cached.options.expanded != options.expanded);
+            let anchor = match (&self.anchor, toggled) {
+                (Some(id), true) => id.clone(),
+                _ => data.record.sha256.clone(),
+            };
+            if self.cached.is_some() && self.view.fitted {
+                if let (Some(at), Some(rect)) = (self.screen.get(&anchor), layout.at.get(&anchor)) {
+                    self.view.offset = *at - rect.center().to_vec2() * self.view.zoom;
+                }
+            }
             self.cached = Some(Cached {
                 options,
                 data: data as *const Data,
@@ -134,6 +159,110 @@ impl State {
         self.refresh(data);
         self.cached.as_ref().map(|cached| cached.graph.clone())
     }
+}
+
+impl State {
+    /// Expand or collapse one node's neighbours; it keeps its place.
+    fn toggle(&mut self, id: String) {
+        self.anchor = Some(id.clone());
+        if !self.expanded.remove(&id) {
+            self.expanded.insert(id);
+        }
+    }
+}
+
+/// What the right-click menu of a node asks for.
+enum Act {
+    Open(String),
+    Promote(Out),
+    Toggle(String),
+}
+
+/// The Add to Samples… request for a file seen in runs: where it was, the
+/// runs it was in and the program that wrote it.
+fn promote_out(graph: &LineageGraph, node: &antinomie_monitor_core::samples::LineageNode) -> Out {
+    let mut runs: Vec<usize> = graph
+        .edges
+        .iter()
+        .filter(|edge| edge.from == node.id || edge.to == node.id)
+        .flat_map(|edge| edge.runs.iter().copied())
+        .collect();
+    runs.sort_unstable();
+    runs.dedup();
+    let writer = graph
+        .edges
+        .iter()
+        .filter(|edge| edge.to == node.id && edge.kinds.contains_key(&EdgeKind::Dropped))
+        .find_map(|edge| graph.nodes.iter().find(|n| n.id == edge.from))
+        .map(|parent| parent.path.clone())
+        .unwrap_or_default();
+    Out::Promote {
+        path: node.path.clone(),
+        sha256: node.sha256.clone(),
+        writer,
+        runs,
+    }
+}
+
+/// The right-click menu of a node.
+fn node_menu(
+    ui: &mut egui::Ui,
+    node: &antinomie_monitor_core::samples::LineageNode,
+    graph: &LineageGraph,
+    data: &Data,
+    expanded: &BTreeSet<String>,
+    act: &mut Option<Act>,
+) {
+    if matches!(node.kind, NodeKind::Library { .. })
+        && node.id != data.record.sha256
+        && ui.button("Open sample").clicked()
+    {
+        *act = Some(Act::Open(node.id.clone()));
+        ui.close_menu();
+    }
+    if matches!(node.kind, NodeKind::Captured | NodeKind::Lost)
+        && !node.path.is_empty()
+        && ui.button("Add to Samples…").clicked()
+    {
+        *act = Some(Act::Promote(promote_out(graph, node)));
+        ui.close_menu();
+    }
+    if matches!(node.kind, NodeKind::Command) && ui.button("Copy command line").clicked() {
+        ui.ctx().copy_text(node.path.clone());
+        ui.close_menu();
+    }
+    if !node.sha256.is_empty() && ui.button("Copy SHA-256").clicked() {
+        ui.ctx().copy_text(node.sha256.clone());
+        ui.close_menu();
+    }
+    let hidden = node.hidden_parents + node.hidden_children;
+    if hidden > 0 {
+        if ui.button(format!("Expand (+{hidden})")).clicked() {
+            *act = Some(Act::Toggle(node.id.clone()));
+            ui.close_menu();
+        }
+    } else if expanded.contains(&node.id) && ui.button("Collapse").clicked() {
+        *act = Some(Act::Toggle(node.id.clone()));
+        ui.close_menu();
+    }
+    parts::add_note_menu_item(ui);
+}
+
+/// "dropped ×4 · executed ×4 · 4 runs": what an edge label stands for.
+pub(super) fn edge_summary(edge: &antinomie_monitor_core::samples::LineageEdge) -> String {
+    let kinds = EdgeKind::ALL
+        .iter()
+        .filter_map(|kind| {
+            edge.kinds
+                .get(kind)
+                .map(|n| format!("{} ×{n}", kind.label()))
+        })
+        .collect::<Vec<_>>()
+        .join(" · ");
+    format!(
+        "{kinds} · {}",
+        antinomie_monitor_core::samples::runs_label(&edge.runs)
+    )
 }
 
 fn stepper(ui: &mut egui::Ui, label: &str, value: &mut usize, max: usize) {
@@ -218,30 +347,54 @@ pub(super) fn section(ui: &mut egui::Ui, state: &mut State, data: &Data) -> Opti
         let sample = data.record.sha256.clone();
         // Read the graph again when an option changed this frame.
         state.refresh(data);
-        let State {
-            cached,
-            view,
-            selected,
-            edge,
-            expanded,
-            ..
-        } = &mut *state;
-        let cached = cached.as_ref().expect("just built");
-        let hit = canvas::show(
-            ui,
-            rect,
-            &cached.graph,
-            &cached.layout,
-            view,
-            selected.as_deref(),
-            edge.as_ref(),
-            expanded,
-            &sample,
-        );
+        let mut act = None;
+        let (hit, screen) = {
+            let State {
+                cached,
+                view,
+                selected,
+                edge,
+                expanded,
+                context,
+                ..
+            } = &mut *state;
+            let cached = cached.as_ref().expect("just built");
+            let expanded: &BTreeSet<String> = expanded;
+            let graph = &cached.graph;
+            let mut menu =
+                |ui: &mut egui::Ui, node: &antinomie_monitor_core::samples::LineageNode| {
+                    node_menu(ui, node, graph, data, expanded, &mut act);
+                };
+            let hit = canvas::show(
+                ui,
+                rect,
+                graph,
+                &cached.layout,
+                view,
+                selected.as_deref(),
+                edge.as_ref(),
+                expanded,
+                &sample,
+                context,
+                &mut menu,
+            );
+            let screen: std::collections::BTreeMap<String, egui::Vec2> = cached
+                .layout
+                .at
+                .iter()
+                .map(|(id, at)| (id.clone(), view.offset + at.center().to_vec2() * view.zoom))
+                .collect();
+            (hit, screen)
+        };
+        state.screen = screen;
+        match act {
+            Some(Act::Open(id)) => out = Some(Out::OpenSample(id)),
+            Some(Act::Promote(promote)) => out = Some(promote),
+            Some(Act::Toggle(id)) => state.toggle(id),
+            None => {}
+        }
         if let Some(id) = hit.badge {
-            if !state.expanded.remove(&id) {
-                state.expanded.insert(id);
-            }
+            state.toggle(id);
         } else if let Some(edge) = hit.edge {
             state.edge = Some(edge);
         } else if let Some(id) = hit.node {
@@ -275,19 +428,7 @@ fn details(ui: &mut egui::Ui, state: &mut State, data: &Data, out: &mut Option<O
             .iter()
             .find(|edge| edge.from == *from && edge.to == *to)
         {
-            let summary = EdgeKind::ALL
-                .iter()
-                .filter_map(|kind| {
-                    edge.kinds
-                        .get(kind)
-                        .map(|n| format!("{} ×{n}", kind.label()))
-                })
-                .collect::<Vec<_>>()
-                .join(" · ");
-            ui.label(RichText::new(format!(
-                "{summary} · {}",
-                antinomie_monitor_core::samples::runs_label(&edge.runs)
-            )));
+            ui.label(RichText::new(edge_summary(edge)));
             if edge.per_run.is_empty() {
                 parts::muted_line(ui, "Seen in the library's origins, not in a run.");
             }
@@ -358,31 +499,7 @@ fn details(ui: &mut egui::Ui, state: &mut State, data: &Data, out: &mut Option<O
                     .on_hover_text("Read the file from a run's saved disk and add it")
                     .clicked();
                 if ask {
-                    let mut runs: Vec<usize> = cached
-                        .graph
-                        .edges
-                        .iter()
-                        .filter(|edge| edge.from == node.id || edge.to == node.id)
-                        .flat_map(|edge| edge.runs.iter().copied())
-                        .collect();
-                    runs.sort_unstable();
-                    runs.dedup();
-                    let writer = cached
-                        .graph
-                        .edges
-                        .iter()
-                        .filter(|edge| {
-                            edge.to == node.id && edge.kinds.contains_key(&EdgeKind::Dropped)
-                        })
-                        .find_map(|edge| cached.graph.nodes.iter().find(|n| n.id == edge.from))
-                        .map(|parent| parent.path.clone())
-                        .unwrap_or_default();
-                    *out = Some(Out::Promote {
-                        path: node.path.clone(),
-                        sha256: node.sha256.clone(),
-                        writer,
-                        runs,
-                    });
+                    *out = Some(promote_out(&cached.graph, node));
                 }
             }
             _ => {}

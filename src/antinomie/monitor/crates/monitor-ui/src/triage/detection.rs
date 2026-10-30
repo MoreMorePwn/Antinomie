@@ -198,6 +198,9 @@ pub(super) struct View {
     pub automatic: bool,
     pub profile: String,
     pub open_manager: bool,
+    /// A rule the Matches table is to be filtered to when it next shows (set
+    /// by the sample window, which opens a run on one rule's hit).
+    pending_rule: Option<String>,
     pub rules_generation: u64,
     seen_generation: u64,
     auto_key: [String; 3],
@@ -370,6 +373,16 @@ impl View {
                     .collect()
             })
             .unwrap_or_default();
+    }
+    /// Show `engine`'s tab, filtered to the rule `rule_id` once it draws.
+    pub(super) fn focus_rule(&mut self, engine: &str, rule_id: &str) {
+        if let Some(found) = ENGINES
+            .iter()
+            .find(|candidate| name(**candidate).eq_ignore_ascii_case(engine))
+        {
+            self.selected = *found;
+        }
+        self.pending_rule = Some(rule_id.to_owned());
     }
     pub fn tick(&mut self, ctx: &egui::Context, input: &TriageInput<'_>) {
         self.clock = input.clock_anchor;
@@ -1070,9 +1083,18 @@ impl View {
                 _ => "No retained matches. Coverage is incomplete or unavailable.",
             });
         }
+        let draft_id = ui.id().with(("table-filter", TABLES[index]));
+        // A quote or backslash cannot be written in the filter's string.
+        if let Some(rule) = self
+            .pending_rule
+            .take()
+            .filter(|rule| !rule.contains(['"', '\\']) && !rule.chars().any(char::is_control))
+        {
+            let draft = format!("finding.rule == \"{rule}\"");
+            ui.data_mut(|data| data.insert_temp(draft_id, draft));
+        }
         let filter =
             query::table_filter(ui, TABLES[index], "finding.severity == high", FIELDS, &[]);
-        let draft_id = ui.id().with(("table-filter", TABLES[index]));
         let draft = ui
             .data(|data| data.get_temp::<String>(draft_id))
             .unwrap_or_default();

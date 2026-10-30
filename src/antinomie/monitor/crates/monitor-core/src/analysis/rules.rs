@@ -11,7 +11,10 @@ pub(super) fn compile_sources(
     include: Option<&Path>,
 ) -> Result<yara_x::Rules, String> {
     if sources.is_empty() {
-        return Err("No rules enabled".into());
+        return Err(
+            "No rules are turned on; enable some in Library > Detection rules to scan with them"
+                .into(),
+        );
     }
     let mut compiler = yara_x::Compiler::new();
     compiler.relaxed_re_syntax(true);
@@ -27,6 +30,9 @@ pub(super) fn compile_sources(
     }
     Ok(compiler.build())
 }
+
+/// The time one scan of the file may take, in seconds.
+const SCAN_SECONDS: u64 = 60;
 
 fn meta_text(value: &yara_x::MetaValue) -> Option<String> {
     match value {
@@ -59,7 +65,9 @@ pub(super) fn scan_at(section: &mut AnalysisSection, specimen: &[u8], directory:
     let sources = selected_sources(directory);
     if sources.is_empty() {
         section.state = AnalysisSectionState::Unavailable;
-        section.summary = "No rules enabled".into();
+        section.summary =
+            "No rules are turned on; enable some in Library > Detection rules to scan with them"
+                .into();
         section.tools = vec![ENGINE.into()];
         return;
     }
@@ -67,7 +75,7 @@ pub(super) fn scan_at(section: &mut AnalysisSection, specimen: &[u8], directory:
         Ok(rules) => rules,
         Err(error) => {
             section.state = AnalysisSectionState::Unavailable;
-            section.summary = format!("selected rules failed to compile: {error}");
+            section.summary = format!("The selected rules did not compile: {error}");
             return;
         }
     };
@@ -76,9 +84,19 @@ pub(super) fn scan_at(section: &mut AnalysisSection, specimen: &[u8], directory:
         format!("{} selected rule files", sources.len()),
     ];
     let mut scanner = yara_x::Scanner::new(&rules);
-    scanner.set_timeout(Duration::from_secs(60));
+    let timeout = super::limits::seconds(SCAN_SECONDS);
+    scanner.set_timeout(Duration::from_secs(timeout));
     let results = match scanner.scan(specimen) {
         Ok(results) => results,
+        Err(yara_x::errors::ScanError::Timeout) => {
+            super::limits::time_out(
+                section,
+                "The rule scan",
+                timeout,
+                "The scan was stopped before it finished, so no matches are listed; a rule that matches very many patterns is slow on a large file.",
+            );
+            return;
+        }
         Err(error) => {
             section.state = AnalysisSectionState::Unavailable;
             section.summary = format!("rule scan failed: {error}");

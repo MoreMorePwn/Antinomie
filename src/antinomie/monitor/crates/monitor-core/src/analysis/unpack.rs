@@ -71,6 +71,10 @@ fn unpack_with(
     tool: Option<&str>,
 ) {
     let started = Instant::now();
+    let budget_seconds = super::limits::seconds(BUDGET_SECONDS);
+    let run_seconds = super::limits::seconds(RUN_SECONDS);
+    // Set when the unpacker or the section's time budget ran out.
+    let mut out_of_time: Option<u64> = None;
     let work = artifacts.join(FOLDER);
     let mut layers = vec![Layer {
         index: 0,
@@ -109,9 +113,10 @@ fn unpack_with(
             );
             break;
         };
-        let remaining = Duration::from_secs(BUDGET_SECONDS).saturating_sub(started.elapsed());
+        let remaining = Duration::from_secs(budget_seconds).saturating_sub(started.elapsed());
         if remaining.is_zero() {
             problem = Some("the unpacking time budget ran out".into());
+            out_of_time = Some(budget_seconds);
             break;
         }
         if section.tools.is_empty() {
@@ -132,13 +137,16 @@ fn unpack_with(
             &found,
             &work,
             layers.len(),
-            remaining.min(Duration::from_secs(RUN_SECONDS)),
+            remaining.min(Duration::from_secs(run_seconds)),
             room,
         );
         let unpacked = match unpacked {
             Ok(unpacked) => unpacked,
             Err(error) => {
                 layers[at].note = format!("{}{error}", prefix(&layers[at].note));
+                if error.contains("timed out after") {
+                    out_of_time = Some(run_seconds);
+                }
                 problem = Some(error);
                 break;
             }
@@ -173,7 +181,7 @@ fn unpack_with(
         });
         current = Some(unpacked.bytes);
     }
-    finish(section, &layers, problem, &work);
+    finish(section, &layers, problem, &work, out_of_time);
 }
 
 fn prefix(note: &str) -> String {
@@ -197,7 +205,13 @@ fn write_layer(path: &Path, bytes: &[u8]) -> Result<(), String> {
         .map_err(|e| format!("layer file: {e}"))
 }
 
-fn finish(section: &mut AnalysisSection, layers: &[Layer], problem: Option<String>, work: &Path) {
+fn finish(
+    section: &mut AnalysisSection,
+    layers: &[Layer],
+    problem: Option<String>,
+    work: &Path,
+    out_of_time: Option<u64>,
+) {
     for layer in layers {
         let mut value = format!(
             "{}: {} octets, SHA-256 {}",
@@ -269,6 +283,23 @@ fn finish(section: &mut AnalysisSection, layers: &[Layer], problem: Option<Strin
             if count == 1 { "layer" } else { "layers" }
         ),
     };
+    if let Some(seconds) = out_of_time {
+        let summary = std::mem::take(&mut section.summary);
+        super::limits::time_out(section, "Unpacking", seconds, summary);
+    } else if let Some(problem) = problem {
+        // The sentence says which bound: a depth or size limit, or a layer
+        // the unpacker could not make.
+        let kind = if problem.contains("levels deep") || problem.contains("kept up to") {
+            AnalysisLimitKind::Size
+        } else {
+            AnalysisLimitKind::Input
+        };
+        let mut text = problem;
+        if let Some(first) = text.get_mut(..1) {
+            first.make_ascii_uppercase();
+        }
+        super::limits::add(section, kind, format!("{text}."), None);
+    }
 }
 
 /// One phase of a report's unpack chain.

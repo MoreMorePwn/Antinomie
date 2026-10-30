@@ -16,12 +16,18 @@ const CAP: usize = 6;
 enum Go {
     /// Open the run in Triage (or Run History for a deleted folder).
     Run(usize),
+    /// Open the run in Triage on one rule's hit (engine, rule id).
+    Rule(usize, String, String),
+    /// Run static analysis on the sample's archived copy.
+    Analyze,
     /// The static report on this tab.
     Report(AnalysisKind),
     AllRuns,
     Verify,
     /// Open the file viewer on the archived sample.
     View,
+    /// The Notes tab.
+    Notes,
 }
 
 impl MonitorApp {
@@ -57,12 +63,16 @@ impl MonitorApp {
             area = area.vertical_scroll_offset(y);
         }
         area.show(ui, |ui| {
-            ui.set_width(ui.available_width());
+            // Room for the scroll bar, so no table or box runs under it.
+            ui.set_width((ui.available_width() - parts::SCROLL_GUTTER).max(320.0));
             verdict(ui, data);
-            if let Some(number) =
+            if super::notes_tab::latest(ui, data) {
+                go = Some(Go::Notes);
+            }
+            if let Some((number, engine, rule)) =
                 super::triage_parts::rules_matched(ui, data, self.settings.font_size)
             {
-                go = Some(Go::Run(number));
+                go = Some(Go::Rule(number, engine, rule));
             }
             super::triage_parts::techniques(ui, data);
             super::triage_parts::evasion(ui, data);
@@ -72,7 +82,14 @@ impl MonitorApp {
                 strings(ui, data, scanned, &mut go, self.settings.font_size);
             }
             static_analysis(ui, data, scanned, &mut go);
-            identity(ui, data, verified, verifying, &mut go);
+            identity(
+                ui,
+                data,
+                verified,
+                verifying,
+                &mut go,
+                self.settings.font_size,
+            );
             lineage_out = super::lineage::section(ui, &mut lineage, data);
             output_act = super::output_files::section(ui, data, self.settings.font_size);
             if let Some(state) = similar {
@@ -89,9 +106,7 @@ impl MonitorApp {
         }
         match output_act {
             Some(super::output_files::Act::Open(number, kind)) => {
-                if let Some(entry) = data.runs.iter().find(|entry| entry.number == number) {
-                    self.open_sample_run(&entry.run, kind.target(), None);
-                }
+                self.open_output(data, number, kind);
             }
             Some(super::output_files::Act::GoToRun(number)) => go = Some(Go::Run(number)),
             None => {}
@@ -139,9 +154,22 @@ impl MonitorApp {
                     self.open_sample_run(&entry.run, crate::workspace::Panel::Triage, None);
                 }
             }
+            Some(Go::Rule(number, engine, rule)) => {
+                if let Some(entry) = data.runs.iter().find(|entry| entry.number == number) {
+                    self.open_sample_rule(&entry.run, &engine, &rule);
+                }
+            }
+            Some(Go::Analyze) => {
+                self.analyze_sample(ui.ctx(), &data.record, data.archive.clone());
+            }
             Some(Go::Report(kind)) => {
                 if let Some(reference) = &data.report {
                     self.open_sample_report(&reference.report, reference.directory.clone(), kind);
+                }
+            }
+            Some(Go::Notes) => {
+                if let Some(detail) = detail {
+                    detail.tab = Tab::Notes;
                 }
             }
             Some(Go::AllRuns) => {
@@ -173,42 +201,31 @@ impl MonitorApp {
 /// Verdict and family: three fields in one box.
 fn verdict(ui: &mut egui::Ui, data: &Data) {
     parts::section(ui, "Verdict and family", None, |ui| {
-        egui::Frame::new()
-            .fill(theme::palette().panel)
-            .stroke(egui::Stroke::new(1.0_f32, theme::palette().line_soft))
-            .corner_radius(6)
-            .inner_margin(10)
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.columns(3, |columns| {
-                    let verdicts: Vec<&Tag> = data
-                        .tags
-                        .iter()
-                        .filter(|tag| tag.kind == TagKind::Verdict)
-                        .collect();
-                    field(&mut columns[0], "Verdict", |ui| {
-                        if verdicts.is_empty() {
-                            ui.label(theme::hint_text("None set"));
-                        }
-                        for tag in verdicts {
-                            sample_tags::tag(ui, tag);
-                        }
-                    });
-                    columns[0].label(theme::hint_text("Your verdict tag"));
-                    field(&mut columns[1], "Highest suspicion", |ui| {
-                        super::triage_parts::highest(ui, data);
-                    });
-                    let family = data.record.family.trim();
-                    field(&mut columns[2], "Family", |ui| {
-                        if family.is_empty() {
-                            ui.label(theme::hint_text("Unknown"));
-                        } else {
-                            ui.label(RichText::new(family).strong());
-                        }
-                    });
-                    columns[2].label(theme::hint_text(family_source(data)));
+        parts::panel_frame().show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.columns(3, |columns| {
+                let verdicts: Vec<&Tag> = data
+                    .tags
+                    .iter()
+                    .filter(|tag| tag.kind == TagKind::Verdict)
+                    .collect();
+                field(&mut columns[0], "Verdict", |ui| {
+                    if verdicts.is_empty() {
+                        ui.label(theme::hint_text("No tag"));
+                    }
+                    for tag in verdicts {
+                        sample_tags::tag(ui, tag);
+                    }
                 });
+                field(&mut columns[1], "Highest suspicion", |ui| {
+                    super::triage_parts::highest(ui, data);
+                });
+                field(&mut columns[2], "Family", |ui| family(ui, data));
+                if let Some(source) = family_source(data) {
+                    columns[2].label(RichText::new(source).small().color(theme::muted()));
+                }
             });
+        });
     });
 }
 
@@ -217,22 +234,60 @@ fn field(ui: &mut egui::Ui, label: &str, value: impl FnOnce(&mut egui::Ui)) {
     ui.horizontal_wrapped(value);
 }
 
-/// Where the family name came from, or why there is none.
-fn family_source(data: &Data) -> String {
+/// The family a YARA rule that matched names, newest rule list first.
+fn yara_family(data: &Data) -> Option<&antinomie_monitor_core::samples::RuleRow> {
+    data.rollup
+        .rules
+        .iter()
+        .find(|rule| rule.engine.eq_ignore_ascii_case("yara") && !rule.family.trim().is_empty())
+}
+
+/// The Family field: the family name (the download source's signature, else a
+/// YARA rule's), else the sample's malware-category tags, else "No tag".
+fn family(ui: &mut egui::Ui, data: &Data) {
+    let named = data.record.family.trim();
+    if !named.is_empty() {
+        ui.label(RichText::new(named).strong());
+        return;
+    }
+    if let Some(rule) = yara_family(data) {
+        ui.label(RichText::new(rule.family.trim()).strong());
+        return;
+    }
+    let categories: Vec<&Tag> = data
+        .tags
+        .iter()
+        .filter(|tag| tag.kind == TagKind::Category)
+        .collect();
+    if categories.is_empty() {
+        ui.label(theme::hint_text("No tag"));
+    }
+    for tag in categories {
+        sample_tags::tag(ui, tag);
+    }
+}
+
+/// Where the family name came from: the download source's signature, a YARA
+/// rule, or both when they agree. Nothing when the field shows tags.
+fn family_source(data: &Data) -> Option<String> {
     use antinomie_monitor_core::samples::OriginKind;
-    let family = data.record.family.trim();
+    let named = data.record.family.trim();
+    let yara = yara_family(data);
     let downloaded = data
         .origins
         .iter()
         .find(|origin| origin.kind == OriginKind::Download);
-    match (family.is_empty(), downloaded) {
-        (false, Some(origin)) => format!("{} signature", origin.source),
-        (false, None) => "Recorded with the sample".into(),
-        (true, Some(origin)) => format!("{} gave no signature", origin.source),
-        (true, None) => match data.origins.first() {
-            Some(origin) => format!("{}, so no source signature", origin.kind.label()),
-            None => "No source signature".into(),
-        },
+    match (named.is_empty(), downloaded, yara) {
+        (false, Some(origin), Some(rule)) if rule.family.trim().eq_ignore_ascii_case(named) => {
+            Some(format!(
+                "{} signature · YARA rule {}",
+                origin.source, rule.rule
+            ))
+        }
+        (false, Some(origin), _) => Some(format!("{} signature", origin.source)),
+        (false, None, _) => Some("Recorded with the sample".into()),
+        (true, _, Some(rule)) => Some(format!("YARA rule {}", rule.rule)),
+        (true, _, None) => None,
     }
 }
 
@@ -288,7 +343,14 @@ fn recent_runs(ui: &mut egui::Ui, data: &Data, go: &mut Option<Go>, font: f32) {
                     });
                     row.col(|ui| super::triage_parts::run_suspicion(ui, entry));
                     row.col(|ui| {
-                        widgets::chip(ui, &exit, parts::exit_tone(&exit));
+                        // One line; the whole outcome is the tooltip.
+                        let detail = execution_detail(run);
+                        ui.add(
+                            egui::Label::new(RichText::new(&exit).color(theme::text()))
+                                .truncate()
+                                .selectable(false),
+                        )
+                        .on_hover_text(if detail.is_empty() { &exit } else { &detail });
                     });
                     let response = row.response().on_hover_text(if entry.folder {
                         format!("Open Triage for {}", parts::run_name(entry.number))
@@ -395,10 +457,11 @@ fn strings(ui: &mut egui::Ui, data: &Data, scanned: &Scanned, go: &mut Option<Go
             },
             "No regex matches.",
         );
+        let shown = strings.matches.len().min(CAP);
         let label = format!(
             "{}Regex matches ({}) ›",
-            if strings.total as usize > CAP && strings.matches.len() > CAP {
-                format!("Showing {CAP} of {} · ", strings.total)
+            if strings.total as usize > shown && shown > 0 {
+                format!("Showing {shown} of {} · ", strings.total)
             } else {
                 String::new()
             },
@@ -456,17 +519,37 @@ fn string_table(
                 .chain(shown.iter().map(|row| cells(row).swap_remove(index))),
         )
     };
-    let widths: Vec<f32> = (0..titles.len()).map(fitted).collect();
+    let mut widths: Vec<f32> = (0..titles.len())
+        .map(|index| {
+            if index == wide {
+                0.0
+            } else if titles[index] == "Seen" {
+                60.0
+            } else if titles[index] == "Found in" || titles[index] == "Offset" {
+                170.0
+            } else {
+                fitted(index)
+            }
+        })
+        .collect();
+    // The string column keeps at least this much; when the window is too
+    // narrow for that, the other columns give way (their text is cut and the
+    // tooltip has the whole of it) so the table never passes the window.
+    let keep = 160.0;
+    let room = ui.available_width() - keep - ui.spacing().item_spacing.x * titles.len() as f32;
+    let used: f32 = widths.iter().sum();
+    if used > room {
+        let scale = (room / used).clamp(0.4, 1.0);
+        for width in &mut widths {
+            *width = (*width * scale).max(48.0);
+        }
+    }
     let mut builder = parts::mini_table(ui, id);
-    for (index, title) in titles.iter().enumerate() {
+    for (index, _) in titles.iter().enumerate() {
         builder = builder.column(if index == wide {
-            egui_extras::Column::remainder().at_least(160.0).clip(true)
-        } else if *title == "Seen" {
-            egui_extras::Column::exact(60.0)
-        } else if *title == "Found in" || *title == "Offset" {
-            egui_extras::Column::exact(170.0)
+            egui_extras::Column::remainder().at_least(keep).clip(true)
         } else {
-            egui_extras::Column::exact(widths[index])
+            egui_extras::Column::exact(widths[index]).clip(true)
         });
     }
     builder
@@ -512,7 +595,15 @@ fn string_table(
 fn static_analysis(ui: &mut egui::Ui, data: &Data, scanned: Option<&Scanned>, go: &mut Option<Go>) {
     parts::section(ui, "Static analysis", None, |ui| {
         let Some(reference) = &data.report else {
-            ui.label(RichText::new("Not analysed").strong());
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Not analysed").strong());
+                if parts::more_inline(ui, "Analyze ›")
+                    .on_hover_text("Run static analysis on the archived sample")
+                    .clicked()
+                {
+                    *go = Some(Go::Analyze);
+                }
+            });
             return;
         };
         let report = &reference.report;
@@ -546,7 +637,7 @@ fn static_analysis(ui: &mut egui::Ui, data: &Data, scanned: Option<&Scanned>, go
             let Some(section) = report.sections.iter().find(|section| section.kind == *kind) else {
                 continue;
             };
-            let value = line_value(*kind, section, total);
+            let value = line_value(*kind, sub, section, total, data);
             let response = ui
                 .horizontal(|ui| {
                     ui.label(RichText::new(*label).strong());
@@ -576,9 +667,11 @@ fn short_id(id: &str) -> String {
 const LINES: &[(AnalysisKind, &str, &str)] = &[
     (AnalysisKind::Metadata, "File Info", "Summary"),
     (AnalysisKind::Structures, "File Info", "Sections"),
+    (AnalysisKind::Structures, "File Info", "Segments"),
     (AnalysisKind::Hardening, "File Info", "Hardening"),
     (AnalysisKind::Identification, "File Info", "Identification"),
     (AnalysisKind::Entropy, "File Info", "Entropy"),
+    (AnalysisKind::Metadata, "Content", ""),
     (AnalysisKind::Strings, "Strings", ""),
     (AnalysisKind::Regex, "Regex matches", ""),
     (AnalysisKind::Floss, "FLOSS", ""),
@@ -586,19 +679,47 @@ const LINES: &[(AnalysisKind, &str, &str)] = &[
     (AnalysisKind::Unpacking, "Unpacking", ""),
     (AnalysisKind::Rules, "YARA", ""),
     (AnalysisKind::Capabilities, "Capa Matrix", ""),
+    (AnalysisKind::Structures, "Symbols", ""),
     (AnalysisKind::Disassembly, "Disassembly", ""),
     (AnalysisKind::Decompilation, "Decompilation", ""),
 ];
 
 /// The count or value the tab's badge shows.
-fn line_value(kind: AnalysisKind, section: &AnalysisSection, regex_total: Option<u64>) -> String {
-    match kind {
-        AnalysisKind::Strings
-        | AnalysisKind::Floss
-        | AnalysisKind::Embedded
-        | AnalysisKind::Rules
-        | AnalysisKind::Capabilities => counted(section).to_string(),
-        AnalysisKind::Regex => {
+fn line_value(
+    kind: AnalysisKind,
+    sub: &str,
+    section: &AnalysisSection,
+    regex_total: Option<u64>,
+    data: &Data,
+) -> String {
+    let entries = |labels: &[&str]| {
+        section
+            .entries
+            .iter()
+            .filter(|entry| labels.contains(&entry.label.as_str()))
+            .count()
+    };
+    match (kind, sub) {
+        (AnalysisKind::Metadata, "") => crate::values::file_size(data.record.size),
+        (AnalysisKind::Structures, "Segments") => {
+            let count = entries(&["Segment"]);
+            format!("{count} segment{}", if count == 1 { "" } else { "s" })
+        }
+        (AnalysisKind::Structures, "") => format!(
+            "{} symbols · {} imports · {} exports",
+            entries(&["Symbol"]),
+            entries(&["Import"]),
+            entries(&["Export"])
+        ),
+        (
+            AnalysisKind::Strings
+            | AnalysisKind::Floss
+            | AnalysisKind::Embedded
+            | AnalysisKind::Rules
+            | AnalysisKind::Capabilities,
+            _,
+        ) => counted(section).to_string(),
+        (AnalysisKind::Regex, _) => {
             regex_total.map_or_else(|| first_line(&section.summary), |n| n.to_string())
         }
         _ => first_line(&section.summary),
@@ -624,202 +745,237 @@ fn identity(
     verified: Option<&(bool, String)>,
     verifying: bool,
     go: &mut Option<Go>,
+    font: f32,
 ) {
     parts::section(ui, "Identity", None, |ui| {
         let record = &data.record;
-        let palette = theme::palette();
         ui.columns(2, |columns| {
             let left = &mut columns[0];
-            egui::Frame::new()
-                .fill(palette.panel)
-                .stroke(egui::Stroke::new(1.0_f32, palette.line_soft))
-                .corner_radius(6)
-                .inner_margin(10)
-                .show(left, |ui| {
-                    ui.set_width(ui.available_width());
-                    if record.description.is_empty() {
-                        ui.label(theme::hint_text("No description"));
-                    } else {
-                        ui.label(&record.description);
+            parts::panel_frame().show(left, |ui| {
+                ui.set_width(ui.available_width());
+                if record.description.is_empty() {
+                    ui.label(theme::hint_text("No description"));
+                } else {
+                    ui.add(egui::Label::new(&record.description).wrap());
+                }
+                ui.add_space(6.0);
+                ui.horizontal_wrapped(|ui| {
+                    for tag in &data.tags {
+                        sample_tags::tag(ui, tag);
                     }
-                    ui.add_space(6.0);
-                    ui.horizontal_wrapped(|ui| {
-                        for tag in &data.tags {
-                            sample_tags::tag(ui, tag);
-                        }
-                        if data.tags.is_empty() {
-                            ui.label(theme::hint_text("No tags"));
-                        }
-                    });
-                    ui.add_space(6.0);
-                    egui::Grid::new("sample_identity_left")
-                        .num_columns(2)
-                        .spacing([12.0, 4.0])
-                        .show(ui, |ui| {
-                            let kind = if record.file_type.is_empty() {
-                                "unknown".to_owned()
-                            } else {
-                                record.file_type.clone()
-                            };
-                            let arch = if record.arch.is_empty() {
-                                String::new()
-                            } else {
-                                format!(
-                                    " · {}",
-                                    antinomie_monitor_core::samples::arch_label(&record.arch)
-                                )
-                            };
-                            parts::row(
+                    if data.tags.is_empty() {
+                        ui.label(theme::hint_text("No tags"));
+                    }
+                });
+                ui.add_space(8.0);
+                let value_width =
+                    parts::value_width(ui, &["Type", "Added", "Also added", "Source"], 0.0);
+                egui::Grid::new("sample_identity_left")
+                    .num_columns(2)
+                    .spacing([12.0, parts::ROW_GAP])
+                    .show(ui, |ui| {
+                        let kind = if record.file_type.is_empty() {
+                            "unknown".to_owned()
+                        } else {
+                            record.file_type.clone()
+                        };
+                        let arch = if record.arch.is_empty() {
+                            String::new()
+                        } else {
+                            format!(
+                                " · {}",
+                                antinomie_monitor_core::samples::arch_label(&record.arch)
+                            )
+                        };
+                        parts::row_in(
+                            ui,
+                            "Type",
+                            format!("{kind}{arch} · {}", crate::values::file_size(record.size)),
+                            value_width,
+                        );
+                        for (index, origin) in data.origins.iter().enumerate() {
+                            let when = parts::second(origin.at_ms);
+                            parts::row_in(
                                 ui,
-                                "Type",
-                                format!("{kind}{arch} · {}", crate::values::file_size(record.size)),
+                                if index == 0 { "Added" } else { "Also added" },
+                                format!(
+                                    "{} · {when}{}",
+                                    origin.kind.label(),
+                                    if origin.before_custody {
+                                        " · recorded before the custody log"
+                                    } else {
+                                        ""
+                                    }
+                                ),
+                                value_width,
                             );
-                            for (index, origin) in data.origins.iter().enumerate() {
-                                let when = parts::second(origin.at_ms);
-                                parts::row(
-                                    ui,
-                                    if index == 0 { "Added" } else { "Also added" },
-                                    format!(
-                                        "{} · {when}{}",
-                                        origin.kind.label(),
-                                        if origin.before_custody {
-                                            " · recorded before the custody log"
-                                        } else {
-                                            ""
-                                        }
-                                    ),
-                                );
-                                let source = [&origin.source, &origin.path, &origin.detail]
-                                    .into_iter()
-                                    .filter(|part| !part.is_empty())
-                                    .cloned()
-                                    .collect::<Vec<_>>()
-                                    .join(" · ");
-                                if !source.is_empty() {
-                                    parts::row(ui, "Source", source);
-                                }
-                            }
-                        });
-                });
-            let right = &mut columns[1];
-            egui::Frame::new()
-                .fill(palette.panel)
-                .stroke(egui::Stroke::new(1.0_f32, palette.line_soft))
-                .corner_radius(6)
-                .inner_margin(10)
-                .show(right, |ui| {
-                    ui.set_width(ui.available_width());
-                    egui::Grid::new("sample_identity_hashes")
-                        .num_columns(2)
-                        .spacing([12.0, 4.0])
-                        .show(ui, |ui| {
-                            parts::copyable(ui, "SHA-256", &record.sha256);
-                            parts::copyable(ui, "SHA-1", &record.sha1);
-                            parts::copyable(ui, "MD5", &record.md5);
-                            parts::copyable(ui, "TLSH", &record.tlsh);
-                        });
-                    ui.add_space(4.0);
-                    // Not in the grid: a long path must wrap in the box, not
-                    // widen its column.
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(RichText::new("Archive").color(theme::muted()));
-                        {
-                            ui.add(
-                                egui::Label::new(
-                                    RichText::new(data.archive.display().to_string()).monospace(),
-                                )
-                                .selectable(true),
-                            );
-                            if data.archived {
-                                widgets::chip(ui, "archive present", Tone::Good)
-                                    .on_hover_text("AES zip, password infected");
-                            } else {
-                                widgets::chip(ui, "✗ missing", Tone::Error);
-                            }
-                            if verifying {
-                                theme::spinner(ui);
-                            }
-                            match verified {
-                                Some((true, _)) => {
-                                    widgets::chip(ui, "✓ SHA-256 matches", Tone::Good);
-                                }
-                                Some((false, why)) => {
-                                    widgets::chip(ui, "✗ did not verify", Tone::Error)
-                                        .on_hover_text(why);
-                                }
-                                None => {}
-                            }
-                            if ui
-                                .add_enabled(
-                                    data.archived && !verifying,
-                                    egui::Button::new("Verify"),
-                                )
-                                .on_hover_text("Read the archive back and compare its SHA-256")
-                                .clicked()
-                            {
-                                *go = Some(Go::Verify);
-                            }
-                            if ui
-                                .add_enabled(data.archived, egui::Button::new("View content"))
-                                .on_hover_text("Open the archived file in the viewer")
-                                .on_disabled_hover_text("The archive was removed")
-                                .clicked()
-                            {
-                                *go = Some(Go::View);
+                            let source = [&origin.source, &origin.path, &origin.detail]
+                                .into_iter()
+                                .filter(|part| !part.is_empty())
+                                .cloned()
+                                .collect::<Vec<_>>()
+                                .join(" · ");
+                            if !source.is_empty() {
+                                parts::row_in(ui, "Source", source, value_width);
                             }
                         }
                     });
+            });
+            let right = &mut columns[1];
+            parts::panel_frame().show(right, |ui| {
+                ui.set_width(ui.available_width());
+                let value_width =
+                    parts::value_width(ui, &["SHA-256", "SHA-1", "MD5", "TLSH"], COPY_WIDTH);
+                egui::Grid::new("sample_identity_hashes")
+                    .num_columns(2)
+                    .spacing([12.0, parts::ROW_GAP])
+                    .show(ui, |ui| {
+                        parts::copyable_in(ui, "SHA-256", &record.sha256, value_width);
+                        parts::copyable_in(ui, "SHA-1", &record.sha1, value_width);
+                        parts::copyable_in(ui, "MD5", &record.md5, value_width);
+                        parts::copyable_in(ui, "TLSH", &record.tlsh, value_width);
+                    });
+                ui.add_space(parts::ROW_GAP);
+                // Not in the grid: a long path must wrap in the box, not
+                // widen its column.
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new("Archive").color(theme::muted()));
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(data.archive.display().to_string()).monospace(),
+                        )
+                        .selectable(true),
+                    );
+                    if data.archived {
+                        widgets::chip(ui, "archive present", Tone::Good)
+                            .on_hover_text("AES zip, password infected");
+                    } else {
+                        widgets::chip(ui, "✗ missing", Tone::Error);
+                    }
+                    if verifying {
+                        theme::spinner(ui);
+                    }
+                    match verified {
+                        Some((true, _)) => {
+                            widgets::chip(ui, "✓ SHA-256 matches", Tone::Good);
+                        }
+                        Some((false, why)) => {
+                            widgets::chip(ui, "✗ did not verify", Tone::Error).on_hover_text(why);
+                        }
+                        None => {}
+                    }
+                    if ui
+                        .add_enabled(data.archived && !verifying, egui::Button::new("Verify"))
+                        .on_hover_text("Read the archive back and compare its SHA-256")
+                        .clicked()
+                    {
+                        *go = Some(Go::Verify);
+                    }
+                    if ui
+                        .add_enabled(data.archived, egui::Button::new("View content"))
+                        .on_hover_text("Open the archived file in the viewer")
+                        .on_disabled_hover_text("The archive was removed")
+                        .clicked()
+                    {
+                        *go = Some(Go::View);
+                    }
                 });
+            });
         });
         ui.add_space(8.0);
-        aliases(ui, data);
+        aliases(ui, data, font);
     });
 }
 
+/// The width the copy button of a hash row takes, with its gap.
+const COPY_WIDTH: f32 = 30.0;
+
 /// Every file name the sample went by.
-fn aliases(ui: &mut egui::Ui, data: &Data) {
-    egui::Frame::new()
-        .fill(theme::palette().panel)
-        .stroke(egui::Stroke::new(1.0_f32, theme::palette().line_soft))
-        .corner_radius(6)
-        .inner_margin(10)
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            let names: std::collections::BTreeSet<&str> = data
-                .aliases
-                .iter()
-                .map(|alias| alias.name.as_str())
-                .collect();
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("Aliases").strong());
-                ui.label(
-                    RichText::new(format!(
-                        "{} name{}",
-                        names.len(),
-                        if names.len() == 1 { "" } else { "s" }
-                    ))
-                    .color(theme::muted()),
+fn aliases(ui: &mut egui::Ui, data: &Data, font: f32) {
+    parts::panel_frame().show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        let names: std::collections::BTreeSet<&str> = data
+            .aliases
+            .iter()
+            .map(|alias| alias.name.as_str())
+            .collect();
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Aliases").strong());
+            ui.label(
+                RichText::new(format!(
+                    "{} name{}",
+                    names.len(),
+                    if names.len() == 1 { "" } else { "s" }
+                ))
+                .color(theme::muted()),
+            );
+        });
+        if data.aliases.is_empty() {
+            ui.label(theme::hint_text("–"));
+            return;
+        }
+        ui.add_space(4.0);
+        let body = egui::TextStyle::Body.resolve(ui.style());
+        let mono = egui::TextStyle::Monospace.resolve(ui.style());
+        let name = parts::fitted_up_to(
+            ui,
+            &mono,
+            std::iter::once("Name".to_owned()).chain(data.aliases.iter().map(|a| a.name.clone())),
+            280.0,
+        );
+        let seen = parts::fitted_up_to(
+            ui,
+            &body,
+            std::iter::once("Where".to_owned()).chain(data.aliases.iter().map(|a| a.seen.clone())),
+            200.0,
+        );
+        // The path takes what is left and is cut; the tooltip has all of it.
+        let narrow = ui.available_width() < name + seen + 200.0;
+        let (name, seen) = if narrow {
+            (name.min(150.0), seen.min(110.0))
+        } else {
+            (name, seen)
+        };
+        parts::mini_table(ui, "sample_aliases")
+            .column(egui_extras::Column::exact(name).clip(true))
+            .column(egui_extras::Column::remainder().at_least(120.0).clip(true))
+            .column(egui_extras::Column::exact(seen).clip(true))
+            .header(table::header_height(font), |mut header| {
+                for title in ["Name", "Path or source", "Where"] {
+                    header.col(|ui| table::head(ui, title));
+                }
+            })
+            .body(|body| {
+                body.rows(
+                    table::row_height(font) + 6.0,
+                    data.aliases.len(),
+                    |mut row| {
+                        let alias = &data.aliases[row.index()];
+                        row.col(|ui| {
+                            let shown = table::cell_rich(
+                                ui,
+                                table::Cell::Mono,
+                                RichText::new(&alias.name).strong(),
+                            );
+                            shown.on_hover_text(&alias.name);
+                        });
+                        row.col(|ui| {
+                            let shown = table::cell_rich(
+                                ui,
+                                table::Cell::Mono,
+                                RichText::new(&alias.path).color(theme::text()),
+                            );
+                            shown.on_hover_text(&alias.path);
+                        });
+                        row.col(|ui| {
+                            table::cell_rich(
+                                ui,
+                                table::Cell::Text,
+                                RichText::new(&alias.seen).color(theme::text()),
+                            );
+                        });
+                    },
                 );
             });
-            if data.aliases.is_empty() {
-                ui.label(theme::hint_text("–"));
-                return;
-            }
-            egui::Grid::new("sample_aliases")
-                .num_columns(3)
-                .spacing([16.0, 4.0])
-                .striped(true)
-                .show(ui, |ui| {
-                    for title in ["Name", "Path or source", "Where"] {
-                        ui.label(RichText::new(title).small().color(theme::muted()));
-                    }
-                    ui.end_row();
-                    for alias in &data.aliases {
-                        ui.label(RichText::new(&alias.name).monospace().strong());
-                        ui.label(RichText::new(&alias.path).monospace().color(theme::muted()));
-                        ui.label(RichText::new(&alias.seen).color(theme::muted()));
-                        ui.end_row();
-                    }
-                });
-        });
+    });
 }

@@ -165,20 +165,22 @@ pub(super) fn pending_order(report: &AnalysisReport) -> Vec<usize> {
 pub(crate) fn worker_deadline(report: &AnalysisReport) -> Duration {
     // The sum of the sections' own budgets, so one slow tool (capa at 4
     // minutes) cannot use up the time of a later one (decompilation); this is
-    // the hard backstop behind each tool's own timeout.
+    // the hard backstop behind each tool's own timeout. A time limit the run
+    // asked for replaces each tool's own.
+    let own = |default: u64| super::limits::seconds_in(report, default);
     let seconds: u64 = report
         .sections
         .iter()
         // Checks a finished analysis already has are not run again.
         .filter(|section| section.state == AnalysisSectionState::Pending)
         .map(|section| match section.kind {
-            AnalysisKind::Decompilation => super::worker::DECOMPILER_SECONDS + 120,
-            AnalysisKind::Capabilities => 300,
-            AnalysisKind::Floss => super::floss::TIMEOUT_SECONDS + 60,
-            AnalysisKind::Unpacking => super::unpack::BUDGET_SECONDS + 30,
-            AnalysisKind::Embedded => 200,
-            AnalysisKind::Identification => 160,
-            AnalysisKind::Disassembly | AnalysisKind::Rules => 90,
+            AnalysisKind::Decompilation => own(super::worker::DECOMPILER_SECONDS) + 120,
+            AnalysisKind::Capabilities => own(super::capa::TIMEOUT_SECONDS) + 60,
+            AnalysisKind::Floss => own(super::floss::TIMEOUT_SECONDS) + 60,
+            AnalysisKind::Unpacking => own(super::unpack::BUDGET_SECONDS) + 30,
+            AnalysisKind::Embedded => own(super::binwalk::TIMEOUT_SECONDS) + 20,
+            AnalysisKind::Identification => own(60) * 2 + 40,
+            AnalysisKind::Disassembly | AnalysisKind::Rules => own(60) + 30,
             _ => 20,
         })
         .sum();
@@ -197,6 +199,7 @@ mod tests {
                 AnalysisKind::Strings,
                 AnalysisKind::Capabilities,
             ],
+            time_limit_minutes: 0,
         };
         let mut report = super::super::jobs::new_report("/bin/x", &selection);
         report.specimen_len = Some(10);
@@ -246,6 +249,10 @@ mod tests {
         // Only the pending checks run, and only they count toward the deadline.
         assert_eq!(pending_order(&report), [1, 2]);
         assert_eq!(worker_deadline(&report), Duration::from_secs(20 + 300));
+        // A time limit of the run replaces the tool's own, capa's 4 minutes.
+        report.time_limit_seconds = Some(600);
+        assert_eq!(worker_deadline(&report), Duration::from_secs(20 + 660));
+        report.time_limit_seconds = None;
         // A live snapshot does not take the finished section's listing away.
         let mut snapshot = report.clone();
         snapshot.state = AnalysisState::Running;

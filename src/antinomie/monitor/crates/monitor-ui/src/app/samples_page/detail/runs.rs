@@ -64,9 +64,21 @@ enum Go {
     Trace(String, u32),
     Terminal(String),
     Stop(String),
+    /// Delete the run (the dialog asks first).
+    Delete(String),
 }
 
 impl RunsTab {
+    #[cfg(test)]
+    pub(super) fn select_for_test(&mut self, id: String) {
+        self.selected = Some(id);
+    }
+
+    /// A run is selected: its details show in the Details panel.
+    pub(super) fn has_selection(&self) -> bool {
+        self.selected.is_some()
+    }
+
     /// Read the process tree of `run` on a thread, once.
     fn read_tree(&mut self, ctx: &egui::Context, run: &RunSummary) {
         if self
@@ -131,6 +143,11 @@ impl MonitorApp {
         if let Some(detail) = self.samples_page.detail.as_mut() {
             detail.runs = state;
         }
+        self.apply_go(ui.ctx(), data, go);
+    }
+
+    /// Carry out what a click in the tab or in the details asked for.
+    fn apply_go(&mut self, ctx: &egui::Context, data: &Arc<Data>, go: Option<Go>) {
         match go {
             Some(Go::Triage(id)) => {
                 if let Some(entry) = data.runs.iter().find(|entry| entry.run.id == id) {
@@ -152,7 +169,58 @@ impl MonitorApp {
                 }
             }
             Some(Go::Stop(id)) => self.request_kill(Some(&id)),
+            Some(Go::Delete(id)) => {
+                if let Some(entry) = data.runs.iter().find(|entry| entry.run.id == id) {
+                    self.start_delete_run(ctx, data, entry.number, &entry.run);
+                }
+            }
             None => {}
+        }
+    }
+
+    /// The Details panel while the Samples page is on screen: the run
+    /// selected on the open sample's Runs tab, as Run History shows a run's
+    /// details, with the processes that run library samples tinted.
+    pub(in crate::app) fn sample_run_details(&mut self, ui: &mut egui::Ui) {
+        let Some(detail) = self.samples_page.detail.as_mut() else {
+            crate::widgets::info_panel(ui, &Self::no_sample_run_panel());
+            return;
+        };
+        let Some(data) = detail.data.clone() else {
+            return;
+        };
+        let mut state = std::mem::take(&mut detail.runs);
+        state.poll();
+        let selected = state
+            .selected
+            .clone()
+            .and_then(|id| data.runs.iter().find(|entry| entry.run.id == id));
+        let mut go = None;
+        match selected {
+            Some(entry) => {
+                crate::details_scroll::show(
+                    ui,
+                    "sample_run_details_scroll",
+                    entry.run.id.clone(),
+                    |ui, _| self.run_details(ui, &data, entry, &mut state, &mut go),
+                );
+            }
+            None => crate::widgets::info_panel(ui, &Self::no_sample_run_panel()),
+        }
+        if let Some(detail) = self.samples_page.detail.as_mut() {
+            detail.runs = state;
+        }
+        self.apply_go(ui.ctx(), &data, go);
+    }
+
+    fn no_sample_run_panel() -> crate::widgets::InfoPanel<'static> {
+        crate::widgets::InfoPanel {
+            icon: egui_phosphor::regular::LIST_MAGNIFYING_GLASS,
+            title: "Select a run to view its details",
+            about: "Details show a run's recorded process tree, analysis checklist, \
+                    route, machine and environment.",
+            steps_title: "To see a run",
+            steps: &["Open a sample, then select a run on its Runs tab."],
         }
     }
 
@@ -228,21 +296,15 @@ impl MonitorApp {
             parts::muted_line(ui, "Never run.");
             return;
         }
-        let list_height = (ui.available_height() * 0.38).clamp(120.0, 300.0);
+        let hint_height = ui.spacing().interact_size.y + 8.0;
+        let list_height = (ui.available_height() - hint_height - 28.0).max(120.0);
         self.run_table(ui, &shown, state, go, list_height);
         ui.add_space(6.0);
-        let selected = state
-            .selected
-            .as_ref()
-            .and_then(|id| data.runs.iter().find(|entry| &entry.run.id == id));
-        let Some(selected) = selected else {
+        if state.selected.is_some() {
+            parts::muted_line(ui, "Run details are in the Details panel below.");
+        } else {
             parts::muted_line(ui, "Select a run for its details.");
-            return;
-        };
-        egui::ScrollArea::vertical()
-            .id_salt("sample_run_details")
-            .auto_shrink([false, false])
-            .show(ui, |ui| self.run_details(ui, data, selected, state, go));
+        }
     }
 
     fn run_table(
@@ -412,8 +474,8 @@ impl MonitorApp {
                                 if entry.folder {
                                     crate::evidence::menu(ui, &run.directory);
                                 }
-                                ui.add_enabled(false, egui::Button::new("Delete run…"))
-                                    .on_disabled_hover_text("Deleting a run is not built yet");
+                                self.delete_run_item(ui, entry, go);
+                                super::super::notes::menu_item(ui, || run_reference(entry));
                             });
                             if response.clicked() || response.double_clicked() {
                                 select = Some(run.id.clone());
@@ -454,8 +516,7 @@ impl MonitorApp {
                 );
             },
             |ui| {
-                ui.add_enabled(false, egui::Button::new("Delete run…"))
-                    .on_disabled_hover_text("Deleting a run is not built yet");
+                self.delete_run_item(ui, entry, go);
                 if ui
                     .add_enabled(entry.folder, egui::Button::new("Open Triage"))
                     .on_disabled_hover_text("The run's folder was deleted")
@@ -664,4 +725,32 @@ fn environment(ui: &mut egui::Ui, run: &RunSummary) {
                         });
                 });
         });
+}
+
+/// The reference a note on this run carries.
+fn run_reference(entry: &RunEntry) -> antinomie_monitor_core::samples::NoteRef {
+    antinomie_monitor_core::samples::NoteRef::new(
+        antinomie_monitor_core::samples::RefKind::Run,
+        format!("{}/{}", entry.run.vm_id, entry.run.id),
+        parts::run_name(entry.number),
+    )
+}
+
+impl MonitorApp {
+    /// "Delete run…": enabled for a run with a folder that is not running.
+    fn delete_run_item(&self, ui: &mut egui::Ui, entry: &RunEntry, go: &mut Option<Go>) {
+        let live = self.sample_run_live(&entry.run);
+        let enabled = entry.folder && !live;
+        let response = ui
+            .add_enabled(enabled, egui::Button::new("Delete run…"))
+            .on_disabled_hover_text(if live {
+                "The run is still running; stop it first"
+            } else {
+                "The run's folder was already deleted"
+            });
+        if response.clicked() {
+            *go = Some(Go::Delete(entry.run.id.clone()));
+            ui.close_menu();
+        }
+    }
 }

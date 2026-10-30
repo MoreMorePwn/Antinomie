@@ -558,8 +558,8 @@ impl VmProcess {
         }
         if stealth.cloud_provider().is_some() && vm.network() != VmNetwork::Routed {
             fallbacks.push(
-                "Device profile setting not applied: cloud metadata service; only a Routed network \
-                 has the gateway that answers the provider's metadata address"
+                "Cloud metadata service is off: it needs a Routed network. Set Network to Routed \
+                 to turn it on."
                     .into(),
             );
         }
@@ -574,7 +574,7 @@ impl VmProcess {
             )
         {
             fallbacks.push(format!(
-                "Device profile setting not applied: cloud instance state; {error}"
+                "Cloud instance state could not be set up ({error}); the VM starts without it."
             ));
         }
         let serial = File::create(runtime_dir.join("serial.log")).map_err(|e| e.to_string())?;

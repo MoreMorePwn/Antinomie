@@ -1768,6 +1768,8 @@ pub enum Command {
         directory: PathBuf,
         run_id: Option<String>,
         checks: Vec<crate::analysis::AnalysisKind>,
+        /// Seconds each of the checks' tools may run; `None` leaves each its own limit.
+        time_limit_seconds: Option<u64>,
     },
     OpenRecording {
         directory: PathBuf,

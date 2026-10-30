@@ -32,6 +32,7 @@ mod run_recording;
 mod runs;
 mod sample_tags;
 mod samples_view;
+mod settings_link;
 mod snapshots;
 mod summary;
 mod table_sort;

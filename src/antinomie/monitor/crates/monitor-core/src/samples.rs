@@ -22,10 +22,13 @@ mod chain;
 mod chain_check;
 mod chain_export;
 mod custody;
+mod delete_run;
 mod intake;
+mod kept;
 mod library;
 mod lineage;
 mod migrate;
+mod notes;
 pub mod promote;
 mod rollup;
 mod runlog;
@@ -42,7 +45,15 @@ pub use chain_export::{
     VERIFIER_NAME, sign_file, verify_record,
 };
 pub use custody::{ActionKind, CustodyEvent, CustodySink, KINDS, NoCustody};
+pub use delete_run::{
+    Deleted as DeletedRun, Place as ArtifactPlace, PlanItem as RunPlanItem, RunPlan,
+    delete as delete_run, plan as plan_run_deletion,
+};
 pub use intake::{Added, FileProbe, NewSample, detect_type};
+pub use kept::{
+    ArtifactKind, Fate as ArtifactFate, KeptArtifact, SAVED_FILE, SavedItem, SavedKind,
+    artifact_sha256, record_saved, saved_items, short_hash,
+};
 pub use library::{
     Alias, CATEGORIES, EventRow, Library, NewOrigin, Origin, OriginKind, RunStats, SampleRecord,
     SeenRun, TAG_COLORS, Tag, TagKind, VERDICTS,
@@ -50,6 +61,9 @@ pub use library::{
 pub use lineage::{
     Edge as LineageEdge, EdgeKind, Graph as LineageGraph, Known, Link, Node as LineageNode,
     NodeKind, Options as LineageOptions, RunLineage, build as build_lineage, runs_label,
+};
+pub use notes::{
+    MAX_NOTE, MAX_REFS, Note, NoteRef, RefKind, artifact_target, text_hash as note_text_hash,
 };
 pub use rollup::{
     CheckRow, EvasionRow, IndicatorRow, Rollup, RuleRow, RunInput, TacticRow, TechniqueRow, rollup,
@@ -759,6 +773,8 @@ pub const STARTERS: &[(&str, &str)] = &[
 
 #[cfg(test)]
 mod chain_tests;
+#[cfg(test)]
+mod feature_tests;
 #[cfg(test)]
 mod library_tests;
 #[cfg(test)]

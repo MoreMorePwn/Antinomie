@@ -330,7 +330,7 @@ impl MonitorApp {
                         table_row.col(|ui| {
                             table::row_mark(
                                 ui,
-                                if problem.is_some() || !row.archived {
+                                if problem.is_some() || !row.archived || !row.custody_ok {
                                     table::Mark::Failed
                                 } else if selected {
                                     table::Mark::Selected
@@ -348,6 +348,11 @@ impl MonitorApp {
                             } else if !row.archived {
                                 widgets::chip(ui, "✗ missing", Tone::Error)
                                     .on_hover_text("The archive is not in the library folder");
+                            }
+                            if !row.custody_ok {
+                                widgets::chip(ui, "✗ custody", Tone::Error).on_hover_text(
+                                    "The custody log does not verify. Open the sample's Custody log tab.",
+                                );
                             }
                         });
                         table_row.col(|ui| {

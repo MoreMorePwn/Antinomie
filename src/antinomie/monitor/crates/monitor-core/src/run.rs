@@ -520,6 +520,7 @@ mod tests {
         let selection = crate::analysis::AnalysisSelection {
             enabled: true,
             checks: vec![crate::analysis::AnalysisKind::Metadata],
+            time_limit_minutes: 0,
         };
         let summary = RunSummary {
             environment: None,

@@ -44,6 +44,21 @@ pub(crate) fn show(ui: &mut egui::Ui, run: &RunSummary) {
     }
 }
 
+/// Only the warning of `show`: Triage lists the notes in its own section.
+pub(crate) fn show_warning(ui: &mut egui::Ui, run: &RunSummary) {
+    if let Some(message) = warning_message(run) {
+        crate::activity::warning(ui, message);
+    }
+}
+
+/// The run's notes, one line each, as plain text.
+pub(crate) fn note_lines(run: &RunSummary) -> Vec<String> {
+    run.notes
+        .iter()
+        .map(|note| run_note_text(note).to_owned())
+        .collect()
+}
+
 /// Shared run identity keeps Activity and inline dismissal in sync without
 /// suppressing another run that stopped for the same reason.
 pub(crate) fn warning_message(run: &RunSummary) -> Option<String> {
