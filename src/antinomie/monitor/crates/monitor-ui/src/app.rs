@@ -17,6 +17,7 @@ mod explorer;
 mod file_drop;
 mod getting_started;
 mod history;
+mod history_columns;
 mod history_sync;
 mod library;
 mod menus;
