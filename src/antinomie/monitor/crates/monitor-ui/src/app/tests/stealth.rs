@@ -363,9 +363,7 @@ fn the_vm_dialog_row_and_the_sidebar_carry_a_warning_badge() {
     let output = render(&mut app, &ctx, size);
     let lines: Vec<String> = texts(&output).into_iter().map(|(text, _)| text).collect();
     assert!(
-        lines
-            .iter()
-            .any(|text| text.contains("Device profile fallback")),
+        lines.iter().any(|text| text.contains("Profile fallback")),
         "the sidebar row: {lines:?}"
     );
 }
@@ -390,6 +388,7 @@ fn a_base_that_supports_every_setting_shows_no_warning_anywhere() {
     assert!(
         !lines.iter().any(|text| text.contains("will not be applied")
             || text.contains("Device profile fallback")
+            || text.contains("Profile fallback")
             || text.contains("fall back")
             || text.contains("falls back")
             || text.contains("not supported by")),

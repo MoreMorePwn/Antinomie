@@ -415,12 +415,16 @@ impl MonitorApp {
             .exact_height(self.settings.font_size + 22.0)
             .frame(theme::frame(theme::panel()))
             .show(ctx, |ui| {
-                egui::ScrollArea::horizontal()
+                // A narrow window cuts the row: an arrow at its end says so and
+                // moves to the other end; the wheel scrolls it too.
+                let target = egui::Id::new("toolbar_scroll_target");
+                let mut area = egui::ScrollArea::horizontal()
                     .id_salt("toolbar_controls")
-                    // A narrow window cuts the row: the bar says so when the
-                    // pointer is over it, and the wheel scrolls it.
-                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
-                    .show(ui, |ui| {
+                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded);
+                if let Some(x) = ctx.data_mut(|data| data.remove_temp::<f32>(target)) {
+                    area = area.horizontal_scroll_offset(x);
+                }
+                let output = area.show(ui, |ui| {
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                             ui.spacing_mut().item_spacing.x = 4.0;
                             let shortcut = |text: &str, shortcut| {
@@ -627,6 +631,39 @@ impl MonitorApp {
                             }
                         });
                     });
+                let overflow = output.content_size.x - output.inner_rect.width();
+                if overflow > 1.0 {
+                    let at_end = output.state.offset.x >= overflow - 1.0;
+                    let side = output.inner_rect.height();
+                    let rect = egui::Rect::from_min_size(
+                        egui::pos2(
+                            if at_end {
+                                output.inner_rect.left()
+                            } else {
+                                output.inner_rect.right() - side
+                            },
+                            output.inner_rect.top(),
+                        ),
+                        egui::vec2(side, side),
+                    );
+                    let arrow = if at_end {
+                        egui_phosphor::regular::CARET_LEFT
+                    } else {
+                        egui_phosphor::regular::CARET_RIGHT
+                    };
+                    if ui
+                        .put(rect, egui::Button::new(arrow).fill(theme::raised()))
+                        .on_hover_text(if at_end {
+                            "Back to the first buttons"
+                        } else {
+                            "More buttons: scroll right (or use the mouse wheel)"
+                        })
+                        .clicked()
+                    {
+                        ctx.data_mut(|data| data.insert_temp(target, if at_end { 0.0 } else { overflow }));
+                        ctx.request_repaint();
+                    }
+                }
             });
     }
 }

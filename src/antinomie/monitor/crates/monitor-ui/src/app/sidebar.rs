@@ -31,7 +31,7 @@ impl MonitorApp {
                     },
                 ));
             }
-            None => machine.push(("Base unavailable".into(), theme::warn())),
+            None => machine.push(("No base".into(), theme::warn())),
         }
         let fallbacks = self.stealth_fallbacks_of(vm);
         machine.extend([
@@ -94,10 +94,7 @@ impl MonitorApp {
                 } else {
                     // Its own line: the base's label can fill the first.
                     let badge = vec![(
-                        format!(
-                            "{} Device profile fallback",
-                            egui_phosphor::regular::WARNING
-                        ),
+                        format!("{} Profile fallback", egui_phosphor::regular::WARNING),
                         theme::warn(),
                     )];
                     vec![machine, badge, last]
@@ -107,6 +104,13 @@ impl MonitorApp {
         );
         response.on_hover_ui(|ui| {
             ui.label(RichText::new(&vm.name).strong());
+            match selected_base(&self.snapshot, vm.base_identity.as_deref()) {
+                Some(base) => ui.label(format!("Base: {}", base.label)),
+                None => ui.colored_label(
+                    theme::warn(),
+                    "Base unavailable: the base image this VM was made from is not installed",
+                ),
+            };
             ui.label(format!(
                 "{} CPU / {} MiB RAM / {} GiB disk\nNetwork: {}",
                 vm.cpus,
@@ -141,7 +145,20 @@ impl MonitorApp {
         egui::SidePanel::left("vms")
             // Room for the VM details, but the trace keeps most of a small
             // screen.
-            .default_width((ctx.screen_rect().width() * 0.2).clamp(200.0, 300.0))
+            .default_width(
+                (ctx.screen_rect().width() * 0.2)
+                    .clamp(200.0, 300.0)
+                    // Section titles and VM rows are cut when the text is
+                    // larger than the default: the width follows the text,
+                    // but a screen narrower than 1100 px keeps the tab beside it
+                    // wide (the debugger listing needs that room there).
+                    .max(if ctx.screen_rect().width() >= 1100.0 {
+                        (ctx.style().text_styles[&egui::TextStyle::Body].size * 14.0)
+                            .min(ctx.screen_rect().width() * 0.22)
+                    } else {
+                        0.0
+                    }),
+            )
             .min_width(200.0)
             .max_width(380.0)
             .resizable(true)
