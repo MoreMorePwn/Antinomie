@@ -1641,6 +1641,27 @@ time.sleep(30)
             assert!(destination.join("antinomie.rep").is_dir());
             assert!(project.is_file(), "export preserves retained evidence");
         }
+        if std::env::var_os("ANTINOMIE_TEST_REQUIRE_GHIDRA_PROJECT").is_some() {
+            // The Ghidra run also exported its disassembly beside the decompilation.
+            let ghidra = report
+                .sections
+                .iter()
+                .find(|s| s.kind == AnalysisKind::Decompilation)
+                .and_then(|s| s.disassembly.as_ref())
+                .expect("Ghidra exports its disassembly listing");
+            assert!(ghidra.instructions > 0 && ghidra.functions > 0);
+            let page = super::super::read_ghidra_disassembly_page(
+                &directory,
+                &report.id,
+                0,
+                8,
+                "",
+                |_| true,
+            )
+            .unwrap();
+            assert_eq!(page.rows.len(), 8);
+            eprintln!("Ghidra listing: {ghidra:?}");
+        }
         let disassembly = report
             .sections
             .iter()
