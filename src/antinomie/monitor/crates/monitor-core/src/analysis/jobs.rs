@@ -1732,6 +1732,13 @@ time.sleep(30)
             production_run(&source, vec![AnalysisKind::Disassembly], Default::default());
         let section = &report.sections[0];
         let ghidra = section.disassembly.as_ref().expect("Ghidra's listing");
+        // Ghidra's listing makes up for a built-in disassembler that has none.
+        assert!(
+            section.listing.is_some() || section.state == AnalysisSectionState::Complete,
+            "{:?} {}",
+            section.state,
+            section.summary
+        );
         assert!(ghidra.instructions > 0 && ghidra.functions > 0);
         // No decompilation: no Decompilation section and no Ghidra project.
         assert!(

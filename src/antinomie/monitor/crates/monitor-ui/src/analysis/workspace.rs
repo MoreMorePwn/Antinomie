@@ -428,6 +428,16 @@ fn export_controls(
 #[path = "workspace_tests.rs"]
 mod render_tests;
 
+/// The rows a category has: its listing's, or those of Ghidra's listing when
+/// the built-in disassembler made none, or the report's own rows.
+fn row_count(report: &AnalysisReport, section: &AnalysisSection) -> u64 {
+    match (&section.listing, report.ghidra_disassembly()) {
+        (Some(listing), _) => listing.rows,
+        (None, Some(ghidra)) if section.kind == AnalysisKind::Disassembly => ghidra.listing.rows,
+        (None, _) => section.entries.len() as u64,
+    }
+}
+
 fn results(
     ui: &mut egui::Ui,
     report: &AnalysisReport,
@@ -446,10 +456,7 @@ fn results(
     let mut action = None;
     ui.horizontal_wrapped(|ui| {
         ui.strong(section_title(kind));
-        let rows = section
-            .listing
-            .as_ref()
-            .map_or(section.entries.len() as u64, |listing| listing.rows);
+        let rows = row_count(report, section);
         crate::widgets::chip(ui, state_word(report, section), state_tone(section));
         ui.label(format!(
             "{} rows",
@@ -755,12 +762,7 @@ fn categories(
         let widest = report
             .sections
             .iter()
-            .map(|section| {
-                section
-                    .listing
-                    .as_ref()
-                    .map_or(section.entries.len() as u64, |listing| listing.rows)
-            })
+            .map(|section| row_count(report, section))
             .chain(regex_total)
             .max()
             .unwrap_or(0);
@@ -828,12 +830,7 @@ fn categories(
                         let rows = if kind == AnalysisKind::Regex {
                             regex_total
                         } else {
-                            Some(
-                                section
-                                    .listing
-                                    .as_ref()
-                                    .map_or(section.entries.len() as u64, |listing| listing.rows),
-                            )
+                            Some(row_count(report, section))
                         };
                         ui.allocate_ui_with_layout(
                             egui::vec2(rows_width, ui.spacing().interact_size.y),

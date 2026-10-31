@@ -217,6 +217,16 @@ pub(super) fn disassembly_listing(section: &mut AnalysisSection, specimen: &[u8]
         &ghidra_version(ghidra),
         Path::new(LISTING_EXPORT),
     );
+    if let Some(listing) = &section.disassembly
+        && section.state == AnalysisSectionState::Unavailable
+    {
+        // No built-in rows for this architecture, but Ghidra listed it.
+        section.state = AnalysisSectionState::Complete;
+        section.summary = format!(
+            "{} instructions in {} functions from {}; the built-in disassembler has no decoder for this architecture",
+            listing.instructions, listing.functions, listing.tool
+        );
+    }
     if section.disassembly.is_none() {
         let why = run
             .failure(Duration::from_secs(budget))
