@@ -139,6 +139,21 @@ impl MonitorApp {
                 });
                 ui.end_row();
             }
+            ui.label("Ghidra for Disassembly");
+            ui.vertical(|ui| {
+                ui.checkbox(
+                    &mut self.settings.analysis_limits.ghidra_disassembly,
+                    "List with Ghidra when Decompilation is not selected",
+                );
+                hint(
+                    ui,
+                    "A run with Disassembly but without Decompilation also starts Ghidra, which lists \
+                     every architecture with labels and cross references. The built-in rows show first. \
+                     Needs Ghidra (Manage tools); the time limit and the listing size apply. \
+                     With Decompilation selected there is only the one Ghidra run, whatever this says.",
+                );
+            });
+            ui.end_row();
         });
         if ui
             .add_enabled(
@@ -512,21 +527,6 @@ impl MonitorApp {
                     &mut self.settings.analysis_time_limit_minutes,
                 ));
                 hint(ui, crate::analysis::TIME_LIMIT_HELP);
-            });
-            ui.end_row();
-            ui.label("Ghidra for Disassembly");
-            ui.vertical(|ui| {
-                ui.checkbox(
-                    &mut self.settings.analysis_limits.ghidra_disassembly,
-                    "List with Ghidra when Decompilation is not selected",
-                );
-                hint(
-                    ui,
-                    "A run with Disassembly but without Decompilation also starts Ghidra, which lists \
-                     every architecture with labels and cross references. The built-in rows show first. \
-                     Needs Ghidra (Manage tools); the time limit and the listing size apply. \
-                     With Decompilation selected there is only the one Ghidra run, whatever this says.",
-                );
             });
             ui.end_row();
         });

@@ -522,8 +522,10 @@ fn a_disassembly_only_run_plans_ghidra_unless_decompilation_or_the_setting_say_o
     );
     assert_eq!(listing_only(&both), None);
     // The setting off keeps the built-in rows only.
-    let mut off = AnalysisLimits::default();
-    off.ghidra_disassembly = false;
+    let off = AnalysisLimits {
+        ghidra_disassembly: false,
+        ..AnalysisLimits::default()
+    };
     let mut report = report_of(&[AnalysisKind::Disassembly], off.for_report());
     assert!(
         report

@@ -1759,8 +1759,10 @@ time.sleep(30)
         } else {
             fs::remove_dir_all(&directory).unwrap();
         }
-        let mut off = AnalysisLimits::default();
-        off.ghidra_disassembly = false;
+        let off = AnalysisLimits {
+            ghidra_disassembly: false,
+            ..AnalysisLimits::default()
+        };
         let (directory, report, _) = production_run(&source, vec![AnalysisKind::Disassembly], off);
         assert!(report.sections[0].disassembly.is_none());
         assert!(report.ghidra_disassembly().is_none());
