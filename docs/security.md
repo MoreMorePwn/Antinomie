@@ -103,7 +103,7 @@ Each VM has one network mode (VM dialog > **Network**). New VMs are
 
 **NAT is the least isolated mode.** The guest can open connections through the
 host, as your user, to the Internet and to your local network. Through QEMU's
-gateway address (10.0.2.2 unless a stealth profile changes the subnet) it can
+gateway address (10.0.2.2 unless a device profile changes the subnet) it can
 also reach services listening on the host's loopback interface: a local
 database or development server, a Tor or proxy you run, and the `127.0.0.1`
 port Antinomie's debugger opens during a debug session. The VM dialog warns
@@ -128,7 +128,7 @@ to another route. Details are in the
 [user guide](usage.md#network-routes).
 
 **Cloud VPS profiles** add a fake cloud metadata service to a Routed VM. With a
-Cloud VPS stealth profile (Tencent CVM, Alibaba ECS, DigitalOcean Droplet,
+Cloud VPS device profile (Tencent CVM, Alibaba ECS, DigitalOcean Droplet,
 Vultr VC2) the gateway answers the provider's metadata address on TCP port 80
 (169.254.169.254; Tencent's 169.254.0.23, Alibaba's 100.100.100.200) on every
 route, **None (drop)** included, and resolves the provider's metadata name to
@@ -256,12 +256,12 @@ library deletes its archive but keeps its record and custody log. To remove
 everything, quit Antinomie, then delete the data directory, any disk or
 recording folders you chose, the cache and any old backup.
 
-## Stealth limits
+## Device profile limits
 
-A stealth profile changes what the guest can read of its hardware identity
+A device profile changes what the guest can read of its hardware identity
 (SMBIOS, CPU, disk and network models, MAC address, firmware), and current
 bases keep the guest kernel's own traces out of view. It does not make the VM
-undetectable. The **Still visible** list in the Stealth profile window names
+undetectable. The **Still visible** list in the Device profile window names
 what remains for that profile and base: timing, the display, the chipset and
 QEMU's firmware tables among them. `CPUID` and `RDTSC` checks leave no system
 call and are not recorded. Software breakpoints are `0xCC` bytes a sample can

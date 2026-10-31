@@ -135,7 +135,7 @@ The **Base images** section in the left sidebar lists installed bases. Use
   image); the wizard says which toolchain the build uses, shows the chroot's
   size and has a **Delete** button (the next build makes it again). BusyBox and
   the Debian desktop keep compiling with the host's toolchain. A Debian Minimal VM whose
-  stealth profile boots UEFI gets a UEFI PC's disk (GPT, an EFI system
+  device profile boots UEFI gets a UEFI PC's disk (GPT, an EFI system
   partition, GRUB for UEFI with the shim, a `debian` firmware boot entry): the
   first such VM of a base lays that disk out once (a progress window shows the
   steps; it needs about the base's size in free space), and later ones share
@@ -145,26 +145,23 @@ The **Base images** section in the left sidebar lists installed bases. Use
 Bases are read-only templates. Right-click a base to make a **New VM from this
 base** or to **Delete base**. Deleting is refused while any VM still uses it.
 
-A VM's Stealth profile can ask for more than its base or this host can give: SATA
+A VM's device profile can ask for more than its base or this host can give: SATA
 or NVMe disks, UEFI, a NAT network of its own or two threads per core need a base
 built by Antinomie 0.7.0 or later (or a host with OVMF or a suitable CPU), and a
 base built earlier has no list of what it supports. Such a setting is not applied;
 the VM starts with the choice every base has (virtio, BIOS, 10.0.2.0/24, one
-thread per core). The app says so in several places: the **Stealth profile**
+thread per core). The app says so in several places: the **Device profile**
 window lists them at its top and on the setting itself ("SATA (AHCI) not supported
 by this base: virtio will be used"), with a **Use base** button when another
-installed base supports it; the VM dialog's Stealth row shows "N fall back"; the
-VM list and the Summary's **Stealth profile** card carry a **Stealth fallback**
+installed base supports it; the VM dialog's device profile row shows "N fall back"; the
+VM list and the Summary's **Device profile** card carry a **Device profile fallback**
 badge; and each start warns in **Activity** and adds the same lines as notes to
 every run of that boot, shown under the run's header.
 
 The realistic presets (desktop, laptop, server) copy one real, popular machine,
 picked at random when the VM is created and kept for its life, never per boot.
 The pick is weighted by how common the model is, and limited to machines the
-host CPU's generation was sold in; when the host CPU is newer or older than every
-machine of that kind, the stealth window says so under the machine. **Machine**
-lists them by kind; the line below it reads "Looks like a Dell OptiPlex 7090: BIOS
-1.13.0 of 10/06/2022". The BIOS release, the unit (product, SKU, board), the disk
+host CPU's generation was sold in. The BIOS release, the unit (product, SKU, board), the disk
 model and the memory part come from what real units of that model report, so two
 VMs of the same model differ, as two such machines do. The catalog's
 `SOURCES.md` names a public hardware report for every value, and the weight is how
@@ -183,7 +180,7 @@ with the X11SCL-F, which has public reports). Changing the profile to a machine 
 and rewrites the VM's network configuration when you save; a VM with snapshots
 keeps its slot (delete the snapshots, or pick a machine with the same chipset).
 
-Each snapshot records the stealth profile the VM had when it was taken (machine,
+Each snapshot records the device profile the VM had when it was taken (machine,
 serials, UUID and MAC address, network card, CPU, disk bus, firmware). A snapshot
 only restores under that same profile: if the VM's profile was changed since, the
 restore dialog says "This snapshot was taken as <machine>" and its button becomes
