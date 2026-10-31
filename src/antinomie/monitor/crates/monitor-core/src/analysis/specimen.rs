@@ -218,6 +218,7 @@ mod tests {
                     summary: "saved".into(),
                     tools: Vec::new(),
                     listing: None,
+                    disassembly: None,
                     entries: Vec::new(),
                     limits: Vec::new(),
                 }],

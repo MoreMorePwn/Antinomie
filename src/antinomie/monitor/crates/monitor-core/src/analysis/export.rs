@@ -76,6 +76,16 @@ pub fn export_analysis(
                 report.specimen_len,
             )?;
         }
+        if let Some(disassembly) = &section.disassembly {
+            super::listing::validate(
+                &directory
+                    .join("listings")
+                    .join(super::listing::GHIDRA_DISASSEMBLY_FILE),
+                AnalysisKind::Disassembly,
+                &disassembly.listing,
+                report.specimen_len,
+            )?;
+        }
     }
     let file = OpenOptions::new()
         .write(true)

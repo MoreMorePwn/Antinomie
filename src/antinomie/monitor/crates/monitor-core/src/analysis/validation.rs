@@ -35,6 +35,13 @@ pub(crate) fn validate_report(report: &AnalysisReport) -> Result<(), String> {
                 || s.listing
                     .as_ref()
                     .is_some_and(|l| l.bytes > super::listing::LISTING_MAX_SIZE)
+                || s.disassembly.as_ref().is_some_and(|d| {
+                    d.listing.bytes > super::listing::LISTING_MAX_SIZE
+                        || d.tool.len() > 256
+                        || d.language.len() > 256
+                        || d.endian.len() > 16
+                        || d.note.len() > 1024
+                })
                 || s.summary.len() > 4096
                 || s.limits.len() > 8
                 || s.limits.iter().any(|l| l.text.len() > 1024)
@@ -220,8 +227,14 @@ pub(crate) fn validate_record(
             mnemonic,
             operands,
             function,
+            label,
+            targets,
+            xrefs,
         } => {
             kind == AnalysisKind::Disassembly
+                && label.as_deref().is_none_or(bounded)
+                && targets.len() <= super::listing::REFERENCES_MAX
+                && xrefs.len() <= super::listing::REFERENCES_MAX
                 && bytes.len() <= 64
                 && bytes.bytes().all(|c| c.is_ascii_hexdigit() || c == b' ')
                 && bounded(mnemonic)

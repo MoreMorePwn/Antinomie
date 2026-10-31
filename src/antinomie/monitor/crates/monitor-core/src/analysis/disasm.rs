@@ -307,6 +307,9 @@ pub(super) fn disassemble(section: &mut AnalysisSection, specimen: &[u8], listin
                     mnemonic,
                     operands,
                     function,
+                    label: None,
+                    targets: Vec::new(),
+                    xrefs: Vec::new(),
                 },
             ) {
                 full = true;
@@ -426,6 +429,9 @@ fn objdump(section: &mut AnalysisSection, listings: &Path) {
                 mnemonic: mnemonic.into(),
                 operands: operands.trim().into(),
                 function: function.clone(),
+                label: None,
+                targets: Vec::new(),
+                xrefs: Vec::new(),
             },
         );
         if full {

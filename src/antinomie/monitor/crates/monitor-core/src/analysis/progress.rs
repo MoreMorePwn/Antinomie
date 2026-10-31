@@ -98,6 +98,7 @@ pub(super) fn merge(report: &mut AnalysisReport, progress: AnalysisReport, keep_
         }
         if !keep_listings {
             section.listing = None;
+            section.disassembly = None;
         }
     }
 }

@@ -575,6 +575,7 @@ pub(super) fn section_report(id: &str, marker: &str) -> antinomie_monitor_core::
         reason: Some("Synthetic UI fixture; no analyzer was run".into()),
         sections: vec![
             AnalysisSection {
+                disassembly: None,
                 kind: AnalysisKind::Metadata,
                 state: AnalysisSectionState::Complete,
                 summary: format!("{marker} metadata"),
@@ -589,6 +590,7 @@ pub(super) fn section_report(id: &str, marker: &str) -> antinomie_monitor_core::
                 limits: Vec::new(),
             },
             AnalysisSection {
+                disassembly: None,
                 kind: AnalysisKind::Structures,
                 state: AnalysisSectionState::Unavailable,
                 summary: format!("{marker} structures unavailable"),
@@ -598,6 +600,7 @@ pub(super) fn section_report(id: &str, marker: &str) -> antinomie_monitor_core::
                 limits: Vec::new(),
             },
             AnalysisSection {
+                disassembly: None,
                 kind: AnalysisKind::Strings,
                 state: AnalysisSectionState::Partial,
                 summary: "Bounded synthetic rows".into(),

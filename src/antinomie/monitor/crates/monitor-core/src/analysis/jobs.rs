@@ -25,6 +25,7 @@ use std::{
 };
 
 mod acquisition;
+mod adopt;
 mod host_copy;
 mod host_file;
 mod layers;
@@ -33,6 +34,7 @@ mod sandbox_run;
 mod specimen_publication;
 mod supplement;
 mod worker_exe;
+pub(super) use adopt::adopt_listings;
 pub(crate) use sandbox_account::host_user_name;
 use sandbox_account::sandbox_passwd;
 pub(crate) use sandbox_run::{Mounts, run_sandboxed, run_sandboxed_sized, run_sandboxed_with};
@@ -113,6 +115,7 @@ pub(crate) fn new_report(path: &str, selection: &AnalysisSelection) -> AnalysisR
                 summary: "pending acquisition".into(),
                 tools: Vec::new(),
                 listing: None,
+                disassembly: None,
                 entries: Vec::new(),
                 limits: Vec::new(),
             })
@@ -680,49 +683,6 @@ const TRANSFER_DEADLINE: Duration = Duration::from_secs(120);
 /// Time the durable report of an acquired specimen has to be written.
 const PUBLICATION_DEADLINE: Duration = Duration::from_secs(30);
 
-/// Move validated worker listings next to the report; a listing that fails
-/// validation is dropped and its category marked partial. A `carried` category
-/// is one a finished analysis already had: the worker did not make its listing.
-pub(super) fn adopt_listings(
-    directory: &Path,
-    report: &mut AnalysisReport,
-    carried: &[AnalysisKind],
-) {
-    let output = directory.join("output/listings");
-    let target = directory.join("listings");
-    let mut total = 0u64;
-    let total_len = report.specimen_len;
-    for section in &mut report.sections {
-        let Some(listing) = section.listing.clone() else {
-            continue;
-        };
-        if carried.contains(&section.kind) {
-            continue;
-        }
-        let name = super::listing::file_name(section.kind);
-        total = total.saturating_add(listing.bytes);
-        let result = if total > super::listing::LISTINGS_MAX_TOTAL {
-            Err("listings exceed their combined bound".to_string())
-        } else {
-            super::listing::validate(&output.join(name), section.kind, &listing, total_len)
-                .and_then(|()| {
-                    fs::create_dir_all(&target).map_err(|e| e.to_string())?;
-                    fs::set_permissions(&target, fs::Permissions::from_mode(0o700))
-                        .map_err(|e| e.to_string())?;
-                    fs::rename(output.join(name), target.join(name)).map_err(|e| e.to_string())
-                })
-        };
-        if let Err(error) = result {
-            section.listing = None;
-            section.state = AnalysisSectionState::Partial;
-            section.summary = format!("{}; full listing rejected: {error}", section.summary);
-            if section.summary.len() > 4096 {
-                section.summary.truncate(4000);
-            }
-        }
-    }
-    let _ = fs::remove_dir_all(&output);
-}
 fn persist_report(directory: &Path, report: &AnalysisReport) -> Result<(), String> {
     let encoded = serde_json::to_vec(report).map_err(|e| e.to_string())?;
     if encoded.len() > REPORT_MAX_SIZE {

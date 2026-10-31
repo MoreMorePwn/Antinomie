@@ -90,6 +90,7 @@ fn limits_report(app: &mut MonitorApp) {
     let section =
         |kind, state, summary: &str, limits: Vec<(AnalysisLimitKind, &str, Option<u64>)>| {
             AnalysisSection {
+                disassembly: None,
                 kind,
                 state,
                 summary: summary.into(),

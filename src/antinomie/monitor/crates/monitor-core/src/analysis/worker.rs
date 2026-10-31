@@ -1272,6 +1272,7 @@ mod tests {
             summary: String::new(),
             tools: Vec::new(),
             listing: None,
+            disassembly: None,
             entries: Vec::new(),
             limits: Vec::new(),
         }

@@ -328,6 +328,17 @@ pub enum AnalysisData {
         mnemonic: String,
         operands: String,
         function: Option<String>,
+        /// A symbol naming this address other than a function start (Ghidra
+        /// listing only).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+        /// Where this instruction refers to: call and jump targets, data it
+        /// reads or writes (Ghidra listing only).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        targets: Vec<AnalysisReference>,
+        /// Who refers to this address; the first few only (Ghidra listing only).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        xrefs: Vec<AnalysisReference>,
     },
     /// Start of a function in a disassembly or decompilation listing.
     Function {
@@ -398,6 +409,25 @@ pub enum AnalysisData {
         name: String,
         version: Option<String>,
     },
+}
+
+/// What a reference does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnalysisReferenceKind {
+    Call,
+    Jump,
+    Data,
+    Other,
+}
+
+/// One reference between two addresses of the listing; `address` is the other
+/// end (the target of a `targets` entry, the source of an `xrefs` entry), as
+/// an object address.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnalysisReference {
+    pub address: u64,
+    pub kind: AnalysisReferenceKind,
 }
 
 /// A category result too large for the report, kept beside it as JSON lines
@@ -491,9 +521,33 @@ pub struct AnalysisSection {
     /// The complete result when it is kept beside the report.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub listing: Option<AnalysisListing>,
+    /// The disassembly listing Ghidra exported during the same run as this
+    /// decompilation, kept beside the report as `ghidra-disassembly.jsonl`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disassembly: Option<AnalysisDisassembly>,
     /// The bounds this category met; empty for a result nothing cut short.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub limits: Vec<AnalysisLimit>,
+}
+
+/// Ghidra's disassembly listing, exported by the same run as the decompilation
+/// (so it covers every architecture Ghidra supports). Rows are `Instruction`
+/// and `Function` records like the Disassembly category's own listing.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnalysisDisassembly {
+    pub listing: AnalysisListing,
+    /// The tool and its version, for example "Ghidra 12.2".
+    pub tool: String,
+    /// Ghidra's language id, for example "x86:LE:64:default".
+    pub language: String,
+    /// "little" or "big".
+    pub endian: String,
+    pub pointer_bits: u32,
+    pub functions: u64,
+    pub instructions: u64,
+    /// Why the listing stops short, empty when it is whole.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub note: String,
 }
 
 impl AnalysisSection {
@@ -505,6 +559,7 @@ impl AnalysisSection {
             entries: Vec::new(),
             tools: Vec::new(),
             listing: None,
+            disassembly: None,
             limits: Vec::new(),
         }
     }

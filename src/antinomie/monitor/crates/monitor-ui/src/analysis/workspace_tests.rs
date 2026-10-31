@@ -72,6 +72,7 @@ fn fixture() -> AnalysisReport {
         }),
     });
     report.sections.push(AnalysisSection {
+        disassembly: None,
         kind: AnalysisKind::Structures,
         state: AnalysisSectionState::Complete,
         summary: "Synthetic headers, section flags and import".into(),
@@ -81,6 +82,7 @@ fn fixture() -> AnalysisReport {
         limits: Vec::new(),
     });
     report.sections.push(AnalysisSection {
+        disassembly: None,
         kind: AnalysisKind::Strings,
         state: AnalysisSectionState::Partial,
         summary: "1024 retained synthetic strings; text bounded".into(),
@@ -113,6 +115,7 @@ fn fixture() -> AnalysisReport {
         limits: Vec::new(),
     });
     report.sections.push(AnalysisSection {
+        disassembly: None,
         kind: AnalysisKind::Rules,
         state: AnalysisSectionState::Unavailable,
         summary: "No rule engine is installed".into(),
@@ -653,6 +656,7 @@ fn disassembly_functions_panel_has_no_module_note_and_rows_have_no_pane() {
     crate::theme::install(&ctx);
     let mut report = fixture();
     report.sections.push(AnalysisSection {
+        disassembly: None,
         kind: AnalysisKind::Disassembly,
         state: AnalysisSectionState::Complete,
         summary: String::new(),
@@ -670,6 +674,9 @@ fn disassembly_functions_panel_has_no_module_note_and_rows_have_no_pane() {
             instruction(
                 2,
                 AnalysisData::Instruction {
+                    label: None,
+                    targets: Vec::new(),
+                    xrefs: Vec::new(),
                     address: 0x1000,
                     bytes: "b8 01 00 00 00".into(),
                     mnemonic: "mov".into(),
@@ -1239,6 +1246,7 @@ fn meaning_report() -> AnalysisReport {
         time_limit_seconds: None,
     };
     report.sections.push(AnalysisSection {
+        disassembly: None,
         kind: AnalysisKind::Strings,
         state: AnalysisSectionState::Complete,
         summary: "two strings".into(),
@@ -1275,6 +1283,7 @@ fn meaning_report() -> AnalysisReport {
         limits: Vec::new(),
     });
     report.sections.push(AnalysisSection {
+        disassembly: None,
         kind: AnalysisKind::Rules,
         state: AnalysisSectionState::Complete,
         summary: "two matches".into(),
@@ -1313,6 +1322,7 @@ fn meaning_report() -> AnalysisReport {
         limits: Vec::new(),
     });
     report.sections.push(AnalysisSection {
+        disassembly: None,
         kind: AnalysisKind::Hardening,
         state: AnalysisSectionState::Complete,
         summary: "two checks".into(),
@@ -1349,6 +1359,7 @@ fn meaning_report() -> AnalysisReport {
         limits: Vec::new(),
     });
     report.sections.push(AnalysisSection {
+        disassembly: None,
         kind: AnalysisKind::Structures,
         state: AnalysisSectionState::Complete,
         summary: "mixed structures".into(),
@@ -1415,6 +1426,7 @@ fn meaning_report() -> AnalysisReport {
         limits: Vec::new(),
     });
     report.sections.push(AnalysisSection {
+        disassembly: None,
         kind: AnalysisKind::Entropy,
         state: AnalysisSectionState::Complete,
         summary: "chart".into(),
@@ -1517,6 +1529,9 @@ fn code_report(kind: AnalysisKind, functions: &[(&str, u64, u32)]) -> (AnalysisR
                 id,
                 if kind == AnalysisKind::Disassembly {
                     AnalysisData::Instruction {
+                        label: None,
+                        targets: Vec::new(),
+                        xrefs: Vec::new(),
                         address: address + u64::from(line),
                         bytes: "90".into(),
                         mnemonic: "nop".into(),
@@ -1541,6 +1556,7 @@ fn code_report(kind: AnalysisKind, functions: &[(&str, u64, u32)]) -> (AnalysisR
     let mut report = fixture();
     let rows = entries.len();
     report.sections.push(AnalysisSection {
+        disassembly: None,
         kind,
         state: AnalysisSectionState::Complete,
         summary: String::new(),

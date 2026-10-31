@@ -289,6 +289,7 @@ mod tests {
     #[test]
     fn capabilities_group_by_tactic_in_matrix_order() {
         let section = AnalysisSection {
+            disassembly: None,
             kind: AnalysisKind::Capabilities,
             state: AnalysisSectionState::Complete,
             summary: String::new(),

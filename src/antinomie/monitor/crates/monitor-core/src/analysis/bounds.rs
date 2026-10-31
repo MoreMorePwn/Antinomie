@@ -98,6 +98,9 @@ pub(super) fn bound_data(data: &mut AnalysisData) -> bool {
             mnemonic,
             operands,
             function,
+            label,
+            targets,
+            xrefs,
             ..
         } => {
             bound(bytes);
@@ -106,6 +109,11 @@ pub(super) fn bound_data(data: &mut AnalysisData) -> bool {
             if let Some(function) = function {
                 bound(function);
             }
+            if let Some(label) = label {
+                bound(label);
+            }
+            targets.truncate(super::listing::REFERENCES_MAX);
+            xrefs.truncate(super::listing::REFERENCES_MAX);
         }
         AnalysisData::Function { name, .. } => bound(name),
         AnalysisData::SourceLine { function, .. } => bound(function),

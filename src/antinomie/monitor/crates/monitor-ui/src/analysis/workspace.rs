@@ -1090,6 +1090,7 @@ mod tests {
     use antinomie_monitor_core::{AnalysisRecord, AnalysisSectionState};
     fn section() -> AnalysisSection {
         AnalysisSection {
+            disassembly: None,
             kind: AnalysisKind::Strings,
             state: AnalysisSectionState::Partial,
             summary: "Retained text is bounded".into(),

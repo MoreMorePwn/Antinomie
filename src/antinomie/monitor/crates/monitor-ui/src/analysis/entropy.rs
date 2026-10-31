@@ -84,6 +84,7 @@ mod tests {
     #[test]
     fn measured_regions_exclude_whole_file_and_invalid_extents() {
         let section = AnalysisSection {
+            disassembly: None,
             kind: AnalysisKind::Entropy,
             state: AnalysisSectionState::Complete,
             summary: String::new(),

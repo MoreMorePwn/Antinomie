@@ -260,6 +260,7 @@ pub(crate) fn listing_row(entry: &AnalysisEntry) -> Vec<(&'static str, crate::qu
             mnemonic,
             operands,
             function,
+            ..
         } => {
             row.extend([
                 ("address", number(Some(*address))),

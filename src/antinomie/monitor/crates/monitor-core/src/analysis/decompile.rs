@@ -15,10 +15,16 @@ const MANAGED_JDK: &str = "/opt/antinomie-tools/ghidra/jdk";
 const MARK_FUNCTION: &str = "@@ANTINOMIE-FUNCTION\t";
 const MARK_BASE: &str = "@@ANTINOMIE-BASE\t";
 const MARK_TIMEOUT: &str = "@@ANTINOMIE-TIMEOUT";
+/// Where the post-script writes the disassembly listing inside the sandbox.
+const LISTING_EXPORT: &str = "/tmp/ghidra-disassembly.txt";
 
-/// Ghidra post-script: decompile every function within a time budget.
+/// Ghidra post-script: export the disassembly listing, then decompile every
+/// function within a time budget. Arguments: decompilation file, seconds for
+/// the decompilation, listing file, listing size bound in octets.
 const GHIDRA_SCRIPT: &str = r#"// SPDX-License-Identifier: MIT
-// Antinomie: export Ghidra's decompilation of every function as plain text.
+// Antinomie: export Ghidra's disassembly listing and its decompilation of every
+// function as plain text.
+//@@LISTING-IMPORTS
 import ghidra.app.decompiler.DecompInterface;
 import ghidra.app.decompiler.DecompileResults;
 import ghidra.app.script.GhidraScript;
@@ -30,10 +36,14 @@ import java.io.OutputStreamWriter;
 import java.io.PrintWriter;
 
 public class AntinomieExport extends GhidraScript {
+//@@LISTING-METHODS
     @Override
     public void run() throws Exception {
         String[] args = getScriptArgs();
         long budget = Long.parseLong(args[1]) * 1000L;
+        if (args.length >= 4) {
+            exportListing(args[2], Long.parseLong(args[3]), Math.max(20000L, budget / 3));
+        }
         long start = System.currentTimeMillis();
         DecompInterface decompiler = new DecompInterface();
         decompiler.openProgram(currentProgram);
@@ -67,9 +77,16 @@ public class AntinomieExport extends GhidraScript {
 }
 "#;
 
+/// The post-script source with the listing export spliced in.
+pub(super) fn ghidra_script() -> String {
+    GHIDRA_SCRIPT
+        .replace("//@@LISTING-IMPORTS\n", super::ghidra_listing::JAVA_IMPORTS)
+        .replace("//@@LISTING-METHODS\n", super::ghidra_listing::JAVA_METHODS)
+}
+
 /// Where the object's addresses start: a decompiler that rebases the image
 /// reports addresses relative to its own base, mapped back with this.
-fn object_base(specimen: &[u8]) -> u64 {
+pub(super) fn object_base(specimen: &[u8]) -> u64 {
     let Ok(file) = object::File::parse(specimen) else {
         return 0;
     };
@@ -118,7 +135,7 @@ fn ghidra_run(
     ] {
         fs::create_dir_all(directory).map_err(|e| format!("{directory}: {e}"))?;
     }
-    fs::write("/tmp/ghidra-scripts/AntinomieExport.java", GHIDRA_SCRIPT)
+    fs::write("/tmp/ghidra-scripts/AntinomieExport.java", ghidra_script())
         .map_err(|e| format!("decompiler script: {e}"))?;
     let budget = super::worker::decompiler_seconds();
     let analysis = (budget / 2).to_string();
@@ -136,6 +153,8 @@ fn ghidra_run(
             "AntinomieExport.java",
             "/tmp/decompiled.txt",
             &export,
+            LISTING_EXPORT,
+            &super::ghidra_listing::EXPORT_MAX_SIZE.to_string(),
             "-analysisTimeoutPerFile",
             &analysis,
             "-max-cpu",
@@ -162,6 +181,12 @@ fn ghidra_run(
             eprintln!("  {line}");
         }
     }
+    section.disassembly = disassembly(
+        listings,
+        specimen,
+        &ghidra_version(ghidra),
+        Path::new(LISTING_EXPORT),
+    );
     let Ok(text) = fs::read("/tmp/decompiled.txt") else {
         if run.timed_out {
             super::limits::time_out(
@@ -220,6 +245,42 @@ fn ghidra_run(
             .push_str("; native Ghidra project retained for export/open");
     }
     Ok(())
+}
+
+/// Ghidra's disassembly listing of the run, kept beside the decompilation.
+/// A listing that cannot be made leaves the decompilation as it was.
+fn disassembly(
+    listings: &Path,
+    specimen: &[u8],
+    tool: &str,
+    export: &Path,
+) -> Option<AnalysisDisassembly> {
+    if !export.is_file() {
+        return None;
+    }
+    let (listing, summary) = match super::ghidra_listing::write_listing(
+        listings,
+        export,
+        specimen,
+        object_base(specimen),
+    ) {
+        Ok(done) => done,
+        Err(error) => {
+            eprintln!("Ghidra disassembly listing: {error}");
+            return None;
+        }
+    };
+    let _ = fs::remove_file(export);
+    (summary.instructions > 0).then(|| AnalysisDisassembly {
+        listing,
+        tool: tool.to_owned(),
+        language: summary.language,
+        endian: summary.endian,
+        pointer_bits: summary.pointer_bits,
+        functions: summary.functions,
+        instructions: summary.instructions,
+        note: summary.note,
+    })
 }
 
 fn ghidra_version(analyze_headless: &str) -> String {

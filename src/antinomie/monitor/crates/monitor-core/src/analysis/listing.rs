@@ -16,6 +16,10 @@ use std::{
 pub(crate) const LISTING_MAX_SIZE: u64 = 64 * 1024 * 1024;
 /// Largest sum of all listings of one report, in octets.
 pub(crate) const LISTINGS_MAX_TOTAL: u64 = 128 * 1024 * 1024;
+/// Most references one instruction row lists on each side.
+pub(crate) const REFERENCES_MAX: usize = 16;
+/// The file of the disassembly Ghidra exports beside its decompilation.
+pub(crate) const GHIDRA_DISASSEMBLY_FILE: &str = "ghidra-disassembly.jsonl";
 /// Largest page a reader may request.
 pub const LISTING_PAGE_MAX_ROWS: usize = 1024;
 
@@ -50,8 +54,12 @@ pub(crate) struct ListingWriter {
 
 impl ListingWriter {
     pub fn create(directory: &Path, kind: AnalysisKind, limit: u64) -> Result<Self, String> {
-        let file =
-            File::create(directory.join(file_name(kind))).map_err(|e| format!("listing: {e}"))?;
+        Self::create_named(directory, file_name(kind), limit)
+    }
+
+    /// A listing of `kind` rows in the file `name` (a companion listing).
+    pub fn create_named(directory: &Path, name: &str, limit: u64) -> Result<Self, String> {
+        let file = File::create(directory.join(name)).map_err(|e| format!("listing: {e}"))?;
         Ok(Self {
             file: BufWriter::new(file),
             rows: 0,
@@ -227,6 +235,52 @@ pub fn read_listing_page_sorted(
     count: usize,
     query: &str,
     sort: Option<ListingSort>,
+    keep: impl FnMut(&AnalysisEntry) -> bool,
+) -> Result<AnalysisListingPage, String> {
+    read_page(
+        directory, report_id, kind, false, start, count, query, sort, keep,
+    )
+}
+
+/// One page of the disassembly Ghidra exported during the decompilation run
+/// (`AnalysisSection::disassembly` of the Decompilation category). The page's
+/// `kind` is `Disassembly`: its rows are the same instruction and function
+/// records as the Disassembly category's own listing, in address order, with
+/// Ghidra's labels and references. Same arguments and rules as
+/// [`read_listing_page_with`].
+pub fn read_ghidra_disassembly_page(
+    directory: &Path,
+    report_id: &str,
+    start: u64,
+    count: usize,
+    query: &str,
+    keep: impl FnMut(&AnalysisEntry) -> bool,
+) -> Result<AnalysisListingPage, String> {
+    read_page(
+        directory,
+        report_id,
+        AnalysisKind::Disassembly,
+        true,
+        start,
+        count,
+        query,
+        None,
+        keep,
+    )
+}
+
+/// `ghidra` reads the companion listing of the Decompilation section instead
+/// of the category's own; the rows are then checked as `kind` rows.
+#[allow(clippy::too_many_arguments)]
+fn read_page(
+    directory: &Path,
+    report_id: &str,
+    kind: AnalysisKind,
+    ghidra: bool,
+    start: u64,
+    count: usize,
+    query: &str,
+    sort: Option<ListingSort>,
     mut keep: impl FnMut(&AnalysisEntry) -> bool,
 ) -> Result<AnalysisListingPage, String> {
     let sort = sort.filter(|sort| match kind {
@@ -242,10 +296,25 @@ pub fn read_listing_page_sorted(
     let section = report
         .sections
         .iter()
-        .find(|section| section.kind == kind)
+        .find(|section| {
+            section.kind
+                == if ghidra {
+                    AnalysisKind::Decompilation
+                } else {
+                    kind
+                }
+        })
         .ok_or("category not in this report")?;
-    let listing = section.listing.as_ref().ok_or("category has no listing")?;
-    let path = directory.join("listings").join(file_name(kind));
+    let (listing, name) = if ghidra {
+        (
+            section.disassembly.as_ref().map(|d| &d.listing),
+            GHIDRA_DISASSEMBLY_FILE,
+        )
+    } else {
+        (section.listing.as_ref(), file_name(kind))
+    };
+    let listing = listing.ok_or("category has no listing")?;
+    let path = directory.join("listings").join(name);
     let file = crate::archive_io::open_regular(&directory.join("listings"), &path)
         .map_err(|e| format!("listing: {e}"))?;
     if file.metadata().map_err(|e| e.to_string())?.len() != listing.bytes {
@@ -593,6 +662,9 @@ mod tests {
                         mnemonic: "nop".into(),
                         operands: String::new(),
                         function: Some((*name).into()),
+                        label: None,
+                        targets: Vec::new(),
+                        xrefs: Vec::new(),
                     }
                 } else {
                     AnalysisData::SourceLine {

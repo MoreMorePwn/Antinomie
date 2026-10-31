@@ -13,6 +13,7 @@ mod decompile;
 pub mod detection;
 mod disasm;
 mod floss;
+mod ghidra_listing;
 mod ident;
 mod limits;
 mod listing;
@@ -29,7 +30,8 @@ pub use decompile::{decompile_captured_core, sparse_core_plan, synthetic_capture
 pub use disasm::{DecodedInstruction, decode_window};
 pub use limits::fixed_limits_text;
 pub use listing::{
-    LISTING_PAGE_MAX_ROWS, read_listing_page, read_listing_page_sorted, read_listing_page_with,
+    LISTING_PAGE_MAX_ROWS, read_ghidra_disassembly_page, read_listing_page,
+    read_listing_page_sorted, read_listing_page_with,
 };
 pub use specimen::read_specimen_range;
 pub(crate) use strings::find_strings;
