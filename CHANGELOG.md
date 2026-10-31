@@ -8,6 +8,26 @@ it runs.
 
 ### Host
 
+- **UI round 5: the 0.8.0 review list.** Notes can now point at one entry of a
+  run's Syscall Trace (the run and the record's event sequence), beside the run as a
+  whole; right-click a Syscall Trace row, a Triage process, evidence or IOC row, a
+  run in Run History or a core, and choose Add note…, and clicking the note's chip
+  opens the trace at that record. The note picker groups what a note can be about,
+  with icons, a hover and selection state. Existing notes load unchanged, and
+  the custody log and its exports name the run and the sequence. Right-click menus
+  of tables are one short menu on the clicked cell (filter on its value, add it with
+  AND or OR, exclude it, copy, add a note) instead of a list of every column, and no
+  menu grows past the screen. A file with no hash now says why (too large, queue
+  full, changed while reading, only read, still open at run end, empty file), and
+  files a run only read or ran are hashed from its starting disk after the run
+  (marked "hashed from the starting disk"; at most 200 files, 64 MiB each, 1 GiB in
+  all, off the UI thread). Smaller fixes: the Identity boxes of a sample fit their
+  content; rule-source and dataset details no longer touch their table; the regex
+  Add button stays in the window; the Strings and Regex tables of the Samples window
+  use the standard rows; the Static analysis lines have a real Open button; neutral
+  chips and every placeholder read in light and dark; the sample name and its back
+  link have their own colour; Samples section titles are a step larger.
+
 - **Sources for the downloadable bases.** The `sources/` folder of the base
   bucket now holds the corresponding source of every listed base: the Debian
   `linux` source package, the Antinomie patch series and exact kernel
