@@ -32,6 +32,8 @@ mod memory;
 mod nat;
 mod parts;
 mod processor;
+#[cfg(test)]
+mod profile_tells_tests;
 mod record;
 mod smbios;
 #[cfg(test)]
@@ -1027,6 +1029,18 @@ impl StealthProfile {
         profile
     }
 
+    /// The CPU model name a cloud profile shows in /proc/cpuinfo and the
+    /// CPUID brand string, of the host CPU's vendor; a profile's own
+    /// `cpu_brand` wins. None for a machine profile (its CPU is the host's,
+    /// which the machine must fit: [`cpu_note`](Self::cpu_note)).
+    pub fn cloud_cpu_brand(&self) -> Option<String> {
+        if !self.identity_enabled || !self.cpu_brand.is_empty() {
+            return None;
+        }
+        self.cloud_provider()
+            .map(|provider| provider.cpu_brand_for(&host_cpu_vendor()).to_owned())
+    }
+
     /// The cloud provider of this profile.
     pub fn cloud_provider(&self) -> Option<&'static CloudProvider> {
         CloudProvider::find(&self.cloud)
@@ -1328,6 +1342,7 @@ impl StealthProfile {
             "the emulated display (Bochs or virtio-gpu)",
             "q35 chipset layout, Red Hat PCI subsystem IDs on the chipset's devices",
             "QEMU's ACPI tables to root (BXPC creator ID, fw_cfg in the DSDT)",
+            "the host CPU's family, model and feature flags behind the provider's CPU name",
             "a fresh boot: minutes of uptime",
         ]);
         found

@@ -174,6 +174,10 @@ pub struct CloudProvider {
     pub chassis_type: u8,
     pub cpu_manufacturer: &'static str,
     pub cpu_version: &'static str,
+    /// The CPU model name /proc/cpuinfo shows (CPUID brand string) on an
+    /// Intel host and on an AMD host: the passthrough CPU keeps the host's
+    /// vendor, family and flags, so the name must be of the same vendor.
+    pub cpu_brand: (&'static str, &'static str),
     pub memory_manufacturer: &'static str,
     /// The vendor part of the MAC address; None: a random locally
     /// administered address, as providers that number guests themselves.
@@ -213,6 +217,7 @@ pub const CLOUDS: &[CloudProvider] = &[
         chassis_type: 1,
         cpu_manufacturer: "Smdbmds",
         cpu_version: "pc-i440fx-2.1",
+        cpu_brand: ("Intel(R) Xeon(R) Platinum 8255C CPU @ 2.50GHz", "AMD EPYC 7K62 48-Core Processor"),
         memory_manufacturer: "Smdbmds",
         mac_prefix: Some([0x52, 0x54, 0x00]),
         nat: ("10.3.0.0/22", "10.3.0.1", "10.3.0.2", "10.3.0.15"),
@@ -256,6 +261,7 @@ pub const CLOUDS: &[CloudProvider] = &[
         chassis_type: 1,
         cpu_manufacturer: "Alibaba Cloud",
         cpu_version: "pc-i440fx-2.1",
+        cpu_brand: ("Intel(R) Xeon(R) Platinum 8269CY CPU @ 2.50GHz", "AMD EPYC 7T83 64-Core Processor"),
         memory_manufacturer: "Alibaba Cloud",
         mac_prefix: Some([0x00, 0x16, 0x3e]),
         nat: ("172.16.0.0/20", "172.16.0.1", "172.16.0.2", "172.16.0.15"),
@@ -301,6 +307,7 @@ pub const CLOUDS: &[CloudProvider] = &[
         chassis_type: 1,
         cpu_manufacturer: "QEMU",
         cpu_version: "pc-i440fx-6.1",
+        cpu_brand: ("DO-Premium-Intel", "DO-Premium-AMD"),
         memory_manufacturer: "QEMU",
         mac_prefix: None,
         nat: ("10.116.0.0/20", "10.116.0.1", "10.116.0.2", "10.116.0.15"),
@@ -339,6 +346,7 @@ pub const CLOUDS: &[CloudProvider] = &[
         chassis_type: 1,
         cpu_manufacturer: "QEMU",
         cpu_version: "pc-q35-7.0",
+        cpu_brand: ("Intel Core Processor (Skylake, IBRS)", "AMD EPYC-Rome Processor"),
         memory_manufacturer: "QEMU",
         mac_prefix: Some([0x56, 0x00, 0x03]),
         nat: ("10.1.96.0/22", "10.1.96.1", "10.1.96.2", "10.1.96.15"),
@@ -366,6 +374,17 @@ pub const CLOUDS: &[CloudProvider] = &[
 impl CloudProvider {
     pub fn find(id: &str) -> Option<&'static Self> {
         CLOUDS.iter().find(|provider| provider.id == id)
+    }
+
+    /// The CPU model name an instance of the provider shows on a host whose
+    /// CPU vendor is `host_vendor` ("AuthenticAMD" or "HygonGenuine" take the
+    /// AMD name, any other the Intel one).
+    pub fn cpu_brand_for(&self, host_vendor: &str) -> &'static str {
+        if matches!(host_vendor, "AuthenticAMD" | "HygonGenuine") {
+            self.cpu_brand.1
+        } else {
+            self.cpu_brand.0
+        }
     }
 
     /// The provider's DHCP network.

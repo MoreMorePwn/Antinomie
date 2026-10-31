@@ -367,6 +367,11 @@ fn hardware(ui: &mut egui::Ui, profile: &mut StealthProfile) {
                     }
                 });
             ui.end_row();
+            if !profile.identity_enabled {
+                ui.label("");
+                ui.label("No device profile: the guest looks like QEMU");
+                ui.end_row();
+            }
             if profile.identity_enabled {
                 ui.label("Chassis");
                 let chassis = chassis_label(profile.identity.chassis_type);

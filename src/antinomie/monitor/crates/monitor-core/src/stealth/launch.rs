@@ -79,8 +79,10 @@ pub(crate) fn cpu_option(
         "host".to_owned()
     } else if profile.cpu_passthrough {
         // Without KVM the host CPU cannot be passed through; show its name.
-        let brand = host_cpuinfo("model name")
-            .unwrap_or_else(|| "Intel(R) Core(TM) i7-10700 CPU @ 2.90GHz".into());
+        let brand = profile.cloud_cpu_brand().unwrap_or_else(|| {
+            host_cpuinfo("model name")
+                .unwrap_or_else(|| "Intel(R) Core(TM) i7-10700 CPU @ 2.90GHz".into())
+        });
         format!("max,model-id={}", escape(&brand))
     } else if named {
         profile.cpu_model.clone()
@@ -95,6 +97,15 @@ pub(crate) fn cpu_option(
     }
     if profile.host_cache_info && model == "host" {
         model.push_str(",host-cache-info=on");
+    }
+    if profile.cpu_passthrough
+        && kvm
+        && let Some(brand) = profile.cloud_cpu_brand()
+    {
+        // The host's CPU keeps its vendor, family and flags; only the name
+        // is the provider's, of the host's vendor (a laptop's Ryzen name
+        // would be a tell in a Droplet).
+        model.push_str(&format!(",model-id={}", escape(&brand)));
     }
     if named && profile.model_cache_info {
         // The named model's caches (leaf 4, 0x8000001d) and an L3.

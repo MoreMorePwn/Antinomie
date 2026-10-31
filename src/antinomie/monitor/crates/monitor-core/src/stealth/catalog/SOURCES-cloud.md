@@ -12,6 +12,7 @@ Dumps: [openbenchmarking.org](https://openbenchmarking.org) publishes the `dmide
 | Firmware | SeaBIOS (BIOS), type 0 "system is a virtual machine" bit set | A | DigitalOcean dump (`System is a virtual machine`); Tencent probe (seabios) |
 | Network card, disk | virtio-net, virtio-blk (`vda`), Red Hat PCI subsystem IDs | A | Tencent probe (virtio net/blk/balloon, 1af4 subsystems) |
 | Memory | one DIMM sized to the VM, `DIMM 0`, type RAM, speed unknown | A (Tencent: 1 DIMM) | Tencent probe |
+| CPU model name (`/proc/cpuinfo`, CPUID brand) | per provider and host vendor: Tencent `Intel(R) Xeon(R) Platinum 8255C CPU @ 2.50GHz` / `AMD EPYC 7K62 48-Core Processor`; Alibaba `Intel(R) Xeon(R) Platinum 8269CY CPU @ 2.50GHz` / `AMD EPYC 7T83 64-Core Processor`; DigitalOcean `DO-Premium-Intel` / `DO-Premium-AMD`; Vultr `Intel Core Processor (Skylake, IBRS)` / `AMD EPYC-Rome Processor` | C | recollection of names these providers' instances show; shown instead of the host's laptop CPU name, of the host CPU's vendor (ANT-T0201). Decision needed: confirm against a probe |
 | Processor table | the host CPU's ID and caches; maker and version from the provider | see below | |
 
 ## Tencent Cloud CVM (`cloud-tencent-cvm`, i440FX)
