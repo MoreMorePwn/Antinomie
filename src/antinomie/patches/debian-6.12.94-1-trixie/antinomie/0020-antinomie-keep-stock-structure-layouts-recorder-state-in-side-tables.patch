@@ -38,7 +38,7 @@ Last-Update: 2026-10-29
 
 ---
 diff --git a/fs/aio.c b/fs/aio.c
-index 46d6d4d84..cdee952b5 100644
+index 46d6d4d..cdee952 100644
 --- a/fs/aio.c
 +++ b/fs/aio.c
 @@ -196,9 +196,6 @@ struct poll_iocb {
@@ -148,7 +148,7 @@ index 46d6d4d84..cdee952b5 100644
  
  	/* Done with the synchronous reference */
 diff --git a/fs/binfmt_elf.c b/fs/binfmt_elf.c
-index 900562050..7256e15e1 100644
+index 9005620..7256e15 100644
 --- a/fs/binfmt_elf.c
 +++ b/fs/binfmt_elf.c
 @@ -1568,26 +1568,27 @@ static void fill_prstatus(struct elf_prstatus_common *prstatus,
@@ -407,7 +407,7 @@ index 900562050..7256e15e1 100644
  		kfree(phdr4note);
  	}
 diff --git a/fs/coredump.c b/fs/coredump.c
-index 00bfd7aee..d20ad9fd3 100644
+index 00bfd7a..d20ad9f 100644
 --- a/fs/coredump.c
 +++ b/fs/coredump.c
 @@ -576,26 +576,9 @@ static int umh_coredump_setup(struct subprocess_info *info, struct cred *new)
@@ -535,7 +535,7 @@ index 00bfd7aee..d20ad9fd3 100644
  			return 0;
  		}
 diff --git a/include/linux/antinomie_monitor.h b/include/linux/antinomie_monitor.h
-index c9752cdd8..06bb59a29 100644
+index c9752cd..06bb59a 100644
 --- a/include/linux/antinomie_monitor.h
 +++ b/include/linux/antinomie_monitor.h
 @@ -8,7 +8,6 @@ struct task_struct;
@@ -743,7 +743,7 @@ index c9752cdd8..06bb59a29 100644
  	return 0;
  }
 diff --git a/include/linux/coredump.h b/include/linux/coredump.h
-index 593d6371f..6b3631189 100644
+index 593d637..6b36311 100644
 --- a/include/linux/coredump.h
 +++ b/include/linux/coredump.h
 @@ -16,26 +16,6 @@ struct core_vma_metadata {
@@ -815,7 +815,7 @@ index 593d6371f..6b3631189 100644
  			     struct core_vma_metadata *vmas, unsigned int vma_count,
  			     struct ant_coredump_live *live);
 diff --git a/include/linux/io_uring_types.h b/include/linux/io_uring_types.h
-index 21d484d70..6d47d0d3f 100644
+index 21d484d..6d47d0d 100644
 --- a/include/linux/io_uring_types.h
 +++ b/include/linux/io_uring_types.h
 @@ -237,13 +237,6 @@ struct io_ring_ctx {
@@ -844,7 +844,7 @@ index 21d484d70..6d47d0d3f 100644
  
  struct io_overflow_cqe {
 diff --git a/include/linux/sched.h b/include/linux/sched.h
-index b220f8f0f..f9ffe42ca 100644
+index b220f8f..f9ffe42 100644
 --- a/include/linux/sched.h
 +++ b/include/linux/sched.h
 @@ -800,22 +800,6 @@ struct task_struct {
@@ -871,7 +871,7 @@ index b220f8f0f..f9ffe42ca 100644
  	refcount_t			usage;
  	/* Per task flags (PF_*), defined further below: */
 diff --git a/io_uring/fs.c b/io_uring/fs.c
-index 0d3fdbf16..a50dc6e80 100644
+index 0d3fdbf..a50dc6e 100644
 --- a/io_uring/fs.c
 +++ b/io_uring/fs.c
 @@ -55,9 +55,7 @@ struct io_link {
@@ -886,7 +886,7 @@ index 0d3fdbf16..a50dc6e80 100644
  
  int io_renameat_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 diff --git a/io_uring/io_uring.c b/io_uring/io_uring.c
-index 8ff6d762b..b78cb82f5 100644
+index 8ff6d76..b78cb82 100644
 --- a/io_uring/io_uring.c
 +++ b/io_uring/io_uring.c
 @@ -935,9 +935,6 @@ void io_req_defer_failed(struct io_kiocb *req, s32 res)
@@ -983,7 +983,7 @@ index 8ff6d762b..b78cb82f5 100644
  	BUILD_BUG_ON(sizeof(atomic_t) != sizeof(u32));
  
 diff --git a/io_uring/io_uring.h b/io_uring/io_uring.h
-index 7fa52e58f..0f147e7ab 100644
+index 7fa52e5..0f147e7 100644
 --- a/io_uring/io_uring.h
 +++ b/io_uring/io_uring.h
 @@ -40,14 +40,14 @@ static inline void ant_uring_complete(struct io_kiocb *req, s32 result,
@@ -1074,7 +1074,7 @@ index 7fa52e58f..0f147e7ab 100644
  }
  
 diff --git a/io_uring/net.c b/io_uring/net.c
-index 92b1710a7..857b0c2f1 100644
+index 92b1710..857b0c2 100644
 --- a/io_uring/net.c
 +++ b/io_uring/net.c
 @@ -782,9 +782,8 @@ static int io_recvmsg_copy_hdr(struct io_kiocb *req,
@@ -1128,7 +1128,7 @@ index 92b1710a7..857b0c2f1 100644
  	}
  
 diff --git a/io_uring/net.h b/io_uring/net.h
-index 67fddfdb5..52bfee05f 100644
+index 67fddfd..52bfee0 100644
 --- a/io_uring/net.h
 +++ b/io_uring/net.h
 @@ -15,11 +15,6 @@ struct io_async_msghdr {
@@ -1144,7 +1144,7 @@ index 67fddfdb5..52bfee05f 100644
  };
  
 diff --git a/io_uring/rw.c b/io_uring/rw.c
-index 25e2755c1..48dd02d9e 100644
+index 25e2755..48dd02d 100644
 --- a/io_uring/rw.c
 +++ b/io_uring/rw.c
 @@ -38,12 +38,12 @@ static void ant_uring_rw_capture(struct io_kiocb *req, bool output, ssize_t resu
@@ -1163,19 +1163,20 @@ index 25e2755c1..48dd02d9e 100644
  #endif
  }
 diff --git a/kernel/antinomie/Kconfig b/kernel/antinomie/Kconfig
-index 669a14f5a..638e1d392 100644
+index 21d474d..c822328 100644
 --- a/kernel/antinomie/Kconfig
 +++ b/kernel/antinomie/Kconfig
-@@ -1,6 +1,6 @@
+@@ -7,7 +7,7 @@ config HAVE_ANTINOMIE
+ 
  config ANTINOMIE
  	bool "Antinomie host control and syscall recorder"
--	depends on X86_64 && UNIX98_PTYS
-+	depends on X86_64 && UNIX98_PTYS && SECURITY
+-	depends on HAVE_ANTINOMIE && UNIX98_PTYS
++	depends on HAVE_ANTINOMIE && UNIX98_PTYS && SECURITY
  	select CRYPTO_LIB_SHA256
  	help
  	  Host control, PTY sessions and observational syscall telemetry over
 diff --git a/kernel/antinomie/Makefile b/kernel/antinomie/Makefile
-index 9f3944aaf..214ccb279 100644
+index 9f3944a..214ccb2 100644
 --- a/kernel/antinomie/Makefile
 +++ b/kernel/antinomie/Makefile
 @@ -7,7 +7,7 @@ ccflags-remove-y += $(DEBUG_CFLAGS)
@@ -1188,7 +1189,7 @@ index 9f3944aaf..214ccb279 100644
  # labels bracket them too.
  obj-$(CONFIG_X86_64) += capture_x86.o
 diff --git a/kernel/antinomie/async.c b/kernel/antinomie/async.c
-index efb999e5a..cefb05909 100644
+index efb999e..cefb059 100644
 --- a/kernel/antinomie/async.c
 +++ b/kernel/antinomie/async.c
 @@ -5,6 +5,7 @@
@@ -1698,7 +1699,7 @@ index efb999e5a..cefb05909 100644
   * A read without output has nothing to observe: its entry is dropped.
   */
 diff --git a/kernel/antinomie/control.c b/kernel/antinomie/control.c
-index c07ebf1ca..48674770a 100644
+index c07ebf1..4867477 100644
 --- a/kernel/antinomie/control.c
 +++ b/kernel/antinomie/control.c
 @@ -30,6 +30,7 @@
@@ -1719,7 +1720,7 @@ index c07ebf1ca..48674770a 100644
  	session->pgrp = get_task_pid(current, PIDTYPE_PGID);
  	ant_specimen_arm(launch->specimen);
 diff --git a/kernel/antinomie/debug.c b/kernel/antinomie/debug.c
-index fb573ae4e..d13675cd0 100644
+index fb573ae..d13675c 100644
 --- a/kernel/antinomie/debug.c
 +++ b/kernel/antinomie/debug.c
 @@ -49,6 +49,7 @@
@@ -1776,7 +1777,7 @@ index fb573ae4e..d13675cd0 100644
  	s->tgid = task_tgid_nr(current);
  	get_task_struct(current);
 diff --git a/kernel/antinomie/fileid.c b/kernel/antinomie/fileid.c
-index 8be3f03d2..0d378b84c 100644
+index 8be3f03..0d378b8 100644
 --- a/kernel/antinomie/fileid.c
 +++ b/kernel/antinomie/fileid.c
 @@ -22,6 +22,7 @@
@@ -1808,7 +1809,7 @@ index 8be3f03d2..0d378b84c 100644
  	rec = kzalloc(ANTC_EXECIMG_HEADER + 2 * ANTC_EXECIMG_PATH_MAX, GFP_KERNEL);
  	path = kmalloc(ANTC_EXECIMG_PATH_MAX, GFP_KERNEL);
 diff --git a/kernel/antinomie/filemap.c b/kernel/antinomie/filemap.c
-index 0aaf4dfea..acc1542d6 100644
+index 0aaf4df..acc1542 100644
 --- a/kernel/antinomie/filemap.c
 +++ b/kernel/antinomie/filemap.c
 @@ -76,6 +76,7 @@
@@ -1838,7 +1839,7 @@ index 0aaf4dfea..acc1542d6 100644
  	slot = ant_monitor_filemap(false);
  	if (slot)
 diff --git a/kernel/antinomie/fileops.c b/kernel/antinomie/fileops.c
-index 2797a93f2..988d8bff9 100644
+index 2797a93..988d8bf 100644
 --- a/kernel/antinomie/fileops.c
 +++ b/kernel/antinomie/fileops.c
 @@ -41,6 +41,7 @@
@@ -1895,7 +1896,7 @@ index 2797a93f2..988d8bff9 100644
  	ops = ant_monitor_fileops(&nr);
  	if (!ops || !copy_call(kind, nr))
 diff --git a/kernel/antinomie/guest.c b/kernel/antinomie/guest.c
-index 69f9b4df1..6ab8a8de7 100644
+index 69f9b4d..6ab8a8d 100644
 --- a/kernel/antinomie/guest.c
 +++ b/kernel/antinomie/guest.c
 @@ -2,7 +2,6 @@
@@ -1955,7 +1956,7 @@ index 69f9b4df1..6ab8a8de7 100644
  static int dispatch(const struct ant_message *req, size_t *payload_len)
  {
 diff --git a/kernel/antinomie/hash.c b/kernel/antinomie/hash.c
-index a5d0117e8..01d3a768d 100644
+index a5d0117..01d3a76 100644
 --- a/kernel/antinomie/hash.c
 +++ b/kernel/antinomie/hash.c
 @@ -65,6 +65,7 @@
@@ -1976,7 +1977,7 @@ index a5d0117e8..01d3a768d 100644
  	job = kzalloc(sizeof(*job), GFP_NOWAIT | __GFP_NOWARN);
  	if (!job) {
 diff --git a/kernel/antinomie/manual_core.c b/kernel/antinomie/manual_core.c
-index cfbe73ec1..704d70e56 100644
+index cfbe73e..704d70e 100644
 --- a/kernel/antinomie/manual_core.c
 +++ b/kernel/antinomie/manual_core.c
 @@ -17,6 +17,7 @@
@@ -2103,7 +2104,7 @@ index cfbe73ec1..704d70e56 100644
  	    task_tgid_nr(current) != session->identity.tgid ||
  	    !current->mm->binfmt || !current->mm->binfmt->core_dump ||
 diff --git a/kernel/antinomie/observer.c b/kernel/antinomie/observer.c
-index acf19c99d..e17297019 100644
+index acf19c9..e172970 100644
 --- a/kernel/antinomie/observer.c
 +++ b/kernel/antinomie/observer.c
 @@ -9,6 +9,7 @@
@@ -2145,7 +2146,7 @@ index acf19c99d..e17297019 100644
  	rcu_assign_pointer(active_observer, observer);
  	write_unlock_irq(&tasklist_lock);
 diff --git a/kernel/antinomie/process_core.c b/kernel/antinomie/process_core.c
-index 109f34707..ed1206dff 100644
+index 44485f8..0310ee0 100644
 --- a/kernel/antinomie/process_core.c
 +++ b/kernel/antinomie/process_core.c
 @@ -22,6 +22,7 @@
@@ -2172,7 +2173,7 @@ index 109f34707..ed1206dff 100644
  		    !core->canceled) {
  			selected = core;
 diff --git a/kernel/antinomie/process_core.h b/kernel/antinomie/process_core.h
-index 005c0f2c7..98a1fbf64 100644
+index 005c0f2..98a1fbf 100644
 --- a/kernel/antinomie/process_core.h
 +++ b/kernel/antinomie/process_core.h
 @@ -2,8 +2,34 @@
@@ -2211,7 +2212,7 @@ index 005c0f2c7..98a1fbf64 100644
  	u64 cookie, start_ns, nonce_lo, nonce_hi;
  	u32 tgid, max_size, timeout_ms, policy;
 diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
-index da72b6d2b..c7f323ab8 100644
+index d75a22c..2c179a3 100644
 --- a/kernel/antinomie/recorder.c
 +++ b/kernel/antinomie/recorder.c
 @@ -38,6 +38,7 @@
@@ -2253,7 +2254,7 @@ index da72b6d2b..c7f323ab8 100644
  	ctx->object_count = ctx->packet_count = ctx->failed_count = ctx->state = 0;
  	ctx->object_id = 0;
  	ctx->flags = 0;
-@@ -988,7 +989,7 @@ static void recapture_reset(struct ant_task *ctx)
+@@ -997,7 +998,7 @@ static void recapture_reset(struct ant_task *ctx)
   */
  void ant_monitor_exec_names(const struct linux_binprm *bprm)
  {
@@ -2262,7 +2263,7 @@ index da72b6d2b..c7f323ab8 100644
  	const char *name = bprm->filename;
  	char prefix[24];
  	int i, n;
-@@ -1035,7 +1036,7 @@ static void operand_clear(struct ant_task *ctx)
+@@ -1044,7 +1045,7 @@ static void operand_clear(struct ant_task *ctx)
  void ant_monitor_operand(u8 arg, const char *key, const char *layout, const void *data,
  			 size_t size)
  {
@@ -2271,7 +2272,7 @@ index da72b6d2b..c7f323ab8 100644
  
  	if (!ctx || !ctx->active)
  		return;
-@@ -1067,7 +1068,7 @@ static void operand_emit(struct ant_task *ctx)
+@@ -1076,7 +1077,7 @@ static void operand_emit(struct ant_task *ctx)
  
  struct ant_fileops *ant_monitor_fileops(u64 *nr)
  {
@@ -2280,7 +2281,7 @@ index da72b6d2b..c7f323ab8 100644
  
  	if (!ctx || !ctx->active || ctx->busy || ctx->abi != ANT_ABI_NATIVE)
  		return NULL;
-@@ -1099,11 +1100,11 @@ static void fileops_emit(struct ant_task *ctx)
+@@ -1108,11 +1109,11 @@ static void fileops_emit(struct ant_task *ctx)
  
  struct ant_filemap **ant_monitor_filemap(bool in_call)
  {
@@ -2294,7 +2295,7 @@ index da72b6d2b..c7f323ab8 100644
  					 !ctx->capture_cookie)))
  		return NULL;
  	return &ctx->filemap;
-@@ -1152,7 +1153,7 @@ static void filemap_note(struct ant_task *ctx)
+@@ -1161,7 +1162,7 @@ static void filemap_note(struct ant_task *ctx)
  		return;
  	if (!ctx->active) {
  		capture_cookie = ant_observer_admit(current);
@@ -2303,7 +2304,7 @@ index da72b6d2b..c7f323ab8 100644
  			ant_filemap_free(ctx->filemap);
  			ctx->filemap = NULL;
  			return;
-@@ -1214,7 +1215,7 @@ static void creds_note(struct ant_task *ctx, u32 reason, const struct cred *cred
+@@ -1223,7 +1224,7 @@ static void creds_note(struct ant_task *ctx, u32 reason, const struct cred *cred
  		return;
  	if (!ctx->active) {
  		capture_cookie = ant_observer_admit(current);
@@ -2312,7 +2313,7 @@ index da72b6d2b..c7f323ab8 100644
  			return;
  		ctx->capture_cookie = capture_cookie;
  	}
-@@ -1257,7 +1258,7 @@ static u32 creds_reason(const struct ant_task *ctx, const struct cred *old,
+@@ -1266,7 +1267,7 @@ static u32 creds_reason(const struct ant_task *ctx, const struct cred *old,
  
  void ant_monitor_creds(const struct cred *old, const struct cred *new)
  {
@@ -2321,7 +2322,7 @@ index da72b6d2b..c7f323ab8 100644
  
  	if (!ctx || ctx->busy || !ctx->creds_seen)
  		return;
-@@ -1277,7 +1278,7 @@ void ant_monitor_creds(const struct cred *old, const struct cred *new)
+@@ -1286,7 +1287,7 @@ void ant_monitor_creds(const struct cred *old, const struct cred *new)
  
  void ant_monitor_loginuid(void)
  {
@@ -2330,7 +2331,7 @@ index da72b6d2b..c7f323ab8 100644
  
  	if (ctx)
  		creds_note(ctx, ANTC_CRED_LOGINUID, current_cred());
-@@ -1289,7 +1290,7 @@ void ant_monitor_loginuid(void)
+@@ -1298,7 +1299,7 @@ void ant_monitor_loginuid(void)
   */
  bool ant_monitor_note(const char *key, const char *layout, const void *data, size_t len)
  {
@@ -2339,7 +2340,7 @@ index da72b6d2b..c7f323ab8 100644
  	bool sent;
  
  	if (!ctx || !ctx->active || ctx->busy)
-@@ -1310,8 +1311,8 @@ static void identity_fill(struct ant_task *ctx, struct ant_async_event *ev, u64
+@@ -1319,8 +1320,8 @@ static void identity_fill(struct ant_task *ctx, struct ant_async_event *ev, u64
  	const struct cred *cred = current_cred();
  
  	ev->origin = current;
@@ -2350,7 +2351,7 @@ index da72b6d2b..c7f323ab8 100644
  	ev->capture_cookie = ctx->capture_cookie;
  	ev->start_boot_ns = current->start_boottime;
  	ev->parent_call_id = ctx->call_id;
-@@ -1329,7 +1330,7 @@ static void identity_fill(struct ant_task *ctx, struct ant_async_event *ev, u64
+@@ -1338,7 +1339,7 @@ static void identity_fill(struct ant_task *ctx, struct ant_async_event *ev, u64
  
  bool ant_monitor_identity(struct ant_async_event *ev, u64 *nr)
  {
@@ -2359,7 +2360,7 @@ index da72b6d2b..c7f323ab8 100644
  
  	if (!ctx || !ctx->active || ctx->busy)
  		return false;
-@@ -1339,9 +1340,9 @@ bool ant_monitor_identity(struct ant_async_event *ev, u64 *nr)
+@@ -1348,9 +1349,9 @@ bool ant_monitor_identity(struct ant_async_event *ev, u64 *nr)
  
  bool ant_monitor_identity_last(struct ant_async_event *ev, u64 *nr)
  {
@@ -2371,7 +2372,7 @@ index da72b6d2b..c7f323ab8 100644
  		return false;
  	identity_fill(ctx, ev, nr);
  	return true;
-@@ -1377,24 +1378,24 @@ void ant_monitor_enter(struct pt_regs *regs, long nr)
+@@ -1386,24 +1387,24 @@ void ant_monitor_enter(struct pt_regs *regs, long nr)
  	if (!selected(nr))
  		return;
  	capture_cookie = ant_observer_admit(current);
@@ -2401,7 +2402,7 @@ index da72b6d2b..c7f323ab8 100644
  		atomic64_inc(&tasks_created);
  		atomic64_inc(&tasks_live);
  	}
-@@ -1438,7 +1439,7 @@ void ant_monitor_enter(struct pt_regs *regs, long nr)
+@@ -1448,7 +1449,7 @@ void ant_monitor_enter(struct pt_regs *regs, long nr)
  
  void ant_monitor_exit(struct pt_regs *regs)
  {
@@ -2410,7 +2411,7 @@ index da72b6d2b..c7f323ab8 100644
  	long result;
  
  	if (!ctx || !ctx->active || ctx->busy)
-@@ -1471,7 +1472,7 @@ static void lifecycle(struct ant_task *ctx, const char *key, u64 value)
+@@ -1481,7 +1482,7 @@ static void lifecycle(struct ant_task *ctx, const char *key, u64 value)
  		return;
  	if (!ctx->active) {
  		capture_cookie = ant_observer_admit(current);
@@ -2419,7 +2420,7 @@ index da72b6d2b..c7f323ab8 100644
  			return;
  		ctx->capture_cookie = capture_cookie;
  	}
-@@ -1485,7 +1486,7 @@ static void lifecycle(struct ant_task *ctx, const char *key, u64 value)
+@@ -1495,7 +1496,7 @@ static void lifecycle(struct ant_task *ctx, const char *key, u64 value)
  
  u64 ant_monitor_parent_call_id(void)
  {
@@ -2428,7 +2429,7 @@ index da72b6d2b..c7f323ab8 100644
  
  	return ctx && ctx->active ? ctx->call_id : 0;
  }
-@@ -1699,15 +1700,15 @@ int ant_monitor_launch(const char *path, char **argv, char **envp)
+@@ -1709,15 +1710,15 @@ int ant_monitor_launch(const char *path, char **argv, char **envp)
  	if (!ctx)
  		return -ENOMEM;
  	ant_monitor_cookie(current);
@@ -2449,7 +2450,7 @@ index da72b6d2b..c7f323ab8 100644
  		atomic64_inc(&tasks_created);
  		atomic64_inc(&tasks_live);
  	}
-@@ -1717,7 +1718,7 @@ int ant_monitor_launch(const char *path, char **argv, char **envp)
+@@ -1727,7 +1728,7 @@ int ant_monitor_launch(const char *path, char **argv, char **envp)
  	ctx->launch_exec = true;
  	ctx->busy = true;
  	event_begin(ctx, 3, 0);
@@ -2458,7 +2459,7 @@ index da72b6d2b..c7f323ab8 100644
  	field(ctx, 255, "lifecycle.launch", "", 4, 0, cookie, sizeof(cookie), sizeof(cookie), ANT_COMPLETE);
  	ctx->kernel_imported = true;
  	field(ctx, 255, "context.exec.path", "", 2, 0, path, strlen(path) + 1,
-@@ -1740,12 +1741,12 @@ int ant_monitor_launch(const char *path, char **argv, char **envp)
+@@ -1750,12 +1751,12 @@ int ant_monitor_launch(const char *path, char **argv, char **envp)
  
  u64 ant_monitor_cookie(struct task_struct *task)
  {
@@ -2473,7 +2474,7 @@ index da72b6d2b..c7f323ab8 100644
  	return previous ?: cookie;
  }
  
-@@ -1759,8 +1760,10 @@ u64 ant_monitor_stream_id(void)
+@@ -1769,8 +1770,10 @@ u64 ant_monitor_stream_id(void)
   */
  void ant_monitor_fork_prepare(struct task_struct *child)
  {
@@ -2486,7 +2487,7 @@ index da72b6d2b..c7f323ab8 100644
  		return;
  	/* An io_uring worker is a thread of the creating process, but not a
  	 * task the program started: it is invisible to the observer and carries
-@@ -1773,16 +1776,16 @@ void ant_monitor_fork_prepare(struct task_struct *child)
+@@ -1783,16 +1786,16 @@ void ant_monitor_fork_prepare(struct task_struct *child)
  		return;
  	}
  	ant_monitor_cookie(child);
@@ -2506,7 +2507,7 @@ index da72b6d2b..c7f323ab8 100644
  	u8 scalar[8];
  	u64 values[4];
  	static const char * const keys[] = { "lifecycle.child_cookie", "lifecycle.child_pid",
-@@ -1790,14 +1793,14 @@ void ant_monitor_fork(struct task_struct *child)
+@@ -1800,14 +1803,14 @@ void ant_monitor_fork(struct task_struct *child)
  	int i;
  
  	if (!ctx || ctx->busy || (!ctx->active &&
@@ -2523,7 +2524,7 @@ index da72b6d2b..c7f323ab8 100644
  	values[1] = task_pid_nr(child);
  	values[2] = task_tgid_nr(child);
  	values[3] = child->start_boottime;
-@@ -1811,7 +1814,7 @@ void ant_monitor_fork(struct task_struct *child)
+@@ -1821,7 +1824,7 @@ void ant_monitor_fork(struct task_struct *child)
  
  void ant_monitor_exec(struct file *file, bool interpreter)
  {
@@ -2532,7 +2533,7 @@ index da72b6d2b..c7f323ab8 100644
  	bool launch = ctx && ctx->launch_exec && !ctx->active;
  
  	lifecycle(ctx, "lifecycle.exec_commit", task_pid_nr(current));
-@@ -1829,18 +1832,18 @@ void ant_monitor_exec(struct file *file, bool interpreter)
+@@ -1839,18 +1842,18 @@ void ant_monitor_exec(struct file *file, bool interpreter)
  void ant_monitor_task_exit(bool group_dead)
  {
  	/* Pages the address space held dirty when exit_mm() dropped it. */
@@ -2557,7 +2558,7 @@ index da72b6d2b..c7f323ab8 100644
  	if (ctx) {
  		ant_capture_set_state(ctx, NULL, NULL);
 diff --git a/kernel/antinomie/run.c b/kernel/antinomie/run.c
-index 799436905..2464d6d02 100644
+index 7994369..2464d6d 100644
 --- a/kernel/antinomie/run.c
 +++ b/kernel/antinomie/run.c
 @@ -11,6 +11,7 @@
@@ -2674,7 +2675,7 @@ index 799436905..2464d6d02 100644
  		error = send_sig(sig, task, 1);
 diff --git a/kernel/antinomie/state.c b/kernel/antinomie/state.c
 new file mode 100644
-index 000000000..ffd81c243
+index 0000000..ffd81c2
 --- /dev/null
 +++ b/kernel/antinomie/state.c
 @@ -0,0 +1,53 @@
@@ -2733,7 +2734,7 @@ index 000000000..ffd81c243
 +}
 diff --git a/kernel/antinomie/state.h b/kernel/antinomie/state.h
 new file mode 100644
-index 000000000..375b0d87b
+index 0000000..375b0d8
 --- /dev/null
 +++ b/kernel/antinomie/state.h
 @@ -0,0 +1,51 @@
@@ -2789,7 +2790,7 @@ index 000000000..375b0d87b
 +
 +#endif
 diff --git a/kernel/fork.c b/kernel/fork.c
-index 2cb277bfc..4bb16528f 100644
+index 2cb277b..4bb1652 100644
 --- a/kernel/fork.c
 +++ b/kernel/fork.c
 @@ -1138,18 +1138,6 @@ static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
@@ -2812,7 +2813,7 @@ index 2cb277bfc..4bb16528f 100644
  	err = alloc_thread_stack_node(tsk, node);
  	if (err)
 diff --git a/security/security.c b/security/security.c
-index 1a85b6794..804d00560 100644
+index 1a85b67..804d005 100644
 --- a/security/security.c
 +++ b/security/security.c
 @@ -11,6 +11,7 @@

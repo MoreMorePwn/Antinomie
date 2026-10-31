@@ -16,7 +16,7 @@ Last-Update: 2026-10-29
 
 ---
 diff --git a/fs/coredump.c b/fs/coredump.c
-index d20ad9fd3..8a3c39f52 100644
+index d20ad9f..8a3c39f 100644
 --- a/fs/coredump.c
 +++ b/fs/coredump.c
 @@ -579,7 +579,7 @@ static int umh_coredump_setup(struct subprocess_info *info, struct cred *new)
@@ -47,7 +47,7 @@ index d20ad9fd3..8a3c39f52 100644
  	unsigned long size = vma_dump_size(vma, flags);
  
 diff --git a/io_uring/io_uring.c b/io_uring/io_uring.c
-index b78cb82f5..ed881ea8e 100644
+index b78cb82..ed881ea 100644
 --- a/io_uring/io_uring.c
 +++ b/io_uring/io_uring.c
 @@ -1717,7 +1717,7 @@ static bool io_assign_file(struct io_kiocb *req, const struct io_issue_def *def,
@@ -97,7 +97,7 @@ index b78cb82f5..ed881ea8e 100644
  {
  	u8 opcode = READ_ONCE(sqe->opcode);
 diff --git a/io_uring/rw.c b/io_uring/rw.c
-index 48dd02d9e..848cc40ce 100644
+index 48dd02d..848cc40 100644
 --- a/io_uring/rw.c
 +++ b/io_uring/rw.c
 @@ -31,7 +31,7 @@ struct io_rw {
@@ -110,7 +110,7 @@ index 48dd02d9e..848cc40ce 100644
  #ifdef CONFIG_ANTINOMIE
  	struct io_async_rw *rw = req->async_data;
 diff --git a/io_uring/uring_cmd.c b/io_uring/uring_cmd.c
-index 6a8e4c46b..7d5bcff92 100644
+index 6a8e4c4..7d5bcff 100644
 --- a/io_uring/uring_cmd.c
 +++ b/io_uring/uring_cmd.c
 @@ -315,7 +315,7 @@ void io_uring_cmd_issue_blocking(struct io_uring_cmd *ioucmd)
@@ -123,7 +123,7 @@ index 6a8e4c46b..7d5bcff92 100644
  {
  	if (optlen > ANT_URING_OPTVAL_MAX)
 diff --git a/kernel/antinomie/Makefile b/kernel/antinomie/Makefile
-index 214ccb279..3578ee277 100644
+index 214ccb2..3578ee2 100644
 --- a/kernel/antinomie/Makefile
 +++ b/kernel/antinomie/Makefile
 @@ -3,6 +3,11 @@
