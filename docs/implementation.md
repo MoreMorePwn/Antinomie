@@ -1850,7 +1850,7 @@ tree.
 ### Architecture-neutral guest patches (0.8.0)
 
 The shared patches no longer assume x86-64; x86-64 behaves as before. The
-series is fifteen patches (`src/antinomie/patches/README.md`, "Architectures"):
+series is nineteen patches (`src/antinomie/patches/README.md`, "Architectures"):
 
 * **Per-architecture headers.** Patch 3 is now x86-64's two headers in its own
   tree: `arch/x86/include/asm/antinomie_syscalls.h`, the generated native table

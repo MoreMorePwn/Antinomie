@@ -6,6 +6,8 @@ it runs.
 
 ## 0.8.0 — unreleased
 
+### Host
+
 - **Sources for the downloadable bases.** The `sources/` folder of the base
   bucket now holds the corresponding source of every listed base: the Debian
   `linux` source package, the Antinomie patch series and exact kernel
@@ -127,7 +129,8 @@ it runs.
 - **A replaced debug target stays replaced after it exits.** When the debugger
   is not following exec, the guest keeps that replacement as the reason the
   session ended, including when the new program has already exited before the
-  first status query.
+  first status query. A guest patch change: needs a new base (the guest
+  kernel changed); older bases keep their previous behaviour.
 
 - **Responsive non-stop debugger input.** Buffered debugger packets are read in
   bounded bursts between guest event polls, avoiding a guest round trip for each
@@ -184,7 +187,9 @@ it runs.
   (summary, indicators, ATT&CK, processes, findings, every Files tab, file
   activity and reconstruction, network, detection engines, evidence
   references, custody head), remembered between exports. The report is of the
-  whole run: the screen's filters and pages do not apply. Optional evidence
+  whole run: the screen's filters and pages do not apply. HTML and PDF show at
+  most 1,000 rows of a table (the JSON keeps them all) and the file activity
+  lists at most 2,000 changed files, with a note for the rest. Optional evidence
   bundle: the packet captures, the files the run dropped in an inner AES-256
   zip (password `infected`), the sample's custody export and a SHA-256
   manifest. Optional defanging (`hxxp://example[.]com`) applies to HTML and PDF
@@ -293,7 +298,8 @@ it runs.
   matched. Tags come in four groups (verdict, malware category, ATT&CK
   technique searched by ID or name, and custom with a colour from nine theme
   colours). *Verify all* reads every archive back. Everything uploaded into a
-  VM is archived first, and Run History gains a Sample column and a
+  VM is archived first (a file over 256 MiB is too large for the library and is
+  streamed into the VM without an archive copy), and Run History gains a Sample column and a
   `sample ==` filter. *Download…* opens the MalwareBazaar and MalShare search
   (Tools › Download malware samples).
 
@@ -325,7 +331,8 @@ it runs.
   the right, one node per file by SHA-256 (a file with no hash is kept apart
   per run and drawn dashed), command nodes for `sh -c` style launchers, and
   edge labels that list the runs ("run 4, 7, 9" or "5 runs") with a shape per
-  kind (dropped, downloaded, executed, loaded). Clicking a label opens the
+  kind (dropped, downloaded, executed; a fourth shape, loaded, is drawn but the
+  recording's index records no such edge yet). Clicking a label opens the
   per-run table. *Hide system binaries* is on by default and shows how many
   are left out; Parents and Children steppers add a level each; a node's
   `+N` badge expands it; the run filter limits the graph to one run. Drag to
@@ -412,13 +419,21 @@ it runs.
   cleanly without the room); BIOS VMs are unchanged. Needs a base built by
   this version.
 
+- **The QEMU builder uploads the UEFI files and has more memory.** A Debian
+  Minimal build in the QEMU builder VM now returns the UEFI root and layout
+  files with the bundle, and the builder VM gets half of the host's memory, at
+  least 4 GiB and at most 8 GiB (the kernel link is killed by the guest's OOM
+  killer below 3.5 GiB).
+
 - **Container builder for bases.** **Build base…** now offers Automatic plus
   Native, Podman, Docker and the QEMU builder. Podman and Docker build in a
   pinned Debian 13 container (image fixed by digest, package snapshot and exact
   versions), so Debian Minimal's kernel gets Debian's exact banner on any host.
   Automatic takes Native (when the host toolchain is Debian 13's), then Podman
   (rootless preferred), Docker, then the QEMU builder, and falls through to the
-  QEMU builder when the image cannot be fetched offline. Each unavailable choice
+  QEMU builder when the image cannot be fetched offline. The Podman and
+  Docker paths are covered by unit tests of the commands the app builds, not yet
+  by a container build in the test suite. Each unavailable choice
   says why; Docker's help says it needs root-equivalent access (the `docker`
   group). The image is kept and listed with a Remove button; a build leaves no
   container behind. `scripts/build-base.py --container` does the same from the
@@ -502,6 +517,52 @@ it runs.
   `conf-stress-contended` passes when every drop has a read gap or such a spell
   and fails on a drop with neither; the run reports the drops by cause.
 
+- **A Partial Sigma scan says why.** The fixed note "Category acceptance is not
+  full compatibility..." no longer takes the first place among the scan's
+  warnings, so the header names the real reason (incomplete captured events,
+  the 4,096-rule budget, the 90 second deadline, a rule that failed while it was
+  evaluated, matches that could not be reported) instead of "(+1 more)". The
+  note is in the header's hover text. Results saved by 0.7.x show without it.
+- **Behaviour samples carry no product name.** The suite is now `demo-all` and
+  `demo-<scenario>` (was `ant-sample-*`). Domains are neutral names under
+  `.invalid` (`update.example-cdn.invalid`, `exfil.example-dns.invalid`,
+  `remote.example-host.invalid`, `pool.example-pool.invalid`), files, units and
+  configs are `demo-sample*`, decoy credentials and notes carry `DEMO-DECOY`,
+  and the sinkhole banner and temp dir are `demo-sinkhole`. The binaries are
+  built without source paths. Endpoints, work-directory-only writes and
+  counted-never-executed downloads are unchanged, and every scenario lists the
+  same rule ids.
+
+- **Captured data reads by its type, not by its bytes.** The Syscall Trace
+  (Info column, argument rows, field rows, async operands) used to show any
+  captured object whose bytes looked printable as a quoted string, so a
+  timespec, a pointer or a struct could read as text in one run and hex in the
+  next. Now strings and character data (a task name, mount options) are
+  always quoted; structs, times, integers, pointers and arrays are always hex;
+  socket addresses are decoded only when the field is a `sockaddr` (a pointer
+  whose name mentions an address no longer reads as `a.b.c.d:port`); and data
+  buffers (what `write` sent, a key payload, a bpf map key) are always quoted
+  with every byte, binary bytes escaped (`"\x06\0\xb6A"`) instead of
+  switching to hex. The conformance golden files no longer change with a
+  run's clock or most addresses (the line for `prctl.set_name_long` still holds
+  an address of the fixture build).
+
+- **File Reconstruction: replay a file's calls and see what each byte is.** In
+  Triage › Files › Per-file history, *Reconstruct contents…* under Content
+  changes (and *Reconstruct contents…* in the right-click menu of a row in any
+  Files tab) opens a window that replays the file's reads, writes, resizes and
+  zeroed ranges in the order the file system applied them, over what the file
+  held when the run started. Each byte is shown as it is known: `??` never seen,
+  read, from the starting disk (before-image), written, `##` changed with the
+  new value not captured, `~~` under a shared writable mapping. Step with the
+  slider, the buttons or the arrow keys; click a byte for its history, with the
+  time each state was learned. *Hash this state* takes the SHA-256 of the
+  reconstruction when every byte is known and compares it with each hash the
+  guest took. *Save reconstruction* writes the file with unknown bytes as 00 and
+  a `.mask` file marking them (00 known, 01 unknown, 02 not captured, 03
+  mapping) to `reconstructed/` in the recording; *Text diff* shows the lines a
+  text file gained or lost.
+
 ### Guest
 
 - **Real file positions and in-kernel copy operands (contract revision 18).**
@@ -546,7 +607,7 @@ it runs.
   through the kernel's portable helpers, and what only x86 has (its system call
   table, its decoders, the debug registers, the system call entry hook and the
   boot-time reservation of the bootstrap page) is in per-architecture files and
-  one x86-64 hook patch (the series is fifteen patches). No change on x86-64.
+  one x86-64 hook patch (the series is nineteen patches). No change on x86-64.
   The host reads the guest's architecture from the debug engine's capability
   reply when it identifies the guest and decodes x86-64 guests only. No wire
   change; a new base is needed for the new series identity, and older bases
@@ -567,51 +628,6 @@ it runs.
   wait, and on a loaded build machine that group measured 1 drop in 13.7
   million records and 38 in 10.5 million (737 in 7.4 million before the
   change).
-- **A Partial Sigma scan says why.** The fixed note "Category acceptance is not
-  full compatibility..." no longer takes the first place among the scan's
-  warnings, so the header names the real reason (incomplete captured events,
-  the 4,096-rule budget, the 90 second deadline, a rule that failed while it was
-  evaluated, matches that could not be reported) instead of "(+1 more)". The
-  note is in the header's hover text. Results saved by 0.7.x show without it.
-- **Behaviour samples carry no product name.** The suite is now `demo-all` and
-  `demo-<scenario>` (was `ant-sample-*`). Domains are neutral names under
-  `.invalid` (`update.example-cdn.invalid`, `exfil.example-dns.invalid`,
-  `remote.example-host.invalid`, `pool.example-pool.invalid`), files, units and
-  configs are `demo-sample*`, decoy credentials and notes carry `DEMO-DECOY`,
-  and the sinkhole banner and temp dir are `demo-sinkhole`. The binaries are
-  built without source paths. Endpoints, work-directory-only writes and
-  counted-never-executed downloads are unchanged, and every scenario lists the
-  same rule ids.
-
-- **Captured data reads by its type, not by its bytes.** The Syscall Trace
-  (Info column, argument rows, field rows, async operands) used to show any
-  captured object whose bytes looked printable as a quoted string, so a
-  timespec, a pointer or a struct could read as text in one run and hex in the
-  next. Now strings and character data (a task name, mount options) are
-  always quoted; structs, times, integers, pointers and arrays are always hex;
-  socket addresses are decoded only when the field is a `sockaddr` (a pointer
-  whose name mentions an address no longer reads as `a.b.c.d:port`); and data
-  buffers (what `write` sent, a key payload, a bpf map key) are always quoted
-  with every byte, binary bytes escaped (`"\x06\0\xb6A"`) instead of
-  switching to hex. The conformance golden files no longer change with a
-  run's clock or addresses.
-
-- **File Reconstruction: replay a file's calls and see what each byte is.** In
-  Triage › Files › Per-file history, *Reconstruct contents…* under Content
-  changes (and *Reconstruct contents…* in the right-click menu of a row in any
-  Files tab) opens a window that replays the file's reads, writes, resizes and
-  zeroed ranges in the order the file system applied them, over what the file
-  held when the run started. Each byte is shown as it is known: `??` never seen,
-  read, from the starting disk (before-image), written, `##` changed with the
-  new value not captured, `~~` under a shared writable mapping. Step with the
-  slider, the buttons or the arrow keys; click a byte for its history, with the
-  time each state was learned. *Hash this state* takes the SHA-256 of the
-  reconstruction when every byte is known and compares it with each hash the
-  guest took. *Save reconstruction* writes the file with unknown bytes as 00 and
-  a `.mask` file marking them (00 known, 01 unknown, 02 not captured, 03
-  mapping) to `reconstructed/` in the recording; *Text diff* shows the lines a
-  text file gained or lost.
-
 - **Guest kernels have BTF, without the recorder in it.** The BusyBox and
   Debian Minimal kernel now builds `/sys/kernel/btf/vmlinux` and module BTF
   like Debian's 6.12.94-1, so systemd's bpf-restrict-fs no longer fails at
