@@ -242,10 +242,34 @@ fn failed_save_is_reported_and_does_not_leave_restart_permanently_blocked() {
     assert!(crate::snapshots::run_layer::pending_record(&fixture.worker.options, "vm").is_some());
 }
 
-/// Explicit integration check: uses the real sandboxed disk reader supplied
-/// through ANTINOMIE_TEST_READER, qemu-img/qemu-io and e2fsprogs, without a VM.
+/// The sandboxed disk reader this check needs: `ANTINOMIE_TEST_READER`, or the
+/// app built in this workspace's target directory.
+fn test_reader() -> Option<PathBuf> {
+    if let Some(reader) = std::env::var_os("ANTINOMIE_TEST_READER") {
+        return Some(PathBuf::from(reader));
+    }
+    let target = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target");
+    ["release", "debug"]
+        .iter()
+        .map(|profile| target.join(profile).join("antinomie-monitor"))
+        .find(|candidate| candidate.is_file())
+}
+
+fn have_host_tool(name: &str) -> bool {
+    std::process::Command::new(name)
+        .arg("-V")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok()
+}
+
+/// Integration check with the real sandboxed disk reader, qemu-img/qemu-io and
+/// e2fsprogs, without a VM. It skips itself (and says so) when the reader
+/// (`ANTINOMIE_TEST_READER`, or a built app in the target directory) or a tool
+/// is missing, so a plain `cargo test` runs it wherever they exist.
 #[test]
-#[ignore = "requires ANTINOMIE_TEST_READER and the qemu/e2fsprogs host tools"]
 fn restart_retains_old_file_bytes_before_real_qcow_layers_merge() {
     use crate::{disk_start, file_before, file_before_store, snapshots::run_layer};
     use std::process::Command as Process;
@@ -260,10 +284,18 @@ fn restart_retains_old_file_bytes_before_real_qcow_layers_merge() {
         output.stdout
     }
 
-    let reader = PathBuf::from(
-        std::env::var_os("ANTINOMIE_TEST_READER").expect("set the disk-reader executable"),
-    );
-    assert!(reader.is_file());
+    let Some(reader) = test_reader() else {
+        eprintln!(
+            "skipped: no disk-reader executable (build the app or set ANTINOMIE_TEST_READER)"
+        );
+        return;
+    };
+    for tool in ["qemu-img", "qemu-io", "mkfs.ext4", "debugfs"] {
+        if !have_host_tool(tool) {
+            eprintln!("skipped: {tool} is not installed");
+            return;
+        }
+    }
     let mut fixture = Fixture::new();
     fs::remove_file(fixture.root.join("vm/run-layer.json")).unwrap();
     let source = fixture.root.join("source");

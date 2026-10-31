@@ -38,5 +38,17 @@ name = "conformance"
 path = "examples/conformance/main.rs"
 test = true
 
+# These two examples are VM tools with unit tests of their own; the tests run
+# with the rest (the VM runs they drive do not).
+[[example]]
+name = "snapshot-check"
+path = "examples/snapshot-check.rs"
+test = true
+
+[[example]]
+name = "guest-run"
+path = "examples/guest-run.rs"
+test = true
+
 [build-dependencies]
 cc = "1"

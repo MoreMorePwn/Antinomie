@@ -31,7 +31,8 @@ jobs:
           sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             pkg-config libsqlite3-dev libxkbcommon-dev libwayland-dev \
             qemu-system-x86 qemu-utils shellcheck file tshark bubblewrap util-linux musl-tools \
-            debian-archive-keyring
+            debian-archive-keyring \
+            python3-venv qpdf poppler-utils mupdf-tools libxml2-utils p7zip-full
       - name: Packet decoder sandbox prerequisites
         run: |
           packet_sandbox() {
@@ -70,6 +71,9 @@ jobs:
       - name: Clippy
         working-directory: src/antinomie/monitor
         run: cargo clippy --release --locked --all-targets -- -D warnings
+      - name: Build the app (the restart test reads disks with its sandboxed reader)
+        working-directory: src/antinomie/monitor
+        run: cargo build --release --locked -p antinomie-monitor-ui
       - name: Tests
         working-directory: src/antinomie/monitor
         run: cargo test --release --locked --no-fail-fast
@@ -83,16 +87,36 @@ jobs:
           python3 tests/monitor/test-build-base.py
           python3 tests/monitor/test-debian-image.py
           python3 tests/monitor/test-native-coverage.py
-          python3 tests/monitor/test-sigma-adapter.py
+          python3 tests/monitor/test-sinkhole.py
+          python3 tests/monitor/test-evasive-sample.py
           python3 tests/monitor/test-vm-regress.py
           python3 tests/monitor/test-sync-quilt-view.py
           python3 tests/monitor/test-kernel-btf.py
           python3 scripts/test-refresh-monitor-bundle.py
           python3 scripts/test-full-pack.py
+      - name: Sigma adapter tests (with the locked pySigma)
+        # The adapter tests skip themselves without pySigma, so install the
+        # exact set the app installs for users, hashes checked.
+        run: |
+          python3 -m venv "$RUNNER_TEMP/sigma"
+          "$RUNNER_TEMP/sigma/bin/pip" install --require-hashes --only-binary=:all: --no-deps \
+            -r src/antinomie/monitor/crates/monitor-core/assets/sigma-requirements.txt
+          "$RUNNER_TEMP/sigma/bin/python" tests/monitor/test-sigma-adapter.py
+      - name: Report exports checked with outside tools
+        # Skips a validator that is not installed; the fixture tests it
+        # drives need the Rust build above.
+        run: |
+          python3 -m venv "$RUNNER_TEMP/report"
+          "$RUNNER_TEMP/report/bin/pip" install --quiet jsonschema stix2 stix2-patterns
+          "$RUNNER_TEMP/report/bin/python" tests/monitor/test-report-export.py
+      - name: Behaviour samples carry no product name
+        run: tests/monitor/check-sample-branding.sh
       - name: Shell scripts
         run: |
-          shellcheck --severity=error scripts/*.sh tests/monitor/*.sh \
-            src/antinomie/monitor/crates/monitor-core/src/guest_desktop.sh
+          shellcheck --severity=error install.sh run.sh scripts/*.sh tests/monitor/*.sh \
+            tests/monitor/conformance/*.sh src/debian/debian/bin/*.sh \
+            src/antinomie/monitor/crates/monitor-core/src/guest_desktop.sh \
+            src/antinomie/monitor/crates/monitor-core/src/guest_account/boot_loader.sh
 
   audit:
     # Advisories in dependencies. A new one fails the job; the reviewed ones
