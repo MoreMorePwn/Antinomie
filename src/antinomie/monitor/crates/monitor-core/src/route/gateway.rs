@@ -10,6 +10,7 @@ use super::{
     config::{Egress, RouteSpec},
     dhcp::{self, Lease},
     dns,
+    filter::{EgressFilter, FilterState},
     frame::{self, BROADCAST, ETHERTYPE_ARP, ETHERTYPE_IPV4, Mac, TcpOut},
     managed::{self, Managed},
     metadata::Service as Metadata,
@@ -19,7 +20,7 @@ use super::{
     upstream::{self, Dest, Pipes},
 };
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{BTreeMap, HashMap, VecDeque},
     hash::{BuildHasher, Hasher},
     io::{Read, Write},
     net::Ipv4Addr,
@@ -33,6 +34,8 @@ use std::{
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
+
+mod egress;
 
 /// Connections the gateway carries at once.
 const MAX_CONNECTIONS: usize = 256;
@@ -97,14 +100,37 @@ struct Active {
     spec: RouteSpec,
     /// wireproxy or tor; locked only to check whether it still runs.
     managed: Mutex<Option<Managed>>,
+    /// When the filter's run time limit ends (live routes with a limit).
+    deadline: Mutex<Option<Instant>>,
+    /// Connections the filter refused by port while this route was up.
+    blocked_ports: Mutex<BTreeMap<u16, u64>>,
 }
 
 impl Active {
     fn new(spec: RouteSpec, managed: Option<Managed>) -> Self {
+        let deadline = spec
+            .is_live()
+            .then(|| spec.filter.run_limit())
+            .flatten()
+            .map(|limit| Instant::now() + limit);
         Self {
             spec,
             managed: Mutex::new(managed),
+            deadline: Mutex::new(deadline),
+            blocked_ports: Mutex::new(BTreeMap::new()),
         }
+    }
+
+    /// The filter, when it applies to this route.
+    fn filter(&self) -> Option<&EgressFilter> {
+        (self.spec.is_live() && self.spec.filter.enabled).then_some(&self.spec.filter)
+    }
+
+    /// The run time limit has passed.
+    fn expired(&self, now: Instant) -> bool {
+        self.deadline
+            .lock()
+            .is_ok_and(|deadline| deadline.is_some_and(|deadline| now >= deadline))
     }
 }
 
@@ -245,6 +271,26 @@ impl Gateway {
         self.shared.counters.snapshot()
     }
 
+    /// Makes the run time limit of the route in force end now (tests wait
+    /// for minutes otherwise).
+    #[cfg(test)]
+    pub(crate) fn end_time_limit_for_tests(&self) {
+        if let Ok(mut deadline) = self.shared.current().deadline.lock() {
+            *deadline = Some(Instant::now());
+        }
+    }
+
+    /// Connections the egress filter refused by destination port while the
+    /// route in force has been up, with the count for each port.
+    pub fn blocked_ports(&self) -> Vec<(u16, u64)> {
+        self.shared
+            .current()
+            .blocked_ports
+            .lock()
+            .map(|ports| ports.iter().map(|(p, n)| (*p, *n)).collect())
+            .unwrap_or_default()
+    }
+
     /// Uses `spec` for run `run`. The first run to claim a route starts what
     /// it needs (wireproxy) and checks that it is up; a failure leaves the
     /// gateway on Drop and is the run's error. Runs that overlap must use
@@ -345,6 +391,7 @@ impl Gateway {
             label: current.spec.label.clone(),
             wireproxy: None,
             tor: None,
+            filter: super::filter::EgressFilter::off(),
         };
         self.shared.install(Active::new(down, None));
         let reason = format!(
@@ -432,6 +479,9 @@ struct Loop {
     flows: HashMap<u64, Flow>,
     next_id: u64,
     seen_generation: u64,
+    /// What the egress filter remembers, for the generation it was built for.
+    filter_state: FilterState,
+    filter_generation: u64,
     /// The generation the connections were last checked against.
     swept_generation: u64,
     fake: FakeIps,
@@ -466,6 +516,8 @@ impl Loop {
             flows: HashMap::new(),
             next_id: 1,
             seen_generation: 0,
+            filter_state: FilterState::default(),
+            filter_generation: 0,
             swept_generation: 0,
             fake: FakeIps::default(),
             dns_in_flight: Arc::new(AtomicUsize::new(0)),
@@ -747,7 +799,15 @@ impl Loop {
                 }
             }
             frame::PROTO_ICMP => {
-                if self.net.is_local(ip.dst)
+                let route = self.shared.current();
+                let allowed = route
+                    .filter()
+                    .is_none_or(|filter| self.filter_state.echo_allowed(filter, Instant::now()));
+                if self.net.is_local(ip.dst) && !allowed {
+                    // A ping flood at the router: not answered, counted.
+                    self.count(&self.shared.counters.filter_icmp);
+                    self.count(&self.shared.counters.icmp_dropped);
+                } else if self.net.is_local(ip.dst)
                     && let Some(reply) = frame::build_icmp_echo_reply(ip.payload)
                 {
                     self.frame_to_guest(ip.dst, ip.src, frame::PROTO_ICMP, &reply);
@@ -779,6 +839,8 @@ impl Loop {
                 metadata_name.map(|metadata| dns::answer_a(&query, &[metadata.ip()], DNS_TTL))
             }
             Egress::Drop => None,
+            // The run time limit ended: no more names for a live route.
+            _ if route.filter().is_some() && route.expired(Instant::now()) => None,
             Egress::Sink(sink) if query.qtype == dns::TYPE_A => {
                 Some(dns::answer_a(&query, &[sink.address], DNS_TTL))
             }
@@ -975,6 +1037,10 @@ impl Loop {
             self.refuse(flow, syn);
             return;
         }
+        if metadata.is_none() && !self.egress_admits(&route, generation, &dest, now) {
+            self.refuse(flow, syn);
+            return;
+        }
         let id = self.next_id;
         self.next_id += 1;
         let mut conn = Conn::new(syn, self.random(), now);
@@ -1092,10 +1158,20 @@ impl Loop {
         let generation = self.sync_generation();
         self.swept_generation = generation;
         let flows: Vec<Flow> = self.conns.keys().copied().collect();
+        let route = self.shared.current();
+        let expired = route.expired(now) && route.filter().is_some();
         for flow in flows {
             let mut out = Vec::new();
             if let Some((_, conn)) = self.conns.get_mut(&flow) {
-                if conn.generation == generation {
+                if conn.generation == generation && expired {
+                    // The run time limit ended: forwarding stops, open
+                    // connections are reset.
+                    if !conn.dead {
+                        Counters::add(&self.shared.counters.filter_time, 1);
+                        Counters::add(&self.shared.counters.tcp_blocked, 1);
+                    }
+                    conn.reset(&mut out);
+                } else if conn.generation == generation {
                     conn.tick(now, &mut out);
                 } else {
                     // Made under a route that is gone: it does not carry on.

@@ -697,6 +697,7 @@ fn a_runs_route_is_copied_into_its_artifacts_and_old_runs_have_none() {
         via: crate::route::RouteVia::Gateway,
         checked_ms: Some(1),
         stats: None,
+        blocked_ports: Vec::new(),
     });
     let owner = RunArtifactOwner::new(&run);
     assert_eq!(owner.summary.route, run.route);

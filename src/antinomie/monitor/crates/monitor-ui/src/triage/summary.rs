@@ -219,6 +219,7 @@ mod tests {
             via: antinomie_monitor_core::route::RouteVia::Gateway,
             checked_ms: Some(1),
             stats: None,
+            blocked_ports: Vec::new(),
         };
         view.set_route_text(crate::route_ui::describe(Some(&route), None));
         let after = draw(&mut view);

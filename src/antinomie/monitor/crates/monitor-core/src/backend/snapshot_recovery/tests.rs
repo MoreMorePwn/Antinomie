@@ -172,6 +172,7 @@ fn routed_run(kind: crate::route::RouteKind) -> RunSummary {
         via: crate::route::RouteVia::Gateway,
         checked_ms: Some(1),
         stats: None,
+        blocked_ports: Vec::new(),
     });
     summary
 }

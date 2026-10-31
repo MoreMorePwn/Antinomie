@@ -20,6 +20,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 mod config;
 mod dhcp;
 mod dns;
+mod filter;
 mod frame;
 mod gateway;
 mod helpers;
@@ -40,6 +41,7 @@ pub use self::{
         InetSimConfig, InetSimMode, RouteConfig, RouteSpec, Socks5Config, TorConfig, TorMode,
         VpnConfig, load_config, save_config, tool_on_path,
     },
+    filter::{EgressFilter, MAIL_PORTS},
     gateway::{Claimed, Gateway, GatewayNet},
     helpers::reap_stale_helpers,
     metadata::{
@@ -185,6 +187,18 @@ pub struct RouteStats {
     /// Payload bytes from the guest and to the guest.
     pub up_len: u64,
     pub down_len: u64,
+    /// Connections the egress filter refused, by reason (they are also in
+    /// `tcp_blocked`): a blocked port (mail), the connections-per-second
+    /// limit, the concurrent limit, the destinations-per-minute limit (scan
+    /// guard), and the run time limit (new and open connections).
+    pub filter_port: u64,
+    pub filter_rate: u64,
+    pub filter_concurrent: u64,
+    pub filter_destinations: u64,
+    pub filter_time: u64,
+    /// ICMP echo replies withheld by the per-second limit (also in
+    /// `icmp_dropped`).
+    pub filter_icmp: u64,
 }
 
 impl RouteStats {
@@ -202,7 +216,73 @@ impl RouteStats {
             other_dropped: d(self.other_dropped, earlier.other_dropped),
             up_len: d(self.up_len, earlier.up_len),
             down_len: d(self.down_len, earlier.down_len),
+            filter_port: d(self.filter_port, earlier.filter_port),
+            filter_rate: d(self.filter_rate, earlier.filter_rate),
+            filter_concurrent: d(self.filter_concurrent, earlier.filter_concurrent),
+            filter_destinations: d(self.filter_destinations, earlier.filter_destinations),
+            filter_time: d(self.filter_time, earlier.filter_time),
+            filter_icmp: d(self.filter_icmp, earlier.filter_icmp),
         }
+    }
+
+    /// Connections and replies the egress filter refused, in all.
+    pub fn filter_total(&self) -> u64 {
+        self.filter_port
+            + self.filter_rate
+            + self.filter_concurrent
+            + self.filter_destinations
+            + self.filter_time
+            + self.filter_icmp
+    }
+
+    /// What the egress filter refused, in words, or `None` when it refused
+    /// nothing: "Egress filter blocked 3 connections to port 25 and 2 to port
+    /// 587, 12 over the connection-rate limit". `ports` is the route record's
+    /// `blocked_ports`.
+    pub fn filter_summary(&self, ports: &[(u16, u64)]) -> Option<String> {
+        if self.filter_total() == 0 {
+            return None;
+        }
+        let plural = |n: u64| if n == 1 { "connection" } else { "connections" };
+        let mut parts = Vec::new();
+        if self.filter_port > 0 {
+            let mut listed: Vec<String> = ports
+                .iter()
+                .enumerate()
+                .map(|(i, (port, count))| {
+                    if i == 0 {
+                        format!("{count} {} to port {port}", plural(*count))
+                    } else {
+                        format!("{count} to port {port}")
+                    }
+                })
+                .collect();
+            if listed.is_empty() {
+                listed.push(format!(
+                    "{} {} to blocked ports",
+                    self.filter_port,
+                    plural(self.filter_port)
+                ));
+            }
+            parts.push(listed.join(" and "));
+        }
+        for (count, what) in [
+            (self.filter_rate, "over the connection-rate limit"),
+            (self.filter_concurrent, "over the open-connections limit"),
+            (
+                self.filter_destinations,
+                "to new destinations over the per-minute limit (scan guard)",
+            ),
+            (self.filter_time, "after the run time limit"),
+        ] {
+            if count > 0 {
+                parts.push(format!("{count} {what}"));
+            }
+        }
+        if self.filter_icmp > 0 {
+            parts.push(format!("{} ICMP echo replies withheld", self.filter_icmp));
+        }
+        Some(format!("Egress filter blocked {}", parts.join(", ")))
     }
 
     /// One line for the UI; empty when nothing was seen.
@@ -240,6 +320,10 @@ pub struct RouteRecord {
     /// What the gateway counted, saved when the run's tree ended.
     #[serde(default)]
     pub stats: Option<RouteStats>,
+    /// Connections the egress filter refused by destination port, with the
+    /// count for each, while the route was up (empty when none).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocked_ports: Vec<(u16, u64)>,
 }
 
 impl RouteRecord {
@@ -272,6 +356,7 @@ impl RouteRecord {
             via,
             checked_ms: None,
             stats: None,
+            blocked_ports: Vec::new(),
         }
     }
 }
@@ -289,6 +374,12 @@ pub(crate) struct Counters {
     pub other_dropped: AtomicU64,
     pub up_len: AtomicU64,
     pub down_len: AtomicU64,
+    pub filter_port: AtomicU64,
+    pub filter_rate: AtomicU64,
+    pub filter_concurrent: AtomicU64,
+    pub filter_destinations: AtomicU64,
+    pub filter_time: AtomicU64,
+    pub filter_icmp: AtomicU64,
 }
 
 impl Counters {
@@ -309,6 +400,12 @@ impl Counters {
             other_dropped: get(&self.other_dropped),
             up_len: get(&self.up_len),
             down_len: get(&self.down_len),
+            filter_port: get(&self.filter_port),
+            filter_rate: get(&self.filter_rate),
+            filter_concurrent: get(&self.filter_concurrent),
+            filter_destinations: get(&self.filter_destinations),
+            filter_time: get(&self.filter_time),
+            filter_icmp: get(&self.filter_icmp),
         }
     }
 }

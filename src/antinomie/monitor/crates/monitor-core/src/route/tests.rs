@@ -10,6 +10,7 @@ use std::{net::Ipv4Addr, path::PathBuf, time::Duration};
 
 mod cloud;
 mod config;
+mod filter;
 mod guest;
 mod helpers;
 mod managed;
@@ -95,6 +96,7 @@ pub(super) fn record_for(kind: RouteKind) -> RouteRecord {
         via: RouteVia::Gateway,
         checked_ms: None,
         stats: None,
+        blocked_ports: Vec::new(),
     }
 }
 

@@ -25,6 +25,9 @@ pub(crate) struct RouteText {
     /// A fact about the run's network that is no warning, for the Notes of
     /// Triage: the run used the VM's own network and no route.
     pub note: Option<String>,
+    /// What the egress filter refused ("Egress filter blocked 3 connections
+    /// to port 25"), when it refused anything.
+    pub filter: Option<String>,
 }
 
 impl Default for RouteText {
@@ -41,6 +44,7 @@ pub(crate) fn describe(route: Option<&RouteRecord>, stats: Option<RouteStats>) -
             detail: "This run was saved before network routes were recorded.".into(),
             leaves: false,
             note: None,
+            filter: None,
         };
     };
     let mut detail = match route.via {
@@ -55,6 +59,10 @@ pub(crate) fn describe(route: Option<&RouteRecord>, stats: Option<RouteStats>) -
         RouteVia::VmDisconnected => "The VM had no network card.".to_owned(),
     };
     let counted = stats.or(route.stats);
+    let filter = counted.and_then(|stats| stats.filter_summary(&route.blocked_ports));
+    if let Some(filter) = &filter {
+        detail.push_str(&format!(" {filter}."));
+    }
     match counted.map(|stats| stats.summary()) {
         Some(summary) if !summary.is_empty() => {
             detail.push_str(&format!(" The gateway counted: {summary}."));
@@ -75,6 +83,7 @@ pub(crate) fn describe(route: Option<&RouteRecord>, stats: Option<RouteStats>) -
                 .to_owned()
         }),
         detail,
+        filter,
         leaves: matches!(
             route.kind,
             RouteKind::Internet | RouteKind::Tor | RouteKind::Vpn | RouteKind::Socks5
@@ -94,6 +103,9 @@ pub(crate) fn line(ui: &mut egui::Ui, text: &RouteText) {
         };
         ui.label(RichText::new(&text.headline).strong().color(color))
             .on_hover_text(&text.detail);
+        if let Some(filter) = &text.filter {
+            ui.label(RichText::new(filter).color(theme::warn()));
+        }
     });
 }
 
@@ -252,6 +264,7 @@ mod tests {
             via,
             checked_ms: None,
             stats: None,
+            blocked_ports: Vec::new(),
         }
     }
 
@@ -324,6 +337,36 @@ mod tests {
         routed.route = Some(RouteKind::Drop);
         draw(&mut routed, RouteChoice::new(VmNetwork::Routed, &config));
         assert_eq!(routed.route, Some(RouteKind::Drop));
+    }
+
+    #[test]
+    fn what_the_egress_filter_blocked_is_in_the_route_text_and_hover() {
+        let mut tor = record(RouteKind::Tor, RouteVia::Gateway, "Tor");
+        tor.stats = Some(RouteStats {
+            filter_port: 3,
+            tcp_blocked: 3,
+            ..RouteStats::default()
+        });
+        tor.blocked_ports = vec![(25, 3)];
+        let text = describe(Some(&tor), None);
+        assert_eq!(
+            text.filter.as_deref(),
+            Some("Egress filter blocked 3 connections to port 25")
+        );
+        assert!(text
+            .detail
+            .contains("Egress filter blocked 3 connections to port 25."));
+        let ctx = egui::Context::default();
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| line(ui, &text));
+        });
+        let shown = crate::app::tests::texts(&output);
+        assert!(shown
+            .iter()
+            .any(|(t, _)| t == "Egress filter blocked 3 connections to port 25"));
+        // A run the filter did not touch says nothing about it.
+        let quiet = record(RouteKind::Tor, RouteVia::Gateway, "Tor");
+        assert_eq!(describe(Some(&quiet), None).filter, None);
     }
 
     #[test]

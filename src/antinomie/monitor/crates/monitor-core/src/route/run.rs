@@ -61,6 +61,7 @@ pub fn claim_for_run(
             via: RouteVia::Gateway,
             checked_ms: Some(claimed.checked_ms),
             stats: None,
+            blocked_ports: Vec::new(),
         },
         Some(RouteClaim { baseline }),
     ))
@@ -77,9 +78,11 @@ pub fn release_for_run(
 ) {
     let Some(gateway) = gateway else { return };
     let counted = gateway.stats().since(claim.baseline);
+    let ports = gateway.blocked_ports();
     gateway.release(run);
     if let Some(record) = record {
         record.stats = Some(counted);
+        record.blocked_ports = ports;
     }
 }
 

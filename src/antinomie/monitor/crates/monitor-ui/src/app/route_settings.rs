@@ -58,6 +58,8 @@ pub(super) struct RouteSettings {
     programs: Vec<RouteProgram>,
     testing: Option<(RouteKind, Receiver<Tested>)>,
     tested: Option<Tested>,
+    /// The blocked-ports field as typed, while it is being edited.
+    ports_text: Option<String>,
 }
 
 impl RouteSettings {
@@ -74,6 +76,7 @@ impl RouteSettings {
             programs: look_up(),
             testing: None,
             tested: None,
+            ports_text: None,
         }
     }
 
@@ -89,6 +92,7 @@ impl RouteSettings {
             programs: Vec::new(),
             testing: None,
             tested: None,
+            ports_text: None,
         }
     }
 
@@ -120,6 +124,7 @@ impl RouteSettings {
     fn save(&mut self, data_dir: &Path) {
         self.status = Some(match route::save_config(data_dir, &self.draft) {
             Ok(()) => {
+                self.ports_text = None;
                 self.config = self.draft.clone();
                 self.load_error = None;
                 ("Network routes saved".into(), false)
@@ -163,6 +168,80 @@ impl RouteSettings {
 
 fn hint(ui: &mut egui::Ui, text: &str) -> egui::Response {
     ui.add(egui::Label::new(RichText::new(text).small().color(theme::muted())).wrap())
+}
+
+/// A comma-separated list of ports, or why it is not one.
+fn parse_ports(text: &str) -> Result<Vec<u16>, String> {
+    text.split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .map(|part| match part.parse::<u16>() {
+            Ok(port) if port != 0 => Ok(port),
+            _ => Err(format!("{part:?} is not a port (1 to 65535)")),
+        })
+        .collect()
+}
+
+/// The egress abuse filter of the live routes. A limit of 0 turns it off.
+fn filter_form(
+    ui: &mut egui::Ui,
+    filter: &mut route::EgressFilter,
+    ports_text: &mut Option<String>,
+) {
+    form_grid("settings_routes_filter", ui).show(ui, |ui| {
+        ui.label("Abuse filter");
+        ui.vertical(|ui| {
+            ui.checkbox(&mut filter.enabled, "Limit what a sample can do through Internet, Tor, VPN and SOCKS5 routes")
+                .on_hover_text(
+                    "On by default. Stops a detonation from sending spam, scanning, \
+                     flooding or keeping a connection open after the time limit. What it \
+                     refused is counted in the run's network route and report.",
+                );
+        });
+        ui.end_row();
+        ui.add_enabled_ui(filter.enabled, |ui| {
+            ui.label("Blocked ports");
+        });
+        ui.vertical(|ui| {
+            ui.add_enabled_ui(filter.enabled, |ui| {
+                let shown = ports_text.get_or_insert_with(|| {
+                    filter
+                        .blocked_ports
+                        .iter()
+                        .map(u16::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                });
+                if ui
+                    .add(text_field(shown).desired_width(260.0))
+                    .on_hover_text("Outbound TCP ports that are refused, separated by commas. Default: mail (25, 26, 465, 587, 2525).")
+                    .changed()
+                {
+                    if let Ok(ports) = parse_ports(shown) {
+                        filter.blocked_ports = ports;
+                    }
+                }
+                if let Err(error) = parse_ports(shown) {
+                    ui.label(RichText::new(error).color(theme::error()));
+                }
+            });
+        });
+        ui.end_row();
+        for (label, value, range, tip) in [
+            ("New connections per second", &mut filter.max_new_per_second, 0..=100_000, "0 = no limit. Default 30."),
+            ("Open connections", &mut filter.max_concurrent, 0..=256, "0 = no limit (the gateway carries at most 256). Default 200."),
+            ("New destinations per minute", &mut filter.max_destinations_per_minute, 0..=100_000, "Distinct addresses or names; a scan guard. 0 = no limit. Default 100."),
+            ("Stop forwarding after (minutes)", &mut filter.run_limit_minutes, 0..=10_080, "The route stops forwarding this long after it came up. 0 = no limit (default)."),
+            ("Pings answered per second", &mut filter.max_icmp_per_second, 0..=100_000, "ICMP echo replies from the gateway. 0 = no limit. Default 20."),
+        ] {
+            ui.add_enabled_ui(filter.enabled, |ui| {
+                ui.label(label);
+            });
+            ui.add_enabled(filter.enabled, egui::DragValue::new(value).range(range))
+                .on_hover_text(tip);
+            ui.end_row();
+        }
+    });
 }
 
 fn inetsim_chip(ui: &mut egui::Ui, name: &str, found: &Option<PathBuf>) {
@@ -470,6 +549,13 @@ impl MonitorApp {
             inetsim_chip(ui, "inetsim", &found_inetsim);
             ui.end_row();
         });
+        ui.separator();
+        ui.label(theme::section_title(ui, "Egress filter"));
+        filter_form(
+            ui,
+            &mut self.routes.draft.filter,
+            &mut self.routes.ports_text,
+        );
         ui.add_space(8.0);
         let dirty = self.routes.dirty();
         let data_dir = self.options.data_dir.clone();
@@ -482,6 +568,7 @@ impl MonitorApp {
             }
             if ui.add_enabled(dirty, egui::Button::new("Revert")).clicked() {
                 self.routes.draft = self.routes.config.clone();
+                self.routes.ports_text = None;
                 self.routes.status = None;
             }
             if let Some((text, is_error)) = &self.routes.status {
@@ -506,6 +593,31 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn blocked_ports_are_read_from_a_comma_list_and_bad_entries_are_named() {
+        assert_eq!(parse_ports("25, 587,2525 "), Ok(vec![25, 587, 2525]));
+        assert_eq!(parse_ports(""), Ok(vec![]));
+        for bad in ["0", "70000", "smtp", "25;587"] {
+            assert!(parse_ports(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn the_filter_is_on_by_default_and_its_form_edits_the_draft() {
+        let mut routes = RouteSettings::unloaded();
+        assert!(routes.draft.filter.enabled);
+        let ctx = egui::Context::default();
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                filter_form(ui, &mut routes.draft.filter, &mut routes.ports_text);
+            });
+        });
+        let shown = crate::app::tests::texts(&output);
+        assert!(shown.iter().any(|(t, _)| t == "Blocked ports"));
+        assert!(shown.iter().any(|(t, _)| t == "25, 26, 465, 587, 2525"));
+        assert!(!routes.dirty(), "drawing changes nothing");
     }
 
     #[test]

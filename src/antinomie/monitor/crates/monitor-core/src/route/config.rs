@@ -6,7 +6,7 @@
 //! sample sources' API keys because it can hold a proxy password. Passwords
 //! are never logged, never shown in a `Debug` print, never put in a run's
 //! metadata and never exported.
-use super::RouteKind;
+use super::{RouteKind, filter::EgressFilter};
 use serde::{Deserialize, Serialize};
 use std::{
     net::Ipv4Addr,
@@ -146,6 +146,9 @@ pub struct RouteConfig {
     /// The Internet route may reach private (RFC 1918) addresses of the
     /// host's network. Off: it reaches only public addresses.
     pub allow_lan: bool,
+    /// The egress abuse filter of the live routes (Internet, Tor, VPN,
+    /// SOCKS5); on by default.
+    pub filter: EgressFilter,
 }
 
 impl Default for RouteConfig {
@@ -157,6 +160,7 @@ impl Default for RouteConfig {
             socks5: Socks5Config::default(),
             inetsim: InetSimConfig::default(),
             allow_lan: false,
+            filter: EgressFilter::default(),
         }
     }
 }
@@ -268,6 +272,8 @@ pub struct RouteSpec {
     pub label: String,
     pub wireproxy: Option<WireproxyLaunch>,
     pub tor: Option<TorLaunch>,
+    /// The egress abuse filter; the gateway applies it to live routes only.
+    pub(crate) filter: EgressFilter,
 }
 
 impl RouteSpec {
@@ -280,7 +286,14 @@ impl RouteSpec {
             label: RouteKind::Drop.label().into(),
             wireproxy: None,
             tor: None,
+            filter: EgressFilter::off(),
         }
+    }
+
+    /// Whether the route lets traffic leave the host (Internet, Tor, VPN,
+    /// SOCKS5), which the egress filter then limits.
+    pub(crate) fn is_live(&self) -> bool {
+        matches!(self.egress, Egress::Direct { .. } | Egress::Socks(_))
     }
 
     /// Own-tor routes learn their SOCKS port when tor starts.
@@ -374,6 +387,7 @@ impl RouteConfig {
         if socks5.username.contains('\0') || socks5.password.contains('\0') {
             return Err("SOCKS5 credentials cannot contain a NUL byte".into());
         }
+        self.filter.validate()?;
         self.inetsim
             .sinkhole
             .parse::<Ipv4Addr>()
@@ -414,6 +428,7 @@ impl RouteConfig {
             label,
             wireproxy,
             tor: None,
+            filter: self.filter.clone(),
         };
         Ok(match kind {
             RouteKind::Drop => RouteSpec::drop_all(),

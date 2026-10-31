@@ -16,6 +16,15 @@ it runs.
   the kernel and BusyBox source identity in `bundle.json`, and
   `scripts/publish-base-sources.py` assembles the sources for an upload.
 
+- **Egress abuse filter on live routes.** The Internet, Tor, VPN and SOCKS5 routes
+  refuse outbound mail ports (25, 26, 465, 587, 2525), cap new connections per
+  second (30), open connections (200) and new destinations per minute (100, a scan
+  guard), limit ICMP echo replies, and can stop forwarding after a time limit (off by
+  default). It is on by default and set under Settings > Network routes (a limit of 0
+  turns that limit off). What it refused is counted by reason, and by port for mail, in
+  the run's network route line and report ("Egress filter blocked 3 connections to
+  port 25"). It runs in the host's gateway: nothing changes in the guest.
+
 - **Routed runs with a network capture start.** A run with Capture network on a
   Routed VM, on any route, failed to start and was listed as Unknown; the toolbar
   capture failed the same way. Both now work. A run that cannot start (a capture on
