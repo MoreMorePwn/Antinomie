@@ -17,6 +17,7 @@ pub mod defang;
 pub mod export;
 mod html;
 pub mod layout;
+pub mod sample;
 pub mod misp;
 mod pdf;
 mod pdf_font;

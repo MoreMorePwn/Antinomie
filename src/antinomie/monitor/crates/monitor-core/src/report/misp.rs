@@ -18,7 +18,7 @@ pub(super) fn split_endpoint(text: &str) -> Option<(String, u16)> {
     Some((host.to_owned(), port))
 }
 
-fn attribute(
+pub(in crate::report) fn attribute(
     kind: &str,
     category: &str,
     value: &str,
@@ -56,7 +56,7 @@ fn comment(indicator: &Indicator) -> String {
     parts.join("; ")
 }
 
-fn attributes(indicator: &Indicator, seed: &str, at: u64) -> Vec<Value> {
+pub(in crate::report) fn attributes(indicator: &Indicator, seed: &str, at: u64) -> Vec<Value> {
     let note = comment(indicator);
     let ids = indicator.matched;
     let mut out = Vec::new();
@@ -168,7 +168,7 @@ fn attributes(indicator: &Indicator, seed: &str, at: u64) -> Vec<Value> {
 
 /// The name part of ATT&CK's `Parent: Sub` form: MISP names a sub-technique
 /// by its own name.
-fn cluster_value(technique: &Technique) -> String {
+pub(in crate::report) fn cluster_value(technique: &Technique) -> String {
     let name = technique
         .name
         .rsplit_once(": ")

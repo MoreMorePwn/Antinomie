@@ -14,7 +14,7 @@ fn quote(text: &str) -> String {
 }
 
 /// The STIX pattern of an indicator, when it has a form STIX can match.
-fn pattern(indicator: &Indicator) -> Option<String> {
+pub(in crate::report) fn pattern(indicator: &Indicator) -> Option<String> {
     match indicator.kind.as_str() {
         "endpoint" => {
             let (ip, port) = split_endpoint(&indicator.value)?;
@@ -58,7 +58,7 @@ fn pattern(indicator: &Indicator) -> Option<String> {
     }
 }
 
-fn object(kind: &str, seed: &str, at: &str, mut fields: Value) -> Value {
+pub(in crate::report) fn object(kind: &str, seed: &str, at: &str, mut fields: Value) -> Value {
     let map = fields.as_object_mut().expect("an object");
     map.insert("type".into(), json!(kind));
     map.insert("spec_version".into(), json!("2.1"));
@@ -71,11 +71,11 @@ fn object(kind: &str, seed: &str, at: &str, mut fields: Value) -> Value {
     fields
 }
 
-fn id_of(value: &Value) -> String {
+pub(in crate::report) fn id_of(value: &Value) -> String {
     value["id"].as_str().unwrap_or_default().to_owned()
 }
 
-fn relationship(kind: &str, from: &str, to: &str, at: &str) -> Value {
+pub(in crate::report) fn relationship(kind: &str, from: &str, to: &str, at: &str) -> Value {
     object(
         "relationship",
         &format!("{kind}:{from}:{to}"),
@@ -253,6 +253,6 @@ pub fn render(report: &Report) -> Result<String, String> {
     serde_json::to_string_pretty(&bundle).map_err(|e| e.to_string())
 }
 
-fn pattern_seed(indicator: &Indicator) -> String {
+pub(in crate::report) fn pattern_seed(indicator: &Indicator) -> String {
     pattern(indicator).unwrap_or_default()
 }
