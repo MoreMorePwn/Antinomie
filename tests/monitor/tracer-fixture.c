@@ -43,6 +43,24 @@
  *              so a reconnect in the middle splits one file's story; each
  *              second also sends a DNS query for tick-K.tracer.test to the
  *              NAT resolver 10.0.2.3 (no answer is needed)
+ *   versions   one file per case under /tmp/tracer-v/, where a version
+ *              that does not survive is the one that matters:
+ *     payload    v1 decoy (seed 31, 6000), closed; overwritten (truncated)
+ *                with v2, a copy of this program, chmod 0755, executed in a
+ *                child (mode exit0); overwritten with v3 (seed 33, 3000) and
+ *                deleted
+ *     data       v1 (seed 41, 4096), closed; v2 (seed 42, 4096) through a
+ *                truncating open, read back whole on its own descriptor;
+ *                then truncated to 0
+ *     partial    seed 51, 16384, then pwrite seed 52 at 4096 (512 bytes) and
+ *                seed 53 at 15000 (100 bytes)
+ *     append     three O_APPEND writes of 1000 bytes (seed 61)
+ *     renamed    target v1 (seed 71, 2000); target.new v2 (seed 72, 2500),
+ *                renamed over target, then target read back
+ *     mapped     8192 bytes through a shared writable mapping (seed 81),
+ *                msync, munmap
+ *     shared     two processes write one file: the child bytes 0..4096
+ *                (seed 91), the parent 4096..8192 (seed 92)
  *   exit0      prints and exits (the dropped copy's mode)
  *
  * Build: cc -static -O2 -Wall -Wextra -Werror tests/monitor/tracer-fixture.c
@@ -304,6 +322,148 @@ static void writes(void)
 	say("TRACER DONE\n");
 }
 
+#define VERSIONS_PATH "/tmp/tracer-v"
+
+/* Read a whole file through its own descriptor (the run's read of it). */
+static void read_back(const char *path, size_t size)
+{
+	static unsigned char buffer[65536];
+	size_t done = 0;
+	ssize_t count;
+	int fd = open(path, O_RDONLY | O_CLOEXEC);
+
+	if (fd < 0)
+		fail(path);
+	while (done < size && (count = read(fd, buffer, sizeof(buffer))) > 0)
+		done += (size_t)count;
+	if (done != size)
+		fail("read back");
+	close(fd);
+}
+
+static void versions(void)
+{
+	static const char *const names[] = { "payload", "data", "partial", "append", "target",
+		"target.new", "mapped", "shared" };
+	unsigned char *map;
+	char path[64];
+	pid_t child;
+	int fd, i;
+
+	for (i = 0; i < (int)(sizeof(names) / sizeof(names[0])); i++) {
+		snprintf(path, sizeof(path), VERSIONS_PATH "/%s", names[i]);
+		unlink(path);
+	}
+	if (mkdir(VERSIONS_PATH, 0755) && errno != EEXIST)
+		fail("mkdir");
+
+	say("CASE payload\n");
+	make_file(VERSIONS_PATH "/payload", 31, 6000);
+	copy_self(VERSIONS_PATH "/payload");
+	if (chmod(VERSIONS_PATH "/payload", 0755))
+		fail("chmod");
+	child = fork();
+	if (child < 0)
+		fail("fork");
+	if (!child) {
+		char run[64], mode[8];
+		char *argv[] = { run, mode, NULL };
+		char *envp[] = { NULL };
+
+		snprintf(run, sizeof(run), "%s/payload", VERSIONS_PATH);
+		snprintf(mode, sizeof(mode), "exit0");
+		execve(argv[0], argv, envp);
+		_exit(97);
+	}
+	wait_child(child);
+	make_file(VERSIONS_PATH "/payload", 33, 3000);
+	if (unlink(VERSIONS_PATH "/payload"))
+		fail("unlink payload");
+
+	say("CASE data\n");
+	make_file(VERSIONS_PATH "/data", 41, 4096);
+	make_file(VERSIONS_PATH "/data", 42, 4096);
+	read_back(VERSIONS_PATH "/data", 4096);
+	if (truncate(VERSIONS_PATH "/data", 0))
+		fail("truncate");
+
+	say("CASE partial\n");
+	make_file(VERSIONS_PATH "/partial", 51, 16384);
+	fd = open(VERSIONS_PATH "/partial", O_WRONLY | O_CLOEXEC);
+	if (fd < 0)
+		fail("partial");
+	if (lseek(fd, 4096, SEEK_SET) != 4096)
+		fail("seek");
+	pattern_write(fd, 52, 4096, 512);
+	{
+		unsigned char tail[100];
+
+		for (i = 0; i < 100; i++)
+			tail[i] = (unsigned char)(((15000 + i) * 31 + 53) & 0xff);
+		if (pwrite(fd, tail, sizeof(tail), 15000) != (ssize_t)sizeof(tail))
+			fail("pwrite");
+	}
+	close(fd);
+
+	say("CASE append\n");
+	for (i = 0; i < 3; i++) {
+		fd = open(VERSIONS_PATH "/append", O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
+		if (fd < 0)
+			fail("append");
+		pattern_write(fd, 61, (size_t)i * 1000, 1000);
+		close(fd);
+	}
+
+	say("CASE renamed\n");
+	make_file(VERSIONS_PATH "/target", 71, 2000);
+	make_file(VERSIONS_PATH "/target.new", 72, 2500);
+	if (rename(VERSIONS_PATH "/target.new", VERSIONS_PATH "/target"))
+		fail("rename over");
+	read_back(VERSIONS_PATH "/target", 2500);
+
+	say("CASE mapped\n");
+	fd = open(VERSIONS_PATH "/mapped", O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+	if (fd < 0 || ftruncate(fd, 8192))
+		fail("mapped");
+	map = mmap(NULL, 8192, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	if (map == MAP_FAILED)
+		fail("mmap");
+	for (i = 0; i < 8192; i++)
+		map[i] = (unsigned char)((i * 31 + 81) & 0xff);
+	if (msync(map, 8192, MS_SYNC) || munmap(map, 8192))
+		fail("msync");
+	close(fd);
+
+	say("CASE shared\n");
+	fd = create(VERSIONS_PATH "/shared");
+	child = fork();
+	if (child < 0)
+		fail("fork");
+	if (!child) {
+		unsigned char half[4096];
+
+		for (i = 0; i < 4096; i++)
+			half[i] = (unsigned char)((i * 31 + 91) & 0xff);
+		if (pwrite(fd, half, sizeof(half), 0) != (ssize_t)sizeof(half))
+			_exit(1);
+		_exit(0);
+	}
+	{
+		unsigned char half[4096];
+
+		for (i = 0; i < 4096; i++)
+			half[i] = (unsigned char)(((4096 + i) * 31 + 92) & 0xff);
+		if (pwrite(fd, half, sizeof(half), 4096) != (ssize_t)sizeof(half))
+			fail("shared");
+	}
+	wait_child(child);
+	close(fd);
+
+	/* Let the guest's hash worker finish before the run ends. */
+	nap(1500);
+	say("TRACER DONE\n");
+}
+
 /* One DNS query (A, recursion desired) for tick-INDEX.tracer.test. */
 static void dns_query(int index)
 {
@@ -367,10 +527,12 @@ int main(int argc, char **argv)
 		writes();
 	else if (argc >= 3 && !strcmp(argv[1], "slow"))
 		slow(atoi(argv[2]));
+	else if (argc >= 2 && !strcmp(argv[1], "versions"))
+		versions();
 	else if (argc >= 2 && !strcmp(argv[1], "exit0"))
 		say("TRACER DONE\n");
 	else {
-		say("usage: tracer-fixture writes|slow N|exit0\n");
+		say("usage: tracer-fixture writes|slow N|versions|exit0\n");
 		return 2;
 	}
 	return 0;

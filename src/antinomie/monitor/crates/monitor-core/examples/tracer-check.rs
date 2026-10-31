@@ -8,9 +8,10 @@
 //!   tracer-check reconnects BUNDLE NEW_DATA_DIR FIXTURE [COUNT]
 //!
 //! FIXTURE is the static `tests/monitor/tracer-fixture`. `record` boots one
-//! VM and makes four runs: `writes` as root (every written-file case), `slow`
-//! with a transport reconnect in its middle, and `exit0` as uid 1000 (named in
-//! the base) and as uid 65534 (not named). It
+//! VM and makes five runs: `writes` as root (every written-file case), `slow`
+//! with a transport reconnect in its middle, `exit0` as uid 1000 (named in
+//! the base) and as uid 65534 (not named), and `versions` (files whose
+//! intermediate version is the payload, checked by the Triage test). It
 //! stops the VM, checks the guest's records against the digests the fixture's
 //! patterns must have (computed here, not read from the guest) and prints a
 //! `RUN label=directory` line for each run; the ignored test
@@ -476,6 +477,12 @@ fn record(bundle: &str, data: &str, fixture: &str) -> Result<(), String> {
         d.finished(&user, 60)?;
         runs.push((label, d.run(&user).ok_or("run missing")?.clone()));
     }
+
+    // One file per case whose intermediate version is the one that matters;
+    // `recorded_tracer_triage` replays them from the recording.
+    let versions = d.launch(FIXTURE, &["versions"], 0)?;
+    d.finished(&versions, 180)?;
+    runs.push(("versions", d.run(&versions).ok_or("run missing")?.clone()));
 
     // The recordings are complete when the VM has stopped.
     d.command(Command::Stop)?;

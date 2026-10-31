@@ -129,7 +129,14 @@ fn recorded_tracer_triage() {
         .collect();
     // Nothing to check is not a pass: a run list without a run this test
     // knows (tracer-check failed before printing any) fails here.
-    const LABELS: [&str; 5] = ["writes", "reconnect", "user", "nobody", "legacy"];
+    const LABELS: [&str; 6] = [
+        "writes",
+        "reconnect",
+        "user",
+        "nobody",
+        "legacy",
+        "versions",
+    ];
     let unknown: Vec<_> = runs
         .keys()
         .filter(|label| !LABELS.contains(&label.as_str()))
@@ -147,10 +154,10 @@ fn recorded_tracer_triage() {
         );
     }
     let fixture = std::env::var("ANTINOMIE_TRACER_FIXTURE_SHA256").unwrap_or_default();
-    if runs.contains_key("writes") {
+    if runs.contains_key("writes") || runs.contains_key("versions") {
         assert!(
             fixture.len() == 64,
-            "the writes run needs ANTINOMIE_TRACER_FIXTURE_SHA256, got {fixture:?}"
+            "the writes and versions runs need ANTINOMIE_TRACER_FIXTURE_SHA256, got {fixture:?}"
         );
     }
 
@@ -366,6 +373,10 @@ fn recorded_tracer_triage() {
         );
     }
 
+    if let Some(directory) = runs.get("versions") {
+        versions(&scan(directory, true), &fixture);
+    }
+
     for (label, user) in [("user", "user"), ("nobody", "65534")] {
         let Some(directory) = runs.get(label) else {
             continue;
@@ -386,4 +397,217 @@ fn recorded_tracer_triage() {
     }
     let missed = MISSED.lock().unwrap();
     assert!(missed.is_empty(), "{}", missed.join("\n"));
+}
+
+/// The SHA-256 of `bytes`.
+fn sha(bytes: &[u8]) -> String {
+    antinomie_monitor_core::storage::sha256_hex(bytes)
+}
+
+/// `pattern(seed)` over `[from, from + len)`, as the fixture writes it.
+fn pattern(seed: u64, from: u64, len: u64) -> Vec<u8> {
+    (from..from + len).map(|i| (i * 31 + seed) as u8).collect()
+}
+
+/// The digest after every step of `file`'s history, from an empty start (the
+/// run created each of these files), with `None` where a byte is unknown.
+fn digests(file: &super::file_activity::FileActivity) -> Vec<Option<String>> {
+    use antinomie_monitor_core::file_reconstruct::{Reconstruction, Start};
+    let mut map = Reconstruction::new(Start::empty(), &file.timeline);
+    (0..=file.timeline.steps().len())
+        .map(|count| {
+            map.goto(count);
+            map.sha256().ok()
+        })
+        .collect()
+}
+
+/// The digest of `file` as it was when its first `kind` call happened.
+fn digest_at(
+    file: &super::file_activity::FileActivity,
+    kind: super::file_activity::Kind,
+) -> Option<String> {
+    use antinomie_monitor_core::file_reconstruct::{Reconstruction, Start};
+    let event = file.events.iter().find(|event| event.kind == kind)?;
+    let mut map = Reconstruction::new(Start::empty(), &file.timeline);
+    map.goto(map.steps_until(event.time));
+    map.sha256().ok()
+}
+
+/// The `versions` run: a file whose real payload is a version that does not
+/// survive the run, a file read in its middle version, partial overwrites,
+/// appends, a rename over a file, shared-mapping writes and two writers.
+/// Every version must be recoverable from the recording, the version that
+/// was executed or read must be the one shown at that call, and the files
+/// must stay listed after they were deleted or emptied.
+fn versions(found: &ArchiveScan, fixture: &str) {
+    let activity = &found.file_activity;
+    let file = |name: &str| {
+        let path = format!("/tmp/tracer-v/{name}");
+        activity
+            .files
+            .iter()
+            .filter(|file| file.path == path || file.names.contains(&path))
+            .collect::<Vec<_>>()
+    };
+    let has = |digests: &[Option<String>], wanted: &str| {
+        digests
+            .iter()
+            .any(|digest| digest.as_deref() == Some(wanted))
+    };
+    for name in [
+        "payload", "data", "partial", "append", "target", "mapped", "shared",
+    ] {
+        let found = file(name);
+        println!(
+            "VERSIONS {name}: {} file(s), steps {:?}",
+            found.len(),
+            found
+                .iter()
+                .map(|file| file.timeline.steps().len())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    // payload: decoy, the program (executed), decoy, deleted.
+    let payload = file("payload");
+    let (v1, v3) = (sha(&pattern(31, 0, 6000)), sha(&pattern(33, 0, 3000)));
+    let steps: Vec<_> = payload.iter().flat_map(|file| digests(file)).collect();
+    expect(
+        has(&steps, &v1),
+        "versions payload: v1 (decoy) recoverable".into(),
+    );
+    expect(
+        has(&steps, fixture),
+        "versions payload: v2 (the executed program) recoverable".into(),
+    );
+    expect(
+        has(&steps, &v3),
+        "versions payload: v3 (decoy) recoverable".into(),
+    );
+    let executed: Vec<_> = payload
+        .iter()
+        .filter_map(|file| digest_at(file, super::file_activity::Kind::Exec))
+        .collect();
+    expect(
+        executed.iter().any(|digest| digest == fixture),
+        format!("versions payload: the version shown at the exec is v2 ({executed:?})"),
+    );
+    expect(
+        payload.iter().any(|file| {
+            file.hashes
+                .iter()
+                .any(|hash| hash.moment == "exec image" && hash.sha256.as_deref() == Some(fixture))
+        }),
+        "versions payload: the guest's exec image hash is v2".into(),
+    );
+    expect(
+        payload.iter().any(|file| file.deleted),
+        "versions payload: listed as deleted, not dropped".into(),
+    );
+
+    // data: v1, v2 (read back), truncated to nothing.
+    let data = file("data");
+    let steps: Vec<_> = data.iter().flat_map(|file| digests(file)).collect();
+    let (d1, d2) = (sha(&pattern(41, 0, 4096)), sha(&pattern(42, 0, 4096)));
+    expect(has(&steps, &d1), "versions data: v1 recoverable".into());
+    expect(has(&steps, &d2), "versions data: v2 recoverable".into());
+    let read: Vec<_> = data
+        .iter()
+        .filter_map(|file| digest_at(file, super::file_activity::Kind::Read))
+        .collect();
+    expect(
+        read.contains(&d2),
+        format!("versions data: the version shown at the read is v2 ({read:?})"),
+    );
+    expect(
+        steps.last().cloned().flatten() == Some(sha(b"")),
+        format!("versions data: ends empty ({:?})", steps.last()),
+    );
+
+    // partial: the base with two pwrite ranges over it.
+    let mut partial = pattern(51, 0, 16384);
+    partial[4096..4608].copy_from_slice(&pattern(52, 4096, 512));
+    partial[15000..15100].copy_from_slice(&pattern(53, 15000, 100));
+    let steps: Vec<_> = file("partial")
+        .iter()
+        .flat_map(|file| digests(file))
+        .collect();
+    expect(
+        has(&steps, &sha(&pattern(51, 0, 16384))),
+        "versions partial: the first version recoverable".into(),
+    );
+    expect(
+        steps.last().cloned().flatten() == Some(sha(&partial)),
+        "versions partial: the pwrites land at their offsets".into(),
+    );
+
+    // append: three appends end to end.
+    let steps: Vec<_> = file("append")
+        .iter()
+        .flat_map(|file| digests(file))
+        .collect();
+    expect(
+        steps.last().cloned().flatten() == Some(sha(&pattern(61, 0, 3000))),
+        format!(
+            "versions append: the appends end to end ({:?})",
+            steps.last()
+        ),
+    );
+    expect(
+        has(&steps, &sha(&pattern(61, 0, 1000))),
+        "versions append: the first append recoverable".into(),
+    );
+
+    // renamed: the old target and the new file renamed over it.
+    let target = file("target");
+    let steps: Vec<_> = target.iter().flat_map(|file| digests(file)).collect();
+    expect(
+        has(&steps, &sha(&pattern(71, 0, 2000))),
+        "versions renamed: the replaced target recoverable".into(),
+    );
+    expect(
+        has(&steps, &sha(&pattern(72, 0, 2500))),
+        "versions renamed: the file renamed over it recoverable".into(),
+    );
+    expect(
+        target.iter().any(|file| {
+            file.path.ends_with("/target.new")
+                || file.names.iter().any(|name| name.ends_with("/target.new"))
+        }),
+        "versions renamed: the new file keeps both names".into(),
+    );
+
+    // mapped: the pages the guest copied at msync.
+    let steps: Vec<_> = file("mapped")
+        .iter()
+        .flat_map(|file| digests(file))
+        .collect();
+    expect(
+        has(&steps, &sha(&pattern(81, 0, 8192))),
+        format!(
+            "versions mapped: the mapping's pages recoverable ({:?})",
+            steps.last()
+        ),
+    );
+
+    // shared: a child and its parent wrote one half each.
+    let mut both = pattern(91, 0, 4096);
+    both.extend(pattern(92, 4096, 4096));
+    let shared = file("shared");
+    let steps: Vec<_> = shared.iter().flat_map(|file| digests(file)).collect();
+    expect(
+        steps.last().cloned().flatten() == Some(sha(&both)),
+        "versions shared: both writers' halves in place".into(),
+    );
+    let writers: std::collections::BTreeSet<_> = shared
+        .iter()
+        .flat_map(|file| &file.events)
+        .filter(|event| event.kind == super::file_activity::Kind::Write)
+        .map(|event| event.process)
+        .collect();
+    expect(
+        writers.len() >= 2,
+        format!("versions shared: two writing processes ({writers:?})"),
+    );
 }
