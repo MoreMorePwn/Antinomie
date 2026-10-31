@@ -443,13 +443,13 @@ impl MonitorApp {
                 let analyze = ui
                     .add_enabled(
                         ready && !uploading && self.exec.analysis.enabled && program_ready && valid,
-                        egui::Button::new("Analyze Only"),
+                        egui::Button::new("Analyze only"),
                     )
                     .on_hover_text("Acquire the file and run static analysis without launching it")
                     .on_disabled_hover_text(if uploading {
                         "Upload the file first"
                     } else {
-                        "Needs Static Analysis and an executable"
+                        "Needs Static analysis and an executable"
                     });
                 analyze_clicked = analyze.clicked();
                 cancel = ui.button("Cancel").clicked();

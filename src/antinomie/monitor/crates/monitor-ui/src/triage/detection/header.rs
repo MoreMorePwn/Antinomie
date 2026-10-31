@@ -12,7 +12,7 @@ pub(super) fn rule_set_title(sets: &[EngineSet]) -> String {
         .map(|set| set.rules)
         .sum();
     format!(
-        "Rule sets: {enabled} enabled · {} {}",
+        "Rule packs: {enabled} enabled · {} {}",
         engine::group_digits(rules),
         if rules == 1 { "rule" } else { "rules" }
     )
@@ -143,7 +143,7 @@ impl View {
     pub(super) fn rule_sets(&mut self, ui: &mut egui::Ui, index: usize) {
         let loading = self.registry_rx.is_some() && self.sets[index].is_empty();
         let title = if loading {
-            "Rule sets: loading…".to_owned()
+            "Rule packs: loading…".to_owned()
         } else {
             rule_set_title(&self.sets[index])
         };
@@ -170,7 +170,7 @@ impl View {
                         .frame(false)
                         .truncate(),
                     )
-                    .on_hover_text("Show or hide the installed rule sets")
+                    .on_hover_text("Show or hide the installed rule packs")
                     .clicked();
             },
             |ui| manager = ui.button("Detection rules").clicked(),
@@ -658,7 +658,7 @@ mod tests {
                 source: String::new(),
             },
         ];
-        assert_eq!(rule_set_title(&sets), "Rule sets: 2 enabled · 2,095 rules");
+        assert_eq!(rule_set_title(&sets), "Rule packs: 2 enabled · 2,095 rules");
         assert_eq!(limitation_line(&State::Complete), None);
         assert_eq!(
             limitation_line(&State::Partial),
@@ -675,7 +675,7 @@ mod tests {
         view.phase[0] = "idle".into();
         let joined = panel_text(&mut view);
         assert!(
-            joined.contains("Rule sets: 1 enabled · 2,094 rules"),
+            joined.contains("Rule packs: 1 enabled · 2,094 rules"),
             "{joined}"
         );
         assert!(joined.contains("1 matched rule"), "{joined}");
@@ -870,7 +870,7 @@ mod tests {
             .iter()
             .any(|(text, _)| text.contains("objects evaluated")));
         // The rule-set title and the manager button share a row.
-        let sets = rect_of(&texts, "Rule sets");
+        let sets = rect_of(&texts, "Rule packs");
         let manager = rect_of(&texts, "Detection rules");
         assert!((sets.center().y - manager.center().y).abs() < 6.0);
     }

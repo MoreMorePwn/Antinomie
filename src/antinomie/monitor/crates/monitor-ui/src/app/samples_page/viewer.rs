@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The file viewer: a window over the Samples page that shows one archived
-//! sample 4 KiB at a time, like Static Analysis › Content, plus a Strings
+//! sample 4 KiB at a time, like Static analysis › Content, plus a Strings
 //! format that lists the printable runs of the whole file with their offsets.
 //! It only reads the archive; it never runs or unpacks anything.
 use super::*;
 use crate::analysis::workspace::content::{parse_offset, render, Format};
 use std::sync::Arc;
 
-/// One page, as Static Analysis › Content reads it.
+/// One page, as Static analysis › Content reads it.
 const PAGE: u64 = 4096;
 /// The shortest printable run Strings lists.
 const MIN_RUN: usize = 5;

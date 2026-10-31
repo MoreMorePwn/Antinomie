@@ -72,7 +72,9 @@ fn attribution(author: &str) -> &str {
 
 fn evidence_note(key: &str) -> String {
     match key {
-        "wait:sample" => "Waiting for the verified sample.".into(),
+        "wait:sample" => {
+            "The scan starts once the sample file is verified (hash check pending).".into()
+        }
         "wait:pcap" => "Waiting for the PCAP segment to finish.".into(),
         "wait:journal" => "Waiting for the run to finish its event journal.".into(),
         "wait:digest" => "Hashing retained evidence before the scan.".into(),
@@ -1213,7 +1215,7 @@ mod tests {
         assert_eq!(
             view.sets[0].len(),
             1,
-            "registry and visible rule sets must remain consistent"
+            "registry and visible rule packs must remain consistent"
         );
         assert!(view.sets[0][0].enabled);
         assert!(

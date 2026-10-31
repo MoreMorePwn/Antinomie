@@ -771,7 +771,7 @@ pub(super) fn process_tree_tinted(
         ui.colored_label(
             theme::muted(),
             format!(
-                "{} observed of {}",
+                "{} of {} seen in the capture",
                 processes.iter().filter(|p| p.packets > 0).count(),
                 processes.len()
             ),

@@ -24,7 +24,7 @@ impl MonitorApp {
         if !run.request.capture_network {
             crate::activity::warning(
                 ui,
-                "Network capture was off for this run, so it has no network evidence.",
+                "Network capture was off for this run. Turn on Capture network in Run program to record one.",
             );
         } else if owned_pcap.is_none() {
             crate::activity::warning(ui, "No network capture was saved for this run.");

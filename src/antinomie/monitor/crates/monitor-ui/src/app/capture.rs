@@ -64,7 +64,7 @@ impl MonitorApp {
             .as_ref()
             .is_some_and(|kernel| kernel.revision.is_some_and(|revision| revision >= 16))
         {
-            Some("Live core capture needs a guest base with revision 16 or newer.")
+            Some("Live core capture needs a newer guest base. Rebuild or download a newer base image (Library > Base images).")
         } else if self.pending_core.is_some()
             || self.snapshot.process_cores.iter().any(|capture| {
                 Some(&capture.vm_id) == self.snapshot.active_vm.as_ref()

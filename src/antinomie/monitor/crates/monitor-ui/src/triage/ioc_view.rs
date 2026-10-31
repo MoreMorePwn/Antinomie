@@ -716,7 +716,7 @@ impl View {
         match &ioc.capture {
             Capture::Read => {}
             Capture::Off => {
-                ui.colored_label(theme::muted(), "Network capture was off for this run.");
+                ui.colored_label(theme::muted(), "Network capture was off for this run. Turn on Capture network in Run program to record one.");
             }
             Capture::Failed(error) => {
                 crate::activity::warning(

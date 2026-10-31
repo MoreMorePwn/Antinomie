@@ -184,7 +184,7 @@ impl TriageView {
         if capture_missing && self.scan_rx.is_none() {
             let off = input.pcap.is_none();
             if off {
-                ui.colored_label(theme::muted(), "Network capture was off for this run.");
+                ui.colored_label(theme::muted(), "Network capture was off for this run. Turn on Capture network in Run program to record one.");
             } else if let Some(warning) = self.scan.as_ref().and_then(|s| s.network_warning.clone())
             {
                 crate::activity::warning(ui, warning);

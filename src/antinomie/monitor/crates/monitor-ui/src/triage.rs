@@ -880,7 +880,7 @@ pub(crate) fn no_run(ui: &mut egui::Ui) {
             steps_title: "To triage a run",
             steps: &[
                 "Start the VM.",
-                "Open Run → Launch program.",
+                "Open Run → Run program.",
                 "Select the run in the list above or in Run History.",
             ],
         },

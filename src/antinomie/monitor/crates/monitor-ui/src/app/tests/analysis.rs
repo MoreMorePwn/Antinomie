@@ -98,7 +98,7 @@ fn run_setup_keeps_final_actions_visible_and_dispatches_a_selection_snapshot() {
         };
         let run_rect = action(" Run");
         assert!(run_rect.bottom() < size.y);
-        let _ = action("Analyze Only");
+        let _ = action("Analyze only");
         let (run_rect, analyze_rect) = app.launch_action_rects.unwrap();
         assert!((analyze_rect.center().y - run_rect.center().y).abs() < 1.0);
         assert!(
@@ -421,7 +421,7 @@ fn analyze_only_and_cancel_do_not_launch_or_stop_a_program() {
     let output = render(&mut app, &ctx, size);
     let target = texts(&output)
         .into_iter()
-        .find(|(text, _)| text == "Analyze Only")
+        .find(|(text, _)| text == "Analyze only")
         .unwrap()
         .1
         .center();

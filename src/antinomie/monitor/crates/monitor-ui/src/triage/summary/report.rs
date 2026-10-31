@@ -133,11 +133,7 @@ fn activity(ui: &mut egui::Ui, scan: &ArchiveScan) -> Option<Destination> {
         .show(ui, |ui| {
             for (title, count, destination) in [
                 ("Syscalls", scan.counts.calls, Destination::Tasks),
-                (
-                    "Observed task identities",
-                    scan.process.len() as u64,
-                    Destination::Tasks,
-                ),
+                ("Processes", scan.process.len() as u64, Destination::Tasks),
                 (
                     "Suspicious observations",
                     scan.counts.findings,

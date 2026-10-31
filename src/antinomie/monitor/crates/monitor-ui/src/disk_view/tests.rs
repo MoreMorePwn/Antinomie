@@ -874,7 +874,7 @@ fn selecting_a_file_fills_the_details() {
         "Extract to view",
         "Save to host…",
         "Open with…",
-        "Hand to Static Analysis",
+        "Hand to Static analysis",
         "Compute hashes",
     ] {
         assert!(has(&texts, expected), "{expected:?} in {texts:?}");
@@ -932,7 +932,7 @@ fn the_details_buttons_queue_extractions_with_their_intent() {
         ("Extract to view", Intent::View),
         ("Save to host…", Intent::Save),
         ("Open with…", Intent::OpenWith),
-        ("Hand to Static Analysis", Intent::Analyze),
+        ("Hand to Static analysis", Intent::Analyze),
     ] {
         view.extraction.running.clear();
         view.search_queue.clear();
@@ -974,7 +974,7 @@ fn hand_to_static_analysis_needs_an_elf_and_extract_to_view_a_small_file() {
         entry("notes", DiskEntryKind::File, 100, 0o644),
         false,
     );
-    scene.click_details(&mut view, &ctx, "Hand to Static Analysis");
+    scene.click_details(&mut view, &ctx, "Hand to Static analysis");
     assert!(
         view.search_queue.is_empty(),
         "a non-ELF file is not handed over"

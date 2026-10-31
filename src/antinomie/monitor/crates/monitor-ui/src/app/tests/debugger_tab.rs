@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! The Debugger tab beside Static Analysis: when it exists, its folded panes,
+//! The Debugger tab beside Static analysis: when it exists, its folded panes,
 //! the one-controller chip and the gdb console.
 use super::*;
 use crate::app::debugger::{
@@ -181,7 +181,7 @@ fn attaching_or_debug_on_start_opens_and_focuses_the_tab_and_the_end_closes_it()
     assert_eq!(
         app.layout.debugger_position(),
         Some((Some(Panel::StaticAnalysis), true)),
-        "right after Static Analysis, and showing"
+        "right after Static analysis, and showing"
     );
     // Detach, stop the run or stop the VM: the session goes, so does the tab.
     app.snapshot.debug = None;

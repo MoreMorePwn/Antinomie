@@ -481,7 +481,7 @@ fn core_picker_captures_the_complete_identity_and_requires_supported_selected_vm
     assert!(app
         .manual_core_unavailable()
         .unwrap()
-        .contains("revision 16"));
+        .contains("newer guest base"));
     app.snapshot.guest_kernel.as_mut().unwrap().revision = Some(16);
     let identity = antinomie_monitor_core::GuestProcessIdentity {
         boot_id: "boot".into(),
