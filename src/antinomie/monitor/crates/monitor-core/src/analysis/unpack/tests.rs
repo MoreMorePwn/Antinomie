@@ -456,3 +456,15 @@ fn layer_rows_with_another_file_name_or_a_bad_hash_are_rejected() {
     );
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn an_elf_header_cut_short_is_not_packed_and_does_not_panic() {
+    // Found by fuzzing: five bytes of an ELF header indexed past the end.
+    for len in 0..64 {
+        let mut file = vec![0x7f, b'E', b'L', b'F', 2, 1, 1, 0];
+        file.resize(len, 0);
+        assert!(detect(&file).is_none(), "{len}");
+    }
+    assert!(detect(b"\x7fELF").is_none());
+    assert!(detect(b"\x7f\x45\x4c\x46\x02").is_none());
+}

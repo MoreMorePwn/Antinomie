@@ -58,10 +58,10 @@ fn u32_at(bytes: &[u8], at: usize) -> Option<u32> {
 
 /// Offset of `l_info` in a little-endian ELF: right after the program headers.
 fn l_info_offset(bytes: &[u8]) -> Option<usize> {
-    if bytes.get(..4)? != b"\x7fELF" || bytes[5] != 1 {
+    if bytes.get(..4)? != b"\x7fELF" || *bytes.get(5)? != 1 {
         return None;
     }
-    let (offset, size, count) = match bytes[4] {
+    let (offset, size, count) = match *bytes.get(4)? {
         2 => (
             usize::try_from(u64::from_le_bytes(bytes.get(0x20..0x28)?.try_into().ok()?)).ok()?,
             u16_at(bytes, 0x36)?,
