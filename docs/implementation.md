@@ -3017,6 +3017,53 @@ card with a `3c:fd:fe` address, Intel ICH9 USB controllers (8086:2934-2936,
 293a), the host's 16 MiB L3 and a `LENOVO` ACPI OEM ID, and records a
 guest-run without loss (3,456 packets, none dropped).
 
+## Parser fuzzing (0.8.0)
+
+The host parses bytes a sample controls: its own file, the guest disk, guest
+network frames and captures, process cores, kernel records and the replies
+the guest sends. `src/antinomie/monitor/fuzz/` is a cargo-fuzz crate (not a
+workspace member, nightly toolchain only for fuzzing) with twelve targets; each
+calls one function of `monitor-core/src/fuzz_entry.rs`, which exists only with
+the off-by-default feature `fuzzing`. A parser that is private is reached
+through a one-line `#[cfg(feature = "fuzzing")]` shim in its own module, so a
+normal build contains none of it.
+
+| Target | Parser reached |
+|---|---|
+| `antt_assembler` | `parse_packet`, `Assembler::ingest` and the stored-range reader (packets re-shaped to valid headers unless a selector bit asks for raw bytes) |
+| `analysis_section` | the worker's in-process checks (object headers and sections, strings, entropy, identification, iced-x86 disassembly, UPX detection), report bounds and validation |
+| `disk_image` | qcow2 and ext4 through the sandboxed reader's requests (patches over a valid base disk) |
+| `partition` | MBR and GPT probing |
+| `core_dump` | `CoreDump::open`, virtual reads, disassembly, sparse core plan |
+| `typed_fields` | every typed-field decoder |
+| `route_frames` | gateway Ethernet, ARP, IPv4, TCP, UDP, DNS and DHCP parsing |
+| `pcap`, `pdml` | the capture page reader, TShark's PDML tree |
+| `debug_wire`, `control_wire` | guest debug and control reply decoders |
+| `tool_text` | FLOSS, binwalk and capa output, ThreatFox/URLhaus/MalwareBazaar replies, release and catalog documents |
+
+To run them (from `src/antinomie/monitor/fuzz`, once per machine
+`rustup toolchain install nightly --profile minimal` and
+`cargo install cargo-fuzz --locked`):
+
+```
+export CARGO_TARGET_DIR=$HOME/fuzz-scratch/target ANTINOMIE_FUZZ_DISKS=/dev/shm/antinomie-fuzz-bases
+./make-bases.sh                              # base disks for disk_image
+cargo +nightly fuzz build
+python3 make-seeds.py "$HOME/fuzz-scratch/seeds"   # benign seeds from the repository fixtures
+mkdir -p ~/fuzz-scratch/corpus/analysis_section
+cp -r seeds/analysis_section/. ~/fuzz-scratch/corpus/analysis_section/      # committed, minimised seeds
+nice -n 10 "$CARGO_TARGET_DIR"/x86_64-unknown-linux-gnu/release/analysis_section \
+    -max_total_time=1800 -max_len=65536 -rss_limit_mb=2048 -timeout=10 \
+    ~/fuzz-scratch/corpus/analysis_section
+```
+
+Corpora and crash artifacts stay out of git; only minimised seeds
+(`fuzz/seeds/<target>/`, under 1 MB in all) are committed. Set
+`ASAN_OPTIONS=detect_leaks=0` to ignore leak reports at exit. Samples are
+never used as seeds: the seeds are fixtures of this repository and generated
+bytes. A finding gets a regression test in the crate's normal tests and a fix
+of the parser, never a limit that hides it.
+
 ## Kernel BTF without the recorder (0.8.0)
 
 Guest series 0019; contract revision unchanged. Debian's 6.12.94-1 kernel has
