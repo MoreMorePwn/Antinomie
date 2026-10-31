@@ -258,7 +258,7 @@ impl MonitorApp {
                     .max_scroll_height(height)
                     .min_scrolled_height(0.0);
                 if let Some(index) = navigation { table = table.scroll_to_row(index, Some(egui::Align::Center)); }
-                table.header(28.0, |mut header| {
+                table.header(crate::widgets::table::header_height(self.settings.font_size), |mut header| {
                         for (column, name) in ["Start time", "Executable", "Sample", "Arguments", "Tree status", "Root exit"].into_iter().enumerate() {
                             if !widths.wide && (column == 2 || column == 3) { continue; }
                             header.col(|ui| crate::table_sort::header(ui, "run_history", column, name));
@@ -266,7 +266,7 @@ impl MonitorApp {
                         header.col(|ui| crate::widgets::table::head(ui, ""));
                     })
                     .body(|body| {
-                        body.rows(self.settings.font_size + 16.0, runs.len(), |mut row| {
+                        body.rows(crate::widgets::table::list_row_height(self.settings.font_size), runs.len(), |mut row| {
                             let run = &runs[row.index()];
                             row.set_selected(self.selected_run.as_ref() == Some(&run.id));
                             row.col(|ui| { ui.add(egui::Label::new(crate::time_format::unix_ms(run.started_ms)).truncate().selectable(false).sense(egui::Sense::hover())); });

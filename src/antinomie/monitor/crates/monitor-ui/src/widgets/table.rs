@@ -34,6 +34,13 @@ pub fn header_height(font_size: f32) -> f32 {
     theme::row_height(font_size) + 4.0
 }
 
+/// Height of one body row of a list table (Samples, Run History, a sample's
+/// Runs): a little taller than a data table's rows, because a cell holds a
+/// name or a chip.
+pub fn list_row_height(font_size: f32) -> f32 {
+    row_height(font_size) + 8.0
+}
+
 /// How a cell's text is set.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Cell {

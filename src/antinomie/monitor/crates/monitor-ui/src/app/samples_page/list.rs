@@ -291,12 +291,12 @@ impl MonitorApp {
             .sense(egui::Sense::click())
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
             .striped(true)
-            .column(Column::initial(180.0).at_least(110.0).resizable(true))
-            .column(Column::remainder().at_least(140.0))
-            .column(Column::initial(190.0).at_least(80.0).resizable(true))
+            .column(Column::initial(140.0).at_least(110.0).resizable(true))
+            .column(Column::remainder().at_least(120.0))
+            .column(Column::initial(150.0).at_least(80.0).resizable(true))
             .column(Column::exact(72.0))
             .column(Column::exact(100.0))
-            .column(Column::initial(180.0).at_least(120.0).resizable(true))
+            .column(Column::initial(250.0).at_least(120.0).resizable(true))
             .column(Column::exact(104.0))
             .max_scroll_height(height)
             .min_scrolled_height(0.0)
@@ -326,7 +326,7 @@ impl MonitorApp {
             })
             .body(|body| {
                 body.rows(
-                    table::row_height(font) + 8.0,
+                    table::list_row_height(font),
                     shown.len(),
                     |mut table_row| {
                         let row = &page.rows[shown[order[table_row.index()]]];

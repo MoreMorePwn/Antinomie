@@ -370,7 +370,7 @@ impl MonitorApp {
                     .column(Column::exact(72.0))
                     .max_scroll_height(height)
                     .min_scrolled_height(0.0)
-                    .header(28.0, |mut header| {
+                    .header(table::header_height(font), |mut header| {
                         for (column, name) in [
                             "Start time",
                             "Executable",
@@ -389,7 +389,7 @@ impl MonitorApp {
                         header.col(|ui| table::head(ui, ""));
                     })
                     .body(|body| {
-                        body.rows(font + 16.0, shown.len(), |mut row| {
+                        body.rows(table::list_row_height(font), shown.len(), |mut row| {
                             let entry = shown[order[row.index()]];
                             let run = &entry.run;
                             row.set_selected(state.selected.as_deref() == Some(run.id.as_str()));

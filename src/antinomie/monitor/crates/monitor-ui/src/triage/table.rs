@@ -246,7 +246,8 @@ fn table_rows_with(
             + 16.0)
             .max(ui.available_width()),
     );
-    let row_height = ui.text_style_height(&egui::TextStyle::Body).max(14.0) + 8.0;
+    let font = ui.text_style_height(&egui::TextStyle::Body).max(14.0);
+    let row_height = crate::widgets::table::row_height(font);
     let selected_id = egui::Id::new(("triage-selected-row", id));
     let selected = ui.ctx().data(|data| data.get_temp::<String>(selected_id));
     let filter_id = ui
@@ -286,7 +287,7 @@ fn table_rows_with(
         };
     }
     builder
-        .header(row_height, |mut header| {
+        .header(crate::widgets::table::header_height(font), |mut header| {
             for (column, title) in headers.iter().enumerate() {
                 header.col(|ui| {
                     crate::widgets::table::aligned(
@@ -506,7 +507,8 @@ fn finding_table_rows(
     let filter_id = ui
         .ctx()
         .data(|data| data.get_temp::<egui::Id>(egui::Id::new(("triage-filter-target", id))));
-    let row_height = ui.text_style_height(&egui::TextStyle::Body).max(14.0) + 8.0;
+    let font = ui.text_style_height(&egui::TextStyle::Body).max(14.0);
+    let row_height = crate::widgets::table::row_height(font);
     let max_height = ui.available_height().max(60.0);
     crate::widgets::table::begin(ui);
     let mut builder = TableBuilder::new(ui)
@@ -532,7 +534,7 @@ fn finding_table_rows(
         builder = builder.scroll_to_row(shown, Some(egui::Align::Center));
     }
     builder
-        .header(row_height, |mut header| {
+        .header(crate::widgets::table::header_height(font), |mut header| {
             // A header sorts by the stored column it shows, so the sort the
             // query asks for needs no translation.
             for &column in &shown {
