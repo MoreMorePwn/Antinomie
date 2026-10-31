@@ -938,3 +938,36 @@ copies like the entry's (they never change residency, `mincore()` included),
 one byte per page to check a buffer and then the copy, and only for calls
 whose entry found a non-resident page. A successful exec with a non-resident
 path keeps a copy of the path (at most `PATH_MAX`) until the call returns.
+
+## 23. Revision 18: file positions, copy operands, shared mappings and typed layouts (0.8.0)
+
+Revision 18 is additive: a host that does not know a record shows it as an
+unknown field, and an older guest simply has none of them. Revisions change
+only with a minor release (`revisions.json`).
+
+* **File positions (patch 16).** The Exit of a read or write family call on a
+  regular file or block device carries `file.position` (24 bytes): where the
+  call began in the file, how much it moved, and for a write the order in which
+  the file system applied it (a number taken under the file's inode lock).
+* **Copy operands (patch 16).** sendfile, splice, copy_file_range,
+  FICLONE/FICLONERANGE and fallocate carry `file.copy`: both files, both
+  offsets, the length, the destination's size after the call and the
+  fallocate mode. When the source is a splice's pipe, `file.copy.data` holds the
+  bytes the destination got (at most 1 MiB per call).
+* **Shared file mappings (patch 17).** The pages a traced task stored into a
+  `MAP_SHARED` file mapping are recorded where the kernel consumes the page
+  table entry's dirty bit: `lifecycle.file_mapped` (96 bytes per range: the
+  file, the range, the size, the time, a write order and why bytes are missing)
+  with the page contents as `lifecycle.file_mapped.data`, at most 4 MiB and 64
+  ranges per call; one lifecycle event before the call's Exit, or before
+  `lifecycle.task_exit` for the address space a task drops when it exits.
+  Each page is its state at that moment, not every store.
+* **Typed layouts (patch 18).** getgroups and setgroups name their array
+  `gid_t[]`, getdents and getdents64 their records `linux_dirent[]` and
+  `linux_dirent64[]`, modify_ldt's reads `desc_struct[]` (x86-64 only), and the
+  netfilter set option `IPT_SO_SET_ADD_COUNTERS` (and its IPv6 twin) is labelled
+  `xt_counters_info`. The bytes do not change; a host that does not know a
+  layout shows them as bytes.
+
+The conformance suite checks each (`tests/monitor/conformance/README.md`), and
+`docs/implementation.md` describes the host side.
