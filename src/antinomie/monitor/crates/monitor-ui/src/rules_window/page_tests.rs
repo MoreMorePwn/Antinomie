@@ -428,11 +428,15 @@ fn native_regex_tab_fixture() {
         Box::new(move |cc| {
             crate::theme::install(&cc.egui_ctx);
             crate::theme::apply_theme(&cc.egui_ctx, theme_choice);
+            if let Ok(size) = var("ANTINOMIE_QA_FONT").parse::<f32>() {
+                crate::theme::text_size(&cc.egui_ctx, size);
+            }
             Ok(Box::new(App {
                 model,
                 dir,
                 outbound: false,
-                deadline: std::time::Instant::now() + Duration::from_secs(12),
+                deadline: std::time::Instant::now()
+                    + Duration::from_secs(var("ANTINOMIE_QA_SECONDS").parse().unwrap_or(12)),
             }))
         }),
     )
@@ -521,11 +525,15 @@ fn native_rules_pack_fixture() {
         Box::new(move |cc| {
             crate::theme::install(&cc.egui_ctx);
             crate::theme::apply_theme(&cc.egui_ctx, theme_choice);
+            if let Ok(size) = var("ANTINOMIE_QA_FONT").parse::<f32>() {
+                crate::theme::text_size(&cc.egui_ctx, size);
+            }
             Ok(Box::new(App {
                 model,
                 dir,
                 outbound,
-                deadline: std::time::Instant::now() + Duration::from_secs(12),
+                deadline: std::time::Instant::now()
+                    + Duration::from_secs(var("ANTINOMIE_QA_SECONDS").parse().unwrap_or(12)),
                 _fixture: fixture,
             }))
         }),

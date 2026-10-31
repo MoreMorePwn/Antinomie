@@ -371,7 +371,16 @@ impl View {
                                     indicator.value.clone()
                                 };
                                 let sub = if ty == Type::File {
-                                    format!("{} · {}", indicator.path, indicator.roles.join(", "))
+                                    let mut sub = format!(
+                                        "{} · {}",
+                                        indicator.path,
+                                        indicator.roles.join(", ")
+                                    );
+                                    // Where its hash came from, or why it has none.
+                                    if let Some(note) = &indicator.hash_note {
+                                        sub.push_str(&format!(" · {note}"));
+                                    }
+                                    sub
                                 } else {
                                     indicator.sub.clone()
                                 };

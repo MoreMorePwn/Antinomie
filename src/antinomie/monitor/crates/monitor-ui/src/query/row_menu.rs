@@ -297,6 +297,17 @@ pub(crate) enum Draft<'a> {
     Text(&'a mut String),
 }
 
+#[cfg(test)]
+fn row_menu_for_test(ui: &mut egui::Ui, filter: &mut String, row: &[(&str, RowValue)]) {
+    menu(
+        ui,
+        Id::new("test-menu"),
+        Draft::Text(filter),
+        row,
+        Extras::default(),
+    );
+}
+
 /// The row's menu with its filter actions on the clicked cell.
 pub(crate) fn menu(
     ui: &mut egui::Ui,
@@ -500,5 +511,66 @@ mod tests {
             "b.name"
         );
         assert_eq!(field_of(&row, None, Some("same"), &[]).unwrap().0, "a.id");
+    }
+
+    /// A right click opens one short menu on the clicked cell, however many
+    /// fields the row has, and it stays on the screen.
+    #[test]
+    fn a_right_click_opens_a_short_menu_that_fits_the_screen() {
+        use crate::table_sort::testing::frame;
+        let ctx = egui::Context::default();
+        let many: Vec<(&'static str, RowValue)> =
+            std::iter::once(("entry.name", RowValue::Text("dropper".into())))
+                .chain((0..60).map(|index| {
+                    let name: &'static str = Box::leak(format!("field.n{index}").into_boxed_str());
+                    (name, RowValue::Number(index))
+                }))
+                .collect();
+        let mut filter = String::new();
+        let mut show = |ui: &mut egui::Ui| {
+            let head = egui::Rect::from_min_size(egui::pos2(20.0, 10.0), egui::vec2(160.0, 20.0));
+            ui.scope_builder(egui::UiBuilder::new().max_rect(head), |ui| {
+                note_head(ui, "Name")
+            });
+            let cell = egui::Rect::from_min_size(egui::pos2(20.0, 40.0), egui::vec2(160.0, 24.0));
+            let response = ui.put(
+                cell,
+                egui::Label::new("dropper").sense(egui::Sense::click()),
+            );
+            response.context_menu(|ui| {
+                row_menu_for_test(ui, &mut filter, &many);
+            });
+        };
+        let pos = egui::pos2(60.0, 52.0);
+        let button = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Secondary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for _ in 0..2 {
+            frame(&ctx, vec![], &mut show);
+        }
+        frame(&ctx, vec![egui::Event::PointerMoved(pos)], &mut show);
+        frame(&ctx, vec![button(true)], &mut show);
+        frame(&ctx, vec![button(false)], &mut show);
+        let texts = frame(&ctx, vec![], &mut show);
+        let find = |text: &str| texts.iter().any(|(painted, _)| painted.starts_with(text));
+        assert!(find("entry.name = dropper"), "{texts:?}");
+        assert!(find("Apply as filter") && find("Add AND") && find("Add OR") && find("Exclude"));
+        assert!(find("Copy value") && find("Copy row"));
+        assert!(
+            !find("Filter by field"),
+            "the menu does not list the row's fields"
+        );
+        assert!(!find("field.n5"), "{texts:?}");
+        let lowest = texts
+            .iter()
+            .map(|(_, rect)| rect.bottom())
+            .fold(0.0_f32, f32::max);
+        assert!(
+            lowest < 400.0,
+            "the menu ends at {lowest}, past the 400 px screen"
+        );
     }
 }

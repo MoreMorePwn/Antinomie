@@ -182,7 +182,9 @@ impl MonitorApp {
             }
             RefKind::Call => {
                 if let Some(entry) = run {
-                    self.open_sample_run(&entry.run, crate::workspace::Panel::Trace, None);
+                    // The call by its id, when the note kept one.
+                    let filter = reference.number().map(|call| format!("call.id == {call}"));
+                    self.open_sample_run(&entry.run, crate::workspace::Panel::Trace, filter);
                 }
                 None
             }

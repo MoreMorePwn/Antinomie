@@ -581,10 +581,14 @@ fn string_table(
             builder = builder.column(if index == wide {
                 egui_extras::Column::remainder().at_least(keep).clip(true)
             } else {
-                egui_extras::Column::exact(widths[index]).clip(true)
+                egui_extras::Column::initial(widths[index])
+                    .at_least(48.0)
+                    .clip(true)
             });
         }
+        // Like the Samples list: the columns can be dragged.
         builder
+            .resizable(true)
             .header(table::header_height(font), |mut header| {
                 for title in titles {
                     header.col(|ui| {
