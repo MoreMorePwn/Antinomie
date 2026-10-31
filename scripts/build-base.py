@@ -9,13 +9,19 @@ Debian 13 container (--container) and prints "::stage NAME" lines for the app.
 
     build-base.py --job JOB.json --inputs DIR --work DIR --output DIR
                   [--kernel-cache FILE] [--image-cache FILE] [--ccache DIR]
-                  [--container auto|podman|docker]
+                  [--container auto|podman|docker] [--toolchain-chroot DIR]
 
 --container runs this same script in the container builder: the image built from
 src/antinomie/packaging/container/Dockerfile (Debian 13 pinned by digest, a
 package snapshot and exact versions), tagged antinomie-builder:<12 hex of that
 file's SHA-256>. auto takes rootless Podman first, then Docker (whose socket
 gives root-equivalent access). The container is removed when the build ends.
+
+--toolchain-chroot lets a native Debian Minimal build on a host whose compiler
+and linker are not Debian 13's: the kernel is unpacked, patched and compiled in
+a rootless Debian 13 chroot in DIR (scripts/toolchain_chroot.py: mmdebstrap in
+unshare mode, the Dockerfile's snapshot and exact versions, created once and
+reused). A host that already has Debian 13's toolchain ignores it.
 
 The kernel depends only on the patch series, the kernel build script and the
 profile, never on the image answers. With --kernel-cache, a matching cached
@@ -41,6 +47,7 @@ cached for a BusyBox build serves it too.
 # Copyright (c) 2026 MikiMiku (MoreMorePwn)
 import argparse
 import hashlib
+import importlib.util
 import io
 import json
 import os
@@ -53,6 +60,8 @@ import sys
 import tarfile
 
 KIT = Path(__file__).resolve().parent.parent
+# The rootless toolchain chroot a native build compiles in, when it has one.
+SANDBOX = None
 ADAPTER = KIT / "src/antinomie/packaging/debian-6.12.94-1-trixie/adapter.conf"
 SERIES = KIT / "src/antinomie/core/6.12"
 DEBIAN_ANSWERS = {"name", "hostname", "locale", "keyboard_layout", "keyboard_variant",
@@ -75,6 +84,23 @@ def stage(name):
 def run(*args, **kwargs):
     print("$ " + " ".join(str(arg) for arg in args), flush=True)
     subprocess.run([str(arg) for arg in args], check=True, **kwargs)
+
+
+def toolchain_module():
+    spec = importlib.util.spec_from_file_location("toolchain_chroot",
+                                                  KIT / "scripts/toolchain_chroot.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def run_tool(*args, env=None, **kwargs):
+    """Run a kernel build step: here, or in the toolchain chroot when there is
+    one (`env` then holds only the variables the step adds)."""
+    if SANDBOX is None:
+        return run(*args, env=None if env is None else os.environ | env, **kwargs)
+    print("$ [chroot] " + " ".join(str(arg) for arg in args), flush=True)
+    return SANDBOX.run([str(arg) for arg in args], env, check=True, **kwargs)
 
 
 def checksum(path):
@@ -111,9 +137,13 @@ def series_hash():
 def toolchain(kernel_profile):
     """The compiler's and linker's version lines the kernel build script would
     record in the kernel's banner, as {"cc": ..., "ld": ...}."""
-    output = subprocess.run(["bash", str(KIT / "scripts/build-monitor-kernel.sh"), kernel_profile],
-                            env=os.environ | {"ANTINOMIE_PRINT_TOOLCHAIN": "1"},
-                            capture_output=True, text=True, check=True).stdout
+    command = ["bash", str(KIT / "scripts/build-monitor-kernel.sh"), kernel_profile]
+    if SANDBOX is not None:
+        output = SANDBOX.run(command, {"ANTINOMIE_PRINT_TOOLCHAIN": "1"}, capture_output=True,
+                             text=True, check=True).stdout
+    else:
+        output = subprocess.run(command, env=os.environ | {"ANTINOMIE_PRINT_TOOLCHAIN": "1"},
+                                capture_output=True, text=True, check=True).stdout
     return dict(line.split(": ", 1) for line in output.splitlines() if ": " in line)
 
 
@@ -125,18 +155,45 @@ def debian_toolchain():
     return {"cc": match[3], "ld": match[4]}
 
 
-def require_debian_toolchain(kernel_profile):
-    """Debian Minimal's kernel must carry Debian's banner, which only Debian
-    13's compiler and linker write: refuse another toolchain before building."""
+def toolchain_problem(kernel_profile):
+    """What differs between the kernel toolchain (here, or in the chroot) and
+    Debian 13's, or None when it is the same."""
     found, wanted = toolchain(kernel_profile), debian_toolchain()
     for tool in ("cc", "ld"):
         if found.get(tool) != wanted[tool]:
-            raise RuntimeError(
-                f"this host's kernel {'compiler' if tool == 'cc' else 'linker'} is "
-                f"{found.get(tool) or 'missing'!r}, not Debian 13's {wanted[tool]!r}: Debian "
-                "Minimal's kernel banner (/proc/version) must be Debian's own; build it in "
-                "a pinned Debian 13 container (--container), in the QEMU builder, or on a "
-                "Debian 13 host")
+            return (f"kernel {'compiler' if tool == 'cc' else 'linker'} is "
+                    f"{found.get(tool) or 'missing'!r}, not Debian 13's {wanted[tool]!r}")
+    return None
+
+
+def require_debian_toolchain(kernel_profile, chroot=None, work=None, inputs=None, ccache=None):
+    """Debian Minimal's kernel must carry Debian's banner, which only Debian
+    13's compiler and linker write. Use the host's when they are Debian 13's;
+    else compile in the rootless toolchain chroot `chroot` (created on first
+    use); without one, refuse before building."""
+    global SANDBOX
+    problem = toolchain_problem(kernel_profile)
+    if problem is None:
+        return
+    if chroot is None:
+        raise RuntimeError(
+            f"this host's {problem}: Debian Minimal's kernel banner (/proc/version) must be "
+            "Debian's own; build it with --toolchain-chroot DIR (a rootless Debian 13 toolchain "
+            "chroot), in a pinned Debian 13 container (--container), in the QEMU builder, or on "
+            "a Debian 13 host")
+    module = toolchain_module()
+    stage("toolchain")
+    root = module.ensure(chroot, CONTAINER_DOCKERFILE)
+    mounts = [(KIT, "/kit", False), (work, "/work", True), (inputs, "/inputs", False)]
+    if ccache is not None:
+        ccache.mkdir(parents=True, exist_ok=True)
+        mounts.append((ccache, "/ccache", True))
+    work.mkdir(parents=True, exist_ok=True)
+    SANDBOX = module.Chroot(root, mounts)
+    problem = toolchain_problem(kernel_profile)
+    if problem is not None:
+        raise RuntimeError(f"the toolchain chroot's {problem}: delete {chroot} and build again")
+    print(f"compiling in the Debian 13 toolchain chroot {chroot}", flush=True)
 
 
 CONTAINER_DOCKERFILE = KIT / "src/antinomie/packaging/container/Dockerfile"
@@ -313,11 +370,11 @@ def prepare_source(inputs, work):
     package = root / "package"
     package.mkdir(parents=True)
     for source in (KIT / conf["INPUT_DSC"], debtar, orig):
-        os.symlink(source, package / source.name)
-    run("dpkg-source", "--no-copy", "-x", package / Path(conf["INPUT_DSC"]).name, tree)
+        os.symlink(source if SANDBOX is None else SANDBOX.translate(source), package / source.name)
+    run_tool("dpkg-source", "--no-copy", "-x", package / Path(conf["INPUT_DSC"]).name, tree)
     shutil.rmtree(package)
     for patch in sorted(SERIES.glob("*.patch")):
-        run("patch", "-p1", "--fuzz=0", "--forward", "--batch", "--no-backup-if-mismatch",
+        run_tool("patch", "-p1", "--fuzz=0", "--forward", "--batch", "--no-backup-if-mismatch",
             "-s", "-d", tree, "-i", patch)
     marker.write_text(json.dumps({"series": series, "source_version": conf["SOURCE_VERSION"]}) + "\n")
     return tree
@@ -325,11 +382,11 @@ def prepare_source(inputs, work):
 
 def build_kernel(kernel_profile, tree, work, jobs, ccache=None):
     build = work / f"kernel-{kernel_profile}"
-    env = os.environ | ({"ANTINOMIE_CCACHE_DIR": str(ccache)} if ccache else {}) | {"ANTINOMIE_SOURCE_TREE": str(tree), "ANTINOMIE_BUILD_TREE": str(build),
+    env = ({"ANTINOMIE_CCACHE_DIR": str(ccache)} if ccache else {}) | {"ANTINOMIE_SOURCE_TREE": str(tree), "ANTINOMIE_BUILD_TREE": str(build),
                         "ANTINOMIE_DEBIAN_CONFIG": str(tree / "debian/config"),
                         "ANTINOMIE_SERIES_DIR": str(SERIES), "ANTINOMIE_SOURCE_PREPARED": "1",
                         "JOBS": str(jobs)}
-    run("bash", KIT / "scripts/build-monitor-kernel.sh", kernel_profile, env=env)
+    run_tool("bash", KIT / "scripts/build-monitor-kernel.sh", kernel_profile, env=env)
     return build
 
 
@@ -509,6 +566,9 @@ def main():
                         help="reuse this cached root filesystem if it matches, else write it")
     parser.add_argument("--ccache", type=Path,
                         help="compiler cache directory for the kernel build")
+    parser.add_argument("--toolchain-chroot", type=Path,
+                        help="a Debian 13 toolchain chroot (created here when missing) for hosts "
+                             "whose compiler and linker are not Debian 13's")
     parser.add_argument("--container", choices=("auto", "podman", "docker"),
                         help="run this build in the pinned Debian 13 container builder")
     args = parser.parse_args()
@@ -518,6 +578,10 @@ def main():
         except (RuntimeError, OSError, subprocess.SubprocessError) as error:
             print(f"::error {error}", flush=True)
             sys.exit(1)
+    # Absolute, so paths bound into the toolchain chroot translate.
+    for name in ("work", "inputs", "ccache", "toolchain_chroot"):
+        if getattr(args, name) is not None:
+            setattr(args, name, getattr(args, name).resolve())
     try:
         profile, values, app_version = load_job(args.job)
         if args.output.exists():
@@ -525,7 +589,8 @@ def main():
         args.work.mkdir(parents=True, exist_ok=True)
         kernel_profile = PROFILES[profile][0]
         if profile == "debian-minimal":
-            require_debian_toolchain(kernel_profile)
+            require_debian_toolchain(kernel_profile, args.toolchain_chroot, args.work,
+                                     args.inputs, args.ccache)
         kernel_space, image_space = PROFILES[profile][3]
         build = load_cached_kernel(args.kernel_cache, kernel_profile, args.work)
         if build is None:

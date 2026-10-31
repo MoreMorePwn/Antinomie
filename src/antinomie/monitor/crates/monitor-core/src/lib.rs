@@ -75,6 +75,7 @@ pub mod storage;
 pub mod strings_regex;
 pub mod syscall_groups;
 pub mod syscalls;
+pub mod toolchain;
 mod transport;
 pub mod typed_fields;
 mod uefi_disk;

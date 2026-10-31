@@ -5,7 +5,9 @@
 //! checkout. Native mode runs the kit's orchestrator on this host and needs the
 //! tool suite below; Podman and Docker modes run it in a pinned Debian 13
 //! container (see `container`) and need only the engine; QEMU mode runs it
-//! inside a Debian builder VM and needs only QEMU and curl. Missing tools are
+//! inside a Debian builder VM and needs only QEMU and curl. Debian Minimal's kernel
+//! needs Debian 13's compiler and linker: a native build on another distro
+//! compiles in a rootless Debian 13 chroot (see `toolchain`). Missing tools are
 //! reported with an install hint and nothing is installed automatically.
 
 use serde::{Deserialize, Serialize};
@@ -71,9 +73,9 @@ pub fn profile(id: &str) -> Option<&'static BuildProfile> {
 /// Where a build runs.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BuildMode {
-    /// The first that can run here: Native (only with Debian 13's toolchain
-    /// where the base needs it), then Podman, then Docker, then the QEMU
-    /// builder.
+    /// The first that can run here: Native (with the host's toolchain, or a
+    /// rootless Debian 13 toolchain chroot where Debian Minimal needs Debian
+    /// 13's), then Podman, then Docker, then the QEMU builder.
     #[default]
     Automatic,
     /// On this Linux host (faster; needs the tool suite).
@@ -577,6 +579,11 @@ const KERNEL_TOOLS: &[ToolSpec] = &[
     file("openssl/ssl.h", "libssl-dev", "/usr/include/openssl/ssl.h"),
 ];
 
+/// What a native kernel build needs on a host that compiles in the Debian 13
+/// toolchain chroot (`pahole`, the compiler and the source tools live there).
+const CHROOT_KERNEL_TOOLS: &[ToolSpec] =
+    &[tool("python3", "python3"), tool("unshare", "util-linux")];
+
 const BUSYBOX_TOOLS: &[ToolSpec] = &[
     tool("qemu-img", "qemu-utils"),
     tool("mkfs.ext4", "e2fsprogs"),
@@ -635,7 +642,13 @@ pub fn tools(kind: Kind, mode: BuildMode) -> Vec<ToolSpec> {
         BuildMode::Podman => vec![tool("podman", "podman")],
         BuildMode::Docker => vec![tool("docker", "docker.io")],
         _ => {
-            let mut all = KERNEL_TOOLS.to_vec();
+            // The toolchain chroot carries the compiler and the source tools.
+            let mut all = if crate::toolchain::for_kind(kind) == crate::toolchain::Toolchain::Chroot
+            {
+                CHROOT_KERNEL_TOOLS.to_vec()
+            } else {
+                KERNEL_TOOLS.to_vec()
+            };
             all.extend_from_slice(match kind {
                 Kind::BusyBox => BUSYBOX_TOOLS,
                 Kind::DebianXfce => DEBIAN_TOOLS,
@@ -700,7 +713,7 @@ fn version_line(program: &str) -> Option<String> {
 /// The compiler and linker version lines a minimal-profile kernel built on
 /// this host records in its banner (the kernel build script's choice:
 /// Debian's `x86_64-linux-gnu-gcc-14` where present, else `gcc`), read once.
-fn host_toolchain() -> &'static (Option<String>, Option<String>) {
+pub(crate) fn host_toolchain() -> &'static (Option<String>, Option<String>) {
     static TOOLCHAIN: std::sync::OnceLock<(Option<String>, Option<String>)> =
         std::sync::OnceLock::new();
     TOOLCHAIN.get_or_init(|| {
@@ -713,45 +726,19 @@ fn host_toolchain() -> &'static (Option<String>, Option<String>) {
     })
 }
 
-/// Why this host's toolchain cannot build Debian Minimal's kernel: its banner
-/// (`/proc/version`) must be Debian's own, compiler and linker versions
-/// included, which only Debian 13's tools write.
-fn toolchain_obstacle(
-    host: &(Option<String>, Option<String>),
-    debian: &(String, String),
-) -> Option<String> {
-    let (cc, ld) = host;
-    let differs = |found: &Option<String>, wanted: &str| found.as_deref() != Some(wanted);
-    if differs(cc, &debian.0) || differs(ld, &debian.1) {
-        let found = |tool: &Option<String>| tool.clone().unwrap_or_else(|| "none".into());
-        return Some(format!(
-            "this host's kernel toolchain ({}; {}) is not Debian 13's ({}; {}), whose \
-             versions Debian Minimal's kernel banner names: build in the QEMU builder",
-            found(cc),
-            found(ld),
-            debian.0,
-            debian.1
-        ));
-    }
-    None
-}
-
 /// Why native Debian builds cannot run here besides missing tools: rootless
-/// mmdebstrap needs a subordinate UID range for this user, and Debian
-/// Minimal's kernel needs Debian 13's compiler and linker.
+/// mmdebstrap needs a subordinate UID range for this user, and so does the
+/// Debian 13 toolchain chroot a Debian Minimal kernel is compiled in where the
+/// host's compiler and linker are not Debian 13's (the tools list names the
+/// chroot's `unshare`).
 pub fn native_obstacle(kind: Kind) -> Option<String> {
     if !kind.is_debian() {
         return None;
     }
-    if kind == Kind::DebianMinimal {
-        match crate::kit::debian_toolchain() {
-            Ok(debian) => {
-                if let Some(obstacle) = toolchain_obstacle(host_toolchain(), &debian) {
-                    return Some(obstacle);
-                }
-            }
-            Err(error) => return Some(error),
-        }
+    if kind == Kind::DebianMinimal
+        && let Err(error) = crate::kit::debian_toolchain()
+    {
+        return Some(error);
     }
     let user = std::env::var("USER").unwrap_or_default();
     let uid = {
@@ -979,23 +966,26 @@ mod tests {
     }
 
     #[test]
-    fn debian_minimal_needs_debian_13s_compiler_and_linker_natively() {
-        let debian = (
-            "x86_64-linux-gnu-gcc-14 (Debian 14.2.0-19) 14.2.0".to_owned(),
-            "GNU ld (GNU Binutils for Debian) 2.44".to_owned(),
+    fn native_obstacles_are_only_the_subordinate_ids_and_a_broken_kit() {
+        // A host toolchain that is not Debian 13's is never an obstacle: the
+        // toolchain chroot compiles there (see `toolchain`).
+        let obstacle = native_obstacle(Kind::DebianMinimal);
+        assert!(obstacle.is_none_or(|text| text.starts_with("no subordinate UID range")));
+        assert!(
+            native_obstacle(Kind::DebianXfce)
+                .is_none_or(|text| text.starts_with("no subordinate UID range"))
         );
-        let trixie = (Some(debian.0.clone()), Some(debian.1.clone()));
-        assert_eq!(toolchain_obstacle(&trixie, &debian), None);
-        // A newer binutils (Kali, Debian testing) writes another linker version.
-        let kali = (
-            Some(debian.0.clone()),
-            Some("GNU ld (GNU Binutils for Debian) 2.47".to_owned()),
-        );
-        let obstacle = toolchain_obstacle(&kali, &debian).unwrap();
-        assert!(obstacle.contains("2.47") && obstacle.contains("QEMU builder"));
-        assert!(toolchain_obstacle(&(None, trixie.1.clone()), &debian).is_some());
-        // Only Debian Minimal carries Debian's /boot to compare the banner with.
+        // BusyBox needs no Debian toolchain or mmdebstrap.
         assert_eq!(native_obstacle(Kind::BusyBox), None);
+    }
+
+    #[test]
+    fn a_chroot_build_needs_python_and_unshare_not_a_compiler() {
+        let names = |specs: &[ToolSpec]| specs.iter().map(|tool| tool.tool).collect::<Vec<_>>();
+        assert_eq!(names(CHROOT_KERNEL_TOOLS), ["python3", "unshare"]);
+        assert!(names(KERNEL_TOOLS).contains(&"gcc") && names(KERNEL_TOOLS).contains(&"pahole"));
+        let busybox = names(&tools(Kind::BusyBox, BuildMode::Native));
+        assert!(busybox.contains(&"gcc") && busybox.contains(&"pahole"));
     }
 
     #[test]
@@ -1096,7 +1086,12 @@ mod tests {
             .map(|tool| tool.tool)
             .collect();
         assert!(native.contains(&"mmdebstrap") && native.contains(&"newuidmap"));
-        assert!(native.contains(&"pahole"));
+        // The compiler is the host's or the toolchain chroot's: either way pahole
+        // is not asked of the host unless the host compiles.
+        assert_eq!(
+            native.contains(&"pahole"),
+            crate::toolchain::for_kind(Kind::DebianMinimal) == crate::toolchain::Toolchain::Host
+        );
         assert!(
             tools(Kind::BusyBox, BuildMode::Native)
                 .iter()

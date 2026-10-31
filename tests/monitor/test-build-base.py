@@ -277,6 +277,148 @@ exit 0
             base.save_cached_kernel(cache, kept, "debian")
             self.assertIsNone(base.load_cached_kernel(cache, "debian", work))
 
+    def test_the_toolchain_chroot_pins_come_from_the_container_dockerfile(self):
+        chroot = base.toolchain_module()
+        text = base.CONTAINER_DOCKERFILE.read_text()
+        stamp, versions = chroot.parse_pins(text)
+        self.assertRegex(stamp, r"^\d{8}T\d{6}Z$")
+        self.assertEqual(set(versions), set(chroot.PACKAGES))
+        self.assertEqual((versions["gcc-14"], versions["binutils"]), ("14.2.0-19", "2.44-3"))
+        self.assertEqual(versions["bison"], "2:3.8.2+dfsg-1+b2")
+        # The version Debian's banner names is the pinned one.
+        self.assertIn(f"Debian {versions['gcc-14']})", base.debian_toolchain()["cc"])
+        with self.assertRaisesRegex(RuntimeError, "snapshot stamp"):
+            chroot.parse_pins("RUN true")
+        with self.assertRaisesRegex(RuntimeError, "does not pin"):
+            chroot.parse_pins("stamp=20260101T000000Z; \\\n    bc=1.0 \\\n")
+        command = chroot.bootstrap_command(stamp, versions, Path("/t/root.tar"))
+        self.assertEqual(command[:4], ["mmdebstrap", "--mode=unshare", "--variant=minbase",
+                                       "--format=tar"])
+        self.assertIn("--include=" + ",".join(f"{n}={v}" for n, v in versions.items()), command)
+        self.assertEqual(sum(f"/{stamp}/" in word for word in command), 3)
+        self.assertTrue(all("snapshot.debian.org" in word and "signed-by=" in word
+                            for word in command[-3:]))
+
+    def test_a_toolchain_chroot_is_ready_only_for_the_dockerfile_it_was_made_from(self):
+        chroot = base.toolchain_module()
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            self.assertFalse(chroot.ready(directory, base.CONTAINER_DOCKERFILE))
+            gcc = directory / "root/usr/bin/x86_64-linux-gnu-gcc-14"
+            gcc.parent.mkdir(parents=True)
+            gcc.write_text("")
+            (directory / chroot.MARKER).write_text(json.dumps(
+                {"dockerfile_sha256": chroot.sha256(base.CONTAINER_DOCKERFILE)}))
+            self.assertTrue(chroot.ready(directory, base.CONTAINER_DOCKERFILE))
+            changed = directory / "Dockerfile"
+            changed.write_text(base.CONTAINER_DOCKERFILE.read_text() + "# changed\n")
+            self.assertFalse(chroot.ready(directory, changed))
+            # A complete chroot is reused without touching the network.
+            with unittest.mock.patch.object(chroot.subprocess, "run") as run:
+                self.assertEqual(chroot.ensure(directory, base.CONTAINER_DOCKERFILE),
+                                 directory / "root")
+                run.assert_not_called()
+
+    def test_the_chroot_binds_the_builds_folders_at_the_containers_paths(self):
+        chroot = base.toolchain_module()
+        with tempfile.TemporaryDirectory() as name:
+            work, kit = Path(name, "w").resolve(), Path(name, "k").resolve()
+            work.mkdir()
+            kit.mkdir()
+            sandbox = chroot.Chroot(Path(name, "root"), [(kit, "/kit", False), (work, "/work", True)])
+            self.assertEqual(sandbox.translate(work / "source/linux"), "/work/source/linux")
+            self.assertEqual(sandbox.translate(kit), "/kit")
+            self.assertEqual(sandbox.translate(str(work) + "-other"), str(work) + "-other")
+            command = sandbox.command(["bash", kit / "scripts/x.sh", "minimal"],
+                                      {"ANTINOMIE_BUILD_TREE": work / "kernel", "JOBS": "12"})
+            self.assertEqual(command[:7], ["unshare", "--user", "--map-root-user", "--mount",
+                                           "--pid", "--fork", "--kill-child"])
+            script = command[-1]
+            self.assertIn("mount --rbind /dev", script)
+            self.assertIn(f"mount --rbind {kit}", script)
+            self.assertIn("remount,bind,ro", script)
+            self.assertEqual(script.count("remount,bind,ro"), 1)  # only /kit is read-only
+            self.assertIn("exec chroot", script)
+            self.assertIn("env -i", script)
+            self.assertIn("ANTINOMIE_BUILD_TREE=/work/kernel", script)
+            self.assertIn("JOBS=12", script)
+            self.assertIn("bash /kit/scripts/x.sh minimal", script)
+            # Nothing of the host's environment leaks in.
+            self.assertNotIn(os.environ["PATH"], script)
+
+    def test_a_host_without_debians_toolchain_compiles_in_the_chroot_or_is_refused(self):
+        trixie = base.debian_toolchain()
+        newer = dict(trixie, cc="gcc (Ubuntu 15.2.0-4ubuntu4) 15.2.0")
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            fake = unittest.mock.Mock()
+            fake.ensure.return_value = root / "chroot/root"
+            fake.Chroot.side_effect = lambda *args: ("chroot", args)
+            try:
+                # Debian 13's own toolchain compiles on the host; no chroot is made.
+                with unittest.mock.patch.object(base, "toolchain", return_value=trixie), \
+                        unittest.mock.patch.object(base, "toolchain_module", return_value=fake):
+                    base.require_debian_toolchain("minimal", root / "chroot", root / "w", root / "i")
+                self.assertIsNone(base.SANDBOX)
+                fake.ensure.assert_not_called()
+                # Another toolchain: refused without a chroot, naming the way out.
+                with unittest.mock.patch.object(base, "toolchain", return_value=newer), \
+                        self.assertRaisesRegex(RuntimeError, "Ubuntu.*--toolchain-chroot"):
+                    base.require_debian_toolchain("minimal")
+                # With one, the chroot is made and must then answer with Debian's.
+                answers = iter([newer, trixie])
+                with unittest.mock.patch.object(base, "toolchain", side_effect=lambda _: next(answers)), \
+                        unittest.mock.patch.object(base, "toolchain_module", return_value=fake):
+                    base.require_debian_toolchain("minimal", root / "chroot", root / "w",
+                                                  root / "i", root / "cc")
+                fake.ensure.assert_called_once_with(root / "chroot", base.CONTAINER_DOCKERFILE)
+                kind, (chroot_root, mounts) = base.SANDBOX
+                self.assertEqual(chroot_root, root / "chroot/root")
+                self.assertEqual([(inside, writable) for _, inside, writable in mounts],
+                                 [("/kit", False), ("/work", True), ("/inputs", False),
+                                  ("/ccache", True)])
+                # A chroot that still has another toolchain is not used silently.
+                base.SANDBOX = None
+                answers = iter([newer, newer])
+                with unittest.mock.patch.object(base, "toolchain", side_effect=lambda _: next(answers)), \
+                        unittest.mock.patch.object(base, "toolchain_module", return_value=fake), \
+                        self.assertRaisesRegex(RuntimeError, "toolchain chroot's kernel compiler"):
+                    base.require_debian_toolchain("minimal", root / "chroot", root / "w", root / "i")
+            finally:
+                base.SANDBOX = None
+
+    def test_a_chrooted_step_passes_only_its_own_environment(self):
+        with unittest.mock.patch.object(base, "SANDBOX") as sandbox:
+            base.run_tool("patch", "-p1", env={"JOBS": "2"})
+            sandbox.run.assert_called_once_with(["patch", "-p1"], {"JOBS": "2"}, check=True)
+        with unittest.mock.patch.object(base, "run") as run:
+            base.run_tool("patch", "-p1")
+            run.assert_called_once_with("patch", "-p1", env=None)
+            run.reset_mock()
+            base.run_tool("patch", env={"JOBS": "2"})
+            self.assertEqual(run.call_args.kwargs["env"]["JOBS"], "2")
+            self.assertIn("PATH", run.call_args.kwargs["env"])
+
+    @unittest.skipUnless(os.environ.get("ANTINOMIE_TOOLCHAIN_CHROOT"),
+                         "set ANTINOMIE_TOOLCHAIN_CHROOT to a ready chroot directory")
+    def test_a_real_chroot_compiles_with_debians_toolchain(self):
+        chroot = base.toolchain_module()
+        directory = Path(os.environ["ANTINOMIE_TOOLCHAIN_CHROOT"])
+        self.assertTrue(chroot.ready(directory, base.CONTAINER_DOCKERFILE))
+        with tempfile.TemporaryDirectory() as name:
+            sandbox = chroot.Chroot(directory / "root", [(base.KIT, "/kit", False),
+                                                         (Path(name), "/work", True)])
+            base.SANDBOX = sandbox
+            try:
+                found = base.toolchain("minimal")
+                self.assertEqual(found, base.debian_toolchain())
+                sandbox.run(["sh", "-c", "echo ok > /work/probe"], check=True)
+                self.assertEqual((Path(name) / "probe").read_text(), "ok\n")
+                # /kit is read-only in the chroot.
+                self.assertNotEqual(sandbox.run(["touch", "/kit/x"], capture_output=True).returncode, 0)
+            finally:
+                base.SANDBOX = None
+
 
 if __name__ == "__main__":
     unittest.main()

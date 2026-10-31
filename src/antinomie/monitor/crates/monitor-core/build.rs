@@ -9,6 +9,7 @@ const KIT_FILES: &[&str] = &[
     "LICENSES/Antinomie-MIT.txt",
     "LICENSES/GPL-2.0-only.txt",
     "scripts/build-base.py",
+    "scripts/toolchain_chroot.py",
     "scripts/build-monitor-kernel.sh",
     "scripts/build-monitor-image.py",
     "scripts/build-debian-image.py",

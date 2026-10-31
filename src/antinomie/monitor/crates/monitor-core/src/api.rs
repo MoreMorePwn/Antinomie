@@ -1309,7 +1309,7 @@ pub struct BuildStatus {
     pub label: String,
     /// Where the build runs (never `Automatic` once started).
     pub mode: crate::build::BuildMode,
-    /// Current stage: `prepare`, `builder`, `source`, `kernel`, `image`,
+    /// Current stage: `prepare`, `builder`, `toolchain`, `source`, `kernel`, `image`,
     /// `install` or `done`.
     pub stage: String,
     /// Bounded tail of the combined build output.

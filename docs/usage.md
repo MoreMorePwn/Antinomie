@@ -110,11 +110,10 @@ The **Base images** section in the left sidebar lists installed bases. Use
   zone, software and mirror), then builds where you choose and installs the result.
   **Where** is Automatic or one of Native (this Linux host, needs the tool suite),
   Podman or Docker (a pinned Debian 13 container) or the QEMU builder (a builder
-  VM, needs only QEMU and curl). Automatic takes the first that can run: Native
-  (only when the host's toolchain is Debian 13's), then Podman (rootless
-  preferred), then Docker, then the QEMU builder. A choice that cannot run says
-  why (no Debian 13 toolchain, engine missing, daemon not reachable, no
-  permission, image not available). Docker needs root-equivalent access (the
+  VM, needs only QEMU and curl). Automatic takes the first that can run: Native,
+  then Podman (rootless preferred), then Docker, then the QEMU builder. A choice
+  that cannot run says why (tool missing, no subordinate UID range, engine
+  missing, daemon not reachable, no permission, image not available). Docker needs root-equivalent access (the
   `docker` group), which is why Podman comes first. The container image
   (`antinomie-builder:<id>`, Debian 13 pinned by digest and package snapshot) is
   built from the app's Dockerfile the first time and kept, so later builds start
@@ -125,9 +124,17 @@ The **Base images** section in the left sidebar lists installed bases. Use
   terminals stay in the app, as with BusyBox), keeps APT, and shares BusyBox's
   kernel, so it builds in minutes once that kernel is cached. Its kernel must
   report Debian's own build string, compiler and linker versions included, so
-  it builds natively only on a Debian 13 host (gcc-14 14.2.0-19, binutils
-  2.44); elsewhere Automatic picks Podman or Docker (the pinned container has
-  exactly that toolchain), then the QEMU builder. A Debian Minimal VM whose
+  it is compiled with Debian 13's gcc-14 14.2.0-19 and binutils 2.44. Native
+  uses the host's tools where they are those; on any other distribution it
+  compiles in a rootless Debian 13 chroot instead (no root, no container
+  engine, no VM): `mmdebstrap` unpacks the packages the container image pins,
+  from the same snapshot.debian.org timestamp and at the same exact versions,
+  the first time (about 110 MiB downloaded, about 500 MiB on disk) and the
+  chroot is kept under the app's build folder and reused. It needs `mmdebstrap`,
+  `unshare` and a subordinate UID range for your user (the same as the Debian
+  image); the wizard says which toolchain the build uses, shows the chroot's
+  size and has a **Delete** button (the next build makes it again). BusyBox and
+  the Debian desktop keep compiling with the host's toolchain. A Debian Minimal VM whose
   stealth profile boots UEFI gets a UEFI PC's disk (GPT, an EFI system
   partition, GRUB for UEFI with the shim, a `debian` firmware boot entry): the
   first such VM of a base lays that disk out once (a progress window shows the

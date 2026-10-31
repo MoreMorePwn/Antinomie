@@ -7,7 +7,7 @@ use antinomie_monitor_core::{
         self, BuildMode, BuildOptions, BuildRequest, Kind, BUILD_PROFILES, KEYBOARD_LAYOUTS,
         KEYBOARD_VARIANTS, LOCALES, TIMEZONES,
     },
-    BuildStatus,
+    toolchain, BuildStatus,
 };
 use eframe::egui::{self, RichText};
 
@@ -150,7 +150,7 @@ impl BuildWizard {
         let mut action = None;
         let valid = match page {
             Page::Base => self.base(ui),
-            Page::Mode => self.mode_page(ui),
+            Page::Mode => self.mode_page(ui, data_dir),
             Page::Language => self.language(ui),
             Page::Keyboard => self.keyboard(ui),
             Page::TimeZone => self.time_zone(ui),
@@ -232,20 +232,22 @@ impl BuildWizard {
         true
     }
 
-    fn mode_page(&mut self, ui: &mut egui::Ui) -> bool {
+    fn mode_page(&mut self, ui: &mut egui::Ui, data_dir: &std::path::Path) -> bool {
         let kind = self.kind();
         ui.label("Where should the build run?");
         for (mode, label, detail) in [
             (
                 BuildMode::Automatic,
                 "Automatic",
-                "The first that can run here: on this host (when its toolchain is Debian 13's, as \
-                 Debian Minimal's kernel needs), then Podman, then Docker, then the QEMU builder VM",
+                "The first that can run here: on this host, then Podman, then Docker, then the QEMU \
+                 builder VM",
             ),
             (
                 BuildMode::Native,
                 "Native (on this Linux host)",
-                "Fastest; needs the kernel and image tool suite",
+                "Fastest; needs the kernel and image tool suite. Debian Minimal's kernel is \
+                 compiled with Debian 13's toolchain: this host's when it is that, else a \
+                 rootless Debian 13 chroot (needs mmdebstrap, unshare and a subordinate UID range)",
             ),
             (
                 BuildMode::Podman,
@@ -306,6 +308,11 @@ impl BuildWizard {
         match build::resolve_mode(kind, self.mode) {
             Ok(BuildMode::Native) => {
                 ui.colored_label(theme::good(), "The build will run on this host.");
+                ui.small(format!(
+                    "Kernel {}.",
+                    toolchain::describe(kind, &data_dir.join("build"))
+                ));
+                Self::toolchain_cache(ui, data_dir);
                 self.images(ui);
                 true
             }
@@ -338,6 +345,35 @@ impl BuildWizard {
                 false
             }
         }
+    }
+
+    /// The cached Debian 13 toolchain chroot: its size and a way to delete it.
+    fn toolchain_cache(ui: &mut egui::Ui, data_dir: &std::path::Path) {
+        let dir = toolchain::chroot_dir(&data_dir.join("build"));
+        if !dir.exists() {
+            return;
+        }
+        ui.horizontal(|ui| {
+            ui.small(format!(
+                "Toolchain chroot cache: {} in {}",
+                antinomie_monitor_core::byte_size::file_size(toolchain::size(&dir)),
+                dir.display()
+            ));
+            if ui
+                .small_button("Delete")
+                .on_hover_text(
+                    "The next native Debian Minimal build downloads and unpacks it again.",
+                )
+                .clicked()
+                && let Err(error) = toolchain::remove(&dir)
+            {
+                crate::activity::report(
+                    ui.ctx(),
+                    crate::activity::Level::Warn,
+                    format!("could not delete the toolchain chroot: {error}"),
+                );
+            }
+        });
     }
 
     /// The builder images the container engines hold, with a way to remove them.
@@ -584,7 +620,12 @@ impl BuildWizard {
         ui.add_space(6.0);
         let options = self.options[self.profile].clone();
         let mode = match build::resolve_mode(kind, self.mode) {
-            Ok(BuildMode::Native) => "on this host".to_string(),
+            Ok(BuildMode::Native) => match toolchain::for_kind(kind) {
+                toolchain::Toolchain::Host => "on this host".to_string(),
+                toolchain::Toolchain::Chroot => {
+                    "on this host, in a rootless Debian 13 toolchain chroot".to_string()
+                }
+            },
             Ok(mode @ (BuildMode::Podman | BuildMode::Docker)) => {
                 format!("in a {} container", mode.label())
             }
@@ -695,6 +736,18 @@ impl BuildWizard {
                             "Builder container"
                         },
                     ),
+                    ("source", "Patch kernel"),
+                    ("kernel", "Compile kernel"),
+                    ("symbols", "Memory analysis symbols"),
+                    ("image", "Build image"),
+                    ("install", "Install base"),
+                ]
+            } else if status.profile == "debian-minimal"
+                && toolchain::for_kind(Kind::DebianMinimal) == toolchain::Toolchain::Chroot
+            {
+                &[
+                    ("prepare", "Kit and kernel source"),
+                    ("toolchain", "Debian 13 toolchain"),
                     ("source", "Patch kernel"),
                     ("kernel", "Compile kernel"),
                     ("symbols", "Memory analysis symbols"),

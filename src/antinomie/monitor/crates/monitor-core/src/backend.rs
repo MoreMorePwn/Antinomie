@@ -1056,6 +1056,13 @@ impl BuildRun {
                 if let Some(cache) = &image_cache {
                     command.arg("--image-cache").arg(cache);
                 }
+                // Debian Minimal's kernel is compiled with Debian 13's toolchain:
+                // in a rootless chroot where this host's is another (cached).
+                if crate::toolchain::for_kind(self.kind) == crate::toolchain::Toolchain::Chroot {
+                    command
+                        .arg("--toolchain-chroot")
+                        .arg(crate::toolchain::chroot_dir(&root));
+                }
                 build::run_streaming(&mut command, "native build", &self.cancel, &mut *line)
             }
         }?;
