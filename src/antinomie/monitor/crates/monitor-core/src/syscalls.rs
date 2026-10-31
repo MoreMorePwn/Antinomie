@@ -33,6 +33,14 @@ pub struct SyscallInfo {
     pub entry_point: Option<String>,
     pub arg_count: Option<u8>,
     pub arguments: Vec<ArgumentInfo>,
+    /// A 32-bit ABI's call that is an x86-64 call by another name (arm's
+    /// `send` is `sendto`, `stat64` is `stat`), for rules keyed by name.
+    #[serde(default)]
+    pub family: Option<String>,
+    /// A compat ABI's call the guest captures as this native call (its
+    /// number on the native ABI): its fields carry the native layouts.
+    #[serde(default)]
+    pub native: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -55,6 +63,8 @@ pub struct FlagValue {
 pub enum Abi {
     X86_64,
     Aarch64,
+    /// arm EABI: the AArch32 programs of an arm64 guest (`ANT_ABI_COMPAT`).
+    Arm,
 }
 
 impl Abi {
@@ -66,6 +76,14 @@ impl Abi {
             _ => None,
         }
     }
+
+    /// The ABI of the compat programs a guest of this native ABI runs.
+    pub fn compat(self) -> Option<Self> {
+        match self {
+            Self::Aarch64 => Some(Self::Arm),
+            Self::X86_64 | Self::Arm => None,
+        }
+    }
 }
 
 /// The table of an id's ABI, if it has one.
@@ -73,6 +91,7 @@ pub fn table_of(id: u64) -> Option<&'static Table> {
     match ids::tag_of(id) {
         0 => Some(table(Abi::X86_64)),
         tag if tag == Abi::Aarch64.tag() => Some(table(Abi::Aarch64)),
+        tag if tag == Abi::Arm.tag() => Some(table(Abi::Arm)),
         _ => None,
     }
 }
@@ -162,9 +181,11 @@ pub fn table_id(abi: Abi) -> String {
 pub fn table(abi: Abi) -> &'static Table {
     static X86_64: OnceLock<Table> = OnceLock::new();
     static AARCH64: OnceLock<Table> = OnceLock::new();
+    static ARM: OnceLock<Table> = OnceLock::new();
     match abi {
         Abi::X86_64 => X86_64.get_or_init(|| Table::load(Abi::X86_64)),
         Abi::Aarch64 => AARCH64.get_or_init(|| Table::load(Abi::Aarch64)),
+        Abi::Arm => ARM.get_or_init(|| Table::load(Abi::Arm)),
     }
 }
 
@@ -192,6 +213,12 @@ pub fn number(name: &str) -> Option<u64> {
 /// The table's name for an id, without a copy.
 pub fn known_name(id: u64) -> Option<&'static str> {
     syscall(id).map(|entry| entry.name.as_str())
+}
+
+/// The x86-64 call an id's call is by another name, when its ABI's table
+/// gives one (arm's `send` is `sendto`): the name rules key it by.
+pub fn family(id: u64) -> Option<&'static str> {
+    syscall(id)?.family.as_deref()
 }
 
 pub fn name(id: u64) -> String {
@@ -1397,6 +1424,51 @@ mod tests {
                 .as_deref(),
             Some("SO_RCVBUF")
         );
+    }
+
+    #[test]
+    fn arm_names_compat_calls_their_families_and_native_counterparts() {
+        let arm = table(Abi::Arm);
+        let a64 = table(Abi::Aarch64);
+        assert_eq!(arm.number("openat"), Some(322));
+        assert_eq!(arm.number("open"), Some(5));
+        assert_eq!(arm.number("execve"), Some(11));
+        // arm's private calls, past the EABI table.
+        assert_eq!(arm.name_of(0x0f0005), Some("set_tls"));
+        let id = |name| super::id(Abi::Arm, arm.number(name).unwrap());
+        assert_eq!(table_of(id("openat")).unwrap().abi, Abi::Arm);
+        assert_eq!(known_name(id("send")), Some("send"));
+        assert_eq!(family(id("send")), Some("sendto"));
+        assert_eq!(family(id("stat64")), Some("stat"));
+        assert_eq!(family(id("setuid32")), Some("setuid"));
+        assert_eq!(family(id("openat")), None);
+        assert_eq!(family(super::id(Abi::X86_64, 2)), None);
+        // Captured as the native call: same arguments, one layout.
+        let native = |name| syscall(id(name)).unwrap().native;
+        assert_eq!(native("openat"), a64.number("openat"));
+        assert_eq!(native("connect"), a64.number("connect"));
+        assert_eq!(native("send"), a64.number("sendto"));
+        assert_eq!(native("execve"), a64.number("execve"));
+        // No native call of one layout: arm's own pointers or none on arm64.
+        for name in [
+            "open",
+            "stat64",
+            "fcntl64",
+            "ioctl",
+            "writev",
+            "mmap2",
+            "setsockopt",
+        ] {
+            assert_eq!(native(name), None, "{name}");
+        }
+        // A 64-bit argument takes an aligned register pair.
+        let pread = arm.by_name("pread64").unwrap();
+        let names: Vec<_> = pread.arguments.iter().map(|a| a.name.as_str()).collect();
+        assert_eq!(names, ["fd", "buf", "count", "pad", "pos_lo", "pos_hi"]);
+        // Flags by arm's values (O_DIRECTORY as arm64's).
+        let flags = arm.argument_flags(322, 2, 0o40000).unwrap();
+        assert!(flags.names.contains(&"O_DIRECTORY".into()));
+        assert_eq!(arm.constants().data_model, DataModel::Ilp32);
     }
 
     #[test]

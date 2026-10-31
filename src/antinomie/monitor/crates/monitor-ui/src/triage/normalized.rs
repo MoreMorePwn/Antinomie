@@ -38,10 +38,14 @@ pub(super) struct Argv {
 }
 
 pub(super) fn argument_vector(call: &InvocationSummary, event: &EventSummary) -> Option<Argv> {
+    // The call's own table: its argv index and its pointers' width (an
+    // AArch32 program's vector holds 4-byte pointers).
+    let table = syscalls::table_of(event.syscall_nr).unwrap_or(syscalls::native());
     let argument = match event.syscall_name.as_str() {
-        name @ ("execve" | "execveat") => syscalls::native().argument(name, "argv")?,
+        name @ ("execve" | "execveat") => table.argument(name, "argv")?,
         _ => return None,
     };
+    let width = table.constants().long_size();
     let fields: Vec<_> = call
         .entry
         .iter()
@@ -55,9 +59,12 @@ pub(super) fn argument_vector(call: &InvocationSummary, event: &EventSummary) ->
         let pointer = field(format!("arg{argument}.ptr[{index}]"));
         let value = pointer
             .filter(|pointer| pointer.complete)
-            .and_then(|pointer| trace::covered_preview(pointer).get(..8))
-            .and_then(|bytes| <[u8; 8]>::try_from(bytes).ok())
-            .map(u64::from_le_bytes);
+            .and_then(|pointer| trace::covered_preview(pointer).get(..width))
+            .map(|bytes| {
+                let mut value = [0; 8];
+                value[..width].copy_from_slice(bytes);
+                u64::from_le_bytes(value)
+            });
         let Some(value) = value else {
             return Some(Argv {
                 arguments,
@@ -854,6 +861,25 @@ mod tests {
             let event = trace::representative(&exec).unwrap();
             assert_eq!(command_line(&exec, event).as_deref(), expected);
         }
+        // An AArch32 program's execve on an arm64 guest: 4-byte pointers.
+        let narrow = |index: u64, value: u32| {
+            super::super::tests::captured(
+                &format!("arg1.ptr[{index}]"),
+                "linux-6.12.94/arm/pointer",
+                &value.to_le_bytes(),
+            )
+        };
+        let arm = syscalls::id(syscalls::Abi::Arm, 11);
+        let mut exec = super::super::tests::path_call(1, arm, "execve", 0, "/usr/bin/crontab");
+        exec.entry.as_mut().unwrap().fields.extend([
+            narrow(0, 0x1000),
+            string(0, b"crontab\0"),
+            narrow(1, 0x1010),
+            string(1, b"-l\0"),
+            narrow(2, 0),
+        ]);
+        let event = trace::representative(&exec).unwrap();
+        assert_eq!(command_line(&exec, event).as_deref(), Some("crontab -l"));
     }
     fn engine_file() -> &'static str {
         antinomie_monitor_core::analysis::detection::JOURNAL_FILE

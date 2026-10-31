@@ -825,6 +825,47 @@ revision 20 is unchanged: the wire carried the architecture since 0.8.0.
 * **Known gap.** The raw `/sys/firmware/fdt` (root only) still shows the
   `antinomie_*` boot options (MA-18).
 
+### AArch32 programs on arm64 guests (0.9.0)
+
+Multi-arch plan cards MA-33a and MA-34: the arm EABI (ILP32) programs most
+Linux IoT samples are run on an arm64 guest (`CONFIG_COMPAT`) and are traced
+like its own programs. Contract revision 20 is unchanged: ARCH_INFO's ABI mask
+already defines bit 3, compat.
+
+* **Schema set.** `protocol/arm/` holds the arm EABI table
+  (`generate-native-syscalls.py --arch arm`, from `arch/arm/tools/syscall.tbl`
+  and arm's private `__ARM_NR_*` calls), its captured layouts and its constants
+  (ILP32, little endian, `audit_arch` 40000028). A 64-bit argument takes an
+  aligned register pair, so a row's arguments are registers (`pos_lo`,
+  `pos_hi`). A row that is an x86-64 call by another name carries its
+  `family` (`send` is `sendto`, `stat64` is `stat`, `setuid32` is `setuid`), for
+  the rules, which key on names. A row the guest captures as an aarch64 call
+  carries its `native` number: the same arguments by name and objects of one
+  layout on ILP32 and LP64 (strings, bytes, 32-bit and fixed-width values,
+  `sockaddr`, time64 values); ioctl, fcntl, prctl, clone, ptrace, socket
+  options, seccomp and io_uring never are.
+* **Guest (patch 37).** arm64 defines `ANT_ABI_COMPAT` (3); the recorder
+  includes the generated `asm/antinomie_compat_syscalls.h` and records an
+  AArch32 call with its arm number and ABI 3. Its arguments are its registers'
+  low halves, with the 32-bit signed ones sign-extended. A call with a native
+  counterpart is captured by the native code under the native number (file
+  activity, exec, credentials and network captures included); `execve` and
+  `execveat` read their vectors as 32-bit pointers (`linux-6.12.94/arm/pointer`).
+  prctl's options whose objects have one layout (`PR_SET_NAME`, `PR_GET_NAME`,
+  int results, `PR_SET_VMA`'s name) are captured by the native code too.
+  Any other call has its path strings captured and its other pointers recorded
+  by address. Everything is under `#ifdef ANT_ABI_COMPAT`: x86-64's objects are
+  identical.
+* **Host.** `syscalls::Abi::Arm` (id tag 40) is aarch64's `compat()` ABI: the
+  assembler names ABI-3 records of an arm64 run by it, struct member filters
+  read a natively captured field with aarch64's layouts and number, rules see a
+  call by its `family`, and `long`/`off_t` arguments render by the call's own
+  data model. A result is the 32-bit register the program sees: -4095 to -1
+  is an error, any other value is unsigned (an `mmap2` address above 2 GiB is
+  that address; the guest records the register sign-extended).
+* **Not supported.** The guest writes no process core of a 32-bit program (the
+  run says why), and the debugger does not attach to one.
+
 ### Fair, progress-sensitive send waits (0.8.0)
 
 Guest patch 1 (`transport/guest.c`, `ant_send`); transport ABI and contract

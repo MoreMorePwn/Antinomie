@@ -90,6 +90,7 @@ pub(super) fn native_syscalls_json(abi: Abi) -> &'static str {
     match abi {
         Abi::X86_64 => include_str!("../../../../protocol/x86_64/native-syscalls.json"),
         Abi::Aarch64 => include_str!("../../../../protocol/aarch64/native-syscalls.json"),
+        Abi::Arm => include_str!("../../../../protocol/arm/native-syscalls.json"),
     }
 }
 
@@ -97,6 +98,7 @@ fn constants_json(abi: Abi) -> &'static str {
     match abi {
         Abi::X86_64 => include_str!("../../../../protocol/x86_64/constants.json"),
         Abi::Aarch64 => include_str!("../../../../protocol/aarch64/constants.json"),
+        Abi::Arm => include_str!("../../../../protocol/arm/constants.json"),
     }
 }
 
@@ -105,6 +107,7 @@ pub fn captured_layouts_json(abi: Abi) -> &'static str {
     match abi {
         Abi::X86_64 => include_str!("../../../../protocol/x86_64/captured-layout-members.json"),
         Abi::Aarch64 => include_str!("../../../../protocol/aarch64/captured-layout-members.json"),
+        Abi::Arm => include_str!("../../../../protocol/arm/captured-layout-members.json"),
     }
 }
 
@@ -136,6 +139,34 @@ mod tests {
                 assert!(layout.starts_with(&constants.layout_prefix), "{layout}");
             }
         }
+    }
+
+    #[test]
+    fn arm_is_the_ilp32_compat_set() {
+        let arm = load_constants(Abi::Arm);
+        assert_eq!(arm.architecture, "arm");
+        assert_eq!(arm.elf_machine, 40);
+        assert_eq!(arm.elf_class, 32);
+        assert_eq!(arm.endianness, Endian::Little);
+        assert_eq!(arm.data_model, DataModel::Ilp32);
+        assert_eq!(arm.long_size(), 4);
+        assert_eq!(arm.audit_arch, "40000028");
+        assert_eq!(arm.layout_prefix, "linux-6.12.94/arm/");
+        let layouts: serde_json::Value =
+            serde_json::from_str(captured_layouts_json(Abi::Arm)).unwrap();
+        assert_eq!(layouts["architecture"], "arm");
+        for layout in layouts["layouts"].as_array().unwrap() {
+            assert!(
+                layout["layout"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("linux-6.12.94/arm/")
+            );
+        }
+        // arch/arm/include/uapi/asm/fcntl.h, as arm64's
+        assert_eq!(arm.value("O_DIRECTORY", 0o200000), Some(0o40000));
+        assert_eq!(Abi::Aarch64.compat(), Some(Abi::Arm));
+        assert_eq!(Abi::X86_64.compat(), None);
     }
 
     #[test]

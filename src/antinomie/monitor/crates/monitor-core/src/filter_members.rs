@@ -98,9 +98,11 @@ fn inventory() -> &'static Inventory {
 fn inventory_of(abi: syscalls::Abi) -> &'static Inventory {
     static X86_64: OnceLock<Inventory> = OnceLock::new();
     static AARCH64: OnceLock<Inventory> = OnceLock::new();
+    static ARM: OnceLock<Inventory> = OnceLock::new();
     let cell = match abi {
         syscalls::Abi::X86_64 => &X86_64,
         syscalls::Abi::Aarch64 => &AARCH64,
+        syscalls::Abi::Arm => &ARM,
     };
     cell.get_or_init(|| {
         // Generated compiled input is validated by tests and the generator.
@@ -317,10 +319,23 @@ fn metadata(field: &FieldSummary, member: &str) -> Option<MemberValue> {
 }
 
 /// The layout of a call's argument, from the layouts of the call's own ABI
-/// (`nr` is a host syscall id).
+/// (`nr` is a host syscall id); a compat call the guest captured as its native
+/// counterpart, from the native ABI's, by the native call's number.
 fn layout(field: &FieldSummary, nr: u64, index: usize) -> Option<&'static Layout> {
-    let abi = syscalls::table_of(nr).map_or(syscalls::native().abi, |table| table.abi);
-    let number = syscalls::wire_number(nr);
+    let table = syscalls::table_of(nr);
+    let mut abi = table.map_or(syscalls::native().abi, |table| table.abi);
+    let mut number = syscalls::wire_number(nr);
+    if let Some(native) = syscalls::syscall(nr).and_then(|call| call.native)
+        && let Some(native_abi) = [syscalls::Abi::Aarch64]
+            .into_iter()
+            .find(|candidate| candidate.compat() == Some(abi))
+        && field
+            .layout
+            .starts_with(&syscalls::table(native_abi).constants().layout_prefix)
+    {
+        abi = native_abi;
+        number = native;
+    }
     inventory_of(abi).layouts.iter().find(|layout| {
         layout.supported
             && layout.layout == field.layout

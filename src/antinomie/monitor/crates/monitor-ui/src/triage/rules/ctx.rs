@@ -50,7 +50,10 @@ impl<'a> Ctx<'a> {
             event,
             files,
             dir,
-            name: event.syscall_name.as_str(),
+            // A 32-bit ABI's call by its x86-64 family's name (arm's
+            // `send` is `sendto`), every other by its own.
+            name: antinomie_monitor_core::syscalls::family(event.syscall_nr)
+                .unwrap_or(event.syscall_name.as_str()),
             args: event.args.or(call_args(call)).unwrap_or([0; 6]),
             ret,
             ok: ret.is_some_and(|ret| ret >= 0),

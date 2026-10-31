@@ -511,6 +511,22 @@ impl Event {
 
 /// The abi field of a native call's records (`ANT_ABI_NATIVE`).
 const ANT_ABI_NATIVE: u16 = 1;
+/// The abi field of a compat program's call (`ANT_ABI_COMPAT`): an AArch32
+/// program's on an arm64 guest, named by the arm table.
+const ANT_ABI_COMPAT: u16 = 3;
+
+/// A compat call's result as its program sees it. The guest records the
+/// 32-bit register sign-extended, as the kernel returns it: an error is
+/// -4095..=-1, and any other value is the register unsigned, so an address
+/// above 2 GiB that `mmap2` returns is that address, not a negative number.
+fn compat_result(result: i64) -> i64 {
+    let register = result as i32;
+    if (-4095..0).contains(&register) {
+        i64::from(register)
+    } else {
+        i64::from(register as u32)
+    }
+}
 
 pub struct Assembler {
     directory: PathBuf,
@@ -546,15 +562,25 @@ impl Assembler {
     pub fn set_arch(&mut self, arch: crate::api::GuestArch) {
         self.abi = crate::syscalls::Abi::of(arch).unwrap_or(crate::syscalls::Abi::X86_64);
     }
-    /// The host syscall id of a record: native calls by the guest's table;
-    /// another ABI's calls on a non-x86 guest by number only (x86-64 keeps
-    /// naming every call by its native table, as it always did).
+    /// The host syscall id of a record: native calls by the guest's table,
+    /// compat programs' by the table of the guest's compat ABI; another ABI's
+    /// calls on a non-x86 guest by number only (x86-64 keeps naming every
+    /// call by its native table, as it always did).
     pub(crate) fn syscall_id(&self, h: &Header) -> u64 {
         match self.abi {
             crate::syscalls::Abi::X86_64 => h.syscall_nr,
             abi if h.abi == ANT_ABI_NATIVE => crate::syscalls::id(abi, h.syscall_nr),
+            abi if h.abi == ANT_ABI_COMPAT
+                && let Some(compat) = abi.compat() =>
+            {
+                crate::syscalls::id(compat, h.syscall_nr)
+            }
             _ => crate::syscalls::untabled_id(h.syscall_nr),
         }
+    }
+    /// The record's ABI is one the run's tables decode.
+    fn decoded_abi(&self, abi: u16) -> bool {
+        abi == ANT_ABI_NATIVE || (abi == ANT_ABI_COMPAT && self.abi.compat().is_some())
     }
     pub fn new(directory: PathBuf, quota: u64) -> Result<Self> {
         private_dir(&directory).map_err(|e| error(e.to_string()))?;
@@ -749,6 +775,7 @@ impl Assembler {
             self.events.insert(key, Event::new(&h));
             self.order.push_back(key);
         }
+        let abi_decoded = self.decoded_abi(h.abi);
         let e = self
             .events
             .get_mut(&key)
@@ -777,7 +804,7 @@ impl Assembler {
                 .push(format!("unknown header flags 0x{:x}", h.flags));
         }
         e.header_flags |= h.flags;
-        if h.schema_id != 1 || h.abi != 1 {
+        if h.schema_id != 1 || !abi_decoded {
             e.issues.push("unknown schema or ABI; raw only".into());
         }
         match h.fragment {
@@ -793,7 +820,12 @@ impl Assembler {
                     }
                     e.summary.args = Some(args);
                     if b[49] != 0 {
-                        e.summary.result = Some(u64_at(b, 56)? as i64);
+                        let result = u64_at(b, 56)? as i64;
+                        e.summary.result = Some(if abi_decoded && h.abi == ANT_ABI_COMPAT {
+                            compat_result(result)
+                        } else {
+                            result
+                        });
                     }
                     e.begin = Some(b.to_vec());
                 }
@@ -1120,6 +1152,39 @@ mod tests {
             b"later field"
         );
         std::fs::remove_dir_all(path).unwrap();
+    }
+    #[test]
+    fn compat_records_are_named_by_the_guests_compat_table() {
+        use crate::syscalls::{Abi, known_name, table_of};
+        let record = |abi: u16, nr: u64| {
+            let mut p = packet(1, 0, 0, &[0; 120], 1);
+            p[88..96].copy_from_slice(&nr.to_le_bytes());
+            p[96..98].copy_from_slice(&abi.to_le_bytes());
+            parse_packet(&p).unwrap().0
+        };
+        let mut assembler = Assembler::sealed();
+        // x86-64 guests keep their numbers whatever the ABI field says.
+        assert_eq!(assembler.syscall_id(&record(3, 322)), 322);
+        assert!(!assembler.decoded_abi(3));
+        assembler.set_arch(crate::api::GuestArch::AARCH64);
+        let compat = assembler.syscall_id(&record(3, 322));
+        assert_eq!(table_of(compat).unwrap().abi, Abi::Arm);
+        assert_eq!(known_name(compat), Some("openat"));
+        let native = assembler.syscall_id(&record(1, 56));
+        assert_eq!(table_of(native).unwrap().abi, Abi::Aarch64);
+        assert_eq!(known_name(native), Some("openat"));
+        assert!(table_of(assembler.syscall_id(&record(2, 56))).is_none());
+        assert!(assembler.decoded_abi(1) && assembler.decoded_abi(3));
+        assert!(!assembler.decoded_abi(2));
+    }
+    #[test]
+    fn compat_results_are_their_32_bit_registers() {
+        // mmap2's address above 2 GiB, sign-extended by the guest.
+        assert_eq!(compat_result(0xffff_ffff_f771_2000_u64 as i64), 0xf771_2000);
+        assert_eq!(compat_result(-12), -12);
+        assert_eq!(compat_result(-4095), -4095);
+        assert_eq!(compat_result(-4096), 0xffff_f000);
+        assert_eq!(compat_result(3), 3);
     }
     #[test]
     fn extended_headers_keep_inherited_root_and_legacy_root_unknown() {

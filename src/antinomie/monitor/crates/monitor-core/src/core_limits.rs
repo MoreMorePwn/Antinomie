@@ -311,6 +311,14 @@ pub fn guest_reason(outcome: &CoreOutcome) -> Option<CoreReason> {
             Some(-4),
             "a signal interrupted the acquisition",
         ),
+        // EOPNOTSUPP: the guest's writer refuses the process outright (a
+        // 32-bit address space, ia32 and x32 on x86-64 too, or no core writer).
+        95 => CoreReason::new(
+            CoreReasonCode::Writer,
+            Some(-95),
+            "the guest writes no core of a 32-bit program (such as an AArch32 program on \
+             arm64) or of a program format without a core writer",
+        ),
         _ => CoreReason::new(
             CoreReasonCode::Writer,
             Some(-errno),
@@ -423,6 +431,9 @@ mod tests {
         }
         assert_eq!(reason(0, 8).unwrap().code, CoreReasonCode::Coverage);
         assert!(reason(0, 0).is_none());
+        let refused = reason(-95, 0).unwrap();
+        assert_eq!(refused.code, CoreReasonCode::Writer);
+        assert!(refused.text.contains("32-bit program"), "{}", refused.text);
         let old = guest_reason(&CoreOutcome {
             state: 4,
             status: -12,

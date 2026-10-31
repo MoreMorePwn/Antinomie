@@ -18,6 +18,7 @@ impl Abi {
         match self {
             Self::X86_64 => 0,
             Self::Aarch64 => u64::from(crate::api::GuestArch::ELF_AARCH64),
+            Self::Arm => u64::from(crate::api::GuestArch::ELF_ARM),
         }
     }
 }
