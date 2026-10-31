@@ -187,7 +187,7 @@ index bee0ffc..51b40a8 100644
 +obj-$(CONFIG_X86_64) += debug_x86.o
  obj-y += fileid.o
 diff --git a/kernel/antinomie/control.c b/kernel/antinomie/control.c
-index 1cbab79..cb51da8 100644
+index f0619f7..a5a5470 100644
 --- a/kernel/antinomie/control.c
 +++ b/kernel/antinomie/control.c
 @@ -26,12 +26,13 @@
@@ -265,7 +265,7 @@ index 1cbab79..cb51da8 100644
  	ant_core_finish_launch(core, true);
  	ant_specimen_finish(specimen, true);
  	return 0;
-@@ -537,6 +552,8 @@ static int stop_run(const u8 *args, size_t args_len)
+@@ -542,6 +557,8 @@ static int stop_run(const u8 *args, size_t args_len)
  	 * escape this pass, so success only reports an issued signal request;
  	 * the escalation to SIGKILL (run.c) covers a task that ignores SIGTERM.
  	 */
@@ -274,7 +274,7 @@ index 1cbab79..cb51da8 100644
  	error = ant_run_signal(root_cookie, SIGTERM, &issued);
  	if (issued) {
  		ant_monitor_run_stopped(root_cookie);
-@@ -556,6 +573,8 @@ static int command(const void *data, size_t args_len, void *reply,
+@@ -561,6 +578,8 @@ static int command(const void *data, size_t args_len, void *reply,
  	    get_unaligned_le16(args + 2) != ANTC_HEADER_SIZE)
  		return opcode == ANTC_RUN_STATUS ? -EINVAL : -EPROTO;
  	if (opcode != ANTC_UPLOAD_BEGIN && opcode != ANTC_EXEC &&
@@ -283,7 +283,7 @@ index 1cbab79..cb51da8 100644
  	    opcode != ANTC_CORE_STATUS && get_unaligned_le32(args + 4))
  		return -EINVAL;
  	switch (opcode) {
-@@ -569,7 +588,8 @@ static int command(const void *data, size_t args_len, void *reply,
+@@ -574,7 +593,8 @@ static int command(const void *data, size_t args_len, void *reply,
  	case ANTC_EXEC:
  		if (capacity < 24 +
  		    (get_unaligned_le32(args + 4) & ANTC_EXEC_SPECIMEN ? 24 : 0) +
@@ -293,7 +293,7 @@ index 1cbab79..cb51da8 100644
  			return -EMSGSIZE;
  		return execute(args, args_len, reply, reply_len);
  	case ANTC_CORE_CAPTURE: case ANTC_CORE_LOOKUP:
-@@ -578,6 +598,14 @@ static int command(const void *data, size_t args_len, void *reply,
+@@ -583,6 +603,14 @@ static int command(const void *data, size_t args_len, void *reply,
  		return ant_core_command(opcode, args, args_len, reply, capacity, reply_len);
  	case ANTC_CORE_CAPS:
  		return ant_core_caps(args, args_len, reply, capacity, reply_len);
@@ -308,7 +308,7 @@ index 1cbab79..cb51da8 100644
  	case ANTC_TRACER_CAPS:
  		if (args_len != 8 || capacity < ANTC_TRACER_CAPS_SIZE)
  			return -EINVAL;
-@@ -657,7 +685,12 @@ static int __init ant_control_init(void)
+@@ -662,7 +690,12 @@ static int __init ant_control_init(void)
  		ANTC_CAPTURE_ALL, ANTC_CAPTURE_STOP, ANTC_CAPTURE_STATUS,
  		ANTC_CORE_STATUS, ANTC_CORE_READ, ANTC_CORE_RELEASE,
  		ANTC_CORE_CAPTURE, ANTC_CORE_LOOKUP, ANTC_CORE_CANCEL, ANTC_CORE_CAPS,

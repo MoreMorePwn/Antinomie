@@ -28,12 +28,12 @@ replaying or losing a command. The worker is not a memory-reclaim
 worker, because reading a terminal flushes the ordinary TTY workqueue.
 
 control.c implements control protocol 1 on top of it (control_wire.h,
-shared with the host): upload a file, launch a program in a pseudo
-terminal of its own through a kernel user-mode helper with the
-requested uid, gid and working directory (nothing runs in the guest to
-do it), write to, read from and resize that terminal, signal its
-process group, report what the kernel is (INFO) and power the guest
-off.
+shared with the host): upload a file (closed before COMMIT answers, so
+that it can be run at once), launch a program in a pseudo terminal of
+its own through a kernel user-mode helper with the requested uid, gid
+and working directory (nothing runs in the guest to do it), write to,
+read from and resize that terminal, signal its process group, report
+what the kernel is (INFO) and power the guest off.
 
 Hooked kernel files:
 - init/Kconfig and kernel/Makefile add CONFIG_ANTINOMIE and the
@@ -63,11 +63,11 @@ revision 14 (transport ABI 9). A kernel without INFO answers it with
  kernel/antinomie/abi.h              | 115 ++++++
  kernel/antinomie/bootstrap.c        |  38 ++
  kernel/antinomie/bootstrap_layout.h |   6 +
- kernel/antinomie/control.c          | 514 +++++++++++++++++++++++++++
+ kernel/antinomie/control.c          | 519 +++++++++++++++++++++++++++
  kernel/antinomie/control_wire.h     |  66 ++++
  kernel/antinomie/guest.c            | 526 ++++++++++++++++++++++++++++
  kernel/antinomie/queue.h            |  79 +++++
- 13 files changed, 1422 insertions(+)
+ 13 files changed, 1427 insertions(+)
  create mode 100644 include/linux/antinomie.h
  create mode 100644 include/linux/antinomie_boot.h
  create mode 100644 kernel/antinomie/Kconfig
@@ -383,10 +383,10 @@ index 0000000..1da2fd9
 +#endif
 diff --git a/kernel/antinomie/control.c b/kernel/antinomie/control.c
 new file mode 100644
-index 0000000..b598a01
+index 0000000..32dbdc3
 --- /dev/null
 +++ b/kernel/antinomie/control.c
-@@ -0,0 +1,514 @@
+@@ -0,0 +1,519 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +#include <linux/antinomie.h>
 +#include <linux/cred.h>
@@ -769,7 +769,12 @@ index 0000000..b598a01
 +		if (error)
 +			return error;
 +	}
-+	fput(upload_file);
++	/*
++	 * This worker is a kernel thread, whose fput() leaves the release to a
++	 * delayed work item; release now, so that the file is closed and no
++	 * longer denies exec when the host reads the reply.
++	 */
++	__fput_sync(upload_file);
 +	upload_file = NULL;
 +	return 0;
 +}

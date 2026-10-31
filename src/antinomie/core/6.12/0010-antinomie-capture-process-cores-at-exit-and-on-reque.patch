@@ -714,7 +714,7 @@ index 795867d..bee0ffc 100644
  obj-y += hash.o
  obj-y += fileid.o
 diff --git a/kernel/antinomie/control.c b/kernel/antinomie/control.c
-index 390f530..1cbab79 100644
+index 6b0e202..f0619f7 100644
 --- a/kernel/antinomie/control.c
 +++ b/kernel/antinomie/control.c
 @@ -24,6 +24,7 @@
@@ -817,7 +817,7 @@ index 390f530..1cbab79 100644
  	free_session(session);
  	free_launch(launch);
  	return error;
-@@ -527,7 +556,7 @@ static int command(const void *data, size_t args_len, void *reply,
+@@ -532,7 +561,7 @@ static int command(const void *data, size_t args_len, void *reply,
  	    get_unaligned_le16(args + 2) != ANTC_HEADER_SIZE)
  		return opcode == ANTC_RUN_STATUS ? -EINVAL : -EPROTO;
  	if (opcode != ANTC_UPLOAD_BEGIN && opcode != ANTC_EXEC &&
@@ -826,7 +826,7 @@ index 390f530..1cbab79 100644
  		return -EINVAL;
  	switch (opcode) {
  	case ANTC_PROCESS_LIST: case ANTC_CAPTURE_ATTACH: case ANTC_CAPTURE_ALL:
-@@ -538,9 +567,17 @@ static int command(const void *data, size_t args_len, void *reply,
+@@ -543,9 +572,17 @@ static int command(const void *data, size_t args_len, void *reply,
  	case ANTC_UPLOAD_CHUNK: case ANTC_UPLOAD_COMMIT: case ANTC_UPLOAD_ABORT:
  		return upload_command(opcode, args, args_len, reply, reply_len);
  	case ANTC_EXEC:
@@ -845,7 +845,7 @@ index 390f530..1cbab79 100644
  	case ANTC_TRACER_CAPS:
  		if (args_len != 8 || capacity < ANTC_TRACER_CAPS_SIZE)
  			return -EINVAL;
-@@ -597,6 +634,7 @@ static int command(const void *data, size_t args_len, void *reply,
+@@ -602,6 +639,7 @@ static int command(const void *data, size_t args_len, void *reply,
  	case ANTC_SHUTDOWN:
  		if (args_len != 8)
  			return -EINVAL;
@@ -853,7 +853,7 @@ index 390f530..1cbab79 100644
  		schedule_delayed_work(&power_off_work, msecs_to_jiffies(250));
  		return 0;
  	default:
-@@ -617,6 +655,8 @@ static int __init ant_control_init(void)
+@@ -622,6 +660,8 @@ static int __init ant_control_init(void)
  		ANTC_SHUTDOWN, ANTC_ACQUIRE, ANTC_SPECIMEN_READ,
  		ANTC_SPECIMEN_RELEASE, ANTC_PROCESS_LIST, ANTC_CAPTURE_ATTACH,
  		ANTC_CAPTURE_ALL, ANTC_CAPTURE_STOP, ANTC_CAPTURE_STATUS,

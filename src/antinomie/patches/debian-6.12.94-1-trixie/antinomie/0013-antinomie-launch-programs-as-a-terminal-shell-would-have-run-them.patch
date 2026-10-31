@@ -25,7 +25,7 @@ Last-Update: 2026-10-26
 
 ---
 diff --git a/kernel/antinomie/control.c b/kernel/antinomie/control.c
-index c36cf60..c07ebf1 100644
+index 92924c7..b76ca15 100644
 --- a/kernel/antinomie/control.c
 +++ b/kernel/antinomie/control.c
 @@ -11,8 +11,10 @@
@@ -145,7 +145,7 @@ index c36cf60..c07ebf1 100644
  	session->master = filp_open("/dev/ptmx", O_RDWR | O_NONBLOCK | O_NOCTTY, 0);
  	if (IS_ERR(session->master)) {
  		error = PTR_ERR(session->master);
-@@ -614,7 +678,8 @@ static int command(const void *data, size_t args_len, void *reply,
+@@ -619,7 +683,8 @@ static int command(const void *data, size_t args_len, void *reply,
  			return -EINVAL;
  		memset(reply, 0, ANTC_TRACER_CAPS_SIZE);
  		put_unaligned_le32(ANTC_TRACER_ABI, reply);

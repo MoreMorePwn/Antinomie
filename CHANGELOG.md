@@ -35,6 +35,11 @@ it runs.
   and a run that never ran can be deleted from its menu. Older Unknown entries of
   launches that never started read as Failed to start.
 
+- **Upload and Run starts at once.** The guest answered an upload's commit
+  before it had closed the file, so a launch right after it could fail with
+  "Text file busy". The guest now closes the file before it answers (needs a
+  base built from this release).
+
 - **Sample notes and Delete run.** Notes with links to runs, processes,
   artifacts and custody entries, a Notes tab, Latest note and Add note… menus;
   every note change is in the custody log. Delete run asks which of the run's

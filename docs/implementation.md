@@ -2407,6 +2407,21 @@ Three host fixes; the guest and the contract are unchanged.
   lines never reached the frontend (lines 164 to 273, the 10 s it did not read);
   with the backlog all 680 did.
 
+### Uploads closed before COMMIT answers (0.8.0)
+
+`UPLOAD_COMMIT` and `UPLOAD_ABORT` run on the guest's `antinomie-control` workqueue, a
+kernel thread. A kernel thread's `fput()` does not release the file itself: it queues
+it on `delayed_fput_work`, which runs a jiffy or more later. Until then the file still
+holds the write access that makes `execve()` refuse it with `ETXTBSY`, so the host
+could read the commit's success and launch the program before the guest had closed it
+("Text file busy" on Upload and Run; test drivers retried or slept). The upload
+command now releases the file with `__fput_sync()` (patch 0001), so the reply comes
+after the close and a launch right after the commit finds the file closed. The wire
+contract is unchanged (no revision); a base built before this still has the race, and
+the launch error says so (`launch_failure`: "the program file is still open for
+writing, for example by an upload that has not finished"). `route-check` and
+`core-size-check` no longer retry or wait after an upload.
+
 ### Accepted host UI performance (0.6.2)
 
 Remove render-time filesystem checks for host chooser availability; resolve

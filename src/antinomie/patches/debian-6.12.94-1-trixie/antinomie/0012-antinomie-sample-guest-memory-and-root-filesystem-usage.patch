@@ -33,7 +33,7 @@ index 51b40a8..a5a55d3 100644
  obj-y += debug.o
  obj-$(CONFIG_X86_64) += debug_x86.o
 diff --git a/kernel/antinomie/control.c b/kernel/antinomie/control.c
-index cb51da8..c36cf60 100644
+index a5a5470..92924c7 100644
 --- a/kernel/antinomie/control.c
 +++ b/kernel/antinomie/control.c
 @@ -24,6 +24,7 @@
@@ -44,7 +44,7 @@ index cb51da8..c36cf60 100644
  #include "process_core.h"
  #include "run.h"
  #include "debug.h"
-@@ -606,6 +607,8 @@ static int command(const void *data, size_t args_len, void *reply,
+@@ -611,6 +612,8 @@ static int command(const void *data, size_t args_len, void *reply,
  	case ANTC_DEBUG_EVENTS: case ANTC_DEBUG_THREAD_CTL: case ANTC_DEBUG_SESSIONS:
  	case ANTC_DEBUG_BP_LIST:
  		return ant_debug_command(opcode, args, args_len, reply, capacity, reply_len);
@@ -53,7 +53,7 @@ index cb51da8..c36cf60 100644
  	case ANTC_TRACER_CAPS:
  		if (args_len != 8 || capacity < ANTC_TRACER_CAPS_SIZE)
  			return -EINVAL;
-@@ -685,6 +688,7 @@ static int __init ant_control_init(void)
+@@ -690,6 +693,7 @@ static int __init ant_control_init(void)
  		ANTC_CAPTURE_ALL, ANTC_CAPTURE_STOP, ANTC_CAPTURE_STATUS,
  		ANTC_CORE_STATUS, ANTC_CORE_READ, ANTC_CORE_RELEASE,
  		ANTC_CORE_CAPTURE, ANTC_CORE_LOOKUP, ANTC_CORE_CANCEL, ANTC_CORE_CAPS,

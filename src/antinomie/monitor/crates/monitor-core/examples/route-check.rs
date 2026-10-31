@@ -504,25 +504,7 @@ impl Driver {
     /// Launches `request` and returns its run id once Run History lists it.
     fn start(&mut self, request: ExecRequest) -> Result<String, String> {
         let known: Vec<String> = self.snapshot.runs.iter().map(|r| r.id.clone()).collect();
-        let path = request.path.clone();
-        // The upload's answer can come before the guest closed the file;
-        // a launch refused as busy (nothing started) is tried again.
-        let mut tries = 0;
-        loop {
-            match self.command_for(Command::Execute(request.clone()), 180) {
-                Err(error) if error.contains("Text file busy") && tries < 5 => {
-                    tries += 1;
-                    println!(
-                        "NOTE launch {path}: the program is still open for writing; again in 1 s"
-                    );
-                    thread::sleep(Duration::from_secs(1));
-                }
-                other => {
-                    other?;
-                    break;
-                }
-            }
-        }
+        self.command_for(Command::Execute(request), 180)?;
         self.wait("run publication", 15, |s| {
             s.runs.iter().any(|r| !known.contains(&r.id))
         })?;

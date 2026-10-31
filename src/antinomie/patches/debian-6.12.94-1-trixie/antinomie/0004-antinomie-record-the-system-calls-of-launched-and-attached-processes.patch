@@ -173,7 +173,7 @@ index 1b603b1..2cf3f23 100644
 +obj-y += bootstrap.o guest.o recorder.o control.o
 +obj-y += observer.o
 diff --git a/kernel/antinomie/control.c b/kernel/antinomie/control.c
-index b598a01..a4ce499 100644
+index 32dbdc3..3ce824b 100644
 --- a/kernel/antinomie/control.c
 +++ b/kernel/antinomie/control.c
 @@ -1,5 +1,6 @@
@@ -205,7 +205,7 @@ index b598a01..a4ce499 100644
  	session->pgrp = get_task_pid(current, PIDTYPE_PGID);
  	return 0;
  }
-@@ -461,6 +467,9 @@ static int command(const void *data, size_t args_len, void *reply,
+@@ -466,6 +472,9 @@ static int command(const void *data, size_t args_len, void *reply,
  	if (opcode != ANTC_UPLOAD_BEGIN && get_unaligned_le32(args + 4))
  		return -EINVAL;
  	switch (opcode) {
@@ -215,7 +215,7 @@ index b598a01..a4ce499 100644
  	case ANTC_UPLOAD_BEGIN:
  		return upload_begin(args, args_len, reply, reply_len);
  	case ANTC_UPLOAD_CHUNK: case ANTC_UPLOAD_COMMIT: case ANTC_UPLOAD_ABORT:
-@@ -470,6 +479,12 @@ static int command(const void *data, size_t args_len, void *reply,
+@@ -475,6 +484,12 @@ static int command(const void *data, size_t args_len, void *reply,
  	case ANTC_TERMINAL_INPUT: case ANTC_TERMINAL_READ:
  	case ANTC_TERMINAL_RESIZE: case ANTC_SIGNAL:
  		return terminal_command(opcode, args, args_len, reply, capacity, reply_len);
@@ -228,7 +228,7 @@ index b598a01..a4ce499 100644
  	case ANTC_INFO:
  		if (args_len != 8 || capacity < ANTC_INFO_SIZE)
  			return -EINVAL;
-@@ -498,7 +513,9 @@ static int __init ant_control_init(void)
+@@ -503,7 +518,9 @@ static int __init ant_control_init(void)
  	static const u32 opcodes[] = { ANTC_INFO, ANTC_UPLOAD_BEGIN,
  		ANTC_UPLOAD_CHUNK, ANTC_UPLOAD_COMMIT, ANTC_UPLOAD_ABORT, ANTC_EXEC,
  		ANTC_TERMINAL_INPUT, ANTC_TERMINAL_READ, ANTC_TERMINAL_RESIZE,

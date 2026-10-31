@@ -230,8 +230,6 @@ fn boot(
         overwrite: false,
         executable: true,
     })?;
-    // The upload's last write may still be settling in the guest (ETXTBSY).
-    thread::sleep(Duration::from_secs(2));
     Ok((driver, vm_id))
 }
 

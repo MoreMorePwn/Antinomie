@@ -105,7 +105,7 @@ index 53436b2..3f8f3aa 100644
 +obj-y += bootstrap.o guest.o recorder.o control.o run.o native_capture.o
  obj-y += observer.o
 diff --git a/kernel/antinomie/control.c b/kernel/antinomie/control.c
-index a4ce499..b58eaca 100644
+index 3ce824b..c0703f2 100644
 --- a/kernel/antinomie/control.c
 +++ b/kernel/antinomie/control.c
 @@ -23,6 +23,7 @@
@@ -116,7 +116,7 @@ index a4ce499..b58eaca 100644
  
  #define ANT_SESSION_MAX 64
  
-@@ -454,6 +455,37 @@ static int terminal_command(u32 opcode, const u8 *args, size_t args_len,
+@@ -459,6 +460,37 @@ static int terminal_command(u32 opcode, const u8 *args, size_t args_len,
  	return tty->ops->resize ? tty->ops->resize(tty, &ws) : tty_do_resize(tty, &ws);
  }
  
@@ -154,7 +154,7 @@ index a4ce499..b58eaca 100644
  static int command(const void *data, size_t args_len, void *reply,
  		   size_t capacity, size_t *reply_len, void *context)
  {
-@@ -463,7 +495,7 @@ static int command(const void *data, size_t args_len, void *reply,
+@@ -468,7 +500,7 @@ static int command(const void *data, size_t args_len, void *reply,
  	*reply_len = 0;
  	if (args_len < ANTC_HEADER_SIZE || get_unaligned_le16(args) != ANTC_VERSION ||
  	    get_unaligned_le16(args + 2) != ANTC_HEADER_SIZE)
@@ -163,7 +163,7 @@ index a4ce499..b58eaca 100644
  	if (opcode != ANTC_UPLOAD_BEGIN && get_unaligned_le32(args + 4))
  		return -EINVAL;
  	switch (opcode) {
-@@ -479,6 +511,22 @@ static int command(const void *data, size_t args_len, void *reply,
+@@ -484,6 +516,22 @@ static int command(const void *data, size_t args_len, void *reply,
  	case ANTC_TERMINAL_INPUT: case ANTC_TERMINAL_READ:
  	case ANTC_TERMINAL_RESIZE: case ANTC_SIGNAL:
  		return terminal_command(opcode, args, args_len, reply, capacity, reply_len);
@@ -186,7 +186,7 @@ index a4ce499..b58eaca 100644
  	case ANTC_STATS:
  		if (args_len != 8 || capacity < 80)
  			return -EINVAL;
-@@ -513,7 +561,7 @@ static int __init ant_control_init(void)
+@@ -518,7 +566,7 @@ static int __init ant_control_init(void)
  	static const u32 opcodes[] = { ANTC_INFO, ANTC_UPLOAD_BEGIN,
  		ANTC_UPLOAD_CHUNK, ANTC_UPLOAD_COMMIT, ANTC_UPLOAD_ABORT, ANTC_EXEC,
  		ANTC_TERMINAL_INPUT, ANTC_TERMINAL_READ, ANTC_TERMINAL_RESIZE,
