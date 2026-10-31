@@ -12,7 +12,7 @@ use antinomie_monitor_core::samples::TagKind;
 /// The first hex digits of a SHA-256 the list shows.
 const SHORT_HASH: usize = 8;
 /// The width the columns need together; narrower, the table scrolls sideways.
-const MIN_TABLE_WIDTH: f32 = 900.0;
+const MIN_TABLE_WIDTH: f32 = 860.0;
 
 impl Row {
     /// The row matches the search text: name, description, a tag or the start
@@ -293,11 +293,11 @@ impl MonitorApp {
             .striped(true)
             .column(Column::initial(180.0).at_least(110.0).resizable(true))
             .column(Column::remainder().at_least(140.0))
-            .column(Column::initial(220.0).at_least(80.0).resizable(true))
+            .column(Column::initial(190.0).at_least(80.0).resizable(true))
             .column(Column::exact(56.0))
-            .column(Column::exact(150.0))
-            .column(Column::initial(200.0).at_least(120.0).resizable(true))
-            .column(Column::exact(88.0))
+            .column(Column::exact(140.0))
+            .column(Column::initial(180.0).at_least(120.0).resizable(true))
+            .column(Column::exact(104.0))
             .max_scroll_height(height)
             .min_scrolled_height(0.0)
             .header(table::header_height(font), |mut header| {
