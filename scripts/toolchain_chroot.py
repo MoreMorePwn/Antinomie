@@ -135,9 +135,12 @@ class Chroot:
         self.mounts = [(Path(host).resolve(), inside, writable) for host, inside, writable in mounts]
 
     def translate(self, text):
-        """`text` with a host path under a bound folder replaced by its path inside."""
+        """`text` with a host path under a bound folder replaced by its path
+        inside. The deepest bound folder wins: a work folder inside the kit is
+        bound at /work, not seen through the kit's read-only /kit."""
         text = str(text)
-        for host, inside, _ in self.mounts:
+        for host, inside, _ in sorted(self.mounts, key=lambda mount: len(str(mount[0])),
+                                      reverse=True):
             prefix = str(host)
             if text == prefix or text.startswith(prefix + "/"):
                 return inside + text[len(prefix):]

@@ -381,6 +381,20 @@ exit 0
                                  directory / "root")
                 run.assert_not_called()
 
+    def test_a_work_folder_inside_the_kit_is_its_own_writable_bind(self):
+        # The repository's own work/ folder lies inside the kit: its paths go
+        # to /work, not to the read-only /kit, whatever the mounts' order.
+        chroot = base.toolchain_module()
+        with tempfile.TemporaryDirectory() as name:
+            kit = Path(name, "kit").resolve()
+            work = kit / "work/t0193/work-debian-minimal"
+            work.mkdir(parents=True)
+            sandbox = chroot.Chroot(Path(name, "root"), [(kit, "/kit", False), (work, "/work", True)])
+            self.assertEqual(sandbox.translate(work / "source/linux-6.12.94"),
+                             "/work/source/linux-6.12.94")
+            self.assertEqual(sandbox.translate(kit / "scripts/x.sh"), "/kit/scripts/x.sh")
+            self.assertEqual(sandbox.translate(kit / "work/other"), "/kit/work/other")
+
     def test_the_chroot_binds_the_builds_folders_at_the_containers_paths(self):
         chroot = base.toolchain_module()
         with tempfile.TemporaryDirectory() as name:
