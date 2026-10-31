@@ -27,6 +27,94 @@ fn reference(kind: RefKind, target: &str, label: &str) -> NoteRef {
 }
 
 #[test]
+fn a_note_can_name_one_trace_entry_and_the_custody_log_says_which() {
+    let root = temp("notes-trace");
+    let mut library = Library::open(&root).unwrap();
+    let sha = added(&mut library, SCRIPT);
+    let target = trace_target("vm1", "r14", 4821);
+    let refs = vec![
+        reference(RefKind::Run, "vm1/r14", "Run 14"),
+        reference(RefKind::Trace, &target, "Run 14 · openat · record 4821"),
+    ];
+    let id = library
+        .add_note(&sha, "reads the shadow file", &refs)
+        .unwrap();
+    let notes = library.notes(&sha).unwrap();
+    let found = notes.iter().find(|note| note.id == id).unwrap();
+    assert_eq!(
+        found.refs.len(),
+        2,
+        "the run and the entry are two references"
+    );
+    let entry = &found.refs[1];
+    assert_eq!(entry.kind, RefKind::Trace);
+    assert_eq!(entry.run(), Some(("vm1", "r14")));
+    assert_eq!(entry.number(), Some(4821));
+    assert_eq!(RefKind::parse("trace"), Some(RefKind::Trace));
+    // The log (and so its export) carries the run and the sequence.
+    let events = library.events(&sha).unwrap();
+    let CustodyEvent::NoteAdded { refs, .. } = &events
+        .iter()
+        .find(|row| row.event.key() == "note_added")
+        .unwrap()
+        .event
+    else {
+        panic!("not a note event");
+    };
+    assert!(
+        refs.contains("Run 14 · openat · record 4821 [run r14, event 4821]"),
+        "{refs}"
+    );
+    let dest = root.join("out").join("custody.json");
+    library
+        .export_custody(&sha, ExportFormat::Json, &dest, None)
+        .unwrap();
+    let json = fs::read_to_string(&dest).unwrap();
+    assert!(json.contains("event 4821"), "{json}");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn notes_saved_before_trace_entries_existed_still_load() {
+    let root = temp("notes-old");
+    let mut library = Library::open(&root).unwrap();
+    let sha = added(&mut library, SCRIPT);
+    drop(library);
+    // A library file as an older build wrote it: only the old kinds, no
+    // trace entries; plus a kind a newer build might add, which is left out.
+    let connection =
+        rusqlite::Connection::open(samples_dir(&root).join(library::DATABASE)).unwrap();
+    connection
+        .execute(
+            "INSERT INTO note(id, sha256, body, by, created_ms) VALUES (7, ?1, 'old note', 'analyst', 1)",
+            [&sha],
+        )
+        .unwrap();
+    for (order, kind, target, label) in [
+        (0, "run", "vm1/r1", "Run 1"),
+        (1, "call", "vm1/r1/12", "call 12"),
+        (2, "from-the-future", "x", "later kind"),
+    ] {
+        connection
+            .execute(
+                "INSERT INTO note_ref(note_id, ord, kind, target, label) VALUES (7, ?1, ?2, ?3, ?4)",
+                rusqlite::params![order, kind, target, label],
+            )
+            .unwrap();
+    }
+    drop(connection);
+    let library = Library::open(&root).unwrap();
+    let notes = library.notes(&sha).unwrap();
+    assert_eq!(notes.len(), 1);
+    assert_eq!(notes[0].text, "old note");
+    assert_eq!(
+        notes[0].refs.iter().map(|r| r.kind).collect::<Vec<_>>(),
+        [RefKind::Run, RefKind::Call]
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn notes_keep_their_references_and_every_change_reaches_the_custody_log() {
     let root = temp("notes");
     let mut library = Library::open(&root).unwrap();

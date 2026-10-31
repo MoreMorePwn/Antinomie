@@ -560,6 +560,16 @@ pub struct MonitorApp {
     launch_action_rects: Option<(egui::Rect, egui::Rect)>,
 }
 
+/// "Add note…" for a row menu anywhere in the app: `sample` is the SHA-256 of
+/// the sample the row's run started (`None`: the sample that is open).
+pub(crate) fn note_menu_item(
+    ui: &mut egui::Ui,
+    sample: Option<&str>,
+    reference: antinomie_monitor_core::samples::NoteRef,
+) -> bool {
+    samples_page::notes::menu_item_for(ui, sample, || reference)
+}
+
 impl MonitorApp {
     pub fn new(
         cc: &eframe::CreationContext<'_>,

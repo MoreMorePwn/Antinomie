@@ -66,6 +66,7 @@ pub use lineage::{
 };
 pub use notes::{
     MAX_NOTE, MAX_REFS, Note, NoteRef, RefKind, artifact_target, text_hash as note_text_hash,
+    trace_target,
 };
 pub use rollup::{
     CheckRow, EvasionRow, IndicatorRow, Rollup, RuleRow, RunInput, TacticRow, TechniqueRow, rollup,

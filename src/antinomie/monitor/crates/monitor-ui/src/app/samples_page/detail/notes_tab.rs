@@ -186,6 +186,17 @@ impl MonitorApp {
                 }
                 None
             }
+            RefKind::Trace => {
+                // The Syscall Trace of the run, filtered to the one record.
+                if let (Some(entry), Some(seq)) = (run, reference.number()) {
+                    self.open_sample_run(
+                        &entry.run,
+                        crate::workspace::Panel::Trace,
+                        Some(format!("event.sequence == {seq}")),
+                    );
+                }
+                None
+            }
             RefKind::Custody => Some(Tab::Custody),
             RefKind::Indicator | RefKind::Artifact | RefKind::Lineage => Some(Tab::Summary),
         };

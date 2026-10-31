@@ -20,7 +20,7 @@ mod delete_run;
 mod detail;
 mod export;
 mod list;
-mod notes;
+pub(super) mod notes;
 mod picker;
 mod promote;
 mod report_export;

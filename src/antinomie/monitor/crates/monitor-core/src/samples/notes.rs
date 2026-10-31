@@ -2,7 +2,7 @@
 //! Notes on a sample, with typed references to the things they are about.
 //!
 //! A note is free text the analyst wrote. Its references are links to a run,
-//! a process, a call, an indicator, an artefact, a custody entry or a node of
+//! a process, a call, one entry of the Syscall Trace, an indicator, an artefact, a custody entry or a node of
 //! the lineage graph. A reference keeps the label it had when the note was
 //! saved, so it still reads well after the thing it names is gone.
 //!
@@ -50,6 +50,10 @@ pub enum RefKind {
     Process,
     /// A call in the run's Syscall Trace; `<vm id>/<run id>/<call number>`.
     Call,
+    /// One entry of the run's Syscall Trace, by its event sequence:
+    /// `<vm id>/<run id>/<event sequence>`. Unlike [`RefKind::Run`] it names
+    /// a single record, and the note jumps to that record in the trace.
+    Trace,
     /// An indicator; `<type>:<value>`.
     Indicator,
     /// An artefact; `<kind>/<vm id>/<run id>/<name>`, see [`artifact_target`].
@@ -61,10 +65,11 @@ pub enum RefKind {
 }
 
 impl RefKind {
-    pub const ALL: [RefKind; 7] = [
+    pub const ALL: [RefKind; 8] = [
         Self::Run,
         Self::Process,
         Self::Call,
+        Self::Trace,
         Self::Indicator,
         Self::Artifact,
         Self::Custody,
@@ -76,6 +81,7 @@ impl RefKind {
             Self::Run => "run",
             Self::Process => "process",
             Self::Call => "call",
+            Self::Trace => "trace",
             Self::Indicator => "indicator",
             Self::Artifact => "artifact",
             Self::Custody => "custody",
@@ -93,6 +99,7 @@ impl RefKind {
             Self::Run => "Run",
             Self::Process => "Process",
             Self::Call => "Call",
+            Self::Trace => "Trace entry",
             Self::Indicator => "IoC",
             Self::Artifact => "Artifact",
             Self::Custody => "Custody entry",
@@ -119,22 +126,33 @@ impl NoteRef {
         }
     }
 
-    /// The run a run, process or call reference names: `(vm id, run id)`.
+    /// The run a run, process, call or trace-entry reference names:
+    /// `(vm id, run id)`.
     pub fn run(&self) -> Option<(&str, &str)> {
-        if !matches!(self.kind, RefKind::Run | RefKind::Process | RefKind::Call) {
+        if !matches!(
+            self.kind,
+            RefKind::Run | RefKind::Process | RefKind::Call | RefKind::Trace
+        ) {
             return None;
         }
         let mut parts = self.target.splitn(3, '/');
         Some((parts.next()?, parts.next()?))
     }
 
-    /// The process id of a process reference, or the call number of a call.
+    /// The process id of a process reference, the call number of a call or
+    /// the event sequence of a trace entry.
     pub fn number(&self) -> Option<u64> {
-        if !matches!(self.kind, RefKind::Process | RefKind::Call) {
+        if !matches!(self.kind, RefKind::Process | RefKind::Call | RefKind::Trace) {
             return None;
         }
         self.target.splitn(3, '/').nth(2)?.parse().ok()
     }
+}
+
+/// The target of a trace-entry reference: the run and the entry's event
+/// sequence (the record number the Syscall Trace shows).
+pub fn trace_target(vm_id: &str, run_id: &str, event_seq: u64) -> String {
+    format!("{vm_id}/{run_id}/{event_seq}")
 }
 
 /// The target of an artefact reference.
@@ -198,9 +216,19 @@ fn check(text: &str, refs: &[NoteRef]) -> Result<String, String> {
     Ok(text.to_owned())
 }
 
+/// The references as the custody log and its exports name them. A trace
+/// entry also gives its run and event sequence, so a reader of the export can
+/// find the record without the label.
 fn labels(refs: &[NoteRef]) -> String {
     refs.iter()
-        .map(|reference| reference.label.as_str())
+        .map(
+            |reference| match (reference.kind, reference.run(), reference.number()) {
+                (RefKind::Trace, Some((_, run)), Some(seq)) => {
+                    format!("{} [run {run}, event {seq}]", reference.label)
+                }
+                _ => reference.label.clone(),
+            },
+        )
         .collect::<Vec<_>>()
         .join("; ")
 }

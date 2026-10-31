@@ -412,7 +412,7 @@ pub(super) fn qa_data(data: &std::path::Path, sha: &str, scene: &str, first: &Ru
         )
         .unwrap();
     }
-    if matches!(scene, "notes" | "note_editor") {
+    if matches!(scene, "notes" | "note_editor" | "note_chips") {
         let mut library = Library::open(data).unwrap();
         library
             .add_note(
@@ -422,6 +422,11 @@ pub(super) fn qa_data(data: &std::path::Path, sha: &str, scene: &str, first: &Ru
                 &[
                     NoteRef::new(RefKind::Run, "vm/r1", "Run 1"),
                     NoteRef::new(RefKind::Process, "vm/r1/4242", "sh 4242 · run 1"),
+                    NoteRef::new(
+                        RefKind::Trace,
+                        "vm/r1/4821",
+                        "Run 1 · openat /etc/shadow · record 4821",
+                    ),
                     NoteRef::new(
                         RefKind::Indicator,
                         "endpoint:198.51.100.7:80",
@@ -456,6 +461,21 @@ pub(super) fn qa_after(app: &mut MonitorApp, ctx: &egui::Context, scene: &str) {
             .samples_page
             .start_note_for_test(run_ref("r1", "Run 1"), true),
         "delete_run" => app.start_delete_run_for_test(ctx, 1),
+        // The editor with one reference of each look, and no picker.
+        "note_chips" => app.samples_page.start_note_with_for_test(vec![
+            run_ref("r1", "Run 1"),
+            NoteRef::new(
+                RefKind::Trace,
+                "vm/r1/4821",
+                "Run 1 · openat /etc/shadow · record 4821",
+            ),
+            NoteRef::new(RefKind::Process, "vm/r1/4242", "sh 4242 · run 1"),
+            NoteRef::new(
+                RefKind::Indicator,
+                "endpoint:198.51.100.7:80",
+                "198.51.100.7:80 (endpoint)",
+            ),
+        ]),
         _ => {}
     }
 }

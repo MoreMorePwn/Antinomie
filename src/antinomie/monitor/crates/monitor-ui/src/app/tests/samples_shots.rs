@@ -185,6 +185,7 @@ fn native_samples_fixture() {
                     | "report"
                     | "notes"
                     | "note_editor"
+                    | "note_chips"
                     | "delete_run"
                     | "kinds"
             ) {
@@ -228,7 +229,7 @@ fn native_samples_fixture() {
                 }
                 app.samples_page.show_detail_tab(match scene.as_str() {
                     "runs" | "runs_details" => "runs",
-                    "notes" | "note_editor" => "notes",
+                    "notes" | "note_editor" | "note_chips" => "notes",
                     "custody" | "custody_broken" | "export" => "custody",
                     _ => "summary",
                 });
@@ -277,7 +278,7 @@ fn native_samples_fixture() {
                 open_export: scene == "export",
                 open_report: scene == "report",
                 select_run: scene == "runs_details",
-                later: matches!(scene.as_str(), "note_editor" | "delete_run")
+                later: matches!(scene.as_str(), "note_editor" | "note_chips" | "delete_run")
                     .then(|| scene.clone()),
                 deadline: Instant::now() + Duration::from_secs(seconds),
             }))
