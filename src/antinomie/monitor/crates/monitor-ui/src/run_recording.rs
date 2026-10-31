@@ -103,10 +103,29 @@ pub(crate) fn warning_message(run: &RunSummary) -> Option<String> {
     }
     run.recording_error.as_ref().map(|error| {
         format!(
-            "Recording incomplete for {} [{}]: saving stopped: {error}",
-            run.request.path, run.id
+            "Recording incomplete for {} [{}]: saving stopped: {}",
+            run.request.path,
+            run.id,
+            explained(run, error)
         )
     })
+}
+
+/// A saving failure with its subject and the next step: which folder is gone,
+/// or what to do about a full disk.
+fn explained(run: &RunSummary, error: &str) -> String {
+    if error.contains("No such file or directory") {
+        format!(
+            "the recording folder {} is missing ({error}). The run can still be deleted from its sample's Runs tab.",
+            run.directory.display()
+        )
+    } else if error.contains("No space left on device") {
+        format!(
+            "the disk is full ({error}). Free space or lower the recording quota in Settings > Recording."
+        )
+    } else {
+        error.to_owned()
+    }
 }
 
 /// The boot-wide saving failure and the last backend error, as red text.

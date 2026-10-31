@@ -105,6 +105,18 @@ impl Toasts {
         action: Option<Action>,
         row: bool,
     ) {
+        // A failure always has the way to its Activity row, and a full disk
+        // says what to do about it.
+        let action = action.or_else(|| (level != Level::Info).then(Action::open_activity));
+        let next_step;
+        let detail = if detail.contains("No space left on device") && !detail.contains("Settings") {
+            next_step = format!(
+                "{detail}. Free space in the data folder or lower the recording quota in Settings > Recording."
+            );
+            next_step.as_str()
+        } else {
+            detail
+        };
         if row {
             self.rows.push((level, row_text(title, detail)));
             self.rows.truncate(crate::activity::INBOX_LIMIT);
@@ -378,14 +390,17 @@ fn draw(ui: &mut egui::Ui, toast: &Toast, width: f32) -> Outcome {
                             }
                         });
                         if !toast.detail.is_empty() {
-                            let one_line = toast.detail.replace('\n', " ");
-                            ui.add(
-                                egui::Label::new(
-                                    RichText::new(one_line).small().color(palette.muted),
-                                )
-                                .truncate(),
-                            )
-                            .on_hover_text(&toast.detail);
+                            // Three lines, then an ellipsis; the hover has all of it.
+                            let mut job = egui::text::LayoutJob::single_section(
+                                toast.detail.replace('\n', " "),
+                                egui::text::TextFormat::simple(
+                                    egui::TextStyle::Small.resolve(ui.style()),
+                                    palette.muted,
+                                ),
+                            );
+                            job.wrap.max_rows = 3;
+                            ui.add(egui::Label::new(job).wrap())
+                                .on_hover_text(&toast.detail);
                         }
                         if let Some(action) = &toast.action {
                             let link = ui
@@ -430,6 +445,11 @@ fn countdown_bar(ui: &egui::Ui, outer: egui::Rect, fraction: f32, color: egui::C
     let track = outer.right() - outer.left() - 2.0 * inset;
     let rect = bar_rect(outer, fraction);
     if track > 0.0 && rect.width() > 0.0 {
+        // On a track, so the bar reads against the toast's own border (red on
+        // red for an error).
+        let full = bar_rect(outer, 1.0);
+        ui.painter()
+            .rect_filled(full, egui::CornerRadius::same(1), theme::palette().line);
         ui.painter()
             .rect_filled(rect, egui::CornerRadius::same(1), color);
     }
