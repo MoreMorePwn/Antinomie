@@ -1,0 +1,65 @@
+From 84512d286c163da19b274062dfff49986bdc2f56 Mon Sep 17 00:00:00 2001
+From: MikiMiku <jonathanirvinjo@gmail.com>
+Date: Sun, 1 Nov 2026 01:14:40 +0700
+Subject: [PATCH] antinomie: wait for ring room without a preemption count
+
+A sender decides whether it may sleep while it waits for room in its
+CPU's ring by its preemption count: one, its own preempt_disable(). A
+kernel built without CONFIG_PREEMPT_COUNT (arm64 with voluntary
+preemption, Debian's arm64 configuration among them) does not count, so
+every sender looked atomic and gave up after the 200 us atomic spin: in
+never-drop mode, any host read gap longer than that with a full ring
+dropped a packet (a 196 ms gap lost part of a 4 MiB file-map record in
+the arm64 conformance runs).
+
+Such a kernel cannot tell a held spinlock from none, so no sender
+sleeps there; a sender with interrupts enabled spins for the whole
+progress-sensitive send wait instead, as long as the host keeps reading
+its ring. Kernels with a preemption count (x86-64's) are unchanged: the
+new branch is compiled out.
+---
+ kernel/antinomie/guest.c | 13 +++++++++++--
+ 1 file changed, 11 insertions(+), 2 deletions(-)
+
+diff --git a/kernel/antinomie/guest.c b/kernel/antinomie/guest.c
+index fc1e94dd1..1c6a8d42c 100644
+--- a/kernel/antinomie/guest.c
++++ b/kernel/antinomie/guest.c
+@@ -253,7 +253,7 @@ int ant_send(const void *data, size_t payload_len)
+ 	struct ant_message msg = { .payload_len = payload_len };
+ 	u64 waited_from = 0, progress_at = 0, tail = 0, now;
+ 	u32 wait_us, ticket = 0;
+-	bool may_sleep, queued = false;
++	bool may_sleep, spin_long, queued = false;
+ 	int error;
+ 
+ 	if (!in_task()) return -EWOULDBLOCK;
+@@ -268,7 +268,16 @@ int ant_send(const void *data, size_t payload_len)
+ 		error = -EPROTO;
+ 		goto drop;
+ 	}
++#ifdef CONFIG_PREEMPT_COUNT
+ 	may_sleep = preempt_count() == 1 && !irqs_disabled() && !rcu_preempt_depth();
++	spin_long = false;
++#else
++	/* Without a preemption count (arm64's voluntary preemption) a held
++	 * spinlock is invisible, so no sender sleeps; one with interrupts on
++	 * still waits the whole send wait, spinning, while the host reads. */
++	may_sleep = false;
++	spin_long = !irqs_disabled();
++#endif
+ 	for (;;) {
+ 		/* Room freed while senders wait is theirs, in turn: a sender that
+ 		 * may sleep and finds others waiting queues behind them instead of
+@@ -290,7 +299,7 @@ int ant_send(const void *data, size_t payload_len)
+ 		 * and other tasks keep running; one in atomic context spins, and
+ 		 * only briefly. */
+ 		wait_us = min_t(u32, W32_READ(&control->send_wait_us), ANT_SEND_WAIT_MAX_US);
+-		if (!may_sleep)
++		if (!may_sleep && !spin_long)
+ 			wait_us = min_t(u32, wait_us, ANT_SEND_ATOMIC_WAIT_US);
+ 		now = local_clock();
+ 		if (!waited_from) {
+-- 
+2.53.0
+

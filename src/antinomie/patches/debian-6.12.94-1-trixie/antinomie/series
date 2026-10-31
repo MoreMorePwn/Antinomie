@@ -60,3 +60,6 @@
 0031-antinomie-keep-the-generic-efi-stub-off-the-bootstrap-page.patch
 0032-antinomie-add-the-arm64-definitions-and-system-call-table.patch
 0033-antinomie-hook-the-arm64-architecture.patch
+0034-antinomie-follow-clone-s-argument-order-on-clone-backwards-architectures.patch
+0035-antinomie-give-the-debugger-s-state-setter-a-name-no-stock-function-has.patch
+0036-antinomie-wait-for-ring-room-without-a-preemption-count.patch

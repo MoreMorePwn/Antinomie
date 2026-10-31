@@ -1,0 +1,123 @@
+From 4369d361c99ad3b7e580ccdac6e7ac3f50f67e32 Mon Sep 17 00:00:00 2001
+From: MikiMiku <jonathanirvinjo@gmail.com>
+Date: Sun, 1 Nov 2026 00:18:05 +0700
+Subject: [PATCH] antinomie: give the debugger's state setter a name no stock
+ function has
+
+debug.c's set_state() shares its name with a static function of
+kernel/stop_machine.c. Where the compiler inlines the stock one and keeps
+the recorder's out of line (arm64's minimal kernel), pahole describes the
+stock function under the recorder's symbol, and the kernel's BTF names a
+function that only the recorder has (scripts/check-kernel-btf.py reports
+it), the case the BTF patch already handles for put_event, remove_one and
+event_release. It is now session_set_state().
+---
+ kernel/antinomie/debug.c | 22 +++++++++++-----------
+ 1 file changed, 11 insertions(+), 11 deletions(-)
+
+diff --git a/kernel/antinomie/debug.c b/kernel/antinomie/debug.c
+index d54759cf3..6bf2f3d35 100644
+--- a/kernel/antinomie/debug.c
++++ b/kernel/antinomie/debug.c
+@@ -1569,7 +1569,7 @@ bool ant_dbg_syscall_step(struct pt_regs *regs)
+ 
+ /* ---- worker: stop, continue, detach ------------------------------------- */
+ 
+-static void set_state(struct ant_dbg *s, u32 state)
++static void session_set_state(struct ant_dbg *s, u32 state)
+ {
+ 	spin_lock_irq(&s->lock);
+ 	s->state = state;
+@@ -1726,7 +1726,7 @@ static void do_stop(struct ant_dbg *s)
+ 		s->last_error = error;
+ 		s->cur.kind = ANTC_DEBUG_EVENT_NONE;
+ 		spin_unlock_irq(&s->lock);
+-		set_state(s, ANTC_DEBUG_RUNNING);
++		session_set_state(s, ANTC_DEBUG_RUNNING);
+ 		release_threads(s);
+ 		return;
+ 	}
+@@ -1767,7 +1767,7 @@ static void do_stop(struct ant_dbg *s)
+ 	}
+ 	s->interrupt = false;
+ 	spin_unlock_irq(&s->lock);
+-	set_state(s, ANTC_DEBUG_STOPPED);
++	session_set_state(s, ANTC_DEBUG_STOPPED);
+ }
+ 
+ /* What CONT said about signals. A thread stopped on a signal takes the number
+@@ -1888,7 +1888,7 @@ static void do_cont(struct ant_dbg *s)
+ 	spin_unlock_irq(&s->lock);
+ 	as = as_get(s);
+ 	if (!as) {
+-		set_state(s, ANTC_DEBUG_STOPPED);
++		session_set_state(s, ANTC_DEBUG_STOPPED);
+ 		return;
+ 	}
+ 	/* An event that came during the stop and has not been reported is the
+@@ -1898,7 +1898,7 @@ static void do_cont(struct ant_dbg *s)
+ 	if (promote_deferred(s)) {
+ 		s->interrupt = false;
+ 		spin_unlock_irq(&s->lock);
+-		set_state(s, ANTC_DEBUG_STOPPED);
++		session_set_state(s, ANTC_DEBUG_STOPPED);
+ 		goto out;
+ 	}
+ 	spin_unlock_irq(&s->lock);
+@@ -1920,7 +1920,7 @@ static void do_cont(struct ant_dbg *s)
+ 				ev_set(s, t, ANTC_DEBUG_EVENT_INTERRUPT, NULL);
+ 			s->interrupt = false;
+ 			spin_unlock_irq(&s->lock);
+-			set_state(s, ANTC_DEBUG_STOPPED);
++			session_set_state(s, ANTC_DEBUG_STOPPED);
+ 			goto out;
+ 		}
+ 		spin_lock_irq(&s->lock);
+@@ -1929,7 +1929,7 @@ static void do_cont(struct ant_dbg *s)
+ 			ev_set(s, t, error ? t->reason : ANTC_DEBUG_EVENT_STEP, NULL);
+ 			s->interrupt = false;
+ 			spin_unlock_irq(&s->lock);
+-			set_state(s, ANTC_DEBUG_STOPPED);
++			session_set_state(s, ANTC_DEBUG_STOPPED);
+ 			goto out;
+ 		}
+ 		spin_unlock_irq(&s->lock);
+@@ -1949,7 +1949,7 @@ static void do_cont(struct ant_dbg *s)
+ 				ev_set(s, t, ANTC_DEBUG_EVENT_INTERRUPT, NULL);
+ 			s->interrupt = false;
+ 			spin_unlock_irq(&s->lock);
+-			set_state(s, ANTC_DEBUG_STOPPED);
++			session_set_state(s, ANTC_DEBUG_STOPPED);
+ 			goto out;
+ 		}
+ 		if (error && error != -EINTR && error != -EINPROGRESS)
+@@ -1965,7 +1965,7 @@ static void do_cont(struct ant_dbg *s)
+ 			}
+ 			s->interrupt = false;
+ 			spin_unlock_irq(&s->lock);
+-			set_state(s, ANTC_DEBUG_STOPPED);
++			session_set_state(s, ANTC_DEBUG_STOPPED);
+ 			goto out;
+ 		}
+ 	}
+@@ -1977,7 +1977,7 @@ static void do_cont(struct ant_dbg *s)
+ 	stop = s->interrupt && error == -EINPROGRESS;
+ 	s->interrupt = false;
+ 	spin_unlock_irq(&s->lock);
+-	set_state(s, ANTC_DEBUG_RUNNING);
++	session_set_state(s, ANTC_DEBUG_RUNNING);
+ 	release_threads(s);
+ 	if (stop) {
+ 		spin_lock_irq(&s->lock);
+@@ -2103,7 +2103,7 @@ static void do_runstop(struct ant_dbg *s)
+ 	memset(&s->cur, 0, sizeof(s->cur));
+ 	s->interrupt = false;
+ 	spin_unlock_irq(&s->lock);
+-	set_state(s, ANTC_DEBUG_RUNNING);
++	session_set_state(s, ANTC_DEBUG_RUNNING);
+ 	release_threads(s);
+ }
+ 
+-- 
+2.53.0
+

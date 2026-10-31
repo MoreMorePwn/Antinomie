@@ -1,0 +1,56 @@
+Description: antinomie: follow clone's argument order on CLONE_BACKWARDS architectures
+ clone() takes its child TID pointer as the fourth argument on x86-64 and
+ the TLS there on the architectures that select CONFIG_CLONE_BACKWARDS
+ (arm64 among them), which pass the child TID pointer fifth. The exit
+ capture of CLONE_CHILD_SETTID and CLONE_CHILD_CLEARTID now reads the
+ pointer from the argument kernel/fork.c declares for the build and names
+ the field after it (arg3.child_tid on x86-64, unchanged; arg4.child_tid on
+ arm64), as the architecture's system call schema numbers the arguments.
+ .
+ x86-64 objects are unchanged: the macros expand to the same index and key.
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-11-01
+
+---
+diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
+index 8535cf9a0..241e6e3ce 100644
+--- a/kernel/antinomie/recorder.c
++++ b/kernel/antinomie/recorder.c
+@@ -40,6 +40,17 @@
+ #include "filemap.h"
+ #include "state.h"
+ 
++/* clone()'s child TID pointer: its fourth argument, or its fifth where the
++ * TLS comes first (CONFIG_CLONE_BACKWARDS, as kernel/fork.c declares it).
++ */
++#ifdef CONFIG_CLONE_BACKWARDS
++#define ANT_CLONE_CHILD_TID 4
++#define ANT_CLONE_CHILD_KEY(name) "arg4." name
++#else
++#define ANT_CLONE_CHILD_TID 3
++#define ANT_CLONE_CHILD_KEY(name) "arg3." name
++#endif
++
+ /* Scratch bounds packet size, never the logical capture extent. A task owns
+  * its context across migration; failure to allocate does not lose lineage.
+  */
+@@ -850,11 +861,13 @@ static void capture_exit(struct ant_task *ctx, long result)
+ 		 * the kernel clears it when the child exits; neither is visible here.
+ 		 */
+ 		if (a[0] & CLONE_CHILD_SETTID)
+-			field(ctx, 3, "arg3.child_tid", ANT_LAYOUT("pid_t"), 3, a[3],
+-			      NULL, sizeof(u32), sizeof(u32), ANT_ASYNC_UNOBSERVED);
++			field(ctx, ANT_CLONE_CHILD_TID, ANT_CLONE_CHILD_KEY("child_tid"),
++			      ANT_LAYOUT("pid_t"), 3, a[ANT_CLONE_CHILD_TID], NULL,
++			      sizeof(u32), sizeof(u32), ANT_ASYNC_UNOBSERVED);
+ 		if (a[0] & CLONE_CHILD_CLEARTID)
+-			field(ctx, 3, "arg3.clear_child_tid", ANT_LAYOUT("pid_t"), 3,
+-			      a[3], NULL, sizeof(u32), sizeof(u32), ANT_ASYNC_UNOBSERVED);
++			field(ctx, ANT_CLONE_CHILD_TID, ANT_CLONE_CHILD_KEY("clear_child_tid"),
++			      ANT_LAYOUT("pid_t"), 3, a[ANT_CLONE_CHILD_TID], NULL,
++			      sizeof(u32), sizeof(u32), ANT_ASYNC_UNOBSERVED);
+ 		break;
+ 	}
+ }

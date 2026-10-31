@@ -60,6 +60,12 @@ changes. Line counts are added/removed lines of the patch.
 | 25 | raise the specimen limit to 128 MiB (contract revision 19) | +8 -4 | none (`specimen.c`, `control_wire.h`) | none |
 | 26 | hand a full ring's turn straight to the next waiting sender (no contract change) | +61 -4 | none (`guest.c`) | none |
 | 30 | report the guest's architecture and carry the transport little endian on every guest (contract revision 20) | +287 -86 | none (`abi.h`, `queue.h`, `guest.c`, `control.c`, `control_wire.h`, `process_core.c`, `recorder.c`; `antinomie_syscalls.h` gains the table id) | none (`arch/x86/include/asm/antinomie.h` and `include/linux/antinomie_monitor.h` gain declarations) |
+| 31 | keep the generic EFI stub off the bootstrap page | +55 | none | `drivers/firmware/efi/libstub/efi-stub-entry.c` (the generic EFI stub arm64 boots through: claims `antinomie_boot_gpa=` before the kernel image is placed) |
+| 32 | add the arm64 definitions and system call table | +3887 | `arch/arm64/include/asm/antinomie.h`, `arch/arm64/include/asm/antinomie_syscalls.h` (generated) | none |
+| 33 | hook the arm64 architecture | +309 -1 | `kernel/antinomie/capture_arm64.c` (the rt_sigreturn frame, MTE tag ptrace requests), `kernel/antinomie/debug_arm64.c` (a stub until the arm64 debug engine) | `arch/arm64/kernel/syscall.c`, `arch/arm64/kernel/setup.c`, `arch/arm64/kernel/cpufeature.c` (`antinomie_kpti=`), `arch/arm64/Kconfig`; `kernel/antinomie/Makefile` |
+| 34 | follow clone's argument order on CLONE_BACKWARDS architectures | +17 -4 | none (`recorder.c`) | none |
+| 35 | give the debugger's state setter a name no stock function has | +11 -11 | none (`debug.c`: `set_state()` is `session_set_state()`, which pahole cannot confuse with `kernel/stop_machine.c`'s) | none |
+| 36 | wait for ring room without a preemption count | +11 -2 | none (`guest.c`: on a kernel without `CONFIG_PREEMPT_COUNT`, arm64's voluntary preemption, a sender with interrupts on spins for the whole send wait instead of 200 us) | none |
 
 Every topic also adds its part of the files shared by all of them:
 `control.c` (dispatch), `control_wire.h` (the wire contract), `antinomie_monitor.h`
@@ -89,10 +95,15 @@ signal frame rt_sigreturn reads, x86 ptrace requests) and `debug_x86.c`
 (breakpoints, single step, debug registers, register sets). The architecture's
 calls into the recorder, its system call entry and exit, the bootstrap page's
 reservation and the boot options, are patch 15, the only patch that changes
-architecture code. A port to another architecture adds those two headers, its
-`*_<arch>.c` files and a patch like 15, and guards the legacy system calls its
-table lacks (`open`, `stat`, `fork` and others on arm64 and RISC-V). Without its
-hook patch the series builds but records nothing and has no transport.
+x86 code. arm64 follows the same pattern: patch 32 adds its two headers, patch 33
+its `*_arm64.c` files and its hooks, and patch 31 makes the generic EFI stub
+(which arm64 boots through, x86-64 does not) keep the bootstrap page free. A
+port to another architecture adds those two headers, its `*_<arch>.c` files and
+a patch like 15 or 33, and guards the legacy system calls its table lacks
+(`open`, `stat`, `fork` and others on arm64 and RISC-V). Without its hook patch
+the series builds but records nothing and has no transport. Patch 34 keeps
+clone()'s child TID pointer where `CONFIG_CLONE_BACKWARDS` puts it (arm64);
+x86-64's objects do not change.
 Patches 16 and 17 came after 15 (0.8.0) and are shared like 1-14: they touch
 no architecture code, and every system call they name exists on every 64-bit
 architecture's table. Patch 17 hooks only generic memory-management code (the
@@ -100,8 +111,8 @@ page table entry's dirty bit, which every architecture keeps).
 
 The guest names its architecture (the ELF machine of its native ABI) in the
 debug engine's CAPS reply, which the host asks for when it identifies a
-revision-17 guest; the host decodes x86-64 guests only and launches nothing on
-another.
+revision-17 guest, and in the ARCH_INFO reply since revision 20; the host
+decodes x86-64 and arm64 guests and launches nothing on another.
 
 ## Series identity
 
