@@ -1,0 +1,460 @@
+Description: antinomie: hook the arm64 architecture
+ Everything the series changes in arm64's own code, as the x86 hook patch
+ does for x86-64, and arm64's per-architecture recorder files.
+ .
+ Hooked kernel files:
+ - arch/arm64/kernel/syscall.c calls the recorder around invoke_syscall()
+   in el0_svc_common(), the one C path every AArch64 and AArch32 call
+   takes, after seccomp and a tracer had their say (the call number is
+   the one that runs; a call they skip is not recorded, as on x86).
+ - arch/arm64/kernel/setup.c takes the antinomie_* options out of the
+   command line right after the device tree (or the EFI stub's) supplied
+   it, before the early options are parsed and before the kernel prints
+   it; reserves the bootstrap page from memblock right after
+   arm64_memblock_init(), before the first allocation; and, on a device
+   tree boot, gives /chosen/bootargs the command line the kernel kept,
+   since /proc/device-tree shows it to every user.
+ - arch/arm64/kernel/cpufeature.c takes antinomie_kpti=, kpti= under
+   another name: the host's "faster emulation" choice, which /proc/cmdline
+   then does not show.
+ - arch/arm64/Kconfig selects HAVE_ANTINOMIE.
+ .
+ Recorder files (kernel/antinomie):
+ - capture_arm64.c decodes the frame rt_sigreturn reads (siginfo and
+   ucontext, and the extra space an extra_context record points to) and
+   the MTE tag requests of ptrace (PEEKMTETAGS, POKEMTETAGS).
+ - debug_arm64.c names the architecture in the debug CAPS and offers no
+   debugging yet: no task is one the engine debugs, so ATTACH answers
+   EOPNOTSUPP.
+ .
+ No arm64 hook reports a single step or a breakpoint yet, and AArch32
+ calls are recorded with their number and no table.
+ .
+ Contract: unchanged (revision 20).
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-10-31
+
+---
+diff --git a/arch/arm64/Kconfig b/arch/arm64/Kconfig
+index 012ec1702..0506f195e 100644
+--- a/arch/arm64/Kconfig
++++ b/arch/arm64/Kconfig
+@@ -165,6 +165,7 @@ config ARM64
+ 	select HAVE_PCI
+ 	select HAVE_ACPI_APEI if (ACPI && EFI)
+ 	select HAVE_ALIGNED_STRUCT_PAGE
++	select HAVE_ANTINOMIE
+ 	select HAVE_ARCH_AUDITSYSCALL
+ 	select HAVE_ARCH_BITREVERSE
+ 	select HAVE_ARCH_COMPILER_H
+diff --git a/arch/arm64/kernel/cpufeature.c b/arch/arm64/kernel/cpufeature.c
+index 8246015fd..f966de2ea 100644
+--- a/arch/arm64/kernel/cpufeature.c
++++ b/arch/arm64/kernel/cpufeature.c
+@@ -1981,6 +1981,19 @@ static int __init parse_kpti(char *str)
+ }
+ early_param("kpti", parse_kpti);
+ 
++#ifdef CONFIG_ANTINOMIE
++/*
++ * antinomie_kpti=: kpti= for an emulated guest whose host trades the isolation
++ * for speed. The option leaves the command line before it is printed, so
++ * /proc/cmdline does not name it.
++ */
++static int __init ant_parse_kpti(char *str)
++{
++	return parse_kpti(str);
++}
++early_param("antinomie_kpti", ant_parse_kpti);
++#endif
++
+ #ifdef CONFIG_ARM64_HW_AFDBM
+ static struct cpumask dbm_cpus __read_mostly;
+ 
+diff --git a/arch/arm64/kernel/setup.c b/arch/arm64/kernel/setup.c
+index 8185979f0..8f99689f4 100644
+--- a/arch/arm64/kernel/setup.c
++++ b/arch/arm64/kernel/setup.c
+@@ -27,6 +27,11 @@
+ #include <linux/proc_fs.h>
+ #include <linux/memblock.h>
+ #include <linux/of_fdt.h>
++#ifdef CONFIG_ANTINOMIE
++#include <linux/antinomie.h>
++#include <linux/antinomie_stealth.h>
++#include <linux/of.h>
++#endif
+ #include <linux/efi.h>
+ #include <linux/psci.h>
+ #include <linux/sched/task.h>
+@@ -279,6 +284,32 @@ u64 cpu_logical_map(unsigned int cpu)
+ 	return __cpu_logical_map[cpu];
+ }
+ 
++#ifdef CONFIG_ANTINOMIE
++/*
++ * The device tree's /chosen bootargs is the command line the boot loader
++ * gave, antinomie_* options included, and /proc/device-tree shows it to every
++ * user: it gets the command line the kernel kept (boot_command_line, which
++ * /proc/cmdline shows).
++ */
++static void __init ant_dt_bootargs(void)
++{
++	struct property *prop;
++	size_t len = strlen(boot_command_line) + 1;
++	char *value;
++
++	prop = of_chosen ? of_find_property(of_chosen, "bootargs", NULL) : NULL;
++	if (!prop || !prop->length ||
++	    !strnstr(prop->value, "antinomie_", prop->length))
++		return;
++	value = memblock_alloc(len, SMP_CACHE_BYTES);
++	if (!value)
++		return;
++	memcpy(value, boot_command_line, len);
++	prop->value = value;
++	prop->length = len;
++}
++#endif
++
+ void __init __no_sanitize_address setup_arch(char **cmdline_p)
+ {
+ 	setup_initial_init_mm(_text, _etext, _edata, _end);
+@@ -291,6 +322,9 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
+ 	early_ioremap_init();
+ 
+ 	setup_machine_fdt(__fdt_pointer);
++#ifdef CONFIG_ANTINOMIE
++	ant_cmdline_take(boot_command_line);
++#endif
+ 
+ 	/*
+ 	 * Initialise the static keys early as they may be enabled by the
+@@ -331,6 +365,9 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
+ 	}
+ 
+ 	arm64_memblock_init();
++#ifdef CONFIG_ANTINOMIE
++	ant_bootstrap_reserve();
++#endif
+ 
+ 	paging_init();
+ 
+@@ -339,8 +376,12 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
+ 	/* Parse the ACPI tables for possible boot-time configuration */
+ 	acpi_boot_table_init();
+ 
+-	if (acpi_disabled)
++	if (acpi_disabled) {
+ 		unflatten_device_tree();
++#ifdef CONFIG_ANTINOMIE
++		ant_dt_bootargs();
++#endif
++	}
+ 
+ 	bootmem_init();
+ 
+diff --git a/arch/arm64/kernel/syscall.c b/arch/arm64/kernel/syscall.c
+index c442fcec6..67141757b 100644
+--- a/arch/arm64/kernel/syscall.c
++++ b/arch/arm64/kernel/syscall.c
+@@ -6,6 +6,7 @@
+ #include <linux/nospec.h>
+ #include <linux/ptrace.h>
+ #include <linux/randomize_kstack.h>
++#include <linux/antinomie_monitor.h>
+ #include <linux/syscalls.h>
+ 
+ #include <asm/debug-monitors.h>
+@@ -129,7 +130,9 @@ static void el0_svc_common(struct pt_regs *regs, int scno, int sc_nr,
+ 			goto trace_exit;
+ 	}
+ 
++	ant_monitor_enter(regs, scno);
+ 	invoke_syscall(regs, scno, sc_nr, syscall_table);
++	ant_monitor_exit(regs);
+ 
+ 	/*
+ 	 * The tracing status may have changed under our feet, so we have to
+diff --git a/kernel/antinomie/Makefile b/kernel/antinomie/Makefile
+index d3fd00ef0..e265b7ad5 100644
+--- a/kernel/antinomie/Makefile
++++ b/kernel/antinomie/Makefile
+@@ -16,6 +16,7 @@ obj-y += bootstrap.o guest.o state.o recorder.o control.o run.o async.o native_c
+ # Per-architecture files: <name>_<arch>.c, built here so that the section
+ # labels bracket them too.
+ obj-$(CONFIG_X86_64) += capture_x86.o
++obj-$(CONFIG_ARM64) += capture_arm64.o
+ obj-y += async_capture.o
+ obj-y += specimen.o
+ obj-y += observer.o
+@@ -26,6 +27,7 @@ obj-y += resources.o
+ obj-y += hash.o
+ obj-y += debug.o
+ obj-$(CONFIG_X86_64) += debug_x86.o
++obj-$(CONFIG_ARM64) += debug_arm64.o
+ obj-y += fileid.o
+ obj-y += fileops.o
+ obj-y += filemap.o
+diff --git a/kernel/antinomie/capture_arm64.c b/kernel/antinomie/capture_arm64.c
+new file mode 100644
+index 000000000..ca6af31b8
+--- /dev/null
++++ b/kernel/antinomie/capture_arm64.c
+@@ -0,0 +1,168 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* arm64 decoders (capture_api.h): the signal frame rt_sigreturn reads from the
++ * user stack, and the ptrace requests only arm64 defines. arm64 has no system
++ * call of its own in its native table. native_capture.c asks here for every
++ * call it has no family for, and capture_ptrace() for every request first.
++ */
++#include <linux/antinomie_monitor.h>
++#include <linux/ptrace.h>
++#include <linux/signal.h>
++#include <linux/slab.h>
++#include <linux/uaccess.h>
++#include <linux/uio.h>
++#include <asm/sigcontext.h>
++#include <asm/ucontext.h>
++
++#include "capture_api.h"
++
++#define LAYOUT(name) ANT_LAYOUT(name)
++
++/* arch/arm64/kernel/signal.c's frame, which no header declares. */
++struct ant_rt_sigframe {
++	struct siginfo info;
++	struct ucontext uc;
++};
++
++/* The extra space a frame may point to: never more than the kernel lets a
++ * whole frame be (SIGFRAME_MAXSZ in signal.c).
++ */
++#define EXTRA_MAX SZ_256K
++/* MTE tags a request reads or writes, one byte per 16-byte granule: copied up
++ * to this many.
++ */
++#define MTE_TAGS_MAX SZ_64K
++
++/* The extra_context record of a frame's __reserved area, as parse_user_sigframe()
++ * finds it: records follow each other, 16-byte multiples, up to a zero magic.
++ */
++static const struct extra_context *find_extra(const struct ant_rt_sigframe *frame)
++{
++	const u8 *base = frame->uc.uc_mcontext.__reserved;
++	size_t limit = sizeof(frame->uc.uc_mcontext.__reserved), offset = 0;
++
++	while (offset + sizeof(struct _aarch64_ctx) <= limit) {
++		const struct _aarch64_ctx *head = (const void *)(base + offset);
++
++		if (!head->magic || head->size < sizeof(*head) || head->size % 16 ||
++		    head->size > limit - offset)
++			return NULL;
++		if (head->magic == EXTRA_MAGIC)
++			return head->size >= sizeof(struct extra_context) ? (const void *)head : NULL;
++		offset += head->size;
++	}
++	return NULL;
++}
++
++/* Slice 2E: frames the kernel reads from the user stack instead of an
++ * argument. Their fields use index 255 and context.* keys.
++ */
++static void capture_rt_sigreturn(struct ant_task *ctx)
++{
++	unsigned long address = user_stack_pointer(current_pt_regs());
++	const struct extra_context *extra;
++	struct ant_rt_sigframe *frame;
++	enum ant_status status;
++	u64 datap;
++	u32 size;
++
++	/* About 4.6 KiB: not on the kernel stack. */
++	frame = kmalloc(sizeof(*frame), GFP_NOWAIT);
++	if (!frame) {
++		ant_capture_field(ctx, 255, "context.rt_sigframe", LAYOUT("rt_sigframe"), 3, address,
++				  NULL, sizeof(*frame), sizeof(*frame), ANT_RESOURCE_EXHAUSTED);
++		return;
++	}
++	status = copy_from_user_nofault(frame, (void __user *)address, sizeof(*frame)) ?
++		ANT_COPY_FAULT : ANT_COMPLETE;
++	ant_capture_field(ctx, 255, "context.rt_sigframe", LAYOUT("rt_sigframe"), 3, address,
++			  frame, sizeof(*frame), sizeof(*frame), status);
++	extra = status == ANT_COMPLETE ? find_extra(frame) : NULL;
++	if (extra && !ant_capture_lost(ctx)) {
++		datap = extra->datap;
++		size = extra->size;
++		ant_capture_field(ctx, 255, "context.extra", "", 1, datap, NULL,
++				  min_t(u64, size, EXTRA_MAX), size,
++				  size > EXTRA_MAX || datap % 16 ? ANT_INVALID_EXTENT : ANT_COMPLETE);
++	}
++	kfree(frame);
++}
++
++static void release_tags(void *state)
++{
++	kfree(state);
++}
++
++/* PEEKMTETAGS and POKEMTETAGS: data is an iovec naming the tag buffer, whose
++ * length the kernel sets to the number of tags it moved.
++ */
++static void capture_mte_tags(struct ant_task *ctx, const u64 args[6], bool output, long result,
++			     bool poke)
++{
++	struct iovec *iov;
++	enum ant_status status;
++	u64 length;
++
++	if (!output) {
++		iov = kzalloc(sizeof(*iov), GFP_NOWAIT);
++		if (!iov) {
++			ant_capture_field(ctx, 3, "arg3.iovec", LAYOUT("iovec"), 3, args[3], NULL,
++					  sizeof(*iov), sizeof(*iov), ANT_RESOURCE_EXHAUSTED);
++			return;
++		}
++		status = copy_from_user_nofault(iov, (void __user *)(unsigned long)args[3],
++						sizeof(*iov)) ? ANT_COPY_FAULT : ANT_COMPLETE;
++		ant_capture_field(ctx, 3, "arg3.iovec", LAYOUT("iovec"), 3, args[3], iov,
++				  sizeof(*iov), sizeof(*iov), status);
++		if (status != ANT_COMPLETE) {
++			kfree(iov);
++			return;
++		}
++		ant_capture_set_state(ctx, iov, release_tags);
++		if (poke && !ant_capture_lost(ctx))
++			ant_capture_field(ctx, 3, "arg3.iovec.tags", "", 1,
++					  (unsigned long)iov->iov_base, NULL,
++					  min_t(u64, iov->iov_len, MTE_TAGS_MAX), iov->iov_len,
++					  iov->iov_len > MTE_TAGS_MAX ? ANT_INVALID_EXTENT :
++					  ANT_COMPLETE);
++		return;
++	}
++	iov = ant_capture_state(ctx);
++	if (result || !iov || ant_capture_lost(ctx))
++		return;
++	status = copy_from_user_nofault(&length, (void __user *)(unsigned long)
++					(args[3] + offsetof(struct iovec, iov_len)),
++					sizeof(length)) ? ANT_COPY_FAULT : ANT_COMPLETE;
++	ant_capture_field(ctx, 3, "arg3.iov_len", LAYOUT("u64"), 3,
++			  args[3] + offsetof(struct iovec, iov_len), &length, sizeof(length),
++			  sizeof(length), status);
++	if (poke || status != ANT_COMPLETE || ant_capture_lost(ctx))
++		return;
++	ant_capture_field(ctx, 3, "arg3.iovec.tags", "", 1, (unsigned long)iov->iov_base, NULL,
++			  min_t(u64, length, MTE_TAGS_MAX), length,
++			  length > MTE_TAGS_MAX ? ANT_INVALID_EXTENT : ANT_COMPLETE);
++}
++
++u8 ant_arch_capture(struct ant_task *ctx, u64 nr, const u64 args[6],
++		    bool output, long result)
++{
++	switch (nr) {
++	case __NR_rt_sigreturn:
++		if (!output)
++			capture_rt_sigreturn(ctx);
++		return ANT_CAPTURE_OWNED;
++	default:
++		return 0;
++	}
++}
++
++bool ant_arch_capture_ptrace(struct ant_task *ctx, const u64 args[6],
++			     bool output, long result)
++{
++	switch (args[0]) {
++	case PTRACE_PEEKMTETAGS: case PTRACE_POKEMTETAGS:
++		capture_mte_tags(ctx, args, output, result, args[0] == PTRACE_POKEMTETAGS);
++		return true;
++	default:
++		return false;
++	}
++}
+diff --git a/kernel/antinomie/debug_arm64.c b/kernel/antinomie/debug_arm64.c
+new file mode 100644
+index 000000000..b0a06490d
+--- /dev/null
++++ b/kernel/antinomie/debug_arm64.c
+@@ -0,0 +1,80 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* arm64 side of the debug engine, before its port: CAPS name the architecture
++ * and offer nothing, and no task is one the engine debugs, so ATTACH and
++ * register access answer EOPNOTSUPP. The recorder, cores and every other
++ * feature are unaffected.
++ */
++#include <linux/elf.h>
++#include <linux/errno.h>
++#include <linux/ptrace.h>
++#include <linux/sched.h>
++#include <linux/sched/task_stack.h>
++#include <linux/string.h>
++#include "control_wire.h"
++#include "debug.h"
++
++void ant_dbg_arch_caps(struct ant_dbg_caps *caps)
++{
++	memset(caps, 0, sizeof(*caps));
++	caps->arch = EM_AARCH64;
++}
++
++int ant_dbg_arch_hw_fill(struct perf_event_attr *attr, u32 kind, u64 addr, u32 len)
++{
++	return -EOPNOTSUPP;
++}
++
++void ant_dbg_arch_resume_past_hw(struct task_struct *task)
++{
++}
++
++bool ant_dbg_arch_task_ok(struct task_struct *task)
++{
++	return false;
++}
++
++unsigned long ant_dbg_arch_pc(struct task_struct *task)
++{
++	return instruction_pointer(task_pt_regs(task));
++}
++
++void ant_dbg_arch_set_pc(struct pt_regs *regs, unsigned long pc)
++{
++	instruction_pointer_set(regs, pc);
++}
++
++unsigned long ant_dbg_arch_bp_addr(struct pt_regs *regs)
++{
++	return instruction_pointer(regs);
++}
++
++unsigned int ant_dbg_arch_bp_insn(unsigned int len, u8 *insn)
++{
++	return 0;
++}
++
++unsigned int ant_dbg_arch_step_class(struct task_struct *task)
++{
++	return ANT_DBG_STEP_PLAIN;
++}
++
++void ant_dbg_arch_step_syscall(struct task_struct *task, bool on)
++{
++}
++
++void ant_dbg_arch_step_arm(struct task_struct *task, struct ant_dbg_step *step)
++{
++}
++
++void ant_dbg_arch_step_disown(struct task_struct *child, struct ant_dbg_step *step)
++{
++}
++
++void ant_dbg_arch_hide_step(struct pt_regs *regs, struct ant_dbg_step *step)
++{
++}
++
++void ant_dbg_arch_step_done(struct task_struct *task, struct ant_dbg_step *step,
++			    bool stepped)
++{
++}

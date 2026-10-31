@@ -1,0 +1,104 @@
+From 6c5c013df23640c9e5a36d05417a45bef6307b67 Mon Sep 17 00:00:00 2001
+From: MikiMiku <jonathanirvinjo@gmail.com>
+Date: Sat, 31 Oct 2026 23:20:14 +0700
+Subject: [PATCH] antinomie: keep the generic EFI stub off the bootstrap page
+
+The EFI stub that arm64, RISC-V, LoongArch and 32-bit ARM share
+(drivers/firmware/efi/libstub/efi-stub-entry.c) places the kernel image
+itself, at a random physical address when the firmware has an RNG, and
+then the initrd and the device tree. Any of them could land on the
+host's bootstrap page, which is ordinary free memory to the firmware,
+and the transport would never come up. The stub now claims the page
+(antinomie_boot_gpa=, else the default) as loader data right after it
+reads the command line, before it places anything; the kernel reserves
+it from memblock as on x86. x86 has its own stub, which already does
+the same (the x86 hook patch).
+
+Contract: unchanged (revision 20).
+---
+ drivers/firmware/efi/libstub/efi-stub-entry.c | 55 +++++++++++++++++++
+ 1 file changed, 55 insertions(+)
+
+diff --git a/drivers/firmware/efi/libstub/efi-stub-entry.c b/drivers/firmware/efi/libstub/efi-stub-entry.c
+index a6c049835..54b658b87 100644
+--- a/drivers/firmware/efi/libstub/efi-stub-entry.c
++++ b/drivers/firmware/efi/libstub/efi-stub-entry.c
+@@ -7,6 +7,11 @@
+ 
+ #include "efistub.h"
+ 
++#ifdef CONFIG_ANTINOMIE
++#include <linux/antinomie_boot.h>
++#include <linux/ctype.h>
++#endif
++
+ static unsigned long screen_info_offset;
+ 
+ struct screen_info *alloc_screen_info(void)
+@@ -22,6 +27,52 @@ struct screen_info *alloc_screen_info(void)
+ 	return NULL;
+ }
+ 
++#ifdef CONFIG_ANTINOMIE
++/*
++ * antinomie_boot_gpa=, checked as the kernel checks it; the last valid one
++ * counts. Without one, the default page.
++ */
++static u64 ant_boot_gpa(const char *cmdline)
++{
++	static const char name[] = "antinomie_boot_gpa=";
++	u64 found = ANT_BOOT_GPA;
++	const char *p = cmdline;
++
++	while (p && (p = strstr(p, name))) {
++		bool word = p == cmdline || isspace(p[-1]);
++		char *end;
++		u64 gpa;
++
++		p += sizeof(name) - 1;
++		gpa = simple_strtoull(p, &end, 0);
++		if (word && end != p && (!*end || isspace(*end)) &&
++		    !(gpa & (ANT_BOOT_SIZE - 1)) && gpa >= 0x100000 &&
++		    gpa <= ~0ULL - ANT_BOOT_SIZE)
++			found = gpa;
++	}
++	return found;
++}
++
++/*
++ * The host's bootstrap page is ordinary free memory to the firmware. Claim it
++ * before the kernel image is placed (at a random address when the firmware
++ * has an RNG) and before the initrd and the device tree are, so that none of
++ * them lands on it. As loader data it is RAM again after the stub exits boot
++ * services, and the kernel reserves it from memblock (ant_bootstrap_reserve()).
++ * x86 has its own stub, which does the same.
++ */
++static void ant_claim_boot_page(const char *cmdline)
++{
++	efi_physical_addr_t addr = ant_boot_gpa(cmdline);
++	efi_status_t status;
++
++	status = efi_bs_call(allocate_pages, EFI_ALLOCATE_ADDRESS, EFI_LOADER_DATA,
++			     ANT_BOOT_SIZE / EFI_PAGE_SIZE, &addr);
++	if (status != EFI_SUCCESS)
++		efi_warn("Bootstrap page 0x%llx is not free: 0x%lx\n", addr, status);
++}
++#endif
++
+ /*
+  * EFI entry point for the generic EFI stub used by ARM, arm64, RISC-V and
+  * LoongArch. This is the entrypoint that is described in the PE/COFF header
+@@ -62,6 +113,10 @@ efi_status_t __efiapi efi_pe_entry(efi_handle_t handle,
+ 	if (status != EFI_SUCCESS)
+ 		return status;
+ 
++#ifdef CONFIG_ANTINOMIE
++	ant_claim_boot_page(cmdline_ptr);
++#endif
++
+ 	efi_info("Booting Linux Kernel...\n");
+ 
+ 	status = handle_kernel_image(&image_addr, &image_size,
+-- 
+2.53.0
+

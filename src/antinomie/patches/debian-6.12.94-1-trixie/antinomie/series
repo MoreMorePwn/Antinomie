@@ -57,3 +57,6 @@
 
 # Multi-architecture contract (revision 20): the guest's architecture and a little-endian transport
 0030-antinomie-report-the-guest-s-architecture-and-carry-the-transport-little-endian-on-every-guest.patch
+0031-antinomie-keep-the-generic-efi-stub-off-the-bootstrap-page.patch
+0032-antinomie-add-the-arm64-definitions-and-system-call-table.patch
+0033-antinomie-hook-the-arm64-architecture.patch
