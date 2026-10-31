@@ -22,8 +22,18 @@ PERMITTED = {
     'MIT', 'MIT-0', 'Apache-2.0', 'BSD-2-Clause', 'BSD-3-Clause', '0BSD',
     'ISC', 'BSL-1.0', 'Zlib', 'Unlicense', 'CC0-1.0', 'Unicode-3.0',
     'GPL-3.0-only', 'GPL-3.0-or-later',
+    # LLVM-derived tables in Capstone (University of Illinois/NCSA).
+    'NCSA',
     # Font data retains its independent license; do not relabel it as host code.
     'OFL-1.1', 'Ubuntu-font-1.0',
+}
+# Crates whose sources embed a C library under terms their Cargo metadata does
+# not name. The bundled terms are checked like any expression, recorded as
+# `bundled_license`, and their notice files must be among the retained
+# documents. capstone-sys (MIT bindings) builds the Capstone C library
+# (BSD-3-Clause, with LLVM-derived tables under NCSA).
+BUNDLED = {
+    'capstone-sys': ('BSD-3-Clause AND NCSA', ('capstone/LICENSE.TXT', 'capstone/LICENSE_LLVM.TXT')),
 }
 SHARED = (
     'src/antinomie/transport/abi.h', 'src/antinomie/transport/queue.h',
@@ -201,6 +211,15 @@ def inventory(metadata, output=None):
                 destination = output / f'{package["name"]}-{package["version"]}' / relative
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(file, destination)
+        if package['name'] in BUNDLED:
+            bundled, notices = BUNDLED[package['name']]
+            if not permitted(bundled):
+                raise ValueError(f'bundled license requires review: {package["name"]} {bundled!r}')
+            retained = {document['path'] for document in row['documents']}
+            missing = [notice for notice in notices if notice not in retained]
+            if missing:
+                raise ValueError(f'{package["name"]} lacks its bundled notices: {", ".join(missing)}')
+            row['bundled_license'] = bundled
         # Some published crates omit a separate license file. Keep that gap
         # explicit; metadata approval does not certify notice completeness.
         row['notice_status'] = 'documents retained' if row['documents'] else 'metadata only; source review required'

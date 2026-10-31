@@ -23,6 +23,7 @@ Cargo may fetch missing locked source packages on a cold build. Set
 | `packages[].linux_x86_64_reachable` | Whether the package is in the filtered workspace dependency graph. This includes test/build tooling, not just linked runtime code. |
 | `packages[].documents` | Retained relative notice paths and SHA-256 hashes. |
 | `packages[].notice_status` | Whether documents were retained or only metadata is available. |
+| `packages[].bundled_license` | Terms of an embedded C library the crate builds, where its metadata does not name them (see below). |
 
 Some published crates omit their workspace's license files. The prepared
 `LICENSES/third-party/cargo-upstream/manifest.json` records exact upstream
@@ -31,6 +32,13 @@ hashes. Before use, the checker confines prepared paths to that directory and
 verifies each hash. Standard license texts and original crate declarations are
 retained for crates that supply no separate file; no copyright owner or year
 is invented. Font data keeps its independent font licenses.
+
+A crate whose sources embed a C library under terms its Cargo metadata does
+not name is listed in the checker's `BUNDLED` table: `capstone-sys` (MIT
+bindings) compiles the Capstone C library, BSD-3-Clause with LLVM-derived
+tables under NCSA. The checker evaluates those terms like any expression,
+records them as `packages[].bundled_license`, and fails when the bundled
+notice files are not among the retained documents.
 
 The inventory is a reproducible metadata/notice check, not a blanket assertion
 of legal clearance. New dependencies or missing host notice documents need

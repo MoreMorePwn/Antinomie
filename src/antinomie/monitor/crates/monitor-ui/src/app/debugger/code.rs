@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! The listing: disassembly around the instruction pointer, decoded by the
-//! same iced-x86 formatter as the static listing from a bounded window of the
-//! stopped process's memory, and painted with the shared listing's
-//! instruction colors. Clicking the gutter toggles a breakpoint. The shared
+//! The listing: disassembly around the instruction pointer, decoded from a
+//! bounded window of the stopped process's memory (x86-64 by the same iced-x86
+//! formatter as the static listing, aarch64 by Capstone), and painted with the
+//! shared listing's instruction colors. Clicking the gutter toggles a breakpoint. The shared
 //! function sidebar is not used: the debug engine reads memory windows, with
 //! no symbols, function bounds or load bias to name functions by.
 use super::*;
@@ -19,7 +19,14 @@ pub(super) fn show(
 ) {
     ui.horizontal(|ui| {
         theme::section(ui, crate::code_listing::View::Disassembly.label()).on_hover_text(
-            "Instructions before the current one are a best guess (x86 lengths vary).",
+            match view.caps.arch {
+                antinomie_monitor_core::debug::ArchTag::X86_64 => {
+                    "Instructions before the current one are a best guess (x86 lengths vary)."
+                }
+                antinomie_monitor_core::debug::ArchTag::Aarch64 => {
+                    "Every aarch64 instruction is one 4-byte word."
+                }
+            },
         );
         if let Some(pc) = view.registers.as_ref().and_then(|registers| registers.pc()) {
             ui.label(
@@ -52,15 +59,6 @@ pub(super) fn show(
         return;
     }
     let pc = view.registers.as_ref().and_then(|registers| registers.pc());
-    if view.caps.arch != antinomie_monitor_core::debug::ArchTag::X86_64 {
-        // Only x86-64 has a decoder here so far (MA-14: capstone for the others).
-        ui.weak(format!(
-            "The code pane cannot disassemble {} instructions yet. Read the code in the \
-             Memory pane, or attach gdb (gdb-multiarch) for its disassembly.",
-            view.caps.arch.name()
-        ));
-        return;
-    }
     let lines = panel.disassembly(view).to_vec();
     if lines.is_empty() {
         ui.weak("No readable code at the instruction pointer.");

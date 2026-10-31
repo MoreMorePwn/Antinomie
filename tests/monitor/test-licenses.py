@@ -25,6 +25,13 @@ class Expressions(unittest.TestCase):
         self.assertFalse(licenses.permitted('GPL-2.0-only WITH LLVM-exception'))
         self.assertFalse(licenses.permitted('Apache-2.0 WITH Unknown-exception'))
 
+    def test_bundled_c_libraries_have_supported_terms(self):
+        self.assertTrue(licenses.permitted('BSD-3-Clause AND NCSA'))
+        for name, (expression, notices) in licenses.BUNDLED.items():
+            with self.subTest(name=name):
+                self.assertTrue(licenses.permitted(expression))
+                self.assertTrue(notices)
+
     def test_malformed_expressions_fail_even_on_unused_branches(self):
         for expression in ('MIT OR', 'MIT OR (Apache-2.0', 'MIT bad!', 'MIT AND AND MIT', 'MIT OR ()'):
             with self.subTest(expression=expression), self.assertRaises(ValueError):

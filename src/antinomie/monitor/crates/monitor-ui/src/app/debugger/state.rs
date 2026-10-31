@@ -5,8 +5,11 @@
 //! only data that belongs to the stop on screen.
 use super::*;
 use antinomie_monitor_core::{
-    debug::view::{DebugRequest, WindowKind},
-    decode_window, DecodedInstruction,
+    debug::{
+        view::{DebugRequest, WindowKind},
+        ArchTag,
+    },
+    decode_window, decode_window_aarch64, DecodedInstruction,
 };
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -75,9 +78,14 @@ impl DebuggerPanel {
         };
         let key = (window.sequence, window.address, window.bytes.len());
         if self.code.as_ref().is_none_or(|cache| cache.key != key) {
+            // iced-x86 for x86-64 (as the static listing), Capstone for aarch64.
+            let decode = match view.caps.arch {
+                ArchTag::X86_64 => decode_window,
+                ArchTag::Aarch64 => decode_window_aarch64,
+            };
             self.code = Some(CodeCache {
                 key,
-                lines: decode_window(
+                lines: decode(
                     window.address,
                     &window.bytes,
                     pc,
