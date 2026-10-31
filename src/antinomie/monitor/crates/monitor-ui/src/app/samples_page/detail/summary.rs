@@ -860,15 +860,18 @@ fn identity(
             // Not in the grid: a long path must wrap in the box, not
             // widen its column.
             ui.label(RichText::new("Archive").color(theme::muted()));
-            ui.add(
-                egui::Label::new(
-                    RichText::new(data.archive.display().to_string())
-                        .monospace()
-                        .small(),
-                )
-                .wrap()
-                .selectable(true),
-            );
+            // Not justified: a path has no spaces to stretch.
+            ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(data.archive.display().to_string())
+                            .monospace()
+                            .small(),
+                    )
+                    .wrap()
+                    .selectable(true),
+                );
+            });
             ui.horizontal_wrapped(|ui| {
                 if data.archived {
                     widgets::chip(ui, "archive present", Tone::Good)

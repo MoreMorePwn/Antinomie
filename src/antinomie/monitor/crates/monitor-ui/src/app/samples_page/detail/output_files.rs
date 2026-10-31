@@ -310,12 +310,12 @@ pub(in crate::app::samples_page) fn section(
         // tooltip has it) so the table never passes the window.
         let gap = ui.spacing().item_spacing.x * 6.0;
         let room = ui.available_width() - gap - 2.0;
-        let mut widths = [file, hash, 70.0, because, size, 140.0];
+        let mut widths = [file, hash, 70.0, because, size, 170.0];
         let roomy = room - widths.iter().sum::<f32>() >= ACTIONS_WIDTH;
         let actions = if roomy { ACTIONS_WIDTH } else { STACKED_WIDTH };
         // (column, least width)
         let mut over = widths.iter().sum::<f32>() + actions - room;
-        for (index, least) in [(3, 90.0), (4, 130.0), (0, 100.0), (5, 120.0)] {
+        for (index, least) in [(3, 80.0), (4, 120.0), (0, 90.0), (2, 56.0), (5, 150.0)] {
             if over <= 0.0 {
                 break;
             }
