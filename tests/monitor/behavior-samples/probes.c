@@ -16,6 +16,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <net/if.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -344,14 +345,24 @@ static int sleep_select(void *context)
     (void)context;
     struct timeval length = {.tv_sec = SLEEP_SECONDS - 15};
     arm_cut();
+#ifdef SYS_select
     return syscall(SYS_select, 0, NULL, NULL, NULL, &length) == -1 && errno == EINTR ? 0 : 1;
+#else
+    // arm64 has no select call; its C library's select is pselect6.
+    return select(0, NULL, NULL, NULL, &length) == -1 && errno == EINTR ? 0 : 1;
+#endif
 }
 
 static int sleep_poll(void *context)
 {
     (void)context;
     arm_cut();
+#ifdef SYS_poll
     return syscall(SYS_poll, NULL, 0, 61000) == -1 && errno == EINTR ? 0 : 1;
+#else
+    // arm64 has no poll call; its C library's poll is ppoll.
+    return poll(NULL, 0, 61000) == -1 && errno == EINTR ? 0 : 1;
+#endif
 }
 
 static int sleep_alarm(void *context)

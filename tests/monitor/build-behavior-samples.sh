@@ -5,6 +5,8 @@
 #
 #   usage: tests/monitor/build-behavior-samples.sh OUTPUT_DIR [--dynamic]
 #
+# CC picks the compiler (default gcc; aarch64-linux-gnu-gcc for arm64 guests).
+#
 # Writes OUTPUT_DIR/demo-all (every scenario) and one demo-<scenario>
 # per scenario. Static by default, so the samples run on the BusyBox and
 # minimal guests; --dynamic links glibc like the default workload build.
@@ -33,16 +35,27 @@ shared=(common net evade beaconing discovery probes anti-analysis stage credenti
 objects=$(mktemp -d)
 trap 'rm -rf "$objects"' EXIT
 for name in "${shared[@]}"; do
-    gcc "${cflags[@]}" -c "$source_dir/$name.c" -o "$objects/$name.o"
+    "${CC:-gcc}" "${cflags[@]}" -c "$source_dir/$name.c" -o "$objects/$name.o"
 done
 link_all() { # SCENARIO-OR-EMPTY OUTPUT
     local define=()
     [[ -n $1 ]] && define=(-DSINGLE_SCENARIO="\"$1\"")
-    gcc "${cflags[@]}" "${define[@]}" "$source_dir/main.c" "$objects"/*.o -o "$2" "${link[@]}" -lm
+    "${CC:-gcc}" "${cflags[@]}" "${define[@]}" "$source_dir/main.c" "$objects"/*.o -o "$2" "${link[@]}" -lm
 }
 link_all "" "$output/demo-all"
 # The registry in main.c is the list of scenarios; build one binary for each.
-mapfile -t scenarios < <("$output/demo-all" --list | awk -F'\t' '!/^#/ {print $1}')
+list_scenarios() {
+    if "$output/demo-all" --list 2>/dev/null; then
+        return
+    fi
+    # A cross build does not run here: list them with a host build.
+    local sources=("$source_dir/main.c") name
+    for name in "${shared[@]}"; do sources+=("$source_dir/$name.c"); done
+    mkdir -p "$objects/host"
+    gcc "${cflags[@]}" "${sources[@]}" -o "$objects/host/demo-all" -lm
+    "$objects/host/demo-all" --list
+}
+mapfile -t scenarios < <(list_scenarios | awk -F'\t' '!/^#/ {print $1}')
 if [[ ${#scenarios[@]} -eq 0 ]]; then
     echo "demo-all --list printed no scenarios" >&2
     exit 1

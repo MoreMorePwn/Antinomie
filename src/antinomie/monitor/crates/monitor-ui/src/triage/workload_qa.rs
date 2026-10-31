@@ -41,6 +41,38 @@ fn recorded_workload_triage() {
         "http": scan.http.len(), "http_omitted": scan.http_omitted,
         "dns": scan.counts.dns, "network_counts": scan.network_counts, "network_warning": scan.network_warning,
     });
+    // The rules that fired, by name and tier, to compare runs of one sample
+    // across guest architectures (MA-13); housekeeping rows left out.
+    let mut rules = std::collections::BTreeMap::<String, u64>::new();
+    let mut hidden = std::collections::BTreeMap::<String, u64>::new();
+    let mut rows = Vec::new();
+    for finding in &scan.findings {
+        let value = |name: &str| {
+            finding
+                .values
+                .iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, v)| v)
+        };
+        let shown = !matches!(value("finding.hidden"), Some(RowValue::Bool(true)));
+        if let (Some(RowValue::Text(rule)), Some(RowValue::Text(summary))) =
+            (value("finding.rule"), value("finding.summary"))
+        {
+            rows.push(format!(
+                "{rule}: {}",
+                summary.chars().take(160).collect::<String>()
+            ));
+        }
+        if let (Some(RowValue::Text(rule)), Some(RowValue::Text(tier))) =
+            (value("finding.rule"), value("finding.tier"))
+        {
+            let counts = if shown { &mut rules } else { &mut hidden };
+            *counts.entry(format!("{rule} {tier}")).or_default() += 1;
+        }
+    }
+    report["finding_rules"] = serde_json::json!(rules);
+    report["hidden_rules"] = serde_json::json!(hidden);
+    report["finding_rows"] = serde_json::json!(rows);
     let mut view = TriageView::default();
     view.scan = Some(scan);
     let ctx = egui::Context::default();

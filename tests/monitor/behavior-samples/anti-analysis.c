@@ -300,7 +300,7 @@ SCENARIO(inject_sim)
             }
         }
         if (stopped) {
-            long word = 0x4141414141414141L;
+            unsigned long word = ~0UL / 0xff * 0x41; /* 0x41 in every byte */
             ptrace(PTRACE_POKEDATA, victim.pid, scratch, (void *)word);
             ptrace(PTRACE_PEEKDATA, victim.pid, scratch, NULL);
             done++;
