@@ -252,6 +252,9 @@ download anything, **you build a full pack** yourself:
 - Choose a base compatible with the application. Installing a newer app does not
   replace an existing VM's pinned base.
 - Your data (bases, VM disks, recordings) lives in `~/antinomie` by default.
+- Downloaded bases are GPL-2.0 and Debian software: their corresponding source
+  (kernel patch series and configuration, BusyBox and package sources) is in the
+  `sources/` folder of the [base bucket](https://huggingface.co/buckets/MoreMorePwn/antinomie-bases/tree/main/sources).
 - The [user guide](docs/usage.md) covers controls, transport settings, desktop
   execution and layouts.
 

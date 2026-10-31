@@ -188,12 +188,19 @@ and its existing local timezone support for host-clock presentation. No new
 third-party package version is introduced by this dependency edge. The retained
 Cargo source/notice inventory includes these packages under their upstream terms.
 
-The `MoreMorePwn/antinomie-bases` Hugging Face bucket is reserved for the VM
-image catalog and required image files. Guest kernel source, exact
-bootstrap/desktop package sources and guest notices belong in a separate
-publication. Release notes must provide the verified source location before
-the release is published. The source inventory associates each distributed
-base with its exact kernel configuration, patch series and package versions.
+The `MoreMorePwn/antinomie-bases` Hugging Face bucket holds the VM image
+catalog and image files, and under `sources/` the corresponding source of each
+listed base (`bases/<identity>/SOURCES.json` is that base's inventory): the
+Debian `linux` source package (`debian/`), the Antinomie patch series and build
+recipe of the kernel revision (`kernels/`), the exact kernel configuration
+(`bases/<identity>/kernel.config`), the source packages of the host programs the
+image builders copy into BusyBox images and every initrd (BusyBox, glibc,
+e2fsprogs; `userland/`), and for Debian bases the full package inventory with
+source package, version and snapshot.debian.org link
+(`bases/<identity>/packages.tsv`). Debian packages keep their own licenses; their
+copyright files are in the images under `/usr/share/doc`. Release notes give the
+bucket location, and a base is listed in `index.json` only with its `sources/`
+section in place.
 
 The 0.7.0 debugger serves the GDB Remote Serial Protocol with original code:
 the framing, packet dispatch, process-qualified thread ids, all-stop and non-stop

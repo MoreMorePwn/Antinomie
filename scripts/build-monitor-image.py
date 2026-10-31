@@ -145,6 +145,7 @@ def stamp_revision(manifest, kernel, allow_unversioned, app_version=None):
                                "pass --allow-unversioned to build an unversioned base")
         return
     manifest["antinomie_revision"], manifest["antinomie_source"] = identity
+    manifest.setdefault("guest_sources", {})["kernel"] = kernel_source_record(identity)
     manifest["min_app_version"] = first_app_version(identity[0])
     if "symbols" in manifest:
         # Older apps compute the base identity without the symbol table.
@@ -202,8 +203,51 @@ def stealth_support(config, kernel, root_buses=True, dhcp=True):
     return support
 
 
+PACKAGE_FIELDS = ("package", "version", "architecture", "source_package", "source_version")
+# Packages the host files copied into the image belong to, by package name: the
+# build records them so the corresponding source can be published.
+INSTALLED_PACKAGES = {}
+
+
+def host_package(path):
+    """The installed Debian package that owns a host file, as a record of
+    PACKAGE_FIELDS, or None when the host has no dpkg or no package owns it."""
+    try:
+        search = subprocess.run(["dpkg-query", "--search", str(Path(path).resolve())],
+                                capture_output=True, text=True)
+        if search.returncode or not search.stdout.strip():
+            return None
+        owner = search.stdout.splitlines()[0].split(": ", 1)[0]
+        fields = subprocess.check_output(
+            ["dpkg-query", "-W", "-f=${binary:Package}\t${Version}\t${Architecture}\t"
+             "${source:Package}\t${source:Version}\n", owner], text=True).strip().split("\t")
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return dict(zip(PACKAGE_FIELDS, fields)) if len(fields) == len(PACKAGE_FIELDS) else None
+
+
+def record_package(path):
+    """Remember the package of a host file copied into the image. A file no
+    package owns is kept under its path, so it cannot be published silently."""
+    record = host_package(path)
+    if record is None:
+        INSTALLED_PACKAGES[str(path)] = {"package": None, "path": str(path)}
+    else:
+        INSTALLED_PACKAGES[record["package"]] = record
+
+
+def kernel_source_record(identity):
+    """The kernel's source identity for bundle.json: the Debian source package
+    it is built on and the Antinomie revision and series hash that patch it."""
+    adapter = REPO / "src/antinomie/packaging/debian-6.12.94-1-trixie/adapter.conf"
+    version = re.search(r"^SOURCE_VERSION=(\S+)", adapter.read_text(), re.M)
+    return {"source_package": "linux", "source_version": version[1] if version else None,
+            "antinomie_revision": identity[0], "antinomie_source": identity[1]}
+
+
 def install_binary(source, root, destination=None):
     source = Path(source)
+    record_package(source)
     target = root / (destination or str(source)).lstrip("/")
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, target)
@@ -217,6 +261,7 @@ def install_binary(source, root, destination=None):
             dest = root / str(path).lstrip("/")
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(path, dest)
+            record_package(path)
 
 
 def write_file(root, path, content, mode=0o644):
@@ -493,6 +538,11 @@ def main():
         manifest["symbols"] = "symbols.json.xz"
         manifest["sha256"]["symbols.json.xz"] = checksum(args.output / "symbols.json.xz")
     stamp_revision(manifest, args.output / "kernel", args.allow_unversioned, args.app_version)
+    # The BusyBox image copies the build host's busybox, its libraries and the
+    # initrd's e2fsprogs; their source packages are what a base's sources need.
+    if INSTALLED_PACKAGES:
+        manifest.setdefault("guest_sources", {})["packages"] = sorted(
+            INSTALLED_PACKAGES.values(), key=lambda item: item.get("package") or item["path"])
     if name:
         manifest["name"] = name
     manifest["stealth_support"] = stealth_support(args.kernel_config, args.output / "kernel")

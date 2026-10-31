@@ -62,11 +62,21 @@ the host/kernel boundary and locked Cargo license expressions and can collect
 upstream license documents. Its manifest marks crates lacking separate notice
 files for source review; a metadata pass is not full legal clearance.
 
-The Hugging Face `MoreMorePwn/antinomie-bases` bucket contains only the image
-catalog, its README and required VM bundle files. Publish corresponding guest
-sources and separate notices elsewhere, with verified access links in the
-release documentation. Keeping the image catalog separate does not remove
-component-specific source distribution obligations.
+The Hugging Face `MoreMorePwn/antinomie-bases` bucket holds the image catalog,
+its README, the VM bundle files and, under `sources/`, the corresponding source
+of every listed base: the Debian `linux` source package each guest kernel is
+built on, the Antinomie patch series and exact kernel configuration of that
+base, the source packages of the BusyBox, glibc and e2fsprogs binaries copied
+into its images, and a package inventory with snapshot.debian.org links for each
+Debian base
+(<https://huggingface.co/buckets/MoreMorePwn/antinomie-bases/tree/main/sources>;
+`bases/<identity>/SOURCES.json` there names every file of one base). Nothing in
+the bucket depends on access to a private repository. A base is published
+together with its `sources/` section (`scripts/publish-base-sources.py`); a base
+whose sources cannot be published is not listed in `index.json`. The patch series
+is also in the `vX.Y.Z` tag of this repository under `src/antinomie/core/`.
+Keeping the image catalog separate does not remove component-specific source
+distribution obligations.
 
 Unnecessary reference mockups, copied branding and research artifacts stay out
 of the product repository; required

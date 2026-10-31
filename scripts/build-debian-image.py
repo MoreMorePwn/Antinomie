@@ -348,13 +348,14 @@ def initrd_provenance(root, provenance):
               "recipe": "bootstrap-recipe.py:initrd_tree"}
     (notices / "packages.json").write_text(json.dumps(record, indent=2) + "\n")
     shutil.copytree(notices, provenance / "initrd")
+    return packages
 
 
 def make_initrd(output, staging, provenance):
     root = staging / "initrd-tree"
     root.mkdir()
     monitor_helpers().initrd_tree(root)
-    initrd_provenance(root, provenance)
+    packages = initrd_provenance(root, provenance)
     names = ["."] + [str(p.relative_to(root)) for p in sorted(root.rglob("*"))]
     cpio = subprocess.run(["cpio", "--create", "--format=newc", "--null", "--owner=0:0"],
                           cwd=root, input=b"\0".join(os.fsencode(n) for n in names) + b"\0",
@@ -362,6 +363,7 @@ def make_initrd(output, staging, provenance):
     gzip = subprocess.run(["gzip", "-n", "-9"], input=cpio.stdout,
                           capture_output=True, check=True)
     output.write_bytes(gzip.stdout)
+    return packages
 
 
 def options(values):
@@ -1539,7 +1541,7 @@ def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=Fa
         subprocess.run(["qemu-img", "convert", "-f", "raw", "-O", "qcow2",
                         str(raw), str(bundle / "base.qcow2")], check=True)
         raw.unlink()
-        make_initrd(bundle / "initrd.gz", staging, provenance)
+        initrd_packages = make_initrd(bundle / "initrd.gz", staging, provenance)
         items = ("kernel", "initrd.gz", "base.qcow2")
         if values["desktop"] == CONSOLE:
             root["uefi_layout"] = uefi_layout(staging, bundle)
@@ -1573,6 +1575,10 @@ def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=Fa
             manifest["symbols"] = "symbols.json.xz"
             hashes["symbols.json.xz"] = helpers.checksum(bundle / "symbols.json.xz")
         helpers.stamp_revision(manifest, bundle / "kernel", allow_unversioned, app_version)
+        # The root filesystem's packages are inventoried in provenance/packages.tsv;
+        # these are the host packages copied into the initrd.
+        manifest.setdefault("guest_sources", {})["packages"] = sorted(
+            initrd_packages.values(), key=lambda item: item["package"])
         if values["name"]:
             manifest["name"] = values["name"]
         # NetworkManager (systemd-networkd on the console base) takes the NAT's

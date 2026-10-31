@@ -6,6 +6,14 @@ it runs.
 
 ## 0.8.0 — unreleased
 
+- **Sources for the downloadable bases.** The `sources/` folder of the base
+  bucket now holds the corresponding source of every listed base: the Debian
+  `linux` source package, the Antinomie patch series and exact kernel
+  configuration, the BusyBox, glibc and e2fsprogs source packages, and a package
+  inventory with snapshot.debian.org links for each Debian base. New builds record
+  the kernel and BusyBox source identity in `bundle.json`, and
+  `scripts/publish-base-sources.py` assembles the sources for an upload.
+
 - **Sample notes and Delete run.** Notes with links to runs, processes,
   artifacts and custody entries, a Notes tab, Latest note and Add note… menus;
   every note change is in the custody log. Delete run asks which of the run's
