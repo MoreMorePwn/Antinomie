@@ -15,11 +15,7 @@ fn main() {
         eprintln!("usage: kernel-notes-check RUN_DIR");
         std::process::exit(2);
     };
-    let recording = Recording {
-        directory,
-        manifest: serde_json::Value::Null,
-        events: Vec::new(),
-    };
+    let recording = Recording::raw(&directory);
     let cancel = AtomicBool::new(false);
     let (mut offset, mut calls, mut undecoded, mut issues) = (0, 0u64, 0u64, 0usize);
     loop {

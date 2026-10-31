@@ -371,11 +371,7 @@ fn checks(text: &str) -> Vec<(String, String, String)> {
 
 /// Calls the run's recording holds.
 fn recorded_calls(directory: &Path) -> Result<u64, String> {
-    let recording = recording::Recording {
-        directory: directory.to_path_buf(),
-        manifest: serde_json::Value::Null,
-        events: Vec::new(),
-    };
+    let recording = recording::Recording::raw(&directory);
     let cancel = AtomicBool::new(false);
     let mut count = 0;
     let mut offset = 0;
@@ -990,11 +986,7 @@ fn abi(
         return Ok(());
     }
     let directory = module_directory.ok_or("module run missing")?;
-    let recording = recording::Recording {
-        directory,
-        manifest: serde_json::Value::Null,
-        events: Vec::new(),
-    };
+    let recording = recording::Recording::raw(&directory);
     let mut load = false;
     let mut unload = false;
     let mut bpf = false;

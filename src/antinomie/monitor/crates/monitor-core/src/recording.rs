@@ -86,6 +86,24 @@ pub struct Recording {
     pub events: Vec<EventSummary>,
 }
 
+impl Recording {
+    /// A run directory's raw records to page through, without the event
+    /// preview `open_recording` builds: the manifest when the run has one (its
+    /// guest architecture names the calls), else none (x86-64).
+    pub fn raw(directory: &Path) -> Self {
+        let manifest = archive_io::open_regular(directory, Path::new("manifest.json"))
+            .ok()
+            .filter(|file| file.metadata().is_ok_and(|meta| meta.len() <= 1024 * 1024))
+            .and_then(|file| serde_json::from_reader(file).ok())
+            .unwrap_or(serde_json::Value::Null);
+        Self {
+            directory: directory.to_path_buf(),
+            manifest,
+            events: Vec::new(),
+        }
+    }
+}
+
 /// A bounded matching page of the retained invocation stream.
 ///
 /// | Field | Meaning |

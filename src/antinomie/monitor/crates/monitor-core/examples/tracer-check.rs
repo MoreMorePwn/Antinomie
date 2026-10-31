@@ -215,11 +215,7 @@ fn pattern_sha(seed: u64, size: u64) -> String {
 
 /// Every hash record of a saved run, with the pid of the call it came with.
 fn hashes(directory: &Path) -> Result<Vec<(u32, String, FileHash)>, String> {
-    let recording = recording::Recording {
-        directory: directory.to_path_buf(),
-        manifest: serde_json::Value::Null,
-        events: Vec::new(),
-    };
+    let recording = recording::Recording::raw(&directory);
     let cancel = AtomicBool::new(false);
     let mut found = Vec::new();
     let mut offset = 0;
@@ -244,11 +240,7 @@ fn hashes(directory: &Path) -> Result<Vec<(u32, String, FileHash)>, String> {
 
 /// The run's launch record, read from its first segment.
 fn launch_of(directory: &Path, root: u64) -> Result<Option<recording::LaunchRecord>, String> {
-    let recording = recording::Recording {
-        directory: directory.to_path_buf(),
-        manifest: serde_json::Value::Null,
-        events: Vec::new(),
-    };
+    let recording = recording::Recording::raw(&directory);
     let cancel = AtomicBool::new(false);
     let page = recording
         .invocation_page_cancellable(0, 1, &cancel)

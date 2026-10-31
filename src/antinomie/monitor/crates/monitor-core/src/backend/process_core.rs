@@ -641,13 +641,23 @@ impl Session {
         if core.allocated + retained_len as u64 > core.max_size {
             return Err("guest process core stored more than its accepted reservation".into());
         }
+        // The guest writes cores of its native 64-bit little-endian programs
+        // only (x86-64, aarch64): ET_CORE of the guest's own machine.
+        let machine = self
+            .capture
+            .guest_kernel
+            .as_ref()
+            .map_or(crate::api::GuestArch::ELF_X86_64, |kernel| kernel.arch.machine);
         if core.offset == 0
             && data.len() >= 20
             && (&data[..7] != b"\x7fELF\x02\x01\x01"
                 || data[16..18] != 4u16.to_le_bytes()
-                || data[18..20] != 62u16.to_le_bytes())
+                || u32::from(u16::from_le_bytes([data[18], data[19]])) != machine)
         {
-            return Err("guest process core is not a native little-endian x86-64 ELF core".into());
+            return Err(
+                "guest process core is not a native little-endian ELF core of the guest's architecture"
+                    .into(),
+            );
         }
         let cut = retained_len < data.len();
         let mut data = data;
