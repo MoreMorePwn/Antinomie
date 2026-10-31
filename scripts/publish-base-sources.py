@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-only
 """Assemble the corresponding source of one Antinomie base for publication.
 
 A published base holds GPL-2.0 programs (the patched Linux kernel, BusyBox, the

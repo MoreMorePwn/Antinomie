@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-only
 """A rootless Debian 13 toolchain chroot for kernel builds on any Linux distro.
 
 Debian Minimal's kernel banner, BTF and compiler-dependent options come from

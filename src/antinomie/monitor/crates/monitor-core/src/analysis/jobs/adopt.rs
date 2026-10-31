@@ -4,6 +4,12 @@
 use super::*;
 use std::{fs, os::unix::fs::PermissionsExt, path::Path};
 
+/// The bytes of listings adopted so far and the most a report may hold.
+struct Budget {
+    used: u64,
+    most: u64,
+}
+
 /// Validate one worker listing of `kind` rows and move it to the report.
 fn adopt(
     output: &Path,
@@ -12,11 +18,10 @@ fn adopt(
     kind: AnalysisKind,
     listing: &AnalysisListing,
     total_len: Option<u64>,
-    total: &mut u64,
-    budget: u64,
+    total: &mut Budget,
 ) -> Result<(), String> {
-    *total = total.saturating_add(listing.bytes);
-    if *total > budget {
+    total.used = total.used.saturating_add(listing.bytes);
+    if total.used > total.most {
         return Err("listings exceed their combined bound".to_string());
     }
     super::super::listing::validate(&output.join(name), kind, listing, total_len).and_then(|()| {
@@ -46,9 +51,11 @@ pub(in super::super) fn adopt_listings(
 ) {
     let output = directory.join("output/listings");
     let target = directory.join("listings");
-    let mut total = 0u64;
     let total_len = report.specimen_len;
-    let budget = report.limits.unwrap_or_default().clamped().listings_total();
+    let mut total = Budget {
+        used: 0,
+        most: report.limits.unwrap_or_default().clamped().listings_total(),
+    };
     for section in &mut report.sections {
         if carried.contains(&section.kind) {
             continue;
@@ -62,7 +69,6 @@ pub(in super::super) fn adopt_listings(
                 &disassembly.listing,
                 total_len,
                 &mut total,
-                budget,
             )
         {
             section.disassembly = None;
@@ -80,7 +86,6 @@ pub(in super::super) fn adopt_listings(
             &listing,
             total_len,
             &mut total,
-            budget,
         ) {
             section.listing = None;
             section.state = AnalysisSectionState::Partial;
