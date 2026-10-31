@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Cloud-profile launch advice without changing a saved network policy.
 use crate::theme;
-use antinomie_monitor_core::{VmConfig, VmNetwork};
+use antinomie_monitor_core::{stealth::MACHINES, VmConfig, VmNetwork};
 use eframe::egui;
 
 pub(in crate::app) fn launch_advice(ui: &mut egui::Ui, vm: &mut VmConfig) {
@@ -10,6 +10,19 @@ pub(in crate::app) fn launch_advice(ui: &mut egui::Ui, vm: &mut VmConfig) {
         crate::activity::warning(ui, note);
     }
     if vm.stealth.cloud_provider().is_none() {
+        if vm.stealth.identity_enabled
+            && MACHINES
+                .iter()
+                .any(|machine| machine.id == vm.stealth.identity.profile)
+        {
+            ui.label(
+                egui::RichText::new(
+                    "Independent imitation of a real machine's reported identity; no affiliation with or endorsement by its maker.",
+                )
+                .small()
+                .color(theme::muted()),
+            );
+        }
         return;
     }
     ui.label(

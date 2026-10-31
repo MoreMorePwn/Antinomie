@@ -766,7 +766,7 @@ impl Open {
         ui.horizontal_wrapped(|ui| {
             let can = directory.is_some() && self.saving.is_none();
             let response = ui
-                .add_enabled(can, egui::Button::new("Save reconstruction…"))
+                .add_enabled(can, egui::Button::new("Save reconstruction"))
                 .on_hover_text("Unknown bytes save as 00; a .mask file next to it marks them (00 known, 01 unknown, 02 not captured, 03 mapping)");
             if let (true, true, Some(directory)) = (can, response.clicked(), directory) {
                 let target = directory.join("reconstructed");

@@ -508,3 +508,24 @@ fn the_vm_dialog_keeps_its_width_for_every_device_profile() {
         }
     }
 }
+
+#[test]
+fn a_machine_profile_says_it_has_no_affiliation_with_the_maker() {
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let mut vm = VmConfig {
+        id: "machine".into(),
+        stealth: StealthProfile::default()
+            .for_preset(StealthPreset::RealisticDesktop, "GenuineIntel"),
+        ..Default::default()
+    };
+    assert!(vm.stealth.identity_enabled && vm.stealth.cloud_provider().is_none());
+    let output = cloud_advice_frame(&ctx, &mut vm, vec![]);
+    assert!(
+        texts(&output)
+            .iter()
+            .any(|(text, _)| text.contains("no affiliation with or endorsement by its maker")),
+        "{:?}",
+        texts(&output)
+    );
+}
