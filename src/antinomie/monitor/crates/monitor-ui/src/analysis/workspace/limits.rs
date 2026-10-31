@@ -34,14 +34,18 @@ pub(super) fn notes(
     ui: &mut egui::Ui,
     report: &AnalysisReport,
     section: &AnalysisSection,
+    first_shown: bool,
 ) -> Option<ReportAction> {
     let mut action = None;
     let finished = matches!(
         report.state,
         AnalysisState::Complete | AnalysisState::Partial
     );
-    for limit in &section.limits {
-        crate::activity::warning(ui, &limit.text);
+    for (at, limit) in section.limits.iter().enumerate() {
+        // The first note's sentence stands at the badge; its buttons stay here.
+        if !(first_shown && at == 0) {
+            crate::activity::warning(ui, &limit.text);
+        }
         if limit.kind != AnalysisLimitKind::Time {
             // A bound a setting raises leads to that setting's field; the rest
             // (a file that disagrees with itself, an unpacking depth) are fixed.
@@ -164,7 +168,7 @@ mod tests {
                 },
                 |ctx| {
                     egui::CentralPanel::default().show(ctx, |ui| {
-                        if let Some(next) = notes(ui, report, &report.sections[at]) {
+                        if let Some(next) = notes(ui, report, &report.sections[at], false) {
                             action = Some(next);
                         }
                     });
@@ -191,7 +195,7 @@ mod tests {
             },
             |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    if let Some(next) = notes(ui, report, &report.sections[at]) {
+                    if let Some(next) = notes(ui, report, &report.sections[at], false) {
                         action = Some(next);
                     }
                 });

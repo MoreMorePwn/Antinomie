@@ -454,13 +454,12 @@ fn results(
         return None;
     };
     let mut action = None;
-    ui.horizontal_wrapped(|ui| {
-        ui.strong(section_title(kind));
-        let rows = row_count(report, section);
-        crate::widgets::chip(ui, state_word(report, section), state_tone(section));
+    let reason = section.reason();
+    // The rest of the header: the row count, the tools and the buttons.
+    let mut rest = |ui: &mut egui::Ui| {
         ui.label(format!(
             "{} rows",
-            antinomie_monitor_core::analysis::detection::group_digits(rows)
+            antinomie_monitor_core::analysis::detection::group_digits(row_count(report, section))
         ));
         let tools = tools(section);
         if !tools.is_empty() {
@@ -481,9 +480,38 @@ fn results(
                 kind,
             });
         }
-    });
-    ui.add(egui::Label::new(egui::RichText::new(&section.summary).weak()).wrap());
-    if let Some(next) = limits::notes(ui, report, section) {
+    };
+    let head = |ui: &mut egui::Ui| {
+        ui.strong(section_title(kind));
+        crate::widgets::chip(ui, state_word(report, section), state_tone(section));
+    };
+    if let Some((text, _)) = &reason {
+        // The reason follows the badge and may wrap, so nothing follows it on
+        // its row; the count and buttons start the next one.
+        let color = if section.state == antinomie_monitor_core::AnalysisSectionState::Unavailable {
+            crate::theme::error()
+        } else {
+            crate::theme::warn()
+        };
+        ui.horizontal_wrapped(|ui| {
+            head(ui);
+            ui.label(egui::RichText::new(text).color(color));
+        });
+        ui.horizontal_wrapped(&mut rest);
+    } else {
+        ui.horizontal_wrapped(|ui| {
+            head(ui);
+            rest(ui);
+        });
+    }
+    // An unavailable check's summary is its reason, already at the badge.
+    if reason
+        .as_ref()
+        .is_none_or(|(text, _)| *text != section.summary)
+    {
+        ui.add(egui::Label::new(egui::RichText::new(&section.summary).weak()).wrap());
+    }
+    if let Some(next) = limits::notes(ui, report, section, reason.as_ref().is_some_and(|r| r.1)) {
         action = Some(next);
     }
     if section.summary.contains("Tools > Analysis tools")
@@ -654,6 +682,30 @@ fn identity(ui: &mut egui::Ui, report: &AnalysisReport) -> Option<ReportAction> 
     ) {
         if let Some(reason) = &report.reason {
             crate::activity::warning(ui, reason);
+        } else if report.state == AnalysisState::Partial {
+            // Partial because of its categories: name them.
+            let names: Vec<&str> = report
+                .sections
+                .iter()
+                .filter(|s| {
+                    matches!(
+                        s.state,
+                        antinomie_monitor_core::AnalysisSectionState::Partial
+                            | antinomie_monitor_core::AnalysisSectionState::Timeout
+                            | antinomie_monitor_core::AnalysisSectionState::Unavailable
+                    )
+                })
+                .map(|s| section_title(s.kind))
+                .collect();
+            if !names.is_empty() {
+                crate::activity::warning(
+                    ui,
+                    format!(
+                        "Not every check completed: {}. Each one says why.",
+                        names.join(", ")
+                    ),
+                );
+            }
         }
     }
     let mut rows = vec![
@@ -807,10 +859,27 @@ fn categories(
                             ui.end_row();
                             continue;
                         };
-                        if crate::widgets::link(ui, section_title(kind))
-                            .on_hover_text(&section.summary)
-                            .clicked()
-                        {
+                        let clicked = ui
+                            .vertical(|ui| {
+                                // Why a check is not complete stands under its name.
+                                ui.set_max_width(340.0);
+                                let clicked = crate::widgets::link(ui, section_title(kind))
+                                    .on_hover_text(&section.summary)
+                                    .clicked();
+                                if let Some((text, _)) = section.reason() {
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(text)
+                                                .small()
+                                                .color(crate::theme::warn()),
+                                        )
+                                        .wrap(),
+                                    );
+                                }
+                                clicked
+                            })
+                            .inner;
+                        if clicked {
                             state.show(kind);
                         }
                         let tag = crate::widgets::chip_wide(

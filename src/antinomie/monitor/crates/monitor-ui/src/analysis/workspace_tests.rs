@@ -87,7 +87,7 @@ fn fixture() -> AnalysisReport {
         disassembly: None,
         kind: AnalysisKind::Strings,
         state: AnalysisSectionState::Partial,
-        summary: "1024 retained synthetic strings; text bounded".into(),
+        summary: "1024 retained synthetic strings, text bounded".into(),
         tools: Vec::new(),
         listing: None,
         entries: (0..1024)
@@ -877,7 +877,21 @@ fn export_controls_emit_report_scoped_actions_and_wrap_long_failure_reason() {
         reason.galley.rows.len() > 1,
         "failure reasons wrap instead of truncating"
     );
-    let pos = texts(&output)
+    // The button of the Strings pane, wherever its header wraps the reason.
+    let mut pane = egui::FullOutput::default();
+    for _ in 0..3 {
+        pane = frame(
+            &ctx,
+            &report,
+            &mut state,
+            Some(AnalysisKind::Strings),
+            size,
+            Vec::new(),
+            (None, None),
+        )
+        .0;
+    }
+    let pos = texts(&pane)
         .into_iter()
         .find(|(text, _)| text == "Open result directory")
         .unwrap()
@@ -1053,6 +1067,8 @@ fn native_analysis_workspace_fixture() {
                 (unpacked_report(), None)
             } else if view_name == "limits" || view_name == "timeout" {
                 (limits_report(), None)
+            } else if view_name.starts_with("partial-") {
+                (incomplete_report().0, None)
             } else {
                 qa_report()
             };
@@ -1093,6 +1109,14 @@ fn native_analysis_workspace_fixture() {
                     "timeout" => Tab::Capa,
                     _ => Tab::FileInfo,
                 };
+            }
+            if let Some(kind) = match view_name.as_str() {
+                "partial-decompilation" => Some(AnalysisKind::Decompilation),
+                "partial-disassembly" => Some(AnalysisKind::Disassembly),
+                "partial-strings" => Some(AnalysisKind::Strings),
+                _ => None,
+            } {
+                state.show(kind);
             }
             if view_name == "unpack" {
                 state.tab = Tab::Unpacking;
@@ -2172,7 +2196,10 @@ fn a_strings_header_click_reads_the_whole_listing_in_that_order_and_keeps_the_pa
         shown.iter().any(|(text, _)| text == "fixture string 0"),
         "{shown:?}"
     );
-    assert!(shown.iter().any(|(text, _)| text == "Sorting…"));
+    assert!(
+        shown.iter().any(|(text, _)| text == "Sorting…"),
+        "{shown:?}"
+    );
     let ascending = ListingSort {
         column: 3,
         descending: false,
@@ -3056,6 +3083,171 @@ fn the_disassembly_tab_shows_built_in_rows_then_ghidra_s_listing_with_jumps() {
     assert!(shown.iter().any(|t| t == "iced-x86"), "{shown:?}");
     assert!(
         shown.iter().any(|t| t == "Show Ghidra 12.2 listing"),
+        "{shown:?}"
+    );
+}
+
+/// Categories that are not complete, each with the reason it must show.
+fn incomplete_report() -> (
+    AnalysisReport,
+    Vec<(AnalysisKind, &'static str, &'static str, bool)>,
+) {
+    use antinomie_monitor_core::{AnalysisLimit, AnalysisLimitKind, LimitSetting};
+    let mut report = fixture();
+    report.sections.clear();
+    let mut cases = Vec::new();
+    let mut add = |kind,
+                   state,
+                   summary: &str,
+                   limit: Option<(AnalysisLimitKind, &'static str, Option<LimitSetting>)>,
+                   word: &'static str,
+                   reason: &'static str| {
+        let mut section = AnalysisSection::new(kind);
+        section.state = state;
+        section.summary = summary.into();
+        let settable = limit.is_some_and(|(_, _, setting)| setting.is_some());
+        if let Some((kind, text, setting)) = limit {
+            section.limits.push(AnalysisLimit {
+                kind,
+                text: text.into(),
+                seconds: None,
+                setting,
+            });
+        }
+        report.sections.push(section);
+        cases.push((kind, word, reason, settable));
+    };
+    add(
+        AnalysisKind::Decompilation,
+        AnalysisSectionState::Partial,
+        "412 functions, 203,652 lines of Ghidra output; full listing rejected: listings exceed their combined bound",
+        Some((
+            AnalysisLimitKind::Size,
+            "Full listing not kept: the listings of this report exceeded their combined size limit.",
+            Some(LimitSetting::Listing),
+        )),
+        "Partial",
+        "Full listing not kept: the listings of this report exceeded their combined size limit.",
+    );
+    add(
+        AnalysisKind::Disassembly,
+        AnalysisSectionState::Partial,
+        "190,000 instructions; Ghidra disassembly rejected: over its size limit",
+        Some((
+            AnalysisLimitKind::Size,
+            "Ghidra's disassembly listing was not kept: it is bigger than the 128.0 MiB Ghidra disassembly size limit.",
+            Some(LimitSetting::GhidraListing),
+        )),
+        "Partial",
+        "Ghidra's disassembly listing was not kept: it is bigger than the 128.0 MiB Ghidra disassembly size limit.",
+    );
+    add(
+        AnalysisKind::Embedded,
+        AnalysisSectionState::Unavailable,
+        "binwalk is not installed on this system",
+        None,
+        "Unavailable",
+        "binwalk is not installed on this system",
+    );
+    // A report from before the reasons were recorded: the last clause of its summary.
+    add(
+        AnalysisKind::Strings,
+        AnalysisSectionState::Partial,
+        "9,000 strings; full listing rejected: listings exceed their combined bound",
+        None,
+        "Partial",
+        "Full listing rejected: listings exceed their combined bound",
+    );
+    add(
+        AnalysisKind::Hardening,
+        AnalysisSectionState::Partial,
+        "Checks of the file",
+        None,
+        "Partial",
+        "Part of the result is missing; this report did not record why.",
+    );
+    (report, cases)
+}
+
+#[test]
+fn every_incomplete_category_says_why_next_to_its_state_badge() {
+    let (report, cases) = incomplete_report();
+    for (kind, word, reason, settable) in cases {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut state = WorkspaceState::default();
+        let mut output = egui::FullOutput::default();
+        for _ in 0..3 {
+            output = frame(
+                &ctx,
+                &report,
+                &mut state,
+                Some(kind),
+                egui::vec2(1400.0, 900.0),
+                Vec::new(),
+                (None, None),
+            )
+            .0;
+        }
+        let shown = texts(&output);
+        let find = |wanted: &str| {
+            shown
+                .iter()
+                .find(|(text, _)| text == wanted)
+                .unwrap_or_else(|| panic!("{kind:?}: {wanted:?} not in {shown:?}"))
+                .1
+        };
+        let (badge, why) = (find(word), find(reason));
+        assert!(
+            why.min.y < badge.max.y && why.max.y > badge.min.y,
+            "{kind:?}: reason {why:?} is not beside the badge {badge:?}"
+        );
+        assert_eq!(
+            shown.iter().filter(|(text, _)| text == reason).count(),
+            1,
+            "{kind:?}: the reason is said once"
+        );
+        assert_eq!(
+            shown.iter().any(|(text, _)| text == "Analysis settings…"),
+            settable,
+            "{kind:?}: the settings button follows the setting"
+        );
+    }
+}
+
+#[test]
+fn the_overview_names_why_each_incomplete_category_is_not_complete() {
+    let (mut report, cases) = incomplete_report();
+    report.state = AnalysisState::Partial;
+    report.reason = None;
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let mut state = WorkspaceState::default();
+    let mut output = egui::FullOutput::default();
+    for _ in 0..3 {
+        output = frame(
+            &ctx,
+            &report,
+            &mut state,
+            None,
+            egui::vec2(1400.0, 1100.0),
+            Vec::new(),
+            (None, None),
+        )
+        .0;
+    }
+    let shown = texts(&output);
+    for (kind, _, reason, _) in cases {
+        assert!(
+            shown.iter().any(|(text, _)| text == reason),
+            "{kind:?}: {reason:?} not in {shown:?}"
+        );
+    }
+    // A report that is partial for its categories names them.
+    assert!(
+        shown
+            .iter()
+            .any(|(text, _)| text.starts_with("Not every check completed:")),
         "{shown:?}"
     );
 }

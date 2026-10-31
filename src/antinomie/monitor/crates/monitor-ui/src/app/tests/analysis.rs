@@ -707,3 +707,28 @@ fn a_limit_warning_opens_settings_at_its_field_and_the_fields_edit_the_limits() 
     app.settings.analysis_limits.set(LimitSetting::Rows, 4096);
     assert_eq!(app.settings.analysis_limits.rows, 4096);
 }
+
+#[test]
+fn the_ghidra_disassembly_warning_opens_settings_at_the_ghidra_size_field() {
+    use antinomie_monitor_core::{LimitSetting, LIMIT_FIELDS};
+    let mut app = app();
+    app.analysis_action(
+        "workspace",
+        Some(crate::analysis::ReportAction::OpenAnalysisLimit(
+            LimitSetting::GhidraListing,
+        )),
+    );
+    assert!(app.settings_open);
+    assert_eq!(app.settings_focus, Some(LimitSetting::GhidraListing));
+    let field = LIMIT_FIELDS
+        .iter()
+        .find(|field| field.setting == LimitSetting::GhidraListing)
+        .unwrap();
+    assert_eq!((field.default, field.unit), (128, "MiB"));
+    // The listing field's own help says Ghidra's has a size of its own.
+    let listing = LIMIT_FIELDS
+        .iter()
+        .find(|field| field.setting == LimitSetting::Listing)
+        .unwrap();
+    assert!(listing.help.contains("Ghidra"));
+}

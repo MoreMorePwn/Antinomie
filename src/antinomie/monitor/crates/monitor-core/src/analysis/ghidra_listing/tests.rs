@@ -487,7 +487,9 @@ fn the_disassembly_is_adopted_under_the_ghidra_listing_size_setting() {
     assert!(section.disassembly.is_none());
     assert_eq!(limit_settings(section), [Some(LimitSetting::GhidraListing)]);
     assert!(
-        section.limits[0].text.contains("Ghidra disassembly size limit"),
+        section.limits[0]
+            .text
+            .contains("Ghidra disassembly size limit"),
         "{}",
         section.limits[0].text
     );
@@ -572,7 +574,10 @@ fn a_large_static_program_keeps_every_listing_at_the_default_limits() {
     let (ghidra, summary) = write_listing(&listings, &export, b"x", 0).unwrap();
     assert!(!ghidra.truncated && summary.note.is_empty(), "{ghidra:?}");
     assert_eq!(summary.instructions, 190_000);
-    assert!(ghidra.bytes > 64 << 20, "the listing must pass the combined single bound");
+    assert!(
+        ghidra.bytes > 64 << 20,
+        "the listing must pass the combined single bound"
+    );
     // The built-in listing of the same code, the decompilation and the strings.
     let rows = |kind, count: u64, make: &dyn Fn(u64) -> (String, AnalysisData)| {
         let mut writer = ListingWriter::create(&listings, kind, 64 << 20).unwrap();
@@ -647,7 +652,12 @@ fn a_large_static_program_keeps_every_listing_at_the_default_limits() {
     let mut report = report_with(vec![strings_section, disassembly, decompilation]);
     super::super::jobs::adopt_listings(&host, &mut report, &[]);
     for section in &report.sections {
-        assert_eq!(section.state, AnalysisSectionState::Complete, "{:?}", section.limits);
+        assert_eq!(
+            section.state,
+            AnalysisSectionState::Complete,
+            "{:?}",
+            section.limits
+        );
         assert!(section.limits.is_empty(), "{:?}", section.limits);
         assert!(section.listing.is_some());
     }

@@ -583,6 +583,45 @@ impl AnalysisReport {
 }
 
 impl AnalysisSection {
+    /// Why a category is not complete, in plain words, to stand next to its state
+    /// badge: the first bound it met, or for one that could not run the reason it
+    /// gave. The flag says the sentence is the first limit note, which the notes
+    /// below then do not repeat. None for a category that is complete or has not
+    /// finished.
+    pub fn reason(&self) -> Option<(String, bool)> {
+        use AnalysisSectionState as State;
+        if !matches!(
+            self.state,
+            State::Partial | State::Timeout | State::Unavailable
+        ) {
+            return None;
+        }
+        if let Some(limit) = self.limits.first() {
+            return Some((limit.text.clone(), true));
+        }
+        // A report made before the reasons were recorded keeps its reason as the
+        // last clause of the summary.
+        let clause = self
+            .summary
+            .rsplit("; ")
+            .next()
+            .filter(|clause| !clause.is_empty() && self.summary.contains("; "));
+        let text = match (self.state, clause) {
+            (State::Unavailable, _) if !self.summary.is_empty() => self.summary.clone(),
+            (State::Unavailable, _) => "This check could not run.".to_owned(),
+            (_, Some(clause)) => {
+                let mut text = clause.to_owned();
+                if let Some(first) = text.get_mut(..1) {
+                    first.make_ascii_uppercase();
+                }
+                text
+            }
+            (State::Timeout, None) => "This check ran out of time.".to_owned(),
+            _ => "Part of the result is missing; this report did not record why.".to_owned(),
+        };
+        Some((text, false))
+    }
+
     pub fn new(kind: AnalysisKind) -> Self {
         Self {
             kind,

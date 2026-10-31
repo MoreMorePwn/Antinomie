@@ -507,4 +507,67 @@ mod tests {
         assert_eq!(section.state, AnalysisSectionState::Timeout);
         assert_eq!(section.limits[0].seconds, Some(240));
     }
+
+    fn section(state: AnalysisSectionState, summary: &str) -> AnalysisSection {
+        let mut section = AnalysisSection::new(AnalysisKind::Decompilation);
+        section.state = state;
+        section.summary = summary.into();
+        section
+    }
+
+    #[test]
+    fn a_complete_or_unfinished_category_has_no_reason() {
+        for state in [
+            AnalysisSectionState::Complete,
+            AnalysisSectionState::Pending,
+            AnalysisSectionState::Running,
+        ] {
+            assert_eq!(section(state, "done; fine").reason(), None);
+        }
+    }
+
+    #[test]
+    fn the_first_bound_a_category_met_is_its_reason() {
+        let mut partial = section(AnalysisSectionState::Partial, "x; y");
+        add_for(
+            &mut partial,
+            AnalysisLimitKind::Size,
+            LimitSetting::Listing,
+            "Full listing not kept.",
+        );
+        assert_eq!(
+            partial.reason(),
+            Some(("Full listing not kept.".into(), true))
+        );
+    }
+
+    #[test]
+    fn a_category_without_notes_falls_back_to_its_summary_and_then_to_plain_words() {
+        use AnalysisSectionState as State;
+        let reason = |state, summary| section(state, summary).reason().map(|r| r.0);
+        assert_eq!(
+            reason(State::Unavailable, "radare2 is not installed").as_deref(),
+            Some("radare2 is not installed")
+        );
+        assert_eq!(
+            reason(State::Unavailable, "").as_deref(),
+            Some("This check could not run.")
+        );
+        assert_eq!(
+            reason(
+                State::Partial,
+                "10 rows; native project not retained: no space"
+            )
+            .as_deref(),
+            Some("Native project not retained: no space")
+        );
+        assert_eq!(
+            reason(State::Timeout, "stopped").as_deref(),
+            Some("This check ran out of time.")
+        );
+        assert_eq!(
+            reason(State::Partial, "stopped").as_deref(),
+            Some("Part of the result is missing; this report did not record why.")
+        );
+    }
 }

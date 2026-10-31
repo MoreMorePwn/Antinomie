@@ -877,6 +877,8 @@ pub(super) struct Feature {
     pub(super) available: bool,
     /// The check ran out of time: shown as a warning, not as missing.
     pub(super) timed_out: bool,
+    /// Why a check is partial, unavailable or out of time, said beside it.
+    pub(super) reason: Option<String>,
     hover: Option<String>,
 }
 
@@ -887,6 +889,7 @@ impl Feature {
             text: text.into(),
             available: true,
             timed_out: false,
+            reason: None,
             hover: None,
         }
     }
@@ -930,6 +933,12 @@ pub(super) fn feature_tree(run: &RunSummary, labels: Option<run_labels::Labels>)
                     feature.available = false;
                     feature.timed_out = section.state == AnalysisSectionState::Timeout;
                     feature.hover = Some(section.summary.clone());
+                    feature.reason = section.reason().map(|(reason, _)| reason);
+                }
+                // Partial: the rows it has are good, and why it stops short is said.
+                Some(section) if section.state == AnalysisSectionState::Partial => {
+                    feature.hover = Some(section.summary.clone());
+                    feature.reason = section.reason().map(|(reason, _)| reason);
                 }
                 None if finished => {
                     feature.available = false;
@@ -998,22 +1007,29 @@ pub(super) fn enabled_features(
     let body = egui::TextStyle::Body.resolve(ui.style());
     for (feature, prefix) in features.iter().zip(crate::tree_lines::prefixes(&depths)) {
         let mut job = prefix.job(&mono);
-        let (mark, color) = if feature.available {
-            (egui_phosphor::regular::CHECK, theme::text())
-        } else if feature.timed_out {
+        let partial = feature.available && feature.reason.is_some();
+        let (mark, color) = if partial || (!feature.available && feature.timed_out) {
             (egui_phosphor::regular::WARNING, theme::warn())
+        } else if feature.available {
+            (egui_phosphor::regular::CHECK, theme::text())
         } else {
             (egui_phosphor::regular::MINUS, theme::muted())
         };
-        let suffix = if feature.available {
+        let suffix = if partial {
+            " · partial"
+        } else if feature.available {
             ""
         } else if feature.timed_out {
             " · timed out"
         } else {
             " · unavailable"
         };
+        let reason = feature
+            .reason
+            .as_deref()
+            .map_or(String::new(), |reason| format!(": {reason}"));
         job.append(
-            &format!("{mark}  {}{suffix}", feature.text),
+            &format!("{mark}  {}{suffix}{reason}", feature.text),
             0.0,
             egui::TextFormat::simple(body.clone(), color),
         );

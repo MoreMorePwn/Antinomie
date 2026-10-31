@@ -63,8 +63,7 @@ fn drop_disassembly(section: &mut AnalysisSection, refusal: Refusal) {
     partial(section);
     match refusal {
         Refusal::Bound => {
-            let size =
-                crate::byte_size::short_size(super::super::limits::ghidra_listing_bytes());
+            let size = crate::byte_size::short_size(super::super::limits::ghidra_listing_bytes());
             super::super::limits::add_for(
                 section,
                 AnalysisLimitKind::Size,
@@ -73,7 +72,10 @@ fn drop_disassembly(section: &mut AnalysisSection, refusal: Refusal) {
                     "Ghidra's disassembly listing was not kept: it is bigger than the {size} Ghidra disassembly size limit."
                 ),
             );
-            note(section, "Ghidra disassembly rejected: over its size limit".into());
+            note(
+                section,
+                "Ghidra disassembly rejected: over its size limit".into(),
+            );
         }
         Refusal::Failed(error) => {
             super::super::limits::add(
@@ -179,7 +181,10 @@ pub(in super::super) fn adopt_listings(
                         LimitSetting::Listing,
                         "Full listing not kept: the listings of this report exceeded their combined size limit.",
                     );
-                    note(section, "full listing rejected: listings exceed their combined bound".into());
+                    note(
+                        section,
+                        "full listing rejected: listings exceed their combined bound".into(),
+                    );
                 }
                 Refusal::Failed(error) => {
                     super::super::limits::add(

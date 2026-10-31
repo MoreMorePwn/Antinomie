@@ -815,6 +815,45 @@ fn a_check_that_timed_out_is_a_warning_in_the_tree_not_a_missing_check() {
 }
 
 #[test]
+fn a_partial_or_unavailable_check_in_the_history_tree_says_why() {
+    use antinomie_monitor_core::{
+        AnalysisKind, AnalysisLimitKind, AnalysisSectionState, LimitSetting,
+    };
+    let mut run = run("r1");
+    run.request.analysis.enabled = true;
+    run.request.analysis.checks = vec![AnalysisKind::Metadata, AnalysisKind::Strings];
+    let mut report = super::section_report("rep", "m");
+    for section in &mut report.sections {
+        if section.kind == AnalysisKind::Strings {
+            section.state = AnalysisSectionState::Partial;
+            section.limits.clear();
+            section.limits.push(antinomie_monitor_core::AnalysisLimit {
+                kind: AnalysisLimitKind::Size,
+                text: "Full listing not kept: the listings of this report exceeded their combined size limit.".into(),
+                seconds: None,
+                setting: Some(LimitSetting::Listing),
+            });
+        }
+    }
+    run.analysis = Some(report);
+    let tree = super::super::history::feature_tree(&run, None);
+    let strings = tree
+        .iter()
+        .find(|feature| feature.text == AnalysisKind::Strings.label())
+        .expect("the Strings check");
+    assert!(strings.available && !strings.timed_out);
+    assert_eq!(
+        strings.reason.as_deref(),
+        Some("Full listing not kept: the listings of this report exceeded their combined size limit.")
+    );
+    let metadata = tree
+        .iter()
+        .find(|feature| feature.text == AnalysisKind::Metadata.label())
+        .expect("the Metadata check");
+    assert!(metadata.reason.is_none());
+}
+
+#[test]
 fn enabled_analysis_is_a_tree_with_unavailable_checks_greyed() {
     use antinomie_monitor_core::AnalysisKind;
     let mut run = run("r1");
