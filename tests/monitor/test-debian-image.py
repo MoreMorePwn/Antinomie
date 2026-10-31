@@ -555,6 +555,10 @@ class DebianImageTests(unittest.TestCase):
         self.assertNotIn("systemctl mask tmp.mount", script)
         self.assertIn("ConditionPathIsMountPoint=/tmp", script)
         self.assertIn("/etc/systemd/system/tmp.mount.d/override.conf", script)
+        # For every Debian base (the desktops too), not only in the console branch.
+        console = script.index("\nnone)\n")
+        self.assertGreater(script.index("tmp.mount.d/override.conf"),
+                           script.index("\nesac\n", console))
         with patch.object(image.os, "geteuid", return_value=1000):
             command = image.mmdebstrap_command(image.options({"desktop": image.CONSOLE,
                                                               "mirror": "http://m.example/debian/"}),

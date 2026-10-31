@@ -3167,6 +3167,7 @@ desktop of `DESKTOPS`) is built like Debian Minimal's kernel side; the
 | Module tree | the kernel's own `modules_install` appended to the root tarball (`add_modules`, removed) | Debian's, from its packages; the bootstrap initrd loads Debian's virtio-blk and ext4 modules (`ROOT_MODULE_GROUPS`), udev the rest |
 | Banner | whatever compiler built it | Debian's (`debian_banner()`); `require_debian_toolchain` runs for every stock-profile job and `toolchain::for_kind` gives both Debian kinds the same toolchain (the host's when it is Debian 13's, else the rootless toolchain chroot) |
 | Fixed display | DRM and virtio-gpu built in | `fixed_display_config(..., modules_ok=True)`: virtio-gpu is Debian's module, loaded by udev before the display manager starts |
+| `/tmp` | Debian 13's default tmpfs | on the root disk, as on Minimal and BusyBox (the `tmp.mount` drop-in is written for every Debian base): dropped files reach the VM's disk, and the conformance cases run in a disk folder; the conformance suite uses the Debian goldens for every `debian-*` guest |
 
 The options the `debian` profile added were all ones Debian builds as
 modules, so none is kept: the desktop's configuration differs from Debian's

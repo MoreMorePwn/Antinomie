@@ -686,6 +686,12 @@ it runs.
 
 ### Guest
 
+- **Debian desktop bases keep /tmp on disk**, like Debian Minimal and BusyBox:
+  what a sample drops in /tmp reaches the VM's disk (Disks tab, disk dumps,
+  checkpoints). The conformance suite checks every Debian base against the
+  Debian goldens and keeps the work folder's device number only where a call
+  names a device.
+
 - **Real file positions and in-kernel copy operands (contract revision 18).**
   A read or write family call on a regular file or block device records where
   it began in the file and how much it moved (`file.position`, 24 bytes), from

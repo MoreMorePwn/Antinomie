@@ -610,11 +610,6 @@ none)
     # ifupdown runs dhcpcd for the wired NIC, as the installer sets it up
     # (provisioning adds its stanza).
     printf '%s' """ + shlex.quote(CONSOLE_INTERFACES) + """ > /etc/network/interfaces
-    # /tmp stays on the root disk, as on BusyBox: what a sample drops there is
-    # in the VM's disk (Disks tab, disk dumps, checkpoints), not only in RAM.
-    # A condition in a drop-in, as "systemctl edit" leaves it, not a mask.
-    mkdir -p /etc/systemd/system/tmp.mount.d
-    printf '[Unit]\\nConditionPathIsMountPoint=/tmp\\n' > /etc/systemd/system/tmp.mount.d/override.conf
     mkdir -p /media/cdrom0
     ln -s cdrom0 /media/cdrom
     # apt-setup's sources.list, named after the netinst image of this point
@@ -634,6 +629,12 @@ none)
     fi
     ;;
 esac
+# /tmp stays on the root disk on every Debian base, as on BusyBox: what a
+# sample drops there is in the VM's disk (Disks tab, disk dumps, checkpoints),
+# not only in RAM. A condition in a drop-in, as "systemctl edit" leaves it,
+# not a mask.
+mkdir -p /etc/systemd/system/tmp.mount.d
+printf '[Unit]\\nConditionPathIsMountPoint=/tmp\\n' > /etc/systemd/system/tmp.mount.d/override.conf
 if [ "$manager" = none ]; then
     systemctl set-default multi-user.target
 else
