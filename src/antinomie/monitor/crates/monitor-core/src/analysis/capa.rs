@@ -320,3 +320,9 @@ mod cache_tests {
         let _ = fs::remove_dir_all(tools.parent().unwrap());
     }
 }
+
+/// Fuzz entry: a capa ATT&CK or MBC object.
+#[cfg(feature = "fuzzing")]
+pub fn fuzz_mapping(value: &serde_json::Value) {
+    let _ = mapping(value);
+}

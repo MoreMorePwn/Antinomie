@@ -1141,6 +1141,9 @@ fn read_lines(
 
 mod parse;
 mod pdml;
+#[cfg(feature = "fuzzing")]
+#[doc(hidden)]
+pub use pdml::parse as fuzz_pdml;
 mod process;
 mod rows;
 use process::run_process;

@@ -163,3 +163,9 @@ mod tests {
         );
     }
 }
+
+/// Fuzz entry: binwalk's table.
+#[cfg(feature = "fuzzing")]
+pub fn fuzz_parse(output: &str, specimen_len: u64) {
+    let _ = parse(output, specimen_len);
+}

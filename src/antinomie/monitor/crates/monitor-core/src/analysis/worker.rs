@@ -1520,3 +1520,22 @@ mod tests {
         );
     }
 }
+
+/// Fuzz entry: one check over `specimen` as the sandboxed worker runs it,
+/// then the bounds and validation the worker puts on the report.
+#[cfg(feature = "fuzzing")]
+pub fn fuzz_section(kind: AnalysisKind, specimen: &[u8], listings: &Path) {
+    let mut section = AnalysisSection::new(kind);
+    analyze_section(&mut section, specimen, listings);
+    let mut report = super::jobs::new_report(
+        "fuzz",
+        &AnalysisSelection {
+            enabled: true,
+            checks: vec![kind],
+            time_limit_minutes: 0,
+        },
+    );
+    report.sections = vec![section];
+    let _ = bounded_report(&mut report);
+    let _ = super::validation::validate_report(&report);
+}

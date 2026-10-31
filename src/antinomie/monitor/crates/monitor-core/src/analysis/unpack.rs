@@ -384,3 +384,14 @@ pub fn packer_verdict(report: &AnalysisReport) -> Option<PackerVerdict> {
         sha256: original.sha256.clone(),
     })
 }
+
+/// Fuzz entry: packer detection and the layer bookkeeping, with no unpacker.
+#[cfg(feature = "fuzzing")]
+pub fn fuzz_unpack(section: &mut AnalysisSection, specimen: &[u8], artifacts: &Path) {
+    unpack_with(section, specimen, artifacts, None);
+    if let Some(found) = upx::detect(specimen)
+        && let Some(layout) = found.layout
+    {
+        let _ = upx::repaired(specimen, layout);
+    }
+}

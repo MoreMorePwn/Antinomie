@@ -288,3 +288,13 @@ fn parse(output: &str) -> Result<Vec<Found>, String> {
 
 #[cfg(test)]
 mod tests;
+
+/// Fuzz entry: FLOSS's JSON document and the rows made from its strings.
+#[cfg(feature = "fuzzing")]
+pub fn fuzz_parse(output: &str, specimen_len: u64) {
+    if let Ok(found) = parse(output) {
+        for string in &found {
+            let _ = record(string, specimen_len);
+        }
+    }
+}

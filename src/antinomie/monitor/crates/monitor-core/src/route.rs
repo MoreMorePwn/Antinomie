@@ -17,6 +17,13 @@
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[cfg(feature = "fuzzing")]
+#[doc(hidden)]
+pub mod fuzz {
+    pub use super::dhcp::{Lease, reply as dhcp_reply};
+    pub use super::dns::parse_query as dns_query;
+    pub use super::frame::{parse_arp, parse_eth, parse_ipv4, parse_tcp, parse_udp};
+}
 mod config;
 mod dhcp;
 mod dns;

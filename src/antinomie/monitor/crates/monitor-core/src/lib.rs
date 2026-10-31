@@ -83,6 +83,10 @@ mod uefi_disk;
 pub mod update_check;
 mod vm;
 pub mod writer;
+
+#[cfg(feature = "fuzzing")]
+#[doc(hidden)]
+pub mod fuzz_entry;
 pub use analysis::*;
 pub use api::*;
 pub use backend::Backend;

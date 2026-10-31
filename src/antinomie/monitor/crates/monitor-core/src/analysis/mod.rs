@@ -37,6 +37,15 @@ pub use specimen::read_specimen_range;
 pub(crate) use strings::find_strings;
 pub use unpack::{PackerVerdict, UnpackLayer, packer_verdict, unpack_layers};
 pub use worker::worker_main_if_requested;
+#[cfg(feature = "fuzzing")]
+#[doc(hidden)]
+pub mod fuzz {
+    pub use super::binwalk::fuzz_parse as binwalk;
+    pub use super::capa::fuzz_mapping as capa;
+    pub use super::floss::fuzz_parse as floss;
+    pub use super::unpack::fuzz_unpack as unpack;
+    pub use super::worker::fuzz_section as section;
+}
 pub(crate) mod jobs;
 pub(crate) mod validation;
 pub use jobs::open_report;

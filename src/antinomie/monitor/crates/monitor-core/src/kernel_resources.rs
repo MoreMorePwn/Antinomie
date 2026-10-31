@@ -257,3 +257,9 @@ fn parse(payload: &[u8], boot_id: &str) -> Result<Parsed, String> {
 
 #[cfg(test)]
 mod tests;
+
+/// Fuzz entry: a kernel `RESOURCES` reply.
+#[cfg(feature = "fuzzing")]
+pub fn fuzz_parse(payload: &[u8]) {
+    let _ = parse(payload, "boot");
+}

@@ -1,0 +1,103 @@
+[package]
+name = "antinomie-monitor-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "GPL-3.0-only"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.antinomie-monitor-core]
+path = "../crates/monitor-core"
+features = ["fuzzing"]
+
+# Not a member of the monitor workspace: built with nightly by cargo-fuzz only.
+[workspace]
+
+[[bin]]
+name = "antt_assembler"
+path = "fuzz_targets/antt_assembler.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "debug_wire"
+path = "fuzz_targets/debug_wire.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "control_wire"
+path = "fuzz_targets/control_wire.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "typed_fields"
+path = "fuzz_targets/typed_fields.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "route_frames"
+path = "fuzz_targets/route_frames.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pdml"
+path = "fuzz_targets/pdml.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pcap"
+path = "fuzz_targets/pcap.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "partition"
+path = "fuzz_targets/partition.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "disk_image"
+path = "fuzz_targets/disk_image.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "core_dump"
+path = "fuzz_targets/core_dump.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "analysis_section"
+path = "fuzz_targets/analysis_section.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tool_text"
+path = "fuzz_targets/tool_text.rs"
+test = false
+doc = false
+bench = false
