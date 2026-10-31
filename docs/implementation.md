@@ -1243,6 +1243,32 @@ of that run no longer has to read it back.
   `backend/tests.rs` (which exec record may vouch), `app/tests/upload.rs` and
   `analysis/workspace_tests.rs`.
 
+### Runs that never ran (0.8.0)
+
+`RunState` has three definite ends besides the recorded ones (ANT-T0182):
+
+| State | Meaning | Set by |
+|---|---|---|
+| `FailedToStart` | The program never started: the guest refused `EXEC`, or the host could not prepare the run (its record or network capture) before `EXEC` was sent. `recording_error` says why. | `failed_run_launch` |
+| `LaunchUnconfirmed` | No usable answer to `EXEC` came (timeout, unreadable reply, VM gone): the program may have started, nothing of it was recorded. | `failed_run_launch` |
+| `Interrupted` | The record was left running (or with an unreadable status): the app closed or the VM stopped before the tree's end was seen. | reading a saved run |
+
+A failed start with nothing captured leaves no folder; one with a network capture is
+kept, with its state, so the capture stays explained. Reading a saved run
+(`saved_run`, `list_runs`) settles the state with `RunState::settled`: `Running` and
+`StopRequested` read as `Interrupted` (before, `Unknown`), and an `Unknown` record of a
+launch that was never acknowledged (root task cookie 0) reads as `FailedToStart`, or
+as `LaunchUnconfirmed` when its error ends with `launch outcome may be unknown`; so
+the Unknown entries of the Routed capture bug read as failed to start. `Unknown` stays
+for a live run whose status cannot be read and a restored run before its first status.
+Run History says *Failed to start*, *Launch unconfirmed* or *Interrupted* with the reason
+in the tooltip and no "Saving stopped" badge, and a run that never ran has a red
+**Delete…** in its menu (`EvidenceItem::FailedRun`: only `runs/<id>` or
+`boots/<boot>/runs/<id>` of the VM's recording, only when its `run.json` names that run
+and reads as never run, refused while the running boot still owns it; a capture taken
+for it stays in the Network tab). An older app reading a record with a new state skips
+that run (one damaged run never hides the others).
+
 ### Pending analyses always settle (0.7.1)
 
 A run's `analysis` record starts as `acquiring` with every section `pending`. It is
@@ -1827,6 +1853,24 @@ stand-in programs, and the own tor with a stand-in `tor` script (private modes,
 torrc contents, library path, bootstrap parsing, a tor that exits, stalls or
 does not speak SOCKS, stop on release). The managed tools are tested with the
 pins and unpacking only; no test downloads anything. No real Tor, VPN or Internet traffic is used.
+
+**Captures and failed starts on a Routed VM (0.8.0, ANT-T0182).** A Routed VM's NIC is
+`net0` like any other, so the run's network capture and the toolbar capture attach to
+it. Before, `prepare_network_capture` refused every VM with neither `nat` nor
+`isolated_network` set ("this VM has no network: select NAT or isolated network"),
+which a Routed VM is: every run with *Capture network* on a Routed VM failed, on every
+route, after its record existed, and Run History listed it as Unknown. The check now
+reads `VmConfig::has_network()`, and a capture on a VM without a network card is
+refused before the run exists (`NO_NETWORK_CARD`), as are a route the VM's network
+cannot carry and a route that is not set up or does not answer: nothing is listed for
+them. The Run form says so first: the capture box is off on a VM without a network
+card with a **VM settings…** button, and a route whose settings are missing has a
+**Network routes…** button. `examples/route-check.rs` (full tier `route`) runs
+`tests/monitor/route-probe` on every route of a Routed VM with a cloud profile, on a
+NAT VM and on a VM without a card; Tor, VPN (a stand-in wireproxy) and SOCKS5 go to
+local fake proxies that answer the probe's one HTTP request themselves and record the
+name they were asked to connect to; the Internet route sends one plain `GET /` to
+example.com.
 
 ### Guest patch series by topic (0.7.1)
 

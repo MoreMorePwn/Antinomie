@@ -224,6 +224,7 @@ impl MonitorApp {
         let height = (ui.available_height() - 36.0).max(50.0);
         let mut inspect = navigation.map(|index| (runs[index].id.clone(), false));
         let mut reopen = None;
+        let mut delete = None;
         ui.allocate_ui_with_layout(
             egui::vec2(ui.available_width(), height + 28.0),
             egui::Layout::top_down(egui::Align::Min),
@@ -354,6 +355,17 @@ impl MonitorApp {
                             let response = row.response();
                             response.context_menu(|ui| {
                                 crate::evidence::menu(ui, &run.directory);
+                                // A run that never ran holds no recording: it can go. The
+                                // item sits with the run's own actions, above the filters.
+                                if run.state.never_recorded() {
+                                    let live = self.snapshot.runs.iter().any(|live| live.id == run.id);
+                                    let blocked = live.then_some(FAILED_RUN_CLEANING);
+                                    if crate::evidence_delete::menu_item(ui, blocked) {
+                                        let title = crate::evidence::title(ui, &run.directory, &run.request.path);
+                                        delete = Some(crate::evidence_delete::Deletion::failed_run(&run.directory, &title));
+                                    }
+                                    ui.separator();
+                                }
                                 let annotation = crate::evidence::annotation(ui, &run.directory);
                                 for (field, value) in crate::run_filter::row(run, annotation.as_ref(), run_status(run), root_exit(run)) {
                                     crate::query::value_menu(ui, field, &value, &mut self.run_query);
@@ -367,6 +379,9 @@ impl MonitorApp {
                     });
             },
         );
+        if let Some(deletion) = delete {
+            self.ask_delete_evidence(deletion);
+        }
         // The terminal keeps the complete run, not the drawing copy.
         if let Some(run) = reopen.and_then(|id| {
             self.snapshot
@@ -757,6 +772,12 @@ impl MonitorApp {
     }
 }
 
+pub(super) use super::run_state_text::{execution_detail, root_exit, run_status};
+
+/// Why a run that never started cannot be deleted yet.
+const FAILED_RUN_CLEANING: &str =
+    "The VM still owns this launch's cleanup. Try again in a moment, or after the VM stops.";
+
 /// `run` for listing: everything but the static-analysis rows. Whether a
 /// report exists stays visible to the row and the filter.
 pub(super) fn listed(run: &RunSummary) -> RunSummary {
@@ -804,60 +825,6 @@ pub(super) fn sample_name(run: &RunSummary) -> &str {
         .sample
         .as_ref()
         .map_or("", |sample| sample.name.as_str())
-}
-
-pub(super) fn run_status(run: &RunSummary) -> &'static str {
-    match run.state {
-        RunState::Unknown => "Unknown",
-        RunState::Running => "Running",
-        RunState::StopRequested => "Stop requested",
-        RunState::Finished => "Finished",
-        RunState::Stopped => "Stopped",
-        RunState::TerminalClosed => "PTY closed",
-        RunState::Finalized => "Recording ended",
-    }
-}
-
-pub(super) fn root_exit(run: &RunSummary) -> String {
-    match run
-        .execution
-        .as_ref()
-        .and_then(|status| status.root_exit.as_ref())
-    {
-        Some(WaitStatus::Exited { code }) => format!("Exit {code}"),
-        Some(WaitStatus::Signaled {
-            signal,
-            core_dumped,
-        }) => format!(
-            "Signal {signal}{}",
-            if *core_dumped { " (core)" } else { "" }
-        ),
-        None => "Unknown".into(),
-    }
-}
-
-pub(super) fn execution_detail(run: &RunSummary) -> String {
-    match &run.execution {
-        Some(status) => format!(
-            "{}; {} live tasks; {} pending async; {} total tasks; {} async losses; flags {:#x}; generation {}{}",
-            run_status(run),
-            status.live_task_count,
-            status.pending_async_count,
-            status.total_task_count,
-            status.async_loss_count,
-            status.flags,
-            status.generation,
-            if status.kill_escalated() {
-                "; Stop needed SIGKILL after the grace period"
-            } else {
-                ""
-            }
-        ),
-        None => format!(
-            "{}; full-tree execution evidence unavailable",
-            run_status(run)
-        ),
-    }
 }
 
 /// The process tree in a box that is taller in a taller window and that the

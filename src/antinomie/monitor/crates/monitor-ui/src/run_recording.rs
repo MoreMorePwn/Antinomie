@@ -6,18 +6,53 @@
 //! recording (for example telemetry sent before the launch was acknowledged
 //! that the host could not keep) and never mean saving stopped.
 use crate::theme;
-use antinomie_monitor_core::{run_note_text, RunSummary, Snapshot};
+use antinomie_monitor_core::{run_note_text, RunState, RunSummary, Snapshot};
 use eframe::egui::{self, RichText};
 
-/// Short mark for a Run History row; `None` while saving works.
+/// Short mark for a Run History row; `None` while saving works. A run that
+/// never ran has no recording to be incomplete: its status says what happened.
 pub(crate) fn badge(run: &RunSummary) -> Option<&'static str> {
+    if run.state.never_recorded() {
+        return None;
+    }
     run.recording_error.as_ref().map(|_| "Saving stopped")
+}
+
+/// What happened to a run whose program never ran, with the reason saved
+/// for it; `None` for any other run.
+pub(crate) fn launch_outcome(run: &RunSummary) -> Option<String> {
+    let reason = run
+        .recording_error
+        .as_deref()
+        .unwrap_or("no reason was saved");
+    match run.state {
+        RunState::FailedToStart => Some(format!(
+            "Failed to start: {reason}. Nothing of the program was recorded."
+        )),
+        RunState::LaunchUnconfirmed => Some(format!(
+            "Launch unconfirmed: {reason}. The program may have started in the guest, but \
+             nothing of it was recorded."
+        )),
+        RunState::Interrupted => Some(
+            "Interrupted: the recording ended before the end of the process tree was seen \
+             (Antinomie closed or the VM stopped while the run was going)."
+                .into(),
+        ),
+        _ => None,
+    }
 }
 
 /// What the run's recording state says, one line per fact, for tooltips.
 pub(crate) fn tooltip(run: &RunSummary) -> String {
     let mut lines = Vec::new();
-    if let Some(error) = &run.recording_error {
+    if let Some(outcome) = launch_outcome(run) {
+        lines.push(outcome);
+    }
+    if let Some(error) = run
+        .recording_error
+        .as_ref()
+        .filter(|_| !run.state.never_recorded())
+    {
         lines.push(format!("Recording incomplete: saving stopped: {error}"));
     }
     lines.extend(
@@ -62,6 +97,10 @@ pub(crate) fn note_lines(run: &RunSummary) -> Vec<String> {
 /// Shared run identity keeps Activity and inline dismissal in sync without
 /// suppressing another run that stopped for the same reason.
 pub(crate) fn warning_message(run: &RunSummary) -> Option<String> {
+    if run.state.never_recorded() {
+        return launch_outcome(run)
+            .map(|outcome| format!("{} [{}]: {outcome}", run.request.path, run.id));
+    }
     run.recording_error.as_ref().map(|error| {
         format!(
             "Recording incomplete for {} [{}]: saving stopped: {error}",

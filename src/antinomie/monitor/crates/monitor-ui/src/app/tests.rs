@@ -15,6 +15,7 @@ mod details_scroll;
 mod dialog_shots;
 mod disks;
 mod evidence_delete;
+mod failed_runs;
 mod file_drop;
 mod fps_counter;
 mod getting_started;
@@ -56,7 +57,7 @@ mod upload;
 mod vm_dialog;
 mod workspace;
 
-use antinomie_monitor_core::RunIn;
+use antinomie_monitor_core::{RunIn, WaitStatus};
 
 pub(crate) fn app() -> MonitorApp {
     let exec = ExecRequest::default();

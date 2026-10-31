@@ -2,16 +2,23 @@
 //! Per-run network capture on the session: start, stop, suspend and resume.
 use super::*;
 
+/// Why a VM without a network card has no capture, and what to change.
+pub(super) const NO_NETWORK_CARD: &str = "this VM has no network card, so there is nothing to \
+     capture: set its network to Isolated, NAT or Routed in the VM settings and restart it";
+
 impl Session {
     pub(super) fn failed_run_launch(
         &mut self,
         run: &mut ProgramRun,
         mut owner: RunArtifactOwner,
-        error: String,
+        failure: (RunState, String),
     ) -> String {
+        let (state, error) = failure;
+        // The run's definite end: it never started, or it was never confirmed.
+        run.summary.state = state;
         // Nothing ran and nothing was captured: leave no run behind, or Run
         // History would list a run that never existed.
-        if error.starts_with(super::launch_failure::REJECTED) && owner.network.is_none() {
+        if run.summary.state == RunState::FailedToStart && owner.network.is_none() {
             run.storage_error(error.clone());
             if let Err(cleanup) = fs::remove_dir_all(&run.summary.directory) {
                 return format!("{error}; its run directory remains: {cleanup}");
@@ -163,8 +170,10 @@ pub(super) fn prepare_network_capture(
     options: &BackendOptions,
     session: &Session,
 ) -> Result<crate::network::NetworkCapture, String> {
-    if !session.vm.nat && !session.vm.isolated_network {
-        return Err("this VM has no network: select NAT or isolated network and restart it".into());
+    // Isolated, NAT and Routed VMs all have the card `net0` the capture
+    // filter attaches to; only a VM without a network card has nothing.
+    if !session.vm.has_network() {
+        return Err(NO_NETWORK_CARD.into());
     }
     if session.available() == 0 {
         return Err("the recording quota of this boot is full".into());

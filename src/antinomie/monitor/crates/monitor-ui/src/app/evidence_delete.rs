@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Deleting a saved network capture or core: the confirmation, the backend
+//! Deleting a saved network capture, core, disk dump or failed run: the confirmation, the backend
 //! command and what the app forgets once the files are gone.
 use super::*;
 use crate::evidence_delete::{Deletion, Kind};
@@ -49,6 +49,17 @@ impl MonitorApp {
                 // Nothing in Triage or Run History names a disk dump.
                 self.disk_view.forget_dump(deletion.path());
                 return;
+            }
+            Kind::Run => {
+                let gone = self
+                    .history
+                    .iter()
+                    .find(|run| run.directory == deletion.path())
+                    .map(|run| run.id.clone());
+                if gone.is_some() && self.selected_run == gone {
+                    self.select_run(None);
+                }
+                self.history.retain(|run| run.directory != deletion.path());
             }
         }
         *self.triage_pcap.borrow_mut() = Default::default();

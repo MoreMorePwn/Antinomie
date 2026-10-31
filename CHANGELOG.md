@@ -16,6 +16,18 @@ it runs.
   the kernel and BusyBox source identity in `bundle.json`, and
   `scripts/publish-base-sources.py` assembles the sources for an upload.
 
+- **Routed runs with a network capture start.** A run with Capture network on a
+  Routed VM, on any route, failed to start and was listed as Unknown; the toolbar
+  capture failed the same way. Both now work. A run that cannot start (a capture on
+  a VM without a network card, a route the network cannot carry or that is not set
+  up) is refused before it exists, and the Run form says what to change with a
+  VM settings… or Network routes… button.
+
+- **Runs that never ran say so.** Run History shows Failed to start, Launch
+  unconfirmed or Interrupted instead of Unknown, with the reason in the tooltip,
+  and a run that never ran can be deleted from its menu. Older Unknown entries of
+  launches that never started read as Failed to start.
+
 - **Sample notes and Delete run.** Notes with links to runs, processes,
   artifacts and custody entries, a Notes tab, Latest note and Add note… menus;
   every note change is in the custody log. Delete run asks which of the run's

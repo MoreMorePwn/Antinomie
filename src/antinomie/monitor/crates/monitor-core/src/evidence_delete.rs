@@ -392,6 +392,61 @@ pub(crate) fn remove_disk_dump(roots: &[PathBuf], directory: &Path) -> Result<Re
     })
 }
 
+/// Largest `run.json` read to decide whether a run may be deleted.
+const RUN_RECORD_LIMIT: u64 = 1024 * 1024;
+
+/// Delete the folder of a run whose program never ran (failed to start, or
+/// a launch the guest never confirmed): `runs/<id>` or
+/// `boots/<boot>/runs/<id>`. Its `run.json` must name that run and read as
+/// such a run; a run that recorded anything is refused (the Samples page
+/// deletes those, artefact by artefact). The network capture a failed
+/// launch kept lives in the boot's folder and stays: it is deleted from the
+/// Network tab.
+pub(crate) fn remove_failed_run(roots: &[PathBuf], directory: &Path) -> Result<Removed, String> {
+    let (item, parts) = confine(roots, directory)?;
+    let (id, boot_id) = match parts.as_slice() {
+        [runs, id] if runs == "runs" => (id.clone(), None),
+        [boots, boot, runs, id] if boots == "boots" && runs == "runs" => {
+            (id.clone(), Some(boot.clone()))
+        }
+        _ => return Err("this is not a run folder of the recording".into()),
+    };
+    if !fs::symlink_metadata(&item).is_ok_and(|metadata| metadata.is_dir()) {
+        return Err("the run is not a folder".into());
+    }
+    let record = item.join("run.json");
+    let file = fs::File::open(&record).map_err(|error| format!("{}: {error}", record.display()))?;
+    if file.metadata().map_or(true, |metadata| {
+        !metadata.is_file() || metadata.len() > RUN_RECORD_LIMIT
+    }) {
+        return Err("the run record is not a regular file of a usable size".into());
+    }
+    let run: crate::RunSummary = serde_json::from_reader(std::io::BufReader::new(file))
+        .map_err(|error| format!("{}: {error}", record.display()))?;
+    if run.id != id {
+        return Err("the run record names another run".into());
+    }
+    let state = run
+        .state
+        .settled(run.root_task_cookie, run.recording_error.as_deref());
+    if !state.never_recorded() {
+        return Err(
+            "only a run that never started can be deleted here; this run recorded its program"
+                .into(),
+        );
+    }
+    let measured = measure(&item);
+    remove_entry(&item)?;
+    Ok(Removed {
+        name: id.clone(),
+        boot_id,
+        run_id: Some(id),
+        bytes: measured.bytes,
+        entries: measured.entries,
+        ..Removed::default()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -633,6 +688,67 @@ mod tests {
         // A record that never saw a delete writes neither field.
         let fresh = serde_json::to_string(&RunArtifacts::default()).unwrap();
         assert!(!fresh.contains("deleted"), "{fresh}");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn saved_run(root: &Path, place: &str, state: crate::RunState, cookie: u64) -> PathBuf {
+        let dir = root.join(place);
+        fs::create_dir_all(&dir).unwrap();
+        let id = dir.file_name().unwrap().to_string_lossy().into_owned();
+        let run = crate::RunSummary {
+            started_ms: Some(1),
+            clock_anchor: None,
+            id,
+            vm_id: "vm".into(),
+            boot_id: "b1".into(),
+            session_id: 0,
+            root_task_cookie: cookie,
+            pid: 0,
+            request: crate::ExecRequest::default(),
+            directory: dir.clone(),
+            terminal_eof: false,
+            state,
+            notes: Vec::new(),
+            recording_error: Some("this VM has no network".into()),
+            execution: None,
+            analysis: None,
+            machine: None,
+            route: None,
+            environment: None,
+        };
+        atomic_json(&dir.join("run.json"), &run).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_run_that_never_started_is_deleted_and_one_that_ran_is_refused() {
+        let root = temp_root();
+        let roots = std::slice::from_ref(&root);
+        let failed = saved_run(&root, "runs/f1", crate::RunState::FailedToStart, 0);
+        fs::write(failed.join("terminal.journal"), b"").unwrap();
+        let removed = remove_failed_run(roots, &failed).unwrap();
+        assert!(!failed.exists());
+        assert_eq!(removed.run_id.as_deref(), Some("f1"));
+        assert_eq!(removed.counted, 0);
+        // A record from before the definite states, of a launch never acknowledged.
+        let old = saved_run(&root, "boots/b2/runs/o1", crate::RunState::Unknown, 0);
+        let removed = remove_failed_run(roots, &old).unwrap();
+        assert_eq!(removed.boot_id.as_deref(), Some("b2"));
+        assert!(!old.exists());
+        for (place, state, cookie) in [
+            ("runs/r1", crate::RunState::Finished, 7),
+            ("runs/r2", crate::RunState::Running, 7),
+            ("runs/r3", crate::RunState::Unknown, 7),
+        ] {
+            let ran = saved_run(&root, place, state, cookie);
+            let error = remove_failed_run(roots, &ran).unwrap_err();
+            assert!(error.contains("recorded its program"), "{error}");
+            assert!(ran.join("run.json").exists());
+        }
+        // Only run folders of the recording, never another place.
+        let elsewhere = saved_run(&root, "core-captures/f2", crate::RunState::FailedToStart, 0);
+        assert!(remove_failed_run(roots, &elsewhere).is_err());
+        assert!(elsewhere.exists());
         fs::remove_dir_all(root).unwrap();
     }
 }

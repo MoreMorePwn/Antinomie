@@ -853,6 +853,16 @@ fn newest_runs(mut runs: Vec<RunSummary>) -> Vec<RunSummary> {
     runs
 }
 
+/// A saved run is not live: one left running was interrupted, and one left
+/// unknown gets the definite state its evidence shows (see
+/// [`RunState::settled`]). The UI shows the live state of a run that is
+/// still going in the running boot instead of this one.
+fn settle_stale_state(run: &mut RunSummary) {
+    run.state = run
+        .state
+        .settled(run.root_task_cookie, run.recording_error.as_deref());
+}
+
 /// The run saved in `directory` under `root`, if it belongs to `vm_id`.
 fn saved_run(
     root: &Path,
@@ -883,9 +893,7 @@ fn saved_run(
     }
     reopen_analysis_sidecar(root, &mut run)?;
     settle_stale_analysis(&mut run);
-    if matches!(run.state, RunState::Running | RunState::StopRequested) {
-        run.state = RunState::Unknown;
-    }
+    settle_stale_state(&mut run);
     Ok(Some(run))
 }
 
@@ -926,9 +934,7 @@ pub fn list_runs(data_root: &Path) -> Result<Vec<RunSummary>, RecordingError> {
             }
             reopen_analysis_sidecar(&data_root, &mut run)?;
             settle_stale_analysis(&mut run);
-            if matches!(run.state, RunState::Running | RunState::StopRequested) {
-                run.state = RunState::Unknown;
-            }
+            settle_stale_state(&mut run);
             runs.push(run);
             if runs.len() > 1024 {
                 return Err(RecordingError::Limit(
@@ -1236,6 +1242,61 @@ mod tests {
         assert_eq!(loaded.analysis.unwrap().state, AnalysisState::Unavailable);
         fs::remove_dir_all(root).unwrap();
     }
+    #[test]
+    fn a_saved_run_that_is_not_live_reads_with_a_definite_state() {
+        let root = std::env::temp_dir().join(format!("ant-run-states-{}", storage::unique_id()));
+        // (saved state, root task cookie, recording error, state Run History shows)
+        let cases = [
+            ("Running", 7, None, RunState::Interrupted),
+            ("StopRequested", 7, None, RunState::Interrupted),
+            // The 0.8.0 Routed capture bug: refused before the launch was sent.
+            (
+                "Unknown",
+                0,
+                Some("this VM has no network: select NAT or isolated network and restart it"),
+                RunState::FailedToStart,
+            ),
+            (
+                "Unknown",
+                0,
+                Some(
+                    "execution acknowledgement failed: guest command 7 timed out; launch outcome may be unknown",
+                ),
+                RunState::LaunchUnconfirmed,
+            ),
+            ("Unknown", 0, None, RunState::LaunchUnconfirmed),
+            ("Unknown", 7, None, RunState::Interrupted),
+            ("Finished", 7, None, RunState::Finished),
+            ("Finalized", 7, None, RunState::Finalized),
+            (
+                "FailedToStart",
+                0,
+                Some("launch rejected by the guest, nothing was started: x"),
+                RunState::FailedToStart,
+            ),
+        ];
+        for (index, (state, cookie, error, expected)) in cases.into_iter().enumerate() {
+            let id = format!("run{index}");
+            let directory = root.join("runs").join(&id);
+            fs::create_dir_all(&directory).unwrap();
+            let run = serde_json::json!({
+                "id": id, "vm_id": "vm", "boot_id": "boot", "session_id": 0,
+                "root_task_cookie": cookie, "pid": 0, "request": ExecRequest::default(),
+                "directory": directory, "terminal_eof": false, "state": state,
+                "notes": [], "recording_error": error, "execution": null,
+            });
+            fs::write(directory.join("run.json"), run.to_string()).unwrap();
+            let canonical = fs::canonicalize(&root).unwrap();
+            let loaded = saved_run(&canonical, &canonical.join("runs").join(&id), "vm")
+                .unwrap()
+                .unwrap();
+            assert_eq!(loaded.state, expected, "{state} cookie {cookie} {error:?}");
+            // The error stays as the reason the details show.
+            assert_eq!(loaded.recording_error.as_deref(), error);
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn matching_analysis_sidecar_refreshes_reaper_state_and_rejects_identity_change() {
         use crate::analysis::{AnalysisSelection, AnalysisState};

@@ -59,6 +59,9 @@ impl EvidenceDeleter {
                             EvidenceItem::DiskDump { directory } => {
                                 files::remove_disk_dump(&roots, directory)
                             }
+                            EvidenceItem::FailedRun { directory } => {
+                                files::remove_failed_run(&roots, directory)
+                            }
                         });
                         let result = std::panic::catch_unwind(work)
                             .unwrap_or_else(|_| Err("evidence deletion panicked".into()));
@@ -113,6 +116,7 @@ impl Worker {
             EvidenceItem::NetworkCapture { file } => self.network_capture_busy(file)?,
             EvidenceItem::ProcessCore { directory } => self.core_busy(directory)?,
             EvidenceItem::DiskDump { directory } => self.disk_dump_busy(directory)?,
+            EvidenceItem::FailedRun { directory } => self.run_busy(directory)?,
         }
         self.evidence.submit(DeleteJob { id, roots, item })
     }
@@ -195,6 +199,33 @@ impl Worker {
                 crate::byte_size::file_size(removed.bytes),
                 removed.entries
             ),
+            EvidenceItem::FailedRun { .. } => format!(
+                "Deleted run {} that never started ({}, {} file(s))",
+                removed.name,
+                crate::byte_size::file_size(removed.bytes),
+                removed.entries
+            ),
+        }
+    }
+
+    /// A run the running boot still owns: live, or a failed launch whose
+    /// network capture is still being cleaned up.
+    fn run_busy(&self, directory: &Path) -> Result<(), String> {
+        let Some(session) = self.session.as_ref() else {
+            return Ok(());
+        };
+        let live = session
+            .runs
+            .values()
+            .any(|run| run.summary.directory == directory)
+            || session
+                .run_artifacts
+                .values()
+                .any(|owner| owner.directory == directory);
+        if live {
+            Err("this run is still in use by the running VM; wait for its cleanup".into())
+        } else {
+            Ok(())
         }
     }
 

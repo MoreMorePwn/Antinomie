@@ -4,6 +4,9 @@ use super::*;
 use crate::debug::KernelDebugBackend;
 use session_transport::launch_image_hash;
 
+/// A launch the guest confirmed: the reply, session id, root task cookie and pid.
+type Acknowledged = (Vec<u8>, u64, u64, u32);
+
 impl Worker {
     pub(super) fn guest_command(&mut self, command: Command) -> Result<String, String> {
         if matches!(&command, Command::Execute(request) if request.debug_on_start) {
@@ -261,6 +264,13 @@ impl Worker {
                     control::execute_analysis(&wire, supported)?,
                     offered,
                 );
+                // Refused before the run exists, so Run History lists nothing for it.
+                if request.capture_network && !session.vm.has_network() {
+                    return Err(format!(
+                        "Capture network cannot be used: {}",
+                        super::run_network::NO_NETWORK_CARD
+                    ));
+                }
                 let selected = request.analysis.enabled;
                 let inline_acquisition = selected && supported && !desktop;
                 let run_id = storage::unique_id();
@@ -334,11 +344,16 @@ impl Worker {
                     artifacts.save()
                 };
                 if let Err(error) = prepared {
-                    return Err(session.failed_run_launch(&mut run, artifacts, error));
+                    // Nothing was sent to the guest: the program never started.
+                    return Err(session.failed_run_launch(
+                        &mut run,
+                        artifacts,
+                        (RunState::FailedToStart, error),
+                    ));
                 }
                 // Every error text below is final: a guest rejection says the launch
                 // did not happen, only an unanswered or malformed one leaves it unknown.
-                let acknowledged = (|| -> Result<(Vec<u8>, u64, u64, u32), String> {
+                let acknowledged = (|| -> Result<Acknowledged, (RunState, String)> {
                     let reply = session
                         .request_typed(
                             control::EXEC,
@@ -367,7 +382,7 @@ impl Worker {
                         Ok((id, cookie, pid))
                     })()
                     .map(|(id, cookie, pid)| (reply, id, cookie, pid))
-                    .map_err(|error| launch_unknown(&error))
+                    .map_err(|error| (RunState::LaunchUnconfirmed, launch_unknown(&error)))
                 })();
                 let (reply, id, cookie, pid) = match acknowledged {
                     Ok(acknowledged) => acknowledged,

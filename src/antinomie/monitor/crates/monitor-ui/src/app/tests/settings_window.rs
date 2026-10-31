@@ -335,7 +335,7 @@ fn the_run_form_names_the_fixed_network_of_a_vm_that_is_not_routed() {
                 ui,
                 &mut request,
                 &crate::route_ui::RouteChoice::fixed(VmNetwork::Nat),
-            )
+            );
         });
     });
     assert_eq!(request.route, None);

@@ -43,6 +43,9 @@ pub(crate) struct LaunchOutcome {
     /// The user asked to install a missing analysis tool.
     pub install: bool,
     pub source: SourceOutcome,
+    /// The user asked for this VM's settings (its network), which a
+    /// capture on a VM without a network card needs.
+    pub open_vm_settings: bool,
 }
 
 /// Program fields and the analysis selection. `capabilities.graphical`
@@ -76,7 +79,7 @@ pub(crate) fn launch_fields(
                 tools,
                 &mut outcome.install,
             );
-            capture_selection(&mut columns[1], request, capabilities);
+            capture_selection(&mut columns[1], request, capabilities, &mut outcome);
             debugger_selection(&mut columns[1], request, capabilities.debug_on_start);
         });
     } else {
@@ -84,7 +87,7 @@ pub(crate) fn launch_fields(
         ui.add_space(6.0);
         crate::theme::section(ui, "Analysis");
         selection(ui, &mut request.analysis, tools, &mut outcome.install);
-        capture_selection(ui, request, capabilities);
+        capture_selection(ui, request, capabilities, &mut outcome);
         debugger_selection(ui, request, capabilities.debug_on_start);
     }
     outcome
@@ -94,6 +97,7 @@ fn capture_selection(
     ui: &mut egui::Ui,
     request: &mut ExecRequest,
     capabilities: LaunchCapabilities,
+    outcome: &mut LaunchOutcome,
 ) {
     let core_supported = capabilities.core_on_exit;
     ui.add_space(12.0);
@@ -124,10 +128,52 @@ fn capture_selection(
     }
     ui.add_space(12.0);
     crate::theme::section(ui, "Network");
-    ui.checkbox(&mut request.capture_network, "Capture network from start until tree exits")
-        .on_hover_text("Record VM network packets during this run. Packets are VM-wide, not attributed to this process.");
+    // A VM without a network card has nothing to capture: the box is off
+    // and says what to change, rather than a run that cannot start.
+    let card = capabilities.route.network != antinomie_monitor_core::VmNetwork::Disconnected;
+    if !card {
+        request.capture_network = false;
+    }
+    ui.add_enabled(
+        card,
+        egui::Checkbox::new(&mut request.capture_network, "Capture network from start until tree exits"),
+    )
+    .on_hover_text("Record VM network packets during this run. Packets are VM-wide, not attributed to this process.")
+    .on_disabled_hover_text(NO_NETWORK_CARD);
+    if !card {
+        ui.horizontal_wrapped(|ui| {
+            ui.add(egui::Label::new(egui::RichText::new(NO_NETWORK_CARD).weak()).wrap());
+            outcome.open_vm_settings = ui
+                .button("VM settings…")
+                .on_hover_text("Open this VM's settings (its network changes while it is stopped)")
+                .clicked();
+        });
+    }
     crate::route_ui::selector(ui, request, &capabilities.route);
 }
+
+/// The Network part of the Run form on a VM with `route`, for tests.
+#[cfg(test)]
+pub(crate) fn capture_selection_for_tests(
+    ui: &mut egui::Ui,
+    request: &mut ExecRequest,
+    route: crate::route_ui::RouteChoice,
+    outcome: &mut LaunchOutcome,
+) {
+    let capabilities = LaunchCapabilities {
+        graphical: false,
+        core_on_exit: false,
+        debug_on_start: false,
+        core_limits: None,
+        core_default_mib: 256,
+        route,
+    };
+    capture_selection(ui, request, capabilities, outcome);
+}
+
+/// Why the Run form offers no network capture.
+const NO_NETWORK_CARD: &str = "This VM has no network card, so there is nothing to capture. \
+     Set its network to Isolated, NAT or Routed and restart it.";
 
 /// Budget and deadline of the exit core, with what the guest accepts.
 fn core_budget_row(ui: &mut egui::Ui, request: &mut ExecRequest, capabilities: LaunchCapabilities) {
@@ -760,6 +806,7 @@ mod tests {
                                 antinomie_monitor_core::VmNetwork::Disconnected,
                             ),
                         },
+                        &mut LaunchOutcome::default(),
                     )
                 });
             });
@@ -785,6 +832,7 @@ mod tests {
                             antinomie_monitor_core::VmNetwork::Disconnected,
                         ),
                     },
+                    &mut LaunchOutcome::default(),
                 )
             });
         });

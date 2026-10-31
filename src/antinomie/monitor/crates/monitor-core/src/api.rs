@@ -1347,8 +1347,13 @@ pub struct VmLocations {
     pub recording_directories: Vec<PathBuf>,
 }
 
+/// Where a run stands. Saved in `run.json`; a record that predates the last
+/// three states reads as one of them when its evidence shows which
+/// ([`RunState::settled`]).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum RunState {
+    /// Not known yet: the guest's status could not be read, or a restored
+    /// run waits for its first status.
     Unknown,
     Running,
     StopRequested,
@@ -1357,7 +1362,44 @@ pub enum RunState {
     /// PTY EOF does not prove all traced descendants have exited.
     TerminalClosed,
     Finalized,
+    /// The program never started: the guest refused the launch, or the
+    /// host could not prepare the run before the launch was sent. Nothing
+    /// of the program was recorded; `recording_error` says why.
+    FailedToStart,
+    /// The guest never confirmed the launch (no answer, an unreadable one,
+    /// or the VM ended first). The program may have started, but nothing of
+    /// it was recorded.
+    LaunchUnconfirmed,
+    /// Recording ended while the run was going: the app closed or the VM
+    /// stopped before the end of its process tree was seen.
+    Interrupted,
 }
+
+impl RunState {
+    /// The state of a saved run that is not live any more. A record left
+    /// running reads as interrupted; an unknown record of a launch that
+    /// was never acknowledged (no root task) reads as failed to start, or
+    /// as unconfirmed when its error says the outcome was unknown.
+    pub fn settled(&self, root_task_cookie: u64, error: Option<&str>) -> RunState {
+        match self {
+            RunState::Running | RunState::StopRequested => RunState::Interrupted,
+            RunState::Unknown if root_task_cookie == 0 => match error {
+                Some(error) if !error.contains(LAUNCH_OUTCOME_UNKNOWN) => RunState::FailedToStart,
+                _ => RunState::LaunchUnconfirmed,
+            },
+            RunState::Unknown => RunState::Interrupted,
+            other => other.clone(),
+        }
+    }
+
+    /// The run is over and nothing of the program was recorded.
+    pub fn never_recorded(&self) -> bool {
+        matches!(self, RunState::FailedToStart | RunState::LaunchUnconfirmed)
+    }
+}
+
+/// How the error of a launch whose answer never came ends.
+pub const LAUNCH_OUTCOME_UNKNOWN: &str = "launch outcome may be unknown";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct InvocationSummary {
@@ -1486,6 +1528,8 @@ pub enum EvidenceItem {
     /// The folder `disks/<id>` of a saved disk dump. An imported image's own
     /// file is left where it is.
     DiskDump { directory: PathBuf },
+    /// The folder of a run whose program never ran ([`RunState::never_recorded`]).
+    FailedRun { directory: PathBuf },
 }
 
 #[derive(Clone, Debug)]

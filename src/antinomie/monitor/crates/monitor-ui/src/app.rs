@@ -29,6 +29,7 @@ mod rules;
 mod run_kill;
 mod run_labels;
 mod run_selector;
+mod run_state_text;
 mod samples_page;
 mod session;
 mod settings_window;
@@ -60,7 +61,7 @@ use antinomie_monitor_core::{
     BackendOptions, BaseSummary, CaptureState, CaptureSummary, Command, DisplayResolution,
     ExecRequest, GuestCredentials, InvocationSummary, Notification, ProcessCorePhase,
     ProcessCoreRequest, RevisionStatus, RunState, RunSummary, Snapshot, TerminalRecord,
-    TransportSettings, VmAcceleration, VmConfig, VmCpuModel, VmLaunchOptions, VmState, WaitStatus,
+    TransportSettings, VmAcceleration, VmConfig, VmCpuModel, VmLaunchOptions, VmState,
     APP_REVISION, APP_VERSION,
 };
 pub(crate) use bases::selected_base;

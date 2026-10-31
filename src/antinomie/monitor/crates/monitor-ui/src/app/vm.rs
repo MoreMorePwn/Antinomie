@@ -348,6 +348,9 @@ impl MonitorApp {
                     if outcome.install {
                         self.open_library(crate::workspace::LibraryPage::Tools);
                     }
+                    if outcome.open_vm_settings {
+                        self.configure_vm();
+                    }
                     if outcome.source.host_file_edited {
                         self.upload_browser.selected = None;
                     }

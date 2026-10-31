@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Right-click Delete of saved network captures and process cores: the menu
-//! item and the wording of the confirmation. The deletion itself is the
+//! Right-click Delete of saved network captures, process cores, disk dumps
+//! and runs that never started: the menu item and the wording of the
+//! confirmation. The deletion itself is the
 //! backend's `Command::DeleteEvidence`.
 use crate::theme;
 use antinomie_monitor_core::{byte_size::file_size, evidence_delete::measure, EvidenceItem};
@@ -18,6 +19,8 @@ pub(crate) enum Kind {
     Disk,
     /// An imported disk image: only the record and extractions go.
     ImportedDisk,
+    /// A run whose program never ran: its folder goes.
+    Run,
 }
 
 /// One item the user asked to delete, with what the confirmation says of it.
@@ -70,12 +73,24 @@ impl Deletion {
         }
     }
 
+    /// A run that failed to start, or whose launch was never confirmed.
+    pub(crate) fn failed_run(directory: &Path, name: &str) -> Self {
+        Self {
+            kind: Kind::Run,
+            item: EvidenceItem::FailedRun {
+                directory: directory.to_path_buf(),
+            },
+            name: name.to_owned(),
+            size: size_text(directory),
+        }
+    }
+
     pub(crate) fn path(&self) -> &Path {
         match &self.item {
             EvidenceItem::NetworkCapture { file } => file,
-            EvidenceItem::ProcessCore { directory } | EvidenceItem::DiskDump { directory } => {
-                directory
-            }
+            EvidenceItem::ProcessCore { directory }
+            | EvidenceItem::DiskDump { directory }
+            | EvidenceItem::FailedRun { directory } => directory,
         }
     }
 
@@ -84,6 +99,7 @@ impl Deletion {
             Kind::Network => "Delete network capture",
             Kind::Core | Kind::ImportedCore => "Delete core dump",
             Kind::Disk | Kind::ImportedDisk => "Delete disk dump",
+            Kind::Run => "Delete run",
         }
     }
 
@@ -108,6 +124,10 @@ impl Deletion {
             Kind::ImportedDisk => (
                 "imported disk image",
                 "Its record and the files extracted from it are removed from disk; the original image file stays where it is.",
+            ),
+            Kind::Run => (
+                "run that never started",
+                "Its folder is removed from disk; a network capture taken for it stays in the Network tab.",
             ),
         };
         format!(
