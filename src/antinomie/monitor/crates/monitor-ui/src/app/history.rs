@@ -235,17 +235,23 @@ impl MonitorApp {
                     // A pane of another width starts its columns afresh, so the
                     // row and the icons at its end always fit the pane.
                     .id_salt(("run_history", widths.pane as i32))
-                    .column(Column::initial(widths.start).range(widths.start_least..=400.0))
+                    .column(Column::initial(widths.start).range(widths.start_least..=400.0).clip(true))
                     .sense(egui::Sense::click())
                     .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
                     // Not resizable: a resizable column keeps the width it had, so a
                     // remainder in the middle stopped following the pane. This one
                     // takes whatever the others leave, and the table spans the pane.
-                    .column(Column::remainder().at_least(HistoryColumns::EXECUTABLE_LEAST).resizable(false))
-                    .column(Column::initial(widths.sample).range(HistoryColumns::SAMPLE_LEAST..=400.0))
-                    .column(Column::initial(widths.arguments).range(HistoryColumns::ARGUMENTS_LEAST..=400.0))
-                    .column(Column::initial(widths.status).range(HistoryColumns::STATUS_LEAST..=320.0))
-                    .column(Column::initial(widths.exit).range(HistoryColumns::EXIT_LEAST..=220.0))
+                    .column(Column::remainder().at_least(widths.executable_least).resizable(false));
+                // A narrow pane drops the Sample and Arguments columns so the
+                // icons at the row's end are never cut off.
+                if widths.wide {
+                    table = table
+                        .column(Column::initial(widths.sample).range(widths.sample_least..=400.0).clip(true))
+                        .column(Column::initial(widths.arguments).range(widths.arguments_least..=400.0).clip(true));
+                }
+                let mut table = table
+                    .column(Column::initial(widths.status).range(widths.status_least..=320.0).clip(true))
+                    .column(Column::initial(widths.exit).range(widths.exit_least..=220.0).clip(true))
                     .column(Column::exact(widths.actions))
                     .resizable(true)
                     .striped(true)
@@ -254,6 +260,7 @@ impl MonitorApp {
                 if let Some(index) = navigation { table = table.scroll_to_row(index, Some(egui::Align::Center)); }
                 table.header(28.0, |mut header| {
                         for (column, name) in ["Start time", "Executable", "Sample", "Arguments", "Tree status", "Root exit"].into_iter().enumerate() {
+                            if !widths.wide && (column == 2 || column == 3) { continue; }
                             header.col(|ui| crate::table_sort::header(ui, "run_history", column, name));
                         }
                         header.col(|ui| crate::widgets::table::head(ui, ""));
@@ -267,7 +274,7 @@ impl MonitorApp {
                                 let title = crate::evidence::title(ui, &run.directory, &run.request.path);
                                 executable_cell(ui, title, run);
                             });
-                            row.col(|ui| {
+                            if widths.wide { row.col(|ui| {
                                 match &run.request.sample {
                                     Some(sample) => {
                                         ui.add(egui::Label::new(&sample.name).selectable(false).sense(egui::Sense::hover()).truncate())
@@ -277,8 +284,8 @@ impl MonitorApp {
                                         ui.add(egui::Label::new(theme::hint_text("-")).selectable(false).sense(egui::Sense::hover()));
                                     }
                                 }
-                            });
-                            row.col(|ui| {
+                            }); }
+                            if widths.wide { row.col(|ui| {
                                 let args = run.request.args.join(" ");
                                 ui.add(
                                     egui::Label::new(&args)
@@ -287,7 +294,7 @@ impl MonitorApp {
                                         .truncate(),
                                 )
                                 .on_hover_text(run.request.args.join("\n"));
-                            });
+                            }); }
                             row.col(|ui| {
                                 let detail = [execution_detail(run), crate::run_recording::tooltip(run)];
                                 ui.add(

@@ -465,7 +465,10 @@ mod tests {
                     &cc.egui_ctx,
                     std::env::var_os("ANTINOMIE_TRIAGE_QA_LIGHT").is_some(),
                 );
-                theme::text_size(&cc.egui_ctx, if width < 700.0 { 24.0 } else { 16.0 });
+                theme::text_size(
+                    &cc.egui_ctx,
+                    theme::qa_text_size(if width < 700.0 { 24.0 } else { 16.0 }),
+                );
                 Ok(Box::new(Fixture {
                     view,
                     analysis,

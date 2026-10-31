@@ -11,21 +11,30 @@ pub(super) struct HistoryColumns {
     pub(super) pane: f32,
     pub(super) start: f32,
     pub(super) start_least: f32,
+    pub(super) executable_least: f32,
     pub(super) sample: f32,
+    pub(super) sample_least: f32,
     pub(super) arguments: f32,
+    pub(super) arguments_least: f32,
     pub(super) status: f32,
+    pub(super) status_least: f32,
     pub(super) exit: f32,
+    pub(super) exit_least: f32,
     /// The Open terminal and Stop icons.
     pub(super) actions: f32,
+    /// The pane has room for the Sample and Arguments columns.
+    pub(super) wide: bool,
 }
 
 impl HistoryColumns {
-    pub(super) const EXECUTABLE_LEAST: f32 = 150.0;
-    pub(super) const SAMPLE_LEAST: f32 = 70.0;
-    pub(super) const ARGUMENTS_LEAST: f32 = 70.0;
-    pub(super) const STATUS_LEAST: f32 = 90.0;
-    pub(super) const EXIT_LEAST: f32 = 60.0;
-    pub(super) const START_LEAST: f32 = 120.0;
+    /// What each column keeps at least in a wide pane: start time, executable,
+    /// sample, arguments, tree status, root exit.
+    const LEAST: [f32; 6] = [120.0, 150.0, 70.0, 70.0, 90.0, 60.0];
+    /// The share of those minimums a narrow pane gives up before the icons
+    /// would be cut off.
+    const SHRINK_MIN: f32 = 0.4;
+    /// The narrowest pane that keeps the Sample and Arguments columns.
+    const WIDE_PANE: f32 = 700.0;
 
     pub(super) fn fit(ui: &egui::Ui) -> Self {
         let spacing = ui.spacing();
@@ -38,28 +47,53 @@ impl HistoryColumns {
             .max(body + 2.0 * spacing.button_padding.x);
         let actions = 2.0 * icon + 3.0 * spacing.item_spacing.x;
         let gaps = 7.0 * spacing.item_spacing.x;
-        let pane = (ui.available_width() / 100.0).floor().max(6.0) * 100.0;
-        // What each column wants, and the least it keeps.
+        let pane = (ui.available_width() / 100.0).floor().max(3.0) * 100.0;
+        // A pane too narrow for every column drops Sample and Arguments; the
+        // minimums of the others then shrink together if they still do not fit.
+        let wide = pane >= Self::WIDE_PANE;
+        let kept = if wide { 6.0 } else { 4.0 };
+        let gaps = gaps * kept / 6.0;
+        let sum: f32 = Self::LEAST
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| wide || !matches!(index, 2 | 3))
+            .map(|(_, least)| least)
+            .sum();
+        let share = ((pane - actions - gaps) / sum).clamp(Self::SHRINK_MIN, 1.0);
+        let least = Self::LEAST.map(|least| least * share);
+        // What each wide column wants.
         let wanted = [190.0, 120.0, 170.0, 190.0, 110.0];
-        let least = [
-            Self::START_LEAST,
-            Self::SAMPLE_LEAST,
-            Self::ARGUMENTS_LEAST,
-            Self::STATUS_LEAST,
-            Self::EXIT_LEAST,
-        ];
-        let room = (pane - actions - gaps - Self::EXECUTABLE_LEAST).max(least.iter().sum());
-        let scale = (room / wanted.iter().sum::<f32>()).min(1.0);
-        let at = |index: usize| (wanted[index] * scale).max(least[index]);
+        let others = [least[0], least[2], least[3], least[4], least[5]];
+        let kept_others: f32 = others
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| wide || !matches!(index, 1 | 2))
+            .map(|(_, least)| least)
+            .sum();
+        let room = (pane - actions - gaps - least[1]).max(kept_others);
+        let wanted_kept: f32 = wanted
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| wide || !matches!(index, 1 | 2))
+            .map(|(_, wanted)| wanted)
+            .sum();
+        let scale = (room / wanted_kept).min(1.0);
+        let at = |index: usize| (wanted[index] * scale).max(others[index]);
         Self {
             pane,
             start: at(0),
-            start_least: Self::START_LEAST,
+            start_least: least[0],
+            executable_least: least[1],
             sample: at(1),
+            sample_least: least[2],
             arguments: at(2),
+            arguments_least: least[3],
             status: at(3),
+            status_least: least[4],
             exit: at(4),
+            exit_least: least[5],
             actions,
+            wide,
         }
     }
 }

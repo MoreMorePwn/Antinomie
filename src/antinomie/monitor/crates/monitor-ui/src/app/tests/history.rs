@@ -755,6 +755,43 @@ fn the_run_list_keeps_the_analysis_report_without_copying_its_rows() {
 }
 
 #[test]
+fn the_terminal_and_stop_icons_stay_inside_the_run_list_at_every_width_and_text_size() {
+    let mut finished = run("live-run");
+    finished.state = RunState::Running;
+    finished.request.path = "/opt/miner/xmrig".into();
+    for font in [18.0, 20.0] {
+        for width in [760.0, 900.0, 1100.0, 1500.0] {
+            let mut app = app();
+            observer_fixture(&mut app);
+            app.history = vec![finished.clone()];
+            app.focus_panel = Some(Panel::RunHistory);
+            let ctx = egui::Context::default();
+            theme::install(&ctx);
+            theme::text_size(&ctx, font);
+            let size = egui::vec2(width, 800.0);
+            for _ in 0..3 {
+                render(&mut app, &ctx, size);
+            }
+            let shown = texts(&render(&mut app, &ctx, size));
+            for (what, glyph) in [
+                ("terminal", egui_phosphor::regular::TERMINAL_WINDOW),
+                ("stop", egui_phosphor::regular::STOP),
+            ] {
+                // The row's own icon, not the toolbar's: below the tab bar.
+                let found = shown
+                    .iter()
+                    .filter(|(text, rect)| text == glyph && rect.top() > 160.0)
+                    .count();
+                assert!(
+                    found >= 1,
+                    "the {what} icon is cut off at {width} wide, text {font}: {shown:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn a_check_that_timed_out_is_a_warning_in_the_tree_not_a_missing_check() {
     use antinomie_monitor_core::{AnalysisKind, AnalysisSectionState};
     let mut run = run("r1");
