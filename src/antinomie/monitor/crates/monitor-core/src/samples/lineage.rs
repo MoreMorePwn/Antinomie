@@ -426,10 +426,10 @@ pub fn build(
             )
             .filter(|(_, note)| !note.is_empty());
         for (path, note) in notes {
-            if let Some(node) = raw.nodes.get_mut(&id_of(path).0) {
-                if node.hash_note.is_empty() {
-                    node.hash_note.clone_from(note);
-                }
+            if let Some(node) = raw.nodes.get_mut(&id_of(path).0)
+                && node.hash_note.is_empty()
+            {
+                node.hash_note.clone_from(note);
             }
         }
     }

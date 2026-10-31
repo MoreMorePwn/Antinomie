@@ -9,7 +9,7 @@
 //! processes, trace entries, indicators, artifacts, custody entries and
 //! lineage nodes.
 use super::detail::Data;
-use super::note_picker::{category_word, lineage_nodes, Candidates, Category, Picker};
+use super::note_picker::{lineage_nodes, Candidates, Picker};
 use super::*;
 use crate::widgets::{self, Tone};
 use antinomie_monitor_core::samples::{Note, NoteRef, RefKind, MAX_NOTE};
@@ -504,7 +504,7 @@ impl SamplesPage {
         let Some(editor) = &self.note_editor else {
             return Vec::new();
         };
-        Category::ALL
+        super::note_picker::Category::ALL
             .into_iter()
             .map(|category| (category.label(), editor.candidates.count(category)))
             .collect()
@@ -522,7 +522,11 @@ impl SamplesPage {
             .0
             .iter()
             .map(|(category, reference)| {
-                format!("{} · {}", category_word(*category), reference.label)
+                format!(
+                    "{} · {}",
+                    super::note_picker::category_word(*category),
+                    reference.label
+                )
             })
             .collect()
     }

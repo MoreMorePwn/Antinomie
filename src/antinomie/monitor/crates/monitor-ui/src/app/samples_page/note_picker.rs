@@ -92,7 +92,7 @@ impl Category {
     }
 
     /// Whether the entries are read from a run's recording, on a thread.
-    pub(super) fn from_recording(self) -> bool {
+    pub(super) fn reads_recording(self) -> bool {
         matches!(self, Self::Processes | Self::Trace)
     }
 }
@@ -198,7 +198,7 @@ impl Candidates {
     }
 
     pub(super) fn count(&self, category: Category) -> usize {
-        if category.from_recording() {
+        if category.reads_recording() {
             return self.runs.iter().filter(|run| run.folder).count();
         }
         self.list
@@ -208,7 +208,7 @@ impl Candidates {
     }
 
     pub(super) fn subtypes(&self, category: Category) -> Vec<(String, usize)> {
-        if category.from_recording() {
+        if category.reads_recording() {
             return self
                 .runs
                 .iter()
@@ -592,7 +592,7 @@ impl Picker {
                     }),
             )
         } else if let Some(category) = self.category {
-            if category.from_recording() {
+            if category.reads_recording() {
                 let run = candidates
                     .runs
                     .iter()
@@ -768,7 +768,7 @@ impl Picker {
                     return;
                 }
                 if let (Some(sub), Some(category)) = (&self.sub, self.category) {
-                    if category.from_recording() {
+                    if category.reads_recording() {
                         match candidates
                             .runs
                             .iter()
@@ -792,7 +792,7 @@ impl Picker {
                         }
                     }
                 }
-                if entries.is_empty() && !self.category.is_some_and(Category::from_recording) {
+                if entries.is_empty() && !self.category.is_some_and(Category::reads_recording) {
                     parts_line(ui, "Nothing matches.");
                 }
                 for (index, (category, reference)) in entries.iter().enumerate() {
@@ -836,7 +836,7 @@ impl Picker {
             self.cursor = 0;
             self.focus = true;
             if let (Some(category), Some(sub)) = (self.category, &self.sub) {
-                if category.from_recording() {
+                if category.reads_recording() {
                     if let Some(run) = candidates.runs.iter().find(|run| &run.label == sub) {
                         self.read_run(ui.ctx(), category, run);
                     }
