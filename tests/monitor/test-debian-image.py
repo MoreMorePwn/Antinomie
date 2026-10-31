@@ -325,11 +325,15 @@ class DebianImageTests(unittest.TestCase):
                                 "timezone": "Europe/Berlin", "standard": True,
                                 "mirror": "http://mirror.example/debian/",
                                 "proxy": "http://proxy.example:3128"})
-        with patch.object(image.os, "geteuid", return_value=1000):
+        with patch.object(image.os, "geteuid", return_value=1000), \
+                patch.object(image, "archive_keyring", return_value=Path("/k/debian.pgp")):
             command = image.mmdebstrap_command(values, Path("/w/rootfs.tar"), Path("/w/c.sh"),
                                                Path("/w/prov"))
         self.assertEqual(command[0], "mmdebstrap")
         self.assertIn("--mode=unshare", command)
+        # Debian's archive keyring, also on a host whose default is another
+        # distribution's.
+        self.assertIn("--keyring=/k/debian.pgp", command)
         self.assertIn("--variant=standard", command)
         self.assertIn("--format=tar", command)
         self.assertIn('--aptopt=APT::Get::AllowUnauthenticated "false"', command)
@@ -862,6 +866,34 @@ class DebianImageTests(unittest.TestCase):
             listing = subprocess.run(["debugfs", "-R", "ea_list /usr/bin/ping", str(raw)],
                                      capture_output=True, text=True, check=True).stdout
             self.assertIn("security.capability", listing)
+
+    def test_rootless_staging_goes_where_the_namespace_root_can_enter(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            root.chmod(0o755)
+            home, spare = root / "home", root / "spare"
+            (home / "work").mkdir(parents=True)
+            spare.mkdir()
+            with patch.object(image.os, "geteuid", return_value=1000), \
+                    patch.dict(image.os.environ, {"ANTINOMIE_STAGING_DIR": str(spare)}):
+                self.assertEqual(image.staging_parent(home / "work"), (home / "work").resolve())
+                # A home folder like Ubuntu's (0750) stops the subordinate UID.
+                home.chmod(0o750)
+                try:
+                    self.assertEqual(image.staging_parent(home / "work"), spare.resolve())
+                    spare.chmod(0o700)
+                    with self.assertRaisesRegex(RuntimeError, "--work"):
+                        image.staging_parent(home / "work")
+                finally:
+                    home.chmod(0o755)
+                    spare.chmod(0o755)
+            # As root (the QEMU builder) the work folder is used as it is.
+            with patch.object(image.os, "geteuid", return_value=0):
+                home.chmod(0o750)
+                try:
+                    self.assertEqual(image.staging_parent(home / "work"), (home / "work").resolve())
+                finally:
+                    home.chmod(0o755)
 
     def test_existing_output_preserved(self):
         with tempfile.TemporaryDirectory() as name:

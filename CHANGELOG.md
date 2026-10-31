@@ -226,11 +226,17 @@ it runs.
   loads Debian's virtio-blk and ext4 modules, udev the rest, virtio-gpu
   among them), and its `/proc/version` is Debian's banner, so its kernel, like
   Minimal's, is compiled with Debian 13's compiler and linker (natively in the
-  rootless Debian 13 toolchain chroot where the host's are others). The `debian` profile's
-  built-in drivers (virtio-blk, ext4, DRM and virtio-gpu) are modules in
-  Debian's configuration and are no longer built in; no other option
-  differs from Debian's. Both Debian bases share one cached kernel. New
+  rootless Debian 13 toolchain chroot where the host's are others). The
+  `debian` profile's built-in drivers (virtio-blk, ext4, DRM and virtio-gpu)
+  are modules in Debian's configuration and are no longer built in; no other
+  option differs from Debian's. Both Debian bases share one cached kernel. New
   desktop bases only; their root stays on virtio.
+
+- **Debian images build on other distributions.** The image bootstrap names
+  Debian's archive keyring (`--keyring`), not the host's default, and a
+  rootless bootstrap stages in `/var/tmp` (`ANTINOMIE_STAGING_DIR`) when a
+  folder above the work folder, such as Ubuntu's 0750 home, keeps the
+  namespace's root out.
 
 - **Conformance goldens for Debian Minimal, and kexec_file_load's flags.**
   With Debian's configuration some calls answer differently from the BusyBox

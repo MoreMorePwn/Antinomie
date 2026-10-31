@@ -730,12 +730,18 @@ def fetch(url, target, proxy=""):
         raise RuntimeError(f"cannot download {url}: {error}") from error
 
 
-def verified_release(signed, work):
-    """The text of an InRelease file that a key of the Debian archive keyring
-    signed (only what the signature covers)."""
+def archive_keyring():
+    """The Debian archive keyring installed on this host."""
     keyring = next((path for path in ARCHIVE_KEYRINGS if path.is_file()), None)
     if keyring is None:
         raise RuntimeError("the Debian archive keyring is missing (install debian-archive-keyring)")
+    return keyring
+
+
+def verified_release(signed, work):
+    """The text of an InRelease file that a key of the Debian archive keyring
+    signed (only what the signature covers)."""
+    keyring = archive_keyring()
     output = work / "Release.verified"
     if shutil.which("gpgv"):
         command = ["gpgv", "--keyring", str(keyring), "--output", str(output), str(signed)]
@@ -1017,6 +1023,26 @@ def bootstrap_mode():
     return "root" if os.geteuid() == 0 else "unshare"
 
 
+def staging_parent(work):
+    """Where the build's staging folder goes: work, unless a rootless bootstrap
+    cannot reach it. mmdebstrap's unshare mode builds as the namespace's root, a
+    subordinate UID, which must traverse every folder above the staging folder;
+    a home folder without others' execute bit (Ubuntu's 0750) stops it, so the
+    staging folder then goes to /var/tmp (ANTINOMIE_STAGING_DIR)."""
+    work = work.resolve()
+    if bootstrap_mode() != "unshare" or all(path.stat().st_mode & 0o001
+                                            for path in (work, *work.parents)):
+        return work
+    fallback = Path(os.environ.get("ANTINOMIE_STAGING_DIR", "/var/tmp")).resolve()
+    if not all(path.stat().st_mode & 0o001 for path in (fallback, *fallback.parents)):
+        raise RuntimeError(f"neither {work} nor {fallback} can be entered by the rootless "
+                           "bootstrap (a folder above it lacks others' execute permission); "
+                           "pass --work in a folder others may traverse")
+    print(f"{work} cannot be entered by the rootless bootstrap (a folder above it lacks "
+          f"others' execute permission); staging in {fallback}", flush=True)
+    return fallback
+
+
 def boot_loader_hooks(scripts, provenance):
     """The console base's last steps: a copy of the system goes to
     /tmp/uefi-root, the BIOS boot loader into the system and the UEFI one into
@@ -1062,6 +1088,9 @@ def mmdebstrap_command(values, tarball, script, provenance, times=None, kernel_d
     scripts = script.parent
     times = times or tarball.with_name(INODE_TIMES)
     command = ["mmdebstrap", "--mode=" + bootstrap_mode(),
+               # Debian's archive keyring, not the host's default (another
+               # distribution's on a non-Debian host).
+               "--keyring=" + str(archive_keyring()),
                "--variant=" + ("standard" if values["standard"] else "important"),
                "--architectures=amd64", "--format=tar",
                "--include=" + ",".join(packages(values["desktop"])),
@@ -1506,7 +1535,7 @@ def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=Fa
     output.parent.mkdir(parents=True, exist_ok=True)
     work = work or output.parent
     work.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="debian-image-", dir=work) as name:
+    with tempfile.TemporaryDirectory(prefix="debian-image-", dir=staging_parent(work)) as name:
         staging = Path(name)
         if bootstrap_mode() == "unshare":
             # mmdebstrap builds the root inside (TMPDIR), and the namespace's
