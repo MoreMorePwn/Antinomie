@@ -149,19 +149,23 @@ impl MonitorApp {
                     );
                     ui.label("A local, kernel-level Linux malware analysis sandbox and workspace.");
                     ui.label("Copyright (c) 2026 MikiMiku (MoreMorePwn)");
-                    ui.label("Original application code: GPL-3.0-only. No warranty.");
-                    ui.hyperlink_to(
-                        "GNU GPL version 3",
-                        "https://www.gnu.org/licenses/gpl-3.0.html",
-                    );
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing.x = 4.0;
+                        ui.label("Original application code: ");
+                        ui.hyperlink_to(
+                            "GPL-3.0-only",
+                            "https://www.gnu.org/licenses/gpl-3.0.html",
+                        );
+                        ui.label(". No warranty.");
+                    });
                     dialog_section(ui, "Versions");
                     form_grid("about", ui).show(ui, |ui| {
                         ui.label(RichText::new("Guest kernel").color(theme::muted()));
                         ui.label("Linux 6.12.94 (Debian 6.12.94-1 source)");
                         ui.end_row();
-                        ui.label(RichText::new("Bases").color(theme::muted()));
+                        ui.label(RichText::new("Base images").color(theme::muted()));
                         ui.label(format!(
-                            "{} or newer",
+                            "Usable {} or newer",
                             RevisionStatus::describe(Some(APP_REVISION), None)
                         ));
                         ui.end_row();

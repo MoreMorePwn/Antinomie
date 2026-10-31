@@ -426,7 +426,7 @@ impl Picker {
         let searching = !self.search.trim().is_empty();
         let hint = match self.category {
             Some(category) => format!("Search {}", category.label().to_lowercase()),
-            None => "Search runs, processes, IoCs, files, custody entries and lineage nodes".into(),
+            None => "Search what this note refers to".into(),
         };
         let frame = egui::Frame::new()
             .fill(ui.visuals().extreme_bg_color)
@@ -655,7 +655,10 @@ pub(super) fn chip(
         .on_hover_text(if exists {
             format!("{} · open it", reference.kind.label())
         } else {
-            format!("{} · it is no longer there", reference.kind.label())
+            format!(
+                "{} · it is no longer there (it was deleted or removed)",
+                reference.kind.label()
+            )
         });
     if main.clicked() {
         out = ChipOut::Open;

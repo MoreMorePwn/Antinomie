@@ -38,7 +38,7 @@ impl SettingsPage {
         match self {
             SettingsPage::Appearance => "Appearance",
             SettingsPage::Recording => "Recording",
-            SettingsPage::Detection => "Detection",
+            SettingsPage::Detection => "Detection rules",
             SettingsPage::Notifications => "Notifications",
             SettingsPage::NetworkLookup => "Network lookup",
             SettingsPage::NetworkRoutes => "Network routes",
@@ -181,7 +181,10 @@ impl MonitorApp {
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
+            // One width for every page, so the window's edge stays put.
             .default_width(width)
+            .min_width(width)
+            .max_width(width)
             .default_height(0.0)
             .default_pos(egui::pos2(
                 (screen.center().x - width * 0.5).max(0.0),
@@ -242,9 +245,9 @@ impl MonitorApp {
                             ui.add(
                                 egui::Label::new(
                                     RichText::new(if stopped {
-                                        "Appearance applies at once · Recording applies on Save"
+                                        "Appearance applies at once · other pages apply on Save"
                                     } else {
-                                        "A VM is running: Recording applies after it stops"
+                                        "Stop the VM to save changes · Appearance applies at once"
                                     })
                                     .small()
                                     .color(theme::muted()),
@@ -256,6 +259,7 @@ impl MonitorApp {
                     |ui| {
                         save = ui
                             .add_enabled(stopped, primary_button("Save settings"))
+                            .on_disabled_hover_text("Stop the running VM to save settings.")
                             .clicked();
                         close = ui.button("Close").clicked();
                     },
@@ -338,7 +342,7 @@ impl MonitorApp {
 
     fn recording_page(&mut self, ui: &mut egui::Ui) {
         if self.snapshot.active_vm.is_some() {
-            crate::activity::warning(ui, "Stop the running VM to change these.");
+            crate::activity::warning(ui, "Stop the VM to change these.");
         }
         ui.add_enabled_ui(self.snapshot.active_vm.is_none(), |ui| {
             form_grid("settings_recording", ui).show(ui, |ui| {
@@ -539,6 +543,9 @@ impl MonitorApp {
     }
 
     fn disks_page(&mut self, ui: &mut egui::Ui) {
+        if self.snapshot.active_vm.is_some() {
+            crate::activity::warning(ui, "Stop the VM to change these.");
+        }
         ui.add_enabled_ui(self.snapshot.active_vm.is_none(), |ui| {
             form_grid("settings_disks", ui).show(ui, |ui| {
                 ui.label("Extraction limit");
@@ -579,9 +586,6 @@ impl MonitorApp {
                 ui.end_row();
             });
         });
-        if self.snapshot.active_vm.is_some() {
-            crate::activity::warning(ui, "Stop the running VM to change these.");
-        }
     }
 
     fn advanced_page(&mut self, ui: &mut egui::Ui) {

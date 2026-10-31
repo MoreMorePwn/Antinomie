@@ -137,8 +137,8 @@ impl DeleteRun {
                         ui.label(
                             RichText::new(format!(
                                 "Frees {} · keeps {}",
-                                crate::values::file_size(frees),
-                                crate::values::file_size(keeps)
+                                crate::values::short_size(frees),
+                                crate::values::short_size(keeps)
                             ))
                             .color(theme::muted()),
                         );
@@ -223,7 +223,7 @@ impl DeleteRun {
                     });
                     row.col(|ui| {
                         ui.label(if item.size > 0 {
-                            crate::values::file_size(item.size)
+                            crate::values::short_size(item.size)
                         } else {
                             "–".to_owned()
                         });
@@ -261,16 +261,11 @@ impl DeleteRun {
                     row.col(|ui| match item.place {
                         ArtifactPlace::InFolder | ArtifactPlace::Outside => {
                             let mut keep = self.item_keep(item);
-                            let second = if item.place == ArtifactPlace::InFolder {
-                                "Delete"
-                            } else {
-                                "Leave"
-                            };
                             let changed = widgets::segmented(
                                 ui,
                                 [
                                     (true, widgets::TabItem::new("Keep")),
-                                    (false, widgets::TabItem::new(second)),
+                                    (false, widgets::TabItem::new("Delete")),
                                 ],
                                 &mut keep,
                             );
@@ -278,10 +273,13 @@ impl DeleteRun {
                                 self.keep.insert(item.key.clone(), keep);
                             }
                             if item.place == ArtifactPlace::Outside {
-                                ui.label(RichText::new("stays in the VM").color(theme::muted()))
-                                    .on_hover_text(
-                                        "Delete it from Memory or Network; only the run's own files are deleted here",
-                                    );
+                                ui.label(
+                                    RichText::new(egui_phosphor::regular::INFO)
+                                        .color(theme::muted()),
+                                )
+                                .on_hover_text(
+                                    "Keep copies this file into the sample's record. Delete does not copy it: the original stays in the VM until you delete it from Memory or Network.",
+                                );
                             }
                         }
                         ArtifactPlace::WithVm => {

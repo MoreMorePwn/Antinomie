@@ -219,7 +219,7 @@ impl ApiKeysWindow {
         ui.label(
             RichText::new(match state.last_used_ms {
                 Some(ms) => format!("Last used {}", when(ms)),
-                None => "Not used yet".to_owned(),
+                None => "No lookup or download has used this key yet".to_owned(),
             })
             .color(theme::muted()),
         );
@@ -239,6 +239,7 @@ impl ApiKeysWindow {
             let has_draft = !draft.trim().is_empty();
             if ui
                 .add_enabled(has_draft, egui::Button::new("Save"))
+                .on_disabled_hover_text("Paste a key first")
                 .clicked()
             {
                 self.save(data_dir, key);
@@ -249,6 +250,11 @@ impl ApiKeysWindow {
                     egui::Button::new("Test"),
                 )
                 .on_hover_text("Asks the service whether it accepts the saved key")
+                .on_disabled_hover_text(if state.masked.is_none() {
+                    "Save a key first"
+                } else {
+                    "A test is already running"
+                })
                 .clicked()
             {
                 self.test(ctx, data_dir, curl, key);
@@ -256,6 +262,7 @@ impl ApiKeysWindow {
             if ui
                 .add_enabled(state.masked.is_some(), egui::Button::new("Clear"))
                 .on_hover_text("Forget the saved key")
+                .on_disabled_hover_text("No key is saved")
                 .clicked()
             {
                 self.clear(data_dir, key);
@@ -275,11 +282,7 @@ impl ApiKeysWindow {
 }
 
 fn when(ms: u64) -> String {
-    i64::try_from(ms / 1000)
-        .ok()
-        .and_then(|seconds| chrono::DateTime::<chrono::Utc>::from_timestamp(seconds, 0))
-        .map(|time| time.format("%Y-%m-%d %H:%M UTC").to_string())
-        .unwrap_or_else(|| "at an unknown time".into())
+    crate::time_format::local_seconds(ms / 1000)
 }
 
 #[cfg(test)]
@@ -354,7 +357,10 @@ mod tests {
         assert!(text.contains("set (…a91f)"), "{text}");
         assert!(!text.contains("super-secret"), "{text}");
         assert!(text.contains("IOC datasets"), "{text}");
-        assert!(text.contains("Not used yet"), "{text}");
+        assert!(
+            text.contains("No lookup or download has used this key yet"),
+            "{text}"
+        );
         window.clear(&dir, ApiKey::Abusech);
         let text = render(&ctx, &mut window, &dir);
         assert!(text.contains("not set"), "{text}");

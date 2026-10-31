@@ -140,19 +140,31 @@ impl<'a> Fit<'a> {
         if self.fallbacks.is_empty() {
             return;
         }
-        crate::activity::warning(
-            ui,
-            format!(
-                "{} setting{} will not be applied as chosen:\n{}",
-                self.fallbacks.len(),
-                if self.fallbacks.len() == 1 { "" } else { "s" },
-                self.fallbacks
-                    .iter()
-                    .map(|fallback| format!("• {}", fallback.summary))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            ),
-        );
+        let count = self.fallbacks.len();
+        if count == 1 {
+            crate::activity::warning(
+                ui,
+                format!(
+                    "1 setting will not be applied as chosen:\n• {}",
+                    self.fallbacks[0].summary
+                ),
+            );
+            return;
+        }
+        egui::CollapsingHeader::new(
+            RichText::new(format!(
+                "{count} setting{} will not be applied as chosen",
+                if count == 1 { "" } else { "s" }
+            ))
+            .color(theme::warn()),
+        )
+        .id_salt("vm_stealth_fallbacks")
+        .default_open(false)
+        .show(ui, |ui| {
+            for fallback in &self.fallbacks {
+                ui.colored_label(theme::warn(), format!("• {}", fallback.summary));
+            }
+        });
     }
 }
 
@@ -799,7 +811,7 @@ pub(super) fn window(
                 fit.summary(ui);
                 egui::ScrollArea::vertical()
                     .id_salt("vm_stealth_scroll")
-                    .max_height((ctx.screen_rect().height() - 260.0).max(120.0))
+                    .max_height((ctx.screen_rect().height() - 330.0).max(120.0))
                     .show(ui, |ui| {
                         egui::CollapsingHeader::new("Hardware identity")
                             .default_open(true)

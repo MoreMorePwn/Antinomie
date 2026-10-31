@@ -18,6 +18,10 @@ pub fn window<'open>(title: impl Into<String>) -> Dialog<'open> {
         window: egui::Window::new(&title).title_bar(false).resizable(true),
         title,
         open: None,
+        positioned: false,
+        fixed: false,
+        max_width: None,
+        max_height: None,
     }
 }
 
@@ -26,6 +30,12 @@ pub struct Dialog<'open> {
     window: egui::Window<'open>,
     title: String,
     open: Option<&'open mut bool>,
+    /// The caller placed the window; otherwise it opens centred.
+    positioned: bool,
+    /// The caller fixed the size.
+    fixed: bool,
+    max_width: Option<f32>,
+    max_height: Option<f32>,
 }
 
 macro_rules! forward {
@@ -53,17 +63,65 @@ impl<'open> Dialog<'open> {
         default_width(width: f32);
         default_height(height: f32);
         default_size(size: impl Into<egui::Vec2>);
-        default_pos(pos: impl Into<egui::Pos2>);
-        default_rect(rect: egui::Rect);
-        current_pos(pos: impl Into<egui::Pos2>);
-        fixed_size(size: impl Into<egui::Vec2>);
         min_size(size: impl Into<egui::Vec2>);
-        max_size(size: impl Into<egui::Vec2>);
         min_width(width: f32);
-        max_width(width: f32);
-        max_height(height: f32);
-        anchor(align: egui::Align2, offset: impl Into<egui::Vec2>);
-        pivot(pivot: egui::Align2);
+    }
+
+    /// A window of exactly this size (never capped to the window area).
+    pub fn fixed_size(mut self, size: impl Into<egui::Vec2>) -> Self {
+        self.fixed = true;
+        self.window = self.window.fixed_size(size);
+        self
+    }
+
+    /// Where the window opens (it stays movable).
+    pub fn default_pos(mut self, pos: impl Into<egui::Pos2>) -> Self {
+        self.positioned = true;
+        self.window = self.window.default_pos(pos);
+        self
+    }
+
+    pub fn default_rect(mut self, rect: egui::Rect) -> Self {
+        self.positioned = true;
+        self.window = self.window.default_rect(rect);
+        self
+    }
+
+    pub fn current_pos(mut self, pos: impl Into<egui::Pos2>) -> Self {
+        self.positioned = true;
+        self.window = self.window.current_pos(pos);
+        self
+    }
+
+    pub fn anchor(mut self, align: egui::Align2, offset: impl Into<egui::Vec2>) -> Self {
+        self.positioned = true;
+        self.window = self.window.anchor(align, offset);
+        self
+    }
+
+    pub fn pivot(mut self, pivot: egui::Align2) -> Self {
+        self.positioned = true;
+        self.window = self.window.pivot(pivot);
+        self
+    }
+
+    /// The most the window may grow to; it is also capped to the window
+    /// area so a dialog never reaches past the screen edge.
+    pub fn max_size(mut self, size: impl Into<egui::Vec2>) -> Self {
+        let size = size.into();
+        self.max_width = Some(size.x);
+        self.max_height = Some(size.y);
+        self
+    }
+
+    pub fn max_width(mut self, width: f32) -> Self {
+        self.max_width = Some(width);
+        self
+    }
+
+    pub fn max_height(mut self, height: f32) -> Self {
+        self.max_height = Some(height);
+        self
     }
 
     /// Show the window: title row, then `add_contents`.
@@ -76,75 +134,93 @@ impl<'open> Dialog<'open> {
             window,
             title,
             open,
+            positioned,
+            fixed,
+            max_width,
+            max_height,
         } = self;
         let closable = open.is_some();
         let mut close = false;
-        let shown = window
-            .constrain_to(crate::title_bar::content_rect(ctx))
-            .show(ctx, |ui| {
-                let rule = ui.painter().add(egui::Shape::Noop);
-                let header = ui
-                    .horizontal(|ui| {
-                        // Not selectable: dragging the title moves the window.
-                        ui.add(
-                            egui::Label::new(theme::bold(ui, &title).color(theme::text()))
-                                .selectable(false),
-                        );
-                        // Room for the close button, which is placed at the
-                        // window's right edge once the width is known.
-                        if closable {
-                            ui.add_space(CLOSE_SIZE + 12.0);
-                        }
-                    })
-                    .response
-                    .rect;
-                ui.add_space(6.0);
-                let rule_y = ui.cursor().top();
-                ui.add_space(8.0);
-                // In a child ui: contents that call `set_max_height` (egui then
-                // resets the cursor to the top of the ui) must not reach back
-                // over the title row.
-                let inner = ui.scope(add_contents).inner;
-                let width = ui.min_rect().x_range();
-                ui.painter().set(
-                    rule,
-                    egui::Shape::hline(
-                        width,
-                        rule_y,
-                        egui::Stroke::new(1.0_f32, theme::line_soft()),
-                    ),
-                );
-                if !closable {
-                    return inner;
-                }
-                let button = egui::Rect::from_min_size(
-                    egui::pos2(width.max - CLOSE_SIZE, header.center().y - CLOSE_SIZE / 2.0),
-                    egui::vec2(CLOSE_SIZE, CLOSE_SIZE),
-                );
-                // Painted and sensed without taking layout space, so the window
-                // does not grow by the button every frame.
-                let response = ui
-                    .interact(button, ui.id().with("close"), egui::Sense::click())
-                    .on_hover_text("Close");
-                let color = if response.hovered() {
-                    theme::palette().text
-                } else {
-                    theme::palette().muted
-                };
-                if response.hovered() {
-                    ui.painter()
-                        .rect_filled(button, 4.0, theme::palette().hover);
-                }
-                ui.painter().text(
-                    button.center(),
-                    egui::Align2::CENTER_CENTER,
-                    egui_phosphor::regular::X,
-                    egui::TextStyle::Body.resolve(ui.style()),
-                    color,
-                );
-                close = response.clicked();
-                inner
-            });
+        let area = crate::title_bar::content_rect(ctx);
+        let mut window = if fixed {
+            window
+        } else {
+            window.max_size(egui::vec2(
+                max_width.unwrap_or(f32::INFINITY).min(area.width() - 24.0),
+                max_height
+                    .unwrap_or(f32::INFINITY)
+                    .min(area.height() - 24.0),
+            ))
+        };
+        if !positioned {
+            window = window
+                .pivot(egui::Align2::CENTER_CENTER)
+                .default_pos(area.center());
+        }
+        let shown = window.constrain_to(area).show(ctx, |ui| {
+            let rule = ui.painter().add(egui::Shape::Noop);
+            let header = ui
+                .horizontal(|ui| {
+                    // Not selectable: dragging the title moves the window.
+                    ui.add(
+                        egui::Label::new(theme::bold(ui, &title).color(theme::text()))
+                            .selectable(false),
+                    );
+                    // Room for the close button, which is placed at the
+                    // window's right edge once the width is known.
+                    if closable {
+                        ui.add_space(CLOSE_SIZE + 12.0);
+                    }
+                })
+                .response
+                .rect;
+            ui.add_space(6.0);
+            let rule_y = ui.cursor().top();
+            ui.add_space(8.0);
+            // In a child ui: contents that call `set_max_height` (egui then
+            // resets the cursor to the top of the ui) must not reach back
+            // over the title row.
+            let inner = ui.scope(add_contents).inner;
+            let width = ui.min_rect().x_range();
+            ui.painter().set(
+                rule,
+                egui::Shape::hline(
+                    width,
+                    rule_y,
+                    egui::Stroke::new(1.0_f32, theme::line_soft()),
+                ),
+            );
+            if !closable {
+                return inner;
+            }
+            let button = egui::Rect::from_min_size(
+                egui::pos2(width.max - CLOSE_SIZE, header.center().y - CLOSE_SIZE / 2.0),
+                egui::vec2(CLOSE_SIZE, CLOSE_SIZE),
+            );
+            // Painted and sensed without taking layout space, so the window
+            // does not grow by the button every frame.
+            let response = ui
+                .interact(button, ui.id().with("close"), egui::Sense::click())
+                .on_hover_text("Close");
+            let color = if response.hovered() {
+                theme::palette().text
+            } else {
+                theme::palette().muted
+            };
+            if response.hovered() {
+                ui.painter()
+                    .rect_filled(button, 4.0, theme::palette().hover);
+            }
+            ui.painter().text(
+                button.center(),
+                egui::Align2::CENTER_CENTER,
+                egui_phosphor::regular::X,
+                egui::TextStyle::Body.resolve(ui.style()),
+                color,
+            );
+            close = response.clicked();
+            inner
+        });
         if close {
             if let Some(open) = open {
                 *open = false;

@@ -293,7 +293,7 @@ impl MonitorApp {
                 hint(ui, draft.default_route.summary());
             });
             ui.end_row();
-            ui.label("Internet");
+            ui.label("Private addresses");
             ui.vertical(|ui| {
                 ui.checkbox(&mut draft.allow_lan, "Allow private network addresses")
                     .on_hover_text(
@@ -321,16 +321,16 @@ impl MonitorApp {
             });
             ui.end_row();
             if draft.tor.mode == TorMode::Own {
-                ui.label("tor program");
+                ui.label("Tor program");
                 ui.vertical(|ui| {
                     ui.add(text_field(&mut draft.tor.program).desired_width(260.0))
                         .on_hover_text(
-                            "Path to a tor program; empty uses PATH, then the copy installed below.\n\
-                             Started when a run claims the route, on a free port of 127.0.0.1, with \
-                             a private data folder of its own and no control port; stopped when the \
-                             run ends. The run waits for Tor to finish bootstrapping and does not \
-                             start if it cannot.",
+                            "Path to a tor program; empty uses PATH, then the copy installed below.",
                         );
+                    hint(
+                        ui,
+                        "Started for each run on a free local port with its own data folder and no control port, and stopped when the run ends. A run waits for Tor to finish starting and does not start without it.",
+                    );
                 });
                 ui.end_row();
             } else {
@@ -361,7 +361,7 @@ impl MonitorApp {
                 .color(theme::heading()),
         );
         form_grid("settings_routes_vpn", ui).show(ui, |ui| {
-            ui.label("wireproxy");
+            ui.label("WireGuard proxy program");
             ui.vertical(|ui| {
                 ui.add(text_field(&mut draft.vpn.wireproxy).desired_width(260.0))
                     .on_hover_text(

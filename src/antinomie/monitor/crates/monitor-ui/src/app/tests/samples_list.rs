@@ -168,7 +168,7 @@ fn the_list_is_flat_latest_run_first_with_counts_and_a_never_run_mark() {
         "Description",
         "Tags",
         "Runs",
-        "Parents / children",
+        "Lineage",
         "Latest run",
         "SHA-256",
         "Cron installer",

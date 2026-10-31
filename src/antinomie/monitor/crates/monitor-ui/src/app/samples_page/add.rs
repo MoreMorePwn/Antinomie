@@ -195,6 +195,7 @@ impl AddDialog {
                                 !busy,
                                 egui::TextEdit::singleline(&mut self.path)
                                     .hint_text(theme::hint_text("Path on this computer"))
+                                    .font(egui::TextStyle::Monospace)
                                     .desired_width(300.0),
                             );
                             if (edit.lost_focus() && self.probed != self.path.trim())
@@ -204,6 +205,11 @@ impl AddDialog {
                             }
                             if ui
                                 .add_enabled(can_choose && !busy, egui::Button::new("Choose file…"))
+                                .on_disabled_hover_text(if busy {
+                                    "Wait for the file to be added"
+                                } else {
+                                    "No file chooser: install zenity to browse, or type the path"
+                                })
                                 .clicked()
                             {
                                 outcome = Outcome::ChooseFile;
@@ -232,11 +238,19 @@ impl AddDialog {
                                 );
                                 ui.end_row();
                                 ui.label(RichText::new("SHA-256").color(theme::muted()));
+                                // Two even lines, so the hash never breaks mid-way.
+                                let half = probe.sha256.len() / 2;
                                 ui.add(
                                     egui::Label::new(
-                                        RichText::new(&probe.sha256).monospace().small(),
+                                        RichText::new(format!(
+                                            "{}\n{}",
+                                            &probe.sha256[..half],
+                                            &probe.sha256[half..]
+                                        ))
+                                        .monospace()
+                                        .small(),
                                     )
-                                    .wrap(),
+                                    .selectable(true),
                                 );
                                 ui.end_row();
                                 ui.label(RichText::new("Type").color(theme::muted()));

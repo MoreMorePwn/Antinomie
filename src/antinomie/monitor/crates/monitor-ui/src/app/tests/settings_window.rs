@@ -277,7 +277,7 @@ fn the_routes_page_shows_install_version_and_status_of_tor_and_wireproxy() {
     assert!(
         visible
             .iter()
-            .any(|(text, _)| text == "Install 0.4.9.14 · 3.8 MB"),
+            .any(|(text, _)| text == "Install 0.4.9.14 · 3.8 MiB"),
         "{visible:?}"
     );
     assert!(has(&visible, "Not installed"), "{visible:?}");

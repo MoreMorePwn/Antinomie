@@ -142,7 +142,7 @@ impl UpdateWindow {
                 {
                     ask = true;
                 }
-                ui.weak("Nothing is downloaded or installed.");
+                ui.colored_label(theme::muted(), "Nothing is downloaded or installed.");
             });
         if ask && self.worker.is_none() {
             self.start(ctx, curl);

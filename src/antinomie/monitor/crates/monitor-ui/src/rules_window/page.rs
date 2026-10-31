@@ -76,7 +76,12 @@ impl Model {
         if !self.loaded {
             self.ensure(data_dir);
         }
-        ui.label(RichText::new("Scans never use the network.").color(theme::text()))
+        ui.label(
+            RichText::new("Detection rules")
+                .size(ui.text_style_height(&egui::TextStyle::Heading))
+                .color(theme::heading()),
+        );
+        ui.label(RichText::new("Scans never use the network.").color(theme::muted()))
             .on_hover_text("Installed packs and custom groups are the only production rules. Scans do not download rules or upload evidence.");
         let mut engine = ENGINES
             .iter()

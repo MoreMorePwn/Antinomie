@@ -189,11 +189,14 @@ impl Performance {
         crate::widgets::window("UI performance").id(egui::Id::new("ui-performance"))
             .open(&mut self.open).default_width(530.0).resizable(true).show(ctx, |ui| {
                 crate::widgets::titled(ui, "Graphics", "The renderer drawing this window.");
-                crate::widgets::facts(ui, "ui-performance-graphics", &[
-                    ("Renderer", if self.renderer.is_empty() { "Unavailable".to_owned() } else { self.renderer.clone() }),
-                    ("Vendor", self.vendor.clone()),
-                    ("OpenGL", self.version.clone()),
-                ]);
+                // A row the driver did not report is left out, not shown empty.
+                let mut graphics = vec![("Renderer", if self.renderer.is_empty() { "Not reported".to_owned() } else { self.renderer.clone() })];
+                for (name, value) in [("Vendor", &self.vendor), ("OpenGL", &self.version)] {
+                    if !value.trim().is_empty() {
+                        graphics.push((name, value.clone()));
+                    }
+                }
+                crate::widgets::facts(ui, "ui-performance-graphics", &graphics);
                 if software_renderer(&self.renderer) {
                     crate::activity::warning(ui, "Software rendering uses the CPU and can slow the whole window.");
                 }
