@@ -148,7 +148,8 @@ pub(super) struct ByteRun {
 #[derive(Clone, Debug)]
 pub(super) struct HashNote {
     pub time: u64,
-    /// "closed after write", "before delete" or "exec image".
+    /// "closed after write" or "before delete": the only moments the guest
+    /// hashes a file at (the exec image hash belongs to the process, not here).
     pub moment: &'static str,
     pub sha256: Option<String>,
     /// The file changed while the guest read it, so the digest may not match.

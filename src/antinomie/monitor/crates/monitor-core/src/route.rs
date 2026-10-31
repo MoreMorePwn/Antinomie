@@ -165,7 +165,10 @@ pub enum RouteVia {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RouteStats {
-    /// TCP connections the gateway carried upstream.
+    /// TCP connections the gateway opened for the guest and carried on: to the
+    /// route's upstream (the Internet, Tor, the VPN, a SOCKS5 proxy) and also
+    /// to its own services (InetSim, the cloud metadata service). Connections
+    /// that failed or were blocked are counted apart.
     pub tcp_connections: u64,
     /// Connections it tried and could not make.
     pub tcp_failed: u64,
