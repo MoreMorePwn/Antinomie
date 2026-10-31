@@ -314,15 +314,11 @@ fn answer(request: Request, shared: &Shared) -> Answer {
             path,
         } => Answer::ProcessTree {
             run_id,
-            result: Ok(recording::Recording {
-                directory,
-                manifest: serde_json::Value::Null,
-                events: Vec::new(),
-            })
-            .and_then(|recording| {
-                recording.process_tree_cancellable(root_pid, &path, &shared.cancelled)
-            })
-            .map_err(|e| e.to_string()),
+            result: Ok(recording::Recording::raw(&directory))
+                .and_then(|recording| {
+                    recording.process_tree_cancellable(root_pid, &path, &shared.cancelled)
+                })
+                .map_err(|e| e.to_string()),
         },
         Request::ListCaptures {
             options,

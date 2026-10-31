@@ -524,11 +524,7 @@ fn save_process_tree(record: &Path, run_directory: &Path) {
     let Ok(run) = read_summary(record) else {
         return;
     };
-    let source = crate::recording::Recording {
-        directory: run_directory.to_path_buf(),
-        manifest: serde_json::Value::Null,
-        events: Vec::new(),
-    };
+    let source = crate::recording::Recording::raw(run_directory);
     let cancel = std::sync::atomic::AtomicBool::new(false);
     if let Ok(tree) = source.process_tree_cancellable(run.pid, &run.request.path, &cancel) {
         let _ = crate::storage::atomic_json(&record.join(PROCESS_TREE_FILE), &tree);

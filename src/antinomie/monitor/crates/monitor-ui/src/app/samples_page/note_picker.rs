@@ -474,11 +474,7 @@ impl Picker {
             .name("note-run-read".into())
             .spawn(move || {
                 let cancel = std::sync::atomic::AtomicBool::new(false);
-                let recording = antinomie_monitor_core::recording::Recording {
-                    directory,
-                    manifest: serde_json::Value::Null,
-                    events: Vec::new(),
-                };
+                let recording = antinomie_monitor_core::recording::Recording::raw(&directory);
                 let result = if category == Category::Trace {
                     read_trace(&recording, &cancel)
                 } else {

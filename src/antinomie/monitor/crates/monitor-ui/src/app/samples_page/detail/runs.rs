@@ -102,11 +102,9 @@ impl RunsTab {
                 // A deleted run's record keeps the tree it had.
                 let result = match antinomie_monitor_core::samples::saved_process_tree(&directory) {
                     Some(tree) => Ok(tree),
-                    None => Ok(antinomie_monitor_core::recording::Recording {
-                        directory,
-                        manifest: serde_json::Value::Null,
-                        events: Vec::new(),
-                    })
+                    None => Ok(antinomie_monitor_core::recording::Recording::raw(
+                        &directory,
+                    ))
                     .and_then(|recording| recording.process_tree_cancellable(pid, &path, &worker))
                     .map_err(|error| error.to_string()),
                 };

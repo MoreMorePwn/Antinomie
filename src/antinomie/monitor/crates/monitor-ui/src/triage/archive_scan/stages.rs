@@ -106,11 +106,8 @@ pub(super) fn open_scan(
     }
     let recordings: Vec<_> = segments
         .iter()
-        .map(|segment| antinomie_monitor_core::recording::Recording {
-            directory: segment.directory.clone(),
-            manifest: serde_json::Value::Null,
-            events: Vec::new(),
-        })
+        // With each segment's manifest: its guest architecture names the calls.
+        .map(|segment| antinomie_monitor_core::recording::Recording::raw(&segment.directory))
         .collect();
     let recording = recordings.last().ok_or("no recording segment")?;
     let facts = segment_facts(&segments, request)?;

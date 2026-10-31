@@ -21,6 +21,8 @@ fn main() {
     let filters = &args[1..];
     let scratch = std::env::temp_dir().join(format!("event-dump-{}", std::process::id()));
     let mut assembler = Assembler::new(scratch.clone(), u64::MAX).expect("assembler");
+    // The run's guest architecture names its calls.
+    assembler.set_arch(antinomie_monitor_core::recording::Recording::raw(&dir).guest_arch());
     let mut reader = BufReader::new(File::open(dir.join("telemetry.raw")).expect("raw"));
     let mut prefix = [0; 4];
     while reader.read_exact(&mut prefix).is_ok() {
