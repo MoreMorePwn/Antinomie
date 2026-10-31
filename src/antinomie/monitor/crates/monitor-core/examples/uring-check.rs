@@ -747,8 +747,24 @@ fn boots(
             let previous = d.snapshot.boot_id.clone();
             d.command(Command::Stop)?;
             d.wait("VM stop", 60, |s| s.state == VmState::Stopped)?;
-            let vm_id = d.vm_id.clone();
-            d.command(Command::Start { vm_id })?;
+            // The app starts no boot while the last one's recordings are
+            // being saved or its disk layer is being finished; it says to
+            // try again. Saving takes longer on a loaded host.
+            d.wait("previous boot saved", 600, |s| s.recording_flush.is_none())?;
+            let deadline = Instant::now() + Duration::from_secs(600);
+            loop {
+                let vm_id = d.vm_id.clone();
+                match d.command(Command::Start { vm_id }) {
+                    Err(why)
+                        if (why.contains("still being saved")
+                            || why.contains("still being finished"))
+                            && Instant::now() < deadline =>
+                    {
+                        thread::sleep(Duration::from_secs(5));
+                    }
+                    started => break started.map(|_| ())?,
+                }
+            }
             d.wait("new boot", 180, |s| {
                 s.state == VmState::Running && s.boot_id.is_some() && s.boot_id != previous
             })?;
