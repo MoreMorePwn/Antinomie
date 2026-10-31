@@ -769,9 +769,11 @@ class DebianImageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as name:
             deb = fake_deb(Path(name) / "linux.deb", {f"./boot/config-{release}": debian.encode()})
             config = Path(name) / "config"
-            # The recorder, the embedded configuration, the release suffix,
+            # The recorder (and HAVE_ANTINOMIE, which the series' architecture
+            # code selects), the embedded configuration, the release suffix,
             # the signing key and the toolchain's values may differ.
-            config.write_text("CONFIG_EXT4_FS=m\nCONFIG_ANTINOMIE=y\nCONFIG_ANTINOMIE_SOURCE_ID=\"1:a\"\n"
+            config.write_text("CONFIG_EXT4_FS=m\nCONFIG_HAVE_ANTINOMIE=y\nCONFIG_ANTINOMIE=y\n"
+                              "CONFIG_ANTINOMIE_SOURCE_ID=\"1:a\"\n"
                               "CONFIG_KERNEL_GZIP=y\nCONFIG_IKCONFIG=y\n# CONFIG_IKCONFIG_PROC is not set\n"
                               "CONFIG_CC_VERSION_TEXT=\"gcc-15\"\nCONFIG_LOCALVERSION=\"+deb13-amd64\"\n"
                               "CONFIG_MODULE_SIG_KEY=\"output/signing_key.pem\"\n")
