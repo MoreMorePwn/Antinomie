@@ -80,9 +80,15 @@ CONSOLE_DESKTOP = "none"
 # Guest architectures the kernel builds for, and the adapter key of Debian's
 # banner for each (adapter.conf).
 ARCHES = {"x86_64": "KERNEL_BANNER", "arm64": "KERNEL_BANNER_ARM64"}
-# Profiles whose image recipe builds an arm64 base yet (none before the arm64
-# BusyBox recipe; the kernel itself cross-builds already).
-ARM64_PROFILES = set()
+# Profiles whose image recipe builds an arm64 base yet (Debian arm64 follows).
+ARM64_PROFILES = {"busybox"}
+# The kernel image of each architecture in the build tree. Only x86-64 bases
+# carry a Volatility symbol table: memory analysis reads x86-64 guests only.
+KERNEL_IMAGES = {"x86_64": "arch/x86/boot/bzImage", "arm64": "arch/arm64/boot/Image"}
+
+
+def has_symbols(arch):
+    return arch == "x86_64"
 
 
 def stage(name):
@@ -462,15 +468,17 @@ def make_symbols(build, work):
             swap.unlink(missing_ok=True)
 
 
-def keep_artifacts(build, work):
+def keep_artifacts(build, work, arch="x86_64"):
     """Keep only what the image needs and free the kernel object tree."""
     kept = work / "kernel-artifacts"
     if kept.exists():
         shutil.rmtree(kept)
-    (kept / "arch/x86/boot").mkdir(parents=True)
-    shutil.copy2(build / "arch/x86/boot/bzImage", kept / "arch/x86/boot/bzImage")
+    image = KERNEL_IMAGES[arch]
+    (kept / image).parent.mkdir(parents=True)
+    shutil.copy2(build / image, kept / image)
     shutil.copy2(build / ".config", kept / ".config")
-    shutil.copy2(build / "symbols.json.xz", kept / "symbols.json.xz")
+    if has_symbols(arch):
+        shutil.copy2(build / "symbols.json.xz", kept / "symbols.json.xz")
     if (build / "debian-config").is_file():
         shutil.copy2(build / "debian-config", kept / "debian-config")
     if (build / "modules-install").is_dir():
@@ -520,7 +528,8 @@ def load_cached_kernel(cache, kernel_profile, work, arch="x86_64"):
             shutil.rmtree(kept)
         return None
     if not all((kept / name).is_file()
-               for name in ("arch/x86/boot/bzImage", ".config", "symbols.json.xz")):
+               for name in (KERNEL_IMAGES[arch], ".config")
+               + (("symbols.json.xz",) if has_symbols(arch) else ())):
         shutil.rmtree(kept)
         return None
     print(f"using the cached kernel for series {manifest['series'][:16]}", flush=True)
@@ -550,7 +559,7 @@ def save_cached_kernel(cache, kept, kernel_profile, arch="x86_64"):
         entry = tarfile.TarInfo("kernel-cache.json")
         entry.size = len(manifest)
         archive.addfile(entry, io.BytesIO(manifest))
-        for name in ("arch/x86/boot/bzImage", ".config", "symbols.json.xz", "debian-config",
+        for name in (KERNEL_IMAGES[arch], ".config", "symbols.json.xz", "debian-config",
                      "modules-install"):
             if (kept / name).exists():
                 archive.add(kept / name, arcname=name, filter=portable)
@@ -559,11 +568,15 @@ def save_cached_kernel(cache, kept, kernel_profile, arch="x86_64"):
 
 
 def build_image(profile, values, build, work, output, app_version=None, image_cache=None,
-                inputs=None):
+                inputs=None, arch="x86_64"):
     recipe = KIT / "scripts" / PROFILES[profile][1]
-    command = [sys.executable, recipe, "--kernel", build / "arch/x86/boot/bzImage",
-               "--kernel-config", build / ".config", "--symbols", build / "symbols.json.xz",
-               "--output", output, "--work", work]
+    command = [sys.executable, recipe, "--kernel", build / KERNEL_IMAGES[arch],
+               "--kernel-config", build / ".config", "--output", output, "--work", work]
+    if has_symbols(arch):
+        command += ["--symbols", build / "symbols.json.xz"]
+    if arch != "x86_64":
+        # Its programs are Debian's pinned packages of that architecture.
+        command += ["--arch", arch]
     if app_version:
         command += ["--app-version", app_version]
     if profile == "busybox":
@@ -642,10 +655,11 @@ def main():
             build = build_kernel(kernel_profile, tree, args.work, args.jobs, args.ccache,
                                  debian_image(args.inputs, args.work, values.get("proxy", ""))
                                  if kernel_profile == "stock" else None, arch)
-            stage("symbols")
-            make_symbols(build, args.work)
+            if has_symbols(arch):
+                stage("symbols")
+                make_symbols(build, args.work)
             if not args.keep_kernel_build:
-                build = keep_artifacts(build, args.work)
+                build = keep_artifacts(build, args.work, arch)
             if args.kernel_cache is not None:
                 save_cached_kernel(args.kernel_cache, build, kernel_profile, arch)
         else:
@@ -653,7 +667,7 @@ def main():
             require_space(args.work, image_space)
         stage("image")
         build_image(profile, values, build, args.work, args.output, app_version,
-                    args.image_cache, args.inputs)
+                    args.image_cache, args.inputs, arch)
         if not args.keep_kernel_build:
             shutil.rmtree(build)
         stage("done")

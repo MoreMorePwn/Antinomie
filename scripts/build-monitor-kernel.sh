@@ -254,8 +254,13 @@ if [[ $profile == minimal ]]; then
     if [[ ! -f "$build_tree/.config" ]]; then
         make -C "$source_tree" "${target[@]}" O="$build_tree" "$defconfig"
     fi
-    # The architecture's own devices (consoles, keyboard, RTC, display).
-    arch_symbols=$(sed -e 's/#.*//' "$repo/src/antinomie/packaging/kconfig/$arch/minimal.cfg")
+    # The architecture's own devices (consoles, keyboard, RTC, display), and
+    # the symbols it turns off (written !NAME).
+    arch_words=$(sed -e 's/#.*//' "$repo/src/antinomie/packaging/kconfig/$arch/minimal.cfg")
+    arch_symbols="" arch_off=""
+    for word in $arch_words; do
+        if [[ $word == !* ]]; then arch_off+=" ${word#!}"; else arch_symbols+=" $word"; fi
+    done
     # shellcheck disable=SC2086
     for symbol in ANTINOMIE SMP UNIX98_PTYS DEVTMPFS DEVTMPFS_MOUNT EXT4_FS \
         VIRTIO VIRTIO_PCI VIRTIO_BLK VIRTIO_NET NET INET TTY VT VT_CONSOLE \
@@ -271,7 +276,7 @@ if [[ $profile == minimal ]]; then
         $DEBIAN_PARITY $MINIMAL_EXTRA $DEBIAN_SHAPE; do
         "$config" --file "$build_tree/.config" --enable "$symbol"
     done
-    for symbol in IKCONFIG_PROC $DEBIAN_SHAPE_OFF; do
+    for symbol in IKCONFIG_PROC $DEBIAN_SHAPE_OFF $arch_off; do
         "$config" --file "$build_tree/.config" --disable "$symbol"
     done
     "$config" --file "$build_tree/.config" --set-str LSM "$DEBIAN_LSM"
@@ -290,7 +295,12 @@ if [[ $profile == minimal ]]; then
         --enable DEBUG_INFO_BTF_MODULES
     "$config" --file "$build_tree/.config" --set-str INITRAMFS_SOURCE ""
     "$config" --file "$build_tree/.config" --set-str ANTINOMIE_SOURCE_ID "$source_id"
-    make -C "$source_tree" "${target[@]}" O="$build_tree" "${compiler[@]}" olddefconfig
+    # arm64's defconfig makes a thousand modules for boards no VM has, and the
+    # BusyBox base loads none: they are left out there (mod2noconfig is
+    # olddefconfig with every module turned off).
+    resolve=olddefconfig
+    [[ $arch == x86_64 ]] || resolve=mod2noconfig
+    make -C "$source_tree" "${target[@]}" O="$build_tree" "${compiler[@]}" "$resolve"
     # shellcheck disable=SC2086
     require_symbols ANTINOMIE IKCONFIG DEBUG_INFO $DISK_BUSES $DEBIAN_PARITY $MINIMAL_EXTRA \
         $DEBIAN_SHAPE

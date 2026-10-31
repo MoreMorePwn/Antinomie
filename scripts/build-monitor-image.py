@@ -66,10 +66,33 @@ def gunzip_bounded(data, limit):
     return result, decoder.unused_data
 
 
+# The arm64 Image header's magic ("ARM\x64" at 0x38): the kernel is not
+# compressed, so its embedded configuration is in the file as built.
+ARM64_IMAGE_MAGIC = b"ARM\x64"
+ARM64_IMAGE_MAX = 128 << 20
+
+
+def image_config(data):
+    """IKCONFIG of an uncompressed arm64 Image."""
+    start = data.find(b"IKCFG_ST\x1f\x8b\x08")
+    if start < 0:
+        raise RuntimeError("fixed display requires embedded CONFIG_IKCONFIG=y")
+    try:
+        config, rest = gunzip_bounded(data[start + 8:start + 8 + (1 << 20)], 2 << 20)
+    except zlib.error as error:
+        raise RuntimeError("invalid embedded kernel configuration") from error
+    if not rest.startswith(b"IKCFG_ED"):
+        raise RuntimeError("invalid embedded kernel configuration trailer")
+    return config
+
+
 def embedded_config(kernel):
-    """Read IKCONFIG from the pinned gzip-compressed x86 bzImage format."""
+    """Read IKCONFIG from the pinned gzip-compressed x86 bzImage format, or
+    from an arm64 Image."""
     with kernel.open("rb") as source:
-        data = source.read((64 << 20) + 1)
+        data = source.read(ARM64_IMAGE_MAX + 1)
+    if 0x40 <= len(data) <= ARM64_IMAGE_MAX and data[0x38:0x3c] == ARM64_IMAGE_MAGIC:
+        return image_config(data)
     if len(data) > 64 << 20 or len(data) < 0x250 or data[0x202:0x206] != b"HdrS":
         raise RuntimeError("unsupported or oversized x86 bzImage")
     offset, length = struct.unpack_from("<II", data, 0x248)
@@ -228,10 +251,10 @@ def kernel_source_record(identity):
 
 
 # A base's programs (BusyBox, and resize2fs and chattr with the libraries they
-# load in the bootstrap initrd) come from Debian 13's amd64 packages, whatever
-# the build host runs: pinned here and fetched through the archive's signed
-# index (snapshot of the container builder's day). The archive, suite and
-# architecture, then (package, version, SHA-256).
+# load in the bootstrap initrd) come from Debian 13's packages of the guest's
+# architecture, whatever the build host runs: pinned here and fetched through
+# the archive's signed index (snapshot of the container builder's day). The
+# archive, suite and architecture, then (package, version, SHA-256).
 USERLAND_SOURCE = ("https://snapshot.debian.org/archive/debian/20261020T213255Z",
                    "trixie", "amd64")
 USERLAND = (
@@ -246,20 +269,42 @@ USERLAND = (
     ("libc6", "2.41-12+deb13u4",
      "967aa62605721081c3eb2a17650611a792aa802d76a6511d1840242623d204c9"),
 )
-# Where the dynamic loader looks for the libraries (Debian's multiarch path).
-LIBRARY_DIRS = ("usr/lib/x86_64-linux-gnu", "lib/x86_64-linux-gnu")
+ARM64_USERLAND_SOURCE = ("https://snapshot.debian.org/archive/debian/20261020T213255Z",
+                         "trixie", "arm64")
+ARM64_USERLAND = (
+    ("busybox-static", "1:1.37.0-6+b9",
+     "c833be48abfa16bc19c4966ec93e289ff1ce5d2f1476cad3a57bd105378cd15c"),
+    ("e2fsprogs", "1.47.2-3+b12",
+     "ebd315c483853fafe877e39c1f49bf725834d7af7249a98b727f2ef4fe01a5c4"),
+    ("libext2fs2t64", "1.47.2-3+b12",
+     "303433a742ff98337ad93e58b7e92cef224a062f4cffcaf5f0e0cb657b732081"),
+    ("libcom-err2", "1.47.2-3+b12",
+     "1acba7e14a17a3f4b8008454e1a75840a5cdff4259d3c1d369092d82089ea0d8"),
+    ("libc6", "2.41-12+deb13u4",
+     "8784eda966b189c777a384dac5ce009e8fc9b52d006926c5a013e7fa8aa688cc"),
+)
+# Per guest architecture: its pinned packages, and where the dynamic loader
+# looks for the libraries (Debian's multiarch path).
+USERLANDS = {"x86_64": (USERLAND_SOURCE, USERLAND),
+             "arm64": (ARM64_USERLAND_SOURCE, ARM64_USERLAND)}
+LIBRARY_DIRS = {"x86_64": ("usr/lib/x86_64-linux-gnu", "lib/x86_64-linux-gnu"),
+                "arm64": ("usr/lib/aarch64-linux-gnu", "lib/aarch64-linux-gnu")}
+# Per guest architecture: the serial console the kernel and getty use.
+CONSOLES = {"x86_64": "ttyS0", "arm64": "ttyAMA0"}
 
 
 class Userland:
     """The pinned packages unpacked in tree: their guest_sources records
     (PACKAGE_FIELDS), which package each unpacked file came from, and which
-    package each file copied into an image came from (installed)."""
+    package each file copied into an image came from (installed), for the
+    guest architecture arch."""
 
-    def __init__(self, tree, packages, owners):
+    def __init__(self, tree, packages, owners, arch="x86_64"):
         self.tree = Path(tree)
         self.packages = list(packages)
         self.owners = dict(owners)
         self.installed = {}
+        self.library_dirs = LIBRARY_DIRS[arch]
 
     def busybox(self):
         return self.tree / "usr/bin/busybox"
@@ -327,17 +372,19 @@ def unpack_deb(deb, tree):
     return record, paths
 
 
-def debian_userland(cache, work, proxy=""):
-    """The pinned packages (verified in cache, else downloaded there through
-    the signed index) unpacked under work, as a Userland."""
+def debian_userland(cache, work, proxy="", arch="x86_64"):
+    """The pinned packages of the guest architecture arch (verified in cache,
+    else downloaded there through the signed index) unpacked under work, as a
+    Userland."""
     import importlib.util
     spec = importlib.util.spec_from_file_location("debian_image",
                                                   REPO / "scripts/build-debian-image.py")
     recipe = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(recipe)
-    debs = recipe.pinned_debs(USERLAND_SOURCE, USERLAND, cache, work, proxy,
+    source, packages = USERLANDS[arch]
+    debs = recipe.pinned_debs(source, packages, cache, work, proxy,
                               "Debian userland packages")
-    tree = Path(work) / "userland-amd64"
+    tree = Path(work) / f"userland-{source[2]}"
     if tree.exists():
         shutil.rmtree(tree)
     tree.mkdir(parents=True)
@@ -346,7 +393,7 @@ def debian_userland(cache, work, proxy=""):
         record, paths = unpack_deb(deb, tree)
         records.append(record)
         owners.update({path: record["package"] for path in paths})
-    return Userland(tree, records, owners)
+    return Userland(tree, records, owners, arch)
 
 
 def elf_needs(path):
@@ -436,11 +483,11 @@ def install_binary(source, root, destination, userland):
             if name in done:
                 continue
             done.add(name)
-            found = next((library for directory in LIBRARY_DIRS
+            found = next((library for directory in userland.library_dirs
                           if (library := tree_file(userland.tree, f"{directory}/{name}"))), None)
             if found is None:
                 raise RuntimeError(f"{name} (for {source.name}) is not in the pinned packages")
-            copy(found, f"{LIBRARY_DIRS[0]}/{name}")
+            copy(found, f"{userland.library_dirs[0]}/{name}")
             pending.append(found)
 
 
@@ -461,7 +508,7 @@ def valid_hostname(name):
     return name
 
 
-def base_tree(root, hostname="debian", userland=None):
+def base_tree(root, hostname="debian", userland=None, console="ttyS0"):
     require_userland(userland)
     for directory in ("bin", "sbin", "usr/bin", "usr/sbin", "etc", "dev", "proc", "sys", "run", "tmp", "root", "home/user", "var/log"):
         (root / directory).mkdir(parents=True, exist_ok=True)
@@ -500,7 +547,7 @@ bound|renew)
     ;;
 esac
 """, 0o755)
-    write_file(root, "/etc/inittab", "::sysinit:/etc/init.d/rcS\ntty1::respawn:/bin/getty -n -l /bin/sh 0 tty1\nttyS0::respawn:/bin/getty -n -l /bin/sh 115200 ttyS0\n::ctrlaltdel:/bin/reboot\n::shutdown:/bin/sync\n::shutdown:/bin/umount -a -r\n")
+    write_file(root, "/etc/inittab", f"::sysinit:/etc/init.d/rcS\ntty1::respawn:/bin/getty -n -l /bin/sh 0 tty1\n{console}::respawn:/bin/getty -n -l /bin/sh 115200 {console}\n::ctrlaltdel:/bin/reboot\n::shutdown:/bin/sync\n::shutdown:/bin/umount -a -r\n")
     write_file(root, "/etc/init.d/rcS", """#!/bin/sh
 export PATH=/bin:/sbin:/usr/bin:/usr/sbin
 mount -t proc proc /proc
@@ -691,6 +738,9 @@ def main():
     parser.add_argument("--name", default="", help="display name of the base")
     parser.add_argument("--work", type=Path, default=REPO / "work",
                         help="directory for temporary build files")
+    parser.add_argument("--arch", choices=sorted(CONSOLES), default="x86_64",
+                        help="guest architecture: its programs come from Debian's pinned "
+                             "packages of that architecture")
     parser.add_argument("--package-cache", type=Path,
                         help="where the pinned Debian packages of the base's programs are kept "
                              "(default: --work)")
@@ -711,14 +761,14 @@ def main():
     args.output.mkdir(parents=True, exist_ok=True)
     args.work.mkdir(parents=True, exist_ok=True)
     try:
-        userland = debian_userland(args.package_cache, args.work, args.proxy)
+        userland = debian_userland(args.package_cache, args.work, args.proxy, args.arch)
     except (RuntimeError, OSError) as error:
         parser.error(str(error))
     with tempfile.TemporaryDirectory(prefix="monitor-image-", dir=args.work) as temporary:
         staging = Path(temporary)
         root = staging / "root"
         root.mkdir()
-        base_tree(root, args.hostname, userland)
+        base_tree(root, args.hostname, userland, CONSOLES[args.arch])
         raw = staging / "base.raw"
         with raw.open("wb") as image:
             image.truncate(args.base_size_mib << 20)
@@ -746,7 +796,7 @@ def main():
     shutil.copy2(args.kernel, args.output / "kernel")
     manifest = {"format": 1, "kernel_version": "6.12.94", "schema_id": 1,
                 "kernel": "kernel", "initrd": "initrd.gz", "base_disk": "base.qcow2",
-                "kernel_append": "console=tty0 console=ttyS0 panic=-1",
+                "kernel_append": f"console=tty0 console={CONSOLES[args.arch]} panic=-1",
                 "sha256": {name: checksum(args.output / name)
                            for name in ("kernel", "initrd.gz", "base.qcow2")}}
     if args.symbols:
@@ -758,6 +808,8 @@ def main():
     # Debian packages; their source packages are what a base's sources need.
     manifest.setdefault("guest_sources", {})["packages"] = sorted(
         userland.packages, key=lambda item: item["package"])
+    if args.arch != "x86_64":
+        manifest["arch"] = args.arch
     if name:
         manifest["name"] = name
     manifest["stealth_support"] = stealth_support(args.kernel_config, args.output / "kernel")

@@ -79,8 +79,12 @@ class BuildBaseTests(unittest.TestCase):
         self.assertEqual((identity["arch"], identity["toolchain"]), ("arm64", found))
         with tempfile.TemporaryDirectory() as name:
             job = Path(name) / "job.json"
-            for arch, error in (("arm64", "no arm64 image recipe"), ("riscv64", "unknown arch")):
-                job.write_text(json.dumps({"format": 1, "profile": "busybox", "arch": arch}))
+            # BusyBox has an arm64 recipe; the Debian profiles not yet.
+            job.write_text(json.dumps({"format": 1, "profile": "busybox", "arch": "arm64"}))
+            self.assertEqual(base.load_job(job)[3], "arm64")
+            for profile, arch, error in (("debian-minimal", "arm64", "no arm64 image recipe"),
+                                         ("busybox", "riscv64", "unknown arch")):
+                job.write_text(json.dumps({"format": 1, "profile": profile, "arch": arch}))
                 with self.assertRaisesRegex(RuntimeError, error):
                     base.load_job(job)
             job.write_text(json.dumps({"format": 1, "profile": "busybox"}))
