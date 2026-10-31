@@ -163,7 +163,7 @@ gives Antinomie `guestfish`, which writes each Debian VM's account, disk layout
 and network card into its disk without root; BusyBox VMs do not need it:
 
 ```sh
-sudo apt install qemu-system-x86 qemu-utils qemu-system-gui curl bubblewrap tshark util-linux libguestfs-tools
+sudo apt install qemu-system-x86 qemu-utils qemu-system-gui curl libsqlite3-0 bubblewrap tshark util-linux libguestfs-tools
 ```
 
 Download `antinomie-0.7.1-linux-x86_64.tar.gz` and `SHA256SUMS` from
