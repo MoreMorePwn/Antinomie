@@ -36,15 +36,7 @@ fn size_text(bytes: u64) -> String {
 }
 
 fn thousands(value: u64) -> String {
-    let text = value.to_string();
-    let mut out = String::new();
-    for (at, c) in text.chars().enumerate() {
-        if at > 0 && (text.len() - at).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(c);
-    }
-    out
+    crate::values::thousands(value)
 }
 
 impl Model {

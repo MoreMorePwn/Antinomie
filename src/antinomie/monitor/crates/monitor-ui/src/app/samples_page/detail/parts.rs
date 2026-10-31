@@ -261,13 +261,7 @@ pub(super) fn minute(ms: Option<u64>) -> String {
 
 /// Seconds-precision local time for event rows.
 pub(super) fn second(ms: u64) -> String {
-    chrono::DateTime::<chrono::Utc>::from_timestamp_millis(ms as i64)
-        .map(|time| {
-            time.with_timezone(&chrono::Local)
-                .format("%Y-%m-%d %H:%M:%S")
-                .to_string()
-        })
-        .unwrap_or_else(|| "Unavailable".into())
+    crate::time_format::local_seconds(ms / 1000)
 }
 
 /// Run `add` (one `mini_table`) on the deepest surface: the fill covers

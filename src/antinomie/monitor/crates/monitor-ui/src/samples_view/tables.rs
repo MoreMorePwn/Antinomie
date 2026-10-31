@@ -174,8 +174,8 @@ impl SamplesView {
             theme::muted(),
             format!(
                 "{} / {} retained catalog rows",
-                order.len(),
-                self.results.len()
+                crate::values::thousands(order.len() as u64),
+                crate::values::thousands(self.results.len() as u64)
             ),
         );
         if order.is_empty() {

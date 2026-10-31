@@ -965,7 +965,7 @@ fn long_disassembly_lines_scroll_horizontally_without_wrapping_at_large_font() {
     let row_height = ctx.fonts(|fonts| fonts.row_height(&font_id));
     let instruction_rows: Vec<_> = content
         .iter()
-        .filter(|(text, _)| text.starts_with("000000000040000"))
+        .filter(|(text, _)| text.starts_with("0x000000000040000"))
         .collect();
     assert!(
         instruction_rows.len() >= 2,
@@ -1778,7 +1778,7 @@ fn a_finished_core_has_a_delete_item_that_asks_to_delete_its_directory() {
             directory: directory.clone()
         }
     );
-    assert_eq!(deletion.size, "2048 bytes (2.0 KB)");
+    assert_eq!(deletion.size, "2048 bytes (2.0 KiB)");
     assert!(directory.exists(), "asking deletes nothing");
 }
 

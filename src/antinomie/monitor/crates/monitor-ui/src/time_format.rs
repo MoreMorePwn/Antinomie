@@ -8,11 +8,24 @@ pub(crate) fn unix_us(value: u64) -> String {
         .ok()
         .and_then(DateTime::<Utc>::from_timestamp_micros)
         .map(|time| {
-            time.with_timezone(&Local)
-                .format("%Y-%m-%d %H:%M:%S%.3f (UTC%:z)")
-                .to_string()
+            let time = time.with_timezone(&Local);
+            format!(
+                "{} (UTC{})",
+                time.format("%Y-%m-%d %H:%M:%S%.3f"),
+                compact_zone(time.offset().local_minus_utc())
+            )
         })
         .unwrap_or_else(|| "Unavailable".into())
+}
+
+/// A zone offset in seconds as `+7`, `+5:30`, `-3`, `+0`.
+fn compact_zone(offset: i32) -> String {
+    let (sign, minutes) = (if offset < 0 { '-' } else { '+' }, offset.abs() / 60);
+    if minutes % 60 == 0 {
+        format!("{sign}{}", minutes / 60)
+    } else {
+        format!("{sign}{}:{:02}", minutes / 60, minutes % 60)
+    }
 }
 
 /// Whole seconds in the host zone, the offset compact: `2026-10-19 14:05:12
@@ -28,13 +41,7 @@ fn local_seconds_at(seconds: u64, zone: impl Fn(DateTime<Utc>) -> DateTime<Fixed
         .and_then(|seconds| DateTime::<Utc>::from_timestamp(seconds, 0))
         .map(|time| {
             let time = zone(time);
-            let offset = time.offset().local_minus_utc();
-            let (sign, minutes) = (if offset < 0 { '-' } else { '+' }, offset.abs() / 60);
-            let zone = if minutes % 60 == 0 {
-                format!("{sign}{}", minutes / 60)
-            } else {
-                format!("{sign}{}:{:02}", minutes / 60, minutes % 60)
-            };
+            let zone = compact_zone(time.offset().local_minus_utc());
             format!("{} (UTC{zone})", time.format("%Y-%m-%d %H:%M:%S"))
         })
         .unwrap_or_else(|| "Unavailable".into())
@@ -53,8 +60,12 @@ pub(crate) fn short_time_us(value: u64) -> String {
         .and_then(DateTime::<Utc>::from_timestamp_micros)
         .map(|time| {
             time.with_timezone(&Local)
-                .format("%H:%M:%S%.3f (UTC%:z)")
+                .format("%H:%M:%S%.3f")
                 .to_string()
+                + &format!(
+                    " (UTC{})",
+                    compact_zone(time.with_timezone(&Local).offset().local_minus_utc())
+                )
         })
         .unwrap_or_else(|| "Unavailable".into())
 }

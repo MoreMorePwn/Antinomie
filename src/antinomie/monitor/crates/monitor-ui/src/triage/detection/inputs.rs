@@ -237,7 +237,7 @@ fn hover(input: &ScannedInput, target: Option<&Route>) -> String {
     let mut text = input.path.display().to_string();
     if let Some(target) = target {
         text.push_str(match target {
-            Route::Open(OpenInput::StaticAnalysis) => "\nClick to open in Static Analysis",
+            Route::Open(OpenInput::StaticAnalysis) => "\nClick to open in Static analysis",
             Route::Open(OpenInput::Capture(_)) => "\nClick to open in Network",
             Route::Open(OpenInput::Core(_)) => "\nClick to open in Core dumps",
             Route::Open(OpenInput::Memory(_)) => "\nClick to open in Memory",
@@ -560,7 +560,7 @@ mod tests {
             "1 complete · 1 skipped · 1 failed",
             "Executable",
             "sample",
-            "2048 bytes (2.0 KB)",
+            "2048 bytes (2.0 KiB)",
             "abababababab",
             "Succeeded",
             "memory.elf",

@@ -284,7 +284,7 @@ pub(crate) fn show(
                     state_color(snapshot, active),
                 );
                 ui.colored_label(theme::muted(), format!("{} vCPU", vm.cpus));
-                ui.colored_label(theme::muted(), network_label(vm));
+                ui.colored_label(theme::muted(), format!("Network: {}", network_label(vm)));
             });
             if let Some(base) = crate::app::selected_base(snapshot, vm.base_identity.as_deref()) {
                 ui.add(
@@ -329,7 +329,7 @@ pub(crate) fn show(
                         if active {
                             "Waiting for the first resource sample"
                         } else {
-                            "No retained observation"
+                            "No resource data yet"
                         },
                     );
                 }
@@ -353,7 +353,7 @@ pub(crate) fn show(
                 ui.colored_label(
                     if stale { theme::muted() } else { theme::good() },
                     if stale {
-                        "Stale / unavailable"
+                        "No guest data yet"
                     } else {
                         "Live · 2 s sampling"
                     },
@@ -1113,7 +1113,7 @@ fn network_label(vm: &VmConfig) -> &'static str {
         antinomie_monitor_core::VmNetwork::Isolated => "Isolated",
         antinomie_monitor_core::VmNetwork::Routed => "Routed (route chosen per run)",
         antinomie_monitor_core::VmNetwork::Nat => "NAT / external access",
-        antinomie_monitor_core::VmNetwork::Disconnected => "Disabled",
+        antinomie_monitor_core::VmNetwork::Disconnected => "Disconnected",
     }
 }
 fn age(time: Instant) -> String {
@@ -1125,29 +1125,10 @@ fn age(time: Instant) -> String {
     }
 }
 fn format_utc(time: SystemTime) -> String {
-    let Ok(d) = time.duration_since(UNIX_EPOCH) else {
-        return "Unavailable".into();
-    };
-    let seconds = d.as_secs();
-    let (y, m, day) = civil_from_days((seconds / 86400) as i64);
-    format!(
-        "{y:04}-{m:02}-{day:02} {:02}:{:02}:{:02} UTC",
-        seconds / 3600 % 24,
-        seconds / 60 % 60,
-        seconds % 60
-    )
-}
-fn civil_from_days(z: i64) -> (i32, u32, u32) {
-    let z = z + 719468;
-    let era = if z >= 0 { z } else { z - 146096 } / 146097;
-    let doe = (z - era * 146097) as u64;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    ((y + i64::from(m <= 2)) as i32, m as u32, d as u32)
+    match time.duration_since(UNIX_EPOCH) {
+        Ok(d) => crate::time_format::local_seconds(d.as_secs()),
+        Err(_) => "Unavailable".into(),
+    }
 }
 fn split_size(value: Option<u64>) -> (Option<String>, &'static str) {
     let Some(value) = value else {
@@ -1460,7 +1441,7 @@ mod tests {
             .iter()
             .map(|(text, _)| text.as_str())
             .collect();
-        assert!(text.contains("Stale / unavailable"));
+        assert!(text.contains("No guest data yet"));
         snapshot.boot_id = Some("other-timeline".into());
         let text: String = render(&snapshot, Some("active"), 700.0, 16.0)
             .iter()

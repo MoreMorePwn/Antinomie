@@ -196,11 +196,11 @@ mod tests {
             |label: &str, value: &str, column| shown_text(column, &row(label, value), value);
         assert_eq!(
             shown("File size", "4096", Column::Value),
-            "4096 bytes (4.0 KB)"
+            "4096 bytes (4.0 KiB)"
         );
         assert_eq!(
             shown("Length (octets)", "16080", Column::Value),
-            "16080 bytes (15.7 KB)"
+            "16080 bytes (15.7 KiB)"
         );
         assert_eq!(
             shown_text(
@@ -212,8 +212,8 @@ mod tests {
         );
         // Already formatted text and other values stay as they are.
         assert_eq!(
-            shown("File size", "4096 bytes (4.0 KB)", Column::Value),
-            "4096 bytes (4.0 KB)"
+            shown("File size", "4096 bytes (4.0 KiB)", Column::Value),
+            "4096 bytes (4.0 KiB)"
         );
         assert_eq!(shown("Class", "64-bit", Column::Value), "64-bit");
         assert_eq!(shown("Section count", "12", Column::Value), "12");

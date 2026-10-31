@@ -217,7 +217,8 @@ impl MemoryView {
                     }
                     ui.label(format!(
                         "Page {page_number}/{page_count} · {} matching / {} retained rows",
-                        result.total, result.source_rows
+                        crate::values::thousands(result.total as u64),
+                        crate::values::thousands(result.source_rows as u64)
                     ));
                     let mut page = page_number;
                     ui.label("Go to page");

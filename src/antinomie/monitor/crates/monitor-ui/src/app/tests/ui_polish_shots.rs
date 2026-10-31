@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Native fixture for the Run History and Static Analysis polish screenshots.
+//! Native fixture for the Run History and Static analysis polish screenshots.
 //! Needs an X11 display; exits by itself.
 //!
 //! ANTINOMIE_QA_SCENE = history | static | details | terminal | empty (an app with no runs,

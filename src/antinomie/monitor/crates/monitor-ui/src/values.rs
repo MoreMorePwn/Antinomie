@@ -540,9 +540,22 @@ pub(crate) fn sockaddr(data: &[u8]) -> Option<String> {
 }
 
 /// A file's size as the exact byte count and, from 1024 bytes up, a rounded
-/// figure in 1024-based units: `16080 bytes (15.7 KB)`.
+/// figure in 1024-based units: `16080 bytes (15.7 KiB)`.
 pub(crate) fn file_size(bytes: u64) -> String {
     antinomie_monitor_core::byte_size::file_size(bytes)
+}
+
+/// A size for a table cell, a button or a one-line summary: the rounded
+/// figure only (`1.9 MiB`). Properties and records use [`file_size`], with the
+/// exact byte count; a short size carries it in its hover text.
+pub(crate) fn short_size(bytes: u64) -> String {
+    antinomie_monitor_core::byte_size::short_size(bytes)
+}
+
+/// A count with thousands separators: `1,024`. Every count shown in a label
+/// or a status line uses this.
+pub(crate) fn thousands(value: u64) -> String {
+    antinomie_monitor_core::analysis::detection::group_digits(value)
 }
 
 #[cfg(test)]
@@ -550,8 +563,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn counts_use_thousands_separators() {
+        assert_eq!(thousands(0), "0");
+        assert_eq!(thousands(999), "999");
+        assert_eq!(thousands(1024), "1,024");
+        assert_eq!(thousands(1_234_567), "1,234,567");
+    }
+
+    #[test]
     fn file_sizes_use_the_shared_bytes_format() {
-        assert_eq!(file_size(4096), "4096 bytes (4.0 KB)");
+        assert_eq!(file_size(4096), "4096 bytes (4.0 KiB)");
         assert_eq!(file_size(1), "1 byte");
     }
 

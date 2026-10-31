@@ -1101,11 +1101,11 @@ mod tests {
             }
         }
         assert!(
-            texts.iter().any(|text| text == "129736 bytes (126.7 KB)"),
+            texts.iter().any(|text| text == "129736 bytes (126.7 KiB)"),
             "{texts:?}"
         );
         for (label, value) in [
-            ("File size", "129736 bytes (126.7 KB)"),
+            ("File size", "129736 bytes (126.7 KiB)"),
             ("MD5", &"abcdef0123456789".repeat(2)),
             (
                 "ssdeep",

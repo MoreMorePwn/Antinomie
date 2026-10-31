@@ -38,7 +38,7 @@ mod tests {
     #[test]
     fn the_message_names_the_limit_and_the_kept_data() {
         let text = message(4 * 1024 * 1024 * 1024);
-        assert!(text.contains("4294967296 bytes (4.0 GB)"));
+        assert!(text.contains("4294967296 bytes (4.0 GiB)"));
         assert!(text.contains("everything saved before is intact"));
         assert!(is_quota_error(&text));
     }

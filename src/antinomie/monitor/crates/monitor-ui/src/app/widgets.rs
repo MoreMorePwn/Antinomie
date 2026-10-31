@@ -455,11 +455,11 @@ pub(super) fn icon(ui: &mut egui::Ui, icon: &str, tooltip: &str, enabled: bool) 
 mod size_tests {
     #[test]
     fn download_and_catalog_sizes_use_the_shared_bytes_format() {
-        assert_eq!(super::human_bytes(3_620), "3620 bytes (3.5 KB)");
+        assert_eq!(super::human_bytes(3_620), "3620 bytes (3.5 KiB)");
         assert_eq!(super::human_bytes(7), "7 bytes");
         assert_eq!(
             crate::network_view::format_bytes(5 * 1024 * 1024),
-            "5242880 bytes (5.0 MB)"
+            "5242880 bytes (5.0 MiB)"
         );
     }
 }

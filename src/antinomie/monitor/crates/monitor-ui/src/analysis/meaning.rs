@@ -649,7 +649,7 @@ mod tests {
         );
         assert_eq!(
             shown_text(AnalysisKind::Metadata, Column::Value, &size, "4096"),
-            "4096 bytes (4.0 KB)"
+            "4096 bytes (4.0 KiB)"
         );
         // Other lists show their text unchanged.
         assert_eq!(

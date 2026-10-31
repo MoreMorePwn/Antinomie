@@ -174,17 +174,24 @@ impl CustodyAll {
             return outcome;
         }
         let height = ui.available_height().max(80.0);
+        let mono = egui::TextStyle::Monospace.resolve(ui.style());
+        let time = super::detail::fitted_up_to(
+            ui,
+            &mono,
+            shown.iter().map(|row| super::detail::second(row.row.at_ms)),
+            400.0,
+        );
         table::begin(ui);
         TableBuilder::new(ui)
             .id_salt("custody_all")
             .striped(true)
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-            .column(Column::exact(150.0))
+            .column(Column::exact(time))
             .column(Column::exact(180.0))
             .column(Column::exact(130.0))
             .column(Column::exact(80.0))
             .column(Column::remainder().at_least(160.0).clip(true))
-            .column(Column::exact(86.0))
+            .column(Column::exact(120.0))
             .max_scroll_height(height)
             .min_scrolled_height(0.0)
             .header(table::header_height(font), |mut header| {

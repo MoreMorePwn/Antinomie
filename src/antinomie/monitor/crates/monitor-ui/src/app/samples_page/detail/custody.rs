@@ -48,7 +48,7 @@ pub(super) fn show(
         .column(Column::exact(130.0))
         .column(Column::exact(80.0))
         .column(Column::remainder().at_least(160.0).clip(true))
-        .column(Column::exact(86.0))
+        .column(Column::exact(120.0))
         .max_scroll_height(height)
         .min_scrolled_height(0.0);
     if let Some(at) = scroll_to.and_then(|seq| data.events.iter().position(|e| e.seq == seq)) {

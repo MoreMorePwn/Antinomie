@@ -548,6 +548,6 @@ pub fn source_update<'a>(catalog: &'a Catalog, pack: &InstalledPack) -> Option<&
 mod size_text_tests {
     #[test]
     fn source_download_sizes_use_the_shared_bytes_format() {
-        assert_eq!(super::human_bytes(1500), "1500 bytes (1.5 KB)");
+        assert_eq!(super::human_bytes(1500), "1500 bytes (1.5 KiB)");
     }
 }

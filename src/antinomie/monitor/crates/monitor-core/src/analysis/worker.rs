@@ -1345,7 +1345,7 @@ mod tests {
     }
     #[test]
     fn metadata_shows_the_file_size_as_bytes_with_a_unit() {
-        for (len, text) in [(5, "5 bytes"), (4096, "4096 bytes (4.0 KB)")] {
+        for (len, text) in [(5, "5 bytes"), (4096, "4096 bytes (4.0 KiB)")] {
             let mut result = section(AnalysisKind::Metadata);
             analyze_section(&mut result, &vec![0u8; len], &listings());
             let size = result

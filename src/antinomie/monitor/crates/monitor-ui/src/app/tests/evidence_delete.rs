@@ -64,7 +64,7 @@ fn the_confirmation_names_the_item_and_its_size_and_says_it_cannot_be_undone() {
     let shown: String = texts(&output).into_iter().map(|(text, _)| text).collect();
     assert!(shown.contains("Delete network capture"));
     assert!(shown.contains("Whole boot of today"));
-    assert!(shown.contains("2048 bytes (2.0 KB)"));
+    assert!(shown.contains("2048 bytes (2.0 KiB)"));
     assert!(shown.contains("can't be undone"));
     assert!(
         app.submitted.is_empty(),

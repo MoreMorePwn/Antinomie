@@ -30,11 +30,7 @@ pub(super) fn short_revision(kind: &str, revision: &str) -> String {
 }
 
 fn fetched_at(seconds: u64) -> String {
-    i64::try_from(seconds)
-        .ok()
-        .and_then(|seconds| chrono::DateTime::<chrono::Utc>::from_timestamp(seconds, 0))
-        .map(|time| time.format("%Y-%m-%d %H:%M UTC").to_string())
-        .unwrap_or_else(|| "unknown time".into())
+    crate::time_format::local_seconds(seconds)
 }
 
 fn size_text(bytes: u64) -> String {
@@ -389,7 +385,7 @@ impl Model {
 mod size_tests {
     #[test]
     fn rule_pack_sizes_use_the_shared_bytes_format() {
-        assert_eq!(super::size_text(2048), "2048 bytes (2.0 KB)");
-        assert_eq!(super::size_text(3 * 1024 * 1024), "3145728 bytes (3.0 MB)");
+        assert_eq!(super::size_text(2048), "2048 bytes (2.0 KiB)");
+        assert_eq!(super::size_text(3 * 1024 * 1024), "3145728 bytes (3.0 MiB)");
     }
 }

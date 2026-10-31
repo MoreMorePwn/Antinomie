@@ -562,8 +562,8 @@ impl SnapshotManager {
                         "Consistency",
                         consistency_label(node.consistency).to_owned(),
                     ),
-                    ("Disk layer", crate::values::file_size(node.disk_size)),
-                    ("Memory state", crate::values::file_size(node.memory_size)),
+                    ("Disk layer", crate::values::short_size(node.disk_size)),
+                    ("Memory state", crate::values::short_size(node.memory_size)),
                     (
                         "Configuration",
                         format!("{} CPUs, {} MiB RAM", node.config.cpus, node.config.ram_mib),
@@ -950,55 +950,9 @@ fn consistency_label(consistency: VmSnapshotConsistency) -> &'static str {
     }
 }
 
-/// Format UTC without a new dependency; 400-year cycles bound the year loop.
+/// A snapshot's creation time in the host zone, as every other time is shown.
 fn created_time(unix_ms: u64) -> String {
-    let seconds = unix_ms / 1000;
-    let mut days = seconds / 86_400;
-    let mut year = 1970;
-    if days >= 10_957 {
-        days -= 10_957;
-        year = 2000 + (days / 146_097) * 400;
-        days %= 146_097;
-    }
-    let leap = |year: u64| {
-        year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400))
-    };
-    loop {
-        let year_days = if leap(year) { 366 } else { 365 };
-        if days < year_days {
-            break;
-        }
-        days -= year_days;
-        year += 1;
-    }
-    let months = [
-        31,
-        if leap(year) { 29 } else { 28 },
-        31,
-        30,
-        31,
-        30,
-        31,
-        31,
-        30,
-        31,
-        30,
-        31,
-    ];
-    let mut month = 1;
-    for month_days in months {
-        if days < month_days {
-            break;
-        }
-        days -= month_days;
-        month += 1;
-    }
-    format!(
-        "{year:04}-{month:02}-{:02} {:02}:{:02} UTC",
-        days + 1,
-        (seconds / 3600) % 24,
-        (seconds / 60) % 60
-    )
+    crate::time_format::local_seconds(unix_ms / 1000)
 }
 
 #[cfg(test)]

@@ -304,7 +304,7 @@ fn hex_dump_pads_short_rows_and_marks_the_chosen_bytes() {
     assert_eq!(format_date(951_782_400), "2000-02-29 00:00:00 UTC");
     assert_eq!(format_duration(6_404), "6 s");
     assert_eq!(format_duration(125_000), "2 min 5 s");
-    assert_eq!(format_bytes(3_620), "3620 bytes (3.5 KB)");
+    assert_eq!(format_bytes(3_620), "3620 bytes (3.5 KiB)");
 }
 
 #[test]
@@ -741,7 +741,7 @@ fn clicking_a_capture_shows_its_record_in_details_and_hover_shows_no_tooltip() {
         "boot-9",
         "1234",
         "/fixture/net/cap-1.pcap",
-        "16080 bytes (15.7 KB)",
+        "16080 bytes (15.7 KiB)",
         "Completed",
     ] {
         assert!(
@@ -869,7 +869,7 @@ fn a_saved_capture_has_a_delete_item_that_asks_to_delete_it() {
         deletion.item,
         antinomie_monitor_core::EvidenceItem::NetworkCapture { file: file.clone() }
     );
-    assert_eq!(deletion.size, "4096 bytes (4.0 KB)");
+    assert_eq!(deletion.size, "4096 bytes (4.0 KiB)");
     // Asking does not delete: the app confirms first.
     assert!(file.exists());
     std::fs::remove_dir_all(dir).unwrap();
