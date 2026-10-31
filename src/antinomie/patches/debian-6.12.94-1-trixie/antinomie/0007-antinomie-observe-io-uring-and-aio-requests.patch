@@ -107,7 +107,7 @@ index e892017..db8658a 100644
  	req->ki_ctx = ctx;
  	INIT_LIST_HEAD(&req->ki_list);
  	refcount_set(&req->ki_refcnt, 2);
-@@ -1102,6 +1111,9 @@ out:
+@@ -1102,6 +1111,9 @@ static struct kioctx *lookup_ioctx(unsigned long ctx_id)
  
  static inline void iocb_destroy(struct aio_kiocb *iocb)
  {
@@ -822,7 +822,7 @@ index 8eb0ebd..92b1710 100644
  	ret = __sys_sendmsg_sock(sock, &kmsg->msg, flags);
  
  	if (ret < min_ret) {
-@@ -671,6 +690,12 @@ retry_bundle:
+@@ -671,6 +690,12 @@ int io_send(struct io_kiocb *req, unsigned int issue_flags)
  
  	flags &= ~MSG_INTERNAL_SENDMSG_FLAGS;
  	kmsg->msg.msg_flags = flags;
@@ -904,7 +904,7 @@ index 8eb0ebd..92b1710 100644
  	struct socket *sock;
  	unsigned flags;
  	int ret, min_ret = 0;
-@@ -1056,6 +1106,7 @@ retry_multishot:
+@@ -1056,6 +1106,7 @@ int io_recvmsg(struct io_kiocb *req, unsigned int issue_flags)
  
  	kmsg->msg.msg_get_inq = 1;
  	kmsg->msg.msg_inq = -1;
@@ -912,7 +912,7 @@ index 8eb0ebd..92b1710 100644
  	if (req->flags & REQ_F_APOLL_MULTISHOT) {
  		ret = io_recvmsg_multishot(sock, sr, kmsg, flags,
  					   &mshot_finished);
-@@ -1066,6 +1117,33 @@ retry_multishot:
+@@ -1066,6 +1117,33 @@ int io_recvmsg(struct io_kiocb *req, unsigned int issue_flags)
  
  		ret = __sys_recvmsg_sock(sock, &kmsg->msg, sr->umsg,
  					 kmsg->uaddr, flags);
@@ -954,7 +954,7 @@ index 8eb0ebd..92b1710 100644
  	struct socket *sock;
  	unsigned flags;
  	int ret, min_ret = 0;
-@@ -1209,7 +1288,11 @@ retry_multishot:
+@@ -1209,7 +1288,11 @@ int io_recv(struct io_kiocb *req, unsigned int issue_flags)
  	if (flags & MSG_WAITALL)
  		min_ret = iov_iter_count(&kmsg->msg.msg_iter);
  
@@ -2861,7 +2861,7 @@ index 0000000..d682e0c
 +
 +#endif
 diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
-index 8225b61..2e95d52 100644
+index 4bc0ce1..f3ce0f3 100644
 --- a/kernel/antinomie/recorder.c
 +++ b/kernel/antinomie/recorder.c
 @@ -7,6 +7,8 @@
@@ -3045,7 +3045,7 @@ index 8225b61..2e95d52 100644
  			break;
  		}
  		chunk_count++;
-@@ -642,6 +675,8 @@ static void capture_entry(struct ant_task *ctx)
+@@ -643,6 +676,8 @@ static void capture_entry(struct ant_task *ctx)
  		return;
  	}
  	handled = ant_native_capture(ctx, ctx->nr, a, false, 0);
@@ -3054,7 +3054,7 @@ index 8225b61..2e95d52 100644
  	if (handled & ANT_CAPTURE_OWNED)
  		return;
  	switch (ctx->nr) {
-@@ -739,6 +774,8 @@ static void capture_exit(struct ant_task *ctx, long result)
+@@ -745,6 +780,8 @@ static void capture_exit(struct ant_task *ctx, long result)
  		return;
  	if (ant_native_capture(ctx, ctx->nr, a, true, result) & ANT_CAPTURE_OWNED)
  		return;
@@ -3063,7 +3063,7 @@ index 8225b61..2e95d52 100644
  	switch (ctx->nr) {
  	case __NR_read: case __NR_recvfrom:
  		if (result > 0)
-@@ -1117,6 +1154,211 @@ static void lifecycle(struct ant_task *ctx, const char *key, u64 value)
+@@ -1127,6 +1164,211 @@ static void lifecycle(struct ant_task *ctx, const char *key, u64 value)
  	ctx->busy = false;
  }
  

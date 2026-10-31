@@ -1,4 +1,4 @@
-From fcf22db82e22a86d1183ace98831817ed59fc028 Mon Sep 17 00:00:00 2001
+From a11041feab0fb0a5f351c117f878852f76657729 Mon Sep 17 00:00:00 2001
 From: MikiMiku <jonathanirvinjo@gmail.com>
 Date: Mon, 26 Oct 2026 19:53:01 +0700
 Subject: [PATCH] antinomie: record the system calls of launched and attached
@@ -39,7 +39,10 @@ The calls the recorder traces, their argument counts and the names of
 undecoded pointer arguments come from the architecture's system call
 table (<asm/antinomie_syscalls.h>), and which ABI a call belongs to and
 how layouts are named from <asm/antinomie.h>; the recorder names
-system calls by their __NR_ constants, never by number. The
+system calls by their __NR_ constants, never by number, guards a
+legacy call an architecture may lack (open, stat, rename on the
+asm-generic architectures) with #ifdef __NR_<name>, and indexes the
+table from the architecture's first number (ANT_ARCH_NR_BASE). The
 common calls have built-in decoders (read, write, readv, writev, open,
 openat, stat, fstat, unlink, rename, execve, execveat, connect, bind,
 accept, sendto, recvfrom, clone and terminal ioctls); the next patch
@@ -75,10 +78,10 @@ not read them sees the fields as before.
  kernel/antinomie/control_wire.h   |   48 +-
  kernel/antinomie/observer.c       |  227 ++++++
  kernel/antinomie/observer.h       |   13 +
- kernel/antinomie/recorder.c       | 1162 +++++++++++++++++++++++++++++
+ kernel/antinomie/recorder.c       | 1172 +++++++++++++++++++++++++++++
  kernel/exit.c                     |    2 +
  kernel/fork.c                     |   11 +
- 11 files changed, 1541 insertions(+), 3 deletions(-)
+ 11 files changed, 1551 insertions(+), 3 deletions(-)
  create mode 100644 include/linux/antinomie_monitor.h
  create mode 100644 kernel/antinomie/observer.c
  create mode 100644 kernel/antinomie/observer.h
@@ -581,10 +584,10 @@ index 0000000..c7df2a9
 +#endif
 diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
 new file mode 100644
-index 0000000..0a077e3
+index 0000000..cbe3b9e
 --- /dev/null
 +++ b/kernel/antinomie/recorder.c
-@@ -0,0 +1,1162 @@
+@@ -0,0 +1,1172 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +#include <linux/antinomie.h>
 +#include <linux/antinomie_monitor.h>
@@ -1107,8 +1110,9 @@ index 0000000..0a077e3
 +{
 +	if (ant_arch_syscall_abi(nr) != ANT_ABI_NATIVE)
 +		return true;
-+	return nr >= 0 && nr < ARRAY_SIZE(ant_native_syscalls) &&
-+		ant_native_syscalls[nr].valid;
++	return nr >= ANT_ARCH_NR_BASE &&
++		nr - ANT_ARCH_NR_BASE < ARRAY_SIZE(ant_native_syscalls) &&
++		ant_native_syscalls[nr - ANT_ARCH_NR_BASE].valid;
 +}
 +
 +static void ioctl_field(struct ant_task *ctx, bool output, long result)
@@ -1197,9 +1201,11 @@ index 0000000..0a077e3
 +			      a[4], NULL, a[5], a[5],
 +			      a[5] > sizeof(struct sockaddr_storage) ? ANT_INVALID_EXTENT : ANT_COMPLETE);
 +		break;
++#ifdef __NR_open	/* the path calls asm-generic has only as *at calls */
 +	case __NR_open: case __NR_stat: case __NR_unlink:
 +		user_string(ctx, 0, "arg0.path", a[0], PATH_MAX);
 +		break;
++#endif
 +	case __NR_openat: case __NR_execveat:
 +		user_string(ctx, 1, "arg1.path", a[1], PATH_MAX);
 +		if (ctx->nr == __NR_openat)
@@ -1218,10 +1224,12 @@ index 0000000..0a077e3
 +		ctx->exec_walk = false;
 +		ctx->exec_budget = budget;
 +		break;
++#ifdef __NR_rename
 +	case __NR_rename:
 +		user_string(ctx, 0, "arg0.path", a[0], PATH_MAX);
 +		user_string(ctx, 1, "arg1.path", a[1], PATH_MAX);
 +		break;
++#endif
 +	case __NR_readv: case __NR_writev:
 +		vector_entry(ctx, ctx->nr == __NR_writev);
 +		break;
@@ -1254,7 +1262,8 @@ index 0000000..0a077e3
 +			      sizeof(u32), sizeof(u32), ANT_NO_DECODER);
 +		break;
 +	default: {
-+		const struct ant_native_syscall *schema = &ant_native_syscalls[ctx->nr];
++		const struct ant_native_syscall *schema =
++			&ant_native_syscalls[ctx->nr - ANT_ARCH_NR_BASE];
 +		char key[96];
 +		int i;
 +
@@ -1308,7 +1317,10 @@ index 0000000..0a077e3
 +				      ctx->sock_capacity_valid ? ANT_COMPLETE : ANT_CONTEXT_MISSING);
 +		}
 +		break;
-+	case __NR_stat: case __NR_fstat:
++#ifdef __NR_stat
++	case __NR_stat:
++#endif
++	case __NR_fstat:
 +		if (!result)
 +			user_field(ctx, 1, "arg1.stat", ANT_LAYOUT("stat"), 3,
 +				   a[1], sizeof(struct stat));
@@ -1537,7 +1549,8 @@ index 0000000..0a077e3
 +	ctx->entry_mm = current->mm;
 +	ctx->nr = nr;
 +	ctx->abi = ant_arch_syscall_abi(nr);
-+	ctx->arg_count = ctx->abi == ANT_ABI_NATIVE ? ant_native_syscalls[nr].argc : 255;
++	ctx->arg_count = ctx->abi == ANT_ABI_NATIVE ?
++		ant_native_syscalls[nr - ANT_ARCH_NR_BASE].argc : 255;
 +	ctx->call_id++;
 +	ctx->entry_ns = ktime_get_ns();
 +	ctx->ip = instruction_pointer(regs);

@@ -1,4 +1,4 @@
-From be7d7869eda69e6f0e08f216ceeef81a9cb09273 Mon Sep 17 00:00:00 2001
+From b8f011cb7657a692a7610a3932e18d7078630c3c Mon Sep 17 00:00:00 2001
 From: MikiMiku <jonathanirvinjo@gmail.com>
 Date: Wed, 28 Oct 2026 10:51:13 +0700
 Subject: [PATCH] antinomie: record where reads and writes of files happened,
@@ -658,7 +658,7 @@ index 0000000..6860579
 +
 +#endif
 diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
-index d4d0879..a448e9d 100644
+index abff504..9cc6506 100644
 --- a/kernel/antinomie/recorder.c
 +++ b/kernel/antinomie/recorder.c
 @@ -36,6 +36,7 @@
@@ -678,7 +678,7 @@ index d4d0879..a448e9d 100644
  	/* Contract 22: inputs to read again at exit, without allocating. */
  	struct ant_recapture recapture[ANT_RECAPTURE_MAX];
  	struct ant_exec_resume exec_resume[2];
-@@ -1057,6 +1060,38 @@ static void operand_emit(struct ant_task *ctx)
+@@ -1066,6 +1069,38 @@ static void operand_emit(struct ant_task *ctx)
  	operand_clear(ctx);
  }
  
@@ -717,7 +717,7 @@ index d4d0879..a448e9d 100644
  /* Credential records (control_wire.h, lifecycle.creds). Every change of a
   * traced task's credentials goes through commit_creds(): setuid and friends,
   * capset, and exec of a setuid, setgid or file-capability image. The record is
-@@ -1293,6 +1328,7 @@ void ant_monitor_enter(struct pt_regs *regs, long nr)
+@@ -1302,6 +1337,7 @@ void ant_monitor_enter(struct pt_regs *regs, long nr)
  	ctx->busy = true;
  	ant_capture_set_state(ctx, NULL, NULL);
  	operand_clear(ctx);
@@ -725,7 +725,7 @@ index d4d0879..a448e9d 100644
  	kfree(ctx->iov);
  	ctx->iov = NULL;
  	ctx->iov_count = 0;
-@@ -1338,6 +1374,7 @@ void ant_monitor_exit(struct pt_regs *regs)
+@@ -1348,6 +1384,7 @@ void ant_monitor_exit(struct pt_regs *regs)
  	event_begin(ctx, 2, result);
  	operand_emit(ctx);
  	capture_exit(ctx, result);
@@ -733,7 +733,7 @@ index d4d0879..a448e9d 100644
  	recapture(ctx);
  	event_end(ctx);
  	recapture_reset(ctx);
-@@ -1730,6 +1767,7 @@ void ant_monitor_release(struct task_struct *task)
+@@ -1740,6 +1777,7 @@ void ant_monitor_release(struct task_struct *task)
  	if (ctx) {
  		ant_capture_set_state(ctx, NULL, NULL);
  		operand_clear(ctx);

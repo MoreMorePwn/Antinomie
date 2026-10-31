@@ -1,4 +1,4 @@
-From 2e69bf3bfc713f35d57be2fe5d625380f935e056 Mon Sep 17 00:00:00 2001
+From ddb2b803888bf5732ae3c7616dcf016895b24eb4 Mon Sep 17 00:00:00 2001
 From: MikiMiku <jonathanirvinjo@gmail.com>
 Date: Mon, 26 Oct 2026 19:53:01 +0700
 Subject: [PATCH] antinomie: hide the recorder from programs in the guest
@@ -178,10 +178,10 @@ index b460eb6..89dae99 100644
  void __init ant_bootstrap_reserve(void)
  {
 diff --git a/kernel/antinomie/debug.c b/kernel/antinomie/debug.c
-index 6ed67ca..a71441c 100644
+index 9c03f27..fb573ae 100644
 --- a/kernel/antinomie/debug.c
 +++ b/kernel/antinomie/debug.c
-@@ -3711,7 +3711,8 @@ bool ant_debug_active(void)
+@@ -3784,7 +3784,8 @@ bool ant_debug_active(void)
  
  static int __init ant_debug_init(void)
  {
@@ -195,7 +195,7 @@ diff --git a/kernel/antinomie/guest.c b/kernel/antinomie/guest.c
 index 596553e..69f9b4d 100644
 --- a/kernel/antinomie/guest.c
 +++ b/kernel/antinomie/guest.c
-@@ -501,9 +501,10 @@ retry:
+@@ -501,9 +501,10 @@ static int __init ant_guest_init(void)
  	 * TTY queue events_unbound. WQ_MEM_RECLAIM makes that flush trip
  	 * check_flush_dependency. Flags stay 0 so the worker may complete
  	 * the read. The queue stays ordered, so commands, EOF and shutdown
@@ -212,7 +212,7 @@ diff --git a/kernel/antinomie/manual_core.c b/kernel/antinomie/manual_core.c
 index 8db80aa..cfbe73e 100644
 --- a/kernel/antinomie/manual_core.c
 +++ b/kernel/antinomie/manual_core.c
-@@ -656,7 +656,8 @@ unlock:
+@@ -656,7 +656,8 @@ int ant_manual_command(u32 opcode, const u8 *args, size_t args_len,
  
  static int __init ant_manual_init(void)
  {

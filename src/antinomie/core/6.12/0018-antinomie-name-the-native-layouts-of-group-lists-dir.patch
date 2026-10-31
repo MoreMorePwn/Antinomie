@@ -1,4 +1,4 @@
-From bceb29fe884be615bdd767adee71bb6866a9ca7f Mon Sep 17 00:00:00 2001
+From 2cbbd6c1e5660097cf9d85f6dbded23299bc6aa1 Mon Sep 17 00:00:00 2001
 From: MikiMiku <jonathanirvinjo@gmail.com>
 Date: Thu, 29 Oct 2026 01:44:26 +0700
 Subject: [PATCH] antinomie: name the native layouts of group lists, directory
@@ -47,7 +47,7 @@ index 3393fb2..38536e4 100644
  	else if (!input && args[0] != 0 && args[0] != 2 && !output)
  		ant_capture_field(ctx, 1, "modify_ldt.unknown_selector", "", 1,
 diff --git a/kernel/antinomie/native_capture.c b/kernel/antinomie/native_capture.c
-index f750037..bcb90f3 100644
+index 1da4b77..9a53655 100644
 --- a/kernel/antinomie/native_capture.c
 +++ b/kernel/antinomie/native_capture.c
 @@ -91,6 +91,8 @@ struct ant_field_rule {
@@ -58,16 +58,19 @@ index f750037..bcb90f3 100644
 +#define RECORDS_FIELD(n, a, p, k, len, ceiling, l) { n, a, p, k, len, ceiling, LAYOUT(l) }
  
  /* Extents are native Linux layouts or syscall-defined lengths. Output-only
-  * buffers never follow a pointer from an exit-time descriptor.
-@@ -202,14 +204,17 @@ static const struct ant_field_rule field_rules[] = {
- 	STRING_FIELD(__NR_init_module, 2, SSIZE_MAX),
+  * buffers never follow a pointer from an exit-time descriptor. Legacy calls
+@@ -240,17 +242,20 @@ static const struct ant_field_rule field_rules[] = {
  	BUFFER_FIELD(__NR_pread64, 1, ANT_OUTPUT_NONNEGATIVE, ANT_BUFFER_OUTPUT, 2, MAX_RW_COUNT),
  	BUFFER_FIELD(__NR_pwrite64, 1, ANT_INPUT, ANT_BUFFER_INPUT, 2, MAX_RW_COUNT),
+ #ifdef __NR_getdents
 -	BUFFER_FIELD(__NR_getdents, 1, ANT_OUTPUT_NONNEGATIVE, ANT_BUFFER_OUTPUT, 2, U32_MAX),
 +	RECORDS_FIELD(__NR_getdents, 1, ANT_OUTPUT_NONNEGATIVE, ANT_BUFFER_OUTPUT, 2, U32_MAX,
 +		      "linux_dirent[]"),
+ #endif
  	BUFFER_FIELD(__NR_getcwd, 0, ANT_OUTPUT_NONNEGATIVE, ANT_BUFFER_OUTPUT, 1, U64_MAX),
+ #ifdef __NR_readlink
  	BUFFER_FIELD(__NR_readlink, 1, ANT_OUTPUT_NONNEGATIVE, ANT_BUFFER_OUTPUT, 2, INT_MAX),
+ #endif
 -	BUFFER_FIELD(__NR_getdents64, 1, ANT_OUTPUT_NONNEGATIVE, ANT_BUFFER_OUTPUT, 2, U32_MAX),
 +	RECORDS_FIELD(__NR_getdents64, 1, ANT_OUTPUT_NONNEGATIVE, ANT_BUFFER_OUTPUT, 2, U32_MAX,
 +		      "linux_dirent64[]"),
@@ -81,7 +84,7 @@ index f750037..bcb90f3 100644
  };
  
  static bool phase_matches(u8 phase, bool output, long result)
-@@ -266,7 +271,7 @@ static void capture_rule(struct ant_task *ctx, const struct ant_field_rule *rule
+@@ -307,7 +312,7 @@ static void capture_rule(struct ant_task *ctx, const struct ant_field_rule *rule
  		}
  	}
  	ant_capture_field(ctx, rule->arg_index, key, rule->layout,
@@ -90,7 +93,7 @@ index f750037..bcb90f3 100644
  			  args[rule->arg_index], NULL, size, declared, status);
  }
  
-@@ -3139,7 +3144,12 @@ static void capture_setsockopt(struct ant_task *ctx, const u64 args[6])
+@@ -3190,7 +3195,12 @@ static void capture_setsockopt(struct ant_task *ctx, const u64 args[6])
  	if (length < 0)
  		return;
  	if (sockopt_netfilter(rule, args[1], args[2])) {

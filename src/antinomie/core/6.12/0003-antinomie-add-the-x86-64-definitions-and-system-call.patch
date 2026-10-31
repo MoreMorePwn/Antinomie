@@ -1,4 +1,4 @@
-From 6d474e5d756ece65123cfba59aedb25db4e1ceb4 Mon Sep 17 00:00:00 2001
+From d062cb4d912934f8d1dddc96585f3f25fddd7168 Mon Sep 17 00:00:00 2001
 From: MikiMiku <jonathanirvinjo@gmail.com>
 Date: Mon, 26 Oct 2026 19:53:01 +0700
 Subject: [PATCH] antinomie: add the x86-64 definitions and system call table
@@ -19,7 +19,10 @@ arch/x86/include/asm/antinomie.h names the ABI in the layout names of
 captured objects (x86_64, and x86 for the 32-bit compat ABI), tells
 which ABI a system call being entered belongs to (native, x32, or ia32
 which has no table), and whether a task has a 32-bit address space,
-whose cores the native writer does not take.
+whose cores the native writer does not take. ANT_ARCH_NR_BASE is the
+number of the first native call, from which the recorder indexes the
+table (0 here; MIPS o32 starts at 4000). arch/x86/Kconfig selects
+HAVE_ANTINOMIE for x86-64, which makes CONFIG_ANTINOMIE available.
 
 The rest of the series reaches these through <linux/antinomie_monitor.h>
 and keys every system call by its __NR_ name, so another architecture
@@ -31,18 +34,31 @@ changes no object.
 
 Only arch/x86 is touched, and the contract does not change.
 ---
- arch/x86/include/asm/antinomie.h          |   43 +
+ arch/x86/Kconfig                          |    1 +
+ arch/x86/include/asm/antinomie.h          |   48 +
  arch/x86/include/asm/antinomie_syscalls.h | 4381 +++++++++++++++++++++
- 2 files changed, 4424 insertions(+)
+ 3 files changed, 4430 insertions(+)
  create mode 100644 arch/x86/include/asm/antinomie.h
  create mode 100644 arch/x86/include/asm/antinomie_syscalls.h
 
+diff --git a/arch/x86/Kconfig b/arch/x86/Kconfig
+index d5e2800..e7c0edb 100644
+--- a/arch/x86/Kconfig
++++ b/arch/x86/Kconfig
+@@ -30,6 +30,7 @@ config X86_64
+ 	select ARCH_SUPPORTS_PER_VMA_LOCK
+ 	select ARCH_SUPPORTS_HUGE_PFNMAP if TRANSPARENT_HUGEPAGE
+ 	select HAVE_ARCH_SOFT_DIRTY
++	select HAVE_ANTINOMIE
+ 	select MODULES_USE_ELF_RELA
+ 	select NEED_DMA_MAP_STATE
+ 	select SWIOTLB
 diff --git a/arch/x86/include/asm/antinomie.h b/arch/x86/include/asm/antinomie.h
 new file mode 100644
-index 0000000..77da4d8
+index 0000000..896d40a
 --- /dev/null
 +++ b/arch/x86/include/asm/antinomie.h
-@@ -0,0 +1,43 @@
+@@ -0,0 +1,48 @@
 +/* SPDX-License-Identifier: GPL-2.0-only */
 +/*
 + * What the Antinomie recorder (kernel/antinomie) needs to know about x86-64.
@@ -63,6 +79,11 @@ index 0000000..77da4d8
 + */
 +#define ANT_ARCH_LAYOUT "x86_64"
 +#define ANT_ARCH_COMPAT_LAYOUT "x86"
++
++/* The number of the first native system call: slot 0 of
++ * <asm/antinomie_syscalls.h>'s table (MIPS o32 numbers start at 4000).
++ */
++#define ANT_ARCH_NR_BASE 0
 +
 +/* x32: native system call numbers with __X32_SYSCALL_BIT set (the recorded
 + * number keeps the bit); there is no table for its own entries.

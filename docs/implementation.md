@@ -1889,6 +1889,51 @@ series is fifteen patches (`src/antinomie/patches/README.md`, "Architectures"):
 and after, and by running the conformance and stress groups on bases built from
 both series.
 
+### Per-architecture schema sets and portable shared guest code (0.8.0)
+
+Groundwork for arm64 guests (multi-arch plan cards MA-02 and MA-03); x86-64
+decodes and records exactly as before.
+
+* **Schema sets.** Each architecture the host ships has a folder
+  `src/antinomie/monitor/protocol/<arch>/` with its native table
+  (`native-syscalls.json`), its captured layouts (`captured-layout-members.json`)
+  and its constants (`constants.json`). The x86-64 files moved there unchanged;
+  `aarch64` is new. The generators take `--arch`
+  (`scripts/generate-native-syscalls.py`: x86_64, aarch64, riscv64, with
+  CLONE_BACKWARDS argument order on the asm-generic architectures;
+  `scripts/generate-filter-layouts.py`: x86_64, aarch64, Clang's target ABI over
+  that architecture's UAPI, its own `capture_<arch>.c` only) and write to the
+  arch's folder by default.
+* **Constants.** The host's decoding tables (flag groups, selector names, socket
+  options, errno and signal names) keep x86-64's values. A constants file lists
+  where another architecture differs (`changed`), which names x86-64 defines and
+  it lacks (`absent`) and its own names a group gains (`additions`), with its
+  ELF machine and class, byte order, data model, `AUDIT_ARCH_*` value and layout
+  prefix. `scripts/generate-arch-constants.py` evaluates every constant name the
+  host sources use with libclang over the arch's installed-UAPI view, one header
+  at a time, and compares it with x86-64's evaluation; x86-64's own file is empty
+  in those three parts. For aarch64: `O_DIRECTORY`, `O_NOFOLLOW`, `O_DIRECT`,
+  `O_LARGEFILE` and `O_TMPFILE` differ; `MAP_32BIT`, `SHADOW_STACK_SET_TOKEN`, the
+  `ARCH_*` codes and the x86 ptrace requests are absent; `PROT_BTI`, `PROT_MTE`
+  and `PTRACE_PEEKMTETAGS`/`PTRACE_POKEMTETAGS` are added. Names no UAPI header
+  defines (the kernel-internal `MSG_*` and `SOCK_*` values) keep their generic
+  value. All 1023 x86-64 literals the UAPI defines matched it when checked.
+* **Host loader.** `syscalls::Abi` has `X86_64` and `Aarch64`; each table carries
+  its `Constants`, and flag names (`Table::argument_flags`) and selector names
+  (`Table::selector_name`, keyed by the call's name instead of its x86-64
+  number) read values through it. The free functions keep using the native
+  (x86-64) table, so callers are unchanged; no guest architecture maps to
+  `Aarch64` yet. Argument values of C type `long` and `off_t` render by the
+  table's data model.
+* **Shared guest code.** Legacy calls the asm-generic architectures lack (open,
+  stat, rename, poll, select, signalfd, sysfs, getdents ...; also arm EABI's and
+  mips o32's few: getrlimit, newfstatat, kexec_file_load) are guarded with
+  `#ifdef __NR_<name>` in place, in the topic patch that names them;
+  `CONFIG_ANTINOMIE` depends on `HAVE_ANTINOMIE`, which x86-64 selects with its
+  definitions (patch 3); `ANT_ARCH_NR_BASE` (0 on x86-64) is the first native
+  number the recorder indexes its table from; the core reader checks the native
+  ELF class and byte order (`elfhdr`, `ELF_CLASS`, `ELF_DATA`).
+
 ### Fair, progress-sensitive send waits (0.8.0)
 
 Guest patch 1 (`transport/guest.c`, `ant_send`); transport ABI and contract

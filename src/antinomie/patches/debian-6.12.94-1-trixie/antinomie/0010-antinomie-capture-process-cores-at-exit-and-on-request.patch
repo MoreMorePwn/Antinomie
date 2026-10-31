@@ -37,6 +37,10 @@ Description: antinomie: capture process cores at exit and on request
  - kernel/signal.c: complete_signal() lets an armed root's fatal signal
    take the core path instead of the immediate group exit.
  .
+ The size of a finished core is read from its ELF header and program
+ headers in the architecture's native class and byte order (elfhdr,
+ ELF_CLASS, ELF_DATA), the ones the kernel's writer produced.
+ .
  Contract: revision 15 (cores at exit, transport ABI 9) and revision 16
  (live cores). Sparse reads, the sizing, CORE_CAPS and the stored-size
  status are additive within revision 17.
@@ -545,7 +549,7 @@ index 64894ba..00bfd7a 100644
  		/*
  		 * To avoid having to allocate page tables for virtual address
  		 * ranges that have never been used yet, and also to make it
-@@ -1213,6 +1360,15 @@ whole:
+@@ -1213,6 +1360,15 @@ static unsigned long vma_dump_size(struct vm_area_struct *vma,
  	return vma->vm_end - vma->vm_start;
  }
  
@@ -1727,7 +1731,7 @@ index 0000000..67d4107
 +#endif
 diff --git a/kernel/antinomie/process_core.c b/kernel/antinomie/process_core.c
 new file mode 100644
-index 0000000..109f347
+index 0000000..44485f8
 --- /dev/null
 +++ b/kernel/antinomie/process_core.c
 @@ -0,0 +1,1001 @@
@@ -2359,16 +2363,16 @@ index 0000000..109f347
 +
 +static u64 core_expected_size(struct ant_core *core)
 +{
-+	struct elf64_hdr *elf;
-+	struct elf64_phdr *ph;
++	struct elfhdr *elf;
++	struct elf_phdr *ph;
 +	u64 available, table, size = 0, extent;
 +	unsigned int i;
 +
 +	elf = core_span(core, 0, &available);
 +	if (!elf || available < sizeof(*elf) ||
 +	    memcmp(elf->e_ident, ELFMAG, SELFMAG) ||
-+	    elf->e_ident[EI_CLASS] != ELFCLASS64 ||
-+	    elf->e_ident[EI_DATA] != ELFDATA2LSB ||
++	    elf->e_ident[EI_CLASS] != ELF_CLASS ||
++	    elf->e_ident[EI_DATA] != ELF_DATA ||
 +	    elf->e_type != ET_CORE || elf->e_machine != ELF_ARCH ||
 +	    elf->e_phentsize != sizeof(*ph) || elf->e_phnum == PN_XNUM)
 +		return 0;
@@ -2392,8 +2396,8 @@ index 0000000..109f347
 + */
 +static u32 core_thread_count(struct ant_core *core)
 +{
-+	struct elf64_hdr *elf;
-+	struct elf64_phdr *ph;
++	struct elfhdr *elf;
++	struct elf_phdr *ph;
 +	u64 available;
 +	u32 count = 0;
 +	unsigned int i;

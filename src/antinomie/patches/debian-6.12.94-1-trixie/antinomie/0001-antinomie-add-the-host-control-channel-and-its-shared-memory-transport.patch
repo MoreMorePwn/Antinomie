@@ -32,7 +32,9 @@ Description: antinomie: add the host control channel and its shared-memory trans
  .
  Hooked kernel files:
  - init/Kconfig and kernel/Makefile add CONFIG_ANTINOMIE and the
-   kernel/antinomie directory.
+   kernel/antinomie directory. CONFIG_ANTINOMIE depends on
+   HAVE_ANTINOMIE, which an architecture selects with the definitions
+   the recorder needs (x86-64 in the patch that adds them).
  .
  The architecture reserves the bootstrap page from memblock
  (ant_bootstrap_reserve()) before the kernel allocates memory, and keeps
@@ -140,20 +142,25 @@ index 87866b0..c20e08d 100644
  obj-$(CONFIG_VHOST_TASK) += vhost_task.o
 diff --git a/kernel/antinomie/Kconfig b/kernel/antinomie/Kconfig
 new file mode 100644
-index 0000000..3ff7199
+index 0000000..517e249
 --- /dev/null
 +++ b/kernel/antinomie/Kconfig
-@@ -0,0 +1,20 @@
+@@ -0,0 +1,25 @@
++config HAVE_ANTINOMIE
++	bool
++	help
++	  Selected by an architecture with an Antinomie port: it provides
++	  <asm/antinomie.h>, the generated <asm/antinomie_syscalls.h> and the
++	  hooks in its own arch/ tree.
++
 +config ANTINOMIE
 +	bool "Antinomie host control and syscall recorder"
-+	depends on X86_64 && UNIX98_PTYS
++	depends on HAVE_ANTINOMIE && UNIX98_PTYS
 +	help
 +	  Host control, PTY sessions and observational syscall telemetry over
 +	  the Antinomie V7 memory transport. Only host-launched tasks and their
 +	  descendants are traced. Host access includes guest execution authority.
-+	  An architecture with a port provides <asm/antinomie.h>, the generated
-+	  <asm/antinomie_syscalls.h> and hooks in its own arch/ tree; x86-64 is
-+	  the only one.
++	  Available on architectures that select HAVE_ANTINOMIE.
 +
 +config ANTINOMIE_SOURCE_ID
 +	string "Antinomie patch-series identity"

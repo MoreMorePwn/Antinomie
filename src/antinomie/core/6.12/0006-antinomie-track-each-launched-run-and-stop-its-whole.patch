@@ -1,4 +1,4 @@
-From 33605226354816a568dee66b6aeca84cec523478 Mon Sep 17 00:00:00 2001
+From a7975e4d09a065511b874a4975345494d71b8ad5 Mon Sep 17 00:00:00 2001
 From: MikiMiku <jonathanirvinjo@gmail.com>
 Date: Mon, 26 Oct 2026 19:53:01 +0700
 Subject: [PATCH] antinomie: track each launched run and stop its whole process
@@ -237,7 +237,7 @@ index 87464f8..3c875c0 100644
   * STATS: header only. Reply: ten u64 counters in order: stream_id,
   * tasks_created, tasks_live, calls_entered, events_attempted,
 diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
-index 3013b53..8225b61 100644
+index 10ef453..4bc0ce1 100644
 --- a/kernel/antinomie/recorder.c
 +++ b/kernel/antinomie/recorder.c
 @@ -24,6 +24,7 @@
@@ -248,7 +248,7 @@ index 3013b53..8225b61 100644
  #include "capture_api.h"
  #include "native_capture.h"
  #include "observer.h"
-@@ -1122,10 +1123,16 @@ int ant_monitor_launch(const char *path, char **argv, char **envp)
+@@ -1132,10 +1133,16 @@ int ant_monitor_launch(const char *path, char **argv, char **envp)
  	char key[80];
  	u64 index;
  	u8 cookie[8];
@@ -265,7 +265,7 @@ index 3013b53..8225b61 100644
  	WRITE_ONCE(current->ant_root_cookie, current->ant_cookie);
  	current->ant_monitor = ctx;
  	if (!current->ant_counted) {
-@@ -1181,10 +1188,21 @@ u64 ant_monitor_stream_id(void)
+@@ -1191,10 +1198,21 @@ u64 ant_monitor_stream_id(void)
  void ant_monitor_fork_prepare(struct task_struct *child)
  {
  	WRITE_ONCE(child->ant_observer_cookie, READ_ONCE(current->ant_observer_cookie));
@@ -288,7 +288,7 @@ index 3013b53..8225b61 100644
  	child->ant_counted = true;
  	atomic64_inc(&tasks_created);
  	atomic64_inc(&tasks_live);
-@@ -1224,8 +1242,9 @@ void ant_monitor_exec(void)
+@@ -1234,8 +1252,9 @@ void ant_monitor_exec(void)
  	lifecycle(current->ant_monitor, "lifecycle.exec_commit", task_pid_nr(current));
  }
  

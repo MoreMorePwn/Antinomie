@@ -560,7 +560,7 @@ index 6860579..9508f6b 100644
  
  #endif
 diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
-index a448e9d..da72b6d 100644
+index 9cc6506..d75a22c 100644
 --- a/kernel/antinomie/recorder.c
 +++ b/kernel/antinomie/recorder.c
 @@ -37,6 +37,7 @@
@@ -582,7 +582,7 @@ index a448e9d..da72b6d 100644
  	/* Contract 22: inputs to read again at exit, without allocating. */
  	struct ant_recapture recapture[ANT_RECAPTURE_MAX];
  	struct ant_exec_resume exec_resume[2];
-@@ -1092,6 +1097,73 @@ static void fileops_emit(struct ant_task *ctx)
+@@ -1101,6 +1106,73 @@ static void fileops_emit(struct ant_task *ctx)
  	ant_fileops_reset(ops);
  }
  
@@ -656,7 +656,7 @@ index a448e9d..da72b6d 100644
  /* Credential records (control_wire.h, lifecycle.creds). Every change of a
   * traced task's credentials goes through commit_creds(): setuid and friends,
   * capset, and exec of a setuid, setgid or file-capability image. The record is
-@@ -1319,6 +1391,8 @@ void ant_monitor_enter(struct pt_regs *regs, long nr)
+@@ -1328,6 +1400,8 @@ void ant_monitor_enter(struct pt_regs *regs, long nr)
  	}
  	if (ctx->busy)
  		return;
@@ -665,7 +665,7 @@ index a448e9d..da72b6d 100644
  	if (!current->ant_counted) {
  		current->ant_counted = true;
  		atomic64_inc(&tasks_created);
-@@ -1371,6 +1445,8 @@ void ant_monitor_exit(struct pt_regs *regs)
+@@ -1381,6 +1455,8 @@ void ant_monitor_exit(struct pt_regs *regs)
  		return;
  	ctx->busy = true;
  	result = syscall_get_return_value(current, regs);
@@ -674,7 +674,7 @@ index a448e9d..da72b6d 100644
  	event_begin(ctx, 2, result);
  	operand_emit(ctx);
  	capture_exit(ctx, result);
-@@ -1752,6 +1828,8 @@ void ant_monitor_exec(struct file *file, bool interpreter)
+@@ -1762,6 +1838,8 @@ void ant_monitor_exec(struct file *file, bool interpreter)
  
  void ant_monitor_task_exit(bool group_dead)
  {
@@ -683,7 +683,7 @@ index a448e9d..da72b6d 100644
  	ant_run_exit(current, group_dead);
  	lifecycle(current->ant_monitor, "lifecycle.task_exit", current->exit_code);
  	if (current->ant_counted) {
-@@ -1768,6 +1846,7 @@ void ant_monitor_release(struct task_struct *task)
+@@ -1778,6 +1856,7 @@ void ant_monitor_release(struct task_struct *task)
  		ant_capture_set_state(ctx, NULL, NULL);
  		operand_clear(ctx);
  		ant_fileops_reset(&ctx->fileops);
