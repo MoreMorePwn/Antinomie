@@ -1999,6 +1999,70 @@ decodes and records exactly as before.
   number the recorder indexes its table from; the core reader checks the native
   ELF class and byte order (`elfhdr`, `ELF_CLASS`, `ELF_DATA`).
 
+### Guest architecture contract, machines and arm64 builds (0.8.0)
+
+Multi-arch plan cards MA-04 to MA-08: the contract, host and tooling an arm64
+guest needs. x86-64 guests record, decode and snapshot as before; the host
+still starts x86-64 VMs only (arm64 VMs start with MA-16).
+
+* **ARCH_INFO (contract revision 20).** A new control opcode (0x1022, header
+  only, 128-byte reply, `protocol/control.h`): the guest's ELF machine, class
+  and byte order, page shift, the system call ABIs its records may carry, the
+  first native call number and table size, user address bits, the debug
+  engine's CAPS flags, the native table id (SHA-256 of the
+  `protocol/<arch>/native-syscalls.json` the guest was built with; the
+  generator emits it as `ANT_NATIVE_TABLE_ID`) and the layout set
+  (`linux-6.12.94/<arch>`). The guest side is patch 0030. A host sends it only
+  to a guest whose INFO revision is 20 or later, because an older guest counts
+  an unknown opcode as a bad command. Revision 20 also defines
+  `ANTC_CORE_NATIVE_ELF32` (process cores of 32-bit guests) and the CAPS flags
+  `SW_SINGLE_STEP` and `READ_WATCH`.
+* **Transport ABI 10.** 64-bit little-endian guests keep ABI 9 byte for byte.
+  ABI 10 is the same LP64 layout with every field little endian, for 32-bit
+  and big-endian guests. Its `POS32` profile bit is for 32-bit guests, which
+  have no 64-bit atomics: queue positions and counters carry their low 32 bits
+  and each reader widens them next to a position it already knows.
+  `tests/monitor/transport-reconnect.c` runs the host simulator on both
+  profiles.
+* **Host handshake.** The host reads `GuestArch` (ELF machine, class, byte
+  order) from ARCH_INFO on a revision-20 guest, from the debug engine's CAPS
+  on revision 17 to 19, and takes x86-64 for older guests. It warns when the
+  guest's table id or layout set differs from its own schema set. x86-64 is
+  still stored as `"X86_64"`, so older settings and recordings read
+  unchanged. A run records its architecture in `RunEnvironment.arch`, written
+  only for non-x86 runs, so x86 environment hashes do not change. The Runs tab
+  names a non-x86 architecture, and an upload whose ELF machine differs from
+  the VM's gets a note.
+* **Machines.** `vm::Machine` is `Pc` (q35/i440FX, `qemu-system-x86_64`) or
+  `Virt` (`virt,gic-version=3`, the `qemu-system-aarch64` next to the
+  configured QEMU). It supplies the RAM layout (virt: one piece at 1 GiB), the
+  default bootstrap page (RAM base + RAM/2, page aligned: 0x60000000 for a
+  1 GiB arm64 VM), the memory map check (virt reads the `shared` backend region
+  from `info mtree -f`), the serial console (`ttyS0` or `ttyAMA0`) and the
+  machine identity that full snapshots check (x86's string is unchanged). An
+  arm64 VM needs at least 512 MiB of RAM, because QEMU's initrd or the
+  firmware's allocations reach the middle of smaller RAM, and is refused with
+  a message otherwise. `ARM64_TIME_SCALE` (8, from the MA-09 TCG
+  measurements) is set in one place, `vm/machine.rs`. Bundles name their
+  architecture (`"arch"` in `bundle.json`, x86-64 when absent).
+* **arm64 kernel builds.** `scripts/build-monitor-kernel.sh` takes
+  `ANTINOMIE_ARCH=x86_64|arm64`, with per-architecture fragments in
+  `src/antinomie/packaging/kconfig/<arch>/`. `ANTINOMIE_CONFIG_ONLY=1` stops
+  after the configuration has been resolved and checked. The container image
+  pins the aarch64 and armhf cross toolchains, `qemu-user-static` and `dtc`.
+  The adapter holds Debian's arm64 banner (`KERNEL_BANNER_ARM64`).
+  `build-base.py` jobs take `"arch"`, and the kernel identity names the
+  architecture for arm64 only. The QEMU builder VM installs the arm64 tool
+  packages for arm64 jobs. No arm64 image recipe exists until MA-15.
+* **Regression tiers.** `scripts/vm-regress.py --arch arm64` cross-builds the
+  fixtures with `aarch64-linux-gnu-gcc` (`CC` in the fixture build scripts),
+  scales every timeout by `ARM64_TIME_SCALE` (read from `vm/machine.rs`), lists the
+  groups that are not ported yet (`ARM64_LATER`: debugger, stealth, cloud,
+  snapshots, interop) as not planned, and names the architecture in the
+  report. Conformance goldens for arm64 live in `golden/aarch64/`. The
+  conformance trace fixture (x86 assembly) and the stealth probe (CPUID) are
+  ported with MA-13 and MA-17.
+
 ### Fair, progress-sensitive send waits (0.8.0)
 
 Guest patch 1 (`transport/guest.c`, `ant_send`); transport ABI and contract
