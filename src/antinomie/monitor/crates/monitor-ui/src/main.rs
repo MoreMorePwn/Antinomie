@@ -166,12 +166,19 @@ fn main() -> eframe::Result<()> {
                 None => println!("{}: ready", check.name),
             }
         }
-        std::process::exit(i32::from(report.has_missing()));
+        if report.has_missing() {
+            eprintln!("{}", failure_line("some runtime requirements are missing"));
+            std::process::exit(1);
+        }
+        std::process::exit(0);
     }
     if let Some(directory) = args.install_base {
-        return install_base(options, directory).map_err(|message| {
-            eframe::Error::AppCreation(Box::new(std::io::Error::other(message)))
-        });
+        // A plain message and exit code 1, not eframe's Debug form of the error.
+        if let Err(message) = install_base(options, directory) {
+            eprintln!("{}", failure_line(&message));
+            std::process::exit(1);
+        }
+        return Ok(());
     }
     let smoke = args.smoke_exit.then_some(Duration::from_secs(3));
     eframe::run_native(
@@ -215,6 +222,11 @@ fn native_options() -> eframe::NativeOptions {
     }
 }
 
+/// The one line a failed command-line action prints on standard error.
+fn failure_line(message: &str) -> String {
+    format!("Error: {message}")
+}
+
 fn install_base(options: BackendOptions, directory: PathBuf) -> Result<(), String> {
     let mut backend = Backend::new(options)?;
     let id = backend.send(Command::ImportBase { directory })?;
@@ -254,6 +266,11 @@ fn wait_for_base_import(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn command_line_failures_are_plain_text() {
+        assert_eq!(failure_line("no bundle"), "Error: no bundle");
+    }
 
     #[test]
     fn base_import_waits_past_two_minutes_of_receive_timeouts_for_its_result() {

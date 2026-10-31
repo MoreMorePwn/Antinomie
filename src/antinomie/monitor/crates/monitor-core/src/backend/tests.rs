@@ -828,6 +828,34 @@ fn frontend_is_woken_for_worker_notifications_without_holding_snapshot_lock() {
     assert_eq!(wakes.load(Ordering::Relaxed), 2);
 }
 
+#[test]
+fn downloading_a_base_for_a_newer_revision_names_both_revisions() {
+    let root = std::env::temp_dir().join(format!("antinomie-refusal-{}", std::process::id()));
+    fs::create_dir_all(&root).unwrap();
+    let mut worker = download_worker(root.clone());
+    worker.catalog.bases.push(distribution::CatalogBase {
+        identity: "newer".into(),
+        antinomie_revision: Some(APP_REVISION + 1),
+        min_app_version: Some("9.1.0".into()),
+        ..Default::default()
+    });
+    let result = worker.command(Command::DownloadBase {
+        identity: "newer".into(),
+    });
+    fs::remove_dir_all(&root).unwrap();
+    let Err(error) = result else {
+        panic!("a base for a newer revision must be refused");
+    };
+    // Without curl the refusal is not reached; the shared text is what counts.
+    if !error.contains("curl") {
+        assert_eq!(
+            error,
+            base_refusal(Some(APP_REVISION + 1), Some("9.1.0")).unwrap()
+        );
+        assert!(error.contains("Antinomie 9.1.0 or newer"), "{error}");
+    }
+}
+
 fn attach_waiting_download(worker: &mut Worker) -> Arc<AtomicBool> {
     let cancel = Arc::new(AtomicBool::new(false));
     let worker_cancel = cancel.clone();
@@ -1378,7 +1406,16 @@ fn base_import_and_failed_credential_creation_preserve_published_state() {
     let error = worker
         .command(Command::ImportBase { directory: newer })
         .unwrap_err();
-    assert!(error.contains("update Antinomie"), "{error}");
+    assert_eq!(
+        error,
+        base_refusal(Some(APP_REVISION + 1), None).unwrap(),
+        "Add base names both sides"
+    );
+    assert!(
+        error.contains(&format!("revision {}", APP_REVISION + 1))
+            && error.contains(&format!("up to guest contract revision {APP_REVISION}")),
+        "{error}"
+    );
     assert_eq!(worker.snapshot.bases.len(), 2);
     assert!(
         crate::locations::boot_bundle(&worker.options, None)

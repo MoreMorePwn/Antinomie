@@ -1167,27 +1167,50 @@ impl RevisionStatus {
         Self::of(revision)
     }
 }
+/// The sentence every base refusal uses, so the CLI, Add base, VM start and
+/// the download dialog say the same thing. `None` when this build can use the
+/// base. It names both sides: the base's guest contract revision and minimum
+/// app version, and this build's version and newest supported revision. (The
+/// build records no date or commit, so none is named.)
+///
+/// | Argument / return | Meaning |
+/// |---|---|
+/// | `revision` | The base's recorded guest contract revision, if any. |
+/// | `min_app_version` | The base's recorded minimum app version, if any. |
+/// | Return | The refusal text, or `None` when the base is usable. |
+pub fn base_refusal(revision: Option<u32>, min_app_version: Option<&str>) -> Option<String> {
+    let needed = min_app_version.and_then(Version::parse);
+    let too_new_version = needed.is_some_and(|needed| needed > Version::app());
+    let too_new_revision = revision.is_some_and(|revision| revision > APP_REVISION);
+    if !too_new_version && !too_new_revision {
+        return None;
+    }
+    let needs = match (revision, base_app_version(revision, min_app_version)) {
+        (Some(revision), Some(version)) => {
+            format!("guest contract revision {revision} (Antinomie {version} or newer)")
+        }
+        (Some(revision), None) => format!("guest contract revision {revision}"),
+        (None, Some(version)) => format!("Antinomie {version} or newer"),
+        (None, None) => "a newer Antinomie".to_string(),
+    };
+    let advice = if too_new_revision {
+        format!("Update Antinomie or use a base of revision {APP_REVISION} or lower.")
+    } else {
+        "Update Antinomie.".to_string()
+    };
+    Some(format!(
+        "This base needs {needs}; this build is Antinomie {APP_VERSION} and supports up to \
+         guest contract revision {APP_REVISION}. {advice}"
+    ))
+}
+
 /// Refuse a base this app cannot fully interpret: one that names a newer
 /// minimum app version, or (older records) a newer kernel revision.
 pub(crate) fn require_supported(
     revision: Option<u32>,
     min_app_version: Option<&str>,
 ) -> Result<(), String> {
-    if let Some(needed) = min_app_version.and_then(Version::parse)
-        && needed > Version::app()
-    {
-        return Err(format!(
-            "this base needs Antinomie {needed} or newer; this is Antinomie {APP_VERSION}; \
-             update Antinomie first"
-        ));
-    }
-    match revision {
-        Some(revision) if revision > APP_REVISION => Err(format!(
-            "this base is for a newer Antinomie than this one ({APP_VERSION}); update \
-             Antinomie first"
-        )),
-        _ => Ok(()),
-    }
+    base_refusal(revision, min_app_version).map_or(Ok(()), Err)
 }
 
 /// The running guest kernel as reported over the control channel.
@@ -2626,17 +2649,63 @@ mod tests {
         assert!(require_supported(None, None).is_ok());
         assert!(require_supported(Some(APP_REVISION), Some(APP_VERSION)).is_ok());
         let error = require_supported(Some(APP_REVISION + 1), None).unwrap_err();
-        assert!(error.contains("update Antinomie"), "{error}");
+        assert!(error.contains("Update Antinomie"), "{error}");
         let app = Version::app();
         let newer = Version(app.0, app.1 + 1, 0).to_string();
         let error = require_supported(Some(APP_REVISION), Some(&newer)).unwrap_err();
         assert!(
-            error.contains(&format!("needs Antinomie {newer}")),
+            error.contains(&format!("Antinomie {newer} or newer")),
             "{error}"
         );
         assert_eq!(
             RevisionStatus::of_base(Some(APP_REVISION), Some(&newer)),
             RevisionStatus::NeedsNewerApp
+        );
+    }
+    #[test]
+    fn base_refusal_names_both_sides_and_is_silent_for_usable_bases() {
+        assert_eq!(base_refusal(None, None), None);
+        assert_eq!(base_refusal(Some(APP_REVISION), Some(APP_VERSION)), None);
+        assert_eq!(base_refusal(Some(APP_REVISION - 1), None), None);
+        // A revision this build lacks, with the base's own minimum version.
+        let newer = APP_REVISION + 1;
+        assert_eq!(
+            base_refusal(Some(newer), Some("9.1.0")).unwrap(),
+            format!(
+                "This base needs guest contract revision {newer} (Antinomie 9.1.0 or newer); \
+                 this build is Antinomie {APP_VERSION} and supports up to guest contract \
+                 revision {APP_REVISION}. Update Antinomie or use a base of revision \
+                 {APP_REVISION} or lower."
+            )
+        );
+        // No recorded minimum: the revision alone is named.
+        let text = base_refusal(Some(newer), None).unwrap();
+        assert!(
+            text.starts_with(&format!(
+                "This base needs guest contract revision {newer}; this build is"
+            )),
+            "{text}"
+        );
+        // Only a minimum version (older record): no revision, no "lower" advice.
+        let text = base_refusal(None, Some("9.1.0")).unwrap();
+        assert!(
+            text.starts_with("This base needs Antinomie 9.1.0 or newer; "),
+            "{text}"
+        );
+        assert!(text.ends_with(". Update Antinomie."), "{text}");
+        // Same revision, newer minimum version: say so, do not claim a lower base.
+        let text = base_refusal(Some(APP_REVISION), Some("9.1.0")).unwrap();
+        assert!(
+            text.contains(&format!(
+                "guest contract revision {APP_REVISION} (Antinomie 9.1.0"
+            )),
+            "{text}"
+        );
+        assert!(!text.contains("or lower"), "{text}");
+        // The gate every path calls returns exactly this text.
+        assert_eq!(
+            require_supported(Some(newer), Some("9.1.0")),
+            Err(base_refusal(Some(newer), Some("9.1.0")).unwrap())
         );
     }
     #[test]

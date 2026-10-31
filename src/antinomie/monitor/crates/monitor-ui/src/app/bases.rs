@@ -276,9 +276,13 @@ pub(super) fn download_row(
                 crate::theme::spinner(ui);
             } else if status == RevisionStatus::NeedsNewerApp {
                 ui.add_enabled(false, egui::Button::new("Download"))
-                    .on_disabled_hover_text(format!(
-                        "Built for a newer Antinomie (this is Antinomie {APP_VERSION})"
-                    ));
+                    .on_disabled_hover_text(
+                        antinomie_monitor_core::base_refusal(
+                            base.revision,
+                            base.min_app_version.as_deref(),
+                        )
+                        .unwrap_or_default(),
+                    );
             } else if ui
                 .add_enabled(
                     !busy,
