@@ -1223,6 +1223,8 @@ impl SamplesPage {
 impl MonitorApp {
     /// The note editor, and the requests menus made this frame.
     pub(super) fn note_windows(&mut self, ctx: &egui::Context) {
+        // The runs every view may file a note under.
+        crate::query::NoteRun::publish(ctx, &self.snapshot.runs, &self.history);
         // A request waits until the sample's data is read; one that names a
         // sample opens it first.
         if let Some(request) = peek_request(ctx) {

@@ -409,17 +409,21 @@ impl StringsState {
                             ui.ctx().copy_text(format!("0x{:x}", string.address));
                             ui.close_menu();
                         }
-                        ui.menu_button("Filter by field", |ui| {
-                            for (field, value) in extracted.row(string) {
-                                ui.menu_button(field, |ui| {
-                                    let mut text = self.query.clone();
-                                    crate::query::value_menu(ui, field, &value, &mut text);
-                                    if text != self.query {
-                                        filter = Some(text);
-                                    }
-                                });
-                            }
-                        });
+                        ui.separator();
+                        let mut text = self.query.clone();
+                        crate::query::row_menu_into(
+                            ui,
+                            egui::Id::new("core-strings-row-menu"),
+                            &mut text,
+                            &extracted.row(string),
+                            crate::query::RowMenuExtras {
+                                defaults: &["string.text", "text"],
+                                ..Default::default()
+                            },
+                        );
+                        if text != self.query {
+                            filter = Some(text);
+                        }
                     });
                     if response.clicked() || response.secondary_clicked() {
                         chosen = Some(index);

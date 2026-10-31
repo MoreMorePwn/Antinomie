@@ -336,15 +336,17 @@ impl NetworkView {
                                 }
                                 response.context_menu(|ui| {
                                     ui.menu_button("Display filter", |ui| {
-                                        for (field, clause) in packet_display_clauses(packet) {
-                                            ui.menu_button(field, |ui| {
-                                                display_clause_menu(
-                                                    ui,
-                                                    &clause,
-                                                    &mut display_filter,
-                                                );
-                                            });
-                                        }
+                                        crate::widgets::bounded_menu(ui, |ui| {
+                                            for (field, clause) in packet_display_clauses(packet) {
+                                                ui.menu_button(field, |ui| {
+                                                    display_clause_menu(
+                                                        ui,
+                                                        &clause,
+                                                        &mut display_filter,
+                                                    );
+                                                });
+                                            }
+                                        });
                                     });
                                     if let Some(set) = filter_menu(ui, packet, filtering) {
                                         filter = Some(set);

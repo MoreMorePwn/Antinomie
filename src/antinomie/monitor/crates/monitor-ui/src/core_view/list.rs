@@ -353,8 +353,35 @@ impl CoreView {
                     )
                     .on_hover_text(format!("{title}\n{state}\n{}", core.directory.display()));
                     let core_file = core.file.clone();
+                    // A core a run took is an artifact of that run's sample.
+                    let note = crate::query::NoteRun::find(ui.ctx(), &core.vm_id, &core.run_id)
+                        .map(|run| {
+                            let name = core
+                                .file
+                                .as_deref()
+                                .and_then(|file| file.file_name())
+                                .map_or_else(String::new, |name| {
+                                    name.to_string_lossy().into_owned()
+                                });
+                            run.extras(Some(antinomie_monitor_core::samples::NoteRef::new(
+                                antinomie_monitor_core::samples::RefKind::Artifact,
+                                antinomie_monitor_core::samples::artifact_target(
+                                    "core",
+                                    &core.vm_id,
+                                    &core.run_id,
+                                    &name,
+                                ),
+                                format!("Core dump · run {}", core.run_id),
+                            )))
+                        })
+                        .unwrap_or_default();
                     row.context_menu(|ui| {
-                        crate::query::table_row_menu(ui, filter_id, &acquired_filter_row(ui, core));
+                        crate::query::table_row_menu_with(
+                            ui,
+                            filter_id,
+                            &acquired_filter_row(ui, core),
+                            note,
+                        );
                         // A deleted core has no files left to open or delete.
                         if core.deleted.is_some() {
                             return;

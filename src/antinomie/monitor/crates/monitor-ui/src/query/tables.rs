@@ -239,20 +239,55 @@ pub(crate) fn value_menu(ui: &mut egui::Ui, field: &str, value: &RowValue, filte
     }
 }
 
-/// Row menu for a table whose draft lives in egui state. The caller supplies its
-/// parent UI's filter id, because a context menu has a different UI identity.
+/// Row menu for a table whose draft lives in egui state: the short menu of
+/// [`row_menu`](super::row_menu) on the cell that was clicked. The caller
+/// supplies its parent UI's filter id, because a context menu has a different
+/// UI identity.
 pub(crate) fn table_row_menu(ui: &mut egui::Ui, filter_id: egui::Id, row: &[(&str, RowValue)]) {
-    ui.menu_button("Filter by field", |ui| {
-        for (field, value) in row {
-            ui.menu_button(*field, |ui| {
-                let mut draft = ui
-                    .data(|data| data.get_temp::<String>(filter_id))
-                    .unwrap_or_default();
-                value_menu(ui, field, value, &mut draft);
-                ui.data_mut(|data| data.insert_temp(filter_id, draft));
-            });
-        }
-    });
+    super::row_menu::menu(
+        ui,
+        filter_id,
+        super::row_menu::Draft::State(filter_id),
+        row,
+        super::row_menu::Extras::default(),
+    );
+}
+
+/// [`table_row_menu`] with an "Add note…" item for the row.
+pub(crate) fn table_row_menu_with(
+    ui: &mut egui::Ui,
+    filter_id: egui::Id,
+    row: &[(&str, RowValue)],
+    extras: super::row_menu::Extras,
+) {
+    super::row_menu::menu(
+        ui,
+        filter_id,
+        super::row_menu::Draft::State(filter_id),
+        row,
+        extras,
+    );
+}
+
+/// The menu of a row of a table that has no filter: copy, and a note.
+pub(crate) fn row_menu_plain(
+    ui: &mut egui::Ui,
+    key: egui::Id,
+    row: &[(&str, RowValue)],
+    extras: super::row_menu::Extras,
+) {
+    super::row_menu::menu(ui, key, super::row_menu::Draft::None, row, extras);
+}
+
+/// [`table_row_menu_with`] for a table whose filter text the caller owns.
+pub(crate) fn row_menu_into(
+    ui: &mut egui::Ui,
+    key: egui::Id,
+    filter: &mut String,
+    row: &[(&str, RowValue)],
+    extras: super::row_menu::Extras,
+) {
+    super::row_menu::menu(ui, key, super::row_menu::Draft::Text(filter), row, extras);
 }
 
 pub(crate) fn label_row(

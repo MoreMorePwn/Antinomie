@@ -39,3 +39,38 @@ pub fn link(ui: &mut egui::Ui, text: impl Into<String>) -> egui::Response {
     ui.add(egui::Button::new(RichText::new(text).color(theme::palette().accent)).frame(false))
         .on_hover_cursor(egui::CursorIcon::PointingHand)
 }
+
+/// The link back to a list from the page of one of its items ("‹ All
+/// samples"), in the identity color so it stands apart from ordinary links.
+pub fn back_link(ui: &mut egui::Ui, text: impl Into<String>) -> egui::Response {
+    ui.add(egui::Button::new(RichText::new(text).color(theme::identity())).frame(false))
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// Detail text that sits under a table or list (a pack's source and license,
+/// a dataset's terms, a tool's path): clear of the table's edge above and of
+/// the window's edge at both sides, and filling the width so its lines wrap.
+pub fn detail_block<R>(ui: &mut egui::Ui, body: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    ui.add_space(8.0);
+    egui::Frame::new()
+        .inner_margin(egui::Margin::symmetric(10, 4))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            body(ui)
+        })
+        .inner
+}
+
+/// The body of a menu (or submenu) whose items come from data: a list of
+/// recent filters, every field of a packet, the checkpoints of a disk. It
+/// grows to the items, but never past most of the screen: a longer list
+/// scrolls inside the menu, and a long item is cut at a readable width.
+pub fn bounded_menu<R>(ui: &mut egui::Ui, body: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let screen = ui.ctx().screen_rect();
+    ui.set_max_width((screen.width() * 0.6).clamp(240.0, 480.0));
+    egui::ScrollArea::vertical()
+        .max_height((screen.height() * 0.7).max(160.0))
+        .auto_shrink([true, true])
+        .show(ui, body)
+        .inner
+}

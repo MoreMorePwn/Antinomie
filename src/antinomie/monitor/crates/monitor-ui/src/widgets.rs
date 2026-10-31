@@ -34,10 +34,10 @@ mod fit;
 mod info_panel;
 pub mod table;
 mod tabs;
-mod tone;
+pub(crate) mod tone;
 mod window;
 
-pub use card::{card, link};
+pub use card::{back_link, bounded_menu, card, detail_block, link};
 pub use facts::{fact_line, facts, titled};
 pub use fit::fit_middle;
 pub use info_panel::{info_panel, InfoPanel};

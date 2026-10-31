@@ -995,19 +995,22 @@ fn notes_table(
                     });
                 }
                 row.response().context_menu(|ui| {
-                    crate::query::value_menu(
+                    // The short menu on the cell that was clicked; the note's
+                    // name is the field a cell with no match falls back to.
+                    let mut fields =
+                        vec![("name", crate::query::RowValue::Text(note.name.clone()))];
+                    fields.extend(note.values());
+                    crate::query::row_menu_into(
                         ui,
-                        "name",
-                        &crate::query::RowValue::Text(note.name.clone()),
+                        selection_id,
                         query,
+                        &fields,
+                        crate::query::RowMenuExtras {
+                            defaults: &["name"],
+                            ..Default::default()
+                        },
                     );
-                    ui.menu_button("Filter by field", |ui| {
-                        for (field, value) in note.values() {
-                            ui.menu_button(field, |ui| {
-                                crate::query::value_menu(ui, field, &value, query)
-                            });
-                        }
-                    });
+                    ui.separator();
                     if ui.button("Copy complete note").clicked() {
                         ui.ctx().copy_text(format!(
                             "{}\t{}\t{}\t{}\t{}\t{}",

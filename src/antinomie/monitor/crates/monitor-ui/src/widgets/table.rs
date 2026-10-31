@@ -74,6 +74,7 @@ pub fn begin(ui: &mut egui::Ui) {
 
 /// A header cell: muted semibold label on the panel color, rule below.
 pub fn head(ui: &mut egui::Ui, text: &str) {
+    crate::query::note_head(ui, text);
     head_cell(ui, |ui| {
         ui.add(egui::Label::new(head_text(text)).truncate());
     });
@@ -113,6 +114,7 @@ pub fn aligned_cell(ui: &mut egui::Ui, align: Align, add: impl FnOnce(&mut egui:
 /// A header cell with its label at the left or right edge (numeric columns
 /// align right, like their cells).
 pub fn head_aligned(ui: &mut egui::Ui, text: &str, align: Align) {
+    crate::query::note_head(ui, text);
     head_bg(ui);
     aligned(ui, align, |ui| {
         ui.add(egui::Label::new(head_text(text)).truncate());
@@ -156,6 +158,7 @@ pub fn cell(ui: &mut egui::Ui, kind: Cell, text: &str) -> egui::Response {
 
 /// `cell` for text that is already styled (a value color, strikethrough).
 pub fn cell_rich(ui: &mut egui::Ui, kind: Cell, text: RichText) -> egui::Response {
+    crate::query::note_cell(ui, text.text());
     match kind {
         Cell::Text => ui.add(egui::Label::new(text).truncate()),
         Cell::Mono => ui.add(egui::Label::new(text.monospace()).truncate()),
@@ -171,6 +174,7 @@ pub fn cell_rich(ui: &mut egui::Ui, kind: Cell, text: RichText) -> egui::Respons
 /// `cell` for a table whose rows are clickable: the text is not selectable,
 /// so a click on it reaches the row.
 pub fn cell_click(ui: &mut egui::Ui, kind: Cell, text: &str) -> egui::Response {
+    crate::query::note_cell(ui, text);
     let text = RichText::new(text);
     match kind {
         Cell::Text => ui.add(egui::Label::new(text).selectable(false).truncate()),

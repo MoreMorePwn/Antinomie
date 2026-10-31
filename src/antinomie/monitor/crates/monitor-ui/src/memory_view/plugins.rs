@@ -334,15 +334,17 @@ impl MemoryView {
             ui.menu_button(label, |ui| {
                 ui.set_max_width(420.0);
                 if !failures.is_empty() {
-                    for failure in failures {
-                        crate::activity::error(
-                            ui,
-                            format!(
-                                "Failed to load Volatility plugin: {}",
-                                failure.trim_start_matches("volatility3.plugins.")
-                            ),
-                        );
-                    }
+                    crate::widgets::bounded_menu(ui, |ui| {
+                        for failure in failures {
+                            crate::activity::error(
+                                ui,
+                                format!(
+                                    "Failed to load Volatility plugin: {}",
+                                    failure.trim_start_matches("volatility3.plugins.")
+                                ),
+                            );
+                        }
+                    });
                 }
                 ui.separator();
                 if ui

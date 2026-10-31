@@ -193,6 +193,19 @@ impl MonitorApp {
             );
         }
         let font = self.settings.font_size;
+        // The run a note about an entry is filed under: its VM and id, and the
+        // sample it started (a run of a program that is not in the library
+        // has none).
+        let note_run = self.selected_vm_run().map(|run| {
+            (
+                run.vm_id.clone(),
+                run.id.clone(),
+                run.request
+                    .sample
+                    .as_ref()
+                    .map(|sample| sample.sha256.clone()),
+            )
+        });
         let height = theme::row_height(font);
         let header_height = font + 12.0;
         let table_height = (ui.available_height() - header_height).max(0.0);
@@ -444,6 +457,9 @@ impl MonitorApp {
                                 });
                             }
                             let response = row.response();
+                            response.context_menu(|ui| {
+                                trace_row_menu(ui, invocation, event, note_run.as_ref());
+                            });
                             if response.hovered() {
                                 response
                                     .ctx
@@ -970,4 +986,56 @@ pub(super) fn sort_invocations(
         let order = if descending { order.reverse() } else { order };
         order.then_with(|| time(a).cmp(&time(b)))
     });
+}
+
+/// The menu of a Syscall Trace row: copy its parts, and "Add note…" about this
+/// one entry of the run.
+fn trace_row_menu(
+    ui: &mut egui::Ui,
+    invocation: &InvocationSummary,
+    event: &antinomie_monitor_core::EventSummary,
+    run: Option<&(String, String, Option<String>)>,
+) {
+    let info = trace::info(invocation);
+    let mut items = vec![
+        ("Record".to_owned(), event.event_seq.to_string()),
+        ("Syscall".to_owned(), event.syscall_name.clone()),
+        ("PID".to_owned(), event.pid.to_string()),
+        ("Time (ns)".to_owned(), event.timestamp_ns.to_string()),
+    ];
+    if !info.is_empty() {
+        items.push(("Info".to_owned(), info.clone()));
+    }
+    crate::data_view::copy_items(ui, &items);
+    ui.separator();
+    match run {
+        Some((vm_id, run_id, Some(sample))) => {
+            let what = if info.is_empty() {
+                event.syscall_name.clone()
+            } else {
+                format!(
+                    "{} {}",
+                    event.syscall_name,
+                    info.chars().take(60).collect::<String>()
+                )
+            };
+            crate::app::note_menu_item(
+                ui,
+                Some(sample),
+                antinomie_monitor_core::samples::NoteRef::new(
+                    antinomie_monitor_core::samples::RefKind::Trace,
+                    antinomie_monitor_core::samples::trace_target(vm_id, run_id, event.event_seq),
+                    format!("Run {run_id} · {what} · record {}", event.event_seq),
+                ),
+            );
+        }
+        Some(_) => {
+            ui.add_enabled(false, egui::Button::new("Add note…"))
+                .on_disabled_hover_text("This run did not start a sample of the library");
+        }
+        None => {
+            ui.add_enabled(false, egui::Button::new("Add note…"))
+                .on_disabled_hover_text("Select a run to note one of its calls");
+        }
+    }
 }

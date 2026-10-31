@@ -260,9 +260,11 @@ fn filter_edit_iter<'a>(
         let history = ui.data(|data| data.get_temp::<Vec<String>>(id.with("history"))).unwrap_or_default();
         if !history.is_empty() {
             ui.menu_button("Recent filters", |ui| {
-                for entry in &history {
-                    if ui.button(entry).clicked() { *text = entry.clone(); menu_changed = true; ui.close_menu(); }
-                }
+                crate::widgets::bounded_menu(ui, |ui| {
+                    for entry in &history {
+                        if ui.add(egui::Button::new(entry).truncate()).on_hover_text(entry).clicked() { *text = entry.clone(); menu_changed = true; ui.close_menu(); }
+                    }
+                });
             });
         }
         if ui.button("Clear filter").clicked() { text.clear(); menu_changed = true; ui.close_menu(); }

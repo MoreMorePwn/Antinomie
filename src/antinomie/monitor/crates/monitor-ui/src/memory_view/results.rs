@@ -635,18 +635,6 @@ impl MemoryView {
                                                 &mut self.filter,
                                             );
                                         }
-                                        ui.menu_button("Filter result metadata", |ui| {
-                                            for (field, value) in &result.record {
-                                                ui.menu_button(*field, |ui| {
-                                                    crate::query::value_menu(
-                                                        ui,
-                                                        field,
-                                                        value,
-                                                        &mut self.filter,
-                                                    )
-                                                });
-                                            }
-                                        });
                                     });
                                 });
                             }

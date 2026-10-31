@@ -462,6 +462,37 @@ impl View {
                                     }
                                 }
                             });
+                            let values = [
+                                (
+                                    "indicator.type",
+                                    crate::query::RowValue::Text(ty.id().to_owned()),
+                                ),
+                                (
+                                    "indicator.value",
+                                    crate::query::RowValue::Text(indicator.value.clone()),
+                                ),
+                                (
+                                    "indicator.path",
+                                    crate::query::RowValue::Text(indicator.path.clone()),
+                                ),
+                            ];
+                            let extras = crate::query::NoteRun::get(&row.response().ctx)
+                                .map(|run| {
+                                    run.extras(Some(antinomie_monitor_core::samples::NoteRef::new(
+                                        antinomie_monitor_core::samples::RefKind::Indicator,
+                                        format!("{}:{}", ty.id(), indicator.value),
+                                        format!("{} ({})", indicator.value, ty.id()),
+                                    )))
+                                })
+                                .unwrap_or_default();
+                            row.response().context_menu(|ui| {
+                                crate::query::row_menu_plain(
+                                    ui,
+                                    egui::Id::new(("ioc-row-menu", ty.id())),
+                                    &values,
+                                    extras,
+                                );
+                            });
                             if row.response().clicked() {
                                 picked = Some(at);
                             }

@@ -91,6 +91,8 @@ impl MonitorApp {
             self.open_library(crate::workspace::LibraryPage::Rules);
             self.rules_ui.show_ioc();
         }
+        // Row menus file a note about a row under this run's sample.
+        crate::query::NoteRun::set(ui.ctx(), &run);
         let jump = self.triage.show(ui, input);
         self.settings.triage_detection = self.triage.detection_settings().clone();
         self.settings.triage_detection.rules_root.clear();

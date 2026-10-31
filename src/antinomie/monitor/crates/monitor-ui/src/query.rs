@@ -11,11 +11,17 @@ mod eval;
 mod guide;
 mod lexer;
 mod parser;
+mod row_menu;
 mod tables;
 mod validate;
 
 use self::{completion::*, eval::*, lexer::*, parser::*, validate::*};
-pub(crate) use self::{editor::*, guide::*, tables::*};
+pub(crate) use self::{
+    editor::*,
+    guide::*,
+    row_menu::{note_cell, note_head, Extras as RowMenuExtras, NoteRun},
+    tables::*,
+};
 
 pub(crate) const HELP: &str = "\
 syscall.num  syscall.name  syscall\n\

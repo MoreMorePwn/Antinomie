@@ -392,53 +392,55 @@ impl DiskView {
         let selected_dump = self.selected_dump().map(|row| row.dump.id.clone());
         let mut chosen = None;
         ui.menu_button("Compare with…", |ui| {
-            ui.add_enabled_ui(backend_ready, |ui| {
-                if ui
-                    .button("Installed base image")
-                    .on_hover_text("What the VM's disk was created from")
-                    .on_disabled_hover_text(why)
-                    .clicked()
-                {
-                    chosen = Some(Against::Source(DiskSourceSpec::Base));
-                }
-                for checkpoint in source::offered(&self.checkpoints) {
+            crate::widgets::bounded_menu(ui, |ui| {
+                ui.add_enabled_ui(backend_ready, |ui| {
                     if ui
-                        .button(format!(
-                            "Checkpoint {}",
-                            source::checkpoint_label(checkpoint)
-                        ))
+                        .button("Installed base image")
+                        .on_hover_text("What the VM's disk was created from")
                         .on_disabled_hover_text(why)
                         .clicked()
                     {
-                        chosen = Some(Against::Source(DiskSourceSpec::Checkpoint(
-                            checkpoint.id.clone(),
-                        )));
+                        chosen = Some(Against::Source(DiskSourceSpec::Base));
+                    }
+                    for checkpoint in source::offered(&self.checkpoints) {
+                        if ui
+                            .button(format!(
+                                "Checkpoint {}",
+                                source::checkpoint_label(checkpoint)
+                            ))
+                            .on_disabled_hover_text(why)
+                            .clicked()
+                        {
+                            chosen = Some(Against::Source(DiskSourceSpec::Checkpoint(
+                                checkpoint.id.clone(),
+                            )));
+                        }
+                    }
+                });
+                ui.separator();
+                if selected_dump.is_some()
+                    && ui
+                        .add_enabled(
+                            cx.current_disk.is_some(),
+                            egui::Button::new("The open view"),
+                        )
+                        .on_disabled_hover_text("Open the current disk (or a checkpoint) first")
+                        .clicked()
+                {
+                    chosen = Some(Against::View);
+                }
+                for row in &self.dumps {
+                    if !row.browsable() || selected_dump.as_deref() == Some(row.dump.id.as_str()) {
+                        continue;
+                    }
+                    if ui
+                        .button(format!("Dump {}", dumps::dump_title(&row.dump)))
+                        .clicked()
+                    {
+                        chosen = Some(Against::Dump(row.dump.id.clone()));
                     }
                 }
             });
-            ui.separator();
-            if selected_dump.is_some()
-                && ui
-                    .add_enabled(
-                        cx.current_disk.is_some(),
-                        egui::Button::new("The open view"),
-                    )
-                    .on_disabled_hover_text("Open the current disk (or a checkpoint) first")
-                    .clicked()
-            {
-                chosen = Some(Against::View);
-            }
-            for row in &self.dumps {
-                if !row.browsable() || selected_dump.as_deref() == Some(row.dump.id.as_str()) {
-                    continue;
-                }
-                if ui
-                    .button(format!("Dump {}", dumps::dump_title(&row.dump)))
-                    .clicked()
-                {
-                    chosen = Some(Against::Dump(row.dump.id.clone()));
-                }
-            }
         });
         if let Some(against) = chosen {
             ui.close_menu();
@@ -580,7 +582,7 @@ impl DiskView {
                 .add(
                     egui::TextEdit::singleline(&mut diff.filter.text)
                         .desired_width(200.0)
-                        .hint_text("path contains"),
+                        .hint_text(crate::theme::hint_text("path contains")),
                 )
                 .changed();
             changed_filter |= ui

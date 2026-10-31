@@ -114,6 +114,43 @@ pub(super) fn table_with(
     details::refresh(ui.ctx(), id, headers, rows);
 }
 
+/// What a row's menu offers for a note: a process is noted by its pid, a row
+/// of call evidence by the event sequence its record has in the Syscall
+/// Trace; other rows (packets, files without a call) have no reference yet.
+fn row_extras(
+    run: Option<&query::NoteRun>,
+    table: &str,
+    first: &str,
+    values: &[(&str, RowValue)],
+) -> query::RowMenuExtras {
+    use antinomie_monitor_core::samples::{trace_target, NoteRef, RefKind};
+    let Some(run) = run else {
+        return query::RowMenuExtras::default();
+    };
+    let short: String = first.chars().take(48).collect();
+    let packet = values.iter().any(|(key, _)| *key == "capture.path");
+    let reference = if table == "triage-process" {
+        files::number(values, "process.pid").map(|pid| {
+            NoteRef::new(
+                RefKind::Process,
+                format!("{}/{}/{pid}", run.vm_id, run.run_id),
+                format!("{short} {pid} · run {}", run.run_id),
+            )
+        })
+    } else {
+        files::number(values, "event.id")
+            .filter(|_| !packet)
+            .map(|seq| {
+                NoteRef::new(
+                    RefKind::Trace,
+                    trace_target(&run.vm_id, &run.run_id, seq),
+                    format!("Run {} · {short} · record {seq}", run.run_id),
+                )
+            })
+    };
+    run.extras(reference)
+}
+
 pub(super) fn evidence_key(row: &[Cell]) -> String {
     let identity = evidence_values_key(
         row.first()
@@ -411,15 +448,26 @@ fn table_rows_with(
                     .first()
                     .map(|cell| cell.values.as_slice())
                     .unwrap_or_default();
-                let reconstructable = file_activity::row_path(id, values).is_some();
-                if filter_id.is_some() || reconstructable {
-                    row.response().context_menu(|ui| {
-                        file_activity::reconstruct_menu(ui, id, values);
-                        if let Some(filter_id) = filter_id {
-                            query::table_row_menu(ui, filter_id, values);
+                let extras = row_extras(
+                    query::NoteRun::get(&row.response().ctx).as_ref(),
+                    id,
+                    cells.first().map_or("", |cell| cell.text.as_str()),
+                    values,
+                );
+                row.response().context_menu(|ui| {
+                    file_activity::reconstruct_menu(ui, id, values);
+                    match filter_id {
+                        Some(filter_id) => {
+                            query::table_row_menu_with(ui, filter_id, values, extras)
                         }
-                    });
-                }
+                        None => query::row_menu_plain(
+                            ui,
+                            egui::Id::new((id, "row-menu")),
+                            values,
+                            extras,
+                        ),
+                    }
+                });
             });
         });
 }
@@ -589,10 +637,23 @@ fn finding_table_rows(
                 if row.response().double_clicked() {
                     request_evidence_jump(&row.response().ctx, &finding.values);
                 }
-                if let Some(filter_id) = filter_id {
-                    row.response()
-                        .context_menu(|ui| query::table_row_menu(ui, filter_id, &finding.values));
-                }
+                let extras = row_extras(
+                    query::NoteRun::get(&row.response().ctx).as_ref(),
+                    id,
+                    finding.cells.first().map_or("", |cell| cell.text.as_str()),
+                    &finding.values,
+                );
+                row.response().context_menu(|ui| match filter_id {
+                    Some(filter_id) => {
+                        query::table_row_menu_with(ui, filter_id, &finding.values, extras)
+                    }
+                    None => query::row_menu_plain(
+                        ui,
+                        egui::Id::new((id, "row-menu")),
+                        &finding.values,
+                        extras,
+                    ),
+                });
             });
         });
     clicked

@@ -367,9 +367,36 @@ impl MonitorApp {
                                     ui.separator();
                                 }
                                 let annotation = crate::evidence::annotation(ui, &run.directory);
-                                for (field, value) in crate::run_filter::row(run, annotation.as_ref(), run_status(run), root_exit(run)) {
-                                    crate::query::value_menu(ui, field, &value, &mut self.run_query);
-                                }
+                                let fields = crate::run_filter::row(run, annotation.as_ref(), run_status(run), root_exit(run));
+                                // A run of a library sample can be noted: the note goes to that sample.
+                                let note = run.request.sample.as_ref().map(|sample| {
+                                    (
+                                        Some(sample.sha256.clone()),
+                                        antinomie_monitor_core::samples::NoteRef::new(
+                                            antinomie_monitor_core::samples::RefKind::Run,
+                                            format!("{}/{}", run.vm_id, run.id),
+                                            format!("Run {} · {}", run.id, crate::time_format::unix_ms(run.started_ms)),
+                                        ),
+                                    )
+                                });
+                                crate::query::row_menu_into(
+                                    ui,
+                                    egui::Id::new(("run-history-row-menu", "run_history")),
+                                    &mut self.run_query,
+                                    &fields,
+                                    crate::query::RowMenuExtras {
+                                        no_note: note.is_none().then_some("This run did not start a sample of the library"),
+                                        note,
+                                        columns: &[
+                                            ("Executable", "process.exe"),
+                                            ("Sample", "sample"),
+                                            ("Arguments", "process.argv"),
+                                            ("Tree status", "run.state"),
+                                            ("Root exit", "run.root_exit"),
+                                        ],
+                                        ..Default::default()
+                                    },
+                                );
                             });
                             if response.clicked() || response.double_clicked() {
                                 pane.request_focus();
