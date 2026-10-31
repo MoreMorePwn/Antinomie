@@ -109,6 +109,131 @@ mod tests {
         assert_eq!(doubled(&limit(Some(0))), None);
     }
 
+    fn report_with(limit: AnalysisLimit) -> (AnalysisReport, usize) {
+        let mut section = AnalysisSection::new(AnalysisKind::Strings);
+        section.state = antinomie_monitor_core::AnalysisSectionState::Partial;
+        section.limits = vec![limit];
+        let report = AnalysisReport {
+            id: "r1".into(),
+            state: AnalysisState::Complete,
+            source_path: "/fixture/sample".into(),
+            specimen_sha256: None,
+            specimen_len: None,
+            reason: None,
+            sections: vec![section],
+            layer: None,
+            specimen_source: None,
+            time_limit_seconds: None,
+        };
+        (report, 0)
+    }
+
+    /// Draw the warnings of the section and press the button called `label`.
+    fn press(
+        report: &AnalysisReport,
+        at: usize,
+        label: &str,
+    ) -> (Vec<String>, Option<ReportAction>) {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut shown = Vec::new();
+        let mut action = None;
+        // The first frame lays the buttons out; the pointer then presses one.
+        let mut rect: Option<egui::Rect> = None;
+        for step in 0..3 {
+            let mut events = Vec::new();
+            if let (2, Some(rect)) = (step, rect) {
+                let pos = rect.center();
+                events = vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ];
+            }
+            let output = ctx.run(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        if let Some(next) = notes(ui, report, &report.sections[at]) {
+                            action = Some(next);
+                        }
+                    });
+                },
+            );
+            let found = crate::app::tests::texts(&output);
+            rect = found
+                .iter()
+                .find(|(text, _)| text == label)
+                .map(|(_, rect)| *rect);
+            shown = found.into_iter().map(|(text, _)| text).collect();
+        }
+        // Release on the next frame completes the click.
+        let pos = rect.unwrap_or(egui::Rect::ZERO).center();
+        let _ = ctx.run(
+            egui::RawInput {
+                events: vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    if let Some(next) = notes(ui, report, &report.sections[at]) {
+                        action = Some(next);
+                    }
+                });
+            },
+        );
+        (shown, action)
+    }
+
+    #[test]
+    fn a_row_size_or_text_limit_has_a_button_to_the_settings_that_list_it() {
+        for kind in [
+            AnalysisLimitKind::Rows,
+            AnalysisLimitKind::Size,
+            AnalysisLimitKind::Text,
+            AnalysisLimitKind::Input,
+        ] {
+            let (report, at) = report_with(AnalysisLimit {
+                kind,
+                text: "A bound was met.".into(),
+                seconds: None,
+            });
+            let (shown, action) = press(&report, at, "Analysis settings…");
+            assert!(
+                shown.iter().any(|text| text == "A bound was met."),
+                "{shown:?}"
+            );
+            assert!(
+                matches!(action, Some(ReportAction::OpenAnalysisSettings)),
+                "{kind:?}: {shown:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_time_limit_keeps_its_own_buttons() {
+        let (report, at) = report_with(limit(Some(240)));
+        let (shown, action) = press(&report, at, "Time limit settings…");
+        assert!(
+            shown.iter().any(|text| text == "Time limit settings…"),
+            "{shown:?}"
+        );
+        assert!(!shown.iter().any(|text| text == "Analysis settings…"));
+        assert!(matches!(action, Some(ReportAction::OpenAnalysisSettings)));
+    }
+
     #[test]
     fn durations_read_as_minutes_and_seconds() {
         assert_eq!(duration_text(480), "8 minutes");
