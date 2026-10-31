@@ -394,6 +394,9 @@ def plan(tier, ctx):
               2400, needs=("base",)),
         Check("snapshot", "full", example("snapshot-check", base, runs / "snapshot"), str(ROOT), 2400,
               needs=("base",)),
+        # A 95 MiB program analysed whole on a 2 GiB VM, refused on a 320 MiB one (two boots).
+        Check("specimen", "full", example("specimen-check", base, runs / "specimen", fix / "specimen-probe"),
+              str(ROOT), 3600, needs=("base",)),
     ]
     # Old host on the new base runs the whole contract; the new host on an old base can only
     # run what that guest has: the legacy checks above (io_uring, tracer) and the audit core.
@@ -443,6 +446,7 @@ def build_fixtures(out):
         (["-static", "-O2", *strict], "stealth-probe.c", fix / "stealth-probe"),
         (["-static", "-O2", *strict], "cloud-probe.c", fix / "cloud-probe"),
         (["-static", "-O2", *strict], "route-probe.c", fix / "route-probe"),
+        (["-static", "-O2", *strict], "specimen-probe.c", fix / "specimen-probe"),
         (["-O1", "-static", "-no-pie", "-pthread"], "debug-p2-fixture.c", fix / "debug/p2fix"),
         (["-O1", "-static-pie", "-pthread"], "debug-p2-fixture.c", fix / "debug/p2pie"),
         (["-O1", "-static", "-no-pie", "-pthread"], "debug-p3-fixture.c", fix / "debug/p3fix"),

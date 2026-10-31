@@ -2407,6 +2407,39 @@ Three host fixes; the guest and the contract are unchanged.
   lines never reached the frontend (lines 164 to 273, the 10 s it did not read);
   with the backlog all 680 did.
 
+### Specimens up to 128 MiB (0.8.0, contract revision 19)
+
+A launched program's executable and an Analyze Only file are copied by the guest
+(`kernel/antinomie/specimen.c`, patch 0008) into one immutable vmalloc buffer,
+which the host reads in 16 KiB chunks into `specimen.partial` and releases. Patch
+0025 raises that copy's bound and the global reservation from 64 to 128 MiB
+(`ANT_SPECIMEN_MAX`); the copy keeps its 5 s limit and the 180 s idle expiry. An
+older guest refuses a `max_size` above 64 MiB with EINVAL, so the larger request is
+revision 19 (`control::LARGE_SPECIMEN_REVISION`, the one place the number is
+written; `REVISION` follows it):
+
+| Item | Value |
+|---|---|
+| `control::specimen_request(revision, ram_mib)` | 128 MiB from revision 19, 64 MiB from 10, none before; never more than `specimen_ram_bound` |
+| `control::specimen_ram_bound(ram_mib)` | a quarter of the VM's RAM, in bytes |
+| `control::SPECIMEN_MAX_SIZE` | 128 MiB: what the host keeps and accepts in an acquisition reply |
+| `LEGACY_SPECIMEN_MAX_SIZE`, `LEGACY_CORE_MAX_SIZE` | 64 MiB: an older guest's specimen; an exit core whose request names no budget |
+
+The quarter-of-RAM rule (coordinator decision, ANT-T0182) bounds the one guest copy:
+`uploads::check_program_size` refuses an executable Upload or a sample sent as
+executable that is larger than a quarter of the VM's RAM before any byte is sent,
+saying how much RAM (in 256 MiB steps) the VM needs; a plain file is not refused. A
+larger program already in the guest is refused by the guest itself (EFBIG for the
+`max_size` it was given), and `control::specimen_acquisition` says the program ran
+without static analysis and why. On the host the transfer streams to disk; each
+sandboxed analysis worker still reads the whole specimen once (`fs::read`), bounded
+by `SPECIMEN_MAX_SIZE`, as before. The Unpacking section's layer 0 is the specimen
+itself: report validation bounds it by `SPECIMEN_MAX_SIZE`, and only unpacked layers by
+`unpack::LAYER_MAX_SIZE` (64 MiB); before, a specimen over 64 MiB failed the whole
+worker report ("structured analysis record violates kind, text or evidence bounds")
+after every section had finished. `production_worker_all_categories_with_listings`
+with `ANTINOMIE_TEST_SPECIMEN` set to a 95.7 MB static ELF runs every section.
+
 ### Uploads closed before COMMIT answers (0.8.0)
 
 `UPLOAD_COMMIT` and `UPLOAD_ABORT` run on the guest's `antinomie-control` workqueue, a

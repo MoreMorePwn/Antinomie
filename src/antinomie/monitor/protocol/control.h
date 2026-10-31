@@ -17,7 +17,9 @@
 /* Revision 18: where reads and writes of seekable files happened, the
  * operands of in-kernel copies and allocations (file.position, file.copy), and
  * pages written through shared file mappings (lifecycle.file_mapped). */
-#define ANTC_REVISION 18
+/* Revision 19: specimens (SPECIMEN_ACQUIRE max_size and the global
+ * reservation) up to 128 MiB. */
+#define ANTC_REVISION 19
 #define ANTC_HEADER_SIZE 8
 #define ANTC_UPLOAD_BEGIN 0x1001
 #define ANTC_UPLOAD_CHUNK 0x1002
@@ -572,14 +574,16 @@
  * reserved=0 at 20, absolute path at 24, then u32 max_size, timeout_ms.
  * Acquisition reply: u64 id, u64 size, i32 status, u32 reserved=0.
  * Ready status=0 has nonzero id; unavailable negative errno has id/size=0.
- * max_size is 1..64MiB; timeout_ms is 1..5000. Initial exec captures the
+ * max_size is 1..128MiB (1..64MiB before revision 19); timeout_ms is
+ * 1..5000. Initial exec captures the
  * opened bprm file; scripts do not prove what an interpreter later reopens.
  * SPECIMEN_READ: header flags=0, u64 id at 8, u64 offset at 16,
  * u32 capacity at 24 (1..16328), u32 reserved=0 at 28. Reply: u64 offset,
  * u64 total_len, u32 count, u32 reserved=0, immutable data at 24.
  * SPECIMEN_RELEASE: header flags=0, u64 id at 8; empty reply.
  * Unknown/stale IDs rejected. Ready handles expire after 180s idle.
- * One active copy, at most four handles, 64MiB global memory reservation.
+ * One active copy, at most four handles, 128MiB global memory reservation
+ * (64MiB before revision 19).
  *
  * INPUT: header, u64 session_id at 8, bytes at 16.
  * Reply: u64 bytes_written (partial writes possible).

@@ -48,3 +48,6 @@
 0020-antinomie-keep-stock-structure-layouts-recorder-state-in-side-tables.patch
 0021-antinomie-keep-the-recorder-out-of-the-function-tracer.patch
 0022-antinomie-keep-the-kernel-s-btf-type-for-type-debian-s.patch
+
+# Static analysis in 0.8.0: specimens up to 128 MiB (contract revision 19)
+0025-antinomie-raise-the-specimen-limit-to-128-mib.patch

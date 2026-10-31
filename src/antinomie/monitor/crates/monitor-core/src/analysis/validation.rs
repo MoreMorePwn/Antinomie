@@ -320,7 +320,14 @@ pub(crate) fn validate_record(
                 && !method.is_empty()
                 && sha256.len() == 64
                 && sha256.bytes().all(|b| b.is_ascii_hexdigit())
-                && *size <= super::unpack::LAYER_MAX_SIZE
+                // Layer 0 is the specimen itself; an unpacked layer has its
+                // own, smaller bound.
+                && *size
+                    <= if *index == 0 {
+                        u64::from(control::SPECIMEN_MAX_SIZE)
+                    } else {
+                        super::unpack::LAYER_MAX_SIZE
+                    }
                 && parent.is_some() == (*index != 0)
                 && parent.is_none_or(|parent| parent < *index)
                 && packer.as_deref().is_none_or(bounded)

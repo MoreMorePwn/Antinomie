@@ -421,6 +421,29 @@ fn layer_rows_with_another_file_name_or_a_bad_hash_are_rejected() {
         )
         .is_err()
     );
+    // Layer 0 is the specimen, which may be larger than an unpacked layer.
+    let original = report.sections[0].entries[0].clone();
+    let sized = |size: u64, index: u32| {
+        let mut entry = if index == 0 {
+            original.clone()
+        } else {
+            entry.clone()
+        };
+        if let AnalysisData::Layer { size: s, .. } = &mut entry.record.as_mut().unwrap().data {
+            *s = size;
+        }
+        crate::analysis::validation::validate_record(
+            AnalysisKind::Unpacking,
+            &entry,
+            entry.record.as_ref().unwrap(),
+            Some(10_000),
+        )
+    };
+    let mib = 1u64 << 20;
+    assert!(sized(96 * mib, 0).is_ok());
+    assert!(sized(128 * mib + 1, 0).is_err());
+    assert!(sized(64 * mib, 1).is_ok());
+    assert!(sized(64 * mib + 1, 1).is_err());
     // Only an Unpacking section may hold them.
     assert!(
         crate::analysis::validation::validate_record(

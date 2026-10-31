@@ -166,7 +166,7 @@ class PlanTests(unittest.TestCase):
                      "conf-stress-contended",
                      "debug-p2", "debug-p3", "audit-stop", "audit-core", "uring-status",
                      "uring-boots", "uring-legacy", "tracer-record", "tracer-legacy", "tracer-qa",
-                     "debugger-live", "stealth", "cloud", "route", "snapshot", "io-old-new-p3",
+                     "debugger-live", "stealth", "cloud", "route", "snapshot", "specimen", "io-old-new-p3",
                      "io-new-old-audit"):
             self.assertIn(name, names)
         self.assertEqual(len(names), len(set(names)))

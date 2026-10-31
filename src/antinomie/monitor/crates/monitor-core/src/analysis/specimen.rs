@@ -45,7 +45,10 @@ pub(super) fn read_all(
         .specimen_len
         .ok_or("complete specimen length unavailable")?;
     if len > u64::from(crate::control::SPECIMEN_MAX_SIZE) {
-        return Err("saved specimen exceeds 64 MiB bound".into());
+        return Err(format!(
+            "saved specimen exceeds the {} MiB bound",
+            crate::control::SPECIMEN_MAX_SIZE >> 20
+        ));
     }
     let page = read_verified_range(directory, report_id, 0, len as usize)?;
     let after = super::jobs::open_report(directory)?;
@@ -98,7 +101,10 @@ fn read_verified_range(
         .specimen_len
         .ok_or("complete specimen length unavailable")?;
     if total_len > u64::from(crate::control::SPECIMEN_MAX_SIZE) {
-        return Err("saved specimen exceeds 64 MiB bound".into());
+        return Err(format!(
+            "saved specimen exceeds the {} MiB bound",
+            crate::control::SPECIMEN_MAX_SIZE >> 20
+        ));
     }
     if end > total_len {
         return Err("specimen preview range exceeds saved length".into());

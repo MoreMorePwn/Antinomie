@@ -40,6 +40,13 @@ it runs.
   "Text file busy". The guest now closes the file before it answers (needs a
   base built from this release).
 
+- **Programs up to 128 MiB are analysed.** Static analysis takes a specimen of
+  up to 128 MiB (was 64 MiB) from a base of this release (contract revision 19),
+  and at most a quarter of the VM's RAM, since the guest keeps one copy of it in
+  memory. Uploading a program larger than a quarter of the VM's RAM is refused
+  before anything is sent, saying how much RAM the VM needs; a larger file
+  already in the guest runs without static analysis and says why.
+
 - **Sample notes and Delete run.** Notes with links to runs, processes,
   artifacts and custody entries, a Notes tab, Latest note and Add note… menus;
   every note change is in the custody log. Delete run asks which of the run's

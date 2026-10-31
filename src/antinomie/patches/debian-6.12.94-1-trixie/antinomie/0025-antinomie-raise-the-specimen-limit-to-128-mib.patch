@@ -1,0 +1,66 @@
+Description: antinomie: raise the specimen limit to 128 MiB
+ The launched program's executable and an Analyze Only file are copied into
+ guest memory as one immutable specimen that the host then reads in chunks.
+ The copy, and the global reservation of every ready specimen, were bounded
+ at 64 MiB, so a larger program was refused (EFBIG) and was not analysed.
+ Raise both bounds to 128 MiB in kernel/antinomie/specimen.c: one copy of
+ up to 128 MiB of guest kernel memory (vmalloc) while it waits for the host,
+ released when the host has read it, or after 180 seconds idle. The copy
+ keeps its 5 second limit. No other kernel file changes.
+ .
+ The host must not ask an older guest for more than 64 MiB (it refuses
+ max_size above its own bound with EINVAL), so the larger bound is contract
+ revision 19 and the control header says which revision allows which size.
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-10-31
+
+---
+diff --git a/kernel/antinomie/control_wire.h b/kernel/antinomie/control_wire.h
+index 3a0c794..d67b25d 100644
+--- a/kernel/antinomie/control_wire.h
++++ b/kernel/antinomie/control_wire.h
+@@ -17,7 +17,9 @@
+ /* Revision 18: where reads and writes of seekable files happened, the
+  * operands of in-kernel copies and allocations (file.position, file.copy), and
+  * pages written through shared file mappings (lifecycle.file_mapped). */
+-#define ANTC_REVISION 18
++/* Revision 19: specimens (SPECIMEN_ACQUIRE max_size and the global
++ * reservation) up to 128 MiB. */
++#define ANTC_REVISION 19
+ #define ANTC_HEADER_SIZE 8
+ #define ANTC_UPLOAD_BEGIN 0x1001
+ #define ANTC_UPLOAD_CHUNK 0x1002
+@@ -572,14 +574,16 @@
+  * reserved=0 at 20, absolute path at 24, then u32 max_size, timeout_ms.
+  * Acquisition reply: u64 id, u64 size, i32 status, u32 reserved=0.
+  * Ready status=0 has nonzero id; unavailable negative errno has id/size=0.
+- * max_size is 1..64MiB; timeout_ms is 1..5000. Initial exec captures the
++ * max_size is 1..128MiB (1..64MiB before revision 19); timeout_ms is
++ * 1..5000. Initial exec captures the
+  * opened bprm file; scripts do not prove what an interpreter later reopens.
+  * SPECIMEN_READ: header flags=0, u64 id at 8, u64 offset at 16,
+  * u32 capacity at 24 (1..16328), u32 reserved=0 at 28. Reply: u64 offset,
+  * u64 total_len, u32 count, u32 reserved=0, immutable data at 24.
+  * SPECIMEN_RELEASE: header flags=0, u64 id at 8; empty reply.
+  * Unknown/stale IDs rejected. Ready handles expire after 180s idle.
+- * One active copy, at most four handles, 64MiB global memory reservation.
++ * One active copy, at most four handles, 128MiB global memory reservation
++ * (64MiB before revision 19).
+  *
+  * INPUT: header, u64 session_id at 8, bytes at 16.
+  * Reply: u64 bytes_written (partial writes possible).
+diff --git a/kernel/antinomie/specimen.c b/kernel/antinomie/specimen.c
+index 469f54a..b8702d5 100644
+--- a/kernel/antinomie/specimen.c
++++ b/kernel/antinomie/specimen.c
+@@ -16,7 +16,7 @@
+ #include <linux/workqueue.h>
+ #include "specimen.h"
+ 
+-#define ANT_SPECIMEN_MAX (64U * 1024 * 1024)
++#define ANT_SPECIMEN_MAX (128U * 1024 * 1024)
+ #define ANT_SPECIMEN_HANDLES 4
+ #define ANT_SPECIMEN_IDLE (180 * HZ)
+ 

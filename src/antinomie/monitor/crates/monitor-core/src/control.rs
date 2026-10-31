@@ -31,8 +31,12 @@ pub(crate) const INFO_SIZE: usize = 160;
 pub(crate) const SHUTDOWN: u32 = 0x1030;
 pub(crate) const RESOURCES: u32 = 0x1070;
 pub(crate) const RESOURCES_SIZE: usize = 96;
+/// The first guest contract revision whose specimens may be 128 MiB
+/// (`ANT_SPECIMEN_MAX`). This is the one place the number is written:
+/// [`REVISION`] follows it until a later revision is added.
+pub(crate) const LARGE_SPECIMEN_REVISION: u32 = 19;
 /// Guest contract revision this host implements (`ANTC_REVISION`).
-pub const REVISION: u32 = 18;
+pub const REVISION: u32 = LARGE_SPECIMEN_REVISION;
 pub(crate) const PROCESS_LIST: u32 = 0x1050;
 pub(crate) const CAPTURE_ATTACH: u32 = 0x1051;
 pub(crate) const CAPTURE_ALL: u32 = 0x1052;
@@ -83,7 +87,34 @@ pub(crate) fn core_lookup(
 pub(crate) const ACQUIRE: u32 = 0x1040;
 pub(crate) const SPECIMEN_READ: u32 = 0x1041;
 pub(crate) const SPECIMEN_RELEASE: u32 = 0x1042;
-pub(crate) const SPECIMEN_MAX_SIZE: u32 = 64 * 1024 * 1024;
+/// Largest specimen the host keeps, and what it asks a guest of
+/// [`LARGE_SPECIMEN_REVISION`] or later for.
+pub(crate) const SPECIMEN_MAX_SIZE: u32 = 128 * 1024 * 1024;
+/// Largest specimen an older guest accepts (it refuses more with EINVAL).
+pub(crate) const LEGACY_SPECIMEN_MAX_SIZE: u32 = 64 * 1024 * 1024;
+/// Exit core budget of a request that names none: the contract of a guest
+/// without CORE_CAPS.
+pub(crate) const LEGACY_CORE_MAX_SIZE: u32 = 64 * 1024 * 1024;
+
+/// The specimen size to ask a guest of contract `revision` with `ram_mib`
+/// of RAM for: the contract's bound, and at most a quarter of the guest's
+/// RAM ([`specimen_ram_bound`]), since the guest holds one copy of the
+/// specimen in kernel memory until the host has read it. `None` for a guest
+/// without specimens (before revision 10) or of unknown revision.
+pub(crate) fn specimen_request(revision: Option<u32>, ram_mib: u32) -> Option<u32> {
+    let bound = match revision? {
+        revision if revision >= LARGE_SPECIMEN_REVISION => SPECIMEN_MAX_SIZE,
+        revision if revision >= 10 => LEGACY_SPECIMEN_MAX_SIZE,
+        _ => return None,
+    };
+    Some(bound.min(u32::try_from(specimen_ram_bound(ram_mib)).unwrap_or(u32::MAX)))
+}
+
+/// A quarter of `ram_mib` MiB, in bytes: the largest specimen a VM with that
+/// much RAM is given.
+pub(crate) fn specimen_ram_bound(ram_mib: u32) -> u64 {
+    u64::from(ram_mib) << 18
+}
 pub(crate) const SPECIMEN_CHUNK_SIZE: u32 = 16328;
 pub(crate) fn header(flags: u32) -> Vec<u8> {
     let mut v = vec![1, 0, 8, 0];
@@ -294,19 +325,26 @@ pub(crate) fn execute(r: &ExecRequest) -> Result<Vec<u8>, String> {
     }
     Ok(v)
 }
-pub(crate) fn execute_analysis(r: &ExecRequest, supported: bool) -> Result<Vec<u8>, String> {
+/// The EXEC request of `r`. `specimen` is the specimen size the guest takes
+/// ([`specimen_request`]); `None` asks for no specimen.
+pub(crate) fn execute_analysis(r: &ExecRequest, specimen: Option<u32>) -> Result<Vec<u8>, String> {
     r.analysis.validate()?;
     let mut encoded = execute(r)?;
-    if supported && r.analysis.enabled {
+    let specimen = specimen.filter(|_| r.analysis.enabled);
+    if let Some(max_size) = specimen {
         encoded[4..8].copy_from_slice(&1u32.to_le_bytes());
-        encoded.extend(SPECIMEN_MAX_SIZE.to_le_bytes());
+        encoded.extend(max_size.to_le_bytes());
         encoded.extend(5000u32.to_le_bytes());
     }
     if r.core_dump_on_exit {
-        let flags = u32::from(supported && r.analysis.enabled) | 2;
+        let flags = u32::from(specimen.is_some()) | 2;
         encoded[4..8].copy_from_slice(&flags.to_le_bytes());
         // A run saved before the budget could be chosen used the old contract.
-        encoded.extend(r.core_max_size.unwrap_or(SPECIMEN_MAX_SIZE).to_le_bytes());
+        encoded.extend(
+            r.core_max_size
+                .unwrap_or(LEGACY_CORE_MAX_SIZE)
+                .to_le_bytes(),
+        );
         encoded.extend(r.core_timeout_ms.unwrap_or(5000).to_le_bytes());
     }
     if r.debug_on_start {
@@ -354,7 +392,8 @@ pub(crate) fn tracer_caps(reply: &[u8]) -> Result<crate::api::GuestTracerCaps, S
         hash_pending_max_size: u64_at(reply, 16).map_err(|e| e.to_string())?,
     })
 }
-pub(crate) fn acquire(path: &str, uid: u32, gid: u32) -> Result<Vec<u8>, String> {
+/// The ACQUIRE request for `path`; `max_size` from [`specimen_request`].
+pub(crate) fn acquire(path: &str, uid: u32, gid: u32, max_size: u32) -> Result<Vec<u8>, String> {
     string(path, true)?;
     let mut encoded = header(0);
     encoded.extend(uid.to_le_bytes());
@@ -366,12 +405,33 @@ pub(crate) fn acquire(path: &str, uid: u32, gid: u32) -> Result<Vec<u8>, String>
     );
     encoded.extend(0u32.to_le_bytes());
     encoded.extend(path.as_bytes());
-    encoded.extend(SPECIMEN_MAX_SIZE.to_le_bytes());
+    encoded.extend(max_size.to_le_bytes());
     encoded.extend(5000u32.to_le_bytes());
     Ok(encoded)
 }
 pub(crate) fn acquisition(reply: &[u8]) -> Result<(u64, u64), String> {
     acquisition_bounded(reply, u64::from(SPECIMEN_MAX_SIZE))
+}
+/// [`acquisition`] of a specimen the guest was asked to keep up to
+/// `max_size` bytes: its refusal of a larger file (EFBIG) says so.
+pub(crate) fn specimen_acquisition(reply: &[u8], max_size: u32) -> Result<(u64, u64), String> {
+    const EFBIG: i32 = 27;
+    acquisition(reply).map_err(|error| {
+        let refused = reply.len() == 24
+            && crate::parser::u32_at(reply, 16).is_ok_and(|status| status as i32 == -EFBIG);
+        if !refused {
+            return error;
+        }
+        let size = |bytes: u32| crate::byte_size::short_size(u64::from(bytes));
+        format!(
+            "the program is larger than the {} the guest keeps for static analysis (a quarter \
+             of the VM's RAM, and at most {} on a base of contract revision \
+             {LARGE_SPECIMEN_REVISION} or later, {} before); it ran without static analysis",
+            size(max_size),
+            size(SPECIMEN_MAX_SIZE),
+            size(LEGACY_SPECIMEN_MAX_SIZE),
+        )
+    })
 }
 /// An arm reply whose reservation may be as large as `limit` bytes.
 pub(crate) fn acquisition_bounded(reply: &[u8], limit: u64) -> Result<(u64, u64), String> {
@@ -561,12 +621,12 @@ mod tests {
         let mut request = ExecRequest::default();
         let legacy = execute(&request).unwrap();
         request.debug_on_start = true;
-        let debug = execute_analysis(&request, true).unwrap();
+        let debug = execute_analysis(&request, Some(LEGACY_SPECIMEN_MAX_SIZE)).unwrap();
         assert_eq!(debug.len(), legacy.len(), "the flag adds no request bytes");
         assert_eq!(&debug[4..8], &EXEC_DEBUG.to_le_bytes());
         request.analysis.enabled = true;
         request.core_dump_on_exit = true;
-        let all = execute_analysis(&request, true).unwrap();
+        let all = execute_analysis(&request, Some(LEGACY_SPECIMEN_MAX_SIZE)).unwrap();
         assert_eq!(&all[4..8], &7u32.to_le_bytes());
         assert_eq!(all.len(), legacy.len() + 16);
     }
@@ -576,15 +636,15 @@ mod tests {
         let mut request = ExecRequest::default();
         let legacy = execute(&request).unwrap();
         request.core_dump_on_exit = true;
-        let core = execute_analysis(&request, true).unwrap();
+        let core = execute_analysis(&request, Some(LEGACY_SPECIMEN_MAX_SIZE)).unwrap();
         assert_eq!(core.len(), legacy.len() + 8);
         assert_eq!(&core[4..8], &2u32.to_le_bytes());
         assert_eq!(
             &core[legacy.len()..legacy.len() + 4],
-            &SPECIMEN_MAX_SIZE.to_le_bytes()
+            &LEGACY_CORE_MAX_SIZE.to_le_bytes()
         );
         request.analysis.enabled = true;
-        let combined = execute_analysis(&request, true).unwrap();
+        let combined = execute_analysis(&request, Some(LEGACY_SPECIMEN_MAX_SIZE)).unwrap();
         assert_eq!(combined.len(), legacy.len() + 16);
         assert_eq!(&combined[4..8], &3u32.to_le_bytes());
         assert_eq!(
@@ -593,13 +653,82 @@ mod tests {
         );
     }
     #[test]
+    fn a_revision_19_guest_is_asked_for_128_mib_and_an_older_one_for_64() {
+        assert_eq!(specimen_request(None, 2048), None);
+        assert_eq!(specimen_request(Some(9), 2048), None);
+        assert_eq!(specimen_request(Some(10), 2048), Some(64 << 20));
+        assert_eq!(specimen_request(Some(18), 2048), Some(64 << 20));
+        assert_eq!(
+            specimen_request(Some(LARGE_SPECIMEN_REVISION), 2048),
+            Some(128 << 20)
+        );
+        assert_eq!(
+            specimen_request(Some(LARGE_SPECIMEN_REVISION + 1), 512),
+            Some(128 << 20)
+        );
+        // Never more than a quarter of the guest's RAM.
+        assert_eq!(
+            specimen_request(Some(LARGE_SPECIMEN_REVISION), 256),
+            Some(64 << 20)
+        );
+        assert_eq!(specimen_request(Some(18), 128), Some(32 << 20));
+        assert_eq!(specimen_ram_bound(2048), 512 << 20);
+        let mut request = ExecRequest {
+            analysis: crate::analysis::AnalysisSelection {
+                enabled: true,
+                ..Default::default()
+            },
+            ..ExecRequest::default()
+        };
+        let legacy = execute(&request).unwrap();
+        let large = execute_analysis(&request, specimen_request(Some(19), 2048)).unwrap();
+        assert_eq!(
+            &large[legacy.len()..legacy.len() + 4],
+            &(128u32 << 20).to_le_bytes()
+        );
+        let old = execute_analysis(&request, specimen_request(Some(18), 2048)).unwrap();
+        assert_eq!(
+            &old[legacy.len()..legacy.len() + 4],
+            &(64u32 << 20).to_le_bytes()
+        );
+        // The exit core keeps its own 64 MiB default on every guest.
+        request.core_dump_on_exit = true;
+        let both = execute_analysis(&request, specimen_request(Some(19), 2048)).unwrap();
+        assert_eq!(
+            &both[legacy.len() + 8..legacy.len() + 12],
+            &(64u32 << 20).to_le_bytes()
+        );
+        let acquire = acquire("/tmp/x", 0, 0, 128 << 20).unwrap();
+        assert_eq!(
+            &acquire[acquire.len() - 8..acquire.len() - 4],
+            &(128u32 << 20).to_le_bytes()
+        );
+        // A 128 MiB reservation is accepted, more is not.
+        let mut arm = Vec::new();
+        arm.extend(4u64.to_le_bytes());
+        arm.extend((128u64 << 20).to_le_bytes());
+        arm.extend(0u64.to_le_bytes());
+        assert_eq!(acquisition(&arm).unwrap(), (4, 128 << 20));
+        arm[8..16].copy_from_slice(&((128u64 << 20) + 1).to_le_bytes());
+        assert!(acquisition(&arm).is_err());
+        // A file over the size the guest was given is refused with EFBIG.
+        let mut refused = vec![0u8; 24];
+        refused[16..20].copy_from_slice(&(-27i32).to_le_bytes());
+        let error = specimen_acquisition(&refused, 64 << 20).unwrap_err();
+        assert!(error.contains("larger than the 64.0 MB"), "{error}");
+        assert!(error.contains("quarter of the VM's RAM"), "{error}");
+        refused[16..20].copy_from_slice(&(-2i32).to_le_bytes());
+        let error = specimen_acquisition(&refused, 64 << 20).unwrap_err();
+        assert!(error.contains("guest acquisition unavailable"), "{error}");
+    }
+    #[test]
     fn core_exec_trailer_carries_the_requested_budget_and_deadline() {
         let mut request = ExecRequest::default();
         let legacy = execute(&request).unwrap();
         request.core_dump_on_exit = true;
         request.core_max_size = Some(256 << 20);
         request.core_timeout_ms = Some(7600);
-        let core = execute_analysis(&request, true).unwrap();
+        let core = execute_analysis(&request, Some(LEGACY_SPECIMEN_MAX_SIZE)).unwrap();
         assert_eq!(
             &core[legacy.len()..legacy.len() + 4],
             &(256u32 << 20).to_le_bytes()
@@ -612,6 +741,7 @@ mod tests {
         arm.extend(4u64.to_le_bytes());
         arm.extend((256u64 << 20).to_le_bytes());
         arm.extend(0u64.to_le_bytes());
+        // Over the 128 MiB specimen bound: only a core reply may be this big.
         assert!(acquisition(&arm).is_err());
         assert_eq!(acquisition_bounded(&arm, 1 << 30).unwrap(), (4, 256 << 20));
     }
@@ -619,15 +749,15 @@ mod tests {
     fn analysis_wire_preserves_off_and_legacy_execution_and_rejects_bad_replies() {
         let mut request = ExecRequest::default();
         assert_eq!(
-            execute_analysis(&request, true).unwrap(),
+            execute_analysis(&request, Some(LEGACY_SPECIMEN_MAX_SIZE)).unwrap(),
             execute(&request).unwrap()
         );
         request.analysis.enabled = true;
         assert_eq!(
-            execute_analysis(&request, false).unwrap(),
+            execute_analysis(&request, None).unwrap(),
             execute(&request).unwrap()
         );
-        let extended = execute_analysis(&request, true).unwrap();
+        let extended = execute_analysis(&request, Some(LEGACY_SPECIMEN_MAX_SIZE)).unwrap();
         assert_eq!(&extended[4..8], &1u32.to_le_bytes());
         assert_eq!(extended.len(), execute(&request).unwrap().len() + 8);
         let mut ready = Vec::new();
@@ -678,7 +808,7 @@ mod tests {
         hole[16..20].copy_from_slice(&0u32.to_le_bytes());
         assert!(core_chunk(&hole, 0, 5000, 3).is_err());
         assert_eq!(specimen_read(4, 0, 3).len(), 32);
-        assert_eq!(acquire("/tmp/a", 1000, 1000).unwrap().len(), 38);
+        assert_eq!(acquire("/tmp/a", 1000, 1000, 64 << 20).unwrap().len(), 38);
     }
     #[test]
     fn tracer_flags_are_asked_for_only_when_the_guest_offers_them() {
@@ -686,7 +816,7 @@ mod tests {
             path: "/bin/true".into(),
             ..Default::default()
         };
-        let plain = execute_analysis(&request, true).unwrap();
+        let plain = execute_analysis(&request, Some(LEGACY_SPECIMEN_MAX_SIZE)).unwrap();
         assert_eq!(with_tracer_flags(plain.clone(), 0), plain);
         assert_eq!(with_tracer_flags(plain.clone(), 0x400), plain);
         let mut reply = vec![0; TRACER_CAPS_SIZE];
@@ -717,7 +847,10 @@ mod tests {
         assert_eq!(&asked[4..8], &56u32.to_le_bytes());
         let mut debug = request.clone();
         debug.debug_on_start = true;
-        let asked = with_tracer_flags(execute_analysis(&debug, true).unwrap(), caps.exec_flags);
+        let asked = with_tracer_flags(
+            execute_analysis(&debug, Some(LEGACY_SPECIMEN_MAX_SIZE)).unwrap(),
+            caps.exec_flags,
+        );
         assert_eq!(&asked[4..8], &(56u32 | EXEC_DEBUG).to_le_bytes());
         // Malformed replies are refused.
         assert!(tracer_caps(&reply[..31]).is_err());

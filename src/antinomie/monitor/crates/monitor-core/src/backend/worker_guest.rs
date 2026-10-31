@@ -225,12 +225,12 @@ impl Worker {
                 if session.runs.len() >= 64 {
                     return Err("this VM boot reached the 64-run limit; restart the VM before another launch".into());
                 }
-                let supported = self
-                    .snapshot
-                    .guest_kernel
-                    .as_ref()
-                    .and_then(|k| k.revision)
-                    .is_some_and(|r| r >= 10);
+                // The specimen size this guest's contract takes (none before 10).
+                let specimen = control::specimen_request(
+                    self.snapshot.guest_kernel.as_ref().and_then(|k| k.revision),
+                    session.vm.ram_mib,
+                );
+                let supported = specimen.is_some();
                 let desktop = request.run_in.guest_desktop();
                 if desktop
                     && !session
@@ -261,7 +261,7 @@ impl Worker {
                 let tracer_hashing =
                     offered & (control::EXEC_HASH_ROOT | control::EXEC_HASH_WRITES);
                 let args = control::with_tracer_flags(
-                    control::execute_analysis(&wire, supported)?,
+                    control::execute_analysis(&wire, specimen)?,
                     offered,
                 );
                 // Refused before the run exists, so Run History lists nothing for it.
@@ -419,19 +419,32 @@ impl Worker {
                 session.run_artifacts.insert(cookie, artifacts);
                 if let Some(report) = run.summary.analysis.take() {
                     let acquisition = if inline_acquisition {
-                        control::acquisition(&reply[24..48])
+                        control::specimen_acquisition(
+                            &reply[24..48],
+                            specimen.unwrap_or(control::LEGACY_SPECIMEN_MAX_SIZE),
+                        )
                     } else if supported {
-                        control::acquire(&request.path, request.uid, request.gid)
-                            .and_then(|args| {
-                                session.request(
-                                    control::ACQUIRE,
-                                    &args,
-                                    &mut self.snapshot,
-                                    &self.sender,
-                                    timeout,
-                                )
-                            })
-                            .and_then(|reply| control::acquisition(&reply))
+                        control::acquire(
+                            &request.path,
+                            request.uid,
+                            request.gid,
+                            specimen.unwrap_or(control::LEGACY_SPECIMEN_MAX_SIZE),
+                        )
+                        .and_then(|args| {
+                            session.request(
+                                control::ACQUIRE,
+                                &args,
+                                &mut self.snapshot,
+                                &self.sender,
+                                timeout,
+                            )
+                        })
+                        .and_then(|reply| {
+                            control::specimen_acquisition(
+                                &reply,
+                                specimen.unwrap_or(control::LEGACY_SPECIMEN_MAX_SIZE),
+                            )
+                        })
                     } else {
                         Err(
                             "this base does not support static analysis (it needs a base for Antinomie 0.2.0 or newer); the program ran without it"
@@ -574,22 +587,32 @@ impl Worker {
                     .recording_directory
                     .join("analyses")
                     .join(&report.id);
-                let supported = self
-                    .snapshot
-                    .guest_kernel
-                    .as_ref()
-                    .and_then(|k| k.revision)
-                    .is_some_and(|r| r >= 10);
+                // The specimen size this guest's contract takes (none before 10).
+                let specimen = control::specimen_request(
+                    self.snapshot.guest_kernel.as_ref().and_then(|k| k.revision),
+                    session.vm.ram_mib,
+                );
+                let supported = specimen.is_some();
                 let acquisition = if supported {
                     session
                         .request(
                             control::ACQUIRE,
-                            &control::acquire(&path, uid, gid)?,
+                            &control::acquire(
+                                &path,
+                                uid,
+                                gid,
+                                specimen.unwrap_or(control::LEGACY_SPECIMEN_MAX_SIZE),
+                            )?,
                             &mut self.snapshot,
                             &self.sender,
                             timeout,
                         )
-                        .and_then(|reply| control::acquisition(&reply))
+                        .and_then(|reply| {
+                            control::specimen_acquisition(
+                                &reply,
+                                specimen.unwrap_or(control::LEGACY_SPECIMEN_MAX_SIZE),
+                            )
+                        })
                 } else {
                     Err("this base does not support static analysis; use a base for Antinomie 0.2.0 or newer".into())
                 };
@@ -618,6 +641,7 @@ impl Worker {
                     return Err("upload source must be a regular file".into());
                 }
                 let total = metadata.len();
+                check_program_size(total, executable, session.vm.ram_mib)?;
                 if total > crate::samples::MAX_SAMPLE {
                     // Too large for the library, which keeps what is sent.
                     return upload_stream(
@@ -690,6 +714,7 @@ impl Worker {
                 let library = crate::samples::Library::open(&self.options.data_dir)?;
                 let bytes = library.open_bytes(&sha256)?;
                 drop(library);
+                check_program_size(bytes.len() as u64, executable, session.vm.ram_mib)?;
                 let message = upload_stream(
                     session,
                     &mut self.snapshot,

@@ -39,6 +39,25 @@ pub(super) fn upload_stream(
     )
 }
 
+/// An executable upload is a program the guest may run and analyse, and the
+/// guest keeps one copy of an analysed program in its memory: one larger
+/// than a quarter of the VM's RAM is refused before anything is sent.
+pub(super) fn check_program_size(total: u64, executable: bool, ram_mib: u32) -> Result<(), String> {
+    let bound = control::specimen_ram_bound(ram_mib);
+    if executable && total > bound {
+        return Err(format!(
+            "The program is {} and this VM has {ram_mib} MiB of RAM: a program to run and \
+             analyse may be at most a quarter of the VM's RAM ({}), because the guest keeps a \
+             copy of it in memory. Give the VM at least {} MiB of RAM in its settings (stop it \
+             first), then upload it again.",
+            crate::byte_size::short_size(total),
+            crate::byte_size::short_size(bound),
+            total.div_ceil(1 << 18).div_ceil(256) * 256,
+        ));
+    }
+    Ok(())
+}
+
 /// Continue only an acknowledged Upload Begin; failures abort the owned transfer.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn upload_contents(
@@ -151,4 +170,24 @@ pub(super) fn validate_snapshot_command(command: &Command) -> Result<(), String>
         return Err("snapshot name/description exceeds supported bounds".into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::check_program_size;
+
+    #[test]
+    fn a_program_over_a_quarter_of_the_vms_ram_is_refused_before_it_is_sent() {
+        let mib = 1u64 << 20;
+        // 2 GiB of RAM: programs up to 512 MiB; any plain file passes.
+        assert!(check_program_size(512 * mib, true, 2048).is_ok());
+        assert!(check_program_size(600 * mib, false, 2048).is_ok());
+        let error = check_program_size(96 * mib, true, 256).unwrap_err();
+        assert!(error.contains("256 MiB of RAM"), "{error}");
+        assert!(error.contains("quarter of the VM's RAM"), "{error}");
+        // 96 MiB needs 384 MiB, offered in 256 MiB steps.
+        assert!(error.contains("at least 512 MiB"), "{error}");
+        assert!(check_program_size(64 * mib, true, 256).is_ok());
+        assert!(check_program_size(64 * mib + 1, true, 256).is_err());
+    }
 }
