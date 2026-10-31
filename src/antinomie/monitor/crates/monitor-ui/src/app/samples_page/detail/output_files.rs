@@ -318,7 +318,7 @@ pub(in crate::app::samples_page) fn section(
         let actions = if roomy { ACTIONS_WIDTH } else { STACKED_WIDTH };
         // (column, least width)
         let mut over = widths.iter().sum::<f32>() + actions - room;
-        for (index, least) in [(3, 80.0), (4, 84.0), (0, 90.0), (2, 56.0), (5, 150.0)] {
+        for (index, least) in [(3, 80.0), (5, 140.0), (4, 104.0), (0, 90.0), (2, 56.0)] {
             if over <= 0.0 {
                 break;
             }
