@@ -193,6 +193,15 @@ pub(super) fn bounded_report(report: &mut AnalysisReport) -> Result<Vec<u8>, Str
                 .ok_or("report metadata alone exceeds normalized bound")?;
             section.entries.truncate(section.entries.len() / 2);
             section.state = AnalysisSectionState::Partial;
+            super::limits::add_for(
+                section,
+                AnalysisLimitKind::Rows,
+                LimitSetting::Rows,
+                format!(
+                    "The report reached its {} KiB size limit, so this check keeps fewer rows than it found.",
+                    target / 1024
+                ),
+            );
             encoded = serde_json::to_vec(&report).map_err(|e| e.to_string())?;
         }
     }

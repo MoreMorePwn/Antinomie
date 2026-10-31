@@ -155,7 +155,7 @@ fn launch_ghidra(ghidra: &str, listing_only: bool) -> Result<(tools::Run, u64), 
         &export,
         LISTING_EXPORT,
     ];
-    let size = super::ghidra_listing::EXPORT_MAX_SIZE.to_string();
+    let size = super::ghidra_listing::export_max_size().to_string();
     args.push(&size);
     if listing_only {
         args.push("listing");
@@ -207,6 +207,12 @@ pub(super) fn disassembly_listing(section: &mut AnalysisSection, specimen: &[u8]
         Ok(done) => done,
         Err(error) => {
             eprintln!("Ghidra listing: {error}");
+            super::limits::add(
+                section,
+                AnalysisLimitKind::Input,
+                "Ghidra could not be started for the disassembly listing; only the built-in rows are shown.",
+                None,
+            );
             section.summary.push_str("; Ghidra listing not made");
             return;
         }
@@ -231,6 +237,12 @@ pub(super) fn disassembly_listing(section: &mut AnalysisSection, specimen: &[u8]
         let why = run
             .failure(Duration::from_secs(budget))
             .unwrap_or_else(|| "exported no instructions".into());
+        super::limits::add(
+            section,
+            AnalysisLimitKind::Input,
+            format!("Ghidra's disassembly listing was not made: Ghidra {why}."),
+            None,
+        );
         section
             .summary
             .push_str(&format!("; Ghidra listing not made: Ghidra {why}"));
@@ -318,6 +330,12 @@ fn ghidra_run(
         if section.state == AnalysisSectionState::Complete {
             section.state = AnalysisSectionState::Partial;
         }
+        super::limits::add(
+            section,
+            AnalysisLimitKind::Input,
+            format!("The native Ghidra project was not kept: {error}."),
+            None,
+        );
         section
             .summary
             .push_str(&format!("; native project not retained: {error}"));

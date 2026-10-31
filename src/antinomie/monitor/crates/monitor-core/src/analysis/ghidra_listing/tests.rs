@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
 use super::*;
-use crate::analysis::listing::LISTING_MAX_SIZE;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
@@ -82,7 +81,7 @@ fn export_mode(
         .arg(work.join("decompiled.txt"))
         .arg("60")
         .arg(&export)
-        .arg(EXPORT_MAX_SIZE.to_string())
+        .arg(export_max_size().to_string())
         .args(listing_only.then_some("listing"))
         .args(["-analysisTimeoutPerFile", "120", "-deleteProject"])
         .env("HOME", work.join("home"))
@@ -425,20 +424,15 @@ fn a_real_program_from_the_environment_exports_within_the_bounds() {
         listing,
         started.elapsed()
     );
-    assert!(listing.bytes <= LISTING_MAX_SIZE);
+    assert!(listing.bytes <= super::super::limits::ghidra_listing_bytes());
     let _ = std::fs::remove_dir_all(work);
 }
 
-/// The combined listing budget the Ghidra disassembly is adopted under follows
-/// the report's size-limit settings.
-#[test]
-fn the_disassembly_is_adopted_under_the_listing_size_setting() {
-    let mut section = AnalysisSection::new(AnalysisKind::Decompilation);
-    section.state = AnalysisSectionState::Complete;
-    section.disassembly = Some(AnalysisDisassembly {
+fn disassembly_of(bytes: u64) -> AnalysisDisassembly {
+    AnalysisDisassembly {
         listing: AnalysisListing {
             rows: 1,
-            bytes: 200 << 20,
+            bytes,
             truncated: false,
         },
         tool: "Ghidra test".into(),
@@ -448,40 +442,243 @@ fn the_disassembly_is_adopted_under_the_listing_size_setting() {
         functions: 0,
         instructions: 0,
         note: String::new(),
-    });
-    let mut report = AnalysisReport {
+    }
+}
+
+fn report_with(sections: Vec<AnalysisSection>) -> AnalysisReport {
+    AnalysisReport {
         id: "budget".into(),
         state: AnalysisState::Complete,
         source_path: "/fixture".into(),
         specimen_sha256: None,
         specimen_len: None,
         reason: None,
-        sections: vec![section],
+        sections,
         layer: None,
         specimen_source: None,
         time_limit_seconds: None,
         limits: None,
-    };
+    }
+}
+
+fn limit_settings(section: &AnalysisSection) -> Vec<Option<super::super::limits::LimitSetting>> {
+    section.limits.iter().map(|limit| limit.setting).collect()
+}
+
+/// Ghidra's disassembly listing is adopted under its own size setting, and a
+/// listing over it is dropped with a reason that names the setting.
+#[test]
+fn the_disassembly_is_adopted_under_the_ghidra_listing_size_setting() {
+    use super::super::limits::{AnalysisLimits, LimitSetting};
+    let mut section = AnalysisSection::new(AnalysisKind::Decompilation);
+    section.state = AnalysisSectionState::Complete;
+    section.disassembly = Some(disassembly_of(200 << 20));
+    let mut report = report_with(vec![section]);
     let host = std::env::temp_dir().join(format!("ant-adopt-budget-{}", std::process::id()));
     std::fs::create_dir_all(&host).unwrap();
     let mut raised = report.clone();
-    let mut limits = super::super::limits::AnalysisLimits::default();
-    limits.set(super::super::limits::LimitSetting::Listing, 512);
+    let mut limits = AnalysisLimits::default();
+    limits.set(LimitSetting::GhidraListing, 512);
     raised.limits = limits.for_report();
     super::super::jobs::adopt_listings(&host, &mut report, &[]);
     super::super::jobs::adopt_listings(&host, &mut raised, &[]);
-    let note = |r: &AnalysisReport| r.sections[0].summary.clone();
+    let section = &report.sections[0];
+    assert_eq!(section.state, AnalysisSectionState::Partial);
+    assert!(section.disassembly.is_none());
+    assert_eq!(limit_settings(section), [Some(LimitSetting::GhidraListing)]);
     assert!(
-        note(&report).contains("combined bound"),
+        section.limits[0].text.contains("Ghidra disassembly size limit"),
         "{}",
-        note(&report)
+        section.limits[0].text
     );
+    // Raised, the size is no longer what refuses it (the file is missing).
     assert!(
-        !note(&raised).contains("combined bound"),
-        "{}",
-        note(&raised)
+        raised.sections[0]
+            .limits
+            .iter()
+            .all(|limit| limit.setting.is_none()),
+        "{:?}",
+        raised.sections[0].limits
     );
     let _ = std::fs::remove_dir_all(host);
+}
+
+/// The combined listing bound stays for the other listings and says so.
+#[test]
+fn a_listing_over_the_combined_bound_is_dropped_with_a_reason_and_its_setting() {
+    use super::super::limits::LimitSetting;
+    let listed = |kind, bytes| {
+        let mut section = AnalysisSection::new(kind);
+        section.state = AnalysisSectionState::Complete;
+        section.listing = Some(AnalysisListing {
+            rows: 1,
+            bytes,
+            truncated: false,
+        });
+        section
+    };
+    let mut report = report_with(vec![
+        listed(AnalysisKind::Strings, 100 << 20),
+        listed(AnalysisKind::Disassembly, 100 << 20),
+    ]);
+    let host = std::env::temp_dir().join(format!("ant-adopt-combined-{}", std::process::id()));
+    std::fs::create_dir_all(&host).unwrap();
+    super::super::jobs::adopt_listings(&host, &mut report, &[]);
+    let second = &report.sections[1];
+    assert_eq!(second.state, AnalysisSectionState::Partial);
+    assert!(second.listing.is_none());
+    assert_eq!(second.limits.len(), 1);
+    assert_eq!(second.limits[0].setting, Some(LimitSetting::Listing));
+    assert_eq!(
+        second.limits[0].text,
+        "Full listing not kept: the listings of this report exceeded their combined size limit."
+    );
+    let _ = std::fs::remove_dir_all(host);
+}
+
+/// A statically linked program of about 1,400 functions and 190,000
+/// instructions: its built-in and Ghidra disassembly listings, the decompiled
+/// source and the strings together pass the combined 128 MiB, and every one is
+/// kept whole at the default settings because Ghidra's has a budget of its own.
+#[test]
+fn a_large_static_program_keeps_every_listing_at_the_default_limits() {
+    use super::super::listing::{ListingWriter, file_name};
+    let host = scratch("static-host");
+    let listings = host.join("output/listings");
+    std::fs::create_dir_all(&listings).unwrap();
+    // Ghidra's export of 190,000 instructions, 1,400 functions, with references.
+    let export = host.join("export.txt");
+    let mut text = String::from("@@ANTINOMIE-ARCH\tx86:LE:64:default\tx86\tlittle\t64\tgcc\n");
+    text.push_str("@@ANTINOMIE-BASE\t4194304\n");
+    let address = |index: u64| 0x401000 + index * 4;
+    for index in 0..190_000u64 {
+        if index % 136 == 0 {
+            text.push_str(&format!(
+                "F\t{:x}\t544\tFUN_{:08x}\n",
+                address(index),
+                address(index)
+            ));
+        }
+        text.push_str(&format!(
+            "I\t{:x}\t488b45f8\tMOV\tRAX,qword ptr [RBP + -0x8]\tFUN_{:08x}\t\t{:x}:j\t{:x}:c,{:x}:j\n",
+            address(index),
+            address(index - index % 136),
+            address(index + 1),
+            address(index.saturating_sub(7)),
+            address(index.saturating_sub(9)),
+        ));
+    }
+    std::fs::write(&export, text).unwrap();
+    let (ghidra, summary) = write_listing(&listings, &export, b"x", 0).unwrap();
+    assert!(!ghidra.truncated && summary.note.is_empty(), "{ghidra:?}");
+    assert_eq!(summary.instructions, 190_000);
+    assert!(ghidra.bytes > 64 << 20, "the listing must pass the combined single bound");
+    // The built-in listing of the same code, the decompilation and the strings.
+    let rows = |kind, count: u64, make: &dyn Fn(u64) -> (String, AnalysisData)| {
+        let mut writer = ListingWriter::create(&listings, kind, 64 << 20).unwrap();
+        for index in 0..count {
+            let (value, data) = make(index);
+            assert!(writer.push("row", value, None, data));
+        }
+        let listing = writer.finish(false).unwrap();
+        assert!(!listing.truncated, "{kind:?} {listing:?}");
+        listing
+    };
+    let instruction = |index: u64| {
+        (
+            "MOV RAX, [RBP-8]".to_string(),
+            AnalysisData::Instruction {
+                address: address(index),
+                bytes: "48 8b 45 f8".into(),
+                mnemonic: "mov".into(),
+                operands: "rax, qword ptr [rbp-8]".into(),
+                function: Some(format!("sub_{:x}", address(index))),
+                label: None,
+                targets: Vec::new(),
+                xrefs: Vec::new(),
+            },
+        )
+    };
+    let built_in = rows(AnalysisKind::Disassembly, 150_000, &instruction);
+    let source = rows(AnalysisKind::Decompilation, 40_000, &|line| {
+        (
+            format!("  local_{line} = param_1 + {line};"),
+            AnalysisData::SourceLine {
+                function: "FUN_00401000".into(),
+                address: None,
+                line: line as u32 + 1,
+            },
+        )
+    });
+    let strings = rows(AnalysisKind::Strings, 60_000, &|index| {
+        (
+            format!("string number {index} of the program"),
+            AnalysisData::String {
+                encoding: "ASCII".into(),
+                byte_len: 64,
+                retained_len: 32,
+            },
+        )
+    });
+    let others = built_in.bytes + source.bytes + strings.bytes;
+    assert!(
+        others + ghidra.bytes > super::super::limits::AnalysisLimits::default().listings_total(),
+        "the sample must pass the old combined bound"
+    );
+    let mut decompilation = AnalysisSection::new(AnalysisKind::Decompilation);
+    decompilation.state = AnalysisSectionState::Complete;
+    decompilation.listing = Some(source);
+    decompilation.disassembly = Some(AnalysisDisassembly {
+        listing: ghidra,
+        tool: "Ghidra test".into(),
+        language: summary.language,
+        endian: summary.endian,
+        pointer_bits: summary.pointer_bits,
+        functions: summary.functions,
+        instructions: summary.instructions,
+        note: String::new(),
+    });
+    let mut disassembly = AnalysisSection::new(AnalysisKind::Disassembly);
+    disassembly.state = AnalysisSectionState::Complete;
+    disassembly.listing = Some(built_in);
+    let mut strings_section = AnalysisSection::new(AnalysisKind::Strings);
+    strings_section.state = AnalysisSectionState::Complete;
+    strings_section.listing = Some(strings);
+    let mut report = report_with(vec![strings_section, disassembly, decompilation]);
+    super::super::jobs::adopt_listings(&host, &mut report, &[]);
+    for section in &report.sections {
+        assert_eq!(section.state, AnalysisSectionState::Complete, "{:?}", section.limits);
+        assert!(section.limits.is_empty(), "{:?}", section.limits);
+        assert!(section.listing.is_some());
+    }
+    assert!(report.sections[2].disassembly.is_some());
+    for name in [
+        super::super::listing::GHIDRA_DISASSEMBLY_FILE,
+        file_name(AnalysisKind::Disassembly),
+        file_name(AnalysisKind::Decompilation),
+        file_name(AnalysisKind::Strings),
+    ] {
+        assert!(host.join("listings").join(name).is_file(), "{name}");
+    }
+    // The old default would have refused it: with the Ghidra listing counted
+    // in the combined bound, one of them does not fit.
+    let _ = std::fs::remove_dir_all(host);
+}
+
+/// `ANTINOMIE_STATIC_PROGRAM=<statically linked benign ELF>` with Ghidra
+/// installed: the real export of a large static program is kept whole.
+#[test]
+fn a_real_static_program_from_the_environment_is_listed_whole_at_the_defaults() {
+    let (Some(headless), Some(program)) =
+        (headless(), std::env::var_os("ANTINOMIE_STATIC_PROGRAM"))
+    else {
+        return;
+    };
+    let (work, _, listing, summary) = export_file(&headless, Path::new(&program));
+    eprintln!("static program: {listing:?} {summary:?}");
+    assert!(!listing.truncated && summary.note.is_empty(), "{summary:?}");
+    assert!(summary.functions > 1000, "{summary:?}");
+    let _ = std::fs::remove_dir_all(work);
 }
 
 fn report_of(

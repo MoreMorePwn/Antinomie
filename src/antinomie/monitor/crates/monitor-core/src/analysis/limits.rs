@@ -25,6 +25,8 @@ pub enum LimitSetting {
     Rows,
     /// The size of one check's listing.
     Listing,
+    /// The size of Ghidra's disassembly listing, which has its own budget.
+    GhidraListing,
     /// Bytes of one value or string kept in a row.
     Value,
     /// Bytes read from a local tool's output (binwalk reads four times this).
@@ -51,7 +53,7 @@ pub struct LimitField {
 }
 
 /// Every setting, in the order Settings lists them.
-pub const LIMIT_FIELDS: [LimitField; 7] = [
+pub const LIMIT_FIELDS: [LimitField; 8] = [
     LimitField {
         setting: LimitSetting::Rows,
         label: "Rows per check",
@@ -68,7 +70,16 @@ pub const LIMIT_FIELDS: [LimitField; 7] = [
         default: 64,
         min: 16,
         max: 512,
-        help: "Largest listing one check may write (strings, disassembly, decompilation, FLOSS strings). All the listings of a report may take twice this, at least 128 MiB, of disk.",
+        help: "Largest listing one check may write (strings, disassembly, decompilation, FLOSS strings). All these listings of a report together may take twice this, at least 128 MiB, of disk. Ghidra's disassembly listing has its own size below.",
+    },
+    LimitField {
+        setting: LimitSetting::GhidraListing,
+        label: "Ghidra disassembly size",
+        unit: "MiB",
+        default: 128,
+        min: 16,
+        max: 512,
+        help: "Largest disassembly listing Ghidra may export for a report. It is kept apart from the other listings, so it does not count toward their combined size. A statically linked program of about 1,500 functions needs about 80 MiB.",
     },
     LimitField {
         setting: LimitSetting::Value,
@@ -124,6 +135,8 @@ pub const LIMIT_FIELDS: [LimitField; 7] = [
 pub struct AnalysisLimits {
     pub rows: u32,
     pub listing_mib: u32,
+    /// Size of Ghidra's disassembly listing, apart from the other listings.
+    pub ghidra_listing_mib: u32,
     pub value_bytes: u32,
     pub tool_output_mib: u32,
     pub large_output_mib: u32,
@@ -144,6 +157,7 @@ impl AnalysisLimits {
     pub const DEFAULT: Self = Self {
         rows: 2048,
         listing_mib: 64,
+        ghidra_listing_mib: 128,
         value_bytes: 4096,
         tool_output_mib: 1,
         large_output_mib: 32,
@@ -157,6 +171,7 @@ impl AnalysisLimits {
         match setting {
             LimitSetting::Rows => self.rows,
             LimitSetting::Listing => self.listing_mib,
+            LimitSetting::GhidraListing => self.ghidra_listing_mib,
             LimitSetting::Value => self.value_bytes,
             LimitSetting::ToolOutput => self.tool_output_mib,
             LimitSetting::LargeOutput => self.large_output_mib,
@@ -175,6 +190,7 @@ impl AnalysisLimits {
         match setting {
             LimitSetting::Rows => self.rows = value,
             LimitSetting::Listing => self.listing_mib = value,
+            LimitSetting::GhidraListing => self.ghidra_listing_mib = value,
             LimitSetting::Value => self.value_bytes = value,
             LimitSetting::ToolOutput => self.tool_output_mib = value,
             LimitSetting::LargeOutput => self.large_output_mib = value,
@@ -201,9 +217,21 @@ impl AnalysisLimits {
         (!limits.is_default()).then_some(limits)
     }
 
-    /// Bytes of disk all the listings of one report may take.
+    /// Bytes of disk all the listings of one report may take, apart from
+    /// Ghidra's disassembly (see [`Self::ghidra_listing_bytes`]).
     pub fn listings_total(&self) -> u64 {
         (u64::from(self.listing_mib) * 2).max(128) << 20
+    }
+
+    /// Bytes Ghidra's disassembly listing may take; its own budget, not part
+    /// of [`Self::listings_total`].
+    pub fn ghidra_listing_bytes(&self) -> u64 {
+        u64::from(self.ghidra_listing_mib) << 20
+    }
+
+    /// Bytes of disk every listing of one report may take together.
+    pub fn listings_reserve(&self) -> u64 {
+        self.listings_total() + self.ghidra_listing_bytes()
     }
 
     /// The report size the worker aims for: 128 KiB at the default row count,
@@ -241,6 +269,11 @@ pub(super) fn rows() -> usize {
 /// Largest listing one check may write, in octets.
 pub(super) fn listing_bytes() -> u64 {
     u64::from(active().listing_mib) << 20
+}
+
+/// Largest Ghidra disassembly listing, in octets.
+pub(super) fn ghidra_listing_bytes() -> u64 {
+    active().ghidra_listing_bytes()
 }
 
 /// Bytes of one value kept in a row.
@@ -413,10 +446,14 @@ mod tests {
         let mut most = defaults;
         most.set(LimitSetting::Rows, u32::MAX);
         most.set(LimitSetting::Listing, u32::MAX);
+        most.set(LimitSetting::GhidraListing, u32::MAX);
         assert_eq!(most.report_target(), REPORT_CEILING);
         assert!(most.listings_total() <= 1024 << 20);
         assert_eq!(most.rows as usize, ROWS_CEILING);
         assert!(u64::from(most.listing_mib) << 20 <= LISTING_CEILING);
+        assert!(most.ghidra_listing_bytes() <= LISTING_CEILING);
+        assert_eq!(defaults.ghidra_listing_bytes(), 128 << 20);
+        assert!(most.listings_reserve() <= 1536 << 20);
         assert!(most.value_bytes as usize <= VALUE_CEILING);
     }
 

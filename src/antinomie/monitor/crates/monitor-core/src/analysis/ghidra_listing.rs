@@ -32,8 +32,11 @@ const MARK_TIMEOUT: &str = "@@ANTINOMIE-TIMEOUT";
 const MARK_SIZE: &str = "@@ANTINOMIE-LISTING-SIZE";
 /// Longest export line read; a longer one is skipped.
 const LINE_MAX: u64 = 16 * 1024;
-/// Octets of export text the script writes before it stops.
-pub(super) const EXPORT_MAX_SIZE: u64 = 48 * 1024 * 1024;
+/// Octets of export text the script writes before it stops: the listing's own
+/// size bound, since a text line is shorter than its listing row.
+pub(super) fn export_max_size() -> u64 {
+    super::limits::ghidra_listing_bytes()
+}
 
 /// Imports of the post-script; spliced in at `//@@LISTING-IMPORTS`.
 pub(super) const JAVA_IMPORTS: &str = r#"import ghidra.program.model.address.Address;
@@ -278,7 +281,7 @@ pub(super) fn write_listing(
         export,
         specimen,
         object_base,
-        super::limits::listing_bytes(),
+        super::limits::ghidra_listing_bytes(),
     )
 }
 

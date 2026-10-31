@@ -223,7 +223,7 @@ impl Jobs {
                 .checked_add(
                     REPORT_MAX_SIZE as u64
                         + 64 * 1024 * 1024
-                        + report.limits.unwrap_or_default().clamped().listings_total()
+                        + report.limits.unwrap_or_default().clamped().listings_reserve()
                         + layers::extra_reserve(&report)
                         + 8192,
                 )
