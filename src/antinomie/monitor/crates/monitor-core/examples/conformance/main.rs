@@ -79,7 +79,7 @@ impl Context {
             .unwrap_or_default()
     }
     /// Where the goldens of the base live: x86-64's in `golden/`, as always,
-    /// with Debian Minimal's own in `golden/debian-minimal/`; another
+    /// with the Debian bases' own in `golden/debian-minimal/`; another
     /// architecture's in `golden/<arch>/`.
     pub fn golden_dir(&self) -> PathBuf {
         let directory = self.repo.join("tests/monitor/conformance/trace/golden");
@@ -89,8 +89,10 @@ impl Context {
                     .ok()
                     .and_then(|bundle| bundle.guest)
                     .map(|guest| guest.id);
+                // Every Debian base (Minimal and the desktops) runs the same
+                // stock kernel with Debian's configuration.
                 match guest.as_deref() {
-                    Some("debian-minimal") => directory.join("debian-minimal"),
+                    Some(id) if id.starts_with("debian-") => directory.join("debian-minimal"),
                     _ => directory,
                 }
             }

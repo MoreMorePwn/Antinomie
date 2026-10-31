@@ -5,7 +5,7 @@
 //! `<pid>`, addresses `<addr>`, and content the program could not predict
 //! (`volatile` cases, exit-time buffers) is left out. The files live in
 //! tests/monitor/conformance/trace/golden/GROUP.txt; `--bless` rewrites them.
-//! A Debian Minimal base has its own (`golden/debian-minimal/GROUP.txt`): its
+//! A Debian base has its own (`golden/debian-minimal/GROUP.txt`): its
 //! kernel has Debian's configuration, so calls whose result depends on it
 //! (kexec_file_load, userfaultfd, transparent huge pages, the shadow stack, the
 //! persistent keyring, the log buffer size, the built-in file systems) answer
@@ -61,9 +61,6 @@ fn normal(text: &str, volatile: &Volatile, pidish: bool) -> String {
             return format!("{head}{owner}<pid>");
         }
     }
-    if volatile.work_device.as_deref() == Some(text) {
-        return "<work-dev>".into();
-    }
     if let Some(device) = &volatile.root_device
         && (text == device || text == format!("\"{device}\""))
     {
@@ -95,6 +92,14 @@ fn normal(text: &str, volatile: &Volatile, pidish: bool) -> String {
         }
     }
     out
+}
+
+/// The work directory's device number, where a device field holds it (an
+/// argument or a decoded member named `dev` or `…_dev`); the same digits in
+/// any other value (a size, a count) are kept.
+fn work_device(name: &str, text: &str, volatile: &Volatile) -> Option<String> {
+    let device = name == "dev" || name.ends_with("_dev");
+    (device && volatile.work_device.as_deref() == Some(text)).then(|| "<work-dev>".to_owned())
 }
 
 /// A captured object as the golden file keeps it: text, socket addresses and
@@ -161,7 +166,10 @@ fn decoded(text: &str, volatile: &Volatile, pidish: bool) -> String {
             } else {
                 let whole = out.is_empty() && c == '\0';
                 let pid = names_process(&member) || (whole && pidish);
-                out.push_str(&normal(&token, volatile, pid));
+                match work_device(&member, &token, volatile) {
+                    Some(device) => out.push_str(&device),
+                    None => out.push_str(&normal(&token, volatile, pid)),
+                }
                 token.clear();
             }
         }
@@ -211,6 +219,9 @@ fn line(
                         .is_ok_and(|value| value.unsigned_abs() > 0xffff) =>
                 {
                     "<value>".to_owned()
+                }
+                None if work_device(&argument.name, &argument.text, ids).is_some() => {
+                    "<work-dev>".to_owned()
                 }
                 None => normal(
                     &argument.text,
@@ -462,7 +473,17 @@ mod tests {
             super::normal("\"/dev/vda1\"", &ids, false),
             "\"<root-dev>\""
         );
-        assert_eq!(super::normal("64769", &ids, false), "<work-dev>");
+        // The work directory's device number only in a device field.
+        assert_eq!(super::normal("64769", &ids, false), "64769");
+        assert_eq!(
+            super::work_device("dev", "64769", &ids).as_deref(),
+            Some("<work-dev>")
+        );
+        assert_eq!(super::work_device("size", "64769", &ids), None);
+        assert_eq!(
+            super::decoded("{st_dev=64769, st_size=64769}", &ids, false),
+            "{st_dev=<work-dev>, st_size=64769}"
+        );
         assert_eq!(super::normal("\"/dev/vda\"", &ids, false), "\"/dev/vda\"");
         assert_eq!(super::normal("0x7ffe00001000", &ids, false), "<addr>");
         assert_eq!(super::normal("1234", &ids, true), "<pid>");
