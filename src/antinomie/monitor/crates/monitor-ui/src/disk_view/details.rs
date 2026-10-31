@@ -569,11 +569,16 @@ impl DiskView {
                             ui.colored_label(theme::muted(), format_size(file.size))
                         });
                         cell(ui, path_width, height, |ui| {
+                            // The folder and the file name stay; the middle is cut.
+                            let shown = crate::widgets::fit_middle(
+                                ui,
+                                &file.host_path.display().to_string(),
+                                &mono,
+                                path_width,
+                            );
                             ui.add(
                                 egui::Label::new(
-                                    egui::RichText::new(file.host_path.display().to_string())
-                                        .monospace()
-                                        .color(theme::muted()),
+                                    egui::RichText::new(shown).monospace().color(theme::muted()),
                                 )
                                 .truncate(),
                             )

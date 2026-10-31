@@ -347,57 +347,61 @@ pub(crate) fn show(
                         .as_ref()
                         .is_none_or(|boot| guest.boot_id == *boot)
             });
-            ui.horizontal_wrapped(|ui| {
-                ui.strong("Guest resources");
-                let stale = !active || guest.is_none_or(|guest| guest.stale);
-                ui.colored_label(
-                    if stale { theme::muted() } else { theme::good() },
-                    if stale {
-                        "No guest data yet"
-                    } else {
-                        "Live · 2 s sampling"
-                    },
-                );
-                if let Some(age) = guest.and_then(|guest| guest.age_ms) {
-                    ui.label(format!("Last reading {:.1} s ago", age as f64 / 1000.0));
-                }
-            });
-            let stacked = width < ui.text_style_height(&egui::TextStyle::Body) * 32.0;
-            let gap = 10.0;
-            let top_width = if stacked {
-                width.max(80.0)
-            } else {
-                ((width - gap * 2.0) / 3.0).max(80.0)
-            };
-            let bottom_width = if stacked {
-                width.max(80.0)
-            } else {
-                ((width - gap) / 2.0).max(80.0)
-            };
-            if stacked {
-                resource_cards(ui, "summary-resources", 5, 1, top_width, 12, |ui, slot| {
-                    summary_resource(ui, slot, guest, values, vm, series);
+            // Without a reading there is nothing to meter: the gauges would only
+            // show empty bars, so they appear with the first sample.
+            if resources.is_some() || guest.is_some() {
+                ui.horizontal_wrapped(|ui| {
+                    ui.strong("Guest resources");
+                    let stale = !active || guest.is_none_or(|guest| guest.stale);
+                    ui.colored_label(
+                        if stale { theme::muted() } else { theme::good() },
+                        if stale {
+                            "No guest data yet"
+                        } else {
+                            "Live · 2 s sampling"
+                        },
+                    );
+                    if let Some(age) = guest.and_then(|guest| guest.age_ms) {
+                        ui.label(format!("Last reading {:.1} s ago", age as f64 / 1000.0));
+                    }
                 });
-            } else {
-                resource_cards(
-                    ui,
-                    "summary-resources-top",
-                    3,
-                    3,
-                    top_width,
-                    12,
-                    |ui, slot| summary_resource(ui, slot, guest, values, vm, series),
-                );
-                ui.add_space(10.0);
-                resource_cards(
-                    ui,
-                    "summary-resources-bottom",
-                    2,
-                    2,
-                    bottom_width,
-                    12,
-                    |ui, slot| summary_resource(ui, slot + 3, guest, values, vm, series),
-                );
+                let stacked = width < ui.text_style_height(&egui::TextStyle::Body) * 32.0;
+                let gap = 10.0;
+                let top_width = if stacked {
+                    width.max(80.0)
+                } else {
+                    ((width - gap * 2.0) / 3.0).max(80.0)
+                };
+                let bottom_width = if stacked {
+                    width.max(80.0)
+                } else {
+                    ((width - gap) / 2.0).max(80.0)
+                };
+                if stacked {
+                    resource_cards(ui, "summary-resources", 5, 1, top_width, 12, |ui, slot| {
+                        summary_resource(ui, slot, guest, values, vm, series);
+                    });
+                } else {
+                    resource_cards(
+                        ui,
+                        "summary-resources-top",
+                        3,
+                        3,
+                        top_width,
+                        12,
+                        |ui, slot| summary_resource(ui, slot, guest, values, vm, series),
+                    );
+                    ui.add_space(10.0);
+                    resource_cards(
+                        ui,
+                        "summary-resources-bottom",
+                        2,
+                        2,
+                        bottom_width,
+                        12,
+                        |ui, slot| summary_resource(ui, slot + 3, guest, values, vm, series),
+                    );
+                }
             }
             if let Some(error) = guest.and_then(|guest| guest.error.as_ref()) {
                 crate::activity::warning(ui, error);

@@ -171,6 +171,20 @@ fn network(
     presentation::heading(ui, "Network evidence", "");
     let mut target = None;
     crate::route_ui::line(ui, route);
+    // Without a capture every count is unavailable: one sentence says so and
+    // how to record one, instead of five identical rows.
+    if scan.network_counts.is_none() {
+        ui.add(
+            egui::Label::new(
+                RichText::new(
+                    "No network capture for this run. Turn on Capture network in Run program to record one.",
+                )
+                .color(theme::muted()),
+            )
+            .wrap(),
+        );
+        return None;
+    }
     egui::Grid::new("triage-summary-network")
         .num_columns(2)
         .max_col_width(ui.available_width() * 0.66)

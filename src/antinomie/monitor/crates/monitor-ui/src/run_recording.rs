@@ -116,7 +116,7 @@ pub(crate) fn warning_message(run: &RunSummary) -> Option<String> {
 fn explained(run: &RunSummary, error: &str) -> String {
     if error.contains("No such file or directory") {
         format!(
-            "the recording folder {} is missing ({error}). The run can still be deleted from its sample's Runs tab.",
+            "the recording folder {} is missing ({error}). Run the sample again to record it.",
             run.directory.display()
         )
     } else if error.contains("No space left on device") {
