@@ -942,7 +942,7 @@ fn aliases(ui: &mut egui::Ui, data: &Data, font: f32) {
             .iter()
             .map(|alias| alias.name.as_str())
             .collect();
-        ui.horizontal(|ui| {
+        let heading = ui.horizontal(|ui| {
             ui.label(RichText::new("Aliases").strong());
             ui.label(
                 RichText::new(format!(
@@ -953,6 +953,7 @@ fn aliases(ui: &mut egui::Ui, data: &Data, font: f32) {
                 .color(theme::muted()),
             );
         });
+        parts::scroll_if_asked(ui, "Aliases", heading.response.rect);
         if data.aliases.is_empty() {
             ui.label(theme::hint_text("–"));
             return;

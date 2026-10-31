@@ -20,14 +20,19 @@ pub(super) fn section(
             ui.label(RichText::new(count.to_string()).color(theme::muted()));
         }
     });
-    // A note's chip, or the screenshot fixture, asks for a section by name.
+    scroll_if_asked(ui, title, heading.response.rect);
+    ui.add_space(2.0);
+    body(ui);
+}
+
+/// Scroll to `rect` when a note's chip, or the screenshot fixture, asked for
+/// the section titled `title`.
+pub(super) fn scroll_if_asked(ui: &mut egui::Ui, title: &str, rect: egui::Rect) {
     let wanted = egui::Id::new("sample_scroll_to_section");
     if ui.ctx().data(|d| d.get_temp::<String>(wanted)).as_deref() == Some(title) {
         ui.ctx().data_mut(|d| d.remove::<String>(wanted));
-        ui.scroll_to_rect(heading.response.rect, Some(egui::Align::TOP));
+        ui.scroll_to_rect(rect, Some(egui::Align::TOP));
     }
-    ui.add_space(2.0);
-    body(ui);
 }
 
 /// Scroll the Summary to the section titled `title` when it is next drawn.

@@ -3,7 +3,7 @@
 //! an X11 display; exits by itself. The library lives in ANTINOMIE_QA_DATA
 //! (a throwaway folder; never the user's data).
 //!
-//! ANTINOMIE_QA_SCENE = list | tags | add | edit | detail | detail2 | regex | identity | lineage | lineage2 | outputs | viewer | promote | similar | runs | runs_details | custody | custody_broken | custody_all | custody_all_broken | export,
+//! ANTINOMIE_QA_SCENE = list | tags | add | edit | detail | detail2 | regex | identity | aliases | lineage | lineage2 | outputs | viewer | promote | similar | runs | runs_details | custody | custody_broken | custody_all | custody_all_broken | export,
 //! ANTINOMIE_QA_THEME = dark | light | blue, ANTINOMIE_QA_SIZE = 1400x820,
 //! ANTINOMIE_QA_SECONDS = 25, ANTINOMIE_QA_FONT = 16 (the font size setting).
 use super::*;
@@ -163,6 +163,7 @@ fn native_samples_fixture() {
                     | "detail2"
                     | "regex"
                     | "identity"
+                | "aliases"
                     | "lineage"
                     | "lineage2"
                     | "outputs"
@@ -254,6 +255,7 @@ fn native_samples_fixture() {
                 "regex" => Some("Regex matches"),
                 "detail2" => Some("Indicators"),
                 "identity" => Some("Identity"),
+                "aliases" => Some("Aliases"),
                 "outputs" | "kinds" => Some("Artifacts"),
                 "lineage" | "lineage2" => Some("Lineage"),
                 "similar" => Some("Similar samples"),
