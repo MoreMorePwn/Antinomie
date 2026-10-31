@@ -1,0 +1,236 @@
+Description: antinomie: read old pages of the caller on CPUs without a hardware access flag
+ The recorder reads the caller's memory with the no-fault reads, which
+ fail on a page that is not present. A present page reads at once on
+ x86-64, whose hardware sets the accessed bit. An arm64 CPU without the
+ hardware access flag (ARMv8.0: the Cortex-A72 of a Raspberry Pi 4 and
+ of QEMU's DT boots) takes an access-flag fault on a present page whose
+ entry is old instead, and a no-fault read fails there. fork leaves every
+ page of the child old, so the execve of a freshly forked child had its
+ path, arguments and environment recorded as not resident (argv never
+ recorded, the program's command line lost) on such CPUs.
+ .
+ On arm64 each no-fault read of the recorder (user_read.h) is retried
+ once after the present, old pages of its range are marked accessed as
+ the access-flag fault marks them, under the conditions the not-resident
+ classification already has: task context, mmap_lock taken without
+ waiting. Pages that are not present still fail. Other architectures
+ call the kernel's reads as before: the header defines nothing there.
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-11-01
+
+---
+diff --git a/kernel/antinomie/Makefile b/kernel/antinomie/Makefile
+index e265b7ad5..ddbd609d4 100644
+--- a/kernel/antinomie/Makefile
++++ b/kernel/antinomie/Makefile
+@@ -16,7 +16,7 @@ obj-y += bootstrap.o guest.o state.o recorder.o control.o run.o async.o native_c
+ # Per-architecture files: <name>_<arch>.c, built here so that the section
+ # labels bracket them too.
+ obj-$(CONFIG_X86_64) += capture_x86.o
+-obj-$(CONFIG_ARM64) += capture_arm64.o
++obj-$(CONFIG_ARM64) += capture_arm64.o user_read_arm64.o
+ obj-y += async_capture.o
+ obj-y += specimen.o
+ obj-y += observer.o
+diff --git a/kernel/antinomie/async_capture.c b/kernel/antinomie/async_capture.c
+index 383c6ed7a..5887132e9 100644
+--- a/kernel/antinomie/async_capture.c
++++ b/kernel/antinomie/async_capture.c
+@@ -13,6 +13,7 @@
+ 
+ #include "async_capture.h"
+ #include "capture_api.h"
++#include "user_read.h"
+ 
+ /* Pinned registration ceilings from io_uring/rsrc.c and kbuf.c. */
+ #define ANT_FIXED_FILE_COUNT BIT(20)
+diff --git a/kernel/antinomie/capture_arm64.c b/kernel/antinomie/capture_arm64.c
+index ca6af31b8..0cd3967a3 100644
+--- a/kernel/antinomie/capture_arm64.c
++++ b/kernel/antinomie/capture_arm64.c
+@@ -14,6 +14,7 @@
+ #include <asm/ucontext.h>
+ 
+ #include "capture_api.h"
++#include "user_read.h"
+ 
+ #define LAYOUT(name) ANT_LAYOUT(name)
+ 
+diff --git a/kernel/antinomie/manual_core.c b/kernel/antinomie/manual_core.c
+index d9dda3ed9..89c53b0d8 100644
+--- a/kernel/antinomie/manual_core.c
++++ b/kernel/antinomie/manual_core.c
+@@ -26,6 +26,7 @@
+ #include "process_core.h"
+ #include "debug.h"
+ #include "state.h"
++#include "user_read.h"
+ 
+ #ifdef CONFIG_COREDUMP
+ #define LIVE_THREADS 256U
+diff --git a/kernel/antinomie/native_capture.c b/kernel/antinomie/native_capture.c
+index 9a53655a1..383f7b976 100644
+--- a/kernel/antinomie/native_capture.c
++++ b/kernel/antinomie/native_capture.c
+@@ -63,6 +63,7 @@
+ 
+ #include "capture_api.h"
+ #include "native_capture.h"
++#include "user_read.h"
+ 
+ enum ant_phase_rule {
+ 	ANT_INPUT, ANT_OUTPUT_ZERO, ANT_OUTPUT_POSITIVE, ANT_OUTPUT_NONNEGATIVE,
+diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
+index e4e851bed..b51842780 100644
+--- a/kernel/antinomie/recorder.c
++++ b/kernel/antinomie/recorder.c
+@@ -44,6 +44,7 @@
+ #include "fileops.h"
+ #include "filemap.h"
+ #include "state.h"
++#include "user_read.h"
+ 
+ /* clone()'s child TID pointer: its fourth argument, or its fifth where the
+  * TLS comes first (CONFIG_CLONE_BACKWARDS, as kernel/fork.c declares it).
+diff --git a/kernel/antinomie/user_read.h b/kernel/antinomie/user_read.h
+new file mode 100644
+index 000000000..5c784ef0a
+--- /dev/null
++++ b/kernel/antinomie/user_read.h
+@@ -0,0 +1,25 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef _ANTINOMIE_USER_READ_H
++#define _ANTINOMIE_USER_READ_H
++
++#include <linux/uaccess.h>
++
++/* The recorder reads the caller's memory without faulting it in. A page an
++ * x86 program has mapped and present reads at once: the hardware sets the
++ * page's accessed bit itself. An arm64 CPU without the hardware access flag
++ * (ARMv8.0, the Cortex-A72 of a Raspberry Pi 4 and of QEMU's DT boots)
++ * faults instead on a present page whose entry is old, and fork leaves every
++ * page of the child old: a forked child's execve would have no path,
++ * arguments or environment recorded. On arm64 each no-fault read below is
++ * retried once after the present, old pages of its range are marked
++ * accessed, as the access-flag fault would have marked them
++ * (user_read_arm64.c). Elsewhere they are the kernel's own calls.
++ */
++#ifdef CONFIG_ARM64
++long ant_copy_from_user_nofault(void *dst, const void __user *src, size_t size);
++long ant_strnlen_user_nofault(const void __user *unsafe_addr, long count);
++#define copy_from_user_nofault(dst, src, size) ant_copy_from_user_nofault(dst, src, size)
++#define strnlen_user_nofault(unsafe_addr, count) ant_strnlen_user_nofault(unsafe_addr, count)
++#endif
++
++#endif
+diff --git a/kernel/antinomie/user_read_arm64.c b/kernel/antinomie/user_read_arm64.c
+new file mode 100644
+index 000000000..3706d2b10
+--- /dev/null
++++ b/kernel/antinomie/user_read_arm64.c
+@@ -0,0 +1,103 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* No-fault reads of the caller's memory that an old page entry does not
++ * fail (user_read.h).
++ */
++#include <linux/mm.h>
++#include <linux/overflow.h>
++#include <linux/pgtable.h>
++#include <linux/sched.h>
++
++#include "user_read.h"
++
++/* The kernel's own no-fault reads from here on. */
++#undef copy_from_user_nofault
++#undef strnlen_user_nofault
++
++/* Marks the page entry mapping address accessed if it is present and old,
++ * as the access-flag fault does. Huge page entries (transparent huge pages,
++ * which arm64's minimal kernel has not) stay as they are.
++ */
++static bool make_page_young(struct vm_area_struct *vma, unsigned long address)
++{
++	struct mm_struct *mm = vma->vm_mm;
++	bool marked = false;
++	spinlock_t *lock;
++	pgd_t *pgdp;
++	p4d_t *p4dp, p4d;
++	pud_t *pudp, pud;
++	pmd_t *pmdp, pmd;
++	pte_t *ptep, pte;
++
++	pgdp = pgd_offset(mm, address);
++	if (pgd_none(*pgdp) || unlikely(pgd_bad(*pgdp)))
++		return false;
++	p4dp = p4d_offset(pgdp, address);
++	p4d = p4dp_get(p4dp);
++	if (p4d_none(p4d) || unlikely(p4d_bad(p4d)))
++		return false;
++	pudp = pud_offset(p4dp, address);
++	pud = pudp_get(pudp);
++	if (!pud_present(pud) || pud_leaf(pud))
++		return false;
++	pmdp = pmd_offset(pudp, address);
++	pmd = pmdp_get_lockless(pmdp);
++	if (!pmd_present(pmd) || pmd_leaf(pmd))
++		return false;
++	ptep = pte_offset_map_lock(mm, pmdp, address, &lock);
++	if (!ptep)
++		return false;
++	pte = ptep_get(ptep);
++	if (pte_present(pte) && !pte_young(pte))
++		marked = ptep_set_access_flags(vma, address, ptep, pte_mkyoung(pte), 0);
++	pte_unmap_unlock(ptep, lock);
++	return marked;
++}
++
++/* Marks the present, old pages of [address, address + len) accessed, up to
++ * the first page outside the caller's readable mappings. Under the same
++ * conditions fault_status() classifies a failed read (recorder.c): in task
++ * context, without waiting for mmap_lock. Returns whether a page was marked,
++ * that is, whether a second read can succeed where the first failed.
++ */
++static bool make_range_young(unsigned long address, unsigned long len)
++{
++	struct mm_struct *mm = current->mm;
++	struct vm_area_struct *vma;
++	unsigned long page, end;
++	bool marked = false;
++
++	if (!in_task() || !mm || (current->flags & PF_KTHREAD) || !address || !len ||
++	    check_add_overflow(address, len, &end) || end > TASK_SIZE_MAX ||
++	    !mmap_read_trylock(mm))
++		return false;
++	for (page = address & PAGE_MASK; page < end; page += PAGE_SIZE) {
++		vma = vma_lookup(mm, page);
++		if (!vma || !(vma->vm_flags & VM_READ))
++			break;
++		marked |= make_page_young(vma, page);
++	}
++	mmap_read_unlock(mm);
++	return marked;
++}
++
++long ant_copy_from_user_nofault(void *dst, const void __user *src, size_t size)
++{
++	long error = copy_from_user_nofault(dst, src, size);
++
++	if (error && make_range_young((unsigned long)src, size))
++		error = copy_from_user_nofault(dst, src, size);
++	return error;
++}
++
++/* A string's end is not known before it is read: the retry marks the pages
++ * up to count, so a page past the string's end may be marked accessed too,
++ * which changes only how reclaim ages it.
++ */
++long ant_strnlen_user_nofault(const void __user *unsafe_addr, long count)
++{
++	long len = strnlen_user_nofault(unsafe_addr, count);
++
++	if (!len && count > 0 && make_range_young((unsigned long)unsafe_addr, count))
++		len = strnlen_user_nofault(unsafe_addr, count);
++	return len;
++}

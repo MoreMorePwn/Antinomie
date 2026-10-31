@@ -776,6 +776,15 @@ revision 20 is unchanged: the wire carried the architecture since 0.8.0.
   host read gap with a full ring dropped a packet; a sender with interrupts on
   now spins for the whole progress-sensitive send wait (it cannot sleep: a
   held spinlock is invisible without the count). x86-64 compiles it out.
+  Patch 38 retries the recorder's no-fault reads on CPUs without the hardware
+  access flag (ARMv8.0: QEMU's DT boots and a Raspberry Pi 4 use a
+  Cortex-A72). There a present page whose entry is old faults, and fork makes
+  every page of the child old, so a forked child's execve had no path, argv
+  or envp recorded (seven Triage rules missed on the behaviour samples). A
+  failed read is retried once after the present, old pages of its range are
+  marked accessed as the access-flag fault would, in task context and without
+  waiting for `mmap_lock` (`user_read.h`, `user_read_arm64.c`); off arm64 the
+  header defines nothing and x86-64's objects are identical.
   Patch 35 renames the debugger's `set_state()`: arm64's build inlines
   `kernel/stop_machine.c`'s function of that name, and pahole described it under
   the recorder's symbol (`check-kernel-btf.py` caught it).
