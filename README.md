@@ -475,11 +475,13 @@ Exact versions, hashes and terms are in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOT
 
 ## Trademarks
 
-Dell, OptiPlex, Latitude, PowerEdge, HP, EliteDesk, ProDesk, ProBook, Lenovo,
-ThinkCentre, ThinkPad, ThinkSystem, Supermicro, Intel, AMD, Realtek, Broadcom,
-Samsung, Tencent Cloud, Alibaba Cloud, DigitalOcean, Vultr and other names in the
-device profile catalog, the cloud VPS profiles and the documentation belong to
-their owners. Antinomie uses them only as factual identifiers: the model, BIOS
+Dell, OptiPlex, Latitude, Vostro, PowerEdge, HP, EliteDesk, ProDesk, ProBook,
+HP 250, Lenovo, ThinkCentre, ThinkPad, ThinkSystem, Supermicro, AMI, Intel, AMD,
+Realtek, Broadcom, Samsung, Micron, SK hynix, Kingston, Crucial, Western Digital,
+Seagate, Toshiba, Tencent Cloud, Alibaba Cloud, DigitalOcean, Vultr, Hetzner,
+Linode, Ubuntu, Debian, Wireshark, Tor, VirusTotal and other names in the device
+profile catalog, the cloud VPS profiles and the documentation belong to their
+owners. Antinomie uses them only as factual identifiers: the model, BIOS
 version and device names a real unit or instance reports, so a guest looks like
 one.
 
