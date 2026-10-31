@@ -22,8 +22,8 @@ clearance for the application. Suricata and pySigma stay optional external
 tools and are not bundled.
 
 The static-analysis worker can load an installed community pack. It does not
-embed those rules in the executable. The rule files keep every rule's author,
-license and source meta.
+embed those YARA rules in the executable; the capa rules (below) are embedded.
+The rule files keep every rule's author, license and source meta.
 
 | Component | Terms / retained notice |
 |---|---|
@@ -124,9 +124,9 @@ Copyright 2011 The Comfortaa Project Authors (https://github.com/alexeiva/comfor
 with Reserved Font Name "Comfortaa", under SIL OFL 1.1, retained in
 [Comfortaa-OFL.txt](LICENSES/third-party/fonts/Comfortaa-OFL.txt). No Comfortaa
 font binary is embedded in the application: SVG outlines are the masters and
-PNG derivatives are embedded for native rendering. The penguin symbol is artwork
-supplied by the project owner, MikiMiku (MoreMorePwn), redrawn and edited as
-vector geometry. The selected
+PNG derivatives are embedded for native rendering. The penguin symbol is the
+project owner's own artwork (MikiMiku (MoreMorePwn)), not licensed from a third
+party, redrawn and edited as vector geometry. The selected
 identity, palette and asset roles are recorded in [the brand asset guide](assets/branding/README.md).
 
 The UI uses the DejaVu fonts (text, bold text and data), egui default fonts as fallbacks and the regular egui-phosphor icon font.
@@ -159,19 +159,15 @@ their notices does not authorize removal of those requirements.
 
 ## Other components and release gate
 
-The 0.6.0 and 0.6.1 archives include the shared Linux dependency notice inventory in
-`LICENSES/third-party/locked-dependencies-0.6.0.tar.gz`. It records the 459
-resolved third-party crates, checked against the locked package checksums,
-their retained upstream license/notice texts and the embedded font/rule notices.
-Two published MIT packages provide their declaration without a separate license
-text; their unchanged published packages and canonical MIT terms are retained.
-The inventory records the exact provenance and preserves combined license terms.
-It contains only third-party material, not Antinomie's own source.
-The third-party Cargo.lock entries are unchanged in 0.6.1; only the two project
-package versions changed. The current Rust 1.98.1 standard-library notice is
+Release archives include the dependency notice inventory for the locked Cargo
+packages in `LICENSES/cargo-dependencies/`, generated at build time by
+`scripts/check-licenses.py` (resolved crates checked against their locked package
+checksums, with their retained upstream license and notice texts). It contains
+only third-party material, not Antinomie's own source. The 0.6.0 and 0.6.1
+archives carry their own, older copy of that inventory; it is no longer kept in
+the repository. The current Rust 1.98.1 standard-library notice is
 retained separately in
-[Rust-Standard-Library-COPYRIGHT.html](LICENSES/third-party/Rust-Standard-Library-COPYRIGHT.html);
-the inventory's earlier snapshot remains intact. The new static resource
+[Rust-Standard-Library-COPYRIGHT.html](LICENSES/third-party/Rust-Standard-Library-COPYRIGHT.html). The static resource
 collector's musl notices are listed below.
 
 The 0.6.2 Properties worker computes similarity hashes in process with two
@@ -271,8 +267,8 @@ runs; none is bundled or linked.
 
 Rust crates, linked system libraries and external tools retain their own terms.
 Use the locked Cargo metadata and actual packaged artifacts, not just the
-application manifest, to inventory a release. The source workspace's MIT
-metadata describes its own crates, not all dependencies.
+application manifest, to inventory a release. The source workspace's
+GPL-3.0-only metadata describes its own crates, not all dependencies.
 
 Optional packet display filtering and HTTP/DNS triage invoke an independently
 installed Wireshark TShark executable, licensed under GPL-2.0-or-later, through
@@ -303,7 +299,7 @@ the exact patched kernel build.
 From 0.7.0 the collector is carried only for bases of revision 16 and earlier;
 revision 17 kernels measure resources themselves.
 
-The embedded x86-64 executable is original MIT project code compiled statically
+The embedded x86-64 executable is original project code (GPL-3.0-only, `guest_resources.c`) compiled statically
 with musl libc (`musl-tools`). musl's MIT and
 file-specific notices are retained in
 [libc/musl-copyright.txt](LICENSES/third-party/libc/musl-copyright.txt), copied

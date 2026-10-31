@@ -4,6 +4,8 @@ Every string in `catalog/*.rs` and `parts.rs`, with a public report of a real un
 Collected on 2026-10-27 from the hw-probe uploads published in the linuxhw repositories on GitHub:
 [DMI](https://github.com/linuxhw/DMI) (dmidecode), [Dmesg](https://github.com/linuxhw/Dmesg) (kernel log),
 [HWInfo](https://github.com/linuxhw/HWInfo) (hwinfo) and [SMART](https://github.com/linuxhw/SMART) (smartctl).
+**Terms of the data.** The four linuxhw repositories are published under Creative Commons Attribution 4.0 (CC BY 4.0; the repositories' license files, checked on GitHub on 2026-10-31). The catalog copies facts (model names, BIOS versions, part strings) that real units report, and this file credits the reports it took them from, with a link to each. The hw-probe tool and the linux-hardware.org site are the same project's; their own terms were not separately checked.
+
 hw-probe hides serial numbers, UUIDs, asset tags and some part numbers in these reports; nothing hidden was guessed.
 
 The cloud VPS profiles are in [SOURCES-cloud.md](SOURCES-cloud.md).
