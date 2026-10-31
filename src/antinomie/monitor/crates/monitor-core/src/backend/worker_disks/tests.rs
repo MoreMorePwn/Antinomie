@@ -271,6 +271,7 @@ impl Machine {
         let kernel = images.path("kernel");
         fs::write(&kernel, b"synthetic kernel").unwrap();
         let bundle = storage::Bundle {
+            arch: Default::default(),
             kernel,
             base_disk: base,
             initrd: None,

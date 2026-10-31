@@ -1389,7 +1389,9 @@ impl<'de> Deserialize<'de> for GuestArch {
             Fields(Fields),
         }
         match Stored::deserialize(deserializer)? {
-            Stored::Name(name) if name == "X86_64" => Ok(Self::X86_64),
+            Stored::Name(name) if name == "X86_64" || name == "x86_64" => Ok(Self::X86_64),
+            // A base's bundle.json names its architecture as Debian does.
+            Stored::Name(name) if name == "arm64" || name == "aarch64" => Ok(Self::AARCH64),
             Stored::Name(name) => Err(serde::de::Error::custom(format!(
                 "unknown guest architecture {name}"
             ))),
@@ -3004,6 +3006,7 @@ mod tests {
         assert_eq!(arm64, r#"{"machine":183,"class":2,"endian":"little"}"#);
         for (stored, arch) in [
             ("\"X86_64\"", GuestArch::X86_64),
+            ("\"arm64\"", GuestArch::AARCH64),
             (r#"{"Unsupported":183}"#, GuestArch::AARCH64),
             (r#"{"Unsupported":8}"#, GuestArch::MIPS),
             (arm64.as_str(), GuestArch::AARCH64),

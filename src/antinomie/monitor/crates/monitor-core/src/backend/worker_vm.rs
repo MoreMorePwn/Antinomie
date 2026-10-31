@@ -135,7 +135,7 @@ impl Worker {
                 return Err(e);
             }
             let mut transport =
-                match Transport::open(&process.ram_path, process.ram_size, process.bootstrap) {
+                match Transport::open(&process.ram_path, process.ram_layout, process.bootstrap) {
                     Ok(t) => t,
                     Err(e) => {
                         capture.queue_manifest(&vm, &bundle, &disk_bundle, "start-failed")?;

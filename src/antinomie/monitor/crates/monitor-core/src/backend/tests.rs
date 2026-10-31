@@ -1331,6 +1331,7 @@ fn base_import_and_failed_credential_creation_preserve_published_state() {
                 .success()
         );
         let bundle = Bundle {
+            arch: Default::default(),
             kernel: source.join("kernel"),
             base_disk: source.join("base.qcow2"),
             initrd: None,
@@ -1778,6 +1779,7 @@ fn final_health_counts_screen_and_keeps_errors_scoped_to_run() {
     let mut capture = capture;
     capture.final_health = Some(health.clone());
     let bundle = Bundle {
+        arch: Default::default(),
         kernel: "kernel".into(),
         base_disk: "base".into(),
         initrd: None,

@@ -374,6 +374,10 @@ pub const SYMBOLS_FILE: &str = "symbols.json.xz";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Bundle {
+    /// The guest architecture the base is built for: `"arm64"`, or absent
+    /// for x86-64 (every base before arm64 existed).
+    #[serde(default, skip_serializing_if = "crate::api::GuestArch::is_x86_64")]
+    pub arch: crate::api::GuestArch,
     pub kernel: PathBuf,
     pub base_disk: PathBuf,
     pub initrd: Option<PathBuf>,
@@ -617,6 +621,7 @@ impl Bundle {
                     }
                 }
                 let copied = Self {
+                    arch: self.arch,
                     kernel: staging.join("kernel"),
                     base_disk: staging.join("base.qcow2"),
                     initrd: self.initrd.as_ref().map(|_| staging.join("initrd")),
@@ -669,6 +674,7 @@ impl Bundle {
             result?;
         }
         let installed = Self {
+            arch: self.arch,
             kernel: target.join("kernel"),
             base_disk: target.join("base.qcow2"),
             initrd: self.initrd.as_ref().map(|_| target.join("initrd")),
@@ -1814,6 +1820,7 @@ mod tests {
             ..BackendOptions::default()
         };
         let bundle = Bundle {
+            arch: Default::default(),
             kernel: source.join("kernel"),
             base_disk: source.join("base.qcow2"),
             initrd: None,
@@ -2139,6 +2146,7 @@ mod tests {
                 .success()
         );
         let mut bundle = Bundle {
+            arch: Default::default(),
             kernel: base.join("kernel"),
             base_disk: base.join("base.qcow2"),
             initrd: None,
@@ -2374,6 +2382,7 @@ mod tests {
             kernel_config_sha256: "b".repeat(64),
         };
         let bundle = Bundle {
+            arch: Default::default(),
             kernel: source.join("kernel"),
             base_disk: source.join("base.qcow2"),
             initrd: None,

@@ -14,12 +14,25 @@ fn a_negative_return_is_the_errno_it_carries_and_a_count_passes_through() {
 #[test]
 fn a_ram_path_with_a_nul_or_that_does_not_exist_is_refused_without_a_client() {
     assert_eq!(
-        Transport::open(Path::new("/home/user/a\0b"), 1 << 28, 0x1000).err(),
+        Transport::open(
+            Path::new("/home/user/a\0b"),
+            crate::vm::RamLayout::q35(1 << 28),
+            0x1000
+        )
+        .err(),
         Some("RAM path contains NUL".to_owned())
     );
-    let missing = Transport::open(Path::new("/nonexistent/ram.bin"), 1 << 28, 0x1000);
+    let missing = Transport::open(
+        Path::new("/nonexistent/ram.bin"),
+        crate::vm::RamLayout::q35(1 << 28),
+        0x1000,
+    );
     assert!(missing.is_err());
-    let pending = Transport::open_pending(Path::new("/nonexistent/ram.bin"), 1 << 28, 0x1000);
+    let pending = Transport::open_pending(
+        Path::new("/nonexistent/ram.bin"),
+        crate::vm::RamLayout::q35(1 << 28),
+        0x1000,
+    );
     assert!(pending.is_err());
     // A failed open registers no client, so a heartbeat has nothing to touch.
     heartbeat_on_this_thread();

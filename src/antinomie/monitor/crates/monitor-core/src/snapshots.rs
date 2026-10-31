@@ -924,6 +924,7 @@ mod tests {
             let kernel = root.join("kernel");
             fs::write(&kernel, b"synthetic kernel").unwrap();
             let bundle = crate::storage::Bundle {
+                arch: Default::default(),
                 kernel,
                 base_disk: base,
                 initrd: None,

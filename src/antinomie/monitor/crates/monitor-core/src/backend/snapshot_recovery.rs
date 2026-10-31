@@ -935,7 +935,7 @@ impl Worker {
             )?;
             process.verify_ram_layout()?;
             let transport =
-                Transport::open_pending(&process.ram_path, process.ram_size, process.bootstrap)?;
+                Transport::open_pending(&process.ram_path, process.ram_layout, process.bootstrap)?;
             let mut session = Session::restored(
                 &self.options,
                 effective,

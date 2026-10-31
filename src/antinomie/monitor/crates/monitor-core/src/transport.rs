@@ -182,36 +182,41 @@ pub(crate) struct Transport {
     _owner: PhantomData<Rc<()>>,
 }
 impl Transport {
-    pub fn open(path: &Path, ram: u64, bootstrap: u64) -> Result<Self, String> {
+    pub fn open(path: &Path, ram: crate::vm::RamLayout, bootstrap: u64) -> Result<Self, String> {
         Self::open_mode(path, ram, bootstrap, false)
     }
     /// Publish resume before continuing a paused incoming guest. Host
     /// heartbeats remain unregistered until `finish_resume` succeeds.
-    pub fn open_pending(path: &Path, ram: u64, bootstrap: u64) -> Result<Self, String> {
+    pub fn open_pending(
+        path: &Path,
+        ram: crate::vm::RamLayout,
+        bootstrap: u64,
+    ) -> Result<Self, String> {
         Self::open_mode(path, ram, bootstrap, true)
     }
-    fn open_mode(path: &Path, ram: u64, bootstrap: u64, pending: bool) -> Result<Self, String> {
+    fn open_mode(
+        path: &Path,
+        layout: crate::vm::RamLayout,
+        bootstrap: u64,
+        pending: bool,
+    ) -> Result<Self, String> {
+        let ram = layout.size();
         let path =
             CString::new(path.as_os_str().as_bytes()).map_err(|_| "RAM path contains NUL")?;
         let backing = Backing {
             path: path.as_ptr(),
             size: ram,
         };
-        let layout = crate::vm::RamLayout::q35(ram);
-        let mut regions = vec![Region {
-            gpa: 0,
-            size: layout.low,
-            file_offset: 0,
-            backing_index: 0,
-        }];
-        if layout.high != 0 {
-            regions.push(Region {
-                gpa: crate::vm::HIGH_RAM_GPA,
-                size: layout.high,
-                file_offset: layout.low,
+        let regions: Vec<Region> = layout
+            .expected()
+            .into_iter()
+            .map(|(gpa, size, file_offset)| Region {
+                gpa,
+                size,
+                file_offset,
                 backing_index: 0,
-            });
-        }
+            })
+            .collect();
         let options = Options {
             backings: &backing,
             backing_count: 1,

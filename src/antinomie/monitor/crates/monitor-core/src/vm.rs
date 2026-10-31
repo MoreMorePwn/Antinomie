@@ -62,71 +62,8 @@ impl Drop for UnstartedRuntime {
         }
     }
 }
-/// Guest RAM as q35 lays it out: QEMU keeps 0xb0000000 bytes below 4 GiB, or
-/// only 2 GiB once RAM reaches that size, and places the rest at 4 GiB. Both
-/// parts come from one backing file, the high part directly after the low.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct RamLayout {
-    pub low: u64,
-    pub high: u64,
-}
-pub(crate) const HIGH_RAM_GPA: u64 = 1 << 32;
-impl RamLayout {
-    pub fn q35(ram_size: u64) -> Self {
-        let lowmem = if ram_size >= 0xb000_0000 {
-            0x8000_0000
-        } else {
-            0xb000_0000
-        };
-        let low = ram_size.min(lowmem);
-        Self {
-            low,
-            high: ram_size - low,
-        }
-    }
-    /// Reads QEMU's `ram-below-4g`/`ram-above-4g` aliases from `info mtree`
-    /// output as (GPA, size, backing offset) triples.
-    fn from_mtree(mtree: &str) -> Result<Vec<(u64, u64, u64)>, String> {
-        let parse = |range: &str| -> Option<(u64, u64)> {
-            let (start, end) = range.trim().split_once('-')?;
-            let start = u64::from_str_radix(start, 16).ok()?;
-            let end = u64::from_str_radix(end.split_whitespace().next()?, 16).ok()?;
-            Some((start, end.checked_sub(start)?.checked_add(1)?))
-        };
-        let mut found = Vec::new();
-        for line in mtree.lines() {
-            let Some((range, alias)) = line.split_once(" (prio ") else {
-                continue;
-            };
-            let Some((_, target)) = alias
-                .split_once("alias ram-below-4g @")
-                .or_else(|| alias.split_once("alias ram-above-4g @"))
-            else {
-                continue;
-            };
-            let (gpa, size) = parse(range).ok_or("unreadable QEMU memory map")?;
-            let (offset, alias_size) = target
-                .split_once(' ')
-                .and_then(|(_, range)| parse(range))
-                .ok_or("unreadable QEMU memory map")?;
-            if alias_size != size {
-                return Err("unreadable QEMU memory map".into());
-            }
-            if !found.contains(&(gpa, size, offset)) {
-                found.push((gpa, size, offset));
-            }
-        }
-        found.sort_unstable();
-        Ok(found)
-    }
-    fn expected(&self) -> Vec<(u64, u64, u64)> {
-        let mut regions = vec![(0, self.low, 0)];
-        if self.high != 0 {
-            regions.push((HIGH_RAM_GPA, self.high, self.low));
-        }
-        regions
-    }
-}
+mod machine;
+pub(crate) use machine::*;
 /// Delete guest RAM files that no process holds open: an app that exits
 /// without stopping its VM leaves `runtime/<run>/shared-ram` behind, several
 /// GiB each. A running VM's QEMU keeps its file open, so it is kept.
@@ -306,7 +243,9 @@ pub(crate) struct VmProcess {
     _ram_memory: Option<OwnedFd>,
     pub runtime_dir: PathBuf,
     pub bootstrap: u64,
-    pub ram_size: u64,
+    /// Where QEMU maps the RAM file on this VM's machine.
+    pub ram_layout: RamLayout,
+    pub machine: Machine,
     pub qmp_path: PathBuf,
     /// The route gateway of a Routed VM; it ends with the process.
     pub gateway: Option<crate::route::Gateway>,
@@ -495,15 +434,20 @@ impl VmProcess {
             started: false,
         };
         let ram_path = runtime_dir.join("shared-ram");
+        let machine = Machine::of(bundle.arch)?;
+        machine.check_ram(vm.ram_mib)?;
+        if machine != Machine::Pc {
+            return Err(format!(
+                "this Antinomie does not start {} VMs yet",
+                bundle.arch.label()
+            ));
+        }
         let ram_size = u64::from(vm.ram_mib) * 1024 * 1024;
-        let layout = RamLayout::q35(ram_size);
-        let bootstrap = options.bootstrap_gpa.unwrap_or((layout.low / 2) & !4095);
-        if bootstrap < 0x100000
-            || !bootstrap.is_multiple_of(4096)
-            || bootstrap
-                .checked_add(4096)
-                .is_none_or(|end| end > layout.low)
-        {
+        let layout = machine.ram_layout(ram_size);
+        let bootstrap = options
+            .bootstrap_gpa
+            .unwrap_or_else(|| layout.default_bootstrap());
+        if !layout.bootstrap_fits(bootstrap) {
             return Err("bootstrap GPA must be page aligned and inside VM RAM below 4 GiB".into());
         }
         let (ram_path, ram_memory) = guest_ram(ram_path, ram_size)?;
@@ -641,8 +585,10 @@ impl VmProcess {
                 .and_then(|account| crate::stealth::NicSlot::from_interface(account.interface()))
                 .unwrap_or_default()
         });
-        if options.serial_console && !boot.kernel_append.contains("console=ttyS0") {
-            boot.kernel_append.push_str(" console=tty0 console=ttyS0");
+        let console = format!("console={}", machine.console());
+        if options.serial_console && !boot.kernel_append.contains(&console) {
+            boot.kernel_append
+                .push_str(&format!(" console=tty0 {console}"));
         }
         if bundle
             .antinomie_revision
@@ -688,7 +634,8 @@ impl VmProcess {
             _ram_memory: ram_memory,
             runtime_dir,
             bootstrap,
-            ram_size,
+            ram_layout: layout,
+            machine,
             qmp_path,
             gateway,
             net_dir,
@@ -741,14 +688,24 @@ impl VmProcess {
                 qemu_log_hint(&self.runtime_dir)
             )
         })?;
-        let mtree = qmp.reply(
-            "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"info mtree\"}}\n",
-        )?;
+        // q35 maps the backend through aliases (`info mtree`); virt maps the
+        // backend region itself, which the flat view shows at its address.
+        let command = match self.machine {
+            Machine::Pc => "info mtree",
+            Machine::Virt => "info mtree -f",
+        };
+        let mtree = qmp.reply(&format!(
+            "{}\n",
+            serde_json::json!({"execute":"human-monitor-command","arguments":{"command-line":command}})
+        ))?;
         let mtree = mtree["return"]
             .as_str()
             .ok_or("QMP memory map is not text")?;
-        let layout = RamLayout::q35(self.ram_size);
-        let found = RamLayout::from_mtree(mtree)?;
+        let layout = self.ram_layout;
+        let found = match self.machine {
+            Machine::Pc => RamLayout::from_mtree(mtree)?,
+            Machine::Virt => RamLayout::from_flat_mtree(mtree)?,
+        };
         if found != layout.expected() {
             return Err(format!(
                 "QEMU placed guest RAM at {found:x?}, expected {:x?}",
@@ -839,7 +796,8 @@ impl VmProcess {
         bundle: &Bundle,
     ) -> Result<String, String> {
         use sha2::{Digest, Sha256};
-        let output = Command::new(&options.qemu)
+        let machine = Machine::of(bundle.arch)?;
+        let output = Command::new(machine.qemu(&options.qemu))
             .arg("--version")
             .output()
             .map_err(|e| format!("QEMU compatibility version: {e}"))?;
@@ -890,7 +848,7 @@ impl VmProcess {
         } else {
             None
         };
-        let mut value = serde_json::json!({"launch_policy":2,"host_identity":host_identity,"qemu":String::from_utf8_lossy(&output.stdout),"machine":format!("{},max-ram-below-4g=4G", vm.stealth.machine.qemu()),"cpus":vm.cpus,"ram_mib":vm.ram_mib,"nat":vm.nat,"launch":vm.launch,"transport":vm.transport,"acceleration":acceleration,"force_tcg":options.force_tcg,"headless":options.headless,"bootstrap_gpa":options.bootstrap_gpa,"bundle_identity":bundle.base_identity,"kernel_append":bundle.kernel_append,"kernel_version":bundle.kernel_version});
+        let mut value = serde_json::json!({"launch_policy":2,"host_identity":host_identity,"qemu":String::from_utf8_lossy(&output.stdout),"machine":machine.identity(vm.stealth.machine.qemu()),"cpus":vm.cpus,"ram_mib":vm.ram_mib,"nat":vm.nat,"launch":vm.launch,"transport":vm.transport,"acceleration":acceleration,"force_tcg":options.force_tcg,"headless":options.headless,"bootstrap_gpa":options.bootstrap_gpa,"bundle_identity":bundle.base_identity,"kernel_append":bundle.kernel_append,"kernel_version":bundle.kernel_version});
         // Keep pre-isolation checkpoints compatible for unchanged network setups.
         if let Some(key) = network_identity_key(vm) {
             value[key] = serde_json::Value::Bool(true);
@@ -1212,7 +1170,8 @@ mod tests {
                 _ram_memory: None,
                 runtime_dir,
                 bootstrap: 0,
-                ram_size: 64 * 1024 * 1024,
+                ram_layout: RamLayout::q35(64 * 1024 * 1024),
+                machine: Machine::Pc,
                 qmp_path,
                 gateway: None,
                 net_dir: None,
@@ -1352,6 +1311,7 @@ mod tests {
 
     fn bundle(graphical: bool) -> Bundle {
         Bundle {
+            arch: Default::default(),
             kernel: "kernel".into(),
             base_disk: "base.qcow2".into(),
             initrd: None,
@@ -1598,6 +1558,7 @@ mod tests {
         assert_eq!(
             RamLayout::q35(2048 * MIB),
             RamLayout {
+                base: 0,
                 low: 2048 * MIB,
                 high: 0
             }
@@ -1605,6 +1566,7 @@ mod tests {
         assert_eq!(
             RamLayout::q35(2815 * MIB),
             RamLayout {
+                base: 0,
                 low: 2815 * MIB,
                 high: 0
             }
@@ -1612,6 +1574,7 @@ mod tests {
         assert_eq!(
             RamLayout::q35(2816 * MIB),
             RamLayout {
+                base: 0,
                 low: 2048 * MIB,
                 high: 768 * MIB
             }
@@ -1619,6 +1582,7 @@ mod tests {
         assert_eq!(
             RamLayout::q35(3072 * MIB),
             RamLayout {
+                base: 0,
                 low: 2048 * MIB,
                 high: 1024 * MIB
             }
@@ -1626,6 +1590,7 @@ mod tests {
         assert_eq!(
             RamLayout::q35(8192 * MIB),
             RamLayout {
+                base: 0,
                 low: 2048 * MIB,
                 high: 6144 * MIB
             }
@@ -1650,6 +1615,71 @@ mod tests {
         );
     }
     #[test]
+    fn arm64_runs_on_virt_with_ram_at_one_gib_and_the_bootstrap_in_its_middle() {
+        use crate::api::GuestArch;
+        const MIB: u64 = 1024 * 1024;
+        assert_eq!(Machine::of(GuestArch::X86_64), Ok(Machine::Pc));
+        assert_eq!(Machine::of(GuestArch::AARCH64), Ok(Machine::Virt));
+        assert!(Machine::of(GuestArch::MIPS).unwrap_err().contains("MIPS"));
+        // x86-64 keeps its default bootstrap page and its checks.
+        let q35 = RamLayout::q35(2048 * MIB);
+        assert_eq!(q35.default_bootstrap(), 0x4000_0000);
+        assert!(q35.bootstrap_fits(0x100000) && !q35.bootstrap_fits(0xff000));
+        assert!(!q35.bootstrap_fits(0x4000_0800) && !q35.bootstrap_fits(2048 * MIB));
+        // MA-09: RAM base + RAM/2 (0x60000000 for 1 GiB, 0x50000000 for 512 MiB).
+        let virt = Machine::Virt.ram_layout(1024 * MIB);
+        assert_eq!(virt.expected(), vec![(0x4000_0000, 1024 * MIB, 0)]);
+        assert_eq!(virt.default_bootstrap(), 0x6000_0000);
+        assert_eq!(
+            Machine::Virt.ram_layout(512 * MIB).default_bootstrap(),
+            0x5000_0000
+        );
+        assert!(virt.bootstrap_fits(0x6000_0000) && !virt.bootstrap_fits(0x2000_0000));
+        assert!(!virt.bootstrap_fits(0x8000_0000) && !virt.bootstrap_fits(0x4000_0000));
+        assert!(
+            Machine::Virt
+                .check_ram(511)
+                .unwrap_err()
+                .contains("at least 512 MiB")
+        );
+        assert!(Machine::Virt.check_ram(512).is_ok() && Machine::Pc.check_ram(256).is_ok());
+        assert_eq!(
+            (Machine::Pc.console(), Machine::Virt.console()),
+            ("ttyS0", "ttyAMA0")
+        );
+        assert_eq!(
+            (Machine::Pc.time_scale(), Machine::Virt.time_scale()),
+            (1, ARM64_TIME_SCALE)
+        );
+        assert_eq!(Machine::Pc.identity("q35"), "q35,max-ram-below-4g=4G");
+        assert_ne!(Machine::Virt.identity("q35"), Machine::Pc.identity("q35"));
+        let qemu = Path::new("/opt/qemu/bin/qemu-system-x86_64");
+        assert_eq!(Machine::Pc.qemu(qemu), qemu);
+        assert_eq!(
+            Machine::Virt.qemu(qemu),
+            Path::new("/opt/qemu/bin/qemu-system-aarch64")
+        );
+        assert_eq!(
+            Machine::Virt.qemu(Path::new("qemu-system-x86_64")),
+            Path::new("qemu-system-aarch64")
+        );
+        // `info mtree -f` lines of QEMU 11.0.3 virt with a 1 GiB shared backend
+        // (MA-09), once per address space.
+        let flat = "\
+FlatView #0
+ AS \"memory\", root: system
+  0000000000000000-0000000003ffffff (prio 0, romd): virt.flash0
+  0000000004000000-0000000007ffffff (prio 0, romd): virt.flash1
+  0000000040000000-000000007fffffff (prio 0, ram): shared
+FlatView #1
+  0000000040000000-000000007fffffff (prio 0, ram): shared";
+        assert_eq!(RamLayout::from_flat_mtree(flat).unwrap(), virt.expected());
+        assert_ne!(
+            RamLayout::from_flat_mtree(flat).unwrap(),
+            Machine::Virt.ram_layout(512 * MIB).expected()
+        );
+    }
+    #[test]
     fn owned_process_is_reaped_on_drop() {
         let child = Command::new("sleep").arg("60").spawn().unwrap();
         let pid = child.id();
@@ -1659,7 +1689,8 @@ mod tests {
             _ram_memory: None,
             runtime_dir: "/nonexistent".into(),
             bootstrap: 0,
-            ram_size: 0,
+            ram_layout: RamLayout::q35(0),
+            machine: Machine::Pc,
             qmp_path: "/nonexistent/qmp".into(),
             gateway: None,
             net_dir: None,
@@ -1679,7 +1710,8 @@ mod tests {
             _ram_memory: None,
             runtime_dir: "/nonexistent".into(),
             bootstrap: 0,
-            ram_size: 0,
+            ram_layout: RamLayout::q35(0),
+            machine: Machine::Pc,
             qmp_path: "/nonexistent/qmp".into(),
             gateway: None,
             net_dir: None,

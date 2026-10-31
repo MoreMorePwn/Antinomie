@@ -365,6 +365,7 @@ mod tests {
                     .success()
             );
             let bundle = Bundle {
+                arch: Default::default(),
                 kernel: source.join("kernel"),
                 base_disk: source.join("base.qcow2"),
                 initrd: None,
