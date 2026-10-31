@@ -11,6 +11,8 @@ use antinomie_monitor_core::samples::TagKind;
 
 /// The first hex digits of a SHA-256 the list shows.
 const SHORT_HASH: usize = 8;
+/// The width the columns need together; narrower, the table scrolls sideways.
+const MIN_TABLE_WIDTH: f32 = 900.0;
 
 impl Row {
     /// The row matches the search text: name, description, a tag or the start
@@ -278,6 +280,11 @@ impl MonitorApp {
             });
         let height = ui.available_height().max(80.0);
         let mut action = None;
+        // Narrower than every column needs: the table scrolls sideways.
+        let width = ui.available_width();
+        egui::ScrollArea::horizontal().id_salt("library_samples_x").auto_shrink([false, false]).show(ui, |ui| {
+        ui.set_min_width(width.max(MIN_TABLE_WIDTH));
+        ui.set_max_width(width.max(MIN_TABLE_WIDTH));
         table::begin(ui);
         TableBuilder::new(ui)
             .id_salt("library_samples")
@@ -449,6 +456,7 @@ impl MonitorApp {
                     },
                 );
             });
+        });
         match action {
             Some(Action::Select(sha256)) => self.samples_page.selected = Some(sha256),
             Some(Action::Open(sha256)) => {

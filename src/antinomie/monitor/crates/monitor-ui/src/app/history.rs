@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Run and capture history views.
-pub(crate) use super::history_columns::short_run_id;
 use super::history_columns::{executable_cell, HistoryColumns};
 use super::*;
 
