@@ -542,7 +542,14 @@ fn string_table(
             } else if titles[index] == "Seen" {
                 60.0
             } else if titles[index] == "Found in" || titles[index] == "Offset" {
-                170.0
+                // Mono text: "Strings · 0x0019", whole.
+                parts::fitted_up_to(
+                    ui_ref,
+                    &egui::TextStyle::Monospace.resolve(ui_ref.style()),
+                    std::iter::once(titles[index].to_owned())
+                        .chain(shown.iter().map(|row| cells(row).swap_remove(index))),
+                    320.0,
+                )
             } else {
                 fitted(index)
             }
@@ -770,142 +777,158 @@ fn identity(
         // A gap between the two boxes, and boxes of one height.
         let spacing = ui.spacing().item_spacing.x;
         ui.spacing_mut().item_spacing.x = 16.0;
-        ui.columns(2, |columns| {
-            parts::equal_boxes(
-                columns,
-                |ui| {
-                    if record.description.is_empty() {
-                        ui.label(theme::hint_text("No description"));
+        let left_body = |ui: &mut egui::Ui| {
+            if record.description.is_empty() {
+                ui.label(theme::hint_text("No description"));
+            } else {
+                ui.add(egui::Label::new(&record.description).wrap());
+            }
+            ui.add_space(6.0);
+            ui.horizontal_wrapped(|ui| {
+                for tag in &data.tags {
+                    sample_tags::tag(ui, tag);
+                }
+                if data.tags.is_empty() {
+                    ui.label(theme::hint_text("No tags"));
+                }
+            });
+            ui.add_space(8.0);
+            let value_width =
+                parts::value_width(ui, &["Type", "Added", "Also added", "Source"], 0.0);
+            egui::Grid::new("sample_identity_left")
+                .num_columns(2)
+                .spacing([12.0, parts::ROW_GAP])
+                .show(ui, |ui| {
+                    let kind = if record.file_type.is_empty() {
+                        "unknown".to_owned()
                     } else {
-                        ui.add(egui::Label::new(&record.description).wrap());
-                    }
-                    ui.add_space(6.0);
-                    ui.horizontal_wrapped(|ui| {
-                        for tag in &data.tags {
-                            sample_tags::tag(ui, tag);
-                        }
-                        if data.tags.is_empty() {
-                            ui.label(theme::hint_text("No tags"));
-                        }
-                    });
-                    ui.add_space(8.0);
-                    let value_width =
-                        parts::value_width(ui, &["Type", "Added", "Also added", "Source"], 0.0);
-                    egui::Grid::new("sample_identity_left")
-                        .num_columns(2)
-                        .spacing([12.0, parts::ROW_GAP])
-                        .show(ui, |ui| {
-                            let kind = if record.file_type.is_empty() {
-                                "unknown".to_owned()
-                            } else {
-                                record.file_type.clone()
-                            };
-                            let arch = if record.arch.is_empty() {
-                                String::new()
-                            } else {
-                                format!(
-                                    " · {}",
-                                    antinomie_monitor_core::samples::arch_label(&record.arch)
-                                )
-                            };
-                            parts::row_in(
-                                ui,
-                                "Type",
-                                format!("{kind}{arch} · {}", crate::values::file_size(record.size)),
-                                value_width,
-                            );
-                            for (index, origin) in data.origins.iter().enumerate() {
-                                let when = parts::second(origin.at_ms);
-                                parts::row_in(
-                                    ui,
-                                    if index == 0 { "Added" } else { "Also added" },
-                                    format!(
-                                        "{} · {when}{}",
-                                        origin.kind.label(),
-                                        if origin.before_custody {
-                                            " · recorded before the custody log"
-                                        } else {
-                                            ""
-                                        }
-                                    ),
-                                    value_width,
-                                );
-                                let source = [&origin.source, &origin.path, &origin.detail]
-                                    .into_iter()
-                                    .filter(|part| !part.is_empty())
-                                    .cloned()
-                                    .collect::<Vec<_>>()
-                                    .join(" · ");
-                                if !source.is_empty() {
-                                    parts::row_in(ui, "Source", source, value_width);
-                                }
-                            }
-                        });
-                },
-                |ui| {
-                    parts::hash_rows(
+                        record.file_type.clone()
+                    };
+                    let arch = if record.arch.is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            " · {}",
+                            antinomie_monitor_core::samples::arch_label(&record.arch)
+                        )
+                    };
+                    parts::row_in(
                         ui,
-                        &[
-                            ("SHA-256", record.sha256.as_str()),
-                            ("SHA-1", record.sha1.as_str()),
-                            ("MD5", record.md5.as_str()),
-                            ("TLSH", record.tlsh.as_str()),
-                        ],
+                        "Type",
+                        format!("{kind}{arch} · {}", crate::values::file_size(record.size)),
+                        value_width,
                     );
-                    ui.add_space(parts::ROW_GAP);
-                    // Not in the grid: a long path must wrap in the box, not
-                    // widen its column.
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(RichText::new("Archive").color(theme::muted()));
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(data.archive.display().to_string()).monospace(),
-                            )
-                            .selectable(true),
+                    for (index, origin) in data.origins.iter().enumerate() {
+                        let when = parts::second(origin.at_ms);
+                        parts::row_in(
+                            ui,
+                            if index == 0 { "Added" } else { "Also added" },
+                            format!(
+                                "{} · {when}{}",
+                                origin.kind.label(),
+                                if origin.before_custody {
+                                    " · recorded before the custody log"
+                                } else {
+                                    ""
+                                }
+                            ),
+                            value_width,
                         );
-                        if data.archived {
-                            widgets::chip(ui, "archive present", Tone::Good)
-                                .on_hover_text("AES zip, password infected");
-                        } else {
-                            widgets::chip(ui, "✗ missing", Tone::Error);
+                        let source = [&origin.source, &origin.path, &origin.detail]
+                            .into_iter()
+                            .filter(|part| !part.is_empty())
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join(" · ");
+                        if !source.is_empty() {
+                            parts::row_in(ui, "Source", source, value_width);
                         }
-                        if verifying {
-                            theme::spinner(ui);
-                        }
-                        match verified {
-                            Some((true, _)) => {
-                                widgets::chip(ui, "✓ SHA-256 matches", Tone::Good);
-                            }
-                            Some((false, why)) => {
-                                widgets::chip(ui, "✗ did not verify", Tone::Error)
-                                    .on_hover_text(why);
-                            }
-                            None => {}
-                        }
-                        if ui
-                            .add_enabled(data.archived && !verifying, egui::Button::new("Verify"))
-                            .on_hover_text("Read the archive back and compare its SHA-256")
-                            .clicked()
-                        {
-                            *go = Some(Go::Verify);
-                        }
-                        if ui
-                            .add_enabled(data.archived, egui::Button::new("View content"))
-                            .on_hover_text("Open the archived file in the viewer")
-                            .on_disabled_hover_text("The archive was removed")
-                            .clicked()
-                        {
-                            *go = Some(Go::View);
-                        }
-                    });
-                },
+                    }
+                });
+        };
+        let mut right_body = |ui: &mut egui::Ui| {
+            parts::hash_rows(
+                ui,
+                &[
+                    ("SHA-256", record.sha256.as_str()),
+                    ("SHA-1", record.sha1.as_str()),
+                    ("MD5", record.md5.as_str()),
+                    ("TLSH", record.tlsh.as_str()),
+                ],
             );
-        });
+            ui.add_space(parts::ROW_GAP);
+            // Not in the grid: a long path must wrap in the box, not
+            // widen its column.
+            ui.label(RichText::new("Archive").color(theme::muted()));
+            ui.add(
+                egui::Label::new(
+                    RichText::new(data.archive.display().to_string())
+                        .monospace()
+                        .small(),
+                )
+                .wrap()
+                .selectable(true),
+            );
+            ui.horizontal_wrapped(|ui| {
+                if data.archived {
+                    widgets::chip(ui, "archive present", Tone::Good)
+                        .on_hover_text("AES zip, password infected");
+                } else {
+                    widgets::chip(ui, "✗ missing", Tone::Error);
+                }
+                if verifying {
+                    theme::spinner(ui);
+                }
+                match verified {
+                    Some((true, _)) => {
+                        widgets::chip(ui, "✓ SHA-256 matches", Tone::Good);
+                    }
+                    Some((false, why)) => {
+                        widgets::chip(ui, "✗ did not verify", Tone::Error).on_hover_text(why);
+                    }
+                    None => {}
+                }
+                if ui
+                    .add_enabled(data.archived && !verifying, egui::Button::new("Verify"))
+                    .on_hover_text("Read the archive back and compare its SHA-256")
+                    .clicked()
+                {
+                    *go = Some(Go::Verify);
+                }
+                if ui
+                    .add_enabled(data.archived, egui::Button::new("View content"))
+                    .on_hover_text("Open the archived file in the viewer")
+                    .on_disabled_hover_text("The archive was removed")
+                    .clicked()
+                {
+                    *go = Some(Go::View);
+                }
+            });
+        };
+        // Side by side when the window is wide enough, else one above the other.
+        if ui.available_width() >= SIDE_BY_SIDE {
+            ui.columns(2, |columns| {
+                parts::equal_boxes(columns, left_body, right_body)
+            });
+        } else {
+            parts::panel_frame().show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                left_body(ui);
+            });
+            ui.add_space(8.0);
+            parts::panel_frame().show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                right_body(ui);
+            });
+        }
         ui.spacing_mut().item_spacing.x = spacing;
         ui.add_space(8.0);
         aliases(ui, data, font);
     });
 }
+
+/// The width Identity needs for its two boxes side by side.
+const SIDE_BY_SIDE: f32 = 880.0;
 
 /// Every file name the sample went by.
 fn aliases(ui: &mut egui::Ui, data: &Data, font: f32) {

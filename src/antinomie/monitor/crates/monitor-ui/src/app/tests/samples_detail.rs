@@ -531,6 +531,20 @@ fn selecting_a_run_opens_the_details_panel_and_a_broken_custody_log_is_marked_in
         render(&mut app, &ctx, SIZE);
     }
     // The run's details draw in the Details panel below the page.
+    // The list shows each run's short id beside its executable, and no
+    // mark for a static report.
+    let shown: Vec<String> = super::texts(&render(&mut app, &ctx, SIZE))
+        .into_iter()
+        .map(|(text, _)| text)
+        .collect();
+    assert!(
+        shown.iter().all(|text| !text.contains("[static analysis]")),
+        "{shown:?}"
+    );
+    assert!(
+        shown.iter().any(|text| text == "[r2]") && shown.iter().any(|text| text == "[r1]"),
+        "{shown:?}"
+    );
     // The list marks a sample whose custody log was edited.
     app.samples_page.close_detail();
     let connection = rusqlite::Connection::open(root.join("samples/library.sqlite")).unwrap();

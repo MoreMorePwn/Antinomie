@@ -110,6 +110,9 @@ pub(crate) fn tag(ui: &mut egui::Ui, tag: &Tag) -> egui::Response {
         }
         TagKind::Technique => {
             let (id, name) = technique_parts(&tag.value);
+            // A name longer than the line is cut (the tooltip has it all).
+            let fits = width_of(ui, tag) <= ui.available_width();
+            let room = ui.available_width() - 16.0 - 8.0;
             frame
                 .fill(wash(palette.pointer))
                 .stroke(Stroke::new(1.0_f32, palette.pointer))
@@ -117,6 +120,9 @@ pub(crate) fn tag(ui: &mut egui::Ui, tag: &Tag) -> egui::Response {
                 .show(ui, |ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
                     ui.horizontal(|ui| {
+                        if !fits {
+                            ui.set_max_width(room.max(60.0));
+                        }
                         ui.label(
                             RichText::new(id)
                                 .small()
@@ -125,11 +131,17 @@ pub(crate) fn tag(ui: &mut egui::Ui, tag: &Tag) -> egui::Response {
                                 .color(theme::text()),
                         );
                         if !name.is_empty() {
-                            ui.label(RichText::new(name).small().color(theme::text()));
+                            let text = RichText::new(name).small().color(theme::text());
+                            if fits {
+                                ui.label(text);
+                            } else {
+                                ui.add(egui::Label::new(text).truncate());
+                            }
                         }
                     });
                 })
                 .response
+                .on_hover_text(&tag.value)
         }
         TagKind::Custom => {
             let color = palette_color(&tag.color);

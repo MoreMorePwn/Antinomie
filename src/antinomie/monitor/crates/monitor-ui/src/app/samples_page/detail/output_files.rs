@@ -99,6 +99,8 @@ pub(in crate::app::samples_page) struct Output {
 
 /// The width the three action buttons of a row need on one line.
 const ACTIONS_WIDTH: f32 = 380.0;
+/// The width the longest of them needs when they sit one above the other.
+const STACKED_WIDTH: f32 = 170.0;
 
 fn size_of(path: &std::path::Path) -> Option<u64> {
     let meta = std::fs::metadata(path).ok()?;
@@ -303,19 +305,35 @@ pub(in crate::app::samples_page) fn section(
             output.size.map_or("–".to_owned(), crate::values::file_size)
         });
         // The three buttons need about this much; a narrower last column
-        // puts them on two lines, in taller rows, instead of cutting them.
-        let fixed = file + hash + 70.0 + because + size + 140.0 + ui.spacing().item_spacing.x * 6.0;
-        let roomy = ui.available_width() - fixed >= ACTIONS_WIDTH;
+        // puts them on separate lines, in taller rows, instead of cutting
+        // them, and the text columns give way (their text is cut, the
+        // tooltip has it) so the table never passes the window.
+        let gap = ui.spacing().item_spacing.x * 6.0;
+        let room = ui.available_width() - gap - 2.0;
+        let mut widths = [file, hash, 70.0, because, size, 140.0];
+        let roomy = room - widths.iter().sum::<f32>() >= ACTIONS_WIDTH;
+        let actions = if roomy { ACTIONS_WIDTH } else { STACKED_WIDTH };
+        // (column, least width)
+        let mut over = widths.iter().sum::<f32>() + actions - room;
+        for (index, least) in [(3, 90.0), (4, 130.0), (0, 100.0), (5, 120.0)] {
+            if over <= 0.0 {
+                break;
+            }
+            let cut = over.min((widths[index] - least).max(0.0));
+            widths[index] -= cut;
+            over -= cut;
+        }
+        let [file, hash, run, because, size, availability] = widths;
         parts::on_surface(ui, |ui| {
             parts::mini_table(ui, "sample_summary_outputs")
                 .sense(egui::Sense::click())
-                .column(egui_extras::Column::exact(file))
+                .column(egui_extras::Column::exact(file).clip(true))
                 .column(egui_extras::Column::exact(hash))
-                .column(egui_extras::Column::exact(70.0))
-                .column(egui_extras::Column::exact(because))
-                .column(egui_extras::Column::exact(size))
-                .column(egui_extras::Column::exact(140.0))
-                .column(egui_extras::Column::remainder().at_least(60.0))
+                .column(egui_extras::Column::exact(run))
+                .column(egui_extras::Column::exact(because).clip(true))
+                .column(egui_extras::Column::exact(size).clip(true))
+                .column(egui_extras::Column::exact(availability).clip(true))
+                .column(egui_extras::Column::remainder().at_least(actions))
                 .header(table::header_height(font), |mut header| {
                     for title in [
                         "File",
@@ -331,7 +349,11 @@ pub(in crate::app::samples_page) fn section(
                 })
                 .body(|body| {
                     body.rows(
-                        table::row_height(font) + if roomy { 6.0 } else { 34.0 },
+                        if roomy {
+                            table::row_height(font) + 6.0
+                        } else {
+                            3.0 * (font + 12.0) + 6.0
+                        },
                         data.outputs.len(),
                         |mut row| {
                             let output = &data.outputs[row.index()];
