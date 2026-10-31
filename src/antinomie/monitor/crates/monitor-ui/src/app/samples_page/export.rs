@@ -164,7 +164,7 @@ impl ExportDialog {
                 ui.add_enabled_ui(!busy && self.result.is_none(), |ui| {
                     ui.label(RichText::new("Format").color(theme::muted()));
                     ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 18.0;
+                        ui.spacing_mut().item_spacing.x = 30.0;
                         let before = self.format;
                         ui.radio_value(&mut self.format, ExportFormat::Json, "JSON")
                             .on_hover_text(

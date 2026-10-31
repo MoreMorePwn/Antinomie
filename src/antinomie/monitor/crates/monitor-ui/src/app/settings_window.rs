@@ -227,9 +227,13 @@ impl MonitorApp {
                         egui::Layout::top_down(egui::Align::Min),
                         |ui| {
                             ui.set_width(content);
+                            // Bounded to the page area, so a page with a wide row
+                            // cannot widen the window: its edge stays put between
+                            // pages.
                             egui::ScrollArea::vertical()
                                 .id_salt("settings_page")
                                 .max_height(height)
+                                .max_width(content)
                                 .auto_shrink([false, false])
                                 .show(ui, |ui| self.settings_page(ui, ctx));
                         },

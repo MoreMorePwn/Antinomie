@@ -366,7 +366,8 @@ pub(in crate::app::samples_page) fn section(
                                 .iter()
                                 .any(|entry| entry.number == output.number && entry.folder);
                             row.col(|ui| {
-                                ui.label(output.kind.label());
+                                ui.add(egui::Label::new(output.kind.label()).truncate())
+                                    .on_hover_text(output.kind.label());
                             });
                             row.col(|ui| {
                                 table::cell(ui, table::Cell::Mono, &output.short()).on_hover_text(
@@ -385,7 +386,8 @@ pub(in crate::app::samples_page) fn section(
                                 });
                             });
                             row.col(|ui| {
-                                ui.label(&output.saved_because);
+                                ui.add(egui::Label::new(&output.saved_because).truncate())
+                                    .on_hover_text(&output.saved_because);
                             });
                             row.col(|ui| {
                                 ui.label(output.size.map_or(

@@ -117,8 +117,6 @@ pub(crate) enum DetailsOf {
     Static,
     /// A run of the open sample, selected on the sample window's Runs tab.
     Sample,
-    /// The open tab has no details (Summary, Base images, Settings pages...).
-    Nothing,
 }
 
 impl DetailsFollow {
@@ -190,7 +188,6 @@ impl DetailsFollow {
             .collect();
         match visible.as_slice() {
             [only] => Self::SIDES[*only],
-            [] if self.drawn.iter().any(Option::is_some) => DetailsOf::Nothing,
             _ => Self::SIDES[self.followed],
         }
     }

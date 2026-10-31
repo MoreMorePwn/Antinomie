@@ -236,17 +236,17 @@ impl MonitorApp {
                 // The name and the status take what they need; the guest column
                 // takes the rest, so no column is squeezed by a long base name.
                 .column(
-                    Column::initial(360.0)
-                        .at_least(200.0)
+                    Column::initial(320.0)
+                        .at_least(180.0)
                         .resizable(true)
                         .clip(true),
                 )
-                .column(Column::remainder().at_least(220.0).clip(true))
-                .column(Column::exact(104.0))
+                .column(Column::remainder().at_least(170.0).clip(true))
+                .column(Column::exact(96.0))
                 .column(Column::exact(84.0))
                 .column(
-                    Column::initial(170.0)
-                        .at_least(110.0)
+                    Column::initial(130.0)
+                        .at_least(90.0)
                         .resizable(true)
                         .clip(true),
                 )
@@ -338,10 +338,13 @@ impl MonitorApp {
                     base_action = Some((id, BaseAction::Delete));
                 }
             });
-            if id.is_none() {
-                ui.weak("Select a base for its actions; right-click a row for the same menu.");
-            }
         });
+        if target
+            .as_deref()
+            .is_none_or(|id| !rows.iter().any(|row| row.id == *id))
+        {
+            ui.weak("Select a base for its actions; right-click a row for the same menu.");
+        }
         if rows.iter().any(|row| row.status != RevisionStatus::Current) {
             ui.weak("Download base lists the bases made for this version of Antinomie.");
         }

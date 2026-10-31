@@ -181,7 +181,7 @@ impl AddDialog {
         widgets::window("Add file")
             .id(egui::Id::new("samples_add_file"))
             .open(&mut open)
-            .default_width(520.0)
+            .default_width(600.0)
             .resizable(false)
             .show(ctx, |ui| {
                 let busy = self.adding.is_some();
@@ -196,7 +196,7 @@ impl AddDialog {
                                 egui::TextEdit::singleline(&mut self.path)
                                     .hint_text(theme::hint_text("Path on this computer"))
                                     .font(egui::TextStyle::Monospace)
-                                    .desired_width(300.0),
+                                    .desired_width(360.0),
                             );
                             if (edit.lost_focus() && self.probed != self.path.trim())
                                 || (self.probed.is_empty() && !self.path.trim().is_empty())

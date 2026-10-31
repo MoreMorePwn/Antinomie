@@ -563,13 +563,6 @@ impl MonitorApp {
                 crate::workspace::DetailsOf::Core => self.core_view.details(ui),
                 crate::workspace::DetailsOf::Static => crate::analysis::details(ui),
                 crate::workspace::DetailsOf::Sample => self.sample_run_details(ui),
-                crate::workspace::DetailsOf::Nothing => {
-                    ui.add_space(6.0);
-                    ui.colored_label(
-                        theme::muted(),
-                        "This tab has no details. Select a row in Syscall Trace, Run History, Triage, Memory, Disks or Static analysis.",
-                    );
-                }
             },
             Panel::Activity => self.activity(ui),
             Panel::Terminal(id) => {

@@ -95,11 +95,15 @@ impl HistoryColumns {
             .filter(|(index, _)| wide || !matches!(index, 1 | 2))
             .map(|(_, wanted)| wanted)
             .sum();
-        let scale = (room / wanted_kept).min(1.0);
+        // The start time takes what it needs first; the other columns share
+        // what is left.
+        let rest_least = kept_others - others[0];
+        let start = wanted[0].min((room - rest_least).max(others[0]));
+        let scale = ((room - start) / (wanted_kept - wanted[0]).max(1.0)).min(1.0);
         let at = |index: usize| (wanted[index] * scale).max(others[index]);
         Self {
             pane,
-            start: at(0),
+            start,
             start_least: least[0],
             executable_least: least[1],
             sample: at(1),
