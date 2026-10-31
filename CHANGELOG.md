@@ -34,6 +34,24 @@ it runs.
   lines say which limit was hit; capa failures show capa's error; capa keeps its
   compiled rules between runs. Run History shows each run's short id.
 
+- **Static-analysis size limits are settings.** Settings › Analysis tools has a
+  field for each bound a warning can name: rows a check keeps in its report
+  (256 to 8,192, default 2,048; also the signatures binwalk lists), the size of
+  one listing (16 to 512 MiB, default 64), the text kept per value (1,024 to
+  16,384 bytes, default 4,096), the output read from a local tool (1 to 16 MiB;
+  binwalk reads four times that), the output read from capa and FLOSS (32 to 256
+  MiB), the strings FLOSS may list (10,000 to 500,000) and the largest file FLOSS
+  is given (16 to 64 MiB). The Analysis settings button of a warning opens
+  Settings at its field; a bound no setting raises (a file that disagrees with
+  itself, the unpacking depth) has no button. A change applies to analyses
+  started afterwards and to checks run again from a tab; a report records the
+  limits it was made with, and the report may grow with the row setting.
+
+- **Reports credit the rules that matched.** Every export format (HTML, PDF,
+  JSON, MISP, STIX) names each matching detection rule's author, licence, source
+  pack and own reference link, as the rules' licences ask. A machine profile
+  shows the same no-affiliation note a cloud profile did.
+
 - **Triage notes and clearer warnings.** Run and device-profile notes sit in a
   Notes section at the bottom of the Triage summary; the Internet route note is
   no longer a warning. Written-content, Sigma coverage, Guest network (formerly
