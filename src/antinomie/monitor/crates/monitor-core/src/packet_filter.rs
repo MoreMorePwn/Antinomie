@@ -1794,9 +1794,11 @@ mod tests {
             all.iter().map(|p| p.number).collect::<Vec<_>>(),
             [1, 2, 3, 4, 5, 6]
         );
-        // TShark names the repeated SYN for what it is.
+        // TShark names the repeated SYN for what it is; 4.4 calls it a
+        // retransmission and 4.6 an out-of-order segment.
         assert!(
-            all[5].info.contains("[TCP Retransmission]"),
+            all[5].info.contains("[TCP Retransmission]")
+                || all[5].info.contains("[TCP Out-Of-Order]"),
             "{}",
             all[5].info
         );
