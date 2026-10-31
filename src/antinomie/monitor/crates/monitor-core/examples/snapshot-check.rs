@@ -2,6 +2,9 @@
 //! Real four-vCPU snapshot/reconnect qualification in a disposable data folder.
 //! Usage: snapshot-check BUNDLE WORK_DIR [debian]
 //! With `debian` the VM is sized for a Debian desktop base and boots longer.
+//! A base of an emulated architecture (its bundle.json `arch`, arm64) gets two
+//! vCPUs and 1 GiB, the budget of a TCG guest, and every wait scaled by the
+//! architecture's time scale.
 use antinomie_monitor_core::*;
 use std::{
     collections::BTreeMap,
@@ -47,6 +50,8 @@ struct Driver {
     /// Serial log text that says guest userspace is up.
     ready: &'static str,
     boot_secs: u64,
+    /// How many times longer the base's guest takes than an x86-64 one.
+    scale: u64,
 }
 impl Driver {
     fn pump(&mut self) -> Vec<(u64, bool, String)> {
@@ -69,7 +74,7 @@ impl Driver {
     }
     fn command(&mut self, command: Command) -> Result<String, String> {
         let id = self.backend.send(command)?;
-        let deadline = Instant::now() + Duration::from_secs(360);
+        let deadline = Instant::now() + Duration::from_secs(360 * self.scale);
         loop {
             for (reply, success, message) in self.pump() {
                 if reply == id {
@@ -89,7 +94,7 @@ impl Driver {
         }
     }
     fn marker(&mut self, id: &str, marker: &str) -> Result<(), String> {
-        let deadline = Instant::now() + Duration::from_secs(40);
+        let deadline = Instant::now() + Duration::from_secs(40 * self.scale);
         loop {
             self.pump();
             if self.terminal.get(id).is_some_and(|data| {
@@ -117,7 +122,7 @@ impl Driver {
         self.marker(id, marker)
     }
     fn guest_ready(&mut self) -> Result<(), String> {
-        let deadline = Instant::now() + Duration::from_secs(self.boot_secs);
+        let deadline = Instant::now() + Duration::from_secs(self.boot_secs * self.scale);
         loop {
             self.pump();
             if self.snapshot.serial_log.as_ref().is_some_and(|path| {
@@ -135,7 +140,7 @@ impl Driver {
     /// may not have its terminal devices yet, so a failed launch is retried
     /// until the boot deadline.
     fn launch(&mut self, request: ExecRequest) -> Result<String, String> {
-        let deadline = Instant::now() + Duration::from_secs(self.boot_secs);
+        let deadline = Instant::now() + Duration::from_secs(self.boot_secs * self.scale);
         loop {
             let before: Vec<String> = self
                 .snapshot
@@ -257,6 +262,13 @@ fn run() -> Result<(), String> {
         _ => return Err("usage: snapshot-check BUNDLE WORK_DIR [debian]".into()),
     };
     let work = PathBuf::from(&args[1]);
+    // The base's guest architecture (bundle.json `arch`; x86-64 when absent).
+    let arch: GuestArch = std::fs::read_to_string(PathBuf::from(&args[0]).join("bundle.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|bundle| serde_json::from_value(bundle["arch"].clone()).ok())
+        .unwrap_or_default();
+    let emulated = arch != GuestArch::X86_64;
     if work.exists() {
         return Err("qualification requires a fresh disposable work directory".into());
     }
@@ -277,11 +289,13 @@ fn run() -> Result<(), String> {
             "BusyBox guest ready"
         },
         boot_secs: if debian { 180 } else { 40 },
+        scale: u64::from(arch.time_scale()),
     };
+    let cpus: u16 = if emulated { 2 } else { 4 };
     let vm = VmConfig {
         name: "Snapshot qualification".into(),
-        cpus: 4,
-        ram_mib: if debian { 4096 } else { 1024 },
+        cpus,
+        ram_mib: if debian && !emulated { 4096 } else { 1024 },
         disk_gib: if debian { 16 } else { 2 },
         ..VmConfig::default()
     };
@@ -301,7 +315,7 @@ fn run() -> Result<(), String> {
     })?;
     let vm = driver.snapshot.vms.first().ok_or("VM missing")?.id.clone();
     driver.command(Command::Start { vm_id: vm.clone() })?;
-    let deadline = Instant::now() + Duration::from_secs(driver.boot_secs);
+    let deadline = Instant::now() + Duration::from_secs(driver.boot_secs * driver.scale);
     loop {
         driver.pump();
         if driver
@@ -429,9 +443,9 @@ fn run() -> Result<(), String> {
     {
         return Err("snapshot branches/dependencies lost".into());
     }
-    std::fs::write(work.join("qualification.json"),serde_json::to_vec_pretty(&serde_json::json!({"passed":true,"base":if debian {"debian"} else {"busybox"},"cpus":4,"full_restores":2,"disk_reboot":true,"reconnect":true,"graph":tree,"health":driver.snapshot.health})).map_err(|error|error.to_string())?).map_err(|error|error.to_string())?;
+    std::fs::write(work.join("qualification.json"),serde_json::to_vec_pretty(&serde_json::json!({"passed":true,"base":if debian {"debian"} else {"busybox"},"cpus":cpus,"arch":arch,"full_restores":2,"disk_reboot":true,"reconnect":true,"graph":tree,"health":driver.snapshot.health})).map_err(|error|error.to_string())?).map_err(|error|error.to_string())?;
     driver.backend.shutdown()?;
-    println!("four-vCPU snapshot, branch and reconnect qualification passed");
+    println!("{cpus}-vCPU snapshot, branch and reconnect qualification passed");
     Ok(())
 }
 fn main() {

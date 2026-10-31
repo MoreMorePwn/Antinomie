@@ -30,7 +30,7 @@ older): by convention the 0.7.0 BusyBox base, from before the tracer's hashes.
 with aarch64-linux-gnu-gcc into fixtures-arm64, every timeout is scaled by the
 host's arm64 time scale (monitor-core src/vm/machine.rs ARM64_TIME_SCALE), and
 the checks that have no arm64 version yet are not planned (the debugger, the x86
-stealth probe, snapshots, interop, stress-extreme: see ARM64_LATER).
+stealth probe, interop, stress-extreme: see ARM64_LATER).
 
 BASE is a BusyBox base bundle built from the current guest series; the quick
 tier also runs on a Debian Minimal base (its VMs get a throwaway account and
@@ -107,9 +107,9 @@ MEASURED_GROUPS = {"conf-stress-rate": "stress-rate"}
 # The compiler of each guest architecture's static fixtures.
 ARCH_CC = {"x86_64": "gcc", "arm64": "aarch64-linux-gnu-gcc"}
 # Checks an arm64 tier does not plan yet, and the card that brings each: the
-# debugger (MA-11/14), the x86 CPUID stealth probe (MA-17), snapshots (MA-16),
-# interop (x86 bases only), stress-extreme (disk under TCG).
-ARM64_LATER = {"debug-p2", "debug-p3", "debugger-live", "stealth", "cloud", "snapshot",
+# debugger (MA-11/14), the x86 CPUID stealth probe (MA-17), interop (x86 bases
+# only), stress-extreme (disk under TCG).
+ARM64_LATER = {"debug-p2", "debug-p3", "debugger-live", "stealth", "cloud",
                "conf-stress-extreme", "uring-legacy", "tracer-legacy"}
 MACHINE_RS = MONITOR / "crates/monitor-core/src/vm/machine.rs"
 
