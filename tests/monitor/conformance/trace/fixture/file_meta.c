@@ -95,6 +95,7 @@ static void stat_cases(void)
     if (fd < 0)
         ora_fail("file_meta: open meta-file");
 
+#ifdef SYS_stat
     memset(&st, 0, sizeof st);
     CALL("stat.file", stat, WANT_OK, "meta-file", &st);
     in_str(0, "meta-file");
@@ -117,6 +118,7 @@ static void stat_cases(void)
     CALL("stat.null_path", stat, EFAULT, NULL, &st);
     want_status(0, "in", "NULL_POINTER");
     DONE();
+#endif
 
     memset(&st, 0, sizeof st);
     CALL("fstat.file", fstat, WANT_OK, fd, &st);
@@ -129,6 +131,7 @@ static void stat_cases(void)
     DONE();
 
     memset(&st, 0, sizeof st);
+#ifdef SYS_lstat
     CALL("lstat.symlink", lstat, WANT_OK, "meta-link", &st);
     in_str(0, "meta-link");
     out_buf(1, &st, sizeof st);
@@ -141,6 +144,7 @@ static void stat_cases(void)
     want_status(0, "in", "COPY_FAULT");
     why("an address in the first page is never mapped: the kernel and the recorder both fault");
     DONE();
+#endif
 
     memset(&st, 0, sizeof st);
     CALL("newfstatat.cwd", newfstatat, WANT_OK, AT_FDCWD, "meta-file", &st, 0);
@@ -267,6 +271,7 @@ static void stat_cases(void)
     DONE();
     CASE("fstatfs.badf", fstatfs, EBADF, 999, &fs);
 
+#ifdef SYS_ustat
     struct stat dir_st;
     if (stat(".", &dir_st) != 0)
         ora_fail("file_meta: stat work dir");
@@ -278,12 +283,14 @@ static void stat_cases(void)
     why("the work directory's superblock is found by its device number (old 32-bit encoding)");
     DONE();
     CASE("ustat.no_device", ustat, EINVAL, 0, &us);
+#endif
 
     close((int)fd);
 }
 
 static void access_cases(void)
 {
+#ifdef SYS_access
     CALL("access.read", access, WANT_OK, "meta-file", R_OK);
     in_str(0, "meta-file");
     DONE();
@@ -300,6 +307,7 @@ static void access_cases(void)
     CALL("access.bad_mode", access, EINVAL, "meta-file", 0x80);
     in_str(0, "meta-file");
     DONE();
+#endif
 
     CALL("faccessat.cwd", faccessat, WANT_OK, AT_FDCWD, "meta-file", R_OK | W_OK);
     in_str(1, "meta-file");
@@ -338,6 +346,7 @@ static void mode_owner_cases(void)
     long fd = open("meta-file", O_RDWR | O_CLOEXEC);
     long uid = getuid(), gid = getgid();
 
+#ifdef SYS_chmod
     CALL("chmod.file", chmod, WANT_OK, "meta-file", 0640);
     in_str(0, "meta-file");
     DONE();
@@ -348,6 +357,7 @@ static void mode_owner_cases(void)
     in_str(0, "/tmp");
     why("/tmp (writable, owned by root) cannot be changed by UID 1000; same mode either way");
     DONE();
+#endif
     CASE("fchmod.file", fchmod, WANT_OK, fd, 0600);
     CASE("fchmod.badf", fchmod, EBADF, 999, 0600);
     CALL("fchmodat.cwd", fchmodat, WANT_OK, AT_FDCWD, "meta-file", 0644);
@@ -372,6 +382,7 @@ static void mode_owner_cases(void)
     in_str(1, "meta-file");
     DONE();
 
+#ifdef SYS_chown
     CALL("chown.own_ids", chown, WANT_OK, "meta-file", uid, gid);
     in_str(0, "meta-file");
     DONE();
@@ -385,15 +396,18 @@ static void mode_owner_cases(void)
     CALL("chown.missing", chown, ENOENT, "meta-missing", uid, gid);
     in_str(0, "meta-missing");
     DONE();
+#endif
     CASE("fchown.own_ids", fchown, WANT_OK, fd, uid, gid);
     CASE("fchown.to_root", fchown, EPERM, fd, 0, -1);
     CASE("fchown.badf", fchown, EBADF, 999, uid, gid);
+#ifdef SYS_lchown
     CALL("lchown.symlink", lchown, WANT_OK, "meta-link", uid, gid);
     in_str(0, "meta-link");
     DONE();
     CALL("lchown.to_root", lchown, EPERM, "meta-link", 0, 0);
     in_str(0, "meta-link");
     DONE();
+#endif
     CALL("fchownat.nofollow", fchownat, WANT_OK, AT_FDCWD, "meta-link", uid, gid,
          AT_SYMLINK_NOFOLLOW);
     in_str(1, "meta-link");
@@ -420,6 +434,7 @@ static void time_cases(void)
 {
     long fd = open("meta-file", O_RDWR | O_CLOEXEC);
 
+#ifdef SYS_utime
     struct utimbuf ub = {.actime = 1000000000, .modtime = 1000000001};
     CALL("utime.explicit", utime, WANT_OK, "meta-file", &ub);
     in_str(0, "meta-file");
@@ -433,7 +448,9 @@ static void time_cases(void)
     in_str(0, "meta-missing");
     in_buf(1, &ub, sizeof ub);
     DONE();
+#endif
 
+#ifdef SYS_utimes
     struct timeval tv[2] = {{.tv_sec = 1100000000, .tv_usec = 5}, {.tv_sec = 1100000001, .tv_usec = 6}};
     CALL("utimes.explicit", utimes, WANT_OK, "meta-file", tv);
     in_str(0, "meta-file");
@@ -472,6 +489,9 @@ static void time_cases(void)
     in_str(1, "meta-file");
     in_buf(2, tv, sizeof tv);
     DONE();
+#else
+    long dir = open(".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+#endif
 
     struct timespec ts[2] = {{.tv_sec = 1200000000, .tv_nsec = 7}, {.tv_sec = 1200000001, .tv_nsec = 8}};
     CALL("utimensat.explicit", utimensat, WANT_OK, AT_FDCWD, "meta-file", ts, 0);
@@ -549,6 +569,7 @@ static void dirent_cases(void)
     CASE("getdents64.not_dir", getdents64, ENOTDIR, file, buffer, sizeof buffer);
     CASE("getdents64.badf", getdents64, EBADF, 999, buffer, sizeof buffer);
 
+#ifdef SYS_getdents
     lseek((int)dir, 0, SEEK_SET);
     memset(buffer, 0, sizeof buffer);
     got = CALL("getdents.list", getdents, WANT_OK, dir, buffer, sizeof buffer);
@@ -566,6 +587,7 @@ static void dirent_cases(void)
     CALL("getdents.fault", getdents, EFAULT, dir, 1, sizeof buffer);
     why("the first entry cannot be copied to an unmapped buffer; nothing is recorded as output");
     DONE();
+#endif
     (void)got;
     close((int)file);
     close((int)dir);

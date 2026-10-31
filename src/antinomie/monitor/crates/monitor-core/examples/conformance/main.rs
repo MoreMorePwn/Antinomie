@@ -37,6 +37,39 @@ use std::{
     process::ExitCode,
 };
 
+/// The system call ABI of the base under test, one per run (x86-64 until
+/// main reads the base): the fixtures print their architecture's numbers,
+/// the host's events carry ids ([`antinomie_monitor_core::syscalls::id`]).
+static ABI: std::sync::OnceLock<antinomie_monitor_core::syscalls::Abi> = std::sync::OnceLock::new();
+
+/// How many times longer the base's guest takes than an x86-64 one (set
+/// with [`ABI`]).
+static TIME_SCALE: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+
+/// A guest wait of `seconds` on an x86-64 guest, scaled for the base.
+pub fn guest_seconds(seconds: u64) -> u64 {
+    seconds * TIME_SCALE.get().copied().unwrap_or(1)
+}
+
+/// Whether the base runs emulated (not x86-64): its VMs get at most 2 vCPUs
+/// and 1 GiB, the budget of a TCG guest on the machines the suite runs on.
+pub fn emulated() -> bool {
+    syscall_table().abi != antinomie_monitor_core::syscalls::Abi::X86_64
+}
+
+/// The base's system call table.
+pub fn syscall_table() -> &'static antinomie_monitor_core::syscalls::Table {
+    antinomie_monitor_core::syscalls::table(
+        *ABI.get()
+            .unwrap_or(&antinomie_monitor_core::syscalls::Abi::X86_64),
+    )
+}
+
+/// The host id of a call the base's programs make by number.
+pub fn syscall_id(number: u64) -> u64 {
+    antinomie_monitor_core::syscalls::id(syscall_table().abi, number)
+}
+
 /// One fixture group: a program run in its own VM.
 #[derive(Clone, Debug)]
 pub struct Group {
@@ -313,6 +346,12 @@ fn main() -> ExitCode {
                 bless,
                 render,
             };
+            let Some(abi) = antinomie_monitor_core::syscalls::Abi::of(context.arch()) else {
+                eprintln!("conformance: the base's architecture has no system call table");
+                return ExitCode::FAILURE;
+            };
+            let _ = ABI.set(abi);
+            let _ = TIME_SCALE.set(u64::from(context.arch().time_scale()));
             if let Err(error) = std::fs::create_dir_all(&context.out) {
                 eprintln!("conformance: {}: {error}", context.out.display());
                 return ExitCode::FAILURE;

@@ -169,6 +169,7 @@ static void clock_read_cases(void)
     why("the copy to the unmapped first page fails; outputs are recorded only on success");
     DONE();
 
+#ifdef SYS_time
     time_t now = 0;
     CALL("time.pointer", time, WANT_OK, &now);
     out_any(0);
@@ -178,6 +179,7 @@ static void clock_read_cases(void)
     want_status(0, "any", "NULL_POINTER");
     volatile_case();
     DONE();
+#endif
 }
 
 static void clock_set_cases(void)

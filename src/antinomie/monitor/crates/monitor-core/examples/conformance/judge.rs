@@ -423,7 +423,10 @@ impl<'a> Judge<'a> {
             return false;
         };
         // ERESTART_RESTARTBLOCK: the call resumes as restart_syscall.
-        let nr = match (code == -516).then(|| syscalls::number("restart_syscall")) {
+        let restart = crate::syscall_table()
+            .number("restart_syscall")
+            .map(crate::syscall_id);
+        let nr = match (code == -516).then_some(restart) {
             Some(Some(restart)) => restart,
             _ => expect.nr,
         };

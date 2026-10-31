@@ -71,6 +71,7 @@ static void cwd_cases(void)
     why("the path does not fit an unmapped buffer; no output is recorded on failure");
     DONE();
 
+#ifdef SYS_mkdir
     CALL("mkdir.new", mkdir, WANT_OK, "paths-dir", 0700);
     in_str(0, "paths-dir");
     DONE();
@@ -80,6 +81,10 @@ static void cwd_cases(void)
     CALL("mkdir.missing_parent", mkdir, ENOENT, "paths-none/child", 0700);
     in_str(0, "paths-none/child");
     DONE();
+#else
+    if (mkdir("paths-dir", 0700) != 0)
+        ora_fail("paths: mkdir paths-dir");
+#endif
     long work = open(".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     CALL("mkdirat.dirfd", mkdirat, WANT_OK, work, "paths-sub", 0755);
     in_str(1, "paths-sub");
@@ -138,6 +143,7 @@ static void symlink_cases(void)
     long got;
     long work = open(".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
 
+#ifdef SYS_symlink
     CALL("symlink.new", symlink, WANT_OK, "paths-file", "paths-sym");
     in_str(0, "paths-file");
     in_str(1, "paths-sym");
@@ -154,6 +160,10 @@ static void symlink_cases(void)
     in_str(0, "");
     in_str(1, "paths-empty");
     DONE();
+#else
+    if (symlink("paths-file", "paths-sym") != 0 || symlink("paths-nowhere", "paths-dangling") != 0)
+        ora_fail("paths: symlink");
+#endif
     CALL("symlinkat.dirfd", symlinkat, WANT_OK, "paths-file", work, "paths-sym2");
     in_str(0, "paths-file");
     in_str(2, "paths-sym2");
@@ -168,6 +178,7 @@ static void symlink_cases(void)
     DONE();
 
     memset(buffer, 0, sizeof buffer);
+#ifdef SYS_readlink
     got = CALL("readlink.full", readlink, WANT_OK, "paths-sym", buffer, sizeof buffer);
     in_str(0, "paths-sym");
     out_buf(1, buffer, got > 0 ? (size_t)got : 0);
@@ -184,6 +195,7 @@ static void symlink_cases(void)
     CALL("readlink.missing", readlink, ENOENT, "paths-none", buffer, sizeof buffer);
     in_str(0, "paths-none");
     DONE();
+#endif
     memset(buffer, 0, sizeof buffer);
     got = CALL("readlinkat.dirfd", readlinkat, WANT_OK, work, "paths-dangling", buffer,
                sizeof buffer);
@@ -223,6 +235,7 @@ static void link_cases(void)
 {
     long work = open(".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
 
+#ifdef SYS_link
     CALL("link.new", link, WANT_OK, "paths-file", "paths-hard");
     in_str(0, "paths-file");
     in_str(1, "paths-hard");
@@ -241,6 +254,10 @@ static void link_cases(void)
     in_str(1, "paths-dirlink");
     why("hard links to directories are refused for everyone");
     DONE();
+#else
+    if (link("paths-file", "paths-hard") != 0)
+        ora_fail("paths: link");
+#endif
 
     CALL("linkat.dirfd", linkat, WANT_OK, work, "paths-file", work, "paths-hard2", 0);
     in_str(1, "paths-file");
@@ -291,6 +308,7 @@ static void rename_cases(void)
     make_file("paths-a");
     make_file("paths-x");
 
+#ifdef SYS_rename
     CALL("rename.file", rename, WANT_OK, "paths-a", "paths-b");
     in_str(0, "paths-a");
     in_str(1, "paths-b");
@@ -308,7 +326,12 @@ static void rename_cases(void)
     want_status(0, "in", "NULL_POINTER");
     in_str(1, "paths-c");
     DONE();
+#else
+    if (rename("paths-a", "paths-b") != 0)
+        ora_fail("paths: rename");
+#endif
 
+#ifdef SYS_renameat
     CALL("renameat.dirfd", renameat, WANT_OK, work, "paths-b", AT_FDCWD, "paths-c");
     in_str(1, "paths-b");
     in_str(3, "paths-c");
@@ -324,6 +347,7 @@ static void rename_cases(void)
     in_str(1, "paths-x");
     in_str(3, "paths-c");
     DONE();
+#endif
 
     CALL("renameat2.noreplace", renameat2, WANT_OK, AT_FDCWD, "paths-x", AT_FDCWD, "paths-d",
          RENAME_NOREPLACE);
@@ -373,6 +397,7 @@ static void mknod_cases(void)
 {
     long work = open(".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
 
+#ifdef SYS_mknod
     CALL("mknod.fifo", mknod, WANT_OK, "paths-fifo", S_IFIFO | 0600, 0);
     in_str(0, "paths-fifo");
     DONE();
@@ -398,6 +423,10 @@ static void mknod_cases(void)
     CALL("mknod.bad_type", mknod, EINVAL, "paths-bad", 0160000 | 0600, 0);
     in_str(0, "paths-bad");
     DONE();
+#else
+    if (mknod("paths-fifo", S_IFIFO | 0600, 0) != 0 || mknod("paths-reg", S_IFREG | 0600, 0) != 0)
+        ora_fail("paths: mknod");
+#endif
 
     CALL("mknodat.socket", mknodat, WANT_OK, work, "paths-sock", S_IFSOCK | 0600, 0);
     in_str(1, "paths-sock");
@@ -421,6 +450,7 @@ static void remove_cases(void)
     long work = open(".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     struct stat st;
 
+#ifdef SYS_unlink
     st = before_unlink("paths-hard");
     CALL("unlink.file", unlink, WANT_OK, "paths-hard");
     in_str(0, "paths-hard");
@@ -446,6 +476,7 @@ static void remove_cases(void)
     CALL("unlink.null_path", unlink, EFAULT, NULL);
     want_status(0, "in", "NULL_POINTER");
     DONE();
+#endif
 
     st = before_unlink("paths-hard2");
     CALL("unlinkat.dirfd", unlinkat, WANT_OK, work, "paths-hard2", 0);
@@ -474,6 +505,7 @@ static void remove_cases(void)
     in_str(1, "paths-reg");
     DONE();
 
+#ifdef SYS_rmdir
     st = before_unlink("paths-dir/inner");
     CALL("rmdir.empty", rmdir, WANT_OK, "paths-dir/inner");
     in_str(0, "paths-dir/inner");
@@ -499,6 +531,7 @@ static void remove_cases(void)
     in_str(0, "paths-sub");
     file_stat("UNLINK", &st);
     DONE();
+#endif
     close((int)work);
 }
 

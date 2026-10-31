@@ -66,7 +66,11 @@ struct ktermios {
     uint8_t c_line, c_cc[19];
 };
 _Static_assert(sizeof(struct ktermios) == 36, "kernel termios layout");
+#ifdef __x86_64__
 _Static_assert(sizeof(struct epoll_event) == 12, "packed x86-64 epoll_event");
+#else
+_Static_assert(sizeof(struct epoll_event) == 16, "epoll_event layout");
+#endif
 _Static_assert(sizeof(struct itimerspec) == 32, "itimerspec layout");
 
 // pselect6's sixth argument.
@@ -97,6 +101,7 @@ static size_t fdset_bytes(int nfds)
     return (size_t)(nfds + 63) / 64 * 8;
 }
 
+#ifdef SYS_select
 // A descriptor number below 64 that is not open.
 static int closed_fd(void)
 {
@@ -105,19 +110,26 @@ static int closed_fd(void)
             return fd;
     return -1;
 }
+#endif
 
 static void pipe_cases(void)
 {
     int fds[2] = {-1, -1}, packet[2] = {-1, -1}, unused[2] = {-1, -1};
 
+#ifdef SYS_pipe
     CALL("pipe.plain", pipe, WANT_OK, fds);
+#else
+    CALL("pipe2.plain", pipe2, WANT_OK, fds, 0);
+#endif
     out_buf(0, fds, sizeof fds);
     DONE();
     rp[0] = fds[0];
     rp[1] = fds[1];
+#ifdef SYS_pipe
     CALL("pipe.fault", pipe, EFAULT, 1);
     why("the kernel creates the pipe, cannot store the pair and closes it again: no output field");
     DONE();
+#endif
     CALL("pipe2.cloexec_nonblock", pipe2, WANT_OK, fds, O_CLOEXEC | O_NONBLOCK);
     out_buf(0, fds, sizeof fds);
     DONE();
@@ -144,7 +156,6 @@ static void poll_cases(void)
     struct pollfd one = {rp[0], POLLIN, 0}, one_in;
     struct timespec zero = {0, 0}, zero_in, wait = {0, 20000000}, wait_in;
     ksigset mask = usr2_mask;
-    struct rlimit limit;
 
     memcpy(set_in, set, sizeof set);
     memcpy(&idle_in, &idle, sizeof idle);
@@ -152,6 +163,9 @@ static void poll_cases(void)
     memcpy(&one_in, &one, sizeof one);
     memcpy(&zero_in, &zero, sizeof zero);
     memcpy(&wait_in, &wait, sizeof wait);
+
+#ifdef SYS_poll
+    struct rlimit limit;
 
     CALL("poll.ready", poll, WANT_OK, set, 3, 0);
     in_buf(0, set_in, sizeof set_in);
@@ -185,6 +199,7 @@ static void poll_cases(void)
         why("more entries than RLIMIT_NOFILE: refused, and the recorder copies nothing");
         DONE();
     }
+#endif
 
     memcpy(set, set_in, sizeof set);
     CALL("ppoll.zero_timeout_mask", ppoll, WANT_OK, set, 3, &zero, &mask, sizeof mask);
@@ -243,6 +258,7 @@ static void select_cases(void)
     memcpy(&w_in, &w, sizeof w);
     memcpy(&e_in, &e, sizeof e);
     memcpy(&tv_in, &tv, sizeof tv);
+#ifdef SYS_select
     CALL("select.ready", select, WANT_OK, n, &r, &w, &e, &tv);
     in_buf(1, &r_in, bytes);
     in_buf(2, &w_in, bytes);
@@ -313,6 +329,7 @@ static void select_cases(void)
     CALL("select.fault", select, EFAULT, n, 1, NULL, NULL, NULL);
     want_status(1, "in", "COPY_FAULT");
     DONE();
+#endif
 
     FD_ZERO(&r);
     FD_SET(rp[0], &r);
@@ -384,11 +401,17 @@ static void epoll_cases(void)
     ksigset mask = usr2_mask;
     long n;
 
+#ifdef SYS_epoll_create
     long epfd = CALL("epoll_create.size", epoll_create, WANT_OK, 8);
     why("the size hint only has to be positive");
     DONE();
+#else
+    long epfd = CASE("epoll_create1.plain", epoll_create1, WANT_OK, 0);
+#endif
     ev_epoll = (int)epfd;
+#ifdef SYS_epoll_create
     CASE("epoll_create.zero_size", epoll_create, EINVAL, 0);
+#endif
     long idle = CASE("epoll_create1.cloexec", epoll_create1, WANT_OK, EPOLL_CLOEXEC);
     CASE("epoll_create1.bad_flags", epoll_create1, EINVAL, 1);
 
@@ -402,18 +425,22 @@ static void epoll_cases(void)
     in_buf(3, &in_ev, sizeof in_ev);
     DONE();
     memset(events, 0, sizeof events);
+#ifdef SYS_epoll_wait
     n = CALL("epoll_wait.ready", epoll_wait, WANT_OK, epfd, events, 4, 0);
     out_buf(1, events, n > 0 ? (size_t)n * sizeof events[0] : 0);
     why("both pipe ends are ready; the recorder copies the events the call returned");
     DONE();
+#endif
     CALL("epoll_ctl.mod_edge", epoll_ctl, WANT_OK, epfd, EPOLL_CTL_MOD, rp[0], &edge);
     in_buf(3, &edge, sizeof edge);
     DONE();
     memset(events, 0, sizeof events);
+#ifdef SYS_epoll_wait
     n = CALL("epoll_wait.after_mod", epoll_wait, WANT_OK, epfd, events, 4, 0);
     out_buf(1, events, n > 0 ? (size_t)n * sizeof events[0] : 0);
     why("modifying a ready descriptor queues it again with the new data");
     DONE();
+#endif
     memset(events, 0, sizeof events);
     n = CALL("epoll_pwait.mask", epoll_pwait, WANT_OK, epfd, events, 4, 0, &mask, sizeof mask);
     out_buf(1, events, n > 0 ? (size_t)n * sizeof events[0] : 0);
@@ -447,23 +474,31 @@ static void epoll_cases(void)
     in_buf(3, &bad_ts, sizeof bad_ts);
     why("tv_nsec of one second is out of range");
     DONE();
+#ifdef SYS_epoll_wait
     CALL("epoll_wait.fault", epoll_wait, EFAULT, epfd, 1, 1, 0);
     why("a ready event cannot be stored: no output field on failure");
     DONE();
+#endif
 
     CALL("epoll_ctl.add_idle", epoll_ctl, WANT_OK, idle, EPOLL_CTL_ADD, ep[0], &idle_ev);
     in_buf(3, &idle_ev, sizeof idle_ev);
     DONE();
     memset(events, 0, sizeof events);
+#ifdef SYS_epoll_wait
     CALL("epoll_wait.empty", epoll_wait, WANT_OK, idle, events, 4, 0);
     out_buf(1, events, 0);
     why("nothing ready: the output field is present with zero bytes");
     DONE();
+#endif
+#ifdef SYS_epoll_wait
     CALL("epoll_wait.timeout", epoll_wait, WANT_OK, idle, events, 4, 20);
     out_buf(1, events, 0);
     DONE();
+#endif
+#ifdef SYS_epoll_wait
     CASE("epoll_wait.bad_maxevents", epoll_wait, EINVAL, idle, events, 0, 0);
     CASE("epoll_wait.not_epoll", epoll_wait, EINVAL, rp[0], events, 4, 0);
+#endif
     CALL("epoll_ctl.add_nested", epoll_ctl, WANT_OK, epfd, EPOLL_CTL_ADD, idle, &nested);
     in_buf(3, &nested, sizeof nested);
     why("an epoll instance watched by another one");
@@ -503,20 +538,27 @@ static void counter_cases(void)
     struct itimerspec bad = {{0, 0}, {0, 1000000000}}, absolute, wall;
     struct timespec now;
 
+#ifdef SYS_eventfd
     long efd = CASE("eventfd.initial", eventfd, WANT_OK, 5);
+#else
+    long efd = CASE("eventfd2.initial", eventfd2, WANT_OK, 5, 0);
+#endif
     long efd2 = CASE("eventfd2.semaphore", eventfd2, WANT_OK, 0,
                      EFD_CLOEXEC | EFD_NONBLOCK | EFD_SEMAPHORE);
     CASE("eventfd2.bad_flags", eventfd2, EINVAL, 0, O_RDWR);
     struct pollfd counters[2] = {{(int)efd, POLLIN, 0}, {(int)efd2, POLLIN, 0}}, counters_in[2];
     memcpy(counters_in, counters, sizeof counters);
+#ifdef SYS_poll
     CALL("poll.eventfd", poll, WANT_OK, counters, 2, 0);
     in_buf(0, counters_in, sizeof counters_in);
     out_buf(0, counters, sizeof counters);
     why("a counter of 5 is readable, a counter of 0 is not");
     DONE();
+#endif
     close((int)efd);
     close((int)efd2);
 
+#ifdef SYS_signalfd
     long sfd = CALL("signalfd.new", signalfd, WANT_OK, -1, &mask, sizeof mask);
     in_key("signal.mask", &mask, sizeof mask);
     why("creating a signalfd does not change the signal mask");
@@ -530,6 +572,10 @@ static void counter_cases(void)
     CALL("signalfd.fault", signalfd, EFAULT, -1, 1, sizeof mask);
     want_status(1, "in", "COPY_FAULT");
     DONE();
+#else
+    long sfd = -1;
+    (void)other;
+#endif
     long sfd4 = CALL("signalfd4.flags", signalfd4, WANT_OK, -1, &mask, sizeof mask,
                      SFD_CLOEXEC | SFD_NONBLOCK);
     in_key("signal.mask", &mask, sizeof mask);
@@ -630,7 +676,11 @@ static void counter_cases(void)
 
 static void notify_cases(void)
 {
+#ifdef SYS_inotify_init
     long ifd = CASE0("inotify_init.plain", inotify_init, WANT_OK);
+#else
+    long ifd = CASE("inotify_init1.plain", inotify_init1, WANT_OK, 0);
+#endif
     long ifd1 = CASE("inotify_init1.flags", inotify_init1, WANT_OK, IN_CLOEXEC | IN_NONBLOCK);
     CASE("inotify_init1.bad_flags", inotify_init1, EINVAL, 1);
 
@@ -671,6 +721,7 @@ static void notify_cases(void)
         close(created);
     else
         ora_fail("events: create ev-created");
+#ifdef SYS_poll
     struct pollfd watch = {(int)ifd1, POLLIN, 0}, watch_in;
     memcpy(&watch_in, &watch, sizeof watch);
     CALL("poll.inotify_event", poll, WANT_OK, &watch, 1, 1000);
@@ -678,6 +729,7 @@ static void notify_cases(void)
     out_buf(0, &watch, sizeof watch);
     why("creating ev-created queued an IN_CREATE event");
     DONE();
+#endif
     CASE("inotify_rm_watch.file", inotify_rm_watch, WANT_OK, ifd1, file_wd);
     CASE("inotify_rm_watch.again", inotify_rm_watch, EINVAL, ifd1, file_wd);
     CASE("inotify_rm_watch.badf", inotify_rm_watch, EBADF, 999, file_wd);
@@ -1006,7 +1058,14 @@ static void pidfd_cases(void)
         DONE();
         struct pollfd exited = {(int)pidfd, POLLIN, 0}, exited_in;
         memcpy(&exited_in, &exited, sizeof exited);
+#ifdef SYS_poll
         CALL("poll.pidfd_exit", poll, WANT_OK, &exited, 1, 2000);
+#else
+        struct timespec patience = {2, 0}, patience_in = patience;
+        CALL("ppoll.pidfd_exit", ppoll, WANT_OK, &exited, 1, &patience, NULL, sizeof(ksigset));
+        in_buf(2, &patience_in, sizeof patience_in);
+        out_any(2);
+#endif
         in_buf(0, &exited_in, sizeof exited_in);
         out_buf(0, &exited, sizeof exited);
         why("a pidfd becomes readable once its process has exited");

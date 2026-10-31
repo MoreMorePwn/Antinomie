@@ -453,6 +453,7 @@ static void module_cases(void)
     DONE();
 }
 
+#ifdef SYS_ioperm
 static void io_port_child(void *unused)
 {
     (void)unused;
@@ -466,6 +467,7 @@ static void io_port_child(void *unused)
     DONE();
     CASE("iopl.lower_root", iopl, WANT_OK, 0);
 }
+#endif
 
 // --- time, identity, scheduling, devices
 
@@ -574,6 +576,7 @@ static void sched_child(void *unused)
 
 static void device_cases(void)
 {
+#ifdef SYS_mknod
     CALL("mknod.char_device", mknod, WANT_OK, "root-null", S_IFCHR | 0600, makedev(1, 3));
     in_str(0, "root-null");
     why("a /dev/null node (1:3) in work_dir, removed right after");
@@ -586,6 +589,7 @@ static void device_cases(void)
     why("mknod never creates directories");
     DONE();
     unlink("root-null");
+#endif
 
     long fan = CALL("fanotify_init.notify", fanotify_init, WANT_ANY,
                     FAN_CLASS_NOTIF | FAN_CLOEXEC, O_RDONLY);
@@ -1111,7 +1115,9 @@ void area_root(void)
     swap_acct_cases();
     reboot_kexec_cases();
     module_cases();
+#ifdef SYS_ioperm
     in_child(720, "I/O port child", io_port_child, NULL);
+#endif
     time_cases();
     in_child(715, "identity child", identity_child, NULL);
     in_child(716, "scheduler child", sched_child, NULL);

@@ -12,7 +12,9 @@
 // Child process indexes 400-459. Every child is reaped before the area ends.
 #include "areas.h"
 
+#ifdef __x86_64__
 #include <asm/prctl.h>
+#endif
 #include <elf.h>
 #include <fcntl.h>
 #include <linux/filter.h>
@@ -71,6 +73,16 @@
 // A pid above PID_MAX_LIMIT: never allocated, so lookups fail with ESRCH and
 // nothing can ever receive a signal sent to it.
 #define NO_PID 0x3ffffff0L
+
+// clone()'s last two arguments: x86-64 takes the child TID pointer, then the
+// TLS; arm64 (CONFIG_CLONE_BACKWARDS) the TLS, then the child TID pointer.
+#if defined(__x86_64__)
+#define CLONE_CTID_TLS(ctid, tls) ctid, tls
+#define CLONE_CTID_KEY(name) "arg3." name
+#else
+#define CLONE_CTID_TLS(ctid, tls) tls, ctid
+#define CLONE_CTID_KEY(name) "arg4." name
+#endif
 
 // struct clone_args (linux-6.12 uapi), spelled out so the extents are fixed.
 struct ant_clone_args {
@@ -191,6 +203,7 @@ static pid_t hold_child(void)
     return pid;
 }
 
+#ifdef SYS_vfork
 // vfork in assembly: the child shares the caller's stack, so it must not
 // return through C code. It exits with `code`, or execs and exits 127.
 static long vfork_then_exit(long code)
@@ -225,6 +238,7 @@ static long vfork_then_exec(const char *path, char *const argv[], char *const en
                      : "rcx", "r11", "memory");
     return ret;
 }
+#endif
 
 // ---------------------------------------------------------------------------
 // Identity of the task, kernel-held per-thread pointers, machine information.
@@ -422,7 +436,11 @@ static void fork_cases(void)
     long pid, got;
 
     ora_flush();
+#ifdef SYS_fork
     pid = CALL0("fork.plain", fork, WANT_OK);
+#else
+    pid = CALL("clone.fork", clone, WANT_OK, SIGCHLD, 0, NULL, NULL, 0);
+#endif
     if (pid == 0) {
         ora_forget();
         ora_child(400);
@@ -446,6 +464,7 @@ static void fork_cases(void)
     if (got != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0)
         ora_fail("fork child exit");
 
+#ifdef SYS_vfork
     // vfork: the parent sleeps until the child exits.
     uint64_t t0 = ora_now();
     pid = vfork_then_exit(6);
@@ -462,6 +481,7 @@ static void fork_cases(void)
     DONE();
     if (status == -1 || !WIFEXITED(status) || WEXITSTATUS(status) != 6)
         ora_fail("vfork child exit code");
+#endif
 
     // clone with the flag sets that change what the recorder reads.
     ora_flush();
@@ -480,13 +500,14 @@ static void fork_cases(void)
     parent_tid = child_tid = 0;
     ora_flush();
     pid = CALL("clone.parent_and_child_tid", clone, WANT_OK,
-               CLONE_PARENT_SETTID | CLONE_CHILD_SETTID | SIGCHLD, 0, &parent_tid, &child_tid, 0);
+               CLONE_PARENT_SETTID | CLONE_CHILD_SETTID | SIGCHLD, 0, &parent_tid,
+               CLONE_CTID_TLS(&child_tid, 0));
     if (pid == 0) {
         ora_forget();
         _exit(child_tid == (pid_t)self_tid() ? 0 : 1);
     }
     out_buf(2, &parent_tid, sizeof parent_tid);
-    want_key_status("arg3.child_tid", "ASYNC_UNOBSERVED");
+    want_key_status(CLONE_CTID_KEY("child_tid"), "ASYNC_UNOBSERVED");
     why("the child writes its own tid in its own copy of memory");
     volatile_case();
     DONE();
@@ -503,9 +524,9 @@ static void fork_cases(void)
 
     ora_flush();
     pid = CALL("clone.clear_child_tid", clone, WANT_OK, CLONE_CHILD_CLEARTID | SIGCHLD, 0, NULL,
-               &child_tid, 0);
+               CLONE_CTID_TLS(&child_tid, 0));
     FORKED(pid, 0);
-    want_key_status("arg3.clear_child_tid", "ASYNC_UNOBSERVED");
+    want_key_status(CLONE_CTID_KEY("clear_child_tid"), "ASYNC_UNOBSERVED");
     why("the kernel clears the child's word when the child exits");
     volatile_case();
     DONE();
@@ -888,8 +909,10 @@ static void exec_cases(void)
     char *const envp[] = {(char *)"ANT_EXEC=execve", (char *)"LC_ALL=C", NULL};
     char *const at_argv[] = {self_path, (char *)"--exec-target", (char *)"8", NULL};
     char *const at_envp[] = {(char *)"ANT_EXEC=execveat", NULL};
+#ifdef SYS_vfork
     char *const v_argv[] = {self_path, (char *)"--exec-target", (char *)"9", NULL};
     char *const v_envp[] = {(char *)"ANT_EXEC=vfork", NULL};
+#endif
     int status, fd;
     pid_t pid;
 
@@ -948,6 +971,7 @@ static void exec_cases(void)
     if (fd >= 0)
         close(fd);
 
+#ifdef SYS_vfork
     // execve from a vfork child: the parent resumes when the exec succeeds.
     uint64_t t0 = ora_now();
     pid = (pid_t)vfork_then_exec(self_path, v_argv, v_envp);
@@ -969,6 +993,7 @@ static void exec_cases(void)
     DONE();
     if (status == -1 || !WIFEXITED(status) || WEXITSTATUS(status) != 9)
         ora_fail("vfork execve target exit code");
+#endif
 
     in_child(411, "exec failures", exec_failure_child, NULL);
     exit_case("exit.child", "exit", SYS_exit, 5);
@@ -1110,6 +1135,7 @@ static void privileges_child(void *unused)
     CASE("prctl.get_seccomp_filtered", prctl, WANT_OK, PR_GET_SECCOMP, 0, 0, 0, 0);
 }
 
+#ifdef SYS_arch_prctl
 static void arch_child(void *unused)
 {
     (void)unused;
@@ -1119,11 +1145,15 @@ static void arch_child(void *unused)
     CASE("arch_prctl.get_cpuid_child", arch_prctl, WANT_OK, ARCH_GET_CPUID, 0);
     CASE("arch_prctl.set_gs_zero", arch_prctl, WANT_OK, ARCH_SET_GS, 0);
 }
+#endif
 
 static void control_cases(void)
 {
     char original[16], name[16];
-    unsigned long value, tid_address = 0;
+    unsigned long tid_address = 0;
+#ifdef SYS_arch_prctl
+    unsigned long value;
+#endif
     uint32_t action;
     struct seccomp_notif_sizes sizes;
     int pdeath = -1;
@@ -1171,6 +1201,7 @@ static void control_cases(void)
     DONE();
     in_child(403, "privileges child", privileges_child, NULL);
 
+#ifdef SYS_arch_prctl
     value = 0;
     CALL("arch_prctl.get_fs", arch_prctl, WANT_OK, ARCH_GET_FS, &value);
     out_buf(1, &value, sizeof value);
@@ -1193,6 +1224,7 @@ static void control_cases(void)
     want_key_status("arch_prctl.unknown_selector", "NO_DECODER");
     DONE();
     in_child(404, "arch_prctl child", arch_child, NULL);
+#endif
 
     action = SECCOMP_RET_ALLOW;
     CALL("seccomp.action_avail", seccomp, WANT_OK, SECCOMP_GET_ACTION_AVAIL, 0, &action);
@@ -1220,8 +1252,10 @@ static void control_cases(void)
 
 static void ptrace_cases(void)
 {
+#ifdef __x86_64__
     struct user_regs_struct regs;
     struct user_fpregs_struct fpregs;
+#endif
     unsigned char regset[512], info[128];
     struct iovec iov, iov_in;
     unsigned long word, message;
@@ -1263,6 +1297,8 @@ static void ptrace_cases(void)
     CALL("ptrace.peekdata_unmapped", ptrace, EIO, PTRACE_PEEKDATA, child, 8, &word);
     want_key_status("arg2.tracee_address", "ADDRESS_ONLY");
     DONE();
+    // The x86-64 register requests (arm64 has only the regsets below).
+#ifdef __x86_64__
     word = 0;
     CALL("ptrace.peekuser", ptrace, WANT_OK, PTRACE_PEEKUSER, child,
          offsetof(struct user, regs.orig_rax), &word);
@@ -1283,6 +1319,7 @@ static void ptrace_cases(void)
     out_key("arg3.fpregs", &fpregs, sizeof fpregs);
     volatile_case();
     DONE();
+#endif
     memset(regset, 0, sizeof regset);
     iov.iov_base = regset;
     iov.iov_len = sizeof regset;
@@ -1319,12 +1356,14 @@ static void ptrace_cases(void)
         out_key("arg3.info", info, (size_t)result < sizeof info ? (size_t)result : sizeof info);
     volatile_case();
     DONE();
+#ifdef __x86_64__
     word = 0;
     CALL("ptrace.arch_prctl_get_fs", ptrace, WANT_OK, PTRACE_ARCH_PRCTL, child, &word,
          ARCH_GET_FS);
     out_key("arg2.value", &word, sizeof word);
     volatile_case();
     DONE();
+#endif
     CASE("ptrace.attach_already_traced", ptrace, EPERM, PTRACE_ATTACH, child, 0, 0);
     CALL("ptrace.peekdata_not_traced", ptrace, ESRCH, PTRACE_PEEKDATA, NO_PID, &ptrace_word,
          &word);

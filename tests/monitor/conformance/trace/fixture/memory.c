@@ -796,7 +796,12 @@ static void pkey_secret_cases(void)
     volatile_case();
     DONE();
     CASE("pkey_alloc.bad_flags", pkey_alloc, EINVAL, 1, 0);
+    // A rights bit the architecture does not define (x86-64 has two, arm64 four).
+#ifdef __x86_64__
     CASE("pkey_alloc.bad_rights", pkey_alloc, EINVAL, 0, 4);
+#else
+    CASE("pkey_alloc.bad_rights", pkey_alloc, EINVAL, 0, 0x10);
+#endif
     CASE("pkey_free.unallocated", pkey_free, EINVAL, 15);
     CASE("pkey_free.negative", pkey_free, EINVAL, -1);
     munmap(region, PAGE);

@@ -42,6 +42,7 @@ static void open_cases(void)
     struct open_how how = {.flags = O_RDONLY | O_CLOEXEC, .resolve = RESOLVE_NO_SYMLINKS};
     long fd;
 
+#ifdef SYS_open
     fd = CALL("open.create", open, WANT_OK, "io-open", O_CREAT | O_RDWR | O_TRUNC | O_CLOEXEC,
               0600);
     in_str(0, "io-open");
@@ -58,6 +59,7 @@ static void open_cases(void)
     want_status(0, "in", "COPY_FAULT");
     why("an address in the first page is never mapped: the kernel and the recorder both fault");
     DONE();
+#endif
 
     fd = CALL("openat.cwd", openat, WANT_OK, AT_FDCWD, "io-at", O_CREAT | O_WRONLY | O_EXCL, 0640);
     in_str(1, "io-at");
@@ -113,6 +115,7 @@ static void open_cases(void)
     in_buf(2, &bad, sizeof bad);
     DONE();
 
+#ifdef SYS_creat
     fd = CALL("creat.new", creat, WANT_OK, "io-creat", 0600);
     in_str(0, "io-creat");
     file_fd("OPEN", (int)fd);
@@ -121,6 +124,7 @@ static void open_cases(void)
     CALL("creat.missing_dir", creat, ENOENT, "no-such-dir/io-creat", 0600);
     in_str(0, "no-such-dir/io-creat");
     DONE();
+#endif
     CASE("close.badf", close, EBADF, 999);
     CASE("close.directory", close, WANT_OK, dir);
 }
@@ -306,9 +310,11 @@ static void descriptor_cases(void)
     DONE();
     long copy = CASE("dup.plain", dup, WANT_OK, fd);
     CASE("dup.badf", dup, EBADF, 999);
+#ifdef SYS_dup2
     CASE("dup2.onto", dup2, WANT_OK, fd, 40);
     CASE("dup2.same", dup2, WANT_OK, fd, fd);
     CASE("dup2.badf", dup2, EBADF, 999, 41);
+#endif
     CASE("dup3.cloexec", dup3, WANT_OK, fd, 41, O_CLOEXEC);
     CASE("dup3.same", dup3, EINVAL, fd, fd, 0);
     CASE("dup3.bad_flags", dup3, EINVAL, fd, 42, O_RDWR);

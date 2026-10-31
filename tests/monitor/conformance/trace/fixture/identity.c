@@ -370,9 +370,11 @@ static void group_child(void *unused)
     CALL("getpgid.own_group", getpgid, WANT_OK, 0);
     volatile_case();
     DONE();
+#ifdef SYS_getpgrp
     CALL0("getpgrp.own_group", getpgrp, WANT_OK);
     volatile_case();
     DONE();
+#endif
     CASE("setpgid.missing_group", setpgid, EPERM, 0, NO_PID);
     CASE("setpgid.negative_group", setpgid, EINVAL, 0, -1);
     CASE("setpgid.no_such_process", setpgid, ESRCH, NO_PID, 0);
@@ -380,9 +382,11 @@ static void group_child(void *unused)
 
 static void session_cases(void)
 {
+#ifdef SYS_getpgrp
     CALL0("getpgrp.self", getpgrp, WANT_OK);
     volatile_case();
     DONE();
+#endif
     CALL("getpgid.self", getpgid, WANT_OK, 0);
     volatile_case();
     DONE();

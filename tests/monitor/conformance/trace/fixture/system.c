@@ -18,7 +18,9 @@
 // case below relies on the kernel's privilege check failing first.
 #include "areas.h"
 
+#ifdef __x86_64__
 #include <asm/ldt.h>
+#endif
 #include <fcntl.h>
 #include <linux/bpf.h>
 #include <linux/dqblk_xfs.h>
@@ -292,6 +294,7 @@ static void uts_io_cases(void)
     why("CAP_SYS_ADMIN in the UTS namespace is checked first");
     DONE();
 
+#ifdef SYS_iopl
     CALL("iopl.same_level", iopl, WANT_OK, 0);
     why("level 0 is the current level: nothing changes and no privilege is needed");
     DONE();
@@ -306,11 +309,13 @@ static void uts_io_cases(void)
     why("granting port access needs CAP_SYS_RAWIO");
     DONE();
     CASE("ioperm.bad_range", ioperm, EINVAL, 65535, 16, 0);
+#endif
     CALL0("vhangup.unprivileged", vhangup, EPERM);
     why("vhangup needs CAP_SYS_TTY_CONFIG; the terminal is not hung up");
     DONE();
 }
 
+#ifdef SYS_modify_ldt
 // modify_ldt returns its int result zero-extended, so an error is a large
 // positive value (0xffffffea for EINVAL) and never sets errno.
 static void ldt_expect(long result, int error)
@@ -381,6 +386,7 @@ static void ldt_child(void *unused)
         "accessed), s 1, dpl 3, present, avl and d set");
     DONE();
 }
+#endif
 
 static void syslog_cases(void)
 {
@@ -479,6 +485,7 @@ static void quota_cases(void)
         close(dir);
 }
 
+#ifdef SYS_sysfs
 static void sysfs_cases(void)
 {
     char name[256];
@@ -498,6 +505,7 @@ static void sysfs_cases(void)
     want_key_status("sysfs.unknown_selector", "NO_DECODER");
     DONE();
 }
+#endif
 
 static void perf_cases(void)
 {
@@ -734,6 +742,7 @@ static void mount_query_cases(void)
     DONE();
 }
 
+#ifdef __x86_64__
 // sys_uretprobe outside a uprobe trampoline: arch/x86/kernel/uprobes.c sends
 // SIGILL and returns -1, so the child dies on the way back to user space.
 struct remote_slot {
@@ -786,6 +795,13 @@ static void uretprobe_case(void)
     DONE();
     munmap(slot, 4096);
 }
+#endif
+
+#ifdef __x86_64__
+#define ORA_TABLE "the x86-64"
+#else
+#define ORA_TABLE "the arm64"
+#endif
 
 static void unavailable_cases(void)
 {
@@ -793,6 +809,7 @@ static void unavailable_cases(void)
         long nr;
         const char *name, *label;
     } rows[] = {
+#ifdef __x86_64__
         {134, "uselib", "uselib.not_implemented"},
         {156, "_sysctl", "_sysctl.not_implemented"},
         {174, "create_module", "create_module.not_implemented"},
@@ -810,11 +827,16 @@ static void unavailable_cases(void)
         {214, "epoll_ctl_old", "epoll_ctl_old.not_implemented"},
         {215, "epoll_wait_old", "epoll_wait_old.not_implemented"},
         {236, "vserver", "vserver.not_implemented"},
+#else
+        // The generic table (arm64).
+        {18, "lookup_dcookie", "lookup_dcookie.not_implemented"},
+        {42, "nfsservctl", "nfsservctl.not_implemented"},
+#endif
     };
     for (size_t i = 0; i < sizeof rows / sizeof rows[0]; i++) {
         CALLNR(rows[i].label, rows[i].name, rows[i].nr, ENOSYS, 0, 0, 0, 0, 0, 0);
         want_key_status("schema.argument_metadata", "NO_DECODER");
-        why("the x86-64 table has no entry point for this row; the recorder has no argument "
+        why(ORA_TABLE " table has no entry point for this row; the recorder has no argument "
             "metadata for it");
         DONE();
     }
@@ -832,14 +854,20 @@ void area_system(void)
     swap_acct_cases();
     mount_cases();
     uts_io_cases();
+#ifdef SYS_modify_ldt
     in_child(700, "modify_ldt child", ldt_child, NULL);
+#endif
     syslog_cases();
     quota_cases();
+#ifdef SYS_sysfs
     sysfs_cases();
+#endif
     perf_cases();
     bpf_cases();
     mount_api_cases();
     mount_query_cases();
+#ifdef __x86_64__
     uretprobe_case();
+#endif
     unavailable_cases();
 }

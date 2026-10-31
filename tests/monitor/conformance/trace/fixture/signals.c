@@ -28,7 +28,8 @@
 #define SA_RESTORER 0x04000000
 #endif
 
-// The kernel's x86-64 struct sigaction, as rt_sigaction reads and writes it.
+// The kernel's struct sigaction, as rt_sigaction reads and writes it (the same
+// on x86-64 and arm64, which both have SA_RESTORER).
 struct ksigaction {
     void *handler;
     unsigned long flags;
@@ -41,15 +42,19 @@ struct ksigaction {
 
 // The signal trampoline: what glibc's __restore_rt does, for handlers this
 // file installs through the raw system call.
+#if defined(__x86_64__)
+#define ANT_RESTORE_RT_BODY "\tmovq $15, %rax\n\tsyscall\n\thlt\n"
+#elif defined(__aarch64__)
+#define ANT_RESTORE_RT_BODY "\tmov x8, #139\n\tsvc #0\n\tbrk #0\n"
+#else
+#error "no signal trampoline for this architecture"
+#endif
 __asm__(".pushsection .text\n"
         ".p2align 4\n"
         ".globl ant_fixture_signals_restore_rt\n"
         ".hidden ant_fixture_signals_restore_rt\n"
         ".type ant_fixture_signals_restore_rt,@function\n"
-        "ant_fixture_signals_restore_rt:\n"
-        "\tmovq $15, %rax\n"
-        "\tsyscall\n"
-        "\thlt\n"
+        "ant_fixture_signals_restore_rt:\n" ANT_RESTORE_RT_BODY
         ".size ant_fixture_signals_restore_rt,.-ant_fixture_signals_restore_rt\n"
         ".popsection\n");
 extern void ant_fixture_signals_restore_rt(void);
@@ -217,6 +222,7 @@ static void sigsuspend_body(int ready_fd)
         ora_fail("rt_sigsuspend: handler did not run once");
 }
 
+#ifdef SYS_pause
 static void pause_body(int ready_fd)
 {
     struct sigaction action;
@@ -233,6 +239,7 @@ static void pause_body(int ready_fd)
     if (hits < 1)
         ora_fail("pause: handler did not run");
 }
+#endif
 
 static void restart_body(int ready_fd)
 {
@@ -263,6 +270,7 @@ static void child_cases(void)
         reap_signalling(child, SIGUSR1, "rt_sigsuspend child");
     }
 
+#ifdef SYS_pause
     // pause: SIGUSR1 once the child sleeps in the call.
     child = start_child(501, pause_body);
     if (child > 0) {
@@ -272,6 +280,7 @@ static void child_cases(void)
         kill(child, SIGUSR1);
         reap_signalling(child, SIGUSR1, "pause child");
     }
+#endif
 
     // restart_syscall: SIGSTOP and SIGCONT during a relative clock_nanosleep.
     child = start_child(502, restart_body);
@@ -560,6 +569,7 @@ static void altstack_cases(void)
 
 static void timer_cases(void)
 {
+#ifdef SYS_alarm
     // main's watchdog is alarm(240); every change to ITIMER_REAL puts it back.
     long previous = CALL("alarm.set", alarm, WANT_OK, 30);
     volatile_case();
@@ -575,6 +585,7 @@ static void timer_cases(void)
     volatile_case();
     why("main's watchdog is restarted at its full 240 s");
     DONE();
+#endif
 
     struct itimerval current, value, old, zero;
     memset(&current, 0, sizeof current);

@@ -124,7 +124,7 @@ impl Driver {
 
     fn command(&mut self, command: Command, seconds: u64) -> Result<String, String> {
         let id = self.backend.send(command)?;
-        let deadline = Instant::now() + Duration::from_secs(seconds);
+        let deadline = Instant::now() + Duration::from_secs(crate::guest_seconds(seconds));
         loop {
             self.receive();
             if let Some(reply) = self.replies.remove(&id) {
@@ -143,7 +143,7 @@ impl Driver {
         seconds: u64,
         ready: impl Fn(&Snapshot) -> bool,
     ) -> Result<(), String> {
-        let deadline = Instant::now() + Duration::from_secs(seconds);
+        let deadline = Instant::now() + Duration::from_secs(crate::guest_seconds(seconds));
         loop {
             self.receive();
             if ready(&self.snapshot) {
@@ -208,10 +208,15 @@ fn random_password() -> Result<String, String> {
 /// The new VM's command: the plan's shape, raised to the base's minima, with
 /// an account when the base asks for one.
 fn create_command(plan: &VmPlan, guest: Option<&GuestProfile>) -> Result<Command, String> {
+    let (cpus, ram_mib) = if crate::emulated() {
+        (plan.cpus.min(2), plan.ram_mib.min(1024))
+    } else {
+        (plan.cpus, plan.ram_mib)
+    };
     let vm = VmConfig {
         name: "conformance".into(),
-        cpus: plan.cpus,
-        ram_mib: plan.ram_mib.max(guest.map_or(0, |guest| guest.min_ram_mib)),
+        cpus,
+        ram_mib: ram_mib.max(guest.map_or(0, |guest| guest.min_ram_mib)),
         disk_gib: 2.max(guest.map_or(0, |guest| guest.min_disk_gib)),
         transport: plan.transport,
         ..Default::default()

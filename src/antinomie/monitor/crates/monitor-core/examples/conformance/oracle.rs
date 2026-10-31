@@ -264,8 +264,12 @@ pub fn parse(text: &str) -> Transcript {
             continue;
         };
         let parsed: Result<(), String> = match tag {
+            // The fixture prints its architecture's number; events carry ids.
             "ANT_EXPECT" => serde_json::from_str::<Expect>(body)
-                .map(|expect| transcript.expects.push(expect))
+                .map(|mut expect| {
+                    expect.nr = crate::syscall_id(expect.nr);
+                    transcript.expects.push(expect)
+                })
                 .map_err(|e| e.to_string()),
             "ANT_ROLE" => serde_json::from_str::<serde_json::Value>(body)
                 .map_err(|e| e.to_string())

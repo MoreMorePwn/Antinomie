@@ -10,7 +10,6 @@ use crate::{
     render::Views,
     trace::GroupReport,
 };
-use antinomie_monitor_core::syscalls;
 use std::{collections::BTreeMap, path::Path};
 
 #[derive(serde::Deserialize)]
@@ -250,8 +249,11 @@ pub fn build(
     let mut failed_slots = 0;
     let mut gap_lines = Vec::new();
     let mut unexplained = Vec::new();
-    for info in syscalls::all() {
-        let slot = slots.remove(&info.number).unwrap_or_default();
+    let calls = crate::syscall_table();
+    for info in calls.all() {
+        let slot = slots
+            .remove(&crate::syscall_id(info.number))
+            .unwrap_or_default();
         let pointer = info.arguments.iter().any(|argument| argument.pointer);
         let matched = slot.cases > slot.unmatched;
         let mut notes = Vec::new();
@@ -360,7 +362,7 @@ pub fn build(
             "failed": slot_failed, "problems": slot.problems,
         }));
     }
-    let total = syscalls::all().len();
+    let total = calls.all().len();
     let mut summary = vec![format!(
         "{} matrix: {total} slots; exercised {exercised}, arguments decoded {decoded}, results decoded {returned}, data captured without gaps {captured}, rendered without fallbacks {rendered_ok}; {failed_slots} slots failing",
         if failed_slots == 0 && slots.is_empty() {

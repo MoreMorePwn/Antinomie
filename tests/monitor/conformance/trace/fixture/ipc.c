@@ -33,9 +33,14 @@
 #define MSG_COPY 040000
 #endif
 
-// The glibc structures are the kernel's 64-bit layouts on x86-64; the
+// The glibc structures are the kernel's 64-bit layouts on x86-64 and arm64
+// (x86-64's semid64_ds has two words more than the generic one); the
 // recorder captures the kernel sizes.
+#ifdef __x86_64__
 _Static_assert(sizeof(struct semid_ds) == 104, "semid64_ds");
+#else
+_Static_assert(sizeof(struct semid_ds) == 88, "semid64_ds");
+#endif
 _Static_assert(sizeof(struct msqid_ds) == 120, "msqid64_ds");
 _Static_assert(sizeof(struct shmid_ds) == 112, "shmid64_ds");
 _Static_assert(sizeof(struct seminfo) == 40, "seminfo");
