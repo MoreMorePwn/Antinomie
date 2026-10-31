@@ -75,7 +75,7 @@ static void acknowledge(struct fixture *f)
 	if (f->boot->resume_sequence_ack > floor) floor = f->boot->resume_sequence_ack;
 	while (cursor != head) {
 		struct ant_message message;
-		assert(!ant_peek(&c->requests, f->region->request_data, ANT_COMMAND_RING_SIZE,
+		assert(!ant_peek(&c->requests, ANT_PROFILE_LP64, f->region->request_data, ANT_COMMAND_RING_SIZE,
 			ANT_MAX_COMMAND_LEN, cursor, &seen, &message));
 		if (message.id > floor) floor = message.id;
 		cursor += ant_span(message.payload_len);
@@ -129,11 +129,11 @@ static void test_resume(void)
 	/* Queue telemetry, a submitted command and an old reply; none may replay. */
 	f.region->directory[0].attempted = 71;
 	f.region->directory[0].dropped = 2;
-	ant_publish(&f.region->directory[0], (char *)f.ram + (4U << 20),
+	ant_publish(&f.region->directory[0], ANT_PROFILE_LP64, (char *)f.ram + (4U << 20),
 		ANT_TELEMETRY_RING_MIN, &head, &telemetry, "hello");
 	assert(!ant_command_send(client, 42, NULL, 0, &id) && id == 1);
 	head = 0;
-	ant_publish(&f.region->control.responses, f.region->response_data,
+	ant_publish(&f.region->control.responses, ANT_PROFILE_LP64, f.region->response_data,
 		ANT_COMMAND_RING_SIZE, &head, &reply, NULL);
 	assert(!ant_resume_begin(client));
 	assert(ant_command_send(client, 42, NULL, 0, &id) == -EINPROGRESS);
@@ -260,12 +260,12 @@ static void test_ordered_reads(void)
 	for (i = 0; i < sizeof(sent) / sizeof(sent[0]); i++) {
 		memset(data, 0, sizeof(data));
 		memcpy(data, &sent[i].key, sizeof(sent[i].key));
-		ant_publish(&f.region->directory[sent[i].ring],
+		ant_publish(&f.region->directory[sent[i].ring], ANT_PROFILE_LP64,
 			(char *)f.ram + (4U << 20) + sent[i].ring * ANT_TELEMETRY_RING_MIN,
 			ANT_TELEMETRY_RING_MIN, &heads[sent[i].ring], &message, data);
 	}
 	/* Too short to hold a key: it orders first. */
-	ant_publish(&f.region->directory[2], (char *)f.ram + (4U << 20) + 2 * ANT_TELEMETRY_RING_MIN,
+	ant_publish(&f.region->directory[2], ANT_PROFILE_LP64, (char *)f.ram + (4U << 20) + 2 * ANT_TELEMETRY_RING_MIN,
 		ANT_TELEMETRY_RING_MIN, &heads[2], &short_message, "x");
 	for (i = 0; i < sizeof(order) / sizeof(order[0]); i++) {
 		assert(!ant_read_ordered(client, data, sizeof(data), &len, 0));
@@ -280,8 +280,56 @@ static void test_ordered_reads(void)
 	cleanup(&f);
 }
 
+/* ABI 10 with POS32 (a 32-bit guest): only the low words of positions,
+ * nonces and counters travel. Positions start just below 2^32, so the first
+ * message wraps both the ring and the 32-bit position. */
+static void test_pos32(void)
+{
+	struct fixture f;
+	struct ant_client *client;
+	struct ant_stats stats;
+	struct ant_message telemetry = { .payload_len = 5 };
+	pthread_t thread;
+	__u64 head = 0xfffffff0ULL;
+	uint64_t id;
+	size_t len;
+	char data[8];
+	static const unsigned rejected[][2] = { { 10, ANT_PROFILE_POS32 }, { 9, 3 }, { 11, 1 } };
+	unsigned i;
+
+	for (i = 0; i < sizeof(rejected) / sizeof(rejected[0]); i++) {
+		setup(&f, rejected[i][0]);
+		f.boot->profile = rejected[i][1];
+		assert(ant_init(&f.options, &client) == -EPROTO);
+		cleanup(&f);
+	}
+	setup(&f, ANT_ABI_WIRE_LE);
+	f.boot->profile = ANT_PROFILE_LP64 | ANT_PROFILE_POS32;
+	f.region->directory[0].head = f.region->directory[0].tail = head;
+	f.region->control.requests.head = f.region->control.requests.tail = 0xfffffff8ULL;
+	assert(!pthread_create(&thread, NULL, ack_thread, &f));
+	assert(!ant_init(&f.options, &client));
+	assert(!pthread_join(thread, NULL));
+	/* The nonce is a 32-bit value; the high word of every moving field stays zero. */
+	assert(f.boot->owner && f.boot->owner <= UINT32_MAX);
+	assert(!ant_heartbeat(client) && f.region->control.host_heartbeat <= UINT32_MAX);
+	f.region->directory[0].attempted = 0x100000007ULL;	/* only the low word counts */
+	ant_publish(&f.region->directory[0], ANT_PROFILE_LP64 | ANT_PROFILE_POS32,
+		(char *)f.ram + (4U << 20), ANT_TELEMETRY_RING_MIN, &head, &telemetry, "hello");
+	assert(head == 0x100000018ULL && f.region->directory[0].head == 0x18);
+	assert(!ant_read(client, data, sizeof(data), &len) && len == 5 && !memcmp(data, "hello", 5));
+	assert(f.region->directory[0].tail == 0x18);
+	assert(ant_read(client, data, sizeof(data), &len) == -EAGAIN);
+	assert(!ant_get_stats(client, &stats) && stats.abi == ANT_ABI_WIRE_LE && stats.attempted == 7);
+	assert(!ant_command_send(client, 42, "x", 1, &id) && id == 1);
+	assert(f.region->control.requests.head == 0x20);
+	ant_close(client);
+	cleanup(&f);
+}
+
 int main(void)
 {
+	test_pos32();
 	test_ordered_reads();
 	test_resume();
 	test_geometry();

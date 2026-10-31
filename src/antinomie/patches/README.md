@@ -1,7 +1,7 @@
 # The Antinomie guest kernel patch series
 
 The guest kernel is Debian's `linux` 6.12.94-1 (trixie) with Antinomie's own
-patch series on top. The series is twenty-three topic patches; each one adds one
+patch series on top. The series is twenty-four topic patches; each one adds one
 part of the design and says, in its description, what it adds, why, which
 existing kernel files it hooks and why there, and which contract revision it
 belongs to.
@@ -58,6 +58,7 @@ changes. Line counts are added/removed lines of the patch.
 | 21 | keep the recorder out of the function tracer | +16 -10 | none | `fs/coredump.c`, `io_uring/{io_uring.c,rw.c,uring_cmd.c}` (notrace), `kernel/antinomie/Makefile` (no `CC_FLAGS_FTRACE`) |
 | 22 | keep the kernel's BTF type for type Debian's | +472 -159 | `kernel/antinomie/core_writer.c` (the recorder's copy of the core writer's sequence) | `kernel/Makefile` (configs.o without debug information), `io_uring/{xattr.c,waitid.c}` (inline attributes); `fs/coredump.c` loses code; `kernel/antinomie/guest.c` allocates its per-CPU state |
 | 25 | raise the specimen limit to 128 MiB (contract revision 19) | +8 -4 | none (`specimen.c`, `control_wire.h`) | none |
+| 30 | report the guest's architecture and carry the transport little endian on every guest (contract revision 20) | +287 -86 | none (`abi.h`, `queue.h`, `guest.c`, `control.c`, `control_wire.h`, `process_core.c`, `recorder.c`; `antinomie_syscalls.h` gains the table id) | none (`arch/x86/include/asm/antinomie.h` and `include/linux/antinomie_monitor.h` gain declarations) |
 
 Every topic also adds its part of the files shared by all of them:
 `control.c` (dispatch), `control_wire.h` (the wire contract), `antinomie_monitor.h`

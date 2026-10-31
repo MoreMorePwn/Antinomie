@@ -19,7 +19,13 @@
  * pages written through shared file mappings (lifecycle.file_mapped). */
 /* Revision 19: specimens (SPECIMEN_ACQUIRE max_size and the global
  * reservation) up to 128 MiB. */
-#define ANTC_REVISION 19
+/* Revision 20: the guest's architecture (ARCH_INFO), the little-endian
+ * transport profile for 32-bit and big-endian guests (transport ABI 10),
+ * process cores of 32-bit guests (CORE_NATIVE_ELF32) and the debug CAPS flags
+ * SW_SINGLE_STEP and READ_WATCH. A host sends ARCH_INFO only to a guest whose
+ * INFO revision is 20 or later; an older guest counts an unknown opcode as a
+ * bad command. */
+#define ANTC_REVISION 20
 #define ANTC_HEADER_SIZE 8
 #define ANTC_UPLOAD_BEGIN 0x1001
 #define ANTC_UPLOAD_CHUNK 0x1002
@@ -42,6 +48,10 @@
 #define ANTC_STATS 0x1020
 #define ANTC_INFO 0x1021
 #define ANTC_INFO_SIZE 160
+#define ANTC_ARCH_INFO 0x1022
+#define ANTC_ARCH_INFO_SIZE 128
+#define ANTC_ARCH_ENDIAN_LITTLE 1
+#define ANTC_ARCH_ENDIAN_BIG 2
 #define ANTC_SHUTDOWN 0x1030
 #define ANTC_PROCESS_LIST 0x1050
 #define ANTC_CAPTURE_ATTACH 0x1051
@@ -102,6 +112,8 @@
 #define ANTC_CORE_MANUAL 0x10
 #define ANTC_CORE_PAUSE_RELEASED 0x20
 #define ANTC_CORE_RESIDENT_ONLY 0x40
+/* Revision 20: the core is the native ELF32 file of a 32-bit guest. */
+#define ANTC_CORE_NATIVE_ELF32 0x80
 #define ANTC_RESOURCES 0x1070
 #define ANTC_RESOURCES_SIZE 96
 #define ANTC_RESOURCES_MEMORY_VALID 1
@@ -184,6 +196,10 @@
 #define ANTC_DEBUG_CAP_BATCH_REGS 128
 #define ANTC_DEBUG_CAP_START 256
 #define ANTC_DEBUG_CAP_AUXV 512
+/* Revision 20: the engine steps in software (no hardware single step: the
+ * gdb stub then lets gdb step), and a watchpoint may trigger on loads only. */
+#define ANTC_DEBUG_CAP_SW_SINGLE_STEP 1024
+#define ANTC_DEBUG_CAP_READ_WATCH 2048
 /* second capability word (CAPS requested with CAPS_EXT) */
 #define ANTC_DEBUG_CAP2_FOLLOW 1
 #define ANTC_DEBUG_CAP2_NONSTOP 2
@@ -621,6 +637,18 @@
  * or empty for an unversioned build. Kernels before revision 9 return
  * -EOPNOTSUPP. INFO is registered before every other opcode, so INFO
  * unsupported while STATS succeeds identifies such a kernel.
+ * ARCH_INFO (revision 20): header only. Reply (128 bytes): u32 ELF e_machine
+ * at 0, u8 ELF class at 4 (1 = 32-bit, 2 = 64-bit), u8 endianness at 5
+ * (ANTC_ARCH_ENDIAN_*), u16 page shift at 6, u32 ABI mask at 8 (bit n: system
+ * call records may carry ABI n: 1 native, 2 x32, 3 compat), u32 number of the
+ * first native system call at 12 (4000 on MIPS o32), u32 native table slots at
+ * 16, u32 user virtual address bits at 20, u32 flags at 24 (the debug
+ * engine's ANTC_DEBUG_CAP_* flags), u32 reserved=0 at 28, the native table id
+ * at 32 (32 bytes: SHA-256 of protocol/<arch>/native-syscalls.json as
+ * generated with the guest's table), the layout set at 64 (32 bytes,
+ * "linux-6.12.94/<arch>", NUL padded: the prefix of every captured layout
+ * name), reserved zero at 96. A host must not send it to a guest whose INFO
+ * revision is below 20.
  * PROCESS_LIST: header flags=0, u32 after_pid at 8, u32 capacity at 12,
  * 1..64. Non-atomic live pagination of userspace process leaders, ascending
  * PID. Reply: u64 stream_id at 0, u32 count at 8, u32 next_pid at 12

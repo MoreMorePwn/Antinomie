@@ -1,0 +1,801 @@
+From 1ab167a0ac0ff076eb73a24d2b88a94a0f51f1e9 Mon Sep 17 00:00:00 2001
+From: MikiMiku <jonathanirvinjo@gmail.com>
+Date: Sat, 31 Oct 2026 13:49:35 +0700
+Subject: [PATCH] antinomie: report the guest's architecture and carry the
+ transport little endian on every guest
+
+A host that decodes more than one architecture must learn which one a guest
+is before it reads a record. ARCH_INFO answers with the ELF machine, class
+and byte order, the page size, the ABIs system call records may carry, the
+number of the first native system call, the native table's size and identity
+(the SHA-256 of the protocol file generated with it, which the generator now
+also writes into <asm/antinomie_syscalls.h>), the user address width, the
+debug engine's capability flags and the prefix of every layout name. It is
+contract revision 20; a host asks only a guest whose INFO revision is 20 or
+later, because an older guest counts an unknown opcode as a bad command.
+
+The shared-memory transport keeps its layout. A 64-bit little-endian guest
+still announces ABI 9 and its words are native accesses, as before. Any other
+guest announces ABI 10: every field little endian (message headers too), and
+on a 32-bit guest, which has no 64-bit atomics, the POS32 profile: each
+moving 64-bit word (queue position, heartbeat, nonce, sequence, counter)
+travels as its low 32 bits, positions run modulo 2^32 and every reader widens
+one next to a position it knows. queue.h takes the profile, guest.c reaches
+every shared field through accessors that expand to the old expressions on a
+64-bit little-endian guest.
+
+Process cores of a 32-bit guest are flagged CORE_NATIVE_ELF32 instead of
+CORE_NATIVE_ELF64, and the debug CAPS flags gain SW_SINGLE_STEP and
+READ_WATCH for the architectures that need them. x86-64 reports neither and
+its shared-ring bytes do not change.
+---
+ arch/x86/include/asm/antinomie.h          |   7 +
+ arch/x86/include/asm/antinomie_syscalls.h |   2 +
+ include/linux/antinomie_monitor.h         |   3 +
+ kernel/antinomie/abi.h                    |  16 +-
+ kernel/antinomie/control.c                |  34 +++-
+ kernel/antinomie/control_wire.h           |  30 +++-
+ kernel/antinomie/guest.c                  | 204 ++++++++++++++--------
+ kernel/antinomie/process_core.c           |   6 +-
+ kernel/antinomie/queue.h                  |  64 ++++++-
+ kernel/antinomie/recorder.c               |   7 +
+ 10 files changed, 287 insertions(+), 86 deletions(-)
+
+diff --git a/arch/x86/include/asm/antinomie.h b/arch/x86/include/asm/antinomie.h
+index 896d40a72..9eb8809a3 100644
+--- a/arch/x86/include/asm/antinomie.h
++++ b/arch/x86/include/asm/antinomie.h
+@@ -29,6 +29,13 @@
+  */
+ #define ANT_ABI_X32 2
+ 
++/* ARCH_INFO: the ABIs system call records may carry (bit n: ABI n), and the
++ * width of user virtual addresses.
++ */
++#define ANT_ARCH_ABI_MASK (BIT(ANT_ABI_NATIVE) | \
++	(IS_ENABLED(CONFIG_X86_X32_ABI) ? BIT(ANT_ABI_X32) : 0))
++#define ANT_ARCH_USER_VA_BITS __VIRTUAL_MASK_SHIFT
++
+ /* The ABI of the system call being entered, the abi field of its records. */
+ static __always_inline u16 ant_arch_syscall_abi(long nr)
+ {
+diff --git a/arch/x86/include/asm/antinomie_syscalls.h b/arch/x86/include/asm/antinomie_syscalls.h
+index 22534e0eb..72a73ebc0 100644
+--- a/arch/x86/include/asm/antinomie_syscalls.h
++++ b/arch/x86/include/asm/antinomie_syscalls.h
+@@ -2,6 +2,8 @@
+ /* Generated native declaration facts of x86_64 (scripts/generate-native-syscalls.py); do not hand-edit. */
+ #ifndef _ASM_ANTINOMIE_SYSCALLS_H
+ #define _ASM_ANTINOMIE_SYSCALLS_H
++/* SHA-256 of protocol/x86_64/native-syscalls.json (ARCH_INFO). */
++#define ANT_NATIVE_TABLE_ID "4eddecebcd9df28e1a2342c3d940f11bd97721f9b26d3c6933c140d468f40637"
+ struct ant_native_syscall {
+ 	u8 valid, argc, pointer_mask, string_mask;
+ 	const char *name;
+diff --git a/include/linux/antinomie_monitor.h b/include/linux/antinomie_monitor.h
+index 06bb59a29..de5b9e308 100644
+--- a/include/linux/antinomie_monitor.h
++++ b/include/linux/antinomie_monitor.h
+@@ -51,6 +51,8 @@ struct vm_area_struct;
+ /* Layout name of a captured object of the native ABI, and of its compat ABI. */
+ #define ANT_LAYOUT(type) "linux-6.12.94/" ANT_ARCH_LAYOUT "/" type
+ #define ANT_COMPAT_LAYOUT(type) "linux-6.12.94/" ANT_ARCH_COMPAT_LAYOUT "/" type
++/* The prefix of every native layout name (ARCH_INFO's layout set). */
++#define ANT_LAYOUT_SET "linux-6.12.94/" ANT_ARCH_LAYOUT
+ #else
+ #define ANT_LAYOUT(type) type
+ #define ANT_COMPAT_LAYOUT(type) type
+@@ -144,6 +146,7 @@ void ant_monitor_task_exit(bool group_dead);
+ void ant_monitor_release(struct task_struct *task);
+ int ant_monitor_launch(const char *path, char **argv, char **envp);
+ void ant_monitor_stats(void *out);
++u32 ant_monitor_native_table(const char **table_id);
+ int ant_monitor_run_status(u64 root_cookie, void *out);
+ void ant_monitor_run_stopped(u64 root_cookie);
+ /* Asynchronous requests are kept by the subsystem object they belong to (an
+diff --git a/kernel/antinomie/abi.h b/kernel/antinomie/abi.h
+index cd61acfca..d7a59c9ff 100644
+--- a/kernel/antinomie/abi.h
++++ b/kernel/antinomie/abi.h
+@@ -9,9 +9,23 @@
+ #include "bootstrap_layout.h"
+ #endif
+ 
+-/* Wire profile: x86-64, little endian. Memory translation is supplied by host. */
++/* Memory translation is supplied by host. The layout below is the LP64 one
++ * (natural alignment, 64-bit fields at 8-byte offsets) on every guest.
++ * ABI 9: a 64-bit little-endian guest; every field is a native word.
++ * ABI 10: the same layout with every field little endian, for 32-bit and
++ * big-endian guests; the profile says how wide the moving words are.
++ */
+ #define ANT_MAGIC 0x354e5441U
+ #define ANT_ABI 9U
++#define ANT_ABI_WIRE_LE 10U
++/* ant_boot.profile bits. LP64 is always set. POS32 (ABI 10 only, a 32-bit
++ * guest, which has no 64-bit atomics): a 64-bit queue position, heartbeat,
++ * nonce, sequence or counter travels as its low 32 bits in the first four
++ * bytes of its field, the other four stay zero; positions are free-running
++ * modulo 2^32 and each reader widens one next to a position it knows (rings
++ * are at most ANT_TELEMETRY_RING_MAX, far below 2^31). */
++#define ANT_PROFILE_LP64 1U
++#define ANT_PROFILE_POS32 2U
+ #define ANT_MAX_CPUS 256U
+ #define ANT_CONTROL_SIZE 1048576U
+ #define ANT_REQUEST_OFFSET 4096U
+diff --git a/kernel/antinomie/control.c b/kernel/antinomie/control.c
+index 4e5236c4f..431536737 100644
+--- a/kernel/antinomie/control.c
++++ b/kernel/antinomie/control.c
+@@ -4,6 +4,8 @@
+ #include <linux/cred.h>
+ #include <linux/tty.h>
+ #include <linux/devpts_fs.h>
++#include <linux/elf.h>
++#include <linux/hex.h>
+ #include <linux/file.h>
+ #include <linux/fdtable.h>
+ #include <linux/fs.h>
+@@ -633,6 +635,34 @@ static int stop_run(const u8 *args, size_t args_len)
+ 	return error;
+ }
+ 
++/* ARCH_INFO: what the host needs to decode this guest (control_wire.h). */
++static int arch_info(size_t args_len, u8 *reply, size_t capacity, size_t *reply_len)
++{
++	struct ant_dbg_caps caps;
++	const char *table_id;
++	u32 slots;
++
++	if (args_len != 8 || capacity < ANTC_ARCH_INFO_SIZE)
++		return -EINVAL;
++	memset(reply, 0, ANTC_ARCH_INFO_SIZE);
++	slots = ant_monitor_native_table(&table_id);
++	if (hex2bin(reply + 32, table_id, 32))
++		return -EIO;
++	ant_dbg_arch_caps(&caps);
++	put_unaligned_le32(ELF_ARCH, reply);
++	reply[4] = ELF_CLASS;
++	reply[5] = ELF_DATA == ELFDATA2MSB ? ANTC_ARCH_ENDIAN_BIG : ANTC_ARCH_ENDIAN_LITTLE;
++	put_unaligned_le16(PAGE_SHIFT, reply + 6);
++	put_unaligned_le32(ANT_ARCH_ABI_MASK, reply + 8);
++	put_unaligned_le32(ANT_ARCH_NR_BASE, reply + 12);
++	put_unaligned_le32(slots, reply + 16);
++	put_unaligned_le32(ANT_ARCH_USER_VA_BITS, reply + 20);
++	put_unaligned_le32(caps.flags, reply + 24);
++	strscpy_pad((char *)reply + 64, ANT_LAYOUT_SET, 32);
++	*reply_len = ANTC_ARCH_INFO_SIZE;
++	return 0;
++}
++
+ static int command(const void *data, size_t args_len, void *reply,
+ 		   size_t capacity, size_t *reply_len, void *context)
+ {
+@@ -733,6 +763,8 @@ static int command(const void *data, size_t args_len, void *reply,
+ 		strscpy_pad((char *)reply + 88, init_utsname()->release, 64);
+ 		*reply_len = ANTC_INFO_SIZE;
+ 		return 0;
++	case ANTC_ARCH_INFO:
++		return arch_info(args_len, reply, capacity, reply_len);
+ 	case ANTC_SHUTDOWN:
+ 		if (args_len != 8)
+ 			return -EINVAL;
+@@ -765,7 +797,7 @@ static int __init ant_control_init(void)
+ 		ANTC_DEBUG_REGS_WRITE, ANTC_DEBUG_MEM_READ, ANTC_DEBUG_MEM_WRITE,
+ 		ANTC_DEBUG_BP_SET, ANTC_DEBUG_BP_CLEAR, ANTC_DEBUG_AUXV, ANTC_DEBUG_CONFIG,
+ 		ANTC_DEBUG_EVENTS, ANTC_DEBUG_THREAD_CTL, ANTC_DEBUG_SESSIONS,
+-		ANTC_DEBUG_BP_LIST, ANTC_TRACER_CAPS };
++		ANTC_DEBUG_BP_LIST, ANTC_TRACER_CAPS, ANTC_ARCH_INFO };
+ 	int i, error;
+ 
+ 	for (i = 0; i < ARRAY_SIZE(opcodes); i++) {
+diff --git a/kernel/antinomie/control_wire.h b/kernel/antinomie/control_wire.h
+index d67b25d96..51439009c 100644
+--- a/kernel/antinomie/control_wire.h
++++ b/kernel/antinomie/control_wire.h
+@@ -19,7 +19,13 @@
+  * pages written through shared file mappings (lifecycle.file_mapped). */
+ /* Revision 19: specimens (SPECIMEN_ACQUIRE max_size and the global
+  * reservation) up to 128 MiB. */
+-#define ANTC_REVISION 19
++/* Revision 20: the guest's architecture (ARCH_INFO), the little-endian
++ * transport profile for 32-bit and big-endian guests (transport ABI 10),
++ * process cores of 32-bit guests (CORE_NATIVE_ELF32) and the debug CAPS flags
++ * SW_SINGLE_STEP and READ_WATCH. A host sends ARCH_INFO only to a guest whose
++ * INFO revision is 20 or later; an older guest counts an unknown opcode as a
++ * bad command. */
++#define ANTC_REVISION 20
+ #define ANTC_HEADER_SIZE 8
+ #define ANTC_UPLOAD_BEGIN 0x1001
+ #define ANTC_UPLOAD_CHUNK 0x1002
+@@ -42,6 +48,10 @@
+ #define ANTC_STATS 0x1020
+ #define ANTC_INFO 0x1021
+ #define ANTC_INFO_SIZE 160
++#define ANTC_ARCH_INFO 0x1022
++#define ANTC_ARCH_INFO_SIZE 128
++#define ANTC_ARCH_ENDIAN_LITTLE 1
++#define ANTC_ARCH_ENDIAN_BIG 2
+ #define ANTC_SHUTDOWN 0x1030
+ #define ANTC_PROCESS_LIST 0x1050
+ #define ANTC_CAPTURE_ATTACH 0x1051
+@@ -102,6 +112,8 @@
+ #define ANTC_CORE_MANUAL 0x10
+ #define ANTC_CORE_PAUSE_RELEASED 0x20
+ #define ANTC_CORE_RESIDENT_ONLY 0x40
++/* Revision 20: the core is the native ELF32 file of a 32-bit guest. */
++#define ANTC_CORE_NATIVE_ELF32 0x80
+ #define ANTC_RESOURCES 0x1070
+ #define ANTC_RESOURCES_SIZE 96
+ #define ANTC_RESOURCES_MEMORY_VALID 1
+@@ -184,6 +196,10 @@
+ #define ANTC_DEBUG_CAP_BATCH_REGS 128
+ #define ANTC_DEBUG_CAP_START 256
+ #define ANTC_DEBUG_CAP_AUXV 512
++/* Revision 20: the engine steps in software (no hardware single step: the
++ * gdb stub then lets gdb step), and a watchpoint may trigger on loads only. */
++#define ANTC_DEBUG_CAP_SW_SINGLE_STEP 1024
++#define ANTC_DEBUG_CAP_READ_WATCH 2048
+ /* second capability word (CAPS requested with CAPS_EXT) */
+ #define ANTC_DEBUG_CAP2_FOLLOW 1
+ #define ANTC_DEBUG_CAP2_NONSTOP 2
+@@ -621,6 +637,18 @@
+  * or empty for an unversioned build. Kernels before revision 9 return
+  * -EOPNOTSUPP. INFO is registered before every other opcode, so INFO
+  * unsupported while STATS succeeds identifies such a kernel.
++ * ARCH_INFO (revision 20): header only. Reply (128 bytes): u32 ELF e_machine
++ * at 0, u8 ELF class at 4 (1 = 32-bit, 2 = 64-bit), u8 endianness at 5
++ * (ANTC_ARCH_ENDIAN_*), u16 page shift at 6, u32 ABI mask at 8 (bit n: system
++ * call records may carry ABI n: 1 native, 2 x32, 3 compat), u32 number of the
++ * first native system call at 12 (4000 on MIPS o32), u32 native table slots at
++ * 16, u32 user virtual address bits at 20, u32 flags at 24 (the debug
++ * engine's ANTC_DEBUG_CAP_* flags), u32 reserved=0 at 28, the native table id
++ * at 32 (32 bytes: SHA-256 of protocol/<arch>/native-syscalls.json as
++ * generated with the guest's table), the layout set at 64 (32 bytes,
++ * "linux-6.12.94/<arch>", NUL padded: the prefix of every captured layout
++ * name), reserved zero at 96. A host must not send it to a guest whose INFO
++ * revision is below 20.
+  * PROCESS_LIST: header flags=0, u32 after_pid at 8, u32 capacity at 12,
+  * 1..64. Non-atomic live pagination of userspace process leaders, ascending
+  * PID. Reply: u64 stream_id at 0, u32 count at 8, u32 next_pid at 12
+diff --git a/kernel/antinomie/guest.c b/kernel/antinomie/guest.c
+index c86907c4b..ee2c3f8d6 100644
+--- a/kernel/antinomie/guest.c
++++ b/kernel/antinomie/guest.c
+@@ -24,6 +24,60 @@
+  */
+ #define ANT_SEND_ATOMIC_WAIT_US 200U
+ 
++/* The transport this guest announces (abi.h). A 64-bit little-endian guest
++ * announces ABI 9 and every word below is a native access, exactly as before
++ * ABI 10 existed. Any other guest announces ABI 10: every field little endian
++ * and, on a 32-bit guest (POS32), each moving 64-bit word (position,
++ * heartbeat, nonce, sequence, counter: MOV_*) carried as its low 32 bits.
++ * W64 is a 64-bit value written once before the boot block is published.
++ */
++#if BITS_PER_LONG == 64 && defined(__LITTLE_ENDIAN)
++#define ANT_GUEST_ABI ANT_ABI
++#define ANT_GUEST_PROFILE ANT_PROFILE_LP64
++#define MOV_ACQ(p) ANT_ACQ(p)
++#define MOV_REL(p, v) ANT_REL(p, v)
++#define MOV_READ(p) READ_ONCE(*(p))
++#define MOV_ONCE(p, v) WRITE_ONCE(*(p), v)
++#define MOV_GET(p) (*(p))
++#define MOV_SET(p, v) (*(p) = (v))
++#define MOV_INC(p) ((*(p))++)
++#define W64_SET(p, v) (*(p) = (v))
++#define W64_GET(p) (*(p))
++#define W32_ACQ(p) ANT_ACQ(p)
++#define W32_READ(p) READ_ONCE(*(p))
++#define W32_ONCE(p, v) WRITE_ONCE(*(p), v)
++#define W32_GET(p) (*(p))
++#define W32_SET(p, v) (*(p) = (v))
++#define W32_OR(p, v) (*(p) |= (v))
++#else
++#define ANT_GUEST_ABI ANT_ABI_WIRE_LE
++#if BITS_PER_LONG == 32
++#define ANT_GUEST_PROFILE (ANT_PROFILE_LP64 | ANT_PROFILE_POS32)
++#define MOV_WORD(p) ((u32 *)(p))
++#define MOV_ACQ(p) ((u64)le32_to_cpu((__force __le32)ANT_ACQ(MOV_WORD(p))))
++#define MOV_REL(p, v) ANT_REL(MOV_WORD(p), (__force u32)cpu_to_le32((u32)(v)))
++#define MOV_READ(p) ((u64)le32_to_cpu((__force __le32)READ_ONCE(*MOV_WORD(p))))
++#define MOV_ONCE(p, v) WRITE_ONCE(*MOV_WORD(p), (__force u32)cpu_to_le32((u32)(v)))
++#else
++#define ANT_GUEST_PROFILE ANT_PROFILE_LP64
++#define MOV_ACQ(p) le64_to_cpu((__force __le64)ANT_ACQ(p))
++#define MOV_REL(p, v) ANT_REL(p, (__force u64)cpu_to_le64(v))
++#define MOV_READ(p) le64_to_cpu((__force __le64)READ_ONCE(*(p)))
++#define MOV_ONCE(p, v) WRITE_ONCE(*(p), (__force u64)cpu_to_le64(v))
++#endif
++#define MOV_GET(p) MOV_READ(p)
++#define MOV_SET(p, v) MOV_ONCE(p, v)
++#define MOV_INC(p) MOV_SET(p, MOV_GET(p) + 1)
++#define W64_SET(p, v) (*(p) = (__force u64)cpu_to_le64(v))
++#define W64_GET(p) le64_to_cpu((__force __le64)*(p))
++#define W32_ACQ(p) le32_to_cpu((__force __le32)ANT_ACQ(p))
++#define W32_READ(p) le32_to_cpu((__force __le32)READ_ONCE(*(p)))
++#define W32_ONCE(p, v) WRITE_ONCE(*(p), (__force u32)cpu_to_le32(v))
++#define W32_GET(p) le32_to_cpu((__force __le32)*(p))
++#define W32_SET(p, v) (*(p) = (__force u32)cpu_to_le32(v))
++#define W32_OR(p, v) W32_SET(p, W32_GET(p) | (v))
++#endif
++
+ struct ant_cpu {
+ 	struct page *pages;
+ 	void *data;
+@@ -72,22 +126,22 @@ static bool host_attached;
+  */
+ static bool service_resume(void)
+ {
+-	u64 nonce = ANT_ACQ(&boot->resume_request);
++	u64 nonce = MOV_ACQ(&boot->resume_request);
+ 	u64 cursor, seen, head, reply_tail, floor;
+ 	int error = 0;
+ 
+-	if (!nonce || nonce == ANT_ACQ(&boot->resume_ack))
++	if (!nonce || nonce == MOV_ACQ(&boot->resume_ack))
+ 		return false;
+ 	/* Fence acknowledgment waits until manual acquisition owns no parks.
+ 	 * Completed immutable evidence remains retained across reattachment.
+ 	 */
+ 	if (!ant_manual_fence() || !ant_debug_fence())
+ 		return true;
+-	floor = max(last_request_id, ANT_ACQ(&boot->resume_sequence_floor));
++	floor = max(last_request_id, MOV_ACQ(&boot->resume_sequence_floor));
+ 	cursor = request_tail;
+ 	seen = request_head_seen;
+-	head = ANT_ACQ(&control->requests.head);
+-	reply_tail = ANT_ACQ(&control->responses.tail);
++	head = ant_pos_acquire(&control->requests.head, ANT_GUEST_PROFILE, cursor, 1);
++	reply_tail = ant_pos_acquire(&control->responses.tail, ANT_GUEST_PROFILE, response_head, 0);
+ 	if (broken || (head & 7) || head < cursor || head - cursor > ANT_COMMAND_RING_SIZE ||
+ 	    (reply_tail & 7) || reply_tail > response_head ||
+ 	    response_head - reply_tail > ANT_COMMAND_RING_SIZE) {
+@@ -97,7 +151,7 @@ static bool service_resume(void)
+ 	while (cursor != head) {
+ 		struct ant_message req;
+ 
+-		error = ant_peek(&control->requests, region->request_data,
++		error = ant_peek(&control->requests, ANT_GUEST_PROFILE, region->request_data,
+ 			ANT_COMMAND_RING_SIZE, ANT_MAX_COMMAND_LEN, cursor, &seen, &req);
+ 		if (error || !req.id || !req.opcode || req.status) {
+ 			error = -EPROTO;
+@@ -106,27 +160,27 @@ static bool service_resume(void)
+ 		floor = max(floor, req.id);
+ 		cursor += ant_span(req.payload_len);
+ 	}
+-	boot->discarded_request_bytes = head - request_tail;
+-	boot->discarded_reply_bytes = response_head - reply_tail;
++	MOV_SET(&boot->discarded_request_bytes, head - request_tail);
++	MOV_SET(&boot->discarded_reply_bytes, response_head - reply_tail);
+ 	request_tail = head;
+ 	request_head_seen = head;
+ 	last_request_id = floor;
+-	ANT_REL(&control->requests.tail, request_tail);
++	ant_pos_release(&control->requests.tail, ANT_GUEST_PROFILE, request_tail);
+ 	/* A new heartbeat establishes liveness independently of rolled-back time. */
+ 	host_seen = jiffies;
+-	last_heartbeat = ANT_ACQ(&control->host_heartbeat);
++	last_heartbeat = MOV_ACQ(&control->host_heartbeat);
+ 	host_attached = true;
+-	ANT_REL(&boot->owner, nonce);
++	MOV_REL(&boot->owner, nonce);
+ acknowledge:
+ 	if (error) {
+ 		broken = true;
+-		control->health |= ANT_HEALTH_RING_FAULT;
+-		boot->discarded_request_bytes = 0;
+-		boot->discarded_reply_bytes = 0;
++		W32_OR(&control->health, ANT_HEALTH_RING_FAULT);
++		MOV_SET(&boot->discarded_request_bytes, 0);
++		MOV_SET(&boot->discarded_reply_bytes, 0);
+ 	}
+-	boot->resume_sequence_ack = floor;
+-	boot->resume_status = error;
+-	ANT_REL(&boot->resume_ack, nonce);
++	MOV_SET(&boot->resume_sequence_ack, floor);
++	W32_SET((u32 *)&boot->resume_status, (u32)error);
++	MOV_REL(&boot->resume_ack, nonce);
+ 	return true;
+ }
+ 
+@@ -183,7 +237,7 @@ int ant_send(const void *data, size_t payload_len)
+ 		else if (queued && ticket != p->serving)
+ 			error = -ENOSPC;
+ 		else
+-			error = ant_space(q, ring_size, p->head, &p->cached_tail,
++			error = ant_space(q, ANT_GUEST_PROFILE, ring_size, p->head, &p->cached_tail,
+ 					  ant_span(payload_len));
+ 		if (error != -ENOSPC)
+ 			break;
+@@ -193,19 +247,19 @@ int ant_send(const void *data, size_t payload_len)
+ 		 * A sender that may sleep sleeps on this CPU, so the control worker
+ 		 * and other tasks keep running; one in atomic context spins, and
+ 		 * only briefly. */
+-		wait_us = min_t(u32, READ_ONCE(control->send_wait_us), ANT_SEND_WAIT_MAX_US);
++		wait_us = min_t(u32, W32_READ(&control->send_wait_us), ANT_SEND_WAIT_MAX_US);
+ 		if (!may_sleep)
+ 			wait_us = min_t(u32, wait_us, ANT_SEND_ATOMIC_WAIT_US);
+ 		now = local_clock();
+ 		if (!waited_from) {
+ 			waited_from = progress_at = now;
+-			tail = ANT_ACQ(&q->tail);
++			tail = ant_pos_acquire(&q->tail, ANT_GUEST_PROFILE, p->head, 0);
+ 			p->waits++;
+-		} else if (ANT_ACQ(&q->tail) != tail) {
+-			tail = ANT_ACQ(&q->tail);
++		} else if (ant_pos_acquire(&q->tail, ANT_GUEST_PROFILE, p->head, 0) != tail) {
++			tail = ant_pos_acquire(&q->tail, ANT_GUEST_PROFILE, p->head, 0);
+ 			progress_at = now;
+ 		}
+-		if (!wait_us || !READ_ONCE(control->live) ||
++		if (!wait_us || !W32_READ(&control->live) ||
+ 		    now - progress_at >= (u64)wait_us * NSEC_PER_USEC) {
+ 			/* A queued sender gives up in its turn, so the ones behind it
+ 			 * keep theirs; they see the same dead host or idle ring. */
+@@ -223,8 +277,8 @@ int ant_send(const void *data, size_t payload_len)
+ 				migrate_disable();
+ 			}
+ 			/* Only our own preempt_disable is held. */
+-			WRITE_ONCE(q->attempted, p->attempted);
+-			WRITE_ONCE(q->waits, p->waits);
++			MOV_ONCE(&q->attempted, p->attempted);
++			MOV_ONCE(&q->waits, p->waits);
+ 			preempt_enable();
+ 			usleep_range(50, 100);
+ 			preempt_disable();
+@@ -240,23 +294,23 @@ int ant_send(const void *data, size_t payload_len)
+ 		p->serving++;
+ 	if (waited_from) {
+ 		p->wait_ns += local_clock() - waited_from;
+-		WRITE_ONCE(q->waits, p->waits);
+-		WRITE_ONCE(q->wait_ns, p->wait_ns);
++		MOV_ONCE(&q->waits, p->waits);
++		MOV_ONCE(&q->wait_ns, p->wait_ns);
+ 	}
+ 	if (error) {
+ 		if (error != -ENOSPC) {
+ 			p->fault = true;
+-			WRITE_ONCE(q->fault, -error);
++			W32_ONCE(&q->fault, -error);
+ 		}
+ 		goto drop;
+ 	}
+-	ant_publish(q, cpus[p->index].data, ring_size, &p->head, &msg, data);
++	ant_publish(q, ANT_GUEST_PROFILE, cpus[p->index].data, ring_size, &p->head, &msg, data);
+ 	goto out;
+ drop:
+ 	p->dropped++;
+ out:
+-	WRITE_ONCE(q->attempted, p->attempted);
+-	WRITE_ONCE(q->dropped, p->dropped);
++	MOV_ONCE(&q->attempted, p->attempted);
++	MOV_ONCE(&q->dropped, p->dropped);
+ 	preempt_enable();
+ 	if (queued)
+ 		migrate_enable();
+@@ -276,7 +330,7 @@ u32 ant_send_room(void)
+ 	preempt_disable();
+ 	p = this_cpu_ptr(producers);
+ 	q = &directory[p->index];
+-	tail = ANT_ACQ(&q->tail);
++	tail = ant_pos_acquire(&q->tail, ANT_GUEST_PROFILE, p->head, 0);
+ 	if (!p->fault && tail <= p->head && p->head - tail <= ring_size)
+ 		room = ring_size - (p->head - tail);
+ 	preempt_enable();
+@@ -286,8 +340,8 @@ u32 ant_send_room(void)
+ bool ant_send_waits(void)
+ {
+ 	/* Pairs with the release that publishes the rings at setup. */
+-	return smp_load_acquire(&ready) && READ_ONCE(control->send_wait_us) &&
+-		READ_ONCE(control->live);
++	return smp_load_acquire(&ready) && W32_READ(&control->send_wait_us) &&
++		W32_READ(&control->live);
+ }
+ 
+ int ant_register_command(u32 opcode, ant_command_handler fn, void *context)
+@@ -358,16 +412,16 @@ static void service_commands(void)
+ 		 */
+ 		if (service_resume())
+ 			return;
+-		error = ant_peek(&control->requests, region->request_data,
++		error = ant_peek(&control->requests, ANT_GUEST_PROFILE, region->request_data,
+ 			ANT_COMMAND_RING_SIZE, ANT_MAX_COMMAND_LEN, request_tail, &request_head_seen, &req);
+ 		if (error == -EAGAIN) return;
+ 		if (error) goto fault;
+ 		/* Reserve worst-case result space before invoking any side effect. */
+-		error = ant_space(&control->responses, ANT_COMMAND_RING_SIZE, response_head,
++		error = ant_space(&control->responses, ANT_GUEST_PROFILE, ANT_COMMAND_RING_SIZE, response_head,
+ 			&response_tail_seen, ant_span(ANT_MAX_RESULT_LEN));
+ 		if (error == -ENOSPC) {
+-			control->reply_stalls++;
+-			control->health |= ANT_HEALTH_REPLY_FULL;
++			MOV_INC(&control->reply_stalls);
++			W32_OR(&control->health, ANT_HEALTH_REPLY_FULL);
+ 			return;
+ 		}
+ 		if (error) goto fault;
+@@ -385,45 +439,45 @@ static void service_commands(void)
+ 			resp.payload_len = payload_len;
+ 		}
+ 		if (resp.status) {
+-			control->bad_commands++;
+-			control->health |= ANT_HEALTH_BAD_COMMAND;
++			MOV_INC(&control->bad_commands);
++			W32_OR(&control->health, ANT_HEALTH_BAD_COMMAND);
+ 		}
+-		ant_publish(&control->responses, region->response_data, ANT_COMMAND_RING_SIZE,
++		ant_publish(&control->responses, ANT_GUEST_PROFILE, region->response_data, ANT_COMMAND_RING_SIZE,
+ 			    &response_head, &resp, command_result);
+ 		request_tail += ant_span(req.payload_len);
+-		ANT_REL(&control->requests.tail, request_tail);
++		ant_pos_release(&control->requests.tail, ANT_GUEST_PROFILE, request_tail);
+ 	}
+ 	return;
+ fault:
+ 	broken = true;
+-	control->health |= ANT_HEALTH_RING_FAULT;
++	W32_OR(&control->health, ANT_HEALTH_RING_FAULT);
+ }
+ 
+ static void control_tick(struct work_struct *work)
+ {
+-	u64 heartbeat = ANT_ACQ(&control->host_heartbeat);
+-	u32 timeout_ms = ANT_ACQ(&control->host_timeout_ms);
++	u64 heartbeat = MOV_ACQ(&control->host_heartbeat);
++	u32 timeout_ms = W32_ACQ(&control->host_timeout_ms);
+ 	u32 i;
+ 	service_resume();
+ 	if (!timeout_ms) timeout_ms = ANT_HOST_TIMEOUT_DEFAULT_MS;
+ 	if (timeout_ms > ANT_HOST_TIMEOUT_MAX_MS) {
+-		control->health |= ANT_HEALTH_BAD_CONFIG;
+-		timeout_ms = control->applied_host_timeout_ms;
++		W32_OR(&control->health, ANT_HEALTH_BAD_CONFIG);
++		timeout_ms = W32_GET(&control->applied_host_timeout_ms);
+ 	}
+-	WRITE_ONCE(control->applied_host_timeout_ms, timeout_ms);
++	W32_ONCE(&control->applied_host_timeout_ms, timeout_ms);
+ 	if (heartbeat != last_heartbeat) {
+ 		last_heartbeat = heartbeat;
+ 		host_seen = jiffies;
+ 		host_attached = true;
+ 	}
+-	control->live = host_attached && time_before(jiffies, host_seen + msecs_to_jiffies(timeout_ms));
+-	if (host_attached && !control->live) control->health |= ANT_HEALTH_HOST_STALE;
++	W32_SET(&control->live, host_attached && time_before(jiffies, host_seen + msecs_to_jiffies(timeout_ms)));
++	if (host_attached && !W32_GET(&control->live)) W32_OR(&control->health, ANT_HEALTH_HOST_STALE);
+ 	for (i = 0; i < queue_count; i++) {
+-		if (READ_ONCE(directory[i].dropped)) control->health |= ANT_HEALTH_OVERFLOW;
+-		if (READ_ONCE(directory[i].fault)) control->health |= ANT_HEALTH_RING_FAULT;
++		if (MOV_READ(&directory[i].dropped)) W32_OR(&control->health, ANT_HEALTH_OVERFLOW);
++		if (W32_READ(&directory[i].fault)) W32_OR(&control->health, ANT_HEALTH_RING_FAULT);
+ 	}
+ 	service_commands();
+-	ANT_REL(&control->guest_heartbeat, control->guest_heartbeat + 1);
++	MOV_REL(&control->guest_heartbeat, MOV_GET(&control->guest_heartbeat) + 1);
+ 	/* While a debugger is attached, or a finished process core is being read,
+ 	 * every request is a round trip the user waits for: poll at the next tick
+ 	 * instead of every ANT_POLL_MS.
+@@ -490,9 +544,9 @@ static int __init ant_guest_init(void)
+ 			goto retry;
+ 		}
+ 		cpus[index].data = page_address(cpus[index].pages);
+-		directory[index].data_gpa = page_to_phys(cpus[index].pages);
+-		directory[index].data_size = ring_size;
+-		directory[index].cpu_id = cpu;
++		W64_SET(&directory[index].data_gpa, page_to_phys(cpus[index].pages));
++		W32_SET(&directory[index].data_size, ring_size);
++		W32_SET(&directory[index].cpu_id, cpu);
+ 		per_cpu_ptr(producers, cpu)->index = index++;
+ 	}
+ 	/*
+@@ -506,28 +560,28 @@ static int __init ant_guest_init(void)
+ 	 */
+ 	worker = alloc_ordered_workqueue("events_unbound", 0);
+ 	if (!worker) goto free_rings;
+-	control->geometry.version = ANT_ABI;
+-	control->geometry.session = get_random_u64() ?: 1;
+-	control->geometry.size = ANT_CONTROL_SIZE;
+-	control->geometry.queue_count = queue_count;
+-	control->geometry.max_message_len = ANT_MAX_MESSAGE_LEN;
+-	control->geometry.max_command_len = ANT_MAX_COMMAND_LEN;
+-	control->geometry.max_result_len = ANT_MAX_RESULT_LEN;
+-	control->applied_host_timeout_ms = ANT_HOST_TIMEOUT_DEFAULT_MS;
+-	control->requests.data_gpa = page_to_phys(pages) + ANT_REQUEST_OFFSET;
+-	control->requests.data_size = ANT_COMMAND_RING_SIZE;
+-	control->responses.data_gpa = page_to_phys(pages) + ANT_RESPONSE_OFFSET;
+-	control->responses.data_size = ANT_COMMAND_RING_SIZE;
+-	ANT_REL(&control->geometry.magic, ANT_MAGIC);
+-	boot->version = ANT_ABI;
+-	boot->session = control->geometry.session;
+-	boot->control_gpa = page_to_phys(pages);
+-	boot->control_size = ANT_CONTROL_SIZE;
+-	boot->profile = 1;
++	W32_SET(&control->geometry.version, ANT_GUEST_ABI);
++	W64_SET(&control->geometry.session, get_random_u64() ?: 1);
++	W32_SET(&control->geometry.size, ANT_CONTROL_SIZE);
++	W32_SET(&control->geometry.queue_count, queue_count);
++	W32_SET(&control->geometry.max_message_len, ANT_MAX_MESSAGE_LEN);
++	W32_SET(&control->geometry.max_command_len, ANT_MAX_COMMAND_LEN);
++	W32_SET(&control->geometry.max_result_len, ANT_MAX_RESULT_LEN);
++	W32_SET(&control->applied_host_timeout_ms, ANT_HOST_TIMEOUT_DEFAULT_MS);
++	W64_SET(&control->requests.data_gpa, page_to_phys(pages) + ANT_REQUEST_OFFSET);
++	W32_SET(&control->requests.data_size, ANT_COMMAND_RING_SIZE);
++	W64_SET(&control->responses.data_gpa, page_to_phys(pages) + ANT_RESPONSE_OFFSET);
++	W32_SET(&control->responses.data_size, ANT_COMMAND_RING_SIZE);
++	ANT_REL(&control->geometry.magic, ANT_TO_LE32(ANT_MAGIC));
++	W32_SET(&boot->version, ANT_GUEST_ABI);
++	W64_SET(&boot->session, W64_GET(&control->geometry.session));
++	W64_SET(&boot->control_gpa, page_to_phys(pages));
++	W32_SET(&boot->control_size, ANT_CONTROL_SIZE);
++	W32_SET(&boot->profile, ANT_GUEST_PROFILE);
+ 	host_seen = jiffies;
+ 	smp_store_release(&ready, true);
+ 	queue_delayed_work(worker, &control_work, 0);
+-	ANT_REL(&boot->magic, ANT_MAGIC);
++	ANT_REL(&boot->magic, ANT_TO_LE32(ANT_MAGIC));
+ 	return 0;
+ free_rings:
+ 	for (index = 0; index < queue_count; index++)
+diff --git a/kernel/antinomie/process_core.c b/kernel/antinomie/process_core.c
+index 0310ee0cf..e2773821c 100644
+--- a/kernel/antinomie/process_core.c
++++ b/kernel/antinomie/process_core.c
+@@ -720,7 +720,8 @@ void ant_core_live_finish(struct ant_core *core, int error, u32 thread_count, bo
+ 	core->thread_count = retained;
+ 	core->flags |= ANTC_CORE_PAUSE_RELEASED;
+ 	if (expected)
+-		core->flags |= ANTC_CORE_NATIVE_ELF64;
++		core->flags |= ELF_CLASS == ELFCLASS32 ?
++			ANTC_CORE_NATIVE_ELF32 : ANTC_CORE_NATIVE_ELF64;
+ 	if (gap || error)
+ 		core->flags |= ANTC_CORE_COVERAGE_GAP;
+ 	core->status = error;
+@@ -786,7 +787,8 @@ bool ant_monitor_core_exit(int wait_status, const kernel_siginfo_t *siginfo)
+ 		error = core->expected_size > ANT_CORE_LOGICAL_MAX ? -EOVERFLOW : -EIO;
+ 	mutex_lock(&core_lock);
+ 	if (core->expected_size)
+-		core->flags |= ANTC_CORE_NATIVE_ELF64;
++		core->flags |= ELF_CLASS == ELFCLASS32 ?
++			ANTC_CORE_NATIVE_ELF32 : ANTC_CORE_NATIVE_ELF64;
+ 	if (thread_count < core->thread_count)
+ 		core->flags |= ANTC_CORE_COVERAGE_GAP;
+ 	core->thread_count = thread_count;
+diff --git a/kernel/antinomie/queue.h b/kernel/antinomie/queue.h
+index b28913a12..bd1e8ac70 100644
+--- a/kernel/antinomie/queue.h
++++ b/kernel/antinomie/queue.h
+@@ -7,15 +7,59 @@
+ #include <linux/errno.h>
+ #include <linux/string.h>
+ #include <asm/barrier.h>
++#include <asm/byteorder.h>
+ #define ANT_ACQ(p) virt_load_acquire(p)
+ #define ANT_REL(p, v) virt_store_release(p, v)
++#define ANT_LE32(v) le32_to_cpu((__force __le32)(v))
++#define ANT_TO_LE32(v) ((__force __u32)cpu_to_le32(v))
+ #else
+ #include <errno.h>
+ #include <string.h>
+ #define ANT_ACQ(p) __atomic_load_n((p), __ATOMIC_ACQUIRE)
+ #define ANT_REL(p, v) __atomic_store_n((p), (v), __ATOMIC_RELEASE)
++/* The host is little endian (x86-64 only). */
++_Static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__, "little-endian host");
++#define ANT_LE32(v) (v)
++#define ANT_TO_LE32(v) (v)
+ #endif
+ 
++/* A queue position of a ring with this profile (abi.h). With POS32 only the
++ * low word travels: the reader widens it next to a position it knows, the
++ * peer's being at most a ring's size behind (below) or ahead of (above) it. */
++static inline __u64 ant_pos_acquire(__u64 *field, __u32 profile, __u64 known, int above)
++{
++	__u32 low;
++
++	if (!(profile & ANT_PROFILE_POS32))
++		return ANT_ACQ(field);
++	low = ANT_LE32(ANT_ACQ((__u32 *)field));
++	return above ? known + (__u32)(low - (__u32)known) : known - (__u32)((__u32)known - low);
++}
++
++static inline void ant_pos_release(__u64 *field, __u32 profile, __u64 pos)
++{
++	if (profile & ANT_PROFILE_POS32)
++		ANT_REL((__u32 *)field, ANT_TO_LE32((__u32)pos));
++	else
++		ANT_REL(field, pos);
++}
++
++/* Message headers are little endian on the wire: a no-op but on a big-endian
++ * guest. */
++static inline void ant_message_wire(struct ant_message *msg)
++{
++#if defined(__KERNEL__) && defined(__BIG_ENDIAN)
++	msg->payload_len = (__force __u32)cpu_to_le32(msg->payload_len);
++	msg->opcode = (__force __u32)cpu_to_le32(msg->opcode);
++	msg->id = (__force __u64)cpu_to_le64(msg->id);
++	msg->status = (__force __s32)cpu_to_le32(msg->status);
++	msg->flags = (__force __u32)cpu_to_le32(msg->flags);
++	msg->reserved = (__force __u64)cpu_to_le64(msg->reserved);
++#else
++	(void)msg;
++#endif
++}
++
+ static inline __u64 ant_span(__u32 payload_len)
+ {
+ 	return (sizeof(struct ant_message) + (__u64)payload_len + 7) & ~7ULL;
+@@ -40,10 +84,10 @@ static inline void ant_copy_out(const void *ring, __u32 size, __u64 pos,
+ }
+ 
+ /* Private counters are authoritative; never accept a peer-written geometry. */
+-static inline int ant_space(struct ant_queue *q, __u32 size, __u64 head,
++static inline int ant_space(struct ant_queue *q, __u32 profile, __u32 size, __u64 head,
+ 			    __u64 *cached_tail, __u64 span)
+ {
+-	__u64 tail = ANT_ACQ(&q->tail);
++	__u64 tail = ant_pos_acquire(&q->tail, profile, head, 0);
+ 	if ((tail & 7) || (head & 7) || tail < *cached_tail || tail > head || head - tail > size)
+ 		return -EPROTO;
+ 	*cached_tail = tail;
+@@ -51,28 +95,36 @@ static inline int ant_space(struct ant_queue *q, __u32 size, __u64 head,
+ 	return span <= size - (head - tail) ? 0 : -ENOSPC;
+ }
+ 
+-static inline void ant_publish(struct ant_queue *q, void *ring, __u32 size,
++static inline void ant_publish(struct ant_queue *q, __u32 profile, void *ring, __u32 size,
+ 			       __u64 *head, const struct ant_message *msg, const void *data)
+ {
+ 	__u64 zero = 0, span = ant_span(msg->payload_len);
++#if defined(__KERNEL__) && defined(__BIG_ENDIAN)
++	struct ant_message wire = *msg;
++
++	ant_message_wire(&wire);
++	ant_copy_in(ring, size, *head, &wire, sizeof(wire));
++#else
+ 	ant_copy_in(ring, size, *head, msg, sizeof(*msg));
++#endif
+ 	ant_copy_in(ring, size, *head + sizeof(*msg), data, msg->payload_len);
+ 	ant_copy_in(ring, size, *head + sizeof(*msg) + msg->payload_len, &zero,
+ 		    span - sizeof(*msg) - msg->payload_len);
+ 	*head += span;
+-	ANT_REL(&q->head, *head);
++	ant_pos_release(&q->head, profile, *head);
+ }
+ 
+-static inline int ant_peek(struct ant_queue *q, const void *ring, __u32 size,
++static inline int ant_peek(struct ant_queue *q, __u32 profile, const void *ring, __u32 size,
+ 			   __u32 limit, __u64 tail, __u64 *seen_head,
+ 			   struct ant_message *msg)
+ {
+-	__u64 head = ANT_ACQ(&q->head);
++	__u64 head = ant_pos_acquire(&q->head, profile, tail, 1);
+ 	if ((head & 7) || (tail & 7) || head < *seen_head || head < tail || head - tail > size) return -EPROTO;
+ 	*seen_head = head;
+ 	if (head == tail) return -EAGAIN;
+ 	if (head - tail < sizeof(*msg)) return -EPROTO;
+ 	ant_copy_out(ring, size, tail, msg, sizeof(*msg));
++	ant_message_wire(msg);
+ 	if (msg->payload_len > limit || msg->flags || msg->reserved ||
+ 	    ant_span(msg->payload_len) > head - tail) return -EPROTO;
+ 	return 0;
+diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
+index 2c179a3cf..8535cf9a0 100644
+--- a/kernel/antinomie/recorder.c
++++ b/kernel/antinomie/recorder.c
+@@ -1866,6 +1866,13 @@ void ant_monitor_release(struct task_struct *task)
+ 	}
+ }
+ 
++/* The native table's slot count and identity, for ARCH_INFO (control.c). */
++u32 ant_monitor_native_table(const char **table_id)
++{
++	*table_id = ANT_NATIVE_TABLE_ID;
++	return ARRAY_SIZE(ant_native_syscalls);
++}
++
+ void ant_monitor_stats(void *out)
+ {
+ 	u64 values[] = { stream_id, atomic64_read(&tasks_created), atomic64_read(&tasks_live),
+-- 
+2.53.0
+

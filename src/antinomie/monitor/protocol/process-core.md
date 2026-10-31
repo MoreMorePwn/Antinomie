@@ -55,7 +55,7 @@ Every request starts with the existing 8-byte control header, flags zero.
 | 52 | i32 | Capture status, zero or negative errno |
 | 56 | i32 | Original Linux wait status |
 | 60 | u32 | Fatal signal, or zero for normal exit |
-| 64 | u32 | Coverage flags: 1 root only, 2 native ELF64, 4 filtered memory, 8 coverage gap |
+| 64 | u32 | Coverage flags: 1 root only, 2 native ELF64, 4 filtered memory, 8 coverage gap (and the higher flags of control.h; revision 20: 0x80 native ELF32, the core of a 32-bit guest, instead of 2) |
 | 68 | u32 | Root thread-group PID |
 | 72 | u32 | Thread contexts retained in complete ELF notes |
 | 76 | u32 | Reserved zero |

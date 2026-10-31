@@ -279,11 +279,17 @@ def generate(kernel, arch, output, c_header):
                        "note": "Prototype facts only; no ABI sizes or pointer extent guesses"},
         "syscalls": rows,
     }
-    output.write_text(json.dumps(document, indent=2) + "\n")
+    text = json.dumps(document, indent=2) + "\n"
+    output.write_text(text)
+    # The guest reports this id in ARCH_INFO; the host compares it with the
+    # SHA-256 of the protocol file it loaded for the guest's architecture.
+    table_id = hashlib.sha256(text.encode()).hexdigest()
     lines = ["/* SPDX-License-Identifier: GPL-2.0-only */",
              f"/* Generated native declaration facts of {arch}"
              " (scripts/generate-native-syscalls.py); do not hand-edit. */",
              "#ifndef _ASM_ANTINOMIE_SYSCALLS_H", "#define _ASM_ANTINOMIE_SYSCALLS_H",
+             f"/* SHA-256 of protocol/{arch}/native-syscalls.json (ARCH_INFO). */",
+             f'#define ANT_NATIVE_TABLE_ID "{table_id}"',
              "struct ant_native_syscall {", "\tu8 valid, argc, pointer_mask, string_mask;",
              "\tconst char *name;", "\tconst char *argument_names[6];",
              "\tconst char *argument_types[6];", "};",

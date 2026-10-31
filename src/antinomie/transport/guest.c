@@ -24,6 +24,60 @@
  */
 #define ANT_SEND_ATOMIC_WAIT_US 200U
 
+/* The transport this guest announces (abi.h). A 64-bit little-endian guest
+ * announces ABI 9 and every word below is a native access, exactly as before
+ * ABI 10 existed. Any other guest announces ABI 10: every field little endian
+ * and, on a 32-bit guest (POS32), each moving 64-bit word (position,
+ * heartbeat, nonce, sequence, counter: MOV_*) carried as its low 32 bits.
+ * W64 is a 64-bit value written once before the boot block is published.
+ */
+#if BITS_PER_LONG == 64 && defined(__LITTLE_ENDIAN)
+#define ANT_GUEST_ABI ANT_ABI
+#define ANT_GUEST_PROFILE ANT_PROFILE_LP64
+#define MOV_ACQ(p) ANT_ACQ(p)
+#define MOV_REL(p, v) ANT_REL(p, v)
+#define MOV_READ(p) READ_ONCE(*(p))
+#define MOV_ONCE(p, v) WRITE_ONCE(*(p), v)
+#define MOV_GET(p) (*(p))
+#define MOV_SET(p, v) (*(p) = (v))
+#define MOV_INC(p) ((*(p))++)
+#define W64_SET(p, v) (*(p) = (v))
+#define W64_GET(p) (*(p))
+#define W32_ACQ(p) ANT_ACQ(p)
+#define W32_READ(p) READ_ONCE(*(p))
+#define W32_ONCE(p, v) WRITE_ONCE(*(p), v)
+#define W32_GET(p) (*(p))
+#define W32_SET(p, v) (*(p) = (v))
+#define W32_OR(p, v) (*(p) |= (v))
+#else
+#define ANT_GUEST_ABI ANT_ABI_WIRE_LE
+#if BITS_PER_LONG == 32
+#define ANT_GUEST_PROFILE (ANT_PROFILE_LP64 | ANT_PROFILE_POS32)
+#define MOV_WORD(p) ((u32 *)(p))
+#define MOV_ACQ(p) ((u64)le32_to_cpu((__force __le32)ANT_ACQ(MOV_WORD(p))))
+#define MOV_REL(p, v) ANT_REL(MOV_WORD(p), (__force u32)cpu_to_le32((u32)(v)))
+#define MOV_READ(p) ((u64)le32_to_cpu((__force __le32)READ_ONCE(*MOV_WORD(p))))
+#define MOV_ONCE(p, v) WRITE_ONCE(*MOV_WORD(p), (__force u32)cpu_to_le32((u32)(v)))
+#else
+#define ANT_GUEST_PROFILE ANT_PROFILE_LP64
+#define MOV_ACQ(p) le64_to_cpu((__force __le64)ANT_ACQ(p))
+#define MOV_REL(p, v) ANT_REL(p, (__force u64)cpu_to_le64(v))
+#define MOV_READ(p) le64_to_cpu((__force __le64)READ_ONCE(*(p)))
+#define MOV_ONCE(p, v) WRITE_ONCE(*(p), (__force u64)cpu_to_le64(v))
+#endif
+#define MOV_GET(p) MOV_READ(p)
+#define MOV_SET(p, v) MOV_ONCE(p, v)
+#define MOV_INC(p) MOV_SET(p, MOV_GET(p) + 1)
+#define W64_SET(p, v) (*(p) = (__force u64)cpu_to_le64(v))
+#define W64_GET(p) le64_to_cpu((__force __le64)*(p))
+#define W32_ACQ(p) le32_to_cpu((__force __le32)ANT_ACQ(p))
+#define W32_READ(p) le32_to_cpu((__force __le32)READ_ONCE(*(p)))
+#define W32_ONCE(p, v) WRITE_ONCE(*(p), (__force u32)cpu_to_le32(v))
+#define W32_GET(p) le32_to_cpu((__force __le32)*(p))
+#define W32_SET(p, v) (*(p) = (__force u32)cpu_to_le32(v))
+#define W32_OR(p, v) W32_SET(p, W32_GET(p) | (v))
+#endif
+
 struct ant_cpu {
 	struct page *pages;
 	void *data;
@@ -72,22 +126,22 @@ static bool host_attached;
  */
 static bool service_resume(void)
 {
-	u64 nonce = ANT_ACQ(&boot->resume_request);
+	u64 nonce = MOV_ACQ(&boot->resume_request);
 	u64 cursor, seen, head, reply_tail, floor;
 	int error = 0;
 
-	if (!nonce || nonce == ANT_ACQ(&boot->resume_ack))
+	if (!nonce || nonce == MOV_ACQ(&boot->resume_ack))
 		return false;
 	/* Fence acknowledgment waits until manual acquisition owns no parks.
 	 * Completed immutable evidence remains retained across reattachment.
 	 */
 	if (!ant_manual_fence() || !ant_debug_fence())
 		return true;
-	floor = max(last_request_id, ANT_ACQ(&boot->resume_sequence_floor));
+	floor = max(last_request_id, MOV_ACQ(&boot->resume_sequence_floor));
 	cursor = request_tail;
 	seen = request_head_seen;
-	head = ANT_ACQ(&control->requests.head);
-	reply_tail = ANT_ACQ(&control->responses.tail);
+	head = ant_pos_acquire(&control->requests.head, ANT_GUEST_PROFILE, cursor, 1);
+	reply_tail = ant_pos_acquire(&control->responses.tail, ANT_GUEST_PROFILE, response_head, 0);
 	if (broken || (head & 7) || head < cursor || head - cursor > ANT_COMMAND_RING_SIZE ||
 	    (reply_tail & 7) || reply_tail > response_head ||
 	    response_head - reply_tail > ANT_COMMAND_RING_SIZE) {
@@ -97,7 +151,7 @@ static bool service_resume(void)
 	while (cursor != head) {
 		struct ant_message req;
 
-		error = ant_peek(&control->requests, region->request_data,
+		error = ant_peek(&control->requests, ANT_GUEST_PROFILE, region->request_data,
 			ANT_COMMAND_RING_SIZE, ANT_MAX_COMMAND_LEN, cursor, &seen, &req);
 		if (error || !req.id || !req.opcode || req.status) {
 			error = -EPROTO;
@@ -106,27 +160,27 @@ static bool service_resume(void)
 		floor = max(floor, req.id);
 		cursor += ant_span(req.payload_len);
 	}
-	boot->discarded_request_bytes = head - request_tail;
-	boot->discarded_reply_bytes = response_head - reply_tail;
+	MOV_SET(&boot->discarded_request_bytes, head - request_tail);
+	MOV_SET(&boot->discarded_reply_bytes, response_head - reply_tail);
 	request_tail = head;
 	request_head_seen = head;
 	last_request_id = floor;
-	ANT_REL(&control->requests.tail, request_tail);
+	ant_pos_release(&control->requests.tail, ANT_GUEST_PROFILE, request_tail);
 	/* A new heartbeat establishes liveness independently of rolled-back time. */
 	host_seen = jiffies;
-	last_heartbeat = ANT_ACQ(&control->host_heartbeat);
+	last_heartbeat = MOV_ACQ(&control->host_heartbeat);
 	host_attached = true;
-	ANT_REL(&boot->owner, nonce);
+	MOV_REL(&boot->owner, nonce);
 acknowledge:
 	if (error) {
 		broken = true;
-		control->health |= ANT_HEALTH_RING_FAULT;
-		boot->discarded_request_bytes = 0;
-		boot->discarded_reply_bytes = 0;
+		W32_OR(&control->health, ANT_HEALTH_RING_FAULT);
+		MOV_SET(&boot->discarded_request_bytes, 0);
+		MOV_SET(&boot->discarded_reply_bytes, 0);
 	}
-	boot->resume_sequence_ack = floor;
-	boot->resume_status = error;
-	ANT_REL(&boot->resume_ack, nonce);
+	MOV_SET(&boot->resume_sequence_ack, floor);
+	W32_SET((u32 *)&boot->resume_status, (u32)error);
+	MOV_REL(&boot->resume_ack, nonce);
 	return true;
 }
 
@@ -183,7 +237,7 @@ int ant_send(const void *data, size_t payload_len)
 		else if (queued && ticket != p->serving)
 			error = -ENOSPC;
 		else
-			error = ant_space(q, ring_size, p->head, &p->cached_tail,
+			error = ant_space(q, ANT_GUEST_PROFILE, ring_size, p->head, &p->cached_tail,
 					  ant_span(payload_len));
 		if (error != -ENOSPC)
 			break;
@@ -193,19 +247,19 @@ int ant_send(const void *data, size_t payload_len)
 		 * A sender that may sleep sleeps on this CPU, so the control worker
 		 * and other tasks keep running; one in atomic context spins, and
 		 * only briefly. */
-		wait_us = min_t(u32, READ_ONCE(control->send_wait_us), ANT_SEND_WAIT_MAX_US);
+		wait_us = min_t(u32, W32_READ(&control->send_wait_us), ANT_SEND_WAIT_MAX_US);
 		if (!may_sleep)
 			wait_us = min_t(u32, wait_us, ANT_SEND_ATOMIC_WAIT_US);
 		now = local_clock();
 		if (!waited_from) {
 			waited_from = progress_at = now;
-			tail = ANT_ACQ(&q->tail);
+			tail = ant_pos_acquire(&q->tail, ANT_GUEST_PROFILE, p->head, 0);
 			p->waits++;
-		} else if (ANT_ACQ(&q->tail) != tail) {
-			tail = ANT_ACQ(&q->tail);
+		} else if (ant_pos_acquire(&q->tail, ANT_GUEST_PROFILE, p->head, 0) != tail) {
+			tail = ant_pos_acquire(&q->tail, ANT_GUEST_PROFILE, p->head, 0);
 			progress_at = now;
 		}
-		if (!wait_us || !READ_ONCE(control->live) ||
+		if (!wait_us || !W32_READ(&control->live) ||
 		    now - progress_at >= (u64)wait_us * NSEC_PER_USEC) {
 			/* A queued sender gives up in its turn, so the ones behind it
 			 * keep theirs; they see the same dead host or idle ring. */
@@ -223,8 +277,8 @@ int ant_send(const void *data, size_t payload_len)
 				migrate_disable();
 			}
 			/* Only our own preempt_disable is held. */
-			WRITE_ONCE(q->attempted, p->attempted);
-			WRITE_ONCE(q->waits, p->waits);
+			MOV_ONCE(&q->attempted, p->attempted);
+			MOV_ONCE(&q->waits, p->waits);
 			preempt_enable();
 			usleep_range(50, 100);
 			preempt_disable();
@@ -240,23 +294,23 @@ int ant_send(const void *data, size_t payload_len)
 		p->serving++;
 	if (waited_from) {
 		p->wait_ns += local_clock() - waited_from;
-		WRITE_ONCE(q->waits, p->waits);
-		WRITE_ONCE(q->wait_ns, p->wait_ns);
+		MOV_ONCE(&q->waits, p->waits);
+		MOV_ONCE(&q->wait_ns, p->wait_ns);
 	}
 	if (error) {
 		if (error != -ENOSPC) {
 			p->fault = true;
-			WRITE_ONCE(q->fault, -error);
+			W32_ONCE(&q->fault, -error);
 		}
 		goto drop;
 	}
-	ant_publish(q, cpus[p->index].data, ring_size, &p->head, &msg, data);
+	ant_publish(q, ANT_GUEST_PROFILE, cpus[p->index].data, ring_size, &p->head, &msg, data);
 	goto out;
 drop:
 	p->dropped++;
 out:
-	WRITE_ONCE(q->attempted, p->attempted);
-	WRITE_ONCE(q->dropped, p->dropped);
+	MOV_ONCE(&q->attempted, p->attempted);
+	MOV_ONCE(&q->dropped, p->dropped);
 	preempt_enable();
 	if (queued)
 		migrate_enable();
@@ -276,7 +330,7 @@ u32 ant_send_room(void)
 	preempt_disable();
 	p = this_cpu_ptr(producers);
 	q = &directory[p->index];
-	tail = ANT_ACQ(&q->tail);
+	tail = ant_pos_acquire(&q->tail, ANT_GUEST_PROFILE, p->head, 0);
 	if (!p->fault && tail <= p->head && p->head - tail <= ring_size)
 		room = ring_size - (p->head - tail);
 	preempt_enable();
@@ -286,8 +340,8 @@ u32 ant_send_room(void)
 bool ant_send_waits(void)
 {
 	/* Pairs with the release that publishes the rings at setup. */
-	return smp_load_acquire(&ready) && READ_ONCE(control->send_wait_us) &&
-		READ_ONCE(control->live);
+	return smp_load_acquire(&ready) && W32_READ(&control->send_wait_us) &&
+		W32_READ(&control->live);
 }
 
 int ant_register_command(u32 opcode, ant_command_handler fn, void *context)
@@ -358,16 +412,16 @@ static void service_commands(void)
 		 */
 		if (service_resume())
 			return;
-		error = ant_peek(&control->requests, region->request_data,
+		error = ant_peek(&control->requests, ANT_GUEST_PROFILE, region->request_data,
 			ANT_COMMAND_RING_SIZE, ANT_MAX_COMMAND_LEN, request_tail, &request_head_seen, &req);
 		if (error == -EAGAIN) return;
 		if (error) goto fault;
 		/* Reserve worst-case result space before invoking any side effect. */
-		error = ant_space(&control->responses, ANT_COMMAND_RING_SIZE, response_head,
+		error = ant_space(&control->responses, ANT_GUEST_PROFILE, ANT_COMMAND_RING_SIZE, response_head,
 			&response_tail_seen, ant_span(ANT_MAX_RESULT_LEN));
 		if (error == -ENOSPC) {
-			control->reply_stalls++;
-			control->health |= ANT_HEALTH_REPLY_FULL;
+			MOV_INC(&control->reply_stalls);
+			W32_OR(&control->health, ANT_HEALTH_REPLY_FULL);
 			return;
 		}
 		if (error) goto fault;
@@ -385,45 +439,45 @@ static void service_commands(void)
 			resp.payload_len = payload_len;
 		}
 		if (resp.status) {
-			control->bad_commands++;
-			control->health |= ANT_HEALTH_BAD_COMMAND;
+			MOV_INC(&control->bad_commands);
+			W32_OR(&control->health, ANT_HEALTH_BAD_COMMAND);
 		}
-		ant_publish(&control->responses, region->response_data, ANT_COMMAND_RING_SIZE,
+		ant_publish(&control->responses, ANT_GUEST_PROFILE, region->response_data, ANT_COMMAND_RING_SIZE,
 			    &response_head, &resp, command_result);
 		request_tail += ant_span(req.payload_len);
-		ANT_REL(&control->requests.tail, request_tail);
+		ant_pos_release(&control->requests.tail, ANT_GUEST_PROFILE, request_tail);
 	}
 	return;
 fault:
 	broken = true;
-	control->health |= ANT_HEALTH_RING_FAULT;
+	W32_OR(&control->health, ANT_HEALTH_RING_FAULT);
 }
 
 static void control_tick(struct work_struct *work)
 {
-	u64 heartbeat = ANT_ACQ(&control->host_heartbeat);
-	u32 timeout_ms = ANT_ACQ(&control->host_timeout_ms);
+	u64 heartbeat = MOV_ACQ(&control->host_heartbeat);
+	u32 timeout_ms = W32_ACQ(&control->host_timeout_ms);
 	u32 i;
 	service_resume();
 	if (!timeout_ms) timeout_ms = ANT_HOST_TIMEOUT_DEFAULT_MS;
 	if (timeout_ms > ANT_HOST_TIMEOUT_MAX_MS) {
-		control->health |= ANT_HEALTH_BAD_CONFIG;
-		timeout_ms = control->applied_host_timeout_ms;
+		W32_OR(&control->health, ANT_HEALTH_BAD_CONFIG);
+		timeout_ms = W32_GET(&control->applied_host_timeout_ms);
 	}
-	WRITE_ONCE(control->applied_host_timeout_ms, timeout_ms);
+	W32_ONCE(&control->applied_host_timeout_ms, timeout_ms);
 	if (heartbeat != last_heartbeat) {
 		last_heartbeat = heartbeat;
 		host_seen = jiffies;
 		host_attached = true;
 	}
-	control->live = host_attached && time_before(jiffies, host_seen + msecs_to_jiffies(timeout_ms));
-	if (host_attached && !control->live) control->health |= ANT_HEALTH_HOST_STALE;
+	W32_SET(&control->live, host_attached && time_before(jiffies, host_seen + msecs_to_jiffies(timeout_ms)));
+	if (host_attached && !W32_GET(&control->live)) W32_OR(&control->health, ANT_HEALTH_HOST_STALE);
 	for (i = 0; i < queue_count; i++) {
-		if (READ_ONCE(directory[i].dropped)) control->health |= ANT_HEALTH_OVERFLOW;
-		if (READ_ONCE(directory[i].fault)) control->health |= ANT_HEALTH_RING_FAULT;
+		if (MOV_READ(&directory[i].dropped)) W32_OR(&control->health, ANT_HEALTH_OVERFLOW);
+		if (W32_READ(&directory[i].fault)) W32_OR(&control->health, ANT_HEALTH_RING_FAULT);
 	}
 	service_commands();
-	ANT_REL(&control->guest_heartbeat, control->guest_heartbeat + 1);
+	MOV_REL(&control->guest_heartbeat, MOV_GET(&control->guest_heartbeat) + 1);
 	/* While a debugger is attached, or a finished process core is being read,
 	 * every request is a round trip the user waits for: poll at the next tick
 	 * instead of every ANT_POLL_MS.
@@ -490,9 +544,9 @@ retry:
 			goto retry;
 		}
 		cpus[index].data = page_address(cpus[index].pages);
-		directory[index].data_gpa = page_to_phys(cpus[index].pages);
-		directory[index].data_size = ring_size;
-		directory[index].cpu_id = cpu;
+		W64_SET(&directory[index].data_gpa, page_to_phys(cpus[index].pages));
+		W32_SET(&directory[index].data_size, ring_size);
+		W32_SET(&directory[index].cpu_id, cpu);
 		per_cpu_ptr(producers, cpu)->index = index++;
 	}
 	/*
@@ -506,28 +560,28 @@ retry:
 	 */
 	worker = alloc_ordered_workqueue("events_unbound", 0);
 	if (!worker) goto free_rings;
-	control->geometry.version = ANT_ABI;
-	control->geometry.session = get_random_u64() ?: 1;
-	control->geometry.size = ANT_CONTROL_SIZE;
-	control->geometry.queue_count = queue_count;
-	control->geometry.max_message_len = ANT_MAX_MESSAGE_LEN;
-	control->geometry.max_command_len = ANT_MAX_COMMAND_LEN;
-	control->geometry.max_result_len = ANT_MAX_RESULT_LEN;
-	control->applied_host_timeout_ms = ANT_HOST_TIMEOUT_DEFAULT_MS;
-	control->requests.data_gpa = page_to_phys(pages) + ANT_REQUEST_OFFSET;
-	control->requests.data_size = ANT_COMMAND_RING_SIZE;
-	control->responses.data_gpa = page_to_phys(pages) + ANT_RESPONSE_OFFSET;
-	control->responses.data_size = ANT_COMMAND_RING_SIZE;
-	ANT_REL(&control->geometry.magic, ANT_MAGIC);
-	boot->version = ANT_ABI;
-	boot->session = control->geometry.session;
-	boot->control_gpa = page_to_phys(pages);
-	boot->control_size = ANT_CONTROL_SIZE;
-	boot->profile = 1;
+	W32_SET(&control->geometry.version, ANT_GUEST_ABI);
+	W64_SET(&control->geometry.session, get_random_u64() ?: 1);
+	W32_SET(&control->geometry.size, ANT_CONTROL_SIZE);
+	W32_SET(&control->geometry.queue_count, queue_count);
+	W32_SET(&control->geometry.max_message_len, ANT_MAX_MESSAGE_LEN);
+	W32_SET(&control->geometry.max_command_len, ANT_MAX_COMMAND_LEN);
+	W32_SET(&control->geometry.max_result_len, ANT_MAX_RESULT_LEN);
+	W32_SET(&control->applied_host_timeout_ms, ANT_HOST_TIMEOUT_DEFAULT_MS);
+	W64_SET(&control->requests.data_gpa, page_to_phys(pages) + ANT_REQUEST_OFFSET);
+	W32_SET(&control->requests.data_size, ANT_COMMAND_RING_SIZE);
+	W64_SET(&control->responses.data_gpa, page_to_phys(pages) + ANT_RESPONSE_OFFSET);
+	W32_SET(&control->responses.data_size, ANT_COMMAND_RING_SIZE);
+	ANT_REL(&control->geometry.magic, ANT_TO_LE32(ANT_MAGIC));
+	W32_SET(&boot->version, ANT_GUEST_ABI);
+	W64_SET(&boot->session, W64_GET(&control->geometry.session));
+	W64_SET(&boot->control_gpa, page_to_phys(pages));
+	W32_SET(&boot->control_size, ANT_CONTROL_SIZE);
+	W32_SET(&boot->profile, ANT_GUEST_PROFILE);
 	host_seen = jiffies;
 	smp_store_release(&ready, true);
 	queue_delayed_work(worker, &control_work, 0);
-	ANT_REL(&boot->magic, ANT_MAGIC);
+	ANT_REL(&boot->magic, ANT_TO_LE32(ANT_MAGIC));
 	return 0;
 free_rings:
 	for (index = 0; index < queue_count; index++)

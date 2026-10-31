@@ -9,9 +9,23 @@
 #include "bootstrap_layout.h"
 #endif
 
-/* Wire profile: x86-64, little endian. Memory translation is supplied by host. */
+/* Memory translation is supplied by host. The layout below is the LP64 one
+ * (natural alignment, 64-bit fields at 8-byte offsets) on every guest.
+ * ABI 9: a 64-bit little-endian guest; every field is a native word.
+ * ABI 10: the same layout with every field little endian, for 32-bit and
+ * big-endian guests; the profile says how wide the moving words are.
+ */
 #define ANT_MAGIC 0x354e5441U
 #define ANT_ABI 9U
+#define ANT_ABI_WIRE_LE 10U
+/* ant_boot.profile bits. LP64 is always set. POS32 (ABI 10 only, a 32-bit
+ * guest, which has no 64-bit atomics): a 64-bit queue position, heartbeat,
+ * nonce, sequence or counter travels as its low 32 bits in the first four
+ * bytes of its field, the other four stay zero; positions are free-running
+ * modulo 2^32 and each reader widens one next to a position it knows (rings
+ * are at most ANT_TELEMETRY_RING_MAX, far below 2^31). */
+#define ANT_PROFILE_LP64 1U
+#define ANT_PROFILE_POS32 2U
 #define ANT_MAX_CPUS 256U
 #define ANT_CONTROL_SIZE 1048576U
 #define ANT_REQUEST_OFFSET 4096U

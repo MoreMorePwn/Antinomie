@@ -45,7 +45,7 @@ struct ant_client {
 	enum ant_poll_mode poll_mode;
 	unsigned poll_sleep_us, poll_spin_us;
 	__u64 session, command_head, command_tail_seen, sequence;
-	__u32 abi;
+	__u32 abi, profile;
 	__u64 guest_hb, guest_changed, heartbeat_at;
 	__u64 control_gpa, attachment;
 	bool pending, suspended;
@@ -61,6 +61,22 @@ static void pause_us(unsigned us)
 {
 	struct timespec t = { .tv_sec = us / 1000000, .tv_nsec = (us % 1000000) * 1000 };
 	nanosleep(&t, NULL);
+}
+/* A moving 64-bit word of the guest's transport profile (abi.h): with POS32
+ * only its low 32 bits travel, in the field's first four bytes. Positions go
+ * through ant_pos_acquire/ant_pos_release (queue.h) instead. */
+static __u64 mov_acq(const struct ant_client *c, __u64 *field)
+{
+	if (c->profile & ANT_PROFILE_POS32)
+		return ANT_ACQ((__u32 *)field);
+	return ANT_ACQ(field);
+}
+static void mov_rel(const struct ant_client *c, __u64 *field, __u64 value)
+{
+	if (c->profile & ANT_PROFILE_POS32)
+		ANT_REL((__u32 *)field, (__u32)value);
+	else
+		ANT_REL(field, value);
 }
 static int failed(struct ant_client *c, int error)
 {
@@ -78,15 +94,15 @@ static int tick(struct ant_client *c)
 	if (ANT_ACQ(&c->boot->magic) != ANT_MAGIC || ANT_ACQ(&c->boot->session) != c->session ||
 	    ANT_ACQ(&c->control->geometry.magic) != ANT_MAGIC || ANT_ACQ(&c->control->geometry.session) != c->session)
 		return failed(c, -ESTALE);
-	if (c->abi >= 9 && (ANT_ACQ(&c->boot->owner) != c->attachment ||
-	    ANT_ACQ(&c->boot->resume_request) != c->attachment ||
-	    ANT_ACQ(&c->boot->resume_ack) != c->attachment)) return failed(c, -ESTALE);
+	if (c->abi >= 9 && (mov_acq(c, &c->boot->owner) != c->attachment ||
+	    mov_acq(c, &c->boot->resume_request) != c->attachment ||
+	    mov_acq(c, &c->boot->resume_ack) != c->attachment)) return failed(c, -ESTALE);
 	t = now_ns();
 	if (t - c->heartbeat_at >= 10000000ULL) {
-		ANT_REL(&c->control->host_heartbeat, t);
+		mov_rel(c, &c->control->host_heartbeat, t);
 		c->heartbeat_at = t;
 	}
-	hb = ANT_ACQ(&c->control->guest_heartbeat);
+	hb = mov_acq(c, &c->control->guest_heartbeat);
 	if (hb < c->guest_hb) return failed(c, -ESTALE);
 	if (hb != c->guest_hb) { c->guest_hb = hb; c->guest_changed = t; }
 	if (!c->guest_paused && t - c->guest_changed > (__u64)c->health_ms * 1000000)
@@ -238,14 +254,20 @@ int ant_open_pending(const struct ant_options *options, struct ant_client **out)
 	}
 	memcpy(&boot, c->boot, sizeof(boot));
 	error = -EPROTO;
-	/* ABI 7 guests (fixed 256 KiB rings, no send wait) remain supported. */
-	if (boot.magic != ANT_MAGIC || (boot.version != ANT_ABI && boot.version != 8 && boot.version != 7) || boot.profile != 1 ||
+	/* ABI 7 guests (fixed 256 KiB rings, no send wait) remain supported. ABI 10
+	 * (little-endian words, the layout of 9) is a 32-bit (POS32) or big-endian
+	 * guest; this host is little endian, so only POS32 changes how it reads. */
+	if (boot.magic != ANT_MAGIC ||
+	    (boot.version == ANT_ABI_WIRE_LE ?
+	     boot.profile != ANT_PROFILE_LP64 && boot.profile != (ANT_PROFILE_LP64 | ANT_PROFILE_POS32) :
+	     (boot.version != ANT_ABI && boot.version != 8 && boot.version != 7) || boot.profile != ANT_PROFILE_LP64) ||
 	    !boot.session || boot.control_size != ANT_CONTROL_SIZE ||
 	    boot.control_gpa > UINT64_MAX - ANT_CONTROL_SIZE ||
 	    overlap(boot.control_gpa, ANT_CONTROL_SIZE, c->bootstrap_gpa, ANT_BOOT_SIZE)) goto fail;
 	if (boot.version < 9 && boot.owner) { error = -EALREADY; goto fail; }
 	c->session = boot.session;
 	c->abi = boot.version;
+	c->profile = boot.profile;
 	c->control_gpa = boot.control_gpa;
 	error = map_gpa(c, boot.control_gpa, ANT_CONTROL_SIZE, PROT_READ | PROT_WRITE, &mapping);
 	if (error) goto fail;
@@ -326,7 +348,7 @@ static int validate_resume_layout(struct ant_client *c)
 
 	if (ANT_ACQ(&b->magic) != ANT_MAGIC || b->version != c->abi ||
 	    b->session != c->session || b->control_gpa != c->control_gpa ||
-	    b->control_size != ANT_CONTROL_SIZE || b->profile != 1 ||
+	    b->control_size != ANT_CONTROL_SIZE || b->profile != c->profile ||
 	    ANT_ACQ(&g->magic) != ANT_MAGIC || g->version != c->abi ||
 	    g->session != c->session || g->queue_count != c->count ||
 	    g->size != ANT_CONTROL_SIZE || g->max_message_len != ANT_MAX_MESSAGE_LEN ||
@@ -359,14 +381,15 @@ int ant_resume_begin(struct ant_client *c)
 		do { got = getrandom(&nonce, sizeof(nonce), 0); } while (got < 0 && errno == EINTR);
 		if (got < 0) return -errno;
 		if (got != sizeof(nonce)) return -EIO;
-	} while (!nonce || nonce == c->attachment || nonce == ANT_ACQ(&c->boot->resume_request) ||
-		 nonce == ANT_ACQ(&c->boot->resume_ack) || nonce == ANT_ACQ(&c->boot->owner));
+		if (c->profile & ANT_PROFILE_POS32) nonce = (__u32)nonce;
+	} while (!nonce || nonce == c->attachment || nonce == mov_acq(c, &c->boot->resume_request) ||
+		 nonce == mov_acq(c, &c->boot->resume_ack) || nonce == mov_acq(c, &c->boot->owner));
 	c->attachment = nonce;
 	c->pending = true;
 	/* A fresh namespace fences queued and already executing commands; callers
 	 * must abandon unresolved results, rather than automatically replay them. */
-	ANT_REL(&c->boot->resume_sequence_floor, c->sequence);
-	ANT_REL(&c->boot->resume_request, nonce);
+	mov_rel(c, &c->boot->resume_sequence_floor, c->sequence);
+	mov_rel(c, &c->boot->resume_request, nonce);
 	return 0;
 }
 
@@ -406,38 +429,39 @@ int ant_resume_finish(struct ant_client *c, int timeout_ms, struct ant_resume_re
 		if (__atomic_load_n(&c->cancelled, __ATOMIC_RELAXED)) return -ECANCELED;
 		error = validate_resume_layout(c);
 		if (error) return failed(c, error);
-		if (ANT_ACQ(&c->boot->resume_request) != c->attachment) return failed(c, -ESTALE);
-		if (ANT_ACQ(&c->boot->resume_ack) == c->attachment) break;
+		if (mov_acq(c, &c->boot->resume_request) != c->attachment) return failed(c, -ESTALE);
+		if (mov_acq(c, &c->boot->resume_ack) == c->attachment) break;
 		if (now_ns() >= deadline) return -ETIMEDOUT;
 		pause_us(1000);
 	}
 	if (c->boot->resume_status) return failed(c,
 		c->boot->resume_status < 0 ? c->boot->resume_status : -EPROTO);
-	if (ANT_ACQ(&c->boot->owner) != c->attachment) return failed(c, -ESTALE);
-	head = ANT_ACQ(&c->control->requests.head);
-	tail = ANT_ACQ(&c->control->requests.tail);
+	if (mov_acq(c, &c->boot->owner) != c->attachment) return failed(c, -ESTALE);
+	/* Positions start afresh here: with POS32 the 32-bit values themselves. */
+	head = mov_acq(c, &c->control->requests.head);
+	tail = mov_acq(c, &c->control->requests.tail);
 	if ((head & 7) || head != tail) return failed(c, -EPROTO);
 	c->command_head = head;
 	c->command_tail_seen = tail;
-	head = ANT_ACQ(&c->control->responses.head);
-	tail = ANT_ACQ(&c->control->responses.tail);
+	head = mov_acq(c, &c->control->responses.head);
+	tail = ant_pos_acquire(&c->control->responses.tail, c->profile, head, 0);
 	if ((head & 7) || (tail & 7) || tail > head || head - tail > ANT_COMMAND_RING_SIZE)
 		return failed(c, -EPROTO);
 	c->replies.tail = head;
 	c->replies.seen_head = head;
-	ANT_REL(&c->control->responses.tail, head);
+	ant_pos_release(&c->control->responses.tail, c->profile, head);
 	for (i = 0; i < c->count; i++) {
 		struct reader *r = &c->readers[i];
-		tail = ANT_ACQ(&r->q->tail);
-		head = ANT_ACQ(&r->q->head);
+		tail = mov_acq(c, &r->q->tail);
+		head = ant_pos_acquire(&r->q->head, c->profile, tail, 1);
 		if ((head & 7) || (tail & 7) || tail > head || head - tail > r->size)
 			return failed(c, -EPROTO);
 		r->tail = tail;
 		r->seen_head = head;
 		r->head_since = 0;
 	}
-	c->sequence = c->boot->resume_sequence_ack;
-	c->guest_hb = ANT_ACQ(&c->control->guest_heartbeat);
+	c->sequence = mov_acq(c, &c->boot->resume_sequence_ack);
+	c->guest_hb = mov_acq(c, &c->control->guest_heartbeat);
 	c->guest_changed = now_ns();
 	c->heartbeat_at = 0;
 	c->next = 0;
@@ -445,13 +469,13 @@ int ant_resume_finish(struct ant_client *c, int timeout_ms, struct ant_resume_re
 	c->pending = false;
 	c->suspended = false;
 	*report = (struct ant_resume_report){ c->attachment, c->sequence,
-		c->boot->discarded_request_bytes, c->boot->discarded_reply_bytes };
+		mov_acq(c, &c->boot->discarded_request_bytes), mov_acq(c, &c->boot->discarded_reply_bytes) };
 	return tick(c);
 }
 
 static int peek_telemetry(struct ant_client *c, struct reader *r, struct ant_message *msg)
 {
-	int error = ant_peek(r->q, r->data, r->size, ANT_MAX_MESSAGE_LEN,
+	int error = ant_peek(r->q, c->profile, r->data, r->size, ANT_MAX_MESSAGE_LEN,
 		r->tail, &r->seen_head, msg);
 	if (error) return failed(c, error);
 	if (msg->opcode) return failed(c, -EPROTO);
@@ -463,7 +487,7 @@ static int peek_telemetry(struct ant_client *c, struct reader *r, struct ant_mes
 static int peek_replies(struct ant_client *c, struct ant_message *msg)
 {
 	struct reader *r = &c->replies;
-	int error = ant_peek(r->q, r->data, ANT_COMMAND_RING_SIZE, ANT_MAX_RESULT_LEN,
+	int error = ant_peek(r->q, c->profile, r->data, ANT_COMMAND_RING_SIZE, ANT_MAX_RESULT_LEN,
 		r->tail, &r->seen_head, msg);
 	if (error) return failed(c, error);
 	if (!msg->id || msg->id > c->sequence) return failed(c, -EPROTO);
@@ -538,7 +562,7 @@ static int take_telemetry(struct ant_client *c, unsigned index, const struct ant
 	}
 	ant_copy_out(r->data, r->size, r->tail + sizeof(*msg), dst, msg->payload_len);
 	r->tail += ant_span(msg->payload_len);
-	ANT_REL(&r->q->tail, r->tail);
+	ant_pos_release(&r->q->tail, c->profile, r->tail);
 	c->last_cpu = r->cpu_id;
 	c->last_wait_ns = now > r->head_since && r->head_since ? now - r->head_since : 0;
 	r->head_since = 0;
@@ -645,7 +669,7 @@ int ant_ring_state(struct ant_client *c, unsigned index, uint32_t *cpu_id, uint3
 	r = &c->readers[index];
 	*cpu_id = r->cpu_id;
 	*size = r->size;
-	*head = ANT_ACQ(&r->q->head);
+	*head = ant_pos_acquire(&r->q->head, c->profile, r->tail, 1);
 	*tail = r->tail;
 	return 0;
 }
@@ -660,11 +684,11 @@ int ant_command_send(struct ant_client *c, uint32_t opcode,
 	error = tick(c);
 	if (error) return error;
 	if (c->sequence == UINT64_MAX) return -EOVERFLOW;
-	error = ant_space(&c->control->requests, ANT_COMMAND_RING_SIZE, c->command_head,
+	error = ant_space(&c->control->requests, c->profile, ANT_COMMAND_RING_SIZE, c->command_head,
 		&c->command_tail_seen, ant_span(payload_len));
 	if (error) return failed(c, error);
 	msg.id = ++c->sequence;
-	ant_publish(&c->control->requests, c->region->request_data, ANT_COMMAND_RING_SIZE,
+	ant_publish(&c->control->requests, c->profile, c->region->request_data, ANT_COMMAND_RING_SIZE,
 		&c->command_head, &msg, args);
 	*request_id = msg.id;
 	return 0;
@@ -687,7 +711,7 @@ int ant_result_read(struct ant_client *c, uint64_t *id, int32_t *status,
 	if (capacity < msg.payload_len) return -ENOBUFS;
 	ant_copy_out(r->data, ANT_COMMAND_RING_SIZE, r->tail + sizeof(msg), dst, msg.payload_len);
 	r->tail += ant_span(msg.payload_len);
-	ANT_REL(&r->q->tail, r->tail);
+	ant_pos_release(&r->q->tail, c->profile, r->tail);
 	*id = msg.id;
 	*status = msg.status;
 	return 0;
@@ -702,17 +726,17 @@ int ant_get_stats(struct ant_client *c, struct ant_stats *stats)
 	if (error) return error;
 	memset(stats, 0, sizeof(*stats));
 	for (i = 0; i < c->count; i++) {
-		stats->attempted += ANT_ACQ(&c->readers[i].q->attempted);
-		stats->dropped += ANT_ACQ(&c->readers[i].q->dropped);
-		stats->waits += ANT_ACQ(&c->readers[i].q->waits);
-		stats->wait_ns += ANT_ACQ(&c->readers[i].q->wait_ns);
+		stats->attempted += mov_acq(c, &c->readers[i].q->attempted);
+		stats->dropped += mov_acq(c, &c->readers[i].q->dropped);
+		stats->waits += mov_acq(c, &c->readers[i].q->waits);
+		stats->wait_ns += mov_acq(c, &c->readers[i].q->wait_ns);
 	}
 	stats->abi = c->abi;
 	stats->ring_size = c->count ? c->readers[0].size : 0;
 	stats->send_wait_us = c->abi >= 8 ? ANT_ACQ(&c->control->send_wait_us) : 0;
 	stats->queue_count = c->count;
-	stats->bad_commands = ANT_ACQ(&c->control->bad_commands);
-	stats->reply_stalls = ANT_ACQ(&c->control->reply_stalls);
+	stats->bad_commands = mov_acq(c, &c->control->bad_commands);
+	stats->reply_stalls = mov_acq(c, &c->control->reply_stalls);
 	stats->health = ANT_ACQ(&c->control->health);
 	stats->live = ANT_ACQ(&c->control->live);
 	stats->host_timeout_ms = ANT_ACQ(&c->control->applied_host_timeout_ms);
@@ -723,7 +747,7 @@ int ant_guest_heartbeat(struct ant_client *c, uint64_t *heartbeat)
 {
 	if (!c || !heartbeat) return -EINVAL;
 	if (__atomic_load_n(&c->cancelled, __ATOMIC_RELAXED)) return -ECANCELED;
-	*heartbeat = ANT_ACQ(&c->control->guest_heartbeat);
+	*heartbeat = mov_acq(c, &c->control->guest_heartbeat);
 	return 0;
 }
 
@@ -764,7 +788,7 @@ int ant_set_guest_paused(struct ant_client *c, int paused)
 {
 	if (!c) return -EINVAL;
 	if (c->guest_paused && !paused) {
-		c->guest_hb = ANT_ACQ(&c->control->guest_heartbeat);
+		c->guest_hb = mov_acq(c, &c->control->guest_heartbeat);
 		c->guest_changed = now_ns();
 	}
 	c->guest_paused = !!paused;

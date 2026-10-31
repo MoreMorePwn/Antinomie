@@ -51,3 +51,6 @@
 
 # Static analysis in 0.8.0: specimens up to 128 MiB (contract revision 19)
 0025-antinomie-raise-the-specimen-limit-to-128-mib.patch
+
+# Multi-architecture contract (revision 20): the guest's architecture and a little-endian transport
+0030-antinomie-report-the-guest-s-architecture-and-carry-the-transport-little-endian-on-every-guest.patch

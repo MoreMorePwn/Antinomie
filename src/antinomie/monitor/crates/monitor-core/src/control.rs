@@ -36,7 +36,7 @@ pub(crate) const RESOURCES_SIZE: usize = 96;
 /// [`REVISION`] follows it until a later revision is added.
 pub(crate) const LARGE_SPECIMEN_REVISION: u32 = 19;
 /// Guest contract revision this host implements (`ANTC_REVISION`).
-pub const REVISION: u32 = LARGE_SPECIMEN_REVISION;
+pub const REVISION: u32 = ARCH_INFO_REVISION;
 pub(crate) const PROCESS_LIST: u32 = 0x1050;
 pub(crate) const CAPTURE_ATTACH: u32 = 0x1051;
 pub(crate) const CAPTURE_ALL: u32 = 0x1052;
