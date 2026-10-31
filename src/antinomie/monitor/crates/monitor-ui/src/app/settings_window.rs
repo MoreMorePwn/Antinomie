@@ -507,15 +507,7 @@ impl MonitorApp {
             });
             ui.end_row();
         });
-        ui.add_space(6.0);
-        ui.label(theme::section_title(ui, "Size limits"));
-        hint(
-            ui,
-            "What a check keeps and reads before it says a bound cut its result short. A warning's Analysis settings button leads here. A change applies to analyses started afterwards; a check can be run again from its tab.",
-        );
-        self.analysis_limit_fields(ui);
-        ui.add_space(6.0);
-        hint(ui, &antinomie_monitor_core::fixed_limits_text());
+
         ui.add_space(6.0);
         ui.separator();
         form_grid("settings_debugger_console", ui).show(ui, |ui| {
@@ -535,6 +527,15 @@ impl MonitorApp {
             });
             ui.end_row();
         });
+        ui.add_space(6.0);
+        ui.label(theme::section_title(ui, "Size limits"));
+        hint(
+            ui,
+            "What a check keeps and reads before it says a bound cut its result short. A warning's Analysis settings button leads here. A change applies to analyses started afterwards; a check can be run again from its tab.",
+        );
+        self.analysis_limit_fields(ui);
+        ui.add_space(6.0);
+        hint(ui, &antinomie_monitor_core::fixed_limits_text());
     }
 
     fn disks_page(&mut self, ui: &mut egui::Ui) {

@@ -755,6 +755,39 @@ fn main() {
     }
 }
 
+/// The VM's stealth profile from `plan.vm.stealth`: a preset name or a profile.
+fn stealth_profile(
+    vm_spec: &Value,
+) -> Result<antinomie_monitor_core::stealth::StealthProfile, String> {
+    use antinomie_monitor_core::stealth::{HostCpu, MACHINES, StealthPreset, StealthProfile};
+    Ok(match vm_spec.get("stealth") {
+        None => StealthProfile::default(),
+        Some(Value::String(spec)) => {
+            // "laptop:dell-latitude-5420" pins the machine the preset copies.
+            let (kind, machine) = spec.split_once(':').unwrap_or((spec, ""));
+            let preset = match kind {
+                "desktop" => StealthPreset::RealisticDesktop,
+                "laptop" => StealthPreset::RealisticLaptop,
+                "server" => StealthPreset::RealisticServer,
+                "transparent" => StealthPreset::Transparent,
+                other => return Err(format!("plan.vm.stealth: unknown preset {other}")),
+            };
+            let mut profile = StealthProfile::default().for_preset_on(preset, &HostCpu::detect());
+            if !machine.is_empty() {
+                let machine = MACHINES
+                    .iter()
+                    .find(|known| known.id == machine)
+                    .ok_or_else(|| format!("plan.vm.stealth: unknown machine {machine}"))?;
+                profile.use_machine(machine);
+            }
+            profile
+        }
+        Some(value) => {
+            serde_json::from_value(value.clone()).map_err(|e| format!("plan.vm.stealth: {e}"))?
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -798,37 +831,4 @@ mod tests {
             assert!(qmp_option(invalid).is_err());
         }
     }
-}
-
-/// The VM's stealth profile from `plan.vm.stealth`: a preset name or a profile.
-fn stealth_profile(
-    vm_spec: &Value,
-) -> Result<antinomie_monitor_core::stealth::StealthProfile, String> {
-    use antinomie_monitor_core::stealth::{HostCpu, MACHINES, StealthPreset, StealthProfile};
-    Ok(match vm_spec.get("stealth") {
-        None => StealthProfile::default(),
-        Some(Value::String(spec)) => {
-            // "laptop:dell-latitude-5420" pins the machine the preset copies.
-            let (kind, machine) = spec.split_once(':').unwrap_or((spec, ""));
-            let preset = match kind {
-                "desktop" => StealthPreset::RealisticDesktop,
-                "laptop" => StealthPreset::RealisticLaptop,
-                "server" => StealthPreset::RealisticServer,
-                "transparent" => StealthPreset::Transparent,
-                other => return Err(format!("plan.vm.stealth: unknown preset {other}")),
-            };
-            let mut profile = StealthProfile::default().for_preset_on(preset, &HostCpu::detect());
-            if !machine.is_empty() {
-                let machine = MACHINES
-                    .iter()
-                    .find(|known| known.id == machine)
-                    .ok_or_else(|| format!("plan.vm.stealth: unknown machine {machine}"))?;
-                profile.use_machine(machine);
-            }
-            profile
-        }
-        Some(value) => {
-            serde_json::from_value(value.clone()).map_err(|e| format!("plan.vm.stealth: {e}"))?
-        }
-    })
 }

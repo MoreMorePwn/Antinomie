@@ -97,7 +97,7 @@ pub(super) fn embedded(section: &mut AnalysisSection, specimen_len: u64) {
             LimitSetting::ToolOutput,
             format!(
                 "binwalk printed more than the {} MiB the analysis reads; the rest was ignored.",
-                super::limits::tool_output() * 4 >> 20
+                (super::limits::tool_output() * 4) >> 20
             ),
         );
     }
