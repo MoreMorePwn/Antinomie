@@ -97,6 +97,35 @@ pub(crate) fn line(ui: &mut egui::Ui, text: &RouteText) {
     });
 }
 
+/// The Samples window's warning for a VM whose runs can leave the host, or
+/// `None` when they cannot. NAT reaches the network and the Internet; a
+/// Routed VM reaches the Internet when its default route (Settings > Network
+/// routes) is a live one, and the text says which. A run can still choose
+/// another route in its form, so it speaks of the default.
+pub(crate) fn internet_warning(network: VmNetwork, default: RouteKind) -> Option<String> {
+    match network {
+        VmNetwork::Nat => Some(
+            "NAT is on for this VM: a sample run there can reach your network and the Internet."
+                .into(),
+        ),
+        VmNetwork::Routed => {
+            let how = match default {
+                RouteKind::Internet => "straight to the real Internet from this computer",
+                RouteKind::Tor => "to the Internet through Tor",
+                RouteKind::Vpn => "to the Internet through your WireGuard tunnel",
+                RouteKind::Socks5 => "to the Internet through your SOCKS5 proxy",
+                RouteKind::Drop | RouteKind::InetSim => return None,
+            };
+            Some(format!(
+                "This VM is Routed and its default route is {}: a sample run there can reach \
+                 {how}. Choose another route in the run form to keep it off the Internet.",
+                default.label()
+            ))
+        }
+        VmNetwork::Isolated | VmNetwork::Disconnected => None,
+    }
+}
+
 /// What the Run form needs to offer a route.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct RouteChoice {
@@ -295,6 +324,28 @@ mod tests {
         routed.route = Some(RouteKind::Drop);
         draw(&mut routed, RouteChoice::new(VmNetwork::Routed, &config));
         assert_eq!(routed.route, Some(RouteKind::Drop));
+    }
+
+    #[test]
+    fn the_samples_warning_covers_nat_and_a_routed_vm_with_a_live_default_route() {
+        let nat = internet_warning(VmNetwork::Nat, RouteKind::Drop).unwrap();
+        assert!(nat.contains("NAT") && nat.contains("Internet"), "{nat}");
+        let internet = internet_warning(VmNetwork::Routed, RouteKind::Internet).unwrap();
+        assert!(internet.contains("default route is Internet"), "{internet}");
+        for (kind, word) in [
+            (RouteKind::Tor, "Tor"),
+            (RouteKind::Vpn, "WireGuard"),
+            (RouteKind::Socks5, "SOCKS5"),
+        ] {
+            let text = internet_warning(VmNetwork::Routed, kind).unwrap();
+            assert!(text.contains(kind.label()) && text.contains(word), "{text}");
+        }
+        for kind in [RouteKind::Drop, RouteKind::InetSim] {
+            assert_eq!(internet_warning(VmNetwork::Routed, kind), None);
+        }
+        for network in [VmNetwork::Isolated, VmNetwork::Disconnected] {
+            assert_eq!(internet_warning(network, RouteKind::Internet), None);
+        }
     }
 
     #[test]

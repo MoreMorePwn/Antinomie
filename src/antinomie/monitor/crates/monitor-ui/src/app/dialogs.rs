@@ -107,7 +107,12 @@ impl MonitorApp {
                     curl: &self.options.curl,
                     running: self.running(),
                     vm_name: vm.as_ref().map(|vm| vm.name.as_str()),
-                    nat: vm.as_ref().is_some_and(|vm| vm.nat),
+                    network_warning: vm.as_ref().and_then(|vm| {
+                        crate::route_ui::internet_warning(
+                            vm.network(),
+                            self.routes.config.default_route,
+                        )
+                    }),
                     font_size: self.settings.font_size,
                 },
             );

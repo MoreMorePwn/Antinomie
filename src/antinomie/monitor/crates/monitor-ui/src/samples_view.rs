@@ -59,8 +59,9 @@ pub(crate) struct SamplesContext<'a> {
     /// The selected VM is running: samples can be sent into it.
     pub running: bool,
     pub vm_name: Option<&'a str>,
-    /// The selected VM reaches the network.
-    pub nat: bool,
+    /// What to warn about when the selected VM's runs can reach the network
+    /// (see [`crate::route_ui::internet_warning`]).
+    pub network_warning: Option<String>,
     pub font_size: f32,
 }
 
@@ -806,12 +807,9 @@ impl SamplesView {
                              folder and are decrypted only in memory, to be sent into the VM. Nothing is run on this computer. Use a VM you can throw \
                              away, or take a snapshot first.",);
                 });
-                if cx.nat {
+                if let Some(text) = &cx.network_warning {
                     ui.add_space(4.0);
-                    crate::activity::warning(ui,
-                        "NAT is on for this VM: a sample run there can reach your network and \
-                         the Internet.",
-                    );
+                    crate::activity::warning(ui, text);
                 }
                 if let Some((message, _)) = &self.status {
                     ui.add_space(4.0);
@@ -1214,6 +1212,37 @@ mod tests {
     }
 
     #[test]
+    fn the_window_shows_the_network_warning_it_is_given_and_none_otherwise() {
+        let data = std::env::temp_dir();
+        let shown = |warning: Option<String>| {
+            let cx = SamplesContext {
+                data_dir: &data,
+                curl: Path::new("curl"),
+                running: false,
+                vm_name: None,
+                network_warning: warning,
+                font_size: 14.0,
+            };
+            let mut view = SamplesView::default();
+            let ctx = egui::Context::default();
+            let output = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| view.warning(ui, &cx));
+            });
+            crate::app::tests::texts(&output)
+                .into_iter()
+                .map(|(text, _)| text)
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        assert!(!shown(None).contains("default route"));
+        let text = crate::route_ui::internet_warning(
+            antinomie_monitor_core::api::VmNetwork::Routed,
+            antinomie_monitor_core::route::RouteKind::Internet,
+        );
+        assert!(shown(text).contains("default route is Internet"));
+    }
+
+    #[test]
     fn the_catalog_waits_for_the_warning_to_be_accepted() {
         let data = std::env::temp_dir().join(format!(
             "ant-samples-view-{}-{}",
@@ -1229,7 +1258,7 @@ mod tests {
             curl: Path::new("/usr/bin/curl"),
             running: false,
             vm_name: None,
-            nat: false,
+            network_warning: None,
             font_size: 14.0,
         };
         let mut view = SamplesView::default();
@@ -1312,7 +1341,7 @@ mod tests {
                     curl: Path::new("curl"),
                     running: true,
                     vm_name: Some("Debian QA"),
-                    nat: false,
+                    network_warning: None,
                     font_size: 16.0,
                 };
                 egui::CentralPanel::default().show(ctx, |_| {});
