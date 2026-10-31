@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! wireproxy as the VPN route starts it, with stand-in programs.
-use super::{WAIT, no_data, scratch};
+use super::{
+    WAIT,
+    guest::{Connect, Guest, Tcp},
+    no_data, scratch,
+};
 use crate::route::{
     Gateway, GatewayNet, RouteConfig, RouteKind, config::WireproxyLaunch, managed::start_wireproxy,
 };
@@ -185,5 +189,73 @@ fn a_tunnel_that_does_not_answer_its_check_stops_the_run_and_wireproxy() {
         );
         std::thread::sleep(Duration::from_millis(50));
     }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_wireproxy_that_stops_during_a_run_is_reported_once_and_its_route_drops_everything() {
+    let dir = scratch("vpn-dies");
+    let port = free_port();
+    // The stand-in exits with status 7 when the test creates `stop`.
+    let stop = dir.join("stop");
+    let watcher = format!(
+        "import os, time\ndef watch():\n    while not os.path.exists({:?}): time.sleep(0.05)\n    os._exit(7)\nthreading.Thread(target=watch, daemon=True).start()\nwhile True:\n    c, _ = srv.accept()",
+        stop.display().to_string()
+    );
+    let mut config = RouteConfig::default();
+    config.vpn.wireproxy = script(
+        &dir,
+        "wireproxy",
+        &FAKE_WIREPROXY.replace("while True:\n    c, _ = srv.accept()", &watcher),
+    )
+    .display()
+    .to_string();
+    config.vpn.config = config_file(&dir, port).display().to_string();
+    config.vpn.probe = "probe.example:443".into();
+    let net = GatewayNet::from_nat(&crate::stealth::NatNetwork::default()).unwrap();
+    let gateway = Gateway::start(&dir, net).unwrap();
+    let mut guest = Guest::connect(gateway.socket_path());
+    gateway
+        .claim("run1", config.spec(no_data(), RouteKind::Vpn).unwrap())
+        .unwrap();
+    assert_eq!(gateway.helper_stopped(), None, "wireproxy runs");
+    let target = std::net::Ipv4Addr::new(192, 0, 2, 10);
+    let (_tcp, state) = Tcp::open(&mut guest, target, 80, WAIT);
+    assert_eq!(state, Connect::Open, "the tunnel carries the run's traffic");
+    std::fs::write(&stop, b"").unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let reason = loop {
+        if let Some(reason) = gateway.helper_stopped() {
+            break reason;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the stopped wireproxy was not noticed"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert!(reason.contains("went down during the run"), "{reason}");
+    assert!(reason.contains("wireproxy stopped"), "{reason}");
+    assert!(reason.contains('7'), "the exit status is named: {reason}");
+    assert_eq!(gateway.helper_stopped(), None, "said once");
+    // The run still holds the route, which now lets nothing out, even if
+    // something else listened on wireproxy's port.
+    assert_eq!(gateway.kind(), RouteKind::Vpn);
+    let _taken = std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
+    let (_tcp, state) = Tcp::open(&mut guest, target, 80, Duration::from_millis(600));
+    assert_eq!(
+        state,
+        Connect::Silent,
+        "nothing leaves after the tunnel died"
+    );
+    // Another run cannot join a route that went down.
+    let error = gateway
+        .claim("run2", config.spec(no_data(), RouteKind::Vpn).unwrap())
+        .unwrap_err();
+    assert!(error.contains("went down during another run"), "{error}");
+    // The last run out puts the gateway back on Drop; the next claim starts afresh.
+    gateway.release("run1");
+    assert_eq!(gateway.kind(), RouteKind::Drop);
+    drop(gateway);
     let _ = std::fs::remove_dir_all(dir);
 }

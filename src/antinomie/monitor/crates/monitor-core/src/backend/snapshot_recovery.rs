@@ -72,6 +72,11 @@ struct HostCheckpoint {
     /// doing it after a reconnect, so the next segment says so too.
     #[serde(default)]
     tracer_hashing: BTreeMap<String, u32>,
+    /// The runs that held their route on the VM's gateway, by run id, with
+    /// the gateway's counters when each claimed it. Absent in a checkpoint
+    /// written before 0.8.0.
+    #[serde(default)]
+    route_claims: Option<BTreeMap<String, crate::route::RouteStats>>,
 }
 #[derive(Serialize, Deserialize)]
 struct CaptureCheckpoint {
@@ -179,6 +184,15 @@ impl Session {
                 .filter(|run| run.tracer_hashing != 0)
                 .map(|run| (run.summary.id.clone(), run.tracer_hashing))
                 .collect(),
+            route_claims: Some(
+                self.run_artifacts
+                    .values()
+                    .filter_map(|owner| {
+                        let claim = owner.route_claim?;
+                        Some((owner.summary.run_id.clone(), claim.baseline))
+                    })
+                    .collect(),
+            ),
             core_handles: self
                 .run_artifacts
                 .values()
@@ -333,13 +347,26 @@ impl Session {
                 }
             }
             owner.tree_complete = tree_complete;
-            if run.summary.route.as_ref().is_some_and(|route| {
-                route.via == crate::route::RouteVia::Gateway
-                    && route.kind != crate::route::RouteKind::Drop
-            }) {
-                // The restored VM's gateway starts on Drop: a restored run
-                // keeps no route it had (the record says what it used before).
-                owner.issue("snapshot recovery does not carry the run's network route over; the restored VM's traffic is dropped".into());
+            // The run's route, before the guest runs: taken over on a
+            // reconnect, claimed again on a restored snapshot's new gateway.
+            let held = match &checkpoint.route_claims {
+                Some(claims) => claims.get(&source_run_id).copied(),
+                // An older checkpoint does not say: a live run held it.
+                None => (!tree_complete).then(crate::route::RouteStats::default),
+            };
+            match super::run_route::restored_route(
+                options,
+                &vm,
+                process.gateway.as_ref(),
+                &mut run.summary,
+                held,
+                reconnect,
+            ) {
+                Ok(claim) => {
+                    owner.route_claim = claim;
+                    owner.summary.route = run.summary.route.clone();
+                }
+                Err(error) => owner.issue(error),
             }
             if tree_complete && run.summary.request.memory_dump_on_exit {
                 owner.summary.memory_state = RunArtifactState::Interrupted;

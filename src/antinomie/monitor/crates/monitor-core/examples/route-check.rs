@@ -21,8 +21,11 @@
 //!   run network capture, InetSim, Tor, VPN, SOCKS5), the toolbar network
 //!   capture, and the failure paths: a SOCKS5 proxy that is down, a VPN
 //!   whose configuration file is missing, a Tor program that does not
-//!   exist (each must fail before the run exists), and a program that does
-//!   not exist (the run is listed as failed to start).
+//!   exist (each must fail before the run exists), a program that does
+//!   not exist (the run is listed as failed to start), the VPN route's
+//!   wireproxy dying during a run (the run and the user are told, nothing
+//!   leaves afterwards, no other run joins it) and a full snapshot restored
+//!   while a run holds the InetSim route (the restored run gets it back).
 //! * nat: NAT network with the same profile: the Internet works, the
 //!   metadata address is silent, and a route cannot be chosen.
 //! * none: no network card: no route, no capture, nothing reaches out.
@@ -54,6 +57,10 @@ const NAME: &str = "example.com";
 const FALLBACK_IP: &str = "1.1.1.1";
 const SOCKS_USER: &str = "routecheck";
 const SOCKS_PASSWORD: &str = "route-check-password";
+/// Beside the VPN log: the fake wireproxy exits when this file appears.
+const VPN_STOP: &str = "vpn-stop";
+/// The InetSim route's sinkhole address (the default settings).
+const SINKHOLE: &str = "198.51.100.1";
 
 /// What a fake proxy was asked: `target:port`, and `|probe` when the
 /// request on it came from the route probe in the guest.
@@ -189,6 +196,8 @@ fn fake_wireproxy(config: &str) -> Result<(), String> {
         .parse()
         .map_err(|e| format!("BindAddress: {e}"))?;
     let log = PathBuf::from(value("route-check-log")?);
+    // The check makes this wireproxy die during a run by creating `stop`.
+    let stop = log.with_file_name(VPN_STOP);
     let listener = TcpListener::bind(bind).map_err(|e| e.to_string())?;
     let seen = Seen::default();
     let shared = seen.clone();
@@ -196,6 +205,9 @@ fn fake_wireproxy(config: &str) -> Result<(), String> {
     let mut written = 0;
     loop {
         thread::sleep(Duration::from_millis(100));
+        if stop.exists() {
+            std::process::exit(7);
+        }
         let lines: Vec<String> = seen.lock().map(|s| s.clone()).unwrap_or_default();
         if lines.len() > written {
             let mut file = fs::OpenOptions::new()
@@ -456,13 +468,12 @@ impl Driver {
         route: Option<RouteKind>,
         capture: bool,
     ) -> Result<Probed, String> {
-        let known: Vec<String> = self.snapshot.runs.iter().map(|r| r.id.clone()).collect();
         let args = if path == PROBE {
             vec![NAME.into(), "80".into(), FALLBACK_IP.into()]
         } else {
             Vec::new()
         };
-        let request = ExecRequest {
+        let id = self.start(ExecRequest {
             path: path.into(),
             args,
             uid: 0,
@@ -470,7 +481,30 @@ impl Driver {
             route,
             capture_network: capture,
             ..Default::default()
-        };
+        })?;
+        self.finish(id, 120)
+    }
+
+    /// The probe on `route`, run by a shell once `first` (a shell command)
+    /// has finished: the run holds the route meanwhile.
+    fn start_probe_after(&mut self, first: &str, route: RouteKind) -> Result<String, String> {
+        self.start(ExecRequest {
+            path: "/bin/sh".into(),
+            args: vec![
+                "-c".into(),
+                format!("{first}; exec {PROBE} {NAME} 80 {FALLBACK_IP}"),
+            ],
+            uid: 0,
+            gid: 0,
+            route: Some(route),
+            ..Default::default()
+        })
+    }
+
+    /// Launches `request` and returns its run id once Run History lists it.
+    fn start(&mut self, request: ExecRequest) -> Result<String, String> {
+        let known: Vec<String> = self.snapshot.runs.iter().map(|r| r.id.clone()).collect();
+        let path = request.path.clone();
         // The upload's answer can come before the guest closed the file;
         // a launch refused as busy (nothing started) is tried again.
         let mut tries = 0;
@@ -492,16 +526,20 @@ impl Driver {
         self.wait("run publication", 15, |s| {
             s.runs.iter().any(|r| !known.contains(&r.id))
         })?;
-        let id = self
+        Ok(self
             .snapshot
             .runs
             .iter()
             .find(|r| !known.contains(&r.id))
             .ok_or("new run missing")?
             .id
-            .clone();
+            .clone())
+    }
+
+    /// Waits up to `seconds` for run `id` to end and reads what it printed.
+    fn finish(&mut self, id: String, seconds: u64) -> Result<Probed, String> {
         let wanted = id.clone();
-        self.wait("run end", 120, move |s| {
+        self.wait("run end", seconds, move |s| {
             s.runs.iter().any(|r| {
                 r.id == wanted && matches!(r.state, RunState::Finished | RunState::Stopped)
             })
@@ -762,7 +800,7 @@ fn routed(d: &mut Driver, t: &mut Table, fakes: &Fakes, data: &Path) -> Result<(
         t.check(
             vm,
             "inetsim: DNS sinkhole",
-            p.fact(&format!("dns.{NAME}")) == "198.51.100.1",
+            p.fact(&format!("dns.{NAME}")) == SINKHOLE,
             p.fact(&format!("dns.{NAME}")),
         );
         t.check(
@@ -822,6 +860,9 @@ fn routed(d: &mut Driver, t: &mut Table, fakes: &Fakes, data: &Path) -> Result<(
         .is_err(),
         format!("127.0.0.1:{}", fakes.vpn_port),
     );
+
+    helper_dies(d, t, fakes)?;
+    snapshot_restore(d, t, &vm_id)?;
 
     // The toolbar capture of a Routed VM.
     let started = d.command_for(Command::StartNetworkCapture, 60);
@@ -948,6 +989,199 @@ fn routed(d: &mut Driver, t: &mut Table, fakes: &Fakes, data: &Path) -> Result<(
         .join("disk.qcow2");
     fs::remove_file(disk).ok();
     Ok(())
+}
+
+/// The VPN route's wireproxy dies while a run holds the route: the run and
+/// the user are told, nothing leaves afterwards, no other run joins the dead
+/// route, and the route works again for the next run.
+fn helper_dies(d: &mut Driver, t: &mut Table, fakes: &Fakes) -> Result<(), String> {
+    let vm = "routed";
+    let stop = fakes.vpn_log.with_file_name(VPN_STOP);
+    let _ = fs::remove_file(&stop);
+    let id = d.start_probe_after("sleep 10", RouteKind::Vpn)?;
+    d.replies.remove(&0);
+    fs::write(&stop, b"").map_err(|e| e.to_string())?;
+    // The backend's own notices have no command id.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let told = loop {
+        d.receive();
+        if let Some(Err(message)) = d.replies.get(&0) {
+            break Ok(message.clone());
+        }
+        if Instant::now() >= deadline {
+            break Err("no notice".to_owned());
+        }
+        thread::sleep(Duration::from_millis(50));
+    };
+    t.check(
+        vm,
+        "vpn dies: the user is told",
+        told.as_ref().is_ok_and(|m| m.contains("went down")),
+        format!("{told:?}"),
+    );
+    let joined = d.probe(Some(RouteKind::Vpn), false);
+    t.check(
+        vm,
+        "vpn dies: another run cannot join the dead route",
+        error_text(&joined).contains("went down during another run"),
+        error_text(&joined),
+    );
+    fs::remove_file(&stop).map_err(|e| e.to_string())?;
+    let p = d.finish(id, 90);
+    t.check(
+        vm,
+        "vpn dies: nothing leaves after",
+        p.as_ref()
+            .is_ok_and(|p| !p.answered("http.status") && p.fact("http.via") != "vpn"),
+        p.as_ref().map_or_else(
+            |e| e.clone(),
+            |p| format!("{} via {}", p.fact("http.status"), p.fact("http.via")),
+        ),
+    );
+    let issues = p
+        .as_ref()
+        .map(|p| artifact_issues(&p.run))
+        .unwrap_or_default();
+    t.check(
+        vm,
+        "vpn dies: the run's record says so",
+        issues
+            .iter()
+            .any(|i| i.contains("went down during the run")),
+        format!("{issues:?}"),
+    );
+    let again = d.probe(Some(RouteKind::Vpn), false);
+    t.check(
+        vm,
+        "vpn dies: the next run starts it again",
+        again.as_ref().is_ok_and(|p| p.fact("http.via") == "vpn"),
+        error_text(&again),
+    );
+    Ok(())
+}
+
+/// A full snapshot taken while a run holds the InetSim route, restored: the
+/// restored run gets its route back on the new gateway.
+fn snapshot_restore(d: &mut Driver, t: &mut Table, vm_id: &str) -> Result<(), String> {
+    let vm = "routed";
+    let first = d.start_probe_after(
+        "while [ ! -e /tmp/route-go ]; do sleep 1; done",
+        RouteKind::InetSim,
+    )?;
+    d.command_for(
+        Command::CreateVmSnapshot {
+            vm_id: vm_id.into(),
+            request: SnapshotRequest {
+                name: "route check".into(),
+                description: "a run on InetSim".into(),
+                mode: VmSnapshotMode::Full,
+            },
+        },
+        600,
+    )?;
+    d.command_for(
+        Command::RefreshVmSnapshots {
+            vm_id: vm_id.into(),
+        },
+        60,
+    )?;
+    let snapshot = d
+        .snapshot
+        .vm_snapshot_trees
+        .get(vm_id)
+        .and_then(|tree| tree.nodes.iter().find(|node| node.name == "route check"))
+        .map(|node| node.id.clone())
+        .ok_or("the snapshot is missing")?;
+    let restored = d.command_for(
+        Command::RestoreVmSnapshot {
+            vm_id: vm_id.into(),
+            snapshot_id: snapshot.clone(),
+            boot_from_disk: false,
+            save_current: None,
+            confirmed: true,
+            switch_profile: false,
+        },
+        600,
+    );
+    t.check(
+        vm,
+        "snapshot: restored",
+        restored.is_ok(),
+        format!("{restored:?}"),
+    );
+    restored?;
+    let boot = d.snapshot.boot_id.clone().unwrap_or_default();
+    let id = d
+        .snapshot
+        .runs
+        .iter()
+        .find(|r| r.boot_id == boot && r.id != first && r.request.path == "/bin/sh")
+        .map(|r| r.id.clone())
+        .ok_or("no restored run")?;
+    // A second run on the same route joins it and lets the first go on.
+    let go = d.start(ExecRequest {
+        path: "/bin/sh".into(),
+        args: vec!["-c".into(), "touch /tmp/route-go".into()],
+        uid: 0,
+        gid: 0,
+        route: Some(RouteKind::InetSim),
+        ..Default::default()
+    });
+    t.check(
+        vm,
+        "snapshot: a run joins the restored run's route",
+        go.is_ok(),
+        format!("{go:?}"),
+    );
+    if let Ok(go) = go {
+        let _ = d.finish(go, 60);
+    }
+    let p = d.finish(id, 90);
+    t.check(
+        vm,
+        "snapshot: the restored run's route is back",
+        p.as_ref()
+            .is_ok_and(|p| p.fact(&format!("dns.{NAME}")) == SINKHOLE && p.answered("http.status")),
+        p.as_ref().map_or_else(
+            |e| e.clone(),
+            |p| {
+                format!(
+                    "{} / {}",
+                    p.fact(&format!("dns.{NAME}")),
+                    p.fact("http.status")
+                )
+            },
+        ),
+    );
+    let issues = p
+        .as_ref()
+        .map(|p| artifact_issues(&p.run))
+        .unwrap_or_default();
+    t.check(
+        vm,
+        "snapshot: no route issue on the restored run",
+        !issues.iter().any(|i| i.contains("route")),
+        format!("{issues:?}"),
+    );
+    d.command_for(
+        Command::DeleteVmSnapshot {
+            vm_id: vm_id.into(),
+            snapshot_id: snapshot,
+            confirmed: true,
+        },
+        120,
+    )?;
+    Ok(())
+}
+
+/// The issues saved in a run's `artifacts.json`.
+fn artifact_issues(run: &RunSummary) -> Vec<String> {
+    fs::read(run.directory.join("artifacts.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|value| value.get("issues").cloned())
+        .and_then(|issues| serde_json::from_value(issues).ok())
+        .unwrap_or_default()
 }
 
 /// A NAT VM: the Internet works, no metadata service, no route to choose.

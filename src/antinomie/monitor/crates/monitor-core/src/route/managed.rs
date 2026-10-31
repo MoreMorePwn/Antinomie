@@ -18,11 +18,22 @@ use std::{
 /// A helper process that is killed (by its recorded handle) when dropped.
 pub struct Managed {
     child: Child,
+    /// The program, for messages ("wireproxy", "tor").
+    name: &'static str,
 }
 
 impl Managed {
-    pub(super) fn new(child: Child) -> Self {
-        Self { child }
+    pub(super) fn new(child: Child, name: &'static str) -> Self {
+        Self { child, name }
+    }
+
+    /// How the program ended, when it has; `None` while it runs.
+    pub(super) fn exited(&mut self) -> Option<String> {
+        match self.child.try_wait() {
+            Ok(None) => None,
+            Ok(Some(status)) => Some(format!("{} stopped ({status})", self.name)),
+            Err(error) => Some(format!("{} cannot be waited for: {error}", self.name)),
+        }
     }
 
     pub(super) fn child_mut(&mut self) -> &mut Child {
@@ -80,7 +91,7 @@ pub(crate) fn start_wireproxy(
         .stderr(Stdio::from(errors))
         .spawn()
         .map_err(|e| format!("VPN: cannot start {}: {e}", launch.binary.display()))?;
-    let mut managed = Managed { child };
+    let mut managed = Managed::new(child, "wireproxy");
     let deadline = Instant::now() + wait;
     loop {
         if let Some(status) = managed

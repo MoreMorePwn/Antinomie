@@ -142,7 +142,7 @@ pub(crate) fn start_tor(
     let child = command
         .spawn()
         .map_err(|e| format!("Tor: cannot start {}: {e}", launch.binary.display()))?;
-    let mut managed = Managed::new(child);
+    let mut managed = Managed::new(child, "tor");
     let deadline = Instant::now() + wait;
     loop {
         if let Some(status) = managed

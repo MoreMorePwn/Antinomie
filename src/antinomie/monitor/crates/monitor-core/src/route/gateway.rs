@@ -95,7 +95,17 @@ impl GatewayNet {
 /// The route in force and what keeps it running.
 struct Active {
     spec: RouteSpec,
-    _managed: Option<Managed>,
+    /// wireproxy or tor; locked only to check whether it still runs.
+    managed: Mutex<Option<Managed>>,
+}
+
+impl Active {
+    fn new(spec: RouteSpec, managed: Option<Managed>) -> Self {
+        Self {
+            spec,
+            managed: Mutex::new(managed),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -103,6 +113,9 @@ struct Claims {
     /// Runs using the route now.
     runs: Vec<String>,
     checked_ms: u64,
+    /// The route's program stopped while these runs held it: why. The
+    /// gateway drops everything until the last of them lets go.
+    down: Option<String>,
 }
 
 struct Shared {
@@ -172,10 +185,7 @@ impl Gateway {
         wake_rx.set_nonblocking(true).map_err(|e| e.to_string())?;
         wake_tx.set_nonblocking(true).map_err(|e| e.to_string())?;
         let shared = Arc::new(Shared {
-            route: RwLock::new(Arc::new(Active {
-                spec: RouteSpec::drop_all(),
-                _managed: None,
-            })),
+            route: RwLock::new(Arc::new(Active::new(RouteSpec::drop_all(), None))),
             generation: AtomicU64::new(0),
             stop: AtomicBool::new(false),
             linked: AtomicBool::new(false),
@@ -247,6 +257,13 @@ impl Gateway {
             .map_err(|_| "route state is unusable")?;
         let current = self.shared.current();
         if !claims.runs.is_empty() {
+            if let Some(down) = &claims.down {
+                return Err(format!(
+                    "the route \"{}\" went down during another run in this VM ({down}); \
+                     wait for that run to end, then start this run again",
+                    current.spec.label
+                ));
+            }
             if current.spec.kind == spec.kind && current.spec.label == spec.label {
                 if !claims.runs.iter().any(|r| r == run) {
                     claims.runs.push(run.to_owned());
@@ -281,10 +298,7 @@ impl Gateway {
             metadata.begin_run(run);
         }
         let checked_ms = unix_ms();
-        self.shared.install(Active {
-            spec,
-            _managed: managed,
-        });
+        self.shared.install(Active::new(spec, managed));
         claims.runs.push(run.to_owned());
         claims.checked_ms = checked_ms;
         Ok(Claimed { checked_ms })
@@ -306,11 +320,40 @@ impl Gateway {
         };
         claims.runs.retain(|r| r != run);
         if claims.runs.is_empty() {
-            self.shared.install(Active {
-                spec: RouteSpec::drop_all(),
-                _managed: None,
-            });
+            claims.down = None;
+            self.shared
+                .install(Active::new(RouteSpec::drop_all(), None));
         }
+    }
+
+    /// Checks the program the route runs (wireproxy or tor). When it has
+    /// stopped while runs hold the route, the gateway drops the VM's traffic
+    /// from then on (whatever listens on its port later is not the route),
+    /// new runs cannot join the route, and this says why, once. `None` while
+    /// the program runs, or when the route has none.
+    pub fn helper_stopped(&self) -> Option<String> {
+        let mut claims = self.shared.claims.lock().ok()?;
+        if claims.runs.is_empty() || claims.down.is_some() {
+            return None;
+        }
+        let current = self.shared.current();
+        let exited = current.managed.lock().ok()?.as_mut()?.exited()?;
+        let down = RouteSpec {
+            kind: current.spec.kind,
+            egress: Egress::Drop,
+            probe: None,
+            label: current.spec.label.clone(),
+            wireproxy: None,
+            tor: None,
+        };
+        self.shared.install(Active::new(down, None));
+        let reason = format!(
+            "the route \"{}\" went down during the run: {exited}; the VM's traffic was \
+             dropped from then on",
+            current.spec.label
+        );
+        claims.down = Some(exited);
+        Some(reason)
     }
 }
 

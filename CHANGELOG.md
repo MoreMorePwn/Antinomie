@@ -21,7 +21,14 @@ it runs.
   capture failed the same way. Both now work. A run that cannot start (a capture on
   a VM without a network card, a route the network cannot carry or that is not set
   up) is refused before it exists, and the Run form says what to change with a
-  VM settings… or Network routes… button.
+  VM settings… or Open Network routes settings button.
+
+- **Routes across snapshots and reconnects; a route whose program stops.** A run
+  restored from a snapshot gets its route back (the restored VM's traffic was
+  dropped); after a transport reconnect the route is released when the run ends.
+  When the VPN route's wireproxy or the Tor route's tor stops during a run, the
+  run's record and a notice say so, the VM's traffic is dropped from then on, and
+  no other run joins the dead route.
 
 - **Runs that never ran say so.** Run History shows Failed to start, Launch
   unconfirmed or Interrupted instead of Unknown, with the reason in the tooltip,

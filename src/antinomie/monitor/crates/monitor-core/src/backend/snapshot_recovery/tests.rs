@@ -153,3 +153,124 @@ fn a_core_handle_must_name_a_run_of_this_boot_and_own_its_id_and_root() {
     repeated.core_handles.push(handle("b", 1, 6));
     assert!(check(&repeated).is_err(), "one core id twice");
 }
+
+#[test]
+fn a_checkpoint_says_which_runs_held_their_route_and_an_older_one_does_not() {
+    assert!(checkpoint(|_| {}).route_claims.is_none());
+    let saved = checkpoint(|value| {
+        value["route_claims"] = serde_json::json!({"run-a": {"tcp_connections": 3}});
+    });
+    let claims = saved.route_claims.unwrap();
+    assert_eq!(claims["run-a"].tcp_connections, 3);
+}
+
+fn routed_run(kind: crate::route::RouteKind) -> RunSummary {
+    let mut summary = run("restored", "vm-1", 5, 1);
+    summary.route = Some(crate::route::RouteRecord {
+        kind,
+        label: kind.label().into(),
+        via: crate::route::RouteVia::Gateway,
+        checked_ms: Some(1),
+        stats: None,
+    });
+    summary
+}
+
+#[test]
+fn a_reconnect_takes_over_the_claim_the_gateway_still_holds() {
+    use crate::route::{RouteKind, RouteStats};
+    let options = BackendOptions::default();
+    let baseline = RouteStats {
+        dns_queries: 4,
+        ..RouteStats::default()
+    };
+    let mut summary = routed_run(RouteKind::Tor);
+    let claim = super::super::run_route::restored_route(
+        &options,
+        &vm(),
+        None,
+        &mut summary,
+        Some(baseline),
+        true,
+    )
+    .unwrap()
+    .expect("the claim");
+    assert_eq!(claim.baseline, baseline);
+    assert_eq!(summary.route.as_ref().unwrap().checked_ms, Some(1));
+    // A run that did not hold its route, or whose network is fixed, has none.
+    for (mut summary, held) in [
+        (routed_run(RouteKind::Tor), None),
+        (run("nat", "vm-1", 6, 2), Some(baseline)),
+    ] {
+        let claim = super::super::run_route::restored_route(
+            &options,
+            &vm(),
+            None,
+            &mut summary,
+            held,
+            true,
+        );
+        assert!(matches!(claim, Ok(None)));
+    }
+}
+
+#[test]
+fn a_restored_snapshot_claims_the_runs_route_again_or_says_why_it_cannot() {
+    use crate::route::{Gateway, GatewayNet, RouteKind, RouteStats};
+    let dir = std::env::temp_dir().join(format!("ant-restore-route-{}", storage::unique_id()));
+    storage::private_dir(&dir).unwrap();
+    let options = BackendOptions {
+        data_dir: dir.join("data"),
+        ..BackendOptions::default()
+    };
+    let routed = VmConfig {
+        routed: true,
+        ..vm()
+    };
+    let net = GatewayNet::from_nat(&crate::stealth::NatNetwork::default()).unwrap();
+    let gateway = Gateway::start(&dir, net).unwrap();
+    let mut summary = routed_run(RouteKind::Drop);
+    let claim = super::super::run_route::restored_route(
+        &options,
+        &routed,
+        Some(&gateway),
+        &mut summary,
+        Some(RouteStats::default()),
+        false,
+    )
+    .unwrap();
+    assert!(claim.is_some(), "the restored run holds its route again");
+    let record = summary.route.as_ref().unwrap();
+    assert_eq!(record.kind, RouteKind::Drop);
+    assert_ne!(
+        record.checked_ms,
+        Some(1),
+        "checked again for the restored run"
+    );
+    // The gateway knows the run: another route cannot start under it.
+    let error = gateway
+        .claim(
+            "another",
+            crate::route::RouteConfig::default()
+                .spec(&options.data_dir, RouteKind::Internet)
+                .unwrap(),
+        )
+        .unwrap_err();
+    assert!(error.contains("another run in this VM"), "{error}");
+    gateway.release(&summary.id);
+    // Without its gateway the route stays down and the record says so.
+    let mut summary = routed_run(RouteKind::InetSim);
+    let error = super::super::run_route::restored_route(
+        &options,
+        &routed,
+        None,
+        &mut summary,
+        Some(RouteStats::default()),
+        false,
+    )
+    .unwrap_err();
+    assert!(error.contains("could not be brought back"), "{error}");
+    assert!(error.contains("traffic is dropped"), "{error}");
+    drop(gateway);
+    let _ = std::fs::remove_dir_all(dir);
+}

@@ -232,6 +232,9 @@ impl Worker {
             return;
         }
         session.last_resource_check = Some(Instant::now());
+        // Checked as often: a route's program that stopped is reported to
+        // its runs within a second.
+        let route_down = session.check_route_helper();
         let mut sample = session.resources.sample(
             session.process.child.id(),
             &session.vm.id,
@@ -252,6 +255,13 @@ impl Worker {
             },
         );
         self.snapshot.vm_resources = Some(sample);
+        if let Some(message) = route_down {
+            self.emit(Notification::CommandResult {
+                id: 0,
+                success: false,
+                message,
+            });
+        }
         self.publish();
     }
     pub(super) fn stop(&mut self) -> Result<(), String> {

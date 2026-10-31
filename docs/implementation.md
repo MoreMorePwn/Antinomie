@@ -1864,13 +1864,34 @@ reads `VmConfig::has_network()`, and a capture on a VM without a network card is
 refused before the run exists (`NO_NETWORK_CARD`), as are a route the VM's network
 cannot carry and a route that is not set up or does not answer: nothing is listed for
 them. The Run form says so first: the capture box is off on a VM without a network
-card with a **VM settings…** button, and a route whose settings are missing has a
-**Network routes…** button. `examples/route-check.rs` (full tier `route`) runs
+card with a **VM settings…** button, and a route whose settings are missing has an
+**Open Network routes settings** button. `examples/route-check.rs` (full tier `route`) runs
 `tests/monitor/route-probe` on every route of a Routed VM with a cloud profile, on a
 NAT VM and on a VM without a card; Tor, VPN (a stand-in wireproxy) and SOCKS5 go to
 local fake proxies that answer the probe's one HTTP request themselves and record the
 name they were asked to connect to; the Internet route sends one plain `GET /` to
 example.com.
+
+**Routes across a restore, a reconnect and a stopped helper (0.8.0, ANT-T0182).**
+The host checkpoint (`HostCheckpoint::route_claims`) lists the runs that hold their
+route on the gateway, with the counters at their claim. A transport reconnect keeps
+the VM process and its gateway, which still holds the route under the same run id:
+the new timeline's owner takes the claim over, so the route is released when the
+run's tree ends (before, the claim was lost and the route stayed up after the run).
+A restored full snapshot has a new gateway on Drop: `run_route::restored_route`
+claims the run's route again for the restored run, starting wireproxy or tor and
+checking it, before the guest's CPUs run. If it cannot (settings changed, proxy
+down), the gateway stays on Drop and the run's issues say "could not be brought back
+after the snapshot restore". A checkpoint written before 0.8.0 does not say: a live
+run with a gateway route is taken as holding it. The gateway also watches the route's
+program (`Gateway::helper_stopped`, checked each second with the resource sample):
+when wireproxy or tor exits while runs hold the route, the gateway installs a route
+that drops everything (whatever listens on the port later is not the route), refuses
+new runs on it ("went down during another run in this VM"), and every run holding it
+gets the issue "the route … went down during the run: wireproxy stopped (exit status:
+7) …", shown as a notice too. The last run out puts the gateway back on Drop and
+clears it. `route-check` checks both on the Routed VM (a fake wireproxy told to exit
+mid-run; a full snapshot of a run waiting on InetSim, restored and let go).
 
 ### Guest patch series by topic (0.7.1)
 
