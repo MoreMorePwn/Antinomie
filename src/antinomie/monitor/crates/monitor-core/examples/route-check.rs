@@ -37,7 +37,7 @@
 //! Started as `route-check -c CONFIG` the program is the fake wireproxy of
 //! the VPN route: a SOCKS5 server on the `BindAddress` of CONFIG.
 use antinomie_monitor_core::route::{
-    RouteConfig, RouteKind, RouteVia, Socks5Config, TorConfig, TorMode, VpnConfig,
+    RouteConfig, RouteKind, RouteStats, RouteVia, Socks5Config, TorConfig, TorMode, VpnConfig,
 };
 use antinomie_monitor_core::stealth::{CLOUDS, StealthProfile};
 use antinomie_monitor_core::*;
@@ -554,16 +554,6 @@ impl Driver {
             self.receive();
             thread::sleep(Duration::from_millis(20));
         }
-        // The route's counts are saved when the tree's artifacts settle.
-        let wanted = id.clone();
-        let _ = self.wait("route counts", 20, move |s| {
-            s.runs.iter().any(|r| {
-                r.id == wanted
-                    && r.route
-                        .as_ref()
-                        .is_none_or(|route| route.via != RouteVia::Gateway || route.stats.is_some())
-            })
-        });
         let run = self
             .snapshot
             .runs
@@ -571,6 +561,21 @@ impl Driver {
             .find(|r| r.id == id)
             .cloned()
             .ok_or("run vanished")?;
+        // The route's counts and the run's capture are saved in its
+        // artifacts.json (not its summary) when the tree's artifacts settle.
+        let counted = run
+            .route
+            .as_ref()
+            .is_some_and(|route| route.via == RouteVia::Gateway);
+        let captured = run.request.capture_network;
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while ((counted && artifact_route_stats(&run).is_none())
+            || (captured && !capture_settled(&run)))
+            && Instant::now() < deadline
+        {
+            self.receive();
+            thread::sleep(Duration::from_millis(100));
+        }
         let text = self.output.get(&id).cloned().unwrap_or_default();
         // The probe's own lines, kept beside the table as evidence.
         let outputs = self.options.data_dir.join("outputs");
@@ -578,6 +583,7 @@ impl Driver {
             .and_then(|()| fs::write(outputs.join(format!("{id}.txt")), &text));
         Ok(Probed {
             facts: facts(&text),
+            text_len: text.len(),
             run,
         })
     }
@@ -585,6 +591,7 @@ impl Driver {
 
 struct Probed {
     facts: BTreeMap<String, String>,
+    text_len: usize,
     run: RunSummary,
 }
 
@@ -600,12 +607,15 @@ impl Probed {
         self.fact(key).starts_with("HTTP/")
     }
 
+    /// Connections the gateway carried, to the route or to its own services
+    /// (InetSim, the cloud metadata service).
     fn connections(&self) -> u64 {
-        self.run
-            .route
-            .as_ref()
-            .and_then(|route| route.stats)
-            .map_or(0, |stats| stats.tcp_connections)
+        artifact_route_stats(&self.run).map_or(0, |stats| stats.tcp_connections)
+    }
+
+    /// Connections the route's rules refused or dropped.
+    fn blocked(&self) -> u64 {
+        artifact_route_stats(&self.run).map_or(0, |stats| stats.tcp_blocked)
     }
 
     /// The run's network capture files and their sizes.
@@ -718,8 +728,13 @@ fn routed(d: &mut Driver, t: &mut Table, fakes: &Fakes, data: &Path) -> Result<(
         t.check(
             vm,
             "drop: no connection leaves",
-            !p.answered("http.status") && p.connections() == 0,
-            format!("{} / {} upstream", p.fact("http.status"), p.connections()),
+            !p.answered("http.status") && p.blocked() >= 1,
+            format!(
+                "{} / {} blocked, {} carried (the metadata service's)",
+                p.fact("http.status"),
+                p.blocked(),
+                p.connections()
+            ),
         );
         t.check(
             vm,
@@ -752,9 +767,10 @@ fn routed(d: &mut Driver, t: &mut Table, fakes: &Fakes, data: &Path) -> Result<(
         );
         t.check(
             vm,
+            // The site's connection and the metadata service's.
             "internet: gateway carried it",
-            p.connections() >= 1,
-            format!("{} upstream", p.connections()),
+            p.connections() >= 2,
+            format!("{} carried", p.connections()),
         );
         t.check(
             vm,
@@ -1095,7 +1111,7 @@ fn snapshot_restore(d: &mut Driver, t: &mut Table, vm_id: &str) -> Result<(), St
     let restored = d.command_for(
         Command::RestoreVmSnapshot {
             vm_id: vm_id.into(),
-            snapshot_id: snapshot.clone(),
+            snapshot_id: snapshot,
             boot_from_disk: false,
             save_current: None,
             confirmed: true,
@@ -1111,13 +1127,18 @@ fn snapshot_restore(d: &mut Driver, t: &mut Table, vm_id: &str) -> Result<(), St
     );
     restored?;
     let boot = d.snapshot.boot_id.clone().unwrap_or_default();
+    // A full snapshot restores every run of the boot, the finished ones too,
+    // each under a new id; this one says which run it continues.
+    let continues = format!("Continues run {first} ");
     let id = d
         .snapshot
         .runs
         .iter()
-        .find(|r| r.boot_id == boot && r.id != first && r.request.path == "/bin/sh")
+        .find(|r| r.boot_id == boot && r.notes.iter().any(|note| note.starts_with(&continues)))
         .map(|r| r.id.clone())
         .ok_or("no restored run")?;
+    // The restored guest reports its tracer again before it takes a launch.
+    d.wait("restored guest tracer", 60, |s| s.guest_tracer.is_some())?;
     // A second run on the same route joins it and lets the first go on.
     let go = d.start(ExecRequest {
         path: "/bin/sh".into(),
@@ -1146,9 +1167,12 @@ fn snapshot_restore(d: &mut Driver, t: &mut Table, vm_id: &str) -> Result<(), St
             |e| e.clone(),
             |p| {
                 format!(
-                    "{} / {}",
+                    "{} / {} (state {:?}, {} output bytes, counts {:?})",
                     p.fact(&format!("dns.{NAME}")),
-                    p.fact("http.status")
+                    p.fact("http.status"),
+                    p.run.state,
+                    p.text_len,
+                    artifact_route_stats(&p.run)
                 )
             },
         ),
@@ -1163,15 +1187,38 @@ fn snapshot_restore(d: &mut Driver, t: &mut Table, vm_id: &str) -> Result<(), St
         !issues.iter().any(|i| i.contains("route")),
         format!("{issues:?}"),
     );
-    d.command_for(
-        Command::DeleteVmSnapshot {
-            vm_id: vm_id.into(),
-            snapshot_id: snapshot,
-            confirmed: true,
-        },
-        120,
-    )?;
+    // The snapshot stays: deleting one needs the VM stopped, and the checks
+    // below need it running; the check's data folder goes with the run.
     Ok(())
+}
+
+/// What the gateway counted for the run, as its `artifacts.json` saved it
+/// when the run's tree ended (the run's summary keeps only the route).
+fn artifact_route_stats(run: &RunSummary) -> Option<RouteStats> {
+    fs::read(run.directory.join("artifacts.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|value| value.get("route")?.get("stats").cloned())
+        .and_then(|stats| serde_json::from_value(stats).ok())
+}
+
+/// The run's network capture has ended, one way or another, in its
+/// `artifacts.json`.
+fn capture_settled(run: &RunSummary) -> bool {
+    fs::read(run.directory.join("artifacts.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|value| value.get("network_state").cloned())
+        .and_then(|state| serde_json::from_value::<RunArtifactState>(state).ok())
+        .is_some_and(|state| {
+            matches!(
+                state,
+                RunArtifactState::Complete
+                    | RunArtifactState::Partial
+                    | RunArtifactState::Interrupted
+                    | RunArtifactState::Failed
+            )
+        })
 }
 
 /// The issues saved in a run's `artifacts.json`.
