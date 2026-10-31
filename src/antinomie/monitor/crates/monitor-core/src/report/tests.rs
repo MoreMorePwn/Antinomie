@@ -645,16 +645,14 @@ fn every_format_keeps_a_matching_rule_s_author_licence_and_source() {
     let report = fixture();
     for format in [Format::Json, Format::Html, Format::Misp, Format::Stix] {
         let text = String::from_utf8(export::render(&report, format, false).unwrap()).unwrap();
-        for credit in [
-            "Jane Rule",
-            "DRL 1.1",
-            "Example Pack",
-            "https://example.org/r1",
-        ] {
-            assert!(
-                text.contains(credit) || text.contains(&credit.replace('/', "&#x2F;")),
-                "{format:?} lacks {credit}"
-            );
+        // The HTML holds no link, so it names the reference without its scheme.
+        let reference = if format == Format::Html {
+            "example.org/r1"
+        } else {
+            "https://example.org/r1"
+        };
+        for credit in ["Jane Rule", "DRL 1.1", "Example Pack", reference] {
+            assert!(text.contains(credit), "{format:?} lacks {credit}");
         }
     }
     let pdf = export::render(&report, Format::Pdf, false).unwrap();

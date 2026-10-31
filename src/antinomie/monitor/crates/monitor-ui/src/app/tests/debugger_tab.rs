@@ -499,7 +499,8 @@ fn a_gdb_that_will_not_run_is_reported_in_the_pane() {
 #[test]
 fn the_flavour_is_chosen_in_settings_and_defaults_to_gef() {
     let ctx = context();
-    let size = egui::vec2(1000.0, 800.0);
+    // The page also holds the analysis size limits, so it needs the height.
+    let size = egui::vec2(1000.0, 1700.0);
     let mut app = app();
     assert_eq!(app.settings.debugger.gdb_flavour, GdbFlavour::Gef);
     app.settings_open = true;
