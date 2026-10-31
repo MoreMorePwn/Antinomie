@@ -110,6 +110,7 @@ fn report_of(section: AnalysisSection) -> AnalysisReport {
         layer: None,
         specimen_source: None,
         time_limit_seconds: None,
+        limits: None,
     }
 }
 

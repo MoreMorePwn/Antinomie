@@ -4,7 +4,7 @@
 use super::ReportAction;
 use antinomie_monitor_core::{
     AnalysisKind, AnalysisLimit, AnalysisLimitKind, AnalysisReport, AnalysisSection, AnalysisState,
-    TIME_LIMIT_MAX_MINUTES,
+    LimitSetting, TIME_LIMIT_MAX_MINUTES,
 };
 use eframe::egui;
 
@@ -43,15 +43,15 @@ pub(super) fn notes(
     for limit in &section.limits {
         crate::activity::warning(ui, &limit.text);
         if limit.kind != AnalysisLimitKind::Time {
-            // Rows, size, text and input bounds are fixed; Settings lists them.
-            if ui
-                .small_button("Analysis settings…")
-                .on_hover_text(
-                    "Open Settings > Analysis, which lists the fixed bounds of a check and the time each tool may run",
-                )
-                .clicked()
+            // A bound a setting raises leads to that setting's field; the rest
+            // (a file that disagrees with itself, an unpacking depth) are fixed.
+            if let Some(setting) = limit.setting
+                && ui
+                    .small_button("Analysis settings…")
+                    .on_hover_text("Open Settings > Analysis at the setting that raises this bound")
+                    .clicked()
             {
-                action = Some(ReportAction::OpenAnalysisSettings);
+                action = Some(ReportAction::OpenAnalysisLimit(setting));
             }
             continue;
         }
@@ -96,6 +96,7 @@ mod tests {
             kind: AnalysisLimitKind::Time,
             text: "capa ran out of time".into(),
             seconds,
+            setting: None,
         }
     }
 
@@ -124,6 +125,7 @@ mod tests {
             layer: None,
             specimen_source: None,
             time_limit_seconds: None,
+            limits: None,
         };
         (report, 0)
     }
@@ -198,17 +200,18 @@ mod tests {
     }
 
     #[test]
-    fn a_row_size_or_text_limit_has_a_button_to_the_settings_that_list_it() {
-        for kind in [
-            AnalysisLimitKind::Rows,
-            AnalysisLimitKind::Size,
-            AnalysisLimitKind::Text,
-            AnalysisLimitKind::Input,
+    fn a_row_size_or_text_limit_has_a_button_to_the_field_that_raises_it() {
+        for (kind, setting) in [
+            (AnalysisLimitKind::Rows, LimitSetting::Rows),
+            (AnalysisLimitKind::Size, LimitSetting::Listing),
+            (AnalysisLimitKind::Text, LimitSetting::Value),
+            (AnalysisLimitKind::Size, LimitSetting::FlossFile),
         ] {
             let (report, at) = report_with(AnalysisLimit {
                 kind,
                 text: "A bound was met.".into(),
                 seconds: None,
+                setting: Some(setting),
             });
             let (shown, action) = press(&report, at, "Analysis settings…");
             assert!(
@@ -216,10 +219,24 @@ mod tests {
                 "{shown:?}"
             );
             assert!(
-                matches!(action, Some(ReportAction::OpenAnalysisSettings)),
+                matches!(action, Some(ReportAction::OpenAnalysisLimit(found)) if found == setting),
                 "{kind:?}: {shown:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_bound_no_setting_raises_has_no_button() {
+        let (report, at) = report_with(AnalysisLimit {
+            kind: AnalysisLimitKind::Input,
+            text: "A bound was met.".into(),
+            seconds: None,
+            setting: None,
+        });
+        let (shown, action) = press(&report, at, "Analysis settings…");
+        assert!(shown.iter().any(|text| text == "A bound was met."));
+        assert!(!shown.iter().any(|text| text == "Analysis settings…"));
+        assert!(action.is_none());
     }
 
     #[test]

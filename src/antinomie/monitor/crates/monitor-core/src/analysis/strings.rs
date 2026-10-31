@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The Strings check: printable ASCII and UTF-16LE strings in file order, the
 //! first ones in the report and all of them in the listing.
-use super::bounds::VALUE_MAX_SIZE;
 use super::worker::structured_entry;
 use super::*;
 use std::path::Path;
 
 /// Strings kept in the report itself; the listing holds all of them.
-const REPORT_STRINGS: usize = 256;
+pub(super) const REPORT_STRINGS: usize = 256;
 
 /// Printable ASCII (four or more octets) and UTF-16LE strings, in file order.
 pub(crate) fn find_strings(specimen: &[u8]) -> Vec<(usize, usize, &'static str, String)> {
+    let value_max = super::limits::value_bytes();
     let mut found = Vec::new();
     let mut start = 0;
     for index in 0..=specimen.len() {
@@ -19,7 +19,7 @@ pub(crate) fn find_strings(specimen: &[u8]) -> Vec<(usize, usize, &'static str, 
             continue;
         }
         if index - start >= 4 {
-            let retained = &specimen[start..index.min(start + VALUE_MAX_SIZE)];
+            let retained = &specimen[start..index.min(start + value_max)];
             found.push((
                 start,
                 index - start,
@@ -38,7 +38,7 @@ pub(crate) fn find_strings(specimen: &[u8]) -> Vec<(usize, usize, &'static str, 
             && specimen[index + 1] == 0
             && (specimen[index].is_ascii_graphic() || specimen[index] == b' ')
         {
-            if text.len() < VALUE_MAX_SIZE {
+            if text.len() < value_max {
                 text.push(specimen[index] as char);
             }
             index += 2;
@@ -58,7 +58,7 @@ pub(super) fn strings(section: &mut AnalysisSection, specimen: &[u8], listings: 
     let mut writer = super::listing::ListingWriter::create(
         listings,
         AnalysisKind::Strings,
-        super::listing::LISTING_MAX_SIZE,
+        super::limits::listing_bytes(),
     )
     .ok();
     let mut full = false;
@@ -100,31 +100,31 @@ pub(super) fn strings(section: &mut AnalysisSection, specimen: &[u8], listings: 
     section.state = AnalysisSectionState::Complete;
     if cut > 0 {
         section.state = AnalysisSectionState::Partial;
-        super::limits::add(
+        super::limits::add_for(
             section,
             AnalysisLimitKind::Text,
+            LimitSetting::Value,
             format!(
                 "{} {} longer than {} bytes; only the start of each is kept.",
                 super::detection::group_digits(cut as u64),
                 if cut == 1 { "string is" } else { "strings are" },
-                super::detection::group_digits(VALUE_MAX_SIZE as u64)
+                super::detection::group_digits(super::limits::value_bytes() as u64)
             ),
-            None,
         );
     }
     if let Some(listing) = writer.and_then(|w| w.finish(full).ok()) {
         if listing.truncated {
             section.state = AnalysisSectionState::Partial;
-            super::limits::add(
+            super::limits::add_for(
                 section,
                 AnalysisLimitKind::Size,
+                LimitSetting::Listing,
                 format!(
                     "The listing reached its {} limit after {} of {} strings; later strings are not listed.",
-                    crate::byte_size::short_size(super::listing::LISTING_MAX_SIZE),
+                    crate::byte_size::short_size(super::limits::listing_bytes()),
                     super::detection::group_digits(listing.rows),
                     super::detection::group_digits(found.len() as u64)
                 ),
-                None,
             );
         }
         section.listing = Some(listing);

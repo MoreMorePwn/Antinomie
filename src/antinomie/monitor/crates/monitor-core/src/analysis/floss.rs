@@ -10,12 +10,6 @@ const MANAGED: &str = "/opt/antinomie-tools/floss/floss";
 /// Wall-clock budget of one FLOSS run. Emulating every candidate routine of a
 /// statically linked program takes far longer than this, and is cut off.
 pub(super) const TIMEOUT_SECONDS: u64 = 480;
-/// FLOSS refuses larger files unless it is told to take them (`-L`).
-const SPECIMEN_MAX_SIZE: u64 = 16 * 1024 * 1024;
-/// FLOSS prints its whole result as one JSON document at the end.
-const OUTPUT_MAX_SIZE: usize = 32 * 1024 * 1024;
-/// Strings kept in the full listing.
-const STRING_MAX_COUNT: usize = 50_000;
 /// Strings shown in the report itself, before the listing.
 const REPORT_ROWS: usize = 256;
 
@@ -43,21 +37,22 @@ pub(super) fn strings(section: &mut AnalysisSection, specimen_len: u64, listings
 }
 
 fn run(section: &mut AnalysisSection, floss: &str, specimen_len: u64, listings: &Path) {
-    if specimen_len > SPECIMEN_MAX_SIZE {
+    let specimen_max = u64::from(super::limits::active().floss_file_mib) << 20;
+    if specimen_len > specimen_max {
         section.state = AnalysisSectionState::Unavailable;
         section.summary = format!(
             "FLOSS does not take files over {} MiB; this file is {} MiB",
-            SPECIMEN_MAX_SIZE >> 20,
+            specimen_max >> 20,
             specimen_len.div_ceil(1 << 20)
         );
-        super::limits::add(
+        super::limits::add_for(
             section,
             AnalysisLimitKind::Size,
+            LimitSetting::FlossFile,
             format!(
                 "The file is larger than the {} MiB FLOSS is given.",
-                SPECIMEN_MAX_SIZE >> 20
+                specimen_max >> 20
             ),
-            None,
         );
         return;
     }
@@ -77,7 +72,7 @@ fn run(section: &mut AnalysisSection, floss: &str, specimen_len: u64, listings: 
         ],
         &[("HOME", "/tmp")],
         timeout,
-        OUTPUT_MAX_SIZE,
+        super::limits::large_output(),
         true,
     ) {
         Ok(run) => run,
@@ -88,6 +83,7 @@ fn run(section: &mut AnalysisSection, floss: &str, specimen_len: u64, listings: 
         }
     };
     section.tools = vec![tools::version(floss, &["--version"])];
+    let string_max = super::limits::active().floss_strings as usize;
     let found = match parse(&run.stdout) {
         Ok(found) if !run.truncated => found,
         _ => {
@@ -102,18 +98,18 @@ fn run(section: &mut AnalysisSection, floss: &str, specimen_len: u64, listings: 
             }
             section.state = AnalysisSectionState::Unavailable;
             section.summary = if run.truncated {
-                super::limits::add(
+                super::limits::add_for(
                     section,
                     AnalysisLimitKind::Size,
+                    LimitSetting::LargeOutput,
                     format!(
                         "FLOSS printed more than the {} MiB the analysis reads.",
-                        OUTPUT_MAX_SIZE >> 20
+                        (super::limits::large_output() >> 20)
                     ),
-                    None,
                 );
                 format!(
                     "FLOSS printed more than {} MiB; its result was not read",
-                    OUTPUT_MAX_SIZE >> 20
+                    (super::limits::large_output() >> 20)
                 )
             } else {
                 run.failure_text("FLOSS", timeout).unwrap_or_else(|| {
@@ -126,12 +122,12 @@ fn run(section: &mut AnalysisSection, floss: &str, specimen_len: u64, listings: 
     let mut writer = super::listing::ListingWriter::create(
         listings,
         AnalysisKind::Floss,
-        super::listing::LISTING_MAX_SIZE,
+        super::limits::listing_bytes(),
     )
     .ok();
     let mut full = false;
     let mut counts = [0usize; 4];
-    for (index, string) in found.iter().take(STRING_MAX_COUNT).enumerate() {
+    for (index, string) in found.iter().take(string_max).enumerate() {
         let (location, data) = record(string, specimen_len);
         counts[ORIGINS
             .iter()
@@ -153,33 +149,33 @@ fn run(section: &mut AnalysisSection, floss: &str, specimen_len: u64, listings: 
             full = true;
         }
     }
-    let capped = found.len() > STRING_MAX_COUNT;
+    let capped = found.len() > string_max;
     section.state = AnalysisSectionState::Complete;
     if capped {
         section.state = AnalysisSectionState::Partial;
-        super::limits::add(
+        super::limits::add_for(
             section,
             AnalysisLimitKind::Rows,
+            LimitSetting::FlossStrings,
             format!(
                 "FLOSS found {} strings; the listing keeps the first {}.",
                 super::detection::group_digits(found.len() as u64),
-                super::detection::group_digits(STRING_MAX_COUNT as u64)
+                super::detection::group_digits(string_max as u64)
             ),
-            None,
         );
     }
     if let Some(listing) = writer.and_then(|writer| writer.finish(full || capped).ok()) {
         if full {
             section.state = AnalysisSectionState::Partial;
-            super::limits::add(
+            super::limits::add_for(
                 section,
                 AnalysisLimitKind::Size,
+                LimitSetting::Listing,
                 format!(
                     "The listing reached its {} limit after {} strings; later strings are not listed.",
-                    crate::byte_size::short_size(super::listing::LISTING_MAX_SIZE),
+                    crate::byte_size::short_size(super::limits::listing_bytes()),
                     super::detection::group_digits(listing.rows)
                 ),
-                None,
             );
         }
         section.listing = Some(listing);
@@ -198,7 +194,7 @@ fn run(section: &mut AnalysisSection, floss: &str, specimen_len: u64, listings: 
     let [decoded, stack, tight, language] = counts;
     section.summary = format!(
         "{} strings from FLOSS: {decoded} decoded, {stack} stack, {tight} tight, {language} Go or Rust; addresses are the ones FLOSS reports",
-        found.len().min(STRING_MAX_COUNT)
+        found.len().min(string_max)
     );
 }
 

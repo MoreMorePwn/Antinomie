@@ -269,6 +269,7 @@ mod tests {
             enabled: true,
             checks: vec![AnalysisKind::Metadata],
             time_limit_minutes: 0,
+            limits: Default::default(),
         };
         jobs.submit(
             Some(RUN.into()),

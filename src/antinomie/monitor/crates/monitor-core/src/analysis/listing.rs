@@ -12,10 +12,9 @@ use std::{
     path::Path,
 };
 
-/// Largest single listing, in octets.
+/// Largest single listing at the default setting, in octets.
+#[cfg(test)]
 pub(crate) const LISTING_MAX_SIZE: u64 = 64 * 1024 * 1024;
-/// Largest sum of all listings of one report, in octets.
-pub(crate) const LISTINGS_MAX_TOTAL: u64 = 128 * 1024 * 1024;
 /// Most references one instruction row lists on each side.
 pub(crate) const REFERENCES_MAX: usize = 16;
 /// The file of the disassembly Ghidra exports beside its decompilation.
@@ -64,7 +63,7 @@ impl ListingWriter {
             file: BufWriter::new(file),
             rows: 0,
             bytes: 0,
-            limit: limit.min(LISTING_MAX_SIZE),
+            limit: limit.min(super::limits::LISTING_CEILING),
             truncated: false,
         })
     }
@@ -145,7 +144,7 @@ pub(crate) fn validate(
         crate::archive_io::open_regular(path.parent().ok_or("listing has no directory")?, path)
             .map_err(|e| format!("listing: {e}"))?;
     let len = file.metadata().map_err(|e| e.to_string())?.len();
-    if len > LISTING_MAX_SIZE || len != expected.bytes {
+    if len > super::limits::LISTING_CEILING || len != expected.bytes {
         return Err("listing size disagrees with its report or bound".into());
     }
     let mut rows = 0u64;
@@ -574,6 +573,7 @@ mod tests {
             layer: None,
             specimen_source: None,
             time_limit_seconds: None,
+            limits: None,
         };
         std::fs::write(
             root.join("report.json"),
@@ -690,6 +690,7 @@ mod tests {
             layer: None,
             specimen_source: None,
             time_limit_seconds: None,
+            limits: None,
         };
         std::fs::write(
             root.join("report.json"),
@@ -745,6 +746,7 @@ mod tests {
             layer: None,
             specimen_source: None,
             time_limit_seconds: None,
+            limits: None,
         };
         std::fs::write(
             root.join("report.json"),
@@ -795,6 +797,7 @@ mod tests {
             layer: None,
             specimen_source: None,
             time_limit_seconds: None,
+            limits: None,
         };
         std::fs::write(
             root.join("report.json"),

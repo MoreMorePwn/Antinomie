@@ -122,6 +122,7 @@ mod tests {
             enabled: true,
             checks: AnalysisKind::TRIAGE.to_vec(),
             time_limit_minutes: 0,
+            limits: Default::default(),
         }
     }
 

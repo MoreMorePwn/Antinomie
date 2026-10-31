@@ -103,6 +103,8 @@ fn limits_report(app: &mut MonitorApp) {
                         kind,
                         text: text.into(),
                         seconds,
+                        setting: (kind != AnalysisLimitKind::Time)
+                            .then_some(antinomie_monitor_core::LimitSetting::Listing),
                     })
                     .collect(),
             }

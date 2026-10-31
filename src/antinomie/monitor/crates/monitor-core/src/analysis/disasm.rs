@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Built-in disassembly: x86 and x86-64 decoded with iced-x86, other
 //! architectures through objdump; every instruction is one listing row.
-use super::listing::{LISTING_MAX_SIZE, ListingWriter};
+use super::listing::ListingWriter;
 use super::*;
 use iced_x86::{
     Decoder, DecoderOptions, Formatter, Instruction, IntelFormatter, SymbolResolver, SymbolResult,
@@ -213,16 +213,19 @@ pub(super) fn disassemble(section: &mut AnalysisSection, specimen: &[u8], listin
     call_targets(&file, bitness, &mut named);
     let discovered = named.len() - symbols;
     let functions = Arc::new(named);
-    let mut writer =
-        match ListingWriter::create(listings, AnalysisKind::Disassembly, LISTING_MAX_SIZE) {
-            Ok(writer) => writer,
-            Err(error) => {
-                return unavailable(
-                    section,
-                    format!("The disassembly listing could not be written: {error}"),
-                );
-            }
-        };
+    let mut writer = match ListingWriter::create(
+        listings,
+        AnalysisKind::Disassembly,
+        super::limits::listing_bytes(),
+    ) {
+        Ok(writer) => writer,
+        Err(error) => {
+            return unavailable(
+                section,
+                format!("The disassembly listing could not be written: {error}"),
+            );
+        }
+    };
     let mut formatter =
         IntelFormatter::with_options(Some(Box::new(Names(functions.clone()))), None);
     configure(&mut formatter);
@@ -331,15 +334,15 @@ pub(super) fn disassemble(section: &mut AnalysisSection, specimen: &[u8], listin
             );
             if listing.truncated {
                 section.state = AnalysisSectionState::Partial;
-                super::limits::add(
+                super::limits::add_for(
                     section,
                     AnalysisLimitKind::Size,
+                    LimitSetting::Listing,
                     format!(
                         "The listing reached its {} limit after {} instructions; later code is not listed.",
-                        crate::byte_size::short_size(super::listing::LISTING_MAX_SIZE),
+                        crate::byte_size::short_size(super::limits::listing_bytes()),
                         super::detection::group_digits(instructions)
                     ),
-                    None,
                 );
             }
             section.listing = Some(listing);
@@ -370,16 +373,19 @@ fn objdump(section: &mut AnalysisSection, listings: &Path) {
             );
         }
     };
-    let mut writer =
-        match ListingWriter::create(listings, AnalysisKind::Disassembly, LISTING_MAX_SIZE) {
-            Ok(writer) => writer,
-            Err(error) => {
-                return unavailable(
-                    section,
-                    format!("The disassembly listing could not be written: {error}"),
-                );
-            }
-        };
+    let mut writer = match ListingWriter::create(
+        listings,
+        AnalysisKind::Disassembly,
+        super::limits::listing_bytes(),
+    ) {
+        Ok(writer) => writer,
+        Err(error) => {
+            return unavailable(
+                section,
+                format!("The disassembly listing could not be written: {error}"),
+            );
+        }
+    };
     let mut function: Option<String> = None;
     let mut full = false;
     let mut instructions = 0u64;
@@ -447,15 +453,15 @@ fn objdump(section: &mut AnalysisSection, listings: &Path) {
             );
             if listing.truncated && full {
                 section.state = AnalysisSectionState::Partial;
-                super::limits::add(
+                super::limits::add_for(
                     section,
                     AnalysisLimitKind::Size,
+                    LimitSetting::Listing,
                     format!(
                         "The listing reached its {} limit after {} instructions; later code is not listed.",
-                        crate::byte_size::short_size(super::listing::LISTING_MAX_SIZE),
+                        crate::byte_size::short_size(super::limits::listing_bytes()),
                         super::detection::group_digits(instructions)
                     ),
-                    None,
                 );
             }
             section.listing = Some(listing);

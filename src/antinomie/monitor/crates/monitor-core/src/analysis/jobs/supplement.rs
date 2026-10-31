@@ -51,12 +51,27 @@ impl Jobs {
     /// could not run), and add them to its report. The returned report is the
     /// analysis with the new sections pending; it is `Err` when nothing could
     /// be queued.
+    #[cfg(test)]
     pub(crate) fn analyze_more(
         &mut self,
         run_id: Option<String>,
         base: &Path,
         kinds: &[AnalysisKind],
         time_limit_seconds: Option<u64>,
+        available: u64,
+    ) -> Result<AnalysisReport, String> {
+        self.analyze_more_with(run_id, base, kinds, time_limit_seconds, None, available)
+    }
+
+    /// [`analyze_more`](Self::analyze_more) with the sizes and counts the new
+    /// checks may reach (`None` keeps the ones the report was made with).
+    pub(crate) fn analyze_more_with(
+        &mut self,
+        run_id: Option<String>,
+        base: &Path,
+        kinds: &[AnalysisKind],
+        time_limit_seconds: Option<u64>,
+        limits: Option<AnalysisLimits>,
         available: u64,
     ) -> Result<AnalysisReport, String> {
         let saved = open_report(base)?;
@@ -105,6 +120,7 @@ impl Jobs {
             enabled: true,
             checks: report.sections.iter().map(|s| s.kind).collect(),
             time_limit_minutes: 0,
+            limits: Default::default(),
         };
         selection.validate()?;
         let carried: Vec<_> = saved
@@ -121,6 +137,9 @@ impl Jobs {
         }
         report.state = AnalysisState::Acquiring;
         report.time_limit_seconds = time_limit_seconds;
+        if let Some(limits) = limits {
+            report.limits = limits.for_report();
+        }
         report.reason = None;
         report.specimen_sha256 = None;
         let base_len = directory_len(base).map_err(|e| e.to_string())?;
@@ -229,6 +248,7 @@ mod tests {
             enabled: true,
             checks: sections.to_vec(),
             time_limit_minutes: 0,
+            limits: Default::default(),
         };
         let mut report = new_report("/tmp/sample", &selection);
         report.state = AnalysisState::Complete;
@@ -381,6 +401,7 @@ mod tests {
             kind: AnalysisLimitKind::Time,
             text: "capa ran out of time: its limit was 4 minutes.".into(),
             seconds: Some(240),
+            setting: None,
         });
         persist_report(&base, &saved).unwrap();
         let mut jobs = Jobs::default();

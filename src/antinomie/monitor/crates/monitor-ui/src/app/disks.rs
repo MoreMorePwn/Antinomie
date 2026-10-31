@@ -152,6 +152,7 @@ impl MonitorApp {
                 let mut analysis = self.exec.analysis.clone();
                 analysis.enabled = true;
                 analysis.time_limit_minutes = self.settings.analysis_time_limit_minutes;
+                analysis.limits = self.settings.analysis_limits;
                 if analysis.checks.is_empty() {
                     analysis.checks = antinomie_monitor_core::AnalysisKind::TRIAGE.to_vec();
                 }

@@ -2,7 +2,7 @@
 //! Decompilation through a locally installed decompiler: Ghidra headless
 //! when present, otherwise radare2's pseudo-code. Each function becomes a
 //! header row followed by one row per source line.
-use super::listing::{LISTING_MAX_SIZE, ListingWriter};
+use super::listing::ListingWriter;
 use super::tools;
 use super::*;
 use object::{Object, ObjectSegment};
@@ -207,7 +207,8 @@ fn ghidra_run(
                 |failure| format!("{failure}; see its output in worker.log"),
             ));
     };
-    let text = String::from_utf8_lossy(&text[..text.len().min(LISTING_MAX_SIZE as usize)]);
+    let text =
+        String::from_utf8_lossy(&text[..text.len().min(super::limits::listing_bytes() as usize)]);
     let version = ghidra_version(ghidra);
     let cut = if run.timed_out { Cut::Time } else { Cut::Whole };
     let (functions, lines, listing, ended) =
@@ -362,7 +363,7 @@ fn radare2_run(section: &mut AnalysisSection, listings: &Path, r2: &str) -> Resu
         ],
         &[("HOME", "/tmp")],
         budget,
-        LISTING_MAX_SIZE as usize / 2,
+        super::limits::listing_bytes() as usize / 2,
     )?;
     // Re-mark the output in the Ghidra export format.
     let mut text = String::new();
@@ -417,8 +418,11 @@ fn write_source(
     object_base: u64,
     cut: Cut,
 ) -> Result<(u64, u64, AnalysisListing, Cut), String> {
-    let mut writer =
-        ListingWriter::create(listings, AnalysisKind::Decompilation, LISTING_MAX_SIZE)?;
+    let mut writer = ListingWriter::create(
+        listings,
+        AnalysisKind::Decompilation,
+        super::limits::listing_bytes(),
+    )?;
     let mut base = None;
     let mut function: Option<String> = None;
     let mut line_number = 0u32;
@@ -541,14 +545,14 @@ fn finish(
             );
             super::limits::time_out(section, name, seconds, summary);
         }
-        Cut::Size => super::limits::add(
+        Cut::Size => super::limits::add_for(
             section,
             AnalysisLimitKind::Size,
+            LimitSetting::Listing,
             format!(
                 "The decompilation reached its {} size limit after {functions} functions; later functions are not listed.",
-                crate::byte_size::short_size(LISTING_MAX_SIZE)
+                crate::byte_size::short_size(super::limits::listing_bytes())
             ),
-            None,
         ),
     }
     section.listing = Some(listing);
@@ -916,9 +920,9 @@ pub fn decompile_captured_core(
         }
         let mut captured = Vec::new();
         crate::archive_io::open_regular(&attempt, &export)
-        .and_then(|file| file.take(LISTING_MAX_SIZE + 1).read_to_end(&mut captured))
+        .and_then(|file| file.take(super::limits::listing_bytes() + 1).read_to_end(&mut captured))
         .map_err(|error| format!("Ghidra produced no decompilation ({error}). The sparse plan file is not a result. Diagnostics: {}/ghidra-*.log", work.display()))?;
-        if captured.len() as u64 > LISTING_MAX_SIZE {
+        if captured.len() as u64 > super::limits::listing_bytes() {
             return Err(
                 "Ghidra decompilation exceeded the retained listing bound; prior export preserved"
                     .into(),

@@ -522,6 +522,7 @@ mod tests {
             enabled: true,
             checks: vec![crate::analysis::AnalysisKind::Metadata],
             time_limit_minutes: 0,
+            limits: Default::default(),
         };
         let summary = RunSummary {
             environment: None,

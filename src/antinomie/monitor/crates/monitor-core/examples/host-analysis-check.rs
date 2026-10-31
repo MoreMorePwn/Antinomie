@@ -77,6 +77,7 @@ fn main() {
                 enabled: true,
                 checks,
                 time_limit_minutes: 0,
+                limits: Default::default(),
             },
         })?;
         let deadline = Instant::now() + Duration::from_secs(180);

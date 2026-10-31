@@ -123,6 +123,7 @@ pub(crate) fn new_report(path: &str, selection: &AnalysisSelection) -> AnalysisR
         layer: None,
         specimen_source: None,
         time_limit_seconds: time_limit_seconds(selection.time_limit_minutes),
+        limits: selection.limits.for_report(),
     }
 }
 pub(crate) fn fail(report: &mut AnalysisReport, state: AnalysisState, reason: impl Into<String>) {
@@ -222,7 +223,7 @@ impl Jobs {
                 .checked_add(
                     REPORT_MAX_SIZE as u64
                         + 64 * 1024 * 1024
-                        + super::listing::LISTINGS_MAX_TOTAL
+                        + report.limits.unwrap_or_default().clamped().listings_total()
                         + layers::extra_reserve(&report)
                         + 8192,
                 )
@@ -1189,6 +1190,7 @@ mod tests {
             enabled: true,
             checks: vec![AnalysisKind::Metadata],
             time_limit_minutes: 0,
+            limits: Default::default(),
         };
         let mut jobs = Jobs::default();
         let first = new_report("/tmp/first", &selection);
@@ -1555,6 +1557,7 @@ time.sleep(30)
                 .copied()
                 .collect(),
             time_limit_minutes: 0,
+            limits: Default::default(),
         };
         let mut report = new_report(&source, &selection);
         report.state = AnalysisState::Queued;
@@ -1720,6 +1723,7 @@ time.sleep(30)
                 AnalysisKind::Entropy,
             ],
             time_limit_minutes: 0,
+            limits: Default::default(),
         };
         let mut report = new_report("/usr/bin/true", &selection);
         report.state = AnalysisState::Queued;
@@ -1805,6 +1809,7 @@ time.sleep(30)
                 enabled: true,
                 checks: vec![AnalysisKind::Strings],
                 time_limit_minutes: 0,
+                limits: Default::default(),
             },
         );
         report.specimen_len = Some(16);
@@ -1962,6 +1967,7 @@ time.sleep(30)
             enabled: true,
             checks: vec![AnalysisKind::Metadata],
             time_limit_minutes: 0,
+            limits: Default::default(),
         };
         let mut jobs = Jobs::default();
         jobs.submit(
@@ -2003,6 +2009,7 @@ time.sleep(30)
             enabled: true,
             checks: vec![AnalysisKind::Metadata],
             time_limit_minutes: 0,
+            limits: Default::default(),
         };
         let mut jobs = Jobs::default();
         let report = new_report("/tmp/sample", &selection);
@@ -2043,6 +2050,7 @@ time.sleep(30)
             enabled: true,
             checks: vec![AnalysisKind::Metadata],
             time_limit_minutes: 0,
+            limits: Default::default(),
         };
         let mut jobs = Jobs::default();
         jobs.submit(

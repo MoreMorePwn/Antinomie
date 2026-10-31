@@ -582,6 +582,7 @@ impl Worker {
         run_id: Option<String>,
         checks: &[crate::analysis::AnalysisKind],
         time_limit_seconds: Option<u64>,
+        limits: crate::analysis::AnalysisLimits,
     ) -> Result<String, String> {
         if directory
             .components()
@@ -590,11 +591,12 @@ impl Worker {
         {
             return Err("the analysis folder is not a plain absolute path".into());
         }
-        self.host_analysis.analyze_more(
+        self.host_analysis.analyze_more_with(
             run_id,
             directory,
             checks,
             time_limit_seconds,
+            Some(limits),
             self.options.capture_quota_size,
         )?;
         self.host_analysis_updates();

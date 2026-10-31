@@ -73,6 +73,7 @@ pub(crate) fn app() -> MonitorApp {
         settings: Settings::default(),
         options: BackendOptions::default(),
         settings_open: false,
+        settings_focus: None,
         settings_page: Default::default(),
         create_open: false,
         config_open: false,
@@ -620,6 +621,7 @@ pub(super) fn section_report(id: &str, marker: &str) -> antinomie_monitor_core::
         layer: None,
         specimen_source: None,
         time_limit_seconds: None,
+        limits: None,
     }
 }
 

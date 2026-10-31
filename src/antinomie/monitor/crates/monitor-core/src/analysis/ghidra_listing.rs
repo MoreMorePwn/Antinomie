@@ -17,7 +17,7 @@
 //!
 //! `targets` and `xrefs` are comma-separated `address:kind` pairs (kind `c`
 //! call, `j` jump, `d` data, `o` other).
-use super::listing::{LISTING_MAX_SIZE, ListingWriter, REFERENCES_MAX};
+use super::listing::{ListingWriter, REFERENCES_MAX};
 use super::*;
 use object::{Object, ObjectSection};
 use std::{
@@ -273,7 +273,13 @@ pub(super) fn write_listing(
     specimen: &[u8],
     object_base: u64,
 ) -> Result<(AnalysisListing, ListingSummary), String> {
-    write_listing_with(listings, export, specimen, object_base, LISTING_MAX_SIZE)
+    write_listing_with(
+        listings,
+        export,
+        specimen,
+        object_base,
+        super::limits::listing_bytes(),
+    )
 }
 
 /// [`write_listing`] under a smaller size bound.

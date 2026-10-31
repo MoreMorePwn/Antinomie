@@ -793,6 +793,7 @@ pub(super) fn listed(run: &RunSummary) -> RunSummary {
                 layer: None,
                 specimen_source: None,
                 time_limit_seconds: None,
+                limits: None,
             }),
     }
 }

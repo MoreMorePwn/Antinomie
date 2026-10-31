@@ -112,6 +112,8 @@ struct Settings {
     core_budget_mib: u32,
     /// Static analysis: minutes each analysis tool may run; 0 leaves each its own limit.
     analysis_time_limit_minutes: u32,
+    /// Static analysis: the sizes and counts a check may reach.
+    analysis_limits: antinomie_monitor_core::AnalysisLimits,
     /// File activity: most MiB of written content kept for one file.
     file_write_file_mib: u32,
     /// File activity: most MiB of written content kept for a whole run.
@@ -244,6 +246,7 @@ impl Default for Settings {
             quota_gib: 4,
             core_budget_mib: crate::core_budget::default_mib(),
             analysis_time_limit_minutes: 0,
+            analysis_limits: antinomie_monitor_core::AnalysisLimits::default(),
             file_write_file_mib: (antinomie_monitor_core::file_writes::DEFAULT_PER_FILE >> 20)
                 as u32,
             file_write_run_mib: (antinomie_monitor_core::file_writes::DEFAULT_PER_RUN >> 20) as u32,
@@ -394,6 +397,8 @@ pub struct MonitorApp {
     settings: Settings,
     options: BackendOptions,
     settings_open: bool,
+    /// The analysis limit field Settings scrolls to once, after a warning's button.
+    settings_focus: Option<antinomie_monitor_core::LimitSetting>,
     settings_page: settings_window::SettingsPage,
     create_open: bool,
     config_open: bool,
@@ -600,6 +605,7 @@ impl MonitorApp {
             settings,
             options,
             settings_open: false,
+            settings_focus: None,
             settings_page: Default::default(),
             create_open: false,
             config_open: false,

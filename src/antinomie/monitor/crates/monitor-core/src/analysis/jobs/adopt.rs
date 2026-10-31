@@ -13,9 +13,10 @@ fn adopt(
     listing: &AnalysisListing,
     total_len: Option<u64>,
     total: &mut u64,
+    budget: u64,
 ) -> Result<(), String> {
     *total = total.saturating_add(listing.bytes);
-    if *total > super::super::listing::LISTINGS_MAX_TOTAL {
+    if *total > budget {
         return Err("listings exceed their combined bound".to_string());
     }
     super::super::listing::validate(&output.join(name), kind, listing, total_len).and_then(|()| {
@@ -47,6 +48,7 @@ pub(in super::super) fn adopt_listings(
     let target = directory.join("listings");
     let mut total = 0u64;
     let total_len = report.specimen_len;
+    let budget = report.limits.unwrap_or_default().clamped().listings_total();
     for section in &mut report.sections {
         if carried.contains(&section.kind) {
             continue;
@@ -60,6 +62,7 @@ pub(in super::super) fn adopt_listings(
                 &disassembly.listing,
                 total_len,
                 &mut total,
+                budget,
             )
         {
             section.disassembly = None;
@@ -77,6 +80,7 @@ pub(in super::super) fn adopt_listings(
             &listing,
             total_len,
             &mut total,
+            budget,
         ) {
             section.listing = None;
             section.state = AnalysisSectionState::Partial;

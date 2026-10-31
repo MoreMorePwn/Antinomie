@@ -1170,6 +1170,7 @@ mod tests {
             enabled: true,
             checks: vec![crate::analysis::AnalysisKind::Metadata],
             time_limit_minutes: 0,
+            limits: Default::default(),
         };
         for (state, expected) in [
             (AnalysisState::Acquiring, AnalysisState::Unavailable),

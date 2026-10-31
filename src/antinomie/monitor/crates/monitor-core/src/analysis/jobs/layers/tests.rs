@@ -56,6 +56,7 @@ fn finished(name: &str) -> (Job, PathBuf) {
         layer: None,
         specimen_source: None,
         time_limit_seconds: None,
+        limits: None,
     };
     let job = Job {
         run_id: Some("run-1".into()),

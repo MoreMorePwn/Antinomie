@@ -530,6 +530,7 @@ fn a_report_scan_reads_the_strings_and_floss_listings_with_their_offsets() {
         layer: None,
         specimen_source: None,
         time_limit_seconds: None,
+        limits: None,
     };
     std::fs::write(
         directory.join("report.json"),

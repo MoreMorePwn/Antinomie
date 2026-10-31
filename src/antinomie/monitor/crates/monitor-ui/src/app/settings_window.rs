@@ -107,6 +107,50 @@ fn hint(ui: &mut egui::Ui, text: &str) -> egui::Response {
 }
 
 impl MonitorApp {
+    /// One field for each size and count a check may reach.
+    pub(super) fn analysis_limit_fields(&mut self, ui: &mut egui::Ui) {
+        let mut focus = self.settings_focus.take();
+        form_grid("settings_analysis_size_limits", ui).show(ui, |ui| {
+            for field in &antinomie_monitor_core::LIMIT_FIELDS {
+                let label = ui.label(field.label);
+                if focus == Some(field.setting) {
+                    label.scroll_to_me(Some(egui::Align::Center));
+                    focus = None;
+                }
+                ui.vertical(|ui| {
+                    let mut value = self.settings.analysis_limits.get(field.setting);
+                    let speed = f64::from((field.max - field.min) / 200).max(1.0);
+                    let changed = ui
+                        .add(
+                            egui::DragValue::new(&mut value)
+                                .range(field.min..=field.max)
+                                .speed(speed)
+                                .suffix(format!(" {}", field.unit)),
+                        )
+                        .on_hover_text(format!("{} to {} {}", field.min, field.max, field.unit))
+                        .changed();
+                    if changed {
+                        self.settings.analysis_limits.set(field.setting, value);
+                    }
+                    hint(
+                        ui,
+                        &format!("{} Default {} {}.", field.help, field.default, field.unit),
+                    );
+                });
+                ui.end_row();
+            }
+        });
+        if ui
+            .add_enabled(
+                !self.settings.analysis_limits.is_default(),
+                egui::Button::new("Reset size limits"),
+            )
+            .clicked()
+        {
+            self.settings.analysis_limits = antinomie_monitor_core::AnalysisLimits::default();
+        }
+    }
+
     /// Shows the settings page whose list label is `label`.
     pub(super) fn open_settings_page(&mut self, label: &str) {
         let Some(page) = SettingsPage::ALL
@@ -463,6 +507,14 @@ impl MonitorApp {
             });
             ui.end_row();
         });
+        ui.add_space(6.0);
+        ui.label(theme::section_title(ui, "Size limits"));
+        hint(
+            ui,
+            "What a check keeps and reads before it says a bound cut its result short. A warning's Analysis settings button leads here. A change applies to analyses started afterwards; a check can be run again from its tab.",
+        );
+        self.analysis_limit_fields(ui);
+        ui.add_space(6.0);
         hint(ui, &antinomie_monitor_core::fixed_limits_text());
         ui.add_space(6.0);
         ui.separator();

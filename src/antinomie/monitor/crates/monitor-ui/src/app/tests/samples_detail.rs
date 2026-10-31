@@ -93,6 +93,7 @@ pub(super) fn save_run(
             layer: None,
             specimen_source: None,
             time_limit_seconds: None,
+            limits: None,
         };
         std::fs::create_dir_all(directory.join("analysis")).unwrap();
         std::fs::write(
@@ -147,6 +148,7 @@ pub(super) fn save_digest(run: &RunSummary, tier: &str, hit: bool) {
                 mitre: vec!["T1053.003".into()],
                 count: 1,
                 family: "CronDropper".into(),
+                ..Default::default()
             }]
         } else {
             Vec::new()

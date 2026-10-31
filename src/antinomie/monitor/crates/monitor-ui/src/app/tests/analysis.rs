@@ -229,6 +229,7 @@ fn static_analysis_uses_selected_archive_report_without_submitting_work() {
         layer: None,
         specimen_source: None,
         time_limit_seconds: None,
+        limits: None,
     };
     live.analysis = Some(report("live-report"));
     app.snapshot.runs.push(live.clone());
@@ -458,6 +459,7 @@ fn analyze_only_and_cancel_do_not_launch_or_stop_a_program() {
             layer: None,
             specimen_source: None,
             time_limit_seconds: None,
+            limits: None,
         });
     app.selected_analysis = Some("standalone-job".into());
     let output = ctx.run(egui::RawInput::default(), |ctx| {
@@ -570,6 +572,7 @@ fn an_unpacked_layers_analysis_is_found_in_its_packed_files_folder_and_can_be_sh
             }),
             specimen_source: None,
             time_limit_seconds: None,
+            limits: None,
         });
     assert_eq!(
         app.analysis_directory("packed-report-L2"),
@@ -608,7 +611,7 @@ fn running_a_missing_check_asks_the_backend_to_add_it_to_the_runs_analysis() {
     );
     assert!(matches!(
         app.submitted.last(),
-        Some(Command::AnalyzeMore { directory, run_id, checks, time_limit_seconds: None })
+        Some(Command::AnalyzeMore { directory, run_id, checks, time_limit_seconds: None, .. })
             if directory == &PathBuf::from("/saved/run/analysis")
                 && run_id.as_deref() == Some("packed-run")
                 && checks == &[antinomie_monitor_core::AnalysisKind::Floss]
@@ -663,4 +666,44 @@ fn running_a_missing_check_asks_the_backend_to_add_it_to_the_runs_analysis() {
         }),
     );
     assert_eq!(app.submitted.len(), sent);
+}
+
+#[test]
+fn a_limit_warning_opens_settings_at_its_field_and_the_fields_edit_the_limits() {
+    use antinomie_monitor_core::{LimitSetting, LIMIT_FIELDS};
+    let mut app = app();
+    app.analysis_action(
+        "workspace",
+        Some(crate::analysis::ReportAction::OpenAnalysisLimit(
+            LimitSetting::FlossFile,
+        )),
+    );
+    assert!(app.settings_open);
+    assert_eq!(app.settings_focus, Some(LimitSetting::FlossFile));
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let output = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(900.0, 1400.0),
+            )),
+            ..Default::default()
+        },
+        |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| app.analysis_limit_fields(ui));
+        },
+    );
+    // The focus is spent, and every setting has its label.
+    assert_eq!(app.settings_focus, None);
+    let shown = crate::app::tests::texts(&output);
+    for field in &LIMIT_FIELDS {
+        assert!(
+            shown.iter().any(|(text, _)| text == field.label),
+            "{} missing",
+            field.label
+        );
+    }
+    app.settings.analysis_limits.set(LimitSetting::Rows, 4096);
+    assert_eq!(app.settings.analysis_limits.rows, 4096);
 }

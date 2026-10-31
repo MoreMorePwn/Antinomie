@@ -121,7 +121,7 @@ pub(super) fn capabilities(section: &mut AnalysisSection) {
         &["--json", "-r", "/tmp/capa-rules", "/input/specimen"],
         &environment,
         timeout,
-        32 * 1024 * 1024,
+        super::limits::large_output(),
         true,
     ) {
         Ok(run) => run,
@@ -148,12 +148,18 @@ pub(super) fn capabilities(section: &mut AnalysisSection) {
             );
         } else if run.truncated {
             section.state = AnalysisSectionState::Unavailable;
-            section.summary = "capa printed more than 32 MiB, so its result was not read".into();
-            super::limits::add(
+            section.summary = format!(
+                "capa printed more than {} MiB, so its result was not read",
+                super::limits::large_output() >> 20
+            );
+            super::limits::add_for(
                 section,
                 AnalysisLimitKind::Size,
-                "capa's output was bigger than the 32 MiB the analysis reads.",
-                None,
+                LimitSetting::LargeOutput,
+                format!(
+                    "capa's output was bigger than the {} MiB the analysis reads.",
+                    super::limits::large_output() >> 20
+                ),
             );
         } else {
             section.state = AnalysisSectionState::Unavailable;
@@ -239,11 +245,14 @@ pub(super) fn capabilities(section: &mut AnalysisSection) {
         );
     } else if run.truncated {
         section.state = AnalysisSectionState::Partial;
-        super::limits::add(
+        super::limits::add_for(
             section,
             AnalysisLimitKind::Size,
-            "capa's output was bigger than the 32 MiB the analysis reads; the rest was ignored.",
-            None,
+            LimitSetting::LargeOutput,
+            format!(
+                "capa's output was bigger than the {} MiB the analysis reads; the rest was ignored.",
+                super::limits::large_output() >> 20
+            ),
         );
     } else {
         section.state = AnalysisSectionState::Complete;

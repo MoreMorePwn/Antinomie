@@ -416,6 +416,7 @@ mod tests {
             layer: None,
             specimen_source: None,
             time_limit_seconds: None,
+            limits: None,
         };
         let ctx = egui::Context::default();
         let mut state = ContentState::default();
@@ -463,6 +464,7 @@ mod tests {
             layer: None,
             specimen_source: None,
             time_limit_seconds: None,
+            limits: None,
         };
         let preview = Ok(AnalysisSpecimenPage {
             report_id: report.id.clone(),

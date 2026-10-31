@@ -315,6 +315,7 @@ impl MonitorApp {
                     // The time limit is one value, here and in Settings.
                     self.exec.analysis.time_limit_minutes =
                         self.settings.analysis_time_limit_minutes;
+                    self.exec.analysis.limits = self.settings.analysis_limits;
                     let outcome = crate::analysis::launch_fields(
                         ui,
                         &mut self.exec,
@@ -460,6 +461,7 @@ impl MonitorApp {
                     Ok(mut request) => {
                         request.analysis.time_limit_minutes =
                             self.settings.analysis_time_limit_minutes;
+                        request.analysis.limits = self.settings.analysis_limits;
                         request.host_copy = self.uploaded_host_file(&request.path);
                         self.send(Command::Execute(request))
                     }
@@ -477,6 +479,7 @@ impl MonitorApp {
                 gid: self.exec.gid,
                 analysis: antinomie_monitor_core::AnalysisSelection {
                     time_limit_minutes: self.settings.analysis_time_limit_minutes,
+                    limits: self.settings.analysis_limits,
                     ..self.exec.analysis.clone()
                 },
             });

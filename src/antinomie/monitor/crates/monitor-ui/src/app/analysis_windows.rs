@@ -207,6 +207,7 @@ impl MonitorApp {
                     run_id,
                     checks: vec![kind],
                     time_limit_seconds: self.analysis_time_limit_seconds(),
+                    limits: self.settings.analysis_limits,
                 });
             }
             Some(crate::analysis::ReportAction::RunCheckLonger {
@@ -224,11 +225,17 @@ impl MonitorApp {
                     run_id,
                     checks: vec![kind],
                     time_limit_seconds: Some(seconds),
+                    limits: self.settings.analysis_limits,
                 });
             }
             Some(crate::analysis::ReportAction::OpenAnalysisSettings) => {
                 self.settings_open = true;
                 self.settings_page = settings_window::SettingsPage::AnalysisTools;
+            }
+            Some(crate::analysis::ReportAction::OpenAnalysisLimit(setting)) => {
+                self.settings_open = true;
+                self.settings_page = settings_window::SettingsPage::AnalysisTools;
+                self.settings_focus = Some(setting);
             }
             Some(crate::analysis::ReportAction::ShowReport { report_id }) => {
                 if self.analysis_report(&report_id).is_some() {

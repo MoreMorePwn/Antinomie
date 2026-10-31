@@ -548,6 +548,8 @@ pub(crate) enum ReportAction {
     },
     /// Open Settings where the time limit of the analysis tools is set.
     OpenAnalysisSettings,
+    /// Open Settings at the field that raises one bound a warning named.
+    OpenAnalysisLimit(antinomie_monitor_core::LimitSetting),
     /// Make this report the one the Static Analysis panel shows.
     ShowReport {
         report_id: String,
@@ -832,6 +834,7 @@ mod tests {
             layer: None,
             specimen_source: None,
             time_limit_seconds: None,
+            limits: None,
         }
     }
 

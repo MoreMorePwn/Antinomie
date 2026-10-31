@@ -18,6 +18,7 @@ fn fixture() -> AnalysisReport {
         layer: None,
         specimen_source: None,
         time_limit_seconds: None,
+        limits: None,
     };
     let mut structures = vec![AnalysisEntry {
         label: "Format".into(),
@@ -1245,6 +1246,7 @@ fn meaning_report() -> AnalysisReport {
         layer: None,
         specimen_source: None,
         time_limit_seconds: None,
+        limits: None,
     };
     report.sections.push(AnalysisSection {
         disassembly: None,
@@ -2246,6 +2248,7 @@ fn unpacked_report() -> AnalysisReport {
         layer: None,
         specimen_source: None,
         time_limit_seconds: None,
+        limits: None,
     }
 }
 
@@ -2513,18 +2516,21 @@ fn regex_matches_are_their_own_check_and_a_report_without_it_offers_to_run_it() 
         enabled: true,
         checks: vec![AnalysisKind::Regex],
         time_limit_minutes: 0,
+        limits: Default::default(),
     };
     assert!(alone.validate().unwrap_err().contains("Strings or FLOSS"));
     let with_strings = AnalysisSelection {
         enabled: true,
         checks: vec![AnalysisKind::Strings, AnalysisKind::Regex],
         time_limit_minutes: 0,
+        limits: Default::default(),
     };
     assert!(with_strings.validate().is_ok());
     let strings_only = AnalysisSelection {
         enabled: true,
         checks: vec![AnalysisKind::Strings],
         time_limit_minutes: 0,
+        limits: Default::default(),
     };
     assert!(strings_only.validate().is_ok());
 }
@@ -2628,11 +2634,13 @@ fn limits_report() -> AnalysisReport {
         kind: AnalysisLimitKind::Time,
         text: "capa ran out of time: its limit was 4 minutes.".into(),
         seconds: Some(240),
+        setting: None,
     });
     report.sections[1].limits.push(AnalysisLimit {
         kind: AnalysisLimitKind::Size,
         text: "The listing reached its 64.0 MB limit after 2,000 of 9,000 strings; later strings are not listed.".into(),
         seconds: None,
+        setting: Some(antinomie_monitor_core::LimitSetting::Listing),
     });
     report
 }

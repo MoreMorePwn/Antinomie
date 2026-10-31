@@ -3,13 +3,12 @@
 //! to what a report keeps, and the cut is reported to the caller.
 use super::*;
 
-pub(super) const VALUE_MAX_SIZE: usize = 4096;
-
 pub(super) fn clip(text: &mut String) -> bool {
-    if text.len() <= VALUE_MAX_SIZE {
+    let most = super::limits::value_bytes();
+    if text.len() <= most {
         return false;
     }
-    let mut end = VALUE_MAX_SIZE;
+    let mut end = most;
     while !text.is_char_boundary(end) {
         end -= 1;
     }

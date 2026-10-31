@@ -201,6 +201,7 @@ mod tests {
                 AnalysisKind::Capabilities,
             ],
             time_limit_minutes: 0,
+            limits: Default::default(),
         };
         let mut report = super::super::jobs::new_report("/bin/x", &selection);
         report.specimen_len = Some(10);

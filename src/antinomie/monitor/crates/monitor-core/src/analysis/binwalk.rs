@@ -5,8 +5,6 @@ use super::*;
 use std::time::Duration;
 
 const SYSTEM: &[&str] = &["/usr/bin/binwalk", "/usr/local/bin/binwalk"];
-/// Signatures kept in the report; binwalk can report thousands on firmware.
-const SIGNATURE_MAX_COUNT: usize = 2048;
 /// binwalk's own time limit, in seconds.
 pub(super) const TIMEOUT_SECONDS: u64 = 180;
 
@@ -24,7 +22,7 @@ pub(super) fn embedded(section: &mut AnalysisSection, specimen_len: u64) {
         &["/input/specimen"],
         &[("HOME", "/tmp")],
         timeout,
-        4 * 1024 * 1024,
+        super::limits::tool_output() * 4,
         true,
     ) {
         Ok(run) => run,
@@ -44,7 +42,7 @@ pub(super) fn embedded(section: &mut AnalysisSection, specimen_len: u64) {
     }
     let signatures = parse(&run.stdout, specimen_len);
     let found = signatures.len();
-    for (offset, description) in signatures.into_iter().take(SIGNATURE_MAX_COUNT) {
+    for (offset, description) in signatures.into_iter().take(super::limits::rows()) {
         super::worker::structured_entry(
             section,
             format!("0x{offset:x}"),
@@ -69,17 +67,17 @@ pub(super) fn embedded(section: &mut AnalysisSection, specimen_len: u64) {
         }
     );
     section.state = AnalysisSectionState::Complete;
-    if found > SIGNATURE_MAX_COUNT {
+    if found > super::limits::rows() {
         section.state = AnalysisSectionState::Partial;
-        super::limits::add(
+        super::limits::add_for(
             section,
             AnalysisLimitKind::Rows,
+            LimitSetting::Rows,
             format!(
                 "binwalk found {} signatures; the report lists the first {}.",
                 super::detection::group_digits(found as u64),
-                super::detection::group_digits(SIGNATURE_MAX_COUNT as u64)
+                super::detection::group_digits(super::limits::rows() as u64)
             ),
-            None,
         );
     }
     if run.timed_out {
@@ -93,11 +91,14 @@ pub(super) fn embedded(section: &mut AnalysisSection, specimen_len: u64) {
         );
     } else if run.truncated {
         section.state = AnalysisSectionState::Partial;
-        super::limits::add(
+        super::limits::add_for(
             section,
             AnalysisLimitKind::Size,
-            "binwalk printed more than the 4 MiB the analysis reads; the rest was ignored.",
-            None,
+            LimitSetting::ToolOutput,
+            format!(
+                "binwalk printed more than the {} MiB the analysis reads; the rest was ignored.",
+                super::limits::tool_output() * 4 >> 20
+            ),
         );
     }
 }

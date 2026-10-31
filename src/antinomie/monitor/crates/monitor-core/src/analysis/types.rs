@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+use super::limits::{AnalysisLimits, LimitSetting};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -69,6 +70,8 @@ pub struct AnalysisSelection {
     /// Minutes each analysis tool may run; 0 leaves each tool its own limit
     /// (capa 4, FLOSS 8, binwalk 3, the decompiler 14).
     pub time_limit_minutes: u32,
+    /// The sizes and counts the analysis may reach (Settings > Analysis).
+    pub limits: AnalysisLimits,
 }
 
 /// Longest time limit a run may ask for, in minutes.
@@ -91,6 +94,7 @@ struct SelectionWire {
     checks: Vec<AnalysisKind>,
     regex_split: bool,
     time_limit_minutes: u32,
+    limits: AnalysisLimits,
 }
 
 impl Default for SelectionWire {
@@ -100,6 +104,7 @@ impl Default for SelectionWire {
             checks: AnalysisKind::TRIAGE.to_vec(),
             regex_split: false,
             time_limit_minutes: 0,
+            limits: AnalysisLimits::DEFAULT,
         }
     }
 }
@@ -117,6 +122,7 @@ impl From<SelectionWire> for AnalysisSelection {
             enabled: wire.enabled,
             checks,
             time_limit_minutes: wire.time_limit_minutes,
+            limits: wire.limits.clamped(),
         }
     }
 }
@@ -128,6 +134,7 @@ impl From<AnalysisSelection> for SelectionWire {
             checks: selection.checks,
             regex_split: true,
             time_limit_minutes: selection.time_limit_minutes,
+            limits: selection.limits,
         }
     }
 }
@@ -138,6 +145,7 @@ impl Default for AnalysisSelection {
             enabled: false,
             checks: AnalysisKind::TRIAGE.to_vec(),
             time_limit_minutes: 0,
+            limits: AnalysisLimits::DEFAULT,
         }
     }
 }
@@ -229,6 +237,9 @@ pub struct AnalysisLimit {
     /// For a time limit, the seconds the tool was given.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seconds: Option<u64>,
+    /// The setting that raises this bound, when there is one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setting: Option<LimitSetting>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -620,6 +631,10 @@ pub struct AnalysisReport {
     /// asked for a limit of its own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time_limit_seconds: Option<u64>,
+    /// The sizes and counts the checks still pending may reach, when the
+    /// analysis was asked for others than the defaults.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limits: Option<AnalysisLimits>,
 }
 
 #[cfg(test)]

@@ -36,6 +36,7 @@ fn production_sandbox_publishes_light_results_while_heavy_tool_runs() {
                 AnalysisKind::Strings,
             ],
             time_limit_minutes: 0,
+            limits: Default::default(),
         },
     );
     report.specimen_len = Some(specimen.len() as u64);
@@ -129,6 +130,7 @@ fn three_checks() -> AnalysisReport {
                 AnalysisKind::Strings,
             ],
             time_limit_minutes: 0,
+            limits: Default::default(),
         },
     );
     report.state = AnalysisState::Running;

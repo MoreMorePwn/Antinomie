@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-use super::bounds::{VALUE_MAX_SIZE, bound_data, clip};
+use super::bounds::{bound_data, clip};
 use super::listing::ListingWriter;
 use super::*;
 use object::{Object, ObjectSection, ObjectSymbol};
@@ -12,17 +12,15 @@ use std::{
     time::Duration,
 };
 
-pub(crate) const REPORT_MAX_SIZE: usize = 128 * 1024;
-/// Rows of a category the report itself keeps; a category with a listing holds
-/// all of its rows there and the report only previews the first ones.
-pub(super) const ENTRY_MAX_COUNT: usize = 2048;
-pub(super) const TOOL_OUTPUT_MAX_SIZE: usize = 1024 * 1024;
+/// The largest report the host accepts (the worker aims for less unless the
+/// row setting was raised: [`AnalysisLimits::report_target`]).
+pub(crate) const REPORT_MAX_SIZE: usize = super::limits::REPORT_CEILING;
 thread_local! {
     /// Rows the section was given, kept or not. A row's id is its number here.
     static ROWS_SEEN: Cell<u64> = const { Cell::new(0) };
     /// Rows left out of the report with no listing to hold them.
     static ROWS_DROPPED: Cell<u64> = const { Cell::new(0) };
-    /// Rows with a text cut to `VALUE_MAX_SIZE`.
+    /// Rows with a text cut to the value bound.
     static VALUES_CUT: Cell<u64> = const { Cell::new(0) };
     /// The listing every row of the section is also written to as it is made.
     static LISTING: RefCell<Option<RowSink>> = const { RefCell::new(None) };
@@ -78,20 +76,21 @@ fn worker_main() -> Result<(), String> {
     // A decompiler runs a JVM with many threads, a large address space
     // reservation, hundreds of open jars and a project database in /tmp.
     super::limits::set_time_limit(report.time_limit_seconds);
+    super::limits::set_limits(report.limits);
     let (cpu, address_space, file_size, files) = if has(AnalysisKind::Decompilation) {
         (6 * DECOMPILER_SECONDS, None, Some(512 * 1024 * 1024), 8192)
     } else if has(AnalysisKind::Capabilities) || has(AnalysisKind::Floss) {
         (
             600,
             Some(8 * 1024 * 1024 * 1024),
-            Some(super::listing::LISTING_MAX_SIZE),
+            Some(super::limits::listing_bytes()),
             1024,
         )
     } else {
         (
             300,
             Some(4 * 1024 * 1024 * 1024),
-            Some(super::listing::LISTING_MAX_SIZE),
+            Some(super::limits::listing_bytes()),
             256,
         )
     };
@@ -153,9 +152,11 @@ fn worker_main() -> Result<(), String> {
 }
 pub(super) fn bounded_report(report: &mut AnalysisReport) -> Result<Vec<u8>, String> {
     let mut encoded = serde_json::to_vec(&report).map_err(|e| e.to_string())?;
+    let target =
+        super::limits::AnalysisLimits::clamped(report.limits.unwrap_or_default()).report_target();
     // Rows of a category with a full listing are only a preview: shorten
     // those first, without calling anything partial.
-    while encoded.len() > REPORT_MAX_SIZE {
+    while encoded.len() > target {
         let Some(section) = report
             .sections
             .iter_mut()
@@ -167,10 +168,13 @@ pub(super) fn bounded_report(report: &mut AnalysisReport) -> Result<Vec<u8>, Str
         section.entries.truncate(section.entries.len() / 2);
         encoded = serde_json::to_vec(&report).map_err(|e| e.to_string())?;
     }
-    if encoded.len() > REPORT_MAX_SIZE {
+    if encoded.len() > target {
         report.state = AnalysisState::Partial;
-        report.reason = Some("normalized report truncated to 128 KiB live-snapshot limit".into());
-        while encoded.len() > REPORT_MAX_SIZE {
+        report.reason = Some(format!(
+            "normalized report truncated to {} KiB live-snapshot limit",
+            target / 1024
+        ));
+        while encoded.len() > target {
             let section = report
                 .sections
                 .iter_mut()
@@ -259,7 +263,7 @@ fn push_row(
         }
         true
     });
-    if section.entries.len() >= ENTRY_MAX_COUNT {
+    if section.entries.len() >= super::limits::rows() {
         if !listed {
             section.state = AnalysisSectionState::Partial;
             ROWS_DROPPED.set(ROWS_DROPPED.get() + 1);
@@ -308,32 +312,32 @@ fn default_summary(kind: AnalysisKind) -> &'static str {
 
 /// The counts the section's rows were made with, said as the bounds they hit.
 fn note_row_limits(section: &mut AnalysisSection) {
-    use super::limits::add;
+    use super::limits::add_for;
     let dropped = ROWS_DROPPED.get();
     if dropped > 0 {
-        add(
+        add_for(
             section,
             AnalysisLimitKind::Rows,
+            LimitSetting::Rows,
             format!(
                 "The report keeps the first {} rows; {} more were left out.",
-                super::detection::group_digits(ENTRY_MAX_COUNT as u64),
+                super::detection::group_digits(super::limits::rows() as u64),
                 super::detection::group_digits(dropped)
             ),
-            None,
         );
     }
     let cut = VALUES_CUT.get();
     if cut > 0 {
-        add(
+        add_for(
             section,
             AnalysisLimitKind::Text,
+            LimitSetting::Value,
             format!(
                 "{} {} longer than {} bytes; only the start is kept.",
                 super::detection::group_digits(cut),
                 if cut == 1 { "value was" } else { "values were" },
-                super::detection::group_digits(VALUE_MAX_SIZE as u64)
+                super::detection::group_digits(super::limits::value_bytes() as u64)
             ),
-            None,
         );
     }
 }
@@ -871,7 +875,7 @@ fn analyze_section(section: &mut AnalysisSection, specimen: &[u8], listings: &Pa
 
 /// Start writing the section's rows to its listing as they are made.
 fn begin_listing(kind: AnalysisKind, listings: &Path) {
-    let writer = ListingWriter::create(listings, kind, super::listing::LISTING_MAX_SIZE);
+    let writer = ListingWriter::create(listings, kind, super::limits::listing_bytes());
     LISTING.with(|sink| {
         *sink.borrow_mut() = writer.ok().map(|writer| RowSink {
             writer,
@@ -893,15 +897,15 @@ fn finish_listing(section: &mut AnalysisSection) {
     let rows = listing.rows;
     if listing.truncated {
         section.state = AnalysisSectionState::Partial;
-        super::limits::add(
+        super::limits::add_for(
             section,
             AnalysisLimitKind::Size,
+            LimitSetting::Listing,
             format!(
                 "The listing reached its {} limit after {} rows; the rest of the rows are not listed.",
-                crate::byte_size::short_size(super::listing::LISTING_MAX_SIZE),
+                crate::byte_size::short_size(super::limits::listing_bytes()),
                 super::detection::group_digits(rows)
             ),
-            None,
         );
     }
     if section.state != AnalysisSectionState::Unavailable {
@@ -936,14 +940,14 @@ pub(super) fn cut_tool_short(section: &mut AnalysisSection, tool: &str, end: Too
         ToolEnd::Finished => {}
         ToolEnd::Output => {
             section.state = AnalysisSectionState::Partial;
-            super::limits::add(
+            super::limits::add_for(
                 section,
                 AnalysisLimitKind::Size,
+                LimitSetting::ToolOutput,
                 format!(
                     "{tool} printed more than {} of output; the rest was ignored.",
-                    crate::byte_size::short_size(TOOL_OUTPUT_MAX_SIZE as u64)
+                    crate::byte_size::short_size(super::limits::tool_output() as u64)
                 ),
-                None,
             );
         }
         ToolEnd::Time(seconds) => super::limits::time_out(
@@ -960,7 +964,14 @@ pub(super) fn tool(path: &str, arguments: &[&str]) -> Result<(String, String, To
         return Err(format!("local tool unavailable: {path}"));
     }
     let limit = Duration::from_secs(super::limits::seconds(120));
-    let run = super::tools::run_with(path, arguments, &[], limit, TOOL_OUTPUT_MAX_SIZE, true)?;
+    let run = super::tools::run_with(
+        path,
+        arguments,
+        &[],
+        limit,
+        super::limits::tool_output(),
+        true,
+    )?;
     if !run.success && !run.truncated && !run.timed_out {
         return Err(run
             .failure_text(path, limit)
@@ -1197,6 +1208,7 @@ mod tests {
                     enabled: true,
                     checks: vec![kind],
                     time_limit_minutes: 0,
+                    limits: Default::default(),
                 },
             );
             report.specimen_len = Some(specimen.len() as u64);
@@ -1247,6 +1259,7 @@ mod tests {
                 enabled: true,
                 checks: vec![AnalysisKind::Metadata],
                 time_limit_minutes: 0,
+                limits: Default::default(),
             },
         );
         // Row ids count per analysed section, as analyze_section starts them.
@@ -1383,13 +1396,28 @@ mod tests {
         result
     }
     #[test]
+    fn the_row_setting_moves_the_cut_and_the_warning_names_it() {
+        let mut limits = AnalysisLimits::default();
+        limits.set(LimitSetting::Rows, 300);
+        super::super::limits::set_limits(Some(limits));
+        let mut result = structures_rows(305, false);
+        note_row_limits(&mut result);
+        super::super::limits::set_limits(None);
+        assert_eq!(result.entries.len(), 300);
+        let warning = &result.limits[0];
+        assert_eq!(warning.kind, AnalysisLimitKind::Rows);
+        assert_eq!(warning.setting, Some(LimitSetting::Rows));
+        assert!(warning.text.contains("first 300 rows"), "{}", warning.text);
+    }
+
+    #[test]
     fn the_listing_holds_every_row_while_the_report_keeps_a_preview() {
-        let mut result = structures_rows(ENTRY_MAX_COUNT + 5, true);
-        assert_eq!(result.entries.len(), ENTRY_MAX_COUNT);
+        let mut result = structures_rows(super::limits::rows() + 5, true);
+        assert_eq!(result.entries.len(), super::limits::rows());
         finish_listing(&mut result);
         note_row_limits(&mut result);
         let listing = result.listing.unwrap();
-        assert_eq!(listing.rows, ENTRY_MAX_COUNT as u64 + 5);
+        assert_eq!(listing.rows, super::limits::rows() as u64 + 5);
         assert!(!listing.truncated);
         assert_eq!(result.state, AnalysisSectionState::Complete);
         assert!(result.limits.is_empty());
@@ -1404,7 +1432,7 @@ mod tests {
         let mut result = structures_rows(40_000, true);
         finish_listing(&mut result);
         assert_eq!(result.listing.as_ref().unwrap().rows, 40_000);
-        assert_eq!(result.entries.len(), ENTRY_MAX_COUNT);
+        assert_eq!(result.entries.len(), super::limits::rows());
         let mut report = AnalysisReport {
             id: "x".into(),
             state: AnalysisState::Complete,
@@ -1416,6 +1444,7 @@ mod tests {
             layer: None,
             specimen_source: None,
             time_limit_seconds: None,
+            limits: None,
         };
         let encoded = bounded_report(&mut report).unwrap();
         assert!(encoded.len() <= REPORT_MAX_SIZE);
@@ -1424,9 +1453,9 @@ mod tests {
     }
     #[test]
     fn rows_over_the_preview_without_a_listing_are_counted_and_said() {
-        let mut result = structures_rows(ENTRY_MAX_COUNT + 5, false);
+        let mut result = structures_rows(super::limits::rows() + 5, false);
         note_row_limits(&mut result);
-        assert_eq!(result.entries.len(), ENTRY_MAX_COUNT);
+        assert_eq!(result.entries.len(), super::limits::rows());
         assert_eq!(result.state, AnalysisSectionState::Partial);
         assert_eq!(result.limits.len(), 1);
         assert_eq!(result.limits[0].kind, AnalysisLimitKind::Rows);
@@ -1434,7 +1463,7 @@ mod tests {
     }
     #[test]
     fn a_row_that_fits_the_preview_leaves_no_note() {
-        let mut result = structures_rows(ENTRY_MAX_COUNT, true);
+        let mut result = structures_rows(super::limits::rows(), true);
         finish_listing(&mut result);
         note_row_limits(&mut result);
         assert!(!result.listing.unwrap().truncated);
@@ -1475,7 +1504,12 @@ mod tests {
     fn a_cut_value_says_how_many_were_cut() {
         begin_section();
         let mut result = section(AnalysisKind::Strings);
-        entry(&mut result, "long", "x".repeat(VALUE_MAX_SIZE + 1), None);
+        entry(
+            &mut result,
+            "long",
+            "x".repeat(super::limits::value_bytes() + 1),
+            None,
+        );
         note_row_limits(&mut result);
         assert_eq!(result.state, AnalysisSectionState::Partial);
         assert_eq!(result.limits[0].kind, AnalysisLimitKind::Text);

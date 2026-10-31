@@ -10,6 +10,7 @@ fn fixture() -> (PathBuf, AnalysisReport) {
             enabled: true,
             checks: vec![AnalysisKind::Identification],
             time_limit_minutes: 0,
+            limits: Default::default(),
         },
     );
     report.state = AnalysisState::Running;

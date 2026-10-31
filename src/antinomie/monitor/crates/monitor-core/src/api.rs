@@ -1771,6 +1771,8 @@ pub enum Command {
         checks: Vec<crate::analysis::AnalysisKind>,
         /// Seconds each of the checks' tools may run; `None` leaves each its own limit.
         time_limit_seconds: Option<u64>,
+        /// The sizes and counts the checks may reach (Settings > Analysis).
+        limits: crate::analysis::AnalysisLimits,
     },
     OpenRecording {
         directory: PathBuf,

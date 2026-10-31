@@ -225,6 +225,7 @@ mod tests {
                 layer: None,
                 specimen_source: None,
                 time_limit_seconds: None,
+                limits: None,
             };
             let fixture = Self { directory, report };
             fixture.save();

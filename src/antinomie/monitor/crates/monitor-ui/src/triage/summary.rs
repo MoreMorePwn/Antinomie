@@ -362,6 +362,7 @@ mod tests {
             layer: None,
             specimen_source: None,
             time_limit_seconds: None,
+            limits: None,
         };
         use antinomie_monitor_core::analysis::detection::{Evidence, Finding, Identity, Report};
         let identity = Identity {

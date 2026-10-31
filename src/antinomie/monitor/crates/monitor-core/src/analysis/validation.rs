@@ -28,15 +28,18 @@ pub(crate) fn validate_report(report: &AnalysisReport) -> Result<(), String> {
         || report
             .time_limit_seconds
             .is_some_and(|seconds| seconds > u64::from(TIME_LIMIT_MAX_MINUTES) * 60)
+        || report
+            .limits
+            .is_some_and(|limits| limits != limits.clamped() || limits.is_default())
         || report.sections.iter().any(|s| {
-            s.entries.len() > 2048
+            s.entries.len() > super::limits::ROWS_CEILING
                 || s.tools.len() > 16
                 || s.tools.iter().any(|t| t.len() > 256)
                 || s.listing
                     .as_ref()
-                    .is_some_and(|l| l.bytes > super::listing::LISTING_MAX_SIZE)
+                    .is_some_and(|l| l.bytes > super::limits::LISTING_CEILING)
                 || s.disassembly.as_ref().is_some_and(|d| {
-                    d.listing.bytes > super::listing::LISTING_MAX_SIZE
+                    d.listing.bytes > super::limits::LISTING_CEILING
                         || d.tool.len() > 256
                         || d.language.len() > 256
                         || d.endian.len() > 16
@@ -47,7 +50,7 @@ pub(crate) fn validate_report(report: &AnalysisReport) -> Result<(), String> {
                 || s.limits.iter().any(|l| l.text.len() > 1024)
                 || s.entries
                     .iter()
-                    .any(|e| e.label.len() > 4096 || e.value.len() > 4096)
+                    .any(|e| e.label.len() > 4096 || e.value.len() > super::limits::VALUE_CEILING)
         })
     {
         return Err("analysis report violates archive bounds".into());

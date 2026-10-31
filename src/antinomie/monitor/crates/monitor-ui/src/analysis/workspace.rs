@@ -1147,6 +1147,7 @@ mod tests {
             layer: None,
             specimen_source: None,
             time_limit_seconds: None,
+            limits: None,
         };
         report.sections[1].state = AnalysisSectionState::Running;
         let words: Vec<_> = report
