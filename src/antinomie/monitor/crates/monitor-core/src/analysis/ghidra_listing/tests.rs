@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 use super::*;
+use crate::analysis::listing::LISTING_MAX_SIZE;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
@@ -355,6 +356,7 @@ fn a_report_reads_the_ghidra_listing_page_by_page_and_adoption_validates_it() {
         layer: None,
         specimen_source: None,
         time_limit_seconds: None,
+        limits: None,
     };
     super::super::jobs::adopt_listings(&host, &mut report, &[]);
     assert!(
@@ -415,4 +417,59 @@ fn a_real_program_from_the_environment_exports_within_the_bounds() {
     );
     assert!(listing.bytes <= LISTING_MAX_SIZE);
     let _ = std::fs::remove_dir_all(work);
+}
+
+/// The combined listing budget the Ghidra disassembly is adopted under follows
+/// the report's size-limit settings.
+#[test]
+fn the_disassembly_is_adopted_under_the_listing_size_setting() {
+    let mut section = AnalysisSection::new(AnalysisKind::Decompilation);
+    section.state = AnalysisSectionState::Complete;
+    section.disassembly = Some(AnalysisDisassembly {
+        listing: AnalysisListing {
+            rows: 1,
+            bytes: 200 << 20,
+            truncated: false,
+        },
+        tool: "Ghidra test".into(),
+        language: String::new(),
+        endian: String::new(),
+        pointer_bits: 64,
+        functions: 0,
+        instructions: 0,
+        note: String::new(),
+    });
+    let mut report = AnalysisReport {
+        id: "budget".into(),
+        state: AnalysisState::Complete,
+        source_path: "/fixture".into(),
+        specimen_sha256: None,
+        specimen_len: None,
+        reason: None,
+        sections: vec![section],
+        layer: None,
+        specimen_source: None,
+        time_limit_seconds: None,
+        limits: None,
+    };
+    let host = std::env::temp_dir().join(format!("ant-adopt-budget-{}", std::process::id()));
+    std::fs::create_dir_all(&host).unwrap();
+    let mut raised = report.clone();
+    let mut limits = super::super::limits::AnalysisLimits::default();
+    limits.set(super::super::limits::LimitSetting::Listing, 512);
+    raised.limits = limits.for_report();
+    super::super::jobs::adopt_listings(&host, &mut report, &[]);
+    super::super::jobs::adopt_listings(&host, &mut raised, &[]);
+    let note = |r: &AnalysisReport| r.sections[0].summary.clone();
+    assert!(
+        note(&report).contains("combined bound"),
+        "{}",
+        note(&report)
+    );
+    assert!(
+        !note(&raised).contains("combined bound"),
+        "{}",
+        note(&raised)
+    );
+    let _ = std::fs::remove_dir_all(host);
 }
