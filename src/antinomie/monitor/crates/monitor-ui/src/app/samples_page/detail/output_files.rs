@@ -352,11 +352,7 @@ pub(in crate::app::samples_page) fn section(
                 })
                 .body(|body| {
                     body.rows(
-                        if roomy {
-                            table::row_height(font) + 6.0
-                        } else {
-                            table::row_height(font) + 6.0
-                        },
+                        table::row_height(font) + 6.0,
                         data.outputs.len(),
                         |mut row| {
                             let output = &data.outputs[row.index()];
