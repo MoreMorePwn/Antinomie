@@ -875,6 +875,69 @@ already defines bit 3, compat.
 * **Not supported.** The guest writes no process core of a 32-bit program (the
   run says why), and the debugger does not attach to one.
 
+### arm64 debugger (0.9.0)
+
+Multi-arch plan cards MA-11 and MA-14: the debug engine, the RSP server, the
+Debugger tab and gdb-multiarch on aarch64 programs of an arm64 guest. Contract
+revision 20 is unchanged; one breakpoint kind is new within it (below).
+
+* **Guest (patch 39).** `debug_arm64.c` replaces the stub. A software
+  breakpoint is `BRK #0xa71`, an immediate no other Linux user of BRK takes, so
+  a program's own BRK keeps its SIGTRAP; shadow reads hide it as on x86. A step
+  is the hardware step (MDSCR_EL1.SS with SPSR.SS), armed as ptrace arms it and
+  cleared from the saved PSTATE before anything can read it; a stepped SVC is
+  reported at the call's exit (`syscall_trace_exit()`). Breakpoints and
+  watchpoints are perf hardware events (up to 4 of each, one pool of 4 slots in
+  the engine). This Debian 6.12.94 has no `register_user_break_hook()`, so the
+  engine is called from `do_el0_brk64()` and `do_el0_softstep()`
+  (`debug-monitors.c`) and `syscall_trace_exit()` (`ptrace.c`). Register sets:
+  NT_PRSTATUS (`user_pt_regs`, 272 bytes), NT_PRFPREG (`user_fpsimd_state`,
+  528) and NT_ARM_TLS (8). An AArch32 program is refused at attach.
+* **Stops before the access.** arm64 takes breakpoint and watchpoint
+  exceptions before the instruction or its access completes, so a watch stop
+  reports the accessing instruction (on x86 the one after it), and resuming
+  there would take the exception again. The engine resumes such a thread with
+  its debug registers off for one step, as the kernel steps a suspended
+  breakpoint, and `try_step_suspended_breakpoints()` turns them on again. When
+  the debugger itself steps from that stop (gdb does after every aarch64 watch
+  stop: its watchpoints are non-steppable), the step is the engine's: it is
+  forced and passed on to `do_el0_softstep()`, where the engine ends it.
+  Without that, the kernel ended the step itself, the engine never saw it and
+  the program ran free: watchpoints looked as if they never fired.
+* **Unfollowed fork children.** A BRK does not advance the pc. A forked child
+  the debugger does not follow, with its own copy of the program's memory,
+  gets the program's own bytes back where the engine's are before it runs: it
+  would otherwise take a SIGTRAP, and under a SIGTRAP handler trap at the same
+  BRK for ever (x86-64's INT3 leaves the pc after it; x86-64 is unchanged).
+* **Load-only watchpoints.** `ANTC_DEBUG_BP_HW_READ` (5) watches loads alone.
+  It is a capability-gated addition to revision 20: only a guest whose CAPS
+  have READ_WATCH (the arm64 engine) accepts it, and the host sends it only to
+  such a guest, so older hosts never send it and x86-64 guests never offer it.
+  gdb's `Z3` (rwatch) is served only with READ_WATCH: x86-64 still refuses it
+  (`read_watchpoints_are_served_only_where_the_guest_offers_them`), and a
+  read watch stop is reported as `rwatch:`.
+* **Host.** `ArchTag::Aarch64` gives gdb the aarch64 core, fpu and TLS target
+  description, and the panel the arch's register names (pc, sp, x29). The
+  panel's length-1 instruction breakpoints become 4-byte ones. The Debugger
+  tab's code pane decodes aarch64 with Capstone (the `capstone` crate built for
+  arm64 alone, BSD-3-Clause; x86-64 keeps iced-x86, so x86 output is
+  unchanged); every A64 instruction is one word, so the rows before the pc are
+  exact, and a word Capstone cannot decode is shown as `.inst 0x...`. A manual
+  process core of an arm64 program is checked against the guest's machine, as
+  the guest's own cores are.
+* **Qualification.** `debug-check gdb` runs gdb-multiarch on the aarch64 P1
+  fixture (break, stepi, hbreak, rwatch, watch, tbreak, detach, then exit,
+  kill, debugger death and interrupt). `debug-check p2` and `p3` run on arm64
+  bases with aarch64 builds of their fixtures (`fixtures-arm64/debug`), and the
+  arm64 tier plans `debug-p2` and `debug-p3`. The checks read the base's
+  architecture from its bundle.json and scale every guest wait by
+  `ARM64_TIME_SCALE`. Where aarch64 differs, they check its behaviour: a watch
+  stop is at the accessing instruction, `step_rep` steps a nop (there is no
+  repeated string instruction), the smc fixture rewrites `mov w0, #v`, the
+  anti-debug probe counts the enabled NT_ARM_HW_BREAK/WATCH slots of a traced
+  child and looks for BRK, not INT3, in its code.
+* **Not supported.** AArch32 programs on an arm64 guest are not debugged.
+
 ### Fair, progress-sensitive send waits (0.8.0)
 
 Guest patch 1 (`transport/guest.c`, `ant_send`); transport ABI and contract
