@@ -214,6 +214,77 @@ class PlanTests(unittest.TestCase):
         self.assertIn("--old-base", vm.missing(by_name["uring-legacy"], ctx))
         self.assertIsNone(vm.missing(by_name["debug-p2"], ctx))
 
+    def test_an_old_host_on_a_base_of_a_newer_revision_is_not_applicable(self):
+        ctx = {**self.ctx(), "base_revision": 20, "old_revision": 18}
+        by_name = {c.name: c for c in vm.plan("full", ctx)}
+        for name in ("io-old-new-stealth", "io-old-new-uring", "io-old-new-tracer", "io-old-new-audit",
+                     "io-old-new-p3"):
+            reason = vm.not_applicable(by_name[name], ctx)
+            self.assertIn("not applicable", reason, name)
+            self.assertIn("revision 18", reason)
+            self.assertIn("(20)", reason)
+        # The new host on the old base, and checks of BASE with this host, still run.
+        for name in ("io-new-old-audit", "debug-p3", "tracer-legacy", "conf-quick"):
+            self.assertIsNone(vm.not_applicable(by_name[name], ctx), name)
+        # Same revision, an older base, or an unknown revision: the interop check runs.
+        for base, old in ((18, 18), (17, 18), (None, 18), (20, None)):
+            same = {**ctx, "base_revision": base, "old_revision": old}
+            self.assertIsNone(vm.not_applicable(by_name["io-old-new-p3"], same), (base, old))
+
+    def test_the_old_host_revision_comes_from_its_source_tree(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = Path(tmp)
+            examples = tree / "src/antinomie/monitor/target/release/examples"
+            examples.mkdir(parents=True)
+            self.assertIsNone(vm.host_revision(examples))
+            control = tree / vm.CONTROL_RS
+            control.parent.mkdir(parents=True)
+            control.write_text("pub(crate) const ARCH_INFO_REVISION: u32 = 20;\npub const REVISION: u32 = 18;\n")
+            self.assertEqual(vm.host_revision(examples), 18)
+            self.assertEqual(vm.host_revision(tree), 18)
+            # REVISION naming the constant of the feature that raised it.
+            control.write_text("pub(crate) const LARGE_SPECIMEN_REVISION: u32 = 19;\n"
+                               "pub const REVISION: u32 = LARGE_SPECIMEN_REVISION;\n")
+            self.assertEqual(vm.host_revision(examples), 19)
+            control.write_text("pub const REVISION: u32 = NOWHERE;\n")
+            self.assertIsNone(vm.host_revision(examples))
+        # This tree's host: the revision its control.h states.
+        header = (vm.ROOT / "src/antinomie/monitor/protocol/control.h").read_text()
+        self.assertEqual(vm.host_revision(vm.ROOT / vm.EXAMPLES),
+                         int(vm.re.search(r"^#define ANTC_REVISION (\d+)", header, vm.re.M).group(1)))
+
+    def test_tracer_legacy_runs_on_a_base_from_before_the_hash_records(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bases = {}
+            for name, revision in (("r17", 17), ("r18", 18), ("none", None)):
+                bundle = Path(tmp) / name
+                bundle.mkdir()
+                fields = {} if revision is None else {"antinomie_revision": revision}
+                (bundle / "bundle.json").write_text(vm.json.dumps(fields))
+                bases[name] = bundle
+            self.assertEqual(vm.bundle_revision(bases["r17"]), 17)
+            self.assertIsNone(vm.bundle_revision(bases["none"]))
+            self.assertIsNone(vm.bundle_revision(Path(tmp) / "missing"))
+            self.assertEqual(vm.legacy_base(None, bases["r17"]), bases["r17"])
+            self.assertIsNone(vm.legacy_base(None, bases["r18"]))
+            self.assertIsNone(vm.legacy_base(None, bases["none"]))
+            self.assertIsNone(vm.legacy_base(None, None))
+            self.assertEqual(vm.legacy_base(str(bases["r17"]), bases["r18"]), bases["r17"].resolve())
+        ctx = {**self.ctx(), "legacy_base": Path("/legacy")}
+        check = {c.name: c for c in vm.plan("full", ctx)}["tracer-legacy"]
+        self.assertIn("/legacy", check.argv)
+        self.assertIsNone(vm.missing(check, ctx))
+        # uring-legacy keeps --old-base.
+        self.assertIn("/old", {c.name: c for c in vm.plan("full", ctx)}["uring-legacy"].argv)
+        ctx["legacy_base"] = None
+        check = {c.name: c for c in vm.plan("full", ctx)}["tracer-legacy"]
+        self.assertIn("--legacy-base", vm.missing(check, ctx))
+        with unittest.mock.patch.dict(os.environ, {vm.LEGACY_BASE_ENV: "/from-env"}):
+            self.assertEqual(vm.parse(["full", "/base"]).legacy_base, "/from-env")
+            self.assertEqual(vm.parse(["full", "/base", "--legacy-base", "/x"]).legacy_base, "/x")
+        with unittest.mock.patch.dict(os.environ, {vm.LEGACY_BASE_ENV: ""}):
+            self.assertIsNone(vm.parse(["full", "/base"]).legacy_base)
+
 
 class TracerQaTests(unittest.TestCase):
     """Triage QA reads tracer-record's runs; it must not pass over a failed one."""
@@ -491,6 +562,10 @@ class ReportTests(unittest.TestCase):
         for status in ("FAIL", "TIMEOUT", "ERROR", "SKIP"):
             self.assertEqual(vm.exit_code({"a": self.result("a", status)}, ["a"]), 1)
         self.assertEqual(vm.exit_code({}, ["a"]), 1)
+        # A check that cannot apply (an old host and a newer base) does not fail the tier.
+        skipped = {**self.result("a", "SKIP"), "not_applicable": True, "detail": "not applicable: ..."}
+        self.assertEqual(vm.exit_code({"a": skipped, "b": self.result("b", "PASS")}, ["a", "b"]), 0)
+        self.assertIn("not applicable", vm.report({"a": skipped}, ["a"], "head"))
 
     def test_report_lists_every_attempt(self):
         attempts = [{"attempt": 1, "status": "FAIL", "seconds": 30, "log": "/l1"},

@@ -2062,6 +2062,15 @@ still starts x86-64 VMs only (arm64 VMs start with MA-16).
   report. Conformance goldens for arm64 live in `golden/aarch64/`. The
   conformance trace fixture (x86 assembly) and the stealth probe (CPUID) are
   ported with MA-13 and MA-17.
+* **Old bases and old hosts in the tiers.** An old host refuses a base of a
+  newer contract revision before it boots it. That is its intended guard, so
+  when BASE's revision (`bundle.json`) is newer than the old host's (`REVISION`
+  in its `control.rs`), the `io-old-new-*` checks are reported as SKIP, not
+  applicable, and do not fail the tier. `tracer-legacy` needs a guest from
+  before the tracer's hash records. It runs on `--legacy-base` (default
+  `$ANTINOMIE_LEGACY_BASE`, else `--old-base` when that base is revision 17 or
+  older), by convention the 0.7.0 BusyBox base
+  (`tests/monitor/conformance/README.md`).
 
 ### Fair, progress-sensitive send waits (0.8.0)
 

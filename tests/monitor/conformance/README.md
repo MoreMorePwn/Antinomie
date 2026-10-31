@@ -156,6 +156,24 @@ directory markers), `ANT_FIXTURE_FAIL` and `ANT_DONE {"failures":N}`.
 do yet, each entry with its reason. A gap that disappears should be removed
 from the list.
 
+## Old bases and old hosts in the regression tiers
+
+`scripts/vm-regress.py` runs this suite and the other VM checks in tiers. The
+checks that need an older guest or host take them as inputs:
+
+| Input | Checks | What to pass |
+|---|---|---|
+| `--old-base` | `uring-legacy`, `io-new-old-audit` (this host on an older guest) | The BusyBox base of the last release |
+| `--legacy-base` | `tracer-legacy` | A base from before the tracer's hash records: the 0.7.0 BusyBox base (revision 17), by convention. Default: `$ANTINOMIE_LEGACY_BASE`, else `--old-base` when its revision is 17 or older; without one the check is skipped and the tier fails |
+| `--old-host` | `io-old-new-*` (an old host on BASE) | A git rev or a built checkout of the last release |
+
+An old host refuses a base of a newer contract revision before it starts a VM
+("this base is for a newer Antinomie than this one"). That refusal is the
+intended guard, so when BASE's revision is newer than the old host's, every
+`io-old-new-*` check is reported as SKIP ("not applicable", with both
+revisions) and does not fail the tier. Interop of a revision bump is checked in
+the other direction, with `io-new-old-audit` and the legacy checks.
+
 ## Writing cases
 
 Read `trace/fixture/oracle.h` and follow `trace/fixture/file_io.c`. Everything

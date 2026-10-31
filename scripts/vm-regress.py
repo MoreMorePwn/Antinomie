@@ -17,6 +17,12 @@ full   quick, the debugger, audit, io_uring, tracer, stealth, cloud profiles, ne
 auto   full when the diff against REF touches the kernel/host contract (guest
        patches, transport, protocol docs, ANTC_REVISION), otherwise quick
 
+An old host refuses a base of a newer contract revision ("this base is for a
+newer Antinomie"), so after a revision bump the io-old-new-* checks are SKIP,
+not applicable, and do not fail the tier. tracer-legacy runs on --legacy-base
+(default $ANTINOMIE_LEGACY_BASE, else --old-base when it is revision 17 or
+older): by convention the 0.7.0 BusyBox base, from before the tracer's hashes.
+
 --arch arm64 runs a tier on an arm64 BusyBox base: its fixtures are built
 with aarch64-linux-gnu-gcc into fixtures-arm64, every timeout is scaled by the
 host's arm64 time scale (monitor-core src/vm/machine.rs ARM64_TIME_SCALE), and
@@ -65,6 +71,14 @@ CONFORMANCE_BULK = ("groups", "render", "bin", "xdg")
 ORDER = ("PASS", "FLAKY", "FAIL", "TIMEOUT", "ERROR", "SKIP")
 # Results that do not fail a tier.
 OK_STATUSES = ("PASS", "FLAKY")
+# The host's own contract revision, in an old host's source tree.
+CONTROL_RS = Path("src/antinomie/monitor/crates/monitor-core/src/control.rs")
+HOST_REVISION = re.compile(r"^pub(?:\([a-z]+\))? const REVISION: u32 = (\w+);", re.M)
+# tracer-legacy needs a guest from before the tracer's hash records: 0.7.0
+# (revision 17) is the last one. Its base comes from --legacy-base, else
+# ANTINOMIE_LEGACY_BASE, else --old-base when that is old enough.
+LEGACY_TRACER_REVISION = 17
+LEGACY_BASE_ENV = "ANTINOMIE_LEGACY_BASE"
 # Checks whose transport drops are judged by attribution, not by count: check
 # name -> conformance group. stress-contended runs a 256 KiB never-drop ring
 # with a 100 ms send wait, so a host that reads nothing for 100 ms (a busy
@@ -374,6 +388,8 @@ class Check:
     def __init__(self, name, group, argv, cwd, timeout, vm=True, needs=(), cargo=False):
         self.name, self.group, self.argv, self.cwd = name, group, argv, cwd
         self.timeout, self.vm, self.needs, self.cargo = timeout, vm, needs, cargo
+        # An old host run on BASE: not applicable when BASE has a newer revision.
+        self.old_host_on_base = False
 
 
 def plan(tier, ctx, arch="x86_64"):
@@ -421,8 +437,8 @@ def plan_x86_64(tier, ctx):
         vm_check("uring-legacy", "full", "uring-check", ["legacy", workload, urfix], bundle=old_base,
                  timeout=3000, needs=("old_base",)),
         vm_check("tracer-record", "full", "tracer-check", ["record", fix / "tracer-fixture"]),
-        vm_check("tracer-legacy", "full", "tracer-check", ["legacy", fix / "tracer-fixture"], bundle=old_base,
-                 needs=("old_base",)),
+        vm_check("tracer-legacy", "full", "tracer-check", ["legacy", fix / "tracer-fixture"],
+                 bundle=ctx.get("legacy_base"), needs=("legacy_base",)),
         Check("tracer-qa", "full", None, mon, 2400, vm=False, cargo=True),
         Check("debugger-live", "full", None, mon, 2400, cargo=True, needs=("base", "tools")),
         vm_check("stealth", "full", "stealth-check", ["measure", fix / "stealth-probe"]),
@@ -449,8 +465,10 @@ def plan_x86_64(tier, ctx):
     ]
     needs = ("base", "old_base", "old")
     for name, mode, args, bundle, ex in interop:
-        checks.append(vm_check(name, "interop", mode, args, bundle=bundle, ex=ex,
-                               timeout=3000 if "uring" in name else 2400, needs=needs))
+        check = vm_check(name, "interop", mode, args, bundle=bundle, ex=ex,
+                         timeout=3000 if "uring" in name else 2400, needs=needs)
+        check.old_host_on_base = ex is old and bundle is base
+        checks.append(check)
     return checks
 
 
@@ -661,12 +679,69 @@ def input_result(ctx, name):
 
 def missing(check, ctx):
     labels = {"old_base": "--old-base", "old": "--old-host", "base": "BASE",
+              "legacy_base": f"--legacy-base (a base of revision {LEGACY_TRACER_REVISION} or older, "
+                             f"the 0.7.0 BusyBox base; or {LEGACY_BASE_ENV})",
               "tools": "--debugger-tools (a data folder with tools/gef and tools/pwndbg)"}
     keys = {"old": "old_ok", "tools": "debugger_ok"}
     for need in check.needs:
         if not ctx.get(keys.get(need, need)):
             return f"needs {labels[need]}"
     return None
+
+
+def bundle_revision(bundle):
+    """A base's guest contract revision (bundle.json antinomie_revision), or None."""
+    try:
+        revision = json.loads((Path(bundle) / "bundle.json").read_text()).get("antinomie_revision")
+    except (OSError, ValueError, TypeError):
+        return None
+    return revision if isinstance(revision, int) else None
+
+
+def host_revision(examples):
+    """The contract revision of the host whose examples these are: REVISION in
+    control.rs of the source tree above them, or None when there is none."""
+    for folder in (Path(examples), *Path(examples).parents):
+        source = folder / CONTROL_RS
+        if source.is_file():
+            text = source.read_text()
+            match = HOST_REVISION.search(text)
+            value = match.group(1) if match else ""
+            # REVISION may name the constant of the feature that last raised it.
+            named = re.search(rf"^pub(?:\([a-z]+\))? const {value}: u32 = (\d+);", text, re.M) \
+                if value and not value.isdigit() else None
+            if named:
+                value = named.group(1)
+            return int(value) if value.isdigit() else None
+    return None
+
+
+def legacy_base(given, old_base):
+    """tracer-legacy's base: the one given, else --old-base when it is old enough."""
+    if given:
+        return Path(given).expanduser().resolve()
+    revision = bundle_revision(old_base) if old_base else None
+    if revision is not None and revision <= LEGACY_TRACER_REVISION:
+        return old_base
+    return None
+
+
+def not_applicable(check, ctx):
+    """Why a check cannot apply to these inputs, or None. An old host refuses a
+    base of a newer contract revision before it starts a VM ("this base is for
+    a newer Antinomie"): that is its intended guard, not an interop failure."""
+    if not check.old_host_on_base:
+        return None
+    new, old = ctx.get("base_revision"), ctx.get("old_revision")
+    if new is None or old is None or new <= old:
+        return None
+    return (f"not applicable: the old host (revision {old}) refuses a base of a newer revision "
+            f"({new}) by design")
+
+
+def passed(result):
+    """Whether a result does not fail the tier."""
+    return result is not None and (result["status"] in OK_STATUSES or bool(result.get("not_applicable")))
 
 
 def run_check(check, ctx, args, attempt):
@@ -680,6 +755,9 @@ def run_check(check, ctx, args, attempt):
     reason = missing(check, ctx)
     if reason:
         return {**result, "status": "SKIP", "seconds": 0.0, "detail": reason}
+    reason = not_applicable(check, ctx)
+    if reason:
+        return {**result, "status": "SKIP", "seconds": 0.0, "detail": reason, "not_applicable": True}
     problem = disk_problem(args)
     if problem:
         return {**result, "status": "ERROR", "seconds": 0.0, "detail": f"not started: {problem}"}
@@ -913,7 +991,7 @@ def report(results, order, header):
 
 
 def exit_code(results, order):
-    bad = [n for n in order if results.get(n) is None or results[n]["status"] not in OK_STATUSES]
+    bad = [n for n in order if not passed(results.get(n))]
     return 1 if bad else 0
 
 
@@ -926,6 +1004,10 @@ def parser():
     p.add_argument("base", help="BusyBox base bundle of the current guest series "
                    "(quick: or a Debian Minimal base)")
     p.add_argument("--old-base", help="an older BusyBox base: legacy checks and the new-host interop direction")
+    p.add_argument("--legacy-base", default=os.environ.get(LEGACY_BASE_ENV) or None,
+                   help=f"tracer-legacy's base, from before the tracer's hash records (revision "
+                        f"{LEGACY_TRACER_REVISION}, the 0.7.0 BusyBox base; default: ${LEGACY_BASE_ENV}, "
+                        f"else --old-base when its revision is {LEGACY_TRACER_REVISION} or older)")
     p.add_argument("--old-host", metavar="REV|PATH",
                    help="old host for interop: a git rev built in a temporary worktree, or a built checkout "
                         "(default: the --against ref, else the nearest origin/release-*)")
@@ -1026,8 +1108,12 @@ def main(argv=None):
             if bundle and not (bundle / "bundle.json").is_file():
                 raise Failure(f"{bundle} is not a base bundle (no bundle.json)")
         # Placeholders until the fixtures and the old host exist; plan() runs again then.
+        legacy = legacy_base(args.legacy_base, old_base)
+        if legacy and not (legacy / "bundle.json").is_file():
+            raise Failure(f"{legacy} is not a base bundle (no bundle.json)")
         ctx = {"out": out, "base": base, "old_base": old_base, "new": MONITOR / EXAMPLES,
-               "fix": out / "fixtures", "old": out / "old-host-examples", "old_ok": False}
+               "fix": out / "fixtures", "old": out / "old-host-examples", "old_ok": False,
+               "legacy_base": legacy, "base_revision": bundle_revision(base)}
         checks = plan(tier, ctx, args.arch)
         if args.list:
             for check in checks:
@@ -1041,7 +1127,7 @@ def main(argv=None):
             if not results_file.exists():
                 raise Failure(f"--rerun-failed: no {results_file}")
             results = json.loads(results_file.read_text())
-            checks = [c for c in checks if results.get(c.name, {}).get("status") not in OK_STATUSES]
+            checks = [c for c in checks if not passed(results.get(c.name))]
         out.mkdir(parents=True, exist_ok=True)
         selected = {check.name for check in checks}
         ctx["results"] = results
@@ -1061,6 +1147,7 @@ def main(argv=None):
                     disk_guard(args)
                     ctx["old"], cleanup = old_host(spec, out)
                     ctx["old_ok"] = True
+                    ctx["old_revision"] = host_revision(ctx["old"])
                 if "debugger-live" in selected:
                     ctx["debugger_data"] = tools_dir(args, out)
                     ctx["debugger_ok"] = all((ctx["debugger_data"] / "tools" / t).is_dir() for t in ("gef", "pwndbg"))
