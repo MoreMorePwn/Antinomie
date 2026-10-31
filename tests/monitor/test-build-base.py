@@ -28,7 +28,7 @@ class BuildBaseTests(unittest.TestCase):
         self.assertEqual(len(conf["INPUT_SHA_ORIG"]), 64)
         self.assertEqual(base.checksum(REPO / conf["INPUT_DEBTAR"]), conf["INPUT_SHA_DEBTAR"])
 
-    def test_debian_minimal_needs_the_toolchain_debians_banner_names(self):
+    def test_debian_bases_need_the_toolchain_debians_banner_names(self):
         # The kernel build script reports what it would compile and link with.
         found = base.toolchain("minimal")
         self.assertEqual(set(found), {"cc", "ld"})
@@ -43,21 +43,23 @@ class BuildBaseTests(unittest.TestCase):
         with unittest.mock.patch.object(base, "toolchain", return_value=newer), \
                 self.assertRaisesRegex(RuntimeError, "2.47.*QEMU builder"):
             base.require_debian_toolchain("minimal")
-        # The orchestrator refuses before preparing any source.
-        with tempfile.TemporaryDirectory() as name, \
-                unittest.mock.patch.object(base, "toolchain", return_value=newer):
-            job = Path(name) / "job.json"
-            job.write_text(json.dumps({"format": 1, "profile": "debian-minimal"}))
-            result = subprocess.run(
-                ["python3", "-c", "import sys,runpy; sys.argv=sys.argv[1:]; "
-                 "runpy.run_path(sys.argv[0], run_name='__main__')",
-                 str(REPO / "scripts/build-base.py"), "--job", str(job), "--inputs", name,
-                 "--work", str(Path(name) / "work"), "--output", str(Path(name) / "out")],
-                capture_output=True, text=True)
-            if base.toolchain("minimal") != trixie:
-                self.assertEqual(result.returncode, 1)
-                self.assertIn("::error this host's kernel", result.stdout)
-                self.assertFalse((Path(name) / "work/source").exists())
+        # The orchestrator refuses before preparing any source, for the
+        # desktop as for Debian Minimal (both run the stock kernel).
+        for profile in ("debian-minimal", "debian-xfce"):
+            with tempfile.TemporaryDirectory() as name, \
+                    unittest.mock.patch.object(base, "toolchain", return_value=newer):
+                job = Path(name) / "job.json"
+                job.write_text(json.dumps({"format": 1, "profile": profile}))
+                result = subprocess.run(
+                    ["python3", "-c", "import sys,runpy; sys.argv=sys.argv[1:]; "
+                     "runpy.run_path(sys.argv[0], run_name='__main__')",
+                     str(REPO / "scripts/build-base.py"), "--job", str(job), "--inputs", name,
+                     "--work", str(Path(name) / "work"), "--output", str(Path(name) / "out")],
+                    capture_output=True, text=True)
+                if base.toolchain("minimal") != trixie:
+                    self.assertEqual(result.returncode, 1, profile)
+                    self.assertIn("::error this host's kernel", result.stdout)
+                    self.assertFalse((Path(name) / "work/source").exists())
         # A cached kernel names the toolchain that built it.
         self.assertEqual(base.kernel_identity("minimal")["toolchain"], found)
 
@@ -226,9 +228,13 @@ exit 0
             base.build_image("debian-minimal", {}, kernel, work, Path("/o"), inputs=Path("/in"))
             self.assertEqual(commands[-1][-2:], ("--kernel-package-cache", Path("/in")))
             commands.pop()
-            (kernel / "modules-install").mkdir()
-            base.build_image("debian-xfce", {"desktop": "gnome"}, kernel, work, Path("/o"))
-            self.assertIn("--modules", commands[1])
+            # The desktop runs the same stock kernel: no modules of its own,
+            # Debian's kernel packages from the inputs.
+            self.assertEqual(base.PROFILES["debian-xfce"][:2], ("stock", "build-debian-image.py"))
+            base.build_image("debian-xfce", {"desktop": "gnome"}, kernel, work, Path("/o"),
+                             inputs=Path("/in"))
+            self.assertNotIn("--modules", commands[1])
+            self.assertEqual(commands[1][-2:], ("--kernel-package-cache", Path("/in")))
             self.assertEqual(json.loads((work / "options.json").read_text()), {"desktop": "gnome"})
 
     def test_the_stock_kernel_is_compared_with_debians_image(self):
@@ -283,26 +289,26 @@ exit 0
             modules = kept / "modules-install/lib/modules/6.12.94"
             modules.mkdir(parents=True)
             (modules / "modules.dep").write_text("")
-            (modules / "build").symlink_to("/build/work/kernel-debian")
-            cache = root / "cache/kernel-debian.tar"
-            base.save_cached_kernel(cache, kept, "debian")
+            (modules / "build").symlink_to("/build/work/kernel-minimal")
+            cache = root / "cache/kernel-minimal.tar"
+            base.save_cached_kernel(cache, kept, "minimal")
             work = root / "work"
             work.mkdir()
-            loaded = base.load_cached_kernel(cache, "debian", work)
+            loaded = base.load_cached_kernel(cache, "minimal", work)
             self.assertEqual((loaded / "arch/x86/boot/bzImage").read_bytes(), b"kernel")
             self.assertEqual((loaded / "symbols.json.xz").read_bytes(), b"isf")
             self.assertEqual((loaded / "debian-config").read_text(), "CONFIG_Y=m\n")
             self.assertTrue((loaded / "modules-install/lib/modules/6.12.94/modules.dep").is_file())
             self.assertFalse((loaded / "modules-install/lib/modules/6.12.94/build").is_symlink())
-            self.assertIsNone(base.load_cached_kernel(cache, "minimal", work))
-            self.assertIsNone(base.load_cached_kernel(root / "missing.tar", "debian", work))
+            self.assertIsNone(base.load_cached_kernel(cache, "stock", work))
+            self.assertIsNone(base.load_cached_kernel(root / "missing.tar", "minimal", work))
             cache.write_bytes(b"not a tar")
-            self.assertIsNone(base.load_cached_kernel(cache, "debian", work))
-            self.assertIsNone(base.load_cached_kernel(None, "debian", work))
+            self.assertIsNone(base.load_cached_kernel(cache, "minimal", work))
+            self.assertIsNone(base.load_cached_kernel(None, "minimal", work))
             # A kernel cached before bases carried a symbol table is rebuilt.
             (kept / "symbols.json.xz").unlink()
-            base.save_cached_kernel(cache, kept, "debian")
-            self.assertIsNone(base.load_cached_kernel(cache, "debian", work))
+            base.save_cached_kernel(cache, kept, "minimal")
+            self.assertIsNone(base.load_cached_kernel(cache, "minimal", work))
 
     def test_the_toolchain_chroot_pins_come_from_the_container_dockerfile(self):
         chroot = base.toolchain_module()

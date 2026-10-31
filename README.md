@@ -274,12 +274,13 @@ first method that can run, in this order:
 
 <br>
 
-Fastest. BusyBox builds natively on any distribution. Debian desktop also needs
-`mmdebstrap` and a subordinate UID range for your user. Debian Minimal needs
-Debian 13's exact kernel toolchain (gcc-14 14.2.0-19, binutils 2.44): its
-kernel must carry Debian's own build string and configuration so that Debian's
-signed modules load, so on other hosts pick Podman or Docker instead. Install
-the tool suite the wizard lists, then choose **Native**.
+Fastest. BusyBox builds natively on any distribution. The Debian bases also
+need `mmdebstrap` and a subordinate UID range for your user. Their kernel
+(Debian Minimal's and the desktop's) must carry Debian's own build string and
+configuration so that Debian's signed modules load, so it is compiled with
+Debian 13's gcc-14 14.2.0-19 and binutils 2.44: the host's where they are
+those, else in a rootless Debian 13 toolchain chroot the build sets up once.
+Install the tool suite the wizard lists, then choose **Native**.
 
 </details>
 

@@ -121,10 +121,12 @@ The **Base images** section in the left sidebar lists installed bases. Use
   falls through to the QEMU builder and the log says why. The dialog lists the
   kept images with a **Remove** button. A build leaves no container behind.
   Debian Minimal has no desktop: it boots to a console login (the program
-  terminals stay in the app, as with BusyBox), keeps APT, and shares BusyBox's
-  kernel, so it builds in minutes once that kernel is cached. Its kernel must
-  report Debian's own build string, compiler and linker versions included, so
-  it is compiled with Debian 13's gcc-14 14.2.0-19 and binutils 2.44. Native
+  terminals stay in the app, as with BusyBox) and keeps APT. Both Debian bases
+  run the same kernel, built with Debian's own configuration, so they install
+  Debian's kernel packages and load Debian's signed modules, and the second
+  builds in minutes once that kernel is cached. That kernel must report
+  Debian's own build string, compiler and linker versions included, so it is
+  compiled with Debian 13's gcc-14 14.2.0-19 and binutils 2.44. Native
   uses the host's tools where they are those; on any other distribution it
   compiles in a rootless Debian 13 chroot instead (no root, no container
   engine, no VM): `mmdebstrap` unpacks the packages the container image pins,
@@ -133,8 +135,8 @@ The **Base images** section in the left sidebar lists installed bases. Use
   chroot is kept under the app's build folder and reused. It needs `mmdebstrap`,
   `unshare` and a subordinate UID range for your user (the same as the Debian
   image); the wizard says which toolchain the build uses, shows the chroot's
-  size and has a **Delete** button (the next build makes it again). BusyBox and
-  the Debian desktop keep compiling with the host's toolchain. A Debian Minimal VM whose
+  size and has a **Delete** button (the next build makes it again). BusyBox
+  keeps compiling with the host's toolchain. A Debian Minimal VM whose
   device profile boots UEFI gets a UEFI PC's disk (GPT, an EFI system
   partition, GRUB for UEFI with the shim, a `debian` firmware boot entry): the
   first such VM of a base lays that disk out once (a progress window shows the

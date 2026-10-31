@@ -40,10 +40,10 @@ JOB.json: {"format": 1, "profile": "busybox" | "debian-xfce" | "debian-minimal",
            (app_version optional: recorded as built_with)
 
 debian-xfce is Debian 13 with the desktop its options choose; debian-minimal is
-the console-only Debian 13 base (no desktop). debian-minimal's kernel is the
-stock profile: Debian's own configuration with the recorder, which loads
-Debian's own modules (from Debian's kernel packages, kept in --inputs and
-compared with the kernel as it is built).
+the console-only Debian 13 base (no desktop). Both run the stock kernel
+profile: Debian's own configuration with the recorder, which loads Debian's own
+modules (from Debian's kernel packages, kept in --inputs and compared with the
+kernel as it is built) and must carry Debian's banner (Debian 13's toolchain).
 """
 # Copyright (c) 2026 MikiMiku (MoreMorePwn)
 import argparse
@@ -71,7 +71,7 @@ DEBIAN_ANSWERS = {"name", "hostname", "locale", "keyboard_layout", "keyboard_var
 # kernel build and the image build need.
 PROFILES = {
     "busybox": ("minimal", "build-monitor-image.py", {"hostname", "name"}, (5, 2)),
-    "debian-xfce": ("debian", "build-debian-image.py", DEBIAN_ANSWERS | {"desktop"}, (30, 20)),
+    "debian-xfce": ("stock", "build-debian-image.py", DEBIAN_ANSWERS | {"desktop"}, (8, 20)),
     "debian-minimal": ("stock", "build-debian-image.py", DEBIAN_ANSWERS, (8, 6)),
 }
 # The image recipe's answer that selects the console-only Debian base.
@@ -168,8 +168,8 @@ def toolchain_problem(kernel_profile):
 
 
 def require_debian_toolchain(kernel_profile, chroot=None, work=None, inputs=None, ccache=None):
-    """Debian Minimal's kernel must carry Debian's banner, which only Debian
-    13's compiler and linker write. Use the host's when they are Debian 13's;
+    """A Debian base's kernel (the stock profile) must carry Debian's banner,
+    which only Debian 13's compiler and linker write. Use the host's when they are Debian 13's;
     else compile in the rootless toolchain chroot `chroot` (created on first
     use); without one, refuse before building."""
     global SANDBOX
@@ -178,7 +178,7 @@ def require_debian_toolchain(kernel_profile, chroot=None, work=None, inputs=None
         return
     if chroot is None:
         raise RuntimeError(
-            f"this host's {problem}: Debian Minimal's kernel banner (/proc/version) must be "
+            f"this host's {problem}: a Debian base's kernel banner (/proc/version) must be "
             "Debian's own; build it with --toolchain-chroot DIR (a rootless Debian 13 toolchain "
             "chroot), in a pinned Debian 13 container (--container), in the QEMU builder, or on "
             "a Debian 13 host")
@@ -555,12 +555,9 @@ def build_image(profile, values, build, work, output, app_version=None, image_ca
         answers = work / "options.json"
         answers.write_text(json.dumps(values) + "\n")
         command += ["--options", answers]
-        # The minimal kernel profile builds everything in and installs no modules.
-        if (build / "modules-install").is_dir() or PROFILES[profile][0] == "debian":
-            command += ["--modules", build / "modules-install"]
-        # The console base's /boot and module tree are Debian's own packages,
+        # A Debian base's /boot and module tree are Debian's own packages,
         # kept with the other Debian inputs.
-        if profile == "debian-minimal" and inputs is not None:
+        if inputs is not None:
             command += ["--kernel-package-cache", inputs]
         if image_cache is not None:
             command += ["--rootfs-cache", image_cache]
@@ -605,7 +602,7 @@ def main():
             raise RuntimeError(f"{args.output} already exists")
         args.work.mkdir(parents=True, exist_ok=True)
         kernel_profile = PROFILES[profile][0]
-        if profile == "debian-minimal":
+        if kernel_profile == "stock":
             require_debian_toolchain(kernel_profile, args.toolchain_chroot, args.work,
                                      args.inputs, args.ccache)
         kernel_space, image_space = PROFILES[profile][3]

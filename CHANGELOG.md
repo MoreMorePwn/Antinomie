@@ -217,6 +217,21 @@ it runs.
   (`scripts/check-kernel-abi.py`). New Debian Minimal bases only; the kernel
   build now needs `zstd`.
 
+- **The Debian desktop base gets Debian Minimal's kernel.** The desktop
+  (GNOME, Xfce and the other desktops) now runs the same stock kernel as
+  Debian Minimal instead of its own `debian` profile (removed): it installs
+  Debian's pinned kernel packages (`/boot`, `/usr/lib/modules` and the module
+  index are Debian's, `dpkg --verify` reports nothing) instead of purging
+  every `linux-image-*`, loads Debian's signed modules (its bootstrap initrd
+  loads Debian's virtio-blk and ext4 modules, udev the rest, virtio-gpu
+  among them), and its `/proc/version` is Debian's banner, so its kernel, like
+  Minimal's, is compiled with Debian 13's compiler and linker (natively in the
+  rootless Debian 13 toolchain chroot where the host's are others). The `debian` profile's
+  built-in drivers (virtio-blk, ext4, DRM and virtio-gpu) are modules in
+  Debian's configuration and are no longer built in; no other option
+  differs from Debian's. Both Debian bases share one cached kernel. New
+  desktop bases only; their root stays on virtio.
+
 - **Conformance goldens for Debian Minimal, and kexec_file_load's flags.**
   With Debian's configuration some calls answer differently from the BusyBox
   kernel (kexec_file_load and userfaultfd exist, transparent huge pages,

@@ -309,24 +309,9 @@ def debian_banner():
     raise RuntimeError("adapter.conf has no KERNEL_BANNER")
 
 
-def module_tree(modules, release):
-    """Return the installed module directory matching the kernel release."""
-    if modules is None:
-        return None
-    tree = modules / "lib/modules" / release.split()[0]
-    if not (tree / "modules.dep").is_file():
-        raise RuntimeError(f"--modules lacks lib/modules/{release.split()[0]}/modules.dep")
-    return tree
-
-
-def kernel_uses_modules(config):
-    return config is not None and any(line.endswith("=m")
-                                      for line in config.read_text().splitlines())
-
-
 def initrd_provenance(root, provenance, modules=None):
-    """The initrd's notices: the host packages its programs come from and, for
-    the console base, the Debian kernel package its modules come from."""
+    """The initrd's notices: the host packages its programs come from and the
+    Debian kernel package its modules come from."""
     notices = root / "usr/share/antinomie-initrd-provenance"
     files = {}
     packages = {}
@@ -368,14 +353,14 @@ def initrd_provenance(root, provenance, modules=None):
     if modules:
         record["kernel_modules"] = {
             "package": modules["package"], "files": modules["sha256"],
-            "origin": "Modules of Debian's kernel package (the console base's own), decompressed"}
+            "origin": "Modules of Debian's kernel package (the base's own), decompressed"}
     (notices / "packages.json").write_text(json.dumps(record, indent=2) + "\n")
     shutil.copytree(notices, provenance / "initrd")
     return packages
 
 
 def make_initrd(output, staging, provenance, modules=None):
-    """The bootstrap initrd (gzip cpio); modules: root_modules() for the console base."""
+    """The bootstrap initrd (gzip cpio); modules: root_modules()."""
     root = staging / "initrd-tree"
     root.mkdir()
     monitor_helpers().initrd_tree(root, modules)
@@ -440,8 +425,7 @@ def kernel_append(desktop, release=None, root_uuid=None):
 
 def fstab(desktop, root_uuid=None):
     """The console base's fstab is the installer's (root by UUID on any disk bus,
-    errors=remount-ro, the CD drive); the desktops keep virtio's /dev/vda (their
-    SATA and NVMe drivers are modules)."""
+    errors=remount-ro, the CD drive); the desktops keep virtio's /dev/vda."""
     if desktop == CONSOLE:
         return (FSTAB_HEADER + f"# / was on {CONSOLE_ROOT_DEVICE} during installation\n"
                 + FSTAB_ROOT.format(uuid=root_uuid) + FSTAB_CDROM)
@@ -581,9 +565,8 @@ if [ -n "$variant" ]; then
     awk -v v="$variant" -v l="$layout:" '/^! variant/ {s = 1; next} /^!/ {s = 0} s && $1 == v && $2 == l {f = 1} END {exit !f}' \\
         /usr/share/X11/xkb/rules/evdev.lst || { echo "unknown keyboard variant $variant for $layout" >&2; exit 1; }
 fi
-# Debian's own kernels go (the base boots its own); the console base's own
-# kernel packages stay.
-remove=$(dpkg-query -W -f='${binary:Package} ${db:Status-Status}\\n' | awk -v keep="$manager" '$2 == "installed" && ($1 ~ /^openssh-server(:|$)/ || $1 ~ /^qemu-guest-agent(:|$)/ || $1 ~ /^spice-vdagent(:|$)/ || $1 ~ /^cloud-init/ || $1 ~ /^cloud-guest-utils(:|$)/ || ($1 ~ /^linux-image-/ && keep != "none")) {print $1}')
+# Debian's own kernel packages stay (every Debian base installs them).
+remove=$(dpkg-query -W -f='${binary:Package} ${db:Status-Status}\\n' | awk '$2 == "installed" && ($1 ~ /^openssh-server(:|$)/ || $1 ~ /^qemu-guest-agent(:|$)/ || $1 ~ /^spice-vdagent(:|$)/ || $1 ~ /^cloud-init/ || $1 ~ /^cloud-guest-utils(:|$)/) {print $1}')
 if [ -n "$remove" ]; then
     apt-get -o APT::Get::AllowUnauthenticated=false -y purge $remove
 fi
@@ -695,7 +678,7 @@ ln -sf /etc/machine-id /var/lib/dbus/machine-id
 """ + FINISH + """"""
 
 
-# The console base's /boot, module tree and kernel packages are Debian's own:
+# Every Debian base's /boot, module tree and kernel packages are Debian's own:
 # linux-image-6.12.94+deb13-amd64 and linux-image-amd64 6.12.94-1 exactly as
 # linux-signed-amd64 6.12.94+1 shipped them (Debian's signed image, its
 # configuration, System.map and modules; dpkg --verify finds nothing to report).
@@ -956,8 +939,8 @@ ROOTFS_CACHE_DAYS = int(os.environ.get("ANTINOMIE_ROOTFS_CACHE_DAYS", "30"))
 
 def rootfs_identity(values, kernel_hashes=()):
     """What the root filesystem depends on: this recipe, the answers that shape
-    it (the base name and the apt proxy do not) and the console base's kernel
-    inputs (Debian's packages and the Antinomie kernel's modules), by SHA-256."""
+    it (the base name and the apt proxy do not) and Debian's kernel packages
+    it installs, by SHA-256."""
     keys = ("desktop", "hostname", "locale", "keyboard_layout", "keyboard_variant",
             "timezone", "standard", "mirror")
     identity = {"format": 1,
@@ -1030,24 +1013,6 @@ def save_rootfs_cache(cache, tarball, provenance, root, values, kernel_hashes=()
     print(f"root filesystem cached in {cache}", flush=True)
 
 
-def add_modules(tarball, modules):
-    """Append the kernel's modules (owned by root) to the root filesystem tarball."""
-    def owned_by_root(info):
-        info.uid = info.gid = 0
-        info.uname = info.gname = "root"
-        return info
-
-    with tarfile.open(tarball, "a", format=tarfile.PAX_FORMAT) as archive:
-        names = set(archive.getnames())
-        for directory in ("./usr", "./usr/lib", "./usr/lib/modules"):
-            if directory not in names and directory[2:] not in names:
-                entry = tarfile.TarInfo(directory)
-                entry.type = tarfile.DIRTYPE
-                entry.mode = 0o755
-                archive.addfile(owned_by_root(entry))
-        archive.add(modules, arcname=f"./usr/lib/modules/{modules.name}", filter=owned_by_root)
-
-
 def bootstrap_mode():
     return "root" if os.geteuid() == 0 else "unshare"
 
@@ -1090,10 +1055,8 @@ def boot_loader_hooks(scripts, provenance):
 
 def mmdebstrap_command(values, tarball, script, provenance, times=None, kernel_debs=()):
     """The mmdebstrap invocation; hooks run as (namespace) root with "$1" the new root.
-    A desktop's kernel modules are added to the tarball afterwards
-    (add_modules), so the bootstrapped system can be cached and reused with
-    another kernel; the console base installs Debian's kernel packages
-    (kernel_debs), whose modules its kernel loads."""
+    Every Debian base installs Debian's kernel packages (kernel_debs), whose
+    modules its kernel loads."""
     q = shlex.quote
     console = values["desktop"] == CONSOLE
     scripts = script.parent
@@ -1426,13 +1389,12 @@ def console_disk(raw, size, rng):
     return f"{raw}?offset={CONSOLE_ROOT_OFFSET}"
 
 
-def root_image(values, raw, staging, provenance, log, modules=None, cache=None,
-               console_kernel=None):
-    """The root filesystem image. console_kernel (the console base): the
-    SHA-256 of Debian's kernel packages ("hashes") and the packages ("debs")."""
+def root_image(values, raw, staging, provenance, log, cache=None, debian_kernel=None):
+    """The root filesystem image. debian_kernel: the SHA-256 of Debian's kernel
+    packages ("hashes") and the packages ("debs")."""
     tarball = staging / "rootfs.tar"
     times = staging / INODE_TIMES
-    kernel_hashes = console_kernel["hashes"] if console_kernel else ()
+    kernel_hashes = debian_kernel["hashes"] if debian_kernel else ()
     root = load_rootfs_cache(cache, values, staging, provenance, log, kernel_hashes)
     if root is None:
         script = staging / "customize.sh"
@@ -1444,7 +1406,7 @@ def root_image(values, raw, staging, provenance, log, modules=None, cache=None,
                 (staging / name).write_text(text)
                 shutil.copy2(staging / name, provenance / name)
             shutil.copy2(REPO / "scripts/debian-uefi-delta.py", staging / "debian-uefi-delta.py")
-        kernel_debs = console_kernel["debs"] if console_kernel else ()
+        kernel_debs = debian_kernel["debs"] if debian_kernel else ()
         command = mmdebstrap_command(values, tarball, script, provenance, times, kernel_debs)
         (provenance / "mmdebstrap.json").write_text(json.dumps(command, indent=2) + "\n")
         # mmdebstrap assembles the system in $TMPDIR; /tmp is a small tmpfs on
@@ -1466,8 +1428,6 @@ def root_image(values, raw, staging, provenance, log, modules=None, cache=None,
         if not all((staging / name).is_file() for name in UEFI_STAGED):
             raise RuntimeError("the bootstrap left no UEFI layout for the console base")
         check_image_leaks(staging / "uefi-root.tar", hostname=values["hostname"])
-    if modules is not None:
-        add_modules(tarball, modules)
     size = image_size(values["desktop"])
     root_uuid = fstab_uuid(tarball) if values["desktop"] == CONSOLE else None
     rng = random.SystemRandom()
@@ -1494,8 +1454,7 @@ def root_image(values, raw, staging, provenance, log, modules=None, cache=None,
             "root_filesystem": "ext4", "root_size": size, "root_uuid": root_uuid,
             "conversion": "mkfs.ext4 -d tarball; extended attributes and the installation's "
                           "access, change and birth times set with debugfs",
-            "extended_attributes": xattrs, "timed_paths": timed,
-            "kernel_modules": None if modules is None else f"/usr/lib/modules/{modules.name}"}
+            "extended_attributes": xattrs, "timed_paths": timed}
 
 
 def uefi_layout(staging, bundle):
@@ -1536,14 +1495,11 @@ def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=Fa
     values = options(values or {})
     release = kernel_release(kernel)
     console = values["desktop"] == CONSOLE
-    if console and modules is not None:
-        raise RuntimeError("the console base loads Debian's own modules; build its kernel with "
-                           "the stock profile and pass no --modules")
-    if not console and kernel_uses_modules(kernel_config) and modules is None:
-        raise RuntimeError("kernel config builds modules; pass --modules with its install root")
-    tree = module_tree(modules, release)
+    if modules is not None:
+        raise RuntimeError("a Debian base loads Debian's own modules; build its kernel with "
+                           "the stock profile and pass no modules")
     helpers = monitor_helpers()
-    helpers.fixed_display_config(kernel_config, kernel, modules_ok=console)
+    helpers.fixed_display_config(kernel_config, kernel, modules_ok=True)
     helpers.stamp_revision({}, kernel, allow_unversioned)
     if e2fsprogs_version() < MIN_E2FSPROGS:
         raise RuntimeError("mkfs.ext4 from e2fsprogs 1.47.1 or newer is required (tarball input)")
@@ -1562,33 +1518,31 @@ def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=Fa
         shutil.copy2(kernel, bundle / "kernel")
         raw = staging / "root.raw"
         log_path = staging / "bootstrap.log"
-        console_kernel = initrd_modules = None
-        if console:
-            # The console base installs Debian's own kernel packages, which
-            # must be the release the Antinomie kernel reports, and loads
-            # their modules: the kernel must have Debian's configuration.
-            if release.split()[0] != DEBIAN_KERNEL_PACKAGES[0][0].removeprefix("linux-image-"):
-                raise RuntimeError(f"kernel release {release.split()[0]} is not Debian's "
-                                   f"{DEBIAN_KERNEL_PACKAGES[0][0]}")
-            # /proc/version beside Debian's /boot/vmlinuz: the same banner,
-            # down to the compiler and linker versions.
-            banner = kernel_banner(kernel)
-            if banner != debian_banner():
-                raise RuntimeError(f"the kernel's banner {banner!r} is not Debian's "
-                                   f"{debian_banner()!r}; build it with Debian 13's compiler "
-                                   "and linker (the QEMU builder)")
-            packages_dir = staging / "kernel-packages"
-            packages_dir.mkdir()
-            packages_dir.chmod(0o755)
-            debs = debian_kernel_debs(kernel_package_cache, packages_dir, values["proxy"])
-            stock_config(kernel_config, debs[0])
-            initrd_modules = root_modules(debs[0])
-            console_kernel = {"hashes": [sha for _, _, sha in DEBIAN_KERNEL_PACKAGES],
-                              "debs": debs}
+        # Every Debian base (the console base and the desktops) installs
+        # Debian's own kernel packages, which must be the release the
+        # Antinomie kernel reports, and loads their modules: the kernel must
+        # have Debian's configuration.
+        if release.split()[0] != DEBIAN_KERNEL_PACKAGES[0][0].removeprefix("linux-image-"):
+            raise RuntimeError(f"kernel release {release.split()[0]} is not Debian's "
+                               f"{DEBIAN_KERNEL_PACKAGES[0][0]}")
+        # /proc/version beside Debian's /boot/vmlinuz: the same banner, down to
+        # the compiler and linker versions.
+        banner = kernel_banner(kernel)
+        if banner != debian_banner():
+            raise RuntimeError(f"the kernel's banner {banner!r} is not Debian's "
+                               f"{debian_banner()!r}; build it with Debian 13's compiler "
+                               "and linker (the QEMU builder)")
+        packages_dir = staging / "kernel-packages"
+        packages_dir.mkdir()
+        packages_dir.chmod(0o755)
+        debs = debian_kernel_debs(kernel_package_cache, packages_dir, values["proxy"])
+        stock_config(kernel_config, debs[0])
+        initrd_modules = root_modules(debs[0])
+        debian_kernel = {"hashes": [sha for _, _, sha in DEBIAN_KERNEL_PACKAGES], "debs": debs}
         try:
             with log_path.open("w") as log:
-                root = root_image(values, raw, staging, provenance, log, tree, rootfs_cache,
-                                  console_kernel)
+                root = root_image(values, raw, staging, provenance, log, rootfs_cache,
+                                  debian_kernel)
         except (RuntimeError, subprocess.CalledProcessError):
             # The log dies with the staging directory; show why it failed.
             lines = log_path.read_text(errors="replace").splitlines()
@@ -1646,11 +1600,11 @@ def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=Fa
         # its root by UUID, so its kernel decides (built-in controllers only).
         manifest["stealth_support"] = stealth_support(values["desktop"], kernel_config,
                                                       bundle / "kernel")
-        if helpers.fixed_display_config(kernel_config, bundle / "kernel", modules_ok=console):
+        if helpers.fixed_display_config(kernel_config, bundle / "kernel", modules_ok=True):
             manifest["fixed_display"] = True
             shutil.copy2(kernel_config, provenance / "kernel.config")
             helpers.fixed_display_config(provenance / "kernel.config", bundle / "kernel",
-                                         modules_ok=console)
+                                         modules_ok=True)
             manifest["kernel_config_sha256"] = helpers.checksum(provenance / "kernel.config")
             manifest["build_provenance"] = {"parent_identity": None,
                 "kernel_sha256": hashes["kernel"], "base_disk_sha256": hashes["base.qcow2"],
@@ -1679,14 +1633,12 @@ def main():
     parser.add_argument("--output", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--symbols", type=Path,
                         help="the kernel's Volatility symbol table (scripts/make-kernel-symbols.py)")
-    parser.add_argument("--modules", type=Path,
-                        help="modules_install root (INSTALL_MOD_PATH) matching the kernel")
     parser.add_argument("--allow-unversioned", action="store_true",
                         help="accept a development kernel without a source id")
     parser.add_argument("--kernel-package-cache", type=Path,
-                        help="directory that keeps Debian's kernel packages for the console "
-                             "base (checked against their pinned SHA-256; downloaded and "
-                             "verified against the archive's signed index when missing)")
+                        help="directory that keeps Debian's kernel packages (checked against "
+                             "their pinned SHA-256; downloaded and verified against the "
+                             "archive's signed index when missing)")
     parser.add_argument("--options", type=Path,
                         help="JSON object of installer answers (desktop: a DESKTOPS id or "
                              "\"none\" for the console-only Debian Minimal base, hostname, "
@@ -1708,7 +1660,7 @@ def main():
         values = json.loads(args.options.read_text()) if args.options else {}
         if not isinstance(values, dict):
             raise RuntimeError("options must be a JSON object")
-        build(args.kernel, args.output, args.kernel_config, args.modules,
+        build(args.kernel, args.output, args.kernel_config, None,
               args.allow_unversioned, values, args.work, args.app_version, args.rootfs_cache,
               args.symbols, args.kernel_package_cache)
     except (RuntimeError, OSError, ValueError, subprocess.CalledProcessError) as error:

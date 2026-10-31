@@ -45,11 +45,11 @@ pub(crate) fn choose(host: &HostToolchain, debian: &(String, String)) -> Toolcha
     }
 }
 
-/// The toolchain a native build of `kind` uses on this host. Only Debian
-/// Minimal's kernel needs Debian's: BusyBox and the desktop base keep the
-/// host's.
+/// The toolchain a native build of `kind` uses on this host. Only the Debian
+/// bases' kernel (Minimal's and the desktop's, the stock profile) needs
+/// Debian's: BusyBox keeps the host's.
 pub fn for_kind(kind: crate::build::Kind) -> Toolchain {
-    if kind != crate::build::Kind::DebianMinimal {
+    if !kind.is_debian() {
         return Toolchain::Host;
     }
     match crate::kit::debian_toolchain() {
@@ -196,10 +196,11 @@ mod tests {
     }
 
     #[test]
-    fn only_debian_minimal_needs_debians_toolchain() {
+    fn only_the_debian_bases_need_debians_toolchain() {
         use crate::build::Kind;
         assert_eq!(for_kind(Kind::BusyBox), Toolchain::Host);
-        assert_eq!(for_kind(Kind::DebianXfce), Toolchain::Host);
+        // The desktop runs Debian Minimal's kernel: the same toolchain.
+        assert_eq!(for_kind(Kind::DebianXfce), for_kind(Kind::DebianMinimal));
     }
 
     #[test]

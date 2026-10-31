@@ -513,14 +513,13 @@ pub fn series_short() -> String {
     crate::kit::series_hash()[..12].to_string()
 }
 
-/// The kernel build profile a base kind uses (`build-monitor-kernel.sh`). The
-/// console-only Debian base runs Debian's own configuration (the stock
-/// profile), so Debian's own modules load into its kernel.
+/// The kernel build profile a base kind uses (`build-monitor-kernel.sh`).
+/// Both Debian bases run Debian's own configuration (the stock profile), so
+/// Debian's own modules load into their kernel; they share one kernel.
 pub(crate) fn kernel_profile(kind: Kind) -> &'static str {
     match kind {
         Kind::BusyBox => "minimal",
-        Kind::DebianMinimal => "stock",
-        Kind::DebianXfce => "debian",
+        Kind::DebianMinimal | Kind::DebianXfce => "stock",
     }
 }
 
@@ -597,26 +596,10 @@ const BUSYBOX_TOOLS: &[ToolSpec] = &[
     tool("ldd", "libc-bin"),
 ];
 
-const DEBIAN_TOOLS: &[ToolSpec] = &[
-    tool("mmdebstrap", "mmdebstrap"),
-    tool("newuidmap", "uidmap"),
-    tool("qemu-img", "qemu-utils"),
-    tool("mkfs.ext4", "e2fsprogs"),
-    tool("debugfs", "e2fsprogs"),
-    tool("resize2fs", "e2fsprogs"),
-    tool("cpio", "cpio"),
-    tool("gzip", "gzip"),
-    tool("tar", "tar"),
-    tool("busybox", "busybox-static"),
-    tool("dpkg-query", "dpkg"),
-    // The UEFI disk layout partitions with it.
-    tool("sfdisk", "fdisk"),
-];
-
-/// The console Debian base: Debian's image tools, on the stock kernel (Debian's
+/// The Debian bases: Debian's image tools, on the stock kernel (Debian's
 /// configuration), whose build compares itself with Debian's kernel image
 /// (zstd-compressed).
-const DEBIAN_MINIMAL_TOOLS: &[ToolSpec] = &[
+const DEBIAN_TOOLS: &[ToolSpec] = &[
     tool("zstd", "zstd"),
     tool("mmdebstrap", "mmdebstrap"),
     tool("newuidmap", "uidmap"),
@@ -656,8 +639,7 @@ pub fn tools(kind: Kind, mode: BuildMode) -> Vec<ToolSpec> {
             };
             all.extend_from_slice(match kind {
                 Kind::BusyBox => BUSYBOX_TOOLS,
-                Kind::DebianXfce => DEBIAN_TOOLS,
-                Kind::DebianMinimal => DEBIAN_MINIMAL_TOOLS,
+                Kind::DebianXfce | Kind::DebianMinimal => DEBIAN_TOOLS,
             });
             all
         }
@@ -733,16 +715,14 @@ pub(crate) fn host_toolchain() -> &'static (Option<String>, Option<String>) {
 
 /// Why native Debian builds cannot run here besides missing tools: rootless
 /// mmdebstrap needs a subordinate UID range for this user, and so does the
-/// Debian 13 toolchain chroot a Debian Minimal kernel is compiled in where the
+/// Debian 13 toolchain chroot a Debian base's kernel is compiled in where the
 /// host's compiler and linker are not Debian 13's (the tools list names the
 /// chroot's `unshare`).
 pub fn native_obstacle(kind: Kind) -> Option<String> {
     if !kind.is_debian() {
         return None;
     }
-    if kind == Kind::DebianMinimal
-        && let Err(error) = crate::kit::debian_toolchain()
-    {
+    if let Err(error) = crate::kit::debian_toolchain() {
         return Some(error);
     }
     let user = std::env::var("USER").unwrap_or_default();
@@ -1085,7 +1065,7 @@ mod tests {
         );
         // Debian's configuration; every kernel build encodes BTF with pahole.
         assert_eq!(kernel_profile(Kind::DebianMinimal), "stock");
-        assert_eq!(kernel_profile(Kind::DebianXfce), "debian");
+        assert_eq!(kernel_profile(Kind::DebianXfce), "stock");
         let native: Vec<_> = tools(Kind::DebianMinimal, BuildMode::Native)
             .iter()
             .map(|tool| tool.tool)

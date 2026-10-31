@@ -742,23 +742,21 @@ class DebianImageTests(unittest.TestCase):
             if not hook.startswith(("upload ", "download ")):
                 self.assertNotIn("/w/", hook)
 
-    def test_console_base_takes_debians_modules_not_its_kernels(self):
+    def test_debian_bases_take_debians_modules_not_their_kernels(self):
         with tempfile.TemporaryDirectory() as name:
             config = Path(name) / "config"
             config.write_text("CONFIG_EXT4_FS=m\nCONFIG_VIRTIO_BLK=m\n")
-            self.assertTrue(image.kernel_uses_modules(config))
             kernel = Path(name) / "kernel"
             kernel.write_bytes(b"kernel")
             modules = Path(name) / "modules"
-            # A desktop needs the kernel's own modules; the console base
-            # refuses them (Debian's are its kernel's).
-            with patch.object(image, "kernel_release", return_value="6.12.94"), \
-                    self.assertRaisesRegex(RuntimeError, "--modules"):
-                image.build(kernel, Path(name) / "out", config, values={"desktop": "xfce"})
-            with patch.object(image, "kernel_release", return_value="6.12.94+deb13-amd64"), \
-                    self.assertRaisesRegex(RuntimeError, "Debian's own modules"):
-                image.build(kernel, Path(name) / "out", config, modules,
-                            values={"desktop": "none"})
+            # The desktops and the console base alike refuse the kernel's own
+            # modules (Debian's are their kernel's).
+            for desktop in ("xfce", "gnome", "none"):
+                with patch.object(image, "kernel_release", return_value="6.12.94+deb13-amd64"), \
+                        self.assertRaisesRegex(RuntimeError, "Debian's own modules"):
+                    image.build(kernel, Path(name) / "out", config, modules,
+                                values={"desktop": desktop})
+            self.assertNotIn("--modules", Path(image.__file__).read_text())
 
     def test_console_kernel_must_have_debians_configuration(self):
         release = image.DEBIAN_KERNEL_PACKAGES[0][0].removeprefix("linux-image-")
@@ -919,16 +917,6 @@ class DebianImageTests(unittest.TestCase):
                 self.assertIsNone(image.load_rootfs_cache(cache, other, staging, provenance, log))
                 clock.now.return_value = now + image.timedelta(days=image.ROOTFS_CACHE_DAYS)
                 self.assertIsNone(image.load_rootfs_cache(cache, values, staging, provenance, log))
-            # Modules are appended, owned by root, under /usr/lib/modules.
-            modules = root / "lib/modules/6.12.94"
-            (modules / "kernel").mkdir(parents=True)
-            (modules / "modules.dep").write_text("")
-            image.add_modules(rootfs, modules)
-            with tarfile.open(rootfs) as archive:
-                names = archive.getnames()
-                self.assertIn("./usr/lib/modules", names)
-                dep = archive.getmember("./usr/lib/modules/6.12.94/modules.dep")
-                self.assertEqual((dep.uid, dep.gid, dep.uname), (0, 0, "root"))
 
     def test_bootstrap_failure_cleans_unpublished_state(self):
         with tempfile.TemporaryDirectory() as name:
@@ -961,7 +949,7 @@ class DebianImageTests(unittest.TestCase):
                     with self.assertRaises(RuntimeError):
                         image.kernel_release(kernel)
 
-    def test_debian_minimal_kernel_carries_debians_banner(self):
+    def test_debian_kernels_carry_debians_banner(self):
         import gzip
 
         def bzimage(banner):
@@ -981,7 +969,7 @@ class DebianImageTests(unittest.TestCase):
             kernel = Path(name) / "kernel"
             kernel.write_bytes(bzimage(debian))
             self.assertEqual(image.kernel_banner(kernel), debian)
-            # The same kernel linked by a newer binutils is refused for the console base.
+            # The same kernel linked by a newer binutils is refused for every Debian base.
             other = debian.replace("GNU ld (GNU Binutils for Debian) 2.44",
                                    "GNU ld (GNU Binutils for Debian) 2.47")
             kernel.write_bytes(bzimage(other))
@@ -990,13 +978,23 @@ class DebianImageTests(unittest.TestCase):
             helpers.fixed_display_config.return_value = False
             # The host's e2fsprogs is not what this checks: a runner older than
             # 1.47.1 would stop the build before the banner is read.
-            with patch.object(image, "kernel_release", return_value="6.12.94+deb13-amd64"), \
+            for desktop in (image.CONSOLE, "gnome", "xfce"):
+                with patch.object(image, "kernel_release", return_value="6.12.94+deb13-amd64"), \
+                        patch.object(image, "monitor_helpers", return_value=helpers), \
+                        patch.object(image, "e2fsprogs_version",
+                                     return_value=image.MIN_E2FSPROGS), \
+                        self.assertRaisesRegex(RuntimeError, "2.47.*is not Debian's"):
+                    image.build(kernel, Path(name) / "out", values={"desktop": desktop},
+                                allow_unversioned=True)
+                self.assertFalse((Path(name) / "out").exists())
+            # A desktop kernel of another release (the old debian profile's
+            # 6.12.94) is refused before its banner is read.
+            with patch.object(image, "kernel_release", return_value="6.12.94"), \
                     patch.object(image, "monitor_helpers", return_value=helpers), \
                     patch.object(image, "e2fsprogs_version", return_value=image.MIN_E2FSPROGS), \
-                    self.assertRaisesRegex(RuntimeError, "2.47.*is not Debian's"):
-                image.build(kernel, Path(name) / "out", values={"desktop": image.CONSOLE},
+                    self.assertRaisesRegex(RuntimeError, "is not Debian's linux-image"):
+                image.build(kernel, Path(name) / "out", values={"desktop": "gnome"},
                             allow_unversioned=True)
-            self.assertFalse((Path(name) / "out").exists())
             kernel.write_bytes(b"not a kernel")
             with self.assertRaisesRegex(RuntimeError, "bzImage"):
                 image.kernel_banner(kernel)
@@ -1098,8 +1096,18 @@ class DebianImageTests(unittest.TestCase):
         self.assertLess(verify, hooks.index("upload /w/c.sh /tmp/antinomie-customize.sh"))
         self.assertFalse(any("depmod" in hook or "update-initramfs" in hook or "updates" in hook
                              for hook in hooks))
-        # The customization purges Debian's kernels, not the console base's own.
-        self.assertIn('($1 ~ /^linux-image-/ && keep != "none")', image.customization_script())
+        # The customization keeps Debian's kernel packages on every base.
+        purge = next(line for line in image.customization_script().splitlines()
+                     if line.startswith("remove="))
+        self.assertNotIn("linux-image", purge)
+        # A desktop installs the same packages first.
+        with patch.object(image.os, "geteuid", return_value=1000):
+            desktop = image.mmdebstrap_command(image.options({"desktop": "gnome"}),
+                                               Path("/w/r.tar"), Path("/w/c.sh"), Path("/w/p"),
+                                               kernel_debs=(Path("/w/k/a.deb"),
+                                                            Path("/w/k/b.deb")))
+        self.assertIn('--customize-hook=chroot "$1" apt-get -o APT::Get::AllowUnauthenticated='
+                      'false -y install /tmp/a.deb /tmp/b.deb', desktop)
         # The cache knows the kernel inputs by their hashes.
         values = image.options({"desktop": image.CONSOLE})
         first = image.rootfs_identity(values, ("aa", "bb"))
@@ -1118,24 +1126,6 @@ class DebianImageTests(unittest.TestCase):
             entries = image.signed_index_entries(Path(name))
         for name, version, sha in image.DEBIAN_KERNEL_PACKAGES:
             self.assertEqual(entries[(name, version)][2], sha)
-
-    def test_modular_kernel_requires_matching_installed_modules(self):
-        with tempfile.TemporaryDirectory() as name:
-            root = Path(name)
-            config = root / "config"
-            config.write_text("CONFIG_EXT4_FS=y\nCONFIG_SND=m\n")
-            self.assertTrue(image.kernel_uses_modules(config))
-            config.write_text("CONFIG_EXT4_FS=y\n# CONFIG_SND is not set\n")
-            self.assertFalse(image.kernel_uses_modules(config))
-            self.assertIsNone(image.module_tree(None, "6.12.94 (builder) #1"))
-            with self.assertRaises(RuntimeError):
-                image.module_tree(root, "6.12.94 (builder) #1")
-            tree = root / "lib/modules/6.12.94"
-            tree.mkdir(parents=True)
-            (tree / "modules.dep").write_text("")
-            self.assertEqual(image.module_tree(root, "6.12.94 (builder) #1"), tree)
-            with self.assertRaises(RuntimeError):
-                image.module_tree(root, "6.12.95 (builder) #1")
 
     def test_profile_contract(self):
         self.assertEqual(image.PROFILE, {"id": "debian-xfce", "label": "Debian 13 (Xfce)",

@@ -360,7 +360,7 @@ class SeriesTests(unittest.TestCase):
         self.assertRegex(script, r"--enable DEBUG_INFO_BTF\b")
         self.assertIn("require_symbols DEBUG_INFO_BTF DEBUG_INFO_BTF_MODULES", script)
         checks = re.findall(r'check-kernel-btf\.py" --vmlinux "\$build_tree/vmlinux"', script)
-        self.assertEqual(len(checks), 3, "every profile runs the BTF check")
+        self.assertEqual(len(checks), 2, "every profile runs the BTF check")
 
 
 if __name__ == "__main__":

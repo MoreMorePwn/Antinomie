@@ -3,7 +3,7 @@
 #
 # build-monitor-kernel.sh — build the patched guest kernel for one profile.
 #
-#   usage: scripts/build-monitor-kernel.sh [minimal|debian|stock]
+#   usage: scripts/build-monitor-kernel.sh [minimal|stock]
 #
 # Environment: ANTINOMIE_SOURCE_TREE, ANTINOMIE_BUILD_TREE, ANTINOMIE_DEBIAN_CONFIG
 # and ANTINOMIE_SERIES_DIR replace the repository work-tree defaults.
@@ -18,18 +18,14 @@
 # minimal (default): upstream x86_64_defconfig plus the symbols below, all
 #   built in, with DWARF debug information in vmlinux; output in
 #   work/monitor-build. Used by the BusyBox base.
-# debian: the pinned Debian amd64 configuration (debian/config/config, then
-#   kernelarch-x86/config, then amd64/config) with only the deviations listed
-#   in DEBIAN_BUILTIN and below; output in work/monitor-build-debian, with
-#   stripped modules installed under modules-install/. Used by the desktop
-#   Debian bases.
-# stock: the pinned Debian amd64 configuration with nothing changed but the
+# stock: the pinned Debian amd64 configuration (debian/config/config, then
+#   kernelarch-x86/config, then amd64/config) with nothing changed but the
 #   recorder (and the embedded configuration the image builders read): Debian's
 #   module ABI, BTF, function tracer and module-signing certificate (the public
 #   certificate of Debian's own build, module-signing.pem in the adapter), so
 #   Debian's own signed modules load. Only the kernel image is built; output in
-#   work/monitor-build-stock. Used by Debian Minimal, which installs Debian's
-#   kernel packages. ANTINOMIE_DEBIAN_IMAGE names Debian's linux-image package
+#   work/monitor-build-stock. Used by the Debian bases (Minimal and the
+#   desktops), which install Debian's kernel packages. ANTINOMIE_DEBIAN_IMAGE names Debian's linux-image package
 #   to compare the kernel's exports, BTF and traceable functions with.
 #
 set -euo pipefail
@@ -42,16 +38,15 @@ prepared=${ANTINOMIE_SOURCE_PREPARED:-0}
 jobs=${JOBS:-8}
 case "$profile" in
     minimal) build_tree=${ANTINOMIE_BUILD_TREE:-"$repo/work/monitor-build"} ;;
-    debian) build_tree=${ANTINOMIE_BUILD_TREE:-"$repo/work/monitor-build-debian"} ;;
     stock) build_tree=${ANTINOMIE_BUILD_TREE:-"$repo/work/monitor-build-stock"} ;;
-    *) echo "usage: $0 [minimal|debian|stock]" >&2; exit 2 ;;
+    *) echo "usage: $0 [minimal|stock]" >&2; exit 2 ;;
 esac
-# The minimal and stock profiles compile with Debian 13's own compiler where the
-# host has it (Debian's kernel build names x86_64-linux-gnu-gcc-14, as
-# /proc/version then shows); the debian profile keeps the host's gcc. The banner records the
-# first line of each tool's --version (scripts/mkcompile_h, CC_VERSION_TEXT).
+# Both profiles compile with Debian 13's own compiler where the host has it
+# (Debian's kernel build names x86_64-linux-gnu-gcc-14, as /proc/version then
+# shows). The banner records the first line of each tool's --version
+# (scripts/mkcompile_h, CC_VERSION_TEXT).
 cc=gcc
-if [[ $profile != debian ]] && command -v x86_64-linux-gnu-gcc-14 >/dev/null; then
+if command -v x86_64-linux-gnu-gcc-14 >/dev/null; then
     cc=x86_64-linux-gnu-gcc-14
 fi
 if [[ ${ANTINOMIE_PRINT_TOOLCHAIN:-0} == 1 ]]; then
@@ -145,11 +140,11 @@ export KBUILD_BUILD_VERSION_TIMESTAMP
 DEBIAN_PARITY="BPF_SYSCALL BPF_JIT CHECKPOINT_RESTORE KEYS KEY_DH_OPERATIONS
     SECURITY_YAMA USER_NS SECURITY_DMESG_RESTRICT"
 # Enabled in the minimal profile only, for prctl coverage; pinned Debian leaves
-# both unset, so the debian profile keeps them off.
+# both unset.
 MINIMAL_EXTRA="ANON_VMA_NAME SCHED_CORE"
 # Root disk controllers the stealth profile offers besides virtio (SATA through
 # q35's AHCI, NVMe), built in for the minimal profile: the bootstrap initrd has
-# no module loader. The Debian profile keeps Debian's modules (virtio root only).
+# no module loader. The stock profile keeps Debian's modules.
 DISK_BUSES="ATA SATA_AHCI SCSI BLK_DEV_SD BLK_DEV_NVME"
 # Debian 13's configuration where a program can see it (uname, /proc,
 # /sys/kernel/security/lsm, the cgroup controllers, /proc/filesystems,
@@ -170,10 +165,6 @@ DEBIAN_SHAPE_OFF="CGROUP_DEBUG NET_9P 9P_FS LEGACY_TIOCSTI NETCONSOLE HZ_1000 DE
 DEBIAN_LSM="landlock,lockdown,yama,loadpin,safesetid,integrity,apparmor,selinux,smack,tomoyo,bpf,ipe"
 # Debian's kernel release suffix (uname -r 6.12.94+deb13-amd64).
 DEBIAN_LOCALVERSION="+deb13-amd64"
-# Built in for both profiles: the bootstrap initrd has no module loader, and the
-# fixed display needs virtio-gpu before userspace starts.
-DEBIAN_BUILTIN="ANTINOMIE UNIX98_PTYS IKCONFIG VIRTIO VIRTIO_PCI VIRTIO_BLK EXT4_FS
-    DRM DRM_VIRTIO_GPU DRM_VIRTIO_GPU_KMS DRM_FBDEV_EMULATION FRAMEBUFFER_CONSOLE"
 
 require_symbols() {
     local missing=0 symbol
@@ -193,7 +184,7 @@ require_source_id() {
     fi
 }
 
-# The banner check of the minimal and stock profiles: Debian Minimal's must be
+# The banner check of the minimal and stock profiles: a Debian base's must be
 # Debian's own (KERNEL_BANNER, which build-debian-image.py checks); only Debian
 # 13's compiler and linker write it.
 check_banner() {
@@ -205,7 +196,7 @@ check_banner() {
     expected=${expected#\'}
     expected=${expected%\'}
     if [[ $banner != "$expected" ]]; then
-        echo "warning: the banner is not Debian's ($expected); Debian Minimal needs a kernel" \
+        echo "warning: the banner is not Debian's ($expected); a Debian base needs a kernel" \
             "built with Debian 13's toolchain" >&2
     fi
 }
@@ -346,44 +337,3 @@ if [[ $profile == stock ]]; then
     echo "$build_tree/arch/x86/boot/bzImage"
     exit 0
 fi
-
-fragments=("$debian_config/config" "$debian_config/kernelarch-x86/config"
-           "$debian_config/amd64/config")
-for fragment in "${fragments[@]}"; do
-    [[ -f $fragment ]] || { echo "missing Debian config fragment $fragment; run scripts/bootstrap.sh" >&2; exit 1; }
-done
-# The unmodified Debian configuration, resolved by this tree, is kept beside the
-# build so the deviations below are recorded rather than implied.
-reference="$build_tree/debian-reference"
-rm -rf "$reference"
-mkdir -p "$reference"
-cat "${fragments[@]}" > "$reference/.config"
-make -C "$source_tree" O="$reference" olddefconfig >/dev/null
-cp "$reference/.config" "$build_tree/.config"
-for symbol in $DEBIAN_BUILTIN; do
-    "$config" --file "$build_tree/.config" --enable "$symbol"
-done
-"$config" --file "$build_tree/.config" --disable IKCONFIG_PROC
-# The image builders read the embedded configuration from a gzip bzImage
-# (pinned format); Debian compresses with zstd.
-"$config" --file "$build_tree/.config" --disable KERNEL_ZSTD --enable KERNEL_GZIP
-# Debian's signing key is not available; the build generates its own.
-"$config" --file "$build_tree/.config" --set-str MODULE_SIG_KEY "certs/signing_key.pem"
-"$config" --file "$build_tree/.config" --set-str SYSTEM_TRUSTED_KEYS ""
-"$config" --file "$build_tree/.config" --set-str SYSTEM_REVOCATION_KEYS ""
-"$config" --file "$build_tree/.config" --set-str ANTINOMIE_SOURCE_ID "$source_id"
-make -C "$source_tree" O="$build_tree" olddefconfig
-# shellcheck disable=SC2086
-require_symbols $DEBIAN_BUILTIN $DEBIAN_PARITY KERNEL_GZIP DEBUG_INFO
-require_source_id
-"$source_tree/scripts/diffconfig" "$reference/.config" "$build_tree/.config" \
-    > "$build_tree/antinomie-config-deviations.txt"
-# LOCALVERSION= keeps the release exactly 6.12.94 (no "+" for an untagged tree).
-make -C "$source_tree" O="$build_tree" "${compiler[@]}" LOCALVERSION= -j"$jobs" bzImage modules
-[[ ${#compiler[@]} -eq 0 ]] || ccache --show-stats >&2
-rm -rf "$build_tree/modules-install"
-make -C "$source_tree" O="$build_tree" LOCALVERSION= INSTALL_MOD_PATH="$build_tree/modules-install" \
-    INSTALL_MOD_STRIP=1 modules_install >/dev/null
-python3 "$repo/scripts/check-kernel-btf.py" --vmlinux "$build_tree/vmlinux" \
-    --system-map "$build_tree/System.map" --modules "$build_tree/modules-install"
-echo "$build_tree/arch/x86/boot/bzImage"

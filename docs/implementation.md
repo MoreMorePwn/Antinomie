@@ -2920,6 +2920,27 @@ guest), the banner's linker version unless built with Debian 13's binutils
 (the build refuses Debian Minimal otherwise), and the recorder's own memory
 and behaviour (see "Guest stealth").
 
+### The desktop base on the same kernel
+
+Since this change the Debian desktop base (profile `debian-xfce`, every
+desktop of `DESKTOPS`) is built like Debian Minimal's kernel side; the
+`debian` kernel profile is gone and `kernel_profile` maps both Debian kinds to
+`stock`, so they share one cached kernel.
+
+| Part | Desktop before | Desktop now |
+| --- | --- | --- |
+| Kernel | `debian` profile: Debian's configuration plus `VIRTIO_BLK`, `EXT4_FS`, `DRM`, `DRM_VIRTIO_GPU` built in (`=m` in Debian), its own module-signing key, release `6.12.94`, the host's gcc | `stock` profile, release `6.12.94+deb13-amd64`, Debian's certificate |
+| Kernel packages | every `linux-image-*` purged in the customization | `DEBIAN_KERNEL_PACKAGES` installed first, as on Minimal, and kept (`dpkg --verify` empty) |
+| Module tree | the kernel's own `modules_install` appended to the root tarball (`add_modules`, removed) | Debian's, from its packages; the bootstrap initrd loads Debian's virtio-blk and ext4 modules (`ROOT_MODULE_GROUPS`), udev the rest |
+| Banner | whatever compiler built it | Debian's (`debian_banner()`); `require_debian_toolchain` runs for every stock-profile job and `toolchain::for_kind` gives both Debian kinds the same toolchain (the host's when it is Debian 13's, else the rootless toolchain chroot) |
+| Fixed display | DRM and virtio-gpu built in | `fixed_display_config(..., modules_ok=True)`: virtio-gpu is Debian's module, loaded by udev before the display manager starts |
+
+The options the `debian` profile added were all ones Debian builds as
+modules, so none is kept: the desktop's configuration differs from Debian's
+only as the stock profile allows. Its root stays `/dev/vda` (fstab, no SATA or
+NVMe root), and its root filesystem cache key now includes the kernel
+packages' SHA-256.
+
 ## Guest stealth (0.7.0)
 
 Guest series 0046-0050; contract revision 17 unchanged, every guest change

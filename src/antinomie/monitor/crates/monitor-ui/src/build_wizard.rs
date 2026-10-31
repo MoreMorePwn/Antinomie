@@ -246,7 +246,7 @@ impl BuildWizard {
             (
                 BuildMode::Native,
                 "Native (on this Linux host)",
-                "Fastest; needs the kernel and image tool suite. Debian Minimal's kernel is \
+                "Fastest; needs the kernel and image tool suite. A Debian base's kernel is \
                  compiled with Debian 13's toolchain: this host's when it is that, else a \
                  rootless Debian 13 chroot (needs mmdebstrap, unshare and a subordinate UID range)",
             ),
@@ -743,7 +743,7 @@ impl BuildWizard {
                     ("image", "Build image"),
                     ("install", "Install base"),
                 ]
-            } else if status.profile == "debian-minimal"
+            } else if status.profile.starts_with("debian-")
                 && toolchain::for_kind(Kind::DebianMinimal) == toolchain::Toolchain::Chroot
             {
                 &[
