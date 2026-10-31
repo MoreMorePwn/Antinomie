@@ -256,8 +256,8 @@ pub fn vfork_own_memory(context: &mut Context) -> Result<String, String> {
         prog.kids.push(kid);
         return Err("the child's session holds its parent's breakpoint table".into());
     }
-    let code = kid.read_memory(child_site, 1).map_err(text)?;
-    if code[0] == 0xcc {
+    let code = kid.read_memory(child_site, bp_bytes()).map_err(text)?;
+    if is_breakpoint(&code) {
         prog.kids.push(kid);
         return Err("the child's memory holds the parent's breakpoint byte".into());
     }

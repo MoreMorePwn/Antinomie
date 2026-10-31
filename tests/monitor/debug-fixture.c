@@ -39,6 +39,7 @@ static volatile int stop_workers;
 
 /* hot(x) = 3 * x + magic. A plain asm body gives a fixed instruction sequence
  * the qualifier can place a breakpoint on and step through. */
+#if defined(__x86_64__)
 __asm__(".text\n"
         ".globl hot\n.type hot,@function\nhot:\n"
         "  mov %rdi,%rax\n"
@@ -51,6 +52,26 @@ __asm__(".text\n"
         "  pop %rax\n"
         "  ret\n"
         ".size tf_probe,.-tf_probe\n");
+#elif defined(__aarch64__)
+/* x0 = x0 * 3 + magic: hot's first instruction is mov x1, x0 (aa0003e1). There
+ * is no flag register a program can read its step state from (MDSCR and SPSR.SS
+ * are not readable at EL0): tf_probe returns 0. */
+__asm__(".text\n"
+        ".globl hot\n.type hot,@function\nhot:\n"
+        "  mov x1, x0\n"
+        "  add x0, x1, x1, lsl #1\n"
+        "  adrp x2, magic\n"
+        "  ldr x2, [x2, :lo12:magic]\n"
+        "  add x0, x0, x2\n"
+        "  ret\n"
+        ".size hot,.-hot\n"
+        ".globl tf_probe\n.type tf_probe,@function\ntf_probe:\n"
+        "  mov x0, #0\n"
+        "  ret\n"
+        ".size tf_probe,.-tf_probe\n");
+#else
+#error "debug-fixture.c: x86-64 or aarch64"
+#endif
 extern long hot(long x);
 extern unsigned long tf_probe(void);
 
@@ -88,13 +109,26 @@ static long tracer_pid(void)
     return value;
 }
 
+/* A breakpoint instruction starting at code[i]: INT3, or an aligned BRK. */
+static int is_breakpoint(const unsigned char *code, unsigned i)
+{
+#if defined(__aarch64__)
+    unsigned word;
+    if (i % 4) return 0;
+    memcpy(&word, (const void *)(code + i), 4);
+    return (word & 0xffe0001fu) == 0xd4200000u;
+#else
+    return code[i] == 0xcc;
+#endif
+}
+
 static int int3_through_mem(void)
 {
     unsigned char code[32];
     int fd = open("/proc/self/mem", O_RDONLY), count = 0;
     if (fd < 0) return -1;
     if (pread(fd, code, sizeof(code), (off_t)(unsigned long)hot) != (ssize_t)sizeof(code)) count = -1;
-    else for (unsigned i = 0; i < sizeof(code); i++) count += code[i] == 0xcc;
+    else for (unsigned i = 0; i < sizeof(code); i++) count += is_breakpoint(code, i);
     close(fd);
     return count;
 }
@@ -103,7 +137,7 @@ static int int3_direct(void)
 {
     const volatile unsigned char *code = (const volatile unsigned char *)hot;
     int count = 0;
-    for (unsigned i = 0; i < 32; i++) count += code[i] == 0xcc;
+    for (unsigned i = 0; i < 32; i++) count += is_breakpoint((const unsigned char *)code, i);
     return count;
 }
 

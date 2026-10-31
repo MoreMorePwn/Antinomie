@@ -219,18 +219,19 @@ pub fn keep_both(context: &mut Context) -> Result<String, String> {
     // Resuming follows it: the child becomes an inferior and stays held, so the
     // parent blocks in waitpid until it is interrupted.
     session.gdb.run("continue &", 30)?;
-    thread::sleep(Duration::from_millis(1500));
+    run_for(1500);
     session.gdb.run("interrupt", 30)?;
     thread::sleep(Duration::from_millis(500));
     let text = session.gdb.run("info inferiors", 30)?;
     expect(&text, &["1 ", "2 ", "process"], "two inferiors")?;
-    // Look at the child: it is stopped at the fork, rax 0.
-    let text = session
-        .gdb
-        .run("inferior 2\ninfo registers rax\nx/i $pc", 30)?;
+    // Look at the child: it is stopped at the fork, rax (x0) 0.
+    let text = session.gdb.run(
+        &format!("inferior 2\ninfo registers {}\nx/i $pc", gdb_reg("rax")),
+        30,
+    )?;
     expect(
         &text,
-        &["rax            0x0"],
+        &[&gdb_reg_line("rax", 0)],
         "the child's fork return value",
     )?;
     let output = session.output(context);
@@ -322,7 +323,7 @@ pub fn vfork(context: &mut Context) -> Result<String, String> {
     }
     let text = session.gdb.run("delete\ncontinue &", 30)?;
     refuse(&text, &["Cannot access memory"], "after the vfork")?;
-    thread::sleep(Duration::from_millis(1500));
+    run_for(1500);
     let output = session.output(context);
     let transcript = session.finish(context)?;
     refuse(
@@ -405,7 +406,7 @@ pub fn nonstop(context: &mut Context) -> Result<String, String> {
     expect(&text, &["Id   Target Id"], "the thread list in non-stop")?;
     session.gdb.run("break work", 30)?;
     session.gdb.send("continue -a")?;
-    thread::sleep(Duration::from_millis(1500));
+    run_for(1500);
     let text = session.gdb.run("info threads", 30)?;
     let stopped = text.matches("(stopped)").count();
     if stopped < 3 {
@@ -433,7 +434,9 @@ pub fn nonstop(context: &mut Context) -> Result<String, String> {
         ));
     }
     // Interrupt it and read its registers.
-    let text = session.gdb.run("interrupt\ninfo registers rip", 30)?;
+    let text = session
+        .gdb
+        .run(&format!("interrupt\ninfo registers {}", gdb_reg("rip")), 30)?;
     refuse(
         &text,
         &["Remote connection closed"],

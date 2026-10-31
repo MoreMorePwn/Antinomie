@@ -36,8 +36,9 @@ fn adopt_kid(prog: &mut Prog, child: &ChildRef) -> Result<Box<dyn DebugBackend>,
     Ok(kid)
 }
 
+/// The system call's result: rax, or x0.
 fn rax(regs: &[u8]) -> u64 {
-    u64_of(regs, RAX)
+    u64_of(regs, ret_at())
 }
 
 fn regs_of(backend: &mut dyn DebugBackend, tid: u32) -> Result<Vec<u8>, String> {
@@ -76,19 +77,19 @@ pub fn fork_follow(context: &mut Context) -> Result<String, String> {
     }
     let mut kid = adopt_kid(&mut prog, &child)?;
     let kid_regs = regs_of(kid.as_mut(), child.tgid)?;
-    if rax(&kid_regs) != 0 || u64_of(&kid_regs, RIP) != event.pc {
+    if rax(&kid_regs) != 0 || u64_of(&kid_regs, pc_at()) != event.pc {
         return Err(format!(
             "the child starts with rax {} at {:#x}, the parent is at {:#x}",
             rax(&kid_regs),
-            u64_of(&kid_regs, RIP),
+            u64_of(&kid_regs, pc_at()),
             event.pc
         ));
     }
     if !kid.guest_breakpoints().map_err(text)?.is_empty() {
         return Err("the child still holds the breakpoints it inherited".into());
     }
-    let code = kid.read_memory(child_site, 1).map_err(text)?;
-    if code[0] == 0xcc {
+    let code = kid.read_memory(child_site, bp_bytes()).map_err(text)?;
+    if is_breakpoint(&code) {
         return Err("the child's memory holds the parent's breakpoint byte".into());
     }
     prog.dbg.detach(DetachMode::Resume).map_err(text)?;
@@ -369,7 +370,7 @@ pub fn exec_legacy(context: &mut Context) -> Result<String, String> {
         run_id: prog.launched.run.id.clone(),
         data: b"g\n".to_vec(),
     })?;
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = Instant::now() + Duration::from_secs(secs(20));
     loop {
         match prog.dbg.state().map_err(text)? {
             TargetState::Replaced => break,
@@ -425,7 +426,7 @@ pub fn nonstop(context: &mut Context) -> Result<String, String> {
         .map_err(text)?;
     let mut seen = Vec::new();
     let mut acknowledged = 0;
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = Instant::now() + Duration::from_secs(secs(20));
     while seen.len() < 3 {
         let batch = prog.dbg.events(acknowledged).map_err(text)?;
         for event in batch.events {
@@ -455,10 +456,10 @@ pub fn nonstop(context: &mut Context) -> Result<String, String> {
     // Memory of the running process can be read; a stopped thread has registers.
     prog.dbg.read_memory(counters, 64).map_err(text)?;
     let regs = prog.regs(seen[0])?;
-    if u64_of(&regs, RIP) != work {
+    if u64_of(&regs, pc_at()) != work {
         return Err(format!(
             "the stopped thread is at {:#x}, not {work:#x}",
-            u64_of(&regs, RIP)
+            u64_of(&regs, pc_at())
         ));
     }
     // A thread that is running has no registers to give.
@@ -469,8 +470,8 @@ pub fn nonstop(context: &mut Context) -> Result<String, String> {
     }
     // Take the breakpoint out and run one thread; the others stay stopped.
     prog.dbg.clear_breakpoint(work, 1).map_err(text)?;
-    let code = prog.dbg.read_memory(work, 1).map_err(text)?;
-    if code[0] == 0xcc {
+    let code = prog.dbg.read_memory(work, bp_bytes()).map_err(text)?;
+    if is_breakpoint(&code) {
         return Err("the byte is still in after BP_CLEAR".into());
     }
     let tid = seen[0];
@@ -493,8 +494,8 @@ pub fn nonstop(context: &mut Context) -> Result<String, String> {
         return Err(format!("the step ended as {:?}", step.kind));
     }
     let regs = prog.regs(tid)?;
-    if u64_of(&regs, EFLAGS) & 0x100 != 0 {
-        return Err("TF after a step".into());
+    if u64_of(&regs, flags_at()) & step_flag() != 0 {
+        return Err("the step flag after a step".into());
     }
     let others_still: Vec<u32> = prog
         .dbg
@@ -533,7 +534,7 @@ pub fn nonstop(context: &mut Context) -> Result<String, String> {
     prog.dbg
         .thread_action(None, ThreadAction::Stop)
         .map_err(text)?;
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(secs(10));
     while prog.dbg.threads().map_err(text)?.iter().any(|t| !t.stopped) {
         if Instant::now() >= deadline {
             return Err("not every thread stopped".into());
@@ -743,7 +744,7 @@ pub fn fork_stress(context: &mut Context) -> Result<String, String> {
     // A signal gdb's table passes silently, owed to the next resume.
     let mut owed: Option<(u32, u32)> = None;
     let mut seen = std::collections::BTreeSet::new();
-    while started.elapsed() < Duration::from_secs(14) {
+    while started.elapsed() < Duration::from_secs(secs(14)) {
         seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
         let action = match owed.take() {
             Some((tid, signal)) => ResumeAction::ContinueSignal { tid, signal },
@@ -764,12 +765,12 @@ pub fn fork_stress(context: &mut Context) -> Result<String, String> {
             );
         }
         let regs = prog.regs(event.tid)?;
-        if u64_of(&regs, RIP) != event.pc && !matches!(event.kind, StopKind::Interrupt) {
+        if u64_of(&regs, pc_at()) != event.pc && !matches!(event.kind, StopKind::Interrupt) {
             return Err(format!(
                 "{:?}: the event says pc {:#x}, the thread is at {:#x}",
                 event.kind,
                 event.pc,
-                u64_of(&regs, RIP)
+                u64_of(&regs, pc_at())
             ));
         }
         match event.kind {
@@ -798,7 +799,7 @@ pub fn fork_stress(context: &mut Context) -> Result<String, String> {
         }
     }
     prog.dbg.resume(ResumeAction::Continue).map_err(text)?;
-    thread::sleep(Duration::from_millis(600));
+    run_for(600);
     let output = context.output(&prog);
     // The guest's terminal keeps only its tail; some children must have ended.
     let reaped = output.matches("child exit=7").count();

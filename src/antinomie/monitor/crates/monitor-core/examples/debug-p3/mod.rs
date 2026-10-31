@@ -139,7 +139,7 @@ impl Prog {
 
 /// The next stop of any backend.
 pub fn wait_for(backend: &mut dyn DebugBackend, seconds: u64) -> Result<StopEvent, String> {
-    let deadline = Instant::now() + Duration::from_secs(seconds);
+    let deadline = Instant::now() + Duration::from_secs(secs(seconds));
     loop {
         match backend.state().map_err(|e| e.to_string())? {
             TargetState::Stopped(event) => return Ok(event),
@@ -160,7 +160,7 @@ pub fn wait_for(backend: &mut dyn DebugBackend, seconds: u64) -> Result<StopEven
 }
 
 pub fn wait_exit(backend: &mut dyn DebugBackend, seconds: u64) -> Result<u32, String> {
-    let deadline = Instant::now() + Duration::from_secs(seconds);
+    let deadline = Instant::now() + Duration::from_secs(secs(seconds));
     loop {
         match backend.state().map_err(|e| e.to_string())? {
             TargetState::Exited { wait_status } => return Ok(wait_status),

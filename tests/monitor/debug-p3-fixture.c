@@ -29,8 +29,8 @@
  *            unblocks: the queued SIGCHLD is delivered then, every round (the
  *            window glibc's fork() opens by itself when the child is quick)
  *   stopself ignores SIGTERM, starts a watchdog child that sends SIGCONT after
- *            6 s, and stops the whole process with SIGSTOP in round 3 (job
- *            control: no thread can park). After SIGCONT it calls
+ *            6 s, and stops the whole process with SIGSTOP in round 3 (30 on
+ *            aarch64) (job control: no thread can park). After SIGCONT it calls
  *            child_site() and prints "child_site survived": a program that
  *            lived through Stop must not find an engine breakpoint byte there
  *   killtimer arms a timer that sends the process SIGKILL after ROUNDS ms and
@@ -89,20 +89,46 @@ __attribute__((noinline, used)) long work(long slot)
 /* A thread's own exit, at a known system call instruction. */
 __attribute__((noinline, used)) void exit_now(void)
 {
+#if defined(__aarch64__)
+    register long nr __asm__("x8") = SYS_exit, code __asm__("x0") = 0;
+    __asm__ volatile(".globl exit_syscall\nexit_syscall:\n\tsvc #0"
+                     : : "r"(nr), "r"(code) : "memory");
+#else
     __asm__ volatile(".globl exit_syscall\nexit_syscall:\n\tsyscall"
                      : : "a"((long)SYS_exit), "D"(0L) : "rcx", "r11", "memory");
+#endif
     __builtin_unreachable();
 }
 extern char exit_syscall[];
 
 __attribute__((noinline, used)) long pause_now(void)
 {
+#if defined(__aarch64__)
+    /* No pause on arm64: ppoll with no descriptors and no timeout blocks the same way. */
+    register long nr __asm__("x8") = SYS_ppoll;
+    register long ret __asm__("x0") = 0;
+    register long a1 __asm__("x1") = 0, a2 __asm__("x2") = 0, a3 __asm__("x3") = 0,
+                  a4 __asm__("x4") = 0;
+    __asm__ volatile(".globl pause_syscall\npause_syscall:\n\tsvc #0"
+                     : "+r"(ret) : "r"(nr), "r"(a1), "r"(a2), "r"(a3), "r"(a4) : "memory");
+    return ret;
+#else
     long ret;
     __asm__ volatile(".globl pause_syscall\npause_syscall:\n\tsyscall"
                      : "=a"(ret) : "0"((long)SYS_pause) : "rcx", "r11", "memory");
     return ret;
+#endif
 }
 extern char pause_syscall[];
+
+/* The round in which stopself stops itself: after the debugger attached and
+ * stopped it once. An emulated (TCG) arm64 guest attaches more slowly, and its
+ * watchdog's 6 s still come after this round. */
+#if defined(__aarch64__)
+#define STOPSELF_ROUND 30
+#else
+#define STOPSELF_ROUND 3
+#endif
 extern char vfork_syscall[];
 
 static long exit_lead_ms;
@@ -238,9 +264,20 @@ int main(int argc, char **argv)
                        WIFSIGNALED(status) ? WTERMSIG(status) : 0);
         } else if (!strcmp(mode, "vforkstep") && round == 20) {
             /* Inline: the child returns into this frame, as from vfork(). */
+#if defined(__aarch64__)
+            /* No vfork on arm64: clone(CLONE_VM | CLONE_VFORK | SIGCHLD) on the same stack. */
+            register long nr __asm__("x8") = SYS_clone;
+            register long child __asm__("x0") = CLONE_VM | CLONE_VFORK | SIGCHLD;
+            register long a1 __asm__("x1") = 0, a2 __asm__("x2") = 0, a3 __asm__("x3") = 0,
+                          a4 __asm__("x4") = 0;
+            __asm__ volatile(".globl vfork_syscall\nvfork_syscall:\n\tsvc #0"
+                             : "+r"(child) : "r"(nr), "r"(a1), "r"(a2), "r"(a3), "r"(a4)
+                             : "memory");
+#else
             long child;
             __asm__ volatile(".globl vfork_syscall\nvfork_syscall:\n\tsyscall"
                              : "=a"(child) : "0"((long)SYS_vfork) : "rcx", "r11", "memory");
+#endif
             if (child == 0) {
                 char *args[] = { self_path, "leaf", NULL };
                 execv(self_path, args);
@@ -293,7 +330,7 @@ int main(int argc, char **argv)
             if (child > 0) waitpid(child, &status, 0);
             sigprocmask(SIG_SETMASK, &old, NULL);
             printf("chld reaped\n");
-        } else if (!strcmp(mode, "stopself") && round == 3) {
+        } else if (!strcmp(mode, "stopself") && round == STOPSELF_ROUND) {
             printf("stopping myself\n");
             fflush(stdout);
             raise(SIGSTOP);

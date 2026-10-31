@@ -38,6 +38,11 @@
 #include <sys/prctl.h>
 #include <sys/ptrace.h>
 #include <sys/user.h>
+#include <sys/uio.h>
+#if defined(__aarch64__)
+#include <asm/ptrace.h>
+#include <elf.h>
+#endif
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -52,6 +57,7 @@ char srcbuf[4096], dstbuf[4096];
 static volatile int stop_workers;
 static sigjmp_buf segv_jump;
 
+#if defined(__x86_64__)
 /* Fixed instruction sequences: a stepper can predict every address. */
 __asm__(".text\n"
         ".globl step_syscall\n.type step_syscall,@function\nstep_syscall:\n"
@@ -86,6 +92,45 @@ __asm__(".text\n"
         "  pop %rax\n"
         "  ret\n"
         ".size tf_probe,.-tf_probe\n");
+#elif defined(__aarch64__)
+/* The same symbols on aarch64. There is no repeated string instruction: step_rep
+ * steps one nop. A watchpoint stops before its access here (gdb steps past it).
+ * EL0 cannot read its step state: tf_probe returns 0. */
+__asm__(".text\n"
+        ".globl step_syscall\n.type step_syscall,@function\nstep_syscall:\n"
+        "  mov x8, #172\n"           /* getpid */
+        ".globl step_syscall_insn\nstep_syscall_insn:\n"
+        "  svc #0\n"
+        ".globl step_after_syscall\nstep_after_syscall:\n"
+        "  mov x1, x0\n"
+        "  nop\n"
+        "  ret\n"
+        ".size step_syscall,.-step_syscall\n"
+        ".globl step_rep\n.type step_rep,@function\nstep_rep:\n"
+        "  nop\n"
+        ".globl step_rep_insn\nstep_rep_insn:\n"
+        "  nop\n"
+        ".globl step_after_rep\nstep_after_rep:\n"
+        "  nop\n"
+        "  ret\n"
+        ".size step_rep,.-step_rep\n"
+        ".globl hw_code\n.type hw_code,@function\nhw_code:\n"
+        "  adrp x1, watched\n"
+        "  add x1, x1, :lo12:watched\n"
+        "  str x0, [x1]\n"
+        ".globl hw_after_write\nhw_after_write:\n"
+        "  ldr x0, [x1]\n"
+        ".globl hw_after_read\nhw_after_read:\n"
+        "  add x0, x0, #1\n"
+        "  ret\n"
+        ".size hw_code,.-hw_code\n"
+        ".globl tf_probe\n.type tf_probe,@function\ntf_probe:\n"
+        "  mov x0, #0\n"
+        "  ret\n"
+        ".size tf_probe,.-tf_probe\n");
+#else
+#error "debug-p2-fixture.c: x86-64 or aarch64"
+#endif
 extern long step_syscall(void);
 extern void step_rep(void);
 extern long hw_code(long value);
@@ -100,7 +145,11 @@ void on_usr1(int sig, siginfo_t *info, void *context)
 {
     (void)sig; (void)info;
     got_usr1++;
+#if defined(__aarch64__)
+    if (((ucontext_t *)context)->uc_mcontext.pstate & (1UL << 21)) tf_in_frame++;   /* SPSR.SS */
+#else
     if (((ucontext_t *)context)->uc_mcontext.gregs[REG_EFL] & 0x100) tf_in_frame++;
+#endif
 }
 static void on_segv(int sig, siginfo_t *info, void *context)
 {
@@ -146,13 +195,26 @@ static long tracer_pid(void)
     return value;
 }
 
+/* A breakpoint instruction starting at code[i]: INT3, or an aligned BRK. */
+static int is_breakpoint(const unsigned char *code, unsigned i)
+{
+#if defined(__aarch64__)
+    unsigned word;
+    if (i % 4) return 0;
+    memcpy(&word, (const void *)(code + i), 4);
+    return (word & 0xffe0001fu) == 0xd4200000u;
+#else
+    return code[i] == 0xcc;
+#endif
+}
+
 static int int3_in(const void *code_address, int direct)
 {
     unsigned char code[32];
     int count = 0;
     if (direct) {
         const volatile unsigned char *code_bytes = code_address;
-        for (unsigned i = 0; i < sizeof(code); i++) count += code_bytes[i] == 0xcc;
+        for (unsigned i = 0; i < sizeof(code); i++) count += is_breakpoint((const unsigned char *)code_bytes, i);
         return count;
     } else {
         int fd = open("/proc/self/mem", O_RDONLY);
@@ -160,7 +222,7 @@ static int int3_in(const void *code_address, int direct)
         if (pread(fd, code, sizeof(code), (off_t)(unsigned long)code_address) != (ssize_t)sizeof(code))
             count = -1;
         else
-            for (unsigned i = 0; i < sizeof(code); i++) count += code[i] == 0xcc;
+            for (unsigned i = 0; i < sizeof(code); i++) count += is_breakpoint(code, i);
         close(fd);
         return count;
     }
@@ -179,8 +241,21 @@ static void dr_probe(void)
     }
     int status;
     waitpid(child, &status, 0);
+#if defined(__aarch64__)
+    /* arm64 has no DR7/DR6: the child's enabled watchpoints and breakpoints. */
+    struct user_hwdebug_state hw;
+    struct iovec iov = { &hw, sizeof(hw) };
+    long dr7 = 0, dr6 = 0;
+    for (int type = NT_ARM_HW_BREAK; type <= NT_ARM_HW_WATCH; type++) {
+        memset(&hw, 0, sizeof(hw));
+        iov.iov_len = sizeof(hw);
+        if (ptrace(PTRACE_GETREGSET, child, type, &iov) == 0)
+            for (int i = 0; i < 16; i++) dr7 += hw.dbg_regs[i].ctrl & 1;
+    }
+#else
     long dr7 = ptrace(PTRACE_PEEKUSER, child, offsetof(struct user, u_debugreg[7]), 0);
     long dr6 = ptrace(PTRACE_PEEKUSER, child, offsetof(struct user, u_debugreg[6]), 0);
+#endif
     printf("dr child_dr7=0x%lx child_dr6=0x%lx\n", dr7, dr6);
     ptrace(PTRACE_CONT, child, 0, 0);
     waitpid(child, &status, 0);
@@ -193,8 +268,16 @@ static __attribute__((noinline)) void fault_once(void)
 
 static void smc_round(unsigned char *page, int version)
 {
+#if defined(__aarch64__)
+    /* mov w0, #version ; ret; byte 1 is not the version here: the tick line
+     * prints the immediate decoded from the instruction. */
+    unsigned int words[2] = { 0x52800000u | ((unsigned)version << 5), 0xd65f03c0u };
+    unsigned char code[8];
+    memcpy(code, words, sizeof(code));
+#else
     /* mov $version,%eax ; ret */
     unsigned char code[6] = { 0xb8, (unsigned char)version, 0, 0, 0, 0xc3 };
+#endif
     memcpy(page, code, sizeof(code));
     __builtin___clear_cache((char *)page, (char *)page + sizeof(code));
     int result = ((int (*)(void))page)();
@@ -263,7 +346,13 @@ int main(int argc, char **argv)
             printf("tick %ld watched=%ld\n", round, watched);
         } else if (!strcmp(mode, "smc")) {
             smc_round(smc, (int)(round % 200) + 1);
+#if defined(__aarch64__)
+            unsigned int word;
+            memcpy(&word, smc, 4);
+            printf("tick %ld smc=%02x\n", round, (word >> 5) & 0xffff);
+#else
             printf("tick %ld smc=%02x\n", round, smc[1]);
+#endif
         } else if (!strcmp(mode, "anti")) {
             if (round == 20) traceme = (int)ptrace(PTRACE_TRACEME, 0, 0, 0);
             if (round == 10) dr_probe();

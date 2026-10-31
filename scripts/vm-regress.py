@@ -107,10 +107,10 @@ MEASURED_GROUPS = {"conf-stress-rate": "stress-rate"}
 # The compiler of each guest architecture's static fixtures.
 ARCH_CC = {"x86_64": "gcc", "arm64": "aarch64-linux-gnu-gcc"}
 # Checks an arm64 tier does not plan yet, and the card that brings each: the
-# debugger (MA-11/14), the cloud profiles (MA-17), interop (x86 bases only),
-# stress-extreme (disk under TCG). The stealth probe measures arm64 without its
-# CPUID and I/O port checks.
-ARM64_LATER = {"debug-p2", "debug-p3", "debugger-live", "cloud",
+# app's live debugger check (MA-14), the cloud profiles (MA-17), interop (x86
+# bases only), stress-extreme (disk under TCG). The stealth probe measures arm64
+# without its CPUID and I/O port checks; debug-p2/p3 run the aarch64 fixtures.
+ARM64_LATER = {"debugger-live", "cloud",
                "conf-stress-extreme", "uring-legacy", "tracer-legacy"}
 MACHINE_RS = MONITOR / "crates/monitor-core/src/vm/machine.rs"
 
@@ -555,8 +555,8 @@ def build_fixtures(out, arch="x86_64"):
 
 def build_foreign_fixtures(out, arch):
     """A foreign architecture's static fixtures, cross-built into fixtures-<arch>:
-    the portable ones (no debugger fixtures; the stealth probe without its x86
-    checks) and the stress samples."""
+    the portable ones (the stealth probe without its x86 checks), the debugger
+    fixtures (aarch64 assembly blocks) and the stress samples."""
     fix = out / f"fixtures-{arch}"
     stamp = fix / ".built"
     if stamp.exists():
@@ -575,7 +575,12 @@ def build_foreign_fixtures(out, arch):
         (["-static", "-O2", *strict], "tracer-fixture.c", fix / "tracer-fixture"),
         (["-static", "-O2", *strict], "stealth-probe.c", fix / "stealth-probe"),
         (["-static", "-O2", *strict], "cloud-probe.c", fix / "cloud-probe"),
+        (["-O1", "-static", "-pthread"], "debug-fixture.c", fix / "debug/fixture"),
+        (["-O1", "-static", "-no-pie", "-pthread"], "debug-p2-fixture.c", fix / "debug/p2fix"),
+        (["-O1", "-static-pie", "-pthread"], "debug-p2-fixture.c", fix / "debug/p2pie"),
+        (["-O1", "-static", "-no-pie", "-pthread"], "debug-p3-fixture.c", fix / "debug/p3fix"),
     ]
+    (fix / "debug").mkdir(exist_ok=True)
     for flags, source, target in builds:
         code, _ = run_logged([cc, *flags, "-o", str(target), str(TESTS / source)], env, str(ROOT), log, 600)
         if code != 0:

@@ -7,7 +7,12 @@ use super::*;
 
 const RCX: usize = 88;
 const RSI: usize = 104;
-const RDI_AT: usize = 112;
+
+/// Where a watchpoint stops: after the access on x86-64 (a trap), at the
+/// accessing instruction on aarch64 (a fault; the engine steps past it on resume).
+fn watch_pc(after: u64) -> u64 {
+    if on_aarch64() { after - 4 } else { after }
+}
 
 fn main_tid(prog: &mut Prog) -> Result<u32, String> {
     Ok(prog.dbg.threads().map_err(|e| e.to_string())?[0].tid)
@@ -41,7 +46,9 @@ pub fn step(context: &mut Context) -> Result<String, String> {
     let mut times = Vec::new();
     let pc = prog.step(tid)?;
     if pc != syscall {
-        return Err(format!("mov $39 stepped to {pc:#x}, wanted {syscall:#x}"));
+        return Err(format!(
+            "the getpid number stepped to {pc:#x}, wanted {syscall:#x}"
+        ));
     }
     let at = Instant::now();
     let pc = prog.step(tid)?;
@@ -51,24 +58,25 @@ pub fn step(context: &mut Context) -> Result<String, String> {
             "stepping SYSCALL ended at {pc:#x}, wanted {after:#x} (one instruction, not two)"
         ));
     }
-    let rax = u64_of(&prog.regs(tid)?, RAX);
+    let rax = u64_of(&prog.regs(tid)?, ret_at());
     if rax != pid {
         return Err(format!("getpid returned {rax}, wanted {pid}"));
     }
-    for want in [after + 2, after + 3] {
+    for want in [after + insn(2), after + insn(2) + insn(1)] {
         let pc = prog.step(tid)?;
         if pc != want {
             return Err(format!("stepped to {pc:#x}, wanted {want:#x}"));
         }
     }
-    // Over REP MOVSB: one step retires the whole copy.
+    // Over REP MOVSB: one step retires the whole copy. aarch64 has no
+    // repeated string instruction: its step_rep steps a nop.
     let event = prog.run_to(prog.sym("step_rep")?)?;
     let tid = event.tid;
-    for _ in 0..3 {
+    for _ in 0..if on_aarch64() { 1 } else { 3 } {
         prog.step(tid)?;
     }
     let before = prog.regs(tid)?;
-    if u64_of(&before, RIP) != rep || u64_of(&before, RCX) != 4096 {
+    if u64_of(&before, pc_at()) != rep || (!on_aarch64() && u64_of(&before, RCX) != 4096) {
         return Err("not at the rep with rcx 4096".into());
     }
     let at = Instant::now();
@@ -76,8 +84,8 @@ pub fn step(context: &mut Context) -> Result<String, String> {
     times.push(at.elapsed().as_secs_f64() * 1000.0);
     let regs = prog.regs(tid)?;
     if pc != after_rep
-        || u64_of(&regs, RCX) != 0
-        || u64_of(&regs, RSI) != u64_of(&before, RSI) + 4096
+        || (!on_aarch64()
+            && (u64_of(&regs, RCX) != 0 || u64_of(&regs, RSI) != u64_of(&before, RSI) + 4096))
     {
         return Err(format!(
             "stepping REP MOVSB ended at {pc:#x} rcx {} (wanted {after_rep:#x} and rcx 0)",
@@ -113,7 +121,12 @@ pub fn step(context: &mut Context) -> Result<String, String> {
         .map_err(|e| e.to_string())?;
     context.finish(prog)?;
     Ok(format!(
-        "SYSCALL stepped to the next instruction (rax = pid), REP MOVSB retired in one step (rcx 0), breakpoints on both stepped over; {:.1} ms per step",
+        "{}; {:.1} ms per step",
+        if on_aarch64() {
+            "SVC stepped to the next instruction (x0 = pid), step_rep's nop in one step, breakpoints on both stepped over"
+        } else {
+            "SYSCALL stepped to the next instruction (rax = pid), REP MOVSB retired in one step (rcx 0), breakpoints on both stepped over"
+        },
         median(times)
     ))
 }
@@ -180,7 +193,7 @@ pub fn signals(context: &mut Context) -> Result<String, String> {
         return Err(format!("thread list does not name the signal: {listed:?}"));
     }
     let regs = prog.regs(tid)?;
-    if u64_of(&regs, RIP) != pc || u64_of(&regs, EFLAGS) & 0x100 != 0 {
+    if u64_of(&regs, pc_at()) != pc || u64_of(&regs, flags_at()) & step_flag() != 0 {
         return Err("registers at a signal stop are wrong".into());
     }
     // Drop it: the handler must not run for this round.
@@ -245,7 +258,7 @@ pub fn signals(context: &mut Context) -> Result<String, String> {
         .resume(ResumeAction::Continue)
         .map_err(|e| e.to_string())?;
     let (_, again, pc_again) = wait_signal(&mut prog, 15)?;
-    if again != 11 || pc_again != u64_of(&at_fault, RIP) {
+    if again != 11 || pc_again != u64_of(&at_fault, pc_at()) {
         return Err(format!(
             "a dropped SIGSEGV did not repeat: {again} at {pc_again:#x}"
         ));
@@ -318,7 +331,7 @@ pub fn signal_step(context: &mut Context) -> Result<String, String> {
                 event = stepped;
             }
             let regs = prog.regs(event.tid)?;
-            if u64_of(&regs, EFLAGS) & 0x100 != 0 {
+            if u64_of(&regs, flags_at()) & step_flag() != 0 {
                 return Err(format!("TF visible after {:?}", event.kind));
             }
             prog.dbg
@@ -364,7 +377,20 @@ pub fn forkbp(context: &mut Context) -> Result<String, String> {
         prog.dbg
             .resume(ResumeAction::Continue)
             .map_err(|e| e.to_string())?;
-        let mut event = wait_state(&mut prog.dbg, 20)?;
+        let mut event = match wait_state(&mut prog.dbg, 20) {
+            Ok(event) => event,
+            Err(error) => {
+                // Where the group is: stop it and list its threads.
+                let _ = prog.dbg.interrupt();
+                let stop = wait_state(&mut prog.dbg, 10);
+                let threads = prog.dbg.threads();
+                context.driver.receive();
+                return Err(format!(
+                    "{error} (after {hits} hits); then {stop:x?}; threads {threads:x?}; output tail: {}",
+                    tail(context.driver.output(&prog.launched.run.id), 400)
+                ));
+            }
+        };
         // A debugger passes the signals gdb's `handle` table says nostop (SIGCHLD,
         // SIGALRM, SIGWINCH, ...) and goes on, as gdb does. glibc's fork() blocks
         // every signal around the clone: a child that exits before the parent
@@ -409,8 +435,15 @@ pub fn forkbp(context: &mut Context) -> Result<String, String> {
         .clear_breakpoint(target, 1)
         .map_err(|e| e.to_string())?;
     context.finish(prog)?;
+    // x86-64 children run past the parent's INT3 in their copy; aarch64 children
+    // get their own bytes back at the fork (a BRK would trap again for ever).
+    let memory = if on_aarch64() {
+        "their own bytes put back at the fork"
+    } else {
+        "the parent's breakpoint byte in their memory"
+    };
     Ok(format!(
-        "{children} forked children ran hw_code() with the parent's breakpoint byte in their memory and exited cleanly (no SIGTRAP); {hits} parent hits, {passed} queued SIGCHLD passed on like gdb does"
+        "{children} forked children ran hw_code() with {memory} and exited cleanly; {hits} parent hits, {passed} queued SIGCHLD passed on like gdb does"
     ))
 }
 
@@ -534,12 +567,14 @@ pub fn hw(context: &mut Context) -> Result<String, String> {
         }
         pcs.push(event.pc);
     }
-    // The next step after a hit goes to the next instruction.
+    // The next step after a hit goes to the next instruction (on aarch64 the
+    // store is hw_code's third instruction).
     let tid = prog.dbg.threads().map_err(|e| e.to_string())?[0].tid;
     let pc = prog.step(tid)?;
-    if pc != after_write {
+    let next = if on_aarch64() { code + 4 } else { after_write };
+    if pc != next {
         return Err(format!(
-            "stepped off the hardware breakpoint to {pc:#x}, wanted {after_write:#x}"
+            "stepped off the hardware breakpoint to {pc:#x}, wanted {next:#x}"
         ));
     }
     // A watchpoint that fires with the step is the report, not the step.
@@ -555,7 +590,7 @@ pub fn hw(context: &mut Context) -> Result<String, String> {
         StopKind::Watchpoint {
             addr,
             access: WatchAccess::Write,
-        } if addr == watched && event.pc == after_write => {}
+        } if addr == watched && event.pc == watch_pc(after_write) => {}
         other => {
             return Err(format!(
                 "expected a write watchpoint, got {other:?} at {:#x}",
@@ -570,12 +605,27 @@ pub fn hw(context: &mut Context) -> Result<String, String> {
             .map_err(|e| e.to_string())?,
         0,
     );
-    // Data written by the instruction that fired is already there.
+    // Data written by the instruction that fired is already there. On aarch64
+    // the store has not run yet: one step runs it (and does not fire again).
+    let value = if on_aarch64() {
+        if prog.step(event.tid)? != after_write {
+            return Err("stepping the watched store did not end after it".into());
+        }
+        u64_of(
+            &prog
+                .dbg
+                .read_memory(watched, 8)
+                .map_err(|e| e.to_string())?,
+            0,
+        )
+    } else {
+        value
+    };
     let regs = prog.regs(event.tid)?;
-    if value != u64_of(&regs, RDI_AT) {
+    if value != u64_of(&regs, arg0_at()) {
         return Err(format!(
-            "watched holds {value}, rdi {}",
-            u64_of(&regs, RDI_AT)
+            "watched holds {value}, the stored register {}",
+            u64_of(&regs, arg0_at())
         ));
     }
     remove(
@@ -602,9 +652,10 @@ pub fn hw(context: &mut Context) -> Result<String, String> {
             other => return Err(format!("expected an access watchpoint, got {other:?}")),
         }
     }
-    if !(seen.contains(&after_write) && seen.contains(&after_read)) {
+    let (write_pc, read_pc) = (watch_pc(after_write), watch_pc(after_read));
+    if !(seen.contains(&write_pc) && seen.contains(&read_pc)) {
         return Err(format!(
-            "access hits at {seen:x?}, wanted both {after_write:#x} and {after_read:#x}"
+            "access hits at {seen:x?}, wanted both {write_pc:#x} and {read_pc:#x}"
         ));
     }
     remove(
@@ -813,10 +864,10 @@ pub fn smc(context: &mut Context) -> Result<String, String> {
     let mut prog = context.start("p2fix", "smc", 200, 0)?;
     prog.stop()?;
     let page = prog.sym("smc")?;
-    // Software breakpoint on the byte the program rewrites every round.
-    prog.dbg
-        .set_breakpoint(page + 1, 1)
-        .map_err(|e| e.to_string())?;
+    // Software breakpoint on the byte the program rewrites every round (on
+    // aarch64 the word with the immediate: a breakpoint is an aligned BRK).
+    let bp = if on_aarch64() { page } else { page + 1 };
+    prog.dbg.set_breakpoint(bp, 1).map_err(|e| e.to_string())?;
     prog.dbg
         .resume(ResumeAction::Continue)
         .map_err(|e| e.to_string())?;
@@ -826,6 +877,21 @@ pub fn smc(context: &mut Context) -> Result<String, String> {
     let stopped = wait_state(&mut prog.dbg, 15);
     thread::sleep(Duration::from_millis(400));
     context.driver.receive();
+    if on_aarch64() {
+        // The emulated guest's terminal lags: the last line printed before the
+        // stop arrives once the output has stopped growing.
+        let (mut seen, mut quiet) = (context.driver.output(&prog.launched.run.id).len(), 0);
+        for _ in 0..80 {
+            thread::sleep(Duration::from_millis(250));
+            context.driver.receive();
+            let now = context.driver.output(&prog.launched.run.id).len();
+            quiet = if now == seen { quiet + 1 } else { 0 };
+            if quiet == 4 {
+                break;
+            }
+            seen = now;
+        }
+    }
     let output = context.driver.output(&prog.launched.run.id).to_string();
     let printed = output
         .lines()
@@ -836,18 +902,24 @@ pub fn smc(context: &mut Context) -> Result<String, String> {
         })
         .ok_or("no smc line")?;
     stopped?;
-    let current = prog.dbg.read_memory(page, 6).map_err(|e| e.to_string())?;
+    let length = if on_aarch64() { 8 } else { 6 };
+    let current = smc_version(
+        &prog
+            .dbg
+            .read_memory(page, length)
+            .map_err(|e| e.to_string())?,
+    )?;
     if output.contains("MISMATCH") {
         return Err("the sample's rewritten code was damaged".into());
     }
-    if current[1] != printed && current[1] != printed.wrapping_add(1) {
+    if current != printed && current != printed.wrapping_add(1) {
         return Err(format!(
-            "the byte under the breakpoint is {:#x}, the program last wrote {:#x}: the engine put back stale code",
-            current[1], printed
+            "the byte under the breakpoint is {current:#x}, the program last wrote {printed:#x}: the engine put back stale code; output tail: {}",
+            tail(&output, 300)
         ));
     }
     prog.dbg
-        .clear_breakpoint(page + 1, 1)
+        .clear_breakpoint(bp, 1)
         .map_err(|e| e.to_string())?;
     // The same page with an instruction breakpoint in the debug registers fires
     // at every call even though the bytes change each time.
@@ -861,18 +933,33 @@ pub fn smc(context: &mut Context) -> Result<String, String> {
                 event.kind, event.pc
             ));
         }
-        let code = prog.dbg.read_memory(page, 6).map_err(|e| e.to_string())?;
-        if code[0] != 0xb8 || code[5] != 0xc3 {
-            return Err(format!("the code at the breakpoint is {code:02x?}"));
-        }
-        versions.push(code[1]);
+        let code = prog
+            .dbg
+            .read_memory(page, length)
+            .map_err(|e| e.to_string())?;
+        versions.push(smc_version(&code)?);
     }
     remove(&mut prog, BreakpointKind::Hardware, page, 1)?;
     context.finish(prog)?;
     Ok(format!(
-        "a software breakpoint in rewritten code left the program's own bytes ({:#x}); an hbreak fired on every call of the rewritten function (versions {versions:?})",
-        current[1]
+        "a software breakpoint in rewritten code left the program's own bytes ({current:#x}); an hbreak fired on every call of the rewritten function (versions {versions:?})"
     ))
+}
+
+/// The version the smc round wrote: `mov $v,%eax; ret` (b8 v 00 00 00 c3), or
+/// `mov w0,#v; ret` on aarch64.
+fn smc_version(code: &[u8]) -> Result<u8, String> {
+    if on_aarch64() {
+        let word = |at: usize| u32::from_le_bytes(code[at..at + 4].try_into().expect("four bytes"));
+        if word(0) & 0xffe0_001f != 0x5280_0000 || word(4) != 0xd65f_03c0 {
+            return Err(format!("the code at the breakpoint is {code:02x?}"));
+        }
+        return u8::try_from((word(0) >> 5) & 0xffff).map_err(|e| e.to_string());
+    }
+    if code[0] != 0xb8 || code[5] != 0xc3 {
+        return Err(format!("the code at the breakpoint is {code:02x?}"));
+    }
+    Ok(code[1])
 }
 
 /// What the program can see of the debugger: nothing it checks for, and the

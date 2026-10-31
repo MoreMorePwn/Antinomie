@@ -24,7 +24,7 @@ impl Gdb {
     pub(crate) fn start(directory: &std::path::Path) -> Result<Self, String> {
         let mut child = Process::new("sh")
             .arg("-c")
-            .arg("exec gdb -nx -q 2>&1")
+            .arg(format!("exec {} -nx -q 2>&1", gdb_name()))
             .current_dir(directory)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -78,6 +78,7 @@ impl Gdb {
         Ok(marker)
     }
     pub(crate) fn wait(&mut self, marker: &str, seconds: u64) -> Result<String, String> {
+        let seconds = secs(seconds);
         let until = Instant::now() + Duration::from_secs(seconds);
         let (lock, signal) = &*self.output;
         let mut text = lock.lock().expect("gdb output");
@@ -150,6 +151,17 @@ impl Drop for Gdb {
             let _ = fs::write(path, format!("{}{}", self.transcript, text));
         }
         let _ = self.child.kill();
+    }
+}
+
+/// A breakpoint location at a fixture symbol: gdb's aarch64 prologue analysis
+/// would move `break sym` past the first instruction, so aarch64 names the
+/// address.
+pub(crate) fn at_sym(symbol: &str) -> String {
+    if on_aarch64() {
+        format!("*{symbol}")
+    } else {
+        symbol.to_string()
     }
 }
 
@@ -253,14 +265,15 @@ pub fn start(context: &mut Context) -> Result<String, String> {
     let port = started.info.tcp_port;
     let text = gdb.run(
         &format!(
-            "file p2fix\ntarget remote 127.0.0.1:{port}\ninfo registers rip\nx/2i $pc\ninfo threads\ninfo symbol $pc\n\
-             p/x *(long*)$rsp\np $_siginfo"
+            "file p2fix\ntarget remote 127.0.0.1:{port}\ninfo registers {}\nx/2i $pc\ninfo threads\ninfo symbol $pc\n\
+             p/x *(long*)$sp\np $_siginfo",
+            gdb_reg("rip")
         ),
         30,
     )?;
     expect(
         &text,
-        &[&format!("rip            0x{entry:x}"), "<_start>"],
+        &[&gdb_reg_line("rip", entry), "<_start>"],
         "stop at entry",
     )?;
     // Still nothing ran while gdb looked.
@@ -270,7 +283,13 @@ pub fn start(context: &mut Context) -> Result<String, String> {
     }
     // argc is on the stack: fixture mode, rounds, workers are three arguments plus the name.
     expect(&text, &["= 0x4"], "argc at the stack top")?;
-    let text = gdb.run("break main\ncontinue\ninfo registers rip\nbt 1", 60)?;
+    let text = gdb.run(
+        &format!(
+            "break main\ncontinue\ninfo registers {}\nbt 1",
+            gdb_reg("rip")
+        ),
+        60,
+    )?;
     expect(
         &text,
         &["Breakpoint 1, 0x", " in main ()"],
@@ -310,7 +329,11 @@ pub fn pie(context: &mut Context) -> Result<String, String> {
     let mut gdb = Gdb::start(&context.dir)?;
     let port = started.info.tcp_port;
     let text = gdb.run(
-        &format!("file p2pie\ntarget remote 127.0.0.1:{port}\ninfo registers rip\ninfo symbol $pc\nbreak main\ninfo breakpoints"),
+        &format!(
+            "file p2pie\ntarget remote 127.0.0.1:{port}\ninfo registers {}\ninfo symbol $pc\nbreak {}\ninfo breakpoints",
+            gdb_reg("rip"),
+            at_sym("main")
+        ),
         30,
     )?;
     expect(
@@ -513,17 +536,40 @@ pub fn step(context: &mut Context) -> Result<String, String> {
     let started = start_running(context, "p2fix", &["step", "400", "0"])?;
     let mut gdb = connect(context, &started, "p2fix")?;
     let text = gdb.run(
-        "break step_syscall\ncontinue\ndelete\nstepi\ninfo symbol $pc\nstepi\ninfo symbol $pc\ninfo registers rax\nx/i $pc\nstepi 2\ninfo symbol $pc",
+        &format!(
+            "break {}\ncontinue\ndelete\nstepi\ninfo symbol $pc\nstepi\ninfo symbol $pc\ninfo registers {}\nx/i $pc\nstepi 2\ninfo symbol $pc",
+            at_sym("step_syscall"),
+            gdb_reg("rax")
+        ),
         60,
     )?;
+    let (syscall, after) = if on_aarch64() { (4, 8) } else { (5, 7) };
     expect(
         &text,
         &[
-            "step_syscall + 5 in section .text",
-            "step_syscall + 7 in section .text",
+            &format!("step_syscall + {syscall} in section .text"),
+            &format!("step_syscall + {after} in section .text"),
         ],
         "stepi across SYSCALL stops at the next instruction",
     )?;
+    if on_aarch64() {
+        // No repeated string instruction: step_rep's stepi steps a nop.
+        let text = gdb.run(
+            "break *step_rep\ncontinue\ndelete\nstepi\ninfo symbol $pc\nx/i $pc\nstepi\ninfo symbol $pc",
+            60,
+        )?;
+        expect(
+            &text,
+            &[
+                "step_rep + 4 in section .text",
+                "nop",
+                "step_rep + 8 in section .text",
+            ],
+            "stepi in step_rep",
+        )?;
+        finish(context, &started, gdb)?;
+        return Ok("stepi over SVC ended on the next instruction (x0 = pid), stepi in step_rep moved one instruction".into());
+    }
     let text = gdb.run(
         "break step_rep\ncontinue\ndelete\nstepi 3\ninfo symbol $pc\nx/i $pc\nstepi\ninfo symbol $pc\np $rcx",
         60,
@@ -546,7 +592,10 @@ pub fn step(context: &mut Context) -> Result<String, String> {
 pub fn hardware(context: &mut Context) -> Result<String, String> {
     let started = start_running(context, "p2fix", &["hw", "400", "0"])?;
     let mut gdb = connect(context, &started, "p2fix")?;
-    let text = gdb.run("hbreak hw_code\ncontinue\ninfo symbol $pc", 60)?;
+    let text = gdb.run(
+        &format!("hbreak {}\ncontinue\ninfo symbol $pc", at_sym("hw_code")),
+        60,
+    )?;
     expect(
         &text,
         &[
@@ -569,8 +618,13 @@ pub fn hardware(context: &mut Context) -> Result<String, String> {
         "awatch",
     )?;
     let text = gdb.run("delete\nrwatch *(long *)&watched", 20)?;
-    // x86 has no read-only watchpoint: gdb explains, and the session goes on.
-    if text.contains("Hardware read watchpoint 4") {
+    if on_aarch64() {
+        // aarch64 watches loads alone (the guest offers READ_WATCH).
+        let text = format!("{text}{}", gdb.run("continue", 60)?);
+        expect(&text, &["Hardware read watchpoint 4:", "Value ="], "rwatch")?;
+        gdb.run("delete", 10)?;
+    } else if text.contains("Hardware read watchpoint 4") {
+        // x86 has no read-only watchpoint: gdb explains, and the session goes on.
         gdb.run("delete", 10)?;
     }
     // Five instruction breakpoints do not fit in four debug registers.
@@ -592,14 +646,24 @@ pub fn hardware(context: &mut Context) -> Result<String, String> {
         "slot exhaustion",
     )?;
     // The session is still usable and the slots can be reused.
-    let text = gdb.run("delete\nhbreak hw_code\ncontinue", 60)?;
+    let text = gdb.run(
+        &format!("delete\nhbreak {}\ncontinue", at_sym("hw_code")),
+        60,
+    )?;
     expect(
         &text,
         &["Breakpoint ", " in hw_code ()"],
         "after exhaustion",
     )?;
     finish(context, &started, gdb)?;
-    Ok("hbreak and watch fired with gdb's own wording, awatch saw reads and writes, rwatch is explained as unsupported, five hbreaks gave a clean refusal and the session carried on".into())
+    Ok(format!(
+        "hbreak and watch fired with gdb's own wording, awatch saw reads and writes, rwatch {}, five hbreaks gave a clean refusal and the session carried on",
+        if on_aarch64() {
+            "fired on a load"
+        } else {
+            "is explained as unsupported"
+        }
+    ))
 }
 
 /// Signal stops, passed and suppressed under gdb, and a fatal one.
@@ -725,7 +789,7 @@ pub fn stop_run(context: &mut Context) -> Result<String, String> {
         .ok();
     let started = context.start_stopped("p2fix", &["hw", "400", "0"])?;
     let mut gdb = connect(context, &started, "p2fix")?;
-    let text = gdb.run("break hw_code\ncontinue", 60)?;
+    let text = gdb.run(&format!("break {}\ncontinue", at_sym("hw_code")), 60)?;
     expect(&text, &["Breakpoint 1, 0x"], "stopped at a breakpoint")?;
     let at = Instant::now();
     context.driver.command(Command::StopRun {
@@ -755,7 +819,9 @@ pub fn stop_run(context: &mut Context) -> Result<String, String> {
         "continue after the program ended",
     )?;
     gdb.close(10);
-    if first > 3.0 || second > 3.0 {
+    // Three seconds on x86-64; a TCG guest gets its time scale.
+    let limit = 3.0 * secs(1) as f64;
+    if first > limit || second > limit {
         return Err(format!(
             "Stop took {first:.1} s and {second:.1} s; it should not wait for the grace period"
         ));

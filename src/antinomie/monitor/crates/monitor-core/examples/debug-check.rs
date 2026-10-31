@@ -79,7 +79,7 @@ impl Driver {
         seconds: u64,
         ready: impl Fn(&Snapshot) -> bool,
     ) -> Result<(), String> {
-        let deadline = Instant::now() + Duration::from_secs(seconds);
+        let deadline = Instant::now() + Duration::from_secs(secs(seconds));
         loop {
             self.receive();
             if ready(&self.snapshot) {
@@ -95,7 +95,7 @@ impl Driver {
         self.output.get(run).map_or("", String::as_str)
     }
     fn wait_text(&mut self, run: &str, needle: &str, seconds: u64) -> Result<(), String> {
-        let deadline = Instant::now() + Duration::from_secs(seconds);
+        let deadline = Instant::now() + Duration::from_secs(secs(seconds));
         loop {
             self.receive();
             if self.output(run).contains(needle) {
@@ -145,6 +145,7 @@ fn boot_with(bundle: &str, data: &str, stop_grace: Option<Duration>) -> Result<D
     if data.exists() {
         return Err("qualification needs a new disposable data folder".into());
     }
+    let _ = ARCH.set(read_bundle_arch(bundle));
     let mut driver = Driver {
         backend: Backend::new(BackendOptions {
             bundle_dir: PathBuf::from(bundle),
@@ -327,7 +328,7 @@ fn wait_state(
     backend: &mut KernelDebugBackend,
     seconds: u64,
 ) -> Result<antinomie_monitor_core::debug::StopEvent, String> {
-    let deadline = Instant::now() + Duration::from_secs(seconds);
+    let deadline = Instant::now() + Duration::from_secs(secs(seconds));
     loop {
         match backend.state().map_err(|e| e.to_string())? {
             TargetState::Stopped(event) => return Ok(event),
@@ -360,6 +361,92 @@ const RSP: usize = 152;
 const RAX: usize = 80;
 const RDI: usize = 112;
 const EFLAGS: usize = 144;
+
+// ---- the guest's architecture ---------------------------------------------------
+
+/// The base's guest architecture (bundle.json `arch`; x86-64 when absent), set
+/// at boot. An arm64 base runs under TCG: every guest wait is scaled.
+static ARCH: std::sync::OnceLock<GuestArch> = std::sync::OnceLock::new();
+fn guest_arch() -> GuestArch {
+    ARCH.get().copied().unwrap_or_default()
+}
+fn on_aarch64() -> bool {
+    guest_arch() == GuestArch::AARCH64
+}
+/// A guest wait of `seconds` on an x86-64 guest, scaled for the base.
+fn secs(seconds: u64) -> u64 {
+    seconds * u64::from(guest_arch().time_scale())
+}
+fn read_bundle_arch(bundle: &str) -> GuestArch {
+    fs::read_to_string(PathBuf::from(bundle).join("bundle.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|bundle| serde_json::from_value(bundle["arch"].clone()).ok())
+        .unwrap_or_default()
+}
+/// Offsets in the NT_PRSTATUS blob: x86-64 `user_regs_struct`, aarch64
+/// `user_pt_regs` (x0..x30 at 0, sp 248, pc 256, pstate 264).
+fn pc_at() -> usize {
+    if on_aarch64() { 256 } else { RIP }
+}
+/// The system call's result and a function's first argument and result.
+fn ret_at() -> usize {
+    if on_aarch64() { 0 } else { RAX }
+}
+fn arg0_at() -> usize {
+    if on_aarch64() { 0 } else { RDI }
+}
+/// EFLAGS, or PSTATE (the SPSR copy a ptrace reader sees).
+fn flags_at() -> usize {
+    if on_aarch64() { 264 } else { EFLAGS }
+}
+/// The step flag a program must never see: TF, or PSTATE.SS.
+fn step_flag() -> u64 {
+    if on_aarch64() { 1 << 21 } else { 0x100 }
+}
+/// gdb's name for an x86-64 register on the guest's architecture.
+fn gdb_reg(x86: &'static str) -> &'static str {
+    if !on_aarch64() {
+        return x86;
+    }
+    match x86 {
+        "rip" => "pc",
+        "rsp" => "sp",
+        "eflags" => "cpsr",
+        "rax" | "rdi" => "x0",
+        "fs_base" => "tpidr",
+        other => other,
+    }
+}
+/// `info registers` prints the name padded to 15 columns.
+fn gdb_reg_line(x86: &'static str, value: u64) -> String {
+    format!("{:<15}0x{value:x}", gdb_reg(x86))
+}
+fn gdb_name() -> &'static str {
+    if on_aarch64() { "gdb-multiarch" } else { "gdb" }
+}
+/// The bytes a breakpoint takes, and whether code read back is one: INT3, or a
+/// BRK (any immediate) at an aligned word.
+fn bp_bytes() -> usize {
+    if on_aarch64() { 4 } else { 1 }
+}
+fn is_breakpoint(code: &[u8]) -> bool {
+    if on_aarch64() {
+        code.len() >= 4
+            && u32::from_le_bytes(code[..4].try_into().expect("four bytes")) & 0xffe0_001f
+                == 0xd420_0000
+    } else {
+        code.first() == Some(&0xcc)
+    }
+}
+/// Let the guest run for `ms` of x86-64 time, scaled for the base.
+fn run_for(ms: u64) {
+    thread::sleep(Duration::from_millis(ms * secs(1)));
+}
+/// Bytes from one instruction to the next in the fixtures' fixed sequences.
+fn insn(x86: u64) -> u64 {
+    if on_aarch64() { 4 } else { x86 }
+}
 
 fn spike(bundle: &str, data: &str, fixture: &str) -> Result<(), String> {
     let mut setup = setup(bundle, data, fixture, 240)?;
@@ -639,6 +726,26 @@ fn spike(bundle: &str, data: &str, fixture: &str) -> Result<(), String> {
 
 // ---- P1 ---------------------------------------------------------------------
 
+/// The fixture's architecture, from its ELF header: aarch64 sessions use
+/// gdb-multiarch and aarch64 register names.
+fn aarch64_fixture(fixture: &str) -> bool {
+    fs::read(fixture).is_ok_and(|elf| elf.len() > 20 && elf[18] == 183 && elf[19] == 0)
+}
+fn gdb_program(fixture: &str) -> &'static str {
+    if aarch64_fixture(fixture) {
+        "gdb-multiarch"
+    } else {
+        "gdb"
+    }
+}
+fn pc_name(fixture: &str) -> &'static str {
+    if aarch64_fixture(fixture) {
+        "pc"
+    } else {
+        "rip"
+    }
+}
+
 fn gdb(bundle: &str, data: &str, fixture: &str) -> Result<(), String> {
     let mut setup = setup(bundle, data, fixture, 200)?;
     let run = setup.run.id.clone();
@@ -659,12 +766,15 @@ fn gdb(bundle: &str, data: &str, fixture: &str) -> Result<(), String> {
     if setup.driver.output(&run).len() == before {
         return Err("the sample stalled after attach".into());
     }
-    let script = [
+    let aarch64 = aarch64_fixture(fixture);
+    let target = format!("target remote 127.0.0.1:{}", info.tcp_port);
+    let file = format!("file {fixture}");
+    let x86_script = [
         "set pagination off",
         "set confirm off",
         "set style enabled off",
-        &format!("file {fixture}"),
-        &format!("target remote 127.0.0.1:{}", info.tcp_port),
+        &file,
+        &target,
         "info threads",
         "info registers rip rsp eflags fs_base orig_rax",
         "x/8xb hot",
@@ -683,7 +793,51 @@ fn gdb(bundle: &str, data: &str, fixture: &str) -> Result<(), String> {
         "p/x $eflags",
         "detach",
     ];
-    let mut command = Process::new("gdb");
+    // aarch64 adds what x86-64's P1 session leaves to the phase 2 checks: a
+    // hardware breakpoint, a read watch (hot loads magic) and a write watch
+    // (a worker thread counts in counters[0]). Breakpoints go on the exact
+    // addresses: gdb's aarch64 prologue analysis would put `break hot` on its
+    // second instruction, and the fixture has no debug information for types.
+    let aarch64_script = [
+        "set pagination off",
+        "set confirm off",
+        "set style enabled off",
+        &file,
+        &target,
+        "info threads",
+        "info registers pc sp cpsr tpidr",
+        "x/8xb hot",
+        "x/2i $pc",
+        "break *hot",
+        "continue",
+        "info registers pc",
+        "x/3i $pc",
+        "x/4xb hot",
+        "stepi",
+        "p/x $pc",
+        "p/x (long)magic",
+        "delete",
+        "hbreak *hot",
+        "continue",
+        "p/x $pc",
+        "delete",
+        "rwatch *(long *)&magic",
+        "continue",
+        "delete",
+        "watch *(long *)&counters",
+        "continue",
+        "delete",
+        "tbreak *tf_probe",
+        "continue",
+        "p/x $cpsr",
+        "detach",
+    ];
+    let script: &[&str] = if aarch64 {
+        &aarch64_script
+    } else {
+        &x86_script
+    };
+    let mut command = Process::new(gdb_program(fixture));
     command.arg("-nx").arg("-batch");
     for line in script {
         command.arg("-ex").arg(line);
@@ -696,18 +850,35 @@ fn gdb(bundle: &str, data: &str, fixture: &str) -> Result<(), String> {
     );
     println!("---- gdb ----\n{text}---- end gdb ----");
     fs::write(PathBuf::from(data).join("gdb-session.txt"), &text).map_err(|e| e.to_string())?;
-    for needle in [
-        &format!("hit Breakpoint 1, 0x{:016x} in hot ()", setup.hot),
-        &format!(
-            "hit Temporary breakpoint 2, 0x{:016x} in tf_probe ()",
-            setup.tf_probe
-        ),
-        "fs_base",
-        "orig_rax",
-        &format!("0x{:x} <hot>:\t0x48\t0x89\t0xf8", setup.hot),
-        "$2 = 0x1111",
-        "detached]",
-    ] {
+    let needles: Vec<String> = if aarch64 {
+        vec![
+            format!("hit Breakpoint 1, 0x{:016x} in hot ()", setup.hot),
+            "in tf_probe ()".into(),
+            "tpidr".into(),
+            // mov x1, x0 (aa0003e1), with the engine's BRK hidden.
+            format!("0x{:x} <hot>:\t0xe1\t0x03\t0x00\t0xaa", setup.hot),
+            "$2 = 0x1111".into(),
+            format!("$3 = 0x{:x}", setup.hot),
+            "Hardware read watchpoint".into(),
+            "Value = 4369".into(),
+            "Hardware watchpoint".into(),
+            "detached]".into(),
+        ]
+    } else {
+        vec![
+            format!("hit Breakpoint 1, 0x{:016x} in hot ()", setup.hot),
+            format!(
+                "hit Temporary breakpoint 2, 0x{:016x} in tf_probe ()",
+                setup.tf_probe
+            ),
+            "fs_base".into(),
+            "orig_rax".into(),
+            format!("0x{:x} <hot>:\t0x48\t0x89\t0xf8", setup.hot),
+            "$2 = 0x1111".into(),
+            "detached]".into(),
+        ]
+    };
+    for needle in &needles {
         if !text.contains(needle) {
             return Err(format!("gdb session lacks {needle:?}"));
         }
@@ -724,15 +895,7 @@ fn gdb(bundle: &str, data: &str, fixture: &str) -> Result<(), String> {
         .as_ref()
         .map(|info| info.target_state.clone());
     println!("server state after detach: {status:?}");
-    let socat = Process::new("sh")
-        .arg("-c")
-        .arg(format!(
-            "printf '+$?#3f' | timeout 5 socat - UNIX-CONNECT:{} | head -c 200",
-            info.unix_socket.display()
-        ))
-        .output()
-        .map_err(|e| e.to_string())?;
-    let reply = String::from_utf8_lossy(&socat.stdout).to_string();
+    let reply = unix_query(&info.unix_socket, b"+$?#3f", secs(5))?;
     println!("unix socket reply: {reply:?}");
     if !reply.contains("T05thread:") {
         return Err("the Unix socket did not answer a stop query".into());
@@ -835,7 +998,7 @@ fn attach(driver: &mut Driver, target: &GuestProcessIdentity) -> Result<DebugSes
 }
 
 fn gdb_batch(port: u16, fixture: &str, lines: &[&str]) -> Process {
-    let mut command = Process::new("gdb");
+    let mut command = Process::new(gdb_program(fixture));
     command.arg("-nx").arg("-batch");
     for line in [
         "set pagination off",
@@ -849,6 +1012,39 @@ fn gdb_batch(port: u16, fixture: &str, lines: &[&str]) -> Process {
         command.arg("-ex").arg(line);
     }
     command
+}
+
+/// Send `request` to an RSP server's Unix socket and collect up to 200 bytes of
+/// its answer for at most `seconds` (what `socat` did, without the tool).
+fn unix_query(path: &std::path::Path, request: &[u8], seconds: u64) -> Result<String, String> {
+    use std::io::{Read, Write};
+    let mut stream = std::os::unix::net::UnixStream::connect(path)
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    stream.write_all(request).map_err(|e| e.to_string())?;
+    let deadline = Instant::now() + Duration::from_secs(seconds);
+    let mut reply = Vec::new();
+    let mut buffer = [0u8; 200];
+    while reply.len() < 200 {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            break;
+        }
+        stream
+            .set_read_timeout(Some(left))
+            .map_err(|e| e.to_string())?;
+        match stream.read(&mut buffer[..200 - reply.len()]) {
+            Ok(0) | Err(_) => break,
+            Ok(count) => reply.extend_from_slice(&buffer[..count]),
+        }
+        // A whole stop reply: `$...#xx`.
+        if let Some(end) = reply.iter().position(|&b| b == b'#')
+            && reply.len() >= end + 3
+            && reply.contains(&b'$')
+        {
+            break;
+        }
+    }
+    Ok(String::from_utf8_lossy(&reply).into_owned())
 }
 
 fn text_of(output: &std::process::Output) -> String {
@@ -910,11 +1106,13 @@ fn scenarios(driver: &mut Driver, fixture: &str) -> Result<(), String> {
     if after <= before {
         return Err("the process stalled after its debugger died".into());
     }
-    let output = gdb_batch(info.tcp_port, fixture, &["info registers rip", "detach"])
+    let pc = pc_name(fixture);
+    let registers = format!("info registers {pc}");
+    let output = gdb_batch(info.tcp_port, fixture, &[&registers, "detach"])
         .output()
         .map_err(|e| e.to_string())?;
     let text = text_of(&output);
-    if !text.contains("rip") || !text.contains("detached") {
+    if !text.contains(pc) || !text.contains("detached") {
         return Err(format!("reattach failed:\n{text}"));
     }
     driver.command(Command::DebugDetach { kill: false })?;
@@ -926,15 +1124,11 @@ fn scenarios(driver: &mut Driver, fixture: &str) -> Result<(), String> {
     // 4. Interrupt: SIGINT to gdb while the process runs stops it.
     let launched = launch(driver, 150)?;
     let info = attach(driver, &launched.target)?;
-    let child = gdb_batch(
-        info.tcp_port,
-        fixture,
-        &["continue", "info registers rip", "detach"],
-    )
-    .stdout(std::process::Stdio::piped())
-    .stderr(std::process::Stdio::piped())
-    .spawn()
-    .map_err(|e| e.to_string())?;
+    let child = gdb_batch(info.tcp_port, fixture, &["continue", &registers, "detach"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| e.to_string())?;
     thread::sleep(Duration::from_millis(2500));
     let _ = Process::new("kill")
         .arg("-INT")
@@ -942,7 +1136,7 @@ fn scenarios(driver: &mut Driver, fixture: &str) -> Result<(), String> {
         .status();
     let output = child.wait_with_output().map_err(|e| e.to_string())?;
     let text = text_of(&output);
-    if !text.contains("SIGINT") || !text.contains("rip") {
+    if !text.contains("SIGINT") || !text.contains(pc) {
         return Err(format!("interrupt did not stop the process:\n{text}"));
     }
     driver.command(Command::DebugDetach { kill: false })?;

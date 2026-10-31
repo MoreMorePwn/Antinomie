@@ -157,10 +157,10 @@ impl Prog {
             ));
         }
         let regs = user_regs(&mut self.dbg, tid)?;
-        if u64_of(&regs, EFLAGS) & 0x100 != 0 {
-            return Err("TF visible after a step".into());
+        if u64_of(&regs, flags_at()) & step_flag() != 0 {
+            return Err("the step flag is visible after a step".into());
         }
-        Ok(u64_of(&regs, RIP))
+        Ok(u64_of(&regs, pc_at()))
     }
     fn regs(&mut self, tid: u32) -> Result<Vec<u8>, String> {
         user_regs(&mut self.dbg, tid)
