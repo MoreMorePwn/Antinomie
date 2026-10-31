@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Public base distribution over the Hugging Face bucket.
 //!
 //! Bases are advertised in an `index.json` catalog at the bucket root. The
@@ -6,7 +7,8 @@
 //! keeps no TLS dependency; a missing `curl` is reported as an explicit tool
 //! alert rather than silently failing.
 //!
-//! Contract: `Documentation/Antinomie/Hugging Face Base Distribution.md`.
+//! The catalog format and the checks on a download are described in
+//! `docs/security.md` (Downloads and their checks).
 
 use crate::storage::Bundle;
 use serde::Deserialize;

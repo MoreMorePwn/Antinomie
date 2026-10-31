@@ -20,15 +20,10 @@ not change the ABI or executable logic.
 - `bootstrap_layout.h`: shared bootstrap defaults for host, kernel and decompressor.
 - `queue.h`: private bounded variable-length SPSC byte queues.
 
-See the [API reference](https://github.com/MoreMorePwn/idk-docs/blob/main/random/Shared%20Memory%20v7%20-%20Bootstrap%20and%20API.md)
-for per-field structure tables, per-argument function tables, return values,
-limits and unsupported lifecycle operations. The
-[diff and walkthrough](https://github.com/MoreMorePwn/idk-docs/blob/main/random/Shared%20Memory%20v7%20-%20Diff%20and%20Walkthrough.md)
-shows numbered source excerpts and implementation details.
-
-Code excerpts in those documents carry actual source line numbers. The short
-examples below use example-local numbers instead; numbers and `|` are annotations,
-not code to compile. Mermaid diagrams remain unnumbered for Obsidian rendering.
+The comments in these headers describe each structure field, function argument,
+return value, limit and unsupported lifecycle operation. The short examples
+below use example-local line numbers; numbers and `|` are annotations, not code
+to compile.
 
 ## Guest feature
 

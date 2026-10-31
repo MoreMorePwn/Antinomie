@@ -168,13 +168,21 @@ Downloads use `curl` with HTTPS only (also across redirects) and ignore your
   (an imported dump, for example), Volatility looks one up on GitHub
   (`Abyss-W4tcher/volatility3-symbols`). This is on by default; the Memory tab
   has the switch.
+* **Help › Check for updates.** Only when you open it (or press Check
+  again): one request to `api.github.com` for the project's latest release. It
+  sends nothing about you or your VMs beyond what any HTTPS request shows (your
+  IP address and the user agent `Antinomie/<version>`), downloads nothing and
+  installs nothing; the answer is a version number and a link to the release
+  page.
 * **Only when you ask:** base downloads and Debian base builds (the container
   builder fetches its pinned Debian image through Podman or Docker and packages
   from snapshot.debian.org when it builds its image); analysis tools,
   Tor and wireproxy (**Install** buttons); the rule catalog and rule packs
   (also off until **Allow outbound catalog and rule downloads** is set);
-  abuse.ch IOC datasets; MalwareBazaar and MalShare searches and downloads;
-  IOC **Check online** (off at every start); API key and route **Test**
+  abuse.ch IOC datasets; MalwareBazaar and MalShare searches (they send the term you typed) and downloads;
+  IOC **Check online** (off at every start; it sends the public indicator
+  values that had no offline match, never files, to `threatfox-api.abuse.ch` and
+  `urlhaus-api.abuse.ch`); API key and route **Test**
   buttons; and Tor itself when a run uses the Tor route.
 
 ## Downloads and their checks

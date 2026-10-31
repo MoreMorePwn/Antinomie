@@ -11,8 +11,8 @@
 # Debian trixie guest has (2.41); --static links the samples statically (the
 # BusyBox guests need this).
 #
-# What each sample does with its options is documented in idk-docs:
-# "Stress Samples - Arguments and Walkthrough.md".
+# What each sample does with its options is described at the top of its source
+# file in tests/monitor/workload/ (its usage text lists them).
 set -euo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source_dir="$here/workload"
