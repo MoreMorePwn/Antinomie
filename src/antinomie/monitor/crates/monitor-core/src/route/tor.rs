@@ -2,6 +2,8 @@
 //! The Tor route's own tor: Antinomie starts a tor of its own for the run
 //! and stops it when the route is released.
 //!
+//! * The process dies with the app and is recorded for the next start
+//!   (`helpers.rs`).
 //! * The data directory is private (mode 0700) under the app's data folder,
 //!   one per gateway so two VMs never share a lock, and kept between runs so
 //!   the next start finds its consensus.
@@ -139,10 +141,9 @@ pub(crate) fn start_tor(
         // The bundle's own libevent and OpenSSL, next to its tor.
         command.env("LD_LIBRARY_PATH", libraries);
     }
-    let child = command
-        .spawn()
+    let (child, record) = super::helpers::spawn(command, &launch.helpers_dir, "tor")
         .map_err(|e| format!("Tor: cannot start {}: {e}", launch.binary.display()))?;
-    let mut managed = Managed::new(child, "tor");
+    let mut managed = Managed::new(child, record, "tor");
     let deadline = Instant::now() + wait;
     loop {
         if let Some(status) = managed

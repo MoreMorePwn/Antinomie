@@ -3,7 +3,7 @@
 use super::{
     WAIT,
     guest::{Connect, Guest, Tcp},
-    no_data, scratch,
+    scratch,
 };
 use crate::route::{
     Gateway, GatewayNet, RouteConfig, RouteKind, config::WireproxyLaunch, managed::start_wireproxy,
@@ -66,6 +66,7 @@ fn wireproxy_is_started_waited_for_and_stopped_with_the_route() {
     let launch = WireproxyLaunch {
         binary: script(&dir, "wireproxy", FAKE_WIREPROXY),
         config: config_file(&dir, port),
+        helpers_dir: dir.join("helpers"),
     };
     let managed =
         start_wireproxy(&launch, ("127.0.0.1", port), &dir, Duration::from_secs(20)).unwrap();
@@ -93,6 +94,7 @@ fn a_wireproxy_that_stops_at_once_or_never_listens_is_a_failed_route() {
     let quits = WireproxyLaunch {
         binary: script(&dir, "quits", "#!/bin/sh\nexit 3\n"),
         config: config.clone(),
+        helpers_dir: dir.join("helpers"),
     };
     let error = start_wireproxy(&quits, ("127.0.0.1", port), &dir, WAIT)
         .err()
@@ -101,6 +103,7 @@ fn a_wireproxy_that_stops_at_once_or_never_listens_is_a_failed_route() {
     let idle = WireproxyLaunch {
         binary: script(&dir, "idle", "#!/bin/sh\nexec sleep 30\n"),
         config,
+        helpers_dir: dir.join("helpers"),
     };
     let error = start_wireproxy(&idle, ("127.0.0.1", port), &dir, Duration::from_millis(600))
         .err()
@@ -117,6 +120,7 @@ fn something_already_listening_is_not_taken_for_the_tunnel() {
     let launch = WireproxyLaunch {
         binary: script(&dir, "wireproxy", FAKE_WIREPROXY),
         config: config_file(&dir, port),
+        helpers_dir: dir.join("helpers"),
     };
     let error = start_wireproxy(&launch, ("127.0.0.1", port), &dir, WAIT)
         .err()
@@ -138,7 +142,7 @@ fn the_vpn_route_runs_wireproxy_for_the_run_and_stops_it_afterwards() {
     let net = GatewayNet::from_nat(&crate::stealth::NatNetwork::default()).unwrap();
     let gateway = Gateway::start(&dir, net).unwrap();
     gateway
-        .claim("run1", config.spec(no_data(), RouteKind::Vpn).unwrap())
+        .claim("run1", config.spec(&dir, RouteKind::Vpn).unwrap())
         .unwrap();
     assert_eq!(gateway.kind(), RouteKind::Vpn);
     // The tunnel's SOCKS port answers while the run holds the route.
@@ -177,7 +181,7 @@ fn a_tunnel_that_does_not_answer_its_check_stops_the_run_and_wireproxy() {
     let net = GatewayNet::from_nat(&crate::stealth::NatNetwork::default()).unwrap();
     let gateway = Gateway::start(&dir, net).unwrap();
     let error = gateway
-        .claim("run1", config.spec(no_data(), RouteKind::Vpn).unwrap())
+        .claim("run1", config.spec(&dir, RouteKind::Vpn).unwrap())
         .unwrap_err();
     assert!(error.contains("is not up"), "{error}");
     assert_eq!(gateway.kind(), RouteKind::Drop);
@@ -216,7 +220,7 @@ fn a_wireproxy_that_stops_during_a_run_is_reported_once_and_its_route_drops_ever
     let gateway = Gateway::start(&dir, net).unwrap();
     let mut guest = Guest::connect(gateway.socket_path());
     gateway
-        .claim("run1", config.spec(no_data(), RouteKind::Vpn).unwrap())
+        .claim("run1", config.spec(&dir, RouteKind::Vpn).unwrap())
         .unwrap();
     assert_eq!(gateway.helper_stopped(), None, "wireproxy runs");
     let target = std::net::Ipv4Addr::new(192, 0, 2, 10);
@@ -250,7 +254,7 @@ fn a_wireproxy_that_stops_during_a_run_is_reported_once_and_its_route_drops_ever
     );
     // Another run cannot join a route that went down.
     let error = gateway
-        .claim("run2", config.spec(no_data(), RouteKind::Vpn).unwrap())
+        .claim("run2", config.spec(&dir, RouteKind::Vpn).unwrap())
         .unwrap_err();
     assert!(error.contains("went down during another run"), "{error}");
     // The last run out puts the gateway back on Drop; the next claim starts afresh.

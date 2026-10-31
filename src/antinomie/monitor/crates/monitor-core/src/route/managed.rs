@@ -16,15 +16,23 @@ use std::{
 };
 
 /// A helper process that is killed (by its recorded handle) when dropped.
+/// It also dies with the app and is recorded for the next start (see
+/// [`super::helpers`]).
 pub struct Managed {
     child: Child,
+    /// The PID file, removed when the helper is.
+    _record: super::helpers::Record,
     /// The program, for messages ("wireproxy", "tor").
     name: &'static str,
 }
 
 impl Managed {
-    pub(super) fn new(child: Child, name: &'static str) -> Self {
-        Self { child, name }
+    pub(super) fn new(child: Child, record: super::helpers::Record, name: &'static str) -> Self {
+        Self {
+            child,
+            _record: record,
+            name,
+        }
     }
 
     /// How the program ended, when it has; `None` while it runs.
@@ -83,15 +91,16 @@ pub(crate) fn start_wireproxy(
         .open(log_dir.join("wireproxy.log"))
         .map_err(|e| format!("VPN: wireproxy log: {e}"))?;
     let errors = log.try_clone().map_err(|e| format!("VPN: {e}"))?;
-    let child = Command::new(&launch.binary)
+    let mut command = Command::new(&launch.binary);
+    command
         .arg("-c")
         .arg(&launch.config)
         .stdin(Stdio::null())
         .stdout(Stdio::from(log))
-        .stderr(Stdio::from(errors))
-        .spawn()
+        .stderr(Stdio::from(errors));
+    let (child, record) = super::helpers::spawn(command, &launch.helpers_dir, "wireproxy")
         .map_err(|e| format!("VPN: cannot start {}: {e}", launch.binary.display()))?;
-    let mut managed = Managed::new(child, "wireproxy");
+    let mut managed = Managed::new(child, record, "wireproxy");
     let deadline = Instant::now() + wait;
     loop {
         if let Some(status) = managed

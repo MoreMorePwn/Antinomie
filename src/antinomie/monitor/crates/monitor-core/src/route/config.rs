@@ -238,6 +238,9 @@ pub(crate) enum Egress {
 pub struct WireproxyLaunch {
     pub binary: PathBuf,
     pub config: PathBuf,
+    /// Where the process is recorded, so a later start can end it if the app
+    /// was killed.
+    pub helpers_dir: PathBuf,
 }
 
 /// The tor Antinomie starts for the Tor route.
@@ -251,6 +254,8 @@ pub struct TorLaunch {
     pub geoip_dir: Option<PathBuf>,
     /// Where each gateway gets its private data folder.
     pub state_root: PathBuf,
+    /// Where the process is recorded (see [`WireproxyLaunch::helpers_dir`]).
+    pub helpers_dir: PathBuf,
 }
 
 /// One route, checked and resolved from the saved settings.
@@ -330,6 +335,11 @@ fn find_program(id: &str, configured: &str, data_dir: &Path) -> Result<Option<Pa
                 .find(|path| path.is_file())
         })
         .or_else(|| crate::analysis_tools::managed_entry(data_dir, id)))
+}
+
+/// The folder of the saved route settings and helper state.
+pub(super) fn network_dir(data_dir: &Path) -> PathBuf {
+    data_dir.join(CONFIG_DIR)
 }
 
 fn find_on_path(name: &str) -> Option<PathBuf> {
@@ -459,6 +469,7 @@ impl RouteConfig {
                     lib_dir,
                     geoip_dir,
                     state_root: data_dir.join(CONFIG_DIR).join("tor"),
+                    helpers_dir: super::helpers::helpers_dir(data_dir),
                 });
                 route
             }
@@ -502,6 +513,7 @@ impl RouteConfig {
                     Some(WireproxyLaunch {
                         binary,
                         config: config.to_path_buf(),
+                        helpers_dir: super::helpers::helpers_dir(data_dir),
                     }),
                 )
             }

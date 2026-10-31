@@ -121,6 +121,10 @@ impl Backend {
         storage::private_dir(&options.data_dir).map_err(|e| e.to_string())?;
         options.data_dir = fs::canonicalize(&options.data_dir).map_err(|e| e.to_string())?;
         let data_owner = acquire_data_owner(&options.data_dir)?;
+        // wireproxy or tor left running by a session that was killed.
+        for line in crate::route::reap_stale_helpers(&options.data_dir) {
+            eprintln!("{line}");
+        }
         let vms = storage::load_vms(&options)?;
         let freed = crate::vm::remove_stale_guest_ram(
             &options,

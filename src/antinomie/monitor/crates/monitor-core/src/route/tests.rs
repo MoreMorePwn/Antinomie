@@ -11,6 +11,7 @@ use std::{net::Ipv4Addr, path::PathBuf, time::Duration};
 mod cloud;
 mod config;
 mod guest;
+mod helpers;
 mod managed;
 mod metadata;
 mod qemu;

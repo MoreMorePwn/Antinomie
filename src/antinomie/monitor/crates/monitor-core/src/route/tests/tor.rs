@@ -62,6 +62,7 @@ fn launch(dir: &Path, binary: std::path::PathBuf) -> TorLaunch {
         lib_dir: None,
         geoip_dir: None,
         state_root: dir.join("network").join("tor"),
+        helpers_dir: dir.join("network").join("helpers"),
     }
 }
 

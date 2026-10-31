@@ -22,6 +22,7 @@ mod dhcp;
 mod dns;
 mod frame;
 mod gateway;
+mod helpers;
 mod inetsim;
 mod managed;
 mod metadata;
@@ -40,6 +41,7 @@ pub use self::{
         VpnConfig, load_config, save_config, tool_on_path,
     },
     gateway::{Claimed, Gateway, GatewayNet},
+    helpers::reap_stale_helpers,
     metadata::{
         REPORT as METADATA_REPORT, Report as MetadataReport, Service as MetadataService,
         read_report as read_metadata_report,
