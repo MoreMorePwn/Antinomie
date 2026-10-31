@@ -21,13 +21,9 @@ pub(super) fn show(
         theme::section(ui, crate::code_listing::View::Disassembly.label()).on_hover_text(
             "Instructions before the current one are a best guess (x86 lengths vary).",
         );
-        if let Some(pc) = view
-            .registers
-            .as_ref()
-            .and_then(|registers| registers.get("rip"))
-        {
+        if let Some(pc) = view.registers.as_ref().and_then(|registers| registers.pc()) {
             ui.label(
-                RichText::new(format!("rip {pc:#x}"))
+                RichText::new(format!("{} {pc:#x}", view.caps.arch.pc_register()))
                     .monospace()
                     .color(theme::value(theme::ValueKind::Pointer)),
             );
@@ -55,10 +51,16 @@ pub(super) fn show(
         );
         return;
     }
-    let pc = view
-        .registers
-        .as_ref()
-        .and_then(|registers| registers.get("rip"));
+    let pc = view.registers.as_ref().and_then(|registers| registers.pc());
+    if view.caps.arch != antinomie_monitor_core::debug::ArchTag::X86_64 {
+        // Only x86-64 has a decoder here so far (MA-14: capstone for the others).
+        ui.weak(format!(
+            "The code pane cannot disassemble {} instructions yet. Read the code in the \
+             Memory pane, or attach gdb (gdb-multiarch) for its disassembly.",
+            view.caps.arch.name()
+        ));
+        return;
+    }
     let lines = panel.disassembly(view).to_vec();
     if lines.is_empty() {
         ui.weak("No readable code at the instruction pointer.");

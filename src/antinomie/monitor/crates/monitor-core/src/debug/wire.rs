@@ -71,6 +71,8 @@ pub const CAP_SIGNALS: u32 = 64;
 pub const CAP_BATCH_REGS: u32 = 128;
 pub const CAP_START: u32 = 256;
 pub const CAP_AUXV: u32 = 512;
+/// Revision 20: a watchpoint can trigger on loads alone (`BP_HW_READ`).
+pub const CAP_READ_WATCH: u32 = 2048;
 
 pub const CAP2_FOLLOW: u32 = 1;
 pub const CAP2_NONSTOP: u32 = 2;
@@ -104,6 +106,8 @@ pub const BP_SOFTWARE: u32 = 1;
 pub const BP_HW_EXEC: u32 = 2;
 pub const BP_HW_WRITE: u32 = 3;
 pub const BP_HW_ACCESS: u32 = 4;
+/// Only where the guest offers `CAP_READ_WATCH`.
+pub const BP_HW_READ: u32 = 5;
 
 fn u32_at(data: &[u8], offset: usize) -> Result<u32, String> {
     data.get(offset..offset + 4)
@@ -153,7 +157,8 @@ pub fn parse_caps(reply: &[u8], ext: bool) -> Result<DebugCaps, String> {
         | CAP_SIGNALS
         | CAP_BATCH_REGS
         | CAP_START
-        | CAP_AUXV;
+        | CAP_AUXV
+        | CAP_READ_WATCH;
     let flags2 = u32_at(reply, 40)?;
     let known2 = if ext {
         CAP2_FOLLOW | CAP2_NONSTOP | CAP2_ADOPT | CAP2_THREAD_HW
@@ -195,6 +200,7 @@ pub fn parse_caps(reply: &[u8], ext: bool) -> Result<DebugCaps, String> {
         batch_regs: flags & CAP_BATCH_REGS != 0,
         debug_on_start: flags & CAP_START != 0,
         auxv: flags & CAP_AUXV != 0,
+        read_watch: flags & CAP_READ_WATCH != 0,
         follow: flags2 & CAP2_FOLLOW != 0,
         nonstop: flags2 & CAP2_NONSTOP != 0,
         adopt: flags2 & CAP2_ADOPT != 0,
@@ -339,10 +345,10 @@ impl SessionStatus {
             },
             EVENT_WATCH => StopKind::Watchpoint {
                 addr: self.event_addr,
-                access: if self.event_access == BP_HW_WRITE {
-                    WatchAccess::Write
-                } else {
-                    WatchAccess::Access
+                access: match self.event_access {
+                    BP_HW_WRITE => WatchAccess::Write,
+                    BP_HW_READ => WatchAccess::Read,
+                    _ => WatchAccess::Access,
                 },
             },
             _ => return None,
@@ -554,7 +560,14 @@ pub fn parse_mem_write(reply: &[u8], requested: usize) -> Result<(), String> {
 }
 
 pub fn breakpoint_request(session: u64, addr: u64, len: u32, generation: u64) -> Vec<u8> {
-    breakpoint_kind_request(session, BreakpointKind::Software, addr, len, generation)
+    breakpoint_kind_request(
+        session,
+        BreakpointKind::Software,
+        addr,
+        len,
+        generation,
+        false,
+    )
 }
 pub fn breakpoint_kind_request(
     session: u64,
@@ -562,6 +575,7 @@ pub fn breakpoint_kind_request(
     addr: u64,
     len: u32,
     generation: u64,
+    read_watch: bool,
 ) -> Vec<u8> {
     let mut args = with_session(0, session);
     args.extend(
@@ -569,8 +583,9 @@ pub fn breakpoint_kind_request(
             BreakpointKind::Software => BP_SOFTWARE,
             BreakpointKind::Hardware => BP_HW_EXEC,
             BreakpointKind::Watch(WatchAccess::Write) => BP_HW_WRITE,
-            // The debug registers cannot watch for reads alone: a read watch is
-            // an access watch (the caller reports what it asked for).
+            BreakpointKind::Watch(WatchAccess::Read) if read_watch => BP_HW_READ,
+            // Debug registers that cannot watch for reads alone (x86-64): a read
+            // watch is an access watch (the caller reports what it asked for).
             BreakpointKind::Watch(_) => BP_HW_ACCESS,
         }
         .to_le_bytes(),
@@ -674,10 +689,10 @@ pub fn parse_events(reply: &[u8]) -> Result<(Vec<EventEntry>, u32), String> {
             },
             EVENT_WATCH => StopKind::Watchpoint {
                 addr: u64_at(entry, 24)?,
-                access: if u32_at(entry, 32)? == BP_HW_WRITE {
-                    WatchAccess::Write
-                } else {
-                    WatchAccess::Access
+                access: match u32_at(entry, 32)? {
+                    BP_HW_WRITE => WatchAccess::Write,
+                    BP_HW_READ => WatchAccess::Read,
+                    _ => WatchAccess::Access,
                 },
             },
             EVENT_FORK => StopKind::Fork { child },
@@ -774,6 +789,7 @@ pub fn parse_bp_list(reply: &[u8]) -> Result<Vec<GuestBreakpoint>, String> {
                 BP_HW_EXEC => BreakpointKind::Hardware,
                 BP_HW_WRITE => BreakpointKind::Watch(WatchAccess::Write),
                 BP_HW_ACCESS => BreakpointKind::Watch(WatchAccess::Access),
+                BP_HW_READ => BreakpointKind::Watch(WatchAccess::Read),
                 other => return Err(format!("debug breakpoint of unknown kind {other}")),
             };
             Ok(GuestBreakpoint {

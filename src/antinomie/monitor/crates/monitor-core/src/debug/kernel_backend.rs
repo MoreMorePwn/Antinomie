@@ -238,11 +238,29 @@ impl KernelDebugBackend {
         self.session
     }
 
+    /// The length of a breakpoint on one instruction: the panel asks with
+    /// length 1, which is the architecture's own (`int3`, or a 4-byte `brk`).
+    fn instruction_len(&self, len: u32) -> u32 {
+        if len == 1 {
+            self.caps.arch.breakpoint_len()
+        } else {
+            len
+        }
+    }
+    fn hardware_len(&self, kind: BreakpointKind, len: u32) -> u32 {
+        match kind {
+            BreakpointKind::Hardware => self.instruction_len(len),
+            _ => len,
+        }
+    }
+
     /// A hardware request the guest advertised support for.
     fn check_hardware(&self, kind: BreakpointKind, len: u32) -> Result<(), DebugError> {
         let caps = &self.caps;
         let supported = match kind {
-            BreakpointKind::Hardware => caps.hardware_breakpoints > 0 && len == 1,
+            BreakpointKind::Hardware => {
+                caps.hardware_breakpoints > 0 && len == caps.arch.breakpoint_len()
+            }
             _ => {
                 caps.hardware_watchpoints > 0
                     && matches!(len, 1 | 2 | 4 | 8)
@@ -467,6 +485,7 @@ impl DebugBackend for KernelDebugBackend {
     }
 
     fn set_breakpoint(&mut self, addr: u64, len: u32) -> Result<(), DebugError> {
+        let len = self.instruction_len(len);
         if !self.caps.supports_breakpoint_len(len) {
             return Err(DebugError::Unsupported(format!(
                 "{len}-byte software breakpoints"
@@ -477,6 +496,7 @@ impl DebugBackend for KernelDebugBackend {
     }
 
     fn clear_breakpoint(&mut self, addr: u64, len: u32) -> Result<(), DebugError> {
+        let len = self.instruction_len(len);
         let request = wire::breakpoint_request(self.session, addr, len, self.generation());
         self.call(wire::BP_CLEAR, &request).map(|_| ())
     }
@@ -490,9 +510,16 @@ impl DebugBackend for KernelDebugBackend {
         if kind == BreakpointKind::Software {
             return self.set_breakpoint(addr, len);
         }
+        let len = self.hardware_len(kind, len);
         self.check_hardware(kind, len)?;
-        let request =
-            wire::breakpoint_kind_request(self.session, kind, addr, len, self.generation());
+        let request = wire::breakpoint_kind_request(
+            self.session,
+            kind,
+            addr,
+            len,
+            self.generation(),
+            self.caps.read_watch,
+        );
         self.call(wire::BP_SET, &request).map(|_| ())
     }
 
@@ -505,8 +532,15 @@ impl DebugBackend for KernelDebugBackend {
         if kind == BreakpointKind::Software {
             return self.clear_breakpoint(addr, len);
         }
-        let request =
-            wire::breakpoint_kind_request(self.session, kind, addr, len, self.generation());
+        let len = self.hardware_len(kind, len);
+        let request = wire::breakpoint_kind_request(
+            self.session,
+            kind,
+            addr,
+            len,
+            self.generation(),
+            self.caps.read_watch,
+        );
         self.call(wire::BP_CLEAR, &request).map(|_| ())
     }
 

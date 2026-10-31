@@ -315,8 +315,8 @@ impl<W: Wire> Session<'_, W> {
             b"0" => BreakpointKind::Software,
             b"1" => BreakpointKind::Hardware,
             b"2" => BreakpointKind::Watch(WatchAccess::Write),
+            b"3" => BreakpointKind::Watch(WatchAccess::Read),
             b"4" => BreakpointKind::Watch(WatchAccess::Access),
-            // Read watchpoints: the debug registers cannot do them.
             _ => return Ok(unsupported()),
         };
         let Some(pid) = self.target_pid() else {
@@ -330,6 +330,11 @@ impl<W: Wire> Session<'_, W> {
             BreakpointKind::Software if !caps.software_breakpoints => return Ok(unsupported()),
             BreakpointKind::Hardware if caps.hardware_breakpoints == 0 => return Ok(unsupported()),
             BreakpointKind::Watch(_) if caps.hardware_watchpoints == 0 => return Ok(unsupported()),
+            // Read watchpoints only where the debug registers can watch loads
+            // alone (arm64); x86-64's cannot.
+            BreakpointKind::Watch(WatchAccess::Read) if !caps.read_watch => {
+                return Ok(unsupported());
+            }
             _ => {}
         }
         if matches!(kind, BreakpointKind::Watch(_)) && (size == 0 || size > 4096) {

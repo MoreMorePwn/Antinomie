@@ -9,6 +9,7 @@
 //! note type, the guest reports a capability set at attach, and every register
 //! view (the GDB target description and the UI) is built from one
 //! [`TargetDescription`] per architecture. x86-64 is the first and only entry.
+pub mod aarch64;
 pub mod amd64;
 pub(crate) mod debugger;
 mod inferior;

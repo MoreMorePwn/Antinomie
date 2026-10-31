@@ -157,6 +157,7 @@ impl PanelControl {
             hardware_breakpoints: caps.hardware_breakpoints,
             hardware_watchpoints: caps.hardware_watchpoints,
             follow: caps.follow,
+            arch: caps.arch,
         };
         let view = DebugView::new(view_caps);
         let shared = Arc::new(PanelShared {
@@ -550,7 +551,7 @@ impl PanelControl {
             .iter()
             .find(|entry| entry.kind == RegKind::CodePointer)
             .map(|entry| entry.value);
-        let sp = snapshot.get("rsp");
+        let sp = snapshot.get(self.caps.arch.sp_register());
         self.view.registers = Some(snapshot);
         self.publish();
 

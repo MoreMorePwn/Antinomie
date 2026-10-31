@@ -208,10 +208,7 @@ pub(super) fn breakpoints(
         return;
     }
     const TABLE: &str = "debugger-breakpoints";
-    let here = view
-        .registers
-        .as_ref()
-        .and_then(|registers| registers.get("rip"));
+    let here = view.registers.as_ref().and_then(|registers| registers.pc());
     let order = table_sort::order(ui.ctx(), TABLE, view.breakpoints.len(), |column, a, b| {
         let (a, b) = (&view.breakpoints[a], &view.breakpoints[b]);
         match column {

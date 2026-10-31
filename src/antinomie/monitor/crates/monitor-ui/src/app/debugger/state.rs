@@ -68,10 +68,7 @@ impl DebuggerPanel {
     /// The decoded window for the code pane, decoding only when it changed.
     pub(super) fn disassembly(&mut self, view: &DebugView) -> &[DecodedInstruction] {
         let window = view.window(WindowKind::Code);
-        let pc = view
-            .registers
-            .as_ref()
-            .and_then(|registers| registers.get("rip"));
+        let pc = view.registers.as_ref().and_then(|registers| registers.pc());
         let (Some(window), Some(pc)) = (window, pc) else {
             self.code = None;
             return &[];

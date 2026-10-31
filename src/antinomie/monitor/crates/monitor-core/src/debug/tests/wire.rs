@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-use crate::debug::{ArchTag, RegsetBlob, wire::*};
+use crate::debug::{ArchTag, BreakpointKind, RegsetBlob, WatchAccess, wire::*};
 
 fn define(name: &str) -> u32 {
     let header = include_str!("../../../../../protocol/control.h");
@@ -60,6 +60,11 @@ fn constants_match_the_shared_control_header() {
         ("ANTC_DEBUG_EVENT_EXIT", EVENT_EXIT),
         ("ANTC_DEBUG_EVENT_EXEC", EVENT_EXEC),
         ("ANTC_DEBUG_BP_SOFTWARE", BP_SOFTWARE),
+        ("ANTC_DEBUG_BP_HW_EXEC", BP_HW_EXEC),
+        ("ANTC_DEBUG_BP_HW_WRITE", BP_HW_WRITE),
+        ("ANTC_DEBUG_BP_HW_ACCESS", BP_HW_ACCESS),
+        ("ANTC_DEBUG_BP_HW_READ", BP_HW_READ),
+        ("ANTC_DEBUG_CAP_READ_WATCH", CAP_READ_WATCH),
     ] {
         assert_eq!(define(name), value, "{name}");
     }
@@ -241,6 +246,23 @@ fn control_requests_layout() {
     assert_eq!(u32::from_le_bytes(bp[20..24].try_into().unwrap()), 1);
     assert_eq!(u64::from_le_bytes(bp[24..32].try_into().unwrap()), 0x401000);
     assert_eq!(u64::from_le_bytes(bp[32..40].try_into().unwrap()), 9);
+    // A read watch is kind BP_HW_READ only for a guest that offers READ_WATCH;
+    // for any other (x86-64) it stays the access watch it always was.
+    let kind = |request: Vec<u8>| u32::from_le_bytes(request[16..20].try_into().unwrap());
+    let read = BreakpointKind::Watch(WatchAccess::Read);
+    assert_eq!(
+        kind(breakpoint_kind_request(7, read, 0x2000, 8, 9, false)),
+        BP_HW_ACCESS
+    );
+    assert_eq!(
+        kind(breakpoint_kind_request(7, read, 0x2000, 8, 9, true)),
+        BP_HW_READ
+    );
+    let access = BreakpointKind::Watch(WatchAccess::Access);
+    assert_eq!(
+        kind(breakpoint_kind_request(7, access, 0x2000, 8, 9, true)),
+        BP_HW_ACCESS
+    );
 }
 
 #[test]

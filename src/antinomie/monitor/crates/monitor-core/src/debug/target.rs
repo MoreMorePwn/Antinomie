@@ -9,31 +9,65 @@ use super::{
 use std::fmt;
 
 /// Architecture tag carried on every debug message: the ELF `e_machine`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ArchTag {
+    #[default]
     X86_64,
+    Aarch64,
 }
 impl ArchTag {
     pub fn from_e_machine(value: u32) -> Option<Self> {
         match value {
             62 => Some(Self::X86_64),
+            183 => Some(Self::Aarch64),
             _ => None,
         }
     }
     pub fn e_machine(self) -> u32 {
         match self {
             Self::X86_64 => 62,
+            Self::Aarch64 => 183,
         }
     }
     pub fn name(self) -> &'static str {
         match self {
             Self::X86_64 => "x86-64",
+            Self::Aarch64 => "aarch64",
         }
     }
     /// The register file this architecture's debuggers see.
     pub fn description(self) -> &'static TargetDescription {
         match self {
             Self::X86_64 => super::amd64::description(),
+            Self::Aarch64 => super::aarch64::description(),
+        }
+    }
+    /// The instruction pointer's register name.
+    pub fn pc_register(self) -> &'static str {
+        match self {
+            Self::X86_64 => "rip",
+            Self::Aarch64 => "pc",
+        }
+    }
+    /// The stack pointer's register name.
+    pub fn sp_register(self) -> &'static str {
+        match self {
+            Self::X86_64 => "rsp",
+            Self::Aarch64 => "sp",
+        }
+    }
+    /// The frame pointer's register name.
+    pub fn fp_register(self) -> &'static str {
+        match self {
+            Self::X86_64 => "rbp",
+            Self::Aarch64 => "x29",
+        }
+    }
+    /// Bytes of the software breakpoint the panel plants (`int3`, `brk`).
+    pub fn breakpoint_len(self) -> u32 {
+        match self {
+            Self::X86_64 => 1,
+            Self::Aarch64 => 4,
         }
     }
 }
@@ -68,6 +102,8 @@ pub struct DebugCaps {
     pub debug_on_start: bool,
     /// The program's auxiliary vector can be read.
     pub auxv: bool,
+    /// A watchpoint can trigger on loads alone (arm64), not only on any access.
+    pub read_watch: bool,
     /// Phase 3: fork and exec events with child sessions, session options, the
     /// event list (`CONFIG`, `EVENTS`).
     pub follow: bool,

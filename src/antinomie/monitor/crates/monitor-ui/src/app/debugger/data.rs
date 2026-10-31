@@ -29,7 +29,12 @@ pub(super) fn stack_pane(ui: &mut egui::Ui, view: &DebugView) {
         .id_salt("debugger-stack-scroll")
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            window_rows(ui, view, WindowKind::Stack, Some("rsp"))
+            window_rows(
+                ui,
+                view,
+                WindowKind::Stack,
+                Some(view.caps.arch.sp_register()),
+            )
         });
 }
 
@@ -61,10 +66,13 @@ fn registers(ui: &mut egui::Ui, view: &DebugView) {
         .spacing([10.0, 2.0])
         .show(ui, |ui| {
             for entry in &registers.entries {
-                let name_color = match entry.name {
-                    "rip" => theme::error(),
-                    "rsp" | "rbp" => theme::neutral_accent(),
-                    _ => theme::value(theme::ValueKind::Name),
+                let arch = view.caps.arch;
+                let name_color = if entry.name == arch.pc_register() {
+                    theme::error()
+                } else if entry.name == arch.sp_register() || entry.name == arch.fp_register() {
+                    theme::neutral_accent()
+                } else {
+                    theme::value(theme::ValueKind::Name)
                 };
                 ui.label(RichText::new(entry.name).monospace().color(name_color));
                 let text = match entry.kind {

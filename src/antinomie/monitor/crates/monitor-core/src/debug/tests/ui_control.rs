@@ -75,6 +75,7 @@ fn caps() -> DebugCaps {
         batch_regs: false,
         debug_on_start: false,
         auxv: false,
+        read_watch: false,
         follow: false,
         nonstop: false,
         adopt: false,

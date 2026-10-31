@@ -76,6 +76,7 @@ fn caps() -> DebugCaps {
         batch_regs: false,
         debug_on_start: false,
         auxv: false,
+        read_watch: false,
         follow: false,
         nonstop: false,
         adopt: false,
@@ -963,6 +964,74 @@ fn debug_registers_are_offered_only_when_the_guest_has_them_and_run_out_cleanly(
     assert!(client.closed());
     fixture.wait_log("hw- Watch(Write) 0x1000 8");
     fixture.wait_count("hw- Hardware 0x4018c0 1", 2);
+    assert!(fixture.mock.lock().unwrap().hardware.is_empty());
+}
+
+/// Load-only watchpoints (Z3, guest kind BP_HW_READ) are a revision-20 addition
+/// gated by the guest's READ_WATCH flag: an x86-64 guest, whose debug registers
+/// cannot watch loads alone, never offers it and gdb's Z3 is refused there; an
+/// arm64 guest takes it and its hits are reported as `rwatch`.
+#[test]
+fn read_watchpoints_are_served_only_where_the_guest_offers_them() {
+    let stopped = || {
+        TargetState::Stopped(StopEvent {
+            sequence: 0,
+            kind: StopKind::Interrupt,
+            tid: TID,
+            pc: 0,
+        })
+    };
+    let fixture = Fixture::start_hardware(stopped());
+    let mut client = fixture.unix();
+    client.hardware = true;
+    client.handshake();
+    assert_eq!(client.send("Z3,2000,8"), "", "x86-64 refuses Z3");
+    assert!(fixture.mock.lock().unwrap().hardware.is_empty());
+    assert_eq!(
+        client.send("Z4,2000,8"),
+        "OK",
+        "an access watch still works"
+    );
+    assert_eq!(client.send("D"), "OK");
+    drop(fixture);
+
+    let fixture = Fixture::start_with(
+        stopped(),
+        DebugCaps {
+            arch: ArchTag::Aarch64,
+            hardware_breakpoints: 4,
+            hardware_watchpoints: 4,
+            watch_len_mask: 0x8b,
+            read_watch: true,
+            ..caps()
+        },
+    );
+    let mut client = fixture.unix();
+    client.hardware = true;
+    client.handshake();
+    assert_eq!(client.send("Z3,2000,8"), "OK");
+    assert_eq!(
+        fixture.mock.lock().unwrap().hardware,
+        vec![(BreakpointKind::Watch(WatchAccess::Read), 0x2000, 8)]
+    );
+    fixture.mock.lock().unwrap().next = Some((
+        1,
+        TargetState::Stopped(StopEvent {
+            sequence: 0,
+            kind: StopKind::Watchpoint {
+                addr: 0x2000,
+                access: WatchAccess::Read,
+            },
+            tid: TID,
+            pc: 0x4018c4,
+        }),
+    ));
+    client.send_no_wait("vCont;c");
+    assert_eq!(
+        client.packet().unwrap(),
+        format!("T05thread:{};rwatch:2000;", thread_id())
+    );
+    assert_eq!(client.send("z3,2000,8"), "OK");
     assert!(fixture.mock.lock().unwrap().hardware.is_empty());
 }
 

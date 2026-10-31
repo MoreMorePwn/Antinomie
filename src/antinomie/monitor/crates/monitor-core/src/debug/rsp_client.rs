@@ -640,10 +640,10 @@ impl<W: Wire> Session<'_, W> {
                             }
                             StopKind::Watchpoint { addr, access } => reply.push_str(&format!(
                                 "{}:{addr:x};",
-                                if access == WatchAccess::Write {
-                                    "watch"
-                                } else {
-                                    "awatch"
+                                match access {
+                                    WatchAccess::Write => "watch",
+                                    WatchAccess::Read => "rwatch",
+                                    WatchAccess::Access => "awatch",
                                 }
                             )),
                             StopKind::Fork { child } if self.client.fork_events => {

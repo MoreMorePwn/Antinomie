@@ -200,6 +200,7 @@ mod panel {
             hardware_breakpoints: 0,
             hardware_watchpoints: 0,
             follow: false,
+            ..Default::default()
         });
         view.epoch = 5;
         view.run = RunState::Stopped {

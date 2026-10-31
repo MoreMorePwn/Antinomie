@@ -10,7 +10,7 @@
 use super::{
     regs::RegKind,
     signal_policy::{SignalAction, SignalNote, SignalTable},
-    target::StopKind,
+    target::{ArchTag, StopKind},
 };
 use std::fmt;
 
@@ -295,6 +295,13 @@ pub struct RegisterSnapshot {
     pub entries: Vec<RegisterEntry>,
 }
 impl RegisterSnapshot {
+    /// The instruction pointer (`rip`, `pc`).
+    pub fn pc(&self) -> Option<u64> {
+        self.entries
+            .iter()
+            .find(|entry| entry.kind == RegKind::CodePointer)
+            .map(|entry| entry.value)
+    }
     pub fn get(&self, name: &str) -> Option<u64> {
         self.entries
             .iter()
@@ -395,6 +402,8 @@ pub struct ViewCaps {
     pub hardware_watchpoints: u32,
     /// The guest can follow forks and execs.
     pub follow: bool,
+    /// The program's architecture: its register names and instructions.
+    pub arch: ArchTag,
 }
 
 /// Everything the debugger panel shows. Replaced as a whole whenever any part
