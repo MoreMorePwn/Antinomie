@@ -200,8 +200,9 @@ it runs.
   verifier, or HTML, optionally signed with your own minisign or SSH key (never
   an app key). Terminal input is recorded by size only. Plain events from earlier
   versions are migrated once and marked "recorded before the custody log".
-  Remove keeps the log with a Removed entry; a full purge is separate and
-  recorded in the index chain. The log is tamper-evident, not tamper-proof:
+  Remove keeps the log with a Removed entry. A full purge (log and index
+  entry) exists in the library code and is recorded in the index chain, but no
+  button offers it yet. The log is tamper-evident, not tamper-proof:
   someone who rewrites the whole library can rewrite both chains, so keep the
   head hash somewhere else.
 
@@ -374,7 +375,7 @@ it runs.
   and a mismatch is refused. A run of a program the library sent names that
   sample in its run record.
 
-- **Every machine profile value has a public source.** The catalog's strings
+- **Machine profile values come from public sources.** The catalog's strings
   are now taken from public hardware reports of real units (hw-probe uploads in
   the linuxhw DMI, Dmesg, HWInfo and SMART collections), cited one by one in
   `stealth/catalog/SOURCES.md`. Disks and memory modules are per model, as seen
@@ -387,7 +388,10 @@ it runs.
   whose old strings had no public unit behind them were replaced by sourced ones:
   the ThinkCentre M75q Gen 2, EliteDesk 805 G8 (Desktop Mini) and ThinkPad T14
   Gen 3 AMD units, the H12SSL-i as a Supermicro "Super Server", and the X12STH-F
-  by the X11SCL-F. Weights are the number of public reports of each model.
+  by the X11SCL-F. Weights are the number of public reports of each model. A few
+  values have no public source and are listed as such in `SOURCES.md` (class C:
+  the serial number formats, the memory array's slot count and capacity, and the
+  SATA stand-ins of NVMe-only ThinkPads).
 
 - **No QEMU strings left in a device profile's SMBIOS.** Dell and HP
   profiles showed QEMU's machine type (`pc-q35-11.0`) as their product and

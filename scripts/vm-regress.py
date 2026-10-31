@@ -698,6 +698,9 @@ def classify_drops(accounting):
             counts["drain"] += count
         else:
             counts["neither"] += count
+    # Every located drop was classified above, so located drops above the
+    # counter cannot hide anything; only drops the counter has and no packet
+    # run located are added as unexplained.
     counts["neither"] += max(int(transport["dropped"]) - located, 0)
     return counts, gaps, spells
 
