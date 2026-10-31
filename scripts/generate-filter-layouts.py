@@ -33,6 +33,15 @@ ARCHES = {
                 "define": "__aarch64__", "uapi": "arch/arm64/include/uapi",
                 "table": "arch/arm64/tools/syscall_64.tbl", "capture": "capture_arm64.c",
                 "records": {}, "sizes": {"epoll_event": 16}, "epoll_data_offset": 64},
+    # arm EABI (ILP32, little endian), also the AArch32 compat ABI of arm64
+    # guests: their layouts are named "linux-6.12.94/arm/" (arm64's
+    # ANT_ARCH_COMPAT_LAYOUT).
+    "arm": {"prefix": "linux-6.12.94/arm/", "target": "armv7a-linux-gnueabihf",
+            "define": "__arm__", "uapi": "arch/arm/include/uapi",
+            "table": "arch/arm/tools/syscall.tbl", "capture": "capture_arm.c",
+            "unistd": ("unistd-eabi.h", "unistd-common.h"),
+            "records": {}, "sizes": {"epoll_event": 16, "sock_fprog": 8}, "epoll_data_offset": 64,
+            "offsets": {"sock_fprog": {"len": 0, "filter": 32}}},
 }
 # Recorded layout spelling -> exact pinned declaration and source header.
 TYPES = {
@@ -385,7 +394,8 @@ def uapi_overlay(kernel, spec, schema, overlay, sources):
     # native table.
     table_path = kernel / spec["table"]
     syscall_definitions = ["#define __NR_" + row["name"] + " " + str(row["number"]) for row in schema["syscalls"]]
-    (overlay / "asm/unistd_64.h").write_text("\n".join(syscall_definitions) + "\n")
+    for name in spec.get("unistd", ("unistd_64.h",)):
+        (overlay / "asm" / name).write_text("\n".join(syscall_definitions) + "\n")
     sources[str(table_path.relative_to(kernel))] = sha(table_path)
 
 
@@ -508,7 +518,8 @@ def generate(kernel, arch):
                         "sock_fprog": {"len": 0, "filter": 64},
                         "epoll_event": {"events": 0, "data": spec["epoll_data_offset"]},
                         "clone_args": {"flags": 0, "pidfd": 64, "child_tid": 128, "parent_tid": 192},
-                        "siginfo_t": {"si_signo": 0, "si_errno": 32, "si_code": 64}}
+                        "siginfo_t": {"si_signo": 0, "si_errno": 32, "si_code": 64},
+                        **spec.get("offsets", {})}
     for name, offsets in required_offsets.items():
         facts = next(layout for layout in layouts if layout["layout"] == prefix + name)
         actual = {member["member"]: member["bit_offset"] for member in facts.get("members", [])}

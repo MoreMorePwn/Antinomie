@@ -48,6 +48,9 @@ IDENTITY = {
                 "audit_arch": "c00000b7",
                 "additions": {"protection": ["PROT_BTI", "PROT_MTE"],
                               "ptrace_request": ["PTRACE_PEEKMTETAGS", "PTRACE_POKEMTETAGS"]}},
+    # arm EABI, also the AArch32 compat ABI of arm64 guests.
+    "arm": {"elf_machine": 40, "elf_class": 32, "endianness": "little", "data_model": "ILP32",
+            "audit_arch": "40000028", "additions": {}},
 }
 
 

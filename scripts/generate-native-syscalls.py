@@ -33,6 +33,26 @@ ARCHES = {
                 "count": 318, "c_header": "arch/arm64/include/asm/antinomie_syscalls.h",
                 "defines": ("-DCONFIG_ARM64=1", "-DCONFIG_CLONE_BACKWARDS=1"),
                 "clone_backwards": True},
+    # arm EABI, the AArch32 compat ABI of arm64 (arch/arm64/tools/syscall_32.tbl
+    # has the same numbers and names; its oabi rows are OABI only): an ILP32
+    # table whose 64-bit arguments take aligned register pairs, written as the
+    # compat header of arm64's recorder.
+    "arm": {"table": "arch/arm/tools/syscall.tbl", "abis": ("common",),
+            "count": 415, "c_header": "arch/arm64/include/asm/antinomie_compat_syscalls.h",
+            "compat": True, "bits": 32,
+            "defines": ("-DCONFIG_ARM=1", "-DCONFIG_CLONE_BACKWARDS=1", "-D__ARCH_WANT_STAT64=1",
+                        "-DCONFIG_OLD_SIGACTION=1", "-DCONFIG_OLD_SIGSUSPEND3=1", "-DCONFIG_HAVE_UID16=1",
+                        "-D__ARCH_WANT_SYS_OLD_GETRLIMIT=1"),
+            "clone_backwards": True,
+            "declarations": """
+long sys_arm_fadvise64_64(int fd, int advice, loff_t offset, loff_t len);
+long sys_mmap2(unsigned long addr, unsigned long len, unsigned long prot,
+               unsigned long flags, unsigned long fd, unsigned long pgoff);
+long sys_sigreturn_wrapper(void);
+long sys_rt_sigreturn_wrapper(void);
+long sys_statfs64_wrapper(const char *pathname, size_t sz, struct statfs64 *buf);
+long sys_fstatfs64_wrapper(unsigned int fd, size_t sz, struct statfs64 *buf);
+"""},
     "riscv64": {"table": "scripts/syscall.tbl",
                 "abis": ("common", "64", "riscv", "rlimit", "memfd_secret"),
                 "count": 319, "c_header": "arch/riscv/include/asm/antinomie_syscalls.h",
@@ -80,8 +100,135 @@ ARGUMENT_NAMES = {
     "io_submit": ("fs/aio.c", ("ctx_id", "nr", "iocbpp")),
     "pselect6": ("fs/select.c", ("n", "inp", "outp", "exp", "tsp", "sig")),
     "ppoll": ("fs/select.c", ("ufds", "nfds", "tsp", "sigmask", "sigsetsize")),
+    # arm: calls syscalls.h declares without names.
+    "send": ("net/socket.c", ("fd", "buff", "len", "flags")),
+    "recv": ("net/socket.c", ("fd", "ubuf", "size", "flags")),
+    "sigaction": ("arch/arm/kernel/signal.c", ("sig", "act", "oact")),
+    "pselect6_time64": ("fs/select.c", ("n", "inp", "outp", "exp", "tsp", "sig")),
+    "ppoll_time64": ("fs/select.c", ("ufds", "nfds", "tsp", "sigmask", "sigsetsize")),
 }
 CLONE_BACKWARDS_NAMES = ("kernel/fork.c", ("clone_flags", "newsp", "parent_tidptr", "tls", "child_tidptr"))
+
+# A 32-bit ABI passes a 64-bit argument in a pair of registers, the pair
+# starting at an even register (arm EABI; little endian: the low word first),
+# so its records' six argument slots are registers, not C arguments.
+WIDE_TYPES = {"loff_t", "u64", "__u64", "s64", "__s64", "long long", "unsigned long long"}
+
+# arm's private calls (arch/arm/include/uapi/asm/unistd.h __ARM_NR_*, from
+# 0x0f0000), handled by arm_syscall() and arm64's compat_arm_syscall(): in the
+# JSON table for the host's names, not in the guest's C table.
+ARM_PRIVATE = (
+    (0x0f0001, "breakpoint", ()),
+    (0x0f0002, "cacheflush", (("start", "unsigned long"), ("end", "unsigned long"), ("flags", "int"))),
+    (0x0f0003, "usr26", ()),
+    (0x0f0004, "usr32", ()),
+    (0x0f0005, "set_tls", (("tls", "unsigned long"),)),
+    (0x0f0006, "get_tls", ()),
+)
+
+# The x86-64 call (the family) each arm call is the same operation as, for the
+# host's rules, which key on names: the same arguments at the same places (a
+# prefix of the family's: send is sendto without an address), except the
+# argument indexes listed, whose values differ (mmap2's offset counts pages).
+# Calls absent here keep their own name (truncate64's register pair, _llseek).
+ARM_FAMILIES = {
+    **{f"{name}32": name for name in (
+        "getuid", "getgid", "geteuid", "getegid", "setuid", "setgid", "setreuid", "setregid",
+        "setresuid", "getresuid", "setresgid", "getresgid", "getgroups", "setgroups",
+        "chown", "lchown", "fchown", "setfsuid", "setfsgid")},
+    **{f"{name}64": name for name in (
+        "clock_gettime", "clock_settime", "clock_adjtime", "timer_gettime", "timer_settime",
+        "timerfd_gettime", "timerfd_settime")},
+    **{f"{name}_time64": name for name in (
+        "clock_getres", "clock_nanosleep", "utimensat", "pselect6", "ppoll", "io_pgetevents",
+        "recvmmsg", "mq_timedsend", "mq_timedreceive", "semtimedop", "rt_sigtimedwait",
+        "futex", "sched_rr_get_interval")},
+    "stat64": "stat", "lstat64": "lstat", "fstat64": "fstat", "fstatat64": "newfstatat",
+    "fcntl64": "fcntl", "ugetrlimit": "getrlimit", "_newselect": "select",
+    "mmap2": "mmap", "send": "sendto", "recv": "recvfrom", "sendfile64": "sendfile",
+}
+ARM_FAMILY_DIFFERENCES = {"mmap2": {5}}
+
+# The compat header's second table: the native call an AArch32 call is, for
+# the recorder to capture it with the native code (its records keep the arm
+# number and ABI). Only calls whose arguments line up by name with the native
+# call and whose objects have one layout on ILP32 and LP64: strings, bytes,
+# 32-bit and fixed-width values, sockaddr, time64 values. The exec calls'
+# vectors of 32-bit pointers are read as such by the recorder.
+SAME_LAYOUT_POINTERS = {
+    "const char *", "char *", "void *", "const void *", "int *", "unsigned int *", "u32 *",
+    "u64 *", "loff_t *", "uid_t *", "gid_t *", "struct sockaddr *", "struct pollfd *",
+    "struct __kernel_timespec *", "const struct __kernel_timespec *",
+    "struct __kernel_itimerspec *", "const struct __kernel_itimerspec *",
+    "sigset_t *", "const sigset_t *", "struct epoll_event *", "struct io_event *",
+    "struct sembuf *", "struct file_handle *", "struct sched_param *", "struct sched_attr *",
+    "struct futex_waitv *", "struct new_utsname *", "struct linux_dirent64 *", "struct statx *",
+    "cap_user_header_t", "cap_user_data_t",
+    "const cap_user_data_t",
+}
+# 32-bit signed types: the recorder sign-extends them, as a 64-bit call's are.
+SIGNED_TYPES = {"int", "long", "pid_t", "off_t", "clockid_t", "timer_t", "mqd_t", "key_t",
+                "key_serial_t", "rwf_t", "__s32"}
+# Native code that reads arch-sized objects behind a value (ioctl and fcntl
+# commands, prctl options, clone's and ptrace's registers, socket options,
+# seccomp's sock_fprog, io_uring's iovecs): never translated. The recorder
+# itself captures prctl's options of one layout (the task name) natively.
+NOT_NATIVE = {"ioctl", "fcntl", "fcntl64", "prctl", "clone", "ptrace", "setsockopt", "getsockopt",
+              "seccomp", "io_uring_enter", "io_uring_register"}
+EXEC_CALLS = {"execve", "execveat"}
+
+
+def native_counterparts(rows, native_table):
+    """Each arm row's native aarch64 number, or None, and its signed mask."""
+    native = {row["name"]: row for row in json.loads(native_table.read_text())["syscalls"]}
+    result = {}
+    for row in rows:
+        signed = sum(1 << index for index, arg in enumerate(row["arguments"])
+                     if not arg["pointer"] and arg["c_type"] in SIGNED_TYPES)
+        twin = native.get(row.get("family", row["name"]))
+        number = None
+        if twin and row["name"] not in NOT_NATIVE and twin["arg_count"] is not None:
+            own = [(arg["name"], arg["pointer"]) for arg in row["arguments"]]
+            theirs = [(arg["name"], arg["pointer"]) for arg in twin["arguments"]]
+            pointers_alike = all(not arg["pointer"] or arg["c_type"] in SAME_LAYOUT_POINTERS
+                                 for arg in row["arguments"])
+            if own == theirs[:len(own)] and (pointers_alike or row["name"] in EXEC_CALLS):
+                number = twin["number"]
+        result[row["number"]] = (number, signed)
+    return result
+
+
+def register_slots(row):
+    """A 32-bit row's arguments as the registers its records carry."""
+    slots = []
+    for arg in row["arguments"]:
+        if arg["pointer"] or arg["c_type"] not in WIDE_TYPES:
+            slots.append(arg)
+            continue
+        if len(slots) % 2:
+            slots.append({"name": "pad", "c_type": "u32", "pointer": False, "flags": None})
+        for half in ("lo", "hi"):
+            slots.append({"name": f"{arg['name']}_{half}", "c_type": "u32", "pointer": False,
+                          "flags": None})
+    if len(slots) > 6:
+        raise ValueError(f"more than six argument registers: {row['name']}")
+    return slots
+
+
+def families(rows, family_table):
+    """Name each arm row's x86-64 family, checking its arguments line up."""
+    by_name = {row["name"]: row for row in json.loads(family_table.read_text())["syscalls"]}
+    for row in rows:
+        family = ARM_FAMILIES.get(row["name"])
+        if family is None:
+            continue
+        own = [arg["name"] for arg in row["arguments"]]
+        theirs = [arg["name"] for arg in by_name[family]["arguments"]]
+        skip = ARM_FAMILY_DIFFERENCES.get(row["name"], set())
+        if len(own) > len(theirs) or any(
+                a != b for index, (a, b) in enumerate(zip(own, theirs)) if index not in skip):
+            raise ValueError(f"{row['name']} does not line up with {family}: {own} {theirs}")
+        row["family"] = family
 
 
 def native_table(kernel, arch):
@@ -125,7 +272,7 @@ def declarations(kernel, arch):
     text = COMMENT.sub("", header.read_text())
     text = re.sub(r"^\s*#\s*include[^\n]*", "", text, flags=re.M)
     text = subprocess.run(
-        ["cc", "-E", "-P", "-x", "c", "-DBITS_PER_LONG=64",
+        ["cc", "-E", "-P", "-x", "c", f"-DBITS_PER_LONG={ARCHES[arch].get('bits', 64)}",
          *ARCHES[arch]["defines"], "-D__ARCH_WANT_SYS_UTIME=1", "-"], input=text, text=True,
         check=True, capture_output=True).stdout
     signatures = [(name, re.sub(r"\b__(?:user|force|kernel|iomem)\b", "", args))
@@ -235,6 +382,9 @@ def flags_for(name, index, arg):
         ("lsm_get_self_attr", 3): "lsm_get",
         ("fanotify_init", 0): "fanotify_init", ("fanotify_mark", 1): "fanotify_mark",
         ("kexec_load", 3): "kexec", ("kexec_file_load", 4): "kexec_file",
+        # arm's own spellings.
+        ("mmap2", 2): "protection", ("mmap2", 3): "mmap", ("fstatat64", 3): "statat",
+        ("send", 3): "message", ("recv", 3): "message", ("arm_sync_file_range", 1): "sync_range",
     }
     return groups.get((name, index), "unknown" if arg["name"] in ("flags", "flag") else None)
 
@@ -262,13 +412,31 @@ def generate(kernel, arch, output, c_header):
             for arg, name in zip(row["arguments"], names):
                 arg["name"] = name
             row["argument_names_source"] = source
+        if ARCHES[arch].get("bits") == 32:
+            row["arguments"] = register_slots(row)
+            row["arg_count"] = len(row["arguments"]) if arguments is not None else None
         for index, arg in enumerate(row["arguments"]):
             arg["flags"] = flags_for(row["name"], index, arg)
     if missing:
         raise ValueError("unresolved native prototypes:\n" + "\n".join(missing))
+    table_rows = list(rows)
+    if arch == "arm":
+        families(rows, ROOT / "src/antinomie/monitor/protocol/x86_64/native-syscalls.json")
+        # The aarch64 call the recorder captures an AArch32 call as: the
+        # host reads those fields with aarch64's layouts and number.
+        twins = native_counterparts(rows, ROOT / "src/antinomie/monitor/protocol/aarch64/native-syscalls.json")
+        for row in rows:
+            if twins[row["number"]][0] is not None:
+                row["native"] = twins[row["number"]][0]
+        for number, name, arguments in ARM_PRIVATE:
+            rows.append({"number": number, "abi": "private", "name": name,
+                         "entry_point": "arm_syscall",
+                         "arguments": [{"name": arg, "c_type": c_type, "pointer": False,
+                                        "flags": None} for arg, c_type in arguments],
+                         "implemented": True, "arg_count": len(arguments)})
     document = {
         "kernel_version": "6.12.94", "architecture": arch,
-        "schema_revision": 1, "native_count": len(rows),
+        "schema_revision": 1, "native_count": len(table_rows),
         "provenance": {"table": str(table.relative_to(kernel)),
                        "table_sha256": hashlib.sha256(table.read_bytes()).hexdigest(),
                        "declarations": str(header.relative_to(kernel)),
@@ -284,17 +452,29 @@ def generate(kernel, arch, output, c_header):
     # The guest reports this id in ARCH_INFO; the host compares it with the
     # SHA-256 of the protocol file it loaded for the guest's architecture.
     table_id = hashlib.sha256(text.encode()).hexdigest()
-    lines = ["/* SPDX-License-Identifier: GPL-2.0-only */",
-             f"/* Generated native declaration facts of {arch}"
-             " (scripts/generate-native-syscalls.py); do not hand-edit. */",
-             "#ifndef _ASM_ANTINOMIE_SYSCALLS_H", "#define _ASM_ANTINOMIE_SYSCALLS_H",
-             f"/* SHA-256 of protocol/{arch}/native-syscalls.json (ARCH_INFO). */",
-             f'#define ANT_NATIVE_TABLE_ID "{table_id}"',
-             "struct ant_native_syscall {", "\tu8 valid, argc, pointer_mask, string_mask;",
-             "\tconst char *name;", "\tconst char *argument_names[6];",
-             "\tconst char *argument_types[6];", "};",
-             f"static const struct ant_native_syscall ant_native_syscalls[{rows[-1]['number'] + 1}] = {{"]
-    for row in rows:
+    size = table_rows[-1]["number"] + 1
+    if ARCHES[arch].get("compat"):
+        # Another architecture's compat table: the same entries under compat
+        # names, included after that architecture's native table.
+        lines = ["/* SPDX-License-Identifier: GPL-2.0-only */",
+                 f"/* Generated declaration facts of the {arch} compat ABI"
+                 " (scripts/generate-native-syscalls.py); do not hand-edit. */",
+                 "#ifndef _ASM_ANTINOMIE_COMPAT_SYSCALLS_H", "#define _ASM_ANTINOMIE_COMPAT_SYSCALLS_H",
+                 f"/* SHA-256 of protocol/{arch}/native-syscalls.json. */",
+                 f'#define ANT_COMPAT_TABLE_ID "{table_id}"',
+                 f"static const struct ant_native_syscall ant_compat_syscalls[{size}] = {{"]
+    else:
+        lines = ["/* SPDX-License-Identifier: GPL-2.0-only */",
+                 f"/* Generated native declaration facts of {arch}"
+                 " (scripts/generate-native-syscalls.py); do not hand-edit. */",
+                 "#ifndef _ASM_ANTINOMIE_SYSCALLS_H", "#define _ASM_ANTINOMIE_SYSCALLS_H",
+                 f"/* SHA-256 of protocol/{arch}/native-syscalls.json (ARCH_INFO). */",
+                 f'#define ANT_NATIVE_TABLE_ID "{table_id}"',
+                 "struct ant_native_syscall {", "\tu8 valid, argc, pointer_mask, string_mask;",
+                 "\tconst char *name;", "\tconst char *argument_names[6];",
+                 "\tconst char *argument_types[6];", "};",
+                 f"static const struct ant_native_syscall ant_native_syscalls[{size}] = {{"]
+    for row in table_rows:
         args = row["arguments"]
         pointer_mask = sum(1 << index for index, arg in enumerate(args) if arg["pointer"])
         string_mask = sum(1 << index for index, arg in enumerate(args)
@@ -311,7 +491,21 @@ def generate(kernel, arch, output, c_header):
                 lines.append("\t\t\tNULL,")
             lines.append("\t\t},")
         lines.append("\t},")
-    lines.extend(["};", "#endif", ""])
+    lines.append("};")
+    if ARCHES[arch].get("compat"):
+        twins = native_counterparts(table_rows,
+                                    ROOT / "src/antinomie/monitor/protocol/aarch64/native-syscalls.json")
+        assert all(twins[row["number"]][0] == row.get("native") for row in table_rows)
+        lines.extend(["/* Each call's native counterpart (number + 1; 0: none, recorded by its",
+                      " * registers only) and the arguments of 32-bit signed types. */",
+                      "struct ant_compat_syscall {", "\tu16 native;", "\tu8 signed_mask;", "};",
+                      f"static const struct ant_compat_syscall ant_compat_natives[{size}] = {{"])
+        for number, (twin, signed) in sorted(twins.items()):
+            if twin is not None or signed:
+                lines.append(f"\t[{number}] = {{ {0 if twin is None else twin + 1}, {signed} }},")
+        lines.append("};")
+        print(f"compat: {sum(t is not None for t, _ in twins.values())} calls captured natively")
+    lines.extend(["#endif", ""])
     rendered = "\n".join(lines)
     if not c_header.exists() or c_header.read_text() != rendered:
         c_header.write_text(rendered)

@@ -1,0 +1,5620 @@
+Description: antinomie: record AArch32 programs on arm64 by the arm table
+ An arm64 kernel with CONFIG_COMPAT runs AArch32 (arm EABI) programs,
+ the shape most Linux IoT samples have. Their calls were recorded with
+ their numbers only (ANT_ABI_NONE): no names, no arguments decoded and
+ nothing captured.
+ .
+ They are now recorded as ANT_ABI_COMPAT (3, already in ARCH_INFO's ABI
+ mask definition) with the arm EABI table generated from
+ arch/arm/tools/syscall.tbl (<asm/antinomie_compat_syscalls.h>, the
+ guest copy of protocol/arm/native-syscalls.json): a 64-bit argument
+ takes an aligned register pair, so each record's arguments are the
+ call's registers, their low halves, with the 32-bit signed ones
+ sign-extended as a native call's are.
+ .
+ A call that is a native call with the same arguments and objects of
+ one layout on ILP32 and LP64 (strings, bytes, 32-bit and fixed-width
+ values, sockaddr, time64 values; the generated ant_compat_natives
+ table names 234 of them) is captured by the native code under the
+ native number, while its records keep the arm number and ABI. execve
+ and execveat read their vectors as 32-bit pointers (arm "pointer"
+ layouts). prctl has no native counterpart (some options read arch-sized
+ objects), but its options whose objects have one layout (the task name
+ of PR_SET_NAME and PR_GET_NAME, int results, an anonymous mapping's
+ name) are captured by the native code too. Every other call has its
+ path strings captured and its other pointers recorded by address.
+ Process cores of AArch32 programs are still not written.
+ .
+ Everything is compiled only where the architecture defines
+ ANT_ABI_COMPAT (arm64 with CONFIG_COMPAT): x86-64 is unchanged.
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-11-01
+
+---
+diff --git a/arch/arm64/include/asm/antinomie.h b/arch/arm64/include/asm/antinomie.h
+index f06382085..6833fff82 100644
+--- a/arch/arm64/include/asm/antinomie.h
++++ b/arch/arm64/include/asm/antinomie.h
+@@ -28,19 +28,29 @@
+  * width of user virtual addresses (52 only with LVA/LPA2 and a 52-bit
+  * configuration; read from TCR_EL1 then).
+  */
++#ifdef CONFIG_COMPAT
++/* AArch32 programs' calls: arm EABI numbers, described by
++ * <asm/antinomie_compat_syscalls.h> (protocol/arm/native-syscalls.json).
++ */
++#define ANT_ABI_COMPAT 3
++#define ANT_ARCH_ABI_MASK (BIT(ANT_ABI_NATIVE) | BIT(ANT_ABI_COMPAT))
++#else
+ #define ANT_ARCH_ABI_MASK BIT(ANT_ABI_NATIVE)
++#endif
+ #define ANT_ARCH_USER_VA_BITS ((u32)vabits_actual)
+ 
+-/* The ABI of the system call being entered, the abi field of its records. An
+- * AArch32 task's calls are recorded with their number and no table.
+- */
++/* The ABI of the system call being entered, the abi field of its records. */
+ static __always_inline u16 ant_arch_syscall_abi(long nr)
+ {
+-	return test_thread_flag(TIF_32BIT) ? ANT_ABI_NONE : ANT_ABI_NATIVE;
++#ifdef ANT_ABI_COMPAT
++	if (test_thread_flag(TIF_32BIT))
++		return ANT_ABI_COMPAT;
++#endif
++	return ANT_ABI_NATIVE;
+ }
+ 
+ /* The current task is an AArch32 program: the process-core writer and its
+- * readers handle native 64-bit processes only.
++ * readers handle native 64-bit processes only (ELF32 cores are not written).
+  */
+ static __always_inline bool ant_arch_compat_task(void)
+ {
+diff --git a/arch/arm64/include/asm/antinomie_compat_syscalls.h b/arch/arm64/include/asm/antinomie_compat_syscalls.h
+new file mode 100644
+index 000000000..eaf4354e8
+--- /dev/null
++++ b/arch/arm64/include/asm/antinomie_compat_syscalls.h
+@@ -0,0 +1,5278 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/* Generated declaration facts of the arm compat ABI (scripts/generate-native-syscalls.py); do not hand-edit. */
++#ifndef _ASM_ANTINOMIE_COMPAT_SYSCALLS_H
++#define _ASM_ANTINOMIE_COMPAT_SYSCALLS_H
++/* SHA-256 of protocol/arm/native-syscalls.json. */
++#define ANT_COMPAT_TABLE_ID "d1ef109ae31cf197fdace5e9db5cbb9cd124522c80eb7cdebd9687687b011995"
++static const struct ant_native_syscall ant_compat_syscalls[463] = {
++	[0] = { 1, 0, 0, 0, "restart_syscall",
++		{
++			NULL,
++		},
++		{
++			NULL,
++		},
++	},
++	[1] = { 1, 1, 0, 0, "exit",
++		{
++			"error_code",
++		},
++		{
++			"int",
++		},
++	},
++	[2] = { 1, 0, 0, 0, "fork",
++		{
++			NULL,
++		},
++		{
++			NULL,
++		},
++	},
++	[3] = { 1, 3, 2, 0, "read",
++		{
++			"fd",
++			"buf",
++			"count",
++		},
++		{
++			"unsigned int",
++			"char *",
++			"size_t",
++		},
++	},
++	[4] = { 1, 3, 2, 0, "write",
++		{
++			"fd",
++			"buf",
++			"count",
++		},
++		{
++			"unsigned int",
++			"const char *",
++			"size_t",
++		},
++	},
++	[5] = { 1, 3, 1, 1, "open",
++		{
++			"filename",
++			"flags",
++			"mode",
++		},
++		{
++			"const char *",
++			"int",
++			"umode_t",
++		},
++	},
++	[6] = { 1, 1, 0, 0, "close",
++		{
++			"fd",
++		},
++		{
++			"unsigned int",
++		},
++	},
++	[8] = { 1, 2, 1, 1, "creat",
++		{
++			"pathname",
++			"mode",
++		},
++		{
++			"const char *",
++			"umode_t",
++		},
++	},
++	[9] = { 1, 2, 3, 3, "link",
++		{
++			"oldname",
++			"newname",
++		},
++		{
++			"const char *",
++			"const char *",
++		},
++	},
++	[10] = { 1, 1, 1, 1, "unlink",
++		{
++			"pathname",
++		},
++		{
++			"const char *",
++		},
++	},
++	[11] = { 1, 3, 7, 1, "execve",
++		{
++			"filename",
++			"argv",
++			"envp",
++		},
++		{
++			"const char *",
++			"const char *const *",
++			"const char *const *",
++		},
++	},
++	[12] = { 1, 1, 1, 1, "chdir",
++		{
++			"filename",
++		},
++		{
++			"const char *",
++		},
++	},
++	[14] = { 1, 3, 1, 1, "mknod",
++		{
++			"filename",
++			"mode",
++			"dev",
++		},
++		{
++			"const char *",
++			"umode_t",
++			"unsigned int",
++		},
++	},
++	[15] = { 1, 2, 1, 1, "chmod",
++		{
++			"filename",
++			"mode",
++		},
++		{
++			"const char *",
++			"umode_t",
++		},
++	},
++	[16] = { 1, 3, 1, 1, "lchown",
++		{
++			"filename",
++			"user",
++			"group",
++		},
++		{
++			"const char *",
++			"old_uid_t",
++			"old_gid_t",
++		},
++	},
++	[19] = { 1, 3, 0, 0, "lseek",
++		{
++			"fd",
++			"offset",
++			"whence",
++		},
++		{
++			"unsigned int",
++			"off_t",
++			"unsigned int",
++		},
++	},
++	[20] = { 1, 0, 0, 0, "getpid",
++		{
++			NULL,
++		},
++		{
++			NULL,
++		},
++	},
++	[21] = { 1, 5, 23, 0, "mount",
++		{
++			"dev_name",
++			"dir_name",
++			"type",
++			"flags",
++			"data",
++		},
++		{
++			"char *",
++			"char *",
++			"char *",
++			"unsigned long",
++			"void *",
++		},
++	},
++	[23] = { 1, 1, 0, 0, "setuid",
++		{
++			"uid",
++		},
++		{
++			"old_uid_t",
++		},
++	},
++	[24] = { 1, 0, 0, 0, "getuid",
++		{
++			NULL,
++		},
++		{
++			NULL,
++		},
++	},
++	[26] = { 1, 4, 0, 0, "ptrace",
++		{
++			"request",
++			"pid",
++			"addr",
++			"data",
++		},
++		{
++			"long",
++			"long",
++			"unsigned long",
++			"unsigned long",
++		},
++	},
++	[29] = { 1, 0, 0, 0, "pause",
++		{
++			NULL,
++		},
++		{
++			NULL,
++		},
++	},
++	[33] = { 1, 2, 1, 1, "access",
++		{
++			"filename",
++			"mode",
++		},
++		{
++			"const char *",
++			"int",
++		},
++	},
++	[34] = { 1, 1, 0, 0, "nice",
++		{
++			"increment",
++		},
++		{
++			"int",
++		},
++	},
++	[36] = { 1, 0, 0, 0, "sync",
++		{
++			NULL,
++		},
++		{
++			NULL,
++		},
++	},
++	[37] = { 1, 2, 0, 0, "kill",
++		{
++			"pid",
++			"sig",
++		},
++		{
++			"pid_t",
++			"int",
++		},
++	},
++	[38] = { 1, 2, 3, 3, "rename",
++		{
++			"oldname",
++			"newname",
++		},
++		{
++			"const char *",
++			"const char *",
++		},
++	},
++	[39] = { 1, 2, 1, 1, "mkdir",
++		{
++			"pathname",
++			"mode",
++		},
++		{
++			"const char *",
++			"umode_t",
++		},
++	},
++	[40] = { 1, 1, 1, 1, "rmdir",
++		{
++			"pathname",
++		},
++		{
++			"const char *",
++		},
++	},
++	[41] = { 1, 1, 0, 0, "dup",
++		{
++			"fildes",
++		},
++		{
++			"unsigned int",
++		},
++	},
++	[42] = { 1, 1, 1, 0, "pipe",
++		{
++			"fildes",
++		},
++		{
++			"int *",
++		},
++	},
++	[43] = { 1, 1, 1, 0, "times",
++		{
++			"tbuf",
++		},
++		{
++			"struct tms *",
++		},
++	},
++	[45] = { 1, 1, 0, 0, "brk",
++		{
++			"brk",
++		},
++		{
++			"unsigned long",
++		},
++	},
++	[46] = { 1, 1, 0, 0, "setgid",
++		{
++			"gid",
++		},
++		{
++			"old_gid_t",
++		},
++	},
++	[47] = { 1, 0, 0, 0, "getgid",
++		{
++			NULL,
++		},
++		{
++			NULL,
++		},
++	},
++	[49] = { 1, 0, 0, 0, "geteuid",
++		{
++			NULL,
++		},
++		{
++			NULL,
++		},
++	},
++	[50] = { 1, 0, 0, 0, "getegid",
++		{
++			NULL,
++		},
++		{
++			NULL,
++		},
++	},
++	[51] = { 1, 1, 1, 1, "acct",
++		{
++			"name",
++		},
++		{
++			"const char *",
++		},
++	},
++	[52] = { 1, 2, 1, 1, "umount2",
++		{
++			"name",
++			"flags",
++		},
++		{
++			"char *",
++			"int",
++		},
++	},
++	[54] = { 1, 3, 0, 0, "ioctl",
++		{
++			"fd",
++			"cmd",
++			"arg",
++		},
++		{
++			"unsigned int",
++			"unsigned int",
++			"unsigned long",
++		},
++	},
++	[55] = { 1, 3, 0, 0, "fcntl",
++		{
++			"fd",
++			"cmd",
++			"arg",
++		},
++		{
++			"unsigned int",
++			"unsigned int",
++			"unsigned long",
++		},
++	},
++	[57] = { 1, 2, 0, 0, "setpgid",
++		{
++			"pid",
++			"pgid",
++		},
++		{
++			"pid_t",
++			"pid_t",
++		},
++	},
++	[60] = { 1, 1, 0, 0, "umask",
++		{
++			"mask",
++		},
++		{
++			"int",
++		},
++	},
++	[61] = { 1, 1, 1, 1, "chroot",
++		{
++			"filename",
++		},
++		{
++			"const char *",
++		},
++	},
++	[62] = { 1, 2, 2, 0, "ustat",
++		{
++			"dev",
++			"ubuf",
++		},
++		{
++			"unsigned int",
++			"struct ustat *",
++		},
++	},
++	[63] = { 1, 2, 0, 0, "dup2",
++		{
++			"oldfd",
++			"newfd",
++		},
++		{
++			"unsigned int",
++			"unsigned int",
++		},
++	},
++	[64] = { 1, 0, 0, 0, "getppid",
++		{
++			NULL,
++		},
++		{
++			NULL,
++		},
++	},
++	[65] = { 1, 0, 0, 0, "getpgrp",
++		{
++			NULL,
++		},
++		{
++			NULL,
++		},
++	},
++	[66] = { 1, 0, 0, 0, "setsid",
++		{
++			NULL,
++		},
++		{
++			NULL,
++		},
++	},
++	[67] = { 1, 3, 6, 0, "sigaction",
++		{
++			"sig",
++			"act",
++			"oact",
++		},
++		{
++			"int",
++			"const struct old_sigaction *",
++			"struct old_sigaction *",
++		},
++	},
++	[70] = { 1, 2, 0, 0, "setreuid",
++		{
++			"ruid",
++			"euid",
++		},
++		{
++			"old_uid_t",
++			"old_uid_t",
++		},
++	},
++	[71] = { 1, 2, 0, 0, "setregid",
++		{
++			"rgid",
++			"egid",
++		},
++		{
++			"old_gid_t",
++			"old_gid_t",
++		},
++	},
++	[72] = { 1, 3, 0, 0, "sigsuspend",
++		{
++			"unused1",
++			"unused2",
++			"mask",
++		},
++		{
++			"int",
++			"int",
++			"old_sigset_t",
++		},
++	},
++	[73] = { 1, 1, 1, 0, "sigpending",
++		{
++			"uset",
++		},
++		{
++			"old_sigset_t *",
++		},
++	},
++	[74] = { 1, 2, 1, 1, "sethostname",
++		{
++			"name",
++			"len",
++		},
++		{
++			"char *",
++			"int",
++		},
++	},
++	[75] = { 1, 2, 2, 0, "setrlimit",
++		{
++			"resource",
++			"rlim",
++		},
++		{
++			"unsigned int",
++			"struct rlimit *",
++		},
++	},
++	[77] = { 1, 2, 2, 0, "getrusage",
++		{
++			"who",
++			"ru",
++		},
++		{
++			"int",
++			"struct rusage *",
++		},
++	},
++	[78] = { 1, 2, 3, 0, "gettimeofday",
++		{
++			"tv",
++			"tz",
++		},
++		{
++			"struct __kernel_old_timeval *",
++			"struct timezone *",
++		},
++	},
++	[79] = { 1, 2, 3, 0, "settimeofday",
++		{
++			"tv",
++			"tz",
++		},
++		{
++			"struct __kernel_old_timeval *",
++			"struct timezone *",
++		},
++	},
++	[80] = { 1, 2, 2, 0, "getgroups",
++		{
++			"gidsetsize",
++			"grouplist",
++		},
++		{
++			"int",
++			"old_gid_t *",
++		},
++	},
++	[81] = { 1, 2, 2, 0, "setgroups",
++		{
++			"gidsetsize",
++			"grouplist",
++		},
++		{
++			"int",
++			"old_gid_t *",
++		},
++	},
++	[83] = { 1, 2, 3, 3, "symlink",
++		{
++			"old",
++			"new",
++		},
++		{
++			"const char *",
++			"const char *",
++		},
++	},
++	[85] = { 1, 3, 3, 1, "readlink",
++		{
++			"path",
++			"buf",
++			"bufsiz",
++		},
++		{
++			"const char *",
++			"char *",
++			"int",
++		},
++	},
++	[86] = { 1, 1, 1, 0, "uselib",
++		{
++			"library",
++		},
++		{
++			"const char *",
++		},
++	},
++	[87] = { 1, 2, 1, 0, "swapon",
++		{
++			"specialfile",
++			"swap_flags",
++		},
++		{
++			"const char *",
++			"int",
++		},
++	},
++	[88] = { 1, 4, 8, 0, "reboot",
++		{
++			"magic1",
++			"magic2",
++			"cmd",
++			"arg",
++		},
++		{
++			"int",
++			"int",
++			"unsigned int",
++			"void *",
++		},
++	},
++	[91] = { 1, 2, 0, 0, "munmap",
++		{
++			"addr",
++			"len",
++		},
++		{
++			"unsigned long",
++			"size_t",
++		},
++	},
++	[92] = { 1, 2, 1, 1, "truncate",
++		{
++			"path",
++			"length",
++		},
++		{
++			"const char *",
++			"long",
++		},
++	},
++	[93] = { 1, 2, 0, 0, "ftruncate",
++		{
++			"fd",
++			"length",
++		},
++		{
++			"unsigned int",
++			"off_t",
++		},
++	},
++	[94] = { 1, 2, 0, 0, "fchmod",
++		{
++			"fd",
++			"mode",
++		},
++		{
++			"unsigned int",
++			"umode_t",
++		},
++	},
++	[95] = { 1, 3, 0, 0, "fchown",
++		{
++			"fd",
++			"user",
++			"group",
++		},
++		{
++			"unsigned int",
++			"old_uid_t",
++			"old_gid_t",
++		},
++	},
++	[96] = { 1, 2, 0, 0, "getpriority",
++		{
++			"which",
++			"who",
++		},
++		{
++			"int",
++			"int",
++		},
++	},
++	[97] = { 1, 3, 0, 0, "setpriority",
++		{
++			"which",
++			"who",
++			"niceval",
++		},
++		{
++			"int",
++			"int",
++			"int",
++		},
++	},
++	[99] = { 1, 2, 3, 1, "statfs",
++		{
++			"path",
++			"buf",
++		},
++		{
++			"const char *",
++			"struct statfs *",
++		},
++	},
++	[100] = { 1, 2, 2, 0, "fstatfs",
++		{
++			"fd",
++			"buf",
++		},
++		{
++			"unsigned int",
++			"struct statfs *",
++		},
++	},
++	[103] = { 1, 3, 2, 0, "syslog",
++		{
++			"type",
++			"buf",
++			"len",
++		},
++		{
++			"int",
++			"char *",
++			"int",
++		},
++	},
++	[104] = { 1, 3, 6, 0, "setitimer",
++		{
++			"which",
++			"value",
++			"ovalue",
++		},
++		{
++			"int",
++			"struct __kernel_old_itimerval *",
++			"struct __kernel_old_itimerval *",
++		},
++	},
++	[105] = { 1, 2, 2, 0, "getitimer",
++		{
++			"which",
++			"value",
++		},
++		{
++			"int",
++			"struct __kernel_old_itimerval *",
++		},
++	},
++	[106] = { 1, 2, 3, 1, "stat",
++		{
++			"filename",
++			"statbuf",
++		},
++		{
++			"const char *",
++			"struct stat *",
++		},
++	},
++	[107] = { 1, 2, 3, 1, "lstat",
++		{
++			"filename",
++			"statbuf",
++		},
++		{
++			"const char *",
++			"struct stat *",
++		},
++	},
++	[108] = { 1, 2, 2, 0, "fstat",
++		{
++			"fd",
++			"statbuf",
++		},
++		{
++			"unsigned int",
++			"struct stat *",
++		},
++	},
++	[111] = { 1, 0, 0, 0, "vhangup",
++		{
++			NULL,
++		},
++		{
++			NULL,
++		},
++	},
++	[114] = { 1, 4, 10, 0, "wait4",
++		{
++			"pid",
++			"stat_addr",
++			"options",
++			"ru",
++		},
++		{
++			"pid_t",
++			"int *",
++			"int",
++			"struct rusage *",
++		},
++	},
++	[115] = { 1, 1, 1, 0, "swapoff",
++		{
++			"specialfile",
++		},
++		{
++			"const char *",
++		},
++	},
++	[116] = { 1, 1, 1, 0, "sysinfo",
++		{
++			"info",
++		},
++		{
++			"struct sysinfo *",
++		},
++	},
++	[118] = { 1, 1, 0, 0, "fsync",
++		{
++			"fd",
++		},
++		{
++			"unsigned int",
++		},
++	},
++	[119] = { 1, 0, 0, 0, "sigreturn",
++		{
++			NULL,
++		},
++		{
++			NULL,
++		},
++	},
++	[120] = { 1, 5, 20, 0, "clone",
++		{
++			"clone_flags",
++			"newsp",
++			"parent_tidptr",
++			"tls",
++			"child_tidptr",
++		},
++		{
++			"unsigned long",
++			"unsigned long",
++			"int *",
++			"unsigned long",
++			"int *",
++		},
++	},
++	[121] = { 1, 2, 1, 1, "setdomainname",
++		{
++			"name",
++			"len",
++		},
++		{
++			"char *",
++			"int",
++		},
++	},
++	[122] = { 1, 1, 1, 0, "uname",
++		{
++			"name",
++		},
++		{
++			"struct new_utsname *",
++		},
++	},
++	[124] = { 1, 1, 1, 0, "adjtimex",
++		{
++			"txc_p",
++		},
++		{
++			"struct old_timex32 *",
++		},
++	},
++	[125] = { 1, 3, 0, 0, "mprotect",
++		{
++			"start",
++			"len",
++			"prot",
++		},
++		{
++			"unsigned long",
++			"size_t",
++			"unsigned long",
++		},
++	},
++	[126] = { 1, 3, 6, 0, "sigprocmask",
++		{
++			"how",
++			"set",
++			"oset",
++		},
++		{
++			"int",
++			"old_sigset_t *",
++			"old_sigset_t *",
++		},
++	},
++	[128] = { 1, 3, 5, 0, "init_module",
++		{
++			"umod",
++			"len",
++			"uargs",
++		},
++		{
++			"void *",
++			"unsigned long",
++			"const char *",
++		},
++	},
++	[129] = { 1, 2, 1, 0, "delete_module",
++		{
++			"name_user",
++			"flags",
++		},
++		{
++			"const char *",
++			"unsigned int",
++		},
++	},
++	[131] = { 1, 4, 10, 0, "quotactl",
++		{
++			"cmd",
++			"special",
++			"id",
++			"addr",
++		},
++		{
++			"unsigned int",
++			"const char *",
++			"qid_t",
++			"void *",
++		},
++	},
++	[132] = { 1, 1, 0, 0, "getpgid",
++		{
++			"pid",
++		},
++		{
++			"pid_t",
++		},
++	},
++	[133] = { 1, 1, 0, 0, "fchdir",
++		{
++			"fd",
++		},
++		{
++			"unsigned int",
++		},
++	},
++	[134] = { 1, 255, 0, 0, "bdflush",
++		{
++			NULL,
++		},
++		{
++			NULL,
++		},
++	},
++	[135] = { 1, 3, 0, 0, "sysfs",
++		{
++			"option",
++			"arg1",
++			"arg2",
++		},
++		{
++			"int",
++			"unsigned long",
++			"unsigned long",
++		},
++	},
++	[136] = { 1, 1, 0, 0, "personality",
++		{
++			"personality",
++		},
++		{
++			"unsigned int",
++		},
++	},
++	[138] = { 1, 1, 0, 0, "setfsuid",
++		{
++			"uid",
++		},
++		{
++			"old_uid_t",
++		},
++	},
++	[139] = { 1, 1, 0, 0, "setfsgid",
++		{
++			"gid",
++		},
++		{
++			"old_gid_t",
++		},
++	},
++	[140] = { 1, 5, 8, 0, "_llseek",
++		{
++			"fd",
++			"offset_high",
++			"offset_low",
++			"result",
++			"whence",
++		},
++		{
++			"unsigned int",
++			"unsigned long",
++			"unsigned long",
++			"loff_t *",
++			"unsigned int",
++		},
++	},
++	[141] = { 1, 3, 2, 0, "getdents",
++		{
++			"fd",
++			"dirent",
++			"count",
++		},
++		{
++			"unsigned int",
++			"struct linux_dirent *",
++			"unsigned int",
++		},
++	},
++	[142] = { 1, 5, 30, 0, "_newselect",
++		{
++			"n",
++			"inp",
++			"outp",
++			"exp",
++			"tvp",
++		},
++		{
++			"int",
++			"fd_set *",
++			"fd_set *",
++			"fd_set *",
++			"struct __kernel_old_timeval *",
++		},
++	},
++	[143] = { 1, 2, 0, 0, "flock",
++		{
++			"fd",
++			"cmd",
++		},
++		{
++			"unsigned int",
++			"unsigned int",
++		},
++	},
++	[144] = { 1, 3, 0, 0, "msync",
++		{
++			"start",
++			"len",
++			"flags",
++		},
++		{
++			"unsigned long",
++			"size_t",
++			"int",
++		},
++	},
++	[145] = { 1, 3, 2, 0, "readv",
++		{
++			"fd",
++			"vec",
++			"vlen",
++		},
++		{
++			"unsigned long",
++			"const struct iovec *",
++			"unsigned long",
++		},
++	},
++	[146] = { 1, 3, 2, 0, "writev",
++		{
++			"fd",
++			"vec",
++			"vlen",
++		},
++		{
++			"unsigned long",
++			"const struct iovec *",
++			"unsigned long",
++		},
++	},
++	[147] = { 1, 1, 0, 0, "getsid",
++		{
++			"pid",
++		},
++		{
++			"pid_t",
++		},
++	},
++	[148] = { 1, 1, 0, 0, "fdatasync",
++		{
++			"fd",
++		},
++		{
++			"unsigned int",
++		},
++	},
++	[149] = { 1, 255, 0, 0, "_sysctl",
++		{
++			NULL,
++		},
++		{
++			NULL,
++		},
++	},
++	[150] = { 1, 2, 0, 0, "mlock",
++		{
++			"start",
++			"len",
++		},
++		{
++			"unsigned long",
++			"size_t",
++		},
++	},
++	[151] = { 1, 2, 0, 0, "munlock",
++		{
++			"start",
++			"len",
++		},
++		{
++			"unsigned long",
++			"size_t",
++		},
++	},
++	[152] = { 1, 1, 0, 0, "mlockall",
++		{
++			"flags",
++		},
++		{
++			"int",
++		},
++	},
++	[153] = { 1, 0, 0, 0, "munlockall",
++		{
++			NULL,
++		},
++		{
++			NULL,
++		},
++	},
++	[154] = { 1, 2, 2, 0, "sched_setparam",
++		{
++			"pid",
++			"param",
++		},
++		{
++			"pid_t",
++			"struct sched_param *",
++		},
++	},
++	[155] = { 1, 2, 2, 0, "sched_getparam",
++		{
++			"pid",
++			"param",
++		},
++		{
++			"pid_t",
++			"struct sched_param *",
++		},
++	},
++	[156] = { 1, 3, 4, 0, "sched_setscheduler",
++		{
++			"pid",
++			"policy",
++			"param",
++		},
++		{
++			"pid_t",
++			"int",
++			"struct sched_param *",
++		},
++	},
++	[157] = { 1, 1, 0, 0, "sched_getscheduler",
++		{
++			"pid",
++		},
++		{
++			"pid_t",
++		},
++	},
++	[158] = { 1, 0, 0, 0, "sched_yield",
++		{
++			NULL,
++		},
++		{
++			NULL,
++		},
++	},
++	[159] = { 1, 1, 0, 0, "sched_get_priority_max",
++		{
++			"policy",
++		},
++		{
++			"int",
++		},
++	},
++	[160] = { 1, 1, 0, 0, "sched_get_priority_min",
++		{
++			"policy",
++		},
++		{
++			"int",
++		},
++	},
++	[161] = { 1, 2, 2, 0, "sched_rr_get_interval",
++		{
++			"pid",
++			"interval",
++		},
++		{
++			"pid_t",
++			"struct old_timespec32 *",
++		},
++	},
++	[162] = { 1, 2, 3, 0, "nanosleep",
++		{
++			"rqtp",
++			"rmtp",
++		},
++		{
++			"struct old_timespec32 *",
++			"struct old_timespec32 *",
++		},
++	},
++	[163] = { 1, 5, 0, 0, "mremap",
++		{
++			"addr",
++			"old_len",
++			"new_len",
++			"flags",
++			"new_addr",
++		},
++		{
++			"unsigned long",
++			"unsigned long",
++			"unsigned long",
++			"unsigned long",
++			"unsigned long",
++		},
++	},
++	[164] = { 1, 3, 0, 0, "setresuid",
++		{
++			"ruid",
++			"euid",
++			"suid",
++		},
++		{
++			"old_uid_t",
++			"old_uid_t",
++			"old_uid_t",
++		},
++	},
++	[165] = { 1, 3, 7, 0, "getresuid",
++		{
++			"ruid",
++			"euid",
++			"suid",
++		},
++		{
++			"old_uid_t *",
++			"old_uid_t *",
++			"old_uid_t *",
++		},
++	},
++	[168] = { 1, 3, 1, 0, "poll",
++		{
++			"ufds",
++			"nfds",
++			"timeout",
++		},
++		{
++			"struct pollfd *",
++			"unsigned int",
++			"int",
++		},
++	},
++	[169] = { 1, 255, 0, 0, "nfsservctl",
++		{
++			NULL,
++		},
++		{
++			NULL,
++		},
++	},
++	[170] = { 1, 3, 0, 0, "setresgid",
++		{
++			"rgid",
++			"egid",
++			"sgid",
++		},
++		{
++			"old_gid_t",
++			"old_gid_t",
++			"old_gid_t",
++		},
++	},
++	[171] = { 1, 3, 7, 0, "getresgid",
++		{
++			"rgid",
++			"egid",
++			"sgid",
++		},
++		{
++			"old_gid_t *",
++			"old_gid_t *",
++			"old_gid_t *",
++		},
++	},
++	[172] = { 1, 5, 0, 0, "prctl",
++		{
++			"option",
++			"arg2",
++			"arg3",
++			"arg4",
++			"arg5",
++		},
++		{
++			"int",
++			"unsigned long",
++			"unsigned long",
++			"unsigned long",
++			"unsigned long",
++		},
++	},
++	[173] = { 1, 0, 0, 0, "rt_sigreturn",
++		{
++			NULL,
++		},
++		{
++			NULL,
++		},
++	},
++	[174] = { 1, 4, 6, 0, "rt_sigaction",
++		{
++			"sig",
++			"act",
++			"oact",
++			"sigsetsize",
++		},
++		{
++			"int",
++			"const struct sigaction *",
++			"struct sigaction *",
++			"size_t",
++		},
++	},
++	[175] = { 1, 4, 6, 0, "rt_sigprocmask",
++		{
++			"how",
++			"set",
++			"oset",
++			"sigsetsize",
++		},
++		{
++			"int",
++			"sigset_t *",
++			"sigset_t *",
++			"size_t",
++		},
++	},
++	[176] = { 1, 2, 1, 0, "rt_sigpending",
++		{
++			"set",
++			"sigsetsize",
++		},
++		{
++			"sigset_t *",
++			"size_t",
++		},
++	},
++	[177] = { 1, 4, 7, 0, "rt_sigtimedwait",
++		{
++			"uthese",
++			"uinfo",
++			"uts",
++			"sigsetsize",
++		},
++		{
++			"const sigset_t *",
++			"siginfo_t *",
++			"const struct old_timespec32 *",
++			"size_t",
++		},
++	},
++	[178] = { 1, 3, 4, 0, "rt_sigqueueinfo",
++		{
++			"pid",
++			"sig",
++			"uinfo",
++		},
++		{
++			"pid_t",
++			"int",
++			"siginfo_t *",
++		},
++	},
++	[179] = { 1, 2, 1, 0, "rt_sigsuspend",
++		{
++			"unewset",
++			"sigsetsize",
++		},
++		{
++			"sigset_t *",
++			"size_t",
++		},
++	},
++	[180] = { 1, 6, 2, 0, "pread64",
++		{
++			"fd",
++			"buf",
++			"count",
++			"pad",
++			"pos_lo",
++			"pos_hi",
++		},
++		{
++			"unsigned int",
++			"char *",
++			"size_t",
++			"u32",
++			"u32",
++			"u32",
++		},
++	},
++	[181] = { 1, 6, 2, 0, "pwrite64",
++		{
++			"fd",
++			"buf",
++			"count",
++			"pad",
++			"pos_lo",
++			"pos_hi",
++		},
++		{
++			"unsigned int",
++			"const char *",
++			"size_t",
++			"u32",
++			"u32",
++			"u32",
++		},
++	},
++	[182] = { 1, 3, 1, 1, "chown",
++		{
++			"filename",
++			"user",
++			"group",
++		},
++		{
++			"const char *",
++			"old_uid_t",
++			"old_gid_t",
++		},
++	},
++	[183] = { 1, 2, 1, 0, "getcwd",
++		{
++			"buf",
++			"size",
++		},
++		{
++			"char *",
++			"unsigned long",
++		},
++	},
++	[184] = { 1, 2, 3, 0, "capget",
++		{
++			"header",
++			"dataptr",
++		},
++		{
++			"cap_user_header_t",
++			"cap_user_data_t",
++		},
++	},
++	[185] = { 1, 2, 3, 0, "capset",
++		{
++			"header",
++			"data",
++		},
++		{
++			"cap_user_header_t",
++			"const cap_user_data_t",
++		},
++	},
++	[186] = { 1, 2, 3, 0, "sigaltstack",
++		{
++			"uss",
++			"uoss",
++		},
++		{
++			"const struct sigaltstack *",
++			"struct sigaltstack *",
++		},
++	},
++	[187] = { 1, 4, 4, 0, "sendfile",
++		{
++			"out_fd",
++			"in_fd",
++			"offset",
++			"count",
++		},
++		{
++			"int",
++			"int",
++			"off_t *",
++			"size_t",
++		},
++	},
++	[190] = { 1, 0, 0, 0, "vfork",
++		{
++			NULL,
++		},
++		{
++			NULL,
++		},
++	},
++	[191] = { 1, 2, 2, 0, "ugetrlimit",
++		{
++			"resource",
++			"rlim",
++		},
++		{
++			"unsigned int",
++			"struct rlimit *",
++		},
++	},
++	[192] = { 1, 6, 0, 0, "mmap2",
++		{
++			"addr",
++			"len",
++			"prot",
++			"flags",
++			"fd",
++			"pgoff",
++		},
++		{
++			"unsigned long",
++			"unsigned long",
++			"unsigned long",
++			"unsigned long",
++			"unsigned long",
++			"unsigned long",
++		},
++	},
++	[193] = { 1, 4, 1, 1, "truncate64",
++		{
++			"path",
++			"pad",
++			"length_lo",
++			"length_hi",
++		},
++		{
++			"const char *",
++			"u32",
++			"u32",
++			"u32",
++		},
++	},
++	[194] = { 1, 4, 0, 0, "ftruncate64",
++		{
++			"fd",
++			"pad",
++			"length_lo",
++			"length_hi",
++		},
++		{
++			"unsigned int",
++			"u32",
++			"u32",
++			"u32",
++		},
++	},
++	[195] = { 1, 2, 3, 1, "stat64",
++		{
++			"filename",
++			"statbuf",
++		},
++		{
++			"const char *",
++			"struct stat64 *",
++		},
++	},
++	[196] = { 1, 2, 3, 1, "lstat64",
++		{
++			"filename",
++			"statbuf",
++		},
++		{
++			"const char *",
++			"struct stat64 *",
++		},
++	},
++	[197] = { 1, 2, 2, 0, "fstat64",
++		{
++			"fd",
++			"statbuf",
++		},
++		{
++			"unsigned long",
++			"struct stat64 *",
++		},
++	},
++	[198] = { 1, 3, 1, 1, "lchown32",
++		{
++			"filename",
++			"user",
++			"group",
++		},
++		{
++			"const char *",
++			"uid_t",
++			"gid_t",
++		},
++	},
++	[199] = { 1, 0, 0, 0, "getuid32",
++		{
++			NULL,
++		},
++		{
++			NULL,
++		},
++	},
++	[200] = { 1, 0, 0, 0, "getgid32",
++		{
++			NULL,
++		},
++		{
++			NULL,
++		},
++	},
++	[201] = { 1, 0, 0, 0, "geteuid32",
++		{
++			NULL,
++		},
++		{
++			NULL,
++		},
++	},
++	[202] = { 1, 0, 0, 0, "getegid32",
++		{
++			NULL,
++		},
++		{
++			NULL,
++		},
++	},
++	[203] = { 1, 2, 0, 0, "setreuid32",
++		{
++			"ruid",
++			"euid",
++		},
++		{
++			"uid_t",
++			"uid_t",
++		},
++	},
++	[204] = { 1, 2, 0, 0, "setregid32",
++		{
++			"rgid",
++			"egid",
++		},
++		{
++			"gid_t",
++			"gid_t",
++		},
++	},
++	[205] = { 1, 2, 2, 0, "getgroups32",
++		{
++			"gidsetsize",
++			"grouplist",
++		},
++		{
++			"int",
++			"gid_t *",
++		},
++	},
++	[206] = { 1, 2, 2, 0, "setgroups32",
++		{
++			"gidsetsize",
++			"grouplist",
++		},
++		{
++			"int",
++			"gid_t *",
++		},
++	},
++	[207] = { 1, 3, 0, 0, "fchown32",
++		{
++			"fd",
++			"user",
++			"group",
++		},
++		{
++			"unsigned int",
++			"uid_t",
++			"gid_t",
++		},
++	},
++	[208] = { 1, 3, 0, 0, "setresuid32",
++		{
++			"ruid",
++			"euid",
++			"suid",
++		},
++		{
++			"uid_t",
++			"uid_t",
++			"uid_t",
++		},
++	},
++	[209] = { 1, 3, 7, 0, "getresuid32",
++		{
++			"ruid",
++			"euid",
++			"suid",
++		},
++		{
++			"uid_t *",
++			"uid_t *",
++			"uid_t *",
++		},
++	},
++	[210] = { 1, 3, 0, 0, "setresgid32",
++		{
++			"rgid",
++			"egid",
++			"sgid",
++		},
++		{
++			"gid_t",
++			"gid_t",
++			"gid_t",
++		},
++	},
++	[211] = { 1, 3, 7, 0, "getresgid32",
++		{
++			"rgid",
++			"egid",
++			"sgid",
++		},
++		{
++			"gid_t *",
++			"gid_t *",
++			"gid_t *",
++		},
++	},
++	[212] = { 1, 3, 1, 1, "chown32",
++		{
++			"filename",
++			"user",
++			"group",
++		},
++		{
++			"const char *",
++			"uid_t",
++			"gid_t",
++		},
++	},
++	[213] = { 1, 1, 0, 0, "setuid32",
++		{
++			"uid",
++		},
++		{
++			"uid_t",
++		},
++	},
++	[214] = { 1, 1, 0, 0, "setgid32",
++		{
++			"gid",
++		},
++		{
++			"gid_t",
++		},
++	},
++	[215] = { 1, 1, 0, 0, "setfsuid32",
++		{
++			"uid",
++		},
++		{
++			"uid_t",
++		},
++	},
++	[216] = { 1, 1, 0, 0, "setfsgid32",
++		{
++			"gid",
++		},
++		{
++			"gid_t",
++		},
++	},
++	[217] = { 1, 3, 2, 0, "getdents64",
++		{
++			"fd",
++			"dirent",
++			"count",
++		},
++		{
++			"unsigned int",
++			"struct linux_dirent64 *",
++			"unsigned int",
++		},
++	},
++	[218] = { 1, 2, 3, 0, "pivot_root",
++		{
++			"new_root",
++			"put_old",
++		},
++		{
++			"const char *",
++			"const char *",
++		},
++	},
++	[219] = { 1, 3, 4, 0, "mincore",
++		{
++			"start",
++			"len",
++			"vec",
++		},
++		{
++			"unsigned long",
++			"size_t",
++			"unsigned char *",
++		},
++	},
++	[220] = { 1, 3, 0, 0, "madvise",
++		{
++			"start",
++			"len",
++			"behavior",
++		},
++		{
++			"unsigned long",
++			"size_t",
++			"int",
++		},
++	},
++	[221] = { 1, 3, 0, 0, "fcntl64",
++		{
++			"fd",
++			"cmd",
++			"arg",
++		},
++		{
++			"unsigned int",
++			"unsigned int",
++			"unsigned long",
++		},
++	},
++	[224] = { 1, 0, 0, 0, "gettid",
++		{
++			NULL,
++		},
++		{
++			NULL,
++		},
++	},
++	[225] = { 1, 5, 0, 0, "readahead",
++		{
++			"fd",
++			"pad",
++			"offset_lo",
++			"offset_hi",
++			"count",
++		},
++		{
++			"int",
++			"u32",
++			"u32",
++			"u32",
++			"size_t",
++		},
++	},
++	[226] = { 1, 5, 7, 3, "setxattr",
++		{
++			"path",
++			"name",
++			"value",
++			"size",
++			"flags",
++		},
++		{
++			"const char *",
++			"const char *",
++			"const void *",
++			"size_t",
++			"int",
++		},
++	},
++	[227] = { 1, 5, 7, 3, "lsetxattr",
++		{
++			"path",
++			"name",
++			"value",
++			"size",
++			"flags",
++		},
++		{
++			"const char *",
++			"const char *",
++			"const void *",
++			"size_t",
++			"int",
++		},
++	},
++	[228] = { 1, 5, 6, 2, "fsetxattr",
++		{
++			"fd",
++			"name",
++			"value",
++			"size",
++			"flags",
++		},
++		{
++			"int",
++			"const char *",
++			"const void *",
++			"size_t",
++			"int",
++		},
++	},
++	[229] = { 1, 4, 7, 3, "getxattr",
++		{
++			"path",
++			"name",
++			"value",
++			"size",
++		},
++		{
++			"const char *",
++			"const char *",
++			"void *",
++			"size_t",
++		},
++	},
++	[230] = { 1, 4, 7, 3, "lgetxattr",
++		{
++			"path",
++			"name",
++			"value",
++			"size",
++		},
++		{
++			"const char *",
++			"const char *",
++			"void *",
++			"size_t",
++		},
++	},
++	[231] = { 1, 4, 6, 2, "fgetxattr",
++		{
++			"fd",
++			"name",
++			"value",
++			"size",
++		},
++		{
++			"int",
++			"const char *",
++			"void *",
++			"size_t",
++		},
++	},
++	[232] = { 1, 3, 3, 1, "listxattr",
++		{
++			"path",
++			"list",
++			"size",
++		},
++		{
++			"const char *",
++			"char *",
++			"size_t",
++		},
++	},
++	[233] = { 1, 3, 3, 1, "llistxattr",
++		{
++			"path",
++			"list",
++			"size",
++		},
++		{
++			"const char *",
++			"char *",
++			"size_t",
++		},
++	},
++	[234] = { 1, 3, 2, 0, "flistxattr",
++		{
++			"fd",
++			"list",
++			"size",
++		},
++		{
++			"int",
++			"char *",
++			"size_t",
++		},
++	},
++	[235] = { 1, 2, 3, 3, "removexattr",
++		{
++			"path",
++			"name",
++		},
++		{
++			"const char *",
++			"const char *",
++		},
++	},
++	[236] = { 1, 2, 3, 3, "lremovexattr",
++		{
++			"path",
++			"name",
++		},
++		{
++			"const char *",
++			"const char *",
++		},
++	},
++	[237] = { 1, 2, 2, 2, "fremovexattr",
++		{
++			"fd",
++			"name",
++		},
++		{
++			"int",
++			"const char *",
++		},
++	},
++	[238] = { 1, 2, 0, 0, "tkill",
++		{
++			"pid",
++			"sig",
++		},
++		{
++			"pid_t",
++			"int",
++		},
++	},
++	[239] = { 1, 4, 4, 0, "sendfile64",
++		{
++			"out_fd",
++			"in_fd",
++			"offset",
++			"count",
++		},
++		{
++			"int",
++			"int",
++			"loff_t *",
++			"size_t",
++		},
++	},
++	[240] = { 1, 6, 25, 0, "futex",
++		{
++			"uaddr",
++			"op",
++			"val",
++			"utime",
++			"uaddr2",
++			"val3",
++		},
++		{
++			"u32 *",
++			"int",
++			"u32",
++			"const struct old_timespec32 *",
++			"u32 *",
++			"u32",
++		},
++	},
++	[241] = { 1, 3, 4, 0, "sched_setaffinity",
++		{
++			"pid",
++			"len",
++			"user_mask_ptr",
++		},
++		{
++			"pid_t",
++			"unsigned int",
++			"unsigned long *",
++		},
++	},
++	[242] = { 1, 3, 4, 0, "sched_getaffinity",
++		{
++			"pid",
++			"len",
++			"user_mask_ptr",
++		},
++		{
++			"pid_t",
++			"unsigned int",
++			"unsigned long *",
++		},
++	},
++	[243] = { 1, 2, 2, 0, "io_setup",
++		{
++			"nr_reqs",
++			"ctx",
++		},
++		{
++			"unsigned int",
++			"aio_context_t *",
++		},
++	},
++	[244] = { 1, 1, 0, 0, "io_destroy",
++		{
++			"ctx",
++		},
++		{
++			"aio_context_t",
++		},
++	},
++	[245] = { 1, 5, 24, 0, "io_getevents",
++		{
++			"ctx_id",
++			"min_nr",
++			"nr",
++			"events",
++			"timeout",
++		},
++		{
++			"__u32",
++			"__s32",
++			"__s32",
++			"struct io_event *",
++			"struct old_timespec32 *",
++		},
++	},
++	[246] = { 1, 3, 4, 0, "io_submit",
++		{
++			"ctx_id",
++			"nr",
++			"iocbpp",
++		},
++		{
++			"aio_context_t",
++			"long",
++			"struct iocb **",
++		},
++	},
++	[247] = { 1, 3, 6, 0, "io_cancel",
++		{
++			"ctx_id",
++			"iocb",
++			"result",
++		},
++		{
++			"aio_context_t",
++			"struct iocb *",
++			"struct io_event *",
++		},
++	},
++	[248] = { 1, 1, 0, 0, "exit_group",
++		{
++			"error_code",
++		},
++		{
++			"int",
++		},
++	},
++	[249] = { 1, 255, 0, 0, "lookup_dcookie",
++		{
++			NULL,
++		},
++		{
++			NULL,
++		},
++	},
++	[250] = { 1, 1, 0, 0, "epoll_create",
++		{
++			"size",
++		},
++		{
++			"int",
++		},
++	},
++	[251] = { 1, 4, 8, 0, "epoll_ctl",
++		{
++			"epfd",
++			"op",
++			"fd",
++			"event",
++		},
++		{
++			"int",
++			"int",
++			"int",
++			"struct epoll_event *",
++		},
++	},
++	[252] = { 1, 4, 2, 0, "epoll_wait",
++		{
++			"epfd",
++			"events",
++			"maxevents",
++			"timeout",
++		},
++		{
++			"int",
++			"struct epoll_event *",
++			"int",
++			"int",
++		},
++	},
++	[253] = { 1, 5, 0, 0, "remap_file_pages",
++		{
++			"start",
++			"size",
++			"prot",
++			"pgoff",
++			"flags",
++		},
++		{
++			"unsigned long",
++			"unsigned long",
++			"unsigned long",
++			"unsigned long",
++			"unsigned long",
++		},
++	},
++	[256] = { 1, 1, 1, 0, "set_tid_address",
++		{
++			"tidptr",
++		},
++		{
++			"int *",
++		},
++	},
++	[257] = { 1, 3, 6, 0, "timer_create",
++		{
++			"which_clock",
++			"timer_event_spec",
++			"created_timer_id",
++		},
++		{
++			"clockid_t",
++			"struct sigevent *",
++			"timer_t *",
++		},
++	},
++	[258] = { 1, 4, 12, 0, "timer_settime",
++		{
++			"timer_id",
++			"flags",
++			"new",
++			"old",
++		},
++		{
++			"timer_t",
++			"int",
++			"struct old_itimerspec32 *",
++			"struct old_itimerspec32 *",
++		},
++	},
++	[259] = { 1, 2, 2, 0, "timer_gettime",
++		{
++			"timer_id",
++			"setting",
++		},
++		{
++			"timer_t",
++			"struct old_itimerspec32 *",
++		},
++	},
++	[260] = { 1, 1, 0, 0, "timer_getoverrun",
++		{
++			"timer_id",
++		},
++		{
++			"timer_t",
++		},
++	},
++	[261] = { 1, 1, 0, 0, "timer_delete",
++		{
++			"timer_id",
++		},
++		{
++			"timer_t",
++		},
++	},
++	[262] = { 1, 2, 2, 0, "clock_settime",
++		{
++			"which_clock",
++			"tp",
++		},
++		{
++			"clockid_t",
++			"struct old_timespec32 *",
++		},
++	},
++	[263] = { 1, 2, 2, 0, "clock_gettime",
++		{
++			"which_clock",
++			"tp",
++		},
++		{
++			"clockid_t",
++			"struct old_timespec32 *",
++		},
++	},
++	[264] = { 1, 2, 2, 0, "clock_getres",
++		{
++			"which_clock",
++			"tp",
++		},
++		{
++			"clockid_t",
++			"struct old_timespec32 *",
++		},
++	},
++	[265] = { 1, 4, 12, 0, "clock_nanosleep",
++		{
++			"which_clock",
++			"flags",
++			"rqtp",
++			"rmtp",
++		},
++		{
++			"clockid_t",
++			"int",
++			"struct old_timespec32 *",
++			"struct old_timespec32 *",
++		},
++	},
++	[266] = { 1, 3, 5, 1, "statfs64",
++		{
++			"pathname",
++			"sz",
++			"buf",
++		},
++		{
++			"const char *",
++			"size_t",
++			"struct statfs64 *",
++		},
++	},
++	[267] = { 1, 3, 4, 0, "fstatfs64",
++		{
++			"fd",
++			"sz",
++			"buf",
++		},
++		{
++			"unsigned int",
++			"size_t",
++			"struct statfs64 *",
++		},
++	},
++	[268] = { 1, 3, 0, 0, "tgkill",
++		{
++			"tgid",
++			"pid",
++			"sig",
++		},
++		{
++			"pid_t",
++			"pid_t",
++			"int",
++		},
++	},
++	[269] = { 1, 2, 3, 1, "utimes",
++		{
++			"filename",
++			"t",
++		},
++		{
++			"const char *",
++			"struct old_timeval32 *",
++		},
++	},
++	[270] = { 1, 6, 0, 0, "arm_fadvise64_64",
++		{
++			"fd",
++			"advice",
++			"offset_lo",
++			"offset_hi",
++			"len_lo",
++			"len_hi",
++		},
++		{
++			"int",
++			"int",
++			"u32",
++			"u32",
++			"u32",
++			"u32",
++		},
++	},
++	[271] = { 1, 3, 0, 0, "pciconfig_iobase",
++		{
++			"which",
++			"bus",
++			"devfn",
++		},
++		{
++			"long",
++			"unsigned long",
++			"unsigned long",
++		},
++	},
++	[272] = { 1, 5, 16, 0, "pciconfig_read",
++		{
++			"bus",
++			"dfn",
++			"off",
++			"len",
++			"buf",
++		},
++		{
++			"unsigned long",
++			"unsigned long",
++			"unsigned long",
++			"unsigned long",
++			"void *",
++		},
++	},
++	[273] = { 1, 5, 16, 0, "pciconfig_write",
++		{
++			"bus",
++			"dfn",
++			"off",
++			"len",
++			"buf",
++		},
++		{
++			"unsigned long",
++			"unsigned long",
++			"unsigned long",
++			"unsigned long",
++			"void *",
++		},
++	},
++	[274] = { 1, 4, 9, 1, "mq_open",
++		{
++			"name",
++			"oflag",
++			"mode",
++			"attr",
++		},
++		{
++			"const char *",
++			"int",
++			"umode_t",
++			"struct mq_attr *",
++		},
++	},
++	[275] = { 1, 1, 1, 1, "mq_unlink",
++		{
++			"name",
++		},
++		{
++			"const char *",
++		},
++	},
++	[276] = { 1, 5, 18, 0, "mq_timedsend",
++		{
++			"mqdes",
++			"u_msg_ptr",
++			"msg_len",
++			"msg_prio",
++			"u_abs_timeout",
++		},
++		{
++			"mqd_t",
++			"const char *",
++			"unsigned int",
++			"unsigned int",
++			"const struct old_timespec32 *",
++		},
++	},
++	[277] = { 1, 5, 26, 0, "mq_timedreceive",
++		{
++			"mqdes",
++			"u_msg_ptr",
++			"msg_len",
++			"u_msg_prio",
++			"u_abs_timeout",
++		},
++		{
++			"mqd_t",
++			"char *",
++			"unsigned int",
++			"unsigned int *",
++			"const struct old_timespec32 *",
++		},
++	},
++	[278] = { 1, 2, 2, 0, "mq_notify",
++		{
++			"mqdes",
++			"notification",
++		},
++		{
++			"mqd_t",
++			"const struct sigevent *",
++		},
++	},
++	[279] = { 1, 3, 6, 0, "mq_getsetattr",
++		{
++			"mqdes",
++			"mqstat",
++			"omqstat",
++		},
++		{
++			"mqd_t",
++			"const struct mq_attr *",
++			"struct mq_attr *",
++		},
++	},
++	[280] = { 1, 5, 20, 0, "waitid",
++		{
++			"which",
++			"pid",
++			"infop",
++			"options",
++			"ru",
++		},
++		{
++			"int",
++			"pid_t",
++			"struct siginfo *",
++			"int",
++			"struct rusage *",
++		},
++	},
++	[281] = { 1, 3, 0, 0, "socket",
++		{
++			"family",
++			"type",
++			"protocol",
++		},
++		{
++			"int",
++			"int",
++			"int",
++		},
++	},
++	[282] = { 1, 3, 2, 0, "bind",
++		{
++			"fd",
++			"umyaddr",
++			"addrlen",
++		},
++		{
++			"int",
++			"struct sockaddr *",
++			"int",
++		},
++	},
++	[283] = { 1, 3, 2, 0, "connect",
++		{
++			"fd",
++			"uservaddr",
++			"addrlen",
++		},
++		{
++			"int",
++			"struct sockaddr *",
++			"int",
++		},
++	},
++	[284] = { 1, 2, 0, 0, "listen",
++		{
++			"fd",
++			"backlog",
++		},
++		{
++			"int",
++			"int",
++		},
++	},
++	[285] = { 1, 3, 6, 0, "accept",
++		{
++			"fd",
++			"upeer_sockaddr",
++			"upeer_addrlen",
++		},
++		{
++			"int",
++			"struct sockaddr *",
++			"int *",
++		},
++	},
++	[286] = { 1, 3, 6, 0, "getsockname",
++		{
++			"fd",
++			"usockaddr",
++			"usockaddr_len",
++		},
++		{
++			"int",
++			"struct sockaddr *",
++			"int *",
++		},
++	},
++	[287] = { 1, 3, 6, 0, "getpeername",
++		{
++			"fd",
++			"usockaddr",
++			"usockaddr_len",
++		},
++		{
++			"int",
++			"struct sockaddr *",
++			"int *",
++		},
++	},
++	[288] = { 1, 4, 8, 0, "socketpair",
++		{
++			"family",
++			"type",
++			"protocol",
++			"usockvec",
++		},
++		{
++			"int",
++			"int",
++			"int",
++			"int *",
++		},
++	},
++	[289] = { 1, 4, 2, 0, "send",
++		{
++			"fd",
++			"buff",
++			"len",
++			"flags",
++		},
++		{
++			"int",
++			"void *",
++			"size_t",
++			"unsigned int",
++		},
++	},
++	[290] = { 1, 6, 18, 0, "sendto",
++		{
++			"fd",
++			"buff",
++			"len",
++			"flags",
++			"addr",
++			"addr_len",
++		},
++		{
++			"int",
++			"void *",
++			"size_t",
++			"unsigned int",
++			"struct sockaddr *",
++			"int",
++		},
++	},
++	[291] = { 1, 4, 2, 0, "recv",
++		{
++			"fd",
++			"ubuf",
++			"size",
++			"flags",
++		},
++		{
++			"int",
++			"void *",
++			"size_t",
++			"unsigned int",
++		},
++	},
++	[292] = { 1, 6, 50, 0, "recvfrom",
++		{
++			"fd",
++			"ubuf",
++			"size",
++			"flags",
++			"addr",
++			"addr_len",
++		},
++		{
++			"int",
++			"void *",
++			"size_t",
++			"unsigned int",
++			"struct sockaddr *",
++			"int *",
++		},
++	},
++	[293] = { 1, 2, 0, 0, "shutdown",
++		{
++			"fd",
++			"how",
++		},
++		{
++			"int",
++			"int",
++		},
++	},
++	[294] = { 1, 5, 8, 0, "setsockopt",
++		{
++			"fd",
++			"level",
++			"optname",
++			"optval",
++			"optlen",
++		},
++		{
++			"int",
++			"int",
++			"int",
++			"char *",
++			"int",
++		},
++	},
++	[295] = { 1, 5, 24, 0, "getsockopt",
++		{
++			"fd",
++			"level",
++			"optname",
++			"optval",
++			"optlen",
++		},
++		{
++			"int",
++			"int",
++			"int",
++			"char *",
++			"int *",
++		},
++	},
++	[296] = { 1, 3, 2, 0, "sendmsg",
++		{
++			"fd",
++			"msg",
++			"flags",
++		},
++		{
++			"int",
++			"struct user_msghdr *",
++			"unsigned int",
++		},
++	},
++	[297] = { 1, 3, 2, 0, "recvmsg",
++		{
++			"fd",
++			"msg",
++			"flags",
++		},
++		{
++			"int",
++			"struct user_msghdr *",
++			"unsigned int",
++		},
++	},
++	[298] = { 1, 3, 2, 0, "semop",
++		{
++			"semid",
++			"sops",
++			"nsops",
++		},
++		{
++			"int",
++			"struct sembuf *",
++			"unsigned int",
++		},
++	},
++	[299] = { 1, 3, 0, 0, "semget",
++		{
++			"key",
++			"nsems",
++			"semflg",
++		},
++		{
++			"key_t",
++			"int",
++			"int",
++		},
++	},
++	[300] = { 1, 4, 0, 0, "semctl",
++		{
++			"semid",
++			"semnum",
++			"cmd",
++			"arg",
++		},
++		{
++			"int",
++			"int",
++			"int",
++			"unsigned long",
++		},
++	},
++	[301] = { 1, 4, 2, 0, "msgsnd",
++		{
++			"msqid",
++			"msgp",
++			"msgsz",
++			"msgflg",
++		},
++		{
++			"int",
++			"struct msgbuf *",
++			"size_t",
++			"int",
++		},
++	},
++	[302] = { 1, 5, 2, 0, "msgrcv",
++		{
++			"msqid",
++			"msgp",
++			"msgsz",
++			"msgtyp",
++			"msgflg",
++		},
++		{
++			"int",
++			"struct msgbuf *",
++			"size_t",
++			"long",
++			"int",
++		},
++	},
++	[303] = { 1, 2, 0, 0, "msgget",
++		{
++			"key",
++			"msgflg",
++		},
++		{
++			"key_t",
++			"int",
++		},
++	},
++	[304] = { 1, 3, 4, 0, "msgctl",
++		{
++			"msqid",
++			"cmd",
++			"buf",
++		},
++		{
++			"int",
++			"int",
++			"struct msqid_ds *",
++		},
++	},
++	[305] = { 1, 3, 2, 0, "shmat",
++		{
++			"shmid",
++			"shmaddr",
++			"shmflg",
++		},
++		{
++			"int",
++			"char *",
++			"int",
++		},
++	},
++	[306] = { 1, 1, 1, 0, "shmdt",
++		{
++			"shmaddr",
++		},
++		{
++			"char *",
++		},
++	},
++	[307] = { 1, 3, 0, 0, "shmget",
++		{
++			"key",
++			"size",
++			"flag",
++		},
++		{
++			"key_t",
++			"size_t",
++			"int",
++		},
++	},
++	[308] = { 1, 3, 4, 0, "shmctl",
++		{
++			"shmid",
++			"cmd",
++			"buf",
++		},
++		{
++			"int",
++			"int",
++			"struct shmid_ds *",
++		},
++	},
++	[309] = { 1, 5, 7, 0, "add_key",
++		{
++			"_type",
++			"_description",
++			"_payload",
++			"plen",
++			"destringid",
++		},
++		{
++			"const char *",
++			"const char *",
++			"const void *",
++			"size_t",
++			"key_serial_t",
++		},
++	},
++	[310] = { 1, 4, 7, 0, "request_key",
++		{
++			"_type",
++			"_description",
++			"_callout_info",
++			"destringid",
++		},
++		{
++			"const char *",
++			"const char *",
++			"const char *",
++			"key_serial_t",
++		},
++	},
++	[311] = { 1, 5, 0, 0, "keyctl",
++		{
++			"cmd",
++			"arg2",
++			"arg3",
++			"arg4",
++			"arg5",
++		},
++		{
++			"int",
++			"unsigned long",
++			"unsigned long",
++			"unsigned long",
++			"unsigned long",
++		},
++	},
++	[312] = { 1, 4, 10, 0, "semtimedop",
++		{
++			"semid",
++			"sops",
++			"nsops",
++			"timeout",
++		},
++		{
++			"int",
++			"struct sembuf *",
++			"unsigned int",
++			"const struct old_timespec32 *",
++		},
++	},
++	[313] = { 1, 255, 0, 0, "vserver",
++		{
++			NULL,
++		},
++		{
++			NULL,
++		},
++	},
++	[314] = { 1, 3, 0, 0, "ioprio_set",
++		{
++			"which",
++			"who",
++			"ioprio",
++		},
++		{
++			"int",
++			"int",
++			"int",
++		},
++	},
++	[315] = { 1, 2, 0, 0, "ioprio_get",
++		{
++			"which",
++			"who",
++		},
++		{
++			"int",
++			"int",
++		},
++	},
++	[316] = { 1, 0, 0, 0, "inotify_init",
++		{
++			NULL,
++		},
++		{
++			NULL,
++		},
++	},
++	[317] = { 1, 3, 2, 2, "inotify_add_watch",
++		{
++			"fd",
++			"path",
++			"mask",
++		},
++		{
++			"int",
++			"const char *",
++			"u32",
++		},
++	},
++	[318] = { 1, 2, 0, 0, "inotify_rm_watch",
++		{
++			"fd",
++			"wd",
++		},
++		{
++			"int",
++			"__s32",
++		},
++	},
++	[319] = { 1, 6, 8, 0, "mbind",
++		{
++			"start",
++			"len",
++			"mode",
++			"nmask",
++			"maxnode",
++			"flags",
++		},
++		{
++			"unsigned long",
++			"unsigned long",
++			"unsigned long",
++			"const unsigned long *",
++			"unsigned long",
++			"unsigned int",
++		},
++	},
++	[320] = { 1, 5, 3, 0, "get_mempolicy",
++		{
++			"policy",
++			"nmask",
++			"maxnode",
++			"addr",
++			"flags",
++		},
++		{
++			"int *",
++			"unsigned long *",
++			"unsigned long",
++			"unsigned long",
++			"unsigned long",
++		},
++	},
++	[321] = { 1, 3, 2, 0, "set_mempolicy",
++		{
++			"mode",
++			"nmask",
++			"maxnode",
++		},
++		{
++			"int",
++			"const unsigned long *",
++			"unsigned long",
++		},
++	},
++	[322] = { 1, 4, 2, 2, "openat",
++		{
++			"dfd",
++			"filename",
++			"flags",
++			"mode",
++		},
++		{
++			"int",
++			"const char *",
++			"int",
++			"umode_t",
++		},
++	},
++	[323] = { 1, 3, 2, 2, "mkdirat",
++		{
++			"dfd",
++			"pathname",
++			"mode",
++		},
++		{
++			"int",
++			"const char *",
++			"umode_t",
++		},
++	},
++	[324] = { 1, 4, 2, 2, "mknodat",
++		{
++			"dfd",
++			"filename",
++			"mode",
++			"dev",
++		},
++		{
++			"int",
++			"const char *",
++			"umode_t",
++			"unsigned int",
++		},
++	},
++	[325] = { 1, 5, 2, 2, "fchownat",
++		{
++			"dfd",
++			"filename",
++			"user",
++			"group",
++			"flag",
++		},
++		{
++			"int",
++			"const char *",
++			"uid_t",
++			"gid_t",
++			"int",
++		},
++	},
++	[326] = { 1, 3, 6, 2, "futimesat",
++		{
++			"dfd",
++			"filename",
++			"t",
++		},
++		{
++			"unsigned int",
++			"const char *",
++			"struct old_timeval32 *",
++		},
++	},
++	[327] = { 1, 4, 6, 2, "fstatat64",
++		{
++			"dfd",
++			"filename",
++			"statbuf",
++			"flag",
++		},
++		{
++			"int",
++			"const char *",
++			"struct stat64 *",
++			"int",
++		},
++	},
++	[328] = { 1, 3, 2, 2, "unlinkat",
++		{
++			"dfd",
++			"pathname",
++			"flag",
++		},
++		{
++			"int",
++			"const char *",
++			"int",
++		},
++	},
++	[329] = { 1, 4, 10, 10, "renameat",
++		{
++			"olddfd",
++			"oldname",
++			"newdfd",
++			"newname",
++		},
++		{
++			"int",
++			"const char *",
++			"int",
++			"const char *",
++		},
++	},
++	[330] = { 1, 5, 10, 10, "linkat",
++		{
++			"olddfd",
++			"oldname",
++			"newdfd",
++			"newname",
++			"flags",
++		},
++		{
++			"int",
++			"const char *",
++			"int",
++			"const char *",
++			"int",
++		},
++	},
++	[331] = { 1, 3, 5, 5, "symlinkat",
++		{
++			"oldname",
++			"newdfd",
++			"newname",
++		},
++		{
++			"const char *",
++			"int",
++			"const char *",
++		},
++	},
++	[332] = { 1, 4, 6, 2, "readlinkat",
++		{
++			"dfd",
++			"path",
++			"buf",
++			"bufsiz",
++		},
++		{
++			"int",
++			"const char *",
++			"char *",
++			"int",
++		},
++	},
++	[333] = { 1, 3, 2, 2, "fchmodat",
++		{
++			"dfd",
++			"filename",
++			"mode",
++		},
++		{
++			"int",
++			"const char *",
++			"umode_t",
++		},
++	},
++	[334] = { 1, 3, 2, 2, "faccessat",
++		{
++			"dfd",
++			"filename",
++			"mode",
++		},
++		{
++			"int",
++			"const char *",
++			"int",
++		},
++	},
++	[335] = { 1, 6, 62, 0, "pselect6",
++		{
++			"n",
++			"inp",
++			"outp",
++			"exp",
++			"tsp",
++			"sig",
++		},
++		{
++			"int",
++			"fd_set *",
++			"fd_set *",
++			"fd_set *",
++			"struct old_timespec32 *",
++			"void *",
++		},
++	},
++	[336] = { 1, 5, 13, 0, "ppoll",
++		{
++			"ufds",
++			"nfds",
++			"tsp",
++			"sigmask",
++			"sigsetsize",
++		},
++		{
++			"struct pollfd *",
++			"unsigned int",
++			"struct old_timespec32 *",
++			"const sigset_t *",
++			"size_t",
++		},
++	},
++	[337] = { 1, 1, 0, 0, "unshare",
++		{
++			"unshare_flags",
++		},
++		{
++			"unsigned long",
++		},
++	},
++	[338] = { 1, 2, 1, 0, "set_robust_list",
++		{
++			"head",
++			"len",
++		},
++		{
++			"struct robust_list_head *",
++			"size_t",
++		},
++	},
++	[339] = { 1, 3, 6, 0, "get_robust_list",
++		{
++			"pid",
++			"head_ptr",
++			"len_ptr",
++		},
++		{
++			"int",
++			"struct robust_list_head **",
++			"size_t *",
++		},
++	},
++	[340] = { 1, 6, 10, 0, "splice",
++		{
++			"fd_in",
++			"off_in",
++			"fd_out",
++			"off_out",
++			"len",
++			"flags",
++		},
++		{
++			"int",
++			"loff_t *",
++			"int",
++			"loff_t *",
++			"size_t",
++			"unsigned int",
++		},
++	},
++	[341] = { 1, 6, 0, 0, "arm_sync_file_range",
++		{
++			"fd",
++			"flags",
++			"offset_lo",
++			"offset_hi",
++			"nbytes_lo",
++			"nbytes_hi",
++		},
++		{
++			"int",
++			"unsigned int",
++			"u32",
++			"u32",
++			"u32",
++			"u32",
++		},
++	},
++	[342] = { 1, 4, 0, 0, "tee",
++		{
++			"fdin",
++			"fdout",
++			"len",
++			"flags",
++		},
++		{
++			"int",
++			"int",
++			"size_t",
++			"unsigned int",
++		},
++	},
++	[343] = { 1, 4, 2, 0, "vmsplice",
++		{
++			"fd",
++			"iov",
++			"nr_segs",
++			"flags",
++		},
++		{
++			"int",
++			"const struct iovec *",
++			"unsigned long",
++			"unsigned int",
++		},
++	},
++	[344] = { 1, 6, 28, 0, "move_pages",
++		{
++			"pid",
++			"nr_pages",
++			"pages",
++			"nodes",
++			"status",
++			"flags",
++		},
++		{
++			"pid_t",
++			"unsigned long",
++			"const void **",
++			"const int *",
++			"int *",
++			"int",
++		},
++	},
++	[345] = { 1, 3, 7, 0, "getcpu",
++		{
++			"cpu",
++			"node",
++			"cache",
++		},
++		{
++			"unsigned int *",
++			"unsigned int *",
++			"struct getcpu_cache *",
++		},
++	},
++	[346] = { 1, 6, 18, 0, "epoll_pwait",
++		{
++			"epfd",
++			"events",
++			"maxevents",
++			"timeout",
++			"sigmask",
++			"sigsetsize",
++		},
++		{
++			"int",
++			"struct epoll_event *",
++			"int",
++			"int",
++			"const sigset_t *",
++			"size_t",
++		},
++	},
++	[347] = { 1, 4, 4, 0, "kexec_load",
++		{
++			"entry",
++			"nr_segments",
++			"segments",
++			"flags",
++		},
++		{
++			"unsigned long",
++			"unsigned long",
++			"struct kexec_segment *",
++			"unsigned long",
++		},
++	},
++	[348] = { 1, 4, 6, 2, "utimensat",
++		{
++			"dfd",
++			"filename",
++			"t",
++			"flags",
++		},
++		{
++			"unsigned int",
++			"const char *",
++			"struct old_timespec32 *",
++			"int",
++		},
++	},
++	[349] = { 1, 3, 2, 0, "signalfd",
++		{
++			"ufd",
++			"user_mask",
++			"sizemask",
++		},
++		{
++			"int",
++			"sigset_t *",
++			"size_t",
++		},
++	},
++	[350] = { 1, 2, 0, 0, "timerfd_create",
++		{
++			"clockid",
++			"flags",
++		},
++		{
++			"int",
++			"int",
++		},
++	},
++	[351] = { 1, 1, 0, 0, "eventfd",
++		{
++			"count",
++		},
++		{
++			"unsigned int",
++		},
++	},
++	[352] = { 1, 6, 0, 0, "fallocate",
++		{
++			"fd",
++			"mode",
++			"offset_lo",
++			"offset_hi",
++			"len_lo",
++			"len_hi",
++		},
++		{
++			"int",
++			"int",
++			"u32",
++			"u32",
++			"u32",
++			"u32",
++		},
++	},
++	[353] = { 1, 4, 12, 0, "timerfd_settime",
++		{
++			"ufd",
++			"flags",
++			"utmr",
++			"otmr",
++		},
++		{
++			"int",
++			"int",
++			"const struct old_itimerspec32 *",
++			"struct old_itimerspec32 *",
++		},
++	},
++	[354] = { 1, 2, 2, 0, "timerfd_gettime",
++		{
++			"ufd",
++			"otmr",
++		},
++		{
++			"int",
++			"struct old_itimerspec32 *",
++		},
++	},
++	[355] = { 1, 4, 2, 0, "signalfd4",
++		{
++			"ufd",
++			"user_mask",
++			"sizemask",
++			"flags",
++		},
++		{
++			"int",
++			"sigset_t *",
++			"size_t",
++			"int",
++		},
++	},
++	[356] = { 1, 2, 0, 0, "eventfd2",
++		{
++			"count",
++			"flags",
++		},
++		{
++			"unsigned int",
++			"int",
++		},
++	},
++	[357] = { 1, 1, 0, 0, "epoll_create1",
++		{
++			"flags",
++		},
++		{
++			"int",
++		},
++	},
++	[358] = { 1, 3, 0, 0, "dup3",
++		{
++			"oldfd",
++			"newfd",
++			"flags",
++		},
++		{
++			"unsigned int",
++			"unsigned int",
++			"int",
++		},
++	},
++	[359] = { 1, 2, 1, 0, "pipe2",
++		{
++			"fildes",
++			"flags",
++		},
++		{
++			"int *",
++			"int",
++		},
++	},
++	[360] = { 1, 1, 0, 0, "inotify_init1",
++		{
++			"flags",
++		},
++		{
++			"int",
++		},
++	},
++	[361] = { 1, 5, 2, 0, "preadv",
++		{
++			"fd",
++			"vec",
++			"vlen",
++			"pos_l",
++			"pos_h",
++		},
++		{
++			"unsigned long",
++			"const struct iovec *",
++			"unsigned long",
++			"unsigned long",
++			"unsigned long",
++		},
++	},
++	[362] = { 1, 5, 2, 0, "pwritev",
++		{
++			"fd",
++			"vec",
++			"vlen",
++			"pos_l",
++			"pos_h",
++		},
++		{
++			"unsigned long",
++			"const struct iovec *",
++			"unsigned long",
++			"unsigned long",
++			"unsigned long",
++		},
++	},
++	[363] = { 1, 4, 8, 0, "rt_tgsigqueueinfo",
++		{
++			"tgid",
++			"pid",
++			"sig",
++			"uinfo",
++		},
++		{
++			"pid_t",
++			"pid_t",
++			"int",
++			"siginfo_t *",
++		},
++	},
++	[364] = { 1, 5, 1, 0, "perf_event_open",
++		{
++			"attr_uptr",
++			"pid",
++			"cpu",
++			"group_fd",
++			"flags",
++		},
++		{
++			"struct perf_event_attr *",
++			"pid_t",
++			"int",
++			"int",
++			"unsigned long",
++		},
++	},
++	[365] = { 1, 5, 18, 0, "recvmmsg",
++		{
++			"fd",
++			"msg",
++			"vlen",
++			"flags",
++			"timeout",
++		},
++		{
++			"int",
++			"struct mmsghdr *",
++			"unsigned int",
++			"unsigned int",
++			"struct old_timespec32 *",
++		},
++	},
++	[366] = { 1, 4, 6, 0, "accept4",
++		{
++			"fd",
++			"upeer_sockaddr",
++			"upeer_addrlen",
++			"flags",
++		},
++		{
++			"int",
++			"struct sockaddr *",
++			"int *",
++			"int",
++		},
++	},
++	[367] = { 1, 2, 0, 0, "fanotify_init",
++		{
++			"flags",
++			"event_f_flags",
++		},
++		{
++			"unsigned int",
++			"unsigned int",
++		},
++	},
++	[368] = { 1, 6, 32, 32, "fanotify_mark",
++		{
++			"fanotify_fd",
++			"flags",
++			"mask_lo",
++			"mask_hi",
++			"fd",
++			"pathname",
++		},
++		{
++			"int",
++			"unsigned int",
++			"u32",
++			"u32",
++			"int",
++			"const char *",
++		},
++	},
++	[369] = { 1, 4, 12, 0, "prlimit64",
++		{
++			"pid",
++			"resource",
++			"new_rlim",
++			"old_rlim",
++		},
++		{
++			"pid_t",
++			"unsigned int",
++			"const struct rlimit64 *",
++			"struct rlimit64 *",
++		},
++	},
++	[370] = { 1, 5, 14, 2, "name_to_handle_at",
++		{
++			"dfd",
++			"name",
++			"handle",
++			"mnt_id",
++			"flag",
++		},
++		{
++			"int",
++			"const char *",
++			"struct file_handle *",
++			"void *",
++			"int",
++		},
++	},
++	[371] = { 1, 3, 2, 0, "open_by_handle_at",
++		{
++			"mountdirfd",
++			"handle",
++			"flags",
++		},
++		{
++			"int",
++			"struct file_handle *",
++			"int",
++		},
++	},
++	[372] = { 1, 2, 2, 0, "clock_adjtime",
++		{
++			"which_clock",
++			"tx",
++		},
++		{
++			"clockid_t",
++			"struct old_timex32 *",
++		},
++	},
++	[373] = { 1, 1, 0, 0, "syncfs",
++		{
++			"fd",
++		},
++		{
++			"int",
++		},
++	},
++	[374] = { 1, 4, 2, 0, "sendmmsg",
++		{
++			"fd",
++			"msg",
++			"vlen",
++			"flags",
++		},
++		{
++			"int",
++			"struct mmsghdr *",
++			"unsigned int",
++			"unsigned int",
++		},
++	},
++	[375] = { 1, 2, 0, 0, "setns",
++		{
++			"fd",
++			"nstype",
++		},
++		{
++			"int",
++			"int",
++		},
++	},
++	[376] = { 1, 6, 10, 0, "process_vm_readv",
++		{
++			"pid",
++			"lvec",
++			"liovcnt",
++			"rvec",
++			"riovcnt",
++			"flags",
++		},
++		{
++			"pid_t",
++			"const struct iovec *",
++			"unsigned long",
++			"const struct iovec *",
++			"unsigned long",
++			"unsigned long",
++		},
++	},
++	[377] = { 1, 6, 10, 0, "process_vm_writev",
++		{
++			"pid",
++			"lvec",
++			"liovcnt",
++			"rvec",
++			"riovcnt",
++			"flags",
++		},
++		{
++			"pid_t",
++			"const struct iovec *",
++			"unsigned long",
++			"const struct iovec *",
++			"unsigned long",
++			"unsigned long",
++		},
++	},
++	[378] = { 1, 5, 0, 0, "kcmp",
++		{
++			"pid1",
++			"pid2",
++			"type",
++			"idx1",
++			"idx2",
++		},
++		{
++			"pid_t",
++			"pid_t",
++			"int",
++			"unsigned long",
++			"unsigned long",
++		},
++	},
++	[379] = { 1, 3, 2, 0, "finit_module",
++		{
++			"fd",
++			"uargs",
++			"flags",
++		},
++		{
++			"int",
++			"const char *",
++			"int",
++		},
++	},
++	[380] = { 1, 3, 2, 0, "sched_setattr",
++		{
++			"pid",
++			"attr",
++			"flags",
++		},
++		{
++			"pid_t",
++			"struct sched_attr *",
++			"unsigned int",
++		},
++	},
++	[381] = { 1, 4, 2, 0, "sched_getattr",
++		{
++			"pid",
++			"attr",
++			"size",
++			"flags",
++		},
++		{
++			"pid_t",
++			"struct sched_attr *",
++			"unsigned int",
++			"unsigned int",
++		},
++	},
++	[382] = { 1, 5, 10, 10, "renameat2",
++		{
++			"olddfd",
++			"oldname",
++			"newdfd",
++			"newname",
++			"flags",
++		},
++		{
++			"int",
++			"const char *",
++			"int",
++			"const char *",
++			"unsigned int",
++		},
++	},
++	[383] = { 1, 3, 4, 0, "seccomp",
++		{
++			"op",
++			"flags",
++			"uargs",
++		},
++		{
++			"unsigned int",
++			"unsigned int",
++			"void *",
++		},
++	},
++	[384] = { 1, 3, 1, 0, "getrandom",
++		{
++			"buf",
++			"count",
++			"flags",
++		},
++		{
++			"char *",
++			"size_t",
++			"unsigned int",
++		},
++	},
++	[385] = { 1, 2, 1, 0, "memfd_create",
++		{
++			"uname_ptr",
++			"flags",
++		},
++		{
++			"const char *",
++			"unsigned int",
++		},
++	},
++	[386] = { 1, 3, 2, 0, "bpf",
++		{
++			"cmd",
++			"attr",
++			"size",
++		},
++		{
++			"int",
++			"union bpf_attr *",
++			"unsigned int",
++		},
++	},
++	[387] = { 1, 5, 14, 2, "execveat",
++		{
++			"dfd",
++			"filename",
++			"argv",
++			"envp",
++			"flags",
++		},
++		{
++			"int",
++			"const char *",
++			"const char *const *",
++			"const char *const *",
++			"int",
++		},
++	},
++	[388] = { 1, 1, 0, 0, "userfaultfd",
++		{
++			"flags",
++		},
++		{
++			"int",
++		},
++	},
++	[389] = { 1, 3, 0, 0, "membarrier",
++		{
++			"cmd",
++			"flags",
++			"cpu_id",
++		},
++		{
++			"int",
++			"unsigned int",
++			"int",
++		},
++	},
++	[390] = { 1, 3, 0, 0, "mlock2",
++		{
++			"start",
++			"len",
++			"flags",
++		},
++		{
++			"unsigned long",
++			"size_t",
++			"int",
++		},
++	},
++	[391] = { 1, 6, 10, 0, "copy_file_range",
++		{
++			"fd_in",
++			"off_in",
++			"fd_out",
++			"off_out",
++			"len",
++			"flags",
++		},
++		{
++			"int",
++			"loff_t *",
++			"int",
++			"loff_t *",
++			"size_t",
++			"unsigned int",
++		},
++	},
++	[392] = { 1, 6, 2, 0, "preadv2",
++		{
++			"fd",
++			"vec",
++			"vlen",
++			"pos_l",
++			"pos_h",
++			"flags",
++		},
++		{
++			"unsigned long",
++			"const struct iovec *",
++			"unsigned long",
++			"unsigned long",
++			"unsigned long",
++			"rwf_t",
++		},
++	},
++	[393] = { 1, 6, 2, 0, "pwritev2",
++		{
++			"fd",
++			"vec",
++			"vlen",
++			"pos_l",
++			"pos_h",
++			"flags",
++		},
++		{
++			"unsigned long",
++			"const struct iovec *",
++			"unsigned long",
++			"unsigned long",
++			"unsigned long",
++			"rwf_t",
++		},
++	},
++	[394] = { 1, 4, 0, 0, "pkey_mprotect",
++		{
++			"start",
++			"len",
++			"prot",
++			"pkey",
++		},
++		{
++			"unsigned long",
++			"size_t",
++			"unsigned long",
++			"int",
++		},
++	},
++	[395] = { 1, 2, 0, 0, "pkey_alloc",
++		{
++			"flags",
++			"init_val",
++		},
++		{
++			"unsigned long",
++			"unsigned long",
++		},
++	},
++	[396] = { 1, 1, 0, 0, "pkey_free",
++		{
++			"pkey",
++		},
++		{
++			"int",
++		},
++	},
++	[397] = { 1, 5, 18, 2, "statx",
++		{
++			"dfd",
++			"path",
++			"flags",
++			"mask",
++			"buffer",
++		},
++		{
++			"int",
++			"const char *",
++			"unsigned int",
++			"unsigned int",
++			"struct statx *",
++		},
++	},
++	[398] = { 1, 4, 1, 0, "rseq",
++		{
++			"rseq",
++			"rseq_len",
++			"flags",
++			"sig",
++		},
++		{
++			"struct rseq *",
++			"uint32_t",
++			"int",
++			"uint32_t",
++		},
++	},
++	[399] = { 1, 6, 56, 0, "io_pgetevents",
++		{
++			"ctx_id",
++			"min_nr",
++			"nr",
++			"events",
++			"timeout",
++			"sig",
++		},
++		{
++			"aio_context_t",
++			"long",
++			"long",
++			"struct io_event *",
++			"struct old_timespec32 *",
++			"const struct __aio_sigset *",
++		},
++	},
++	[400] = { 1, 4, 12, 0, "migrate_pages",
++		{
++			"pid",
++			"maxnode",
++			"from",
++			"to",
++		},
++		{
++			"pid_t",
++			"unsigned long",
++			"const unsigned long *",
++			"const unsigned long *",
++		},
++	},
++	[401] = { 1, 5, 8, 0, "kexec_file_load",
++		{
++			"kernel_fd",
++			"initrd_fd",
++			"cmdline_len",
++			"cmdline_ptr",
++			"flags",
++		},
++		{
++			"int",
++			"int",
++			"unsigned long",
++			"const char *",
++			"unsigned long",
++		},
++	},
++	[403] = { 1, 2, 2, 0, "clock_gettime64",
++		{
++			"which_clock",
++			"tp",
++		},
++		{
++			"clockid_t",
++			"struct __kernel_timespec *",
++		},
++	},
++	[404] = { 1, 2, 2, 0, "clock_settime64",
++		{
++			"which_clock",
++			"tp",
++		},
++		{
++			"clockid_t",
++			"const struct __kernel_timespec *",
++		},
++	},
++	[405] = { 1, 2, 2, 0, "clock_adjtime64",
++		{
++			"which_clock",
++			"tx",
++		},
++		{
++			"clockid_t",
++			"struct __kernel_timex *",
++		},
++	},
++	[406] = { 1, 2, 2, 0, "clock_getres_time64",
++		{
++			"which_clock",
++			"tp",
++		},
++		{
++			"clockid_t",
++			"struct __kernel_timespec *",
++		},
++	},
++	[407] = { 1, 4, 12, 0, "clock_nanosleep_time64",
++		{
++			"which_clock",
++			"flags",
++			"rqtp",
++			"rmtp",
++		},
++		{
++			"clockid_t",
++			"int",
++			"const struct __kernel_timespec *",
++			"struct __kernel_timespec *",
++		},
++	},
++	[408] = { 1, 2, 2, 0, "timer_gettime64",
++		{
++			"timer_id",
++			"setting",
++		},
++		{
++			"timer_t",
++			"struct __kernel_itimerspec *",
++		},
++	},
++	[409] = { 1, 4, 12, 0, "timer_settime64",
++		{
++			"timer_id",
++			"flags",
++			"new_setting",
++			"old_setting",
++		},
++		{
++			"timer_t",
++			"int",
++			"const struct __kernel_itimerspec *",
++			"struct __kernel_itimerspec *",
++		},
++	},
++	[410] = { 1, 2, 2, 0, "timerfd_gettime64",
++		{
++			"ufd",
++			"otmr",
++		},
++		{
++			"int",
++			"struct __kernel_itimerspec *",
++		},
++	},
++	[411] = { 1, 4, 12, 0, "timerfd_settime64",
++		{
++			"ufd",
++			"flags",
++			"utmr",
++			"otmr",
++		},
++		{
++			"int",
++			"int",
++			"const struct __kernel_itimerspec *",
++			"struct __kernel_itimerspec *",
++		},
++	},
++	[412] = { 1, 4, 6, 2, "utimensat_time64",
++		{
++			"dfd",
++			"filename",
++			"utimes",
++			"flags",
++		},
++		{
++			"int",
++			"const char *",
++			"struct __kernel_timespec *",
++			"int",
++		},
++	},
++	[413] = { 1, 6, 62, 0, "pselect6_time64",
++		{
++			"n",
++			"inp",
++			"outp",
++			"exp",
++			"tsp",
++			"sig",
++		},
++		{
++			"int",
++			"fd_set *",
++			"fd_set *",
++			"fd_set *",
++			"struct __kernel_timespec *",
++			"void *",
++		},
++	},
++	[414] = { 1, 5, 13, 0, "ppoll_time64",
++		{
++			"ufds",
++			"nfds",
++			"tsp",
++			"sigmask",
++			"sigsetsize",
++		},
++		{
++			"struct pollfd *",
++			"unsigned int",
++			"struct __kernel_timespec *",
++			"const sigset_t *",
++			"size_t",
++		},
++	},
++	[416] = { 1, 6, 56, 0, "io_pgetevents_time64",
++		{
++			"ctx_id",
++			"min_nr",
++			"nr",
++			"events",
++			"timeout",
++			"sig",
++		},
++		{
++			"aio_context_t",
++			"long",
++			"long",
++			"struct io_event *",
++			"struct __kernel_timespec *",
++			"const struct __aio_sigset *",
++		},
++	},
++	[417] = { 1, 5, 18, 0, "recvmmsg_time64",
++		{
++			"fd",
++			"msg",
++			"vlen",
++			"flags",
++			"timeout",
++		},
++		{
++			"int",
++			"struct mmsghdr *",
++			"unsigned int",
++			"unsigned int",
++			"struct __kernel_timespec *",
++		},
++	},
++	[418] = { 1, 5, 18, 0, "mq_timedsend_time64",
++		{
++			"mqdes",
++			"msg_ptr",
++			"msg_len",
++			"msg_prio",
++			"abs_timeout",
++		},
++		{
++			"mqd_t",
++			"const char *",
++			"size_t",
++			"unsigned int",
++			"const struct __kernel_timespec *",
++		},
++	},
++	[419] = { 1, 5, 26, 0, "mq_timedreceive_time64",
++		{
++			"mqdes",
++			"msg_ptr",
++			"msg_len",
++			"msg_prio",
++			"abs_timeout",
++		},
++		{
++			"mqd_t",
++			"char *",
++			"size_t",
++			"unsigned int *",
++			"const struct __kernel_timespec *",
++		},
++	},
++	[420] = { 1, 4, 10, 0, "semtimedop_time64",
++		{
++			"semid",
++			"sops",
++			"nsops",
++			"timeout",
++		},
++		{
++			"int",
++			"struct sembuf *",
++			"unsigned int",
++			"const struct __kernel_timespec *",
++		},
++	},
++	[421] = { 1, 4, 7, 0, "rt_sigtimedwait_time64",
++		{
++			"uthese",
++			"uinfo",
++			"uts",
++			"sigsetsize",
++		},
++		{
++			"const sigset_t *",
++			"siginfo_t *",
++			"const struct __kernel_timespec *",
++			"size_t",
++		},
++	},
++	[422] = { 1, 6, 25, 0, "futex_time64",
++		{
++			"uaddr",
++			"op",
++			"val",
++			"utime",
++			"uaddr2",
++			"val3",
++		},
++		{
++			"u32 *",
++			"int",
++			"u32",
++			"const struct __kernel_timespec *",
++			"u32 *",
++			"u32",
++		},
++	},
++	[423] = { 1, 2, 2, 0, "sched_rr_get_interval_time64",
++		{
++			"pid",
++			"interval",
++		},
++		{
++			"pid_t",
++			"struct __kernel_timespec *",
++		},
++	},
++	[424] = { 1, 4, 4, 0, "pidfd_send_signal",
++		{
++			"pidfd",
++			"sig",
++			"info",
++			"flags",
++		},
++		{
++			"int",
++			"int",
++			"siginfo_t *",
++			"unsigned int",
++		},
++	},
++	[425] = { 1, 2, 2, 0, "io_uring_setup",
++		{
++			"entries",
++			"p",
++		},
++		{
++			"u32",
++			"struct io_uring_params *",
++		},
++	},
++	[426] = { 1, 6, 16, 0, "io_uring_enter",
++		{
++			"fd",
++			"to_submit",
++			"min_complete",
++			"flags",
++			"argp",
++			"argsz",
++		},
++		{
++			"unsigned int",
++			"u32",
++			"u32",
++			"u32",
++			"const void *",
++			"size_t",
++		},
++	},
++	[427] = { 1, 4, 4, 0, "io_uring_register",
++		{
++			"fd",
++			"op",
++			"arg",
++			"nr_args",
++		},
++		{
++			"unsigned int",
++			"unsigned int",
++			"void *",
++			"unsigned int",
++		},
++	},
++	[428] = { 1, 3, 2, 2, "open_tree",
++		{
++			"dfd",
++			"path",
++			"flags",
++		},
++		{
++			"int",
++			"const char *",
++			"unsigned int",
++		},
++	},
++	[429] = { 1, 5, 10, 0, "move_mount",
++		{
++			"from_dfd",
++			"from_path",
++			"to_dfd",
++			"to_path",
++			"ms_flags",
++		},
++		{
++			"int",
++			"const char *",
++			"int",
++			"const char *",
++			"unsigned int",
++		},
++	},
++	[430] = { 1, 2, 1, 0, "fsopen",
++		{
++			"fs_name",
++			"flags",
++		},
++		{
++			"const char *",
++			"unsigned int",
++		},
++	},
++	[431] = { 1, 5, 12, 0, "fsconfig",
++		{
++			"fs_fd",
++			"cmd",
++			"key",
++			"value",
++			"aux",
++		},
++		{
++			"int",
++			"unsigned int",
++			"const char *",
++			"const void *",
++			"int",
++		},
++	},
++	[432] = { 1, 3, 0, 0, "fsmount",
++		{
++			"fs_fd",
++			"flags",
++			"ms_flags",
++		},
++		{
++			"int",
++			"unsigned int",
++			"unsigned int",
++		},
++	},
++	[433] = { 1, 3, 2, 2, "fspick",
++		{
++			"dfd",
++			"path",
++			"flags",
++		},
++		{
++			"int",
++			"const char *",
++			"unsigned int",
++		},
++	},
++	[434] = { 1, 2, 0, 0, "pidfd_open",
++		{
++			"pid",
++			"flags",
++		},
++		{
++			"pid_t",
++			"unsigned int",
++		},
++	},
++	[435] = { 1, 2, 1, 0, "clone3",
++		{
++			"uargs",
++			"size",
++		},
++		{
++			"struct clone_args *",
++			"size_t",
++		},
++	},
++	[436] = { 1, 3, 0, 0, "close_range",
++		{
++			"fd",
++			"max_fd",
++			"flags",
++		},
++		{
++			"unsigned int",
++			"unsigned int",
++			"unsigned int",
++		},
++	},
++	[437] = { 1, 4, 6, 2, "openat2",
++		{
++			"dfd",
++			"filename",
++			"how",
++			"size",
++		},
++		{
++			"int",
++			"const char *",
++			"struct open_how *",
++			"size_t",
++		},
++	},
++	[438] = { 1, 3, 0, 0, "pidfd_getfd",
++		{
++			"pidfd",
++			"fd",
++			"flags",
++		},
++		{
++			"int",
++			"int",
++			"unsigned int",
++		},
++	},
++	[439] = { 1, 4, 2, 2, "faccessat2",
++		{
++			"dfd",
++			"filename",
++			"mode",
++			"flags",
++		},
++		{
++			"int",
++			"const char *",
++			"int",
++			"int",
++		},
++	},
++	[440] = { 1, 5, 2, 0, "process_madvise",
++		{
++			"pidfd",
++			"vec",
++			"vlen",
++			"behavior",
++			"flags",
++		},
++		{
++			"int",
++			"const struct iovec *",
++			"size_t",
++			"int",
++			"unsigned int",
++		},
++	},
++	[441] = { 1, 6, 26, 0, "epoll_pwait2",
++		{
++			"epfd",
++			"events",
++			"maxevents",
++			"timeout",
++			"sigmask",
++			"sigsetsize",
++		},
++		{
++			"int",
++			"struct epoll_event *",
++			"int",
++			"const struct __kernel_timespec *",
++			"const sigset_t *",
++			"size_t",
++		},
++	},
++	[442] = { 1, 5, 10, 2, "mount_setattr",
++		{
++			"dfd",
++			"path",
++			"flags",
++			"uattr",
++			"usize",
++		},
++		{
++			"int",
++			"const char *",
++			"unsigned int",
++			"struct mount_attr *",
++			"size_t",
++		},
++	},
++	[443] = { 1, 4, 8, 0, "quotactl_fd",
++		{
++			"fd",
++			"cmd",
++			"id",
++			"addr",
++		},
++		{
++			"unsigned int",
++			"unsigned int",
++			"qid_t",
++			"void *",
++		},
++	},
++	[444] = { 1, 3, 1, 0, "landlock_create_ruleset",
++		{
++			"attr",
++			"size",
++			"flags",
++		},
++		{
++			"const struct landlock_ruleset_attr *",
++			"size_t",
++			"__u32",
++		},
++	},
++	[445] = { 1, 4, 4, 0, "landlock_add_rule",
++		{
++			"ruleset_fd",
++			"rule_type",
++			"rule_attr",
++			"flags",
++		},
++		{
++			"int",
++			"enum landlock_rule_type",
++			"const void *",
++			"__u32",
++		},
++	},
++	[446] = { 1, 2, 0, 0, "landlock_restrict_self",
++		{
++			"ruleset_fd",
++			"flags",
++		},
++		{
++			"int",
++			"__u32",
++		},
++	},
++	[448] = { 1, 2, 0, 0, "process_mrelease",
++		{
++			"pidfd",
++			"flags",
++		},
++		{
++			"int",
++			"unsigned int",
++		},
++	},
++	[449] = { 1, 5, 9, 0, "futex_waitv",
++		{
++			"waiters",
++			"nr_futexes",
++			"flags",
++			"timeout",
++			"clockid",
++		},
++		{
++			"struct futex_waitv *",
++			"unsigned int",
++			"unsigned int",
++			"struct __kernel_timespec *",
++			"clockid_t",
++		},
++	},
++	[450] = { 1, 4, 0, 0, "set_mempolicy_home_node",
++		{
++			"start",
++			"len",
++			"home_node",
++			"flags",
++		},
++		{
++			"unsigned long",
++			"unsigned long",
++			"unsigned long",
++			"unsigned long",
++		},
++	},
++	[451] = { 1, 4, 6, 0, "cachestat",
++		{
++			"fd",
++			"cstat_range",
++			"cstat",
++			"flags",
++		},
++		{
++			"unsigned int",
++			"struct cachestat_range *",
++			"struct cachestat *",
++			"unsigned int",
++		},
++	},
++	[452] = { 1, 4, 2, 2, "fchmodat2",
++		{
++			"dfd",
++			"filename",
++			"mode",
++			"flags",
++		},
++		{
++			"int",
++			"const char *",
++			"umode_t",
++			"unsigned int",
++		},
++	},
++	[453] = { 1, 3, 0, 0, "map_shadow_stack",
++		{
++			"addr",
++			"size",
++			"flags",
++		},
++		{
++			"unsigned long",
++			"unsigned long",
++			"unsigned int",
++		},
++	},
++	[454] = { 1, 4, 1, 0, "futex_wake",
++		{
++			"uaddr",
++			"mask",
++			"nr",
++			"flags",
++		},
++		{
++			"void *",
++			"unsigned long",
++			"int",
++			"unsigned int",
++		},
++	},
++	[455] = { 1, 6, 17, 0, "futex_wait",
++		{
++			"uaddr",
++			"val",
++			"mask",
++			"flags",
++			"timespec",
++			"clockid",
++		},
++		{
++			"void *",
++			"unsigned long",
++			"unsigned long",
++			"unsigned int",
++			"struct __kernel_timespec *",
++			"clockid_t",
++		},
++	},
++	[456] = { 1, 4, 1, 0, "futex_requeue",
++		{
++			"waiters",
++			"flags",
++			"nr_wake",
++			"nr_requeue",
++		},
++		{
++			"struct futex_waitv *",
++			"unsigned int",
++			"int",
++			"int",
++		},
++	},
++	[457] = { 1, 4, 3, 0, "statmount",
++		{
++			"req",
++			"buf",
++			"bufsize",
++			"flags",
++		},
++		{
++			"const struct mnt_id_req *",
++			"struct statmount *",
++			"size_t",
++			"unsigned int",
++		},
++	},
++	[458] = { 1, 4, 3, 0, "listmount",
++		{
++			"req",
++			"mnt_ids",
++			"nr_mnt_ids",
++			"flags",
++		},
++		{
++			"const struct mnt_id_req *",
++			"u64 *",
++			"size_t",
++			"unsigned int",
++		},
++	},
++	[459] = { 1, 4, 6, 0, "lsm_get_self_attr",
++		{
++			"attr",
++			"ctx",
++			"size",
++			"flags",
++		},
++		{
++			"unsigned int",
++			"struct lsm_ctx *",
++			"u32 *",
++			"u32",
++		},
++	},
++	[460] = { 1, 4, 2, 0, "lsm_set_self_attr",
++		{
++			"attr",
++			"ctx",
++			"size",
++			"flags",
++		},
++		{
++			"unsigned int",
++			"struct lsm_ctx *",
++			"u32",
++			"u32",
++		},
++	},
++	[461] = { 1, 3, 3, 0, "lsm_list_modules",
++		{
++			"ids",
++			"size",
++			"flags",
++		},
++		{
++			"u64 *",
++			"u32 *",
++			"u32",
++		},
++	},
++	[462] = { 1, 3, 0, 0, "mseal",
++		{
++			"start",
++			"len",
++			"flags",
++		},
++		{
++			"unsigned long",
++			"size_t",
++			"unsigned long",
++		},
++	},
++};
++/* Each call's native counterpart (number + 1; 0: none, recorded by its
++ * registers only) and the arguments of 32-bit signed types. */
++struct ant_compat_syscall {
++	u16 native;
++	u8 signed_mask;
++};
++static const struct ant_compat_syscall ant_compat_natives[463] = {
++	[0] = { 129, 0 },
++	[1] = { 94, 1 },
++	[3] = { 64, 0 },
++	[4] = { 65, 0 },
++	[5] = { 0, 2 },
++	[6] = { 58, 0 },
++	[11] = { 222, 0 },
++	[12] = { 50, 0 },
++	[19] = { 63, 2 },
++	[20] = { 173, 0 },
++	[21] = { 41, 0 },
++	[23] = { 147, 0 },
++	[24] = { 175, 0 },
++	[26] = { 0, 3 },
++	[33] = { 0, 2 },
++	[34] = { 0, 1 },
++	[36] = { 82, 0 },
++	[37] = { 130, 3 },
++	[41] = { 24, 0 },
++	[45] = { 215, 0 },
++	[46] = { 145, 0 },
++	[47] = { 177, 0 },
++	[49] = { 176, 0 },
++	[50] = { 178, 0 },
++	[51] = { 90, 0 },
++	[52] = { 40, 2 },
++	[57] = { 155, 3 },
++	[60] = { 167, 1 },
++	[61] = { 52, 0 },
++	[64] = { 174, 0 },
++	[66] = { 158, 0 },
++	[67] = { 0, 1 },
++	[70] = { 146, 0 },
++	[71] = { 144, 0 },
++	[72] = { 0, 3 },
++	[74] = { 162, 2 },
++	[77] = { 0, 1 },
++	[80] = { 0, 1 },
++	[81] = { 0, 1 },
++	[85] = { 0, 4 },
++	[87] = { 225, 2 },
++	[88] = { 143, 3 },
++	[91] = { 216, 0 },
++	[92] = { 46, 2 },
++	[93] = { 47, 2 },
++	[94] = { 53, 0 },
++	[95] = { 56, 0 },
++	[96] = { 142, 3 },
++	[97] = { 141, 7 },
++	[103] = { 117, 5 },
++	[104] = { 0, 1 },
++	[105] = { 0, 1 },
++	[111] = { 59, 0 },
++	[114] = { 0, 5 },
++	[115] = { 226, 0 },
++	[118] = { 83, 0 },
++	[121] = { 163, 2 },
++	[122] = { 161, 0 },
++	[125] = { 227, 0 },
++	[126] = { 0, 1 },
++	[128] = { 106, 0 },
++	[129] = { 107, 0 },
++	[131] = { 61, 0 },
++	[132] = { 156, 1 },
++	[133] = { 51, 0 },
++	[135] = { 0, 1 },
++	[136] = { 93, 0 },
++	[138] = { 152, 0 },
++	[139] = { 153, 0 },
++	[142] = { 0, 1 },
++	[143] = { 33, 0 },
++	[144] = { 228, 4 },
++	[147] = { 157, 1 },
++	[148] = { 84, 0 },
++	[150] = { 229, 0 },
++	[151] = { 230, 0 },
++	[152] = { 231, 1 },
++	[153] = { 232, 0 },
++	[154] = { 119, 1 },
++	[155] = { 122, 1 },
++	[156] = { 120, 3 },
++	[157] = { 121, 1 },
++	[158] = { 125, 0 },
++	[159] = { 126, 1 },
++	[160] = { 127, 1 },
++	[161] = { 0, 1 },
++	[163] = { 217, 0 },
++	[164] = { 148, 0 },
++	[168] = { 0, 4 },
++	[170] = { 150, 0 },
++	[172] = { 0, 1 },
++	[173] = { 140, 0 },
++	[174] = { 0, 1 },
++	[175] = { 136, 1 },
++	[176] = { 137, 0 },
++	[178] = { 0, 3 },
++	[179] = { 134, 0 },
++	[183] = { 18, 0 },
++	[184] = { 91, 0 },
++	[185] = { 92, 0 },
++	[187] = { 0, 3 },
++	[199] = { 175, 0 },
++	[200] = { 177, 0 },
++	[201] = { 176, 0 },
++	[202] = { 178, 0 },
++	[203] = { 146, 0 },
++	[204] = { 144, 0 },
++	[205] = { 159, 1 },
++	[206] = { 160, 1 },
++	[207] = { 56, 0 },
++	[208] = { 148, 0 },
++	[209] = { 149, 0 },
++	[210] = { 150, 0 },
++	[211] = { 151, 0 },
++	[213] = { 147, 0 },
++	[214] = { 145, 0 },
++	[215] = { 152, 0 },
++	[216] = { 153, 0 },
++	[217] = { 62, 0 },
++	[218] = { 42, 0 },
++	[220] = { 234, 4 },
++	[224] = { 179, 0 },
++	[225] = { 0, 1 },
++	[226] = { 6, 16 },
++	[227] = { 7, 16 },
++	[228] = { 8, 17 },
++	[229] = { 9, 0 },
++	[230] = { 10, 0 },
++	[231] = { 11, 1 },
++	[232] = { 12, 0 },
++	[233] = { 13, 0 },
++	[234] = { 14, 1 },
++	[235] = { 15, 0 },
++	[236] = { 16, 0 },
++	[237] = { 17, 1 },
++	[238] = { 131, 3 },
++	[239] = { 72, 3 },
++	[240] = { 0, 2 },
++	[241] = { 0, 1 },
++	[242] = { 0, 1 },
++	[244] = { 2, 0 },
++	[245] = { 0, 6 },
++	[246] = { 0, 2 },
++	[248] = { 95, 1 },
++	[250] = { 0, 1 },
++	[251] = { 22, 7 },
++	[252] = { 0, 13 },
++	[253] = { 235, 0 },
++	[256] = { 97, 0 },
++	[257] = { 0, 1 },
++	[258] = { 0, 3 },
++	[259] = { 0, 1 },
++	[260] = { 110, 1 },
++	[261] = { 112, 1 },
++	[262] = { 0, 1 },
++	[263] = { 0, 1 },
++	[264] = { 0, 1 },
++	[265] = { 0, 3 },
++	[268] = { 132, 7 },
++	[270] = { 0, 3 },
++	[271] = { 0, 1 },
++	[274] = { 0, 2 },
++	[275] = { 182, 0 },
++	[276] = { 0, 1 },
++	[277] = { 0, 1 },
++	[278] = { 0, 1 },
++	[279] = { 0, 1 },
++	[280] = { 0, 11 },
++	[281] = { 199, 7 },
++	[282] = { 201, 5 },
++	[283] = { 204, 5 },
++	[284] = { 202, 3 },
++	[285] = { 203, 1 },
++	[286] = { 205, 1 },
++	[287] = { 206, 1 },
++	[288] = { 200, 7 },
++	[289] = { 207, 1 },
++	[290] = { 207, 33 },
++	[291] = { 208, 1 },
++	[292] = { 208, 1 },
++	[293] = { 211, 3 },
++	[294] = { 0, 23 },
++	[295] = { 0, 7 },
++	[296] = { 0, 1 },
++	[297] = { 0, 1 },
++	[298] = { 194, 1 },
++	[299] = { 191, 7 },
++	[300] = { 192, 7 },
++	[301] = { 0, 9 },
++	[302] = { 0, 25 },
++	[303] = { 187, 3 },
++	[304] = { 0, 3 },
++	[305] = { 197, 5 },
++	[306] = { 198, 0 },
++	[307] = { 195, 5 },
++	[308] = { 0, 3 },
++	[309] = { 218, 16 },
++	[310] = { 219, 8 },
++	[311] = { 220, 1 },
++	[312] = { 0, 1 },
++	[314] = { 31, 7 },
++	[315] = { 32, 3 },
++	[317] = { 28, 1 },
++	[318] = { 29, 3 },
++	[321] = { 0, 1 },
++	[322] = { 57, 5 },
++	[323] = { 35, 1 },
++	[324] = { 34, 1 },
++	[325] = { 55, 17 },
++	[327] = { 0, 9 },
++	[328] = { 36, 5 },
++	[329] = { 39, 5 },
++	[330] = { 38, 21 },
++	[331] = { 37, 2 },
++	[332] = { 79, 9 },
++	[333] = { 54, 1 },
++	[334] = { 49, 5 },
++	[335] = { 0, 1 },
++	[337] = { 98, 0 },
++	[339] = { 0, 1 },
++	[340] = { 77, 5 },
++	[341] = { 0, 1 },
++	[342] = { 78, 3 },
++	[343] = { 0, 1 },
++	[344] = { 0, 33 },
++	[346] = { 23, 13 },
++	[348] = { 0, 8 },
++	[349] = { 0, 1 },
++	[350] = { 86, 3 },
++	[352] = { 0, 3 },
++	[353] = { 0, 3 },
++	[354] = { 0, 1 },
++	[355] = { 75, 9 },
++	[356] = { 20, 2 },
++	[357] = { 21, 1 },
++	[358] = { 25, 4 },
++	[359] = { 60, 2 },
++	[360] = { 27, 1 },
++	[363] = { 0, 7 },
++	[364] = { 0, 14 },
++	[365] = { 0, 1 },
++	[366] = { 243, 9 },
++	[367] = { 263, 0 },
++	[368] = { 0, 17 },
++	[369] = { 0, 1 },
++	[370] = { 265, 17 },
++	[371] = { 266, 5 },
++	[372] = { 0, 1 },
++	[373] = { 268, 1 },
++	[374] = { 0, 1 },
++	[375] = { 269, 3 },
++	[376] = { 0, 1 },
++	[377] = { 0, 1 },
++	[378] = { 273, 7 },
++	[379] = { 274, 5 },
++	[380] = { 275, 1 },
++	[381] = { 276, 1 },
++	[382] = { 277, 5 },
++	[384] = { 279, 0 },
++	[385] = { 280, 0 },
++	[386] = { 0, 1 },
++	[387] = { 282, 17 },
++	[388] = { 283, 1 },
++	[389] = { 284, 5 },
++	[390] = { 285, 4 },
++	[391] = { 286, 5 },
++	[392] = { 0, 32 },
++	[393] = { 0, 32 },
++	[394] = { 289, 8 },
++	[395] = { 290, 0 },
++	[396] = { 291, 1 },
++	[397] = { 292, 1 },
++	[398] = { 0, 4 },
++	[399] = { 0, 6 },
++	[400] = { 0, 1 },
++	[401] = { 295, 3 },
++	[403] = { 114, 1 },
++	[404] = { 113, 1 },
++	[405] = { 0, 1 },
++	[406] = { 115, 1 },
++	[407] = { 116, 3 },
++	[408] = { 109, 1 },
++	[409] = { 111, 3 },
++	[410] = { 88, 1 },
++	[411] = { 87, 3 },
++	[412] = { 89, 9 },
++	[413] = { 0, 1 },
++	[414] = { 74, 0 },
++	[416] = { 0, 6 },
++	[417] = { 0, 1 },
++	[418] = { 183, 1 },
++	[419] = { 184, 1 },
++	[420] = { 193, 1 },
++	[422] = { 99, 2 },
++	[423] = { 128, 1 },
++	[424] = { 0, 3 },
++	[428] = { 429, 1 },
++	[429] = { 430, 5 },
++	[430] = { 431, 0 },
++	[431] = { 432, 17 },
++	[432] = { 433, 1 },
++	[433] = { 434, 1 },
++	[434] = { 435, 1 },
++	[436] = { 437, 0 },
++	[437] = { 0, 1 },
++	[438] = { 439, 3 },
++	[439] = { 440, 13 },
++	[440] = { 0, 9 },
++	[441] = { 442, 5 },
++	[442] = { 0, 1 },
++	[443] = { 444, 0 },
++	[445] = { 446, 1 },
++	[446] = { 447, 1 },
++	[448] = { 449, 1 },
++	[449] = { 450, 16 },
++	[450] = { 451, 0 },
++	[452] = { 453, 1 },
++	[453] = { 454, 0 },
++	[454] = { 455, 4 },
++	[455] = { 456, 32 },
++	[456] = { 457, 12 },
++	[461] = { 462, 0 },
++	[462] = { 463, 0 },
++};
++#endif
+diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
+index 241e6e3ce..e4e851bed 100644
+--- a/kernel/antinomie/recorder.c
++++ b/kernel/antinomie/recorder.c
+@@ -26,6 +26,11 @@
+ #include <asm/stat.h>
+ #include <asm/syscall.h>
+ #include <asm/antinomie_syscalls.h>
++#ifdef ANT_ABI_COMPAT
++#include <linux/prctl.h>
++#include <asm/antinomie_compat_syscalls.h>
++#include <asm/unistd_compat_32.h>
++#endif
+ 
+ #include "run.h"
+ #include "async.h"
+@@ -125,6 +130,14 @@ struct ant_task {
+ 	u8 recapture_count;
+ 	enum ant_status last_status;
+ 	bool string_field, exec_walk, exec_committed, exec_argv_intact;
++#ifdef ANT_ABI_COMPAT
++	/* The call is a compat program's: its records carry wire_nr and
++	 * ANT_ABI_COMPAT; nr and abi are the native call's when the native
++	 * code captures it (ant_compat_natives), else wire_nr and COMPAT.
++	 */
++	bool compat;
++	u64 wire_nr;
++#endif
+ 	u8 packet[ANT_HEADER_SIZE + ANT_CHUNK_SIZE];
+ };
+ 
+@@ -168,8 +181,13 @@ static int publish(struct ant_task *ctx, u8 kind, u32 object_id,
+ 	put_unaligned_le32(async ? async->tid : task_pid_nr(current), p + 76);
+ 	put_unaligned_le32(async ? async->cpu : raw_smp_processor_id(), p + 80);
+ 	put_unaligned_le32(1, p + 84);
++#ifdef ANT_ABI_COMPAT
++	put_unaligned_le64(ctx->compat ? ctx->wire_nr : ctx->nr, p + 88);
++	put_unaligned_le16(ctx->compat ? ANT_ABI_COMPAT : ctx->abi, p + 96);
++#else
+ 	put_unaligned_le64(ctx->nr, p + 88);
+ 	put_unaligned_le16(ctx->abi, p + 96);
++#endif
+ 	p[98] = ctx->phase;
+ 	p[99] = kind;
+ 	put_unaligned_le32(object_id, p + 100);
+@@ -217,7 +235,12 @@ static void event_begin(struct ant_task *ctx, u8 phase, long result)
+ 	body[48] = ctx->arg_count;
+ 	if (phase == 2) {
+ 		body[49] = result >= 0 ? 1 : 2;
++#ifdef ANT_ABI_COMPAT
++		/* A compat call's result is a sign-extended 32-bit value. */
++		if (ctx->abi != ANT_ABI_NATIVE && !ctx->compat)
++#else
+ 		if (ctx->abi != ANT_ABI_NATIVE)
++#endif
+ 			body[49] = 4;
+ 		if (result == -ERESTARTSYS || result == -ERESTARTNOINTR ||
+ 		    result == -ERESTARTNOHAND || result == -ERESTART_RESTARTBLOCK)
+@@ -497,6 +520,15 @@ void ant_capture_set_state(struct ant_task *ctx, void *state,
+ 	ctx->native_release = release;
+ }
+ 
++/* An exec vector's pointers: a compat program's are 32-bit (arm layouts). */
++#ifdef ANT_ABI_COMPAT
++#define VECTOR_WIDTH(ctx) ((ctx)->compat ? 4ULL : 8ULL)
++#define VECTOR_LAYOUT(ctx) ((ctx)->compat ? ANT_COMPAT_LAYOUT("pointer") : ANT_LAYOUT("pointer"))
++#else
++#define VECTOR_WIDTH(ctx) sizeof(u64)
++#define VECTOR_LAYOUT(ctx) ANT_LAYOUT("pointer")
++#endif
++
+ /* Walks an exec vector from @index. At entry, a pointer or string on a page
+  * that is not resident ends the walk and leaves the point to resume from at
+  * exit (contract 22); there a value that still cannot be read is not recorded.
+@@ -514,7 +546,7 @@ static void exec_vector(struct ant_task *ctx, int slot, u8 arg_index, u64 addres
+ 	if (!address)
+ 		return;
+ 	for (; index < MAX_ARG_STRINGS; index++) {
+-		if (*budget < sizeof(ptr) || address > ULONG_MAX - index * sizeof(ptr)) {
++		if (*budget < VECTOR_WIDTH(ctx) || address > ULONG_MAX - index * VECTOR_WIDTH(ctx)) {
+ 			scnprintf(key, sizeof(key), "arg%u.vector", arg_index);
+ 			field(ctx, arg_index, key, "", 1, address, NULL,
+ 			      U64_MAX, *budget, ANT_INVALID_EXTENT);
+@@ -525,22 +557,25 @@ static void exec_vector(struct ant_task *ctx, int slot, u8 arg_index, u64 addres
+ 			ptr = resume->pointer;
+ 			resume->pointer_read = false;
+ 		} else {
++#ifdef ANT_ABI_COMPAT
++			ptr = 0;	/* a 32-bit pointer fills its low half */
++#endif
+ 			status = copy_from_user_nofault(&ptr,
+-				(void __user *)(unsigned long)(address + index * sizeof(ptr)),
+-				sizeof(ptr)) ? fault_status(address + index * sizeof(ptr),
+-							    sizeof(ptr)) : ANT_COMPLETE;
++				(void __user *)(unsigned long)(address + index * VECTOR_WIDTH(ctx)),
++				VECTOR_WIDTH(ctx)) ? fault_status(address + index * VECTOR_WIDTH(ctx),
++							    VECTOR_WIDTH(ctx)) : ANT_COMPLETE;
+ 			if (!entry && status != ANT_COMPLETE)
+ 				return;
+ 			scnprintf(key, sizeof(key), "arg%u.ptr[%llu]", arg_index, index);
+-			field(ctx, arg_index, key, ANT_LAYOUT("pointer"), 3,
+-			      address + index * sizeof(ptr), &ptr, sizeof(ptr), sizeof(ptr),
++			field(ctx, arg_index, key, VECTOR_LAYOUT(ctx), 3,
++			      address + index * VECTOR_WIDTH(ctx), &ptr, VECTOR_WIDTH(ctx), VECTOR_WIDTH(ctx),
+ 			      status);
+ 			if (status == ANT_NOT_RESIDENT)
+ 				*resume = (struct ant_exec_resume){ .vector = address,
+ 					.index = index, .arg_index = arg_index, .pending = true };
+ 			if (status != ANT_COMPLETE || !ptr || ctx->failed_count)
+ 				return;
+-			*budget -= sizeof(ptr);
++			*budget -= VECTOR_WIDTH(ctx);
+ 		}
+ 		ceiling = min_t(u64, MAX_ARG_STRLEN, *budget);
+ 		if (!entry) {
+@@ -685,6 +720,93 @@ static void ioctl_field(struct ant_task *ctx, bool output, long result)
+ 	}
+ }
+ 
++#ifdef ANT_ABI_COMPAT
++/* A compat program's call: its registers' low halves as its arguments, the
++ * 32-bit signed ones sign-extended as a native call's are, and the native
++ * call to capture it as, if the arm table names one (ant_compat_natives).
++ */
++/* prctl reads an arch-sized object behind some options (PR_SET_MM's map,
++ * PR_SET_SECCOMP's program, PR_GET_AUXV's vector), so the arm table gives it
++ * no native counterpart. The options whose objects have one layout on ILP32
++ * and LP64 are captured by the native code: the task name, an int result
++ * and an anonymous mapping's name.
++ */
++static bool compat_prctl_native(u64 nr, u64 option)
++{
++	if (nr != __NR_compat32_prctl)
++		return false;
++	switch (option) {
++	case PR_SET_NAME: case PR_GET_NAME: case PR_GET_PDEATHSIG:
++	case PR_GET_CHILD_SUBREAPER: case PR_SET_VMA:
++		return true;
++	}
++	return false;
++}
++
++static void compat_entry(struct ant_task *ctx)
++{
++	const struct ant_compat_syscall *twin = NULL;
++	u64 nr = ctx->nr;
++	int i;
++
++	ctx->compat = ctx->abi == ANT_ABI_COMPAT;
++	if (!ctx->compat)
++		return;
++	ctx->wire_nr = nr;
++	ctx->arg_count = 255;
++	if (nr < ARRAY_SIZE(ant_compat_syscalls) && ant_compat_syscalls[nr].valid) {
++		ctx->arg_count = ant_compat_syscalls[nr].argc;
++		twin = &ant_compat_natives[nr];
++	}
++	for (i = 0; i < 6; i++) {
++		u64 value = lower_32_bits(ctx->args[i]);
++
++		if (ctx->arg_count != 255 && i >= ctx->arg_count)
++			value = 0;
++		else if (twin && (twin->signed_mask & BIT(i)))
++			value = (u64)(s64)(s32)value;
++		ctx->args[i] = value;
++	}
++	if (twin && twin->native) {
++		ctx->nr = twin->native - 1;
++		ctx->abi = ANT_ABI_NATIVE;
++	} else if (compat_prctl_native(nr, ctx->args[0])) {
++		ctx->nr = __NR_prctl;
++		ctx->abi = ANT_ABI_NATIVE;
++	}
++}
++
++/* A compat call no native call captures: its path strings, and its other
++ * pointers by address only.
++ */
++static void compat_capture_entry(struct ant_task *ctx)
++{
++	const struct ant_native_syscall *schema;
++	char key[96];
++	int i;
++
++	if (ctx->arg_count == 255) {
++		field(ctx, 255, "schema.argument_metadata", "", 1, 0, NULL,
++		      U64_MAX, U64_MAX, ANT_NO_DECODER);
++		return;
++	}
++	schema = &ant_compat_syscalls[ctx->wire_nr];
++	for (i = 0; i < ctx->arg_count && !ctx->failed_count; i++) {
++		if (!(schema->pointer_mask & BIT(i)))
++			continue;
++		if (schema->string_mask & BIT(i)) {
++			scnprintf(key, sizeof(key), "arg%d.path", i);
++			user_string(ctx, i, key, ctx->args[i], PATH_MAX);
++			continue;
++		}
++		scnprintf(key, sizeof(key), "arg%d.%s", i,
++			  schema->argument_names[i] ?: "pointer");
++		field(ctx, i, key, "", 1, ctx->args[i], NULL, U64_MAX, U64_MAX,
++		      ctx->args[i] ? ANT_NO_DECODER : ANT_NULL_POINTER);
++	}
++}
++#endif
++
+ static void capture_entry(struct ant_task *ctx)
+ {
+ 	u64 *a = ctx->args;
+@@ -692,6 +814,12 @@ static void capture_entry(struct ant_task *ctx)
+ 	u8 handled;
+ 	int error;
+ 
++#ifdef ANT_ABI_COMPAT
++	if (ctx->abi == ANT_ABI_COMPAT) {
++		compat_capture_entry(ctx);
++		return;
++	}
++#endif
+ 	if (ctx->abi != ANT_ABI_NATIVE) {
+ 		field(ctx, 255, "schema.unsupported_abi", "", 1, 0, NULL,
+ 		      U64_MAX, U64_MAX, ANT_NO_DECODER);
+@@ -1381,6 +1509,9 @@ int ant_monitor_note_publish(struct ant_task *ctx, const struct ant_async_event
+ 	ctx->entry_ns = event->entry_ns;
+ 	ctx->nr = nr;
+ 	ctx->abi = ANT_ABI_NATIVE;
++#ifdef ANT_ABI_COMPAT
++	ctx->compat = false;
++#endif
+ 	event_begin(ctx, 3, 0);
+ 	ctx->kernel_imported = true;
+ 	field(ctx, 255, key, layout, 3, 0, data, len, len, ANT_COMPLETE);
+@@ -1446,6 +1577,9 @@ void ant_monitor_enter(struct pt_regs *regs, long nr)
+ 	if (ctx->arg_count != 255)
+ 		for (i = ctx->arg_count; i < 6; i++)
+ 			ctx->args[i] = 0;
++#ifdef ANT_ABI_COMPAT
++	compat_entry(ctx);
++#endif
+ 	ctx->active = true;
+ 	ctx->entry_lost = false;
+ 	atomic64_inc(&calls_entered);
+@@ -1546,6 +1680,9 @@ static void async_context(struct ant_task *ctx, const struct ant_async_event *ev
+ 		(event->system == ANT_ASYNC_IO_URING ? __NR_io_uring_enter : __NR_io_submit) :
+ 		U64_MAX;
+ 	ctx->abi = ANT_ABI_NATIVE;
++#ifdef ANT_ABI_COMPAT
++	ctx->compat = false;
++#endif
+ 	event_begin(ctx, 3, 0);
+ 	async_fields(ctx, event);
+ }
+@@ -1738,6 +1875,9 @@ int ant_monitor_launch(const char *path, char **argv, char **envp)
+ 	ctx->capture_cookie = ant_observer_admit(current);
+ 	ctx->nr = U64_MAX;
+ 	ctx->abi = ANT_ABI_NATIVE;
++#ifdef ANT_ABI_COMPAT
++	ctx->compat = false;
++#endif
+ 	ctx->launch_exec = true;
+ 	ctx->busy = true;
+ 	event_begin(ctx, 3, 0);

@@ -66,6 +66,7 @@ changes. Line counts are added/removed lines of the patch.
 | 34 | follow clone's argument order on CLONE_BACKWARDS architectures | +17 -4 | none (`recorder.c`) | none |
 | 35 | give the debugger's state setter a name no stock function has | +11 -11 | none (`debug.c`: `set_state()` is `session_set_state()`, which pahole cannot confuse with `kernel/stop_machine.c`'s) | none |
 | 36 | wait for ring room without a preemption count | +11 -2 | none (`guest.c`: on a kernel without `CONFIG_PREEMPT_COUNT`, arm64's voluntary preemption, a sender with interrupts on spins for the whole send wait instead of 200 us) | none |
+| 37 | record AArch32 programs on arm64 by the arm table | +5440 -12 | `arch/arm64/include/asm/antinomie_compat_syscalls.h` (generated: the arm EABI table and each call's native counterpart) | none (`arch/arm64/include/asm/antinomie.h` defines `ANT_ABI_COMPAT`; `recorder.c`: compat records keep the arm number, calls with a native counterpart and prctl's options of one layout are captured by the native code, exec vectors of 32-bit pointers; compiled only where `ANT_ABI_COMPAT` is defined) |
 
 Every topic also adds its part of the files shared by all of them:
 `control.c` (dispatch), `control_wire.h` (the wire contract), `antinomie_monitor.h`
