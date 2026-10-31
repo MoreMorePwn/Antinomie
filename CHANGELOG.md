@@ -686,6 +686,13 @@ it runs.
 
 ### Guest
 
+- **Every base's programs come from Debian's packages.** The BusyBox base and
+  the Debian bases' bootstrap initrd take BusyBox, resize2fs, chattr and their
+  libraries from pinned Debian 13 packages, checked against the archive's
+  signed index, whatever system builds the base (a base built on Ubuntu carried
+  Ubuntu's BusyBox and glibc). `bundle.json` lists those packages for the base's
+  published sources, and a native build no longer needs busybox or ldd on the
+  host.
 - **Debian desktop bases keep /tmp on disk**, like Debian Minimal and BusyBox:
   what a sample drops in /tmp reaches the VM's disk (Disks tab, disk dumps,
   checkpoints). The conformance suite checks every Debian base against the

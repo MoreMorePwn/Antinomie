@@ -4,8 +4,11 @@ image builders write into bundle.json; no network, no kernel build."""
 # SPDX-License-Identifier: GPL-3.0-only
 import hashlib
 import importlib.util
+import io
 import json
+import os
 from pathlib import Path
+import tarfile
 import tempfile
 import unittest
 import unittest.mock
@@ -215,23 +218,63 @@ class BuilderRecordTests(unittest.TestCase):
         self.assertEqual(record["source_version"], "6.12.94-1")
         self.assertEqual((record["antinomie_revision"], record["antinomie_source"]), (16, series))
 
-    def test_host_package_names_the_source_package_and_version(self):
-        calls = iter([unittest.mock.Mock(returncode=0, stdout="busybox: /usr/bin/busybox\n")])
-        with unittest.mock.patch.object(builder.subprocess, "run", side_effect=lambda *a, **k: next(calls)), \
-                unittest.mock.patch.object(builder.subprocess, "check_output",
-                    return_value="busybox\t1:1.37.0-6+b1\tamd64\tbusybox\t1:1.37.0-6\n"):
-            record = builder.host_package("/usr/bin/busybox")
-        self.assertEqual(record, {"package": "busybox", "version": "1:1.37.0-6+b1",
-                                  "architecture": "amd64", "source_package": "busybox",
-                                  "source_version": "1:1.37.0-6"})
+    def test_a_pinned_package_names_its_source_package_and_version(self):
+        def tar(files):
+            data = io.BytesIO()
+            with tarfile.open(fileobj=data, mode="w:gz") as archive:
+                for name, content in files.items():
+                    entry = tarfile.TarInfo(name)
+                    entry.size = len(content)
+                    archive.addfile(entry, io.BytesIO(content))
+            return data.getvalue()
 
-    def test_a_file_without_an_owning_package_is_kept_visible(self):
-        builder.INSTALLED_PACKAGES.clear()
-        with unittest.mock.patch.object(builder, "host_package", return_value=None):
-            builder.record_package(Path("/opt/tool"))
-        self.assertEqual(builder.INSTALLED_PACKAGES, {"/opt/tool": {"package": None, "path": "/opt/tool"}})
-        builder.INSTALLED_PACKAGES.clear()
+        control = (b"Package: libcom-err2\nSource: e2fsprogs (1.47.2-3)\n"
+                   b"Version: 1.47.2-3+b12\nArchitecture: amd64\nDescription: x\n more\n")
+        members = [("debian-binary", b"2.0\n"), ("control.tar.gz", tar({"./control": control})),
+                   ("data.tar.gz", tar({"./usr/lib/x86_64-linux-gnu/libcom_err.so.2.1": b"x"}))]
+        archive = b"!<arch>\n"
+        for name, content in members:
+            archive += f"{name + '/':<16}{0:<12}{0:<6}{0:<6}{'100644':<8}{len(content):<10}`\n".encode()
+            archive += content + (b"\n" if len(content) & 1 else b"")
+        with tempfile.TemporaryDirectory() as name:
+            deb = Path(name) / "libcom-err2.deb"
+            deb.write_bytes(archive)
+            record, paths = builder.unpack_deb(deb, Path(name) / "tree")
+            self.assertEqual(record, {"package": "libcom-err2", "version": "1.47.2-3+b12",
+                                      "architecture": "amd64", "source_package": "e2fsprogs",
+                                      "source_version": "1.47.2-3"})
+            self.assertEqual(paths, ["usr/lib/x86_64-linux-gnu/libcom_err.so.2.1"])
+            self.assertTrue((Path(name) / "tree/usr/lib/x86_64-linux-gnu/libcom_err.so.2.1").is_file())
 
+    def test_the_userland_is_pinned_debian_amd64_whatever_the_host(self):
+        archive, suite, arch = builder.USERLAND_SOURCE
+        self.assertTrue(archive.startswith("https://snapshot.debian.org/archive/debian/"))
+        self.assertEqual((suite, arch), ("trixie", "amd64"))
+        names = [name for name, _, _ in builder.USERLAND]
+        self.assertEqual(names, ["busybox-static", "e2fsprogs", "libext2fs2t64", "libcom-err2",
+                                 "libc6"])
+        for _, version, sha in builder.USERLAND:
+            self.assertRegex(sha, r"^[0-9a-f]{64}$")
+            self.assertNotIn("ubuntu", version)
+        # No program is taken from the build host any more.
+        source = (REPO / "scripts/build-monitor-image.py").read_text()
+        for host in ('"/usr/bin/busybox"', 'shutil.which("resize2fs")', "ldd", "dpkg-query"):
+            self.assertNotIn(host, source)
+        with self.assertRaisesRegex(RuntimeError, "pinned Debian packages"):
+            builder.initrd_tree(Path("/nonexistent"))
+
+    @unittest.skipUnless(Path("/bin/ls").is_file(), "needs a dynamically linked /bin/ls")
+    def test_elf_needs_reads_the_libraries_and_the_loader(self):
+        needed, interpreter = builder.elf_needs(Path(os.path.realpath("/bin/ls")))
+        if interpreter is None:
+            self.skipTest("/bin/ls is static here")
+        self.assertTrue(interpreter.startswith("/"))
+        self.assertIn("libc.so.6", needed)
+        with tempfile.NamedTemporaryFile() as text:
+            text.write(b"#!/bin/sh\n")
+            text.flush()
+            with self.assertRaisesRegex(RuntimeError, "not a 64-bit"):
+                builder.elf_needs(Path(text.name))
 
 if __name__ == "__main__":
     unittest.main()

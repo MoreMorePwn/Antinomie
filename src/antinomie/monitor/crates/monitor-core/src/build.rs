@@ -585,15 +585,15 @@ const KERNEL_TOOLS: &[ToolSpec] = &[
 const CHROOT_KERNEL_TOOLS: &[ToolSpec] =
     &[tool("python3", "python3"), tool("unshare", "util-linux")];
 
+/// The BusyBox base. Its programs (BusyBox, and the initrd's resize2fs and
+/// chattr with their libraries) come from Debian's pinned packages, which the
+/// recipe downloads and checks itself, not from this host.
 const BUSYBOX_TOOLS: &[ToolSpec] = &[
     tool("qemu-img", "qemu-utils"),
     tool("mkfs.ext4", "e2fsprogs"),
     tool("debugfs", "e2fsprogs"),
-    tool("resize2fs", "e2fsprogs"),
     tool("cpio", "cpio"),
     tool("gzip", "gzip"),
-    tool("busybox", "busybox-static"),
-    tool("ldd", "libc-bin"),
 ];
 
 /// The Debian bases: Debian's image tools, on the stock kernel (Debian's
@@ -606,12 +606,9 @@ const DEBIAN_TOOLS: &[ToolSpec] = &[
     tool("qemu-img", "qemu-utils"),
     tool("mkfs.ext4", "e2fsprogs"),
     tool("debugfs", "e2fsprogs"),
-    tool("resize2fs", "e2fsprogs"),
     tool("cpio", "cpio"),
     tool("gzip", "gzip"),
     tool("tar", "tar"),
-    tool("busybox", "busybox-static"),
-    tool("dpkg-query", "dpkg"),
     // The UEFI disk layout partitions with it.
     tool("sfdisk", "fdisk"),
 ];

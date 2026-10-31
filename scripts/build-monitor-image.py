@@ -3,6 +3,7 @@
 """Create a reproducible minimal guest bundle without mounting host filesystems."""
 import argparse
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -10,6 +11,7 @@ import re
 import shutil
 import subprocess
 import struct
+import tarfile
 import tempfile
 import zlib
 
@@ -211,36 +213,6 @@ def stealth_support(config, kernel, root_buses=True, dhcp=True, module_buses=Fal
 
 
 PACKAGE_FIELDS = ("package", "version", "architecture", "source_package", "source_version")
-# Packages the host files copied into the image belong to, by package name: the
-# build records them so the corresponding source can be published.
-INSTALLED_PACKAGES = {}
-
-
-def host_package(path):
-    """The installed Debian package that owns a host file, as a record of
-    PACKAGE_FIELDS, or None when the host has no dpkg or no package owns it."""
-    try:
-        search = subprocess.run(["dpkg-query", "--search", str(Path(path).resolve())],
-                                capture_output=True, text=True)
-        if search.returncode or not search.stdout.strip():
-            return None
-        owner = search.stdout.splitlines()[0].split(": ", 1)[0]
-        fields = subprocess.check_output(
-            ["dpkg-query", "-W", "-f=${binary:Package}\t${Version}\t${Architecture}\t"
-             "${source:Package}\t${source:Version}\n", owner], text=True).strip().split("\t")
-    except (OSError, subprocess.CalledProcessError):
-        return None
-    return dict(zip(PACKAGE_FIELDS, fields)) if len(fields) == len(PACKAGE_FIELDS) else None
-
-
-def record_package(path):
-    """Remember the package of a host file copied into the image. A file no
-    package owns is kept under its path, so it cannot be published silently."""
-    record = host_package(path)
-    if record is None:
-        INSTALLED_PACKAGES[str(path)] = {"package": None, "path": str(path)}
-    else:
-        INSTALLED_PACKAGES[record["package"]] = record
 
 
 def kernel_source_record(identity):
@@ -252,23 +224,221 @@ def kernel_source_record(identity):
             "antinomie_revision": identity[0], "antinomie_source": identity[1]}
 
 
-def install_binary(source, root, destination=None):
+# A base's programs (BusyBox, and resize2fs and chattr with the libraries they
+# load in the bootstrap initrd) come from Debian 13's amd64 packages, whatever
+# the build host runs: pinned here and fetched through the archive's signed
+# index (snapshot of the container builder's day). The archive, suite and
+# architecture, then (package, version, SHA-256).
+USERLAND_SOURCE = ("https://snapshot.debian.org/archive/debian/20261020T213255Z",
+                   "trixie", "amd64")
+USERLAND = (
+    ("busybox-static", "1:1.37.0-6+b9",
+     "598a3fd92bdafc34cd81196b2952ad36e910e47a4ecf162f8ce5e8e262598e53"),
+    ("e2fsprogs", "1.47.2-3+b12",
+     "e9e638eb3e22b5f14d01ce0b28aa512a5a22fcc0e70d1c733444579b67ea236b"),
+    ("libext2fs2t64", "1.47.2-3+b12",
+     "9f5783fa48239e42260d41846fbc6c8b19c233251063524456096195660eaa09"),
+    ("libcom-err2", "1.47.2-3+b12",
+     "bd43e020b8fed399db3eebf098111f10fba4c436fff99ccad72cc7e27c9764ec"),
+    ("libc6", "2.41-12+deb13u4",
+     "967aa62605721081c3eb2a17650611a792aa802d76a6511d1840242623d204c9"),
+)
+# Where the dynamic loader looks for the libraries (Debian's multiarch path).
+LIBRARY_DIRS = ("usr/lib/x86_64-linux-gnu", "lib/x86_64-linux-gnu")
+
+
+class Userland:
+    """The pinned packages unpacked in tree: their guest_sources records
+    (PACKAGE_FIELDS), which package each unpacked file came from, and which
+    package each file copied into an image came from (installed)."""
+
+    def __init__(self, tree, packages, owners):
+        self.tree = Path(tree)
+        self.packages = list(packages)
+        self.owners = dict(owners)
+        self.installed = {}
+
+    def busybox(self):
+        return self.tree / "usr/bin/busybox"
+
+    def program(self, name):
+        for directory in ("usr/sbin", "sbin", "usr/bin", "bin"):
+            if (self.tree / directory / name).is_file():
+                return self.tree / directory / name
+        raise RuntimeError(f"{name} is not in the pinned packages")
+
+    def applets(self):
+        return busybox_applets(self.busybox().read_bytes())
+
+    def owner(self, path):
+        return self.owners.get(str(Path(path).relative_to(self.tree)))
+
+
+def busybox_applets(data):
+    """The applet names a BusyBox binary carries: its packed, sorted name
+    table ("[", "[[", "acpid", ...), read without running the binary."""
+    start = data.find(b"[\x00[[\x00")
+    if start < 0 or data.find(b"[\x00[[\x00", start + 1) >= 0:
+        raise RuntimeError("cannot find BusyBox's applet table")
+    names = data[start:data.index(b"\x00\x00", start)].decode("ascii").split("\x00")
+    if len(names) < 100 or names != sorted(names) or not all(
+            re.fullmatch(r"[][a-z0-9_.-]+", name) for name in names):
+        raise RuntimeError("BusyBox's applet table is not readable")
+    return names
+
+
+def deb_members(deb):
+    """{member name: bytes} of a Debian package's ar archive."""
+    members = {}
+    with Path(deb).open("rb") as source:
+        if source.read(8) != b"!<arch>\n":
+            raise RuntimeError(f"{Path(deb).name} is not a Debian package")
+        while header := source.read(60):
+            name, size = header[:16].decode().strip().rstrip("/"), int(header[48:58])
+            members[name] = source.read(size)
+            source.read(size & 1)
+    return members
+
+
+def unpack_deb(deb, tree):
+    """Unpack a package's files into tree (no maintainer scripts run); its
+    guest_sources record and the paths it unpacked (relative to tree)."""
+    members = deb_members(deb)
+    control = next((data for name, data in members.items() if name.startswith("control.tar")),
+                   None)
+    payload = next((data for name, data in members.items() if name.startswith("data.tar")), None)
+    if control is None or payload is None:
+        raise RuntimeError(f"{Path(deb).name} lacks its control or data archive")
+    with tarfile.open(fileobj=io.BytesIO(control)) as archive:
+        text = archive.extractfile("./control").read().decode()
+    values = dict(line.split(": ", 1) for line in text.splitlines()
+                  if ": " in line and not line.startswith(" "))
+    source = values.get("Source", values["Package"]).split(" ")
+    record = {"package": values["Package"], "version": values["Version"],
+              "architecture": values["Architecture"], "source_package": source[0],
+              "source_version": source[1].strip("()") if len(source) > 1 else values["Version"]}
+    with tarfile.open(fileobj=io.BytesIO(payload)) as archive:
+        entries = archive.getmembers()
+        archive.extractall(tree, members=entries, filter="tar")
+    paths = [entry.name.removeprefix("./") for entry in entries if entry.isfile()]
+    return record, paths
+
+
+def debian_userland(cache, work, proxy=""):
+    """The pinned packages (verified in cache, else downloaded there through
+    the signed index) unpacked under work, as a Userland."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("debian_image",
+                                                  REPO / "scripts/build-debian-image.py")
+    recipe = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(recipe)
+    debs = recipe.pinned_debs(USERLAND_SOURCE, USERLAND, cache, work, proxy,
+                              "Debian userland packages")
+    tree = Path(work) / "userland-amd64"
+    if tree.exists():
+        shutil.rmtree(tree)
+    tree.mkdir(parents=True)
+    records, owners = [], {}
+    for deb in debs:
+        record, paths = unpack_deb(deb, tree)
+        records.append(record)
+        owners.update({path: record["package"] for path in paths})
+    return Userland(tree, records, owners)
+
+
+def elf_needs(path):
+    """(DT_NEEDED names, PT_INTERP path or None) of an ELF64 little-endian program."""
+    data = Path(path).read_bytes()
+    if data[:4] != b"\x7fELF" or data[4] != 2 or data[5] != 1:
+        raise RuntimeError(f"{path} is not a 64-bit little-endian ELF file")
+    phoff, = struct.unpack_from("<Q", data, 0x20)
+    phentsize, phnum = struct.unpack_from("<HH", data, 0x36)
+    segments = [struct.unpack_from("<IIQQQQQQ", data, phoff + index * phentsize)
+                for index in range(phnum)]
+    interpreter, dynamic = None, None
+    for kind, _, offset, vaddr, _, filesz, _, _ in segments:
+        if kind == 3:
+            interpreter = data[offset:offset + filesz].rstrip(b"\0").decode()
+        elif kind == 2:
+            dynamic = (offset, filesz)
+    if dynamic is None:
+        return [], interpreter
+
+    def file_offset(address):
+        for kind, _, offset, vaddr, _, filesz, _, _ in segments:
+            if kind == 1 and vaddr <= address < vaddr + filesz:
+                return offset + address - vaddr
+        raise RuntimeError(f"{path}: address {address:#x} is in no loaded segment")
+
+    entries = [struct.unpack_from("<qQ", data, dynamic[0] + index)
+               for index in range(0, dynamic[1], 16)]
+    strtab = next((value for tag, value in entries if tag == 5), None)
+    if strtab is None:
+        raise RuntimeError(f"{path} has no dynamic string table")
+    base = file_offset(strtab)
+    needed = [data[base + value:data.index(b"\0", base + value)].decode()
+              for tag, value in entries if tag == 1]
+    return needed, interpreter
+
+
+def require_userland(userland):
+    if userland is None:
+        raise RuntimeError("a base's programs come from the pinned Debian packages "
+                           "(debian_userland())")
+
+
+def tree_file(tree, path):
+    """The regular file a path of the unpacked packages names, following its
+    symbolic links inside the tree; merged-/usr packages ship /lib's files
+    under /usr/lib. None when there is none."""
+    for candidate in (path.lstrip("/"), "usr/" + path.lstrip("/")):
+        current = tree / candidate
+        for _ in range(16):
+            if not current.is_symlink():
+                break
+            link = os.readlink(current)
+            current = tree / link.lstrip("/") if link.startswith("/") else current.parent / link
+        if current.is_file() and not current.is_symlink():
+            return Path(os.path.normpath(current))
+    return None
+
+
+def install_binary(source, root, destination, userland):
+    """Copy a program of the pinned packages, the libraries it loads (into
+    the multiarch directory the dynamic loader searches) and its loader (at
+    the absolute path the program names); each copy is noted in
+    userland.installed with its package."""
     source = Path(source)
-    record_package(source)
-    target = root / (destination or str(source)).lstrip("/")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source, target)
-    dependency_list = subprocess.run(["ldd", str(source)], capture_output=True, text=True)
-    if dependency_list.returncode and "not a dynamic executable" not in dependency_list.stderr:
-        raise RuntimeError(f"cannot inspect dependencies for {source}: {dependency_list.stderr}")
-    for line in dependency_list.stdout.splitlines():
-        dependency = re.search(r"(?:=>\s+)?(/\S+)\s+\(", line)
-        if dependency:
-            path = Path(dependency.group(1))
-            dest = root / str(path).lstrip("/")
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(path, dest)
-            record_package(path)
+
+    def copy(found, target):
+        target = root / target.lstrip("/")
+        if target.exists():
+            return
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(found, target)
+        userland.installed[str(target.relative_to(root))] = userland.owner(found)
+
+    copy(source, destination)
+    pending, done = [source], set()
+    while pending:
+        needed, interpreter = elf_needs(pending.pop())
+        if interpreter:
+            found = tree_file(userland.tree, interpreter)
+            if found is None:
+                raise RuntimeError(f"{interpreter} is not in the pinned packages")
+            copy(found, interpreter)
+            # The C library names the loader too; it is already loaded.
+            done.add(Path(interpreter).name)
+        for name in needed:
+            if name in done:
+                continue
+            done.add(name)
+            found = next((library for directory in LIBRARY_DIRS
+                          if (library := tree_file(userland.tree, f"{directory}/{name}"))), None)
+            if found is None:
+                raise RuntimeError(f"{name} (for {source.name}) is not in the pinned packages")
+            copy(found, f"{LIBRARY_DIRS[0]}/{name}")
+            pending.append(found)
 
 
 def write_file(root, path, content, mode=0o644):
@@ -288,14 +458,14 @@ def valid_hostname(name):
     return name
 
 
-def base_tree(root, hostname="debian"):
+def base_tree(root, hostname="debian", userland=None):
+    require_userland(userland)
     for directory in ("bin", "sbin", "usr/bin", "usr/sbin", "etc", "dev", "proc", "sys", "run", "tmp", "root", "home/user", "var/log"):
         (root / directory).mkdir(parents=True, exist_ok=True)
     (root / "tmp").chmod(0o1777)
     (root / "home/user").chmod(0o700)
-    install_binary("/usr/bin/busybox", root, "/bin/busybox")
-    applets = subprocess.check_output(["/usr/bin/busybox", "--list"], text=True).splitlines()
-    for applet in applets:
+    install_binary(userland.busybox(), root, "/bin/busybox", userland)
+    for applet in userland.applets():
         if applet != "busybox":
             (root / "bin" / applet).symlink_to("busybox")
     (root / "sbin/init").symlink_to("../bin/busybox")
@@ -365,14 +535,15 @@ def module_loading(modules):
     return "\n".join(lines) + "\n"
 
 
-def initrd_tree(root, modules=None):
+def initrd_tree(root, modules=None, userland=None):
     """The bootstrap initrd: mounts the root (by UUID, on virtio, SATA or NVMe),
     writes the UEFI boot entry and switches to it. modules (module_loading())
     adds a distribution's own modules for kernels that build those drivers as
     modules."""
+    require_userland(userland)
     for directory in ("bin", "dev", "proc", "sys", "newroot"):
         (root / directory).mkdir(parents=True, exist_ok=True)
-    install_binary("/usr/bin/busybox", root, "/bin/busybox")
+    install_binary(userland.busybox(), root, "/bin/busybox", userland)
     applets = ["sh", "mount", "mkdir", "sleep", "switch_root", "echo", "cat", "findfs",
                "dd", "od", "tr", "cut", "sed", "ls", "readlink", "basename", "rm"]
     if modules:
@@ -382,9 +553,9 @@ def initrd_tree(root, modules=None):
             (root / "lib/modules" / f"{name}.ko").write_bytes(data)
     for applet in applets:
         (root / "bin" / applet).symlink_to("busybox")
-    install_binary(shutil.which("resize2fs"), root, "/bin/resize2fs")
+    install_binary(userland.program("resize2fs"), root, "/bin/resize2fs", userland)
     # efivarfs marks the boot variables immutable; BootOrder is rewritten.
-    install_binary(shutil.which("chattr"), root, "/bin/chattr")
+    install_binary(userland.program("chattr"), root, "/bin/chattr", userland)
     write_file(root, "/init", """#!/bin/sh
 export PATH=/bin
 mount -t devtmpfs devtmpfs /dev
@@ -517,6 +688,10 @@ def main():
     parser.add_argument("--name", default="", help="display name of the base")
     parser.add_argument("--work", type=Path, default=REPO / "work",
                         help="directory for temporary build files")
+    parser.add_argument("--package-cache", type=Path,
+                        help="where the pinned Debian packages of the base's programs are kept "
+                             "(default: --work)")
+    parser.add_argument("--proxy", default="", help="HTTP proxy for the Debian archive")
     args = parser.parse_args()
     try:
         valid_hostname(args.hostname)
@@ -532,11 +707,15 @@ def main():
         parser.error("existing kernel and base size of at least 128 MiB required")
     args.output.mkdir(parents=True, exist_ok=True)
     args.work.mkdir(parents=True, exist_ok=True)
+    try:
+        userland = debian_userland(args.package_cache, args.work, args.proxy)
+    except (RuntimeError, OSError) as error:
+        parser.error(str(error))
     with tempfile.TemporaryDirectory(prefix="monitor-image-", dir=args.work) as temporary:
         staging = Path(temporary)
         root = staging / "root"
         root.mkdir()
-        base_tree(root, args.hostname)
+        base_tree(root, args.hostname, userland)
         raw = staging / "base.raw"
         with raw.open("wb") as image:
             image.truncate(args.base_size_mib << 20)
@@ -555,7 +734,7 @@ def main():
         run("qemu-img", "convert", "-f", "raw", "-O", "qcow2", str(raw), str(args.output / "base.qcow2"))
         initrd = staging / "initrd"
         initrd.mkdir()
-        initrd_tree(initrd)
+        initrd_tree(initrd, userland=userland)
         names = ["."] + [str(p.relative_to(initrd)) for p in sorted(initrd.rglob("*"))]
         cpio = subprocess.run(["cpio", "--create", "--format=newc", "--null", "--owner=0:0"], cwd=initrd,
                               input=b"\0".join(os.fsencode(n) for n in names) + b"\0", capture_output=True, check=True)
@@ -572,11 +751,10 @@ def main():
         manifest["symbols"] = "symbols.json.xz"
         manifest["sha256"]["symbols.json.xz"] = checksum(args.output / "symbols.json.xz")
     stamp_revision(manifest, args.output / "kernel", args.allow_unversioned, args.app_version)
-    # The BusyBox image copies the build host's busybox, its libraries and the
-    # initrd's e2fsprogs; their source packages are what a base's sources need.
-    if INSTALLED_PACKAGES:
-        manifest.setdefault("guest_sources", {})["packages"] = sorted(
-            INSTALLED_PACKAGES.values(), key=lambda item: item.get("package") or item["path"])
+    # BusyBox, its libraries and the initrd's e2fsprogs come from the pinned
+    # Debian packages; their source packages are what a base's sources need.
+    manifest.setdefault("guest_sources", {})["packages"] = sorted(
+        userland.packages, key=lambda item: item["package"])
     if name:
         manifest["name"] = name
     manifest["stealth_support"] = stealth_support(args.kernel_config, args.output / "kernel")

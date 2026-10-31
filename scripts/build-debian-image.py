@@ -310,12 +310,14 @@ def debian_banner():
     raise RuntimeError("adapter.conf has no KERNEL_BANNER")
 
 
-def initrd_provenance(root, provenance, modules=None):
-    """The initrd's notices: the host packages its programs come from and the
-    Debian kernel package its modules come from."""
+def initrd_provenance(root, provenance, userland, modules=None):
+    """The initrd's notices: the pinned Debian packages its programs come from
+    (userland, build-monitor-image.py's Userland) and the Debian kernel
+    package its modules come from."""
     notices = root / "usr/share/antinomie-initrd-provenance"
     files = {}
     packages = {}
+    records = {record["package"]: record for record in userland.packages}
     helpers = monitor_helpers()
     for path in sorted(root.rglob("*")):
         if not path.is_file() or path.is_symlink() or path == root / "init":
@@ -323,33 +325,27 @@ def initrd_provenance(root, provenance, modules=None):
         if modules and path.parent == root / "lib/modules":
             continue
         relative = str(path.relative_to(root))
-        source = {"bin/busybox": Path("/usr/bin/busybox"),
-                  "bin/resize2fs": Path(shutil.which("resize2fs")),
-                  "bin/chattr": Path(shutil.which("chattr"))}.get(
-                      relative, Path("/") / relative)
-        ownership = subprocess.check_output(
-            ["dpkg-query", "--search", str(source.resolve())], text=True).splitlines()
-        owner = ownership[0].split(": ", 1)[0]
-        metadata = subprocess.check_output(
-            ["dpkg-query", "-W", "-f=${binary:Package}\t${Version}\t${Architecture}\t${source:Package}\t${source:Version}\n",
-             owner], text=True).strip().split("\t")
-        if len(metadata) != 5:
-            raise RuntimeError("unexpected host package metadata for " + owner)
-        packages[owner] = dict(zip(("package", "version", "architecture",
-                                   "source_package", "source_version"), metadata))
+        owner = userland.installed.get(relative)
+        if owner not in records:
+            raise RuntimeError(f"/{relative} in the initrd comes from no pinned package")
+        packages[owner] = records[owner]
         files["/" + relative] = {"package": owner, "sha256": helpers.checksum(path)}
     notices.mkdir(parents=True)
     for owner in sorted(packages):
-        package = owner.split(":", 1)[0]
-        target = notices / "packages" / package
+        target = notices / "packages" / owner
         target.mkdir(parents=True)
-        shutil.copy2(Path("/usr/share/doc") / package / "copyright", target / "copyright")
-    shutil.copytree("/usr/share/common-licenses", notices / "common-licenses")
-    shutil.copy2("/etc/os-release", notices / "host-os-release")
+        copyright = helpers.tree_file(userland.tree, f"usr/share/doc/{owner}/copyright")
+        if copyright is None:
+            raise RuntimeError(f"the pinned package {owner} has no copyright file")
+        shutil.copy2(copyright, target / "copyright")
+    licenses = helpers.tree_file(userland.tree, "usr/share/common-licenses/GPL-2")
+    if licenses is not None:
+        shutil.copytree(licenses.parent, notices / "common-licenses")
     shutil.copy2(REPO / "LICENSE", notices / "project-LICENSE")
     shutil.copy2(REPO / "scripts/build-monitor-image.py", notices / "bootstrap-recipe.py")
     record = {"packages": packages, "files": files,
-              "origin": "Installed host packages copied into the bootstrap initrd",
+              "origin": "Pinned Debian packages (build-monitor-image.py USERLAND) copied into "
+                        "the bootstrap initrd",
               "recipe": "bootstrap-recipe.py:initrd_tree"}
     if modules:
         record["kernel_modules"] = {
@@ -360,12 +356,13 @@ def initrd_provenance(root, provenance, modules=None):
     return packages
 
 
-def make_initrd(output, staging, provenance, modules=None):
-    """The bootstrap initrd (gzip cpio); modules: root_modules()."""
+def make_initrd(output, staging, provenance, userland, modules=None):
+    """The bootstrap initrd (gzip cpio); userland: the pinned Debian packages
+    (build-monitor-image.py debian_userland()); modules: root_modules()."""
     root = staging / "initrd-tree"
     root.mkdir()
-    monitor_helpers().initrd_tree(root, modules)
-    packages = initrd_provenance(root, provenance, modules)
+    monitor_helpers().initrd_tree(root, modules, userland)
+    packages = initrd_provenance(root, provenance, userland, modules)
     names = ["."] + [str(p.relative_to(root)) for p in sorted(root.rglob("*"))]
     cpio = subprocess.run(["cpio", "--create", "--format=newc", "--null", "--owner=0:0"],
                           cwd=root, input=b"\0".join(os.fsencode(n) for n in names) + b"\0",
@@ -694,7 +691,6 @@ ln -sf /etc/machine-id /var/lib/dbus/machine-id
 # against the index and the SHA-256 pinned here.
 DEBIAN_KERNEL_ARCHIVE = "https://snapshot.debian.org/archive/debian-security/20260621T081639Z"
 DEBIAN_KERNEL_SUITE = "trixie-security"
-DEBIAN_KERNEL_INDEX = "main/binary-amd64/Packages.xz"
 DEBIAN_KERNEL_PACKAGES = (
     ("linux-image-6.12.94+deb13-amd64", "6.12.94-1",
      "e38184e9aee8814cc12559abd10437ff2970c12cd01339e871b881abd9a5344e"),
@@ -705,8 +701,9 @@ ARCHIVE_KEYRINGS = (Path("/usr/share/keyrings/debian-archive-keyring.pgp"),
                     Path("/usr/share/keyrings/debian-archive-keyring.gpg"))
 
 
-def deb_name(package, version):
-    return f"{package}_{version}_amd64.deb"
+def deb_name(package, version, arch="amd64"):
+    """A package's file name as the archive's pool names it (no epoch)."""
+    return f"{package}_{version.split(':', 1)[-1]}_{arch}.deb"
 
 
 def sha256_file(path):
@@ -772,7 +769,7 @@ def release_hash(release, path):
     raise RuntimeError(f"the Debian archive's Release does not list {path}")
 
 
-def index_entries(packages, wanted):
+def index_entries(packages, wanted, arch="amd64"):
     """Filename, size and SHA-256 of each (package, version) in a Packages index."""
     found = {}
     for stanza in packages.split("\n\n"):
@@ -782,7 +779,7 @@ def index_entries(packages, wanted):
                 key, value = line.split(":", 1)
                 fields[key] = value.strip()
         key = (fields.get("Package"), fields.get("Version"))
-        if key in wanted and fields.get("Architecture") == "amd64":
+        if key in wanted and fields.get("Architecture") == arch:
             found[key] = (fields["Filename"], int(fields["Size"]), fields["SHA256"])
     missing = sorted(f"{name} {version}" for name, version in set(wanted) - set(found))
     if missing:
@@ -794,18 +791,29 @@ def debian_kernel_debs(cache, work, proxy=""):
     """Debian's kernel packages (DEBIAN_KERNEL_PACKAGES), from cache when a
     copy there matches its pinned SHA-256, else downloaded into cache (or work)
     through the archive's signed index."""
+    return pinned_debs((DEBIAN_KERNEL_ARCHIVE, DEBIAN_KERNEL_SUITE, "amd64"),
+                       DEBIAN_KERNEL_PACKAGES, cache, work, proxy, "Debian kernel packages")
+
+
+def pinned_debs(source, packages, cache, work, proxy="", what="Debian packages"):
+    """Pinned Debian packages, from cache when a copy there matches its
+    SHA-256, else downloaded into cache (or work) through the signed index of
+    source = (archive URL, suite, architecture). packages: (name, version,
+    SHA-256) triples. Returns their paths in that order."""
+    archive, suite, arch = source
     directory = cache or work
     directory.mkdir(parents=True, exist_ok=True)
-    debs = [directory / deb_name(name, version) for name, version, _ in DEBIAN_KERNEL_PACKAGES]
-    pinned = {path: sha for path, (_, _, sha) in zip(debs, DEBIAN_KERNEL_PACKAGES)}
+    debs = [directory / deb_name(name, version, arch) for name, version, _ in packages]
+    pinned = {path: sha for path, (_, _, sha) in zip(debs, packages)}
     if all(path.is_file() and sha256_file(path) == pinned[path] for path in debs):
-        print("Debian kernel packages verified in " + str(directory), flush=True)
+        print(f"{what} verified in {directory}", flush=True)
         return debs
-    index = work / "kernel-index"
+    index = work / f"index-{arch}"
     index.mkdir(parents=True, exist_ok=True)
     try:
-        entries = signed_index_entries(index, proxy)
-        for path, (name, version, sha) in zip(debs, DEBIAN_KERNEL_PACKAGES):
+        entries = signed_index_entries(index, proxy, source,
+                                       {(name, version) for name, version, _ in packages})
+        for path, (name, version, sha) in zip(debs, packages):
             filename, size, indexed = entries[(name, version)]
             if indexed != sha:
                 raise RuntimeError(f"{name} {version}: the signed index names another file "
@@ -813,7 +821,7 @@ def debian_kernel_debs(cache, work, proxy=""):
             if path.is_file() and sha256_file(path) == sha:
                 continue
             print(f"downloading {name} {version} ({size >> 20} MiB)", flush=True)
-            fetch(f"{DEBIAN_KERNEL_ARCHIVE}/{filename}", path, proxy)
+            fetch(f"{archive}/{filename}", path, proxy)
             if path.stat().st_size != size or sha256_file(path) != sha:
                 path.unlink()
                 raise RuntimeError(f"{path.name} does not match the Debian archive's index")
@@ -822,20 +830,25 @@ def debian_kernel_debs(cache, work, proxy=""):
     return debs
 
 
-def signed_index_entries(index, proxy=""):
-    """The pinned packages' index entries, from the archive's Packages index
-    whose hash its signed InRelease lists (both downloaded into index)."""
+def signed_index_entries(index, proxy="", source=None, wanted=None):
+    """The wanted (package, version) pairs' index entries, from the Packages
+    index of source = (archive URL, suite, architecture) whose hash its signed
+    InRelease lists (both downloaded into index). Default: the kernel
+    packages' archive and DEBIAN_KERNEL_PACKAGES."""
     import lzma
-    dists = f"{DEBIAN_KERNEL_ARCHIVE}/dists/{DEBIAN_KERNEL_SUITE}"
+    archive, suite, arch = source or (DEBIAN_KERNEL_ARCHIVE, DEBIAN_KERNEL_SUITE, "amd64")
+    if wanted is None:
+        wanted = {(name, version) for name, version, _ in DEBIAN_KERNEL_PACKAGES}
+    listing = f"main/binary-{arch}/Packages.xz"
+    dists = f"{archive}/dists/{suite}"
     fetch(f"{dists}/InRelease", index / "InRelease", proxy)
     release = verified_release(index / "InRelease", index)
-    expected, size = release_hash(release, DEBIAN_KERNEL_INDEX)
+    expected, size = release_hash(release, listing)
     listed = index / "Packages.xz"
-    fetch(f"{dists}/{DEBIAN_KERNEL_INDEX}", listed, proxy)
+    fetch(f"{dists}/{listing}", listed, proxy)
     if sha256_file(listed) != expected or listed.stat().st_size != size:
-        raise RuntimeError(f"{DEBIAN_KERNEL_INDEX} does not match the signed Release")
-    return index_entries(lzma.decompress(listed.read_bytes()).decode(),
-                         {(name, version) for name, version, _ in DEBIAN_KERNEL_PACKAGES})
+        raise RuntimeError(f"{listing} does not match the signed Release")
+    return index_entries(lzma.decompress(listed.read_bytes()).decode(), wanted, arch)
 
 
 def deb_member(deb, wanted):
@@ -1570,6 +1583,9 @@ def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=Fa
         stock_config(kernel_config, debs[0])
         initrd_modules = root_modules(debs[0])
         debian_kernel = {"hashes": [sha for _, _, sha in DEBIAN_KERNEL_PACKAGES], "debs": debs}
+        # The initrd's programs: Debian's pinned packages, whatever the host runs.
+        userland = monitor_helpers().debian_userland(kernel_package_cache, packages_dir,
+                                                     values["proxy"])
         try:
             with log_path.open("w") as log:
                 root = root_image(values, raw, staging, provenance, log, rootfs_cache,
@@ -1585,7 +1601,8 @@ def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=Fa
         subprocess.run(["qemu-img", "convert", "-f", "raw", "-O", "qcow2",
                         str(raw), str(bundle / "base.qcow2")], check=True)
         raw.unlink()
-        initrd_packages = make_initrd(bundle / "initrd.gz", staging, provenance, initrd_modules)
+        initrd_packages = make_initrd(bundle / "initrd.gz", staging, provenance, userland,
+                                      initrd_modules)
         items = ("kernel", "initrd.gz", "base.qcow2")
         if console:
             root["uefi_layout"] = uefi_layout(staging, bundle)
@@ -1620,7 +1637,7 @@ def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=Fa
             hashes["symbols.json.xz"] = helpers.checksum(bundle / "symbols.json.xz")
         helpers.stamp_revision(manifest, bundle / "kernel", allow_unversioned, app_version)
         # The root filesystem's packages are inventoried in provenance/packages.tsv;
-        # these are the host packages copied into the initrd.
+        # these are the pinned Debian packages copied into the initrd.
         manifest.setdefault("guest_sources", {})["packages"] = sorted(
             initrd_packages.values(), key=lambda item: item["package"])
         if values["name"]:
@@ -1683,8 +1700,9 @@ def main():
     args = parser.parse_args()
     if not args.kernel.is_file():
         parser.error("an existing patched Linux 6.12.94 kernel is required")
+    # The initrd's programs come from Debian's pinned packages, not the host.
     for tool in ("mmdebstrap", "mkfs.ext4", "mke2fs", "debugfs", "qemu-img", "cpio", "gzip",
-                 "busybox", "resize2fs", "dpkg-query", "tar", "sfdisk", "dpkg-deb"):
+                 "tar", "sfdisk", "dpkg-deb"):
         if shutil.which(tool) is None:
             parser.error("required installed tool missing: " + tool)
     try:

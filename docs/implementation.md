@@ -3175,6 +3175,30 @@ only as the stock profile allows. Its root stays `/dev/vda` (fstab, no SATA or
 NVMe root), and its root filesystem cache key now includes the kernel
 packages' SHA-256.
 
+### A base's programs from Debian's packages, whatever the build host
+
+The BusyBox base and every Debian base's bootstrap initrd used to copy the
+build host's `busybox`, `resize2fs` and `chattr` with the libraries `ldd`
+named, and recorded the host packages that owned them (`dpkg-query`): a base
+built on Ubuntu carried Ubuntu's BusyBox and glibc, and its published sources
+had to be Ubuntu's. Now `build-monitor-image.py` takes them from Debian 13's
+amd64 packages, pinned in `USERLAND` (busybox-static, e2fsprogs,
+libext2fs2t64, libcom-err2, libc6, at the container builder's snapshot) and
+fetched through the archive's signed index (`pinned_debs` in
+`build-debian-image.py`, shared with the kernel packages and the arm64
+userland), into `--package-cache` (build-base.py passes its inputs folder).
+
+| Step | How |
+| --- | --- |
+| Unpack | `unpack_deb`: the package's data archive into a private tree (no maintainer scripts), its control fields as the `guest_sources` record (package, version, architecture, source package and version) and the paths it shipped |
+| Copy | `install_binary`: the program, the libraries its `DT_NEEDED` names (into `/usr/lib/x86_64-linux-gnu`, Debian's multiarch directory the loader searches) and its loader at its `PT_INTERP` path; `elf_needs` reads both from the ELF file, so no host `ldd` or `readelf` is needed |
+| Applets | read from BusyBox's packed applet table (`busybox_applets`), not by running it |
+| Record | `bundle.json` `guest_sources.packages` lists the pinned packages; a Debian base's initrd notices (`provenance/initrd/packages.json`) map each initrd file to its package, with the package's own copyright file |
+
+The host no longer needs `busybox`, `ldd` or `dpkg-query` for a native
+build (the app's tool checks dropped them); it needs network access to the
+snapshot archive once, as for Debian's kernel packages.
+
 ## Guest stealth (0.7.0)
 
 Guest series 0046-0050; contract revision 17 unchanged, every guest change

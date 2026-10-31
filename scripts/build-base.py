@@ -572,6 +572,10 @@ def build_image(profile, values, build, work, output, app_version=None, image_ca
         for option in ("hostname", "name"):
             if option in values:
                 command += [f"--{option}", values[option]]
+        # BusyBox and the initrd's programs: Debian's pinned packages, kept
+        # with the other Debian inputs.
+        if inputs is not None:
+            command += ["--package-cache", inputs]
     else:
         if profile == "debian-minimal":
             values = {**values, "desktop": CONSOLE_DESKTOP}

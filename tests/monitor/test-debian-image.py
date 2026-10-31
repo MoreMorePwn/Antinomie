@@ -39,6 +39,30 @@ def newc(members):
     return initrd_resume.write_archive(entries)
 
 
+class StandInUserland:
+    """The pinned Debian userland for tests of the initrd's script: names
+    only; install_binary is stubbed so nothing is copied."""
+    tree = Path("/nonexistent")
+    packages = []
+    installed = {}
+
+    def busybox(self):
+        return Path("busybox")
+
+    def program(self, name):
+        return Path(name)
+
+    def applets(self):
+        return ["sh"]
+
+
+def initrd_script_tree(tree, modules=None):
+    """initrd_tree() with the stand-in userland (nothing is copied)."""
+    helpers = image.monitor_helpers()
+    with patch.object(helpers, "install_binary"):
+        helpers.initrd_tree(Path(tree), modules, StandInUserland())
+
+
 def fake_deb(path, files):
     """A .deb (ar archive) whose data.tar.xz holds files {path: bytes}."""
     data = io.BytesIO()
@@ -156,7 +180,7 @@ class BootEntryTests(unittest.TestCase):
 
     def run_entry(self, disk, variables):
         with tempfile.TemporaryDirectory() as tree:
-            image.monitor_helpers().initrd_tree(Path(tree))
+            initrd_script_tree(tree)
             init = (Path(tree) / "init").read_text()
         start = init.index("efi_hex() {")
         functions = init[start:init.index("\npart=${root#/dev/}", start)]
@@ -811,7 +835,7 @@ class DebianImageTests(unittest.TestCase):
             self.assertLess(script.index("efivarfs"), script.index("ext4"))
             tree = Path(name) / "initrd"
             tree.mkdir()
-            image.monitor_helpers().initrd_tree(tree, modules)
+            initrd_script_tree(tree, modules)
             init = (tree / "init").read_text()
             self.assertLess(init.index("mount -t sysfs"), init.index("load virtio_blk"))
             self.assertLess(init.index("load virtio_blk"), init.index("findfs"))
