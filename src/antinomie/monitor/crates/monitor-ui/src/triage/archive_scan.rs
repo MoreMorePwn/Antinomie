@@ -393,15 +393,23 @@ pub(super) fn scan_archive_query(
     });
     let omitted_files = file_index.omitted_files;
     let (all_changes, mut activity) = file_index.finish_all();
+    let segment_dirs: Vec<_> = segments
+        .iter()
+        .map(|segment| (segment.directory.clone(), segment.boot_id.clone()))
+        .collect();
     super::file_activity::resolve_earlier(
         &mut activity,
-        &segments
-            .iter()
-            .map(|segment| (segment.directory.clone(), segment.boot_id.clone()))
-            .collect::<Vec<_>>(),
+        &segment_dirs,
         None,
         request.before_copy.as_deref(),
     );
+    // Files the run only read or ran: their hashes come from the starting
+    // disk, here in the scan's thread and once the run is over.
+    let read_hashes = if request.run_finished {
+        super::file_activity::hash_read(&mut activity, &segment_dirs, None, cancel)
+    } else {
+        Default::default()
+    };
     let ioc_files: Vec<files::IocFile> = all_changes
         .iter()
         .filter_map(files::Change::ioc_file)
@@ -555,6 +563,7 @@ pub(super) fn scan_archive_query(
             collector: std::mem::take(&mut network.ioc),
             log: engine.take_ioc(),
             files: ioc_files,
+            read_hashes,
             report: request.report.as_deref(),
             clock: clock_anchor,
             capture: capture_state,

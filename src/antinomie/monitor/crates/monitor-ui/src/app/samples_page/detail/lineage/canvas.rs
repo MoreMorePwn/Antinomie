@@ -211,7 +211,7 @@ fn border(node: &LineageNode) -> (Color32, Color32) {
 
 fn node_title(node: &LineageNode) -> String {
     match node.kind {
-        NodeKind::Lost => format!("{} · hash unknown", node.label),
+        NodeKind::Lost => format!("{} · {}", node.label, node.no_hash_text()),
         _ => node.label.clone(),
     }
 }
@@ -729,6 +729,7 @@ mod tests {
             label: id.into(),
             path: String::new(),
             sha256: String::new(),
+            hash_note: String::new(),
             level,
             hidden_parents: 0,
             hidden_children: 0,

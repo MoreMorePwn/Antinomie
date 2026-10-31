@@ -78,6 +78,7 @@ fn a_modified_files_earlier_bytes_match_the_base_image() {
     fs::create_dir_all(tree.join("dev/shm")).unwrap();
     fs::write(tree.join("etc/crontab"), CRONTAB).unwrap();
     fs::write(tree.join("etc/ld.so.preload"), PRELOAD).unwrap();
+    fs::write(tree.join("etc/empty"), b"").unwrap();
     let raw = root.join("base.raw");
     fs::File::create(&raw).unwrap().set_len(16 << 20).unwrap();
     assert!(Command::new(mkfs)
@@ -159,6 +160,46 @@ fn a_modified_files_earlier_bytes_match_the_base_image() {
     );
     let file = file.unwrap();
     assert_eq!(file.disk.read(&file.path, 0, 4096).unwrap(), CRONTAB);
+
+    // Files the run only read hash from the same disk, bounded by a count
+    // cap, with a reason for each file that has none.
+    {
+        use antinomie_monitor_core::file_before::{StartHash, ToHash, START_HASH_COUNT_CAP};
+        let ask = |path: &str, key| ToHash {
+            path: path.into(),
+            key,
+            first_segment: 0,
+            last_segment: 0,
+        };
+        let done = resolver.hash_files(
+            &[
+                ask("/etc/crontab", Some(crontab)),
+                ask("/etc/empty", None),
+                ask("/etc/nothing-here", None),
+            ],
+            &|| false,
+        );
+        match &done.files["/etc/crontab"] {
+            StartHash::Hashed { sha256, size, .. } => {
+                assert_eq!(
+                    *sha256,
+                    antinomie_monitor_core::file_reconstruct::sha256_hex(CRONTAB)
+                );
+                assert_eq!(*size, CRONTAB.len() as u64);
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(done.files["/etc/empty"], StartHash::Empty);
+        assert!(matches!(
+            done.files["/etc/nothing-here"],
+            StartHash::Skipped(_)
+        ));
+        let many: Vec<ToHash> = (0..START_HASH_COUNT_CAP + 5)
+            .map(|_| ask("/etc/crontab", Some(crontab)))
+            .collect();
+        assert_eq!(resolver.hash_files(&many, &|| false).left_out, 5);
+        assert!(resolver.hash_files(&many, &|| true).cancelled);
+    }
 
     // The run wrote 8 bytes at offset 10; laid over the earlier bytes, the
     // file reads as before except there, and the bytes under it still read.

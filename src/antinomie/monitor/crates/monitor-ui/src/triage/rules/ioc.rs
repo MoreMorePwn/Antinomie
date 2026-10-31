@@ -135,7 +135,10 @@ pub(super) fn observe(cx: &Ctx, log: &mut Log) {
                     let why = hash.skipped();
                     (why.is_none().then(|| hash.sha256_hex()).flatten(), why)
                 }
-                None => (None, None),
+                None => (
+                    None,
+                    Some("the guest sent no hash record for this program".to_owned()),
+                ),
             };
             if log.executed.len() >= LIMIT {
                 log.omitted += 1;

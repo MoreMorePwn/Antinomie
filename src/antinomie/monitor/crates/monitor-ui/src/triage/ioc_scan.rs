@@ -6,6 +6,7 @@
 use super::*;
 use super::{files::IocFile, rules::ioc as log};
 use antinomie_monitor_core::{
+    file_before::StartHash,
     ioc::{
         feeds,
         indicator::{
@@ -67,6 +68,8 @@ pub(super) struct Gathered<'a> {
     pub collector: Collector,
     pub log: log::Log,
     pub files: Vec<IocFile>,
+    /// Files the run only read or ran, hashed from its starting disk.
+    pub read_hashes: super::file_activity::ReadHashes,
     pub report: Option<&'a antinomie_monitor_core::AnalysisReport>,
     pub clock: Option<antinomie_monitor_core::HostClockAnchor>,
     pub capture: Capture,
@@ -190,20 +193,96 @@ fn feed(gathered: &mut Gathered<'_>) {
             seen,
         );
     }
+    // What the starting disk gave for the files the run only read or ran.
+    let from_start: std::collections::BTreeMap<&str, &StartHash> = gathered
+        .read_hashes
+        .files
+        .iter()
+        .map(|(path, _, hash)| (path.as_str(), hash))
+        .collect();
+    let mut start_used = std::collections::BTreeSet::new();
     for run in &gathered.log.executed {
+        let start = from_start
+            .get(run.path.as_str())
+            .copied()
+            .filter(|_| run.sha256.is_none());
+        let (hash, note) = match (&run.sha256, start) {
+            (Some(sha), _) => (Some(hashes(sha)), None),
+            (None, Some(StartHash::Hashed { sha256, md5, .. })) => {
+                start_used.insert(run.path.as_str());
+                (
+                    Some(Hashes {
+                        sha256: sha256.clone(),
+                        md5: md5.clone(),
+                        sha1: String::new(),
+                    }),
+                    Some(StartHash::SOURCE.to_owned()),
+                )
+            }
+            (None, Some(StartHash::Empty)) => {
+                start_used.insert(run.path.as_str());
+                (
+                    None,
+                    Some(antinomie_monitor_core::ioc::EMPTY_FILE.to_owned()),
+                )
+            }
+            (None, _) => (
+                None,
+                run.why
+                    .as_deref()
+                    .map(antinomie_monitor_core::ioc::no_hash_text),
+            ),
+        };
         let seen = Seen {
             time_us: host_us(clock, run.who.time_ns),
             evidence: Some(call_evidence(&run.who, "execve")),
             ok: Some(true),
             process: Some(process(&run.who)),
-            note: run.why.as_ref().map(|why| format!("no hash: {why}")),
+            note,
+        };
+        let from_disk = hash.clone().filter(|_| run.sha256.is_none());
+        gathered
+            .collector
+            .file(&run.path, "executed", hash, Source::Syscall, seen);
+        if let Some(disk) = from_disk {
+            gathered.collector.file(
+                &run.path,
+                "executed",
+                Some(disk),
+                Source::Disk,
+                Seen {
+                    note: Some(StartHash::SOURCE.to_owned()),
+                    ..Seen::default()
+                },
+            );
+        }
+    }
+    // Other files the run only read, outside the library directories.
+    for (path, executed, hash) in &gathered.read_hashes.files {
+        if *executed || start_used.contains(path.as_str()) {
+            continue;
+        }
+        let (hashes, note) = match hash {
+            StartHash::Hashed { sha256, md5, .. } => (
+                Some(Hashes {
+                    sha256: sha256.clone(),
+                    md5: md5.clone(),
+                    sha1: String::new(),
+                }),
+                StartHash::SOURCE.to_owned(),
+            ),
+            StartHash::Empty => (None, antinomie_monitor_core::ioc::EMPTY_FILE.to_owned()),
+            StartHash::Skipped(_) => continue,
         };
         gathered.collector.file(
-            &run.path,
-            "executed",
-            run.sha256.as_deref().map(hashes),
-            Source::Syscall,
-            seen,
+            path,
+            "read",
+            hashes,
+            Source::Disk,
+            Seen {
+                note: Some(note),
+                ..Seen::default()
+            },
         );
     }
     for file in &gathered.files {
@@ -231,9 +310,9 @@ fn feed(gathered: &mut Gathered<'_>) {
                 process: Some(process(&who)),
                 note: file
                     .why
-                    .as_ref()
+                    .as_deref()
                     .filter(|_| hash.is_none())
-                    .map(|why| format!("no hash: {why}")),
+                    .map(antinomie_monitor_core::ioc::no_hash_text),
             };
             gathered
                 .collector
@@ -346,10 +425,24 @@ pub(super) fn build(
     if let Some(disk) = &disk {
         gathered.disk = (*disk.hashes).clone();
     }
-    let disk_notes = disk
+    let mut disk_notes = disk
         .as_ref()
         .map(|disk| disk.notes.clone())
         .unwrap_or_default();
+    let read = &gathered.read_hashes;
+    if read.hashed > 0 {
+        disk_notes.push(format!(
+            "{} files the run only read or ran were hashed from its starting disk",
+            read.hashed
+        ));
+    }
+    if read.left_out > 0 {
+        disk_notes.push(format!(
+            "{} more files were left out (at most {} are hashed from the starting disk)",
+            read.left_out,
+            antinomie_monitor_core::file_before::START_HASH_COUNT_CAP
+        ));
+    }
     feed(&mut gathered);
     let omitted = gathered.collector.omitted + gathered.log.omitted;
     let capture = gathered.capture;
@@ -822,6 +915,7 @@ mod tests {
             collector: Collector::default(),
             log,
             files,
+            read_hashes: Default::default(),
             report,
             clock: None,
             capture: Capture::Off,

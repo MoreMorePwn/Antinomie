@@ -112,6 +112,9 @@ pub struct LineageFile {
     pub roles: Vec<String>,
     /// The image path of the process that wrote it; empty when not known.
     pub writer: String,
+    /// Why the file has no hash, or where its hash came from ("hashed from
+    /// the starting disk"); empty when the guest's hash needs no remark.
+    pub hash_note: String,
 }
 
 /// A program one process started, from the image it ran before.
@@ -125,6 +128,8 @@ pub struct LineageExec {
     /// For a shell or interpreter started with `-c`: the command line it ran.
     pub command: String,
     pub count: u64,
+    /// As [`LineageFile::hash_note`], for the program's file.
+    pub hash_note: String,
 }
 
 /// What a run's files and programs say about where its files came from.

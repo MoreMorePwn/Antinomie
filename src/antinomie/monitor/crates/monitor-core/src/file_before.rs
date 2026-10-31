@@ -217,6 +217,151 @@ impl Drop for StartDisk {
     }
 }
 
+/// Largest file hashed from the starting disk.
+pub const START_HASH_SIZE_CAP: u64 = 64 << 20;
+/// Most files hashed from the starting disk for one run.
+pub const START_HASH_COUNT_CAP: usize = 200;
+/// Most bytes hashed from the starting disk for one run.
+pub const START_HASH_TOTAL_CAP: u64 = 1 << 30;
+
+/// What reading a file's digests from the starting disk gave.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StartHash {
+    /// Digests of the file as the run's disk held it before the run.
+    Hashed {
+        sha256: String,
+        md5: String,
+        size: u64,
+    },
+    /// The file is empty on the starting disk.
+    Empty,
+    /// No digests, and why (not on the disk, over a cap, unreadable).
+    Skipped(String),
+}
+
+impl StartHash {
+    /// The words a hash line carries when the digest came from here.
+    pub const SOURCE: &'static str = "hashed from the starting disk";
+}
+
+impl StartDisk {
+    /// SHA-256 and MD5 of the file `found` says is on this disk, read in
+    /// place by the sandboxed reader. `found` is what [`StartDisk::find`]
+    /// answered for the path; the size cap is applied by the caller's budget.
+    pub fn hash(&self, path: &str, found: &Before, size_cap: u64) -> StartHash {
+        if self.recorded.is_some() {
+            return StartHash::Skipped(
+                "the recording keeps the earlier bytes of changed files only".into(),
+            );
+        }
+        let size = match found {
+            Before::OnDisk { size, .. } | Before::Recorded { size, .. } => *size,
+            Before::TooLarge(size) => {
+                return StartHash::Skipped(format!(
+                    "the file is {size} bytes, over the {size_cap}-byte limit"
+                ));
+            }
+            Before::Created => return StartHash::Skipped("the run created this file".into()),
+            Before::NotCopied { why, .. } | Before::Elsewhere(why) | Before::Unavailable(why) => {
+                return StartHash::Skipped(why.clone());
+            }
+        };
+        if size == 0 {
+            return StartHash::Empty;
+        }
+        if size > size_cap {
+            return StartHash::Skipped(format!(
+                "the file is {size} bytes, over the {size_cap}-byte limit"
+            ));
+        }
+        let answer = self.with_reader(|reader, _| {
+            reader.request(DiskRequest::Info {
+                path: path.to_owned(),
+                hash_cap: size_cap,
+            })
+        });
+        match answer {
+            Ok(Ok(DiskAnswer::Info(info))) => match (info.sha256, info.md5) {
+                (Some(sha256), Some(md5)) => StartHash::Hashed {
+                    sha256,
+                    md5,
+                    size: info.entry.size,
+                },
+                _ => StartHash::Skipped(info.hash_note.unwrap_or_else(|| "not hashed".into())),
+            },
+            Ok(Ok(other)) => StartHash::Skipped(format!("unexpected answer {other:?}")),
+            Ok(Err(error)) => StartHash::Skipped(error.to_string()),
+            Err(why) => StartHash::Skipped(why),
+        }
+    }
+}
+
+/// One file to hash from the starting disk.
+#[derive(Clone, Debug)]
+pub struct ToHash {
+    pub path: String,
+    pub key: Option<FileKey>,
+    pub first_segment: usize,
+    pub last_segment: usize,
+}
+
+/// What hashing a run's read-only files from the starting disk did.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StartHashed {
+    /// The answer for each path asked.
+    pub files: std::collections::BTreeMap<String, StartHash>,
+    /// Files left out because of [`START_HASH_COUNT_CAP`] or
+    /// [`START_HASH_TOTAL_CAP`].
+    pub left_out: usize,
+    pub cancelled: bool,
+}
+
+impl Resolver {
+    /// Hash `files` from the starting disk, at most [`START_HASH_COUNT_CAP`]
+    /// of them, none over [`START_HASH_SIZE_CAP`] and [`START_HASH_TOTAL_CAP`]
+    /// bytes in all. Stops early when `cancel` returns true. Blocking: call it
+    /// off the UI thread.
+    pub fn hash_files(&mut self, files: &[ToHash], cancel: &dyn Fn() -> bool) -> StartHashed {
+        let mut done = StartHashed::default();
+        let mut total = 0_u64;
+        for (index, file) in files.iter().enumerate() {
+            if cancel() {
+                done.cancelled = true;
+                done.left_out = files.len() - index;
+                return done;
+            }
+            if index >= START_HASH_COUNT_CAP || total >= START_HASH_TOTAL_CAP {
+                done.left_out = files.len() - index;
+                return done;
+            }
+            let (before, source) = self.resolve(&Wanted {
+                path: &file.path,
+                names: &[],
+                key: file.key,
+                created: false,
+                first_segment: file.first_segment,
+                last_segment: file.last_segment,
+            });
+            let hash = match &source {
+                Some(source) => {
+                    let hash = source.disk.hash(&source.path, &before, START_HASH_SIZE_CAP);
+                    if let StartHash::Hashed { size, .. } = &hash {
+                        total = total.saturating_add(*size);
+                    }
+                    hash
+                }
+                None => match before {
+                    Before::Elsewhere(why) | Before::Unavailable(why) => StartHash::Skipped(why),
+                    Before::Created => StartHash::Skipped("the run created this file".into()),
+                    other => StartHash::Skipped(format!("not on the starting disk: {other:?}")),
+                },
+            };
+            done.files.insert(file.path.clone(), hash);
+        }
+        done
+    }
+}
+
 /// What one file of a run needs to find its earlier bytes.
 pub struct Wanted<'a> {
     /// The name the file was first reached by, and other names it had.

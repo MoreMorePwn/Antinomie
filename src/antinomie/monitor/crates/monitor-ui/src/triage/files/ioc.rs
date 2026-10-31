@@ -53,6 +53,17 @@ impl Change {
                 let why = hash.skipped();
                 (why.is_none().then(|| hash.sha256_hex()).flatten(), why)
             }
+            // The guest hashes a file when its last writer closes it (or just
+            // before it is deleted). A written file with no record was still
+            // open for writing when the run ended; an empty one has no digest.
+            None if !self.deleted && self.final_size == Some(0) => (
+                None,
+                Some(antinomie_monitor_core::ioc::EMPTY_FILE.to_owned()),
+            ),
+            None if !self.deleted => (
+                None,
+                Some("still open at run end (the guest hashes a file when it is closed)".into()),
+            ),
             None => (None, None),
         };
         Some(IocFile {

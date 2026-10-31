@@ -202,6 +202,20 @@ fn a_script_interpreter_or_a_changed_file_gives_no_sysmon_hash_and_says_why() {
 }
 
 #[test]
+fn a_file_with_no_bytes_says_empty_file_not_unknown() {
+    let mut bytes = hash_bytes(3, 0, 0);
+    bytes[2] = 0;
+    bytes[8..16].copy_from_slice(&0u64.to_le_bytes());
+    bytes[16..24].copy_from_slice(&0u64.to_le_bytes());
+    bytes.resize(112, 0);
+    let hash = file_hash(&note(HASH_KEY, HASH_WRITE_LAYOUT, bytes)).unwrap();
+    assert_eq!(hash.sha256, None);
+    assert_eq!(hash.skipped().as_deref(), Some("empty file"));
+    assert_eq!(crate::ioc::no_hash_text("empty file"), "empty file");
+    assert_eq!(crate::ioc::no_hash_text("too large"), "no hash: too large");
+}
+
+#[test]
 fn every_skipped_status_has_a_reason_and_no_digest() {
     for (status, words) in [
         (1, "over the 16 MiB limit"),

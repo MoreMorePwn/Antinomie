@@ -122,6 +122,7 @@ fn file(path: &str, sha: &str, roles: &[&str], writer: &str) -> LineageFile {
         sha256: sha.into(),
         roles: roles.iter().map(|role| role.to_string()).collect(),
         writer: writer.into(),
+        hash_note: String::new(),
     }
 }
 

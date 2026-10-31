@@ -522,9 +522,12 @@ fn details(ui: &mut egui::Ui, state: &mut State, data: &Data, out: &mut Option<O
             ui.label(RichText::new(&node.path).monospace().small());
         }
         if node.sha256.is_empty() {
-            ui.label(theme::hint_text("hash unknown"));
+            ui.label(theme::hint_text(node.no_hash_text()));
         } else {
             ui.label(RichText::new(&node.sha256).monospace().small());
+            if !node.hash_note.is_empty() {
+                ui.label(theme::hint_text(&node.hash_note));
+            }
             if ui
                 .small_button(egui_phosphor::regular::COPY)
                 .on_hover_text("Copy SHA-256")

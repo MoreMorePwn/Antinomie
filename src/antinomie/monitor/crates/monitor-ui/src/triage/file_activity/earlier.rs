@@ -69,6 +69,139 @@ pub(in crate::triage) fn resolve(
     }
 }
 
+/// What hashing the read-only files from the starting disk did, for the
+/// IOC list's notes.
+#[derive(Clone, Debug, Default)]
+pub(in crate::triage) struct ReadHashes {
+    /// Files not hashed because of the count or total size cap.
+    pub left_out: usize,
+    /// Files hashed.
+    pub hashed: usize,
+    /// Each file asked: its path, whether the run executed it, and the answer.
+    pub files: Vec<(String, bool, antinomie_monitor_core::file_before::StartHash)>,
+}
+
+/// Cached answers of the last runs: a refresh of a finished run's scan must
+/// not read the disk again for the same files.
+static HASHED: Mutex<Vec<(String, antinomie_monitor_core::file_before::StartHashed)>> =
+    Mutex::new(Vec::new());
+
+/// Hash the files the run only read or ran from its starting disk, for the
+/// IOC and lineage lists. Bounded: at most
+/// [`antinomie_monitor_core::file_before::START_HASH_COUNT_CAP`] files, none
+/// over [`antinomie_monitor_core::file_before::START_HASH_SIZE_CAP`] bytes and
+/// [`antinomie_monitor_core::file_before::START_HASH_TOTAL_CAP`] bytes in all.
+/// Programs the run executed come first, then other files outside the
+/// library directories. Runs in the scan's worker thread, never the UI's.
+pub(in crate::triage) fn hash_read(
+    activity: &mut Activity,
+    segments: &[(PathBuf, String)],
+    executable: Option<PathBuf>,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> ReadHashes {
+    use super::Kind;
+    use antinomie_monitor_core::file_before::{StartHashed, ToHash, START_HASH_COUNT_CAP};
+    let mut chosen: Vec<(bool, usize)> = Vec::new();
+    for (index, file) in activity.files.iter().enumerate() {
+        if file.changed()
+            || file.created
+            || file.deleted
+            || file.failed_only
+            || file.standard_io
+            || !file.path.starts_with('/')
+        {
+            continue;
+        }
+        let done = |kind: Kind| {
+            file.events
+                .iter()
+                .any(|event| event.kind == kind && event.success != Some(false))
+        };
+        let executed = done(Kind::Exec);
+        if executed || ((done(Kind::Read) || done(Kind::Map)) && !file.library()) {
+            chosen.push((executed, index));
+        }
+    }
+    // Programs first; the order of first use otherwise.
+    chosen.sort_by_key(|(executed, index)| (!executed, *index));
+    let left_over = chosen.len().saturating_sub(START_HASH_COUNT_CAP);
+    chosen.truncate(START_HASH_COUNT_CAP);
+    let wanted: Vec<ToHash> = chosen
+        .iter()
+        .map(|(_, index)| {
+            let file = &activity.files[*index];
+            ToHash {
+                path: file.path.clone(),
+                key: file.identity,
+                first_segment: file.first_segment,
+                last_segment: file.last_segment,
+            }
+        })
+        .collect();
+    if wanted.is_empty() {
+        return ReadHashes::default();
+    }
+    let key = format!(
+        "{}|{}",
+        segments
+            .iter()
+            .map(|(dir, boot)| format!("{}@{boot}", dir.display()))
+            .collect::<Vec<_>>()
+            .join(","),
+        wanted
+            .iter()
+            .map(|file| file.path.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    let cached = HASHED.lock().ok().and_then(|cache| {
+        cache
+            .iter()
+            .find(|(known, _)| *known == key)
+            .map(|(_, done)| done.clone())
+    });
+    let done: StartHashed = match cached {
+        Some(done) => done,
+        None => {
+            let mut resolver = Resolver::new(segments, executable).disk_only();
+            let done = resolver.hash_files(&wanted, &|| {
+                cancel.load(std::sync::atomic::Ordering::Relaxed)
+            });
+            // A cut-short answer is not kept: the next scan finishes it.
+            if !done.cancelled {
+                if let Ok(mut cache) = HASHED.lock() {
+                    cache.retain(|(known, _)| *known != key);
+                    cache.push((key, done.clone()));
+                    if cache.len() > 8 {
+                        cache.remove(0);
+                    }
+                }
+            }
+            done
+        }
+    };
+    let mut hashed = 0;
+    let mut files = Vec::new();
+    for (executed, index) in &chosen {
+        let file = &mut activity.files[*index];
+        if let Some(found) = done.files.get(&file.path) {
+            if matches!(
+                found,
+                antinomie_monitor_core::file_before::StartHash::Hashed { .. }
+            ) {
+                hashed += 1;
+            }
+            file.start_hash = Some(found.clone());
+            files.push((file.path.clone(), *executed, found.clone()));
+        }
+    }
+    ReadHashes {
+        left_out: done.left_out + left_over,
+        hashed,
+        files,
+    }
+}
+
 /// One line for the window: where the file's earlier bytes stand.
 pub(super) fn describe(earlier: &Earlier) -> String {
     use antinomie_monitor_core::byte_size::file_size;

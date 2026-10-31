@@ -690,7 +690,11 @@ impl Open {
             }
         }
         if guest.is_empty() {
-            ui.weak("The guest took no hash of this file.");
+            ui.weak(if file.changed() {
+                "No hash: still open at run end (the guest hashes a file when its last writer closes it)."
+            } else {
+                "No hash: only read, and the guest hashes only programs, written files and deleted files."
+            });
         }
         for (hex, moment) in &guest {
             ui.add(

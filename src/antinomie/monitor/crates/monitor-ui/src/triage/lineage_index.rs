@@ -83,13 +83,28 @@ pub(super) fn index(nodes: &[ProcessNode], ioc: Option<&ioc_scan::IocScan>) -> L
     let mut out = Lineage::default();
     // Hashes the run knows for a path, from the IOC file list.
     let mut hashes: BTreeMap<&str, &str> = BTreeMap::new();
+    // What the run said of each path's hash: where it came from, or why
+    // there is none.
+    let mut notes: BTreeMap<&str, &str> = BTreeMap::new();
     if let Some(ioc) = ioc {
         for indicator in ioc.indicators.iter().filter(|i| i.ty == Type::File) {
             if let Some(hash) = indicator.hashes.as_ref().filter(|h| !h.sha256.is_empty()) {
                 hashes.insert(indicator.path.as_str(), hash.sha256.as_str());
             }
+            if let Some(note) = indicator.hash_note.as_deref() {
+                // A line about a file that was hashed is where the hash came
+                // from; one about a file that was not is the reason.
+                notes.entry(indicator.path.as_str()).or_insert(note);
+            }
         }
     }
+    // "no hash: too large" reads as "too large" under the hash line.
+    let note_of = |path: &str| -> String {
+        notes
+            .get(path)
+            .map(|note| note.trim_start_matches("no hash: ").to_owned())
+            .unwrap_or_default()
+    };
     let by_task: BTreeMap<(u32, u64), &ProcessNode> = nodes
         .iter()
         .map(|node| ((node.pid, node.cookie), node))
@@ -116,6 +131,7 @@ pub(super) fn index(nodes: &[ProcessNode], ioc: Option<&ioc_scan::IocScan>) -> L
                     .unwrap_or_default(),
                 command,
                 count: 0,
+                hash_note: note_of(path),
             });
         entry.count += 1;
     }
@@ -155,6 +171,7 @@ pub(super) fn index(nodes: &[ProcessNode], ioc: Option<&ioc_scan::IocScan>) -> L
                 .unwrap_or_default(),
             roles,
             writer,
+            hash_note: note_of(&indicator.path),
         });
     }
     out

@@ -23,11 +23,9 @@ mod graph;
 mod reconstruct;
 mod window;
 
-pub(super) use earlier::{copy_boot, resolve as resolve_earlier};
+pub(super) use earlier::{copy_boot, hash_read, resolve as resolve_earlier, ReadHashes};
 
-pub(super) use reconstruct::{
-    menu as reconstruct_menu, row_path, start_of, REQUEST as RECONSTRUCT_REQUEST,
-};
+pub(super) use reconstruct::{menu as reconstruct_menu, start_of, REQUEST as RECONSTRUCT_REQUEST};
 pub(super) use window::{Window, CALLS_TABLE, FILE_TABLE};
 
 #[cfg(test)]
@@ -205,6 +203,10 @@ pub(super) struct FileActivity {
     /// What the run's starting disk says of the file's earlier bytes; `None`
     /// until looked up (only files the run changed are).
     pub earlier: Option<Earlier>,
+    /// For a file the run only read or ran: its digests, read from the
+    /// starting disk after the run (`None` until then, and for files the run
+    /// changed, which the guest hashed or which have no starting content).
+    pub start_hash: Option<antinomie_monitor_core::file_before::StartHash>,
 }
 
 /// A file's bytes at the start of the run, and where to read them.
@@ -534,6 +536,7 @@ impl Builder {
                 first_segment: self.segment,
                 last_segment: self.segment,
                 earlier: None,
+                start_hash: None,
             });
         file.last_segment = file.last_segment.max(self.segment);
         if !file.path_known && path_known {
@@ -703,6 +706,7 @@ impl Builder {
             first_segment: self.segment,
             last_segment: self.segment,
             earlier: None,
+            start_hash: None,
         });
         file.last_segment = file.last_segment.max(self.segment);
         file.standard_io = false;

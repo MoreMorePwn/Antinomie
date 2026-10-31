@@ -773,6 +773,37 @@ fn file_written(ui: &mut egui::Ui, file: &FileActivity) {
     }
 }
 
+/// A file the run only read or ran: its digests as the starting disk holds
+/// them, or why there are none.
+fn start_hash(ui: &mut egui::Ui, file: &FileActivity) {
+    use antinomie_monitor_core::file_before::StartHash;
+    let Some(hash) = &file.start_hash else {
+        return;
+    };
+    ui.add_space(8.0);
+    ui.label(theme::section_title(ui, "Hash"));
+    match hash {
+        StartHash::Hashed { sha256, md5, .. } => {
+            ui.label(format!("SHA-256 ({})", StartHash::SOURCE));
+            ui.add(egui::Label::new(egui::RichText::new(sha256).monospace()).wrap());
+            ui.label("MD5");
+            ui.monospace(md5);
+        }
+        StartHash::Empty => {
+            ui.weak(antinomie_monitor_core::ioc::EMPTY_FILE);
+        }
+        StartHash::Skipped(why) => {
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(format!("Not hashed from the starting disk: {why}"))
+                        .color(theme::muted()),
+                )
+                .wrap(),
+            );
+        }
+    }
+}
+
 /// The bytes the run changed, where the run captured what they were and what
 /// they became.
 fn contents(
@@ -780,6 +811,7 @@ fn contents(
     file: &FileActivity,
     clock: Option<antinomie_monitor_core::HostClockAnchor>,
 ) {
+    start_hash(ui, file);
     let known = &file.contents;
     if known.runs.is_empty()
         && known.gaps.is_empty()

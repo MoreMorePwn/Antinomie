@@ -68,11 +68,27 @@ pub struct Node {
     pub path: String,
     /// Empty when the hash is unknown.
     pub sha256: String,
+    /// What to say of the hash: why there is none ("empty file", "too large",
+    /// "still open at run end"), or where it came from ("hashed from the
+    /// starting disk"). Empty when the guest's hash needs no remark.
+    pub hash_note: String,
     /// Negative for parents, 0 for the sample, positive for children.
     pub level: i32,
     /// Neighbours not drawn at the current levels.
     pub hidden_parents: usize,
     pub hidden_children: usize,
+}
+
+impl Node {
+    /// What a hash line says when the node has no digest: the run's reason,
+    /// or that none was recorded.
+    pub fn no_hash_text(&self) -> String {
+        if self.hash_note.is_empty() {
+            "no hash recorded".to_owned()
+        } else {
+            self.hash_note.clone()
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -262,6 +278,11 @@ pub fn build(
             label,
             path: path.to_owned(),
             sha256: sha.to_owned(),
+            hash_note: if sha == crate::ioc::EMPTY_SHA256 {
+                crate::ioc::EMPTY_FILE.to_owned()
+            } else {
+                String::new()
+            },
             level: 0,
             hidden_parents: 0,
             hidden_children: 0,
@@ -328,6 +349,7 @@ pub fn build(
                             label: format!("$ {command}"),
                             path: path.clone(),
                             sha256: String::new(),
+                            hash_note: String::new(),
                             level: 0,
                             hidden_parents: 0,
                             hidden_children: 0,
@@ -388,6 +410,27 @@ pub fn build(
                 EdgeKind::Dropped,
                 1,
             );
+        }
+        // What the run said of a hash it has no digest for, or where it took
+        // one from, goes onto the node of that file.
+        let notes = lineage
+            .files
+            .iter()
+            .map(|file| (&file.path, &file.hash_note))
+            .chain(
+                lineage
+                    .execs
+                    .iter()
+                    .filter(|exec| exec.command.is_empty())
+                    .map(|exec| (&exec.path, &exec.hash_note)),
+            )
+            .filter(|(_, note)| !note.is_empty());
+        for (path, note) in notes {
+            if let Some(node) = raw.nodes.get_mut(&id_of(path).0) {
+                if node.hash_note.is_empty() {
+                    node.hash_note.clone_from(note);
+                }
+            }
         }
     }
     for link in links {
@@ -635,6 +678,7 @@ mod tests {
             sha256: hash.into(),
             roles: roles.iter().map(|r| (*r).to_owned()).collect(),
             writer: writer.into(),
+            hash_note: String::new(),
         }
     }
 
@@ -645,6 +689,7 @@ mod tests {
             sha256: hash.into(),
             command: command.into(),
             count,
+            hash_note: String::new(),
         }
     }
 
@@ -718,6 +763,70 @@ mod tests {
                 exec("/tmp/.x", "/tmp/.x", &sha(2), "", 5),
             ],
         }
+    }
+
+    #[test]
+    fn a_file_with_no_hash_says_why_and_an_empty_one_says_so() {
+        let me = sha(1);
+        let mut l = lineage();
+        for (path, note) in [
+            ("/tmp/.x", "hashed from the starting disk"),
+            ("/tmp/empty", "empty file"),
+            ("/tmp/big", "file is 99999999 bytes, over the 16 MiB limit"),
+        ] {
+            let digest = if path == "/tmp/.x" {
+                sha(2)
+            } else {
+                String::new()
+            };
+            let mut entry = file(path, &digest, &["created"], "/tmp/install.sh");
+            entry.hash_note = note.into();
+            l.files.push(entry);
+        }
+        // An empty file is also known by its digest.
+        l.files.push(file(
+            "/tmp/zero",
+            crate::ioc::EMPTY_SHA256,
+            &["created"],
+            "/tmp/install.sh",
+        ));
+        let graph = build(
+            &me,
+            &[run(1, &me, &l)],
+            &[],
+            &nobody,
+            &Options {
+                children: 3,
+                ..manifest()
+            },
+        );
+        let node = |label: &str| graph.nodes.iter().find(|node| node.label == label).unwrap();
+        assert_eq!(node("empty").no_hash_text(), "empty file");
+        assert!(node("big").no_hash_text().contains("16 MiB"));
+        assert_eq!(node(".x").hash_note, "hashed from the starting disk");
+        assert_eq!(node("zero").hash_note, "empty file");
+        // A file the run said nothing about reads as not recorded, never as an unknown hash.
+        l.files
+            .push(file("/tmp/silent", "", &["created"], "/tmp/install.sh"));
+        let graph = build(
+            &me,
+            &[run(1, &me, &l)],
+            &[],
+            &nobody,
+            &Options {
+                children: 3,
+                ..manifest()
+            },
+        );
+        assert_eq!(
+            graph
+                .nodes
+                .iter()
+                .find(|n| n.label == "silent")
+                .unwrap()
+                .no_hash_text(),
+            "no hash recorded"
+        );
     }
 
     #[test]

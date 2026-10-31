@@ -69,6 +69,12 @@ impl View {
                             row(ui, "SHA-1", &hashes.sha1, true);
                         }
                     }
+                    // Where the hash came from, or why the file has none.
+                    if indicator.ty == Type::File {
+                        if let Some(note) = &indicator.hash_note {
+                            row(ui, "Hash", note, false);
+                        }
+                    }
                     if let Some(tls) = &indicator.tls {
                         row(ui, "SNI", if tls.sni.is_empty() { "(none)" } else { &tls.sni }, true);
                         row(ui, "JA3", &tls.ja3, true);

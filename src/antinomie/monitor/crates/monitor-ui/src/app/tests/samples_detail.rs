@@ -162,18 +162,21 @@ pub(super) fn save_digest(run: &RunSummary, tier: &str, hit: bool) {
                     sha256: sha(2),
                     roles: vec!["created".into(), "executed".into()],
                     writer: "/tmp/install.sh".into(),
+                    ..LineageFile::default()
                 },
                 LineageFile {
                     path: "/usr/lib/libprocesshider.so".into(),
                     sha256: sha(3),
                     roles: vec!["created".into()],
                     writer: "/tmp/.x".into(),
+                    ..LineageFile::default()
                 },
                 LineageFile {
                     path: "/usr/bin/curl".into(),
                     sha256: sha(9),
                     roles: vec!["executed".into()],
                     writer: String::new(),
+                    ..LineageFile::default()
                 },
             ],
             execs: vec![

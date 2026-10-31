@@ -178,6 +178,10 @@ pub struct Indicator {
     pub roles: Vec<String>,
     /// Why nothing was looked up: `private address`, `no content kept`.
     pub not_checked: Option<String>,
+    /// For a file: where its hash came from or why it has none, as a line
+    /// ("hashed from the starting disk", "empty file", "no hash: ...").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hash_note: Option<String>,
 }
 
 impl Indicator {
@@ -201,6 +205,7 @@ impl Indicator {
             path: String::new(),
             roles: Vec::new(),
             not_checked: None,
+            hash_note: None,
         }
     }
 
@@ -535,6 +540,9 @@ impl Collector {
         }
         if indicator.hashes.is_none() {
             indicator.hashes = hashes;
+        }
+        if indicator.hash_note.is_none() {
+            indicator.hash_note.clone_from(&seen.note);
         }
         Self::record(entry, source, &seen);
     }

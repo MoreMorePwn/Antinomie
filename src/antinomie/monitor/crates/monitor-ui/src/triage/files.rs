@@ -185,7 +185,7 @@ impl Change {
         };
         let what = match (hash.sha256_hex(), hash.skipped()) {
             (Some(hex), None) => format!("SHA-256 {}…", &hex[..12]),
-            (_, Some(why)) => format!("no hash: {why}"),
+            (_, Some(why)) => antinomie_monitor_core::ioc::no_hash_text(&why),
             (None, None) => "no hash".to_owned(),
         };
         self.step(format!("{moment} · {what}"));

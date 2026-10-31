@@ -317,6 +317,10 @@ impl FileHash {
     pub fn skipped(&self) -> Option<String> {
         let limit = self.limit / (1024 * 1024);
         let reason = match self.status {
+            // A file with no bytes has no digest to take: say so, not "unknown".
+            HashStatus::Ok if self.sha256.is_none() && self.size == 0 && self.hashed == 0 => {
+                crate::ioc::EMPTY_FILE.to_owned()
+            }
             HashStatus::Ok if self.interpreter => {
                 "the image was a script's interpreter, not the script".to_owned()
             }
