@@ -190,6 +190,24 @@ class PlanTests(unittest.TestCase):
         with self.assertRaises(vm.Failure):
             vm.select(checks, ["nope"], [])
 
+    def test_an_arm64_tier_scales_its_timeouts_and_leaves_out_what_has_no_arm64_version(self):
+        scale = vm.time_scale("arm64")
+        source = vm.MACHINE_RS.read_text()
+        self.assertIn(f"const ARM64_TIME_SCALE: u32 = {scale};", source)
+        self.assertEqual(vm.time_scale("x86_64"), 1)
+        x86 = {c.name: c.timeout for c in vm.plan("full", self.ctx())}
+        self.assertEqual(x86, {c.name: c.timeout for c in vm.plan("full", self.ctx(), "x86_64")})
+        arm64 = {c.name: c for c in vm.plan("full", self.ctx(), "arm64")}
+        self.assertIn("conf-quick", arm64)
+        for name in ("debug-p2", "debugger-live", "stealth", "snapshot", "conf-stress-extreme",
+                     "io-old-new-p3", "io-new-old-audit", "uring-legacy"):
+            self.assertNotIn(name, arm64)
+        for name, check in arm64.items():
+            self.assertEqual(check.timeout, x86[name] * scale, name)
+        self.assertEqual([c.name for c in vm.plan("quick", self.ctx(), "arm64")], ["conf-quick"])
+        self.assertEqual(vm.parse(["quick", "/base", "--arch", "arm64"]).arch, "arm64")
+        self.assertEqual(vm.parse(["quick", "/base"]).arch, "x86_64")
+
     def test_missing_prerequisites_skip(self):
         ctx = {**self.ctx(), "old_base": None, "old_ok": False}
         by_name = {c.name: c for c in vm.plan("full", ctx)}

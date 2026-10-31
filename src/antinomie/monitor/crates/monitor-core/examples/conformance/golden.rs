@@ -306,21 +306,8 @@ fn diff(old: &str, new: &str) -> Vec<String> {
     out
 }
 
-/// The golden directory for the base: Debian Minimal's own, else the shared one.
-fn directory(context: &Context) -> std::path::PathBuf {
-    let shared = context.repo.join("tests/monitor/conformance/trace/golden");
-    let guest = antinomie_monitor_core::storage::Bundle::load(&context.base)
-        .ok()
-        .and_then(|bundle| bundle.guest)
-        .map(|guest| guest.id);
-    match guest.as_deref() {
-        Some("debian-minimal") => shared.join("debian-minimal"),
-        _ => shared,
-    }
-}
-
 pub fn check(context: &Context, reports: &[GroupReport], views: &Views) -> Result<Checked, String> {
-    let directory = directory(context);
+    let directory = context.golden_dir();
     let mut passed = true;
     let mut summary = Vec::new();
     for report in reports

@@ -17,6 +17,12 @@ full   quick, the debugger, audit, io_uring, tracer, stealth, cloud profiles, ne
 auto   full when the diff against REF touches the kernel/host contract (guest
        patches, transport, protocol docs, ANTC_REVISION), otherwise quick
 
+--arch arm64 runs a tier on an arm64 BusyBox base: its fixtures are built
+with aarch64-linux-gnu-gcc into fixtures-arm64, every timeout is scaled by the
+host's arm64 time scale (monitor-core src/vm/machine.rs ARM64_TIME_SCALE), and
+the checks that have no arm64 version yet are not planned (the debugger, the x86
+stealth probe, snapshots, interop, stress-extreme: see ARM64_LATER).
+
 BASE is a BusyBox base bundle built from the current guest series; the quick
 tier also runs on a Debian Minimal base (its VMs get a throwaway account and
 the base's minima). Everything a check writes goes under --out (default vm-regress-out): logs, runs, the
@@ -70,6 +76,26 @@ OK_STATUSES = ("PASS", "FLAKY")
 # still fails it.
 GAP_TOLERANCE_NS = 20_000_000
 ATTRIBUTED_GROUPS = {"conf-stress-contended": "stress-contended"}
+# The compiler of each guest architecture's static fixtures.
+ARCH_CC = {"x86_64": "gcc", "arm64": "aarch64-linux-gnu-gcc"}
+# Checks an arm64 tier does not plan yet, and the card that brings each: the
+# debugger (MA-11/14), the x86 CPUID stealth probe (MA-17), snapshots (MA-16),
+# interop (x86 bases only), stress-extreme (disk under TCG).
+ARM64_LATER = {"debug-p2", "debug-p3", "debugger-live", "stealth", "cloud", "snapshot",
+               "conf-stress-extreme", "uring-legacy", "tracer-legacy"}
+MACHINE_RS = MONITOR / "crates/monitor-core/src/vm/machine.rs"
+
+
+def time_scale(arch):
+    """How many times longer a guest of this architecture may take: 1 for
+    x86-64, the host's ARM64_TIME_SCALE for arm64 (one constant, in
+    vm/machine.rs)."""
+    if arch == "x86_64":
+        return 1
+    match = re.search(r"const ARM64_TIME_SCALE: u32 = (\d+);", MACHINE_RS.read_text())
+    if not match:
+        raise Failure(f"ARM64_TIME_SCALE is missing from {MACHINE_RS}")
+    return int(match[1])
 
 
 class Failure(Exception):
@@ -350,8 +376,20 @@ class Check:
         self.timeout, self.vm, self.needs, self.cargo = timeout, vm, needs, cargo
 
 
-def plan(tier, ctx):
-    """The checks of a tier in run order. ctx holds paths: base, old_base, out, new, old, fix."""
+def plan(tier, ctx, arch="x86_64"):
+    """The checks of a tier in run order. ctx holds paths: base, old_base, out, new, old, fix.
+    A foreign architecture's tier leaves out ARM64_LATER and scales every timeout."""
+    checks = plan_x86_64(tier, ctx)
+    if arch == "x86_64":
+        return checks
+    scale = time_scale(arch)
+    checks = [check for check in checks if check.name not in ARM64_LATER and check.group != "interop"]
+    for check in checks:
+        check.timeout *= scale
+    return checks
+
+
+def plan_x86_64(tier, ctx):
     out, new, fix, base, old_base = ctx["out"], ctx["new"], ctx["fix"], ctx["base"], ctx["old_base"]
     runs = out / "runs"
     mon = str(MONITOR)
@@ -427,8 +465,10 @@ def select(checks, only, skip):
 # Fixtures and hosts
 
 
-def build_fixtures(out):
+def build_fixtures(out, arch="x86_64"):
     """Static guest programs from tests/monitor, built once per output folder."""
+    if arch != "x86_64":
+        return build_foreign_fixtures(out, arch)
     fix = out / "fixtures"
     stamp = fix / ".built"
     if stamp.exists():
@@ -469,6 +509,39 @@ def build_fixtures(out):
     code, _ = run_logged([str(TESTS / "build-workload.sh"), str(fix), "--static"], env, str(ROOT), log, 1800)
     if code != 0:
         raise Failure(f"building the stress samples failed, see {log}")
+    stamp.write_text("built\n")
+    return fix
+
+
+def build_foreign_fixtures(out, arch):
+    """A foreign architecture's static fixtures, cross-built into fixtures-<arch>:
+    the portable ones (no debugger fixtures, no x86 CPUID probe) and the stress
+    samples."""
+    fix = out / f"fixtures-{arch}"
+    stamp = fix / ".built"
+    if stamp.exists():
+        return fix
+    log = out / "logs" / f"fixtures-{arch}.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    fix.mkdir(parents=True, exist_ok=True)
+    cc = ARCH_CC[arch]
+    if not shutil.which(cc):
+        raise Failure(f"{cc} is not installed (the {arch} cross compiler)")
+    env = dict(os.environ, CC=cc)
+    strict = ["-Wall", "-Wextra", "-Werror"]
+    builds = [
+        (["-static", "-O2", *strict], "audit-fixture.c", fix / "audit-fixture"),
+        (["-static", "-O2", "-pthread", *strict], "uring-fixture.c", fix / "uring-fixture"),
+        (["-static", "-O2", *strict], "tracer-fixture.c", fix / "tracer-fixture"),
+        (["-static", "-O2", *strict], "cloud-probe.c", fix / "cloud-probe"),
+    ]
+    for flags, source, target in builds:
+        code, _ = run_logged([cc, *flags, "-o", str(target), str(TESTS / source)], env, str(ROOT), log, 600)
+        if code != 0:
+            raise Failure(f"building {source} for {arch} failed, see {log}")
+    code, _ = run_logged([str(TESTS / "build-workload.sh"), str(fix), "--static"], env, str(ROOT), log, 1800)
+    if code != 0:
+        raise Failure(f"building the {arch} stress samples failed, see {log}")
     stamp.write_text("built\n")
     return fix
 
@@ -857,6 +930,8 @@ def parser():
                    help="old host for interop: a git rev built in a temporary worktree, or a built checkout "
                         "(default: the --against ref, else the nearest origin/release-*)")
     p.add_argument("--against", help="auto: ref to diff against (default: the nearest origin/release-*)")
+    p.add_argument("--arch", choices=tuple(ARCH_CC), default="x86_64",
+                   help="architecture of BASE (default: %(default)s)")
     p.add_argument("--out", default="vm-regress-out", help="output folder (default: %(default)s)")
     p.add_argument("--only", action="append", default=[], metavar="CHECK", help="run only this check (repeatable)")
     p.add_argument("--skip", action="append", default=[], metavar="CHECK", help="skip this check (repeatable)")
@@ -953,7 +1028,7 @@ def main(argv=None):
         # Placeholders until the fixtures and the old host exist; plan() runs again then.
         ctx = {"out": out, "base": base, "old_base": old_base, "new": MONITOR / EXAMPLES,
                "fix": out / "fixtures", "old": out / "old-host-examples", "old_ok": False}
-        checks = plan(tier, ctx)
+        checks = plan(tier, ctx, args.arch)
         if args.list:
             for check in checks:
                 print(f"{check.name:<20} {check.group:<8} timeout {check.timeout} s")
@@ -976,7 +1051,7 @@ def main(argv=None):
                 print("nothing to run")
             else:
                 disk_guard(args)
-                ctx["fix"] = build_fixtures(out)
+                ctx["fix"] = build_fixtures(out, args.arch)
                 if not args.no_build:
                     disk_guard(args)
                     ctx["new"] = build_examples(ROOT, out, "build.log", app=bool(selected & {"tracer-qa", "debugger-live"}))
@@ -989,7 +1064,7 @@ def main(argv=None):
                 if "debugger-live" in selected:
                     ctx["debugger_data"] = tools_dir(args, out)
                     ctx["debugger_ok"] = all((ctx["debugger_data"] / "tools" / t).is_dir() for t in ("gef", "pwndbg"))
-                checks = [c for c in plan(tier, ctx) if c.name in selected]
+                checks = [c for c in plan(tier, ctx, args.arch) if c.name in selected]
                 for check in checks:
                     print(f"{check.name} ...", flush=True)
                     results[check.name] = run_with_retries(check, ctx, args)
@@ -1006,7 +1081,7 @@ def main(argv=None):
             if not args.keep_data:
                 clean_check_data(out, "tracer-record")
         shown = [n for n in order if n in results or n in selected or not (args.only or args.skip)]
-        text = report(results, shown, f"{tier} tier, base {base}")
+        text = report(results, shown, f"{tier} tier, {args.arch}, base {base}")
         (out / "report.txt").write_text(text + "\n")
         print("\n" + text)
         return exit_code(results, shown)

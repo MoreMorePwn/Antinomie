@@ -70,6 +70,34 @@ impl Context {
     pub fn bin(&self) -> PathBuf {
         self.out.join("bin")
     }
+    /// The base's guest architecture (its bundle.json `arch`; x86-64 when absent).
+    pub fn arch(&self) -> antinomie_monitor_core::GuestArch {
+        std::fs::read_to_string(self.base.join("bundle.json"))
+            .ok()
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+            .and_then(|bundle| serde_json::from_value(bundle["arch"].clone()).ok())
+            .unwrap_or_default()
+    }
+    /// Where the goldens of the base live: x86-64's in `golden/`, as always,
+    /// with Debian Minimal's own in `golden/debian-minimal/`; another
+    /// architecture's in `golden/<arch>/`.
+    pub fn golden_dir(&self) -> PathBuf {
+        let directory = self.repo.join("tests/monitor/conformance/trace/golden");
+        match self.arch() {
+            antinomie_monitor_core::GuestArch::X86_64 => {
+                let guest = antinomie_monitor_core::storage::Bundle::load(&self.base)
+                    .ok()
+                    .and_then(|bundle| bundle.guest)
+                    .map(|guest| guest.id);
+                match guest.as_deref() {
+                    Some("debian-minimal") => directory.join("debian-minimal"),
+                    _ => directory,
+                }
+            }
+            antinomie_monitor_core::GuestArch::AARCH64 => directory.join("aarch64"),
+            other => directory.join(format!("machine-{}", other.machine)),
+        }
+    }
     pub fn group_dir(&self, group: &str) -> PathBuf {
         self.out.join("groups").join(group)
     }
@@ -105,9 +133,13 @@ fn build_fixtures(context: &Context) -> Result<(), String> {
     let script = context
         .repo
         .join("tests/monitor/conformance/build-fixtures.sh");
-    let status = std::process::Command::new("bash")
-        .arg(&script)
-        .arg(context.bin())
+    let mut command = std::process::Command::new("bash");
+    command.arg(&script).arg(context.bin());
+    // A foreign base's fixtures come from its cross compiler.
+    if context.arch() == antinomie_monitor_core::GuestArch::AARCH64 {
+        command.env("CC", "aarch64-linux-gnu-gcc");
+    }
+    let status = command
         .status()
         .map_err(|e| format!("{}: {e}", script.display()))?;
     if !status.success() {

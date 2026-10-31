@@ -33,6 +33,10 @@
 #include <sys/user.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#if !defined(__x86_64__)
+#include <elf.h>
+#include <sys/uio.h>
+#endif
 
 // ---------------------------------------------------------------- async-io
 
@@ -228,7 +232,13 @@ static void tracing(void)
     int status;
     if (child > 0 && waitpid(child, &status, 0) > 0 && WIFSTOPPED(status)) {
         struct user_regs_struct regs;
+#if defined(__x86_64__)
         TRY(ptrace(PTRACE_GETREGS, child, NULL, &regs));
+#else
+        /* Architectures without PTRACE_GETREGS read the same set by regset. */
+        struct iovec io = { &regs, sizeof(regs) };
+        TRY(ptrace(PTRACE_GETREGSET, child, (void *)NT_PRSTATUS, &io));
+#endif
         TRY(ptrace(PTRACE_PEEKDATA, child, (void *)&decoded, NULL));
         TRY(ptrace(PTRACE_SETOPTIONS, child, NULL, (void *)PTRACE_O_TRACESYSGOOD));
         TRY(ptrace(PTRACE_CONT, child, NULL, NULL));

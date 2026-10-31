@@ -9,7 +9,8 @@
 # and the ant-static-* variants for static analysis. The default build links
 # glibc dynamically and stops if a binary would need a newer glibc than the
 # Debian trixie guest has (2.41); --static links the samples statically (the
-# BusyBox guests need this).
+# BusyBox guests need this). CC names the compiler (default gcc), e.g.
+# aarch64-linux-gnu-gcc for arm64 guests.
 #
 # What each sample does with its options is described at the top of its source
 # file in tests/monitor/workload/ (its usage text lists them).
@@ -29,6 +30,7 @@ elif [[ -n $mode ]]; then
     exit 2
 fi
 
+cc=${CC:-gcc}
 cflags=(-O2 -g -Wall -Wextra -Wno-unused-result -pthread -D_GNU_SOURCE -I"$source_dir")
 sources=("$source_dir"/main.c "$source_dir"/load.c "$source_dir"/process.c "$source_dir"/files.c
     "$source_dir"/network.c "$source_dir"/kernel.c "$source_dir"/memory.c "$source_dir"/detect.c
@@ -47,10 +49,10 @@ check_glibc() {
     fi
 }
 
-gcc "${cflags[@]}" "${sources[@]}" -o "$output/ant-workload" "${link[@]}"
+"$cc" "${cflags[@]}" "${sources[@]}" -o "$output/ant-workload" "${link[@]}"
 check_glibc "$output/ant-workload"
 for module in "${modules[@]}"; do
-    gcc "${cflags[@]}" -DSINGLE_MODULE="\"$module\"" -DSINGLE_ID_"${module//-/_}" "${sources[@]}" \
+    "$cc" "${cflags[@]}" -DSINGLE_MODULE="\"$module\"" -DSINGLE_ID_"${module//-/_}" "${sources[@]}" \
         -o "$output/ant-$module" "${link[@]}"
     check_glibc "$output/ant-$module"
 done
@@ -121,7 +123,7 @@ corpus="$source_dir/static-corpus.c"
 variant() {
     local name=$1
     shift
-    gcc -Wall -Wextra "$@" "$corpus" -o "$output/ant-static-$name"
+    "$cc" -Wall -Wextra "$@" "$corpus" -o "$output/ant-static-$name"
 }
 variant symbols -O0 -g
 variant stripped -O2 -s
@@ -129,8 +131,13 @@ variant nopie -O2 -fno-pie -no-pie
 variant norelro -O2 -Wl,-z,norelro -Wl,-z,lazy
 variant unprotected -O0 -fno-stack-protector -U_FORTIFY_SOURCE -fno-pie -no-pie \
     -Wl,-z,execstack -Wl,--no-warn-execstack -Wl,-z,norelro
+# Control-flow protection is CET on x86-64, BTI and pointer authentication on arm64.
+case $("$cc" -dumpmachine) in
+    aarch64-*) cf_protection=-mbranch-protection=standard ;;
+    *) cf_protection=-fcf-protection ;;
+esac
 variant hardened -O2 -fstack-protector-strong -D_FORTIFY_SOURCE=3 -fstack-clash-protection \
-    -fcf-protection -fPIE -pie -Wl,-z,relro,-z,now
+    "$cf_protection" -fPIE -pie -Wl,-z,relro,-z,now
 variant static -O2 -static
 variant packed -O2 -DCORPUS_GENERATED -I"$generated/packed"
 variant huge -O1 -DCORPUS_GENERATED -I"$generated/huge"
