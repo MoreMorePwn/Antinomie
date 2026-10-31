@@ -791,7 +791,7 @@ mod tests {
         let mut refused = vec![0u8; 24];
         refused[16..20].copy_from_slice(&(-27i32).to_le_bytes());
         let error = specimen_acquisition(&refused, 64 << 20).unwrap_err();
-        assert!(error.contains("larger than the 64.0 MB"), "{error}");
+        assert!(error.contains("larger than the 64.0 MiB"), "{error}");
         assert!(error.contains("quarter of the VM's RAM"), "{error}");
         refused[16..20].copy_from_slice(&(-2i32).to_le_bytes());
         let error = specimen_acquisition(&refused, 64 << 20).unwrap_err();
