@@ -2,6 +2,20 @@
 //! Streaming uploads into the guest and guest-scoped command checks.
 use super::*;
 
+/// The note an executable upload's result carries when the program is for
+/// another architecture than the running guest's (empty otherwise).
+pub(super) fn arch_note(snapshot: &Snapshot, program: &[u8], executable: bool) -> String {
+    let arch = snapshot
+        .guest_kernel
+        .as_ref()
+        .map(|kernel| kernel.arch)
+        .unwrap_or_default();
+    match executable.then(|| arch.elf_mismatch(program)).flatten() {
+        Some(note) => format!(" (note: {note})"),
+        None => String::new(),
+    }
+}
+
 /// Send `total` bytes from `source` to a new guest file through the upload
 /// protocol; `target` is the guest path, overwrite and executable.
 #[allow(clippy::too_many_arguments)]

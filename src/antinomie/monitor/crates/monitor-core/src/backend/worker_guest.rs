@@ -664,6 +664,7 @@ impl Worker {
                     &mut bytes,
                 )
                 .map_err(|e| format!("upload {}: {e}", source.display()))?;
+                let note = arch_note(&self.snapshot, &bytes, executable);
                 let mut library = crate::samples::Library::open(&self.options.data_dir)?;
                 let sha256 = library
                     .add_bytes(
@@ -690,7 +691,7 @@ impl Worker {
                     &mut bytes.as_slice(),
                     bytes.len() as u64,
                     (&destination, overwrite, executable),
-                )?;
+                )? + &note;
                 drop(bytes);
                 library.record_push(
                     &sha256,
@@ -715,6 +716,7 @@ impl Worker {
                 let bytes = library.open_bytes(&sha256)?;
                 drop(library);
                 check_program_size(bytes.len() as u64, executable, session.vm.ram_mib)?;
+                let note = arch_note(&self.snapshot, &bytes, executable);
                 let message = upload_stream(
                     session,
                     &mut self.snapshot,
@@ -726,7 +728,7 @@ impl Worker {
                     // The path names the sample's hash: what is there is the
                     // same sample (sent before), so it is replaced.
                     (&destination, true, executable),
-                )?;
+                )? + &note;
                 drop(bytes);
                 crate::samples::record_push(
                     &self.options.data_dir,

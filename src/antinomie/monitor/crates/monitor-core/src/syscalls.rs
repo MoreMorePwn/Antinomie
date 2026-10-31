@@ -46,8 +46,9 @@ pub struct FlagValue {
 }
 
 /// A system call ABI this host ships a table for. Records name their calls
-/// through the table of the run's ABI. aarch64's set is shipped for the
-/// decoders; no guest architecture maps to it yet.
+/// through the table of the run's ABI. An arm64 guest maps to aarch64's set;
+/// the host launches nothing there before its decoding is qualified
+/// (`GuestArch::supported`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Abi {
     X86_64,
@@ -59,7 +60,8 @@ impl Abi {
     pub fn of(arch: crate::api::GuestArch) -> Option<Self> {
         match arch {
             crate::api::GuestArch::X86_64 => Some(Self::X86_64),
-            crate::api::GuestArch::Unsupported(_) => None,
+            crate::api::GuestArch::AARCH64 => Some(Self::Aarch64),
+            _ => None,
         }
     }
 }
@@ -136,6 +138,16 @@ impl Table {
 }
 
 /// The table of an ABI.
+/// The id a guest reports for its native table in ARCH_INFO: the SHA-256 (hex)
+/// of the protocol file generated with it, here the one this host ships.
+pub fn table_id(abi: Abi) -> String {
+    use sha2::Digest;
+    sha2::Sha256::digest(arch::native_syscalls_json(abi).as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 pub fn table(abi: Abi) -> &'static Table {
     static X86_64: OnceLock<Table> = OnceLock::new();
     static AARCH64: OnceLock<Table> = OnceLock::new();

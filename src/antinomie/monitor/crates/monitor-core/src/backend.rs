@@ -691,6 +691,8 @@ enum KernelProbe {
     Due(Instant),
     /// INFO request in flight.
     Info(u64),
+    /// ARCH_INFO in flight (revision 20 or later), for the guest's architecture.
+    ArchInfo(u64),
     /// The debug engine's CAPS in flight, for the guest's architecture.
     Arch(u64),
     /// INFO was unsupported; STATS tells a pre-INFO kernel from one still booting.

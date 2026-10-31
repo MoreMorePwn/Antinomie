@@ -28,6 +28,11 @@ pub(crate) const RUN_STATUS: u32 = 0x1016;
 pub(crate) const STATS: u32 = 0x1020;
 pub(crate) const INFO: u32 = 0x1021;
 pub(crate) const INFO_SIZE: usize = 160;
+pub(crate) const ARCH_INFO: u32 = 0x1022;
+pub(crate) const ARCH_INFO_SIZE: usize = 128;
+/// The first revision that answers ARCH_INFO; an older guest counts the
+/// unknown opcode as a bad command, so it is never sent one.
+pub(crate) const ARCH_INFO_REVISION: u32 = 20;
 pub(crate) const SHUTDOWN: u32 = 0x1030;
 pub(crate) const RESOURCES: u32 = 0x1070;
 pub(crate) const RESOURCES_SIZE: usize = 96;
@@ -581,7 +586,78 @@ pub(crate) fn info(reply: &[u8]) -> Result<crate::api::GuestKernel, String> {
         source,
         release: Some(release),
         arch: crate::api::GuestArch::X86_64,
+        arch_info: None,
     })
+}
+/// Decode an ARCH_INFO reply (revision 20, layout in control.h).
+pub(crate) fn arch_info(
+    reply: &[u8],
+) -> Result<(crate::api::GuestArch, crate::api::GuestArchInfo), String> {
+    use crate::api::{Endian, GuestArch, GuestArchInfo};
+    if reply.len() != ARCH_INFO_SIZE {
+        return Err("invalid guest architecture reply length".into());
+    }
+    let u32_at = |at: usize| u32::from_le_bytes(reply[at..at + 4].try_into().expect("four bytes"));
+    let class = reply[4];
+    let endian = match reply[5] {
+        1 => Endian::Little,
+        2 => Endian::Big,
+        _ => return Err("invalid guest byte order".into()),
+    };
+    if !(class == 1 || class == 2)
+        || reply[28..32].iter().any(|&byte| byte != 0)
+        || reply[96..].iter().any(|&byte| byte != 0)
+    {
+        return Err("invalid guest architecture reply".into());
+    }
+    let layout = &reply[64..96];
+    let end = layout
+        .iter()
+        .position(|&byte| byte == 0)
+        .ok_or("guest layout set is not terminated")?;
+    if end == 0 || layout[end..].iter().any(|&byte| byte != 0) {
+        return Err("invalid guest layout set".into());
+    }
+    let layout_set =
+        String::from_utf8(layout[..end].to_vec()).map_err(|_| "guest layout set is not UTF-8")?;
+    let page_shift = u16::from_le_bytes([reply[6], reply[7]]);
+    if !(12..=16).contains(&page_shift) {
+        return Err(format!("unsupported guest page shift {page_shift}"));
+    }
+    Ok((
+        GuestArch::new(u32_at(0), class, endian),
+        GuestArchInfo {
+            page_shift,
+            abi_mask: u32_at(8),
+            nr_base: u32_at(12),
+            native_count: u32_at(16),
+            user_va_bits: u32_at(20),
+            flags: u32_at(24),
+            table_id: reply[32..64]
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect(),
+            layout_set,
+        },
+    ))
+}
+/// Why the host's tables do not fit a guest it otherwise decodes: its native
+/// table or layout set is another than the one this host ships.
+pub(crate) fn arch_table_mismatch(
+    arch: crate::api::GuestArch,
+    info: &crate::api::GuestArchInfo,
+) -> Option<String> {
+    let abi = crate::syscalls::Abi::of(arch)?;
+    let prefix = &crate::syscalls::table(abi).constants().layout_prefix;
+    let expected = prefix.trim_end_matches('/');
+    if info.table_id != crate::syscalls::table_id(abi) || info.layout_set != expected {
+        return Some(format!(
+            "the guest's {} system call table or layouts differ from this Antinomie's: \
+             decoded values may be wrong; use a base built for this version",
+            arch.label()
+        ));
+    }
+    None
 }
 /// The guest's architecture from a debug CAPS reply (debug ABI 1: u32 abi at
 /// 0, the ELF machine at 4). Every revision-17 guest has the debug engine; its
@@ -892,6 +968,8 @@ mod tests {
             ("ANTC_STATS", STATS),
             ("ANTC_INFO", INFO),
             ("ANTC_INFO_SIZE", INFO_SIZE as u32),
+            ("ANTC_ARCH_INFO", ARCH_INFO),
+            ("ANTC_ARCH_INFO_SIZE", ARCH_INFO_SIZE as u32),
             ("ANTC_SHUTDOWN", SHUTDOWN),
             ("ANTC_RESOURCES", RESOURCES),
             ("ANTC_RESOURCES_SIZE", RESOURCES_SIZE as u32),
@@ -1010,6 +1088,89 @@ mod tests {
         dirty[100] = b'x';
         assert!(super::info(&dirty).is_err());
     }
+    /// An ARCH_INFO reply as a guest of this architecture and table writes it.
+    fn arch_reply(machine: u32, class: u8, endian: u8, table: &str, layouts: &str) -> Vec<u8> {
+        let mut reply = vec![0; ARCH_INFO_SIZE];
+        reply[0..4].copy_from_slice(&machine.to_le_bytes());
+        reply[4] = class;
+        reply[5] = endian;
+        reply[6..8].copy_from_slice(&12u16.to_le_bytes());
+        reply[8..12].copy_from_slice(&6u32.to_le_bytes());
+        reply[16..20].copy_from_slice(&463u32.to_le_bytes());
+        reply[20..24].copy_from_slice(&47u32.to_le_bytes());
+        reply[24..28].copy_from_slice(&0x33u32.to_le_bytes());
+        for (index, byte) in reply[32..64].iter_mut().enumerate() {
+            *byte = u8::from_str_radix(&table[index * 2..index * 2 + 2], 16).unwrap();
+        }
+        reply[64..64 + layouts.len()].copy_from_slice(layouts.as_bytes());
+        reply
+    }
+    #[test]
+    fn arch_info_names_the_architecture_and_checks_the_tables() {
+        use crate::api::{Endian, GuestArch};
+        use crate::syscalls::{Abi, table_id};
+        let x86 = table_id(Abi::X86_64);
+        let (arch, info) = arch_info(&arch_reply(62, 2, 1, &x86, "linux-6.12.94/x86_64")).unwrap();
+        assert_eq!(arch, GuestArch::X86_64);
+        assert_eq!(
+            (info.page_shift, info.abi_mask, info.native_count),
+            (12, 6, 463)
+        );
+        assert_eq!((info.user_va_bits, info.flags, info.nr_base), (47, 0x33, 0));
+        assert_eq!(info.table_id, x86);
+        assert_eq!(arch_table_mismatch(arch, &info), None);
+        // Another table, layouts of another architecture: decoded, but said.
+        let (arch, info) = arch_info(&arch_reply(
+            62,
+            2,
+            1,
+            &table_id(Abi::Aarch64),
+            "linux-6.12.94/x86_64",
+        ))
+        .unwrap();
+        assert!(arch_table_mismatch(arch, &info).unwrap().contains("differ"));
+        let (arch, info) = arch_info(&arch_reply(62, 2, 1, &x86, "linux-6.12.94/aarch64")).unwrap();
+        assert!(arch_table_mismatch(arch, &info).is_some());
+        let aarch64 = table_id(Abi::Aarch64);
+        let (arch, info) =
+            arch_info(&arch_reply(183, 2, 1, &aarch64, "linux-6.12.94/aarch64")).unwrap();
+        assert_eq!(arch, GuestArch::AARCH64);
+        assert_eq!(arch_table_mismatch(arch, &info), None);
+        let (arch, _) = arch_info(&arch_reply(8, 1, 2, &x86, "linux-6.12.94/mips")).unwrap();
+        assert_eq!(arch, GuestArch::MIPS);
+        assert_eq!(
+            arch_info(&arch_reply(8, 1, 1, &x86, "x")).unwrap().0,
+            GuestArch::new(8, 1, Endian::Little)
+        );
+        // An architecture without a shipped table has nothing to compare.
+        let (arch, info) =
+            arch_info(&arch_reply(243, 2, 1, &x86, "linux-6.12.94/riscv64")).unwrap();
+        assert_eq!(arch_table_mismatch(arch, &info), None);
+        for bad in [
+            arch_reply(62, 3, 1, &x86, "l"),
+            arch_reply(62, 2, 0, &x86, "l"),
+            arch_reply(62, 2, 1, &x86, ""),
+            arch_reply(62, 2, 1, &x86, &"l".repeat(32)),
+            {
+                let mut reply = arch_reply(62, 2, 1, &x86, "l");
+                reply[100] = 1;
+                reply
+            },
+            {
+                let mut reply = arch_reply(62, 2, 1, &x86, "l");
+                reply[28] = 1;
+                reply
+            },
+            {
+                let mut reply = arch_reply(62, 2, 1, &x86, "l");
+                reply[6] = 40;
+                reply
+            },
+            arch_reply(62, 2, 1, &x86, "l")[..127].to_vec(),
+        ] {
+            assert!(arch_info(&bad).is_err());
+        }
+    }
     #[test]
     fn debug_caps_name_the_guest_architecture() {
         use crate::api::GuestArch;
@@ -1020,9 +1181,12 @@ mod tests {
             reply
         };
         assert_eq!(arch_caps(&caps(1, 62)), Ok(GuestArch::X86_64));
-        assert_eq!(arch_caps(&caps(1, 183)), Ok(GuestArch::Unsupported(183)));
-        assert_eq!(arch_caps(&caps(1, 0)), Ok(GuestArch::Unsupported(0)));
-        assert!(!GuestArch::Unsupported(183).supported());
+        assert_eq!(arch_caps(&caps(1, 183)), Ok(GuestArch::AARCH64));
+        assert_eq!(
+            arch_caps(&caps(1, 0)),
+            Ok(GuestArch::new(0, 2, crate::api::Endian::Little))
+        );
+        assert!(!GuestArch::AARCH64.supported());
         assert!(arch_caps(&caps(2, 62)).is_err());
         assert!(arch_caps(&caps(1, 62)[..47]).is_err());
     }

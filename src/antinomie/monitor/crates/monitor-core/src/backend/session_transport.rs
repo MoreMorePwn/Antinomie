@@ -2,6 +2,8 @@
 //! Telemetry pumping, load shedding, control requests and terminal output.
 use super::*;
 
+mod arch_probe;
+
 /// Passes of the guest control worker after which a command it has not
 /// answered is late (each pass serves up to 16 commands).
 /// Rings whose fill the read-gap tracker watches (more are not).
@@ -495,6 +497,7 @@ impl Session {
                 Ok(())
             }
             KernelProbe::Info(_)
+            | KernelProbe::ArchInfo(_)
             | KernelProbe::Arch(_)
             | KernelProbe::Stats(_)
             | KernelProbe::Core(..)
@@ -546,12 +549,31 @@ impl Session {
                 };
                 true
             }
+            KernelProbe::ArchInfo(id) if id == reply_id => {
+                // A guest that answers but cannot be read is taken as its debug
+                // engine says, as a revision-17 guest is.
+                self.kernel_probe = match (status == 0).then(|| control::arch_info(payload)) {
+                    Some(Ok((arch, info))) => {
+                        if let Some(note) = control::arch_table_mismatch(arch, &info) {
+                            snapshot.last_error = Some(note);
+                        }
+                        self.arch_identified(arch, Some(info), snapshot);
+                        self.core_probe_start(snapshot)
+                    }
+                    Some(Err(error)) => {
+                        snapshot.last_error = Some(format!("guest architecture: {error}"));
+                        self.caps_probe_start(snapshot)
+                    }
+                    None => self.caps_probe_start(snapshot),
+                };
+                true
+            }
             KernelProbe::Arch(id) if id == reply_id => {
                 // A guest that cannot say (a development kernel without the
                 // debug engine) is taken as x86-64, as every older guest is.
                 if status == 0 {
                     match control::arch_caps(payload) {
-                        Ok(arch) => self.arch_identified(arch, snapshot),
+                        Ok(arch) => self.arch_identified(arch, None, snapshot),
                         Err(error) => {
                             snapshot.last_error = Some(format!("guest architecture: {error}"))
                         }
@@ -569,35 +591,6 @@ impl Session {
                 true
             }
             _ => false,
-        }
-    }
-    /// Ask a revision-17 guest's debug engine for its architecture: the
-    /// guest's own account of whose system call numbers, layouts and registers
-    /// its records use. An older guest is x86-64 and is not asked.
-    fn arch_probe_start(&mut self, revision: Option<u32>, snapshot: &mut Snapshot) -> KernelProbe {
-        if revision.is_some_and(|revision| revision >= 17) {
-            match self.transport.send(
-                crate::debug::wire::CAPS,
-                &crate::debug::wire::caps_request(),
-            ) {
-                Ok(id) => return KernelProbe::Arch(id),
-                Err(error) => snapshot.last_error = Some(format!("guest architecture: {error}")),
-            }
-        }
-        self.core_probe_start(snapshot)
-    }
-    fn arch_identified(&mut self, arch: crate::api::GuestArch, snapshot: &mut Snapshot) {
-        if !arch.supported() {
-            snapshot.last_error = Some(unsupported_arch(arch));
-        }
-        for kernel in [
-            self.capture.guest_kernel.as_mut(),
-            snapshot.guest_kernel.as_mut(),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            kernel.arch = arch;
         }
     }
     /// Ask a revision-15 or newer guest for its process-core limits; an older

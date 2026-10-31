@@ -1202,44 +1202,224 @@ pub struct GuestKernel {
     /// use. Recordings from before it was reported are x86-64.
     #[serde(default)]
     pub arch: GuestArch,
+    /// The guest's ARCH_INFO answer; `None` before revision 20.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arch_info: Option<GuestArchInfo>,
 }
 
-/// A guest kernel's CPU architecture: the ELF machine its debug engine's CAPS
-/// names, asked when the host identifies a revision-17 guest. This host
-/// decodes x86-64 guests only; an older guest is x86-64.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum GuestArch {
-    #[default]
-    #[allow(non_camel_case_types)]
-    X86_64,
-    /// Another architecture, by its ELF machine number: no decoder here.
-    Unsupported(u32),
+/// A guest kernel's CPU architecture: its ELF machine, class and byte order,
+/// from ARCH_INFO (revision 20) or, for a revision-17 to 19 guest, from the
+/// machine its debug engine's CAPS names. An older guest, and every run
+/// recorded before the architecture was reported, is x86-64.
+///
+/// x86-64 is stored as `"X86_64"`, as before; another architecture as
+/// `{"machine": .., "class": .., "endian": ..}`. The old `{"Unsupported": n}`
+/// form still reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct GuestArch {
+    /// ELF `e_machine`.
+    pub machine: u32,
+    /// ELF class: 1 for 32-bit, 2 for 64-bit.
+    pub class: u8,
+    pub endian: Endian,
+}
+
+/// Byte order of a guest's words.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Endian {
+    Little,
+    Big,
+}
+
+impl Default for GuestArch {
+    fn default() -> Self {
+        Self::X86_64
+    }
 }
 
 impl GuestArch {
     /// `EM_X86_64`.
     pub const ELF_X86_64: u32 = 62;
+    /// `EM_AARCH64`.
+    pub const ELF_AARCH64: u32 = 183;
+    /// `EM_RISCV`.
+    pub const ELF_RISCV: u32 = 243;
+    /// `EM_ARM`.
+    pub const ELF_ARM: u32 = 40;
+    /// `EM_MIPS`.
+    pub const ELF_MIPS: u32 = 8;
+    pub const X86_64: Self = Self::new(Self::ELF_X86_64, 2, Endian::Little);
+    pub const AARCH64: Self = Self::new(Self::ELF_AARCH64, 2, Endian::Little);
+    pub const RISCV64: Self = Self::new(Self::ELF_RISCV, 2, Endian::Little);
+    pub const ARM: Self = Self::new(Self::ELF_ARM, 1, Endian::Little);
+    pub const MIPS: Self = Self::new(Self::ELF_MIPS, 1, Endian::Big);
+    pub const MIPSEL: Self = Self::new(Self::ELF_MIPS, 1, Endian::Little);
 
-    /// The architecture of an ELF machine number.
-    pub fn from_elf_machine(machine: u32) -> Self {
-        match machine {
-            Self::ELF_X86_64 => Self::X86_64,
-            other => Self::Unsupported(other),
+    pub const fn new(machine: u32, class: u8, endian: Endian) -> Self {
+        Self {
+            machine,
+            class,
+            endian,
         }
     }
 
-    /// Whether this host has the architecture's system call table, layouts
-    /// and register views.
+    /// The architecture of an ELF machine number alone (debug CAPS): the
+    /// class and byte order Linux uses for it; MIPS is taken as big endian.
+    pub fn from_elf_machine(machine: u32) -> Self {
+        match machine {
+            Self::ELF_X86_64 => Self::X86_64,
+            Self::ELF_AARCH64 => Self::AARCH64,
+            Self::ELF_RISCV => Self::RISCV64,
+            Self::ELF_ARM => Self::ARM,
+            Self::ELF_MIPS => Self::MIPS,
+            other => Self::new(other, 2, Endian::Little),
+        }
+    }
+
+    pub fn is_x86_64(&self) -> bool {
+        *self == Self::X86_64
+    }
+
+    /// Whether this host decodes the architecture's records and launches
+    /// programs there.
     pub fn supported(self) -> bool {
-        matches!(self, Self::X86_64)
+        self == Self::X86_64
     }
 
     pub fn label(self) -> String {
         match self {
             Self::X86_64 => "x86-64".into(),
-            Self::Unsupported(machine) => format!("ELF machine {machine}"),
+            Self::AARCH64 => "arm64".into(),
+            Self::RISCV64 => "riscv64".into(),
+            Self::ARM => "ARM (32-bit)".into(),
+            Self::MIPS => "MIPS (big endian)".into(),
+            Self::MIPSEL => "MIPS (little endian)".into(),
+            Self {
+                machine,
+                class,
+                endian,
+            } => format!(
+                "ELF machine {machine} ({}-bit, {})",
+                if class == 1 { 32 } else { 64 },
+                match endian {
+                    Endian::Little => "little endian",
+                    Endian::Big => "big endian",
+                }
+            ),
         }
     }
+
+    /// Why an ELF program cannot run on a guest of this architecture (it would
+    /// fail there with ENOEXEC: an arm64 program on x86-64, a MIPS big-endian
+    /// one on mipsel), or None for a program it runs and for anything not ELF.
+    /// x86-64 also runs i386 programs and arm64 32-bit ARM ones.
+    pub fn elf_mismatch(self, program: &[u8]) -> Option<String> {
+        if program.len() < 20 || &program[..4] != b"\x7fELF" {
+            return None;
+        }
+        let endian = match program[5] {
+            1 => Endian::Little,
+            2 => Endian::Big,
+            _ => return None,
+        };
+        let machine = u32::from(match endian {
+            Endian::Little => u16::from_le_bytes([program[18], program[19]]),
+            Endian::Big => u16::from_be_bytes([program[18], program[19]]),
+        });
+        let program = Self::new(machine, program[4], endian);
+        let runs = program == self
+            || (self == Self::X86_64 && program == Self::new(3, 1, Endian::Little))
+            || (self == Self::AARCH64 && program == Self::ARM);
+        (!runs).then(|| {
+            format!(
+                "the program is for {} and the guest is {}: it will not run there",
+                program.label(),
+                self.label()
+            )
+        })
+    }
+
+    /// The architecture names a sample's ELF header may carry to run on this
+    /// guest (`samples::elf_arch`); an AArch64 guest also runs 32-bit ARM
+    /// programs once its compat table is decoded.
+    pub fn runs_elf_arch(self, elf_arch: &str) -> bool {
+        let elf_arch = elf_arch.to_ascii_lowercase();
+        match self {
+            Self::X86_64 => matches!(elf_arch.as_str(), "x86_64" | "amd64" | "x86-64"),
+            Self::AARCH64 => matches!(elf_arch.as_str(), "aarch64" | "arm64"),
+            Self::RISCV64 => elf_arch == "risc-v",
+            Self::ARM => elf_arch == "arm",
+            Self::MIPS | Self::MIPSEL => elf_arch == "mips",
+            _ => false,
+        }
+    }
+}
+
+impl Serialize for GuestArch {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        if *self == Self::X86_64 {
+            return serializer.serialize_str("X86_64");
+        }
+        let mut state = serializer.serialize_struct("GuestArch", 3)?;
+        state.serialize_field("machine", &self.machine)?;
+        state.serialize_field("class", &self.class)?;
+        state.serialize_field("endian", &self.endian)?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for GuestArch {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Fields {
+            machine: u32,
+            class: u8,
+            endian: Endian,
+        }
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Stored {
+            Name(String),
+            Legacy {
+                #[serde(rename = "Unsupported")]
+                unsupported: u32,
+            },
+            Fields(Fields),
+        }
+        match Stored::deserialize(deserializer)? {
+            Stored::Name(name) if name == "X86_64" => Ok(Self::X86_64),
+            Stored::Name(name) => Err(serde::de::Error::custom(format!(
+                "unknown guest architecture {name}"
+            ))),
+            Stored::Legacy { unsupported } => Ok(Self::from_elf_machine(unsupported)),
+            Stored::Fields(fields) if fields.class == 1 || fields.class == 2 => {
+                Ok(Self::new(fields.machine, fields.class, fields.endian))
+            }
+            Stored::Fields(_) => Err(serde::de::Error::custom("ELF class must be 1 or 2")),
+        }
+    }
+}
+
+/// What ARCH_INFO (revision 20) adds to the architecture: what the host needs
+/// to decode the guest's records and to check that its tables match.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuestArchInfo {
+    pub page_shift: u16,
+    /// Bit n: system call records may carry ABI n (1 native, 2 x32, 3 compat).
+    pub abi_mask: u32,
+    /// Number of the first native system call (4000 on MIPS o32).
+    pub nr_base: u32,
+    /// Slots of the guest's native system call table.
+    pub native_count: u32,
+    pub user_va_bits: u32,
+    /// The debug engine's capability flags.
+    pub flags: u32,
+    /// SHA-256 (hex) of the protocol file the guest's table was generated with.
+    pub table_id: String,
+    /// Prefix of every captured layout name, e.g. `linux-6.12.94/aarch64`.
+    pub layout_set: String,
 }
 
 /// What a guest's tracer offers beyond the records every revision-17 guest
@@ -2813,5 +2993,73 @@ mod tests {
         });
         let read: InvocationSummary = serde_json::from_value(row).unwrap();
         assert_eq!((read.async_saved, read.async_omitted()), (0, 0));
+    }
+    #[test]
+    fn guest_arch_reads_every_stored_form_and_writes_x86_as_before() {
+        assert_eq!(
+            serde_json::to_string(&GuestArch::X86_64).unwrap(),
+            "\"X86_64\""
+        );
+        let arm64 = serde_json::to_string(&GuestArch::AARCH64).unwrap();
+        assert_eq!(arm64, r#"{"machine":183,"class":2,"endian":"little"}"#);
+        for (stored, arch) in [
+            ("\"X86_64\"", GuestArch::X86_64),
+            (r#"{"Unsupported":183}"#, GuestArch::AARCH64),
+            (r#"{"Unsupported":8}"#, GuestArch::MIPS),
+            (arm64.as_str(), GuestArch::AARCH64),
+            (
+                r#"{"machine":8,"class":1,"endian":"little"}"#,
+                GuestArch::MIPSEL,
+            ),
+        ] {
+            assert_eq!(
+                serde_json::from_str::<GuestArch>(stored).unwrap(),
+                arch,
+                "{stored}"
+            );
+        }
+        for bad in ["\"Arm\"", r#"{"machine":8,"class":3,"endian":"little"}"#] {
+            assert!(serde_json::from_str::<GuestArch>(bad).is_err());
+        }
+        let kernel: GuestKernel =
+            serde_json::from_str(r#"{"revision":18,"source":null,"release":null}"#).unwrap();
+        assert_eq!((kernel.arch, kernel.arch_info), (GuestArch::X86_64, None));
+        assert_eq!(GuestArch::AARCH64.label(), "arm64");
+        assert!(
+            GuestArch::AARCH64.runs_elf_arch("AArch64")
+                && !GuestArch::AARCH64.runs_elf_arch("x86_64")
+        );
+        assert!(
+            GuestArch::X86_64.runs_elf_arch("x86_64") && !GuestArch::X86_64.runs_elf_arch("ARM")
+        );
+        assert!(GuestArch::X86_64.supported() && !GuestArch::AARCH64.supported());
+        let elf = |class: u8, data: u8, machine: u16| {
+            let mut header = b"\x7fELF".to_vec();
+            header.extend([class, data, 1]);
+            header.resize(18, 0);
+            header.extend(if data == 2 {
+                machine.to_be_bytes()
+            } else {
+                machine.to_le_bytes()
+            });
+            header
+        };
+        assert_eq!(GuestArch::X86_64.elf_mismatch(&elf(2, 1, 62)), None);
+        assert_eq!(GuestArch::X86_64.elf_mismatch(&elf(1, 1, 3)), None);
+        assert_eq!(GuestArch::X86_64.elf_mismatch(b"#!/bin/sh\n"), None);
+        assert!(
+            GuestArch::X86_64
+                .elf_mismatch(&elf(2, 1, 183))
+                .unwrap()
+                .contains("is for arm64")
+        );
+        assert_eq!(GuestArch::AARCH64.elf_mismatch(&elf(1, 1, 40)), None);
+        assert!(
+            GuestArch::MIPSEL
+                .elf_mismatch(&elf(1, 2, 8))
+                .unwrap()
+                .contains("big endian")
+        );
+        assert_eq!(GuestArch::MIPS.elf_mismatch(&elf(1, 2, 8)), None);
     }
 }

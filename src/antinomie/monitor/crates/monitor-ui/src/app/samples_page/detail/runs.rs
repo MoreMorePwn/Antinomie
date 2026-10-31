@@ -683,8 +683,13 @@ fn environment(ui: &mut egui::Ui, run: &RunSummary) {
                                 ui,
                                 "Guest kernel",
                                 format!(
-                                    "{}{}",
+                                    "{}{}{}",
                                     environment.kernel_release,
+                                    if environment.arch.is_x86_64() {
+                                        String::new()
+                                    } else {
+                                        format!(" · {}", environment.arch.label())
+                                    },
                                     if environment.patch_series.is_empty() {
                                         String::new()
                                     } else {

@@ -3,7 +3,7 @@
 //! read against it: the VM and its hardware, the base image and kernel, the
 //! rule packs and tools installed, and the app. A run saved before this
 //! existed has none, and the Runs tab says so.
-use crate::api::{GuestKernel, VmConfig, VmNetwork};
+use crate::api::{GuestArch, GuestKernel, VmConfig, VmNetwork};
 use serde::{Deserialize, Serialize};
 
 /// What was in place when the run was launched.
@@ -23,6 +23,10 @@ pub struct RunEnvironment {
     pub base_revision: Option<u32>,
     pub kernel_release: String,
     pub kernel_revision: Option<u32>,
+    /// The guest's architecture. Written only when it is not x86-64, so an
+    /// x86-64 run's record (and its hash) is what it always was.
+    #[serde(skip_serializing_if = "GuestArch::is_x86_64")]
+    pub arch: GuestArch,
     /// SHA-256 of the patch series the kernel was built from.
     pub patch_series: String,
     /// Installed rule packs, "name version", enabled ones only.
@@ -95,6 +99,7 @@ impl RunEnvironment {
                 .and_then(|kernel| kernel.release.clone())
                 .unwrap_or_default(),
             kernel_revision: inputs.kernel.and_then(|kernel| kernel.revision),
+            arch: inputs.kernel.map(|kernel| kernel.arch).unwrap_or_default(),
             patch_series: inputs
                 .kernel
                 .and_then(|kernel| kernel.source.clone())
@@ -159,5 +164,22 @@ mod tests {
         let environment: RunEnvironment = serde_json::from_str("{}").unwrap();
         assert!(environment.hash.is_empty());
         assert!(environment.vm_name.is_empty());
+        assert_eq!(environment.arch, GuestArch::X86_64);
+    }
+
+    #[test]
+    fn only_a_foreign_architecture_is_written() {
+        let mut environment = RunEnvironment::default();
+        let x86 = serde_json::to_value(&environment).unwrap();
+        assert!(x86.get("arch").is_none());
+        environment.arch = GuestArch::AARCH64;
+        let arm64 = serde_json::to_value(&environment).unwrap();
+        assert_eq!(arm64["arch"]["machine"], 183);
+        let read: RunEnvironment = serde_json::from_value(arm64).unwrap();
+        assert_eq!(read.arch, GuestArch::AARCH64);
+        assert_ne!(
+            environment.compute_hash(),
+            RunEnvironment::default().compute_hash()
+        );
     }
 }
