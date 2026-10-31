@@ -360,6 +360,16 @@ fn acknowledged_len(previous: u64, written: u64, reserved: u64) -> Result<u64, S
         .ok_or_else(|| "core disk acknowledgement exceeds its reservation".into())
 }
 impl Session {
+    /// ELF `e_machine` of the cores the guest writes: its own (x86-64 until the
+    /// guest has said otherwise).
+    pub(super) fn core_machine(&self) -> u32 {
+        self.capture
+            .guest_kernel
+            .as_ref()
+            .map_or(crate::api::GuestArch::ELF_X86_64, |kernel| {
+                kernel.arch.machine
+            })
+    }
     pub(super) fn core_readonly(
         &mut self,
         opcode: u32,
@@ -643,13 +653,7 @@ impl Session {
         }
         // The guest writes cores of its native 64-bit little-endian programs
         // only (x86-64, aarch64): ET_CORE of the guest's own machine.
-        let machine = self
-            .capture
-            .guest_kernel
-            .as_ref()
-            .map_or(crate::api::GuestArch::ELF_X86_64, |kernel| {
-                kernel.arch.machine
-            });
+        let machine = self.core_machine();
         if core.offset == 0
             && data.len() >= 20
             && (&data[..7] != b"\x7fELF\x02\x01\x01"

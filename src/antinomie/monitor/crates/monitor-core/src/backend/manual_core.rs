@@ -713,13 +713,19 @@ impl Session {
         if owner.allocated + retained as u64 > u64::from(owner.summary.max_size) {
             return Err("manual core stored more than its requested limit".into());
         }
+        // A native 64-bit little-endian ET_CORE of the guest's own machine
+        // (x86-64, aarch64), as for the guest's own process cores.
+        let machine = self.core_machine();
         if owner.summary.stored_size == 0
             && retained >= 20
             && (&data[..7] != b"\x7fELF\x02\x01\x01"
                 || data[16..18] != 4u16.to_le_bytes()
-                || data[18..20] != 62u16.to_le_bytes())
+                || u32::from(u16::from_le_bytes([data[18], data[19]])) != machine)
         {
-            return Err("manual core is not a native Linux x86-64 ELF core".into());
+            return Err(
+                "manual core is not a native little-endian ELF core of the guest's architecture"
+                    .into(),
+            );
         }
         let cut = retained < data.len();
         let mut data = data;
