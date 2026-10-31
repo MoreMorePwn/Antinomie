@@ -16,6 +16,13 @@ it runs.
   the kernel and BusyBox source identity in `bundle.json`, and
   `scripts/publish-base-sources.py` assembles the sources for an upload.
 
+- **Route helpers die with the app; the Samples warning covers routes.** The
+  wireproxy and tor a route starts now end when Antinomie is killed (a death
+  signal and a process group), and the next start ends any left over by their
+  recorded process id and start time, never by name. The Samples window's warning
+  now also covers a Routed VM whose default route can reach the Internet (Internet,
+  Tor, VPN, SOCKS5) and names that route.
+
 - **Egress abuse filter on live routes.** The Internet, Tor, VPN and SOCKS5 routes
   refuse outbound mail ports (25, 26, 465, 587, 2525), cap new connections per
   second (30), open connections (200) and new destinations per minute (100, a scan
